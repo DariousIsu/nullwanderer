@@ -1,0 +1,9 @@
+# Build artifacts
+/_build/
+/deps/
+
+# Generated on crash by the VM
+erl_crash.dump
+
+# Mix lock should be committed for reproducibility
+# but build artifacts should not
