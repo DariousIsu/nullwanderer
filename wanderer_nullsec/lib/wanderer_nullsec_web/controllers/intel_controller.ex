@@ -25,7 +25,7 @@ defmodule WandererNullsecWeb.IntelController do
   Add authentication plug if desired — currently inherits Wanderer's pipeline.
   """
 
-  use Phoenix.Controller, namespace: WandererNullsecWeb
+  use Phoenix.Controller, formats: [:json]
 
   alias WandererNullsec.Store.Aggregator
   alias WandererNullsec.Types.IntelEntry

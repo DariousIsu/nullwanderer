@@ -7,6 +7,7 @@ defmodule WandererNullsec.MixProject do
       version: "0.1.0",
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
+      elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
       description: "Nullsec regional intel plugin for Wanderer EVE mapper",
       # Include SDE priv files in releases
@@ -19,12 +20,17 @@ defmodule WandererNullsec.MixProject do
     ]
   end
 
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
+
   def application do
     [
-      extra_applications: [:logger],
-      mod: {WandererNullsec.Application, []}
-    ]
+      extra_applications: [:logger]
+    ] ++ app_mod(Mix.env())
   end
+
+  defp app_mod(:test), do: []
+  defp app_mod(_), do: [mod: {WandererNullsec.Application, []}]
 
   defp deps do
     [
@@ -39,6 +45,9 @@ defmodule WandererNullsec.MixProject do
       # Follows redirects automatically — required since RedisQ /listen.php
       # redirects to /object.php?objectID=<id> as of Aug 2025.
       {:req, "~> 0.5"},
+
+      # Phoenix — needed for Phoenix.Controller in IntelController
+      {:phoenix, "~> 1.7"},
 
       # Phoenix PubSub — already a dep of Wanderer, no version conflict
       {:phoenix_pubsub, "~> 2.1"},

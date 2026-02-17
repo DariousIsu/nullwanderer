@@ -85,6 +85,7 @@ defmodule WandererNullsec.Types.IntelEntry do
     :sov_faction_id,
     :adm_value,
     :vulnerability_occupancy_level,
+    :last_updated,
     npc_kills:           0,
     npc_kills_delta:     0,
     ship_kills:          0,
@@ -96,7 +97,6 @@ defmodule WandererNullsec.Types.IntelEntry do
     mining_cost_index:   nil,
     mining_cost_delta:   nil,
     pvp_kills_1hr:       [],
-    pvp_ship_count_1hr:  0,
-    :last_updated
+    pvp_ship_count_1hr:  0
   ]
 end

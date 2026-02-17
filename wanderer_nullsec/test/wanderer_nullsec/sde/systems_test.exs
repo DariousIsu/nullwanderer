@@ -3,6 +3,24 @@ defmodule WandererNullsec.SDE.SystemsTest do
 
   alias WandererNullsec.SDE.Systems
 
+  setup do
+    try do
+      :ets.new(:nullsec_sde_systems, [:named_table, :set, :public, read_concurrency: true])
+    rescue
+      ArgumentError -> :ok
+    end
+
+    on_exit(fn ->
+      try do
+        :ets.delete(:nullsec_sde_systems)
+      rescue
+        ArgumentError -> :ok
+      end
+    end)
+
+    :ok
+  end
+
   describe "systems_within_ly/2" do
     test "includes systems within radius" do
       one_ly = 9.4607e15

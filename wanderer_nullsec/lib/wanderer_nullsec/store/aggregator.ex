@@ -21,10 +21,9 @@ defmodule WandererNullsec.Store.Aggregator do
 
   require Logger
 
-  alias WandererNullsec.{SDE, Types, Config}
+  alias WandererNullsec.{SDE, Config}
   alias WandererNullsec.Store.{SystemCache, DeltaTracker}
   alias WandererNullsec.Routes.RouteClient
-  alias WandererNullsec.Publisher
   alias WandererNullsec.Types.IntelEntry
 
   @heartbeat_ms 30_000

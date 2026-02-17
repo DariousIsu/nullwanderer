@@ -34,6 +34,13 @@ defmodule WandererNullsec.Store.AggregatorTest do
     start_supervised!(Aggregator)
     start_supervised!(WandererNullsec.Routes.RouteClient)
 
+    # Pre-populate route cache to avoid HTTP call to route service
+    :ets.insert(:nullsec_route_cache, {
+      {30000142, 30000142},
+      %{route: [30000142], jumps: 0},
+      System.monotonic_time(:millisecond)
+    })
+
     SystemCache.put({:kills, 30000142}, %{npc: 10, ship: 1, pod: 0})
     SystemCache.put({:jumps, 30000142}, %{jumps: 50})
 

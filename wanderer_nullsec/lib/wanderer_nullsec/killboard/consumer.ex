@@ -31,7 +31,7 @@ defmodule WandererNullsec.Killboard.Consumer do
 
   require Logger
 
-  alias WandererNullsec.Store.{SystemCache, Aggregator}
+  alias WandererNullsec.Store.SystemCache
 
   @redisq_base "https://zkillredisq.stream/listen.php"
   # Node-stable queue ID using node name hash — unique per deployment
