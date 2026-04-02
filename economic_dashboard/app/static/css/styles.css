@@ -1,0 +1,71 @@
+﻿/* Main Styles */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #f8f9fa;
+}
+
+.navbar-brand {
+    font-weight: bold;
+}
+
+.card {
+    border-radius: 10px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    margin-bottom: 20px;
+}
+
+.card-header {
+    border-radius: 10px 10px 0 0;
+}
+
+/* Dashboard specific styles */
+.indicator-value {
+    font-size: 2rem;
+    font-weight: bold;
+}
+
+.indicator-title {
+    font-size: 1.2rem;
+    color: #6c757d;
+}
+
+.indicator-date {
+    font-size: 0.8rem;
+    color: #adb5bd;
+}
+
+/* Market indices */
+.positive {
+    color: #28a745;
+}
+
+.negative {
+    color: #dc3545;
+}
+
+/* News section */
+.news-title {
+    font-weight: bold;
+    margin-bottom: 5px;
+}
+
+.news-source {
+    font-size: 0.8rem;
+    color: #6c757d;
+}
+
+.news-date {
+    font-size: 0.8rem;
+    color: #adb5bd;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .indicator-value {
+        font-size: 1.5rem;
+    }
+    
+    .indicator-title {
+        font-size: 1rem;
+    }
+}

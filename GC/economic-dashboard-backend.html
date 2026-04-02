@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gleipnir Economic Dashboard - Backend Connected</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 3rem;
+            margin-bottom: 10px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .backend-status {
+            background: rgba(16, 185, 129, 0.2);
+            border: 2px solid rgba(16, 185, 129, 0.3);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            text-align: center;
+            font-size: 14px;
+        }
+
+        .controls {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .refresh-btn {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 2px solid rgba(255,255,255,0.3);
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .refresh-btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+
+        .refresh-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .status {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .health-section {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            text-align: center;
+        }
+
+        .health-score {
+            font-size: 4rem;
+            font-weight: bold;
+            color: #3b82f6;
+            margin-bottom: 10px;
+        }
+
+        .health-rating {
+            font-size: 1.5rem;
+            color: #666;
+            margin-bottom: 20px;
+        }
+
+        .health-factors {
+            font-size: 12px;
+            color: #999;
+            margin-bottom: 20px;
+            max-height: 60px;
+            overflow-y: auto;
+        }
+
+        .health-bar {
+            width: 300px;
+            height: 20px;
+            background: #e5e7eb;
+            border-radius: 10px;
+            margin: 0 auto;
+            overflow: hidden;
+        }
+
+        .health-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #10b981, #3b82f6);
+            border-radius: 10px;
+            transition: width 1s ease;
+        }
+
+        .indicators-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .indicator-card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+            transition: transform 0.3s ease;
+        }
+
+        .indicator-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .indicator-title {
+            font-size: 14px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+        }
+
+        .indicator-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #1f2937;
+            margin-bottom: 8px;
+        }
+
+        .indicator-date {
+            font-size: 12px;
+            color: #999;
+        }
+
+        .loading {
+            text-align: center;
+            color: white;
+            font-size: 18px;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid rgba(255,255,255,0.3);
+            border-top: 4px solid white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #fee2e2;
+            color: #dc2626;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            text-align: center;
+        }
+
+        .metadata {
+            background: rgba(255,255,255,0.1);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            font-size: 12px;
+            text-align: center;
+        }
+
+        .footer {
+            text-align: center;
+            color: rgba(255,255,255,0.8);
+            margin-top: 40px;
+            font-size: 14px;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .health-score {
+                font-size: 3rem;
+            }
+            
+            .health-bar {
+                width: 250px;
+            }
+            
+            .indicators-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>📊 Gleipnir Economic Dashboard</h1>
+            <p>Real-time Federal Reserve Economic Data (FRED)</p>
+        </div>
+
+        <!-- Backend Status -->
+        <div class="backend-status">
+            ✅ Connected to local backend server (localhost:3001) • No CORS issues!
+        </div>
+
+        <!-- Controls -->
+        <div class="controls">
+            <button class="refresh-btn" onclick="fetchData()" id="refreshBtn">
+                🔄 Refresh Data
+            </button>
+        </div>
+
+        <!-- Status -->
+        <div class="status" id="status">
+            Click refresh to load data from backend...
+        </div>
+
+        <!-- Loading -->
+        <div class="loading" id="loading" style="display: none;">
+            <div class="spinner"></div>
+            <div>Fetching data from backend server...</div>
+        </div>
+
+        <!-- Error -->
+        <div class="error" id="error" style="display: none;"></div>
+
+        <!-- Health Section -->
+        <div class="health-section" id="healthSection" style="display: none;">
+            <h2>Economic Health Score</h2>
+            <div class="health-score" id="healthScore">--</div>
+            <div class="health-rating" id="healthRating">Loading...</div>
+            <div class="health-factors" id="healthFactors">Click refresh to calculate</div>
+            <div class="health-bar">
+                <div class="health-fill" id="healthFill" style="width: 0%;"></div>
+            </div>
+        </div>
+
+        <!-- Indicators Grid -->
+        <div class="indicators-grid" id="indicatorsGrid" style="display: none;">
+            <!-- Cards will be populated by JavaScript -->
+        </div>
+
+        <!-- Metadata -->
+        <div class="metadata" id="metadata" style="display: none;">
+            <!-- Backend info will be populated here -->
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <p>🚀 Powered by Node.js + Express backend</p>
+            <p>📡 Real-time FRED API integration • 🔄 No CORS limitations</p>
+        </div>
+    </div>
+
+    <script>
+        // Backend API configuration
+        const BACKEND_URL = 'http://localhost:3001';
+        
+        let currentData = null;
+
+        // Fetch data from our backend
+        async function fetchData() {
+            const refreshBtn = document.getElementById('refreshBtn');
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const status = document.getElementById('status');
+
+            // Show loading state
+            refreshBtn.disabled = true;
+            refreshBtn.textContent = '🔄 Fetching...';
+            loading.style.display = 'block';
+            error.style.display = 'none';
+            status.textContent = 'Connecting to backend server...';
+
+            try {
+                console.log('📡 Fetching from backend:', `${BACKEND_URL}/api/dashboard`);
+                
+                const response = await fetch(`${BACKEND_URL}/api/dashboard`);
+                
+                if (!response.ok) {
+                    throw new Error(`Backend responded with ${response.status}: ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                console.log('✅ Backend response:', result);
+
+                if (result.success) {
+                    currentData = result.data;
+                    updateUI();
+                    
+                    const now = new Date();
+                    status.textContent = `✅ Data loaded from backend at ${now.toLocaleTimeString()}`;
+                } else {
+                    throw new Error(result.error || 'Backend returned unsuccessful response');
+                }
+
+                loading.style.display = 'none';
+
+            } catch (err) {
+                console.error('❌ Backend fetch error:', err);
+                
+                error.style.display = 'block';
+                error.innerHTML = `
+                    ❌ Backend Connection Failed<br>
+                    <strong>Error:</strong> ${err.message}<br>
+                    <small>Make sure your backend is running on localhost:3001</small><br>
+                    <small>Run: <code>npm run dev</code> in your gleipnir-backend folder</small>
+                `;
+                
+                loading.style.display = 'none';
+                status.textContent = '❌ Backend connection failed';
+            } finally {
+                refreshBtn.disabled = false;
+                refreshBtn.textContent = '🔄 Refresh Data';
+            }
+        }
+
+        // Update UI with backend data
+        function updateUI() {
+            if (!currentData) return;
+
+            const { health, indicators, metadata } = currentData;
+
+            // Update health section
+            document.getElementById('healthScore').textContent = health.score;
+            document.getElementById('healthRating').textContent = health.rating;
+            document.getElementById('healthFactors').textContent = health.factors.join(' • ');
+            document.getElementById('healthFill').style.width = `${health.score}%`;
+
+            // Update health score color
+            const scoreElement = document.getElementById('healthScore');
+            if (health.score >= 70) {
+                scoreElement.style.color = '#10b981';
+            } else if (health.score >= 50) {
+                scoreElement.style.color = '#f59e0b';
+            } else {
+                scoreElement.style.color = '#ef4444';
+            }
+
+            // Create indicator cards
+            const grid = document.getElementById('indicatorsGrid');
+            grid.innerHTML = '';
+
+            Object.entries(indicators).forEach(([key, indicator]) => {
+                const card = document.createElement('div');
+                card.className = 'indicator-card';
+
+                const statusIcon = indicator.success ? '✅' : '❌';
+                
+                card.innerHTML = `
+                    <div class="indicator-title">${indicator.name} ${statusIcon}</div>
+                    <div class="indicator-value">${indicator.displayValue}</div>
+                    <div class="indicator-date">Updated: ${indicator.date || 'N/A'}</div>
+                `;
+
+                grid.appendChild(card);
+            });
+
+            // Update metadata
+            const metadataEl = document.getElementById('metadata');
+            metadataEl.innerHTML = `
+                📊 ${metadata.totalIndicators} indicators • 
+                ✅ ${metadata.successfulFetches} successful • 
+                🏦 ${metadata.dataSource} • 
+                🕒 ${currentData.timestamp}
+            `;
+
+            // Show sections
+            document.getElementById('healthSection').style.display = 'block';
+            document.getElementById('indicatorsGrid').style.display = 'grid';
+            document.getElementById('metadata').style.display = 'block';
+        }
+
+        // Test backend connection on page load
+        window.addEventListener('load', async () => {
+            try {
+                const response = await fetch(`${BACKEND_URL}/health`);
+                if (response.ok) {
+                    document.getElementById('status').textContent = '✅ Backend server detected - Click refresh to load data';
+                } else {
+                    document.getElementById('status').textContent = '⚠️ Backend server not responding - Make sure it\'s running';
+                }
+            } catch (error) {
+                document.getElementById('status').textContent = '❌ Backend server not found - Start your backend first';
+            }
+        });
+    </script>
+</body>
+</html>

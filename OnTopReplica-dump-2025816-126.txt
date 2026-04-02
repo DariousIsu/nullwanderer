@@ -1,0 +1,78 @@
+OnTopReplica Dump file
+This file has been created because OnTopReplica crashed.
+Please send it to lck@klopfenstein.net to help fix the bug that caused the crash.
+
+Last exception:
+System.Configuration.ConfigurationErrorsException: An error occurred loading a configuration file: The process cannot access the file 'C:\Users\azrae\AppData\Local\Lorenz_Cuno_Klopfenstein\OnTopReplica.exe_Url_rzgqv5qwygenk4czm3xhun0quvgyolek\3.5.1.0\user.config' because it is being used by another process. (C:\Users\azrae\AppData\Local\Lorenz_Cuno_Klopfenstein\OnTopReplica.exe_Url_rzgqv5qwygenk4czm3xhun0quvgyolek\3.5.1.0\user.config) ---> System.IO.IOException: The process cannot access the file 'C:\Users\azrae\AppData\Local\Lorenz_Cuno_Klopfenstein\OnTopReplica.exe_Url_rzgqv5qwygenk4czm3xhun0quvgyolek\3.5.1.0\user.config' because it is being used by another process.
+   at System.IO.__Error.WinIOError(Int32 errorCode, String maybeFullPath)
+   at System.IO.FileStream.Init(String path, FileMode mode, FileAccess access, Int32 rights, Boolean useRights, FileShare share, Int32 bufferSize, FileOptions options, SECURITY_ATTRIBUTES secAttrs, String msgPath, Boolean bFromProxy, Boolean useLongPath, Boolean checkHost)
+   at System.IO.FileStream..ctor(String path, FileMode mode, FileAccess access, FileShare share)
+   at System.Configuration.Internal.InternalConfigHost.StaticOpenStreamForRead(String streamName)
+   at System.Configuration.Internal.InternalConfigHost.System.Configuration.Internal.IInternalConfigHost.OpenStreamForRead(String streamName, Boolean assertPermissions)
+   at System.Configuration.BaseConfigurationRecord.InitConfigFromFile()
+   --- End of inner exception stack trace ---
+   at System.Configuration.ConfigurationSchemaErrors.ThrowIfErrors(Boolean ignoreLocal)
+   at System.Configuration.BaseConfigurationRecord.ThrowIfParseErrors(ConfigurationSchemaErrors schemaErrors)
+   at System.Configuration.Configuration..ctor(String locationSubPath, Type typeConfigHost, Object[] hostInitConfigurationParams)
+   at System.Configuration.Internal.InternalConfigConfigurationFactory.System.Configuration.Internal.IInternalConfigConfigurationFactory.Create(Type typeConfigHost, Object[] hostInitConfigurationParams)
+   at System.Configuration.ClientSettingsStore.WriteSettings(String sectionName, Boolean isRoaming, IDictionary newSettings)
+   at System.Configuration.LocalFileSettingsProvider.SetPropertyValues(SettingsContext context, SettingsPropertyValueCollection values)
+   at System.Configuration.SettingsBase.SaveCore()
+   at System.Configuration.SettingsBase.Save()
+   at System.Configuration.ApplicationSettingsBase.Save()
+   at OnTopReplica.Program.Main(String[] args)
+
+Last log entries:
+01:20:59 Launching OnTopReplica v.3.5.1.0
+01:20:59 Microsoft Windows NT 10.0.26100.0 detected, using support class OnTopReplica.Platforms.WindowsSeven
+01:20:59 Platform support initialized
+01:20:59 Main form constructed
+01:20:59 Entering application loop
+01:20:59 Shell hook window registered successfully
+01:20:59 Registered message pump processor OnTopReplica.MessagePumpProcessors.WindowKeeper
+01:20:59 Failed to create hotkey on key 67 with modifiers 6
+01:20:59 Failed to create hotkey on key 79 with modifiers 6
+01:20:59 Registered message pump processor OnTopReplica.MessagePumpProcessors.HotKeyManager
+01:20:59 Registered message pump processor OnTopReplica.MessagePumpProcessors.GroupSwitchManager
+01:20:59 Registered message pump processor OnTopReplica.MessagePumpProcessors.FlashCloner
+01:21:00 Main form shown
+01:21:00 Applying command line launch parameters
+01:21:00 Unable to check for updates
+         System.Net.WebException: The remote name could not be resolved: 'ontopreplica.codeplex.com'
+   at System.Net.HttpWebRequest.EndGetResponse(IAsyncResult asyncResult)
+   at OnTopReplica.Update.UpdateManager.CheckForUpdateCallback(IAsyncResult result)
+01:21:10 Cloning window HWND 2821682 of class trinityWindow
+01:21:10 Setting new thumbnail
+         HWND #2821682 (title 'EVE - Urd Feigr', class trinityWindow), region ({X=52,Y=70,Width=145,Height=519}, absolute)
+01:26:13 Unsetting thumbnail
+01:26:15 Main form closing
+01:26:15 Deregistered shell hook window successfully
+01:26:15 Main form closed
+01:26:15 Last position before shutdown: {X=0,Y=-1440}, size: {Width=213, Height=726}
+01:26:15 Persisting settings
+01:26:15 Unhandled exception
+         System.Configuration.ConfigurationErrorsException: An error occurred loading a configuration file: The process cannot access the file 'C:\Users\azrae\AppData\Local\Lorenz_Cuno_Klopfenstein\OnTopReplica.exe_Url_rzgqv5qwygenk4czm3xhun0quvgyolek\3.5.1.0\user.config' because it is being used by another process. (C:\Users\azrae\AppData\Local\Lorenz_Cuno_Klopfenstein\OnTopReplica.exe_Url_rzgqv5qwygenk4czm3xhun0quvgyolek\3.5.1.0\user.config) ---> System.IO.IOException: The process cannot access the file 'C:\Users\azrae\AppData\Local\Lorenz_Cuno_Klopfenstein\OnTopReplica.exe_Url_rzgqv5qwygenk4czm3xhun0quvgyolek\3.5.1.0\user.config' because it is being used by another process.
+   at System.IO.__Error.WinIOError(Int32 errorCode, String maybeFullPath)
+   at System.IO.FileStream.Init(String path, FileMode mode, FileAccess access, Int32 rights, Boolean useRights, FileShare share, Int32 bufferSize, FileOptions options, SECURITY_ATTRIBUTES secAttrs, String msgPath, Boolean bFromProxy, Boolean useLongPath, Boolean checkHost)
+   at System.IO.FileStream..ctor(String path, FileMode mode, FileAccess access, FileShare share)
+   at System.Configuration.Internal.InternalConfigHost.StaticOpenStreamForRead(String streamName)
+   at System.Configuration.Internal.InternalConfigHost.System.Configuration.Internal.IInternalConfigHost.OpenStreamForRead(String streamName, Boolean assertPermissions)
+   at System.Configuration.BaseConfigurationRecord.InitConfigFromFile()
+   --- End of inner exception stack trace ---
+   at System.Configuration.ConfigurationSchemaErrors.ThrowIfErrors(Boolean ignoreLocal)
+   at System.Configuration.BaseConfigurationRecord.ThrowIfParseErrors(ConfigurationSchemaErrors schemaErrors)
+   at System.Configuration.Configuration..ctor(String locationSubPath, Type typeConfigHost, Object[] hostInitConfigurationParams)
+   at System.Configuration.Internal.InternalConfigConfigurationFactory.System.Configuration.Internal.IInternalConfigConfigurationFactory.Create(Type typeConfigHost, Object[] hostInitConfigurationParams)
+   at System.Configuration.ClientSettingsStore.WriteSettings(String sectionName, Boolean isRoaming, IDictionary newSettings)
+   at System.Configuration.LocalFileSettingsProvider.SetPropertyValues(SettingsContext context, SettingsPropertyValueCollection values)
+   at System.Configuration.SettingsBase.SaveCore()
+   at System.Configuration.SettingsBase.Save()
+   at System.Configuration.ApplicationSettingsBase.Save()
+   at OnTopReplica.Program.Main(String[] args)
+
+OnTopReplica v.3.5.1.0
+OS: Microsoft Windows NT 10.0.26100.0
+.NET: 4.0.30319.42000
+DWM: True
+Launch command: "C:\Program Files (x86)\OnTopReplica\OnTopReplica\OnTopReplica.exe" 
+UTC time: 8/16/2025 5:26 AM

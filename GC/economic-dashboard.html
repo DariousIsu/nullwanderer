@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gleipnir Economic Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 3rem;
+            margin-bottom: 10px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .controls {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .refresh-btn {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 2px solid rgba(255,255,255,0.3);
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .refresh-btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+
+        .refresh-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .status {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .health-section {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            text-align: center;
+        }
+
+        .health-score {
+            font-size: 4rem;
+            font-weight: bold;
+            color: #3b82f6;
+            margin-bottom: 10px;
+        }
+
+        .health-rating {
+            font-size: 1.5rem;
+            color: #666;
+            margin-bottom: 20px;
+        }
+
+        .health-bar {
+            width: 300px;
+            height: 20px;
+            background: #e5e7eb;
+            border-radius: 10px;
+            margin: 0 auto;
+            overflow: hidden;
+        }
+
+        .health-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #10b981, #3b82f6);
+            border-radius: 10px;
+            transition: width 1s ease;
+        }
+
+        .indicators-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .indicator-card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+            transition: transform 0.3s ease;
+        }
+
+        .indicator-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .indicator-title {
+            font-size: 14px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+        }
+
+        .indicator-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #1f2937;
+            margin-bottom: 8px;
+        }
+
+        .indicator-date {
+            font-size: 12px;
+            color: #999;
+        }
+
+        .loading {
+            text-align: center;
+            color: white;
+            font-size: 18px;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid rgba(255,255,255,0.3);
+            border-top: 4px solid white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #fee2e2;
+            color: #dc2626;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            text-align: center;
+        }
+
+        .cors-notice {
+            background: rgba(255,255,255,0.1);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            text-align: center;
+            font-size: 14px;
+        }
+
+        .footer {
+            text-align: center;
+            color: rgba(255,255,255,0.8);
+            margin-top: 40px;
+            font-size: 14px;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .health-score {
+                font-size: 3rem;
+            }
+            
+            .health-bar {
+                width: 250px;
+            }
+            
+            .indicators-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>📊 Gleipnir Economic Dashboard</h1>
+            <p>Real-time Federal Reserve Economic Data (FRED)</p>
+        </div>
+
+        <!-- CORS Notice -->
+        <div class="cors-notice">
+            ℹ️ Using CORS proxy to fetch FRED data. In production, use a backend server.
+        </div>
+
+        <!-- Controls -->
+        <div class="controls">
+            <button class="refresh-btn" onclick="fetchData()" id="refreshBtn">
+                🔄 Refresh Data
+            </button>
+        </div>
+
+        <!-- Status -->
+        <div class="status" id="status">
+            Click refresh to load data...
+        </div>
+
+        <!-- Loading -->
+        <div class="loading" id="loading" style="display: none;">
+            <div class="spinner"></div>
+            <div>Fetching economic data from FRED API...</div>
+        </div>
+
+        <!-- Error -->
+        <div class="error" id="error" style="display: none;"></div>
+
+        <!-- Health Section -->
+        <div class="health-section" id="healthSection">
+            <h2>Economic Health Score</h2>
+            <div class="health-score" id="healthScore">--</div>
+            <div class="health-rating" id="healthRating">Click refresh to calculate</div>
+            <div class="health-bar">
+                <div class="health-fill" id="healthFill" style="width: 0%;"></div>
+            </div>
+        </div>
+
+        <!-- Indicators Grid -->
+        <div class="indicators-grid" id="indicatorsGrid">
+            <!-- Sample cards with placeholder data -->
+            <div class="indicator-card">
+                <div class="indicator-title">GDP</div>
+                <div class="indicator-value">$27.4T</div>
+                <div class="indicator-date">Sample data - Click refresh for real data</div>
+            </div>
+            <div class="indicator-card">
+                <div class="indicator-title">Unemployment Rate</div>
+                <div class="indicator-value">3.7%</div>
+                <div class="indicator-date">Sample data - Click refresh for real data</div>
+            </div>
+            <div class="indicator-card">
+                <div class="indicator-title">Consumer Price Index</div>
+                <div class="indicator-value">307.8</div>
+                <div class="indicator-date">Sample data - Click refresh for real data</div>
+            </div>
+            <div class="indicator-card">
+                <div class="indicator-title">Federal Funds Rate</div>
+                <div class="indicator-value">5.33%</div>
+                <div class="indicator-date">Sample data - Click refresh for real data</div>
+            </div>
+            <div class="indicator-card">
+                <div class="indicator-title">Consumer Spending</div>
+                <div class="indicator-value">$18.1T</div>
+                <div class="indicator-date">Sample data - Click refresh for real data</div>
+            </div>
+            <div class="indicator-card">
+                <div class="indicator-title">Retail Sales</div>
+                <div class="indicator-value">$709B</div>
+                <div class="indicator-date">Sample data - Click refresh for real data</div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <p>✅ Real-time data from Federal Reserve Economic Data (FRED)</p>
+            <p>🔄 Click refresh to update • 📊 Professional economic intelligence</p>
+        </div>
+    </div>
+
+    <script>
+        // FRED API Configuration with CORS proxy
+        const FRED_API_KEY = '65eb511053bc1dcd7587f9afbc790e82';
+        const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+        
+        // Economic indicators to fetch
+        const indicators = {
+            gdp: {
+                id: 'GDP',
+                name: 'GDP',
+                unit: 'Billions USD',
+                format: (value) => `$${(value / 1000).toFixed(1)}T`
+            },
+            unemployment: {
+                id: 'UNRATE',
+                name: 'Unemployment Rate',
+                unit: '%',
+                format: (value) => `${value.toFixed(1)}%`
+            },
+            inflation: {
+                id: 'CPIAUCSL',
+                name: 'Consumer Price Index',
+                unit: 'Index',
+                format: (value) => value.toFixed(1)
+            },
+            fedFunds: {
+                id: 'FEDFUNDS',
+                name: 'Federal Funds Rate',
+                unit: '%',
+                format: (value) => `${value.toFixed(2)}%`
+            },
+            consumerSpending: {
+                id: 'PCE',
+                name: 'Consumer Spending',
+                unit: 'Billions USD',
+                format: (value) => `$${(value / 1000).toFixed(1)}T`
+            },
+            retailSales: {
+                id: 'RSAFS',
+                name: 'Retail Sales',
+                unit: 'Millions USD',
+                format: (value) => `$${(value / 1000).toFixed(0)}B`
+            }
+        };
+
+        let currentData = {};
+        let fetchAttempts = 0;
+
+        // Fetch data from FRED API with CORS proxy
+        async function fetchFredData(seriesId) {
+            try {
+                const fredUrl = `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&api_key=${FRED_API_KEY}&file_type=json&limit=1&sort_order=desc`;
+                const proxyUrl = `${CORS_PROXY}${encodeURIComponent(fredUrl)}`;
+                
+                console.log(`Fetching ${seriesId}...`);
+                
+                const response = await fetch(proxyUrl);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log(`${seriesId} response:`, data);
+
+                if (data.observations && data.observations.length > 0) {
+                    const observation = data.observations[0];
+                    return {
+                        value: observation.value === '.' ? null : parseFloat(observation.value),
+                        date: observation.date,
+                        success: true
+                    };
+                } else {
+                    console.warn(`No observations found for ${seriesId}`);
+                    return { value: null, date: null, success: false };
+                }
+            } catch (error) {
+                console.error(`Error fetching ${seriesId}:`, error);
+                return { value: null, date: null, success: false, error: error.message };
+            }
+        }
+
+        // Fallback to mock data if API fails
+        function getMockData() {
+            return {
+                gdp: { value: 27394.0, date: '2024-07-01', success: true },
+                unemployment: { value: 3.7, date: '2024-10-01', success: true },
+                inflation: { value: 307.8, date: '2024-10-01', success: true },
+                fedFunds: { value: 5.33, date: '2024-11-01', success: true },
+                consumerSpending: { value: 18100.0, date: '2024-09-01', success: true },
+                retailSales: { value: 709000.0, date: '2024-10-01', success: true }
+            };
+        }
+
+        // Calculate health score
+        function calculateHealthScore(data) {
+            let score = 50; // Base score
+            let factors = [];
+
+            // GDP factor
+            if (data.gdp && data.gdp.value) {
+                score += 10;
+                factors.push('GDP data available (+10)');
+            }
+
+            // Unemployment factor (lower is better)
+            if (data.unemployment && data.unemployment.value !== null) {
+                if (data.unemployment.value < 4) {
+                    score += 20;
+                    factors.push('Low unemployment (+20)');
+                } else if (data.unemployment.value < 6) {
+                    score += 10;
+                    factors.push('Moderate unemployment (+10)');
+                } else if (data.unemployment.value > 8) {
+                    score -= 10;
+                    factors.push('High unemployment (-10)');
+                }
+            }
+
+            // Fed funds rate factor
+            if (data.fedFunds && data.fedFunds.value !== null) {
+                if (data.fedFunds.value < 6) {
+                    score += 15;
+                    factors.push('Moderate Fed rate (+15)');
+                } else if (data.fedFunds.value > 8) {
+                    score -= 10;
+                    factors.push('High Fed rate (-10)');
+                }
+            }
+
+            // Consumer spending factor
+            if (data.consumerSpending && data.consumerSpending.value) {
+                score += 5;
+                factors.push('Consumer spending data (+5)');
+            }
+
+            console.log('Health score factors:', factors);
+            return Math.max(0, Math.min(100, Math.round(score)));
+        }
+
+        // Get health rating
+        function getHealthRating(score) {
+            if (score >= 80) return 'Excellent';
+            if (score >= 70) return 'Good';
+            if (score >= 60) return 'Fair';
+            if (score >= 40) return 'Poor';
+            return 'Critical';
+        }
+
+        // Update UI elements
+        function updateUI(useMockData = false) {
+            const healthScore = calculateHealthScore(currentData);
+            const healthRating = getHealthRating(healthScore);
+
+            // Update health section
+            document.getElementById('healthScore').textContent = healthScore;
+            document.getElementById('healthRating').textContent = healthRating + (useMockData ? ' (Demo Data)' : '');
+            document.getElementById('healthFill').style.width = `${healthScore}%`;
+
+            // Update health score color
+            const scoreElement = document.getElementById('healthScore');
+            if (healthScore >= 70) {
+                scoreElement.style.color = '#10b981';
+            } else if (healthScore >= 50) {
+                scoreElement.style.color = '#f59e0b';
+            } else {
+                scoreElement.style.color = '#ef4444';
+            }
+
+            // Create indicator cards
+            const grid = document.getElementById('indicatorsGrid');
+            grid.innerHTML = '';
+
+            Object.entries(indicators).forEach(([key, config]) => {
+                const data = currentData[key];
+                const card = document.createElement('div');
+                card.className = 'indicator-card';
+
+                let value = 'N/A';
+                let date = 'No date';
+                
+                if (data && data.value !== null) {
+                    value = config.format(data.value);
+                    date = data.date || 'No date';
+                }
+
+                card.innerHTML = `
+                    <div class="indicator-title">${config.name}</div>
+                    <div class="indicator-value">${value}</div>
+                    <div class="indicator-date">Updated: ${date}${useMockData ? ' (Demo)' : ''}</div>
+                `;
+
+                grid.appendChild(card);
+            });
+
+            // Show sections
+            document.getElementById('healthSection').style.display = 'block';
+            document.getElementById('indicatorsGrid').style.display = 'grid';
+        }
+
+        // Main fetch function
+        async function fetchData() {
+            const refreshBtn = document.getElementById('refreshBtn');
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const status = document.getElementById('status');
+
+            fetchAttempts++;
+            console.log(`Fetch attempt #${fetchAttempts}`);
+
+            // Show loading state
+            refreshBtn.disabled = true;
+            refreshBtn.textContent = '🔄 Fetching...';
+            loading.style.display = 'block';
+            error.style.display = 'none';
+            status.textContent = 'Fetching data from FRED API...';
+
+            try {
+                // Fetch all indicators
+                status.textContent = 'Fetching economic indicators...';
+                
+                const promises = Object.entries(indicators).map(async ([key, config]) => {
+                    const data = await fetchFredData(config.id);
+                    return [key, data];
+                });
+
+                const results = await Promise.all(promises);
+                
+                // Store results
+                currentData = {};
+                let successCount = 0;
+                
+                results.forEach(([key, data]) => {
+                    currentData[key] = data;
+                    if (data.success) successCount++;
+                });
+
+                console.log(`Successfully fetched ${successCount}/${results.length} indicators`);
+
+                // If most requests failed, use mock data
+                if (successCount < results.length / 2) {
+                    console.log('Most API calls failed, using mock data');
+                    currentData = getMockData();
+                    updateUI(true);
+                    status.textContent = `Demo mode: Using sample data (API calls failed)`;
+                    error.style.display = 'block';
+                    error.innerHTML = `
+                        ⚠️ FRED API calls failed (CORS/Network issues)<br>
+                        Showing demo data instead<br>
+                        <small>In production, use a backend server to avoid CORS issues</small>
+                    `;
+                } else {
+                    // Update UI with real data
+                    updateUI(false);
+                    const now = new Date();
+                    status.textContent = `Last updated: ${now.toLocaleTimeString()} • ✅ Connected to FRED API (${successCount}/${results.length} indicators)`;
+                }
+
+                loading.style.display = 'none';
+
+            } catch (err) {
+                console.error('Fetch error:', err);
+                
+                // Use mock data as fallback
+                currentData = getMockData();
+                updateUI(true);
+                
+                error.style.display = 'block';
+                error.innerHTML = `
+                    ❌ Error fetching data: ${err.message}<br>
+                    Showing demo data instead<br>
+                    <small>This is normal for HTML files due to CORS restrictions</small>
+                `;
+                loading.style.display = 'none';
+                status.textContent = '❌ API connection failed - showing demo data';
+            } finally {
+                refreshBtn.disabled = false;
+                refreshBtn.textContent = '🔄 Refresh Data';
+            }
+        }
+
+        // Initialize with sample data
+        window.addEventListener('load', () => {
+            // Show sample data immediately
+            currentData = getMockData();
+            updateUI(true);
+            
+            // Update status
+            document.getElementById('status').textContent = 'Demo data loaded - Click refresh to try fetching real data';
+        });
+    </script>
+</body>
+</html>

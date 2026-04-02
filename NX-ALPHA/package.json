@@ -1,0 +1,87 @@
+{
+  "name": "aura-nx-alpha",
+  "version": "0.1.0-alpha",
+  "private": true,
+  "description": "AURA NX-Alpha — Command Center interface",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently -n vite,electron -c cyan,yellow \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "dev:renderer": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "dist": "vite build && electron-builder"
+  },
+  "dependencies": {
+    "@deck.gl/layers": "^9.2.11",
+    "@deck.gl/mapbox": "^9.2.11",
+    "@xyflow/react": "^12.10.2",
+    "deck.gl": "^9.2.11",
+    "gsap": "^3.12.5",
+    "hls.js": "^1.5.13",
+    "maplibre-gl": "^5.21.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-map-gl": "^8.1.0",
+    "react-maplibre": "^1.0.0",
+    "react-markdown": "^10.1.0",
+    "recharts": "^2.12.7",
+    "remark-gfm": "^4.0.1",
+    "three": "^0.163.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^8.2.2",
+    "electron": "^30.0.1",
+    "electron-builder": "^24.9.1",
+    "vite": "^5.2.11",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.aura.nx-alpha",
+    "productName": "AURA NX-α",
+    "copyright": "AURA NX-Alpha",
+    "asar": true,
+    "directories": {
+      "buildResources": "assets",
+      "output": "dist/electron"
+    },
+    "files": [
+      "dist/renderer/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.icns"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  }
+}
