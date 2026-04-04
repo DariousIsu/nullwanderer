@@ -1,0 +1,101 @@
+##
+## AURA NX-Alpha — Docker Compose
+##
+## Services:
+##   neo4j     — Layer 3 graph memory (Bolt protocol, Neo4j Community)
+##               Port 7687 (Bolt), 7474 (HTTP browser UI)
+##
+## NOTE ON OLLAMA:
+##   Ollama v0.18.0 is running natively on this machine at localhost:11434.
+##   Do NOT run Ollama in Docker — port would conflict and GPU access is better native.
+##   Models available: qwen3:32b (workhorse), qwen3:8b, phi4-mini, deepseek-r1:7b
+##   For vision (interface_agent): use llama-cpp-python with GGUF file directly.
+##
+## START:
+##   cd backend
+##   docker compose up -d
+##
+## STOP:
+##   docker compose down
+##
+## LOGS:
+##   docker compose logs -f neo4j
+##
+## ENV (add to .env):
+##   AURA_MEMORY__NEO4J_URI=bolt://localhost:7687
+##   AURA_MEMORY__NEO4J_PASSWORD=aurapassword
+##   AURA_WORKHORSE__OLLAMA_HOST=http://127.0.0.1:11434
+##
+
+services:
+
+  # ── Neo4j — Layer 3 Knowledge Graph ─────────────────────────────────────────
+  # Property graph database (Bolt protocol). AURA stores entity relationships,
+  # conversation facts, and LightRAG knowledge graph here.
+  # Two named databases: aura_memory (conversation facts) + lightrag_knowledge (LightRAG)
+  #
+  # Browser UI: http://localhost:7474 (neo4j / aurapassword)
+  # Bolt: bolt://localhost:7687
+  neo4j:
+    image: neo4j:5-community
+    container_name: aura-neo4j
+    restart: unless-stopped
+    ports:
+      - "7687:7687"   # Bolt (driver connections)
+      - "7474:7474"   # HTTP browser UI
+    volumes:
+      - neo4j_data:/data
+    environment:
+      - NEO4J_AUTH=neo4j/aurapassword
+      - NEO4J_PLUGINS=[]
+      - NEO4J_dbms_memory_heap_initial__size=256m
+      - NEO4J_dbms_memory_heap_max__size=512m
+      - NEO4J_dbms_memory_pagecache_size=256m
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ── SearxNG — Multi-engine search aggregator ────────────────────────────────
+  # Aggregates Google, Bing, DuckDuckGo, and 70+ engines via single HTTP API.
+  # Port 8888. JSON API: GET /search?q=...&format=json&categories=general
+  # Config mounted read-only from ./searxng/settings.yml
+  searxng:
+    image: searxng/searxng:latest
+    container_name: aura-searxng
+    restart: unless-stopped
+    ports:
+      - "8888:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_SECRET_KEY=aura-local-dev-secret
+      - SEARXNG_BIND_ADDRESS=0.0.0.0
+
+  # ── Qdrant — Semantic search result cache ───────────────────────────────────
+  # Vector DB for semantic caching of web search results.
+  # Port 6333 (HTTP REST), 6334 (gRPC).
+  # Phase 2: also used for legal embeddings index.
+  # Set AURA_SEARCH__QDRANT_HOST=localhost in .env (default)
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: aura-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  neo4j_data:
+    driver: local
+  qdrant_data:
+    driver: local

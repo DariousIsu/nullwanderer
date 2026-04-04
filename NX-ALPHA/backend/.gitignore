@@ -1,0 +1,28 @@
+# Environment
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Runtime data
+*.db
+*.db-shm
+*.db-wal
+checkpoints/
+
+# Models (large files)
+*.gguf
+*.bin
+*.safetensors
+models/
+
+# Logs
+*.log

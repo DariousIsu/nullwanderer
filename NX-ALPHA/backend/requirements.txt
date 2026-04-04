@@ -1,0 +1,151 @@
+# AURA NX-Alpha — Backend Dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+# INSTALL:
+#   pip install -r requirements.txt
+#
+# AMD ROCm / llama-cpp-python — install separately (see Sprint 0 checklist):
+#   pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/rocm57
+#   OR build from source with CMAKE_ARGS="-DGGML_HIPBLAS=ON"
+#
+# Ollama — install separately: https://ollama.com
+# Neo4j — run via Docker: docker-compose up -d
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Core API ──────────────────────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+
+# ── MCP (Model Context Protocol) ─────────────────────────────────────────────
+mcp>=1.0.0                         # MCP server SDK — AURA as MCP server for Claude Code
+
+# ── Async HTTP ────────────────────────────────────────────────────────────────
+httpx>=0.27.0
+aiohttp>=3.9.0
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+aiosqlite>=0.20.0
+
+# ── Scheduled Tasks ──────────────────────────────────────────────────────────
+APScheduler>=3.10.0,<4.0.0          # Cron-based task scheduling (v3.x stable)
+
+# ── LangGraph Pipeline ────────────────────────────────────────────────────────
+langgraph>=0.2.0
+langgraph-checkpoint-sqlite>=2.0.0
+
+# ── Memory Layer ──────────────────────────────────────────────────────────────
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+neo4j>=5.0.0                      # Layer 3 graph memory (Bolt protocol, replaces FalkorDB)
+lightrag-hku>=1.0.0               # Graph-enhanced RAG — entity extraction → Neo4j lightrag_knowledge DB
+qdrant-client>=1.9.0              # Semantic search result cache (Docker on port 6333)
+
+# ── Interface Engine ──────────────────────────────────────────────────────────
+# llama-cpp-python: install HIP build manually (see above)
+pynvml>=11.0.0                    # NVIDIA GPU metrics (soft dep — torch installs this)
+
+# ── GPU Monitoring ──────────────────────────────────────────────────────────
+ADLXPybind>=1.4.0                 # AMD GPU metrics (temp, VRAM, utilization) via ADLX SDK
+
+# ── Workhorse ─────────────────────────────────────────────────────────────────
+ollama>=0.1.0
+
+# ── Routing ────────────────────────────────────────────────────────────────────
+semantic-router[local]>=0.1.0  # Embedding-based request routing (FastEmbed, ONNX, CPU)
+                               # No API keys needed. ~100ms first call, ~5ms after.
+
+# ── Document Export / Import ──────────────────────────────────────────────────
+python-docx>=1.1.0             # DOCX document generation + import parsing
+pypdf>=4.0.0                   # PDF text extraction for document import
+reportlab>=4.0.0               # PDF generation for citation verification reports
+rapidfuzz>=3.0.0               # Fuzzy string matching for quote verification
+
+# ── Agent Tools ───────────────────────────────────────────────────────────────
+duckduckgo-search>=6.0.0      # Web search — free, no key
+playwright>=1.44.0             # Browser automation — free, open source
+                               # After install: playwright install chromium
+trafilatura>=1.12.0            # Web scraping + content extraction (scraper_service.py)
+yt-dlp>=2024.3.10              # Video stream URL extraction (YouTube, Twitch, Vimeo, 1000+ sites)
+gpt-researcher>=0.8.0          # Deep research agent — configure via OPENAI_BASE_URL for Ollama
+
+# ── Live Data — Finance ───────────────────────────────────────────────────────
+yfinance>=0.2.40               # Stocks, ETFs, international markets — free, no key
+pandas>=2.0.0                  # DataFrame operations for market data
+numpy>=1.24.0                  # Numerical computing
+
+# ── Technical Analysis ────────────────────────────────────────────────────────
+pandas-ta>=0.3.14b             # 130+ TA indicators (RSI, MACD, Bollinger, EMA, etc.)
+
+# ── Forecasting & Statistical Modeling ───────────────────────────────────────
+statsmodels>=0.14.0            # ARIMA, SARIMA, OLS regression, statistical tests
+scikit-learn>=1.3.0            # ML models: RandomForest, GradientBoosting, SVR, etc.
+scipy>=1.11.0                  # Statistical functions, optimization routines
+# prophet>=1.1.5               # Facebook Prophet time-series forecasting — optional
+#   Heavy dependency (requires pystan). Install separately if needed:
+#   pip install prophet
+
+# ── Live Data — News ──────────────────────────────────────────────────────────
+feedparser>=6.0.11             # RSS/Atom parsing — free, no key
+html2text>=2024.2.26           # HTML→plain text for newsletter indexing
+
+# ── Live Data — Weather ───────────────────────────────────────────────────────
+# Open-Meteo: called via httpx — no extra dep, no key
+# OpenWeatherMap: called via httpx — key configured in MarketAPIConfig
+
+# ── Live Data — Google OAuth (Calendar + Gmail) ───────────────────────────────
+google-auth>=2.29.0
+google-auth-oauthlib>=1.2.0
+google-api-python-client>=2.126.0
+
+# ── Screen Capture ────────────────────────────────────────────────────────────
+mss>=9.0.0                     # Cross-platform screenshot capture (screen_capture tool)
+Pillow>=10.1.0                 # Image processing + JPEG encode for screen captures
+
+# ── System Monitoring ─────────────────────────────────────────────────────────
+psutil>=5.9.0                  # CPU, RAM, disk — free, open source
+
+# ── Knowledge DB Download ─────────────────────────────────────────────────────
+aiofiles>=23.0.0               # Async file writes for downloads
+
+# ── Voice — STT ───────────────────────────────────────────────────────────────
+faster-whisper>=1.0.0          # Whisper STT on CPU (CTranslate2 backend). tiny.en: 39MB, ~300ms latency
+                               # AMD GPU not supported — intentionally CPU-only for Phase 1
+
+# ── Voice — TTS ───────────────────────────────────────────────────────────────
+piper-tts>=1.2.0               # Local neural TTS, CPU-only, ~50-100ms latency (Phase 1 fallback)
+                               # After install, download a voice model:
+                               #   mkdir -p ~/.aura/models/voice/piper
+                               #   cd ~/.aura/models/voice/piper
+                               #   wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
+                               #   wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
+chatterbox-tts>=0.1.0          # Voice-cloning TTS with emotion control (Resemble AI, 2025)
+                               # Downloads ~1.5GB model on first use (HuggingFace Hub)
+                               # Usage: set tts_engine="chatterbox" in voice profile
+                               # Reference audio in ~/.aura/models/voice/samples/ used for cloning
+torchaudio>=2.0.0              # Required by Chatterbox for WAV encoding
+                               # Install CPU build: pip install torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# ── Voice — Wake Word ─────────────────────────────────────────────────────────
+openwakeword>=0.6.0            # Wake word detection, MIT license, CPU, ~5% idle CPU usage
+                               # Includes pre-trained models; custom "hey_aura" model trainable
+                               # After install: python -m openwakeword.models (downloads base models)
+
+# ── Voice — VAD ───────────────────────────────────────────────────────────────
+torch>=2.0.0                   # Required for Silero VAD (end-of-utterance detection)
+                               # CPU-only build sufficient: pip install torch --index-url https://download.pytorch.org/whl/cpu
+                               # Silero VAD loaded via torch.hub — downloads ~1MB model on first use
+
+# ── Voice — Audio I/O ────────────────────────────────────────────────────────
+sounddevice>=0.4.6             # Audio device enumeration + microphone capture
+                               # Requires PortAudio: apt install libportaudio2 (Linux) / auto on Windows
+
+# ── HuggingFace Hub ───────────────────────────────────────────────────────────
+huggingface_hub>=0.23.0        # Model search, metadata, and streaming downloads
+                               # All AURA model downloads route through this library
+datasets>=2.20.0               # HuggingFace datasets — adversarial trainer dataset loading
+
+# ── Geospatial / Orbital ──────────────────────────────────────────────────────
+skyfield>=1.46.0               # Satellite propagation from TLE data (uses sgp4 internally)
+sgp4>=2.22                     # SGP4 orbital mechanics library (skyfield dependency)
