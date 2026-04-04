@@ -245,6 +245,15 @@ class IdleTriageService:
                     await asyncio.sleep(60)
                     continue
 
+                # Defer during active model inference
+                try:
+                    from app.controller.chat_controller import _runtime_state
+                    if _runtime_state.get("interface_busy"):
+                        await asyncio.sleep(cfg.triage_interval_seconds)
+                        continue
+                except Exception:
+                    pass
+
                 idle_state, idle_secs = self._get_idle_state()
 
                 if idle_state == "active":
@@ -288,6 +297,15 @@ class IdleTriageService:
                     continue
 
                 idle_state, idle_secs = self._get_idle_state()
+
+                # Defer during active model inference
+                try:
+                    from app.controller.chat_controller import _runtime_state
+                    if _runtime_state.get("interface_busy"):
+                        await asyncio.sleep(30)
+                        continue
+                except Exception:
+                    pass
 
                 # Only dispatch during deep idle or away
                 if idle_state not in ("deep_idle", "away"):

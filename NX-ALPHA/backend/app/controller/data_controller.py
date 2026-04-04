@@ -22,6 +22,7 @@ ROUTES:
     GET  /data/knowledge/sources            — SOURCES dict with current status merged
     POST /data/knowledge/personal           — ingest a single personal document
     POST /data/knowledge/personal/batch     — batch ingest text files from a folder
+    GET  /data/collector/status              — Worker B data collector status
 """
 
 import asyncio
@@ -1368,4 +1369,22 @@ async def list_calendar_accounts():
         return {"accounts": []}
     except Exception as exc:
         logger.exception("Calendar accounts error: %s", exc)
+        raise HTTPException(status_code=502, detail={"error": str(exc)})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA COLLECTOR (Worker B) STATUS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/collector/status")
+async def collector_status():
+    """Return Worker B data collector operational status."""
+    try:
+        from app.service.data_collector_service import get_data_collector
+        svc = get_data_collector()
+        return svc.status()
+    except RuntimeError:
+        return {"running": False, "detail": "Data collector not initialised"}
+    except Exception as exc:
+        logger.exception("Collector status error: %s", exc)
         raise HTTPException(status_code=502, detail={"error": str(exc)})

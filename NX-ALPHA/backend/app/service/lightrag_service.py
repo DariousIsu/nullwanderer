@@ -5,8 +5,12 @@ AURA LightRAG integration — entity extraction and graph-enhanced RAG.
 
 Architecture:
   - Uses Neo4j `lightrag_knowledge` database (separate from `aura_memory`)
-  - LLM binding: Ollama via OpenAI-compatible endpoint at localhost:11434/v1
-  - Working directory: ~/.aura/lightrag/ (LightRAG's own vector + KV storage)
+  - Two LightRAG instances:
+    * Query instance: Ollama LLM for chat-pipeline queries
+    * Worker instance: llama-cpp-python (qwen2.5-3b GGUF, CPU, 2 threads)
+      for passive background entity extraction — never touches Ollama
+  - Both share Ollama embeddings (nomic-embed-text) for vector compatibility
+  - Working dirs: ~/.aura/lightrag/ (query) and ~/.aura/lightrag_worker/ (ingest)
   - Async ingest queue with deduplication (source_id based)
 
 Ingestion paths:
@@ -26,13 +30,14 @@ Retrieval modes (passed to query()):
 """
 
 import asyncio
+import functools
 import hashlib
 import logging
 import os
 import sqlite3
 import time
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Union
 
 logger = logging.getLogger(__name__)
 
@@ -48,15 +53,150 @@ except ImportError:
     logger.info("[lightrag_service] lightrag-hku not installed — LightRAG disabled")
     logger.info("[lightrag_service] Install with: pip install lightrag-hku")
 
-_WORKING_DIR = str(Path.home() / ".aura" / "lightrag")
-_OLLAMA_HOST = "http://127.0.0.1:11434"
-_EMBED_MODEL  = "nomic-embed-text"   # Fast local embedding via Ollama — fallback to mxbai-embed-large
-_LLM_MODEL    = "qwen2.5:3b"         # Entity extraction LLM — lightweight, fast for batch extraction
+_WORKING_DIR        = str(Path.home() / ".aura" / "lightrag")
+_WORKER_WORKING_DIR = str(Path.home() / ".aura" / "lightrag_worker")
+_OLLAMA_HOST  = "http://127.0.0.1:11434"
+_EMBED_MODEL  = "nomic-embed-text"   # Fast local embedding via Ollama — shared by both instances
+_LLM_MODEL    = "qwen2.5:3b"         # Query instance LLM (Ollama)
+
+# ── llama-cpp worker model config ─────────────────────────────────────────────
+_WORKER_GGUF_REPO   = "Qwen/Qwen2.5-3B-Instruct-GGUF"
+_WORKER_GGUF_FILE   = "qwen2.5-3b-instruct-q4_k_m.gguf"
+_WORKER_MODEL_DIR   = str(Path.home() / ".aura" / "models" / "lightrag")
+_WORKER_N_THREADS   = 2
+_WORKER_N_CTX       = 8192
+
+# Module-level singleton for the llama-cpp model (lazy-loaded)
+_llama_model = None
+_llama_lock: asyncio.Lock | None = None
+
+
+async def _ensure_worker_model() -> Path:
+    """Download the GGUF model if missing, return the path."""
+    model_path = Path(_WORKER_MODEL_DIR) / _WORKER_GGUF_FILE
+    if model_path.exists():
+        return model_path
+
+    logger.info("[lightrag_service] Downloading worker GGUF model: %s/%s",
+                _WORKER_GGUF_REPO, _WORKER_GGUF_FILE)
+    Path(_WORKER_MODEL_DIR).mkdir(parents=True, exist_ok=True)
+
+    loop = asyncio.get_running_loop()
+    try:
+        from huggingface_hub import hf_hub_download
+        downloaded = await loop.run_in_executor(
+            None,
+            functools.partial(
+                hf_hub_download,
+                repo_id=_WORKER_GGUF_REPO,
+                filename=_WORKER_GGUF_FILE,
+                local_dir=_WORKER_MODEL_DIR,
+            ),
+        )
+        logger.info("[lightrag_service] Worker model downloaded: %s", downloaded)
+        return Path(downloaded)
+    except Exception as exc:
+        logger.warning("[lightrag_service] Failed to download worker model: %s", exc)
+        raise
+
+
+async def _get_llama_model():
+    """Lazy-load the llama-cpp-python model singleton."""
+    global _llama_model, _llama_lock
+    if _llama_model is not None:
+        return _llama_model
+
+    if _llama_lock is None:
+        _llama_lock = asyncio.Lock()
+
+    async with _llama_lock:
+        if _llama_model is not None:
+            return _llama_model
+
+        model_path = await _ensure_worker_model()
+
+        loop = asyncio.get_running_loop()
+
+        def _load():
+            from llama_cpp import Llama
+            return Llama(
+                model_path=str(model_path),
+                n_ctx=_WORKER_N_CTX,
+                n_threads=_WORKER_N_THREADS,
+                n_gpu_layers=0,          # CPU only — no GPU contention
+                verbose=False,
+            )
+
+        logger.info("[lightrag_service] Loading worker GGUF model (CPU, %d threads)...",
+                     _WORKER_N_THREADS)
+        _llama_model = await loop.run_in_executor(None, _load)
+        logger.info("[lightrag_service] Worker GGUF model loaded: %s", _WORKER_GGUF_FILE)
+        return _llama_model
+
+
+async def _llama_cpp_complete(
+    prompt,
+    system_prompt=None,
+    history_messages=None,
+    enable_cot: bool = False,
+    keyword_extraction=False,
+    **kwargs,
+) -> Union[str, None]:
+    """LLM function for LightRAG that uses llama-cpp-python instead of Ollama."""
+    if history_messages is None:
+        history_messages = []
+
+    # Build messages list for chat completion
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    for msg in history_messages:
+        messages.append(msg)
+    messages.append({"role": "user", "content": prompt})
+
+    model = await _get_llama_model()
+    loop = asyncio.get_running_loop()
+
+    def _generate():
+        _set_thread_idle_priority()
+        response = model.create_chat_completion(
+            messages=messages,
+            max_tokens=4096,
+            temperature=0.0,
+        )
+        return response["choices"][0]["message"]["content"]
+
+    result = await loop.run_in_executor(None, _generate)
+    return result
+
+
+def _set_thread_idle_priority() -> None:
+    """Set the current thread to IDLE priority so it yields to games/heavy apps."""
+    import sys
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            THREAD_SET_INFORMATION = 0x0020
+            THREAD_PRIORITY_IDLE = -15
+            handle = ctypes.windll.kernel32.GetCurrentThread()
+            ctypes.windll.kernel32.SetThreadPriority(handle, THREAD_PRIORITY_IDLE)
+        except Exception:
+            pass
+    else:
+        try:
+            os.nice(19)
+        except OSError:
+            pass
 
 
 class LightRAGService:
     """
-    Singleton service managing AURA's LightRAG instance.
+    Singleton service managing AURA's LightRAG instances.
+
+    Two instances:
+      - _rag        : Ollama LLM — used for **queries** (chat pipeline)
+      - _rag_worker : llama-cpp LLM — used for **ingest** (background workers)
+    Both share Ollama embeddings (nomic-embed-text) for vector compatibility.
 
     Usage:
         svc = LightRAGService.get_instance()
@@ -67,8 +207,10 @@ class LightRAGService:
     _instance: "LightRAGService | None" = None
 
     def __init__(self) -> None:
-        self._rag: "LightRAG | None" = None
+        self._rag: "LightRAG | None" = None            # Query instance (Ollama LLM)
+        self._rag_worker: "LightRAG | None" = None      # Worker instance (llama-cpp LLM)
         self._available = False
+        self._worker_available = False
         self._ingest_queue: asyncio.Queue = asyncio.Queue(maxsize=500)
         self._seen_ids: set[str] = set()
         self._worker_task: asyncio.Task | None = None
@@ -81,7 +223,7 @@ class LightRAGService:
         return cls._instance
 
     async def initialize(self) -> None:
-        """Initialize LightRAG with Ollama LLM + Neo4j graph backend."""
+        """Initialize LightRAG query instance (Ollama LLM) and prepare worker instance."""
         if not _LIGHTRAG_AVAILABLE:
             logger.warning("[lightrag_service] LightRAG not available — skipping init")
             return
@@ -90,15 +232,14 @@ class LightRAGService:
 
         try:
             Path(_WORKING_DIR).mkdir(parents=True, exist_ok=True)
+            Path(_WORKER_WORKING_DIR).mkdir(parents=True, exist_ok=True)
 
             # Configure Ollama as the LLM and embedding provider
             os.environ.setdefault("OPENAI_BASE_URL", f"{_OLLAMA_HOST}/v1")
             os.environ.setdefault("OPENAI_API_KEY", "ollama")
 
-            # LightRAG 1.4.x API: pass llm function + model name + kwargs separately.
-            # Do NOT wrap ollama_model_complete — LightRAG injects model= internally.
-            # For embedding: use ollama_embed.func to bypass the hardcoded 1024-dim
-            # EmbeddingFunc wrapper; nomic-embed-text is 768-dim.
+            # Shared embedding function — both instances use Ollama nomic-embed-text
+            # for vector compatibility between ingest and query paths.
             import numpy as np
             from lightrag.llm.ollama import ollama_embed as _ollama_embed_wrapped
 
@@ -116,6 +257,7 @@ class LightRAGService:
                 func=_embed_func,
             )
 
+            # ── Query instance (Ollama LLM) — used by chat pipeline ──────────
             self._rag = LightRAG(
                 working_dir=_WORKING_DIR,
                 llm_model_func=ollama_model_complete,
@@ -132,25 +274,86 @@ class LightRAGService:
 
             await self._rag.initialize_storages()
             self._available = True
+            logger.info("[lightrag_service] Query instance initialized — working_dir=%s", _WORKING_DIR)
 
-            # Start background ingest worker + FTS5 sync worker
-            self._worker_task = asyncio.create_task(self._ingest_worker())
-            self._sync_task = asyncio.create_task(self._fts5_sync_worker())
-
-            logger.info("[lightrag_service] LightRAG initialized — working_dir=%s", _WORKING_DIR)
+            # ── Worker instance (llama-cpp LLM) — used by background ingest ──
+            # Deferred: workers are started later via start_workers() in Phase 3
+            # to avoid CPU/memory contention during boot.
 
         except Exception as exc:
             logger.warning("[lightrag_service] LightRAG init failed: %s", exc)
             self._available = False
 
+    async def _init_worker_instance(self) -> None:
+        """Initialize the llama-cpp-backed worker LightRAG instance."""
+        if self._worker_available:
+            return
+        try:
+            import numpy as np
+            from lightrag.llm.ollama import ollama_embed as _ollama_embed_wrapped
+
+            async def _embed_func(texts: list[str]) -> np.ndarray:
+                result = await _ollama_embed_wrapped.func(
+                    texts,
+                    embed_model=_EMBED_MODEL,
+                    host=_OLLAMA_HOST,
+                )
+                return np.array(result, dtype=np.float32)
+
+            embedding_func = EmbeddingFunc(
+                embedding_dim=768,
+                max_token_size=8192,
+                func=_embed_func,
+            )
+
+            self._rag_worker = LightRAG(
+                working_dir=_WORKER_WORKING_DIR,
+                llm_model_func=_llama_cpp_complete,
+                llm_model_name="qwen2.5-3b-instruct",
+                llm_model_kwargs={},
+                embedding_func=embedding_func,
+                enable_llm_cache=False,
+                enable_llm_cache_for_entity_extract=False,
+            )
+
+            await self._rag_worker.initialize_storages()
+            self._worker_available = True
+            logger.info("[lightrag_service] Worker instance initialized (llama-cpp) — working_dir=%s",
+                        _WORKER_WORKING_DIR)
+        except Exception as exc:
+            logger.warning("[lightrag_service] Worker instance init failed: %s", exc)
+            self._worker_available = False
+
+    async def start_workers(self) -> None:
+        """Start background ingest + FTS5 sync workers. Called from boot Phase 3."""
+        if not self._available:
+            logger.warning("[lightrag_service] Cannot start workers — query instance not available")
+            return
+
+        # Initialize the llama-cpp worker instance
+        await self._init_worker_instance()
+
+        if not self._worker_available:
+            logger.warning("[lightrag_service] Worker instance failed — "
+                           "falling back to Ollama for ingest")
+
+        self._worker_task = asyncio.create_task(self._ingest_worker())
+        self._sync_task = asyncio.create_task(self._fts5_sync_worker())
+        logger.info("[lightrag_service] Background workers started (worker_llm=%s)",
+                     "llama-cpp" if self._worker_available else "ollama-fallback")
+
     async def _ingest_worker(self) -> None:
-        """Background worker that drains the ingest queue."""
+        """Background worker that drains the ingest queue.
+        Uses llama-cpp worker instance if available, falls back to Ollama."""
+        ingest_rag = self._rag_worker if self._worker_available else self._rag
+        _backend = "llama-cpp" if self._worker_available else "ollama"
         while True:
             try:
                 text, source_id, source_type = await self._ingest_queue.get()
                 try:
-                    await self._rag.ainsert(text)
-                    logger.debug("[lightrag_service] Ingested source_id=%s type=%s", source_id, source_type)
+                    await ingest_rag.ainsert(text)
+                    logger.debug("[lightrag_service] Ingested (%s) source_id=%s type=%s",
+                                 _backend, source_id, source_type)
                 except Exception as exc:
                     logger.warning("[lightrag_service] Ingest failed for %s: %s", source_id, exc)
                 finally:
@@ -190,6 +393,7 @@ class LightRAGService:
         """
         Direct async ingest — for batch scripts and lightrag_tool.py.
         Awaits completion (unlike enqueue_ingest which is fire-and-forget).
+        Uses worker instance (llama-cpp) if available, falls back to Ollama.
         """
         if not self._available or self._rag is None:
             return {"success": False, "error": "LightRAG not initialized"}
@@ -199,8 +403,9 @@ class LightRAGService:
             return {"success": True, "skipped": True, "reason": "already ingested"}
         self._seen_ids.add(dedup_key)
 
+        ingest_rag = self._rag_worker if self._worker_available else self._rag
         try:
-            await self._rag.ainsert(text)
+            await ingest_rag.ainsert(text)
             return {"success": True, "source_id": source_id, "source_type": source_type}
         except Exception as exc:
             logger.warning("[lightrag_service] Direct ingest failed for %s: %s", source_id, exc)
@@ -396,6 +601,8 @@ class LightRAGService:
             "seen_ids_count": len(self._seen_ids),
             "working_dir": _WORKING_DIR,
             "llm_model": _LLM_MODEL,
+            "worker_llm": "llama-cpp/" + _WORKER_GGUF_FILE if self._worker_available else _LLM_MODEL,
+            "worker_available": self._worker_available,
             "embed_model": _EMBED_MODEL,
             "entity_count": entity_count,
             "relation_count": relation_count,

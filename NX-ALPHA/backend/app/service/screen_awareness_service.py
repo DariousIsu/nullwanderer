@@ -60,7 +60,7 @@ MIN_CONTEXT_WORDS = 2
 
 # Vision capture (Phase B)
 _VISION_INTERVAL_S         = 30.0    # proactive mode
-_VISION_INTERVAL_AMBIENT_S = 120.0   # ambient mode
+_VISION_INTERVAL_AMBIENT_S = 300.0   # ambient mode (5 min — reduced from 2 min)
 _VISION_MAX_WIDTH          = 1024
 _VISION_JPEG_QUALITY       = 60
 _VISION_PROMPT = (
@@ -486,6 +486,10 @@ class ScreenAwarenessService:
         if mode == "quiet":
             return  # completely dormant in quiet mode
 
+        # Defer window title polling during active model inference
+        if _runtime_state.get("interface_busy"):
+            return
+
         raw_title, proc_name = await asyncio.to_thread(_get_foreground_info)
         if not raw_title:
             return
@@ -588,6 +592,10 @@ class ScreenAwarenessService:
         from app.controller.chat_controller import _runtime_state  # type: ignore
         mode = _runtime_state.get("operating_mode", "proactive")
         if mode == "quiet":
+            return
+
+        # Defer browser history polling during active model inference
+        if _runtime_state.get("interface_busy"):
             return
 
         self._last_browser_at = time.time()

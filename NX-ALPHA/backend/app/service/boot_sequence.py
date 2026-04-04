@@ -670,9 +670,28 @@ class BootSequence:
         # Warm up the Qdrant embedding model so first chat message isn't slow
         await self._run_step_warn("Vector encoder warm-up", 3, self._warm_vector_encoder)
 
+        # Start LightRAG background workers (deferred from Phase 0 to avoid
+        # Ollama contention during model verification in Phase 2).
+        await self._run_step_warn("LightRAG workers", 3, self._start_lightrag_workers)
+        await self._run_step_warn("Data collector", 3, self._start_data_collector)
+
         await self._emit_phase(3, "complete")
 
     # ── Phase 3 init helpers ──
+
+    async def _start_lightrag_workers(self):
+        from app.service.lightrag_service import LightRAGService
+        svc = LightRAGService.get_instance()
+        if not svc._available:
+            return "skipped — LightRAG not initialized"
+        await svc.start_workers()
+        backend = "llama-cpp" if svc._worker_available else "ollama-fallback"
+        return f"started ({backend})"
+
+    async def _start_data_collector(self):
+        from app.service.data_collector_service import init_data_collector
+        svc = init_data_collector()
+        return await svc.start()
 
     async def _init_pipeline(self):
         from app.graph.pipeline import init_pipeline

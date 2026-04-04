@@ -43,7 +43,7 @@
 
 'use strict';
 
-const { app, BrowserWindow, ipcMain, shell, nativeTheme, screen, globalShortcut, Menu, session } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, nativeTheme, screen, globalShortcut, Menu, session, components } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 
@@ -63,39 +63,13 @@ const IS_DEV          = !app.isPackaged && !fs.existsSync(RENDERER_HTML);
 /** Default SSE endpoint. Override via AURA_STREAM_URL env var. */
 const DEFAULT_STREAM_URL = 'http://localhost:8000/stream';
 
+// GPU flags removed — not needed and caused blank window on AMD dual-GPU
+// (iGPU + RX 7900 XT) with castlabs Electron 40 / Chromium 134.
+
 // Suppress EPIPE errors on stdout/stderr — these fire as async stream errors
 // when the parent terminal pipe closes (common in Electron dev mode).
 process.stdout.on('error', (err) => { if (err.code !== 'EPIPE') throw err; });
 process.stderr.on('error', (err) => { if (err.code !== 'EPIPE') throw err; });
-
-// ─────────────────────────────────────────────────────────────────────────────
-// WIDEVINE CDM — load from local Chrome install for DRM streaming services
-// Must be called before app 'ready'. Silently skips if Chrome is not found.
-// ─────────────────────────────────────────────────────────────────────────────
-
-(function loadWidevine() {
-  const chromeBase = 'C:\\Program Files\\Google\\Chrome\\Application';
-  if (!fs.existsSync(chromeBase)) return;
-  try {
-    const versions = fs.readdirSync(chromeBase).filter(d => /^\d+\.\d+/.test(d));
-    if (!versions.length) return;
-    versions.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
-    const widevineDll = path.join(
-      chromeBase, versions[0],
-      'WidevineCdm', '_platform_specific', 'win_x64', 'widevinecdm.dll'
-    );
-    if (!fs.existsSync(widevineDll)) return;
-    const manifestPath = path.join(chromeBase, versions[0], 'WidevineCdm', 'manifest.json');
-    const cdmVersion = fs.existsSync(manifestPath)
-      ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')).version
-      : '4.10.2557.0';
-    app.commandLine.appendSwitch('widevine-cdm-path', widevineDll);
-    app.commandLine.appendSwitch('widevine-cdm-version', cdmVersion);
-    console.log('[AURA] Widevine CDM loaded v' + cdmVersion);
-  } catch (err) {
-    console.warn('[AURA] Widevine CDM load failed:', err.message);
-  }
-})();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WINDOW REGISTRY
@@ -334,10 +308,39 @@ function createTheatreWindow() {
     theatreWindow.loadFile(RENDERER_HTML, { query: { mode: 'theatre' } });
   }
 
-  // Allow DRM (Widevine) and media permissions for the theatre session
+  // Configure the theatre session: spoof Chrome UA + client hints so streaming
+  // services (Netflix, Paramount+, etc.) don't detect Electron and block DRM.
   const theatreSes = session.fromPartition('persist:theatre');
-  theatreSes.setPermissionRequestHandler((_wc, _permission, callback) => callback(true));
+  const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36';
+  theatreSes.setUserAgent(CHROME_UA);
 
+  // Override Sec-CH-UA client hints — these expose "Electron" as a brand
+  // even when the UA string is spoofed. Netflix checks these headers.
+  if (theatreSes.setUserAgentMetadata) {
+    theatreSes.setUserAgentMetadata({
+      brands: [
+        { brand: 'Chromium',      version: '134' },
+        { brand: 'Google Chrome', version: '134' },
+        { brand: 'Not-A.Brand',   version: '99'  },
+      ],
+      fullVersionList: [
+        { brand: 'Chromium',      version: '134.0.6998.89' },
+        { brand: 'Google Chrome', version: '134.0.6998.89' },
+        { brand: 'Not-A.Brand',   version: '99.0.0.0'      },
+      ],
+      platform:        'Windows',
+      platformVersion: '10.0.0',
+      architecture:    'x86',
+      model:           '',
+      mobile:          false,
+    });
+  }
+
+  theatreSes.setPermissionRequestHandler((_wc, _permission, callback) => callback(true));
+  theatreSes.setPermissionCheckHandler(() => true);
+
+  theatreWindow.on('maximize',   () => theatreWindow?.webContents.send('window:maximized'));
+  theatreWindow.on('unmaximize', () => theatreWindow?.webContents.send('window:unmaximized'));
   theatreWindow.once('ready-to-show', () => theatreWindow?.show());
   theatreWindow.on('closed', () => { theatreWindow = null; });
 
@@ -404,26 +407,20 @@ ipcMain.on('window:maximize-restore', () => {
 
 ipcMain.on('window:close', () => mainWindow?.close());
 
-ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false);
+ipcMain.handle('window:is-maximized', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  return win?.isMaximized() ?? false;
+});
 
 // ── Theatre window ──
-ipcMain.on('theatre:open', () => createTheatreWindow());
-
-// ── Theatre: launch service in Chrome app-mode (full DRM, no browser UI) ──
-ipcMain.handle('theatre:open-service', async (_evt, url) => {
-  const chromePaths = [
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
-  ];
-  const chromePath = chromePaths.find(p => fs.existsSync(p));
-  if (chromePath) {
-    spawn(chromePath, ['--app=' + url, '--new-window'], { detached: true, stdio: 'ignore' }).unref();
-    return 'app';
-  }
-  shell.openExternal(url);
-  return 'external';
+ipcMain.on('theatre:open',             () => createTheatreWindow());
+ipcMain.on('theatre:minimize',         () => theatreWindow?.minimize());
+ipcMain.on('theatre:maximize-restore', () => {
+  if (!theatreWindow) return;
+  theatreWindow.isMaximized() ? theatreWindow.restore() : theatreWindow.maximize();
 });
+ipcMain.on('theatre:close',            () => theatreWindow?.close());
+
 
 // ── Panel pop-outs ──
 ipcMain.on('panel:pop-out', (_evt, panelId) => {
@@ -479,6 +476,16 @@ ipcMain.handle('shell:open-external', (_evt, url) => {
   }
 });
 
+// ── Neural Interface — folder picker for desktop ingestion ──
+const { dialog } = require('electron');
+ipcMain.handle('dialog:open-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory', 'multiSelections'],
+    title: 'Select folder(s) for ingestion',
+  });
+  return result.canceled ? [] : result.filePaths;
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // APP LIFECYCLE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -486,8 +493,22 @@ ipcMain.handle('shell:open-external', (_evt, url) => {
 // Force dark color scheme — prevents any light-mode flash from OS theme
 nativeTheme.themeSource = 'dark';
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Wait for castlabs Widevine CDM to be ready before creating windows
+  await components.whenReady();
   spawnBackend();
+
+  // Configure persist:station session — Chrome UA so sites don't block Electron
+  const stationSes = session.fromPartition('persist:station');
+  stationSes.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36');
+  stationSes.setPermissionRequestHandler((_wc, _permission, callback) => callback(true));
+
+  // Configure persist:haystack session — for Haystack.tv news feed webviews
+  const haystackSes = session.fromPartition('persist:haystack');
+  haystackSes.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36');
+  haystackSes.setPermissionRequestHandler((_wc, _permission, callback) => callback(true));
+  haystackSes.setPermissionCheckHandler(() => true);
+
   createMainWindow();
 
   // ── Push-to-talk global shortcut ─────────────────────────────────────────
@@ -540,16 +561,17 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// Security: allow webviews only from the theatre window; block all others.
-// Also enforce safe attributes on theatre webviews (no nodeIntegration).
+// Security: allow webviews only from known windows (theatre + main).
+// Enforce safe defaults — no nodeIntegration, contextIsolation on.
 app.on('web-contents-created', (_evt, contents) => {
   contents.on('will-attach-webview', (evt, webPreferences) => {
-    if (theatreWindow && !theatreWindow.isDestroyed() && contents === theatreWindow.webContents) {
-      // Enforce safe defaults on the webview regardless of what the renderer requested
+    const isTheatre = theatreWindow && !theatreWindow.isDestroyed() && contents === theatreWindow.webContents;
+    const isMain    = mainWindow    && !mainWindow.isDestroyed()    && contents === mainWindow.webContents;
+    if (isTheatre || isMain) {
       webPreferences.nodeIntegration = false;
       webPreferences.contextIsolation = true;
       return; // allow
     }
-    evt.preventDefault(); // block webviews from all other windows
+    evt.preventDefault(); // block webviews from any other window
   });
 });

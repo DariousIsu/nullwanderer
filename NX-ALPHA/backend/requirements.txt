@@ -42,8 +42,8 @@ neo4j>=5.0.0                      # Layer 3 graph memory (Bolt protocol, replace
 lightrag-hku>=1.0.0               # Graph-enhanced RAG — entity extraction → Neo4j lightrag_knowledge DB
 qdrant-client>=1.9.0              # Semantic search result cache (Docker on port 6333)
 
-# ── Interface Engine ──────────────────────────────────────────────────────────
-# llama-cpp-python: install HIP build manually (see above)
+# ── Interface Engine + LightRAG Worker ────────────────────────────────────────
+llama-cpp-python>=0.3.0             # LightRAG passive worker (CPU, qwen2.5-3b GGUF) — or install HIP build (see above)
 pynvml>=11.0.0                    # NVIDIA GPU metrics (soft dep — torch installs this)
 
 # ── GPU Monitoring ──────────────────────────────────────────────────────────

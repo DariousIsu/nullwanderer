@@ -2065,13 +2065,19 @@ _GREETINGS = (
 )
 
 
+def _is_greeting(text: str) -> bool:
+    """Return True if the message is a simple greeting or conversational pleasantry."""
+    lower = text.lower().strip()
+    return any(lower.startswith(g.strip()) or g in lower for g in _GREETINGS)
+
+
 def _is_ambiguous(text: str, window: list) -> bool:
     """Return True if the query is too vague to fetch for without clarification."""
     lower = text.lower().strip()
     words = lower.split()
 
     # Never ask for clarification on greetings or conversational acknowledgements
-    if any(lower.startswith(g.strip()) or g in lower for g in _GREETINGS):
+    if _is_greeting(lower):
         return False
 
     # Exempt: query contains a clear data keyword
@@ -3050,6 +3056,12 @@ async def run_interface_agent(state: GraphState) -> dict:
             _runtime_state["pending_team_confirmed"] = False
             user_message_for_team = pending_ctx
             logger.info("[interface_agent] User confirmed team dispatch — dispatching stored request")
+        elif _is_greeting(msg_lower) and not any(sig in msg_lower for sig in _CONFIRM_SIGNALS):
+            # Pure greeting/pleasantry — do NOT treat as clarification answer.
+            # Clear pending context so AURA responds conversationally.
+            _runtime_state["pending_team_context"] = None
+            _runtime_state["pending_team_confirmed"] = False
+            logger.info("[interface_agent] Greeting detected while pending team context active — clearing context")
         else:
             # Combine the original request with the user's follow-up (clarification answer)
             combined = f"{pending_ctx}\n\nUser clarification: {user_message}"
@@ -3194,31 +3206,43 @@ async def run_interface_agent(state: GraphState) -> dict:
     # Query memory layers for relevant context
     memory_context_str = ""
     l1_sliding_window = []
+    _is_greeting_msg = _is_greeting(user_message)
     try:
         from app.service.memory_service import get_memory_service
         mem_svc = get_memory_service()
         if mem_svc is not None:
-            # Pass the engine's actual context window so memory budgets
-            # scale down automatically for smaller/constrained models.
-            try:
-                from app.service.interface_engine import get_engine as _get_mem_engine
-                _mem_engine = _get_mem_engine()
-                _ctx_size = getattr(getattr(_mem_engine, "_cfg", None), "context_size", 32768) or 32768
-            except Exception:
-                _ctx_size = 32768
-            context = await mem_svc.build_context(
-                role="interface",
-                task=user_message,
-                thread_id=thread_id,
-                context_size=_ctx_size,
-            )
-            memory_context_str = _format_memory_context(context)
-            l1_sliding_window = context.get("sliding_window", [])
-            if memory_context_str:
-                logger.info(
-                    "[interface_agent] Memory context: ~%d tokens from L2/L3",
-                    context.get("token_estimate", 0),
+            if _is_greeting_msg:
+                # Lightweight path: only L1 sliding window, skip L2/L3/LightRAG
+                try:
+                    l1_sliding_window = mem_svc._get_sliding_window(thread_id, limit=20)
+                    if not l1_sliding_window:
+                        l1_sliding_window = mem_svc._get_recent_turns_all_threads(limit=20)
+                    logger.info("[interface_agent] Greeting detected — lightweight memory path (L1 only)")
+                except Exception as exc:
+                    logger.warning("[interface_agent] Greeting L1 fetch failed: %s", exc)
+            else:
+                # Full context build for substantive messages
+                # Pass the engine's actual context window so memory budgets
+                # scale down automatically for smaller/constrained models.
+                try:
+                    from app.service.interface_engine import get_engine as _get_mem_engine
+                    _mem_engine = _get_mem_engine()
+                    _ctx_size = getattr(getattr(_mem_engine, "_cfg", None), "context_size", 32768) or 32768
+                except Exception:
+                    _ctx_size = 32768
+                context = await mem_svc.build_context(
+                    role="interface",
+                    task=user_message,
+                    thread_id=thread_id,
+                    context_size=_ctx_size,
                 )
+                memory_context_str = _format_memory_context(context)
+                l1_sliding_window = context.get("sliding_window", [])
+                if memory_context_str:
+                    logger.info(
+                        "[interface_agent] Memory context: ~%d tokens from L2/L3",
+                        context.get("token_estimate", 0),
+                    )
     except Exception as exc:
         logger.warning("[interface_agent] Memory context build failed: %s", exc)
 

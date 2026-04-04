@@ -141,26 +141,9 @@ def init_voice_controller(loop: asyncio.AbstractEventLoop) -> None:
     Wire callbacks and start the wake word listener thread.
     Called from main.py lifespan after other services are up.
     """
-    try:
-        from app.service.wake_word_service import (
-            init_wake_word_service,
-            start_listening,
-            set_session_timeout,
-        )
-        ok = init_wake_word_service(
-            on_wake          = _on_wake,
-            on_utterance     = _on_utterance,
-            on_session_close = _on_session_close,
-            session_timeout_s = _voice_settings["session_timeout_s"],
-            mic_device_index  = _voice_settings["input_device"],
-        )
-        if ok:
-            start_listening(loop)
-            logger.info("[voice_controller] Wake word listener started")
-        else:
-            logger.warning("[voice_controller] Wake word service unavailable — always-on disabled")
-    except Exception as exc:
-        logger.warning("[voice_controller] init_voice_controller error: %s", exc)
+    # Wake word disabled — continuous mic capture + Silero VAD + faster-whisper
+    # adds ~200MB RAM + constant CPU load. Re-enable when hardware supports it.
+    logger.info("[voice_controller] Wake word listener disabled (resource conservation)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

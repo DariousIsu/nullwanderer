@@ -62,6 +62,7 @@ _GRAPHITI_AVAILABLE = False
 Role = Literal[
     "interface", "pm", "plan_validator", "area_decompose", "area_review",
     "sprint", "assembler", "proposer", "challenger", "verifier", "adversarial",
+    "collector",
 ]
 
 # Token budgets per role: how many tokens from each layer to include in context.
@@ -78,6 +79,7 @@ _TOKEN_BUDGETS: dict[str, dict[str, int]] = {
     "challenger":     {"layer1":    0, "layer2": 2000, "layer3":  900},
     "verifier":       {"layer1":    0, "layer2":  500, "layer3":  800},
     "adversarial":    {"layer1":    0, "layer2": 1000, "layer3": 1000},
+    "collector":      {"layer1":    0, "layer2":    0, "layer3":    0},
 }
 
 # Cosine distance above this threshold is considered orthogonal / irrelevant.
@@ -937,11 +939,13 @@ class MemoryService:
             from app.service.lightrag_service import LightRAGService
             lg = LightRAGService.get_instance()
             if lg._available:
-                res = await lg.query(task, mode="hybrid")
+                res = await asyncio.wait_for(lg.query(task, mode="hybrid"), timeout=5.0)
                 if res.get("success") and res.get("result"):
                     lightrag_results = [{"content": res["result"], "source": "lightrag"}]
                     logger.debug("[memory] role=%s LightRAG: %d chars",
                                  role, len(res["result"]))
+        except asyncio.TimeoutError:
+            logger.warning("[memory] LightRAG query timed out after 5s — skipping")
         except Exception as exc:
             logger.debug("[memory] LightRAG query failed (non-fatal): %s", exc)
 

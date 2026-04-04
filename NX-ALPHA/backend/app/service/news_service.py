@@ -126,11 +126,21 @@ def _parse_feed_xml(xml_bytes: bytes) -> list[dict]:
                     if link.get("type", "").startswith("image"):
                         image = link.get("href", "")
                         break
+            # Last resort: extract <img src="..."> from summary HTML
+            if not image and summary:
+                import re as _img_re
+                img_match = _img_re.search(r'<img[^>]+src=["\']([^"\']+)["\']', summary)
+                if img_match:
+                    image = img_match.group(1)
+
+            # Strip HTML from summary (HN, arXiv etc. embed markup)
+            import re as _strip_re
+            clean_summary = _strip_re.sub(r'<[^>]+>', '', summary).strip()
 
             articles.append(
                 {
                     "title":     entry.get("title", "").strip(),
-                    "summary":   summary.strip(),
+                    "summary":   clean_summary,
                     "link":      entry.get("link", ""),
                     "published": published,
                     "source":    "",  # caller fills this in

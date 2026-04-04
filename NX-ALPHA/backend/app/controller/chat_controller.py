@@ -362,10 +362,14 @@ async def receive_message(
     # across messages. The interface chat is always one conversation.
     thread_id = body.thread_id or _get_session_thread_id()
 
+    # Streaming TTS disabled — Chatterbox/piper synthesis adds too much latency
+    # to the chat loop. Voice still available via explicit /voice endpoints.
+    _voice = False
+
     if settings.dev_stub_responses:
-        background_tasks.add_task(_stub_response, body.text, thread_id, body.voice_enabled)
+        background_tasks.add_task(_stub_response, body.text, thread_id, _voice)
     else:
-        background_tasks.add_task(_pipeline_response, body.text, thread_id, body.voice_enabled)
+        background_tasks.add_task(_pipeline_response, body.text, thread_id, _voice)
 
     return {"status": "accepted", "thread_id": thread_id}
 

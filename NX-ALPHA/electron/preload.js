@@ -41,6 +41,9 @@ function safeSend(channel, ...args) {
     'panel:close-pop-out',
     'voice:ptt-toggle',
     'theatre:open',
+    'theatre:minimize',
+    'theatre:maximize-restore',
+    'theatre:close',
   ]);
   if (!ALLOWED_SEND.has(channel)) {
     console.error('[preload] Blocked unauthorized IPC send:', channel);
@@ -57,7 +60,7 @@ function safeInvoke(channel, ...args) {
     'window:set-portrait-mode',
     'window:toggle-always-on-top',
     'window:is-always-on-top',
-    'theatre:open-service',
+    'dialog:open-folder',
   ]);
   if (!ALLOWED_INVOKE.has(channel)) {
     console.error('[preload] Blocked unauthorized IPC invoke:', channel);
@@ -114,8 +117,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   isAlwaysOnTop:      ()       => safeInvoke('window:is-always-on-top'),
 
   // ── Theatre window ──
-  openTheatre:      () => safeSend('theatre:open'),
-  openServiceApp:   (url) => safeInvoke('theatre:open-service', url),
+  openTheatre:            () => safeSend('theatre:open'),
+  theatreMinimize:        () => safeSend('theatre:minimize'),
+  theatreMaximizeRestore: () => safeSend('theatre:maximize-restore'),
+  theatreClose:           () => safeSend('theatre:close'),
+
+  // ── Neural Interface — folder picker ──
+  openFolder: () => safeInvoke('dialog:open-folder'),
 
   // ── Voice push-to-talk ──
   // Triggered by Ctrl+Alt+Space globalShortcut from main process.
