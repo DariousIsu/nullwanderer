@@ -1,0 +1,100 @@
+/* AURA NX-Alpha — LayerControlPanel */
+
+.root {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 12px;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.groupLabel {
+  font-size: 9px;
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  color: rgba(255, 255, 255, 0.25);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+/* ── Pills ─────────────────────────────────────────────────────────────── */
+.pills {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.pills::-webkit-scrollbar { display: none; }
+
+.pill {
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 9px;
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+
+.pill:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.pillActive {
+  border-color: rgba(245, 166, 35, 0.6);
+  color: #f5a623;
+  background: rgba(245, 166, 35, 0.08);
+}
+
+.pillTrip {
+  border-color: rgba(74, 222, 128, 0.6);
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.08);
+}
+
+/* ── Divider ────────────────────────────────────────────────────────────── */
+.divider {
+  width: 1px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+/* ── Refresh button ─────────────────────────────────────────────────────── */
+.refreshBtn {
+  padding: 3px 10px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 9px;
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: border-color 0.12s, color 0.12s;
+}
+
+.refreshBtn:hover {
+  border-color: rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.empty {
+  font-size: 9px;
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  color: rgba(255, 255, 255, 0.2);
+}

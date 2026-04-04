@@ -1,0 +1,53 @@
+/*
+ * AURA NX-Alpha — ParticleField
+ *
+ * Sits behind all canvas content blocks (z-index: 0).
+ * The particle canvas is sized to fill its parent.
+ * The scan line is a pure CSS animation — no GSAP, no JS.
+ *
+ * SCAN LINE:
+ *   A very faint amber gradient that sweeps from top to bottom every 5s.
+ *   Only visible on the idle canvas. Signals the surface is alive.
+ */
+
+/* ── ROOT ── */
+.root {
+  position:       absolute;
+  inset:          0;
+  pointer-events: none;
+  z-index:        0;
+  overflow:       hidden;
+}
+
+/* ── PARTICLE CANVAS ── */
+.canvas {
+  display: block;
+  width:   100%;
+  height:  100%;
+}
+
+/* ── SCAN LINE ── */
+.scanLine {
+  position:   absolute;
+  left:       0;
+  right:      0;
+  height:     60px;
+  /* Soft amber gradient — like a ghost trace sweeping the surface */
+  background: linear-gradient(
+    to bottom,
+    transparent           0%,
+    rgba(240,168,48,0.04) 40%,
+    rgba(240,168,48,0.07) 50%,
+    rgba(240,168,48,0.04) 60%,
+    transparent           100%
+  );
+  animation: scanSweep 5.5s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes scanSweep {
+  0%   { top: -60px; opacity: 0; }
+  5%   { opacity: 1; }
+  90%  { opacity: 0.6; }
+  100% { top: 100%; opacity: 0; }
+}

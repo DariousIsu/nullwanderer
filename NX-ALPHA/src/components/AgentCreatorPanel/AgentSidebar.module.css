@@ -1,0 +1,314 @@
+/*
+ * AURA NX-Alpha — AgentSidebar
+ * Left panel in the Agent Creator three-column layout.
+ */
+
+.sidebar {
+  width:        220px;
+  flex-shrink:  0;
+  display:      flex;
+  flex-direction: column;
+  overflow-y:   auto;
+  background:   rgba(5, 10, 18, 0.60);
+  border-right: 1px solid rgba(31, 45, 64, 0.60);
+}
+
+/* ── Accordion section ───────────────────────────────────── */
+
+.section {
+  border-bottom: 1px solid rgba(31, 45, 64, 0.40);
+}
+
+.sectionHeader {
+  display:         flex;
+  justify-content: space-between;
+  align-items:     center;
+  width:           100%;
+  padding:         7px 12px;
+  background:      none;
+  border:          none;
+  cursor:          pointer;
+  font-family:     var(--font-condensed, 'Barlow Condensed', sans-serif);
+  font-size:       9px;
+  font-weight:     700;
+  letter-spacing:  0.12em;
+  text-transform:  uppercase;
+  color:           var(--text-tertiary, #4a6070);
+  transition:      color 0.12s;
+}
+
+.sectionHeader:hover {
+  color: var(--text-secondary, #8aa0b4);
+}
+
+.chevron {
+  font-size: 8px;
+  opacity:   0.6;
+}
+
+.sectionBody {
+  padding: 4px 0 8px;
+}
+
+/* ── Agent rows ──────────────────────────────────────────── */
+
+.newAgentBtn {
+  display:    block;
+  width:      calc(100% - 20px);
+  margin:     0 10px 6px;
+  padding:    5px 8px;
+  background: rgba(184, 120, 32, 0.10);
+  border:     1px solid rgba(184, 120, 32, 0.25);
+  border-radius: 4px;
+  color:      #b87820;
+  font-family: var(--font-condensed, 'Barlow Condensed', sans-serif);
+  font-size:  10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  cursor:     pointer;
+  transition: background 0.12s;
+}
+
+.newAgentBtn:hover {
+  background: rgba(184, 120, 32, 0.18);
+}
+
+.agentRow {
+  display:     flex;
+  align-items: center;
+  justify-content: space-between;
+  padding:     5px 12px;
+  cursor:      pointer;
+  transition:  background 0.10s;
+}
+
+.agentRow:hover {
+  background: rgba(31, 45, 64, 0.40);
+}
+
+.agentRowActive {
+  background:   rgba(184, 120, 32, 0.08);
+  border-left:  2px solid #b87820;
+  padding-left: 10px;
+}
+
+.agentName {
+  font-size:  10px;
+  color:      var(--text-primary, #c8d8e8);
+  overflow:   hidden;
+  text-overflow: ellipsis;
+  white-space:  nowrap;
+  max-width:  140px;
+}
+
+.badge {
+  font-family:    var(--font-condensed, 'Barlow Condensed', sans-serif);
+  font-size:      8px;
+  font-weight:    700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding:        1px 5px;
+  border-radius:  2px;
+  flex-shrink:    0;
+}
+
+.badgeDraft {
+  background: rgba(31, 45, 64, 0.60);
+  color:      var(--text-tertiary, #4a6070);
+}
+
+.badgePublished {
+  background: rgba(42, 184, 122, 0.15);
+  color:      #2ab87a;
+}
+
+/* ── Node Palette ────────────────────────────────────────── */
+
+.palette {
+  display:        flex;
+  flex-direction: column;
+  gap:            3px;
+  padding:        0 10px;
+}
+
+.paletteItem {
+  padding:       5px 8px;
+  background:    rgba(8, 14, 24, 0.80);
+  border:        1px solid rgba(31, 45, 64, 0.50);
+  border-left:   3px solid transparent;
+  border-radius: 4px;
+  font-family:   var(--font-mono, 'JetBrains Mono', monospace);
+  font-size:     9px;
+  color:         var(--text-secondary, #8aa0b4);
+  cursor:        grab;
+  transition:    background 0.10s, opacity 0.10s;
+  user-select:   none;
+}
+
+.paletteItem:hover {
+  background: rgba(31, 45, 64, 0.50);
+  color:      var(--text-primary, #c8d8e8);
+}
+
+.paletteItem:active {
+  cursor:  grabbing;
+  opacity: 0.7;
+}
+
+/* ── Skills / Templates ──────────────────────────────────── */
+
+.skillRow {
+  padding:  4px 12px;
+  cursor:   pointer;
+  transition: background 0.10s;
+}
+
+.skillRow:hover {
+  background: rgba(31, 45, 64, 0.35);
+}
+
+.skillName {
+  display:   block;
+  font-size: 10px;
+  color:     var(--text-primary, #c8d8e8);
+}
+
+.skillDesc {
+  display:    block;
+  font-size:  9px;
+  color:      var(--text-tertiary, #4a6070);
+  margin-top: 1px;
+}
+
+/* ── Tool Sources ────────────────────────────────────────── */
+
+.sourceLabel {
+  padding:        2px 12px 4px;
+  font-family:    var(--font-condensed, 'Barlow Condensed', sans-serif);
+  font-size:      8px;
+  font-weight:    700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color:          var(--text-tertiary, #4a6070);
+}
+
+.ingestForm {
+  padding: 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ingestInput {
+  width:        100%;
+  padding:      4px 7px;
+  background:   rgba(8, 14, 24, 0.80);
+  border:       1px solid rgba(31, 45, 64, 0.60);
+  border-radius: 3px;
+  font-family:  var(--font-mono, 'JetBrains Mono', monospace);
+  font-size:    9px;
+  color:        var(--text-primary, #c8d8e8);
+  outline:      none;
+  box-sizing:   border-box;
+}
+
+.ingestInput:focus {
+  border-color: rgba(184, 120, 32, 0.50);
+}
+
+.ingestInput::placeholder {
+  color: var(--text-tertiary, #4a6070);
+}
+
+.ingestBtn {
+  padding:      4px 8px;
+  background:   rgba(42, 122, 184, 0.12);
+  border:       1px solid rgba(42, 122, 184, 0.30);
+  border-radius: 3px;
+  color:        #5a9ed4;
+  font-family:  var(--font-condensed, 'Barlow Condensed', sans-serif);
+  font-size:    9px;
+  font-weight:  700;
+  letter-spacing: 0.06em;
+  cursor:       pointer;
+  transition:   background 0.12s;
+  align-self:   flex-start;
+}
+
+.ingestBtn:hover:not(:disabled) {
+  background: rgba(42, 122, 184, 0.20);
+}
+
+.ingestBtn:disabled {
+  opacity: 0.5;
+  cursor:  default;
+}
+
+.ingestError {
+  font-size: 9px;
+  color:     #b84a4a;
+  padding:   2px 0;
+}
+
+.ingestPreview {
+  background:    rgba(42, 122, 184, 0.06);
+  border:        1px solid rgba(42, 122, 184, 0.20);
+  border-radius: 4px;
+  padding:       6px 8px;
+}
+
+.ingestType {
+  font-family:    var(--font-condensed, 'Barlow Condensed', sans-serif);
+  font-size:      9px;
+  font-weight:    700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color:          #5a9ed4;
+}
+
+.ingestSub {
+  font-size: 9px;
+  color:     var(--text-secondary, #8aa0b4);
+}
+
+.ingestUrl {
+  font-size:     8px;
+  color:         var(--text-tertiary, #4a6070);
+  overflow:      hidden;
+  text-overflow: ellipsis;
+  white-space:   nowrap;
+  margin-top:    2px;
+}
+
+/* ── MCP server list ─────────────────────────────────────── */
+
+.mcpList {
+  margin-top: 6px;
+  padding:    0 10px;
+}
+
+.mcpRow {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+  padding:     3px 0;
+  font-size:   9px;
+  color:       var(--text-secondary, #8aa0b4);
+}
+
+.mcpDot {
+  width:         5px;
+  height:        5px;
+  border-radius: 50%;
+  background:    #2ab87a;
+  flex-shrink:   0;
+}
+
+/* ── Misc ────────────────────────────────────────────────── */
+
+.empty {
+  padding:   4px 12px;
+  font-size: 9px;
+  color:     var(--text-tertiary, #4a6070);
+  font-style: italic;
+}

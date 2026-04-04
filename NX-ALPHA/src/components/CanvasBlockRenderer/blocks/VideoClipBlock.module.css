@@ -1,0 +1,77 @@
+/* VideoClipBlock — inline HTML5 video clip player */
+
+.wrap {
+  display:        flex;
+  flex-direction: column;
+  gap:            8px;
+  padding:        10px 12px;
+  background:     rgba(255,255,255,0.03);
+  border:         1px solid rgba(255,255,255,0.08);
+  border-radius:  4px;
+}
+
+.header {
+  display:     flex;
+  align-items: center;
+  gap:         8px;
+  flex-wrap:   wrap;
+}
+
+.icon { font-size: 13px; opacity: 0.6; flex-shrink: 0; }
+
+.title {
+  font-size:     13px;
+  font-weight:   600;
+  color:         var(--text-primary, #e2e8f0);
+  flex:          1;
+  min-width:     0;
+  overflow:      hidden;
+  text-overflow: ellipsis;
+  white-space:   nowrap;
+}
+
+.duration {
+  font-family: var(--font-mono, monospace);
+  font-size:   11px;
+  color:       var(--text-muted, #64748b);
+  flex-shrink: 0;
+}
+
+.badge {
+  font-size:      9px;
+  font-weight:    700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding:        2px 5px;
+  border-radius:  3px;
+  background:     rgba(99,102,241,0.12);
+  color:          rgba(165,180,252,0.80);
+  border:         1px solid rgba(99,102,241,0.20);
+  flex-shrink:    0;
+}
+
+.format {
+  font-family: var(--font-mono, monospace);
+  font-size:   9px;
+  color:       var(--text-muted, #64748b);
+  flex-shrink: 0;
+}
+
+.player {
+  width:        100%;
+  max-height:   360px;
+  background:   #000;
+  border-radius: 2px;
+}
+
+.placeholder {
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  gap:             8px;
+  padding:         24px;
+  color:           var(--text-muted, #64748b);
+  font-size:       13px;
+}
+
+.placeholderIcon { font-size: 20px; opacity: 0.4; }

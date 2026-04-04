@@ -1,0 +1,256 @@
+/*
+ * AURA NX-Alpha — AgentMonitor
+ * Inside the glass. These styles define what's rendered
+ * in the Panel body — the agent list, rows, progress bars.
+ * The chassis and glass are Panel's job. This is content.
+ */
+
+/* ── LIST ── */
+.list {
+  display:        flex;
+  flex-direction: column;
+}
+
+/* ── AGENT ROW ── */
+.row {
+  display:     grid;
+  grid-template-columns: 3px 1fr auto;
+  gap:         10px;
+  align-items: center;
+  padding:     9px 0;
+  border-bottom: 1px solid rgba(31, 45, 64, 0.50);
+  cursor:      default;
+  transition:  background var(--dur-instant) ease;
+}
+.row:last-child { border-bottom: none; }
+.row:hover {
+  background:   rgba(25, 34, 51, 0.50);
+  margin:       0 calc(-1 * var(--panel-padding-x));
+  padding-left:  var(--panel-padding-x);
+  padding-right: var(--panel-padding-x);
+}
+
+/* ── STATUS BAR — left edge color stripe ── */
+.bar {
+  min-height:   20px;
+  width:        3px;
+  border-radius: 2px;
+  flex-shrink:  0;
+  align-self:   stretch;
+}
+
+.bar_working { background: var(--blue-bright);   animation: barPulse 2.0s ease-in-out infinite; }
+.bar_waiting { background: var(--amber-bright);  animation: barPulse 1.4s ease-in-out infinite; }
+.bar_done    { background: var(--green-bright);  }
+.bar_idle    { background: var(--status-idle);   }
+.bar_fault   { background: var(--status-error);  animation: barPulse 0.9s ease-in-out infinite; }
+
+@keyframes barPulse {
+  0%, 100% { opacity: 1.0; }
+  50%       { opacity: 0.35; }
+}
+
+/* ── INFO BLOCK ── */
+.info {
+  min-width: 0;
+  display:   flex;
+  flex-direction: column;
+  gap:       2px;
+}
+
+.nameRow {
+  display:     flex;
+  align-items: baseline;
+  gap:         8px;
+}
+
+.name {
+  font-family:    var(--font-condensed);
+  font-size:      11px;
+  font-weight:    var(--weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color:          var(--text-secondary);
+  white-space:    nowrap;
+  overflow:       hidden;
+  text-overflow:  ellipsis;
+}
+
+.elapsed {
+  font-family: var(--font-mono);
+  font-size:   9px;
+  color:       var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.task {
+  font-family:  var(--font-ui);
+  font-size:    10px;
+  color:        var(--text-tertiary);
+  line-height:  1.4;
+  white-space:  nowrap;
+  overflow:     hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── PROGRESS BAR ── */
+.progressTrack {
+  background:    rgba(22, 40, 64, 0.60);
+  border-radius: 2px;
+  height:        2px;
+  overflow:      hidden;
+  margin-top:    4px;
+}
+
+.progressFill {
+  height:        100%;
+  border-radius: 2px;
+  transition:    width 0.4s var(--ease-out);
+}
+
+.progress_working { background: var(--blue-bright); }
+.progress_waiting { background: var(--amber-bright); }
+.progress_done    { background: var(--green-bright); }
+.progress_fault   { background: var(--status-error); }
+
+/* ── BADGE ── */
+.badge {
+  flex-shrink: 0;
+  align-self:  flex-start;
+  padding-top: 1px;
+}
+
+/* ── EMPTY STATE ── */
+.empty {
+  display:         flex;
+  flex-direction:  column;
+  align-items:     center;
+  justify-content: center;
+  padding:         var(--space-8) 0;
+  gap:             var(--space-2);
+}
+
+.emptyLabel {
+  font-family:    var(--font-condensed);
+  font-size:      var(--text-sm);
+  font-weight:    var(--weight-semibold);
+  letter-spacing: var(--tracking-condensed);
+  text-transform: uppercase;
+  color:          var(--text-tertiary);
+}
+
+.emptyMeta {
+  font-family: var(--font-mono);
+  font-size:   var(--text-xs);
+  color:       var(--status-idle);
+  letter-spacing: 0.06em;
+}
+
+/* ── FOOTER ── */
+.footer {
+  display:         flex;
+  align-items:     center;
+  justify-content: space-between;
+  padding:         7px var(--panel-padding-x);
+}
+
+.footerCounts {
+  display: flex;
+  gap:     var(--space-4);
+}
+
+.footerCount {
+  display:  flex;
+  gap:      4px;
+  align-items: baseline;
+}
+
+.footerCountValue {
+  font-family: var(--font-mono);
+  font-size:   11px;
+  font-weight: var(--weight-medium);
+  color:       var(--text-secondary);
+}
+
+/* Active count glows amber */
+.footerCountValue[data-active="true"] {
+  color: var(--amber-base);
+}
+
+/* Fault count glows red */
+.footerCountValue[data-fault="true"] {
+  color: var(--status-error);
+}
+
+.footerCountLabel {
+  font-family:    var(--font-mono);
+  font-size:      9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color:          var(--text-tertiary);
+}
+
+.heartbeat {
+  font-family: var(--font-mono);
+  font-size:   9px;
+  color:       var(--text-tertiary);
+  letter-spacing: 0.04em;
+}
+
+/* ── TEAM CARD ── */
+.teamCard {
+  border-bottom: 1px solid rgba(31, 45, 64, 0.50);
+}
+.teamCard:last-child { border-bottom: none; }
+
+/* Team header row — same grid as .row */
+.teamHeader {
+  display:     grid;
+  grid-template-columns: 3px 1fr auto;
+  gap:         10px;
+  align-items: center;
+  padding:     9px 0 6px;
+  cursor:      default;
+}
+
+.teamName {
+  font-family:    var(--font-condensed);
+  font-size:      11px;
+  font-weight:    var(--weight-bold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color:          var(--text-primary);
+  white-space:    nowrap;
+  overflow:       hidden;
+  text-overflow:  ellipsis;
+}
+
+/* Member rows grouped under a team */
+.teamMembers {
+  padding-bottom: 4px;
+}
+
+/* Indented agent row (member of a team) */
+.rowIndented {
+  padding-left:  12px;
+  border-bottom: 1px solid rgba(31, 45, 64, 0.30);
+}
+.rowIndented:last-child { border-bottom: none; }
+.rowIndented .name {
+  font-size: 10px;
+  color:     var(--text-tertiary);
+}
+
+/* ── HEADER COUNT BADGE ── */
+.headerCount {
+  font-family:  var(--font-mono);
+  font-size:    9px;
+  font-weight:  var(--weight-semibold);
+  background:   rgba(61, 135, 168, 0.12);
+  color:        var(--blue-bright);
+  border:       1px solid rgba(61, 135, 168, 0.20);
+  border-radius: var(--radius-sm);
+  padding:      1px 6px;
+  letter-spacing: 0.04em;
+  flex-shrink:  0;
+}

@@ -1,0 +1,142 @@
+/*
+ * AURA NX-Alpha — CanvasBlock
+ *
+ * Spatial wrapper for canvas content artifacts.
+ * Intentionally lighter than FloatingPanel — these are content objects,
+ * not operational tools. Thin amber border, minimal chrome.
+ *
+ * POSITIONING: absolute within the canvas (position:relative container).
+ * WIDTH/HEIGHT: set via inline style from spatial state in CanvasBlockRenderer.
+ */
+
+/* ── BLOCK ROOT ── */
+.block {
+  position:  absolute;
+  display:   flex;
+  flex-direction: column;
+  /* Thinner amber-tinted border — artifact feel, not tool feel */
+  border:    1px solid rgba(240, 168, 48, 0.20);
+  border-radius: 3px;
+  /* Dark surface with very slight transparency */
+  background: rgba(13, 20, 33, 0.96);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.60),
+    0 8px 32px rgba(0, 0, 0, 0.50),
+    0 0 24px rgba(240, 168, 48, 0.04);
+  /* Render block chrome on top of canvas crosshatch */
+  contain: layout;
+  /* No CSS transitions — GSAP owns entrance/exit */
+}
+
+/* Active state: slightly brighter border */
+.block:focus-within {
+  border-color: rgba(240, 168, 48, 0.32);
+}
+
+/* ── DRAG HANDLE ── */
+.handle {
+  display:         flex;
+  align-items:     center;
+  justify-content: space-between;
+  height:          22px;
+  padding:         0 6px 0 8px;
+  background:      rgba(8, 12, 20, 0.90);
+  border-bottom:   1px solid rgba(240, 168, 48, 0.12);
+  border-radius:   2px 2px 0 0;
+  cursor:          grab;
+  flex-shrink:     0;
+  user-select:     none;
+}
+
+.handle:active {
+  cursor: grabbing;
+}
+
+/* Block type label — Barlow Condensed, subdued amber */
+.typeLabel {
+  font-family:    var(--font-condensed);
+  font-size:      9px;
+  font-weight:    600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color:          var(--amber-muted);
+  line-height:    1;
+}
+
+/* Close (×) button */
+.closeBtn {
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  width:           16px;
+  height:          16px;
+  background:      transparent;
+  border:          none;
+  cursor:          pointer;
+  color:           var(--text-tertiary);
+  font-size:       13px;
+  line-height:     1;
+  border-radius:   2px;
+  padding:         0;
+  transition:      color var(--dur-instant) ease, background var(--dur-instant) ease;
+}
+
+.closeBtn:hover {
+  background: rgba(208, 92, 92, 0.15);
+  color:      var(--status-error);
+}
+
+/* ── CONTENT AREA ── */
+.content {
+  flex:     1;
+  overflow: auto;
+  /* Thin scrollbar matching the dark theme */
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-rule) transparent;
+  /* Give block content components full room */
+  min-height: 0;
+}
+
+.content::-webkit-scrollbar        { width: 4px; height: 4px; }
+.content::-webkit-scrollbar-track  { background: transparent; }
+.content::-webkit-scrollbar-thumb  { background: var(--bg-rule); border-radius: 2px; }
+
+/* ── RESIZE HANDLE ── */
+.resizeHandle {
+  position:  absolute;
+  right:     0;
+  bottom:    0;
+  width:     14px;
+  height:    14px;
+  cursor:    se-resize;
+  /* Corner indicator — two diagonal lines */
+  background-image:
+    linear-gradient(
+      135deg,
+      transparent 40%,
+      rgba(240, 168, 48, 0.25) 40%,
+      rgba(240, 168, 48, 0.25) 50%,
+      transparent 50%,
+      transparent 65%,
+      rgba(240, 168, 48, 0.15) 65%,
+      rgba(240, 168, 48, 0.15) 75%,
+      transparent 75%
+    );
+  border-radius: 0 0 2px 0;
+  z-index: 1;
+}
+
+.resizeHandle:hover {
+  background-image:
+    linear-gradient(
+      135deg,
+      transparent 40%,
+      rgba(240, 168, 48, 0.50) 40%,
+      rgba(240, 168, 48, 0.50) 50%,
+      transparent 50%,
+      transparent 65%,
+      rgba(240, 168, 48, 0.35) 65%,
+      rgba(240, 168, 48, 0.35) 75%,
+      transparent 75%
+    );
+}

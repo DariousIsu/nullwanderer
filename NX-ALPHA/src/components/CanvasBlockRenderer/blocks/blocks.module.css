@@ -1,0 +1,467 @@
+/*
+ * AURA NX-Alpha — Shared Block Content Styles
+ *
+ * Imported by individual block components (HeadingBlock, TableBlock, etc.)
+ * All styles are CSS Modules — exported class names are scoped.
+ *
+ * FONT ROLES (per design system):
+ *   --font-condensed : Barlow Condensed — structural labels, headings
+ *   --font-ui        : Space Grotesk    — body copy, UI text
+ *   --font-mono      : JetBrains Mono   — data, code, numbers
+ */
+
+/* ── BLOCK ROOT ── */
+/* Applied to the outermost div of every block content component */
+.root {
+  width:   100%;
+  height:  100%;
+  padding: 12px 14px;
+  color:   var(--text-primary);
+  font-family: var(--font-ui);
+  font-size:   var(--text-sm);
+  line-height: 1.55;
+  box-sizing: border-box;
+}
+
+/* Compact variant — less padding for small blocks like metric_card */
+.rootCompact {
+  padding: 10px 12px;
+}
+
+/* Full-bleed variant — no padding, let content control its own spacing */
+.rootBleed {
+  padding: 0;
+}
+
+/* ── TYPOGRAPHY ── */
+
+.heading1 {
+  font-family:    var(--font-condensed);
+  font-size:      22px;
+  font-weight:    700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color:          var(--text-primary);
+  line-height:    1.2;
+  margin:         0 0 8px;
+}
+
+.heading2 {
+  font-family:    var(--font-condensed);
+  font-size:      17px;
+  font-weight:    600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color:          var(--text-primary);
+  line-height:    1.3;
+  margin:         0 0 6px;
+}
+
+.heading3 {
+  font-family:    var(--font-condensed);
+  font-size:      14px;
+  font-weight:    600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color:          var(--text-secondary);
+  line-height:    1.3;
+  margin:         0 0 4px;
+}
+
+/* Amber rule under headings */
+.headingRule {
+  width:      100%;
+  height:     1px;
+  background: linear-gradient(to right, var(--amber-muted) 0%, transparent 70%);
+  margin-bottom: 10px;
+}
+
+.bodyText {
+  font-family: var(--font-ui);
+  font-size:   var(--text-sm);
+  color:       var(--text-primary);
+  line-height: 1.60;
+  margin:      0;
+}
+
+.monoText {
+  font-family: var(--font-mono);
+  font-size:   12px;
+  color:       var(--text-primary);
+}
+
+/* ── EDITABLE FIELD ── */
+/* contentEditable-capable elements — subtle focus ring */
+.editable {
+  outline:    none;
+  min-height: 1em;
+  cursor:     text;
+  border-radius: 2px;
+  padding:    2px 3px;
+  margin:     -2px -3px;
+  transition: background var(--dur-instant) ease;
+}
+
+.editable:focus {
+  background: rgba(240, 168, 48, 0.06);
+  outline:    1px solid rgba(240, 168, 48, 0.20);
+  outline-offset: 0;
+}
+
+.editable:empty::before {
+  content: attr(data-placeholder);
+  color:   var(--text-tertiary);
+  font-style: italic;
+}
+
+/* ── TABLE ── */
+.tableWrap {
+  width:    100%;
+  overflow-x: auto;
+}
+
+.table {
+  width:           100%;
+  border-collapse: collapse;
+  font-family:     var(--font-mono);
+  font-size:       11px;
+}
+
+.th {
+  text-align:    left;
+  padding:       5px 8px;
+  font-family:   var(--font-condensed);
+  font-size:     10px;
+  font-weight:   600;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color:         var(--text-secondary);
+  border-bottom: 1px solid var(--bg-rule);
+  background:    var(--bg-surface);
+  cursor:        pointer;
+  white-space:   nowrap;
+  user-select:   none;
+}
+
+.th:hover { color: var(--text-amber); }
+
+.thSorted { color: var(--amber-bright); }
+
+.thSortIcon {
+  margin-left: 4px;
+  opacity:     0.7;
+}
+
+.td {
+  padding:     4px 8px;
+  color:       var(--text-primary);
+  border-bottom: 1px solid rgba(31, 45, 64, 0.50);
+  font-family: var(--font-mono);
+  font-size:   11px;
+  line-height: 1.4;
+}
+
+.trHover:hover .td {
+  background: var(--bg-interactive);
+}
+
+/* ── LIST ── */
+.list {
+  margin:  0;
+  padding: 0;
+  list-style: none;
+}
+
+.listItem {
+  display:     flex;
+  align-items: flex-start;
+  gap:         8px;
+  padding:     3px 0;
+  color:       var(--text-primary);
+  font-size:   var(--text-sm);
+  line-height: 1.5;
+}
+
+.listBullet {
+  color:       var(--amber-base);
+  flex-shrink: 0;
+  margin-top:  1px;
+  font-size:   10px;
+}
+
+.listBulletOrdered {
+  color:       var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size:   10px;
+  flex-shrink: 0;
+  min-width:   16px;
+}
+
+/* ── CODE ── */
+.codeHeader {
+  display:         flex;
+  align-items:     center;
+  justify-content: space-between;
+  padding:         6px 12px;
+  background:      var(--bg-surface);
+  border-bottom:   1px solid var(--bg-rule);
+  flex-shrink:     0;
+}
+
+.codeLang {
+  font-family:    var(--font-condensed);
+  font-size:      9px;
+  font-weight:    600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color:          var(--blue-bright);
+}
+
+.codeCopyBtn {
+  font-family: var(--font-condensed);
+  font-size:   9px;
+  font-weight: 600;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color:       var(--text-tertiary);
+  background:  transparent;
+  border:      1px solid var(--bg-rule);
+  border-radius: 2px;
+  padding:     2px 7px;
+  cursor:      pointer;
+  transition:  color var(--dur-instant) ease, border-color var(--dur-instant) ease;
+}
+
+.codeCopyBtn:hover {
+  color:         var(--amber-bright);
+  border-color:  rgba(240, 168, 48, 0.30);
+}
+
+.codeCopied {
+  color:        var(--status-complete) !important;
+  border-color: rgba(56, 168, 92, 0.30) !important;
+}
+
+.codeBody {
+  padding:     10px 14px;
+  font-family: var(--font-mono);
+  font-size:   11px;
+  line-height: 1.65;
+  color:       var(--text-primary);
+  white-space: pre;
+  overflow-x:  auto;
+  background:  rgba(6, 10, 18, 0.90);
+  flex:        1;
+}
+
+/* Syntax token colors */
+.tokenKeyword  { color: #9B7EC8; }
+.tokenString   { color: #38A85C; }
+.tokenComment  { color: var(--text-tertiary); font-style: italic; }
+.tokenNumber   { color: #D99030; }
+.tokenFunction { color: #3D87A8; }
+.tokenOperator { color: var(--text-secondary); }
+
+/* ── CALLOUT ── */
+.calloutAmber { border-left: 3px solid var(--amber-base);  background: rgba(184, 120, 32, 0.08); }
+.calloutBlue  { border-left: 3px solid var(--blue-bright); background: rgba(61, 135, 168, 0.08); }
+.calloutRed   { border-left: 3px solid var(--status-error); background: rgba(208, 92, 92, 0.08); }
+.calloutGreen { border-left: 3px solid var(--green-bright); background: rgba(56, 168, 92, 0.08); }
+
+.calloutTitle {
+  font-family:    var(--font-condensed);
+  font-size:      11px;
+  font-weight:    700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  margin-bottom:  6px;
+}
+
+/* ── METRIC CARD ── */
+.metricValue {
+  font-family:  var(--font-mono);
+  font-size:    32px;
+  font-weight:  700;
+  color:        var(--text-primary);
+  line-height:  1.1;
+  letter-spacing: -0.02em;
+}
+
+.metricLabel {
+  font-family:    var(--font-condensed);
+  font-size:      10px;
+  font-weight:    600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color:          var(--text-secondary);
+  margin-top:     4px;
+}
+
+.metricDeltaPos { color: var(--green-bright); font-family: var(--font-mono); font-size: 11px; }
+.metricDeltaNeg { color: var(--status-error);  font-family: var(--font-mono); font-size: 11px; }
+.metricDeltaFlat { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 11px; }
+
+/* ── EMAIL DRAFT ── */
+.emailField {
+  display:     flex;
+  align-items: flex-start;
+  gap:         8px;
+  padding:     6px 0;
+  border-bottom: 1px solid var(--bg-rule);
+}
+
+.emailLabel {
+  font-family:    var(--font-condensed);
+  font-size:      10px;
+  font-weight:    600;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color:          var(--text-tertiary);
+  min-width:      44px;
+  padding-top:    1px;
+}
+
+.emailValue {
+  font-family: var(--font-ui);
+  font-size:   var(--text-sm);
+  color:       var(--text-primary);
+  flex:        1;
+}
+
+.emailBody {
+  padding:     10px 0;
+  font-family: var(--font-ui);
+  font-size:   var(--text-sm);
+  color:       var(--text-primary);
+  line-height: 1.60;
+  flex:        1;
+  overflow-y:  auto;
+}
+
+.emailActions {
+  display:     flex;
+  gap:         8px;
+  padding-top: 10px;
+  border-top:  1px solid var(--bg-rule);
+  flex-shrink: 0;
+}
+
+.btnPrimary {
+  font-family:    var(--font-condensed);
+  font-size:      10px;
+  font-weight:    700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding:        5px 14px;
+  background:     rgba(184, 120, 32, 0.18);
+  border:         1px solid rgba(240, 168, 48, 0.35);
+  border-radius:  2px;
+  color:          var(--amber-bright);
+  cursor:         pointer;
+  transition:     background var(--dur-instant) ease;
+}
+
+.btnPrimary:hover { background: rgba(184, 120, 32, 0.28); }
+
+.btnSecondary {
+  font-family:    var(--font-condensed);
+  font-size:      10px;
+  font-weight:    600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding:        5px 12px;
+  background:     transparent;
+  border:         1px solid var(--bg-rule);
+  border-radius:  2px;
+  color:          var(--text-secondary);
+  cursor:         pointer;
+  transition:     color var(--dur-instant) ease;
+}
+
+.btnSecondary:hover { color: var(--text-primary); }
+
+/* ── IMAGE ── */
+.imageWrap {
+  width:   100%;
+  height:  calc(100% - 28px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.imageEl {
+  flex:           1;
+  width:          100%;
+  height:         0;
+  object-fit:     contain;
+  object-position: center;
+  background:     var(--bg-surface);
+  border-radius:  2px;
+  display:        block;
+}
+
+.imageCaption {
+  font-family: var(--font-ui);
+  font-size:   11px;
+  color:       var(--text-secondary);
+  text-align:  center;
+  line-height: 1.4;
+  padding:     0 4px;
+  flex-shrink: 0;
+}
+
+/* ── HTML / LIVE IFRAME ── */
+.htmlToolbar {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+  padding:     4px 8px;
+  background:  var(--bg-surface);
+  border-bottom: 1px solid var(--bg-rule);
+  flex-shrink: 0;
+}
+
+.htmlUrl {
+  flex:        1;
+  font-family: var(--font-mono);
+  font-size:   10px;
+  color:       var(--text-secondary);
+  overflow:    hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.htmlRefreshBtn {
+  background:  transparent;
+  border:      none;
+  cursor:      pointer;
+  color:       var(--text-tertiary);
+  font-size:   11px;
+  padding:     2px 4px;
+  border-radius: 2px;
+  transition:  color var(--dur-instant) ease;
+}
+
+.htmlRefreshBtn:hover { color: var(--amber-bright); }
+
+.iframe {
+  width:  100%;
+  height: 100%;
+  border: none;
+  background: var(--bg-surface);
+  flex:   1;
+  display: block;
+}
+
+/* ── EMPTY / PLACEHOLDER ── */
+.empty {
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  height:          100%;
+  color:           var(--text-tertiary);
+  font-family:     var(--font-condensed);
+  font-size:       11px;
+  letter-spacing:  0.08em;
+  text-transform:  uppercase;
+}

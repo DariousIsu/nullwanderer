@@ -1,0 +1,130 @@
+/*
+ * AURA NX-Alpha — SystemStatus
+ * Telemetry rows and service indicators inside the glass.
+ * Dense but readable. Peripheral awareness panel.
+ */
+
+.section {
+  display:        flex;
+  flex-direction: column;
+}
+
+/* ── METRIC ROW ── */
+.metricRow {
+  display:         flex;
+  align-items:     center;
+  justify-content: space-between;
+  padding:         5px 0;
+  border-bottom:   1px solid rgba(31, 45, 64, 0.40);
+  gap:             8px;
+}
+.metricRow:last-child { border-bottom: none; }
+
+.metricLabel {
+  font-family:    var(--font-mono);
+  font-size:      9px;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color:          var(--text-tertiary);
+  flex-shrink:    0;
+}
+
+.metricRight {
+  display:     flex;
+  align-items: center;
+  gap:         8px;
+}
+
+/* Inline bar — shows utilization at a glance */
+.barTrack {
+  width:         48px;
+  height:        2px;
+  background:    rgba(22, 40, 64, 0.60);
+  border-radius: 2px;
+  overflow:      hidden;
+  flex-shrink:   0;
+}
+.barFill {
+  height:        100%;
+  border-radius: 2px;
+  transition:    width 0.4s var(--ease-out), background 0.2s ease;
+}
+
+.metricValue {
+  font-family:  var(--font-mono);
+  font-size:    11px;
+  font-weight:  var(--weight-medium);
+  white-space:  nowrap;
+  text-align:   right;
+  min-width:    40px;
+  transition:   color 0.2s ease;
+}
+
+.metricUnit {
+  font-size:   9px;
+  margin-left: 2px;
+  color:       var(--text-tertiary);
+  font-weight: var(--weight-regular);
+}
+
+/* ── DIVIDER ── */
+.divider {
+  height:       1px;
+  background:   rgba(31, 45, 64, 0.60);
+  margin:       var(--space-2) 0;
+}
+
+/* ── SERVICES GRID ── */
+.servicesGrid {
+  display:               grid;
+  grid-template-columns: 1fr 1fr;
+  gap:                   4px var(--space-4);
+}
+
+.service {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+}
+
+.serviceDot {
+  width:         5px;
+  height:        5px;
+  border-radius: 50%;
+  flex-shrink:   0;
+  transition:    background 0.2s ease;
+}
+
+.serviceName {
+  font-family:    var(--font-mono);
+  font-size:      9px;
+  letter-spacing: 0.04em;
+  color:          var(--text-tertiary);
+  white-space:    nowrap;
+  overflow:       hidden;
+  text-overflow:  ellipsis;
+}
+
+/* ── FOOTER ── */
+.footer {
+  display:         flex;
+  align-items:     center;
+  justify-content: space-between;
+  padding:         7px var(--panel-padding-x);
+}
+
+.footerLabel {
+  font-family:    var(--font-mono);
+  font-size:      9px;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color:          var(--text-tertiary);
+}
+
+.footerValue {
+  font-family: var(--font-mono);
+  font-size:   11px;
+  font-weight: var(--weight-medium);
+  color:       var(--green-bright);
+  letter-spacing: 0.04em;
+}

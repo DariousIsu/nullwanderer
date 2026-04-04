@@ -1,0 +1,89 @@
+/* ChartBlock — supplemental styles beyond shared blocks.module.css */
+
+.header {
+  display:         flex;
+  align-items:     center;
+  justify-content: space-between;
+  padding:         8px 12px 4px;
+  flex-shrink:     0;
+  gap:             8px;
+}
+
+.chartTitle {
+  font-family:    var(--font-condensed);
+  font-size:      11px;
+  font-weight:    600;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color:          var(--text-secondary);
+  flex:           1;
+  overflow:       hidden;
+  text-overflow:  ellipsis;
+  white-space:    nowrap;
+}
+
+.typeTabs {
+  display: flex;
+  gap:     2px;
+}
+
+.typeTab {
+  font-family:    var(--font-condensed);
+  font-size:      9px;
+  font-weight:    600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding:        2px 8px;
+  background:     transparent;
+  border:         1px solid transparent;
+  border-radius:  2px;
+  color:          var(--text-tertiary);
+  cursor:         pointer;
+  transition:     color var(--dur-instant) ease, border-color var(--dur-instant) ease;
+}
+
+.typeTab:hover { color: var(--text-secondary); }
+
+.typeTabActive {
+  color:        var(--amber-bright) !important;
+  border-color: rgba(240, 168, 48, 0.28) !important;
+  background:   rgba(240, 168, 48, 0.08);
+}
+
+/* Dark-theme tooltip */
+.tooltip {
+  background:    rgba(13, 20, 33, 0.96);
+  border:        1px solid var(--bg-rule);
+  border-radius: 3px;
+  padding:       6px 10px;
+  box-shadow:    0 4px 12px rgba(0,0,0,0.50);
+}
+
+.tooltipLabel {
+  font-family:    var(--font-condensed);
+  font-size:      10px;
+  font-weight:    600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color:          var(--text-secondary);
+  margin-bottom:  4px;
+}
+
+.tooltipRow {
+  display:     flex;
+  align-items: center;
+  gap:         5px;
+  font-family: var(--font-mono);
+  font-size:   11px;
+  color:       var(--text-primary);
+}
+
+.tooltipDot {
+  width:         6px;
+  height:        6px;
+  border-radius: 50%;
+  flex-shrink:   0;
+}
+
+.tooltipName  { color: var(--text-secondary); }
+.tooltipValue { color: var(--text-primary); margin-left: auto; padding-left: 8px; }

@@ -1,0 +1,279 @@
+/*
+ * AURA NX-Alpha — Boot Splash Screen
+ * Full-screen validation UI shown before the main shell.
+ *
+ * Layout: flex column — header pinned top, checklist scrolls, footer pinned bottom.
+ */
+
+/* ── OUTER SHELL ── */
+
+.splash {
+  position:        fixed;
+  inset:           0;
+  display:         flex;
+  flex-direction:  column;
+  align-items:     center;
+  background:      var(--bg-base, #030810);
+  font-family:     var(--font-ui, 'Inter', system-ui, sans-serif);
+  color:           var(--text-primary, #e0dcd4);
+  z-index:         9999;
+  -webkit-app-region: drag;
+  overflow:        hidden;
+}
+
+.container {
+  width:           520px;
+  max-width:       90vw;
+  display:         flex;
+  flex-direction:  column;
+  height:          100%;
+  padding:         3rem 0 2rem;
+  -webkit-app-region: no-drag;
+}
+
+/* ── PINNED HEADER ── */
+
+.header {
+  flex-shrink:   0;
+  text-align:    center;
+  margin-bottom: 1rem;
+}
+
+.splashLogo {
+  width:      100%;
+  max-width:  460px;
+  height:     auto;
+  display:    block;
+  margin:     0 auto;
+  animation:  logoIn 0.8s ease-out both;
+  -webkit-mask-image: radial-gradient(ellipse 78% 80% at 50% 50%, black 35%, transparent 80%);
+  mask-image:         radial-gradient(ellipse 78% 80% at 50% 50%, black 35%, transparent 80%);
+}
+
+.subtitle {
+  font-size:      0.7rem;
+  color:          var(--text-muted, #706b60);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-top:     0.5rem;
+  animation:      subtitleIn 0.5s 0.5s ease-out both;
+}
+
+/* ── SCROLLABLE CHECKLIST ── */
+
+.checklist {
+  flex:         1;
+  min-height:   0;           /* critical — allows flex child to shrink below content size */
+  overflow-y:   auto;
+  list-style:   none;
+  padding:      0;
+  margin:       0;
+
+  /* subtle amber scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(184, 120, 32, 0.2) transparent;
+}
+
+.checklist::-webkit-scrollbar       { width: 3px; }
+.checklist::-webkit-scrollbar-track { background: transparent; }
+.checklist::-webkit-scrollbar-thumb { background: rgba(184, 120, 32, 0.2); border-radius: 2px; }
+
+.step {
+  display:     flex;
+  align-items: center;
+  gap:         0.75rem;
+  padding:     0.5rem 0.75rem;
+  font-size:   0.85rem;
+  border-left: 2px solid transparent;
+  transition:  border-color 0.3s ease;
+  animation:   stepIn 0.18s ease-out both;
+}
+
+.step[data-status="ok"] {
+  border-left-color: #2d8b4e;
+}
+.step[data-status="running"] {
+  border-left-color: var(--accent-gold, #b87820);
+}
+.step[data-status="warn"] {
+  border-left-color: #b8781f;
+  opacity: 0.85;
+}
+.step[data-status="error"] {
+  border-left-color: #a83232;
+  opacity: 0.85;
+}
+.step[data-status="pending"] {
+  opacity: 0.35;
+}
+
+.stepIcon {
+  width:      18px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size:  0.9rem;
+}
+
+.stepName {
+  flex: 1;
+}
+
+.stepMessage {
+  font-size:      0.7rem;
+  color:          var(--text-muted, #706b60);
+  max-width:      200px;
+  overflow:       hidden;
+  text-overflow:  ellipsis;
+  white-space:    nowrap;
+}
+
+/* ── PINNED FOOTER ── */
+
+.footer {
+  flex-shrink: 0;
+  padding-top: 1.25rem;
+}
+
+/* ── MODEL GATE ── */
+
+.modelGate {
+  background:    rgba(255, 255, 255, 0.03);
+  border:        1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding:       1.25rem;
+  margin-bottom: 1.25rem;
+  animation:     fadeUp 0.3s ease-out both;
+}
+
+.modelGateTitle {
+  font-size:      0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color:          var(--accent-gold, #b87820);
+  margin-bottom:  1rem;
+}
+
+.modelCard {
+  margin-bottom: 1rem;
+}
+
+.modelRole {
+  font-size:      0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color:          var(--text-muted, #706b60);
+  margin-bottom:  0.25rem;
+}
+
+.modelName {
+  font-size:   1rem;
+  font-weight: 600;
+  margin-bottom: 0.15rem;
+}
+
+.modelMeta {
+  font-size: 0.75rem;
+  color:     var(--text-muted, #706b60);
+}
+
+/* ── BUTTONS ── */
+
+.actions {
+  display:         flex;
+  gap:             0.75rem;
+  justify-content: center;
+}
+
+.btnPrimary {
+  padding:        0.6rem 2rem;
+  font-size:      0.85rem;
+  font-weight:    600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border:         1px solid var(--accent-gold, #b87820);
+  background:     rgba(184, 120, 32, 0.12);
+  color:          var(--accent-gold, #b87820);
+  border-radius:  4px;
+  cursor:         pointer;
+  transition:     background 0.2s, transform 0.1s;
+}
+.btnPrimary:hover  { background: rgba(184, 120, 32, 0.25); }
+.btnPrimary:active { transform: scale(0.98); }
+.btnPrimary:disabled { opacity: 0.4; cursor: default; }
+
+.btnSecondary {
+  padding:       0.6rem 1.5rem;
+  font-size:     0.8rem;
+  border:        1px solid rgba(255, 255, 255, 0.1);
+  background:    transparent;
+  color:         var(--text-muted, #706b60);
+  border-radius: 4px;
+  cursor:        pointer;
+  transition:    background 0.2s;
+}
+.btnSecondary:hover { background: rgba(255, 255, 255, 0.04); }
+
+/* ── READY STATE ── */
+
+.readyMessage {
+  text-align:    center;
+  font-size:     0.9rem;
+  color:         #2d8b4e;
+  margin-bottom: 1.25rem;
+  animation:     readyIn 0.6s ease-out both;
+}
+
+/* ── PHASE LABEL ── */
+
+.phaseLabel {
+  font-size:      0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color:          var(--text-muted, #706b60);
+  margin-bottom:  0.5rem;
+  text-align:     center;
+}
+
+/* ── ANIMATIONS ── */
+
+/* Logo: fade in + subtle scale up */
+@keyframes logoIn {
+  0%   { opacity: 0; transform: scale(0.94); }
+  60%  { opacity: 1; }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* Subtitle: fade + rise */
+@keyframes subtitleIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Each checklist step: slide in from left */
+@keyframes stepIn {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Model gate / ready state: fade + rise */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* "All systems verified" green glow reveal */
+@keyframes readyIn {
+  0%   { opacity: 0; transform: translateY(4px); text-shadow: none; }
+  50%  { opacity: 1; text-shadow: 0 0 12px rgba(45, 139, 78, 0.6); }
+  100% { opacity: 1; text-shadow: 0 0 4px rgba(45, 139, 78, 0.2); }
+}
+
+/* Spinner for running steps */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spinner {
+  display:   inline-block;
+  animation: spin 1s linear infinite;
+}

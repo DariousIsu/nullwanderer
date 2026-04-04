@@ -1,0 +1,245 @@
+/*
+ * AURA NX-Alpha — DropPanel
+ *
+ * Full-canvas service overlay. Slides down from top when AppBar tab is activated.
+ *
+ * ANIMATION:
+ *   Handled entirely by GSAP (animateDropPanelOpen / animateDropPanelClose).
+ *   Initial state: visibility:hidden, translateY(-102%).
+ *   GSAP sets visibility:visible before animating open.
+ *   GSAP sets visibility:hidden after animating closed.
+ *   No CSS transitions here — GSAP owns all state transitions per design system rule.
+ *
+ * Z-INDEX HIERARCHY (recapping for reference):
+ *   Floating panels:     20–80
+ *   Drop panels:         110    ← here
+ *   TitleBar/AppBar:     150–200
+ *   Peek stack:          250    (above drop panels — tabs stay accessible)
+ */
+
+/* ── OUTER SHELL — position:absolute fills canvas ── */
+.panel {
+  position:       absolute;
+  inset:          0;
+  z-index:        110;
+  display:        flex;
+  flex-direction: column;
+
+  /* GSAP initial state — hidden above canvas top edge */
+  visibility: hidden;
+  transform:  translateY(-102%);
+  /* NO CSS transitions — GSAP handles open/close animation */
+}
+
+/* ── FROSTED BACKGROUND ── */
+.bg {
+  position:   absolute;
+  inset:      0;
+  background:
+    rgba(3, 8, 16, 0.96),
+    linear-gradient(180deg, rgba(61,135,168,.04) 0%, transparent 40%);
+  backdrop-filter: blur(4px);
+}
+
+/* ── PANEL INNER — content sits above .bg ── */
+.inner {
+  position:       relative;
+  z-index:        1;
+  display:        flex;
+  flex-direction: column;
+  height:         100%;
+}
+
+/* ──────────────────────────────────────────────────────────
+   HEADER
+   ────────────────────────────────────────────────────────── */
+
+.header {
+  display:       flex;
+  align-items:   center;
+  gap:           10px;
+  height:        44px;
+  padding:       0 16px;
+  flex-shrink:   0;
+  background:    linear-gradient(180deg, #1C2E46 0%, #111C2E 100%);
+  border-bottom: 1px solid rgba(61,135,168,.20);
+  box-shadow:    inset 0 1px 0 rgba(255,255,255,.06);
+}
+
+/* LED presence dot */
+.led {
+  width:         6px;
+  height:        6px;
+  border-radius: 50%;
+  background:    var(--blue-bright);
+  box-shadow:    0 0 5px var(--blue-bright);
+  flex-shrink:   0;
+  animation:     dropLed 2.5s ease-in-out infinite;
+}
+@keyframes dropLed {
+  0%, 100% { opacity: .90; }
+  50%       { opacity: .45; }
+}
+
+/* Panel title */
+.title {
+  font-family:    var(--font-condensed);
+  font-size:      14px;
+  font-weight:    700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color:          var(--text-primary);
+}
+
+/* Service tag */
+.tag {
+  font-family:    var(--font-condensed);
+  font-size:      10px;
+  font-weight:    500;
+  letter-spacing: .06em;
+  color:          var(--text-tertiary);
+  flex:           1;
+}
+
+/* Header action buttons */
+.actions {
+  display:     flex;
+  align-items: center;
+  gap:         4px;
+}
+
+.btn {
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  width:           24px;
+  height:          24px;
+  background:      transparent;
+  border:          1px solid transparent;
+  border-radius:   3px;
+  color:           var(--text-tertiary);
+  cursor:          pointer;
+  padding:         0;
+  transition:
+    background   100ms,
+    border-color 100ms,
+    color        100ms;
+}
+.btn:hover {
+  background:   rgba(61,135,168,.12);
+  border-color: rgba(61,135,168,.25);
+  color:        var(--text-secondary);
+}
+
+/* ──────────────────────────────────────────────────────────
+   BODY — two-column layout
+   ────────────────────────────────────────────────────────── */
+
+.body {
+  flex:     1;
+  display:  flex;
+  overflow: hidden;
+}
+
+/* ── LEFT SIDEBAR ── */
+.side {
+  width:         220px;
+  flex-shrink:   0;
+  padding:       12px 0;
+  border-right:  1px solid rgba(31,45,64,.60);
+  background:    rgba(5,10,18,.50);
+  overflow-y:    auto;
+}
+
+.sideLabel {
+  padding:        4px 16px 8px;
+  font-family:    var(--font-condensed);
+  font-size:      9px;
+  font-weight:    700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color:          var(--text-tertiary);
+}
+
+.sideItem {
+  display:        flex;
+  align-items:    center;
+  gap:            8px;
+  padding:        7px 16px;
+  font-family:    var(--font-condensed);
+  font-size:      12px;
+  font-weight:    500;
+  letter-spacing: .04em;
+  color:          var(--text-secondary);
+  cursor:         pointer;
+  transition:     background 80ms, color 80ms;
+}
+.sideItem:hover {
+  background: rgba(61,135,168,.06);
+  color:      var(--text-primary);
+}
+.sideItemActive {
+  color:      var(--blue-bright);
+  background: rgba(61,135,168,.08);
+}
+
+/* Source dot */
+.sideDot {
+  width:         5px;
+  height:        5px;
+  border-radius: 50%;
+  background:    var(--text-tertiary);
+  flex-shrink:   0;
+}
+.sideItemActive .sideDot {
+  background: var(--blue-bright);
+  box-shadow: 0 0 3px var(--blue-bright);
+}
+
+/* ── RIGHT MAIN CONTENT ── */
+.main {
+  flex:       1;
+  overflow-y: auto;
+  padding:    16px;
+  position:   relative;
+}
+
+/* ──────────────────────────────────────────────────────────
+   STUB CONTENT — placeholder until integrations are built
+   ────────────────────────────────────────────────────────── */
+
+.stub {
+  display:         flex;
+  flex-direction:  column;
+  align-items:     center;
+  justify-content: center;
+  height:          100%;
+  gap:             12px;
+  min-height:      200px;
+}
+
+.stubIcon {
+  font-size:   36px;
+  opacity:     .12;
+  line-height: 1;
+}
+
+.stubTitle {
+  font-family:    var(--font-condensed);
+  font-size:      16px;
+  font-weight:    600;
+  letter-spacing: .10em;
+  text-transform: uppercase;
+  color:          var(--text-tertiary);
+  margin:         0;
+  opacity:        .60;
+}
+
+.stubSub {
+  font-family: var(--font-condensed);
+  font-size:   11px;
+  color:       var(--text-tertiary);
+  margin:      0;
+  opacity:     .40;
+  letter-spacing: .04em;
+}

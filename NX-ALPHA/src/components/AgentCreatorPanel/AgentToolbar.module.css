@@ -1,0 +1,145 @@
+/*
+ * AURA NX-Alpha — AgentToolbar
+ */
+
+.bar {
+  display:     flex;
+  align-items: center;
+  gap:         8px;
+  padding:     6px 12px;
+  background:  rgba(5, 10, 18, 0.80);
+  border-bottom: 1px solid rgba(31, 45, 64, 0.60);
+  flex-shrink: 0;
+}
+
+.hint {
+  font-size:  10px;
+  color:      var(--text-tertiary, #4a6070);
+  font-style: italic;
+}
+
+/* ── Name input ────────────────────────────────────────────── */
+
+.nameInput {
+  background:    rgba(8, 14, 24, 0.80);
+  border:        1px solid rgba(31, 45, 64, 0.60);
+  border-radius: 4px;
+  padding:       4px 9px;
+  font-family:   var(--font-condensed, 'Barlow Condensed', sans-serif);
+  font-size:     13px;
+  font-weight:   700;
+  letter-spacing: 0.04em;
+  color:         var(--text-primary, #c8d8e8);
+  outline:       none;
+  width:         220px;
+  transition:    border-color 0.12s;
+}
+
+.nameInput:focus {
+  border-color: rgba(184, 120, 32, 0.50);
+}
+
+.nameInput::placeholder {
+  color: var(--text-tertiary, #4a6070);
+}
+
+/* ── Category select ────────────────────────────────────────── */
+
+.categorySelect {
+  background:    rgba(8, 14, 24, 0.80);
+  border:        1px solid rgba(31, 45, 64, 0.60);
+  border-radius: 4px;
+  padding:       4px 7px;
+  font-family:   var(--font-condensed, 'Barlow Condensed', sans-serif);
+  font-size:     10px;
+  font-weight:   700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color:         var(--text-secondary, #8aa0b4);
+  outline:       none;
+  cursor:        pointer;
+}
+
+.categorySelect:focus {
+  border-color: rgba(184, 120, 32, 0.50);
+}
+
+/* ── Spacer ─────────────────────────────────────────────────── */
+
+.spacer {
+  flex: 1;
+}
+
+/* ── Status chip ────────────────────────────────────────────── */
+
+.chip {
+  font-family:    var(--font-condensed, 'Barlow Condensed', sans-serif);
+  font-size:      9px;
+  font-weight:    700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  padding:        2px 7px;
+  border-radius:  3px;
+  flex-shrink:    0;
+}
+
+.chipDraft {
+  background: rgba(31, 45, 64, 0.60);
+  color:      var(--text-tertiary, #4a6070);
+}
+
+.chipPublished {
+  background: rgba(42, 184, 122, 0.14);
+  color:      #2ab87a;
+}
+
+.chipError {
+  background: rgba(184, 42, 42, 0.16);
+  color:      #e05a5a;
+}
+
+/* ── Buttons ────────────────────────────────────────────────── */
+
+.btnSave,
+.btnPublish,
+.btnRun {
+  padding:        4px 10px;
+  border-radius:  4px;
+  font-family:    var(--font-condensed, 'Barlow Condensed', sans-serif);
+  font-size:      10px;
+  font-weight:    700;
+  letter-spacing: 0.06em;
+  cursor:         pointer;
+  transition:     background 0.12s;
+  white-space:    nowrap;
+}
+
+.btnSave {
+  background: rgba(31, 45, 64, 0.60);
+  border:     1px solid rgba(31, 45, 64, 0.80);
+  color:      var(--text-secondary, #8aa0b4);
+}
+
+.btnSave:hover {
+  background: rgba(31, 45, 64, 0.90);
+}
+
+.btnPublish {
+  background: rgba(184, 120, 32, 0.14);
+  border:     1px solid rgba(184, 120, 32, 0.35);
+  color:      #b87820;
+}
+
+.btnPublish:hover {
+  background: rgba(184, 120, 32, 0.24);
+}
+
+.btnRun {
+  background: rgba(42, 184, 122, 0.12);
+  border:     1px solid rgba(42, 184, 122, 0.30);
+  color:      #2ab87a;
+}
+
+.btnRun:hover {
+  background: rgba(42, 184, 122, 0.20);
+}

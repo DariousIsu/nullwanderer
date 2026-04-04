@@ -1,0 +1,474 @@
+/*
+ * AURA NX-Alpha — Chat Panel
+ *
+ * This panel has ONE job: be an unbroken conversational river.
+ * No metadata overlays. No status chrome. No competing elements.
+ * The thinking indicator is the only dynamic element.
+ * The illusion of persistent state lives or dies on this surface staying clean.
+ *
+ * CHARACTER NOTES:
+ * - User bubble: left border in blue-muted (instrument read — this is your input)
+ * - Aura text: runs flush — no bubble. This is the river.
+ * - Thinking dots: amber, not blue. Aura's processing is still Aura.
+ * - Input bar: recessed with depth-inset — feels like typing into hardware.
+ */
+
+/* ── CHAT CONTAINER ── */
+.chat {
+  display:        flex;
+  flex-direction: column;
+  height:         100%;
+  min-height:     0;  /* required for flex children to scroll */
+}
+
+/* ── MESSAGE LIST ── */
+.messages {
+  flex:           1;
+  overflow-y:     auto;
+  overflow-x:     hidden;
+  padding:        var(--space-3) 0;
+  display:        flex;
+  flex-direction: column;
+  gap:            0;
+  scroll-behavior: smooth;
+}
+
+/* Subtle scrollbar */
+.messages::-webkit-scrollbar       { width: 3px; }
+.messages::-webkit-scrollbar-track { background: transparent; }
+.messages::-webkit-scrollbar-thumb {
+  background:    var(--bg-rule);
+  border-radius: 2px;
+}
+.messages::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+
+/* ── THINKING BLOCK — collapsible reasoning ── */
+.thinkingBlock {
+  padding:       0 var(--space-2);
+  margin-bottom: var(--space-1);
+  will-change:   opacity, transform;
+}
+
+.thinkingToggle {
+  display:        flex;
+  align-items:    center;
+  gap:            var(--space-1);
+  background:     none;
+  border:         1px solid rgba(255, 255, 255, 0.06);
+  border-radius:  4px;
+  padding:        var(--space-1) var(--space-2);
+  cursor:         pointer;
+  color:          var(--text-muted, #706b60);
+  font-family:    var(--font-condensed);
+  font-size:      var(--text-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition:     background var(--dur-instant) ease, color var(--dur-instant) ease;
+}
+
+.thinkingToggle:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color:      var(--text-secondary, #a09a8f);
+}
+
+.thinkingIcon {
+  font-size: 0.65rem;
+  line-height: 1;
+}
+
+.thinkingLabel {
+  line-height: 1;
+}
+
+.thinkingContent {
+  margin-top:    var(--space-1);
+  padding:       var(--space-2);
+  background:    rgba(255, 255, 255, 0.02);
+  border:        1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 4px;
+  font-size:     var(--text-sm);
+  color:         var(--text-muted, #706b60);
+  line-height:   1.5;
+  white-space:   pre-wrap;
+  max-height:    300px;
+  overflow-y:    auto;
+}
+
+.thinkingContent::-webkit-scrollbar       { width: 3px; }
+.thinkingContent::-webkit-scrollbar-track { background: transparent; }
+.thinkingContent::-webkit-scrollbar-thumb { background: var(--bg-rule); border-radius: 2px; }
+
+/* ── SCREENPLAY MESSAGE ROW ──
+   All roles share this single-row format.
+   [timestamp]  ▸  message text
+   Amber ▸ + amber text for user.
+   Dim space   + near-white text for Aura. */
+.msgRow {
+  display:     flex;
+  align-items: baseline;
+  padding:     2px var(--space-2);
+  line-height: 1.6;
+  will-change: opacity, transform;  /* GSAP entrance target */
+}
+
+/* Timestamp column */
+.msgTs {
+  font-family:  var(--font-mono);
+  font-size:    10px;
+  color:        var(--text-tertiary);
+  width:        54px;
+  flex-shrink:  0;
+  opacity:      0.5;
+  padding-top:  1px;
+  letter-spacing: 0.02em;
+}
+
+/* Arrow / glyph column */
+.msgArrow {
+  width:       18px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size:   11px;
+  color:       transparent;
+  padding-top: 1px;
+}
+
+/* Amber ▸ for user lines */
+.msgArrowUser {
+  color: var(--amber-base);
+}
+
+/* Message body */
+.msgBody {
+  flex:        1;
+  font-family: var(--font-mono);
+  font-size:   var(--text-sm);
+  white-space: pre-wrap;
+  word-break:  break-word;
+  min-width:   0;
+  /* Override parent shell's user-select:none so chat text is copyable */
+  user-select: text;
+}
+
+/* User text — amber */
+.msgBodyUser {
+  color:       var(--amber-base);
+  user-select: text;
+}
+
+/* Aura text — near-white */
+.msgBodyAura {
+  color:       var(--text-primary);
+  user-select: text;
+}
+
+/* System text — muted amber border */
+.msgBodySystem {
+  color:        var(--text-secondary);
+  border-left:  2px solid rgba(245, 158, 11, 0.3);
+  padding-left: var(--space-2);
+  font-size:    var(--text-xs);
+}
+
+/* Inline actions (queue btn, download btn) after message text */
+.msgActions {
+  display:      inline-flex;
+  align-items:  center;
+  gap:          var(--space-1);
+  margin-left:  var(--space-2);
+  vertical-align: middle;
+}
+
+/* ── SYSTEM MESSAGE (gate prompts, hardware notices, queue events) ── */
+.msgSystem {
+  display:        flex;
+  flex-direction: column;
+  gap:            var(--space-1);
+  padding:        var(--space-2) var(--space-3);
+  border-left:    2px solid var(--accent-amber, #f59e0b);
+  background:     rgba(245, 158, 11, 0.05);
+  border-radius:  0 var(--radius-sm) var(--radius-sm) 0;
+  margin:         var(--space-1) 0;
+}
+
+.msgSystemText {
+  font-family: var(--font-ui);
+  font-size:   var(--text-sm);
+  color:       var(--text-secondary);
+  margin:      0;
+  line-height: 1.5;
+}
+
+.msgSystemActions {
+  display:     flex;
+  align-items: center;
+  gap:         var(--space-2);
+  margin-top:  var(--space-1);
+}
+
+.queueBtn {
+  font-family:     var(--font-condensed);
+  font-size:       var(--text-xs);
+  padding:         3px 10px;
+  background:      transparent;
+  border:          1px solid var(--accent-amber, #f59e0b);
+  color:           var(--accent-amber, #f59e0b);
+  border-radius:   var(--radius-sm);
+  cursor:          pointer;
+  letter-spacing:  0.04em;
+  text-transform:  uppercase;
+  transition:      background 0.15s, color 0.15s;
+}
+.queueBtn:hover:not(:disabled) {
+  background: var(--accent-amber, #f59e0b);
+  color:      #000;
+}
+.queueBtn:disabled {
+  opacity: 0.45;
+  cursor:  not-allowed;
+}
+
+.queuedBadge {
+  font-family:    var(--font-condensed);
+  font-size:      var(--text-xs);
+  color:          var(--accent-green, #4ade80);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.downloadBtn {
+  font-family:     var(--font-condensed);
+  font-size:       var(--text-xs);
+  padding:         3px 10px;
+  background:      transparent;
+  border:          1px solid var(--accent-amber, #f59e0b);
+  color:           var(--accent-amber, #f59e0b);
+  border-radius:   var(--radius-sm);
+  cursor:          pointer;
+  letter-spacing:  0.04em;
+  text-transform:  uppercase;
+  transition:      background 0.15s, color 0.15s;
+}
+.downloadBtn:hover {
+  background: var(--accent-amber, #f59e0b);
+  color:      #000;
+}
+
+/* ── THINKING INDICATOR — scramble text + amber glow row ── */
+
+/* Faint amber wash pulses on the row while thinking */
+.msgRowThinking {
+  animation: thinking-pulse 2.4s ease-in-out infinite;
+}
+@keyframes thinking-pulse {
+  0%, 100% { background: transparent; }
+  50%       { background: rgba(184, 120, 32, 0.05); }
+}
+
+.thinkingText {
+  display:     inline-flex;
+  align-items: baseline;
+  gap:         0;
+  font-family: var(--font-mono);
+  font-size:   var(--text-sm);
+  color:       var(--amber-muted, #b87820);
+  letter-spacing: 0.06em;
+}
+
+/* The `...` ellipsis — slightly dimmer */
+.thinkingEllipsis {
+  opacity: 0.5;
+}
+
+/* Live elapsed timer — very dim, right of the ellipsis */
+.thinkingElapsed {
+  font-size:      10px;
+  color:          var(--text-tertiary);
+  opacity:        0.6;
+  margin-left:    8px;
+  letter-spacing: 0.04em;
+}
+
+/* ── RESPONSE STATS — elapsed time + token count ── */
+.msgStats {
+  display:        block;
+  font-family:    var(--font-mono);
+  font-size:      9px;
+  color:          var(--text-tertiary);
+  opacity:        0;  /* GSAP fades in when sealed */
+  margin-top:     4px;
+  letter-spacing: 0.04em;
+}
+
+/* Live variant — visible immediately, no fade-in needed */
+.msgStatsLive {
+  opacity: 0.55;
+}
+
+/* ── SCROLL ANCHOR ── */
+.scrollAnchor { height: 1px; flex-shrink: 0; }
+
+/* ── DATE DIVIDER ── */
+.divider {
+  display:     flex;
+  align-items: center;
+  gap:         var(--space-3);
+  padding:     0 var(--space-2);
+}
+.divider::before,
+.divider::after {
+  content:    '';
+  flex:       1;
+  height:     1px;
+  background: var(--bg-rule);
+}
+.dividerLabel {
+  font-family:    var(--font-mono);
+  font-size:      var(--text-xs);
+  color:          var(--text-tertiary);
+  letter-spacing: 0.06em;
+  white-space:    nowrap;
+}
+
+/* ── INPUT BAR ── */
+.inputBar {
+  display:     flex;
+  align-items: center;
+  gap:         var(--space-2);
+  padding:     var(--space-3) var(--space-3);
+}
+
+.input {
+  flex:          1;
+  /* Recessed — typing into hardware, not onto a surface */
+  background:    var(--bg-void);
+  box-shadow:    var(--depth-inset);
+  border:        var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding:       var(--space-2) var(--space-3);
+  font-family:   var(--font-ui);
+  font-size:     var(--text-sm);
+  font-weight:   var(--weight-regular);
+  color:         var(--text-primary);
+  outline:       none;
+  resize:        none;
+  line-height:   var(--leading-normal);
+  min-height:    36px;
+  max-height:    120px;
+  transition:
+    border-color var(--dur-instant) ease,
+    box-shadow   var(--dur-instant) ease;
+}
+
+.input::placeholder { color: var(--text-tertiary); }
+
+.input:focus {
+  border-color: var(--amber-muted);  /* Amber focus — attention is amber */
+  box-shadow:   var(--depth-inset), var(--glow-amber-sm);
+}
+
+.sendBtn {
+  width:           32px;
+  height:          32px;
+  border-radius:   var(--radius-sm);  /* Tight — hardware button */
+  background:      var(--amber-base);
+  border:          none;
+  cursor:          pointer;
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  color:           var(--bg-void);  /* Dark icon on amber — maximum contrast */
+  flex-shrink:     0;
+  transition:
+    background var(--dur-instant) ease,
+    box-shadow var(--dur-instant) ease,
+    transform  var(--dur-instant) ease;
+}
+
+.sendBtn:hover:not(:disabled) {
+  background: var(--amber-bright);
+  box-shadow: var(--glow-amber-sm);
+}
+
+.sendBtn:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.sendBtn:disabled {
+  opacity:    0.30;
+  cursor:     not-allowed;
+  background: var(--bg-border);
+}
+
+.sendBtn:focus-visible {
+  outline:    none;
+  box-shadow: var(--border-focus), var(--glow-amber-sm);
+}
+
+/* ── MIC BUTTON ──
+   Sits between textarea and send. Three visual states:
+   idle        — ghost button, mic icon
+   recording   — amber pulse, stop icon — "I'm listening"
+   transcribing — muted, spinner feel
+   speaking    — blue-muted, locked — "Aura is talking" */
+.micBtn {
+  width:           32px;
+  height:          32px;
+  border-radius:   var(--radius-sm);
+  background:      transparent;
+  border:          var(--border-subtle);
+  cursor:          pointer;
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  color:           var(--text-tertiary);
+  flex-shrink:     0;
+  transition:
+    background  var(--dur-instant) ease,
+    border-color var(--dur-instant) ease,
+    color       var(--dur-instant) ease,
+    box-shadow  var(--dur-instant) ease;
+}
+
+.micBtn:hover:not(:disabled) {
+  border-color: var(--amber-muted);
+  color:        var(--text-secondary);
+}
+
+.micBtn:focus-visible {
+  outline:    none;
+  box-shadow: var(--border-focus);
+}
+
+/* Recording — amber pulse, stop icon */
+.micBtnRecording {
+  background:   var(--amber-base);
+  border-color: var(--amber-base);
+  color:        var(--bg-void);
+  animation:    mic-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(184, 120, 32, 0.4); }
+  50%       { box-shadow: 0 0 0 6px rgba(184, 120, 32, 0); }
+}
+
+/* Transcribing — faded, not clickable */
+.micBtnTranscribing {
+  opacity:    0.4;
+  cursor:     not-allowed;
+  background: var(--bg-elevated);
+  border-color: var(--bg-border);
+}
+
+/* Speaking — blue-muted indicator, non-interactive */
+.micBtnSpeaking {
+  border-color: var(--blue-muted);
+  color:        var(--blue-muted);
+  cursor:       not-allowed;
+  opacity:      0.6;
+}
+
+.micBtn:disabled {
+  cursor: not-allowed;
+}

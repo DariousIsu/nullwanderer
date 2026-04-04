@@ -1,0 +1,150 @@
+/*
+ * AURA NX-Alpha — Schedule
+ * Agenda view. Dense, readable. Today and tomorrow.
+ */
+
+.list {
+  display:        flex;
+  flex-direction: column;
+  gap:            var(--space-1);
+}
+
+/* ── DAY SECTION ── */
+.day {
+  display:        flex;
+  flex-direction: column;
+}
+
+.dayLabel {
+  font-family:    var(--font-mono);
+  font-size:      9px;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color:          var(--text-tertiary);
+  padding:        4px 0;
+  margin-bottom:  2px;
+}
+
+.daySep {
+  height:     1px;
+  background: rgba(31, 45, 64, 0.50);
+  margin:     var(--space-2) 0;
+}
+
+/* ── EVENT ROW ── */
+.event {
+  display:     grid;
+  grid-template-columns: 52px 1fr auto;
+  gap:         var(--space-2);
+  align-items: flex-start;
+  padding:     6px 0;
+  border-bottom: 1px solid rgba(31, 45, 64, 0.35);
+}
+.event:last-child { border-bottom: none; }
+
+.event_now  { opacity: 1.0; }
+.event_soon { opacity: 1.0; }
+.event_later { opacity: 0.75; }
+.event_done  { opacity: 0.40; }
+
+.eventTime {
+  font-family:    var(--font-mono);
+  font-size:      10px;
+  font-weight:    var(--weight-medium);
+  color:          var(--text-tertiary);
+  letter-spacing: 0.02em;
+  padding-top:    1px;
+  white-space:    nowrap;
+}
+.event_now  .eventTime { color: var(--amber-hot); }
+.event_soon .eventTime { color: var(--amber-base); }
+
+.eventInfo {
+  min-width: 0;
+}
+
+.eventTitle {
+  font-family:  var(--font-ui);
+  font-size:    var(--text-xs);
+  color:        var(--text-secondary);
+  line-height:  var(--leading-snug);
+  white-space:  nowrap;
+  overflow:     hidden;
+  text-overflow: ellipsis;
+}
+.event_now .eventTitle { color: var(--text-primary); }
+
+.eventLocation {
+  font-family: var(--font-mono);
+  font-size:   9px;
+  color:       var(--text-tertiary);
+  margin-top:  2px;
+  white-space: nowrap;
+  overflow:    hidden;
+  text-overflow: ellipsis;
+}
+
+/* Status pill */
+.eventStatus {
+  font-family:    var(--font-condensed);
+  font-size:      8px;
+  font-weight:    var(--weight-bold);
+  letter-spacing: 0.08em;
+  padding:        2px 5px;
+  border-radius:  var(--radius-sm);
+  align-self:     flex-start;
+  white-space:    nowrap;
+}
+.status_now  { background: rgba(240,168,48,0.15); color: var(--amber-hot); border: 1px solid rgba(240,168,48,0.25); }
+.status_soon { background: rgba(184,120,32,0.10); color: var(--amber-base); border: 1px solid rgba(184,120,32,0.18); }
+.status_done { background: rgba(44,138,74,0.10);  color: var(--green-bright); border: 1px solid rgba(44,138,74,0.16); }
+
+/* ── EMPTY ── */
+.empty {
+  font-family:    var(--font-mono);
+  font-size:      var(--text-xs);
+  color:          var(--text-tertiary);
+  text-align:     center;
+  padding:        var(--space-8) 0;
+  letter-spacing: 0.04em;
+}
+
+/* ── HEADER COUNT ── */
+.headerCount {
+  font-family:    var(--font-mono);
+  font-size:      9px;
+  font-weight:    var(--weight-semibold);
+  background:     rgba(184, 120, 32, 0.10);
+  color:          var(--amber-base);
+  border:         1px solid rgba(184, 120, 32, 0.20);
+  border-radius:  var(--radius-sm);
+  padding:        1px 6px;
+  white-space:    nowrap;
+}
+.headerCount[data-urgent="true"] {
+  background: rgba(240, 168, 48, 0.12);
+  color:      var(--amber-hot);
+  border-color: rgba(240, 168, 48, 0.25);
+}
+
+/* ── FOOTER ── */
+.footer {
+  display:         flex;
+  align-items:     center;
+  justify-content: space-between;
+  padding:         7px var(--panel-padding-x);
+}
+
+.footerDate {
+  font-family:    var(--font-mono);
+  font-size:      9px;
+  color:          var(--text-tertiary);
+  letter-spacing: 0.04em;
+}
+
+.footerSync {
+  font-family:    var(--font-mono);
+  font-size:      9px;
+  color:          var(--green-bright);
+  letter-spacing: 0.04em;
+}

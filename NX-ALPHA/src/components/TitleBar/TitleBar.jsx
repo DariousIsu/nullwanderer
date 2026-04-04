@@ -140,6 +140,7 @@ const MODES = [
   { id: 'quiet',     icon: '🔇', label: 'Quiet',     desc: 'Silent — no proactive output' },
   { id: 'ambient',   icon: '🔔', label: 'Ambient',   desc: 'Passive monitoring only' },
   { id: 'proactive', icon: '⚡', label: 'Proactive', desc: 'Full autonomous operation' },
+  { id: 'dev',       icon: '⌨',  label: 'Dev',       desc: 'Workhorse dedicated to Dev Studio' },
 ];
 
 /**
@@ -278,7 +279,7 @@ const TitleBar = ({
       <TimezoneBar zones={timezones} />
     </div>
 
-    {/* Right — canvas export (when blocks present) + theatre + window controls */}
+    {/* Right — canvas export (when blocks present) + window controls */}
     <div className={styles.right}>
       <CanvasExportControl
         blockCount={canvasBlockCount}
@@ -287,14 +288,6 @@ const TitleBar = ({
         onDownload={onCanvasDownload}
         exporting={exporting}
       />
-      <button
-        className={styles.theatreBtn}
-        onClick={() => window.electronAPI?.openTheatre?.()}
-        title="Open Theatre"
-        aria-label="Open Theatre streaming window"
-      >
-        ▶ Theatre
-      </button>
       <WinControls />
     </div>
   </div>

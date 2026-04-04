@@ -1,0 +1,503 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   StationPanel — AURA YouTube station with live transcription
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.root {
+  display: flex;
+  width: 100%;
+  /* 36px TitleBar + 32px AppBar + 44px DropPanel header = 112px */
+  height: calc(100vh - 112px);
+  overflow: hidden;
+  background: #0a0a0a;
+}
+
+/* ── Left: browser column ───────────────────────────────────────────────────── */
+
+.browser {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 65%;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid rgba(200, 160, 78, 0.15);
+}
+
+/* ── Player area (top ~60% of left column) ──────────────────────────────────── */
+
+.playerWrap {
+  flex: 1 1 60%;
+  position: relative;
+  min-height: 0;
+  background: #000;
+}
+
+.player {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+}
+
+/* Placeholder shown before any video is selected */
+.playerPlaceholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: linear-gradient(150deg, #0d1420 0%, #080e18 60%, #050a10 100%);
+}
+
+.placeholderLed {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(200, 160, 78, 0.3);
+  box-shadow: 0 0 8px rgba(200, 160, 78, 0.2);
+}
+
+.placeholderTitle {
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  letter-spacing: 0.2em;
+  color: rgba(200, 160, 78, 0.5);
+  text-transform: uppercase;
+}
+
+.placeholderSub {
+  font-family: 'Courier New', monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: #333;
+}
+
+/* ── Channel browser ───────────────────────────────────────────────────────── */
+
+.channelBrowser {
+  flex-shrink: 0;
+  border-top: 1px solid rgba(200, 160, 78, 0.12);
+  background: #0d0d0d;
+  padding: 6px 8px;
+}
+
+.channelTabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 6px;
+  overflow-x: auto;
+}
+
+.channelTab {
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid rgba(200, 160, 78, 0.15);
+  border-radius: 3px;
+  color: rgba(200, 160, 78, 0.50);
+  font-family: var(--font-condensed, 'Courier New', monospace);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.1s ease;
+}
+
+.channelTab:hover {
+  color: rgba(200, 160, 78, 0.80);
+  border-color: rgba(200, 160, 78, 0.30);
+}
+
+.channelTabActive {
+  color: #c8a04e;
+  border-color: rgba(200, 160, 78, 0.50);
+  background: rgba(200, 160, 78, 0.08);
+}
+
+.channelSearchInput {
+  width: 100%;
+  padding: 4px 8px;
+  margin: 4px 0;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.08));
+  color: var(--text-secondary, rgba(255,255,255,0.7));
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  border-radius: 1px;
+  outline: none;
+}
+
+.channelSearchInput:focus {
+  border-color: rgba(200, 160, 78, 0.5);
+}
+
+.channelSearchInput::placeholder {
+  color: var(--text-muted, rgba(255,255,255,0.35));
+}
+
+.channelGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-height: 72px;
+  overflow-y: auto;
+}
+
+.channelChip {
+  padding: 2px 7px;
+  background: rgba(200, 160, 78, 0.05);
+  border: 1px solid rgba(200, 160, 78, 0.12);
+  border-radius: 2px;
+  color: rgba(200, 160, 78, 0.60);
+  font-family: var(--font-mono, 'Courier New', monospace);
+  font-size: 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.1s ease;
+}
+
+.channelChip:hover {
+  color: #c8a04e;
+  border-color: rgba(200, 160, 78, 0.35);
+  background: rgba(200, 160, 78, 0.10);
+}
+
+.channelChipActive {
+  color: #c8a04e;
+  border-color: rgba(200, 160, 78, 0.50);
+  background: rgba(200, 160, 78, 0.15);
+  box-shadow: 0 0 4px rgba(200, 160, 78, 0.20);
+}
+
+/* ── Search pane (bottom ~40% of left column) ───────────────────────────────── */
+
+.searchPane {
+  flex: 0 0 30%;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid rgba(200, 160, 78, 0.12);
+  overflow: hidden;
+  background: #0d0d0d;
+}
+
+.searchBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(200, 160, 78, 0.1);
+  flex-shrink: 0;
+}
+
+.searchInput {
+  flex: 1;
+  padding: 4px 8px;
+  background: #111;
+  border: 1px solid rgba(200, 160, 78, 0.15);
+  border-radius: 3px;
+  color: #ccc;
+  font-size: 11px;
+  font-family: 'Courier New', monospace;
+  outline: none;
+  min-width: 0;
+}
+
+.searchInput:focus {
+  border-color: rgba(200, 160, 78, 0.4);
+}
+
+.searchInput::placeholder {
+  color: #444;
+}
+
+.searchBtn {
+  padding: 4px 12px;
+  background: rgba(200, 160, 78, 0.1);
+  border: 1px solid rgba(200, 160, 78, 0.3);
+  border-radius: 3px;
+  color: #c8a04e;
+  font-size: 10px;
+  font-family: 'Courier New', monospace;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+
+.searchBtn:hover:not(:disabled) {
+  background: rgba(200, 160, 78, 0.2);
+}
+
+.searchBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Result grid — horizontal scroll of cards */
+.resultGrid {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  padding: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 1;
+  align-items: flex-start;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(200, 160, 78, 0.15) transparent;
+}
+
+.resultGrid::-webkit-scrollbar {
+  height: 4px;
+}
+
+.resultGrid::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.resultGrid::-webkit-scrollbar-thumb {
+  background: rgba(200, 160, 78, 0.2);
+  border-radius: 2px;
+}
+
+.resultEmpty {
+  color: #333;
+  font-size: 11px;
+  font-family: 'Courier New', monospace;
+  padding: 12px 0;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+/* Video card */
+.card {
+  flex-shrink: 0;
+  width: 160px;
+  background: transparent;
+  border: 1px solid rgba(200, 160, 78, 0.1);
+  border-radius: 4px;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+  overflow: hidden;
+}
+
+.card:hover {
+  border-color: rgba(200, 160, 78, 0.35);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.cardActive {
+  border-color: rgba(200, 160, 78, 0.6);
+  background: rgba(200, 160, 78, 0.06);
+}
+
+.cardThumbWrap {
+  position: relative;
+  width: 160px;
+  height: 90px;
+  overflow: hidden;
+  background: #111;
+}
+
+.cardThumb {
+  width: 160px;
+  height: 90px;
+  object-fit: cover;
+  display: block;
+}
+
+.cardDuration {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #ddd;
+  font-size: 9px;
+  font-family: 'Courier New', monospace;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+.cardPlayingBadge {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(200, 160, 78, 0.25);
+  color: #c8a04e;
+  font-size: 10px;
+  font-family: 'Courier New', monospace;
+  letter-spacing: 0.1em;
+  font-weight: bold;
+}
+
+.cardTitle {
+  padding: 5px 6px 2px;
+  font-size: 10px;
+  font-family: 'Courier New', monospace;
+  color: #bbb;
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.cardChannel {
+  padding: 0 6px 6px;
+  font-size: 9px;
+  font-family: 'Courier New', monospace;
+  color: #555;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Right: transcription pane ──────────────────────────────────────────────── */
+
+.txPane {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 35%;
+  min-width: 260px;
+  max-width: 380px;
+  background: #0d0d0d;
+  overflow: hidden;
+}
+
+.txControls {
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid rgba(200, 160, 78, 0.12);
+  flex-shrink: 0;
+}
+
+.txHeader {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+
+.txLed {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #333;
+  transition: background 0.3s;
+  flex-shrink: 0;
+}
+
+.txLedActive {
+  background: #2ecc71;
+  box-shadow: 0 0 5px #2ecc71;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+.txTitle {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: #888;
+  font-family: 'Courier New', monospace;
+  text-transform: uppercase;
+}
+
+.watchBtn {
+  width: 100%;
+  padding: 6px;
+  background: rgba(200, 160, 78, 0.1);
+  border: 1px solid rgba(200, 160, 78, 0.35);
+  border-radius: 3px;
+  color: #c8a04e;
+  font-size: 10px;
+  font-family: 'Courier New', monospace;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.stopBtn {
+  background: rgba(231, 76, 60, 0.1);
+  border-color: rgba(231, 76, 60, 0.35);
+  color: #e74c3c;
+}
+
+.stopBtn:hover {
+  background: rgba(231, 76, 60, 0.2);
+}
+
+/* Live transcript feed */
+.txFeed {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(200, 160, 78, 0.15) transparent;
+}
+
+.txFeed::-webkit-scrollbar {
+  width: 4px;
+}
+
+.txFeed::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.txFeed::-webkit-scrollbar-thumb {
+  background: rgba(200, 160, 78, 0.2);
+  border-radius: 2px;
+}
+
+.txEmpty {
+  color: #444;
+  font-size: 11px;
+  font-family: 'Courier New', monospace;
+  text-align: center;
+  padding-top: 24px;
+  letter-spacing: 0.06em;
+}
+
+.txError {
+  color: rgba(231, 76, 60, 0.8);
+  font-size: 10px;
+  font-family: 'Courier New', monospace;
+  padding: 8px 0;
+  letter-spacing: 0.04em;
+  border-left: 2px solid rgba(231, 76, 60, 0.4);
+  padding-left: 8px;
+  margin-bottom: 8px;
+}
+
+.txSegment {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+  line-height: 1.5;
+}
+
+.txTs {
+  flex-shrink: 0;
+  font-size: 9px;
+  color: #555;
+  font-family: 'Courier New', monospace;
+  padding-top: 2px;
+  min-width: 36px;
+}
+
+.txText {
+  font-size: 11px;
+  color: #bbb;
+  font-family: 'Courier New', monospace;
+}

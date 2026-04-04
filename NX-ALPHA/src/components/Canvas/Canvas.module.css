@@ -1,0 +1,85 @@
+/*
+ * AURA NX-Alpha — Canvas
+ *
+ * The primary work surface. flex:1 fills all space right of the chat sidebar.
+ * Crosshatch blue grid on deep void background — this is the work surface material.
+ * FloatingPanels are position:absolute within this container.
+ */
+
+.canvas {
+  flex:       1;
+  position:   relative;
+  overflow:   hidden;
+
+  /* Deep void background */
+  background-color: var(--bg-void);
+
+  /* Crosshatch grid substrate — blueprint / targeting reticle feel */
+  background-image:
+    linear-gradient(rgba(61,135,168,.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(61,135,168,.018) 1px, transparent 1px);
+  background-size: 48px 48px;
+
+  /* Subtle inset frame — this surface is a display, not a wall */
+  box-shadow: inset 0 0 60px rgba(0,0,0,.40);
+}
+
+/* ──────────────────────────────────────────────────────────
+   IDLE STATE — "Work Surface" placeholder
+   Visible when canvas has no active content.
+   Centered, low contrast — recedes behind floating panels.
+   ────────────────────────────────────────────────────────── */
+
+.idle {
+  position:        absolute;
+  inset:           0;
+  display:         flex;
+  flex-direction:  column;
+  align-items:     center;
+  justify-content: center;
+  gap:             6px;
+  pointer-events:  none;
+  user-select:     none;
+}
+
+/* Horizontal rule with centered label */
+.idleRule {
+  display:     flex;
+  align-items: center;
+  gap:         12px;
+  width:       200px;
+  margin-bottom: 6px;
+}
+.idleRule span {
+  flex:        1;
+  height:      1px;
+  background:  rgba(61,135,168,.10);
+}
+.idleRule em {
+  font-family:    var(--font-condensed);
+  font-style:     normal;
+  font-size:      9px;
+  font-weight:    600;
+  letter-spacing: .20em;
+  text-transform: uppercase;
+  color:          rgba(61,135,168,.20);
+}
+
+.idleTitle {
+  font-family:    var(--font-condensed);
+  font-size:      14px;
+  font-weight:    600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color:          rgba(61,135,168,.18);
+  margin:         0;
+}
+
+.idleSub {
+  font-family:    var(--font-condensed);
+  font-size:      11px;
+  font-weight:    400;
+  letter-spacing: .06em;
+  color:          rgba(61,135,168,.10);
+  margin:         0;
+}

@@ -1,0 +1,369 @@
+/*
+ * AURA NX-Alpha — FloatingPanel
+ *
+ * Absolutely-positioned draggable chassis. Lives inside the Canvas layer.
+ * Replicates the command / work panel aesthetics from the core design system
+ * using design tokens, without inheriting from Panel.jsx.
+ *
+ * COMMAND variant:
+ *   Amber L-bracket corners + inner accent marks.
+ *   Segmented border edges (four separate lines, gaps at corners).
+ *   Heavy holographic glass interior.
+ *
+ * WORK variant:
+ *   Continuous CSS border, rangefinder corners (TL + TR inner marks only).
+ *   Lighter presence — frame serves content, doesn't announce itself.
+ */
+
+/* ──────────────────────────────────────────────────────────
+   ROOT — absolute position managed by JS
+   ────────────────────────────────────────────────────────── */
+
+.float {
+  position:    absolute;
+  display:     flex;
+  flex-direction: column;
+  user-select: none;
+  /* z-index injected via inline style */
+}
+
+/* ──────────────────────────────────────────────────────────
+   COMMAND VARIANT — base chassis
+   ────────────────────────────────────────────────────────── */
+
+.floatCmd {
+  background: linear-gradient(150deg, #182438 0%, #111C2E 30%, #0A1422 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.06),
+    0 8px 32px rgba(0,0,0,.85);
+}
+
+/* ──────────────────────────────────────────────────────────
+   WORK VARIANT — lighter chassis with continuous border
+   ────────────────────────────────────────────────────────── */
+
+.floatWork {
+  background: linear-gradient(150deg, #182438 0%, #111C2E 30%, #0A1422 100%);
+  border:     1px solid #1A2E44;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.07),
+    inset 0 -1px 0 rgba(0,0,0,.50),
+    0 6px 28px rgba(0,0,0,.80);
+}
+.floatWork.active {
+  border-color: var(--blue-base);
+  box-shadow:
+    0 0 8px rgba(61,135,168,.25),
+    inset 0 1px 0 rgba(255,255,255,.07),
+    inset 0 -1px 0 rgba(0,0,0,.50),
+    0 6px 28px rgba(0,0,0,.80);
+}
+
+/* ──────────────────────────────────────────────────────────
+   BORDER SEGMENTS — command variant only
+   Four separate edge lines; gaps at corners leave room for plates.
+   ────────────────────────────────────────────────────────── */
+
+.bt, .bb, .bl, .br {
+  position:       absolute;
+  pointer-events: none;
+  z-index:        1;
+  transition:     background 120ms;
+}
+/* Top + Bottom edge lines — inset 8px from each side */
+.bt { top: 8px;    left: 8px;   right: 8px;   height: 1px; background: rgba(100,60,16,.40); }
+.bb { bottom: 8px; left: 8px;   right: 8px;   height: 1px; background: rgba(100,60,16,.30); }
+/* Left + Right edge lines — inset 8px from top/bottom */
+.bl { top: 8px;    bottom: 8px; left: 8px;    width: 1px;  background: rgba(100,60,16,.35); }
+.br { top: 8px;    bottom: 8px; right: 8px;   width: 1px;  background: rgba(100,60,16,.25); }
+
+/* Active state — brighter amber edges */
+.floatCmd.active .bt { background: rgba(184,120,32,.55); }
+.floatCmd.active .bb { background: rgba(184,120,32,.40); }
+.floatCmd.active .bl { background: rgba(184,120,32,.45); }
+.floatCmd.active .br { background: rgba(184,120,32,.35); }
+
+/* ──────────────────────────────────────────────────────────
+   CORNER PLATES — outer L-bracket structural elements
+   ────────────────────────────────────────────────────────── */
+
+.c {
+  position:       absolute;
+  width:          8px;
+  height:         8px;
+  z-index:        2;
+  pointer-events: none;
+}
+/* Positioning */
+.ctl { top: 0;    left: 0;  }
+.ctr { top: 0;    right: 0; }
+.cbl { bottom: 0; left: 0;  }
+.cbr { bottom: 0; right: 0; }
+
+/* ── Command corners — amber L-brackets via pseudo ── */
+.floatCmd .c::before,
+.floatCmd .c::after {
+  content:    '';
+  position:   absolute;
+  background: var(--amber-muted);
+  transition: background 120ms;
+}
+/* Active — brighter amber */
+.floatCmd.active .c::before,
+.floatCmd.active .c::after {
+  background: var(--amber-bright);
+}
+/* Horizontal arm */
+.floatCmd .c::before { top: 0;    left: 0; right: 0; height: 2px; }
+/* Vertical arm */
+.floatCmd .c::after  { top: 0;    left: 0; bottom: 0; width: 2px; }
+
+/* TR — horizontal same, vertical right */
+.floatCmd .ctr::after  { left: auto; right: 0; }
+/* BL — horizontal bottom, vertical same */
+.floatCmd .cbl::before { top: auto; bottom: 0; }
+/* BR — both flipped */
+.floatCmd .cbr::before { top: auto; bottom: 0; }
+.floatCmd .cbr::after  { left: auto; right: 0; }
+
+/* ── Work corners — rangefinder (border-based) ── */
+.floatWork .c {
+  width:  10px;
+  height: 10px;
+}
+.floatWork .ctl { border-top: 1px solid #2A4060; border-left: 1px solid #2A4060; }
+.floatWork .ctr { border-top: 1px solid #2A4060; border-right: 1px solid #2A4060; }
+.floatWork .cbl { border-bottom: 1px solid #1E3050; border-left: 1px solid #1E3050; }
+.floatWork .cbr { border-bottom: 1px solid #1E3050; border-right: 1px solid #1E3050; }
+
+.floatWork.active .ctl,
+.floatWork.active .ctr { border-color: var(--blue-base); }
+.floatWork.active .cbl,
+.floatWork.active .cbr { border-color: var(--blue-muted); }
+
+/* ──────────────────────────────────────────────────────────
+   INNER ACCENT MARKS (ci) — small interior L-notches
+   Command: all 4 corners. Work: TL + TR only.
+   ────────────────────────────────────────────────────────── */
+
+.ci {
+  position:       absolute;
+  z-index:        2;
+  pointer-events: none;
+}
+.citl { top: 4px;    left: 4px;  }
+.citr { top: 4px;    right: 4px; }
+.cibl { bottom: 4px; left: 4px;  }
+.cibr { bottom: 4px; right: 4px; }
+
+/* Command inner marks */
+.floatCmd .ci::before,
+.floatCmd .ci::after {
+  content:    '';
+  position:   absolute;
+  background: rgba(100,60,16,.50);
+  transition: background 120ms;
+}
+.floatCmd.active .ci::before,
+.floatCmd.active .ci::after {
+  background: rgba(184,120,32,.70);
+}
+/* Horizontal tick */
+.floatCmd .ci::before { width: 4px;  height: 1px; top: 0; left: 0; }
+/* Vertical tick */
+.floatCmd .ci::after  { width: 1px;  height: 4px; top: 0; left: 0; }
+/* TR */
+.floatCmd .citr::before,
+.floatCmd .citr::after  { left: auto; right: 0; }
+/* BL */
+.floatCmd .cibl::before,
+.floatCmd .cibl::after  { top: auto; bottom: 0; }
+/* BR */
+.floatCmd .cibr::before,
+.floatCmd .cibr::after  { top: auto; bottom: 0; left: auto; right: 0; }
+
+/* ──────────────────────────────────────────────────────────
+   HEADER — title plate, LED, drag grip, actions
+   ────────────────────────────────────────────────────────── */
+
+.header {
+  display:       flex;
+  align-items:   center;
+  gap:           8px;
+  height:        36px;
+  padding:       0 12px;
+  flex-shrink:   0;
+  position:      relative;
+  z-index:       2;
+  cursor:        grab;
+  background:    linear-gradient(180deg, #1C2E46 0%, #152238 40%, #0E1A2E 100%);
+  border-bottom: 1px solid rgba(61,135,168,.18);
+  box-shadow:
+    inset 0  1px 0 rgba(255,255,255,.08),
+    inset 0 -1px 0 rgba(0,0,0,.60);
+}
+.header:active { cursor: grabbing; }
+
+/* ── LED presence dot ── */
+.led {
+  width:         6px;
+  height:        6px;
+  border-radius: 50%;
+  flex-shrink:   0;
+  background:    var(--amber-base);
+  box-shadow:    0 0 4px var(--amber-base);
+  animation:     ledBreath 3s ease-in-out infinite;
+}
+@keyframes ledBreath {
+  0%, 100% { opacity: .85; }
+  50%       { opacity: .40; }
+}
+
+/* ── Drag grip dots ── */
+.dragDots {
+  display:     flex;
+  gap:         2px;
+  align-items: center;
+  opacity:     .18;
+  flex-shrink: 0;
+  transition:  opacity 100ms;
+}
+.header:hover .dragDots { opacity: .45; }
+
+.dragDots::before,
+.dragDots::after {
+  content:       '';
+  display:       block;
+  width:         3px;
+  height:        10px;
+  border-radius: 2px;
+  background:    repeating-linear-gradient(
+    to bottom,
+    var(--text-secondary) 0, var(--text-secondary) 2px,
+    transparent 2px, transparent 4px
+  );
+}
+
+/* ── Panel title ── */
+.title {
+  flex:           1;
+  font-family:    var(--font-condensed);
+  font-size:      12px;
+  font-weight:    600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color:          var(--text-secondary);
+  white-space:    nowrap;
+  overflow:       hidden;
+  text-overflow:  ellipsis;
+  transition:     color 120ms;
+}
+.active .title { color: var(--text-primary); }
+
+/* ── Header extra (badges, VU bars, counts) ── */
+.headerExtra {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+  flex-shrink: 0;
+}
+
+/* ── Action buttons container ── */
+.actions {
+  display:     flex;
+  align-items: center;
+  gap:         2px;
+  flex-shrink: 0;
+}
+
+/* ── Header icon button ── */
+.btn {
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  width:           20px;
+  height:          20px;
+  background:      transparent;
+  border:          1px solid transparent;
+  border-radius:   3px;
+  color:           var(--text-tertiary);
+  cursor:          pointer;
+  padding:         0;
+  transition:
+    background   100ms,
+    border-color 100ms,
+    color        100ms;
+}
+.btn:hover {
+  background:   rgba(61,135,168,.12);
+  border-color: rgba(61,135,168,.25);
+  color:        var(--text-secondary);
+}
+.btn:active {
+  background: rgba(61,135,168,.20);
+}
+
+/* ──────────────────────────────────────────────────────────
+   GLASS BODY — holographic display surface
+   ────────────────────────────────────────────────────────── */
+
+.glass {
+  position:       relative;
+  display:        flex;
+  flex-direction: column;
+  overflow:       hidden;
+  background:     rgba(4, 8, 15, 0.94);
+  box-shadow:
+    inset 0  1px 0 rgba(61,135,168,.18),
+    inset 0  0  40px rgba(0,0,0,.80);
+}
+
+/* Internal ambient glow + radial bloom */
+.glass::before {
+  content:    '';
+  position:   absolute;
+  inset:      0;
+  background:
+    linear-gradient(180deg, rgba(61,135,168,.04) 0%, transparent 35%),
+    radial-gradient(ellipse 60% 30% at 50% 0%, rgba(61,135,168,.08), transparent);
+  pointer-events: none;
+  z-index:    0;
+}
+
+/* Blue grid substrate */
+.glass::after {
+  content:    '';
+  position:   absolute;
+  inset:      0;
+  background-image:
+    linear-gradient(rgba(61,135,168,.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(61,135,168,.022) 1px, transparent 1px);
+  background-size: 20px 20px;
+  pointer-events:  none;
+  z-index:    0;
+}
+
+/* ── Scrollable body ── */
+.body {
+  flex:       1;
+  overflow-y: auto;
+  position:   relative;
+  z-index:    1;
+  padding:    8px 0;
+}
+.body::-webkit-scrollbar       { width: 3px; }
+.body::-webkit-scrollbar-track { background: transparent; }
+.body::-webkit-scrollbar-thumb {
+  background:    rgba(31,45,64,.80);
+  border-radius: 2px;
+}
+
+/* ── Footer bar ── */
+.footer {
+  flex-shrink: 0;
+  position:    relative;
+  z-index:     1;
+  border-top:  1px solid rgba(31,45,64,.80);
+  background:  rgba(8,14,24,.90);
+  padding:     6px 12px;
+}

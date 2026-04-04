@@ -1,0 +1,116 @@
+/* TextScramble — Markdown renderer styles
+   Matches AURA's terminal aesthetic: monospace, terminal-green on near-black.
+   Conversational responses render as plain text via the <p> defaults.
+   Structured/factual responses get full hierarchy. */
+
+.md {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+/* ── Paragraphs ─────────────────────────────────────────────── */
+.md p {
+  margin: 0 0 0.5em 0;
+}
+.md p:last-child {
+  margin-bottom: 0;
+}
+
+/* ── Headings ───────────────────────────────────────────────── */
+.md h1,
+.md h2,
+.md h3 {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--green-bright, #38A85C);
+  margin: 0.9em 0 0.35em 0;
+  line-height: 1.2;
+}
+.md h1 { font-size: 1.1em; letter-spacing: 0.06em; text-transform: uppercase; }
+.md h2 { font-size: 1.0em; letter-spacing: 0.04em; }
+.md h3 { font-size: 0.95em; letter-spacing: 0.02em; opacity: 0.9; }
+
+/* ── Horizontal rule ────────────────────────────────────────── */
+.md hr {
+  border: none;
+  border-top: 1px solid var(--green-bright, #38A85C);
+  opacity: 0.25;
+  margin: 0.75em 0;
+}
+
+/* ── Lists ──────────────────────────────────────────────────── */
+.md ul,
+.md ol {
+  margin: 0.25em 0 0.5em 0;
+  padding-left: 1.4em;
+}
+.md li {
+  margin: 0.18em 0;
+  line-height: 1.5;
+}
+.md ul li::marker {
+  color: var(--green-bright, #38A85C);
+}
+.md ol li::marker {
+  color: var(--green-bright, #38A85C);
+}
+
+/* ── Blockquotes ────────────────────────────────────────────── */
+.md blockquote {
+  border-left: 2px solid var(--green-bright, #38A85C);
+  margin: 0.5em 0;
+  padding: 0.2em 0.75em;
+  opacity: 0.85;
+  font-style: italic;
+}
+.md blockquote p {
+  margin: 0;
+}
+
+/* ── Bold / italic ──────────────────────────────────────────── */
+.md strong {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.md em {
+  font-style: italic;
+  opacity: 0.9;
+}
+
+/* ── Inline code ────────────────────────────────────────────── */
+.md code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: rgba(0, 255, 136, 0.07);
+  border: 1px solid rgba(0, 255, 136, 0.18);
+  border-radius: 2px;
+  padding: 0.05em 0.3em;
+  color: var(--green-bright, #38A85C);
+}
+
+/* ── Tables (GFM) ───────────────────────────────────────────── */
+.md table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5em 0;
+  font-size: 0.9em;
+}
+.md th,
+.md td {
+  border: 1px solid rgba(0, 255, 136, 0.2);
+  padding: 0.3em 0.6em;
+  text-align: left;
+  vertical-align: top;
+}
+.md th {
+  background: rgba(0, 255, 136, 0.06);
+  color: var(--green-bright, #38A85C);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.md tr:nth-child(even) td {
+  background: rgba(0, 255, 136, 0.025);
+}

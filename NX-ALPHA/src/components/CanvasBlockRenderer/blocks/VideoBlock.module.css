@@ -1,0 +1,219 @@
+/* VideoBlock — video / live stream player */
+
+.root {
+  position: relative;
+  width:    100%;
+  height:   100%;
+  background: #000;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Native video element */
+.video {
+  width:      100%;
+  height:     100%;
+  display:    block;
+  object-fit: contain;
+}
+
+/* ── Overlays ── */
+.bufferOverlay,
+.errorOverlay {
+  position:        absolute;
+  inset:           0;
+  display:         flex;
+  flex-direction:  column;
+  align-items:     center;
+  justify-content: center;
+  gap:             10px;
+  background:      rgba(0, 0, 0, 0.55);
+  pointer-events:  none;
+}
+
+.bufferSpinner {
+  width:         24px;
+  height:        24px;
+  border:        2px solid rgba(255,255,255,0.12);
+  border-top:    2px solid rgba(255,255,255,0.70);
+  border-radius: 50%;
+  animation:     spinV 0.8s linear infinite;
+}
+
+@keyframes spinV {
+  to { transform: rotate(360deg); }
+}
+
+.errorOverlay {
+  color:          var(--status-error);
+  font-family:    var(--font-condensed);
+  font-size:      11px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+}
+
+/* ── Center play button (when paused) ── */
+.playCenter {
+  position:        absolute;
+  top:             50%;
+  left:            50%;
+  transform:       translate(-50%, -50%);
+  width:           44px;
+  height:          44px;
+  background:      rgba(0, 0, 0, 0.55);
+  border:          1px solid rgba(255,255,255,0.20);
+  border-radius:   50%;
+  color:           rgba(255,255,255,0.85);
+  cursor:          pointer;
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  padding-left:    2px; /* optical center for play icon */
+  transition:      background 120ms ease, border-color 120ms ease;
+}
+
+.playCenter:hover {
+  background:    rgba(240, 168, 48, 0.22);
+  border-color:  rgba(240, 168, 48, 0.55);
+  color:         var(--amber-bright);
+}
+
+/* ── Top bar ── */
+.topBar {
+  position:        absolute;
+  top:             0;
+  left:            0;
+  right:           0;
+  display:         flex;
+  align-items:     center;
+  gap:             8px;
+  padding:         8px 10px;
+  background:      linear-gradient(to bottom, rgba(0,0,0,0.65) 0%, transparent 100%);
+  transition:      opacity 200ms ease;
+}
+
+.videoTitle {
+  font-family:    var(--font-condensed);
+  font-size:      10px;
+  font-weight:    600;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color:          rgba(255,255,255,0.70);
+}
+
+.liveBadge {
+  font-family:    var(--font-condensed);
+  font-size:      9px;
+  font-weight:    700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color:          var(--status-error);
+  background:     rgba(208, 92, 92, 0.18);
+  border:         1px solid rgba(208, 92, 92, 0.35);
+  border-radius:  2px;
+  padding:        2px 6px;
+}
+
+/* ── Bottom controls bar ── */
+.controls {
+  position:   absolute;
+  bottom:     0;
+  left:       0;
+  right:      0;
+  padding:    4px 8px 6px;
+  background: linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 100%);
+  transition: opacity 200ms ease;
+}
+
+.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Seek bar */
+.seekWrap {
+  position:     relative;
+  height:       14px;
+  display:      flex;
+  align-items:  center;
+  margin-bottom: 2px;
+}
+
+.seekTrack {
+  position:      absolute;
+  left:          0;
+  right:         0;
+  height:        3px;
+  background:    rgba(255,255,255,0.18);
+  border-radius: 2px;
+  overflow:      hidden;
+  pointer-events: none;
+}
+
+.seekFill {
+  height:        100%;
+  background:    var(--amber-base);
+  border-radius: 2px;
+  transition:    width 0.1s linear;
+}
+
+.seekRange {
+  position:   absolute;
+  left:       0;
+  right:      0;
+  width:      100%;
+  height:     14px;
+  opacity:    0;
+  cursor:     pointer;
+  margin:     0;
+  padding:    0;
+}
+
+/* Control row */
+.controlRow {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+}
+
+.ctrlBtn {
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  width:           26px;
+  height:          26px;
+  background:      transparent;
+  border:          none;
+  cursor:          pointer;
+  color:           rgba(255,255,255,0.70);
+  border-radius:   3px;
+  flex-shrink:     0;
+  transition:      color 120ms ease;
+}
+
+.ctrlBtn:hover { color: var(--amber-bright); }
+
+.timeDisplay {
+  font-family:  var(--font-mono);
+  font-size:    10px;
+  color:        rgba(255,255,255,0.55);
+  white-space:  nowrap;
+}
+
+.liveIndicator {
+  font-family:    var(--font-condensed);
+  font-size:      9px;
+  font-weight:    700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color:          var(--status-error);
+}
+
+/* Volume slider */
+.volRange {
+  width:   56px;
+  height:  3px;
+  cursor:  pointer;
+  accent-color: var(--amber-base);
+  flex-shrink: 0;
+}

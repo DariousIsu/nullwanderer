@@ -1,0 +1,927 @@
+/*
+ * AURA NX-Alpha — Panel Shell
+ * All values reference design tokens from design-tokens.css (imported globally).
+ * Do not hardcode colors or spacing values here — except where the panel
+ * architecture requires precise material values that have no token equivalent
+ * (e.g. glass body background, chassis gradient stops, glow intensities).
+ *
+ * CHARACTER RULE:
+ * Panels are hardware. They are mounted, not floated.
+ * The chassis gradient, segmented borders, corner plates, amber LED,
+ * and holographic glass interior exist to make this feel like physical equipment.
+ *
+ * VARIANT HIERARCHY:
+ *   .panel (base) → .panelCommand / .panelWork / .panelFault (material identity)
+ *   + .panelActive (focus state) + .panelFloating (pop-out state)
+ *
+ * CSS ARCHITECTURE:
+ * Base .panel sets geometry and layout. Variant classes set material.
+ * Descendant selectors (.panelCommand .corner, etc.) handle per-variant
+ * differences on shared structural child elements.
+ */
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ROOT — GEOMETRY & LAYOUT
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.panel {
+  position:       relative;   /* Required for all absolute structural children */
+  display:        flex;
+  flex-direction: column;
+  min-width:      var(--panel-min-width);
+  min-height:     var(--panel-min-height);
+  /* No overflow:hidden here — glass handles content clipping.
+     Corners and border segments need to be visible at panel edges. */
+  will-change:    transform, opacity;
+  /* Entrance handled by GSAP, not CSS */
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   VARIANT — COMMAND CENTER (Type A)
+   Heavy chassis. Segmented border system. Assembled from parts.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.panelCommand {
+  background: linear-gradient(150deg, #182438 0%, #111C2E 30%, #0A1422 100%);
+  /* Outer chassis glow — very faint amber emission, heavy drop shadow */
+  box-shadow:
+    inset 0  1px 0 rgba(255,255,255,0.06),
+    inset 0 -1px 0 rgba(0,0,0,0.50),
+    0 8px 36px rgba(0,0,0,0.85),
+    0 0 32px rgba(184,120,32,0.04);
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   VARIANT — WORK AREA (Type B)
+   Continuous border. Lighter. Frame serves content, doesn't announce itself.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.panelWork {
+  background:  linear-gradient(150deg, #182438 0%, #111C2E 30%, #0A1422 100%);
+  border:      1px solid #1A2E44;
+  box-shadow:
+    inset 0  1px 0 rgba(255,255,255,0.07),
+    inset 0 -1px 0 rgba(0,0,0,0.50),
+    0 6px 28px rgba(0,0,0,0.80);
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   VARIANT — FAULT STATE (Type C)
+   Red chassis. Hazard stripe. Red-tinted glass. Fast-pulsing LED.
+   Do not use for anything other than genuine error / system failure.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.panelFault {
+  background: linear-gradient(150deg, #1C1418 0%, #140E14 30%, #0E080E 100%);
+  box-shadow:
+    inset 0  1px 0 rgba(255,255,255,0.04),
+    inset 0 -1px 0 rgba(0,0,0,0.50),
+    0 8px 36px rgba(0,0,0,0.90),
+    0 0 40px rgba(208,92,92,0.07);
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ACTIVE STATE — Focused panel
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Work active: blue border glow */
+.panelActive.panelWork {
+  border-color: var(--blue-base);
+  box-shadow:
+    var(--glow-blue-sm),
+    inset 0  1px 0 rgba(255,255,255,0.07),
+    inset 0 -1px 0 rgba(0,0,0,0.50),
+    0 6px 28px rgba(0,0,0,0.80);
+}
+
+/* Command active: corners brighten (handled in corner section below) */
+/* Fault active: fault state is always "active-looking" — no change */
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FLOATING STATE — Panel popped out to its own layer / window
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.panelFloating {
+  box-shadow: var(--depth-float);
+}
+.panelFloating.panelWork {
+  border-color: var(--bg-border);
+}
+.panelFloating.panelActive {
+  box-shadow: var(--glow-blue), var(--depth-float);
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BORDER SEGMENTS — Command + Fault only
+   The panel border is NOT continuous. It's 4 separate edge pieces that leave
+   gaps at the corners. The corners are their own structural elements.
+   This creates the "assembled from parts" chassis feeling.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.borderTop,
+.borderBottom,
+.borderLeft,
+.borderRight {
+  position:       absolute;
+  z-index:        3;
+  pointer-events: none;
+}
+
+/* Edge segments — leave 14px at each end for corner plates */
+.borderTop    { top: 0;    left: 14px; right: 14px;  height: 1px; }
+.borderBottom { bottom: 0; left: 14px; right: 14px;  height: 1px; }
+.borderLeft   { left: 0;   top: 14px;  bottom: 14px; width: 1px;  }
+.borderRight  { right: 0;  top: 14px;  bottom: 14px; width: 1px;  }
+
+/* Command border: blue-steel gradient */
+.panelCommand .borderTop,
+.panelCommand .borderBottom {
+  background: linear-gradient(to right, #1A3050, #2A4868, #1A3050);
+}
+.panelCommand .borderLeft,
+.panelCommand .borderRight {
+  background: linear-gradient(to bottom, #1A3050, #223C58, #1A3050);
+}
+
+/* Fault border: red-tinted steel */
+.panelFault .borderTop,
+.panelFault .borderBottom {
+  background: linear-gradient(to right, #3A1A1A, #6A2222, #3A1A1A);
+}
+.panelFault .borderLeft,
+.panelFault .borderRight {
+  background: linear-gradient(to bottom, #3A1A1A, #5A2020, #3A1A1A);
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FAULT STRIPE — Hazard stripe on top edge
+   Diagonal amber/red repeating stripes.
+   Sits between the top corner plates, above the glass header.
+   Reserved exclusively for fault/error state — never decorative.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.faultStripe {
+  position:   absolute;
+  top:        1px;
+  left:       14px;
+  right:      14px;
+  height:     5px;
+  z-index:    3;
+  overflow:   hidden;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(208, 60, 60, 0.50) 0px,
+    rgba(208, 60, 60, 0.50) 4px,
+    rgba(120, 20, 20, 0.30) 4px,
+    rgba(120, 20, 20, 0.30) 8px
+  );
+  animation: faultStripePulse 2s ease-in-out infinite;
+}
+
+@keyframes faultStripePulse {
+  0%, 100% { opacity: 1.0; }
+  50%       { opacity: 0.55; }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CORNER PLATES — The structural elements
+   Each corner is an independent component positioned at the panel corners.
+   Command + Fault: outer L-bracket via ::before (horiz) + ::after (vert)
+   Work: L-bracket shape applied directly as border properties on the div
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.corner {
+  position:       absolute;
+  z-index:        4;
+  pointer-events: none;
+  width:          14px;
+  height:         14px;
+}
+
+.cornerTL { top: 0;    left: 0;   }
+.cornerTR { top: 0;    right: 0;  }
+.cornerBL { bottom: 0; left: 0;   }
+.cornerBR { bottom: 0; right: 0;  }
+
+/* ── Command corners — amber L-brackets, gradient fade toward bottom ── */
+
+.panelCommand .cornerTL::before {
+  content:    '';
+  position:   absolute;
+  top: 0; left: 0;
+  width:      14px;
+  height:     2px;
+  background: linear-gradient(to right, var(--amber-base), var(--amber-muted));
+}
+.panelCommand .cornerTL::after {
+  content:    '';
+  position:   absolute;
+  top: 0; left: 0;
+  width:      2px;
+  height:     14px;
+  background: linear-gradient(to bottom, var(--amber-base), var(--amber-muted));
+}
+
+.panelCommand .cornerTR::before {
+  content:    '';
+  position:   absolute;
+  top: 0; right: 0;
+  width:      14px;
+  height:     2px;
+  background: linear-gradient(to left, var(--amber-muted), var(--amber-base));
+}
+.panelCommand .cornerTR::after {
+  content:    '';
+  position:   absolute;
+  top: 0; right: 0;
+  width:      2px;
+  height:     14px;
+  background: linear-gradient(to bottom, var(--amber-base), var(--amber-muted));
+}
+
+.panelCommand .cornerBL::before {
+  content:    '';
+  position:   absolute;
+  bottom: 0; left: 0;
+  width:      14px;
+  height:     2px;
+  background: linear-gradient(to right, var(--amber-muted), #3A2008);
+}
+.panelCommand .cornerBL::after {
+  content:    '';
+  position:   absolute;
+  bottom: 0; left: 0;
+  width:      2px;
+  height:     14px;
+  background: linear-gradient(to top, var(--amber-muted), #3A2008);
+}
+
+.panelCommand .cornerBR::before {
+  content:    '';
+  position:   absolute;
+  bottom: 0; right: 0;
+  width:      14px;
+  height:     2px;
+  background: linear-gradient(to left, var(--amber-muted), #3A2008);
+}
+.panelCommand .cornerBR::after {
+  content:    '';
+  position:   absolute;
+  bottom: 0; right: 0;
+  width:      2px;
+  height:     14px;
+  background: linear-gradient(to top, var(--amber-muted), #3A2008);
+}
+
+/* Command active: TL + TR corners brighten to amber-bright */
+.panelActive.panelCommand .cornerTL::before,
+.panelActive.panelCommand .cornerTL::after {
+  background: var(--amber-bright);
+}
+.panelActive.panelCommand .cornerTR::before,
+.panelActive.panelCommand .cornerTR::after {
+  background: var(--amber-bright);
+}
+
+/* ── Work corners — rangefinder style (border on the div itself) ── */
+/* Precise, not heavy. TL is brightest, BR is most faded. */
+
+.panelWork .cornerTL {
+  border-top:  2px solid var(--amber-base);
+  border-left: 2px solid var(--amber-base);
+}
+.panelWork .cornerTR {
+  border-top:   2px solid var(--amber-muted);
+  border-right: 2px solid var(--amber-muted);
+}
+.panelWork .cornerBL {
+  border-bottom: 2px solid var(--amber-muted);
+  border-left:   2px solid var(--amber-muted);
+}
+.panelWork .cornerBR {
+  border-bottom: 2px solid rgba(107, 64, 15, 0.5);
+  border-right:  2px solid rgba(107, 64, 15, 0.5);
+}
+
+/* ── Fault corners — red L-brackets with glow ── */
+
+.panelFault .cornerTL::before {
+  content:    '';
+  position:   absolute;
+  top: 0; left: 0;
+  width:      14px;
+  height:     2px;
+  background: var(--status-error);
+  box-shadow: 0 0 4px rgba(208, 92, 92, 0.6);
+}
+.panelFault .cornerTL::after {
+  content:    '';
+  position:   absolute;
+  top: 0; left: 0;
+  width:      2px;
+  height:     14px;
+  background: var(--status-error);
+  box-shadow: 0 0 4px rgba(208, 92, 92, 0.6);
+}
+
+.panelFault .cornerTR::before {
+  content:    '';
+  position:   absolute;
+  top: 0; right: 0;
+  width:      14px;
+  height:     2px;
+  background: var(--status-error);
+  box-shadow: 0 0 4px rgba(208, 92, 92, 0.6);
+}
+.panelFault .cornerTR::after {
+  content:    '';
+  position:   absolute;
+  top: 0; right: 0;
+  width:      2px;
+  height:     14px;
+  background: var(--status-error);
+  box-shadow: 0 0 4px rgba(208, 92, 92, 0.6);
+}
+
+.panelFault .cornerBL::before {
+  content:    '';
+  position:   absolute;
+  bottom: 0; left: 0;
+  width:      14px;
+  height:     2px;
+  background: #8A2020;
+}
+.panelFault .cornerBL::after {
+  content:    '';
+  position:   absolute;
+  bottom: 0; left: 0;
+  width:      2px;
+  height:     14px;
+  background: #8A2020;
+}
+
+.panelFault .cornerBR::before {
+  content:    '';
+  position:   absolute;
+  bottom: 0; right: 0;
+  width:      14px;
+  height:     2px;
+  background: #8A2020;
+}
+.panelFault .cornerBR::after {
+  content:    '';
+  position:   absolute;
+  bottom: 0; right: 0;
+  width:      2px;
+  height:     14px;
+  background: #8A2020;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   INNER CORNER ACCENT MARKS
+   Small L-marks set inward from the corner plates. Suggest precision tolerances.
+   Command: all four corners (full hardware feel)
+   Work: TL + TR only (lighter — just enough to register the corner language)
+   Fault: none (the stripe + red corners are loud enough)
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.cornerInner {
+  position:       absolute;
+  z-index:        5;
+  pointer-events: none;
+  width:          4px;
+  height:         4px;
+}
+
+.cornerInnerTL { top:    4px; left:  4px; }
+.cornerInnerTR { top:    4px; right: 4px; }
+.cornerInnerBL { bottom: 4px; left:  4px; }
+.cornerInnerBR { bottom: 4px; right: 4px; }
+
+/* Command: all four inner accents, amber — fading from TL (brightest) to BR (dimmest) */
+.panelCommand .cornerInnerTL {
+  border-top:  1px solid rgba(180, 120, 32, 0.60);
+  border-left: 1px solid rgba(180, 120, 32, 0.60);
+}
+.panelCommand .cornerInnerTR {
+  border-top:   1px solid rgba(180, 120, 32, 0.40);
+  border-right: 1px solid rgba(180, 120, 32, 0.40);
+}
+.panelCommand .cornerInnerBL {
+  border-bottom: 1px solid rgba(100, 60, 16, 0.40);
+  border-left:   1px solid rgba(100, 60, 16, 0.40);
+}
+.panelCommand .cornerInnerBR {
+  border-bottom: 1px solid rgba(100, 60, 16, 0.30);
+  border-right:  1px solid rgba(100, 60, 16, 0.30);
+}
+
+/* Work: TL + TR only */
+.panelWork .cornerInnerTL {
+  border-top:  1px solid rgba(184, 120, 32, 0.45);
+  border-left: 1px solid rgba(184, 120, 32, 0.45);
+}
+.panelWork .cornerInnerTR {
+  border-top:   1px solid rgba(184, 120, 32, 0.30);
+  border-right: 1px solid rgba(184, 120, 32, 0.30);
+}
+.panelWork .cornerInnerBL,
+.panelWork .cornerInnerBR {
+  display: none;
+}
+
+/* Fault: no inner accents */
+.panelFault .cornerInner {
+  display: none;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LED DOT — Physical indicator set into the header
+   Amber radial-gradient dome with slow breathing animation.
+   Fault variant gets red dome + fast blink.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.led {
+  width:         7px;
+  height:        7px;
+  border-radius: 50%;
+  flex-shrink:   0;
+  background:    radial-gradient(
+    circle at 35% 35%,
+    var(--amber-hot)   0%,
+    var(--amber-base)  55%,
+    var(--amber-muted) 100%
+  );
+  box-shadow:
+    0 0 6px rgba(240, 168, 48, 0.60),
+    0 0 2px rgba(240, 168, 48, 0.90);
+  animation: ledBreath 3s ease-in-out infinite;
+}
+
+@keyframes ledBreath {
+  0%, 100% {
+    box-shadow:
+      0 0 6px rgba(240, 168, 48, 0.60),
+      0 0 2px rgba(240, 168, 48, 0.90);
+  }
+  50% {
+    box-shadow:
+      0 0 3px rgba(240, 168, 48, 0.30),
+      0 0 1px rgba(240, 168, 48, 0.50);
+    opacity: 0.80;
+  }
+}
+
+/* Fault LED: red, fast blink */
+.panelFault .led {
+  background: radial-gradient(
+    circle at 35% 35%,
+    #FF6060          0%,
+    var(--status-error) 55%,
+    #8A2020          100%
+  );
+  box-shadow:
+    0 0 8px rgba(208, 92, 92, 0.80),
+    0 0 2px rgba(255, 80, 80, 0.90);
+  animation: faultLedBlink 0.9s ease-in-out infinite;
+}
+
+@keyframes faultLedBlink {
+  0%, 100% {
+    box-shadow:
+      0 0 8px rgba(208, 92, 92, 0.80),
+      0 0 2px rgba(255, 80, 80, 0.90);
+  }
+  50% {
+    box-shadow:
+      0 0 4px rgba(208, 92, 92, 0.40),
+      0 0 1px rgba(255, 80, 80, 0.50);
+    opacity: 0.70;
+  }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   HEADER — Title plate set into the chassis
+   Gradient metal bar. Inset light at top (surface reflection), shadow at bottom.
+   Blue border-bottom = glass edge where header meets glass body.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.header {
+  display:     flex;
+  align-items: center;
+  gap:         var(--space-3);
+  height:      var(--panel-header-height);
+  padding:     0 var(--panel-padding-x);
+  position:    relative;
+  z-index:     2;
+  flex-shrink: 0;
+  cursor:      grab;
+  user-select: none;
+  /* Base — overridden per variant below */
+  background:    linear-gradient(180deg, #1C2E46 0%, #152238 40%, #0E1A2E 100%);
+  border-bottom: 1px solid rgba(61, 135, 168, 0.18);
+  box-shadow:
+    inset 0  1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.60);
+}
+.header:active { cursor: grabbing; }
+
+/* Command header: slightly more saturated metal */
+.panelCommand .header {
+  background:    linear-gradient(180deg, #1C2E48 0%, #152238 50%, #0E1A2E 100%);
+  border-bottom: 1px solid rgba(61, 135, 168, 0.20);
+  box-shadow:
+    inset 0  1px 0 rgba(255, 255, 255, 0.09),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.65);
+}
+
+/* Fault header: red-tinted metal */
+.panelFault .header {
+  background:    linear-gradient(180deg, #221418 0%, #1A0E14 50%, #12080E 100%);
+  border-bottom: 1px solid rgba(208, 92, 92, 0.30);
+  box-shadow:
+    inset 0  1px 0 rgba(255, 255, 255, 0.05),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.65);
+}
+
+
+/* ── DRAG INDICATOR ── */
+.dragHandle {
+  display:     flex;
+  gap:         2px;
+  align-items: center;
+  opacity:     0.25;
+  transition:  opacity var(--dur-instant) ease;
+  flex-shrink: 0;
+}
+.header:hover .dragHandle { opacity: 0.5; }
+
+/* Six-dot grip via repeating gradient */
+.dragHandle::before,
+.dragHandle::after {
+  content:       '';
+  display:       block;
+  width:         3px;
+  height:        12px;
+  border-radius: 2px;
+  background:    repeating-linear-gradient(
+    to bottom,
+    var(--text-tertiary) 0px,
+    var(--text-tertiary) 2px,
+    transparent          2px,
+    transparent          4px
+  );
+}
+
+
+/* ── TITLE — Barlow Condensed, stenciled ── */
+.title {
+  flex:           1;
+  font-family:    var(--font-condensed);
+  font-size:      var(--text-sm);
+  font-weight:    var(--weight-semibold);
+  letter-spacing: var(--tracking-condensed);
+  text-transform: uppercase;
+  color:          var(--text-tertiary);
+  white-space:    nowrap;
+  overflow:       hidden;
+  text-overflow:  ellipsis;
+  transition:     color var(--dur-instant) ease;
+}
+.panelActive .title    { color: var(--text-secondary); }
+.panelFault .title     { color: #C05060; }  /* Fault title is muted red */
+
+
+/* ── HEADER EXTRA ── */
+.headerExtra {
+  display:     flex;
+  align-items: center;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+
+/* ── HEADER ACTIONS ── */
+.actions {
+  display:     flex;
+  gap:         var(--space-1);
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.actionBtn {
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  width:           20px;
+  height:          20px;
+  border-radius:   var(--radius-sm);
+  border:          1px solid transparent;
+  background:      transparent;
+  color:           var(--text-tertiary);
+  cursor:          pointer;
+  padding:         0;
+  transition:
+    color        var(--dur-instant) ease,
+    background   var(--dur-instant) ease,
+    border-color var(--dur-instant) ease;
+}
+.actionBtn:hover {
+  color:        var(--text-secondary);
+  background:   var(--bg-interactive);
+  border-color: var(--border-subtle);
+}
+.actionBtn:focus-visible {
+  outline:      none;
+  border-color: var(--blue-bright);
+  box-shadow:   var(--glow-blue-sm);
+  color:        var(--text-primary);
+}
+.actionBtn:active {
+  background: var(--blue-dim);
+  color:      var(--blue-bright);
+}
+
+/* Collapse button — chevron rotates when collapsed */
+.actionBtnCollapse { composes: actionBtn; }
+.actionBtnCollapse svg {
+  transition: transform var(--dur-standard) var(--ease-inout);
+}
+.actionBtnCollapse.collapsed svg { transform: rotate(-90deg); }
+
+/* Close button hover — warm red */
+.actionBtnClose:hover {
+  color:        var(--status-error);
+  background:   rgba(208, 92, 92, 0.08);
+  border-color: rgba(208, 92, 92, 0.20);
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   GLASS — The holographic display surface
+   Dark glass set into the chassis. The frame is physical/material.
+   The content area is a display glass inset into that frame.
+   ::before — internal blue/red glow (top gradient + radial bloom)
+   ::after  — 20×20px grid substrate
+   box-shadow — glass edge illumination (inset rim light)
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.glass {
+  position:       relative;
+  flex:           1;
+  display:        flex;
+  flex-direction: column;
+  overflow:       hidden;  /* Glass clips its own content */
+
+  /* Glass base — near-black, slightly blue-shifted */
+  background: rgba(4, 8, 15, 0.94);
+
+  /* Glass edge illumination — blue rim light on all edges */
+  box-shadow:
+    inset 0  1px 0 rgba(61, 135, 168, 0.20),
+    inset  1px 0 0 rgba(61, 135, 168, 0.08),
+    inset -1px 0 0 rgba(61, 135, 168, 0.08),
+    inset 0 -1px 0 rgba(61, 135, 168, 0.05);
+}
+
+/* Internal blue glow — top gradient + radial bloom from top center */
+.glass::before {
+  content:        '';
+  position:       absolute;
+  inset:          0;
+  pointer-events: none;
+  z-index:        0;
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(61, 135, 168, 0.12) 0px,
+      rgba(61, 135, 168, 0.03) 18px,
+      transparent 44px
+    ),
+    radial-gradient(
+      ellipse at 50% 10%,
+      rgba(61, 135, 168, 0.06) 0%,
+      transparent 65%
+    );
+}
+
+/* Grid substrate — 20×20px blueprint grid */
+.glass::after {
+  content:          '';
+  position:         absolute;
+  inset:            0;
+  pointer-events:   none;
+  z-index:          0;
+  background-image:
+    linear-gradient(rgba(61, 135, 168, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(61, 135, 168, 0.035) 1px, transparent 1px);
+  background-size:  20px 20px;
+}
+
+/* Active: brighter glass glow */
+.panelActive.panelCommand .glass,
+.panelActive.panelWork .glass {
+  box-shadow:
+    inset 0  1px 0 rgba(61, 135, 168, 0.32),
+    inset  1px 0 0 rgba(61, 135, 168, 0.14),
+    inset -1px 0 0 rgba(61, 135, 168, 0.14),
+    inset 0 -1px 0 rgba(61, 135, 168, 0.08);
+}
+.panelActive.panelCommand .glass::before,
+.panelActive.panelWork .glass::before {
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(61, 135, 168, 0.18) 0px,
+      rgba(61, 135, 168, 0.05) 18px,
+      transparent 44px
+    ),
+    radial-gradient(
+      ellipse at 50% 10%,
+      rgba(61, 135, 168, 0.09) 0%,
+      transparent 65%
+    );
+}
+
+/* Fault glass: red-tinted interior */
+.panelFault .glass {
+  background: rgba(8, 3, 6, 0.96);
+  box-shadow:
+    inset 0  1px 0 rgba(208, 92, 92, 0.22),
+    inset  1px 0 0 rgba(208, 92, 92, 0.10),
+    inset -1px 0 0 rgba(208, 92, 92, 0.10),
+    inset 0 -1px 0 rgba(208, 92, 92, 0.06);
+}
+.panelFault .glass::before {
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(208, 92, 92, 0.10) 0px,
+      rgba(208, 92, 92, 0.03) 16px,
+      transparent 40px
+    ),
+    radial-gradient(
+      ellipse at 50% 10%,
+      rgba(208, 92, 92, 0.06) 0%,
+      transparent 60%
+    );
+}
+.panelFault .glass::after {
+  background-image:
+    linear-gradient(rgba(208, 92, 92, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(208, 92, 92, 0.04) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BODY — Scrollable content area inside the glass
+   z-index: 1 to sit above the ::before/::after glass overlays.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.body {
+  flex:       1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding:    var(--panel-padding-y) var(--panel-padding-x);
+  position:   relative;
+  z-index:    1;
+}
+
+/* Subtle scrollbar */
+.body::-webkit-scrollbar       { width: 4px; }
+.body::-webkit-scrollbar-track { background: transparent; }
+.body::-webkit-scrollbar-thumb {
+  background:    var(--bg-rule);
+  border-radius: 2px;
+}
+.body::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+
+/* Collapsed state — GSAP manages height transition, CSS just clips cleanly */
+.bodyCollapsed {
+  overflow: hidden;
+  height:   0;
+  opacity:  0;
+  padding:  0;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FAULT ALERT ROW — shown at top of body when faultMessage prop is set
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.faultAlert {
+  display:       flex;
+  align-items:   center;
+  gap:           var(--space-2);
+  padding:       var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  background:    rgba(208, 92, 92, 0.06);
+  border-left:   2px solid var(--status-error);
+  position:      relative;
+  z-index:       1;
+}
+
+.faultAlertLabel {
+  font-family:    var(--font-condensed);
+  font-size:      9px;
+  font-weight:    var(--weight-bold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color:          var(--status-error);
+  flex-shrink:    0;
+}
+
+.faultAlertMsg {
+  font-family: var(--font-ui);
+  font-size:   var(--text-xs);
+  color:       #C06070;
+  line-height: 1.4;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FOOTER — Inside the glass, at the bottom
+   Gradient line at top (::before) marks the edge between content and footer.
+   Fault footer uses red accent.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.footer {
+  flex-shrink: 0;
+  background:  rgba(6, 11, 20, 0.96);
+  border-top:  1px solid rgba(61, 135, 168, 0.15);
+  position:    relative;
+  z-index:     1;
+}
+
+/* Blue gradient accent line across the top of the footer */
+.footer::before {
+  content:    '';
+  position:   absolute;
+  top:        0;
+  left:       0;
+  right:      0;
+  height:     1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    rgba(61, 135, 168, 0.30) 30%,
+    rgba(61, 135, 168, 0.30) 70%,
+    transparent
+  );
+}
+
+/* Fault footer */
+.panelFault .footer {
+  background:  rgba(8, 3, 6, 0.98);
+  border-top:  1px solid rgba(208, 92, 92, 0.20);
+}
+.panelFault .footer::before {
+  background: linear-gradient(
+    to right,
+    transparent,
+    rgba(208, 92, 92, 0.20) 30%,
+    rgba(208, 92, 92, 0.20) 70%,
+    transparent
+  );
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   RESIZE HANDLE — bottom-right corner, floating panels only
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.resizeHandle {
+  position:   absolute;
+  right:      0;
+  bottom:     0;
+  width:      16px;
+  height:     16px;
+  cursor:     se-resize;
+  opacity:    0;
+  transition: opacity var(--dur-instant) ease;
+  z-index:    3;
+}
+.panelFloating:hover .resizeHandle { opacity: 0.5; }
+.panelFloating .resizeHandle::after {
+  content:       '';
+  position:      absolute;
+  right:         4px;
+  bottom:        4px;
+  width:         8px;
+  height:        8px;
+  border-right:  2px solid var(--text-tertiary);
+  border-bottom: 2px solid var(--text-tertiary);
+  border-radius: 0 0 2px 0;
+}

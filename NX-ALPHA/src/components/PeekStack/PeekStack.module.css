@@ -1,0 +1,89 @@
+/*
+ * AURA NX-Alpha — PeekStack
+ *
+ * Right-edge tab strip. Position: absolute to canvas, right edge, vertically centered.
+ * z-index 250 — the highest layer, always accessible.
+ *
+ * LOCKED: Do not modify z-index, right-edge positioning, or tab appearance
+ * without a deliberate design decision.
+ */
+
+/* ── STACK CONTAINER ── */
+.stack {
+  position:       absolute;
+  right:          0;
+  top:            50%;
+  transform:      translateY(-50%);
+  display:        flex;
+  flex-direction: column;
+  gap:            3px;
+  z-index:        250;   /* LOCKED — above drop panels and all floating panels */
+  pointer-events: none;  /* Container transparent; individual tabs are clickable */
+}
+
+/* ── PEEK TAB ── */
+.tab {
+  pointer-events: all;
+
+  /* Vertical text — rotated to read bottom-up */
+  writing-mode:   vertical-rl;
+  transform:      rotate(180deg);
+
+  padding:        12px 6px;
+  height:         auto;   /* Grows with text length */
+
+  background:     rgba(8, 13, 23, 0.92);
+  border:         1px solid rgba(31,45,64,.70);
+  border-right:   none;   /* Flush against right canvas edge */
+  border-radius:  3px 0 0 3px;
+
+  font-family:    var(--font-condensed);
+  font-size:      10px;
+  font-weight:    600;
+  letter-spacing: .10em;
+  text-transform: uppercase;
+  color:          var(--text-tertiary);
+  cursor:         pointer;
+
+  position:       relative;
+  overflow:       hidden;
+
+  transition:
+    background   120ms,
+    border-color 120ms,
+    color        120ms;
+
+  box-shadow: -3px 0 12px rgba(0,0,0,.50);
+}
+
+.tab:hover {
+  background:   rgba(13, 20, 34, 0.96);
+  border-color: rgba(61,135,168,.30);
+  color:        var(--text-secondary);
+}
+
+/* ── LEFT ACCENT BAR — appears as bottom bar after rotation ── */
+.tab::after {
+  content:  '';
+  position: absolute;
+  top:      0;     /* After rotate(180deg) this becomes the "bottom" visually */
+  right:    0;
+  width:    2px;
+  height:   100%;
+  transition: opacity 120ms;
+  opacity:  0.70;
+}
+.tab:hover::after { opacity: 1; }
+
+/* Command panel accent — amber gradient */
+.tabCmd::after {
+  background: linear-gradient(to top, var(--amber-muted), var(--amber-base));
+}
+/* Work panel accent — blue gradient */
+.tabWork::after {
+  background: linear-gradient(to top, var(--blue-muted), var(--blue-base));
+}
+
+/* Active state on hover — color matches accent */
+.tabCmd:hover { color: var(--amber-base); border-color: rgba(184,120,32,.30); }
+.tabWork:hover { color: var(--blue-bright); border-color: rgba(61,135,168,.30); }

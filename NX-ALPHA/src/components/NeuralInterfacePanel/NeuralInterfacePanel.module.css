@@ -1,0 +1,193 @@
+/*
+ * AURA NX-Alpha — NeuralInterfacePanel
+ *
+ * Main panel shell: left sidebar nav (200px) + content area.
+ * Views: graph (default), analytics, ingestion.
+ */
+
+/* ─── OUTER SHELL ─────────────────────────────────────────── */
+.panel {
+  display:        flex;
+  flex-direction: row;
+  height:         100%;
+  width:          100%;
+  overflow:       hidden;
+  background:     #0d0d0d;
+  font-family:    var(--font-condensed, 'Rajdhani', 'JetBrains Mono', monospace);
+}
+
+/* ─── SIDEBAR ─────────────────────────────────────────────── */
+.sidebar {
+  width:          200px;
+  flex-shrink:    0;
+  display:        flex;
+  flex-direction: column;
+  background:     #1e1e1e;
+  border-right:   1px solid #2a2a2a;
+  overflow:       hidden;
+}
+
+/* Ingestion mode banner — top of sidebar */
+.ingestionModeBar {
+  padding:        6px 16px;
+  background:     #3d3320;
+  font-size:      11px;
+  font-weight:    600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color:          #e6a817;
+  text-align:     center;
+  border-bottom:  1px solid #5a4a20;
+  flex-shrink:    0;
+}
+
+/* Sidebar nav section */
+.navList {
+  flex:           1;
+  display:        flex;
+  flex-direction: column;
+  padding:        8px 0;
+  overflow-y:     auto;
+}
+
+.navItem {
+  display:     flex;
+  align-items: center;
+  gap:         8px;
+  padding:     10px 16px;
+  width:       100%;
+  text-align:  left;
+  background:  transparent;
+  border:      none;
+  color:       #888;
+  font-family: inherit;
+  font-size:   12px;
+  font-weight: 500;
+  letter-spacing: .04em;
+  cursor:      pointer;
+  position:    relative;
+  transition:  background 80ms, color 80ms;
+}
+.navItem:hover {
+  background: rgba(230, 168, 23, 0.06);
+  color:      #e0e0e0;
+}
+
+.navItemActive {
+  color:      #e6a817;
+  background: #1a1a0d;
+}
+.navItemActive::before {
+  content:    '';
+  position:   absolute;
+  left:       0;
+  top:        4px;
+  bottom:     4px;
+  width:      2px;
+  background: #e6a817;
+  border-radius: 0 1px 1px 0;
+}
+
+.navIcon {
+  font-size:   13px;
+  flex-shrink: 0;
+  opacity:     .70;
+  line-height: 1;
+}
+.navItemActive .navIcon {
+  opacity: 1;
+}
+
+/* ─── LIVE STATUS SECTION (bottom of sidebar) ─────────────── */
+.liveSection {
+  padding:       12px 16px;
+  border-top:    1px solid #2a2a2a;
+  flex-shrink:   0;
+}
+
+.liveSectionLabel {
+  font-size:      9px;
+  font-weight:    700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color:          #555;
+  margin-bottom:  8px;
+}
+
+.liveRow {
+  display:       flex;
+  align-items:   center;
+  gap:           8px;
+  font-size:     11px;
+  color:         #888;
+  margin-bottom: 4px;
+  font-family:   var(--font-mono, 'JetBrains Mono', monospace);
+}
+.liveRow:last-child {
+  margin-bottom: 0;
+}
+
+.liveRowLabel {
+  flex: 1;
+}
+
+/* ─── LED INDICATORS ──────────────────────────────────────── */
+.led {
+  width:        6px;
+  height:       6px;
+  border-radius: 50%;
+  flex-shrink:  0;
+}
+
+.ledGreen {
+  background: #22c55e;
+  box-shadow: 0 0 4px #22c55e66;
+}
+
+.ledRed {
+  background: #ef4444;
+}
+
+.ledAmber {
+  background: #f59e0b;
+  box-shadow: 0 0 4px #f59e0b66;
+  animation:  pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: .45; }
+}
+
+/* ─── CONTENT AREA ────────────────────────────────────────── */
+.content {
+  flex:       1;
+  overflow:   hidden;
+  position:   relative;
+  display:    flex;
+  flex-direction: column;
+}
+
+/* ─── REDIRECT / NOTICE BANNER ────────────────────────────── */
+.redirectBanner {
+  display:       flex;
+  align-items:   center;
+  gap:           8px;
+  padding:       8px 16px;
+  background:    rgba(61, 51, 32, 0.40);
+  border:        1px solid #5a4a20;
+  border-radius: 3px;
+  margin:        12px 16px;
+  font-size:     11px;
+  color:         #e6a817;
+  flex-shrink:   0;
+}
+
+/* ─── LOADING / ERROR STATES ──────────────────────────────── */
+.statusDot {
+  display:     inline-block;
+  width:       6px;
+  height:      6px;
+  border-radius: 50%;
+  margin-right: 6px;
+}

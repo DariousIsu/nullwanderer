@@ -1,0 +1,65 @@
+/* AURA NX-Alpha — StreetViewPanel */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #0a0b0d;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  height: 28px;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.label {
+  font-size: 10px;
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  color: rgba(255, 255, 255, 0.45);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.coords {
+  font-size: 9px;
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  color: rgba(245, 166, 35, 0.7);
+}
+
+.stream {
+  flex: 1;
+  width: 100%;
+  height: calc(100% - 28px);
+  object-fit: cover;
+  display: block;
+  background: #111;
+}
+
+/* ── Placeholder ─────────────────────────────────────────────────────────── */
+.placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.2);
+  user-select: none;
+}
+
+.placeholderIcon {
+  font-size: 24px;
+  opacity: 0.4;
+}
+
+.placeholder p {
+  font-size: 11px;
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  margin: 0;
+}

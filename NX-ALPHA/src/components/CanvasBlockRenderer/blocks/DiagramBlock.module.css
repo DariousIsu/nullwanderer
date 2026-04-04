@@ -1,0 +1,57 @@
+/* DiagramBlock — rendered Graphviz / Mermaid diagram */
+
+.wrap {
+  display:        flex;
+  flex-direction: column;
+  gap:            8px;
+  padding:        10px 12px;
+  background:     rgba(255,255,255,0.03);
+  border:         1px solid rgba(255,255,255,0.08);
+  border-radius:  4px;
+}
+
+.title {
+  font-size:   12px;
+  font-weight: 600;
+  color:       var(--text-primary, #e2e8f0);
+}
+
+.frame {
+  width:      100%;
+  overflow:   auto;
+  background: rgba(255,255,255,0.02);
+  border-radius: 2px;
+  padding:    8px;
+}
+
+.svg, .img {
+  max-width:  100%;
+  height:     auto;
+  display:    block;
+}
+
+.badge {
+  align-self:     flex-start;
+  font-size:      9px;
+  font-weight:    700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding:        2px 5px;
+  border-radius:  3px;
+  background:     rgba(52,211,153,0.10);
+  color:          rgba(110,231,183,0.80);
+  border:         1px solid rgba(52,211,153,0.18);
+}
+
+.placeholder {
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  gap:             8px;
+  padding:         24px;
+  color:           var(--text-muted, #64748b);
+  font-size:       13px;
+}
+
+.icon { font-size: 20px; opacity: 0.4; }
+.label { font-size: 12px; }

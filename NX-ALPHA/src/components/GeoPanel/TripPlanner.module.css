@@ -1,0 +1,359 @@
+/* AURA NX-Alpha — TripPlanner styles */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  height: 100%;
+  overflow-y: auto;
+  font-size: 13px;
+  color: #e0e0e0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  flex: 1;
+}
+
+.tripMeta {
+  font-size: 12px;
+  color: #888;
+  display: flex;
+  gap: 8px;
+}
+
+.loading, .empty {
+  padding: 16px;
+  text-align: center;
+  color: #666;
+  font-style: italic;
+}
+
+.error {
+  padding: 8px;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  color: #ef4444;
+  font-size: 12px;
+}
+
+/* ── Trip List ─────────────────────────────────────────── */
+
+.tripList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tripCard {
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.tripCard:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.tripName {
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+/* ── Form ──────────────────────────────────────────────── */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.input {
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: #e0e0e0;
+  font-size: 13px;
+  outline: none;
+}
+
+.input:focus {
+  border-color: rgba(96, 165, 250, 0.5);
+}
+
+.dateRow {
+  display: flex;
+  gap: 8px;
+}
+
+.dateRow .input {
+  flex: 1;
+}
+
+.inlineForm {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.inlineForm input, .inlineForm select {
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 12px;
+  outline: none;
+  flex: 1;
+  min-width: 80px;
+}
+
+/* ── Buttons ───────────────────────────────────────────── */
+
+.btnPrimary {
+  padding: 8px 14px;
+  background: rgba(96, 165, 250, 0.2);
+  border: 1px solid rgba(96, 165, 250, 0.3);
+  border-radius: 6px;
+  color: #60a5fa;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btnPrimary:hover {
+  background: rgba(96, 165, 250, 0.3);
+}
+
+.btnBack {
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: #aaa;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.btnSmall {
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: #ccc;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.btnSmall:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.btnDelete {
+  padding: 2px 6px;
+  background: transparent;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.btnDelete:hover {
+  color: #ef4444;
+}
+
+.btnDanger {
+  margin-top: 16px;
+  padding: 8px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 6px;
+  color: #ef4444;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.btnDanger:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+/* ── Actions ───────────────────────────────────────────── */
+
+.actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ── Budget ────────────────────────────────────────────── */
+
+.budgetBox {
+  padding: 10px;
+  background: rgba(74, 222, 128, 0.08);
+  border: 1px solid rgba(74, 222, 128, 0.15);
+  border-radius: 6px;
+}
+
+.budgetBox h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: #4ade80;
+}
+
+.budgetLine {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  font-size: 12px;
+}
+
+/* ── Section ───────────────────────────────────────────── */
+
+.section {
+  margin-top: 8px;
+}
+
+.section h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #aaa;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ── Reservations ──────────────────────────────────────── */
+
+.resCard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 4px;
+  margin-bottom: 4px;
+}
+
+.resType {
+  padding: 2px 6px;
+  background: rgba(96, 165, 250, 0.15);
+  border-radius: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  color: #60a5fa;
+}
+
+.resTitle {
+  flex: 1;
+  font-size: 12px;
+}
+
+.resDate {
+  font-size: 11px;
+  color: #888;
+}
+
+/* ── Days & Places ─────────────────────────────────────── */
+
+.dayBlock {
+  margin-bottom: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.dayHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.dayLabel {
+  font-weight: 500;
+  flex: 1;
+}
+
+.dayDate {
+  font-size: 11px;
+  color: #888;
+}
+
+.placeList {
+  padding: 4px;
+}
+
+.placeCard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.placeCard:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.placeNum {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(96, 165, 250, 0.2);
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  color: #60a5fa;
+  flex-shrink: 0;
+}
+
+.placeInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.placeName {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.placeCat {
+  font-size: 10px;
+  color: #888;
+}
+
+.emptyPlace {
+  padding: 8px;
+  text-align: center;
+  color: #555;
+  font-size: 11px;
+  font-style: italic;
+}

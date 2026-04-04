@@ -1,0 +1,98 @@
+/*
+ * AURA NX-Alpha — Toast
+ * System notification toasts. Stacked in top-right corner.
+ * Z-index 500 — above warning popup (400).
+ */
+
+/* ── STACK ── */
+.stack {
+  position:       fixed;
+  top:            calc(var(--titlebar-height, 36px) + 8px);
+  right:          16px;
+  z-index:        500;
+  display:        flex;
+  flex-direction: column;
+  gap:            6px;
+  pointer-events: none;
+}
+
+/* ── SINGLE TOAST ── */
+.toast {
+  display:       flex;
+  align-items:   flex-start;
+  gap:           8px;
+  padding:       9px 10px;
+  min-width:     240px;
+  max-width:     360px;
+
+  background:    rgba(10, 16, 30, 0.92);
+  border:        1px solid var(--toast-border, rgba(61, 135, 168, 0.30));
+  border-left:   3px solid var(--toast-accent, var(--blue-bright));
+  border-radius: var(--radius-sm);
+  backdrop-filter: blur(8px);
+
+  pointer-events: auto;
+  animation: toastIn 0.18s var(--ease-out) both;
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(16px) scale(0.97); }
+  to   { opacity: 1; transform: translateX(0)    scale(1); }
+}
+
+/* ── LEVEL VARIANTS ── */
+.toast_info {
+  --toast-accent: var(--blue-bright);
+  --toast-border: rgba(61, 135, 168, 0.30);
+}
+
+.toast_warning {
+  --toast-accent: var(--amber-bright);
+  --toast-border: rgba(255, 180, 50, 0.25);
+}
+
+.toast_error {
+  --toast-accent: var(--status-error);
+  --toast-border: rgba(255, 80, 80, 0.25);
+}
+
+.toast_success {
+  --toast-accent: var(--green-bright);
+  --toast-border: rgba(80, 200, 120, 0.25);
+}
+
+/* ── ICON ── */
+.icon {
+  flex-shrink:  0;
+  font-size:    11px;
+  color:        var(--toast-accent);
+  line-height:  1.4;
+  margin-top:   1px;
+}
+
+/* ── MESSAGE ── */
+.message {
+  flex:        1;
+  font-family: var(--font-ui);
+  font-size:   11px;
+  color:       var(--text-secondary);
+  line-height: 1.4;
+  word-break:  break-word;
+}
+
+/* ── DISMISS BUTTON ── */
+.dismiss {
+  flex-shrink:     0;
+  background:      none;
+  border:          none;
+  cursor:          pointer;
+  padding:         0 2px;
+  font-size:       9px;
+  color:           var(--text-tertiary);
+  line-height:     1;
+  margin-top:      2px;
+  transition:      color var(--dur-instant) ease;
+}
+.dismiss:hover {
+  color: var(--text-secondary);
+}

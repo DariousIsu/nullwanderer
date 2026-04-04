@@ -1,0 +1,929 @@
+/*
+ * AURA NX-Alpha — FinancePanel (Bloomberg Terminal)
+ *
+ * Local design tokens scoped to .finRoot.
+ * Purple/violet palette, Share Tech Mono + Rajdhani typography.
+ * @property --bangle is global (CSS Modules passes @property through unchanged).
+ */
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* Holographic spinning border — requires @property for transition             */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+@property --bangle {
+  syntax:        '<angle>';
+  inherits:      false;
+  initial-value: 0deg;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* ROOT                                                                         */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.finRoot {
+  /* Local palette */
+  --fin-purple:      #9333EA;
+  --fin-purple-lite: #A855F7;
+  --fin-purple-dim:  rgba(147,51,234,0.22);
+  --fin-red:         #E11D48;
+  --fin-red-lite:    #F43F5E;
+  --fin-green:       #4ade80;
+  --fin-dim:         #4D4070;
+  --fin-text:        #E9D5FF;
+  --fin-text-dim:    #9E8EC0;
+  --fin-bg:          rgba(4,0,12,0.97);
+  --fin-border:      rgba(147,51,234,0.18);
+  --fin-sep:         rgba(147,51,234,0.12);
+
+  display:       flex;
+  flex-direction: column;
+  flex:          1;
+  min-height:    0;
+  background:    var(--fin-bg);
+  color:         var(--fin-text);
+  overflow:      hidden;
+  font-family:   'Rajdhani', var(--font-ui);
+}
+
+/* Shared color helpers */
+.up { color: var(--fin-green); }
+.dn { color: var(--fin-red-lite); }
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* HEADER                                                                        */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.finHeader {
+  flex-shrink:  0;
+  height:       36px;
+  position:     relative;
+  overflow:     visible;
+  /* Animated conic-gradient border via @property --bangle */
+  border-bottom: 1px solid transparent;
+  background:
+    linear-gradient(var(--fin-bg), var(--fin-bg)) padding-box,
+    conic-gradient(from var(--bangle), rgba(147,51,234,0) 0%, var(--fin-purple) 15%, rgba(147,51,234,0) 30%)
+    border-box;
+  animation: spinBorder 4s linear infinite;
+}
+
+@keyframes spinBorder {
+  to { --bangle: 360deg; }
+}
+
+.finHeaderInner {
+  display:     flex;
+  align-items: center;
+  justify-content: space-between;
+  height:      100%;
+  padding:     0 14px;
+}
+
+.finHeaderLeft {
+  display:     flex;
+  align-items: baseline;
+  gap:         8px;
+}
+
+.finSymLabel {
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      16px;
+  font-weight:    700;
+  letter-spacing: 0.08em;
+  color:          var(--fin-purple-lite);
+}
+
+.finNameLabel {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   10px;
+  color:       var(--fin-text-dim);
+  letter-spacing: 0.04em;
+}
+
+.finPrice {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   15px;
+  font-weight: 500;
+  color:       var(--fin-text);
+  letter-spacing: 0.03em;
+}
+
+.finDelta {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   12px;
+  letter-spacing: 0.02em;
+}
+
+.finHeaderRight {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+}
+
+.finMktDot {
+  width:         6px;
+  height:        6px;
+  border-radius: 50%;
+  background:    var(--fin-green);
+  box-shadow:    0 0 5px rgba(74,222,128,0.60);
+  flex-shrink:   0;
+}
+
+.finMktLabel {
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      9px;
+  font-weight:    700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color:          var(--fin-green);
+}
+
+.finSessionTime {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   9px;
+  color:       var(--fin-text-dim);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* PORTFOLIO STRIP                                                               */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.portStrip {
+  display:       flex;
+  align-items:   center;
+  height:        30px;
+  min-height:    30px;
+  flex-shrink:   0;
+  border-bottom: 1px solid var(--fin-border);
+  padding:       0 8px;
+  gap:           0;
+  overflow:      hidden;
+}
+
+.portBlock {
+  display:       flex;
+  align-items:   center;
+  gap:           6px;
+  padding:       0 10px;
+  white-space:   nowrap;
+}
+
+.portBlockLabel {
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      8px;
+  font-weight:    700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color:          var(--fin-text-dim);
+}
+
+.portBlockVal {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   11px;
+  color:       var(--fin-text);
+}
+
+.portSep {
+  width:      1px;
+  height:     14px;
+  background: var(--fin-border);
+  flex-shrink: 0;
+}
+
+/* Index strip — right-aligned flex grow */
+.portIndexStrip {
+  display:     flex;
+  align-items: center;
+  gap:         0;
+  margin-left: auto;
+  padding-left: 8px;
+  border-left: 1px solid var(--fin-border);
+}
+
+.portIdx {
+  display:     flex;
+  align-items: center;
+  gap:         4px;
+  padding:     0 10px;
+  border-right: 1px solid var(--fin-sep);
+  white-space: nowrap;
+}
+
+.portIdxSym {
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      8px;
+  font-weight:    700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color:          var(--fin-purple-lite);
+}
+
+.portIdxVal {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   10px;
+  color:       var(--fin-text);
+}
+
+.portIdxChg {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   9px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* 3-COLUMN BODY                                                                 */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.finBody {
+  display:    flex;
+  flex:       1;
+  min-height: 0;
+  overflow:   hidden;
+}
+
+/* ── LEFT COLUMN ── */
+.finColL {
+  width:       212px;
+  min-width:   212px;
+  border-right: 1px solid var(--fin-border);
+  overflow-y:  auto;
+  display:     flex;
+  flex-direction: column;
+  scrollbar-width: thin;
+  scrollbar-color: var(--fin-dim) transparent;
+}
+
+/* ── CENTER COLUMN ── */
+.finColC {
+  flex:        1;
+  min-width:   0;
+  border-right: 1px solid var(--fin-border);
+  overflow-y:  auto;
+  display:     flex;
+  flex-direction: column;
+  scrollbar-width: thin;
+  scrollbar-color: var(--fin-dim) transparent;
+}
+
+/* ── RIGHT COLUMN ── */
+.finColR {
+  width:       216px;
+  min-width:   216px;
+  overflow-y:  auto;
+  display:     flex;
+  flex-direction: column;
+  scrollbar-width: thin;
+  scrollbar-color: var(--fin-dim) transparent;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* SECTION HEADING                                                               */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.sectionHead {
+  display:      flex;
+  align-items:  center;
+  gap:          6px;
+  padding:      5px 10px 4px;
+  flex-shrink:  0;
+  margin-top:   4px;
+}
+
+.sectionLabel {
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      8px;
+  font-weight:    700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color:          var(--fin-purple-lite);
+  white-space:    nowrap;
+  flex-shrink:    0;
+}
+
+.sectionLine {
+  flex:         1;
+  height:       1px;
+  background:   var(--fin-border);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* POSITIONS TABLE                                                               */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.posTable {
+  padding:  0 6px 4px;
+  flex-shrink: 0;
+}
+
+.posHeader {
+  display:        grid;
+  grid-template-columns: 44px 30px 52px 52px auto;
+  padding:        2px 4px;
+  border-bottom:  1px solid var(--fin-sep);
+  margin-bottom:  2px;
+}
+
+.posHeader span {
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color:          var(--fin-dim);
+}
+
+.posRow {
+  display:        grid;
+  grid-template-columns: 44px 30px 52px 52px auto;
+  padding:        3px 4px;
+  border-radius:  2px;
+  cursor:         default;
+}
+
+.posRow:hover {
+  background: rgba(147,51,234,0.07);
+}
+
+.posSym {
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      11px;
+  font-weight:    700;
+  color:          var(--fin-text);
+}
+
+.posQty,
+.posAvg,
+.posLast {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   10px;
+  color:       var(--fin-text-dim);
+}
+
+.posPnl {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   10px;
+  text-align:  right;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* P&L SUMMARY                                                                   */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.pnlTable {
+  padding:     0 10px 6px;
+  flex-shrink: 0;
+}
+
+.pnlRow {
+  display:         flex;
+  justify-content: space-between;
+  align-items:     center;
+  padding:         3px 0;
+  border-bottom:   1px solid var(--fin-sep);
+}
+
+.pnlRow:last-child {
+  border-bottom: none;
+}
+
+.pnlLabel {
+  font-family: 'Rajdhani', var(--font-condensed);
+  font-size:   10px;
+  color:       var(--fin-text-dim);
+  letter-spacing: 0.04em;
+}
+
+.pnlVal {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   11px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* WATCHLIST                                                                     */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.watchList {
+  padding:     0 6px 6px;
+  flex-shrink: 0;
+}
+
+.watchRow {
+  display:     flex;
+  align-items: center;
+  gap:         4px;
+  padding:     3px 4px;
+  border-radius: 2px;
+  cursor:      default;
+}
+
+.watchRow:hover {
+  background: rgba(147,51,234,0.07);
+}
+
+.watchSym {
+  font-family: 'Rajdhani', var(--font-condensed);
+  font-size:   11px;
+  font-weight: 700;
+  color:       var(--fin-text);
+  width:       40px;
+}
+
+.watchVal {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   10px;
+  color:       var(--fin-text);
+  flex:        1;
+  text-align:  right;
+}
+
+.watchChg {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   9px;
+  width:       54px;
+  text-align:  right;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* CHART                                                                         */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.chartWrap {
+  flex-shrink:  0;
+  height:       180px;
+  min-height:   180px;
+  display:      flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--fin-border);
+  position:     relative;
+}
+
+.chartToolbar {
+  display:     flex;
+  align-items: center;
+  gap:         2px;
+  padding:     4px 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--fin-sep);
+}
+
+.tfBtn {
+  padding:        1px 5px;
+  background:     transparent;
+  border:         1px solid transparent;
+  border-radius:  2px;
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      9px;
+  font-weight:    600;
+  letter-spacing: 0.06em;
+  color:          var(--fin-text-dim);
+  cursor:         pointer;
+  transition:     background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.tfBtn:hover {
+  background:   rgba(147,51,234,0.12);
+  color:        var(--fin-text);
+  border-color: var(--fin-border);
+}
+
+.tfBtnActive {
+  background:   rgba(147,51,234,0.18);
+  color:        var(--fin-purple-lite);
+  border-color: rgba(147,51,234,0.35);
+}
+
+.chartSym {
+  font-family:  'Share Tech Mono', var(--font-mono);
+  font-size:    9px;
+  color:        var(--fin-text-dim);
+  margin-left:  auto;
+}
+
+.chartCanvas {
+  flex:   1;
+  width:  100%;
+  display: block;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* ORDER BOOK                                                                    */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.obWrap {
+  flex-shrink: 0;
+  padding:     0 6px 4px;
+}
+
+.obGrid {
+  display:     flex;
+  flex-direction: column;
+}
+
+.obAsks,
+.obBids {
+  display: flex;
+  flex-direction: column;
+}
+
+.obRow {
+  display:     flex;
+  align-items: center;
+  gap:         4px;
+  padding:     1px 2px;
+  position:    relative;
+  overflow:    hidden;
+}
+
+.obPx {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   10px;
+  width:       54px;
+  flex-shrink: 0;
+}
+
+.obPx[data-side="ask"] { color: var(--fin-red-lite); }
+.obPx[data-side="bid"] { color: var(--fin-green); }
+
+.obSz {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   10px;
+  color:       var(--fin-text-dim);
+  width:       40px;
+  text-align:  right;
+  flex-shrink: 0;
+}
+
+/* Depth bars — behind the row content */
+.obDepthAsk,
+.obDepthBid {
+  position:   absolute;
+  right:      0;
+  top:        0;
+  height:     100%;
+  opacity:    0.18;
+  border-radius: 1px;
+}
+
+.obDepthAsk { background: var(--fin-red); }
+.obDepthBid { background: var(--fin-green); }
+
+.obSpread {
+  display:         flex;
+  justify-content: center;
+  padding:         3px 0;
+  border-top:      1px solid var(--fin-sep);
+  border-bottom:   1px solid var(--fin-sep);
+  margin:          2px 0;
+}
+
+.obSpreadVal {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   9px;
+  color:       var(--fin-purple-lite);
+  letter-spacing: 0.04em;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* TIME & SALES                                                                  */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.tasTable {
+  flex-shrink: 0;
+  padding:     0 6px 6px;
+}
+
+.tasHeader {
+  display:        grid;
+  grid-template-columns: 70px 60px auto;
+  padding:        2px 4px;
+  border-bottom:  1px solid var(--fin-sep);
+  margin-bottom:  2px;
+}
+
+.tasHeader span {
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color:          var(--fin-dim);
+}
+
+.tasBody {
+  display:     flex;
+  flex-direction: column;
+  max-height:  200px;
+  overflow-y:  auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--fin-dim) transparent;
+}
+
+.tasRow {
+  display:       grid;
+  grid-template-columns: 70px 60px auto;
+  padding:       2px 4px;
+  border-radius: 2px;
+  transition:    background 0.15s;
+}
+
+.tasUp { background: rgba(74,222,128,0.04); }
+.tasDn { background: rgba(244,63,94,0.04);  }
+
+.tasTime {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   9px;
+  color:       var(--fin-text-dim);
+}
+
+.tasPx {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   10px;
+  color:       var(--fin-text);
+}
+
+.tasSz {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   10px;
+  color:       var(--fin-text-dim);
+  text-align:  right;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* EXECUTIONS                                                                    */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.execTable {
+  padding:     0 6px 4px;
+  flex-shrink: 0;
+}
+
+.execHeader {
+  display:        grid;
+  grid-template-columns: 50px 22px 36px 28px auto 32px;
+  padding:        2px 4px;
+  border-bottom:  1px solid var(--fin-sep);
+  margin-bottom:  2px;
+}
+
+.execHeader span {
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      7px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color:          var(--fin-dim);
+}
+
+.execRow {
+  display:       grid;
+  grid-template-columns: 50px 22px 36px 28px auto 32px;
+  padding:       3px 4px;
+  border-radius: 2px;
+  cursor:        default;
+}
+
+.execRow:hover { background: rgba(147,51,234,0.07); }
+
+.execTime {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   9px;
+  color:       var(--fin-text-dim);
+}
+
+.execSide {
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      10px;
+  font-weight:    700;
+}
+
+.sideB { color: var(--fin-green); }
+.sideS { color: var(--fin-red-lite); }
+
+.execSym {
+  font-family: 'Rajdhani', var(--font-condensed);
+  font-size:   10px;
+  font-weight: 700;
+  color:       var(--fin-text);
+}
+
+.execQty,
+.execPx {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   9px;
+  color:       var(--fin-text-dim);
+}
+
+.execSt {
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      8px;
+  font-weight:    700;
+  letter-spacing: 0.06em;
+}
+
+.stFill { color: var(--fin-green); }
+.stPart { color: #facc15; }
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* NEWS                                                                          */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.newsList {
+  padding:     0 8px 6px;
+  flex-shrink: 0;
+}
+
+.newsItem {
+  padding:       5px 0;
+  border-bottom: 1px solid var(--fin-sep);
+  cursor:        default;
+}
+
+.newsItem:last-child { border-bottom: none; }
+
+.newsItem:hover .newsHeadline { color: var(--fin-text); }
+
+.newsHead {
+  display:         flex;
+  justify-content: space-between;
+  align-items:     center;
+  margin-bottom:   2px;
+}
+
+.newsSrc {
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      8px;
+  font-weight:    700;
+  letter-spacing: 0.10em;
+  color:          var(--fin-purple-lite);
+}
+
+.newsTime {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   8px;
+  color:       var(--fin-text-dim);
+}
+
+.newsHeadline {
+  margin:      0;
+  font-family: 'Rajdhani', var(--font-condensed);
+  font-size:   11px;
+  line-height: 1.3;
+  color:       var(--fin-text-dim);
+  transition:  color 0.12s;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* ORDER ENTRY BAR                                                               */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.orderBar {
+  display:       flex;
+  align-items:   center;
+  gap:           4px;
+  height:        36px;
+  min-height:    36px;
+  flex-shrink:   0;
+  border-top:    1px solid var(--fin-border);
+  padding:       0 8px;
+  background:    rgba(4,0,20,0.95);
+}
+
+/* Side toggle */
+.sideToggle {
+  display:     flex;
+  border:      1px solid var(--fin-border);
+  border-radius: 3px;
+  overflow:    hidden;
+  flex-shrink: 0;
+}
+
+.sideBtn {
+  padding:        0 8px;
+  height:         22px;
+  background:     transparent;
+  border:         none;
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      10px;
+  font-weight:    700;
+  letter-spacing: 0.08em;
+  color:          var(--fin-text-dim);
+  cursor:         pointer;
+  transition:     background 0.1s, color 0.1s;
+}
+
+.sideBtn:hover { background: rgba(147,51,234,0.10); }
+
+.sideBuyActive  { background: rgba(74,222,128,0.18) !important; color: var(--fin-green) !important; }
+.sideSellActive { background: rgba(244,63,94,0.18) !important;  color: var(--fin-red-lite) !important; }
+
+/* Inputs */
+.orderInput {
+  height:         22px;
+  padding:        0 6px;
+  background:     rgba(147,51,234,0.06);
+  border:         1px solid var(--fin-border);
+  border-radius:  2px;
+  font-family:    'Share Tech Mono', var(--font-mono);
+  font-size:      11px;
+  color:          var(--fin-text);
+  outline:        none;
+  transition:     border-color 0.1s;
+  flex-shrink:    0;
+}
+
+.orderInput:focus {
+  border-color: var(--fin-purple);
+  background:   rgba(147,51,234,0.10);
+}
+
+.orderInput:disabled {
+  opacity: 0.38;
+  cursor:  not-allowed;
+}
+
+/* Selects */
+.orderSelect {
+  height:         22px;
+  padding:        0 4px;
+  background:     rgba(147,51,234,0.06);
+  border:         1px solid var(--fin-border);
+  border-radius:  2px;
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      10px;
+  font-weight:    600;
+  letter-spacing: 0.06em;
+  color:          var(--fin-text-dim);
+  cursor:         pointer;
+  outline:        none;
+  transition:     border-color 0.1s;
+  flex-shrink:    0;
+}
+
+.orderSelect:focus { border-color: var(--fin-purple); }
+
+/* Notional */
+.notional {
+  font-family: 'Share Tech Mono', var(--font-mono);
+  font-size:   10px;
+  color:       var(--fin-text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin:      0 4px;
+}
+
+.notionalLabel {
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      8px;
+  letter-spacing: 0.10em;
+  color:          var(--fin-dim);
+  margin-right:   3px;
+}
+
+/* Action buttons */
+.orderActions {
+  display:     flex;
+  gap:         3px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.orderBtn {
+  padding:        0 10px;
+  height:         22px;
+  border:         1px solid transparent;
+  border-radius:  2px;
+  font-family:    'Rajdhani', var(--font-condensed);
+  font-size:      11px;
+  font-weight:    700;
+  letter-spacing: 0.08em;
+  cursor:         pointer;
+  transition:     background 0.1s, box-shadow 0.1s;
+}
+
+.orderBtnBuy {
+  background:   rgba(74,222,128,0.16);
+  border-color: rgba(74,222,128,0.35);
+  color:        var(--fin-green);
+}
+
+.orderBtnBuy:hover {
+  background: rgba(74,222,128,0.26);
+  box-shadow: 0 0 6px rgba(74,222,128,0.20);
+}
+
+.orderBtnSell {
+  background:   rgba(244,63,94,0.14);
+  border-color: rgba(244,63,94,0.32);
+  color:        var(--fin-red-lite);
+}
+
+.orderBtnSell:hover {
+  background: rgba(244,63,94,0.24);
+  box-shadow: 0 0 6px rgba(244,63,94,0.20);
+}
+
+.orderBtnStage {
+  background:   rgba(147,51,234,0.14);
+  border-color: rgba(147,51,234,0.32);
+  color:        var(--fin-purple-lite);
+}
+
+.orderBtnStage:hover {
+  background: rgba(147,51,234,0.22);
+}

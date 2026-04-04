@@ -1,0 +1,107 @@
+/*
+ * AURA NX-Alpha — CanvasBlockRenderer
+ *
+ * The renderer itself has no visual footprint — it's a transparent layer
+ * that renders absolutely-positioned CanvasBlocks within the canvas container.
+ *
+ * TOOLBAR: Floating bar at top-right of canvas, visible when blocks are present.
+ * Matches CanvasBlock chrome — amber accents, Barlow Condensed, dark surface.
+ */
+
+/* ── CANVAS TOOLBAR ── */
+.toolbar {
+  position:  absolute;
+  top:       56px;
+  right:     16px;
+  z-index:   9999;
+  display:   flex;
+  align-items: center;
+  gap:       10px;
+  padding:   4px 8px 4px 10px;
+  background: rgba(8, 12, 20, 0.92);
+  border:    1px solid rgba(240, 168, 48, 0.18);
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.50),
+    0 4px 16px rgba(0, 0, 0, 0.40);
+  pointer-events: auto;
+}
+
+/* Block count label */
+.toolbarCount {
+  font-family:     var(--font-condensed);
+  font-size:       9px;
+  font-weight:     600;
+  letter-spacing:  0.12em;
+  text-transform:  uppercase;
+  color:           rgba(240, 168, 48, 0.50);
+  white-space:     nowrap;
+  user-select:     none;
+}
+
+/* Format selector */
+.toolbarSelect {
+  padding:        2px 4px;
+  border:         1px solid rgba(240, 168, 48, 0.22);
+  border-radius:  2px;
+  background:     rgba(240, 168, 48, 0.06);
+  color:          rgba(240, 168, 48, 0.72);
+  font-family:    var(--font-condensed);
+  font-size:      9px;
+  font-weight:    600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor:         pointer;
+  outline:        none;
+}
+
+.toolbarSelect:hover {
+  background:   rgba(240, 168, 48, 0.12);
+  color:        rgba(240, 168, 48, 0.90);
+  border-color: rgba(240, 168, 48, 0.36);
+}
+
+.toolbarSelect option {
+  background: #1a1a2e;
+  color:      #e0e0e0;
+}
+
+/* Download button */
+.toolbarBtn {
+  display:        flex;
+  align-items:    center;
+  gap:            5px;
+  padding:        3px 8px;
+  border:         1px solid rgba(240, 168, 48, 0.22);
+  border-radius:  2px;
+  background:     rgba(240, 168, 48, 0.06);
+  color:          rgba(240, 168, 48, 0.72);
+  font-family:    var(--font-condensed);
+  font-size:      9px;
+  font-weight:    600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor:         pointer;
+  white-space:    nowrap;
+  transition:     background 0.15s, color 0.15s, border-color 0.15s;
+  user-select:    none;
+}
+
+.toolbarBtn:hover:not(:disabled) {
+  background:   rgba(240, 168, 48, 0.12);
+  color:        rgba(240, 168, 48, 0.90);
+  border-color: rgba(240, 168, 48, 0.36);
+}
+
+.toolbarBtn:active:not(:disabled) {
+  background: rgba(240, 168, 48, 0.18);
+}
+
+.toolbarBtn:disabled {
+  opacity: 0.45;
+  cursor:  not-allowed;
+}
+
+.toolbarBtn svg {
+  flex-shrink: 0;
+}

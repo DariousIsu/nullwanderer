@@ -1,0 +1,242 @@
+/*
+ * AURA NX-Alpha — WarningPopup
+ *
+ * Full-shell interrupt overlay. z-index 400 sits above everything:
+ *   canvas blocks (10–100), floating panels (20–100),
+ *   drop panels (110), peek stack (250).
+ *
+ * DESIGN:
+ *   Backdrop: dark glass — dims without hiding context.
+ *   Card: angular clip (top-right corner cut), colored left border,
+ *         accent top bar. Variant color drives --accent CSS variable.
+ *
+ * COLOR SCHEME BY VARIANT:
+ *   pending_approval  → amber-base
+ *   external_alert    → severity-driven (blue / amber / red)
+ *   self_care_handoff → amber-base
+ */
+
+/* ── BACKDROP ── */
+.backdrop {
+  position:        absolute;
+  inset:           0;
+  z-index:         400;
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  background:      rgba(3, 8, 16, 0.70);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  /* Slight warm push for amber variants (always present, very subtle) */
+}
+
+/* ── CARD ── */
+.card {
+  position:   relative;
+  width:       384px;
+  background:  var(--bg-surface);
+
+  /* Left border = variant accent color */
+  border:      1px solid var(--bg-border);
+  border-left: 2.5px solid var(--accent, var(--amber-base));
+
+  /*
+   * Angular clip — top-right corner removed.
+   * Matches AURA's physical panel aesthetic.
+   */
+  clip-path: polygon(
+    0 0,
+    calc(100% - 14px) 0,
+    100% 14px,
+    100% 100%,
+    0 100%
+  );
+
+  box-shadow:
+    0 8px 40px rgba(0, 0, 0, 0.65),
+    0 2px 8px  rgba(0, 0, 0, 0.40),
+    inset 0 1px 0 rgba(255, 255, 255, 0.035);
+
+  /* Lift card slightly above true vertical center */
+  margin-bottom: 8vh;
+}
+
+/* ── ACCENT BAR — thin top edge stripe in accent color ── */
+.accentBar {
+  height:     2px;
+  width:      100%;
+  background: linear-gradient(
+    to right,
+    var(--accent, var(--amber-base)) 0%,
+    rgba(0, 0, 0, 0) 80%
+  );
+  opacity: 0.65;
+}
+
+/* ── LABEL ROW — type identifier + icon ── */
+.labelRow {
+  display:        flex;
+  align-items:    center;
+  gap:            7px;
+  padding:        12px 14px 0;
+  color:          var(--accent, var(--amber-base));
+  font-family:    var(--font-condensed);
+  font-size:      10px;
+  font-weight:    600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* ── BODY ── */
+.body {
+  padding: 8px 14px 0;
+}
+
+/* Primary question or alert title */
+.bodyTitle {
+  font-family: var(--font-ui);
+  font-size:   14px;
+  font-weight: 500;
+  color:       var(--text-primary);
+  margin:      0 0 6px;
+  line-height: 1.4;
+}
+
+/* Supporting detail — description, message */
+.bodyDetail {
+  font-family: var(--font-ui);
+  font-size:   12px;
+  color:       var(--text-secondary);
+  line-height: 1.55;
+  margin:      0;
+}
+
+/* ── TOOL CHIP — pending_approval tool name ── */
+.toolChip {
+  display:       inline-flex;
+  align-items:   center;
+  background:    rgba(184, 120, 32, 0.09);
+  border:        1px solid rgba(184, 120, 32, 0.22);
+  border-radius: 2px;
+  padding:       3px 9px;
+  margin-bottom: 7px;
+}
+
+.toolName {
+  font-family:    var(--font-mono);
+  font-size:      11px;
+  color:          var(--amber-bright);
+  letter-spacing: 0.04em;
+}
+
+/* ── CHECKPOINT COUNT — self_care_handoff big number ── */
+.checkpointNum {
+  font-family:    var(--font-condensed);
+  font-size:      20px;
+  font-weight:    700;
+  color:          var(--amber-hot);
+  line-height:    1;
+  vertical-align: middle;
+  margin-right:   1px;
+}
+
+/* ── DIVIDER ── */
+.divider {
+  height:     1px;
+  background: var(--bg-border);
+  margin:     12px 0 0;
+}
+
+/* ── ACTIONS ── */
+.actions {
+  display:        flex;
+  flex-direction: row-reverse;  /* Primary action on the right */
+  align-items:    center;
+  gap:            8px;
+  padding:        10px 14px 14px;
+}
+
+/* ── BUTTON BASE ── */
+.btnPrimary,
+.btnSecondary,
+.btnDestructive {
+  height:         30px;
+  padding:        0 18px;
+  border-radius:  2px;
+  font-family:    var(--font-condensed);
+  font-size:      11px;
+  font-weight:    600;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  cursor:         pointer;
+  border:         1px solid transparent;
+
+  /* Angular micro-clip on buttons — same language as panels */
+  clip-path: polygon(
+    0 0,
+    calc(100% - 5px) 0,
+    100% 5px,
+    100% 100%,
+    0 100%
+  );
+
+  transition:
+    background    100ms ease,
+    border-color  100ms ease,
+    color         100ms ease;
+}
+
+/* Primary — amber fill, dark text */
+.btnPrimary {
+  background:  var(--amber-base);
+  border-color: var(--amber-bright);
+  color:        #000;
+}
+
+.btnPrimary:hover {
+  background:  var(--amber-bright);
+  border-color: var(--amber-hot);
+}
+
+.btnPrimary:active {
+  background:  var(--amber-muted);
+}
+
+/* Secondary — transparent, muted border */
+.btnSecondary {
+  background:   transparent;
+  border-color: var(--bg-border);
+  color:        var(--text-secondary);
+}
+
+.btnSecondary:hover {
+  border-color: rgba(184, 120, 32, 0.28);
+  color:        var(--text-primary);
+  background:   rgba(184, 120, 32, 0.05);
+}
+
+/* Destructive — deny button, red-tinted */
+.btnDestructive {
+  background:   transparent;
+  border-color: rgba(208, 92, 92, 0.22);
+  color:        var(--status-error);
+}
+
+.btnDestructive:hover {
+  background:   rgba(208, 92, 92, 0.08);
+  border-color: rgba(208, 92, 92, 0.48);
+}
+
+.btnDestructive:active {
+  background:   rgba(208, 92, 92, 0.14);
+}
+
+/* ──────────────────────────────────────────────────────────
+   EXTERNAL ALERT SEVERITY TINTS
+   The --accent var on .card already drives the left border
+   and label color. This adds a very subtle bg tint for
+   critical severity to reinforce urgency.
+   ────────────────────────────────────────────────────────── */
+[data-warning-type="external_alert"] .card {
+  /* Handled entirely via --accent variable */
+}

@@ -1,0 +1,159 @@
+/*
+ * AURA NX-Alpha — RightDock
+ *
+ * Right-side panel dock. Sits in the workspace flex row to the right of the canvas.
+ * Canvas shrinks naturally when dock is open — no overlap.
+ *
+ * ANIMATION:
+ *   GSAP animateRightDockOpen / animateRightDockClose drive the width.
+ *   Initial state: width 0 (collapsed). GSAP expands to 264px on first dock.
+ *   overflow:hidden on .dock prevents content bleed during animation.
+ *
+ * VISUAL LANGUAGE:
+ *   Mirrors the chat sidebar (left) in weight and material.
+ *   border-left: amber-tinted rule — the dock is an amber-sided surface.
+ *   Panels inside use their full Panel.jsx chassis — same variant system.
+ */
+
+/* ── OUTER SHELL — sits in flex row, GSAP controls width ── */
+.dock {
+  width:          0;          /* GSAP opens to 264px */
+  flex-shrink:    0;
+  overflow:       hidden;
+  display:        flex;
+  flex-direction: column;
+  background:     var(--bg-base);
+  border-left:    1px solid rgba(184,120,32,.25);
+  box-shadow:     -4px 0 28px rgba(0,0,0,.55);
+  z-index:        50;
+  position:       relative;
+}
+
+/* ── INNER — full width, scrollable ── */
+.inner {
+  width:          264px;       /* Fixed content width — GSAP clips via parent overflow:hidden */
+  min-width:      264px;
+  display:        flex;
+  flex-direction: column;
+  height:         100%;
+  overflow-y:     auto;
+  overflow-x:     hidden;
+}
+
+/* ──────────────────────────────────────────────────────────
+   DOCK LABEL — top of dock
+   ────────────────────────────────────────────────────────── */
+
+.dockLabel {
+  display:        flex;
+  align-items:    center;
+  gap:            8px;
+  height:         28px;
+  padding:        0 12px;
+  flex-shrink:    0;
+  background:     rgba(10,16,26,.80);
+  border-bottom:  1px solid rgba(184,120,32,.15);
+}
+
+.dockLabelText {
+  font-family:    var(--font-condensed);
+  font-size:      9px;
+  font-weight:    700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color:          var(--text-tertiary);
+  flex:           1;
+}
+
+.dockCount {
+  display:         inline-flex;
+  align-items:     center;
+  justify-content: center;
+  width:           16px;
+  height:          16px;
+  border-radius:   2px;
+  background:      rgba(184,120,32,.15);
+  border:          1px solid rgba(184,120,32,.25);
+  font-family:     var(--font-condensed);
+  font-size:       9px;
+  font-weight:     700;
+  color:           var(--amber-bright);
+}
+
+/* ──────────────────────────────────────────────────────────
+   PANEL STACK
+   ────────────────────────────────────────────────────────── */
+
+.panelStack {
+  display:        flex;
+  flex-direction: column;
+  gap:            0;
+  flex:           1;
+  padding:        8px 0 12px;
+}
+
+/* Slot wrapper — adds horizontal padding and visual separation between panels */
+.panelSlot {
+  padding:       0 8px 6px;
+}
+.panelSlot:first-child {
+  padding-top: 2px;
+}
+
+/* ──────────────────────────────────────────────────────────
+   DOCK PANEL HEADER ACTIONS
+   Rendered via headerExtra in Panel.jsx.
+   Styled to match Panel's .actionBtn / .actions row.
+   ────────────────────────────────────────────────────────── */
+
+.dockActions {
+  display:     flex;
+  align-items: center;
+  gap:         2px;
+  margin-right: 2px;   /* Small gap before Panel's own action buttons */
+}
+
+.dockBtn {
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  width:           20px;
+  height:          20px;
+  background:      transparent;
+  border:          1px solid transparent;
+  border-radius:   2px;
+  color:           var(--text-tertiary);
+  cursor:          pointer;
+  padding:         0;
+  flex-shrink:     0;
+  transition:
+    background   100ms,
+    border-color 100ms,
+    color        100ms;
+}
+.dockBtn:hover {
+  background:   rgba(184,120,32,.12);
+  border-color: rgba(184,120,32,.35);
+  color:        var(--amber-bright);
+}
+.dockBtn:active {
+  background: rgba(184,120,32,.20);
+}
+
+/* ──────────────────────────────────────────────────────────
+   SCROLLBAR STYLING
+   ────────────────────────────────────────────────────────── */
+
+.inner::-webkit-scrollbar {
+  width: 4px;
+}
+.inner::-webkit-scrollbar-track {
+  background: transparent;
+}
+.inner::-webkit-scrollbar-thumb {
+  background:    rgba(184,120,32,.25);
+  border-radius: 2px;
+}
+.inner::-webkit-scrollbar-thumb:hover {
+  background: rgba(184,120,32,.45);
+}

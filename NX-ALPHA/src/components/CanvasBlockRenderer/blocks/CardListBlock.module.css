@@ -1,0 +1,105 @@
+/*
+ * CardListBlock — scoped styles
+ * Extends blocks.module.css tokens; does not override shared classes.
+ */
+
+.wrap {
+  display:        flex;
+  flex-direction: column;
+  height:         100%;
+  overflow:       hidden;
+  padding:        8px 10px;
+}
+
+.list {
+  list-style: none;
+  margin:     0;
+  padding:    0;
+  overflow-y: auto;
+  flex:       1;
+  display:    flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.card {
+  padding:       7px 8px;
+  border-bottom: 1px solid rgba(31, 45, 64, 0.55);
+  transition:    background 80ms ease;
+}
+
+.card:last-child {
+  border-bottom: none;
+}
+
+.card:hover {
+  background: var(--bg-interactive);
+  border-radius: 2px;
+}
+
+/* Title */
+.title {
+  font-family:  var(--font-ui);
+  font-size:    12px;
+  font-weight:  600;
+  color:        var(--text-primary);
+  line-height:  1.35;
+  margin-bottom: 3px;
+}
+
+.titleLink {
+  color:           var(--amber-bright);
+  text-decoration: none;
+}
+
+.titleLink:hover {
+  text-decoration: underline;
+  text-decoration-color: rgba(240, 168, 48, 0.5);
+}
+
+/* Meta row */
+.meta {
+  display:     flex;
+  align-items: center;
+  gap:         4px;
+  margin-bottom: 3px;
+}
+
+.source,
+.date {
+  font-family:  var(--font-condensed);
+  font-size:    9px;
+  font-weight:  600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color:        var(--text-tertiary);
+  white-space:  nowrap;
+}
+
+.metaSep {
+  color:     var(--text-tertiary);
+  font-size: 9px;
+  opacity:   0.5;
+}
+
+/* Summary */
+.summary {
+  font-family: var(--font-ui);
+  font-size:   11px;
+  color:       var(--text-secondary);
+  line-height: 1.45;
+}
+
+/* Footer caption */
+.caption {
+  flex-shrink:    0;
+  padding-top:    6px;
+  margin-top:     4px;
+  border-top:     1px solid var(--bg-rule);
+  font-family:    var(--font-condensed);
+  font-size:      9px;
+  font-weight:    600;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color:          var(--text-tertiary);
+}

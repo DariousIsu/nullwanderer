@@ -1,0 +1,163 @@
+/*
+ * AURA NX-Alpha — PopOutShell
+ * Full-window container for popped-out panels.
+ */
+
+.shell {
+  width:          100vw;
+  height:         100vh;
+  overflow:       hidden;
+  background:     var(--surface-base);
+  display:        flex;
+  flex-direction: column;
+}
+
+/* ── Draggable titlebar ── */
+.titlebar {
+  display:         flex;
+  align-items:     center;
+  justify-content: space-between;
+  height:          36px;
+  padding:         0 var(--space-2);
+  background:      var(--bg-void);
+  border-bottom:   1px solid rgba(31, 45, 64, 0.80);
+  flex-shrink:     0;
+  z-index:         100;
+  user-select:     none;
+}
+
+.dragRegion {
+  flex:             1;
+  font-family:      var(--font-condensed);
+  font-size:        12px;
+  font-weight:      600;
+  letter-spacing:   0.08em;
+  text-transform:   uppercase;
+  color:            var(--text-secondary);
+  -webkit-app-region: drag;
+}
+
+/* Icon buttons — pin + portrait toggle */
+.iconBtn {
+  display:          flex;
+  align-items:      center;
+  justify-content:  center;
+  width:            26px;
+  height:           26px;
+  background:       transparent;
+  border:           1px solid var(--bg-border);
+  color:            var(--text-tertiary);
+  font-size:        13px;
+  cursor:           pointer;
+  -webkit-app-region: no-drag;
+  transition:       border-color 150ms, color 150ms, background 150ms;
+  flex-shrink:      0;
+}
+
+.iconBtn:hover {
+  border-color: var(--amber-muted);
+  color:        var(--amber-base);
+}
+
+.iconBtnActive {
+  border-color: rgba(200, 146, 42, 0.55);
+  color:        var(--amber-base);
+  background:   rgba(200, 146, 42, 0.08);
+}
+
+.closeBtn {
+  display:          flex;
+  align-items:      center;
+  justify-content:  center;
+  width:            26px;
+  height:           26px;
+  background:       transparent;
+  border:           none;
+  color:            var(--text-secondary);
+  font-size:        16px;
+  cursor:           pointer;
+  -webkit-app-region: no-drag;
+  transition:       color 150ms;
+  flex-shrink:      0;
+}
+
+.closeBtn:hover {
+  color: var(--amber-base);
+}
+
+/* Panel content fills remaining space */
+.content {
+  flex:           1;
+  min-height:     0;
+  overflow:       hidden;
+  display:        flex;
+  flex-direction: column;
+}
+
+/* ── Portrait mode: chat shrinks to 75% of remaining space ── */
+.portraitContent {
+  flex: 3 !important;
+}
+
+/* Canvas takes 25% */
+.canvasSection {
+  flex:           1;
+  min-height:     0;
+  display:        flex;
+  flex-direction: column;
+  border-top:     1px solid var(--bg-rule);
+  overflow:       hidden;
+}
+
+.canvasHeader {
+  display:        flex;
+  align-items:    center;
+  gap:            var(--space-2);
+  padding:        4px 10px;
+  font-family:    var(--font-mono);
+  font-size:      8px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color:          var(--text-tertiary);
+  border-bottom:  1px solid var(--bg-rule);
+  flex-shrink:    0;
+  opacity:        0.6;
+}
+
+.canvasHeaderRule {
+  flex:       1;
+  height:     1px;
+  background: var(--bg-rule);
+  opacity:    0.5;
+}
+
+.canvasBody {
+  flex:       1;
+  min-height: 0;
+  overflow:   hidden;
+}
+
+/* ── Unknown panel fallback ── */
+.unknown {
+  display:         flex;
+  flex-direction:  column;
+  align-items:     center;
+  justify-content: center;
+  height:          100%;
+  gap:             var(--space-2);
+}
+
+.unknownCode {
+  font-family:    var(--font-mono);
+  font-size:      var(--text-sm);
+  color:          var(--text-secondary);
+  letter-spacing: 0.06em;
+}
+
+.unknownLabel {
+  font-family:    var(--font-condensed);
+  font-size:      var(--text-xs);
+  color:          var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-condensed);
+}

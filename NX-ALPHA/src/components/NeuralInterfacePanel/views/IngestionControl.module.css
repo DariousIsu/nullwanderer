@@ -1,0 +1,799 @@
+/*
+ * AURA NX-Alpha — IngestionControl
+ * Coverage map, mapper status, injection ports, ingestion mode.
+ */
+
+/* ─── OUTER WRAPPER ───────────────────────────────────────── */
+.wrapper {
+  display:        flex;
+  flex-direction: column;
+  height:         100%;
+  overflow-y:     auto;
+  padding:        20px 24px;
+  background:     #0d0d0d;
+  font-family:    var(--font-condensed, 'Rajdhani', monospace);
+  gap:            20px;
+}
+
+/* ─── SECTION ─────────────────────────────────────────────── */
+.section {
+  background:    #141414;
+  border:        1px solid #2a2a2a;
+  border-radius: 3px;
+  padding:       16px;
+}
+
+.sectionTitle {
+  font-size:      13px;
+  font-weight:    700;
+  letter-spacing: .10em;
+  text-transform: uppercase;
+  color:          #e6a817;
+  margin:         0 0 14px;
+  padding-bottom: 10px;
+  border-bottom:  1px solid #1e1e1e;
+  display:        flex;
+  align-items:    center;
+  gap:            8px;
+}
+
+.sectionTitleRight {
+  margin-left: auto;
+  font-size:   10px;
+  font-weight: 500;
+  color:       #444;
+  letter-spacing: .06em;
+}
+
+/* ─── COVERAGE MAP ────────────────────────────────────────── */
+.coverageRow {
+  display:       flex;
+  align-items:   center;
+  gap:           10px;
+  padding:       7px 0;
+  border-bottom: 1px solid #1a1a1a;
+}
+.coverageRow:last-child {
+  border-bottom: none;
+}
+
+.coverageSource {
+  width:          120px;
+  flex-shrink:    0;
+  font-size:      11px;
+  font-weight:    600;
+  color:          #aaa;
+  letter-spacing: .04em;
+  overflow:       hidden;
+  text-overflow:  ellipsis;
+  white-space:    nowrap;
+}
+
+.coverageBarWrap {
+  flex:         1;
+  height:       8px;
+  background:   #1a1a1a;
+  border-radius: 2px;
+  overflow:     hidden;
+  display:      flex;
+}
+
+.coverageSegmentIngested {
+  height: 100%;
+  background: #e6a817;
+  transition: width 300ms ease;
+}
+.coverageSegmentQueued {
+  height: 100%;
+  background: #5a4a20;
+  transition: width 300ms ease;
+}
+.coverageSegmentUnmapped {
+  height:  100%;
+  flex:    1;
+  background: #1a1a1a;
+}
+
+.coveragePct {
+  width:       36px;
+  text-align:  right;
+  font-size:   10px;
+  color:       #666;
+  font-family: var(--font-mono, monospace);
+  flex-shrink: 0;
+}
+
+.coverageCount {
+  width:       60px;
+  text-align:  right;
+  font-size:   9px;
+  color:       #444;
+  font-family: var(--font-mono, monospace);
+  flex-shrink: 0;
+}
+
+.coverageActions {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+  flex-shrink: 0;
+}
+
+/* ─── TOGGLE SWITCH ───────────────────────────────────────── */
+.toggle {
+  position:   relative;
+  width:      32px;
+  height:     16px;
+  flex-shrink: 0;
+}
+.toggle input {
+  opacity: 0;
+  width:   0;
+  height:  0;
+  position: absolute;
+}
+.toggleTrack {
+  position:      absolute;
+  inset:         0;
+  background:    #1e1e1e;
+  border:        1px solid #2a2a2a;
+  border-radius: 8px;
+  cursor:        pointer;
+  transition:    background 150ms, border-color 150ms;
+}
+.toggle input:checked + .toggleTrack {
+  background:   #3d3320;
+  border-color: #5a4a20;
+}
+.toggleThumb {
+  position:      absolute;
+  top:           2px;
+  left:          2px;
+  width:         10px;
+  height:        10px;
+  background:    #444;
+  border-radius: 50%;
+  transition:    left 150ms, background 150ms;
+  pointer-events: none;
+}
+.toggle input:checked ~ .toggleThumb {
+  left:       18px;
+  background: #e6a817;
+}
+
+/* Small action button */
+.btnSm {
+  padding:     3px 8px;
+  background:  transparent;
+  border:      1px solid #2a2a2a;
+  border-radius: 2px;
+  color:       #666;
+  font-family: inherit;
+  font-size:   10px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  cursor:      pointer;
+  transition:  background 80ms, color 80ms, border-color 80ms;
+}
+.btnSm:hover {
+  background:  rgba(230,168,23,.08);
+  border-color: #3d3320;
+  color:       #e6a817;
+}
+.btnSm:disabled {
+  opacity: .35;
+  cursor:  default;
+}
+
+/* ─── MAPPER STATUS ───────────────────────────────────────── */
+.mapperRow {
+  display:     flex;
+  align-items: center;
+  gap:         12px;
+  flex-wrap:   wrap;
+}
+
+.mapperStatus {
+  font-size:   11px;
+  color:       #888;
+  flex:        1;
+  font-family: var(--font-mono, monospace);
+}
+
+.mapperTimestamp {
+  font-size:  9px;
+  color:      #444;
+  font-family: var(--font-mono, monospace);
+}
+
+.mapperProgress {
+  width:     100%;
+  margin-top: 8px;
+  font-size:  10px;
+  color:      #e6a817;
+  font-family: var(--font-mono, monospace);
+  animation:  fadeIn .3s ease;
+}
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+
+/* ─── INJECTION PORT GRID ─────────────────────────────────── */
+.portGrid {
+  display:               grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap:                   10px;
+}
+
+@media (max-width: 900px) {
+  .portGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ─── PORT CARD ───────────────────────────────────────────── */
+.portCard {
+  background:    #0d0d0d;
+  border:        1px solid #2a2a2a;
+  border-radius: 3px;
+  padding:       12px;
+  display:       flex;
+  flex-direction: column;
+  gap:           8px;
+  transition:    border-color 120ms;
+}
+.portCard:hover {
+  border-color: #3d3320;
+}
+
+.portCardHeader {
+  display:       flex;
+  align-items:   center;
+  gap:           8px;
+  margin-bottom: 2px;
+}
+
+.portIcon {
+  font-size:  16px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.portTitle {
+  font-size:      12px;
+  font-weight:    700;
+  letter-spacing: .06em;
+  color:          #e0e0e0;
+  flex:           1;
+}
+
+.portStatus {
+  font-size:     9px;
+  font-weight:   600;
+  letter-spacing: .06em;
+  padding:       2px 6px;
+  border-radius: 2px;
+}
+.portStatusConnected {
+  background: rgba(34, 197, 94, 0.12);
+  color:      #22c55e;
+  border:     1px solid rgba(34, 197, 94, 0.25);
+}
+.portStatusDisconnected {
+  background: rgba(100, 100, 100, 0.10);
+  color:      #555;
+  border:     1px solid #2a2a2a;
+}
+.portStatusComingSoon {
+  background: rgba(230, 168, 23, 0.08);
+  color:      #5a4a20;
+  border:     1px solid #3d3320;
+}
+
+.portBody {
+  font-size:   10px;
+  color:       #666;
+  line-height: 1.4;
+  flex:        1;
+}
+
+.portActions {
+  display:   flex;
+  flex-wrap: wrap;
+  gap:       6px;
+  align-items: center;
+}
+
+/* Auto-ingest toggle row */
+.autoToggleRow {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+  font-size:   9px;
+  color:       #444;
+  margin-top:  2px;
+}
+
+/* Path chips */
+.pathChips {
+  display:   flex;
+  flex-wrap: wrap;
+  gap:       4px;
+  margin-top: 2px;
+}
+
+.pathChip {
+  padding:     2px 7px;
+  background:  #1e1e1e;
+  border:      1px solid #2a2a2a;
+  border-radius: 2px;
+  font-size:   9px;
+  color:       #888;
+  font-family: var(--font-mono, monospace);
+  max-width:   180px;
+  overflow:    hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Drop zone */
+.dropZone {
+  border:        2px dashed #2a2a2a;
+  border-radius: 3px;
+  padding:       16px 8px;
+  text-align:    center;
+  font-size:     10px;
+  color:         #444;
+  cursor:        pointer;
+  transition:    border-color 120ms, background 120ms;
+}
+.dropZone:hover,
+.dropZoneActive {
+  border-color: #5a4a20;
+  background:   rgba(61, 51, 32, 0.15);
+  color:        #888;
+}
+
+.dropZoneIcon {
+  font-size:    20px;
+  opacity:      .25;
+  margin-bottom: 6px;
+}
+
+/* URL input */
+.urlInput {
+  width:         100%;
+  padding:       5px 8px;
+  background:    #141414;
+  border:        1px solid #2a2a2a;
+  border-radius: 2px;
+  color:         #e0e0e0;
+  font-size:     11px;
+  font-family:   var(--font-mono, monospace);
+  outline:       none;
+  box-sizing:    border-box;
+  transition:    border-color 120ms;
+}
+.urlInput::placeholder { color: #333; }
+.urlInput:focus         { border-color: #3d3320; }
+
+/* Knowledge pills grid */
+.knowledgePills {
+  display:   flex;
+  flex-wrap: wrap;
+  gap:       6px;
+}
+
+.knowledgePill {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+  padding:     5px 8px;
+  background:  #1a1a1a;
+  border:      1px solid #2a2a2a;
+  border-radius: 2px;
+}
+
+.pillName {
+  font-size:   10px;
+  font-weight: 600;
+  color:       #aaa;
+}
+
+.pillBadge {
+  font-size:     8px;
+  font-weight:   700;
+  letter-spacing: .05em;
+  padding:       1px 5px;
+  border-radius: 2px;
+}
+.pillBadgeActive {
+  background: rgba(34, 197, 94, 0.12);
+  color:      #22c55e;
+  border:     1px solid rgba(34, 197, 94, 0.20);
+}
+.pillBadgeInactive {
+  background: rgba(100, 100, 100, 0.08);
+  color:      #444;
+  border:     1px solid #222;
+}
+
+/* Progress bar */
+.progressBar {
+  height:        4px;
+  background:    #1a1a1a;
+  border-radius: 2px;
+  overflow:      hidden;
+  width:         100%;
+}
+.progressFill {
+  height:        100%;
+  background:    #e6a817;
+  border-radius: 2px;
+  transition:    width 300ms ease;
+}
+
+/* Text result box */
+.resultBox {
+  padding:       8px;
+  background:    #0a0a0a;
+  border:        1px solid #1e1e1e;
+  border-radius: 2px;
+  font-size:     10px;
+  font-family:   var(--font-mono, monospace);
+  color:         #888;
+  line-height:   1.5;
+  max-height:    80px;
+  overflow-y:    auto;
+}
+
+/* ─── JOBS TABLE ──────────────────────────────────────────── */
+.jobsTable {
+  width:          100%;
+  border-collapse: collapse;
+  font-size:      11px;
+  font-family:    var(--font-mono, 'JetBrains Mono', monospace);
+}
+.jobsTable th {
+  text-align:     left;
+  padding:        5px 8px;
+  font-size:      9px;
+  font-weight:    700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color:          #444;
+  border-bottom:  1px solid #1e1e1e;
+}
+.jobsTable td {
+  padding:        6px 8px;
+  color:          #888;
+  border-bottom:  1px solid #141414;
+  vertical-align: middle;
+}
+.jobsTable tr:last-child td {
+  border-bottom: none;
+}
+
+.statusBadge {
+  display:        inline-flex;
+  align-items:    center;
+  gap:            4px;
+  padding:        2px 6px;
+  border-radius:  2px;
+  font-size:      9px;
+  font-weight:    700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.statusBadgeRunning {
+  background: rgba(230, 168, 23, 0.12);
+  color:      #e6a817;
+  border:     1px solid rgba(230, 168, 23, 0.25);
+}
+.statusBadgeQueued {
+  background: rgba(100, 100, 100, 0.08);
+  color:      #555;
+  border:     1px solid #2a2a2a;
+}
+.statusBadgeDone {
+  background: rgba(34, 197, 94, 0.10);
+  color:      #22c55e;
+  border:     1px solid rgba(34, 197, 94, 0.20);
+}
+.statusBadgeFailed {
+  background: rgba(239, 68, 68, 0.10);
+  color:      #ef4444;
+  border:     1px solid rgba(239, 68, 68, 0.20);
+}
+
+/* ─── INGESTION MODE LAUNCHER ─────────────────────────────── */
+.launchSection {
+  display:        flex;
+  flex-direction: column;
+  gap:            12px;
+}
+
+.launchBtn {
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  gap:             8px;
+  padding:         12px 24px;
+  background:      rgba(61, 51, 32, 0.50);
+  border:          1px solid #5a4a20;
+  border-radius:   3px;
+  color:           #e6a817;
+  font-family:     var(--font-condensed, monospace);
+  font-size:       14px;
+  font-weight:     700;
+  letter-spacing:  .08em;
+  text-transform:  uppercase;
+  cursor:          pointer;
+  transition:      background 120ms, border-color 120ms, box-shadow 120ms;
+  width:           100%;
+}
+.launchBtn:hover:not(:disabled) {
+  background:  rgba(61, 51, 32, 0.80);
+  border-color: #e6a817;
+  box-shadow:  0 0 20px rgba(230, 168, 23, 0.15);
+}
+.launchBtn:disabled {
+  opacity: .40;
+  cursor:  default;
+}
+
+/* ─── INGESTION MODE MODAL ────────────────────────────────── */
+.modalOverlay {
+  position:         fixed;
+  inset:            0;
+  background:       rgba(0, 0, 0, 0.75);
+  z-index:          200;
+  display:          flex;
+  align-items:      center;
+  justify-content:  center;
+  backdrop-filter:  blur(3px);
+}
+
+.modal {
+  background:    #141414;
+  border:        1px solid #3d3320;
+  border-radius: 4px;
+  padding:       24px;
+  width:         420px;
+  max-width:     calc(100vw - 40px);
+  box-shadow:    0 0 40px rgba(0, 0, 0, 0.6);
+}
+
+.modalTitle {
+  font-size:      15px;
+  font-weight:    700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color:          #e6a817;
+  margin:         0 0 20px;
+}
+
+.modalField {
+  margin-bottom:  16px;
+}
+
+.modalLabel {
+  display:       block;
+  font-size:     10px;
+  font-weight:   700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color:         #555;
+  margin-bottom: 6px;
+}
+
+.modalSelect {
+  width:         100%;
+  padding:       7px 10px;
+  background:    #0d0d0d;
+  border:        1px solid #2a2a2a;
+  border-radius: 2px;
+  color:         #e0e0e0;
+  font-family:   var(--font-condensed, monospace);
+  font-size:     12px;
+  outline:       none;
+  cursor:        pointer;
+}
+
+.sliderRow {
+  display:     flex;
+  align-items: center;
+  gap:         10px;
+}
+
+.modalSlider {
+  flex:    1;
+  accent-color: #e6a817;
+  cursor:  pointer;
+}
+
+.sliderValue {
+  font-family: var(--font-mono, monospace);
+  font-size:   12px;
+  color:       #e6a817;
+  width:       28px;
+  text-align:  right;
+}
+
+.modalActions {
+  display:     flex;
+  gap:         8px;
+  justify-content: flex-end;
+  margin-top:  20px;
+}
+
+.btnCancel {
+  padding:     7px 16px;
+  background:  transparent;
+  border:      1px solid #2a2a2a;
+  border-radius: 2px;
+  color:       #666;
+  font-family: inherit;
+  font-size:   11px;
+  font-weight: 600;
+  cursor:      pointer;
+  transition:  background 80ms, color 80ms;
+}
+.btnCancel:hover {
+  background: rgba(100,100,100,.08);
+  color:      #aaa;
+}
+
+.btnConfirm {
+  padding:     7px 16px;
+  background:  rgba(61, 51, 32, 0.60);
+  border:      1px solid #5a4a20;
+  border-radius: 2px;
+  color:       #e6a817;
+  font-family: inherit;
+  font-size:   11px;
+  font-weight: 700;
+  cursor:      pointer;
+  letter-spacing: .05em;
+  transition:  background 80ms, border-color 80ms;
+}
+.btnConfirm:hover {
+  background:  rgba(61, 51, 32, 0.90);
+  border-color: #e6a817;
+}
+
+/* ─── LOCK SCREEN (ingestion mode active) ─────────────────── */
+.lockScreen {
+  position:        absolute;
+  inset:           0;
+  background:      rgba(9, 9, 9, 0.97);
+  z-index:         50;
+  display:         flex;
+  flex-direction:  column;
+  padding:         24px;
+  gap:             16px;
+  font-family:     var(--font-mono, 'JetBrains Mono', monospace);
+  overflow-y:      auto;
+}
+
+.lockHeader {
+  display:     flex;
+  align-items: center;
+  gap:         12px;
+}
+
+.lockTitle {
+  font-family:    var(--font-condensed, monospace);
+  font-size:      18px;
+  font-weight:    700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color:          #e6a817;
+  flex:           1;
+}
+
+.lockStopBtn {
+  padding:     8px 18px;
+  background:  rgba(239, 68, 68, 0.15);
+  border:      1px solid rgba(239, 68, 68, 0.40);
+  border-radius: 2px;
+  color:       #ef4444;
+  font-family: inherit;
+  font-size:   12px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  cursor:      pointer;
+  transition:  background 80ms, border-color 80ms;
+}
+.lockStopBtn:hover {
+  background:  rgba(239, 68, 68, 0.25);
+  border-color: #ef4444;
+}
+
+.lockJobRow {
+  display:        flex;
+  flex-direction: column;
+  gap:            5px;
+}
+
+.lockJobLabel {
+  font-size:   11px;
+  color:       #888;
+  margin-bottom: 3px;
+}
+
+.lockStats {
+  display:   flex;
+  flex-wrap: wrap;
+  gap:       16px;
+  font-size: 11px;
+  color:     #666;
+}
+
+.lockStat {
+  display:     flex;
+  align-items: center;
+  gap:         5px;
+}
+.lockStatLabel { color: #444; }
+.lockStatValue { color: #e6a817; font-weight: 600; }
+
+.workerDots {
+  display:     flex;
+  align-items: center;
+  gap:         3px;
+}
+.workerDot {
+  width:        8px;
+  height:       8px;
+  border-radius: 50%;
+}
+.workerDotActive   { background: #e6a817; box-shadow: 0 0 4px #e6a81766; }
+.workerDotInactive { background: #2a2a2a; }
+
+.lockEventLog {
+  flex:         1;
+  background:   #080808;
+  border:       1px solid #1e1e1e;
+  border-radius: 2px;
+  padding:      8px;
+  overflow-y:   auto;
+  max-height:   160px;
+  font-size:    10px;
+  color:        #555;
+  line-height:  1.6;
+}
+
+.lockEventLine {
+  color: #e6a817;
+}
+
+.lockNote {
+  font-size:  9px;
+  color:      #333;
+  line-height: 1.5;
+  font-style: italic;
+}
+
+/* ─── ACTIVITY FEED ───────────────────────────────────────── */
+.eventLog {
+  height:         160px;
+  overflow-y:     auto;
+  background:     #080808;
+  border:         1px solid #1a1a1a;
+  border-radius:  2px;
+  padding:        6px;
+  font-family:    var(--font-mono, 'JetBrains Mono', monospace);
+  font-size:      10px;
+  color:          #555;
+  line-height:    1.6;
+}
+
+.eventLine {
+  padding: 1px 0;
+}
+.eventLineAmber { color: #e6a817; }
+.eventLineBlue  { color: #3b82f6; }
+.eventTs {
+  color:       #333;
+  margin-right: 6px;
+  font-size:   9px;
+}

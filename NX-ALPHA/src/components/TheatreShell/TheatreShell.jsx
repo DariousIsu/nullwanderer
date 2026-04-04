@@ -1,69 +1,69 @@
 /**
  * AURA NX-Alpha — TheatreShell
  *
- * Streaming theatre window. Opens as a separate Electron BrowserWindow
- * via ?mode=theatre URL param. Uses <webview> with persist:theatre session
- * so all service logins survive across app restarts.
+ * Dedicated YouTube video viewer. Opens as a separate Electron BrowserWindow
+ * via ?mode=theatre URL param.
  *
- * LAYOUT (selector open):
- *   [ webview 75% ][ channel selector 25% ]
- *
- * LAYOUT (service selected / selector closed):
- *   [ webview 100% ]  ← slim reopen tab on right edge
- *
- * Non-maximized: AURA style guide (dark glass, amber corners, titlebar).
- * Maximized: immersive — titlebar collapses on idle, controls auto-hide.
- *
- * Bottom drawer: headless transcription sessions via /watch endpoints.
+ * - Paste any YouTube URL (watch, youtu.be, shorts) to load
+ * - Uses YouTube embed iframe with IFrame Player API for custom controls
+ * - No full YouTube page, no streaming service list
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import styles from './TheatreShell.module.css';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SERVICE REGISTRY
+// HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SERVICES = [
-  { id: 'youtube',   label: 'YouTube',    url: 'https://www.youtube.com',       accent: '#c4302b' },
-  { id: 'netflix',   label: 'Netflix',    url: 'https://www.netflix.com',       accent: '#E50914' },
-  { id: 'hulu',      label: 'Hulu',       url: 'https://www.hulu.com',          accent: '#1CE783' },
-  { id: 'disney',    label: 'Disney+',    url: 'https://www.disneyplus.com',    accent: '#113CCF' },
-  { id: 'prime',     label: 'Prime',      url: 'https://www.primevideo.com',    accent: '#00A8E1' },
-  { id: 'twitch',    label: 'Twitch',     url: 'https://www.twitch.tv',         accent: '#9146FF' },
-  { id: 'max',       label: 'Max',        url: 'https://www.max.com',           accent: '#4B5EFA' },
-  { id: 'peacock',   label: 'Peacock',    url: 'https://www.peacocktv.com',     accent: '#F6C800' },
-  { id: 'paramount', label: 'Paramount+', url: 'https://www.paramountplus.com', accent: '#0064FF' },
-  { id: 'appletv',   label: 'Apple TV+',  url: 'https://tv.apple.com',          accent: '#999999' },
-];
+function extractVideoId(url) {
+  const str = (url || '').trim();
+  const patterns = [
+    /youtu\.be\/([A-Za-z0-9_-]{11})/,
+    /youtube\.com\/watch\?(?:.*&)?v=([A-Za-z0-9_-]{11})/,
+    /youtube\.com\/embed\/([A-Za-z0-9_-]{11})/,
+    /youtube\.com\/shorts\/([A-Za-z0-9_-]{11})/,
+    /youtube\.com\/v\/([A-Za-z0-9_-]{11})/,
+  ];
+  for (const p of patterns) {
+    const m = str.match(p);
+    if (m) return m[1];
+  }
+  // bare 11-char ID
+  if (/^[A-Za-z0-9_-]{11}$/.test(str)) return str;
+  return null;
+}
 
-const API = 'http://127.0.0.1:8000';
+function ytCommand(iframe, func, args = '') {
+  if (!iframe) return;
+  iframe.contentWindow?.postMessage(
+    JSON.stringify({ event: 'command', func, args }),
+    'https://www.youtube.com'
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function TheatreShell() {
-  const [activeService,   setActiveService]   = useState(null);   // currently loaded service
-  const [selectorOpen,    setSelectorOpen]    = useState(true);   // channel guide visible
-  const [isMaximized,     setIsMaximized]     = useState(false);
-  const [titlebarVisible, setTitlebarVisible] = useState(true);   // auto-hide when maximized
-  const [drawerOpen,      setDrawerOpen]      = useState(false);
-  const [sessions,        setSessions]        = useState([]);
-  const [watchUrl,        setWatchUrl]        = useState('');
-  const [watchLabel,      setWatchLabel]      = useState('');
-  const [watchLoading,    setWatchLoading]    = useState(false);
+  const [videoId,       setVideoId]       = useState(null);
+  const [urlInput,      setUrlInput]      = useState('');
+  const [urlError,      setUrlError]      = useState(false);
+  const [isPlaying,     setIsPlaying]     = useState(false);
+  const [isMuted,       setIsMuted]       = useState(false);
+  const [isMaximized,   setIsMaximized]   = useState(false);
+  const [titlebarVisible, setTitlebarVisible] = useState(true);
+  const [playerReady,   setPlayerReady]   = useState(false);
 
-  const hideTimerRef    = useRef(null);
-  const pollRef         = useRef(null);
+  const iframeRef      = useRef(null);
+  const hideTimerRef   = useRef(null);
 
   // ── Window state sync ──────────────────────────────────────────────────────
   useEffect(() => {
     const api = window.electronAPI;
     if (!api) return;
-
     api.windowIsMaximized().then(setIsMaximized).catch(() => {});
-
     const onMax   = () => setIsMaximized(true);
     const onUnmax = () => { setIsMaximized(false); setTitlebarVisible(true); };
     api.onWindowMaximize(onMax);
@@ -83,73 +83,73 @@ export default function TheatreShell() {
   }, [isMaximized]);
 
   useEffect(() => {
-    if (!isMaximized) {
-      clearTimeout(hideTimerRef.current);
-      setTitlebarVisible(true);
-    }
+    if (!isMaximized) { clearTimeout(hideTimerRef.current); setTitlebarVisible(true); }
     return () => clearTimeout(hideTimerRef.current);
   }, [isMaximized]);
 
-  // ── Session poll (when drawer open) ────────────────────────────────────────
+  // ── YT IFrame Player API state messages ────────────────────────────────────
   useEffect(() => {
-    if (!drawerOpen) {
-      clearInterval(pollRef.current);
+    const handleMessage = (e) => {
+      if (e.origin !== 'https://www.youtube.com') return;
+      try {
+        const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+        if (data.event === 'onReady') {
+          setPlayerReady(true);
+        }
+        if (data.event === 'onStateChange') {
+          // YT states: -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering, 5 cued
+          setIsPlaying(data.info === 1 || data.info === 3);
+        }
+      } catch {}
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
+  // ── Load video ─────────────────────────────────────────────────────────────
+  const loadVideo = useCallback(() => {
+    const id = extractVideoId(urlInput);
+    if (!id) {
+      setUrlError(true);
+      setTimeout(() => setUrlError(false), 1800);
       return;
     }
-    const fetchSessions = () => {
-      fetch(`${API}/watch/sessions`)
-        .then(r => r.json())
-        .then(d => setSessions(d.sessions || []))
-        .catch(() => {});
-    };
-    fetchSessions();
-    pollRef.current = setInterval(fetchSessions, 4000);
-    return () => clearInterval(pollRef.current);
-  }, [drawerOpen]);
+    setUrlError(false);
+    setVideoId(id);
+    setPlayerReady(false);
+    setIsPlaying(false);
+    setUrlInput('');
+  }, [urlInput]);
 
-  // ── Service selection — opens in Chrome app-mode (no browser UI, full DRM) ──
-  const selectService = useCallback((svc) => {
-    setActiveService(svc);
-    window.electronAPI?.openServiceApp(svc.url);
-  }, []);
+  const handleUrlKeyDown = (e) => {
+    if (e.key === 'Enter') loadVideo();
+  };
 
-  // ── Headless watch ─────────────────────────────────────────────────────────
-  const startWatch = useCallback(async () => {
-    if (!watchUrl.trim()) return;
-    setWatchLoading(true);
-    try {
-      const r = await fetch(`${API}/watch/start`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ url: watchUrl.trim(), label: watchLabel.trim() }),
-      });
-      const d = await r.json();
-      if (!d.error) {
-        setWatchUrl('');
-        setWatchLabel('');
-        setSessions(prev => [...prev, d]);
-      }
-    } catch {}
-    setWatchLoading(false);
-  }, [watchUrl, watchLabel]);
+  // ── Controls ────────────────────────────────────────────────────────────────
+  const togglePlayPause = () => {
+    ytCommand(iframeRef.current, isPlaying ? 'pauseVideo' : 'playVideo');
+  };
 
-  const stopWatch = useCallback(async (stream_id) => {
-    try {
-      await fetch(`${API}/watch/stop`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ stream_id }),
-      });
-      setSessions(prev => prev.filter(s => s.stream_id !== stream_id));
-    } catch {}
-  }, []);
+  const toggleMute = () => {
+    ytCommand(iframeRef.current, isMuted ? 'unMute' : 'mute');
+    setIsMuted(m => !m);
+  };
 
-  // ── Window controls ────────────────────────────────────────────────────────
-  const minimize  = () => window.electronAPI?.windowMinimize();
-  const maxToggle = () => window.electronAPI?.windowMaximizeRestore();
-  const close     = () => window.electronAPI?.windowClose();
+  const handleFullscreen = () => {
+    iframeRef.current?.requestFullscreen?.();
+  };
 
-  const activeCount = sessions.filter(s => s.status === 'watching').length;
+  const skipBack = () => ytCommand(iframeRef.current, 'seekTo', [-10, true]);
+  const skipFwd  = () => ytCommand(iframeRef.current, 'seekTo', [10, true]);
+
+  // ── Window controls ─────────────────────────────────────────────────────────
+  const minimize  = () => window.electronAPI?.theatreMinimize();
+  const maxToggle = () => window.electronAPI?.theatreMaximizeRestore();
+  const close     = () => window.electronAPI?.theatreClose();
+
+  const embedSrc = videoId
+    ? `https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&controls=1&rel=0&modestbranding=1&fs=1&iv_load_policy=3`
+    : null;
 
   // ─────────────────────────────────────────────────────────────────────────
   // RENDER
@@ -160,7 +160,7 @@ export default function TheatreShell() {
       className={`${styles.shell} ${isMaximized ? styles.shellMaximized : ''}`}
       onMouseMove={resetHideTimer}
     >
-      {/* ── Corner plates (non-maximized only) ── */}
+      {/* Corner plates (non-maximized) */}
       {!isMaximized && (
         <>
           <div className={`${styles.corner} ${styles.cornerTL}`} />
@@ -170,28 +170,18 @@ export default function TheatreShell() {
         </>
       )}
 
-      {/* ── Titlebar ── */}
+      {/* Titlebar */}
       <div className={`${styles.titlebar} ${!titlebarVisible ? styles.titlebarHidden : ''}`}>
         <div className={styles.dragRegion}>
-          {/* LED */}
           <div className={styles.led} />
-          {/* Brand */}
           <span className={styles.brand}>Theatre</span>
-          {activeService && (
+          {videoId && (
             <>
               <span className={styles.titleSep}>·</span>
-              <span
-                className={styles.serviceName}
-                style={{ color: activeService.accent }}
-              >
-                {activeService.label}
-              </span>
+              <span className={styles.serviceName} style={{ color: '#c4302b' }}>YouTube</span>
             </>
           )}
         </div>
-
-
-        {/* Window controls */}
         <div className={styles.winControls}>
           <button className={styles.winBtn} onClick={minimize} title="Minimize">─</button>
           <button className={styles.winBtn} onClick={maxToggle} title={isMaximized ? 'Restore' : 'Maximize'}>
@@ -201,138 +191,98 @@ export default function TheatreShell() {
         </div>
       </div>
 
-      {/* ── Main body ── */}
+      {/* Main body */}
       <div className={styles.body}>
 
-        {/* ── Now playing display ── */}
-        <div className={styles.webviewArea}>
-          <div className={styles.placeholder}>
-            <div className={styles.placeholderInner}>
-              <div
-                className={styles.placeholderLed}
-                style={activeService ? { background: activeService.accent, boxShadow: `0 0 10px ${activeService.accent}` } : {}}
-              />
-              {activeService ? (
-                <>
-                  <div className={styles.placeholderTitle} style={{ color: activeService.accent }}>
-                    {activeService.label}
-                  </div>
-                  <button
-                    className={styles.relaunchBtn}
-                    style={{ borderColor: activeService.accent, color: activeService.accent }}
-                    onClick={() => window.electronAPI?.openServiceApp(activeService.url)}
-                  >
-                    ▶ Relaunch
-                  </button>
-                </>
-              ) : (
-                <>
-                  <div className={styles.placeholderTitle}>AURA THEATRE</div>
-                  <div className={styles.placeholderSub}>Select a channel</div>
-                </>
-              )}
+        {/* URL input bar */}
+        <div className={styles.urlBar}>
+          <span className={styles.urlBarLabel}>YT</span>
+          <input
+            className={`${styles.urlInput} ${urlError ? styles.urlInputError : ''}`}
+            placeholder="Paste YouTube URL or video ID…"
+            value={urlInput}
+            onChange={e => setUrlInput(e.target.value)}
+            onKeyDown={handleUrlKeyDown}
+            spellCheck={false}
+          />
+          <button
+            className={styles.urlLoadBtn}
+            onClick={loadVideo}
+            disabled={!urlInput.trim()}
+          >
+            LOAD
+          </button>
+        </div>
+
+        {/* Player area */}
+        <div className={styles.playerWrap}>
+          {embedSrc ? (
+            <iframe
+              ref={iframeRef}
+              key={videoId}
+              className={styles.playerFrame}
+              src={embedSrc}
+              title="YouTube player"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+              allowFullScreen
+              frameBorder="0"
+            />
+          ) : (
+            <div className={styles.placeholder}>
+              <div className={styles.placeholderInner}>
+                <div className={styles.placeholderLed} />
+                <div className={styles.placeholderTitle}>AURA THEATRE</div>
+                <div className={styles.placeholderSub}>Paste a YouTube URL above to begin</div>
+              </div>
             </div>
-          </div>
-        </div>
-
-        {/* ── Channel selector panel ── */}
-        <div className={`${styles.selectorPanel} ${!selectorOpen ? styles.selectorPanelClosed : ''}`}>
-          <div className={styles.selectorHeader}>
-            <span className={styles.selectorTitle}>Channels</span>
-          </div>
-          <div className={styles.serviceList}>
-            {SERVICES.map(svc => (
-              <button
-                key={svc.id}
-                className={`${styles.serviceItem} ${activeService?.id === svc.id ? styles.serviceItemActive : ''}`}
-                style={activeService?.id === svc.id ? { '--accent': svc.accent } : {}}
-                onClick={() => selectService(svc)}
-                onMouseEnter={e => e.currentTarget.style.setProperty('--accent', svc.accent)}
-                onMouseLeave={e => activeService?.id !== svc.id && e.currentTarget.style.removeProperty('--accent')}
-              >
-                <span
-                  className={styles.serviceAccent}
-                  style={{ background: svc.accent }}
-                />
-                <span className={styles.serviceLabel}>{svc.label}</span>
-                {activeService?.id === svc.id && (
-                  <span className={styles.serviceActiveDot} style={{ color: svc.accent }}>◉</span>
-                )}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* ── Transcription drawer ── */}
-      <div className={styles.drawerWrap}>
-        {/* Drawer tab — always visible */}
-        <button
-          className={styles.drawerTab}
-          onClick={() => setDrawerOpen(o => !o)}
-        >
-          <span className={styles.drawerTabIcon}>{drawerOpen ? '▾' : '▴'}</span>
-          <span className={styles.drawerTabLabel}>STREAMS</span>
-          {activeCount > 0 && (
-            <span className={styles.drawerBadge}>{activeCount}</span>
           )}
-        </button>
+        </div>
 
-        {/* Drawer body */}
-        <div className={`${styles.drawer} ${drawerOpen ? styles.drawerOpen : ''}`}>
-          {/* Input row */}
-          <div className={styles.drawerInputRow}>
-            <input
-              className={styles.drawerInput}
-              placeholder="Stream or video URL…"
-              value={watchUrl}
-              onChange={e => setWatchUrl(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && startWatch()}
-            />
-            <input
-              className={`${styles.drawerInput} ${styles.drawerInputLabel}`}
-              placeholder="Label (optional)"
-              value={watchLabel}
-              onChange={e => setWatchLabel(e.target.value)}
-            />
+        {/* Custom control bar */}
+        {videoId && (
+          <div className={styles.controlBar}>
             <button
-              className={styles.drawerWatchBtn}
-              onClick={startWatch}
-              disabled={!watchUrl.trim() || watchLoading}
+              className={styles.ctrlBtn}
+              onClick={skipBack}
+              title="Back 10s"
+              disabled={!playerReady}
             >
-              {watchLoading ? '…' : 'WATCH'}
+              ⏮ 10
+            </button>
+            <button
+              className={`${styles.ctrlBtn} ${styles.ctrlBtnPlay}`}
+              onClick={togglePlayPause}
+              title={isPlaying ? 'Pause' : 'Play'}
+              disabled={!playerReady}
+            >
+              {isPlaying ? '⏸' : '▶'}
+            </button>
+            <button
+              className={styles.ctrlBtn}
+              onClick={skipFwd}
+              title="Forward 10s"
+              disabled={!playerReady}
+            >
+              10 ⏭
+            </button>
+            <button
+              className={`${styles.ctrlBtn} ${isMuted ? styles.ctrlBtnMuted : ''}`}
+              onClick={toggleMute}
+              title={isMuted ? 'Unmute' : 'Mute'}
+              disabled={!playerReady}
+            >
+              {isMuted ? '🔇' : '🔊'}
+            </button>
+            <div className={styles.ctrlSpacer} />
+            <button
+              className={styles.ctrlBtn}
+              onClick={handleFullscreen}
+              title="Fullscreen"
+            >
+              ⛶
             </button>
           </div>
-
-          {/* Session list */}
-          <div className={styles.drawerSessions}>
-            {sessions.length === 0 ? (
-              <div className={styles.drawerEmpty}>No active transcription sessions</div>
-            ) : (
-              sessions.map(s => (
-                <div key={s.stream_id} className={styles.sessionRow}>
-                  <div
-                    className={styles.sessionDot}
-                    style={{ background: s.status === 'watching' ? '#2ecc71' : '#888' }}
-                  />
-                  <div className={styles.sessionInfo}>
-                    <div className={styles.sessionLabel}>{s.label || s.stream_id}</div>
-                    <div className={styles.sessionMeta}>
-                      {s.segment_count} segments · {Math.floor((s.duration_s || 0) / 60)}m {(s.duration_s || 0) % 60}s
-                    </div>
-                  </div>
-                  <button
-                    className={styles.sessionStopBtn}
-                    onClick={() => stopWatch(s.stream_id)}
-                    title="Stop"
-                  >
-                    ◼
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );
