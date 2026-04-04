@@ -28,6 +28,7 @@ Each SSE event has:
 import asyncio
 import json
 import logging
+import time
 import uuid
 from pathlib import Path
 from typing import AsyncGenerator, Optional
@@ -169,6 +170,109 @@ async def _emit(event_type: str, data: dict) -> None:
         _canvas_replay.clear()           # pipeline complete — new response will start fresh
     for q in list(_stream_clients):
         await q.put(payload)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PROACTIVE DELIVERY (Idle Processing)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_proactive_queue: list[dict] = []
+
+# Minimum operating mode required for immediate delivery (ordered least → most restrictive)
+_MODE_RANK = {"proactive": 0, "ambient": 1, "quiet": 2, "study": 3, "dev": 4}
+
+# Delivery rules: event_type → min mode for immediate emit
+_PROACTIVE_DELIVERY_RULES: dict[str, str] = {
+    "news_break_breaking":  "ambient",     # breaking news → emit in proactive + ambient
+    "news_break_urgent":    "proactive",   # urgent news → emit only in proactive
+    "idle_insight":         "proactive",   # insights → emit only in proactive
+    "morning_briefing":     "ambient",     # briefings → emit in proactive + ambient
+    "daily_recap":          "ambient",     # recaps → emit in proactive + ambient
+}
+
+
+async def deliver_proactive(event_type: str, data: dict, significance: str = "") -> None:
+    """
+    Deliver a proactive notification, respecting operating mode.
+
+    If the current mode allows immediate delivery, emits via SSE.
+    Otherwise queues for "while you were away" flush on user return.
+    """
+    current_mode = _runtime_state.get("operating_mode", "proactive")
+    current_rank = _MODE_RANK.get(current_mode, 0)
+
+    # Build lookup key (e.g. "news_break_breaking" or just "idle_insight")
+    lookup = f"{event_type}_{significance}" if significance else event_type
+    min_mode = _PROACTIVE_DELIVERY_RULES.get(lookup, _PROACTIVE_DELIVERY_RULES.get(event_type, "proactive"))
+    min_rank = _MODE_RANK.get(min_mode, 0)
+
+    if current_rank <= min_rank:
+        # Deliver immediately
+        await _emit(event_type, data)
+        logger.info("[proactive] Delivered %s immediately (mode=%s)", lookup, current_mode)
+    elif current_mode == "study" and event_type == "idle_insight":
+        # Suppress entirely in study mode
+        logger.debug("[proactive] Suppressed %s in study mode", lookup)
+    else:
+        # Queue for later
+        _proactive_queue.append({
+            "event_type": event_type,
+            "data": data,
+            "significance": significance,
+            "queued_at": time.time(),
+        })
+        logger.debug("[proactive] Queued %s (mode=%s, queue_size=%d)", lookup, current_mode, len(_proactive_queue))
+
+
+async def flush_proactive_queue() -> None:
+    """
+    Flush queued proactive notifications on user return.
+    If 4+ items, synthesize into a single summary via Interface Engine.
+    """
+    if not _proactive_queue:
+        return
+
+    items = list(_proactive_queue)
+    _proactive_queue.clear()
+
+    if len(items) <= 3:
+        # Deliver individually
+        for item in items:
+            await _emit(item["event_type"], item["data"])
+        logger.info("[proactive] Flushed %d queued items individually", len(items))
+    else:
+        # Synthesize summary via Interface Engine
+        try:
+            from app.service.interface_engine import get_engine
+            engine = get_engine()
+            if engine:
+                summaries = []
+                for item in items:
+                    summary = item["data"].get("summary", item["data"].get("content", str(item["data"])))
+                    summaries.append(f"- [{item['event_type']}] {summary}")
+                prompt_text = (
+                    f"While the user was away, {len(items)} events occurred:\n"
+                    + "\n".join(summaries[:10])
+                    + "\n\nWrite a concise 2-3 sentence summary of what happened."
+                )
+                result = await engine.generate(
+                    [{"role": "user", "content": prompt_text}],
+                    max_tokens=256,
+                    temperature=0.3,
+                )
+                summary_text = result.get("text", "You had several notifications while away.")
+            else:
+                summary_text = f"You had {len(items)} notifications while you were away."
+        except Exception as exc:
+            logger.warning("[proactive] Summary generation failed: %s", exc)
+            summary_text = f"You had {len(items)} notifications while you were away."
+
+        await _emit("idle_summary", {
+            "summary": summary_text,
+            "item_count": len(items),
+            "items": [{"type": i["event_type"], "significance": i["significance"]} for i in items],
+        })
+        logger.info("[proactive] Flushed %d queued items as summary", len(items))
 
 
 async def _stream_generator(request: Request) -> AsyncGenerator[str, None]:
@@ -888,6 +992,13 @@ async def _pipeline_response(text: str, thread_id: str, voice_enabled: bool = Fa
     Runs the compiled graph with interface_agent as entry point.
     interface_agent streams tokens directly to the SSE queue.
     """
+    # Reset idle timer — user is active
+    try:
+        from app.service.screen_awareness_service import update_interaction
+        update_interaction()
+    except Exception:
+        pass
+
     from app.graph.pipeline import get_pipeline
     from app.graph.state import initial_state
     from app.config import get_settings

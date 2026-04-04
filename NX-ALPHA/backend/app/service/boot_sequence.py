@@ -643,11 +643,17 @@ class BootSequence:
         # Screen awareness — active window title → proactive file surfacing
         await self._run_step_warn("Screen awareness", 3, self._init_screen_awareness)
 
+        # Idle triage — passive intelligence processing during user idle
+        await self._run_step_warn("Idle triage", 3, self._init_idle_triage)
+
         # File monitor — polling-based file change detection
         await self._run_step_warn("File monitor", 3, self._init_file_monitor)
 
         # Scheduler
         await self._run_step_warn("Scheduler", 3, self._init_scheduler)
+
+        # Briefing service (depends on scheduler for cron registration)
+        await self._run_step_warn("Briefing service", 3, self._init_briefing)
 
         # Email dispatch
         await self._run_step_warn("Email service", 3, self._init_email)
@@ -758,6 +764,45 @@ class BootSequence:
         svc = init_screen_awareness()
         task = svc.start()
         self._background_tasks.append(task)
+
+    async def _init_idle_triage(self):
+        from app.service.idle_triage_service import init_idle_triage
+        svc = init_idle_triage()
+        tasks = svc.start()
+        self._background_tasks.extend(tasks)
+
+    async def _init_briefing(self):
+        from app.service.briefing_service import init_briefing_service
+        init_briefing_service()
+        # Register default briefing schedules (idempotent)
+        try:
+            from app.service.scheduler_service import get_scheduler_service
+            from app.config import get_settings
+            sched = get_scheduler_service()
+            cfg = get_settings().idle_processing
+            if sched and cfg.enabled:
+                existing = sched.get_all_tasks()
+                existing_types = {t.get("task_type") for t in existing}
+                if "morning_briefing" not in existing_types:
+                    sched.create_task({
+                        "name": "Morning Briefing",
+                        "task_type": "morning_briefing",
+                        "schedule": cfg.morning_briefing_cron,
+                        "parameters": {},
+                        "source": "internal",
+                    })
+                    logger.info("[boot] Registered default morning briefing schedule")
+                if "daily_recap" not in existing_types:
+                    sched.create_task({
+                        "name": "Daily Recap",
+                        "task_type": "daily_recap",
+                        "schedule": cfg.daily_recap_cron,
+                        "parameters": {},
+                        "source": "internal",
+                    })
+                    logger.info("[boot] Registered default daily recap schedule")
+        except Exception as exc:
+            logger.warning("[boot] Briefing schedule registration failed: %s", exc)
 
     async def _init_file_monitor(self):
         from app.service.file_monitor_service import init_file_monitor

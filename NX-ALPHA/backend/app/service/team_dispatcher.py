@@ -39,12 +39,13 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TeamJob:
-    __slots__ = ("team_id", "thread_id", "task")
+    __slots__ = ("team_id", "thread_id", "task", "metadata")
 
-    def __init__(self, team_id: str, thread_id: str, task: str):
+    def __init__(self, team_id: str, thread_id: str, task: str, metadata: dict | None = None):
         self.team_id   = team_id
         self.thread_id = thread_id
         self.task      = task
+        self.metadata  = metadata or {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -73,15 +74,21 @@ class TeamDispatcher:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    async def dispatch(self, task: str, thread_id: str, team_id: str) -> int:
+    async def dispatch(self, task: str, thread_id: str, team_id: str, metadata: dict | None = None) -> int:
         """
         Enqueue a team job.
+
+        Args:
+            task: Natural-language task description.
+            thread_id: Chat session thread ID (or "idle_processing" for autonomous).
+            team_id: Unique team job ID.
+            metadata: Optional metadata dict. Use {"autonomous": True} for idle-time dispatch.
 
         Returns:
             0 if the job starts immediately (queue was empty and nothing active).
             N if the job is queued at position N (1-based).
         """
-        job = TeamJob(team_id=team_id, thread_id=thread_id, task=task)
+        job = TeamJob(team_id=team_id, thread_id=thread_id, task=task, metadata=metadata)
         await self._queue.put(job)
         queue_pos = self._queue.qsize()   # how many are waiting (including this one)
 
@@ -243,6 +250,9 @@ class TeamDispatcher:
             workhorse_model=settings.workhorse_model_name,
             hardware_phase=settings.hardware_phase,
         )
+        # Propagate metadata (e.g. autonomous=True for idle-time dispatch)
+        if job.metadata:
+            state["metadata"] = job.metadata
 
         config = {
             "configurable": {
@@ -272,16 +282,90 @@ class TeamDispatcher:
     async def _deliver_result(self, final_state: dict, thread_id: str, team_id: str):
         """
         Deliver completed team results to the chat session.
-        Calls deliver_team_result() from interface_agent.py which handles
-        the AURA personality pass and SSE emission.
+
+        For user-initiated tasks: calls deliver_team_result() from interface_agent.py
+        which handles the AURA personality pass and SSE emission.
+
+        For autonomous tasks (idle-time dispatch): routes through the proactive
+        delivery system which respects operating modes and queues if needed.
         """
-        from app.graph.nodes.interface_agent import deliver_team_result
+        metadata = final_state.get("metadata", {})
+        is_autonomous = metadata.get("autonomous", False)
+
         msg_id = f"msg-team-{team_id}"
-        logger.info("[team_dispatcher] Delivering result for job %s to thread %s", team_id, thread_id)
+        logger.info(
+            "[team_dispatcher] Delivering result for job %s to thread %s (autonomous=%s)",
+            team_id, thread_id, is_autonomous,
+        )
+
+        if is_autonomous:
+            await self._deliver_autonomous_result(final_state, team_id)
+        else:
+            try:
+                from app.graph.nodes.interface_agent import deliver_team_result
+                await deliver_team_result(final_state, msg_id, thread_id)
+            except Exception as exc:
+                logger.error("[team_dispatcher] Result delivery failed for job %s: %s", team_id, exc, exc_info=True)
+
+    async def _deliver_autonomous_result(self, final_state: dict, team_id: str):
+        """Route autonomous team results through proactive delivery + memory."""
+        # Extract the assembled output
+        content = (
+            final_state.get("verified_output", {}).get("content", "")
+            or final_state.get("assembled_output", {}).get("content", "")
+            or str(final_state.get("assembled_output", ""))
+        )
+
+        if not content:
+            logger.warning("[team_dispatcher] Autonomous result for %s has no content", team_id)
+            return
+
+        # Deliver via proactive system
         try:
-            await deliver_team_result(final_state, msg_id, thread_id)
+            from app.controller.chat_controller import deliver_proactive
+            await deliver_proactive("idle_insight", {
+                "content": content[:4000],
+                "team_id": team_id,
+                "task_type": final_state.get("metadata", {}).get("task_type", "idle_analysis"),
+                "timestamp": __import__("time").time(),
+            })
         except Exception as exc:
-            logger.error("[team_dispatcher] Result delivery failed for job %s: %s", team_id, exc, exc_info=True)
+            logger.warning("[team_dispatcher] Autonomous proactive delivery failed: %s", exc)
+
+        # Store in memory (L2)
+        try:
+            from app.service.memory_service import get_memory_service
+            mem = get_memory_service()
+            if mem:
+                import asyncio as _aio
+                _aio.create_task(mem.record(
+                    "system",
+                    f"Idle analysis insight: {content[:2000]}",
+                    "idle_processing",
+                    metadata={
+                        "source": "idle_analysis",
+                        "team_id": team_id,
+                        "task_type": final_state.get("metadata", {}).get("task_type", "idle_analysis"),
+                    },
+                ))
+        except Exception as exc:
+            logger.debug("[team_dispatcher] Autonomous memory record failed: %s", exc)
+
+        # Ingest into knowledge graph (L3)
+        try:
+            from app.service.lightrag_service import get_lightrag_service
+            lr = get_lightrag_service()
+            if lr:
+                import asyncio as _aio
+                _aio.create_task(lr.ingest_document(
+                    text=content[:3000],
+                    source_id=f"idle_{team_id}",
+                    source_type="idle_analysis",
+                ))
+        except Exception as exc:
+            logger.debug("[team_dispatcher] Autonomous LightRAG ingest failed: %s", exc)
+
+        logger.info("[team_dispatcher] Autonomous result for %s delivered + stored", team_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -186,6 +186,41 @@ class MarketAPIConfig(BaseModel):
     openweathermap_api_key: str = ""  # Optional — Open-Meteo (no key) used by default
 
 
+class IdleProcessingConfig(BaseModel):
+    """Idle-time passive intelligence processing.
+
+    When the user is idle, the Interface Engine triages incoming data streams,
+    maintains a rolling world-state summary, fires news breaks for urgent events,
+    and autonomously dispatches the Workhorse team for deeper analysis.
+    """
+    enabled: bool = True
+
+    # Idle state thresholds (seconds since last user interaction)
+    soft_idle_seconds: int = 180       # 3 min → Interface triage starts
+    deep_idle_seconds: int = 600       # 10 min → team dispatch eligible
+    away_seconds: int = 1800           # 30 min → reduce processing frequency
+
+    # Triage loop
+    triage_interval_seconds: int = 30  # how often to drain streams during idle
+    triage_max_batch: int = 20         # max events per triage classification call
+    world_state_update_interval: int = 300  # 5 min world-state refresh
+
+    # Autonomous team dispatch
+    min_items_for_team_dispatch: int = 3    # batch threshold before waking team
+    team_dispatch_cooldown: int = 300       # min seconds between autonomous dispatches
+
+    # Scheduled briefings (cron strings)
+    morning_briefing_cron: str = "0 7 * * *"
+    daily_recap_cron: str = "0 18 * * MON-FRI"
+
+    # News breaks
+    news_break_enabled: bool = True
+    news_break_min_significance: str = "urgent"  # "urgent" or "breaking"
+
+    # Token limits
+    max_interface_tokens_per_triage: int = 2048
+
+
 class MCPConfig(BaseModel):
     """§H MCP client config."""
     enabled: bool = True
@@ -272,6 +307,7 @@ class AuraSettings(BaseSettings):
     satellites: List[SatelliteEndpoint] = []
     validator: ValidatorConfig = ValidatorConfig()
     mcp: MCPConfig = MCPConfig()
+    idle_processing: IdleProcessingConfig = IdleProcessingConfig()
 
     # ── Integrations ──────────────────────────────────────────────────────────
     # GitHub PAT (public_repo scope) — used by tool_composition_analyzer for

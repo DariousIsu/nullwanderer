@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import collections
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -54,6 +55,8 @@ class BaseStream(ABC):
         self._running:  bool = False
         self._tick_count: int = 0
         self._error_count: int = 0
+        # Read-only buffer for idle triage — does not consume from queue
+        self._recent_buffer: collections.deque = collections.deque(maxlen=200)
 
     @abstractmethod
     async def _fetch(self) -> list[dict]:
@@ -89,6 +92,7 @@ class BaseStream(ABC):
                     event.setdefault("_ts", time.time())
                     if not self._queue.full():
                         self._queue.put_nowait(event)
+                    self._recent_buffer.append(event)
                 self._tick_count += 1
             except asyncio.CancelledError:
                 break
@@ -109,6 +113,10 @@ class BaseStream(ABC):
             except asyncio.TimeoutError:
                 continue
 
+    def drain_recent(self, since_ts: float) -> list[dict]:
+        """Return events from the recent buffer with _ts >= since_ts (non-destructive)."""
+        return [e for e in self._recent_buffer if e.get("_ts", 0) >= since_ts]
+
     def status(self) -> dict:
         return {
             "stream_id":   self.STREAM_ID,
@@ -116,6 +124,7 @@ class BaseStream(ABC):
             "queue_size":  self._queue.qsize(),
             "tick_count":  self._tick_count,
             "error_count": self._error_count,
+            "recent_buffer_size": len(self._recent_buffer),
         }
 
 
@@ -540,6 +549,15 @@ class StreamManager:
     async def stop_all(self) -> None:
         for stream in self._streams.values():
             await stream.stop()
+
+    def drain_all_recent(self, since_ts: float) -> dict[str, list[dict]]:
+        """Drain recent events from all registered streams since a timestamp."""
+        result = {}
+        for stream_id, stream in self._streams.items():
+            events = stream.drain_recent(since_ts)
+            if events:
+                result[stream_id] = events
+        return result
 
     def status_all(self) -> list[dict]:
         return [s.status() for s in self._streams.values()]

@@ -43,6 +43,8 @@ VALID_TASK_TYPES = {
     "data_pull",
     "report",
     "leg_monitor_update",
+    "morning_briefing",
+    "daily_recap",
 }
 
 VALID_STATUSES = {"active", "paused", "archived"}
@@ -589,7 +591,9 @@ class SchedulerService:
             "internal_schedule":   self._handle_internal_schedule,
             "data_pull":           self._handle_data_pull,
             "leg_monitor_update":  self._handle_leg_monitor_update,
-            "report":            self._handle_report,
+            "report":              self._handle_report,
+            "morning_briefing":    self._handle_morning_briefing,
+            "daily_recap":         self._handle_daily_recap,
         }
 
         handler = handler_map.get(task_type)
@@ -822,6 +826,30 @@ class SchedulerService:
         if errors:
             summary += f" Errors: {'; '.join(errors[:3])}"
         return summary
+
+    async def _handle_morning_briefing(self, task: dict, params: dict) -> str:
+        """Trigger morning briefing via BriefingService."""
+        try:
+            from app.service.briefing_service import get_briefing_service
+            svc = get_briefing_service()
+            if svc is None:
+                return "Morning briefing skipped: service not initialized"
+            return await svc.trigger_morning_briefing(params)
+        except Exception as exc:
+            logger.warning("[scheduler] Morning briefing failed: %s", exc)
+            return f"Morning briefing error: {exc}"
+
+    async def _handle_daily_recap(self, task: dict, params: dict) -> str:
+        """Trigger daily recap via BriefingService."""
+        try:
+            from app.service.briefing_service import get_briefing_service
+            svc = get_briefing_service()
+            if svc is None:
+                return "Daily recap skipped: service not initialized"
+            return await svc.trigger_daily_recap(params)
+        except Exception as exc:
+            logger.warning("[scheduler] Daily recap failed: %s", exc)
+            return f"Daily recap error: {exc}"
 
     # ── Email Dispatch ────────────────────────────────────────────────────────
 

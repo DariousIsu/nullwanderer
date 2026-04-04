@@ -73,8 +73,10 @@ async def run_project_manager(state: GraphState) -> dict:
     # ── CLARIFICATION GATE — check for genuine subject-matter ambiguity ────────
     # Only runs on first-pass plans (not revisions). Does NOT ask about format,
     # length, audience, or style — those are AURA's domain, not planning's.
+    # Skip entirely for autonomous (idle-time) tasks — no user to ask.
+    _is_autonomous = state.get("metadata", {}).get("autonomous", False)
     clarification_answer: Optional[str] = state.get("clarification_answer")
-    if not clarification_answer and not corrections:
+    if not clarification_answer and not corrections and not _is_autonomous:
         try:
             from app.service.ollama_service import get_ollama_service
             _svc = get_ollama_service()

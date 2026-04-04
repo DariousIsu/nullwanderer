@@ -335,6 +335,19 @@ def get_current_context() -> WindowContext:
     return _instance.current_context
 
 
+def get_idle_state() -> tuple[str, float]:
+    """Return (idle_state, seconds_idle). Safe if not initialized."""
+    if _instance is None:
+        return ("active", 0.0)
+    return _instance.get_idle_state()
+
+
+def update_interaction() -> None:
+    """Reset the idle timer. Called from chat_controller on every user message."""
+    if _instance is not None:
+        _instance.update_interaction()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SERVICE
 # ─────────────────────────────────────────────────────────────────────────────
@@ -361,6 +374,12 @@ class ScreenAwarenessService:
         self._last_browser_at:         float      = 0.0
         self._last_browser_visit_time: int | None = None
         self._recent_browser_history:  list[dict] = []
+
+        # Idle detection state
+        self._last_user_interaction: float = time.time()
+        self._idle_state: str = "active"   # "active" | "soft_idle" | "deep_idle" | "away"
+        self._idle_state_changed_at: float = time.time()
+        self._on_return_callbacks: list = []  # callables invoked when user returns from idle
 
         logger.info("[screen_awareness] ScreenAwarenessService created")
 
@@ -391,8 +410,76 @@ class ScreenAwarenessService:
             except Exception as exc:
                 logger.debug("[screen_awareness] tick error: %s", exc)
 
+    # ── Idle detection ──────────────────────────────────────────────────────
+
+    def update_interaction(self) -> None:
+        """Reset idle timer — user has interacted with AURA."""
+        was_idle = self._idle_state != "active"
+        self._last_user_interaction = time.time()
+        if was_idle:
+            prev_state = self._idle_state
+            self._idle_state = "active"
+            self._idle_state_changed_at = time.time()
+            logger.info(
+                "[screen_awareness] User returned from %s (idle %.0fs)",
+                prev_state,
+                time.time() - self._idle_state_changed_at,
+            )
+            # Fire return callbacks (e.g. "while you were away" flush)
+            for cb in self._on_return_callbacks:
+                try:
+                    result = cb()
+                    if asyncio.iscoroutine(result):
+                        asyncio.create_task(result)
+                except Exception as exc:
+                    logger.warning("[screen_awareness] Return callback error: %s", exc)
+
+    def get_idle_state(self) -> tuple[str, float]:
+        """Return (idle_state, seconds_since_last_interaction)."""
+        elapsed = time.time() - self._last_user_interaction
+        return (self._idle_state, elapsed)
+
+    def register_on_return(self, callback) -> None:
+        """Register a callback to fire when user returns from idle."""
+        self._on_return_callbacks.append(callback)
+
+    def _update_idle_state(self) -> None:
+        """Recompute idle state based on time since last interaction."""
+        try:
+            from app.config import get_settings
+            cfg = get_settings().idle_processing
+        except Exception:
+            return
+
+        if not cfg.enabled:
+            return
+
+        elapsed = time.time() - self._last_user_interaction
+        if elapsed >= cfg.away_seconds:
+            new_state = "away"
+        elif elapsed >= cfg.deep_idle_seconds:
+            new_state = "deep_idle"
+        elif elapsed >= cfg.soft_idle_seconds:
+            new_state = "soft_idle"
+        else:
+            new_state = "active"
+
+        if new_state != self._idle_state:
+            prev = self._idle_state
+            self._idle_state = new_state
+            self._idle_state_changed_at = time.time()
+            logger.info(
+                "[screen_awareness] Idle state: %s -> %s (%.0fs since interaction)",
+                prev, new_state, elapsed,
+            )
+
+    # ── Main tick ─────────────────────────────────────────────────────────────
+
     async def _tick(self) -> None:
         """One poll cycle — get window title, maybe trigger search + emit."""
+        # Update idle state every tick (cheap, no I/O)
+        self._update_idle_state()
+
         from app.controller.chat_controller import _runtime_state  # type: ignore
 
         mode = _runtime_state.get("operating_mode", "proactive")
