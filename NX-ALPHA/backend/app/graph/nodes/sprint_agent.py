@@ -113,7 +113,8 @@ def _build_search_query(task: str, team_request: str) -> str:
 async def _run_tool(tool_name: str, task: str, team_request: str) -> tuple[str, list]:
     """
     Dispatch one tool and return (text_result, [urls]).
-    Routes through MCP registry first, then legacy hardcoded fallbacks.
+    web_search uses custom query-building for better results.
+    All other tools delegate to interface_agent._dispatch_tool for full tool parity with Interface.
     """
     import re
 
@@ -132,37 +133,17 @@ async def _run_tool(tool_name: str, task: str, team_request: str) -> tuple[str, 
         urls = [r["url"] for r in results if r.get("url")]
         return f"Web search results:\n{text}", urls
 
-    # ── MCP registry: all registered tools (exa, jina, sec_edgar, etc.) ─────
+    # ── All other tools: delegate to Interface's _dispatch_tool ──────────────
+    # This gives the team identical tool coverage to Interface (all 60+ tools).
     try:
-        from app.tools._mcp_wrapper import dispatch, is_registered
-        if is_registered(tool_name):
-            result = await dispatch(tool_name, {"query": task})
-            text = json.dumps(result, indent=2)[:3000] if isinstance(result, dict) else str(result)[:3000]
-            urls = re.findall(r'https?://[^\s\)\"\',]+', text)
-            return text, urls[:5]
+        from app.graph.nodes.interface_agent import _dispatch_tool
+        result = await _dispatch_tool(tool_name, {"query": task})
+        text = result[:3000] if isinstance(result, str) else str(result)[:3000]
+        urls = re.findall(r'https?://[^\s\)\"\',]+', text)
+        return text, urls[:5]
     except Exception as exc:
-        logger.warning("[sprint_agent] registry dispatch for %s failed: %s", tool_name, exc)
-
-    # ── Legacy hardcoded fallbacks for old tool names ─────────────────────────
-    if tool_name in ("finance_quote", "market_overview"):
-        from app.tools.system_tools import get_market_overview
-        data = await get_market_overview()
-        return f"Market data:\n{json.dumps(data, indent=2)[:2000]}", []
-
-    if tool_name == "news":
-        from app.tools.system_tools import get_news
-        news = await get_news(category="all", limit=8)
-        if isinstance(news, list):
-            return "Recent news:\n" + "\n".join(f"- {a.get('title','')}" for a in news), []
+        logger.warning("[sprint_agent] _dispatch_tool(%s) failed: %s", tool_name, exc)
         return "", []
-
-    if tool_name == "weather":
-        from app.tools.system_tools import get_weather
-        data = await get_weather()
-        return f"Weather:\n{json.dumps(data, indent=2)[:500]}", []
-
-    logger.debug("[sprint_agent] Tool '%s' not available — skipping", tool_name)
-    return "", []
 
 
 async def _execute_with_ollama(task: str, tools: list, domain: str, team_request: str = "", sprint: dict = None) -> tuple[str, list]:

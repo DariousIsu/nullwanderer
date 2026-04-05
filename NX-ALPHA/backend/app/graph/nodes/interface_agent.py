@@ -1446,6 +1446,114 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
                 summary += f"\nErrors: {'; '.join(errors[:3])}"
             return summary
 
+        elif tool_name == "aura_self":
+            from app.tools.self_awareness_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "git":
+            from app.tools.git_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "file_system":
+            from app.tools.file_system_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "chart_image":
+            from app.tools.chart_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "skills_lookup":
+            from app.tools.skills_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "ocr":
+            from app.tools.ocr_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "office_docs":
+            from app.tools.office_docs_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "research":
+            from app.tools.research_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "security_scan":
+            from app.tools.security_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "x_twitter":
+            from app.tools.x_twitter_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "computer_use":
+            from app.tools.computer_use_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "ffmpeg_editor":
+            from app.tools.ffmpeg_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "mindmap":
+            from app.tools.mindmap_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "music_gen":
+            from app.tools.music_gen_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "logo_gen":
+            from app.tools.logo_gen_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "excalidraw":
+            from app.tools.excalidraw_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "comfyui_generate":
+            from app.tools.comfyui_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "cad_3d":
+            from app.tools.cad_tool import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "openapi_consumer":
+            from app.tools.openapi_consumer import tool_handler as _h
+            result = await _h(args)
+            return _format_tool_result(result) if isinstance(result, dict) else str(result)
+
+        elif tool_name == "news_search":
+            from app.tools.web_search import news_search
+            query = args.get("query", args.get("q", ""))
+            max_results = int(args.get("max_results", 8))
+            articles = await news_search(query, max_results=max_results)
+            if not articles:
+                return "No news results found."
+            lines = [
+                f"[{a.get('source','')}] {a.get('title','')}: {a.get('snippet','')} ({a.get('url','')})"
+                for a in articles
+            ]
+            return "News results:\n" + "\n".join(lines)
+
         else:
             # ── MCP Tool Registry — covers all new tools (sec_edgar, exa, polygon, etc.)
             try:
