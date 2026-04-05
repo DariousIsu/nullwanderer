@@ -518,6 +518,29 @@ def is_team_task(text: str) -> bool:
         logger.debug("[routing] Hard guard 6 (tool-use): %r → solo", text[:60])
         return False
 
+    # Hard guard 7: Document processing operations are Interface-only.
+    # These are single-turn analysis tasks the interface handles immediately —
+    # NOT multi-agent deliverables. Catches: "summarize this", "analyze this doc",
+    # "give me an overview of", "review this", "explain this", etc.
+    # Only applies when no strong deliverable framing is present.
+    _INTERFACE_OP_SIGNALS = [
+        "summarize this", "summarize it", "summarize the", "summarize my", "summarize these",
+        "give me a summary", "give me an overview", "give me a brief",
+        "give an overview", "quick overview", "brief overview", "brief summary",
+        "what does this say", "what does it say", "what does this cover",
+        "what does this mean", "what's in this", "what is in this",
+        "explain this", "explain it", "explain the",
+        "review this", "review it", "review the", "review these",
+        "go through this", "go through the",
+        "read through this", "read through the",
+        "describe this", "describe the",
+        "tell me about this", "tell me what this",
+        "analyze this", "analyse this",
+    ]
+    if any(sig in lower for sig in _INTERFACE_OP_SIGNALS) and not _has_deliverable:
+        logger.debug("[routing] Hard guard 7 (interface-op): %r → solo", text[:60])
+        return False
+
     # Tier 1: Semantic router (fast, accurate at high threshold)
     result = _semantic_classify(text)
     if result is not None:
