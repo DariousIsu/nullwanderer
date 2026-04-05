@@ -189,7 +189,7 @@ _TOOL_SCHEMA = """
 CONTEXT INDEX (pre-loaded for this query):
 {coord_index}
 
-AVAILABLE TOOLS — output a SINGLE-LINE JSON object: {{"tool": "<name>", "key": "value"}}
+AVAILABLE TOOLS — output a SINGLE-LINE JSON object: {"tool": "<name>", "key": "value"}
 CRITICAL: Tool calls MUST be on ONE line. Do NOT pretty-print across lines or wrap params in "args".
 You have FULL access to the local file system, shell, git, browser, and real-time data.
 You run locally on the user's machine. Never say "I don't have access" — use the tool.
