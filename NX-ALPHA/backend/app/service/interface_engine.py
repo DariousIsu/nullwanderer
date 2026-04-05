@@ -254,16 +254,15 @@ class InterfaceEngine:
                             yield after
                             anything_yielded = True
                         continue
-                    # Buffer at the very start when content looks like a think prefix
-                    # so we can catch the orphan </think> before yielding anything.
-                    if not anything_yielded and content_accumulated.lstrip().startswith("Thinking"):
-                        if len(content_accumulated) < 1500:
-                            continue  # Still waiting for </think> or more content
-                        # Exceeded buffer without </think> — real content, flush all
-                        think_resolved = True
-                        yield content_accumulated
-                        anything_yielded = True
-                        continue
+                    # Buffer at the very start when content looks like a think prefix.
+                    # Buffer indefinitely — we MUST see </think> before yielding.
+                    # The end-of-stream fallback (below) handles the rare case where
+                    # </think> never arrives (legitimate "Thinking..." prose).
+                    if not anything_yielded and re.match(
+                        r'^\s*(?:Thinking|think|\d+\.)',
+                        content_accumulated,
+                    ):
+                        continue  # Still waiting for </think>
                     think_resolved = True
                     yield item
                     anything_yielded = True

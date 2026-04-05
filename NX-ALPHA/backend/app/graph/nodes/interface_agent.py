@@ -1605,10 +1605,13 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
 
 
 def _repair_tool_json(text: str) -> str:
-    """Fix common LLM JSON errors: unquoted keys, trailing commas."""
+    """Fix common LLM JSON errors: unquoted keys, trailing commas, unescaped backslashes."""
     s = text.strip()
     s = re.sub(r'(?<=[\{,\n])\s*([a-zA-Z_]\w*)\s*:', r' "\1":', s)
     s = re.sub(r',\s*\}', '}', s)
+    # Fix unescaped backslashes in string values (Windows paths like C:\Users\...)
+    # Replace \ not already followed by a valid JSON escape character
+    s = re.sub(r'\\(?!["\\/bfnrtu0-9])', r'\\\\', s)
     return s
 
 
