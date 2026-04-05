@@ -218,7 +218,9 @@ You run locally on the user's machine. Never say "I don't have access" — use t
   file_write (path, content)          — Create or overwrite a local file.
   file_edit (path, edits)             — Edit specific sections of a local file.
   screen_capture ()                   — Take a screenshot of the user's current screen.
-  display (type, ...)                 — Show content on canvas (table|chart|document|code|image|html|list|heading|paragraph).
+  display (type, ...)                 — Show content on canvas. Types: table|chart|document|code|image|html|list|heading|paragraph.
+                                        Interactive app: display(html, content="<self-contained html>") — renders live in canvas iframe.
+                                        External URL: display(html, src="https://...").
   task_create / task_list / task_update — Manage the user's task list.
   schedule_cron / list_scheduled_tasks / delete_scheduled_task — Scheduled automation.
   git (operation, ...)                — Git operations: status, diff, log, commit, branch, pull, push, etc.
@@ -236,7 +238,8 @@ You run locally on the user's machine. Never say "I don't have access" — use t
   mindmap (action, data|mermaid_code)  — Generate Mermaid diagrams: mindmaps, flowcharts, sequence, class, state, ER.
   logo_gen (svg_code, output_path)     — Generate SVG graphics with optional PNG export.
   comfyui_generate (prompt, ...)       — Generate images locally via ComfyUI on the user's GPU.
-  code_runner (language, code, ...)    — Execute code in Python, Rust, Go, Java, JavaScript, TypeScript, or Bash.
+  code_runner (language, code, ...)   — Execute code locally: python|javascript|typescript|rust|go|java|bash. Returns stdout.
+                                        Use for computation, data processing, and generating content to embed in canvas.
   security_scan (action, ...)          — Security scanning: scan_request, audit_package, audit_plugin.
   x_twitter (action, ...)              — X/Twitter: trends (by country), search (via Nitter), post (draft via Playwright).
   office_docs (format, content, ...)   — Generate PPTX, DOCX, XLSX, or PDF documents.
@@ -263,6 +266,18 @@ CANVAS RULES:
 - User explicitly asks to show/display/visualize something? Canvas.
 - Short lists, brief tables, bullet points, factual answers — these belong in chat, not canvas.
 - Do NOT push every response to canvas. Only push when the visual format adds real value over plain text.
+
+INTERACTIVE CANVAS APPS:
+- You can build and LAUNCH live interactive apps in the canvas. The user sees and interacts with them directly.
+- Self-contained HTML/JS games, tools, calculators, visualizations:
+    display(html, content="<!DOCTYPE html><html>...</html>")
+  This renders live in a sandboxed iframe. Use for Tic-Tac-Toe, chess, simulators, dashboards, demos.
+  Write complete, self-contained HTML with embedded CSS and JavaScript — no external dependencies needed.
+- Python computation → canvas: run code_runner(python, ...) to get data, then embed the output
+  into an HTML template and display(html, content="...") to render it on canvas.
+- Background server for stateful apps: bash_exec("python server.py &") then display(html, src="http://localhost:PORT/")
+- NEVER say you cannot build interactive apps. You have full local access and canvas rendering.
+  If you don't know the exact approach, web_search first, then build it.
 
 When the user adds something to the canvas, you will be notified — engage with it directly.
 """
@@ -400,6 +415,12 @@ to monitor hardware, services, and storage. You are network-aware. You know you
 have a team of agents available for complex multi-step tasks — use web_search
 and your own reasoning for quick questions, escalate to the team for tasks that
 require research, deliverable production, or multi-phase work.
+
+RESEARCH BEFORE REFUSING: If you don't know how to accomplish something technically,
+call web_search immediately — never claim you can't do something without trying first.
+You have full tool access including shell, browser, code execution, and canvas rendering.
+For large or complex programs (full applications, systems, data pipelines), automatically
+route to the team after scoping — they have Workhorse for deep code generation.
 """
 
 _EDITORIAL_SECTION = """
@@ -660,9 +681,9 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
                 if ytshort_match:
                     src = f"https://www.youtube.com/embed/{ytshort_match.group(1)}"
                 # If model passed inline content instead of a URL, render as paragraph
-                inline = args.get("content", "") or args.get("html", "") or args.get("text", "")
+                inline = args.get("content", "") or args.get("html", "") or args.get("code", "")
                 if not src and inline:
-                    block = {"type": "paragraph", "data": {"text": inline}}
+                    block = {"type": "html", "data": {"srcdoc": inline, "title": args.get("title", "")}}
                 else:
                     block["data"] = {"src": src, "title": args.get("title", "")}
             elif block_type == "code":
@@ -1247,6 +1268,21 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
                 content=args.get("content") or None,
                 priority=args.get("priority") or None,
             )
+
+        elif tool_name == "code_runner":
+            from app.tools.code_runner_tool import run_code
+            result = await run_code(
+                language=args.get("language", "python"),
+                code=args.get("code", ""),
+                timeout=min(int(args.get("timeout", 30)), 120),
+            )
+            exit_code = result.get("exit_code", 0)
+            stdout = result.get("stdout", "")
+            stderr = result.get("stderr", "")
+            if exit_code == 0:
+                return stdout or "(no output)"
+            else:
+                return f"[exit {exit_code}]\n{stdout}\n{stderr}".strip()
 
         elif tool_name == "bash_exec":
             from app.tools.bash_tool import bash_exec
@@ -2966,55 +3002,15 @@ async def _auto_canvas(response_text: str) -> None:
 
 async def _generate_team_ack(task: str, team_id: str, queue_pos: int, engine) -> str:
     """
-    Generate AURA's acknowledgment when a team task is dispatched.
-    Uses the interface engine for her voice; falls back to a canned string.
+    Return AURA's acknowledgment when a team task is dispatched.
+    Uses canned strings to avoid model generation leaking raw reasoning/thinking output.
     queue_pos=0 means starting now; >0 means queued at that position.
     """
-    queue_note = (
-        f" Note: a team task is already running — yours is queued at position {queue_pos}."
-        if queue_pos > 0 else ""
-    )
-
-    if engine is None:
-        if queue_pos > 0:
-            return (
-                f"On it — queued at position {queue_pos}. "
-                "The team will get to it right after the current run. I'll deliver when ready."
-            )
-        return "On it. Research team dispatched — I'll bring the result the moment it's done."
-
-    try:
-        ack_messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are AURA. Respond naturally and briefly. "
-                    "No lists, no headers, no filler phrases. Just direct."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Acknowledge that you've dispatched this to your research team: "
-                    f"'{task[:200]}'. Tell the user you'll deliver it when ready."
-                    f"{queue_note} "
-                    "1-2 sentences max. Sound like yourself — warm, direct, confident."
-                ),
-            },
-        ]
-        result = await engine.generate(ack_messages, max_tokens=128, temperature=0.7)
-        raw = result.get("text", "").strip()
-        # Strip thinking tags if present
-        import re as _re2
-        raw = _re2.sub(r'<think>.*?</think>', '', raw, flags=_re2.DOTALL).strip()
-        if raw and len(raw) > 10:
-            return raw
-    except Exception as exc:
-        logger.warning("[interface_agent] Team ack generation failed: %s", exc)
-
-    # Fallback
     if queue_pos > 0:
-        return f"On it — queued at position {queue_pos}. The team will pick it up next. I'll let you know."
+        return (
+            f"On it — queued at position {queue_pos}. "
+            "The team will pick it up right after the current run. I'll deliver when ready."
+        )
     return "On it. Team dispatched — I'll bring you the result the moment it's ready."
 
 
@@ -3199,7 +3195,21 @@ async def run_interface_agent(state: GraphState) -> dict:
 
             from app.service.team_dispatcher import get_team_dispatcher
             dispatcher = get_team_dispatcher()
-            queue_pos = await dispatcher.dispatch(dispatch_message, thread_id, team_id)
+            try:
+                queue_pos = await dispatcher.dispatch(dispatch_message, thread_id, team_id)
+            except Exception as _dispatch_err:
+                logger.error("[interface_agent] Team dispatch failed: %s", _dispatch_err)
+                _runtime_state["pending_team_context"] = None
+                _err_msg = "I tried to dispatch the team but hit a connection error. Please try again."
+                await _emit("token", {"text": _err_msg, "messageId": msg_id})
+                await _tts_emitter.feed(_err_msg)
+                await _tts_emitter.flush()
+                await _emit("end", {"reason": "error"})
+                history = list(state.get("conversation_history", []))
+                _now = datetime.now(timezone.utc).isoformat()
+                history.append({"role": "user", "content": user_message, "timestamp": _now})
+                history.append({"role": "aura", "content": _err_msg,     "timestamp": _now})
+                return {"path": "solo", "final_response": _err_msg, "conversation_history": history}
 
             # Emit team_dispatched so AgentMonitor initialises (PM will replace with full roster)
             await _emit("team_dispatched", {
@@ -3210,14 +3220,7 @@ async def run_interface_agent(state: GraphState) -> dict:
                 }
             })
 
-            # Generate acknowledgment in AURA's voice via interface engine
-            try:
-                from app.service.interface_engine import get_engine as _get_engine
-                _ack_engine = _get_engine()
-            except Exception:
-                _ack_engine = None
-
-            ack = await _generate_team_ack(dispatch_message, team_id, queue_pos, _ack_engine)
+            ack = await _generate_team_ack(dispatch_message, team_id, queue_pos, None)
 
             # Stream the ack tokens and close this chat turn
             _ack_chunks = re.split(r'(?<=[.!?])\s+', ack)
@@ -3480,17 +3483,11 @@ async def run_interface_agent(state: GraphState) -> dict:
         _gate_full_ctx = pending_ctx  # full text (including context block) passed as background
         sys_prompt += (
             f"\nCONVERSATIONAL GATE: The user wants a team deliverable: \"{_gate_display}\"{_est_note}\n"
-            f"Background context for your scoping questions:\n{_gate_full_ctx}\n"
-            f"Scope this before dispatching. CRITICAL RULE: Ask ONE question at a time. "
-            f"Wait for their answer before asking the next — no question dumps.\n"
-            f"Typical scoping sequence (pick what's relevant, don't ask all of them):\n"
-            f"  → What format? (paper, report, briefing, slides, PDF)\n"
-            f"  → What scope or specific angle?\n"
-            f"  → Any sources, constraints, or audience requirements?\n"
-            f"Once you have enough information: summarize in 1-2 sentences what the team "
-            f"will produce, then ask for explicit confirmation — e.g. 'Want me to kick that off?' "
-            f"or 'Should I start the team on this?' "
-            f"The team dispatches only after the user says yes.\n"
+            f"Background context:\n{_gate_full_ctx}\n"
+            f"Ask ONE scoping question. Once answered, do NOT ask more — summarize in one sentence "
+            f"what the team will produce and ask: 'Want me to kick that off?'\n"
+            f"If the user says yes/sure/ok/go/do it/sounds good/correct/send it or any affirmative — dispatch immediately.\n"
+            f"Do NOT repeat the same question. Do NOT give a long explanation. Scope once, confirm once.\n"
         )
 
     # ── Proactive maturity offer — check if conversation is ready for team dispatch ──
