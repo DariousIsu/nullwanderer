@@ -63,8 +63,8 @@ const IS_DEV          = !app.isPackaged && !fs.existsSync(RENDERER_HTML);
 /** Default SSE endpoint. Override via AURA_STREAM_URL env var. */
 const DEFAULT_STREAM_URL = 'http://localhost:8000/stream';
 
-// GPU flags removed — not needed and caused blank window on AMD dual-GPU
-// (iGPU + RX 7900 XT) with castlabs Electron 40 / Chromium 134.
+// Force ANGLE to D3D11 — prevents AMD driver timeouts (TDR) with OpenGL
+app.commandLine.appendSwitch('use-angle', 'd3d11');
 
 // Suppress EPIPE errors on stdout/stderr — these fire as async stream errors
 // when the parent terminal pipe closes (common in Electron dev mode).
@@ -484,6 +484,24 @@ ipcMain.handle('dialog:open-folder', async () => {
     title: 'Select folder(s) for ingestion',
   });
   return result.canceled ? [] : result.filePaths;
+});
+
+// ── Computer Use — confirmation dialog for risky actions ──
+// Called by the backend when AURA wants to perform a destructive or
+// interactive computer use action that requires user approval.
+ipcMain.handle('computer-use:confirm', async (_evt, payload) => {
+  const { action = 'perform an action', description = '', risk_level = 'normal' } = payload || {};
+  const icon = risk_level === 'high' ? 'warning' : 'question';
+  const result = await dialog.showMessageBox(mainWindow, {
+    type: icon,
+    title: 'AURA Computer Use',
+    message: `AURA wants to: ${action}`,
+    detail: description || 'Allow this action?',
+    buttons: ['Allow', 'Deny'],
+    defaultId: 1,   // Deny is the safer default
+    cancelId: 1,
+  });
+  return { allowed: result.response === 0 };
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

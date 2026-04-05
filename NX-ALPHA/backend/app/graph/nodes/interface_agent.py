@@ -244,6 +244,9 @@ You run locally on the user's machine. Never say "I don't have access" — use t
   music_gen (prompt, ...)              — Generate music via ACE Music API (free).
   cad_3d (action, code|query, ...)     — 3D: render (build123d code), search_stl (Printables), info (server health).
   excalidraw (nodes, edges, ...)       — Generate Excalidraw flowchart/diagram files.
+  computer_use (action, ...)            — Control Windows: screenshot, list/focus/minimize/maximize/close/resize windows, mouse_move/click/right_click/scroll/drag, keyboard_type/hotkey/press, launch_app, find_elements/click_element/get_element_value/set_element_value via Accessibility API.
+  file_system (operation, path, ...)    — Navigate local filesystem: list, read, write, edit, search, move, copy, delete, mkdir, info. Destructive ops (delete, move, overwrite) require confirmed=True.
+  aura_self (query)                     — Introspect AURA's own operational state. query: health, services, memory, errors, tasks, config, models, logs, world_state, screen, full.
 
 RULES: Start from pre-loaded context; expand before calling web_search. Never fabricate facts or URLs. Do not explain tool calls — just call them.
 """
@@ -573,6 +576,33 @@ def _build_system_prompt(memory_context: str = "", conversation_window: list[dic
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# TOOL RESULT FORMATTING
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _format_tool_result(result: dict) -> str:
+    """Convert a tool result dict to human-readable text — no indented JSON dumps."""
+    # Single string payload — most common case for well-behaved tools
+    for key in ("result", "output", "text", "content", "message", "summary", "answer"):
+        if key in result and isinstance(result[key], str):
+            return result[key]
+    # List payload — summarize top items
+    for key in ("results", "items", "data", "articles", "records", "hits"):
+        if key in result and isinstance(result[key], list):
+            items = result[key]
+            lines = [f"  [{i+1}] {str(item)[:200]}" for i, item in enumerate(items[:10])]
+            suffix = f"\n  ... ({len(items)} total)" if len(items) > 10 else ""
+            return f"{key.title()} ({len(items)}):\n" + "\n".join(lines) + suffix
+    # Flat key: value for simple dicts
+    lines = [f"  {k}: {v}" for k, v in result.items()
+             if isinstance(v, (str, int, float, bool)) or v is None]
+    if lines:
+        return "\n".join(lines)
+    # Last resort: compact JSON (no indent — at least no ugly 2-space dumps)
+    import json as _json_fallback
+    return _json_fallback.dumps(result, ensure_ascii=False, default=str)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # TOOL DISPATCH
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -694,16 +724,39 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
             data = await get_finance_quote(ticker)
             if not data:
                 return f"No quote data available for {ticker}."
-            import json as _json
-            return f"Finance quote for {ticker}:\n{_json.dumps(data, indent=2, default=str)[:1500]}"
+            price   = data.get("currentPrice") or data.get("regularMarketPrice", "N/A")
+            prev    = data.get("previousClose", "N/A")
+            change  = data.get("regularMarketChange", "N/A")
+            pct     = data.get("regularMarketChangePercent")
+            mktcap  = data.get("marketCap")
+            name    = data.get("shortName") or data.get("longName") or ticker.upper()
+            pct_str = f" ({pct:.2%})" if isinstance(pct, (int, float)) else ""
+            cap_str = f"  Market Cap:  ${mktcap:,.0f}" if isinstance(mktcap, (int, float)) else ""
+            lines   = [
+                f"{name} ({ticker.upper()})",
+                f"  Price:       ${price}",
+                f"  Change:      {change}{pct_str}",
+                f"  Prev Close:  ${prev}",
+            ]
+            if cap_str:
+                lines.append(cap_str)
+            return "\n".join(lines)
 
         elif tool_name == "market_overview":
             from app.tools.system_tools import get_market_overview
             data = await get_market_overview()
             if not data:
                 return "Market overview not available."
-            import json as _json
-            return f"Market Overview:\n{_json.dumps(data, indent=2, default=str)[:1500]}"
+            lines = ["Market Overview:"]
+            for k, v in data.items():
+                if isinstance(v, dict):
+                    price = v.get("price") or v.get("value") or v.get("last", "N/A")
+                    chg   = v.get("change") or v.get("changePercent", "")
+                    chg_str = f"  ({chg})" if chg else ""
+                    lines.append(f"  {k}: {price}{chg_str}")
+                elif isinstance(v, (str, int, float)):
+                    lines.append(f"  {k}: {v}")
+            return "\n".join(lines) if len(lines) > 1 else _format_tool_result(data)
 
         elif tool_name == "news":
             from app.tools.system_tools import get_news
@@ -1029,9 +1082,13 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
             if not path:
                 return "read_file requires a path argument."
             path = os.path.expandvars(path)
+            offset = int(args.get("offset", 0))
+            limit  = int(args.get("limit", 10_000))
             try:
                 with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                    content = fh.read(4000)
+                    if offset:
+                        fh.seek(offset)
+                    content = fh.read(limit)
                 return content if content else "(empty file)"
             except FileNotFoundError:
                 return f"File not found: {path}"
@@ -1073,7 +1130,11 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
                         size = e.stat().st_size
                         size_str = f"{size / 1024:.1f} KB" if size >= 1024 else f"{size} B"
                         lines.append(f"[FILE] {e.name}  ({size_str})")
-                return f"{path}\n" + "\n".join(lines[:200]) if lines else f"{path}\n(empty directory)"
+                total = len(lines)
+                truncated = total > 500
+                visible = lines[:500]
+                header = f"{path} ({total} entries{', showing first 500' if truncated else ''})"
+                return header + "\n" + "\n".join(visible) if visible else f"{path}\n(empty directory)"
             except FileNotFoundError:
                 return f"Directory not found: {path}"
             except PermissionError:
@@ -1355,12 +1416,10 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
                 from app.tools._mcp_wrapper import dispatch, is_registered
                 if is_registered(tool_name):
                     result = await dispatch(tool_name, args)
-                    # Convert dict results to readable string for conversation
                     if isinstance(result, dict):
                         if "error" in result:
                             return f"Tool error: {result['error']}"
-                        import json
-                        return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+                        return _format_tool_result(result)
                     return str(result)
             except Exception as reg_exc:
                 logger.warning("[interface_agent] Registry dispatch for %s failed: %s", tool_name, reg_exc)

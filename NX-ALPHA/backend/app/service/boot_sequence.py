@@ -431,7 +431,9 @@ class BootSequence:
             await self._run_step_warn("Verify Workhorse", 2, self._verify_workhorse)
             # Check the step result for "available"
             wh_step = next((s for s in reversed(self.state.steps) if s.name == "Verify Workhorse"), None)
-            workhorse_ok = wh_step and wh_step.status == "ok" and "available" in (wh_step.message or "").lower()
+            wh_msg = (wh_step.message or "").lower()
+            # Team gate requires Ollama to be reachable — model loads on first dispatch
+            workhorse_ok = wh_step and wh_step.status == "ok" and "ollama reachable" in wh_msg
 
         # Auto-enable team gate when workhorse (Ollama) is verified
         if workhorse_ok:
@@ -579,6 +581,8 @@ class BootSequence:
             raise RuntimeError(f"Interface engine verification failed: {exc}")
 
     async def _verify_workhorse(self):
+        """Verify Ollama is reachable and capable of serving the workhorse model.
+        The model does not need to be pre-loaded — it activates on first team dispatch."""
         import httpx
         host = self.settings.workhorse.ollama_host
         model = self.settings.workhorse.model
@@ -589,12 +593,10 @@ class BootSequence:
                 if resp.status_code == 200:
                     tags = resp.json()
                     model_names = [m.get("name", "") for m in tags.get("models", [])]
-                    # Check if model is pulled (exact or prefix match)
                     found = any(model in name or name.startswith(model.split(":")[0])
                                 for name in model_names)
-                    if found:
-                        return f"{model} available in Ollama"
-                    return f"{model} not pulled — will pull on first use"
+                    status = "active" if found else "will load on first dispatch"
+                    return f"Ollama reachable — {model} {status}"
                 return f"Ollama responded {resp.status_code}"
         except Exception as exc:
             return f"Ollama not reachable: {exc}"
@@ -643,6 +645,12 @@ class BootSequence:
         # Screen awareness — active window title → proactive file surfacing
         await self._run_step_warn("Screen awareness", 3, self._init_screen_awareness)
 
+        # Computer use — window control, mouse/keyboard, app launch, UIAutomation
+        await self._run_step_warn("Computer use", 3, self._init_computer_use)
+
+        # Self-awareness — AURA's introspective state aggregator
+        await self._run_step_warn("Self-awareness", 3, self._init_self_awareness)
+
         # Idle triage — passive intelligence processing during user idle
         await self._run_step_warn("Idle triage", 3, self._init_idle_triage)
 
@@ -685,8 +693,7 @@ class BootSequence:
         if not svc._available:
             return "skipped — LightRAG not initialized"
         await svc.start_workers()
-        backend = "llama-cpp" if svc._worker_available else "ollama-fallback"
-        return f"started ({backend})"
+        return "started (qwen3.5:9b)"
 
     async def _start_data_collector(self):
         from app.service.data_collector_service import init_data_collector
@@ -783,6 +790,22 @@ class BootSequence:
         svc = init_screen_awareness()
         task = svc.start()
         self._background_tasks.append(task)
+
+    async def _init_computer_use(self):
+        from app.service.computer_use_service import init_computer_use
+        svc = init_computer_use()
+        a = svc.availability()
+        flags = [k for k, v in a.items() if k in ("pyautogui", "win32", "uiautomation") and v]
+        return f"available: {', '.join(flags)}" if flags else "degraded — packages not installed"
+
+    async def _init_self_awareness(self):
+        from app.service.self_awareness_service import init_self_awareness
+        from app.config import get_settings
+        cfg = get_settings().idle_processing
+        fast_s = getattr(cfg, "computer_use_sa_fast_interval_s", 30)
+        svc = init_self_awareness()
+        svc.start_polling(interval_s=fast_s)
+        return "ok"
 
     async def _init_idle_triage(self):
         from app.service.idle_triage_service import init_idle_triage

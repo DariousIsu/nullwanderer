@@ -61,6 +61,7 @@ function safeInvoke(channel, ...args) {
     'window:toggle-always-on-top',
     'window:is-always-on-top',
     'dialog:open-folder',
+    'computer-use:confirm',
   ]);
   if (!ALLOWED_INVOKE.has(channel)) {
     console.error('[preload] Blocked unauthorized IPC invoke:', channel);
@@ -133,6 +134,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   removeVoicePttListener: (fn) => {
     ipcRenderer.removeListener('voice:ptt-toggle', fn);
+  },
+
+  // ── Computer Use ──
+  // Renderer calls this to ask the user to confirm a risky AURA action.
+  confirmComputerUseAction: (payload) => safeInvoke('computer-use:confirm', payload),
+
+  // Notification when AURA performs autonomous computer use during idle.
+  onComputerUseNotify: (fn) => {
+    ipcRenderer.on('computer-use:notify', fn);
+  },
+  removeComputerUseNotifyListener: (fn) => {
+    ipcRenderer.removeListener('computer-use:notify', fn);
+  },
+
+  // Self-status updates from the self-awareness service.
+  onSelfStatusUpdate: (fn) => {
+    ipcRenderer.on('self-status:update', fn);
+  },
+  removeSelfStatusListener: (fn) => {
+    ipcRenderer.removeListener('self-status:update', fn);
   },
 
 });

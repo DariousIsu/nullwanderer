@@ -369,6 +369,11 @@ class ScreenAwarenessService:
         self._last_vision_at:      float = 0.0
         self._last_vision_summary: str   = ""
         self._vision_busy:         bool  = False
+        self._last_vision_window:  tuple = ("", "")   # (title, app) at last vision capture
+
+        # OCR state (event-driven — fires on window change, not on timer)
+        self._last_ocr_text:       str   = ""
+        self._last_ocr_window:     tuple = ("", "")   # (title, app) at last OCR run
 
         # Browser history state (Phase C)
         self._last_browser_at:         float      = 0.0
@@ -380,8 +385,27 @@ class ScreenAwarenessService:
         self._idle_state: str = "active"   # "active" | "soft_idle" | "deep_idle" | "away"
         self._idle_state_changed_at: float = time.time()
         self._on_return_callbacks: list = []  # callables invoked when user returns from idle
+        self._idle_cfg = self._load_idle_cfg()  # cached at init — avoids per-tick config I/O
 
         logger.info("[screen_awareness] ScreenAwarenessService created")
+
+    # ── Idle config ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _load_idle_cfg():
+        """Load idle processing config once at init. Returns safe defaults if unavailable."""
+        try:
+            from app.config import get_settings
+            return get_settings().idle_processing
+        except Exception as exc:
+            logger.warning("[screen_awareness] Could not load idle config (%s) — using defaults", exc)
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                enabled=True,
+                soft_idle_seconds=180,
+                deep_idle_seconds=600,
+                away_seconds=1800,
+            )
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -445,11 +469,7 @@ class ScreenAwarenessService:
 
     def _update_idle_state(self) -> None:
         """Recompute idle state based on time since last interaction."""
-        try:
-            from app.config import get_settings
-            cfg = get_settings().idle_processing
-        except Exception:
-            return
+        cfg = self._idle_cfg  # cached at init — no I/O, no silent failure risk
 
         if not cfg.enabled:
             return
@@ -507,7 +527,13 @@ class ScreenAwarenessService:
             app_hint    = app_hint,
             captured_at = time.time(),
         )
+        # Detect window change (before updating current_context)
+        window_changed = ctx.differs_from(self.current_context)
         self.current_context = ctx
+
+        # Event-driven OCR: fire on window change (no timer, zero background CPU)
+        if window_changed and ctx.is_meaningful():
+            asyncio.create_task(self._ocr_tick(raw_title, proc_name))
 
         # Only emit/search in proactive mode when context changed
         if mode != "proactive":
@@ -537,6 +563,20 @@ class ScreenAwarenessService:
         if _runtime_state.get("interface_busy") or self._vision_busy:
             return
 
+        # Skip-if-unchanged: no new screenshot or LLM call if the user is
+        # still in the same window as the last vision capture.
+        current_window = (self.current_context.raw_title, self.current_context.app_name)
+        if current_window == self._last_vision_window and self._last_vision_at > 0:
+            return
+
+        # System load guard — skip if CPU > 75% or RAM > 85%
+        try:
+            from app.service.self_awareness_service import _system_under_load
+            if _system_under_load():
+                return
+        except ImportError:
+            pass
+
         self._vision_busy = True
         try:
             img_b64 = await asyncio.to_thread(_capture_screen_b64)
@@ -548,6 +588,7 @@ class ScreenAwarenessService:
             summary = await wh.chat_with_image(_VISION_PROMPT, img_b64)
             self._last_vision_summary = summary.strip()
             self._last_vision_at = time.time()
+            self._last_vision_window = current_window
 
             # Persist to memory
             try:
@@ -563,12 +604,14 @@ class ScreenAwarenessService:
             except Exception:
                 pass
 
-            # Emit SSE event
+            # Emit SSE event with window_context field
             try:
                 from app.controller.chat_controller import _emit  # type: ignore
                 await _emit("activity_vision", {
-                    "summary": self._last_vision_summary,
-                    "timestamp": time.time(),
+                    "summary":        self._last_vision_summary,
+                    "window_context": self.current_context.topic,
+                    "app":            self.current_context.app_name,
+                    "timestamp":      time.time(),
                 })
             except Exception:
                 pass
@@ -581,6 +624,96 @@ class ScreenAwarenessService:
             logger.debug("[screen_awareness] Vision tick error: %s", exc)
         finally:
             self._vision_busy = False
+
+    async def _ocr_tick(self, title: str, app_name: str) -> None:
+        """
+        Event-driven OCR — called when the foreground window changes.
+        Captures the focused window region and extracts visible text via OCR.
+        Zero continuous CPU drain: fires once per window switch, then quiet.
+        """
+        from app.controller.chat_controller import _runtime_state  # type: ignore
+        if _runtime_state.get("interface_busy"):
+            return
+
+        # Skip if same window as last OCR run
+        current_window = (title, app_name)
+        if current_window == self._last_ocr_window:
+            return
+
+        # System load guard
+        try:
+            from app.service.self_awareness_service import _system_under_load
+            if _system_under_load():
+                return
+        except ImportError:
+            pass
+
+        try:
+            # Get the focused window rect for targeted capture
+            region = None
+            try:
+                from app.service.computer_use_service import get_computer_use
+                cu = get_computer_use()
+                if cu and cu._win32_ok:
+                    windows = await cu.list_windows()
+                    for w in windows:
+                        if w.get("title") == title:
+                            r = w.get("rect", [0, 0, 1920, 1080])
+                            region = {
+                                "left":   r[0],
+                                "top":    r[1],
+                                "width":  max(r[2] - r[0], 1),
+                                "height": max(r[3] - r[1], 1),
+                            }
+                            break
+            except Exception:
+                pass
+
+            # Capture screen region
+            if region:
+                from app.service.computer_use_service import capture_region_b64
+                img_data = await asyncio.to_thread(
+                    capture_region_b64, 1, region, 1024, 70
+                )
+            else:
+                img_data = {"b64": await asyncio.to_thread(_capture_screen_b64)}
+
+            if "error" in img_data:
+                return
+
+            # Run OCR via the existing ocr_tool
+            try:
+                from app.tools.ocr_tool import tool_handler as _ocr_handler
+                ocr_result = await _ocr_handler({"image_base64": img_data["b64"]})
+                ocr_text = ocr_result.get("text", "") if isinstance(ocr_result, dict) else ""
+            except Exception:
+                ocr_text = ""
+
+            if not ocr_text or not ocr_text.strip():
+                return
+
+            self._last_ocr_text   = ocr_text.strip()
+            self._last_ocr_window = current_window
+
+            # Emit SSE event
+            try:
+                from app.controller.chat_controller import _emit  # type: ignore
+                await _emit("activity_ocr", {
+                    "text":      self._last_ocr_text[:1000],
+                    "window":    title,
+                    "app":       app_name,
+                    "timestamp": time.time(),
+                })
+            except Exception:
+                pass
+
+            logger.debug(
+                "[screen_awareness] OCR tick (%s): %s chars",
+                app_name, len(self._last_ocr_text),
+            )
+
+        except Exception as exc:
+            logger.debug("[screen_awareness] OCR tick error: %s", exc)
 
     # ── Browser history polling ───────────────────────────────────────────────
 
@@ -749,6 +882,25 @@ class ScreenAwarenessService:
         if self._recent_browser_history:
             recent = self._recent_browser_history[0]
             parts.append(f"Recent browser: {recent['title']} ({recent['url'][:60]})")
+
+        # OCR text from current window (first 200 chars — gives agent readable screen content)
+        if self._last_ocr_text:
+            snippet = self._last_ocr_text[:200].replace("\n", " ").strip()
+            if snippet:
+                parts.append(f"Screen text: {snippet}")
+
+        # Open windows (concise list — gives agent awareness of what's running)
+        try:
+            from app.service.computer_use_service import get_computer_use
+            cu = get_computer_use()
+            if cu and cu._win32_ok:
+                import asyncio as _asyncio
+                loop = _asyncio.get_event_loop()
+                if loop.is_running():
+                    # Best-effort: use cached data if available, don't block
+                    pass  # window list is available via tool — no blocking call here
+        except Exception:
+            pass
 
         # Recent file activity (from file_monitor_service)
         try:

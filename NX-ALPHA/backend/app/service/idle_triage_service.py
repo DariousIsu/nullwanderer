@@ -161,6 +161,7 @@ class IdleTriageService:
             "economic": "No recent updates.",
             "legal": "No recent updates.",
             "scientific": "No recent updates.",
+            "knowledge": "No recent ingestion insights.",
             "last_updated": 0.0,
         }
 
@@ -175,6 +176,7 @@ class IdleTriageService:
         # Background tasks
         self._triage_task: Optional[asyncio.Task] = None
         self._dispatch_task: Optional[asyncio.Task] = None
+        self._computer_use_task: Optional[asyncio.Task] = None
 
         logger.info("[idle_triage] IdleTriageService created")
 
@@ -184,6 +186,9 @@ class IdleTriageService:
         """Start background loops. Returns the tasks."""
         self._triage_task = asyncio.create_task(self._triage_loop(), name="idle_triage")
         self._dispatch_task = asyncio.create_task(self._dispatch_loop(), name="idle_dispatch")
+        self._computer_use_task = asyncio.create_task(
+            self._computer_use_idle_loop(), name="idle_computer_use"
+        )
         logger.info("[idle_triage] Background loops started")
 
         # Register return callback for proactive queue flush
@@ -197,10 +202,10 @@ class IdleTriageService:
         except Exception as exc:
             logger.warning("[idle_triage] Could not register return callback: %s", exc)
 
-        return [self._triage_task, self._dispatch_task]
+        return [self._triage_task, self._dispatch_task, self._computer_use_task]
 
     def stop(self) -> None:
-        for task in (self._triage_task, self._dispatch_task):
+        for task in (self._triage_task, self._dispatch_task, self._computer_use_task):
             if task and not task.done():
                 task.cancel()
         logger.info("[idle_triage] Stopped")
@@ -218,9 +223,9 @@ class IdleTriageService:
     def world_state_for_prompt(self) -> str:
         """Format world state as a multi-line string for prompt injection."""
         parts = []
-        for key in ("market", "news", "weather", "economic", "legal", "scientific"):
+        for key in ("market", "news", "weather", "economic", "legal", "scientific", "knowledge"):
             val = self.world_state.get(key, "No data")
-            if val and val != "No recent updates.":
+            if val and val not in ("No recent updates.", "No recent ingestion insights."):
                 parts.append(f"{key.title()}: {val}")
         return "\n".join(parts) if parts else ""
 
@@ -358,6 +363,133 @@ class IdleTriageService:
         except Exception as exc:
             logger.debug("[idle_triage] Stream drain error: %s", exc)
             return []
+
+    # ── Idle Computer Use Loop ────────────────────────────────────────────────
+
+    async def _computer_use_idle_loop(self) -> None:
+        """
+        Bounded autonomous computer use during deep_idle or away states.
+
+        Only runs if IdleProcessingConfig.autonomous_computer_use_allowed is
+        non-empty (default: []). The user must explicitly opt in by listing
+        allowed actions. Each action is enqueued via task_queue_service so
+        the user can see and cancel it via GET /queue.
+        """
+        _IDLE_ACTION_SCHEMA = {
+            "type": "object",
+            "properties": {
+                "action":    {"type": "string"},
+                "reasoning": {"type": "string"},
+                "parameters": {"type": "object"},
+            },
+            "required": ["action"],
+        }
+
+        while True:
+            try:
+                cfg = self._get_config()
+                if not cfg or not cfg.enabled:
+                    await asyncio.sleep(120)
+                    continue
+
+                allowed = getattr(cfg, "autonomous_computer_use_allowed", [])
+                if not allowed:
+                    await asyncio.sleep(300)   # check every 5 min if config changes
+                    continue
+
+                idle_state, _ = self._get_idle_state()
+                if idle_state not in ("deep_idle", "away"):
+                    await asyncio.sleep(60)
+                    continue
+
+                # Don't interrupt active inference
+                try:
+                    from app.controller.chat_controller import _runtime_state
+                    if _runtime_state.get("interface_busy"):
+                        await asyncio.sleep(30)
+                        continue
+                except Exception:
+                    pass
+
+                # Build context for decision
+                try:
+                    from app.service.interface_engine import get_engine
+                    from app.service.self_awareness_service import get_self_awareness
+                    from app.service.screen_awareness_service import get_current_context
+
+                    engine = get_engine()
+                    if engine is None:
+                        await asyncio.sleep(120)
+                        continue
+
+                    sa = get_self_awareness()
+                    health_snap = sa.snapshot("health") if sa else {}
+                    screen_ctx = get_current_context()
+
+                    allowed_list = "\n".join(f"- {a}" for a in allowed)
+                    prompt = (
+                        f"You are AURA operating autonomously while the user is idle.\n"
+                        f"Available actions you may take:\n{allowed_list}\n\n"
+                        f"Current screen: {screen_ctx.topic or 'unknown'} ({screen_ctx.app_name or 'none'})\n"
+                        f"Service health: {len(health_snap.get('services', {}))} services tracked\n\n"
+                        f"Choose ONE action to perform now, or 'none' if nothing is needed. "
+                        f"Respond in JSON."
+                    )
+
+                    result = await engine.generate(
+                        [{"role": "user", "content": prompt}],
+                        max_tokens=256,
+                        format="json",
+                        temperature=0.3,
+                    )
+
+                    import json as _json
+                    action_data = _json.loads(result.get("text", "{}"))
+                    chosen_action = action_data.get("action", "none")
+
+                    if not chosen_action or chosen_action.lower() == "none":
+                        await asyncio.sleep(getattr(cfg, "team_dispatch_cooldown", 300))
+                        continue
+
+                    # Enqueue via task queue — visible + cancellable by user
+                    try:
+                        from app.service.task_queue_service import enqueue_task
+                        await enqueue_task({
+                            "type":          "computer_use_idle",
+                            "action":        chosen_action,
+                            "parameters":    action_data.get("parameters", {}),
+                            "reasoning":     action_data.get("reasoning", ""),
+                            "autonomous":    True,
+                            "idle_action":   True,
+                        })
+                        logger.info(
+                            "[idle_triage] Autonomous computer use queued: %s", chosen_action
+                        )
+
+                        # Emit SSE so frontend can notify user
+                        try:
+                            from app.controller.chat_controller import _emit
+                            await _emit("computer_use_action", {
+                                "action":    chosen_action,
+                                "reasoning": action_data.get("reasoning", ""),
+                                "source":    "idle_autonomous",
+                            })
+                        except Exception:
+                            pass
+
+                    except Exception as exc:
+                        logger.warning("[idle_triage] Failed to enqueue autonomous action: %s", exc)
+
+                except Exception as exc:
+                    logger.debug("[idle_triage] Computer use idle loop error: %s", exc)
+
+                await asyncio.sleep(getattr(cfg, "team_dispatch_cooldown", 300))
+
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning("[idle_triage] Computer use idle loop outer error: %s", exc)
+                await asyncio.sleep(120)
 
     # ── Classification ────────────────────────────────────────────────────────
 
