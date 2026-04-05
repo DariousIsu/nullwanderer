@@ -10,9 +10,10 @@ REST endpoints for the Neural Interface feature:
     GET  /neural/sources              — Known source types + ingestion_enabled flags
     PUT  /neural/sources/{source_id}/ingestion — Enable/disable ingestion per source
     PUT  /neural/mapper/toggle        — Toggle background mapper
-    POST /neural/ingestion-mode/start    — Enter ingestion mode (unload workhorse)
-    POST /neural/ingestion-mode/stop     — Exit ingestion mode (reload workhorse)
+    POST /neural/ingestion-mode/start    — Boost ingestion rate (no model swap)
+    POST /neural/ingestion-mode/stop     — Return to idle-gated ingestion
     POST /neural/ingestion-mode/trigger-exit — Automated trigger exit
+    POST /neural/graph/rebuild           — Rebuild graph from scratch
     GET  /neural/interrupt-config     — Get interrupt trigger config
     PUT  /neural/interrupt-config     — Save interrupt trigger config
 """
@@ -49,7 +50,7 @@ class MapperToggleRequest(BaseModel):
 
 
 class IngestionModeStartRequest(BaseModel):
-    model: str
+    model: str = ""  # ignored — always uses interface model (qwen3.5:9b)
     workers: int = 2
     aggressiveness: int = 5
 
@@ -58,6 +59,10 @@ class IngestionModeTriggerExitRequest(BaseModel):
     reason: str
     trigger: str
     auto_resume: bool = False
+
+
+class GraphRebuildRequest(BaseModel):
+    confirm: bool = False
 
 
 class InterruptConfigRequest(BaseModel):
@@ -609,9 +614,10 @@ async def neural_ingestion_mode_start(body: IngestionModeStartRequest) -> dict:
     """
     Enter ingestion mode:
     1. Set app state ingestion_mode = True
-    2. Unload workhorse via Ollama keep_alive=0 trick
-    3. Set LightRAG worker concurrency to `workers`
-    4. Emit SSE event
+    2. Emit SSE event
+
+    Note: No model swapping — ingestion uses the interface model (qwen3.5:9b)
+    which is always in VRAM. Ingestion rate is controlled by idle-gating.
     """
     # 1. Set app state
     try:
@@ -620,54 +626,32 @@ async def neural_ingestion_mode_start(body: IngestionModeStartRequest) -> dict:
     except Exception:
         pass
 
-    # 2. Unload workhorse model via Ollama
-    workhorse_model = body.model or _get_settings().workhorse_model_name
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
-                f"{_OLLAMA_BASE}/api/generate",
-                json={"model": workhorse_model, "keep_alive": 0},
-            )
-    except Exception as exc:
-        logger.debug("[neural] Ollama model unload failed (non-fatal): %s", exc)
-
-    # 3. Adjust LightRAG worker concurrency
-    lr_svc = _get_lightrag_svc()
-    if lr_svc:
-        try:
-            lr_svc._max_workers = body.workers
-        except Exception:
-            pass
-
-    # 4. Emit SSE event
+    # 2. Emit SSE event
     await _emit("ingestion_mode_started", {
-        "model": workhorse_model,
+        "model": "qwen3.5:9b",
         "workers": body.workers,
         "aggressiveness": body.aggressiveness,
     })
 
     logger.info(
-        "[neural] Ingestion mode started — model=%s workers=%d aggressiveness=%d",
-        workhorse_model, body.workers, body.aggressiveness,
+        "[neural] Ingestion mode started — model=qwen3.5:9b workers=%d aggressiveness=%d",
+        body.workers, body.aggressiveness,
     )
 
-    return {"started": True, "model": workhorse_model, "workers": body.workers}
+    return {"started": True, "model": "qwen3.5:9b", "workers": body.workers}
 
 
 @router.post("/ingestion-mode/stop")
 async def neural_ingestion_mode_stop() -> dict:
     """
     Exit ingestion mode (graceful user stop):
-    1. Signal workers to stop
-    2. Checkpoint all jobs
-    3. Warm the workhorse model via Ollama
-    4. Set ingestion_mode = False
-    5. Emit SSE event
-    """
-    # 1. Signal LightRAG workers
-    lr_svc = _get_lightrag_svc()
+    1. Checkpoint all active jobs
+    2. Set ingestion_mode = False
+    3. Emit SSE event
 
-    # 2. Checkpoint all active jobs
+    Note: No model swapping needed — interface model stays loaded.
+    """
+    # 1. Checkpoint all active jobs
     job_svc = _get_job_svc()
     try:
         for job in job_svc.get_all_jobs():
@@ -676,29 +660,14 @@ async def neural_ingestion_mode_stop() -> dict:
     except Exception as exc:
         logger.debug("[neural] Job checkpoint failed: %s", exc)
 
-    # 3. Warm workhorse model
-    workhorse_model = _get_settings().workhorse_model_name
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            await client.post(
-                f"{_OLLAMA_BASE}/api/generate",
-                json={
-                    "model": workhorse_model,
-                    "prompt": "",
-                    "keep_alive": "5m",
-                },
-            )
-    except Exception as exc:
-        logger.debug("[neural] Workhorse warm-up failed (non-fatal): %s", exc)
-
-    # 4. Clear ingestion mode flag
+    # 2. Clear ingestion mode flag
     try:
         from app.controller.chat_controller import app as _app
         _app.state.ingestion_mode = False
     except Exception:
         pass
 
-    # 5. Emit SSE
+    # 3. Emit SSE
     await _emit("ingestion_mode_stopped", {"reason": "user_stop"})
 
     logger.info("[neural] Ingestion mode stopped (graceful)")
@@ -722,17 +691,6 @@ async def neural_ingestion_mode_trigger_exit(body: IngestionModeTriggerExitReque
             trigger=body.trigger,
         )
         await job_svc.set_status(active["id"], "paused")
-
-    # Warm workhorse
-    workhorse_model = _get_settings().workhorse_model_name
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            await client.post(
-                f"{_OLLAMA_BASE}/api/generate",
-                json={"model": workhorse_model, "prompt": "", "keep_alive": "5m"},
-            )
-    except Exception as exc:
-        logger.debug("[neural] Workhorse warm-up failed (non-fatal): %s", exc)
 
     # Clear ingestion mode flag
     try:
@@ -759,6 +717,31 @@ async def neural_ingestion_mode_trigger_exit(body: IngestionModeTriggerExitReque
         "trigger": body.trigger,
         "auto_resume": body.auto_resume,
     }
+
+
+@router.post("/graph/rebuild")
+async def neural_graph_rebuild(body: GraphRebuildRequest) -> dict:
+    """
+    Rebuild the LightRAG graph from scratch.
+    Archives old graph, clears tracking, reinitializes.
+    Backfill worker will re-process all documents with qwen3.5:9b.
+    """
+    if not body.confirm:
+        raise HTTPException(400, "Set confirm=true to rebuild the graph")
+
+    lr_svc = _get_lightrag_svc()
+    if lr_svc is None:
+        raise HTTPException(503, "LightRAG service not available")
+
+    result = await lr_svc.rebuild_graph()
+
+    if result.get("success"):
+        await _emit("graph_rebuild_started", {"backup": result.get("backup")})
+        logger.info("[neural] Graph rebuild started — backup=%s", result.get("backup"))
+    else:
+        logger.warning("[neural] Graph rebuild failed: %s", result.get("error"))
+
+    return result
 
 
 @router.get("/interrupt-config")

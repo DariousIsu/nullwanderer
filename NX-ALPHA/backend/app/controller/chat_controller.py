@@ -636,7 +636,7 @@ async def models_status() -> dict:
         "interface": {
             "name":   settings.interface_model_name,
             "status": interface_status,
-            "runtime": "llama-cpp-python",
+            "runtime": "ollama",
             "stub_mode": settings.dev_stub_responses or interface_status == "stub",
             **interface_health,
         },

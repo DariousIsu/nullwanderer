@@ -102,7 +102,17 @@ class OllamaService:
                 keep_alive=self.keep_alive,
                 options=self._opts(temperature=temperature, num_predict=max_tokens),
             )
-            return response.message.content
+            content = response.message.content or ""
+            # Qwen 3.5+ uses Ollama's native thinking API — thinking tokens
+            # go into a separate `thinking` field, leaving `content` empty
+            # until the model finishes reasoning.  Fall back to the thinking
+            # text so callers always receive a non-empty string.
+            if not content.strip():
+                thinking = getattr(response.message, "thinking", None) or ""
+                if thinking.strip():
+                    logger.info("[ollama_service] content empty, returning thinking text (%d chars)", len(thinking))
+                    return thinking.strip()
+            return content
 
         try:
             result = await asyncio.to_thread(_call)

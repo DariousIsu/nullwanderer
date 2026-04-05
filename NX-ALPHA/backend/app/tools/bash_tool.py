@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 
 _HOME = Path.home()
 _ALLOWLIST_PATH = _HOME / ".aura" / "bash_allowlist.json"
-_TIMEOUT_SECONDS = 30
-_OUTPUT_CAP = 4000
+_TIMEOUT_SECONDS = 60
+_OUTPUT_CAP = 10_000
 
 # Hard-blocked patterns — matched against the full command string (case-insensitive)
 _BLOCKED_PATTERNS: list[re.Pattern] = [
