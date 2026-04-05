@@ -68,6 +68,9 @@ from app.controller.dev_controller import router as dev_router
 from app.controller.neural_controller import router as neural_router
 from app.controller.travel_controller import router as travel_router
 from app.controller.newsletter_controller import router as newsletter_router
+from app.controller.truthsocial_controller import router as truthsocial_router
+from app.controller.game_controller import router as game_router
+from app.controller.computer_use_controller import router as computer_use_router
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGGING
@@ -222,12 +225,38 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("[main] Newsletter poller start failed (non-fatal): %s", e)
 
+    # ── Truth Social poller — monitor @realDonaldTrump ─────────────────────
+    try:
+        from app.service.truthsocial_service import get_truthsocial_service
+        _ts_cfg = get_settings().truthsocial
+        if _ts_cfg.username and _ts_cfg.password:
+            _ts_svc = get_truthsocial_service()
+            await _ts_svc.start_polling(interval_seconds=_ts_cfg.poll_interval)
+            logger.info("[main] Truth Social polling started (interval=%ds)", _ts_cfg.poll_interval)
+        else:
+            logger.info("[main] Truth Social polling skipped — credentials not configured in .env")
+    except Exception as e:
+        logger.warning("[main] Truth Social poller start failed (non-fatal): %s", e)
+
+    # ── Game Session Service — warm singleton (sessions start on demand) ───
+    try:
+        from app.service.game_session_service import GameSessionService
+        GameSessionService.get_instance()
+    except Exception as e:
+        logger.warning("[main] Game session service init failed (non-fatal): %s", e)
+
     yield  # ── Application runs here (server is accepting connections) ──────
 
     # ── Shutdown ──────────────────────────────────────────────────────────────
     try:
         from app.service.newsletter_service import get_newsletter_service
         await get_newsletter_service().stop_polling()
+    except Exception:
+        pass
+
+    try:
+        from app.service.truthsocial_service import get_truthsocial_service
+        await get_truthsocial_service().stop_polling()
     except Exception:
         pass
 
@@ -318,6 +347,9 @@ app.include_router(dev_router)
 app.include_router(neural_router)
 app.include_router(travel_router)
 app.include_router(newsletter_router)
+app.include_router(truthsocial_router)
+app.include_router(game_router)
+app.include_router(computer_use_router)
 
 
 @app.post("/shutdown")

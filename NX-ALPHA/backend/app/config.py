@@ -220,6 +220,13 @@ class IdleProcessingConfig(BaseModel):
     # Token limits
     max_interface_tokens_per_triage: int = 2048
 
+    # Computer use / self-awareness settings
+    autonomous_computer_use_allowed: List[str] = []   # opt-in: list allowed idle actions
+    computer_use_ocr_on_window_change: bool = True    # event-driven OCR (recommended)
+    computer_use_vision_skip_unchanged: bool = True   # skip vision if same window
+    computer_use_sa_fast_interval_s: int = 30         # self-awareness fast poll (seconds)
+    computer_use_sa_slow_interval_s: int = 300        # self-awareness slow poll (seconds)
+
 
 class MCPConfig(BaseModel):
     """§H MCP client config."""
@@ -263,6 +270,15 @@ class SearchConfig(BaseModel):
     decomposer_min_length: int = 80         # queries shorter than this are never decomposed
 
 
+class TruthSocialConfig(BaseModel):
+    """Truth Social monitor — credentials and polling config."""
+    username: str = ""
+    password: str = ""
+    db_path: str = "~/.aura/truthsocial.db"
+    poll_interval: int = 900          # seconds (default 15 min)
+    monitor_username: str = "realDonaldTrump"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN SETTINGS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -304,6 +320,7 @@ class AuraSettings(BaseSettings):
     knowledge: KnowledgeConfig = KnowledgeConfig()
     market: MarketAPIConfig = MarketAPIConfig()
     search: SearchConfig = SearchConfig()
+    truthsocial: TruthSocialConfig = TruthSocialConfig()
     satellites: List[SatelliteEndpoint] = []
     validator: ValidatorConfig = ValidatorConfig()
     mcp: MCPConfig = MCPConfig()

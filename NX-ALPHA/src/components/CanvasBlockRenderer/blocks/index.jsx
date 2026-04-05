@@ -45,6 +45,7 @@ import AudioClipBlock     from './AudioClipBlock';
 import VideoClipBlock     from './VideoClipBlock';
 import FileBlock          from './FileBlock';
 import CardListBlock      from './CardListBlock';
+import GameStateBlock    from './GameStateBlock';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BLOCK MAP — type string → component
@@ -83,6 +84,8 @@ const BLOCK_MAP = {
   file:            FileBlock,
   // Card list (news, memory, files, screen awareness)
   'card-list':     CardListBlock,
+  // Game state — live Gymnasium / AgentGym sessions
+  game_state:      GameStateBlock,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -142,6 +145,7 @@ export {
   VideoClipBlock,
   FileBlock,
   CardListBlock,
+  GameStateBlock,
 };
 
 export default BLOCK_MAP;

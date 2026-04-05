@@ -314,12 +314,18 @@ def _propagate(norad_id: str, name: str, l1: str, l2: str) -> Optional[dict]:
         satellite = EarthSatellite(l1, l2, name, ts)
         t = ts.now()
         sub = satellite.at(t).subpoint()
+        import math
+        lat = sub.latitude.degrees
+        lon = sub.longitude.degrees
+        alt = sub.elevation.km
+        if any(math.isnan(v) or math.isinf(v) for v in (lat, lon, alt)):
+            return None
         return {
             "norad_id":  norad_id,
             "name":      name,
-            "lat":       sub.latitude.degrees,
-            "lon":       sub.longitude.degrees,
-            "alt_km":    sub.elevation.km,
+            "lat":       lat,
+            "lon":       lon,
+            "alt_km":    alt,
             "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception:

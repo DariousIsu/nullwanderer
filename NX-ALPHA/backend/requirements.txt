@@ -3,10 +3,6 @@
 # INSTALL:
 #   pip install -r requirements.txt
 #
-# AMD ROCm / llama-cpp-python — install separately (see Sprint 0 checklist):
-#   pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/rocm57
-#   OR build from source with CMAKE_ARGS="-DGGML_HIPBLAS=ON"
-#
 # Ollama — install separately: https://ollama.com
 # Neo4j — run via Docker: docker-compose up -d
 # ─────────────────────────────────────────────────────────────────────────────
@@ -42,11 +38,8 @@ neo4j>=5.0.0                      # Layer 3 graph memory (Bolt protocol, replace
 lightrag-hku>=1.0.0               # Graph-enhanced RAG — entity extraction → Neo4j lightrag_knowledge DB
 qdrant-client>=1.9.0              # Semantic search result cache (Docker on port 6333)
 
-# ── Interface Engine + LightRAG Worker ────────────────────────────────────────
-llama-cpp-python>=0.3.0             # LightRAG passive worker (CPU, qwen2.5-3b GGUF) — or install HIP build (see above)
-pynvml>=11.0.0                    # NVIDIA GPU metrics (soft dep — torch installs this)
-
 # ── GPU Monitoring ──────────────────────────────────────────────────────────
+pynvml>=11.0.0                    # NVIDIA GPU metrics (soft dep — torch installs this)
 ADLXPybind>=1.4.0                 # AMD GPU metrics (temp, VRAM, utilization) via ADLX SDK
 
 # ── Workhorse ─────────────────────────────────────────────────────────────────
@@ -103,6 +96,13 @@ google-api-python-client>=2.126.0
 mss>=9.0.0                     # Cross-platform screenshot capture (screen_capture tool)
 Pillow>=10.1.0                 # Image processing + JPEG encode for screen captures
 
+# ── Computer Use (Windows control) ────────────────────────────────────────────
+pyautogui>=0.9.54              # Mouse/keyboard simulation
+pygetwindow>=0.0.9             # Window listing by title
+pywin32>=306                   # Win32 APIs: window management, ShellExecute, UIAutomation
+comtypes>=1.4.2                # COM interface bindings (required by uiautomation)
+uiautomation>=2.0.18           # Windows UIAutomation: find/click UI elements semantically
+
 # ── System Monitoring ─────────────────────────────────────────────────────────
 psutil>=5.9.0                  # CPU, RAM, disk — free, open source
 
@@ -149,3 +149,12 @@ datasets>=2.20.0               # HuggingFace datasets — adversarial trainer da
 # ── Geospatial / Orbital ──────────────────────────────────────────────────────
 skyfield>=1.46.0               # Satellite propagation from TLE data (uses sgp4 internally)
 sgp4>=2.22                     # SGP4 orbital mechanics library (skyfield dependency)
+
+# ── Truth Social Monitor ──────────────────────────────────────────────────────
+truthbrush>=0.1.0              # Truth Social API client — monitor @realDonaldTrump
+
+# ── Game Environments ─────────────────────────────────────────────────────────
+gymnasium>=0.29.0              # Classic RL environments (CartPole, MountainCar, LunarLander)
+gymnasium[classic-control]     # Physics-based classic control environments
+# agentgym — install separately (heavy system deps vary by environment):
+#   pip install agentgym

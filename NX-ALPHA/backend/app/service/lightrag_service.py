@@ -4,14 +4,27 @@ lightrag_service.py
 AURA LightRAG integration — entity extraction and graph-enhanced RAG.
 
 Architecture:
-  - Uses Neo4j `lightrag_knowledge` database (separate from `aura_memory`)
-  - Two LightRAG instances:
-    * Query instance: Ollama LLM for chat-pipeline queries
-    * Worker instance: llama-cpp-python (qwen2.5-3b GGUF, CPU, 2 threads)
-      for passive background entity extraction — never touches Ollama
-  - Both share Ollama embeddings (nomic-embed-text) for vector compatibility
-  - Working dirs: ~/.aura/lightrag/ (query) and ~/.aura/lightrag_worker/ (ingest)
+  - Single LightRAG instance using qwen3.5:9b (interface model) via Ollama
+    for both queries and background entity extraction.
+  - The same model that talks to the user understands the ingested material.
+  - Embeddings: nomic-embed-text via Ollama.
+  - Working dir: ~/.aura/lightrag/
   - Async ingest queue with deduplication (source_id based)
+
+Idle-gated ingestion:
+  Ingestion rate scales with user idle depth:
+    active    → paused (nothing starts)
+    soft_idle → 1 doc / 5 min (extract only)
+    deep_idle → 1 doc / 2 min (extract + reflection)
+    away      → 1 doc / 30s  (extract + reflection + batch synthesis)
+
+  On return to active, in-flight extraction finishes but nothing new starts.
+
+Reflection:
+  In deep_idle and away, after each extraction the interface model is asked
+  what connections it sees between the new material and existing knowledge.
+  Insights are re-inserted as synthetic documents, enriching the graph with
+  higher-order connections. Batch synthesis runs every 10 docs in away mode.
 
 Ingestion paths:
   1. FTS5 sync worker: polls memory_fts for ALL new entries (newest-first),
@@ -30,14 +43,14 @@ Retrieval modes (passed to query()):
 """
 
 import asyncio
-import functools
 import hashlib
 import logging
 import os
+import shutil
 import sqlite3
 import time
 from pathlib import Path
-from typing import Literal, Union
+from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -53,150 +66,42 @@ except ImportError:
     logger.info("[lightrag_service] lightrag-hku not installed — LightRAG disabled")
     logger.info("[lightrag_service] Install with: pip install lightrag-hku")
 
-_WORKING_DIR        = str(Path.home() / ".aura" / "lightrag")
-_WORKER_WORKING_DIR = str(Path.home() / ".aura" / "lightrag_worker")
+_WORKING_DIR  = str(Path.home() / ".aura" / "lightrag")
 _OLLAMA_HOST  = "http://127.0.0.1:11434"
-_EMBED_MODEL  = "nomic-embed-text"   # Fast local embedding via Ollama — shared by both instances
-_LLM_MODEL    = "qwen2.5:3b"         # Query instance LLM (Ollama)
+_EMBED_MODEL  = "nomic-embed-text"   # Fast local embedding via Ollama
+_LLM_MODEL    = "qwen3.5:9b"        # Interface model — always in VRAM
 
-# ── llama-cpp worker model config ─────────────────────────────────────────────
-_WORKER_GGUF_REPO   = "Qwen/Qwen2.5-3B-Instruct-GGUF"
-_WORKER_GGUF_FILE   = "qwen2.5-3b-instruct-q4_k_m.gguf"
-_WORKER_MODEL_DIR   = str(Path.home() / ".aura" / "models" / "lightrag")
-_WORKER_N_THREADS   = 2
-_WORKER_N_CTX       = 8192
+# ── Idle-gated ingestion rates ────────────────────────────────────────────────
+_COOLDOWN_BY_IDLE = {
+    "active":    300,   # 5 min between docs during active use (~10% of away rate)
+    "soft_idle": 300,   # 5 min between docs
+    "deep_idle": 120,   # 2 min between docs
+    "away":       30,   # 30s between docs
+}
+_COOLDOWN_DEFAULT = 300  # fallback: 5 min
+_BATCH_REFLECT_EVERY = 10  # batch synthesis every N docs in away mode
+_FTS5_POLL_INTERVAL = 120  # poll every 2 min (was 30s)
+_FTS5_HOT_LIMIT = 10       # hot fetch size (was 50)
+_FTS5_BACKFILL_LIMIT = 5   # backfill fetch size (was 20)
 
-# Module-level singleton for the llama-cpp model (lazy-loaded)
-_llama_model = None
-_llama_lock: asyncio.Lock | None = None
 
-
-async def _ensure_worker_model() -> Path:
-    """Download the GGUF model if missing, return the path."""
-    model_path = Path(_WORKER_MODEL_DIR) / _WORKER_GGUF_FILE
-    if model_path.exists():
-        return model_path
-
-    logger.info("[lightrag_service] Downloading worker GGUF model: %s/%s",
-                _WORKER_GGUF_REPO, _WORKER_GGUF_FILE)
-    Path(_WORKER_MODEL_DIR).mkdir(parents=True, exist_ok=True)
-
-    loop = asyncio.get_running_loop()
+def _get_idle_state() -> str:
+    """Return current idle state string. Safe if screen_awareness not initialized."""
     try:
-        from huggingface_hub import hf_hub_download
-        downloaded = await loop.run_in_executor(
-            None,
-            functools.partial(
-                hf_hub_download,
-                repo_id=_WORKER_GGUF_REPO,
-                filename=_WORKER_GGUF_FILE,
-                local_dir=_WORKER_MODEL_DIR,
-            ),
-        )
-        logger.info("[lightrag_service] Worker model downloaded: %s", downloaded)
-        return Path(downloaded)
-    except Exception as exc:
-        logger.warning("[lightrag_service] Failed to download worker model: %s", exc)
-        raise
-
-
-async def _get_llama_model():
-    """Lazy-load the llama-cpp-python model singleton."""
-    global _llama_model, _llama_lock
-    if _llama_model is not None:
-        return _llama_model
-
-    if _llama_lock is None:
-        _llama_lock = asyncio.Lock()
-
-    async with _llama_lock:
-        if _llama_model is not None:
-            return _llama_model
-
-        model_path = await _ensure_worker_model()
-
-        loop = asyncio.get_running_loop()
-
-        def _load():
-            from llama_cpp import Llama
-            return Llama(
-                model_path=str(model_path),
-                n_ctx=_WORKER_N_CTX,
-                n_threads=_WORKER_N_THREADS,
-                n_gpu_layers=0,          # CPU only — no GPU contention
-                verbose=False,
-            )
-
-        logger.info("[lightrag_service] Loading worker GGUF model (CPU, %d threads)...",
-                     _WORKER_N_THREADS)
-        _llama_model = await loop.run_in_executor(None, _load)
-        logger.info("[lightrag_service] Worker GGUF model loaded: %s", _WORKER_GGUF_FILE)
-        return _llama_model
-
-
-async def _llama_cpp_complete(
-    prompt,
-    system_prompt=None,
-    history_messages=None,
-    enable_cot: bool = False,
-    keyword_extraction=False,
-    **kwargs,
-) -> Union[str, None]:
-    """LLM function for LightRAG that uses llama-cpp-python instead of Ollama."""
-    if history_messages is None:
-        history_messages = []
-
-    # Build messages list for chat completion
-    messages = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    for msg in history_messages:
-        messages.append(msg)
-    messages.append({"role": "user", "content": prompt})
-
-    model = await _get_llama_model()
-    loop = asyncio.get_running_loop()
-
-    def _generate():
-        _set_thread_idle_priority()
-        response = model.create_chat_completion(
-            messages=messages,
-            max_tokens=4096,
-            temperature=0.0,
-        )
-        return response["choices"][0]["message"]["content"]
-
-    result = await loop.run_in_executor(None, _generate)
-    return result
-
-
-def _set_thread_idle_priority() -> None:
-    """Set the current thread to IDLE priority so it yields to games/heavy apps."""
-    import sys
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            THREAD_SET_INFORMATION = 0x0020
-            THREAD_PRIORITY_IDLE = -15
-            handle = ctypes.windll.kernel32.GetCurrentThread()
-            ctypes.windll.kernel32.SetThreadPriority(handle, THREAD_PRIORITY_IDLE)
-        except Exception:
-            pass
-    else:
-        try:
-            os.nice(19)
-        except OSError:
-            pass
+        from app.service.screen_awareness_service import get_idle_state
+        state, _ = get_idle_state()
+        return state
+    except Exception:
+        return "active"
 
 
 class LightRAGService:
     """
-    Singleton service managing AURA's LightRAG instances.
+    Singleton service managing AURA's LightRAG instance.
 
-    Two instances:
-      - _rag        : Ollama LLM — used for **queries** (chat pipeline)
-      - _rag_worker : llama-cpp LLM — used for **ingest** (background workers)
-    Both share Ollama embeddings (nomic-embed-text) for vector compatibility.
+    Single instance using qwen3.5:9b (interface model) for both queries and
+    background entity extraction. Ingestion is idle-gated and includes
+    reflection for maximum awareness.
 
     Usage:
         svc = LightRAGService.get_instance()
@@ -207,14 +112,14 @@ class LightRAGService:
     _instance: "LightRAGService | None" = None
 
     def __init__(self) -> None:
-        self._rag: "LightRAG | None" = None            # Query instance (Ollama LLM)
-        self._rag_worker: "LightRAG | None" = None      # Worker instance (llama-cpp LLM)
+        self._rag: "LightRAG | None" = None
         self._available = False
-        self._worker_available = False
         self._ingest_queue: asyncio.Queue = asyncio.Queue(maxsize=500)
         self._seen_ids: set[str] = set()
         self._worker_task: asyncio.Task | None = None
         self._sync_task: asyncio.Task | None = None
+        self._rebuilding = False
+        self._recent_ingestions: list[str] = []  # summaries for batch reflection
 
     @classmethod
     def get_instance(cls) -> "LightRAGService":
@@ -223,7 +128,7 @@ class LightRAGService:
         return cls._instance
 
     async def initialize(self) -> None:
-        """Initialize LightRAG query instance (Ollama LLM) and prepare worker instance."""
+        """Initialize the single LightRAG instance (qwen3.5:9b via Ollama)."""
         if not _LIGHTRAG_AVAILABLE:
             logger.warning("[lightrag_service] LightRAG not available — skipping init")
             return
@@ -232,14 +137,12 @@ class LightRAGService:
 
         try:
             Path(_WORKING_DIR).mkdir(parents=True, exist_ok=True)
-            Path(_WORKER_WORKING_DIR).mkdir(parents=True, exist_ok=True)
 
             # Configure Ollama as the LLM and embedding provider
             os.environ.setdefault("OPENAI_BASE_URL", f"{_OLLAMA_HOST}/v1")
             os.environ.setdefault("OPENAI_API_KEY", "ollama")
 
-            # Shared embedding function — both instances use Ollama nomic-embed-text
-            # for vector compatibility between ingest and query paths.
+            # Embedding function — nomic-embed-text via Ollama
             import numpy as np
             from lightrag.llm.ollama import ollama_embed as _ollama_embed_wrapped
 
@@ -257,14 +160,14 @@ class LightRAGService:
                 func=_embed_func,
             )
 
-            # ── Query instance (Ollama LLM) — used by chat pipeline ──────────
+            # Single instance — interface model for both query and ingest
             self._rag = LightRAG(
                 working_dir=_WORKING_DIR,
                 llm_model_func=ollama_model_complete,
                 llm_model_name=_LLM_MODEL,
                 llm_model_kwargs={
                     "host": _OLLAMA_HOST,
-                    "options": {"num_ctx": 8192},
+                    "options": {"num_ctx": 16384},
                     "timeout": 600,
                 },
                 embedding_func=embedding_func,
@@ -274,95 +177,157 @@ class LightRAGService:
 
             await self._rag.initialize_storages()
             self._available = True
-            logger.info("[lightrag_service] Query instance initialized — working_dir=%s", _WORKING_DIR)
-
-            # ── Worker instance (llama-cpp LLM) — used by background ingest ──
-            # Deferred: workers are started later via start_workers() in Phase 3
-            # to avoid CPU/memory contention during boot.
+            logger.info("[lightrag_service] Initialized (model=%s) — working_dir=%s",
+                        _LLM_MODEL, _WORKING_DIR)
 
         except Exception as exc:
             logger.warning("[lightrag_service] LightRAG init failed: %s", exc)
             self._available = False
 
-    async def _init_worker_instance(self) -> None:
-        """Initialize the llama-cpp-backed worker LightRAG instance."""
-        if self._worker_available:
-            return
-        try:
-            import numpy as np
-            from lightrag.llm.ollama import ollama_embed as _ollama_embed_wrapped
-
-            async def _embed_func(texts: list[str]) -> np.ndarray:
-                result = await _ollama_embed_wrapped.func(
-                    texts,
-                    embed_model=_EMBED_MODEL,
-                    host=_OLLAMA_HOST,
-                )
-                return np.array(result, dtype=np.float32)
-
-            embedding_func = EmbeddingFunc(
-                embedding_dim=768,
-                max_token_size=8192,
-                func=_embed_func,
-            )
-
-            self._rag_worker = LightRAG(
-                working_dir=_WORKER_WORKING_DIR,
-                llm_model_func=_llama_cpp_complete,
-                llm_model_name="qwen2.5-3b-instruct",
-                llm_model_kwargs={},
-                embedding_func=embedding_func,
-                enable_llm_cache=False,
-                enable_llm_cache_for_entity_extract=False,
-            )
-
-            await self._rag_worker.initialize_storages()
-            self._worker_available = True
-            logger.info("[lightrag_service] Worker instance initialized (llama-cpp) — working_dir=%s",
-                        _WORKER_WORKING_DIR)
-        except Exception as exc:
-            logger.warning("[lightrag_service] Worker instance init failed: %s", exc)
-            self._worker_available = False
-
     async def start_workers(self) -> None:
         """Start background ingest + FTS5 sync workers. Called from boot Phase 3."""
         if not self._available:
-            logger.warning("[lightrag_service] Cannot start workers — query instance not available")
+            logger.warning(
+                "[lightrag_service] Workers NOT started — LightRAG failed to initialize. "
+                "Verify Ollama is running and nomic-embed-text is pulled: "
+                "`ollama pull nomic-embed-text`"
+            )
             return
-
-        # Initialize the llama-cpp worker instance
-        await self._init_worker_instance()
-
-        if not self._worker_available:
-            logger.warning("[lightrag_service] Worker instance failed — "
-                           "falling back to Ollama for ingest")
 
         self._worker_task = asyncio.create_task(self._ingest_worker())
         self._sync_task = asyncio.create_task(self._fts5_sync_worker())
-        logger.info("[lightrag_service] Background workers started (worker_llm=%s)",
-                     "llama-cpp" if self._worker_available else "ollama-fallback")
+        logger.info("[lightrag_service] Background workers started (model=%s)", _LLM_MODEL)
+
+    # ── Ingest Worker ─────────────────────────────────────────────────────────
 
     async def _ingest_worker(self) -> None:
-        """Background worker that drains the ingest queue.
-        Uses llama-cpp worker instance if available, falls back to Ollama."""
-        ingest_rag = self._rag_worker if self._worker_available else self._rag
-        _backend = "llama-cpp" if self._worker_available else "ollama"
+        """Background worker that drains the ingest queue, idle-gated."""
         while True:
             try:
-                text, source_id, source_type = await self._ingest_queue.get()
+                # Gate: pause only during active rebuild
+                idle = _get_idle_state()
+                if self._rebuilding:
+                    await asyncio.sleep(10)
+                    continue
+
                 try:
-                    await ingest_rag.ainsert(text)
-                    logger.debug("[lightrag_service] Ingested (%s) source_id=%s type=%s",
-                                 _backend, source_id, source_type)
+                    text, source_id, source_type = self._ingest_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    await asyncio.sleep(10)
+                    continue
+
+                try:
+                    await self._rag.ainsert(text)
+                    logger.debug("[lightrag_service] Ingested source_id=%s type=%s",
+                                 source_id, source_type)
+
+                    # Reflection in deep_idle and away
+                    idle = _get_idle_state()
+                    if idle in ("deep_idle", "away"):
+                        summary = text[:2000]
+                        await self._reflect_on_ingestion(summary, source_id)
+                        self._recent_ingestions.append(summary)
+
+                        # Batch synthesis every N docs in away mode
+                        if idle == "away" and len(self._recent_ingestions) >= _BATCH_REFLECT_EVERY:
+                            await self._batch_reflect()
+                            self._recent_ingestions.clear()
+
                 except Exception as exc:
                     logger.warning("[lightrag_service] Ingest failed for %s: %s", source_id, exc)
                 finally:
                     self._ingest_queue.task_done()
+
+                # Rate limit based on idle depth
+                cooldown = _COOLDOWN_BY_IDLE.get(idle, _COOLDOWN_DEFAULT)
+                await asyncio.sleep(cooldown)
+
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 logger.warning("[lightrag_service] Worker error: %s", exc)
-                await asyncio.sleep(1)
+                await asyncio.sleep(5)
+
+    # ── Reflection ────────────────────────────────────────────────────────────
+
+    async def _reflect_on_ingestion(self, doc_summary: str, doc_id: str) -> None:
+        """Ask the interface model what connections it sees in newly ingested material."""
+        from app.service.interface_engine import get_engine
+
+        engine = get_engine()
+        if not engine:
+            return
+
+        try:
+            # Query graph for entities related to this document
+            related = await self._rag.aquery(
+                doc_summary[:500],
+                param=QueryParam(mode="local", top_k=10),
+            )
+
+            result = await engine.generate([{
+                "role": "user",
+                "content": (
+                    f"You just processed this document:\n{doc_summary}\n\n"
+                    f"Related knowledge already in the graph:\n{str(related)[:2000]}\n\n"
+                    f"What new connections, patterns, or insights emerge? "
+                    f"Be specific about relationships between entities. "
+                    f"Format as a brief analytical note."
+                )
+            }], max_tokens=512, temperature=0.4)
+
+            insight = result.get("text", "").strip()
+            if insight and len(insight) > 50:
+                # Feed insight back into graph as synthetic document
+                await self._rag.ainsert(f"[Insight — {doc_id}] {insight}")
+                logger.info("[lightrag_service] Reflection inserted (%d chars)", len(insight))
+
+                # Update world state knowledge key
+                self._update_world_state_knowledge(insight)
+
+        except Exception as exc:
+            logger.debug("[lightrag_service] Reflection failed (non-fatal): %s", exc)
+
+    async def _batch_reflect(self) -> None:
+        """Cross-domain synthesis across recently ingested documents."""
+        from app.service.interface_engine import get_engine
+
+        engine = get_engine()
+        if not engine:
+            return
+
+        try:
+            summaries = "\n---\n".join(self._recent_ingestions[-_BATCH_REFLECT_EVERY:])
+            result = await engine.generate([{
+                "role": "user",
+                "content": (
+                    f"Review these recently ingested documents:\n{summaries[:4000]}\n\n"
+                    f"Identify cross-domain patterns, emerging themes, or "
+                    f"connections between previously unrelated topics."
+                )
+            }], max_tokens=768, temperature=0.5)
+
+            synthesis = result.get("text", "").strip()
+            if synthesis and len(synthesis) > 50:
+                await self._rag.ainsert(f"[Synthesis] {synthesis}")
+                logger.info("[lightrag_service] Batch synthesis inserted (%d chars)", len(synthesis))
+                self._update_world_state_knowledge(synthesis)
+
+        except Exception as exc:
+            logger.debug("[lightrag_service] Batch reflection failed (non-fatal): %s", exc)
+
+    @staticmethod
+    def _update_world_state_knowledge(insight: str) -> None:
+        """Push recent ingestion insight into world state knowledge key."""
+        try:
+            from app.service.idle_triage_service import get_idle_triage
+            triage = get_idle_triage()
+            if triage:
+                triage.world_state["knowledge"] = f"Recently learned: {insight[:300]}"
+        except Exception:
+            pass
+
+    # ── Public API ────────────────────────────────────────────────────────────
 
     def enqueue_ingest(self, text: str, source_id: str, source_type: str = "conversation") -> bool:
         """
@@ -393,7 +358,6 @@ class LightRAGService:
         """
         Direct async ingest — for batch scripts and lightrag_tool.py.
         Awaits completion (unlike enqueue_ingest which is fire-and-forget).
-        Uses worker instance (llama-cpp) if available, falls back to Ollama.
         """
         if not self._available or self._rag is None:
             return {"success": False, "error": "LightRAG not initialized"}
@@ -403,9 +367,8 @@ class LightRAGService:
             return {"success": True, "skipped": True, "reason": "already ingested"}
         self._seen_ids.add(dedup_key)
 
-        ingest_rag = self._rag_worker if self._worker_available else self._rag
         try:
-            await ingest_rag.ainsert(text)
+            await self._rag.ainsert(text)
             return {"success": True, "source_id": source_id, "source_type": source_type}
         except Exception as exc:
             logger.warning("[lightrag_service] Direct ingest failed for %s: %s", source_id, exc)
@@ -430,9 +393,66 @@ class LightRAGService:
             logger.warning("[lightrag_service] Query failed: %s", exc)
             return {"success": False, "error": str(exc), "result": ""}
 
+    # ── Graph Rebuild ─────────────────────────────────────────────────────────
+
+    async def rebuild_graph(self) -> dict:
+        """
+        Rebuild the LightRAG graph from scratch.
+        1. Pause workers
+        2. Archive old graph data
+        3. Clear tracking table + watermark
+        4. Reinitialize with fresh working directory
+        5. Resume workers — backfill re-discovers all documents
+        """
+        if self._rebuilding:
+            return {"success": False, "error": "Rebuild already in progress"}
+
+        self._rebuilding = True
+        backup_name = f"lightrag_backup_{int(time.time())}"
+        backup_path = str(Path.home() / ".aura" / backup_name)
+
+        try:
+            # Archive old graph
+            if Path(_WORKING_DIR).exists():
+                shutil.move(_WORKING_DIR, backup_path)
+                logger.info("[lightrag_service] Archived graph to %s", backup_path)
+
+            # Clear tracking table
+            try:
+                from app.service.memory_service import get_memory_service
+                mem = get_memory_service()
+                if mem:
+                    with sqlite3.connect(mem._l1_path) as db:
+                        db.execute("DELETE FROM lightrag_processed")
+                    logger.info("[lightrag_service] Cleared lightrag_processed table")
+            except Exception as exc:
+                logger.warning("[lightrag_service] Could not clear tracking table: %s", exc)
+
+            # Clean up old worker directory if it exists
+            old_worker_dir = Path.home() / ".aura" / "lightrag_worker"
+            if old_worker_dir.exists():
+                shutil.rmtree(str(old_worker_dir), ignore_errors=True)
+                logger.info("[lightrag_service] Removed old worker directory")
+
+            # Reinitialize
+            self._available = False
+            self._rag = None
+            self._seen_ids.clear()
+            self._recent_ingestions.clear()
+            await self.initialize()
+
+            self._rebuilding = False
+            logger.info("[lightrag_service] Graph rebuild initiated — backfill will re-process all documents")
+            return {"success": True, "backup": backup_name}
+
+        except Exception as exc:
+            self._rebuilding = False
+            logger.error("[lightrag_service] Rebuild failed: %s", exc)
+            return {"success": False, "error": str(exc)}
+
     # ── FTS5 Sync Worker ───────────────────────────────────────────────────────
 
-    async def _fts5_sync_worker(self, poll_interval: float = 30.0) -> None:
+    async def _fts5_sync_worker(self) -> None:
         """
         Background worker that polls memory_fts for new entries and enqueues
         them into LightRAG for entity extraction.
@@ -440,6 +460,8 @@ class LightRAGService:
         Two-pass strategy (newest-first):
           Pass 1: entries newer than high watermark (hot path, always first)
           Pass 2: old unprocessed entries (backfill, only when hot path empty)
+
+        Idle-gated: pauses during active use.
         """
         watermark_path = Path(_WORKING_DIR) / "fts5_high_watermark.txt"
 
@@ -454,7 +476,12 @@ class LightRAGService:
 
         while True:
             try:
-                await asyncio.sleep(poll_interval)
+                await asyncio.sleep(_FTS5_POLL_INTERVAL)
+
+                idle = _get_idle_state()
+                if self._rebuilding:
+                    continue
+
                 if not self._available:
                     continue
 
@@ -466,8 +493,12 @@ class LightRAGService:
                 from app.config import get_settings
                 disabled = getattr(get_settings(), "lightrag_disabled_sources", [])
 
+                # Passive mode during active use — 1 doc per cycle (10% of idle rate)
+                hot_limit = 1 if idle == "active" else _FTS5_HOT_LIMIT
+                backfill_limit = 1 if idle == "active" else _FTS5_BACKFILL_LIMIT
+
                 # PASS 1: Hot path — newest entries (> high watermark), DESC
-                new_rows = self._query_fts5_newer_than(mem._l1_path, high_wm, limit=50)
+                new_rows = self._query_fts5_newer_than(mem._l1_path, high_wm, limit=hot_limit)
 
                 if new_rows:
                     for row in new_rows:
@@ -485,7 +516,7 @@ class LightRAGService:
                     continue  # prioritize new data — skip backfill this cycle
 
                 # PASS 2: Backfill — old unprocessed entries, newest-of-old first
-                old_rows = self._query_fts5_unprocessed(mem._l1_path, high_wm, limit=20)
+                old_rows = self._query_fts5_unprocessed(mem._l1_path, high_wm, limit=backfill_limit)
 
                 if old_rows:
                     for row in old_rows:
@@ -502,7 +533,7 @@ class LightRAGService:
                 break
             except Exception as exc:
                 logger.warning("[lightrag_service] FTS5 sync error: %s", exc)
-                await asyncio.sleep(poll_interval)
+                await asyncio.sleep(_FTS5_POLL_INTERVAL)
 
     def _ensure_processed_table(self) -> None:
         """Create the lightrag_processed tracking table if it doesn't exist."""
@@ -523,7 +554,7 @@ class LightRAGService:
             """)
 
     @staticmethod
-    def _query_fts5_newer_than(db_path: str, since_ts: float, limit: int = 50) -> list[dict]:
+    def _query_fts5_newer_than(db_path: str, since_ts: float, limit: int = 10) -> list[dict]:
         """Newest entries first — hot path for real-time data."""
         with sqlite3.connect(db_path) as db:
             db.row_factory = sqlite3.Row
@@ -536,7 +567,7 @@ class LightRAGService:
         return [dict(r) for r in rows]
 
     @staticmethod
-    def _query_fts5_unprocessed(db_path: str, before_ts: float, limit: int = 20) -> list[dict]:
+    def _query_fts5_unprocessed(db_path: str, before_ts: float, limit: int = 5) -> list[dict]:
         """Backfill: old entries not yet processed, newest-of-old first."""
         with sqlite3.connect(db_path) as db:
             db.row_factory = sqlite3.Row
@@ -601,11 +632,11 @@ class LightRAGService:
             "seen_ids_count": len(self._seen_ids),
             "working_dir": _WORKING_DIR,
             "llm_model": _LLM_MODEL,
-            "worker_llm": "llama-cpp/" + _WORKER_GGUF_FILE if self._worker_available else _LLM_MODEL,
-            "worker_available": self._worker_available,
             "embed_model": _EMBED_MODEL,
             "entity_count": entity_count,
             "relation_count": relation_count,
+            "rebuilding": self._rebuilding,
+            "idle_state": _get_idle_state(),
         }
 
     async def shutdown(self) -> None:

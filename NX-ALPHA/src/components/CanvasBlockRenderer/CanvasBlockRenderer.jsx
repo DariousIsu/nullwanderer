@@ -60,6 +60,8 @@ const BLOCK_DEFAULTS = {
   file:        { w: 400, h: 100 },
   // Card list
   'card-list': { w: 420, h: 320 },
+  // Game state — live Gymnasium / AgentGym sessions
+  game_state:  { w: 540, h: 340 },
 };
 
 // Auto-placement cascade — offset each new block slightly so they don't overlap
