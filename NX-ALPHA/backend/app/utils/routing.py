@@ -294,6 +294,13 @@ _TEAM_KEYWORDS_STRONG = [
     "verify the citations", "check the citations", "citation verification",
     "validate citations", "citation check", "verify these citations",
     "verify the sources", "source verification",
+    # Complex software builds — Workhorse/dev pipeline is better suited
+    "build a full application", "build a full app", "build a complete application",
+    "build a complete app", "build a production", "full stack application",
+    "multi-file program", "build a system", "build a service",
+    "write a complete program", "write a full program", "write a complete application",
+    "build a data pipeline", "build an api", "build a rest api",
+    "write a backend", "write a frontend", "write a web app",
 ]
 
 # Weaker signals — need longer context to be confident (>8 words)
@@ -467,6 +474,14 @@ def is_team_task(text: str) -> bool:
         "put it in the canvas", "put them in the canvas",
         "just search", "search them up", "search it up",
         "web search and find", "web search for", "just web search",
+        # Canvas interactive app requests — always solo, use display() tool
+        "html game", "a game in", "game in the canvas", "game on the canvas",
+        "game we can play", "play together", "play it in", "game in canvas",
+        "build it in the canvas", "launch it in the canvas", "render it in canvas",
+        "interactive game", "tic-tac-toe", "tic tac toe", "chess in", "checkers in",
+        "show it in the canvas", "launch in canvas", "render in canvas",
+        "interactive app", "interactive tool", "calculator in canvas",
+        "live demo", "on the canvas", "in the canvas",
     ]
     if any(sig in lower for sig in _FETCH_SIGNALS):
         return False
@@ -513,6 +528,10 @@ def is_team_task(text: str) -> bool:
         "run this command", "run the command", "execute this",
         "check the file", "check this file", "check the folder",
         "your source file", "your source code", "source files",
+        # Code execution requests — solo via code_runner/snip
+        "run this code", "run this script", "execute this code", "execute this script",
+        "run the code", "run the script", "quick script", "small script", "code snippet",
+        "python snippet", "js snippet", "javascript snippet",
     ]
     if any(sig in lower for sig in _TOOL_USE_SIGNALS) and not _has_deliverable:
         logger.debug("[routing] Hard guard 6 (tool-use): %r → solo", text[:60])

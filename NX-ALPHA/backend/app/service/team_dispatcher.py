@@ -242,6 +242,24 @@ class TeamDispatcher:
             self._active_thread_id = None
             return
 
+        # Ensure Workhorse is loaded before the pipeline starts.
+        # If it unloaded during idle time, trigger a minimal warm-up call now
+        # so the model is in VRAM when the first pipeline node fires.
+        from app.service.ollama_service import get_ollama_service
+        _wh_svc = get_ollama_service()
+        if _wh_svc and not _wh_svc.is_probably_loaded:
+            logger.info("[team_dispatcher] Workhorse not loaded — warming up before pipeline start")
+            try:
+                await _wh_svc.chat(
+                    [{"role": "user", "content": "ready"}],
+                    max_tokens=1,
+                    temperature=0.0,
+                )
+                logger.info("[team_dispatcher] Workhorse warm-up complete")
+            except Exception as _warm_err:
+                logger.warning("[team_dispatcher] Workhorse warm-up failed: %s", _warm_err)
+                # Proceed anyway — Ollama may still load the model on the first real call
+
         # Build initial team state
         state = initial_team_state(
             team_id=job.team_id,
