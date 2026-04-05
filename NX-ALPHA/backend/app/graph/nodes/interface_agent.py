@@ -1729,8 +1729,8 @@ async def _generate_stub_response(user_message: str, msg_id: str, tts_emitter=No
 # ─────────────────────────────────────────────────────────────────────────────
 
 _MAX_TOOL_ROUNDS = 3      # prevent runaway tool loops
-_GEN_MAX_TOKENS  = 4096   # budget for model generation (thinking + response)
-_FAST_MAX_TOKENS = 2048   # reduced budget for simple conversational queries (never scaled)
+_GEN_MAX_TOKENS  = 12288  # budget for model generation (thinking + response)
+_FAST_MAX_TOKENS = 4096   # reduced budget for simple conversational queries (never scaled)
 _MAX_TOOL_RESULT_CHARS = 1500  # hard cap per tool result
 _MEM_CTX_CHAR_BUDGET   = 6000  # ~1500 tokens; cap total assembled memory context
 _MEM_CTX_SNIPPET_FULL  = 600   # chars per snippet under budget
@@ -1743,17 +1743,17 @@ def set_interface_budget(solo: bool) -> None:
     Dynamically adjust generation budget based on workhorse state.
     Called by ollama_service when workhorse loads/unloads.
 
-    solo=True  (workhorse idle):   full budget — 3 tool rounds, 4096 tokens, 6000 char memory
-    solo=False (workhorse active): reduced budget — 2 rounds, 2048 tokens, 3000 char memory
+    solo=True  (workhorse idle):   full budget — 3 tool rounds, 12288 tokens, 6000 char memory
+    solo=False (workhorse active): reduced budget — 2 rounds, 6144 tokens, 3000 char memory
     """
     global _MAX_TOOL_ROUNDS, _GEN_MAX_TOKENS, _MEM_CTX_CHAR_BUDGET
     if solo:
         _MAX_TOOL_ROUNDS     = 3
-        _GEN_MAX_TOKENS      = 4096
+        _GEN_MAX_TOKENS      = 12288
         _MEM_CTX_CHAR_BUDGET = 6000
     else:
         _MAX_TOOL_ROUNDS     = 2
-        _GEN_MAX_TOKENS      = 2048
+        _GEN_MAX_TOKENS      = 6144
         _MEM_CTX_CHAR_BUDGET = 3000
 
 # Grammar-constrained tool call schema — used when model refuses to output tool JSON
