@@ -669,7 +669,7 @@ const CommandCenter = ({
       } catch { /* backend not ready yet */ }
     };
     poll();
-    const id = setInterval(poll, 10_000);
+    const id = setInterval(poll, 30_000);
 
     // Fetch LLMFit recommendation (retries until backend up)
     retryFetch('http://127.0.0.1:8000/llmfit/recommend', (data) => {

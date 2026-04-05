@@ -155,19 +155,28 @@ const AdversarialTrainerPanel = () => {
     setHistoryLoading(false);
   }, []);
 
-  // Start polling on mount; also load dataset registry for suggestions
+  // Poll on mount — fast (5s) while training is running, slow (30s) when idle
   useEffect(() => {
     fetchStatus();
     fetchStats();
     fetchQueueStatus();
     fetchDatasets();
-    pollRef.current = setInterval(() => {
-      fetchStatus();
-      fetchStats();
-      fetchQueueStatus();
-    }, 3000);
+
+    const tick = () => {
+      fetchStatus().then(() => {
+        // Only fetch stats/queue when training is actively running
+        if (status?.running) {
+          fetchStats();
+          fetchQueueStatus();
+        }
+      });
+    };
+
+    // Use fast polling only when training is running
+    const interval = status?.running ? 5000 : 30000;
+    pollRef.current = setInterval(tick, interval);
     return () => clearInterval(pollRef.current);
-  }, [fetchStatus, fetchStats, fetchQueueStatus, fetchDatasets]);
+  }, [fetchStatus, fetchStats, fetchQueueStatus, fetchDatasets, status?.running]);
 
   useEffect(() => {
     if (activeTab === 'history') fetchDatasets();

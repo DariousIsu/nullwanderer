@@ -82,7 +82,7 @@ export function useInbox(pollMs = 120000) {
 
 // ── System Status ─────────────────────────────────────────────────────────────
 
-export function useSystemStatus(pollMs = 15000) {
+export function useSystemStatus(pollMs = 30000) {
   return useFetch('/system/status', { pollMs });
 }
 
@@ -113,7 +113,7 @@ export async function removeGoogleAccount(accountId) {
 
 // ── Hardware / Queue ──────────────────────────────────────────────────────────
 
-export function useQueueStatus(pollMs = 15000) {
+export function useQueueStatus(pollMs = 30000) {
   return useFetch('/queue/status', { pollMs });
 }
 
@@ -431,11 +431,11 @@ export async function downloadVoiceModel(modelId) {
 
 // ── Satellites ───────────────────────────────────────────────────────────────
 
-export function useSatellites(pollMs = 15000) {
+export function useSatellites(pollMs = 60000) {
   return useFetch('/satellites', { pollMs });
 }
 
-export function useSatelliteNetworkMap(pollMs = 15000) {
+export function useSatelliteNetworkMap(pollMs = 60000) {
   return useFetch('/satellites/network-map', { pollMs });
 }
 

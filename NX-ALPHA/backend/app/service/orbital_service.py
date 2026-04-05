@@ -36,6 +36,12 @@ _last_failure_time: Optional[datetime] = None
 _BACKOFF_BASE_SECONDS = 60   # 1 min after first failure
 _BACKOFF_MAX_SECONDS = 600   # cap at 10 min
 
+# CelesTrak-specific cooldown (separate from overall refresh backoff)
+_celestrak_consecutive_failures: int = 0
+_celestrak_last_failure: Optional[datetime] = None
+_CELESTRAK_COOLDOWN_THRESHOLD = 3     # After 3 failures, enter long cooldown
+_CELESTRAK_COOLDOWN_SECONDS = 1800    # 30-minute cooldown before retrying CelesTrak
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DB
@@ -114,32 +120,56 @@ async def refresh_catalog(category: str = "active") -> int:
     Fetch TLE catalog from CelesTrak (primary) with SatNOGS fallback.
     Returns count of satellites stored.
     """
+    global _celestrak_consecutive_failures, _celestrak_last_failure
+
     now_iso  = datetime.utcnow().isoformat()
     filename = CATALOGS.get(category, "active.txt")
     url      = f"{CELESTRAK_TLE_BASE}/{filename}"
-    logger.info("[orbital] Fetching TLE catalog: %s", url)
 
     satellites = []
+    skip_celestrak = False
+
+    # Check if CelesTrak is in cooldown after repeated failures
+    if _celestrak_consecutive_failures >= _CELESTRAK_COOLDOWN_THRESHOLD and _celestrak_last_failure:
+        elapsed = (datetime.utcnow() - _celestrak_last_failure).total_seconds()
+        if elapsed < _CELESTRAK_COOLDOWN_SECONDS:
+            skip_celestrak = True
+            logger.debug(
+                "[orbital] CelesTrak in cooldown (%d failures, %ds remaining) — using SatNOGS directly",
+                _celestrak_consecutive_failures,
+                int(_CELESTRAK_COOLDOWN_SECONDS - elapsed),
+            )
 
     # ── Primary: CelesTrak TLE text format ───────────────────────────────────
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            res = await client.get(url)
-            res.raise_for_status()
+    if not skip_celestrak:
+        logger.info("[orbital] Fetching TLE catalog: %s", url)
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                res = await client.get(url)
+                res.raise_for_status()
 
-        lines = [l for l in res.text.strip().splitlines() if l.strip()]
-        for i in range(0, len(lines) - 2, 3):
-            name = lines[i].strip()
-            l1   = lines[i + 1].strip()
-            l2   = lines[i + 2].strip()
-            if l1.startswith("1 ") and l2.startswith("2 "):
-                norad_id = l1[2:7].strip()
-                satellites.append((norad_id, name, l1, l2, category, now_iso))
+            lines = [l for l in res.text.strip().splitlines() if l.strip()]
+            for i in range(0, len(lines) - 2, 3):
+                name = lines[i].strip()
+                l1   = lines[i + 1].strip()
+                l2   = lines[i + 2].strip()
+                if l1.startswith("1 ") and l2.startswith("2 "):
+                    norad_id = l1[2:7].strip()
+                    satellites.append((norad_id, name, l1, l2, category, now_iso))
 
-        if not satellites:
-            logger.warning("[orbital] No satellites parsed from CelesTrak %s", url)
-    except Exception as exc:
-        logger.warning("[orbital] CelesTrak fetch failed: %s — trying SatNOGS fallback", exc)
+            if satellites:
+                # CelesTrak succeeded — reset cooldown
+                _celestrak_consecutive_failures = 0
+                _celestrak_last_failure = None
+            else:
+                logger.warning("[orbital] No satellites parsed from CelesTrak %s", url)
+        except Exception as exc:
+            _celestrak_consecutive_failures += 1
+            _celestrak_last_failure = datetime.utcnow()
+            logger.warning(
+                "[orbital] CelesTrak fetch failed (attempt %d): %s — trying SatNOGS fallback",
+                _celestrak_consecutive_failures, exc,
+            )
 
     # ── Fallback: SatNOGS DB (reachable when CelesTrak is blocked) ───────────
     if not satellites:

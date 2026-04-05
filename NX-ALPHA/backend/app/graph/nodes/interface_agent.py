@@ -1401,6 +1401,14 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
         return f"Tool error: {exc}"
 
 
+def _repair_tool_json(text: str) -> str:
+    """Fix common LLM JSON errors: unquoted keys, trailing commas."""
+    s = text.strip()
+    s = re.sub(r'(?<=[\{,\n])\s*([a-zA-Z_]\w*)\s*:', r' "\1":', s)
+    s = re.sub(r',\s*\}', '}', s)
+    return s
+
+
 def _unwrap_tool_args(obj: dict) -> dict:
     """Flatten {"tool": "X", "args": {k: v}} → {"tool": "X", k: v}."""
     if "args" in obj and isinstance(obj["args"], dict):
@@ -1421,49 +1429,41 @@ def _extract_tool_calls(text: str) -> list[dict]:
     """
     calls = []
 
+    def _try_parse(raw: str, span) -> bool:
+        """Try to parse raw JSON, with repair fallback. Returns True if added."""
+        for candidate in (raw, _repair_tool_json(raw)):
+            try:
+                obj = json.loads(candidate)
+                if isinstance(obj, dict) and "tool" in obj:
+                    calls.append({"json": _unwrap_tool_args(obj), "span": span})
+                    return True
+            except (json.JSONDecodeError, ValueError):
+                continue
+        return False
+
     # Strip thinking prefix so tool calls after </think> are on clean lines
     cleaned = re.sub(r'^.*?</think>\s*', '', text, count=1, flags=re.DOTALL)
     # Also strip markdown code fences around JSON
     cleaned = re.sub(r'```(?:json)?\s*\n?', '', cleaned)
 
-    # Match bare JSON objects on their own line that have a "tool" key
-    for match in re.finditer(r'^\s*(\{[^\n]*"tool"[^\n]*\})\s*$', cleaned, re.MULTILINE):
-        try:
-            obj = json.loads(match.group(1))
-            if "tool" in obj:
-                calls.append({"json": _unwrap_tool_args(obj), "span": match.span()})
-        except json.JSONDecodeError:
-            pass
+    # Match bare JSON objects on their own line that have a "tool" key (quoted or unquoted)
+    for match in re.finditer(r'^\s*(\{[^\n]*(?:"tool"|tool\s*:)[^\n]*\})\s*$', cleaned, re.MULTILINE):
+        _try_parse(match.group(1), match.span())
 
     # Fallback: multi-line JSON blocks containing a "tool" key
     if not calls:
-        for match in re.finditer(r'(\{\s*\n[^{}]*"tool"\s*:[^{}]*\})', cleaned, re.DOTALL):
-            try:
-                obj = json.loads(match.group(1))
-                if "tool" in obj:
-                    calls.append({"json": _unwrap_tool_args(obj), "span": match.span()})
-            except json.JSONDecodeError:
-                pass
+        for match in re.finditer(r'(\{\s*\n[^{}]*(?:"tool"\s*:|tool\s*:)[^{}]*\})', cleaned, re.DOTALL):
+            _try_parse(match.group(1), match.span())
 
     # Fallback: also check the original text (in case stripping removed valid matches)
     if not calls:
-        for match in re.finditer(r'^\s*(\{[^\n]*"tool"[^\n]*\})\s*$', text, re.MULTILINE):
-            try:
-                obj = json.loads(match.group(1))
-                if "tool" in obj:
-                    calls.append({"json": _unwrap_tool_args(obj), "span": match.span()})
-            except json.JSONDecodeError:
-                pass
+        for match in re.finditer(r'^\s*(\{[^\n]*(?:"tool"|tool\s*:)[^\n]*\})\s*$', text, re.MULTILINE):
+            _try_parse(match.group(1), match.span())
 
     # Final fallback: multi-line in original text
     if not calls:
-        for match in re.finditer(r'(\{\s*\n[^{}]*"tool"\s*:[^{}]*\})', text, re.DOTALL):
-            try:
-                obj = json.loads(match.group(1))
-                if "tool" in obj:
-                    calls.append({"json": _unwrap_tool_args(obj), "span": match.span()})
-            except json.JSONDecodeError:
-                pass
+        for match in re.finditer(r'(\{\s*\n[^{}]*(?:"tool"\s*:|tool\s*:)[^{}]*\})', text, re.DOTALL):
+            _try_parse(match.group(1), match.span())
 
     return calls
 
@@ -2438,24 +2438,28 @@ async def _stream_generate_with_thinking(
 
     _MAX_JSON_ACCUM_LINES = 10  # give up after this many lines
 
+    def _has_tool_key(s: str) -> bool:
+        return '"tool"' in s or re.search(r'\btool\s*:', s) is not None
+
     def _is_tool_json(line: str) -> bool:
         """Check if a line looks like a tool-call JSON object (single-line)."""
         s = line.strip()
-        return s.startswith("{") and '"tool"' in s and s.endswith("}")
+        return s.startswith("{") and _has_tool_key(s) and s.endswith("}")
 
     def _starts_tool_json(line: str) -> bool:
         """Check if a line starts a multi-line tool call JSON block."""
         s = line.strip()
-        return s == "{" or (s.startswith("{") and '"tool"' in s and not s.endswith("}"))
+        return s == "{" or (s.startswith("{") and _has_tool_key(s) and not s.endswith("}"))
 
     def _try_parse_tool_json(text: str) -> dict | None:
         """Try to parse accumulated text as a tool-call JSON object."""
-        try:
-            obj = json.loads(text.strip())
-            if isinstance(obj, dict) and "tool" in obj:
-                return _unwrap_tool_args(obj)
-        except (json.JSONDecodeError, ValueError):
-            pass
+        for candidate in (text.strip(), _repair_tool_json(text)):
+            try:
+                obj = json.loads(candidate)
+                if isinstance(obj, dict) and "tool" in obj:
+                    return _unwrap_tool_args(obj)
+            except (json.JSONDecodeError, ValueError):
+                continue
         return None
 
     await _emit("agent_update", {

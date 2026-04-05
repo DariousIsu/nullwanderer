@@ -17,6 +17,23 @@ import Map, { Source, Layer, Marker, NavigationControl, Popup } from 'react-map-
 import 'maplibre-gl/dist/maplibre-gl.css';
 import styles from './MapPanel.module.css';
 
+// Guard against zero-size framebuffer by deferring Map mount until container has dimensions
+function useContainerReady(ref) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (el.clientWidth > 0 && el.clientHeight > 0) { setReady(true); return; }
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) { setReady(true); ro.disconnect(); }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return ready;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BASEMAP STYLES — no API key required
 // ─────────────────────────────────────────────────────────────────────────────
@@ -157,7 +174,9 @@ export default function MapPanel({
   onMapMove,
   flyToLocation     = null,
 }) {
-  const mapRef       = useRef(null);
+  const mapRef        = useRef(null);
+  const containerRef  = useRef(null);
+  const containerReady = useContainerReady(containerRef);
   const [groundTrack,  setGroundTrack]  = useState(null);
   const [popupEvent,   setPopupEvent]   = useState(null);
   const [searchQuery,  setSearchQuery]  = useState('');
@@ -309,8 +328,8 @@ export default function MapPanel({
   }, [geocode, searchQuery]);
 
   return (
-    <div className={styles.root}>
-      <Map
+    <div className={styles.root} ref={containerRef}>
+      {!containerReady ? null : <Map
         ref={mapRef}
         initialViewState={{ longitude: 10, latitude: 20, zoom: 2 }}
         style={{ width: '100%', height: '100%' }}
@@ -443,7 +462,7 @@ export default function MapPanel({
             </div>
           </Popup>
         )}
-      </Map>
+      </Map>}
 
       {/* ── Geocoder search bar ── */}
       <form className={styles.searchBar} onSubmit={handleSearch}>
