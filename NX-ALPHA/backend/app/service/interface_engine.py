@@ -165,7 +165,12 @@ class InterfaceEngine:
                     chunk_count += 1
                     text = chunk.message.content or ""
                     if text:
-                        token_queue.put(text)
+                        token_queue.put(("content", text))
+                    # Qwen 3.5+ uses Ollama's native thinking field instead
+                    # of embedding <think> tags inside content.
+                    thinking = getattr(chunk.message, "thinking", None) or ""
+                    if thinking:
+                        token_queue.put(("think", thinking))
                     # Detect stop reason on final chunk
                     done = getattr(chunk, 'done', False)
                     if done:
@@ -186,11 +191,15 @@ class InterfaceEngine:
         loop = asyncio.get_running_loop()
         executor_fut = loop.run_in_executor(None, _stream_sync)
 
-        # Stream tokens, stripping <think>...</think> blocks
-        accumulated = ""
+        # Stream tokens, handling both:
+        # 1. Native thinking field (Qwen 3.5+ via Ollama) — tagged ("think"/"content")
+        # 2. Legacy <think> tags in content (DeepSeek-R1 style) — fallback path
+        content_accumulated = ""
+        think_accumulated = ""
         in_think = False
         think_resolved = False
         anything_yielded = False
+        native_thinking = False  # True once we see a ("think", ...) tuple
 
         while True:
             try:
@@ -202,25 +211,59 @@ class InterfaceEngine:
             if item is _SENTINEL:
                 break
 
-            accumulated += item
+            # Handle tagged tuples from _stream_sync
+            if isinstance(item, tuple):
+                tag, text = item
+                if tag == "think":
+                    native_thinking = True
+                    think_accumulated += text
+                    continue
+                else:  # "content"
+                    content_accumulated += text
+                    # Native thinking path — content tokens stream directly
+                    if native_thinking or think_resolved:
+                        yield text
+                        anything_yielded = True
+                        continue
+                    # Fall through to legacy <think> tag handling
+                    item = text
+            else:
+                content_accumulated += item
 
+            # Legacy path: strip <think>...</think> from content text
             if not think_resolved:
-                # Detect opening think tag
-                if "<think>" in accumulated and not in_think:
+                if "<think>" in content_accumulated and not in_think:
                     in_think = True
 
                 if in_think:
-                    # Buffer until think block closes
-                    if "</think>" in accumulated:
+                    if "</think>" in content_accumulated:
                         in_think = False
                         think_resolved = True
-                        after = accumulated.split("</think>", 1)[1]
+                        after = content_accumulated.split("</think>", 1)[1]
                         if after.strip():
                             yield after
                             anything_yielded = True
                     continue
                 else:
-                    # No think block — stream immediately
+                    # Detect orphan </think> — model emitted thinking without
+                    # an opening <think> tag (e.g. "Thinking Process:\n...\n</think>").
+                    if "</think>" in content_accumulated:
+                        think_resolved = True
+                        after = content_accumulated.split("</think>", 1)[1]
+                        if after.strip():
+                            yield after
+                            anything_yielded = True
+                        continue
+                    # Buffer at the very start when content looks like a think prefix
+                    # so we can catch the orphan </think> before yielding anything.
+                    if not anything_yielded and content_accumulated.lstrip().startswith("Thinking"):
+                        if len(content_accumulated) < 1500:
+                            continue  # Still waiting for </think> or more content
+                        # Exceeded buffer without </think> — real content, flush all
+                        think_resolved = True
+                        yield content_accumulated
+                        anything_yielded = True
+                        continue
                     think_resolved = True
                     yield item
                     anything_yielded = True
@@ -229,18 +272,21 @@ class InterfaceEngine:
                 yield item
                 anything_yielded = True
 
-        # Guard: model generated only a <think> block with no response (token budget
-        # exhausted during reasoning). Yield the stripped thinking content so the
-        # caller receives a non-empty string instead of triggering the fallback error.
-        if not anything_yielded and accumulated.strip():
-            import re as _re
-            think_only = _re.sub(r"</?think>", "", accumulated).strip()
-            if think_only:
+        # Guard: model generated only thinking with no response content (token budget
+        # exhausted during reasoning). Yield the thinking content so the caller
+        # receives a non-empty string instead of triggering the fallback error.
+        if not anything_yielded:
+            fallback = think_accumulated.strip() or content_accumulated.strip()
+            if fallback:
+                import re as _re
+                fallback = _re.sub(r"</?think>", "", fallback).strip()
+            if fallback:
                 logger.warning(
-                    "[interface_engine] Think-only response (no text after </think>)"
-                    " — yielding thinking content as response"
+                    "[interface_engine] Think-only response (no content after thinking)"
+                    " — yielding thinking content as response (%d chars)",
+                    len(fallback),
                 )
-                yield think_only
+                yield fallback
 
         self._idle_since = time.time()
         await executor_fut
