@@ -1,6 +1,6 @@
 """
 AURA NX-Alpha — Interface Engine (§28)
-Always-loaded interface model (qwen3.5:9b) via Ollama.
+Always-loaded interface model (gemma4:26b) via Ollama.
 keep_alive=-1 keeps it permanently in VRAM.
 Vision handled natively by Ollama's multimodal support.
 
@@ -51,7 +51,7 @@ def get_engine() -> "InterfaceEngine | None":
 
 class InterfaceEngine:
     """
-    Always-loaded interface model (qwen3.5:9b) via Ollama.
+    Always-loaded interface model (gemma4:26b) via Ollama.
     keep_alive=-1 keeps the model permanently in VRAM.
     All vision calls use Ollama's native multimodal support (no mmproj needed).
     """

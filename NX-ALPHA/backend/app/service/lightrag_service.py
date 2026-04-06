@@ -4,7 +4,7 @@ lightrag_service.py
 AURA LightRAG integration — entity extraction and graph-enhanced RAG.
 
 Architecture:
-  - Single LightRAG instance using qwen3.5:9b (interface model) via Ollama
+  - Single LightRAG instance using gemma4:26b (interface model) via Ollama
     for both queries and background entity extraction.
   - The same model that talks to the user understands the ingested material.
   - Embeddings: nomic-embed-text via Ollama.
@@ -69,7 +69,6 @@ except ImportError:
 _WORKING_DIR  = str(Path.home() / ".aura" / "lightrag")
 _OLLAMA_HOST  = "http://127.0.0.1:11434"
 _EMBED_MODEL  = "nomic-embed-text"   # Fast local embedding via Ollama
-_LLM_MODEL    = "qwen3.5:9b"        # Interface model — always in VRAM
 
 # ── Idle-gated ingestion rates ────────────────────────────────────────────────
 _COOLDOWN_BY_IDLE = {
@@ -99,7 +98,7 @@ class LightRAGService:
     """
     Singleton service managing AURA's LightRAG instance.
 
-    Single instance using qwen3.5:9b (interface model) for both queries and
+    Single instance using gemma4:26b (interface model) for both queries and
     background entity extraction. Ingestion is idle-gated and includes
     reflection for maximum awareness.
 
@@ -128,7 +127,7 @@ class LightRAGService:
         return cls._instance
 
     async def initialize(self) -> None:
-        """Initialize the single LightRAG instance (qwen3.5:9b via Ollama)."""
+        """Initialize the single LightRAG instance (gemma4:26b via Ollama)."""
         if not _LIGHTRAG_AVAILABLE:
             logger.warning("[lightrag_service] LightRAG not available — skipping init")
             return
@@ -160,14 +159,18 @@ class LightRAGService:
                 func=_embed_func,
             )
 
+            from app.config import get_settings as _get_settings
+            _llm_model = _get_settings().interface_model.model
+            _num_ctx   = _get_settings().interface_model.context_size
+
             # Single instance — interface model for both query and ingest
             self._rag = LightRAG(
                 working_dir=_WORKING_DIR,
                 llm_model_func=ollama_model_complete,
-                llm_model_name=_LLM_MODEL,
+                llm_model_name=_llm_model,
                 llm_model_kwargs={
                     "host": _OLLAMA_HOST,
-                    "options": {"num_ctx": 16384},
+                    "options": {"num_ctx": _num_ctx},
                     "timeout": 600,
                 },
                 embedding_func=embedding_func,
@@ -178,7 +181,7 @@ class LightRAGService:
             await self._rag.initialize_storages()
             self._available = True
             logger.info("[lightrag_service] Initialized (model=%s) — working_dir=%s",
-                        _LLM_MODEL, _WORKING_DIR)
+                        _llm_model, _WORKING_DIR)
 
         except Exception as exc:
             logger.warning("[lightrag_service] LightRAG init failed: %s", exc)
