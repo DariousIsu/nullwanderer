@@ -3229,6 +3229,21 @@ async def run_interface_agent(state: GraphState) -> dict:
     execution_id = state.get("execution_id", str(uuid.uuid4()))
     msg_id = f"msg-{execution_id}"
 
+    # ── Instant acknowledgment — fires before any async work so the user
+    #    sees a response token immediately while memory/prefetch runs.
+    _ACK_PHRASES = [
+        "Let me check on that for you",
+        "Hmmm",
+        "Searching...",
+        "Processing...",
+        "Um",
+        "Yep",
+        "On it",
+        "Let me see",
+    ]
+    import random as _random
+    await _emit("token", {"text": _random.choice(_ACK_PHRASES) + "\n\n", "messageId": msg_id})
+
     # Streaming TTS: synthesize sentences as tokens stream, not after full response
     _tts_emitter = StreamingTTSEmitter(
         emit_fn=_emit,
@@ -3550,26 +3565,6 @@ async def run_interface_agent(state: GraphState) -> dict:
             {"role": "user", "content": user_message},
             {"role": "assistant", "content": response_text},
         ]}
-
-    # ── Immediate acknowledgment — emitted before prefetch so the user sees
-    #    instant feedback while routing + DB queries run in the background.
-    _ACK_PHRASES = [
-        "Let me check on that for you",
-        "Hmmm",
-        "Searching...",
-        "Processing...",
-        "Um",
-        "Yep",
-        "On it",
-        "Let me see",
-    ]
-    import random as _random
-    _ack = _random.choice(_ACK_PHRASES)
-    try:
-        from app.controller.chat_controller import _emit as _ack_emit
-        await _ack_emit("token", {"text": _ack + "\n\n", "messageId": msg_id})
-    except Exception as _ack_err:
-        logger.debug("[interface_agent] ack emit failed: %s", _ack_err)
 
     # ── Pre-fetch: parallel local DB + web query before model runs ──────────
     # Stores full results in _SESSION_CACHE; only coordinate labels enter context.
