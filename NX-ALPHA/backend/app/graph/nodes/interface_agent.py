@@ -640,13 +640,30 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
             from app.tools.web_search import search
             from app.knowledge.query_decomposer import parallel_search
             query = args.get("query", "")
-            search_fn = functools.partial(search, max_results=5)
+            search_fn = functools.partial(search, max_results=10)
             results = await parallel_search(query, search_fn)
             if not results:
                 return "No results found."
+            # Browse top 3 URLs via Playwright for full page content
+            top_urls = [r.get("url", "") for r in results[:3] if r.get("url")]
+            if top_urls:
+                try:
+                    from app.tools.browser import get_browser_tool
+                    bt = get_browser_tool()
+                    browse_coros = [
+                        asyncio.wait_for(bt.fetch_page(url), timeout=8.0)
+                        for url in top_urls
+                    ]
+                    pages = await asyncio.gather(*browse_coros, return_exceptions=True)
+                    for i, page in enumerate(pages):
+                        if isinstance(page, dict) and page.get("text_content") and not page.get("error"):
+                            results[i]["text_content"] = page["text_content"]
+                except Exception as _browse_exc:
+                    logger.debug("[web_search] Playwright browse failed: %s", _browse_exc)
             lines = []
             for r in results:
-                lines.append(f"[{r['source']}] {r['title']}\n{r['snippet']}\nURL: {r['url']}")
+                content = r.get("text_content") or r.get("snippet", "")
+                lines.append(f"[{r['source']}] {r['title']}\n{content[:2000]}\nURL: {r['url']}")
             return "\n\n".join(lines)
 
         elif tool_name == "browse":
@@ -2102,8 +2119,31 @@ async def _fetch_web_markers(query: str) -> dict | None:
         if not results:
             logger.info("[prefetch] web search returned 0 results for %r", query)
             return None
+
+        # Browse top 3 URLs via Playwright for full page content
+        top_urls = [r.get("url", "") for r in results[:3] if r.get("url")]
+        if top_urls:
+            try:
+                from app.tools.browser import get_browser_tool
+                bt = get_browser_tool()
+                browse_coros = [
+                    asyncio.wait_for(bt.fetch_page(url), timeout=8.0)
+                    for url in top_urls
+                ]
+                pages = await asyncio.gather(*browse_coros, return_exceptions=True)
+                ok = 0
+                for i, page in enumerate(pages):
+                    if isinstance(page, dict) and page.get("text_content") and not page.get("error"):
+                        results[i]["text_content"] = page["text_content"]
+                        results[i]["page_title"] = page.get("title", "")
+                        ok += 1
+                if ok:
+                    logger.info("[prefetch] Playwright fetched full content for %d/%d URLs", ok, len(top_urls))
+            except Exception as exc:
+                logger.warning("[prefetch] Playwright browse failed: %s", exc)
+
         titles = [r.get("title", "")[:50] for r in results[:3]]
-        label = f"{len(results)} web results: {'; '.join(t for t in titles if t)}"
+        label = f"{len(results)} web results (full pages): {'; '.join(t for t in titles if t)}"
         return {"label": label, "items": results, "count": len(results), "source": "web"}
     except Exception as exc:
         logger.warning("[prefetch] web error: %s", exc)
@@ -2210,9 +2250,9 @@ def _format_coord_summary(items: list, source: str) -> str:
         lines = []
         for r in items[:3]:
             title = r.get("title", "")
-            snippet = r.get("snippet", "")
+            preview = r.get("text_content") or r.get("snippet", "")
             url = r.get("url", "")
-            lines.append(f"• {title}: {snippet[:120]}\n  {url}")
+            lines.append(f"• {title}: {preview[:160]}\n  {url}")
         return "\n".join(lines)
     elif source == "filesystem":
         lines = []
@@ -2252,10 +2292,11 @@ def _format_coord_full(items: list, source: str) -> str:
     elif source == "web":
         lines = []
         for r in items[:3]:
+            content = r.get("text_content") or r.get("snippet", "")
             lines.append(
                 f"Title: {r.get('title','')}\n"
                 f"URL: {r.get('url','')}\n"
-                f"Content: {r.get('snippet','')[:400]}"
+                f"Content: {content[:3000]}"
             )
         return "\n\n---\n\n".join(lines)
     elif source == "filesystem":
