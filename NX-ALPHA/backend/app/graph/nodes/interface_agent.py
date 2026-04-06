@@ -1607,6 +1607,9 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
 def _repair_tool_json(text: str) -> str:
     """Fix common LLM JSON errors: unquoted keys, trailing commas, unescaped backslashes."""
     s = text.strip()
+    # Strip Python-style double-brace wrapping {{...}} → {...} (f-string artifact in model output)
+    if s.startswith("{{") and s.endswith("}}"):
+        s = s[1:-1]
     s = re.sub(r'(?<=[\{,\n])\s*([a-zA-Z_]\w*)\s*:', r' "\1":', s)
     s = re.sub(r',\s*\}', '}', s)
     # Fix unescaped backslashes in string values (Windows paths like C:\Users\...)
@@ -1930,6 +1933,15 @@ _KNOWLEDGE_KEYWORDS = (
     "clinical trial", "scientific", "academic",
     "treat", "treatment", "remedy", "symptoms", "cause of", "causes of",
     "difference between", "versus", "compare",
+    # contraction forms
+    "who's", "what's", "how's",
+    # group / enumeration queries
+    "who are the", "who are",
+    "list of", "full list", "complete list",
+    # political / organisational
+    "members of", "roster", "cabinet",
+    # explicit knowledge-source references
+    "wiki", "database",
 )
 _MEMORY_KEYWORDS = (
     "remember", "recall", "last time", "we discussed", "you said",
@@ -2086,7 +2098,7 @@ async def _fetch_filesystem_markers(query: str) -> dict | None:
 async def _fetch_web_markers(query: str) -> dict | None:
     try:
         from app.tools.web_search import search
-        results = await search(query, max_results=5)
+        results = await search(query, max_results=10)
         if not results:
             logger.info("[prefetch] web search returned 0 results for %r", query)
             return None
@@ -2105,20 +2117,46 @@ async def _prefetch_to_cache(user_message: str) -> dict[str, str]:
     Run relevant DB + web queries in parallel (~3s total, web is bottleneck).
     Store full results in _SESSION_CACHE. Return {key: label} coordinate index.
     Nothing enters model context except the short labels.
+
+    Two-tier routing:
+      Tier 1 — keyword matching (0ms, catches obvious cases)
+      Tier 2 — semantic embedding (5-15ms, catches contractions / paraphrases)
     """
+    # ── Tier 1: keyword ───────────────────────────────────────────────────────
+    needs = {
+        "legislation": _query_needs_legislation(user_message),
+        "knowledge":   _query_needs_knowledge(user_message),
+        "memory":      _query_needs_memory(user_message),
+        "filesystem":  _query_needs_filesystem(user_message),
+    }
+
+    # ── Tier 2: semantic supplement (only for routes keywords missed) ─────────
+    missed = [r for r, hit in needs.items() if not hit]
+    if missed:
+        try:
+            from app.service.semantic_router import SemanticRouter
+            scores = await SemanticRouter.get_instance().classify(user_message)
+            for route in missed:
+                score = scores.get(route, 0.0)
+                if score > SemanticRouter.THRESHOLD:
+                    needs[route] = True
+                    logger.debug("[prefetch] semantic route +%s (score=%.2f)", route, score)
+        except Exception as exc:
+            logger.debug("[prefetch] semantic router skipped: %s", exc)
+
     fetch_tasks: list[tuple[str, str]] = []  # [(source_name, coroutine)]
     coros = []
 
-    if _query_needs_legislation(user_message):
+    if needs["legislation"]:
         fetch_tasks.append(("legislation", "leg"))
         coros.append(_fetch_legislation_markers(user_message))
-    if _query_needs_knowledge(user_message):
+    if needs["knowledge"]:
         fetch_tasks.append(("knowledge", "kno"))
         coros.append(_fetch_knowledge_markers(user_message))
-    if _query_needs_memory(user_message):
+    if needs["memory"]:
         fetch_tasks.append(("memory", "mem"))
         coros.append(_fetch_memory_markers(user_message))
-    if _query_needs_filesystem(user_message):
+    if needs["filesystem"]:
         fetch_tasks.append(("filesystem", "fil"))
         coros.append(_fetch_filesystem_markers(user_message))
     # Web always runs
@@ -2884,9 +2922,9 @@ async def _generate_live_response(
                     continue  # Re-generate with tool results
 
         if not tool_calls or round_num == _MAX_TOOL_ROUNDS:
-            # Final response — strip any leftover tool JSON, stream tokens
+            # Final response — strip any leftover tool JSON (single or double-brace), stream tokens
             clean_text = re.sub(
-                r'^\s*\{[^\n]*"tool"[^\n]*\}\s*$', "", text, flags=re.MULTILINE
+                r'^\s*\{{1,2}[^\n]*"tool"[^\n]*\}{1,2}\s*$', "", text, flags=re.MULTILINE
             ).strip()
             if not clean_text:
                 clean_text = text.strip()

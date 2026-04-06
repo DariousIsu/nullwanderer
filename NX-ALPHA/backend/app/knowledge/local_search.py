@@ -145,8 +145,11 @@ class LocalSearch:
         _auto_discover_sources(self._base)
 
     async def _get_conn(self, source: str) -> Optional[aiosqlite.Connection]:
-        if source in self._connections:
-            return self._connections[source]
+        # Only return a cached connection if it's a live (non-None) one.
+        # Failed connections are NOT cached so the next query retries.
+        conn = self._connections.get(source)
+        if conn is not None:
+            return conn
 
         cfg = SOURCE_CONFIG.get(source)
         if not cfg:
@@ -155,8 +158,7 @@ class LocalSearch:
         db_path = self._base / cfg["db_file"]
         if not db_path.exists():
             logger.debug("[local_search] %s not yet downloaded: %s", source, db_path)
-            self._connections[source] = None
-            return None
+            return None  # don't cache — file may appear later
 
         try:
             conn = await aiosqlite.connect(str(db_path))
@@ -172,8 +174,7 @@ class LocalSearch:
             return conn
         except Exception as exc:
             logger.warning("[local_search] Failed to open %s: %s", source, exc)
-            self._connections[source] = None
-            return None
+            return None  # don't cache — allow retry on next query
 
     async def search(
         self,

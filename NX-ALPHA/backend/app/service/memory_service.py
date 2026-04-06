@@ -939,13 +939,13 @@ class MemoryService:
             from app.service.lightrag_service import LightRAGService
             lg = LightRAGService.get_instance()
             if lg._available:
-                res = await asyncio.wait_for(lg.query(task, mode="hybrid"), timeout=5.0)
+                res = await asyncio.wait_for(lg.query(task, mode="hybrid"), timeout=15.0)
                 if res.get("success") and res.get("result"):
                     lightrag_results = [{"content": res["result"], "source": "lightrag"}]
                     logger.debug("[memory] role=%s LightRAG: %d chars",
                                  role, len(res["result"]))
         except asyncio.TimeoutError:
-            logger.warning("[memory] LightRAG query timed out after 5s — skipping")
+            logger.warning("[memory] LightRAG query timed out after 15s — skipping")
         except Exception as exc:
             logger.debug("[memory] LightRAG query failed (non-fatal): %s", exc)
 

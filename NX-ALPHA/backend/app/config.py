@@ -263,7 +263,7 @@ class SearchConfig(BaseModel):
     qdrant_collection: str = "search_cache"
     qdrant_enabled: bool = True
     semantic_cache_threshold: float = 0.85  # cosine similarity floor for cache hit
-    semantic_cache_ttl_hours: float = 24.0  # max age of a cached result
+    semantic_cache_ttl_hours: float = 4.0   # max age of a cached result
 
     # Query decomposer (MindSearch-style parallel sub-query execution)
     decomposer_enabled: bool = True
