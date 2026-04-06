@@ -693,7 +693,7 @@ class BootSequence:
         if not svc._available:
             return "skipped — LightRAG not initialized"
         await svc.start_workers()
-        return "started (qwen3.5:9b)"
+        return f"started ({svc._rag.llm_model_name if svc._rag else 'unknown'})"
 
     async def _start_data_collector(self):
         from app.service.data_collector_service import init_data_collector

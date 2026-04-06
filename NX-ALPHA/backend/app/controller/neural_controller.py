@@ -50,7 +50,7 @@ class MapperToggleRequest(BaseModel):
 
 
 class IngestionModeStartRequest(BaseModel):
-    model: str = ""  # ignored — always uses interface model (qwen3.5:9b)
+    model: str = ""  # ignored — always uses interface model (gemma4:26b)
     workers: int = 2
     aggressiveness: int = 5
 
@@ -616,7 +616,7 @@ async def neural_ingestion_mode_start(body: IngestionModeStartRequest) -> dict:
     1. Set app state ingestion_mode = True
     2. Emit SSE event
 
-    Note: No model swapping — ingestion uses the interface model (qwen3.5:9b)
+    Note: No model swapping — ingestion uses the interface model (gemma4:26b)
     which is always in VRAM. Ingestion rate is controlled by idle-gating.
     """
     # 1. Set app state
@@ -627,18 +627,21 @@ async def neural_ingestion_mode_start(body: IngestionModeStartRequest) -> dict:
         pass
 
     # 2. Emit SSE event
+    from app.config import get_settings as _get_settings
+    _model_name = _get_settings().interface_model.model
+
     await _emit("ingestion_mode_started", {
-        "model": "qwen3.5:9b",
+        "model": _model_name,
         "workers": body.workers,
         "aggressiveness": body.aggressiveness,
     })
 
     logger.info(
-        "[neural] Ingestion mode started — model=qwen3.5:9b workers=%d aggressiveness=%d",
-        body.workers, body.aggressiveness,
+        "[neural] Ingestion mode started — model=%s workers=%d aggressiveness=%d",
+        _model_name, body.workers, body.aggressiveness,
     )
 
-    return {"started": True, "model": "qwen3.5:9b", "workers": body.workers}
+    return {"started": True, "model": _model_name, "workers": body.workers}
 
 
 @router.post("/ingestion-mode/stop")
@@ -724,7 +727,7 @@ async def neural_graph_rebuild(body: GraphRebuildRequest) -> dict:
     """
     Rebuild the LightRAG graph from scratch.
     Archives old graph, clears tracking, reinitializes.
-    Backfill worker will re-process all documents with qwen3.5:9b.
+    Backfill worker will re-process all documents with gemma4:26b.
     """
     if not body.confirm:
         raise HTTPException(400, "Set confirm=true to rebuild the graph")

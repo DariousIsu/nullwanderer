@@ -187,9 +187,9 @@ class GraphState(TypedDict):
     study_sprints_completed: int
     study_facts_ingested: int
 
-    # ── Dual-Model Infrastructure (phase-aware) ───────────────────────────────
-    interface_model: str    # "qwen3-vl-4b" (Phase 1) | "gemma-3-27b-qat" (Phase 2+)
-    workhorse_model: str    # "qwen3-vl-14b" (Phase 1) | "qwen3-vl-32b" (Phase 2+)
+    # ── Model Infrastructure (phase-aware) ───────────────────────────────────
+    interface_model: str    # "gemma4:26b" (Phase 1) | future upgrade (Phase 2+)
+    workhorse_model: str    # "gemma4:26b" (Phase 1) | future upgrade (Phase 2+)
     hardware_phase: int     # 1 | 2 | 3 | 4
 
     # ── Satellite + Mode ──────────────────────────────────────────────────────
@@ -208,8 +208,8 @@ def initial_state(
     thread_id: str,
     user_id: str = "local",
     hardware_phase: int = 1,
-    interface_model: str = "qwen3-vl-4b",
-    workhorse_model: str = "qwen3-vl-14b",
+    interface_model: str = "gemma4:26b",
+    workhorse_model: str = "gemma4:26b",
     team_enabled: bool = False,
     operating_mode: str = "proactive",
 ) -> GraphState:
@@ -371,7 +371,7 @@ def initial_team_state(
     team_id: str,
     thread_id: str,
     task: str,
-    workhorse_model: str = "gemma3:12b",
+    workhorse_model: str = "gemma4:26b",
     hardware_phase: int = 1,
 ) -> TeamGraphState:
     """Return a fresh TeamGraphState with safe defaults."""

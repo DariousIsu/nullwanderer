@@ -22,8 +22,8 @@ _ENV_FILE = str(Path(__file__).parent.parent / ".env")
 
 class InterfaceModelConfig(BaseModel):
     """Ollama Interface Engine config."""
-    # qwen3.5:9b — always-on, vision-native, ~5.8 GB VRAM, 256K context, keep_alive=-1 (never unload)
-    model: str = "qwen3.5:9b"
+    # gemma4:26b — always-on, vision-native, ~15 GB VRAM, keep_alive=-1 (never unload)
+    model: str = "gemma4:26b"
     ollama_host: str = "http://127.0.0.1:11434"
     context_size: int = 32768
     keep_alive: str = "-1"        # never unload from VRAM
@@ -47,12 +47,12 @@ def _parse_keep_alive_sec(s: str) -> int:
 
 class WorkhorseConfig(BaseModel):
     """Ollama Workhorse config."""
-    # DeepSeek-R1-14B: reasoning/analysis/forecasting, ~8.5 GB on-demand via Ollama
-    model: str = "deepseek-r1:14b"
+    # gemma4:26b — same model as interface, always-on, Ollama deduplicates the load
+    model: str = "gemma4:26b"
     ollama_host: str = "http://127.0.0.1:11434"
-    context_size: int = 16384
+    context_size: int = 32768
     num_gpu: int = -1             # -1 = full GPU offload
-    keep_alive: str = "5m"       # Auto-unload after idle: "5m", "10m", "0", "-1" (never)
+    keep_alive: str = "-1"       # always-on (same model as interface — never unload)
 
 
 class MemoryConfig(BaseModel):
@@ -114,16 +114,15 @@ class ValidatorConfig(BaseModel):
     challenger_source controls which model acts as the adversarial challenger
     in the proposer/challenger review gate:
 
-      "interface"  — Interface model (qwen3.5:9b via Ollama).
-                     Correct for Phase 1 hardware (single 7900 XT) because the
-                     interface and workhorse are different model families, making
-                     the challenge genuinely adversarial.  Interface is marked busy
-                     while challenging; incoming chat receives a hold message.
+      "interface"  — Interface model (gemma4:26b via Ollama).
+                     Both interface and workhorse now use the same model; the
+                     challenge is still a separate inference call with a different
+                     system prompt, providing review diversity.  Interface is marked
+                     busy while challenging; incoming chat receives a hold message.
 
       "workhorse"  — Ollama workhorse model acts as its own challenger.
-                     Use this once 32GB GPUs are installed and a second, larger
-                     Ollama model can be loaded alongside the interface model,
-                     freeing the interface engine for live chat during validation.
+                     Equivalent to "interface" while both configs point to the same
+                     model. Retain for future multi-model phases.
     """
     challenger_source: str = "interface"   # "interface" | "workhorse"
 
