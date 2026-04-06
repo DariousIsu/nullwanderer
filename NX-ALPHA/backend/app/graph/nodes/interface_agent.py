@@ -3551,6 +3551,26 @@ async def run_interface_agent(state: GraphState) -> dict:
             {"role": "assistant", "content": response_text},
         ]}
 
+    # ── Immediate acknowledgment — emitted before prefetch so the user sees
+    #    instant feedback while routing + DB queries run in the background.
+    _ACK_PHRASES = [
+        "Let me check on that for you",
+        "Hmmm",
+        "Searching...",
+        "Processing...",
+        "Um",
+        "Yep",
+        "On it",
+        "Let me see",
+    ]
+    import random as _random
+    _ack = _random.choice(_ACK_PHRASES)
+    try:
+        from app.controller.chat_controller import _emit as _ack_emit
+        await _ack_emit("token", {"text": _ack + "\n\n", "messageId": msg_id})
+    except Exception as _ack_err:
+        logger.debug("[interface_agent] ack emit failed: %s", _ack_err)
+
     # ── Pre-fetch: parallel local DB + web query before model runs ──────────
     # Stores full results in _SESSION_CACHE; only coordinate labels enter context.
     # Model expands on demand via {"tool": "expand", "key": "..."}.
