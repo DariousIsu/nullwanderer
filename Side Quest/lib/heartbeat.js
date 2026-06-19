@@ -15,6 +15,22 @@ const RECENT_MONOLOGUE_LIMIT = 12;
 const RECENT_REFLECTION_LIMIT = 3;
 const RECENT_TURN_LIMIT = 10;
 
+// --- idle-repetition guard ---------------------------------------------------
+// The heartbeat had no dedup, so it would loop the same unprompted utterance
+// over and over (e.g. "I read about X and want to bring it up" ×15). Suppress an
+// utterance too similar to her recent ones.
+const SIM_STOPWORDS = new Set(['the','a','an','and','or','but','it','its','is','was','of','in','on','at','to','for','with','as','this','that','these','those','i','you','he','she','they','we','my','your','our','their','have','has','had','be','been','do','does','did','not','no','so','if','then','than','from','by','about','what','which','who','when','where','why','how','can','could','would','should','will','may','might','just','only','also','still','really','very','more','most','some','any','all','one','two']);
+function _sigWords(t) {
+  return new Set(String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length >= 4 && !SIM_STOPWORDS.has(w)));
+}
+function _jaccard(a, b) { if (!a.size || !b.size) return 0; let i = 0; for (const w of a) if (b.has(w)) i++; return i / (a.size + b.size - i); }
+function tooSimilarToRecent(text, prevs, thr = 0.5) {
+  const s = _sigWords(text);
+  if (s.size < 3) return false;
+  for (const p of prevs) { const o = _sigWords(p); if (o.size < 3) continue; if (_jaccard(s, o) > thr) return true; }
+  return false;
+}
+
 let timer = null;
 let opts = { getSessionId: () => null, getWindow: () => null };
 let paused = false;
@@ -315,7 +331,15 @@ async function maybeHeartbeat() {
 
     // GOVERNOR: pace unprompted utterances so she doesn't surface in bursts. An
     // inbound chat-bot reply is priority (bypasses pacing — it's time-sensitive).
-    const wantsToSpeak = trimmedSay && !isPlaceholder;
+    let wantsToSpeak = trimmedSay && !isPlaceholder;
+    // Idle-repetition guard: don't surface an utterance near-identical to recent ones.
+    if (wantsToSpeak && !hasInbound) {
+      const recentSaids = db.getRecentTurns(50).filter(t => t.speaker === 'ai_said').slice(-8).map(t => t.content);
+      if (tooSimilarToRecent(trimmedSay, recentSaids)) {
+        wantsToSpeak = false;
+        console.log('[heartbeat] suppressed repetitive utterance');
+      }
+    }
     const uGate = wantsToSpeak ? governor.requestAction('utterance', { priority: hasInbound }) : { allow: false };
     if (wantsToSpeak && uGate.allow) {
       governor.record('utterance');
