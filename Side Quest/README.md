@@ -19,17 +19,19 @@ in real goals that drive autonomous tool use.
 
 ## Model
 
-Single model, both chat and the between-turn inner monologue:
-**`hf.co/bartowski/PocketDoc_Dans-PersonalityEngine-V1.3.0-24b-GGUF:Q4_K_M`**
-(Mistral-Small-3.1-24B finetune, decensored, tool/instruction/RP-trained). ~14.8 GB
-VRAM on a 20 GB RX 7900 XT. Mistral-3 arch unlocks KV-cache quantization.
+Single model, both chat and the between-turn monologue. Configured via **`ZOE_MODEL`**
+in `.env` (one line to swap — never hardcoded). Default **`mistral-small3.2:24b`**
+(Mistral-Small-3.2-24B Instruct). ~17 GB VRAM on a 20 GB RX 7900 XT. Mistral-3 arch
+unlocks KV-cache quantization.
 
 Recommended env: `OLLAMA_FLASH_ATTENTION=1`, `OLLAMA_KV_CACHE_TYPE=q8_0`.
 All call sites use `num_ctx: 8192` (uniform, to avoid single-model reload thrash).
 
-> History: started on Stheno-v3.2-Q6 (8B chat) + gemma3-abliterated:4b (subconscious).
-> Swapped to single Dans-24B — the 4B was ~72% attractor-slop and Stheno (Llama-3 arch)
-> confabulated tool calls + couldn't use KV-quant.
+> History: Stheno-8B + gemma-4B → single **Dans-PersonalityEngine-24B** (RP finetune) →
+> **Mistral-Small-3.2-24B Instruct**. The RP finetune narrated/confabulated tool tags
+> instead of emitting them; the official Instruct restores reliable tool-calling at the
+> same arch (so KV-quant carries over). The knowledge-layer embedder (bge-small) runs
+> separately on **CPU** so it never contends with the chat model for VRAM.
 
 ## Architecture
 
@@ -53,7 +55,22 @@ enforced by the protocols layer + a hard interceptor.
 ### Memory / state (SQLite, data/sq.db)
 `turns`, `reflections`, `monologue`, `commitments`, `meta`, `sessions`,
 `open_threads` (goals), `protocols` (durable user-AI agreements), `inbound_messages`
-(chat-bot replies). Identity in `meta` (chosen_name = Zoe Lane).
+(chat-bot replies + incoming email), `scheduled_tasks` (her own clock), `email_log`
+(outbound audit), `knowledge` + `knowledge_fts` (the integration/learning store).
+Identity in `meta` (chosen_name = Zoe Lane).
+
+### Knowledge / learning layer
+Hybrid-retrieval memory so she retains and *uses* what she learns, not a leaky recency buffer:
+- **Store** — short synthesized notes / references / action-trajectories in `knowledge`
+  (reference-not-copy: never copies of source corpora; Echo would stay system-of-record).
+- **Retrieve** — semantic (bge-small CPU embeddings, JS cosine) + keyword (FTS5 BM25),
+  fused by reciprocal-rank, top-K≈4. Injected into chat by *relevance*, not recency.
+- **Action-memory** — actions she takes (e.g. emails sent) log as retrievable trajectories,
+  so she knows what she's already done.
+- **Gap-response reflex** — when she doesn't know something she says so and plans how to
+  find out, instead of fabricating. A retrieval miss is the cue to learn, not invent.
+- **Pinned vs retrieved** — identity/protocols/goals pinned every turn (deterministic);
+  the rest retrieved by relevance. Incoming email + readings feed the store.
 
 ### Tools Zoe can use
 - **Web** — `<navigate>`, auto search (curiosity/boredom), page fetch.
@@ -77,9 +94,13 @@ enforced by the protocols layer + a hard interceptor.
 - **Presence** — `<notify title="...">body</notify>` (desktop notification),
   `<clipboard-read/>`, `<clipboard-write>text</clipboard-write>`. Native via Electron.
 - **Email** *(needs creds)* — `<email to="..." subject="...">body</email>` sends real
-  outbound mail (Gmail SMTP via nodemailer) toward the publication goal. She sends
-  directly — no approval gate — with a per-day cap as a runaway backstop and a full
-  `email_log` audit trail.
+  outbound mail (Gmail SMTP via nodemailer) toward the publication goal. Long emails build
+  in steps: `<email-draft>` / `<email-body>` / `<email-send>`. Direct send — no approval
+  gate — with a per-day cap backstop and an `email_log` audit. A just-in-time nudge fires
+  on send-intent; outward sends are guarded against reflexive firing on unrelated turns.
+- **Inbox** *(needs creds)* — `<read-inbox/>` reads her incoming Gmail (IMAP via imapflow).
+  An autonomous poller also sweeps for **unread** mail every few minutes and surfaces it to
+  Lucas unprompted (via the heartbeat) + integrates each message into the knowledge store.
 - **Discord** *(needs creds)* — `<discord-dm>...</discord-dm>` DMs Lucas (e.g. on his
   phone). Inbound DMs from Lucas route through the *same* chat turn and her reply goes
   back over Discord. Hard-locked to one owner user id — never servers, never others.
@@ -109,20 +130,25 @@ credentials are present in `.env`.
    npx playwright install chromium
    ```
 
-4. **Model** — pull the Dans model and set the KV-cache env (persist these on the
-   machine so Ollama picks them up):
+4. **Model + embedder** — pull the chat model and set the KV-cache env (persist these so
+   Ollama picks them up):
 
    ```
-   ollama pull hf.co/bartowski/PocketDoc_Dans-PersonalityEngine-V1.3.0-24b-GGUF:Q4_K_M
+   ollama pull mistral-small3.2:24b
    setx OLLAMA_FLASH_ATTENTION 1
    setx OLLAMA_KV_CACHE_TYPE q8_0
    ```
+   The model name is read from `ZOE_MODEL` in `.env` (swap there, no code edit). The
+   knowledge-layer embedder (bge-small via transformers.js) downloads itself on first
+   run and runs on CPU — no extra setup, no VRAM cost.
 
 5. **Credentials** — copy `.env.example` to `.env` and fill what you want enabled:
 
-   - **Email** (`ZOE_EMAIL_USER` / `ZOE_EMAIL_PASS` / `ZOE_EMAIL_FROM`): Gmail needs a
-     16-char **App Password**, not the account login password. `ZOE_EMAIL_DAILY_CAP`
-     bounds runaway sends.
+   - **Model** (`ZOE_MODEL`): defaults to `mistral-small3.2:24b`.
+   - **Email + Inbox** (`ZOE_EMAIL_USER` / `ZOE_EMAIL_PASS` / `ZOE_EMAIL_FROM`): Gmail needs
+     a 16-char **App Password** (not the login password); `ZOE_EMAIL_DAILY_CAP` bounds
+     runaway sends. The same app password enables inbox reading via IMAP — ensure **IMAP
+     is enabled** in Gmail settings.
    - **Discord** (`DISCORD_BOT_TOKEN` / `DISCORD_OWNER_ID`): bot token from the Discord
      developer portal (enable the *Message Content Intent*), plus your own user id.
 
@@ -134,9 +160,18 @@ credentials are present in `.env`.
 npm start
 ```
 
-The app boots, warms the model, starts the self-scheduling ticker, connects the Discord
-bridge (if configured), verifies email creds, and (if Chrome is open with
-`--remote-debugging-port=9222`) auto-reconnects the browser layer.
+The app boots, warms the chat model + the CPU embedder, starts the self-scheduling ticker
+and the inbox poller, connects the Discord bridge (if configured), verifies email creds,
+and (if Chrome is open with `--remote-debugging-port=9222`) auto-reconnects the browser.
+
+## Known limitation — autonomous multi-step *acting*
+
+Awareness, memory, and noticing work well; honesty about gaps and not-fabricating are in
+place. The open frontier is reliably emitting a *sequence* of tool tags to act on a
+multi-step task (e.g. read → draft → send a reply): the 24B tends to **narrate the intent
+instead of emitting the tags**. Single short tags (`observe-screen`, `read-inbox`) are
+reliable; multi-step acting is not. The planned fix is an **action loop** (structured
+plan→act→observe, fed by tool-retrieval + the experience store), not more prompting.
 
 ## Layout
 
