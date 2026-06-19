@@ -207,6 +207,13 @@ function isConfigured() {
 function detectEmailIntent(msg) {
   if (!msg) return false;
   const m = String(msg).toLowerCase();
+  // Inbox-READ requests ("check your email", "you have a new email", "access your
+  // inbox") must NOT trigger the SEND nudge — that's what made her draft/send a
+  // spurious email when asked to read. If it's clearly a read request and not an
+  // explicit send, bail.
+  const readish = /\binbox\b/.test(m) || /\b(check|read|see|open|look|any|new|got|receiv|incoming|unread)\b[\s\S]{0,40}\b(e-?mail|inbox|mail|message)\b/.test(m);
+  const explicitSend = /\b(send|reply|compose|draft|write|pitch|forward)\b/.test(m);
+  if (readish && !explicitSend) return false;
   const sendVerb = /\b(send|email|e-mail|pitch|shoot|fire off|forward|reply)\b/.test(m);
   const emailWord = /\be-?mail\b/.test(m);
   const hasAddr = /@[^\s@]+\.[^\s@]+/.test(m);
