@@ -207,15 +207,19 @@ app.whenReady().then(() => {
         // Gates so she never fires a reply Lucas wouldn't expect:
         //  - one reply per poll cycle, and only if no action is already running;
         //  - sender must be a real person (skip no-reply / bulk / list senders);
+        //  - NEVER her own address — replying to self creates an infinite loop
+        //    (each self-reply lands as new unread → another reply → cascade);
         //  - she must have ALREADY emailed this address (thread continuation only —
         //    never a cold reply to an unknown sender).
         if (!actionLoop.isActive()) {
           const replied = JSON.parse(db.getMeta('auto_replied_uids') || '[]');
+          const self = (config.emailConfig().user || '').toLowerCase();
           const rr = await inboxLib.pollUnread(replied, 6);
           if (rr.ok && rr.messages && rr.messages.length) {
             const NOREPLY = /(no-?reply|do-?not-?reply|donotreply|mailer-daemon|postmaster|notification|notifications|bounce|newsletter|mailing|@.*\.(list|lists)\.)/i;
             const candidate = [...rr.messages].reverse().find(m =>
-              m.fromAddr && !NOREPLY.test(m.fromAddr) && db.hasEmailedAddress(m.fromAddr));
+              m.fromAddr && m.fromAddr.toLowerCase() !== self
+              && !NOREPLY.test(m.fromAddr) && db.hasEmailedAddress(m.fromAddr));
             if (candidate) {
               db.setMeta('auto_replied_uids', JSON.stringify([...replied, candidate.uid].slice(-300)));
               console.log('[action] autonomous reply → thread with', candidate.fromAddr, 'uid', candidate.uid);
