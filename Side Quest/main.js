@@ -174,35 +174,30 @@ app.whenReady().then(() => {
   // knowledge store. Baselines on first run so the existing backlog isn't surfaced.
   if (inboxLib.isConfigured()) {
     const INBOX_POLL_MS = 4 * 60 * 1000;
-    (async () => {
+    const runInboxPoll = async () => {
       try {
-        if (!db.getMeta('inbox_last_uid')) {
-          const b = await inboxLib.pollNewMail(null);
-          if (b.ok && b.maxUid) db.setMeta('inbox_last_uid', String(b.maxUid));
-          console.log('[inbox-poll] baseline uid:', b.ok ? b.maxUid : 'fail ' + b.reason);
-        }
-      } catch {}
-    })().catch(() => {});
-    setInterval(async () => {
-      try {
-        const last = parseInt(db.getMeta('inbox_last_uid') || '0', 10);
-        if (!last) return; // wait for baseline
-        const r = await inboxLib.pollNewMail(last);
+        const surfaced = JSON.parse(db.getMeta('inbox_surfaced_uids') || '[]');
+        const r = await inboxLib.pollUnread(surfaced, 3);
         if (!r.ok) { console.log('[inbox-poll] fail:', r.reason); return; }
-        if (r.maxUid && r.maxUid > last) db.setMeta('inbox_last_uid', String(r.maxUid));
         if (r.messages && r.messages.length) {
           for (const m of r.messages) {
-            const blurb = `New email from ${m.from} — subject "${m.subject}": ${(m.snippet || '').slice(0, 300)}`;
+            const blurb = `Unread email from ${m.from} — subject "${m.subject}": ${(m.snippet || '').slice(0, 300)}`;
             try { db.insertInbound({ tabUrl: 'email', speaker: m.from, text: blurb, source: 'email' }); } catch {}
             memoryLib.store({ kind: 'reference', content: `Email I received — from ${m.from}, subject "${m.subject}": ${(m.snippet || '').slice(0, 300)}`, source: 'inbox', importance: 0.55 }).catch(() => {});
           }
-          console.log(`[inbox-poll] ${r.messages.length} new email(s) → queued + heartbeat kick`);
+          const merged = [...surfaced, ...r.messages.map(m => m.uid)].slice(-300);
+          db.setMeta('inbox_surfaced_uids', JSON.stringify(merged));
+          console.log(`[inbox-poll] ${r.messages.length} unread email(s) → queued + heartbeat kick`);
           const { maybeHeartbeat } = require('./lib/heartbeat');
           maybeHeartbeat().catch(() => {});
+        } else {
+          console.log('[inbox-poll] no unsurfaced unread');
         }
       } catch (e) { console.error('[inbox-poll]', e.message); }
-    }, INBOX_POLL_MS);
-    console.log('[main] inbox poller started (every 4 min)');
+    };
+    setTimeout(() => { runInboxPoll().catch(() => {}); }, 20000); // initial sweep ~20s after boot
+    setInterval(() => { runInboxPoll().catch(() => {}); }, INBOX_POLL_MS);
+    console.log('[main] inbox poller started (unread-based, every 4 min)');
   }
 
   // Browser layer status → forward to renderer

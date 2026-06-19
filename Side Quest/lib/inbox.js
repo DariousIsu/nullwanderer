@@ -82,10 +82,11 @@ async function fetchInbox({ limit = 5, unreadOnly = false } = {}) {
   return { ok: true, messages };
 }
 
-// Autonomous poll: return messages with UID greater than sinceUid (i.e. arrived
-// since the last check). If sinceUid is falsy, returns no messages but reports
-// the current maxUid as a baseline (so the existing backlog isn't surfaced as new).
-async function pollNewMail(sinceUid) {
+// Autonomous poll: return UNREAD messages she hasn't surfaced yet (by UID).
+// "Unread = unhandled", so the existing unread backlog gets surfaced too, not just
+// mail that arrives after startup. Capped per call so a big backlog drains paced,
+// not in a flood. Caller persists the surfaced UIDs so nothing repeats.
+async function pollUnread(surfacedUids = [], cap = 3) {
   const cfg = config.emailConfig();
   if (!cfg.configured || !ImapFlow) return { ok: false, reason: 'email not configured' };
   const client = new ImapFlow({ host: HOST, port: 993, secure: true, auth: { user: cfg.user, pass: cfg.pass }, logger: false });
@@ -93,19 +94,15 @@ async function pollNewMail(sinceUid) {
 
   let lock;
   const messages = [];
-  let maxUid = sinceUid || 0;
   try {
     lock = await client.getMailboxLock('INBOX');
-    const status = await client.status('INBOX', { uidNext: true });
-    const uidNext = status.uidNext || 1;
-    if (!sinceUid) {
-      // First run — establish baseline, surface nothing.
-      return { ok: true, messages: [], maxUid: uidNext - 1 };
-    }
-    const range = `${sinceUid + 1}:*`;
-    for await (const msg of client.fetch(range, { uid: true, envelope: true, bodyParts: ['text'] }, { uid: true })) {
-      if (!msg.uid || msg.uid <= sinceUid) continue;
-      maxUid = Math.max(maxUid, msg.uid);
+    let unseen = [];
+    try { unseen = await client.search({ seen: false }, { uid: true }); } catch {}
+    if (!unseen || unseen.length === 0) return { ok: true, messages: [] };
+    const surf = new Set((surfacedUids || []).map(Number));
+    const fresh = unseen.filter(u => !surf.has(u)).sort((a, b) => a - b).slice(-cap); // newest few
+    if (fresh.length === 0) return { ok: true, messages: [] };
+    for await (const msg of client.fetch(fresh, { uid: true, envelope: true, bodyParts: ['text'] }, { uid: true })) {
       let snippet = '';
       try {
         const part = msg.bodyParts && msg.bodyParts.get ? msg.bodyParts.get('text') : null;
@@ -121,7 +118,7 @@ async function pollNewMail(sinceUid) {
     try { if (lock) lock.release(); } catch {}
     try { await client.logout(); } catch {}
   }
-  return { ok: true, messages, maxUid };
+  return { ok: true, messages };
 }
 
 function formatInbox(result) {
@@ -195,4 +192,4 @@ function buildPromptBlock() {
 Your recent messages (sender, subject, snippet) then arrive in your next-turn context. Use it whenever Lucas asks you to check or read your email/inbox, or to see replies to mail you sent. This is a DIFFERENT action from sending: <read-inbox/> READS; <email>/<email-draft>/<email-send> SEND. When asked to read, emit <read-inbox/> — never draft or send.`;
 }
 
-module.exports = { fetchInbox, pollNewMail, formatInbox, parseTags, stripTags, dispatch, buildPromptBlock, isConfigured, detectInboxIntent, buildInboxNudge };
+module.exports = { fetchInbox, pollUnread, formatInbox, parseTags, stripTags, dispatch, buildPromptBlock, isConfigured, detectInboxIntent, buildInboxNudge };
