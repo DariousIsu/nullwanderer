@@ -164,14 +164,26 @@ The app boots, warms the chat model + the CPU embedder, starts the self-scheduli
 and the inbox poller, connects the Discord bridge (if configured), verifies email creds,
 and (if Chrome is open with `--remote-debugging-port=9222`) auto-reconnects the browser.
 
-## Known limitation — autonomous multi-step *acting*
+## Autonomous multi-step *acting* — the action loop
 
 Awareness, memory, and noticing work well; honesty about gaps and not-fabricating are in
-place. The open frontier is reliably emitting a *sequence* of tool tags to act on a
-multi-step task (e.g. read → draft → send a reply): the 24B tends to **narrate the intent
-instead of emitting the tags**. Single short tags (`observe-screen`, `read-inbox`) are
-reliable; multi-step acting is not. The planned fix is an **action loop** (structured
-plan→act→observe, fed by tool-retrieval + the experience store), not more prompting.
+place. The hard part is reliably emitting a *sequence* of tool tags for a multi-step task
+(e.g. draft → body → send a reply): the 24B tends to **narrate the intent instead of
+emitting the tags**. Single short tags (`observe-screen`, `read-inbox`) are reliable; raw
+sequences are not.
+
+The fix is the **action loop** (`lib/action_loop.js`) — structure does the sequencing so
+the model only ever has to emit *one* reliable tag. An action is a list of steps; each step
+has a `directive(ctx)` (the hard one-tag instruction injected into that turn) and a
+`check(ctx)` (observed from real state). The driver injects the directive → generates →
+dispatches the resulting tag → calls `observe()`, which advances only when `check()` passes,
+re-nudges on failure, and aborts after `maxAttempts`. Intermediate steps run silent; only
+completion/abort speaks (via the tool follow-up).
+
+First concrete action: **email-reply** (`emailReplyAction`: `<email-draft>` → `<email-body>`
+→ `<email-send/>`, checks read `email.draftState()`). It triggers when Lucas asks her to
+reply and a real sender address was captured from the last inbound mail
+(`last_inbound_from`). Adding a new multi-step action = defining another `{name, steps[]}`.
 
 ## Layout
 
