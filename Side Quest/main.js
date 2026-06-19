@@ -575,6 +575,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   }
   // === END INTERCEPTOR ===
 
+  const userName = db.getMeta('user_name') || 'them';
+
   // Detect URLs in user message; fetch them as shared-link context
   const sharedUrls = extractUrls(userMessage);
   const sharedPages = [];
@@ -596,7 +598,6 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     });
   }
 
-  const userName = db.getMeta('user_name') || 'them';
   const recentReflections = db.getRecentReflections(RECENT_REFLECTION_LIMIT);
   const recentMonologue = db.getRecentMonologueByType('thought', 5);
   const recentReadings = db.getRecentMonologueByType('reading', 2);
