@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Runtime / personal state — Zoe's live memory, her file workspace, archives
+data/
+
+# Logs / scratch
+*.log
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db

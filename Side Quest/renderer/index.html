@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Side Quest</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <div id="chat-pane">
+      <div id="transcript" aria-live="polite"></div>
+      <div id="composer">
+        <div id="attachments-bar"></div>
+        <textarea id="input" placeholder="Begin." rows="1" autofocus></textarea>
+        <div id="composer-controls">
+          <button id="attach-btn" type="button" title="Attach a text/markdown/json file">+ attach</button>
+          <button id="browser-btn" type="button" title="Open shared browser she can see/touch">⊕ browser</button>
+          <span id="browser-status" class="browser-status disconnected">offline</span>
+        </div>
+        <input type="file" id="attach-input" accept=".txt,.md,.markdown,.json,.csv,.log,text/*" multiple style="display:none">
+      </div>
+    </div>
+    <div id="sheep-pane">
+      <div id="sheep-header">
+        <span class="sheep-header-text">electric sheep</span>
+        <button id="dashboard-toggle" type="button" title="Show depth dashboard">depth</button>
+      </div>
+      <div id="sheep-stream" aria-live="off"></div>
+    </div>
+  </div>
+
+  <div id="dashboard-overlay" class="hidden" role="dialog" aria-modal="true">
+    <div id="dashboard-panel">
+      <div id="dashboard-header">
+        <span>depth dashboard</span>
+        <button id="dashboard-close" type="button">×</button>
+      </div>
+      <div id="dashboard-body"></div>
+    </div>
+  </div>
+
+  <script src="chat.js"></script>
+</body>
+</html>

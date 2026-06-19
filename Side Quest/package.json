@@ -1,0 +1,22 @@
+{
+  "name": "side-quest",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "rebuild": "electron-rebuild -f -w better-sqlite3"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "electron": "^42.4.1",
+    "playwright": "^1.61.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.4"
+  }
+}
