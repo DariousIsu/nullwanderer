@@ -48,15 +48,25 @@ function observeWindows({ timeoutMs = 6000 } = {}) {
   });
 }
 
+// Window titles flow from the OS straight into her model context. A window or tab
+// titled with tag-like text (e.g. "<email ...>" or "[thread-done:1]") would otherwise
+// read as an instruction/control tag — prompt injection. Neutralize the structural
+// characters before interpolating any title/foreground string into the output.
+function sanitizeTitle(s) {
+  return String(s == null ? '' : s)
+    .replace(/</g, '‹').replace(/>/g, '›')
+    .replace(/\[/g, '(').replace(/\]/g, ')');
+}
+
 // Format an observation result into prose for her context / a reading row.
 function formatObservation(result) {
   if (!result || !result.ok) return `(could not read the screen: ${result?.reason || 'unknown'})`;
   const lines = [];
   lines.push(`What's open on Lucas's screen right now (you can see windows, not their contents):`);
-  if (result.foreground) lines.push(`  FOCUSED: ${result.foreground}`);
+  if (result.foreground) lines.push(`  FOCUSED: ${sanitizeTitle(result.foreground)}`);
   lines.push(`  Open windows:`);
   for (const w of result.windows.slice(0, 25)) {
-    lines.push(`    · ${w.app} — ${w.title}`);
+    lines.push(`    · ${w.app} — ${sanitizeTitle(w.title)}`);
   }
   return lines.join('\n');
 }

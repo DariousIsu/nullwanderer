@@ -3,6 +3,7 @@ const { streamChat, TagStreamParser } = require('./ollama');
 const { BOOTSTRAP, buildAwarenessBlock } = require('./context');
 const { runSelfDialogue } = require('./self_dialogue');
 const filesLib = require('./files');
+const browserLib = require('./browser');
 const screenLib = require('./screen');
 const autoTools = require('./auto_tools');
 const governor = require('./governor');
@@ -220,13 +221,6 @@ async function maybeHeartbeat() {
     pendingInbounds
   });
 
-  // Mark consumed — they're in Stheno's context now
-  if (pendingInbounds && pendingInbounds.length > 0) {
-    for (const i of pendingInbounds) {
-      try { db.markInboundConsumed(i.id); } catch {}
-    }
-  }
-
   const win = opts.getWindow ? opts.getWindow() : null;
   if (!win || win.isDestroyed()) return;
 
@@ -248,6 +242,15 @@ async function maybeHeartbeat() {
     });
 
     const { thought, say, truncated } = parser.finalize();
+
+    // Mark inbounds consumed only AFTER a successful generation — if streamChat
+    // had thrown above, we'd skip this and the inbound stays pending for the
+    // next tick rather than being silently dropped.
+    if (pendingInbounds && pendingInbounds.length > 0) {
+      for (const i of pendingInbounds) {
+        try { db.markInboundConsumed(i.id); } catch {}
+      }
+    }
 
     // Capture any <wonder> tags so Stheno can self-prompt from heartbeat utterances too
     const wonderRe = /<wonder>([\s\S]*?)<\/wonder>/gi;
@@ -273,6 +276,26 @@ async function maybeHeartbeat() {
           } catch (err) { console.error('[heartbeat] file dispatch error:', err.message); }
         }
       })().catch(() => {});
+    }
+    // BROWSER TAGS (autonomous): the heartbeat prompt invites <chat-send> to
+    // continue a web chat-bot. Dispatch any page actions she emitted while idle
+    // (chat-send/chat-watch/chat-unwatch et al.) — mirror monologue's handling.
+    const browserTags = [...browserLib.parseTags(thought || ''), ...browserLib.parseTags(say || '')];
+    if (browserTags.length > 0 && browserLib.isConnected()) {
+      (async () => {
+        for (const t of browserTags.slice(0, 2)) {
+          try {
+            const r = await browserLib.dispatch(t);
+            console.log(`[heartbeat] browser ${t.tag}: ${r?.ok ? 'ok' : 'FAIL ' + r?.reason}`);
+            if (r?.ok && t.tag === 'browse-read' && r.text) {
+              const rr = db.insertMonologue({ content: `I read "${r.title || r.url}" (${r.url}):\n${r.text}`, model: 'browser-read', type: 'reading', query: r.url, urls: [r.url] });
+              try { win.webContents.send('monologue:tick', { id: rr.id, ts: rr.ts, content: `(read) ${r.title || r.url}`, type: 'reading', query: r.url }); } catch {}
+            } else if (r?.ok) {
+              try { win.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(${t.tag}) ${r.target || r.url || ''}`, type: 'reading' }); } catch {}
+            }
+          } catch (err) { console.error('[heartbeat] browser dispatch error:', err.message); }
+        }
+      })().catch(err => console.error('[heartbeat] browser async error:', err.message));
     }
     // SCREEN TAGS (autonomous): observe desktop if she chose to while idle
     const screenTags = [...screenLib.parseTags(thought || ''), ...screenLib.parseTags(say || '')];
@@ -300,11 +323,20 @@ async function maybeHeartbeat() {
           onSheep: (p) => { try { win.webContents.send('monologue:tick', p); } catch {} },
           source: 'heartbeat'
         }).catch(err => console.error('[heartbeat] auto-tools error:', err.message));
+      } else {
+        // Governor denied — don't silently swallow the intended action. Make the
+        // drop visible and leave a note row (no retry queue, just visibility).
+        console.warn('[heartbeat] auto-tool action held back by governor (paced out)');
+        try {
+          const heldRow = db.insertMonologue({ content: '(held an action back — governor paced it out)', model: MODEL, type: 'reading' });
+          try { win.webContents.send('monologue:tick', { id: heldRow.id, ts: heldRow.ts, content: '(held an action back — governor paced it out)', type: 'reading' }); } catch {}
+        } catch (err) { console.error('[heartbeat] held-note insert error:', err.message); }
       }
     }
 
     let thoughtStripped = (thought || '').replace(/<wonder>[\s\S]*?<\/wonder>/gi, '').trim();
     thoughtStripped = filesLib.stripTags(thoughtStripped);
+    thoughtStripped = browserLib.stripTags(thoughtStripped);
     thoughtStripped = screenLib.stripTags(thoughtStripped);
     thoughtStripped = autoTools.stripAll(thoughtStripped);
 
@@ -320,7 +352,7 @@ async function maybeHeartbeat() {
     }
 
     // Treat literal placeholder text as silence, not as utterance
-    const stripLeakedTags = (s) => autoTools.stripAll(screenLib.stripTags(filesLib.stripTags((s || '')
+    const stripLeakedTags = (s) => autoTools.stripAll(screenLib.stripTags(browserLib.stripTags(filesLib.stripTags((s || '')
       .replace(/<\/?think>/gi, '')
       .replace(/<\/?say>/gi, '')
       .replace(/<navigate>[^<]*<\/navigate>/gi, '')
@@ -328,7 +360,7 @@ async function maybeHeartbeat() {
       .replace(/\*[^*\n]{1,200}\*/g, '')
       .replace(/[ \t]+/g, ' ')
       .replace(/\n{3,}/g, '\n\n')
-      .trim())));
+      .trim()))));
     const trimmedSay = stripLeakedTags(say);
     const isPlaceholder = /^[\s.()]*(empty|silence|nothing|none|n\/a|null|undefined|no\s+say|no\s+comment)[\s.()]*$/i.test(trimmedSay);
 

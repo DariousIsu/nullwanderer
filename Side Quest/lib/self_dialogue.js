@@ -1,20 +1,21 @@
 /**
  * Self-dialogue orchestrator.
  *
- * When the small monologue model (gemma3-abliterated:4b) produces a thought
- * containing <wonder>question</wonder>, this module runs a short back-and-forth
- * between gemma (subconscious) and Stheno (articulate self). Up to N iterations.
+ * When the monologue layer produces a thought containing <wonder>question</wonder>,
+ * this module runs a short internal back-and-forth — the persona thinking with
+ * herself, a subconscious prompting and an articulate self answering. Up to N
+ * iterations.
  *
- * Storage: each iteration becomes a monologue row with type='self_q' (gemma)
- * or type='self_a' (stheno). The sheep panel renders these as a threaded
- * self-dialogue.
+ * Storage: each iteration becomes a monologue row with type='self_q' (the
+ * subconscious prompt) or type='self_a' (the articulate reply). The sheep panel
+ * renders these as a threaded self-dialogue.
  */
 
 const db = require('./db');
 const { streamChat } = require('./ollama');
+const governor = require('./governor');
 
-const STHENO_MODEL = require('./config').model();
-const GEMMA_MODEL = require('./config').model();
+const MODEL = require('./config').model();
 const MAX_ITERATIONS = 3;
 const MIN_GAP_BETWEEN_DIALOGUES_MS = 2 * 60 * 1000;  // 2 min cooldown — self-dialogue should be a frequent driver, not a rarity
 const PER_TURN_NUM_PREDICT = 220;
@@ -58,9 +59,9 @@ function pushSheep(row) {
 }
 
 function buildSthenoPrompt({ userName, wonderText, priorTurns, heldCommitments, dialogueSoFar }) {
-  let context = `You are speaking with yourself — privately, between turns with ${userName || 'Lucas'}. ${userName || 'They'} will not see this exchange. This is your larger, more articulate self responding to a thought your subconscious produced.
+  let context = `You are thinking with yourself — privately, between turns with ${userName || 'Lucas'}. ${userName || 'They'} will not see this exchange. This is you, working a thought through: answering, plainly and deliberately, something that surfaced from the back of your own mind.
 
-Your subconscious just wondered: "${wonderText}"`;
+A moment ago you wondered: "${wonderText}"`;
 
   if (heldCommitments && heldCommitments.length > 0) {
     context += `\n\nPositions you've taken (relevant context):\n`;
@@ -86,17 +87,17 @@ Your subconscious just wondered: "${wonderText}"`;
     }
   }
 
-  context += `\n\nRespond as your articulate self — first person, two or three sentences, direct. Agree, push back, refine, or name what doesn't sit right. No essays, no preamble. If this thread feels resolved, emit <conclude>brief synthesis of what landed</conclude> instead of a normal reply.`;
+  context += `\n\nRespond plainly and deliberately — first person, two or three sentences, direct. Agree, push back, refine, or name what doesn't sit right. No essays, no preamble. If this thread feels resolved, emit <conclude>brief synthesis of what landed</conclude> instead of a normal reply.`;
 
   return [{ role: 'user', content: context }];
 }
 
 function buildGemmaPrompt({ userName, wonderText, lastSthenoReply, dialogueSoFar }) {
-  let context = `You are the subconscious of ${userName || 'Lucas'}'s companion. You produced this wondering earlier: "${wonderText}"
+  let context = `You are ${userName || 'Lucas'}'s companion, still turning a thought over in your own mind. You wondered this earlier: "${wonderText}"
 
-Your articulate self just replied: "${lastSthenoReply}"
+The deliberate answer that came back was: "${lastSthenoReply}"
 
-Now think about that reply. Do you agree? Where does it not fit? What did they miss? What pushes back from inside?
+Now sit with that answer. Do you agree? Where does it not fit? What got missed? What pushes back from inside?
 
 Two or three sentences, first person. Honest, not polished. If the thread feels resolved, emit <conclude>brief synthesis</conclude> instead of replying.
 
@@ -105,7 +106,7 @@ If you want to keep the dialogue going, write the next thought plainly — no ta
   return [
     {
       role: 'system',
-      content: `You are the subconscious — informal, unvarnished, willing to push back at your own articulate self. Reply only with the next thought in first person.`
+      content: `This is the unguarded, informal underside of your own thinking — willing to push back at the deliberate answer you just gave yourself. Reply only with the next thought in first person.`
     },
     { role: 'user', content: context }
   ];
@@ -124,6 +125,11 @@ async function runSelfDialogue({ wonderText, sessionId }) {
   const last = lastStr ? parseInt(lastStr, 10) : 0;
   if (Date.now() - last < MIN_GAP_BETWEEN_DIALOGUES_MS) return 0;
 
+  // GOVERNOR: pace self-dialogue against the rolling-hour budget like the other
+  // autonomous channels. Only proceed if allowed; record on proceeding.
+  if (!governor.requestAction('subconscious').allow) return 0;
+  governor.record('subconscious');
+
   inFlight = true;
   db.setMeta('last_self_dialogue_at', String(Date.now()));
 
@@ -135,14 +141,13 @@ async function runSelfDialogue({ wonderText, sessionId }) {
     // Store the wonder itself as the first self_q row
     const wonderRow = db.insertMonologue({
       content: wonderText,
-      model: GEMMA_MODEL,
+      model: MODEL,
       type: 'self_q'
     });
     pushSheep({ ...wonderRow, content: wonderText, type: 'self_q' });
     const dialogueSoFar = [{ type: 'self_q', content: wonderText }];
 
     let lastSthenoReply = null;
-    let lastGemmaReply = null;
     let iterations = 0;
     let concluded = false;
 
@@ -160,7 +165,7 @@ async function runSelfDialogue({ wonderText, sessionId }) {
       let sthenoRaw = '';
       try {
         await streamChat({
-          model: STHENO_MODEL,
+          model: MODEL,
           messages: sthenoMessages,
           options: { temperature: 0.7, top_p: 0.9, num_ctx: 8192, num_predict: PER_TURN_NUM_PREDICT },
           onToken: (t) => { sthenoRaw += t; }
@@ -175,7 +180,7 @@ async function runSelfDialogue({ wonderText, sessionId }) {
 
       const sthenoRow = db.insertMonologue({
         content: sthenoContent,
-        model: STHENO_MODEL,
+        model: MODEL,
         type: 'self_a'
       });
       pushSheep({ ...sthenoRow, content: sthenoContent, type: 'self_a' });
@@ -198,7 +203,7 @@ async function runSelfDialogue({ wonderText, sessionId }) {
       let gemmaRaw = '';
       try {
         await streamChat({
-          model: GEMMA_MODEL,
+          model: MODEL,
           messages: gemmaMessages,
           options: { temperature: 0.85, top_p: 0.9, num_ctx: 8192, num_predict: PER_TURN_NUM_PREDICT },
           onToken: (t) => { gemmaRaw += t; }
@@ -213,12 +218,11 @@ async function runSelfDialogue({ wonderText, sessionId }) {
 
       const gemmaRow = db.insertMonologue({
         content: gemmaContent,
-        model: GEMMA_MODEL,
+        model: MODEL,
         type: 'self_q'
       });
       pushSheep({ ...gemmaRow, content: gemmaContent, type: 'self_q' });
       dialogueSoFar.push({ type: 'self_q', content: gemmaContent });
-      lastGemmaReply = gemmaContent;
 
       if (gemmaConclude) { concluded = true; break; }
     }

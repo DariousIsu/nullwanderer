@@ -8,7 +8,9 @@ const {
   startReflectionScheduler,
   stopReflectionScheduler,
   markUserActivity,
-  forceReflectionIfDue
+  forceReflectionIfDue,
+  pause: pauseReflection,
+  resume: resumeReflection
 } = require('./lib/reflection');
 const {
   startMonologueScheduler,
@@ -57,6 +59,8 @@ const DISPLAY_HISTORY_LIMIT = 50;
 let mainWindow = null;
 let currentSessionId = null;
 let currentSessionStartedAt = null;
+let inboxPollTimer = null;     // setInterval id for the inbox poller (cleared on shutdown)
+let inboxPollTimeout = null;   // initial-sweep setTimeout id
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -241,8 +245,8 @@ app.whenReady().then(() => {
         }
       } catch (e) { console.error('[inbox-poll]', e.message); }
     };
-    setTimeout(() => { runInboxPoll().catch(() => {}); }, 20000); // initial sweep ~20s after boot
-    setInterval(() => { runInboxPoll().catch(() => {}); }, INBOX_POLL_MS);
+    inboxPollTimeout = setTimeout(() => { runInboxPoll().catch(() => {}); }, 20000); // initial sweep ~20s after boot
+    inboxPollTimer = setInterval(() => { runInboxPoll().catch(() => {}); }, INBOX_POLL_MS);
     console.log('[main] inbox poller started (unread-based, every 4 min)');
   }
 
@@ -307,6 +311,9 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', async () => {
+  if (inboxPollTimer) { clearInterval(inboxPollTimer); inboxPollTimer = null; }
+  if (inboxPollTimeout) { clearTimeout(inboxPollTimeout); inboxPollTimeout = null; }
+  try { actionLoop.abort(); } catch {}
   stopMonologueScheduler();
   stopHeartbeatScheduler();
   stopContinuityScheduler();
@@ -508,6 +515,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   pauseMonologue();
   pauseHeartbeat();
   pauseContinuity();
+  pauseReflection();
   selfDialogue.pause();
 
   const sessionId = currentSessionId;
@@ -567,6 +575,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       resumeMonologue();
       resumeHeartbeat();
       resumeContinuity();
+      resumeReflection();
       selfDialogue.resume();
 
       console.log(`[main] PROTOCOL INTERCEPTED: ${triggerMatch.protocol.trigger_phrase} → ${triggerMatch.action} (${triggerMatch.matchType})`);
@@ -680,14 +689,6 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     newUserMessage: composedUserMessage
   });
 
-  // Mark these inbounds consumed — they're now in Stheno's context. If she doesn't
-  // act on them, that's her call; we don't keep re-injecting forever.
-  if (pendingInbounds && pendingInbounds.length > 0) {
-    for (const i of pendingInbounds) {
-      try { db.markInboundConsumed(i.id); } catch {}
-    }
-  }
-
   const parser = new TagStreamParser({
     onSayToken: (token) => {
       try {
@@ -708,8 +709,18 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     resumeMonologue();
     resumeHeartbeat();
     resumeContinuity();
+    resumeReflection();
     selfDialogue.resume();
     return { ok: false, error: err.message, say: null };
+  }
+
+  // Turn succeeded → mark the injected inbounds consumed (they're now in her
+  // context). Done AFTER the stream so a model failure above doesn't silently
+  // drop a pending inbound — it stays queued to re-surface next turn.
+  if (pendingInbounds && pendingInbounds.length > 0) {
+    for (const i of pendingInbounds) {
+      try { db.markInboundConsumed(i.id); } catch {}
+    }
   }
 
   const { thought, say, truncated } = parser.finalize();
@@ -842,6 +853,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   resumeMonologue();
   resumeHeartbeat();
   resumeContinuity();
+  resumeReflection();
   selfDialogue.resume();
 
   // Background: detect AI-initiated <navigate>URL</navigate> tags in both thought and said.
@@ -1126,11 +1138,6 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     userName
   }).then(stored => {
     if (stored && stored.length > 0) {
-      try {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('open_threads:added', stored);
-        }
-      } catch {}
       console.log('[main] open_threads extracted:', stored.map(s => `[${s.id}] ${s.content}`));
     }
   }).catch(err => console.error('[main] open_threads extract failed:', err.message));
@@ -1144,11 +1151,6 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     userName
   }).then(stored => {
     if (stored && stored.length > 0) {
-      try {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('protocols:added', stored);
-        }
-      } catch {}
       console.log('[main] PROTOCOLS extracted:', stored.map(s => `[${s.id}] ${s.category} ${s.trigger_phrase || ''}`));
     }
   }).catch(err => console.error('[main] protocols extract failed:', err.message));
@@ -1160,12 +1162,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     aiSaidContent: finalSaid,
     aiSaidTurnId: saidRow.id
   }).then(stored => {
-    if (stored.length > 0) {
-      try {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('commitments:added', stored);
-        }
-      } catch {}
+    if (stored && stored.length > 0) {
+      console.log('[main] commitments extracted:', stored.length);
     }
   }).catch(err => console.error('[main] commitment extraction failed:', err.message));
 

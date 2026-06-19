@@ -61,13 +61,16 @@ function parseWhen(when) {
 // --- tag parsing (mirrors files.js / screen.js) ---
 
 const SCHED_TAG_RE = /<(schedule(?:-list|-cancel)?)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
-const ATTR_RE = /(\w+)\s*=\s*"([^"]*)"/g;
+const ATTR_RE = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
 
 function parseAttrs(s) {
   const out = {};
   if (!s) return out;
   let m; ATTR_RE.lastIndex = 0;
-  while ((m = ATTR_RE.exec(s)) !== null) out[m[1]] = m[2];
+  while ((m = ATTR_RE.exec(s)) !== null) {
+    const val = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : m[4]);
+    out[m[1].toLowerCase()] = val;
+  }
   return out;
 }
 
@@ -150,23 +153,33 @@ function stopScheduler() {
   timer = null;
 }
 
+let ticking = false;
+
 async function tick() {
-  let due;
-  try { due = db.getDueScheduledTasks(Date.now()); } catch { return; }
-  if (!due || due.length === 0) return;
-  for (const t of due) {
-    try {
-      const body = `⏰ A task you scheduled for yourself just came due: "${t.note}"${t.kind === 'recurring' ? ' (recurring)' : ''}. This is your own reminder — decide what to do about it now.`;
-      const row = db.insertMonologue({ content: body, model: 'self-schedule', type: 'reading' });
-      pushSheep({ id: row.id, ts: row.ts, content: `(reminder due) ${t.note}`, type: 'reading' });
-      db.markScheduledFired(t.id);
-      console.log(`[scheduler] fired task #${t.id}: ${t.note}`);
-    } catch (err) {
-      console.error('[scheduler] fire failed for task', t.id, err.message);
+  // Re-entrancy guard: the boot catch-up tick and the interval tick must not run
+  // concurrently, or a due task could double-fire.
+  if (ticking) return;
+  ticking = true;
+  try {
+    let due;
+    try { due = db.getDueScheduledTasks(Date.now()); } catch { return; }
+    if (!due || due.length === 0) return;
+    for (const t of due) {
+      try {
+        const body = `⏰ A task you scheduled for yourself just came due: "${t.note}"${t.kind === 'recurring' ? ' (recurring)' : ''}. This is your own reminder — decide what to do about it now.`;
+        const row = db.insertMonologue({ content: body, model: 'self-schedule', type: 'reading' });
+        pushSheep({ id: row.id, ts: row.ts, content: `(reminder due) ${t.note}`, type: 'reading' });
+        db.markScheduledFired(t.id);
+        console.log(`[scheduler] fired task #${t.id}: ${t.note}`);
+      } catch (err) {
+        console.error('[scheduler] fire failed for task', t.id, err.message);
+      }
     }
+    // Kick the heartbeat so she surfaces/acts on the due reminder(s) promptly.
+    try { opts.kickHeartbeat(); } catch {}
+  } finally {
+    ticking = false;
   }
-  // Kick the heartbeat so she surfaces/acts on the due reminder(s) promptly.
-  try { opts.kickHeartbeat(); } catch {}
 }
 
 function pushSheep(payload) {

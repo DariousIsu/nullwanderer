@@ -319,12 +319,6 @@ function confirmCommitment(id, turnId) {
   return { id, ts: now };
 }
 
-function countCommitmentsByStatus() {
-  return getDb()
-    .prepare(`SELECT status, COUNT(*) as n FROM commitments GROUP BY status`)
-    .all();
-}
-
 // --- Open Threads (intentions / goals / tasks the agent is pursuing) ---
 
 function insertOpenThread({ content, parentId = null, sourceTurnId = null }) {
@@ -407,12 +401,6 @@ function incrementThreadAction(id) {
     .run(now, id);
 }
 
-function countOpenThreadsByStatus() {
-  return getDb()
-    .prepare(`SELECT status, COUNT(*) as n FROM open_threads GROUP BY status`)
-    .all();
-}
-
 function getRecentReflections(n) {
   const rows = getDb()
     .prepare('SELECT * FROM reflections ORDER BY id DESC LIMIT ?')
@@ -449,12 +437,6 @@ function insertProtocol({ category, triggerPhrase = null, action = null, descrip
 function getActiveProtocols() {
   return getDb()
     .prepare(`SELECT * FROM protocols WHERE status = 'active' ORDER BY category, id`)
-    .all();
-}
-
-function getAllProtocols() {
-  return getDb()
-    .prepare(`SELECT * FROM protocols ORDER BY id DESC`)
     .all();
 }
 
@@ -555,8 +537,26 @@ function getPendingScheduledTasks(limit = 20) {
     .all(limit);
 }
 
+// Atomically claim a 'once' task for firing. Two tickers (scheduler.js + main.js)
+// can both observe the same due task via getDueScheduledTasks (a non-atomic
+// SELECT-then-UPDATE), which would double-fire it. This flips status pending→fired
+// in a single statement and returns true ONLY for the caller that won the race
+// (info.changes === 1). Callers gate their fire side-effects on this. Recurring
+// re-arm stays in markScheduledFired (which is itself made claim-safe below).
+function claimScheduledTask(id) {
+  const now = Date.now();
+  const info = getDb()
+    .prepare(`UPDATE scheduled_tasks SET status = 'fired', last_fired_ts = ?, fire_count = fire_count + 1 WHERE id = ? AND status = 'pending'`)
+    .run(now, id);
+  return info.changes === 1;
+}
+
 // Mark a task fired. For 'recurring' tasks re-arm fire_at to the next interval
 // boundary in the future (skipping any missed windows while the app was down).
+// The status flip / re-arm is guarded by `status IN ('pending','fired')` so that
+// concurrent tickers can't double-process a task that another already claimed
+// (a cancelled task in particular is never resurrected). When the guard loses
+// (info.changes === 0) we return rearmed/fired = null so callers can tell.
 function markScheduledFired(id) {
   const now = Date.now();
   const t = getDb().prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id);
@@ -564,15 +564,15 @@ function markScheduledFired(id) {
   if (t.kind === 'recurring' && t.interval_ms && t.interval_ms > 0) {
     let next = t.fire_at + t.interval_ms;
     while (next <= now) next += t.interval_ms;
-    getDb()
-      .prepare(`UPDATE scheduled_tasks SET fire_at = ?, last_fired_ts = ?, fire_count = fire_count + 1 WHERE id = ?`)
+    const info = getDb()
+      .prepare(`UPDATE scheduled_tasks SET fire_at = ?, last_fired_ts = ?, fire_count = fire_count + 1 WHERE id = ? AND status IN ('pending','fired')`)
       .run(next, now, id);
-    return { id, ts: now, rearmedFor: next };
+    return { id, ts: now, rearmedFor: info.changes === 1 ? next : null };
   }
-  getDb()
-    .prepare(`UPDATE scheduled_tasks SET status = 'fired', last_fired_ts = ?, fire_count = fire_count + 1 WHERE id = ?`)
+  const info = getDb()
+    .prepare(`UPDATE scheduled_tasks SET status = 'fired', last_fired_ts = ?, fire_count = fire_count + 1 WHERE id = ? AND status IN ('pending','fired')`)
     .run(now, id);
-  return { id, ts: now, rearmedFor: null };
+  return { id, ts: now, rearmedFor: null, fired: info.changes === 1 };
 }
 
 function cancelScheduledTask(id) {
@@ -601,11 +601,21 @@ function countEmailsSentSince(sinceTs) {
 
 // Has she already sent mail to this address? Gates autonomous reply: she only
 // auto-continues threads she's part of, never cold-replies to unknown senders.
+// EXACT case-insensitive match (not substring) — a substring LIKE is spoofable
+// by lookalikes (a@b.com would match a@b.com.evil.com). to_addr is stored as the
+// raw `to` passed to sendEmail, which is a bare address in the autonomous path;
+// we also match the angle-bracket-extracted form ("Name <a@b.com>") defensively.
 function hasEmailedAddress(addr) {
   if (!addr) return false;
+  const norm = String(addr).trim().toLowerCase();
+  if (!norm) return false;
   const row = getDb()
-    .prepare(`SELECT 1 FROM email_log WHERE status = 'sent' AND LOWER(to_addr) LIKE ? LIMIT 1`)
-    .get('%' + String(addr).toLowerCase() + '%');
+    .prepare(`SELECT 1 FROM email_log
+      WHERE status = 'sent'
+        AND (LOWER(to_addr) = ?
+          OR LOWER(TRIM(SUBSTR(to_addr, INSTR(to_addr, '<') + 1, INSTR(to_addr, '>') - INSTR(to_addr, '<') - 1))) = ?)
+      LIMIT 1`)
+    .get(norm, norm);
   return !!row;
 }
 
@@ -659,12 +669,23 @@ function countKnowledge() {
 }
 
 function deleteKnowledgeBySource(source) {
-  const ids = getDb().prepare('SELECT id FROM knowledge WHERE source = ?').all(source).map(r => r.id);
-  for (const id of ids) {
+  // knowledge_fts is a standalone (non-content) FTS5 table mirroring `content`.
+  // A plain DELETE on it does NOT purge the inverted index — FTS5 requires the
+  // special 'delete' command, which needs the ORIGINAL indexed content for the
+  // row. So fetch id+content first, delete the base rows, then issue the FTS5
+  // delete for each. Errors are logged, not swallowed silently.
+  const rows = getDb().prepare('SELECT id, content FROM knowledge WHERE source = ?').all(source);
+  for (const { id, content } of rows) {
     getDb().prepare('DELETE FROM knowledge WHERE id = ?').run(id);
-    try { getDb().prepare('DELETE FROM knowledge_fts WHERE rowid = ?').run(id); } catch {}
+    try {
+      getDb()
+        .prepare(`INSERT INTO knowledge_fts(knowledge_fts, rowid, content) VALUES('delete', ?, ?)`)
+        .run(id, content);
+    } catch (e) {
+      console.error('[db] knowledge_fts delete failed for id', id, e.message);
+    }
   }
-  return ids.length;
+  return rows.length;
 }
 
 function getMeta(key) {
@@ -697,7 +718,6 @@ module.exports = {
   reviseCommitment,
   markCommitmentStatus,
   confirmCommitment,
-  countCommitmentsByStatus,
   insertOpenThread,
   getActiveOpenThreads,
   getAllOpenThreads,
@@ -706,10 +726,8 @@ module.exports = {
   touchOpenThread,
   incrementThreadMention,
   incrementThreadAction,
-  countOpenThreadsByStatus,
   insertProtocol,
   getActiveProtocols,
-  getAllProtocols,
   getProtocolByTrigger,
   confirmProtocol,
   invokeProtocol,
@@ -721,6 +739,7 @@ module.exports = {
   insertScheduledTask,
   getDueScheduledTasks,
   getPendingScheduledTasks,
+  claimScheduledTask,
   markScheduledFired,
   cancelScheduledTask,
   insertEmailLog,

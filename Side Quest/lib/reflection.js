@@ -11,7 +11,11 @@ const MODEL = require('./config').model();
 let timer = null;
 let lastUserActivityTs = Date.now();
 let opts = { getSessionId: () => null, getWindow: () => null };
+let paused = false;
 let inFlight = false;
+
+function pause() { paused = true; }
+function resume() { paused = false; }
 
 function markUserActivity() {
   lastUserActivityTs = Date.now();
@@ -30,7 +34,7 @@ function stopReflectionScheduler() {
 }
 
 async function tick() {
-  if (inFlight) return;
+  if (paused || inFlight) return;
   try {
     await reflectIfDue({ force: false });
   } catch (err) {
@@ -102,6 +106,8 @@ async function reflectIfDue({ force = false } = {}) {
 module.exports = {
   startReflectionScheduler,
   stopReflectionScheduler,
+  pause,
+  resume,
   markUserActivity,
   reflectIfDue,
   forceReflectionIfDue: () => reflectIfDue({ force: true })

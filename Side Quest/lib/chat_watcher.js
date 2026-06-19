@@ -49,10 +49,12 @@ let listeners = { onReplyArrived: () => {}, onReplyTimeout: () => {} };
 function setListeners(l) { listeners = { ...listeners, ...l }; }
 
 function _key(url) {
-  // Normalize URL — strip query/hash so a navigated tab stays watched
+  // Normalize URL — strip hash but RETAIN the query string so distinct
+  // conversations on the same path (e.g. ?conversation=A vs ?conversation=B)
+  // don't collide onto one watcher/baseline.
   try {
     const u = new URL(url);
-    return u.origin + u.pathname;
+    return u.origin + u.pathname + u.search;
   } catch {
     return url;
   }
@@ -242,7 +244,7 @@ async function sendAndWait(page, text, { speaker } = {}) {
   const newMessages = await extractMessages(page, preCount);
   // The first new message is usually her own send (we just typed it). The bot's
   // reply is usually the second. Filter to messages that AREN'T her own text.
-  const botReplies = newMessages.filter(m => !m.text.toLowerCase().includes(text.toLowerCase().slice(0, Math.min(60, text.length))) || m.index > preCount + 0);
+  const botReplies = newMessages.filter(m => !m.text.toLowerCase().includes(text.toLowerCase().slice(0, Math.min(60, text.length))));
   const reply = botReplies.length > 0 ? botReplies[botReplies.length - 1] : (newMessages[newMessages.length - 1] || null);
 
   if (!reply) {
@@ -280,14 +282,17 @@ async function sendAndWait(page, text, { speaker } = {}) {
  */
 async function raceDetection(page, preCount) {
   const start = Date.now();
+  // Shared flag the winner sets so the losing poll loop(s) stop early instead
+  // of polling a possibly-closed page until their own 45s timeout.
+  let done = false;
 
   const messageCountSignal = (async () => {
-    while (Date.now() - start < REPLY_TIMEOUT_MS) {
+    while (!done && Date.now() - start < REPLY_TIMEOUT_MS) {
       try {
         const cur = await countMessages(page);
         // Wait for at least 2 new messages (the user's send + bot's reply)
         // OR 1 new message if no user-message echo (some sites don't echo user msg into the same container)
-        if (cur >= preCount + 2) return { detectedBy: 'message-count-+2' };
+        if (cur >= preCount + 2) { done = true; return { detectedBy: 'message-count-+2' }; }
       } catch {}
       await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
     }
@@ -299,7 +304,7 @@ async function raceDetection(page, preCount) {
     // then wait for it to become ENABLED again (reply complete)
     const disabledStart = Date.now();
     let wasDisabled = false;
-    while (Date.now() - start < REPLY_TIMEOUT_MS) {
+    while (!done && Date.now() - start < REPLY_TIMEOUT_MS) {
       try {
         const btn = page.locator(SEND_BUTTON_SELECTORS.join(', ')).first();
         const visible = await btn.isVisible({ timeout: 500 }).catch(() => false);
@@ -308,6 +313,7 @@ async function raceDetection(page, preCount) {
         if (!enabled) { wasDisabled = true; }
         else if (wasDisabled && (Date.now() - disabledStart > 1500)) {
           // Send was disabled then re-enabled → reply complete
+          done = true;
           return { detectedBy: 'send-button-re-enabled' };
         }
       } catch {}
@@ -318,6 +324,7 @@ async function raceDetection(page, preCount) {
 
   const timeoutSignal = (async () => {
     await new Promise(r => setTimeout(r, REPLY_TIMEOUT_MS));
+    done = true;
     return { timedOut: true };
   })();
 

@@ -6,7 +6,7 @@
  * newsletter→read→integrate flow: incoming mail can be surfaced to her and
  * synthesized into the knowledge store.
  *
- * Tag (parsed from <think>/<say>): <email-check/>  (optionally unread="true")
+ * Tag (parsed from <think>/<say>): <read-inbox/>  (optionally unread="true")
  *   → fetches the most recent inbox messages, surfaced to her next turn.
  *
  * Requires IMAP enabled on the Gmail account (Settings → Forwarding and POP/IMAP).
@@ -40,9 +40,6 @@ async function fetchInbox({ limit = 5, unreadOnly = false } = {}) {
   const messages = [];
   try {
     lock = await client.getMailboxLock('INBOX');
-    const status = await client.status('INBOX', { messages: true });
-    const total = status.messages || 0;
-    if (total === 0) return { ok: true, messages: [] };
 
     let range;
     if (unreadOnly) {
@@ -50,6 +47,9 @@ async function fetchInbox({ limit = 5, unreadOnly = false } = {}) {
       if (!unseen || unseen.length === 0) return { ok: true, messages: [] };
       range = unseen.slice(-limit);
     } else {
+      const status = await client.status('INBOX', { messages: true });
+      const total = status.messages || 0;
+      if (total === 0) return { ok: true, messages: [] };
       const start = Math.max(1, total - limit + 1);
       range = `${start}:${total}`;
     }
@@ -137,13 +137,16 @@ function formatInbox(result) {
 // Accept several names; primary is <read-inbox/> (doesn't collide with the
 // <email…> SEND family, which she kept confusing it with).
 const TAG_RE = /<(?:read-inbox|check-inbox|inbox|email-check)\s*([^>]*?)\/?>/gi;
-const ATTR_RE = /(\w+)\s*=\s*"([^"]*)"/g;
+const ATTR_RE = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
 
 function parseAttrs(s) {
   const out = {};
   if (!s) return out;
   let m; ATTR_RE.lastIndex = 0;
-  while ((m = ATTR_RE.exec(s)) !== null) out[m[1]] = m[2];
+  while ((m = ATTR_RE.exec(s)) !== null) {
+    const val = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : m[4]);
+    out[m[1].toLowerCase()] = val;
+  }
   return out;
 }
 

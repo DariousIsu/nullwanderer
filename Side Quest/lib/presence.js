@@ -59,13 +59,16 @@ function clipboardWrite(text) {
 // --- tag parsing (mirrors files.js / screen.js) ---
 
 const PRESENCE_TAG_RE = /<(notify|clipboard-read|clipboard-write)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
-const ATTR_RE = /(\w+)\s*=\s*"([^"]*)"/g;
+const ATTR_RE = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
 
 function parseAttrs(s) {
   const out = {};
   if (!s) return out;
   let m; ATTR_RE.lastIndex = 0;
-  while ((m = ATTR_RE.exec(s)) !== null) out[m[1]] = m[2];
+  while ((m = ATTR_RE.exec(s)) !== null) {
+    const val = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : m[4]);
+    out[m[1].toLowerCase()] = val;
+  }
   return out;
 }
 

@@ -28,7 +28,8 @@ async function getExtractor() {
   _loading = (async () => {
     const { pipeline, env } = await import('@xenova/transformers');
     // Cache models under the app's data dir; allow first-run download.
-    try { env.cacheDir = require('path').join(db.DB_PATH, '..', 'models'); } catch {}
+    // DB_PATH is a FILE path, so resolve its directory before joining 'models'.
+    try { const path = require('path'); env.cacheDir = path.join(path.dirname(db.DB_PATH), 'models'); } catch {}
     _extractor = await pipeline('feature-extraction', EMBED_MODEL);
     return _extractor;
   })();
@@ -42,10 +43,13 @@ async function embed(text) {
 }
 
 // Embeddings are L2-normalized → dot product IS cosine similarity.
+// Guard mismatched lengths: these are 384-dim normalized vectors, so unequal
+// lengths mean corrupt/foreign data — return 0 rather than silently truncating
+// to the shorter length (which would compare misaligned dimensions).
 function cosine(a, b) {
+  if (a.length !== b.length) return 0;
   let d = 0;
-  const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n; i++) d += a[i] * b[i];
+  for (let i = 0; i < a.length; i++) d += a[i] * b[i];
   return d;
 }
 

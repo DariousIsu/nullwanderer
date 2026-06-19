@@ -99,7 +99,7 @@ function emailReplyAction({ to, subject, snippet }) {
         // Start the draft — deterministic (to/subject are already known). The loop
         // fires the tag itself rather than hoping the 24B emits it correctly.
         auto: () => emailLib.dispatch({ tag: 'email-draft', attrs: { to, subject: subj } }, { source: 'action' }),
-        check: () => { const d = emailLib.draftState(); return !!(d && d.to); }
+        check: () => { const d = emailLib.draftState('action'); return !!(d && d.to); }
       },
       {
         // The ONLY step that needs the model: write the actual reply text.
@@ -110,7 +110,7 @@ function emailReplyAction({ to, subject, snippet }) {
         expect: 'email-body',
         directive: () => `You are writing a reply email to ${to}. Their message was: "${(snippet || '').slice(0, 220)}".\nWrite your reply now and emit it inside ONE tag, exactly like this:\n<email-body>your reply text here</email-body>\nEmit only that single tag with your message inside it. Do NOT include To: or Subject: lines — just the body of your reply.\nSay only what is true. This reply carries no attachment, so don't claim to have attached, included, or enclosed anything with it, and don't describe an action you haven't taken. If a point needs a document you don't have, offer to follow up rather than pretending it's already attached.`,
         check: (ctx) => {
-          const d = emailLib.draftState();
+          const d = emailLib.draftState('action');
           const body = d && d.body ? d.body.join('\n\n').trim() : '';
           if (body.length >= 5) { ctx.bodyText = body; return true; } // capture for the send step
           return false;

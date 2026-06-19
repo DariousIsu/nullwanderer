@@ -652,6 +652,14 @@ async function runOneTick() {
       governor.record('tool');
       autoTools.dispatchFound(trimmed, { onSheep: pushSheep, source: 'monologue' })
         .catch(err => console.error('[monologue] auto-tools error:', err.message));
+    } else {
+      // Governor denied — tags get stripped below either way, so make the dropped
+      // action visible and leave a note row rather than discarding it silently.
+      console.warn('[monologue] auto-tool action held back by governor (paced out)');
+      try {
+        const heldRow = db.insertMonologue({ content: '(held an action back — governor paced it out)', model: MODEL, type: 'reading' });
+        pushSheep({ id: heldRow.id, ts: heldRow.ts, content: '(held an action back — governor paced it out)', type: 'reading' });
+      } catch (err) { console.error('[monologue] held-note insert error:', err.message); }
     }
     trimmed = autoTools.stripAll(trimmed);
   }

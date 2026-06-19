@@ -414,7 +414,7 @@ async function loadSheep() {
   try {
     const monologue = await window.sq.getRecentMonologue(30);
     for (const m of monologue) {
-      appendSheep({ ts: m.ts, content: m.content });
+      appendSheep({ ts: m.ts, content: m.content, type: m.type, query: m.query });
     }
   } catch (err) {
     console.error('sheep load failed:', err);

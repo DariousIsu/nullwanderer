@@ -26,6 +26,7 @@ try { nodemailer = require('nodemailer'); } catch { /* not installed yet */ }
 
 let transporter = null;
 let transporterFor = null;  // remember which user the cached transporter is for
+let inFlightSends = 0;      // reservations for the daily-cap check under concurrent sends
 
 function getTransporter() {
   const { user, pass, configured } = config.emailConfig();
@@ -68,9 +69,11 @@ async function sendEmail({ to, subject, body, attachments = [], source = 'zoe' }
   const hasAttach = Array.isArray(attachments) && attachments.length > 0;
   if (!String(body == null ? '' : body).trim() && !hasAttach) return { ok: false, reason: 'refusing to send an empty body' };
 
-  // Daily-cap backstop
+  // Daily-cap backstop. Count logged sends PLUS in-flight reservations so that
+  // concurrent un-awaited sends (chat + idle loops) can't all slip past the cap
+  // before any of them logs a row.
   const sentToday = db.countEmailsSentSince(startOfTodayTs());
-  if (sentToday >= cfg.dailyCap) {
+  if (sentToday + inFlightSends >= cfg.dailyCap) {
     db.insertEmailLog({ to, subject, status: 'failed', error: 'daily cap reached', source });
     return { ok: false, reason: `daily send cap (${cfg.dailyCap}) reached; resets at midnight` };
   }
@@ -78,6 +81,7 @@ async function sendEmail({ to, subject, body, attachments = [], source = 'zoe' }
   const t = getTransporter();
   if (!t) return { ok: false, reason: 'email transport unavailable' };
 
+  inFlightSends++;
   try {
     const mail = {
       from: cfg.from || cfg.user,
@@ -88,10 +92,12 @@ async function sendEmail({ to, subject, body, attachments = [], source = 'zoe' }
     if (hasAttach) mail.attachments = attachments.map(p => ({ path: p }));
     const info = await t.sendMail(mail);
     db.insertEmailLog({ to, subject, status: 'sent', source });
-    return { ok: true, to, subject, attached: hasAttach ? attachments.length : 0, messageId: info.messageId, remainingToday: cfg.dailyCap - sentToday - 1 };
+    return { ok: true, to, subject, attached: hasAttach ? attachments.length : 0, messageId: info.messageId, remainingToday: cfg.dailyCap - sentToday - inFlightSends };
   } catch (err) {
     db.insertEmailLog({ to, subject, status: 'failed', error: err.message, source });
     return { ok: false, reason: err.message };
+  } finally {
+    inFlightSends--;
   }
 }
 
@@ -100,65 +106,78 @@ async function sendEmail({ to, subject, body, attachments = [], source = 'zoe' }
 // emit one long tag with a full letter inside. So let her build a draft in
 // pieces: set headers, append body (one or more times, across turns), then send.
 // Each emission is tiny → reliable. The draft persists between turns in memory.
-let draft = null;  // { to, subject, body: [], attachments: [] }
-
-function emailDraftStart({ to, subject } = {}) {
-  draft = { to: (to || '').trim() || null, subject: (subject || '').trim() || null, body: [], attachments: [] };
-  return { ok: true, note: `draft started (to: ${draft.to || 'unset'}, subject: ${draft.subject || 'unset'})` };
+// Drafts are keyed by SOURCE (chat / monologue / heartbeat / action / …) so the
+// concurrent idle loops and the chat path each build their own draft and can't
+// clobber one another across turns (the shared-singleton race). Each draft is
+// { to, subject, body: [], attachments: [] }.
+const drafts = new Map();
+function getDraft(source) {
+  let d = drafts.get(source);
+  if (!d) { d = { to: null, subject: null, body: [], attachments: [] }; drafts.set(source, d); }
+  return d;
 }
 
-function emailBodyAppend(text) {
-  if (!draft) draft = { to: null, subject: null, body: [], attachments: [] };
+function emailDraftStart({ to, subject } = {}, source = 'chat') {
+  const d = { to: (to || '').trim() || null, subject: (subject || '').trim() || null, body: [], attachments: [] };
+  drafts.set(source, d);
+  return { ok: true, note: `draft started (to: ${d.to || 'unset'}, subject: ${d.subject || 'unset'})` };
+}
+
+function emailBodyAppend(text, source = 'chat') {
+  const d = getDraft(source);
   const chunk = String(text == null ? '' : text).trim();
-  if (chunk) draft.body.push(chunk);
-  return { ok: true, note: `body part ${draft.body.length} added`, parts: draft.body.length };
+  if (chunk) d.body.push(chunk);
+  return { ok: true, note: `body part ${d.body.length} added`, parts: d.body.length };
 }
 
 // Attach a real file to the in-progress draft. Path is relative→workspace or
 // absolute (full access by design); the file must exist. This is what makes a
 // "I've attached X" statement TRUE — she attaches an actual file she has.
-function emailAttach(p) {
-  if (!draft) draft = { to: null, subject: null, body: [], attachments: [] };
+function emailAttach(p, source = 'chat') {
+  const d = getDraft(source);
   const abs = filesLib.resolvePath(p);
   if (!abs) return { ok: false, reason: 'no file path given to attach' };
   try {
     const st = fs.statSync(abs);
     if (!st.isFile()) return { ok: false, reason: `"${abs}" is not a file` };
   } catch { return { ok: false, reason: `file not found: "${abs}" — write or create it first, then attach` }; }
-  draft.attachments.push(abs);
-  return { ok: true, note: `attached ${path.basename(abs)}`, attachments: draft.attachments.length };
+  d.attachments.push(abs);
+  return { ok: true, note: `attached ${path.basename(abs)}`, attachments: d.attachments.length };
 }
 
-// Read-only view of the in-progress draft (used by the action loop's step checks).
-function draftState() {
-  if (!draft) return null;
-  return { to: draft.to, subject: draft.subject, body: draft.body.slice(), attachments: draft.attachments.slice() };
+// Read-only view of the in-progress draft for a source (used by the action loop's step checks).
+function draftState(source = 'chat') {
+  const d = drafts.get(source);
+  if (!d) return null;
+  return { to: d.to, subject: d.subject, body: d.body.slice(), attachments: d.attachments.slice() };
 }
 
-function emailDraftText() {
-  if (!draft) return null;
-  const att = draft.attachments.length ? `\nAttachments: ${draft.attachments.map(a => path.basename(a)).join(', ')}` : '';
-  return `To: ${draft.to || '(unset)'}\nSubject: ${draft.subject || '(unset)'}${att}\n\n${draft.body.join('\n\n')}`;
+function emailDraftText(source = 'chat') {
+  const d = drafts.get(source);
+  if (!d) return null;
+  const att = d.attachments.length ? `\nAttachments: ${d.attachments.map(a => path.basename(a)).join(', ')}` : '';
+  return `To: ${d.to || '(unset)'}\nSubject: ${d.subject || '(unset)'}${att}\n\n${d.body.join('\n\n')}`;
 }
 
-function emailDraftShow() {
-  if (!draft) return { ok: false, reason: 'no draft in progress' };
-  return { ok: true, text: emailDraftText() };
+function emailDraftShow(source = 'chat') {
+  if (!drafts.get(source)) return { ok: false, reason: 'no draft in progress' };
+  return { ok: true, text: emailDraftText(source) };
 }
 
-function emailDraftDiscard() {
-  draft = null;
+function emailDraftDiscard(source = 'chat') {
+  drafts.delete(source);
   return { ok: true, note: 'draft discarded' };
 }
 
-// Send the in-progress draft. to/subject may be overridden at send time.
-async function emailSend({ to, subject } = {}, { source = 'zoe' } = {}) {
-  if (!draft) return { ok: false, reason: 'no draft to send — start one with <email-draft .../> and add <email-body>…</email-body> first' };
-  const finalTo = (to || draft.to || '').trim();
-  const finalSubject = (subject || draft.subject || '').trim();
-  const body = draft.body.join('\n\n');
-  const r = await sendEmail({ to: finalTo, subject: finalSubject, body, attachments: draft.attachments.slice(), source });
-  if (r.ok) draft = null;  // clear on success; keep on failure so she can fix + retry
+// Send the in-progress draft for a source. to/subject may be overridden at send time.
+async function emailSend({ to, subject } = {}, { source = 'chat' } = {}) {
+  const d = drafts.get(source);
+  if (!d) return { ok: false, reason: 'no draft to send — start one with <email-draft .../> and add <email-body>…</email-body> first' };
+  const finalTo = (to || d.to || '').trim();
+  const finalSubject = (subject || d.subject || '').trim();
+  const body = d.body.join('\n\n');
+  const r = await sendEmail({ to: finalTo, subject: finalSubject, body, attachments: d.attachments.slice(), source });
+  if (r.ok) drafts.delete(source);  // clear on success; keep on failure so she can fix + retry
   return r;
 }
 
@@ -196,13 +215,13 @@ function stripTags(text) {
   return (text || '').replace(EMAIL_TAG_RE, '').replace(/[ \t]+/g, ' ').trim();
 }
 
-async function dispatch({ tag, attrs = {}, body = '' } = {}, { source = 'zoe' } = {}) {
+async function dispatch({ tag, attrs = {}, body = '' } = {}, { source = 'chat' } = {}) {
   switch ((tag || 'email').toLowerCase()) {
-    case 'email-draft':   return emailDraftStart({ to: attrs.to, subject: attrs.subject });
-    case 'email-body':    return emailBodyAppend(body);
-    case 'email-attach':  return emailAttach(attrs.path || attrs.file || (body || '').trim());
-    case 'email-show':    return emailDraftShow();
-    case 'email-discard': return emailDraftDiscard();
+    case 'email-draft':   return emailDraftStart({ to: attrs.to, subject: attrs.subject }, source);
+    case 'email-body':    return emailBodyAppend(body, source);
+    case 'email-attach':  return emailAttach(attrs.path || attrs.file || (body || '').trim(), source);
+    case 'email-show':    return emailDraftShow(source);
+    case 'email-discard': return emailDraftDiscard(source);
     case 'email-send':    return emailSend({ to: attrs.to, subject: attrs.subject }, { source });
     case 'email':
     default: {
@@ -224,7 +243,12 @@ async function dispatch({ tag, attrs = {}, body = '' } = {}, { source = 'zoe' } 
         .replace(/^\s*to\s*:\s*[^\n]*\n?/im, '')
         .replace(/^\s*subject\s*:\s*[^\n]*\n?/im, '')
         .replace(/^\s+/, '');
-      return sendEmail({ to, subject, body: text, source });
+      // If she staged attachments for this source then sent one-shot, carry them.
+      const pend = drafts.get(source);
+      const attachments = pend && pend.attachments.length ? pend.attachments.slice() : [];
+      const r = await sendEmail({ to, subject, body: text, attachments, source });
+      if (r.ok && pend) drafts.delete(source);
+      return r;
     }
   }
 }

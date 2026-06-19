@@ -193,8 +193,18 @@ function trackPage(page) {
   // Initial state
   setTimeout(() => updateTabForPage(page), 250);
   // Updates as the user navigates
-  page.on('framenavigated', () => updateTabForPage(page));
-  page.on('load', () => updateTabForPage(page));
+  page.on('framenavigated', (f) => {
+    // Invalidate captured handle→locator map on a main-frame nav: an in-place
+    // nav or SPA route change detaches the locators captured at the last read,
+    // so B0/I0 would resolve to stale/detached elements. Drop the registry so
+    // the model is forced to <browse-read/> again before acting.
+    if (f === page.mainFrame()) elementRegistry.delete(page);
+    updateTabForPage(page);
+  });
+  page.on('load', () => {
+    elementRegistry.delete(page);
+    updateTabForPage(page);
+  });
   page.on('close', () => removeTabForPage(page));
 }
 
@@ -302,13 +312,20 @@ function resolveTab(attr) {
     return tabContext.recentTabs[0]?.pageHandle || null;
   }
 
-  // 2. last → most-recently-mentioned URL
+  // 2. last → most-recently-mentioned URL. Prefer an EXACT url match first; a
+  // bare-origin mention (e.g. "https://crushon.ai") would otherwise prefix-match
+  // the wrong deep-linked tab. Only fall back to startsWith when nothing matches.
   if (a === 'last') {
     if (tabContext.lastMentionedUrl) {
-      const found = tabContext.recentTabs.find(t => t.url === tabContext.lastMentionedUrl ||
-        t.url.startsWith(tabContext.lastMentionedUrl));
-      if (found) return found.pageHandle;
+      const exact = tabContext.recentTabs.find(t => t.url === tabContext.lastMentionedUrl);
+      if (exact) return exact.pageHandle;
+      const prefix = tabContext.recentTabs.find(t => t.url.startsWith(tabContext.lastMentionedUrl));
+      if (prefix) {
+        console.log(`[browser] tab="last": no exact match for ${tabContext.lastMentionedUrl}, falling back to prefix match ${prefix.url}`);
+        return prefix.pageHandle;
+      }
     }
+    console.log('[browser] tab="last": no url match, falling back to most-recent tab');
     return tabContext.recentTabs[0]?.pageHandle || null;
   }
 
@@ -550,9 +567,9 @@ async function actionScroll(spec, tabAttr) {
   const dir = m[1] === 'up' ? -1 : 1;
   const count = parseInt(m[2] || '1', 10);
   try {
-    await page.evaluate(({ d, n }) => {
+    await withEvalTimeout(page.evaluate(({ d, n }) => {
       window.scrollBy({ top: d * n * window.innerHeight, left: 0, behavior: 'instant' });
-    }, { d: dir, n: count });
+    }, { d: dir, n: count }), 'scroll');
     return { ok: true, direction: m[1], count };
   } catch (err) {
     return { ok: false, reason: err.message };
@@ -563,6 +580,19 @@ async function actionScroll(spec, tabAttr) {
 
 const MAX_A11Y_CHARS = 5000;  // ~1200 tokens for body
 const MAX_INTERACTIVES = 40;
+// Hard ceiling for otherwise-unguarded page.evaluate / a11y-snapshot calls so a
+// hung renderer can't block the dispatch loop forever. Other actions already
+// pass per-call timeouts; this is the fallback for the ones that don't.
+const EVAL_TIMEOUT_MS = 8000;
+
+// Wrap a promise so it rejects if it hasn't settled within EVAL_TIMEOUT_MS.
+function withEvalTimeout(promise, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label || 'page.evaluate'} timed out after ${EVAL_TIMEOUT_MS}ms`)), EVAL_TIMEOUT_MS);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 // Per-page registry of interactive elements, keyed by stable handle (B0/L3/I0…).
 // Populated on each read; click/type resolve handles to live Playwright locators
@@ -576,12 +606,11 @@ function getRegistry(page) {
 function setRegistry(page, handles) {
   elementRegistry.set(page, handles);
 }
-const HANDLE_RE = /^[BLI]\d+$/i;
 
 async function extractA11y(page) {
   let bodyText = '';
   try {
-    const snap = await page.accessibility.snapshot({ interestingOnly: true });
+    const snap = await withEvalTimeout(page.accessibility.snapshot({ interestingOnly: true }), 'a11y-snapshot');
     const lines = [];
     walkA11y(snap, lines, 0);
     bodyText = lines.join('\n');
@@ -869,9 +898,9 @@ function buildActionNudge(userMessage) {
 
   if (wantsType) {
     lines.push(`Lucas wants you to TYPE something. Steps:`);
-    lines.push(`  1. First emit <browse-read/> to see what inputs exist (the INTERACTIVE ELEMENTS section will list inputs with their selectors)`);
-    lines.push(`  2. Then on your next turn emit <browse-type selector="...">your text here</browse-type>`);
-    lines.push(`  3. If there's a Send/Submit button, also <browse-click>Send</browse-click>`);
+    lines.push(`  1. First emit <browse-read/> to see what inputs exist (the INTERACTIVE ELEMENTS section lists inputs with HANDLES like [I0] [I1])`);
+    lines.push(`  2. Then on your next turn emit <browse-type selector="I0">your text here</browse-type> — name the input HANDLE you saw, never a guessed selector`);
+    lines.push(`  3. If there's a Send/Submit button, also <browse-click>B0</browse-click> naming its handle from the read`);
   } else if (wantsClick) {
     // Check if the user named a specific target (proper noun, quoted phrase, "one of the X")
     // — if so, push for immediate click. Otherwise read first.
