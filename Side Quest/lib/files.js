@@ -252,7 +252,7 @@ A bare name like "notes/idea.md" lands in your workspace (${WORKSPACE}). An abso
 
 module.exports = {
   WORKSPACE,
-  ensureWorkspace,
+  ensureWorkspace, resolvePath,
   fileWrite, fileAppend, fileRead, fileList, fileMove, fileCopy, fileSearch,
   parseTags, stripTags, dispatch,
   buildPromptBlock

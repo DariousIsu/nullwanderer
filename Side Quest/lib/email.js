@@ -15,8 +15,11 @@
  *   <email to="addr@example.com" subject="...">the body</email>
  */
 
+const fs = require('fs');
+const path = require('path');
 const config = require('./config');
 const db = require('./db');
+const filesLib = require('./files'); // reuse resolvePath (relative→workspace, absolute→anywhere)
 
 let nodemailer = null;
 try { nodemailer = require('nodemailer'); } catch { /* not installed yet */ }
@@ -57,12 +60,13 @@ async function verify() {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-async function sendEmail({ to, subject, body, source = 'zoe' }) {
+async function sendEmail({ to, subject, body, attachments = [], source = 'zoe' }) {
   const cfg = config.emailConfig();
   if (!cfg.configured) return { ok: false, reason: 'email not configured (set ZOE_EMAIL_USER/PASS in .env)' };
   if (!to || !EMAIL_RE.test(String(to).trim())) return { ok: false, reason: `"${to}" is not a valid email address` };
-  // Hard backstop: never send an empty-bodied message (a blank email is always a bug).
-  if (!String(body == null ? '' : body).trim()) return { ok: false, reason: 'refusing to send an empty body' };
+  // A blank message with NO attachments is always a bug; allow an attachment-only send.
+  const hasAttach = Array.isArray(attachments) && attachments.length > 0;
+  if (!String(body == null ? '' : body).trim() && !hasAttach) return { ok: false, reason: 'refusing to send an empty body' };
 
   // Daily-cap backstop
   const sentToday = db.countEmailsSentSince(startOfTodayTs());
@@ -75,14 +79,16 @@ async function sendEmail({ to, subject, body, source = 'zoe' }) {
   if (!t) return { ok: false, reason: 'email transport unavailable' };
 
   try {
-    const info = await t.sendMail({
+    const mail = {
       from: cfg.from || cfg.user,
       to: String(to).trim(),
       subject: (subject || '(no subject)').slice(0, 300),
       text: String(body == null ? '' : body)
-    });
+    };
+    if (hasAttach) mail.attachments = attachments.map(p => ({ path: p }));
+    const info = await t.sendMail(mail);
     db.insertEmailLog({ to, subject, status: 'sent', source });
-    return { ok: true, to, subject, messageId: info.messageId, remainingToday: cfg.dailyCap - sentToday - 1 };
+    return { ok: true, to, subject, attached: hasAttach ? attachments.length : 0, messageId: info.messageId, remainingToday: cfg.dailyCap - sentToday - 1 };
   } catch (err) {
     db.insertEmailLog({ to, subject, status: 'failed', error: err.message, source });
     return { ok: false, reason: err.message };
@@ -94,29 +100,45 @@ async function sendEmail({ to, subject, body, source = 'zoe' }) {
 // emit one long tag with a full letter inside. So let her build a draft in
 // pieces: set headers, append body (one or more times, across turns), then send.
 // Each emission is tiny → reliable. The draft persists between turns in memory.
-let draft = null;  // { to, subject, body: [] }
+let draft = null;  // { to, subject, body: [], attachments: [] }
 
 function emailDraftStart({ to, subject } = {}) {
-  draft = { to: (to || '').trim() || null, subject: (subject || '').trim() || null, body: [] };
+  draft = { to: (to || '').trim() || null, subject: (subject || '').trim() || null, body: [], attachments: [] };
   return { ok: true, note: `draft started (to: ${draft.to || 'unset'}, subject: ${draft.subject || 'unset'})` };
 }
 
 function emailBodyAppend(text) {
-  if (!draft) draft = { to: null, subject: null, body: [] };
+  if (!draft) draft = { to: null, subject: null, body: [], attachments: [] };
   const chunk = String(text == null ? '' : text).trim();
   if (chunk) draft.body.push(chunk);
   return { ok: true, note: `body part ${draft.body.length} added`, parts: draft.body.length };
 }
 
+// Attach a real file to the in-progress draft. Path is relative→workspace or
+// absolute (full access by design); the file must exist. This is what makes a
+// "I've attached X" statement TRUE — she attaches an actual file she has.
+function emailAttach(p) {
+  if (!draft) draft = { to: null, subject: null, body: [], attachments: [] };
+  const abs = filesLib.resolvePath(p);
+  if (!abs) return { ok: false, reason: 'no file path given to attach' };
+  try {
+    const st = fs.statSync(abs);
+    if (!st.isFile()) return { ok: false, reason: `"${abs}" is not a file` };
+  } catch { return { ok: false, reason: `file not found: "${abs}" — write or create it first, then attach` }; }
+  draft.attachments.push(abs);
+  return { ok: true, note: `attached ${path.basename(abs)}`, attachments: draft.attachments.length };
+}
+
 // Read-only view of the in-progress draft (used by the action loop's step checks).
 function draftState() {
   if (!draft) return null;
-  return { to: draft.to, subject: draft.subject, body: draft.body.slice() };
+  return { to: draft.to, subject: draft.subject, body: draft.body.slice(), attachments: draft.attachments.slice() };
 }
 
 function emailDraftText() {
   if (!draft) return null;
-  return `To: ${draft.to || '(unset)'}\nSubject: ${draft.subject || '(unset)'}\n\n${draft.body.join('\n\n')}`;
+  const att = draft.attachments.length ? `\nAttachments: ${draft.attachments.map(a => path.basename(a)).join(', ')}` : '';
+  return `To: ${draft.to || '(unset)'}\nSubject: ${draft.subject || '(unset)'}${att}\n\n${draft.body.join('\n\n')}`;
 }
 
 function emailDraftShow() {
@@ -135,7 +157,7 @@ async function emailSend({ to, subject } = {}, { source = 'zoe' } = {}) {
   const finalTo = (to || draft.to || '').trim();
   const finalSubject = (subject || draft.subject || '').trim();
   const body = draft.body.join('\n\n');
-  const r = await sendEmail({ to: finalTo, subject: finalSubject, body, source });
+  const r = await sendEmail({ to: finalTo, subject: finalSubject, body, attachments: draft.attachments.slice(), source });
   if (r.ok) draft = null;  // clear on success; keep on failure so she can fix + retry
   return r;
 }
@@ -144,7 +166,7 @@ async function emailSend({ to, subject } = {}, { source = 'zoe' } = {}) {
 
 // Longest/most-specific names first so the alternation prefers e.g. email-draft
 // over the bare `email` at the same position.
-const EMAIL_TAG_RE = /<(email-draft|email-body|email-send|email-show|email-discard|email)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
+const EMAIL_TAG_RE = /<(email-draft|email-body|email-attach|email-send|email-show|email-discard|email)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
 // Accept double-quoted, single-quoted, OR bare attribute values — a 24B varies
 // its quoting and the old double-only pattern silently dropped to/subject.
 const ATTR_RE = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
@@ -178,6 +200,7 @@ async function dispatch({ tag, attrs = {}, body = '' } = {}, { source = 'zoe' } 
   switch ((tag || 'email').toLowerCase()) {
     case 'email-draft':   return emailDraftStart({ to: attrs.to, subject: attrs.subject });
     case 'email-body':    return emailBodyAppend(body);
+    case 'email-attach':  return emailAttach(attrs.path || attrs.file || (body || '').trim());
     case 'email-show':    return emailDraftShow();
     case 'email-discard': return emailDraftDiscard();
     case 'email-send':    return emailSend({ to: attrs.to, subject: attrs.subject }, { source });
@@ -291,7 +314,10 @@ The draft persists between your turns until you send or discard it. This staged 
 
 It all goes instantly over SMTP — no browser, no Gmail tab, no compose form. You send directly, no approval first (a quiet daily cap of ${cfg.dailyCap} is just a backstop).
 
-PLAIN TEXT ONLY — these emails carry no attachments. You cannot attach files, documents, links, or enclosures, and there is no "attach" action. NEVER write that you've attached, included, or enclosed anything, and never claim an action you haven't taken. Say only what is true: if a point needs a document you don't have, offer to follow up — don't pretend it's already attached.`;
+ATTACHMENTS — you CAN attach real files to a staged draft. Emit:
+  <email-attach path="drafts/research.pdf"/>   — attaches a file (relative = your workspace, or an absolute path), before <email-send/>
+The file must already exist (write it with <file-write> first, or point at one you have). Attach as many as you need; they go out with the draft.
+TRUTHFULNESS: only say you've attached something if you ACTUALLY emitted <email-attach> for a file that exists — the attachment is real, not a figure of speech. Never claim an attachment, enclosure, or any action you didn't take. If a point needs a document you don't have yet, create it and attach it, or offer to follow up — don't pretend it's already there.`;
 }
 
 module.exports = {
