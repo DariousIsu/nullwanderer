@@ -414,6 +414,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const sendComplete = io.onComplete || (() => {});
   const sendError = io.onError || (() => {});
   const channel = io.channel || 'desktop';
+  // Guard: a chat-initiated tool result triggers exactly ONE auto-continuation
+  // turn (so she voices what the tool returned without Lucas having to prompt).
+  let followupFired = false;
 
   markUserActivity();
   markMonologueActivity();
@@ -515,7 +518,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const recentMonologue = db.getRecentMonologueByType('thought', 5);
   const recentReadings = db.getRecentMonologueByType('reading', 2);
   const heldCommitments = db.getHeldCommitments(8);
-  const openThreads = db.getActiveOpenThreads(5);
+  const openThreads = db.getActiveOpenThreads(3);
   const protocols = db.getActiveProtocols();
   const pendingInbounds = db.getPendingInbounds(6);
 
@@ -806,6 +809,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
                 });
               }
             } catch {}
+            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: content }); }
           } else if (result && result.ok && t.tag === 'browse' && result.url) {
             const row = db.insertMonologue({
               content: `I opened "${result.title || result.url}" (${result.url})`,
@@ -844,6 +848,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               model: 'file-read', type: 'reading', query: result.path
             });
             try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(read file) ${result.path}`, type: 'reading', query: result.path }); } catch {}
+            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `I read my file ${result.path}:\n${result.text}` }); }
           } else if (result && result.ok && t.tag === 'file-list') {
             const listing = (result.entries || []).map(e => `${e.type === 'dir' ? '[dir] ' : ''}${e.name}`).join(', ');
             const row = db.insertMonologue({
@@ -851,6 +856,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               model: 'file-list', type: 'reading', query: result.path
             });
             try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(listed) ${result.path}`, type: 'reading', query: result.path }); } catch {}
+            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `Files in ${result.path}: ${listing || '(empty)'}` }); }
           } else if (result && result.ok && (t.tag === 'file-write' || t.tag === 'file-append')) {
             const verb = t.tag === 'file-write' ? 'wrote' : 'appended to';
             try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(${verb} file) ${result.path}`, type: 'reading', query: result.path }); } catch {}
@@ -872,6 +878,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         if (r && r.ok) {
           const row = db.insertMonologue({ content: r.text, model: 'screen-observe', type: 'reading' });
           try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(observed screen — focused: ${r.foreground || '?'})`, type: 'reading' }); } catch {}
+          if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: r.text }); }
         }
         console.log(`[main] screen observe: ${r?.ok ? 'ok (' + (r.windows||[]).length + ' windows)' : 'FAIL ' + r?.reason}`);
       } catch (err) { console.error('[main] screen dispatch error:', err.message); }
@@ -918,12 +925,32 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // (email_log) and mirrored to the sheep panel.
   if (emailTagsToRun.length > 0) {
     (async () => {
-      for (const t of emailTagsToRun.slice(0, 3)) {
+      for (const t of emailTagsToRun.slice(0, 6)) {
         try {
           const r = await emailLib.dispatch(t, { source: 'chat' });
-          const desc = r.ok ? `(emailed) ${t.attrs.to} — ${t.attrs.subject || '(no subject)'}` : `(email failed) ${r.reason}`;
-          try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: desc, type: 'reading' }); } catch {}
-          console.log(`[main] email: ${r?.ok ? 'sent to ' + t.attrs.to : 'FAIL ' + r?.reason}`);
+          const isSend = (t.tag === 'email' || t.tag === 'email-send');
+          const tick = (content) => { try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content, type: 'reading' }); } catch {} };
+          if (isSend) {
+            const toAddr = r.to || t.attrs.to || '(no address)';
+            tick(r.ok ? `(emailed) ${toAddr}` : `(email failed) ${r.reason}`);
+            console.log(`[main] email send: ${r?.ok ? 'sent to ' + toAddr : 'FAIL ' + r?.reason}`);
+            // Feed the REAL outcome back so she reports it truthfully instead of
+            // assuming success (she has confabulated "I sent it" on a failed send).
+            if (!followupFired) {
+              followupFired = true;
+              fireToolFollowup({ io, channel, sessionId, resultText: r.ok
+                ? `[Your email to ${toAddr} SENT successfully. Confirm that to Lucas briefly.]`
+                : `[Your email did NOT send — it FAILED: ${r.reason}. Do NOT claim it was sent. Tell Lucas plainly that it failed and why.]` });
+            }
+          } else {
+            // Staged-compose step (draft / body / show / discard).
+            tick(r.ok ? `(${t.tag}) ${r.note || 'ok'}` : `(${t.tag} failed) ${r.reason}`);
+            console.log(`[main] ${t.tag}: ${r?.ok ? 'ok' : 'FAIL ' + r?.reason}`);
+            if (t.tag === 'email-show' && r.ok && r.text && !followupFired) {
+              followupFired = true;
+              fireToolFollowup({ io, channel, sessionId, resultText: `[Your current email draft:\n${r.text}]` });
+            }
+          }
         } catch (err) { console.error('[main] email dispatch error:', err.message); }
       }
     })().catch(() => {});
@@ -1021,3 +1048,54 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
     onError: (e) => { try { event.sender.send('chat:error', e); } catch {} }
   });
 });
+
+// Auto-continuation: a chat-initiated tool (observe-screen / browse-read / file-read /
+// file-list) returns its result AFTER the turn that emitted the tag — so without this,
+// she emits the tag, says "checking…", and never voices the answer (the result just sits
+// in next-turn context with nothing to trigger a next turn). This fires ONE follow-up
+// generation with the result in hand so she answers naturally. Renderer: streams as a
+// new message (like a heartbeat). Discord: DMs the reply back. No tool tags are dispatched
+// in the follow-up (stripped) — no recursion.
+async function fireToolFollowup({ io, channel, sessionId, resultText }) {
+  try {
+    const userName = db.getMeta('user_name') || 'them';
+    const recentTurns = db.getRecentTurns(8);
+    const awareness = buildAwarenessBlock({
+      chosenName: db.getMeta('chosen_name'),
+      sessionStartedAt: currentSessionStartedAt,
+      cumulativeMs: db.getCumulativeSessionTime()
+    });
+    const protocols = db.getActiveProtocols();
+    const note = `[A tool you just used returned the result below. Respond to ${userName} NOW, in your own voice, using it directly to answer what they asked. Do NOT emit any more tool tags — just talk to them.]\n\n${String(resultText || '').slice(0, 4000)}`;
+    const messages = buildChatPrompt({
+      userName, recentReflections: [], recentTurns, recentMonologue: [], recentReadings: [],
+      heldCommitments: [], openThreads: [], awareness, protocols, browserBlock: null,
+      pendingInbounds: [], newUserMessage: note
+    });
+    const emit = io && io.emit ? io.emit : (() => {});
+    const parser = new TagStreamParser({ onSayToken: (t) => { try { emit(t); } catch {} } });
+    await streamChat({ model: MODEL, messages, onToken: (c) => parser.feed(c) });
+    const { thought, say } = parser.finalize();
+    // Strip ALL tags from the follow-up output — it must not trigger more tool dispatch.
+    let sayOut = (say || '')
+      .replace(/<\/?(think|say)>/gi, '')
+      .replace(/\*[^*\n]{1,200}\*/g, '')
+      .replace(/[ \t]+/g, ' ')
+      .trim();
+    sayOut = screenLib.stripTags(filesLib.stripTags(browserLib.stripTags(sayOut)));
+    sayOut = sayOut.replace(/<[^>]+>/g, '').trim();
+    if (!sayOut) return;
+    const thoughtClean = (thought || '').replace(/<\/?(think|say)>/gi, '').trim();
+    if (thoughtClean) db.insertTurn({ sessionId, speaker: 'ai_thought', content: thoughtClean, model: MODEL });
+    const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: sayOut, model: MODEL });
+    db.setMeta('last_ai_utterance_at', String(Date.now()));
+    if (channel === 'discord') {
+      try { await discordLib.sendDM(sayOut); } catch (e) { console.error('[main] followup discord DM failed:', e.message); }
+    } else {
+      try { if (io && io.onComplete) io.onComplete({ saidId: saidRow.id, truncated: 0, unprompted: true }); } catch {}
+    }
+    console.log('[main] tool follow-up delivered via', channel);
+  } catch (err) {
+    console.error('[main] fireToolFollowup failed:', err.message);
+  }
+}

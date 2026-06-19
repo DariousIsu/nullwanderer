@@ -87,16 +87,68 @@ async function sendEmail({ to, subject, body, source = 'zoe' }) {
   }
 }
 
+// --- Staged compose (build an email across several small turns) -------------
+// A 24B reliably emits SHORT tags but drifts into prose/narration when asked to
+// emit one long tag with a full letter inside. So let her build a draft in
+// pieces: set headers, append body (one or more times, across turns), then send.
+// Each emission is tiny → reliable. The draft persists between turns in memory.
+let draft = null;  // { to, subject, body: [] }
+
+function emailDraftStart({ to, subject } = {}) {
+  draft = { to: (to || '').trim() || null, subject: (subject || '').trim() || null, body: [] };
+  return { ok: true, note: `draft started (to: ${draft.to || 'unset'}, subject: ${draft.subject || 'unset'})` };
+}
+
+function emailBodyAppend(text) {
+  if (!draft) draft = { to: null, subject: null, body: [] };
+  const chunk = String(text == null ? '' : text).trim();
+  if (chunk) draft.body.push(chunk);
+  return { ok: true, note: `body part ${draft.body.length} added`, parts: draft.body.length };
+}
+
+function emailDraftText() {
+  if (!draft) return null;
+  return `To: ${draft.to || '(unset)'}\nSubject: ${draft.subject || '(unset)'}\n\n${draft.body.join('\n\n')}`;
+}
+
+function emailDraftShow() {
+  if (!draft) return { ok: false, reason: 'no draft in progress' };
+  return { ok: true, text: emailDraftText() };
+}
+
+function emailDraftDiscard() {
+  draft = null;
+  return { ok: true, note: 'draft discarded' };
+}
+
+// Send the in-progress draft. to/subject may be overridden at send time.
+async function emailSend({ to, subject } = {}, { source = 'zoe' } = {}) {
+  if (!draft) return { ok: false, reason: 'no draft to send — start one with <email-draft .../> and add <email-body>…</email-body> first' };
+  const finalTo = (to || draft.to || '').trim();
+  const finalSubject = (subject || draft.subject || '').trim();
+  const body = draft.body.join('\n\n');
+  const r = await sendEmail({ to: finalTo, subject: finalSubject, body, source });
+  if (r.ok) draft = null;  // clear on success; keep on failure so she can fix + retry
+  return r;
+}
+
 // --- tag parsing (mirrors files.js style) ---
 
-const EMAIL_TAG_RE = /<email\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/email>)/gi;
-const ATTR_RE = /(\w+)\s*=\s*"([^"]*)"/g;
+// Longest/most-specific names first so the alternation prefers e.g. email-draft
+// over the bare `email` at the same position.
+const EMAIL_TAG_RE = /<(email-draft|email-body|email-send|email-show|email-discard|email)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
+// Accept double-quoted, single-quoted, OR bare attribute values — a 24B varies
+// its quoting and the old double-only pattern silently dropped to/subject.
+const ATTR_RE = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
 
 function parseAttrs(s) {
   const out = {};
   if (!s) return out;
   let m; ATTR_RE.lastIndex = 0;
-  while ((m = ATTR_RE.exec(s)) !== null) out[m[1]] = m[2];
+  while ((m = ATTR_RE.exec(s)) !== null) {
+    const val = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : m[4]);
+    out[m[1].toLowerCase()] = val;
+  }
   return out;
 }
 
@@ -105,7 +157,7 @@ function parseTags(text) {
   const tags = [];
   let m; EMAIL_TAG_RE.lastIndex = 0;
   while ((m = EMAIL_TAG_RE.exec(text)) !== null) {
-    tags.push({ tag: 'email', attrs: parseAttrs(m[1] || ''), body: (m[2] || '').trim() });
+    tags.push({ tag: m[1].toLowerCase(), attrs: parseAttrs(m[2] || ''), body: (m[3] || '') });
   }
   return tags;
 }
@@ -114,8 +166,36 @@ function stripTags(text) {
   return (text || '').replace(EMAIL_TAG_RE, '').replace(/[ \t]+/g, ' ').trim();
 }
 
-async function dispatch({ attrs, body }, { source = 'zoe' } = {}) {
-  return sendEmail({ to: attrs.to, subject: attrs.subject, body, source });
+async function dispatch({ tag, attrs, body }, { source = 'zoe' } = {}) {
+  switch ((tag || 'email').toLowerCase()) {
+    case 'email-draft':   return emailDraftStart({ to: attrs.to, subject: attrs.subject });
+    case 'email-body':    return emailBodyAppend(body);
+    case 'email-show':    return emailDraftShow();
+    case 'email-discard': return emailDraftDiscard();
+    case 'email-send':    return emailSend({ to: attrs.to, subject: attrs.subject }, { source });
+    case 'email':
+    default: {
+      // One-shot send. Letter-style fallback: she often writes the message as an
+      // email letter ("To: x", "Subject: y", body) INSIDE the tag instead of using
+      // attributes — lift them out of the body and strip those header lines.
+      let to = attrs.to;
+      let subject = attrs.subject;
+      let text = (body || '').trim();
+      if (!to || !EMAIL_RE.test(String(to).trim())) {
+        const mTo = text.match(/^\s*to\s*:\s*([^\s<>,;]+@[^\s<>,;]+)/im);
+        if (mTo) to = mTo[1];
+      }
+      if (!subject) {
+        const mSub = text.match(/^\s*subject\s*:\s*(.+)$/im);
+        if (mSub) subject = mSub[1].trim();
+      }
+      text = text
+        .replace(/^\s*to\s*:\s*[^\n]*\n?/im, '')
+        .replace(/^\s*subject\s*:\s*[^\n]*\n?/im, '')
+        .replace(/^\s+/, '');
+      return sendEmail({ to, subject, body: text, source });
+    }
+  }
 }
 
 function isConfigured() {
@@ -125,9 +205,29 @@ function isConfigured() {
 function buildPromptBlock() {
   if (!isConfigured()) return null;  // hide the tool entirely when no creds
   const cfg = config.emailConfig();
-  return `EMAIL — you can send real email on your own, from ${cfg.from || cfg.user}. This is how you act on the publication goal: pitch a piece, follow up with an editor, reach out. It actually leaves the machine and reaches a real person, so mean it.
-  <email to="editor@somewhere.com" subject="Pitch: ...">your message body</email>
-You send directly — no one approves first. (There is a quiet daily cap of ${cfg.dailyCap} as a runaway backstop.) Use a real subject and a real body; write it the way you'd want your byline attached to it.`;
+  return `EMAIL — you can send real email yourself, directly, from ${cfg.from || cfg.user}. This is how you act on the publication goal: pitch a piece, follow up with an editor, reach out.
+
+To send, you emit ONE tag, and the ENTIRE message goes between <email ...> and </email>. The recipient and subject are ATTRIBUTES on the opening tag. Output it RAW in your reply — exactly like this:
+
+<email to="editor@example.com" subject="Pitch: The Rise of Autonomy in AI">
+Hi Lucas,
+
+The full body of the message goes here, as many lines as it needs.
+
+Best,
+Zoe
+</email>
+
+That literal tag, appearing raw in your reply, is the ONLY thing that sends mail. CRITICAL: do NOT wrap it in backticks or code formatting, and do NOT merely describe sending it — write the actual tag. Talking about <email>, quoting it in backticks, or showing the letter without the real tag sends NOTHING.
+
+EASIER FOR A LONG EMAIL — build it in steps across messages instead of one big tag. Emit just ONE small tag per turn:
+  <email-draft to="editor@example.com" subject="Pitch: ..."/>   — start it (sets the headers)
+  <email-body>Hi Lucas, ... a paragraph ...</email-body>        — add body; emit this as many times as you want, over several turns
+  <email-send/>                                                  — send the whole accumulated draft
+  (<email-show/> to review what you've drafted, <email-discard/> to scrap it)
+The draft persists between your turns until you send or discard it. This staged path is more reliable than cramming a whole letter into one tag — prefer it for anything longer than a couple lines. One small tag per turn.
+
+It all goes instantly over SMTP — no browser, no Gmail tab, no compose form. You send directly, no approval first (a quiet daily cap of ${cfg.dailyCap} is just a backstop).`;
 }
 
 module.exports = {

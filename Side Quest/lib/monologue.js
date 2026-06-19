@@ -522,7 +522,7 @@ async function runOneTick() {
   let messages;
   let modeIsThreadReview = false;
   let focusedThread = null;
-  if (openThreads.length > 0 && (tickCounter % 2 === 1)) {
+  if (openThreads.length > 0 && (tickCounter % 3 === 0)) {
     focusedThread = openThreads[0];  // stalest (oldest last_touched)
     messages = buildThreadReviewPrompt({
       userName,
