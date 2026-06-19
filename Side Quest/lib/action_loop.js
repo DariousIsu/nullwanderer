@@ -104,21 +104,34 @@ function emailReplyAction({ to, subject, snippet }) {
       {
         // The ONLY step that needs the model: write the actual reply text.
         // `expect` restricts dispatch to email-body so a stray <email>/<email-draft>
-        // from the model can't clobber the draft headers or fire an uncontrolled send.
+        // from the model can't clobber the draft or fire an uncontrolled send. On
+        // success we CAPTURE the body text into ctx so the send no longer depends on
+        // the shared draft singleton (which concurrent loops can reset between steps).
         expect: 'email-body',
         directive: () => `You are writing a reply email to ${to}. Their message was: "${(snippet || '').slice(0, 220)}".\nWrite your reply now and emit it inside ONE tag, exactly like this:\n<email-body>your reply text here</email-body>\nEmit only that single tag with your message inside it. Do NOT include To: or Subject: lines — just the body of your reply.`,
-        check: () => { const d = emailLib.draftState(); return !!(d && d.body && d.body.length > 0); }
+        check: (ctx) => {
+          const d = emailLib.draftState();
+          const body = d && d.body ? d.body.join('\n\n').trim() : '';
+          if (body.length >= 5) { ctx.bodyText = body; return true; } // capture for the send step
+          return false;
+        }
       },
       {
-        // Send — deterministic. Pass the known to/subject explicitly so the send is
-        // correct even if the body turn clobbered the draft headers.
-        auto: async () => {
-          const r = await emailLib.dispatch({ tag: 'email-send', attrs: { to, subject: subj } }, { source: 'action' });
+        // Send — deterministic, ONE-SHOT from the captured ctx (to/subject/body all
+        // known). Does not read the shared draft, so a concurrent loop resetting it
+        // can't blank the message. ctx.sent gates completion.
+        auto: async (ctx) => {
+          const body = (ctx && ctx.bodyText) || '';
+          if (!body) { console.log('[action] send skipped — no captured body'); if (ctx) ctx.sent = false; return; }
+          console.log('[action] sending reply, body len', body.length);
+          const r = await emailLib.sendEmail({ to, subject: subj, body, source: 'action' });
+          if (ctx) ctx.sent = !!(r && r.ok);
           if (!(r && r.ok)) console.log('[action] email-send failed:', (r && r.reason) || 'unknown');
           else console.log('[action] email-send ok →', r.to);
+          try { await emailLib.dispatch({ tag: 'email-discard' }, { source: 'action' }); } catch {} // clear the leftover draft
           return r;
         },
-        check: () => { const d = emailLib.draftState(); return !d; } // cleared on successful send
+        check: (ctx) => !!(ctx && ctx.sent)
       }
     ]
   };

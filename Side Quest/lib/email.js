@@ -61,6 +61,8 @@ async function sendEmail({ to, subject, body, source = 'zoe' }) {
   const cfg = config.emailConfig();
   if (!cfg.configured) return { ok: false, reason: 'email not configured (set ZOE_EMAIL_USER/PASS in .env)' };
   if (!to || !EMAIL_RE.test(String(to).trim())) return { ok: false, reason: `"${to}" is not a valid email address` };
+  // Hard backstop: never send an empty-bodied message (a blank email is always a bug).
+  if (!String(body == null ? '' : body).trim()) return { ok: false, reason: 'refusing to send an empty body' };
 
   // Daily-cap backstop
   const sentToday = db.countEmailsSentSince(startOfTodayTs());
