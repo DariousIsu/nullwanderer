@@ -2,7 +2,7 @@ const db = require('./db');
 const { streamChat, TagStreamParser } = require('./ollama');
 const { BOOTSTRAP } = require('./context');
 
-const MODEL = 'hf.co/bartowski/PocketDoc_Dans-PersonalityEngine-V1.3.0-24b-GGUF:Q4_K_M';
+const MODEL = require('./config').model();
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;       // poll every 5 min
 const MIN_INTERVAL_MS = 45 * 60 * 1000;        // at most one continuity check per 45 min
 const IDLE_THRESHOLD_MS = 3 * 60 * 1000;       // user must be quiet ≥ 3 min

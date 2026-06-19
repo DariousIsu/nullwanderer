@@ -19,7 +19,7 @@
 const db = require('./db');
 const { streamChat } = require('./ollama');
 
-const EXTRACTION_MODEL = 'hf.co/bartowski/PocketDoc_Dans-PersonalityEngine-V1.3.0-24b-GGUF:Q4_K_M';
+const EXTRACTION_MODEL = require('./config').model();
 
 // --- Extraction ---
 

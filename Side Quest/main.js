@@ -46,7 +46,7 @@ const {
 } = require('./lib/continuity');
 const selfDialogue = require('./lib/self_dialogue');
 
-const MODEL = 'hf.co/bartowski/PocketDoc_Dans-PersonalityEngine-V1.3.0-24b-GGUF:Q4_K_M';
+const MODEL = config.model();
 const RECENT_TURN_LIMIT = 8;
 const RECENT_REFLECTION_LIMIT = 5;
 const DISPLAY_HISTORY_LIMIT = 50;
@@ -97,8 +97,8 @@ app.whenReady().then(() => {
       keep_alive: '24h',
       options: { num_predict: 1, num_ctx: 8192 }
     })
-  }).then(() => console.log('[main] Dans-24B warmed at 8192 ctx'))
-    .catch(err => console.error('[main] Dans warmup failed:', err.message));
+  }).then(() => console.log('[main] model warmed at 8192 ctx:', MODEL))
+    .catch(err => console.error('[main] model warmup failed:', err.message));
   startReflectionScheduler({
     getSessionId: () => currentSessionId,
     getWindow: () => mainWindow

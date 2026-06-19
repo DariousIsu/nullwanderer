@@ -7,7 +7,7 @@ const screenLib = require('./screen');
 const autoTools = require('./auto_tools');
 const governor = require('./governor');
 
-const MODEL = 'hf.co/bartowski/PocketDoc_Dans-PersonalityEngine-V1.3.0-24b-GGUF:Q4_K_M';
+const MODEL = require('./config').model();
 const TICK_INTERVAL_MS = 30 * 1000;        // check every 30s while idle
 const IDLE_THRESHOLD_MS = 60 * 1000;       // user must be quiet ≥ 60s
 const MIN_GAP_BETWEEN_HEARTBEATS_MS = 3 * 60 * 1000;  // ≥ 3min between unsolicited utterances

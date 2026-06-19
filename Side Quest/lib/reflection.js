@@ -6,7 +6,7 @@ const IDLE_THRESHOLD_MS = 3 * 60 * 1000;     // 3 min of no user input
 const MIN_GAP_MS = 10 * 60 * 1000;            // at most one reflection per 10 min
 const MIN_TURNS_SINCE_LAST = 6;               // need at least 6 new turns
 const TICK_INTERVAL_MS = 30 * 1000;           // check every 30s
-const MODEL = 'hf.co/bartowski/PocketDoc_Dans-PersonalityEngine-V1.3.0-24b-GGUF:Q4_K_M';
+const MODEL = require('./config').model();
 
 let timer = null;
 let lastUserActivityTs = Date.now();

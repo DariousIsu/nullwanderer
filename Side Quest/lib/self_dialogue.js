@@ -13,8 +13,8 @@
 const db = require('./db');
 const { streamChat } = require('./ollama');
 
-const STHENO_MODEL = 'hf.co/bartowski/PocketDoc_Dans-PersonalityEngine-V1.3.0-24b-GGUF:Q4_K_M';
-const GEMMA_MODEL = 'hf.co/bartowski/PocketDoc_Dans-PersonalityEngine-V1.3.0-24b-GGUF:Q4_K_M';
+const STHENO_MODEL = require('./config').model();
+const GEMMA_MODEL = require('./config').model();
 const MAX_ITERATIONS = 3;
 const MIN_GAP_BETWEEN_DIALOGUES_MS = 2 * 60 * 1000;  // 2 min cooldown — self-dialogue should be a frequent driver, not a rarity
 const PER_TURN_NUM_PREDICT = 220;

@@ -1,7 +1,7 @@
 const db = require('./db');
 const { streamChat } = require('./ollama');
 
-const EXTRACTOR_MODEL = 'hf.co/bartowski/PocketDoc_Dans-PersonalityEngine-V1.3.0-24b-GGUF:Q4_K_M';
+const EXTRACTOR_MODEL = require('./config').model();
 const MAX_NEW_PER_TURN = 3;
 
 const EXTRACTOR_SYSTEM = `You are a passive observer reading a single response that [user]'s companion just gave. Your only job: identify any explicit positions, beliefs, preferences, or commitments the speaker stated as their own.

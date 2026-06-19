@@ -217,10 +217,13 @@ function detectEmailIntent(msg) {
 // reverting to the browser for email. Mirrors the browser action-nudge.
 function buildEmailNudge(userMessage) {
   if (!isConfigured()) return null;
-  // If a draft is already open, carry the multi-step flow forward EVERY turn,
-  // regardless of the user's wording — this is what keeps her from losing the
-  // thread on a keyword-less continuation like "now write the body and send it".
-  if (draft && (draft.to || draft.subject || draft.body.length)) {
+  const open = draft && (draft.to || draft.subject || draft.body.length);
+  const intent = detectEmailIntent(userMessage);
+  // Continuation language for an in-progress draft ("send it", "write the body", etc.)
+  const continuation = /\b(send it|send that|send the|send now|go ahead|do it|finish it|the body|write the body|add (?:a |another )?paragraph|continue|yes,? ?send|email it|fire it off?)\b/i.test(userMessage || '');
+
+  // Draft open AND this turn is actually about email → carry the flow forward.
+  if (open && (intent || continuation)) {
     const haveBody = draft.body.length > 0;
     const lines = [
       `EMAIL DRAFT IN PROGRESS — you already started an email (to: ${draft.to || 'unset'}, subject: ${draft.subject || 'unset'}, ${draft.body.length} body part(s) so far). Finish it with the email tags, NOT the browser. Emit the next RAW tag now — use <angle brackets>, not [square brackets] or backticks:`
@@ -232,7 +235,15 @@ function buildEmailNudge(userMessage) {
       : `Write the body in one or more <email-body>…</email-body> tags, then <email-send/>.`);
     return lines.join('\n');
   }
-  if (!detectEmailIntent(userMessage)) return null;
+
+  // Draft open but this turn is UNRELATED (e.g. a greeting) → passive reminder only.
+  // Critically, do NOT command a send: a stale draft must never auto-fire on an
+  // off-topic message.
+  if (open) {
+    return `(Reminder: you have an UNSENT email draft to ${draft.to || 'unset'} re "${draft.subject || 'unset'}". It has NOT been sent. Do NOT send it in reaction to an unrelated message like a greeting — only send it when ${'Lucas'} actually asks or it genuinely fits the moment. If it's stale, you may <email-discard/> it.)`;
+  }
+
+  if (!intent) return null;
   return `EMAIL ACTION — Lucas is asking you to send an email. Do NOT use the browser, a Gmail tab, or browse-read for this — that is the wrong tool and it will not send anything. Send it with the email tags, one small RAW tag at a time across your next turns:
   <email-draft to="the@address" subject="..."/>   then one or more   <email-body>…</email-body>   then   <email-send/>
 Emit the FIRST step — <email-draft to="..." subject="..."/> — as a real raw tag in your reply right now (not in backticks, not merely described). If you already know the recipient and subject, start the draft this turn.`;

@@ -11,7 +11,7 @@ const autoTools = require('./auto_tools');
 const governor = require('./governor');
 const { buildAwarenessBlock } = require('./context');
 
-const MODEL = 'hf.co/bartowski/PocketDoc_Dans-PersonalityEngine-V1.3.0-24b-GGUF:Q4_K_M';
+const MODEL = require('./config').model();
 const TICK_INTERVAL_MS = 10 * 1000;     // 10s between ticks while idle
 const TICK_INTERVAL_BUSY_MS = 30 * 1000; // back off when conversation is active
 const RECENT_MONOLOGUE_WINDOW = 6;

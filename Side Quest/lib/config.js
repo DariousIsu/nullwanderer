@@ -60,6 +60,13 @@ function getInt(key, fallback) {
   return Number.isFinite(v) ? v : fallback;
 }
 
+// --- Model ---
+// Single source of truth for the local model name. Override via ZOE_MODEL in
+// .env so swapping models is one line, never a code edit (per no-hardcode rule).
+function model() {
+  return get('ZOE_MODEL').trim() || 'mistral-small3.2:24b';
+}
+
 // --- Email ---
 function emailConfig() {
   const user = get('ZOE_EMAIL_USER').trim();
@@ -76,4 +83,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
