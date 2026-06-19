@@ -38,6 +38,7 @@ const presenceLib = require('./lib/presence');
 const emailLib = require('./lib/email');
 const discordLib = require('./lib/discord');
 const memoryLib = require('./lib/memory');
+const inboxLib = require('./lib/inbox');
 const {
   startContinuityScheduler,
   stopContinuityScheduler,
@@ -538,9 +539,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const schedBlock = schedulerLib.buildPromptBlock();
   const presenceBlock = presenceLib.buildPromptBlock();
   const emailBlock = emailLib.buildPromptBlock();           // null when unconfigured
+  const inboxBlock = inboxLib.buildPromptBlock();           // null when unconfigured
   const discordConnBlock = discordLib.buildPromptBlock();   // null when unconfigured
   const browserConnBlock = browserLib.isConnected() ? browserLib.buildPromptBlock() : null;
-  const browserBlock = [fileBlock, screenBlock, schedBlock, presenceBlock, emailBlock, discordConnBlock, browserConnBlock].filter(Boolean).join('\n\n') || null;
+  const browserBlock = [fileBlock, screenBlock, schedBlock, presenceBlock, emailBlock, inboxBlock, discordConnBlock, browserConnBlock].filter(Boolean).join('\n\n') || null;
   // Pull any attachment content the renderer sent up with this turn (text/md/json)
   const attachmentText = (Array.isArray(attachments) ? attachments : [])
     .map(a => `${userName || 'Lucas'} attached "${a.name || 'file'}":\n${(a.text || '').slice(0, 6000)}`)
@@ -675,6 +677,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     ...screenLib.parseTags(thought || ''),
     ...screenLib.parseTags(say || '')
   ];
+  const inboxTagsToRun = [
+    ...inboxLib.parseTags(thought || ''),
+    ...inboxLib.parseTags(say || '')
+  ];
   const schedTagsToRun = [
     ...schedulerLib.parseTags(thought || ''),
     ...schedulerLib.parseTags(say || '')
@@ -697,6 +703,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   thoughtStripped = browserLib.stripTags(thoughtStripped);
   thoughtStripped = filesLib.stripTags(thoughtStripped);
   thoughtStripped = screenLib.stripTags(thoughtStripped);
+  thoughtStripped = inboxLib.stripTags(thoughtStripped);
   thoughtStripped = schedulerLib.stripTags(thoughtStripped);
   thoughtStripped = presenceLib.stripTags(thoughtStripped);
   thoughtStripped = emailLib.stripTags(thoughtStripped);
@@ -732,6 +739,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   sayStripped = filesLib.stripTags(sayStripped);
   // Strip any screen-observe tags that leaked into say
   sayStripped = screenLib.stripTags(sayStripped);
+  sayStripped = inboxLib.stripTags(sayStripped);
   // Strip any scheduling / presence / email / discord tags that leaked into say
   sayStripped = schedulerLib.stripTags(sayStripped);
   sayStripped = presenceLib.stripTags(sayStripped);
@@ -897,6 +905,29 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         }
         console.log(`[main] screen observe: ${r?.ok ? 'ok (' + (r.windows||[]).length + ' windows)' : 'FAIL ' + r?.reason}`);
       } catch (err) { console.error('[main] screen dispatch error:', err.message); }
+    })().catch(() => {});
+  }
+
+  // Background: dispatch inbox checks — read incoming email, surface it via the
+  // auto-continuation, and integrate each message into the knowledge store
+  // (reference-not-copy: sender + subject + short snippet, never the full body).
+  if (inboxTagsToRun.length > 0) {
+    (async () => {
+      try {
+        const r = await inboxLib.dispatch(inboxTagsToRun[0]);
+        if (r && r.ok) {
+          const row = db.insertMonologue({ content: r.text, model: 'inbox', type: 'reading' });
+          try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(checked inbox — ${(r.messages || []).length} messages)`, type: 'reading' }); } catch {}
+          for (const m of (r.messages || []).slice(0, 5)) {
+            memoryLib.store({ kind: 'reference', content: `Email I received from ${m.from} — subject "${m.subject}": ${(m.snippet || '').slice(0, 300)}`, source: 'inbox', importance: 0.5 }).catch(() => {});
+          }
+          console.log(`[main] inbox check: ok (${(r.messages || []).length} msgs)`);
+          if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: r.text }); }
+        } else {
+          console.log('[main] inbox check FAIL:', r && r.reason);
+          if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[Your inbox check did not work: ${r && r.reason}. Tell Lucas plainly you couldn't read the inbox and why — don't invent messages.]` }); }
+        }
+      } catch (err) { console.error('[main] inbox dispatch error:', err.message); }
     })().catch(() => {});
   }
 
