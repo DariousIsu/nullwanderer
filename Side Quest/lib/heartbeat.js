@@ -158,7 +158,7 @@ If you choose to speak, your <say> MUST reference a concrete subject by name. Th
     These reference REAL statements from the dialogue history above.
 
 (2) FROM YOUR OWN READINGS — things you looked up between turns when you were curious or bored.
-    Valid phrasings: "I read about X between our turns and I want to bring it up" / "I went looking into Y on my own — here's what struck me" / "I got curious about Z while you were quiet"
+    CRITICAL: when you bring up a reading, you MUST include the actual SUBSTANCE — the specific thing you found, stated in a sentence or two — not just announce the topic. A bare "I read about X and I want to bring it up" with no content is NOT allowed: it's a hollow opener you can't back up, and when ${userName || 'they'} engages you'll have nothing to say. Lead with the point itself: "I read about X — what struck me was [the specific thing]." The substance you state must come from your actual readings above; if you do NOT have a concrete point to make about it, do not bring it up — pick something you can actually discuss, or stay silent.
     DO NOT phrase these as "that thing you said about" — ${userName || 'they'} did not tell you these things. You read them yourself.
 
 NOT VALID: "The silence has weight" / "I notice the quiet" / atmospheric meta-commentary.
