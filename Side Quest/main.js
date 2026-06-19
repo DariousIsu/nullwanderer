@@ -39,6 +39,7 @@ const emailLib = require('./lib/email');
 const discordLib = require('./lib/discord');
 const memoryLib = require('./lib/memory');
 const inboxLib = require('./lib/inbox');
+const actionLoop = require('./lib/action_loop');
 const {
   startContinuityScheduler,
   stopContinuityScheduler,
@@ -187,6 +188,12 @@ app.whenReady().then(() => {
           }
           const merged = [...surfaced, ...r.messages.map(m => m.uid)].slice(-300);
           db.setMeta('inbox_surfaced_uids', JSON.stringify(merged));
+          const newest = r.messages[r.messages.length - 1];
+          if (newest && newest.fromAddr) {
+            db.setMeta('last_inbound_from', newest.fromAddr);
+            db.setMeta('last_inbound_subject', newest.subject || '');
+            db.setMeta('last_inbound_snippet', (newest.snippet || '').slice(0, 300));
+          }
           console.log(`[inbox-poll] ${r.messages.length} unread email(s) → queued + heartbeat kick`);
           const { maybeHeartbeat } = require('./lib/heartbeat');
           maybeHeartbeat().catch(() => {});
@@ -952,6 +959,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           for (const m of (r.messages || []).slice(0, 5)) {
             memoryLib.store({ kind: 'reference', content: `Email I received from ${m.from} — subject "${m.subject}": ${(m.snippet || '').slice(0, 300)}`, source: 'inbox', importance: 0.5 }).catch(() => {});
           }
+          const newest = (r.messages || [])[0];
+          if (newest && newest.fromAddr) {
+            db.setMeta('last_inbound_from', newest.fromAddr);
+            db.setMeta('last_inbound_subject', newest.subject || '');
+            db.setMeta('last_inbound_snippet', (newest.snippet || '').slice(0, 300));
+          }
           console.log(`[main] inbox check: ok (${(r.messages || []).length} msgs)`);
           if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: r.text }); }
         } else {
@@ -1116,6 +1129,29 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   }).catch(err => console.error('[main] commitment extraction failed:', err.message));
 
+  // ACTION LOOP — if Lucas asked her to reply to the email she last received, and we
+  // have a real target address, start the email-reply action and self-drive it
+  // (draft → body → send), one tag per step. This is the fix for multi-step acting:
+  // she narrates a sequence but reliably emits one tag at a time, so the loop sequences.
+  try {
+    const replyIntent = /\b(reply|respond|write back|answer)\b/i.test(userMessage)
+      && /\b(e-?mails?|message|that|him|her|them|it|lucas|rainey|mail|back)\b/i.test(userMessage);
+    if (replyIntent && !actionLoop.isActive()) {
+      const to = (db.getMeta('last_inbound_from') || '').trim();
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+        actionLoop.start(actionLoop.emailReplyAction({
+          to,
+          subject: db.getMeta('last_inbound_subject') || '',
+          snippet: db.getMeta('last_inbound_snippet') || ''
+        }));
+        console.log('[action] email-reply started → to', to);
+        setTimeout(() => { runActionStep(io, 0).catch(() => {}); }, 1200);
+      } else {
+        console.log('[action] reply intent but no valid target address in last_inbound_from');
+      }
+    }
+  } catch (err) { console.error('[action] trigger failed:', err.message); }
+
   return { ok: true, say: finalSaid };
 }
 
@@ -1177,5 +1213,48 @@ async function fireToolFollowup({ io, channel, sessionId, resultText }) {
     console.log('[main] tool follow-up delivered via', channel);
   } catch (err) {
     console.error('[main] fireToolFollowup failed:', err.message);
+  }
+}
+
+// Action loop self-driver: runs ONE step of the active action (inject the single-step
+// directive → generate → dispatch the resulting email tag → observe → advance), then
+// chains to the next step on its own. Steps are silent; only completion/abort speaks.
+// This is what makes a multi-step action (reply: draft→body→send) happen without Lucas
+// prompting each step — the 24B only has to emit one tag at a time.
+async function runActionStep(io, depth = 0) {
+  if (!actionLoop.isActive()) return;
+  if (depth > 8) { actionLoop.abort(); console.log('[action] depth cap — aborted'); return; }
+  const directive = actionLoop.currentDirective();
+  if (!directive) return;
+  const channel = (io && io.channel) || 'desktop';
+  try {
+    const userName = db.getMeta('user_name') || 'them';
+    const awareness = buildAwarenessBlock({ chosenName: db.getMeta('chosen_name'), sessionStartedAt: currentSessionStartedAt, cumulativeMs: db.getCumulativeSessionTime() });
+    const messages = buildChatPrompt({
+      userName, recentReflections: [], recentTurns: db.getRecentTurns(4), recentMonologue: [],
+      recentReadings: [], heldCommitments: [], openThreads: [], awareness,
+      protocols: db.getActiveProtocols(), browserBlock: emailLib.buildPromptBlock(),
+      pendingInbounds: [], retrievedKnowledgeBlock: null,
+      newUserMessage: `[You are carrying out a multi-step action, one step at a time. Do EXACTLY the step below — emit the single tag it names, raw, and nothing else.]\n\n${directive}`
+    });
+    // Steps run silent (no streaming to the user); the final confirmation speaks.
+    const parser = new TagStreamParser({ onSayToken: () => {} });
+    await streamChat({ model: MODEL, messages, onToken: (c) => parser.feed(c) });
+    const { thought, say } = parser.finalize();
+    const tags = [...emailLib.parseTags(thought || ''), ...emailLib.parseTags(say || '')];
+    for (const t of tags.slice(0, 3)) { try { await emailLib.dispatch(t, { source: 'action' }); } catch (e) { console.error('[action] dispatch:', e.message); } }
+    const res = await actionLoop.observe();
+    console.log('[action] step:', JSON.stringify(res));
+    if (res.status === 'advanced' || res.status === 'retry') {
+      setTimeout(() => { runActionStep(io, depth + 1).catch(() => {}); }, 1500);
+    } else if (res.status === 'complete') {
+      if (res.name === 'email-reply') memoryLib.logAction(`I replied by email to ${db.getMeta('last_inbound_from') || 'a sender'}.`, { source: 'email' }).catch(() => {});
+      fireToolFollowup({ io, channel, sessionId: currentSessionId, resultText: `[You just finished the action "${res.name}" — it completed successfully. Tell ${userName} briefly what you did, in your own voice.]` });
+    } else if (res.status === 'aborted') {
+      fireToolFollowup({ io, channel, sessionId: currentSessionId, resultText: `[The action "${res.name}" got stuck and was stopped after several tries. Tell ${userName} plainly that you couldn't finish it — do not pretend it worked.]` });
+    }
+  } catch (err) {
+    console.error('[action] runActionStep failed:', err.message);
+    actionLoop.abort();
   }
 }

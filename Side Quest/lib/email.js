@@ -106,6 +106,12 @@ function emailBodyAppend(text) {
   return { ok: true, note: `body part ${draft.body.length} added`, parts: draft.body.length };
 }
 
+// Read-only view of the in-progress draft (used by the action loop's step checks).
+function draftState() {
+  if (!draft) return null;
+  return { to: draft.to, subject: draft.subject, body: draft.body.slice() };
+}
+
 function emailDraftText() {
   if (!draft) return null;
   return `To: ${draft.to || '(unset)'}\nSubject: ${draft.subject || '(unset)'}\n\n${draft.body.join('\n\n')}`;
@@ -285,7 +291,7 @@ It all goes instantly over SMTP — no browser, no Gmail tab, no compose form. Y
 }
 
 module.exports = {
-  sendEmail, verify, isConfigured,
+  sendEmail, verify, isConfigured, draftState,
   parseTags, stripTags, dispatch, buildPromptBlock,
   detectEmailIntent, buildEmailNudge
 };

@@ -110,7 +110,7 @@ async function pollUnread(surfacedUids = [], cap = 3) {
       } catch {}
       const env = msg.envelope || {};
       const fromObj = (env.from && env.from[0]) || {};
-      messages.push({ uid: msg.uid, from: fromObj.name || fromObj.address || 'unknown', subject: env.subject || '(no subject)', snippet });
+      messages.push({ uid: msg.uid, from: fromObj.name || fromObj.address || 'unknown', fromAddr: fromObj.address || '', subject: env.subject || '(no subject)', snippet });
     }
   } catch (e) {
     return { ok: false, reason: e.message };
