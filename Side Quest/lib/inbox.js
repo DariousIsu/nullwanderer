@@ -82,6 +82,48 @@ async function fetchInbox({ limit = 5, unreadOnly = false } = {}) {
   return { ok: true, messages };
 }
 
+// Autonomous poll: return messages with UID greater than sinceUid (i.e. arrived
+// since the last check). If sinceUid is falsy, returns no messages but reports
+// the current maxUid as a baseline (so the existing backlog isn't surfaced as new).
+async function pollNewMail(sinceUid) {
+  const cfg = config.emailConfig();
+  if (!cfg.configured || !ImapFlow) return { ok: false, reason: 'email not configured' };
+  const client = new ImapFlow({ host: HOST, port: 993, secure: true, auth: { user: cfg.user, pass: cfg.pass }, logger: false });
+  try { await client.connect(); } catch (e) { return { ok: false, reason: e.message }; }
+
+  let lock;
+  const messages = [];
+  let maxUid = sinceUid || 0;
+  try {
+    lock = await client.getMailboxLock('INBOX');
+    const status = await client.status('INBOX', { uidNext: true });
+    const uidNext = status.uidNext || 1;
+    if (!sinceUid) {
+      // First run — establish baseline, surface nothing.
+      return { ok: true, messages: [], maxUid: uidNext - 1 };
+    }
+    const range = `${sinceUid + 1}:*`;
+    for await (const msg of client.fetch(range, { uid: true, envelope: true, bodyParts: ['text'] }, { uid: true })) {
+      if (!msg.uid || msg.uid <= sinceUid) continue;
+      maxUid = Math.max(maxUid, msg.uid);
+      let snippet = '';
+      try {
+        const part = msg.bodyParts && msg.bodyParts.get ? msg.bodyParts.get('text') : null;
+        if (part) snippet = part.toString('utf8').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
+      } catch {}
+      const env = msg.envelope || {};
+      const fromObj = (env.from && env.from[0]) || {};
+      messages.push({ uid: msg.uid, from: fromObj.name || fromObj.address || 'unknown', subject: env.subject || '(no subject)', snippet });
+    }
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  } finally {
+    try { if (lock) lock.release(); } catch {}
+    try { await client.logout(); } catch {}
+  }
+  return { ok: true, messages, maxUid };
+}
+
 function formatInbox(result) {
   if (!result || !result.ok) return `(couldn't read the inbox: ${result?.reason || 'unknown'})`;
   if (!result.messages || result.messages.length === 0) return 'Your inbox has no messages to show right now.';
@@ -153,4 +195,4 @@ function buildPromptBlock() {
 Your recent messages (sender, subject, snippet) then arrive in your next-turn context. Use it whenever Lucas asks you to check or read your email/inbox, or to see replies to mail you sent. This is a DIFFERENT action from sending: <read-inbox/> READS; <email>/<email-draft>/<email-send> SEND. When asked to read, emit <read-inbox/> — never draft or send.`;
 }
 
-module.exports = { fetchInbox, formatInbox, parseTags, stripTags, dispatch, buildPromptBlock, isConfigured, detectInboxIntent, buildInboxNudge };
+module.exports = { fetchInbox, pollNewMail, formatInbox, parseTags, stripTags, dispatch, buildPromptBlock, isConfigured, detectInboxIntent, buildInboxNudge };

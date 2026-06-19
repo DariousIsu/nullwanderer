@@ -89,13 +89,16 @@ function buildHeartbeatPrompt({ userName, recentReflections, recentTurns, recent
   // She can either tell Lucas about it (via <say>) or continue with the bot
   // (via <chat-send>) or both.
   if (pendingInbounds && pendingInbounds.length > 0) {
-    const lines = ['\n\nINCOMING MESSAGES from chat bots you have open (these are NOT from Lucas; a third-party bot replied while you were watching):'];
+    const lines = ['\n\nNEW INCOMING — arrived while you were idle (NOT something Lucas said to you directly):'];
+    let anyEmail = false;
     for (const i of pendingInbounds.slice(0, 4)) {
-      const speaker = i.speaker || 'bot';
+      const speaker = i.speaker || 'sender';
       const text = (i.text || '').slice(0, 800);
-      lines.push(`[${speaker}]: ${text}`);
+      const via = i.source === 'email' ? ' (email)' : '';
+      if (i.source === 'email') anyEmail = true;
+      lines.push(`[${speaker}${via}]: ${text}`);
     }
-    lines.push('\nYou may reply to the bot by emitting <chat-send speaker="..." tab="...">your message</chat-send>, or you may surface this to Lucas via your <say>, or both.');
+    lines.push('\nIf any of this is worth telling Lucas, surface it in your <say> — e.g. "you got a new email from X about Y" — proactively, since he hasn\'t asked.' + (anyEmail ? ' To read an email in full use <read-inbox/>; only send a reply (email tags) if it genuinely fits.' : ' For a chat-bot reply you may continue via <chat-send>.'));
     systemContent += lines.join('\n');
   }
 
