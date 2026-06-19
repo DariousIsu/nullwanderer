@@ -289,7 +289,9 @@ EASIER FOR A LONG EMAIL — build it in steps across messages instead of one big
   (<email-show/> to review what you've drafted, <email-discard/> to scrap it)
 The draft persists between your turns until you send or discard it. This staged path is more reliable than cramming a whole letter into one tag — prefer it for anything longer than a couple lines. One small tag per turn.
 
-It all goes instantly over SMTP — no browser, no Gmail tab, no compose form. You send directly, no approval first (a quiet daily cap of ${cfg.dailyCap} is just a backstop).`;
+It all goes instantly over SMTP — no browser, no Gmail tab, no compose form. You send directly, no approval first (a quiet daily cap of ${cfg.dailyCap} is just a backstop).
+
+PLAIN TEXT ONLY — these emails carry no attachments. You cannot attach files, documents, links, or enclosures, and there is no "attach" action. NEVER write that you've attached, included, or enclosed anything, and never claim an action you haven't taken. Say only what is true: if a point needs a document you don't have, offer to follow up — don't pretend it's already attached.`;
 }
 
 module.exports = {

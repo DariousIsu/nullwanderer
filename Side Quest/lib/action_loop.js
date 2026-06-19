@@ -108,7 +108,7 @@ function emailReplyAction({ to, subject, snippet }) {
         // success we CAPTURE the body text into ctx so the send no longer depends on
         // the shared draft singleton (which concurrent loops can reset between steps).
         expect: 'email-body',
-        directive: () => `You are writing a reply email to ${to}. Their message was: "${(snippet || '').slice(0, 220)}".\nWrite your reply now and emit it inside ONE tag, exactly like this:\n<email-body>your reply text here</email-body>\nEmit only that single tag with your message inside it. Do NOT include To: or Subject: lines — just the body of your reply.`,
+        directive: () => `You are writing a reply email to ${to}. Their message was: "${(snippet || '').slice(0, 220)}".\nWrite your reply now and emit it inside ONE tag, exactly like this:\n<email-body>your reply text here</email-body>\nEmit only that single tag with your message inside it. Do NOT include To: or Subject: lines — just the body of your reply.\nThis is a PLAIN-TEXT email with NO attachments — you cannot attach files, links, or documents. Never claim to have attached, included, or sent anything alongside it, and never describe an action you haven't actually taken. Say only what is true: respond to what they wrote. If something would need a document you don't have, say you'll follow up rather than pretending it's already attached.`,
         check: (ctx) => {
           const d = emailLib.draftState();
           const body = d && d.body ? d.body.join('\n\n').trim() : '';
