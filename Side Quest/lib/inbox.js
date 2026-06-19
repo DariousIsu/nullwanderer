@@ -95,7 +95,9 @@ function formatInbox(result) {
 
 // --- tag parsing (mirrors screen.js) ---
 
-const TAG_RE = /<email-check\s*([^>]*?)\/?>/gi;
+// Accept several names; primary is <read-inbox/> (doesn't collide with the
+// <email…> SEND family, which she kept confusing it with).
+const TAG_RE = /<(?:read-inbox|check-inbox|inbox|email-check)\s*([^>]*?)\/?>/gi;
 const ATTR_RE = /(\w+)\s*=\s*"([^"]*)"/g;
 
 function parseAttrs(s) {
@@ -110,8 +112,27 @@ function parseTags(text) {
   if (!text) return [];
   const tags = [];
   let m; TAG_RE.lastIndex = 0;
-  while ((m = TAG_RE.exec(text)) !== null) tags.push({ tag: 'email-check', attrs: parseAttrs(m[1] || '') });
+  while ((m = TAG_RE.exec(text)) !== null) tags.push({ tag: 'read-inbox', attrs: parseAttrs(m[1] || '') });
   return tags;
+}
+
+// Is this a request to READ the inbox (not send)? Drives the just-in-time nudge.
+function detectInboxIntent(msg) {
+  if (!msg) return false;
+  const m = String(msg).toLowerCase();
+  const explicitSend = /\b(send|compose|draft|write|pitch|forward|reply)\b/.test(m);
+  if (explicitSend) return false;
+  return /\binbox\b/.test(m)
+    || /\b(check|read|see|look at|open|any|new|got|receiv|incoming|unread|what)\b[\s\S]{0,40}\b(e-?mails?|inbox|mails?|messages?)\b/.test(m);
+}
+
+// Just-in-time directive: push her to <read-inbox/> instead of the send tags.
+function buildInboxNudge(userMessage) {
+  if (!isConfigured()) return null;
+  if (!detectInboxIntent(userMessage)) return null;
+  return `READ-INBOX ACTION — Lucas is asking you to READ the email you've received, NOT to send anything. Emit this exact raw tag now:
+  <read-inbox/>
+That fetches your inbox. Do NOT emit <email-draft>, <email-send>, or <email> — those compose/send mail, which is the wrong action here. Your reply should contain <read-inbox/> and nothing about drafting or recipients.`;
 }
 
 function stripTags(text) {
@@ -127,7 +148,9 @@ function isConfigured() { return config.emailConfig().configured; }
 
 function buildPromptBlock() {
   if (!isConfigured()) return null;
-  return `INBOX — you can read your own incoming email. Emit <email-check/> and your recent messages (sender, subject, a snippet) arrive in your next-turn context. Use it when Lucas says he sent you something, to check for replies to mail you sent, or to read what's come in. (This is reading only — to send, use the <email>/<email-draft> tags.)`;
+  return `INBOX — to READ the email you've received, emit this exact tag:
+  <read-inbox/>
+Your recent messages (sender, subject, snippet) then arrive in your next-turn context. Use it whenever Lucas asks you to check or read your email/inbox, or to see replies to mail you sent. This is a DIFFERENT action from sending: <read-inbox/> READS; <email>/<email-draft>/<email-send> SEND. When asked to read, emit <read-inbox/> — never draft or send.`;
 }
 
-module.exports = { fetchInbox, formatInbox, parseTags, stripTags, dispatch, buildPromptBlock, isConfigured };
+module.exports = { fetchInbox, formatInbox, parseTags, stripTags, dispatch, buildPromptBlock, isConfigured, detectInboxIntent, buildInboxNudge };

@@ -468,6 +468,14 @@ Drawing on interior is what makes you a continuous mind rather than a fresh-cont
     if (eNudge) finalUserMessage = `${finalUserMessage}\n\n${eNudge}`;
   } catch {}
 
+  // INBOX-READ NUDGE — when the message is a read/check-inbox request, push her to
+  // <read-inbox/> (she keeps reaching for the send tags instead).
+  try {
+    const { buildInboxNudge } = require('./inbox');
+    const iNudge = buildInboxNudge(newUserMessage);
+    if (iNudge) finalUserMessage = `${finalUserMessage}\n\n${iNudge}`;
+  } catch {}
+
   messages.push({ role: 'user', content: finalUserMessage });
   return messages;
 }
