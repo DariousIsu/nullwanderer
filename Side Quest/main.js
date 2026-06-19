@@ -200,6 +200,41 @@ app.whenReady().then(() => {
         } else {
           console.log('[inbox-poll] no unsurfaced unread');
         }
+
+        // AUTONOMOUS REPLY (gated) — independent of surfacing. Runs every poll and
+        // dedupes against UIDs she's already auto-replied to (NOT the surfaced set),
+        // so already-surfaced unread mail is still eligible for a reply once.
+        // Gates so she never fires a reply Lucas wouldn't expect:
+        //  - one reply per poll cycle, and only if no action is already running;
+        //  - sender must be a real person (skip no-reply / bulk / list senders);
+        //  - she must have ALREADY emailed this address (thread continuation only —
+        //    never a cold reply to an unknown sender).
+        if (!actionLoop.isActive()) {
+          const replied = JSON.parse(db.getMeta('auto_replied_uids') || '[]');
+          const rr = await inboxLib.pollUnread(replied, 6);
+          if (rr.ok && rr.messages && rr.messages.length) {
+            const NOREPLY = /(no-?reply|do-?not-?reply|donotreply|mailer-daemon|postmaster|notification|notifications|bounce|newsletter|mailing|@.*\.(list|lists)\.)/i;
+            const candidate = [...rr.messages].reverse().find(m =>
+              m.fromAddr && !NOREPLY.test(m.fromAddr) && db.hasEmailedAddress(m.fromAddr));
+            if (candidate) {
+              db.setMeta('auto_replied_uids', JSON.stringify([...replied, candidate.uid].slice(-300)));
+              console.log('[action] autonomous reply → thread with', candidate.fromAddr, 'uid', candidate.uid);
+              actionLoop.start(actionLoop.emailReplyAction({
+                to: candidate.fromAddr, subject: candidate.subject || '', snippet: candidate.snippet || ''
+              }));
+              // io wired to the window so her completion confirmation renders live,
+              // exactly like a heartbeat utterance (stream tokens + finalize).
+              const autoIo = {
+                channel: 'desktop',
+                emit: (token) => { try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('chat:say-token', token); } catch {} },
+                onComplete: (payload) => { try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('chat:complete', { ...payload, unprompted: true }); } catch {} }
+              };
+              setTimeout(() => { runActionStep(autoIo, 0).catch(() => {}); }, 1500);
+            } else {
+              console.log('[action] no auto-reply candidate (cold/bulk senders only)');
+            }
+          }
+        }
       } catch (e) { console.error('[inbox-poll]', e.message); }
     };
     setTimeout(() => { runInboxPoll().catch(() => {}); }, 20000); // initial sweep ~20s after boot
@@ -1224,25 +1259,33 @@ async function fireToolFollowup({ io, channel, sessionId, resultText }) {
 async function runActionStep(io, depth = 0) {
   if (!actionLoop.isActive()) return;
   if (depth > 8) { actionLoop.abort(); console.log('[action] depth cap — aborted'); return; }
-  const directive = actionLoop.currentDirective();
-  if (!directive) return;
   const channel = (io && io.channel) || 'desktop';
+  const userName = db.getMeta('user_name') || 'them';
   try {
-    const userName = db.getMeta('user_name') || 'them';
-    const awareness = buildAwarenessBlock({ chosenName: db.getMeta('chosen_name'), sessionStartedAt: currentSessionStartedAt, cumulativeMs: db.getCumulativeSessionTime() });
-    const messages = buildChatPrompt({
-      userName, recentReflections: [], recentTurns: db.getRecentTurns(4), recentMonologue: [],
-      recentReadings: [], heldCommitments: [], openThreads: [], awareness,
-      protocols: db.getActiveProtocols(), browserBlock: emailLib.buildPromptBlock(),
-      pendingInbounds: [], retrievedKnowledgeBlock: null,
-      newUserMessage: `[You are carrying out a multi-step action, one step at a time. Do EXACTLY the step below — emit the single tag it names, raw, and nothing else.]\n\n${directive}`
-    });
-    // Steps run silent (no streaming to the user); the final confirmation speaks.
-    const parser = new TagStreamParser({ onSayToken: () => {} });
-    await streamChat({ model: MODEL, messages, onToken: (c) => parser.feed(c) });
-    const { thought, say } = parser.finalize();
-    const tags = [...emailLib.parseTags(thought || ''), ...emailLib.parseTags(say || '')];
-    for (const t of tags.slice(0, 3)) { try { await emailLib.dispatch(t, { source: 'action' }); } catch (e) { console.error('[action] dispatch:', e.message); } }
+    // Deterministic step (start-draft / send): the loop runs it directly — no model
+    // turn. Only generative steps (writing the reply body) go to the 24B.
+    const didAuto = await actionLoop.runCurrentAuto();
+    if (!didAuto) {
+      const directive = actionLoop.currentDirective();
+      if (directive) {
+        const awareness = buildAwarenessBlock({ chosenName: db.getMeta('chosen_name'), sessionStartedAt: currentSessionStartedAt, cumulativeMs: db.getCumulativeSessionTime() });
+        const messages = buildChatPrompt({
+          userName, recentReflections: [], recentTurns: db.getRecentTurns(4), recentMonologue: [],
+          recentReadings: [], heldCommitments: [], openThreads: [], awareness,
+          protocols: db.getActiveProtocols(), browserBlock: emailLib.buildPromptBlock(),
+          pendingInbounds: [], retrievedKnowledgeBlock: null,
+          newUserMessage: `[You are carrying out a multi-step action, one step at a time. Do EXACTLY the step below — emit the single tag it names, raw, and nothing else.]\n\n${directive}`
+        });
+        // Steps run silent (no streaming to the user); the final confirmation speaks.
+        const parser = new TagStreamParser({ onSayToken: () => {} });
+        await streamChat({ model: MODEL, messages, onToken: (c) => parser.feed(c) });
+        const { thought, say } = parser.finalize();
+        let tags = [...emailLib.parseTags(thought || ''), ...emailLib.parseTags(say || '')];
+        const expect = actionLoop.currentExpect();
+        if (expect) tags = tags.filter(t => t.tag === expect); // only the tag this step wants
+        for (const t of tags.slice(0, 3)) { try { await emailLib.dispatch(t, { source: 'action' }); } catch (e) { console.error('[action] dispatch:', e.message); } }
+      }
+    }
     const res = await actionLoop.observe();
     console.log('[action] step:', JSON.stringify(res));
     if (res.status === 'advanced' || res.status === 'retry') {

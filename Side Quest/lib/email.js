@@ -172,7 +172,7 @@ function stripTags(text) {
   return (text || '').replace(EMAIL_TAG_RE, '').replace(/[ \t]+/g, ' ').trim();
 }
 
-async function dispatch({ tag, attrs, body }, { source = 'zoe' } = {}) {
+async function dispatch({ tag, attrs = {}, body = '' } = {}, { source = 'zoe' } = {}) {
   switch ((tag || 'email').toLowerCase()) {
     case 'email-draft':   return emailDraftStart({ to: attrs.to, subject: attrs.subject });
     case 'email-body':    return emailBodyAppend(body);

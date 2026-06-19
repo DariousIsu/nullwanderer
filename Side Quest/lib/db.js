@@ -599,6 +599,16 @@ function countEmailsSentSince(sinceTs) {
   return row ? row.n : 0;
 }
 
+// Has she already sent mail to this address? Gates autonomous reply: she only
+// auto-continues threads she's part of, never cold-replies to unknown senders.
+function hasEmailedAddress(addr) {
+  if (!addr) return false;
+  const row = getDb()
+    .prepare(`SELECT 1 FROM email_log WHERE status = 'sent' AND LOWER(to_addr) LIKE ? LIMIT 1`)
+    .get('%' + String(addr).toLowerCase() + '%');
+  return !!row;
+}
+
 // --- Knowledge store (integration/learning layer) ---
 
 function insertKnowledge({ kind = 'note', content, embedding = null, source = null, importance = 0.5, links = null }) {
@@ -715,6 +725,7 @@ module.exports = {
   cancelScheduledTask,
   insertEmailLog,
   countEmailsSentSince,
+  hasEmailedAddress,
   insertKnowledge,
   getAllKnowledgeEmbeddings,
   ftsSearchKnowledge,

@@ -32,7 +32,15 @@ function snapshot() {
 function currentDirective() {
   if (!active) return null;
   const step = active.def.steps[active.idx];
+  if (typeof step.directive !== 'function') return null;
   try { return step.directive(active.ctx); } catch { return null; }
+}
+
+// If the current generative step only wants a specific tag, return it (else null);
+// the driver dispatches only that tag so the model can't fire other tools mid-action.
+function currentExpect() {
+  if (!active) return null;
+  return active.def.steps[active.idx].expect || null;
 }
 
 // Called AFTER a turn's tools dispatched. Checks whether the current step completed;
@@ -64,6 +72,19 @@ async function observe() {
 
 function abort() { const had = !!active; active = null; return had; }
 
+// If the current step is DETERMINISTIC (has an auto() — e.g. start-draft, send),
+// run it directly instead of asking the model to emit a tag. Returns true if it
+// ran an auto step (caller then skips model generation), false if the step needs
+// the model. This is the core reliability move: only genuinely generative steps
+// (writing the reply body) go to the 24B; the mechanical tags the loop fires itself.
+async function runCurrentAuto() {
+  if (!active) return false;
+  const step = active.def.steps[active.idx];
+  if (typeof step.auto !== 'function') return false;
+  try { await step.auto(active.ctx); } catch (e) { console.log('[action] auto step threw:', e && e.message); }
+  return true;
+}
+
 // --- Action definitions ---
 
 // Reply to an email: draft headers -> body -> send. Steps map to the staged-compose
@@ -75,19 +96,32 @@ function emailReplyAction({ to, subject, snippet }) {
     maxAttempts: 4,
     steps: [
       {
-        directive: () => `CURRENT ACTION — reply to ${to}. STEP 1 of 3. Emit EXACTLY this one tag now and nothing else (no prose around it):\n<email-draft to="${to}" subject="${subj}"/>`,
+        // Start the draft — deterministic (to/subject are already known). The loop
+        // fires the tag itself rather than hoping the 24B emits it correctly.
+        auto: () => emailLib.dispatch({ tag: 'email-draft', attrs: { to, subject: subj } }, { source: 'action' }),
         check: () => { const d = emailLib.draftState(); return !!(d && d.to); }
       },
       {
-        directive: () => `CURRENT ACTION — reply to ${to}. STEP 2 of 3. The draft is started. Now write the reply body — emit ONE <email-body>…</email-body> tag containing your message. Address what they wrote: "${(snippet || '').slice(0, 160)}". Emit just that one tag.`,
+        // The ONLY step that needs the model: write the actual reply text.
+        // `expect` restricts dispatch to email-body so a stray <email>/<email-draft>
+        // from the model can't clobber the draft headers or fire an uncontrolled send.
+        expect: 'email-body',
+        directive: () => `You are writing a reply email to ${to}. Their message was: "${(snippet || '').slice(0, 220)}".\nWrite your reply now and emit it inside ONE tag, exactly like this:\n<email-body>your reply text here</email-body>\nEmit only that single tag with your message inside it. Do NOT include To: or Subject: lines — just the body of your reply.`,
         check: () => { const d = emailLib.draftState(); return !!(d && d.body && d.body.length > 0); }
       },
       {
-        directive: () => `CURRENT ACTION — reply to ${to}. STEP 3 of 3. The reply is written. Send it now — emit EXACTLY: <email-send/>`,
+        // Send — deterministic. Pass the known to/subject explicitly so the send is
+        // correct even if the body turn clobbered the draft headers.
+        auto: async () => {
+          const r = await emailLib.dispatch({ tag: 'email-send', attrs: { to, subject: subj } }, { source: 'action' });
+          if (!(r && r.ok)) console.log('[action] email-send failed:', (r && r.reason) || 'unknown');
+          else console.log('[action] email-send ok →', r.to);
+          return r;
+        },
         check: () => { const d = emailLib.draftState(); return !d; } // cleared on successful send
       }
     ]
   };
 }
 
-module.exports = { start, observe, abort, isActive, currentDirective, snapshot, emailReplyAction };
+module.exports = { start, observe, abort, isActive, currentDirective, currentExpect, runCurrentAuto, snapshot, emailReplyAction };
