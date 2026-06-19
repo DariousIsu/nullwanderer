@@ -433,6 +433,15 @@ Drawing on interior is what makes you a continuous mind rather than a fresh-cont
     }
   }
 
+  // EMAIL ACTION NUDGE — when the user's message is an email-send request, push
+  // her to the email tags (staged compose) instead of reverting to the browser.
+  // Just-in-time directives beat general steers against recent-context priming.
+  try {
+    const { buildEmailNudge } = require('./email');
+    const eNudge = buildEmailNudge(newUserMessage);
+    if (eNudge) finalUserMessage = `${finalUserMessage}\n\n${eNudge}`;
+  } catch {}
+
   messages.push({ role: 'user', content: finalUserMessage });
   return messages;
 }

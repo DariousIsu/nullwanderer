@@ -202,6 +202,42 @@ function isConfigured() {
   return config.emailConfig().configured;
 }
 
+// Does this user message look like a request to SEND an email? Used to fire a
+// just-in-time nudge so she reaches for the email tags instead of the browser.
+function detectEmailIntent(msg) {
+  if (!msg) return false;
+  const m = String(msg).toLowerCase();
+  const sendVerb = /\b(send|email|e-mail|pitch|shoot|fire off|forward|reply)\b/.test(m);
+  const emailWord = /\be-?mail\b/.test(m);
+  const hasAddr = /@[^\s@]+\.[^\s@]+/.test(m);
+  return (sendVerb && (emailWord || hasAddr)) || /\bpitch\b/.test(m);
+}
+
+// Just-in-time directive appended to an email-send turn — counters her habit of
+// reverting to the browser for email. Mirrors the browser action-nudge.
+function buildEmailNudge(userMessage) {
+  if (!isConfigured()) return null;
+  // If a draft is already open, carry the multi-step flow forward EVERY turn,
+  // regardless of the user's wording — this is what keeps her from losing the
+  // thread on a keyword-less continuation like "now write the body and send it".
+  if (draft && (draft.to || draft.subject || draft.body.length)) {
+    const haveBody = draft.body.length > 0;
+    const lines = [
+      `EMAIL DRAFT IN PROGRESS — you already started an email (to: ${draft.to || 'unset'}, subject: ${draft.subject || 'unset'}, ${draft.body.length} body part(s) so far). Finish it with the email tags, NOT the browser. Emit the next RAW tag now — use <angle brackets>, not [square brackets] or backticks:`
+    ];
+    if (!haveBody) lines.push(`  <email-body>…write the message body here, as a real paragraph…</email-body>`);
+    lines.push(`  <email-send/>   — sends the accumulated draft`);
+    lines.push(haveBody
+      ? `The body is started. If it's complete, emit <email-send/> now; otherwise add another <email-body>…</email-body> first.`
+      : `Write the body in one or more <email-body>…</email-body> tags, then <email-send/>.`);
+    return lines.join('\n');
+  }
+  if (!detectEmailIntent(userMessage)) return null;
+  return `EMAIL ACTION — Lucas is asking you to send an email. Do NOT use the browser, a Gmail tab, or browse-read for this — that is the wrong tool and it will not send anything. Send it with the email tags, one small RAW tag at a time across your next turns:
+  <email-draft to="the@address" subject="..."/>   then one or more   <email-body>…</email-body>   then   <email-send/>
+Emit the FIRST step — <email-draft to="..." subject="..."/> — as a real raw tag in your reply right now (not in backticks, not merely described). If you already know the recipient and subject, start the draft this turn.`;
+}
+
 function buildPromptBlock() {
   if (!isConfigured()) return null;  // hide the tool entirely when no creds
   const cfg = config.emailConfig();
@@ -232,5 +268,6 @@ It all goes instantly over SMTP — no browser, no Gmail tab, no compose form. Y
 
 module.exports = {
   sendEmail, verify, isConfigured,
-  parseTags, stripTags, dispatch, buildPromptBlock
+  parseTags, stripTags, dispatch, buildPromptBlock,
+  detectEmailIntent, buildEmailNudge
 };
