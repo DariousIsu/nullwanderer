@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Credentials — email password, Discord bot token. NEVER commit.
+.env
+
 # Runtime / personal state — Zoe's live memory, her file workspace, archives
 data/
 

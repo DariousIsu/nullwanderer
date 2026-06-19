@@ -4,6 +4,8 @@ const { BOOTSTRAP, buildAwarenessBlock } = require('./context');
 const { runSelfDialogue } = require('./self_dialogue');
 const filesLib = require('./files');
 const screenLib = require('./screen');
+const autoTools = require('./auto_tools');
+const governor = require('./governor');
 
 const MODEL = 'hf.co/bartowski/PocketDoc_Dans-PersonalityEngine-V1.3.0-24b-GGUF:Q4_K_M';
 const TICK_INTERVAL_MS = 30 * 1000;        // check every 30s while idle
@@ -57,6 +59,10 @@ function buildHeartbeatPrompt({ userName, recentReflections, recentTurns, recent
   let systemContent = sub(BOOTSTRAP, userName);
   systemContent += '\n\n' + filesLib.buildPromptBlock();
   systemContent += '\n\n' + screenLib.buildPromptBlock();
+  // Autonomy tools — scheduling, presence, and (when configured) email + discord.
+  // The heartbeat is the proactive channel: this is where she reaches out.
+  const autoBlocks = autoTools.promptBlocks();
+  if (autoBlocks) systemContent += '\n\n' + autoBlocks;
   if (awareness) systemContent = awareness + '\n\n' + systemContent;
   if (protocols && protocols.length > 0) {
     const { formatInjection } = require('./protocols');
@@ -264,9 +270,24 @@ async function maybeHeartbeat() {
       })().catch(() => {});
     }
 
+    // AUTONOMY TOOLS (scheduler / presence / email / discord): the proactive
+    // outreach surface — a due reminder, progress worth sharing → email or DM.
+    const autoCombined = `${thought || ''}\n${say || ''}`;
+    if (autoTools.hasAny(autoTools.parseAll(autoCombined))) {
+      // GOVERNOR: pace proactive tool actions (notify/schedule/email/dm).
+      if (governor.requestAction('tool').allow) {
+        governor.record('tool');
+        autoTools.dispatchFound(autoCombined, {
+          onSheep: (p) => { try { win.webContents.send('monologue:tick', p); } catch {} },
+          source: 'heartbeat'
+        }).catch(err => console.error('[heartbeat] auto-tools error:', err.message));
+      }
+    }
+
     let thoughtStripped = (thought || '').replace(/<wonder>[\s\S]*?<\/wonder>/gi, '').trim();
     thoughtStripped = filesLib.stripTags(thoughtStripped);
     thoughtStripped = screenLib.stripTags(thoughtStripped);
+    thoughtStripped = autoTools.stripAll(thoughtStripped);
 
     // Always store the thought (research signal: what did she consider saying?)
     if (thoughtStripped) {
@@ -280,7 +301,7 @@ async function maybeHeartbeat() {
     }
 
     // Treat literal placeholder text as silence, not as utterance
-    const stripLeakedTags = (s) => screenLib.stripTags(filesLib.stripTags((s || '')
+    const stripLeakedTags = (s) => autoTools.stripAll(screenLib.stripTags(filesLib.stripTags((s || '')
       .replace(/<\/?think>/gi, '')
       .replace(/<\/?say>/gi, '')
       .replace(/<navigate>[^<]*<\/navigate>/gi, '')
@@ -288,11 +309,16 @@ async function maybeHeartbeat() {
       .replace(/\*[^*\n]{1,200}\*/g, '')
       .replace(/[ \t]+/g, ' ')
       .replace(/\n{3,}/g, '\n\n')
-      .trim()));
+      .trim())));
     const trimmedSay = stripLeakedTags(say);
     const isPlaceholder = /^[\s.()]*(empty|silence|nothing|none|n\/a|null|undefined|no\s+say|no\s+comment)[\s.()]*$/i.test(trimmedSay);
 
-    if (trimmedSay && !isPlaceholder) {
+    // GOVERNOR: pace unprompted utterances so she doesn't surface in bursts. An
+    // inbound chat-bot reply is priority (bypasses pacing — it's time-sensitive).
+    const wantsToSpeak = trimmedSay && !isPlaceholder;
+    const uGate = wantsToSpeak ? governor.requestAction('utterance', { priority: hasInbound }) : { allow: false };
+    if (wantsToSpeak && uGate.allow) {
+      governor.record('utterance');
       const saidRow = db.insertTurn({
         sessionId,
         speaker: 'ai_said',

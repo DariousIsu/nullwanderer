@@ -7,6 +7,8 @@ const openThreadsLib = require('./open_threads');
 const filesLib = require('./files');
 const browserLib = require('./browser');
 const screenLib = require('./screen');
+const autoTools = require('./auto_tools');
+const governor = require('./governor');
 const { buildAwarenessBlock } = require('./context');
 
 const MODEL = 'hf.co/bartowski/PocketDoc_Dans-PersonalityEngine-V1.3.0-24b-GGUF:Q4_K_M';
@@ -124,6 +126,11 @@ function buildPrompt({ userName, recentMonologue, recentReadings, recentReflecti
 
   // SCREEN — she can observe Lucas's open windows on her own initiative.
   sys += '\n\n' + screenLib.buildPromptBlock();
+
+  // AUTONOMY TOOLS — she can set reminders, notify, use the clipboard, and (when
+  // configured) email or DM Lucas on her own initiative between turns.
+  const autoBlocks = autoTools.promptBlocks();
+  if (autoBlocks) sys += '\n\n' + autoBlocks;
 
   // PRIMACY: open_threads block injected at top of system prompt
   if (openThreads && openThreads.length > 0) {
@@ -636,6 +643,19 @@ async function runOneTick() {
     trimmed = filesLib.stripTags(trimmed);
   }
 
+  // AUTONOMY TOOLS (scheduler / presence / email / discord): if she invoked any
+  // while thinking, run them and strip the tags from the stored thought.
+  if (autoTools.hasAny(autoTools.parseAll(trimmed))) {
+    // GOVERNOR: pace autonomous tool actions (schedule/notify/email/dm). Strip the
+    // tags either way so they never leak into the stored thought.
+    if (governor.requestAction('tool').allow) {
+      governor.record('tool');
+      autoTools.dispatchFound(trimmed, { onSheep: pushSheep, source: 'monologue' })
+        .catch(err => console.error('[monologue] auto-tools error:', err.message));
+    }
+    trimmed = autoTools.stripAll(trimmed);
+  }
+
   if (!trimmed) return;
   // Model said it has nothing specific to surface — honor that, don't store
   if (/^SKIP\.?$/i.test(trimmed)) return;
@@ -650,13 +670,22 @@ async function runOneTick() {
     if (!trimmed) trimmed = `(wondered: ${wonderText.slice(0, 80)})`;
   }
 
-  if (isTooSimilarToRecent(trimmed, recentThoughts)) {
+  // GOVERNOR gap-fill: when she's been quiet too long, relax the quality drop-filters
+  // so SOMETHING surfaces and the silence gets filled rather than staying empty.
+  const fillGap = governor.shouldFillGap();
+  if (!fillGap && isTooSimilarToRecent(trimmed, recentThoughts)) {
     return;
   }
-  if (isSilenceEssay(trimmed)) {
+  if (!fillGap && isSilenceEssay(trimmed)) {
     // Drop silently — the model is in the silence attractor; don't store or render.
     return;
   }
+
+  // GOVERNOR pace: hold surfaced thoughts to the min-gap + hourly budget. If paced
+  // out, let the silence stand (she still thought; it just isn't surfaced).
+  const thoughtGate = governor.requestAction('thought');
+  if (!thoughtGate.allow) return;
+  governor.record('thought');
 
   const row = db.insertMonologue({
     content: trimmed,

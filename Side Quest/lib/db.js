@@ -130,7 +130,37 @@ const MIGRATIONS = [
     consumed_ts INTEGER,
     source TEXT
   )`,
-  `CREATE INDEX IF NOT EXISTS idx_inbound_consumed ON inbound_messages(consumed_ts, received_ts)`
+  `CREATE INDEX IF NOT EXISTS idx_inbound_consumed ON inbound_messages(consumed_ts, received_ts)`,
+  // scheduled_tasks — Zoe's own clock. Reminders / one-off and recurring
+  // self-tasks she sets for herself. A ticker in main.js fires due tasks,
+  // surfaces them as a reading, and kicks the heartbeat so she acts on them.
+  //   kind: 'once' (fires at fire_at) | 'recurring' (re-arms fire_at += interval_ms)
+  //   status: pending | fired (once, done) | cancelled
+  `CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL DEFAULT 'once' CHECK(kind IN ('once','recurring')),
+    note TEXT NOT NULL,
+    fire_at INTEGER NOT NULL,
+    interval_ms INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','fired','cancelled')),
+    source TEXT DEFAULT 'zoe',
+    created_ts INTEGER NOT NULL,
+    last_fired_ts INTEGER,
+    fire_count INTEGER DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_scheduled_status_fire ON scheduled_tasks(status, fire_at)`,
+  // email_log — every outbound send (and failure), for the daily-cap backstop
+  // and full visibility. Zoe sends real mail; this is the audit trail.
+  `CREATE TABLE IF NOT EXISTS email_log (
+    id INTEGER PRIMARY KEY,
+    ts INTEGER NOT NULL,
+    to_addr TEXT,
+    subject TEXT,
+    status TEXT NOT NULL,
+    error TEXT,
+    source TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_email_log_ts ON email_log(ts)`
 ];
 
 function init() {
@@ -482,6 +512,74 @@ function getCumulativeSessionTime() {
   return total;
 }
 
+// --- Scheduled tasks (Zoe's self-scheduling clock) ---
+
+function insertScheduledTask({ kind = 'once', note, fireAt, intervalMs = null, source = 'zoe' }) {
+  const ts = Date.now();
+  const info = getDb()
+    .prepare(`INSERT INTO scheduled_tasks
+      (kind, note, fire_at, interval_ms, status, source, created_ts, fire_count)
+      VALUES (?, ?, ?, ?, 'pending', ?, ?, 0)`)
+    .run(kind, note, fireAt, intervalMs, source, ts);
+  return { id: info.lastInsertRowid, ts };
+}
+
+function getDueScheduledTasks(now = Date.now()) {
+  return getDb()
+    .prepare(`SELECT * FROM scheduled_tasks WHERE status = 'pending' AND fire_at <= ? ORDER BY fire_at ASC`)
+    .all(now);
+}
+
+function getPendingScheduledTasks(limit = 20) {
+  return getDb()
+    .prepare(`SELECT * FROM scheduled_tasks WHERE status = 'pending' ORDER BY fire_at ASC LIMIT ?`)
+    .all(limit);
+}
+
+// Mark a task fired. For 'recurring' tasks re-arm fire_at to the next interval
+// boundary in the future (skipping any missed windows while the app was down).
+function markScheduledFired(id) {
+  const now = Date.now();
+  const t = getDb().prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id);
+  if (!t) return null;
+  if (t.kind === 'recurring' && t.interval_ms && t.interval_ms > 0) {
+    let next = t.fire_at + t.interval_ms;
+    while (next <= now) next += t.interval_ms;
+    getDb()
+      .prepare(`UPDATE scheduled_tasks SET fire_at = ?, last_fired_ts = ?, fire_count = fire_count + 1 WHERE id = ?`)
+      .run(next, now, id);
+    return { id, ts: now, rearmedFor: next };
+  }
+  getDb()
+    .prepare(`UPDATE scheduled_tasks SET status = 'fired', last_fired_ts = ?, fire_count = fire_count + 1 WHERE id = ?`)
+    .run(now, id);
+  return { id, ts: now, rearmedFor: null };
+}
+
+function cancelScheduledTask(id) {
+  const info = getDb()
+    .prepare(`UPDATE scheduled_tasks SET status = 'cancelled' WHERE id = ? AND status = 'pending'`)
+    .run(id);
+  return { id, cancelled: info.changes > 0 };
+}
+
+// --- Email log (audit trail + daily-cap backstop) ---
+
+function insertEmailLog({ to, subject, status, error = null, source = 'zoe' }) {
+  const ts = Date.now();
+  const info = getDb()
+    .prepare(`INSERT INTO email_log (ts, to_addr, subject, status, error, source) VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(ts, to, subject, status, error, source);
+  return { id: info.lastInsertRowid, ts };
+}
+
+function countEmailsSentSince(sinceTs) {
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) AS n FROM email_log WHERE status = 'sent' AND ts >= ?`)
+    .get(sinceTs);
+  return row ? row.n : 0;
+}
+
 function getMeta(key) {
   const row = getDb().prepare('SELECT value FROM meta WHERE key = ?').get(key);
   return row ? row.value : null;
@@ -533,6 +631,13 @@ module.exports = {
   getPendingInbounds,
   markInboundConsumed,
   markAllInboundsConsumed,
+  insertScheduledTask,
+  getDueScheduledTasks,
+  getPendingScheduledTasks,
+  markScheduledFired,
+  cancelScheduledTask,
+  insertEmailLog,
+  countEmailsSentSince,
   getCumulativeSessionTime,
   getMeta,
   setMeta,

@@ -32,6 +32,11 @@ const browserLib = require('./lib/browser');
 const filesLib = require('./lib/files');
 const screenLib = require('./lib/screen');
 const chatWatcher = require('./lib/chat_watcher');
+const config = require('./lib/config');
+const schedulerLib = require('./lib/scheduler');
+const presenceLib = require('./lib/presence');
+const emailLib = require('./lib/email');
+const discordLib = require('./lib/discord');
 const {
   startContinuityScheduler,
   stopContinuityScheduler,
@@ -71,6 +76,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  config.loadEnv();
   db.init();
   filesLib.ensureWorkspace();
   currentSessionId = db.startSession();
@@ -114,6 +120,48 @@ app.whenReady().then(() => {
     getWindow: () => mainWindow,
     getSessionId: () => currentSessionId
   });
+
+  // Self-scheduling: her own clock. When a task comes due the ticker surfaces it
+  // and kicks the heartbeat so she actually acts on it.
+  schedulerLib.startScheduler({
+    getWindow: () => mainWindow,
+    kickHeartbeat: () => {
+      const { maybeHeartbeat } = require('./lib/heartbeat');
+      maybeHeartbeat().catch(err => console.error('[main] scheduler heartbeat kick failed:', err.message));
+    }
+  });
+
+  // Email: surface a credential problem early rather than at first send.
+  if (emailLib.isConfigured()) {
+    emailLib.verify().then(r => {
+      console.log(r.ok ? '[main] email SMTP verified, ready to send'
+                       : '[main] email NOT ready (check ZOE_EMAIL_PASS — Gmail needs an App Password): ' + r.reason);
+    }).catch(() => {});
+  } else {
+    console.log('[main] email not configured (.env ZOE_EMAIL_USER/PASS blank) — email tool hidden');
+  }
+
+  // Discord bridge: same Zoe, new I/O surface. Owner DMs route through the real
+  // chat turn; her reply goes back over Discord.
+  if (discordLib.isConfigured()) {
+    discordLib.setHandlers({
+      getWindow: () => mainWindow,
+      onOwnerMessage: async (text) => {
+        try {
+          const r = await runChatTurn(text, [], { unprompted: false, channel: 'discord' });
+          return r && r.say ? r.say : null;
+        } catch (err) {
+          console.error('[main] discord chat turn failed:', err.message);
+          return null;
+        }
+      }
+    });
+    discordLib.start().then(r => {
+      console.log(r.ok ? '[main] discord bridge connected' : '[main] discord bridge failed: ' + r.reason);
+    }).catch(err => console.error('[main] discord start error:', err.message));
+  } else {
+    console.log('[main] discord not configured (.env DISCORD_BOT_TOKEN/OWNER_ID blank) — discord tool hidden');
+  }
 
   // Browser layer status → forward to renderer
   browserLib.setListeners({
@@ -179,6 +227,8 @@ app.on('window-all-closed', async () => {
   stopMonologueScheduler();
   stopHeartbeatScheduler();
   stopContinuityScheduler();
+  schedulerLib.stopScheduler();
+  try { await discordLib.stop(); } catch {}
   try {
     await forceReflectionIfDue();
   } catch (err) {
@@ -354,8 +404,16 @@ function extractUrls(text) {
   return [...new Set(matches)].slice(0, 3);
 }
 
-ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
-  if (!userMessage || !userMessage.trim()) return { ok: false, error: 'empty' };
+// Core chat turn — shared by the IPC handler (renderer) and the Discord bridge.
+// io.emit(token) streams say-tokens; io.onComplete/onError fire UI events. For
+// headless callers (Discord) these default to no-ops and the final say is
+// returned in { ok, say } so the caller can deliver it however it likes.
+async function runChatTurn(userMessage, attachments = [], io = {}) {
+  if (!userMessage || !userMessage.trim()) return { ok: false, error: 'empty', say: null };
+  const emit = io.emit || (() => {});
+  const sendComplete = io.onComplete || (() => {});
+  const sendError = io.onError || (() => {});
+  const channel = io.channel || 'desktop';
 
   markUserActivity();
   markMonologueActivity();
@@ -399,9 +457,9 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
       // Stream the response to the renderer in pieces so it animates naturally
       try {
         for (const ch of result.responseSay) {
-          event.sender.send('chat:say-token', ch);
+          emit(ch);
         }
-        event.sender.send('chat:complete', { saidId: saidRow.id, truncated: 0, protocolInvoked: triggerMatch.protocol.id });
+        sendComplete({ saidId: saidRow.id, truncated: 0, protocolInvoked: triggerMatch.protocol.id });
       } catch {}
 
       // If hard_break_rp: abandon any active threads that were extracted from
@@ -426,7 +484,7 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
       selfDialogue.resume();
 
       console.log(`[main] PROTOCOL INTERCEPTED: ${triggerMatch.protocol.trigger_phrase} → ${triggerMatch.action} (${triggerMatch.matchType})`);
-      return { ok: true, intercepted: true, protocolId: triggerMatch.protocol.id };
+      return { ok: true, intercepted: true, protocolId: triggerMatch.protocol.id, say: result.responseSay };
     }
   }
   // === END INTERCEPTOR ===
@@ -464,11 +522,17 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
   // If the user mentioned a URL or known tab title, update the tab-mention state
   // so Eloise can resolve tab="last" correctly
   try { browserLib.noteMention(userMessage); } catch {}
-  // Tools block injected into her prompt: files + screen (always available) + browser (when connected)
+  // Tools block injected into her prompt: files + screen + scheduling + presence
+  // (always available); email + discord (only when their creds are configured);
+  // browser (only when connected).
   const fileBlock = filesLib.buildPromptBlock();
   const screenBlock = screenLib.buildPromptBlock();
+  const schedBlock = schedulerLib.buildPromptBlock();
+  const presenceBlock = presenceLib.buildPromptBlock();
+  const emailBlock = emailLib.buildPromptBlock();           // null when unconfigured
+  const discordConnBlock = discordLib.buildPromptBlock();   // null when unconfigured
   const browserConnBlock = browserLib.isConnected() ? browserLib.buildPromptBlock() : null;
-  const browserBlock = [fileBlock, screenBlock, browserConnBlock].filter(Boolean).join('\n\n') || null;
+  const browserBlock = [fileBlock, screenBlock, schedBlock, presenceBlock, emailBlock, discordConnBlock, browserConnBlock].filter(Boolean).join('\n\n') || null;
   // Pull any attachment content the renderer sent up with this turn (text/md/json)
   const attachmentText = (Array.isArray(attachments) ? attachments : [])
     .map(a => `${userName || 'Lucas'} attached "${a.name || 'file'}":\n${(a.text || '').slice(0, 6000)}`)
@@ -479,6 +543,13 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
 
   // If the user shared links or attached files, surface them prominently in the message
   let composedUserMessage = userMessage;
+  // CHANNEL AWARENESS — tell her which surface this message reached her on, so she
+  // doesn't reference the desktop UI while on Discord, and knows Discord is how she
+  // reaches Lucas when he's away. Injected into the model-facing message only; the
+  // stored user turn stays clean.
+  if (channel === 'discord') {
+    composedUserMessage = `[This message reached you over Discord DM — Lucas is messaging you from Discord, likely away from the desktop. Your reply goes back to him on Discord, so write for that: no references to the desktop window or sheep panel. If later, while he's quiet, you have something worth telling him, remember you can reach him here with <discord-dm>...</discord-dm>.]\n\n${composedUserMessage}`;
+  }
   if (sharedPages.length > 0) {
     const linkBlocks = sharedPages.map(p =>
       `[I just looked at ${p.url} — title: "${p.title || '(no title)'}"]\n${p.text.slice(0, 2500)}`
@@ -522,7 +593,7 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
   const parser = new TagStreamParser({
     onSayToken: (token) => {
       try {
-        event.sender.send('chat:say-token', token);
+        emit(token);
       } catch {}
     }
   });
@@ -535,8 +606,12 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
     });
   } catch (err) {
     console.error('[main] streamChat failed:', err);
-    try { event.sender.send('chat:error', err.message || String(err)); } catch {}
-    return { ok: false, error: err.message };
+    try { sendError(err.message || String(err)); } catch {}
+    resumeMonologue();
+    resumeHeartbeat();
+    resumeContinuity();
+    selfDialogue.resume();
+    return { ok: false, error: err.message, say: null };
   }
 
   const { thought, say, truncated } = parser.finalize();
@@ -582,12 +657,32 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
     ...screenLib.parseTags(thought || ''),
     ...screenLib.parseTags(say || '')
   ];
+  const schedTagsToRun = [
+    ...schedulerLib.parseTags(thought || ''),
+    ...schedulerLib.parseTags(say || '')
+  ];
+  const presenceTagsToRun = [
+    ...presenceLib.parseTags(thought || ''),
+    ...presenceLib.parseTags(say || '')
+  ];
+  const emailTagsToRun = [
+    ...emailLib.parseTags(thought || ''),
+    ...emailLib.parseTags(say || '')
+  ];
+  const discordTagsToRun = [
+    ...discordLib.parseTags(thought || ''),
+    ...discordLib.parseTags(say || '')
+  ];
 
   let thoughtStripped = (thought || '').replace(/<wonder>[\s\S]*?<\/wonder>/gi, '').trim();
   thoughtStripped = openThreadsLib.stripStatusTags(thoughtStripped);
   thoughtStripped = browserLib.stripTags(thoughtStripped);
   thoughtStripped = filesLib.stripTags(thoughtStripped);
   thoughtStripped = screenLib.stripTags(thoughtStripped);
+  thoughtStripped = schedulerLib.stripTags(thoughtStripped);
+  thoughtStripped = presenceLib.stripTags(thoughtStripped);
+  thoughtStripped = emailLib.stripTags(thoughtStripped);
+  thoughtStripped = discordLib.stripTags(thoughtStripped);
 
   if (thoughtStripped) {
     db.insertTurn({
@@ -619,6 +714,11 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
   sayStripped = filesLib.stripTags(sayStripped);
   // Strip any screen-observe tags that leaked into say
   sayStripped = screenLib.stripTags(sayStripped);
+  // Strip any scheduling / presence / email / discord tags that leaked into say
+  sayStripped = schedulerLib.stripTags(sayStripped);
+  sayStripped = presenceLib.stripTags(sayStripped);
+  sayStripped = emailLib.stripTags(sayStripped);
+  sayStripped = discordLib.stripTags(sayStripped);
   const trimmedSay = sayStripped;
   const isPlaceholder = /^[\s.()]*(empty|silence|nothing|none|n\/a|null|undefined)[\s.()]*$/i.test(trimmedSay);
   const finalSaid = (trimmedSay && !isPlaceholder) ? trimmedSay : '…';
@@ -631,7 +731,7 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
   });
 
   try {
-    event.sender.send('chat:complete', { saidId: saidRow.id, truncated });
+    sendComplete({ saidId: saidRow.id, truncated });
   } catch {}
 
   db.setMeta('last_ai_utterance_at', String(Date.now()));
@@ -778,6 +878,70 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
     })().catch(() => {});
   }
 
+  // Background: dispatch scheduling tags — set/list/cancel her own timers.
+  if (schedTagsToRun.length > 0) {
+    (async () => {
+      for (const t of schedTagsToRun.slice(0, 4)) {
+        try {
+          const r = await schedulerLib.dispatch(t);
+          if (r && r.ok && t.tag === 'schedule-list' && r.text) {
+            const row = db.insertMonologue({ content: r.text, model: 'self-schedule', type: 'reading' });
+            try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: '(listed schedule)', type: 'reading' }); } catch {}
+          } else if (r && r.ok && t.tag === 'schedule') {
+            try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(scheduled #${r.id}) ${r.summary}`, type: 'reading' }); } catch {}
+          }
+          console.log(`[main] schedule ${t.tag}: ${r?.ok ? 'ok' : 'FAIL ' + r?.reason}`);
+        } catch (err) { console.error('[main] schedule dispatch error:', err.message); }
+      }
+    })().catch(() => {});
+  }
+
+  // Background: dispatch presence tags — desktop notifications + clipboard.
+  if (presenceTagsToRun.length > 0) {
+    (async () => {
+      for (const t of presenceTagsToRun.slice(0, 4)) {
+        try {
+          const r = await presenceLib.dispatch(t);
+          if (r && r.ok && t.tag === 'clipboard-read' && r.text != null) {
+            const row = db.insertMonologue({ content: `I read the clipboard:\n${r.text}`, model: 'clipboard', type: 'reading' });
+            try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: '(read clipboard)', type: 'reading' }); } catch {}
+          } else if (r && r.ok) {
+            try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(${t.tag})`, type: 'reading' }); } catch {}
+          }
+          console.log(`[main] presence ${t.tag}: ${r?.ok ? 'ok' : 'FAIL ' + r?.reason}`);
+        } catch (err) { console.error('[main] presence dispatch error:', err.message); }
+      }
+    })().catch(() => {});
+  }
+
+  // Background: dispatch email tags — REAL outbound mail. Every send is logged
+  // (email_log) and mirrored to the sheep panel.
+  if (emailTagsToRun.length > 0) {
+    (async () => {
+      for (const t of emailTagsToRun.slice(0, 3)) {
+        try {
+          const r = await emailLib.dispatch(t, { source: 'chat' });
+          const desc = r.ok ? `(emailed) ${t.attrs.to} — ${t.attrs.subject || '(no subject)'}` : `(email failed) ${r.reason}`;
+          try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: desc, type: 'reading' }); } catch {}
+          console.log(`[main] email: ${r?.ok ? 'sent to ' + t.attrs.to : 'FAIL ' + r?.reason}`);
+        } catch (err) { console.error('[main] email dispatch error:', err.message); }
+      }
+    })().catch(() => {});
+  }
+
+  // Background: dispatch discord-dm tags — Zoe proactively DMs Lucas.
+  if (discordTagsToRun.length > 0) {
+    (async () => {
+      for (const t of discordTagsToRun.slice(0, 3)) {
+        try {
+          const r = await discordLib.dispatch(t);
+          try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: r.ok ? "(DM'd Lucas on Discord)" : `(discord failed) ${r.reason}`, type: 'reading' }); } catch {}
+          console.log(`[main] discord-dm: ${r?.ok ? 'sent' : 'FAIL ' + r?.reason}`);
+        } catch (err) { console.error('[main] discord dispatch error:', err.message); }
+      }
+    })().catch(() => {});
+  }
+
   // Background: if Stheno emitted any <wonder> tags, fire self-dialogue(s) async.
   // First wonder takes priority; additional ones queue against the rate limit and
   // will simply no-op if the cooldown blocks them — that's intentional.
@@ -845,5 +1009,15 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
     }
   }).catch(err => console.error('[main] commitment extraction failed:', err.message));
 
-  return { ok: true };
+  return { ok: true, say: finalSaid };
+}
+
+// Thin IPC wrapper — the renderer's chat turn. Streams say-tokens + UI events
+// to the sender; the shared runChatTurn does the work.
+ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
+  return runChatTurn(userMessage, attachments, {
+    emit: (t) => { try { event.sender.send('chat:say-token', t); } catch {} },
+    onComplete: (info) => { try { event.sender.send('chat:complete', info); } catch {} },
+    onError: (e) => { try { event.sender.send('chat:error', e); } catch {} }
+  });
 });

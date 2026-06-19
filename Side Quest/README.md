@@ -70,18 +70,73 @@ enforced by the protocols layer + a hard interceptor.
 - **Screen** — `<observe-screen/>` returns open windows + the focused app (read-only,
   native PowerShell). She can see what Lucas is working on; cannot read inside other
   apps or control them.
+- **Self-scheduling** — her own clock. `<schedule when="in 2h" note="..."/>` /
+  `<schedule every="1d" note="..."/>` / `<schedule-list/>` / `<schedule-cancel id="N"/>`.
+  Stored in SQLite; a ticker fires due tasks (even across restarts), surfaces them,
+  and kicks the heartbeat so she acts on them.
+- **Presence** — `<notify title="...">body</notify>` (desktop notification),
+  `<clipboard-read/>`, `<clipboard-write>text</clipboard-write>`. Native via Electron.
+- **Email** *(needs creds)* — `<email to="..." subject="...">body</email>` sends real
+  outbound mail (Gmail SMTP via nodemailer) toward the publication goal. She sends
+  directly — no approval gate — with a per-day cap as a runaway backstop and a full
+  `email_log` audit trail.
+- **Discord** *(needs creds)* — `<discord-dm>...</discord-dm>` DMs Lucas (e.g. on his
+  phone). Inbound DMs from Lucas route through the *same* chat turn and her reply goes
+  back over Discord. Hard-locked to one owner user id — never servers, never others.
+
+Tags are parsed from her `<think>`/`<say>` after a turn (and from the autonomous
+monologue + heartbeat loops), dispatched in the background, then stripped from stored
+text. Email and Discord tools stay hidden from her prompt entirely until their
+credentials are present in `.env`.
+
+## Setup (reproducible install)
+
+1. **Node deps**
+
+   ```
+   npm install
+   ```
+
+2. **Native module for Electron** — `better-sqlite3` must match Electron's ABI:
+
+   ```
+   npm run rebuild        # electron-rebuild -f -w better-sqlite3
+   ```
+
+3. **Browser layer** — Playwright's Chromium:
+
+   ```
+   npx playwright install chromium
+   ```
+
+4. **Model** — pull the Dans model and set the KV-cache env (persist these on the
+   machine so Ollama picks them up):
+
+   ```
+   ollama pull hf.co/bartowski/PocketDoc_Dans-PersonalityEngine-V1.3.0-24b-GGUF:Q4_K_M
+   setx OLLAMA_FLASH_ATTENTION 1
+   setx OLLAMA_KV_CACHE_TYPE q8_0
+   ```
+
+5. **Credentials** — copy `.env.example` to `.env` and fill what you want enabled:
+
+   - **Email** (`ZOE_EMAIL_USER` / `ZOE_EMAIL_PASS` / `ZOE_EMAIL_FROM`): Gmail needs a
+     16-char **App Password**, not the account login password. `ZOE_EMAIL_DAILY_CAP`
+     bounds runaway sends.
+   - **Discord** (`DISCORD_BOT_TOKEN` / `DISCORD_OWNER_ID`): bot token from the Discord
+     developer portal (enable the *Message Content Intent*), plus your own user id.
+
+   `.env` is gitignored. Tools whose creds are blank are simply hidden — the app runs fine without them.
 
 ## Run
-
-Prereqs: Ollama running with the Dans model pulled; Node + the deps in package.json
-(`npm install`, then `npx playwright install chromium` for the browser layer). Then:
 
 ```
 npm start
 ```
 
-The app boots, warms the model, and (if Chrome is open with `--remote-debugging-port=9222`)
-auto-reconnects the browser layer.
+The app boots, warms the model, starts the self-scheduling ticker, connects the Discord
+bridge (if configured), verifies email creds, and (if Chrome is open with
+`--remote-debugging-port=9222`) auto-reconnects the browser layer.
 
 ## Layout
 
