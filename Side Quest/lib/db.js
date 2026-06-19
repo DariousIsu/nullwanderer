@@ -160,7 +160,26 @@ const MIGRATIONS = [
     error TEXT,
     source TEXT
   )`,
-  `CREATE INDEX IF NOT EXISTS idx_email_log_ts ON email_log(ts)`
+  `CREATE INDEX IF NOT EXISTS idx_email_log_ts ON email_log(ts)`,
+  // knowledge — the integration/learning store. Holds SHORT synthesized notes +
+  // references + action trajectories (never copies of source corpora — see the
+  // reference-not-copy principle). embedding = JSON float[384] (bge-small) for JS
+  // cosine; knowledge_fts mirrors content for keyword (BM25). Retrieval fuses both.
+  //   kind: note | fact | trajectory | reference
+  `CREATE TABLE IF NOT EXISTS knowledge (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL DEFAULT 'note',
+    content TEXT NOT NULL,
+    embedding TEXT,
+    source TEXT,
+    importance REAL DEFAULT 0.5,
+    created_ts INTEGER NOT NULL,
+    last_used_ts INTEGER,
+    use_count INTEGER DEFAULT 0,
+    links TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_kind ON knowledge(kind)`,
+  `CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(content)`
 ];
 
 function init() {
@@ -580,6 +599,64 @@ function countEmailsSentSince(sinceTs) {
   return row ? row.n : 0;
 }
 
+// --- Knowledge store (integration/learning layer) ---
+
+function insertKnowledge({ kind = 'note', content, embedding = null, source = null, importance = 0.5, links = null }) {
+  const ts = Date.now();
+  const info = getDb()
+    .prepare(`INSERT INTO knowledge (kind, content, embedding, source, importance, created_ts, links)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(kind, content, embedding, source, importance, ts, links ? JSON.stringify(links) : null);
+  const id = info.lastInsertRowid;
+  try { getDb().prepare('INSERT INTO knowledge_fts(rowid, content) VALUES (?, ?)').run(id, content); } catch {}
+  return { id, ts };
+}
+
+// All embeddings (id + raw JSON + light metadata) for in-JS cosine. Fine at the
+// single-user scale (hundreds–thousands of notes = ms); swap for ANN if it grows.
+function getAllKnowledgeEmbeddings() {
+  return getDb()
+    .prepare('SELECT id, kind, embedding, importance, created_ts, last_used_ts FROM knowledge WHERE embedding IS NOT NULL')
+    .all();
+}
+
+// FTS5 keyword search. Caller passes raw text; we tokenize to words OR-joined so
+// arbitrary input can't break FTS query syntax. Returns [{id, score}] (BM25; lower=better).
+function ftsSearchKnowledge(query, limit = 12) {
+  const terms = String(query || '').toLowerCase().match(/[a-z0-9]+/g);
+  if (!terms || terms.length === 0) return [];
+  const matchExpr = terms.slice(0, 24).join(' OR ');
+  try {
+    return getDb()
+      .prepare('SELECT rowid AS id, bm25(knowledge_fts) AS score FROM knowledge_fts WHERE knowledge_fts MATCH ? ORDER BY score LIMIT ?')
+      .all(matchExpr, limit);
+  } catch { return []; }
+}
+
+function getKnowledgeByIds(ids) {
+  if (!ids || ids.length === 0) return [];
+  const ph = ids.map(() => '?').join(',');
+  return getDb().prepare(`SELECT * FROM knowledge WHERE id IN (${ph})`).all(...ids);
+}
+
+function touchKnowledge(id) {
+  const now = Date.now();
+  getDb().prepare('UPDATE knowledge SET use_count = use_count + 1, last_used_ts = ? WHERE id = ?').run(now, id);
+}
+
+function countKnowledge() {
+  return getDb().prepare('SELECT COUNT(*) AS n FROM knowledge').get().n;
+}
+
+function deleteKnowledgeBySource(source) {
+  const ids = getDb().prepare('SELECT id FROM knowledge WHERE source = ?').all(source).map(r => r.id);
+  for (const id of ids) {
+    getDb().prepare('DELETE FROM knowledge WHERE id = ?').run(id);
+    try { getDb().prepare('DELETE FROM knowledge_fts WHERE rowid = ?').run(id); } catch {}
+  }
+  return ids.length;
+}
+
 function getMeta(key) {
   const row = getDb().prepare('SELECT value FROM meta WHERE key = ?').get(key);
   return row ? row.value : null;
@@ -638,6 +715,13 @@ module.exports = {
   cancelScheduledTask,
   insertEmailLog,
   countEmailsSentSince,
+  insertKnowledge,
+  getAllKnowledgeEmbeddings,
+  ftsSearchKnowledge,
+  getKnowledgeByIds,
+  touchKnowledge,
+  countKnowledge,
+  deleteKnowledgeBySource,
   getCumulativeSessionTime,
   getMeta,
   setMeta,

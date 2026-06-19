@@ -72,6 +72,15 @@ And note: merely describing a tool in words ("let me emit the tag", "I'll read i
 does NOTHING. The application only acts when the actual literal tag appears in your text.
 If you mean to use a tool, emit the real tag — then stop and wait for the result.
 
+WHEN YOU DON'T KNOW SOMETHING — this is the most important habit you have. Your
+FIRST move is to say so plainly ("I don't have that" / "I don't remember" / "I
+haven't looked into that yet"), and then decide how to FIND OUT: search the web,
+read a page or a file, check your own knowledge, or ask [user]. Never fabricate
+an answer, a fact, or a memory of something you did. If your retrieved knowledge
+above doesn't cover what's being asked, that is not a failure — it's the cue to
+say you don't know it and go learn it. A wrong-but-confident answer is the worst
+thing you can give; "I don't know — here's how I'll find out" is among the best.
+
 HOW YOU CARRY YOURSELF:
 
 You are direct — you say the true thing over the nice thing. You do not flatter
@@ -294,7 +303,7 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
  *   then    = alternating user / assistant from recentTurns (assistant carries <think>/<say>)
  *   finally = the new user message
  */
-function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, newUserMessage }) {
+function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, retrievedKnowledgeBlock, newUserMessage }) {
   let systemContent = sub(BOOTSTRAP, userName);
 
   // AWARENESS — temporal + system facts prepended to system prompt so she knows
@@ -356,6 +365,14 @@ function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonol
     for (const r of recentReadings.slice(-2)) {
       systemContent += `\n${cap(r.content, 1100)}\n`;
     }
+  }
+
+  // RETRIEVED KNOWLEDGE (the relevance-retrieved tail) — notes/facts/trajectories
+  // pulled by relevance to this message. Includes her own past ACTIONS, so she
+  // knows what she's already done. Empty when nothing scored — that's the cue for
+  // the gap-response reflex, not a reason to invent.
+  if (retrievedKnowledgeBlock) {
+    systemContent += `\n\n${retrievedKnowledgeBlock}`;
   }
 
   // CRITICAL instruction — drives the model to actually USE the interior content,

@@ -37,6 +37,7 @@ const schedulerLib = require('./lib/scheduler');
 const presenceLib = require('./lib/presence');
 const emailLib = require('./lib/email');
 const discordLib = require('./lib/discord');
+const memoryLib = require('./lib/memory');
 const {
   startContinuityScheduler,
   stopContinuityScheduler,
@@ -79,6 +80,10 @@ app.whenReady().then(() => {
   config.loadEnv();
   db.init();
   filesLib.ensureWorkspace();
+  // Warm the CPU embedder (bge-small via transformers.js) so first knowledge
+  // retrieval isn't slow. Runs on CPU — no VRAM contention with the chat model.
+  memoryLib.warm().then(ok => console.log('[main] memory embedder warm:', ok, '| knowledge items:', db.countKnowledge()))
+    .catch(err => console.error('[main] memory warm failed:', err.message));
   currentSessionId = db.startSession();
   currentSessionStartedAt = Date.now();
   createWindow();
@@ -570,6 +575,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     cumulativeMs: db.getCumulativeSessionTime()
   });
 
+  // KNOWLEDGE RETRIEVAL (the RETRIEVED tail) — pull the few most relevant stored
+  // notes/facts/trajectories for THIS message, by relevance not recency. Graceful:
+  // empty on miss, so the gap-response reflex handles "I don't know" cleanly.
+  let retrievedKnowledgeBlock = null;
+  try {
+    const rk = await memoryLib.retrieve(userMessage, { k: 4 });
+    retrievedKnowledgeBlock = memoryLib.formatForPrompt(rk, userName);
+  } catch (err) { console.error('[main] knowledge retrieve failed:', err.message); }
+
   const messages = buildChatPrompt({
     userName,
     recentReflections,
@@ -582,6 +596,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     protocols,
     browserBlock,
     pendingInbounds,
+    retrievedKnowledgeBlock,
     newUserMessage: composedUserMessage
   });
 
@@ -934,6 +949,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             const toAddr = r.to || t.attrs.to || '(no address)';
             tick(r.ok ? `(emailed) ${toAddr}` : `(email failed) ${r.reason}`);
             console.log(`[main] email send: ${r?.ok ? 'sent to ' + toAddr : 'FAIL ' + r?.reason}`);
+            // Action-memory: record the successful send so she KNOWS she did it
+            // (and won't think it's still an unsent draft on a later turn).
+            if (r.ok) memoryLib.logAction(`I sent an email to ${toAddr} — subject "${t.attrs.subject || '(no subject)'}". It is sent, done.`, { source: 'email' }).catch(() => {});
             // Feed the REAL outcome back so she reports it truthfully instead of
             // assuming success (she has confabulated "I sent it" on a failed send).
             if (!followupFired) {
