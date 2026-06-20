@@ -248,7 +248,23 @@ const MIGRATIONS = [
   // url, an action, an email, the reflection window). JSON array of
   // {type,label,refTable?,refId?,url?}. Lets her drill from a compact note back to
   // the full source without the store ever holding a copy of it.
-  `ALTER TABLE knowledge ADD COLUMN provenance TEXT`
+  `ALTER TABLE knowledge ADD COLUMN provenance TEXT`,
+  // permissions — the authoritative list of what Zoe is ALREADY allowed/able to do.
+  // The structured source of truth behind "settled permission": always injected so
+  // she stops ASKING for / PROPOSING capabilities she already has (chronic under-reach
+  // on the 24B — she re-pitches "let me establish file access" when it's long granted).
+  // Sibling of `protocols` (rules of engagement); this table is GRANTS.
+  //   status: granted | granted_with_judgment (outward/irreversible — her call, not a
+  //   permission to ask for) | ask_first | denied
+  `CREATE TABLE IF NOT EXISTS permissions (
+    id INTEGER PRIMARY KEY,
+    capability TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'granted' CHECK(status IN ('granted','granted_with_judgment','ask_first','denied')),
+    description TEXT NOT NULL,
+    how TEXT,
+    updated_ts INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_permissions_status ON permissions(status)`
 ];
 
 function init() {
@@ -555,6 +571,39 @@ function invokeProtocol(id) {
 function revokeProtocol(id) {
   getDb().prepare(`UPDATE protocols SET status = 'revoked' WHERE id = ?`).run(id);
   return { id };
+}
+
+// --- Permissions (the authoritative grant list) ---
+
+// Seed a capability if absent (won't clobber a status Lucas later changed).
+function seedPermission({ capability, status = 'granted', description, how = null }) {
+  getDb()
+    .prepare(`INSERT OR IGNORE INTO permissions (capability, status, description, how, updated_ts) VALUES (?,?,?,?,?)`)
+    .run(capability, status, description, how, Date.now());
+}
+
+// Explicitly change a capability's status (grant/deny/ask). Upserts if new.
+function setPermission(capability, status, { description = null, how = null } = {}) {
+  const existing = getDb().prepare('SELECT id FROM permissions WHERE capability = ?').get(capability);
+  if (existing) {
+    getDb().prepare('UPDATE permissions SET status = ?, updated_ts = ? WHERE capability = ?').run(status, Date.now(), capability);
+  } else {
+    getDb().prepare(`INSERT INTO permissions (capability, status, description, how, updated_ts) VALUES (?,?,?,?,?)`)
+      .run(capability, status, description || capability, how, Date.now());
+  }
+  return { capability, status };
+}
+
+function getAllPermissions() {
+  return getDb()
+    .prepare(`SELECT * FROM permissions ORDER BY CASE status
+                WHEN 'granted' THEN 0 WHEN 'granted_with_judgment' THEN 1
+                WHEN 'ask_first' THEN 2 ELSE 3 END, capability`)
+    .all();
+}
+
+function getPermission(capability) {
+  return getDb().prepare('SELECT * FROM permissions WHERE capability = ? LIMIT 1').get(capability);
 }
 
 // --- Inbound messages (queued chat-bot replies awaiting consumption) ---
@@ -962,6 +1011,10 @@ module.exports = {
   confirmProtocol,
   invokeProtocol,
   revokeProtocol,
+  seedPermission,
+  setPermission,
+  getAllPermissions,
+  getPermission,
   insertInbound,
   getPendingInbounds,
   markInboundConsumed,

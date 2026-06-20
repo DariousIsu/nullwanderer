@@ -125,6 +125,11 @@ function buildPrompt({ userName, recentMonologue, recentReadings, recentReflecti
     sys = awareness + '\n\n' + sys;
   }
 
+  // PERMISSIONS — the authoritative grant list, pinned high so her idle loop acts
+  // on what's already hers instead of proposing to "establish" capabilities she has.
+  try { const permBlock = require('./permissions').buildPromptBlock(); if (permBlock) sys = permBlock + '\n' + sys; }
+  catch (e) { console.error('[monologue] permissions block failed:', e.message); }
+
   // PROTOCOLS — pinned to ABSOLUTE TOP. The subconscious also needs to know the
   // rules of engagement so it doesn't generate in-RP content when an exit
   // protocol has been invoked, and so its readings of user messages don't

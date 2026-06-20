@@ -342,6 +342,11 @@ function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonol
     systemContent = awareness + '\n\n' + systemContent;
   }
 
+  // PERMISSIONS — the authoritative grant list ("what's already yours"). Pinned
+  // high so she stops asking for / proposing capabilities she already has.
+  try { const permBlock = require('./permissions').buildPromptBlock(); if (permBlock) systemContent = permBlock + '\n' + systemContent; }
+  catch (e) { console.error('[context] permissions block failed:', e.message); }
+
   // PROTOCOLS — durable user-AI agreements pinned to ABSOLUTE TOP. These are
   // the rules of engagement (safe words, mode commands, boundaries, conversational
   // rules). Never aged out. Highest primacy weight — above even awareness.
