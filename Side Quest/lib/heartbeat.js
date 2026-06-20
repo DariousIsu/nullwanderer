@@ -188,6 +188,11 @@ async function maybeHeartbeat() {
   const earlyInbounds = db.getPendingInbounds(2);
   const hasInbound = earlyInbounds.length > 0;
 
+  // OFF THE CLOCK: suppress spontaneous (non-inbound) heartbeats — she shouldn't
+  // ping Lucas with her own musings during personal/play time. A genuine external
+  // inbound (email, a watched chat) still gets through.
+  try { if (!hasInbound && require('./personal').isOn()) return; } catch {}
+
   if (!hasInbound) {
     const idleMs = now - lastUserActivityTs;
     if (idleMs < IDLE_THRESHOLD_MS) return;

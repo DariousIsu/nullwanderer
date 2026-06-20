@@ -18,7 +18,7 @@
 
 const db = require('./db');
 const webLib = require('./web');
-const { streamChat } = require('./ollama');
+const ollama = require('./ollama');  // call ollama.streamChat at use-time (stub-friendly)
 const MODEL = require('./config').model();
 
 const STEPS = ['none', 'open', 'inventory', 'choose', 'chat'];
@@ -179,7 +179,7 @@ async function runTick(ctx = {}) {
     const inv = JSON.parse(db.getMeta('play_inventory') || '[]');
     if (!inv.length) { set('inventory'); return { step, ok: false, note: 'empty inventory → re-read' }; }
     let out = '';
-    await streamChat({ model: MODEL, messages: _chooseMessages({ ...ctx, inventory: inv }), options: { temperature: 0.9, top_p: 0.95, num_ctx: 8192, num_predict: 40 }, onToken: (t) => { out += t; } });
+    await ollama.streamChat({ model: MODEL, messages: _chooseMessages({ ...ctx, inventory: inv }), options: { temperature: 0.9, top_p: 0.95, num_ctx: 8192, num_predict: 40 }, onToken: (t) => { out += t; } });
     const pick = parsePick(out, inv);
     if (!pick) { const gaveUp = _strike(); return { step, ok: false, note: `could not parse a pick${gaveUp ? ' (session reset)' : ''}` }; }
     const r = await webLib.click(pick.handle);
@@ -196,7 +196,7 @@ async function runTick(ctx = {}) {
     const char = character();
     const lastReply = db.getMeta(lastReplyKey) || '';
     let out = '';
-    await streamChat({ model: MODEL, messages: _chatMessages({ ...ctx, character: char, lastReply }), options: { temperature: 0.95, top_p: 0.95, num_ctx: 8192, num_predict: 200 }, onToken: (t) => { out += t; } });
+    await ollama.streamChat({ model: MODEL, messages: _chatMessages({ ...ctx, character: char, lastReply }), options: { temperature: 0.95, top_p: 0.95, num_ctx: 8192, num_predict: 200 }, onToken: (t) => { out += t; } });
     const line = parseChatLine(out);
     if (!line) { const gaveUp = _strike(); return { step, ok: false, note: `no line produced${gaveUp ? ' (session reset)' : ''}` }; }
     const r = await webLib.chatSend(line, char);
