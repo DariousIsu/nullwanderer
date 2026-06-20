@@ -74,10 +74,14 @@ both *who she is* and *what she can do*:
   (each note links to its nearest neighbour, A-MEM-style), retrieved **on demand** by relevance.
   Knowledge means *real, applicable* know-how — a fact, a how-to step, a correct procedure,
   a rule of thumb — never abstract musings (those are dropped). Skills are `kind='skill'`.
+  **Write-time dedup** (`memory.storeDeduped`, Mem0-style): before adding a note, the nearest
+  existing one is checked and an LLM confirms — a true duplicate **NOOPs** instead of piling up,
+  so the store stays clean even under heavy autonomous research.
 
 **Reflection-as-router** — when enough significant thinking accumulates, reflection fires and
-**classifies** each durable takeaway: `[SELF]` → identity track, `[KNOWLEDGE]`/`[SKILL]` →
-capability track, everything else **dropped** (the noise filter). One pass feeds both tracks.
+**classifies** each durable takeaway: `[SELF]` → identity, `[KNOWLEDGE]`/`[SKILL]` → capability,
+`[INTEREST]` → a developing taste in identity (experience → taste), everything else **dropped**
+(the noise filter). One pass feeds both tracks.
 
 **Experience layer (`lib/experience.js`)** — doing → durable know-how (Voyager/Reflexion). On
 a completed action the model distills the **reusable procedure** ("to do X: …") into the
@@ -93,7 +97,35 @@ reciprocal-rank, top-K≈4, scored by recency·relevance·importance. Injected b
 
 **Gap-response reflex** — a retrieval miss is the cue to say "I don't know" and plan how to
 find out, not to fabricate. **Pinned vs retrieved** — identity/protocols/goals pinned every
-turn (deterministic); the rest retrieved by relevance.
+turn (deterministic); the rest retrieved by relevance. **Recall** is query-relevant for both
+tracks: `self_model.buildContextBlock(query)` surfaces the *specific* preference/fact a
+question is about (so "favorite flower" carries the ranunculus entry), and `retrieveScored`
+excludes internal machinery (`focus_tombstone`) so real notes aren't crowded out.
+
+### Personality — the "ghost command"
+The chat model (Mistral-Small Instruct) has a hard trained reflex: any self/preference/identity
+question ("what's your favorite flower?", "what's your name?") gets the "I'm an AI, I have no
+preferences" disclaimer. No prompting overrides it — the *identity-question framing* is the
+trigger. So a **narrow deterministic interceptor** (`lib/preferences.js`) routes around it:
+- A taste/identity question (`favorite` / `would you rather` / `are you a fan of` / `your name`
+  / `who are you`) is answered **from `self_model` directly**, before the model runs — speaking
+  a held interest, or **forming + storing** a new one (reframed as a "pick one" writing task,
+  which the model answers cleanly).
+- The trigger is deliberately **narrow** so it can never hijack a substantive question ("your
+  take on permitting reform"); all real work/research/tool turns flow through the full pipeline
+  untouched. The self lives in *data*; the interceptor just lets a stubborn model voice it.
+
+### A developing self (not a band-aid)
+Because the model is frozen (no fine-tuning on this hardware), development lives in the memory
+layer and is expressed through the interceptor:
+- **Revision** — `self_model.record` runs a 3-way Mem0 classify (SAME / UPDATE / DIFFERENT). On
+  **UPDATE** a changed stance/favorite *replaces* the old value in the same slot (matched by
+  *favorite-slot*, not just cosine, since "Parasite"→"Portrait of a Lady on Fire" embeds far
+  apart) and writes a `self_evolution` trace she can recall ("I used to hold X, now Y").
+- **Experience → interest** — the reflection router's `[INTEREST]` channel turns things she's
+  drawn to (from what she read/did) into developing tastes.
+- **Seed** — a one-time self-generated personal canon (`scripts/seed_personal_canon.js`), free
+  to evolve thereafter. Her favorites move; her tastes grow from what she encounters.
 
 ### Tools Zoe can use
 - **Her own browser** (`lib/web.js`, a dedicated Playwright-driven Chrome with its own
