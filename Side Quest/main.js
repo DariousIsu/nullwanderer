@@ -504,35 +504,7 @@ function extractUrls(text) {
   return [...new Set(matches)].slice(0, 3);
 }
 
-// Detect a clear "use your own browser / look it up online" request and return
-// { target } (a URL or search terms) for the web-intent interceptor, else null.
-// Conservative: requires BOTH a browser/web cue and an action verb (or an explicit
-// online-search), so normal conversation ("let's search for an approach") won't fire.
-function detectWebIntent(text) {
-  if (!text) return null;
-  const t = String(text).trim();
-  const tag = t.match(/<web-open>\s*([\s\S]*?)\s*<\/web-open>/i);
-  if (tag) return { target: (tag[1] || '').trim() || 'https://duckduckgo.com' };
-
-  const url = t.match(/https?:\/\/\S+/i) || t.match(/\b[a-z0-9-]+\.[a-z]{2,}(?:\/\S*)?\b/i);
-  const search = t.match(/\b(?:search(?:\s+for)?|look\s*up|google|find)\b\s+(?:the\s+|for\s+)?(.{2,90})/i);
-  const verb = /(open|opening|launch|fire up|pull up|go to|browse|web-open|\buse\b)/i.test(t);
-  const webCue = /\b(browser|web|online|internet|web-open)\b/i.test(t);
-  // "take a look at this <url>" / "check out <url>" / "read this <url>" → open it in HER browser.
-  const viewVerb = /\b(look|take a look|check(?:\s+(?:it|this|out))?|see|read|view|visit|peek|here'?s|this is)\b/i.test(t);
-
-  // A pasted URL with a viewing/visiting verb is the clearest "open this for me".
-  if (url && (viewVerb || verb || webCue)) return { target: url[0] };
-
-  if (verb && webCue) {
-    if (search) return { target: search[1].trim().replace(/[.?!,\s]+$/, '') };
-    return { target: 'https://duckduckgo.com' };
-  }
-  if (search && /\b(online|web|internet|browser)\b/i.test(t)) {
-    return { target: search[1].trim().replace(/[.?!,\s]+$/, '') };
-  }
-  return null;
-}
+const { detectWebIntent } = require('./lib/intent');
 
 // Core chat turn — shared by the IPC handler (renderer) and the Discord bridge.
 // io.emit(token) streams say-tokens; io.onComplete/onError fire UI events. For
