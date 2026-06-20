@@ -52,17 +52,25 @@ function isConnected() { return !!(context && page); }
 // machine). Persistent profile keeps logins across sessions.
 async function ensure() {
   if (context && page) return page;
-  const pw = require('playwright');
+  // PATCHRIGHT (drop-in patched Playwright) instead of vanilla playwright: it
+  // neutralizes the Runtime.enable CDP leak (the #1 Cloudflare/DataDome bot signal)
+  // by running JS in isolated execution contexts, and strips the automation launch
+  // flags. Driving REAL system Chrome (executablePath) headful + a persistent profile
+  // is the recommended stealth setup; cf_clearance cookies then persist across runs.
+  const pw = require('patchright');
   const executablePath = findChrome();
   if (!executablePath) throw new Error('chrome.exe/msedge.exe not found in standard paths');
   try { if (!fs.existsSync(PROFILE_DIR)) fs.mkdirSync(PROFILE_DIR, { recursive: true }); } catch {}
   context = await pw.chromium.launchPersistentContext(PROFILE_DIR, {
     headless: false,
     executablePath,
-    viewport: { width: 1100, height: 820 },
+    viewport: null,                                // a fixed viewport is itself a fingerprint — let it match the real window
     chromiumSandbox: true,                         // keep Chrome's sandbox on (removes the --no-sandbox warning banner + restores security)
     ignoreDefaultArgs: ['--enable-automation'],    // drop the "controlled by automated software" infobar too
-    args: ['--no-first-run', '--no-default-browser-check']
+    // --test-type suppresses Chrome's "unsupported command-line flag" infobar that
+    // patchright's --disable-blink-features=AutomationControlled would otherwise show.
+    // It's not exposed to page JS, so it doesn't weaken the stealth fingerprint.
+    args: ['--no-first-run', '--no-default-browser-check', '--test-type']
   });
   context.on('close', () => { context = null; page = null; registry = {}; });
   page = context.pages()[0] || await context.newPage();
@@ -159,8 +167,14 @@ async function type(handle, text) {
 
 async function back() {
   if (!page) return { ok: false, reason: 'no page open' };
-  try { await page.goBack({ timeout: NAV_TIMEOUT, waitUntil: 'domcontentloaded' }); registry = {}; return { ok: true, url: page.url() }; }
-  catch (err) { return { ok: false, reason: err.message }; }
+  // waitUntil 'commit' (not 'domcontentloaded') — returning to an already-loaded /
+  // bfcached page doesn't re-fire domcontentloaded, which made goBack hang to timeout.
+  // Swallow a wait-timeout and report the resulting URL: the back nav itself succeeds.
+  try {
+    await page.goBack({ timeout: 8000, waitUntil: 'commit' }).catch(() => {});
+    registry = {};
+    return { ok: true, url: page.url() };
+  } catch (err) { return { ok: false, reason: err.message }; }
 }
 
 // Follow the first organic result on a search-results page and land on the actual
