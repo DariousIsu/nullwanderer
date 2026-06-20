@@ -25,6 +25,7 @@ function reset() {
   db.getDb().prepare('DELETE FROM open_threads').run();
   db.getDb().prepare('DELETE FROM knowledge').run();
   db.setMeta('current_focus_id', ''); db.setMeta('focus_state', '');
+  db.setMeta('rumination_last_id', '');
 }
 async function stubEmbed(text) {
   const c = (text || '').trim()[0]?.toUpperCase();

@@ -38,6 +38,13 @@ async function detect({ k = K, threshold = THRESHOLD, embedFn = memory.embed } =
   if (focusLib.isActive()) return { ruminating: false, reason: 'focus-active' };
   const thoughts = recentFreeThoughts(k);
   if (thoughts.length < k) return { ruminating: false, reason: 'too-few', thoughts };
+  // STALE-WINDOW GUARD: don't re-fire on the same thoughts. After an escalation
+  // attempt (esp. a suppressed/tombstoned one) the window doesn't change — without
+  // this the guard spins every tick, burning an embed + naming call to be skipped.
+  // Only consider it if there's a NEW thought since the last attempt.
+  const maxId = Math.max(...thoughts.map(t => t.id || 0));
+  const lastId = parseInt(db.getMeta('rumination_last_id') || '0', 10);
+  if (maxId <= lastId) return { ruminating: false, reason: 'no-new-thoughts', thoughts };
   const vecs = [];
   for (const t of thoughts) { try { vecs.push(await embedFn(t.content)); } catch { vecs.push(null); } }
   let sum = 0, n = 0;
@@ -70,6 +77,10 @@ async function nameTheme(thoughts, userName = 'them') {
  * or the spawn-gate suppressed it. nameFn injectable for tests.
  */
 async function escalate(thoughts, userName = 'them', { nameFn = nameTheme } = {}) {
+  // Mark this thought-window consumed FIRST (success OR suppression), so detect()
+  // won't re-fire on the same stale thoughts next tick. This is what stops the
+  // suppressed-escalation spin observed in the live log.
+  try { const ids = (thoughts || []).map(t => t.id || 0); if (ids.length) db.setMeta('rumination_last_id', String(Math.max(...ids))); } catch {}
   let goal = null;
   try { goal = await nameFn(thoughts, userName); } catch (e) { console.error('[rumination] nameTheme failed:', e.message); }
   if (!goal || goal.length < 6) return null;

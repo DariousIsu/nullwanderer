@@ -15,7 +15,7 @@ const recipesLib = require('./recipes');
 const MODEL = require('./config').model();
 const TICK_INTERVAL_MS = 30 * 1000;        // check every 30s while idle
 const IDLE_THRESHOLD_MS = 60 * 1000;       // user must be quiet ≥ 60s
-const MIN_GAP_BETWEEN_HEARTBEATS_MS = 3 * 60 * 1000;  // ≥ 3min between unsolicited utterances
+const MIN_GAP_BETWEEN_HEARTBEATS_MS = 15 * 60 * 1000;  // ≥ 15min between unsolicited utterances (near-silent)
 const RECENT_MONOLOGUE_LIMIT = 12;
 const RECENT_REFLECTION_LIMIT = 3;
 const RECENT_TURN_LIMIT = 10;
@@ -391,7 +391,8 @@ async function maybeHeartbeat() {
     // mute forever, and inbound chat-bot replies bypass it (time-sensitive).
     if (wantsToSpeak && !hasInbound) {
       const imp = await importanceLib.score(trimmedSay, { userName, kind: 'utterance' });
-      const threshold = governor.shouldFillGap() ? 3 : 5;
+      // Near-silent: only genuinely significant things break the silence unprompted.
+      const threshold = governor.shouldFillGap() ? 5 : 8;
       if (imp < threshold) {
         wantsToSpeak = false;
         console.log(`[heartbeat] suppressed low-importance utterance (${imp} < ${threshold})`);

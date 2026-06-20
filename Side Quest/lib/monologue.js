@@ -885,7 +885,10 @@ async function runOneTick() {
     importance
   });
 
-  pushSheep({ id: row.id, ts: row.ts, content: trimmed, type: 'thought', importance });
+  // SURFACING GATE: only show thoughts that clear the importance bar (≥5), or when
+  // filling a long silence. Low-value free-association is still STORED (for the
+  // blackboard + learning) but not rendered — kills the sheep-panel firehose.
+  if (importance >= 5 || fillGap) pushSheep({ id: row.id, ts: row.ts, content: trimmed, type: 'thought', importance });
   // write-bottom: record this thought on the shared timeline so the next tick (and
   // the other loops) can see it, and so the StuckDetector has something to compare.
   try { blackboard.append({ source: 'monologue', kind: 'thought', refTable: 'monologue', refId: row.id, content: trimmed }); } catch (e) { console.error('[monologue] blackboard append failed:', e.message); }
