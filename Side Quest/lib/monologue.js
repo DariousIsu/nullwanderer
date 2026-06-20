@@ -885,10 +885,12 @@ async function runOneTick() {
     importance
   });
 
-  // SURFACING GATE: only show thoughts that clear the importance bar (≥5), or when
-  // filling a long silence. Low-value free-association is still STORED (for the
-  // blackboard + learning) but not rendered — kills the sheep-panel firehose.
-  if (importance >= 5 || fillGap) pushSheep({ id: row.id, ts: row.ts, content: trimmed, type: 'thought', importance });
+  // The sheep panel is the WINDOW INTO HER SUBCONSCIOUS, not noise-to-Lucas — so it
+  // shows her FULL thought stream (importance is passed through for styling, not as
+  // a gate). The thing that was actually annoying — unprompted UTTERANCES to Lucas —
+  // is gated separately in the heartbeat (importance ≥8 + 15-min floor). Dimming the
+  // panel made her look like she'd stopped thinking; she hadn't.
+  pushSheep({ id: row.id, ts: row.ts, content: trimmed, type: 'thought', importance });
   // write-bottom: record this thought on the shared timeline so the next tick (and
   // the other loops) can see it, and so the StuckDetector has something to compare.
   try { blackboard.append({ source: 'monologue', kind: 'thought', refTable: 'monologue', refId: row.id, content: trimmed }); } catch (e) { console.error('[monologue] blackboard append failed:', e.message); }
