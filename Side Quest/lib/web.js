@@ -60,6 +60,8 @@ async function ensure() {
     headless: false,
     executablePath,
     viewport: { width: 1100, height: 820 },
+    chromiumSandbox: true,                         // keep Chrome's sandbox on (removes the --no-sandbox warning banner + restores security)
+    ignoreDefaultArgs: ['--enable-automation'],    // drop the "controlled by automated software" infobar too
     args: ['--no-first-run', '--no-default-browser-check']
   });
   context.on('close', () => { context = null; page = null; registry = {}; });
