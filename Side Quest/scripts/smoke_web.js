@@ -15,6 +15,13 @@ ok('bare domain → https', web.toUrl('example.com') === 'https://example.com');
 ok('plain words → search', /duckduckgo\.com\/html/.test(web.toUrl('how to write a cold pitch')));
 ok('empty → null', web.toUrl('') === null);
 
+console.log('\ncleanQuery (strip prepended engine/verb + quotes):');
+ok('Google "phrase" → clean phrase', web.cleanQuery('Google "best practices for sending professional emails 2024"') === 'best practices for sending professional emails 2024');
+ok('search for X → X', web.cleanQuery('search for rainey center summit') === 'rainey center summit');
+ok('look up X → X', web.cleanQuery('look up the maastricht treaty') === 'the maastricht treaty');
+ok('plain query unchanged', web.cleanQuery('latest AI policy news') === 'latest AI policy news');
+ok('toUrl search drops Google+quotes', (() => { const u = web.toUrl('Google "AI email tips"'); return !/Google/i.test(u) && /AI%20email%20tips/.test(u); })());
+
 console.log('\nparseTags (all forms):');
 ok('web-open with body', web.parseTags('<web-open>example.com</web-open>')[0]?.tag === 'web-open');
 ok('web-read self-closing', web.parseTags('<web-read/>')[0]?.tag === 'web-read');

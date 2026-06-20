@@ -76,7 +76,19 @@ function toUrl(target) {
   if (!t) return null;
   if (/^https?:\/\//i.test(t)) return t;
   if (/^[a-z0-9.-]+\.[a-z]{2,}(\/|$)/i.test(t) && !t.includes(' ')) return 'https://' + t;
-  return SEARCH_URL(t);
+  return SEARCH_URL(cleanQuery(t));
+}
+
+// Clean a search query the model may have dressed up: strip a leading engine/verb
+// it prepended ("google …", "search for …", "look up …") and wrapping quotes
+// (which force an exact-phrase match that often returns nothing). e.g.
+//   Google "best practices for sending professional emails 2024"
+//   → best practices for sending professional emails 2024
+function cleanQuery(s) {
+  let q = String(s || '').trim();
+  q = q.replace(/^(?:on\s+)?(?:google|bing|duck\s*duck\s*go|the\s+web|search(?:\s+for)?|look\s*up|find|google\s+for)\b[\s:]*/i, '');
+  q = q.replace(/^["“'`]+|["”'`]+$/g, '').trim();
+  return q || String(s || '').trim();
 }
 
 async function open(target) {
@@ -196,5 +208,5 @@ Always <web-read/> after opening or clicking before you click/type again — han
 
 module.exports = {
   isConnected, ensure, open, read, click, type, back, close,
-  parseTags, stripTags, dispatch, buildPromptBlock, toUrl, WEB_TAG_RE, PROFILE_DIR
+  parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR
 };
