@@ -226,7 +226,29 @@ const MIGRATIONS = [
     proposed_ts INTEGER,
     resolved_ts INTEGER
   )`,
-  `CREATE INDEX IF NOT EXISTS idx_capability_gaps_status ON capability_gaps(status, detected_ts)`
+  `CREATE INDEX IF NOT EXISTS idx_capability_gaps_status ON capability_gaps(status, detected_ts)`,
+  // self_model — the IDENTITY track, distinct from `knowledge` (the capability
+  // track). Small, curated, CONSOLIDATED in place (not append-forever) and ALWAYS
+  // injected into her persona, so "who she is" is continuously loaded rather than
+  // retrieved on demand. category: trait|value|preference|relationship|insight.
+  // `mentions` bumps each time a near-duplicate is reinforced, so durable traits rise.
+  `CREATE TABLE IF NOT EXISTS self_model (
+    id INTEGER PRIMARY KEY,
+    category TEXT NOT NULL DEFAULT 'insight',
+    content TEXT NOT NULL,
+    embedding TEXT,
+    importance REAL DEFAULT 0.6,
+    mentions INTEGER DEFAULT 1,
+    created_ts INTEGER NOT NULL,
+    updated_ts INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_self_model_cat ON self_model(category)`,
+  // provenance — REFERENCE-NOT-COPY marker(s) for a knowledge row: where the raw
+  // data this note was distilled from actually LIVES (a reading's monologue row +
+  // url, an action, an email, the reflection window). JSON array of
+  // {type,label,refTable?,refId?,url?}. Lets her drill from a compact note back to
+  // the full source without the store ever holding a copy of it.
+  `ALTER TABLE knowledge ADD COLUMN provenance TEXT`
 ];
 
 function init() {
@@ -690,15 +712,21 @@ function hasEmailedAddress(addr) {
 
 // --- Knowledge store (integration/learning layer) ---
 
-function insertKnowledge({ kind = 'note', content, embedding = null, source = null, importance = 0.5, links = null }) {
+function insertKnowledge({ kind = 'note', content, embedding = null, source = null, importance = 0.5, links = null, provenance = null }) {
   const ts = Date.now();
   const info = getDb()
-    .prepare(`INSERT INTO knowledge (kind, content, embedding, source, importance, created_ts, links)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .run(kind, content, embedding, source, importance, ts, links ? JSON.stringify(links) : null);
+    .prepare(`INSERT INTO knowledge (kind, content, embedding, source, importance, created_ts, links, provenance)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(kind, content, embedding, source, importance, ts, links ? JSON.stringify(links) : null, provenance ? JSON.stringify(provenance) : null);
   const id = info.lastInsertRowid;
   try { getDb().prepare('INSERT INTO knowledge_fts(rowid, content) VALUES (?, ?)').run(id, content); } catch {}
   return { id, ts };
+}
+
+// Fetch a single monologue row by id — used to resolve a provenance marker
+// (refTable='monologue') back to the raw reading/thought it points at.
+function getMonologueById(id) {
+  return getDb().prepare('SELECT * FROM monologue WHERE id = ?').get(id);
 }
 
 // All embeddings (id + raw JSON + light metadata) for in-JS cosine. Fine at the
@@ -764,6 +792,48 @@ function deleteKnowledgeBySource(source) {
   }
   return rows.length;
 }
+
+// --- Self-model (identity track: who she is) ---
+
+function insertSelfModel({ category = 'insight', content, embedding = null, importance = 0.6 }) {
+  const ts = Date.now();
+  const info = getDb()
+    .prepare(`INSERT INTO self_model (category, content, embedding, importance, mentions, created_ts, updated_ts)
+      VALUES (?, ?, ?, ?, 1, ?, ?)`)
+    .run(category, content, embedding, importance, ts, ts);
+  return { id: info.lastInsertRowid, ts };
+}
+
+// Refine an existing entry in place (consolidation) and bump its mention count.
+function updateSelfModel(id, { content = null, embedding = null, importance = null, bumpMention = true } = {}) {
+  const cur = getDb().prepare('SELECT * FROM self_model WHERE id = ?').get(id);
+  if (!cur) return null;
+  getDb().prepare(`UPDATE self_model SET content = ?, embedding = ?, importance = ?, mentions = mentions + ?, updated_ts = ? WHERE id = ?`)
+    .run(
+      content != null ? content : cur.content,
+      embedding != null ? embedding : cur.embedding,
+      importance != null ? importance : cur.importance,
+      bumpMention ? 1 : 0,
+      Date.now(), id
+    );
+  return getDb().prepare('SELECT * FROM self_model WHERE id = ?').get(id);
+}
+
+function getAllSelfModelEmbeddings() {
+  return getDb().prepare('SELECT id, category, content, embedding, importance, mentions FROM self_model WHERE embedding IS NOT NULL').all();
+}
+
+// Top entries for the always-injected persona block: weight importance by how often
+// the trait has been reinforced (mentions), then recency.
+function getSelfModelForPrompt(limit = 10) {
+  return getDb().prepare('SELECT category, content, mentions FROM self_model ORDER BY (importance * (1 + 0.1 * mentions)) DESC, updated_ts DESC LIMIT ?').all(limit);
+}
+
+function getAllSelfModel() {
+  return getDb().prepare('SELECT * FROM self_model ORDER BY updated_ts DESC').all();
+}
+
+function countSelfModel() { return getDb().prepare('SELECT COUNT(*) AS n FROM self_model').get().n; }
 
 // --- Capability gaps (things she can't do yet → proposals on return) ---
 
@@ -906,6 +976,7 @@ module.exports = {
   countEmailsSentSince,
   hasEmailedAddress,
   insertKnowledge,
+  getMonologueById,
   getAllKnowledgeEmbeddings,
   ftsSearchKnowledge,
   getKnowledgeBySourceSince,
@@ -913,6 +984,12 @@ module.exports = {
   touchKnowledge,
   countKnowledge,
   deleteKnowledgeBySource,
+  insertSelfModel,
+  updateSelfModel,
+  getAllSelfModelEmbeddings,
+  getSelfModelForPrompt,
+  getAllSelfModel,
+  countSelfModel,
   getCumulativeSessionTime,
   insertCapabilityGap,
   getOpenCapabilityGaps,

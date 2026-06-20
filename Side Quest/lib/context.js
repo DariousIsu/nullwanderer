@@ -329,6 +329,14 @@ function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonol
     if (block) systemContent = block + '\n' + systemContent;
   }
 
+  // SELF-MODEL — "who you are" (the identity track), always injected so it shapes
+  // her voice and reasoning. High primacy: just under protocols/awareness, above
+  // the work/context blocks. Built from her own reflection (lib/self_model).
+  try {
+    const selfBlock = require('./self_model').buildPromptBlock(10);
+    if (selfBlock) systemContent += '\n\n' + selfBlock;
+  } catch (e) { console.error('[context] self-model block failed:', e.message); }
+
   // BROWSER — when connected, listed tabs + tag syntax instructions
   if (browserBlock) {
     systemContent += '\n\n' + browserBlock;

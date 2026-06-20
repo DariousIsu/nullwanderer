@@ -25,6 +25,17 @@ const MODEL = config.model();
 const K = 4;            // how many recent free-association thoughts to consider
 const THRESHOLD = 0.80; // avg pairwise cosine that counts as circling one theme
 
+// CIRCUIT BREAKER: escalation assumes naming the theme as a focus RESOLVES it. But
+// a sticky meta-preoccupation (e.g. "stop overanalyzing his typo") resolves in one
+// tick then instantly re-ruminates, reworded just enough to dodge the spawn gate —
+// an eternal spin (observed: focuses #56→#57→#58, cosine climbing 0.899→0.928). So
+// if escalation fires repeatedly in a short window, the theme is NOT escalation-
+// resolvable: stop trying and drop into a long cooldown so the normal loops (free-
+// browse, thread-review) get the airtime back instead.
+const ESC_WINDOW_MS = 20 * 60 * 1000;          // rolling window for counting escalations
+const ESC_MAX = 2;                             // escalations in-window before the breaker trips
+const ESC_BREAKER_COOLDOWN_MS = 2 * 60 * 60 * 1000;  // then suppress escalation this long
+
 // Recent free-association thoughts (kind='thought', not tied to a focus), oldest→newest.
 function recentFreeThoughts(k = K) {
   return db.getRecentAgentEvents(40).filter(e => e.kind === 'thought' && !e.focus_id).slice(-k);
@@ -90,8 +101,22 @@ async function escalate(thoughts, userName = 'them', { nameFn = nameTheme } = {}
   try { goal = await nameFn(thoughts, userName); } catch (e) { console.error('[rumination] nameTheme failed:', e.message); }
   if (!goal || goal.length < 6) return null;
   const set = await focusLib.setFromText(`<focus>${goal}</focus>`);
-  if (set) console.log(`[rumination] escalated circling → focus #${set.focus.id}: ${goal.slice(0, 70)}`);
-  else {
+  if (set) {
+    console.log(`[rumination] escalated circling → focus #${set.focus.id}: ${goal.slice(0, 70)}`);
+    // CIRCUIT BREAKER bookkeeping: record this escalation; if too many fired in the
+    // window, the theme isn't escalation-resolvable — trip a long cooldown so we
+    // stop respawning near-identical focuses on it.
+    try {
+      const now = Date.now();
+      const arr = JSON.parse(db.getMeta('rumination_escalations') || '[]').filter(t => now - t < ESC_WINDOW_MS);
+      arr.push(now);
+      db.setMeta('rumination_escalations', JSON.stringify(arr));
+      if (arr.length >= ESC_MAX) {
+        db.setMeta('rumination_cooldown_until', String(now + ESC_BREAKER_COOLDOWN_MS));
+        console.log(`[rumination] circuit breaker tripped: ${arr.length} escalations in ${Math.round(ESC_WINDOW_MS / 60000)}m on a sticky theme — suppressing escalation for ${Math.round(ESC_BREAKER_COOLDOWN_MS / 60000)}m`);
+      }
+    } catch (e) { console.error('[rumination] breaker bookkeeping failed:', e.message); }
+  } else {
     // Spawn-gate suppressed it (theme tombstoned recently) — back off for 30 min so
     // we don't re-name + re-suppress on every new thought about the same dead theme.
     try { db.setMeta('rumination_cooldown_until', String(Date.now() + 30 * 60 * 1000)); } catch {}

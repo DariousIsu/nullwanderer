@@ -3,6 +3,7 @@ const { streamChat } = require('./ollama');
 const { buildReflectionPrompt } = require('./context');
 const blackboard = require('./blackboard');
 const memoryLib = require('./memory');
+const selfModelLib = require('./self_model');
 
 // Generative-Agents significance trigger: reflection fires when enough IMPORTANT
 // thinking has accumulated (sum of thought/reading importance ≥ threshold), not
@@ -17,6 +18,64 @@ const MIN_GAP_MS = 10 * 60 * 1000;            // at most one reflection per 10 m
 const MIN_TURNS_SINCE_LAST = 6;               // need at least 6 new turns
 const TICK_INTERVAL_MS = 30 * 1000;           // check every 30s
 const MODEL = require('./config').model();
+
+// Nearest existing knowledge note (A-MEM-lite linking) so new facts connect to
+// related ones instead of forming a flat bag. Returns an id or null.
+async function nearestKnowledge(text, threshold = 0.6) {
+  let qv; try { qv = await memoryLib.embed(text); } catch { return null; }
+  if (!qv) return null;
+  let bestId = null, bestSim = 0;
+  for (const r of db.getAllKnowledgeEmbeddings()) {
+    let v; try { v = JSON.parse(r.embedding); } catch { continue; }
+    const sim = memoryLib.cosine(qv, v);
+    if (sim > bestSim) { bestSim = sim; bestId = r.id; }
+  }
+  return (bestId && bestSim >= threshold) ? bestId : null;
+}
+
+// Parse the router's tagged output and ROUTE each takeaway to its store: [SELF] →
+// self_model (identity), [KNOWLEDGE]/[SKILL] → knowledge (capability, linked to the
+// nearest existing note). Untagged lines are dropped — the noise filter. Exported
+// for the backtest. Returns { taggedCount, kept, nSelf, nKnow, nSkill }.
+async function routeReflection(raw, sourceRows = []) {
+  const tagged = [];
+  for (const line of String(raw || '').split('\n')) {
+    const m = line.match(/^\s*[-*\d.)]*\s*\[(SELF|KNOWLEDGE|SKILL)\][\s:\-–—•*]*(.+)$/i);
+    if (m && m[2].trim().length >= 12) tagged.push({ type: m[1].toUpperCase(), text: m[2].trim() });
+  }
+  // PROVENANCE marker — where the raw data this reflection distilled actually lives:
+  // the monologue rows in the window (+ any reading URLs). Reference-not-copy.
+  const refIds = sourceRows.map(r => r.id).filter(Boolean).slice(-8);
+  const urls = [];
+  for (const r of sourceRows) { try { const u = r.urls ? JSON.parse(r.urls) : null; if (Array.isArray(u)) urls.push(...u); } catch {} }
+  const prov = refIds.length || urls.length
+    ? [{ type: 'reflection', refTable: 'monologue', refId: refIds[refIds.length - 1] || null, refIds, urls: urls.slice(0, 5), label: 'distilled from recent thoughts/readings' }]
+    : null;
+
+  const kept = [];
+  let nSelf = 0, nKnow = 0, nSkill = 0;
+  for (const t of tagged.slice(0, 5)) {
+    try {
+      if (t.type === 'SELF') {
+        const r = await selfModelLib.record(t.text, { category: 'insight', importance: 0.7 });
+        if (r) { nSelf++; kept.push(`[self] ${t.text}`); }
+      } else {
+        const link = await nearestKnowledge(t.text);
+        await memoryLib.store({
+          kind: t.type === 'SKILL' ? 'skill' : 'note',
+          content: t.text,
+          source: t.type === 'SKILL' ? 'reflection_skill' : 'reflection_knowledge',
+          importance: 0.75,
+          links: link ? [link] : null,
+          provenance: prov
+        });
+        if (t.type === 'SKILL') { nSkill++; kept.push(`[skill] ${t.text}`); }
+        else { nKnow++; kept.push(`[knowledge] ${t.text}`); }
+      }
+    } catch (e) { console.error('[reflection] route store failed:', e.message); }
+  }
+  return { taggedCount: tagged.length, kept, nSelf, nKnow, nSkill };
+}
 
 let timer = null;
 let lastUserActivityTs = Date.now();
@@ -76,35 +135,40 @@ async function maybeSignificanceReflect() {
   try {
     const userName = db.getMeta('user_name') || 'them';
     const lines = recent.slice(-20).map((m, i) => `${i + 1}. ${(m.content || '').replace(/\s+/g, ' ').slice(0, 200)}`).join('\n');
+    // ROUTER prompt: instead of one bucket of vague "insights", classify each durable
+    // takeaway into the IDENTITY track ([SELF]) vs the CAPABILITY track ([KNOWLEDGE]/
+    // [SKILL]) so browsing builds BOTH who she is AND what she can do — and so the
+    // capability track captures concrete facts/methods, not introspective summaries.
     const messages = [{
       role: 'user',
-      content: `These are things ${userName}'s companion has recently thought and read on its own:\n\n${lines}\n\nWhat 1–3 higher-level INSIGHTS connect or deepen these — durable takeaways worth keeping, NOT a summary and NOT a restatement of any single item? Write each insight as ONE standalone sentence on its own line. No preamble, no numbering.`
+      content: `These are things ${userName}'s companion has recently thought and read on its own:\n\n${lines}\n\nExtract DURABLE takeaways worth keeping long-term. Tag each with EXACTLY one label:\n[SELF] — a trait, value, preference, or truth about WHO THE COMPANION IS (its identity/personality), e.g. "I tend to overanalyze small wording".\n[KNOWLEDGE] — REAL, APPLICABLE knowledge it can USE later: a specific fact, a how-to step, a correct procedure, or a concrete rule of thumb. Capture the SUBSTANCE — the actual fact/method — NOT an abstract observation about it.\n   GOOD: "A cold pitch email should state the specific ask in the first sentence." / "DuckDuckGo's HTML results page lists each result title under a.result__a."\n   BAD (do NOT tag — drop): "exploring email guidelines reflects an interest in communication", "the tension between trust and autonomy is significant".\n[SKILL] — a procedure it refined through DOING — the correct way to do something, learned from what worked or failed, e.g. "To send email reliably, emit the staged draft→body→send tags in order; narrating the steps doesn't trigger it."\n\nRules: a takeaway must be CONCRETE and APPLICABLE. Abstract or relational OBSERVATIONS (about trust, autonomy, communication, "deeper meaning") have no place in KNOWLEDGE/SKILL — leave them untagged (dropped) unless they name a real trait ([SELF]). Output ONLY genuinely durable, NEW, usable lines. Each line = the tag then ONE standalone sentence. If nothing qualifies, output nothing.`
     }];
 
     let raw = '';
     await streamChat({
       model: MODEL,
       messages,
-      options: { temperature: 0.6, top_p: 0.9, num_ctx: 8192, num_predict: 220 },
+      options: { temperature: 0.5, top_p: 0.9, num_ctx: 8192, num_predict: 260 },
       onToken: (t) => { raw += t; }
     });
 
-    const insights = raw.split('\n').map(s => s.replace(/^[\s\-*\d.)]+/, '').trim()).filter(s => s.length >= 15).slice(0, 3);
-    if (insights.length === 0) { db.setMeta('reflection_importance_accum', '0'); return false; }
+    const routed = await routeReflection(raw, recent);
+    if (routed.taggedCount === 0) {
+      db.setMeta('reflection_importance_accum', '0');
+      db.setMeta('last_significance_monologue_id', String(recent[recent.length - 1].id));
+      return false;
+    }
+    const { kept, nSelf, nKnow, nSkill, taggedCount } = routed;
 
     const now = Date.now();
-    for (const ins of insights) {
-      try { await memoryLib.store({ kind: 'note', content: ins, source: 'reflection', importance: 0.8 }); }
-      catch (e) { console.error('[reflection] insight store failed:', e.message); }
-    }
-    const joined = insights.map(s => `• ${s}`).join('\n');
-    const reflRow = db.insertReflection({ promptUsed: 'significance-v1', content: joined, sourceTurnStart: null, sourceTurnEnd: null, model: MODEL });
+    const joined = kept.map(s => `• ${s}`).join('\n');
+    const reflRow = db.insertReflection({ promptUsed: 'router-v1', content: joined, sourceTurnStart: null, sourceTurnEnd: null, model: MODEL });
     try { blackboard.append({ source: 'reflection', kind: 'insight', refTable: 'reflections', refId: reflRow && reflRow.id, content: joined }); } catch {}
 
     db.setMeta('reflection_importance_accum', '0');
     db.setMeta('last_significance_monologue_id', String(recent[recent.length - 1].id));
     db.setMeta('last_reflection_at', String(now));
-    console.log(`[reflection] significance reflection — ${insights.length} insight(s) stored as notes`);
+    console.log(`[reflection] router — self:${nSelf} knowledge:${nKnow} skill:${nSkill} (from ${taggedCount} tagged)`);
     try { const win = opts.getWindow ? opts.getWindow() : null; if (win && !win.isDestroyed()) win.webContents.send('reflection:fired', { ts: now, significance: true }); } catch {}
     return true;
   } finally {
@@ -183,6 +247,7 @@ module.exports = {
   markUserActivity,
   reflectIfDue,
   maybeSignificanceReflect,
+  routeReflection,
   forceReflectionIfDue: () => reflectIfDue({ force: true }),
   SIGNIFICANCE_THRESHOLD,
   MIN_ITEMS_FOR_SIGNIFICANCE

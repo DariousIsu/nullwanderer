@@ -163,6 +163,28 @@ async function back() {
   catch (err) { return { ok: false, reason: err.message }; }
 }
 
+// Follow the first organic result on a search-results page and land on the actual
+// page — the AUTO-DEEPEN step. Without it an autonomous search stops at the SERP
+// and never sees real content. DuckDuckGo's HTML SERP marks result titles with
+// a.result__a; fall back to other layouts, and skip duckduckgo-internal links.
+async function openTopResult() {
+  if (!page) return { ok: false, reason: 'no page open' };
+  try {
+    const selectors = ['a.result__a', '.result__title a', 'a[data-testid="result-title-a"]', '.results .result a[href]'];
+    let link = null;
+    for (const sel of selectors) {
+      const loc = page.locator(sel).first();
+      if (await loc.count().catch(() => 0)) { link = loc; break; }
+    }
+    if (!link) return { ok: false, reason: 'no result links on page' };
+    await link.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+    await link.click({ timeout: 8000 });
+    await page.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT }).catch(() => {});
+    registry = {}; counter = { L: 0, B: 0, I: 0 };
+    return { ok: true, url: page.url(), title: await page.title().catch(() => '') };
+  } catch (err) { return { ok: false, reason: err.message }; }
+}
+
 async function close() {
   try { if (context) await context.close(); } catch {}
   context = null; page = null; registry = {};
@@ -207,6 +229,6 @@ Always <web-read/> after opening or clicking before you click/type again — han
 }
 
 module.exports = {
-  isConnected, ensure, open, read, click, type, back, close,
+  isConnected, ensure, open, read, click, type, back, close, openTopResult,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR
 };

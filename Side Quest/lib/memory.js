@@ -63,11 +63,16 @@ function fuse(semIds, ftsIds, k = 4, C = 60) {
 }
 
 /** Store a piece of knowledge. content should be SHORT synthesis/reference, not a copy. */
-async function store({ kind = 'note', content, source = null, importance = 0.5, links = null }) {
+async function store({ kind = 'note', content, source = null, importance = 0.5, links = null, embedText = null, provenance = null }) {
   if (!content || !String(content).trim()) return null;
+  // embedText lets the caller embed something OTHER than the readable content —
+  // e.g. a focus_tombstone stores a readable "Focus \"X\" → resolved: reason" note
+  // but should embed the BARE goal X, so the spawn-gate's bare-goal cosine isn't
+  // diluted by the wrapper (the dilution pushed real theme-matches under threshold).
+  // provenance = reference-not-copy marker(s) for where the raw source data lives.
   let embStr = null;
-  try { embStr = JSON.stringify(await embed(content)); } catch (e) { console.error('[memory] embed failed:', e.message); }
-  return db.insertKnowledge({ kind, content: String(content).trim(), embedding: embStr, source, importance, links });
+  try { embStr = JSON.stringify(await embed(embedText || content)); } catch (e) { console.error('[memory] embed failed:', e.message); }
+  return db.insertKnowledge({ kind, content: String(content).trim(), embedding: embStr, source, importance, links, provenance });
 }
 
 /** Log an action she took, as retrievable memory (kills "didn't know she did X"). */

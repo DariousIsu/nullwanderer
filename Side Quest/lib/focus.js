@@ -214,7 +214,8 @@ function _close(focus, status, reason) {
       kind: 'note',
       content: `Focus "${focus.content}" → ${status}: ${reason}`,
       source: 'focus_tombstone',
-      importance: status === 'resolved' ? 0.8 : 0.5
+      importance: status === 'resolved' ? 0.8 : 0.5,
+      embedText: focus.content   // embed the BARE goal — recentlyTombstoned compares against the bare goal, so the wrapper must not dilute it
     }).catch(e => console.error('[focus] tombstone store failed:', e.message));
   } catch (e) { console.error('[focus] tombstone store threw:', e.message); }
   clear(`${status}:${reason}`);

@@ -42,6 +42,7 @@ const discordLib = require('./lib/discord');
 const memoryLib = require('./lib/memory');
 const inboxLib = require('./lib/inbox');
 const actionLoop = require('./lib/action_loop');
+const experience = require('./lib/experience');
 const blackboard = require('./lib/blackboard');
 const curatorLib = require('./lib/curator');
 const gapsLib = require('./lib/gaps');
@@ -1390,7 +1391,18 @@ async function runActionStep(io, depth = 0) {
     if (res.status === 'advanced' || res.status === 'retry') {
       setTimeout(() => { runActionStep(io, depth + 1).catch(() => {}); }, 1500);
     } else if (res.status === 'complete') {
-      if (res.name === 'email-reply') memoryLib.logAction(`I replied by email to ${db.getMeta('last_inbound_from') || 'a sender'}.`, { source: 'email' }).catch(() => {});
+      if (res.name === 'email-reply') {
+        const to = db.getMeta('last_inbound_from') || 'a sender';
+        memoryLib.logAction(`I replied by email to ${to}.`, { source: 'email' }).catch(() => {});
+        // EXPERIENCE: distill the reusable procedure from this completed action +
+        // mark where the raw data lives (the email it replied to).
+        experience.captureActionOutcome({
+          name: res.name,
+          task: `reply to an email from ${to}`,
+          success: true,
+          provenance: experience.marker('email', { to, subject: db.getMeta('last_inbound_subject') || '', label: `email reply to ${to}` })
+        }).catch((e) => console.error('[experience] capture failed:', e.message));
+      }
       fireToolFollowup({ io, channel, sessionId: currentSessionId, resultText: `[You just finished the action "${res.name}" — it completed successfully. Tell ${userName} briefly what you did, in your own voice.]` });
     } else if (res.status === 'aborted') {
       fireToolFollowup({ io, channel, sessionId: currentSessionId, resultText: `[The action "${res.name}" got stuck and was stopped after several tries. Tell ${userName} plainly that you couldn't finish it — do not pretend it worked.]` });

@@ -1,0 +1,18 @@
+const D=require('../lib/db'); D.init(); const db=D.getDb();
+const s=(x,n=100)=>(x||'').replace(/\s+/g,' ').trim().slice(0,n);
+console.log('================ HER ROADMAP (organized memory) ================\n');
+console.log('=== WHO I AM (self_model / identity) ===');
+for (const r of D.getAllSelfModel()) console.log(`  • [${r.category}] ${s(r.content,90)}  (×${r.mentions})`);
+console.log('\n=== WHAT I KNOW (knowledge facts) ===');
+for (const r of db.prepare(`SELECT content,source,links FROM knowledge WHERE kind='note' AND source LIKE 'reflection%' ORDER BY id DESC`).all()) console.log(`  • ${s(r.content,90)} ${r.links?'(↔'+r.links+')':''}`);
+console.log('\n=== WHAT I CAN DO (skills) ===');
+for (const r of db.prepare(`SELECT content FROM knowledge WHERE kind='skill' ORDER BY id DESC`).all()) console.log(`  • ${s(r.content,90)}`);
+console.log('\n=== WHAT I\'VE DONE (action trajectories) ===');
+for (const r of db.prepare(`SELECT content FROM knowledge WHERE kind='trajectory' ORDER BY id DESC LIMIT 6`).all()) console.log(`  • ${s(r.content,90)}`);
+console.log('\n=== WHAT I\'M WORKING TOWARD (active goals) ===');
+for (const t of D.getActiveOpenThreads(12)) console.log(`  • #${t.id} ${s(t.content,90)}`);
+console.log('\n=== GAPS / NEXT TO ACQUIRE ===');
+const g=D.getOpenCapabilityGaps(10); if(!g.length)console.log('  (none open)');
+for (const x of g) console.log(`  • ${s(x.description,80)}`);
+console.log(`\nstores: self_model=${D.countSelfModel()} | knowledge=${D.countKnowledge()} | active goals=${D.getActiveOpenThreads(50).length}`);
+db.close();

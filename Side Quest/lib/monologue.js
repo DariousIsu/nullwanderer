@@ -17,6 +17,7 @@ const gapsLib = require('./gaps');
 const recipesLib = require('./recipes');
 const ruminationLib = require('./rumination');
 const webLib = require('./web');
+const memoryLib = require('./memory');
 const { buildAwarenessBlock } = require('./context');
 
 const MODEL = require('./config').model();
@@ -131,6 +132,10 @@ function buildPrompt({ userName, recentMonologue, recentReadings, recentReflecti
     const block = formatInjection(protocols);
     if (block) sys = block + '\n' + sys;
   }
+
+  // SELF-MODEL — who she is, so her idle thinking stays consistent with her evolving
+  // identity (not just reactive association). Same block the chat prompt injects.
+  try { const sb = require('./self_model').buildPromptBlock(8); if (sb) sys += '\n\n' + sb; } catch {}
 
   // SCREEN — she can observe Lucas's open windows on her own initiative.
   sys += '\n\n' + screenLib.buildPromptBlock();
@@ -954,6 +959,13 @@ async function maybeSearchFromThought(thoughtText, focusId = null) {
   const trig = detectCuriosity(thoughtText);
   if (!trig.triggered || !trig.query) return;
   if (recentSearchHappened()) return;
+  // RUMINATION BRAKE on the curiosity path too: a circling thought was firing its
+  // search here (not via boredom), so the boredom-only brake never saw it. A
+  // focus-scoped search (focusId set) is intentional deepening — leave it alone.
+  if (!focusId && await isRepeatOfRecentSearch(trig.query)) {
+    console.log(`[monologue] curiosity search suppressed (rumination brake): "${trig.query.slice(0, 60)}"`);
+    return;
+  }
   await runSearch(trig.query, 'curiosity', focusId);
 }
 
@@ -994,7 +1006,30 @@ async function maybeBoredomSearch() {
   const query = parseBoredomResponse(raw);
   if (!query) return;
 
+  // RUMINATION BRAKE: the boredom search bypasses the thought-level rumination
+  // guard (its query is generated here, not in the surfaced thought stream), which
+  // is how she fired 264 near-identical theme searches in 24h. Embed the candidate
+  // against her recent reading queries; if it's a semantic near-repeat, suppress it
+  // so she stops re-circling and the next idle tick can do something new instead.
+  if (await isRepeatOfRecentSearch(query)) {
+    console.log(`[monologue] boredom search suppressed (rumination brake): "${query.slice(0, 60)}"`);
+    return;
+  }
+
   await runSearch(query, 'boredom');
+}
+
+const SEARCH_REPEAT_THRESHOLD = 0.82;  // single-pair cosine; deliberately high so deepening (new terms) passes, only near-duplicates are braked
+async function isRepeatOfRecentSearch(query, k = 8) {
+  try {
+    const recent = db.getRecentMonologueByType('reading', k).map(r => r.query).filter(Boolean);
+    if (!recent.length) return false;
+    const qv = await memoryLib.embed(query);
+    for (const past of recent) {
+      try { if (memoryLib.cosine(qv, await memoryLib.embed(past)) >= SEARCH_REPEAT_THRESHOLD) return true; } catch {}
+    }
+    return false;
+  } catch (e) { console.error('[monologue] repeat-check failed:', e.message); return false; }
 }
 
 function recentSearchHappened() {
@@ -1003,13 +1038,76 @@ function recentSearchHappened() {
   return (Date.now() - last) < MIN_GAP_BETWEEN_SEARCHES_MS;
 }
 
+// Autonomous exploration runs through HER OWN visible browser (webLib), not the
+// legacy headless scraper. This is the channel "indulge on the internet" /
+// curiosity / boredom are supposed to use — so the capability actually gets
+// exercised and every search is visible + inspectable. Falls back to the headless
+// path only if the browser can't launch, so autonomy never silently goes dark.
 async function runSearch(query, source, focusId = null) {
   db.setMeta('last_search_at', String(Date.now()));
+  try {
+    const opened = await webLib.open(query);
+    if (!opened.ok) {
+      console.warn(`[monologue] browser open failed (${opened.reason}) — falling back to headless`);
+      return runSearchLegacy(query, source, focusId);
+    }
+    const r = await webLib.read();
+    let body = (r.ok && r.text ? r.text : '').replace(/\n{3,}/g, '\n\n').slice(0, 900);
+
+    // AUTO-DEEPEN: don't stop at the results page — follow the top result and read
+    // the actual page, so she explores past the SERP (the headless path always did
+    // this; rerouting to her browser had dropped it). The real content is what
+    // feeds importance → reflection → durable knowledge.
+    const urls = opened.url ? [opened.url] : [];
+    try {
+      const top = await webLib.openTopResult();
+      if (top.ok) {
+        urls.push(top.url);
+        const pageRead = await webLib.read();
+        if (pageRead.ok && pageRead.text) {
+          body += `\n\nI opened the top result (${top.title || top.url}) and read:\n` + pageRead.text.replace(/\n{3,}/g, '\n\n').slice(0, 1800);
+        }
+        console.log(`[monologue] auto-deepen → ${top.url}`);
+      } else {
+        console.log(`[monologue] auto-deepen skipped: ${top.reason}`);
+      }
+    } catch (e) { console.error('[monologue] auto-deepen failed:', e.message); }
+
+    const prefix = source === 'boredom'
+      ? `I looked up "${query}" in my own browser. What I found:\n`
+      : `I wondered about "${query}" and searched it in my own browser. What I found:\n`;
+    const content = prefix + (body || `(opened ${opened.url} — ${opened.title || 'no readable text'})`);
+
+    const readingImportance = await importanceLib.score(content, { kind: 'reading' });
+    bumpReflectionAccum(readingImportance);
+    const row = db.insertMonologue({
+      content,
+      model: 'web-read',
+      type: 'reading',
+      query,
+      urls: urls.length ? urls : null,
+      importance: readingImportance
+    });
+
+    pushSheep({ id: row.id, ts: row.ts, content, type: 'reading', query });
+    // write-bottom: a reading is an "observation" on the timeline — it breaks a
+    // run of pure thoughts, which is exactly what the StuckDetector keys on. When
+    // the search was fired to advance a focus, tag it so it joins that focus's
+    // working set (counts as progress, visible to the next focus tick).
+    try { blackboard.append({ source: 'monologue', kind: 'reading', focusId: focusId || null, refTable: 'monologue', refId: row.id, content: query || content }); } catch (e) { console.error('[monologue] blackboard reading append failed:', e.message); }
+  } catch (err) {
+    console.error('[monologue] browser search failed, falling back to headless:', err.message);
+    try { await runSearchLegacy(query, source, focusId); } catch (e2) { console.error('[monologue] legacy search also failed:', e2.message); }
+  }
+}
+
+// SAFETY-NET ONLY: the old headless DuckDuckGo path. Used when her real browser
+// can't launch so idle exploration never drops to zero. Not the default channel.
+async function runSearchLegacy(query, source, focusId = null) {
   try {
     const { results } = await webSearch(query);
     if (!results || results.length === 0) return;
 
-    // Compose a readable digest of the top hits
     const top = results.slice(0, 3);
     const lines = top.map(r => {
       const title = r.title.length > 110 ? r.title.slice(0, 110) + '…' : r.title;
@@ -1023,7 +1121,6 @@ async function runSearch(query, source, focusId = null) {
 
     let content = prefix + lines;
 
-    // Auto-deepen — fetch top result's actual page text
     const topUrl = top[0]?.url;
     if (topUrl) {
       const page = await fetchPage(topUrl, { maxChars: 2200, timeoutMs: 8000 });
@@ -1044,10 +1141,6 @@ async function runSearch(query, source, focusId = null) {
     });
 
     pushSheep({ id: row.id, ts: row.ts, content, type: 'reading', query });
-    // write-bottom: a reading is an "observation" on the timeline — it breaks a
-    // run of pure thoughts, which is exactly what the StuckDetector keys on. When
-    // the search was fired to advance a focus, tag it so it joins that focus's
-    // working set (counts as progress, visible to the next focus tick).
     try { blackboard.append({ source: 'monologue', kind: 'reading', focusId: focusId || null, refTable: 'monologue', refId: row.id, content: query || content }); } catch (e) { console.error('[monologue] blackboard reading append failed:', e.message); }
   } catch (err) {
     console.error('[monologue] search failed:', err.message);
@@ -1060,5 +1153,6 @@ module.exports = {
   pause,
   resume,
   markUserActivity,
+  isRepeatOfRecentSearch,  // exported for smoke test
   MODEL
 };
