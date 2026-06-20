@@ -21,13 +21,26 @@ for (const s of [
   "I do not possess consciousness or subjective experiences."
 ]) ok(`catch: "${s.slice(0, 45)}…"`, voice.isSelfDisclaimer(s));
 
-console.log('\nSHOULD NOT catch (factual gaps — the GOOD reflex):');
+console.log('\nSHOULD catch (capability denial / cutoff / dead-assistant boilerplate):');
+for (const s of [
+  "I'm sorry, but I currently don't have the capability to access or interact with external chats.",
+  "However, I'm here to help answer any questions or provide information based on the data I've been trained on, up until 2023.",
+  "How else can I assist you today?",
+  "I can't access the internet or real-time data.",
+  "I don't have the ability to browse websites.",
+  "My knowledge cutoff is 2023, so I can't help with that."
+]) ok(`catch: "${s.slice(0, 45)}…"`, voice.isSelfDisclaimer(s));
+
+console.log('\nSHOULD NOT catch (factual gaps + real limits — the GOOD reflex):');
 for (const s of [
   "I don't know the answer to that yet.",
   "I don't remember what he said earlier.",
   "I haven't looked into that — let me find out.",
   "I don't have that information in front of me.",
-  "I don't have the details on the bill yet."
+  "I don't have the details on the bill yet.",
+  "Email isn't configured, so I can't send that right now.",
+  "My browser failed to open — let me try again.",
+  "I can't send that until you give me the address."
 ]) ok(`pass: "${s.slice(0, 45)}…"`, !voice.isSelfDisclaimer(s));
 
 console.log('\nSHOULD NOT catch (genuine stances / normal talk):');
