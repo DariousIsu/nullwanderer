@@ -82,6 +82,7 @@ function toUrl(target) {
 async function open(target) {
   const url = toUrl(target);
   if (!url) return { ok: false, reason: 'empty target' };
+  console.log(`[web] open target=${JSON.stringify(target)} → goto ${JSON.stringify(url)}`);
   try {
     const p = await ensure();
     await p.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
