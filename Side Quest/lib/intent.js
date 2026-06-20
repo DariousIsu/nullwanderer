@@ -28,6 +28,10 @@ function detectWebIntent(text) {
   // Explicit "open/use ... browser/web" with optional search terms.
   if (verb && webCue) {
     if (search) return { target: search[1].trim().replace(/[.?!,\s]+$/, '') };
+    // "use web read" / "use the web to read this" is a READ of the current page, NOT
+    // a request to open the search home. Don't fire the SEARCH_HOME fallback — let it
+    // fall through to the act-on-open-page (read) handler.
+    if (/\bread\b/i.test(t)) return null;
     return { target: SEARCH_HOME };
   }
   // A search COMMAND → web search. Fires when the message is an imperative search
@@ -54,9 +58,13 @@ function detectWebIntent(text) {
 // stops refusing and actually sees what's open (e.g. a chat Lucas opened for her).
 const ACT_VERB = /\b(look at|take a look|check|read|see|view|surf|use|interact with|what'?s on|whats on|scroll|explore|go through|browse|play with|talk to|respond to|reply to)\b/i;
 const PAGE_NOUN = /\b(?:the|this|that|her|your)?\s*(page|chat|site|website|tab|conversation|browser|window|bot|character)\b/i;
+// Explicit "read the current page" phrasings that carry no page-noun ("use web read",
+// "web-read", "read it"). These must read the OPEN page, never open a search.
+const EXPLICIT_READ = /\bweb[\s-]?read\b|<web-read\b|\bread (?:it|this|the (?:page|site|tab|chat))\b/i;
 function detectActOnOpenPage(text) {
   if (!text) return false;
   const t = String(text);
+  if (EXPLICIT_READ.test(t)) return true;
   return ACT_VERB.test(t) && PAGE_NOUN.test(t);
 }
 

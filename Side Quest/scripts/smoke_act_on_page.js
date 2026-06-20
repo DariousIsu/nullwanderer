@@ -6,7 +6,7 @@
  *
  * Run: $env:ELECTRON_RUN_AS_NODE=1; .\node_modules\.bin\electron.cmd scripts\smoke_act_on_page.js
  */
-const { detectActOnOpenPage, detectWebIntent, detectPickCharacter } = require('../lib/intent');
+const { detectActOnOpenPage, detectWebIntent, detectPickCharacter, SEARCH_HOME } = require('../lib/intent');
 
 let pass = 0, fail = 0;
 const ok = (n, c, detail) => { if (c) { pass++; console.log(`  ✓ ${n}${detail ? ' — ' + detail : ''}`); } else { fail++; console.log(`  ✗ ${n}${detail ? ' — ' + detail : ''}`); } };
@@ -40,6 +40,13 @@ for (const s of ['pick a character to chat with', 'choose a character', 'chat wi
 for (const s of ['what do you think about housing', 'pick a topic for the article', "let's chat about the bill"]) {
   ok(`no-pick: "${s.slice(0, 40)}"`, !detectPickCharacter(s));
 }
+
+console.log('\n"use web read" routes to READ, never to DuckDuckGo:');
+for (const s of ['use web read', 'web read', 'web-read', 'read it', 'use the web to read this']) {
+  ok(`read-routes: "${s}"`, detectActOnOpenPage(s));
+  ok(`not ddg: "${s}"`, detectWebIntent(s) === null || !/duckduckgo/i.test(detectWebIntent(s).target || ''));
+}
+ok('bare "use the browser" still opens (search home)', (detectWebIntent('use the browser') || {}).target === SEARCH_HOME);
 
 console.log('\nNo collision with open/search intent (detectWebIntent owns those):');
 for (const s of ['open crushon.ai', 'search for housing data', 'go to https://example.com']) {
