@@ -111,12 +111,16 @@ function parsePick(output, inventory) {
   return null;
 }
 
-// Extract the line she wants to send on a 'chat' tick: prefer a <web-chat> body,
-// else the stripped text (minus any tags) as the spoken line.
+// Extract the line she wants to send on a 'chat' tick: prefer a <web-chat> body.
+// If there's no web-chat body but the output contains interior tags
+// (<think>/<thoughts>/…), return '' — do NOT strip-and-send, or her private
+// thinking would leak straight into the scene. Only bare prose with no tags is
+// accepted as a spoken line.
 function parseChatLine(output) {
   if (!output) return '';
   const m = output.match(/<web-chat[^>]*>([\s\S]*?)<\/web-chat>/i);
   if (m && m[1].trim()) return m[1].trim();
+  if (/<\/?(?:think|thoughts|thinking|thought|say)\b/i.test(output)) return '';
   return output.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
 }
 

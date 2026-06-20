@@ -58,7 +58,8 @@ ok('unparseable → null', ps.parsePick('hmm, none of these', inv) === null);
 console.log('\nChat-line parsing:');
 ok('extracts <web-chat> body', ps.parseChatLine('<web-chat speaker="Mizuki">So, you got fired?</web-chat>') === 'So, you got fired?');
 ok('falls back to plain text', ps.parseChatLine('Just talking normally.') === 'Just talking normally.');
-ok('empty body → strips to remainder', ps.parseChatLine('<web-chat speaker="X"></web-chat> hey there') === 'hey there');
+ok('web-chat body wins even with interior present', ps.parseChatLine('<thoughts>plan</thoughts><web-chat speaker="X">Hi.</web-chat>') === 'Hi.');
+ok('interior-only (no web-chat) → NO leak to bot', ps.parseChatLine('<thoughts>I should be careful here.</thoughts>') === '');
 
 console.log(`\n${fail === 0 ? 'ALL PLAY-SESSION TESTS OK' : 'SOME FAILURES'} — ${pass} passed, ${fail} failed`);
 try { D.getDb().close(); } catch {}
