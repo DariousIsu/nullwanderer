@@ -15,6 +15,7 @@ const focusLib = require('./focus');
 const importanceLib = require('./importance');
 const gapsLib = require('./gaps');
 const recipesLib = require('./recipes');
+const ruminationLib = require('./rumination');
 const { buildAwarenessBlock } = require('./context');
 
 const MODEL = require('./config').model();
@@ -611,7 +612,25 @@ async function runOneTick() {
   let focusedThread = null;
   // FOCUS is highest priority: if one is active she serves it every tick until it
   // resolves/stalls/caps. This is the continuity — an intention carried forward.
-  const activeFocus = focusLib.getCurrent();
+  let activeFocus = focusLib.getCurrent();
+
+  // RUMINATION GUARD: if she's NOT on a focus but her recent free-association
+  // thoughts are circling one theme (semantic spiral the exact-match StuckDetector
+  // can't see), auto-escalate it into a focus so the focus guards drive it to
+  // resolution instead of restating it forever. If the spawn-gate suppresses it
+  // (recently tombstoned), break the loop by skipping this tick's surfacing.
+  if (!activeFocus) {
+    try {
+      const rum = await ruminationLib.detect();
+      if (rum.ruminating) {
+        console.log(`[rumination] detected (avg cosine ${rum.avg.toFixed(3)}) — escalating to a focus`);
+        const set = await ruminationLib.escalate(rum.thoughts, userName);
+        if (set) activeFocus = set.focus;
+        else { console.log('[rumination] escalation suppressed (tombstoned) — skipping tick'); return; }
+      }
+    } catch (e) { console.error('[monologue] rumination guard failed:', e.message); }
+  }
+
   if (activeFocus) {
     const workingSet = blackboard.forFocus(activeFocus.id, 60);
     messages = buildFocusPrompt({
