@@ -56,25 +56,56 @@ enforced by the protocols layer + a hard interceptor.
 `turns`, `reflections`, `monologue`, `commitments`, `meta`, `sessions`,
 `open_threads` (goals), `protocols` (durable user-AI agreements), `inbound_messages`
 (chat-bot replies + incoming email), `scheduled_tasks` (her own clock), `email_log`
-(outbound audit), `knowledge` + `knowledge_fts` (the integration/learning store).
-Identity in `meta` (chosen_name = Zoe Lane).
+(outbound audit), `agent_events` (the blackboard — one append-only timeline every idle
+loop reads/writes), `capability_gaps` (things she can't do yet → proposed on return),
+`self_model` (the identity track, below), `knowledge` + `knowledge_fts` (the capability
+track, below). Identity in `meta` (chosen_name = Zoe Lane).
 
-### Knowledge / learning layer
-Hybrid-retrieval memory so she retains and *uses* what she learns, not a leaky recency buffer:
-- **Store** — short synthesized notes / references / action-trajectories in `knowledge`
-  (reference-not-copy: never copies of source corpora; Echo would stay system-of-record).
-- **Retrieve** — semantic (bge-small CPU embeddings, JS cosine) + keyword (FTS5 BM25),
-  fused by reciprocal-rank, top-K≈4. Injected into chat by *relevance*, not recency.
-- **Action-memory** — actions she takes (e.g. emails sent) log as retrievable trajectories,
-  so she knows what she's already done.
-- **Gap-response reflex** — when she doesn't know something she says so and plans how to
-  find out, instead of fabricating. A retrieval miss is the cue to learn, not invent.
-- **Pinned vs retrieved** — identity/protocols/goals pinned every turn (deterministic);
-  the rest retrieved by relevance. Incoming email + readings feed the store.
+### Memory — two tracks (identity + capability)
+She grows along two axes with deliberately different lifecycles, so browsing/doing builds
+both *who she is* and *what she can do*:
+
+- **Identity track — `self_model`** ("who I am"). Small, curated, **consolidated in place**
+  (a near-duplicate trait reinforces an existing entry + bumps its mention count rather than
+  piling up restatements), and **always injected** into her persona — so her sense of self is
+  continuously loaded, not retrieved. Dedup uses a cosine prefilter + an LLM confirm (a fixed
+  embedding threshold can't separate same-trait paraphrases from distinct traits).
+- **Capability track — `knowledge`** ("what I know / can do"). Large, **append + linked**
+  (each note links to its nearest neighbour, A-MEM-style), retrieved **on demand** by relevance.
+  Knowledge means *real, applicable* know-how — a fact, a how-to step, a correct procedure,
+  a rule of thumb — never abstract musings (those are dropped). Skills are `kind='skill'`.
+
+**Reflection-as-router** — when enough significant thinking accumulates, reflection fires and
+**classifies** each durable takeaway: `[SELF]` → identity track, `[KNOWLEDGE]`/`[SKILL]` →
+capability track, everything else **dropped** (the noise filter). One pass feeds both tracks.
+
+**Experience layer (`lib/experience.js`)** — doing → durable know-how (Voyager/Reflexion). On
+a completed action the model distills the **reusable procedure** ("to do X: …") into the
+capability track (deduped + linked), so next time the task recurs it's retrievable.
+
+**Provenance markers (reference-not-copy)** — every capability note carries a `provenance`
+pointer to where the raw data it was distilled from *lives* (the action/email, or the
+monologue rows + reading URLs). `experience.resolveMarker()` turns a marker back into the raw
+source. The note stays compact; the store never copies the source.
+
+**Retrieval** — semantic (bge-small CPU embeddings, JS cosine) + keyword (FTS5 BM25), fused by
+reciprocal-rank, top-K≈4, scored by recency·relevance·importance. Injected by *relevance*.
+
+**Gap-response reflex** — a retrieval miss is the cue to say "I don't know" and plan how to
+find out, not to fabricate. **Pinned vs retrieved** — identity/protocols/goals pinned every
+turn (deterministic); the rest retrieved by relevance.
 
 ### Tools Zoe can use
-- **Web** — `<navigate>`, auto search (curiosity/boredom), page fetch.
-- **Browser** (co-pilot of the user's real Chrome via Playwright CDP, port 9222) —
+- **Her own browser** (`lib/web.js`, a dedicated Playwright-driven Chrome with its own
+  persistent profile, separate from the user's) — `<web-open>` (a URL *or* search terms) /
+  `<web-read/>` / `<web-click>HANDLE</web-click>` / `<web-type selector="HANDLE">` /
+  `<web-back/>` / `<web-close/>`. Autonomous idle exploration (curiosity/boredom) runs
+  through **this** browser and **auto-deepens** — it follows the top result and reads the
+  actual page, not just the results list (a headless fallback covers a launch failure). A
+  rumination brake suppresses re-searching a theme she's already been circling. A
+  deterministic web-intent interceptor opens it when the user clearly asks her to look
+  something up, so the model's reflex to "decline" can't block a real request.
+- **Co-pilot browser** (the user's real Chrome via Playwright CDP, port 9222) —
   `<browse>` / `<browse tab="active">` (in-place) / `<browse-close>` / `<browse-read/>` /
   `<browse-click>HANDLE</browse-click>` / `<browse-type selector="HANDLE">` / `<browse-scroll>`.
   Read assigns stable element **handles** (B0/L3/I0) so she acts by reference, not by
@@ -184,6 +215,10 @@ First concrete action: **email-reply** (`emailReplyAction`: `<email-draft>` → 
 → `<email-send/>`, checks read `email.draftState()`). It triggers when Lucas asks her to
 reply and a real sender address was captured from the last inbound mail
 (`last_inbound_from`). Adding a new multi-step action = defining another `{name, steps[]}`.
+
+On completion the **experience layer** distills the reusable procedure from the action into
+the capability track (deduped + linked, with a provenance marker pointing back to the source)
+— so the *how* is retained and retrievable next time the task recurs.
 
 ## Layout
 
