@@ -41,6 +41,12 @@ function installHappyStubs() {
 }
 
 (async () => {
+  // REGRESSION: play_session calls webLib.chatSend/read/click/open on the exported
+  // object — assert they're really EXPORTED before the stubs below mask them. (A
+  // missing chatSend export once caused a runaway no-GPU-registering tick loop.)
+  for (const fn of ['chatSend', 'chatWatch', 'chatUnwatch', 'read', 'open', 'click']) {
+    ok(`web.${fn} is exported`, typeof web[fn] === 'function');
+  }
   installHappyStubs();
   ps.reset(); ps.start();
   ok('starts at open', ps.get() === 'open');

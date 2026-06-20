@@ -335,5 +335,6 @@ This types your line, sends it, WAITS for the character's reply to finish, and h
 
 module.exports = {
   isConnected, ensure, open, read, click, type, back, close, openTopResult,
+  chatSend, chatWatch, chatUnwatch,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR
 };
