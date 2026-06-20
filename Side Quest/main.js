@@ -42,6 +42,9 @@ const discordLib = require('./lib/discord');
 const memoryLib = require('./lib/memory');
 const inboxLib = require('./lib/inbox');
 const actionLoop = require('./lib/action_loop');
+const blackboard = require('./lib/blackboard');
+const curatorLib = require('./lib/curator');
+const gapsLib = require('./lib/gaps');
 const {
   startContinuityScheduler,
   stopContinuityScheduler,
@@ -61,6 +64,8 @@ let currentSessionId = null;
 let currentSessionStartedAt = null;
 let inboxPollTimer = null;     // setInterval id for the inbox poller (cleared on shutdown)
 let inboxPollTimeout = null;   // initial-sweep setTimeout id
+let lastUserTurnTs = Date.now(); // for detecting "return after a long absence" (capability proposals)
+const RETURN_IDLE_MS = 10 * 60 * 1000; // gap that counts as "they were away"
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -85,6 +90,9 @@ function createWindow() {
 app.whenReady().then(() => {
   config.loadEnv();
   db.init();
+  // Curator: deterministic hygiene at session start — age long-stalled threads to
+  // 'abandoned' so they stop resurfacing in the idle loop. Never deletes.
+  try { curatorLib.curateThreads(); curatorLib.curateGaps(); } catch (e) { console.error('[main] curator failed:', e.message); }
   filesLib.ensureWorkspace();
   // Warm the CPU embedder (bge-small via transformers.js) so first knowledge
   // retrieval isn't slow. Runs on CPU — no VRAM contention with the chat model.
@@ -508,6 +516,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // turn (so she voices what the tool returned without Lucas having to prompt).
   let followupFired = false;
 
+  // Measure the gap since her last turn BEFORE resetting activity — a long gap
+  // means Lucas is "back", which is when a capability proposal may surface.
+  const idleSinceLastTurn = Date.now() - lastUserTurnTs;
+  lastUserTurnTs = Date.now();
+
   markUserActivity();
   markMonologueActivity();
   markHeartbeatActivity();
@@ -520,6 +533,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
 
   const sessionId = currentSessionId;
   const userTurnRow = db.insertTurn({ sessionId, speaker: 'user', content: userMessage });
+  // Blackboard: a user message is the StuckDetector's reset boundary — events
+  // after it start a fresh "interactive slice" so a new instruction is never read
+  // as part of a prior spiral.
+  try { blackboard.markUser(userMessage, userTurnRow && userTurnRow.id); } catch (e) { console.error('[main] blackboard.markUser failed:', e.message); }
 
   // === HARD PROTOCOL INTERCEPTOR ===
   // Before doing ANYTHING expensive (web fetch, Stheno call, gemma extraction),
@@ -669,9 +686,18 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // empty on miss, so the gap-response reflex handles "I don't know" cleanly.
   let retrievedKnowledgeBlock = null;
   try {
-    const rk = await memoryLib.retrieve(userMessage, { k: 4 });
+    // Generative-Agents scored retrieval: recency × relevance × importance, so
+    // high-signal notes/insights outrank stale or idle ones (not pure relevance).
+    const rk = await memoryLib.retrieveScored(userMessage, { k: 4 });
     retrievedKnowledgeBlock = memoryLib.formatForPrompt(rk, userName);
   } catch (err) { console.error('[main] knowledge retrieve failed:', err.message); }
+
+  // CAPABILITY PROPOSAL ON RETURN: if Lucas was away a while and she logged a
+  // capability gap during idle, surface the top one for her to PROPOSE (her call).
+  let capabilityProposalBlock = null;
+  if (idleSinceLastTurn > RETURN_IDLE_MS) {
+    try { capabilityProposalBlock = gapsLib.buildReturnProposalBlock(userName); } catch (e) { console.error('[main] gap proposal failed:', e.message); }
+  }
 
   const messages = buildChatPrompt({
     userName,
@@ -686,6 +712,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     browserBlock,
     pendingInbounds,
     retrievedKnowledgeBlock,
+    capabilityProposalBlock,
     newUserMessage: composedUserMessage
   });
 

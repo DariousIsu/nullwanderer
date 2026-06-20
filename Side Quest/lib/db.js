@@ -6,7 +6,9 @@ let db = null;
 
 const APP_ROOT = path.resolve(__dirname, '..');
 const DATA_DIR = path.join(APP_ROOT, 'data');
-const DB_PATH = path.join(DATA_DIR, 'sq.db');
+// SQ_DB_PATH lets smoke/back-tests run against an isolated throwaway DB instead of
+// the live data/sq.db. Unset in normal operation → the real database.
+const DB_PATH = process.env.SQ_DB_PATH || path.join(DATA_DIR, 'sq.db');
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -179,11 +181,57 @@ const MIGRATIONS = [
     links TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_kind ON knowledge(kind)`,
-  `CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(content)`
+  `CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(content)`,
+  // agent_events — the BLACKBOARD. One append-only timeline that every idle loop
+  // writes to at the end of its tick and reads from at the top, so tick N+1 sees
+  // tick N (the "continuous consciousness" substrate). Reference-not-copy: each
+  // row points at the canonical source row (ref_table/ref_id) and keeps only a
+  // short `content` snippet + a normalized `signature` for the StuckDetector's
+  // cheap equality compare. cause_id links an event to the one that triggered it
+  // (e.g. an observation back to its action). source ∈ monologue|heartbeat|
+  // reflection|action|user|curator; kind ∈ thought|reading|utterance|action|
+  // observation|insight|focus_set|focus_advance|focus_resolve|user_msg.
+  `CREATE TABLE IF NOT EXISTS agent_events (
+    id INTEGER PRIMARY KEY,
+    ts INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    focus_id INTEGER,
+    cause_id INTEGER,
+    ref_table TEXT,
+    ref_id INTEGER,
+    content TEXT,
+    signature TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_events_ts ON agent_events(ts)`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_events_focus ON agent_events(focus_id, id)`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_events_source ON agent_events(source, id)`,
+  // Generative-Agents importance ("poignancy"): a 1–10 significance score on each
+  // thought/reading. Drives the heartbeat surfacing gate (don't speak trivia) and
+  // the Phase-D retrieval scorer (importance is one of recency×relevance×importance).
+  `ALTER TABLE monologue ADD COLUMN importance INTEGER`,
+  // capability_gaps — things she discovered she CAN'T do yet during idle time,
+  // each with her proposed solution. Detected from <gap> tags / blocked focuses;
+  // surfaced as a proactive proposal when the user returns (the "drive toward new
+  // capabilities" behavior). status: open → proposed → resolved|dismissed.
+  // signature = normalized description for dedup (avoid the open_threads sprawl).
+  `CREATE TABLE IF NOT EXISTS capability_gaps (
+    id INTEGER PRIMARY KEY,
+    description TEXT NOT NULL,
+    proposed_solution TEXT,
+    source_context TEXT,
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','proposed','resolved','dismissed')),
+    signature TEXT,
+    detected_ts INTEGER NOT NULL,
+    proposed_ts INTEGER,
+    resolved_ts INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_capability_gaps_status ON capability_gaps(status, detected_ts)`
 ];
 
 function init() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  const dir = path.dirname(DB_PATH);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   db = new Database(DB_PATH);
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = NORMAL');
@@ -233,11 +281,11 @@ function getRecentDisplayTurns(n) {
   return rows.reverse();
 }
 
-function insertMonologue({ content, model = null, feedContext = null, type = 'thought', query = null, urls = null }) {
+function insertMonologue({ content, model = null, feedContext = null, type = 'thought', query = null, urls = null, importance = null }) {
   const ts = Date.now();
   const info = getDb()
-    .prepare('INSERT INTO monologue (ts, model, content, feed_context, type, query, urls) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(ts, model, content, feedContext ? JSON.stringify(feedContext) : null, type, query, urls ? JSON.stringify(urls) : null);
+    .prepare('INSERT INTO monologue (ts, model, content, feed_context, type, query, urls, importance) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(ts, model, content, feedContext ? JSON.stringify(feedContext) : null, type, query, urls ? JSON.stringify(urls) : null, importance);
   return { id: info.lastInsertRowid, ts };
 }
 
@@ -392,6 +440,27 @@ function touchOpenThread(id, note = null) {
 
 function incrementThreadMention(id) {
   getDb().prepare('UPDATE open_threads SET mention_count = mention_count + 1 WHERE id = ?').run(id);
+}
+
+// Merge a child thread INTO a parent (umbrella) — the consolidation primitive.
+// Non-destructive: the child row is kept, marked 'abandoned' (so it drops out of
+// the active set), linked to the parent via parent_id, and its mention/action
+// weight is transferred to the parent. A progress note records merged_into for
+// reversibility. Returns null if either id is missing.
+function mergeOpenThread(childId, parentId, { reason = 'merged (consolidation)' } = {}) {
+  const child = getOpenThread(childId);
+  const parent = getOpenThread(parentId);
+  if (!child || !parent || childId === parentId) return null;
+  const now = Date.now();
+  getDb()
+    .prepare('UPDATE open_threads SET mention_count = mention_count + ?, action_count = action_count + ? WHERE id = ?')
+    .run(child.mention_count || 0, child.action_count || 0, parentId);
+  const notes = child.progress_notes ? JSON.parse(child.progress_notes) : [];
+  notes.push({ ts: now, status: 'merged', reason, merged_into: parentId });
+  getDb()
+    .prepare(`UPDATE open_threads SET status = 'abandoned', parent_id = ?, progress_notes = ?, last_touched_ts = ?, resolved_ts = ? WHERE id = ?`)
+    .run(parentId, JSON.stringify(notes), now, now, childId);
+  return { childId, parentId, ts: now };
 }
 
 function incrementThreadAction(id) {
@@ -653,6 +722,14 @@ function ftsSearchKnowledge(query, limit = 12) {
   } catch { return []; }
 }
 
+// Knowledge rows whose source matches a LIKE pattern, created on/after sinceTs,
+// newest first. Used by the focus spawn-gate to find recent focus tombstones.
+function getKnowledgeBySourceSince(sourceLike, sinceTs) {
+  return getDb()
+    .prepare(`SELECT * FROM knowledge WHERE source LIKE ? AND created_ts >= ? ORDER BY created_ts DESC`)
+    .all(sourceLike, sinceTs);
+}
+
 function getKnowledgeByIds(ids) {
   if (!ids || ids.length === 0) return [];
   const ph = ids.map(() => '?').join(',');
@@ -688,6 +765,87 @@ function deleteKnowledgeBySource(source) {
   return rows.length;
 }
 
+// --- Capability gaps (things she can't do yet → proposals on return) ---
+
+function insertCapabilityGap({ description, proposedSolution = null, sourceContext = null, signature = null }) {
+  const ts = Date.now();
+  const info = getDb()
+    .prepare(`INSERT INTO capability_gaps (description, proposed_solution, source_context, status, signature, detected_ts)
+      VALUES (?, ?, ?, 'open', ?, ?)`)
+    .run(description, proposedSolution, sourceContext, signature, ts);
+  return { id: info.lastInsertRowid, ts };
+}
+
+function getOpenCapabilityGaps(limit = 10) {
+  return getDb()
+    .prepare(`SELECT * FROM capability_gaps WHERE status = 'open' ORDER BY detected_ts DESC LIMIT ?`)
+    .all(limit);
+}
+
+// Dedup helper: is there already an open/proposed gap with this signature?
+function findActiveCapabilityGapBySignature(signature) {
+  if (!signature) return null;
+  return getDb()
+    .prepare(`SELECT * FROM capability_gaps WHERE signature = ? AND status IN ('open','proposed') LIMIT 1`)
+    .get(signature);
+}
+
+function markCapabilityGapStatus(id, status) {
+  const now = Date.now();
+  const col = status === 'proposed' ? 'proposed_ts' : (status === 'resolved' || status === 'dismissed') ? 'resolved_ts' : null;
+  if (col) getDb().prepare(`UPDATE capability_gaps SET status = ?, ${col} = ? WHERE id = ?`).run(status, now, id);
+  else getDb().prepare(`UPDATE capability_gaps SET status = ? WHERE id = ?`).run(status, id);
+  return { id, ts: now };
+}
+
+// For the curator: open/proposed gaps untouched since before cutoffTs.
+function getStaleCapabilityGaps(cutoffTs) {
+  return getDb()
+    .prepare(`SELECT id FROM capability_gaps WHERE status IN ('open','proposed') AND detected_ts < ?`)
+    .all(cutoffTs);
+}
+
+// --- Agent events (the blackboard / shared timeline) ---
+
+function insertAgentEvent({ source, kind, focusId = null, causeId = null, refTable = null, refId = null, content = null, signature = null }) {
+  const ts = Date.now();
+  const info = getDb()
+    .prepare(`INSERT INTO agent_events (ts, source, kind, focus_id, cause_id, ref_table, ref_id, content, signature)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(ts, source, kind, focusId, causeId, refTable, refId,
+      content != null ? String(content).slice(0, 600) : null, signature);
+  return { id: info.lastInsertRowid, ts };
+}
+
+// Recent events, oldest→newest (matches getRecentTurns convention).
+function getRecentAgentEvents(n = 40) {
+  const rows = getDb().prepare('SELECT * FROM agent_events ORDER BY id DESC LIMIT ?').all(n);
+  return rows.reverse();
+}
+
+// Events for one focus, oldest→newest (the focus's own working set).
+function getAgentEventsForFocus(focusId, n = 60) {
+  const rows = getDb()
+    .prepare('SELECT * FROM agent_events WHERE focus_id = ? ORDER BY id DESC LIMIT ?')
+    .all(focusId, n);
+  return rows.reverse();
+}
+
+// Events strictly after the most recent source='user' event, oldest→newest, capped
+// at n. This is the StuckDetector's "interactive slice" — a user message resets the
+// loop detector so a fresh instruction is never mistaken for a spiral. Falls back to
+// the recent window when the user hasn't spoken yet this history.
+function getAgentEventsSinceLastUser(n = 40) {
+  const last = getDb()
+    .prepare(`SELECT id FROM agent_events WHERE source = 'user' ORDER BY id DESC LIMIT 1`)
+    .get();
+  if (!last) return getRecentAgentEvents(n);
+  const rows = getDb()
+    .prepare('SELECT * FROM agent_events WHERE id > ? ORDER BY id ASC LIMIT ?')
+    .all(last.id, n);
+  return rows;
+}
+
 function getMeta(key) {
   const row = getDb().prepare('SELECT value FROM meta WHERE key = ?').get(key);
   return row ? row.value : null;
@@ -701,6 +859,7 @@ function setMeta(key, value) {
 
 module.exports = {
   init,
+  getDb,
   startSession,
   endSession,
   insertTurn,
@@ -726,6 +885,7 @@ module.exports = {
   touchOpenThread,
   incrementThreadMention,
   incrementThreadAction,
+  mergeOpenThread,
   insertProtocol,
   getActiveProtocols,
   getProtocolByTrigger,
@@ -748,11 +908,21 @@ module.exports = {
   insertKnowledge,
   getAllKnowledgeEmbeddings,
   ftsSearchKnowledge,
+  getKnowledgeBySourceSince,
   getKnowledgeByIds,
   touchKnowledge,
   countKnowledge,
   deleteKnowledgeBySource,
   getCumulativeSessionTime,
+  insertCapabilityGap,
+  getOpenCapabilityGaps,
+  findActiveCapabilityGapBySignature,
+  markCapabilityGapStatus,
+  getStaleCapabilityGaps,
+  insertAgentEvent,
+  getRecentAgentEvents,
+  getAgentEventsForFocus,
+  getAgentEventsSinceLastUser,
   getMeta,
   setMeta,
   DB_PATH

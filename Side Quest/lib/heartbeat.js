@@ -7,6 +7,10 @@ const browserLib = require('./browser');
 const screenLib = require('./screen');
 const autoTools = require('./auto_tools');
 const governor = require('./governor');
+const blackboard = require('./blackboard');
+const importanceLib = require('./importance');
+const gapsLib = require('./gaps');
+const recipesLib = require('./recipes');
 
 const MODEL = require('./config').model();
 const TICK_INTERVAL_MS = 30 * 1000;        // check every 30s while idle
@@ -80,6 +84,8 @@ function buildHeartbeatPrompt({ userName, recentReflections, recentTurns, recent
   // The heartbeat is the proactive channel: this is where she reaches out.
   const autoBlocks = autoTools.promptBlocks();
   if (autoBlocks) systemContent += '\n\n' + autoBlocks;
+  // Recipe card — emit the right literal tag (e.g. <read-inbox/> vs the SEND family).
+  systemContent += '\n\n' + recipesLib.card();
   if (awareness) systemContent = awareness + '\n\n' + systemContent;
   if (protocols && protocols.length > 0) {
     const { formatInjection } = require('./protocols');
@@ -334,11 +340,15 @@ async function maybeHeartbeat() {
       }
     }
 
+    // CAPABILITY GAPS: log any <gap> she named while idle (deduped), then strip.
+    try { gapsLib.record(autoCombined, { sourceContext: 'heartbeat' }); } catch (e) { console.error('[heartbeat] gap record failed:', e.message); }
+
     let thoughtStripped = (thought || '').replace(/<wonder>[\s\S]*?<\/wonder>/gi, '').trim();
     thoughtStripped = filesLib.stripTags(thoughtStripped);
     thoughtStripped = browserLib.stripTags(thoughtStripped);
     thoughtStripped = screenLib.stripTags(thoughtStripped);
     thoughtStripped = autoTools.stripAll(thoughtStripped);
+    thoughtStripped = gapsLib.stripTags(thoughtStripped);
 
     // Always store the thought (research signal: what did she consider saying?)
     if (thoughtStripped) {
@@ -375,6 +385,18 @@ async function maybeHeartbeat() {
         console.log('[heartbeat] suppressed repetitive utterance');
       }
     }
+    // IMPORTANCE SURFACING GATE (Generative Agents): don't interrupt Lucas with
+    // trivia. Score the candidate utterance 1–10 and stay silent below threshold.
+    // The bar drops when she's been quiet a long while (gap-fill) so she isn't
+    // mute forever, and inbound chat-bot replies bypass it (time-sensitive).
+    if (wantsToSpeak && !hasInbound) {
+      const imp = await importanceLib.score(trimmedSay, { userName, kind: 'utterance' });
+      const threshold = governor.shouldFillGap() ? 3 : 5;
+      if (imp < threshold) {
+        wantsToSpeak = false;
+        console.log(`[heartbeat] suppressed low-importance utterance (${imp} < ${threshold})`);
+      }
+    }
     const uGate = wantsToSpeak ? governor.requestAction('utterance', { priority: hasInbound }) : { allow: false };
     if (wantsToSpeak && uGate.allow) {
       governor.record('utterance');
@@ -386,6 +408,11 @@ async function maybeHeartbeat() {
         truncated
       });
       db.setMeta('last_ai_utterance_at', String(Date.now()));
+      // write-bottom: an unprompted utterance goes on the shared timeline (kind
+      // 'utterance' = a MessageAction to the user). Lets the StuckDetector catch
+      // the heartbeat repeating the same surfaced line, and lets the monologue see
+      // what was just said.
+      try { blackboard.append({ source: 'heartbeat', kind: 'utterance', refTable: 'turns', refId: saidRow.id, content: trimmedSay }); } catch (e) { console.error('[heartbeat] blackboard append failed:', e.message); }
       try { win.webContents.send('chat:complete', { saidId: saidRow.id, truncated, unprompted: true }); } catch {}
     } else {
       // Empty say — she chose silence. Reset the gap timer so we don't spam-check.

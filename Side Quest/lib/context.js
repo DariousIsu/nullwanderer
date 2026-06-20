@@ -310,7 +310,7 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
  *   then    = alternating user / assistant from recentTurns (assistant carries <think>/<say>)
  *   finally = the new user message
  */
-function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, retrievedKnowledgeBlock, newUserMessage }) {
+function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, retrievedKnowledgeBlock, capabilityProposalBlock, newUserMessage }) {
   let systemContent = sub(BOOTSTRAP, userName);
 
   // AWARENESS — temporal + system facts prepended to system prompt so she knows
@@ -380,6 +380,17 @@ function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonol
   // the gap-response reflex, not a reason to invent.
   if (retrievedKnowledgeBlock) {
     systemContent += `\n\n${retrievedKnowledgeBlock}`;
+  }
+
+  // RECIPE CARD — procedural memory: need→tag quick-reference so she emits the
+  // right literal tag (the <read-inbox/> vs SEND-family class of confusion).
+  // Lazy require avoids any context↔recipes load-order cycle.
+  try { systemContent += '\n\n' + require('./recipes').card(); } catch (e) { console.error('[context] recipe card failed:', e.message); }
+
+  // CAPABILITY PROPOSAL — only present when Lucas returns after an absence and she
+  // logged a gap she couldn't solve. Invites her to proactively propose it.
+  if (capabilityProposalBlock) {
+    systemContent += capabilityProposalBlock;
   }
 
   // CRITICAL instruction — drives the model to actually USE the interior content,

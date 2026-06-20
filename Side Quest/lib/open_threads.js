@@ -15,6 +15,7 @@
 
 const db = require('./db');
 const { streamChat } = require('./ollama');
+const consolidate = require('./consolidate');
 
 const EXTRACTION_MODEL = require('./config').model();
 const EXTRACTION_NUM_PREDICT = 220;
@@ -83,7 +84,12 @@ async function extractFromUserTurn({ userMessage, sourceTurnId, userName }) {
   const goals = parseGoalsJson(raw);
   if (!goals || goals.length === 0) return [];
 
-  // Dedup against existing active threads — don't re-insert near-duplicates
+  // EXTRACT-THEN-UPDATE (Mem0 best-practice): exact-string dedup is a cheap first
+  // pass, but it misses intent-duplicates worded differently (the cause of the
+  // goal sprawl). So for each surviving candidate we ask the consolidator for an
+  // ADD/NOOP decision against the semantically-nearest active threads — only
+  // genuinely-new objectives get inserted. Fail-open (ADD) if the decision errors,
+  // so a hiccup never silently drops a real goal.
   const active = db.getActiveOpenThreads(50);
   const activeNorms = new Set(active.map(t => normalize(t.content)));
 
@@ -91,7 +97,16 @@ async function extractFromUserTurn({ userMessage, sourceTurnId, userName }) {
   for (const g of goals.slice(0, 4)) {
     const cleaned = (g || '').trim();
     if (cleaned.length < 4 || cleaned.length > 200) continue;
-    if (activeNorms.has(normalize(cleaned))) continue;
+    if (activeNorms.has(normalize(cleaned))) continue; // exact-dup fast path
+    let decision = { action: 'ADD' };
+    try { decision = await consolidate.decideForCandidate(cleaned); }
+    catch (e) { console.error('[open_threads] dedup decision failed:', e.message); }
+    if (decision.action === 'NOOP') {
+      // Same intent as an existing goal — touch that thread instead of duplicating.
+      if (decision.targetId) { try { db.touchOpenThread(decision.targetId, `re-surfaced (deduped: "${cleaned.slice(0, 60)}")`); } catch {} }
+      console.log(`[open_threads] candidate deduped (NOOP → #${decision.targetId || '?'}): ${cleaned.slice(0, 60)}`);
+      continue;
+    }
     const row = db.insertOpenThread({ content: cleaned, sourceTurnId });
     inserted.push({ id: row.id, content: cleaned, ts: row.ts });
     activeNorms.add(normalize(cleaned));

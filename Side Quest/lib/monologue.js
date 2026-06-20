@@ -9,6 +9,12 @@ const browserLib = require('./browser');
 const screenLib = require('./screen');
 const autoTools = require('./auto_tools');
 const governor = require('./governor');
+const blackboard = require('./blackboard');
+const stuck = require('./stuck');
+const focusLib = require('./focus');
+const importanceLib = require('./importance');
+const gapsLib = require('./gaps');
+const recipesLib = require('./recipes');
 const { buildAwarenessBlock } = require('./context');
 
 const MODEL = require('./config').model();
@@ -131,6 +137,10 @@ function buildPrompt({ userName, recentMonologue, recentReadings, recentReflecti
   // configured) email or DM Lucas on her own initiative between turns.
   const autoBlocks = autoTools.promptBlocks();
   if (autoBlocks) sys += '\n\n' + autoBlocks;
+
+  // RECIPE CARD — procedural memory: condensed need→tag quick-reference above the
+  // verbose blocks, so she emits the right literal tag instead of narrating one.
+  sys += '\n\n' + recipesLib.card();
 
   // PRIMACY: open_threads block injected at top of system prompt
   if (openThreads && openThreads.length > 0) {
@@ -294,6 +304,73 @@ Output: one paragraph + one status tag. Nothing else.`;
   }
 
   context += `NOW: produce one short paragraph of concrete progress on thread #${thread.id}. End with the appropriate [thread-...] tag.`;
+
+  messages.push({ role: 'user', content: context });
+  return messages;
+}
+
+// FOCUS MODE: the highest-priority idle prompt. When a focus is active the tick
+// SERVES it — works the next concrete step — instead of free-associating. The
+// anti-loop core is that we SHOW the focus its own working set (what it has
+// already thought/read), then demand the smallest step it has NOT already done.
+// First-cut boundary: thinking + reading only (a curiosity "I want to know X" or,
+// when a browser is connected, a browse-read). No real-world actions.
+function buildFocusPrompt({ userName, focus, workingSet, recentTurns, awareness, protocols }) {
+  let sys = `You are ${userName || 'their'} companion, thinking between turns. Right now you are WORKING ON ONE THING you set for yourself — holding it across thoughts instead of drifting.
+
+YOUR CURRENT FOCUS: ${focus.content}
+
+This tick has ONE job: take the SMALLEST next concrete step on this focus that you have NOT already taken. Build on what you've done — do not repeat it, do not restate the goal, do not narrate that you are working on it.
+
+How to advance:
+• Think the next specific piece — a concrete point, a draft line, a decision, a distinction — one you haven't already made below.
+• If you need to learn something to advance, say plainly "I want to know <specific thing>" and it will be looked up for you.
+• If you produce something worth keeping (a draft, a template, a finding), save it with <file-write path="notes/<topic>.md">…</file-write> so it persists.
+• If advancing would need a capability you don't have yet, name it: <gap>what you can't do :: how you'd solve it</gap> — it'll be proposed to ${userName || 'them'} later, not acted on now.
+• When the focus is genuinely COMPLETE, emit <focus-done>one line on what you landed on</focus-done>.
+• If you truly cannot make progress (it's blocked or ill-posed), emit <focus-stalled>why</focus-stalled>. Do NOT stall just because it's hard.
+
+Forbidden: restating the focus, narrating effort ("I should work on…"), atmospheric filler, or repeating anything in "Already done" below.`;
+
+  if (awareness) sys = awareness + '\n\n' + sys;
+  if (protocols && protocols.length > 0) {
+    const { formatInjection } = require('./protocols');
+    const block = formatInjection(protocols);
+    if (block) sys = block + '\n' + sys;
+  }
+  // Recipe card — so a focus step emits the right tag (read/file/search) directly.
+  sys += '\n\n' + recipesLib.card();
+
+  const messages = [{ role: 'system', content: sys }];
+
+  let context = `FOCUS: ${focus.content}\n\n`;
+
+  // The focus's own working set — what she has already done on it. This is the
+  // line that prevents loops: she can see her prior steps and is told not to
+  // repeat them. Render newest-last so the progression reads naturally.
+  if (workingSet && workingSet.length > 0) {
+    context += `Already done on this focus (do NOT repeat any of these — go beyond them):\n`;
+    for (const e of workingSet.slice(-8)) {
+      const tag = e.kind === 'reading' ? 'read' : (e.kind === 'focus_set' ? 'set' : 'thought');
+      const snip = (e.content || '').replace(/\s+/g, ' ').slice(0, 160);
+      if (snip) context += `  · (${tag}) ${snip}\n`;
+    }
+    context += '\n';
+  } else {
+    context += `(Nothing done yet — this is the first step.)\n\n`;
+  }
+
+  if (recentTurns && recentTurns.length > 0) {
+    const lastFew = recentTurns.slice(-4);
+    context += `Recent conversation (grounding only — don't drift to it):\n`;
+    for (const t of lastFew) {
+      if (t.speaker === 'user') context += `${userName || 'them'}: ${(t.content || '').slice(0, 200)}\n`;
+      else if (t.speaker === 'ai_said') context += `you: ${(t.content || '').slice(0, 200)}\n`;
+    }
+    context += '\n';
+  }
+
+  context += `NOW: the single smallest next step on "${focus.content}" that you have not already taken. One short paragraph. End with <focus-done>…</focus-done> only if it's genuinely complete.`;
 
   messages.push({ role: 'user', content: context });
   return messages;
@@ -483,6 +560,16 @@ async function tick() {
   }
 }
 
+// Feed the reflection significance trigger: every scored thought/reading adds its
+// importance to a running accumulator; reflection.js fires when it crosses 150.
+function bumpReflectionAccum(n) {
+  if (!n) return;
+  try {
+    const a = parseInt(db.getMeta('reflection_importance_accum') || '0', 10);
+    db.setMeta('reflection_importance_accum', String(a + n));
+  } catch {}
+}
+
 async function runOneTick() {
   tickCounter++;
   const userName = db.getMeta('user_name') || 'them';
@@ -522,7 +609,20 @@ async function runOneTick() {
   let messages;
   let modeIsThreadReview = false;
   let focusedThread = null;
-  if (openThreads.length > 0 && (tickCounter % 3 === 0)) {
+  // FOCUS is highest priority: if one is active she serves it every tick until it
+  // resolves/stalls/caps. This is the continuity — an intention carried forward.
+  const activeFocus = focusLib.getCurrent();
+  if (activeFocus) {
+    const workingSet = blackboard.forFocus(activeFocus.id, 60);
+    messages = buildFocusPrompt({
+      userName,
+      focus: activeFocus,
+      workingSet,
+      recentTurns,
+      awareness,
+      protocols
+    });
+  } else if (openThreads.length > 0 && (tickCounter % 3 === 0)) {
     focusedThread = openThreads[0];  // stalest (oldest last_touched)
     messages = buildThreadReviewPrompt({
       userName,
@@ -559,7 +659,13 @@ async function runOneTick() {
   });
 
   let trimmed = content.trim();
-  if (!trimmed) return;
+  if (!trimmed) {
+    // An empty focus tick is still a no-progress strike — otherwise empty
+    // generations could keep a focus alive until the wall-clock cap. Free
+    // association just stays silent as before.
+    if (activeFocus) { const o = focusLib.recordOutcome(activeFocus, { progressed: false }); console.log(`[focus] #${activeFocus.id} empty tick → ${o.action}`); }
+    return;
+  }
 
   // OPEN THREADS POST-PROCESSING:
   // 1) Parse + apply any [thread-*:N] status tags (touches DB)
@@ -664,7 +770,42 @@ async function runOneTick() {
     trimmed = autoTools.stripAll(trimmed);
   }
 
+  // CAPABILITY GAPS: if she named something she can't do yet (<gap>…</gap>), log
+  // it (deduped) so it can be proposed when Lucas returns. Strip from the thought.
+  try { if (gapsLib.record(trimmed, { sourceContext: 'monologue' })) trimmed = gapsLib.stripTags(trimmed); }
+  catch (e) { console.error('[monologue] gap record failed:', e.message); }
+
   if (!trimmed) return;
+
+  // FOCUS OUTCOME: when serving a focus, this tick's output is its next step. We
+  // measure novelty against the focus's OWN working set (re-stating ≠ progress),
+  // store the thought tagged to the focus, then let focus.recordOutcome decide
+  // continue / resolve / stall (strikes + hard caps + focus-scoped stuck check).
+  // A SKIP or empty output counts as a no-progress strike — she can't idle a focus
+  // forever. Returns here so focus ticks bypass the free-association quality gates.
+  if (activeFocus) {
+    const control = focusLib.parseControlTags(trimmed);
+    let clean = focusLib.stripControlTags(trimmed).replace(/<wonder>[\s\S]*?<\/wonder>/gi, '').trim();
+    if (/^SKIP\.?$/i.test(clean)) clean = '';
+    const sig = blackboard.signature(clean);
+    const progressed = (control && control.type === 'done') ? true : focusLib.isNovel(activeFocus.id, sig);
+    if (clean) {
+      const imp = await importanceLib.score(clean, { userName, kind: 'thought' });
+      bumpReflectionAccum(imp);
+      const frow = db.insertMonologue({ content: clean, model: MODEL, feedContext, type: 'thought', importance: imp });
+      pushSheep({ id: frow.id, ts: frow.ts, content: clean, type: 'thought' });
+      try { blackboard.append({ source: 'monologue', kind: 'thought', focusId: activeFocus.id, refTable: 'monologue', refId: frow.id, content: clean }); }
+      catch (e) { console.error('[monologue] focus thought append failed:', e.message); }
+    }
+    const outcome = focusLib.recordOutcome(activeFocus, { progressed, control });
+    console.log(`[focus] #${activeFocus.id} → ${outcome.action} (${outcome.reason})`);
+    // Reading to advance — scoped to the focus so its readings join the working set.
+    if (outcome.action === 'continue' && clean) {
+      maybeSearchFromThought(clean, activeFocus.id).catch(err => console.error('[monologue] focus search error:', err.message));
+    }
+    return;
+  }
+
   // Model said it has nothing specific to surface — honor that, don't store
   if (/^SKIP\.?$/i.test(trimmed)) return;
 
@@ -678,6 +819,15 @@ async function runOneTick() {
     if (!trimmed) trimmed = `(wondered: ${wonderText.slice(0, 80)})`;
   }
 
+  // SELF-SET: a free-association thought may declare a new intention with
+  // <focus>goal</focus>. Create it (it becomes the served focus next tick) and
+  // strip the tag so it doesn't pollute the stored thought. One focus at a time —
+  // setFromText no-ops if one is already active.
+  try { const set = await focusLib.setFromText(trimmed); if (set) console.log('[focus] self-set →', set.goal.slice(0, 80)); }
+  catch (e) { console.error('[monologue] focus self-set failed:', e.message); }
+  trimmed = focusLib.stripControlTags(trimmed);
+  if (!trimmed) return;
+
   // GOVERNOR gap-fill: when she's been quiet too long, relax the quality drop-filters
   // so SOMETHING surfaces and the silence gets filled rather than staying empty.
   const fillGap = governor.shouldFillGap();
@@ -689,20 +839,37 @@ async function runOneTick() {
     return;
   }
 
+  // STUCK GUARD (blackboard): defense-in-depth beyond the Jaccard similarity check
+  // above. Reads the shared timeline and catches exact-repeat / alternating spirals
+  // (incl. cross-loop ones) that single-loop similarity misses. On a hit we skip
+  // surfacing this tick rather than feed the loop. (Phase B gives this teeth: it
+  // will abort the active focus; for now it just breaks the visible repetition.)
+  const stuckState = stuck.check();
+  if (stuckState.stuck) {
+    console.log(`[monologue] stuck (${stuckState.scenario}) — skipping tick: ${stuckState.reason}`);
+    return;
+  }
+
   // GOVERNOR pace: hold surfaced thoughts to the min-gap + hourly budget. If paced
   // out, let the silence stand (she still thought; it just isn't surfaced).
   const thoughtGate = governor.requestAction('thought');
   if (!thoughtGate.allow) return;
   governor.record('thought');
 
+  const importance = await importanceLib.score(trimmed, { userName, kind: 'thought' });
+  bumpReflectionAccum(importance);
   const row = db.insertMonologue({
     content: trimmed,
     model: MODEL,
     feedContext,
-    type: 'thought'
+    type: 'thought',
+    importance
   });
 
-  pushSheep({ id: row.id, ts: row.ts, content: trimmed, type: 'thought' });
+  pushSheep({ id: row.id, ts: row.ts, content: trimmed, type: 'thought', importance });
+  // write-bottom: record this thought on the shared timeline so the next tick (and
+  // the other loops) can see it, and so the StuckDetector has something to compare.
+  try { blackboard.append({ source: 'monologue', kind: 'thought', refTable: 'monologue', refId: row.id, content: trimmed }); } catch (e) { console.error('[monologue] blackboard append failed:', e.message); }
 
   // If a <wonder>X</wonder> was extracted, fire a self-dialogue with [stheno]
   // her larger self. Async — does not block monologue tick.
@@ -734,11 +901,11 @@ function pushSheep(payload) {
   } catch {}
 }
 
-async function maybeSearchFromThought(thoughtText) {
+async function maybeSearchFromThought(thoughtText, focusId = null) {
   const trig = detectCuriosity(thoughtText);
   if (!trig.triggered || !trig.query) return;
   if (recentSearchHappened()) return;
-  await runSearch(trig.query, 'curiosity');
+  await runSearch(trig.query, 'curiosity', focusId);
 }
 
 async function maybeBoredomSearch() {
@@ -787,7 +954,7 @@ function recentSearchHappened() {
   return (Date.now() - last) < MIN_GAP_BETWEEN_SEARCHES_MS;
 }
 
-async function runSearch(query, source) {
+async function runSearch(query, source, focusId = null) {
   db.setMeta('last_search_at', String(Date.now()));
   try {
     const { results } = await webSearch(query);
@@ -816,15 +983,23 @@ async function runSearch(query, source) {
       }
     }
 
+    const readingImportance = await importanceLib.score(content, { kind: 'reading' });
+    bumpReflectionAccum(readingImportance);
     const row = db.insertMonologue({
       content,
       model: 'duckduckgo',
       type: 'reading',
       query,
-      urls: top.map(r => r.url)
+      urls: top.map(r => r.url),
+      importance: readingImportance
     });
 
     pushSheep({ id: row.id, ts: row.ts, content, type: 'reading', query });
+    // write-bottom: a reading is an "observation" on the timeline — it breaks a
+    // run of pure thoughts, which is exactly what the StuckDetector keys on. When
+    // the search was fired to advance a focus, tag it so it joins that focus's
+    // working set (counts as progress, visible to the next focus tick).
+    try { blackboard.append({ source: 'monologue', kind: 'reading', focusId: focusId || null, refTable: 'monologue', refId: row.id, content: query || content }); } catch (e) { console.error('[monologue] blackboard reading append failed:', e.message); }
   } catch (err) {
     console.error('[monologue] search failed:', err.message);
   }

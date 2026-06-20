@@ -112,6 +112,72 @@ async function retrieve(query, { k = 4, kinds = null } = {}) {
   return result;
 }
 
+// Min-max normalize a Map's values into [0,1]. Zero range (all equal, incl. a
+// single item) → 0.5 for every key, matching Generative Agents' normalize_dict.
+function _normalize(map) {
+  const vals = [...map.values()];
+  if (vals.length === 0) return map;
+  const min = Math.min(...vals), max = Math.max(...vals), range = max - min;
+  const out = new Map();
+  for (const [k, v] of map) out.set(k, range === 0 ? 0.5 : (v - min) / range);
+  return out;
+}
+
+/**
+ * Generative-Agents retrieval: score every candidate by a weighted sum of
+ * recency × relevance × importance (each min-max normalized to [0,1] first), and
+ * return the top-K. This replaces pure-recency / pure-RRF ordering so high-signal
+ * memories outrank idle noticing.
+ *
+ *   recency    = decayPerHour ^ hours-since-last-touched (exponential)
+ *   relevance  = cosine(query, memory) over bge-small embeddings
+ *   importance = stored 1–10 poignancy (knowledge.importance; null → neutral)
+ *
+ * Effective weights mirror the paper (relevance dominates): recency 0.5,
+ * relevance 3, importance 2. Falls back gracefully: no query embedding → relevance
+ * drops out and ranking is recency+importance.
+ */
+async function retrieveScored(query, { k = 4, kinds = null, weights = { recency: 0.5, relevance: 3, importance: 2 }, decayPerHour = 0.99 } = {}) {
+  const rows = db.getAllKnowledgeEmbeddings();
+  if (!rows || rows.length === 0) return [];
+
+  let qv = null;
+  if (query && String(query).trim()) { try { qv = await embed(query); } catch { qv = null; } }
+
+  const now = Date.now();
+  const recency = new Map(), relevance = new Map(), importance = new Map();
+  for (const r of rows) {
+    if (kinds && !kinds.includes(r.kind)) continue;
+    const last = r.last_used_ts || r.created_ts || now;
+    const hours = Math.max(0, (now - last) / 3600000);
+    recency.set(r.id, Math.pow(decayPerHour, hours));
+    let rel = 0;
+    if (qv) { try { rel = cosine(qv, JSON.parse(r.embedding)); } catch { rel = 0; } }
+    relevance.set(r.id, rel);
+    // knowledge.importance is stored 0..1 (legacy) OR 1..10 (poignancy). Normalize
+    // either onto a common axis: >1 means a 1–10 score, divide by 10.
+    let imp = r.importance == null ? 0.5 : r.importance;
+    if (imp > 1) imp = imp / 10;
+    importance.set(r.id, imp);
+  }
+  if (recency.size === 0) return [];
+
+  const recN = _normalize(recency), relN = _normalize(relevance), impN = _normalize(importance);
+  const scored = [];
+  for (const id of recN.keys()) {
+    const s = weights.recency * recN.get(id) + weights.relevance * relN.get(id) + weights.importance * impN.get(id);
+    scored.push([id, s]);
+  }
+  scored.sort((a, b) => b[1] - a[1]);
+  const topIds = scored.slice(0, k).map(([id]) => id);
+
+  const fetched = db.getKnowledgeByIds(topIds);
+  const byId = new Map(fetched.map(r => [r.id, r]));
+  const result = topIds.map(id => byId.get(id)).filter(Boolean);
+  for (const r of result) { try { db.touchKnowledge(r.id); } catch {} }
+  return result;
+}
+
 /** Format retrieved knowledge for prompt injection (the RETRIEVED tail). */
 function formatForPrompt(rows, userName = 'them') {
   if (!rows || rows.length === 0) return null;
@@ -128,6 +194,6 @@ function isReady() { return !!_extractor; }
 function warm() { return getExtractor().then(() => true).catch(() => false); }
 
 module.exports = {
-  embed, store, logAction, retrieve, formatForPrompt, warm, isReady,
-  cosine, fuse  // exported for unit tests
+  embed, store, logAction, retrieve, retrieveScored, formatForPrompt, warm, isReady,
+  cosine, fuse, _normalize  // exported for unit tests
 };
