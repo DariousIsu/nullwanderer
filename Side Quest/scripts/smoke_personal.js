@@ -68,14 +68,6 @@ ok('forbids asking for a task', /do not ask .* to/i.test(cb) || /assign you a ta
 ok('does NOT choreograph bot navigation (Lucas owns the bot tools)', !/web-open|crushon|navigate/i.test(cb));
 ok('just-toggled nudge present', /JUST handed you/i.test(cb));
 
-console.log('\nMonologue play steer content (framing only — no navigation choreography):');
-const ms = personal.buildMonologueSteer('Lucas');
-ok('off the clock', /off the clock/i.test(ms));
-ok('continue an OPEN chat with <web-chat>', /<web-chat/i.test(ms));
-ok('does NOT tell her to navigate/open a site', !/web-open|crushon|web-read/i.test(ms));
-ok('says no work', /no work|No work/.test(ms));
-ok('tells her not to disclaim a self', /disclaim having a self/i.test(ms));
-
 console.log('\n<web-chat> tag parsing (her own browser):');
 const tags = web.parseTags('thinking... <web-chat speaker="Aiden">Tell me about the heist.</web-chat> ok');
 ok('parses one web-chat tag', tags.length === 1 && tags[0].tag === 'web-chat');

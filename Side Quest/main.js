@@ -900,19 +900,23 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     ...inboxLib.parseTags(thought || ''),
     ...inboxLib.parseTags(say || '')
   ];
-  const schedTagsToRun = [
+  // OFF THE CLOCK: don't fire the work / Lucas-pinging tools from a chat reply
+  // either (the 24B reflexively schedules + notifies + DMs when told to "go play").
+  // The tags are still stripped from the stored content below; they just don't run.
+  const offClock = (() => { try { return personal.isOn(); } catch { return false; } })();
+  const schedTagsToRun = offClock ? [] : [
     ...schedulerLib.parseTags(thought || ''),
     ...schedulerLib.parseTags(say || '')
   ];
-  const presenceTagsToRun = [
+  const presenceTagsToRun = offClock ? [] : [
     ...presenceLib.parseTags(thought || ''),
     ...presenceLib.parseTags(say || '')
   ];
-  const emailTagsToRun = [
+  const emailTagsToRun = offClock ? [] : [
     ...emailLib.parseTags(thought || ''),
     ...emailLib.parseTags(say || '')
   ];
-  const discordTagsToRun = [
+  const discordTagsToRun = offClock ? [] : [
     ...discordLib.parseTags(thought || ''),
     ...discordLib.parseTags(say || '')
   ];

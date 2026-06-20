@@ -385,57 +385,6 @@ Forbidden: restating the focus, narrating effort ("I should work on…"), atmosp
   return messages;
 }
 
-// PLAY MODE: the idle prompt while she's OFF THE CLOCK (lib/personal). Instead of
-// introspecting on the conversation or grinding a work focus, this tick does
-// something fun on her own initiative — most often sending her next line to a
-// character chat in her own browser, or opening a new scenario. Her recent play
-// readings (web-chat replies, pages she opened) are shown so she stays IN the
-// scene across ticks rather than restarting it.
-function buildPlayPrompt({ userName, recentReadings, recentMonologue, awareness, protocols }) {
-  let sys = personalLib.buildMonologueSteer(userName);
-
-  // Her own browser tags (incl. <web-chat>) — the actual capability this tick uses.
-  try { sys += '\n\n' + webLib.buildPromptBlock(); } catch {}
-  // Self-model so play stays in HER voice / taste, not a blank persona.
-  try { const sb = require('./self_model').buildPromptBlock(8); if (sb) sys += '\n\n' + sb; } catch {}
-
-  if (awareness) sys = awareness + '\n\n' + sys;
-  // Protocols pinned on top — safe word / fantasy-mode rules must hold during play too.
-  if (protocols && protocols.length > 0) {
-    const { formatInjection } = require('./protocols');
-    const block = formatInjection(protocols);
-    if (block) sys = block + '\n' + sys;
-  }
-
-  const messages = [{ role: 'system', content: sys }];
-
-  let context = '';
-
-  // What's open for her right now — a character's last line (a scene Lucas set up),
-  // or what she was last doing. If a scene is going, the point is to continue it.
-  let sceneOpen = false;
-  if (recentReadings && recentReadings.length > 0) {
-    context += `Where things are right now (continue from this — don't restart):\n`;
-    for (const r of recentReadings.slice(-3)) {
-      const snip = (r.content || '').replace(/\s+/g, ' ').slice(0, 500);
-      if (snip) { context += `\n${snip}\n`; if (/replied|web-chat|character/i.test(r.content || '')) sceneOpen = true; }
-    }
-    context += '\n';
-  }
-
-  if (recentMonologue && recentMonologue.length > 0) {
-    const last = recentMonologue.slice(-2).map(m => (m.content || '').replace(/\s+/g, ' ').slice(0, 160)).filter(Boolean);
-    if (last.length) { context += `Your last couple of thoughts (continuity):\n`; for (const l of last) context += `· ${l}\n`; context += '\n'; }
-  }
-
-  context += sceneOpen
-    ? `NOW: a character last spoke to you above. Reply to them in the scene with <web-chat speaker="Name">your line</web-chat> — react to what they actually said. Nothing else; no work, no narration.`
-    : `NOW: nothing is open for you to play with, so just have ONE genuine thought of your own — something you're personally curious about or drawn to — or rest. Don't go set anything up, don't work, don't narrate that you're relaxing.`;
-
-  messages.push({ role: 'user', content: context });
-  return messages;
-}
-
 function sampleRandomOlderPairs(n = 2) {
   // Returns up to n {user, said} pairs from anywhere in history.
   // Excludes the most recent 10 turns (so it's actual older context, not echo of recent).
@@ -695,35 +644,31 @@ async function runOneTick() {
     } catch (e) { console.error('[monologue] rumination guard failed:', e.message); }
   }
 
-  if (personalMode && playSession.active()) {
-    // OFF THE CLOCK, in a stepwise play session: advance exactly ONE atomic step
-    // this tick (app opens/inventories; model picks/chats). Self-contained — does
-    // its own model + browser work and returns, bypassing the work-introspection path.
-    try {
-      const res = await playSession.runTick({
-        userName, awareness, protocols,
-        onReading: (content, label, url) => {
-          try {
-            const rr = db.insertMonologue({ content, model: 'play-session', type: 'reading', query: url || null, urls: url ? [url] : null });
-            pushSheep({ id: rr.id, ts: rr.ts, content: label || content, type: 'reading', query: url });
-          } catch (e) { console.error('[play] reading insert failed:', e.message); }
-        }
-      });
-      console.log(`[play] ${res.step}: ${res.note}`);
-    } catch (e) { console.error('[monologue] play-session tick failed:', e.message); }
+  // PERSONAL/PLAY MODE — off the clock. Either advance the play session ONE step,
+  // or REST. We NEVER fall through to the work free-association loop here: the 24B
+  // reflexively turns "go play" into a project (focus + schedule + notify + DM +
+  // notes), which is exactly the failure we're killing. No active session → quiet tick.
+  if (personalMode) {
+    if (playSession.active()) {
+      try {
+        const res = await playSession.runTick({
+          userName, awareness, protocols,
+          onReading: (content, label, url) => {
+            try {
+              const rr = db.insertMonologue({ content, model: 'play-session', type: 'reading', query: url || null, urls: url ? [url] : null });
+              pushSheep({ id: rr.id, ts: rr.ts, content: label || content, type: 'reading', query: url });
+            } catch (e) { console.error('[play] reading insert failed:', e.message); }
+          }
+        });
+        console.log(`[play] ${res.step}: ${res.note}`);
+      } catch (e) { console.error('[monologue] play-session tick failed:', e.message); }
+    } else {
+      console.log('[play] off the clock, no active session — resting this tick');
+    }
     return;
-  } else if (personalMode) {
-    // OFF THE CLOCK but no active play session (it completed / gave up / not started).
-    // Light off-the-clock thinking instead of grinding work — no navigation choreography.
-    const playReadings = db.getRecentMonologueByType('reading', 6);
-    messages = buildPlayPrompt({
-      userName,
-      recentReadings: playReadings,
-      recentMonologue: recentThoughts,
-      awareness,
-      protocols
-    });
-  } else if (activeFocus) {
+  }
+
+  if (activeFocus) {
     const workingSet = blackboard.forFocus(activeFocus.id, 60);
     messages = buildFocusPrompt({
       userName,
