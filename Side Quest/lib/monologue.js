@@ -16,6 +16,7 @@ const importanceLib = require('./importance');
 const gapsLib = require('./gaps');
 const recipesLib = require('./recipes');
 const ruminationLib = require('./rumination');
+const webLib = require('./web');
 const { buildAwarenessBlock } = require('./context');
 
 const MODEL = require('./config').model();
@@ -723,6 +724,30 @@ async function runOneTick() {
       }
     })().catch(err => console.error('[monologue] browser async error:', err.message));
     trimmed = browserLib.stripTags(trimmed);
+  }
+
+  // WEB TAGS (autonomous): her OWN browser, between turns. This is what makes
+  // "indulge on the internet" / a browsing focus real during idle — open, read,
+  // click on her own. web-read/open results are stored as readings so the NEXT
+  // tick sees them (and they feed importance scoring → reflection → knowledge).
+  const webTags = webLib.parseTags(trimmed);
+  if (webTags.length > 0) {
+    (async () => {
+      for (const t of webTags.slice(0, 2)) {
+        try {
+          const r = await webLib.dispatch(t);
+          if (r?.ok && t.tag === 'web-read' && r.text) {
+            const rr = db.insertMonologue({ content: `I looked at "${r.title || r.url}" in my own browser (${r.url}):\n${r.text}`, model: 'web-read', type: 'reading', query: r.url, urls: r.url ? [r.url] : null });
+            pushSheep({ id: rr.id, ts: rr.ts, content: `(my browser) ${r.title || r.url}`, type: 'reading', query: r.url });
+          } else if (r?.ok && t.tag === 'web-open') {
+            const rr = db.insertMonologue({ content: `I opened ${r.url} in my own browser`, model: 'web-open', type: 'reading', query: r.url, urls: r.url ? [r.url] : null });
+            pushSheep({ id: rr.id, ts: rr.ts, content: `(opened) ${r.url}`, type: 'reading', query: r.url });
+          }
+          console.log(`[monologue] web ${t.tag}: ${r?.ok ? 'ok' : 'FAIL ' + r?.reason}`);
+        } catch (err) { console.error('[monologue] web dispatch error:', err.message); }
+      }
+    })().catch(err => console.error('[monologue] web async error:', err.message));
+    trimmed = webLib.stripTags(trimmed);
   }
 
   // SCREEN TAGS (autonomous): if she chose to observe the desktop while thinking,
