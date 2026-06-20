@@ -511,7 +511,7 @@ function extractUrls(text) {
   return [...new Set(matches)].slice(0, 3);
 }
 
-const { detectWebIntent, detectActOnOpenPage } = require('./lib/intent');
+const { detectWebIntent, detectActOnOpenPage, detectPickCharacter } = require('./lib/intent');
 const preferences = require('./lib/preferences');
 const personal = require('./lib/personal');
 const playSession = require('./lib/play_session');
@@ -642,6 +642,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       try { await fireToolFollowup({ io, channel, sessionId, resultText }); } catch (e) { console.error('[web-intent] followup failed:', e.message); }
       console.log(`[web-intent] opened her browser → "${webIntent.target}" (${o.ok ? 'ok' : 'FAIL ' + o.reason})`);
       return { ok: true, webOpened: true, say: null };
+    }
+    // PICK A CHARACTER / START A SCENE → kick the deterministic play stepper. The 24B
+    // fumbles free-form navigation (gets confused and reverts), but the stepper makes
+    // each step a trivial pick. Turn on personal mode + start the session pointed at the
+    // already-open site; the idle loop drives inventory→choose→chat one step per tick
+    // (visible in the sheep panel). This is the part she does reliably.
+    if (webLib.isConnected() && detectPickCharacter(userMessage)) {
+      try { personal.setOn(); playSession.start(); playSession.set('inventory'); }
+      catch (e) { console.error('[pick-char] start failed:', e.message); }
+      db.setMeta('last_ai_utterance_at', String(Date.now()));
+      resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
+      const resultText = `[Lucas asked you to pick a character on the chat site open in your browser. You're doing it now, step by step — look at who's there, pick the one that appeals to you, open them, and start talking; your play loop drives it. Tell Lucas in ONE line that you're picking one and diving in. Do NOT say you can't — you're already on it.]`;
+      try { await fireToolFollowup({ io, channel, sessionId, resultText }); } catch (e) { console.error('[pick-char] followup failed:', e.message); }
+      console.log('[pick-char] started play stepper at inventory (site already open)');
+      return { ok: true, pickChar: true, say: null };
     }
     // ACT ON THE OPEN PAGE: "look at / use / surf the page (or the chat I opened)".
     // She refuses to emit the read tag, so we read her CURRENT front tab for her —

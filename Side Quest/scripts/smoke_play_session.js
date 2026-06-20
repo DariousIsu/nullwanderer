@@ -40,13 +40,16 @@ const readDump = [
   '  [L4] link: Create Character',
   '  [L5] link: Premium',
   '  [L6] link: Seraphina the archivist',
+  '  [C0] card: Lady Dimitrescu, the vampire',
   '  [B0] button: Menu',
   '  [I0] input: Search'
 ].join('\n');
 const inv = ps.extractInventory(readDump);
-ok('keeps the 3 character links', inv.length === 3, inv.map(o => o.label).join(' | '));
+ok('keeps the 3 link characters + 1 card character', inv.length === 4, inv.map(o => o.label).join(' | '));
 ok('drops Home/Login/Create/Premium nav', !inv.some(o => /home|log in|create|premium/i.test(o.label)));
 ok('first is Mizuki @ L2', inv[0] && inv[0].handle === 'L2' && /Mizuki/.test(inv[0].label));
+ok('captures the clickable CARD (C0)', inv.some(o => o.handle === 'C0' && /Dimitrescu/.test(o.label)));
+ok('parsePick resolves a card handle', ps.parsePick('<web-click>C0</web-click>', inv) && ps.parsePick('<web-click>C0</web-click>', inv).handle === 'C0');
 
 console.log('\nPick parsing:');
 ok('explicit <web-click>L3</web-click>', ps.parsePick('<web-click>L3</web-click>', inv) && ps.parsePick('<web-click>L3</web-click>', inv).handle === 'L3');

@@ -72,7 +72,8 @@ const NON_CHARACTER = [
 function extractInventory(readText, cap = 12) {
   if (!readText) return [];
   const out = [];
-  const re = /\[(L\d+)\]\s*link:\s*(.+)/g;
+  // Links (L#) AND clickable cards (C#) — CrushOn character tiles are cards, not <a>.
+  const re = /\[([LC]\d+)\]\s*(?:link|card):\s*(.+)/g;
   let m;
   while ((m = re.exec(readText)) !== null) {
     const handle = m[1];
@@ -95,11 +96,10 @@ function extractInventory(readText, cap = 12) {
  */
 function parsePick(output, inventory) {
   if (!output || !inventory || !inventory.length) return null;
-  const handleM = output.match(/\bL(\d+)\b/i);
-  if (handleM) {
-    const h = 'L' + handleM[1];
-    const found = inventory.find(o => o.handle.toUpperCase() === h.toUpperCase());
-    if (found) return found;
+  // explicit handle of ANY kind (L#/C#/B#) — first inventory handle that appears
+  const up = String(output).toUpperCase();
+  for (const o of inventory) {
+    if (new RegExp(`\\b${o.handle.toUpperCase()}\\b`).test(up)) return o;
   }
   // bare number → prefer 1-based (how the list is shown), fall back to 0-based
   const numM = output.match(/(?:^|[^a-z\d])(\d{1,2})(?:[^a-z\d]|$)/i);

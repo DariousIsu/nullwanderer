@@ -42,7 +42,7 @@ const NAV_TIMEOUT = 20000;
 let context = null;   // a Playwright-managed persistent context (her Chrome)
 let page = null;
 let registry = {};    // handle → locator
-let counter = { L: 0, B: 0, I: 0 };
+let counter = { L: 0, B: 0, I: 0, C: 0 };
 
 function findChrome() { for (const p of CHROME_PATHS) { try { if (fs.existsSync(p)) return p; } catch {} } return null; }
 function isConnected() { return !!(context && page); }
@@ -78,7 +78,7 @@ async function ensure() {
   // current page so she isn't stranded on the old one. Single-tab model preserved —
   // "current tab" just tracks the freshest one.
   context.on('page', (p) => {
-    page = p; registry = {}; counter = { L: 0, B: 0, I: 0 };
+    page = p; registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
     try { p.setDefaultTimeout(8000); } catch {}
   });
   page = context.pages()[0] || await context.newPage();
@@ -101,7 +101,7 @@ async function syncActivePage() {
   }
   if (!picked) picked = pages[pages.length - 1];  // newest as fallback
   if (picked && picked !== page) {
-    page = picked; registry = {}; counter = { L: 0, B: 0, I: 0 };
+    page = picked; registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
     try { page.setDefaultTimeout(8000); } catch {}
   }
 }
@@ -134,7 +134,7 @@ async function open(target) {
   try {
     const p = await ensure();
     await p.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-    registry = {}; counter = { L: 0, B: 0, I: 0 };
+    registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
     return { ok: true, url: p.url(), title: await p.title().catch(() => '') };
   } catch (err) { return { ok: false, reason: err.message }; }
 }
@@ -147,14 +147,19 @@ async function read() {
   if (!page) return { ok: false, reason: 'no page open — use <web-open> first' };
   try {
     const text = (await page.innerText('body').catch(() => '')).replace(/\n{3,}/g, '\n\n').slice(0, MAX_TEXT);
-    registry = {}; counter = { L: 0, B: 0, I: 0 };
+    registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
     const lines = [];
+    const seen = new Set();   // dedupe by label across passes (SPA cards often double up)
     const kinds = [
       { sel: 'a[href]', role: 'L', label: 'link' },
       { sel: 'button, [role=button], input[type=submit]', role: 'B', label: 'button' },
-      { sel: 'input:not([type=hidden]):not([type=submit]), textarea', role: 'I', label: 'input' }
+      { sel: 'input:not([type=hidden]):not([type=submit]), textarea', role: 'I', label: 'input' },
+      // CLICKABLE CARDS — SPA tiles that aren't <a>/<button> (CrushOn character cards
+      // live here). Without this pass they're invisible to her, so she "can't pick a
+      // character". Captured as C# handles; click() resolves any handle the same way.
+      { sel: '[role=link], [role=option], [role=article], [onclick], [tabindex="0"]', role: 'C', label: 'card', requireText: true }
     ];
-    for (const { sel, role, label } of kinds) {
+    for (const { sel, role, label, requireText } of kinds) {
       const loc = page.locator(sel);
       const n = Math.min(await loc.count().catch(() => 0), 60);
       for (let i = 0; i < n && Object.keys(registry).length < MAX_INTERACTIVES; i++) {
@@ -163,6 +168,9 @@ async function read() {
         if (!visible) continue;
         let name = '';
         try { name = ((await el.innerText({ timeout: 300 }).catch(() => '')) || (await el.getAttribute('aria-label').catch(() => '')) || (await el.getAttribute('placeholder').catch(() => '')) || '').replace(/\s+/g, ' ').trim().slice(0, 60); } catch {}
+        if (requireText && !name) continue;            // cards with no text are noise
+        if (name && seen.has(name)) continue;          // already captured under another pass
+        if (name) seen.add(name);
         const handle = role + (counter[role]++);
         registry[handle] = el;
         lines.push(`  [${handle}] ${label}: ${name || '(unlabeled)'}`);
@@ -225,7 +233,7 @@ async function openTopResult() {
     await link.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
     await link.click({ timeout: 8000 });
     await page.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT }).catch(() => {});
-    registry = {}; counter = { L: 0, B: 0, I: 0 };
+    registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
     return { ok: true, url: page.url(), title: await page.title().catch(() => '') };
   } catch (err) { return { ok: false, reason: err.message }; }
 }
