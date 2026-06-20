@@ -36,6 +36,11 @@ function recentFreeThoughts(k = K) {
  */
 async function detect({ k = K, threshold = THRESHOLD, embedFn = memory.embed } = {}) {
   if (focusLib.isActive()) return { ruminating: false, reason: 'focus-active' };
+  // Cooldown: after an escalation was SUPPRESSED (theme tombstoned in the last
+  // 24h), back off entirely for a while — otherwise each new thought on that same
+  // tombstoned theme re-fires detect→escalate→suppress, burning a naming call.
+  const cooldownUntil = parseInt(db.getMeta('rumination_cooldown_until') || '0', 10);
+  if (Date.now() < cooldownUntil) return { ruminating: false, reason: 'cooldown' };
   const thoughts = recentFreeThoughts(k);
   if (thoughts.length < k) return { ruminating: false, reason: 'too-few', thoughts };
   // STALE-WINDOW GUARD: don't re-fire on the same thoughts. After an escalation
@@ -86,6 +91,11 @@ async function escalate(thoughts, userName = 'them', { nameFn = nameTheme } = {}
   if (!goal || goal.length < 6) return null;
   const set = await focusLib.setFromText(`<focus>${goal}</focus>`);
   if (set) console.log(`[rumination] escalated circling → focus #${set.focus.id}: ${goal.slice(0, 70)}`);
+  else {
+    // Spawn-gate suppressed it (theme tombstoned recently) — back off for 30 min so
+    // we don't re-name + re-suppress on every new thought about the same dead theme.
+    try { db.setMeta('rumination_cooldown_until', String(Date.now() + 30 * 60 * 1000)); } catch {}
+  }
   return set;
 }
 

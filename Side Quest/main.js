@@ -518,9 +518,13 @@ function detectWebIntent(text) {
   const search = t.match(/\b(?:search(?:\s+for)?|look\s*up|google|find)\b\s+(?:the\s+|for\s+)?(.{2,90})/i);
   const verb = /(open|opening|launch|fire up|pull up|go to|browse|web-open|\buse\b)/i.test(t);
   const webCue = /\b(browser|web|online|internet|web-open)\b/i.test(t);
+  // "take a look at this <url>" / "check out <url>" / "read this <url>" → open it in HER browser.
+  const viewVerb = /\b(look|take a look|check(?:\s+(?:it|this|out))?|see|read|view|visit|peek|here'?s|this is)\b/i.test(t);
+
+  // A pasted URL with a viewing/visiting verb is the clearest "open this for me".
+  if (url && (viewVerb || verb || webCue)) return { target: url[0] };
 
   if (verb && webCue) {
-    if (url) return { target: url[0] };
     if (search) return { target: search[1].trim().replace(/[.?!,\s]+$/, '') };
     return { target: 'https://duckduckgo.com' };
   }
