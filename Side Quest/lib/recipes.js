@@ -23,6 +23,7 @@ const schedulerLib = require('./scheduler');
 const presenceLib = require('./presence');
 const discordLib = require('./discord');
 const browserLib = require('./browser');
+const webLib = require('./web');
 const gapsLib = require('./gaps');
 const focusLib = require('./focus');
 const { detectCuriosity } = require('./curiosity');
@@ -51,7 +52,10 @@ function allRecipes() {
     { tier: 'core', need: 'remind yourself / schedule work', emit: '<schedule when="in 2h" note="follow up on X"/>', trap: 'recurring <schedule every=…>; <schedule-list/>; <schedule-cancel id=N/>', check: t => schedulerLib.parseTags(t).length > 0 },
     { tier: 'core', need: 'pop a desktop notification to Lucas', emit: '<notify title="Quick thing">the body</notify>', trap: 'transient popup; for a real away-message use Discord', check: t => presenceLib.parseTags(t).length > 0 },
     // --- browser (only meaningful when connected, but grammar always valid) ---
-    { tier: 'core', need: 'read the page you have open', emit: '<browse-read/>', trap: 'follow a link/button by HANDLE: <browse-click>L3</browse-click>; never guess a CSS selector', check: t => browserLib.parseTags(t).length > 0 },
+    { tier: 'core', need: "read the page YOU have open in Lucas's Chrome", emit: '<browse-read/>', trap: 'follow a link/button by HANDLE: <browse-click>L3</browse-click>; never guess a CSS selector', check: t => browserLib.parseTags(t).length > 0 },
+    // --- her OWN dedicated browser (separate from Lucas's Chrome) ---
+    { tier: 'core', need: 'do your OWN web research/browsing', emit: '<web-open>a URL or search terms</web-open>', trap: "this is YOUR browser, not Lucas's; then <web-read/> to see it", check: t => webLib.parseTags(t).length > 0 },
+    { tier: 'core', need: 'read / act in your own browser', emit: '<web-read/>', trap: 'click handles with <web-click>L3</web-click>, type with <web-type selector="I0">…</web-type>; handles valid only from the latest read', check: t => webLib.parseTags(t).length > 0 },
     // --- email (configured only) ---
     { tier: 'email', need: 'READ your inbox', emit: '<read-inbox/>', trap: 'NOT <email>/<email-draft>/<email-send> — those SEND mail, the wrong action for reading', check: t => inboxLib.parseTags(t).length > 0 },
     { tier: 'email', need: 'SEND an email', emit: '<email to="addr@x.com" subject="...">the whole body here</email>', trap: 'recipient/subject are ATTRIBUTES; body goes BETWEEN the tags; never put To:/Subject: lines in the body, never backtick the tag', check: t => emailLib.parseTags(t).some(x => x.tag === 'email') },

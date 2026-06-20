@@ -45,6 +45,7 @@ const actionLoop = require('./lib/action_loop');
 const blackboard = require('./lib/blackboard');
 const curatorLib = require('./lib/curator');
 const gapsLib = require('./lib/gaps');
+const webLib = require('./lib/web');
 const {
   startContinuityScheduler,
   stopContinuityScheduler,
@@ -327,6 +328,7 @@ app.on('window-all-closed', async () => {
   stopContinuityScheduler();
   schedulerLib.stopScheduler();
   try { await discordLib.stop(); } catch {}
+  try { await webLib.close(); } catch {}
   try {
     await forceReflectionIfDue();
   } catch (err) {
@@ -785,6 +787,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     ...browserLib.parseTags(thought || ''),
     ...browserLib.parseTags(say || '')
   ];
+  const webTagsToRun = [
+    ...webLib.parseTags(thought || ''),
+    ...webLib.parseTags(say || '')
+  ];
   const fileTagsToRun = [
     ...filesLib.parseTags(thought || ''),
     ...filesLib.parseTags(say || '')
@@ -817,6 +823,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let thoughtStripped = (thought || '').replace(/<wonder>[\s\S]*?<\/wonder>/gi, '').trim();
   thoughtStripped = openThreadsLib.stripStatusTags(thoughtStripped);
   thoughtStripped = browserLib.stripTags(thoughtStripped);
+  thoughtStripped = webLib.stripTags(thoughtStripped);
   thoughtStripped = filesLib.stripTags(thoughtStripped);
   thoughtStripped = screenLib.stripTags(thoughtStripped);
   thoughtStripped = inboxLib.stripTags(thoughtStripped);
@@ -851,6 +858,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   sayStripped = openThreadsLib.stripStatusTags(sayStripped);
   // Strip any browser tags that leaked into say
   sayStripped = browserLib.stripTags(sayStripped);
+  sayStripped = webLib.stripTags(sayStripped);
   // Strip any file tags that leaked into say
   sayStripped = filesLib.stripTags(sayStripped);
   // Strip any screen-observe tags that leaked into say
@@ -972,6 +980,31 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         }
       }
     })().catch(err => console.error('[main] browser async error:', err.message));
+  }
+
+  // Background: dispatch her OWN-browser (web-*) tags — a separate Chrome she
+  // controls (port 9223), distinct from the shared attach above. web-read results
+  // are stored as a reading + voiced via the tool follow-up.
+  if (webTagsToRun.length > 0) {
+    (async () => {
+      for (const t of webTagsToRun.slice(0, 4)) {
+        try {
+          const r = await webLib.dispatch(t);
+          if (r && r.ok && t.tag === 'web-read' && r.text) {
+            const label = r.title || r.url || 'page';
+            const content = `I looked at "${label}" in my own browser (${r.url}):\n${r.text}`;
+            const row = db.insertMonologue({ content, model: 'web-read', type: 'reading', query: r.url, urls: r.url ? [r.url] : null });
+            try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(my browser) ${label}`, type: 'reading', query: r.url }); } catch {}
+            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: content }); }
+          } else if (r && r.ok && t.tag === 'web-open') {
+            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[You opened ${r.url} in your own browser. Emit <web-read/> to see it, then tell ${userName} what you find — don't describe the page until you've read it.]` }); }
+          } else if (!(r && r.ok)) {
+            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[Your own-browser action "${t.tag}" didn't work: ${r && r.reason}. Tell ${userName} plainly; don't invent page content.]` }); }
+          }
+          console.log(`[main] web ${t.tag}: ${r?.ok ? 'ok' : 'FAIL ' + r?.reason}`);
+        } catch (err) { console.error('[main] web dispatch error:', err.message); }
+      }
+    })().catch(err => console.error('[main] web async error:', err.message));
   }
 
   // Background: dispatch any file tags Eloise emitted. file-read/file-list results

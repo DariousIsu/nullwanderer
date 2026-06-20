@@ -1,0 +1,34 @@
+/**
+ * Backtest — Zoe's dedicated browser, PARSE layer (offline, no launch).
+ * URL/search routing, tag parsing (all forms), strip, dispatch routing.
+ * The live automation is exercised by scripts/web_live.js.
+ */
+const web = require('../lib/web');
+let pass = 0, fail = 0;
+function ok(n, c) { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}`); } }
+
+console.log('Backtest — web.js parse layer\n');
+
+console.log('toUrl (URL vs search):');
+ok('full URL passes through', web.toUrl('https://example.com/x') === 'https://example.com/x');
+ok('bare domain → https', web.toUrl('example.com') === 'https://example.com');
+ok('plain words → search', /duckduckgo\.com\/html/.test(web.toUrl('how to write a cold pitch')));
+ok('empty → null', web.toUrl('') === null);
+
+console.log('\nparseTags (all forms):');
+ok('web-open with body', web.parseTags('<web-open>example.com</web-open>')[0]?.tag === 'web-open');
+ok('web-read self-closing', web.parseTags('<web-read/>')[0]?.tag === 'web-read');
+ok('web-click body handle', web.parseTags('<web-click>L3</web-click>')[0]?.body === 'L3');
+ok('web-type selector attr', (() => { const t = web.parseTags('<web-type selector="I0">hi</web-type>')[0]; return t.attrs.selector === 'I0' && t.body === 'hi'; })());
+ok('web-back self-closing', web.parseTags('<web-back/>')[0]?.tag === 'web-back');
+ok('multiple tags parsed', web.parseTags('<web-open>x.com</web-open> then <web-read/>').length === 2);
+
+console.log('\nstripTags + dispatch routing:');
+ok('stripTags removes tags + collapses ws', web.stripTags('a <web-read/> b') === 'a b');
+(async () => {
+  const r = await web.dispatch({ tag: 'web-bogus' });
+  ok('unknown tag → ok:false', r.ok === false);
+  ok('click with no page → graceful', (await web.dispatch({ tag: 'web-click', body: 'L1' })).ok === false);
+  console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
+  process.exit(fail === 0 ? 0 : 1);
+})();
