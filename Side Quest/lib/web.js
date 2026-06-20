@@ -19,15 +19,12 @@
 
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
 const db = require('./db');
 
 // Her browser is a SECOND system-Chrome instance on its own debug port + profile
 // (NOT Lucas's 9222). We connect over CDP — the same proven path lib/browser.js
 // uses for the shared attach — instead of Playwright's bundled chromium, which
 // fails to spawn under Electron on Windows ("spawn UNKNOWN").
-const CDP_PORT = 9223;
-const CDP_URL = `http://localhost:${CDP_PORT}`;
 const PROFILE_DIR = path.join(path.dirname(db.DB_PATH), 'web_profile');
 const CHROME_PATHS = [
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -41,42 +38,31 @@ const MAX_TEXT = 4000;
 const MAX_INTERACTIVES = 35;
 const NAV_TIMEOUT = 20000;
 
-let chromeProc = null;
-let browser = null;
-let context = null;
+let context = null;   // a Playwright-managed persistent context (her Chrome)
 let page = null;
-let registry = {};   // handle → locator
+let registry = {};    // handle → locator
 let counter = { L: 0, B: 0, I: 0 };
 
 function findChrome() { for (const p of CHROME_PATHS) { try { if (fs.existsSync(p)) return p; } catch {} } return null; }
-function isConnected() { return !!(browser && page); }
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+function isConnected() { return !!(context && page); }
 
+// Launch her browser the STANDARD Playwright way: launchPersistentContext drives
+// the SYSTEM Chrome (executablePath) over Playwright's internal pipe — no debug
+// port, no connectOverCDP (which failed to attach to a self-spawned Chrome on this
+// machine). Persistent profile keeps logins across sessions.
 async function ensure() {
-  if (browser && page) return page;
+  if (context && page) return page;
   const pw = require('playwright');
-  if (!browser) {
-    // Maybe her Chrome is already up (prior launch) — try connecting first.
-    try { browser = await pw.connectOverCDP(CDP_URL); } catch {}
-    if (!browser) {
-      const chromePath = findChrome();
-      if (!chromePath) throw new Error('chrome.exe/msedge.exe not found in standard paths');
-      try { if (!fs.existsSync(PROFILE_DIR)) fs.mkdirSync(PROFILE_DIR, { recursive: true }); } catch {}
-      chromeProc = spawn(chromePath, [
-        `--remote-debugging-port=${CDP_PORT}`,
-        `--user-data-dir=${PROFILE_DIR}`,
-        '--no-first-run', '--no-default-browser-check', 'about:blank'
-      ], { detached: true, stdio: 'ignore' });
-      chromeProc.unref();
-      // Generous window: a fresh-profile Chrome cold-start can take >10s to bind
-      // the debug port the first time (profile init).
-      await sleep(800);
-      for (let i = 0; i < 30 && !browser; i++) { try { browser = await pw.connectOverCDP(CDP_URL); } catch { await sleep(700); } }
-      if (!browser) throw new Error(`connectOverCDP failed on ${CDP_PORT} (Chrome may not have started)`);
-    }
-    browser.on('disconnected', () => { browser = null; context = null; page = null; registry = {}; });
-  }
-  context = browser.contexts()[0] || await browser.newContext();
+  const executablePath = findChrome();
+  if (!executablePath) throw new Error('chrome.exe/msedge.exe not found in standard paths');
+  try { if (!fs.existsSync(PROFILE_DIR)) fs.mkdirSync(PROFILE_DIR, { recursive: true }); } catch {}
+  context = await pw.chromium.launchPersistentContext(PROFILE_DIR, {
+    headless: false,
+    executablePath,
+    viewport: { width: 1100, height: 820 },
+    args: ['--no-first-run', '--no-default-browser-check']
+  });
+  context.on('close', () => { context = null; page = null; registry = {}; });
   page = context.pages()[0] || await context.newPage();
   page.setDefaultTimeout(8000);
   return page;
@@ -163,9 +149,8 @@ async function back() {
 }
 
 async function close() {
-  try { if (browser) await browser.close(); } catch {}
-  try { if (chromeProc && !chromeProc.killed) chromeProc.kill(); } catch {}
-  browser = null; context = null; page = null; chromeProc = null; registry = {};
+  try { if (context) await context.close(); } catch {}
+  context = null; page = null; registry = {};
   return { ok: true };
 }
 

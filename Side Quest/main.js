@@ -99,6 +99,12 @@ app.whenReady().then(() => {
   // retrieval isn't slow. Runs on CPU — no VRAM contention with the chat model.
   memoryLib.warm().then(ok => console.log('[main] memory embedder warm:', ok, '| knowledge items:', db.countKnowledge()))
     .catch(err => console.error('[main] memory warm failed:', err.message));
+  // Pre-warm her dedicated browser so the slow first-run init happens at boot, not
+  // mid-conversation — and so any launch/CDP problem surfaces here in the log.
+  // Fire-and-forget; lazy launch on first use still works if this is skipped.
+  webLib.ensure()
+    .then(() => console.log('[main] dedicated browser ready on 9223'))
+    .catch(err => console.error('[main] dedicated browser warm FAILED:', err.message));
   currentSessionId = db.startSession();
   currentSessionStartedAt = Date.now();
   createWindow();
