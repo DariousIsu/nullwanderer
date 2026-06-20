@@ -103,10 +103,7 @@ app.whenReady().then(() => {
   // mid-conversation — and so any launch/CDP problem surfaces here in the log.
   // Fire-and-forget; lazy launch on first use still works if this is skipped.
   webLib.ensure()
-    .then(async () => {
-      const probe = await webLib.open('https://example.com').catch(e => ({ ok: false, reason: e.message }));
-      console.log('[main] dedicated browser ready; nav-probe →', JSON.stringify(probe).slice(0, 160));
-    })
+    .then(() => console.log('[main] dedicated browser ready'))
     .catch(err => console.error('[main] dedicated browser warm FAILED:', err.message));
   currentSessionId = db.startSession();
   currentSessionStartedAt = Date.now();

@@ -30,9 +30,20 @@ function detectWebIntent(text) {
     if (search) return { target: search[1].trim().replace(/[.?!,\s]+$/, '') };
     return { target: SEARCH_HOME };
   }
-  // "search/look up X" with an online cue.
-  if (search && /\b(online|web|internet|browser)\b/i.test(t)) {
-    return { target: search[1].trim().replace(/[.?!,\s]+$/, '') };
+  // A search COMMAND → web search. Fires when the message is an imperative search
+  // ("search X", "can you look up X", "google X") OR references the web/browser
+  // ("…from here", "in the browser", "online"). Stays quiet on conversational
+  // "let's search for an approach" (doesn't start with the verb, no web ref).
+  if (search) {
+    const searchCmd = /^(?:can|could|would|will|please|hey)?[\s,]*(?:you[\s,]*)?(?:search|look\s*up|google|find)\b/i.test(t)
+      || /\b(google|from here|in (?:the|your) browser|on the (?:web|internet)|online)\b/i.test(t);
+    if (searchCmd) {
+      const q = search[1].trim()
+        .replace(/[.?!,\s]+$/, '')
+        .replace(/\s+(?:from here|for me|online|on the web|on the internet|please)\s*$/i, '')
+        .trim();
+      return { target: q || SEARCH_HOME };
+    }
   }
   return null;
 }
