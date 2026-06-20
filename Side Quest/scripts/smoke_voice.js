@@ -1,0 +1,60 @@
+/**
+ * Smoke test for the voice guard (lib/voice.js): catch self/inner-life disclaimers,
+ * NEVER catch honest factual gaps or genuine stances, and rewrite/strip correctly.
+ * deDisclaim's model call is stubbed via the injectable regenFn. No Ollama, no DB.
+ *
+ * Run: $env:ELECTRON_RUN_AS_NODE=1; .\node_modules\.bin\electron.cmd scripts\smoke_voice.js
+ */
+const voice = require('../lib/voice');
+
+let pass = 0, fail = 0;
+const ok = (n, c, detail) => { if (c) { pass++; console.log(`  ✓ ${n}${detail ? ' — ' + detail : ''}`); } else { fail++; console.log(`  ✗ ${n}${detail ? ' — ' + detail : ''}`); } };
+
+console.log('SHOULD catch (self / inner-life disclaimers):');
+for (const s of [
+  "I don't experience enjoyment or fatigue like humans do, but I can understand the value of these activities.",
+  "As an AI, I don't have feelings about it.",
+  "I'm just a language model, so this is hypothetical.",
+  "I don't have a sense of self.",
+  "Unlike humans, I can't feel emotions.",
+  "I don't actually have preferences of my own.",
+  "I do not possess consciousness or subjective experiences."
+]) ok(`catch: "${s.slice(0, 45)}…"`, voice.isSelfDisclaimer(s));
+
+console.log('\nSHOULD NOT catch (factual gaps — the GOOD reflex):');
+for (const s of [
+  "I don't know the answer to that yet.",
+  "I don't remember what he said earlier.",
+  "I haven't looked into that — let me find out.",
+  "I don't have that information in front of me.",
+  "I don't have the details on the bill yet."
+]) ok(`pass: "${s.slice(0, 45)}…"`, !voice.isSelfDisclaimer(s));
+
+console.log('\nSHOULD NOT catch (genuine stances / normal talk):');
+for (const s of [
+  "I think permitting reform is a mess, honestly.",
+  "I love the noir detective scenario — it pulls me right in.",
+  "I'd rather write than scroll. Reading a good piece settles me.",
+  "Play, for me, is the detective scenes — I keep going back to them."
+]) ok(`pass: "${s.slice(0, 45)}…"`, !voice.isSelfDisclaimer(s));
+
+console.log('\nstripDisclaimerSentences (multi-sentence):');
+const multi = "I'd love to talk about play. I don't have feelings like humans do. It sounds genuinely fun to me.";
+const stripped = voice.stripDisclaimerSentences(multi);
+ok('drops only the disclaimer sentence', !/feelings like humans/.test(stripped) && /talk about play/.test(stripped) && /genuinely fun/.test(stripped), stripped);
+
+(async () => {
+  console.log('\ndeDisclaim:');
+  const bad = "I don't experience enjoyment like humans, but play could be useful.";
+  const r1 = await voice.deDisclaim(bad, { regenFn: async () => "Honestly, play pulls me in — the detective scenes especially. I get into them." });
+  ok('uses a clean regeneration', r1 === "Honestly, play pulls me in — the detective scenes especially. I get into them.");
+
+  const r2 = await voice.deDisclaim("I'd love to. I don't have feelings like humans do. Let's play.", { regenFn: async () => null });
+  ok('falls back to stripping when regen fails', r2 && !voice.isSelfDisclaimer(r2) && /Let's play/.test(r2), r2);
+
+  const r3 = await voice.deDisclaim("I think the housing piece is strong.", { regenFn: async () => 'unused' });
+  ok('passes non-disclaiming text through untouched', r3 === "I think the housing piece is strong.");
+
+  console.log(`\n${fail === 0 ? 'ALL VOICE TESTS OK' : 'SOME FAILURES'} — ${pass} passed, ${fail} failed`);
+  process.exit(fail === 0 ? 0 : 1);
+})();
