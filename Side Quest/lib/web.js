@@ -74,9 +74,36 @@ async function ensure() {
     args: ['--no-first-run', '--no-default-browser-check', '--test-type']
   });
   context.on('close', () => { context = null; page = null; registry = {}; });
+  // Follow newly-opened tabs: if a click (or Lucas) opens a new tab, make IT her
+  // current page so she isn't stranded on the old one. Single-tab model preserved —
+  // "current tab" just tracks the freshest one.
+  context.on('page', (p) => {
+    page = p; registry = {}; counter = { L: 0, B: 0, I: 0 };
+    try { p.setDefaultTimeout(8000); } catch {}
+  });
   page = context.pages()[0] || await context.newPage();
   page.setDefaultTimeout(8000);
   return page;
+}
+
+// Point `page` at whatever tab is actually in FRONT of her browser window — the one
+// Lucas is looking at / just opened. Prefer the visible tab (only the foreground tab
+// reports visibilityState 'visible'); fall back to the newest open page. This is what
+// lets her SEE a chat Lucas opened for her instead of reading a stale tab.
+async function syncActivePage() {
+  if (!context) return;
+  let pages = [];
+  try { pages = context.pages().filter(p => { try { return !p.isClosed(); } catch { return false; } }); } catch {}
+  if (!pages.length) return;
+  let picked = null;
+  for (const p of pages) {
+    try { if ((await p.evaluate(() => document.visibilityState).catch(() => null)) === 'visible') { picked = p; break; } } catch {}
+  }
+  if (!picked) picked = pages[pages.length - 1];  // newest as fallback
+  if (picked && picked !== page) {
+    page = picked; registry = {}; counter = { L: 0, B: 0, I: 0 };
+    try { page.setDefaultTimeout(8000); } catch {}
+  }
 }
 
 // Treat as a URL if it has a scheme or looks like a bare domain; else a search.
@@ -113,7 +140,10 @@ async function open(target) {
 }
 
 // Read the current page: capped body text + a handle list of interactive elements.
+// Syncs to the front tab first, so <web-read/> shows whatever is actually open in
+// her window right now (including a chat Lucas just opened), not a stale page.
 async function read() {
+  try { if (context) await syncActivePage(); } catch {}
   if (!page) return { ok: false, reason: 'no page open — use <web-open> first' };
   try {
     const text = (await page.innerText('body').catch(() => '')).replace(/\n{3,}/g, '\n\n').slice(0, MAX_TEXT);
@@ -214,6 +244,7 @@ async function close() {
 // reading so her next tick continues the scene) instead of kicking the heartbeat
 // and pinging Lucas — this is her own time, not an interrupt.
 async function chatSend(text, speaker) {
+  try { if (context) await syncActivePage(); } catch {}  // target the chat tab that's actually open/front
   if (!page) return { ok: false, reason: 'no page open — open the chat site with <web-open> first' };
   if (!text || !text.trim()) return { ok: false, reason: 'empty message' };
   try {

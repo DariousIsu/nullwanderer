@@ -511,7 +511,7 @@ function extractUrls(text) {
   return [...new Set(matches)].slice(0, 3);
 }
 
-const { detectWebIntent } = require('./lib/intent');
+const { detectWebIntent, detectActOnOpenPage } = require('./lib/intent');
 const preferences = require('./lib/preferences');
 const personal = require('./lib/personal');
 const playSession = require('./lib/play_session');
@@ -642,6 +642,24 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       try { await fireToolFollowup({ io, channel, sessionId, resultText }); } catch (e) { console.error('[web-intent] followup failed:', e.message); }
       console.log(`[web-intent] opened her browser → "${webIntent.target}" (${o.ok ? 'ok' : 'FAIL ' + o.reason})`);
       return { ok: true, webOpened: true, say: null };
+    }
+    // ACT ON THE OPEN PAGE: "look at / use / surf the page (or the chat I opened)".
+    // She refuses to emit the read tag, so we read her CURRENT front tab for her —
+    // syncActivePage means this picks up a chat Lucas just opened — and feed it back
+    // with a push to act. Bypasses both the refusal AND the can't-see-it problem.
+    if (webLib.isConnected() && detectActOnOpenPage(userMessage)) {
+      const r = await webLib.read();
+      let resultText;
+      if (r.ok) {
+        resultText = `[You just looked at the page open in your OWN browser right now — "${r.title || r.url}" (${r.url}). Its text and the things you can click/type (handles like [L0]/[B0]/[I0]) are below. ACT on it in your own voice: if it's a chat, send your line with <web-chat speaker="Name">…</web-chat>; if there's something to open/click, <web-click>HANDLE</web-click>. You CAN see and use it — you just did. Never say you can't.\n\n${(r.text || '').slice(0, 3000)}]`;
+      } else {
+        resultText = `[You tried to look at your browser but: ${r.reason}. If nothing's open yet, open something with <web-open>. Tell ${userName} plainly — do NOT claim you lack the capability to see or use it.]`;
+      }
+      db.setMeta('last_ai_utterance_at', String(Date.now()));
+      resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
+      try { await fireToolFollowup({ io, channel, sessionId, resultText }); } catch (e) { console.error('[act-on-page] followup failed:', e.message); }
+      console.log(`[act-on-page] read her front tab (${r.ok ? 'ok: ' + (r.title || r.url) : 'FAIL ' + r.reason})`);
+      return { ok: true, webRead: true, say: null };
     }
   } catch (err) { console.error('[web-intent] interceptor failed:', err.message); }
   // === END WEB-INTENT ===
