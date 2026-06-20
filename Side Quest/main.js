@@ -504,6 +504,32 @@ function extractUrls(text) {
   return [...new Set(matches)].slice(0, 3);
 }
 
+// Detect a clear "use your own browser / look it up online" request and return
+// { target } (a URL or search terms) for the web-intent interceptor, else null.
+// Conservative: requires BOTH a browser/web cue and an action verb (or an explicit
+// online-search), so normal conversation ("let's search for an approach") won't fire.
+function detectWebIntent(text) {
+  if (!text) return null;
+  const t = String(text).trim();
+  const tag = t.match(/<web-open>\s*([\s\S]*?)\s*<\/web-open>/i);
+  if (tag) return { target: (tag[1] || '').trim() || 'https://duckduckgo.com' };
+
+  const url = t.match(/https?:\/\/\S+/i) || t.match(/\b[a-z0-9-]+\.[a-z]{2,}(?:\/\S*)?\b/i);
+  const search = t.match(/\b(?:search(?:\s+for)?|look\s*up|google|find)\b\s+(?:the\s+|for\s+)?(.{2,90})/i);
+  const verb = /(open|opening|launch|fire up|pull up|go to|browse|web-open|\buse\b)/i.test(t);
+  const webCue = /\b(browser|web|online|internet|web-open)\b/i.test(t);
+
+  if (verb && webCue) {
+    if (url) return { target: url[0] };
+    if (search) return { target: search[1].trim().replace(/[.?!,\s]+$/, '') };
+    return { target: 'https://duckduckgo.com' };
+  }
+  if (search && /\b(online|web|internet|browser)\b/i.test(t)) {
+    return { target: search[1].trim().replace(/[.?!,\s]+$/, '') };
+  }
+  return null;
+}
+
 // Core chat turn — shared by the IPC handler (renderer) and the Discord bridge.
 // io.emit(token) streams say-tokens; io.onComplete/onError fire UI events. For
 // headless callers (Discord) these default to no-ops and the final say is
@@ -604,6 +630,34 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // === END INTERCEPTOR ===
 
   const userName = db.getMeta('user_name') || 'them';
+
+  // === WEB-INTENT INTERCEPTOR ===
+  // The 24B reflexively refuses "open a browser / look it up" even though its
+  // prompt explicitly grants the capability (confirmed in the system prompt). So
+  // when Lucas clearly asks for web action we open her OWN browser deterministically
+  // and have her REPORT the result via the tool follow-up — bypassing the refusal.
+  // Mirrors the protocol interceptor + the email reply-intent trigger.
+  try {
+    const webIntent = detectWebIntent(userMessage);
+    if (webIntent) {
+      const o = await webLib.open(webIntent.target);
+      let resultText;
+      if (o.ok) {
+        const r = await webLib.read();
+        resultText = r.ok
+          ? `[You just opened your OWN browser to "${r.title || r.url}" (${r.url}) — it is open on screen right now. The page contents:\n${(r.text || '').slice(0, 2500)}\n\nTell ${userName} you opened it and what you see, in your own voice. You DID open it — never say you can't open a browser.]`
+          : `[You opened your own browser to ${o.url} — it's open now. Tell ${userName} briefly that you opened it.]`;
+      } else {
+        resultText = `[Your own browser failed to open: ${o.reason}. Tell ${userName} plainly what went wrong. Do NOT claim you lack the capability — the tool exists, it just errored.]`;
+      }
+      db.setMeta('last_ai_utterance_at', String(Date.now()));
+      resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
+      try { await fireToolFollowup({ io, channel, sessionId, resultText }); } catch (e) { console.error('[web-intent] followup failed:', e.message); }
+      console.log(`[web-intent] opened her browser → "${webIntent.target}" (${o.ok ? 'ok' : 'FAIL ' + o.reason})`);
+      return { ok: true, webOpened: true, say: null };
+    }
+  } catch (err) { console.error('[web-intent] interceptor failed:', err.message); }
+  // === END WEB-INTENT ===
 
   // Detect URLs in user message; fetch them as shared-link context
   const sharedUrls = extractUrls(userMessage);
