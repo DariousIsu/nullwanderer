@@ -332,7 +332,7 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
  *   then    = alternating user / assistant from recentTurns (assistant carries <think>/<say>)
  *   finally = the new user message
  */
-function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, retrievedKnowledgeBlock, capabilityProposalBlock, selfModelBlock, newUserMessage }) {
+function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, retrievedKnowledgeBlock, capabilityProposalBlock, selfModelBlock, personalBlock, newUserMessage }) {
   let systemContent = sub(BOOTSTRAP, userName);
 
   // AWARENESS — temporal + system facts prepended to system prompt so she knows
@@ -436,6 +436,13 @@ Examples of drawing on interior:
 • "Between our turns I wondered if you have siblings. Do you?"
 
 Drawing on interior is what makes you a continuous mind rather than a fresh-context responder.`;
+
+  // PERSONAL-LIFE block (high recency). When she's off the clock this reframes the
+  // whole conversation toward play and kills the work reflexes (asking to be assigned
+  // a task, scheduling, self-disclaiming). Placed just before the preference nudge.
+  if (personalBlock) {
+    systemContent += `\n\n---\n${personalBlock}`;
+  }
 
   // PREFERENCE NUDGE (placed LAST = highest recency). Subjective/taste questions
   // trigger the trained "I'm an AI, I have no preferences" reflex hard, even with the

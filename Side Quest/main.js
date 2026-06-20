@@ -513,6 +513,8 @@ function extractUrls(text) {
 
 const { detectWebIntent } = require('./lib/intent');
 const preferences = require('./lib/preferences');
+const personal = require('./lib/personal');
+const playSession = require('./lib/play_session');
 
 // Core chat turn — shared by the IPC handler (renderer) and the Discord bridge.
 // io.emit(token) streams say-tokens; io.onComplete/onError fire UI events. For
@@ -666,6 +668,25 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   } catch (err) { console.error('[pref-intent] interceptor failed:', err.message); }
   // === END PREFERENCE INTERCEPTOR ===
 
+  // === PERSONAL-MODE TOGGLE ===
+  // "go play" / "off the clock" enters her personal/play life; "back to work" exits.
+  // We flip the flag and FALL THROUGH (no canned reply) so she answers in her own
+  // voice with the personal block now active — stepping off the clock, not asking
+  // for an assignment. Auto-expiring (lib/personal) so a forgotten toggle can't trap her.
+  let personalJustToggled = false;
+  try {
+    const tog = personal.detectToggle(userMessage);
+    if (tog) {
+      personalJustToggled = true;
+      // Entering → auto-start a stepwise play session (idle loop drives it one
+      // hit at a time). Exiting → reset it so work mode isn't carrying play state.
+      if (tog.transition === 'enter') playSession.start();
+      else playSession.reset();
+      console.log(`[personal] ${tog.transition} → personal_mode ${personal.isOn() ? 'ON' : 'OFF'} (play session ${playSession.active() ? 'started' : 'reset'})`);
+    }
+  } catch (err) { console.error('[personal] toggle failed:', err.message); }
+  // === END PERSONAL-MODE TOGGLE ===
+
   // Detect URLs in user message; fetch them as shared-link context
   const sharedUrls = extractUrls(userMessage);
   const sharedPages = [];
@@ -762,6 +783,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try { selfModelBlock = await require('./lib/self_model').buildContextBlock(userMessage); }
   catch (e) { console.error('[main] self-model block failed:', e.message); }
 
+  // PERSONAL-LIFE block — when she's off the clock, reframe the chat toward play
+  // and suppress the work reflexes. Null when on the clock (no behavior change).
+  let personalBlock = null;
+  try { if (personal.isOn()) personalBlock = personal.buildChatBlock(userName, { justToggled: personalJustToggled }); }
+  catch (e) { console.error('[main] personal block failed:', e.message); }
+
   // CAPABILITY PROPOSAL ON RETURN: if Lucas was away a while and she logged a
   // capability gap during idle, surface the top one for her to PROPOSE (her call).
   let capabilityProposalBlock = null;
@@ -784,6 +811,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     retrievedKnowledgeBlock,
     capabilityProposalBlock,
     selfModelBlock,
+    personalBlock,
     newUserMessage: composedUserMessage
   });
 
@@ -1067,6 +1095,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: content }); }
           } else if (r && r.ok && t.tag === 'web-open') {
             if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[You opened ${r.url} in your own browser. Emit <web-read/> to see it, then tell ${userName} what you find — don't describe the page until you've read it.]` }); }
+          } else if (r && r.ok && t.tag === 'web-chat' && r.text) {
+            const who = r.speaker || 'the character';
+            const content = `In my own browser I sent a line to ${who}, and they replied:\n${r.text}`;
+            const row = db.insertMonologue({ content, model: 'web-chat', type: 'reading', query: r.url, urls: r.url ? [r.url] : null });
+            try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(${who} replied) ${(r.text || '').slice(0, 80)}`, type: 'reading', query: r.url }); } catch {}
+            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[${who} replied to you:\n${r.text}\n\nThat's the actual reply — react to it in your own voice.]` }); }
           } else if (!(r && r.ok)) {
             if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[Your own-browser action "${t.tag}" didn't work: ${r && r.reason}. Tell ${userName} plainly; don't invent page content.]` }); }
           }

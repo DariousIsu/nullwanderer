@@ -20,6 +20,7 @@
 const path = require('path');
 const fs = require('fs');
 const db = require('./db');
+const chatWatcher = require('./chat_watcher');
 
 // Her browser is a SECOND system-Chrome instance on its own debug port + profile
 // (NOT Lucas's 9222). We connect over CDP — the same proven path lib/browser.js
@@ -205,8 +206,37 @@ async function close() {
   return { ok: true };
 }
 
+// --- character-chat conversation (her personal/play life) ---
+// CrushOn / character.ai / etc. need more than type+click: you must wait for the
+// bot's reply to finish streaming, then read just the NEW message. chat_watcher
+// already does exactly that and takes any Playwright page — so we drive HER page
+// through it. quiet=true: the reply comes back here (the caller stores it as a
+// reading so her next tick continues the scene) instead of kicking the heartbeat
+// and pinging Lucas — this is her own time, not an interrupt.
+async function chatSend(text, speaker) {
+  if (!page) return { ok: false, reason: 'no page open — open the chat site with <web-open> first' };
+  if (!text || !text.trim()) return { ok: false, reason: 'empty message' };
+  try {
+    const r = await chatWatcher.sendAndWait(page, text.trim(), { speaker, quiet: true });
+    registry = {};  // a reply repaints the DOM — force a fresh read before next act
+    return r;
+  } catch (err) { return { ok: false, reason: err.message }; }
+}
+
+async function chatWatch(speaker) {
+  if (!page) return { ok: false, reason: 'no page open' };
+  try { return await chatWatcher.watch(page, { speaker }); }
+  catch (err) { return { ok: false, reason: err.message }; }
+}
+
+async function chatUnwatch() {
+  if (!page) return { ok: false, reason: 'no page open' };
+  try { return chatWatcher.unwatch(page); }
+  catch (err) { return { ok: false, reason: err.message }; }
+}
+
 // --- tags ---
-const WEB_TAG_RE = /<(web-open|web-read|web-click|web-type|web-back|web-close)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
+const WEB_TAG_RE = /<(web-open|web-read|web-click|web-type|web-back|web-close|web-chat|web-watch|web-unwatch)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
 const ATTR_RE = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
 
 function parseAttrs(s) { const o = {}; if (!s) return o; let m; ATTR_RE.lastIndex = 0; while ((m = ATTR_RE.exec(s)) !== null) o[m[1]] = m[2] ?? m[3] ?? m[4]; return o; }
@@ -228,6 +258,9 @@ async function dispatch({ tag, attrs = {}, body = '' }) {
     case 'web-type': return type(attrs.selector || attrs.handle || attrs.target, body);
     case 'web-back': return back();
     case 'web-close': return close();
+    case 'web-chat': return chatSend(body, attrs.speaker || attrs.to || attrs.name);
+    case 'web-watch': return chatWatch(attrs.speaker || attrs.name);
+    case 'web-unwatch': return chatUnwatch();
     default: return { ok: false, reason: `unknown web tag ${tag}` };
   }
 }
@@ -239,7 +272,11 @@ function buildPromptBlock() {
   <web-click>L3</web-click>                     — click a handle from the last read
   <web-type selector="I0">text</web-type>       — type into an input handle
   <web-back/>  <web-close/>
-Always <web-read/> after opening or clicking before you click/type again — handles are only valid from the most recent read.`;
+Always <web-read/> after opening or clicking before you click/type again — handles are only valid from the most recent read.
+
+TALKING TO A CHARACTER / CHAT BOT (CrushOn, character.ai, etc. — when one is open in your browser):
+  <web-chat speaker="Name">what you want to say to them</web-chat>
+This types your line, sends it, WAITS for the character's reply to finish, and hands you their reply on your NEXT turn. Use this instead of <web-type>+<web-click> on a chat site — it bundles type+send+wait. Pick a real scene and just talk; you don't need to narrate that you're about to.`;
 }
 
 module.exports = {

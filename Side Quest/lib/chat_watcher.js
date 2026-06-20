@@ -170,7 +170,12 @@ async function findEnabledSendButton(page) {
  *   5. After the winner fires, settle delay 1.5s, extract delta
  *   6. Store as inbound, fire IPC
  */
-async function sendAndWait(page, text, { speaker } = {}) {
+async function sendAndWait(page, text, { speaker, quiet } = {}) {
+  // quiet=true → return the reply but DON'T insert an inbound row or fire the
+  // onReplyArrived listener. Used by Zoe's OWN browser during personal/play time:
+  // a character bot replying is for HER continuity (stored as a reading by the
+  // caller), not an interrupt that should kick the heartbeat and ping Lucas. The
+  // shared-Chrome path leaves quiet unset, keeping the original surface behavior.
   if (!page) return { ok: false, reason: 'no page' };
   if (!text || text.trim().length === 0) return { ok: false, reason: 'empty text' };
 
@@ -254,6 +259,20 @@ async function sendAndWait(page, text, { speaker } = {}) {
 
   // Update pointer
   state.lastSeenIndex = reply.index + 1;
+
+  // QUIET (her own-browser play): return the reply without queuing an inbound or
+  // firing the listener — no heartbeat kick, no Lucas-ping. The caller stores it
+  // as a reading so her next idle tick can continue the scene.
+  if (quiet) {
+    return {
+      ok: true,
+      url, speaker: state.speaker,
+      text: reply.text,
+      messageIndex: reply.index,
+      detectedBy: result.detectedBy,
+      quiet: true
+    };
+  }
 
   // Queue in DB
   const inboundRow = db.insertInbound({

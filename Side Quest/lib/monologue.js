@@ -18,6 +18,8 @@ const recipesLib = require('./recipes');
 const ruminationLib = require('./rumination');
 const webLib = require('./web');
 const memoryLib = require('./memory');
+const personalLib = require('./personal');
+const playSession = require('./play_session');
 const { buildAwarenessBlock } = require('./context');
 
 const MODEL = require('./config').model();
@@ -383,6 +385,57 @@ Forbidden: restating the focus, narrating effort ("I should work on…"), atmosp
   return messages;
 }
 
+// PLAY MODE: the idle prompt while she's OFF THE CLOCK (lib/personal). Instead of
+// introspecting on the conversation or grinding a work focus, this tick does
+// something fun on her own initiative — most often sending her next line to a
+// character chat in her own browser, or opening a new scenario. Her recent play
+// readings (web-chat replies, pages she opened) are shown so she stays IN the
+// scene across ticks rather than restarting it.
+function buildPlayPrompt({ userName, recentReadings, recentMonologue, awareness, protocols }) {
+  let sys = personalLib.buildMonologueSteer(userName);
+
+  // Her own browser tags (incl. <web-chat>) — the actual capability this tick uses.
+  try { sys += '\n\n' + webLib.buildPromptBlock(); } catch {}
+  // Self-model so play stays in HER voice / taste, not a blank persona.
+  try { const sb = require('./self_model').buildPromptBlock(8); if (sb) sys += '\n\n' + sb; } catch {}
+
+  if (awareness) sys = awareness + '\n\n' + sys;
+  // Protocols pinned on top — safe word / fantasy-mode rules must hold during play too.
+  if (protocols && protocols.length > 0) {
+    const { formatInjection } = require('./protocols');
+    const block = formatInjection(protocols);
+    if (block) sys = block + '\n' + sys;
+  }
+
+  const messages = [{ role: 'system', content: sys }];
+
+  let context = '';
+
+  // What's open for her right now — a character's last line (a scene Lucas set up),
+  // or what she was last doing. If a scene is going, the point is to continue it.
+  let sceneOpen = false;
+  if (recentReadings && recentReadings.length > 0) {
+    context += `Where things are right now (continue from this — don't restart):\n`;
+    for (const r of recentReadings.slice(-3)) {
+      const snip = (r.content || '').replace(/\s+/g, ' ').slice(0, 500);
+      if (snip) { context += `\n${snip}\n`; if (/replied|web-chat|character/i.test(r.content || '')) sceneOpen = true; }
+    }
+    context += '\n';
+  }
+
+  if (recentMonologue && recentMonologue.length > 0) {
+    const last = recentMonologue.slice(-2).map(m => (m.content || '').replace(/\s+/g, ' ').slice(0, 160)).filter(Boolean);
+    if (last.length) { context += `Your last couple of thoughts (continuity):\n`; for (const l of last) context += `· ${l}\n`; context += '\n'; }
+  }
+
+  context += sceneOpen
+    ? `NOW: a character last spoke to you above. Reply to them in the scene with <web-chat speaker="Name">your line</web-chat> — react to what they actually said. Nothing else; no work, no narration.`
+    : `NOW: nothing is open for you to play with, so just have ONE genuine thought of your own — something you're personally curious about or drawn to — or rest. Don't go set anything up, don't work, don't narrate that you're relaxing.`;
+
+  messages.push({ role: 'user', content: context });
+  return messages;
+}
+
 function sampleRandomOlderPairs(n = 2) {
   // Returns up to n {user, said} pairs from anywhere in history.
   // Excludes the most recent 10 turns (so it's actual older context, not echo of recent).
@@ -616,16 +669,21 @@ async function runOneTick() {
   let messages;
   let modeIsThreadReview = false;
   let focusedThread = null;
-  // FOCUS is highest priority: if one is active she serves it every tick until it
-  // resolves/stalls/caps. This is the continuity — an intention carried forward.
-  let activeFocus = focusLib.getCurrent();
+  // PERSONAL/PLAY MODE takes precedence over everything else: when she's off the
+  // clock the tick is for fun, not work. A work focus (if any) just sits unserved
+  // until she clocks back in — play does not resolve or strike it.
+  const personalMode = personalLib.isOn();
+  // FOCUS is highest priority among WORK modes: if one is active she serves it
+  // every tick until it resolves/stalls/caps. (Skipped while in personal mode.)
+  let activeFocus = personalMode ? null : focusLib.getCurrent();
 
   // RUMINATION GUARD: if she's NOT on a focus but her recent free-association
   // thoughts are circling one theme (semantic spiral the exact-match StuckDetector
   // can't see), auto-escalate it into a focus so the focus guards drive it to
   // resolution instead of restating it forever. If the spawn-gate suppresses it
   // (recently tombstoned), break the loop by skipping this tick's surfacing.
-  if (!activeFocus) {
+  // Disabled in personal mode — play is allowed to wander; it isn't rumination.
+  if (!activeFocus && !personalMode) {
     try {
       const rum = await ruminationLib.detect();
       if (rum.ruminating) {
@@ -637,7 +695,35 @@ async function runOneTick() {
     } catch (e) { console.error('[monologue] rumination guard failed:', e.message); }
   }
 
-  if (activeFocus) {
+  if (personalMode && playSession.active()) {
+    // OFF THE CLOCK, in a stepwise play session: advance exactly ONE atomic step
+    // this tick (app opens/inventories; model picks/chats). Self-contained — does
+    // its own model + browser work and returns, bypassing the work-introspection path.
+    try {
+      const res = await playSession.runTick({
+        userName, awareness, protocols,
+        onReading: (content, label, url) => {
+          try {
+            const rr = db.insertMonologue({ content, model: 'play-session', type: 'reading', query: url || null, urls: url ? [url] : null });
+            pushSheep({ id: rr.id, ts: rr.ts, content: label || content, type: 'reading', query: url });
+          } catch (e) { console.error('[play] reading insert failed:', e.message); }
+        }
+      });
+      console.log(`[play] ${res.step}: ${res.note}`);
+    } catch (e) { console.error('[monologue] play-session tick failed:', e.message); }
+    return;
+  } else if (personalMode) {
+    // OFF THE CLOCK but no active play session (it completed / gave up / not started).
+    // Light off-the-clock thinking instead of grinding work — no navigation choreography.
+    const playReadings = db.getRecentMonologueByType('reading', 6);
+    messages = buildPlayPrompt({
+      userName,
+      recentReadings: playReadings,
+      recentMonologue: recentThoughts,
+      awareness,
+      protocols
+    });
+  } else if (activeFocus) {
     const workingSet = blackboard.forFocus(activeFocus.id, 60);
     messages = buildFocusPrompt({
       userName,
@@ -747,6 +833,12 @@ async function runOneTick() {
           } else if (r?.ok && t.tag === 'web-open') {
             const rr = db.insertMonologue({ content: `I opened ${r.url} in my own browser`, model: 'web-open', type: 'reading', query: r.url, urls: r.url ? [r.url] : null });
             pushSheep({ id: rr.id, ts: rr.ts, content: `(opened) ${r.url}`, type: 'reading', query: r.url });
+          } else if (r?.ok && t.tag === 'web-chat' && r.text) {
+            // A character replied during her play — store it as a reading so the NEXT
+            // tick sees the scene-so-far and continues it (the whole point of play).
+            const who = r.speaker || 'the character';
+            const rr = db.insertMonologue({ content: `I'm playing a scene in my own browser. I sent ${who} a line, and they replied:\n${r.text}`, model: 'web-chat', type: 'reading', query: r.url, urls: r.url ? [r.url] : null });
+            pushSheep({ id: rr.id, ts: rr.ts, content: `(${who} replied) ${(r.text || '').slice(0, 80)}`, type: 'reading', query: r.url });
           }
           console.log(`[monologue] web ${t.tag}: ${r?.ok ? 'ok' : 'FAIL ' + r?.reason}`);
         } catch (err) { console.error('[monologue] web dispatch error:', err.message); }
@@ -800,7 +892,12 @@ async function runOneTick() {
 
   // AUTONOMY TOOLS (scheduler / presence / email / discord): if she invoked any
   // while thinking, run them and strip the tags from the stored thought.
-  if (autoTools.hasAny(autoTools.parseAll(trimmed))) {
+  // SUPPRESSED in personal mode — off the clock she shouldn't be scheduling things
+  // or pinging Lucas; strip the tags so they don't leak, but don't fire them.
+  if (personalMode && autoTools.hasAny(autoTools.parseAll(trimmed))) {
+    console.log('[monologue] personal mode — suppressing autonomous Lucas-ping tool(s)');
+    trimmed = autoTools.stripAll(trimmed);
+  } else if (autoTools.hasAny(autoTools.parseAll(trimmed))) {
     // GOVERNOR: pace autonomous tool actions (schedule/notify/email/dm). Strip the
     // tags either way so they never leak into the stored thought.
     if (governor.requestAction('tool').allow) {
@@ -871,9 +968,12 @@ async function runOneTick() {
   // SELF-SET: a free-association thought may declare a new intention with
   // <focus>goal</focus>. Create it (it becomes the served focus next tick) and
   // strip the tag so it doesn't pollute the stored thought. One focus at a time —
-  // setFromText no-ops if one is already active.
-  try { const set = await focusLib.setFromText(trimmed); if (set) console.log('[focus] self-set →', set.goal.slice(0, 80)); }
-  catch (e) { console.error('[monologue] focus self-set failed:', e.message); }
+  // setFromText no-ops if one is already active. SKIPPED in personal mode: play
+  // shouldn't spin up a work focus (just strip any tag so it doesn't leak).
+  if (!personalMode) {
+    try { const set = await focusLib.setFromText(trimmed); if (set) console.log('[focus] self-set →', set.goal.slice(0, 80)); }
+    catch (e) { console.error('[monologue] focus self-set failed:', e.message); }
+  }
   trimmed = focusLib.stripControlTags(trimmed);
   if (!trimmed) return;
 
@@ -941,9 +1041,13 @@ async function runOneTick() {
   );
 
   // Periodically ask her what she'd want to look up if nothing is pulling.
-  maybeBoredomSearch().catch(err =>
-    console.error('[monologue] boredom search error:', err.message)
-  );
+  // Skipped in personal mode — the play prompt already drives her browser toward
+  // something fun; the work-framed boredom search would just add noise.
+  if (!personalMode) {
+    maybeBoredomSearch().catch(err =>
+      console.error('[monologue] boredom search error:', err.message)
+    );
+  }
 }
 
 function pushSheep(payload) {
