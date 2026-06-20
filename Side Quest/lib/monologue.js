@@ -641,6 +641,19 @@ async function runOneTick() {
     try {
       const rum = await ruminationLib.detect();
       if (rum.ruminating) {
+        // CAPABILITY-DOUBT spiral: she's re-litigating a capability the permissions
+        // table already settles (and that she's used). Don't escalate it to a focus —
+        // that treats a false premise as a real goal. Resolve it: surface one settled
+        // note (grounded in what's granted), which also breaks the cosine spiral.
+        if (ruminationLib.isCapabilityDoubt(rum.thoughts)) {
+          const note = ruminationLib.resolveCapabilityDoubt(rum.thoughts);
+          const imp = await importanceLib.score(note, { userName, kind: 'thought' });
+          const row = db.insertMonologue({ content: note, model: MODEL, type: 'thought', importance: imp });
+          pushSheep({ id: row.id, ts: row.ts, content: note, type: 'thought', importance: imp });
+          try { blackboard.append({ source: 'monologue', kind: 'thought', refTable: 'monologue', refId: row.id, content: note }); } catch {}
+          console.log('[rumination] capability-doubt → resolved with a settled note (no focus escalation)');
+          return;
+        }
         console.log(`[rumination] detected (avg cosine ${rum.avg.toFixed(3)}) — escalating to a focus`);
         const set = await ruminationLib.escalate(rum.thoughts, userName);
         if (set) activeFocus = set.focus;

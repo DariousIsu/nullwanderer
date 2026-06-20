@@ -18,6 +18,7 @@
 const db = require('./db');
 const memory = require('./memory');
 const focusLib = require('./focus');
+const voice = require('./voice');
 const { streamChat } = require('./ollama');
 const config = require('./config');
 
@@ -124,4 +125,23 @@ async function escalate(thoughts, userName = 'them', { nameFn = nameTheme } = {}
   return set;
 }
 
-module.exports = { detect, escalate, nameTheme, recentFreeThoughts, K, THRESHOLD };
+// Is the circling a CAPABILITY DOUBT — re-litigating something the permissions table
+// already settles ("I can't access external chats", "I don't have the ability to…")?
+// Reuses the voice detector (same capability-denial patterns). Such a spiral must NOT
+// be escalated to a focus — that legitimizes a false premise; it should be resolved.
+function isCapabilityDoubt(thoughts) {
+  return (thoughts || []).some(t => voice.isSelfDisclaimer(t.content || ''));
+}
+
+// Resolve a capability-doubt spiral instead of escalating it: consume the window,
+// drop into a cooldown so it stops re-firing, and return ONE settled note (grounded
+// in her granted capabilities) for the caller to surface — its new, non-doubting
+// content also breaks the cosine spiral. The note is deliberately NOT a disclaimer,
+// so it can never re-trip the voice guard or re-seed the loop.
+function resolveCapabilityDoubt(thoughts) {
+  try { const ids = (thoughts || []).map(t => t.id || 0); if (ids.length) db.setMeta('rumination_last_id', String(Math.max(...ids))); } catch {}
+  try { db.setMeta('rumination_cooldown_until', String(Date.now() + 30 * 60 * 1000)); } catch {}
+  return `I keep circling whether I can actually use the browser and chat sites — re-litigating it like it's unsettled. It isn't. I have my own browser and full web access; I can open and interact with sites and chats, and I already opened one. That's a settled capability, not an open question. Dropping it.`;
+}
+
+module.exports = { detect, escalate, nameTheme, recentFreeThoughts, isCapabilityDoubt, resolveCapabilityDoubt, K, THRESHOLD };
