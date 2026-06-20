@@ -72,9 +72,17 @@ async function classify3(a, b) {
 // decideFn: pass null (default) to use the 3-way classify (SAME/UPDATE/DIFFERENT).
 // For back-compat, a boolean-returning decideFn is treated as SAME(true)/DIFFERENT(false);
 // a string-returning one is used verbatim as the verdict (for tests).
+// GUARDRAIL: never canonize anxious self-criticism / rumination as IDENTITY. This is
+// the loop that built her negative self-concept ("I overanalyze" 16×, "I default to
+// research" 11×): the reflection router fed self-critical takeaways here, they got
+// stored, then injected every turn, which reinforced the very behavior. Tastes,
+// values, opinions, and positive traits still flow through untouched.
+const SELF_REJECT = /\b(over[\s-]?analyz|hesitat|oversell|fabricat|safety net|second[\s-]?guess|struggle to|deferential|incomplete information|don'?t (?:have|experience) (?:a |any |personal )?(?:self|sense of self|preferenc|favou?rite|feelings?|emotions?|opinions?|enjoyment|fatigue)|not (?:sure|certain) (?:i|I)(?:'?m| was| am)? (?:honest|being honest)|tendency to (?:avoid|frame|question|fabricat|oversell|overanaly)|default to (?:research|a broad|broad overview)|can'?t (?:access|interact|use the|browse))/i;
+
 async function record(content, { category = 'insight', importance = 0.6, decideFn = null } = {}) {
   const text = String(content || '').trim();
   if (text.length < 8) return null;
+  if (SELF_REJECT.test(text)) { console.log('[self_model] guardrail rejected self-critical takeaway:', text.slice(0, 70)); return { skipped: 'self-criticism' }; }
   let cat = VALID.has(category) ? category : 'insight';
   if (cat === 'insight') cat = inferCategory(text);  // upgrade the generic default to a real category when the content reveals one
 
@@ -172,4 +180,4 @@ async function buildContextBlock(query, { limit = 10, relevantK = 4 } = {}) {
   return render(out.slice(0, limit));
 }
 
-module.exports = { record, buildPromptBlock, buildContextBlock, retrieveRelevant, inferCategory, defaultDecide, classify3, PREFILTER_SIM };
+module.exports = { record, buildPromptBlock, buildContextBlock, retrieveRelevant, inferCategory, defaultDecide, classify3, PREFILTER_SIM, SELF_REJECT };
