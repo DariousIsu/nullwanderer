@@ -65,6 +65,17 @@ async function sendEmail({ to, subject, body, attachments = [], source = 'zoe' }
   const cfg = config.emailConfig();
   if (!cfg.configured) return { ok: false, reason: 'email not configured (set ZOE_EMAIL_USER/PASS in .env)' };
   if (!to || !EMAIL_RE.test(String(to).trim())) return { ok: false, reason: `"${to}" is not a valid email address` };
+  // VOICE GUARD (central): rewrite an inner-life disclaimer in the body before it
+  // sends. Unlike a DM we don't drop the email (it may be substantive) — just clean
+  // the body. No-op + no model call for normal bodies.
+  try {
+    const voice = require('./voice');
+    if (voice.isSelfDisclaimer(body)) {
+      const fixed = await voice.deDisclaim(String(body));
+      if (fixed) body = fixed;
+    }
+  } catch (e) { console.error('[email] voice guard failed:', e.message); }
+
   // A blank message with NO attachments is always a bug; allow an attachment-only send.
   const hasAttach = Array.isArray(attachments) && attachments.length > 0;
   if (!String(body == null ? '' : body).trim() && !hasAttach) return { ok: false, reason: 'refusing to send an empty body' };

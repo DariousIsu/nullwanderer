@@ -11,6 +11,7 @@ const blackboard = require('./blackboard');
 const importanceLib = require('./importance');
 const gapsLib = require('./gaps');
 const recipesLib = require('./recipes');
+const voice = require('./voice');
 
 const MODEL = require('./config').model();
 const TICK_INTERVAL_MS = 30 * 1000;        // check every 30s while idle
@@ -376,7 +377,11 @@ async function maybeHeartbeat() {
       .replace(/[ \t]+/g, ' ')
       .replace(/\n{3,}/g, '\n\n')
       .trim()))));
-    const trimmedSay = stripLeakedTags(say);
+    let trimmedSay = stripLeakedTags(say);
+    // VOICE GUARD: de-disclaim an unprompted utterance before it surfaces. It streamed
+    // live, so the corrected text rides the complete payload and the renderer swaps it.
+    const heartbeatDisclaimed = voice.isSelfDisclaimer(trimmedSay);
+    if (heartbeatDisclaimed) { try { trimmedSay = (await voice.deDisclaim(trimmedSay)) || ''; } catch (e) { console.error('[heartbeat] voice guard failed:', e.message); } }
     const isPlaceholder = /^[\s.()]*(empty|silence|nothing|none|n\/a|null|undefined|no\s+say|no\s+comment)[\s.()]*$/i.test(trimmedSay);
 
     // GOVERNOR: pace unprompted utterances so she doesn't surface in bursts. An
@@ -419,7 +424,7 @@ async function maybeHeartbeat() {
       // the heartbeat repeating the same surfaced line, and lets the monologue see
       // what was just said.
       try { blackboard.append({ source: 'heartbeat', kind: 'utterance', refTable: 'turns', refId: saidRow.id, content: trimmedSay }); } catch (e) { console.error('[heartbeat] blackboard append failed:', e.message); }
-      try { win.webContents.send('chat:complete', { saidId: saidRow.id, truncated, unprompted: true }); } catch {}
+      try { win.webContents.send('chat:complete', heartbeatDisclaimed ? { saidId: saidRow.id, truncated, unprompted: true, say: trimmedSay } : { saidId: saidRow.id, truncated, unprompted: true }); } catch {}
     } else {
       // Empty say — she chose silence. Reset the gap timer so we don't spam-check.
       db.setMeta('last_ai_utterance_at', String(Date.now()));

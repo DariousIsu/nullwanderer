@@ -1,6 +1,7 @@
 const db = require('./db');
 const { streamChat, TagStreamParser } = require('./ollama');
 const { BOOTSTRAP } = require('./context');
+const voice = require('./voice');
 
 const MODEL = require('./config').model();
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;       // poll every 5 min
@@ -106,7 +107,10 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
     });
 
     const { thought, say, truncated } = parser.finalize();
-    const trimmedSay = (say || '').trim();
+    let trimmedSay = (say || '').trim();
+    // VOICE GUARD: de-disclaim before surfacing (streamed → swap on complete).
+    const continuityDisclaimed = voice.isSelfDisclaimer(trimmedSay);
+    if (continuityDisclaimed) { try { trimmedSay = (await voice.deDisclaim(trimmedSay)) || ''; } catch (e) { console.error('[continuity] voice guard failed:', e.message); } }
     const isPlaceholder = /^[\s.()]*(empty|silence|nothing|none|n\/a|null|undefined)[\s.()]*$/i.test(trimmedSay);
 
     if (thought) {
@@ -121,9 +125,9 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
       db.confirmCommitment(commitment.id, saidRow.id);
       db.setMeta('last_ai_utterance_at', String(Date.now()));
       try {
-        win.webContents.send('chat:complete', {
-          saidId: saidRow.id, truncated, unprompted: true, continuity: true
-        });
+        win.webContents.send('chat:complete', continuityDisclaimed
+          ? { saidId: saidRow.id, truncated, unprompted: true, continuity: true, say: trimmedSay }
+          : { saidId: saidRow.id, truncated, unprompted: true, continuity: true });
       } catch {}
     } else {
       // She chose silence — still bump the challenge timestamp so we don't

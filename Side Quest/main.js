@@ -515,6 +515,7 @@ const { detectWebIntent } = require('./lib/intent');
 const preferences = require('./lib/preferences');
 const personal = require('./lib/personal');
 const playSession = require('./lib/play_session');
+const voice = require('./lib/voice');
 
 // Core chat turn — shared by the IPC handler (renderer) and the Discord bridge.
 // io.emit(token) streams say-tokens; io.onComplete/onError fire UI events. For
@@ -970,7 +971,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   sayStripped = presenceLib.stripTags(sayStripped);
   sayStripped = emailLib.stripTags(sayStripped);
   sayStripped = discordLib.stripTags(sayStripped);
-  const trimmedSay = sayStripped;
+  let trimmedSay = sayStripped;
+  // VOICE GUARD: if she disclaimed her inner life ("I don't experience…/as an AI I…"),
+  // rewrite it in her own voice. It streamed live, so we pass the corrected text in the
+  // complete payload and the renderer swaps the bubble. Only runs a model call when a
+  // disclaimer is actually present.
+  const wasDisclaimer = voice.isSelfDisclaimer(trimmedSay);
+  if (wasDisclaimer) { try { trimmedSay = (await voice.deDisclaim(trimmedSay)) || ''; } catch (e) { console.error('[main] voice guard failed:', e.message); } }
   const isPlaceholder = /^[\s.()]*(empty|silence|nothing|none|n\/a|null|undefined)[\s.()]*$/i.test(trimmedSay);
   const finalSaid = (trimmedSay && !isPlaceholder) ? trimmedSay : '…';
   const saidRow = db.insertTurn({
@@ -982,7 +989,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   });
 
   try {
-    sendComplete({ saidId: saidRow.id, truncated });
+    // Include the corrected say ONLY when we rewrote it, so the renderer replaces the
+    // streamed text; normal replies keep rendering from the live stream untouched.
+    sendComplete(wasDisclaimer ? { saidId: saidRow.id, truncated, say: finalSaid } : { saidId: saidRow.id, truncated });
   } catch {}
 
   db.setMeta('last_ai_utterance_at', String(Date.now()));
@@ -1406,6 +1415,10 @@ async function fireToolFollowup({ io, channel, sessionId, resultText }) {
     sayOut = screenLib.stripTags(filesLib.stripTags(browserLib.stripTags(sayOut)));
     sayOut = sayOut.replace(/<[^>]+>/g, '').trim();
     if (!sayOut) return;
+    // VOICE GUARD: de-disclaim the follow-up before it surfaces (streamed → swap on complete).
+    const followupDisclaimed = voice.isSelfDisclaimer(sayOut);
+    if (followupDisclaimed) { try { sayOut = (await voice.deDisclaim(sayOut)) || ''; } catch (e) { console.error('[main] followup voice guard failed:', e.message); } }
+    if (!sayOut) return;
     const thoughtClean = (thought || '').replace(/<\/?(think|say)>/gi, '').trim();
     if (thoughtClean) db.insertTurn({ sessionId, speaker: 'ai_thought', content: thoughtClean, model: MODEL });
     const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: sayOut, model: MODEL });
@@ -1413,7 +1426,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText }) {
     if (channel === 'discord') {
       try { await discordLib.sendDM(sayOut); } catch (e) { console.error('[main] followup discord DM failed:', e.message); }
     } else {
-      try { if (io && io.onComplete) io.onComplete({ saidId: saidRow.id, truncated: 0, unprompted: true }); } catch {}
+      try { if (io && io.onComplete) io.onComplete(followupDisclaimed ? { saidId: saidRow.id, truncated: 0, unprompted: true, say: sayOut } : { saidId: saidRow.id, truncated: 0, unprompted: true }); } catch {}
     }
     console.log('[main] tool follow-up delivered via', channel);
   } catch (err) {

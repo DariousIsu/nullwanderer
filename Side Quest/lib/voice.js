@@ -77,4 +77,14 @@ Rewrite:`;
   return raw.trim().replace(/^["'`]+|["'`]+$/g, '').trim() || null;
 }
 
-module.exports = { isSelfDisclaimer, deDisclaim, stripDisclaimerSentences, PATTERNS };
+// Convenience for spoken surfaces: returns the text to actually say. If it's not a
+// disclaimer, returns it unchanged (cheap — just a regex test, no model call). If it
+// is, returns the de-disclaimed rewrite, or '' when nothing survives (caller treats
+// '' as silence / placeholder). regenFn injectable for tests.
+async function guard(text, opts = {}) {
+  if (!isSelfDisclaimer(text)) return text;
+  const fixed = await deDisclaim(text, opts);
+  return fixed || '';
+}
+
+module.exports = { isSelfDisclaimer, deDisclaim, stripDisclaimerSentences, guard, PATTERNS };

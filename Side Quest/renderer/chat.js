@@ -189,12 +189,18 @@ window.sq.onSayToken((token) => {
   scrollMaybe();
 });
 
-window.sq.onComplete(() => {
+window.sq.onComplete((info) => {
   const turnDiv = currentAiTurnDiv;
   const saidNode = currentAiSaidNode;
   if (turnDiv && saidNode) {
-    // Final clean of accumulated say buffer
-    saidNode.textContent = cleanLiveSay(liveSayBuffer).trim();
+    // If the backend rewrote the say (voice guard de-disclaimed it), the corrected
+    // text rides the complete payload — use it to replace what streamed. Otherwise
+    // render the accumulated live buffer as before.
+    if (info && typeof info.say === 'string' && info.say.trim()) {
+      saidNode.textContent = info.say.trim();
+    } else {
+      saidNode.textContent = cleanLiveSay(liveSayBuffer).trim();
+    }
     backfillThoughtIntoTurn(turnDiv, saidNode);
   }
   currentAiTurnDiv = null;

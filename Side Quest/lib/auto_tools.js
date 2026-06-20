@@ -17,7 +17,6 @@ const schedulerLib = require('./scheduler');
 const presenceLib = require('./presence');
 const emailLib = require('./email');
 const discordLib = require('./discord');
-const voice = require('./voice');
 
 function promptBlocks() {
   return [
@@ -77,14 +76,7 @@ async function dispatchFound(text, { onSheep = () => {}, source = 'auto' } = {})
   }
   for (const t of found.discord.slice(0, 2)) {
     try {
-      // VOICE GUARD: a spontaneously-composed DM that disclaims her inner life
-      // ("I don't experience enjoyment like humans…") gets rewritten in her own
-      // voice before it sends. Composed-then-sent, so no live-stream wrinkle.
-      if (t.body && voice.isSelfDisclaimer(t.body)) {
-        const fixed = await voice.deDisclaim(t.body);
-        if (fixed) { console.log('[auto] de-disclaimed a Discord DM before sending'); t.body = fixed; }
-        else { console.log('[auto] dropped a Discord DM that was only a self-disclaimer'); continue; }
-      }
+      // (voice guard for disclaimers is centralized in discord.sendDM)
       const r = await discordLib.dispatch(t);
       onSheep({ id: Date.now(), ts: Date.now(), content: r.ok ? "(DM'd Lucas on Discord)" : `(discord failed) ${r.reason}`, type: 'reading' });
       console.log(`[auto] discord-dm: ${r && r.ok ? 'sent' : 'FAIL ' + (r && r.reason)}`);

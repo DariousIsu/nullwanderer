@@ -110,8 +110,19 @@ async function resolveOwner() {
 async function sendDM(text) {
   if (!isConfigured()) return { ok: false, reason: 'discord not configured' };
   if (!ready) return { ok: false, reason: 'discord not connected yet' };
-  const t = String(text == null ? '' : text).trim();
+  let t = String(text == null ? '' : text).trim();
   if (!t) return { ok: false, reason: 'empty message' };
+  // VOICE GUARD (central): every DM passes through here. A message that disclaims
+  // her inner life is rewritten in her own voice before it leaves; if that's all it
+  // was, it's suppressed rather than sent. No-op + no model call for normal messages.
+  try {
+    const voice = require('./voice');
+    if (voice.isSelfDisclaimer(t)) {
+      const fixed = await voice.deDisclaim(t);
+      if (!fixed) return { ok: false, reason: 'suppressed self-disclaimer (nothing left to say)' };
+      t = fixed;
+    }
+  } catch (e) { console.error('[discord] voice guard failed:', e.message); }
   const owner = await resolveOwner();
   if (!owner) return { ok: false, reason: 'could not resolve owner user' };
   try {
