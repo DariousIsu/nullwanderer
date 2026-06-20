@@ -47,6 +47,16 @@ let counter = { L: 0, B: 0, I: 0, C: 0 };
 function findChrome() { for (const p of CHROME_PATHS) { try { if (fs.existsSync(p)) return p; } catch {} } return null; }
 function isConnected() { return !!(context && page); }
 
+// Hard wall-clock cap for any browser promise that could hang (page.evaluate has no
+// built-in timeout and will block forever on a stuck/heavy SPA). Resolves to `fallback`
+// if the promise doesn't settle in `ms`. This is what keeps a heavy page (CrushOn) from
+// freezing the whole turn — the bug behind "she looks hung, no GPU actions".
+function withTimeout(promise, ms, fallback) {
+  let t;
+  const timeout = new Promise((res) => { t = setTimeout(() => res(fallback), ms); });
+  return Promise.race([Promise.resolve(promise).catch(() => fallback), timeout]).finally(() => clearTimeout(t));
+}
+
 // Launch her browser the STANDARD Playwright way: launchPersistentContext drives
 // the SYSTEM Chrome (executablePath) over Playwright's internal pipe — no debug
 // port, no connectOverCDP (which failed to attach to a self-spawned Chrome on this
@@ -97,7 +107,9 @@ async function syncActivePage() {
   if (!pages.length) return;
   let picked = null;
   for (const p of pages) {
-    try { if ((await p.evaluate(() => document.visibilityState).catch(() => null)) === 'visible') { picked = p; break; } } catch {}
+    // evaluate() has NO built-in timeout — a stuck page would hang here forever.
+    const vis = await withTimeout(p.evaluate(() => document.visibilityState), 1200, null);
+    if (vis === 'visible') { picked = p; break; }
   }
   if (!picked) picked = pages[pages.length - 1];  // newest as fallback
   if (picked && picked !== page) {
@@ -146,10 +158,11 @@ async function read() {
   try { if (context) await syncActivePage(); } catch {}
   if (!page) return { ok: false, reason: 'no page open — use <web-open> first' };
   try {
-    const text = (await page.innerText('body').catch(() => '')).replace(/\n{3,}/g, '\n\n').slice(0, MAX_TEXT);
+    const text = (await page.innerText('body', { timeout: 5000 }).catch(() => '')).replace(/\n{3,}/g, '\n\n').slice(0, MAX_TEXT);
     registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
     const lines = [];
     const seen = new Set();   // dedupe by label across passes (SPA cards often double up)
+    const deadline = Date.now() + 7000;  // never let element collection run away on a heavy page
     const kinds = [
       { sel: 'a[href]', role: 'L', label: 'link' },
       { sel: 'button, [role=button], input[type=submit]', role: 'B', label: 'button' },
@@ -160,11 +173,13 @@ async function read() {
       { sel: '[role=link], [role=option], [role=article], [onclick], [tabindex="0"]', role: 'C', label: 'card', requireText: true }
     ];
     for (const { sel, role, label, requireText } of kinds) {
+      if (Date.now() > deadline) break;
       const loc = page.locator(sel);
-      const n = Math.min(await loc.count().catch(() => 0), 60);
+      const n = Math.min(await withTimeout(loc.count(), 1500, 0), 60);
       for (let i = 0; i < n && Object.keys(registry).length < MAX_INTERACTIVES; i++) {
+        if (Date.now() > deadline) break;
         const el = loc.nth(i);
-        let visible = false; try { visible = await el.isVisible({ timeout: 300 }); } catch {}
+        let visible = false; try { visible = await el.isVisible({ timeout: 250 }); } catch {}
         if (!visible) continue;
         let name = '';
         try { name = ((await el.innerText({ timeout: 300 }).catch(() => '')) || (await el.getAttribute('aria-label').catch(() => '')) || (await el.getAttribute('placeholder').catch(() => '')) || '').replace(/\s+/g, ' ').trim().slice(0, 60); } catch {}

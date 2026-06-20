@@ -34,7 +34,7 @@ for (const s of [
 ]) ok(`no-fire: "${s.slice(0, 40)}"`, !detectActOnOpenPage(s));
 
 console.log('\ndetectPickCharacter — routes to the deterministic stepper:');
-for (const s of ['pick a character to chat with', 'choose a character', 'chat with one', 'start a scene', 'find someone to talk to', 'pick one to chat']) {
+for (const s of ['pick a character to chat with', 'choose a character', 'chat with one', 'start a scene', 'find someone to talk to', 'pick one to chat', 'explore different characters', 'explore a character']) {
   ok(`pick: "${s.slice(0, 40)}"`, detectPickCharacter(s));
 }
 for (const s of ['what do you think about housing', 'pick a topic for the article', "let's chat about the bill"]) {

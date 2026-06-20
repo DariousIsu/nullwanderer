@@ -63,7 +63,7 @@ function detectActOnOpenPage(text) {
 // "Pick a character / chat with one / start a scene" — the 24B fumbles this as
 // free-form navigation, so we route it to the deterministic play stepper (which
 // makes each step a trivial pick). Fires only when her browser is already open.
-const PICK_CHAR_RE = /\b(?:pick|choose|select|find|start)\b[^.?!]{0,30}\b(?:character|someone|scene|bot|conversation|one to (?:chat|talk|play))\b|\bchat with (?:a |an |one\b|someone|somebody)\b|\bstart (?:a |the )?(?:scene|roleplay|rp)\b/i;
+const PICK_CHAR_RE = /\b(?:pick|choose|select|find|start|explore|browse|open)\b[^.?!]{0,30}\b(?:characters?|someone|scene|bot|conversation|one to (?:chat|talk|play))\b|\bchat with (?:a |an |one\b|someone|somebody)\b|\bstart (?:a |the )?(?:scene|roleplay|rp)\b/i;
 function detectPickCharacter(text) { return !!text && PICK_CHAR_RE.test(String(text)); }
 
 module.exports = { detectWebIntent, detectActOnOpenPage, detectPickCharacter, SEARCH_HOME };
