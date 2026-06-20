@@ -512,6 +512,7 @@ function extractUrls(text) {
 }
 
 const { detectWebIntent } = require('./lib/intent');
+const preferences = require('./lib/preferences');
 
 // Core chat turn — shared by the IPC handler (renderer) and the Discord bridge.
 // io.emit(token) streams say-tokens; io.onComplete/onError fire UI events. For
@@ -642,6 +643,29 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   } catch (err) { console.error('[web-intent] interceptor failed:', err.message); }
   // === END WEB-INTENT ===
 
+  // === PREFERENCE INTERCEPTOR (the "ghost command") ===
+  // A taste question ("what's your favorite flower?") triggers the Instruct model's
+  // "I'm an AI, I have no preferences" reflex, which the full chat prompt cannot
+  // override (the identity-question FRAMING is the trigger). So on a NARROW set of
+  // taste questions we answer from her self_model directly — speaking a held interest
+  // or FORMING + storing a new one (she develops interests over time) — bypassing the
+  // refusal. Narrow trigger = her work/research/tool turns are never affected.
+  try {
+    {
+      const ans = await preferences.interceptSelf(userMessage, userName);
+      if (ans && ans.say) {
+        if (ans.thought) db.insertTurn({ sessionId, speaker: 'ai_thought', content: ans.thought, model: 'preference-interceptor' });
+        const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: ans.say, model: 'preference-interceptor' });
+        try { for (const ch of ans.say) emit(ch); sendComplete({ saidId: saidRow.id, truncated: 0, preferenceAnswered: true }); } catch {}
+        db.setMeta('last_ai_utterance_at', String(Date.now()));
+        resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
+        console.log('[pref-intent] answered from self_model (bypassed the disclaimer reflex)');
+        return { ok: true, preferenceAnswered: true, say: ans.say };
+      }
+    }
+  } catch (err) { console.error('[pref-intent] interceptor failed:', err.message); }
+  // === END PREFERENCE INTERCEPTOR ===
+
   // Detect URLs in user message; fetch them as shared-link context
   const sharedUrls = extractUrls(userMessage);
   const sharedPages = [];
@@ -731,6 +755,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     retrievedKnowledgeBlock = memoryLib.formatForPrompt(rk, userName);
   } catch (err) { console.error('[main] knowledge retrieve failed:', err.message); }
 
+  // SELF-MODEL block — query-relevant self entries (so a question about a specific
+  // taste/preference surfaces THAT entry, e.g. "favorite flower" → her ranunculus)
+  // plus her always-on core self. Async (embeds the query).
+  let selfModelBlock = null;
+  try { selfModelBlock = await require('./lib/self_model').buildContextBlock(userMessage); }
+  catch (e) { console.error('[main] self-model block failed:', e.message); }
+
   // CAPABILITY PROPOSAL ON RETURN: if Lucas was away a while and she logged a
   // capability gap during idle, surface the top one for her to PROPOSE (her call).
   let capabilityProposalBlock = null;
@@ -752,6 +783,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     pendingInbounds,
     retrievedKnowledgeBlock,
     capabilityProposalBlock,
+    selfModelBlock,
     newUserMessage: composedUserMessage
   });
 

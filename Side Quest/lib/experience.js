@@ -31,35 +31,17 @@ async function sameProcedure(a, b) {
   return /^\s*yes/i.test(raw.trim());
 }
 
-function nearest(emb, excludeNone = true) {
-  let best = null, bestSim = 0;
-  for (const r of db.getAllKnowledgeEmbeddings()) {
-    let v; try { v = JSON.parse(r.embedding); } catch { continue; }
-    const sim = memory.cosine(emb, v);
-    if (sim > bestSim) { bestSim = sim; best = r; }
-  }
-  return { best, bestSim };
-}
-
-// Store a procedure/fact in the capability track, deduped + linked + with provenance.
-// Returns { action:'add'|'skip', id? }.
-async function recordProcedure({ content, kind = 'skill', provenance = null, importance = 0.75, decideFn = sameProcedure }) {
+// Store a procedure/fact in the capability track via the shared write-time dedup
+// (memory.storeDeduped): a confirmed near-duplicate NOOPs instead of re-storing.
+// Returns { action:'add'|'noop'|'skip-empty', id? }.
+async function recordProcedure({ content, kind = 'skill', source = 'experience', provenance = null, importance = 0.78, decideFn = null }) {
   const text = String(content || '').trim();
   if (text.length < 10) return null;
-  let emb = null;
-  try { emb = await memory.embed(text); } catch {}
-  if (emb) {
-    const { best, bestSim } = nearest(emb);
-    if (best && bestSim >= PREFILTER_SIM) {
-      const dup = await decideFn(text, best.content);
-      if (dup) return { action: 'skip', id: best.id, sim: bestSim };
-    }
-  }
-  // link to nearest existing capability note (A-MEM-lite)
-  let link = null;
-  if (emb) { const { best, bestSim } = nearest(emb); if (best && bestSim >= 0.6) link = best.id; }
-  const row = await memory.store({ kind, content: text, source: 'experience', importance, links: link ? [link] : null, provenance: provenance ? (Array.isArray(provenance) ? provenance : [provenance]) : null });
-  return { action: 'add', id: row && row.id };
+  return memory.storeDeduped({
+    kind, content: text, source, importance,
+    provenance: provenance ? (Array.isArray(provenance) ? provenance : [provenance]) : null,
+    prefilter: PREFILTER_SIM, decideFn
+  });
 }
 
 // Distill the reusable procedure from a completed action and record it.

@@ -40,10 +40,10 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
   ok('row holds provenance marker', !!(prov && prov[0] && prov[0].refId === rd.id));
   ok('marker records source kind/url', !!(prov[0].type === 'reading' && /purdue/i.test(prov[0].url)));
 
-  // duplicate (LLM says same) → skip, no new row
+  // duplicate (LLM says same) → noop, no new row
   const before = D.countKnowledge();
   const b = await experience.recordProcedure({ content: 'Keep each sentence focused on a single idea for clarity.', kind: 'skill', provenance: mk, decideFn: alwaysDup });
-  ok('confirmed duplicate is SKIPPED', b && b.action === 'skip');
+  ok('confirmed duplicate is NOOPed (deduped)', b && b.action === 'noop');
   ok('no new row added on dup', D.countKnowledge() === before);
 
   // resolveMarker → raw source row (reference-not-copy proof)

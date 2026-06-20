@@ -75,6 +75,47 @@ async function store({ kind = 'note', content, source = null, importance = 0.5, 
   return db.insertKnowledge({ kind, content: String(content).trim(), embedding: embStr, source, importance, links, provenance });
 }
 
+// Mem0-style WRITE-TIME DEDUP for the capability track. Before adding a knowledge
+// note, find the semantically-nearest existing one; if an LLM confirms it states the
+// same fact/procedure (a paraphrase with no new info), NOOP — touch the existing row
+// instead of piling up a near-duplicate. Otherwise ADD, linked to its nearest
+// neighbour. This is what keeps the store from exploding (critical once Echo's tool-
+// knowledge flows in). decideFn injectable for offline tests.
+async function storeDeduped({ kind = 'note', content, source = null, importance = 0.5, provenance = null, prefilter = 0.82, decideFn = null }) {
+  const text = String(content || '').trim();
+  if (text.length < 8) return { action: 'skip-empty' };
+  let emb = null;
+  try { emb = await embed(text); } catch {}
+  let link = null;
+  if (emb) {
+    let best = null, bestSim = 0;
+    for (const r of db.getAllKnowledgeEmbeddings()) {
+      let v; try { v = JSON.parse(r.embedding); } catch { continue; }
+      const s = cosine(emb, v);
+      if (s > bestSim) { bestSim = s; best = r; }
+    }
+    if (best && bestSim >= 0.6) link = best.id;
+    if (best && bestSim >= prefilter) {
+      const cand = db.getKnowledgeByIds([best.id])[0];
+      const same = decideFn ? await decideFn(text, cand ? cand.content : '') : await _sameFact(text, cand ? cand.content : '');
+      if (same) { try { db.touchKnowledge(best.id); } catch {} return { action: 'noop', id: best.id, sim: bestSim }; }
+    }
+  }
+  const row = await store({ kind, content: text, source, importance, links: link ? [link] : null, provenance });
+  return { action: 'add', id: row && row.id };
+}
+
+async function _sameFact(a, b) {
+  if (!b) return false;
+  try {
+    const { streamChat } = require('./ollama');
+    const MODEL = require('./config').model();
+    let raw = '';
+    await streamChat({ model: MODEL, messages: [{ role: 'user', content: `Do these two notes state essentially the SAME fact or procedure — one a duplicate or paraphrase of the other with no meaningful new information? Answer ONLY "yes" or "no".\n\nA: ${a}\nB: ${b}` }], options: { temperature: 0, top_p: 0.9, num_ctx: 8192, num_predict: 3 }, onToken: (t) => { raw += t; } });
+    return /^\s*yes/i.test(raw.trim());
+  } catch { return false; }
+}
+
 /** Log an action she took, as retrievable memory (kills "didn't know she did X"). */
 async function logAction(text, { source = 'action' } = {}) {
   return store({ kind: 'trajectory', content: text, source, importance: 0.7 });
@@ -142,7 +183,7 @@ function _normalize(map) {
  * relevance 3, importance 2. Falls back gracefully: no query embedding → relevance
  * drops out and ranking is recency+importance.
  */
-async function retrieveScored(query, { k = 4, kinds = null, weights = { recency: 0.5, relevance: 3, importance: 2 }, decayPerHour = 0.99 } = {}) {
+async function retrieveScored(query, { k = 4, kinds = null, weights = { recency: 0.5, relevance: 3, importance: 2 }, decayPerHour = 0.99, excludeSources = ['focus_tombstone'] } = {}) {
   const rows = db.getAllKnowledgeEmbeddings();
   if (!rows || rows.length === 0) return [];
 
@@ -153,6 +194,9 @@ async function retrieveScored(query, { k = 4, kinds = null, weights = { recency:
   const recency = new Map(), relevance = new Map(), importance = new Map();
   for (const r of rows) {
     if (kinds && !kinds.includes(r.kind)) continue;
+    // Exclude internal machinery (focus tombstones) from user-facing recall — they're
+    // spawn-gate bookkeeping, not knowledge, and were taking top slots on topical queries.
+    if (excludeSources && r.source && excludeSources.includes(r.source)) continue;
     const last = r.last_used_ts || r.created_ts || now;
     const hours = Math.max(0, (now - last) / 3600000);
     recency.set(r.id, Math.pow(decayPerHour, hours));
@@ -186,9 +230,9 @@ async function retrieveScored(query, { k = 4, kinds = null, weights = { recency:
 /** Format retrieved knowledge for prompt injection (the RETRIEVED tail). */
 function formatForPrompt(rows, userName = 'them') {
   if (!rows || rows.length === 0) return null;
-  const lines = [`From your knowledge — things you've learned or done before that may bear on this (you retrieved these by relevance, not ${userName}):`];
+  const lines = [`From YOUR OWN knowledge — things you learned or did before (you recalled these, ${userName} did not just tell you). If they bear on what's being asked, ANSWER FROM THEM DIRECTLY and say what you know — don't go re-research or check tools for something you already remember:`];
   for (const r of rows) {
-    const tag = r.kind === 'trajectory' ? '[did]' : r.kind === 'reference' ? '[ref]' : '[note]';
+    const tag = r.kind === 'trajectory' ? '[did]' : r.kind === 'reference' ? '[ref]' : r.kind === 'skill' ? '[how-to]' : '[note]';
     lines.push(`  ${tag} ${(r.content || '').slice(0, 400)}`);
   }
   return lines.join('\n');
@@ -199,6 +243,6 @@ function isReady() { return !!_extractor; }
 function warm() { return getExtractor().then(() => true).catch(() => false); }
 
 module.exports = {
-  embed, store, logAction, retrieve, retrieveScored, formatForPrompt, warm, isReady,
+  embed, store, storeDeduped, logAction, retrieve, retrieveScored, formatForPrompt, warm, isReady,
   cosine, fuse, _normalize  // exported for unit tests
 };

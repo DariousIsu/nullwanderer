@@ -733,7 +733,7 @@ function getMonologueById(id) {
 // single-user scale (hundreds–thousands of notes = ms); swap for ANN if it grows.
 function getAllKnowledgeEmbeddings() {
   return getDb()
-    .prepare('SELECT id, kind, embedding, importance, created_ts, last_used_ts FROM knowledge WHERE embedding IS NOT NULL')
+    .prepare('SELECT id, kind, source, embedding, importance, created_ts, last_used_ts FROM knowledge WHERE embedding IS NOT NULL')
     .all();
 }
 

@@ -41,9 +41,17 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
 
   const block = self.buildPromptBlock(10);
   ok('persona block renders both traits', block && /directness/.test(block) && /(overanalyze|reading too much)/.test(block));
-  console.log('\n--- persona block ---\n' + block + '\n');
 
-  console.log(`${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
+  console.log('\nrevision — a changed favorite EVOLVES (not a 2nd contradictory entry):');
+  await self.record('My favorite movie is Parasite.', { category: 'preference', decideFn: async () => 'different' });
+  const cntA = D.countSelfModel();
+  const r2 = await self.record('My favorite movie is now Portrait of a Lady on Fire.', { category: 'preference', decideFn: async () => 'update' });
+  ok('changed favorite → revise (not add)', r2 && r2.action === 'revise');
+  ok('no new row on revision', D.countSelfModel() === cntA);
+  const all = D.getAllSelfModel();
+  ok('entry now holds the NEW favorite, not the old', all.some(x => /Portrait of a Lady/i.test(x.content)) && !all.some(x => /Parasite/i.test(x.content)));
+
+  console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { D.getDb().close(); } catch {}
   try { fs.unlinkSync(process.env.SQ_DB_PATH); } catch {}
   process.exit(fail === 0 ? 0 : 1);

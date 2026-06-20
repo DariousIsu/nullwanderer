@@ -27,6 +27,7 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
 
   const raw = [
     "[SELF] I tend to read deeper meaning into small word choices than is usually there.",
+    "[INTEREST] I'm increasingly drawn to mid-century political journalism after this reading.",
     "[KNOWLEDGE] The Purdue OWL recommends one main idea per sentence for clarity.",
     "[SKILL] To de-escalate, acknowledge the other person's view before giving my own.",
     "I wonder if Lucas is happy with me today.",          // untagged passing feeling → DROP
@@ -34,14 +35,16 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
   ].join('\n');
 
   const sourceRows = [{ id: 9001, urls: JSON.stringify(['https://owl.purdue.edu/x']) }, { id: 9002, urls: null }];
-  const routed = await reflection.routeReflection(raw, sourceRows);
-  ok('tagged lines parsed (3 valid, short/untagged ignored)', routed.taggedCount === 3);
-  ok('1 SELF routed to identity track', routed.nSelf === 1);
+  // never-dup decideFn keeps the test deterministic (no model call in storeDeduped)
+  const routed = await reflection.routeReflection(raw, sourceRows, { decideFn: async () => false });
+  ok('tagged lines parsed (4 valid, short/untagged ignored)', routed.taggedCount === 4);
+  ok('SELF + INTEREST routed to identity track (nSelf=2)', routed.nSelf === 2);
   ok('1 KNOWLEDGE routed to capability track', routed.nKnow === 1);
   ok('1 SKILL routed to capability track', routed.nSkill === 1);
 
-  // self_model got exactly the identity line
+  // self_model got the identity line AND the experience→interest line
   ok('self_model has the identity statement', D.getAllSelfModel().some(r => /deeper meaning into small word/i.test(r.content)));
+  ok('self_model captured the [INTEREST] (experience→taste)', D.getAllSelfModel().some(r => /mid-century political journalism/i.test(r.content)));
   ok('self_model did NOT absorb the email fact', !D.getAllSelfModel().some(r => /Purdue|emails/i.test(r.content)));
 
   // knowledge got the fact + skill, and the new fact LINKED to the seeded note
