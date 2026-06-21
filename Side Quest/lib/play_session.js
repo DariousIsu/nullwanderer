@@ -21,7 +21,7 @@ const webLib = require('./web');
 const ollama = require('./ollama');  // call ollama.streamChat at use-time (stub-friendly)
 const MODEL = require('./config').model();
 
-const STEPS = ['none', 'open', 'inventory', 'choose', 'chat'];
+const STEPS = ['none', 'open', 'inventory', 'choose', 'startchat', 'chat'];
 const MAX_STEP_STRIKES = 3;   // consecutive failures on a step before we reset the session
 
 function siteUrl() { return db.getMeta('play_site_url') || 'https://crushon.ai'; }
@@ -63,6 +63,15 @@ const NON_CHARACTER = [
   'previous', 'more', 'download', 'app store', 'google play', 'back'
 ];
 
+// Filter / sort / tab chips that sit ALONGSIDE the character cards (this is what bit us:
+// she "chose Discover" — a tab, not a character). EXACT-match only, so a real character
+// label like "Female Knight" or "The Explorer" isn't dropped by a bare "female"/"explore".
+const FILTER_EXACT = new Set([
+  'sfw', 'nsfw', 'all', 'popular', 'trending', 'latest', 'newest', 'recommended', 'for you',
+  'following', 'hot', 'new', 'random', 'female', 'male', 'anime', 'games', 'original',
+  'discover', 'explore', 'featured', 'top', 'my characters', 'create character'
+]);
+
 /**
  * Extract a character inventory from a web.read() result's text. The read appends
  * lines like "  [L0] link: Mizuki, the fired mini-boss". We keep link handles whose
@@ -82,6 +91,7 @@ function extractInventory(readText, cap = 12) {
     if (label === '(unlabeled)') continue;
     const low = label.toLowerCase();
     if (NON_CHARACTER.some(w => low === w || low.includes(w))) continue;
+    if (FILTER_EXACT.has(low)) continue;            // tab/filter chip, not a character
     if (out.some(o => o.label === label)) continue;
     out.push({ handle, label });
     if (out.length >= cap) break;
@@ -122,6 +132,24 @@ function parseChatLine(output) {
   if (m && m[1].trim()) return m[1].trim();
   if (/<\/?(?:think|thoughts|thinking|thought|say)\b/i.test(output)) return '';
   return output.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+}
+
+// Find the "Start Chat" control on a character's profile/intro page — the page CrushOn
+// (and most character sites) pop up AFTER you pick a character, BEFORE the chat input
+// exists. Scans the read()'s interactive-element lines ([B#] button / [L#] link / [C#]
+// card) for a label that opens the conversation. Returns a handle or null.
+const START_CHAT_RE = /\b(start chat(?:ting)?|chat now|begin chat|new chat|open chat|message|talk to|let'?s chat)\b/i;
+function findStartChatHandle(readText) {
+  if (!readText) return null;
+  const re = /\[([LBC]\d+)\]\s*(?:link|button|card):\s*(.+)/g;
+  let m; const hits = [];
+  while ((m = re.exec(readText)) !== null) {
+    const label = (m[2] || '').trim();
+    if (START_CHAT_RE.test(label)) hits.push({ handle: m[1], label });
+  }
+  // prefer an explicit "start chat" over a generic "message"/"talk to"
+  hits.sort((a, b) => (/start chat/i.test(b.label) ? 1 : 0) - (/start chat/i.test(a.label) ? 1 : 0));
+  return hits.length ? hits[0].handle : null;
 }
 
 // --- per-step model prompts (choose + chat only) ---
@@ -188,12 +216,34 @@ async function runTick(ctx = {}) {
     if (!pick) { const gaveUp = _strike(); return { step, ok: false, note: `could not parse a pick${gaveUp ? ' (session reset)' : ''}` }; }
     const r = await webLib.click(pick.handle);
     if (r.ok) {
-      _clearStrikes(); db.setMeta('play_character', pick.label); db.setMeta(lastReplyKey, ''); set('chat');
+      _clearStrikes(); db.setMeta('play_character', pick.label); db.setMeta(lastReplyKey, ''); set('startchat');
       ctx.onReading && ctx.onReading(`I picked ${pick.label} to play with.`, `(chose) ${pick.label}`, r.url);
-      return { step, ok: true, note: `chose ${pick.label} → chat` };
+      return { step, ok: true, note: `chose ${pick.label} → start chat` };
     }
     const gaveUp = _strike();
     return { step, ok: false, note: `click ${pick.handle} failed: ${r.reason}${gaveUp ? ' (session reset)' : ''}` };
+  }
+
+  if (step === 'startchat') {
+    // The profile/intro page after picking a character: must click "Start Chat" before the
+    // chat input exists. If there's no "Start Chat", we likely clicked a tab/filter, not a
+    // character — go back and re-pick rather than dead-ending in chat ("no message input").
+    const r = await webLib.read();
+    if (!r.ok) { const g = _strike(); return { step, ok: false, note: `read failed: ${r.reason}${g ? ' (session reset)' : ''}` }; }
+    const handle = findStartChatHandle(r.text);
+    if (!handle) {
+      const g = _strike();
+      if (!g) set('inventory');
+      return { step, ok: false, note: `no "Start Chat" on page — likely a tab/filter, re-inventory${g ? ' (session reset)' : ''}` };
+    }
+    const c = await webLib.click(handle);
+    if (c.ok) {
+      _clearStrikes(); set('chat');
+      ctx.onReading && ctx.onReading(`I clicked Start Chat to open the scene with ${character()}.`, `(start chat) ${character()}`, c.url);
+      return { step, ok: true, note: `started chat with ${character()} → chat` };
+    }
+    const g = _strike();
+    return { step, ok: false, note: `click Start Chat failed: ${c.reason}${g ? ' (session reset)' : ''}` };
   }
 
   if (step === 'chat') {
@@ -219,5 +269,5 @@ async function runTick(ctx = {}) {
 module.exports = {
   STEPS, get, set, active, start, reset, character, siteUrl, runTick,
   // pure helpers exported for tests
-  extractInventory, parsePick, parseChatLine
+  extractInventory, parsePick, parseChatLine, findStartChatHandle
 };
