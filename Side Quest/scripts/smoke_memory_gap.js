@@ -1,0 +1,15 @@
+const { isMemoryGapFixation } = require('../lib/rumination');
+let pass = 0, fail = 0;
+const is = (text, want) => { const got = isMemoryGapFixation([{ content: text }]); const ok = got === want; (ok ? pass++ : fail++); console.log(`  ${ok ? '✓' : '✗'} [gap=${want}] ${text.slice(0,72)}`); };
+console.log('MEMORY-GAP thoughts (should trigger a recall-reconcile):');
+is("Lucas asked about his Father's Day plans, but I didn't find a record of that in our conversation.", true);
+is("I should check if there are any existing notes about Lucas's Father's Day plans.", true);
+is("Did we ever discuss the database schema approach?", true);
+is("I'm not sure whether we talked about this; I might ask Lucas directly to clarify.", true);
+is("I need to verify what we discussed about permitting deadlines.", true);
+console.log('\nNOT memory-gap (normal idle thinking — must NOT trigger):');
+is("I'm drawn to mid-century political journalism and its clarity.", false);
+is("Policy should prioritize adaptability and iterative refinement.", false);
+is("I enjoyed reading about Salesforce duplicate rules today.", false);
+console.log(`\n${fail === 0 ? 'MEMORY-GAP DETECTOR OK' : 'SOME FAILURES'} — ${pass} passed, ${fail} failed`);
+process.exit(fail === 0 ? 0 : 1);

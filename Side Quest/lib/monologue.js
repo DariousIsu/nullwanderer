@@ -963,6 +963,23 @@ async function runOneTick() {
   // regenerating. Cheap: she re-ticks in ~35s, so a dropped tick just stays silent.
   if (curatorLib.isJunk(trimmed)) { console.log('[curation] dropped spiral/junk thought:', trimmed.replace(/\s+/g, ' ').slice(0, 70)); return; }
 
+  // SUBCONSCIOUS MEMORY RECONCILE: if this idle thought is about to conclude she has "no record
+  // / didn't we discuss this / I should check my notes or ask Lucas", SEARCH her conversation
+  // memory FIRST — recall belongs here, in the subconscious. If the answer is actually in what
+  // the user said, replace the gap-thought with the reconciled fact (so she stops forming a
+  // false "I don't remember" belief and can surface it); if genuinely absent, let it stand.
+  if (!personalMode && ruminationLib.isMemoryGapFixation([{ content: trimmed }])) {
+    try {
+      const exclude = recentTurns ? recentTurns.map(t => t.id) : [];
+      const hits = await memoryLib.retrieveTurns(trimmed, { k: 4, excludeIds: exclude, userOnly: true, dropQuestions: true });
+      if (hits && hits.length) {
+        const said = hits.map(h => `"${(h.content || '').replace(/\s+/g, ' ').slice(0, 180)}"`).join('; ');
+        trimmed = `I almost told myself I had no record of this — but I searched my memory of our conversation and I do. ${userName} said: ${said}. That's the answer; no need to ask again or dig through notes.`;
+        console.log(`[memory-reconcile] idle gap-thought resolved from conversation memory (${hits.length} turn(s))`);
+      }
+    } catch (e) { console.error('[memory-reconcile] failed:', e.message); }
+  }
+
   // GOVERNOR gap-fill: when she's been quiet too long, relax the quality drop-filters
   // so SOMETHING surfaces and the silence gets filled rather than staying empty.
   const fillGap = governor.shouldFillGap();

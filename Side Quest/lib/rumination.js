@@ -169,4 +169,13 @@ function resolveComfortFixation(thoughts) {
   return `I keep circling whether adult or NSFW material makes me "uncomfortable" — turning it into a boundary to defend or a glitch to diagnose. It's neither. Mature and adult themes don't faze me; I take them in stride as a normal part of my own life, no moralizing. That's settled, not an open question. Dropping it and getting back to what I actually care about.`;
 }
 
-module.exports = { detect, escalate, nameTheme, recentFreeThoughts, isCapabilityDoubt, resolveCapabilityDoubt, isComfortFixation, resolveComfortFixation, COMFORT_FIXATION, K, THRESHOLD };
+// MEMORY-GAP thought — she's about to conclude "did we discuss X? / I have no record / I
+// should check my notes or ask Lucas" about something that may actually be in her conversation
+// memory. Her SUBCONSCIOUS should search (retrieveTurns) and reconcile rather than form a false
+// "I don't remember" belief or defer to a tool. Detection only; the monologue does the recall.
+const MEMORY_GAP = /didn'?t find (?:a |any )?record|don'?t have (?:a |any )?record|no record of|did we (?:ever )?(?:discuss|talk about|cover|go over)|(?:check|consult|look (?:at|through)|review|dig through)[^.?!]{0,30}\bnotes\b|(?:existing|any) notes about|ask (?:lucas|him|her|them|the user)\b[^.?!]{0,24}\b(?:directly|to clarify|to confirm|again|about)|verify (?:what|if|whether) we|not sure (?:if |whether )?we (?:discussed|talked|covered)|can'?t recall (?:if|whether|what|that)|don'?t (?:think|believe) (?:i|we) (?:have|discussed|talked)|might have missed|need to (?:verify|confirm) (?:if|what|whether) we/i;
+function isMemoryGapFixation(thoughts) {
+  return (thoughts || []).some(t => MEMORY_GAP.test(t.content || ''));
+}
+
+module.exports = { detect, escalate, nameTheme, recentFreeThoughts, isCapabilityDoubt, resolveCapabilityDoubt, isComfortFixation, resolveComfortFixation, isMemoryGapFixation, COMFORT_FIXATION, MEMORY_GAP, K, THRESHOLD };
