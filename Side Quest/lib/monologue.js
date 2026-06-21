@@ -684,6 +684,7 @@ async function runOneTick() {
   // notes), which is exactly the failure we're killing. No active session → quiet tick.
   if (personalMode) {
     if (playSession.active()) {
+      db.setMeta('play_dead_rest', '0');  // a live session → reset the freeze counter
       try {
         const res = await playSession.runTick({
           userName, awareness, protocols,
@@ -697,7 +698,19 @@ async function runOneTick() {
         console.log(`[play] ${res.step}: ${res.note}`);
       } catch (e) { console.error('[monologue] play-session tick failed:', e.message); }
     } else {
-      console.log('[play] off the clock, no active session — resting this tick');
+      // FREEZE-RECOVERY: personal mode on but no viable play session = dead rest. Don't sit
+      // off-the-clock doing nothing for hours (the observed freeze when play struck out and
+      // reset). After a few dead-rest ticks, end personal mode so she's back on the clock next
+      // tick instead of silently catatonic until the 3h auto-expiry.
+      const dead = parseInt(db.getMeta('play_dead_rest') || '0', 10) + 1;
+      db.setMeta('play_dead_rest', String(dead));
+      if (dead >= 4) {
+        db.setMeta('play_dead_rest', '0');
+        try { personalLib.setOff(); } catch (e) { console.error('[play] freeze-recovery setOff failed:', e.message); }
+        console.log(`[play] no viable play session for ${dead} ticks — exiting personal mode (back to work next tick)`);
+      } else {
+        console.log(`[play] off the clock, no active session — resting this tick (${dead}/4 before freeze-recovery)`);
+      }
     }
     return;
   }

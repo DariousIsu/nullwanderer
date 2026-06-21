@@ -117,7 +117,22 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
       db.insertTurn({ sessionId, speaker: 'ai_thought', content: thought, model: MODEL, truncated });
     }
 
+    // REPETITION GUARD (mirrors the heartbeat's): don't surface an utterance near-identical
+    // to her recent ai_said — i.e. re-stating the reply she just gave (the observed
+    // back-to-back "Silent Witness" duplicate). Falls through to silence below.
+    let repetitive = false;
     if (trimmedSay && !isPlaceholder) {
+      try {
+        const recent = db.getRecentTurns(40).filter(t => t.speaker === 'ai_said').slice(-8).map(t => t.content);
+        const sig = (s) => new Set(String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length >= 4));
+        const jac = (a, b) => { if (!a.size || !b.size) return 0; let i = 0; for (const w of a) if (b.has(w)) i++; return i / (a.size + b.size - i); };
+        const s = sig(trimmedSay);
+        if (s.size >= 3) for (const p of recent) { if (jac(s, sig(p)) > 0.5) { repetitive = true; break; } }
+      } catch {}
+      if (repetitive) console.log('[continuity] suppressed repetitive utterance (too similar to a recent reply)');
+    }
+
+    if (trimmedSay && !isPlaceholder && !repetitive) {
       const saidRow = db.insertTurn({
         sessionId, speaker: 'ai_said', content: trimmedSay, model: MODEL, truncated
       });
