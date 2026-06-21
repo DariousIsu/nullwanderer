@@ -4,6 +4,13 @@ const { streamChat } = require('./ollama');
 const EXTRACTOR_MODEL = require('./config').model();
 const MAX_NEW_PER_TURN = 3;
 
+// GUARDRAIL (mirrors self_model.SELF_REJECT): never canonize a capability-denial or
+// prude/avoidance stance as a held "commitment". These contradict the fixed base persona
+// (her tools are hers; mature/adult material doesn't faze her) and, once held, get injected
+// every turn and re-prime the exact spiral we just scrubbed. Tastes, beliefs, ambitions,
+// and genuinely-held positions still flow through untouched.
+const COMMIT_REJECT = /\b(?:can'?t|cannot|unable to|incapable of|not able to)\b[^.]*\b(?:access|interact|use|browse|control|open|reach|chat)\b|questions whether (?:chatbots|other (?:ais?|bots?)) are|(?:chatbots?|other (?:ais?|bots?)) are (?:distinct|aspects)|(?:avoid|uncomfortable|uneasy|prefers? not|won'?t engage|refuses?)[^.]*\b(?:nsfw|explicit|sexual|adult content|no[- ]?filter)\b|\b(?:nsfw|no[- ]?filter)\b[^.]*(?:uncomfortable|avoid|boundar|prefer)|over[\s-]?analyz|second[\s-]?guess/i;
+
 const EXTRACTOR_SYSTEM = `You are a passive observer reading a single response that [user]'s companion just gave. Your only job: identify any explicit positions, beliefs, preferences, or commitments the speaker stated as their own.
 
 A "commitment" is something the speaker affirmed about themselves or the world that another conversation could reference. Examples:
@@ -76,6 +83,7 @@ async function extractCommitments({ userName, userMessage, aiSaidContent, aiSaid
 
   const stored = [];
   for (const claim of claims) {
+    if (COMMIT_REJECT.test(claim)) { console.log('[commitments] guardrail rejected capability-denial/avoidance claim:', claim.slice(0, 70)); continue; }
     const norm = claim.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
     if (heldNormalized.has(norm)) {
       // Already held — confirm it (refresh last_confirmed_at)
@@ -94,4 +102,4 @@ async function extractCommitments({ userName, userMessage, aiSaidContent, aiSaid
   return stored;
 }
 
-module.exports = { extractCommitments };
+module.exports = { extractCommitments, COMMIT_REJECT };

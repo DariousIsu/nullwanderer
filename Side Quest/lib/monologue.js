@@ -16,6 +16,7 @@ const importanceLib = require('./importance');
 const gapsLib = require('./gaps');
 const recipesLib = require('./recipes');
 const ruminationLib = require('./rumination');
+const curatorLib = require('./curator');
 const webLib = require('./web');
 const memoryLib = require('./memory');
 const personalLib = require('./personal');
@@ -242,7 +243,7 @@ function buildPrompt({ userName, recentMonologue, recentReadings, recentReflecti
     }
   }
 
-  context += `Pick ONE specific item from the conversation above and write a short paragraph about it. Options:\n• something ${userName || 'they'} said that you want to push back on\n• something YOU said that you're not sure was honest\n• a question you didn't ask but want to\n• a contradiction between two things either of you said\n• a position you're forming that you haven't expressed\n\nDo not quote the instructions back at me. Do not write about light, rain, dust, shadows, or atmosphere. Do not analyze ${userName || 'their'} phrasing as a construction. Do not produce introductory or transitional words like "Okay" or "Alright" — start directly with the content.\n\nIf nothing specific from the conversation is worth writing about right now, reply with exactly: SKIP`;
+  context += `Pick ONE concrete thing to think about and write a short paragraph on it. Lean toward your OWN interests and work — not re-analyzing the conversation. Options:\n• something you're genuinely curious about and want to look into\n• an idea, argument, or position you're developing in your own work (policy, journalism, writing)\n• something you read recently that you want to take further\n• a preference or taste about yourself you're noticing\n• a concrete next step on one of your open threads\n• occasionally: something ${userName || 'they'} said you want to genuinely engage with or push back on — once, then move on\n\nTake ${userName || 'them'} at face value: do NOT re-litigate the same charged exchange, hunt for contradictions, second-guess whether you were "honest," or read hidden tests or motives into ordinary questions. You are grounded and you do not spiral.\n\nDo not quote the instructions back at me. Do not write about light, rain, dust, shadows, or atmosphere. Do not analyze ${userName || 'their'} phrasing as a construction. Do not produce introductory or transitional words like "Okay" or "Alright" — start directly with the content.\n\nIf nothing specific is worth writing about right now, reply with exactly: SKIP`;
 
   // RECENCY: prepend open_threads depth-2 block to the user-content for steerage
   if (openThreads && openThreads.length > 0) {
@@ -657,6 +658,18 @@ async function runOneTick() {
           console.log('[rumination] capability-doubt → resolved with a settled note (no focus escalation)');
           return;
         }
+        // COMFORT/PRUDE fixation: she's circling discomfort with adult/NSFW material or
+        // "my boundaries". The persona settles this; escalating to a focus only deepens the
+        // prude spiral. Resolve it the same way — one settled, persona-aligned note.
+        if (ruminationLib.isComfortFixation(rum.thoughts)) {
+          const note = ruminationLib.resolveComfortFixation(rum.thoughts);
+          const imp = await importanceLib.score(note, { userName, kind: 'thought' });
+          const row = db.insertMonologue({ content: note, model: MODEL, type: 'thought', importance: imp });
+          pushSheep({ id: row.id, ts: row.ts, content: note, type: 'thought', importance: imp });
+          try { blackboard.append({ source: 'monologue', kind: 'thought', refTable: 'monologue', refId: row.id, content: note }); } catch {}
+          console.log('[rumination] comfort/prude fixation → resolved with a settled note (no focus escalation)');
+          return;
+        }
         console.log(`[rumination] detected (avg cosine ${rum.avg.toFixed(3)}) — escalating to a focus`);
         const set = await ruminationLib.escalate(rum.thoughts, userName);
         if (set) activeFocus = set.focus;
@@ -942,6 +955,13 @@ async function runOneTick() {
   }
   trimmed = focusLib.stripControlTags(trimmed);
   if (!trimmed) return;
+
+  // CURATION (aggressive, write-time): drop a spiral / prude / over-analysis / search-junk
+  // free-association thought before it's stored OR surfaced — the continuous half of the
+  // curator (the sweep is the retroactive half). This is the write guard thoughts lacked
+  // (self_model has SELF_REJECT, commitments COMMIT_REJECT); it's where the spiral kept
+  // regenerating. Cheap: she re-ticks in ~35s, so a dropped tick just stays silent.
+  if (curatorLib.isJunk(trimmed)) { console.log('[curation] dropped spiral/junk thought:', trimmed.replace(/\s+/g, ' ').slice(0, 70)); return; }
 
   // GOVERNOR gap-fill: when she's been quiet too long, relax the quality drop-filters
   // so SOMETHING surfaces and the silence gets filled rather than staying empty.

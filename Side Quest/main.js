@@ -93,8 +93,12 @@ app.whenReady().then(() => {
   config.loadEnv();
   db.init();
   // Curator: deterministic hygiene at session start — age long-stalled threads to
-  // 'abandoned' so they stop resurfacing in the idle loop. Never deletes.
-  try { curatorLib.curateThreads(); curatorLib.curateGaps(); } catch (e) { console.error('[main] curator failed:', e.message); }
+  // 'abandoned', and aggressively prune spiral/prude/junk thoughts + search-junk readings
+  // so they can't re-seed the idle loop on boot.
+  try { curatorLib.curateThreads(); curatorLib.curateGaps(); curatorLib.curateMonologue(); } catch (e) { console.error('[main] curator failed:', e.message); }
+  // Keep pruning spiral/junk during long sessions (write-time guard catches most; this
+  // sweeps anything that slips through, e.g. junk readings from tool output).
+  setInterval(() => { try { curatorLib.curateMonologue(); } catch (e) { console.error('[main] periodic curateMonologue failed:', e.message); } }, 20 * 60 * 1000).unref?.();
   filesLib.ensureWorkspace();
   // Warm the CPU embedder (bge-small via transformers.js) so first knowledge
   // retrieval isn't slow. Runs on CPU — no VRAM contention with the chat model.

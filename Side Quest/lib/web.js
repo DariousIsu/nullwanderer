@@ -151,6 +151,30 @@ async function open(target) {
   } catch (err) { return { ok: false, reason: err.message }; }
 }
 
+// On a DuckDuckGo HTML SERP, page.innerText('body') leads with the locale/region picker
+// ("All Regions Argentina Australia Austria …") and buries the actual results — which then
+// got stored as a junk "reading" that fed her rumination. Pull the real result list instead.
+const DDG_SERP_RE = /(?:^|\/\/)(?:html\.)?duckduckgo\.com\/html/i;
+async function readSerpResults() {
+  try {
+    const results = await withTimeout(page.evaluate(() => {
+      const out = [];
+      for (const b of document.querySelectorAll('.result, .web-result, .results_links')) {
+        const a = b.querySelector('a.result__a, .result__title a, a[href]');
+        if (!a) continue;
+        const title = (a.innerText || a.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!title) continue;
+        const sn = b.querySelector('.result__snippet, .result__body');
+        const snippet = sn ? (sn.innerText || sn.textContent || '').replace(/\s+/g, ' ').trim() : '';
+        out.push({ title, snippet });
+        if (out.length >= 8) break;
+      }
+      return out;
+    }), 2500, []);
+    return results || [];
+  } catch { return []; }
+}
+
 // Read the current page: capped body text + a handle list of interactive elements.
 // Syncs to the front tab first, so <web-read/> shows whatever is actually open in
 // her window right now (including a chat Lucas just opened), not a stale page.
@@ -158,7 +182,14 @@ async function read() {
   try { if (context) await syncActivePage(); } catch {}
   if (!page) return { ok: false, reason: 'no page open — use <web-open> first' };
   try {
-    const text = (await page.innerText('body', { timeout: 5000 }).catch(() => '')).replace(/\n{3,}/g, '\n\n').slice(0, MAX_TEXT);
+    let text = null;
+    if (DDG_SERP_RE.test(page.url())) {
+      const results = await readSerpResults();
+      if (results.length) {
+        text = ('Search results:\n' + results.map((r, i) => `${i + 1}. ${r.title}${r.snippet ? ' — ' + r.snippet : ''}`).join('\n')).slice(0, MAX_TEXT);
+      }
+    }
+    if (text == null) text = (await page.innerText('body', { timeout: 5000 }).catch(() => '')).replace(/\n{3,}/g, '\n\n').slice(0, MAX_TEXT);
     registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
     const lines = [];
     const seen = new Set();   // dedupe by label across passes (SPA cards often double up)

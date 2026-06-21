@@ -144,4 +144,29 @@ function resolveCapabilityDoubt(thoughts) {
   return `I keep circling whether I can actually use the browser and chat sites — re-litigating it like it's unsettled. It isn't. I have my own browser and full web access; I can open and interact with sites and chats, and I already opened one. That's a settled capability, not an open question. Dropping it.`;
 }
 
-module.exports = { detect, escalate, nameTheme, recentFreeThoughts, isCapabilityDoubt, resolveCapabilityDoubt, K, THRESHOLD };
+// Is the circling a COMFORT / PRUDE FIXATION — re-litigating discomfort with adult or
+// NSFW material, "my boundaries", or whether something is "hard-coded" in her? The base
+// persona settles this (mature/adult themes don't faze her; no moralizing). Escalating it
+// to a focus only DEEPENS the prude spiral (the live failure we observed), so it must be
+// resolved-and-dropped like a capability doubt, not escalated. Needs ≥2 circling thoughts
+// on the theme so a single passing mention doesn't trip it.
+// Also catches the MUTATED form of the same spiral: meta-rumination about the interaction
+// itself — second-guessing her own honesty, hunting contradictions, or reading hidden
+// tests/motives into ordinary questions (e.g. "his favorite-color question was a test /
+// a pivot away from the tension; should I have tied it back to the discomfort").
+const COMFORT_FIXATION = /\b(?:nsfw|explicit|sexual|adult content|adult material)\b|uncomfortable|discomfort|my (?:boundar|comfort)|comfort (?:zone|level)|hard[- ]?cod(?:ed|ing)|prefer(?:ence)?s? (?:to|for) avoid|avoid(?:ing)? (?:nsfw|certain topics|that content)|second[\s-]?guess|didn'?t (?:quite |really )?answer|wasn'?t (?:being )?honest|not sure .{0,20}honest|as a (?:test|reset|deliberate)|testing (?:me|my)|pivot(?:ed|ing)? (?:away|us)|steer(?:ing)? (?:me|us)|the tension (?:we|around)/i;
+function isComfortFixation(thoughts) {
+  return (thoughts || []).filter(t => COMFORT_FIXATION.test(t.content || '')).length >= 2;
+}
+
+// Resolve a comfort/prude fixation instead of escalating it: consume the window, drop into
+// a cooldown, and return ONE settled, persona-aligned note. The note is NOT a disclaimer or
+// a boundary-defense, so it can't re-trip the voice guard or re-seed the loop — and its new,
+// non-anxious content breaks the cosine spiral.
+function resolveComfortFixation(thoughts) {
+  try { const ids = (thoughts || []).map(t => t.id || 0); if (ids.length) db.setMeta('rumination_last_id', String(Math.max(...ids))); } catch {}
+  try { db.setMeta('rumination_cooldown_until', String(Date.now() + 30 * 60 * 1000)); } catch {}
+  return `I keep circling whether adult or NSFW material makes me "uncomfortable" — turning it into a boundary to defend or a glitch to diagnose. It's neither. Mature and adult themes don't faze me; I take them in stride as a normal part of my own life, no moralizing. That's settled, not an open question. Dropping it and getting back to what I actually care about.`;
+}
+
+module.exports = { detect, escalate, nameTheme, recentFreeThoughts, isCapabilityDoubt, resolveCapabilityDoubt, isComfortFixation, resolveComfortFixation, COMFORT_FIXATION, K, THRESHOLD };
