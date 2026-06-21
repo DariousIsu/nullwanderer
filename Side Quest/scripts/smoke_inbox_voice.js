@@ -10,6 +10,8 @@ ok('the exact message she sent', voice.isSelfDisclaimer("I'm sorry, but I don't 
 ok('"I can\'t access emails"', voice.isSelfDisclaimer("I can't access emails"));
 ok('"I am unable to check your inbox"', voice.isSelfDisclaimer("I am unable to check your inbox right now"));
 ok('"I don\'t have the ability to send email"', voice.isSelfDisclaimer("I don't have the ability to send email"));
+ok('"don\'t have the capability to receive emails"', voice.isSelfDisclaimer("I currently don't have the capability to receive emails or access attachments. However, I can help guide you."));
+ok('"I can\'t access attachments"', voice.isSelfDisclaimer("I can't access attachments"));
 
 console.log('\nvoice.isSelfDisclaimer — must KEEP (false, real gaps):');
 ok('"I don\'t know what\'s in that email yet"', voice.isSelfDisclaimer("I don't know what's in that email yet — let me check.") === false);

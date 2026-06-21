@@ -1540,6 +1540,14 @@ async function runActionStep(io, depth = 0) {
         let tags = [...emailLib.parseTags(thought || ''), ...emailLib.parseTags(say || '')];
         const expect = actionLoop.currentExpect();
         if (expect) tags = tags.filter(t => t.tag === expect); // only the tag this step wants
+        // FALLBACK: the body step needs <email-body>…</email-body>, but the 24B often writes
+        // the reply as plain prose without the tag — then nothing dispatches, the check fails,
+        // and the action retries→aborts (observed). If we're on the body step and got no tag,
+        // wrap the prose she wrote as the body so the reply actually goes out.
+        if (expect === 'email-body' && tags.length === 0) {
+          const prose = ((say && say.trim()) || (thought && thought.trim()) || '').trim();
+          if (prose.length >= 5) { tags = [{ tag: 'email-body', attrs: {}, body: prose }]; console.log('[action] email-body fallback: wrapped prose (no tag emitted)'); }
+        }
         for (const t of tags.slice(0, 3)) { try { await emailLib.dispatch(t, { source: 'action' }); } catch (e) { console.error('[action] dispatch:', e.message); } }
       }
     }

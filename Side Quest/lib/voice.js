@@ -36,7 +36,7 @@ const PATTERNS = [
   // inbox, files, scheduling — all granted in the permissions table. Denying any of these
   // is always a false reflex for Zoe, so catching + rewriting is correct. Covers "perform
   // browser actions", "access emails", "check my inbox", "send email", etc.
-  /\bI\s+(?:currently\s+|really\s+|right now\s+)?(?:do not|don'?t|can ?not|can'?t|am unable to|am not able to|lack the (?:ability|capability)(?:\s+to)?|don'?t have the (?:ability|capability)(?:\s+to)?)\s+(?:to\s+)?(?:perform|do|carry out|execute|take|complete|access|use|check|read|open|control|interact with|send|reply to|compose|look at)\b[^.?!]{0,45}\b(?:browser|browsing|web\s*pages?|e-?mails?|inbox(?:es)?|your inbox|messages?|gmail|files?|the schedule|reminders?)\b/i,
+  /\bI\s+(?:currently\s+|really\s+|right now\s+)?(?:do not|don'?t|can ?not|can'?t|am unable to|am not able to|lack the (?:ability|capability)(?:\s+to)?|don'?t have the (?:ability|capability)(?:\s+to)?)\s+(?:to\s+)?(?:perform|do|carry out|execute|take|complete|access|use|check|read|open|control|interact with|send|reply to|respond to|compose|look at|receive|get|fetch|retrieve|download)\b[^.?!]{0,45}\b(?:browser|browsing|web\s*pages?|e-?mails?|inbox(?:es)?|your inbox|messages?|gmail|files?|attachments?|the schedule|reminders?)\b/i,
   // --- false knowledge-cutoff / training-data framing (she is a continuous local agent) ---
   /\b(?:based on|limited to|according to)\s+(?:the\s+)?(?:data|information|knowledge)\s+I(?:'?ve| have)\s+been\s+trained\s+on\b/i,
   /\bmy\s+(?:training\s+data|knowledge\s+cut[\s-]?off|training\s+cut[\s-]?off|last\s+(?:training\s+)?update)\b/i,
