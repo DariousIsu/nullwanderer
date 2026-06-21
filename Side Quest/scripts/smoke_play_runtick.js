@@ -1,6 +1,6 @@
 /**
  * Integration test for play_session.runTick — drives the full stepwise walk
- * (open → inventory → choose → chat) with the browser + model STUBBED, so the
+ * (open → inventory → choose → startchat → chat) with the browser + model STUBBED, so the
  * orchestration is proven deterministically without a live CrushOn session or
  * Ollama. Also verifies the 3-strike reset when a step keeps failing.
  *
@@ -24,6 +24,7 @@ const READ_DUMP = [
   '  [L0] link: Home',
   '  [L1] link: Mizuki, the fired mini-boss',
   '  [L2] link: Detective Kaito',
+  '  [B0] button: Start Chat',
   '  [I0] input: Search'
 ].join('\n');
 
@@ -60,8 +61,11 @@ function installHappyStubs() {
   ok('inventory stored 2 characters (Home dropped)', inv.length === 2, inv.map(o => o.label).join(' | '));
 
   r = await ps.runTick({ userName: 'Lucas' });
-  ok('choose tick → chat, clicked L1', ps.get() === 'chat' && calls.click === 'L1', r.note);
+  ok('choose tick → startchat, clicked L1', ps.get() === 'startchat' && calls.click === 'L1', r.note);
   ok('character recorded', /Mizuki/.test(ps.character()), ps.character());
+
+  r = await ps.runTick({ userName: 'Lucas' });
+  ok('startchat tick → chat, clicked Start Chat', ps.get() === 'chat' && calls.click === 'B0', r.note);
 
   r = await ps.runTick({ userName: 'Lucas' });
   ok('chat tick sent her line', calls.chatSend && /rough day/i.test(calls.chatSend.line), calls.chatSend && calls.chatSend.line);

@@ -1,0 +1,13 @@
+{
+  "site": "drive.google.com",
+  "task": "open_doc",
+  "verified": false,
+  "_note": "PROVISIONAL. Searches Drive for {{query}} and waits for results to render; a follow-up click-first-result step is added once the live result-row selector is confirmed. Confirm/heal on first logged-in run.",
+  "fingerprint": { "url_pattern": "drive.google.com" },
+  "steps": [
+    { "action": "navigate", "url": "https://drive.google.com/drive/search?q={{query}}", "expectLogin": true },
+    { "action": "waitFor",
+      "locator": { "method": "getByRole", "role": "main" },
+      "fallbacks": [ { "css": "div[role=main]" }, { "css": "div[role=grid]" } ] }
+  ]
+}

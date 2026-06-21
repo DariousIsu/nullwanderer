@@ -115,6 +115,16 @@ app.whenReady().then(() => {
     .catch(err => console.error('[main] dedicated browser warm FAILED:', err.message));
   currentSessionId = db.startSession();
   currentSessionStartedAt = Date.now();
+  // Downtime marker (her request): record how long she was offline, then start the
+  // keep-alive heartbeat. recordBoot drops a first-person "back online" reading + an
+  // awareness line; the heartbeat keeps last_alive_at fresh so a HARD restart is still
+  // measured accurately next boot.
+  try {
+    const downtimeLib = require('./lib/downtime');
+    const dt = downtimeLib.recordBoot();
+    if (dt) console.log(`[main] downtime: offline ~${downtimeLib.formatGap(dt.ms)}${dt.graceful ? '' : ' (unclean stop)'}`);
+    downtimeLib.startHeartbeat();
+  } catch (e) { console.error('[main] downtime init failed:', e.message); }
   createWindow();
 
   // Warm the single Dans-24B model at boot. One model now serves both chat and
@@ -343,6 +353,7 @@ app.on('window-all-closed', async () => {
   schedulerLib.stopScheduler();
   try { await discordLib.stop(); } catch {}
   try { await webLib.close(); } catch {}
+  try { require('./lib/downtime').markShutdown(); } catch {}   // precise marker for a clean shutdown
   try {
     await forceReflectionIfDue();
   } catch (err) {
@@ -559,6 +570,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // after it start a fresh "interactive slice" so a new instruction is never read
   // as part of a prior spiral.
   try { blackboard.markUser(userMessage, userTurnRow && userTurnRow.id); } catch (e) { console.error('[main] blackboard.markUser failed:', e.message); }
+
+  // BYLINE START — "write/publish a post about X" kicks off her autonomous byline
+  // pipeline (research→read→write→publish, advanced one stage per idle tick). Side
+  // effect only: the normal turn still runs so she acknowledges in her own voice.
+  try {
+    const bylineLib = require('./lib/byline');
+    if (!bylineLib.active()) {
+      const bylineTopic = bylineLib.detectStart(userMessage);
+      if (bylineTopic) { bylineLib.start(bylineTopic); console.log(`[main] byline pipeline started on: "${bylineTopic}"`); }
+    }
+  } catch (e) { console.error('[main] byline start detect failed:', e.message); }
 
   // === HARD PROTOCOL INTERCEPTOR ===
   // Before doing ANYTHING expensive (web fetch, Stheno call, gemma extraction),
@@ -1237,7 +1259,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       for (const t of webTagsToRun.slice(0, 4)) {
         try {
           const r = await webLib.dispatch(t);
-          if (r && r.ok && t.tag === 'web-read' && r.text) {
+          if (r && r.blocker && r.blocker.needsHuman) {
+            // She hit a sign-in wall / CAPTCHA / Cloudflare / paywall. She does NOT
+            // try to defeat these — she asks Lucas for help, in her own voice, and
+            // resumes once he clears it (her persistent profile keeps the login).
+            const b = r.blocker;
+            const human = { login: 'a sign-in wall', cloudflare: 'a "verify you\'re human" check', captcha: 'a CAPTCHA', paywall: 'a paywall' }[b.type] || "something I can't get past on my own";
+            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[You opened ${r.url} but hit ${human}. You do NOT try to defeat sign-ins, CAPTCHAs, or paywalls yourself — you ask ${userName} for help. Tell him plainly, in your own voice, which site it is and what you ran into, and that once he clears it you'll pick up where you left off. Keep it short and natural — a real ask, not boilerplate.]` }); }
+            try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(blocked: ${b.type}) ${r.url}`, type: 'reading', query: r.url }); } catch {}
+            console.log(`[main] web blocker on open: ${b.type} — asking ${userName} for help`);
+          } else if (r && r.ok && t.tag === 'web-read' && r.text) {
             const label = r.title || r.url || 'page';
             const content = `I looked at "${label}" in my own browser (${r.url}):\n${r.text}`;
             const row = db.insertMonologue({ content, model: 'web-read', type: 'reading', query: r.url, urls: r.url ? [r.url] : null });

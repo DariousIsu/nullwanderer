@@ -21,6 +21,7 @@ const path = require('path');
 const fs = require('fs');
 const db = require('./db');
 const chatWatcher = require('./chat_watcher');
+const blockersLib = require('./blockers');
 
 // Her browser is a SECOND system-Chrome instance on its own debug port + profile
 // (NOT Lucas's 9222). We connect over CDP — the same proven path lib/browser.js
@@ -145,9 +146,17 @@ async function open(target) {
   console.log(`[web] open target=${JSON.stringify(target)} → goto ${JSON.stringify(url)}`);
   try {
     const p = await ensure();
-    await p.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+    const resp = await p.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
     registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
-    return { ok: true, url: p.url(), title: await p.title().catch(() => '') };
+    const result = { ok: true, url: p.url(), title: await p.title().catch(() => '') };
+    // BLOCKER CHECK — did this land on a sign-in wall / CAPTCHA / Cloudflare / paywall?
+    // If so, flag it so the caller asks Lucas for help instead of her flailing. She has
+    // a persistent profile, so once he logs in the cookie sticks and she won't re-ask.
+    try {
+      const blocker = await blockersLib.detect(p, resp);
+      if (blocker && blocker.needsHuman) { result.blocker = blocker; console.log(`[web] blocker on open: ${blocker.type} (${blocker.reason})`); }
+    } catch {}
+    return result;
   } catch (err) { return { ok: false, reason: err.message }; }
 }
 
@@ -250,6 +259,22 @@ async function type(handle, text) {
   catch (err) { return { ok: false, reason: `type into ${handle} failed: ${err.message}` }; }
 }
 
+// Scroll the page to load/reveal more content — the fix for "she reads the first
+// screenful and stops". read() caps body text and only sees what's rendered; on a
+// long article or an infinite-scroll feed she must scroll to advance. A scroll can
+// lazy-load new DOM, so we invalidate the handle registry — she must <web-read/>
+// again for fresh handles. dir defaults to down; "up"/"top" scrolls back.
+async function scroll(dir) {
+  if (!page) return { ok: false, reason: 'no page open' };
+  const down = !/\b(up|back|top)\b/i.test(dir || '');
+  try {
+    await withTimeout(page.evaluate((d) => window.scrollBy(0, d * Math.round(window.innerHeight * 0.9)), down ? 1 : -1), 2500, null);
+    await page.waitForTimeout(400).catch(() => {});   // let lazy-loaded content settle in
+    registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
+    return { ok: true, url: page.url(), dir: down ? 'down' : 'up' };
+  } catch (err) { return { ok: false, reason: err.message }; }
+}
+
 async function back() {
   if (!page) return { ok: false, reason: 'no page open' };
   // waitUntil 'commit' (not 'domcontentloaded') — returning to an already-loaded /
@@ -290,6 +315,23 @@ async function close() {
   return { ok: true };
 }
 
+// Run a declarative recipe (recipes/*.json) against HER browser via the flow runner.
+// This is the live recipe-invocation path: ensures the browser, loads the recipe, and
+// replays its locator descriptors deterministically (zero model). Returns the runner's
+// result ({ ok, ran, healed, blocker?, atStep?, reason? }). A needsHuman blocker comes
+// back in result.blocker so the caller (byline pipeline) can ask Lucas to log in.
+async function runRecipe(recipeName, vars = {}, ctx = {}) {
+  const recipeStore = require('./recipe_store');
+  const flowRunner = require('./flow_runner');
+  const recipe = recipeStore.load(recipeName) || recipeStore.find(recipeName, ctx.task);
+  if (!recipe) return { ok: false, reason: `no recipe "${recipeName}"` };
+  try {
+    const p = await ensure();
+    registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };   // recipe drives its own locators; invalidate stale handles
+    return await flowRunner.runRecipe(p, recipe, vars, ctx);
+  } catch (err) { return { ok: false, reason: err.message }; }
+}
+
 // --- character-chat conversation (her personal/play life) ---
 // CrushOn / character.ai / etc. need more than type+click: you must wait for the
 // bot's reply to finish streaming, then read just the NEW message. chat_watcher
@@ -321,7 +363,7 @@ async function chatUnwatch() {
 }
 
 // --- tags ---
-const WEB_TAG_RE = /<(web-open|web-read|web-click|web-type|web-back|web-close|web-chat|web-watch|web-unwatch)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
+const WEB_TAG_RE = /<(web-open|web-read|web-deepen|web-scroll|web-click|web-type|web-back|web-close|web-chat|web-watch|web-unwatch)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
 const ATTR_RE = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
 
 function parseAttrs(s) { const o = {}; if (!s) return o; let m; ATTR_RE.lastIndex = 0; while ((m = ATTR_RE.exec(s)) !== null) o[m[1]] = m[2] ?? m[3] ?? m[4]; return o; }
@@ -339,6 +381,8 @@ async function dispatch({ tag, attrs = {}, body = '' }) {
   switch ((tag || '').toLowerCase()) {
     case 'web-open': return open(body || attrs.url);
     case 'web-read': return read();
+    case 'web-deepen': return openTopResult();
+    case 'web-scroll': return scroll(body || attrs.dir);
     case 'web-click': return click(body || attrs.handle);
     case 'web-type': return type(attrs.selector || attrs.handle || attrs.target, body);
     case 'web-back': return back();
@@ -354,10 +398,13 @@ function buildPromptBlock() {
   return `YOUR OWN BROWSER — a separate browser window you fully control (not Lucas's). Use it for your own web work: research, reading, looking things up, multi-step tasks. It does NOT touch his tabs.
   <web-open>a URL or search terms</web-open>   — open a page (plain words = a web search)
   <web-read/>                                   — read the current page; interactive elements come back as [L#]/[B#]/[I#] handles
+  <web-deepen/>                                  — on a search-results page, open the TOP result and land on the real article (don't stop at the results list)
+  <web-scroll/>                                  — scroll down to load/read MORE of a long page or feed, then <web-read/> again
   <web-click>L3</web-click>                     — click a handle from the last read
   <web-type selector="I0">text</web-type>       — type into an input handle
   <web-back/>  <web-close/>
-Always <web-read/> after opening or clicking before you click/type again — handles are only valid from the most recent read.
+Always <web-read/> after opening, deepening, scrolling, or clicking before you click/type again — handles are only valid from the most recent read.
+Go DEEP, not wide: after a search, <web-deepen/> into the best result and actually read it; <web-scroll/> through long pages instead of skimming the top. Take notes as you go with <file-write>/<file-append>.
 
 TALKING TO A CHARACTER / CHAT BOT (CrushOn, character.ai, etc. — when one is open in your browser):
   <web-chat speaker="Name">what you want to say to them</web-chat>
@@ -365,7 +412,7 @@ This types your line, sends it, WAITS for the character's reply to finish, and h
 }
 
 module.exports = {
-  isConnected, ensure, open, read, click, type, back, close, openTopResult,
+  isConnected, ensure, open, read, click, type, back, close, openTopResult, scroll, runRecipe,
   chatSend, chatWatch, chatUnwatch,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR
 };

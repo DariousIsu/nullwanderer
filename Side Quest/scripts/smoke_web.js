@@ -28,6 +28,9 @@ ok('web-read self-closing', web.parseTags('<web-read/>')[0]?.tag === 'web-read')
 ok('web-click body handle', web.parseTags('<web-click>L3</web-click>')[0]?.body === 'L3');
 ok('web-type selector attr', (() => { const t = web.parseTags('<web-type selector="I0">hi</web-type>')[0]; return t.attrs.selector === 'I0' && t.body === 'hi'; })());
 ok('web-back self-closing', web.parseTags('<web-back/>')[0]?.tag === 'web-back');
+ok('web-deepen self-closing', web.parseTags('<web-deepen/>')[0]?.tag === 'web-deepen');
+ok('web-scroll self-closing', web.parseTags('<web-scroll/>')[0]?.tag === 'web-scroll');
+ok('web-scroll with dir body', (() => { const t = web.parseTags('<web-scroll>up</web-scroll>')[0]; return t.tag === 'web-scroll' && t.body === 'up'; })());
 ok('multiple tags parsed', web.parseTags('<web-open>x.com</web-open> then <web-read/>').length === 2);
 
 console.log('\nstripTags + dispatch routing:');
@@ -36,6 +39,8 @@ ok('stripTags removes tags + collapses ws', web.stripTags('a <web-read/> b') ===
   const r = await web.dispatch({ tag: 'web-bogus' });
   ok('unknown tag → ok:false', r.ok === false);
   ok('click with no page → graceful', (await web.dispatch({ tag: 'web-click', body: 'L1' })).ok === false);
+  ok('scroll with no page → graceful', (await web.dispatch({ tag: 'web-scroll', body: 'down' })).ok === false);
+  ok('deepen with no page → graceful', (await web.dispatch({ tag: 'web-deepen' })).ok === false);
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

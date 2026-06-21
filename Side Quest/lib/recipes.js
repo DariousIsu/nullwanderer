@@ -56,6 +56,7 @@ function allRecipes() {
     // --- her OWN dedicated browser (separate from Lucas's Chrome) ---
     { tier: 'core', need: 'do your OWN web research/browsing', emit: '<web-open>a URL or search terms</web-open>', trap: "this is YOUR browser, not Lucas's; then <web-read/> to see it", check: t => webLib.parseTags(t).length > 0 },
     { tier: 'core', need: 'read / act in your own browser', emit: '<web-read/>', trap: 'click handles with <web-click>L3</web-click>, type with <web-type selector="I0">…</web-type>; handles valid only from the latest read', check: t => webLib.parseTags(t).length > 0 },
+    { tier: 'core', need: 'go DEEP after a search instead of skimming results', emit: '<web-deepen/>', trap: '<web-scroll/> to read more of a long page; take notes as you go — do not stop at the results list', check: t => webLib.parseTags(t).length > 0 },
     // --- email (configured only) ---
     { tier: 'email', need: 'READ your inbox', emit: '<read-inbox/>', trap: 'NOT <email>/<email-draft>/<email-send> — those SEND mail, the wrong action for reading', check: t => inboxLib.parseTags(t).length > 0 },
     { tier: 'email', need: 'SEND an email', emit: '<email to="addr@x.com" subject="...">the whole body here</email>', trap: 'recipient/subject are ATTRIBUTES; body goes BETWEEN the tags; never put To:/Subject: lines in the body, never backtick the tag', check: t => emailLib.parseTags(t).some(x => x.tag === 'email') },

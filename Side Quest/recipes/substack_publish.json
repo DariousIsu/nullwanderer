@@ -1,0 +1,26 @@
+{
+  "site": "substack.com",
+  "task": "publish_post",
+  "verified": false,
+  "_note": "PROVISIONAL author-time selectors. Substack publish is multi-step (compose -> Continue -> Publish now). Confirm or let the heal ladder repair on the first live run while Lucas is logged in. {{title}}/{{body}} come from her local draft.",
+  "fingerprint": { "url_pattern": "substack.com/publish" },
+  "steps": [
+    { "action": "navigate", "url": "https://substack.com/publish/post", "expectLogin": true },
+    { "action": "fill",
+      "locator": { "method": "getByPlaceholder", "placeholder": "Title" },
+      "fallbacks": [ { "method": "getByRole", "role": "textbox", "name": "Title" }, { "css": "textarea[data-testid=post-title]" } ],
+      "value": "{{title}}" },
+    { "action": "fill",
+      "locator": { "method": "getByPlaceholder", "placeholder": "Start writing" },
+      "fallbacks": [ { "method": "getByRole", "role": "textbox", "name": "Body" }, { "css": "div[contenteditable=true]" } ],
+      "value": "{{body}}" },
+    { "action": "click",
+      "locator": { "method": "getByRole", "role": "button", "name": "Continue" },
+      "fallbacks": [ { "text": "Continue" } ],
+      "mayNavigate": true },
+    { "action": "click",
+      "locator": { "method": "getByRole", "role": "button", "name": "Publish now" },
+      "fallbacks": [ { "text": "Publish now" }, { "text": "Publish" } ],
+      "mayNavigate": true }
+  ]
+}

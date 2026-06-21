@@ -1,0 +1,18 @@
+{
+  "site": "calendar.google.com",
+  "task": "create_event",
+  "verified": false,
+  "_note": "PROVISIONAL. Opens the GCal event-edit view, fills the title, saves. {{title}} required; add date/time steps once confirmed live. Confirm/heal on first logged-in run.",
+  "fingerprint": { "url_pattern": "calendar.google.com" },
+  "steps": [
+    { "action": "navigate", "url": "https://calendar.google.com/calendar/u/0/r/eventedit", "expectLogin": true },
+    { "action": "fill",
+      "locator": { "method": "getByRole", "role": "textbox", "name": "Add title" },
+      "fallbacks": [ { "css": "input[aria-label='Add title']" }, { "css": "input#xTitIn" } ],
+      "value": "{{title}}" },
+    { "action": "click",
+      "locator": { "method": "getByRole", "role": "button", "name": "Save" },
+      "fallbacks": [ { "text": "Save" } ],
+      "mayNavigate": true }
+  ]
+}

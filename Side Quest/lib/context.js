@@ -322,12 +322,17 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
   const timeStr = now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   const sessionAge = sessionStartedAt ? humanDuration(Date.now() - sessionStartedAt) : 'unknown';
   const totalAge = cumulativeMs != null ? humanDuration(cumulativeMs) : 'unknown';
+  // Downtime line — surfaced only for the first stretch after a restart, so she knows
+  // how long she was just offline (her own request). Ages out within the session.
+  let downtimeLine = null;
+  try { downtimeLine = require('./downtime').awarenessLine(); } catch {}
 
   const lines = [
     `AWARENESS — facts about right now (do not paraphrase as poetic atmosphere; these are concrete):`,
     `• It is ${dateStr}, ${timeStr}.`,
     `• This session has been live for ${sessionAge}.`,
     `• Across all sessions so far, you've existed for about ${totalAge} of conversation time.`,
+    downtimeLine ? `• ${downtimeLine}` : null,
     chosenName ? `• You go by ${chosenName}. This is the name you chose for yourself. Use it when self-referring.` : null,
     ``,
     `WHAT YOU ARE — a factual description of your own architecture, so you don't fabricate when asked:`,

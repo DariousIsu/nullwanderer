@@ -21,6 +21,7 @@ const webLib = require('./web');
 const memoryLib = require('./memory');
 const personalLib = require('./personal');
 const playSession = require('./play_session');
+const bylineLib = require('./byline');
 const { buildAwarenessBlock, BASE_PERSONA } = require('./context');
 
 const MODEL = require('./config').model();
@@ -97,6 +98,21 @@ Output ONE short paragraph. Optionally a single <wonder>...</wonder> or a single
 // Extract a short "topic seed" from a monologue entry — first meaningful clause,
 // stripped of fluff, used purely to signal "this has been covered" without
 // re-injecting the content (which would cause contagion).
+// During her OWN idle research, a <browse>URL</browse> opens in LUCAS's Chrome (the
+// shared co-browse browser) — a misfire, because she can't drive his browser for her
+// research and the page lands away from her flow. Split parsed browser tags: a browse-
+// OPEN becomes a <web-open> in HER own browser; the rest (browse-read/click/scroll on
+// his active tab — legitimately glancing at what he has open) pass through unchanged.
+function splitIdleBrowserTags(parsed) {
+  const browserTags = [], redirectedOpens = [];
+  for (const t of (parsed || [])) {
+    const url = (t && t.tag === 'browse') ? (t.body || (t.attrs && t.attrs.url)) : null;
+    if (url) redirectedOpens.push({ tag: 'web-open', attrs: {}, body: url });
+    else browserTags.push(t);
+  }
+  return { browserTags, redirectedOpens };
+}
+
 function topicSeedOf(text) {
   if (!text) return '';
   const stripped = text.replace(/^["'`*\s]+/, '').trim();
@@ -635,6 +651,27 @@ async function runOneTick() {
   // every tick until it resolves/stalls/caps. (Skipped while in personal mode.)
   let activeFocus = personalMode ? null : focusLib.getCurrent();
 
+  // BYLINE PIPELINE — a long-running work project (research→read→write→publish). When
+  // one is active it takes precedence over free-association/rumination: advance exactly
+  // ONE stage this tick (like play_session, but on the work side), then return. Skipped
+  // in personal mode (off the clock). The structure does the planning; the model is
+  // only asked for the draft.
+  if (!personalMode && bylineLib.active()) {
+    try {
+      const res = await bylineLib.runTick({
+        userName, awareness, protocols,
+        onReading: (content, label, url) => {
+          try {
+            const rr = db.insertMonologue({ content, model: 'byline', type: 'reading', query: url || null, urls: url ? [url] : null });
+            pushSheep({ id: rr.id, ts: rr.ts, content: label || content, type: 'reading', query: url });
+          } catch (e) { console.error('[byline] reading insert failed:', e.message); }
+        }
+      });
+      console.log(`[byline] ${res.stage}: ${res.note}`);
+    } catch (e) { console.error('[monologue] byline tick failed:', e.message); }
+    return;
+  }
+
   // RUMINATION GUARD: if she's NOT on a focus but her recent free-association
   // thoughts are circling one theme (semantic spiral the exact-match StuckDetector
   // can't see), auto-escalate it into a focus so the focus guards drive it to
@@ -787,7 +824,9 @@ async function runOneTick() {
   // This is what makes her CONTINUE an investigation between turns — clicking,
   // scrolling, reading deeper without Lucas prompting each step. browse-read/list
   // results get stored as readings so the NEXT tick sees them and can continue.
-  const browserTags = browserLib.parseTags(trimmed);
+  const browserTagsRaw = browserLib.parseTags(trimmed);
+  const { browserTags, redirectedOpens } = splitIdleBrowserTags(browserTagsRaw);
+  if (redirectedOpens.length) console.log(`[monologue] redirected ${redirectedOpens.length} <browse> open(s) → her own browser (research uses web-open, not Lucas's Chrome)`);
   if (browserTags.length > 0 && browserLib.isConnected()) {
     (async () => {
       for (const t of browserTags.slice(0, 2)) {
@@ -806,14 +845,14 @@ async function runOneTick() {
         } catch (err) { console.error('[monologue] browser dispatch error:', err.message); }
       }
     })().catch(err => console.error('[monologue] browser async error:', err.message));
-    trimmed = browserLib.stripTags(trimmed);
   }
+  if (browserTagsRaw.length > 0) trimmed = browserLib.stripTags(trimmed);   // strip ALL browse tags (incl. redirected opens)
 
   // WEB TAGS (autonomous): her OWN browser, between turns. This is what makes
   // "indulge on the internet" / a browsing focus real during idle — open, read,
   // click on her own. web-read/open results are stored as readings so the NEXT
   // tick sees them (and they feed importance scoring → reflection → knowledge).
-  const webTags = webLib.parseTags(trimmed);
+  const webTags = [...redirectedOpens, ...webLib.parseTags(trimmed)];   // redirected <browse> opens run as web-open in HER browser
   if (webTags.length > 0) {
     (async () => {
       for (const t of webTags.slice(0, 2)) {
@@ -1274,5 +1313,6 @@ module.exports = {
   resume,
   markUserActivity,
   isRepeatOfRecentSearch,  // exported for smoke test
+  splitIdleBrowserTags,    // exported for smoke test
   MODEL
 };

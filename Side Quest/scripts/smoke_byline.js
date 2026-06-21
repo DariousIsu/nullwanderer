@@ -1,0 +1,124 @@
+/**
+ * Backtest — byline pipeline. Pure helpers + a FULL pipeline run (research→read→write→
+ * publish→done) driven through injected mock deps (no browser, no model, no network).
+ * Uses a temp DB for the meta-backed stage state.
+ */
+const os = require('os');
+const path = require('path');
+const fs = require('fs');
+process.env.SQ_DB_PATH = path.join(os.tmpdir(), `sq_byline_${Date.now()}.db`);
+
+const db = require('../lib/db');
+db.init();
+const byline = require('../lib/byline');
+let pass = 0, fail = 0;
+const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}`); } };
+
+// --- mock deps ---
+function mockDeps(over = {}) {
+  const calls = { opens: [], recipes: [], reads: 0 };
+  const _fs = {};
+  const files = {
+    fileWrite: (p, c) => { _fs[p] = String(c); return { ok: true, path: p }; },
+    fileAppend: (p, c) => { _fs[p] = (_fs[p] || '') + String(c); return { ok: true, path: p }; },
+    fileRead: (p) => _fs[p] != null ? { ok: true, text: _fs[p] } : { ok: false, reason: 'missing' },
+    _fs
+  };
+  const web = {
+    open: async (url) => { calls.opens.push(url); return over.openBlocker ? { ok: true, blocker: over.openBlocker } : { ok: true, url }; },
+    read: async () => { calls.reads++; return { ok: true, text: 'page text about the topic with substance' }; },
+    runRecipe: async (name, vars) => { calls.recipes.push([name, vars]); return over.publishResult || { ok: true, ran: 5, healed: 0 }; }
+  };
+  const webSearch = over.webSearch || (async (q) => ({ query: q, results: [
+    { title: 'Source A', url: 'https://a.example/x', snippet: 'about ' + q },
+    { title: 'Source B', url: 'https://b.example/y', snippet: 'more on ' + q }
+  ] }));
+  const streamChat = over.streamChat || (async ({ onToken }) => { onToken('Title: A Real Title\n\nThis is the essay body, long enough to clear the forty character minimum easily and then some.'); });
+  return { deps: { webSearch, web, files, streamChat, MODEL: 'test-model' }, calls, files };
+}
+
+(async () => {
+  console.log('Backtest — byline pipeline\n');
+
+  console.log('slugify:');
+  ok('spaces → kebab', byline.slugify('The Future of Work') === 'the-future-of-work');
+  ok('strips punctuation', byline.slugify('AI, policy & you!') === 'ai-policy-you');
+  ok('empty → untitled', byline.slugify('') === 'untitled');
+
+  console.log('\ndetectStart (matches real asks, ignores casual):');
+  ok('write a post about X', byline.detectStart('can you write a post about the debt ceiling') === 'the debt ceiling');
+  ok('publish an essay on Y', byline.detectStart('publish an essay on monetary policy') === 'monetary policy');
+  ok('draft a substack piece about Z', byline.detectStart('draft a substack piece about NATO expansion') === 'NATO expansion');
+  ok('work on a column about W', byline.detectStart('work on a column about housing') === 'housing');
+  ok('casual mention → null', byline.detectStart('I really liked that post you wrote') === null);
+  ok('write me a poem → null (not a post)', byline.detectStart('write me a poem about the sea') === null);
+  ok('bare "write a post" (no topic) → null', byline.detectStart('write a post') === null);
+
+  console.log('\nparseDraft:');
+  ok('Title: line', (() => { const r = byline.parseDraft('Title: Hello World\n\nbody here'); return r.title === 'Hello World' && r.body === 'body here'; })());
+  ok('# heading', (() => { const r = byline.parseDraft('# My Heading\n\nthe body'); return r.title === 'My Heading' && r.body === 'the body'; })());
+  ok('fallback first line', (() => { const r = byline.parseDraft('Just a line\nand more'); return r.title === 'Just a line' && /and more/.test(r.body); })());
+  ok('strips stray tags', !/[<>]/.test(byline.parseDraft('<think>x</think>Title: Clean\n\nbody').title));
+
+  console.log('\nnextDraftPath (versioning, injected existsFn):');
+  ok('no existing → base', byline.nextDraftPath('my-slug', () => false) === 'drafts/my-slug.md');
+  ok('base exists → -v2', byline.nextDraftPath('my-slug', p => p === 'drafts/my-slug.md') === 'drafts/my-slug-v2.md');
+  ok('base+v2 exist → -v3', byline.nextDraftPath('my-slug', p => p === 'drafts/my-slug.md' || p === 'drafts/my-slug-v2.md') === 'drafts/my-slug-v3.md');
+
+  console.log('\nFULL pipeline (happy path):');
+  const m = mockDeps();
+  ok('start sets research + active', byline.start('the future of work') && byline.active() && byline.get() === 'research');
+  let r = await byline.runTick({ deps: m.deps });
+  ok('research → read (2 sources)', r.stage === 'research' && r.ok && byline.get() === 'read' && r.sources === 2);
+  r = await byline.runTick({ deps: m.deps });
+  ok('read source 1 (stays read)', r.stage === 'read' && r.ok && byline.get() === 'read');
+  r = await byline.runTick({ deps: m.deps });
+  ok('read source 2 (stays read)', r.stage === 'read' && byline.get() === 'read');
+  r = await byline.runTick({ deps: m.deps });
+  ok('sources exhausted → write', r.stage === 'read' && byline.get() === 'write');
+  ok('opened both source URLs in HER browser', m.calls.opens.length === 2);
+  r = await byline.runTick({ deps: m.deps });
+  ok('write → publish + draft written', r.stage === 'write' && r.ok && byline.get() === 'publish' && r.title === 'A Real Title');
+  ok('draft file exists with body', Object.keys(m.files._fs).some(p => /^drafts\//.test(p)));
+  r = await byline.runTick({ deps: m.deps });
+  ok('publish → done (autonomous, recipe run)', r.stage === 'publish' && r.ok && byline.get() === 'done');
+  ok('substack recipe invoked with title+body', m.calls.recipes.length === 1 && m.calls.recipes[0][0] === 'substack_publish' && m.calls.recipes[0][1].title === 'A Real Title' && /essay body/.test(m.calls.recipes[0][1].body));
+  r = await byline.runTick({ deps: m.deps });
+  ok('done → cleared (inactive)', !byline.active() && byline.get() === 'none');
+
+  console.log('\nblocker at publish (asks Lucas, stays on publish):');
+  const m2 = mockDeps({ publishResult: { ok: false, blocker: { type: 'login', needsHuman: true } } });
+  byline.start('topic two');
+  byline.set('publish');
+  db.setMeta('byline_title', 'Piece Two');
+  db.setMeta('byline_draft_path', 'drafts/topic-two.md');
+  m2.files._fs['drafts/topic-two.md'] = '# Piece Two\n\nthe body of piece two here.';
+  let surfaced = null;
+  r = await byline.runTick({ deps: m2.deps, onReading: (c) => { surfaced = c; } });
+  ok('publish blocked → stays publish', r.stage === 'publish' && !r.ok && r.blocker === 'login' && byline.active() && byline.get() === 'publish');
+  ok('surfaced a help-ask to Lucas', /log me in|login/i.test(surfaced || ''));
+  byline.reset();
+
+  console.log('\nblocker at read (skips the source, keeps going):');
+  const m3 = mockDeps({ openBlocker: { type: 'cloudflare', needsHuman: true } });
+  byline.start('topic three');
+  await byline.runTick({ deps: m3.deps });                 // research → read
+  r = await byline.runTick({ deps: m3.deps });             // read source 0 → blocked
+  ok('blocked source skipped, read_idx advances', r.stage === 'read' && r.ok && r.blocker === 'cloudflare' && parseInt(db.getMeta('byline_read_idx'), 10) === 1);
+  byline.reset();
+
+  console.log('\nstrikes (no sources 3x → pipeline resets):');
+  const m4 = mockDeps({ webSearch: async (q) => ({ query: q, results: [] }) });
+  byline.start('topic four');
+  await byline.runTick({ deps: m4.deps });
+  await byline.runTick({ deps: m4.deps });
+  r = await byline.runTick({ deps: m4.deps });
+  ok('3 empty researches → reset', !byline.active() && /reset/.test(r.note));
+
+  console.log('\nidle when inactive:');
+  ok('runTick with no pipeline → none/ok:false', (await byline.runTick({ deps: mockDeps().deps })).stage === 'none');
+
+  try { fs.unlinkSync(process.env.SQ_DB_PATH); } catch {}
+  console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
+  process.exit(fail === 0 ? 0 : 1);
+})();
