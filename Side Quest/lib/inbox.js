@@ -172,6 +172,23 @@ function detectInboxIntent(msg) {
   return !askToSend;
 }
 
+// WHICH inbox does the request mean? She has TWO email surfaces, and conflating them is
+// what confused her: HER own account (IMAP, zoelanai@gmail.com) vs LUCAS'S inbox, which he
+// keeps open in the shared co-pilot browser — she reads that by looking at the shared tab,
+// not via IMAP.
+//   'his'  → first-person possessive ("my inbox/email", "that's my inbox") = Lucas's, on the shared browser
+//   'hers' → "your inbox/email", "the email I sent you", "you got mail", "any new email" = her account
+//   null   → ambiguous ("check email") → caller defaults to her own account
+function inboxReferent(msg) {
+  const m = String(msg || '').toLowerCase();
+  if (/\bmy\s+(?:e-?mails?|inbox|mail|messages?)\b/.test(m) || /\bthat'?s\s+my\s+inbox\b/.test(m)) return 'his';
+  if (/\byour\s+(?:e-?mails?|inbox|mail|messages?)\b/.test(m)
+    || /\bemail\b[^.?!]{0,15}\bi\s+sent\s+(?:you|u)\b/.test(m)
+    || /\b(?:you|u)\s+(?:got|received|have|get)\b[^.?!]{0,20}\b(?:e-?mails?|mail|messages?)\b/.test(m)
+    || /\bany\s+(?:new\s+)?(?:e-?mails?|mail|messages?)\b/.test(m)) return 'hers';
+  return null;
+}
+
 // Just-in-time directive: push her to <read-inbox/> instead of the send tags.
 function buildInboxNudge(userMessage) {
   if (!isConfigured()) return null;
@@ -199,4 +216,4 @@ function buildPromptBlock() {
 Your recent messages (sender, subject, snippet) then arrive in your next-turn context. Use it whenever Lucas asks you to check or read your email/inbox, or to see replies to mail you sent. This is a DIFFERENT action from sending: <read-inbox/> READS; <email>/<email-draft>/<email-send> SEND. When asked to read, emit <read-inbox/> — never draft or send.`;
 }
 
-module.exports = { fetchInbox, pollUnread, formatInbox, parseTags, stripTags, dispatch, buildPromptBlock, isConfigured, detectInboxIntent, buildInboxNudge };
+module.exports = { fetchInbox, pollUnread, formatInbox, parseTags, stripTags, dispatch, buildPromptBlock, isConfigured, detectInboxIntent, inboxReferent, buildInboxNudge };

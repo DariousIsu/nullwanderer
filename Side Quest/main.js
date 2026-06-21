@@ -684,21 +684,38 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // === END WEB-INTENT ===
 
   // === READ-INBOX INTERCEPTOR ===
-  // Lucas asks her to check / read email she's received → she keeps DENYING she can
-  // ("I can't access emails"), instead of emitting <read-inbox/>. So read the inbox FOR
-  // her deterministically and feed it back with a push to respond — same pattern as
-  // act-on-open-page. Read-only and harmless; bypasses the denial reflex entirely.
+  // She has TWO email surfaces, and conflating them is what confused her: HER own account
+  // (IMAP, zoelanai@gmail.com) vs LUCAS'S inbox, which he keeps open in the SHARED co-pilot
+  // browser. Route by referent so "your inbox" reads her account and "my inbox" looks at
+  // his on the shared browser — deterministically, bypassing the denial reflex.
   try {
-    if (inboxLib.isConfigured() && inboxLib.detectInboxIntent(userMessage)) {
-      const r = await inboxLib.dispatch({});
-      const resultText = (r && r.ok)
-        ? `[You just read your OWN email inbox (zoelanai@gmail.com) — here is what is actually in it right now. Tell ${userName} what you see, in your own voice. You DID read it; never say you can't access email.\n\n${r.text}]`
-        : `[You tried to read your inbox but: ${(r && r.reason) || 'unknown error'}. Tell ${userName} plainly what went wrong — do NOT claim you lack the capability to read email; you have it.]`;
-      db.setMeta('last_ai_utterance_at', String(Date.now()));
-      resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
-      try { await fireToolFollowup({ io, channel, sessionId, resultText }); } catch (e) { console.error('[read-inbox] followup failed:', e.message); }
-      console.log(`[read-inbox] read inbox for her (${(r && r.ok) ? 'ok: ' + ((r.messages && r.messages.length) || 0) + ' msgs' : 'FAIL ' + (r && r.reason)})`);
-      return { ok: true, inboxRead: true, say: null };
+    if (inboxLib.detectInboxIntent(userMessage)) {
+      const ref = inboxLib.inboxReferent(userMessage);
+      if (ref === 'his' && browserLib.isConnected()) {
+        // His inbox is on the shared browser — read that tab, not her IMAP account.
+        const r = await browserLib.dispatch({ tag: 'browse-read', attrs: {} });
+        const resultText = (r && r.ok)
+          ? `[Lucas asked about HIS inbox — it's open in the shared browser you both use, NOT your own zoelanai@gmail.com account. You just read that tab; here's what's on it. Tell him what you see, in your own voice — you CAN see it, you just did.\n\n${(r.text || '').slice(0, 3000)}]`
+          : `[You tried to read Lucas's inbox in the shared browser but: ${(r && r.reason) || 'unknown error'}. If the tab isn't up, ask him to bring it forward. Do NOT say you can't see it — you can read the shared browser.]`;
+        db.setMeta('last_ai_utterance_at', String(Date.now()));
+        resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
+        try { await fireToolFollowup({ io, channel, sessionId, resultText }); } catch (e) { console.error('[read-inbox/his] followup failed:', e.message); }
+        console.log(`[read-inbox] Lucas's inbox via shared browser (${(r && r.ok) ? 'ok' : 'FAIL ' + (r && r.reason)})`);
+        return { ok: true, inboxRead: 'his', say: null };
+      }
+      // 'his' but no shared browser connected → fall through (don't read HER account as a
+      // wrong substitute; let the model ask him to open it). Otherwise read her own inbox.
+      if (ref !== 'his' && inboxLib.isConfigured()) {
+        const r = await inboxLib.dispatch({});
+        const resultText = (r && r.ok)
+          ? `[You just read your OWN email inbox (zoelanai@gmail.com) — here is what is in it right now. Tell ${userName} what you see, in your own voice. You DID read it; never say you can't access email.\n\n${r.text}]`
+          : `[You tried to read your inbox but: ${(r && r.reason) || 'unknown error'}. Tell ${userName} plainly what went wrong — do NOT claim you lack the capability to read email; you have it.]`;
+        db.setMeta('last_ai_utterance_at', String(Date.now()));
+        resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
+        try { await fireToolFollowup({ io, channel, sessionId, resultText }); } catch (e) { console.error('[read-inbox] followup failed:', e.message); }
+        console.log(`[read-inbox] her IMAP inbox (${(r && r.ok) ? 'ok: ' + ((r.messages && r.messages.length) || 0) + ' msgs' : 'FAIL ' + (r && r.reason)})`);
+        return { ok: true, inboxRead: 'hers', say: null };
+      }
     }
   } catch (err) { console.error('[read-inbox] interceptor failed:', err.message); }
   // === END READ-INBOX INTERCEPTOR ===

@@ -25,5 +25,14 @@ console.log('\ninbox.detectInboxIntent — must NOT fire (false, send requests):
 ok('"can you send an email to John"', inbox.detectInboxIntent("can you send an email to John?") === false);
 ok('"please draft a reply"', inbox.detectInboxIntent("please draft a reply to that") === false);
 
+console.log('\ninbox.inboxReferent — which mailbox (his=shared browser, hers=her IMAP):');
+ok('"check my inbox" → his', inbox.inboxReferent('check my inbox') === 'his');
+ok('"that\'s my inbox" → his', inbox.inboxReferent("that's my inbox, I sent you something") === 'his');
+ok('"check my email" → his', inbox.inboxReferent('can you check my email') === 'his');
+ok('"check your inbox" → hers', inbox.inboxReferent('check your inbox') === 'hers');
+ok('"did you get any new email" → hers', inbox.inboxReferent('did you get any new email?') === 'hers');
+ok('"the email I sent you" → hers', inbox.inboxReferent('read the email I sent you') === 'hers');
+ok('"check email" → null (ambiguous→her account)', inbox.inboxReferent('check email') === null);
+
 console.log(`\n${fail === 0 ? 'INBOX+VOICE OK' : 'SOME FAILURES'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
