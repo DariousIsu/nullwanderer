@@ -61,31 +61,50 @@ function startHeartbeat(intervalMs = HEARTBEAT_MS) {
 function stopHeartbeat() { if (timer) { clearInterval(timer); timer = null; } }
 
 /**
- * Called once at boot. Computes the offline gap, drops a first-person "back online"
- * reading into her stream, and stores a second-person awareness line. Returns
- * { ms, summary, graceful } or null (first-ever boot, or a sub-minute reload).
+ * Called once at boot. Surfaces TWO things in the back-online marker: how long she was
+ * offline (when it was a real gap), and WHAT changed in her capabilities while she was
+ * down (any unsurfaced changelog entries — Lucas's rule). The capability-change part is
+ * decoupled from the gap gate, so a quick redeploy that adds a capability still tells
+ * her. Stores a second-person awareness line + drops a first-person reading. Returns
+ * { ms, summary, graceful, changes } or null (nothing to report).
  */
 function recordBoot(now = Date.now()) {
+  const changelog = require('./changelog');
   const lastAlive = parseInt(db.getMeta(ALIVE_KEY) || '0', 10);
   const lastShutdown = parseInt(db.getMeta(SHUTDOWN_KEY) || '0', 10);
   const ref = Math.max(lastAlive, lastShutdown);   // most recent proof-of-life
   db.setMeta(BOOT_KEY, String(now));
   touch(now);                                       // mark alive immediately
-  if (!ref) return null;                            // first ever boot — nothing to compare
-  const gap = now - ref;
-  if (gap < MIN_GAP_MS) { db.setMeta(SUMMARY_KEY, ''); return null; }  // quick reload, not a real absence
-  const graceful = lastShutdown > 0 && lastShutdown >= lastAlive;
-  const human = formatGap(gap);
-  const fromStr = fmtClock(ref), nowStr = fmtClock(now);
-  const awareLine = `You just came back online — you were offline for about ${human} (last awake ${fromStr}, back ${nowStr}).${graceful ? '' : ' That stop was not a clean shutdown — likely a restart.'}`;
+
+  const changes = changelog.unsurfaced();
+  const gap = ref ? now - ref : 0;
+  const realGap = !!ref && gap >= MIN_GAP_MS;       // a genuine absence, not a quick reload
+
+  // Nothing worth reporting: no real gap AND no capability changes.
+  if (!realGap && !changes.length) { db.setMeta(SUMMARY_KEY, ''); return null; }
+
+  const awareParts = [], readingParts = [];
+  if (realGap) {
+    const graceful = lastShutdown > 0 && lastShutdown >= lastAlive;
+    const human = formatGap(gap);
+    const fromStr = fmtClock(ref), nowStr = fmtClock(now);
+    awareParts.push(`you were offline for about ${human} (last awake ${fromStr}, back ${nowStr})${graceful ? '' : ' — that stop was not a clean shutdown, likely a restart'}`);
+    readingParts.push(`I was offline for about ${human} — from ${fromStr} until ${nowStr}.`);
+  }
+  if (changes.length) {
+    const list = changes.map(c => `• ${c.summary}`).join('\n');
+    awareParts.push(`while you were down, your own capabilities changed:\n${list}`);
+    readingParts.push(`While I was down, what I can do changed:\n${list}`);
+    changelog.markSurfaced(changes[changes.length - 1].ts);
+  }
+
+  const awareLine = `You just came back online — ${awareParts.join('. ')}.`;
   db.setMeta(SUMMARY_KEY, awareLine);
   try {
-    db.insertMonologue({
-      content: `[Back online] I was offline for about ${human} — from ${fromStr} until ${nowStr}. Picking up where I left off.`,
-      model: 'downtime', type: 'reading'
-    });
+    db.insertMonologue({ content: `[Back online] ${readingParts.join(' ')} Picking up where I left off.`, model: 'downtime', type: 'reading' });
   } catch {}
-  return { ms: gap, summary: awareLine, graceful };
+  const graceful = lastShutdown > 0 && lastShutdown >= lastAlive;
+  return { ms: gap, summary: awareLine, graceful, changes: changes.length };
 }
 
 // The awareness-block line — only while the boot is still recent, so it doesn't

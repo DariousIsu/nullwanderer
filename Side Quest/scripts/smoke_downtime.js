@@ -6,7 +6,7 @@
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
-process.env.SQ_DB_PATH = path.join(os.tmpdir(), `sq_downtime_${Date.now()}.db`);
+process.env.SQ_DB_PATH = path.join(os.tmpdir(), `sq_downtime_${Date.now()}`, 'sq.db');  // unique dir isolates capability_log.json
 
 const db = require('../lib/db');
 db.init();
@@ -56,6 +56,25 @@ dt.recordBoot(now);
 ok('surfaces right after boot', !!dt.awarenessLine(now));
 ok('gone after the 30m window', dt.awarenessLine(now + 31 * 60 * 1000) === null);
 
-try { fs.unlinkSync(process.env.SQ_DB_PATH); } catch {}
+console.log('\ncapability changelog in the reboot log (Lucas: tell her what changed):');
+const changelog = require('../lib/changelog');
+// quick reload (sub-minute) but a capability shipped → still surfaces the change
+db.setMeta(dt.ALIVE_KEY, String(now - 5000));
+db.setMeta(dt.SHUTDOWN_KEY, '0');
+changelog.add('Added the byline pipeline', now - 1000);
+let cr = dt.recordBoot(now);
+ok('quick reload + change → surfaces the change', cr && cr.changes === 1 && /byline pipeline/.test(cr.summary));
+ok('no offline-duration part on a quick reload', !/offline for about/.test(cr.summary));
+// next boot → already-surfaced change is not repeated
+db.setMeta(dt.ALIVE_KEY, String(now - 5000));
+ok('surfaced change not repeated', dt.recordBoot(now) === null);
+// real gap + a NEW change → BOTH parts present
+db.setMeta(dt.ALIVE_KEY, String(now - 3 * 60 * 60 * 1000));
+changelog.add('Blockers now ask Lucas for help', now - 500);
+const cr3 = dt.recordBoot(now);
+ok('real gap + new change → offline-time AND change', /offline for about/.test(cr3.summary) && /ask Lucas/.test(cr3.summary));
+ok('older surfaced change not re-listed', !/byline pipeline/.test(cr3.summary));
+
+try { fs.rmSync(path.dirname(process.env.SQ_DB_PATH), { recursive: true, force: true }); } catch {}
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -184,6 +184,11 @@ Your <think> may explain why you chose what you chose. But the <say> is what ${u
 
 async function maybeHeartbeat() {
   const now = Date.now();
+  // AWAY: Lucas said he's away from the machine. Stay completely silent on the desktop
+  // chat — no musing (or even inbound announcements) into a window he isn't watching.
+  // His rule: don't talk just to talk, and especially not while away. Inbounds remain
+  // pending (not consumed) so they surface when he's back.
+  try { if (require('./availability').isAway()) return; } catch {}
   // Inbounds bypass the idle + gap gates — a chat-bot reply is a priority signal
   // we want surfaced quickly, not in 3 minutes.
   const earlyInbounds = db.getPendingInbounds(2);
@@ -401,8 +406,10 @@ async function maybeHeartbeat() {
     // mute forever, and inbound chat-bot replies bypass it (time-sensitive).
     if (wantsToSpeak && !hasInbound) {
       const imp = await importanceLib.score(trimmedSay, { userName, kind: 'utterance' });
-      // Near-silent: only genuinely significant things break the silence unprompted.
-      const threshold = governor.shouldFillGap() ? 5 : 8;
+      // Near-silent by default: only a genuinely significant, fully-formed point (or an
+      // expected deliverable) breaks the silence unprompted. NO gap-fill leniency — she
+      // does NOT talk just to fill quiet (Lucas's rule); silence is the honest default.
+      const threshold = 8;
       if (imp < threshold) {
         wantsToSpeak = false;
         console.log(`[heartbeat] suppressed low-importance utterance (${imp} < ${threshold})`);

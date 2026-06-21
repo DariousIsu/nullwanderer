@@ -51,6 +51,8 @@ async function tick() {
 
 async function maybeFireContinuityCheck() {
   const now = Date.now();
+  // AWAY: don't surface a commitment check-in into a chat Lucas isn't watching.
+  try { if (require('./availability').isAway()) return; } catch {}
   if (now - lastUserActivityTs < IDLE_THRESHOLD_MS) return;
 
   const lastCheck = parseInt(db.getMeta('last_continuity_check_at') || '0', 10);

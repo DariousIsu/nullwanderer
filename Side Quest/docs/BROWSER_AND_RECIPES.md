@@ -133,6 +133,14 @@ first-person "[Back online] I was offline ~X" reading, and stores a second-perso
 awareness line surfaced by `buildAwarenessBlock` for the first 30 min. Sub-minute
 reloads are ignored as noise.
 
+**Reboot capability log** (`lib/changelog.js`): a reboot that changes her capabilities
+tells her *what* changed. Before deploying, the dev records a one-line entry —
+`scripts/log_capability_change.js "what changed"` — and `recordBoot()` surfaces any
+unsurfaced entries in the back-online marker (and her awareness), then marks them
+surfaced so they're shown once. This is **decoupled from the offline-duration gate**, so
+even a quick redeploy that adds a capability still tells her. Stored in
+`data/capability_log.json` with its own surfaced-marker.
+
 ---
 
 ## Tests

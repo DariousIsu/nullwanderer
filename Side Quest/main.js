@@ -571,6 +571,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // as part of a prior spiral.
   try { blackboard.markUser(userMessage, userTurnRow && userTurnRow.id); } catch (e) { console.error('[main] blackboard.markUser failed:', e.message); }
 
+  // AVAILABILITY: a message FROM Lucas means he's present → clear away. If the message
+  // itself announces leaving ("I'll be away", "stepping out", "heading to bed"), set
+  // away so unprompted heartbeat/continuity utterances go silent until he's back. His
+  // direct message is still answered immediately below — away only gates HER unprompted talk.
+  try {
+    const availability = require('./lib/availability');
+    availability.clearAway();
+    const awayReason = availability.detectAway(userMessage);
+    if (awayReason) { availability.setAway(awayReason); console.log(`[main] Lucas marked away ("${awayReason}") — unprompted utterances will stay silent`); }
+  } catch (e) { console.error('[main] availability update failed:', e.message); }
+
   // BYLINE START — "write/publish a post about X" kicks off her autonomous byline
   // pipeline (research→read→write→publish, advanced one stage per idle tick). Side
   // effect only: the normal turn still runs so she acknowledges in her own voice.
