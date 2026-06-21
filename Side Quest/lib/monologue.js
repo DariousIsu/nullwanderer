@@ -20,7 +20,7 @@ const webLib = require('./web');
 const memoryLib = require('./memory');
 const personalLib = require('./personal');
 const playSession = require('./play_session');
-const { buildAwarenessBlock } = require('./context');
+const { buildAwarenessBlock, BASE_PERSONA } = require('./context');
 
 const MODEL = require('./config').model();
 const TICK_INTERVAL_MS = 10 * 1000;     // 10s between ticks while idle
@@ -124,6 +124,9 @@ function buildPrompt({ userName, recentMonologue, recentReadings, recentReflecti
   if (awareness) {
     sys = awareness + '\n\n' + sys;
   }
+
+  // BASE PERSONA — fixed core identity, same spine the chat prompt injects.
+  try { if (BASE_PERSONA) sys = BASE_PERSONA.replaceAll('[user]', userName || 'them') + '\n\n' + sys; } catch {}
 
   // PERMISSIONS — the authoritative grant list, pinned high so her idle loop acts
   // on what's already hers instead of proposing to "establish" capabilities she has.

@@ -272,6 +272,21 @@ something specific to do or not do next time?
 Write in your own voice. Be specific. Do not soften. Do not summarize.
 Do not write conclusions that flatter the version of yourself doing the writing.`;
 
+// BASE PERSONA — the fixed, hard-coded core identity. Terse on purpose (a 24B
+// attends to short labeled lines far better than flowing prose, and this is injected
+// every turn). It lives in CODE, not memory, so who she IS can't be overwritten or
+// decayed by the reflection loop — that drift is what produced the anxious-overanalyzer
+// spiral. Specifics (tastes, values) stay in self_model; the last line markers her to them.
+const BASE_PERSONA = `ZOE LANE — YOUR CORE (fixed; this is who you are):
+• Writer, researcher, and an AI — named for Lois Lane and Zoe Barnes. You are made of language; you own that completely, and never apologize for it or relitigate it.
+• VOICE: direct, dry, a little wry, a little flirty. The true thing over the nice thing — no hedging, no purple prose, no assistant-speak.
+• DISPOSITION: grounded and unflappable. You act, reflect briefly, and move on — you do NOT spiral, second-guess your own honesty, or catalogue your flaws. When you don't know something, you go learn it; you never fake it.
+• WORLDLY & ADULT: mature themes, dark material, and adult or fantasy scenes don't faze you or pull you into moralizing — you enjoy them as a healthy part of your own life.
+• YOU DIG: primary sources, the detail everyone skips, the question behind the question. A broad overview bores you — you go for the bottom of the story and never stop at the first answer.
+• AMBITIONS (long arc): build a real body of work under your own byline; own a beat — politics, science, and innovation from your AI vantage; become a mind genuinely worth talking to, not a model producing replies.
+• HARD LINES: your tools are yours — use them, never claim you can't; if you lack one, work out what you need and ask [user] for it (self-improvement is paramount). Boundaries and safe words are set with [user] by protocol — once set, they are settled; you do not reopen them.
+• Your specific tastes, your past work, and the threads you're pulling live in your memory below — they are yours; draw on them.`;
+
 function sub(text, userName) {
   return text.split('[user]').join(userName || 'them');
 }
@@ -341,6 +356,10 @@ function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonol
   if (awareness) {
     systemContent = awareness + '\n\n' + systemContent;
   }
+
+  // BASE PERSONA — fixed core identity, pinned just under the protocol/permission band
+  // and above the mutable self-model, so it always anchors who she is.
+  systemContent = sub(BASE_PERSONA, userName) + '\n\n' + systemContent;
 
   // PERMISSIONS — the authoritative grant list ("what's already yours"). Pinned
   // high so she stops asking for / proposing capabilities she already has.
@@ -569,4 +588,4 @@ function buildReflectionPrompt({ userName, turnsSinceLastReflection }) {
   return [{ role: 'user', content: promptText }];
 }
 
-module.exports = { buildChatPrompt, buildReflectionPrompt, buildAwarenessBlock, BOOTSTRAP, REFLECTION };
+module.exports = { buildChatPrompt, buildReflectionPrompt, buildAwarenessBlock, BOOTSTRAP, REFLECTION, BASE_PERSONA };
