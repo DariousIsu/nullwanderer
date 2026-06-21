@@ -2,6 +2,7 @@ const db = require('./db');
 const { streamChat, TagStreamParser } = require('./ollama');
 const { BOOTSTRAP } = require('./context');
 const voice = require('./voice');
+const importanceLib = require('./importance');
 
 const MODEL = require('./config').model();
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;       // poll every 5 min
@@ -132,6 +133,18 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
         if (s.size >= 3) for (const p of recent) { if (jac(s, sig(p)) > 0.5) { repetitive = true; break; } }
       } catch {}
       if (repetitive) console.log('[continuity] suppressed repetitive utterance (too similar to a recent reply)');
+    }
+
+    // IMPORTANCE GATE (mirrors the heartbeat): a commitment re-examination is usually
+    // her musing to herself ("I don't feel as strongly about X anymore") — exactly the
+    // "talking just to talk" Lucas doesn't want. Only surface it if it's genuinely
+    // significant; otherwise re-examine SILENTLY (the commitment is still bumped below
+    // so we don't re-pick it). Firm bar 8, no gap-fill leniency.
+    if (trimmedSay && !isPlaceholder && !repetitive) {
+      try {
+        const imp = await importanceLib.score(trimmedSay, { userName, kind: 'utterance' });
+        if (imp < 8) { repetitive = true; console.log(`[continuity] suppressed low-importance check-in (${imp} < 8)`); }
+      } catch (e) { console.error('[continuity] importance gate failed:', e.message); }
     }
 
     if (trimmedSay && !isPlaceholder && !repetitive) {
