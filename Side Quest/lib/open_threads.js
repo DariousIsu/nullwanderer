@@ -35,6 +35,7 @@ A goal is NOT (output empty for ALL of these):
 • Browser interactions, page reads, link follows — those execute in this turn, not as long-term work
 • Questions the AI answers right now
 • Casual commands or one-shot directives
+• A DATED or ONE-SHOT reminder ("remind me to call my father later today", "ping me at 2pm") — that is SCHEDULING, never a standing thread
 • Mid-conversation steering ("let's switch topics", "try that again")
 • Emotional sharing or small talk
 • Short imperatives under 5 words ("explore the page", "look at it", "go check")
@@ -42,6 +43,8 @@ A goal is NOT (output empty for ALL of these):
 HARD RULE: if the user's intent can be completed in ONE chat response (even if it takes a tool call), it is NOT a goal. Only multi-session standing work is a goal.
 
 DECOMPOSITION: only decompose compound DURABLE directives. Don't decompose immediate requests.
+
+PERSPECTIVE (critical) — the message is from ${userName || 'the user'}. Resolve first person to them: "I/me/my/mine" = ${userName || 'the user'} (his/her), "you/your" = YOU (the companion). Phrase every goal as work YOU would do, referring to ${userName || 'the user'} in the THIRD PERSON. NEVER store ${userName || 'the user'}'s personal items as your own. e.g. "remind me to call my father" → "remind ${userName || 'the user'} to call his father" (and per the rule above, a dated reminder isn't a goal at all → []).
 
 OUTPUT FORMAT — strict JSON, no preamble:
 { "goals": ["goal one", "goal two"] }
