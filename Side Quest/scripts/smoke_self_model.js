@@ -20,15 +20,18 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
 (async () => {
   await memory.warm().catch(() => {});
 
-  // Deterministic merge-decider for the test: same trait iff both mention wording/words/overanalyze.
-  const isWordingTrait = s => /overanalyz|wording|words/i.test(s);
-  const decideFn = async (x, y) => isWordingTrait(x) && isWordingTrait(y);
+  // Deterministic merge-decider for the test: same trait iff both are about systems/
+  // frameworks. (Uses a POSITIVE trait, not self-criticism — self_model's SELF_REJECT
+  // guardrail intentionally refuses to canonize self-critical takeaways like
+  // "I overanalyze", so the dedup example must be a real, non-anxious trait.)
+  const isSystemsTrait = s => /systems?|framework|mapping|\bmap\b|structur/i.test(s);
+  const decideFn = async (x, y) => isSystemsTrait(x) && isSystemsTrait(y);
 
-  const a = await self.record('I tend to overanalyze small wording choices in conversation', { category: 'trait', decideFn });
+  const a = await self.record('I gravitate toward systems thinking, mapping problems onto clear frameworks', { category: 'trait', decideFn });
   ok('first statement → add', a && a.action === 'add');
 
-  const b = await self.record('I have a habit of reading too much into the exact words people pick', { category: 'trait', decideFn });
-  ok('paraphrase (cosine 0.76, LLM says same) → update (no new row)', b && b.action === 'update');
+  const b = await self.record('I tend to map new problems onto structured frameworks and systems', { category: 'trait', decideFn });
+  ok('paraphrase (high cosine, decider says same) → update (no new row)', b && b.action === 'update');
   console.log(`      (prefilter sim=${b && b.sim ? b.sim.toFixed(3) : '?'})`);
 
   const c = await self.record('I value directness and plain communication over hedging', { category: 'value', decideFn });
@@ -36,11 +39,11 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
 
   ok('only 2 rows after a dedup (not 3)', D.countSelfModel() === 2);
 
-  const reinforced = D.getAllSelfModel().find(r => /overanalyze|reading too much/i.test(r.content));
+  const reinforced = D.getAllSelfModel().find(r => /systems|framework|map/i.test(r.content));
   ok('reinforced entry has mentions = 2', reinforced && reinforced.mentions === 2);
 
   const block = self.buildPromptBlock(10);
-  ok('persona block renders both traits', block && /directness/.test(block) && /(overanalyze|reading too much)/.test(block));
+  ok('persona block renders both traits', block && /directness/.test(block) && /(systems|framework|map)/.test(block));
 
   console.log('\nrevision — a changed favorite EVOLVES (not a 2nd contradictory entry):');
   await self.record('My favorite movie is Parasite.', { category: 'preference', decideFn: async () => 'different' });
