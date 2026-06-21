@@ -96,4 +96,10 @@ function classifyQuery(text) {
   return 'broad';
 }
 
-module.exports = { detectWebIntent, detectActOnOpenPage, detectPickCharacter, classifyQuery, SEARCH_HOME };
+// "What did I say / we discuss about X", "remind me what…", "what are my…" — a RECALL of
+// something earlier in the conversation. Routes episodic recall to USER statements only
+// (the ground truth for "what I said"), dropping her own deflections + other questions.
+const RECALL_RE = /\bwhat did (?:i|we|you) (?:say|tell|mention|discuss|talk about|decide|agree)\b|\bremind me what\b|\bwhat (?:are|were) my\b|\bdo you remember (?:what|when|that|me)\b|\bwhat was (?:my|the|our)\b|\bwhat did we (?:cover|land on)\b/i;
+function isRecallQuery(text) { return !!text && RECALL_RE.test(String(text)); }
+
+module.exports = { detectWebIntent, detectActOnOpenPage, detectPickCharacter, classifyQuery, isRecallQuery, SEARCH_HOME };

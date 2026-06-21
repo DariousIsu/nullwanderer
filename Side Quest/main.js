@@ -518,7 +518,7 @@ function extractUrls(text) {
   return [...new Set(matches)].slice(0, 3);
 }
 
-const { detectWebIntent, detectActOnOpenPage, detectPickCharacter, classifyQuery } = require('./lib/intent');
+const { detectWebIntent, detectActOnOpenPage, detectPickCharacter, classifyQuery, isRecallQuery } = require('./lib/intent');
 const preferences = require('./lib/preferences');
 const personal = require('./lib/personal');
 const playSession = require('./lib/play_session');
@@ -884,7 +884,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     userQv = await memoryLib.embed(userMessage).catch(() => null);
     if (userQv && userTurnRow && userTurnRow.id) { try { db.setTurnEmbedding(userTurnRow.id, JSON.stringify(userQv)); } catch {} }
-    if (userQv) relevantPastTurns = await memoryLib.retrieveTurns(userMessage, { k: 3, excludeIds: recentTurns.map(t => t.id), qv: userQv });
+    // RECALL queries ("what did I say about X") → restrict to the user's own statements so
+    // her past deflections + other questions don't crowd out the actual answer.
+    const recall = isRecallQuery(userMessage);
+    if (userQv) relevantPastTurns = await memoryLib.retrieveTurns(userMessage, { k: recall ? 4 : 3, excludeIds: recentTurns.map(t => t.id), qv: userQv, userOnly: recall, dropQuestions: recall });
   } catch (e) { console.error('[main] episodic recall failed:', e.message); }
 
   // SCOPED CONTEXT (Phase 1, conditional) — on a NARROW factual question, relevance-gate the

@@ -18,5 +18,14 @@ is('tell me about the Maastricht treaty', 'broad');
 is("let's talk through the dedup approach", 'broad');
 is('catch me up on what you found', 'broad');
 
+const { isRecallQuery } = require('../lib/intent');
+const rc = (text, want) => { const got = isRecallQuery(text); const ok = got === want; (ok ? pass++ : fail++); console.log(`  ${ok ? '✓' : '✗'} [recall=${want}] ${text}`); };
+console.log('\nisRecallQuery (routes to user-statement recall):');
+rc("what did I say about my father's day plans", true);
+rc('remind me what we decided on the schema', true);
+rc('what are my plans for saturday', true);
+rc('what is H.R. 1 about?', false);
+rc("how's the dedup research going?", false);
+
 console.log(`\n${fail === 0 ? 'QUERY CLASSIFIER OK' : 'SOME FAILURES'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

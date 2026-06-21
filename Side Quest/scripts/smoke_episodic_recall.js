@@ -34,6 +34,14 @@ const ok = (n, c) => { (c ? pass++ : fail++); console.log(`  ${c ? '✓' : '✗'
   const ex = await mem.retrieveTurns("remind me what my Father's Day plans were", { k: 3, excludeIds: [fdId] });
   ok('Father\'s Day turn excluded when in the recency window', !ex.some(h => h.id === fdId));
 
+  console.log('\nRECALL MODE (userOnly + dropQuestions) — surfaces the user STATEMENT, not noise:');
+  const qId = await seed('user', "wait, what are my Father's Day plans again?");          // a user QUESTION
+  const defId = await seed('ai_said', 'Let me double-check my notes and calendar to confirm.'); // her DEFLECTION
+  const rec = await mem.retrieveTurns("what did I say about my Father's Day plans", { k: 3, excludeIds: [], userOnly: true, dropQuestions: true });
+  ok('returns the user STATEMENT (the answer)', rec.some(h => h.id === fdId));
+  ok('excludes the user QUESTION', !rec.some(h => h.id === qId));
+  ok('excludes her ai_said deflection', !rec.some(h => h.id === defId));
+
   db.getDb().close();
   try { for (const e of ['', '-wal', '-shm']) fs.existsSync(process.env.SQ_DB_PATH + e) && fs.unlinkSync(process.env.SQ_DB_PATH + e); } catch {}
   console.log(`\n${fail === 0 ? 'EPISODIC RECALL OK' : 'SOME FAILURES'} — ${pass} passed, ${fail} failed`);

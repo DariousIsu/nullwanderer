@@ -127,7 +127,8 @@ async function logAction(text, { source = 'action' } = {}) {
  * (excludeIds) so it only surfaces what scrolled out. Semantic-only, min-similarity gated
  * so an unrelated question injects nothing. Pass a precomputed `qv` to skip re-embedding.
  */
-async function retrieveTurns(query, { k = 3, excludeIds = [], minSim = 0.45, qv = null } = {}) {
+const _isQuestionTurn = (c) => /\?\s*$/.test((c || '').trim()) || /^\s*(what|who|when|which|where|why|how|do|did|are|is|was|were|can|could|would|should)\b/i.test((c || '').trim());
+async function retrieveTurns(query, { k = 3, excludeIds = [], minSim = 0.45, qv = null, userOnly = false, dropQuestions = false } = {}) {
   if (!query || !String(query).trim()) return [];
   if (!qv) { try { qv = await embed(query); } catch { return []; } }
   if (!qv) return [];
@@ -135,6 +136,11 @@ async function retrieveTurns(query, { k = 3, excludeIds = [], minSim = 0.45, qv 
   const scored = [];
   for (const r of db.getEmbeddedTurns(400)) {
     if (exclude.has(r.id)) continue;
+    // RECALL MODE: "what did I say about X" is answered by what the USER actually stated —
+    // not by her own past replies/deflections or by other QUESTIONS (which embed closest to
+    // the meta-question and crowd out the real content). Filter to user statements.
+    if (userOnly && r.speaker !== 'user') continue;
+    if (dropQuestions && _isQuestionTurn(r.content)) continue;
     let v; try { v = JSON.parse(r.embedding); } catch { continue; }
     const sim = cosine(qv, v);
     if (sim >= minSim) scored.push([sim, r]);
