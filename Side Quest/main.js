@@ -57,7 +57,7 @@ const {
 const selfDialogue = require('./lib/self_dialogue');
 
 const MODEL = config.model();
-const RECENT_TURN_LIMIT = 8;
+const RECENT_TURN_LIMIT = 14;
 const RECENT_REFLECTION_LIMIT = 5;
 const DISPLAY_HISTORY_LIMIT = 50;
 
@@ -99,6 +99,9 @@ app.whenReady().then(() => {
   // Keep pruning spiral/junk during long sessions (write-time guard catches most; this
   // sweeps anything that slips through, e.g. junk readings from tool output).
   setInterval(() => { try { curatorLib.curateMonologue(); } catch (e) { console.error('[main] periodic curateMonologue failed:', e.message); } }, 20 * 60 * 1000).unref?.();
+  // Episodic recall backfill: embed recent past turns lacking an embedding so "what did we
+  // say earlier about X" works over EXISTING history too. Delayed so the CPU embedder is warm.
+  setTimeout(() => { memoryLib.backfillTurnEmbeddings(300).catch(() => {}); }, 20 * 1000).unref?.();
   filesLib.ensureWorkspace();
   // Warm the CPU embedder (bge-small via transformers.js) so first knowledge
   // retrieval isn't slow. Runs on CPU — no VRAM contention with the chat model.
@@ -871,6 +874,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     try { capabilityProposalBlock = gapsLib.buildReturnProposalBlock(userName); } catch (e) { console.error('[main] gap proposal failed:', e.message); }
   }
 
+  // EPISODIC RECALL — embed THIS user message (store it on the turn for future recall),
+  // and pull the few most-relevant PAST turns that scrolled out of the recency window, so
+  // "what did we say earlier about X" works instead of diverting to a tool.
+  let relevantPastTurns = [];
+  try {
+    const qv = await memoryLib.embed(userMessage).catch(() => null);
+    if (qv && userTurnRow && userTurnRow.id) { try { db.setTurnEmbedding(userTurnRow.id, JSON.stringify(qv)); } catch {} }
+    if (qv) relevantPastTurns = await memoryLib.retrieveTurns(userMessage, { k: 3, excludeIds: recentTurns.map(t => t.id), qv });
+  } catch (e) { console.error('[main] episodic recall failed:', e.message); }
+
   const messages = buildChatPrompt({
     userName,
     recentReflections,
@@ -887,6 +900,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     capabilityProposalBlock,
     selfModelBlock,
     personalBlock,
+    relevantPastTurns,
     newUserMessage: composedUserMessage
   });
 
@@ -1061,6 +1075,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     model: MODEL,
     truncated
   });
+  // Embed her reply too (async) so it's recallable later via episodic retrieval.
+  try { memoryLib.embed(finalSaid).then(v => { if (v && saidRow && saidRow.id) db.setTurnEmbedding(saidRow.id, JSON.stringify(v)); }).catch(() => {}); } catch {}
 
   try {
     // Include the corrected say ONLY when we rewrote it, so the renderer replaces the

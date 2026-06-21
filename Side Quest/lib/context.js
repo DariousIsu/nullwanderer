@@ -350,7 +350,7 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
  *   then    = alternating user / assistant from recentTurns (assistant carries <think>/<say>)
  *   finally = the new user message
  */
-function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, retrievedKnowledgeBlock, capabilityProposalBlock, selfModelBlock, personalBlock, newUserMessage }) {
+function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, retrievedKnowledgeBlock, capabilityProposalBlock, selfModelBlock, personalBlock, relevantPastTurns, newUserMessage }) {
   let systemContent = sub(BOOTSTRAP, userName);
 
   // AWARENESS — temporal + system facts prepended to system prompt so she knows
@@ -448,6 +448,15 @@ function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonol
   // logged a gap she couldn't solve. Invites her to proactively propose it.
   if (capabilityProposalBlock) {
     systemContent += capabilityProposalBlock;
+  }
+
+  // EARLIER-IN-CONVERSATION RECALL — past turns (outside the recency window) that are
+  // semantically relevant to what they just asked. Fixes the "we discussed X earlier but
+  // it scrolled out of the last-N turns" gap, so she recalls it instead of diverting to a
+  // tool. Endpoint-style: only the relevant turns, never the whole transcript.
+  if (relevantPastTurns && relevantPastTurns.length) {
+    const lines = relevantPastTurns.map(t => `  • ${t.speaker === 'user' ? (userName || 'They') : 'You'}: ${(t.content || '').replace(/\s+/g, ' ').slice(0, 240)}`);
+    systemContent += `\n\n---\nEARLIER IN THIS CONVERSATION (relevant to what ${userName || 'they'} just said — you DID discuss this; recall it directly, don't ask again or divert to a tool):\n${lines.join('\n')}`;
   }
 
   // CRITICAL instruction — drives the model to actually USE the interior content,

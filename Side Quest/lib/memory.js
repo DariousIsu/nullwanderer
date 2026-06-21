@@ -122,6 +122,39 @@ async function logAction(text, { source = 'action' } = {}) {
 }
 
 /**
+ * Episodic conversation recall — top-K PAST turns semantically relevant to the query,
+ * for "what did we say earlier about X". Excludes turns already in the recency window
+ * (excludeIds) so it only surfaces what scrolled out. Semantic-only, min-similarity gated
+ * so an unrelated question injects nothing. Pass a precomputed `qv` to skip re-embedding.
+ */
+async function retrieveTurns(query, { k = 3, excludeIds = [], minSim = 0.45, qv = null } = {}) {
+  if (!query || !String(query).trim()) return [];
+  if (!qv) { try { qv = await embed(query); } catch { return []; } }
+  if (!qv) return [];
+  const exclude = new Set((excludeIds || []).map(Number));
+  const scored = [];
+  for (const r of db.getEmbeddedTurns(400)) {
+    if (exclude.has(r.id)) continue;
+    let v; try { v = JSON.parse(r.embedding); } catch { continue; }
+    const sim = cosine(qv, v);
+    if (sim >= minSim) scored.push([sim, r]);
+  }
+  scored.sort((a, b) => b[0] - a[0]);
+  return scored.slice(0, k).map(([sim, r]) => ({ id: r.id, speaker: r.speaker, content: r.content, _sim: sim }));
+}
+
+// One-time/idempotent backfill: embed recent user/ai_said turns lacking an embedding so
+// episodic recall works over EXISTING history too. Bounded + best-effort (CPU embedder).
+async function backfillTurnEmbeddings(limit = 300) {
+  let n = 0;
+  for (const r of db.getTurnsMissingEmbedding(limit)) {
+    try { const v = await embed(r.content); if (v) { db.setTurnEmbedding(r.id, JSON.stringify(v)); n++; } } catch {}
+  }
+  if (n) console.log(`[memory] backfilled embeddings for ${n} past turn(s)`);
+  return n;
+}
+
+/**
  * Hybrid retrieve: top-K knowledge rows by semantic + keyword fusion.
  * Graceful: returns [] on empty query or no store (caller injects nothing → the
  * gap-response reflex handles "I don't know" rather than getting noise).
@@ -243,6 +276,6 @@ function isReady() { return !!_extractor; }
 function warm() { return getExtractor().then(() => true).catch(() => false); }
 
 module.exports = {
-  embed, store, storeDeduped, logAction, retrieve, retrieveScored, formatForPrompt, warm, isReady,
+  embed, store, storeDeduped, logAction, retrieve, retrieveScored, retrieveTurns, backfillTurnEmbeddings, formatForPrompt, warm, isReady,
   cosine, fuse, _normalize  // exported for unit tests
 };

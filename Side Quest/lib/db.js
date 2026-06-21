@@ -249,6 +249,7 @@ const MIGRATIONS = [
   // {type,label,refTable?,refId?,url?}. Lets her drill from a compact note back to
   // the full source without the store ever holding a copy of it.
   `ALTER TABLE knowledge ADD COLUMN provenance TEXT`,
+  `ALTER TABLE turns ADD COLUMN embedding TEXT`,
   // permissions — the authoritative list of what Zoe is ALREADY allowed/able to do.
   // The structured source of truth behind "settled permission": always injected so
   // she stops ASKING for / PROPOSING capabilities she already has (chronic under-reach
@@ -309,6 +310,23 @@ function getRecentTurns(n) {
     .prepare('SELECT * FROM turns ORDER BY id DESC LIMIT ?')
     .all(n);
   return rows.reverse();
+}
+
+// --- episodic recall: turn embeddings (for "what did we say earlier about X") ---
+function setTurnEmbedding(id, embedding) {
+  getDb().prepare('UPDATE turns SET embedding = ? WHERE id = ?').run(embedding, id);
+}
+// user + ai_said turns that carry an embedding, newest first, capped (small N → cosine in JS).
+function getEmbeddedTurns(limit = 400) {
+  return getDb()
+    .prepare("SELECT id, speaker, content, embedding FROM turns WHERE embedding IS NOT NULL AND speaker IN ('user','ai_said') ORDER BY id DESC LIMIT ?")
+    .all(limit);
+}
+// recent user/ai_said turns MISSING an embedding (for one-time backfill), newest first.
+function getTurnsMissingEmbedding(limit = 300) {
+  return getDb()
+    .prepare("SELECT id, content FROM turns WHERE embedding IS NULL AND speaker IN ('user','ai_said') ORDER BY id DESC LIMIT ?")
+    .all(limit);
 }
 
 function getRecentDisplayTurns(n) {
@@ -983,6 +1001,9 @@ module.exports = {
   endSession,
   insertTurn,
   getRecentTurns,
+  setTurnEmbedding,
+  getEmbeddedTurns,
+  getTurnsMissingEmbedding,
   getRecentDisplayTurns,
   getRecentReflections,
   insertReflection,
