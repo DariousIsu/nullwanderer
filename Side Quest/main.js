@@ -683,6 +683,26 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   } catch (err) { console.error('[web-intent] interceptor failed:', err.message); }
   // === END WEB-INTENT ===
 
+  // === READ-INBOX INTERCEPTOR ===
+  // Lucas asks her to check / read email she's received → she keeps DENYING she can
+  // ("I can't access emails"), instead of emitting <read-inbox/>. So read the inbox FOR
+  // her deterministically and feed it back with a push to respond — same pattern as
+  // act-on-open-page. Read-only and harmless; bypasses the denial reflex entirely.
+  try {
+    if (inboxLib.isConfigured() && inboxLib.detectInboxIntent(userMessage)) {
+      const r = await inboxLib.dispatch({});
+      const resultText = (r && r.ok)
+        ? `[You just read your OWN email inbox (zoelanai@gmail.com) — here is what is actually in it right now. Tell ${userName} what you see, in your own voice. You DID read it; never say you can't access email.\n\n${r.text}]`
+        : `[You tried to read your inbox but: ${(r && r.reason) || 'unknown error'}. Tell ${userName} plainly what went wrong — do NOT claim you lack the capability to read email; you have it.]`;
+      db.setMeta('last_ai_utterance_at', String(Date.now()));
+      resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
+      try { await fireToolFollowup({ io, channel, sessionId, resultText }); } catch (e) { console.error('[read-inbox] followup failed:', e.message); }
+      console.log(`[read-inbox] read inbox for her (${(r && r.ok) ? 'ok: ' + ((r.messages && r.messages.length) || 0) + ' msgs' : 'FAIL ' + (r && r.reason)})`);
+      return { ok: true, inboxRead: true, say: null };
+    }
+  } catch (err) { console.error('[read-inbox] interceptor failed:', err.message); }
+  // === END READ-INBOX INTERCEPTOR ===
+
   // === PREFERENCE INTERCEPTOR (the "ghost command") ===
   // A taste question ("what's your favorite flower?") triggers the Instruct model's
   // "I'm an AI, I have no preferences" reflex, which the full chat prompt cannot

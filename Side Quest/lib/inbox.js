@@ -162,10 +162,14 @@ function parseTags(text) {
 function detectInboxIntent(msg) {
   if (!msg) return false;
   const m = String(msg).toLowerCase();
-  const explicitSend = /\b(send|compose|draft|write|pitch|forward|reply)\b/.test(m);
-  if (explicitSend) return false;
-  return /\binbox\b/.test(m)
+  const readCue = /\binbox\b/.test(m)
     || /\b(check|read|see|look at|open|any|new|got|receiv|incoming|unread|what)\b[\s\S]{0,40}\b(e-?mails?|inbox|mails?|messages?)\b/.test(m);
+  if (!readCue) return false;
+  // Only SUPPRESS when it's an imperative to HER to send/compose — not when Lucas merely
+  // notes that HE sent something ("yes I did send you an email"), which used to trip it.
+  const askToSend = /\b(?:can|could|would|will|please|go ahead and)\b[\s\S]{0,20}\b(send|compose|draft|write|forward|reply)\b/.test(m)
+    || /^(?:send|compose|draft|write|forward|reply)\b/.test(m.trim());
+  return !askToSend;
 }
 
 // Just-in-time directive: push her to <read-inbox/> instead of the send tags.
