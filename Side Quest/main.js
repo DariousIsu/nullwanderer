@@ -723,6 +723,30 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   } catch (err) { console.error('[read-inbox] interceptor failed:', err.message); }
   // === END READ-INBOX INTERCEPTOR ===
 
+  // === RECALL INTERCEPTOR ===
+  // "What did I say about X" — she HAS the answer in past turns (and the passive recall block
+  // injects it), but the 24B reflexively deflects to "let me check my notes / the calendar"
+  // and ignores it. Same fix as act-on-page/inbox: pull what the USER actually said and feed
+  // it back with a hard directive to state it directly — bypassing the deflection reflex.
+  try {
+    if (isRecallQuery(userMessage)) {
+      const qv = await memoryLib.embed(userMessage).catch(() => null);
+      if (qv && userTurnRow && userTurnRow.id) { try { db.setTurnEmbedding(userTurnRow.id, JSON.stringify(qv)); } catch {} }
+      const recentIds = db.getRecentTurns(RECENT_TURN_LIMIT).map(t => t.id);
+      const hits = qv ? await memoryLib.retrieveTurns(userMessage, { k: 4, excludeIds: recentIds, qv, userOnly: true, dropQuestions: true }) : [];
+      if (hits.length) {
+        const lines = hits.map(h => `  • You said: "${(h.content || '').replace(/\s+/g, ' ').slice(0, 240)}"`).join('\n');
+        const resultText = `[${userName} asked you to recall what THEY said earlier about this. You DO remember it — here is what ${userName} actually said, pulled from your memory of this conversation:\n${lines}\n\nAnswer DIRECTLY from this, in your own voice — tell them what they said. Do NOT say you'll "check your notes", "verify with the calendar", or "double-check" — you already have it, right here. Just recall it to them.]`;
+        db.setMeta('last_ai_utterance_at', String(Date.now()));
+        resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
+        try { await fireToolFollowup({ io, channel, sessionId, resultText }); } catch (e) { console.error('[recall] followup failed:', e.message); }
+        console.log(`[recall] surfaced ${hits.length} user-statement turn(s) for "${userMessage.slice(0, 50)}"`);
+        return { ok: true, recalled: true, say: null };
+      }
+    }
+  } catch (err) { console.error('[recall] interceptor failed:', err.message); }
+  // === END RECALL INTERCEPTOR ===
+
   // === PREFERENCE INTERCEPTOR (the "ghost command") ===
   // A taste question ("what's your favorite flower?") triggers the Instruct model's
   // "I'm an AI, I have no preferences" reflex, which the full chat prompt cannot
