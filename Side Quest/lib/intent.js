@@ -74,4 +74,26 @@ function detectActOnOpenPage(text) {
 const PICK_CHAR_RE = /\b(?:pick|choose|select|find|start|explore|browse|open)\b[^.?!]{0,30}\b(?:characters?|someone|scene|bot|conversation|one to (?:chat|talk|play))\b|\bchat with (?:a |an |one\b|someone|somebody)\b|\bstart (?:a |the )?(?:scene|roleplay|rp)\b/i;
 function detectPickCharacter(text) { return !!text && PICK_CHAR_RE.test(String(text)); }
 
-module.exports = { detectWebIntent, detectActOnOpenPage, detectPickCharacter, SEARCH_HOME };
+// Classify a user message as 'narrow' (a specific factual ask — named bill/entity, a
+// who/what/when question, a quoted phrase) vs 'broad' (open/exploratory/conversational).
+// Drives SCOPED retrieval: narrow → tight, entity-exact, recency-gated (don't flood with
+// the whole topic); broad → wider + keep the recency "continuous-mind" texture. DEFAULTS
+// to 'broad' (safer — only tightens on clear narrow signals).
+function classifyQuery(text) {
+  const t = String(text || '').trim();
+  if (!t) return 'broad';
+  // explicit exploratory cues → broad
+  if (/\b(tell me about|what do you think|thoughts on|how (?:are|'?s| is) (?:you|it going|things)|overview|in general|broadly|what'?s new|anything interesting|catch me up|how was your)\b/i.test(t)) return 'broad';
+  // named-entity / factual cues → narrow
+  const narrow =
+    /\b(?:H\.?\s?R\.?|S\.?)\s?\d+\b/.test(t)                                                   // bill number (H.R. 1, S.123)
+    || /\b[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,5}\s+(?:Act|Bill|Treaty|Agreement|Initiative|Center|Report|Rule)\b/.test(t) // proper-named thing
+    || /"[^"]{3,}"|'[^']{3,}'/.test(t)                                                          // quoted exact phrase
+    || /\b(?:who|what|which|when|where)\s+(?:is|was|are|were|did|does|do)\b/i.test(t);          // factual wh-question
+  if (narrow) return 'narrow';
+  // short message anchored on a multi-word proper noun → narrow
+  if (t.split(/\s+/).length <= 12 && /\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b/.test(t)) return 'narrow';
+  return 'broad';
+}
+
+module.exports = { detectWebIntent, detectActOnOpenPage, detectPickCharacter, classifyQuery, SEARCH_HOME };

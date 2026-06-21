@@ -518,7 +518,7 @@ function extractUrls(text) {
   return [...new Set(matches)].slice(0, 3);
 }
 
-const { detectWebIntent, detectActOnOpenPage, detectPickCharacter } = require('./lib/intent');
+const { detectWebIntent, detectActOnOpenPage, detectPickCharacter, classifyQuery } = require('./lib/intent');
 const preferences = require('./lib/preferences');
 const personal = require('./lib/personal');
 const playSession = require('./lib/play_session');
@@ -787,8 +787,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   }
 
   const recentReflections = db.getRecentReflections(RECENT_REFLECTION_LIMIT);
-  const recentMonologue = db.getRecentMonologueByType('thought', 5);
-  const recentReadings = db.getRecentMonologueByType('reading', 2);
+  let recentMonologue = db.getRecentMonologueByType('thought', 5);
+  let recentReadings = db.getRecentMonologueByType('reading', 2);
   const heldCommitments = db.getHeldCommitments(8);
   const openThreads = db.getActiveOpenThreads(3);
   const protocols = db.getActiveProtocols();
@@ -843,14 +843,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     cumulativeMs: db.getCumulativeSessionTime()
   });
 
-  // KNOWLEDGE RETRIEVAL (the RETRIEVED tail) — pull the few most relevant stored
-  // notes/facts/trajectories for THIS message, by relevance not recency. Graceful:
-  // empty on miss, so the gap-response reflex handles "I don't know" cleanly.
+  // SCOPED RETRIEVAL (Phase 1) — classify the question, then retrieve to fit it:
+  //  • narrow/factual (a specific bill, a who/what question) → hybrid semantic+FTS (exact
+  //    keyword boost for named entities) at small K — the precise leaf, not the topic.
+  //  • broad/open → scored recency×relevance×importance at wider K (keeps her texture).
+  const qClass = classifyQuery(userMessage);
   let retrievedKnowledgeBlock = null;
   try {
-    // Generative-Agents scored retrieval: recency × relevance × importance, so
-    // high-signal notes/insights outrank stale or idle ones (not pure relevance).
-    const rk = await memoryLib.retrieveScored(userMessage, { k: 4 });
+    const rk = qClass === 'narrow'
+      ? await memoryLib.retrieve(userMessage, { k: 3 })          // entity-exact, tight
+      : await memoryLib.retrieveScored(userMessage, { k: 6 });   // open, high-signal, wider
     retrievedKnowledgeBlock = memoryLib.formatForPrompt(rk, userName);
   } catch (err) { console.error('[main] knowledge retrieve failed:', err.message); }
 
@@ -878,11 +880,29 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // and pull the few most-relevant PAST turns that scrolled out of the recency window, so
   // "what did we say earlier about X" works instead of diverting to a tool.
   let relevantPastTurns = [];
+  let userQv = null;
   try {
-    const qv = await memoryLib.embed(userMessage).catch(() => null);
-    if (qv && userTurnRow && userTurnRow.id) { try { db.setTurnEmbedding(userTurnRow.id, JSON.stringify(qv)); } catch {} }
-    if (qv) relevantPastTurns = await memoryLib.retrieveTurns(userMessage, { k: 3, excludeIds: recentTurns.map(t => t.id), qv });
+    userQv = await memoryLib.embed(userMessage).catch(() => null);
+    if (userQv && userTurnRow && userTurnRow.id) { try { db.setTurnEmbedding(userTurnRow.id, JSON.stringify(userQv)); } catch {} }
+    if (userQv) relevantPastTurns = await memoryLib.retrieveTurns(userMessage, { k: 3, excludeIds: recentTurns.map(t => t.id), qv: userQv });
   } catch (e) { console.error('[main] episodic recall failed:', e.message); }
+
+  // SCOPED CONTEXT (Phase 1, conditional) — on a NARROW factual question, relevance-gate the
+  // recency blocks against the question so broad recent material doesn't ride along (the
+  // "loads everything" bloat). On a BROAD/open turn, keep them — that's her continuous-mind
+  // texture. Gating embeds a handful of rows; only runs on narrow turns.
+  if (qClass === 'narrow' && userQv) {
+    const gate = async (rows) => {
+      const out = [];
+      for (const r of rows || []) {
+        try { const v = await memoryLib.embed(r.content || ''); if (v && memoryLib.cosine(userQv, v) >= 0.4) out.push(r); }
+        catch { out.push(r); }
+      }
+      return out;
+    };
+    try { recentMonologue = await gate(recentMonologue); recentReadings = await gate(recentReadings); }
+    catch (e) { console.error('[main] recency gate failed:', e.message); }
+  }
 
   const messages = buildChatPrompt({
     userName,
