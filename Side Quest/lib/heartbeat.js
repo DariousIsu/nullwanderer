@@ -297,7 +297,18 @@ async function maybeHeartbeat() {
     // BROWSER TAGS (autonomous): the heartbeat prompt invites <chat-send> to
     // continue a web chat-bot. Dispatch any page actions she emitted while idle
     // (chat-send/chat-watch/chat-unwatch et al.) — mirror monologue's handling.
-    const browserTags = [...browserLib.parseTags(thought || ''), ...browserLib.parseTags(say || '')];
+    // WRONG-BROWSER GUARD: a bare <browse> open is her OWN web work → run it in HER browser,
+    // not Lucas's shared Chrome. browse-read/click/etc. still co-browse his open tabs.
+    const { browserTags, redirectedOpens } = browserLib.splitBrowseOpens([...browserLib.parseTags(thought || ''), ...browserLib.parseTags(say || '')]);
+    if (redirectedOpens.length) {
+      (async () => {
+        const webLib = require('./web');
+        for (const w of redirectedOpens) {
+          try { const r = await webLib.open(w.body); console.log(`[heartbeat] redirected <browse> open → her browser: ${w.body} (${r && r.ok ? 'ok' : 'FAIL'})`); }
+          catch (e) { console.error('[heartbeat] web open (redirected) failed:', e.message); }
+        }
+      })().catch(() => {});
+    }
     if (browserTags.length > 0 && browserLib.isConnected()) {
       (async () => {
         for (const t of browserTags.slice(0, 2)) {

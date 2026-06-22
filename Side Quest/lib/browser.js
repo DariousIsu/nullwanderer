@@ -811,6 +811,26 @@ function stripTags(text) {
 }
 
 /**
+ * WRONG-BROWSER GUARD. A bare <browse>URL</browse> is an OPEN of a new page — that is
+ * HER OWN web work, which belongs in HER dedicated browser (lib/web.js), NOT Lucas's
+ * shared co-pilot Chrome on :9222. The model keeps reaching for <browse> when it means
+ * "go look something up," landing her research in the wrong window. Split those opens out
+ * as <web-open> tags for her browser; everything else (browse-read/click/type/scroll/
+ * close — legitimately glancing at / acting on what Lucas already has open) passes through.
+ * Used by EVERY dispatch path (chat, heartbeat, monologue) so the redirect is uniform.
+ * Returns { browserTags (shared-Chrome only), redirectedOpens (<web-open> for her browser) }.
+ */
+function splitBrowseOpens(parsed) {
+  const browserTags = [], redirectedOpens = [];
+  for (const t of (parsed || [])) {
+    const url = (t && t.tag === 'browse') ? (t.body || (t.attrs && t.attrs.url)) : null;
+    if (url) redirectedOpens.push({ tag: 'web-open', attrs: {}, body: url });
+    else browserTags.push(t);
+  }
+  return { browserTags, redirectedOpens };
+}
+
+/**
  * Dispatch a single parsed tag to its handler. Returns the result for logging
  * or for storing as a reading.
  */
@@ -942,6 +962,7 @@ module.exports = {
   buildActionNudge,
   parseTags,
   stripTags,
+  splitBrowseOpens,
   dispatch,
   setListeners,
   // exported for tests

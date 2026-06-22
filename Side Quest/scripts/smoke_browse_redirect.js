@@ -1,15 +1,23 @@
 /**
- * Backtest — idle-research browser routing. A <browse>URL</browse> (opens in LUCAS's
- * Chrome) emitted during her OWN research is a misfire: splitIdleBrowserTags redirects
- * it to <web-open> (her own browser), while browse-read/click/scroll on his active tab
- * pass through unchanged.
+ * Backtest — WRONG-BROWSER GUARD. A <browse>URL</browse> (opens in LUCAS's Chrome) emitted
+ * for HER OWN work is a misfire: browser.splitBrowseOpens redirects it to <web-open> (her
+ * own browser), while browse-read/click/scroll on his active tab pass through unchanged.
+ * The same canonical helper is used by ALL dispatch paths (chat, heartbeat, monologue) —
+ * monologue.splitIdleBrowserTags must delegate to it so the redirect is uniform everywhere.
  */
 const { splitIdleBrowserTags } = require('../lib/monologue');
 const browserLib = require('../lib/browser');
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}`); } };
 
-console.log('Backtest — idle browse-open redirect\n');
+console.log('Backtest — wrong-browser guard (browse-open redirect)\n');
+
+console.log('canonical helper lives in browser.js + monologue delegates to it:');
+ok('browser.splitBrowseOpens is exported', typeof browserLib.splitBrowseOpens === 'function');
+const canon = browserLib.splitBrowseOpens(browserLib.parseTags('<browse>https://example.com</browse> <browse-read/>'));
+const deleg = splitIdleBrowserTags(browserLib.parseTags('<browse>https://example.com</browse> <browse-read/>'));
+ok('monologue.splitIdleBrowserTags delegates (identical result)', JSON.stringify(canon) === JSON.stringify(deleg));
+console.log('');
 
 // browse-OPEN of a URL → redirected to her own browser as web-open
 let r = splitIdleBrowserTags(browserLib.parseTags('<browse>https://substack.com</browse>'));

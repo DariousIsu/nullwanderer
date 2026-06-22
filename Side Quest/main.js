@@ -1098,14 +1098,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   }
 
   // Parse browser + file tags from BOTH thought and say BEFORE stripping
-  const browserTagsToRun = [
-    ...browserLib.parseTags(thought || ''),
-    ...browserLib.parseTags(say || '')
-  ];
+  // WRONG-BROWSER GUARD: a bare <browse>URL</browse> open is HER OWN web work → route it
+  // to HER browser (<web-open>), not Lucas's shared Chrome. browse-read/click/etc. (glancing
+  // at what he has open) still go to the shared browser. Same split monologue/heartbeat use.
+  const { browserTags: browserTagsToRun, redirectedOpens: browseRedirectedOpens } =
+    browserLib.splitBrowseOpens([
+      ...browserLib.parseTags(thought || ''),
+      ...browserLib.parseTags(say || '')
+    ]);
   const webTagsToRun = [
+    ...browseRedirectedOpens,
     ...webLib.parseTags(thought || ''),
     ...webLib.parseTags(say || '')
   ];
+  if (browseRedirectedOpens.length) console.log(`[main] redirected ${browseRedirectedOpens.length} <browse> open(s) → her own browser (research belongs in her browser, not Lucas's Chrome)`);
   const fileTagsToRun = [
     ...filesLib.parseTags(thought || ''),
     ...filesLib.parseTags(say || '')

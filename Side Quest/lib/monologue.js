@@ -105,13 +105,8 @@ Output ONE short paragraph. Optionally a single <wonder>...</wonder> or a single
 // OPEN becomes a <web-open> in HER own browser; the rest (browse-read/click/scroll on
 // his active tab — legitimately glancing at what he has open) pass through unchanged.
 function splitIdleBrowserTags(parsed) {
-  const browserTags = [], redirectedOpens = [];
-  for (const t of (parsed || [])) {
-    const url = (t && t.tag === 'browse') ? (t.body || (t.attrs && t.attrs.url)) : null;
-    if (url) redirectedOpens.push({ tag: 'web-open', attrs: {}, body: url });
-    else browserTags.push(t);
-  }
-  return { browserTags, redirectedOpens };
+  // Single source of truth in browser.js so chat/heartbeat/monologue redirect identically.
+  return browserLib.splitBrowseOpens(parsed);
 }
 
 function topicSeedOf(text) {
