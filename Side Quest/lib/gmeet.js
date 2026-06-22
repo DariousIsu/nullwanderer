@@ -199,6 +199,15 @@ async function runTick(ctx = {}) {
       return { stage, ok: false, note: `join blocked (${r.blocker.type}) — asked ${ctx.userName || 'Lucas'} to sign in`, blocker: r.blocker.type };
     }
     if (r && r.ok) { _clear(); set('intro'); surface(`I joined the meeting (muted).`, '(gmeet) joined'); return { stage, ok: true, note: 'joined → intro' }; }
+    // HEAL SIGNAL: the join recipe's provisional selectors didn't match the live Meet DOM.
+    // Dump the real pre-join interactive elements so the selectors can be corrected.
+    try {
+      const rd = await d.web.read();
+      if (rd && rd.ok && rd.text) {
+        const ie = rd.text.includes('Interactive elements:') ? rd.text.split('Interactive elements:')[1] : rd.text;
+        console.log('[gmeet] PRE-JOIN DOM (heal signal) ↓\n' + (ie || '').slice(0, 1800));
+      }
+    } catch {}
     const g = _strike();
     return { stage, ok: false, note: `join failed: ${r && r.reason}${g ? ' (gave up)' : ''}` };
   }

@@ -143,7 +143,11 @@ async function runStep(page, step, vars = {}, ctx = {}) {
   // fill / click / waitFor all need a resolved target
   const target = await resolveTarget(page, step, ctx);
   if (!target) return { ok: false, action, reason: `could not locate target for ${action} (${describe(step.locator)})` };
-  const { loc, healed, byModel } = target;
+  const { healed, byModel } = target;
+  // A step acts on ONE element. Narrow to the first match so a broad selector that
+  // resolves to several elements (common on heavy SPAs like Meet) clicks/fills the
+  // first instead of throwing a Playwright strict-mode violation.
+  const loc = target.loc && target.loc.first ? target.loc.first() : target.loc;
 
   try {
     if (action === 'waitFor') {
