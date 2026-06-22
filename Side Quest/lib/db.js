@@ -371,7 +371,20 @@ const MIGRATIONS = [
   // it) | speculated (she asserted it about herself). Existing rows default to 'speculated' —
   // they were all self-asserted. Injection then ranks grounded self above asserted self, and
   // self-repetition no longer buys influence (the mechanism that entrenched the obsession).
-  `ALTER TABLE self_model ADD COLUMN epistemic TEXT DEFAULT 'speculated'`
+  `ALTER TABLE self_model ADD COLUMN epistemic TEXT DEFAULT 'speculated'`,
+
+  // MEETING TRANSCRIPT (M1): durable, timestamped record of every caption line, so a meeting
+  // chunk can purge from her active context yet remain a queryable, time-anchored transcript.
+  // At meeting end this is the "fully processed transcript" artifact; turns are a view over it
+  // (segmentTurns). Append-only; scoped per meeting via the `meeting` code + ts >= started_at.
+  `CREATE TABLE IF NOT EXISTS meeting_transcript (
+    id INTEGER PRIMARY KEY,
+    meeting TEXT,
+    speaker TEXT,
+    text TEXT NOT NULL,
+    ts INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_meeting_transcript_ts ON meeting_transcript(ts)`
 ];
 
 function init() {
@@ -1253,6 +1266,19 @@ function graphListPendingEntityProposals(limit = 200) { return getDb().prepare("
 function graphListPendingRelationProposals(limit = 200) { return getDb().prepare("SELECT * FROM graph_relation_proposals WHERE status = 'pending' ORDER BY id LIMIT ?").all(limit); }
 function graphSetEntityProposalStatus(id, status) { getDb().prepare('UPDATE graph_entity_proposals SET status = ? WHERE id = ?').run(status, id); }
 function graphSetRelationProposalStatus(id, status) { getDb().prepare('UPDATE graph_relation_proposals SET status = ? WHERE id = ?').run(status, id); }
+// --- meeting transcript (M1) ---
+function insertTranscriptLine({ meeting = null, speaker = null, text, ts = null }) {
+  const t = ts == null ? Date.now() : ts;
+  const info = getDb().prepare('INSERT INTO meeting_transcript (meeting, speaker, text, ts) VALUES (?,?,?,?)').run(meeting, speaker, String(text), t);
+  return { id: info.lastInsertRowid, ts: t };
+}
+function getTranscriptSince(ts, limit = 2000) {
+  return getDb().prepare('SELECT id, meeting, speaker, text, ts FROM meeting_transcript WHERE ts >= ? ORDER BY ts ASC, id ASC LIMIT ?').all(ts || 0, limit);
+}
+function countTranscriptSince(ts) {
+  return getDb().prepare('SELECT COUNT(*) AS n FROM meeting_transcript WHERE ts >= ?').get(ts || 0).n;
+}
+
 function graphCounts() {
   const one = (t) => getDb().prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n;
   return {
@@ -1371,5 +1397,8 @@ module.exports = {
   graphSetEntityProposalStatus,
   graphSetRelationProposalStatus,
   graphCounts,
+  insertTranscriptLine,
+  getTranscriptSince,
+  countTranscriptSince,
   DB_PATH
 };

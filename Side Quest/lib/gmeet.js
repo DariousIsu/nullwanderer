@@ -137,6 +137,27 @@ function parseCaptions(scrapeText) {
   return out;
 }
 
+// Group a sequence of caption/transcript lines into SPEAKER TURNS (consecutive lines from the
+// same speaker = one turn) so the meeting can be processed turn-by-turn. Each turn carries its
+// time span. Pure; tested. rows: [{speaker,text,ts}] → [{speaker,text,startTs,endTs,lines}].
+function segmentTurns(rows) {
+  const out = [];
+  for (const r of (rows || [])) {
+    const speaker = String(r.speaker || '').trim();
+    const text = String(r.text || '').trim();
+    if (!text) continue;
+    const last = out[out.length - 1];
+    if (last && last.speaker === speaker) {
+      last.text += ' ' + text;
+      if (r.ts != null) last.endTs = r.ts;
+      last.lines++;
+    } else {
+      out.push({ speaker, text, startTs: r.ts != null ? r.ts : null, endTs: r.ts != null ? r.ts : null, lines: 1 });
+    }
+  }
+  return out;
+}
+
 // Parse a normalized people-panel scrape (one name per line) into a deduped name list,
 // dropping obvious non-people chrome.
 const NON_PERSON = /^(you|presentation|in this meeting|contributors|search|add people|people|chat|on|off|host)$/i;
@@ -205,6 +226,7 @@ function start(meetUrl) {
   db.setMeta('gmeet_signoff_seen', ''); db.setMeta('gmeet_last_caption_at', '');
   db.setMeta('gmeet_understanding_log', ''); db.setMeta('gmeet_last_recap', '');
   db.setMeta('gmeet_present', '[]'); db.setMeta('gmeet_directives', '[]');
+  db.setMeta('gmeet_started_at', String(Date.now()));   // M1: transcript scope anchor
   _seenCaps = new Set();
   _answered = new Set();
   set('joining');
@@ -606,6 +628,15 @@ async function runTick(ctx = {}) {
     if (fresh.length) {
       const block = fresh.map(c => `${c.speaker}: ${c.text}`).join('\n');
       surface(`Meeting captions:\n${block}`, `(gmeet) ${fresh.length} new caption(s)`);
+      // M1: persist each line to the durable, timestamped transcript so it can purge from her
+      // active context yet remain a queryable record (the end-of-meeting "fully processed
+      // transcript"). Best-effort; the meeting code anchors it.
+      try {
+        const mtg = (db.getMeta('gmeet_url') || '').match(/meet\.google\.com\/([a-z0-9-]+)/i);
+        const code = mtg ? mtg[1] : null;
+        const tline = d.now ? d.now() : Date.now();
+        for (const c of fresh) db.insertTranscriptLine({ meeting: code, speaker: c.speaker, text: c.text, ts: tline });
+      } catch (e) { console.error('[gmeet] transcript persist failed:', e.message); }
       // Accumulate into the pending-synthesis buffer (capped) for the follow-along tick.
       const prev = db.getMeta('gmeet_pending') || '';
       db.setMeta('gmeet_pending', ((prev ? prev + '\n' : '') + block).slice(-4000));
@@ -717,6 +748,6 @@ module.exports = {
   STAGES, get, set, active, start, reset, url, runTick, defaultDeps,
   // pure helpers (tested)
   detectMeetUrl, meetLinkFromEvent, introPrompt, validateIntro, ensureIntro, parseCaptions, parseAttendees,
-  addressesSelf, isSelfSpeaker, selfNames, looksLikeSignOff, extractDirective,
+  addressesSelf, isSelfSpeaker, selfNames, looksLikeSignOff, extractDirective, segmentTurns,
   MEET_URL_RE
 };
