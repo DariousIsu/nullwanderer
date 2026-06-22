@@ -74,6 +74,37 @@ function detectActOnOpenPage(text) {
 const PICK_CHAR_RE = /\b(?:pick|choose|select|find|start|explore|browse|open)\b[^.?!]{0,30}\b(?:characters?|someone|scene|bot|conversation|one to (?:chat|talk|play))\b|\bchat with (?:a |an |one\b|someone|somebody)\b|\bstart (?:a |the )?(?:scene|roleplay|rp)\b/i;
 function detectPickCharacter(text) { return !!text && PICK_CHAR_RE.test(String(text)); }
 
+// "Record a recipe by demonstration" — Lucas wants to walk her through a site once so
+// she captures a reusable flow. Returns { action:'start', task, url, site } to begin, or
+// { action:'stop' } to finish + save, else null. `recording` (is a demonstration live?)
+// broadens the stop phrasing — once recording, a bare "done"/"that's it" means stop.
+const REC_START_RE = /\b(?:record|capture)\b[^.?!]{0,24}\b(?:recipe|flow|steps?|how\s+(?:to|i))\b|\b(?:learn|memori[sz]e|remember)\s+how\s+to\b|\b(?:watch|let me show you)\b[^.?!]{0,12}\b(?:me|how)\b/i;
+const REC_STOP_STRICT = /\b(?:stop|done|finish(?:ed)?|end)\s+(?:the\s+|this\s+)?recording\b|\bsave\s+(?:the\s+|this\s+)?recipe\b/i;
+const REC_STOP_LOOSE = /\b(?:that'?s\s+(?:it|all|the\s+recipe)|i'?m\s+done|we'?re\s+done|finished|all\s+done|stop\s+recording|done\s+recording)\b/i;
+
+function detectRecordCommand(text, recording = false) {
+  if (!text) return null;
+  const t = String(text).trim();
+  // STOP first when a recording is live (so "done" ends it rather than starting a new one).
+  if (recording && (REC_STOP_STRICT.test(t) || REC_STOP_LOOSE.test(t))) return { action: 'stop' };
+  if (!recording && REC_STOP_STRICT.test(t)) return { action: 'stop' };
+
+  if (!REC_START_RE.test(t)) return null;
+  const urlM = t.match(/https?:\/\/\S+/i) || t.match(/\b[a-z0-9-]+\.[a-z]{2,}(?:\/\S*)?\b/i);
+  const url = urlM ? urlM[0] : null;
+  let site = '';
+  if (url) { try { site = new URL(/^https?:/i.test(url) ? url : 'https://' + url).hostname.replace(/^www\./, ''); } catch { site = url; } }
+  // task phrase: "how to <task>", "recipe for <task>", "record <task>" — stop at " on <site>".
+  let task = '';
+  const m = t.match(/\bhow\s+to\s+(.+?)(?:\s+(?:on|at|in|using|via|with)\b|[.?!]|$)/i)
+    || t.match(/\brecipe\s+for\s+(.+?)(?:\s+(?:on|at|in)\b|[.?!]|$)/i)
+    || t.match(/\b(?:record|capture)\s+(?:me\s+|a\s+|the\s+)?(?:recipe\s+for\s+)?(.+?)(?:\s+(?:on|at|in)\b|[.?!]|$)/i);
+  if (m) task = m[1].replace(/\b(?:a|the|this|that)\s+(?:recipe|flow|steps)\b/i, '').replace(/[\s,]+$/, '').trim();
+  // collapse a leftover bare "recipe/flow" task to a generic label
+  if (!task || /^(?:recipe|flow|steps?|this|it)$/i.test(task)) task = 'flow';
+  return { action: 'start', task: task.slice(0, 60), url, site };
+}
+
 // Classify a user message as 'narrow' (a specific factual ask — named bill/entity, a
 // who/what/when question, a quoted phrase) vs 'broad' (open/exploratory/conversational).
 // Drives SCOPED retrieval: narrow → tight, entity-exact, recency-gated (don't flood with
@@ -102,4 +133,4 @@ function classifyQuery(text) {
 const RECALL_RE = /\bwhat did (?:i|we|you) (?:say|tell|mention|discuss|talk about|decide|agree)\b|\bremind me what\b|\bwhat (?:are|were) my\b|\bdo you remember (?:what|when|that|me)\b|\bwhat was (?:my|the|our)\b|\bwhat did we (?:cover|land on)\b/i;
 function isRecallQuery(text) { return !!text && RECALL_RE.test(String(text)); }
 
-module.exports = { detectWebIntent, detectActOnOpenPage, detectPickCharacter, classifyQuery, isRecallQuery, SEARCH_HOME };
+module.exports = { detectWebIntent, detectActOnOpenPage, detectPickCharacter, detectRecordCommand, classifyQuery, isRecallQuery, SEARCH_HOME };

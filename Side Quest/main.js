@@ -529,7 +529,7 @@ function extractUrls(text) {
   return [...new Set(matches)].slice(0, 3);
 }
 
-const { detectWebIntent, detectActOnOpenPage, detectPickCharacter, classifyQuery, isRecallQuery } = require('./lib/intent');
+const { detectWebIntent, detectActOnOpenPage, detectPickCharacter, detectRecordCommand, classifyQuery, isRecallQuery } = require('./lib/intent');
 const preferences = require('./lib/preferences');
 const personal = require('./lib/personal');
 const playSession = require('./lib/play_session');
@@ -581,6 +581,37 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const awayReason = availability.detectAway(userMessage);
     if (awayReason) { availability.setAway(awayReason); console.log(`[main] Lucas marked away ("${awayReason}") — unprompted utterances will stay silent`); }
   } catch (e) { console.error('[main] availability update failed:', e.message); }
+
+  // === RECIPE RECORDER INTERCEPTOR ===
+  // "record how to X on <url>" → open the site + start in-page demonstration capture;
+  // "stop recording" / "save the recipe" → finalize + save. Deterministic (the 24B won't
+  // reliably drive a record session), and placed BEFORE byline/gmeet/web-intent so a
+  // record command isn't misread as "publish a post" or "open a browser".
+  try {
+    const recCmd = detectRecordCommand(userMessage, webLib.isRecording());
+    if (recCmd) {
+      const recUserName = db.getMeta('user_name') || 'Lucas';
+      let resultText;
+      if (recCmd.action === 'start') {
+        const r = await webLib.startRecording({ task: recCmd.task, url: recCmd.url, site: recCmd.site });
+        resultText = r.ok
+          ? `[You just started RECORDING a recipe by demonstration — your browser is open at ${r.url}. Tell ${recUserName} you're watching and ask him to click and type through "${r.task}" once in your browser; you'll remember the steps. When he's finished he'll say "stop recording". One or two sentences, your own voice. You CAN do this — never deny the capability.]`
+          : `[You tried to start recording a recipe but it failed: ${r.reason}. Tell ${recUserName} plainly what went wrong. Do NOT claim you lack the capability — the tool exists, it errored.]`;
+        console.log(`[recorder] demonstration START → task="${recCmd.task}" url=${recCmd.url || recCmd.site || '(current)'} (${r.ok ? 'ok' : 'FAIL ' + r.reason})`);
+      } else {
+        const r = webLib.stopRecording();
+        resultText = r.ok
+          ? `[You just finished recording a recipe ("${r.recipe.task}" on ${r.recipe.site}) — ${r.steps} step${r.steps === 1 ? '' : 's'} captured and saved${r.save && r.save.shadowed ? ' as a review copy (a verified recipe for this already exists)' : ''}. It's provisional until the first real run confirms it. Tell ${recUserName} briefly what you saved, your own voice.]`
+          : `[You tried to stop/save the recording but: ${r.reason}. Tell ${recUserName} plainly.]`;
+        console.log(`[recorder] demonstration STOP → ${r.ok ? 'saved ' + r.steps + ' steps' : 'FAIL ' + r.reason}`);
+      }
+      db.setMeta('last_ai_utterance_at', String(Date.now()));
+      resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
+      try { await fireToolFollowup({ io, channel, sessionId, resultText }); } catch (e) { console.error('[recorder] followup failed:', e.message); }
+      return { ok: true, recording: recCmd.action === 'start', say: null };
+    }
+  } catch (e) { console.error('[recorder] interceptor failed:', e.message); }
+  // === END RECIPE RECORDER INTERCEPTOR ===
 
   // GOOGLE MEET — a meet.google.com link from Lucas means "join this". Start the
   // join → mandatory-intro → observe stepper (advances in the idle loop). The normal

@@ -100,6 +100,33 @@ recipe and returns `{ blocker, atStep }` so the caller can ask Lucas and resume.
 `substack_publish`, `gcal_create_event`, `gdrive_open_doc`. Selectors are best-effort
 until a logged-in run verifies them.
 
+### Recipe recorder — record by demonstration (`lib/recorder.js`)
+Instead of hand-authoring every recipe, she can **learn one by watching a walk-through**.
+The recorder captures a flow into the exact descriptor format above (primary
+`getByRole`/`getByPlaceholder` + the heal-ladder fallback chain), so what it emits replays
+with **zero model inference**. Two capture paths feed one assembly core:
+
+- **Demonstration (Lucas drives).** Say *"record how to X on \<site\>"* → main.js's
+  deterministic **recorder interceptor** opens the site in her browser and installs
+  in-page listeners via `page.addInitScript` + `page.exposeFunction` (the Playwright-native
+  path — **never** `connectOverCDP`+`Runtime.enable`, which would re-light the CDP bot
+  signal patchright suppresses). Click/type through it once; say *"stop recording"* → the
+  recipe is assembled + saved. `web.startRecording()` / `stopRecording()` / `isRecording()`.
+- **Passive (she drives herself).** On `web.open()` of a site with **no** existing recipe,
+  a passive session starts; each of her own successful `click`/`type` actions is captured
+  (`recorder.captureLocator` → descriptor). When she leaves the host (or closes), a flow of
+  **≥2 action steps** is auto-saved as a candidate recipe (`source:"passive"`). Single
+  clicks and already-covered sites are dropped as noise.
+
+**Core (pure, offline-tested):** `computeDescriptor(el)` (self-contained, runs in-page or
+in tests) → `buildDescriptor` (primary + ordered fallbacks) → `eventToStep` → `dedupeSteps`
+(collapses repeated fills; folds a click-induced navigation into the click's `mayNavigate`)
+→ `assembleRecipe` (always `verified:false`). **Safety:** credential fields are never
+baked in — a password / OTP field is recorded as an `optional` `needsHuman` step with the
+value scrubbed; at replay `flow_runner` treats a present sign-in field as a `login` blocker
+and pauses for Lucas. **No-clobber:** `save()` refuses to overwrite a `verified:true`
+recipe, writing `\<stem\>.recorded.json` for review instead.
+
 ---
 
 ## 4. Byline pipeline (`lib/byline.js`)
@@ -177,5 +204,7 @@ Steps 2–3 (grounded contribution from Echo's KB, loopback transcript) ride Ech
 `smoke_blockers` · `smoke_web` · `smoke_browse_redirect` · `smoke_flow_runner` ·
 `smoke_gmeet` ·
 `smoke_recipes` · `smoke_recipes_heavy` (every recipe × success/heal/fail/blocker/vars +
-50× determinism) · `smoke_byline` · `smoke_downtime` · `smoke_play_runtick`.
+50× determinism) · `smoke_recorder` (descriptor computation, build/dedupe/redact/assemble,
+no-clobber save) · `smoke_intent` (incl. `detectRecordCommand`) · `smoke_byline` ·
+`smoke_downtime` · `smoke_play_runtick`.
 Run: `ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron.cmd scripts/<name>.js`

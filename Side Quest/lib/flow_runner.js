@@ -148,6 +148,12 @@ async function runStep(page, step, vars = {}, ctx = {}) {
     if (step.optional) return { ok: true, action, skipped: true };
     return { ok: false, action, reason: `could not locate target for ${action} (${describe(step.locator)})` };
   }
+  // A recorded credential field (needsHuman) that IS present means Lucas isn't signed in
+  // on this profile — pause exactly like a blocker so the caller asks him to log in,
+  // instead of typing a scrubbed/empty value into a password box.
+  if (step.needsHuman) {
+    return { ok: false, action, blocker: { type: 'login', needsHuman: true, reason: 'sign-in field in recorded recipe' } };
+  }
   const { healed, byModel } = target;
   // A step acts on ONE element. Narrow to the first match so a broad selector that
   // resolves to several elements (common on heavy SPAs like Meet) clicks/fills the

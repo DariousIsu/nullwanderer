@@ -22,6 +22,8 @@ const fs = require('fs');
 const db = require('./db');
 const chatWatcher = require('./chat_watcher');
 const blockersLib = require('./blockers');
+const recorder = require('./recorder');
+const recipeStore = require('./recipe_store');
 
 // Her browser is a SECOND system-Chrome instance on its own debug port + profile
 // (NOT Lucas's 9222). We connect over CDP — the same proven path lib/browser.js
@@ -44,6 +46,43 @@ let context = null;   // a Playwright-managed persistent context (her Chrome)
 let page = null;
 let registry = {};    // handle → locator
 let counter = { L: 0, B: 0, I: 0, C: 0 };
+
+// RECIPE RECORDING (lib/recorder.js). `demo` = an explicit record-by-demonstration
+// session Lucas drives (in-page listeners). `passive` = her own successful flow on an
+// uncovered site, captured silently. Only ONE feeds at a time — demonstration wins.
+let demo = null;
+let passive = null;
+
+function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } }
+
+// Finalize the passive session into a candidate recipe IF it's a real multi-step flow on
+// a site we don't already cover. Single clicks / covered sites are dropped as noise.
+function flushPassive() {
+  if (!passive) return;
+  const sess = passive; passive = null;
+  try {
+    if (recorder.actionStepCount(sess) < 2) return;
+    if (recipeStore.find(sess.site, null)) return;   // already have a recipe for this host
+    const recipe = recorder.finalize(sess);
+    const res = recorder.save(recipe);
+    if (res.ok) console.log(`[recorder] passive recipe saved: ${res.stem} (${recipe.steps.length} steps, site ${recipe.site})`);
+  } catch (e) { console.error('[recorder] flushPassive failed:', e.message); }
+}
+
+// On navigation, rotate the passive session: if we crossed to a new host, flush the old
+// one and (when the new host is uncovered and no demonstration is running) start a fresh
+// passive capture. The initial navigate is recorded as the recipe's open step.
+function rotatePassive(url) {
+  if (demo) return;                                  // demonstration takes the wheel
+  const host = hostOf(url);
+  if (!host) return;
+  if (passive && passive.site !== host) flushPassive();
+  if (!passive) {
+    if (recipeStore.find(host, null)) return;        // covered → nothing to learn
+    passive = recorder.newSession({ site: host, task: 'flow', source: 'passive' });
+  }
+  recorder.pushNavigate(passive, url, Date.now());
+}
 
 function findChrome() { for (const p of CHROME_PATHS) { try { if (fs.existsSync(p)) return p; } catch {} } return null; }
 
@@ -179,6 +218,7 @@ async function open(target) {
     const p = await ensure();
     const resp = await p.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
     registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
+    try { rotatePassive(p.url()); } catch {}   // passive recipe capture on uncovered sites
     const result = { ok: true, url: p.url(), title: await p.title().catch(() => '') };
     // BLOCKER CHECK — did this land on a sign-in wall / CAPTCHA / Cloudflare / paywall?
     // If so, flag it so the caller asks Lucas for help instead of her flailing. She has
@@ -274,8 +314,11 @@ async function click(handle) {
   const loc = resolve(handle);
   if (!loc) return { ok: false, reason: `no element ${handle}. Emit <web-read/> first for the handle list.` };
   try {
+    // Snapshot the descriptor BEFORE the click — a navigating click detaches its element.
+    const info = passive && !demo ? await recorder.captureLocator(loc) : null;
     await loc.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
     await loc.click({ timeout: 5000 });
+    if (info) { try { recorder.pushElement(passive, info, 'click', undefined, Date.now()); } catch {} }
     registry = {};
     return { ok: true, target: handle.toUpperCase(), url: page.url() };
   } catch (err) { return { ok: false, reason: `click ${handle} failed: ${err.message}` }; }
@@ -286,7 +329,11 @@ async function type(handle, text) {
   if (!text) return { ok: false, reason: 'no text' };
   const loc = resolve(handle);
   if (!loc) return { ok: false, reason: `no input ${handle}. Emit <web-read/> first.` };
-  try { await loc.fill(text, { timeout: 5000 }); return { ok: true, selector: handle.toUpperCase(), text }; }
+  try {
+    await loc.fill(text, { timeout: 5000 });
+    if (passive && !demo) { try { await recorder.recordLocator(passive, loc, 'fill', text); } catch {} }
+    return { ok: true, selector: handle.toUpperCase(), text };
+  }
   catch (err) { return { ok: false, reason: `type into ${handle} failed: ${err.message}` }; }
 }
 
@@ -341,9 +388,42 @@ async function openTopResult() {
 }
 
 async function close() {
+  try { flushPassive(); } catch {}
   try { if (context) await context.close(); } catch {}
   context = null; page = null; registry = {};
   return { ok: true };
+}
+
+// --- record-by-demonstration (Lucas drives) ---
+// Start a demonstration recording: open the target site in HER browser, install the
+// in-page capture listeners, and let Lucas click/type through the flow once. Passive
+// capture is suspended while a demonstration is live (demonstration wins).
+async function startRecording({ site, task, url } = {}) {
+  try {
+    const p = await ensure();
+    if (passive) { try { passive.active = false; } catch {} passive = null; }   // demonstration takes over
+    if (url) { try { await p.goto(toUrl(url) || url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }); } catch {} }
+    const inferredSite = site || hostOf(p.url());
+    demo = await recorder.startDemonstration(p, { site: inferredSite, task: task || 'flow' });
+    registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
+    return { ok: true, site: inferredSite, task: demo.task, url: (() => { try { return p.url(); } catch { return url || ''; } })() };
+  } catch (err) { return { ok: false, reason: err.message }; }
+}
+
+function isRecording() { return !!(demo && demo.active); }
+
+// Stop the demonstration, assemble + save the recipe. Returns { ok, recipe, save }.
+function stopRecording() {
+  if (!demo) return { ok: false, reason: 'not recording' };
+  try {
+    const recipe = recorder.finalize(demo);
+    demo = null;
+    const steps = (recipe.steps || []).length;
+    if (!steps) return { ok: false, reason: 'nothing was recorded — no steps captured' };
+    const res = recorder.save(recipe);
+    if (res.ok) console.log(`[recorder] demonstration recipe saved: ${res.stem} (${steps} steps, site ${recipe.site})`);
+    return { ok: res.ok, recipe, save: res, steps };
+  } catch (err) { demo = null; return { ok: false, reason: err.message }; }
 }
 
 // Run a declarative recipe (recipes/*.json) against HER browser via the flow runner.
@@ -444,6 +524,7 @@ This types your line, sends it, WAITS for the character's reply to finish, and h
 
 module.exports = {
   isConnected, ensure, open, read, click, type, back, close, openTopResult, scroll, runRecipe,
+  startRecording, stopRecording, isRecording,
   chatSend, chatWatch, chatUnwatch,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR
 };
