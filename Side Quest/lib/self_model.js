@@ -22,6 +22,13 @@ const MODEL = require('./config').model();
 // find a merge candidate; an LLM confirms the actual merge (the Mem0 best practice,
 // same as consolidate.js). PREFILTER deliberately low so paraphrases reach the LLM.
 const PREFILTER_SIM = 0.68;
+// SATURATION (lever 4 — "reward rare, not frequent"): if a new self-statement lands in an
+// already over-represented neighborhood (sum of nearby entries' mentions ≥ this), its
+// reinforcement plateaus — no further importance climb / mention bump, and a new facet of
+// that cluster is added at reduced weight. Stops the reflection→interest→reinforce loop
+// from concentrating her identity into one obsession (the immersive-storytelling blob).
+const SATURATION_MASS = 12;
+const CLUSTER_SIM = 0.70;
 
 const VALID = new Set(['trait', 'value', 'preference', 'taste', 'opinion', 'relationship', 'identity', 'insight']);
 const PERSONALITY = new Set(['preference', 'taste', 'value', 'opinion', 'relationship', 'trait', 'identity']);
@@ -90,15 +97,18 @@ async function record(content, { category = 'insight', importance = 0.6, decideF
   try { emb = await memory.embed(text); } catch (e) { console.error('[self_model] embed failed:', e.message); }
   const embStr = emb ? JSON.stringify(emb) : null;
 
+  let addImportance = importance;
   if (emb) {
-    let best = null, bestSim = 0, slotMatch = null;
+    let best = null, bestSim = 0, slotMatch = null, clusterMass = 0;
     const slot = favoriteSlot(text);
     for (const r of db.getAllSelfModelEmbeddings()) {
       let v; try { v = JSON.parse(r.embedding); } catch { continue; }
       const sim = memory.cosine(emb, v);
       if (sim > bestSim) { bestSim = sim; best = r; }
+      if (sim >= CLUSTER_SIM) clusterMass += (r.mentions || 0) + 1;   // mass of the surrounding theme
       if (slot && !slotMatch && favoriteSlot(r.content) === slot) slotMatch = r;  // same favorite-slot = revision candidate even if cosine is low
     }
+    const saturated = clusterMass >= SATURATION_MASS;
     // Candidate: a close-cosine neighbour, OR (for preferences) the same favorite slot.
     const candidate = (best && bestSim >= PREFILTER_SIM) ? best : slotMatch;
     if (candidate) {
@@ -108,10 +118,14 @@ async function record(content, { category = 'insight', importance = 0.6, decideF
       else verdict = await classify3(text, candidate.content);
 
       if (verdict === 'same') {
-        // Reinforce: keep the richer phrasing, raise importance, bump mentions.
+        // Reinforce — but if the theme is already SATURATED, plateau: keep the richer
+        // phrasing, do NOT climb importance or bump mentions further (diminishing returns).
         const keep = text.length > (candidate.content || '').length ? text : candidate.content;
-        const entry = db.updateSelfModel(candidate.id, { content: keep, embedding: JSON.stringify(emb), importance: Math.max(candidate.importance || 0.6, importance) });
-        return { action: 'update', id: candidate.id, sim: cSim, entry };
+        const entry = saturated
+          ? db.updateSelfModel(candidate.id, { content: keep, embedding: JSON.stringify(emb), bumpMention: false })
+          : db.updateSelfModel(candidate.id, { content: keep, embedding: JSON.stringify(emb), importance: Math.max(candidate.importance || 0.6, importance) });
+        if (saturated) console.log('[self_model] saturated theme — reinforcement plateaued (no climb):', keep.slice(0, 50));
+        return { action: 'update', id: candidate.id, sim: cSim, saturated, entry };
       }
       if (verdict === 'update') {
         // EVOLUTION: the same aspect of her changed → replace the value (same slot,
@@ -123,9 +137,12 @@ async function record(content, { category = 'insight', importance = 0.6, decideF
       }
       // 'different' → fall through to ADD
     }
+    // A genuinely NEW facet that still sits inside a saturated theme → add it, but at
+    // reduced weight so the over-grown cluster doesn't keep gaining injection priority.
+    if (saturated && best && bestSim >= CLUSTER_SIM) { addImportance = importance * 0.7; console.log('[self_model] saturated theme — new facet added at reduced weight:', text.slice(0, 50)); }
   }
 
-  const row = db.insertSelfModel({ category: cat, content: text, embedding: embStr, importance });
+  const row = db.insertSelfModel({ category: cat, content: text, embedding: embStr, importance: addImportance });
   return { action: 'add', id: row.id };
 }
 

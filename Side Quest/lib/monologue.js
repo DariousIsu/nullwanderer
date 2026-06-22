@@ -117,7 +117,7 @@ function topicSeedOf(text) {
   return firstClause.length > 90 ? firstClause.slice(0, 90) + '…' : firstClause;
 }
 
-function buildPrompt({ userName, recentMonologue, recentReadings, recentReflections, recentTurns, heldCommitments, openThreads, randomOlderPairs, feedContext, awareness, protocols, browserBlock }) {
+function buildPrompt({ userName, recentMonologue, recentReadings, recentReflections, recentTurns, heldCommitments, openThreads, randomOlderPairs, feedContext, awareness, protocols, browserBlock, intakeFirst }) {
   let sys = SYSTEM_PROMPT.replaceAll('[user]', userName || 'them');
 
   // BROWSER (when connected): make the between-turn loop browser-aware so she
@@ -207,8 +207,13 @@ function buildPrompt({ userName, recentMonologue, recentReadings, recentReflecti
   }
 
   // Recent readings — actual content (capped) so she has real material to chew on.
+  // INTAKE-FIRST: when something fresh just came in that she hasn't digested, make THAT
+  // the tick — digest real input instead of free-associating from her own prior thoughts
+  // (rebalances the ~3.5:1 think-vs-read ratio that makes the loop feed on itself).
   if (recentReadings && recentReadings.length > 0) {
-    context += `Things you've looked up on your own recently (you may want to think about one):\n`;
+    context += intakeFirst
+      ? `INTAKE FIRST — you just took this in and haven't digested it yet. Make THIS tick about understanding it: what is it actually about, what did you genuinely learn, what's new or surprising in it? Think about the material itself, not your usual themes:\n`
+      : `Things you've looked up on your own recently (you may want to think about one):\n`;
     for (const r of recentReadings.slice(-2)) {
       const text = r.content || '';
       const capped = text.length > 700 ? text.slice(0, 700) + '…' : text;
@@ -838,6 +843,12 @@ async function runOneTick() {
     });
     modeIsThreadReview = true;
   } else {
+    // INTAKE-FIRST (lever 1): if a reading arrived that she hasn't digested yet, make this
+    // tick digest it rather than free-associate — flip the think-heavy ratio toward intake.
+    const freshReadingId = recentReadings.length ? recentReadings[recentReadings.length - 1].id : 0;
+    const lastDigested = parseInt(db.getMeta('monologue_last_digested_reading_id') || '0', 10);
+    const intakeFirst = freshReadingId > lastDigested;
+    if (intakeFirst) db.setMeta('monologue_last_digested_reading_id', String(freshReadingId));
     messages = buildPrompt({
       userName,
       recentMonologue: recentThoughts,
@@ -849,6 +860,7 @@ async function runOneTick() {
       randomOlderPairs: null,  // turned off — was introducing more drift than association
       feedContext,
       awareness,
+      intakeFirst,
       protocols,
       browserBlock
     });
