@@ -203,6 +203,7 @@ function start(meetUrl) {
   db.setMeta('gmeet_left_ticks', '0');
   db.setMeta('gmeet_pending', ''); db.setMeta('gmeet_pending_lines', '0'); db.setMeta('gmeet_pending_since', ''); db.setMeta('gmeet_understanding', '');
   db.setMeta('gmeet_signoff_seen', ''); db.setMeta('gmeet_last_caption_at', '');
+  db.setMeta('gmeet_understanding_log', ''); db.setMeta('gmeet_last_recap', '');
   _seenCaps = new Set();
   _answered = new Set();
   set('joining');
@@ -228,6 +229,9 @@ function defaultDeps() {
     enableCaptions: liveEnableCaptions,
     inMeeting: liveInMeeting,
     leaveMeeting: liveLeaveMeeting,
+    // storeMeeting(recap) → persist the end-of-meeting recap as durable, retrievable knowledge
+    // (so "what did we discuss with Joshua?" recalls it later instead of it ageing out).
+    storeMeeting: async (content) => { try { return await require('./memory').store({ kind: 'meeting', content, source: 'gmeet', importance: 0.75 }); } catch { return null; } },
     preClear: livePreClear,
     postChat: livePostChat,
     // retrieve(query) → grounding rows from her OWN knowledge store (leaf-preference) for
@@ -429,6 +433,40 @@ async function modelAnswerForChat(d, ctx, ask, transcript, knowledge) {
   return out.replace(/<[^>]+>/g, '').replace(/^["']|["']$/g, '').trim().slice(0, 600);
 }
 
+// PROCESS THE MEETING (end-of-meeting synthesis): she captured the whole call live, but
+// the raw captions + running understandings are TRANSIENT monologue rows that age out — so
+// without this she "sat in" a meeting and kept nothing. modelMeetingRecap turns her running
+// notes into ONE durable recap (what it was about + decisions + action items with owners),
+// which synthesizeMeeting then stores as retrievable knowledge and surfaces. ONE model tick.
+async function modelMeetingRecap(d, ctx, notes) {
+  const u = ctx.userName || 'Lucas';
+  let out = '';
+  try {
+    await d.streamChat({
+      model: d.MODEL,
+      messages: [{ role: 'user', content: `You just sat in on a meeting on ${u}'s behalf and followed it live. Here are your running notes, oldest first:\n\n${String(notes).slice(-5000)}\n\nWrite a tight recap FOR ${u} so none of it is lost:\n- 2–4 sentences on what the meeting was about and what was decided.\n- Then "Action items:" — a short list of concrete follow-ups, each tagged with who owns it (${u} / someone else by name / you). Only items actually discussed; don't invent any.\nBe specific (names, dates, numbers). No preamble, no "the notes say".` }],
+      options: { temperature: 0.4, top_p: 0.9, num_ctx: 8192, num_predict: 320 },
+      onToken: (t) => { out += t; }
+    });
+  } catch { return ''; }
+  return out.replace(/<[^>]+>/g, '').trim().slice(0, 1200);
+}
+
+// Build + store the durable recap from the running-understanding log. Returns the recap text
+// (or '' when nothing substantive was captured — e.g. captions never came through, so there's
+// nothing honest to summarize). Clears the log so a recap can't be double-stored.
+async function synthesizeMeeting(d, ctx) {
+  const notes = (db.getMeta('gmeet_understanding_log') || '').trim()
+    || (db.getMeta('gmeet_understanding') || '').trim();
+  if (notes.length < 40) return '';
+  const recap = await modelMeetingRecap(d, ctx, notes);
+  if (!recap) return '';
+  try { if (d.storeMeeting) await d.storeMeeting(recap); } catch {}
+  db.setMeta('gmeet_last_recap', recap);
+  db.setMeta('gmeet_understanding_log', '');
+  return recap;
+}
+
 // --- orchestrator: advance ONE stage per tick ---
 // ctx: { userName, deps?, onReading(content,label), onSurface(text) }
 async function runTick(ctx = {}) {
@@ -496,9 +534,12 @@ async function runTick(ctx = {}) {
       const n = parseInt(db.getMeta('gmeet_left_ticks') || '0', 10) + 1;
       db.setMeta('gmeet_left_ticks', String(n));
       if (n >= 2) {
-        db.setMeta('gmeet_left_ticks', '0'); set('done');
+        db.setMeta('gmeet_left_ticks', '0');
+        const recap = await synthesizeMeeting(d, ctx).catch(() => '');
+        set('done');
         surface(`The meeting ended — I've left and I'm back to my own time.`, '(gmeet) meeting ended');
-        return { stage, ok: true, note: 'meeting ended → done (left detection)' };
+        if (recap) surface(`Here's what I took from the meeting — ${recap}`, '(gmeet) meeting recap');
+        return { stage, ok: true, note: `meeting ended → done (left detection)${recap ? ' + recap' : ''}` };
       }
       return { stage, ok: true, note: `not in meeting (${n}/2) — will end if it persists` };
     }
@@ -537,10 +578,12 @@ async function runTick(ctx = {}) {
         || looksLikeSignOff(db.getMeta('gmeet_understanding') || '');
       if (signoff && lastCap > 0 && (tNow - lastCap) >= LEAVE_SILENCE_MS) {
         const lv = await d.leaveMeeting(d.web).catch(() => ({ ok: false }));
+        const recap = await synthesizeMeeting(d, ctx).catch(() => '');
         db.setMeta('gmeet_signoff_seen', ''); db.setMeta('gmeet_last_caption_at', ''); db.setMeta('gmeet_left_ticks', '0');
         set('done');
         surface(`The meeting wrapped up, so I left the call — I'm back to my own time.`, '(gmeet) left after sign-off');
-        return { stage, ok: true, note: `sign-off + ${Math.round((tNow - lastCap) / 1000)}s quiet → left call → done${lv && lv.ok ? '' : ' (leave click unconfirmed)'}` };
+        if (recap) surface(`Here's what I took from the meeting — ${recap}`, '(gmeet) meeting recap');
+        return { stage, ok: true, note: `sign-off + ${Math.round((tNow - lastCap) / 1000)}s quiet → left call → done${recap ? ' + recap' : ''}${lv && lv.ok ? '' : ' (leave click unconfirmed)'}` };
       }
     }
     // ADDRESSED TO HER (active participation): if a fresh caption directly addresses Zoe
@@ -587,6 +630,11 @@ async function runTick(ctx = {}) {
       const understanding = await modelFollowAlong(d, ctx, transcript);
       if (understanding) {
         db.setMeta('gmeet_understanding', understanding);   // latest running understanding (for her context / recall)
+        // Accumulate every running understanding into a bounded log — this compact sequence
+        // is the input the end-of-meeting recap synthesizes from (raw captions are too big /
+        // get cleared; the understandings are already distilled).
+        const log = db.getMeta('gmeet_understanding_log') || '';
+        db.setMeta('gmeet_understanding_log', ((log ? log + '\n' : '') + understanding).slice(-6000));
         surface(`I'm following the meeting — ${understanding}`, '(gmeet) following along');
         return { stage, ok: true, note: `followed along (${pendLines} line${pendLines === 1 ? '' : 's'}${stale ? ', stale-flush' : ''} → understanding)` };
       }
