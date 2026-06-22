@@ -204,6 +204,7 @@ function start(meetUrl) {
   db.setMeta('gmeet_pending', ''); db.setMeta('gmeet_pending_lines', '0'); db.setMeta('gmeet_pending_since', ''); db.setMeta('gmeet_understanding', '');
   db.setMeta('gmeet_signoff_seen', ''); db.setMeta('gmeet_last_caption_at', '');
   db.setMeta('gmeet_understanding_log', ''); db.setMeta('gmeet_last_recap', '');
+  db.setMeta('gmeet_present', '[]');
   _seenCaps = new Set();
   _answered = new Set();
   set('joining');
@@ -456,6 +457,19 @@ async function modelMeetingRecap(d, ctx, notes) {
 // (or '' when nothing substantive was captured — e.g. captions never came through, so there's
 // nothing honest to summarize). Clears the log so a recap can't be double-stored.
 async function synthesizeMeeting(d, ctx) {
+  // ATTENDANCE (phase 4): record who was actually present as grounded episodic memory, and
+  // reconcile any expected-attendee anticipations against it (expected-capture rides on the
+  // calendar source — parked; present alone still grounds "who was in that meeting"). Runs
+  // independent of the recap so even a sparse meeting grounds its attendance.
+  try {
+    const present = JSON.parse(db.getMeta('gmeet_present') || '[]');
+    if (present.length) {
+      const url = db.getMeta('gmeet_url') || '';
+      const code = (url.match(/meet\.google\.com\/([a-z0-9-]+)/i) || [])[1] || '';
+      require('./graph_memory').reconcileAttendance({ meeting: code ? `Google Meet ${code}` : 'a Google Meet', present, expected: [] });
+    }
+  } catch (e) { console.error('[gmeet] attendance reconcile failed:', e.message); }
+
   const notes = (db.getMeta('gmeet_understanding_log') || '').trim()
     || (db.getMeta('gmeet_understanding') || '').trim();
   if (notes.length < 40) return '';
@@ -563,6 +577,14 @@ async function runTick(ctx = {}) {
       db.setMeta('gmeet_pending', ((prev ? prev + '\n' : '') + block).slice(-4000));
       db.setMeta('gmeet_pending_lines', String(parseInt(db.getMeta('gmeet_pending_lines') || '0', 10) + fresh.length));
       if (!db.getMeta('gmeet_pending_since')) db.setMeta('gmeet_pending_since', String(d.now ? d.now() : Date.now()));
+      // PRESENT (phase 4): accumulate distinct human speakers so end-of-meeting attendance is
+      // grounded episodic memory (who was actually there), reconcilable against who was expected.
+      try {
+        const sn = selfNames();
+        const present = new Set(JSON.parse(db.getMeta('gmeet_present') || '[]'));
+        for (const c of fresh) { if (c.speaker && !isSelfSpeaker(c.speaker, sn)) present.add(c.speaker.trim()); }
+        db.setMeta('gmeet_present', JSON.stringify(Array.from(present).slice(0, 50)));
+      } catch {}
     }
     // END-OF-MEETING: note a sign-off cue when one lands; then, once the call goes quiet for
     // LEAVE_SILENCE_MS, she HANGS UP herself (Leave call in HER browser) and ends the stage —

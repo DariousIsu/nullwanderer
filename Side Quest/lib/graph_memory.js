@@ -172,6 +172,37 @@ function topFacts({ limit = 12, includeUnconfirmed = true } = {}) {
   return ents;
 }
 
+// EPISODIC RECONCILIATION (phase 4) — close the Madeline loop. A meeting is a witnessed
+// event; people who actually spoke ATTENDED it (witnessed). For anyone who was EXPECTED
+// (an anticipated edge, because someone said they'd be there), reconcile against who was
+// actually present: present → confirmed; absent → refuted + superseded, so "Madeline was
+// expected" stops being a live fact she can free-associate once she didn't show.
+// `present` = caption speakers; `expected` = names from pre-meeting context (when available).
+function reconcileAttendance({ meeting, expected = [], present = [], proposedBy = 'gmeet' } = {}) {
+  const mName = String(meeting || '').trim();
+  if (!mName) return { ok: false, reason: 'need a meeting name' };
+  recordEntity({ name: mName, type: 'meeting', epistemic: 'witnessed', proposedBy });
+  const presentKeys = new Set(present.map((p) => normalizeName(p)).filter(Boolean));
+  const out = { ok: true, meeting: mName, attended: [], confirmed: [], absent: [] };
+
+  for (const p of present) {
+    const pn = String(p || '').trim();
+    if (!pn) continue;
+    recordEntity({ name: pn, type: 'person', epistemic: 'witnessed', proposedBy });
+    recordRelation({ source: pn, target: mName, type: 'ATTENDED', epistemic: 'witnessed', proposedBy });
+    out.attended.push(pn);
+  }
+  for (const e of expected) {
+    const en = String(e || '').trim();
+    if (!en) continue;
+    const rel = recordRelation({ source: en, target: mName, type: 'EXPECTED_ATTENDEE', epistemic: 'anticipated', proposedBy });
+    const here = presentKeys.has(normalizeName(en));
+    if (rel.relationId) reconcileRelation(rel.relationId, here);
+    (here ? out.confirmed : out.absent).push(en);
+  }
+  return out;
+}
+
 // Epistemic-ranked facts block for prompt injection (phase 3). ONLY grounded canonical
 // facts — speculated never reaches here (it's in the proposal queue, not the graph) and
 // refuted items (confirmed=0, e.g. Madeline-didn't-show) are dropped — so the idle loop
@@ -191,6 +222,6 @@ module.exports = {
   TRUST, GROUNDED, normalizeName, isEpistemic, trust,
   recordEntity, recordRelation,
   promoteEntityProposal, promoteRelationProposal, rejectEntityProposal, rejectRelationProposal,
-  reconcileRelation, reconcileEntity,
+  reconcileRelation, reconcileEntity, reconcileAttendance,
   getEntity, neighbors, counts, topFacts, attachSource, factsForPrompt,
 };
