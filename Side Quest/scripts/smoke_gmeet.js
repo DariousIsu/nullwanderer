@@ -181,12 +181,35 @@ function mockDeps(over = {}) {
   ok('posted intro carries name + disclosure despite model omission', m2.calls.posts.length === 1 && g.validateIntro(m2.calls.posts[0]).ok && /Zoe/.test(m2.calls.posts[0]));
   g.reset();
 
-  console.log('\njoin blocked → asks Lucas to sign in:');
+  console.log('\njoin blocked → asks Lucas to sign in (only a REAL login wall):');
   g.start(URL1);
   const m3 = mockDeps({ joinResult: { ok: false, blocker: { type: 'login', needsHuman: true } } });
   let asked = null;
   r = await g.runTick({ userName: 'Lucas', deps: m3.deps, onSurface: (t) => { asked = t; } });
-  ok('blocked join stays joining + asks to sign in', !r.ok && r.blocker === 'login' && g.get() === 'joining' && /log me into|sign(ed)? (me )?in/i.test(asked || ''));
+  ok('login wall stays joining + asks to sign in', !r.ok && r.blocker === 'login' && g.get() === 'joining' && /log me into|sign(ed)? (me )?in/i.test(asked || ''));
+  g.reset();
+
+  console.log('\nMeet pre-join FALSE blocker (captcha/paywall) does NOT cry "sign me in":');
+  g.start(URL1);
+  const mFalse = mockDeps({ joinResult: { ok: false, blocker: { type: 'captcha', needsHuman: true } }, inMeeting: true });
+  let asked3 = null;
+  const fr2 = await g.runTick({ userName: 'Lucas', deps: mFalse.deps, onSurface: (t) => { asked3 = t; } });
+  ok('captcha false-positive ignored → joins via in-meeting truth', fr2.ok && g.get() === 'intro');
+  ok('no spurious "sign me in" surfaced', asked3 === null);
+  g.reset();
+
+  console.log('\npull-up-information seam: thin knowledge → web lookup grounds the reply:');
+  g.start(URL1); g.set('observing');
+  let webAsked = '';
+  const mWeb = mockDeps({
+    captionsRef: { text: 'Bob: Zoe, what was the final vote count on the appropriations bill?' },
+    streamChat: async ({ onToken }) => onToken('The bill passed 218–210; sharing the roll call now.'),
+  });
+  mWeb.deps.retrieve = async () => [];                                  // her own knowledge is thin
+  mWeb.deps.webLookup = async (q) => { webAsked = q; return '- Roll call: appropriations bill passed 218-210.'; };
+  const wr = await g.runTick({ userName: 'Lucas', deps: mWeb.deps });
+  ok('she goes and fetches when knowledge is thin', /appropriations bill/i.test(webAsked));
+  ok('the fetched answer is posted to chat', wr.ok && mWeb.calls.posts.length === 1 && /218/.test(mWeb.calls.posts[0]));
   g.reset();
 
   console.log('\nrecipes present + structured:');

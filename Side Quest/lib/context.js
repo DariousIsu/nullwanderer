@@ -330,6 +330,19 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
   // pathways work (direct counter to capability-denial). Ages out within 12h.
   let selfCheckLine = null;
   try { selfCheckLine = require('./self_check').awarenessLine(); } catch {}
+  // Live-meeting line — when she's in a Google Meet, surface her running understanding so a
+  // desktop-chat question ("what's happening in the meeting?") is answered from what she's
+  // actually following, not a deflection. Only while a meeting is active.
+  let gmeetLine = null;
+  try {
+    const gm = require('./gmeet');
+    if (gm.active()) {
+      const u = (require('./db').getMeta('gmeet_understanding') || '').trim();
+      gmeetLine = u
+        ? `You are RIGHT NOW in a live Google Meet (observing, and you can reply in its chat). What you're following so far: ${u}`
+        : `You are RIGHT NOW in a live Google Meet — you've joined and are starting to follow it.`;
+    }
+  } catch {}
 
   const lines = [
     `AWARENESS — facts about right now (do not paraphrase as poetic atmosphere; these are concrete):`,
@@ -338,6 +351,7 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
     `• Across all sessions so far, you've existed for about ${totalAge} of conversation time.`,
     downtimeLine ? `• ${downtimeLine}` : null,
     selfCheckLine ? `• ${selfCheckLine}` : null,
+    gmeetLine ? `• ${gmeetLine}` : null,
     chosenName ? `• You go by ${chosenName}. This is the name you chose for yourself. Use it when self-referring.` : null,
     ``,
     `WHAT YOU ARE — a factual description of your own architecture, so you don't fabricate when asked:`,

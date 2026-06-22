@@ -218,9 +218,16 @@ function defaultDeps() {
     inMeeting: liveInMeeting,
     preClear: livePreClear,
     postChat: livePostChat,
-    // retrieve(query) → grounding rows for answering a question addressed to her in-meeting.
-    // Her own knowledge store (leaf-preference); web/Echo grounding can layer on later.
-    retrieve: async (q) => { try { return await require('./memory').retrieve(q, { k: 3, preferLeaf: true }); } catch { return []; } }
+    // retrieve(query) → grounding rows from her OWN knowledge store (leaf-preference) for
+    // answering a question addressed to her in-meeting.
+    retrieve: async (q) => { try { return await require('./memory').retrieve(q, { k: 3, preferLeaf: true }); } catch { return []; } },
+    // webLookup(query) → a quick web search when her own knowledge is thin, so "pull up
+    // information" actually FETCHES instead of just promising to follow up (Step-3 seam).
+    // Echo-grounded retrieval can layer onto this same hook later.
+    webLookup: async (q) => {
+      try { const { results } = await require('./web_search').search(q); return (results || []).slice(0, 4).map(r => `- ${r.title}${r.snippet ? ': ' + r.snippet : ''}`).join('\n'); }
+      catch { return ''; }
+    }
   };
 }
 
@@ -400,9 +407,13 @@ async function runTick(ctx = {}) {
   if (stage === 'joining') {
     await d.preClear(d.web).catch(() => {});   // dismiss the device-permission modal that covers Join now
     const r = await d.web.runRecipe('gmeet_join', { url: url() }, { expectLogin: true });
-    if (r && r.blocker && r.blocker.needsHuman) {
-      try { ctx.onSurface && ctx.onSurface(`I'm trying to join the meeting but Google wants me signed in (${r.blocker.type}). ${ctx.userName || 'Lucas'}, can you log me into my Google account? I'll join as soon as it's clear.`); } catch {}
-      return { stage, ok: false, note: `join blocked (${r.blocker.type}) — asked ${ctx.userName || 'Lucas'} to sign in`, blocker: r.blocker.type };
+    // Only a genuine SIGN-IN wall needs Lucas. Meet's pre-join screen trips the generic
+    // captcha/paywall heuristics (a "your name" field, camera-permission copy) — those are
+    // FALSE POSITIVES here, so we ignore them and let the in-meeting source-of-truth below
+    // decide. Otherwise she'd spuriously ask Lucas to "sign me in" on a perfectly normal join.
+    if (r && r.blocker && r.blocker.needsHuman && r.blocker.type === 'login') {
+      try { ctx.onSurface && ctx.onSurface(`I'm trying to join the meeting but Google wants me signed in. ${ctx.userName || 'Lucas'}, can you log me into my Google account? I'll join as soon as it's clear.`); } catch {}
+      return { stage, ok: false, note: `join blocked (login) — asked ${ctx.userName || 'Lucas'} to sign in`, blocker: 'login' };
     }
     // SOURCE OF TRUTH: am I actually in the meeting? Lucas may have joined me manually, or
     // the recipe partially worked. If so, proceed regardless of the recipe's result — and
@@ -493,6 +504,12 @@ async function runTick(ctx = {}) {
         if (_answered.size > 200) _answered = new Set(Array.from(_answered).slice(-100));
         let knowledge = '';
         try { const rows = d.retrieve ? await d.retrieve(ask.text) : []; knowledge = (rows || []).map(r => `- ${(r.content || '').slice(0, 220)}`).join('\n'); } catch {}
+        // Step-3 seam: if her own knowledge is thin AND it's an info request, actually GO
+        // FETCH (web search) and ground the answer in it — "pull up information", not "I'll
+        // look into it later".
+        if ((!knowledge || knowledge.length < 40) && d.webLookup && /\?|\b(what|who|when|where|how|which|latest|status|update|pull up|look up|find|number|figure|data|recent)\b/i.test(ask.text)) {
+          try { const web = await d.webLookup(ask.text); if (web) knowledge = (knowledge ? knowledge + '\n' : '') + `From a quick web search:\n${web}`; } catch {}
+        }
         const transcript = db.getMeta('gmeet_pending') || db.getMeta('gmeet_understanding') || `${ask.speaker}: ${ask.text}`;
         const reply = await modelAnswerForChat(d, ctx, ask, transcript, knowledge);
         if (reply) {
