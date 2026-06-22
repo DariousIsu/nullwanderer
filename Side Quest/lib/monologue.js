@@ -608,6 +608,13 @@ function bumpReflectionAccum(n) {
 async function runOneTick() {
   tickCounter++;
   const userName = db.getMeta('user_name') || 'them';
+
+  // CAPABILITY SELF-CHECK — a cheap, model-free Tier-1 sweep of her own pathways, at most
+  // once per ~6h (self_check.due() throttles). Greens stay silent; a RED surfaces a reading
+  // + a deduped gap. Grounds her self-knowledge so she stops denying capabilities she has.
+  // Runs before any work mode since it neither calls the model nor blocks.
+  try { const selfCheck = require('./self_check'); if (selfCheck.due()) selfCheck.run(); } catch (e) { console.error('[self-check] tick run failed:', e.message); }
+
   // Split monologue into thoughts (used for anti-loop seeds) and readings (used as material).
   const recentThoughts = db.getRecentMonologueByType('thought', RECENT_MONOLOGUE_WINDOW);
   const recentReadings = db.getRecentMonologueByType('reading', 2);

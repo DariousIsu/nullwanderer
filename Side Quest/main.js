@@ -125,6 +125,13 @@ app.whenReady().then(() => {
     if (dt) console.log(`[main] downtime: offline ~${downtimeLib.formatGap(dt.ms)}${dt.graceful ? '' : ' (unclean stop)'}`);
     downtimeLib.startHeartbeat();
   } catch (e) { console.error('[main] downtime init failed:', e.message); }
+  // Capability self-check at boot — a cheap model-free sweep so there's always a fresh
+  // ledger grounding her self-knowledge (and a RED surfaces immediately if a pathway
+  // drifted across the restart). Throttled thereafter by the idle loop (~6h).
+  try {
+    const sc = require('./lib/self_check');
+    if (sc.due()) { const l = sc.run(); console.log(`[main] capability self-check: ${l.green}/${l.total} green${l.allGreen ? '' : ' — RED: ' + l.red.map(r => r.name).join(', ')}`); }
+  } catch (e) { console.error('[main] self-check at boot failed:', e.message); }
   createWindow();
 
   // Warm the single Dans-24B model at boot. One model now serves both chat and

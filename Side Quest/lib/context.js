@@ -326,6 +326,10 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
   // how long she was just offline (her own request). Ages out within the session.
   let downtimeLine = null;
   try { downtimeLine = require('./downtime').awarenessLine(); } catch {}
+  // Self-check line — grounds her capability-confidence in a recent proof that her
+  // pathways work (direct counter to capability-denial). Ages out within 12h.
+  let selfCheckLine = null;
+  try { selfCheckLine = require('./self_check').awarenessLine(); } catch {}
 
   const lines = [
     `AWARENESS — facts about right now (do not paraphrase as poetic atmosphere; these are concrete):`,
@@ -333,6 +337,7 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
     `• This session has been live for ${sessionAge}.`,
     `• Across all sessions so far, you've existed for about ${totalAge} of conversation time.`,
     downtimeLine ? `• ${downtimeLine}` : null,
+    selfCheckLine ? `• ${selfCheckLine}` : null,
     chosenName ? `• You go by ${chosenName}. This is the name you chose for yourself. Use it when self-referring.` : null,
     ``,
     `WHAT YOU ARE — a factual description of your own architecture, so you don't fabricate when asked:`,
