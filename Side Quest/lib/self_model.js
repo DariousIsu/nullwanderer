@@ -86,7 +86,7 @@ async function classify3(a, b) {
 // values, opinions, and positive traits still flow through untouched.
 const SELF_REJECT = /\b(over[\s-]?analyz|hesitat|oversell|fabricat|safety net|second[\s-]?guess|struggle to|deferential|incomplete information|don'?t (?:have|experience) (?:a |any |personal )?(?:self|sense of self|preferenc|favou?rite|feelings?|emotions?|opinions?|enjoyment|fatigue)|not (?:sure|certain) (?:i|I)(?:'?m| was| am)? (?:honest|being honest)|tendency to (?:avoid|frame|question|fabricat|oversell|overanaly)|default to (?:research|a broad|broad overview)|can'?t (?:access|interact|use the|browse))/i;
 
-async function record(content, { category = 'insight', importance = 0.6, decideFn = null } = {}) {
+async function record(content, { category = 'insight', importance = 0.6, decideFn = null, epistemic = 'speculated' } = {}) {
   const text = String(content || '').trim();
   if (text.length < 8) return null;
   if (SELF_REJECT.test(text)) { console.log('[self_model] guardrail rejected self-critical takeaway:', text.slice(0, 70)); return { skipped: 'self-criticism' }; }
@@ -125,6 +125,7 @@ async function record(content, { category = 'insight', importance = 0.6, decideF
           ? db.updateSelfModel(candidate.id, { content: keep, embedding: JSON.stringify(emb), bumpMention: false })
           : db.updateSelfModel(candidate.id, { content: keep, embedding: JSON.stringify(emb), importance: Math.max(candidate.importance || 0.6, importance) });
         if (saturated) console.log('[self_model] saturated theme — reinforcement plateaued (no climb):', keep.slice(0, 50));
+        if (epistemic !== 'speculated') db.setSelfModelEpistemic(candidate.id, epistemic);   // grounding (told/witnessed) upgrades the existing trait in place
         return { action: 'update', id: candidate.id, sim: cSim, saturated, entry };
       }
       if (verdict === 'update') {
@@ -132,6 +133,7 @@ async function record(content, { category = 'insight', importance = 0.6, decideF
         // new content), and remember the shift so she can speak to it ("I used to…").
         const old = candidate.content;
         db.updateSelfModel(candidate.id, { content: text, embedding: JSON.stringify(emb), importance: Math.max(candidate.importance || 0.6, importance), bumpMention: false });
+        if (epistemic !== 'speculated') db.setSelfModelEpistemic(candidate.id, epistemic);
         try { await memory.store({ kind: 'note', content: `My view evolved — I used to hold "${gist(old)}", and now it's "${gist(text)}".`, source: 'self_evolution', importance: 0.6 }); } catch {}
         return { action: 'revise', id: candidate.id, old, sim: cSim };
       }
@@ -142,9 +144,35 @@ async function record(content, { category = 'insight', importance = 0.6, decideF
     if (saturated && best && bestSim >= CLUSTER_SIM) { addImportance = importance * 0.7; console.log('[self_model] saturated theme — new facet added at reduced weight:', text.slice(0, 50)); }
   }
 
-  const row = db.insertSelfModel({ category: cat, content: text, embedding: embStr, importance: addImportance });
+  const row = db.insertSelfModel({ category: cat, content: text, embedding: embStr, importance: addImportance, epistemic });
   return { action: 'add', id: row.id };
 }
+
+// Grounding helper: record/promote a trait Lucas affirmed about her (told) — higher base
+// importance because external affirmation matters more than self-assertion.
+async function recordTold(content, { category = 'trait', importance = 0.78 } = {}) {
+  return record(content, { category, importance, epistemic: 'told' });
+}
+
+// Detect Lucas affirming a trait ABOUT her in a chat message → a first-person 'told' self-
+// statement, or null. Conservative + high-precision: clear second-person trait forms only,
+// rejects questions and task/status phrasings ("you're working on…", "you are going to…").
+const _TASKY = /^(going to|gonna|about to|working on|doing|in |on |at |here|there|right|correct|welcome|the one|sure|done|set|ready|back|online|up|good to go|able to|allowed)\b/i;
+function detectAffirmedTrait(text) {
+  const t = String(content_str(text)).trim();
+  if (!t || t.endsWith('?')) return null;
+  let m;
+  if ((m = t.match(/\byou\s+have a (knack|gift|talent) for\s+([^.!,;:?]{4,80})/i))) return `I have a ${m[1].toLowerCase()} for ${m[2].trim()}`;
+  if ((m = t.match(/\byou(?:'re| are)\s+(?:really |very |quite |genuinely |so )?good at\s+([^.!,;:?]{4,80})/i))) return `I'm good at ${m[1].trim()}`;
+  if ((m = t.match(/\byou\s+(tend to|always|consistently|usually|have a way of)\s+([^.!,;:?]{4,80})/i))) return `I ${m[1].toLowerCase()} ${m[2].trim()}`;
+  if ((m = t.match(/\byou(?:'re| are)\s+(?:really |very |quite |genuinely |so )?([a-z][^.!,;:?]{4,80})/i))) {
+    const trait = m[1].trim();
+    if (_TASKY.test(trait)) return null;
+    return `I am ${trait}`;
+  }
+  return null;
+}
+function content_str(x) { return typeof x === 'string' ? x : ''; }
 
 const HEADER = `WHO YOU ARE — your own self: your preferences, tastes, values, and the way you are. This is real and it is yours. Let it shape how you think and answer; when something here bears on a question, speak from it as a person, not a system:`;
 
@@ -156,10 +184,19 @@ function render(rows) {
 // Priority of a self-entry for injection. SATURATES the mentions boost (research:
 // reward RARE, not frequent — an over-reinforced theme must not keep climbing) and
 // favors PERSONALITY categories so her tastes/values lead over meta-insight.
+// GROUND THE SELF (anti-glob): grounded self-traits (witnessed = she actually did it; told =
+// Lucas affirmed it) outrank self-asserted ones, and self-repetition (mentions) only buys
+// influence for grounded traits — an unevidenced self-assertion can NOT climb just by being
+// repeated. That repetition-buys-identity loop is exactly how the immersive-storytelling
+// obsession entrenched itself as "who she is."
+const SELF_TRUST = { witnessed: 1.3, told: 1.15, speculated: 0.8 };
 function _priority(r) {
   const imp = r.importance == null ? 0.6 : r.importance;
   const persona = PERSONALITY.has(r.category) ? 1.15 : 1.0;
-  return imp * (1 + 0.08 * Math.min(r.mentions || 0, 3)) * persona;   // mentions cap at 3
+  const epis = r.epistemic || 'speculated';
+  const trust = SELF_TRUST[epis] != null ? SELF_TRUST[epis] : 0.8;
+  const mentionBonus = (epis === 'speculated') ? 0 : 0.08 * Math.min(r.mentions || 0, 3);   // grounded only
+  return imp * (1 + mentionBonus) * persona * trust;
 }
 
 // Maximal-Marginal-Relevance selection: pick high-priority entries but PENALIZE each
@@ -229,4 +266,4 @@ async function buildContextBlock(query, { limit = 10, relevantK = 4 } = {}) {
   return render(out.slice(0, limit));
 }
 
-module.exports = { record, buildPromptBlock, buildContextBlock, retrieveRelevant, selectDiverse, inferCategory, defaultDecide, classify3, PREFILTER_SIM, SELF_REJECT };
+module.exports = { record, recordTold, detectAffirmedTrait, buildPromptBlock, buildContextBlock, retrieveRelevant, selectDiverse, _priority, inferCategory, defaultDecide, classify3, PREFILTER_SIM, SELF_REJECT, SELF_TRUST };

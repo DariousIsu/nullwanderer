@@ -364,7 +364,14 @@ const MIGRATIONS = [
     created_at INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending'
   )`,
-  `CREATE INDEX IF NOT EXISTS idx_graph_rel_prop_status ON graph_relation_proposals(status, created_at)`
+  `CREATE INDEX IF NOT EXISTS idx_graph_rel_prop_status ON graph_relation_proposals(status, created_at)`,
+
+  // GROUND THE SELF (anti-glob): her identity track gets the same epistemic discipline as the
+  // fact graph. epistemic ∈ witnessed (she actually did it repeatedly) | told (Lucas affirmed
+  // it) | speculated (she asserted it about herself). Existing rows default to 'speculated' —
+  // they were all self-asserted. Injection then ranks grounded self above asserted self, and
+  // self-repetition no longer buys influence (the mechanism that entrenched the obsession).
+  `ALTER TABLE self_model ADD COLUMN epistemic TEXT DEFAULT 'speculated'`
 ];
 
 function init() {
@@ -1007,13 +1014,24 @@ function deleteKnowledgeBySource(source) {
 
 // --- Self-model (identity track: who she is) ---
 
-function insertSelfModel({ category = 'insight', content, embedding = null, importance = 0.6 }) {
+function insertSelfModel({ category = 'insight', content, embedding = null, importance = 0.6, epistemic = 'speculated' }) {
   const ts = Date.now();
   const info = getDb()
-    .prepare(`INSERT INTO self_model (category, content, embedding, importance, mentions, created_ts, updated_ts)
-      VALUES (?, ?, ?, ?, 1, ?, ?)`)
-    .run(category, content, embedding, importance, ts, ts);
+    .prepare(`INSERT INTO self_model (category, content, embedding, importance, mentions, created_ts, updated_ts, epistemic)
+      VALUES (?, ?, ?, ?, 1, ?, ?, ?)`)
+    .run(category, content, embedding, importance, ts, ts, epistemic);
   return { id: info.lastInsertRowid, ts };
+}
+
+// Set/upgrade a self-trait's epistemic grounding (e.g. promote speculated → told when Lucas
+// affirms it). Trust only upgrades; never downgrade an evidenced trait back to speculation.
+const SELF_EPIS_RANK = { speculated: 0, told: 1, witnessed: 2 };
+function setSelfModelEpistemic(id, epistemic) {
+  const cur = getDb().prepare('SELECT epistemic FROM self_model WHERE id = ?').get(id);
+  if (!cur) return null;
+  if ((SELF_EPIS_RANK[epistemic] ?? 0) <= (SELF_EPIS_RANK[cur.epistemic] ?? 0) && cur.epistemic) return cur.epistemic;
+  getDb().prepare('UPDATE self_model SET epistemic = ?, updated_ts = ? WHERE id = ?').run(epistemic, Date.now(), id);
+  return epistemic;
 }
 
 // Refine an existing entry in place (consolidation) and bump its mention count.
@@ -1032,13 +1050,13 @@ function updateSelfModel(id, { content = null, embedding = null, importance = nu
 }
 
 function getAllSelfModelEmbeddings() {
-  return getDb().prepare('SELECT id, category, content, embedding, importance, mentions FROM self_model WHERE embedding IS NOT NULL').all();
+  return getDb().prepare('SELECT id, category, content, embedding, importance, mentions, epistemic FROM self_model WHERE embedding IS NOT NULL').all();
 }
 
 // Top entries for the always-injected persona block: weight importance by how often
 // the trait has been reinforced (mentions), then recency.
 function getSelfModelForPrompt(limit = 10) {
-  return getDb().prepare('SELECT category, content, mentions FROM self_model ORDER BY (importance * (1 + 0.1 * mentions)) DESC, updated_ts DESC LIMIT ?').all(limit);
+  return getDb().prepare('SELECT category, content, mentions, epistemic FROM self_model ORDER BY (importance * (1 + 0.1 * mentions)) DESC, updated_ts DESC LIMIT ?').all(limit);
 }
 
 function getAllSelfModel() {
@@ -1312,6 +1330,7 @@ module.exports = {
   deleteKnowledgeBySource,
   insertSelfModel,
   updateSelfModel,
+  setSelfModelEpistemic,
   getAllSelfModelEmbeddings,
   getSelfModelForPrompt,
   getAllSelfModel,

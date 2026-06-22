@@ -1572,6 +1572,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   }).catch(err => console.error('[main] protocols extract failed:', err.message));
 
+  // Background: did Lucas AFFIRM a trait ABOUT her in this message ("you're thoughtful about
+  // sources", "you have a knack for X")? Ground it as a 'told' self-statement so grounded self
+  // outranks self-asserted self (anti-glob: ground the self). Conservative — high-precision only.
+  try {
+    const sm = require('./lib/self_model');
+    const trait = sm.detectAffirmedTrait(userMessage);
+    if (trait) sm.recordTold(trait).then(r => { if (r && r.id) console.log('[main] told-trait grounded:', trait.slice(0, 60)); }).catch(() => {});
+  } catch (e) { console.error('[main] told-trait extract failed:', e.message); }
+
   // Background: extract any committed positions from this response. Don't block.
   extractCommitments({
     userName,
