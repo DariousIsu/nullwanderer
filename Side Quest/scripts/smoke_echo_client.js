@@ -76,6 +76,59 @@ function mockTransport() {
   ok('bare JSON body', echo.parseStreamableBody('application/json', '{"jsonrpc":"2.0","id":2,"result":{"x":1}}').result.x === 1);
   ok('SSE body (last data line)', echo.parseStreamableBody('text/event-stream', 'data: {"result":{"x":1}}\ndata: {"result":{"x":2}}\n').result.x === 2);
 
+  console.log('\nstdio transport (Zoe spawns Echo) — fake child process, no real Echo:');
+  const { EventEmitter } = require('events');
+  function makeFakeProc() {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.writes = [];
+    proc.stdin = { write: (s) => { proc.writes.push(s); if (proc._onWrite) proc._onWrite(s); } };
+    proc.kill = () => { proc.emit('exit', 0); };
+    return proc;
+  }
+  // scripted child: auto-answers each written request line (like Echo would)
+  let scripted;
+  const spawnFn = () => {
+    scripted = makeFakeProc();
+    scripted._onWrite = (s) => {
+      for (const line of s.split('\n')) {
+        if (!line.trim()) continue;
+        let m; try { m = JSON.parse(line); } catch { continue; }
+        if (m.id == null) continue;   // notification — no response
+        let result, error;
+        if (m.method === 'initialize') result = { serverInfo: { name: 'nx-echo' } };
+        else if (m.method === 'tools/list') result = { tools: [{ name: 'search_knowledge' }, { name: 'spawn_agent' }] };
+        else if (m.method === 'tools/call') result = { content: [{ type: 'text', text: 'stdio ok' }] };
+        else error = { code: -32601, message: 'nope' };
+        const resp = JSON.stringify(error ? { jsonrpc: '2.0', id: m.id, error } : { jsonrpc: '2.0', id: m.id, result }) + '\n';
+        setImmediate(() => scripted.stdout.emit('data', Buffer.from(resp)));
+      }
+    };
+    return scripted;
+  };
+  const sc = new echo.EchoClient({ transport: echo.stdioTransport({ spawnFn }) });
+  const sinit = await sc.initialize();
+  ok('stdio: initialize handshake over the child', sinit.serverInfo.name === 'nx-echo');
+  ok('stdio: writes newline-delimited JSON to stdin', scripted.writes[0].endsWith('\n') && JSON.parse(scripted.writes[0].trim()).method === 'initialize');
+  ok('stdio: tools/list over the child', (await sc.listTools()).some(x => x.name === 'spawn_agent'));
+  ok('stdio: tools/call over the child', /stdio ok/.test((await sc.callTool('search_knowledge', { q: 'x' })).content[0].text));
+
+  console.log('\nstdio framing (buffering, id correlation, notifications, timeout):');
+  const proc2 = makeFakeProc();
+  const tr = echo.stdioTransport({ spawnFn: () => proc2, requestTimeoutMs: 200 });
+  const n = await tr.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  ok('notification (no id) returns null immediately', n === null);
+  const p1 = tr.send({ jsonrpc: '2.0', id: 1, method: 'a' });
+  const p2 = tr.send({ jsonrpc: '2.0', id: 2, method: 'b' });
+  proc2.stdout.emit('data', Buffer.from('{"jsonrpc":"2.0","id":2,"result":{"v":2}}\n{"jsonrpc":"2.0","id":1,"resu'));   // out-of-order + split line
+  proc2.stdout.emit('data', Buffer.from('lt":{"v":1}}\n'));
+  const [r1, r2] = await Promise.all([p1, p2]);
+  ok('id correlation + line split across chunks', r1.result.v === 1 && r2.result.v === 2);
+  let timedOut = false;
+  try { await tr.send({ jsonrpc: '2.0', id: 99, method: 'hang' }); } catch (e) { timedOut = /timeout/.test(e.message); }
+  ok('unanswered request times out (does not hang)', timedOut);
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

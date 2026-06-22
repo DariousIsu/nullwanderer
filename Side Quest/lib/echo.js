@@ -58,6 +58,69 @@ function httpTransport({ url, token = null, fetchImpl = (typeof fetch !== 'undef
   };
 }
 
+// stdio transport — Zoe OWNS the suit's process: she spawns `python -m echo.mcp_server`
+// (Echo's default stdio mode) and frames MCP JSON-RPC as newline-delimited messages over
+// the child's stdin/stdout (the MCP stdio contract). No port, no token. `spawnFn` is
+// injectable so the framing can be smoke-tested without launching real Echo.
+function stdioTransport({
+  python = process.env.ECHO_PYTHON || 'python',
+  cwd = process.env.ECHO_CWD || null,
+  moduleName = 'echo.mcp_server',
+  extraArgs = [],
+  env = null,
+  spawnFn = null,
+  requestTimeoutMs = 30000,
+} = {}) {
+  let proc = null;
+  let started = false;
+  let buf = '';
+  const pending = new Map();
+  let nextId = 0;
+
+  function handleLine(line) {
+    if (!line.trim()) return;
+    let msg; try { msg = JSON.parse(line); } catch { return; }   // skip Echo's stdout log noise
+    if (msg.id != null && pending.has(msg.id)) {
+      const p = pending.get(msg.id); pending.delete(msg.id); p.resolve(msg);
+    }
+    // server-initiated notifications/requests are ignored for now (no sampling/roots needed yet)
+  }
+
+  function rejectAll(err) { for (const [, p] of pending) p.reject(err); pending.clear(); }
+
+  function start() {
+    if (started) return;
+    const _spawn = spawnFn || require('child_process').spawn;
+    proc = _spawn(python, ['-m', moduleName, ...extraArgs], {
+      cwd: cwd || undefined, env: env || process.env, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    started = true;
+    proc.stdout.on('data', (d) => {
+      buf += d.toString('utf8');
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1); handleLine(line); }
+    });
+    if (proc.stderr) proc.stderr.on('data', () => { /* Echo logs to stderr; swallow */ });
+    proc.on('exit', (code) => { started = false; proc = null; rejectAll(new Error(`echo stdio exited (code ${code})`)); });
+    proc.on('error', (e) => { started = false; rejectAll(e); });
+  }
+
+  return {
+    kind: 'stdio',
+    start,
+    async send(message) {
+      if (!started) start();
+      proc.stdin.write(JSON.stringify(message) + '\n');
+      if (message.id == null) return null;   // notification — no response expected
+      return new Promise((resolve, reject) => {
+        const to = setTimeout(() => { if (pending.has(message.id)) { pending.delete(message.id); reject(new Error(`echo stdio timeout (id ${message.id})`)); } }, requestTimeoutMs);
+        pending.set(message.id, { resolve: (m) => { clearTimeout(to); resolve(m); }, reject: (e) => { clearTimeout(to); reject(e); } });
+      });
+    },
+    close() { if (proc) { try { proc.kill(); } catch { /* already dead */ } proc = null; started = false; } },
+  };
+}
+
 class EchoClient {
   constructor({ transport, clientName = 'zoe', clientVersion = '1.0.0' } = {}) {
     if (!transport || typeof transport.send !== 'function') throw new Error('EchoClient: a transport with send() is required');
@@ -119,4 +182,19 @@ function fromEnv(overrides = {}) {
   return new EchoClient({ transport: httpTransport({ url, token }), ...overrides });
 }
 
-module.exports = { EchoClient, httpTransport, parseStreamableBody, fromEnv, PROTOCOL_VERSION };
+// The chosen path: Zoe spawns Echo over stdio (she owns the suit's process). cwd/python come
+// from env (ECHO_CWD = the nx-echo repo root, ECHO_PYTHON = its interpreter). Caller calls
+// .initialize() to start the handshake (which lazily spawns the child).
+function spawnEcho(overrides = {}) {
+  const transport = stdioTransport({
+    python: overrides.python || process.env.ECHO_PYTHON || 'python',
+    cwd: overrides.cwd || process.env.ECHO_CWD || null,
+    moduleName: overrides.moduleName || 'echo.mcp_server',
+    extraArgs: overrides.extraArgs || [],
+    env: overrides.env || null,
+    spawnFn: overrides.spawnFn || null,
+  });
+  return new EchoClient({ transport, clientName: overrides.clientName || 'zoe', clientVersion: overrides.clientVersion || '1.0.0' });
+}
+
+module.exports = { EchoClient, httpTransport, stdioTransport, parseStreamableBody, fromEnv, spawnEcho, PROTOCOL_VERSION };
