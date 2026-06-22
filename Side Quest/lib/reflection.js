@@ -4,6 +4,7 @@ const { buildReflectionPrompt } = require('./context');
 const blackboard = require('./blackboard');
 const memoryLib = require('./memory');
 const selfModelLib = require('./self_model');
+const graphMem = require('./graph_memory');
 
 // Generative-Agents significance trigger: reflection fires when enough IMPORTANT
 // thinking has accumulated (sum of thought/reading importance ≥ threshold), not
@@ -52,8 +53,15 @@ async function routeReflection(raw, sourceRows = [], { decideFn = null } = {}) {
     ? [{ type: 'reflection', refTable: 'monologue', refId: refIds[refIds.length - 1] || null, refIds, urls: urls.slice(0, 5), label: 'distilled from recent thoughts/readings' }]
     : null;
 
+  // GROUNDEDNESS (anti-glob phase 2): is this reflection anchored in something EXTERNAL
+  // (a reading she took in / a URL), or distilled purely from her own prior thoughts?
+  // Knowledge from her own thoughts is SPECULATION and must not become a retrievable fact.
+  const hasReading = sourceRows.some(r => r && r.type === 'reading');
+  const grounded = hasReading || urls.length > 0;
+  const lastRefId = refIds.length ? refIds[refIds.length - 1] : null;
+
   const kept = [];
-  let nSelf = 0, nKnow = 0, nSkill = 0;
+  let nSelf = 0, nKnow = 0, nSkill = 0, nSpec = 0;
   let lastKnowledgeId = null;   // the note the source readings get pointed at (Phase 2)
   for (const t of tagged.slice(0, 5)) {
     try {
@@ -65,9 +73,23 @@ async function routeReflection(raw, sourceRows = [], { decideFn = null } = {}) {
         // a developing interest in her identity track (goes through record's revision).
         const r = await selfModelLib.record(t.text, { category: 'preference', importance: 0.72 });
         if (r) { nSelf++; kept.push(`[interest] ${t.text}`); }
+      } else if (!grounded) {
+        // DE-LAUNDER (anti-glob phase 2): a KNOWLEDGE/SKILL takeaway distilled purely from
+        // her OWN thoughts (no external reading/URL this window) is SPECULATION — it must NOT
+        // become a retrievable 0.75 "fact" (that laundering is what grew the obsession). It
+        // queues as a GATED graph proposal instead and only becomes canonical if a real
+        // source later grounds it (graph_memory.promote*). See docs/MEMORY_GROUNDING.md.
+        try {
+          graphMem.recordEntity({
+            name: t.text.slice(0, 120), type: 'claim', summary: t.text,
+            epistemic: 'speculated', proposedBy: 'reflection',
+            source: lastRefId ? { kind: 'own_thought', ref: `monologue:${lastRefId}` } : null
+          });
+        } catch (e) { console.error('[reflection] speculation→proposal failed:', e.message); }
+        nSpec++; kept.push(`[speculation] ${t.text}`);
       } else {
-        // Write-time dedup/merge: a near-duplicate fact/procedure UPDATEs in place or
-        // NOOPs instead of piling up (Mem0). A genuinely new one ADDs.
+        // GROUNDED → a real, externally-anchored fact. Write-time dedup/merge: a near-duplicate
+        // fact/procedure UPDATEs in place or NOOPs instead of piling up (Mem0); a new one ADDs.
         const r = await memoryLib.storeDeduped({
           kind: t.type === 'SKILL' ? 'skill' : 'note',
           content: t.text,
@@ -94,7 +116,7 @@ async function routeReflection(raw, sourceRows = [], { decideFn = null } = {}) {
       if (n) console.log(`[reflection] consolidated ${n} reading(s) → knowledge #${lastKnowledgeId} (demoted from recency)`);
     } catch (e) { console.error('[reflection] consolidate readings failed:', e.message); }
   }
-  return { taggedCount: tagged.length, kept, nSelf, nKnow, nSkill };
+  return { taggedCount: tagged.length, kept, nSelf, nKnow, nSkill, nSpec };
 }
 
 let timer = null;
