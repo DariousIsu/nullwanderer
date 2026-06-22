@@ -29,6 +29,7 @@ const STAGES = ['none', 'joining', 'intro', 'observing', 'done'];
 const MAX_STAGE_STRIKES = 3;
 const FOLLOW_EVERY_LINES = 4;   // synthesize a running understanding after this many new caption lines
 const FOLLOW_MAX_WAIT_MS = 25000;   // ...or after this long with ANY pending lines, so sparse meetings still get understood (don't sit forever short of the line count)
+const LEAVE_SILENCE_MS = 90000;   // after a clear sign-off, if captions go quiet THIS long she hangs up herself (instead of sitting alone in an ended call / improvising a tab-close)
 
 // Captions she's already surfaced this meeting (exact speaker|text), so scrolling/repeat
 // caption rows aren't re-reported each ~10s observe tick. Reset on start(). In-memory:
@@ -112,6 +113,15 @@ function ensureIntro(text, userName) {
   return (t ? `${clause} ${t}` : clause).slice(0, 400);
 }
 
+// Sign-off detector — does this caption/understanding line sound like the meeting is wrapping
+// up? Used (together with a stretch of caption silence) to decide she should hang up on her
+// own. Deliberately broad on closers but anchored to whole words so mid-meeting chatter
+// ("goodbye for now to that idea") rarely trips it; the silence requirement is the real gate.
+const SIGNOFF_RE = /\b(bye|goodbye|see (?:you|ya|everyone|y'?all)|talk (?:to you )?(?:later|soon)|catch (?:you|ya) (?:later|soon)|take care|have a (?:good|great|nice)|thanks?(?: |,)?(?:everyone|all|guys|y'?all|so much)|thank you(?: all| everyone| so much)?|that'?s (?:all|it) (?:for|from)|we'?re (?:all )?done|wrap(?:ping)? (?:this|it|things)? ?up|signing off|see you (?:on )?(?:monday|tuesday|wednesday|thursday|friday|next))\b/i;
+function looksLikeSignOff(text) {
+  return SIGNOFF_RE.test(String(text || ''));
+}
+
 // Parse a normalized caption scrape ("Speaker: text" lines, one per caption) into
 // [{ speaker, text }]. scrapeCaptions() produces this normalized form from the live DOM,
 // so this parser is the stable contract we test against.
@@ -192,6 +202,7 @@ function start(meetUrl) {
   db.setMeta('gmeet_strikes', '0');
   db.setMeta('gmeet_left_ticks', '0');
   db.setMeta('gmeet_pending', ''); db.setMeta('gmeet_pending_lines', '0'); db.setMeta('gmeet_pending_since', ''); db.setMeta('gmeet_understanding', '');
+  db.setMeta('gmeet_signoff_seen', ''); db.setMeta('gmeet_last_caption_at', '');
   _seenCaps = new Set();
   _answered = new Set();
   set('joining');
@@ -216,6 +227,7 @@ function defaultDeps() {
     scrapeCaptions: liveScrapeCaptions,
     enableCaptions: liveEnableCaptions,
     inMeeting: liveInMeeting,
+    leaveMeeting: liveLeaveMeeting,
     preClear: livePreClear,
     postChat: livePostChat,
     // retrieve(query) → grounding rows from her OWN knowledge store (leaf-preference) for
@@ -320,6 +332,26 @@ async function liveInMeeting(web) {
     const inCall = await page.locator('button[aria-label*="Leave call" i], [aria-label*="Leave call" i], [aria-label*="Leave the call" i]').count().catch(() => 0);
     return inCall > 0;
   } catch { return false; }
+}
+
+// LEAVE THE CALL — the correct, deterministic way to leave: click "Leave call" in HER OWN
+// browser (the meeting lives in lib/web.js, never the shared co-pilot Chrome). Fallback:
+// navigate her Meet tab to about:blank — NOT context.close() (too blunt) and NEVER a
+// browse-close against Lucas's shared browser (the bug that killed his active tab). Idempotent.
+async function liveLeaveMeeting(web) {
+  try {
+    const page = await web.ensure();
+    try { await page.mouse.move(500, 700); } catch {}   // surface the auto-hiding control bar
+    const btn = page.locator('button[aria-label*="Leave call" i], [role="button"][aria-label*="Leave call" i], [aria-label*="Leave the call" i]').first();
+    if (await btn.count().catch(() => 0)) {
+      await btn.click({ timeout: 3000 }).catch(() => {});
+      await page.waitForTimeout(800).catch(() => {});
+    }
+    // Confirm we're out (Leave-call control gone). If still in-call, navigate HER tab away.
+    const still = await page.locator('button[aria-label*="Leave call" i], [aria-label*="Leave call" i]').count().catch(() => 0);
+    if (still > 0) { try { await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 5000 }); } catch {} }
+    return { ok: true, via: still > 0 ? 'navigate-away' : 'leave-button' };
+  } catch (e) { return { ok: false, reason: e.message }; }
 }
 
 // Clear the "Do you want people to hear you in the meeting?" device-permission modal that
@@ -448,6 +480,7 @@ async function runTick(ctx = {}) {
       // button fallback. Best-effort: proceed to observing even if unconfirmed.
       try { const cc = await d.enableCaptions(d.web); if (!(cc && cc.ok)) console.log('[gmeet] enable-captions unconfirmed:', cc && (cc.reason || cc.via)); } catch (e) { console.log('[gmeet] enable-captions threw:', e.message); }
       set('observing');
+      db.setMeta('gmeet_last_caption_at', String(d.now ? d.now() : Date.now()));   // start the silence clock so a sign-off-then-quiet leave can fire
       surface(`I introduced myself in the meeting chat: "${intro}"`, '(gmeet) introduced');
       return { stage, ok: true, note: 'posted intro → observing', intro };
     }
@@ -489,6 +522,26 @@ async function runTick(ctx = {}) {
       db.setMeta('gmeet_pending', ((prev ? prev + '\n' : '') + block).slice(-4000));
       db.setMeta('gmeet_pending_lines', String(parseInt(db.getMeta('gmeet_pending_lines') || '0', 10) + fresh.length));
       if (!db.getMeta('gmeet_pending_since')) db.setMeta('gmeet_pending_since', String(d.now ? d.now() : Date.now()));
+    }
+    // END-OF-MEETING: note a sign-off cue when one lands; then, once the call goes quiet for
+    // LEAVE_SILENCE_MS, she HANGS UP herself (Leave call in HER browser) and ends the stage —
+    // instead of sitting forever in an ended call ('observing' never advancing) or improvising
+    // a tab-close that lands on Lucas's shared browser. This is the deterministic "leave".
+    const tNow = d.now ? d.now() : Date.now();
+    if (fresh.length) {
+      db.setMeta('gmeet_last_caption_at', String(tNow));
+      if (fresh.some(c => looksLikeSignOff(c.text))) db.setMeta('gmeet_signoff_seen', '1');
+    } else {
+      const lastCap = parseInt(db.getMeta('gmeet_last_caption_at') || '0', 10);
+      const signoff = db.getMeta('gmeet_signoff_seen') === '1'
+        || looksLikeSignOff(db.getMeta('gmeet_understanding') || '');
+      if (signoff && lastCap > 0 && (tNow - lastCap) >= LEAVE_SILENCE_MS) {
+        const lv = await d.leaveMeeting(d.web).catch(() => ({ ok: false }));
+        db.setMeta('gmeet_signoff_seen', ''); db.setMeta('gmeet_last_caption_at', ''); db.setMeta('gmeet_left_ticks', '0');
+        set('done');
+        surface(`The meeting wrapped up, so I left the call — I'm back to my own time.`, '(gmeet) left after sign-off');
+        return { stage, ok: true, note: `sign-off + ${Math.round((tNow - lastCap) / 1000)}s quiet → left call → done${lv && lv.ok ? '' : ' (leave click unconfirmed)'}` };
+      }
     }
     // ADDRESSED TO HER (active participation): if a fresh caption directly addresses Zoe
     // (anyone may — Lucas's call), she ANSWERS in the meeting chat autonomously. This takes
@@ -549,6 +602,6 @@ module.exports = {
   STAGES, get, set, active, start, reset, url, runTick, defaultDeps,
   // pure helpers (tested)
   detectMeetUrl, meetLinkFromEvent, introPrompt, validateIntro, ensureIntro, parseCaptions, parseAttendees,
-  addressesSelf, isSelfSpeaker, selfNames,
+  addressesSelf, isSelfSpeaker, selfNames, looksLikeSignOff,
   MEET_URL_RE
 };

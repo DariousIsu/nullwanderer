@@ -453,6 +453,18 @@ async function actionClose(tabAttr) {
   if (tabContext.recentTabs.length <= 1) return { ok: false, reason: 'only one tab open — not closing it' };
   const url = page.url();
   const title = await page.title().catch(() => '');
+  // HARD GUARD #1 — never close Lucas's ACTIVE/foreground tab. This is the shared co-pilot
+  // Chrome; the active tab is the one he's using right now. (The "she closed my active shared
+  // tab thinking she left the meeting" failure.)
+  if (tabContext.activeTabUrl && url === tabContext.activeTabUrl) {
+    return { ok: false, reason: "refusing to close the active/foreground tab — that's the tab Lucas is using right now" };
+  }
+  // HARD GUARD #2 — a Google Meet tab in the SHARED browser is never hers to close. Leaving a
+  // meeting happens in HER OWN browser via the gmeet stepper (Leave call), not by closing a
+  // tab here. Closing it cannot "leave the meeting" and only risks nuking Lucas's window.
+  if (/meet\.google\.com\//i.test(url)) {
+    return { ok: false, reason: "that's a Google Meet tab in the shared browser — leaving a meeting is handled in my own browser, not by closing Lucas's tab" };
+  }
   try {
     elementRegistry.delete(page);
     removeTabForPage(page);
