@@ -279,7 +279,92 @@ const MIGRATIONS = [
   `ALTER TABLE knowledge ADD COLUMN level TEXT DEFAULT 'fact'`,
   `ALTER TABLE knowledge ADD COLUMN parent_id INTEGER`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_level ON knowledge(level)`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_parent ON knowledge(parent_id)`
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_parent ON knowledge(parent_id)`,
+
+  // GRAPH MEMORY (anti-glob): Zoe's OWN relational store, modeled on echo/store.py
+  // (entities/relations/sources/source_citations + a propose→promote gate). Self-
+  // contained — never depends on Echo — but written in the SAME structure so it maps
+  // ~1:1 onto Echo's KG for federation. The addition Echo's research-KG doesn't model
+  // is the EPISTEMIC layer: every fact carries how-we-know-it (witnessed|told|read|
+  // speculated|anticipated) + a confirmed flag, so speculation can't masquerade as fact
+  // and an anticipated-but-absent item (the "Madeline was expected" glob) can be
+  // reconciled. entity_type/relation_type are open TEXT (whitelist enforced in code,
+  // like Echo) so the vocab can align with Echo's [graph] config for clean union.
+  // See docs/MEMORY_GROUNDING.md.
+  `CREATE TABLE IF NOT EXISTS graph_entities (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    name_key TEXT NOT NULL UNIQUE,
+    entity_type TEXT NOT NULL,
+    entity_subtype TEXT,
+    summary TEXT,
+    confidence REAL DEFAULT 0.8,
+    epistemic TEXT NOT NULL DEFAULT 'told',
+    confirmed INTEGER,
+    proposed_by TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_graph_entities_type ON graph_entities(entity_type)`,
+  `CREATE INDEX IF NOT EXISTS idx_graph_entities_epis ON graph_entities(epistemic)`,
+  `CREATE TABLE IF NOT EXISTS graph_relations (
+    id INTEGER PRIMARY KEY,
+    source_id INTEGER NOT NULL REFERENCES graph_entities(id) ON DELETE CASCADE,
+    target_id INTEGER NOT NULL REFERENCES graph_entities(id) ON DELETE CASCADE,
+    relation_type TEXT NOT NULL,
+    confidence REAL DEFAULT 0.8,
+    epistemic TEXT NOT NULL DEFAULT 'told',
+    confirmed INTEGER,
+    proposed_by TEXT,
+    created_at INTEGER NOT NULL,
+    valid_from INTEGER,
+    valid_to INTEGER,
+    deleted INTEGER DEFAULT 0,
+    UNIQUE(source_id, target_id, relation_type)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_graph_relations_src ON graph_relations(source_id, relation_type) WHERE deleted = 0`,
+  `CREATE INDEX IF NOT EXISTS idx_graph_relations_tgt ON graph_relations(target_id, relation_type) WHERE deleted = 0`,
+  `CREATE TABLE IF NOT EXISTS graph_sources (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    ref TEXT,
+    excerpt TEXT,
+    fetched_at INTEGER
+  )`,
+  `CREATE TABLE IF NOT EXISTS graph_citations (
+    source_id INTEGER NOT NULL REFERENCES graph_sources(id) ON DELETE CASCADE,
+    fact_kind TEXT NOT NULL,
+    fact_id INTEGER NOT NULL,
+    quoted_text TEXT,
+    PRIMARY KEY (source_id, fact_kind, fact_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS graph_entity_proposals (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_subtype TEXT,
+    summary TEXT,
+    confidence REAL DEFAULT 0.6,
+    epistemic TEXT NOT NULL DEFAULT 'speculated',
+    proposed_by TEXT,
+    source_ref TEXT,
+    created_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_graph_ent_prop_status ON graph_entity_proposals(status, created_at)`,
+  `CREATE TABLE IF NOT EXISTS graph_relation_proposals (
+    id INTEGER PRIMARY KEY,
+    source_name TEXT NOT NULL,
+    target_name TEXT NOT NULL,
+    relation_type TEXT NOT NULL,
+    confidence REAL DEFAULT 0.6,
+    epistemic TEXT NOT NULL DEFAULT 'speculated',
+    proposed_by TEXT,
+    source_ref TEXT,
+    created_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_graph_rel_prop_status ON graph_relation_proposals(status, created_at)`
 ];
 
 function init() {
@@ -1054,6 +1139,110 @@ function setMeta(key, value) {
     .run(key, String(value));
 }
 
+// --- graph memory (anti-glob relational store; see docs/MEMORY_GROUNDING.md) ---
+// Raw table accessors only. The propose→promote gate + epistemic rules + name
+// normalization live in lib/graph_memory.js (semantic logic out of db.js, per house style).
+function graphInsertEntity({ name, nameKey, entityType, entitySubtype = null, summary = null, confidence = 0.8, epistemic = 'told', confirmed = null, proposedBy = null }) {
+  const now = Date.now();
+  const info = getDb().prepare(
+    `INSERT INTO graph_entities (name, name_key, entity_type, entity_subtype, summary, confidence, epistemic, confirmed, proposed_by, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+  ).run(name, nameKey, entityType, entitySubtype, summary, confidence, epistemic, confirmed, proposedBy, now, now);
+  return { id: info.lastInsertRowid, created_at: now };
+}
+function graphGetEntityByKey(nameKey) {
+  return getDb().prepare('SELECT * FROM graph_entities WHERE name_key = ?').get(nameKey) || null;
+}
+function graphGetEntity(id) {
+  return getDb().prepare('SELECT * FROM graph_entities WHERE id = ?').get(id) || null;
+}
+function graphUpdateEntity(id, fields = {}) {
+  const allowed = ['name', 'entity_type', 'entity_subtype', 'summary', 'confidence', 'epistemic', 'confirmed', 'proposed_by'];
+  const sets = [], vals = [];
+  for (const k of allowed) if (k in fields) { sets.push(`${k} = ?`); vals.push(fields[k]); }
+  if (!sets.length) return;
+  sets.push('updated_at = ?'); vals.push(Date.now());
+  vals.push(id);
+  getDb().prepare(`UPDATE graph_entities SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+}
+function graphListEntities({ epistemic = null, limit = 500 } = {}) {
+  return epistemic
+    ? getDb().prepare('SELECT * FROM graph_entities WHERE epistemic = ? ORDER BY id DESC LIMIT ?').all(epistemic, limit)
+    : getDb().prepare('SELECT * FROM graph_entities ORDER BY id DESC LIMIT ?').all(limit);
+}
+function graphInsertRelation({ sourceId, targetId, relationType, confidence = 0.8, epistemic = 'told', confirmed = null, proposedBy = null, validFrom = null }) {
+  const now = Date.now();
+  getDb().prepare(
+    `INSERT INTO graph_relations (source_id, target_id, relation_type, confidence, epistemic, confirmed, proposed_by, created_at, valid_from, valid_to, deleted)
+     VALUES (?,?,?,?,?,?,?,?,?,NULL,0)
+     ON CONFLICT(source_id, target_id, relation_type) DO UPDATE SET
+       confidence = excluded.confidence, epistemic = excluded.epistemic,
+       confirmed = excluded.confirmed, deleted = 0`
+  ).run(sourceId, targetId, relationType, confidence, epistemic, confirmed, proposedBy, now, validFrom == null ? now : validFrom);
+  // lastInsertRowid is unreliable on an upsert-update path — re-read the canonical row.
+  return getDb().prepare('SELECT * FROM graph_relations WHERE source_id = ? AND target_id = ? AND relation_type = ?').get(sourceId, targetId, relationType);
+}
+function graphGetRelation(id) {
+  return getDb().prepare('SELECT * FROM graph_relations WHERE id = ?').get(id) || null;
+}
+function graphNeighbors(entityId, { includeSuperseded = false } = {}) {
+  const q = includeSuperseded
+    ? 'SELECT * FROM graph_relations WHERE (source_id = ? OR target_id = ?) AND deleted = 0 ORDER BY id'
+    : 'SELECT * FROM graph_relations WHERE (source_id = ? OR target_id = ?) AND deleted = 0 AND valid_to IS NULL ORDER BY id';
+  return getDb().prepare(q).all(entityId, entityId);
+}
+function graphSupersedeRelation(id, { confirmed = null, validTo = null } = {}) {
+  getDb().prepare('UPDATE graph_relations SET valid_to = ?, confirmed = COALESCE(?, confirmed) WHERE id = ?')
+    .run(validTo == null ? Date.now() : validTo, confirmed, id);
+}
+function graphSetEntityConfirmed(id, confirmed) {
+  getDb().prepare('UPDATE graph_entities SET confirmed = ?, updated_at = ? WHERE id = ?').run(confirmed, Date.now(), id);
+}
+function graphSetRelationConfirmed(id, confirmed) {
+  getDb().prepare('UPDATE graph_relations SET confirmed = ? WHERE id = ?').run(confirmed, id);
+}
+function graphInsertSource({ kind, ref = null, excerpt = null, fetchedAt = null }) {
+  const info = getDb().prepare('INSERT INTO graph_sources (kind, ref, excerpt, fetched_at) VALUES (?,?,?,?)')
+    .run(kind, ref, excerpt, fetchedAt == null ? Date.now() : fetchedAt);
+  return { id: info.lastInsertRowid };
+}
+function graphInsertCitation({ sourceId, factKind, factId, quotedText = null }) {
+  getDb().prepare('INSERT OR REPLACE INTO graph_citations (source_id, fact_kind, fact_id, quoted_text) VALUES (?,?,?,?)')
+    .run(sourceId, factKind, factId, quotedText);
+}
+function graphCitationsFor(factKind, factId) {
+  return getDb().prepare(
+    `SELECT s.*, c.quoted_text FROM graph_citations c JOIN graph_sources s ON s.id = c.source_id
+     WHERE c.fact_kind = ? AND c.fact_id = ?`).all(factKind, factId);
+}
+function graphInsertEntityProposal({ name, entityType, entitySubtype = null, summary = null, confidence = 0.6, epistemic = 'speculated', proposedBy = null, sourceRef = null }) {
+  const info = getDb().prepare(
+    `INSERT INTO graph_entity_proposals (name, entity_type, entity_subtype, summary, confidence, epistemic, proposed_by, source_ref, created_at, status)
+     VALUES (?,?,?,?,?,?,?,?,?,'pending')`
+  ).run(name, entityType, entitySubtype, summary, confidence, epistemic, proposedBy, sourceRef, Date.now());
+  return { id: info.lastInsertRowid };
+}
+function graphInsertRelationProposal({ sourceName, targetName, relationType, confidence = 0.6, epistemic = 'speculated', proposedBy = null, sourceRef = null }) {
+  const info = getDb().prepare(
+    `INSERT INTO graph_relation_proposals (source_name, target_name, relation_type, confidence, epistemic, proposed_by, source_ref, created_at, status)
+     VALUES (?,?,?,?,?,?,?,?,'pending')`
+  ).run(sourceName, targetName, relationType, confidence, epistemic, proposedBy, sourceRef, Date.now());
+  return { id: info.lastInsertRowid };
+}
+function graphGetEntityProposal(id) { return getDb().prepare('SELECT * FROM graph_entity_proposals WHERE id = ?').get(id) || null; }
+function graphGetRelationProposal(id) { return getDb().prepare('SELECT * FROM graph_relation_proposals WHERE id = ?').get(id) || null; }
+function graphListPendingEntityProposals(limit = 200) { return getDb().prepare("SELECT * FROM graph_entity_proposals WHERE status = 'pending' ORDER BY id LIMIT ?").all(limit); }
+function graphListPendingRelationProposals(limit = 200) { return getDb().prepare("SELECT * FROM graph_relation_proposals WHERE status = 'pending' ORDER BY id LIMIT ?").all(limit); }
+function graphSetEntityProposalStatus(id, status) { getDb().prepare('UPDATE graph_entity_proposals SET status = ? WHERE id = ?').run(status, id); }
+function graphSetRelationProposalStatus(id, status) { getDb().prepare('UPDATE graph_relation_proposals SET status = ? WHERE id = ?').run(status, id); }
+function graphCounts() {
+  const one = (t) => getDb().prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n;
+  return {
+    entities: one('graph_entities'), relations: one('graph_relations'), sources: one('graph_sources'),
+    entityProposals: one('graph_entity_proposals'), relationProposals: one('graph_relation_proposals')
+  };
+}
+
 module.exports = {
   init,
   getDb,
@@ -1139,5 +1328,29 @@ module.exports = {
   getAgentEventsSinceLastUser,
   getMeta,
   setMeta,
+  // graph memory (anti-glob relational store)
+  graphInsertEntity,
+  graphGetEntityByKey,
+  graphGetEntity,
+  graphUpdateEntity,
+  graphListEntities,
+  graphInsertRelation,
+  graphGetRelation,
+  graphNeighbors,
+  graphSupersedeRelation,
+  graphSetEntityConfirmed,
+  graphSetRelationConfirmed,
+  graphInsertSource,
+  graphInsertCitation,
+  graphCitationsFor,
+  graphInsertEntityProposal,
+  graphInsertRelationProposal,
+  graphGetEntityProposal,
+  graphGetRelationProposal,
+  graphListPendingEntityProposals,
+  graphListPendingRelationProposals,
+  graphSetEntityProposalStatus,
+  graphSetRelationProposalStatus,
+  graphCounts,
   DB_PATH
 };
