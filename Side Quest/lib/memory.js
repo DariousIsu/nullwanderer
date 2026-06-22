@@ -218,10 +218,10 @@ async function backfillTurnEmbeddings(limit = 300) {
 // into narrow-query recall). Members:
 //   reflection_speculation — ungrounded speculation the de-laundering gate demoted
 //   focus_tombstone        — "Focus 'X' → resolved" spawn-gate bookkeeping, not knowledge
-//   self_evolution         — "my view evolved; I used to hold X" self-view-change log; belongs
-//                            to the self-model track, not factual recall (was re-surfacing
-//                            superseded/abandoned views as if they were facts)
-const QUARANTINE_SOURCES = ['reflection_speculation', 'focus_tombstone', 'self_evolution'];
+// NOTE: self_evolution ("my view evolved; I used to hold X") is intentionally NOT quarantined —
+// Lucas wants the record of how an idea evolved to stay recallable (it's legitimate memory of her
+// own change over time, not bookkeeping).
+const QUARANTINE_SOURCES = ['reflection_speculation', 'focus_tombstone'];
 
 /**
  * Hybrid retrieve: top-K knowledge rows by semantic + keyword fusion.
