@@ -1119,6 +1119,26 @@ async function runOneTick() {
   if (!fillGap && isTooSimilarToRecent(trimmed, recentThoughts)) {
     return;
   }
+  // FIXATION DROP (F2 — anti-rumination on the THOUGHT path): when recent thoughts are already
+  // dominated by one anchor term (diversifySeeds.monoFixated) and THIS new thought keeps riding
+  // that same anchor, drop it — she's circling (e.g. ~9 near-identical "Otter AI" thoughts). The
+  // existing soft prompt nudge wasn't biting; this forces a topic change, mirroring the Jaccard
+  // drop above. EXCEPTION: if the anchor is in Lucas's latest message she's legitimately
+  // processing live conversation — let it stand. (R4 braked repeat SEARCHES; this is the thought loop.)
+  if (!fillGap) {
+    try {
+      const fix = diversifySeeds(recentThoughts, { window: 6, domFrac: 0.6 });
+      if (fix.monoFixated && fix.anchor) {
+        const anchorRe = new RegExp(`\\b${fix.anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
+        const lastUser = (recentTurns || []).filter(t => t.speaker === 'user').slice(-1)[0];
+        const userOnAnchor = !!(lastUser && anchorRe.test(lastUser.content || ''));
+        if (anchorRe.test(trimmed) && !userOnAnchor) {
+          console.log(`[anti-fixation] dropped thought still circling "${fix.anchor}" — forcing topic change`);
+          return;
+        }
+      }
+    } catch (e) { console.error('[anti-fixation] check failed:', e.message); }
+  }
   if (!fillGap && isSilenceEssay(trimmed)) {
     // Drop silently — the model is in the silence attractor; don't store or render.
     return;

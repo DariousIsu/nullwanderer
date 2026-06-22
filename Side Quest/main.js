@@ -30,6 +30,9 @@ const { extractCommitments } = require('./lib/commitments');
 const { fetchPage } = require('./lib/web_search');
 const echoSuitLib = require('./lib/echo_suit');
 let echoSuit = null;   // Echo "suit" — attached over HTTP to Lucas's running Echo; drives 518 MCP tools
+// Lucas explicitly invoking the suit / our data → bind to echo tags (F1 nudge). Deliberately
+// specific so it doesn't fire on casual mentions of "data" etc.
+const ECHO_INVOKE_RE = /\b(the\s+)?(power\s*)?suit\b|\becho\b|\b(use|search|query|check|look\s*up\s+in|pull\s+from)\b[^.?!]{0,30}\b(the\s+)?(db|database|knowledge\s*base|kb|graph|kg|our\s+(records|data|kb|knowledge|graph|contacts|bills))\b|\bthe\s+db\b|\bour\s+(records|knowledge\s*base|kb|graph|database)\b|\blamp\b/i;
 
 // Read Echo's HTTP endpoint + admin token from its config.toml (env overrides win). Zoe attaches
 // to the SAME server Lucas's Echo UI uses, so her work shares his canvas/DB. Admin tier (his call)
@@ -1006,6 +1009,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   }
   if (attachmentText) {
     composedUserMessage = `${composedUserMessage}\n\n--- Attachments ---\n${attachmentText}`;
+  }
+  // ECHO NUDGE (F1) — when Lucas explicitly invokes the suit / our data ("use the db", "the power
+  // suit", "our records/KB/graph", "echo"), bind that to the echo tags right at the message tail
+  // (highest recency) so she reaches for Echo instead of defaulting to her web browser (the LAMP →
+  // Japanese-band miss). Only when the suit is actually connected.
+  if (echoSuit && echoSuit.connected && ECHO_INVOKE_RE.test(userMessage)) {
+    composedUserMessage = `${composedUserMessage}\n\n[You are wearing the Echo suit and ${userName} is asking you to use it / OUR data — not the open web. Do this with your echo tags: <echo-find>what you need</echo-find> then <echo-do name="tool">{json}</echo-do> (or directly if you know the tool). Echo is our knowledge base / entity graph / contacts / bills / the LAMP network. Do NOT use <web-open> for this — that's the open internet, the wrong tool for our data.]`;
   }
 
   const chosenName = db.getMeta('chosen_name');

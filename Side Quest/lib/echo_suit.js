@@ -151,6 +151,8 @@ class EchoSuit {
       `• <echo-propose kind="entity|relation|link">{json}</echo-propose> — propose into the shared knowledge graph. You curate by relevance; verification + Lucas are the commit gate, so propose freely.`,
       `• <echo-guide/> — reload this contract + map.`,
       ``,
+      `WHEN TO REACH FOR ECHO vs your web browser — this matters: Echo is OUR data (the Rainey knowledge base, the entity/relationship graph, contacts, bills, legislators, the LAMP network, past deliverables). Your <web-open> browser is the OPEN INTERNET. If Lucas asks you to "use the db / our records / our KB / the graph", or to look up something that is OURS — a person/org/bill/LAMP — DO IT WITH ECHO (<echo-find> then <echo-do>), NOT the web browser. Reaching for the web on an "our data" question is the wrong tool (you once returned a Japanese pop band for "LAMP" because you web-searched instead of querying our graph). When in doubt whether something is in Echo, <echo-find> it before going to the web.`,
+      ``,
       `ECHO'S CONTRACT (its own usage guide):`,
       this._suit.guide,
       ``,
