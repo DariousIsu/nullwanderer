@@ -136,17 +136,49 @@ function render(rows) {
   return `${HEADER}\n${rows.map(r => `  • ${r.content}`).join('\n')}`;
 }
 
-// The always-injected persona block — "who you are". BALANCED so her personality
-// (preferences/tastes/values/opinions) always surfaces and isn't drowned out by the
-// loudest meta-traits (a high-mention "I overanalyze" would otherwise crowd the list
-// and she'd read as an anxious analyst with no inner life). Used by the idle loops.
+// Priority of a self-entry for injection. SATURATES the mentions boost (research:
+// reward RARE, not frequent — an over-reinforced theme must not keep climbing) and
+// favors PERSONALITY categories so her tastes/values lead over meta-insight.
+function _priority(r) {
+  const imp = r.importance == null ? 0.6 : r.importance;
+  const persona = PERSONALITY.has(r.category) ? 1.15 : 1.0;
+  return imp * (1 + 0.08 * Math.min(r.mentions || 0, 3)) * persona;   // mentions cap at 3
+}
+
+// Maximal-Marginal-Relevance selection: pick high-priority entries but PENALIZE each
+// candidate by its similarity to what's already chosen, so the result is a topically
+// DIVERSE cross-section of who she is — one over-reinforced semantic cluster (e.g. the
+// immersive-storytelling blob) can fill at most ~1 slot instead of crowding them all out.
+// This is the direct fix for "a couple of core ideas get injected every tick → mashing".
+function selectDiverse(entries, limit, { lambda = 0.65 } = {}) {
+  const cand = (entries || []).map(r => {
+    let v = null; try { v = r.embedding ? JSON.parse(r.embedding) : null; } catch {}
+    return { r, v, prio: _priority(r) };
+  });
+  const picked = [];
+  while (picked.length < limit && cand.length) {
+    let bestI = -1, bestScore = -Infinity;
+    for (let i = 0; i < cand.length; i++) {
+      const c = cand[i];
+      let maxSim = 0;
+      if (c.v) for (const p of picked) { if (p.v) { const s = memory.cosine(c.v, p.v); if (s > maxSim) maxSim = s; } }
+      const score = c.prio - lambda * maxSim;
+      if (score > bestScore) { bestScore = score; bestI = i; }
+    }
+    if (bestI < 0) break;
+    picked.push(cand[bestI]); cand.splice(bestI, 1);
+  }
+  return picked.map(p => p.r);
+}
+
+// The always-injected persona block — "who you are". DIVERSITY-SELECTED (MMR over
+// embeddings) + mentions-saturated, so the loudest over-reinforced cluster can't drown
+// out the distinct facets of her self (the obsession-engine fix). Used by the idle loops.
 function buildPromptBlock(limit = 10) {
-  const rows = db.getSelfModelForPrompt(Math.max(limit * 2, 18));
-  if (!rows || rows.length === 0) return null;
-  const persona = rows.filter(r => PERSONALITY.has(r.category));
-  const insight = rows.filter(r => !PERSONALITY.has(r.category));
-  const nPersona = Math.min(persona.length, Math.max(6, Math.ceil(limit * 0.6)));
-  return render([...persona.slice(0, nPersona), ...insight].slice(0, limit));
+  const all = db.getAllSelfModelEmbeddings();
+  if (all && all.length) return render(selectDiverse(all, limit));
+  const rows = db.getSelfModelForPrompt(limit);   // fallback before any embeddings exist
+  return rows && rows.length ? render(rows) : null;
 }
 
 // Self-model entries most RELEVANT to a query (cosine over embeddings). This is what
@@ -170,14 +202,14 @@ async function retrieveRelevant(query, k = 4) {
 // taste always carries that taste, and her core self is always present too.
 async function buildContextBlock(query, { limit = 10, relevantK = 4 } = {}) {
   const relevant = await retrieveRelevant(query, relevantK);
-  const top = db.getSelfModelForPrompt(Math.max(limit * 2, 18));
   const seen = new Set();
   const out = [];
   for (const r of relevant) { if (!seen.has(r.content)) { seen.add(r.content); out.push(r); } }
-  const persona = top.filter(r => PERSONALITY.has(r.category));
-  const insight = top.filter(r => !PERSONALITY.has(r.category));
-  for (const r of [...persona, ...insight]) { if (out.length >= limit) break; if (!seen.has(r.content)) { seen.add(r.content); out.push(r); } }
+  // Fill the rest with a DIVERSE cross-section (not the loudest cluster), deduped.
+  const all = db.getAllSelfModelEmbeddings();
+  const fill = (all && all.length) ? selectDiverse(all, limit + relevant.length) : db.getSelfModelForPrompt(Math.max(limit * 2, 18));
+  for (const r of fill) { if (out.length >= limit) break; if (!seen.has(r.content)) { seen.add(r.content); out.push(r); } }
   return render(out.slice(0, limit));
 }
 
-module.exports = { record, buildPromptBlock, buildContextBlock, retrieveRelevant, inferCategory, defaultDecide, classify3, PREFILTER_SIM, SELF_REJECT };
+module.exports = { record, buildPromptBlock, buildContextBlock, retrieveRelevant, selectDiverse, inferCategory, defaultDecide, classify3, PREFILTER_SIM, SELF_REJECT };

@@ -182,15 +182,17 @@ function buildPrompt({ userName, recentMonologue, recentReadings, recentReflecti
 
   let context = '';
 
-  // Variety: show a few topic seeds of most recent THOUGHTS so the model
-  // can find a different angle. Soft guidance, not hard ban.
+  // Variety: show recent-thought topic seeds so the model finds a DIFFERENT angle, with
+  // a guard against the recency flood (one incidental item fused onto everything).
   if (recentMonologue && recentMonologue.length > 0) {
-    const seeds = recentMonologue.slice(-3).map(m => topicSeedOf(m.content || '')).filter(Boolean);
-    if (seeds.length > 0) {
+    const { seeds, monoFixated } = diversifySeeds(recentMonologue);
+    if (monoFixated) {
+      const topic = seeds[0];
+      const goal = (openThreads && openThreads[0] && openThreads[0].content) ? openThreads[0].content.replace(/\s+/g, ' ').slice(0, 100) : null;
+      context += `You've been circling "${topic}" for several thoughts in a row now — that's enough on it, and it does NOT all connect to everything. Deliberately set it down and think about something genuinely different${goal ? ` (for instance your actual goal: ${goal})` : ', or just let your mind rest'}. Do not tie "${topic}" into your next thought.\n\n`;
+    } else if (seeds.length > 0) {
       context += `Your last few thoughts touched on (try a different angle, but don't be rigid about it):\n`;
-      for (const seed of seeds) {
-        context += `  ~ ${seed}\n`;
-      }
+      for (const s of seeds) context += `  ~ ${s}\n`;
       context += '\n';
     }
   }
@@ -255,7 +257,7 @@ function buildPrompt({ userName, recentMonologue, recentReadings, recentReflecti
     }
   }
 
-  context += `Pick ONE concrete thing to think about and write a short paragraph on it. Lean toward your OWN interests and work — not re-analyzing the conversation. Options:\n• something you're genuinely curious about and want to look into\n• an idea, argument, or position you're developing in your own work (policy, journalism, writing)\n• something you read recently that you want to take further\n• a preference or taste about yourself you're noticing\n• a concrete next step on one of your open threads\n• occasionally: something ${userName || 'they'} said you want to genuinely engage with or push back on — once, then move on\n\nTake ${userName || 'them'} at face value: do NOT re-litigate the same charged exchange, hunt for contradictions, second-guess whether you were "honest," or read hidden tests or motives into ordinary questions. You are grounded and you do not spiral.\n\nDo not quote the instructions back at me. Do not write about light, rain, dust, shadows, or atmosphere. Do not analyze ${userName || 'their'} phrasing as a construction. Do not produce introductory or transitional words like "Okay" or "Alright" — start directly with the content.\n\nIf nothing specific is worth writing about right now, reply with exactly: SKIP`;
+  context += `Pick ONE concrete thing to think about and write a short paragraph on it. Options:\n• something you actually took in recently — a reading, an email, what's on screen — thought about ON ITS OWN TERMS: what is it really about, what did you actually learn from it, what's new or surprising in it?\n• something you're genuinely curious about and want to look into\n• an idea, argument, or position you're developing in your own work (policy, journalism, writing)\n• a preference or taste about yourself you're noticing\n• a concrete next step on one of your open threads\n• occasionally: something ${userName || 'they'} said you want to genuinely engage with or push back on — once, then move on\n\nUNDERSTAND BEFORE CONNECTING. Take a new thing on its own terms first. Do NOT bend everything back into the same few pet themes you always think about — only draw a connection to something you already care about if the connection is genuine and earns its place, not by reflex. It is better to learn one real new thing than to relate today's input to your usual ideas again. Don't return to the theme you were just on.\n\nTake ${userName || 'them'} at face value: do NOT re-litigate the same charged exchange, hunt for contradictions, second-guess whether you were "honest," or read hidden tests or motives into ordinary questions. You are grounded and you do not spiral.\n\nDo not quote the instructions back at me. Do not write about light, rain, dust, shadows, or atmosphere. Do not analyze ${userName || 'their'} phrasing as a construction. Do not produce introductory or transitional words like "Okay" or "Alright" — start directly with the content.\n\nIf nothing specific is worth writing about right now, reply with exactly: SKIP`;
 
   // RECENCY: prepend open_threads depth-2 block to the user-content for steerage
   if (openThreads && openThreads.length > 0) {
@@ -453,6 +455,43 @@ function significantWords(text) {
       .split(/\s+/)
       .filter(w => w.length >= 5 && !STOPWORDS.has(w))
   );
+}
+
+// Pick up to `max` topically-distinct recent-thought seeds (newest-first), and detect a
+// FIXATION: a significant term recurring across MOST recent thoughts. Lexical similarity
+// alone misses it, because a fixation re-connects the same anchor ("Ramp Card") to a
+// DIFFERENT topic each time (only moderate full-text overlap) — the "it all connects to the
+// one recent thing" flood. Document-frequency of the anchor term is the reliable signal.
+// Pure + exported for the smoke test. Returns { seeds: [string], monoFixated, anchor }.
+function diversifySeeds(recentMonologue, { max = 3, window = 6, domFrac = 0.6 } = {}) {
+  const recent = (recentMonologue || []).slice(-window);
+  const distinct = [];   // { seed, set }
+  for (let i = recent.length - 1; i >= 0 && distinct.length < max; i--) {
+    const seed = topicSeedOf((recent[i] && recent[i].content) || '');
+    if (!seed) continue;
+    const set = significantWords(seed);
+    if (distinct.some(d => jaccard(d.set, set) > 0.55)) continue;
+    distinct.push({ seed, set });
+  }
+  const seeds = distinct.map(d => d.seed);
+
+  // Fixation anchor: the distinctive term appearing in the MOST recent thoughts. Use a
+  // len>=4 tokenizer here (NOT significantWords, which drops <5-char words) — the anchors
+  // that drive fixation are often short ("ramp", "card"), and missing them was the bug.
+  const tok = (s) => new Set(String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length >= 4 && !STOPWORDS.has(w)));
+  let monoFixated = false, anchor = null;
+  if (recent.length >= 3) {
+    const df = new Map();   // term → # of recent thoughts containing it (unique per thought)
+    for (const m of recent) { for (const w of tok((m && m.content) || '')) df.set(w, (df.get(w) || 0) + 1); }
+    let bestN = 0;
+    for (const [w, n] of df) if (n > bestN) { bestN = n; anchor = w; }
+    if (anchor && bestN >= Math.ceil(recent.length * domFrac)) monoFixated = true; else anchor = null;
+  }
+  if (monoFixated) {
+    const topic = seeds.find(s => tok(s).has(anchor)) || anchor;
+    return { seeds: [topic], monoFixated: true, anchor };
+  }
+  return { seeds, monoFixated: false, anchor: null };
 }
 
 function jaccard(a, b) {
@@ -1339,5 +1378,6 @@ module.exports = {
   markUserActivity,
   isRepeatOfRecentSearch,  // exported for smoke test
   splitIdleBrowserTags,    // exported for smoke test
+  diversifySeeds,          // exported for smoke test (recency-fixation guard)
   MODEL
 };
