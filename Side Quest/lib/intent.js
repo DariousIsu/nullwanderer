@@ -133,4 +133,20 @@ function classifyQuery(text) {
 const RECALL_RE = /\bwhat did (?:i|we|you) (?:say|tell|mention|discuss|talk about|decide|agree)\b|\bremind me what\b|\bwhat (?:are|were) my\b|\bdo you remember (?:what|when|that|me)\b|\bwhat was (?:my|the|our)\b|\bwhat did we (?:cover|land on)\b/i;
 function isRecallQuery(text) { return !!text && RECALL_RE.test(String(text)); }
 
-module.exports = { detectWebIntent, detectActOnOpenPage, detectPickCharacter, detectRecordCommand, classifyQuery, isRecallQuery, SEARCH_HOME };
+// ACTIONABLE turn — the message hands her something concrete to act on: a URL, a file/path
+// reference, or an imperative task verb aimed at a thing ("open this", "read the sheet",
+// "try it"). On such turns the TASK owns the context, so off-topic between-turn musing must
+// be relevance-gated out (it was bleeding in: a shared spreadsheet got read as being about
+// whatever she'd been idly ruminating on). classifyQuery() defaults to 'broad' and misses
+// these (no narrow signal in "try it from your own drive"), so this is a separate gate.
+const _IMPERATIVE_RE = /\b(open|read|check|look at|pull(?: up| it)?|review|try|use|fix|do|send|write|make|show|get|find|fetch|load|view|see|summari[sz]e|analyz?e|go to|visit)\b[^.?!]{0,40}\b(this|that|it|the|here|link|file|sheet|spreadsheet|doc|document|page|tab|url|email|pdf|attachment|drive)\b/i;
+function isActionable(text) {
+  const t = String(text || '');
+  if (!t.trim()) return false;
+  if (/https?:\/\/\S+/i.test(t)) return true;                 // a URL to act on
+  if (/\b[\w.\-]+\.(?:xlsx?|xlsm|csv|pdf|docx?|pptx?|txt|md|json|png|jpe?g)\b/i.test(t)) return true; // a file reference
+  if (/[A-Za-z]:\\|\b\/[\w.\-]+\/[\w.\-]+/.test(t)) return true; // a filesystem path
+  return _IMPERATIVE_RE.test(t);                              // imperative aimed at a thing
+}
+
+module.exports = { detectWebIntent, detectActOnOpenPage, detectPickCharacter, detectRecordCommand, classifyQuery, isRecallQuery, isActionable, SEARCH_HOME };

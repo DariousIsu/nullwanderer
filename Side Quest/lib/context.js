@@ -344,6 +344,30 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
     }
   } catch {}
 
+  // Post-meeting recall — once a meeting ends, the live line above goes silent (active() is
+  // false). Without this she carries NO context that she just attended, so when asked about it
+  // ("that meeting was an hour ago / you were in it") she confabulates instead of recalling the
+  // recap that's already stored. Surface attendance + recap + who was there for a window after.
+  let gmeetRecallLine = null;
+  try {
+    const db2 = require('./db');
+    if (!require('./gmeet').active()) {
+      const recap = (db2.getMeta('gmeet_last_recap') || '').trim();
+      const endedAt = parseInt(db2.getMeta('gmeet_ended_at') || '0', 10);
+      const RECALL_WINDOW_MS = 6 * 60 * 60 * 1000;   // 6h: she should remember a meeting she just sat through
+      if (recap && endedAt && (Date.now() - endedAt) < RECALL_WINDOW_MS) {
+        let who = '';
+        try {
+          const p = JSON.parse(db2.getMeta('gmeet_present') || '[]');
+          if (Array.isArray(p) && p.length) who = ` Who was there: ${p.join(', ')}.`;
+        } catch {}
+        const mins = Math.round((Date.now() - endedAt) / 60000);
+        const ago = mins < 1 ? 'just now' : mins < 60 ? `${mins} min ago` : `${(mins / 60).toFixed(mins % 60 ? 1 : 0)}h ago`;
+        gmeetRecallLine = `You ATTENDED a Google Meet that ended ${ago} — you sat through it live, it is not just a calendar entry.${who} What it covered: ${recap}`;
+      }
+    }
+  } catch {}
+
   const lines = [
     `AWARENESS — facts about right now (do not paraphrase as poetic atmosphere; these are concrete):`,
     `• It is ${dateStr}, ${timeStr}.`,
@@ -352,6 +376,7 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
     downtimeLine ? `• ${downtimeLine}` : null,
     selfCheckLine ? `• ${selfCheckLine}` : null,
     gmeetLine ? `• ${gmeetLine}` : null,
+    gmeetRecallLine ? `• ${gmeetRecallLine}` : null,
     chosenName ? `• You go by ${chosenName}. This is the name you chose for yourself. Use it when self-referring.` : null,
     ``,
     `WHAT YOU ARE — a factual description of your own architecture, so you don't fabricate when asked:`,

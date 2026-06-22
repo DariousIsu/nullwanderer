@@ -212,12 +212,23 @@ async function backfillTurnEmbeddings(limit = 300) {
   return n;
 }
 
+// CANONICAL QUARANTINE LIST — sources that are internal bookkeeping or demoted/laundered
+// notes, never legitimate user-facing recall. BOTH retrieve() and retrieveScored() use this so
+// they can't diverge (they did: retrieve() omitted focus_tombstone and leaked ~54% tombstones
+// into narrow-query recall). Members:
+//   reflection_speculation — ungrounded speculation the de-laundering gate demoted
+//   focus_tombstone        — "Focus 'X' → resolved" spawn-gate bookkeeping, not knowledge
+//   self_evolution         — "my view evolved; I used to hold X" self-view-change log; belongs
+//                            to the self-model track, not factual recall (was re-surfacing
+//                            superseded/abandoned views as if they were facts)
+const QUARANTINE_SOURCES = ['reflection_speculation', 'focus_tombstone', 'self_evolution'];
+
 /**
  * Hybrid retrieve: top-K knowledge rows by semantic + keyword fusion.
  * Graceful: returns [] on empty query or no store (caller injects nothing → the
  * gap-response reflex handles "I don't know" rather than getting noise).
  */
-async function retrieve(query, { k = 4, kinds = null, preferLeaf = false, excludeSources = ['reflection_speculation'] } = {}) {
+async function retrieve(query, { k = 4, kinds = null, preferLeaf = false, excludeSources = QUARANTINE_SOURCES } = {}) {
   if (!query || !String(query).trim()) return [];
   let qv;
   try { qv = await embed(query); } catch { qv = null; }
@@ -290,7 +301,7 @@ function _normalize(map) {
  * relevance 3, importance 2. Falls back gracefully: no query embedding → relevance
  * drops out and ranking is recency+importance.
  */
-async function retrieveScored(query, { k = 4, kinds = null, weights = { recency: 0.5, relevance: 3, importance: 2 }, decayPerHour = 0.99, excludeSources = ['focus_tombstone', 'reflection_speculation'] } = {}) {
+async function retrieveScored(query, { k = 4, kinds = null, weights = { recency: 0.5, relevance: 3, importance: 2 }, decayPerHour = 0.99, excludeSources = QUARANTINE_SOURCES } = {}) {
   const rows = db.getAllKnowledgeEmbeddings();
   if (!rows || rows.length === 0) return [];
 

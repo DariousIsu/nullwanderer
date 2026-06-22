@@ -93,8 +93,11 @@ function enterObserving() {
     ok('tick 2: called leaveMeeting() once', calls.leave === 1);
     ok('tick 2: advanced to done', gmeet.get() === 'done');
     ok('tick 2: note mentions leaving + recap', /left call|left after|done/i.test(r2.note || '') && /recap/i.test(r2.note || ''));
-    // PROCESSING: the meeting was synthesized into a durable, surfaced recap.
-    ok('recap stored as durable memory (storeMeeting called once)', calls.store === 1 && calls.stored === RECAP);
+    // PROCESSING: the meeting was synthesized into a durable, surfaced EPISODIC memory (R3) —
+    // the recap is now wrapped as "I attended a Google Meet … What it covered: <recap>" so general
+    // recall surfaces it as her own attendance, not a free-floating note.
+    ok('recap stored as durable episodic memory (called once, attendance-framed, contains recap)',
+      calls.store === 1 && typeof calls.stored === 'string' && /I attended a Google Meet/.test(calls.stored) && calls.stored.includes(RECAP));
     ok('recap surfaced to Lucas', surfaced.some(s => /Here's what I took from the meeting/.test(s.content || '')));
     ok('gmeet_last_recap persisted', (db.getMeta('gmeet_last_recap') || '') === RECAP);
     ok('understanding log cleared (no double-store)', (db.getMeta('gmeet_understanding_log') || '') === '');

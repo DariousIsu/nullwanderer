@@ -1292,16 +1292,43 @@ function shouldSuppressSearch(query) {
   catch { return false; }
 }
 
-const SEARCH_REPEAT_THRESHOLD = 0.82;  // single-pair cosine; deliberately high so deepening (new terms) passes, only near-duplicates are braked
+const SEARCH_REPEAT_THRESHOLD = 0.82;  // single-pair cosine: an outright near-duplicate of one recent search
+// R4 — CLUSTER-DENSITY brake (the obsession-engine fix). The pairwise brake alone let the loop run:
+// "water shortage in town A/B/C…" sit at ~0.75 to each other — each individually BELOW 0.82, so all
+// passed, and she fired ~264 near-identical theme searches in 24h. Productive *deepening* is a few
+// related searches that then branch out; unproductive *rumination* is a DENSE cluster all in one
+// semantic vein. So also brake when the candidate joins an over-represented cluster of recent topics.
+// Grounded in the idle-loop deep-research: novelty-vs-redundancy / anti-mode-collapse — converge a
+// little, then move on, rather than re-circling one vein. (Shumailov 2024 model-collapse; learning-
+// progress curricula reward NEW information, not reworded sameness.)
+const FIXATION_SIM = 0.62;    // two topics share a semantic vein at/above this cosine
+const FIXATION_COUNT = 4;     // ≥ this many of the recent-K already in the candidate's vein → circling
+
+// Pure novelty assessment over precomputed embedding vectors. Testable in isolation: returns the
+// near-duplicate + cluster-density signals and whether to suppress. Deepening (sparse related vein)
+// passes; a dense cluster (fixation) or an outright near-dup is braked.
+function assessSearchNovelty(qv, recentVecs) {
+  let maxSim = 0, clusterCount = 0;
+  for (const v of recentVecs || []) {
+    let s; try { s = memoryLib.cosine(qv, v); } catch { continue; }
+    if (s > maxSim) maxSim = s;
+    if (s >= FIXATION_SIM) clusterCount++;
+  }
+  const nearDup = maxSim >= SEARCH_REPEAT_THRESHOLD;
+  const fixated = clusterCount >= FIXATION_COUNT;
+  return { maxSim, clusterCount, nearDup, fixated, suppress: nearDup || fixated };
+}
+
 async function isRepeatOfRecentSearch(query, k = 8) {
   try {
     const recent = db.getRecentMonologueByType('reading', k).map(r => r.query).filter(Boolean);
     if (!recent.length) return false;
     const qv = await memoryLib.embed(query);
-    for (const past of recent) {
-      try { if (memoryLib.cosine(qv, await memoryLib.embed(past)) >= SEARCH_REPEAT_THRESHOLD) return true; } catch {}
-    }
-    return false;
+    const vecs = [];
+    for (const past of recent) { try { vecs.push(await memoryLib.embed(past)); } catch {} }
+    const a = assessSearchNovelty(qv, vecs);
+    if (a.suppress) console.log(`[monologue] boredom search braked (${a.nearDup ? 'near-dup' : `fixation-cluster ${a.clusterCount}/${vecs.length}`}): "${query.slice(0, 60)}"`);
+    return a.suppress;
   } catch (e) { console.error('[monologue] repeat-check failed:', e.message); return false; }
 }
 
@@ -1439,6 +1466,7 @@ module.exports = {
   resume,
   markUserActivity,
   isRepeatOfRecentSearch,  // exported for smoke test
+  assessSearchNovelty,     // exported for smoke test (R4 cluster-density brake)
   splitIdleBrowserTags,    // exported for smoke test
   diversifySeeds,          // exported for smoke test (recency-fixation guard)
   looksLikeOwnFragment,    // exported for smoke test (self-fragment search guard)

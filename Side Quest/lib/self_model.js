@@ -158,6 +158,10 @@ async function recordTold(content, { category = 'trait', importance = 0.78 } = {
 // statement, or null. Conservative + high-precision: clear second-person trait forms only,
 // rejects questions and task/status phrasings ("you're working on…", "you are going to…").
 const _TASKY = /^(going to|gonna|about to|working on|doing|in |on |at |here|there|right|correct|welcome|the one|sure|done|set|ready|back|online|up|good to go|able to|allowed)\b/i;
+// Definite/possessive determiners signal a NOUN-PHRASE / role ("you are the models you'll have
+// access to", "you're my assistant") rather than a trait — never a first-person identity fact.
+// (Indefinite a/an is allowed: "you're a curious person" → a genuine trait.)
+const _DETERMINER = /^(the|this|that|these|those|my|your|our|their|his|her|its)\b/i;
 function detectAffirmedTrait(text) {
   const t = String(content_str(text)).trim();
   if (!t || t.endsWith('?')) return null;
@@ -167,7 +171,7 @@ function detectAffirmedTrait(text) {
   if ((m = t.match(/\byou\s+(tend to|always|consistently|usually|have a way of)\s+([^.!,;:?]{4,80})/i))) return `I ${m[1].toLowerCase()} ${m[2].trim()}`;
   if ((m = t.match(/\byou(?:'re| are)\s+(?:really |very |quite |genuinely |so )?([a-z][^.!,;:?]{4,80})/i))) {
     const trait = m[1].trim();
-    if (_TASKY.test(trait)) return null;
+    if (_TASKY.test(trait) || _DETERMINER.test(trait)) return null;
     return `I am ${trait}`;
   }
   return null;

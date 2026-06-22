@@ -94,7 +94,7 @@ const now = () => CLOCK;
     const r2 = await gmeet.runTick(ctx);
     ok('left + done', gmeet.get() === 'done' && calls.leave === 1);
     ok('directive stored as its own durable meeting_action note', calls.stores.some(s => s.kind === 'meeting_action' && /make a column/.test(s.content)));
-    ok('recap also stored (kind meeting)', calls.stores.some(s => s.kind === 'meeting'));
+    ok('recap also stored as episodic memory (R3)', calls.stores.some(s => s.kind === 'episodic'));
     const recapPrompt = prompts.find(p => /Write a tight recap/.test(p));
     ok('recap prompt force-includes the assigned task verbatim', !!recapPrompt && /Tasks explicitly assigned/.test(recapPrompt) && /make a column/.test(recapPrompt));
   }

@@ -99,9 +99,25 @@ app.whenReady().then(() => {
   // Keep pruning spiral/junk during long sessions (write-time guard catches most; this
   // sweeps anything that slips through, e.g. junk readings from tool output).
   setInterval(() => { try { curatorLib.curateMonologue(); } catch (e) { console.error('[main] periodic curateMonologue failed:', e.message); } }, 20 * 60 * 1000).unref?.();
-  // Episodic recall backfill: embed recent past turns lacking an embedding so "what did we
-  // say earlier about X" works over EXISTING history too. Delayed so the CPU embedder is warm.
-  setTimeout(() => { memoryLib.backfillTurnEmbeddings(300).catch(() => {}); }, 20 * 1000).unref?.();
+  // Episodic recall backfill: embed past turns lacking an embedding so "what did we say earlier
+  // about X" works over EXISTING history too. The one-shot 300 left ~half of turns unembedded
+  // (episodic recall was blind to old history); DRAIN it in bounded batches until caught up, paced
+  // so the CPU embedder doesn't spike. Delayed so the embedder is warm.
+  setTimeout(() => {
+    let drained = 0;
+    const drain = async () => {
+      try {
+        const n = await memoryLib.backfillTurnEmbeddings(300);
+        drained += n;
+        if (n >= 300 && drained < 6000) { setTimeout(() => { drain().catch(() => {}); }, 30 * 1000).unref?.(); }
+        else if (drained) console.log(`[main] turn-embedding backfill caught up (${drained} embedded)`);
+      } catch {}
+    };
+    drain().catch(() => {});
+  }, 20 * 1000).unref?.();
+  // Index hygiene: purge any orphaned FTS rows (rotted from past mismatched deletes) so keyword
+  // search can't match ghosts. Idempotent; cheap.
+  try { const purged = db.reconcileKnowledgeFts(); if (purged) console.log(`[main] purged ${purged} orphaned knowledge_fts row(s)`); } catch {}
   filesLib.ensureWorkspace();
   // Warm the CPU embedder (bge-small via transformers.js) so first knowledge
   // retrieval isn't slow. Runs on CPU — no VRAM contention with the chat model.
@@ -228,7 +244,7 @@ app.whenReady().then(() => {
           for (const m of r.messages) {
             const blurb = `Unread email from ${m.from} — subject "${m.subject}": ${(m.snippet || '').slice(0, 300)}`;
             try { db.insertInbound({ tabUrl: 'email', speaker: m.from, text: blurb, source: 'email' }); } catch {}
-            memoryLib.store({ kind: 'reference', content: `Email I received — from ${m.from}, subject "${m.subject}": ${(m.snippet || '').slice(0, 300)}`, source: 'inbox', importance: 0.55 }).catch(() => {});
+            memoryLib.storeDeduped({ kind: 'reference', content: `Email I received — from ${m.from}, subject "${m.subject}": ${(m.snippet || '').slice(0, 300)}`, source: 'inbox', importance: 0.55 }).catch(() => {});
           }
           const merged = [...surfaced, ...r.messages.map(m => m.uid)].slice(-300);
           db.setMeta('inbox_surfaced_uids', JSON.stringify(merged));
@@ -540,7 +556,7 @@ function extractUrls(text) {
   return [...new Set(matches)].slice(0, 3);
 }
 
-const { detectWebIntent, detectActOnOpenPage, detectPickCharacter, detectRecordCommand, classifyQuery, isRecallQuery } = require('./lib/intent');
+const { detectWebIntent, detectActOnOpenPage, detectPickCharacter, detectRecordCommand, classifyQuery, isRecallQuery, isActionable } = require('./lib/intent');
 const preferences = require('./lib/preferences');
 const personal = require('./lib/personal');
 const playSession = require('./lib/play_session');
@@ -878,22 +894,34 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // Detect URLs in user message; fetch them as shared-link context
   const sharedUrls = extractUrls(userMessage);
   const sharedPages = [];
+  const who = userName || 'Lucas';
   for (const url of sharedUrls) {
-    try {
-      const page = await fetchPage(url, { maxChars: 2800, timeoutMs: 8000 });
-      if (page.ok && page.text) sharedPages.push(page);
-    } catch (err) { console.error('[main] user url fetch failed:', url, err.message); }
-  }
+    let page = null;
+    try { page = await fetchPage(url, { maxChars: 2800, timeoutMs: 8000 }); }
+    catch (err) { console.error('[main] user url fetch failed:', url, err.message); page = { ok: false, error: err.message }; }
 
-  // Persist any shared-link content as a reading-type monologue row tagged as user-shared
-  for (const p of sharedPages) {
-    db.insertMonologue({
-      content: `${userName || 'Lucas'} shared this link: ${p.title || p.url}\n${p.text}`,
-      model: 'user-shared',
-      type: 'reading',
-      query: p.url,
-      urls: [p.url]
-    });
+    if (page && page.ok && page.text) {
+      // Readable via background fetch — persist the content as a user-shared reading.
+      sharedPages.push(page);
+      db.insertMonologue({
+        content: `${who} shared this link: ${page.title || page.url}\n${page.text}`,
+        model: 'user-shared', type: 'reading', query: page.url, urls: [page.url],
+      });
+    } else {
+      // Background fetch failed or returned nothing usable — common for Google Drive/Docs/Sheets
+      // and other auth-walled / JS-app pages. Record THAT the link was shared and WHY it couldn't
+      // be read, so the link's purpose stays in her context and she routes to her own signed-in
+      // browser instead of going silent ("…") or flailing to check email. (This is the fix for
+      // "struggling to open links / can't recall why she has them".)
+      const isDrive = /\b(docs|drive|sheets)\.google\.com/i.test(url);
+      const why = isDrive
+        ? 'it is a Google Drive/Docs/Sheets page that needs MY OWN signed-in browser'
+        : (page && page.error ? `background fetch said: ${page.error}` : 'background fetch returned nothing readable');
+      db.insertMonologue({
+        content: `${who} shared this link: ${url}\n[I could not read it with a background fetch — ${why}. To actually SEE it I open it in my own browser: <web-open>${url}</web-open> then <web-read/>. I must NOT go silent or check email instead — if I still can't see it, I tell ${who} plainly.]`,
+        model: 'user-shared', type: 'reading', query: url, urls: [url],
+      });
+    }
   }
 
   const recentReflections = db.getRecentReflections(RECENT_REFLECTION_LIMIT);
@@ -1000,11 +1028,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (userQv) relevantPastTurns = await memoryLib.retrieveTurns(userMessage, { k: recall ? 4 : 3, excludeIds: recentTurns.map(t => t.id), qv: userQv, userOnly: recall, dropQuestions: recall });
   } catch (e) { console.error('[main] episodic recall failed:', e.message); }
 
-  // SCOPED CONTEXT (Phase 1, conditional) — on a NARROW factual question, relevance-gate the
-  // recency blocks against the question so broad recent material doesn't ride along (the
-  // "loads everything" bloat). On a BROAD/open turn, keep them — that's her continuous-mind
-  // texture. Gating embeds a handful of rows; only runs on narrow turns.
-  if (qClass === 'narrow' && userQv) {
+  // SCOPED CONTEXT — relevance-gate the recency blocks (recent monologue + readings) against
+  // the message so off-topic between-turn musing can't ride along. Runs when the TASK should
+  // own the turn: a NARROW factual question OR an ACTIONABLE turn (a URL/file/imperative —
+  // classifyQuery defaults to 'broad' and misses these, which is exactly how idle water-shortage
+  // rumination bled into reading a shared spreadsheet). On a genuinely open/social turn we keep
+  // them raw — that's her continuous-mind texture, and there's no task to corrupt. This is the
+  // structural fix that replaces the earlier prompt-level "treat these as idle musing" reframe.
+  if ((qClass === 'narrow' || isActionable(userMessage)) && userQv) {
     const gate = async (rows) => {
       const out = [];
       for (const r of rows || []) {
@@ -1423,7 +1454,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           const row = db.insertMonologue({ content: r.text, model: 'inbox', type: 'reading' });
           try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(checked inbox — ${(r.messages || []).length} messages)`, type: 'reading' }); } catch {}
           for (const m of (r.messages || []).slice(0, 5)) {
-            memoryLib.store({ kind: 'reference', content: `Email I received from ${m.from} — subject "${m.subject}": ${(m.snippet || '').slice(0, 300)}`, source: 'inbox', importance: 0.5 }).catch(() => {});
+            memoryLib.storeDeduped({ kind: 'reference', content: `Email I received from ${m.from} — subject "${m.subject}": ${(m.snippet || '').slice(0, 300)}`, source: 'inbox', importance: 0.5 }).catch(() => {});
           }
           const realNewest = (r.messages || []).find(m => m.fromAddr && !inboxLib.isJunkSender(m.fromAddr));
           if (realNewest) {

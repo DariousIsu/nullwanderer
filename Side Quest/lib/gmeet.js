@@ -228,6 +228,7 @@ function start(meetUrl) {
   db.setMeta('gmeet_understanding_log', ''); db.setMeta('gmeet_last_recap', '');
   db.setMeta('gmeet_present', '[]'); db.setMeta('gmeet_directives', '[]');
   db.setMeta('gmeet_started_at', String(Date.now()));   // M1: transcript scope anchor
+  db.setMeta('gmeet_ended_at', '0');   // post-meeting recall freshness stamp (set when the call ends)
   db.setMeta('gmeet_last_research_at', '0'); db.setMeta('gmeet_researched', '[]');   // M2: research governance
   _seenCaps = new Set();
   _answered = new Set();
@@ -571,7 +572,21 @@ async function synthesizeMeeting(d, ctx) {
   if (notes.length < 40 && !directives.length) return '';
   const recap = await modelMeetingRecap(d, ctx, notes, directives);
   if (!recap) return '';
-  try { if (d.storeMeeting) await d.storeMeeting(recap); } catch {}
+  // R3 — store the recap as a FIRST-CLASS EPISODIC memory, not a bare free-floating note. The
+  // self-contained "I attended a Google Meet (<when>) … Present: <who> … What it covered: <recap>"
+  // framing means the GENERAL recall pipeline (retrieve/retrieveScored) surfaces it for ANY past
+  // meeting — "who was in that meeting", "what did we decide", "the meeting earlier" — and she
+  // recognizes it as HER attendance, not an abstract fact. This is the real mechanism; the
+  // post-meeting awareness line is now just the recency arm for the most-recent one.
+  let episodic = recap;
+  try {
+    let present = []; try { present = JSON.parse(db.getMeta('gmeet_present') || '[]'); } catch {}
+    const startedAt = parseInt(db.getMeta('gmeet_started_at') || '0', 10);
+    const whenStr = startedAt ? new Date(startedAt).toLocaleString() : 'recently';
+    const who = (Array.isArray(present) && present.length) ? ` Present: ${present.join(', ')}.` : '';
+    episodic = `I attended a Google Meet (${whenStr}) on ${ctx.userName || 'Lucas'}'s behalf — I sat through it live, it is not just a calendar entry.${who} What it covered: ${recap}`;
+  } catch {}
+  try { if (d.storeMeeting) await d.storeMeeting(episodic, { kind: 'episodic', source: 'meeting_episode', importance: 0.85 }); } catch {}
   db.setMeta('gmeet_last_recap', recap);
   db.setMeta('gmeet_understanding_log', ''); db.setMeta('gmeet_directives', '[]');
   return recap;
@@ -647,6 +662,7 @@ async function runTick(ctx = {}) {
         db.setMeta('gmeet_left_ticks', '0');
         const recap = await synthesizeMeeting(d, ctx).catch(() => '');
         set('done');
+        db.setMeta('gmeet_ended_at', String(Date.now()));   // arms post-meeting recall in context.js
         surface(`The meeting ended — I've left and I'm back to my own time.`, '(gmeet) meeting ended');
         if (recap) surface(`Here's what I took from the meeting — ${recap}`, '(gmeet) meeting recap');
         return { stage, ok: true, note: `meeting ended → done (left detection)${recap ? ' + recap' : ''}` };
@@ -719,6 +735,7 @@ async function runTick(ctx = {}) {
         const recap = await synthesizeMeeting(d, ctx).catch(() => '');
         db.setMeta('gmeet_signoff_seen', ''); db.setMeta('gmeet_last_caption_at', ''); db.setMeta('gmeet_left_ticks', '0');
         set('done');
+        db.setMeta('gmeet_ended_at', String(Date.now()));   // arms post-meeting recall in context.js
         surface(`The meeting wrapped up, so I left the call — I'm back to my own time.`, '(gmeet) left after sign-off');
         if (recap) surface(`Here's what I took from the meeting — ${recap}`, '(gmeet) meeting recap');
         return { stage, ok: true, note: `sign-off + ${Math.round((tNow - lastCap) / 1000)}s quiet → left call → done${recap ? ' + recap' : ''}${lv && lv.ok ? '' : ' (leave click unconfirmed)'}` };
@@ -803,7 +820,7 @@ async function runTick(ctx = {}) {
 }
 
 module.exports = {
-  STAGES, get, set, active, start, reset, url, runTick, defaultDeps,
+  STAGES, get, set, active, start, reset, url, runTick, defaultDeps, synthesizeMeeting,
   // pure helpers (tested)
   detectMeetUrl, meetLinkFromEvent, introPrompt, validateIntro, ensureIntro, parseCaptions, parseAttendees,
   addressesSelf, isSelfSpeaker, selfNames, looksLikeSignOff, extractDirective, segmentTurns, parseMeetingAction,

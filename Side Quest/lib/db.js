@@ -1006,23 +1006,26 @@ function countKnowledge() {
 }
 
 function deleteKnowledgeBySource(source) {
-  // knowledge_fts is a standalone (non-content) FTS5 table mirroring `content`.
-  // A plain DELETE on it does NOT purge the inverted index — FTS5 requires the
-  // special 'delete' command, which needs the ORIGINAL indexed content for the
-  // row. So fetch id+content first, delete the base rows, then issue the FTS5
-  // delete for each. Errors are logged, not swallowed silently.
-  const rows = getDb().prepare('SELECT id, content FROM knowledge WHERE source = ?').all(source);
-  for (const { id, content } of rows) {
+  // knowledge_fts is a STANDARD fts5 table (CREATE … USING fts5(content), no content=),
+  // so ordinary `DELETE FROM knowledge_fts WHERE rowid = ?` purges the inverted index. The
+  // previous code used the external-content `INSERT … VALUES('delete', …)` command, which is
+  // for content= tables — on a standard table it errors and was caught, leaving the FTS row
+  // behind. That mismatch was the source of 155 ghost FTS rows (drift vs knowledge). Verified
+  // empirically: plain DELETE removes them and MATCH still works.
+  const rows = getDb().prepare('SELECT id FROM knowledge WHERE source = ?').all(source);
+  for (const { id } of rows) {
     getDb().prepare('DELETE FROM knowledge WHERE id = ?').run(id);
-    try {
-      getDb()
-        .prepare(`INSERT INTO knowledge_fts(knowledge_fts, rowid, content) VALUES('delete', ?, ?)`)
-        .run(id, content);
-    } catch (e) {
-      console.error('[db] knowledge_fts delete failed for id', id, e.message);
-    }
+    try { getDb().prepare('DELETE FROM knowledge_fts WHERE rowid = ?').run(id); }
+    catch (e) { console.error('[db] knowledge_fts delete failed for id', id, e.message); }
   }
   return rows.length;
+}
+
+// Idempotent self-heal: purge any FTS rows whose base knowledge row is gone (index rot from
+// past mismatched deletes). Safe to run at boot; returns the number purged.
+function reconcileKnowledgeFts() {
+  try { return getDb().prepare('DELETE FROM knowledge_fts WHERE rowid NOT IN (SELECT id FROM knowledge)').run().changes; }
+  catch (e) { console.error('[db] fts reconcile failed:', e.message); return 0; }
 }
 
 // --- Self-model (identity track: who she is) ---
@@ -1354,6 +1357,7 @@ module.exports = {
   touchKnowledge,
   countKnowledge,
   deleteKnowledgeBySource,
+  reconcileKnowledgeFts,
   insertSelfModel,
   updateSelfModel,
   setSelfModelEpistemic,
