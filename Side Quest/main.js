@@ -1543,6 +1543,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   }).then(stored => {
     if (stored && stored.length > 0) {
       console.log('[main] open_threads extracted:', stored.map(s => `[${s.id}] ${s.content}`));
+      // A new assignment redefines "his work" — refresh the lane domain profile now
+      // instead of waiting out the ~2h TTL, so YOURS/OURS pick it up immediately.
+      try { require('./lib/lanes').invalidate(); } catch {}
     }
   }).catch(err => console.error('[main] open_threads extract failed:', err.message));
 

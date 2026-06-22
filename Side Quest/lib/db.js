@@ -475,6 +475,19 @@ function getActiveOpenThreads(limit = 10) {
     .all(limit);
 }
 
+// Threads that originated from a USER turn — i.e. things Lucas actually ASSIGNED her
+// (vs. self-generated goals). The deterministic ground truth for the YOURS/OURS lanes:
+// these define "his work." Newest-touched first. (Self-generated threads have no
+// user source_turn_id and are excluded → they stay HERS.)
+function getUserAssignedThreads(limit = 60) {
+  return getDb()
+    .prepare(`SELECT ot.* FROM open_threads ot
+      JOIN turns t ON t.id = ot.source_turn_id
+      WHERE t.speaker = 'user'
+      ORDER BY ot.last_touched_ts DESC LIMIT ?`)
+    .all(limit);
+}
+
 function getAllOpenThreads(limit = 200) {
   return getDb()
     .prepare(`SELECT * FROM open_threads ORDER BY id DESC LIMIT ?`)
@@ -1100,6 +1113,7 @@ module.exports = {
   getMonologueById,
   markReadingsConsolidated,
   updateKnowledge,
+  getUserAssignedThreads,
   getAllKnowledgeEmbeddings,
   ftsSearchKnowledge,
   getKnowledgeBySourceSince,

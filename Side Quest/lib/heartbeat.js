@@ -406,13 +406,19 @@ async function maybeHeartbeat() {
     // mute forever, and inbound chat-bot replies bypass it (time-sensitive).
     if (wantsToSpeak && !hasInbound) {
       const imp = await importanceLib.score(trimmedSay, { userName, kind: 'utterance' });
-      // Near-silent by default: only a genuinely significant, fully-formed point (or an
-      // expected deliverable) breaks the silence unprompted. NO gap-fill leniency — she
-      // does NOT talk just to fill quiet (Lucas's rule); silence is the honest default.
-      const threshold = 8;
+      // LANE-AWARE gate (importance × WHOSE-LANE): the bar depends on whose lane the
+      // utterance is in. HERS (her own research/curiosity) stays near-silent (bar 9);
+      // YOURS (an assignment of Lucas's) and OURS (her research overlapping his work)
+      // drop the bar so his deliverables surface. Defaults to HERS on any uncertainty,
+      // so this can only make her MORE responsive to his work, never noisier on hers.
+      let lane = 'hers';
+      try { lane = await require('./lanes').classify(trimmedSay); } catch (e) { console.error('[lanes] classify failed:', e.message); }
+      const threshold = require('./lanes').thresholdFor(lane);
       if (imp < threshold) {
         wantsToSpeak = false;
-        console.log(`[heartbeat] suppressed low-importance utterance (${imp} < ${threshold})`);
+        console.log(`[heartbeat] suppressed [${lane}] utterance (${imp} < ${threshold})`);
+      } else {
+        console.log(`[heartbeat] surfacing [${lane}] utterance (${imp} ≥ ${threshold})`);
       }
     }
     const uGate = wantsToSpeak ? governor.requestAction('utterance', { priority: hasInbound }) : { allow: false };
