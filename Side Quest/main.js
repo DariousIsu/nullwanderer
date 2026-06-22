@@ -28,6 +28,8 @@ const {
 } = require('./lib/heartbeat');
 const { extractCommitments } = require('./lib/commitments');
 const { fetchPage } = require('./lib/web_search');
+const echoSuitLib = require('./lib/echo_suit');
+let echoSuit = null;   // Echo "suit" — warm-spawned at boot (background); drives the 518 MCP tools
 const openThreadsLib = require('./lib/open_threads');
 const protocolsLib = require('./lib/protocols');
 const browserLib = require('./lib/browser');
@@ -118,6 +120,18 @@ app.whenReady().then(() => {
   // Index hygiene: purge any orphaned FTS rows (rotted from past mismatched deletes) so keyword
   // search can't match ghosts. Idempotent; cheap.
   try { const purged = db.reconcileKnowledgeFts(); if (purged) console.log(`[main] purged ${purged} orphaned knowledge_fts row(s)`); } catch {}
+  // Echo suit — warm-spawn the capability suit in the BACKGROUND after boot (≈5–26s cold; never
+  // blocks her startup). She wears it once connected; failure is non-fatal (suit just stays off,
+  // and any tag use lazily retries the connection). Paths overridable via ECHO_PYTHON/ECHO_CWD.
+  const ECHO_PYTHON = process.env.ECHO_PYTHON || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo/.venv/Scripts/python.exe';
+  const ECHO_CWD = process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo';
+  echoSuit = echoSuitLib.createSuit({ spawnFn: () => require('./lib/echo').spawnEcho({ python: ECHO_PYTHON, cwd: ECHO_CWD }) });
+  setTimeout(() => {
+    echoSuit.connect().then(r => {
+      console.log(r.ok ? `[main] echo suit connected: ${r.tools} tools (${r.bootMs}ms)` : `[main] echo suit offline: ${r.error}`);
+      try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('echo:status', { connected: !!r.ok, tools: r.tools || 0 }); } catch {}
+    }).catch(e => console.error('[main] echo suit connect threw:', e.message));
+  }, 8 * 1000).unref?.();
   filesLib.ensureWorkspace();
   // Warm the CPU embedder (bge-small via transformers.js) so first knowledge
   // retrieval isn't slow. Runs on CPU — no VRAM contention with the chat model.
@@ -1065,6 +1079,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     selfModelBlock,
     personalBlock,
     relevantPastTurns,
+    echoSuitBlock: echoSuit ? echoSuit.suitContextBlock() : null,
     newUserMessage: composedUserMessage
   });
 
@@ -1179,6 +1194,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     ...discordLib.parseTags(thought || ''),
     ...discordLib.parseTags(say || '')
   ];
+  // Echo suit tags (work tools → off the clock she doesn't research/curate). Gated on the suit
+  // existing; dispatch self-heals the connection if the warm-connect hasn't finished.
+  const echoTagsToRun = (offClock || !echoSuit) ? [] : [
+    ...echoSuitLib.parseEchoTags(thought || ''),
+    ...echoSuitLib.parseEchoTags(say || '')
+  ];
 
   let thoughtStripped = (thought || '').replace(/<wonder>[\s\S]*?<\/wonder>/gi, '').trim();
   thoughtStripped = openThreadsLib.stripStatusTags(thoughtStripped);
@@ -1191,6 +1212,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   thoughtStripped = presenceLib.stripTags(thoughtStripped);
   thoughtStripped = emailLib.stripTags(thoughtStripped);
   thoughtStripped = discordLib.stripTags(thoughtStripped);
+  thoughtStripped = echoSuitLib.stripEchoTags(thoughtStripped);
 
   if (thoughtStripped) {
     db.insertTurn({
@@ -1229,6 +1251,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   sayStripped = presenceLib.stripTags(sayStripped);
   sayStripped = emailLib.stripTags(sayStripped);
   sayStripped = discordLib.stripTags(sayStripped);
+  sayStripped = echoSuitLib.stripEchoTags(sayStripped);
   let trimmedSay = sayStripped;
   // VOICE GUARD: if she disclaimed her inner life ("I don't experience…/as an AI I…"),
   // rewrite it in her own voice. It streamed live, so we pass the corrected text in the
@@ -1470,6 +1493,31 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         }
       } catch (err) { console.error('[main] inbox dispatch error:', err.message); }
     })().catch(() => {});
+  }
+
+  // Background: dispatch any Echo-suit tags she emitted — navigate the atlas / call a tool /
+  // delegate / propose. Each result is stored as a 'reading' (next-turn context) AND the first
+  // is fed back via one tool-followup so she can CHAIN (e.g. <echo-find> → see the tool →
+  // <echo-do> it in the follow-up) and react in her own voice. Errors are surfaced too, with a
+  // nudge to fix the args / pick another tool — never silently swallowed.
+  if (echoTagsToRun.length > 0 && echoSuit) {
+    (async () => {
+      for (const t of echoTagsToRun.slice(0, 4)) {
+        try {
+          const r = await echoSuit.dispatch(t);
+          const label = t.kind === 'do' ? `echo ${t.name}` : `echo ${t.kind}`;
+          const content = `I used the Echo suit (${label}):\n${(r.text || '').slice(0, 1800)}`;
+          const row = db.insertMonologue({ content, model: 'echo-suit', type: 'reading', query: label });
+          try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(${label}${r.isError ? ' ⚠' : ''})`, type: 'reading', query: label }); } catch {}
+          if (!followupFired) {
+            followupFired = true;
+            const tail = r.isError ? '\n[That call errored — read the message, fix the args or run <echo-find> to pick a better tool, then try again.]' : '';
+            fireToolFollowup({ io, channel, sessionId, resultText: content + tail });
+          }
+          console.log(`[main] ${label}: ${r.ok ? 'ok' : 'ERR'}`);
+        } catch (err) { console.error('[main] echo dispatch error:', err.message); }
+      }
+    })().catch(err => console.error('[main] echo async error:', err.message));
   }
 
   // Background: dispatch scheduling tags — set/list/cancel her own timers.

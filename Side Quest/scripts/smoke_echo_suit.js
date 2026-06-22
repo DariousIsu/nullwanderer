@@ -118,6 +118,24 @@ function mockClient(overrides = {}) {
     ok('second got entity', /Rainey Center/.test(results[1].text));
   }
 
+  console.log('\nstripEchoTags (pure):');
+  ok('strips <echo-do> block, keeps prose', (() => { const s = S.stripEchoTags('Sure. <echo-do name="search_knowledge">{"q":"x"}</echo-do> done'); return /Sure\./.test(s) && /done/.test(s) && !/echo-do/.test(s); })());
+  ok('strips all five tag forms', (() => { const s = S.stripEchoTags('<echo-guide/><echo-find>a</echo-find><echo-do name="t">{}</echo-do><echo-delegate name="x">y</echo-delegate><echo-propose kind="entity">{}</echo-propose>'); return s.trim() === ''; })());
+  ok('null-safe', S.stripEchoTags(null) === null);
+
+  console.log('\ndispatch auto-connect (self-heal before warm-connect finishes):');
+  {
+    const suit = S.createSuit({ client: mockClient() });
+    // not connected yet (no connect() call) — dispatch should connect on demand
+    const r = await suit.dispatch({ kind: 'do', name: 'search_knowledge', args: { query: 'x' } });
+    ok('auto-connected on first dispatch', suit.status().connected === true && r.ok);
+  }
+  {
+    const suit = S.createSuit({ client: mockClient({ failInit: true }) });
+    const r = await suit.dispatch({ kind: 'do', name: 'search_knowledge', args: {} });
+    ok('disconnected suit → graceful "not connected" (no throw)', r.isError === true && /isn't connected/.test(r.text));
+  }
+
   console.log('\n' + (fail === 0 ? 'ALL PASS' : 'FAILURES') + ` - ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

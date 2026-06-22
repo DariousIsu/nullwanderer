@@ -399,7 +399,7 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
  *   then    = alternating user / assistant from recentTurns (assistant carries <think>/<say>)
  *   finally = the new user message
  */
-function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, retrievedKnowledgeBlock, capabilityProposalBlock, selfModelBlock, personalBlock, relevantPastTurns, newUserMessage }) {
+function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, retrievedKnowledgeBlock, capabilityProposalBlock, selfModelBlock, personalBlock, relevantPastTurns, echoSuitBlock, newUserMessage }) {
   let systemContent = sub(BOOTSTRAP, userName);
 
   // AWARENESS — temporal + system facts prepended to system prompt so she knows
@@ -437,6 +437,12 @@ function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonol
   // BROWSER — when connected, listed tabs + tag syntax instructions
   if (browserBlock) {
     systemContent += '\n\n' + browserBlock;
+  }
+
+  // ECHO SUIT — when the suit is connected, her capability surface (518 tools navigated via the
+  // atlas) + the nav-verb tags. A peer capability surface like the browser; only present when on.
+  if (echoSuitBlock) {
+    systemContent += '\n\n' + echoSuitBlock;
   }
 
   // PRIMACY INJECTION — open threads at top of system block for primacy weighting.

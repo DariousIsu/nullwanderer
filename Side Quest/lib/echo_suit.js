@@ -60,6 +60,22 @@ function parseArgs(body) {
   try { return { args: JSON.parse(t) }; } catch (e) { return { args: {}, parseError: e.message }; }
 }
 
+// Remove all echo-suit tags from a block of her output, so they don't persist in stored turns
+// (mirrors every other tool lib's stripTags). Idempotent; null-safe.
+function stripEchoTags(text) {
+  if (!text) return text;
+  return String(text)
+    .replace(/<echo-guide\s*\/>/g, '')
+    .replace(/<echo-guide>\s*<\/echo-guide>/g, '')
+    .replace(/<echo-find>[\s\S]*?<\/echo-find>/g, '')
+    .replace(/<echo-do\b[\s\S]*?<\/echo-do>/g, '')
+    .replace(/<echo-delegate\b[\s\S]*?<\/echo-delegate>/g, '')
+    .replace(/<echo-propose\b[\s\S]*?<\/echo-propose>/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 // Turn get_tool_map(intent) JSON into a SMALL, query-relevant list — the small-model navigation
 // aid (518 raw entries would blow her context). Filters by query terms over name+description.
 function filterToolMap(jsonText, query, limit = 15) {
@@ -147,6 +163,12 @@ class EchoSuit {
   // to her (errors included, so she can self-correct args / pick another tool).
   async dispatch(tag) {
     if (!tag || !tag.kind) return { ok: false, text: 'no tag' };
+    // Self-heal: if she reaches for the suit before the warm-connect finished (or after Echo
+    // dropped), try to connect now. guide connects on its own below.
+    if (!this.connected && tag.kind !== 'guide') {
+      await this.connect();
+      if (!this.connected) return { ok: false, kind: tag.kind, isError: true, text: `The Echo suit isn't connected right now (${this.lastError || 'still starting up'}). I can't reach those tools this moment — say so plainly and try again shortly.` };
+    }
     try {
       const c = this.client();
       if (tag.kind === 'guide') {
@@ -195,4 +217,4 @@ class EchoSuit {
 
 function createSuit(opts) { return new EchoSuit(opts); }
 
-module.exports = { EchoSuit, createSuit, parseEchoTags, parseArgs, normalizeToolResult, resultText, filterToolMap };
+module.exports = { EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap };
