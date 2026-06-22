@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('sq', {
   browserDisconnect: () => ipcRenderer.invoke('browser:disconnect'),
   browserStatus: () => ipcRenderer.invoke('browser:status'),
   onBrowserStatus: (cb) => ipcRenderer.on('browser:status', (_e, info) => cb(info)),
+  onEchoStatus: (cb) => ipcRenderer.on('echo:status', (_e, info) => cb(info)),
   onInboundArrived: (cb) => ipcRenderer.on('inbound:arrived', (_e, info) => cb(info)),
   onInboundTimeout: (cb) => ipcRenderer.on('inbound:timeout', (_e, info) => cb(info)),
 

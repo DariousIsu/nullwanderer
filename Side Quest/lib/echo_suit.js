@@ -198,6 +198,9 @@ class EchoSuit {
       }
       return { ok: false, text: `unknown tag kind ${tag.kind}` };
     } catch (e) {
+      // A throw here is a transport/protocol failure (Echo dropped, server restarted) — mark
+      // disconnected so the next use / the boot poller re-attaches rather than assuming it's live.
+      this.connected = false;
       return { ok: false, kind: tag.kind, isError: true, text: `Echo call failed: ${e.message}` };
     }
   }

@@ -54,6 +54,27 @@ if (browserBtn) {
 if (window.sq && window.sq.onBrowserStatus) {
   window.sq.onBrowserStatus((s) => setBrowserStatus(s));
 }
+
+// --- Echo suit status (read-only indicator; she auto-attaches to the Echo app you run) ---
+const echoStatus = document.getElementById('echo-status');
+function setEchoStatus(s) {
+  if (!echoStatus) return;
+  const connected = !!(s && s.connected);
+  if (connected) {
+    echoStatus.textContent = `echo · ${s.tools || 0} tools`;
+    echoStatus.classList.add('connected');
+    echoStatus.classList.remove('disconnected');
+    echoStatus.title = `Echo suit attached — ${s.tools || 0} tools available`;
+  } else {
+    echoStatus.textContent = 'echo: offline';
+    echoStatus.classList.add('disconnected');
+    echoStatus.classList.remove('connected');
+    echoStatus.title = 'Echo suit — open the Echo app to connect';
+  }
+}
+if (window.sq && window.sq.onEchoStatus) {
+  window.sq.onEchoStatus((s) => setEchoStatus(s));
+}
 // Initial status query
 if (window.sq && window.sq.browserStatus) {
   window.sq.browserStatus().then(s => setBrowserStatus(s)).catch(() => {});

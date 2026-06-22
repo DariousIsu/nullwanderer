@@ -29,7 +29,22 @@ const {
 const { extractCommitments } = require('./lib/commitments');
 const { fetchPage } = require('./lib/web_search');
 const echoSuitLib = require('./lib/echo_suit');
-let echoSuit = null;   // Echo "suit" — warm-spawned at boot (background); drives the 518 MCP tools
+let echoSuit = null;   // Echo "suit" — attached over HTTP to Lucas's running Echo; drives 518 MCP tools
+
+// Read Echo's HTTP endpoint + admin token from its config.toml (env overrides win). Zoe attaches
+// to the SAME server Lucas's Echo UI uses, so her work shares his canvas/DB. Admin tier (his call)
+// → propose + canvas push. Token is read at runtime from Echo's config; never stored by Side Quest.
+function readEchoConfig(dir) {
+  const fs = require('fs'); const path = require('path');
+  let token = process.env.NX_ECHO_ADMIN_TOKEN || null;
+  let port = 8765;
+  try {
+    const toml = fs.readFileSync(path.join(dir, 'config.toml'), 'utf8');
+    if (!token) { const m = toml.match(/^\s*admin_token\s*=\s*"([^"]+)"/m); if (m) token = m[1]; }
+    const p = toml.match(/^\s*port\s*=\s*(\d+)/m); if (p) port = parseInt(p[1], 10);
+  } catch (e) { console.error('[main] could not read Echo config.toml:', e.message); }
+  return { url: process.env.ECHO_MCP_URL || `http://127.0.0.1:${port}/mcp/`, token };
+}
 const openThreadsLib = require('./lib/open_threads');
 const protocolsLib = require('./lib/protocols');
 const browserLib = require('./lib/browser');
@@ -120,17 +135,22 @@ app.whenReady().then(() => {
   // Index hygiene: purge any orphaned FTS rows (rotted from past mismatched deletes) so keyword
   // search can't match ghosts. Idempotent; cheap.
   try { const purged = db.reconcileKnowledgeFts(); if (purged) console.log(`[main] purged ${purged} orphaned knowledge_fts row(s)`); } catch {}
-  // Echo suit — warm-spawn the capability suit in the BACKGROUND after boot (≈5–26s cold; never
-  // blocks her startup). She wears it once connected; failure is non-fatal (suit just stays off,
-  // and any tag use lazily retries the connection). Paths overridable via ECHO_PYTHON/ECHO_CWD.
-  const ECHO_PYTHON = process.env.ECHO_PYTHON || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo/.venv/Scripts/python.exe';
+  // Echo suit — ATTACH over HTTP to the Echo app Lucas runs. ONE shared Echo process serves his
+  // UI/canvas AND her MCP tools off the same DB + event bus, so her proposals + canvas renders show
+  // up live in his Echo. She does NOT spawn it — she's a guest; if it isn't up yet she retries
+  // every 60s so the suit comes online (and the status light flips) the moment he opens Echo.
   const ECHO_CWD = process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo';
-  echoSuit = echoSuitLib.createSuit({ spawnFn: () => require('./lib/echo').spawnEcho({ python: ECHO_PYTHON, cwd: ECHO_CWD }) });
+  const echoCfg = readEchoConfig(ECHO_CWD);
+  echoSuit = echoSuitLib.createSuit({ client: require('./lib/echo').fromEnv({ url: echoCfg.url, token: echoCfg.token }) });
+  const pushEchoStatus = (r) => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('echo:status', { connected: !!(r && r.ok), tools: (r && r.tools) || 0 }); } catch {} };
+  const tryEchoAttach = () => echoSuit.connect().then(r => { if (r.ok) console.log(`[main] echo suit attached: ${r.tools} tools`); pushEchoStatus(r); return !!r.ok; }).catch(() => { pushEchoStatus(null); return false; });
   setTimeout(() => {
-    echoSuit.connect().then(r => {
-      console.log(r.ok ? `[main] echo suit connected: ${r.tools} tools (${r.bootMs}ms)` : `[main] echo suit offline: ${r.error}`);
-      try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('echo:status', { connected: !!r.ok, tools: r.tools || 0 }); } catch {}
-    }).catch(e => console.error('[main] echo suit connect threw:', e.message));
+    tryEchoAttach();   // first attempt shortly after boot
+    // Permanent heartbeat: a cheap no-op while connected; reattaches within 60s whenever Echo
+    // comes online (Lucas opens it) or comes back (it died mid-session → a failed dispatch flips
+    // connected=false, the next beat re-attaches and refreshes the status light).
+    const iv = setInterval(() => { if (!echoSuit || echoSuit.connected) return; tryEchoAttach(); }, 60 * 1000);
+    iv.unref?.();
   }, 8 * 1000).unref?.();
   filesLib.ensureWorkspace();
   // Warm the CPU embedder (bge-small via transformers.js) so first knowledge
