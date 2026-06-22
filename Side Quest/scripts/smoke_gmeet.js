@@ -121,6 +121,32 @@ function mockDeps(over = {}) {
   ok('after the max wait → stale-flush synthesizes understanding', sr2.ok && /followed along/.test(sr2.note) && /stale-flush/.test(sr2.note));
   g.reset();
 
+  console.log('\naddressesSelf (active participation — direct address vs passing mention):');
+  ok('vocative "Zoe, can you…"', g.addressesSelf('Zoe, can you pull up the Q3 numbers?'));
+  ok('name + question word', g.addressesSelf("Hey Zoe what's the latest on the bill?"));
+  ok('trailing vocative question', g.addressesSelf('Could you share that, Zoe?'));
+  ok('"ask Zoe to…"', g.addressesSelf('Can someone ask Zoe to summarize?'));
+  ok('question naming her', g.addressesSelf('What does Zoe think about this?'));
+  ok('plain mention is NOT addressed', !g.addressesSelf('Zoe is here taking notes for Lucas.'));
+  ok('praise is NOT addressed', !g.addressesSelf('Great work Zoe.'));
+  ok('unrelated line is NOT addressed', !g.addressesSelf('Let us move on to the next agenda item.'));
+  ok('isSelfSpeaker matches her own caption', g.isSelfSpeaker('Zoe Lane', g.selfNames()));
+  ok('isSelfSpeaker false for another speaker', !g.isSelfSpeaker('Lucas Overby', g.selfNames()));
+
+  console.log('\nobserving → addressed → autonomous reply in the meeting chat:');
+  g.start(URL1); g.set('observing');
+  const mAns = mockDeps({
+    captionsRef: { text: 'Alice: Zoe, can you pull up the latest polling numbers?' },
+    streamChat: async ({ onToken }) => onToken('The latest poll has support at 52%, up 3 points week-over-week — sharing the source now.'),
+  });
+  mAns.deps.retrieve = async () => [{ content: 'Latest poll: 52% support, +3 wk/wk (internal tracker).' }];
+  const ar = await g.runTick({ userName: 'Lucas', deps: mAns.deps });
+  ok('detects the address + replies in chat', ar.ok && /replied in chat/.test(ar.note) && /Alice/.test(ar.note));
+  ok('the reply was posted to the meeting chat', mAns.calls.posts.length === 1 && /52%/.test(mAns.calls.posts[0]));
+  const ar2 = await g.runTick({ userName: 'Lucas', deps: mAns.deps });
+  ok('the same address is not answered twice (dedup)', mAns.calls.posts.length === 1);
+  g.reset();
+
   console.log('\nstay-in: recipe imperfect but actually in-meeting → joins anyway (anti-wander):');
   g.start(URL1);
   const mStay = mockDeps({ joinResult: { ok: false, reason: 'modal covered Join now' }, inMeeting: true });

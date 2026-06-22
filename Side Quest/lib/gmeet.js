@@ -34,6 +34,9 @@ const FOLLOW_MAX_WAIT_MS = 25000;   // ...or after this long with ANY pending li
 // caption rows aren't re-reported each ~10s observe tick. Reset on start(). In-memory:
 // captions are ephemeral, no need to persist.
 let _seenCaps = new Set();
+// addressed-to-her lines she's already answered (so a mutating/repeated caption doesn't
+// trigger duplicate chat replies). Reset on start().
+let _answered = new Set();
 
 // --- pure helpers (unit-tested) ---
 
@@ -139,6 +142,43 @@ function parseAttendees(scrapeText) {
   return out;
 }
 
+// --- addressee detection (active participation) ---
+// The names she answers to. "Zoe" + her chosen_name; deduped, lowercased.
+function selfNames() {
+  const names = ['zoe', 'zoe lane'];
+  const chosen = (db.getMeta('chosen_name') || '').toLowerCase().trim();
+  if (chosen && !names.includes(chosen)) names.push(chosen);
+  return names;
+}
+function _nameAlt(names) {
+  return (names || ['zoe']).map(n => String(n).trim().toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).filter(Boolean).join('|');
+}
+// Is this caption SPOKEN BY her (so she doesn't answer her own echoed lines)?
+function isSelfSpeaker(speaker, names = ['zoe']) {
+  const s = String(speaker || '').toLowerCase();
+  return (names || ['zoe']).some(n => n && s.includes(String(n).toLowerCase()));
+}
+/**
+ * Is this caption ADDRESSED to her (a request/question directed at Zoe), vs merely a
+ * third-person MENTION ("Zoe is taking notes")? Deterministic, tuned to fire on a direct
+ * address and stay quiet on a passing reference. Used to decide when she should respond
+ * in the meeting. names defaults to ['zoe'].
+ */
+function addressesSelf(text, names = ['zoe']) {
+  const t = String(text || '').trim();
+  const alt = _nameAlt(names);
+  if (!t || !alt) return false;
+  const lower = t.toLowerCase();
+  if (!new RegExp(`\\b(?:${alt})\\b`).test(lower)) return false;           // must name her at all
+  if (new RegExp(`\\b(?:${alt})\\s*[,:]`).test(lower)) return true;        // vocative: "Zoe, ..." / "Zoe:"
+  if (new RegExp(`[,]\\s*(?:${alt})\\b[\\s!?.]*$`).test(lower)) return true; // trailing vocative: "..., Zoe?"
+  if (new RegExp(`\\b(?:${alt})\\b[\\s,]*(?:can|could|would|will)\\s+you\\b`).test(lower)) return true; // "Zoe can you..."
+  if (new RegExp(`\\b(?:${alt})\\b[\\s,]*(?:what|how|why|when|where|which|who|please|help|pull up|look up|find|share|send|tell us|give us)\\b`).test(lower)) return true; // "Zoe what's..."
+  if (new RegExp(`\\b(?:ask|tell|have|get)\\s+(?:${alt})\\b`).test(lower)) return true; // "ask Zoe to..."
+  if (/\?\s*$/.test(t) && new RegExp(`\\b(?:${alt})\\b`).test(lower)) return true;        // a question naming her
+  return false;
+}
+
 // --- meta-backed stage state ---
 function get() { return db.getMeta('gmeet_stage') || 'none'; }
 function set(s) { if (STAGES.includes(s)) db.setMeta('gmeet_stage', s); }
@@ -153,6 +193,7 @@ function start(meetUrl) {
   db.setMeta('gmeet_left_ticks', '0');
   db.setMeta('gmeet_pending', ''); db.setMeta('gmeet_pending_lines', '0'); db.setMeta('gmeet_pending_since', ''); db.setMeta('gmeet_understanding', '');
   _seenCaps = new Set();
+  _answered = new Set();
   set('joining');
   return true;
 }
@@ -176,7 +217,10 @@ function defaultDeps() {
     enableCaptions: liveEnableCaptions,
     inMeeting: liveInMeeting,
     preClear: livePreClear,
-    postChat: livePostChat
+    postChat: livePostChat,
+    // retrieve(query) → grounding rows for answering a question addressed to her in-meeting.
+    // Her own knowledge store (leaf-preference); web/Echo grounding can layer on later.
+    retrieve: async (q) => { try { return await require('./memory').retrieve(q, { k: 3, preferLeaf: true }); } catch { return []; } }
   };
 }
 
@@ -326,6 +370,26 @@ async function modelFollowAlong(d, ctx, transcript) {
   return out.replace(/<[^>]+>/g, '').trim().slice(0, 400);
 }
 
+// ANSWER WHEN ADDRESSED: someone in the meeting addressed her — compose a SHORT reply to
+// post in the meeting chat, grounded in the recent conversation + anything she knows
+// (knowledge rows passed in). ONE model tick. Returns '' on failure.
+async function modelAnswerForChat(d, ctx, ask, transcript, knowledge) {
+  const who = (ask && ask.speaker) || 'someone';
+  const askText = (ask && ask.text) || '';
+  const self = ctx.selfName || 'Zoe';
+  const k = knowledge ? `\n\nWhat you already know that may help:\n${knowledge}` : '';
+  let out = '';
+  try {
+    await d.streamChat({
+      model: d.MODEL,
+      messages: [{ role: 'user', content: `You are ${self}, ${ctx.userName || 'Lucas'}'s AI assistant, actively taking part in a live meeting. ${who} just addressed you directly:\n"${askText}"\n\nRecent conversation:\n${String(transcript || '').slice(-1500)}${k}\n\nWrite a SHORT, direct reply to post in the meeting chat (1–3 sentences). Answer the question or do what's asked, using what you know. If you genuinely don't have the information, say so plainly and that you'll look into it and follow up. Your own voice. No preamble, no quotes, no stage directions.` }],
+      options: { temperature: 0.5, top_p: 0.9, num_ctx: 8192, num_predict: 180 },
+      onToken: (tok) => { out += tok; }
+    });
+  } catch { return ''; }
+  return out.replace(/<[^>]+>/g, '').replace(/^["']|["']$/g, '').trim().slice(0, 600);
+}
+
 // --- orchestrator: advance ONE stage per tick ---
 // ctx: { userName, deps?, onReading(content,label), onSurface(text) }
 async function runTick(ctx = {}) {
@@ -415,6 +479,29 @@ async function runTick(ctx = {}) {
       db.setMeta('gmeet_pending_lines', String(parseInt(db.getMeta('gmeet_pending_lines') || '0', 10) + fresh.length));
       if (!db.getMeta('gmeet_pending_since')) db.setMeta('gmeet_pending_since', String(d.now ? d.now() : Date.now()));
     }
+    // ADDRESSED TO HER (active participation): if a fresh caption directly addresses Zoe
+    // (anyone may — Lucas's call), she ANSWERS in the meeting chat autonomously. This takes
+    // precedence over the periodic follow-along — being spoken to is the priority. Dedup so a
+    // mutating/repeated caption can't double-post. Skips her own echoed lines.
+    const names = selfNames();
+    const addressed = fresh.filter(c => !isSelfSpeaker(c.speaker, names) && addressesSelf(c.text, names));
+    if (addressed.length) {
+      const ask = addressed[addressed.length - 1];                 // answer the most recent ask
+      const sig = `${ask.speaker}|${ask.text}`.toLowerCase().replace(/\s+/g, ' ').trim();
+      if (!_answered.has(sig)) {
+        _answered.add(sig);
+        if (_answered.size > 200) _answered = new Set(Array.from(_answered).slice(-100));
+        let knowledge = '';
+        try { const rows = d.retrieve ? await d.retrieve(ask.text) : []; knowledge = (rows || []).map(r => `- ${(r.content || '').slice(0, 220)}`).join('\n'); } catch {}
+        const transcript = db.getMeta('gmeet_pending') || db.getMeta('gmeet_understanding') || `${ask.speaker}: ${ask.text}`;
+        const reply = await modelAnswerForChat(d, ctx, ask, transcript, knowledge);
+        if (reply) {
+          const post = await d.postChat(d.web, reply);
+          surface(`${ask.speaker} addressed me — "${ask.text}". I replied in the meeting chat: "${reply}"`, '(gmeet) replied in chat');
+          return { stage, ok: !!(post && post.ok), note: `addressed by ${ask.speaker} → replied in chat${post && post.ok ? '' : ` (post failed: ${post && post.reason})`}` };
+        }
+      }
+    }
     // FOLLOW ALONG: synthesize what's being discussed in ONE model tick — so she actually
     // REGISTERS the conversation live (forms understanding) instead of just logging captions
     // she never reads. Fires on EITHER enough new lines (rich meeting) OR a max wait with any
@@ -445,5 +532,6 @@ module.exports = {
   STAGES, get, set, active, start, reset, url, runTick, defaultDeps,
   // pure helpers (tested)
   detectMeetUrl, meetLinkFromEvent, introPrompt, validateIntro, ensureIntro, parseCaptions, parseAttendees,
+  addressesSelf, isSelfSpeaker, selfNames,
   MEET_URL_RE
 };
