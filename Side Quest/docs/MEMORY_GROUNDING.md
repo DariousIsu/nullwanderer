@@ -79,4 +79,13 @@ graph_entity_proposals / graph_relation_proposals  (propose→promote gate; stat
 - (b) ✅ `factsForPrompt()` injected into the chat prompt (`context.js`) and idle prompt (`monologue.js`); `memory.retrieve/retrieveScored` exclude `reflection_speculation`.
 - (c) ✅ `lib/graph_extract.js`: grounded readings → 'read' graph triples (constrained vocab + pronoun/sentence-rejecting parser), throttled non-blocking hook in `runSearch`. `smoke_graph_extract.js` 10/10.
 
-**Live status:** all 6 graph tables present in `data/sq.db`; 3 facts quarantined; app rebooted clean (model warmed, embedder warm, browser ready). Graph starts empty and populates forward from meeting attendance + grounded-reading extraction.
+**Live status:** all 6 graph tables present in `data/sq.db`; 3 facts quarantined; app rebooted clean (model warmed, embedder warm, browser ready). Graph starts empty and populates forward from meeting attendance + grounded-reading extraction (live: 18 entities / 14 relations and climbing).
+
+## Ground the self (anti-glob, live 2026-06-22)
+
+The obsession's deepest root was in `self_model`, not the fact graph: high-mention self-assertions topped her identity because self-repetition (mentions) bought rank. Fixed with the same epistemic discipline:
+- `self_model.epistemic` column (witnessed | told | speculated; existing 52 rows → speculated, all self-asserted).
+- `_priority` weights grounded self above asserted self **and gives speculated NO mention bonus** — an unevidenced self-claim can't climb by repetition. Distinct high-importance tastes now lead over the mention-pumped obsession.
+- `recordTold()` + `setSelfModelEpistemic()` (trust upgrades only) + `detectAffirmedTrait()`: Lucas affirming a trait in chat ("you have a knack for X") grounds it as `told` and upgrades a matching asserted trait in place. Wired into `main.js` chat:send.
+- `witnessed` (behavior-grounded) supported in schema/priority; populated later (Echo KB + action evidence).
+- `smoke_self_grounding.js` 19/19; full suite 61/61.
