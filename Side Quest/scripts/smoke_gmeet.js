@@ -31,6 +31,7 @@ function mockDeps(over = {}) {
       scrapeAttendees: async () => over.attendeesText || '',
       scrapeCaptions: async () => (over.captionsRef ? over.captionsRef.text : (over.captionsText || '')),
       enableCaptions: async () => over.captionsEnable || { ok: true, via: 'shortcut' },
+      inMeeting: async () => (over.inMeeting !== undefined ? over.inMeeting : true),
       postChat: async (_w, msg) => { calls.posts.push(msg); return over.postResult || { ok: true }; }
     }
   };
@@ -86,6 +87,15 @@ function mockDeps(over = {}) {
   m.deps.scrapeCaptions = async () => 'Alice: Hello\nBob: Hi\nAlice: One more thing';   // a new line arrives
   r = await g.runTick({ userName: 'Lucas', deps: m.deps });
   ok('detects only the 1 newly-added caption', r.ok && /1 new/.test(r.note));
+  g.reset();
+
+  console.log('\nleave detection (meeting ended → exits observing, frees the idle loop):');
+  g.start(URL1); g.set('observing');
+  const mLeave = mockDeps({ inMeeting: false });
+  let lr = await g.runTick({ userName: 'Lucas', deps: mLeave.deps });
+  ok('1st miss stays observing', g.get() === 'observing' && /1\/2/.test(lr.note));
+  lr = await g.runTick({ userName: 'Lucas', deps: mLeave.deps });
+  ok('2nd miss → ends + inactive (no more loop monopoly)', !g.active() && /ended/.test(lr.note));
   g.reset();
 
   console.log('\nintro guarantee end-to-end (model forgets name + disclosure → still both):');

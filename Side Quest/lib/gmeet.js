@@ -141,6 +141,7 @@ function start(meetUrl) {
   if (!u) return false;
   db.setMeta('gmeet_url', u);
   db.setMeta('gmeet_strikes', '0');
+  db.setMeta('gmeet_left_ticks', '0');
   _seenCaps = new Set();
   set('joining');
   return true;
@@ -163,6 +164,7 @@ function defaultDeps() {
     scrapeAttendees: liveScrapeAttendees,
     scrapeCaptions: liveScrapeCaptions,
     enableCaptions: liveEnableCaptions,
+    inMeeting: liveInMeeting,
     postChat: livePostChat
   };
 }
@@ -245,6 +247,19 @@ async function liveScrapeCaptions(web) {
     return (res && res.text) || '';
   } catch { return ''; }
 }
+// Is she actually still in the meeting? (Leave detection — without this, observing never
+// exits and monopolizes the idle loop forever, which is what froze her cognition.)
+// True only if the browser is on a Meet meeting URL AND the in-call UI ("Leave call") is present.
+async function liveInMeeting(web) {
+  try {
+    const page = await web.ensure();
+    const url = (() => { try { return page.url() || ''; } catch { return ''; } })();
+    if (!/meet\.google\.com\/[a-z0-9]/i.test(url)) return false;   // navigated away / not a meeting
+    const inCall = await page.locator('button[aria-label*="Leave call" i], [aria-label*="Leave call" i], [aria-label*="Leave the call" i]').count().catch(() => 0);
+    return inCall > 0;
+  } catch { return false; }
+}
+
 async function livePostChat(web, message) {
   // Posting to the Meet chat is a recipe (find chat input → type → Enter); replayed live.
   try { return await web.runRecipe('gmeet_post_chat', { message }, {}); } catch (e) { return { ok: false, reason: e.message }; }
@@ -314,6 +329,20 @@ async function runTick(ctx = {}) {
   }
 
   if (stage === 'observing') {
+    // LEAVE DETECTION: if she's no longer in the meeting (navigated away / call ended),
+    // end after 2 consecutive misses so observing can't monopolize the idle loop forever
+    // (the freeze: a stale 'observing' from an ended meeting starved her of all cognition).
+    if (!(await d.inMeeting(d.web))) {
+      const n = parseInt(db.getMeta('gmeet_left_ticks') || '0', 10) + 1;
+      db.setMeta('gmeet_left_ticks', String(n));
+      if (n >= 2) {
+        db.setMeta('gmeet_left_ticks', '0'); set('done');
+        surface(`The meeting ended — I've left and I'm back to my own time.`, '(gmeet) meeting ended');
+        return { stage, ok: true, note: 'meeting ended → done (left detection)' };
+      }
+      return { stage, ok: true, note: `not in meeting (${n}/2) — will end if it persists` };
+    }
+    db.setMeta('gmeet_left_ticks', '0');
     // Dedupe by exact speaker|text against what she's already surfaced — captions scroll
     // and the active line mutates in place, so an index-into-the-list breaks; a seen-set
     // is robust to both. (10s observe ticks usually catch a line after it finalizes.)
