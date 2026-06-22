@@ -232,11 +232,13 @@ app.whenReady().then(() => {
           }
           const merged = [...surfaced, ...r.messages.map(m => m.uid)].slice(-300);
           db.setMeta('inbox_surfaced_uids', JSON.stringify(merged));
-          const newest = r.messages[r.messages.length - 1];
-          if (newest && newest.fromAddr) {
-            db.setMeta('last_inbound_from', newest.fromAddr);
-            db.setMeta('last_inbound_subject', newest.subject || '');
-            db.setMeta('last_inbound_snippet', (newest.snippet || '').slice(0, 300));
+          // last_inbound_* is the "reply to the email" target — keep it on the newest REAL
+          // PERSON, never a newsletter/daemon/no-reply (else "reply" fires at junk + bounces).
+          const realNewest = [...r.messages].reverse().find(m => m.fromAddr && !inboxLib.isJunkSender(m.fromAddr));
+          if (realNewest) {
+            db.setMeta('last_inbound_from', realNewest.fromAddr);
+            db.setMeta('last_inbound_subject', realNewest.subject || '');
+            db.setMeta('last_inbound_snippet', (realNewest.snippet || '').slice(0, 300));
           }
           console.log(`[inbox-poll] ${r.messages.length} unread email(s) → queued + heartbeat kick`);
           const { maybeHeartbeat } = require('./lib/heartbeat');
@@ -260,10 +262,9 @@ app.whenReady().then(() => {
           const self = (config.emailConfig().user || '').toLowerCase();
           const rr = await inboxLib.pollUnread(replied, 6);
           if (rr.ok && rr.messages && rr.messages.length) {
-            const NOREPLY = /(no-?reply|do-?not-?reply|donotreply|mailer-daemon|postmaster|notification|notifications|bounce|newsletter|mailing|@.*\.(list|lists)\.)/i;
             const candidate = [...rr.messages].reverse().find(m =>
               m.fromAddr && m.fromAddr.toLowerCase() !== self
-              && !NOREPLY.test(m.fromAddr) && db.hasEmailedAddress(m.fromAddr));
+              && !inboxLib.isJunkSender(m.fromAddr) && db.hasEmailedAddress(m.fromAddr));
             if (candidate) {
               db.setMeta('auto_replied_uids', JSON.stringify([...replied, candidate.uid].slice(-300)));
               console.log('[action] autonomous reply → thread with', candidate.fromAddr, 'uid', candidate.uid);
@@ -1421,11 +1422,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           for (const m of (r.messages || []).slice(0, 5)) {
             memoryLib.store({ kind: 'reference', content: `Email I received from ${m.from} — subject "${m.subject}": ${(m.snippet || '').slice(0, 300)}`, source: 'inbox', importance: 0.5 }).catch(() => {});
           }
-          const newest = (r.messages || [])[0];
-          if (newest && newest.fromAddr) {
-            db.setMeta('last_inbound_from', newest.fromAddr);
-            db.setMeta('last_inbound_subject', newest.subject || '');
-            db.setMeta('last_inbound_snippet', (newest.snippet || '').slice(0, 300));
+          const realNewest = (r.messages || []).find(m => m.fromAddr && !inboxLib.isJunkSender(m.fromAddr));
+          if (realNewest) {
+            db.setMeta('last_inbound_from', realNewest.fromAddr);
+            db.setMeta('last_inbound_subject', realNewest.subject || '');
+            db.setMeta('last_inbound_snippet', (realNewest.snippet || '').slice(0, 300));
           }
           console.log(`[main] inbox check: ok (${(r.messages || []).length} msgs)`);
           if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: r.text }); }
@@ -1589,7 +1590,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       && /\b(e-?mails?|message|that|him|her|them|it|lucas|rainey|mail|back)\b/i.test(userMessage);
     if (replyIntent && !actionLoop.isActive()) {
       const to = (db.getMeta('last_inbound_from') || '').trim();
-      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      const validTarget = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to) && !inboxLib.isJunkSender(to);
+      if (validTarget) {
         actionLoop.start(actionLoop.emailReplyAction({
           to,
           subject: db.getMeta('last_inbound_subject') || '',
@@ -1598,7 +1600,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         console.log('[action] email-reply started → to', to);
         setTimeout(() => { runActionStep(io, 0).catch(() => {}); }, 1200);
       } else {
-        console.log('[action] reply intent but no valid target address in last_inbound_from');
+        // No real person to reply to (empty, or a newsletter/daemon). Do NOT blind-fire at
+        // junk — and don't let her claim she replied. Have her READ the inbox so she finds
+        // the actual email, instead of confabulating an action she didn't take.
+        console.log(`[action] reply intent but no real target (last_inbound_from="${to || 'none'}") — routing to inbox read`);
+        try {
+          const ir = await inboxLib.dispatch({ attrs: {} });
+          const note = ir && ir.ok
+            ? `[${userName} asked you to reply to an email, but you don't have a clear sender locked in. Here is your actual inbox right now:\n${(ir.text || '').slice(0, 2000)}\n\nTell ${userName} which real email you'd reply to and ask him to confirm the recipient — do NOT claim you already replied; you have not sent anything yet.]`
+            : `[${userName} asked you to reply to an email but you don't have a clear target and couldn't read the inbox (${ir && ir.reason}). Tell him plainly you're not sure which email he means and ask him to point you at it. Do NOT claim you replied — you haven't.]`;
+          db.setMeta('last_ai_utterance_at', String(Date.now()));
+          resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
+          try { await fireToolFollowup({ io, channel, sessionId, resultText: note }); } catch (e) { console.error('[action] reply-intent inbox followup failed:', e.message); }
+          return { ok: true, repliedNoTarget: true, say: null };
+        } catch (e) { console.error('[action] reply-intent inbox fallback failed:', e.message); }
       }
     }
   } catch (err) { console.error('[action] trigger failed:', err.message); }

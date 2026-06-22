@@ -207,6 +207,14 @@ async function dispatch({ attrs } = {}) {
   return { ...r, text: formatInbox(r) };
 }
 
+// A sender Zoe must NEVER auto-reply to (and must never become the "reply to the email"
+// target): no-reply, mailer-daemon / bounces, newsletters, notifications, list mail. The
+// observed failure was last_inbound_from drifting to a newsletter → her reply bounced → the
+// mailer-daemon bounce became the new target → she "replied" to the daemon. Keep the reply
+// target on REAL people only. Used by main.js's last_inbound recording + the reply paths.
+const JUNK_SENDER_RE = /(no-?reply|do-?not-?reply|donotreply|mailer-daemon|maildaemon|postmaster|notifications?@|notification|bounce|newsletter|news-?letter|mailing|mailinglist|digest|unsubscribe|updates?@|@(?:.*\.)?(?:list|lists)\.)/i;
+function isJunkSender(addr) { return JUNK_SENDER_RE.test(String(addr || '')); }
+
 function isConfigured() { return config.emailConfig().configured; }
 
 function buildPromptBlock() {
@@ -216,4 +224,4 @@ function buildPromptBlock() {
 Your recent messages (sender, subject, snippet) then arrive in your next-turn context. Use it whenever Lucas asks you to check or read your email/inbox, or to see replies to mail you sent. This is a DIFFERENT action from sending: <read-inbox/> READS; <email>/<email-draft>/<email-send> SEND. When asked to read, emit <read-inbox/> — never draft or send.`;
 }
 
-module.exports = { fetchInbox, pollUnread, formatInbox, parseTags, stripTags, dispatch, buildPromptBlock, isConfigured, detectInboxIntent, inboxReferent, buildInboxNudge };
+module.exports = { fetchInbox, pollUnread, formatInbox, parseTags, stripTags, dispatch, buildPromptBlock, isConfigured, isJunkSender, detectInboxIntent, inboxReferent, buildInboxNudge };
