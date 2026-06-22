@@ -75,6 +75,9 @@ function mockPage({ present = new Set(), detect = null } = {}) {
   // nothing resolves, no modelHeal → fail
   const h3 = await runner.runStep(mockPage(), { action: 'click', locator: { method: 'getByRole', role: 'button', name: 'Ghost' } }, {});
   ok('unresolvable target → ok:false', h3.ok === false && /could not locate/.test(h3.reason));
+  // optional step: unresolvable → skipped (ok:true), not a failure
+  const hOpt = await runner.runStep(mockPage(), { action: 'click', optional: true, locator: { method: 'getByRole', role: 'button', name: 'Ghost' } }, {});
+  ok('optional unresolvable → skipped (ok)', hOpt.ok === true && hOpt.skipped === true);
   // modelHeal hook supplies a working descriptor (the model-last tier)
   const pf4 = mockPage({ present: new Set(['css:#healed']) });
   const h4 = await runner.runStep(pf4, { action: 'click', locator: { method: 'getByRole', role: 'button', name: 'Ghost' } }, {}, { modelHeal: async () => ({ css: '#healed' }) });

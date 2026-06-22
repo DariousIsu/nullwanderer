@@ -142,7 +142,12 @@ async function runStep(page, step, vars = {}, ctx = {}) {
 
   // fill / click / waitFor all need a resolved target
   const target = await resolveTarget(page, step, ctx);
-  if (!target) return { ok: false, action, reason: `could not locate target for ${action} (${describe(step.locator)})` };
+  if (!target) {
+    // An OPTIONAL step that can't be located is skipped, not failed — e.g. a "mute mic"
+    // toggle that's already off / not present. Required steps still fail the recipe.
+    if (step.optional) return { ok: true, action, skipped: true };
+    return { ok: false, action, reason: `could not locate target for ${action} (${describe(step.locator)})` };
+  }
   const { healed, byModel } = target;
   // A step acts on ONE element. Narrow to the first match so a broad selector that
   // resolves to several elements (common on heavy SPAs like Meet) clicks/fills the

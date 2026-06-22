@@ -32,6 +32,7 @@ function mockDeps(over = {}) {
       scrapeCaptions: async () => (over.captionsRef ? over.captionsRef.text : (over.captionsText || '')),
       enableCaptions: async () => over.captionsEnable || { ok: true, via: 'shortcut' },
       inMeeting: async () => (over.inMeeting !== undefined ? over.inMeeting : true),
+      preClear: async () => {},
       postChat: async (_w, msg) => { calls.posts.push(msg); return over.postResult || { ok: true }; }
     }
   };
@@ -87,6 +88,23 @@ function mockDeps(over = {}) {
   m.deps.scrapeCaptions = async () => 'Alice: Hello\nBob: Hi\nAlice: One more thing';   // a new line arrives
   r = await g.runTick({ userName: 'Lucas', deps: m.deps });
   ok('detects only the 1 newly-added caption', r.ok && /1 new/.test(r.note));
+  g.reset();
+
+  console.log('\nstay-in: recipe imperfect but actually in-meeting → joins anyway (anti-wander):');
+  g.start(URL1);
+  const mStay = mockDeps({ joinResult: { ok: false, reason: 'modal covered Join now' }, inMeeting: true });
+  const sr = await g.runTick({ userName: 'Lucas', deps: mStay.deps });
+  ok('joins via in-meeting source-of-truth', sr.ok && g.get() === 'intro');
+  g.reset();
+
+  console.log('\ngive-up: not in + recipe fails 3x → asks Lucas:');
+  g.start(URL1);
+  const mGive = mockDeps({ joinResult: { ok: false, reason: 'no Join now' }, inMeeting: false });
+  let asked2 = null;
+  await g.runTick({ userName: 'Lucas', deps: mGive.deps, onSurface: t => { asked2 = t; } });
+  await g.runTick({ userName: 'Lucas', deps: mGive.deps, onSurface: t => { asked2 = t; } });
+  await g.runTick({ userName: 'Lucas', deps: mGive.deps, onSurface: t => { asked2 = t; } });
+  ok('after 3 fails → inactive + asks Lucas', !g.active() && /let me in|check the link/i.test(asked2 || ''));
   g.reset();
 
   console.log('\nleave detection (meeting ended → exits observing, frees the idle loop):');

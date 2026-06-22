@@ -165,6 +165,7 @@ function defaultDeps() {
     scrapeCaptions: liveScrapeCaptions,
     enableCaptions: liveEnableCaptions,
     inMeeting: liveInMeeting,
+    preClear: livePreClear,
     postChat: livePostChat
   };
 }
@@ -260,6 +261,22 @@ async function liveInMeeting(web) {
   } catch { return false; }
 }
 
+// Clear the "Do you want people to hear you in the meeting?" device-permission modal that
+// covers the pre-join controls (Join now + mic/cam toggles) and hangs the join. Escape
+// usually closes it; the X is a fallback. Closing it leaves her muted — what we want.
+// (Recall's bot does the same Escape pre-clear of blocking overlays.)
+async function livePreClear(web) {
+  try {
+    const page = await web.ensure();
+    try { await page.mouse.move(500, 700); } catch {}
+    for (let i = 0; i < 2; i++) { try { await page.keyboard.press('Escape'); } catch {} try { await page.waitForTimeout(250); } catch {} }
+    try {
+      const x = page.locator('[role="dialog"] button[aria-label*="Close" i], button[aria-label="Close"]').first();
+      if (await x.count().catch(() => 0)) await x.click({ timeout: 1500 }).catch(() => {});
+    } catch {}
+  } catch {}
+}
+
 async function livePostChat(web, message) {
   // Posting to the Meet chat is a recipe (find chat input → type → Enter); replayed live.
   try { return await web.runRecipe('gmeet_post_chat', { message }, {}); } catch (e) { return { ok: false, reason: e.message }; }
@@ -289,14 +306,20 @@ async function runTick(ctx = {}) {
   const stage = get();
 
   if (stage === 'joining') {
+    await d.preClear(d.web).catch(() => {});   // dismiss the device-permission modal that covers Join now
     const r = await d.web.runRecipe('gmeet_join', { url: url() }, { expectLogin: true });
     if (r && r.blocker && r.blocker.needsHuman) {
       try { ctx.onSurface && ctx.onSurface(`I'm trying to join the meeting but Google wants me signed in (${r.blocker.type}). ${ctx.userName || 'Lucas'}, can you log me into my Google account? I'll join as soon as it's clear.`); } catch {}
       return { stage, ok: false, note: `join blocked (${r.blocker.type}) — asked ${ctx.userName || 'Lucas'} to sign in`, blocker: r.blocker.type };
     }
-    if (r && r.ok) { _clear(); set('intro'); surface(`I joined the meeting (muted).`, '(gmeet) joined'); return { stage, ok: true, note: 'joined → intro' }; }
-    // HEAL SIGNAL: the join recipe's provisional selectors didn't match the live Meet DOM.
-    // Dump the real pre-join interactive elements so the selectors can be corrected.
+    // SOURCE OF TRUTH: am I actually in the meeting? Lucas may have joined me manually, or
+    // the recipe partially worked. If so, proceed regardless of the recipe's result — and
+    // STAY in (advancing to observing), so her idle browsing can't navigate the tab away
+    // from a meeting she's actually in (the "she wandered off to search" failure).
+    const inside = await d.inMeeting(d.web).catch(() => false);
+    if ((r && r.ok) || inside) { _clear(); set('intro'); surface(`I joined the meeting (muted).`, '(gmeet) joined'); return { stage, ok: true, note: `joined → intro${inside && !(r && r.ok) ? ' (confirmed in-call)' : ''}` }; }
+    // HEAL SIGNAL: not in the meeting and the recipe didn't land — dump the real pre-join
+    // interactive elements so the selectors can be corrected.
     try {
       const rd = await d.web.read();
       if (rd && rd.ok && rd.text) {
@@ -305,7 +328,8 @@ async function runTick(ctx = {}) {
       }
     } catch {}
     const g = _strike();
-    return { stage, ok: false, note: `join failed: ${r && r.reason}${g ? ' (gave up)' : ''}` };
+    if (g) { try { ctx.onSurface && ctx.onSurface(`I couldn't get into the meeting (${(r && r.reason) || 'the join screen didn\'t cooperate'}). ${ctx.userName || 'Lucas'}, could you let me in or check the link?`); } catch {} }
+    return { stage, ok: false, note: `join failed: ${r && r.reason}${g ? ' (asked Lucas for help)' : ''}` };
   }
 
   if (stage === 'intro') {
