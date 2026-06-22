@@ -28,6 +28,7 @@ const db = require('./db');
 const STAGES = ['none', 'joining', 'intro', 'observing', 'done'];
 const MAX_STAGE_STRIKES = 3;
 const FOLLOW_EVERY_LINES = 4;   // synthesize a running understanding after this many new caption lines
+const FOLLOW_MAX_WAIT_MS = 25000;   // ...or after this long with ANY pending lines, so sparse meetings still get understood (don't sit forever short of the line count)
 
 // Captions she's already surfaced this meeting (exact speaker|text), so scrolling/repeat
 // caption rows aren't re-reported each ~10s observe tick. Reset on start(). In-memory:
@@ -150,7 +151,7 @@ function start(meetUrl) {
   db.setMeta('gmeet_url', u);
   db.setMeta('gmeet_strikes', '0');
   db.setMeta('gmeet_left_ticks', '0');
-  db.setMeta('gmeet_pending', ''); db.setMeta('gmeet_pending_lines', '0'); db.setMeta('gmeet_understanding', '');
+  db.setMeta('gmeet_pending', ''); db.setMeta('gmeet_pending_lines', '0'); db.setMeta('gmeet_pending_since', ''); db.setMeta('gmeet_understanding', '');
   _seenCaps = new Set();
   set('joining');
   return true;
@@ -412,19 +413,25 @@ async function runTick(ctx = {}) {
       const prev = db.getMeta('gmeet_pending') || '';
       db.setMeta('gmeet_pending', ((prev ? prev + '\n' : '') + block).slice(-4000));
       db.setMeta('gmeet_pending_lines', String(parseInt(db.getMeta('gmeet_pending_lines') || '0', 10) + fresh.length));
+      if (!db.getMeta('gmeet_pending_since')) db.setMeta('gmeet_pending_since', String(d.now ? d.now() : Date.now()));
     }
-    // FOLLOW ALONG: once enough new lines accumulate, synthesize what's being discussed in
-    // ONE model tick — so she actually REGISTERS the conversation live (forms understanding)
-    // instead of just logging captions she never reads. Throttled by line count to bound load.
+    // FOLLOW ALONG: synthesize what's being discussed in ONE model tick — so she actually
+    // REGISTERS the conversation live (forms understanding) instead of just logging captions
+    // she never reads. Fires on EITHER enough new lines (rich meeting) OR a max wait with any
+    // pending lines (sparse meeting — otherwise 1–3 trickled lines would never reach the count
+    // and understanding would never form, the observed gap).
     const pendLines = parseInt(db.getMeta('gmeet_pending_lines') || '0', 10);
-    if (pendLines >= FOLLOW_EVERY_LINES) {
+    const pendSince = parseInt(db.getMeta('gmeet_pending_since') || '0', 10);
+    const nowMs = d.now ? d.now() : Date.now();
+    const stale = pendLines >= 1 && pendSince > 0 && (nowMs - pendSince) >= FOLLOW_MAX_WAIT_MS;
+    if (pendLines >= FOLLOW_EVERY_LINES || stale) {
       const transcript = db.getMeta('gmeet_pending') || '';
-      db.setMeta('gmeet_pending', ''); db.setMeta('gmeet_pending_lines', '0');
+      db.setMeta('gmeet_pending', ''); db.setMeta('gmeet_pending_lines', '0'); db.setMeta('gmeet_pending_since', '');
       const understanding = await modelFollowAlong(d, ctx, transcript);
       if (understanding) {
         db.setMeta('gmeet_understanding', understanding);   // latest running understanding (for her context / recall)
         surface(`I'm following the meeting — ${understanding}`, '(gmeet) following along');
-        return { stage, ok: true, note: `followed along (${pendLines} lines → understanding)` };
+        return { stage, ok: true, note: `followed along (${pendLines} line${pendLines === 1 ? '' : 's'}${stale ? ', stale-flush' : ''} → understanding)` };
       }
     }
     return { stage, ok: true, note: fresh.length ? `observed ${fresh.length} new caption(s)` : 'observing (no new captions)' };

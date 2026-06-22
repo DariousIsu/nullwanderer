@@ -105,6 +105,22 @@ function mockDeps(over = {}) {
   ok('understanding surfaced as her perception', /Q3 roadmap|migration risk/.test(surfacedFollow));
   g.reset();
 
+  console.log('\nfollow-along stale-flush: a sparse meeting (<4 lines) is still understood after the max wait:');
+  g.start(URL1); g.set('observing');
+  let clock = 1000;
+  const mStale = mockDeps({
+    captionsRef: { text: 'Lucas: quick note before we start' },   // a single line
+    streamChat: async ({ onToken }) => onToken('Lucas dropped a brief note to the group before the meeting got going.'),
+  });
+  mStale.deps.now = () => clock;
+  let sr1 = await g.runTick({ userName: 'Lucas', deps: mStale.deps });
+  ok('1 sparse line → not yet synthesized (below count, not yet stale)', sr1.ok && /1 new/.test(sr1.note));
+  clock += 26000;                                            // wait past FOLLOW_MAX_WAIT_MS
+  mStale.deps.scrapeCaptions = async () => 'Lucas: quick note before we start';   // same line, nothing fresh
+  let sr2 = await g.runTick({ userName: 'Lucas', deps: mStale.deps });
+  ok('after the max wait → stale-flush synthesizes understanding', sr2.ok && /followed along/.test(sr2.note) && /stale-flush/.test(sr2.note));
+  g.reset();
+
   console.log('\nstay-in: recipe imperfect but actually in-meeting → joins anyway (anti-wander):');
   g.start(URL1);
   const mStay = mockDeps({ joinResult: { ok: false, reason: 'modal covered Join now' }, inMeeting: true });
