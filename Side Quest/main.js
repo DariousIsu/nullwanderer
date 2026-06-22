@@ -252,11 +252,14 @@ app.whenReady().then(() => {
         // so already-surfaced unread mail is still eligible for a reply once.
         // Gates so she never fires a reply Lucas wouldn't expect:
         //  - one reply per poll cycle, and only if no action is already running;
-        //  - sender must be a real person (skip no-reply / bulk / list senders);
+        //  - sender must be a real PERSON writing to HER directly (skip no-reply / bulk /
+        //    newsletter / list senders — those she only READS for information, never replies);
         //  - NEVER her own address — replying to self creates an infinite loop
-        //    (each self-reply lands as new unread → another reply → cascade);
-        //  - she must have ALREADY emailed this address (thread continuation only —
-        //    never a cold reply to an unknown sender).
+        //    (each self-reply lands as new unread → another reply → cascade).
+        // This is HER inbox (zoelaneai@gmail.com), her own correspondence: a direct email
+        // from a real person gets a reply IN HER OWN VOICE, even a first-time sender (the
+        // old "must have emailed them first" gate blocked every new direct email — the bug
+        // behind "she isn't sending emails"). Dedup + one-per-poll prevent any cascade.
         if (!actionLoop.isActive()) {
           const replied = JSON.parse(db.getMeta('auto_replied_uids') || '[]');
           const self = (config.emailConfig().user || '').toLowerCase();
@@ -264,7 +267,7 @@ app.whenReady().then(() => {
           if (rr.ok && rr.messages && rr.messages.length) {
             const candidate = [...rr.messages].reverse().find(m =>
               m.fromAddr && m.fromAddr.toLowerCase() !== self
-              && !inboxLib.isJunkSender(m.fromAddr) && db.hasEmailedAddress(m.fromAddr));
+              && !inboxLib.isJunkSender(m.fromAddr));
             if (candidate) {
               db.setMeta('auto_replied_uids', JSON.stringify([...replied, candidate.uid].slice(-300)));
               console.log('[action] autonomous reply → thread with', candidate.fromAddr, 'uid', candidate.uid);
@@ -1607,8 +1610,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         try {
           const ir = await inboxLib.dispatch({ attrs: {} });
           const note = ir && ir.ok
-            ? `[${userName} asked you to reply to an email, but you don't have a clear sender locked in. Here is your actual inbox right now:\n${(ir.text || '').slice(0, 2000)}\n\nTell ${userName} which real email you'd reply to and ask him to confirm the recipient — do NOT claim you already replied; you have not sent anything yet.]`
-            : `[${userName} asked you to reply to an email but you don't have a clear target and couldn't read the inbox (${ir && ir.reason}). Tell him plainly you're not sure which email he means and ask him to point you at it. Do NOT claim you replied — you haven't.]`;
+            ? `[${userName} asked you to reply to an email in YOUR inbox, but no specific direct email is locked in as the target. Here is your actual inbox right now:\n${(ir.text || '').slice(0, 2000)}\n\nPick out the real, direct email (not a newsletter or no-reply) you'd respond to and tell ${userName} which one + that you'll reply to it as yourself. Do NOT claim you already replied — you have not sent anything yet.]`
+            : `[${userName} asked you to reply to an email but no direct email is locked in and you couldn't read your inbox (${ir && ir.reason}). Tell him plainly and that you'll check again. Do NOT claim you replied — you haven't.]`;
           db.setMeta('last_ai_utterance_at', String(Date.now()));
           resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
           try { await fireToolFollowup({ io, channel, sessionId, resultText: note }); } catch (e) { console.error('[action] reply-intent inbox followup failed:', e.message); }
