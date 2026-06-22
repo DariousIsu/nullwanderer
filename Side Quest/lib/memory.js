@@ -217,7 +217,7 @@ async function backfillTurnEmbeddings(limit = 300) {
  * Graceful: returns [] on empty query or no store (caller injects nothing → the
  * gap-response reflex handles "I don't know" rather than getting noise).
  */
-async function retrieve(query, { k = 4, kinds = null, preferLeaf = false } = {}) {
+async function retrieve(query, { k = 4, kinds = null, preferLeaf = false, excludeSources = ['reflection_speculation'] } = {}) {
   if (!query || !String(query).trim()) return [];
   let qv;
   try { qv = await embed(query); } catch { qv = null; }
@@ -248,6 +248,8 @@ async function retrieve(query, { k = 4, kinds = null, preferLeaf = false } = {})
   const rows = db.getKnowledgeByIds(fusedIds);
   const byId = new Map(rows.map(r => [r.id, r]));
   let ordered = fusedIds.map(id => byId.get(id)).filter(Boolean);
+  // Quarantine: never surface demoted/laundered notes (reflection_speculation) as recall.
+  if (excludeSources && excludeSources.length) ordered = ordered.filter(r => !excludeSources.includes(r.source));
 
   // LEAF-PREFERENCE (Phase 3): a narrow/factual query wants the specific leaf, not the
   // rolled-up topic. Put 'fact' (and legacy null-level) notes first in fused order; topic
@@ -288,7 +290,7 @@ function _normalize(map) {
  * relevance 3, importance 2. Falls back gracefully: no query embedding → relevance
  * drops out and ranking is recency+importance.
  */
-async function retrieveScored(query, { k = 4, kinds = null, weights = { recency: 0.5, relevance: 3, importance: 2 }, decayPerHour = 0.99, excludeSources = ['focus_tombstone'] } = {}) {
+async function retrieveScored(query, { k = 4, kinds = null, weights = { recency: 0.5, relevance: 3, importance: 2 }, decayPerHour = 0.99, excludeSources = ['focus_tombstone', 'reflection_speculation'] } = {}) {
   const rows = db.getAllKnowledgeEmbeddings();
   if (!rows || rows.length === 0) return [];
 

@@ -160,6 +160,11 @@ function buildPrompt({ userName, recentMonologue, recentReadings, recentReflecti
   // identity (not just reactive association). Same block the chat prompt injects.
   try { const sb = require('./self_model').buildPromptBlock(8); if (sb) sys += '\n\n' + sb; } catch {}
 
+  // GROUNDED FACTS (anti-glob): think FROM epistemically-typed, source-grounded facts
+  // (witnessed/told/read), not her own laundered speculation. Cheap sync DB read; empty
+  // until the graph is populated. See docs/MEMORY_GROUNDING.md.
+  try { const gf = require('./graph_memory').factsForPrompt({ limit: 8 }); if (gf) sys += '\n\n' + gf; } catch {}
+
   // SCREEN — she can observe Lucas's open windows on her own initiative.
   sys += '\n\n' + screenLib.buildPromptBlock();
 
@@ -1358,6 +1363,11 @@ async function runSearch(query, source, focusId = null) {
     });
 
     pushSheep({ id: row.id, ts: row.ts, content, type: 'reading', query });
+
+    // STRUCTURED EXTRACTION (anti-glob #3): pull grounded entity/relation triples from this
+    // REAL reading into her graph as 'read' facts (throttled, best-effort, non-blocking) — so
+    // she accumulates real-world structure to think from, not just transient reading text.
+    try { require('./graph_extract').maybeIngestReading({ text: content, ref: (urls && urls[0]) || query }); } catch {}
     // write-bottom: a reading is an "observation" on the timeline — it breaks a
     // run of pure thoughts, which is exactly what the StuckDetector keys on. When
     // the search was fired to advance a focus, tag it so it joins that focus's

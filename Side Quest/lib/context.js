@@ -463,6 +463,15 @@ function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonol
     systemContent += `\n\n${retrievedKnowledgeBlock}`;
   }
 
+  // GROUNDED FACTS (anti-glob): her own relational memory — only epistemically-typed,
+  // source-grounded facts (witnessed/told/read), trust-ranked, with speculation and refuted
+  // items excluded. So she answers from what she actually knows, not laundered self-talk.
+  // Cheap synchronous DB read; null (skipped) until the graph is populated.
+  try {
+    const gf = require('./graph_memory').factsForPrompt({ limit: 8 });
+    if (gf) systemContent += `\n\n${gf}`;
+  } catch (e) { console.error('[context] grounded facts block failed:', e.message); }
+
   // RECIPE CARD — procedural memory: need→tag quick-reference so she emits the
   // right literal tag (the <read-inbox/> vs SEND-family class of confusion).
   // Lazy require avoids any context↔recipes load-order cycle.
