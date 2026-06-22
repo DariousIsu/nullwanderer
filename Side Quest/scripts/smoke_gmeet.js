@@ -45,6 +45,9 @@ function mockDeps(over = {}) {
   ok('finds a meet url in text', g.detectMeetUrl('join this https://meet.google.com/abc-defg-hij please') === URL1);
   ok('loose lookup form', /meet\.google\.com/.test(g.detectMeetUrl('https://meet.google.com/lookup/abc123') || ''));
   ok('no url → null', g.detectMeetUrl('no link here') === null);
+  // SCHEME-LESS link (the real "can't join" bug): Lucas pastes a bare meet.google.com/...
+  ok('bare meet.google.com link → normalized to https', g.detectMeetUrl('meet.google.com/fhe-ccmh-ykx') === 'https://meet.google.com/fhe-ccmh-ykx');
+  ok('bare link inside a sentence is found + normalized', g.detectMeetUrl('hop in when you can: meet.google.com/abc-defg-hij thanks') === URL1);
 
   console.log('\nmeetLinkFromEvent:');
   ok('hangoutLink', g.meetLinkFromEvent({ hangoutLink: URL1 }) === URL1);

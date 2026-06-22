@@ -37,14 +37,21 @@ let _seenCaps = new Set();
 // --- pure helpers (unit-tested) ---
 
 // A Google Meet URL anywhere in text. Meet codes are xxx-xxxx-xxx (lowercase letters).
-const MEET_URL_RE = /https?:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:\?[^\s"'<>]*)?/i;
+// The scheme is OPTIONAL: Lucas often pastes a bare "meet.google.com/abc-defg-hij" (no
+// https://) — that MUST still match, or the join stepper never starts and the model falls
+// back to a raw <browse> that fails (the "can't join from the link" bug).
+const MEET_URL_RE = /(?:https?:\/\/)?meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:\?[^\s"'<>]*)?/i;
 // Looser form (lookup codes / _meet links) as a fallback.
-const MEET_URL_LOOSE_RE = /https?:\/\/meet\.google\.com\/[a-z0-9_-]+(?:\?[^\s"'<>]*)?/i;
+const MEET_URL_LOOSE_RE = /(?:https?:\/\/)?meet\.google\.com\/[a-z0-9_-]+(?:\?[^\s"'<>]*)?/i;
 
 function detectMeetUrl(text) {
   const t = String(text || '');
   const m = t.match(MEET_URL_RE) || t.match(MEET_URL_LOOSE_RE);
-  return m ? m[0] : null;
+  if (!m) return null;
+  // Always return an ABSOLUTE url — the join recipe / page.goto need a scheme.
+  let u = m[0];
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u.replace(/^\/\//, '');
+  return u;
 }
 
 // Pull a Meet link out of a calendar event (hangoutLink / conferenceData / location /
