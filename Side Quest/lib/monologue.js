@@ -22,6 +22,7 @@ const memoryLib = require('./memory');
 const personalLib = require('./personal');
 const playSession = require('./play_session');
 const bylineLib = require('./byline');
+const gmeetLib = require('./gmeet');
 const { buildAwarenessBlock, BASE_PERSONA } = require('./context');
 
 const MODEL = require('./config').model();
@@ -650,6 +651,26 @@ async function runOneTick() {
   // FOCUS is highest priority among WORK modes: if one is active she serves it
   // every tick until it resolves/stalls/caps. (Skipped while in personal mode.)
   let activeFocus = personalMode ? null : focusLib.getCurrent();
+
+  // GOOGLE MEET — when she's in/joining a meeting, that's live and time-sensitive: it
+  // takes precedence over every other work mode. Advance ONE stage per tick (join →
+  // mandatory intro → observe captions). A sign-in wall is surfaced to Lucas (notify).
+  if (!personalMode && gmeetLib.active()) {
+    try {
+      const res = await gmeetLib.runTick({
+        userName,
+        onReading: (content, label) => {
+          try { const rr = db.insertMonologue({ content, model: 'gmeet', type: 'reading' }); pushSheep({ id: rr.id, ts: rr.ts, content: label || content, type: 'reading' }); } catch (e) { console.error('[gmeet] reading insert failed:', e.message); }
+        },
+        onSurface: (text) => {
+          try { require('./presence').notify('Zoe — Google Meet', text); } catch {}
+          try { const rr = db.insertMonologue({ content: text, model: 'gmeet', type: 'reading' }); pushSheep({ id: rr.id, ts: rr.ts, content: `(gmeet) ${text.slice(0, 80)}`, type: 'reading' }); } catch {}
+        }
+      });
+      console.log(`[gmeet] ${res.stage}: ${res.note}`);
+    } catch (e) { console.error('[monologue] gmeet tick failed:', e.message); }
+    return;
+  }
 
   // BYLINE PIPELINE — a long-running work project (research→read→write→publish). When
   // one is active it takes precedence over free-association/rumination: advance exactly

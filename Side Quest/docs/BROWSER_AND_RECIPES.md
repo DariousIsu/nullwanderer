@@ -143,8 +143,31 @@ even a quick redeploy that adds a capability still tells her. Stored in
 
 ---
 
+## 6. Google Meet — Step 1 (`lib/gmeet.js`)
+
+Join a meeting muted, post a **mandatory self-introduction** to the meeting chat, then
+observe live captions. Built like the byline stepper (meta stages, one per idle tick):
+`joining → intro → observing → done`.
+
+- **Join** = the `gmeet_join` recipe (mute mic+cam → Join now), replayed by flow_runner;
+  a sign-in wall pauses and **notifies Lucas to log her Google account in** (blocker handoff).
+- **Triggers**: a `meet.google.com` link from Lucas in chat (`detectMeetUrl`) = "join now";
+  calendar auto-join uses `meetLinkFromEvent` (hangoutLink / conferenceData / location) +
+  the scheduler (the calendar poll itself lands in the live pass).
+- **Mandatory intro**: she writes it warm and may greet recognized attendees by name, but
+  the **AI-disclosure is enforced deterministically** — `validateIntro` + `ensureDisclosure`
+  guarantee the intro always states she's an AI on Lucas's behalf, even if the model omits it.
+- **Observe**: `parseCaptions` turns the live caption scrape into `{speaker,text}`; only
+  newly-arrived lines surface as her perception (readings), tracked by a seen-index.
+
+Provisional (`verified:false`): `gmeet_join`, `gmeet_post_chat`. Meet's DOM is fragile and
+needs her Google login — the join/post/scrape selectors verify+heal on the first live
+meeting. Pure helpers + the stage machine are offline-tested (`smoke_gmeet` 27/27).
+Steps 2–3 (grounded contribution from Echo's KB, loopback transcript) ride Echo.
+
 ## Tests
 `smoke_blockers` · `smoke_web` · `smoke_browse_redirect` · `smoke_flow_runner` ·
+`smoke_gmeet` ·
 `smoke_recipes` · `smoke_recipes_heavy` (every recipe × success/heal/fail/blocker/vars +
 50× determinism) · `smoke_byline` · `smoke_downtime` · `smoke_play_runtick`.
 Run: `ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron.cmd scripts/<name>.js`

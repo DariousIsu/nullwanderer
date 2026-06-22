@@ -58,7 +58,7 @@ function mockPage({ present = new Set(), detect = null } = {}) {
 
 const TARGET_ACTIONS = new Set(['fill', 'click', 'waitFor']);
 const VALID_ACTIONS = new Set(['navigate', 'fill', 'click', 'scroll', 'waitFor', 'read']);
-const VARS = { title: 'My Title', body: 'My Body Text', query: 'my query' };
+const VARS = { title: 'My Title', body: 'My Body Text', query: 'my query', message: 'My chat message', url: 'https://meet.google.com/abc-defg-hij' };
 
 (async () => {
   console.log('HEAVY backtest — recipes + flow_runner\n');

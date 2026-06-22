@@ -100,7 +100,7 @@ function mockPage({ present = new Set(), detect = null } = {}) {
 
   console.log('\nreal recipes/*.json are runner-shaped:');
   const list = store.list();
-  ok('recipe_store loads 3 recipes', list.length === 3);
+  ok('recipe_store loads the core recipes', list.length >= 3);
   ok('finds substack publish_post', !!store.find('substack', 'publish_post'));
   const VALID_ACTIONS = new Set(['navigate', 'fill', 'click', 'scroll', 'waitFor', 'read']);
   let structOk = true;

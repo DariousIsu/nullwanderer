@@ -1,0 +1,19 @@
+{
+  "site": "meet.google.com",
+  "task": "post_chat",
+  "verified": false,
+  "_note": "PROVISIONAL. Open the in-meeting chat panel, type {{message}}, send. Meet sends on Enter; flow_runner has no keypress action yet, so we click the Send button — if that selector is wrong, the live pass either fixes it or adds an Enter capability to flow_runner. Confirm/heal live.",
+  "fingerprint": { "url_pattern": "meet.google.com" },
+  "steps": [
+    { "action": "click",
+      "locator": { "method": "getByRole", "role": "button", "name": "Chat with everyone" },
+      "fallbacks": [ { "css": "button[aria-label='Chat with everyone']" }, { "text": "Chat with everyone" } ] },
+    { "action": "fill",
+      "locator": { "method": "getByRole", "role": "textbox", "name": "Send a message" },
+      "fallbacks": [ { "css": "textarea[aria-label='Send a message']" }, { "css": "textarea[placeholder*='message' i]" } ],
+      "value": "{{message}}" },
+    { "action": "click",
+      "locator": { "method": "getByRole", "role": "button", "name": "Send a message" },
+      "fallbacks": [ { "css": "button[aria-label='Send a message']" }, { "text": "Send" } ] }
+  ]
+}

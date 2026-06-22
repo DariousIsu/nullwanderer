@@ -1,0 +1,23 @@
+{
+  "site": "meet.google.com",
+  "task": "join",
+  "verified": false,
+  "_note": "PROVISIONAL. Pre-join screen: turn OFF mic + camera, then Join now (or Ask to join). Meet's DOM is fragile + hostile to automation and requires her Google login — confirm/heal every step on the first live run. The mic/cam toggles assume they start ON; if they start off this would re-enable them (verify live).",
+  "fingerprint": { "url_pattern": "meet.google.com" },
+  "steps": [
+    { "action": "navigate", "url": "{{url}}", "expectLogin": true },
+    { "action": "waitFor",
+      "locator": { "method": "getByRole", "role": "button", "name": "Join now" },
+      "fallbacks": [ { "method": "getByRole", "role": "button", "name": "Ask to join" }, { "text": "Join now" } ] },
+    { "action": "click",
+      "locator": { "method": "getByRole", "role": "button", "name": "Turn off microphone" },
+      "fallbacks": [ { "css": "div[aria-label='Turn off microphone']" }, { "css": "[data-is-muted=false][aria-label*='microphone' i]" } ] },
+    { "action": "click",
+      "locator": { "method": "getByRole", "role": "button", "name": "Turn off camera" },
+      "fallbacks": [ { "css": "div[aria-label='Turn off camera']" }, { "css": "[aria-label*='camera' i]" } ] },
+    { "action": "click",
+      "locator": { "method": "getByRole", "role": "button", "name": "Join now" },
+      "fallbacks": [ { "method": "getByRole", "role": "button", "name": "Ask to join" }, { "text": "Join now" }, { "text": "Ask to join" } ],
+      "mayNavigate": true }
+  ]
+}

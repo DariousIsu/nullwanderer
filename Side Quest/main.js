@@ -582,6 +582,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (awayReason) { availability.setAway(awayReason); console.log(`[main] Lucas marked away ("${awayReason}") — unprompted utterances will stay silent`); }
   } catch (e) { console.error('[main] availability update failed:', e.message); }
 
+  // GOOGLE MEET — a meet.google.com link from Lucas means "join this". Start the
+  // join → mandatory-intro → observe stepper (advances in the idle loop). The normal
+  // turn still runs so she acknowledges.
+  try {
+    const gmeetLib = require('./lib/gmeet');
+    if (!gmeetLib.active()) {
+      const meetUrl = gmeetLib.detectMeetUrl(userMessage);
+      if (meetUrl) { gmeetLib.start(meetUrl); console.log(`[main] gmeet join started: ${meetUrl}`); }
+    }
+  } catch (e) { console.error('[main] gmeet start detect failed:', e.message); }
+
   // BYLINE START — "write/publish a post about X" kicks off her autonomous byline
   // pipeline (research→read→write→publish, advanced one stage per idle tick). Side
   // effect only: the normal turn still runs so she acknowledges in her own voice.
