@@ -101,7 +101,7 @@ function mockDeps(over = {}) {
   });
   let surfacedFollow = '';
   const fr = await g.runTick({ userName: 'Lucas', deps: mFollow.deps, onReading: (c, l) => { if (/following/i.test(l || '')) surfacedFollow = c; } });
-  ok('≥4 new lines → follows along (understanding synthesized)', fr.ok && /followed along/.test(fr.note));
+  ok('≥4 new lines → per-turn decision fires (understanding synthesized)', fr.ok && /turn/.test(fr.note));
   ok('understanding surfaced as her perception', /Q3 roadmap|migration risk/.test(surfacedFollow));
   g.reset();
 
@@ -118,7 +118,7 @@ function mockDeps(over = {}) {
   clock += 26000;                                            // wait past FOLLOW_MAX_WAIT_MS
   mStale.deps.scrapeCaptions = async () => 'Lucas: quick note before we start';   // same line, nothing fresh
   let sr2 = await g.runTick({ userName: 'Lucas', deps: mStale.deps });
-  ok('after the max wait → stale-flush synthesizes understanding', sr2.ok && /followed along/.test(sr2.note) && /stale-flush/.test(sr2.note));
+  ok('after the max wait → stale-flush fires the turn decision', sr2.ok && /turn/.test(sr2.note) && /stale/.test(sr2.note));
   g.reset();
 
   console.log('\naddressesSelf (active participation — direct address vs passing mention):');

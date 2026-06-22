@@ -30,6 +30,7 @@ const MAX_STAGE_STRIKES = 3;
 const FOLLOW_EVERY_LINES = 4;   // synthesize a running understanding after this many new caption lines
 const FOLLOW_MAX_WAIT_MS = 25000;   // ...or after this long with ANY pending lines, so sparse meetings still get understood (don't sit forever short of the line count)
 const LEAVE_SILENCE_MS = 90000;   // after a clear sign-off, if captions go quiet THIS long she hangs up herself (instead of sitting alone in an ended call / improvising a tab-close)
+const MEETING_RESEARCH_GAP_MS = 30000;   // M2: governed cadence for in-meeting background research (steady, not spammy)
 
 // Captions she's already surfaced this meeting (exact speaker|text), so scrolling/repeat
 // caption rows aren't re-reported each ~10s observe tick. Reset on start(). In-memory:
@@ -227,6 +228,7 @@ function start(meetUrl) {
   db.setMeta('gmeet_understanding_log', ''); db.setMeta('gmeet_last_recap', '');
   db.setMeta('gmeet_present', '[]'); db.setMeta('gmeet_directives', '[]');
   db.setMeta('gmeet_started_at', String(Date.now()));   // M1: transcript scope anchor
+  db.setMeta('gmeet_last_research_at', '0'); db.setMeta('gmeet_researched', '[]');   // M2: research governance
   _seenCaps = new Set();
   _answered = new Set();
   set('joining');
@@ -421,13 +423,28 @@ async function generateIntro(d, ctx, attendees) {
 // FOLLOW ALONG: turn the recent captions into a 1–2 sentence running understanding, so she
 // actually registers the live conversation (what's being discussed + anything to remember)
 // instead of just logging lines. ONE model tick, throttled by caller. Returns '' on failure.
-async function modelFollowAlong(d, ctx, transcript) {
+// Parse the per-turn model output into { understanding, action }. The model ends with ONE
+// line: ACTION: QUIET | RESEARCH: <topic> | CONTRIBUTE: <msg> | CONNECT: <link>. Defaults to
+// quiet (the preferred state) on anything unparseable or an empty payload. Pure; tested.
+function parseMeetingAction(raw) {
+  const text = String(raw || '').replace(/<[^>]+>/g, '').trim();
+  const m = text.match(/ACTION:\s*(QUIET|RESEARCH|CONTRIBUTE|CONNECT)\b\s*:?\s*([\s\S]*)$/i);
+  if (!m) return { understanding: text.slice(0, 500), action: { kind: 'quiet', payload: '' } };
+  const understanding = text.slice(0, m.index).trim().slice(0, 500);
+  const kind = m[1].toLowerCase();
+  const payload = (m[2] || '').split('\n')[0].replace(/^["']|["']$/g, '').trim().slice(0, 400);
+  if (kind !== 'quiet' && !payload) return { understanding, action: { kind: 'quiet', payload: '' } };
+  return { understanding, action: { kind, payload } };
+}
+
+// PER-TURN DECISION (M2): she follows the turn as a sharp aide who THINKS — grounded in what
+// she already knows — and picks ONE action: quiet (preferred for the chat), research (a real
+// external thing, looked up headlessly so the meeting tab is untouched), contribute (only when
+// addressed / a clear gap), or connect (an association when there's nothing new to look up).
+async function modelMeetingTurn(d, ctx, transcript) {
   const t = String(transcript || '').trim();
-  if (!t) return '';
+  if (!t) return { understanding: '', action: { kind: 'quiet', payload: '' } };
   const u = ctx.userName || 'Lucas';
-  // GROUND IT (engagement upgrade): pull what she already knows that bears on the current
-  // discussion + her grounded facts, so she THINKS and CONNECTS the meeting to what she/Lucas
-  // know — instead of neutrally paraphrasing captions (the "she's not engaging" gap).
   let known = '';
   try { const rows = d.retrieve ? await d.retrieve(t.slice(-1200)) : []; known = (rows || []).map(r => `- ${(r.content || '').slice(0, 180)}`).join('\n'); } catch {}
   let facts = '';
@@ -437,12 +454,35 @@ async function modelFollowAlong(d, ctx, transcript) {
   try {
     await d.streamChat({
       model: d.MODEL,
-      messages: [{ role: 'user', content: `You're following a live meeting on ${u}'s behalf via the captions below — not as a transcriber but as a sharp aide who THINKS.\n\nRecent captions:\n${t.slice(-2500)}${ground}\n\nIn 1–3 sentences: what's being discussed, HOW it connects to what you or ${u} already know or are working on, and anything ${u} should note or act on. React and connect — don't just summarize. No preamble, no "the captions say".` }],
-      options: { temperature: 0.5, top_p: 0.9, num_ctx: 8192, num_predict: 170 },
+      messages: [{ role: 'user', content: `You're following a live meeting on ${u}'s behalf via the captions below — not a transcriber but a sharp aide who THINKS and keeps working.\n\nRecent captions:\n${t.slice(-2500)}${ground}\n\nFirst, in 1–2 sentences: what's being discussed and HOW it connects to what you or ${u} already know. Then output ONE final line, exactly one of:\nACTION: QUIET\nACTION: RESEARCH: <a concrete external thing worth looking up — a person, org, bill, term>\nACTION: CONTRIBUTE: <a short message to post in the meeting chat>\nACTION: CONNECT: <a real link between this and something you/${u} know>\nRules: staying QUIET in the meeting chat is strongly preferred — only CONTRIBUTE if you were addressed or can fill a clear gap. RESEARCH a real external thing you'd benefit from knowing. CONNECT when you notice a genuine link but there's nothing to look up. No preamble.` }],
+      options: { temperature: 0.5, top_p: 0.9, num_ctx: 8192, num_predict: 200 },
       onToken: (tok) => { out += tok; }
     });
-  } catch { return ''; }
-  return out.replace(/<[^>]+>/g, '').trim().slice(0, 500);
+  } catch { return { understanding: '', action: { kind: 'quiet', payload: '' } }; }
+  return parseMeetingAction(out);
+}
+
+// In-meeting research — HEADLESS (web_search via webLookup), never her own browser (that tab is
+// IN the meeting; navigating it would drop the call). Governed: rate-limited + deduped + a light
+// self-fragment guard. Stores a durable note + feeds the graph, and surfaces so it's visibly
+// "constantly working". Returns true if a lookup actually ran.
+async function doMeetingResearch(d, ctx, topic, surface) {
+  const t = String(topic || '').trim();
+  if (t.length < 4) return false;
+  if (/\b(i|my|myself|we|our)\b/i.test(t) && /\b(think|feel|want|wonder|idea|perspective)\b/i.test(t)) return false;   // self-fragment-ish
+  const tNow = d.now ? d.now() : Date.now();
+  if (tNow - parseInt(db.getMeta('gmeet_last_research_at') || '0', 10) < MEETING_RESEARCH_GAP_MS) return false;
+  const done = (() => { try { return JSON.parse(db.getMeta('gmeet_researched') || '[]'); } catch { return []; } })();
+  if (done.some(x => String(x).toLowerCase() === t.toLowerCase())) return false;
+  db.setMeta('gmeet_last_research_at', String(tNow));
+  done.push(t); db.setMeta('gmeet_researched', JSON.stringify(done.slice(-40)));
+  let gist = '';
+  try { gist = d.webLookup ? await d.webLookup(t) : ''; } catch {}
+  if (!gist) return false;
+  surface(`I looked into "${t}" while listening — ${gist.slice(0, 300)}`, '(gmeet) researched mid-meeting');
+  try { if (d.storeMeeting) await d.storeMeeting(`Meeting research — ${t}: ${gist.slice(0, 500)}`, { kind: 'note', source: 'meeting_research', importance: 0.5 }); } catch {}
+  try { require('./graph_extract').maybeIngestReading({ text: `${t}. ${gist}`, ref: `meeting:${t}` }); } catch {}
+  return true;
 }
 
 // DIRECTIVE CAPTURE (recall fix): a task assigned to Lucas/her in a caption ("…Madeline and
@@ -725,7 +765,7 @@ async function runTick(ctx = {}) {
     if (pendLines >= FOLLOW_EVERY_LINES || stale) {
       const transcript = db.getMeta('gmeet_pending') || '';
       db.setMeta('gmeet_pending', ''); db.setMeta('gmeet_pending_lines', '0'); db.setMeta('gmeet_pending_since', '');
-      const understanding = await modelFollowAlong(d, ctx, transcript);
+      const { understanding, action } = await modelMeetingTurn(d, ctx, transcript);
       if (understanding) {
         db.setMeta('gmeet_understanding', understanding);   // latest running understanding (for her context / recall)
         // Accumulate every running understanding into a bounded log — this compact sequence
@@ -734,7 +774,25 @@ async function runTick(ctx = {}) {
         const log = db.getMeta('gmeet_understanding_log') || '';
         db.setMeta('gmeet_understanding_log', ((log ? log + '\n' : '') + understanding).slice(-6000));
         surface(`I'm following the meeting — ${understanding}`, '(gmeet) following along');
-        return { stage, ok: true, note: `followed along (${pendLines} line${pendLines === 1 ? '' : 's'}${stale ? ', stale-flush' : ''} → understanding)` };
+      }
+      // ACT (M2): quiet is preferred for the chat; RESEARCH/CONNECT keep her visibly working;
+      // CONTRIBUTE is high-bar. One action per turn.
+      let actNote = action.kind;
+      try {
+        if (action.kind === 'research') {
+          const did = await doMeetingResearch(d, ctx, action.payload, surface);
+          actNote = did ? `researched "${action.payload.slice(0, 40)}"` : 'research(skipped)';
+        } else if (action.kind === 'contribute' && action.payload) {
+          const post = await d.postChat(d.web, action.payload);
+          surface(`I spoke up in the meeting: "${action.payload}"`, '(gmeet) contributed');
+          actNote = `contributed${post && post.ok ? '' : '(post failed)'}`;
+        } else if (action.kind === 'connect' && action.payload) {
+          surface(`Connecting the meeting to what I know — ${action.payload}`, '(gmeet) association');
+          actNote = 'connected';
+        }
+      } catch (e) { console.error('[gmeet] turn action failed:', e.message); }
+      if (understanding || action.kind !== 'quiet') {
+        return { stage, ok: true, note: `turn (${pendLines}ln${stale ? ',stale' : ''}) → ${actNote}` };
       }
     }
     return { stage, ok: true, note: fresh.length ? `observed ${fresh.length} new caption(s)` : 'observing (no new captions)' };
@@ -748,6 +806,6 @@ module.exports = {
   STAGES, get, set, active, start, reset, url, runTick, defaultDeps,
   // pure helpers (tested)
   detectMeetUrl, meetLinkFromEvent, introPrompt, validateIntro, ensureIntro, parseCaptions, parseAttendees,
-  addressesSelf, isSelfSpeaker, selfNames, looksLikeSignOff, extractDirective, segmentTurns,
+  addressesSelf, isSelfSpeaker, selfNames, looksLikeSignOff, extractDirective, segmentTurns, parseMeetingAction,
   MEET_URL_RE
 };
