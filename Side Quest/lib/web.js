@@ -46,6 +46,21 @@ let registry = {};    // handle → locator
 let counter = { L: 0, B: 0, I: 0, C: 0 };
 
 function findChrome() { for (const p of CHROME_PATHS) { try { if (fs.existsSync(p)) return p; } catch {} } return null; }
+
+// Kill any orphaned Chrome still running HER persistent profile before we launch a fresh
+// one. A hard-killed app (Stop-Process) never runs close(), so the system Chrome she
+// launched is orphaned — these pile up across restarts, and MULTIPLE windows in a Meet
+// both play audio (the echo) + fight over the profile lock (join flakiness/drops). Only
+// runs on a fresh launch (context === null), so it can't kill the current session's browser.
+function killStaleProfileChrome() {
+  if (process.platform !== 'win32') return;
+  try {
+    require('child_process').execSync(
+      "powershell -NoProfile -Command \"Get-CimInstance Win32_Process -Filter \\\"Name='chrome.exe'\\\" | Where-Object { $_.CommandLine -like '*web_profile*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\"",
+      { timeout: 8000, stdio: 'ignore' }
+    );
+  } catch {}
+}
 function isConnected() { return !!(context && page); }
 
 // Hard wall-clock cap for any browser promise that could hang (page.evaluate has no
@@ -86,6 +101,7 @@ async function ensure() {
   const executablePath = findChrome();
   if (!executablePath) throw new Error('chrome.exe/msedge.exe not found in standard paths');
   try { if (!fs.existsSync(PROFILE_DIR)) fs.mkdirSync(PROFILE_DIR, { recursive: true }); } catch {}
+  killStaleProfileChrome();   // clear orphaned windows on her profile (echo + lock conflicts)
   context = await pw.chromium.launchPersistentContext(PROFILE_DIR, {
     headless: false,
     executablePath,
@@ -95,7 +111,9 @@ async function ensure() {
     // --test-type suppresses Chrome's "unsupported command-line flag" infobar that
     // patchright's --disable-blink-features=AutomationControlled would otherwise show.
     // It's not exposed to page JS, so it doesn't weaken the stealth fingerprint.
-    args: ['--no-first-run', '--no-default-browser-check', '--test-type']
+    // --mute-audio: she's an OBSERVER (reads captions) — her browser must never OUTPUT
+    // audio, or a Meet tab playing the call on the same machine echoes against Lucas's.
+    args: ['--no-first-run', '--no-default-browser-check', '--test-type', '--mute-audio']
   });
   context.on('close', () => { context = null; page = null; registry = {}; });
   // Follow newly-opened tabs: if a click (or Lucas) opens a new tab, make IT her
