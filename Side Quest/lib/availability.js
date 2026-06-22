@@ -17,8 +17,10 @@ const AWAY_KEY = 'user_away';
 const SINCE_KEY = 'user_away_since';
 const REASON_KEY = 'user_away_reason';
 
-// "I'm leaving / I'll be gone" signals.
-const AWAY_RE = /\b(?:i'?ll?\s+be\s+(?:away|back|gone|offline|out|afk)|i'?m\s+(?:heading|stepping|going)\s+(?:out|off|away)|stepping\s+(?:out|away|afk)|be\s+right\s+back|\bbrb\b|\bafk\b|away\s+from\s+(?:my|the)\s+(?:computer|desk|keyboard|machine|screen)|gotta\s+(?:go|run)|heading\s+(?:out|off|home|to\s+bed)|off\s+(?:to\s+bed|for\s+the\s+(?:night|day|evening))|talk\s+(?:to\s+you\s+)?later|logging\s+off|signing\s+off|see\s+you\s+(?:later|tomorrow|tonight|in\s+a\s+bit))\b/i;
+// "I'm leaving / I'll be gone / I'm done for the day" signals. Broad on end-of-day
+// phrasings (bed / sleep / goodnight / calling it a night / for the night) — a false
+// "away" only quiets her unprompted chatter, which Lucas prefers over the reverse.
+const AWAY_RE = /\b(?:i'?ll?\s+be\s+(?:away|back|gone|offline|out|afk)|i'?m\s+(?:heading|stepping|going)\s+(?:out|off|away)|stepping\s+(?:out|away|afk)|be\s+right\s+back|\bbrb\b|\bafk\b|away\s+from\s+(?:my|the)\s+(?:computer|desk|keyboard|machine|screen)|gotta\s+(?:go|run)|head(?:ing|ed)?\s+(?:out|off|home)|(?:go(?:ing)?|head(?:ing|ed)?|off)\s+to\s+bed|go(?:ing)?\s+to\s+sleep|get(?:ting)?\s+some\s+sleep|good\s?night|g'?night|night\s+night|\bnite\b|call(?:ing)?\s+it\s+(?:a\s+)?(?:night|day|quits)|done\s+for\s+(?:the\s+)?(?:night|day|today|tonight)|that'?s\s+it\s+for\s+(?:tonight|today|the\s+night)|for\s+the\s+(?:night|evening)|talk\s+(?:to\s+you\s+)?later|logging\s+off|signing\s+off|see\s+you\s+(?:later|tomorrow|tonight|in\s+a\s+bit))\b/i;
 // An explicit "I'm back" is NOT an away signal (a bare message already clears away).
 const BACK_RE = /\b(?:i'?m\s+back|back\s+now|i'?m\s+here|just\s+got\s+back|returned)\b/i;
 
