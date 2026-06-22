@@ -172,10 +172,25 @@ function topFacts({ limit = 12, includeUnconfirmed = true } = {}) {
   return ents;
 }
 
+// Epistemic-ranked facts block for prompt injection (phase 3). ONLY grounded canonical
+// facts — speculated never reaches here (it's in the proposal queue, not the graph) and
+// refuted items (confirmed=0, e.g. Madeline-didn't-show) are dropped — so the idle loop
+// gets ground truth to think from, not its own laundered speculation. Each line states HOW
+// she knows it, so the model can weight witnessed/told over read. Returns null when empty.
+function factsForPrompt({ limit = 10 } = {}) {
+  const ents = topFacts({ limit, includeUnconfirmed: true }).filter((e) => e.confirmed !== 0);
+  if (!ents.length) return null;
+  const lines = ['Grounded facts you actually know (and how you know each — trust witnessed/told over read; these are real, not your own speculation):'];
+  for (const e of ents) {
+    lines.push(`  · (${e.epistemic}) ${e.name}${e.summary ? ' — ' + String(e.summary).slice(0, 160) : ''}`);
+  }
+  return lines.join('\n');
+}
+
 module.exports = {
   TRUST, GROUNDED, normalizeName, isEpistemic, trust,
   recordEntity, recordRelation,
   promoteEntityProposal, promoteRelationProposal, rejectEntityProposal, rejectRelationProposal,
   reconcileRelation, reconcileEntity,
-  getEntity, neighbors, counts, topFacts, attachSource,
+  getEntity, neighbors, counts, topFacts, attachSource, factsForPrompt,
 };

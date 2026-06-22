@@ -1204,6 +1204,32 @@ async function maybeSearchFromThought(thoughtText, focusId = null) {
   await runSearch(trig.query, 'curiosity', focusId);
 }
 
+// SELF-FRAGMENT GUARD (anti-glob phase 3): the self-feeding loop's intake was curiosity
+// web-searching her OWN introspective sentences (live DB had queries like
+// "this could be a unique angle for my article series"), so "external" readings came back
+// pre-shaped by her fixation. A real search TOPIC is a noun phrase about the world, not a
+// first-person clause and not a slice of something she just thought. Returns true → suppress.
+function looksLikeOwnFragment(query, recentThoughts = []) {
+  const q = String(query || '').trim();
+  if (!q) return true;
+  const lc = q.toLowerCase();
+  // first-person / introspective phrasing — a world-facing search topic almost never has this
+  if (/\b(i|i'm|im|my|myself|me|we|our|us)\b/.test(lc) &&
+      /\b(could|should|would|think|feel|want|wonder|reflect|idea|angle|article|series|my work)\b/.test(lc)) return true;
+  // an overlong prose clause rather than a topic
+  if (q.split(/\s+/).length > 12) return true;
+  // basically a slice of something she just thought (containment either direction)
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const nq = norm(q);
+  if (nq.length >= 12) {
+    for (const t of recentThoughts) {
+      const nt = norm(t);
+      if (nt && (nt.includes(nq) || nq.includes(nt.slice(0, Math.min(nt.length, 60))))) return true;
+    }
+  }
+  return false;
+}
+
 async function maybeBoredomSearch() {
   const lastBoredomStr = db.getMeta('last_boredom_search_at');
   const lastBoredom = lastBoredomStr ? parseInt(lastBoredomStr, 10) : 0;
@@ -1248,6 +1274,13 @@ async function maybeBoredomSearch() {
   // so she stops re-circling and the next idle tick can do something new instead.
   if (await isRepeatOfRecentSearch(query)) {
     console.log(`[monologue] boredom search suppressed (rumination brake): "${query.slice(0, 60)}"`);
+    return;
+  }
+
+  // ANTI-GLOB: don't let her web-search her own introspective sentence (the self-feeding loop).
+  const recentThoughtTexts = db.getRecentMonologueByType('thought', 6).map(r => r.content);
+  if (looksLikeOwnFragment(query, recentThoughtTexts)) {
+    console.log(`[monologue] boredom search suppressed (self-fragment, not a world topic): "${query.slice(0, 60)}"`);
     return;
   }
 
@@ -1391,5 +1424,6 @@ module.exports = {
   isRepeatOfRecentSearch,  // exported for smoke test
   splitIdleBrowserTags,    // exported for smoke test
   diversifySeeds,          // exported for smoke test (recency-fixation guard)
+  looksLikeOwnFragment,    // exported for smoke test (self-fragment search guard)
   MODEL
 };
