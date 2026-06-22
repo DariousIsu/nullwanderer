@@ -90,6 +90,18 @@ function mockDeps(over = {}) {
   ok('detects only the 1 newly-added caption', r.ok && /1 new/.test(r.note));
   g.reset();
 
+  console.log('\nfollow-along: enough captions → synthesizes understanding (registers live):');
+  g.start(URL1); g.set('observing');
+  const mFollow = mockDeps({
+    captionsRef: { text: 'Lucas: one\nAlice: two\nBob: three\nLucas: four\nAlice: five' },
+    streamChat: async ({ onToken }) => onToken("They're discussing the Q3 roadmap; Lucas flagged a migration risk."),
+  });
+  let surfacedFollow = '';
+  const fr = await g.runTick({ userName: 'Lucas', deps: mFollow.deps, onReading: (c, l) => { if (/following/i.test(l || '')) surfacedFollow = c; } });
+  ok('≥4 new lines → follows along (understanding synthesized)', fr.ok && /followed along/.test(fr.note));
+  ok('understanding surfaced as her perception', /Q3 roadmap|migration risk/.test(surfacedFollow));
+  g.reset();
+
   console.log('\nstay-in: recipe imperfect but actually in-meeting → joins anyway (anti-wander):');
   g.start(URL1);
   const mStay = mockDeps({ joinResult: { ok: false, reason: 'modal covered Join now' }, inMeeting: true });

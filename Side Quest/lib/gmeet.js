@@ -27,6 +27,7 @@ const db = require('./db');
 
 const STAGES = ['none', 'joining', 'intro', 'observing', 'done'];
 const MAX_STAGE_STRIKES = 3;
+const FOLLOW_EVERY_LINES = 4;   // synthesize a running understanding after this many new caption lines
 
 // Captions she's already surfaced this meeting (exact speaker|text), so scrolling/repeat
 // caption rows aren't re-reported each ~10s observe tick. Reset on start(). In-memory:
@@ -142,6 +143,7 @@ function start(meetUrl) {
   db.setMeta('gmeet_url', u);
   db.setMeta('gmeet_strikes', '0');
   db.setMeta('gmeet_left_ticks', '0');
+  db.setMeta('gmeet_pending', ''); db.setMeta('gmeet_pending_lines', '0'); db.setMeta('gmeet_understanding', '');
   _seenCaps = new Set();
   set('joining');
   return true;
@@ -298,6 +300,24 @@ async function generateIntro(d, ctx, attendees) {
   return ensureIntro(cleaned, ctx.userName);   // name + disclosure guaranteed regardless of model output
 }
 
+// FOLLOW ALONG: turn the recent captions into a 1–2 sentence running understanding, so she
+// actually registers the live conversation (what's being discussed + anything to remember)
+// instead of just logging lines. ONE model tick, throttled by caller. Returns '' on failure.
+async function modelFollowAlong(d, ctx, transcript) {
+  const t = String(transcript || '').trim();
+  if (!t) return '';
+  let out = '';
+  try {
+    await d.streamChat({
+      model: d.MODEL,
+      messages: [{ role: 'user', content: `You're quietly observing a meeting on ${ctx.userName || 'Lucas'}'s behalf, following along via the live captions below.\n\n${t.slice(-2500)}\n\nIn ONE or TWO sentences, say what's being discussed right now and anything worth remembering for ${ctx.userName || 'Lucas'}. Just the substance — no preamble, no "the captions say".` }],
+      options: { temperature: 0.4, top_p: 0.9, num_ctx: 8192, num_predict: 140 },
+      onToken: (tok) => { out += tok; }
+    });
+  } catch { return ''; }
+  return out.replace(/<[^>]+>/g, '').trim().slice(0, 400);
+}
+
 // --- orchestrator: advance ONE stage per tick ---
 // ctx: { userName, deps?, onReading(content,label), onSurface(text) }
 async function runTick(ctx = {}) {
@@ -381,9 +401,26 @@ async function runTick(ctx = {}) {
     if (fresh.length) {
       const block = fresh.map(c => `${c.speaker}: ${c.text}`).join('\n');
       surface(`Meeting captions:\n${block}`, `(gmeet) ${fresh.length} new caption(s)`);
-      return { stage, ok: true, note: `observed ${fresh.length} new caption(s)` };
+      // Accumulate into the pending-synthesis buffer (capped) for the follow-along tick.
+      const prev = db.getMeta('gmeet_pending') || '';
+      db.setMeta('gmeet_pending', ((prev ? prev + '\n' : '') + block).slice(-4000));
+      db.setMeta('gmeet_pending_lines', String(parseInt(db.getMeta('gmeet_pending_lines') || '0', 10) + fresh.length));
     }
-    return { stage, ok: true, note: 'observing (no new captions)' };
+    // FOLLOW ALONG: once enough new lines accumulate, synthesize what's being discussed in
+    // ONE model tick — so she actually REGISTERS the conversation live (forms understanding)
+    // instead of just logging captions she never reads. Throttled by line count to bound load.
+    const pendLines = parseInt(db.getMeta('gmeet_pending_lines') || '0', 10);
+    if (pendLines >= FOLLOW_EVERY_LINES) {
+      const transcript = db.getMeta('gmeet_pending') || '';
+      db.setMeta('gmeet_pending', ''); db.setMeta('gmeet_pending_lines', '0');
+      const understanding = await modelFollowAlong(d, ctx, transcript);
+      if (understanding) {
+        db.setMeta('gmeet_understanding', understanding);   // latest running understanding (for her context / recall)
+        surface(`I'm following the meeting — ${understanding}`, '(gmeet) following along');
+        return { stage, ok: true, note: `followed along (${pendLines} lines → understanding)` };
+      }
+    }
+    return { stage, ok: true, note: fresh.length ? `observed ${fresh.length} new caption(s)` : 'observing (no new captions)' };
   }
 
   if (stage === 'done') { reset(); return { stage: 'done', ok: true, note: 'meeting ended' }; }
