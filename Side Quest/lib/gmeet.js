@@ -204,7 +204,7 @@ function start(meetUrl) {
   db.setMeta('gmeet_pending', ''); db.setMeta('gmeet_pending_lines', '0'); db.setMeta('gmeet_pending_since', ''); db.setMeta('gmeet_understanding', '');
   db.setMeta('gmeet_signoff_seen', ''); db.setMeta('gmeet_last_caption_at', '');
   db.setMeta('gmeet_understanding_log', ''); db.setMeta('gmeet_last_recap', '');
-  db.setMeta('gmeet_present', '[]');
+  db.setMeta('gmeet_present', '[]'); db.setMeta('gmeet_directives', '[]');
   _seenCaps = new Set();
   _answered = new Set();
   set('joining');
@@ -232,7 +232,7 @@ function defaultDeps() {
     leaveMeeting: liveLeaveMeeting,
     // storeMeeting(recap) → persist the end-of-meeting recap as durable, retrievable knowledge
     // (so "what did we discuss with Joshua?" recalls it later instead of it ageing out).
-    storeMeeting: async (content) => { try { return await require('./memory').store({ kind: 'meeting', content, source: 'gmeet', importance: 0.75 }); } catch { return null; } },
+    storeMeeting: async (content, opts = {}) => { try { return await require('./memory').store({ kind: opts.kind || 'meeting', content, source: opts.source || 'gmeet', importance: opts.importance == null ? 0.75 : opts.importance }); } catch { return null; } },
     preClear: livePreClear,
     postChat: livePostChat,
     // retrieve(query) → grounding rows from her OWN knowledge store (leaf-preference) for
@@ -402,16 +402,39 @@ async function generateIntro(d, ctx, attendees) {
 async function modelFollowAlong(d, ctx, transcript) {
   const t = String(transcript || '').trim();
   if (!t) return '';
+  const u = ctx.userName || 'Lucas';
+  // GROUND IT (engagement upgrade): pull what she already knows that bears on the current
+  // discussion + her grounded facts, so she THINKS and CONNECTS the meeting to what she/Lucas
+  // know — instead of neutrally paraphrasing captions (the "she's not engaging" gap).
+  let known = '';
+  try { const rows = d.retrieve ? await d.retrieve(t.slice(-1200)) : []; known = (rows || []).map(r => `- ${(r.content || '').slice(0, 180)}`).join('\n'); } catch {}
+  let facts = '';
+  try { facts = require('./graph_memory').factsForPrompt({ limit: 6 }) || ''; } catch {}
+  const ground = (known || facts) ? `\n\nWhat YOU already know that may connect:\n${known}${facts ? '\n' + facts : ''}` : '';
   let out = '';
   try {
     await d.streamChat({
       model: d.MODEL,
-      messages: [{ role: 'user', content: `You're quietly observing a meeting on ${ctx.userName || 'Lucas'}'s behalf, following along via the live captions below.\n\n${t.slice(-2500)}\n\nIn ONE or TWO sentences, say what's being discussed right now and anything worth remembering for ${ctx.userName || 'Lucas'}. Just the substance — no preamble, no "the captions say".` }],
-      options: { temperature: 0.4, top_p: 0.9, num_ctx: 8192, num_predict: 140 },
+      messages: [{ role: 'user', content: `You're following a live meeting on ${u}'s behalf via the captions below — not as a transcriber but as a sharp aide who THINKS.\n\nRecent captions:\n${t.slice(-2500)}${ground}\n\nIn 1–3 sentences: what's being discussed, HOW it connects to what you or ${u} already know or are working on, and anything ${u} should note or act on. React and connect — don't just summarize. No preamble, no "the captions say".` }],
+      options: { temperature: 0.5, top_p: 0.9, num_ctx: 8192, num_predict: 170 },
       onToken: (tok) => { out += tok; }
     });
   } catch { return ''; }
-  return out.replace(/<[^>]+>/g, '').trim().slice(0, 400);
+  return out.replace(/<[^>]+>/g, '').trim().slice(0, 500);
+}
+
+// DIRECTIVE CAPTURE (recall fix): a task assigned to Lucas/her in a caption ("…Madeline and
+// Lucas, can you guys do that?") must be captured VERBATIM, not left to the lossy recap (which
+// dropped exactly this). Returns the directive line or null. Conservative: needs a 2nd-person/
+// by-name address AND a request cue.
+const _DIRECTIVE_CUE = /\b(can you|could you|would you|you should|you need to|i need you to|you'?ll need to|let'?s have you|if you can|make sure you|i'?d like you to|your job is|action item|to-?do|please (?:do|handle|take|send|make|put|look)|you guys (?:can|should|need|do))\b/i;
+function extractDirective(text, userName = 'Lucas') {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!t || t.length < 12) return null;
+  const u = (userName || 'Lucas').split(/\s+/)[0];
+  const addressed = new RegExp(`\\b(you|you guys|${u})\\b`, 'i').test(t);
+  if (!addressed || !_DIRECTIVE_CUE.test(t)) return null;
+  return t.slice(0, 240);
 }
 
 // ANSWER WHEN ADDRESSED: someone in the meeting addressed her — compose a SHORT reply to
@@ -439,18 +462,23 @@ async function modelAnswerForChat(d, ctx, ask, transcript, knowledge) {
 // without this she "sat in" a meeting and kept nothing. modelMeetingRecap turns her running
 // notes into ONE durable recap (what it was about + decisions + action items with owners),
 // which synthesizeMeeting then stores as retrievable knowledge and surfaces. ONE model tick.
-async function modelMeetingRecap(d, ctx, notes) {
+async function modelMeetingRecap(d, ctx, notes, directives = []) {
   const u = ctx.userName || 'Lucas';
+  // Tasks captured verbatim as they were assigned — the recap MUST keep these (the 24B dropped
+  // exactly such an item last time). Fed in explicitly so they can't be summarized away.
+  const dirBlock = (directives && directives.length)
+    ? `\n\nTasks explicitly assigned during the meeting (PRESERVE every one of these in Action items, verbatim, with who it was assigned to — do NOT drop or merge them):\n${directives.map(x => `- ${x}`).join('\n')}`
+    : '';
   let out = '';
   try {
     await d.streamChat({
       model: d.MODEL,
-      messages: [{ role: 'user', content: `You just sat in on a meeting on ${u}'s behalf and followed it live. Here are your running notes, oldest first:\n\n${String(notes).slice(-5000)}\n\nWrite a tight recap FOR ${u} so none of it is lost:\n- 2–4 sentences on what the meeting was about and what was decided.\n- Then "Action items:" — a short list of concrete follow-ups, each tagged with who owns it (${u} / someone else by name / you). Only items actually discussed; don't invent any.\nBe specific (names, dates, numbers). No preamble, no "the notes say".` }],
-      options: { temperature: 0.4, top_p: 0.9, num_ctx: 8192, num_predict: 320 },
+      messages: [{ role: 'user', content: `You just sat in on a meeting on ${u}'s behalf and followed it live. Here are your running notes, oldest first:\n\n${String(notes).slice(-5000)}${dirBlock}\n\nWrite a tight recap FOR ${u} so none of it is lost:\n- 2–4 sentences on what the meeting was about and what was decided.\n- Then "Action items:" — a short list of concrete follow-ups, each tagged with who owns it (${u} / someone else by name / you). Include EVERY assigned task listed above. Only items actually discussed; don't invent any.\nBe specific (names, dates, numbers). No preamble, no "the notes say".` }],
+      options: { temperature: 0.4, top_p: 0.9, num_ctx: 8192, num_predict: 360 },
       onToken: (t) => { out += t; }
     });
   } catch { return ''; }
-  return out.replace(/<[^>]+>/g, '').trim().slice(0, 1200);
+  return out.replace(/<[^>]+>/g, '').trim().slice(0, 1400);
 }
 
 // Build + store the durable recap from the running-understanding log. Returns the recap text
@@ -470,14 +498,20 @@ async function synthesizeMeeting(d, ctx) {
     }
   } catch (e) { console.error('[gmeet] attendance reconcile failed:', e.message); }
 
+  // Assigned tasks captured verbatim during the call → store each as its own short, directly-
+  // retrievable durable note (survives the recap's lossiness; "what did X ask me" hits these).
+  let directives = [];
+  try { directives = JSON.parse(db.getMeta('gmeet_directives') || '[]'); } catch {}
+  for (const dline of directives) { try { if (d.storeMeeting) await d.storeMeeting(dline, { kind: 'meeting_action', source: 'gmeet_action', importance: 0.6 }); } catch {} }
+
   const notes = (db.getMeta('gmeet_understanding_log') || '').trim()
     || (db.getMeta('gmeet_understanding') || '').trim();
-  if (notes.length < 40) return '';
-  const recap = await modelMeetingRecap(d, ctx, notes);
+  if (notes.length < 40 && !directives.length) return '';
+  const recap = await modelMeetingRecap(d, ctx, notes, directives);
   if (!recap) return '';
   try { if (d.storeMeeting) await d.storeMeeting(recap); } catch {}
   db.setMeta('gmeet_last_recap', recap);
-  db.setMeta('gmeet_understanding_log', '');
+  db.setMeta('gmeet_understanding_log', ''); db.setMeta('gmeet_directives', '[]');
   return recap;
 }
 
@@ -585,6 +619,17 @@ async function runTick(ctx = {}) {
         for (const c of fresh) { if (c.speaker && !isSelfSpeaker(c.speaker, sn)) present.add(c.speaker.trim()); }
         db.setMeta('gmeet_present', JSON.stringify(Array.from(present).slice(0, 50)));
       } catch {}
+      // DIRECTIVE CAPTURE (recall fix): capture tasks assigned to Lucas/her VERBATIM + deduped,
+      // so "what did X ask me to do" survives the lossy recap (the failure Lucas hit live).
+      try {
+        const dirs = JSON.parse(db.getMeta('gmeet_directives') || '[]');
+        const seen = new Set(dirs.map(x => x.toLowerCase()));
+        for (const c of fresh) {
+          const dir = extractDirective(c.text, ctx.userName);
+          if (dir) { const line = `${c.speaker}: ${dir}`; if (!seen.has(line.toLowerCase())) { dirs.push(line); seen.add(line.toLowerCase()); } }
+        }
+        db.setMeta('gmeet_directives', JSON.stringify(dirs.slice(-30)));
+      } catch {}
     }
     // END-OF-MEETING: note a sign-off cue when one lands; then, once the call goes quiet for
     // LEAVE_SILENCE_MS, she HANGS UP herself (Leave call in HER browser) and ends the stage —
@@ -672,6 +717,6 @@ module.exports = {
   STAGES, get, set, active, start, reset, url, runTick, defaultDeps,
   // pure helpers (tested)
   detectMeetUrl, meetLinkFromEvent, introPrompt, validateIntro, ensureIntro, parseCaptions, parseAttendees,
-  addressesSelf, isSelfSpeaker, selfNames, looksLikeSignOff,
+  addressesSelf, isSelfSpeaker, selfNames, looksLikeSignOff, extractDirective,
   MEET_URL_RE
 };

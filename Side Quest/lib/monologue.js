@@ -1282,14 +1282,14 @@ async function maybeBoredomSearch() {
     return;
   }
 
-  // ANTI-GLOB: don't let her web-search her own introspective sentence (the self-feeding loop).
-  const recentThoughtTexts = db.getRecentMonologueByType('thought', 6).map(r => r.content);
-  if (looksLikeOwnFragment(query, recentThoughtTexts)) {
-    console.log(`[monologue] boredom search suppressed (self-fragment, not a world topic): "${query.slice(0, 60)}"`);
-    return;
-  }
+  await runSearch(query, 'boredom');   // self-fragment guard is now universal (inside runSearch)
+}
 
-  await runSearch(query, 'boredom');
+// The self-fragment guard, callable from any search path. True → this query is her own
+// introspective sentence, not a world topic; suppress the search.
+function shouldSuppressSearch(query) {
+  try { return looksLikeOwnFragment(query, db.getRecentMonologueByType('thought', 6).map(r => r.content)); }
+  catch { return false; }
 }
 
 const SEARCH_REPEAT_THRESHOLD = 0.82;  // single-pair cosine; deliberately high so deepening (new terms) passes, only near-duplicates are braked
@@ -1317,6 +1317,13 @@ function recentSearchHappened() {
 // exercised and every search is visible + inspectable. Falls back to the headless
 // path only if the browser can't launch, so autonomy never silently goes dark.
 async function runSearch(query, source, focusId = null) {
+  // UNIVERSAL self-fragment guard (anti-glob): NO search path — boredom OR curiosity/wonder —
+  // may web-search her own introspective sentence. The wonder path was unguarded; live logs
+  // showed her searching "that's more about perspective than the numbers themselves".
+  if (shouldSuppressSearch(query)) {
+    console.log(`[monologue] search suppressed (self-fragment, ${source}): "${String(query).slice(0, 60)}"`);
+    return;
+  }
   db.setMeta('last_search_at', String(Date.now()));
   try {
     const opened = await webLib.open(query);
@@ -1435,5 +1442,6 @@ module.exports = {
   splitIdleBrowserTags,    // exported for smoke test
   diversifySeeds,          // exported for smoke test (recency-fixation guard)
   looksLikeOwnFragment,    // exported for smoke test (self-fragment search guard)
+  shouldSuppressSearch,    // exported for smoke test (universal guard wiring)
   MODEL
 };
