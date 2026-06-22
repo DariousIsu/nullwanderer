@@ -63,7 +63,20 @@ function withTimeout(promise, ms, fallback) {
 // port, no connectOverCDP (which failed to attach to a self-spawned Chrome on this
 // machine). Persistent profile keeps logins across sessions.
 async function ensure() {
-  if (context && page) return page;
+  if (context && page) {
+    // A CLOSED page/tab must not be reused — that's the "Target page has been closed"
+    // error that forced a full relaunch (a visible drop+rejoin mid-meeting). If the
+    // context is still alive, just reuse/recreate a tab from it — no new window.
+    let closed = false; try { closed = page.isClosed(); } catch { closed = true; }
+    if (!closed) return page;
+    try {
+      const live = context.pages().find(p => { try { return !p.isClosed(); } catch { return false; } });
+      page = live || await context.newPage();
+      registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
+      page.setDefaultTimeout(8000);
+      return page;
+    } catch { context = null; page = null; }   // context truly dead → fall through to relaunch
+  }
   // PATCHRIGHT (drop-in patched Playwright) instead of vanilla playwright: it
   // neutralizes the Runtime.enable CDP leak (the #1 Cloudflare/DataDome bot signal)
   // by running JS in isolated execution contexts, and strips the automation launch
