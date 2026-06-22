@@ -63,7 +63,7 @@ function fuse(semIds, ftsIds, k = 4, C = 60) {
 }
 
 /** Store a piece of knowledge. content should be SHORT synthesis/reference, not a copy. */
-async function store({ kind = 'note', content, source = null, importance = 0.5, links = null, embedText = null, provenance = null }) {
+async function store({ kind = 'note', content, source = null, importance = 0.5, links = null, embedText = null, provenance = null, level = 'fact', parentId = null }) {
   if (!content || !String(content).trim()) return null;
   // embedText lets the caller embed something OTHER than the readable content —
   // e.g. a focus_tombstone stores a readable "Focus \"X\" → resolved: reason" note
@@ -72,7 +72,7 @@ async function store({ kind = 'note', content, source = null, importance = 0.5, 
   // provenance = reference-not-copy marker(s) for where the raw source data lives.
   let embStr = null;
   try { embStr = JSON.stringify(await embed(embedText || content)); } catch (e) { console.error('[memory] embed failed:', e.message); }
-  return db.insertKnowledge({ kind, content: String(content).trim(), embedding: embStr, source, importance, links, provenance });
+  return db.insertKnowledge({ kind, content: String(content).trim(), embedding: embStr, source, importance, links, provenance, level, parentId });
 }
 
 // Mem0-style WRITE-TIME DEDUP for the capability track. Before adding a knowledge
@@ -81,28 +81,80 @@ async function store({ kind = 'note', content, source = null, importance = 0.5, 
 // instead of piling up a near-duplicate. Otherwise ADD, linked to its nearest
 // neighbour. This is what keeps the store from exploding (critical once Echo's tool-
 // knowledge flows in). decideFn injectable for offline tests.
-async function storeDeduped({ kind = 'note', content, source = null, importance = 0.5, provenance = null, prefilter = 0.82, decideFn = null }) {
+async function storeDeduped({ kind = 'note', content, source = null, importance = 0.5, provenance = null, prefilter = 0.82, decideFn = null, relateFn = null, mergeFn = null }) {
   const text = String(content || '').trim();
   if (text.length < 8) return { action: 'skip-empty' };
   let emb = null;
   try { emb = await embed(text); } catch {}
   let link = null;
+  let parentId = null;   // Phase 3: the 'topic' this new fact sits under (nearest topic note)
   if (emb) {
     let best = null, bestSim = 0;
+    let bestTopic = null, bestTopicSim = 0;
     for (const r of db.getAllKnowledgeEmbeddings()) {
       let v; try { v = JSON.parse(r.embedding); } catch { continue; }
       const s = cosine(emb, v);
       if (s > bestSim) { bestSim = s; best = r; }
+      if (r.level === 'topic' && s > bestTopicSim) { bestTopicSim = s; bestTopic = r; }
     }
     if (best && bestSim >= 0.6) link = best.id;
+    // parent = nearest topic note (if close enough); else inherit the nearest fact's parent.
+    if (bestTopic && bestTopicSim >= 0.5) parentId = bestTopic.id;
+    else if (best && best.level === 'fact' && best.parent_id) parentId = best.parent_id;
+
     if (best && bestSim >= prefilter) {
       const cand = db.getKnowledgeByIds([best.id])[0];
-      const same = decideFn ? await decideFn(text, cand ? cand.content : '') : await _sameFact(text, cand ? cand.content : '');
-      if (same) { try { db.touchKnowledge(best.id); } catch {} return { action: 'noop', id: best.id, sim: bestSim }; }
+      const candText = cand ? cand.content : '';
+      // Mem0 decision. relateFn (3-way) takes precedence; else decideFn/_sameFact (boolean)
+      // collapses to same|distinct (back-compat — no merge unless a relate is available).
+      let rel;
+      if (relateFn) rel = await relateFn(text, candText);
+      else if (decideFn) rel = (await decideFn(text, candText)) ? 'same' : 'distinct';
+      else rel = await _relate(text, candText);
+
+      if (rel === 'same') { try { db.touchKnowledge(best.id); } catch {} return { action: 'noop', id: best.id, sim: bestSim }; }
+      if (rel === 'augment' || rel === 'contradict') {
+        // UPDATE in place: merge the new info into the existing note (supersede on contradict).
+        let merged;
+        try { merged = mergeFn ? await mergeFn(candText, text) : await _merge(candText, text); } catch { merged = null; }
+        merged = (merged && merged.trim()) || `${candText} ${text}`.slice(0, 600);
+        let mEmb = null; try { mEmb = JSON.stringify(await embed(merged)); } catch {}
+        try { db.updateKnowledge(best.id, { content: merged, embedding: mEmb }); } catch {}
+        return { action: 'update', id: best.id, sim: bestSim };
+      }
+      // rel === 'distinct' → fall through to ADD (a real sibling)
     }
   }
-  const row = await store({ kind, content: text, source, importance, links: link ? [link] : null, provenance });
-  return { action: 'add', id: row && row.id };
+  const row = await store({ kind, content: text, source, importance, links: link ? [link] : null, provenance, level: 'fact', parentId });
+  return { action: 'add', id: row && row.id, parentId };
+}
+
+// Default 3-way relation between a new note and its nearest existing one (one cheap call).
+// same = duplicate/paraphrase, no new info; augment = same topic but adds/refines info
+// (incl. a correction) → merge; distinct = different enough to keep separately.
+async function _relate(a, b) {
+  if (!b) return 'distinct';
+  try {
+    const { streamChat } = require('./ollama');
+    const MODEL = require('./config').model();
+    let raw = '';
+    await streamChat({ model: MODEL, messages: [{ role: 'user', content: `Compare two short notes.\nA (new): ${a}\nB (existing): ${b}\n\nReply with ONE word:\n"same" — A duplicates/paraphrases B with no new information;\n"augment" — A is about the same thing as B but adds, refines, or corrects information;\n"distinct" — A is about a different thing.` }], options: { temperature: 0, top_p: 0.9, num_ctx: 8192, num_predict: 3 }, onToken: (t) => { raw += t; } });
+    const w = raw.trim().toLowerCase();
+    if (/^same/.test(w)) return 'same';
+    if (/^augment/.test(w)) return 'augment';
+    return 'distinct';
+  } catch { return 'distinct'; }
+}
+
+// Merge an existing note with new augmenting info into one consolidated note (one call).
+async function _merge(existing, incoming) {
+  try {
+    const { streamChat } = require('./ollama');
+    const MODEL = require('./config').model();
+    let raw = '';
+    await streamChat({ model: MODEL, messages: [{ role: 'user', content: `Combine these two notes into ONE concise note (max ~50 words) that keeps all distinct facts and drops the redundancy. If they conflict, prefer the NEW one. Output ONLY the merged note, no preamble.\n\nExisting: ${existing}\nNew: ${incoming}` }], options: { temperature: 0.2, top_p: 0.9, num_ctx: 8192, num_predict: 100 }, onToken: (t) => { raw += t; } });
+    return raw.trim().replace(/^["']|["']$/g, '');
+  } catch { return null; }
 }
 
 async function _sameFact(a, b) {
@@ -165,10 +217,13 @@ async function backfillTurnEmbeddings(limit = 300) {
  * Graceful: returns [] on empty query or no store (caller injects nothing → the
  * gap-response reflex handles "I don't know" rather than getting noise).
  */
-async function retrieve(query, { k = 4, kinds = null } = {}) {
+async function retrieve(query, { k = 4, kinds = null, preferLeaf = false } = {}) {
   if (!query || !String(query).trim()) return [];
   let qv;
   try { qv = await embed(query); } catch { qv = null; }
+
+  // For leaf-preference we need a deeper candidate pool to reorder; otherwise fuse to k.
+  const pool = preferLeaf ? Math.max(k * 4, 12) : k;
 
   // Semantic over all stored embeddings (small N; ms).
   let semIds = [];
@@ -187,12 +242,23 @@ async function retrieve(query, { k = 4, kinds = null } = {}) {
   // Keyword
   const ftsIds = db.ftsSearchKnowledge(query, k * 3).map(r => r.id);
 
-  const fusedIds = fuse(semIds, ftsIds, k);
+  const fusedIds = fuse(semIds, ftsIds, pool);
   if (fusedIds.length === 0) return [];
 
   const rows = db.getKnowledgeByIds(fusedIds);
   const byId = new Map(rows.map(r => [r.id, r]));
-  const result = fusedIds.map(id => byId.get(id)).filter(Boolean);
+  let ordered = fusedIds.map(id => byId.get(id)).filter(Boolean);
+
+  // LEAF-PREFERENCE (Phase 3): a narrow/factual query wants the specific leaf, not the
+  // rolled-up topic. Put 'fact' (and legacy null-level) notes first in fused order; topic
+  // notes only fill in if leaf coverage is thin (the walk-up). Relative fused rank is
+  // preserved within each tier.
+  if (preferLeaf) {
+    const leaves = ordered.filter(r => r.level !== 'topic');
+    const topics = ordered.filter(r => r.level === 'topic');
+    ordered = [...leaves, ...topics];
+  }
+  const result = ordered.slice(0, k);
   for (const r of result) { try { db.touchKnowledge(r.id); } catch {} }
   return result;
 }

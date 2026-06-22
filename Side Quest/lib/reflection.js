@@ -54,6 +54,7 @@ async function routeReflection(raw, sourceRows = [], { decideFn = null } = {}) {
 
   const kept = [];
   let nSelf = 0, nKnow = 0, nSkill = 0;
+  let lastKnowledgeId = null;   // the note the source readings get pointed at (Phase 2)
   for (const t of tagged.slice(0, 5)) {
     try {
       if (t.type === 'SELF') {
@@ -65,7 +66,8 @@ async function routeReflection(raw, sourceRows = [], { decideFn = null } = {}) {
         const r = await selfModelLib.record(t.text, { category: 'preference', importance: 0.72 });
         if (r) { nSelf++; kept.push(`[interest] ${t.text}`); }
       } else {
-        // Write-time dedup: a near-duplicate fact/procedure NOOPs instead of piling up.
+        // Write-time dedup/merge: a near-duplicate fact/procedure UPDATEs in place or
+        // NOOPs instead of piling up (Mem0). A genuinely new one ADDs.
         const r = await memoryLib.storeDeduped({
           kind: t.type === 'SKILL' ? 'skill' : 'note',
           content: t.text,
@@ -74,12 +76,23 @@ async function routeReflection(raw, sourceRows = [], { decideFn = null } = {}) {
           provenance: prov,
           decideFn
         });
-        if (r && r.action === 'add') {
+        if (r && r.id) lastKnowledgeId = r.id;            // add | update | noop all yield the note id
+        if (r && (r.action === 'add' || r.action === 'update')) {
           if (t.type === 'SKILL') { nSkill++; kept.push(`[skill] ${t.text}`); }
           else { nKnow++; kept.push(`[knowledge] ${t.text}`); }
         }
       }
     } catch (e) { console.error('[reflection] route store failed:', e.message); }
+  }
+  // ENDPOINT-NOT-PATH (Phase 2): once this window of readings has been distilled into a
+  // durable knowledge note, mark those readings consolidated + point them at the note, so
+  // recall loads the distilled fact + a pointer, never the raw trail again.
+  if (lastKnowledgeId && (nKnow + nSkill) > 0) {
+    try {
+      const readingIds = sourceRows.filter(r => r && r.type === 'reading').map(r => r.id);
+      const n = db.markReadingsConsolidated(readingIds, lastKnowledgeId);
+      if (n) console.log(`[reflection] consolidated ${n} reading(s) → knowledge #${lastKnowledgeId} (demoted from recency)`);
+    } catch (e) { console.error('[reflection] consolidate readings failed:', e.message); }
   }
   return { taggedCount: tagged.length, kept, nSelf, nKnow, nSkill };
 }

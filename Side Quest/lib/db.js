@@ -265,7 +265,21 @@ const MIGRATIONS = [
     how TEXT,
     updated_ts INTEGER NOT NULL
   )`,
-  `CREATE INDEX IF NOT EXISTS idx_permissions_status ON permissions(status)`
+  `CREATE INDEX IF NOT EXISTS idx_permissions_status ON permissions(status)`,
+  // MEMORY REDESIGN Phase 2 — endpoint-not-path. Once a reading is distilled into a
+  // durable knowledge note (during reflection), it's marked consolidated and pointed at
+  // the note that captured it (distilled_into). Consolidated readings are then EXCLUDED
+  // from recency injection — recall loads the distilled endpoint + a pointer, never the
+  // raw journey again. The raw row STAYS addressable (HippoRAG-2: don't delete sources).
+  `ALTER TABLE monologue ADD COLUMN consolidated INTEGER DEFAULT 0`,
+  `ALTER TABLE monologue ADD COLUMN distilled_into INTEGER`,
+  // MEMORY REDESIGN Phase 3 — general↔specific hierarchy. level: 'fact' (leaf, specific)
+  // | 'topic' (rolled-up summary). parent_id → the topic a fact sits under. Lets narrow
+  // retrieval prefer the LEAF and walk UP to the topic only when leaf coverage is thin.
+  `ALTER TABLE knowledge ADD COLUMN level TEXT DEFAULT 'fact'`,
+  `ALTER TABLE knowledge ADD COLUMN parent_id INTEGER`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_level ON knowledge(level)`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_parent ON knowledge(parent_id)`
 ];
 
 function init() {
@@ -352,11 +366,27 @@ function getRecentMonologue(n) {
   return rows.reverse();
 }
 
-function getRecentMonologueByType(type, n) {
+// excludeConsolidated (Phase 2): drop readings already distilled into a knowledge note
+// from recency injection — their endpoint is the note, not the raw row. The count/audit
+// callers pass nothing (default false) so totals stay complete.
+function getRecentMonologueByType(type, n, { excludeConsolidated = false } = {}) {
+  const where = excludeConsolidated ? 'type = ? AND COALESCE(consolidated, 0) = 0' : 'type = ?';
   const rows = getDb()
-    .prepare('SELECT * FROM monologue WHERE type = ? ORDER BY id DESC LIMIT ?')
+    .prepare(`SELECT * FROM monologue WHERE ${where} ORDER BY id DESC LIMIT ?`)
     .all(type, n);
   return rows.reverse();
+}
+
+// Phase 2: mark readings as distilled into a knowledge note (consolidated → excluded from
+// recency injection; distilled_into = the note id, the pointer back). Reading rows only.
+function markReadingsConsolidated(ids, knowledgeId = null) {
+  const list = (ids || []).map(Number).filter(Boolean);
+  if (!list.length) return 0;
+  const ph = list.map(() => '?').join(',');
+  const info = getDb()
+    .prepare(`UPDATE monologue SET consolidated = 1, distilled_into = ? WHERE id IN (${ph}) AND type = 'reading'`)
+    .run(knowledgeId, ...list);
+  return info.changes;
 }
 
 // --- Commitments ---
@@ -779,15 +809,32 @@ function hasEmailedAddress(addr) {
 
 // --- Knowledge store (integration/learning layer) ---
 
-function insertKnowledge({ kind = 'note', content, embedding = null, source = null, importance = 0.5, links = null, provenance = null }) {
+function insertKnowledge({ kind = 'note', content, embedding = null, source = null, importance = 0.5, links = null, provenance = null, level = 'fact', parentId = null }) {
   const ts = Date.now();
   const info = getDb()
-    .prepare(`INSERT INTO knowledge (kind, content, embedding, source, importance, created_ts, links, provenance)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(kind, content, embedding, source, importance, ts, links ? JSON.stringify(links) : null, provenance ? JSON.stringify(provenance) : null);
+    .prepare(`INSERT INTO knowledge (kind, content, embedding, source, importance, created_ts, links, provenance, level, parent_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(kind, content, embedding, source, importance, ts, links ? JSON.stringify(links) : null, provenance ? JSON.stringify(provenance) : null, level, parentId);
   const id = info.lastInsertRowid;
   try { getDb().prepare('INSERT INTO knowledge_fts(rowid, content) VALUES (?, ?)').run(id, content); } catch {}
   return { id, ts };
+}
+
+// Phase 3: rewrite a knowledge note in place (Mem0 UPDATE/merge) — content + its
+// embedding + FTS index, bumping last_used_ts. Used when a new takeaway AUGMENTS an
+// existing one rather than duplicating it, so one topic doesn't pile up near-dup rows.
+function updateKnowledge(id, { content, embedding = null, importance = null } = {}) {
+  if (!id || !content || !String(content).trim()) return false;
+  const now = Date.now();
+  const sets = ['content = ?', 'last_used_ts = ?'];
+  const args = [String(content).trim(), now];
+  if (embedding != null) { sets.push('embedding = ?'); args.push(embedding); }
+  if (importance != null) { sets.push('importance = ?'); args.push(importance); }
+  args.push(id);
+  getDb().prepare(`UPDATE knowledge SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+  // keep FTS in sync (no UPDATE on a contentless fts5 table → delete + reinsert the row)
+  try { getDb().prepare('DELETE FROM knowledge_fts WHERE rowid = ?').run(id); getDb().prepare('INSERT INTO knowledge_fts(rowid, content) VALUES (?, ?)').run(id, String(content).trim()); } catch {}
+  return true;
 }
 
 // Fetch a single monologue row by id — used to resolve a provenance marker
@@ -800,7 +847,7 @@ function getMonologueById(id) {
 // single-user scale (hundreds–thousands of notes = ms); swap for ANN if it grows.
 function getAllKnowledgeEmbeddings() {
   return getDb()
-    .prepare('SELECT id, kind, source, embedding, importance, created_ts, last_used_ts FROM knowledge WHERE embedding IS NOT NULL')
+    .prepare('SELECT id, kind, source, embedding, importance, created_ts, last_used_ts, level, parent_id FROM knowledge WHERE embedding IS NOT NULL')
     .all();
 }
 
@@ -1051,6 +1098,8 @@ module.exports = {
   hasEmailedAddress,
   insertKnowledge,
   getMonologueById,
+  markReadingsConsolidated,
+  updateKnowledge,
   getAllKnowledgeEmbeddings,
   ftsSearchKnowledge,
   getKnowledgeBySourceSince,

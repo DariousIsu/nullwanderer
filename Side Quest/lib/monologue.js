@@ -616,8 +616,10 @@ async function runOneTick() {
   try { const selfCheck = require('./self_check'); if (selfCheck.due()) selfCheck.run(); } catch (e) { console.error('[self-check] tick run failed:', e.message); }
 
   // Split monologue into thoughts (used for anti-loop seeds) and readings (used as material).
+  // Readings already distilled into knowledge are excluded (Phase 2 endpoint-not-path) —
+  // the endpoint note carries them now; the raw trail shouldn't re-feed the loop.
   const recentThoughts = db.getRecentMonologueByType('thought', RECENT_MONOLOGUE_WINDOW);
-  const recentReadings = db.getRecentMonologueByType('reading', 2);
+  const recentReadings = db.getRecentMonologueByType('reading', 2, { excludeConsolidated: true });
   const recentReflections = db.getRecentReflections(2);
   const recentTurns = db.getRecentTurns(20);
   const heldCommitments = db.getHeldCommitments(5);
@@ -1169,7 +1171,7 @@ async function maybeBoredomSearch() {
   const recentTurnsAll = db.getRecentTurns(30);
   const recentTurns = recentTurnsAll.filter(t => t.speaker === 'user' || t.speaker === 'ai_said');
   const heldCommitments = db.getHeldCommitments(5);
-  const recentReadings = db.getRecentMonologueByType('reading', 8);
+  const recentReadings = db.getRecentMonologueByType('reading', 8, { excludeConsolidated: true });
   const recentReadingTopics = recentReadings.map(r => {
     if (r.query) return r.query;
     const m = (r.content || '').match(/(?:looked up|wondered about) "([^"]+)"/i);

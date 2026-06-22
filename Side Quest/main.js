@@ -894,7 +894,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
 
   const recentReflections = db.getRecentReflections(RECENT_REFLECTION_LIMIT);
   let recentMonologue = db.getRecentMonologueByType('thought', 5);
-  let recentReadings = db.getRecentMonologueByType('reading', 2);
+  let recentReadings = db.getRecentMonologueByType('reading', 2, { excludeConsolidated: true });
   const heldCommitments = db.getHeldCommitments(8);
   const openThreads = db.getActiveOpenThreads(3);
   const protocols = db.getActiveProtocols();
@@ -957,8 +957,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let retrievedKnowledgeBlock = null;
   try {
     const rk = qClass === 'narrow'
-      ? await memoryLib.retrieve(userMessage, { k: 3 })          // entity-exact, tight
-      : await memoryLib.retrieveScored(userMessage, { k: 6 });   // open, high-signal, wider
+      ? await memoryLib.retrieve(userMessage, { k: 3, preferLeaf: true })   // entity-exact, leaf-first
+      : await memoryLib.retrieveScored(userMessage, { k: 6 });             // open, high-signal, wider
     retrievedKnowledgeBlock = memoryLib.formatForPrompt(rk, userName);
   } catch (err) { console.error('[main] knowledge retrieve failed:', err.message); }
 
