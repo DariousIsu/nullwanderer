@@ -14,10 +14,24 @@
  *       (no flag = dry-run report; --apply performs the demotion)
  */
 const db = require('../lib/db');
+const { looksLikeOwnFragment } = require('../lib/monologue');
 
 const REFLECTION_SOURCES = ['reflection_knowledge', 'reflection_skill'];
 
-// A reflection-distilled note with no real external grounding → laundered self-talk.
+function decodeDdgQueries(urls) {
+  const out = [];
+  for (const u of urls) {
+    const m = String(u).match(/duckduckgo\.com\/[^?]*\?[^#]*\bq=([^&]+)/i);
+    if (m) { try { out.push(decodeURIComponent(m[1].replace(/\+/g, ' '))); } catch { /* skip */ } }
+  }
+  return out;
+}
+
+// The precise laundering signature (NOT merely "no URL" — that demotes real facts she simply
+// didn't store a link for). A reflection fact is laundered when BOTH: (a) it has no clean
+// external article grounding it, AND (b) the search that produced it was HER OWN sentence
+// fragment (the self-feeding loop). That targets "she web-searched her own speculation" while
+// leaving real-world facts and any genuinely-sourced note untouched.
 function isLaundered(row) {
   if (!row || !REFLECTION_SOURCES.includes(row.source)) return false;
   let prov = null;
@@ -25,7 +39,9 @@ function isLaundered(row) {
   const urls = [];
   if (Array.isArray(prov)) for (const p of prov) { if (p && Array.isArray(p.urls)) urls.push(...p.urls); }
   const cleanExternal = urls.filter((u) => /^https?:\/\//i.test(u) && !/duckduckgo\.com/i.test(u));
-  return cleanExternal.length === 0;
+  if (cleanExternal.length) return false;                      // grounded in a real article → keep
+  const selfQueries = decodeDdgQueries(urls).filter((q) => looksLikeOwnFragment(q));
+  return selfQueries.length > 0;                               // searched her own sentence, no real source → laundered
 }
 
 function scan() {
