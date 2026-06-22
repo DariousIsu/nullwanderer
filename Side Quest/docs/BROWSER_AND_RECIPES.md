@@ -157,12 +157,20 @@ observe live captions. Built like the byline stepper (meta stages, one per idle 
 - **Mandatory intro**: she writes it warm and may greet recognized attendees by name, but
   the **AI-disclosure is enforced deterministically** — `validateIntro` + `ensureDisclosure`
   guarantee the intro always states she's an AI on Lucas's behalf, even if the model omits it.
-- **Observe**: `parseCaptions` turns the live caption scrape into `{speaker,text}`; only
-  newly-arrived lines surface as her perception (readings), tracked by a seen-index.
+- **Captions**: enabled with **`Shift+C`** (keyboard, retried; button click only as fallback —
+  the approach maintained OSS Meet bots use, since the control bar auto-hides / the CC button
+  can be in the overflow menu). The scraper anchors on the **durable accessibility attributes**
+  (`[role="region"][aria-label*="Captions"]` / `[aria-live]`) — Google rotates the obfuscated
+  class names every few months, so classes (`.nMcdL` row, `.NWpY1d`/`.xoMHSc` speaker) are only
+  fallbacks, and text is extracted by **cloning a row and removing the speaker badge + avatars**
+  (class-free, durable). Selectors sourced from Recall.ai's Playwright bot + extension,
+  yunho0130/google-meet-cc-to-srt, and S Anand's recorder. A heal signal logs candidate regions
+  if none match. Dedup is a seen-set (captions scroll + the active line mutates in place, so an
+  index breaks).
 
-Provisional (`verified:false`): `gmeet_join`, `gmeet_post_chat`. Meet's DOM is fragile and
-needs her Google login — the join/post/scrape selectors verify+heal on the first live
-meeting. Pure helpers + the stage machine are offline-tested (`smoke_gmeet` 27/27).
+Provisional until verified on a live meeting: `gmeet_join`, `gmeet_post_chat`, and the caption
+selectors. Meet's DOM needs her Google login. Pure helpers + the stage machine are offline-tested
+(`smoke_gmeet` 28/28).
 Steps 2–3 (grounded contribution from Echo's KB, loopback transcript) ride Echo.
 
 ## Tests

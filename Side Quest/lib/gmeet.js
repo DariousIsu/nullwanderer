@@ -28,6 +28,11 @@ const db = require('./db');
 const STAGES = ['none', 'joining', 'intro', 'observing', 'done'];
 const MAX_STAGE_STRIKES = 3;
 
+// Captions she's already surfaced this meeting (exact speaker|text), so scrolling/repeat
+// caption rows aren't re-reported each ~10s observe tick. Reset on start(). In-memory:
+// captions are ephemeral, no need to persist.
+let _seenCaps = new Set();
+
 // --- pure helpers (unit-tested) ---
 
 // A Google Meet URL anywhere in text. Meet codes are xxx-xxxx-xxx (lowercase letters).
@@ -136,7 +141,7 @@ function start(meetUrl) {
   if (!u) return false;
   db.setMeta('gmeet_url', u);
   db.setMeta('gmeet_strikes', '0');
-  db.setMeta('gmeet_caption_seen', '0');
+  _seenCaps = new Set();
   set('joining');
   return true;
 }
@@ -157,36 +162,82 @@ function defaultDeps() {
     MODEL: require('./config').model(),
     scrapeAttendees: liveScrapeAttendees,
     scrapeCaptions: liveScrapeCaptions,
+    enableCaptions: liveEnableCaptions,
     postChat: livePostChat
   };
 }
 
-// --- live DOM bits (provisional; verify on a real meeting) ---
+// --- live DOM bits ---
+// Selectors are grounded in maintained OSS Meet scrapers (Recall.ai's Playwright bot +
+// extension, yunho0130/google-meet-cc-to-srt, S Anand's recorder). The DURABLE anchors are
+// accessibility attributes (aria-live / role=region[aria-label*=Captions] / the button
+// aria-label) — Google obfuscates+rotates the class names every few months, so classes are
+// only fallbacks and we extract text by REMOVING the speaker badge (Recall's class-free trick).
+
 async function liveScrapeAttendees(web) {
   try { const r = await web.read(); return (r && r.ok && r.text) ? r.text : ''; } catch { return ''; }
 }
+
+// Enable captions: Shift+C is what the battle-tested bots send (more reliable than a click,
+// works regardless of the control bar auto-hiding or the CC button being in the overflow
+// menu). Click the "Turn on captions" button only as a fallback. Confirm via the captions
+// region or the "Turn off captions" state.
+async function liveEnableCaptions(web) {
+  try {
+    const page = await web.ensure();
+    const onSel = '[role="region"][aria-label*="Captions" i], button[aria-label*="Turn off captions" i]';
+    const isOn = async () => (await page.locator(onSel).count().catch(() => 0)) > 0;
+    try { await page.mouse.move(500, 700); } catch {}   // control bar renders on pointer activity
+    if (await isOn()) return { ok: true, already: true };
+    for (let i = 0; i < 5; i++) {
+      try { await page.keyboard.down('Shift'); await page.keyboard.press('c'); await page.keyboard.up('Shift'); } catch {}
+      await page.waitForTimeout(500).catch(() => {});
+      if (await isOn()) return { ok: true, via: 'shortcut' };
+    }
+    try {
+      const btn = page.locator('button[aria-label*="Turn on captions" i]').first();
+      if (await btn.count().catch(() => 0)) await btn.click({ timeout: 4000 });
+    } catch {}
+    const on = await isOn();
+    if (!on) console.log('[gmeet] enable-captions unconfirmed (Shift+C + button both unverified)');
+    return { ok: on, via: on ? 'button' : 'unconfirmed' };
+  } catch (e) { return { ok: false, reason: e.message }; }
+}
+
 async function liveScrapeCaptions(web) {
-  // Scrape the REAL caption region (NOT the whole page — that was reading meeting chrome
-  // and treating any "X: Y" line as a caption). Meet's caption classes are obfuscated and
-  // drift, so try several known containers + aria, and emit a heal signal listing
-  // candidates when none match, so the selector can be corrected from a live run.
+  // Read the REAL caption region (NOT the whole page). Anchor on aria, fall back through
+  // historical row/speaker classes; get text by cloning a row and removing the speaker
+  // badge + avatars (durable against text-class churn). Heal signal if no region found.
   try {
     const page = await web.ensure();
     const res = await page.evaluate(() => {
-      const sels = ['div[aria-label="Captions"]', 'div[aria-label="Captions are on"]', '.a4cQT', '.iOzk7', '[jsname="dsyhDe"]', 'div[aria-live="polite"]'];
-      let region = null;
-      for (const s of sels) { try { const el = document.querySelector(s); if (el) { region = el; break; } } catch {} }
+      const region =
+        document.querySelector('[role="region"][aria-label*="Captions" i]') ||
+        Array.from(document.querySelectorAll('[aria-live]')).find(e => (e.textContent || '').trim().length > 0) ||
+        (document.querySelector('.nMcdL') && document.querySelector('.nMcdL').parentElement) ||
+        document.querySelector("div[jscontroller='TEjq6e']");
       if (!region) {
-        const cands = Array.from(document.querySelectorAll('[aria-live], [aria-label*="aption" i]')).slice(0, 6)
-          .map(e => `${e.tagName}.${String(e.className || '').slice(0, 36)} aria-label="${e.getAttribute('aria-label') || ''}" live="${e.getAttribute('aria-live') || ''}"`);
-        return { text: '', diag: cands.length ? cands.join(' | ') : 'no aria-live / caption candidates on page' };
+        const cands = Array.from(document.querySelectorAll('[aria-live],[aria-label*="aption" i],[role="region"]')).slice(0, 6)
+          .map(e => `${e.tagName} role="${e.getAttribute('role') || ''}" aria-label="${e.getAttribute('aria-label') || ''}" live="${e.getAttribute('aria-live') || ''}"`);
+        return { text: '', diag: cands.length ? cands.join(' | ') : 'no caption region / aria-live on page' };
       }
-      // Each caption row tends to pair a speaker name with a text span. Collect short,
-      // visible text lines from the region; parseCaptions() turns "Name: text" into pairs.
+      const BADGE = '.NWpY1d, .xoMHSc, .zs7s8d';   // speaker-name badge (current + legacy)
+      let rows = Array.from(region.querySelectorAll('.nMcdL'));            // current per-caption row
+      if (!rows.length) rows = Array.from(region.children);                // structural fallback
+      if (!rows.length) rows = [region];
       const lines = [];
-      for (const row of region.querySelectorAll('div, span')) {
-        const t = (row.innerText || '').replace(/\s+/g, ' ').trim();
-        if (t && t.length <= 240 && !lines.includes(t)) lines.push(t);
+      for (const row of rows) {
+        const badge = row.querySelector ? row.querySelector(BADGE) : null;
+        const speaker = badge ? (badge.textContent || '').replace(/\s+/g, ' ').trim() : '';
+        let text = '';
+        try {
+          const clone = row.cloneNode(true);
+          clone.querySelectorAll(BADGE).forEach(e => e.remove());          // strip speaker badge
+          clone.querySelectorAll('img, [data-iml]').forEach(e => e.remove()); // strip avatars
+          text = (clone.textContent || '').replace(/\s+/g, ' ').trim();
+        } catch {}
+        if (!text || text.length > 280) continue;
+        lines.push(speaker ? `${speaker}: ${text}` : text);
       }
       return { text: lines.join('\n'), diag: '' };
     });
@@ -251,9 +302,9 @@ async function runTick(ctx = {}) {
     const post = await d.postChat(d.web, intro);
     if (post && post.ok) {
       _clear();
-      // Turn on captions for the observe phase (Meet doesn't auto-enable them). Best-effort:
-      // proceed to observing even if the toggle selector needs healing.
-      try { const cc = await d.web.runRecipe('gmeet_enable_captions', {}, {}); if (!(cc && cc.ok)) console.log('[gmeet] enable-captions recipe did not confirm:', cc && cc.reason); } catch (e) { console.log('[gmeet] enable-captions threw:', e.message); }
+      // Turn on captions for the observe phase (Meet doesn't auto-enable). Shift+C primary,
+      // button fallback. Best-effort: proceed to observing even if unconfirmed.
+      try { const cc = await d.enableCaptions(d.web); if (!(cc && cc.ok)) console.log('[gmeet] enable-captions unconfirmed:', cc && (cc.reason || cc.via)); } catch (e) { console.log('[gmeet] enable-captions threw:', e.message); }
       set('observing');
       surface(`I introduced myself in the meeting chat: "${intro}"`, '(gmeet) introduced');
       return { stage, ok: true, note: 'posted intro → observing', intro };
@@ -263,11 +314,18 @@ async function runTick(ctx = {}) {
   }
 
   if (stage === 'observing') {
+    // Dedupe by exact speaker|text against what she's already surfaced — captions scroll
+    // and the active line mutates in place, so an index-into-the-list breaks; a seen-set
+    // is robust to both. (10s observe ticks usually catch a line after it finalizes.)
     const caps = parseCaptions(await d.scrapeCaptions(d.web));
-    const seen = parseInt(db.getMeta('gmeet_caption_seen') || '0', 10);
-    const fresh = caps.slice(seen);
+    const fresh = [];
+    for (const c of caps) {
+      const key = `${c.speaker}|${c.text}`;
+      if (_seenCaps.has(key)) continue;
+      _seenCaps.add(key); fresh.push(c);
+    }
+    if (_seenCaps.size > 600) _seenCaps = new Set(Array.from(_seenCaps).slice(-300));   // bound memory
     if (fresh.length) {
-      db.setMeta('gmeet_caption_seen', String(caps.length));
       const block = fresh.map(c => `${c.speaker}: ${c.text}`).join('\n');
       surface(`Meeting captions:\n${block}`, `(gmeet) ${fresh.length} new caption(s)`);
       return { stage, ok: true, note: `observed ${fresh.length} new caption(s)` };

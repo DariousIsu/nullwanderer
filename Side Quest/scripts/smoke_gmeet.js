@@ -30,6 +30,7 @@ function mockDeps(over = {}) {
       streamChat: over.streamChat || (async ({ onToken }) => onToken(over.introText != null ? over.introText : "Hi everyone — I'm Zoe, Lucas's AI assistant, here to follow along and take notes.")),
       scrapeAttendees: async () => over.attendeesText || '',
       scrapeCaptions: async () => (over.captionsRef ? over.captionsRef.text : (over.captionsText || '')),
+      enableCaptions: async () => over.captionsEnable || { ok: true, via: 'shortcut' },
       postChat: async (_w, msg) => { calls.posts.push(msg); return over.postResult || { ok: true }; }
     }
   };
@@ -106,7 +107,6 @@ function mockDeps(over = {}) {
   console.log('\nrecipes present + structured:');
   ok('gmeet_join loads (verified:false)', (() => { const x = store.load('gmeet_join'); return x && x.task === 'join' && x.verified === false && x.steps.length >= 3; })());
   ok('gmeet_post_chat loads', (() => { const x = store.load('gmeet_post_chat'); return x && x.task === 'post_chat' && x.steps.some(s => s.value === '{{message}}'); })());
-  ok('gmeet_enable_captions loads', (() => { const x = store.load('gmeet_enable_captions'); return x && x.task === 'enable_captions' && x.steps.length >= 1; })());
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { require('fs').rmSync(path.dirname(process.env.SQ_DB_PATH), { recursive: true, force: true }); } catch {}
