@@ -66,10 +66,12 @@ graph_entity_proposals / graph_relation_proposals  (propose→promote gate; stat
 
 **Federation bonus:** shared `entity_type`/`relation_type` vocab + column shape → her graph unions with Echo's (same names resolve, same relations merge) with no coupling.
 
-## Phased build
+## Phased build (status 2026-06-22 — each gated on a passing hard smoke)
 
-- **Phase 1 (this commit):** schema + propose/promote gate + epistemic typing in `lib/db.js` accessors + `lib/graph_memory.js`, offline smoke test. Existing flat `knowledge` store keeps running in parallel.
-- **Phase 2:** de-launder `reflection.js` — write proposals, not 0.75 facts; ground promotion in a source.
-- **Phase 3:** retrieval ranks by epistemic; idle curiosity queries the graph, stops searching her own fragments.
-- **Phase 4:** episodic reconciliation (meeting attendees expected-vs-present) + Zep-style valid-time.
-- **Phase 5:** Echo federation — union her graph with Echo's KG when connected.
+- **Phase 1 ✅** schema + propose/promote gate + epistemic typing (`lib/db.js`, `lib/graph_memory.js`). `smoke_graph_memory.js` 21/21. Flat `knowledge` store runs in parallel.
+- **Phase 2 ✅** de-laundered `reflection.js`: ungrounded (own-thought) takeaways → gated graph proposals, never 0.75 facts; grounded (reading/URL) → real facts. `smoke_reflection_delaunder.js` 11/11.
+- **Phase 3 ✅** `graph_memory.factsForPrompt()` (grounded-only, trust-ranked, refuted/speculation excluded) + `monologue.looksLikeOwnFragment()` (boredom search no longer fires on her own introspective sentences). `smoke_graph_phase3.js` 14/14.
+- **Phase 4 ✅** `graph_memory.reconcileAttendance()` + gmeet present-speaker capture → end-of-meeting reconciliation; expected-but-absent (Madeline) → refuted + superseded. `smoke_graph_phase4.js` 10/10. (Expected-attendee capture rides on the calendar source — parked; present alone already grounds attendance.)
+- **Phase 5 ⏳ (blocked on Echo)** federation — union her graph with Echo's KG. Needs the live Echo MCP connection (the larger integration). Not started.
+
+**Not yet done (follow-ups):** (a) one-time cleanup migration of the existing laundered facts (knowledge #580-702); (b) wiring `factsForPrompt()` into the live chat/idle prompts (currently a primitive, not yet injected); (c) structured entity/relation extraction from grounded readings into the graph (today only reflection-speculation + meeting attendance populate it).
