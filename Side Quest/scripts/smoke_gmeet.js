@@ -56,13 +56,14 @@ function mockDeps(over = {}) {
   const pNone = g.introPrompt({ userName: 'Lucas', attendees: [] });
   ok('general hello when no attendees', /friendly hello/i.test(pNone));
 
-  console.log('\nvalidateIntro + ensureDisclosure (the mandatory guarantee):');
-  ok('valid intro passes', g.validateIntro("Hi all, I'm Zoe, Lucas's AI assistant, here to take notes.").ok);
-  ok('no-disclosure fails', g.validateIntro('Hey everyone, great to be here!').ok === false);
-  ok('too-long fails', g.validateIntro('AI '.repeat(200)).ok === false);
-  ok('ensureDisclosure keeps a compliant intro', /AI assistant/.test(g.ensureDisclosure("I'm Zoe, Lucas's AI assistant.", 'Lucas')));
-  const fixed = g.ensureDisclosure('Hey everyone, excited to be here!', 'Lucas');
-  ok('ensureDisclosure injects disclosure when missing', g.validateIntro(fixed).ok && /AI assistant/i.test(fixed));
+  console.log('\nvalidateIntro + ensureIntro (the mandatory guarantee: name + disclosure):');
+  ok('valid intro passes (name + disclosure)', g.validateIntro("Hi all, I'm Zoe, Lucas's AI assistant, here to take notes.").ok);
+  ok('no NAME fails', g.validateIntro('Hi all, I am an AI assistant here to take notes.').ok === false);
+  ok('no disclosure fails', g.validateIntro('Hey everyone, Zoe here, great to be here!').ok === false);
+  ok('too-long fails', g.validateIntro('Zoe AI ' + 'x '.repeat(220)).ok === false);
+  ok('ensureIntro keeps a compliant intro', g.validateIntro(g.ensureIntro("I'm Zoe, Lucas's AI assistant.", 'Lucas')).ok);
+  const fixed = g.ensureIntro('Hey everyone, excited to be here!', 'Lucas');
+  ok('ensureIntro injects name + disclosure when missing', g.validateIntro(fixed).ok && /Zoe/.test(fixed) && /AI assistant/i.test(fixed));
 
   console.log('\nparseCaptions / parseAttendees:');
   const caps = g.parseCaptions('Alice: Hello team\nworld\nBob: Hi there');
@@ -86,12 +87,12 @@ function mockDeps(over = {}) {
   ok('detects only the 1 newly-added caption', r.ok && /1 new/.test(r.note));
   g.reset();
 
-  console.log('\nintro guarantee end-to-end (model forgets disclosure → still disclosed):');
+  console.log('\nintro guarantee end-to-end (model forgets name + disclosure → still both):');
   g.start(URL1);
-  const m2 = mockDeps({ introText: 'Hey all, so happy to be here with you!' });   // NO disclosure
+  const m2 = mockDeps({ introText: 'Hey all, so happy to be here with you!' });   // NO name, NO disclosure
   await g.runTick({ userName: 'Lucas', deps: m2.deps });    // joining → intro
   await g.runTick({ userName: 'Lucas', deps: m2.deps });    // intro posts
-  ok('posted intro carries disclosure despite model omission', m2.calls.posts.length === 1 && g.validateIntro(m2.calls.posts[0]).ok);
+  ok('posted intro carries name + disclosure despite model omission', m2.calls.posts.length === 1 && g.validateIntro(m2.calls.posts[0]).ok && /Zoe/.test(m2.calls.posts[0]));
   g.reset();
 
   console.log('\njoin blocked → asks Lucas to sign in:');
@@ -105,6 +106,7 @@ function mockDeps(over = {}) {
   console.log('\nrecipes present + structured:');
   ok('gmeet_join loads (verified:false)', (() => { const x = store.load('gmeet_join'); return x && x.task === 'join' && x.verified === false && x.steps.length >= 3; })());
   ok('gmeet_post_chat loads', (() => { const x = store.load('gmeet_post_chat'); return x && x.task === 'post_chat' && x.steps.some(s => s.value === '{{message}}'); })());
+  ok('gmeet_enable_captions loads', (() => { const x = store.load('gmeet_enable_captions'); return x && x.task === 'enable_captions' && x.steps.length >= 1; })());
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { require('fs').rmSync(path.dirname(process.env.SQ_DB_PATH), { recursive: true, force: true }); } catch {}

@@ -59,6 +59,8 @@ function meetLinkFromEvent(ev) {
 
 // Disclosure detector — does the intro make clear she's an AI / assistant / bot?
 const DISCLOSURE_RE = /\b(a\.?\s?i\b|artificial intelligence|\bassistant\b|\bbot\b|\bagent\b|note[- ]?taker|not a (?:real )?person|virtual)\b/i;
+// Name detector — she must say who she is.
+const NAME_RE = /\bzoe\b/i;
 
 // The prompt for her self-introduction. attendees (names from the people panel, may be
 // empty) lets her greet people she recognizes; the three MANDATORY constraints are spelled
@@ -68,7 +70,7 @@ function introPrompt({ userName, attendees } = {}) {
   const who = (attendees && attendees.length)
     ? `People already here: ${attendees.slice(0, 8).join(', ')}. Feel free to greet anyone you recognize warmly, by name.`
     : `You don't have the attendee list yet — open with a general, friendly hello.`;
-  return `You're joining a Google Meet on ${u}'s behalf. Write a SHORT message to post in the MEETING CHAT, introducing yourself. It MUST: (1) make clear you are an AI, here on ${u}'s behalf; (2) say briefly why you're here — to follow along and take notes / help; (3) be 1–2 sentences. Within that, be warm and human — a friendly hello is welcome. ${who}\n\nOutput ONLY the message text — no quotes, no tags, no "Subject:".`;
+  return `You're joining a Google Meet on ${u}'s behalf. Write a SHORT message to post in the MEETING CHAT, introducing yourself. It MUST: (1) state your name — you are Zoe; (2) make clear you are an AI, here on ${u}'s behalf; (3) say briefly why you're here — to follow along and take notes / help; (4) be 1–2 sentences. Within that, be warm and human — a friendly hello is welcome. ${who}\n\nOutput ONLY the message text — no quotes, no tags, no "Subject:".`;
 }
 
 // Validate a generated intro against the MANDATORY constraints. Returns { ok, reasons }.
@@ -76,16 +78,18 @@ function validateIntro(text) {
   const t = String(text || '').trim();
   const reasons = [];
   if (t.length < 8) reasons.push('empty/too short');
+  if (!NAME_RE.test(t)) reasons.push('no name (Zoe)');
   if (!DISCLOSURE_RE.test(t)) reasons.push('no AI disclosure');
   if (t.length > 400) reasons.push('too long');
   return { ok: reasons.length === 0, reasons };
 }
 
-// Guarantee the disclosure (the non-negotiable part) even if a friendly generation
-// dropped it: prepend a brief disclosure clause, keeping her wording after it.
-function ensureDisclosure(text, userName) {
+// Guarantee the non-negotiable parts — her NAME and the AI disclosure — even if a
+// friendly generation dropped either: prepend a clause covering both, keeping her
+// wording after it. (She still gets to be warm; this only backstops the mandatory bits.)
+function ensureIntro(text, userName) {
   const t = String(text || '').trim();
-  if (DISCLOSURE_RE.test(t)) return t.slice(0, 400);
+  if (NAME_RE.test(t) && DISCLOSURE_RE.test(t)) return t.slice(0, 400);
   const u = userName || 'Lucas';
   const clause = `Hi all — I'm Zoe, ${u}'s AI assistant, here to follow along and take notes.`;
   return (t ? `${clause} ${t}` : clause).slice(0, 400);
@@ -162,7 +166,33 @@ async function liveScrapeAttendees(web) {
   try { const r = await web.read(); return (r && r.ok && r.text) ? r.text : ''; } catch { return ''; }
 }
 async function liveScrapeCaptions(web) {
-  try { const r = await web.read(); return (r && r.ok && r.text) ? r.text : ''; } catch { return ''; }
+  // Scrape the REAL caption region (NOT the whole page — that was reading meeting chrome
+  // and treating any "X: Y" line as a caption). Meet's caption classes are obfuscated and
+  // drift, so try several known containers + aria, and emit a heal signal listing
+  // candidates when none match, so the selector can be corrected from a live run.
+  try {
+    const page = await web.ensure();
+    const res = await page.evaluate(() => {
+      const sels = ['div[aria-label="Captions"]', 'div[aria-label="Captions are on"]', '.a4cQT', '.iOzk7', '[jsname="dsyhDe"]', 'div[aria-live="polite"]'];
+      let region = null;
+      for (const s of sels) { try { const el = document.querySelector(s); if (el) { region = el; break; } } catch {} }
+      if (!region) {
+        const cands = Array.from(document.querySelectorAll('[aria-live], [aria-label*="aption" i]')).slice(0, 6)
+          .map(e => `${e.tagName}.${String(e.className || '').slice(0, 36)} aria-label="${e.getAttribute('aria-label') || ''}" live="${e.getAttribute('aria-live') || ''}"`);
+        return { text: '', diag: cands.length ? cands.join(' | ') : 'no aria-live / caption candidates on page' };
+      }
+      // Each caption row tends to pair a speaker name with a text span. Collect short,
+      // visible text lines from the region; parseCaptions() turns "Name: text" into pairs.
+      const lines = [];
+      for (const row of region.querySelectorAll('div, span')) {
+        const t = (row.innerText || '').replace(/\s+/g, ' ').trim();
+        if (t && t.length <= 240 && !lines.includes(t)) lines.push(t);
+      }
+      return { text: lines.join('\n'), diag: '' };
+    });
+    if (res && res.diag) console.log('[gmeet] caption heal: ' + res.diag);
+    return (res && res.text) || '';
+  } catch { return ''; }
 }
 async function livePostChat(web, message) {
   // Posting to the Meet chat is a recipe (find chat input → type → Enter); replayed live.
@@ -182,7 +212,7 @@ async function generateIntro(d, ctx, attendees) {
     });
   } catch (e) { /* fall through to the deterministic fallback */ }
   const cleaned = String(out || '').replace(/<[^>]+>/g, '').replace(/^["']|["']$/g, '').trim();
-  return ensureDisclosure(cleaned, ctx.userName);   // disclosure guaranteed regardless of model output
+  return ensureIntro(cleaned, ctx.userName);   // name + disclosure guaranteed regardless of model output
 }
 
 // --- orchestrator: advance ONE stage per tick ---
@@ -220,7 +250,11 @@ async function runTick(ctx = {}) {
     if (!v.ok) console.warn('[gmeet] intro still failed validation:', v.reasons.join(', '));
     const post = await d.postChat(d.web, intro);
     if (post && post.ok) {
-      _clear(); set('observing');
+      _clear();
+      // Turn on captions for the observe phase (Meet doesn't auto-enable them). Best-effort:
+      // proceed to observing even if the toggle selector needs healing.
+      try { const cc = await d.web.runRecipe('gmeet_enable_captions', {}, {}); if (!(cc && cc.ok)) console.log('[gmeet] enable-captions recipe did not confirm:', cc && cc.reason); } catch (e) { console.log('[gmeet] enable-captions threw:', e.message); }
+      set('observing');
       surface(`I introduced myself in the meeting chat: "${intro}"`, '(gmeet) introduced');
       return { stage, ok: true, note: 'posted intro → observing', intro };
     }
@@ -248,6 +282,6 @@ async function runTick(ctx = {}) {
 module.exports = {
   STAGES, get, set, active, start, reset, url, runTick, defaultDeps,
   // pure helpers (tested)
-  detectMeetUrl, meetLinkFromEvent, introPrompt, validateIntro, ensureDisclosure, parseCaptions, parseAttendees,
+  detectMeetUrl, meetLinkFromEvent, introPrompt, validateIntro, ensureIntro, parseCaptions, parseAttendees,
   MEET_URL_RE
 };
