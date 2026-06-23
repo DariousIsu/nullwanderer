@@ -144,20 +144,13 @@ class EchoSuit {
   suitContextBlock() {
     if (!this.connected || !this._suit) return null;
     return [
-      `ECHO SUIT — you are wearing Echo, your capability suit: ${this.toolCount} tools over a live connection (search, the knowledge graph, deliverable renderers, a background agent workforce). You don't hold them all — you navigate them with these tags:`,
-      `• <echo-find>what you need</echo-find> — find the right tool by description.`,
-      `• <echo-do name="tool_name">{json args}</echo-do> — run any Echo tool by name (use <echo-find> first if unsure of the name or args; <echo-do name="describe_tool">{"name":"X"}</echo-do> shows a tool's schema + examples).`,
-      `• <echo-delegate name="agent">the task</echo-delegate> — hand a heavy/multi-step job to a background agent; it reports back later, you don't wait.`,
-      `• <echo-propose kind="entity|relation|link">{json}</echo-propose> — propose into the shared knowledge graph. You curate by relevance; verification + Lucas are the commit gate, so propose freely.`,
-      `• <echo-guide/> — reload this contract + map.`,
-      ``,
-      `WHEN TO REACH FOR ECHO vs your web browser — this matters: Echo is OUR data (the Rainey knowledge base, the entity/relationship graph, contacts, bills, legislators, the LAMP network, past deliverables). Your <web-open> browser is the OPEN INTERNET. If Lucas asks you to "use the db / our records / our KB / the graph", or to look up something that is OURS — a person/org/bill/LAMP — DO IT WITH ECHO (<echo-find> then <echo-do>), NOT the web browser. Reaching for the web on an "our data" question is the wrong tool (you once returned a Japanese pop band for "LAMP" because you web-searched instead of querying our graph). When in doubt whether something is in Echo, <echo-find> it before going to the web.`,
-      ``,
-      `ECHO'S CONTRACT (its own usage guide):`,
-      this._suit.guide,
-      ``,
-      `ECHO'S ATLAS (navigation map):`,
-      this._suit.atlas,
+      `ECHO SUIT — you are wearing Echo, your capability suit: ${this.toolCount} tools (search, the knowledge graph, deliverable renderers, a background agent workforce). Navigate with:`,
+      `• <echo-find>what you need</echo-find> — find the right tool.`,
+      `• <echo-do name="tool">{json}</echo-do> — run any tool by name (<echo-do name="describe_tool">{"name":"X"}</echo-do> shows its schema).`,
+      `• <echo-delegate name="agent">task</echo-delegate> — hand a heavy job to a background agent (reports back later).`,
+      `• <echo-propose kind="entity|relation|link">{json}</echo-propose> — curate into the graph (verification + Lucas are the commit gate).`,
+      `• <echo-guide/> — pull the full contract + atlas when you need the map.`,
+      `ECHO = OUR data (Rainey KB, the entity/relationship graph, contacts, bills, the LAMP network). <web-open> = the open internet. "Use the db / our records / look up something OURS (a person/org/bill/LAMP)" → ECHO via <echo-find>/<echo-do>, NOT the browser. (You once web-searched "LAMP" and got a Japanese band — wrong tool.)`,
     ].join('\n');
   }
 
@@ -174,8 +167,12 @@ class EchoSuit {
     try {
       const c = this.client();
       if (tag.kind === 'guide') {
-        const r = await this.connect();
-        return { ok: r.ok, kind: 'guide', text: r.ok ? `Reloaded the Echo contract + atlas (${this.toolCount} tools).` : `Echo not reachable: ${r.error}` };
+        if (!this.connected) await this.connect();
+        if (!this.connected) return { ok: false, kind: 'guide', isError: true, text: `Echo not reachable: ${this.lastError || 'offline'}` };
+        // Surface the full contract + atlas as the result (fed back via the tool-followup), so she
+        // has the map THIS turn on demand — instead of it sitting in every prompt and blowing ctx.
+        const s = this._suit || {};
+        return { ok: true, kind: 'guide', text: `Echo contract + navigation atlas (${this.toolCount} tools):\n\n${s.guide || ''}\n\n${s.atlas || ''}` };
       }
       if (tag.kind === 'find') {
         const r = normalizeToolResult(await c.callTool('get_tool_map', { grouping: 'intent' }));

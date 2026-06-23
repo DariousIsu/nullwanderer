@@ -70,7 +70,8 @@ function mockClient(overrides = {}) {
     ok('records server info', suit.status().server.name === 'nx-echo');
     ok('pinned guide+atlas (suitContextBlock non-null)', !!suit.suitContextBlock());
     ok('suit block names the tags', /<echo-find>/.test(suit.suitContextBlock()) && /<echo-do/.test(suit.suitContextBlock()));
-    ok('suit block carries the contract text', /README_MCP/.test(suit.suitContextBlock()));
+    ok('suit block points to <echo-guide/> for the full map (not inlined)', /<echo-guide\/>/.test(suit.suitContextBlock()) && !/README_MCP/.test(suit.suitContextBlock()));
+    ok('suit block is COMPACT (ctx-budget: < 1200 chars)', suit.suitContextBlock().length < 1200);
   }
   {
     const suit = S.createSuit({ client: mockClient({ failInit: true }) });
@@ -92,7 +93,7 @@ function mockClient(overrides = {}) {
     const prop = await suit.dispatch({ kind: 'propose', proposeKind: 'entity', payload: { name: 'X' } });
     ok('propose -> propose_entity (pending_verification)', prop.ok && /pending_verification/.test(prop.text));
     const guide = await suit.dispatch({ kind: 'guide' });
-    ok('guide reloads contract', guide.ok && /Reloaded/.test(guide.text));
+    ok('guide surfaces the full contract+atlas on demand', guide.ok && /README_MCP|atlas|contract/i.test(guide.text));
   }
 
   console.log('\ndispatch error feedback (self-correction):');
