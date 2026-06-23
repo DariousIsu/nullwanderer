@@ -681,6 +681,11 @@ function getRecentReflections(n) {
   return rows.reverse();
 }
 
+// Single reflection by id — for the <recall ref="rID"/> memory-marker expansion.
+function getReflectionById(id) {
+  return getDb().prepare('SELECT * FROM reflections WHERE id = ?').get(id) || null;
+}
+
 function insertReflection({ promptUsed, content, sourceTurnStart, sourceTurnEnd, model = null }) {
   const ts = Date.now();
   const info = getDb()
@@ -1302,6 +1307,7 @@ module.exports = {
   getTurnsMissingEmbedding,
   getRecentDisplayTurns,
   getRecentReflections,
+  getReflectionById,
   insertReflection,
   getTurnsSinceId,
   insertMonologue,

@@ -29,6 +29,7 @@ const {
 const { extractCommitments } = require('./lib/commitments');
 const { fetchPage } = require('./lib/web_search');
 const echoSuitLib = require('./lib/echo_suit');
+const recallLib = require('./lib/recall');   // <recall ref="rID"/> — expand a memory marker on demand
 let echoSuit = null;   // Echo "suit" — attached over HTTP to Lucas's running Echo; drives 518 MCP tools
 // Lucas explicitly invoking the suit / our data → bind to echo tags (F1 nudge). Deliberately
 // specific so it doesn't fire on casual mentions of "data" etc.
@@ -1230,6 +1231,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     ...echoSuitLib.parseEchoTags(thought || ''),
     ...echoSuitLib.parseEchoTags(say || '')
   ];
+  // <recall ref="rID"/> — expand a memory marker (reflection/reading/note) to its full text on
+  // demand. Always allowed (it's reading her own memory, not a work tool).
+  const recallTagsToRun = [
+    ...recallLib.parseRecallTags(thought || ''),
+    ...recallLib.parseRecallTags(say || '')
+  ];
 
   let thoughtStripped = (thought || '').replace(/<wonder>[\s\S]*?<\/wonder>/gi, '').trim();
   thoughtStripped = openThreadsLib.stripStatusTags(thoughtStripped);
@@ -1243,6 +1250,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   thoughtStripped = emailLib.stripTags(thoughtStripped);
   thoughtStripped = discordLib.stripTags(thoughtStripped);
   thoughtStripped = echoSuitLib.stripEchoTags(thoughtStripped);
+  thoughtStripped = recallLib.stripRecallTags(thoughtStripped);
 
   if (thoughtStripped) {
     db.insertTurn({
@@ -1282,6 +1290,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   sayStripped = emailLib.stripTags(sayStripped);
   sayStripped = discordLib.stripTags(sayStripped);
   sayStripped = echoSuitLib.stripEchoTags(sayStripped);
+  sayStripped = recallLib.stripRecallTags(sayStripped);
   let trimmedSay = sayStripped;
   // VOICE GUARD: if she disclaimed her inner life ("I don't experience…/as an AI I…"),
   // rewrite it in her own voice. It streamed live, so we pass the corrected text in the
@@ -1548,6 +1557,22 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         } catch (err) { console.error('[main] echo dispatch error:', err.message); }
       }
     })().catch(err => console.error('[main] echo async error:', err.message));
+  }
+
+  // Background: expand any <recall ref="rID"/> memory markers she emitted → the full reflection /
+  // reading / note, fed back via one tool-followup so she has it THIS turn and can use it.
+  if (recallTagsToRun.length > 0) {
+    (async () => {
+      for (const ref of recallTagsToRun.slice(0, 3)) {
+        try {
+          const r = recallLib.resolveRecall(db, ref);
+          const content = `Recalled ${ref.ref}:\n${(r.text || '').slice(0, 1800)}`;
+          try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(recalled ${ref.ref})${r.ok ? '' : ' ⚠'}`, type: 'reading', query: ref.ref }); } catch {}
+          if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: content }); }
+          console.log(`[main] recall ${ref.ref}: ${r.ok ? 'ok' : 'miss'}`);
+        } catch (err) { console.error('[main] recall error:', err.message); }
+      }
+    })().catch(err => console.error('[main] recall async error:', err.message));
   }
 
   // Background: dispatch scheduling tags — set/list/cancel her own timers.

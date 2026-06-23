@@ -244,12 +244,15 @@ function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonol
     }
   }
 
+  // MEMORY MARKERS (ctx restructure phase 2): reflections + readings are shown as one-line
+  // markers, not full text, to keep the prompt under num_ctx. When a marker is relevant, pull
+  // its full text on demand with <recall ref="rID"/> (reflection) or <recall ref="mID"/> (reading).
+  const marker = (s) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > 120 ? t.slice(0, 120) + '…' : t; };
   if (recentReflections && recentReflections.length > 0) {
-    systemContent += '\n\nNotes you have left for yourself across past sessions:\n';
+    systemContent += '\n\nNotes you\'ve left yourself across sessions (markers — emit <recall ref="rID"/> to pull a full note when it\'s relevant):\n';
     for (const r of recentReflections.slice(-3)) {
-      systemContent += `\n---\n${cap(r.content, 900)}\n`;
+      systemContent += `• [r${r.id}] ${marker(r.content)}\n`;
     }
-    systemContent += '---';
   }
 
   if (recentMonologue && recentMonologue.length > 0) {
@@ -260,9 +263,9 @@ function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonol
   }
 
   if (recentReadings && recentReadings.length > 0) {
-    systemContent += `\n\nThings YOU looked up on your own — ${userName || 'they'} did NOT tell you these. If you bring one up, phrase as "I read about X between our turns" / "I got curious about Y" — NOT "you mentioned" or "that thing you said":\n`;
+    systemContent += `\n\nThings YOU looked up on your own — ${userName || 'they'} did NOT tell you these (markers — <recall ref="mID"/> for the full text; when you bring one up phrase it "I read about X between our turns", never "you mentioned"):\n`;
     for (const r of recentReadings.slice(-2)) {
-      systemContent += `\n${cap(r.content, 1100)}\n`;
+      systemContent += `• [m${r.id}] ${marker(r.content)}\n`;
     }
   }
 
