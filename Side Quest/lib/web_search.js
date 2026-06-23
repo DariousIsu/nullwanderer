@@ -4,7 +4,7 @@
  */
 
 const DDG_HTML_ENDPOINT = 'https://html.duckduckgo.com/html/';
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 SideQuest/0.1';
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ZoeLane/0.1';
 const MAX_RESULTS = 5;
 const TIMEOUT_MS = 8000;
 

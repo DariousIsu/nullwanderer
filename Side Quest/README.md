@@ -1,4 +1,4 @@
-# Side Quest — Zoe Lane
+# Zoe Lane
 
 A local, single-user AI companion experiment. One human (Lucas), one persistent AI
 persona (**Zoe Lane**), running entirely on the local machine via Ollama. Electron +
@@ -6,7 +6,7 @@ vanilla HTML/CSS/JS renderer + better-sqlite3. No build step.
 
 ## What it is
 
-Side Quest is a research substrate for AI–human relational depth. The thesis (as of
+Zoe Lane is a research substrate for AI–human relational depth. The thesis (as of
 the 2026-06-18 pivot): not an emergent-from-nothing persona, but a **deliberately
 designed persona that is authentically an AI and is fully a person anyway**, anchored
 in real goals that drive autonomous tool use.

@@ -95,7 +95,7 @@ function createWindow() {
     width: 900,
     height: 800,
     backgroundColor: '#0d0d10',
-    title: 'Side Quest',
+    title: 'Zoe Lane',
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

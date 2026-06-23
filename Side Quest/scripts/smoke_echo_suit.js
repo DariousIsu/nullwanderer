@@ -29,6 +29,14 @@ function mockClient(overrides = {}) {
       if (name === 'spawn_agent_async') return text('{"run_id":"agent_42","status":"queued"}');
       if (name === 'propose_entity') return text('{"proposal_id":"p_7","status":"pending_verification"}');
       if (name === 'quick_lookup') return text('2 validation errors for call[quick_lookup]\nname\n  Missing required argument');
+      if (name === 'list_recipes') return text(JSON.stringify({ count: 2, recipes: [
+        { name: 'search-vault', intent: 'Search our Rainey vault documents by keyword.', arg: 'a keyword', category: 'echo-data' },
+        { name: 'lamp-count', intent: 'Count LAMP members by category.', arg: '(none)', category: 'echo-data' },
+      ] }));
+      if (name === 'run_recipe') {
+        if (!args || !args.name) return text(JSON.stringify({ ok: false, error: 'requires name' }));
+        return text(JSON.stringify({ ok: true, recipe: args.name, rows: [{ n: 434 }], row_count: 1, ms: 0.3 }));
+      }
       return text('ok');
     },
   };
@@ -71,7 +79,9 @@ function mockClient(overrides = {}) {
     ok('pinned guide+atlas (suitContextBlock non-null)', !!suit.suitContextBlock());
     ok('suit block names the tags', /<echo-find>/.test(suit.suitContextBlock()) && /<echo-do/.test(suit.suitContextBlock()));
     ok('suit block points to <echo-guide/> for the full map (not inlined)', /<echo-guide\/>/.test(suit.suitContextBlock()) && !/README_MCP/.test(suit.suitContextBlock()));
-    ok('suit block is COMPACT (ctx-budget: < 1200 chars)', suit.suitContextBlock().length < 1200);
+    ok('suit block names the recipe tag (preferred path)', /<echo-recipe/.test(suit.suitContextBlock()));
+    ok('suit block carries the recipe MENU', /search-vault/.test(suit.suitContextBlock()) && /lamp-count/.test(suit.suitContextBlock()));
+    ok('suit block bounded (ctx-budget: < 4000 chars incl menu)', suit.suitContextBlock().length < 4000);
   }
   {
     const suit = S.createSuit({ client: mockClient({ failInit: true }) });
@@ -123,6 +133,29 @@ function mockClient(overrides = {}) {
   ok('strips <echo-do> block, keeps prose', (() => { const s = S.stripEchoTags('Sure. <echo-do name="search_knowledge">{"q":"x"}</echo-do> done'); return /Sure\./.test(s) && /done/.test(s) && !/echo-do/.test(s); })());
   ok('strips all five tag forms', (() => { const s = S.stripEchoTags('<echo-guide/><echo-find>a</echo-find><echo-do name="t">{}</echo-do><echo-delegate name="x">y</echo-delegate><echo-propose kind="entity">{}</echo-propose>'); return s.trim() === ''; })());
   ok('null-safe', S.stripEchoTags(null) === null);
+
+  console.log('\n<echo-recipe> tag (the preferred path):');
+  {
+    const t1 = P('<echo-recipe name="search-vault" arg="weather modification"/>')[0];
+    ok('parses self-closing recipe tag', t1 && t1.kind === 'recipe' && t1.name === 'search-vault' && t1.arg === 'weather modification');
+    const t2 = P('<echo-recipe name="lamp-count"/>')[0];
+    ok('parses no-arg recipe tag', t2 && t2.name === 'lamp-count' && t2.arg === null);
+    const t3 = P('<echo-recipe name="officials-in-state" arg="NY" limit="5"/>')[0];
+    ok('parses limit attr', t3 && t3.arg === 'NY' && t3.limit === 5);
+    const t4 = P('<echo-recipe name="find-person">Schumer</echo-recipe>')[0];
+    ok('parses paired form (arg in body)', t4 && t4.name === 'find-person' && t4.arg === 'Schumer');
+    ok('strips recipe tags', !/echo-recipe/.test(S.stripEchoTags('hi <echo-recipe name="x" arg="y"/> there')) && /hi/.test(S.stripEchoTags('hi <echo-recipe name="x" arg="y"/> there')));
+    ok('buildRecipeMenu renders lines', /search-vault/.test(S.buildRecipeMenu(JSON.stringify({ recipes: [{ name: 'search-vault', intent: 'x', arg: 'k' }] }))));
+
+    const suit = S.createSuit({ client: mockClient() });
+    await suit.connect();
+    const good = await suit.dispatch({ kind: 'recipe', name: 'lamp-count' });
+    ok('dispatch recipe -> run_recipe ok', good.ok === true && good.kind === 'recipe' && /434/.test(good.text));
+    const noName = await suit.dispatch({ kind: 'recipe', name: '' });
+    ok('recipe without name -> self-correct prompt', noName.isError === true && /needs name/.test(noName.text));
+    const calledRunRecipe = suit.client().calls.some(c => c[0] === 'run_recipe' && c[1] && c[1].name === 'lamp-count');
+    ok('dispatch routed to run_recipe with name', calledRunRecipe);
+  }
 
   console.log('\ndispatch auto-connect (self-heal before warm-connect finishes):');
   {

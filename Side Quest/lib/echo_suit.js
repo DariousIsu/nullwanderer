@@ -52,6 +52,17 @@ function parseEchoTags(text) {
   scan(/<echo-do\s+name="([^"]+)"\s*>([\s\S]*?)<\/echo-do>/g, m => { const a = parseArgs(m[2]); return { kind: 'do', name: m[1].trim(), args: a.args, parseError: a.parseError }; });
   scan(/<echo-delegate(?:\s+name="([^"]*)")?\s*>([\s\S]*?)<\/echo-delegate>/g, m => ({ kind: 'delegate', agent: (m[1] || '').trim() || null, task: m[2].trim() }));
   scan(/<echo-propose\s+kind="([^"]+)"\s*>([\s\S]*?)<\/echo-propose>/g, m => { const a = parseArgs(m[2]); return { kind: 'propose', proposeKind: m[1].trim(), payload: a.args, parseError: a.parseError }; });
+  // <echo-recipe name="X" arg="Y"/> — the PREFERRED path: a named, pre-validated procedure.
+  // Tolerant of self-closing or paired form, attrs in any order, and arg given as the body.
+  scan(/<echo-recipe\s+([^>]*?)\/?>(?:([\s\S]*?)<\/echo-recipe>)?/g, m => {
+    const attrs = m[1] || '';
+    const name = (attrs.match(/name\s*=\s*"([^"]*)"/) || [])[1] || '';
+    let arg = (attrs.match(/arg\s*=\s*"([^"]*)"/) || [])[1];
+    const limit = (attrs.match(/limit\s*=\s*"?(\d+)"?/) || [])[1];
+    const body = (m[2] || '').trim();
+    if (arg == null && body) arg = body;
+    return { kind: 'recipe', name: name.trim(), arg: arg != null ? String(arg).trim() : null, limit: limit ? Number(limit) : null };
+  });
   return found.sort((a, b) => a.index - b.index).map(x => x.tag);
 }
 function parseArgs(body) {
@@ -71,6 +82,7 @@ function stripEchoTags(text) {
     .replace(/<echo-do\b[\s\S]*?<\/echo-do>/g, '')
     .replace(/<echo-delegate\b[\s\S]*?<\/echo-delegate>/g, '')
     .replace(/<echo-propose\b[\s\S]*?<\/echo-propose>/g, '')
+    .replace(/<echo-recipe\b[\s\S]*?(?:\/>|<\/echo-recipe>)/g, '')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -93,6 +105,18 @@ function filterToolMap(jsonText, query, limit = 15) {
   const lines = hits.slice(0, limit).map(t => `• ${t.name} [${t.intent}] — ${cap(t.desc, 90)}`);
   const more = hits.length > limit ? `\n(+${hits.length - limit} more — narrow your terms, then <echo-do name="describe_tool">{"name":"…"}</echo-do> to inspect one)` : '';
   return `Tools matching "${query}":\n` + lines.join('\n') + more;
+}
+
+// Turn list_recipes() JSON into a compact in-context menu: one terse line per recipe
+// (name + arg hint + intent), capped so it stays ctx-cheap at num_ctx 8192.
+function buildRecipeMenu(jsonText) {
+  let d; try { d = JSON.parse(jsonText); } catch { return ''; }
+  const list = d.recipes || [];
+  if (!list.length) return '';
+  const lines = list.map(r => `• ${r.name}${r.arg ? ` <${cap(String(r.arg), 22)}>` : ''} — ${cap(r.intent || '', 58)}`);
+  let out = lines.join('\n');
+  if (out.length > 2200) out = out.slice(0, 2200) + '\n…(more — <echo-do name="list_recipes">{}</echo-do>)';
+  return out;
 }
 
 // ---------- the suit (stateful connection wrapper) ----------
@@ -125,10 +149,12 @@ class EchoSuit {
       this.serverInfo = (init && init.serverInfo) || c.serverInfo || null;
       const tools = await c.listTools();
       this.toolCount = Array.isArray(tools) ? tools.length : 0;
-      let guide = '', atlas = '';
+      let guide = '', atlas = '', recipes = '';
       try { guide = normalizeToolResult(await c.callTool('get_usage_guide', {})).text; } catch {}
       try { atlas = normalizeToolResult(await c.callTool('get_atlas', {})).text; } catch {}
-      this._suit = { guide: cap(guide, 1400), atlas: cap(atlas, 1200) };
+      // Recipe Book menu — the validated, one-arg procedures she should reach for FIRST.
+      try { recipes = buildRecipeMenu(normalizeToolResult(await c.callTool('list_recipes', {})).text); } catch {}
+      this._suit = { guide: cap(guide, 1400), atlas: cap(atlas, 1200), recipes };
       this.connected = true; this.lastError = null; this.bootMs = this._now() - t0;
       return { ok: true, tools: this.toolCount, bootMs: this.bootMs, server: this.serverInfo };
     } catch (e) {
@@ -143,15 +169,18 @@ class EchoSuit {
   // + the tag grammar, so the navigation surface is in front of her (Echo's "load this first").
   suitContextBlock() {
     if (!this.connected || !this._suit) return null;
-    return [
-      `ECHO SUIT — you are wearing Echo, your capability suit: ${this.toolCount} tools (search, the knowledge graph, deliverable renderers, a background agent workforce). Navigate with:`,
-      `• <echo-find>what you need</echo-find> — find the right tool.`,
-      `• <echo-do name="tool">{json}</echo-do> — run any tool by name (<echo-do name="describe_tool">{"name":"X"}</echo-do> shows its schema).`,
-      `• <echo-delegate name="agent">task</echo-delegate> — hand a heavy job to a background agent (reports back later).`,
-      `• <echo-propose kind="entity|relation|link">{json}</echo-propose> — curate into the graph (verification + Lucas are the commit gate).`,
+    const lines = [
+      `ECHO SUIT — you are wearing Echo: ${this.toolCount} tools + a validated RECIPE BOOK. Reach for a recipe FIRST — they're pre-validated and take ONE plain arg, so they can't be fumbled. Drop to raw tools only when no recipe fits.`,
+      `• <echo-recipe name="X" arg="Y"/> — run a named recipe from the menu below. ONE human arg (a name, a 2-letter state code, a keyword). THIS IS YOUR DEFAULT for our data.`,
+      `• <echo-find>what you need</echo-find> — find a raw tool when no recipe fits.`,
+      `• <echo-do name="tool">{json}</echo-do> — run any tool by name (describe_tool shows its schema).`,
+      `• <echo-delegate name="agent">task</echo-delegate> — hand a heavy job to a background agent.`,
+      `• <echo-propose kind="entity|relation|link">{json}</echo-propose> — curate into the graph (verification + Lucas gate).`,
       `• <echo-guide/> — pull the full contract + atlas when you need the map.`,
-      `ECHO = OUR data (Rainey KB, the entity/relationship graph, contacts, bills, the LAMP network). <web-open> = the open internet. "Use the db / our records / look up something OURS (a person/org/bill/LAMP)" → ECHO via <echo-find>/<echo-do>, NOT the browser. (You once web-searched "LAMP" and got a Japanese band — wrong tool.)`,
-    ].join('\n');
+    ];
+    if (this._suit.recipes) lines.push(`RECIPES (your menu — run any with <echo-recipe name="..." arg="..."/>):\n${this._suit.recipes}`);
+    lines.push(`ECHO = OUR data (Rainey vault, the entity/relationship graph, contacts, bills, the LAMP network). <web-open> = the open internet. "Use the db / our records / find OUR papers / look up someone OURS (person/org/bill/LAMP)" → a recipe (or <echo-find>), NEVER the browser. (You once web-searched "LAMP" and got a Japanese band, and DuckDuckGo'd for Rainey papers that live in our own vault — wrong tool. search-vault is the recipe for that.)`);
+    return lines.join('\n');
   }
 
   // Execute one parsed tag → a normalized { ok, kind, isError?, text } the caller surfaces back
@@ -195,6 +224,18 @@ class EchoSuit {
         const r = normalizeToolResult(await c.callTool('propose_' + tag.proposeKind, tag.payload || {}));
         return { ok: r.ok, kind: 'propose', isError: r.isError, text: r.text };
       }
+      if (tag.kind === 'recipe') {
+        if (!tag.name) return { ok: false, kind: 'recipe', isError: true, text: `<echo-recipe> needs name="..." from your recipe menu — e.g. <echo-recipe name="search-vault" arg="weather modification"/>.` };
+        const args = { name: tag.name };
+        if (tag.arg) args.arg = tag.arg;
+        if (tag.limit) args.limit = tag.limit;
+        const r = normalizeToolResult(await c.callTool('run_recipe', args));
+        // run_recipe reports recipe-level failure (bad name / missing arg) as {ok:false} in its
+        // payload, which isn't an MCP transport error — detect it so she gets the correction.
+        let recipeOk = r.ok;
+        try { const p = JSON.parse(r.text); if (p && p.ok === false) recipeOk = false; } catch {}
+        return { ok: recipeOk, kind: 'recipe', name: tag.name, isError: !recipeOk, text: r.text };
+      }
       return { ok: false, text: `unknown tag kind ${tag.kind}` };
     } catch (e) {
       // A throw here is a transport/protocol failure (Echo dropped, server restarted) — mark
@@ -219,4 +260,4 @@ class EchoSuit {
 
 function createSuit(opts) { return new EchoSuit(opts); }
 
-module.exports = { EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap };
+module.exports = { EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu };
