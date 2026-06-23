@@ -1784,7 +1784,8 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
 // generation with the result in hand so she answers naturally. Renderer: streams as a
 // new message (like a heartbeat). Discord: DMs the reply back. No tool tags are dispatched
 // in the follow-up (stripped) — no recursion.
-async function fireToolFollowup({ io, channel, sessionId, resultText }) {
+const MAX_ECHO_HOPS = 4;   // bounded in-turn Echo chain (find → pick tool → do → answer)
+async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 0 }) {
   try {
     const userName = db.getMeta('user_name') || 'them';
     const recentTurns = db.getRecentTurns(8);
@@ -1794,39 +1795,69 @@ async function fireToolFollowup({ io, channel, sessionId, resultText }) {
       cumulativeMs: db.getCumulativeSessionTime()
     });
     const protocols = db.getActiveProtocols();
-    const note = `[A tool you just used returned the result below. Respond to ${userName} NOW, in your own voice, using it directly to answer what they asked. Do NOT emit any more tool tags — just talk to them.]\n\n${String(resultText || '').slice(0, 4000)}`;
+    // Echo chaining: while hops remain and the suit is connected, let her emit ONE more echo tag
+    // to continue a find→do flow (this is the fix for the find→do stall — the followup used to
+    // strip her <echo-do> and dispatch nothing). Other tool tags are still forbidden here.
+    const canChain = echoHop < MAX_ECHO_HOPS && !!(echoSuit && echoSuit.connected);
+    const note = canChain
+      ? `[An Echo tool you just used returned the result below. Use it to answer ${userName}. If you found a tool and now need to RUN it (or need one more lookup to get the answer — e.g. <echo-do name="db_query">…</echo-do>, <echo-do name="get_db_map">…</echo-do>, <echo-find>…</echo-find>), emit that ONE Echo tag now and nothing else. If you already have the answer, just give it in your own voice. Don't emit non-Echo tool tags.]\n\n${String(resultText || '').slice(0, 4000)}`
+      : `[A tool you just used returned the result below. Respond to ${userName} NOW, in your own voice, using it directly to answer what they asked. Do NOT emit any more tool tags — just talk to them.]\n\n${String(resultText || '').slice(0, 4000)}`;
     const messages = buildChatPrompt({
       userName, recentReflections: [], recentTurns, recentMonologue: [], recentReadings: [],
       heldCommitments: [], openThreads: [], awareness, protocols, browserBlock: null,
+      echoSuitBlock: canChain ? echoSuit.suitContextBlock() : null,
       pendingInbounds: [], newUserMessage: note
     });
     const emit = io && io.emit ? io.emit : (() => {});
     const parser = new TagStreamParser({ onSayToken: (t) => { try { emit(t); } catch {} } });
     await streamChat({ model: MODEL, messages, onToken: (c) => parser.feed(c) });
     const { thought, say } = parser.finalize();
-    // Strip ALL tags from the follow-up output — it must not trigger more tool dispatch.
+    // Capture any follow-on Echo tag BEFORE stripping (the strip below removes all tags).
+    const chainTags = canChain ? [
+      ...echoSuitLib.parseEchoTags(thought || ''),
+      ...echoSuitLib.parseEchoTags(say || '')
+    ] : [];
+    // Strip ALL tags from the follow-up output for DISPLAY — tags don't render.
     let sayOut = (say || '')
       .replace(/<\/?(think|say)>/gi, '')
       .replace(/\*[^*\n]{1,200}\*/g, '')
       .replace(/[ \t]+/g, ' ')
       .trim();
     sayOut = screenLib.stripTags(filesLib.stripTags(browserLib.stripTags(sayOut)));
+    sayOut = echoSuitLib.stripEchoTags(sayOut);
     sayOut = sayOut.replace(/<[^>]+>/g, '').trim();
-    if (!sayOut) return;
-    // VOICE GUARD: de-disclaim the follow-up before it surfaces (streamed → swap on complete).
-    const followupDisclaimed = voice.isSelfDisclaimer(sayOut);
-    if (followupDisclaimed) { try { sayOut = (await voice.deDisclaim(sayOut)) || ''; } catch (e) { console.error('[main] followup voice guard failed:', e.message); } }
-    if (!sayOut) return;
-    const thoughtClean = (thought || '').replace(/<\/?(think|say)>/gi, '').trim();
-    if (thoughtClean) db.insertTurn({ sessionId, speaker: 'ai_thought', content: thoughtClean, model: MODEL });
-    const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: sayOut, model: MODEL });
-    db.setMeta('last_ai_utterance_at', String(Date.now()));
-    if (channel === 'discord') {
-      try { await discordLib.sendDM(sayOut); } catch (e) { console.error('[main] followup discord DM failed:', e.message); }
-    } else {
-      try { if (io && io.onComplete) io.onComplete(followupDisclaimed ? { saidId: saidRow.id, truncated: 0, unprompted: true, say: sayOut } : { saidId: saidRow.id, truncated: 0, unprompted: true }); } catch {}
+    // Deliver her words (the visible step — "I'll run db_query…" or the final answer). May be
+    // empty when she emitted only a tag — that's fine; the Echo chain below still runs.
+    if (sayOut) {
+      const followupDisclaimed = voice.isSelfDisclaimer(sayOut);
+      if (followupDisclaimed) { try { sayOut = (await voice.deDisclaim(sayOut)) || ''; } catch (e) { console.error('[main] followup voice guard failed:', e.message); } }
+      if (sayOut) {
+        const thoughtClean = (thought || '').replace(/<\/?(think|say)>/gi, '').trim();
+        if (thoughtClean) db.insertTurn({ sessionId, speaker: 'ai_thought', content: thoughtClean, model: MODEL });
+        const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: sayOut, model: MODEL });
+        db.setMeta('last_ai_utterance_at', String(Date.now()));
+        if (channel === 'discord') {
+          try { await discordLib.sendDM(sayOut); } catch (e) { console.error('[main] followup discord DM failed:', e.message); }
+        } else {
+          try { if (io && io.onComplete) io.onComplete(followupDisclaimed ? { saidId: saidRow.id, truncated: 0, unprompted: true, say: sayOut } : { saidId: saidRow.id, truncated: 0, unprompted: true }); } catch {}
+        }
+        console.log('[main] tool follow-up delivered via', channel);
+      }
     }
-    console.log('[main] tool follow-up delivered via', channel);
+    // ECHO CHAIN: she emitted a follow-on Echo tag → dispatch the first and recurse with its
+    // result (echoHop+1), so find→do→answer completes in one flow. Bounded by MAX_ECHO_HOPS.
+    if (chainTags.length > 0 && echoSuit) {
+      const t = chainTags[0];
+      try {
+        const r = await echoSuit.dispatch(t);
+        const label = t.kind === 'do' ? `echo ${t.name}` : `echo ${t.kind}`;
+        const content = `I used the Echo suit (${label}):\n${(r.text || '').slice(0, 1800)}`;
+        try { db.insertMonologue({ content, model: 'echo-suit', type: 'reading', query: label }); } catch {}
+        try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(${label}${r.isError ? ' ⚠' : ''})`, type: 'reading', query: label }); } catch {}
+        console.log(`[main] echo chain hop ${echoHop + 1}: ${label} → ${r.ok ? 'ok' : 'ERR'}`);
+        await fireToolFollowup({ io, channel, sessionId, resultText: content + (r.isError ? '\n[That call errored — fix the args or pick another tool with <echo-find>.]' : ''), echoHop: echoHop + 1 });
+      } catch (e) { console.error('[main] echo chain hop failed:', e.message); }
+    }
   } catch (err) {
     console.error('[main] fireToolFollowup failed:', err.message);
   }
