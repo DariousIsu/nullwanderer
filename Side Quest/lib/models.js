@@ -16,6 +16,15 @@
  * Cloud is the priority tier for verification-class workspaces (Lucas); local
  * is the secondary subset. Cloud source is OPTIONAL — absent env → local only,
  * no error. Endpoints/keys come from env (never hardcoded model names or creds).
+ *
+ * The cloud key resolution mirrors Echo's gateway: it also accepts OLLAMA_API_KEY
+ * (Echo's canonical secret-injection var, host https://ollama.com), and defaults
+ * the base to ollama.com when a key is present. So injecting the key the standard
+ * way (env / OS keychain — same as Echo) lights up Zoe's cloud listing with NO
+ * code or secret-in-file change. NOTE: the editorial/cert path (lib/editor_checks)
+ * runs cloud THROUGH the owned engine's gateway (which already authenticates via
+ * Echo's keystore) and needs no Zoe-side key at all; this var only powers Zoe's
+ * own direct model-selector listing.
  */
 const OLLAMA_BASE = process.env.OLLAMA_BASE || 'http://localhost:11434';
 const PREF_PREFIX = 'model.';            // db meta key = `model.<workspace>`
@@ -25,8 +34,11 @@ const _ctxCache = new Map();             // `${base}::${name}` -> { ctx, at }
 // The configured model sources, in display priority (cloud frontier first).
 function sources() {
   const out = [];
-  const cloudBase = process.env.OLLAMA_CLOUD_BASE;
-  if (cloudBase) out.push({ tier: 'cloud', base: cloudBase, token: process.env.OLLAMA_CLOUD_KEY || null });
+  // Cloud bearer: prefer the explicit OLLAMA_CLOUD_KEY, else Echo's canonical OLLAMA_API_KEY.
+  const cloudKey = process.env.OLLAMA_CLOUD_KEY || process.env.OLLAMA_API_KEY || null;
+  // Base: explicit OLLAMA_CLOUD_BASE, else default to Ollama Cloud (ollama.com) when a key exists.
+  const cloudBase = process.env.OLLAMA_CLOUD_BASE || (cloudKey ? 'https://ollama.com' : null);
+  if (cloudBase) out.push({ tier: 'cloud', base: cloudBase, token: cloudKey });
   out.push({ tier: 'local', base: OLLAMA_BASE, token: null });
   return out;
 }
