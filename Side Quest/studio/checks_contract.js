@@ -71,7 +71,11 @@
   }
 
   // Resolve any item (citation OR claim, code OR word OR score) → {verdict,vlabel,status,resolved}.
-  function classify(c) {
+  // STRICT MODE (opts.strict): an item with NO recognizable status signal (no enum code, no known
+  // status word, no finite match_score) is FLAGGED as a schema violation rather than silently
+  // guessed via the score fallback — the deterministic validation gate (feedback-workspace-
+  // determinism: reject/flag non-conforming output instead of guessing).
+  function classify(c, opts = {}) {
     const code = (c.status_code || c.code || '').toString().trim().toUpperCase().replace(/\s+/g, '_');
     if (STATUS_CODE[code]) { const m = STATUS_CODE[code]; return { verdict: m.verdict, vlabel: m.label, status: code, resolved: m.resolved }; }
     let raw = (c.status || '').toString().trim().toLowerCase().replace(/\s+/g, '');
@@ -81,15 +85,17 @@
       else if (raw.startsWith('contra')) raw = 'contradicted';
       else if (raw.startsWith('inacc')) raw = 'inaccessible';
       else if (raw.startsWith('unver')) raw = 'unverified';
-      else raw = statusFromScore(c.match_score);
+      else if (opts.strict && !Number.isFinite(Number(c.match_score))) {
+        return { verdict: 'bad', vlabel: 'Schema violation', status: 'INVALID', resolved: false, invalid: true };
+      } else raw = statusFromScore(c.match_score);
     }
     const m = STATUS[raw];
     return { verdict: m.verdict, vlabel: m.label, status: raw, resolved: m.resolvedByDefault };
   }
 
   // One item (citation OR Rainey claim) → one rail finding.
-  function toFinding(c, i) {
-    const k = classify(c);
+  function toFinding(c, i, opts) {
+    const k = classify(c, opts);
     const hasFix = !!(c.suggested_replacement && c.suggested_replacement.after);
     return {
       id: c.id || `f${i + 1}`,
@@ -102,14 +108,15 @@
       resolved: k.resolved,
       auto: k.resolved,
       locator: c.locator || '',
+      invalid: !!k.invalid,
     };
   }
 
   // An item carrying a suggested_replacement → one drawer suggestion (diff segments).
-  function toSuggestion(c, i) {
+  function toSuggestion(c, i, opts) {
     const sr = c.suggested_replacement;
     if (!sr || !sr.after) return null;
-    const k = classify(c);
+    const k = classify(c, opts);
     const label = c.label || c.claim || c.claim_text || c.text || '';
     return {
       id: c.suggestion_id || `s${i + 1}`,
@@ -141,17 +148,18 @@
    * Accepts a single payload OR an array of payloads (e.g. cite_verify + fact_check merged),
    * tolerating the free-form boundary. Returns { findings, suggestions, summary }.
    */
-  function mapCheckResult(raw) {
+  function mapCheckResult(raw, opts = {}) {
     const payloads = Array.isArray(raw) && raw.length && typeof raw[0] === 'object' && (raw[0].citations || raw[0].claims || raw[0].results)
       ? raw : [raw];
     const items = payloads.flatMap(itemsOf);
-    const findings = items.map(toFinding);
-    const suggestions = items.map(toSuggestion).filter(Boolean);
+    const findings = items.map((c, i) => toFinding(c, i, opts));
+    const suggestions = items.map((c, i) => toSuggestion(c, i, opts)).filter(Boolean);
     const total = findings.length;
     const resolved = findings.filter(f => f.resolved || f.auto).length;
+    const invalid = findings.filter(f => f.invalid).length;
     const byStatus = {}, byVerdict = {};
     for (const f of findings) { byStatus[f.status] = (byStatus[f.status] || 0) + 1; byVerdict[f.verdict] = (byVerdict[f.verdict] || 0) + 1; }
-    return { findings, suggestions, summary: { total, resolved, byStatus, byVerdict } };
+    return { findings, suggestions, summary: { total, resolved, invalid, byStatus, byVerdict } };
   }
 
   return { mapCheckResult, statusFromScore, classify, itemsOf, STATUS, STATUS_CODE };

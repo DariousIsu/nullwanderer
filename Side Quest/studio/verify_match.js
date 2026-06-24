@@ -54,7 +54,8 @@
 
   // --- normalization -----------------------------------------------------------------------------
   function normalize(s) {
-    return String(s == null ? '' : s).toLowerCase().replace(/[^\p{L}\p{N}\s%$.]/gu, ' ').replace(/\s+/g, ' ').trim();
+    // Drop punctuation (incl. '.') to spaces so "site." matches "site"; keep % and $ for stats.
+    return String(s == null ? '' : s).toLowerCase().replace(/[^\p{L}\p{N}\s%$]/gu, ' ').replace(/\s+/g, ' ').trim();
   }
   function words(s) { return normalize(s).split(' ').filter(Boolean); }
   function contentWords(s) { return words(s).filter(w => w.length > 1 && !STOPWORDS.has(w)); }
@@ -97,7 +98,7 @@
     while ((m = pct.exec(t))) out.push({ unit: '%', val: parseFloat(m[1].replace(/,/g, '')), raw: m[0] });
     const cur = /\$\s?(\d[\d,]*(?:\.\d+)?)\s?(billion|million|trillion|thousand|bn|m|k)?/gi;
     while ((m = cur.exec(t))) out.push({ unit: '$', val: parseFloat(m[1].replace(/,/g, '')) * (SCALE[(m[2] || '').toLowerCase()] || 1), raw: m[0] });
-    const mag = /\b(\d[\d,]*(?:\.\d+)?)\s?(billion|million|trillion|thousand)\b/gi;
+    const mag = /(?<!\$)(?<!\$\s)\b(\d[\d,]*(?:\.\d+)?)\s?(billion|million|trillion|thousand)\b/gi;  // not a $-magnitude (already captured by currency)
     while ((m = mag.exec(t))) out.push({ unit: 'n', val: parseFloat(m[1].replace(/,/g, '')) * (SCALE[m[2].toLowerCase()] || 1), raw: m[0] });
     return out;
   }
