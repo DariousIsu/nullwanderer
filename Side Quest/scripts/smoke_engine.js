@@ -52,6 +52,38 @@ ok('serveArgs targets echo.main serve http', args.join(' ') === '-m echo.main se
   r = await sup.ensure({ spawnIfDown: false });
   ok('DOWN + spawn disabled: state=down, no spawn', r.state === 'down' && spawnCalls === 0, `${r.state}/${spawnCalls}`);
 
+  // --- sidecar fleet (agent-execution workers) ---
+  ok('sidecarDefs = huey + pass-worker + orchestrator', (() => {
+    const d = E.sidecarDefs();
+    return d.length === 3
+      && d.find(x => x.name === 'huey-consumer').args.join(' ').includes('huey.bin.huey_consumer')
+      && d.find(x => x.name === 'pass-worker').args.join(' ').includes('echo.worker')
+      && d.find(x => x.name === 'orchestrator').args.join(' ').includes('echo.orchestrator.run');
+  })());
+
+  let sideCalls = 0;
+  const sideSpawn = () => { sideCalls++; return { pid: 1000 + sideCalls, on() {}, kill() {}, killed: false }; };
+
+  const s2 = new E.EngineSupervisor({ cwd: 'x', spawnFn: sideSpawn });
+  s2._startSidecars();
+  ok('owned _startSidecars spawns all 3', Object.keys(s2.status().sidecars).length === 3 && sideCalls === 3, `calls=${sideCalls}`);
+
+  process.env.NX_ECHO_DISABLE_PASS_WORKER = '1';
+  const s3 = new E.EngineSupervisor({ cwd: 'x', spawnFn: sideSpawn });
+  const before = sideCalls;
+  s3._startSidecars();
+  ok('NX_ECHO_DISABLE_PASS_WORKER skips that sidecar (2 of 3)', (sideCalls - before) === 2 && !s3.status().sidecars['pass-worker']);
+  delete process.env.NX_ECHO_DISABLE_PASS_WORKER;
+
+  await s2.shutdown();
+  ok('shutdown clears spawned sidecars', Object.keys(s2.status().sidecars).length === 0);
+
+  // adopt path must NOT start a competing fleet
+  global.fetch = async () => ({ ok: true });
+  const s4 = new E.EngineSupervisor({ cwd: 'x', spawnFn: sideSpawn });
+  await s4.ensure();
+  ok('ADOPT path starts NO sidecars', s4.status().adopted === true && Object.keys(s4.status().sidecars).length === 0);
+
   global.fetch = realFetch;
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

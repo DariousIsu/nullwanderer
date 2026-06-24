@@ -43,6 +43,19 @@ function serveArgs(host = HOST, port = PORT) {
   return ['-m', 'echo.main', 'serve', '--transport', 'http', '--host', host, '--port', String(port)];
 }
 
+// The agent-execution sidecars standalone Echo runs alongside the engine (mirrors
+// ui/electron/saga-server.cjs exactly): the saga.db huey consumer, the jobs.db pass worker, and
+// the LangGraph orchestrator that DISPATCHES queued agent runs (delegate_to_*). Without these,
+// delegated agents sit 'queued' forever and no model is ever called. Each is gated by the same
+// NX_ECHO_DISABLE_* env var Echo honors.
+function sidecarDefs() {
+  return [
+    { name: 'huey-consumer', disableEnv: 'NX_ECHO_DISABLE_HUEY',         args: ['-m', 'huey.bin.huey_consumer', 'echo.queue.huey', '-w', '1', '-k', 'thread', '--quiet'] },
+    { name: 'pass-worker',   disableEnv: 'NX_ECHO_DISABLE_PASS_WORKER',  args: ['-m', 'echo.worker', '-w', '2'] },
+    { name: 'orchestrator',  disableEnv: 'NX_ECHO_DISABLE_ORCHESTRATOR', args: ['-m', 'echo.orchestrator.run', '--checkpoint-db', 'data/skuld_checkpoints.db', '--interval-s', '60'] },
+  ];
+}
+
 // ---- I/O ----------------------------------------------------------------
 
 async function probeHealth(timeoutMs = 2500) {
@@ -80,6 +93,9 @@ class EngineSupervisor {
     this.adopted = false;     // true if we're using a pre-existing external engine
     this._shuttingDown = false;
     this._restarts = [];      // timestamps, for the 5-in-60s window
+    this.startSidecars = opts.startSidecars !== false;   // only meaningful on the owned/spawn path
+    this.sidecars = opts.sidecars || sidecarDefs();
+    this.sidecarProcs = {};   // name -> child (ONLY what WE spawned; never an adopted fleet)
   }
 
   // Adopt a running engine if present; else spawn + wait for health.
@@ -107,7 +123,39 @@ class EngineSupervisor {
     const ok = await waitHealthy({ timeoutMs: bootTimeoutMs });
     if (!ok) { this.onLog('engine: spawned but never became healthy'); return { state: 'failed', pid: this.child && this.child.pid }; }
     this.onLog(`engine: spawned + healthy (pid ${this.child.pid})`);
+    if (this.startSidecars) this._startSidecars();   // owned engine → bring up the agent fleet
     return { state: 'spawned', pid: this.child.pid };
+  }
+
+  // Spawn the agent-execution sidecars (mirrors saga-server.cjs argv/env). ONLY called from the
+  // owned/spawn path — an adopted external Echo already runs these via its own saga-server, so we
+  // never start competing queue consumers. We supervise/kill only what we spawn.
+  _startSidecars() {
+    const env = { ...process.env, PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8' };
+    for (const def of this.sidecars) {
+      if (process.env[def.disableEnv] === '1') { this.onLog(`sidecar ${def.name}: disabled via ${def.disableEnv}`); continue; }
+      if (this.sidecarProcs[def.name]) continue;
+      try {
+        const proc = this.spawnFn(this.python, def.args, { cwd: this.cwd, env, stdio: 'ignore', windowsHide: true });
+        this.sidecarProcs[def.name] = proc;
+        proc.on('exit', (code) => { this.onLog(`sidecar ${def.name}: exited (code ${code})`); delete this.sidecarProcs[def.name]; });
+        this.onLog(`sidecar ${def.name}: spawned (pid ${proc.pid})`);
+      } catch (e) { this.onLog(`sidecar ${def.name}: spawn failed — ${e.message}`); }
+    }
+  }
+
+  // Tree-kill the sidecars we spawned (Windows taskkill /T /F). No-op if we never started any.
+  _stopSidecars() {
+    for (const [name, proc] of Object.entries(this.sidecarProcs)) {
+      if (!proc || proc.killed) continue;
+      const pid = proc.pid;
+      if (process.platform === 'win32') {
+        try { this.spawnFn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }); }
+        catch { try { proc.kill(); } catch {} }
+      } else { try { proc.kill('SIGTERM'); } catch {} }
+      this.onLog(`sidecar ${name}: shutdown (tree-killed pid ${pid})`);
+    }
+    this.sidecarProcs = {};
   }
 
   _onExit(code) {
@@ -124,6 +172,7 @@ class EngineSupervisor {
   // Tree-kill ONLY what we spawned (never an adopted external engine).
   async shutdown() {
     this._shuttingDown = true;
+    this._stopSidecars();   // owned-only; no-op when we never spawned a fleet (adopt path)
     if (!this.owned || !this.child || this.child.killed) return;
     const pid = this.child.pid;
     if (process.platform === 'win32') {
@@ -136,7 +185,8 @@ class EngineSupervisor {
   }
 
   status() {
-    return { owned: this.owned, adopted: this.adopted, pid: this.child ? this.child.pid : null, port: this.port };
+    const sidecars = Object.fromEntries(Object.entries(this.sidecarProcs).map(([n, p]) => [n, p ? p.pid : null]));
+    return { owned: this.owned, adopted: this.adopted, pid: this.child ? this.child.pid : null, port: this.port, sidecars };
   }
 }
 
@@ -148,5 +198,6 @@ module.exports = {
   nextBackoff,
   decideAction,
   serveArgs,
+  sidecarDefs,
   HEALTH_URL,
 };
