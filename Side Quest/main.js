@@ -32,8 +32,10 @@ const {
 const { extractCommitments } = require('./lib/commitments');
 const { fetchPage } = require('./lib/web_search');
 const echoSuitLib = require('./lib/echo_suit');
+const { EngineSupervisor } = require('./lib/engine');   // Zoe OWNS the absorbed engine (adopt-or-spawn)
 const recallLib = require('./lib/recall');   // <recall ref="rID"/> — expand a memory marker on demand
-let echoSuit = null;   // Echo "suit" — attached over HTTP to Lucas's running Echo; drives 518 MCP tools
+let echoSuit = null;   // Echo "suit" — the MCP tool surface Zoe wears; bound to the engine she owns
+let engineSupervisor = null;   // supervises the engine process: adopts a running one, else spawns + owns it
 // Lucas explicitly invoking the suit / our data → bind to echo tags (F1 nudge). Deliberately
 // specific so it doesn't fire on casual mentions of "data" etc.
 const ECHO_INVOKE_RE = /\b(the\s+)?(power\s*)?suit\b|\becho\b|\b(use|search|query|check|look\s*up\s+in|pull\s+from)\b[^.?!]{0,30}\b(the\s+)?(db|database|knowledge\s*base|kb|graph|kg|our\s+(records|data|kb|knowledge|graph|contacts|bills))\b|\bthe\s+db\b|\bour\s+(records|knowledge\s*base|kb|graph|database)\b|\blamp\b/i;
@@ -50,7 +52,10 @@ function readEchoConfig(dir) {
     if (!token) { const m = toml.match(/^\s*admin_token\s*=\s*"([^"]+)"/m); if (m) token = m[1]; }
     const p = toml.match(/^\s*port\s*=\s*(\d+)/m); if (p) port = parseInt(p[1], 10);
   } catch (e) { console.error('[main] could not read Echo config.toml:', e.message); }
-  return { url: process.env.ECHO_MCP_URL || `http://127.0.0.1:${port}/mcp/`, token };
+  const host = '127.0.0.1';
+  const envPort = parseInt(process.env.ECHO_PORT || '', 10);
+  if (!Number.isNaN(envPort)) port = envPort;
+  return { url: process.env.ECHO_MCP_URL || `http://${host}:${port}/mcp/`, token, host, port };
 }
 const openThreadsLib = require('./lib/open_threads');
 const protocolsLib = require('./lib/protocols');
@@ -142,20 +147,37 @@ app.whenReady().then(() => {
   // Index hygiene: purge any orphaned FTS rows (rotted from past mismatched deletes) so keyword
   // search can't match ghosts. Idempotent; cheap.
   try { const purged = db.reconcileKnowledgeFts(); if (purged) console.log(`[main] purged ${purged} orphaned knowledge_fts row(s)`); } catch {}
-  // Echo suit — ATTACH over HTTP to the Echo app Lucas runs. ONE shared Echo process serves his
-  // UI/canvas AND her MCP tools off the same DB + event bus, so her proposals + canvas renders show
-  // up live in his Echo. She does NOT spawn it — she's a guest; if it isn't up yet she retries
-  // every 60s so the suit comes online (and the status light flips) the moment he opens Echo.
+  // Engine + Echo suit — Zoe OWNS the absorbed engine now (architecture lock 2026-06-23). The
+  // EngineSupervisor runs ADOPT-OR-SPAWN: if standalone Echo is already serving the port we ADOPT
+  // it (never double-spawn — they share the same DB/event bus, so her proposals/canvas show up
+  // live in his UI during the transition); if the port is dead she SPAWNS + OWNS
+  // `python -m echo.main serve --transport http` and supervises it (backoff restart, tree-kill on
+  // quit). We only ever kill what WE spawned. The suit (her MCP tool surface) attaches once the
+  // engine is healthy, and the 60s heartbeat re-attaches if the connection ever drops.
   const ECHO_CWD = process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo';
   const echoCfg = readEchoConfig(ECHO_CWD);
   echoSuit = echoSuitLib.createSuit({ client: require('./lib/echo').fromEnv({ url: echoCfg.url, token: echoCfg.token }) });
+  // Spawn path uses Echo's OWN venv interpreter by default (its deps aren't on bare `python`);
+  // ECHO_PYTHON env still overrides. The adopt path doesn't touch this.
+  const ECHO_PYTHON = process.env.ECHO_PYTHON || path.join(ECHO_CWD, '.venv', 'Scripts', 'python.exe');
+  engineSupervisor = new EngineSupervisor({
+    host: echoCfg.host, port: echoCfg.port,
+    python: ECHO_PYTHON,
+    cwd: ECHO_CWD,
+    onLog: (m) => console.log('[engine]', m),
+  });
   const pushEchoStatus = (r) => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('echo:status', { connected: !!(r && r.ok), tools: (r && r.tools) || 0 }); } catch {} };
   const tryEchoAttach = () => echoSuit.connect().then(r => { if (r.ok) console.log(`[main] echo suit attached: ${r.tools} tools`); pushEchoStatus(r); return !!r.ok; }).catch(() => { pushEchoStatus(null); return false; });
   setTimeout(() => {
-    tryEchoAttach();   // first attempt shortly after boot
-    // Permanent heartbeat: a cheap no-op while connected; reattaches within 60s whenever Echo
-    // comes online (Lucas opens it) or comes back (it died mid-session → a failed dispatch flips
-    // connected=false, the next beat re-attaches and refreshes the status light).
+    // Adopt the running engine, or spawn + own one, THEN attach the suit. If ensure can't bring an
+    // engine up (e.g. ECHO_CWD/ECHO_PYTHON wrong on the spawn path), still try to attach in case one
+    // came online by another route — the heartbeat keeps retrying regardless.
+    engineSupervisor.ensure({ spawnIfDown: true })
+      .then(r => { console.log(`[main] engine ${r.state}${r.pid ? ' (pid ' + r.pid + ')' : ''}`); return tryEchoAttach(); })
+      .catch(e => { console.error('[main] engine ensure failed:', e.message); return tryEchoAttach(); });
+    // Permanent heartbeat: a cheap no-op while connected; reattaches within 60s whenever the engine
+    // comes online or comes back (a dropped connection / supervisor restart flips connected=false,
+    // the next beat re-attaches and refreshes the status light).
     const iv = setInterval(() => { if (!echoSuit || echoSuit.connected) return; tryEchoAttach(); }, 60 * 1000);
     iv.unref?.();
   }, 8 * 1000).unref?.();
@@ -421,6 +443,7 @@ app.on('window-all-closed', async () => {
   schedulerLib.stopScheduler();
   try { await discordLib.stop(); } catch {}
   try { await webLib.close(); } catch {}
+  try { await engineSupervisor?.shutdown(); } catch {}   // tree-kills ONLY an engine WE spawned; adopted external left alone
   try { require('./lib/downtime').markShutdown(); } catch {}   // precise marker for a clean shutdown
   try {
     await forceReflectionIfDue();
