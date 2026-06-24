@@ -55,6 +55,30 @@ async function streamChat({ model, messages, options = {}, onToken, signal }) {
 }
 
 /**
+ * Non-streaming single completion → full assistant text. Used by deterministic callers (the
+ * verification harness's homework-check + classify leaf) that need the WHOLE reply to parse into
+ * a schema, not token-by-token. Low temperature by default (these are judgements, not prose).
+ * Optional `base` selects a non-default endpoint (e.g. an Ollama-Cloud base for the frontier tier).
+ */
+async function complete({ model, messages, options = {}, base = OLLAMA_BASE, headers = {}, signal }) {
+  const res = await fetch(`${base}/api/chat`, {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
+    body: JSON.stringify({
+      model, messages, stream: false, keep_alive: '24h',
+      options: Object.assign({ temperature: 0, top_p: 0.9, num_ctx: 8192 }, options),
+    }),
+    signal,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Ollama HTTP ${res.status}: ${text || res.statusText}`);
+  }
+  const obj = await res.json();
+  return (obj && obj.message && obj.message.content) || '';
+}
+
+/**
  * Splits a streamed string into <think>...</think> and <say>...</say> segments.
  * Streams say-content tokens to onSayToken as soon as they arrive.
  * Tolerates missing tags; finalize() salvages whatever was produced.
@@ -210,4 +234,4 @@ class TagStreamParser {
   }
 }
 
-module.exports = { streamChat, TagStreamParser, OLLAMA_BASE };
+module.exports = { streamChat, complete, TagStreamParser, OLLAMA_BASE };

@@ -5,7 +5,7 @@ const db = require('./lib/db');
 const editorRegistry = require('./lib/editor_registry');   // Editor Studio: document registry + lifecycle
 const editorImport = require('./lib/editor_import');         // Editor Studio: normalize-on-import
 const editorChecks = require('./lib/editor_checks');         // Editor Studio: "Run checks" orchestration
-const { streamChat, TagStreamParser } = require('./lib/ollama');
+const { streamChat, complete, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
 const {
   startReflectionScheduler,
@@ -558,9 +558,11 @@ ipcMain.handle('editor:import-document', async () => {
   }
 });
 
-// Run checks → drives Echo's Rainey verification agents on the doc and returns mapped findings.
-// Lazily ingests the doc into Echo's corpus first (so the agents can get_document it). Long-running
-// (cloud agents take minutes); the renderer awaits with a "running" state.
+// Run checks → drives the DETERMINISTIC verification harness (studio/verify_harness via
+// editor_checks.runHarnessChecks) over the doc's normalized working copy. One pathway:
+// extract→resolve→match→preflight→classify→contract. Resolution + match are ~0-token; the model
+// is reached only at the caged classify leaf (local 24B), behind the preflight homework-check gate.
+// callTool reaches Echo's web tools (web_fetch/web_search/wayback/…); embed/cosine = local bge-small.
 ipcMain.handle('editor:run-checks', async (_e, docId) => {
   try {
     const doc = editorRegistry.getDocument(docId);
@@ -569,25 +571,17 @@ ipcMain.handle('editor:run-checks', async (_e, docId) => {
     if (!echoSuit || !echoSuit.connected) return { ok: false, error: 'Echo engine not connected' };
     const callTool = (n, a) => echoSuit.client().callTool(n, a);
 
-    // Ensure the doc is in Echo's corpus (agents read via get_document). Ingest once, then cache the ref.
-    let echoPath = doc.echo_doc_path, echoId = doc.echo_doc_id;
-    if (!echoId && echoPath) {
-      const ing = echoSuitLib.normalizeToolResult(await callTool('ingest_file', { source_path: echoPath }));
-      const data = (() => { try { return JSON.parse(ing.text); } catch { return {}; } })();
-      if (data.action === 'ingested') {
-        echoId = data.doc_id; echoPath = data.path || echoPath;
-        editorRegistry.updateEchoRef(docId, { echoDocId: echoId, echoDocPath: echoPath });
-      } else {
-        return { ok: false, error: `ingest failed: ${data.error || data.action || 'unknown'}` };
-      }
-    }
+    const workingCopy = editorRegistry.getWorkingCopy(docId, doc.current_version);
+    if (!workingCopy || !Array.isArray(workingCopy.blocks)) return { ok: false, error: 'no working copy for this version' };
 
-    const res = await editorChecks.runChecks({
-      callTool, docId, sourceDocPath: echoPath, sourceVersion: doc.current_version,
-      author: doc.author, model: 'gemma4:31b-cloud', tier: 'cloud',
-      pollIntervalMs: 8000, timeoutMs: 540000,
+    const res = await editorChecks.runHarnessChecks({
+      callTool, workingCopy, complete, docId,
+      sourceDocPath: doc.echo_doc_path || null, author: doc.author, sourceVersion: doc.current_version,
+      localModel: MODEL,                              // classify leaf = the local 24B (no hardcoded model)
+      embed: memoryLib.embed, cosine: memoryLib.cosine,
+      onStage: (name, payload) => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('editor:check-progress', { name, payload }); } catch {} },
     });
-    return { ok: true, status: res.status, runIds: res.runIds, mapped: res.mapped };
+    return { ok: true, gate: res.gate, mapped: res.mapped };
   } catch (e) {
     console.error('[editor] run-checks failed:', e.message);
     return { ok: false, error: e.message };

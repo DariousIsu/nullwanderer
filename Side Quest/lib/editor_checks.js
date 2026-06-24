@@ -25,6 +25,8 @@
 const { normalizeToolResult } = require('./echo_suit');
 const contract = require('../studio/checks_contract');
 const registry = require('./editor_registry');
+const { runHarness } = require('../studio/verify_harness');
+const { makeHomeworkCheck, makeClassifier } = require('../studio/verify_model_io');
 
 const TERMINAL = new Set(['report_ready', 'accepted', 'revised', 'expired']);
 
@@ -125,4 +127,49 @@ async function runChecks({
   return { sessionId, checkRunId, runIds, status: statusData.status || null, mapped };
 }
 
-module.exports = { runChecks, buildEventPrompt, parseFindings, TERMINAL };
+/**
+ * Drive the DETERMINISTIC verification harness (studio/verify_harness) for a working document —
+ * the one-pathway "Run checks" of the locked design (replaces the agentic delegate path; that
+ * stays available via runChecks as a fallback toggle). Builds the real injections — callTool
+ * (Echo web tools), embed/cosine (bge-small), the homework-check + classify leaf (Ollama via the
+ * adapters above) — and records the run against the registry.
+ *
+ *   callTool      (REQUIRED) async (name,args) -> MCP result
+ *   workingCopy   (REQUIRED) editor_import normalized copy ({blocks:[...]})
+ *   complete      (REQUIRED) ollama.complete (or a mock); the model transport
+ *   embed/cosine  bge-small embedder + cosine (lib/memory) — Tier B; omit ⇒ Tier B skipped
+ *   localModel    classify primary (local 24B); cheapModel: homework tier (default localModel)
+ *   frontierModel + frontierBase/frontierHeaders: optional cloud escalation tier
+ * Returns { checkRunId, mapped:{findings,suggestions,summary}, gate, stages }.
+ */
+async function runHarnessChecks({
+  callTool, workingCopy, complete, docId = null, sourceDocPath = null, author = null, sourceVersion = 1,
+  localModel = null, cheapModel = null, frontierModel = null, frontierBase = null, frontierHeaders = null,
+  embed = null, cosine = null, tier = 'harness', onStage = null,
+} = {}) {
+  if (typeof callTool !== 'function') throw new Error('runHarnessChecks: callTool(name,args) is required');
+  if (!workingCopy || !Array.isArray(workingCopy.blocks)) throw new Error('runHarnessChecks: workingCopy with blocks is required');
+  if (typeof complete !== 'function') throw new Error('runHarnessChecks: complete(...) transport is required');
+  if (!localModel) throw new Error('runHarnessChecks: localModel is required (no hardcoded model)');
+
+  const homeworkCheck = makeHomeworkCheck({ complete, model: cheapModel || localModel });
+  const classifyModel = makeClassifier({ complete, model: localModel });
+  const classifyFrontier = frontierModel ? makeClassifier({ complete, model: frontierModel, base: frontierBase, headers: frontierHeaders }) : null;
+
+  let checkRunId = null;
+  if (docId != null) {
+    checkRunId = registry.recordCheckRun(docId, { verificationSessionId: null, tier, model: localModel, status: 'running', version: sourceVersion });
+  }
+
+  const result = await runHarness(workingCopy, { callTool, embed, cosine, homeworkCheck, classifyModel, classifyFrontier, onStage });
+
+  if (checkRunId != null) {
+    registry.updateCheckRun(checkRunId, {
+      status: result.gate.proceed ? 'checked' : 'gate-aborted',
+      findingsCount: result.summary.total, resolvedCount: result.summary.resolved, finished: true,
+    });
+  }
+  return { checkRunId, mapped: { findings: result.findings, suggestions: result.suggestions, summary: result.summary }, gate: result.gate, stages: result.stages };
+}
+
+module.exports = { runChecks, runHarnessChecks, buildEventPrompt, parseFindings, TERMINAL };
