@@ -161,9 +161,10 @@ Guards against garbage-in (botched extraction, fetched login/404 page, claim ali
 ~70-80% resolve in Tier A / numeric -> **0 tokens**; ~15-25% in Tier B local embeddings -> **0 cloud tokens**; small residue -> cheap preflight (1 call) -> frontier bulk (1 batched call) on vetted inputs only. A bad run dies at the cheap gate, not after the spend.
 
 ### Build order (each its own commit + OFFLINE smoke; steps 1-5 need NO cloud)
-1. `verify_extract` — units from the working copy.
-2. `verify_resolve` — the ladder (mock callTool -> prove each branch fires on its blocked-signal).
-3. `verify_match` — Tier A lexical + numeric + cite_floor; Tier B local embeddings (bge-small); Layer-0 guards.
-4. `verify_preflight` — Layer-0 filter + the canary/sample homework-check gate (cheap-tier; mockable).
-5. `verify_classify` — **stub** -> full pipeline runs offline end-to-end; + strict validation gate in checks_contract.
-6. Swap `editor_checks.runChecks` to drive the harness (agent path kept as a fallback toggle); classify -> real tiered model call; live-fire test.
+1. ✅ DONE (`dc1ef98`) `verify_extract` — units from the working copy. Smoke 44/44.
+2. ✅ DONE (`9a76e8f`) `verify_resolve` — the ladder (mock callTool -> prove each branch fires on its blocked-signal). Smoke 35/35.
+3. ✅ DONE (`b7fbe78`) `verify_match` — Tier A lexical + numeric + cite_floor; Tier B local embeddings (bge-small, injected); Layer-0 guards. Smoke 25/25.
+4. ✅ DONE (`49cf045`) `verify_preflight` — Layer-0 filter + the canary/sample homework-check gate (cheap-tier; injected/mockable). Smoke 20/20.
+5. ✅ DONE (`0e48144`) `verify_classify` — **stub** -> full pipeline runs offline end-to-end (smoke_verify_pipeline 17/17); + strict validation gate in checks_contract (opt-in). classify 19/19.
+   - All modules in `studio/` alongside checks_contract. Embedder + both model tiers + homework-check + callTool are ALL injected → harness runs 100% offline; deterministic.
+6. ⏳ NEXT (needs cloud + a Zoe restart + a live-fire doc): Swap `editor_checks.runChecks` to drive the harness (agent path kept as a fallback toggle); wire callTool=echoClient, embed/cosine=lib/memory, homeworkCheck + classify -> real tiered model call (cheap-tier homework via Ollama, frontier via gemma4:31b-cloud); live-fire test.
