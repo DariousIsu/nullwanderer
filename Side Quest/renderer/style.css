@@ -520,6 +520,21 @@ html, body {
 #browser-btn:hover { border-color: #4a4a52; color: #d0d0d3; }
 #browser-btn:disabled { opacity: 0.5; cursor: wait; }
 
+#editor-btn {
+  background: transparent;
+  border: 1px solid #2a2a30;
+  color: #9a9aa3;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  margin-left: 6px;
+  cursor: pointer;
+  transition: border-color 150ms, color 150ms;
+}
+#editor-btn:hover { border-color: #4a4a52; color: #d0d0d3; }
+#editor-btn:focus, #editor-btn:focus-visible { outline: none; border-color: #4a4a52; }
+
 .browser-status {
   font-size: 11px;
   margin-left: 8px;

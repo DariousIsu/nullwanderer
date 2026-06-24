@@ -160,6 +160,7 @@ function createEditorWindow() {
     backgroundColor: '#0d0d10',
     title: "Editor's Studio",
     autoHideMenuBar: true,
+    show: false,   // show on ready-to-show so it surfaces ON TOP (not blank-flashing behind chat)
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -168,6 +169,7 @@ function createEditorWindow() {
     }
   });
   editorWindow.loadFile(path.join(__dirname, 'renderer', 'editor.html'));
+  editorWindow.once('ready-to-show', () => { editorWindow.show(); editorWindow.focus(); });
   editorWindow.on('closed', () => { editorWindow = null; });
   return editorWindow;
 }
