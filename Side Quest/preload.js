@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('sq', {
     listDocuments: (opts) => ipcRenderer.invoke('editor:list-documents', opts || {}),
     importDocument: () => ipcRenderer.invoke('editor:import-document'),
     getDocument: (id) => ipcRenderer.invoke('editor:get-document', id),
-    getWorkingCopy: (docId, version) => ipcRenderer.invoke('editor:get-working-copy', { docId, version })
+    getWorkingCopy: (docId, version) => ipcRenderer.invoke('editor:get-working-copy', { docId, version }),
+    runChecks: (docId) => ipcRenderer.invoke('editor:run-checks', docId)
   }
 });

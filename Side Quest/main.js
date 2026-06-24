@@ -4,6 +4,7 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const db = require('./lib/db');
 const editorRegistry = require('./lib/editor_registry');   // Editor Studio: document registry + lifecycle
 const editorImport = require('./lib/editor_import');         // Editor Studio: normalize-on-import
+const editorChecks = require('./lib/editor_checks');         // Editor Studio: "Run checks" orchestration
 const { streamChat, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
 const {
@@ -553,6 +554,42 @@ ipcMain.handle('editor:import-document', async () => {
     return { ok: true, document: editorRegistry.getDocument(doc.id) };
   } catch (e) {
     console.error('[editor] import failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+// Run checks → drives Echo's Rainey verification agents on the doc and returns mapped findings.
+// Lazily ingests the doc into Echo's corpus first (so the agents can get_document it). Long-running
+// (cloud agents take minutes); the renderer awaits with a "running" state.
+ipcMain.handle('editor:run-checks', async (_e, docId) => {
+  try {
+    const doc = editorRegistry.getDocument(docId);
+    if (!doc) return { ok: false, error: 'no such document' };
+    if (!echoSuit || !echoSuit.connected) { try { await echoSuit.connect(); } catch {} }
+    if (!echoSuit || !echoSuit.connected) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = (n, a) => echoSuit.client().callTool(n, a);
+
+    // Ensure the doc is in Echo's corpus (agents read via get_document). Ingest once, then cache the ref.
+    let echoPath = doc.echo_doc_path, echoId = doc.echo_doc_id;
+    if (!echoId && echoPath) {
+      const ing = echoSuitLib.normalizeToolResult(await callTool('ingest_file', { source_path: echoPath }));
+      const data = (() => { try { return JSON.parse(ing.text); } catch { return {}; } })();
+      if (data.action === 'ingested') {
+        echoId = data.doc_id; echoPath = data.path || echoPath;
+        editorRegistry.updateEchoRef(docId, { echoDocId: echoId, echoDocPath: echoPath });
+      } else {
+        return { ok: false, error: `ingest failed: ${data.error || data.action || 'unknown'}` };
+      }
+    }
+
+    const res = await editorChecks.runChecks({
+      callTool, docId, sourceDocPath: echoPath, sourceVersion: doc.current_version,
+      author: doc.author, model: 'gemma4:31b-cloud', tier: 'cloud',
+      pollIntervalMs: 8000, timeoutMs: 540000,
+    });
+    return { ok: true, status: res.status, runIds: res.runIds, mapped: res.mapped };
+  } catch (e) {
+    console.error('[editor] run-checks failed:', e.message);
     return { ok: false, error: e.message };
   }
 });

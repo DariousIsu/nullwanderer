@@ -115,6 +115,18 @@ html,body{height:100%;background:var(--bg);color:var(--tx-soft);font-family:-app
 .toprail-btn:hover{border-color:var(--line-hover);color:var(--tx-soft);}
 .rail-collapse{font-size:14px;color:var(--tx-dim);cursor:pointer;line-height:1;}
 .rail-collapse:hover{color:var(--tx-soft);}
+.fcard{background:var(--bg-panel);border:1px solid var(--line);border-radius:var(--r);padding:9px;transition:border-color 120ms;}
+.fcard.bad{border-left:2px solid var(--bad-line);}
+.fcard.warn{border-left:2px solid var(--warn-line);}
+.fcard.ok{border-left:2px solid var(--ok-line);}
+.fcard.info{border-left:2px solid var(--info-line);}
+.fcard.done{opacity:0.6;}
+.fcard-top{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px;}
+.fcard-lbl{font-size:12px;font-weight:500;color:var(--tx-soft);}
+.fcard-ev{font-size:11px;color:var(--tx-dim);line-height:1.5;margin-bottom:7px;}
+.fcard-actions{display:flex;justify-content:space-between;align-items:center;}
+.fcard-resolve{font-size:11px;color:var(--tx-dim);cursor:pointer;user-select:none;}
+.fcard-resolve.done{color:var(--ok-fg);}
 </style>
 </head>
 <body>
@@ -172,7 +184,7 @@ html,body{height:100%;background:var(--bg);color:var(--tx-soft);font-family:-app
     </div>
     <div class="topbar-actions">
       <span class="progress"><span class="bar"><i id="prog-bar" style="width:0%"></i></span><span id="prog-text">0 of 0 resolved</span></span>
-      <button class="btn accent sm" id="run-checks-btn" disabled title="wired next slice"><span class="ic">&#10003;</span>Run checks</button>
+      <button class="btn accent sm" id="run-checks-btn"><span class="ic">&#10003;</span>Run checks</button>
       <button class="btn sm" disabled>Certify</button>
       <button class="btn sm" disabled>Publish</button>
       <button class="toprail-btn" id="rail-toggle" title="toggle findings">&#9776;</button>

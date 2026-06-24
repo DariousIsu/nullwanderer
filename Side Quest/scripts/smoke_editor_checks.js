@@ -1,7 +1,7 @@
 /**
- * Offline smoke for lib/editor_checks.js (B2 plumbing) — full orchestration via a MOCK callTool
- * (no live engine, no cloud creds). Proves open → delegate → poll-until-terminal → contract map →
- * registry record, plus the safe delegate:false path.
+ * Offline smoke for lib/editor_checks.js (slice 2) — full orchestration via a MOCK callTool
+ * (no live engine, no cloud). Proves open → fire verifier+fact-checker (event prompt) →
+ * poll-until-findings-attached → contract map (Rainey {claims} shape) → registry record.
  * Run: ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron.exe scripts/smoke_editor_checks.js
  */
 const path = require('path');
@@ -20,17 +20,17 @@ function ok(name, cond, detail = '') {
 }
 const wrap = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj) }] });
 
-// Canonical findings (round-trip shape): partial+suggestion, verified, inaccessible.
-const CITE_FINDINGS = { citations: [
-  { id: 'f1', locator: '¶2', label: 'Flock claim', status: 'Partially Verified', match_score: 0.72,
-    evidence: 'Company cites "thousands"; 5,000 not confirmed.',
-    suggested_replacement: { before: 'deployed in 5,000 communities', after: 'deployed in thousands of communities', source: 'Flock 2024 transparency page' } },
-  { id: 'f2', label: 'ALPR retention', status: 'verified', match_score: 0.94, evidence: '2 matching sources · cite-ready.' },
-  { id: 'f3', label: 'blocked source', status: 'Inaccessible', match_score: 0 },
+// Rainey AGENT findings shapes (what rainey_attach_*_findings persists onto the session).
+const CITE = { claims: [
+  { claim_text: 'Flock cameras in 5,000 communities', status_code: 'M', finding: 'Company cites "thousands"; 5,000 not confirmed.' },
+  { claim_text: 'ALPR retention 30 days', status_code: 'V', finding: '2 independent sources confirm.' },
+], summary: { total_cites: 2 } };
+const FACT = { claims: [
+  { text: 'downwind effects peer-reviewed', status_code: 'VC', finding: 'True with a caveat on basin scope.' },
 ] };
 
-// Build a mock callTool. status returns non-terminal once, then report_ready with findings.
-function makeMock({ attachFindings = true } = {}) {
+// status returns no findings until both agents have been delegated + one poll passes.
+function makeMock({ preAttached = false } = {}) {
   const calls = [];
   let statusCalls = 0;
   return {
@@ -42,11 +42,10 @@ function makeMock({ attachFindings = true } = {}) {
       if (name === 'delegate_to_rainey_fact_checker') return wrap({ run_id: 'fc-1' });
       if (name === 'verification_session_status') {
         statusCalls++;
-        if (attachFindings && (statusCalls >= 2 || calls.filter(c => c === 'delegate_to_rainey_citation_verifier').length === 0)) {
-          // terminal once delegated-and-polled-twice, OR immediately when not delegating
-          return wrap({ status: 'report_ready', report_doc_path: 'Vault/report.md', cite_verify_findings: JSON.stringify(CITE_FINDINGS) });
-        }
-        return wrap({ status: 'citation_verifying' });
+        const ready = preAttached || statusCalls >= 2;
+        return wrap(ready
+          ? { status: 'citation_verifying', cite_verify_findings: JSON.stringify(CITE), fact_check_findings: JSON.stringify(FACT) }
+          : { status: 'citation_verifying' });
       }
       return wrap({ ok: true });
     },
@@ -57,41 +56,41 @@ try {
   R.init({ path: TMP_DB });
   const doc = R.registerDocument({ title: 'Flock Op-Ed', author: 'Charles Walker', source: 'upload' });
 
-  // --- full delegate path (polls twice) ---
   (async () => {
-    const mock = makeMock({ attachFindings: true });
-    const res = await C.runChecks({ callTool: mock.fn, docId: doc.id, sourceDocPath: 'C:/x/flock.docx',
-      author: 'Charles Walker', model: 'frontier-x', tier: 'cloud', sleep: async () => {} });
+    // --- full delegate path (event prompt + poll until both findings attached) ---
+    const mock = makeMock({});
+    const res = await C.runChecks({ callTool: mock.fn, docId: doc.id, sourceDocPath: 'Vault/_Inbox/flock.md',
+      author: 'Charles Walker', model: 'gemma4:31b-cloud', tier: 'cloud', sleep: async () => {} });
 
     ok('opened session', res.sessionId === 'sess-x');
-    ok('delegated cite-verify + fact-check', res.runIds.citeVerify === 'cv-1' && res.runIds.factCheck === 'fc-1');
-    ok('polled until terminal (report_ready)', res.status === 'report_ready');
-    ok('mapped 3 findings', res.mapped.summary.total === 3, `total=${res.mapped.summary.total}`);
-    ok('1 suggestion (f1 has replacement)', res.mapped.suggestions.length === 1);
-    ok('1 resolved (f2 verified auto-resolves)', res.mapped.summary.resolved === 1, `resolved=${res.mapped.summary.resolved}`);
-    ok('byStatus partial+verified+inaccessible', res.mapped.summary.byStatus.partial === 1 && res.mapped.summary.byStatus.verified === 1 && res.mapped.summary.byStatus.inaccessible === 1);
-    ok('status polled at least twice (non-terminal then terminal)', mock.calls.filter(c => c === 'verification_session_status').length >= 2);
+    ok('fired cite-verify + fact-checker', res.runIds.citeVerify === 'cv-1' && res.runIds.factCheck === 'fc-1');
+    ok('mapped 3 findings (2 cite + 1 fact)', res.mapped.summary.total === 3, `total=${res.mapped.summary.total}`);
+    ok('M → bad, V → ok+auto, VC → warn', (() => {
+      const v = res.mapped.summary.byVerdict; return v.bad === 1 && v.ok === 1 && v.warn === 1;
+    })());
+    ok('1 resolved (V auto-resolves)', res.mapped.summary.resolved === 1, `resolved=${res.mapped.summary.resolved}`);
+    ok('polled until findings attached (>=2 status reads)', mock.calls.filter(c => c === 'verification_session_status').length >= 2);
 
-    // registry check-run recorded + updated
     const cr = R.latestCheckRun(doc.id);
-    ok('check_run tied to session + model/tier', cr.verification_session_id === 'sess-x' && cr.model === 'frontier-x' && cr.tier === 'cloud');
-    ok('check_run updated: counts + finished + report_ref', cr.status === 'report_ready' && cr.findings_count === 3 && cr.resolved_count === 1 && cr.finished_at > 0 && cr.report_ref === 'Vault/report.md');
+    ok('check_run tied to session + model/tier', cr.verification_session_id === 'sess-x' && cr.model === 'gemma4:31b-cloud' && cr.tier === 'cloud');
+    ok('check_run updated: counts', cr.findings_count === 3 && cr.resolved_count === 1);
 
-    // --- delegate:false path (safe pre-creds): no delegate calls, maps attached findings ---
-    const mock2 = makeMock({ attachFindings: true });
-    const res2 = await C.runChecks({ callTool: mock2.fn, docId: doc.id, sourceDocPath: 'C:/x/flock.docx', delegate: false, sleep: async () => {} });
+    // --- delegate:false (pre-attached findings) maps without delegating ---
+    const mock2 = makeMock({ preAttached: true });
+    const res2 = await C.runChecks({ callTool: mock2.fn, docId: doc.id, sourceDocPath: 'Vault/x.md', delegate: false, sleep: async () => {} });
     ok('delegate:false skips delegation', !mock2.calls.includes('delegate_to_rainey_citation_verifier'));
-    ok('delegate:false still maps findings', res2.mapped.summary.total === 3);
+    ok('delegate:false still maps attached findings', res2.mapped.summary.total === 3);
 
-    // --- guards / pure helpers ---
+    // --- guards / helpers ---
     let threw = false; try { await C.runChecks({}); } catch { threw = true; }
     ok('runChecks requires callTool', threw);
 
-    const prompt = C.buildVerifierPrompt({ sessionId: 's1', sourceDocPath: 'd.docx', model: 'frontier-x' });
-    ok('prompt carries pipeline + rubric + model', /citation_verify/.test(prompt) && /0\.90/.test(prompt) && /frontier-x/.test(prompt));
+    const evt = C.buildEventPrompt('verification:session_open', { session_id: 's1', source_doc_path: 'd.md' });
+    ok('event prompt carries topic + session_id payload', /Event: verification:session_open/.test(evt) && /"session_id": "s1"/.test(evt) && /Respond to this event/.test(evt));
 
-    ok('extractCitations parses string form', C.extractCitations({ cite_verify_findings: JSON.stringify(CITE_FINDINGS) }).length === 3);
-    ok('extractCitations parses object + merges fact-check', C.extractCitations({ cite_verify_findings: CITE_FINDINGS, fact_check_findings: { citations: [{ id: 'g1', status: 'verified', match_score: 0.99 }] } }).length === 4);
+    ok('parseFindings parses string form', C.parseFindings({ cite_verify_findings: JSON.stringify(CITE) }, 'cite_verify_findings').claims.length === 2);
+    ok('parseFindings parses object form', C.parseFindings({ fact_check_findings: FACT }, 'fact_check_findings').claims.length === 1);
+    ok('parseFindings missing → null', C.parseFindings({}, 'cite_verify_findings') === null);
 
     R.close();
     for (const f of [TMP_DB, TMP_DB + '-wal', TMP_DB + '-shm']) { try { fs.unlinkSync(f); } catch {} }

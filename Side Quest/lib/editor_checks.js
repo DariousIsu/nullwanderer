@@ -30,33 +30,21 @@ const TERMINAL = new Set(['report_ready', 'accepted', 'revised', 'expired']);
 
 function parseJson(text) { try { return JSON.parse(text); } catch { return null; } }
 
-// Pull the canonical citation array out of a session-status payload. cite_verify_findings /
-// fact_check_findings cross the boundary as JSON strings (or objects) shaped {citations:[...]}.
-function extractCitations(statusData) {
-  const out = [];
-  for (const key of ['cite_verify_findings', 'fact_check_findings']) {
-    let v = statusData ? statusData[key] : null;
-    if (typeof v === 'string') v = parseJson(v);
-    if (v && Array.isArray(v.citations)) out.push(...v.citations);
-    else if (Array.isArray(v)) out.push(...v);
-  }
-  return out;
+// Parse a session-status findings field (cite_verify_findings / fact_check_findings), which
+// crosses the boundary as a JSON string or an object. Returns the parsed payload (or null).
+function parseFindings(statusData, key) {
+  let v = statusData ? statusData[key] : null;
+  if (typeof v === 'string') v = parseJson(v);
+  return (v && typeof v === 'object') ? v : null;
 }
 
-// The verifier task spec handed to the background agent. The canonical pipeline + rubric come
-// straight from citation_verification.toml. `model` is a soft directive until A2 adds a structured
-// model param to the verify tools.
-function buildVerifierPrompt({ sessionId, sourceDocPath, model = null }) {
-  return [
-    `Run the Rainey citation-verification pipeline for verification session ${sessionId}` +
-      (sourceDocPath ? ` on document: ${sourceDocPath}.` : '.'),
-    'Pipeline: extract citations → open_access_resolve → citation_verify (direct → Wayback → Google Cache)',
-    '→ web_search/browse fallback → attach findings to the session.',
-    'Per citation, set status by match_score: Verified ≥0.90 · Partial 0.60–0.89 · Unverified 0.20–0.59;',
-    'use Contradicted when the source refutes the claim, Inaccessible when unreachable after fallbacks.',
-    'Where wording differs, include suggested_replacement {before, after, source}.',
-    model ? `Use the ${model} tier for this verification.` : '',
-  ].filter(Boolean).join('\n');
+// The EVENT-format prompt the Rainey agents expect — mirrors echo/agents/events.py
+// _build_event_prompt (topic + JSON payload). The agent's system_prompt reads session_id +
+// source_doc_path from this payload and calls rainey_attach_*_findings ITSELF. (A custom prose
+// prompt does NOT trigger the attach — the agent just produces a canvas deliverable.) This is the
+// only path that lands findings on the session for an external (non-async-loop) caller like Zoe.
+function buildEventPrompt(topic, payload) {
+  return `Event: ${topic}\nPayload:\n\`\`\`json\n${JSON.stringify(payload, null, 2)}\n\`\`\`\nRespond to this event according to your purpose.`;
 }
 
 /**
@@ -90,31 +78,38 @@ async function runChecks({
     });
   }
 
-  // 3) delegate to the background verifier(s) — LIVE path (gated on cloud creds)
+  // 3) fire the Rainey verifier + fact-checker with the EVENT-format prompt so each agent's
+  //    system_prompt drives it to call rainey_attach_*_findings on THIS session.
   const runIds = {};
   if (delegate) {
-    const prompt = buildVerifierPrompt({ sessionId, sourceDocPath, model });
-    const cv = normalizeToolResult(await callTool('delegate_to_rainey_citation_verifier', { prompt }));
+    const payload = { session_id: sessionId, source_doc_path: sourceDocPath, source_version: sourceVersion, author_name: author, parent_session_id: null };
+    const evt = buildEventPrompt('verification:session_open', payload);
+    const cv = normalizeToolResult(await callTool('delegate_to_rainey_citation_verifier', { prompt: evt }));
     runIds.citeVerify = (parseJson(cv.text) || {}).run_id || null;
     if (factCheck) {
-      const fc = normalizeToolResult(await callTool('delegate_to_rainey_fact_checker', { prompt }));
+      const fc = normalizeToolResult(await callTool('delegate_to_rainey_fact_checker', { prompt: evt }));
       runIds.factCheck = (parseJson(fc.text) || {}).run_id || null;
     }
   }
 
-  // 4) poll status until terminal (or once, when not delegating — the safe pre-creds path)
+  // 4) poll until findings are ATTACHED (the agents attach independently; there is no auto-compose
+  //    for an external driver, so we wait for the findings themselves, not report_ready). Stop on
+  //    both-attached, a terminal status, or timeout.
   const deadline = now() + timeoutMs;
-  let statusData = {};
+  let statusData = {}, cite = null, fact = null;
   for (;;) {
     const s = normalizeToolResult(await callTool('verification_session_status', { session_id: sessionId }));
     statusData = parseJson(s.text) || {};
-    if (!delegate || TERMINAL.has(statusData.status)) break;
+    cite = parseFindings(statusData, 'cite_verify_findings');
+    fact = parseFindings(statusData, 'fact_check_findings');
+    const bothIn = cite && (!factCheck || fact);
+    if (!delegate || bothIn || TERMINAL.has(statusData.status)) break;
     if (now() >= deadline) break;
     await sleep(pollIntervalMs);
   }
 
-  // 5) map findings through the contract → render model
-  const mapped = contract.mapCheckResult(extractCitations(statusData));
+  // 5) map both findings payloads through the contract → render model
+  const mapped = contract.mapCheckResult([cite, fact].filter(Boolean));
 
   // 6) update the check-run pointer for index display
   if (checkRunId != null) {
@@ -130,4 +125,4 @@ async function runChecks({
   return { sessionId, checkRunId, runIds, status: statusData.status || null, mapped };
 }
 
-module.exports = { runChecks, buildVerifierPrompt, extractCitations, TERMINAL };
+module.exports = { runChecks, buildEventPrompt, parseFindings, TERMINAL };

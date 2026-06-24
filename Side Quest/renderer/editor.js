@@ -9,6 +9,8 @@ function esc(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<
 const STATUS_PILL = { 'in-process':'info', 'certified':'warn', 'published':'ok' };
 let DOCS = [];
 let sortKey = 'accessed', sortDir = 'desc';
+let currentDoc = null;     // { id, current_version, ... } of the open doc in View B
+let FINDINGS = [];         // mapped findings for the open doc (from Run checks)
 
 function relTime(ms){
   if(!ms) return '—';
@@ -103,6 +105,8 @@ async function openDoc(id){
   const dR = await E.getDocument(id);
   const doc = dR && dR.document;
   if(!doc){ return; }
+  currentDoc = doc;
+  FINDINGS = [];
   const wcR = await E.getWorkingCopy(id, doc.current_version);
   document.getElementById('doc-title').textContent = doc.title || '(untitled)';
   document.getElementById('doc-sub').textContent = (doc.author || '—') + ' · v' + doc.current_version;
@@ -110,13 +114,67 @@ async function openDoc(id){
   pill.className = 'pill ' + (STATUS_PILL[doc.status] || 'mute');
   pill.textContent = doc.status;
   renderDocBody(wcR && wcR.workingCopy);
-  document.getElementById('rail-count').textContent = '0';
-  document.getElementById('prog-text').textContent = '0 of 0 resolved';
-  document.getElementById('prog-bar').style.width = '0%';
+  resetFindings();
   document.getElementById('view-index').hidden = true;
   document.getElementById('view-doc').hidden = false;
 }
 function showIndex(){ document.getElementById('view-doc').hidden = true; document.getElementById('view-index').hidden = false; }
+
+/* ---------- findings (Run checks) ---------- */
+function resetFindings(){
+  document.getElementById('findings').innerHTML = '<div class="rail-empty">No checks run yet. Press <b>Run checks</b> to verify this document.</div>';
+  document.getElementById('rail-count').textContent = '0';
+  updateProgress();
+}
+function findingCardHTML(f){
+  const done = f.resolved || f.auto;
+  const resolve = f.auto
+    ? `<span class="fcard-resolve done">&#9745; cite-ready</span>`
+    : `<span class="fcard-resolve ${f.resolved?'done':''}" data-resolve="${f.id}">${f.resolved?'&#9745; resolved':'&#9744; resolve'}</span>`;
+  return `<div class="fcard ${f.verdict} ${done?'done':''}" data-fcard="${f.id}">
+    <div class="fcard-top"><span class="fcard-lbl">${esc(f.label)}</span><span class="pill ${f.verdict}">${esc(f.vlabel)}</span></div>
+    <div class="fcard-ev">${esc(f.ev)}</div>
+    <div class="fcard-actions"><span></span>${resolve}</div></div>`;
+}
+function renderFindings(){
+  const el = document.getElementById('findings');
+  if(!FINDINGS.length){ resetFindings(); return; }
+  el.innerHTML = FINDINGS.map(findingCardHTML).join('');
+  document.getElementById('rail-count').textContent = FINDINGS.length;
+  updateProgress();
+}
+function updateProgress(){
+  const total = FINDINGS.length;
+  const done = FINDINGS.filter(f => f.resolved || f.auto).length;
+  document.getElementById('prog-text').textContent = `${done} of ${total} resolved`;
+  document.getElementById('prog-bar').style.width = total ? `${Math.round(done/total*100)}%` : '0%';
+}
+// findings rail: manual resolve toggle (delegated)
+document.getElementById('findings').addEventListener('click', e => {
+  const r = e.target.closest('[data-resolve]'); if(!r) return;
+  const f = FINDINGS.find(x => x.id === r.dataset.resolve);
+  if(f){ f.resolved = !f.resolved; renderFindings(); }
+});
+
+document.getElementById('run-checks-btn').addEventListener('click', async () => {
+  if(!E || !currentDoc) return;
+  const btn = document.getElementById('run-checks-btn');
+  const orig = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = '<span class="ic">&#8635;</span>Running…';
+  document.getElementById('findings').innerHTML = '<div class="rail-empty">Verifying… the Rainey citation-verifier + fact-checker are reading the document and tracing sources. This runs on cloud and can take a few minutes.</div>';
+  try {
+    const res = await E.runChecks(currentDoc.id);
+    if (res && res.ok) {
+      FINDINGS = (res.mapped && res.mapped.findings) || [];
+      renderFindings();
+      if(!FINDINGS.length) document.getElementById('findings').innerHTML = '<div class="rail-empty">Checks ran but returned no findings (the agents attached nothing — likely the document had no traceable citations, or the run timed out).</div>';
+    } else {
+      document.getElementById('findings').innerHTML = `<div class="rail-empty">Run checks failed: ${esc(res && res.error || 'unknown error')}</div>`;
+    }
+  } catch (err) {
+    document.getElementById('findings').innerHTML = `<div class="rail-empty">Run checks errored: ${esc(err.message)}</div>`;
+  } finally { btn.disabled = false; btn.innerHTML = orig; }
+});
 
 /* ---------- wiring ---------- */
 document.getElementById('new-doc-btn').addEventListener('click', async () => {

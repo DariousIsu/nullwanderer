@@ -296,6 +296,16 @@ function getWorkingCopy(docId, version) {
   return r ? JSON.parse(r.model_json) : null;
 }
 
+// Persist the Echo corpus refs once a doc has been ingested (so "Run checks" can target the
+// engine-side document and we don't re-ingest on every run).
+function updateEchoRef(docId, { echoDocId = null, echoDocPath = null } = {}) {
+  const sets = [], args = [];
+  if (echoDocId != null) { sets.push('echo_doc_id = ?'); args.push(echoDocId); }
+  if (echoDocPath != null) { sets.push('echo_doc_path = ?'); args.push(echoDocPath); }
+  if (!sets.length) return;
+  _db().prepare(`UPDATE pipeline_documents SET ${sets.join(', ')} WHERE id = ?`).run(...args, docId);
+}
+
 // Close-out: mark actually-published, record the public copy (url or file). Terminal state.
 function closeOut(docId, { publicCopyRef = null } = {}) {
   const doc = getDocument(docId);
@@ -312,7 +322,7 @@ module.exports = {
   addIteration, listIterations,
   recordCheckRun, updateCheckRun, latestCheckRun,
   setStatus, attachCertificate, listCertificates, closeOut,
-  saveWorkingCopy, getWorkingCopy,
+  saveWorkingCopy, getWorkingCopy, updateEchoRef,
   // pure helpers
   formatCertNumber, dateStamp,
 };
