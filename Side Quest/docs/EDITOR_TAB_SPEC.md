@@ -115,3 +115,55 @@ Correction to any earlier "4-zone shell" reading: what carries across workbenche
 
 ### Lifecycle = bounded (the Editor is the last QA leg)
 The studio sits near the **end** of the publication chain — from the last verified version, publication follows in ~a week. Flow: **load → verify/correct (revisions accrue *within* this cycle) → certify → publish (close-out, terminal).** Because publication ends iteration, version chains never sprawl. **Anything done after publish is a NEW document entry, not a revision** (optionally linked back, but its own row). Normal path is cert → publish, but close-out does not hard-require a cert.
+
+---
+
+## Verification Engine — the deterministic harness (spec, FROZEN 2026-06-24)
+
+**Governing law:** workspace determinism — one pathway, one output shape, standardized formats; the LLM is a CAGED component, never the orchestrator. The free-form Rainey agent did *all* verification in prose (least deterministic, most tokens). We invert it: **a deterministic state machine drives the atomic tools; the model is reached only at defined leaves, with schema-validated I/O, and only after a cheap preflight gate clears the batch.** Target: ~90% deterministic, frontier tokens spent once, batched, on vetted inputs only.
+
+### Two tracks, one session
+Same engine runs twice in parallel, both attaching to one `verification_session`: **cite track** (sourcing discipline → `rainey_attach_cite_verify_findings`) + **fact track** (factual truth → `rainey_attach_fact_check_findings`). Both emit the locked `status_code` enum (V/VC/VP/QO/QP/A/M/NK); the contract merges them into one rail.
+
+### Pipeline (module · deterministic? · I/O)
+| # | Stage | Module | Det? | In → Out |
+|---|---|---|---|---|
+| 1 | Intake | editor_registry + editor_import + editor_checks | built | file → working copy + Echo doc_id + session_id |
+| 2 | Extract units | NEW verify_extract (rides import blocks) | code | working copy → [{anchor,text,quote?,url?,doi?,kind}] |
+| 3 | Resolve ladder | NEW verify_resolve | code | unit → {resolved,source_text,source_url,archive_url,tier} |
+| 4 | Match + score | NEW verify_match | code (cascade) | (quote/claim, source) → match_score + rubric |
+| - | Preflight gate | NEW verify_preflight | gate=code, sample=cheap model | residue sample → proceed \| abort+reason |
+| 5 | Classify (leaf) | NEW verify_classify | MODEL (caged) | {claim,passage} → one validated status_code |
+| 6 | Validate gate | checks_contract (+ strict mode) | code | finding → conforms ? map : flag/reject |
+| 7 | Attach + map | editor_checks + checks_contract | built | findings → {findings,suggestions,summary} → rail |
+| 8 | Certify | editor_registry + cert render (B4/B5) | code | findings → CFC cert → PDF |
+
+### Stage 3 — resolution ladder (each branch = `if blocked -> next`)
+Blocked-signal is mechanical: `!2xx` / empty body / paywall marker / login redirect.
+`web_fetch(url)` -> `wayback_history`/`verify_url_history` -> cache / `web_resolve_oa(doi)` -> `web_search`·`academic_search`·`courtlistener_*`·`edgar_full_text_search`·`fr_search` (find by source-kind; fetch top-N) -> **Inaccessible** (deterministic terminal). Resolved at any step exits to Stage 4.
+
+### Stage 4 — match cascade (cheap->expensive, stop when confident; the local embedder is the lever)
+- **Tier A - lexical (0 tokens):** normalize -> exact substring -> fuzzy ratio over sliding window. Verbatim/near-verbatim quote present -> **Verified, no model** (can't verbatim-quote a negation as support). Catches the majority of explicit cites.
+- **Tier B - local embeddings (~0 tokens):** bge-small CPU embedder (already warm at boot) -> cosine sim between claim and source passages -> semantic match_score for paraphrase, no cloud tokens.
+- **Tier C - model (residue only):** only the gray band + contradiction (M) — high similarity can still mean the opposite. Input is {claim, single top passage}, never the whole doc.
+- **Deterministic wins:** numeric claims -> regex the number near the passage, compare (equal->V, differ->M, a *deterministic contradiction*). cite_floor=2 -> count independent confirms (domain/canonical dedup) in code.
+
+### Preflight gate — "check the deterministic's homework before the bulk order" (token safety)
+Guards against garbage-in (botched extraction, fetched login/404 page, claim aligned to irrelevant passage) burning a whole frontier batch.
+- **Layer 0 - code guards (free):** drop degenerate candidates before any model — empty/whole-doc/boilerplate passage, degenerate claim, **zero content-word overlap AND embedding sim ~ 0 -> resolve Unsupported deterministically, never escalate**, extraction sanity (cite-count plausible for doc length).
+- **Layer 1 - homework-check (one CHEAP-tier call):** sample the residue (or one canary item end-to-end); ask local/cheap model *"is each {claim, matched-passage} coherent + on-topic? yes/no"*. Deterministic gate on pass-rate: **>= threshold -> release the bulk; < threshold -> ABORT, surface why** (e.g. "4/5 sampled passages were login pages"). Operator fixes import/doc + re-runs. The frontier model is NEVER spent on a batch the deterministic stage couldn't assemble coherently.
+- **Layer 2 - bulk classify (frontier, batched):** only the vetted residue, as ONE batched call, tiny per-item input.
+
+### Classify leaf — the only model touch
+`classify({claim, passage}) -> {status_code in enum, note}`. Schema-validated **input and output**. **Tiered model:** local 24B first; escalate to cloud frontier only when the local call is low-confidence (model-selector primitive). Stubbed first (deterministic placeholder) so the whole pipeline runs offline end-to-end before any cloud call.
+
+### Token economy (net)
+~70-80% resolve in Tier A / numeric -> **0 tokens**; ~15-25% in Tier B local embeddings -> **0 cloud tokens**; small residue -> cheap preflight (1 call) -> frontier bulk (1 batched call) on vetted inputs only. A bad run dies at the cheap gate, not after the spend.
+
+### Build order (each its own commit + OFFLINE smoke; steps 1-5 need NO cloud)
+1. `verify_extract` — units from the working copy.
+2. `verify_resolve` — the ladder (mock callTool -> prove each branch fires on its blocked-signal).
+3. `verify_match` — Tier A lexical + numeric + cite_floor; Tier B local embeddings (bge-small); Layer-0 guards.
+4. `verify_preflight` — Layer-0 filter + the canary/sample homework-check gate (cheap-tier; mockable).
+5. `verify_classify` — **stub** -> full pipeline runs offline end-to-end; + strict validation gate in checks_contract.
+6. Swap `editor_checks.runChecks` to drive the harness (agent path kept as a fallback toggle); classify -> real tiered model call; live-fire test.
