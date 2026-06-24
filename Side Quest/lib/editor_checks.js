@@ -138,13 +138,19 @@ async function runChecks({
  *   workingCopy   (REQUIRED) editor_import normalized copy ({blocks:[...]})
  *   complete      (REQUIRED) ollama.complete (or a mock); the model transport
  *   embed/cosine  bge-small embedder + cosine (lib/memory) — Tier B; omit ⇒ Tier B skipped
- *   localModel    classify primary (local 24B); cheapModel: homework tier (default localModel)
- *   frontierModel + frontierBase/frontierHeaders: optional cloud escalation tier
+ *   classifyModelName  the CLASSIFY-leaf model name. With classifyBase set it runs on the cloud
+ *                 frontier (this verification judgment is too big for a local model — cloud is the
+ *                 real path); without, it runs on local Ollama.
+ *   classifyBase/classifyHeaders  endpoint + auth for the classify leaf (cloud base + bearer)
+ *   cheapModel    homework-check tier (default classifyModelName) — kept LOCAL/cheap on purpose
+ *   frontierModel + frontierBase/frontierHeaders: optional low-confidence escalation tier
  * Returns { checkRunId, mapped:{findings,suggestions,summary}, gate, stages }.
  */
 async function runHarnessChecks({
   callTool, workingCopy, complete, docId = null, sourceDocPath = null, author = null, sourceVersion = 1,
-  localModel = null, cheapModel = null, frontierModel = null, frontierBase = null, frontierHeaders = null,
+  classifyModelName = null, classifyBase = null, classifyHeaders = null,
+  cheapModel = null, cheapBase = null, cheapHeaders = null,
+  frontierModel = null, frontierBase = null, frontierHeaders = null,
   embed = null, cosine = null, tier = 'harness', onStage = null,
   // Echo's fetch rung → web_extract (trafilatura clean text + status), not web_fetch (raw-HTML
   // preview). The ladder reads the body from `text_preview` (see verify_resolve.readFetch).
@@ -153,15 +159,17 @@ async function runHarnessChecks({
   if (typeof callTool !== 'function') throw new Error('runHarnessChecks: callTool(name,args) is required');
   if (!workingCopy || !Array.isArray(workingCopy.blocks)) throw new Error('runHarnessChecks: workingCopy with blocks is required');
   if (typeof complete !== 'function') throw new Error('runHarnessChecks: complete(...) transport is required');
-  if (!localModel) throw new Error('runHarnessChecks: localModel is required (no hardcoded model)');
+  if (!classifyModelName) throw new Error('runHarnessChecks: classifyModelName is required (no hardcoded model)');
 
-  const homeworkCheck = makeHomeworkCheck({ complete, model: cheapModel || localModel });
-  const classifyModel = makeClassifier({ complete, model: localModel });
+  // Classify leaf runs on classifyBase/Headers when given (cloud), else local Ollama. The cheap
+  // homework-check stays on the local/cheap tier on purpose (it's a coherence gate, not the judge).
+  const classifyModel = makeClassifier({ complete, model: classifyModelName, base: classifyBase, headers: classifyHeaders });
+  const homeworkCheck = makeHomeworkCheck({ complete, model: cheapModel || classifyModelName, base: cheapBase, headers: cheapHeaders });
   const classifyFrontier = frontierModel ? makeClassifier({ complete, model: frontierModel, base: frontierBase, headers: frontierHeaders }) : null;
 
   let checkRunId = null;
   if (docId != null) {
-    checkRunId = registry.recordCheckRun(docId, { verificationSessionId: null, tier, model: localModel, status: 'running', version: sourceVersion });
+    checkRunId = registry.recordCheckRun(docId, { verificationSessionId: null, tier: classifyBase ? 'cloud' : tier, model: classifyModelName, status: 'running', version: sourceVersion });
   }
 
   const result = await runHarness(workingCopy, { callTool, embed, cosine, homeworkCheck, classifyModel, classifyFrontier, resolveOpts, onStage });

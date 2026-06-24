@@ -50,10 +50,22 @@ const DOC = [
   const doc = registry.registerDocument({ title: wc.title || 'Live-fire cert probe', author: 'Zoe (live-fire)', format: 'md' });
   registry.saveWorkingCopy(doc.id, doc.current_version, wc);
 
-  console.log(`[cert] doc #${doc.id} "${doc.title}" — running harness on ${model}…`);
+  // Inherit Echo's cloud key so classify runs on the cloud frontier (too big for local).
+  const ECHO_PYTHON = process.env.ECHO_PYTHON || path.join(process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo', '.venv', 'Scripts', 'python.exe');
+  const ECHO_CWD = process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo';
+  require('../lib/keystore').hydrateFromEcho(['OLLAMA_API_KEY'], { python: ECHO_PYTHON, cwd: ECHO_CWD });
+  const modelsLib = require('../lib/models');
+  const cloud = modelsLib.sources().find(s => s.tier === 'cloud' && s.token);
+  const cloudModel = process.env.AGENT_MODEL_ON_DEMAND_BACKGROUND || 'gemma4:31b-cloud';
+
+  console.log(`[cert] doc #${doc.id} "${doc.title}" — classify on ${cloud ? 'CLOUD ' + cloudModel : 'local ' + model}…`);
   const run = await editorChecks.runHarnessChecks({
     callTool, workingCopy: wc, complete, docId: doc.id, sourceVersion: doc.current_version,
-    author: doc.author, localModel: model, embed: memory.embed, cosine: memory.cosine,
+    author: doc.author,
+    classifyModelName: cloud ? cloudModel : model,
+    classifyBase: cloud ? cloud.base : null,
+    classifyHeaders: cloud ? { Authorization: `Bearer ${cloud.token}` } : null,
+    cheapModel: model, embed: memory.embed, cosine: memory.cosine,
   });
   console.log(`[cert] verdicts: ${JSON.stringify(run.mapped.summary.byVerdict)}  (gate: ${run.gate.proceed ? 'released' : 'aborted'})`);
 

@@ -6,6 +6,7 @@ const editorRegistry = require('./lib/editor_registry');   // Editor Studio: doc
 const editorImport = require('./lib/editor_import');         // Editor Studio: normalize-on-import
 const editorChecks = require('./lib/editor_checks');         // Editor Studio: "Run checks" orchestration
 const editorCert = require('./lib/editor_cert');             // Editor Studio: "Certify" issuance (B4)
+const modelsLib = require('./lib/models');                   // model sources (cloud frontier + local) resolver
 const { streamChat, complete, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
 const {
@@ -219,6 +220,13 @@ app.whenReady().then(() => {
   // Spawn path uses Echo's OWN venv interpreter by default (its deps aren't on bare `python`);
   // ECHO_PYTHON env still overrides. The adopt path doesn't touch this.
   const ECHO_PYTHON = process.env.ECHO_PYTHON || path.join(ECHO_CWD, '.venv', 'Scripts', 'python.exe');
+  // Inherit Echo's cloud credential (env → OS keychain "nx-echo" → .env) via Echo's own resolver,
+  // so Zoe's verification classify leaf can reach the cloud frontier with the SAME key the engine
+  // uses. Resolved into memory only — never written or logged (names only).
+  try {
+    const r = require('./lib/keystore').hydrateFromEcho(['OLLAMA_API_KEY'], { python: ECHO_PYTHON, cwd: ECHO_CWD });
+    console.log(`[main] cloud key: ${process.env.OLLAMA_API_KEY ? 'inherited from Echo (' + r.resolved.join(',') + ')' : 'absent — cloud classify falls back to local'}`);
+  } catch (e) { console.error('[main] cloud key hydrate failed:', e.message); }
   engineSupervisor = new EngineSupervisor({
     host: echoCfg.host, port: echoCfg.port,
     python: ECHO_PYTHON,
@@ -575,10 +583,21 @@ ipcMain.handle('editor:run-checks', async (_e, docId) => {
     const workingCopy = editorRegistry.getWorkingCopy(docId, doc.current_version);
     if (!workingCopy || !Array.isArray(workingCopy.blocks)) return { ok: false, error: 'no working copy for this version' };
 
+    // Classify leaf runs on the CLOUD FRONTIER (this verification judgment is too big for a local
+    // model). Resolve the cloud endpoint+bearer from the inherited key; pick the cloud model from
+    // the editor preference, else the engine's on-demand slot, else the operator's known good tag.
+    const cloud = modelsLib.sources().find(s => s.tier === 'cloud' && s.token);
+    const cloudModel = modelsLib.getModelFor('editor', null) || process.env.AGENT_MODEL_ON_DEMAND_BACKGROUND || 'gemma4:31b-cloud';
+    const useCloud = !!cloud;
+    if (!useCloud) console.warn('[editor] no cloud key — classify falling back to local', MODEL);
+
     const res = await editorChecks.runHarnessChecks({
       callTool, workingCopy, complete, docId,
       sourceDocPath: doc.echo_doc_path || null, author: doc.author, sourceVersion: doc.current_version,
-      localModel: MODEL,                              // classify leaf = the local 24B (no hardcoded model)
+      classifyModelName: useCloud ? cloudModel : MODEL,
+      classifyBase: useCloud ? cloud.base : null,
+      classifyHeaders: useCloud ? { Authorization: `Bearer ${cloud.token}` } : null,
+      cheapModel: MODEL,                              // homework-check stays local/cheap (coherence gate)
       embed: memoryLib.embed, cosine: memoryLib.cosine,
       onStage: (name, payload) => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('editor:check-progress', { name, payload }); } catch {} },
     });

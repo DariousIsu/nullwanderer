@@ -46,7 +46,15 @@ const DOC = [
   const client = echoLib.fromEnv({ url: cfg.url, token: cfg.token });
   const callTool = (n, a) => client.callTool(n, a);
   const model = config.model();
-  console.log(`[livefire] local classify/homework model: ${model}`);
+
+  // Inherit Echo's cloud key (env→keychain→.env) so classify runs on the cloud frontier.
+  const ECHO_PYTHON = process.env.ECHO_PYTHON || path.join(process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo', '.venv', 'Scripts', 'python.exe');
+  const ECHO_CWD = process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo';
+  require('../lib/keystore').hydrateFromEcho(['OLLAMA_API_KEY'], { python: ECHO_PYTHON, cwd: ECHO_CWD });
+  const modelsLib = require('../lib/models');
+  const cloud = modelsLib.sources().find(s => s.tier === 'cloud' && s.token);
+  const cloudModel = process.env.AGENT_MODEL_ON_DEMAND_BACKGROUND || 'gemma4:31b-cloud';
+  console.log(`[livefire] classify tier: ${cloud ? 'CLOUD ' + cloudModel + ' @ ' + cloud.base : 'local ' + model} · homework: local ${model}`);
 
   console.log('[livefire] warming bge-small embedder…');
   await memory.warm();
@@ -57,7 +65,11 @@ const DOC = [
   const t0 = Date.now();
   const res = await editorChecks.runHarnessChecks({
     callTool, workingCopy: wc, complete, docId: null,
-    localModel: model, embed: memory.embed, cosine: memory.cosine,
+    classifyModelName: cloud ? cloudModel : model,
+    classifyBase: cloud ? cloud.base : null,
+    classifyHeaders: cloud ? { Authorization: `Bearer ${cloud.token}` } : null,
+    cheapModel: model,
+    embed: memory.embed, cosine: memory.cosine,
     onStage: (name, payload) => console.log(`  [stage] ${name}:`, JSON.stringify(payload)),
   });
   const dt = ((Date.now() - t0) / 1000).toFixed(1);

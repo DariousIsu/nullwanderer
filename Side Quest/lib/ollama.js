@@ -61,6 +61,8 @@ async function streamChat({ model, messages, options = {}, onToken, signal }) {
  * Optional `base` selects a non-default endpoint (e.g. an Ollama-Cloud base for the frontier tier).
  */
 async function complete({ model, messages, options = {}, base = OLLAMA_BASE, headers = {}, signal }) {
+  base = base || OLLAMA_BASE;          // coalesce explicit null (default params only fill undefined)
+  headers = headers || {};
   const res = await fetch(`${base}/api/chat`, {
     method: 'POST',
     headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
