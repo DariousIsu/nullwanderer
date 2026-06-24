@@ -10,14 +10,26 @@
  * Pure parsing/selection helpers are separated from I/O so they're unit-testable
  * offline (smoke_models.js); the preference store is a thin layer over db meta.
  *
- * NB: this lists Zoe's LOCAL Ollama pool (/api/tags). The cloud-tier pool
- * (Echo's gateway / Ollama Cloud) is merged in at the Editor-wiring step — this
- * module stays the local-discovery + preference core.
+ * SOURCES: two Ollama-protocol endpoints, merged + tier-tagged —
+ *   - LOCAL  : OLLAMA_BASE (localhost) — Zoe's 24B + small models
+ *   - CLOUD  : OLLAMA_CLOUD_BASE (+ OLLAMA_CLOUD_KEY bearer) — frontier models
+ * Cloud is the priority tier for verification-class workspaces (Lucas); local
+ * is the secondary subset. Cloud source is OPTIONAL — absent env → local only,
+ * no error. Endpoints/keys come from env (never hardcoded model names or creds).
  */
 const OLLAMA_BASE = process.env.OLLAMA_BASE || 'http://localhost:11434';
 const PREF_PREFIX = 'model.';            // db meta key = `model.<workspace>`
 const CONTEXT_TTL_MS = 10 * 60 * 1000;   // cache /api/show context lookups
-const _ctxCache = new Map();             // name -> { ctx, at }
+const _ctxCache = new Map();             // `${base}::${name}` -> { ctx, at }
+
+// The configured model sources, in display priority (cloud frontier first).
+function sources() {
+  const out = [];
+  const cloudBase = process.env.OLLAMA_CLOUD_BASE;
+  if (cloudBase) out.push({ tier: 'cloud', base: cloudBase, token: process.env.OLLAMA_CLOUD_KEY || null });
+  out.push({ tier: 'local', base: OLLAMA_BASE, token: null });
+  return out;
+}
 
 // ---- pure helpers (no I/O — unit-tested) --------------------------------
 
@@ -54,12 +66,30 @@ function parseContextLength(showJson) {
   return null;
 }
 
-// Pick the best default for a workspace: the largest-context model meeting an
-// optional floor. Ties keep list order (stable). Returns the model name or null.
-function pickDefault(modelsWithCtx, { minContext = 0 } = {}) {
-  const eligible = (modelsWithCtx || []).filter(m =>
+// Order a merged model list for the selector: configured tier priority first
+// (cloud before local), then largest context, then name. Stable, pure.
+const TIER_RANK = { cloud: 0, local: 1 };
+function orderForSelector(models) {
+  return (models || []).slice().sort((a, b) => {
+    const ta = TIER_RANK[a.tier] ?? 9, tb = TIER_RANK[b.tier] ?? 9;
+    if (ta !== tb) return ta - tb;
+    const ca = a.contextLength || 0, cb = b.contextLength || 0;
+    if (ca !== cb) return cb - ca;
+    return String(a.name).localeCompare(String(b.name));
+  });
+}
+
+// Pick the best default for a workspace: meets an optional context floor; if
+// preferTier is set, a model of that tier wins over any other tier regardless
+// of context (verification → preferTier:'cloud'). Within the chosen set, the
+// largest context wins; ties keep list order. Returns the model name or null.
+function pickDefault(modelsWithCtx, { minContext = 0, preferTier = null } = {}) {
+  let eligible = (modelsWithCtx || []).filter(m =>
     m && m.name && (minContext ? (m.contextLength || 0) >= minContext : true));
   if (!eligible.length) return null;
+  if (preferTier && eligible.some(m => m.tier === preferTier)) {
+    eligible = eligible.filter(m => m.tier === preferTier);
+  }
   let best = eligible[0];
   for (const m of eligible) {
     if ((m.contextLength || 0) > (best.contextLength || 0)) best = m;
@@ -69,11 +99,13 @@ function pickDefault(modelsWithCtx, { minContext = 0 } = {}) {
 
 // ---- I/O: query the live Ollama daemon -----------------------------------
 
-async function _fetchJson(url, opts = {}, timeoutMs = 6000) {
+async function _fetchJson(url, { token = null, ...opts } = {}, timeoutMs = 6000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const headers = { ...(opts.headers || {}) };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   try {
-    const res = await fetch(url, { ...opts, signal: ctrl.signal });
+    const res = await fetch(url, { ...opts, headers, signal: ctrl.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } finally {
@@ -81,40 +113,53 @@ async function _fetchJson(url, opts = {}, timeoutMs = 6000) {
   }
 }
 
-// List installed models (names + sizes). Returns [] if Ollama is down.
-async function listModels() {
+// List models from one source, tier/source-tagged. [] if that endpoint is down.
+async function listFromSource(src) {
   try {
-    return parseTags(await _fetchJson(`${OLLAMA_BASE}/api/tags`));
+    const tags = parseTags(await _fetchJson(`${src.base}/api/tags`, { token: src.token }));
+    return tags.map(m => ({ ...m, tier: src.tier, base: src.base }));
   } catch {
     return [];
   }
 }
 
-// Context length for one model (cached). Null if unknown / Ollama down.
-async function modelContext(name) {
+// Local-only list (back-compat; the 24B/small pool).
+async function listModels() {
+  return listFromSource({ tier: 'local', base: OLLAMA_BASE, token: null });
+}
+
+// Context length for one model on a given base (cached). Null if unknown/down.
+async function modelContext(name, base = OLLAMA_BASE, token = null) {
   if (!name) return null;
-  const hit = _ctxCache.get(name);
+  const key = `${base}::${name}`;
+  const hit = _ctxCache.get(key);
   if (hit && (Date.now() - hit.at) < CONTEXT_TTL_MS) return hit.ctx;
   let ctx = null;
   try {
-    const show = await _fetchJson(`${OLLAMA_BASE}/api/show`, {
+    const show = await _fetchJson(`${base}/api/show`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      token,
       body: JSON.stringify({ model: name }),
     });
     ctx = parseContextLength(show);
   } catch {
     ctx = null;
   }
-  _ctxCache.set(name, { ctx, at: Date.now() });
+  _ctxCache.set(key, { ctx, at: Date.now() });
   return ctx;
 }
 
-// Full list with context lengths — what the selector tab renders.
+// Full merged list (all sources) with context lengths, ordered for the selector
+// (cloud frontier first, then by context desc). What the selector tab renders.
 async function listModelsDetailed() {
-  const models = await listModels();
-  await Promise.all(models.map(async m => { m.contextLength = await modelContext(m.name); }));
-  return models;
+  const srcs = sources();
+  const lists = await Promise.all(srcs.map(listFromSource));
+  const merged = lists.flat();
+  await Promise.all(merged.map(async m => {
+    m.contextLength = await modelContext(m.name, m.base, srcs.find(s => s.base === m.base)?.token || null);
+  }));
+  return orderForSelector(merged);
 }
 
 // ---- per-workspace preference (db meta) ----------------------------------
@@ -141,8 +186,10 @@ function clearModelFor(workspace) {
 
 module.exports = {
   listModels,
+  listFromSource,
   modelContext,
   listModelsDetailed,
+  sources,
   getModelFor,
   setModelFor,
   clearModelFor,
@@ -150,6 +197,7 @@ module.exports = {
   parseTags,
   parseContextLength,
   pickDefault,
+  orderForSelector,
   prefKey,
   OLLAMA_BASE,
 };

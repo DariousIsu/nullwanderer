@@ -99,6 +99,31 @@ const MIGRATIONS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_open_threads_status_ts ON open_threads(status, last_touched_ts)`,
   `CREATE INDEX IF NOT EXISTS idx_open_threads_parent ON open_threads(parent_id)`,
+  // open_questions — questions ZOE asked Lucas that await an answer (the QUD/grounding
+  // stack). Distinct from open_threads (her goals) and commitments (her beliefs): this is
+  // live CONVERSATIONAL state — "I asked, he hasn't answered." Surfaced on his next turn so
+  // a terse reply binds to the question; auto-closed once surfaced. See open_questions.js.
+  `CREATE TABLE IF NOT EXISTS open_questions (
+    id INTEGER PRIMARY KEY,
+    session_id INTEGER NOT NULL,
+    question TEXT NOT NULL,
+    asked_turn_id INTEGER,
+    status TEXT DEFAULT 'pending' CHECK(status IN ('pending','answered','dropped')),
+    answer_turn_id INTEGER,
+    created_ts INTEGER NOT NULL,
+    resolved_ts INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_open_questions_session_status ON open_questions(session_id, status, created_ts)`,
+  // conversation_state — a running summary of the LIVE conversation per session (recursive
+  // summarization, Wang 2023). The compact "where we are now" anchor that survives turns
+  // scrolling out of the 14-turn recency window, so she doesn't lose the thread on longer
+  // exchanges — and the voice-gate substrate (no scrollback to lean on). One row per session.
+  `CREATE TABLE IF NOT EXISTS conversation_state (
+    session_id INTEGER PRIMARY KEY,
+    summary TEXT,
+    turn_count INTEGER DEFAULT 0,
+    updated_ts INTEGER NOT NULL
+  )`,
   // protocols — durable user-AI negotiated agreements. ALWAYS injected, never aged.
   // Distinct memory class from turns (history), commitments (AI beliefs), or
   // open_threads (transient tasks). These are the rules of engagement.
@@ -644,6 +669,53 @@ function touchOpenThread(id, note = null) {
 
 function incrementThreadMention(id) {
   getDb().prepare('UPDATE open_threads SET mention_count = mention_count + 1 WHERE id = ?').run(id);
+}
+
+// --- Open Questions (QUD/grounding: questions SHE asked that await an answer) ---
+function insertOpenQuestion({ sessionId, question, askedTurnId = null }) {
+  const ts = Date.now();
+  const info = getDb()
+    .prepare(`INSERT INTO open_questions (session_id, question, asked_turn_id, status, created_ts)
+      VALUES (?, ?, ?, 'pending', ?)`)
+    .run(sessionId, question, askedTurnId, ts);
+  return { id: info.lastInsertRowid, ts };
+}
+// Pending questions for a session, newest first, within a recency floor (a question past
+// its moment shouldn't resurface). Small N — surfaced as a high-recency prompt block.
+function getPendingOpenQuestions(sessionId, { maxAgeMs = 30 * 60 * 1000, limit = 2 } = {}) {
+  const floor = Date.now() - maxAgeMs;
+  return getDb()
+    .prepare(`SELECT * FROM open_questions
+      WHERE session_id = ? AND status = 'pending' AND created_ts >= ?
+      ORDER BY created_ts DESC LIMIT ?`)
+    .all(sessionId, floor, limit);
+}
+// Close all pending questions for a session (called once they've been surfaced on a user
+// reply) — binds them to the answering turn so the lifecycle is auditable.
+function resolveOpenQuestions(sessionId, { answerTurnId = null, status = 'answered' } = {}) {
+  const now = Date.now();
+  const info = getDb()
+    .prepare(`UPDATE open_questions SET status = ?, answer_turn_id = ?, resolved_ts = ?
+      WHERE session_id = ? AND status = 'pending'`)
+    .run(status, answerTurnId, now, sessionId);
+  return info.changes;
+}
+
+// --- Conversation state (running "where we are now" summary, per session) ---
+function getConversationState(sessionId) {
+  return getDb().prepare('SELECT * FROM conversation_state WHERE session_id = ?').get(sessionId);
+}
+// Upsert the running summary. turnCount null → auto-increment on update, 0 on first insert.
+function upsertConversationState(sessionId, summary, turnCount = null) {
+  const now = Date.now();
+  getDb().prepare(`INSERT INTO conversation_state (session_id, summary, turn_count, updated_ts)
+      VALUES (?, ?, COALESCE(?, 0), ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        summary = excluded.summary,
+        turn_count = COALESCE(?, conversation_state.turn_count + 1),
+        updated_ts = excluded.updated_ts`)
+    .run(sessionId, summary, turnCount, now, turnCount);
+  return { sessionId, ts: now };
 }
 
 // Merge a child thread INTO a parent (umbrella) — the consolidation primitive.
@@ -1328,6 +1400,11 @@ module.exports = {
   incrementThreadMention,
   incrementThreadAction,
   mergeOpenThread,
+  insertOpenQuestion,
+  getPendingOpenQuestions,
+  resolveOpenQuestions,
+  getConversationState,
+  upsertConversationState,
   insertProtocol,
   getActiveProtocols,
   getProtocolByTrigger,

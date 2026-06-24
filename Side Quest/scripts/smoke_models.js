@@ -50,5 +50,22 @@ ok('pickDefault stable on ties', M.pickDefault([{ name: 'a', contextLength: 100 
 ok('prefKey namespaces + lowercases', M.prefKey('Editor') === 'model.editor');
 ok('prefKey trims', M.prefKey('  Chat ') === 'model.chat');
 
+// --- orderForSelector (cloud-first, then context desc) ---
+const MIXED = [
+  { name: 'local-big', tier: 'local', contextLength: 131072 },
+  { name: 'cloud-small', tier: 'cloud', contextLength: 32768 },
+  { name: 'cloud-big', tier: 'cloud', contextLength: 200000 },
+  { name: 'local-small', tier: 'local', contextLength: 8192 },
+];
+const ordered = M.orderForSelector(MIXED).map(m => m.name);
+ok('orderForSelector puts cloud first', ordered[0] === 'cloud-big' && ordered[1] === 'cloud-small', ordered.join(','));
+ok('orderForSelector orders local after cloud by ctx', ordered[2] === 'local-big' && ordered[3] === 'local-small', ordered.join(','));
+ok('orderForSelector is pure (no mutation)', MIXED[0].name === 'local-big');
+
+// --- pickDefault preferTier (verification → cloud wins over bigger local) ---
+ok('preferTier cloud beats larger-ctx local', M.pickDefault(MIXED, { preferTier: 'cloud' }) === 'cloud-big', `${M.pickDefault(MIXED, { preferTier: 'cloud' })}`);
+ok('preferTier falls back when tier absent', M.pickDefault([{ name: 'l', tier: 'local', contextLength: 8192 }], { preferTier: 'cloud' }) === 'l');
+ok('no preferTier → pure max-ctx overall', M.pickDefault(MIXED) === 'cloud-big', `${M.pickDefault(MIXED)}`);
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

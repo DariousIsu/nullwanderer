@@ -13,6 +13,7 @@
 const db = require('./db');
 
 const STALE_THREAD_DAYS = 14;
+const ACTIVE_STALE_DAYS = 10; // an active/pending thread untouched this long → stalled (decay)
 const STALE_GAP_DAYS = 21; // an un-acted capability gap this old → dismissed
 
 // SPIRAL/JUNK classifier — the aggressive-curation core. A free-association thought (or
@@ -48,10 +49,23 @@ function curateMonologue({ scanLast = 600 } = {}) {
 
 // Age stalled, long-untouched threads to 'abandoned'. Returns the count aged.
 // Pure DB + deterministic; safe to run on a timer or at boot.
-function curateThreads({ staleDays = STALE_THREAD_DAYS } = {}) {
-  const cutoff = Date.now() - staleDays * 24 * 60 * 60 * 1000;
-  let aged = 0;
+function curateThreads({ staleDays = STALE_THREAD_DAYS, activeStaleDays = ACTIVE_STALE_DAYS } = {}) {
+  const now = Date.now();
+  let stalledN = 0, aged = 0;
   try {
+    // 1) active/pending threads untouched beyond activeStaleDays → 'stalled'. Nothing demoted
+    //    active threads on neglect before, so the store grew into an 18-thread junk drawer the
+    //    idle loop + chat primacy kept working (incl. stale self-coaching goals). This starts
+    //    the decay clock; (2) then carries stalled → abandoned (drops from rotation).
+    const activeCutoff = now - activeStaleDays * 24 * 60 * 60 * 1000;
+    const goneQuiet = db.getDb()
+      .prepare(`SELECT id FROM open_threads WHERE status IN ('active','pending') AND last_touched_ts < ?`)
+      .all(activeCutoff);
+    for (const r of goneQuiet) {
+      db.markOpenThreadStatus(r.id, 'stalled', { reason: `curator: active > ${activeStaleDays}d untouched` });
+      stalledN++;
+    }
+    const cutoff = now - staleDays * 24 * 60 * 60 * 1000;
     const stale = db.getDb()
       .prepare(`SELECT id FROM open_threads WHERE status = 'stalled' AND last_touched_ts < ?`)
       .all(cutoff);
@@ -60,8 +74,9 @@ function curateThreads({ staleDays = STALE_THREAD_DAYS } = {}) {
       aged++;
     }
   } catch (e) { console.error('[curator] curateThreads failed:', e.message); }
+  if (stalledN > 0) console.log(`[curator] stalled ${stalledN} long-untouched active thread(s)`);
   if (aged > 0) console.log(`[curator] aged ${aged} stale thread(s) → abandoned`);
-  return aged;
+  return aged + stalledN;
 }
 
 // Age long-unacted capability gaps to 'dismissed' so proposals don't pile up.

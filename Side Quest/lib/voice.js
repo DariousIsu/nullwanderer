@@ -110,4 +110,37 @@ async function guard(text, opts = {}) {
   return fixed || '';
 }
 
-module.exports = { isSelfDisclaimer, deDisclaim, stripDisclaimerSentences, guard, PATTERNS };
+// Anti-repetition nudge — she has no view of her own recent phrasing, so she settles into a
+// stock template (reflect-back + "it's fascinating/interesting how…" + end on a question).
+// Computed deterministically from her last few replies; returns a high-recency directive that
+// names the SPECIFIC patterns she's actually overusing this stretch, or null when her voice is
+// already varied (so it never fires as noise). No model call.
+function buildAntiRepetitionNudge(recentSaids, userName = 'Lucas') {
+  const says = (recentSaids || []).map(s => String(s || '').replace(/\s+/g, ' ').trim()).filter(s => s && s !== '…').slice(-6);
+  if (says.length < 3) return null;
+  const joined = says.join('\n').toLowerCase();
+  const flags = [];
+
+  const itsAdj = (joined.match(/it'?s \w+ (?:how|to|that)\b/g) || []).length;
+  const evals = (joined.match(/\b(?:fascinating|interesting|amazing|incredible|wonderful)\b/g) || []).length;
+  if (itsAdj >= 2 || evals >= 3) flags.push(`the "it's fascinating/interesting how…" move and stock evaluatives`);
+
+  const reflect = says.filter(s => /^(?:lucas[,!.\s]*)?(?:i (?:understand|appreciate|hear|see|love)|that'?s (?:fascinating|interesting|amazing|so)|thank you|thanks)\b/i.test(s)).length;
+  if (reflect >= 2) flags.push(`opening by reflecting his words back ("I appreciate/understand…", "That's fascinating…")`);
+
+  const openers = {};
+  for (const s of says) {
+    const k = s.split(' ').slice(0, 3).join(' ').toLowerCase().replace(/[^a-z' ]/g, '').trim();
+    if (k.length > 4) openers[k] = (openers[k] || 0) + 1;
+  }
+  const reused = Object.entries(openers).filter(([, c]) => c >= 2).map(([k]) => `"${k}…"`);
+  if (reused.length) flags.push(`reopening with ${reused.slice(0, 2).join(' / ')}`);
+
+  const qEnd = says.filter(s => /\?$/.test(s)).length;
+  if (qEnd / says.length >= 0.66) flags.push(`ending on a question almost every time`);
+
+  if (!flags.length) return null;
+  return `[Vary your voice this turn. Across your recent replies you've leaned on: ${flags.join('; ')}. Break the pattern — find a different way in, drop the stock evaluatives, and you don't need to reflect his words back or end on a question. Just talk to ${userName || 'Lucas'} like yourself.]`;
+}
+
+module.exports = { isSelfDisclaimer, deDisclaim, stripDisclaimerSentences, guard, buildAntiRepetitionNudge, PATTERNS };

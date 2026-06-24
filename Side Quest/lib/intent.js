@@ -149,4 +149,27 @@ function isActionable(text) {
   return _IMPERATIVE_RE.test(t);                              // imperative aimed at a thing
 }
 
-module.exports = { detectWebIntent, detectActOnOpenPage, detectPickCharacter, detectRecordCommand, classifyQuery, isRecallQuery, isActionable, SEARCH_HOME };
+// SOCIAL / PERSONAL turn — Lucas is just talking WITH her (a greeting, a check-in, casual
+// relating), not handing her work. On these turns the work-goal scaffolding + assistant
+// register should RECEDE so she's present, instead of answering "how are you" with a status
+// report on her threads + professionalism + "Best, Zoe". Conservative: never fires on a task
+// (isActionable wins), and a work-progress check ("how are you doing on the op-ed") is
+// excluded by the work-reference guard, so only genuine relational turns qualify.
+const _GREETING_RE = /^\s*(?:hi|hey|hello|yo|sup|hiya|heya|howdy|morning|evening|good\s*(?:morning|afternoon|evening|night)|goodnight)\b/i;
+const _CHECKIN_RE = /\bhow\s+(?:are|'?re|r)\s+(?:you|ya|u)\b|\bhow\s+(?:you|ya)\s+doin[g']?\b|\bhow'?s\s+(?:it\s+going|things|life|your\s+(?:day|night|weekend|morning|evening))\b|\bhow\s+have\s+you\s+been\b|\bhow\s+was\s+your\b|\byou\s+(?:there|around|awake|up)\b|\bwhat'?s\s+up\b|\bmiss(?:ed)?\s+you\b|\bgood\s+to\s+(?:see|hear\s+from)\s+you\b|\bjust\s+(?:checking\s+in|saying\s+(?:hi|hey|hello))\b/i;
+const _ENDEARMENT_RE = /\b(?:kiddo|buddy|pal|sweetie|hon)\b/i;
+const _WORK_REF_RE = /\b(?:on|with|about|for|re)\s+(?:the|your|our|that|this|my|a)\b|\b(?:op-?ed|article|draft|bill|research|project|report|piece|spreadsheet|sheet|deck|memo|deadline|task|assignment)\b/i;
+function isSocialTurn(text) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  if (isActionable(t)) return false;                    // a task owns the turn, not chit-chat
+  const checkin = _CHECKIN_RE.test(t), greeting = _GREETING_RE.test(t), endear = _ENDEARMENT_RE.test(t);
+  if (!checkin && !greeting && !endear) return false;
+  if (_WORK_REF_RE.test(t)) return false;               // "how are you doing on the op-ed" = work
+  const words = t.split(/\s+/).length;
+  if (checkin) return true;                             // a state check-in is social at any length
+  if (greeting && words <= 12) return true;            // a bare/opening greeting
+  return endear && words <= 16;                        // an address term in a short personal line
+}
+
+module.exports = { detectWebIntent, detectActOnOpenPage, detectPickCharacter, detectRecordCommand, classifyQuery, isRecallQuery, isActionable, isSocialTurn, SEARCH_HOME };

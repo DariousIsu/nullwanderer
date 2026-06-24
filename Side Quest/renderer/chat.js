@@ -183,6 +183,28 @@ function renderHistoricalAiPair(thoughtText, saidText) {
   transcript.appendChild(div);
 }
 
+// THINKING INDICATOR — she generates a (sometimes long) private <think> before any <say>
+// streams, so without this the chat looks frozen for several seconds, then text appears (or,
+// if the think ran long and truncated, "…"). Show pulsing dots the moment a message is sent;
+// clear them on the first streamed token, on complete, or on error.
+let thinkingNode = null;
+function showThinking() {
+  if (thinkingNode) return;
+  thinkingNode = document.createElement('div');
+  thinkingNode.className = 'thinking';
+  thinkingNode.setAttribute('aria-label', 'Zoe is thinking');
+  for (let i = 0; i < 3; i++) {
+    const d = document.createElement('span');
+    d.className = 'dot';
+    thinkingNode.appendChild(d);
+  }
+  transcript.appendChild(thinkingNode);
+  scrollMaybe();
+}
+function hideThinking() {
+  if (thinkingNode) { thinkingNode.remove(); thinkingNode = null; }
+}
+
 let liveSayBuffer = '';
 
 function cleanLiveSay(s) {
@@ -198,6 +220,7 @@ function cleanLiveSay(s) {
 }
 
 window.sq.onSayToken((token) => {
+  hideThinking();
   if (!currentAiTurnDiv) {
     currentAiTurnDiv = makeAiTurn();
     currentAiSaidNode = makeSaidNode('');
@@ -211,6 +234,7 @@ window.sq.onSayToken((token) => {
 });
 
 window.sq.onComplete((info) => {
+  hideThinking();
   const turnDiv = currentAiTurnDiv;
   const saidNode = currentAiSaidNode;
   if (turnDiv && saidNode) {
@@ -261,6 +285,7 @@ async function backfillThoughtIntoTurn(turnDiv, saidNode) {
 }
 
 window.sq.onError((err) => {
+  hideThinking();
   renderEphemeral(`— ${err} —`);
   currentAiTurnDiv = null;
   currentAiSaidNode = null;
@@ -354,6 +379,7 @@ async function send() {
     ? `\n[attached: ${pendingAttachments.map(a => a.name).join(', ')}]`
     : '');
   renderUserTurn(displayText);
+  showThinking();
   const attachmentsToSend = pendingAttachments.slice();
   pendingAttachments.length = 0;
   renderAttachments();

@@ -1,6 +1,8 @@
 # Editor's Studio — spec (design)
 
-> **Status: DESIGN.** A **STUDIO**: operator-driven, self-contained, programmatic; modeled on the QR studio. No Zoe / no language interaction in the workflow — the cloud model is invoked as a *service behind a button*. Zoe is **aware-only** (holds a memory pointer to it). Built ON Echo's existing `verification_session` spine, extended. See [ZOE_HOST_ARCHITECTURE.md](ZOE_HOST_ARCHITECTURE.md).
+> **Status: DESIGN + HARNESS BUILT.** A **STUDIO**: operator-driven, self-contained, programmatic; modeled on the QR studio. No Zoe / no language interaction in the workflow — the cloud model is invoked as a *service behind a button*. Zoe is **aware-only** (holds a memory pointer to it). Built ON Echo's existing `verification_session` spine, extended. See [ZOE_HOST_ARCHITECTURE.md](ZOE_HOST_ARCHITECTURE.md).
+>
+> **HOST CONTEXT (locked 2026-06-23):** the Editor lands as a **surface in "My Workspace"** of the Zoe-led 3-window app. Per the architecture lock, Echo's engine is **absorbed + owned** by Zoe's app — so "Run checks" runs the verification on the **owned gateway** natively (no foreign-Echo attach), and the cloud-model selection rides Zoe's source-aware model registry (`lib/models.js`, cloud-first). The harness (`studio/editor.html` + `studio/shell.css`) IS the implementation spec; the findings seam is pinned in `studio/checks_contract.js` (smoke 22/22); the live "Run checks" loop was proven end-to-end against the engine (`scripts/smoke_editor_roundtrip.js`, 6/6).
 
 ## The "Studio" pattern (this is a reusable template)
 A studio is a **near-self-contained interface for one mission**, giving Lucas **direct programmatic interaction** — deterministic buttons → backend calls, its own state, its own persistence/log. The cloud model (where needed) is a recipe-locked **service** triggered by a button, returning structured results the UI renders. Studios do NOT route through Zoe's chat or her construct.

@@ -597,7 +597,7 @@ function extractUrls(text) {
   return [...new Set(matches)].slice(0, 3);
 }
 
-const { detectWebIntent, detectActOnOpenPage, detectPickCharacter, detectRecordCommand, classifyQuery, isRecallQuery, isActionable } = require('./lib/intent');
+const { detectWebIntent, detectActOnOpenPage, detectPickCharacter, detectRecordCommand, classifyQuery, isRecallQuery, isActionable, isSocialTurn } = require('./lib/intent');
 const preferences = require('./lib/preferences');
 const personal = require('./lib/personal');
 const playSession = require('./lib/play_session');
@@ -985,7 +985,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let recentMonologue = db.getRecentMonologueByType('thought', 5);
   let recentReadings = db.getRecentMonologueByType('reading', 2, { excludeConsolidated: true });
   const heldCommitments = db.getHeldCommitments(8);
-  const openThreads = db.getActiveOpenThreads(3);
+  // REGISTER GATE (conversation harness, Piece 2): on a personal/social turn — a greeting or
+  // check-in, not a work request — the work-goal scaffolding RECEDES so she's present instead
+  // of reciting goals/professionalism at him. Her threads still drive her idle loop + tools;
+  // they just stop colonizing a warm "how are you". (Root cause of the corporate-reply bug.)
+  const socialTurn = isSocialTurn(userMessage);
+  const openThreads = socialTurn ? [] : db.getActiveOpenThreads(3);
+  // WHERE-WE-ARE (conversation harness, Piece 3): the running summary of this conversation,
+  // so she stays on-thread even after raw turns scroll out of the recency window.
+  const convoStateBlock = require('./lib/convo_state').buildBlock(sessionId, userName);
   const protocols = db.getActiveProtocols();
   const pendingInbounds = db.getPendingInbounds(6);
 
@@ -1011,6 +1019,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // Pull recent turns BEFORE the just-inserted user turn; the new message is appended separately
   const recentTurnsAll = db.getRecentTurns(RECENT_TURN_LIMIT + 1);
   const recentTurns = recentTurnsAll.slice(0, -1); // drop the freshly-inserted user turn
+  // ANTI-REPETITION (conversation harness): she has no view of her own recent phrasing and
+  // settles into a stock template (reflect-back + "it's fascinating how…" + a question). Nudge
+  // her off whatever pattern she's ACTUALLY overusing this stretch (null when her voice is varied).
+  const varietyNudge = require('./lib/voice').buildAntiRepetitionNudge(
+    recentTurns.filter(t => t.speaker === 'ai_said').map(t => t.content), userName);
 
   // If the user shared links or attached files, surface them prominently in the message
   let composedUserMessage = userMessage;
@@ -1080,7 +1093,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // CAPABILITY PROPOSAL ON RETURN: if Lucas was away a while and she logged a
   // capability gap during idle, surface the top one for her to PROPOSE (her call).
   let capabilityProposalBlock = null;
-  if (idleSinceLastTurn > RETURN_IDLE_MS) {
+  if (idleSinceLastTurn > RETURN_IDLE_MS && !socialTurn) {
     try { capabilityProposalBlock = gapsLib.buildReturnProposalBlock(userName); } catch (e) { console.error('[main] gap proposal failed:', e.message); }
   }
 
@@ -1097,6 +1110,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const recall = isRecallQuery(userMessage);
     if (userQv) relevantPastTurns = await memoryLib.retrieveTurns(userMessage, { k: recall ? 4 : 3, excludeIds: recentTurns.map(t => t.id), qv: userQv, userOnly: recall, dropQuestions: recall });
   } catch (e) { console.error('[main] episodic recall failed:', e.message); }
+
+  // OPEN-QUESTION SURFACING (conversation harness, Piece 1) — if she asked Lucas something on
+  // a prior turn, his message is very likely the answer. Surface it (exactly once) as
+  // high-recency state so a terse reply binds to her question instead of floating free;
+  // takePending resolves it in the same breath so it doesn't nag next turn.
+  let openQuestionBlock = null;
+  try {
+    const pend = require('./lib/open_questions').takePending(sessionId, userTurnRow && userTurnRow.id);
+    openQuestionBlock = require('./lib/open_questions').buildBlock(pend, userName);
+  } catch (e) { console.error('[main] open-question surface failed:', e.message); }
 
   // SCOPED CONTEXT — relevance-gate the recency blocks (recent monologue + readings) against
   // the message so off-topic between-turn musing can't ride along. Runs when the TASK should
@@ -1135,6 +1158,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     selfModelBlock,
     personalBlock,
     relevantPastTurns,
+    openQuestionBlock,
+    socialTurn,
+    convoStateBlock,
+    varietyNudge,
     echoSuitBlock: echoSuit ? echoSuit.suitContextBlock() : null,
     newUserMessage: composedUserMessage
   });
@@ -1173,7 +1200,34 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   }
 
-  const { thought, say, truncated } = parser.finalize();
+  let { thought, say, truncated } = parser.finalize();
+
+  // EMPTY-SAY RECOVERY (the "…" bug): every blank reply traces to the generation being
+  // truncated mid-<think> (against num_ctx 8192) before she ever reaches <say> — she thinks
+  // but never speaks, and the user gets a bare "…". If she produced no spoken reply AND isn't
+  // deliberately acting through a tool (whose follow-up would speak), give her ONE bounded
+  // retry to actually say something: brief, think-skipping, num_predict-capped so it stays well
+  // inside the output budget and can't re-truncate. (Piece 3a already shrank the prompt to make
+  // this rarer; this guarantees she never goes silent on a plain conversational turn.)
+  const _hasToolTag = /<(web-open|web-read|web-click|web-type|web-back|web-close|browse|file-write|file-append|file-read|file-list|observe-screen|read-inbox|email|discord-dm|schedule|notify|clipboard-read|clipboard-write|echo-find|echo-do|chat-send|navigate|recall)\b/i.test(`${thought || ''}\n${say || ''}`);
+  if ((!say || !say.trim()) && !_hasToolTag && !pulledFromThought) {
+    try {
+      const gist = thought ? thought.replace(/\s+/g, ' ').trim().slice(-360) : '';
+      const nudge = gist
+        ? `[Your reply came out blank — you thought it through but never actually spoke. You were thinking: "${gist}". Now say it to ${userName || 'Lucas'} out loud — briefly, 1–4 sentences, in your own voice. Don't think first; go straight to a <say>…</say>.]`
+        : `[Your reply came out blank — you didn't actually say anything. Respond to ${userName || 'Lucas'} now, briefly (1–4 sentences), in your own voice. Don't think first; go straight to a <say>…</say>.]`;
+      const retryParser = new TagStreamParser({ onSayToken: (t) => { try { emit(t); } catch {} } });
+      await streamChat({
+        model: MODEL,
+        messages: messages.concat([{ role: 'user', content: nudge }]),
+        options: { num_predict: 240 },
+        onToken: (c) => retryParser.feed(c)
+      });
+      const r = retryParser.finalize();
+      if (r.say && r.say.trim()) { say = r.say; truncated = r.truncated; if (r.thought) thought = thought ? `${thought}\n${r.thought}` : r.thought; }
+      else console.log('[main] empty-say retry still produced no say');
+    } catch (e) { console.error('[main] empty-say retry failed:', e.message); }
+  }
 
   // Detect <wonder>X</wonder> in thought OR say — Stheno can self-prompt by emitting
   // a wonder tag, which fires a gemma↔Stheno self-dialogue async. Strip from stored
@@ -1334,6 +1388,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   });
   // Embed her reply too (async) so it's recallable later via episodic retrieval.
   try { memoryLib.embed(finalSaid).then(v => { if (v && saidRow && saidRow.id) db.setTurnEmbedding(saidRow.id, JSON.stringify(v)); }).catch(() => {}); } catch {}
+  // OPEN-QUESTION STACK (conversation harness, Piece 1): if her reply asked Lucas something,
+  // record it as pending conversational state so his next message binds to it — she stops
+  // forgetting she asked. Detection runs on the main chat say-storage (the dominant path).
+  try { require('./lib/open_questions').recordFromSay(sessionId, finalSaid, saidRow && saidRow.id); } catch (e) { console.error('[main] open-question record failed:', e.message); }
+  // CONVERSATION STATE (conversation harness, Piece 3): fold this exchange into the running
+  // "where we are" summary — async + non-blocking (one cheap bounded call) so it's ready next turn.
+  try { require('./lib/convo_state').update(sessionId, userMessage, finalSaid).catch(() => {}); } catch {}
 
   try {
     // Include the corrected say ONLY when we rewrote it, so the renderer replaces the

@@ -1,8 +1,17 @@
 # Zoe-as-Host — Echo Integration Redesign (design doc)
 
-> **Status: DESIGN / decision-pending.** Grounded in a read-only study of both Echo repos
-> (`NX ECHO/nx-echo` engine + `NX ECHO/ui` Electron/React UI), 2026-06-23. Supersedes the
-> "Zoe wears Echo as a suit over HTTP" attach model. Nothing built yet.
+> **Status: DECISION LOCKED 2026-06-23.** Grounded in a read-only study of both Echo repos
+> (`NX ECHO/nx-echo` engine + `NX ECHO/ui` Electron/React UI). Supersedes the
+> "Zoe wears Echo as a suit over HTTP" attach model. Host question RESOLVED (see below).
+> Editor Studio design + harness built/validated; engine absorption is the next keystone build.
+
+## ⭐ DECISION LOCKED (2026-06-23)
+- **HOST = Zoe's Electron app.** Her construct runs **as-is in Node main — NO Python rewrite** (she's close to ready after major persona/memory breakthroughs; preserving the tuned construct is a hard requirement). She is the operator-will *and* keeps her own chat window.
+- **Echo's Python engine is ABSORBED + OWNED**, not attached. Zoe's app becomes the **sole launcher/supervisor**. Once owned, **extending the engine IS "the Zoe build"** (model-roster tool, verifier model-param, etc. go into the owned engine). The unlock that ended the recent friction: *own it, don't attach to a foreign Echo.* ("Don't modify Echo's repo" = don't patch the separate standalone app; the absorbed engine is the product's.)
+- **3-WINDOW WORKSPACE UI, built fresh** = **Zoe** (chat, her home) · **Canvas** (shared) · **My Workspace** (Echo's proving-ground surfaces **collapsed/consolidated** + studios incl. the Editor). Echo's React surfaces are *replaced* by this, not ported 1:1 — so Echo-as-host would save ~no UI work (another reason Zoe stays host).
+- **ORIGINAL STANDALONE ECHO RETIRES** on successful launch of the new Zoe-led program with all UI reworks. Runs in PARALLEL until then (dev against :8765 via `lib/echo.js`, as today).
+- **Capability friction gone:** gateway / model-roster / cloud-creds / verification become native in the owned engine — no JS reimplementation. `lib/models.js` local-Ollama discovery stays as the "local subset"; cloud tier + verification ride the owned gateway.
+- **BUILD REORDER:** absorption (Zoe supervises+owns the engine, sole launcher) → FIRST; then 3-window UI + surface collapse; Editor lands as a My Workspace surface (today's harness IS its spec). Large multi-step lift; its own focused build. Today's work (harness=spec, recipe book engine-side, `studio/checks_contract.js` + `lib/models.js` + snap-back) all ports in.
 
 ## The goal (Lucas)
 Zoe is the **host program**. Her **chat stays its own window**. A **new, clean Echo interface

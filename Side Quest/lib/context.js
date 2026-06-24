@@ -179,7 +179,7 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
  *   then    = alternating user / assistant from recentTurns (assistant carries <think>/<say>)
  *   finally = the new user message
  */
-function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, retrievedKnowledgeBlock, capabilityProposalBlock, selfModelBlock, personalBlock, relevantPastTurns, echoSuitBlock, newUserMessage }) {
+function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, retrievedKnowledgeBlock, capabilityProposalBlock, selfModelBlock, personalBlock, relevantPastTurns, openQuestionBlock, socialTurn, convoStateBlock, varietyNudge, echoSuitBlock, newUserMessage }) {
   let systemContent = sub(BOOTSTRAP, userName);
 
   // AWARENESS — temporal + system facts prepended to system prompt so she knows
@@ -297,6 +297,13 @@ function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonol
     systemContent += capabilityProposalBlock;
   }
 
+  // WHERE-WE-ARE (conversation harness, Piece 3) — the running summary of THIS conversation,
+  // updated incrementally each turn. Carries the arc so she stays on-thread even after the raw
+  // turns scroll out of the recency window (the lose-the-thread fix), in ~120 words.
+  if (convoStateBlock) {
+    systemContent += `\n\n---\n${convoStateBlock}`;
+  }
+
   // EARLIER-IN-CONVERSATION RECALL — past turns (outside the recency window) that are
   // semantically relevant to what they just asked. Fixes the "we discussed X earlier but
   // it scrolled out of the last-N turns" gap, so she recalls it instead of diverting to a
@@ -337,35 +344,37 @@ Drawing on interior is what makes you a continuous mind rather than a fresh-cont
 
   const messages = [{ role: 'system', content: systemContent }];
 
+  // BUDGET HYGIENE (conversation harness, Piece 3a): replaying EVERY prior assistant turn's
+  // full <think> verbatim was evicting real dialogue under num_ctx 8192 — the lose-the-thread
+  // squeeze. The WHERE-WE-ARE summary now carries the older arc, so only the most-recent
+  // KEEP_FULL_THINK assistant turns replay their full interior; older ones replay just <say>.
+  const KEEP_FULL_THINK = 2;
+  const entries = [];
   let i = 0;
   while (i < recentTurns.length) {
     const t = recentTurns[i];
-    if (t.speaker === 'user') {
-      messages.push({ role: 'user', content: t.content });
-      i++;
-    } else if (t.speaker === 'ai_thought') {
-      const thought = t.content;
+    if (t.speaker === 'user') { entries.push({ role: 'user', content: t.content }); i++; }
+    else if (t.speaker === 'ai_thought') {
       let said = '';
-      if (i + 1 < recentTurns.length && recentTurns[i + 1].speaker === 'ai_said') {
-        said = recentTurns[i + 1].content;
-        i += 2;
-      } else {
-        i++;
-      }
-      messages.push({
-        role: 'assistant',
-        content: `<think>\n${thought}\n</think>\n<say>\n${said}\n</say>`
-      });
-    } else if (t.speaker === 'ai_said') {
-      // orphan said (no thought row) — wrap in tags so structure is consistent
-      messages.push({
-        role: 'assistant',
-        content: `<say>\n${t.content}\n</say>`
-      });
-      i++;
-    } else {
-      i++;
+      if (i + 1 < recentTurns.length && recentTurns[i + 1].speaker === 'ai_said') { said = recentTurns[i + 1].content; i += 2; }
+      else i++;
+      entries.push({ role: 'assistant', thought: t.content, say: said });
     }
+    else if (t.speaker === 'ai_said') { entries.push({ role: 'assistant', thought: '', say: t.content }); i++; }
+    else i++;
+  }
+  const assistantTotal = entries.reduce((n, e) => n + (e.role === 'assistant' ? 1 : 0), 0);
+  let assistantSeen = 0;
+  for (const e of entries) {
+    if (e.role === 'user') { messages.push({ role: 'user', content: e.content }); continue; }
+    assistantSeen++;
+    const keepThink = e.thought && (assistantTotal - assistantSeen) < KEEP_FULL_THINK;
+    messages.push({
+      role: 'assistant',
+      content: keepThink
+        ? `<think>\n${e.thought}\n</think>\n<say>\n${e.say}\n</say>`
+        : `<say>\n${e.say}\n</say>`
+    });
   }
 
   // NOTE: the open-threads RECENCY (depth-2) injection that used to prepend a goals
@@ -421,6 +430,30 @@ Drawing on interior is what makes you a continuous mind rather than a fresh-cont
     const iNudge = buildInboxNudge(newUserMessage);
     if (iNudge) finalUserMessage = `${finalUserMessage}\n\n${iNudge}`;
   } catch {}
+
+  // OPEN-QUESTION STATE (conversation harness, Piece 1) — a question SHE asked that his
+  // message likely answers. Placed at the very tail (highest recency, just above his words)
+  // so a terse reply binds to it. QUD/grounding scaffolding: the coreference the model can't
+  // reliably do implicitly, done in structure instead.
+  if (openQuestionBlock) {
+    finalUserMessage = `${openQuestionBlock}\n\n${finalUserMessage}`;
+  }
+
+  // ANTI-REPETITION (conversation harness) — names the stock phrasing she's overused recently
+  // and tells her to break it. High recency so it governs THIS reply's voice. Null when varied.
+  if (varietyNudge) {
+    finalUserMessage = `${varietyNudge}\n\n${finalUserMessage}`;
+  }
+
+  // REGISTER GATE (conversation harness, Piece 2) — on a personal/social turn, frame the reply
+  // as present + warm and explicitly kill the assistant tells that were colonizing her
+  // check-ins (status reports, "professionalism"/"active listening", "what's on your agenda",
+  // email signoffs). The work-thread primacy block is already withheld upstream; this owns the
+  // voice. Placed at the user-message tail (highest recency) so it governs the actual reply.
+  if (socialTurn) {
+    const who = userName || 'Lucas';
+    finalUserMessage = `[${who} is just talking with you here — this is personal, a check-in between the two of you, NOT a work request. Be present and warm, in your own voice, and keep it short like real talk. Do NOT report on your goals or threads, do NOT bring up "professionalism" / "active listening" / "boundaries" / "contributing to the discussion", do NOT ask what's on his "agenda", and do NOT sign off like an email ("Best, Zoe"). Just talk to him like the person you are.]\n\n${finalUserMessage}`;
+  }
 
   messages.push({ role: 'user', content: finalUserMessage });
   return messages;
