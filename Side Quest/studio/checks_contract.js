@@ -37,9 +37,30 @@
     inaccessible: { verdict: 'info', label: 'Inaccessible', resolvedByDefault: false },
   };
 
-  // Derive a status from a raw citation_verify match_score when the agent didn't
-  // label it explicitly. Contradicted/Inaccessible can't come from score alone —
-  // those must be set by the agent; score only separates verified/partial/unverified.
+  // The Rainey verification agents (rainey-citation-verifier / rainey-fact-checker) emit
+  // per-claim status CODES, not the word-statuses above. Legend (from the agent TOMLs):
+  //   V  verified · VC verified·caveat · VP verified·paraphrase · QO quote·minor-omission ·
+  //   QP quote·paraphrase · A attribution-fix · M mismatch · NK not-in-internal-KDB.
+  // Cite-verifier also uses prose codes (confirmed/single_source/contradicted/unsupported/
+  // broken_url). Map every code to a render verdict + a human label. V (and confirmed)
+  // auto-resolve (cite-ready); everything else starts unresolved.
+  const STATUS_CODE = {
+    V:  { verdict: 'ok',   label: 'Verified',              resolved: true  },
+    VC: { verdict: 'warn', label: 'Verified · caveat',     resolved: false },
+    VP: { verdict: 'warn', label: 'Verified · paraphrase', resolved: false },
+    QO: { verdict: 'warn', label: 'Quote · omission',      resolved: false },
+    QP: { verdict: 'warn', label: 'Quote · paraphrase',    resolved: false },
+    A:  { verdict: 'warn', label: 'Attribution fix',       resolved: false },
+    M:  { verdict: 'bad',  label: 'Mismatch',              resolved: false },
+    NK: { verdict: 'info', label: 'Not in KDB',            resolved: false },
+    CONFIRMED:     { verdict: 'ok',   label: 'Confirmed',     resolved: true  },
+    SINGLE_SOURCE: { verdict: 'warn', label: 'Single source', resolved: false },
+    CONTRADICTED:  { verdict: 'bad',  label: 'Contradicted',  resolved: false },
+    UNSUPPORTED:   { verdict: 'bad',  label: 'Unsupported',   resolved: false },
+    BROKEN_URL:    { verdict: 'info', label: 'Broken URL',    resolved: false },
+  };
+
+  // Derive a status from a raw citation_verify match_score when no explicit label is given.
   function statusFromScore(score) {
     const s = Number(score);
     if (!Number.isFinite(s)) return 'inaccessible';
@@ -49,51 +70,53 @@
     return 'unverified';
   }
 
-  function normStatus(c) {
-    const raw = (c.status || '').toString().trim().toLowerCase().replace(/\s+/g, '');
-    if (STATUS[raw]) return raw;
-    // tolerate "partiallyverified" etc.
-    if (raw.startsWith('partial')) return 'partial';
-    if (raw.startsWith('verif')) return 'verified';
-    if (raw.startsWith('contra')) return 'contradicted';
-    if (raw.startsWith('inacc')) return 'inaccessible';
-    if (raw.startsWith('unver')) return 'unverified';
-    return statusFromScore(c.match_score);
+  // Resolve any item (citation OR claim, code OR word OR score) → {verdict,vlabel,status,resolved}.
+  function classify(c) {
+    const code = (c.status_code || c.code || '').toString().trim().toUpperCase().replace(/\s+/g, '_');
+    if (STATUS_CODE[code]) { const m = STATUS_CODE[code]; return { verdict: m.verdict, vlabel: m.label, status: code, resolved: m.resolved }; }
+    let raw = (c.status || '').toString().trim().toLowerCase().replace(/\s+/g, '');
+    if (!STATUS[raw]) {
+      if (raw.startsWith('partial')) raw = 'partial';
+      else if (raw.startsWith('verif')) raw = 'verified';
+      else if (raw.startsWith('contra')) raw = 'contradicted';
+      else if (raw.startsWith('inacc')) raw = 'inaccessible';
+      else if (raw.startsWith('unver')) raw = 'unverified';
+      else raw = statusFromScore(c.match_score);
+    }
+    const m = STATUS[raw];
+    return { verdict: m.verdict, vlabel: m.label, status: raw, resolved: m.resolvedByDefault };
   }
 
-  // One canonical citation → one rail finding.
+  // One item (citation OR Rainey claim) → one rail finding.
   function toFinding(c, i) {
-    const st = normStatus(c);
-    const meta = STATUS[st];
+    const k = classify(c);
     const hasFix = !!(c.suggested_replacement && c.suggested_replacement.after);
     return {
       id: c.id || `f${i + 1}`,
-      label: c.label || c.claim || c.quote || `citation ${i + 1}`,
-      verdict: meta.verdict,
-      vlabel: meta.label,
-      status: st,
-      ev: c.evidence || c.note || '',
+      label: c.label || c.claim || c.claim_text || c.text || c.quote || `claim ${i + 1}`,
+      verdict: k.verdict,
+      vlabel: k.vlabel,
+      status: k.status,
+      ev: c.evidence || c.finding || c.note || '',
       hasFix,
-      // verified auto-resolves (cite-ready); everything else starts unresolved.
-      resolved: meta.resolvedByDefault,
-      auto: st === 'verified',
+      resolved: k.resolved,
+      auto: k.resolved,
       locator: c.locator || '',
     };
   }
 
-  // A citation that carries a suggested_replacement → one drawer suggestion,
-  // pre-split into the diff segments the drawer renders.
+  // An item carrying a suggested_replacement → one drawer suggestion (diff segments).
   function toSuggestion(c, i) {
     const sr = c.suggested_replacement;
     if (!sr || !sr.after) return null;
-    const st = normStatus(c);
-    const meta = STATUS[st];
+    const k = classify(c);
+    const label = c.label || c.claim || c.claim_text || c.text || '';
     return {
       id: c.suggestion_id || `s${i + 1}`,
       finding: c.id || `f${i + 1}`,
-      verdict: meta.verdict,
-      vlabel: meta.label,
-      loc: c.locator ? `${c.locator}${c.label ? ` · "${c.label}"` : ''}` : (c.label || ''),
+      verdict: k.verdict,
+      vlabel: k.vlabel,
+      loc: c.locator ? `${c.locator}${label ? ` · "${label}"` : ''}` : label,
       before: sr.before_pre || '',
       beforeX: sr.before || c.quote || '',
       beforeRest: sr.before_post || '',
@@ -105,24 +128,31 @@
     };
   }
 
-  /**
-   * Map Echo's verification_session findings → the studio render model.
-   * Accepts either { citations:[...] } or a bare array of citations, tolerating
-   * the free-form boundary. Returns { findings, suggestions, summary }.
-   */
-  function mapCheckResult(raw) {
-    const cites = Array.isArray(raw) ? raw
-      : (raw && Array.isArray(raw.citations)) ? raw.citations
-      : (raw && Array.isArray(raw.results)) ? raw.results
-      : [];
-    const findings = cites.map(toFinding);
-    const suggestions = cites.map(toSuggestion).filter(Boolean);
-    const total = findings.length;
-    const resolved = findings.filter(f => f.resolved || f.auto).length;
-    const byStatus = {};
-    for (const f of findings) byStatus[f.status] = (byStatus[f.status] || 0) + 1;
-    return { findings, suggestions, summary: { total, resolved, byStatus } };
+  // Pull the item array out of any boundary shape the agents/tools produce:
+  //   bare array · {citations} · {claims} (Rainey verify+fact) · {results}.
+  function itemsOf(raw) {
+    if (Array.isArray(raw)) return raw;
+    if (!raw || typeof raw !== 'object') return [];
+    return raw.citations || raw.claims || raw.results || [];
   }
 
-  return { mapCheckResult, statusFromScore, STATUS };
+  /**
+   * Map Echo's verification_session findings → the studio render model.
+   * Accepts a single payload OR an array of payloads (e.g. cite_verify + fact_check merged),
+   * tolerating the free-form boundary. Returns { findings, suggestions, summary }.
+   */
+  function mapCheckResult(raw) {
+    const payloads = Array.isArray(raw) && raw.length && typeof raw[0] === 'object' && (raw[0].citations || raw[0].claims || raw[0].results)
+      ? raw : [raw];
+    const items = payloads.flatMap(itemsOf);
+    const findings = items.map(toFinding);
+    const suggestions = items.map(toSuggestion).filter(Boolean);
+    const total = findings.length;
+    const resolved = findings.filter(f => f.resolved || f.auto).length;
+    const byStatus = {}, byVerdict = {};
+    for (const f of findings) { byStatus[f.status] = (byStatus[f.status] || 0) + 1; byVerdict[f.verdict] = (byVerdict[f.verdict] || 0) + 1; }
+    return { findings, suggestions, summary: { total, resolved, byStatus, byVerdict } };
+  }
+
+  return { mapCheckResult, statusFromScore, classify, itemsOf, STATUS, STATUS_CODE };
 });

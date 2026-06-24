@@ -93,5 +93,27 @@ ok('NaN score → inaccessible', statusFromScore('x') === 'inaccessible');
 const scored = mapCheckResult({ citations: [{ id: 'x', match_score: 0.93, label: 'q' }] });
 ok('score-only finding → verified', scored.findings[0].verdict === 'ok');
 
+// --- Rainey AGENT shape: {claims:[{claim_text, status_code, finding}]} + status codes ---
+const CITE = { claims: [
+  { claim_text: 'Flock cameras in 5,000 communities', status_code: 'M', finding: 'Company materials cite "thousands"; 5,000 not confirmed.' },
+  { claim_text: 'ALPR retention 30 days', status_code: 'V', finding: '2 independent sources confirm.' },
+  { claim_text: 'GAO reviewed in 2021', status_code: 'VP', finding: 'Verified but paraphrased.' },
+] };
+const FACT = { claims: [
+  { text: 'downwind effects peer-reviewed', status_code: 'VC', finding: 'True with caveat on basin scope.' },
+  { text: 'no national framework exists', status_code: 'NK', finding: 'Not in internal KDB; needs external.' },
+] };
+const rr = mapCheckResult([CITE, FACT]);
+ok('Rainey claims map (5 findings across both payloads)', rr.summary.total === 5, `total=${rr.summary.total}`);
+ok('status_code M → bad verdict', rr.findings.find(f => f.label.startsWith('Flock')).verdict === 'bad');
+ok('status_code V → ok + auto-resolve', (() => { const f = rr.findings.find(x => x.status === 'V'); return f.verdict === 'ok' && f.auto === true; })());
+ok('status_code VP → warn, label "Verified · paraphrase"', (() => { const f = rr.findings.find(x => x.status === 'VP'); return f.verdict === 'warn' && /paraphrase/i.test(f.vlabel); })());
+ok('status_code NK → info', rr.findings.find(f => f.status === 'NK').verdict === 'info');
+ok('Rainey label falls back to claim_text/text', rr.findings.some(f => f.label === 'downwind effects peer-reviewed'));
+ok('Rainey evidence from finding field', rr.findings.find(f => f.status === 'M').ev.includes('thousands'));
+ok('only V auto-resolves (1 of 5)', rr.summary.resolved === 1, `resolved=${rr.summary.resolved}`);
+ok('byVerdict tallies ok/warn/bad/info', rr.summary.byVerdict.ok === 1 && rr.summary.byVerdict.bad === 1 && rr.summary.byVerdict.warn === 2 && rr.summary.byVerdict.info === 1);
+ok('single Rainey payload (not array) also maps', mapCheckResult(CITE).summary.total === 3);
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
