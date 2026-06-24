@@ -75,7 +75,7 @@
     if (json) {
       const status = json.status != null ? json.status
         : (json.status_code != null ? json.status_code : (json.http_status != null ? json.http_status : undefined));
-      const body = json.body || json.text || json.content || json.markdown || json.extract || '';
+      const body = json.body || json.text || json.content || json.markdown || json.extract || json.text_preview || json.text_excerpt || '';
       const finalUrl = json.final_url || json.resolved_url || json.location || json.url || undefined;
       return { status, body: String(body || ''), finalUrl };
     }

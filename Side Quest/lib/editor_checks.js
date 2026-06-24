@@ -146,6 +146,9 @@ async function runHarnessChecks({
   callTool, workingCopy, complete, docId = null, sourceDocPath = null, author = null, sourceVersion = 1,
   localModel = null, cheapModel = null, frontierModel = null, frontierBase = null, frontierHeaders = null,
   embed = null, cosine = null, tier = 'harness', onStage = null,
+  // Echo's fetch rung → web_extract (trafilatura clean text + status), not web_fetch (raw-HTML
+  // preview). The ladder reads the body from `text_preview` (see verify_resolve.readFetch).
+  resolveOpts = { tools: { fetch: 'web_extract' } },
 } = {}) {
   if (typeof callTool !== 'function') throw new Error('runHarnessChecks: callTool(name,args) is required');
   if (!workingCopy || !Array.isArray(workingCopy.blocks)) throw new Error('runHarnessChecks: workingCopy with blocks is required');
@@ -161,7 +164,7 @@ async function runHarnessChecks({
     checkRunId = registry.recordCheckRun(docId, { verificationSessionId: null, tier, model: localModel, status: 'running', version: sourceVersion });
   }
 
-  const result = await runHarness(workingCopy, { callTool, embed, cosine, homeworkCheck, classifyModel, classifyFrontier, onStage });
+  const result = await runHarness(workingCopy, { callTool, embed, cosine, homeworkCheck, classifyModel, classifyFrontier, resolveOpts, onStage });
 
   if (checkRunId != null) {
     registry.updateCheckRun(checkRunId, {
