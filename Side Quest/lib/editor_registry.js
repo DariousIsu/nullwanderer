@@ -97,6 +97,16 @@ CREATE TABLE IF NOT EXISTS certificates (
   issued_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cert_doc ON certificates(doc_id);
+
+CREATE TABLE IF NOT EXISTS working_copies (
+  id INTEGER PRIMARY KEY,
+  doc_id INTEGER NOT NULL REFERENCES pipeline_documents(id),
+  version INTEGER NOT NULL,
+  model_json TEXT NOT NULL,             -- normalized working-copy model from lib/editor_import
+  created_at INTEGER NOT NULL,
+  UNIQUE(doc_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_wc_doc ON working_copies(doc_id);
 `;
 
 function init(opts = {}) {
@@ -273,6 +283,19 @@ function listCertificates(docId) {
   return _db().prepare(`SELECT * FROM certificates WHERE doc_id = ? ORDER BY issued_at ASC`).all(docId);
 }
 
+// Working-copy persistence (the normalized model from lib/editor_import lives here; an
+// iteration's content_ref points at (doc_id, version)). Upsert per (doc, version).
+function saveWorkingCopy(docId, version, model) {
+  _db().prepare(
+    `INSERT INTO working_copies (doc_id, version, model_json, created_at) VALUES (?,?,?,?)
+     ON CONFLICT(doc_id, version) DO UPDATE SET model_json = excluded.model_json, created_at = excluded.created_at`
+  ).run(docId, version, JSON.stringify(model), now());
+}
+function getWorkingCopy(docId, version) {
+  const r = _db().prepare(`SELECT model_json FROM working_copies WHERE doc_id = ? AND version = ?`).get(docId, version);
+  return r ? JSON.parse(r.model_json) : null;
+}
+
 // Close-out: mark actually-published, record the public copy (url or file). Terminal state.
 function closeOut(docId, { publicCopyRef = null } = {}) {
   const doc = getDocument(docId);
@@ -289,6 +312,7 @@ module.exports = {
   addIteration, listIterations,
   recordCheckRun, updateCheckRun, latestCheckRun,
   setStatus, attachCertificate, listCertificates, closeOut,
+  saveWorkingCopy, getWorkingCopy,
   // pure helpers
   formatCertNumber, dateStamp,
 };
