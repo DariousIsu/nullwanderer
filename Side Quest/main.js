@@ -1,10 +1,11 @@
 const path = require('path');
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 
 const db = require('./lib/db');
 const editorRegistry = require('./lib/editor_registry');   // Editor Studio: document registry + lifecycle
 const editorImport = require('./lib/editor_import');         // Editor Studio: normalize-on-import
 const editorChecks = require('./lib/editor_checks');         // Editor Studio: "Run checks" orchestration
+const editorCert = require('./lib/editor_cert');             // Editor Studio: "Certify" issuance (B4)
 const { streamChat, complete, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
 const {
@@ -584,6 +585,28 @@ ipcMain.handle('editor:run-checks', async (_e, docId) => {
     return { ok: true, gate: res.gate, mapped: res.mapped };
   } catch (e) {
     console.error('[editor] run-checks failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+// Certify (B4) → issue a canonical CFC-numbered certificate from the last Run-checks result
+// (passed in by the renderer; issuance never re-runs verification). Renders the standardized
+// template, writes <projectData>/certs/<num>.html, logs the certificate + flips the doc to
+// 'certified', and opens the cert for review.
+ipcMain.handle('editor:certify', async (_e, { docId, mapped } = {}) => {
+  try {
+    const doc = editorRegistry.getDocument(docId);
+    if (!doc) return { ok: false, error: 'no such document' };
+    if (!mapped || !Array.isArray(mapped.findings)) return { ok: false, error: 'no verification result to certify — run checks first' };
+    const latest = editorRegistry.latestCheckRun(docId);
+    const res = editorCert.issueCertificate({
+      docId, mapped, checkRunId: latest ? latest.id : null,
+      certsDir: path.join(__dirname, 'data', 'certs'),
+    });
+    try { await shell.openPath(res.certDocRef); } catch (e) { console.error('[editor] open cert failed:', e.message); }
+    return { ok: true, certNumber: res.certNumber, grade: res.grade, gradeLabel: res.gradeLabel, scoreline: res.scoreline, certDocRef: res.certDocRef };
+  } catch (e) {
+    console.error('[editor] certify failed:', e.message);
     return { ok: false, error: e.message };
   }
 });

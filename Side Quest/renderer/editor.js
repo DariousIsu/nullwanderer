@@ -11,6 +11,7 @@ let DOCS = [];
 let sortKey = 'accessed', sortDir = 'desc';
 let currentDoc = null;     // { id, current_version, ... } of the open doc in View B
 let FINDINGS = [];         // mapped findings for the open doc (from Run checks)
+let LAST_MAPPED = null;    // full {findings, suggestions, summary} from the last run → fed to Certify
 
 function relTime(ms){
   if(!ms) return '—';
@@ -159,21 +160,49 @@ document.getElementById('findings').addEventListener('click', e => {
 document.getElementById('run-checks-btn').addEventListener('click', async () => {
   if(!E || !currentDoc) return;
   const btn = document.getElementById('run-checks-btn');
+  const certBtn = document.getElementById('certify-btn');
   const orig = btn.innerHTML;
   btn.disabled = true; btn.innerHTML = '<span class="ic">&#8635;</span>Running…';
-  document.getElementById('findings').innerHTML = '<div class="rail-empty">Verifying… the Rainey citation-verifier + fact-checker are reading the document and tracing sources. This runs on cloud and can take a few minutes.</div>';
+  if(certBtn) certBtn.disabled = true;
+  document.getElementById('findings').innerHTML = '<div class="rail-empty">Verifying… extracting claims, resolving sources, matching (lexical + local embeddings), and classifying the residue. Runs on local models — usually under a minute.</div>';
   try {
     const res = await E.runChecks(currentDoc.id);
     if (res && res.ok) {
+      LAST_MAPPED = res.mapped || null;
       FINDINGS = (res.mapped && res.mapped.findings) || [];
       renderFindings();
-      if(!FINDINGS.length) document.getElementById('findings').innerHTML = '<div class="rail-empty">Checks ran but returned no findings (the agents attached nothing — likely the document had no traceable citations, or the run timed out).</div>';
+      if(!FINDINGS.length) document.getElementById('findings').innerHTML = '<div class="rail-empty">No verification units were extracted from this document (nothing with a quote, source reference, or statistic to check).</div>';
+      // Certify becomes available once a run has produced findings.
+      if(certBtn) certBtn.disabled = !FINDINGS.length;
     } else {
       document.getElementById('findings').innerHTML = `<div class="rail-empty">Run checks failed: ${esc(res && res.error || 'unknown error')}</div>`;
     }
   } catch (err) {
     document.getElementById('findings').innerHTML = `<div class="rail-empty">Run checks errored: ${esc(err.message)}</div>`;
   } finally { btn.disabled = false; btn.innerHTML = orig; }
+});
+
+document.getElementById('certify-btn').addEventListener('click', async () => {
+  if(!E || !currentDoc || !LAST_MAPPED) return;
+  const btn = document.getElementById('certify-btn');
+  const orig = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = 'Certifying…';
+  try {
+    const res = await E.certify(currentDoc.id, LAST_MAPPED);
+    if (res && res.ok) {
+      btn.innerHTML = res.certNumber;                 // show the issued cert id on the button
+      // reflect the new lifecycle state in the top-bar pill
+      const pill = document.getElementById('doc-status');
+      if(pill){ pill.className = 'pill warn'; pill.textContent = 'certified'; }
+      currentDoc.status = 'certified'; currentDoc.cert_number = res.certNumber;
+    } else {
+      btn.innerHTML = orig; btn.disabled = false;
+      alert('Certify failed: ' + (res && res.error || 'unknown error'));
+    }
+  } catch (err) {
+    btn.innerHTML = orig; btn.disabled = false;
+    alert('Certify errored: ' + err.message);
+  }
 });
 
 /* ---------- wiring ---------- */

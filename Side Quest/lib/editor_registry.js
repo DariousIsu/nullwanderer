@@ -142,6 +142,13 @@ function dateStamp(ms) {
   const d = new Date(ms);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+// Next daily sequence for CFC-YYYY-MM-DD-<rev>: count certs already in that date's number series
+// (by cert_number prefix — independent of stored issued_at clock, collision-free, monotonic per
+// day across ALL docs) → returns the 1-based next number.
+function nextCertSeq(dateStr) {
+  const row = _db().prepare(`SELECT COUNT(*) AS n FROM certificates WHERE cert_number LIKE ?`).get(`CFC-${dateStr}-%`);
+  return (row && row.n ? row.n : 0) + 1;
+}
 
 // ---- registry / lifecycle ----
 
@@ -324,5 +331,5 @@ module.exports = {
   setStatus, attachCertificate, listCertificates, closeOut,
   saveWorkingCopy, getWorkingCopy, updateEchoRef,
   // pure helpers
-  formatCertNumber, dateStamp,
+  formatCertNumber, dateStamp, nextCertSeq,
 };
