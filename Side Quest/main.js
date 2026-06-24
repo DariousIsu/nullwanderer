@@ -17,8 +17,11 @@ const {
   stopMonologueScheduler,
   pause: pauseMonologue,
   resume: resumeMonologue,
+  interrupt: interruptMonologue,
+  isBusy: monologueBusy,
   markUserActivity: markMonologueActivity
 } = require('./lib/monologue');
+const { detectHardPull, pickBusyLine } = require('./lib/snapback');
 const {
   startHeartbeatScheduler,
   stopHeartbeatScheduler,
@@ -609,6 +612,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const emit = io.emit || (() => {});
   const sendComplete = io.onComplete || (() => {});
   const sendError = io.onError || (() => {});
+  const sendBusy = io.busy || (() => {});
   const channel = io.channel || 'desktop';
   // Guard: a chat-initiated tool result triggers exactly ONE auto-continuation
   // turn (so she voices what the tool returned without Lucas having to prompt).
@@ -628,6 +632,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   pauseContinuity();
   pauseReflection();
   selfDialogue.pause();
+
+  // SNAP-BACK: how this message reaches her while she may be lost in thought.
+  //  • explicit phrase ("earth to Zoe" / "Zoe, come back" / "snap out of it")
+  //    → HARD-interrupt the in-flight thought so her reply gets the GPU now;
+  //    she surfaces with a brief "coming back" beat (note injected below).
+  //  • normal message while she's mid-thought → an instant busy-lane placeholder
+  //    in her voice; the thought finishes naturally, then her real reply follows.
+  //  • normal message while idle → nothing special.
+  let pulledFromThought = false;
+  if (channel !== 'discord' && detectHardPull(userMessage)) {
+    try { interruptMonologue(); } catch {}
+    pulledFromThought = true;
+  } else if (channel !== 'discord' && monologueBusy()) {
+    try { sendBusy(pickBusyLine(Date.now())); } catch {}
+  }
 
   const sessionId = currentSessionId;
   const userTurnRow = db.insertTurn({ sessionId, speaker: 'user', content: userMessage });
@@ -995,6 +1014,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
 
   // If the user shared links or attached files, surface them prominently in the message
   let composedUserMessage = userMessage;
+
+  // If Lucas snapped her out of a thought, tell her so she surfaces naturally —
+  // a brief "coming back" beat in her own voice, then answers. Not an apology loop.
+  if (pulledFromThought) {
+    composedUserMessage = `[${userName || 'Lucas'} just pulled you back from a deep thought to talk to you — you were absorbed in something and he wants your attention now. Surface naturally: a short, genuine "coming back to the room" beat in your own voice (you needn't say what you were lost in unless you want to), then answer him. Don't over-apologize.]\n\n${composedUserMessage}`;
+  }
   // CHANNEL AWARENESS — tell her which surface this message reached her on, so she
   // doesn't reference the desktop UI while on Discord, and knows Discord is how she
   // reaches Lucas when he's away. Injected into the model-facing message only; the
@@ -1773,7 +1798,8 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
   return runChatTurn(userMessage, attachments, {
     emit: (t) => { try { event.sender.send('chat:say-token', t); } catch {} },
     onComplete: (info) => { try { event.sender.send('chat:complete', info); } catch {} },
-    onError: (e) => { try { event.sender.send('chat:error', e); } catch {} }
+    onError: (e) => { try { event.sender.send('chat:error', e); } catch {} },
+    busy: (text) => { try { event.sender.send('chat:busy', text); } catch {} }
   });
 });
 

@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('sq', {
   onSayToken: (cb) => ipcRenderer.on('chat:say-token', (_e, token) => cb(token)),
   onComplete: (cb) => ipcRenderer.on('chat:complete', (_e, info) => cb(info)),
   onError: (cb) => ipcRenderer.on('chat:error', (_e, err) => cb(err)),
+  onBusy: (cb) => ipcRenderer.on('chat:busy', (_e, text) => cb(text)),
   onReflectionFired: (cb) => ipcRenderer.on('reflection:fired', (_e, info) => cb(info)),
   onMonologueTick: (cb) => ipcRenderer.on('monologue:tick', (_e, info) => cb(info))
 });

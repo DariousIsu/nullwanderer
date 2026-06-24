@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Editor's Studio — harness</title>
+<style>
+/* === inlined copy of shell.css ===========================================
+ * The Launch preview sandbox doesn't fetch sibling files, so the harness
+ * inlines the kit to render standalone. CANONICAL SOURCE = ./shell.css
+ * (kept in sync during design). Edit shell.css for the real kit; mirror here.
+ * ========================================================================= */
+:root{
+  --bg:#0d0d10;--bg-deep:#0a0a0d;--bg-panel:#121218;--bg-raised:#1a1a20;
+  --line-faint:#15151a;--line:#1f1f24;--line-strong:#2a2a30;--line-hover:#4a4a52;
+  --tx:#e8e8eb;--tx-soft:#d8d8db;--tx-muted:#9a9aa3;--tx-dim:#6a6a73;--tx-fainter:#4a4a52;--tx-ghost:#2a2a30;
+  --ok-fg:#a8d8a8;--ok-bg:#1b271b;--ok-line:#4a7a4a;
+  --warn-fg:#d8c79a;--warn-bg:#28231a;--warn-line:#8a7440;
+  --bad-fg:#d8a0a0;--bad-bg:#281a1a;--bad-line:#8a4a4a;
+  --info-fg:#9ab2cc;--info-bg:#1a222e;--info-line:#4a6480;
+  --r-sm:3px;--r:4px;--r-lg:6px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;background:var(--bg);color:var(--tx-soft);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Inter",system-ui,sans-serif;font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased;}
+[hidden]{display:none !important;}
+.studio{height:100vh;display:flex;flex-direction:column;overflow:hidden;}
+.studio-head{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:18px 24px;border-bottom:1px solid var(--line-faint);}
+.studio-id{display:flex;align-items:center;gap:12px;min-width:0;}
+.studio-mark{font-size:16px;color:var(--tx-dim);line-height:1;}
+.studio-title{font-size:10px;letter-spacing:0.2em;text-transform:uppercase;color:var(--tx-muted);}
+.studio-sub{font-size:11px;color:var(--tx-fainter);letter-spacing:0.04em;}
+.studio-back{background:transparent;border:none;color:var(--tx-dim);cursor:pointer;font-size:15px;line-height:1;padding:0 4px;}
+.studio-back:hover{color:var(--tx-soft);}
+.btn{background:transparent;border:1px solid var(--line-strong);color:var(--tx-muted);font-family:inherit;font-size:12px;letter-spacing:0.04em;padding:5px 12px;border-radius:var(--r-sm);cursor:pointer;transition:border-color 150ms,color 150ms,background 150ms;white-space:nowrap;}
+.btn:hover{border-color:var(--line-hover);color:var(--tx-soft);}
+.btn:active{transform:scale(0.98);}
+.btn:disabled{opacity:0.4;cursor:default;}
+.btn.accent{border-color:var(--info-line);color:var(--info-fg);}
+.btn.accent:hover{border-color:var(--info-fg);}
+.btn.ok{border-color:var(--ok-line);color:var(--ok-fg);}
+.btn.sm{font-size:11px;padding:3px 9px;}
+.btn .ic{opacity:0.7;margin-right:5px;}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;padding:2px 9px;border-radius:11px;border:1px solid transparent;white-space:nowrap;}
+.pill.ok{color:var(--ok-fg);background:var(--ok-bg);border-color:var(--ok-line);}
+.pill.warn{color:var(--warn-fg);background:var(--warn-bg);border-color:var(--warn-line);}
+.pill.bad{color:var(--bad-fg);background:var(--bad-bg);border-color:var(--bad-line);}
+.pill.info{color:var(--info-fg);background:var(--info-bg);border-color:var(--info-line);}
+.pill.mute{color:var(--tx-dim);background:var(--bg-raised);border-color:var(--line-strong);}
+.chip{display:inline-flex;align-items:center;font-size:11px;letter-spacing:0.02em;color:var(--tx-muted);background:var(--bg-raised);border:1px solid var(--line-strong);padding:2px 9px;border-radius:11px;}
+.toolbar{flex-shrink:0;display:flex;align-items:center;gap:8px;padding:12px 24px;border-bottom:1px solid var(--line-faint);flex-wrap:wrap;}
+.search{flex:1;min-width:200px;position:relative;}
+.search .ic{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--tx-fainter);font-size:13px;}
+.search input{width:100%;background:var(--bg-deep);border:1px solid var(--line);color:var(--tx);font-family:inherit;font-size:13px;padding:7px 12px 7px 30px;border-radius:var(--r);outline:none;transition:border-color 150ms;}
+.search input:focus{border-color:var(--line-hover);}
+.search input::placeholder{color:var(--tx-fainter);}
+.filter{background:transparent;border:1px solid var(--line-strong);color:var(--tx-dim);font-family:inherit;font-size:11px;letter-spacing:0.04em;padding:6px 10px;border-radius:var(--r-sm);cursor:pointer;transition:border-color 150ms,color 150ms;}
+.filter:hover{border-color:var(--line-hover);color:var(--tx-muted);}
+.filter .caret{opacity:0.6;margin-left:5px;font-size:9px;}
+.studio-body{flex:1;min-height:0;overflow-y:auto;}
+.studio-body::-webkit-scrollbar{width:6px;}
+.studio-body::-webkit-scrollbar-track{background:transparent;}
+.studio-body::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:3px;}
+.studio-body::-webkit-scrollbar-thumb:hover{background:var(--line-hover);}
+.stbl{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px;}
+.stbl thead th{position:sticky;top:0;background:var(--bg);text-align:left;font-weight:500;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--tx-dim);padding:10px 14px;border-bottom:1px solid var(--line);user-select:none;}
+.stbl thead th.sortable{cursor:pointer;}
+.stbl thead th.sortable:hover{color:var(--tx-muted);}
+.stbl thead th .caret{opacity:0.5;font-size:9px;margin-left:4px;}
+.stbl thead th.active{color:var(--tx-soft);}
+.stbl thead th.active .caret{opacity:1;}
+.stbl tbody td{padding:11px 14px;border-bottom:1px solid var(--line-faint);color:var(--tx-soft);vertical-align:middle;}
+.stbl tbody tr.row{cursor:pointer;transition:background 120ms;}
+.stbl tbody tr.row:hover{background:var(--bg-panel);}
+.stbl tbody tr.row.open{background:var(--bg-panel);}
+.stbl td.dim{color:var(--tx-dim);}
+.stbl td.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(--tx-muted);}
+.stbl td .twirl{color:var(--tx-dim);margin-right:7px;display:inline-block;width:8px;transition:transform 120ms;}
+.stbl tbody tr.row.open .twirl{transform:rotate(90deg);}
+.detail td{padding:0 14px 14px 36px;background:var(--bg-panel);border-bottom:1px solid var(--line-faint);}
+.detail-grid{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start;padding-top:4px;}
+.detail-col{min-width:170px;}
+.detail-col.wide{flex:1.4;min-width:220px;}
+.detail-summary{font-size:12px;color:var(--tx-muted);line-height:1.6;margin-bottom:9px;}
+.detail-chips{display:flex;gap:6px;flex-wrap:wrap;}
+.detail-meta{font-size:11px;color:var(--tx-dim);line-height:1.9;}
+.detail-meta .ic{color:var(--tx-fainter);margin-right:6px;}
+.detail-actions{display:flex;flex-direction:column;gap:7px;min-width:130px;}
+.detail-link{color:var(--info-fg);font-size:12px;text-decoration:none;}
+.detail-link:hover{text-decoration:underline;}
+.studio-foot{flex-shrink:0;display:flex;gap:18px;padding:9px 24px;border-top:1px solid var(--line-faint);font-size:10px;letter-spacing:0.04em;color:var(--tx-fainter);}
+.studio-foot .ic{margin-right:4px;opacity:0.7;}
+
+/* ---- View B: document view ---- */
+.topbar{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 18px;border-bottom:1px solid var(--line-faint);flex-wrap:wrap;}
+.topbar-id{display:flex;align-items:center;gap:9px;min-width:0;}
+.topbar-id .meta{min-width:0;}
+.topbar-id .t{font-size:13px;color:var(--tx-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.topbar-id .s{font-size:11px;color:var(--tx-dim);}
+.topbar-actions{display:flex;align-items:center;gap:8px;}
+.progress{display:inline-flex;align-items:center;gap:7px;font-size:11px;color:var(--tx-dim);}
+.progress .bar{display:inline-block;width:48px;height:5px;border-radius:3px;background:var(--line-strong);position:relative;overflow:hidden;}
+.progress .bar i{position:absolute;left:0;top:0;bottom:0;background:var(--ok-line);transition:width 200ms;}
+.docwrap{flex:1;min-height:0;display:flex;overflow:hidden;}
+.docmain{flex:1;min-width:0;overflow-y:auto;padding:24px 28px;}
+.docmain::-webkit-scrollbar{width:6px;}
+.docmain::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:3px;}
+.measure{max-width:600px;}
+.doc-h1{font-size:20px;font-weight:500;color:var(--tx);margin-bottom:4px;line-height:1.3;}
+.doc-byline{font-size:12px;color:var(--tx-dim);margin-bottom:20px;}
+.doc p{font-size:15px;line-height:1.9;color:var(--tx-soft);margin-bottom:14px;}
+.doc p.muted{color:var(--tx-muted);}
+.mark{padding:0 2px;border-radius:2px;cursor:pointer;border-bottom:2px solid transparent;}
+.mark.bad{background:rgba(138,74,74,0.18);border-bottom-color:var(--bad-line);}
+.mark.warn{background:rgba(138,116,64,0.18);border-bottom-color:var(--warn-line);}
+.mark.ok{background:rgba(74,122,74,0.16);border-bottom-color:var(--ok-line);}
+.mark.sel{box-shadow:0 0 0 2px var(--line-hover);}
+.mark.resolved{opacity:0.5;border-bottom-style:dotted;}
+.rail{width:264px;flex-shrink:0;border-left:1px solid var(--line-faint);background:var(--bg-deep);display:flex;flex-direction:column;transition:width 160ms,opacity 120ms;}
+.rail.collapsed{width:0;opacity:0;overflow:hidden;border-left:none;}
+.rail-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--line-faint);}
+.rail-head .lbl{font-size:11px;font-weight:500;color:var(--tx-soft);}
+.rail-head .lbl .n{color:var(--tx-fainter);}
+.rail-head .right{display:flex;align-items:center;gap:9px;}
+.rail-filter{font-size:11px;color:var(--info-fg);cursor:pointer;}
+.rail-collapse{font-size:14px;color:var(--tx-dim);cursor:pointer;line-height:1;}
+.rail-collapse:hover{color:var(--tx-soft);}
+.rail-body{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px;}
+.rail-body::-webkit-scrollbar{width:5px;}
+.rail-body::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:3px;}
+.fcard{background:var(--bg-panel);border:1px solid var(--line);border-radius:var(--r);padding:9px;cursor:pointer;transition:border-color 120ms,box-shadow 120ms;}
+.fcard:hover{border-color:var(--line-strong);}
+.fcard.sel{box-shadow:0 0 0 2px var(--line-hover);border-color:var(--line-hover);}
+.fcard.bad{border-left:2px solid var(--bad-line);}
+.fcard.warn{border-left:2px solid var(--warn-line);}
+.fcard.ok{border-left:2px solid var(--ok-line);}
+.fcard.done{opacity:0.6;}
+.fcard-top{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px;}
+.fcard-lbl{font-size:12px;font-weight:500;color:var(--tx-soft);}
+.fcard-ev{font-size:11px;color:var(--tx-dim);line-height:1.5;margin-bottom:7px;}
+.fcard-actions{display:flex;justify-content:space-between;align-items:center;}
+.fcard-fix{font-size:11px;color:var(--info-fg);cursor:pointer;}
+.fcard-resolve{font-size:11px;color:var(--tx-dim);cursor:pointer;user-select:none;}
+.fcard-resolve.done{color:var(--ok-fg);}
+.rail-toggle-edge{display:none;}
+
+/* rail toggle button when collapsed (lives in topbar) */
+.rail-show{font-size:11px;}
+
+/* button row gets a small toggle for the rail */
+.toprail-btn{background:transparent;border:1px solid var(--line-strong);color:var(--tx-dim);font-family:inherit;font-size:13px;line-height:1;padding:4px 8px;border-radius:var(--r-sm);cursor:pointer;}
+.toprail-btn:hover{border-color:var(--line-hover);color:var(--tx-soft);}
+
+/* ---- suggestions drawer (full-screen overlay) ---- */
+.drawer-overlay{position:absolute;inset:0;background:rgba(10,10,13,0.6);display:flex;align-items:stretch;justify-content:stretch;z-index:50;}
+.drawer{flex:1;background:var(--bg);display:flex;flex-direction:column;border:1px solid var(--line-strong);}
+.drawer-head{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--line-faint);}
+.drawer-head .id{display:flex;align-items:center;gap:10px;}
+.drawer-head .title{font-size:14px;color:var(--tx-soft);font-weight:500;}
+.drawer-head .sub{font-size:11px;color:var(--tx-fainter);}
+.drawer-head .right{display:flex;align-items:center;gap:10px;}
+.drawer-close{font-size:18px;color:var(--tx-dim);cursor:pointer;line-height:1;}
+.drawer-close:hover{color:var(--tx-soft);}
+.drawer-body{flex:1;overflow-y:auto;padding:14px 20px;display:flex;flex-direction:column;gap:10px;}
+.drawer-body::-webkit-scrollbar{width:6px;}
+.drawer-body::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:3px;}
+.sug{border:1px solid var(--line);border-radius:var(--r-lg);padding:12px 14px;background:var(--bg-panel);max-width:760px;}
+.sug.rejected{opacity:0.55;}
+.sug-top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:9px;}
+.sug-loc{font-size:12px;color:var(--tx-dim);}
+.sug-jump{font-size:11px;color:var(--tx-fainter);cursor:pointer;}
+.sug-jump:hover{color:var(--info-fg);}
+.diff{font-size:13px;line-height:1.7;margin-bottom:9px;}
+.diff .before{color:var(--tx-dim);}
+.diff .before .x{background:rgba(138,74,74,0.18);color:var(--bad-fg);text-decoration:line-through;padding:0 2px;border-radius:2px;}
+.diff .after{color:var(--tx-soft);}
+.diff .after .o{background:rgba(74,122,74,0.16);color:var(--ok-fg);padding:0 2px;border-radius:2px;}
+.sug-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;}
+.sug-src{font-size:11px;color:var(--tx-fainter);}
+.sug-src .ic{margin-right:5px;}
+.sug-actions{display:flex;gap:6px;flex-shrink:0;}
+</style>
+</head>
+<body>
+
+<!-- ============ VIEW A — index ============ -->
+<div class="studio" id="view-index">
+  <header class="studio-head">
+    <div class="studio-id">
+      <span class="studio-mark">&#9635;</span>
+      <div><div class="studio-title">Editor&#8217;s Studio</div><div class="studio-sub">142 releases</div></div>
+    </div>
+    <button class="btn accent" onclick="openDoc()"><span class="ic">+</span>New document</button>
+  </header>
+  <div class="toolbar">
+    <div class="search"><span class="ic">&#9906;</span><input type="text" placeholder="Search releases&#8230;"></div>
+    <button class="filter">Author <span class="caret">&#9660;</span></button>
+    <button class="filter">Date <span class="caret">&#9660;</span></button>
+    <button class="filter">Status <span class="caret">&#9660;</span></button>
+    <button class="filter">Topics <span class="caret">&#9660;</span></button>
+  </div>
+  <div class="studio-body">
+    <table class="stbl">
+      <thead><tr>
+        <th class="sortable" style="width:32%">Title <span class="caret">&#8645;</span></th>
+        <th class="sortable" style="width:15%">Author <span class="caret">&#8645;</span></th>
+        <th style="width:18%">Cert #</th>
+        <th class="sortable" style="width:7%">Ver <span class="caret">&#8645;</span></th>
+        <th class="sortable active" style="width:14%">Last accessed <span class="caret">&#9660;</span></th>
+        <th class="sortable" style="width:14%">Status</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <footer class="studio-foot">
+    <span><span class="ic">&#9655;</span>single-click: expand</span>
+    <span><span class="ic">&#9655;&#9655;</span>double-click: open</span>
+    <span><span class="ic">&#8645;</span>click headers: sort</span>
+  </footer>
+</div>
+
+<!-- ============ VIEW B — document ============ -->
+<div class="studio" id="view-doc" hidden style="position:relative;">
+  <header class="topbar">
+    <div class="topbar-id">
+      <button class="studio-back" title="back to index" onclick="showIndex()">&#8592;</button>
+      <div class="meta">
+        <div class="t">The oversight gap in weather modification</div>
+        <div class="s">L. Overby &middot; rev A3</div>
+      </div>
+      <span class="pill warn" style="margin-left:4px;">verifying</span>
+    </div>
+    <div class="topbar-actions">
+      <span class="progress"><span class="bar"><i id="prog-bar" style="width:0%"></i></span><span id="prog-text">0 of 0 resolved</span></span>
+      <button class="btn accent sm" onclick="openDrawer()"><span class="ic">&#10003;</span>Run checks</button>
+      <button class="btn sm">Certify</button>
+      <button class="btn sm">Publish</button>
+      <button class="toprail-btn" id="rail-toggle" title="toggle findings" onclick="toggleRail()">&#9776;</button>
+    </div>
+  </header>
+
+  <div class="docwrap">
+    <div class="docmain">
+      <div class="measure doc">
+        <div class="doc-h1">The oversight gap in weather modification</div>
+        <div class="doc-byline">By Lucas Overby &middot; Rainey Center</div>
+        <p>Cloud-seeding programs across the western states have expanded sharply since 2018. Wyoming, the most aggressive adopter, reports a <span class="mark bad" data-finding="f1" onclick="selectFinding('f1')">15% snowpack increase</span> across treated basins.</p>
+        <p>Yet federal review of these efforts <span class="mark warn" data-finding="f2" onclick="selectFinding('f2')">remains limited to a single 2021 GAO memo</span>, leaving oversight almost entirely to the states that fund the programs.</p>
+        <p>Critics counter that downwind precipitation effects are <span class="mark ok" data-finding="f3" onclick="selectFinding('f3')">well-documented in peer-reviewed literature</span>, and that the absence of a national framework is itself the risk.</p>
+        <p class="muted">The states, for their part, argue the science is settled enough to act and that federal delay only widens the gap they are left to manage alone.</p>
+      </div>
+    </div>
+
+    <aside class="rail" id="rail">
+      <div class="rail-head">
+        <span class="lbl">Findings <span class="n" id="rail-count">0</span></span>
+        <div class="right">
+          <span class="rail-filter">unresolved</span>
+          <span class="rail-collapse" title="collapse" onclick="toggleRail()">&#10095;</span>
+        </div>
+      </div>
+      <div class="rail-body" id="findings"></div>
+    </aside>
+  </div>
+
+  <!-- suggestions drawer (overlays the document view) -->
+  <div class="drawer-overlay" id="drawer" hidden>
+    <div class="drawer">
+      <div class="drawer-head">
+        <div class="id">
+          <span class="title">Suggested replacements</span>
+          <span class="sub" id="sug-count">0 across 0 findings</span>
+        </div>
+        <div class="right">
+          <span class="sub" id="accepted-count">0 accepted</span>
+          <button class="btn ok sm" id="apply-btn" onclick="applyAccepted()"><span class="ic">&#10003;</span>Apply 0 accepted</button>
+          <span class="drawer-close" title="close" onclick="closeDrawer()">&#10005;</span>
+        </div>
+      </div>
+      <div class="drawer-body" id="suggestions"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+/* ---------- View A (index) ---------- */
+const DOCS = [
+  {id:1,title:"Weather-mod oversight gap",author:"L. Overby",cert:"CFC-2026-06-22-A3",ver:"A3",last:"today",status:"certified",
+   summary:"Federal review of cloud-seeding remains limited; states carry oversight. Op-ed for Rainey Center.",
+   topics:["weather modification","federal oversight","GAO"],history:"A1 Jun 21 · A2 Jun 21 · A3 today",
+   checks:"7 claims · 7 resolved · last run today",src:"imported from .docx",published:false,open:true},
+  {id:2,title:"Disaster aid timeline brief",author:"M. Chen",cert:"—",ver:"A2",last:"yesterday",status:"in-process",
+   summary:"Timeline of federal disaster declarations and aid disbursement lags, 2021–2025.",
+   topics:["FEMA","disaster aid","appropriations"],history:"A1 Jun 21 · A2 yesterday",
+   checks:"5 claims · 2 resolved · last run yesterday",src:"imported from .md",published:false,open:false},
+  {id:3,title:"US–Israel trade partnership",author:"L. Overby",cert:"CFC-2026-06-18-A1",ver:"A1",last:"Jun 20",status:"published",
+   summary:"Economic case for deepening bilateral trade; published in the Jerusalem Post.",
+   topics:["US-Israel","trade","economic policy"],history:"A1 Jun 18",checks:"9 claims · 9 resolved",
+   src:"imported from .docx",published:true,open:false},
+  {id:4,title:"Grid resilience funding memo",author:"R. Patel",cert:"CFC-2026-06-15-A2",ver:"A2",last:"Jun 16",status:"published",
+   summary:"Memo on grid-hardening appropriations and resilience ROI for state legislators.",
+   topics:["energy","grid","resilience"],history:"A1 Jun 14 · A2 Jun 15",checks:"6 claims · 6 resolved",
+   src:"imported from .pdf",published:true,open:false},
+  {id:5,title:"SNAP waiver analysis",author:"L. Overby",cert:"—",ver:"A1",last:"Jun 14",status:"in-process",
+   summary:"Analysis of state SNAP work-requirement waiver requests and outcomes.",
+   topics:["SNAP","welfare","state policy"],history:"A1 Jun 14",checks:"4 claims · 0 resolved · not yet run",
+   src:"imported from .txt",published:false,open:false},
+];
+const STATUS_PILL={"in-process":"info","certified":"warn","published":"ok"};
+
+function rowHTML(d){
+  const pill=STATUS_PILL[d.status]||"mute";
+  const certCls=d.cert==="—"?"mono dim":"mono";
+  return `<tr class="row ${d.open?'open':''}" data-id="${d.id}">
+    <td><span class="twirl">&#9656;</span>${esc(d.title)}</td>
+    <td class="dim">${esc(d.author)}</td>
+    <td class="${certCls}">${esc(d.cert)}</td>
+    <td>${esc(d.ver)}</td>
+    <td class="dim">${esc(d.last)}</td>
+    <td><span class="pill ${pill}">${esc(d.status)}</span></td></tr>`;
+}
+function detailHTML(d){
+  const chips=d.topics.map(t=>`<span class="chip">${esc(t)}</span>`).join(" ");
+  const pub=d.published?`<a class="detail-link" href="#">&#8599; public copy</a>`:`<button class="btn sm">Close out</button>`;
+  return `<tr class="detail" data-detail="${d.id}"><td colspan="6"><div class="detail-grid">
+    <div class="detail-col wide"><div class="detail-summary">${esc(d.summary)}</div><div class="detail-chips">${chips}</div></div>
+    <div class="detail-col detail-meta">
+      <div><span class="ic">&#8634;</span>${esc(d.history)}</div>
+      <div><span class="ic">&#10003;</span>${esc(d.checks)}</div>
+      <div><span class="ic">&#9776;</span>${esc(d.src)}</div></div>
+    <div class="detail-actions"><button class="btn accent sm" onclick="openDoc()">&#8599; Open document</button>${pub}</div>
+  </div></td></tr>`;
+}
+function renderIndex(){
+  document.getElementById("rows").innerHTML=DOCS.map(d=>rowHTML(d)+(d.open?detailHTML(d):"")).join("");
+}
+let clickTimer=null;
+document.getElementById("rows").addEventListener("click",e=>{
+  const tr=e.target.closest("tr.row"); if(!tr) return;
+  if(clickTimer) return;
+  clickTimer=setTimeout(()=>{clickTimer=null;const d=DOCS.find(x=>x.id==+tr.dataset.id);d.open=!d.open;renderIndex();},200);
+});
+document.getElementById("rows").addEventListener("dblclick",e=>{
+  if(clickTimer){clearTimeout(clickTimer);clickTimer=null;}
+  if(e.target.closest("tr.row")) openDoc();
+});
+
+/* ---------- view toggle ---------- */
+function showIndex(){document.getElementById("view-doc").hidden=true;document.getElementById("view-index").hidden=false;}
+function openDoc(){document.getElementById("view-index").hidden=true;document.getElementById("view-doc").hidden=false;renderFindings();}
+
+/* ---------- View B (document) ---------- */
+const FINDINGS=[
+  {id:"f1",label:"15% snowpack",verdict:"bad",vlabel:"Contradicted",ev:"Source reports 5–10% in treated basins, not 15%.",resolved:false,hasFix:true},
+  {id:"f2",label:"2021 GAO memo",verdict:"warn",vlabel:"Partial",ev:'Memo exists; "limited to" slightly overstates.',resolved:true,hasFix:true},
+  {id:"f3",label:"peer-reviewed downwind",verdict:"ok",vlabel:"Verified",ev:"3 matching sources · cite-ready.",resolved:true,auto:true,hasFix:false},
+];
+let selected=null;
+
+function findingCardHTML(f){
+  const done=f.resolved||f.auto;
+  const fix=f.hasFix?`<span class="fcard-fix" onclick="event.stopPropagation();openDrawer('${f.id}')">Suggested fix &rarr;</span>`:`<span></span>`;
+  const resolve=f.auto
+    ? `<span class="fcard-resolve done">&#9745; cite-ready</span>`
+    : `<span class="fcard-resolve ${f.resolved?'done':''}" onclick="event.stopPropagation();toggleResolve('${f.id}')">${f.resolved?'&#9745; resolved':'&#9744; resolve'}</span>`;
+  return `<div class="fcard ${f.verdict} ${done?'done':''} ${selected===f.id?'sel':''}" data-fcard="${f.id}" onclick="selectFinding('${f.id}')">
+    <div class="fcard-top"><span class="fcard-lbl">${esc(f.label)}</span><span class="pill ${f.verdict}">${esc(f.vlabel)}</span></div>
+    <div class="fcard-ev">${esc(f.ev)}</div>
+    <div class="fcard-actions">${fix}${resolve}</div></div>`;
+}
+function renderFindings(){
+  document.getElementById("findings").innerHTML=FINDINGS.map(findingCardHTML).join("");
+  document.getElementById("rail-count").textContent=FINDINGS.length;
+  updateProgress();
+  syncMarkers();
+}
+function updateProgress(){
+  const total=FINDINGS.length;
+  const done=FINDINGS.filter(f=>f.resolved||f.auto).length;
+  document.getElementById("prog-text").textContent=`${done} of ${total} resolved`;
+  document.getElementById("prog-bar").style.width=`${Math.round(done/total*100)}%`;
+}
+function syncMarkers(){
+  document.querySelectorAll(".mark").forEach(m=>{
+    const f=FINDINGS.find(x=>x.id===m.dataset.finding);
+    m.classList.toggle("sel",selected===m.dataset.finding);
+    m.classList.toggle("resolved",!!(f&&(f.resolved||f.auto)));
+  });
+}
+function selectFinding(id){
+  selected=(selected===id)?null:id;
+  renderFindings();
+  if(selected){const m=document.querySelector(`.mark[data-finding="${selected}"]`);if(m)m.scrollIntoView({block:"center",behavior:"smooth"});}
+}
+function toggleResolve(id){const f=FINDINGS.find(x=>x.id===id);if(f){f.resolved=!f.resolved;renderFindings();}}
+function toggleRail(){document.getElementById("rail").classList.toggle("collapsed");}
+
+/* ---------- suggestions drawer ---------- */
+const SUGGESTIONS=[
+  {id:"s1",finding:"f1",verdict:"bad",vlabel:"Contradicted",loc:'¶2 · "15% snowpack"',
+   before:'…reports a ',beforeX:'15% snowpack increase',beforeRest:' across treated basins.',
+   after:'…reports a ',afterO:'5–10% snowpack increase',afterRest:' across treated basins.',
+   src:"Wyoming Water Dev. Office 2023, Table 4",state:"accepted"},
+  {id:"s2",finding:"f2",verdict:"warn",vlabel:"Partial",loc:'¶3 · "2021 GAO memo"',
+   before:'…review ',beforeX:'remains limited to a single 2021 GAO memo',beforeRest:', leaving…',
+   after:'…review ',afterO:'has produced only a 2021 GAO memo and a 2022 follow-up',afterRest:', leaving…',
+   src:"GAO-22-104, summary",state:"pending"},
+];
+function sugHTML(s){
+  const rej=s.state==="rejected";
+  let actions;
+  if(s.state==="accepted") actions=`<button class="btn sm" onclick="setSug('${s.id}','pending')">Undo</button><button class="btn ok sm">&#10003; Accepted</button>`;
+  else if(rej) actions=`<button class="btn sm" onclick="setSug('${s.id}','pending')">Undo</button>`;
+  else actions=`<button class="btn sm" title="edit replacement">&#9998;</button><button class="btn sm" onclick="setSug('${s.id}','rejected')">Reject</button><button class="btn sm" onclick="setSug('${s.id}','accepted')">Accept</button>`;
+  return `<div class="sug ${rej?'rejected':''}">
+    <div class="sug-top"><span class="sug-loc"><span class="pill ${s.verdict}" style="margin-right:6px;">${esc(s.vlabel)}</span>${esc(s.loc)}</span><span class="sug-jump" onclick="closeDrawer();selectFinding('${s.finding}')">&#128279; jump to text</span></div>
+    <div class="diff">
+      <div class="before">${esc(s.before)}<span class="x">${esc(s.beforeX)}</span>${esc(s.beforeRest)}</div>
+      <div class="after">${esc(s.after)}<span class="o">${esc(s.afterO)}</span>${esc(s.afterRest)}</div>
+    </div>
+    <div class="sug-foot"><span class="sug-src"><span class="ic">&#9776;</span>${esc(s.src)}</span><div class="sug-actions">${actions}</div></div></div>`;
+}
+function renderDrawer(){
+  document.getElementById("suggestions").innerHTML=SUGGESTIONS.map(sugHTML).join("");
+  const findings=new Set(SUGGESTIONS.map(s=>s.finding)).size;
+  document.getElementById("sug-count").textContent=`${SUGGESTIONS.length} across ${findings} findings`;
+  const acc=SUGGESTIONS.filter(s=>s.state==="accepted").length;
+  document.getElementById("accepted-count").textContent=`${acc} accepted`;
+  document.getElementById("apply-btn").innerHTML=`<span class="ic">&#10003;</span>Apply ${acc} accepted`;
+}
+function openDrawer(){document.getElementById("drawer").hidden=false;renderDrawer();}
+function closeDrawer(){document.getElementById("drawer").hidden=true;}
+function setSug(id,state){const s=SUGGESTIONS.find(x=>x.id===id);if(s){s.state=state;renderDrawer();}}
+function applyAccepted(){
+  SUGGESTIONS.filter(s=>s.state==="accepted").forEach(s=>{const f=FINDINGS.find(x=>x.id===s.finding);if(f)f.resolved=true;});
+  closeDrawer();renderFindings();
+}
+
+renderIndex();
+</script>
+</body>
+</html>

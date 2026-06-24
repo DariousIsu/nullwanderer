@@ -38,6 +38,7 @@ let timer = null;
 let opts = { getWindow: () => null };
 let paused = false;
 let inFlight = false;
+let currentController = null;  // AbortController for the in-flight generation (snap-back)
 let lastUserActivityTs = Date.now();
 let tickCounter = 0;  // for alternating observation / thread-review modes
 
@@ -607,6 +608,17 @@ function resume() {
   if (!timer) schedule(TICK_INTERVAL_MS);
 }
 
+// Hard recall: abort an in-flight thought generation so the chat reply gets the
+// GPU immediately. No-op when she isn't generating. Pausing (above) only blocks
+// the NEXT tick; this stops the one already running.
+function interrupt() {
+  try { if (currentController) currentController.abort(); } catch {}
+}
+
+// True while a thought generation is running — used to fire a busy-lane
+// placeholder when a normal message arrives mid-thought.
+function isBusy() { return inFlight; }
+
 function markUserActivity() {
   lastUserActivityTs = Date.now();
 }
@@ -872,12 +884,28 @@ async function runOneTick() {
   }
 
   let content = '';
-  await streamChat({
-    model: MODEL,
-    messages,
-    options: { temperature: 0.95, top_p: 0.95, num_ctx: 8192, num_predict: 200 },
-    onToken: (t) => { content += t; }
-  });
+  const ctrl = new AbortController();
+  currentController = ctrl;
+  let aborted = false;
+  try {
+    await streamChat({
+      model: MODEL,
+      messages,
+      options: { temperature: 0.95, top_p: 0.95, num_ctx: 8192, num_predict: 200 },
+      onToken: (t) => { content += t; },
+      signal: ctrl.signal
+    });
+  } catch (e) {
+    if (e && (e.name === 'AbortError' || ctrl.signal.aborted)) aborted = true;
+    else throw e;
+  } finally {
+    if (currentController === ctrl) currentController = null;
+  }
+  if (aborted) {
+    // Lucas snapped her out of it — drop this half-formed thought, don't store it.
+    console.log('[monologue] thought interrupted — snapped back to Lucas');
+    return;
+  }
 
   let trimmed = content.trim();
   if (!trimmed) {
@@ -1282,12 +1310,24 @@ async function maybeBoredomSearch() {
   });
 
   let raw = '';
-  await streamChat({
-    model: MODEL,
-    messages,
-    options: { temperature: 0.9, top_p: 0.9, num_ctx: 8192, num_predict: 30 },
-    onToken: (t) => { raw += t; }
-  });
+  const ctrl = new AbortController();
+  currentController = ctrl;
+  let aborted = false;
+  try {
+    await streamChat({
+      model: MODEL,
+      messages,
+      options: { temperature: 0.9, top_p: 0.9, num_ctx: 8192, num_predict: 30 },
+      onToken: (t) => { raw += t; },
+      signal: ctrl.signal
+    });
+  } catch (e) {
+    if (e && (e.name === 'AbortError' || ctrl.signal.aborted)) aborted = true;
+    else throw e;
+  } finally {
+    if (currentController === ctrl) currentController = null;
+  }
+  if (aborted) return;
 
   const query = parseBoredomResponse(raw);
   if (!query) return;
@@ -1484,6 +1524,8 @@ module.exports = {
   stopMonologueScheduler,
   pause,
   resume,
+  interrupt,
+  isBusy,
   markUserActivity,
   isRepeatOfRecentSearch,  // exported for smoke test
   assessSearchNovelty,     // exported for smoke test (R4 cluster-density brake)

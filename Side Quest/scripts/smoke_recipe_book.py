@@ -13,6 +13,7 @@ from pathlib import Path
 RECIPES = Path(r"C:\Users\azrae\Desktop\NX ECHO\nx-echo\echo\mcp\external\recipes.json")
 
 VALID_CATEGORIES = {"echo-data", "agent-assign", "model-pick", "zoe-action", "render"}
+VALID_TIERS = {"local", "cloud"}
 
 pass_n = 0
 fail_n = 0
@@ -93,6 +94,9 @@ def main():
         # shared invariants (all recipes)
         ok(f"[{name}] category valid", r.get("category") in VALID_CATEGORIES,
            str(r.get("category")))
+        # tier: absent => 'local'; if declared, must be a known tier
+        ok(f"[{name}] tier valid", r.get("tier", "local") in VALID_TIERS,
+           str(r.get("tier")))
         # every seeded recipe must carry a live proof (the 'verified before making' bar)
         ok(f"[{name}] has validation proof", r.get("validated") is True and "proof" in r)
 

@@ -269,6 +269,18 @@ window.sq.onError((err) => {
   input.focus();
 });
 
+// Busy-lane placeholder: she's mid-thought, so she drops a quick "hang on" in her
+// own voice while the real reply generates. Rendered as a standalone AI line so it
+// doesn't collide with the streaming turn (which starts its own div on first token).
+if (window.sq.onBusy) {
+  window.sq.onBusy((text) => {
+    const div = makeAiTurn();
+    div.appendChild(makeSaidNode(text));
+    transcript.appendChild(div);
+    scrollMaybe();
+  });
+}
+
 window.sq.onReflectionFired(() => {
   renderEphemeral('— time passed —');
 });
