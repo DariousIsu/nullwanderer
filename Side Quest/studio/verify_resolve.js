@@ -205,13 +205,18 @@
       }
     }
 
-    // Rung 4 — search by source-kind, fetch top-N until one is readable.
+    // Rung 4 — search by source-kind, fetch top-N until one is readable. An injected opts.search
+    // (e.g. Zoe's own DuckDuckGo provider) is preferred when present — Echo's web_search needs a
+    // provider key the operator may not have set, so this keeps no-URL claims resolvable.
     const kind = sourceKind(unit);
     const stool = tools[searchToolKey(kind)];
     const query = (unit && (unit.quote || unit.text) || '').slice(0, 300);
     let results = [];
-    try { results = readSearchResults(await callTool(stool, { query, q: query })); } catch (e) { /* next */ }
-    trail.push({ step: 'search', tool: stool, kind, ok: results.length > 0, reason: results.length ? null : 'no-results', count: results.length });
+    try {
+      const raw = typeof opts.search === 'function' ? await opts.search(query, { kind }) : await callTool(stool, { query, q: query });
+      results = readSearchResults(raw);
+    } catch (e) { /* next */ }
+    trail.push({ step: 'search', tool: typeof opts.search === 'function' ? 'search(injected)' : stool, kind, ok: results.length > 0, reason: results.length ? null : 'no-results', count: results.length });
     for (const r of results.slice(0, topN)) {
       const { fr, blocked } = await tryFetch(r.url, 'search-fetch');
       if (!blocked) return done('search', fr, { source_url: r.url });

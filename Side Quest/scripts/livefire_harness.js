@@ -63,6 +63,7 @@ const DOC = [
   console.log(`[livefire] working copy: ${wc.blocks.length} blocks`);
 
   const t0 = Date.now();
+  const webSearch = require('../lib/web_search').search;
   const res = await editorChecks.runHarnessChecks({
     callTool, workingCopy: wc, complete, docId: null,
     classifyModelName: cloud ? cloudModel : model,
@@ -70,6 +71,7 @@ const DOC = [
     classifyHeaders: cloud ? { Authorization: `Bearer ${cloud.token}` } : null,
     cheapModel: model,
     embed: memory.embed, cosine: memory.cosine,
+    resolveOpts: { tools: { fetch: 'web_extract' }, search: (q) => webSearch(q) },   // Zoe's DDG for no-URL claims
     onStage: (name, payload) => console.log(`  [stage] ${name}:`, JSON.stringify(payload)),
   });
   const dt = ((Date.now() - t0) / 1000).toFixed(1);

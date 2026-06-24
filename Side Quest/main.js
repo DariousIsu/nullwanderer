@@ -35,7 +35,7 @@ const {
   markUserActivity: markHeartbeatActivity
 } = require('./lib/heartbeat');
 const { extractCommitments } = require('./lib/commitments');
-const { fetchPage } = require('./lib/web_search');
+const { fetchPage, search: webSearch } = require('./lib/web_search');
 const echoSuitLib = require('./lib/echo_suit');
 const { EngineSupervisor } = require('./lib/engine');   // Zoe OWNS the absorbed engine (adopt-or-spawn)
 const recallLib = require('./lib/recall');   // <recall ref="rID"/> — expand a memory marker on demand
@@ -599,6 +599,9 @@ ipcMain.handle('editor:run-checks', async (_e, docId) => {
       classifyHeaders: useCloud ? { Authorization: `Bearer ${cloud.token}` } : null,
       cheapModel: MODEL,                              // homework-check stays local/cheap (coherence gate)
       embed: memoryLib.embed, cosine: memoryLib.cosine,
+      // fetch via Echo web_extract (clean text); SEARCH via Zoe's own DuckDuckGo provider so
+      // no-URL claims resolve without an engine-side search-provider key.
+      resolveOpts: { tools: { fetch: 'web_extract' }, search: (q) => webSearch(q) },
       onStage: (name, payload) => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('editor:check-progress', { name, payload }); } catch {} },
     });
     return { ok: true, gate: res.gate, mapped: res.mapped };

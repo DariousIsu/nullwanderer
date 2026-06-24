@@ -133,6 +133,20 @@ function mock(table) {
     ok('rung5 trail recorded every attempted rung', r.trail.some(t => t.step === 'fetch') && r.trail.some(t => t.step === 'archive') && r.trail.some(t => t.step === 'search'));
   }
 
+  // ---- injected search provider (opts.search) preferred over callTool's web_search -----------
+  {
+    let echoSearchCalled = false;
+    const ct = mock({
+      web_search: () => { echoSearchCalled = true; return { results: [] }; },   // engine search keyless/empty
+      web_fetch: ({ url }) => ({ status: 200, body: 'the committee rejected the amendment ' + body(80), final_url: url }),
+    });
+    const injectedSearch = async (q) => ({ results: [{ url: 'https://found.example/a', title: 'hit' }] });
+    const r = await run(resolveUnit({ uid: 'a9.s0', kind: 'quote', quote: 'committee rejected the amendment', text: 'committee rejected the amendment' }, ct, { search: injectedSearch }));
+    ok('injected search resolves a no-URL claim (tier=search)', r.resolved && r.tier === 'search' && r.source_url === 'https://found.example/a');
+    ok('injected search bypasses engine web_search', echoSearchCalled === false);
+    ok('trail labels the injected search', r.trail.some(t => t.step === 'search' && t.tool === 'search(injected)'));
+  }
+
   // ---- tool-name parameterization (live wiring can remap without touching the ladder) --------
   {
     const ct = mock({ echo_fetch: ({ url }) => ({ status: 200, body: 'mapped tool worked ' + body(80), final_url: url }) });
