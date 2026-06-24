@@ -611,6 +611,21 @@ ipcMain.handle('editor:certify', async (_e, { docId, mapped } = {}) => {
   }
 });
 
+// Publish / close-out (lifecycle terminal) → records the doc as actually published, optionally
+// attaching a public copy (URL or file). Forward-only: must be certified first.
+ipcMain.handle('editor:publish', async (_e, { docId, publicCopyRef } = {}) => {
+  try {
+    const doc = editorRegistry.getDocument(docId);
+    if (!doc) return { ok: false, error: 'no such document' };
+    if (doc.status !== 'certified' && doc.status !== 'published') return { ok: false, error: 'document must be certified before publishing' };
+    const updated = editorRegistry.closeOut(docId, { publicCopyRef: publicCopyRef || null });
+    return { ok: true, status: updated.status, publicCopyRef: updated.public_copy_ref || null };
+  } catch (e) {
+    console.error('[editor] publish failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('meta:get', (_e, key) => db.getMeta(key));
 
 ipcMain.handle('meta:set', (_e, key, value) => {

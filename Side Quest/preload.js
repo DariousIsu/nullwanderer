@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('sq', {
     getDocument: (id) => ipcRenderer.invoke('editor:get-document', id),
     getWorkingCopy: (docId, version) => ipcRenderer.invoke('editor:get-working-copy', { docId, version }),
     runChecks: (docId) => ipcRenderer.invoke('editor:run-checks', docId),
-    certify: (docId, mapped) => ipcRenderer.invoke('editor:certify', { docId, mapped })
+    certify: (docId, mapped) => ipcRenderer.invoke('editor:certify', { docId, mapped }),
+    publish: (docId, publicCopyRef) => ipcRenderer.invoke('editor:publish', { docId, publicCopyRef })
   }
 });

@@ -114,6 +114,15 @@ async function openDoc(id){
   const pill = document.getElementById('doc-status');
   pill.className = 'pill ' + (STATUS_PILL[doc.status] || 'mute');
   pill.textContent = doc.status;
+  // action-button states from lifecycle: Certify needs a fresh run (disabled on open);
+  // Publish is available once certified; a published doc locks both.
+  LAST_MAPPED = null;
+  const certBtn = document.getElementById('certify-btn');
+  const pubBtn = document.getElementById('publish-btn');
+  certBtn.disabled = true;
+  certBtn.innerHTML = (doc.cert_number && doc.status !== 'in-process') ? esc(doc.cert_number) : 'Certify';
+  pubBtn.disabled = (doc.status !== 'certified');
+  pubBtn.innerHTML = (doc.status === 'published') ? 'Published' : 'Publish';
   renderDocBody(wcR && wcR.workingCopy);
   resetFindings();
   document.getElementById('view-index').hidden = true;
@@ -195,6 +204,7 @@ document.getElementById('certify-btn').addEventListener('click', async () => {
       const pill = document.getElementById('doc-status');
       if(pill){ pill.className = 'pill warn'; pill.textContent = 'certified'; }
       currentDoc.status = 'certified'; currentDoc.cert_number = res.certNumber;
+      const pubBtn = document.getElementById('publish-btn'); if(pubBtn) pubBtn.disabled = false;  // certified → can publish
     } else {
       btn.innerHTML = orig; btn.disabled = false;
       alert('Certify failed: ' + (res && res.error || 'unknown error'));
@@ -202,6 +212,29 @@ document.getElementById('certify-btn').addEventListener('click', async () => {
   } catch (err) {
     btn.innerHTML = orig; btn.disabled = false;
     alert('Certify errored: ' + err.message);
+  }
+});
+
+document.getElementById('publish-btn').addEventListener('click', async () => {
+  if(!E || !currentDoc) return;
+  const ref = (prompt('Optional — public copy URL or file path (leave blank to skip):', '') || '').trim() || null;
+  const btn = document.getElementById('publish-btn');
+  const orig = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = 'Publishing…';
+  try {
+    const res = await E.publish(currentDoc.id, ref);
+    if (res && res.ok) {
+      const pill = document.getElementById('doc-status');
+      if(pill){ pill.className = 'pill ok'; pill.textContent = 'published'; }
+      currentDoc.status = 'published'; currentDoc.public_copy_ref = ref;
+      btn.innerHTML = 'Published';
+    } else {
+      btn.innerHTML = orig; btn.disabled = false;
+      alert('Publish failed: ' + (res && res.error || 'unknown error'));
+    }
+  } catch (err) {
+    btn.innerHTML = orig; btn.disabled = false;
+    alert('Publish errored: ' + err.message);
   }
 });
 
