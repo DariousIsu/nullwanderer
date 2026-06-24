@@ -23,5 +23,16 @@ contextBridge.exposeInMainWorld('sq', {
   onError: (cb) => ipcRenderer.on('chat:error', (_e, err) => cb(err)),
   onBusy: (cb) => ipcRenderer.on('chat:busy', (_e, text) => cb(text)),
   onReflectionFired: (cb) => ipcRenderer.on('reflection:fired', (_e, info) => cb(info)),
-  onMonologueTick: (cb) => ipcRenderer.on('monologue:tick', (_e, info) => cb(info))
+  onMonologueTick: (cb) => ipcRenderer.on('monologue:tick', (_e, info) => cb(info)),
+
+  // Open the Editor Studio window (My Workspace surface)
+  openEditor: () => ipcRenderer.invoke('editor:open'),
+
+  // Editor Studio — document registry / lifecycle / checks (all run in main over IPC)
+  editor: {
+    listDocuments: (opts) => ipcRenderer.invoke('editor:list-documents', opts || {}),
+    importDocument: () => ipcRenderer.invoke('editor:import-document'),
+    getDocument: (id) => ipcRenderer.invoke('editor:get-document', id),
+    getWorkingCopy: (docId, version) => ipcRenderer.invoke('editor:get-working-copy', { docId, version })
+  }
 });

@@ -10,6 +10,10 @@ const attachInput = document.getElementById('attach-input');
 const attachmentsBar = document.getElementById('attachments-bar');
 const browserBtn = document.getElementById('browser-btn');
 const browserStatus = document.getElementById('browser-status');
+const editorBtn = document.getElementById('editor-btn');
+if (editorBtn && window.sq && window.sq.openEditor) {
+  editorBtn.addEventListener('click', () => window.sq.openEditor());
+}
 
 // --- Browser layer UI ---
 let browserConnected = false;

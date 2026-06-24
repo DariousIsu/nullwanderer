@@ -1,7 +1,9 @@
 const path = require('path');
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 
 const db = require('./lib/db');
+const editorRegistry = require('./lib/editor_registry');   // Editor Studio: document registry + lifecycle
+const editorImport = require('./lib/editor_import');         // Editor Studio: normalize-on-import
 const { streamChat, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
 const {
@@ -113,14 +115,67 @@ function createWindow() {
     }
   });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  // Right-click context menu in the chat window: spellcheck suggestions + cut/copy/paste.
+  // Self-contained (inline require) so it stays out of the way of other edits to this file.
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    const { Menu, MenuItem } = require('electron');
+    const menu = new Menu();
+    for (const suggestion of params.dictionarySuggestions) {
+      menu.append(new MenuItem({
+        label: suggestion,
+        click: () => mainWindow.webContents.replaceMisspelling(suggestion)
+      }));
+    }
+    if (params.misspelledWord) {
+      menu.append(new MenuItem({
+        label: 'Add to dictionary',
+        click: () => mainWindow.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord)
+      }));
+      menu.append(new MenuItem({ type: 'separator' }));
+    }
+    if (params.isEditable) {
+      menu.append(new MenuItem({ role: 'cut', enabled: params.editFlags.canCut }));
+      menu.append(new MenuItem({ role: 'copy', enabled: params.editFlags.canCopy }));
+      menu.append(new MenuItem({ role: 'paste', enabled: params.editFlags.canPaste }));
+      menu.append(new MenuItem({ type: 'separator' }));
+      menu.append(new MenuItem({ role: 'selectAll' }));
+    } else if (params.selectionText) {
+      menu.append(new MenuItem({ role: 'copy' }));
+    }
+    if (menu.items.length) menu.popup({ window: mainWindow });
+  });
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
 
+let editorWindow = null;
+// Editor Studio — its own window (the "My Workspace" surface in the 3-window model). Single
+// instance: re-focus if already open. Shares the chat preload (adds window.sq.editor.*).
+function createEditorWindow() {
+  if (editorWindow && !editorWindow.isDestroyed()) { editorWindow.focus(); return editorWindow; }
+  editorWindow = new BrowserWindow({
+    width: 1100,
+    height: 820,
+    backgroundColor: '#0d0d10',
+    title: "Editor's Studio",
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  });
+  editorWindow.loadFile(path.join(__dirname, 'renderer', 'editor.html'));
+  editorWindow.on('closed', () => { editorWindow = null; });
+  return editorWindow;
+}
+
 app.whenReady().then(() => {
   config.loadEnv();
   db.init();
+  try { editorRegistry.init(); } catch (e) { console.error('[main] editor registry init failed:', e.message); }
   // Curator: deterministic hygiene at session start — age long-stalled threads to
   // 'abandoned', and aggressively prune spiral/prude/junk thoughts + search-junk readings
   // so they can't re-seed the idle loop on boot.
@@ -456,6 +511,49 @@ app.on('window-all-closed', async () => {
 });
 
 // --- IPC ----------------------------------------------------------------
+
+// Editor Studio — open the window + the registry/import surface (runs in main; renderer invokes).
+ipcMain.handle('editor:open', () => { createEditorWindow(); return { ok: true }; });
+
+ipcMain.handle('editor:list-documents', (_e, opts = {}) => {
+  try { return { ok: true, documents: editorRegistry.listDocuments(opts) }; }
+  catch (e) { console.error('[editor] list failed:', e.message); return { ok: false, error: e.message, documents: [] }; }
+});
+
+ipcMain.handle('editor:get-document', (_e, id) => {
+  try { return { ok: true, document: editorRegistry.getDocument(id) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('editor:get-working-copy', (_e, { docId, version } = {}) => {
+  try { return { ok: true, workingCopy: editorRegistry.getWorkingCopy(docId, version) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+
+// New document → pick a text file, normalize it to a working copy, register it into the pipeline.
+// Slice 1 supports .md/.txt directly (editor_import reads them); .docx/.pdf land later via Echo
+// extraction (they need opts.markdown from the engine's ingest).
+ipcMain.handle('editor:import-document', async () => {
+  try {
+    const res = await dialog.showOpenDialog(editorWindow || mainWindow, {
+      title: 'Import a document into the Editor',
+      properties: ['openFile'],
+      filters: [{ name: 'Text / Markdown', extensions: ['md', 'markdown', 'txt', 'text'] }],
+    });
+    if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
+    const filePath = res.filePaths[0];
+    const wc = editorImport.importFile(filePath);
+    const doc = editorRegistry.registerDocument({
+      title: wc.title, docType: wc.format, source: 'upload',
+      echoDocPath: filePath, changeSummary: `imported from .${wc.format}`,
+    });
+    editorRegistry.saveWorkingCopy(doc.id, 1, wc);
+    return { ok: true, document: editorRegistry.getDocument(doc.id) };
+  } catch (e) {
+    console.error('[editor] import failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+});
 
 ipcMain.handle('meta:get', (_e, key) => db.getMeta(key));
 
