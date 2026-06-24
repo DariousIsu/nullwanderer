@@ -100,6 +100,11 @@ function launchChrome() {
     `--user-data-dir=${userDataDir}`,
     '--no-first-run',
     '--no-default-browser-check',
+    // Night mode by default: Chrome's algorithmic auto-dark for ALL web contents
+    // (not just sites with a dark theme). Per-page CDP setAutoDarkModeOverride in
+    // trackPage() enforces it on every tab too (incl. tabs already open on connect).
+    '--force-dark-mode',
+    '--enable-features=WebContentsForceDark',
     'about:blank'
   ];
   try {
@@ -189,7 +194,18 @@ function isConnected() {
 
 // --- Tab tracking ---
 
+// Force Chrome's auto-dark on this page (night mode on all sites). Per-page CDP override —
+// belt-and-suspenders with the --force-dark-mode launch flag, and the only path that reaches
+// tabs already open when we connect. Best-effort: some internal pages reject the override.
+async function applyDarkMode(page) {
+  try {
+    const session = await page.context().newCDPSession(page);
+    await session.send('Emulation.setAutoDarkModeOverride', { enabled: true });
+  } catch { /* flags cover the rest; never block tab tracking on this */ }
+}
+
 function trackPage(page) {
+  applyDarkMode(page);
   // Initial state
   setTimeout(() => updateTabForPage(page), 250);
   // Updates as the user navigates
