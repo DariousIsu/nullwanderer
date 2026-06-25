@@ -116,11 +116,8 @@
     id: 'knowledge',
     plane: 'internal',
     label: 'Knowledge corpora',
-    // Enabled when the plan targets it, or by default when no plan/targets given (slice-1 posture).
-    enabled(plan) {
-      const t = plan && plan.internal_targets;
-      return !Array.isArray(t) || t.length === 0 || t.includes('knowledge');
-    },
+    // Enabled when the plan targets it, or by default when no plan/targets given.
+    enabled(plan) { return targetEnabled(plan, 'knowledge'); },
     async run({ query, plan, deps }) {
       const source = (plan && plan.knowledge_source) || null;
       const top_k = (plan && plan.top_k) || 10;
@@ -157,21 +154,34 @@
 
   // Run one recipe end-to-end against injected deps. Deterministic + fail-safe: a disabled recipe
   // returns no cards; a thrown tool error is captured (never propagated) so one bad source can't
-  // sink the lane. Returns { source, cards, error }.
+  // sink the lane. If the recipe declares an async enrich(cards, deps) — the atlas spine join — it
+  // runs after toCards and is covered by the same fail-safe. Returns { source, cards, error }.
   async function runRecipe(recipe, { query, plan, deps }) {
     if (!recipe.enabled(plan)) return { source: recipe.id, cards: [], error: null, skipped: true };
     try {
       const rows = await recipe.run({ query, plan, deps });
-      return { source: recipe.id, cards: recipe.toCards(rows), error: null };
+      let cards = recipe.toCards(rows);
+      if (typeof recipe.enrich === 'function') cards = await recipe.enrich(cards, deps);
+      return { source: recipe.id, cards, error: null };
     } catch (e) {
       return { source: recipe.id, cards: [], error: String((e && e.message) || e) };
     }
   }
 
+  // Shared enabled-gate: a recipe is on when the plan names no internal_targets (default-on) or
+  // explicitly lists this recipe id. Recipes with special gating (db_query) override enabled().
+  function targetEnabled(plan, id) {
+    const t = plan && plan.internal_targets;
+    return !Array.isArray(t) || t.length === 0 || t.includes(id);
+  }
+
+  // Join truthy parts into a " · " descriptor (for cards whose tool returns fields, not a snippet).
+  function compose(...parts) { return parts.map(p => (p == null ? '' : String(p)).trim()).filter(Boolean).join(' · '); }
+
   return {
     PLANES, REQUIRED, CARD_FIELDS,
     djb2, cleanText, leadTitle, scoreFromRank,
     normalizeCard, validateCard,
-    knowledgeRecipe, REGISTRY, recipes, runRecipe,
+    knowledgeRecipe, REGISTRY, recipes, runRecipe, targetEnabled, compose,
   };
 });

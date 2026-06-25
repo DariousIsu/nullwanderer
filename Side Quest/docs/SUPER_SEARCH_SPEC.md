@@ -65,9 +65,9 @@ Bindings + enrichment come straight from `get_atlas()` / `get_db_map()`:
 - **Overview → cloud frontier** (the big judgment; "too big for local"), key inherited from Echo's keychain (`lib/keystore.js`), same as the Editor's cloud classify.
 
 ## Build order (frozen slices — same discipline as the Editor harness)
-1. **Card contract + registry skeleton** (one recipe: `knowledge`) — pure, offline smoke. ← *this slice*
-2. **Full internal recipe set** + spine enrichment — smoke each `toCards` mapping.
-3. **External lane** (`web_search` + `academic_search` + `web_extract` → cards).
+1. ✅ **Card contract + registry skeleton** (one recipe: `knowledge`) — pure, offline smoke (39/39).
+2. ✅ **Full internal recipe set** (entities · contacts · bills · polls · db_query) + entities spine join — smoke 39/39.
+3. **External lane** (`web_search` + `academic_search` + `web_extract` → cards). ← *next*
 4. **Three caged leaves** — plan (local) · rerank (local) · overview (cloud) — each schema-validated, pure over injected `complete`.
 5. **Ingest-gated loop** — `record_web_source` / `ingest` + dedup + provenance + reversible.
 6. **Run orchestrator** — one pathway → standardized run object — smoke.
