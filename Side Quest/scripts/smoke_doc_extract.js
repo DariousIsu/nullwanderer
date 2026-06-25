@@ -1,0 +1,58 @@
+/**
+ * Offline smoke for the document extractor (lib/doc_extract.js): the pure HTML→markdown converter
+ * over mammoth's real tag vocabulary (h1-6 / p / li / strong / em / tables). Binary extraction
+ * (mammoth/pdfjs) is exercised separately by the live check in scripts/livefire_doc_extract.js.
+ *
+ * Run: node scripts/smoke_doc_extract.js
+ */
+const DX = require('../lib/doc_extract');
+const EI = require('../lib/editor_import');
+
+let pass = 0, fail = 0;
+function ok(name, cond, detail = '') { if (cond) { pass++; console.log(`  PASS ${name}`); } else { fail++; console.log(`  FAIL ${name}${detail ? ' — ' + detail : ''}`); } }
+
+// --- entities + inline ---
+ok('entities: amp/lt/gt/quote/apos', DX.decodeEntities('a &amp; b &lt;c&gt; &quot;d&quot; &#39;e&#39;') === 'a & b <c> "d" \'e\'');
+ok('inline: strong → **', DX.inlineMd('<strong>Bold</strong> text') === '**Bold** text');
+ok('inline: em → _', DX.inlineMd('<em>it</em>') === '_it_');
+ok('inline: link flattened to text', DX.inlineMd('see <a href="http://x">here</a>') === 'see here');
+ok('inline: stray tags stripped + ws collapsed', DX.inlineMd('<span class="x">a</span>   b') === 'a b');
+
+// --- htmlToMarkdown over mammoth-shaped HTML ---
+{
+  const html = '<h1>Title</h1><p>First <strong>para</strong>.</p><h2>Sub</h2><ul><li>one</li><li>two</li></ul>';
+  const md = DX.htmlToMarkdown(html);
+  ok('h1/h2 → # / ##', /^# Title/m.test(md) && /^## Sub/m.test(md));
+  ok('paragraph + inline bold', /First \*\*para\*\*\./.test(md));
+  ok('list items → "- "', /- one/.test(md) && /- two/.test(md));
+  ok('blocks blank-line separated', md.split('\n\n').length === 5);
+}
+
+// --- real mammoth shape: layout tables flatten to their inner paragraphs (captured 2026-06-25) ---
+{
+  const real = '<p><strong>What We Do</strong></p><p><em>Full-spectrum consulting.</em></p><table><tr><td></td><td><p><strong>01</strong></p><p><strong>Fundraising</strong></p><p>No campaign runs on conviction alone.</p></td></tr></table>';
+  const md = DX.htmlToMarkdown(real);
+  ok('table tags dropped, inner paragraphs kept', !/<t(able|r|d)/.test(md) && /\*\*Fundraising\*\*/.test(md) && /No campaign runs/.test(md));
+  ok('empty cell produced no block', !/\n\n\n/.test(md));
+  // composes with the existing block model → working copy
+  const wc = EI.normalizeMarkdown(md, { format: 'docx' });
+  ok('extractor markdown → normalizeMarkdown blocks', wc.blocks.length >= 4 && wc.blocks.every(b => b.anchor && b.type));
+  ok('title guessed from leading content', /What We Do/.test(wc.title));
+}
+
+// --- pdf-style markdown (## Page N + run-on text) normalizes too ---
+{
+  const md = `## Page 1\n\nRESEARCH BRIEF energy policy and AI infrastructure.\n\n## Page 2\n\nMore text here.`;
+  const wc = EI.normalizeMarkdown(md, { format: 'pdf' });
+  ok('pdf markdown → page headings + paragraphs', wc.blocks.filter(b => b.type === 'heading').length === 2 && wc.blocks.some(b => /RESEARCH BRIEF/.test(b.text)));
+}
+
+// --- dispatch guard ---
+(async () => {
+  let threw = false;
+  try { await DX.extractToMarkdown('/x/y.xlsx'); } catch (e) { threw = /unsupported/.test(e.message); }
+  ok('extractToMarkdown rejects unsupported ext', threw);
+
+  console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
+  process.exit(fail === 0 ? 0 : 1);
+})();
