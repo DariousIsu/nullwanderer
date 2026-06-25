@@ -14,6 +14,7 @@ const pollView = require('./studio/poll_view');              // Polling surface:
 const crmView = require('./studio/crm_view');                // CRM surface: contact tool payloads → view shapes
 const legView = require('./studio/leg_view');                // Legislation surface: bill tool payloads → view shapes
 const kgView = require('./studio/kg_view');                  // Knowledge Graph surface: graph tool payloads → nodes/links
+const docView = require('./studio/doc_view');                // Reader/Library surface: corpus doc payloads → reader view
 const modelsLib = require('./lib/models');                   // model sources (cloud frontier + local) resolver
 const { streamChat, complete, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
@@ -944,6 +945,36 @@ ipcMain.handle('kg:search', async (_e, { query } = {}) => {
     const hits = kgView.searchHits(payload).map(h => ({ ...h, color: kgView.colorFor(h.entity_type) }));
     return { ok: true, hits };
   } catch (e) { console.error('[kg] search failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// ============================ READER / LIBRARY (studio — writing suite Phase 2) ===============
+// Read-only corpus reader on the document substrate. Lists projects + recent docs, and renders a
+// document's body markdown through the shared block model (editor_import via doc_view). No model.
+ipcMain.handle('reader:projects', async () => {
+  try {
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('list_projects', {});
+    return { ok: true, projects: docView.projectList(payload) };
+  } catch (e) { console.error('[reader] projects failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('reader:list', async (_e, { project } = {}) => {
+  try {
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('recent_documents', { project_name: project || null, limit: 50 });
+    return { ok: true, docs: docView.docList(payload) };
+  } catch (e) { console.error('[reader] list failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('reader:get', async (_e, { docId } = {}) => {
+  try {
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('get_document', { doc_id: Number(docId), depth: 'full' });
+    return { ok: true, doc: docView.readerDoc(payload) };
+  } catch (e) { console.error('[reader] get failed:', e.message); return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('meta:get', (_e, key) => db.getMeta(key));

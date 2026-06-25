@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reader / Library</title>
+<style>
+/* === Reader / Library surface — canonical dark kit (mirrors crm.html) ====================== */
+:root{
+  --bg:#0d0d10;--bg-deep:#0a0a0d;--bg-panel:#121218;--bg-raised:#1a1a20;
+  --line-faint:#15151a;--line:#1f1f24;--line-strong:#2a2a30;--line-hover:#4a4a52;
+  --tx:#e8e8eb;--tx-soft:#d8d8db;--tx-muted:#9a9aa3;--tx-dim:#6a6a73;--tx-fainter:#4a4a52;
+  --accent:#6a86b6;--info-fg:#9ab2cc;
+  --r-sm:3px;--r:4px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;background:var(--bg);color:var(--tx-soft);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Inter",system-ui,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;}
+[hidden]{display:none !important;}
+.studio{height:100vh;display:flex;flex-direction:column;overflow:hidden;}
+.studio-head{flex-shrink:0;display:flex;align-items:center;gap:12px;padding:13px 20px;border-bottom:1px solid var(--line-faint);}
+.studio-mark{font-size:16px;color:var(--tx-dim);}
+.studio-title{font-size:10px;letter-spacing:0.2em;text-transform:uppercase;color:var(--tx-muted);}
+.studio-sub{font-size:11px;color:var(--tx-fainter);}
+.spacer{flex:1;}
+select{background:var(--bg-deep);border:1px solid var(--line-strong);color:var(--tx-soft);font:inherit;font-size:12px;padding:6px 9px;border-radius:var(--r-sm);outline:none;max-width:230px;}
+select:focus{border-color:var(--accent);}
+.qbox input{background:var(--bg-deep);border:1px solid var(--line-strong);color:var(--tx);font:inherit;font-size:12px;padding:7px 11px;border-radius:var(--r);outline:none;min-width:190px;}
+.qbox input:focus{border-color:var(--accent);}
+
+.main{flex:1;display:flex;min-height:0;}
+.list{width:340px;flex-shrink:0;border-right:1px solid var(--line);display:flex;flex-direction:column;background:var(--bg-deep);}
+.list .head{padding:8px 14px;font-size:11px;color:var(--tx-dim);border-bottom:1px solid var(--line-faint);}
+.list .rows{flex:1;overflow-y:auto;}
+.list .rows::-webkit-scrollbar,.reader::-webkit-scrollbar{width:7px;}
+.list .rows::-webkit-scrollbar-thumb,.reader::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:4px;}
+.ditem{padding:10px 14px;border-bottom:1px solid var(--line-faint);cursor:pointer;}
+.ditem:hover{background:var(--bg-panel);}
+.ditem.active{background:var(--bg-panel);border-left:2px solid var(--accent);padding-left:12px;}
+.ditem .ti{font-size:13px;color:var(--tx);line-height:1.4;}
+.ditem .mt{font-size:10.5px;color:var(--tx-fainter);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+.ext{font-size:8.5px;letter-spacing:0.06em;text-transform:uppercase;padding:1px 6px;border-radius:8px;border:1px solid var(--line-strong);color:var(--tx-dim);}
+
+.reader{flex:1;overflow-y:auto;padding:0;min-width:0;}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--tx-dim);text-align:center;gap:6px;}
+.empty .big{font-size:15px;color:var(--tx-muted);}
+.empty .small{font-size:12px;color:var(--tx-fainter);max-width:380px;}
+.doc{max-width:760px;margin:0 auto;padding:30px 40px 60px;}
+.doc-head{border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:24px;}
+.doc-title{font-size:24px;color:var(--tx);font-weight:600;line-height:1.25;}
+.doc-meta{margin-top:8px;display:flex;flex-wrap:wrap;gap:6px 12px;font-size:11.5px;color:var(--tx-dim);align-items:center;}
+.doc-meta .mchip{background:var(--bg-raised);border:1px solid var(--line-strong);border-radius:9px;padding:1px 8px;color:var(--tx-muted);}
+/* rendered document body */
+.doc-body h2{font-size:19px;color:var(--tx);font-weight:600;margin:26px 0 10px;}
+.doc-body h3{font-size:16px;color:var(--tx-soft);font-weight:600;margin:20px 0 8px;}
+.doc-body h4{font-size:14px;color:var(--tx-soft);font-weight:600;margin:16px 0 6px;text-transform:uppercase;letter-spacing:0.04em;}
+.doc-body p{font-size:14.5px;color:var(--tx-soft);line-height:1.7;margin:0 0 13px;}
+.doc-body ul{margin:0 0 14px;padding-left:22px;}
+.doc-body li{font-size:14.5px;color:var(--tx-soft);line-height:1.65;margin:3px 0;}
+.doc-body strong{color:var(--tx);font-weight:600;}
+.doc-body em{color:var(--tx);font-style:italic;}
+.doc-body pre{background:var(--bg-deep);border:1px solid var(--line);border-radius:var(--r);padding:11px 13px;overflow-x:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--tx-muted);margin:0 0 14px;white-space:pre-wrap;}
+.status{padding:18px;color:var(--tx-dim);font-size:12px;}
+.err{padding:18px;color:#d8c79a;font-size:12px;}
+</style>
+</head>
+<body>
+  <div class="studio">
+    <div class="studio-head">
+      <span class="studio-mark">&#128214;</span><div><div class="studio-title">Reader / Library</div><div class="studio-sub">Corpus documents</div></div>
+      <div class="spacer"></div>
+      <select id="proj"><option value="">All recent</option></select>
+      <div class="qbox"><input id="q" type="text" placeholder="Filter by title…" autocomplete="off" spellcheck="false"></div>
+    </div>
+    <div class="main">
+      <div class="list">
+        <div class="head" id="listhead">Loading…</div>
+        <div class="rows" id="rows"></div>
+      </div>
+      <div class="reader" id="reader">
+        <div class="empty"><div class="big">Reader / Library</div><div class="small">Pick a project or browse recent documents, then open one to read it — rendered from the document substrate (the same structured blocks the writing suite uses).</div></div>
+      </div>
+    </div>
+  </div>
+  <script src="reader.js"></script>
+</body>
+</html>

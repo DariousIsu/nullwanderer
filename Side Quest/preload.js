@@ -79,5 +79,12 @@ contextBridge.exposeInMainWorld('sq', {
     overview: () => ipcRenderer.invoke('kg:overview'),
     ego: (entity, hops) => ipcRenderer.invoke('kg:ego', { entity, hops }),
     search: (query) => ipcRenderer.invoke('kg:search', { query })
+  },
+
+  // Reader / Library — read-only corpus reader on the document substrate.
+  reader: {
+    projects: () => ipcRenderer.invoke('reader:projects'),
+    list: (project) => ipcRenderer.invoke('reader:list', { project }),
+    get: (docId) => ipcRenderer.invoke('reader:get', { docId })
   }
 });
