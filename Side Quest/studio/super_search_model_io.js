@@ -56,7 +56,8 @@
       try { text = await complete({ model, base, headers, messages: [{ role: 'system', content: PLAN_SYS }, { role: 'user', content: `QUERY: ${query}` }] }); }
       catch (e) { text = ''; }
       const s = String(text || '');
-      const grab = (k) => { const m = s.match(new RegExp(k + '\\s*=\\s*([^|\\n]*)', 'i')); return m ? m[1].trim() : ''; };
+      // strip the template's literal <…> brackets the model often echoes back; values never contain them.
+      const grab = (k) => { const m = s.match(new RegExp(k + '\\s*=\\s*([^|\\n]*)', 'i')); return m ? m[1].replace(/[<>]/g, '').trim() : ''; };
       const intentRaw = grab('INTENT').toLowerCase();
       const intent = INTENTS.includes(intentRaw) ? intentRaw : 'lookup';
       const entities = splitList(grab('ENTITIES')).filter(x => x !== '-');

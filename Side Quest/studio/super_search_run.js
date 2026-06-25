@@ -54,8 +54,15 @@
     // 1. PLAN
     const plan = deps.planner ? await deps.planner(query) : defaultPlan(query);
 
+    // Per-lane query: internal FTS5 wants KEYWORDS (implicit-AND chokes on a natural-language
+    // question), so the internal lane uses the plan's extracted entities when present; the external
+    // lane (web/academic) handles the raw question fine. No entities (planner absent) → raw query.
+    const kw = (plan.entities || []).filter(Boolean).join(' ').trim();
+    const internalQuery = kw || query;
+    const queryFor = (recipe) => (recipe && recipe.plane === 'external') ? query : internalQuery;
+
     // 2. RETRIEVE — all enabled recipes in parallel, each fail-safe.
-    const settled = await Promise.all(recipeList.map(r => runRecipe(r, { query, plan, deps: deps.recipeDeps || {} })));
+    const settled = await Promise.all(recipeList.map(r => runRecipe(r, { query: queryFor(r), plan, deps: deps.recipeDeps || {} })));
     const errors = [];
     let internalCards = [], externalCards = [];
     const bySource = {};

@@ -197,4 +197,22 @@ function spawnEcho(overrides = {}) {
   return new EchoClient({ transport, clientName: overrides.clientName || 'zoe', clientVersion: overrides.clientVersion || '1.0.0' });
 }
 
-module.exports = { EchoClient, httpTransport, stdioTransport, parseStreamableBody, fromEnv, spawnEcho, PROTOCOL_VERSION };
+// Unwrap an MCP tool result ({ content: [{type:'text', text:'<json>'}], isError? }) to the tool's
+// domain payload object. MCP encodes the real return value as JSON text inside content[]; callers
+// that want the structured object (not the envelope) route through this. Already-structured input
+// is returned as-is; unparseable text comes back as { text } so callers can still inspect it.
+function toolJson(raw) {
+  if (raw == null) return raw;
+  // FastMCP populates `structuredContent` with the canonical structured object — list returns are
+  // wrapped under {result:[…]}, dict returns pass through ({query,results}/{ok,rows}/…). This is the
+  // shape callers ground against, so prefer it. `content[].text` is the human-text rendering (a
+  // BARE list for list-returning tools), used only as a fallback when structuredContent is absent.
+  if (raw.structuredContent != null) return raw.structuredContent;
+  if (Array.isArray(raw.content)) {
+    const text = raw.content.map(c => (c && typeof c.text === 'string') ? c.text : '').join('').trim();
+    try { return JSON.parse(text); } catch { return { text }; }
+  }
+  return raw;
+}
+
+module.exports = { EchoClient, httpTransport, stdioTransport, parseStreamableBody, fromEnv, spawnEcho, toolJson, PROTOCOL_VERSION };

@@ -6,6 +6,10 @@ const editorRegistry = require('./lib/editor_registry');   // Editor Studio: doc
 const editorImport = require('./lib/editor_import');         // Editor Studio: normalize-on-import
 const editorChecks = require('./lib/editor_checks');         // Editor Studio: "Run checks" orchestration
 const editorCert = require('./lib/editor_cert');             // Editor Studio: "Certify" issuance (B4)
+const ssRun = require('./studio/super_search_run');          // Super Search: run orchestrator (one pathway)
+const ssModelIO = require('./studio/super_search_model_io'); // Super Search: the three caged model leaves
+const ssIngest = require('./studio/super_search_ingest');    // Super Search: ingest-gated loop
+const ssLedger = require('./lib/super_search_ledger');       // Super Search: persistent ingest ledger
 const modelsLib = require('./lib/models');                   // model sources (cloud frontier + local) resolver
 const { streamChat, complete, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
@@ -680,6 +684,68 @@ ipcMain.handle('editor:publish', async (_e, { docId, publicCopyRef } = {}) => {
     console.error('[editor] publish failed:', e.message);
     return { ok: false, error: e.message };
   }
+});
+
+// ============================ SUPER SEARCH (studio) ==========================================
+// One deterministic pathway over the OWNED engine + cloud frontier: plan (local) → retrieve both
+// lanes (the recipe registry, all over echoSuit callTool + Zoe's DDG search) → rerank (local) →
+// cited overview (CLOUD) → gated ingest (save_source + persistent ledger). The model is caged at
+// exactly the three leaves. Mirrors the editor's cloud-resolution + Zoe-search-injection pattern.
+let superSearchLedger = null;
+function getSuperSearchLedger() { if (!superSearchLedger) superSearchLedger = ssLedger.makeFileLedger(path.join(__dirname, 'data', 'super_search_ledger.json')); return superSearchLedger; }
+
+function superSearchCloud() {
+  const cloud = modelsLib.sources().find(s => s.tier === 'cloud' && s.token);
+  const cloudModel = modelsLib.getModelFor('search', null) || process.env.AGENT_MODEL_ON_DEMAND_BACKGROUND || 'gemma4:31b-cloud';
+  return { cloud, cloudModel };
+}
+
+ipcMain.handle('search:status', () => {
+  const { cloud } = superSearchCloud();
+  return { ok: true, engine: (echoSuit && echoSuit.connected) ? 'connected' : 'offline', cloud: !!cloud };
+});
+
+ipcMain.handle('search:run', async (_e, { query, opts } = {}) => {
+  try {
+    if (!query || !String(query).trim()) return { ok: false, error: 'empty query' };
+    if (!echoSuit || !echoSuit.connected) { try { await echoSuit.connect(); } catch {} }
+    if (!echoSuit || !echoSuit.connected) return { ok: false, error: 'Echo engine not connected' };
+    // Super Search recipes expect the tool's DOMAIN payload ({result}/{results}/{rows}); the MCP
+    // client returns the {content:[…]} envelope, so unwrap at the boundary via echo.toolJson.
+    const toolJson = require('./lib/echo').toolJson;
+    const callTool = async (n, a) => toolJson(await echoSuit.client().callTool(n, a));
+
+    // plan + rerank on the LOCAL 24B; overview on the CLOUD frontier (inherited key).
+    const { cloud, cloudModel } = superSearchCloud();
+    const planner = ssModelIO.makePlanner({ complete, model: MODEL });
+    const reranker = ssModelIO.makeReranker({ complete, model: MODEL });
+    const overview = ssModelIO.makeOverview(cloud
+      ? { complete, model: cloudModel, base: cloud.base, headers: { Authorization: `Bearer ${cloud.token}` } }
+      : { complete, model: MODEL });   // graceful: no cloud key → overview on local
+    const ingestor = ssIngest.makeIngestor({ callTool, ledger: getSuperSearchLedger() });
+
+    const run = await ssRun.runSuperSearch(String(query), {
+      // recipeDeps: engine tools for every recipe; SEARCH via Zoe's own DDG (engine web_search has
+      // no provider key); web body-enrich uses engine web_extract through callTool.
+      recipeDeps: { callTool, search: (q) => webSearch(q) },
+      planner, reranker, overview, ingestor,
+      ingestMode: (opts && opts.ingestMode) || 'cited',
+    });
+    return { ok: true, run };
+  } catch (e) {
+    console.error('[super-search] run failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('search:revert', async (_e, { id } = {}) => {
+  try {
+    const toolJson = require('./lib/echo').toolJson;
+    const callTool = async (n, a) => toolJson(await echoSuit.client().callTool(n, a));
+    const ingestor = ssIngest.makeIngestor({ callTool, ledger: getSuperSearchLedger() });
+    const r = await ingestor.revert(id);
+    return { ok: r.reverted, ...r };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('meta:get', (_e, key) => db.getMeta(key));

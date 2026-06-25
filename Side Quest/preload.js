@@ -39,5 +39,13 @@ contextBridge.exposeInMainWorld('sq', {
     runChecks: (docId) => ipcRenderer.invoke('editor:run-checks', docId),
     certify: (docId, mapped) => ipcRenderer.invoke('editor:certify', { docId, mapped }),
     publish: (docId, publicCopyRef) => ipcRenderer.invoke('editor:publish', { docId, publicCopyRef })
+  },
+
+  // Super Search — the unified search studio. The whole deterministic pathway (plan → retrieve
+  // both lanes → rerank → cited overview → gated ingest) runs in main over one IPC call.
+  search: {
+    run: (query, opts) => ipcRenderer.invoke('search:run', { query, opts: opts || {} }),
+    revert: (id) => ipcRenderer.invoke('search:revert', { id }),
+    status: () => ipcRenderer.invoke('search:status')
   }
 });
