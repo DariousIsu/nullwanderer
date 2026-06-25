@@ -177,6 +177,39 @@ function createEditorWindow() {
   return editorWindow;
 }
 
+let workspaceWindow = null;
+// My Workspace — Window 3 of the 3-window model: the operator workbench that HOSTS the studios +
+// (later) data-browser surfaces. Each surface mounts in a <webview>; the shared preload is forced
+// onto every webview so embedded surfaces (the Editor) get window.sq.* untouched.
+function createWorkspaceWindow() {
+  if (workspaceWindow && !workspaceWindow.isDestroyed()) { workspaceWindow.focus(); return workspaceWindow; }
+  workspaceWindow = new BrowserWindow({
+    width: 1280,
+    height: 860,
+    backgroundColor: '#0d0d10',
+    title: 'My Workspace',
+    autoHideMenuBar: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      webviewTag: true,   // surfaces are hosted in <webview>
+    }
+  });
+  // Force the shared preload + safe settings onto any surface webview (so window.sq works inside).
+  workspaceWindow.webContents.on('will-attach-webview', (_e, webPreferences) => {
+    webPreferences.preload = path.join(__dirname, 'preload.js');
+    webPreferences.contextIsolation = true;
+    webPreferences.nodeIntegration = false;
+  });
+  workspaceWindow.loadFile(path.join(__dirname, 'renderer', 'workspace.html'));
+  workspaceWindow.once('ready-to-show', () => { workspaceWindow.show(); workspaceWindow.focus(); });
+  workspaceWindow.on('closed', () => { workspaceWindow = null; });
+  return workspaceWindow;
+}
+
 app.whenReady().then(() => {
   config.loadEnv();
   db.init();
@@ -526,6 +559,7 @@ app.on('window-all-closed', async () => {
 
 // Editor Studio — open the window + the registry/import surface (runs in main; renderer invokes).
 ipcMain.handle('editor:open', () => { createEditorWindow(); return { ok: true }; });
+ipcMain.handle('workspace:open', () => { createWorkspaceWindow(); return { ok: true }; });
 
 ipcMain.handle('editor:list-documents', (_e, opts = {}) => {
   try { return { ok: true, documents: editorRegistry.listDocuments(opts) }; }

@@ -11,8 +11,10 @@ const attachmentsBar = document.getElementById('attachments-bar');
 const browserBtn = document.getElementById('browser-btn');
 const browserStatus = document.getElementById('browser-status');
 const editorBtn = document.getElementById('editor-btn');
-if (editorBtn && window.sq && window.sq.openEditor) {
-  editorBtn.addEventListener('click', () => window.sq.openEditor());
+if (editorBtn && window.sq && (window.sq.openWorkspace || window.sq.openEditor)) {
+  // ⊞ opens the My Workspace workbench (the Editor lives inside it now); falls back to the
+  // standalone Editor window if workspace isn't available.
+  editorBtn.addEventListener('click', () => (window.sq.openWorkspace || window.sq.openEditor)());
 }
 
 // --- Browser layer UI ---

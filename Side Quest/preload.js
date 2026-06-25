@@ -25,8 +25,10 @@ contextBridge.exposeInMainWorld('sq', {
   onReflectionFired: (cb) => ipcRenderer.on('reflection:fired', (_e, info) => cb(info)),
   onMonologueTick: (cb) => ipcRenderer.on('monologue:tick', (_e, info) => cb(info)),
 
-  // Open the Editor Studio window (My Workspace surface)
+  // Open the Editor Studio window directly (kept for back-compat / direct access)
   openEditor: () => ipcRenderer.invoke('editor:open'),
+  // Open the My Workspace workbench (Window 3) — hosts the Editor + future surfaces
+  openWorkspace: () => ipcRenderer.invoke('workspace:open'),
 
   // Editor Studio — document registry / lifecycle / checks (all run in main over IPC)
   editor: {
