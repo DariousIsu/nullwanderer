@@ -69,8 +69,8 @@ Bindings + enrichment come straight from `get_atlas()` / `get_db_map()`:
 2. ✅ **Full internal recipe set** (entities · contacts · bills · polls · db_query) + entities spine join — smoke 39/39.
 3. ✅ **External lane** — `web` (Zoe-search primary, engine fallback, web_extract body enrich) + `academic` (keyless) → cards. Smoke 30/30.
 4. ✅ **Three caged leaves** — plan (local, schema-bounded targets) · rerank (local, permutation-only) · overview (cloud, cite_floor gate) — pure over injected `complete`. Smoke 30/30.
-5. **Ingest-gated loop** — `record_web_source` / `ingest` + dedup + provenance + reversible. ← *next*
-6. **Run orchestrator** — one pathway → standardized run object — smoke.
+5. ✅ **Ingest-gated loop** — `save_source` archive + URL-keyed ledger (dedup · provenance · reversible); engine-error → ledger untouched/retryable. Smoke 21/21.
+6. **Run orchestrator** — one pathway → standardized run object — smoke. ← *next*
 7. **Super Search surface** — rail entry + `<webview>`, wired over IPC → warn-and-restart → live-fire → commit.
 
 Every slice: build → offline smoke → (slice 7) wire IPC → warn-and-restart → live-fire → commit.
