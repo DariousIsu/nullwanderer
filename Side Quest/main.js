@@ -10,6 +10,7 @@ const ssRun = require('./studio/super_search_run');          // Super Search: ru
 const ssModelIO = require('./studio/super_search_model_io'); // Super Search: the three caged model leaves
 const ssIngest = require('./studio/super_search_ingest');    // Super Search: ingest-gated loop
 const ssLedger = require('./lib/super_search_ledger');       // Super Search: persistent ingest ledger
+const pollView = require('./studio/poll_view');              // Polling surface: tool payloads → view shapes
 const modelsLib = require('./lib/models');                   // model sources (cloud frontier + local) resolver
 const { streamChat, complete, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
@@ -746,6 +747,58 @@ ipcMain.handle('search:revert', async (_e, { id } = {}) => {
     const r = await ingestor.revert(id);
     return { ok: r.reverted, ...r };
   } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// ============================ POLLING (studio — data browser) ================================
+// Read-only surface over the engine's polling tools. main unwraps the MCP envelope and maps each
+// payload to the standardized view shape (studio/poll_view.js); the renderer just draws. No model.
+function pollCallTool() {
+  const toolJson = require('./lib/echo').toolJson;
+  return async (n, a) => toolJson(await echoSuit.client().callTool(n, a));
+}
+async function ensureEngine() {
+  if (!echoSuit || !echoSuit.connected) { try { await echoSuit.connect(); } catch {} }
+  return !!(echoSuit && echoSuit.connected);
+}
+
+ipcMain.handle('poll:list', async (_e, opts = {}) => {
+  try {
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('list_pollings', {
+      source_kind: opts.source_kind || null, topic: opts.topic || null, year: opts.year || null, vendor: opts.vendor || null, frame: opts.frame || null,
+    });
+    return { ok: true, items: pollView.fieldingList(payload) };
+  } catch (e) { console.error('[poll] list failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('poll:get', async (_e, { fieldingId } = {}) => {
+  try {
+    if (!fieldingId) return { ok: false, error: 'no fielding id' };
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('get_poll', { fielding_id: fieldingId, include_questions: true });
+    return { ok: true, view: pollView.pollView(payload) };
+  } catch (e) { console.error('[poll] get failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('poll:question', async (_e, { questionId } = {}) => {
+  try {
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('get_poll_question', { question_id: Number(questionId) });
+    return { ok: true, question: payload, bars: pollView.toplineBars(payload || {}) };
+  } catch (e) { console.error('[poll] question failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('poll:issues', async () => {
+  try {
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('list_poll_issues', { open_only: true, limit: 200 });
+    const rows = (Array.isArray(payload) ? payload : (payload && payload.result) || []).map(pollView.issueRow);
+    return { ok: true, rows };
+  } catch (e) { console.error('[poll] issues failed:', e.message); return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('meta:get', (_e, key) => db.getMeta(key));

@@ -47,5 +47,13 @@ contextBridge.exposeInMainWorld('sq', {
     run: (query, opts) => ipcRenderer.invoke('search:run', { query, opts: opts || {} }),
     revert: (id) => ipcRenderer.invoke('search:revert', { id }),
     status: () => ipcRenderer.invoke('search:status')
+  },
+
+  // Polling — read-only data browser over the engine's polling tools (main maps to view shapes).
+  poll: {
+    list: (opts) => ipcRenderer.invoke('poll:list', opts || {}),
+    get: (fieldingId) => ipcRenderer.invoke('poll:get', { fieldingId }),
+    question: (questionId) => ipcRenderer.invoke('poll:question', { questionId }),
+    issues: () => ipcRenderer.invoke('poll:issues')
   }
 });
