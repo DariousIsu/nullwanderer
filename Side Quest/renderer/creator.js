@@ -11,10 +11,28 @@ let editor = null;
 let currentId = null;
 let dirty = false;
 let saveTimer = null;
+let scanTimer = null;
 
 const $ = (id) => document.getElementById(id);
 const pickerEl = $('picker'), newBtn = $('new-btn'), saveBtn = $('save-btn'), stateEl = $('savestate');
 const wrapEl = $('editorwrap'), emptyEl = $('empty'), fmtbar = $('fmtbar');
+
+// ---- clinical panel: document statistics (Slice 2) ----
+function renderStats(s) {
+  s = s || {};
+  $('st-words').textContent = (s.words || 0).toLocaleString();
+  $('st-chars').textContent = (s.chars || 0).toLocaleString();
+  $('st-sentences').textContent = (s.sentences || 0).toLocaleString();
+  $('st-paragraphs').textContent = (s.paragraphs || 0).toLocaleString();
+  $('st-reading').textContent = s.words ? `${s.readingMin} min` : '—';
+}
+function clearStats() { ['words', 'chars', 'sentences', 'paragraphs', 'reading'].forEach(k => { const el = $('st-' + k); if (el) el.textContent = '—'; }); }
+function scheduleScan() { clearTimeout(scanTimer); scanTimer = setTimeout(runScan, 500); }
+async function runScan() {
+  if (!C || !editor) return;
+  try { const res = await C.scan(editor.getJSON()); if (res && res.ok) renderStats(res.stats); }
+  catch (e) { /* stats are best-effort; never block editing */ }
+}
 
 function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
@@ -31,11 +49,12 @@ function mountEditor(docJson) {
     extensions: [Z.StarterKit.configure({ blockquote: false, horizontalRule: false })],
     content: docJson || { type: 'doc', content: [{ type: 'paragraph' }] },
     autofocus: 'end',
-    onUpdate: () => { dirty = true; setState('dirty'); scheduleSave(); },
+    onUpdate: () => { dirty = true; setState('dirty'); scheduleSave(); scheduleScan(); },
     onSelectionUpdate: refreshToolbar,
     onTransaction: refreshToolbar,
   });
   refreshToolbar();
+  runScan();   // initial statistics for the just-loaded document
 }
 
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 1500); }

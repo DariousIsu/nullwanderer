@@ -71,6 +71,11 @@ select:focus{border-color:var(--accent);}
 .rail-note{font-size:12px;color:var(--tx-dim);line-height:1.65;}
 .rail-note b{color:var(--tx-muted);font-weight:600;}
 .rail-sec{font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx-fainter);margin:18px 0 7px;}
+.rail-sec:first-child{margin-top:0;}
+.stats{display:flex;flex-direction:column;gap:1px;}
+.stat{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line-faint);}
+.stat .k{font-size:12px;color:var(--tx-dim);}
+.stat .v{font-size:14px;color:var(--tx-soft);font-variant-numeric:tabular-nums;font-weight:600;}
 
 .empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--tx-dim);text-align:center;gap:8px;padding:40px;}
 .empty .big{font-size:16px;color:var(--tx-muted);}
@@ -113,9 +118,16 @@ select:focus{border-color:var(--accent);}
       <aside class="rail">
         <div class="rail-head">Assist</div>
         <div class="rail-body">
-          <div class="rail-note">The Zoe program reads what you write and assists <b>clinically, in the background</b> — no chat here.</div>
+          <div class="rail-sec">Statistics</div>
+          <div class="stats">
+            <div class="stat"><span class="k">Words</span><span class="v" id="st-words">—</span></div>
+            <div class="stat"><span class="k">Characters</span><span class="v" id="st-chars">—</span></div>
+            <div class="stat"><span class="k">Sentences</span><span class="v" id="st-sentences">—</span></div>
+            <div class="stat"><span class="k">Paragraphs</span><span class="v" id="st-paragraphs">—</span></div>
+            <div class="stat"><span class="k">Reading time</span><span class="v" id="st-reading">—</span></div>
+          </div>
           <div class="rail-sec">Coming next</div>
-          <div class="rail-note">&bull; Document statistics<br>&bull; Spelling &amp; grammar<br>&bull; Source flagging from the database<br>&bull; Fact-check sweeps<br><br>Slice 1 is the editor foundation: author &amp; save on the substrate.</div>
+          <div class="rail-note">&bull; Spelling &amp; grammar<br>&bull; Source flagging from the database<br>&bull; Fact-check sweeps</div>
         </div>
       </aside>
     </div>

@@ -94,6 +94,7 @@ contextBridge.exposeInMainWorld('sq', {
     list: (opts) => ipcRenderer.invoke('creator:list', opts || {}),
     get: (docId) => ipcRenderer.invoke('creator:get', { docId }),
     newDoc: (title) => ipcRenderer.invoke('creator:new', { title }),
-    save: (docId, docJson) => ipcRenderer.invoke('creator:save', { docId, docJson })
+    save: (docId, docJson) => ipcRenderer.invoke('creator:save', { docId, docJson }),
+    scan: (docJson) => ipcRenderer.invoke('creator:scan', { docJson })
   }
 });

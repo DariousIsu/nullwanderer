@@ -17,6 +17,7 @@ const kgView = require('./studio/kg_view');                  // Knowledge Graph 
 const docView = require('./studio/doc_view');                // Reader/Library surface: corpus doc payloads → reader view
 const docExtract = require('./lib/doc_extract');             // writing suite: local .docx/.pdf extractors (rich render)
 const creatorView = require('./studio/creator_view');        // Creator surface: block-model ⇄ ProseMirror bridge (Phase 3)
+const creatorStats = require('./studio/creator_stats');      // Creator clinical panel: deterministic document statistics
 const modelsLib = require('./lib/models');                   // model sources (cloud frontier + local) resolver
 const { streamChat, complete, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
@@ -726,6 +727,17 @@ ipcMain.handle('creator:new', (_e, { title } = {}) => {
     editorRegistry.saveWorkingCopy(doc.id, 1, wc);
     return { ok: true, doc: { id: doc.id, title: doc.title, version: doc.current_version, status: doc.status }, docJson: creatorView.blocksToDoc(wc.blocks) };
   } catch (e) { console.error('[creator] new failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// Background scan = the Creator's deterministic clinical analysis pipeline (renderer calls it
+// debounced as you write). Slice 2 = document statistics only (no model). Later slices extend the
+// returned object with corrections / DB source-flags / fact-check verdicts — same pathway, model
+// caged at named leaves. Stateless: takes the editor's ProseMirror JSON, returns findings.
+ipcMain.handle('creator:scan', (_e, { docJson } = {}) => {
+  try {
+    const blocks = creatorView.docToBlocks(docJson || { type: 'doc', content: [] });
+    return { ok: true, stats: creatorStats.computeStats(blocks) };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 
 // Save = overwrite the CURRENT version's working copy from the editor's ProseMirror JSON. This is
