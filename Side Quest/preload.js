@@ -87,5 +87,13 @@ contextBridge.exposeInMainWorld('sq', {
     list: (project) => ipcRenderer.invoke('reader:list', { project }),
     get: (docId) => ipcRenderer.invoke('reader:get', { docId }),
     bytes: (docId) => ipcRenderer.invoke('reader:bytes', { docId })
+  },
+
+  // Creator — authoring surface on the document substrate (Tiptap host; block⇄PM bridge in main).
+  creator: {
+    list: (opts) => ipcRenderer.invoke('creator:list', opts || {}),
+    get: (docId) => ipcRenderer.invoke('creator:get', { docId }),
+    newDoc: (title) => ipcRenderer.invoke('creator:new', { title }),
+    save: (docId, docJson) => ipcRenderer.invoke('creator:save', { docId, docJson })
   }
 });

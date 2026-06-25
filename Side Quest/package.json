@@ -5,13 +5,17 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "rebuild": "electron-rebuild -f -w better-sqlite3"
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "build:editor": "node scripts/build_editor.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@tiptap/core": "^3.27.1",
+    "@tiptap/pm": "^3.27.1",
+    "@tiptap/starter-kit": "^3.27.1",
     "@xenova/transformers": "^2.17.2",
     "better-sqlite3": "^12.11.1",
     "discord.js": "^14.16.3",
@@ -26,6 +30,7 @@
     "playwright": "^1.61.0"
   },
   "devDependencies": {
-    "@electron/rebuild": "^4.0.4"
+    "@electron/rebuild": "^4.0.4",
+    "esbuild": "^0.28.1"
   }
 }

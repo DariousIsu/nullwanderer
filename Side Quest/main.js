@@ -16,6 +16,7 @@ const legView = require('./studio/leg_view');                // Legislation surf
 const kgView = require('./studio/kg_view');                  // Knowledge Graph surface: graph tool payloads → nodes/links
 const docView = require('./studio/doc_view');                // Reader/Library surface: corpus doc payloads → reader view
 const docExtract = require('./lib/doc_extract');             // writing suite: local .docx/.pdf extractors (rich render)
+const creatorView = require('./studio/creator_view');        // Creator surface: block-model ⇄ ProseMirror bridge (Phase 3)
 const modelsLib = require('./lib/models');                   // model sources (cloud frontier + local) resolver
 const { streamChat, complete, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
@@ -690,6 +691,56 @@ ipcMain.handle('editor:publish', async (_e, { docId, publicCopyRef } = {}) => {
     console.error('[editor] publish failed:', e.message);
     return { ok: false, error: e.message };
   }
+});
+
+// ============================ CREATOR (writing suite — Phase 3) ==============================
+// Authoring surface on the SAME document substrate (editor_registry working copies + the light
+// block model). The renderer is a THIN Tiptap host; the block ⇄ ProseMirror bridge runs HERE
+// (studio/creator_view). Slice 1 = author + persist round-trip. The clinical assist panel
+// (stats / corrections / DB source-flagging / fact-check sweeps) lands in later slices; the model
+// stays caged as a background analysis component, never an orchestrator and never a chat partner.
+ipcMain.handle('creator:list', (_e, opts = {}) => {
+  try { return { ok: true, documents: editorRegistry.listDocuments({ sort: 'accessed', dir: 'desc', limit: 200, ...opts }) }; }
+  catch (e) { console.error('[creator] list failed:', e.message); return { ok: false, error: e.message, documents: [] }; }
+});
+
+ipcMain.handle('creator:get', (_e, { docId } = {}) => {
+  try {
+    const doc = editorRegistry.getDocument(docId);
+    if (!doc) return { ok: false, error: 'no such document' };
+    editorRegistry.touchAccessed(docId);
+    const wc = editorRegistry.getWorkingCopy(docId, doc.current_version);
+    const blocks = (wc && Array.isArray(wc.blocks)) ? wc.blocks : [];
+    return {
+      ok: true,
+      doc: { id: doc.id, title: doc.title, version: doc.current_version, status: doc.status, author: doc.author },
+      docJson: creatorView.blocksToDoc(blocks),
+    };
+  } catch (e) { console.error('[creator] get failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('creator:new', (_e, { title } = {}) => {
+  try {
+    const wc = creatorView.emptyWorkingCopy(title || 'Untitled draft');
+    const doc = editorRegistry.registerDocument({ title: wc.title, docType: 'native', source: 'native', changeSummary: 'created in Creator' });
+    editorRegistry.saveWorkingCopy(doc.id, 1, wc);
+    return { ok: true, doc: { id: doc.id, title: doc.title, version: doc.current_version, status: doc.status }, docJson: creatorView.blocksToDoc(wc.blocks) };
+  } catch (e) { console.error('[creator] new failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// Save = overwrite the CURRENT version's working copy from the editor's ProseMirror JSON. This is
+// the live edit buffer (saveWorkingCopy upserts per (doc,version)); deliberate version bumps /
+// iterations are a later, explicit action — NOT one per autosave.
+ipcMain.handle('creator:save', (_e, { docId, docJson } = {}) => {
+  try {
+    const doc = editorRegistry.getDocument(docId);
+    if (!doc) return { ok: false, error: 'no such document' };
+    const blocks = creatorView.docToBlocks(docJson || { type: 'doc', content: [] });
+    const wc = { title: doc.title, format: 'native', blocks, blockCount: blocks.length, normalizedAt: Date.now() };
+    editorRegistry.saveWorkingCopy(docId, doc.current_version, wc);
+    editorRegistry.touchAccessed(docId);
+    return { ok: true, blockCount: blocks.length, savedAt: Date.now() };
+  } catch (e) { console.error('[creator] save failed:', e.message); return { ok: false, error: e.message }; }
 });
 
 // ============================ SUPER SEARCH (studio) ==========================================
