@@ -13,6 +13,7 @@ const ssLedger = require('./lib/super_search_ledger');       // Super Search: pe
 const pollView = require('./studio/poll_view');              // Polling surface: tool payloads → view shapes
 const crmView = require('./studio/crm_view');                // CRM surface: contact tool payloads → view shapes
 const legView = require('./studio/leg_view');                // Legislation surface: bill tool payloads → view shapes
+const kgView = require('./studio/kg_view');                  // Knowledge Graph surface: graph tool payloads → nodes/links
 const modelsLib = require('./lib/models');                   // model sources (cloud frontier + local) resolver
 const { streamChat, complete, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
@@ -906,6 +907,45 @@ ipcMain.handle('leg:get', async (_e, { billId } = {}) => {
   } catch (e) { console.error('[leg] get failed:', e.message); return { ok: false, error: e.message }; }
 });
 
+// ============================ KNOWLEDGE GRAPH (studio — data browser) =========================
+// Read-only entity-network explorer over graph_overview / query_graph / search_entities. main
+// unwraps + builds the {nodes,links} graph (with style) via studio/kg_view.js; the renderer draws
+// it with vanilla force-graph and re-filters by type client-side. No model.
+ipcMain.handle('kg:overview', async () => {
+  try {
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('graph_overview', { per_type_k: 8, recent_k: 20, recent_window_days: 30 });
+    const g = kgView.buildOverview(payload);
+    return { ok: true, nodes: g.nodes, links: g.links, availableTypes: kgView.availableTypes('overview', payload), legend: kgView.legend(),
+      stats: { totalEntities: (payload && payload.total_entities) || g.nodes.length, totalRelations: (payload && payload.total_relations) || g.links.length } };
+  } catch (e) { console.error('[kg] overview failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('kg:ego', async (_e, { entity, hops } = {}) => {
+  try {
+    if (!entity) return { ok: false, error: 'no entity' };
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('query_graph', { entity_name: String(entity), hops: Number(hops) || 2 });
+    if (payload && payload.error) return { ok: true, error: payload.error };
+    const g = kgView.buildEgo(payload);
+    return { ok: true, nodes: g.nodes, links: g.links, availableTypes: kgView.availableTypes('ego', payload), legend: kgView.legend(),
+      stats: { related: (payload && payload.result_count) || g.links.length, hops: (payload && payload.hops) || hops } };
+  } catch (e) { console.error('[kg] ego failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('kg:search', async (_e, { query } = {}) => {
+  try {
+    if (!query || String(query).trim().length < 2) return { ok: true, hits: [] };
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('search_entities', { query: String(query), top_k: 8 });
+    const hits = kgView.searchHits(payload).map(h => ({ ...h, color: kgView.colorFor(h.entity_type) }));
+    return { ok: true, hits };
+  } catch (e) { console.error('[kg] search failed:', e.message); return { ok: false, error: e.message }; }
+});
+
 ipcMain.handle('meta:get', (_e, key) => db.getMeta(key));
 
 ipcMain.handle('meta:set', (_e, key, value) => {
@@ -1179,6 +1219,18 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       if (meetUrl) { gmeetLib.start(meetUrl); console.log(`[main] gmeet join started: ${meetUrl}`); }
     }
   } catch (e) { console.error('[main] gmeet start detect failed:', e.message); }
+
+  // MEDIA WATCH — "watch/play this video <url>" starts her caption-follow stepper (open →
+  // captions on → follow the live caption stream, advanced in the idle loop). Requires an
+  // explicit watch verb so a YouTube link merely referenced isn't auto-watched; a live
+  // meeting takes precedence. The normal turn still runs so she acknowledges.
+  try {
+    const mediaCcLib = require('./lib/media_cc');
+    if (!mediaCcLib.active() && !require('./lib/gmeet').active() && /\b(watch|play|put on|stream)\b/i.test(userMessage)) {
+      const mediaUrl = mediaCcLib.detectMediaUrl(userMessage);
+      if (mediaUrl) { mediaCcLib.start(mediaUrl); console.log(`[main] media watch started: ${mediaUrl}`); }
+    }
+  } catch (e) { console.error('[main] media watch detect failed:', e.message); }
 
   // BYLINE START — "write/publish a post about X" kicks off her autonomous byline
   // pipeline (research→read→write→publish, advanced one stage per idle tick). Side

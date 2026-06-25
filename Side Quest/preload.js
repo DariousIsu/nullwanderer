@@ -72,5 +72,12 @@ contextBridge.exposeInMainWorld('sq', {
     browse: (filters, offset) => ipcRenderer.invoke('leg:browse', { filters: filters || {}, offset: offset || 0 }),
     search: (query, filters) => ipcRenderer.invoke('leg:search', { query, filters: filters || {} }),
     get: (billId) => ipcRenderer.invoke('leg:get', { billId })
+  },
+
+  // Knowledge Graph — read-only entity-network explorer (overview + ego-walk + fuzzy search).
+  kg: {
+    overview: () => ipcRenderer.invoke('kg:overview'),
+    ego: (entity, hops) => ipcRenderer.invoke('kg:ego', { entity, hops }),
+    search: (query) => ipcRenderer.invoke('kg:search', { query })
   }
 });

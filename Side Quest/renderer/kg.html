@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Knowledge Graph</title>
+<style>
+/* === Knowledge Graph surface — canonical dark kit; viz on vanilla force-graph (MIT) ======== */
+:root{
+  --bg:#0d0d10;--bg-deep:#0a0b0e;--bg-panel:#121218;--bg-raised:#1a1a20;
+  --line-faint:#15151a;--line:#1f1f24;--line-strong:#2a2a30;--line-hover:#4a4a52;
+  --tx:#e8e8eb;--tx-soft:#d8d8db;--tx-muted:#9a9aa3;--tx-dim:#6a6a73;--tx-fainter:#4a4a52;
+  --accent:#6a86b6;--warn-fg:#d8c79a;--bad-fg:#d8a0a0;
+  --r-sm:3px;--r:4px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;background:var(--bg);color:var(--tx-soft);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Inter",system-ui,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;}
+[hidden]{display:none !important;}
+.studio{height:100vh;display:flex;flex-direction:column;overflow:hidden;}
+.studio-head{flex-shrink:0;display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--line);background:var(--bg-panel);}
+.studio-mark{font-size:16px;color:var(--accent);}
+.studio-title{font-size:13px;font-weight:600;color:var(--tx);}
+.qwrap{flex:1;max-width:560px;position:relative;}
+.qwrap input{width:100%;background:var(--bg-raised);border:1px solid var(--line-strong);color:var(--tx);font:inherit;font-size:13px;padding:7px 11px;border-radius:var(--r);outline:none;}
+.qwrap input:focus{border-color:var(--accent);}
+.dd{position:absolute;left:0;right:0;top:100%;margin-top:4px;z-index:50;background:var(--bg-raised);border:1px solid var(--line-strong);border-radius:var(--r);max-height:300px;overflow:auto;box-shadow:0 6px 18px rgba(0,0,0,0.5);}
+.dd .hit{padding:7px 11px;cursor:pointer;font-size:12.5px;display:flex;align-items:center;gap:8px;}
+.dd .hit:hover,.dd .hit.on{background:var(--bg-panel);}
+.dd .hit .swatch{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+.dd .hit .nm{color:var(--tx-soft);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dd .hit .ty{font-size:10px;text-transform:uppercase;color:var(--tx-fainter);font-family:ui-monospace,monospace;}
+.lbl{font-size:12px;color:var(--tx-dim);display:flex;align-items:center;gap:6px;}
+.lbl select{background:var(--bg-raised);border:1px solid var(--line-strong);color:var(--tx-soft);font:inherit;font-size:12px;padding:4px 7px;border-radius:var(--r-sm);outline:none;}
+.btn{background:transparent;border:1px solid var(--line-strong);color:var(--tx-muted);font:inherit;font-size:12px;padding:5px 11px;border-radius:var(--r-sm);cursor:pointer;}
+.btn:hover{border-color:var(--line-hover);color:var(--tx-soft);}
+.pills{flex-shrink:0;display:flex;flex-wrap:wrap;gap:6px;padding:8px 18px;border-bottom:1px solid var(--line-faint);background:var(--bg-panel);}
+.pills:empty{display:none;}
+.pill{font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-family:ui-monospace,monospace;padding:1px 8px;border-radius:4px;border:1px solid;cursor:pointer;background:transparent;}
+.stage{flex:1;position:relative;min-height:0;background:var(--bg-deep);}
+#graph{position:absolute;inset:0;}
+.overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:32px;color:var(--tx-dim);font-size:13px;pointer-events:none;}
+.overlay.fail{color:var(--bad-fg);}.overlay.warn{color:var(--warn-fg);}
+.legend{position:absolute;top:10px;left:10px;background:rgba(18,18,24,0.85);border:1px solid var(--line);border-radius:var(--r-sm);padding:7px 9px;font-size:9px;text-transform:uppercase;letter-spacing:0.07em;font-family:ui-monospace,monospace;pointer-events:none;}
+.legend .lt{color:var(--tx-fainter);margin-bottom:4px;}
+.legend .row{display:flex;align-items:center;gap:6px;margin-top:2px;color:var(--tx-muted);}
+.legend .bar{display:inline-block;width:16px;}
+.stats{position:absolute;bottom:10px;right:10px;font-size:10px;text-transform:uppercase;letter-spacing:0.07em;font-family:ui-monospace,monospace;color:var(--tx-dim);background:rgba(18,18,24,0.8);padding:3px 8px;border-radius:var(--r-sm);pointer-events:none;}
+.hovercard{position:absolute;bottom:10px;left:10px;max-width:320px;background:rgba(18,18,24,0.96);border:1px solid var(--line-strong);border-radius:var(--r);padding:9px 11px;font-size:12px;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,0.5);}
+.hovercard .hh{display:flex;align-items:center;gap:7px;margin-bottom:4px;}
+.hovercard .swatch{width:8px;height:8px;border-radius:50%;}
+.hovercard .nm{font-weight:600;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.hovercard .ty{font-size:10px;text-transform:uppercase;color:var(--tx-fainter);font-family:ui-monospace,monospace;}
+.hovercard .sm{font-size:11.5px;color:var(--tx-muted);line-height:1.5;max-height:5.4em;overflow:hidden;}
+.hovercard .hint{font-size:10px;color:var(--tx-fainter);font-style:italic;margin-top:4px;}
+</style>
+</head>
+<body>
+  <div class="studio">
+    <div class="studio-head">
+      <span class="studio-mark">&#9737;</span><span class="studio-title">Knowledge Graph</span>
+      <div class="qwrap"><input id="q" type="text" placeholder="Focus an entity… (fuzzy search)" autocomplete="off" spellcheck="false"><div class="dd" id="dd" hidden></div></div>
+      <label class="lbl">hops <select id="hops"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></label>
+      <button class="btn" id="backBtn" hidden>← overview</button>
+    </div>
+    <div class="pills" id="pills"></div>
+    <div class="stage">
+      <div id="graph"></div>
+      <div class="overlay" id="overlay">Loading corpus overview…</div>
+      <div class="legend" id="legend" hidden></div>
+      <div class="stats" id="stats" hidden></div>
+      <div class="hovercard" id="hovercard" hidden></div>
+    </div>
+  </div>
+  <script src="vendor/force-graph.min.js"></script>
+  <script src="kg.js"></script>
+</body>
+</html>
