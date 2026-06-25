@@ -55,5 +55,14 @@ contextBridge.exposeInMainWorld('sq', {
     get: (fieldingId) => ipcRenderer.invoke('poll:get', { fieldingId }),
     question: (questionId) => ipcRenderer.invoke('poll:question', { questionId }),
     issues: () => ipcRenderer.invoke('poll:issues')
+  },
+
+  // CRM (Rolodex) — read-only contact browser (facets + search + paginated browse + detail).
+  crm: {
+    facets: (filters) => ipcRenderer.invoke('crm:facets', filters || {}),
+    browse: (filters) => ipcRenderer.invoke('crm:browse', filters || {}),
+    search: (query, filters) => ipcRenderer.invoke('crm:search', { query, filters: filters || {} }),
+    page: (cursor) => ipcRenderer.invoke('crm:page', { cursor }),
+    get: (contactId) => ipcRenderer.invoke('crm:get', { contactId })
   }
 });

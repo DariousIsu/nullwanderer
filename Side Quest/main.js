@@ -11,6 +11,7 @@ const ssModelIO = require('./studio/super_search_model_io'); // Super Search: th
 const ssIngest = require('./studio/super_search_ingest');    // Super Search: ingest-gated loop
 const ssLedger = require('./lib/super_search_ledger');       // Super Search: persistent ingest ledger
 const pollView = require('./studio/poll_view');              // Polling surface: tool payloads → view shapes
+const crmView = require('./studio/crm_view');                // CRM surface: contact tool payloads → view shapes
 const modelsLib = require('./lib/models');                   // model sources (cloud frontier + local) resolver
 const { streamChat, complete, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
@@ -799,6 +800,60 @@ ipcMain.handle('poll:issues', async () => {
     const rows = (Array.isArray(payload) ? payload : (payload && payload.result) || []).map(pollView.issueRow);
     return { ok: true, rows };
   } catch (e) { console.error('[poll] issues failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// ============================ CRM / ROLODEX (studio — data browser) ==========================
+// Read-only surface over the engine's contact tools. main unwraps the MCP envelope and maps each
+// payload to the standardized view shape (studio/crm_view.js); the renderer draws. No model.
+ipcMain.handle('crm:facets', async (_e, filters = {}) => {
+  try {
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('contact_facets', {
+      state: filters.state || null, party: filters.party || null, chamber: filters.chamber || null, tier: filters.tier || null,
+    });
+    return { ok: true, groups: crmView.facetGroups(payload) };
+  } catch (e) { console.error('[crm] facets failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('crm:browse', async (_e, filters = {}) => {
+  try {
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('list_contacts_compact', {
+      state: filters.state || null, party: filters.party || null, chamber: filters.chamber || null, tier: filters.tier || null,
+    });
+    return { ok: true, list: crmView.browseList(payload) };
+  } catch (e) { console.error('[crm] browse failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('crm:search', async (_e, { query, filters } = {}) => {
+  try {
+    if (!query || !String(query).trim()) return { ok: false, error: 'empty query' };
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('search_contacts', { query: String(query), state: (filters && filters.state) || null, tier: (filters && filters.tier) || null, top_k: 50 });
+    return { ok: true, list: crmView.searchList(payload) };
+  } catch (e) { console.error('[crm] search failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('crm:page', async (_e, { cursor } = {}) => {
+  try {
+    if (!cursor) return { ok: false, error: 'no cursor' };
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('list_contacts_page', { cursor, limit: 100 });
+    return { ok: true, page: crmView.pageRows(payload) };
+  } catch (e) { console.error('[crm] page failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('crm:get', async (_e, { contactId } = {}) => {
+  try {
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('get_contact', { contact_id: Number(contactId), include_related: true });
+    return { ok: true, card: crmView.contactCard(payload) };
+  } catch (e) { console.error('[crm] get failed:', e.message); return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('meta:get', (_e, key) => db.getMeta(key));
