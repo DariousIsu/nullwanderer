@@ -64,5 +64,13 @@ contextBridge.exposeInMainWorld('sq', {
     search: (query, filters) => ipcRenderer.invoke('crm:search', { query, filters: filters || {} }),
     page: (cursor) => ipcRenderer.invoke('crm:page', { cursor }),
     get: (contactId) => ipcRenderer.invoke('crm:get', { contactId })
+  },
+
+  // Legislation — read-only bill browser (facets + FTS search + offset-paginated browse + detail).
+  leg: {
+    facets: (filters) => ipcRenderer.invoke('leg:facets', filters || {}),
+    browse: (filters, offset) => ipcRenderer.invoke('leg:browse', { filters: filters || {}, offset: offset || 0 }),
+    search: (query, filters) => ipcRenderer.invoke('leg:search', { query, filters: filters || {} }),
+    get: (billId) => ipcRenderer.invoke('leg:get', { billId })
   }
 });

@@ -12,6 +12,7 @@ const ssIngest = require('./studio/super_search_ingest');    // Super Search: in
 const ssLedger = require('./lib/super_search_ledger');       // Super Search: persistent ingest ledger
 const pollView = require('./studio/poll_view');              // Polling surface: tool payloads → view shapes
 const crmView = require('./studio/crm_view');                // CRM surface: contact tool payloads → view shapes
+const legView = require('./studio/leg_view');                // Legislation surface: bill tool payloads → view shapes
 const modelsLib = require('./lib/models');                   // model sources (cloud frontier + local) resolver
 const { streamChat, complete, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
@@ -854,6 +855,55 @@ ipcMain.handle('crm:get', async (_e, { contactId } = {}) => {
     const payload = await callTool('get_contact', { contact_id: Number(contactId), include_related: true });
     return { ok: true, card: crmView.contactCard(payload) };
   } catch (e) { console.error('[crm] get failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// ============================ LEGISLATION (studio — data browser) ============================
+// Read-only surface over the engine's bill tools (~1.46M bills). No "list all": browse by facets
+// (offset-paginated) or FTS search. main unwraps + maps via studio/leg_view.js. No model.
+ipcMain.handle('leg:facets', async (_e, filters = {}) => {
+  try {
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('bill_facets', {
+      state: filters.state || null, session: filters.session || null, bill_type: filters.bill_type || null,
+      chamber_origin: filters.chamber_origin || null, year: filters.year || null,
+    });
+    return { ok: true, groups: legView.facetGroups(payload) };
+  } catch (e) { console.error('[leg] facets failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('leg:browse', async (_e, { filters, offset } = {}) => {
+  try {
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const f = filters || {};
+    const callTool = pollCallTool();
+    const payload = await callTool('list_bills', {
+      state: f.state || null, session: f.session || null, bill_type: f.bill_type || null,
+      chamber_origin: f.chamber_origin || null, year: f.year || null,
+      offset: Number(offset) || 0, limit: 60, order_by: 'name',
+    });
+    return { ok: true, list: legView.billList(payload, Number(offset) || 0) };
+  } catch (e) { console.error('[leg] browse failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('leg:search', async (_e, { query, filters } = {}) => {
+  try {
+    if (!query || !String(query).trim()) return { ok: false, error: 'empty query' };
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const f = filters || {};
+    const callTool = pollCallTool();
+    const payload = await callTool('search_bills', { query: String(query), state: f.state || null, session: f.session || null, bill_type: f.bill_type || null, top_k: 50 });
+    return { ok: true, list: legView.searchList(payload) };
+  } catch (e) { console.error('[leg] search failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('leg:get', async (_e, { billId } = {}) => {
+  try {
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const payload = await callTool('get_bill', { bill_id: Number(billId) });
+    return { ok: true, card: legView.billCard(payload) };
+  } catch (e) { console.error('[leg] get failed:', e.message); return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('meta:get', (_e, key) => db.getMeta(key));
