@@ -34,6 +34,113 @@ async function runScan() {
   catch (e) { /* stats are best-effort; never block editing */ }
 }
 
+// ---- clinical panel: proofread corrections + in-document squiggles (Slice 3) ----
+// The model (caged in main) returns candidate corrections; here we anchor each to a real text
+// range, render it as a squiggle decoration + a panel card, and let the operator accept/reject.
+let corrections = [];        // [{id,type,original,suggestion,message, _range}]
+let proofInFlight = false;
+let bgOn = false;
+let bgTimer = null;
+let lastProofText = '';
+const corrKey = (Z && Z.PluginKey) ? new Z.PluginKey('corrDecos') : null;
+const corrPlugin = (Z && Z.Plugin && corrKey) ? new Z.Plugin({
+  key: corrKey,
+  state: {
+    init: () => Z.DecorationSet.empty,
+    apply(tr, old) {
+      const meta = tr.getMeta(corrKey);
+      if (meta && meta.decorations) return meta.decorations;
+      return old.map(tr.mapping, tr.doc);   // track edits between scans
+    },
+  },
+  props: { decorations(state) { return corrKey.getState(state); } },
+}) : null;
+
+// Map each correction's verbatim span to a ProseMirror range by searching text nodes. Claims
+// occurrences greedily so two corrections on the same word don't collide. Spans that cross a mark
+// boundary (rare) simply don't get a range — the card still works, just no squiggle.
+function mapCorrections() {
+  if (!editor) return;
+  const segs = [];
+  editor.state.doc.descendants((node, pos) => { if (node.isText && node.text) segs.push({ text: node.text, from: pos }); });
+  const used = [];
+  for (const c of corrections) {
+    c._range = null;
+    for (const seg of segs) {
+      let idx = seg.text.indexOf(c.original);
+      while (idx >= 0) {
+        const from = seg.from + idx, to = from + c.original.length;
+        if (!used.some(r => from < r.to && to > r.from)) { c._range = { from, to }; used.push({ from, to }); break; }
+        idx = seg.text.indexOf(c.original, idx + 1);
+      }
+      if (c._range) break;
+    }
+  }
+}
+function applyDecorations() {
+  if (!editor || !corrKey) return;
+  const decos = [];
+  for (const c of corrections) {
+    if (c._range) decos.push(Z.Decoration.inline(c._range.from, c._range.to, { class: 'corr-mark corr-' + c.type }));
+  }
+  const set = Z.DecorationSet.create(editor.state.doc, decos);
+  editor.view.dispatch(editor.state.tr.setMeta(corrKey, { decorations: set }));
+}
+function renderCorrections() {
+  const el = $('corrections'), cnt = $('corr-count');
+  if (cnt) cnt.textContent = corrections.length ? `(${corrections.length})` : '';
+  if (!el) return;
+  el.innerHTML = corrections.map(c => `
+    <div class="ccard ${c.type}" data-id="${c.id}">
+      <div class="ct"><span class="ctype">${escapeHtml(c.type)}</span></div>
+      <div class="cfix"><span class="old">${escapeHtml(c.original)}</span> &rarr; <span class="new">${escapeHtml(c.suggestion)}</span></div>
+      ${c.message ? `<div class="cmsg">${escapeHtml(c.message)}</div>` : ''}
+      <div class="cact"><button class="cbtn acc" data-acc="${c.id}">Accept</button><button class="cbtn" data-dis="${c.id}">Dismiss</button></div>
+    </div>`).join('');
+}
+function setCorrStatus(t, working) { const el = $('corr-status'); if (el) { el.textContent = t || ''; el.className = 'corr-status' + (working ? ' working' : ''); } }
+
+function acceptCorrection(id) {
+  const c = corrections.find(x => x.id === id); if (!c || !editor) return;
+  mapCorrections();
+  if (c._range) {
+    const { from, to } = c._range;
+    editor.chain().focus().command(({ tr }) => { tr.insertText(c.suggestion, from, to); return true; }).run();
+  }
+  corrections = corrections.filter(x => x.id !== id);
+  afterCorrChange();
+}
+function dismissCorrection(id) { corrections = corrections.filter(x => x.id !== id); afterCorrChange(); }
+function afterCorrChange() { mapCorrections(); applyDecorations(); renderCorrections(); }
+
+async function proofreadNow() {
+  if (!C || !editor || proofInFlight) return;
+  proofInFlight = true; setCorrStatus('checking…', true);
+  const btn = $('check-btn'); if (btn) btn.disabled = true;
+  try {
+    const res = await C.proofread(editor.getJSON(), null);
+    if (res && res.ok) {
+      corrections = (res.corrections || []).map(c => ({ ...c }));
+      lastProofText = editor.getText();
+      mapCorrections(); applyDecorations(); renderCorrections();
+      setCorrStatus(corrections.length ? `${corrections.length} suggestion${corrections.length === 1 ? '' : 's'}` : 'no issues found');
+    } else setCorrStatus('check failed');
+  } catch (e) { setCorrStatus('check failed'); }
+  finally { proofInFlight = false; const b = $('check-btn'); if (b) b.disabled = false; }
+}
+// background mode: re-check a couple seconds after typing stops, only if the text actually changed
+// and no pass is in flight (single-flight, idle-gated). Per-block-hash incrementality is a later refinement.
+function scheduleBgProof() {
+  if (!bgOn) return;
+  clearTimeout(bgTimer);
+  bgTimer = setTimeout(() => { if (bgOn && !proofInFlight && editor && editor.getText() !== lastProofText) proofreadNow(); }, 2500);
+}
+function resetCorrections() {
+  corrections = []; lastProofText = '';
+  if (editor && corrPlugin) { try { editor.registerPlugin(corrPlugin); } catch (e) { /* already registered */ } }
+  applyDecorations(); renderCorrections(); setCorrStatus('');
+}
+
 function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 function setState(s) {  // '' | 'dirty' | 'saving' | 'saved'
@@ -49,12 +156,13 @@ function mountEditor(docJson) {
     extensions: [Z.StarterKit.configure({ blockquote: false, horizontalRule: false })],
     content: docJson || { type: 'doc', content: [{ type: 'paragraph' }] },
     autofocus: 'end',
-    onUpdate: () => { dirty = true; setState('dirty'); scheduleSave(); scheduleScan(); },
+    onUpdate: () => { dirty = true; setState('dirty'); scheduleSave(); scheduleScan(); scheduleBgProof(); },
     onSelectionUpdate: refreshToolbar,
     onTransaction: refreshToolbar,
   });
   refreshToolbar();
-  runScan();   // initial statistics for the just-loaded document
+  runScan();           // initial statistics for the just-loaded document
+  resetCorrections();  // clear prior doc's corrections + (re)register the decoration plugin
 }
 
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 1500); }
@@ -129,6 +237,13 @@ newBtn.addEventListener('click', async () => {
   }
 });
 saveBtn.addEventListener('click', saveNow);
+// corrections: manual check, background toggle, and card accept/dismiss (delegated)
+$('check-btn').addEventListener('click', proofreadNow);
+$('bg-toggle').addEventListener('change', e => { bgOn = e.target.checked; if (bgOn) scheduleBgProof(); });
+$('corrections').addEventListener('click', e => {
+  const a = e.target.closest('[data-acc]'); if (a) { acceptCorrection(a.dataset.acc); return; }
+  const d = e.target.closest('[data-dis]'); if (d) { dismissCorrection(d.dataset.dis); return; }
+});
 // best-effort flush if the surface is torn down with unsaved edits
 window.addEventListener('beforeunload', () => { if (dirty && C && currentId != null && editor) C.save(currentId, editor.getJSON()); });
 

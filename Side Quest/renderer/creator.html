@@ -10,7 +10,7 @@
   --bg:#0d0d10;--bg-deep:#0a0a0d;--bg-panel:#121218;--bg-raised:#1a1a20;
   --line-faint:#15151a;--line:#1f1f24;--line-strong:#2a2a30;--line-hover:#4a4a52;
   --tx:#e8e8eb;--tx-soft:#d8d8db;--tx-muted:#9a9aa3;--tx-dim:#6a6a73;--tx-fainter:#4a4a52;
-  --accent:#6a86b6;--info-fg:#9ab2cc;--ok-fg:#a8d8a8;--warn-fg:#d8c79a;
+  --accent:#6a86b6;--info-fg:#9ab2cc;--ok-fg:#a8d8a8;--warn-fg:#d8c79a;--bad-fg:#d8a0a0;
   --r-sm:3px;--r:4px;
 }
 *{box-sizing:border-box;margin:0;padding:0;}
@@ -76,6 +76,33 @@ select:focus{border-color:var(--accent);}
 .stat{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line-faint);}
 .stat .k{font-size:12px;color:var(--tx-dim);}
 .stat .v{font-size:14px;color:var(--tx-soft);font-variant-numeric:tabular-nums;font-weight:600;}
+/* corrections */
+.corr-controls{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+.btn.xs{font-size:11px;padding:4px 9px;}
+.bgtoggle{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--tx-dim);cursor:pointer;user-select:none;}
+.bgtoggle input{accent-color:var(--accent);}
+.corr-status{font-size:11px;color:var(--tx-fainter);min-height:14px;margin-bottom:6px;}
+.corr-status.working{color:var(--info-fg);}
+.corrections{display:flex;flex-direction:column;gap:7px;}
+.ccard{background:var(--bg-panel);border:1px solid var(--line);border-radius:var(--r);padding:8px 9px;border-left:2px solid var(--line-strong);}
+.ccard.spelling{border-left-color:var(--bad-fg);}
+.ccard.grammar{border-left-color:var(--info-fg);}
+.ccard.style{border-left-color:var(--warn-fg);}
+.ccard .ct{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px;}
+.ccard .ctype{font-size:9px;letter-spacing:0.08em;text-transform:uppercase;color:var(--tx-dim);}
+.ccard .cfix{font-size:12.5px;color:var(--tx-soft);line-height:1.45;}
+.ccard .cfix .old{color:var(--bad-fg);text-decoration:line-through;text-decoration-color:var(--tx-fainter);}
+.ccard .cfix .new{color:var(--ok-fg);}
+.ccard .cmsg{font-size:11px;color:var(--tx-fainter);margin-top:3px;line-height:1.4;}
+.ccard .cact{display:flex;gap:6px;margin-top:7px;}
+.cbtn{font-size:11px;padding:3px 10px;border:1px solid var(--line-strong);border-radius:var(--r-sm);background:transparent;color:var(--tx-muted);cursor:pointer;}
+.cbtn.acc{border-color:var(--ok-line,#4a7a4a);color:var(--ok-fg);}
+.cbtn:hover{border-color:var(--line-hover);}
+/* in-document squiggles (decorations) */
+.ProseMirror .corr-mark{text-decoration:underline wavy;text-decoration-skip-ink:none;text-underline-offset:3px;}
+.ProseMirror .corr-spelling{text-decoration-color:var(--bad-fg);}
+.ProseMirror .corr-grammar{text-decoration-color:var(--info-fg);}
+.ProseMirror .corr-style{text-decoration-color:var(--warn-fg);}
 
 .empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--tx-dim);text-align:center;gap:8px;padding:40px;}
 .empty .big{font-size:16px;color:var(--tx-muted);}
@@ -126,8 +153,16 @@ select:focus{border-color:var(--accent);}
             <div class="stat"><span class="k">Paragraphs</span><span class="v" id="st-paragraphs">—</span></div>
             <div class="stat"><span class="k">Reading time</span><span class="v" id="st-reading">—</span></div>
           </div>
+          <div class="rail-sec">Corrections <span class="muted" id="corr-count"></span></div>
+          <div class="corr-controls">
+            <button class="btn xs" id="check-btn">Check writing</button>
+            <label class="bgtoggle" title="Re-check automatically a couple seconds after you stop typing"><input type="checkbox" id="bg-toggle"> background</label>
+          </div>
+          <div class="corr-status" id="corr-status"></div>
+          <div class="corrections" id="corrections"></div>
+
           <div class="rail-sec">Coming next</div>
-          <div class="rail-note">&bull; Spelling &amp; grammar<br>&bull; Source flagging from the database<br>&bull; Fact-check sweeps</div>
+          <div class="rail-note">&bull; Source flagging from the database<br>&bull; Fact-check sweeps</div>
         </div>
       </aside>
     </div>

@@ -18,6 +18,7 @@ const docView = require('./studio/doc_view');                // Reader/Library s
 const docExtract = require('./lib/doc_extract');             // writing suite: local .docx/.pdf extractors (rich render)
 const creatorView = require('./studio/creator_view');        // Creator surface: block-model ⇄ ProseMirror bridge (Phase 3)
 const creatorStats = require('./studio/creator_stats');      // Creator clinical panel: deterministic document statistics
+const creatorProofread = require('./studio/creator_proofread'); // Creator clinical panel: caged proofread leaf (spelling/grammar/style)
 const modelsLib = require('./lib/models');                   // model sources (cloud frontier + local) resolver
 const { streamChat, complete, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
@@ -738,6 +739,26 @@ ipcMain.handle('creator:scan', (_e, { docJson } = {}) => {
     const blocks = creatorView.docToBlocks(docJson || { type: 'doc', content: [] });
     return { ok: true, stats: creatorStats.computeStats(blocks) };
   } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// Proofread = the caged spelling/grammar/style leaf (local 24B). The model returns candidate
+// corrections; creator_proofread validates + de-hallucinates them (every kept span must be real
+// verbatim text). The OPERATOR accepts/rejects in the panel — the model never edits the document.
+// onlyAnchors (optional) scopes the pass to changed blocks for background-incremental mode.
+ipcMain.handle('creator:proofread', async (_e, { docJson, onlyAnchors } = {}) => {
+  try {
+    const blocks = creatorView.docToBlocks(docJson || { type: 'doc', content: [] });
+    let prose = creatorProofread.proseBlocks(blocks);
+    if (Array.isArray(onlyAnchors) && onlyAnchors.length) {
+      const set = new Set(onlyAnchors);
+      prose = prose.filter(b => set.has(b.anchor));
+    }
+    if (!prose.length) return { ok: true, corrections: [], anchors: [] };
+    const messages = creatorProofread.buildMessages(prose);
+    const text = await complete({ model: MODEL, messages, options: { temperature: 0, num_ctx: 8192 } });
+    const corrections = creatorProofread.parseCorrections(text, creatorProofread.anchorTextMap(prose));
+    return { ok: true, corrections, anchors: prose.map(b => b.anchor) };
+  } catch (e) { console.error('[creator] proofread failed:', e.message); return { ok: false, error: e.message }; }
 });
 
 // Save = overwrite the CURRENT version's working copy from the editor's ProseMirror JSON. This is

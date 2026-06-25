@@ -11,7 +11,12 @@
  */
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
+// ProseMirror primitives for the clinical-assist layer: inline decorations (the spelling/grammar
+// squiggles + source/fact-check marks) ride a plugin keyed by PluginKey; the renderer rebuilds the
+// DecorationSet from the scan's findings without mutating the document.
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 
-// Single global the renderer consumes. Namespaced so it can grow (table, decorations, changeset)
-// without colliding with anything else on window.
-window.ZoeEditor = { Editor, StarterKit };
+// Single global the renderer consumes. Namespaced so it can grow (table, changeset) without
+// colliding with anything else on window.
+window.ZoeEditor = { Editor, StarterKit, Plugin, PluginKey, Decoration, DecorationSet };
