@@ -65,6 +65,22 @@ async function extractDocx(filePath) {
   return { markdown: htmlToMarkdown(r.value), messages: (r.messages || []).map(x => x.message || String(x)) };
 }
 
+// .docx → RICH HTML for faithful display (the Reader's hybrid-fidelity path: render the canonical
+// original, not the lossy extracted markdown). mammoth emits a safe fixed vocabulary (h1-6, p,
+// ul/ol/li, table, strong/em, a, img) and inlines embedded images as base64 data URIs. We still
+// run a light sanitize (strip <script>, on*= handlers, javascript: URLs) as belt-and-suspenders.
+function sanitizeHtml(html) {
+  return String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/\son\w+\s*=\s*"[^"]*"/gi, '').replace(/\son\w+\s*=\s*'[^']*'/gi, '')
+    .replace(/(href|src)\s*=\s*("|')\s*javascript:[^"']*\2/gi, '$1=$2#$2');
+}
+async function extractDocxHtml(filePath) {
+  const mammoth = require('mammoth');
+  const r = await mammoth.convertToHtml({ path: filePath });
+  return { html: sanitizeHtml(r.value), messages: (r.messages || []).map(x => x.message || String(x)) };
+}
+
 // .pdf → markdown via pdfjs-dist (ESM, dynamic import). One "## Page N" section per page; the page
 // text is a single run-on block (PDF positioned-text has no paragraph semantics — lossy by nature).
 async function extractPdf(filePath) {
@@ -93,4 +109,4 @@ async function extractToMarkdown(filePath) {
   throw new Error(`extractToMarkdown: unsupported extension .${ext}`);
 }
 
-module.exports = { decodeEntities, inlineMd, htmlToMarkdown, extractDocx, extractPdf, extractToMarkdown, TEXT_EXT };
+module.exports = { decodeEntities, inlineMd, htmlToMarkdown, sanitizeHtml, extractDocx, extractDocxHtml, extractPdf, extractToMarkdown, TEXT_EXT };

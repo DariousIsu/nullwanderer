@@ -85,6 +85,7 @@ contextBridge.exposeInMainWorld('sq', {
   reader: {
     projects: () => ipcRenderer.invoke('reader:projects'),
     list: (project) => ipcRenderer.invoke('reader:list', { project }),
-    get: (docId) => ipcRenderer.invoke('reader:get', { docId })
+    get: (docId) => ipcRenderer.invoke('reader:get', { docId }),
+    bytes: (docId) => ipcRenderer.invoke('reader:bytes', { docId })
   }
 });

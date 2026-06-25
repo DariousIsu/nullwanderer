@@ -55,11 +55,28 @@ function renderDoc(doc) {
     doc.method && `<span>via ${esc(doc.method)}</span>`,
     ...doc.meta.map(m => `<span class="mchip">${esc(m.key)}: ${esc(m.value).slice(0, 60)}</span>`),
   ].filter(Boolean).join('');
+  // Prefer the faithful rich HTML (mammoth, from the canonical .docx — real headings, lists,
+  // tables, emphasis + embedded images). Fall back to the structured blocks for other formats.
+  const body = doc.html
+    ? `<div class="rich">${doc.html}</div>`
+    : (doc.blocks.length ? bodyHtml(doc.blocks) : '<div class="status">Empty document.</div>');
   readerEl.innerHTML = `<div class="doc">
     <div class="doc-head"><div class="doc-title">${esc(doc.title)}</div><div class="doc-meta">${meta}</div></div>
-    <div class="doc-body">${doc.blocks.length ? bodyHtml(doc.blocks) : '<div class="status">Empty document.</div>'}</div>
+    <div class="doc-body">${body}</div>
   </div>`;
   readerEl.scrollTop = 0;
+}
+
+// PDFs render full-fidelity in Chromium's native viewer: pull the canonical bytes → blob → iframe.
+async function renderPdf(doc) {
+  readerEl.innerHTML = `<div class="status">Loading PDF…</div>`;
+  try {
+    const res = await window.sq.reader.bytes(doc.id);
+    if (!res || !res.ok || !res.base64) { renderDoc(doc); return; }   // fall back to extracted text
+    const bytes = Uint8Array.from(atob(res.base64), c => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+    readerEl.innerHTML = `<iframe class="pdfframe" src="${url}#toolbar=1"></iframe>`;
+  } catch (e) { renderDoc(doc); }
 }
 
 async function openDoc(id) {
@@ -69,6 +86,7 @@ async function openDoc(id) {
   try {
     const res = await window.sq.reader.get(activeId);
     if (!res || !res.ok) { readerEl.innerHTML = `<div class="err">⚠ ${esc((res && res.error) || 'failed to load')}</div>`; return; }
+    if (res.doc && res.doc.sourceExt === 'pdf') return renderPdf(res.doc);
     renderDoc(res.doc);
   } catch (e) { readerEl.innerHTML = `<div class="err">⚠ ${esc(e.message || String(e))}</div>`; }
 }

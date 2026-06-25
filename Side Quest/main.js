@@ -15,6 +15,7 @@ const crmView = require('./studio/crm_view');                // CRM surface: con
 const legView = require('./studio/leg_view');                // Legislation surface: bill tool payloads → view shapes
 const kgView = require('./studio/kg_view');                  // Knowledge Graph surface: graph tool payloads → nodes/links
 const docView = require('./studio/doc_view');                // Reader/Library surface: corpus doc payloads → reader view
+const docExtract = require('./lib/doc_extract');             // writing suite: local .docx/.pdf extractors (rich render)
 const modelsLib = require('./lib/models');                   // model sources (cloud frontier + local) resolver
 const { streamChat, complete, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
@@ -973,8 +974,37 @@ ipcMain.handle('reader:get', async (_e, { docId } = {}) => {
     if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
     const callTool = pollCallTool();
     const payload = await callTool('get_document', { doc_id: Number(docId), depth: 'full' });
-    return { ok: true, doc: docView.readerDoc(payload) };
+    const doc = docView.readerDoc(payload);
+    // Faithful render: for a .docx, re-extract the CANONICAL original via mammoth (real headings,
+    // lists, tables, emphasis + embedded images as data URIs) — far richer than Echo's flattened
+    // markdown_current. Falls back to the structured blocks if the original isn't reachable.
+    try {
+      const orig = payload.vault_source_abs_path || payload.abs_path || '';
+      if (doc && /\.docx$/i.test(orig) && require('fs').existsSync(orig)) {
+        doc.html = (await docExtract.extractDocxHtml(orig)).html;
+      }
+    } catch (e) { console.warn('[reader] rich docx render skipped:', e.message); }
+    return { ok: true, doc };
   } catch (e) { console.error('[reader] get failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// Return a document's CANONICAL original file as base64 — used by the Reader to render PDFs in
+// Chromium's native viewer (full fidelity: charts, images, layout). Resolves the original via
+// get_document's source paths; size-capped to keep the IPC payload sane.
+ipcMain.handle('reader:bytes', async (_e, { docId } = {}) => {
+  try {
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const fs = require('fs');
+    const callTool = pollCallTool();
+    const payload = await callTool('get_document', { doc_id: Number(docId), depth: 'summary' });
+    const orig = (payload && (payload.vault_source_abs_path || payload.abs_path || payload.source_path)) || '';
+    if (!orig || !fs.existsSync(orig)) return { ok: false, error: 'original file not found' };
+    const stat = fs.statSync(orig);
+    if (stat.size > 30 * 1024 * 1024) return { ok: false, error: 'file too large to preview (>30MB)' };
+    const ext = path.extname(orig).replace(/^\./, '').toLowerCase();
+    const mime = ext === 'pdf' ? 'application/pdf' : 'application/octet-stream';
+    return { ok: true, base64: fs.readFileSync(orig).toString('base64'), mime, name: path.basename(orig) };
+  } catch (e) { console.error('[reader] bytes failed:', e.message); return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('meta:get', (_e, key) => db.getMeta(key));
