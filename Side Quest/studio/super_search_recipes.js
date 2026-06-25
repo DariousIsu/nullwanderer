@@ -1,19 +1,24 @@
 /*
- * Super Search — the INTERNAL recipe set (slice 2). One deterministic recipe per owned source,
- * each binding the query to a KNOWN engine tool and mapping that tool's KNOWN result shape → the
- * standardized ResultCard (studio/super_search_card.js). Bindings + enrichment are grounded in the
- * live atlas (get_atlas / get_db_map, 2026-06-24) and the real tool return shapes captured live.
+ * Super Search — the recipe set: INTERNAL lane (slice 2) + EXTERNAL lane (slice 3). One
+ * deterministic recipe per source, each binding the query to a KNOWN tool and mapping that tool's
+ * KNOWN result shape → the standardized ResultCard (studio/super_search_card.js). Bindings +
+ * enrichment are grounded in the live atlas (get_atlas / get_db_map) and the real tool return
+ * shapes captured live (2026-06-24).
  *
- * Recipes here:
+ * INTERNAL (plane='internal'):
  *   entities  — search_entities (civic_graph FTS5) ; spine enrich: entities.contact_id → contact
  *   contacts  — search_contacts (CRM FTS5)         ; party/state/chamber inline from the row
  *   bills     — search_bills    (bill FTS5)         ; state/session/votes inline from the row
  *   polls     — search_poll_questions (polling FTS5); no rank field → positional score
  *   db_query  — parameterized SELECT escape hatch   ; fires only when the plan supplies SQL
+ * EXTERNAL (plane='external'):
+ *   web       — Zoe's own search (deps.search) PRIMARY, engine web_search FALLBACK (the engine's
+ *               federated providers have no keys → empty). enrich: fetch top-N bodies via web_extract.
+ *   academic  — academic_search (keyless OpenAlex/Crossref/DOAJ); abstract inline, no fetch needed.
  *
- * Pure + offline-testable: all I/O goes through injected deps.callTool. buildRegistry() assembles
- * the full registry (the knowledge recipe from the contract module + these five); the slice-6
- * orchestrator consumes it. See docs/SUPER_SEARCH_SPEC.md.
+ * Pure + offline-testable: all I/O goes through injected deps (deps.callTool / deps.search /
+ * deps.fetchPage). buildRegistry() assembles the full registry (knowledge + internal + external);
+ * the slice-6 orchestrator consumes it. See docs/SUPER_SEARCH_SPEC.md.
  *
  * Runs in Node (smoke) and the browser (surface): CommonJS + window fallback.
  */
@@ -216,17 +221,113 @@
 
   const INTERNAL = [entitiesRecipe, contactsRecipe, billsRecipe, pollsRecipe, dbQueryRecipe];
 
-  // Full registry = the contract module's knowledge recipe + this internal set. (External lane
-  // recipes — web / academic — land in slice 3 and register here too.)
+  // ============================ EXTERNAL LANE (slice 3) ========================================
+  // External recipes gate on plan.external_targets (default-on — the operator chose two lanes that
+  // both run). Host of a URL → a small provenance tag.
+  function externalEnabled(plan, id) {
+    const t = plan && plan.external_targets;
+    return !Array.isArray(t) || t.length === 0 || t.includes(id);
+  }
+  function hostOf(url) { try { return new URL(url).hostname.replace(/^www\./, ''); } catch (e) { return ''; } }
+
+  // ---- web — Zoe's search PRIMARY, engine web_search FALLBACK ----------------------------------
+  // Zoe's search (deps.search) → { query, results: [ { title, url, snippet } ] }. The engine's
+  // web_search needs provider keys it doesn't have (returns [] with providers_skipped), so it is
+  // only the fallback. enrich() deepens the top FETCH_TOP results via web_extract (body=text_preview).
+  const FETCH_TOP = 3;
+  const webRecipe = {
+    id: 'web',
+    plane: 'external',
+    label: 'Web',
+    enabled(plan) { return externalEnabled(plan, 'web'); },
+    async run({ query, plan, deps }) {
+      const top_k = (plan && plan.top_k) || 10;
+      const raw = (typeof deps.search === 'function')
+        ? await deps.search(query)
+        : await deps.callTool('web_search', { query, top_k });
+      return (raw && raw.results) || [];
+    },
+    toCards(rows) {
+      const list = rows || [];
+      return list.map((r, i) => normalizeCard({
+        id: `web:${djb2(r.url || r.title)}`,
+        plane: 'external',
+        source: 'web',
+        title: r.title || hostOf(r.url),
+        snippet: cleanText(r.snippet),
+        url: r.url || null,
+        score: list.length - i,
+        enrich: pruned({ host: hostOf(r.url) }),
+        cite: compose(r.title, r.url),
+        raw_ref: r,
+      }));
+    },
+    // Deepen the top FETCH_TOP hits: pull the readable body via engine web_extract (text_preview)
+    // or injected deps.fetchPage. Bounded + per-url fail-safe — the body feeds the cited overview.
+    async enrich(cards, deps) {
+      const out = cards.slice();
+      const n = Math.min(FETCH_TOP, out.length);
+      for (let i = 0; i < n; i++) {
+        const c = out[i];
+        if (!c.url) continue;
+        try {
+          let body = '';
+          if (typeof deps.fetchPage === 'function') { const r = await deps.fetchPage(c.url); body = (r && (r.text || r.body)) || ''; }
+          else { const r = await deps.callTool('web_extract', { url: c.url }); body = (r && (r.text_preview || r.text_excerpt || r.body)) || ''; }
+          if (body) out[i] = { ...c, enrich: { ...c.enrich, body: cleanText(body).slice(0, 1200), fetched: true } };
+        } catch (e) { /* fail-safe: leave the card as-is */ }
+      }
+      return out;
+    },
+  };
+
+  // ---- academic — keyless OpenAlex / Crossref / DOAJ -------------------------------------------
+  // Shape: { results: [ { title, authors[], year, venue, doi, url, abstract, cited_by_count,
+  //                       is_oa, source } ], providers_used, providers_skipped }
+  const academicRecipe = {
+    id: 'academic',
+    plane: 'external',
+    label: 'Academic',
+    enabled(plan) { return externalEnabled(plan, 'academic'); },
+    async run({ query, plan, deps }) {
+      const res = await deps.callTool('academic_search', { query, top_k: (plan && plan.top_k) || 10 });
+      return (res && res.results) || [];
+    },
+    toCards(rows) {
+      const list = rows || [];
+      return list.map((r, i) => {
+        const authors = Array.isArray(r.authors) ? r.authors : [];
+        const byline = authors.length ? (authors.length > 2 ? `${authors[0]} et al.` : authors.join(', ')) : '';
+        return normalizeCard({
+          id: `academic:${djb2(r.doi || r.url || r.title)}`,
+          plane: 'external',
+          source: 'academic',
+          title: r.title,
+          snippet: cleanText(r.abstract) || compose(byline, r.venue, r.year),
+          url: r.url || (r.doi ? `https://doi.org/${r.doi}` : null),
+          score: list.length - i,
+          enrich: pruned({ authors: byline, year: r.year, venue: r.venue, doi: r.doi, cited_by: r.cited_by_count, open_access: r.is_oa, provider: r.source }),
+          cite: compose(byline, r.year ? `(${r.year})` : '', r.venue, r.doi ? `doi:${r.doi}` : ''),
+          raw_ref: r,
+        });
+      });
+    },
+  };
+
+  const EXTERNAL = [webRecipe, academicRecipe];
+
+  // Full registry = knowledge (contract module) + internal set + external lane.
   function buildRegistry() {
     const reg = { knowledge: knowledgeRecipe };
     for (const r of INTERNAL) reg[r.id] = r;
+    for (const r of EXTERNAL) reg[r.id] = r;
     return reg;
   }
   function recipes() { return Object.values(buildRegistry()); }
 
   return {
     entitiesRecipe, contactsRecipe, billsRecipe, pollsRecipe, dbQueryRecipe,
-    INTERNAL, buildRegistry, recipes, pruned,
+    webRecipe, academicRecipe,
+    INTERNAL, EXTERNAL, buildRegistry, recipes, pruned, hostOf,
   };
 });
