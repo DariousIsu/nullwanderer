@@ -71,7 +71,9 @@ Bindings + enrichment come straight from `get_atlas()` / `get_db_map()`:
 4. ✅ **Three caged leaves** — plan (local, schema-bounded targets) · rerank (local, permutation-only) · overview (cloud, cite_floor gate) — pure over injected `complete`. Smoke 30/30.
 5. ✅ **Ingest-gated loop** — `save_source` archive + URL-keyed ledger (dedup · provenance · reversible); engine-error → ledger untouched/retryable. Smoke 21/21.
 6. ✅ **Run orchestrator** — one pathway → one standardized run object; per-lane rerank; cited-ingest gate (`ingestMode` cited/all/none); degrades cleanly when a leaf is absent; per-recipe errors captured. Smoke 23/23.
-7. ⏳ **Super Search surface** — rail entry + `search.html` `<webview>` + `search:run/revert/status` IPC (plan/rerank local · overview cloud · Zoe-search injected · persistent ledger). Engine-side pathway **live-fire proven** (both lanes populate, cited overview renders); MCP envelope unwrap fixed (`echo.toolJson` prefers `structuredContent`) + internal FTS keyword-query fix. In-app UI render pending a warned restart.
+7. ✅ **Super Search surface** — rail entry + `search.html` `<webview>` + `search:run/revert/status` IPC (plan/rerank local · overview cloud · Zoe-search injected · persistent ledger). **Validated in-app end-to-end**: both lanes populate, cited cloud overview renders, cloud billing confirmed on the operator's account (cost per search is tiny — ~0.1% session usage per several runs). MCP envelope unwrap (`echo.toolJson` prefers `structuredContent`) + internal FTS keyword-query fix, both caught by live-fire.
+
+**Build complete — all 7 slices ✅.** Offline suite 189/189; live-fire + in-app both green.
 
 Every slice: build → offline smoke → (slice 7) wire IPC → warn-and-restart → live-fire → commit.
 
