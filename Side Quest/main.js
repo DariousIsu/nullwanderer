@@ -19,7 +19,8 @@ const docExtract = require('./lib/doc_extract');             // writing suite: l
 const creatorView = require('./studio/creator_view');        // Creator surface: block-model ⇄ ProseMirror bridge (Phase 3)
 const creatorStats = require('./studio/creator_stats');      // Creator clinical panel: deterministic document statistics
 const creatorProofread = require('./studio/creator_proofread'); // Creator clinical panel: caged proofread leaf (spelling/grammar/style)
-const creatorSources = require('./studio/creator_sources');     // Creator clinical panel: deterministic source-flagging (knowledge DB)
+const creatorSources = require('./studio/creator_sources');     // Creator clinical panel: external (web/academic) classifier — reused by research
+const creatorResearch = require('./studio/creator_research');   // Creator clinical panel: entity research + cloud writing-advisor
 const modelsLib = require('./lib/models');                   // model sources (cloud frontier + local) resolver
 const { streamChat, complete, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
@@ -766,30 +767,127 @@ ipcMain.handle('creator:proofread', async (_e, { docJson, onlyAnchors } = {}) =>
   } catch (e) { console.error('[creator] proofread failed:', e.message); return { ok: false, error: e.message }; }
 });
 
-// Source flagging = DETERMINISTIC (no model). Reuse verify_extract to pull checkable claims, then
-// query the operator's knowledge DB (search_knowledge) for each. A hit = a CANDIDATE source to
-// cite (citation-engine seed); no hit = "needs a citation." Status is found/none — never a truth
-// verdict (that's the fact-check sweep / classify leaf in a later slice).
-ipcMain.handle('creator:sources', async (_e, { docJson } = {}) => {
+// RESEARCH & ASSIST = entity-centric (replaces per-sentence source-hunting). One deterministic
+// pathway: detect entities (local) → DB match (search_entities, name-overlap gated) → complementary
+// material (kg_neighborhood + corpus; web/academic for entities NOT in the DB, when `web` on). The
+// model is NOT used here — this whole pass is retrieval. The cloud writing-advisor is a SEPARATE,
+// opt-in leaf (creator:advise). Returns entities[] + a `context` blob the advisor grounds on.
+const EXTERNAL_MAX = 8;   // bound external (web+academic) lookups per pass to keep latency sane
+ipcMain.handle('creator:research', async (_e, { docJson, web = true } = {}) => {
   try {
     const blocks = creatorView.docToBlocks(docJson || { type: 'doc', content: [] });
-    const claims = creatorSources.extractClaims(blocks);
-    if (!claims.length) return { ok: true, findings: [] };
+    const mentions = creatorResearch.detectEntities(blocks);
+    if (!mentions.length) return { ok: true, entities: [], context: '' };
     if (!echoSuit || !echoSuit.connected) { try { await echoSuit.connect(); } catch {} }
     if (!echoSuit || !echoSuit.connected) return { ok: false, error: 'Echo engine not connected' };
     const toolJson = require('./lib/echo').toolJson;
-    const findings = [];
-    for (const u of claims) {
+    const entities = [];
+    const ctxLines = [];
+    let externalUsed = 0;
+    for (const ent of mentions) {
+      // --- direct DB match (typed, name-overlap gated)
       let results = [];
       try {
-        const data = toolJson(await echoSuit.client().callTool('search_knowledge', { query: creatorSources.queryFor(u), top_k: 3 }));
-        results = (data && (data.result || data)) || [];
+        const d = toolJson(await echoSuit.client().callTool('search_entities', { query: ent.mention, top_k: 5 }));
+        results = (d && (d.result || d)) || [];
         if (!Array.isArray(results)) results = [];
       } catch (e) { results = []; }
-      findings.push(creatorSources.toFinding(u, creatorSources.classifyMatch(u, results)));
+      const match = creatorResearch.classifyEntity(ent.mention, results);
+      const entry = { mention: ent.mention, kind: ent.kind, matched: match.matched, candidates: match.candidates, related: [], external: null };
+      if (match.matched) {
+        // --- complementary internal: KG neighbors of the top candidate (best-effort)
+        const top = match.candidates[0];
+        if (top && top.id != null) {
+          try {
+            const nb = toolJson(await echoSuit.client().callTool('kg_neighborhood', { entity_id: top.id, top_k: 5 }));
+            const neighbors = (nb && (nb.neighbors || (nb.result && nb.result.neighbors))) || [];
+            entry.related = (Array.isArray(neighbors) ? neighbors : []).map(n => n && (n.name || n.title || n.label)).filter(Boolean).slice(0, 5);
+          } catch (e) { /* neighbors are best-effort */ }
+        }
+        ctxLines.push(`- ${top.name}${top.subtype ? ` (${top.subtype})` : top.type ? ` (${top.type})` : ''}${top.summary ? ` — ${top.summary}` : ''}${entry.related.length ? `; related: ${entry.related.join(', ')}` : ''}`);
+      } else if (web && externalUsed < EXTERNAL_MAX) {
+        // --- complementary external: outside reading for an entity the DB doesn't have (web + academic)
+        externalUsed++;
+        const [webRows, acadRows] = await Promise.all([
+          (async () => { try { const r = await webSearch(ent.mention); return (r && r.results) || []; } catch (e) { return []; } })(),
+          (async () => { try { const d = toolJson(await echoSuit.client().callTool('academic_search', { query: ent.mention, top_k: 5 })); return (d && d.results) || []; } catch (e) { return []; } })(),
+        ]);
+        const ext = creatorSources.classifyExternal(webRows, acadRows);
+        if (ext.status === 'found') {
+          entry.external = { provenance: ext.provenance, title: ext.title, url: ext.url, snippet: ext.snippet, source: ext.source };
+          ctxLines.push(`- ${ent.mention} [${ext.provenance}] — ${ext.title}${ext.snippet ? `: ${ext.snippet}` : ''}`);
+        }
+      }
+      entities.push(entry);
     }
-    return { ok: true, findings };
-  } catch (e) { console.error('[creator] sources failed:', e.message); return { ok: false, error: e.message }; }
+    // --- relevant documents in the operator's library: ONE corpus search on the draft's salient
+    // terms → real material the advisor can ground "additions" in (titles + content snippets).
+    try {
+      const fullText = blocks.map(b => b && b.text).filter(Boolean).join(' ');
+      const kw = creatorSources.keywords(fullText).slice(0, 2).join(' ');
+      if (kw) {
+        const d = toolJson(await echoSuit.client().callTool('search', { query: kw, top_k: 3 }));
+        const docs = (d && (d.result || d)) || [];
+        if (Array.isArray(docs) && docs.length) {
+          ctxLines.push('Relevant documents in your library:');
+          for (const doc of docs.slice(0, 3)) ctxLines.push(`- ${doc.title || '(untitled)'}: ${creatorSources.stripMarks(doc.snippet).slice(0, 200)}`);
+        }
+      }
+    } catch (e) { /* library docs are best-effort */ }
+    return { ok: true, entities, context: ctxLines.join('\n') };
+  } catch (e) { console.error('[creator] research failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// Cloud WRITING ADVISOR (opt-in leaf) — the cloud model reads the draft + the research `context`
+// and proposes additions / directional options / tone adjustments (fixed JSON shape; operator
+// disposes). Caged: never edits the doc. Resolves the cloud endpoint+bearer from the inherited key
+// (same pattern as editor:run-checks); falls back to the local model if no cloud key.
+ipcMain.handle('creator:advise', async (_e, { docJson, context } = {}) => {
+  try {
+    const blocks = creatorView.docToBlocks(docJson || { type: 'doc', content: [] });
+    const docText = blocks.map(b => b.text).filter(Boolean).join('\n\n');
+    if (!docText.trim()) return { ok: true, advice: { additions: [], directions: [], tone: [] } };
+    const cloud = modelsLib.sources().find(s => s.tier === 'cloud' && s.token);
+    const cloudModel = modelsLib.getModelFor('editor', null) || process.env.AGENT_MODEL_ON_DEMAND_BACKGROUND || 'gemma4:31b-cloud';
+    // per-call proof (no secret): which tier/model/endpoint the advisor used.
+    console.log(`[creator] advise via ${cloud ? `CLOUD ${cloudModel} @ ${cloud.base}` : `LOCAL ${MODEL}`} (${docText.length} chars in)`);
+    const messages = creatorResearch.buildAdvisorMessages(docText, context || '');
+    const t0 = Date.now();
+    const text = await complete({
+      model: cloud ? cloudModel : MODEL, messages,
+      base: cloud ? cloud.base : undefined,
+      headers: cloud ? { Authorization: `Bearer ${cloud.token}` } : {},
+      options: { temperature: 0.3, num_ctx: 8192 },
+    });
+    console.log(`[creator] advise ← ${cloud ? 'CLOUD' : 'LOCAL'} ${Date.now() - t0}ms, ${text.length} chars out`);
+    return { ok: true, advice: creatorResearch.parseAdvice(text), cloud: !!cloud };
+  } catch (e) { console.error('[creator] advise failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// Open a flagged source in its native app (operator clicks "Open" on a source card). Resolve the
+// doc's absolute path via get_document, then shell.openPath it.
+ipcMain.handle('creator:open-source', async (_e, { docId } = {}) => {
+  try {
+    if (docId == null) return { ok: false, error: 'no document id' };
+    if (!echoSuit || !echoSuit.connected) { try { await echoSuit.connect(); } catch {} }
+    if (!echoSuit || !echoSuit.connected) return { ok: false, error: 'Echo engine not connected' };
+    const toolJson = require('./lib/echo').toolJson;
+    const data = toolJson(await echoSuit.client().callTool('get_document', { doc_id: Number(docId), depth: 'summary' }));
+    const payload = (data && (data.result || data)) || {};
+    const abs = payload.vault_source_abs_path || payload.abs_path || payload.source_path || payload.path;
+    if (!abs) return { ok: false, error: 'no path for document' };
+    const err = await shell.openPath(abs);                 // '' on success, message on failure
+    return err ? { ok: false, error: err } : { ok: true, path: abs };
+  } catch (e) { console.error('[creator] open-source failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// Open an external (web/academic) source in the default browser (operator clicks "Open"). http(s) only.
+ipcMain.handle('creator:open-external', async (_e, { url } = {}) => {
+  try {
+    if (!url || !/^https?:\/\//i.test(String(url))) return { ok: false, error: 'invalid url' };
+    await shell.openExternal(String(url));
+    return { ok: true };
+  } catch (e) { console.error('[creator] open-external failed:', e.message); return { ok: false, error: e.message }; }
 });
 
 // Save = overwrite the CURRENT version's working copy from the editor's ProseMirror JSON. This is

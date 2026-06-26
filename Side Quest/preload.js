@@ -97,6 +97,9 @@ contextBridge.exposeInMainWorld('sq', {
     save: (docId, docJson) => ipcRenderer.invoke('creator:save', { docId, docJson }),
     scan: (docJson) => ipcRenderer.invoke('creator:scan', { docJson }),
     proofread: (docJson, onlyAnchors) => ipcRenderer.invoke('creator:proofread', { docJson, onlyAnchors }),
-    sources: (docJson) => ipcRenderer.invoke('creator:sources', { docJson })
+    research: (docJson, web) => ipcRenderer.invoke('creator:research', { docJson, web }),
+    advise: (docJson, context) => ipcRenderer.invoke('creator:advise', { docJson, context }),
+    openSource: (docId) => ipcRenderer.invoke('creator:open-source', { docId }),
+    openExternal: (url) => ipcRenderer.invoke('creator:open-external', { url })
   }
 });

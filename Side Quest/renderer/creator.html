@@ -116,8 +116,32 @@ select:focus{border-color:var(--accent);}
 .scard.none .sstatus{color:var(--warn-fg);}
 .scard.found .sstatus{color:var(--ok-fg);}
 .scard .sclaim{font-size:12px;color:var(--tx-soft);line-height:1.45;}
-.scard .ssrc{font-size:11px;color:var(--tx-fainter);margin-top:4px;line-height:1.45;border-top:1px solid var(--line-faint);padding-top:4px;}
-.scard .ssrc b{color:var(--tx-dim);font-weight:600;}
+.scard .ssrc{font-size:11px;color:var(--tx-fainter);margin-top:5px;line-height:1.45;border-top:1px solid var(--line-faint);padding-top:5px;}
+.scard .stitle{color:var(--tx-soft);font-weight:600;font-size:11.5px;}
+.scard .sproj{color:var(--tx-fainter);font-weight:400;}
+.scard .ssnip{color:var(--tx-fainter);margin-top:2px;}
+.scard .sopen{margin-top:6px;border-color:var(--info-line);color:var(--info-fg);}
+.scard .sopen:hover{border-color:var(--info-fg);}
+/* entity (research) cards + in-document entity highlight */
+.ProseMirror .ent-mark{background:rgba(106,134,182,0.18);border-radius:2px;box-shadow:0 0 0 1px rgba(106,134,182,0.25);}
+.ecard{background:var(--bg-panel);border:1px solid var(--line);border-radius:var(--r);padding:8px 9px;border-left:2px solid var(--line-strong);}
+.ecard.matched{border-left-color:var(--ok-fg);}
+.ecard.ext{border-left-color:var(--info-fg);}
+.ecard .et{display:flex;justify-content:space-between;align-items:baseline;gap:6px;}
+.ecard .emention{font-size:12.5px;color:var(--tx);font-weight:600;}
+.ecard .ekind{font-size:9px;letter-spacing:0.07em;text-transform:uppercase;color:var(--tx-fainter);}
+.ecard .ecand{font-size:11.5px;color:var(--tx-soft);margin-top:4px;line-height:1.4;}
+.ecard .ecand .etype{color:var(--tx-dim);font-size:10px;}
+.ecard .esum{font-size:10.5px;color:var(--tx-fainter);line-height:1.4;}
+.ecard .erel{font-size:10.5px;color:var(--tx-dim);margin-top:5px;border-top:1px solid var(--line-faint);padding-top:4px;}
+.ecard .erel b{color:var(--tx-muted);font-weight:600;}
+.ecard .eopen{margin-top:6px;border-color:var(--info-line);color:var(--info-fg);}
+/* advice (cloud) buckets */
+.abucket{margin-top:4px;}
+.abucket .alabel{font-size:9px;letter-spacing:0.09em;text-transform:uppercase;color:var(--accent);margin:8px 0 4px;}
+.acard{background:var(--bg-panel);border:1px solid var(--line);border-radius:var(--r);padding:7px 9px;margin-bottom:6px;}
+.acard .atitle{font-size:12px;color:var(--tx-soft);font-weight:600;}
+.acard .adetail{font-size:11px;color:var(--tx-dim);line-height:1.45;margin-top:2px;}
 
 .empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--tx-dim);text-align:center;gap:8px;padding:40px;}
 .empty .big{font-size:16px;color:var(--tx-muted);}
@@ -176,15 +200,20 @@ select:focus{border-color:var(--accent);}
           <div class="corr-status" id="corr-status"></div>
           <div class="corrections" id="corrections"></div>
 
-          <div class="rail-sec">Sources <span class="muted" id="src-count"></span></div>
+          <div class="rail-sec">Research <span class="muted" id="ent-count"></span></div>
           <div class="corr-controls">
-            <button class="btn xs" id="sources-btn">Check sources</button>
+            <button class="btn xs" id="research-btn">Scan draft</button>
+            <label class="bgtoggle" title="For entities not in your database, pull complementary reading from the web + academic sources"><input type="checkbox" id="web-toggle" checked> web</label>
           </div>
-          <div class="corr-status" id="src-status"></div>
-          <div class="corrections" id="sources"></div>
+          <div class="corr-status" id="ent-status"></div>
+          <div class="corrections" id="entities"></div>
 
-          <div class="rail-sec">Coming next</div>
-          <div class="rail-note">&bull; Fact-check sweeps (truth verdicts)<br>&bull; Auto-citation builder</div>
+          <div class="rail-sec">Assist <span class="muted" id="advice-meta"></span></div>
+          <div class="corr-controls">
+            <button class="btn xs" id="advise-btn" title="Cloud writing advisor — additions, directional options, tone (grounded in the scan)">Suggest (cloud)</button>
+          </div>
+          <div class="corr-status" id="advice-status"></div>
+          <div class="corrections" id="advice"></div>
         </div>
       </aside>
     </div>
