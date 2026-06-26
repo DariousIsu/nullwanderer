@@ -103,6 +103,21 @@ select:focus{border-color:var(--accent);}
 .ProseMirror .corr-spelling{text-decoration-color:var(--bad-fg);}
 .ProseMirror .corr-grammar{text-decoration-color:var(--info-fg);}
 .ProseMirror .corr-style{text-decoration-color:var(--warn-fg);}
+/* source flags: dotted (distinct from proofread's wavy) — amber=needs citation, green=source found */
+.ProseMirror .src-mark{text-decoration:underline dotted;text-decoration-skip-ink:none;text-underline-offset:4px;text-decoration-thickness:2px;}
+.ProseMirror .src-none{text-decoration-color:var(--warn-fg);}
+.ProseMirror .src-found{text-decoration-color:var(--ok-fg);}
+/* source cards */
+.scard{background:var(--bg-panel);border:1px solid var(--line);border-radius:var(--r);padding:8px 9px;border-left:2px solid var(--line-strong);}
+.scard.none{border-left-color:var(--warn-fg);}
+.scard.found{border-left-color:var(--ok-fg);}
+.scard .st{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px;}
+.scard .sstatus{font-size:9px;letter-spacing:0.07em;text-transform:uppercase;}
+.scard.none .sstatus{color:var(--warn-fg);}
+.scard.found .sstatus{color:var(--ok-fg);}
+.scard .sclaim{font-size:12px;color:var(--tx-soft);line-height:1.45;}
+.scard .ssrc{font-size:11px;color:var(--tx-fainter);margin-top:4px;line-height:1.45;border-top:1px solid var(--line-faint);padding-top:4px;}
+.scard .ssrc b{color:var(--tx-dim);font-weight:600;}
 
 .empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--tx-dim);text-align:center;gap:8px;padding:40px;}
 .empty .big{font-size:16px;color:var(--tx-muted);}
@@ -161,8 +176,15 @@ select:focus{border-color:var(--accent);}
           <div class="corr-status" id="corr-status"></div>
           <div class="corrections" id="corrections"></div>
 
+          <div class="rail-sec">Sources <span class="muted" id="src-count"></span></div>
+          <div class="corr-controls">
+            <button class="btn xs" id="sources-btn">Check sources</button>
+          </div>
+          <div class="corr-status" id="src-status"></div>
+          <div class="corrections" id="sources"></div>
+
           <div class="rail-sec">Coming next</div>
-          <div class="rail-note">&bull; Source flagging from the database<br>&bull; Fact-check sweeps</div>
+          <div class="rail-note">&bull; Fact-check sweeps (truth verdicts)<br>&bull; Auto-citation builder</div>
         </div>
       </aside>
     </div>

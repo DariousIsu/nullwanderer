@@ -19,6 +19,7 @@ const docExtract = require('./lib/doc_extract');             // writing suite: l
 const creatorView = require('./studio/creator_view');        // Creator surface: block-model ⇄ ProseMirror bridge (Phase 3)
 const creatorStats = require('./studio/creator_stats');      // Creator clinical panel: deterministic document statistics
 const creatorProofread = require('./studio/creator_proofread'); // Creator clinical panel: caged proofread leaf (spelling/grammar/style)
+const creatorSources = require('./studio/creator_sources');     // Creator clinical panel: deterministic source-flagging (knowledge DB)
 const modelsLib = require('./lib/models');                   // model sources (cloud frontier + local) resolver
 const { streamChat, complete, TagStreamParser } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
@@ -460,7 +461,11 @@ app.whenReady().then(() => {
             const candidate = [...rr.messages].reverse().find(m =>
               m.fromAddr && m.fromAddr.toLowerCase() !== self
               && !inboxLib.isJunkSender(m.fromAddr));
-            if (candidate) {
+            if (candidate && !emailLib.isSendEnabled()) {
+              // Kill-switch active — never auto-compose an outbound reply (the highest-risk,
+              // no-human-in-loop send path). Don't consume the uid, so it can reply once re-enabled.
+              console.log('[action] autonomous email reply suppressed — send kill-switch active');
+            } else if (candidate) {
               db.setMeta('auto_replied_uids', JSON.stringify([...replied, candidate.uid].slice(-300)));
               console.log('[action] autonomous reply → thread with', candidate.fromAddr, 'uid', candidate.uid);
               actionLoop.start(actionLoop.emailReplyAction({
@@ -759,6 +764,32 @@ ipcMain.handle('creator:proofread', async (_e, { docJson, onlyAnchors } = {}) =>
     const corrections = creatorProofread.parseCorrections(text, creatorProofread.anchorTextMap(prose));
     return { ok: true, corrections, anchors: prose.map(b => b.anchor) };
   } catch (e) { console.error('[creator] proofread failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// Source flagging = DETERMINISTIC (no model). Reuse verify_extract to pull checkable claims, then
+// query the operator's knowledge DB (search_knowledge) for each. A hit = a CANDIDATE source to
+// cite (citation-engine seed); no hit = "needs a citation." Status is found/none — never a truth
+// verdict (that's the fact-check sweep / classify leaf in a later slice).
+ipcMain.handle('creator:sources', async (_e, { docJson } = {}) => {
+  try {
+    const blocks = creatorView.docToBlocks(docJson || { type: 'doc', content: [] });
+    const claims = creatorSources.extractClaims(blocks);
+    if (!claims.length) return { ok: true, findings: [] };
+    if (!echoSuit || !echoSuit.connected) { try { await echoSuit.connect(); } catch {} }
+    if (!echoSuit || !echoSuit.connected) return { ok: false, error: 'Echo engine not connected' };
+    const toolJson = require('./lib/echo').toolJson;
+    const findings = [];
+    for (const u of claims) {
+      let results = [];
+      try {
+        const data = toolJson(await echoSuit.client().callTool('search_knowledge', { query: creatorSources.queryFor(u), top_k: 3 }));
+        results = (data && (data.result || data)) || [];
+        if (!Array.isArray(results)) results = [];
+      } catch (e) { results = []; }
+      findings.push(creatorSources.toFinding(u, creatorSources.classifyMatch(u, results)));
+    }
+    return { ok: true, findings };
+  } catch (e) { console.error('[creator] sources failed:', e.message); return { ok: false, error: e.message }; }
 });
 
 // Save = overwrite the CURRENT version's working copy from the editor's ProseMirror JSON. This is
@@ -2590,7 +2621,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       if (sayOut) {
         const thoughtClean = (thought || '').replace(/<\/?(think|say)>/gi, '').trim();
         if (thoughtClean) db.insertTurn({ sessionId, speaker: 'ai_thought', content: thoughtClean, model: MODEL });
-        const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: sayOut, model: MODEL });
+        const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: sayOut, model: MODEL, unprompted: 1 });
         db.setMeta('last_ai_utterance_at', String(Date.now()));
         if (channel === 'discord') {
           try { await discordLib.sendDM(sayOut); } catch (e) { console.error('[main] followup discord DM failed:', e.message); }

@@ -38,7 +38,9 @@ async function runScan() {
 // The model (caged in main) returns candidate corrections; here we anchor each to a real text
 // range, render it as a squiggle decoration + a panel card, and let the operator accept/reject.
 let corrections = [];        // [{id,type,original,suggestion,message, _range}]
+let sourceFlags = [];        // [{id,anchor,kind,text,status,source,snippet, _range}]
 let proofInFlight = false;
+let sourcesInFlight = false;
 let bgOn = false;
 let bgTimer = null;
 let lastProofText = '';
@@ -59,30 +61,39 @@ const corrPlugin = (Z && Z.Plugin && corrKey) ? new Z.Plugin({
 // Map each correction's verbatim span to a ProseMirror range by searching text nodes. Claims
 // occurrences greedily so two corrections on the same word don't collide. Spans that cross a mark
 // boundary (rare) simply don't get a range — the card still works, just no squiggle.
-function mapCorrections() {
-  if (!editor) return;
+// flatten the doc into text-node segments {text, from} for substring→position mapping
+function segments() {
   const segs = [];
-  editor.state.doc.descendants((node, pos) => { if (node.isText && node.text) segs.push({ text: node.text, from: pos }); });
+  if (editor) editor.state.doc.descendants((node, pos) => { if (node.isText && node.text) segs.push({ text: node.text, from: pos }); });
+  return segs;
+}
+// assign each item a ._range by finding its needle text; claims occurrences within THIS list only
+// (so two layers — corrections + source flags — may overlap, which is fine for decorations).
+function assignRanges(items, textOf, segs) {
   const used = [];
-  for (const c of corrections) {
-    c._range = null;
+  for (const it of items) {
+    it._range = null;
+    const needle = textOf(it);
+    if (!needle) continue;
     for (const seg of segs) {
-      let idx = seg.text.indexOf(c.original);
+      let idx = seg.text.indexOf(needle);
       while (idx >= 0) {
-        const from = seg.from + idx, to = from + c.original.length;
-        if (!used.some(r => from < r.to && to > r.from)) { c._range = { from, to }; used.push({ from, to }); break; }
-        idx = seg.text.indexOf(c.original, idx + 1);
+        const from = seg.from + idx, to = from + needle.length;
+        if (!used.some(r => from < r.to && to > r.from)) { it._range = { from, to }; used.push({ from, to }); break; }
+        idx = seg.text.indexOf(needle, idx + 1);
       }
-      if (c._range) break;
+      if (it._range) break;
     }
   }
 }
+function mapCorrections() { if (editor) assignRanges(corrections, c => c.original, segments()); }
+function mapSources() { if (editor) assignRanges(sourceFlags, f => f.text, segments()); }
+// one decoration set drawn from BOTH layers: proofread squiggles (wavy) + source flags (dotted)
 function applyDecorations() {
   if (!editor || !corrKey) return;
   const decos = [];
-  for (const c of corrections) {
-    if (c._range) decos.push(Z.Decoration.inline(c._range.from, c._range.to, { class: 'corr-mark corr-' + c.type }));
-  }
+  for (const c of corrections) if (c._range) decos.push(Z.Decoration.inline(c._range.from, c._range.to, { class: 'corr-mark corr-' + c.type }));
+  for (const f of sourceFlags) if (f._range) decos.push(Z.Decoration.inline(f._range.from, f._range.to, { class: 'src-mark src-' + f.status }));
   const set = Z.DecorationSet.create(editor.state.doc, decos);
   editor.view.dispatch(editor.state.tr.setMeta(corrKey, { decorations: set }));
 }
@@ -135,10 +146,40 @@ function scheduleBgProof() {
   clearTimeout(bgTimer);
   bgTimer = setTimeout(() => { if (bgOn && !proofInFlight && editor && editor.getText() !== lastProofText) proofreadNow(); }, 2500);
 }
+// ---- clinical panel: source flagging (Slice 4) — deterministic claim → knowledge-DB lookup ----
+function setSrcStatus(t, working) { const el = $('src-status'); if (el) { el.textContent = t || ''; el.className = 'corr-status' + (working ? ' working' : ''); } }
+function renderSources() {
+  const el = $('sources'), cnt = $('src-count');
+  if (cnt) cnt.textContent = sourceFlags.length ? `(${sourceFlags.length})` : '';
+  if (!el) return;
+  el.innerHTML = sourceFlags.map(f => `
+    <div class="scard ${f.status}" data-id="${f.id}">
+      <div class="st"><span class="sstatus">${f.status === 'found' ? 'source found' : 'needs citation'}</span><button class="cbtn" data-sdis="${f.id}">Dismiss</button></div>
+      <div class="sclaim">${escapeHtml(f.text.length > 140 ? f.text.slice(0, 140) + '…' : f.text)}</div>
+      ${f.status === 'found' && f.snippet ? `<div class="ssrc"><b>${escapeHtml(f.source)}</b> · ${escapeHtml(f.snippet)}</div>` : ''}
+    </div>`).join('');
+}
+async function checkSources() {
+  if (!C || !editor || sourcesInFlight) return;
+  sourcesInFlight = true; setSrcStatus('searching…', true);
+  const btn = $('sources-btn'); if (btn) btn.disabled = true;
+  try {
+    const res = await C.sources(editor.getJSON());
+    if (res && res.ok) {
+      sourceFlags = (res.findings || []).map(f => ({ ...f }));
+      mapSources(); applyDecorations(); renderSources();
+      const none = sourceFlags.filter(f => f.status === 'none').length;
+      setSrcStatus(sourceFlags.length ? `${sourceFlags.length} claim${sourceFlags.length === 1 ? '' : 's'} · ${none} need${none === 1 ? 's' : ''} citation` : 'no checkable claims');
+    } else setSrcStatus(res && res.error ? ('failed: ' + res.error) : 'check failed');
+  } catch (e) { setSrcStatus('check failed'); }
+  finally { sourcesInFlight = false; const b = $('sources-btn'); if (b) b.disabled = false; }
+}
+function dismissSource(id) { sourceFlags = sourceFlags.filter(f => f.id !== id); mapSources(); applyDecorations(); renderSources(); }
+
 function resetCorrections() {
-  corrections = []; lastProofText = '';
+  corrections = []; sourceFlags = []; lastProofText = '';
   if (editor && corrPlugin) { try { editor.registerPlugin(corrPlugin); } catch (e) { /* already registered */ } }
-  applyDecorations(); renderCorrections(); setCorrStatus('');
+  applyDecorations(); renderCorrections(); renderSources(); setCorrStatus(''); setSrcStatus('');
 }
 
 function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -243,6 +284,10 @@ $('bg-toggle').addEventListener('change', e => { bgOn = e.target.checked; if (bg
 $('corrections').addEventListener('click', e => {
   const a = e.target.closest('[data-acc]'); if (a) { acceptCorrection(a.dataset.acc); return; }
   const d = e.target.closest('[data-dis]'); if (d) { dismissCorrection(d.dataset.dis); return; }
+});
+$('sources-btn').addEventListener('click', checkSources);
+$('sources').addEventListener('click', e => {
+  const d = e.target.closest('[data-sdis]'); if (d) { dismissSource(d.dataset.sdis); return; }
 });
 // best-effort flush if the surface is torn down with unsaved edits
 window.addEventListener('beforeunload', () => { if (dirty && C && currentId != null && editor) C.save(currentId, editor.getJSON()); });
