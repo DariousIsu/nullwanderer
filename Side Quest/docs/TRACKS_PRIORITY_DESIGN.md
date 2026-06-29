@@ -193,6 +193,15 @@ genuinely-new requirements. Observed failures, each a named slice:
   crowded out the actual answer. → **a turn may carry multiple intents; a continue/clarification ack must
   not crowd out the conversational answer (and vice-versa).**
 
+- **Autonomous video-watching is the same pattern (validates the model on a 2nd domain):** she re-picks
+  the SAME video repeatedly (no **watched-set** → anti-circle violation) and **abandons mid-video** (no
+  completion lifecycle — another autonomous action navigates her browser away). And the guardrail Lucas
+  wants ("finish what you start, but don't sink hours into non-project video") is exactly the **priority
+  budget**. → a video-watch is a **low-priority (≈2) self-Track**: (a) watched-set so she doesn't re-pick;
+  (b) a **completion lock** — a started watch runs to `complete` before another autonomous action grabs
+  the browser; (c) a **bounded watch budget** on spare capacity (a project-serving video earns more; a
+  higher-priority track still preempts). No separate patch — it's the Track lifecycle + anti-circle + budget.
+
 **Net adjustments to the plan:**
 - **Slice 1** widens to *"query the CURRENT-or-last Track, active OR complete"* — explicitly including a
   live, in-progress Track so the conversation reflects what's being researched *right now*.
