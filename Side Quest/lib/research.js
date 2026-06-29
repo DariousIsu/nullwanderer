@@ -65,14 +65,19 @@ function facetsSummary(facets = []) {
 // --- mid-run CLARIFICATION (Lucas refining the standing task while it runs) -----------------------
 
 // While a directed run is active, decide whether a message is a CLARIFICATION/refinement to fold into
-// the task (vs unrelated chatter). Two triggers: she just asked a question (so this is his answer), or
-// the message carries refinement language. Kept liberal — captured guidance is additive, and the caller
-// already gates on "a directed run is active and this isn't a stop/expand", so it can't run off.
-const REFINE_RE = /\b(also|as well|in addition|additionally|make sure|focus on|prioriti[sz]e|priority|include|exclude|only|don'?t|do not|instead|actually|i want|i'?d like|i need|should|besides|on top of|skip|ignore|add|plus|but also|prefer|narrow|broaden|limit (?:it )?to|make it|as well as|yes|no\b)\b/i;
+// the task (vs unrelated chatter). Tuned 2026-06-29 after live mis-captures: "Thank you Zoe" was
+// captured (assistantAskedQuestion fired on a social reply) and "Rainey Center is a right-of-center
+// think tank for example" was MISSED (no imperative keyword). Fix: hard-exclude social/gratitude/ack,
+// and broaden the refinement language to catch informative scope statements ("X is a …", "for example",
+// "as well", "counts", "consider").
+const REFINE_RE = /\b(also|as well|in addition|additionally|make sure|focus on|prioriti[sz]e|priority|include|exclude|only|don'?t|do not|instead|actually|i want|i'?d like|i need|should|besides|on top of|skip|ignore|add|plus|but also|prefer|narrow|broaden|limit (?:it )?to|make it|as well as|consider|note that|keep in mind|for example|e\.?g\.?|counts?|is (?:a|an|one)\b|are (?:also|one)\b|too\b)\b/i;
+// Social / gratitude / greeting / pure-ack — NEVER a research clarification (optional trailing name).
+const SOCIAL_CLOSER_RE = /^(?:thanks?|thank you|ty|cheers|much appreciated|appreciate it|great|nice|cool|awesome|perfect|ok(?:ay)?|sounds good|got it|gotcha|sure|will do|hi|hey|hello|good (?:morning|night|evening|afternoon)|love you|you'?re the best)\b(?:\s+(?:zoe|so much|a lot|man|dude|babe|then))?[\s!.,]*$/i;
 function isClarification({ message = '', assistantAskedQuestion = false } = {}) {
   const s = String(message).trim();
-  if (s.length < 3) return false;
-  return !!assistantAskedQuestion || REFINE_RE.test(s);
+  if (s.length < 6) return false;
+  if (SOCIAL_CLOSER_RE.test(s)) return false;                 // gratitude/greeting/ack ≠ task guidance
+  return REFINE_RE.test(s) || !!assistantAskedQuestion;        // substantive refinement, or an answer to her question
 }
 
 // Is the user asking for a STATUS/progress update on the running task? (Concern 1: these were falling

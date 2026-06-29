@@ -69,6 +69,12 @@ ok(r.isClarification({ message: 'also make sure to get their funding sources' })
 ok(r.isClarification({ message: 'focus on the energy ones first' }) === true, '"focus on …" → clarification');
 ok(r.isClarification({ message: 'the weather is nice' }) === false, 'unrelated chatter (no refinement, no question asked) → NOT a clarification');
 ok(r.isClarification({ message: 'lol' }) === false, 'too-short throwaway → not a clarification');
+// live mis-captures (2026-06-29): fix the false positive + false negative
+ok(r.isClarification({ message: 'Thank you Zoe', assistantAskedQuestion: true }) === false, '"Thank you Zoe" (after she asked a Q) → NOT a clarification (social, was wrongly captured)');
+ok(r.isClarification({ message: 'thanks so much!', assistantAskedQuestion: true }) === false, 'gratitude → NOT a clarification');
+ok(r.isClarification({ message: 'good morning Zoe', assistantAskedQuestion: true }) === false, 'a greeting → NOT a clarification');
+ok(r.isClarification({ message: 'Rainey Center is a right of center think tank for example' }) === true, '"X is a … think tank for example" → clarification (scope steer, was wrongly MISSED)');
+ok(r.isClarification({ message: "But if it helps, expand to 'moderate' as well" }) === true, '"expand to moderate as well" → clarification (scope broadening)');
 ok(r.buildGuidanceBlock([]) === '', 'no clarifications → empty guidance block');
 const gb = r.buildGuidanceBlock(['include state-level ones', 'skip any already in our CRM']);
 ok(/ADDITIONAL GUIDANCE/i.test(gb) && /include state-level ones/.test(gb) && /skip any already/.test(gb), 'guidance block lists all clarifications');

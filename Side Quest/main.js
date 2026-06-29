@@ -74,6 +74,7 @@ const echoSuitLib = require('./lib/echo_suit');
 const { EngineSupervisor } = require('./lib/engine');   // Zoe OWNS the absorbed engine (adopt-or-spawn)
 const recallLib = require('./lib/recall');   // <recall ref="rID"/> — expand a memory marker on demand
 let echoSuit = null;   // Echo "suit" — the MCP tool surface Zoe wears; bound to the engine she owns
+let echoHttp = null;   // {base,token} for the engine's HTTP custom routes (e.g. GET /canvas live snapshot)
 let engineSupervisor = null;   // supervises the engine process: adopts a running one, else spawns + owns it
 // Lucas explicitly invoking the suit / our data → bind to echo tags (F1 nudge). Deliberately
 // specific so it doesn't fire on casual mentions of "data" etc.
@@ -368,6 +369,7 @@ app.whenReady().then(() => {
   // engine is healthy, and the 60s heartbeat re-attaches if the connection ever drops.
   const ECHO_CWD = process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo';
   const echoCfg = readEchoConfig(ECHO_CWD);
+  echoHttp = { base: `http://${echoCfg.host}:${echoCfg.port}`, token: echoCfg.token };   // for GET /canvas
   echoSuit = echoSuitLib.createSuit({ client: require('./lib/echo').fromEnv({ url: echoCfg.url, token: echoCfg.token }) });
   // Register this connected suit as the live singleton so active_recall can query the master DB
   // (search_knowledge) through the SAME connection — automatic recall, not just her explicit tags.
@@ -1202,19 +1204,29 @@ ipcMain.handle('crm:get', async (_e, { contactId } = {}) => {
 });
 
 // ============================ CANVAS (studio — saga canvas renderer) =========================
-// Read-only Slice 1: render Echo's saga canvas (tenant_rainey.canvas_tabs / canvas_blocks). The
-// canvas is the live surface; the saga store is the system of record. We read via db_query through
-// the Echo suit (same callTool boundary as the other browsers) and map via studio/canvas_view.js.
-// Drive (saga_canvas_* writes) is Slice 2 — this slice only renders. No model.
+// Render Zoe's LIVE canvas. CRITICAL: the canvas lives IN-MEMORY in the engine (canvas_publisher
+// _TABS/_BLOCKS + websocket fan-out); the engine serves it over GET /canvas (full snapshot). The
+// tenant_rainey.canvas_blocks SQLite table is ONLY written by TENANT processes — Saga's MAIN engine
+// (what we run) keeps canvas state in-memory, so db_query would never see live blocks. We read the
+// snapshot over HTTP (same engine canvasEmit writes to → consistent) and map via canvas_view. No model.
+async function canvasSnapshot() {
+  if (!echoHttp || !echoHttp.base) return null;
+  const headers = { Accept: 'application/json' };
+  if (echoHttp.token) headers.Authorization = `Bearer ${echoHttp.token}`;
+  const res = await fetch(`${echoHttp.base}/canvas`, { headers });
+  if (!res || !res.ok) throw new Error(`canvas snapshot ${res ? res.status : 'no response'}`);
+  return await res.json();
+}
+
 ipcMain.handle('canvas:list-tabs', async (_e, opts = {}) => {
   try {
     if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
-    const callTool = pollCallTool();
-    const openOnly = !!(opts && opts.openOnly);
-    const sql = `SELECT tab_key, mode, title, opened_at, closed_at FROM tenant_rainey.canvas_tabs${openOnly ? ' WHERE closed_at IS NULL' : ''} ORDER BY opened_at DESC LIMIT 200`;
-    const payload = await callTool('db_query', { sql });
-    const rows = (payload && Array.isArray(payload.rows)) ? payload.rows : [];
-    return { ok: true, tabs: rows.map(canvasView.normalizeTab) };
+    const snap = await canvasSnapshot();
+    if (!snap) return { ok: false, error: 'canvas snapshot unavailable' };
+    let tabs = (Array.isArray(snap.tabs) ? snap.tabs : []).map(canvasView.normalizeTab);
+    if (opts && opts.openOnly) tabs = tabs.filter(t => t.open);
+    tabs.sort((a, b) => (b.openedAt || 0) - (a.openedAt || 0));   // newest first
+    return { ok: true, tabs };
   } catch (e) { console.error('[canvas] list-tabs failed:', e.message); return { ok: false, error: e.message }; }
 });
 
@@ -1222,21 +1234,37 @@ ipcMain.handle('canvas:get-tab', async (_e, { tabKey } = {}) => {
   try {
     if (!tabKey) return { ok: false, error: 'no tab key' };
     if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
-    const callTool = pollCallTool();
-    const tabRes = await callTool('db_query', {
-      sql: 'SELECT tab_key, mode, title, opened_at, closed_at FROM tenant_rainey.canvas_tabs WHERE tab_key = ? LIMIT 1',
-      params: [String(tabKey)],
-    });
-    const tabRow = (tabRes && Array.isArray(tabRes.rows) && tabRes.rows[0]) || null;
+    const snap = await canvasSnapshot();
+    if (!snap) return { ok: false, error: 'canvas snapshot unavailable' };
+    const tabRow = (Array.isArray(snap.tabs) ? snap.tabs : []).find(t => (t.tab_key || t.key) === tabKey);
     if (!tabRow) return { ok: false, error: 'tab not found' };
-    const blkRes = await callTool('db_query', {
-      sql: 'SELECT block_id, tab_key, block_type, data, position, created_at, updated_at FROM tenant_rainey.canvas_blocks WHERE tab_key = ? ORDER BY position IS NULL, position, created_at',
-      params: [String(tabKey)],
-    });
-    const blocks = (blkRes && Array.isArray(blkRes.rows)) ? blkRes.rows : [];
+    const blocks = (snap.blocks_by_tab && Array.isArray(snap.blocks_by_tab[tabKey])) ? snap.blocks_by_tab[tabKey] : [];
     return { ok: true, tab: canvasView.normalizeTab(tabRow), stream: canvasView.normalizeStream(blocks) };
   } catch (e) { console.error('[canvas] get-tab failed:', e.message); return { ok: false, error: e.message }; }
 });
+
+// ZOE CANVAS DRIVE (Slice 2) — the orchestrator's SINGLE seam for writing a professional-register
+// block to Zoe's saga canvas (write path A: Side Quest calls saga_canvas_* directly through the Echo
+// suit). Determinism law: content here is produced upstream by caged cloud leaves (organize/condense
+// reasoner); Dans NEVER writes a block. Tab key is deterministic per focus so re-opens are idempotent
+// and the tab re-attaches after a restart. Fully fail-safe: a canvas error never breaks the research
+// loop (the deliverable FILES remain the durable artifact; the canvas is the live render).
+const _canvasTabsOpened = new Set();
+async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
+  try {
+    if (!blockType) return false;
+    if (!(await ensureEngine())) return false;
+    const ce = require('./studio/canvas_emit');
+    const callTool = pollCallTool();
+    const tabKey = ce.tabKeyForFocus(focusId);
+    if (!_canvasTabsOpened.has(tabKey)) {
+      await callTool('saga_canvas_open_tab', { mode: ce.mode(tabMode || 'RESEARCH'), tab_key: tabKey, title: ce.tabTitleForGoal(title) });
+      _canvasTabsOpened.add(tabKey);
+    }
+    await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: blockType, data: data || {} });
+    return true;
+  } catch (e) { console.error('[canvas] emit failed:', e.message); return false; }
+}
 
 // ============================ LEGISLATION (studio — data browser) ============================
 // Read-only surface over the engine's bill tools (~1.46M bills). No "list all": browse by facets
@@ -3876,6 +3904,15 @@ async function condenseRun(focus, { reason = 'done' } = {}) {
     catch (e) { console.error('[condense] dossier write failed:', e.message); }
     try { await memoryLib.store({ kind: 'note', content: `Research dossier — ${goal.slice(0, 90)}:\n${condensed.slice(0, 4000)}`, source: 'research_dossier', importance: 0.85, embedText: goal }); } catch {}
     try { db.setMeta('research.last_dossier', JSON.stringify({ focusId: focus.id, path: dossierPath, goal, reason })); } catch {}
+    // DRIVE → Zoe's canvas: emit the count headline + the final condensed dossier as DOC blocks.
+    try {
+      const ce = require('./studio/canvas_emit');
+      let cov = []; try { cov = JSON.parse(db.getMeta(`focus.${focus.id}.covered`) || '[]'); } catch {}
+      const h = ce.countHeading(cov.length);
+      await canvasEmit({ focusId: focus.id, title: goal, tabMode: 'DOC', blockType: h.blockType, data: h.data });
+      const dblk = ce.dossierBlock(condensed.trim());
+      await canvasEmit({ focusId: focus.id, title: goal, tabMode: 'DOC', blockType: dblk.blockType, data: dblk.data });
+    } catch (e) { console.error('[condense] canvas emit failed:', e.message); }
     try {
       const rr = db.insertMonologue({ content: `Condensed the research run into a dossier (${dossierPath}). ${condensed.slice(0, 280)}`, model: 'condense', type: 'reading' });
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: rr.id, ts: rr.ts, content: `(dossier ready) ${dossierPath}`, type: 'reading' });
@@ -3967,6 +4004,8 @@ async function runDirectedResearchPass(focus) {
       const header = covered.length === 0 ? `# Directed research deliverable\n\n**Task:** ${goal}\n\n---\n\n` : '';
       try { await filesLib.dispatch({ tag: 'file-append', attrs: { path: file }, body: `${header}${section}\n\n` }); }
       catch (e) { console.error('[directed] append failed:', e.message); }
+      // DRIVE → Zoe's canvas: mirror the organized section as a live per-org block as the run advances.
+      try { const blk = require('./studio/canvas_emit').orgSectionBlock(section); await canvasEmit({ focusId: focus.id, title: goal, tabMode: 'RESEARCH', blockType: blk.blockType, data: blk.data }); } catch {}
       covered.push(target.name); try { db.setMeta(coveredKey, JSON.stringify(covered.slice(-300))); } catch {}
       note = `completed ${target.name} (${target.passes} passes, ${adv.reason}) + organized`; sig = target.name.toLowerCase(); progressed = true;
       target = null; try { db.setMeta(targetKey, ''); } catch {}
