@@ -442,6 +442,9 @@ app.whenReady().then(() => {
     if (sc.due()) { const l = sc.run(); console.log(`[main] capability self-check: ${l.green}/${l.total} green${l.allGreen ? '' : ' — RED: ' + l.red.map(r => r.name).join(', ')}`); }
   } catch (e) { console.error('[main] self-check at boot failed:', e.message); }
   createWindow();
+  // Zoe's Canvas auto-spawns at launch (it's a primary surface, not on-demand). The renderer
+  // self-retries its first load until the engine attaches, so an early spawn is fine.
+  try { createCanvasWindow(); } catch (e) { console.error('[main] canvas auto-spawn failed:', e.message); }
 
   // BOOT HOUSEKEEPING: a model pinned by keep_alive from a PRIOR run (e.g. the old front model after
   // a swap, or a leftover extraction model) squats VRAM and collides with the current front — loads
@@ -1241,29 +1244,106 @@ ipcMain.handle('canvas:get-tab', async (_e, { tabKey } = {}) => {
     const tabRow = (Array.isArray(snap.tabs) ? snap.tabs : []).find(t => (t.tab_key || t.key) === tabKey);
     if (!tabRow) return { ok: false, error: 'tab not found' };
     const blocks = (snap.blocks_by_tab && Array.isArray(snap.blocks_by_tab[tabKey])) ? snap.blocks_by_tab[tabKey] : [];
-    const stream = canvasView.normalizeStream(blocks);
-    // freeform board: saved positions win; un-positioned blocks get a deterministic auto-slot.
-    let positions = {}; try { positions = canvasLayoutStore.getPositions(tabKey); } catch {}
-    const placed = canvasLayout.autoPlace(stream.blocks.map(b => b.id), positions);
-    return { ok: true, tab: canvasView.normalizeTab(tabRow), stream, placed };
+    return { ok: true, tab: canvasView.normalizeTab(tabRow), stream: canvasView.normalizeStream(blocks) };
   } catch (e) { console.error('[canvas] get-tab failed:', e.message); return { ok: false, error: e.message }; }
 });
 
-// Freeform board — persist a drag (operator moves a card) and reset a tab's arrangement.
-ipcMain.handle('canvas:set-block-pos', async (_e, { tabKey, blockId, x, y } = {}) => {
+// Whole canvas in one shot: every tab as a DOCUMENT (normalized block stream) + its board position.
+// The movable object on the canvas is the DOCUMENT (a tab), with its blocks flowing inside it.
+// Operator-saved coords win; un-positioned docs get a deterministic auto-slot. One /canvas fetch.
+ipcMain.handle('canvas:get-all', async () => {
   try {
-    if (!tabKey || !blockId) return { ok: false, error: 'tabKey + blockId required' };
-    const pos = canvasLayoutStore.setPosition(tabKey, blockId, x, y);
-    return { ok: true, pos };
-  } catch (e) { console.error('[canvas] set-block-pos failed:', e.message); return { ok: false, error: e.message }; }
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const snap = await canvasSnapshot();
+    if (!snap) return { ok: false, error: 'canvas snapshot unavailable' };
+    const tabs = (Array.isArray(snap.tabs) ? snap.tabs : []).map(canvasView.normalizeTab);
+    let state = {}; try { state = canvasLayoutStore.getPositions(); } catch {}
+    const placed = canvasLayout.autoPlace(tabs.map(t => t.key), state);
+    const posBy = {}; for (const p of placed) posBy[p.blockId] = p;   // autoPlace's id field == the tab key here
+    const bb = snap.blocks_by_tab || {};
+    const docs = tabs.map(t => {
+      const s = state[t.key] || {};
+      return {
+        tab: t,
+        stream: canvasView.normalizeStream(Array.isArray(bb[t.key]) ? bb[t.key] : []),
+        pos: posBy[t.key] || { x: 48, y: 48 },
+        w: s.w || null, h: s.h || null, hidden: !!s.hidden, minimized: !!s.minimized,
+      };
+    });
+    return { ok: true, docs };
+  } catch (e) { console.error('[canvas] get-all failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// Freeform board — persist a drag (operator moves a DOCUMENT) + reset arrangement (one doc or all).
+ipcMain.handle('canvas:set-doc-pos', async (_e, { tabKey, x, y } = {}) => {
+  try {
+    if (!tabKey) return { ok: false, error: 'tabKey required' };
+    return { ok: true, pos: canvasLayoutStore.setPosition(tabKey, x, y) };
+  } catch (e) { console.error('[canvas] set-doc-pos failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// Merge a UI-state patch for a document: size {w,h}, {hidden}, {minimized}, or position.
+ipcMain.handle('canvas:update-doc', async (_e, { tabKey, patch } = {}) => {
+  try {
+    if (!tabKey) return { ok: false, error: 'tabKey required' };
+    return { ok: true, state: canvasLayoutStore.update(tabKey, patch || {}) };
+  } catch (e) { console.error('[canvas] update-doc failed:', e.message); return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('canvas:reset-layout', async (_e, { tabKey } = {}) => {
+  try { return { ok: true, cleared: canvasLayoutStore.clear(tabKey || undefined) }; }
+  catch (e) { console.error('[canvas] reset-layout failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// Drag-and-drop a file onto the canvas → a DOCUMENT object. Reuses the suite's existing extractor
+// (lib/doc_extract: .docx via mammoth, .pdf via pdfjs, .md/.txt direct) with a utf8 fallback for
+// other text types, then opens a DOC tab with the content and positions it at the drop point. These
+// dropped docs live in the engine's in-memory canvas (ephemeral) — ideal for quick test population.
+const IMG_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml' };
+ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
   try {
-    if (!tabKey) return { ok: false, error: 'no tab key' };
-    const cleared = canvasLayoutStore.clearTab(tabKey);
-    return { ok: true, cleared };
-  } catch (e) { console.error('[canvas] reset-layout failed:', e.message); return { ok: false, error: e.message }; }
+    if (!filePath) return { ok: false, error: 'no file path' };
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const fs = require('fs');
+    const ext = path.extname(filePath).replace(/^\./, '').toLowerCase();
+    const baseName = path.basename(filePath).replace(/\.[^.]+$/, '');
+    let mode = 'DOC', blockType = 'paragraph', data = null, title = baseName.slice(0, 120) || 'document';
+
+    if (IMG_MIME[ext]) {                                   // IMAGE → render as an actual image
+      const b64 = fs.readFileSync(filePath).toString('base64');
+      data = { src: `data:${IMG_MIME[ext]};base64,${b64}`, alt: baseName };
+      blockType = 'image'; mode = 'ILLUSTRATIVE';
+    } else if (ext === 'csv' || ext === 'tsv') {           // SPREADSHEET (delimited) → table
+      const tbl = require('./studio/sheet_view').csvToTable(fs.readFileSync(filePath, 'utf8'), ext === 'tsv' ? '\t' : ',');
+      data = { headers: tbl.headers, rows: tbl.rows, caption: tbl.truncated ? `+${tbl.truncated} more rows` : null };
+      blockType = 'table';
+    } else if (ext === 'xlsx' || ext === 'xlsm' || ext === 'xls') {   // EXCEL → table (first sheet)
+      const ExcelJS = require('exceljs');
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(filePath);
+      const ws = wb.worksheets[0];
+      const rows = [];
+      if (ws) ws.eachRow((r) => rows.push((r.values || []).slice(1).map(v => (v == null ? '' : (typeof v === 'object' ? (v.text || v.result || v.hyperlink || JSON.stringify(v)) : v)))));
+      const tbl = require('./studio/sheet_view').toTable(rows);
+      data = { headers: tbl.headers, rows: tbl.rows, caption: ws ? `${ws.name}${tbl.truncated ? ` · +${tbl.truncated} more rows` : ''}` : null };
+      blockType = 'table';
+    } else {                                               // DOCUMENT (docx/pdf/md/txt/…) → markdown
+      let markdown = '';
+      try { markdown = (await require('./lib/doc_extract').extractToMarkdown(filePath)).markdown || ''; }
+      catch (e) { try { markdown = fs.readFileSync(filePath, 'utf8'); } catch { return { ok: false, error: `could not read ${path.basename(filePath)}: ${e.message}` }; } }
+      if (!markdown.trim()) return { ok: false, error: 'empty / unreadable document' };
+      const firstH = markdown.split(/\r?\n/).map(l => l.trim()).find(l => /^#{1,6}\s+\S/.test(l));
+      if (firstH) title = firstH.replace(/^#{1,6}\s+/, '').slice(0, 120);
+      data = { markdown: markdown.slice(0, 200000) };
+    }
+
+    const tabKey = `drop-${path.basename(filePath).replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 40)}-${Date.now().toString(36)}`;
+    const callTool = pollCallTool();
+    await callTool('saga_canvas_open_tab', { mode, tab_key: tabKey, title });
+    await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: blockType, data });
+    try { canvasLayoutStore.setPosition(tabKey, x, y); } catch {}
+    return { ok: true, tabKey, title };
+  } catch (e) { console.error('[canvas] drop-doc failed:', e.message); return { ok: false, error: e.message }; }
 });
 
 // ZOE CANVAS DRIVE (Slice 2) — the orchestrator's SINGLE seam for writing a professional-register
@@ -2476,18 +2556,25 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   } catch (e) { console.error('[main] expand-order failed:', e.message); }
 
-  // DELIVERABLE QUERY (Slice 1) — count / list / sample / facet / status about the research, answered
-  // off the Track's own index + document, whether the run is ACTIVE or COMPLETE. Fixes the
-  // post-completion confabulation ("around 15" while 21 sat in covered) AND the live-research disconnect
-  // (a question about the org being researched right NOW reaches the in-flight target). All facts are
-  // deterministic, straight from the artifact; Dans only relays them. A status-kind turn on a finished
-  // run is suppressed if it's a bare social greeting (so "how's it going?" stays small talk).
+  // INTERFACE POLL (Slice I) — the interface polls the brain through ONE deterministic router instead of
+  // answering from its own (lossy) memory. Sources register here; the router picks who answers, preferring
+  // deterministic (program-grounded) sources. Two registered today:
+  //   • research-deliverable — count/list/sample/facet/status off the Track's index+document, ACTIVE or
+  //     COMPLETE (fixes the post-completion "around 15" confab + the live-research disconnect).
+  //   • current-activity — "what are you doing/working on/watching" answered from the live lane snapshot.
+  // Lanes (media/meeting/news) register more sources here as they land — no new branch in the pipeline.
   let statusHandled = false;
   try {
     if (!directedStopHandled && !expandHandled && !followupFired) {
       const tk = require('./lib/track');
-      const cls = tk.classifyQuery(userMessage);
-      if (cls.is) {
+      const act = require('./lib/activity');
+      const poll = require('./lib/poll');
+      const sources = [
+        { name: 'research-deliverable', kind: 'deliverable', tier: 'deterministic', match: (q) => tk.classifyQuery(q).is },
+        { name: 'current-activity', kind: 'activity', tier: 'deterministic', match: (q) => act.isActivityQuestion(q) },
+      ];
+      const top = poll.pick(userMessage, sources);
+      if (top && top.kind === 'deliverable') {
         const track = await buildQueryTrack();
         const ans = tk.buildAnswer(track, userMessage);
         const skip = ans.kind === 'status' && track.kind !== 'active' && socialTurn;   // greeting, not a project query
@@ -2501,11 +2588,19 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           const where = track.kind === 'active' ? 'your IN-PROGRESS research' : 'your research';
           composedUserMessage += `\n\n[${userName} asked about ${where}. Answer using THESE REAL FACTS from your task state — present them exactly (do not drop or invent any organization, name, or contact), naturally in your own voice:\n${body}]`;
           statusHandled = true;
-          console.log(`[deliverable] ${ans.kind} answered from ${track.kind} track (${ans.note})`);
+          console.log(`[poll] deliverable answered from ${track.kind} track (${ans.note})`);
+        }
+      } else if (top && top.kind === 'activity' && !socialTurn) {
+        const snap = await laneSnapshot();
+        const a = act.summarize(snap);
+        if (a.active) {
+          composedUserMessage += `\n\n[${userName} asked what you're doing right now. Answer from THIS REAL live state of your active work — exactly, no invention, in your own voice:\n${a.block}]`;
+          statusHandled = true;
+          console.log(`[poll] activity answered (${a.active} active lane(s))`);
         }
       }
     }
-  } catch (e) { console.error('[main] status request failed:', e.message); }
+  } catch (e) { console.error('[main] interface poll failed:', e.message); }
 
   // MID-RUN CLARIFICATION — Lucas refining the standing task WHILE it runs (often answering a question
   // she just asked). Without this his guidance was dropped: a non-task-shaped clarification ("yes,
@@ -3981,6 +4076,35 @@ async function buildQueryTrack() {
     if (!goal) { try { const t = db.getOpenThread(id); goal = t ? String(t.content || '') : ''; } catch {} }
     return { kind, goal, covered, sections, target, completed };
   } catch (e) { console.error('[track] build failed:', e.message); return { kind: 'none' }; }
+}
+
+// Build the live cross-lane SNAPSHOT for the activity poll source (Slice I): the active research focus,
+// the media-watch state, and the meeting state — read straight from focus + meta. Lightweight (no file
+// reads); lib/activity turns it into the grounded "what are you doing" answer + heartbeat pointers.
+async function laneSnapshot() {
+  const snap = { research: null, media: null, meeting: null };
+  try {
+    const focusLib = require('./lib/focus');
+    const f = (() => { try { return focusLib.getCurrent(); } catch { return null; } })();
+    if (f && focusLib.isDirected(f)) {
+      let covered = []; try { covered = JSON.parse(db.getMeta(`focus.${f.id}.covered`) || '[]'); } catch {}
+      let target = null; try { const t = JSON.parse(db.getMeta(`focus.${f.id}.target`) || 'null'); if (t && t.name) target = { name: t.name }; } catch {}
+      snap.research = { goal: String(f.content || ''), covered, target };
+    }
+  } catch {}
+  try {
+    const stage = db.getMeta('media_stage') || 'none';
+    if (!['none', 'done'].includes(stage)) {
+      snap.media = { url: db.getMeta('media_url') || '', stage, understanding: db.getMeta('media_understanding') || '' };
+    }
+  } catch {}
+  try {
+    const stage = db.getMeta('gmeet_stage') || 'none';
+    if (!['none', 'done'].includes(stage)) {
+      snap.meeting = { url: db.getMeta('gmeet_url') || '', stage, awaitingAdmit: stage === 'awaiting_admit' };
+    }
+  } catch {}
+  return snap;
 }
 
 // FRONTIER STATUS REPORT (Concern 1) — when Lucas asks how a running task is going, the local voice
