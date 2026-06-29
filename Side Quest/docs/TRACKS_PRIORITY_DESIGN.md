@@ -135,10 +135,27 @@ So most of it is **collecting fragments onto one object**, not new plumbing.
 ## 8. Slice plan (incremental, gate-green at each step, substrate protected)
 0. **Track as a thin view/extension** over existing focus/open_threads + knowledge + meta (lean: a *view*,
    not a new substrate table, unless a minimal `tracks` index proves necessary). Pure mappers + smoke.
-1. **Deliverable fix (highest value, concrete):** lossless **deterministic assembly** (condense = stitch
-   per-part leaves + a small Summary/Gaps model pass) **+ the deliverable-query path** (count/list/sample/
-   status off the Track, active OR complete). Fixes the live confabulation + the 6/21 drop. Pure-logic
-   smokes (assembly is deterministic → fully testable offline).
+1. **Deliverable fix (highest value, concrete) — ✅ BUILT 2026-06-29:** lossless **deterministic assembly**
+   (condense = stitch per-part leaves + a small Summary/Gaps model pass) **+ the deliverable-query path**
+   (count/list/sample/facet/status off the Track, active OR complete). Fixes the live confabulation + the
+   6/21 drop. Pure-logic smokes (assembly is deterministic → fully testable offline).
+   - `lib/assemble.js` (pure): `parseSections` (split the accreted run file into "## <org>" sections),
+     `reconcileIndex` (covered ↔ document drift → indexed-but-missing surfaced in Gaps), `buildWrapperPrompt`/
+     `parseWrapper`/`WRAPPER_SYS` (the model writes ONLY Summary/Gaps, never the sections), `stitchDocument`
+     (deterministic N-in=N-out; count derived from the artifact). The model never sees the assembled output.
+   - `lib/track.js` (pure): `classifyQuery` (count/list/sample/facet/status), `buildAnswer` over a plain
+     track object (the index + sections + in-flight target) — grounded facts only, no invention; the
+     "facet sweep" answers "head of policy for each" across every section; the in-flight target serves a
+     live "what about MIRI" question.
+   - `main.js`: `condenseRun` rewritten to the lossless stitch (drops the old whole-doc map-reduce);
+     `buildQueryTrack()` resolves the CURRENT-or-last Track (active focus → `research.last_dossier` →
+     `research.last_focus_id`); the chat status block replaced by the deliverable-query block (fires active
+     OR complete; status-kind suppressed on a bare social greeting for a finished run). `research.last_focus_id`
+     pointer set at directed-run start so a stall-without-dossier is still queryable.
+   - Smokes `smoke_assemble.js` (45 ok) + `smoke_track.js` (22 ok); gate now **47/47 green**.
+   - Still routing-deferred (Slice 3): a dual-intent turn ("keep researching **but** your opinion on MIRI")
+     answers the deliverable query but drops the continue-ack; the live "opinion/why" conversational
+     question (vs a count/list/sample) is not yet auto-routed to the live Track content.
 2. **Priority model:** banding + the deterministic gate (+ ask-for-color) + two-way alert + the self-budget.
    Pure logic + smokes.
 3. **The scheduler:** replace the single-focus driver with the priority-ordered multi-track scheduler.

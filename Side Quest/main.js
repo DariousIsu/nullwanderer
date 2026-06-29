@@ -30,6 +30,8 @@ const pollView = require('./studio/poll_view');              // Polling surface:
 const crmView = require('./studio/crm_view');                // CRM surface: contact tool payloads → view shapes
 const legView = require('./studio/leg_view');                // Legislation surface: bill tool payloads → view shapes
 const canvasView = require('./studio/canvas_view');          // Canvas surface: saga canvas tabs/blocks → view shapes
+const canvasLayout = require('./studio/canvas_layout');      // Canvas freeform board: pure placement math
+const canvasLayoutStore = require('./lib/canvas_layout');    // Canvas freeform board: operator's saved block positions
 const kgView = require('./studio/kg_view');                  // Knowledge Graph surface: graph tool payloads → nodes/links
 const docView = require('./studio/doc_view');                // Reader/Library surface: corpus doc payloads → reader view
 const docExtract = require('./lib/doc_extract');             // writing suite: local .docx/.pdf extractors (rich render)
@@ -1239,8 +1241,29 @@ ipcMain.handle('canvas:get-tab', async (_e, { tabKey } = {}) => {
     const tabRow = (Array.isArray(snap.tabs) ? snap.tabs : []).find(t => (t.tab_key || t.key) === tabKey);
     if (!tabRow) return { ok: false, error: 'tab not found' };
     const blocks = (snap.blocks_by_tab && Array.isArray(snap.blocks_by_tab[tabKey])) ? snap.blocks_by_tab[tabKey] : [];
-    return { ok: true, tab: canvasView.normalizeTab(tabRow), stream: canvasView.normalizeStream(blocks) };
+    const stream = canvasView.normalizeStream(blocks);
+    // freeform board: saved positions win; un-positioned blocks get a deterministic auto-slot.
+    let positions = {}; try { positions = canvasLayoutStore.getPositions(tabKey); } catch {}
+    const placed = canvasLayout.autoPlace(stream.blocks.map(b => b.id), positions);
+    return { ok: true, tab: canvasView.normalizeTab(tabRow), stream, placed };
   } catch (e) { console.error('[canvas] get-tab failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// Freeform board — persist a drag (operator moves a card) and reset a tab's arrangement.
+ipcMain.handle('canvas:set-block-pos', async (_e, { tabKey, blockId, x, y } = {}) => {
+  try {
+    if (!tabKey || !blockId) return { ok: false, error: 'tabKey + blockId required' };
+    const pos = canvasLayoutStore.setPosition(tabKey, blockId, x, y);
+    return { ok: true, pos };
+  } catch (e) { console.error('[canvas] set-block-pos failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('canvas:reset-layout', async (_e, { tabKey } = {}) => {
+  try {
+    if (!tabKey) return { ok: false, error: 'no tab key' };
+    const cleared = canvasLayoutStore.clearTab(tabKey);
+    return { ok: true, cleared };
+  } catch (e) { console.error('[canvas] reset-layout failed:', e.message); return { ok: false, error: e.message }; }
 });
 
 // ZOE CANVAS DRIVE (Slice 2) — the orchestrator's SINGLE seam for writing a professional-register
@@ -2453,27 +2476,34 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   } catch (e) { console.error('[main] expand-order failed:', e.message); }
 
-  // STATUS REQUEST (Concern 1) — "how's the project going?" on a running directed task. Answer it with
-  // a FRONTIER-generated report over the real progress state, NOT the local voice model (which
-  // truncated + half-guessed). Runs even on a social-classified turn ("how's it going") since it's
-  // about the project; gates the blocks below so they don't double-handle.
+  // DELIVERABLE QUERY (Slice 1) — count / list / sample / facet / status about the research, answered
+  // off the Track's own index + document, whether the run is ACTIVE or COMPLETE. Fixes the
+  // post-completion confabulation ("around 15" while 21 sat in covered) AND the live-research disconnect
+  // (a question about the org being researched right NOW reaches the in-flight target). All facts are
+  // deterministic, straight from the artifact; Dans only relays them. A status-kind turn on a finished
+  // run is suppressed if it's a bare social greeting (so "how's it going?" stays small talk).
   let statusHandled = false;
   try {
-    if (_isStatusReq && _directedFocus && !directedStopHandled && !expandHandled && !followupFired) {
-      const f = _directedFocus;
-      // DETERMINISTIC ground truth FIRST — the actual covered list straight from meta, so the answer
-      // can't omit it or confabulate (the "Wayne Crews leads CEI and Mercatus" failure was her riffing
-      // from rumination because the real list never reached the reply).
-      let cov = []; try { cov = JSON.parse(db.getMeta(`focus.${f.id}.covered`) || '[]'); } catch {}
-      let tgt = null; try { tgt = JSON.parse(db.getMeta(`focus.${f.id}.target`) || 'null'); } catch {}
-      const listLine = cov.length
-        ? `So far you have completed ${cov.length} organizations: ${cov.join(', ')}.${tgt ? ` You're currently researching ${tgt.name}.` : ''}`
-        : `You haven't completed any organizations yet — still getting going.`;
-      const report = await statusReport(f);   // frontier narrative (what's solid, what's thin) — enrichment
-      const body = report && report.trim() ? `${listLine}\n\n${report.trim()}` : listLine;
-      composedUserMessage += `\n\n[${userName} asked how your research is going / what you've covered. Answer using THESE REAL FACTS from your task state — present the FULL organization list (every one, exactly as written; do not drop or invent any), then the progress notes, naturally in your own voice:\n${body}]`;
-      statusHandled = true;
-      console.log(`[status] grounded status+list delivered for focus #${f.id} (${cov.length} orgs)`);
+    if (!directedStopHandled && !expandHandled && !followupFired) {
+      const tk = require('./lib/track');
+      const cls = tk.classifyQuery(userMessage);
+      if (cls.is) {
+        const track = await buildQueryTrack();
+        const ans = tk.buildAnswer(track, userMessage);
+        const skip = ans.kind === 'status' && track.kind !== 'active' && socialTurn;   // greeting, not a project query
+        if (ans.handled && ans.block && !skip) {
+          let body = ans.block;
+          // status-kind on a LIVE run gets the frontier narrative (what's solid vs thin) layered on the list
+          if (ans.kind === 'status' && track.kind === 'active') {
+            const f = (() => { try { return require('./lib/focus').getCurrent(); } catch { return null; } })();
+            if (f) { const report = await statusReport(f); if (report && report.trim()) body = `${ans.block}\n\n${report.trim()}`; }
+          }
+          const where = track.kind === 'active' ? 'your IN-PROGRESS research' : 'your research';
+          composedUserMessage += `\n\n[${userName} asked about ${where}. Answer using THESE REAL FACTS from your task state — present them exactly (do not drop or invent any organization, name, or contact), naturally in your own voice:\n${body}]`;
+          statusHandled = true;
+          console.log(`[deliverable] ${ans.kind} answered from ${track.kind} track (${ans.note})`);
+        }
+      }
     }
   } catch (e) { console.error('[main] status request failed:', e.message); }
 
@@ -3878,49 +3908,79 @@ async function condenseComplete(messages, { numPredict = 2500 } = {}) {
   } catch (e) { console.error('[condense] cloud failed:', e.message); return ''; }
 }
 
-// CONDENSE a finished directed run into one clean dossier: read the accreted file, fold it (map-reduce
-// if large) via the reasoner, write notes/directed-<id>-dossier.md, store ONE recall-friendly knowledge
-// node, remember it as research.last_dossier (so a later "expand" can find it), and notify Lucas.
+// ASSEMBLE a finished directed run into one clean dossier by LOSSLESS DETERMINISTIC STITCH (Slice 1):
+// the accreted run file already holds one clean "## <org>" section per covered org (continuous organize
+// pass). We stitch those sections verbatim — N-in = N-out — and use the reasoner ONLY for the
+// Summary/Gaps wrapper (it never sees the assembled output, so it can't drop an org — the old
+// whole-document re-summarization dropped 15/21). The count is derived from the artifact. Then store the
+// recall node, remember research.last_dossier + last_focus_id (so a later "expand" / query can find it),
+// drive the canvas, and notify Lucas.
 async function condenseRun(focus, { reason = 'done' } = {}) {
   try {
-    const cd = require('./lib/condense');
+    const as = require('./lib/assemble');
     const goal = String(focus.content || '');
     const file = db.getMeta(`focus.${focus.id}.file`);
     let raw = '';
     if (file) { try { const r = await filesLib.dispatch({ tag: 'file-read', attrs: { path: file } }); raw = (r && (r.text || r.content)) || ''; } catch {} }
     if (!raw || raw.trim().length < 80) { console.log('[condense] nothing substantial to condense'); return null; }
-    const chunks = cd.chunkForCondense(raw, 24000);
-    let condensed = '';
-    if (chunks.length <= 1) {
-      condensed = await condenseComplete(cd.buildCondensePrompt({ goal, raw: chunks[0] || raw }), { numPredict: 3000 });
-    } else {
-      const parts = [];
-      for (const ch of chunks) { const p = await condenseComplete(cd.buildCondensePrompt({ goal, raw: ch }), { numPredict: 2000 }); if (p && p.trim()) parts.push(p); }
-      condensed = parts.length ? await condenseComplete(cd.buildMergePrompt({ goal, parts }), { numPredict: 3000 }) : '';
-    }
-    if (!condensed || condensed.trim().length < 40) { console.log('[condense] empty result — leaving raw run file in place'); return null; }
+    const { sections } = as.parseSections(raw);
+    if (!sections.length) { console.log('[condense] no parseable org sections — leaving raw run file in place'); return null; }
+    let covered = []; try { covered = JSON.parse(db.getMeta(`focus.${focus.id}.covered`) || '[]'); } catch {}
+    const rec = as.reconcileIndex(covered, sections);
+    let wrapper = { summary: '', gaps: '' };
+    try { const w = await condenseComplete(as.buildWrapperPrompt({ goal, sections }), { numPredict: 900 }); wrapper = as.parseWrapper(w); } catch {}
+    const condensed = as.stitchDocument({ goal, completed: reason, sections, summary: wrapper.summary, gaps: wrapper.gaps, indexedMissing: rec.indexedMissing });
     const dossierPath = `notes/directed-${focus.id}-dossier.md`;
-    try { await filesLib.dispatch({ tag: 'file-write', attrs: { path: dossierPath }, body: `# Research dossier\n\n**Task:** ${goal}\n**Completed:** ${reason}\n\n${condensed.trim()}\n` }); }
+    try { await filesLib.dispatch({ tag: 'file-write', attrs: { path: dossierPath }, body: condensed }); }
     catch (e) { console.error('[condense] dossier write failed:', e.message); }
-    try { await memoryLib.store({ kind: 'note', content: `Research dossier — ${goal.slice(0, 90)}:\n${condensed.slice(0, 4000)}`, source: 'research_dossier', importance: 0.85, embedText: goal }); } catch {}
-    try { db.setMeta('research.last_dossier', JSON.stringify({ focusId: focus.id, path: dossierPath, goal, reason })); } catch {}
-    // DRIVE → Zoe's canvas: emit the count headline + the final condensed dossier as DOC blocks.
+    try { await memoryLib.store({ kind: 'note', content: `Research dossier — ${goal.slice(0, 90)} (${sections.length} orgs):\n${condensed.slice(0, 4000)}`, source: 'research_dossier', importance: 0.85, embedText: goal }); } catch {}
+    try { db.setMeta('research.last_dossier', JSON.stringify({ focusId: focus.id, path: dossierPath, goal, reason, count: sections.length })); } catch {}
+    try { db.setMeta('research.last_focus_id', String(focus.id)); } catch {}
+    // DRIVE → Zoe's canvas: emit the count headline (from the artifact) + the stitched dossier as DOC blocks.
     try {
       const ce = require('./studio/canvas_emit');
-      let cov = []; try { cov = JSON.parse(db.getMeta(`focus.${focus.id}.covered`) || '[]'); } catch {}
-      const h = ce.countHeading(cov.length);
+      const h = ce.countHeading(sections.length);
       await canvasEmit({ focusId: focus.id, title: goal, tabMode: 'DOC', blockType: h.blockType, data: h.data });
       const dblk = ce.dossierBlock(condensed.trim());
       await canvasEmit({ focusId: focus.id, title: goal, tabMode: 'DOC', blockType: dblk.blockType, data: dblk.data });
     } catch (e) { console.error('[condense] canvas emit failed:', e.message); }
     try {
-      const rr = db.insertMonologue({ content: `Condensed the research run into a dossier (${dossierPath}). ${condensed.slice(0, 280)}`, model: 'condense', type: 'reading' });
+      const rr = db.insertMonologue({ content: `Assembled the research run into a dossier (${dossierPath}, ${sections.length} orgs). ${condensed.slice(0, 240)}`, model: 'condense', type: 'reading' });
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: rr.id, ts: rr.ts, content: `(dossier ready) ${dossierPath}`, type: 'reading' });
     } catch {}
-    try { require('./lib/presence').notify('Zoe — dossier ready', `${goal.slice(0, 50)} → ${dossierPath}`); } catch {}
-    console.log(`[condense] dossier written → ${dossierPath} (${condensed.length} chars, from ${chunks.length} chunk(s))`);
-    return { path: dossierPath };
+    try { require('./lib/presence').notify('Zoe — dossier ready', `${goal.slice(0, 50)} → ${dossierPath} (${sections.length} orgs)`); } catch {}
+    console.log(`[condense] LOSSLESS dossier → ${dossierPath} (${sections.length} sections stitched, ${rec.indexedMissing.length} indexed-missing)`);
+    return { path: dossierPath, count: sections.length };
   } catch (e) { console.error('[condense] run failed:', e.message); return null; }
+}
+
+// Build the CURRENT-or-last research Track for the deliverable-query path (Slice 1): the active directed
+// focus if one is running, else the last completed/stalled run (research.last_dossier → last_focus_id).
+// Reads the covered index + the accreted "## <org>" sections + any in-flight target, so a question is
+// answered off the Track's own artifact whether the run is ACTIVE or COMPLETE. Returns a plain track
+// object for lib/track, or { kind:'none' }. Fail-safe.
+async function buildQueryTrack() {
+  try {
+    const as = require('./lib/assemble');
+    const focusLib = require('./lib/focus');
+    let id = null, kind = 'complete', completed = null, goal = '';
+    const active = (() => { try { return focusLib.getCurrent(); } catch { return null; } })();
+    if (active && focusLib.isDirected(active)) { id = active.id; kind = 'active'; goal = String(active.content || ''); }
+    if (id == null) {
+      let last = null; try { last = JSON.parse(db.getMeta('research.last_dossier') || 'null'); } catch {}
+      if (last && last.focusId != null) { id = last.focusId; goal = String(last.goal || ''); completed = last.reason || 'done'; }
+      else { const lf = db.getMeta('research.last_focus_id'); if (lf) { id = parseInt(lf, 10) || null; const t = id != null ? db.getOpenThread(id) : null; goal = t ? String(t.content || '') : ''; completed = t ? t.status : 'done'; } }
+    }
+    if (id == null) return { kind: 'none' };
+    let covered = []; try { covered = JSON.parse(db.getMeta(`focus.${id}.covered`) || '[]'); } catch {}
+    let target = null;
+    if (kind === 'active') { try { const t = JSON.parse(db.getMeta(`focus.${id}.target`) || 'null'); if (t && t.name) target = { name: t.name, rawExcerpt: String(t.raw || '').slice(0, 1200) }; } catch {} }
+    let sections = [];
+    const file = db.getMeta(`focus.${id}.file`);
+    if (file) { try { const r = await filesLib.dispatch({ tag: 'file-read', attrs: { path: file } }); sections = as.parseSections((r && (r.text || r.content)) || '').sections; } catch {} }
+    if (!goal) { try { const t = db.getOpenThread(id); goal = t ? String(t.content || '') : ''; } catch {} }
+    return { kind, goal, covered, sections, target, completed };
+  } catch (e) { console.error('[track] build failed:', e.message); return { kind: 'none' }; }
 }
 
 // FRONTIER STATUS REPORT (Concern 1) — when Lucas asks how a running task is going, the local voice
@@ -3964,6 +4024,9 @@ async function runDirectedResearchPass(focus) {
   let covered = []; try { covered = JSON.parse(db.getMeta(coveredKey) || '[]'); } catch {}
   let target = null; try { target = JSON.parse(db.getMeta(targetKey) || 'null'); } catch {}
   let file = db.getMeta(fileKey); if (!file) { file = `notes/directed-${focus.id}.md`; try { db.setMeta(fileKey, file); } catch {} }
+  // Pointer to the most recent directed run, so the deliverable-query path can resolve the "last Track"
+  // even when a run STALLS before producing a dossier (condenseRun sets this too, but only on success).
+  try { db.setMeta('research.last_focus_id', String(focus.id)); } catch {}
   // Mid-run clarifications Lucas gave → guidance folded into EVERY pass from here on.
   let clar = []; try { clar = JSON.parse(db.getMeta(`focus.${focus.id}.clarifications`) || '[]'); } catch {}
   const guidance = rs.buildGuidanceBlock(clar);

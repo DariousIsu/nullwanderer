@@ -45,6 +45,8 @@ const smokes = [
   'smoke_calibration_pressure.js',
   'smoke_focus.js',
   'smoke_condense.js',
+  'smoke_assemble.js',
+  'smoke_track.js',
   'smoke_research.js',
   'smoke_self_dev.js',
   'smoke_self_state.js',
