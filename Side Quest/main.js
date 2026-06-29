@@ -3054,6 +3054,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const _leaky = (m) => _DIRSIG.test(m) || (m.length > 60 && _METASIG.test(m));
   sayStripped = sayStripped.replace(/\[[^\]]*\]/g, (m) => (_leaky(m) ? '' : m));   // bracketed blocks (incl. multi-line)
   sayStripped = sayStripped.replace(/\[[^\]]*$/g, (m) => (_leaky(m) ? '' : m));     // trailing unterminated leak
+  // STACKED / UNTERMINATED directives: when she echoes several directive openers as a template
+  // ("[DELIVER THIS…\n…[ANSWER TO GIVE…\n…[YOU HAVE ACCEPTED…") none close, so the two strips above
+  // (which need a closing ] or end-of-string) miss the middle ones. Catch each '[' + directive-signature
+  // run up to its ']' OR the NEXT '[' OR end-of-string. (Live leak 2026-06-29 — the think-tank turn.)
+  sayStripped = sayStripped.replace(/\[[^\[]*?(?:DELIVER THIS|ANSWER TO GIVE|THAT'?S YOUR TASK|ACCEPTED (?:this|THIS) as|standing (?:task|focus)|Calibration:|do NOT (?:invent|fabricate|summarize)|present the FULL|keep EVERY item|REAL FACTS|complete result of the task)[^\[]*?(?:\]|(?=\[)|$)/gi, '');
   sayStripped = sayStripped.replace(/\n{3,}/g, '\n\n').trim();
   // LEAKED-PLANNING GUARD: a reply that is ONLY a bracketed fragment (e.g. "[No need for an
   // argument since we want the total count…]") is internal tool/arg reasoning that leaked instead

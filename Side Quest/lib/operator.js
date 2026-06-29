@@ -91,9 +91,18 @@ function _finalize(steps, answer) {
 // investigation family + work-assignment framing. Precision stays acceptable because a false positive
 // only routes a turn through the (grounded) operator, never fabricates.
 const TASK_RE = /\b(make|build|create|compile|put together|assemble|draft|write\s*(up|me)|find me|find out|figure out|research|study|investigate|look into|dig into|delve into|catalogu?e|map out|profile|identify|organi[sz]e|gather|pull together|generate|list out|come up with|work(?:ing)? on|spend (?:the )?(?:night|day|evening|time)|keep working|continue working|i need you to|give me a (?:list|rundown|breakdown|summary|report))\b/i;
+// NOT a new assignment, even though they contain a task verb: a PAST-TENSE reference to work she was/
+// has been doing ("you were doing research on X", "you've been researching Y", "we were working on Z",
+// "remember you were studying…"). Treating these as a fresh directed task is the mis-fire that spun up a
+// duplicate run + confabulated files (live 2026-06-29). They're context/recall, not a command.
+const PAST_REF_RE = /\b(you (?:were|was|have been|'ve been|had been|did|used to)|we (?:were|have been|'ve been|had been)|you'?d been|remember (?:you|we|when)|earlier you|you'?ve already|already (?:did|done|researched|covered))\b/i;
+
 function isDirectedTask(text) {
   const s = String(text || '');
-  return s.length >= 6 && TASK_RE.test(s);
+  if (s.length < 6) return false;
+  if (!TASK_RE.test(s)) return false;
+  if (PAST_REF_RE.test(s)) return false;   // a reference to past/existing work, not a new assignment
+  return true;
 }
 
 // Parse ONE directed-focus research slice (used by the overnight driver in main.js). The slice prompt

@@ -63,6 +63,13 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(op.isDirectedTask('find me a good documentary on neuromorphics'), '"find me" → directed task');
   ok(!op.isDirectedTask('what is the price of oil?'), 'a quick question is NOT a directed task (stays snappy)');
   ok(!op.isDirectedTask('how are you doing?'), 'small talk is not a directed task');
+  // PAST-TENSE references are NOT new assignments (the live mis-fire: spun a duplicate run + confab)
+  ok(!op.isDirectedTask('you were doing research on right of center think tanks'), '"you were doing research…" → NOT a new task (past reference)');
+  ok(!op.isDirectedTask("you've been researching the AI safety orgs"), '"you\'ve been researching…" → NOT a new task');
+  ok(!op.isDirectedTask('we were working on the think tank project'), '"we were working on…" → NOT a new task');
+  ok(!op.isDirectedTask('remember you were studying nuclear energy think tanks'), '"remember you were studying…" → NOT a new task');
+  ok(op.isDirectedTask('research every right-of-center think tank for me'), 'a fresh "research … for me" IS still a directed task');
+  ok(op.isDirectedTask('study the AI safety organizations'), 'a fresh "study …" IS still a directed task');
 
   // --- wall-clock budget: over maxMs → stop looping, force a final (no minutes-long block) ---
   let nowVal = 0; const nowFn = () => nowVal;
