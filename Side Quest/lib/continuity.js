@@ -4,7 +4,7 @@ const { BOOTSTRAP } = require('./context');
 const voice = require('./voice');
 const importanceLib = require('./importance');
 
-const MODEL = require('./config').model();
+const MODEL = require('./config').extractionModel();
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;       // poll every 5 min
 const MIN_INTERVAL_MS = 45 * 60 * 1000;        // at most one continuity check per 45 min
 const IDLE_THRESHOLD_MS = 3 * 60 * 1000;       // user must be quiet ≥ 3 min
@@ -149,7 +149,7 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
 
     if (trimmedSay && !isPlaceholder && !repetitive) {
       const saidRow = db.insertTurn({
-        sessionId, speaker: 'ai_said', content: trimmedSay, model: MODEL, truncated
+        sessionId, speaker: 'ai_said', content: trimmedSay, model: MODEL, truncated, unprompted: 1
       });
       // Refresh confirmation timestamp — she engaged with this commitment
       db.confirmCommitment(commitment.id, saidRow.id);

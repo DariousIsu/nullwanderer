@@ -30,6 +30,21 @@ const recipeStore = require('./recipe_store');
 // uses for the shared attach — instead of Playwright's bundled chromium, which
 // fails to spawn under Electron on Windows ("spawn UNKNOWN").
 const PROFILE_DIR = path.join(path.dirname(db.DB_PATH), 'web_profile');
+// Downloads from her research browser are Playwright-controlled — without a downloadsPath they land
+// in a temp artifacts dir and get DELETED on context close. Give them a real, predictable home.
+const DOWNLOADS_DIR = path.join(path.dirname(db.DB_PATH), 'downloads');
+
+// Resolve a non-clobbering destination path for a download (pure; `exists` injectable for the smoke).
+// Sanitizes the suggested filename and appends " (n)" before the extension on collision.
+function downloadDest(dir, suggestedName, exists = fs.existsSync) {
+  const safe = String(suggestedName || '').replace(/[\\/:*?"<>|\r\n]/g, '_').trim() || `download-${Date.now()}`;
+  if (!exists(path.join(dir, safe))) return path.join(dir, safe);
+  const ext = path.extname(safe);
+  const base = safe.slice(0, safe.length - ext.length);
+  let i = 1;
+  while (exists(path.join(dir, `${base} (${i})${ext}`))) i++;
+  return path.join(dir, `${base} (${i})${ext}`);
+}
 const CHROME_PATHS = [
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
@@ -140,10 +155,13 @@ async function ensure() {
   const executablePath = findChrome();
   if (!executablePath) throw new Error('chrome.exe/msedge.exe not found in standard paths');
   try { if (!fs.existsSync(PROFILE_DIR)) fs.mkdirSync(PROFILE_DIR, { recursive: true }); } catch {}
+  try { if (!fs.existsSync(DOWNLOADS_DIR)) fs.mkdirSync(DOWNLOADS_DIR, { recursive: true }); } catch {}
   killStaleProfileChrome();   // clear orphaned windows on her profile (echo + lock conflicts)
   context = await pw.chromium.launchPersistentContext(PROFILE_DIR, {
     headless: false,
     executablePath,
+    acceptDownloads: true,                         // (default) — but pair it with downloadsPath so files persist
+    downloadsPath: DOWNLOADS_DIR,                  // without this, downloads go to a temp dir + are deleted on close
     viewport: null,                                // a fixed viewport is itself a fingerprint — let it match the real window
     chromiumSandbox: true,                         // keep Chrome's sandbox on (removes the --no-sandbox warning banner + restores security)
     ignoreDefaultArgs: ['--enable-automation'],    // drop the "controlled by automated software" infobar too
@@ -155,6 +173,15 @@ async function ensure() {
     args: ['--no-first-run', '--no-default-browser-check', '--test-type', '--mute-audio']
   });
   context.on('close', () => { context = null; page = null; registry = {}; });
+  // Persist downloads to DOWNLOADS_DIR with their real filename (collision-safe) instead of letting
+  // Playwright discard them on context close. saveAs moves the temp artifact to the friendly path.
+  context.on('download', async (download) => {
+    try {
+      const dest = downloadDest(DOWNLOADS_DIR, download.suggestedFilename());
+      await download.saveAs(dest);
+      console.log('[web] download saved →', dest);
+    } catch (e) { console.error('[web] download save failed:', e.message); }
+  });
   // Follow newly-opened tabs: if a click (or Lucas) opens a new tab, make IT her
   // current page so she isn't stranded on the old one. Single-tab model preserved —
   // "current tab" just tracks the freshest one.
@@ -473,8 +500,24 @@ async function chatUnwatch() {
   catch (err) { return { ok: false, reason: err.message }; }
 }
 
+// Screenshot the CURRENT page as base64 PNG, so a vision model can SEE the rendered page
+// (images, charts, layout) — not just the scraped text. Viewport-only by default (the visible
+// screen); fullPage on request. Caller (main) runs it through lib/vision; web.js stays model-free.
+async function screenshot({ fullPage = false } = {}) {
+  try {
+    await ensure();
+    if (!page) return { ok: false, reason: 'no page open' };
+    const buf = await withTimeout(page.screenshot({ type: 'png', fullPage }), 15000, null);
+    if (!buf) return { ok: false, reason: 'screenshot timed out' };
+    let url = '', title = '';
+    try { url = page.url(); } catch {}
+    try { title = await withTimeout(page.title(), 3000, ''); } catch {}
+    return { ok: true, base64: Buffer.from(buf).toString('base64'), url, title };
+  } catch (e) { return { ok: false, reason: e.message }; }
+}
+
 // --- tags ---
-const WEB_TAG_RE = /<(web-open|web-read|web-deepen|web-scroll|web-click|web-type|web-back|web-close|web-chat|web-watch|web-unwatch)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
+const WEB_TAG_RE = /<(web-open|web-read|web-see|web-deepen|web-scroll|web-click|web-type|web-back|web-close|web-chat|web-watch|web-unwatch)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
 const ATTR_RE = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
 
 function parseAttrs(s) { const o = {}; if (!s) return o; let m; ATTR_RE.lastIndex = 0; while ((m = ATTR_RE.exec(s)) !== null) o[m[1]] = m[2] ?? m[3] ?? m[4]; return o; }
@@ -492,6 +535,13 @@ async function dispatch({ tag, attrs = {}, body = '' }) {
   switch ((tag || '').toLowerCase()) {
     case 'web-open': return open(body || attrs.url);
     case 'web-read': return read();
+    case 'web-see': {
+      // Optionally scroll FIRST so she can capture below the fold (scroll="down"/"up"), or grab the
+      // WHOLE page in one shot (full/whole/entire/all in the body or scroll attr). Default = viewport.
+      const want = `${body || ''} ${attrs.scroll || ''}`;
+      if (attrs.scroll && !/\b(full|whole|entire|all)\b/i.test(attrs.scroll)) { try { await scroll(attrs.scroll); } catch {} }
+      return screenshot({ fullPage: /\b(full|whole|entire|all)\b/i.test(want) });
+    }
     case 'web-deepen': return openTopResult();
     case 'web-scroll': return scroll(body || attrs.dir);
     case 'web-click': return click(body || attrs.handle);
@@ -508,7 +558,8 @@ async function dispatch({ tag, attrs = {}, body = '' }) {
 function buildPromptBlock() {
   return `YOUR OWN BROWSER — a separate browser window you fully control (not Lucas's). Use it for your own web work: research, reading, looking things up, multi-step tasks. It does NOT touch his tabs.
   <web-open>a URL or search terms</web-open>   — open a page (plain words = a web search)
-  <web-read/>                                   — read the current page; interactive elements come back as [L#]/[B#]/[I#] handles
+  <web-read/>                                   — read the current page's TEXT; interactive elements come back as [L#]/[B#]/[I#] handles
+  <web-see>optional question</web-see>          — actually SEE the current page (a screenshot through your vision): images, charts, photos, layout — what the text alone can't tell you. Add a question to focus it. <web-see scroll="down">…</web-see> scrolls first to capture below the fold; say "full"/"whole" (in the question or scroll=) to grab the ENTIRE page in one shot.
   <web-deepen/>                                  — on a search-results page, open the TOP result and land on the real article (don't stop at the results list)
   <web-scroll/>                                  — scroll down to load/read MORE of a long page or feed, then <web-read/> again
   <web-click>L3</web-click>                     — click a handle from the last read
@@ -523,8 +574,9 @@ This types your line, sends it, WAITS for the character's reply to finish, and h
 }
 
 module.exports = {
-  isConnected, ensure, open, read, click, type, back, close, openTopResult, scroll, runRecipe,
+  isConnected, ensure, open, read, screenshot, click, type, back, close, openTopResult, scroll, runRecipe,
   startRecording, stopRecording, isRecording,
   chatSend, chatWatch, chatUnwatch,
-  parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR
+  parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR,
+  DOWNLOADS_DIR, downloadDest
 };

@@ -17,7 +17,7 @@ const { streamChat } = require('./ollama');
 const blackboard = require('./blackboard');
 const config = require('./config');
 
-const MODEL = config.model();
+const MODEL = config.extractionModel();
 const DEFAULT_SCORE = 5;
 const CACHE_MAX = 500;
 const _cache = new Map(); // signature → score

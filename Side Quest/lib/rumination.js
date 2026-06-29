@@ -22,7 +22,7 @@ const voice = require('./voice');
 const { streamChat } = require('./ollama');
 const config = require('./config');
 
-const MODEL = config.model();
+const MODEL = config.extractionModel();
 const K = 4;            // how many recent free-association thoughts to consider
 const THRESHOLD = 0.80; // avg pairwise cosine that counts as circling one theme
 

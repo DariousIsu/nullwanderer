@@ -13,7 +13,7 @@ const gapsLib = require('./gaps');
 const recipesLib = require('./recipes');
 const voice = require('./voice');
 
-const MODEL = require('./config').model();
+const MODEL = require('./config').frontModel();
 const TICK_INTERVAL_MS = 30 * 1000;        // check every 30s while idle
 const IDLE_THRESHOLD_MS = 60 * 1000;       // user must be quiet ≥ 60s
 const MIN_GAP_BETWEEN_HEARTBEATS_MS = 15 * 60 * 1000;  // ≥ 15min between unsolicited utterances (near-silent)
@@ -440,7 +440,8 @@ async function maybeHeartbeat() {
         speaker: 'ai_said',
         content: trimmedSay,
         model: MODEL,
-        truncated
+        truncated,
+        unprompted: 1
       });
       db.setMeta('last_ai_utterance_at', String(Date.now()));
       // write-bottom: an unprompted utterance goes on the shared timeline (kind

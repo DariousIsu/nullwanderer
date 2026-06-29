@@ -1,26 +1,36 @@
 /* studio/puller_beliefs.js — Puller's belief-revision heart (PURE: no I/O, no DB, no model).
  *
- * Ports the Saga Prospecting playbook §3 (email derivation) + §4 (negative-signal feedback) to JS.
- * This is the "absorb next round info and update the refinement" engine: a per-domain email-pattern
- * belief is a Beta distribution; each verification result (hit/miss) nudges it; when the leading
- * pattern shifts, callers re-derive and propose a revision. Everything here is a pure transform over
- * plain state objects — persistence (lib/puller_db) and the verify/propose orchestration (Slice 4)
- * live elsewhere. Determinism law: this is a caged, deterministic component; no model involved.
+ * Ports the Saga Prospecting playbook §3 (email derivation) + §4 (negative-signal feedback) to JS,
+ * extended for negative-signal v2: 11 pattern templates (incl. middle-name forms), a `nextCandidate`
+ * that skips non-derivable patterns, and `looksInfraBlocked` (gateway-block vs pattern-miss). A
+ * per-domain email-pattern belief is a Beta distribution; each verification result nudges it; when the
+ * leading pattern shifts, callers re-derive and propose a revision. Pure transforms over plain state;
+ * persistence + orchestration live elsewhere. Determinism law: caged, deterministic, no model.
  *
- * Pattern-belief state shape (per domain), mirroring playbook §4.2:
- *   { patterns: { "first.last": {hits, misses, prior}, ... }, is_catch_all: bool }
+ * Pattern-belief state shape (per domain): { patterns: { "first.last": {hits, misses, prior}, ... },
+ *   is_catch_all: bool }
  */
 'use strict';
 
-// Candidate patterns in default-preference order (playbook §4.9 PATTERN_PRIORITY). first.m.last is a
-// documented outlier (needs a middle name) and is intentionally NOT in the auto-ranked set.
-const PATTERN_PRIORITY = ['first.last', 'flast', 'firstlast', 'f.last', 'first', 'last.first'];
+// Candidate patterns in default-preference order. Common forms first; bare first/last and middle-name
+// forms (need a middle token) rank last. Used for tiebreaks + as the derivation menu.
+const PATTERN_PRIORITY = [
+  'first.last', 'flast', 'f.last', 'firstlast', 'first_last', 'last.first',
+  'firstm.last', 'first.m.last', 'first.middle.last', 'first', 'last',
+];
 
-const DEFAULT_PRIOR = 1 / PATTERN_PRIORITY.length;   // ~0.1667 — uniform when nothing is known
-const PSEUDOCOUNT = 10;                              // prior strength: a 0.70 prior ≈ Beta(7,3) (§4.3)
-const MIN_BELIEF = 0.10;                             // below this, don't bother deriving (§4.9)
-const DEAD_MISSES = 3;                               // misses needed to consider abandoning (§4.4 r3)
-const DEAD_BELIEF = 0.20;                            // ...alongside belief under this (§4.4 r3)
+const DEFAULT_PRIOR = 0.15;     // un-seeded prior — fixed (NOT 1/N) so it stays above MIN_BELIEF as the
+                                // pattern menu grows; explicit seeds (seed_priors) override per domain.
+const PSEUDOCOUNT = 10;         // prior strength: a 0.70 prior ≈ Beta(7,3) (§4.3)
+const MIN_BELIEF = 0.10;        // below this, don't bother deriving (§4.9 / strategy.ABANDON_PATTERN_BELIEF)
+const DEAD_MISSES = 3;          // misses needed to consider abandoning (§4.4 r3)
+const DEAD_BELIEF = 0.20;       // ...alongside belief under this (§4.4 r3)
+
+// Infra-vs-pattern (gateway-block) signal: a domain we were CONFIDENT about (strong prior) that only
+// ever bounces is almost certainly a sender-reputation/infra problem, not a pattern error — pausing
+// beats burning retests + corrupting beliefs (NEGATIVE_SIGNAL_ANALYSIS: Apple/MSFT/IBM/OpenAI @ 100%).
+const INFRA_MIN_MISSES = 3;
+const INFRA_MIN_PRIOR = 0.55;
 
 const DELIVERABLE = new Set(['valid', 'deliverable']);
 const UNDELIVERABLE = new Set(['invalid', 'undeliverable']);
@@ -28,36 +38,49 @@ const CATCH_ALL = new Set(['accept_all', 'catch_all', 'catch-all', 'catchall']);
 
 const NAME_SUFFIXES = new Set(['jr', 'sr', 'ii', 'iii', 'iv', 'v']);
 
-// Split a display name into [first, last], dropping generational suffixes + apostrophes (playbook §3).
-// Returns null if fewer than two usable parts (single mononyms can't be derived).
+// Split a display name into {first, middle, last}, dropping generational suffixes + apostrophes
+// (playbook §3). middle = the second of 3+ tokens (used for the middle-name patterns). Returns null if
+// fewer than two usable parts (mononyms can't be derived). (Particle handling — van/de la — is a
+// tracked edge; rare in the corporate-prospect data.)
 function nameParts(name) {
   const parts = String(name || '').replace(/['’]/g, '').split(/\s+/)
     .filter(Boolean)
     .filter(p => !NAME_SUFFIXES.has(p.toLowerCase().replace(/\.$/, '')));
   if (parts.length < 2) return null;
-  return { first: parts[0].toLowerCase(), last: parts[parts.length - 1].toLowerCase() };
+  return {
+    first: parts[0].toLowerCase(),
+    last: parts[parts.length - 1].toLowerCase(),
+    middle: parts.length >= 3 ? parts[1].toLowerCase() : null,
+  };
 }
 
-// Derive a candidate email for a name at a domain under a given pattern (playbook §3 derive_email).
-// Unknown pattern falls back to first.last (the ~70% default). Empty string if name isn't derivable.
+// Derive a candidate email for a name at a domain under a given pattern (playbook §3 + v2 templates).
+// Middle-name patterns return '' when there's no middle token. Unknown pattern → first.last fallback;
+// a KNOWN-but-not-derivable pattern returns '' (so callers can skip it rather than mis-fallback).
 function deriveEmail(name, domain, pattern) {
   const np = nameParts(name);
   if (!np || !domain) return '';
-  const { first, last } = np;
+  const { first, last, middle } = np;
   const f1 = first[0];
+  const m1 = middle ? middle[0] : null;
   const map = {
     'first.last': `${first}.${last}@${domain}`,
     'flast': `${f1}${last}@${domain}`,
     'f.last': `${f1}.${last}@${domain}`,
     'firstlast': `${first}${last}@${domain}`,
-    'first': `${first}@${domain}`,
+    'first_last': `${first}_${last}@${domain}`,
     'last.first': `${last}.${first}@${domain}`,
+    'first': `${first}@${domain}`,
+    'last': `${last}@${domain}`,
+    'firstm.last': m1 ? `${first}${m1}.${last}@${domain}` : '',
+    'first.m.last': m1 ? `${first}.${m1}.${last}@${domain}` : '',
+    'first.middle.last': middle ? `${first}.${middle}.${last}@${domain}` : '',
   };
-  return map[pattern] || `${first}.${last}@${domain}`;
+  return Object.prototype.hasOwnProperty.call(map, pattern) ? map[pattern] : `${first}.${last}@${domain}`;
 }
 
 // Reverse of deriveEmail: given an observed email + the person's name, infer which pattern produced
-// it (playbook §4.6 detect_pattern_used) so the right (domain, pattern) belief gets the credit/blame.
+// it (playbook §4.6) so the right (domain, pattern) belief gets credit/blame.
 function detectPatternUsed(email, name, domain) {
   const local = String(email || '').split('@')[0].trim().toLowerCase();
   if (!local) return null;
@@ -103,8 +126,6 @@ function seedPrior(state, pattern, prior) {
 }
 
 // Fold one verification result into the belief. PURE — returns a new state. (playbook §4.3)
-//   deliverable → α (hits)++ ; undeliverable → β (misses)++ ; catch-all → mark domain untrustworthy ;
-//   unknown/risky → no update (kept deterministic; the playbook's weak update is intentionally omitted).
 function updateBelief(state, pattern, result, prior) {
   const next = cloneState(state);
   const r = String(result || '').toLowerCase();
@@ -115,7 +136,7 @@ function updateBelief(state, pattern, result, prior) {
   return next;
 }
 
-// Posterior mean of the Beta(α, β) for a (domain, pattern): α = prior·N + hits, β = (1−prior)·N + misses.
+// Posterior mean of the Beta(α, β): α = prior·N + hits, β = (1−prior)·N + misses.
 function currentBelief(state, pattern) {
   const p = (state && state.patterns && state.patterns[pattern]) || { hits: 0, misses: 0, prior: DEFAULT_PRIOR };
   const prior = typeof p.prior === 'number' ? p.prior : DEFAULT_PRIOR;
@@ -124,8 +145,7 @@ function currentBelief(state, pattern) {
   return (alpha + beta) > 0 ? alpha / (alpha + beta) : prior;
 }
 
-// A pattern is "dead" for a domain after enough misses AND a collapsed belief (§4.4 rule 3) — never
-// derive with it again.
+// A pattern is "dead" for a domain after enough misses AND a collapsed belief (§4.4 rule 3).
 function isPatternDead(state, pattern) {
   const p = state && state.patterns && state.patterns[pattern];
   if (!p) return false;
@@ -134,9 +154,23 @@ function isPatternDead(state, pattern) {
 
 function isCatchAll(state) { return !!(state && state.is_catch_all); }
 
-// Rank the not-yet-tried patterns by current belief and return the best one above the floor; null when
-// every remaining pattern is tried or too weak (playbook §4.9 best_unused_pattern). Ties break toward
-// the higher-priority pattern so ordering is fully deterministic.
+// Gateway-block detector: a domain where some pattern had a STRONG prior (we were confident) but the
+// domain only ever bounces (0 hits, ≥N misses) → likely infra/sender-reputation, not a pattern miss.
+// Uses the prior (original confidence), not current belief (which the misses already dragged down).
+function looksInfraBlocked(state, { minMisses = INFRA_MIN_MISSES, minPrior = INFRA_MIN_PRIOR } = {}) {
+  if (!state || !state.patterns) return false;
+  let hits = 0, misses = 0, strongPrior = false;
+  for (const k of Object.keys(state.patterns)) {
+    const e = state.patterns[k];
+    hits += e.hits | 0;
+    misses += e.misses | 0;
+    if ((typeof e.prior === 'number' ? e.prior : DEFAULT_PRIOR) >= minPrior) strongPrior = true;
+  }
+  return strongPrior && hits === 0 && misses >= minMisses;
+}
+
+// Rank not-yet-tried patterns by current belief, best above the floor; null when all tried/too weak.
+// Ties break toward higher PATTERN_PRIORITY index (deterministic). (§4.9 best_unused_pattern)
 function bestUnusedPattern(state, alreadyTried) {
   const tried = new Set((alreadyTried || []).map(String));
   const scored = [];
@@ -150,12 +184,32 @@ function bestUnusedPattern(state, alreadyTried) {
   return scored[0].p;
 }
 
-// Highest-belief pattern overall (the one to derive first). (§4.9 best_pattern)
 function bestPattern(state) { return bestUnusedPattern(state, []); }
+
+// The next email to actually try for a person: the highest-belief untried pattern that DERIVES a
+// non-empty address for this name (skips middle-name patterns when there's no middle token). Returns
+// { pattern, email } or null when nothing derivable remains.
+function nextCandidate(state, name, domain, alreadyTried) {
+  const tried = new Set((alreadyTried || []).map(String));
+  const ranked = [];
+  PATTERN_PRIORITY.forEach((p, i) => {
+    if (tried.has(p)) return;
+    const b = currentBelief(state, p);
+    if (b >= MIN_BELIEF) ranked.push({ p, b, i });
+  });
+  ranked.sort((a, b) => (b.b - a.b) || (a.i - b.i));
+  for (const { p } of ranked) {
+    const email = deriveEmail(name, domain, p);
+    if (email) return { pattern: p, email };
+  }
+  return null;
+}
 
 module.exports = {
   PATTERN_PRIORITY, DEFAULT_PRIOR, PSEUDOCOUNT, MIN_BELIEF, DEAD_MISSES, DEAD_BELIEF,
+  INFRA_MIN_MISSES, INFRA_MIN_PRIOR,
   nameParts, deriveEmail, detectPatternUsed,
   emptyState, cloneState, seedPrior, updateBelief,
-  currentBelief, isPatternDead, isCatchAll, bestUnusedPattern, bestPattern,
+  currentBelief, isPatternDead, isCatchAll, looksInfraBlocked,
+  bestUnusedPattern, bestPattern, nextCandidate,
 };

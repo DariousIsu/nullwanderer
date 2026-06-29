@@ -19,7 +19,7 @@
 const db = require('./db');
 const { streamChat } = require('./ollama');
 
-const EXTRACTION_MODEL = require('./config').model();
+const EXTRACTION_MODEL = require('./config').extractionModel();
 
 // --- Extraction ---
 

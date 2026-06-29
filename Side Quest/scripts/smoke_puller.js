@@ -57,6 +57,29 @@ ok('not-yet-missed pattern not dead', B.isPatternDead(dead, 'first.last') === fa
 ok('bestUnused excludes tried', B.bestUnusedPattern(seeded, ['flast']) === 'first.last');
 ok('bestUnused null when all tried', B.bestUnusedPattern(empty, B.PATTERN_PRIORITY) === null);
 
+// ---- v2: expanded pattern menu (11 templates) + middle names ----
+ok('derive first_last (underscore)', B.deriveEmail('Brian Huseman', 'x.com', 'first_last') === 'brian_huseman@x.com');
+ok('derive bare last', B.deriveEmail('Brian Huseman', 'x.com', 'last') === 'huseman@x.com');
+ok('nameParts extracts middle', B.nameParts('Mark Allen Miller').middle === 'allen');
+ok('derive firstm.last', B.deriveEmail('Mark Allen Miller', 'aes.com', 'firstm.last') === 'marka.miller@aes.com');
+ok('derive first.m.last', B.deriveEmail('Mark Allen Miller', 'aes.com', 'first.m.last') === 'mark.a.miller@aes.com');
+ok('derive first.middle.last', B.deriveEmail('Mark Allen Miller', 'aes.com', 'first.middle.last') === 'mark.allen.miller@aes.com');
+ok('middle pattern → "" when no middle', B.deriveEmail('Brian Huseman', 'x.com', 'firstm.last') === '');
+ok('detect first_last reverse', B.detectPatternUsed('brian_huseman@x.com', 'Brian Huseman', 'x.com') === 'first_last');
+
+// ---- v2: nextCandidate (skips non-derivable patterns) ----
+const nc1 = B.nextCandidate(empty, 'Brian Huseman', 'x.com', ['first.last']);
+ok('nextCandidate picks next derivable (flast)', nc1 && nc1.pattern === 'flast' && nc1.email === 'bhuseman@x.com');
+const nc2 = B.nextCandidate(empty, 'Brian Huseman', 'x.com', ['first.last', 'flast', 'f.last', 'firstlast', 'first_last', 'last.first']);
+ok('nextCandidate skips middle patterns for 2-token name → first', nc2 && nc2.pattern === 'first');
+
+// ---- v2: gateway-block (infra) detector ----
+let infra = B.seedPrior(empty, 'first.last', 0.7);     // a domain we were confident about
+for (let i = 0; i < 3; i++) infra = B.updateBelief(infra, 'first.last', 'invalid');
+ok('strong prior + only bounces → infra-blocked', B.looksInfraBlocked(infra) === true);
+ok('a hit clears infra suspicion', B.looksInfraBlocked(B.updateBelief(infra, 'first.last', 'valid')) === false);
+ok('weak-prior bounces are NOT infra', B.looksInfraBlocked(dead) === false);   // firstlast 3 misses, default prior
+
 console.log(`\nmath: ${pass} passed, ${fail} failed (so far)`);
 
 // ---- DB round-trip (needs better-sqlite3 / Electron node) ----------------------------------------
@@ -112,6 +135,24 @@ if (DB) {
     ok('retest enqueues + json round-trips', queued.length === 1 && queued[0].patterns_tried[0] === 'first.last' && queued[0].previous_attempts[0].result === 'invalid');
     const upd = DB.updateRetest(rq, { status: 'verified' });
     ok('updateRetest moves status', upd.status === 'verified' && DB.listRetests({ status: 'queued' }).length === 0);
+
+    // ---- Slice 1 aggregator (lib/puller_ipc.buildDossier) over the same in-memory db ----
+    const IPC = require('../lib/puller_ipc');
+    // a fresh pending belief revision + queued retest so the dossier surfaces them
+    DB.proposeRevision({ subjectKind: 'belief', subjectRef: '1', targetId: t.id, attr: 'role',
+      fromValue: 'VP GA', toValue: 'SVP GA', rationale: 'press release lists SVP' });
+    DB.enqueueRetest({ targetId: t.id, person: 'Brian Huseman', domain: 'amazon.com',
+      patternsTried: ['first.last'], nextPattern: 'flast' });
+    const dos = IPC.buildDossier(t.id);
+    ok('buildDossier returns target identity', dos && dos.target && dos.target.id === t.id);
+    ok('buildDossier joins observations + beliefs', dos.observations.length === 2 && dos.beliefs.length === 1);
+    ok('buildDossier surfaces pending revision', dos.revisions.some(r => r.attr === 'role' && r.status === 'pending'));
+    ok('buildDossier surfaces queued retest', dos.retests.length === 1 && dos.retests[0].next_pattern === 'flast');
+    ok('buildDossier domainPattern ranks best first', dos.domainPattern && dos.domainPattern.patterns[0].belief >= dos.domainPattern.patterns[1].belief);
+    ok('buildDossier flags the best pattern', dos.domainPattern.patterns.some(p => p.best === true));
+    ok('buildDossier null for unknown target', IPC.buildDossier(99999) === null);
+    ok('domainPatternView null without domain', IPC.domainPatternView(null) === null);
+    ok('listTargets returns trimmed rows', IPC.listTargets({}).some(r => r.id === t.id && r.name === 'Brian Huseman'));
 
     DB.close();
   } catch (e) { console.error('  ✗ db round-trip threw: ' + e.message); fail++; }

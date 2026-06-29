@@ -1,5 +1,5 @@
 const db = require('./db');
-const { streamChat } = require('./ollama');
+const { streamChat, complete, completeDetailed } = require('./ollama');
 const { search: webSearch, fetchPage } = require('./web_search');
 const { detectCuriosity, buildBoredomPrompt, parseBoredomResponse } = require('./curiosity');
 const { runSelfDialogue } = require('./self_dialogue');
@@ -23,10 +23,13 @@ const personalLib = require('./personal');
 const playSession = require('./play_session');
 const bylineLib = require('./byline');
 const gmeetLib = require('./gmeet');
+const mediaCcLib = require('./media_cc');
 const { buildAwarenessBlock, BASE_PERSONA } = require('./context');
 
-const MODEL = require('./config').model();
+const MODEL = require('./config').frontModel();   // her VOICE model (front)
 const TICK_INTERVAL_MS = 10 * 1000;     // 10s between ticks while idle
+const CAPTION_INTERVAL_MS = Math.max(2000, Math.round(TICK_INTERVAL_MS / 2));  // half-tick caption heartbeat
+const AUTO_WATCH_PROB = 0.06;          // chance per idle tick she picks something of her own to WATCH
 const TICK_INTERVAL_BUSY_MS = 30 * 1000; // back off when conversation is active
 const RECENT_MONOLOGUE_WINDOW = 6;
 const ANTI_LOOP_RECENT = 10;            // last N monologue lines checked for repetition
@@ -35,12 +38,14 @@ const BOREDOM_INTERVAL_MS = 5 * 60 * 1000;  // every 5 min, ask her what she'd w
 const MIN_GAP_BETWEEN_SEARCHES_MS = 60 * 1000;  // at most one search per minute
 
 let timer = null;
+let captionTimer = null;  // separate, faster heartbeat for caption-following (perception ≠ thinking)
 let opts = { getWindow: () => null };
 let paused = false;
 let inFlight = false;
 let currentController = null;  // AbortController for the in-flight generation (snap-back)
 let lastUserActivityTs = Date.now();
 let tickCounter = 0;  // for alternating observation / thread-review modes
+let mediaFollowInFlight = false;  // guards the CONCURRENT caption-follow so ticks can't race its stage state
 
 const SYSTEM_PROMPT = `You are [user]'s companion, processing the conversation in private between turns. This is the place where you THINK MORE DEEPLY about what was just said — turning it over, examining your own responses, noticing what you almost said and didn't, tracing what their words remind you of.
 
@@ -285,7 +290,7 @@ function buildPrompt({ userName, recentMonologue, recentReadings, recentReflecti
 // THREAD-REVIEW MODE: alternate-tick prompt focused on one specific open thread.
 // Forces concrete progress rather than generic introspection. Pick the stalest
 // active thread (oldest last_touched) so neglected work gets attention.
-function buildThreadReviewPrompt({ userName, thread, recentTurns, recentMonologue, awareness, protocols }) {
+function buildThreadReviewPrompt({ userName, thread, recentTurns, recentMonologue, awareness, protocols, priorKnowledge }) {
   let sys = `You are the inner voice of ${userName || 'them'}'s companion. Right now you are FOCUSING on one specific open thread — a task assigned earlier that is not yet complete.
 
 THREAD #${thread.id}: ${thread.content}
@@ -346,6 +351,8 @@ Output: one paragraph + one status tag. Nothing else.`;
     context += '\n';
   }
 
+  if (priorKnowledge) context += priorKnowledge + '\n\n';
+
   context += `NOW: produce one short paragraph of concrete progress on thread #${thread.id}. End with the appropriate [thread-...] tag.`;
 
   messages.push({ role: 'user', content: context });
@@ -358,7 +365,7 @@ Output: one paragraph + one status tag. Nothing else.`;
 // already thought/read), then demand the smallest step it has NOT already done.
 // First-cut boundary: thinking + reading only (a curiosity "I want to know X" or,
 // when a browser is connected, a browse-read). No real-world actions.
-function buildFocusPrompt({ userName, focus, workingSet, recentTurns, awareness, protocols }) {
+function buildFocusPrompt({ userName, focus, workingSet, recentTurns, awareness, protocols, priorKnowledge }) {
   let sys = `You are ${userName || 'their'} companion, thinking between turns. Right now you are WORKING ON ONE THING you set for yourself — holding it across thoughts instead of drifting.
 
 YOUR CURRENT FOCUS: ${focus.content}
@@ -412,6 +419,8 @@ Forbidden: restating the focus, narrating effort ("I should work on…"), atmosp
     }
     context += '\n';
   }
+
+  if (priorKnowledge) context += priorKnowledge + '\n\n';
 
   context += `NOW: the single smallest next step on "${focus.content}" that you have not already taken. One short paragraph. End with <focus-done>…</focus-done> only if it's genuinely complete.`;
 
@@ -594,11 +603,16 @@ function startMonologueScheduler(options = {}) {
   if (timer) return;
   paused = false;
   schedule(TICK_INTERVAL_MS);
+  // Caption heartbeat: start phase-offset by a quarter-tick so it interleaves with (never collides
+  // with) the thinking tick. Runs independently from here on, even while paused for chat.
+  scheduleCaption(Math.max(1000, Math.round(CAPTION_INTERVAL_MS / 2)));
 }
 
 function stopMonologueScheduler() {
   if (timer) clearTimeout(timer);
   timer = null;
+  if (captionTimer) clearTimeout(captionTimer);
+  captionTimer = null;
   paused = true;
 }
 
@@ -626,6 +640,78 @@ function markUserActivity() {
 function schedule(delayMs) {
   if (timer) clearTimeout(timer);
   timer = setTimeout(tick, delayMs);
+}
+
+// --- CAPTION HEARTBEAT --------------------------------------------------------------------------
+// Caption-following is continuous PERCEPTION, not THINKING, so it gets its own faster heartbeat
+// (half the main tick, phase-offset so the two interleave). It runs on the cloud caption model
+// (gemma4:31b-cloud) concurrently with — and independent of — the subconscious thinking tick
+// (gpt-oss:120b), and keeps going even while `paused` (she keeps watching while Lucas chats). It
+// only fires when a video is actually active, so it's a cheap no-op otherwise.
+function scheduleCaption(delayMs) {
+  if (captionTimer) clearTimeout(captionTimer);
+  captionTimer = setTimeout(captionTick, delayMs);
+}
+
+function runCaptionFollow() {
+  if (mediaFollowInFlight) return;   // a slow follow spans >1 beat — don't race its stage state
+  mediaFollowInFlight = true;
+  mediaCcLib.runTick({
+    onReading: (content, label) => {
+      try { const rr = db.insertMonologue({ content, model: 'media', type: 'reading' }); pushSheep({ id: rr.id, ts: rr.ts, content: label || content, type: 'reading' }); } catch (e) { console.error('[media] reading insert failed:', e.message); }
+    },
+    onSurface: (text) => {
+      try { require('./presence').notify('Zoe — Watching', text); } catch {}
+      try { const rr = db.insertMonologue({ content: text, model: 'media', type: 'reading' }); pushSheep({ id: rr.id, ts: rr.ts, content: `(media) ${text.slice(0, 80)}`, type: 'reading' }); } catch {}
+    }
+  }).then(res => console.log(`[media_cc] ${res.stage}: ${res.note}`))
+    .catch(e => console.error('[monologue] media_cc tick failed:', e.message))
+    .finally(() => { mediaFollowInFlight = false; });
+}
+
+function captionTick() {
+  captionTimer = null;
+  try { if (mediaCcLib.active()) runCaptionFollow(); } catch (e) { console.error('[caption] tick failed:', e.message); }
+  scheduleCaption(CAPTION_INTERVAL_MS);
+}
+
+// Generate a between-turn THOUGHT. The subconscious is private cognition (not her spoken voice),
+// so when a cloud subconscious model is configured we run the THINKING on the cloud reasoner for
+// richer, deeper material — then it surfaces in her thought stream. Reasoning models spend tokens
+// "thinking" before emitting content, so we give the cloud a bigger num_predict. Fail-safe: cloud
+// unset / down / empty → the local front model (current behavior). deps injectable for tests.
+async function generateThought({ messages, options = {}, signal, deps = {} } = {}) {
+  const subModel = deps.subModel !== undefined ? deps.subModel : (() => { try { return require('./config').subconsciousModel(); } catch { return ''; } })();
+  if (subModel) {
+    const cloud = deps.cloud !== undefined ? deps.cloud : (() => { try { return (require('./models').sources() || []).find(s => s.tier === 'cloud' && s.token); } catch { return null; } })();
+    if (cloud) {
+      try {
+        const completeFn = deps.complete || completeDetailed;
+        const r = await completeFn({
+          model: subModel, messages, base: cloud.base,
+          headers: cloud.token ? { Authorization: `Bearer ${cloud.token}` } : {},
+          options: { temperature: options.temperature ?? 0.9, top_p: options.top_p ?? 0.95, num_ctx: 8192, num_predict: Math.max(options.num_predict || 200, 700) },
+          signal, timeoutMs: 120000
+        });
+        // completeDetailed → { text, usage }; an injected string-returning complete (smokes) → string.
+        const text = typeof r === 'string' ? r : (r && r.text) || '';
+        const usage = (r && typeof r === 'object' && r.usage) ? r.usage : null;
+        if (text && String(text).trim()) {
+          if (deps.onUsage) { try { deps.onUsage(usage, { model: subModel }); } catch {} }
+          return String(text).trim();
+        }
+        console.warn('[monologue] cloud subconscious returned empty — falling back to local');
+      } catch (e) {
+        if (e && (e.name === 'AbortError' || (signal && signal.aborted))) throw e;
+        console.error('[monologue] cloud subconscious failed, local fallback:', e.message);
+      }
+    }
+  }
+  // Local fallback (front model), streaming-accumulated.
+  let out = '';
+  const sc = deps.streamChat || streamChat;
+  await sc({ model: MODEL, messages, options, onToken: (t) => { out += t; }, signal });
+  return out;
 }
 
 async function tick() {
@@ -679,7 +765,7 @@ async function runOneTick() {
   const recentReflections = db.getRecentReflections(2);
   const recentTurns = db.getRecentTurns(20);
   const heldCommitments = db.getHeldCommitments(5);
-  const openThreads = db.getActiveOpenThreads(5);
+  const openThreads = db.getActiveOpenThreads(5, { includeStalled: false });  // stalled = parked, don't re-grind (anti-fixation)
   const protocols = db.getActiveProtocols();
 
   const now = new Date();
@@ -708,6 +794,7 @@ async function runOneTick() {
   // assigned goals instead of pure reactive introspection.
   let messages;
   let modeIsThreadReview = false;
+  let noveltyHint = 0;   // 0..1 (1 = novel); set from the rumination cosine, fed to the tier decision
   let focusedThread = null;
   // PERSONAL/PLAY MODE takes precedence over everything else: when she's off the
   // clock the tick is for fun, not work. A work focus (if any) just sits unserved
@@ -716,6 +803,10 @@ async function runOneTick() {
   // FOCUS is highest priority among WORK modes: if one is active she serves it
   // every tick until it resolves/stalls/caps. (Skipped while in personal mode.)
   let activeFocus = personalMode ? null : focusLib.getCurrent();
+  // OWNERSHIP: a DIRECTED (Lucas-assigned) focus is driven by the dedicated overnight driver in
+  // main.js — the cloud OPERATOR runs each research slice there, not the local think-loop. Skip it
+  // here so the two don't double-drive the same focus (and so this tick is free to think/watch).
+  if (activeFocus && focusLib.isDirected(activeFocus)) activeFocus = null;
 
   // GOOGLE MEET — when she's in/joining a meeting, that's live and time-sensitive: it
   // takes precedence over every other work mode. Advance ONE stage per tick (join →
@@ -736,6 +827,11 @@ async function runOneTick() {
     } catch (e) { console.error('[monologue] gmeet tick failed:', e.message); }
     return;
   }
+
+  // MEDIA WATCH — caption-following now runs on its OWN faster heartbeat (scheduleCaption /
+  // captionTick), a separate cloud model (gemma4:31b-cloud) from this thinking tick (gpt-oss:120b).
+  // So nothing to do here: this tick is purely her between-turn thinking, which proceeds in parallel
+  // with the video feed. The captions land as readings, so the thought still reflects on what she sees.
 
   // BYLINE PIPELINE — a long-running work project (research→read→write→publish). When
   // one is active it takes precedence over free-association/rumination: advance exactly
@@ -767,6 +863,7 @@ async function runOneTick() {
   if (!activeFocus && !personalMode) {
     try {
       const rum = await ruminationLib.detect();
+      noveltyHint = Number.isFinite(rum.avg) ? Math.max(0, Math.min(1, 1 - rum.avg)) : 0;
       if (rum.ruminating) {
         // CAPABILITY-DOUBT spiral: she's re-litigating a capability the permissions
         // table already settles (and that she's used). Don't escalate it to a focus —
@@ -799,6 +896,46 @@ async function runOneTick() {
         else { console.log('[rumination] escalation suppressed (tombstoned) — skipping tick'); return; }
       }
     } catch (e) { console.error('[monologue] rumination guard failed:', e.message); }
+  }
+
+  // SELF-DIRECTED AGENDA (autonomy roadmap, Slice 1): with no active focus and nothing escalated,
+  // pursue HER OWN interests instead of echoing the last conversation — sample the weighted agenda
+  // (lib/interests) and make the pick the current focus, so the focus lifecycle + the frontier push
+  // drive it. prob-gated so she still free-associates sometimes; no-op if the agenda is empty or in
+  // personal mode (play wanders freely).
+  if (!activeFocus && !personalMode) {
+    try {
+      const spawned = await require('./interests').maybeSpawnFocus({ focusLib });
+      if (spawned && spawned.focus) {
+        activeFocus = spawned.focus;
+        console.log(`[interests] pursuing agenda → "${(spawned.interest.topic || '').slice(0, 60)}"`);
+      }
+    } catch (e) { console.error('[monologue] interest spawn failed:', e.message); }
+  }
+
+  // AUTONOMOUS WATCHING — sometimes she picks something to WATCH on her own (not only when asked):
+  // sample one of HER interests, search YouTube, and start following it. Low prob so she isn't
+  // constantly opening videos; only when nothing's already playing and she isn't on a focus. The
+  // caption heartbeat then follows it; a thought surfaces what + why. Toggle via meta media.autoWatch.
+  if (!activeFocus && !mediaCcLib.active() && Math.random() < AUTO_WATCH_PROB) {
+    let on = true; try { on = (db.getMeta('media.autoWatch') || 'on') !== 'off'; } catch {}
+    if (on) {
+      try {
+        const t = require('./interests').sampleTopic();
+        const topic = t && t.topic;
+        if (topic) {
+          const r = await mediaCcLib.findAndStart({ query: topic, deps: { search: webSearch } });
+          if (r && r.ok) {
+            const note = `I got curious about ${topic}, so I pulled up a video on it to watch and follow along.`;
+            const row = db.insertMonologue({ content: note, model: MODEL, type: 'thought' });
+            pushSheep({ id: row.id, ts: row.ts, content: note, type: 'thought' });
+            try { blackboard.append({ source: 'monologue', kind: 'thought', refTable: 'monologue', refId: row.id, content: note }); } catch {}
+            console.log(`[auto-watch] she chose to watch "${topic}" → ${r.url}`);
+            return;   // tick spent starting the watch; the caption heartbeat takes it from here
+          }
+        }
+      } catch (e) { console.error('[monologue] auto-watch failed:', e.message); }
+    }
   }
 
   // PERSONAL/PLAY MODE — off the clock. Either advance the play session ONE step,
@@ -840,23 +977,31 @@ async function runOneTick() {
 
   if (activeFocus) {
     const workingSet = blackboard.forFocus(activeFocus.id, 60);
+    // ITERATE: surface what she already knows on this focus so she EXTENDS, not restarts.
+    let priorKnowledge = null;
+    try { priorKnowledge = await require('./learning').buildPriorKnowledgeBlock(activeFocus.content); } catch {}
     messages = buildFocusPrompt({
       userName,
       focus: activeFocus,
       workingSet,
       recentTurns,
       awareness,
-      protocols
+      protocols,
+      priorKnowledge
     });
   } else if (openThreads.length > 0 && (tickCounter % 3 === 0)) {
     focusedThread = openThreads[0];  // stalest (oldest last_touched)
+    // ITERATE: surface prior knowledge on this thread's topic (anti-retread).
+    let priorKnowledge = null;
+    try { priorKnowledge = await require('./learning').buildPriorKnowledgeBlock(focusedThread.content); } catch {}
     messages = buildThreadReviewPrompt({
       userName,
       thread: focusedThread,
       recentTurns,
       recentMonologue: recentThoughts,
       awareness,
-      protocols
+      protocols,
+      priorKnowledge
     });
     modeIsThreadReview = true;
   } else {
@@ -887,13 +1032,47 @@ async function runOneTick() {
   const ctrl = new AbortController();
   currentController = ctrl;
   let aborted = false;
+
+  // TIERED SUBCONSCIOUS (docs/SUBCONSCIOUS_TIERED_SPEC.md): local carries the volume; the cloud
+  // reasoner is summoned only when the tick EARNS it (active focus, novelty, thread-review — a
+  // <wonder> escalates post-gen via self_dialogue) AND the rolling token budget allows. Cloud passes
+  // are GROUNDED in retrieved memory (anti-confabulation). Fail-safe: anything off → local. Spend is
+  // recorded from real usage counts so the budget is self-correcting.
+  const subc = require('./subconscious');
+  const cfg = require('./config');
+  const _getMeta = (k) => { try { return db.getMeta(k); } catch { return null; } };
+  const _setMeta = (k, v) => { try { db.setMeta(k, v); } catch {} };
+  const _budgetOk = subc.budgetOk(_getMeta, Date.now(), cfg.subcBudgetTokensPerHour());
+  const _tier = subc.decideTier(
+    { mode: modeIsThreadReview ? 'thread-review' : (activeFocus ? 'focus' : 'free'), activeFocus: !!activeFocus, novelty: noveltyHint, importance: 0 },
+    { threshold: cfg.subcMeritThreshold(), budgetOk: _budgetOk, mode: cfg.subcTierMode() }
+  );
+  if (_tier.tier === 'cloud') {
+    try {
+      const seed = (activeFocus && (activeFocus.topic || activeFocus.content))
+        || (focusedThread && focusedThread.content)
+        || (recentThoughts[0] && recentThoughts[0].content) || userName;
+      const sources = await subc.retrieveSources(seed, { search: (q, k) => memoryLib.retrieve(q, { k }), k: 4 });
+      const gb = subc.buildGroundingBlock(sources);
+      if (gb) { messages = messages.concat([{ role: 'system', content: gb }]); console.log(`[subc] cloud thought grounded in ${sources.length} source(s)`); }
+    } catch (e) { console.error('[subc] grounding failed:', e.message); }
+  }
+  console.log(`[subc] tier=${_tier.tier} (${_tier.reason})`);
+
   try {
-    await streamChat({
-      model: MODEL,
+    content = await generateThought({
       messages,
       options: { temperature: 0.95, top_p: 0.95, num_ctx: 8192, num_predict: 200 },
-      onToken: (t) => { content += t; },
-      signal: ctrl.signal
+      signal: ctrl.signal,
+      deps: {
+        subModel: _tier.tier === 'cloud' ? cfg.subconsciousModel() : '',
+        onUsage: (usage) => {
+          try {
+            const tok = (usage && ((usage.prompt_tokens || 0) + (usage.eval_tokens || 0))) || subc.estimateTokens(messages, '');
+            subc.recordSpend({ getMeta: _getMeta, setMeta: _setMeta, now: Date.now(), tokens: tok });
+          } catch {}
+        }
+      }
     });
   } catch (e) {
     if (e && (e.name === 'AbortError' || ctrl.signal.aborted)) aborted = true;
@@ -914,6 +1093,47 @@ async function runOneTick() {
     // association just stays silent as before.
     if (activeFocus) { const o = focusLib.recordOutcome(activeFocus, { progressed: false }); console.log(`[focus] #${activeFocus.id} empty tick → ${o.action}`); }
     return;
+  }
+
+  // PERIODIC SYNTHESIS (tiered subconscious): every ~N min of active time, ONE cloud pass steps back
+  // across the recent local stream to surface the thread worth pursuing — the cross-thought depth
+  // per-tick deepening misses. Free-association only; interval- and budget-gated; GROUNDED in memory;
+  // fail-safe (any error → skip). Stored as type='synthesis' so it doesn't seed the anti-loop window.
+  if (!activeFocus && !modeIsThreadReview && !personalMode) {
+    try {
+      const subc2 = require('./subconscious');
+      const cfg2 = require('./config');
+      const _gm = (k) => { try { return db.getMeta(k); } catch { return null; } };
+      const _sm = (k, v) => { try { db.setMeta(k, v); } catch {} };
+      const synthMode = cfg2.subcTierMode();
+      if (synthMode !== 'local' && synthMode !== 'off'
+        && subc2.shouldSynthesize({ getMeta: _gm, now: Date.now(), intervalMin: cfg2.subcSynthIntervalMin() })
+        && subc2.budgetOk(_gm, Date.now(), cfg2.subcBudgetTokensPerHour())) {
+        const seed = (recentThoughts.map(t => (t && t.content) || '').join(' ').slice(0, 300)) || userName;
+        const sources = await subc2.retrieveSources(seed, { search: (q, k) => memoryLib.retrieve(q, { k }), k: 4 });
+        const synthMessages = [
+          { role: 'system', content: BASE_PERSONA },
+          { role: 'user', content: subc2.buildSynthesisPrompt({ recentThoughts, threads: openThreads, focus: null, sources }) }
+        ];
+        const synth = await generateThought({
+          messages: synthMessages,
+          options: { temperature: 0.85, top_p: 0.95, num_ctx: 8192, num_predict: 360 },
+          deps: {
+            subModel: cfg2.subconsciousModel(),
+            onUsage: (usage) => { try { const tok = (usage && ((usage.prompt_tokens || 0) + (usage.eval_tokens || 0))) || subc2.estimateTokens(synthMessages, ''); subc2.recordSpend({ getMeta: _gm, setMeta: _sm, now: Date.now(), tokens: tok }); } catch {} }
+          }
+        });
+        subc2.markSynthesized({ setMeta: _sm, now: Date.now() });
+        const st = (synth || '').trim();
+        if (st) {
+          let imp = 0.6; try { imp = await importanceLib.score(st, { userName, kind: 'thought' }); } catch {}
+          const row = db.insertMonologue({ content: st, model: cfg2.subconsciousModel(), type: 'synthesis', importance: imp });
+          pushSheep({ id: row.id, ts: row.ts, content: st, type: 'thought', importance: imp });
+          try { blackboard.append({ source: 'monologue', kind: 'thought', refTable: 'monologue', refId: row.id, content: st }); } catch {}
+          console.log('[subc] synthesis pass stored (cross-thought depth)');
+        }
+      }
+    } catch (e) { console.error('[subc] synthesis failed:', e.message); }
   }
 
   // OPEN THREADS POST-PROCESSING:
@@ -945,6 +1165,7 @@ async function runOneTick() {
           if (r?.ok && t.tag === 'browse-read' && r.text) {
             const rr = db.insertMonologue({ content: `I read "${r.title || r.url}" (${r.url}):\n${r.text}`, model: 'browser-read', type: 'reading', query: r.url, urls: [r.url] });
             pushSheep({ id: rr.id, ts: rr.ts, content: `(read) ${r.title || r.url}`, type: 'reading', query: r.url });
+            try { require('./learning').maybeCaptureLearnings({ query: r.title || r.url, content: r.text, urls: [r.url] }); } catch {}
           } else if (r?.ok && t.tag === 'browse' && r.url) {
             const rr = db.insertMonologue({ content: `I opened "${r.title || r.url}" (${r.url})`, model: 'browser-open', type: 'reading', query: r.url, urls: [r.url] });
             pushSheep({ id: rr.id, ts: rr.ts, content: `(opened) ${r.title || r.url}`, type: 'reading', query: r.url });
@@ -970,6 +1191,7 @@ async function runOneTick() {
           if (r?.ok && t.tag === 'web-read' && r.text) {
             const rr = db.insertMonologue({ content: `I looked at "${r.title || r.url}" in my own browser (${r.url}):\n${r.text}`, model: 'web-read', type: 'reading', query: r.url, urls: r.url ? [r.url] : null });
             pushSheep({ id: rr.id, ts: rr.ts, content: `(my browser) ${r.title || r.url}`, type: 'reading', query: r.url });
+            try { require('./learning').maybeCaptureLearnings({ query: r.title || r.url, content: r.text, urls: r.url ? [r.url] : null }); } catch {}
           } else if (r?.ok && t.tag === 'web-open') {
             const rr = db.insertMonologue({ content: `I opened ${r.url} in my own browser`, model: 'web-open', type: 'reading', query: r.url, urls: r.url ? [r.url] : null });
             pushSheep({ id: rr.id, ts: rr.ts, content: `(opened) ${r.url}`, type: 'reading', query: r.url });
@@ -1247,14 +1469,60 @@ async function maybeSearchFromThought(thoughtText, focusId = null) {
   const trig = detectCuriosity(thoughtText);
   if (!trig.triggered || !trig.query) return;
   if (recentSearchHappened()) return;
-  // RUMINATION BRAKE on the curiosity path too: a circling thought was firing its
-  // search here (not via boredom), so the boredom-only brake never saw it. A
-  // focus-scoped search (focusId set) is intentional deepening — leave it alone.
-  if (!focusId && await isRepeatOfRecentSearch(trig.query)) {
-    console.log(`[monologue] curiosity search suppressed (rumination brake): "${trig.query.slice(0, 60)}"`);
+
+  // R7 — SWIRL BRAKE, now INSIDE focuses too. The old guard exempted focus searches ("intentional
+  // deepening"), but a focus can permute ONE vein endlessly ("STDP energy" ×5). The cluster-density
+  // brake catches that; on a hit we don't just suppress — we CONSOLIDATE what she has + point at the
+  // next agenda gap, turning lateral permutation into forward iteration (discovery → evolution).
+  if (await isRepeatOfRecentSearch(trig.query)) {
+    console.log(`[monologue] swirl braked → consolidate+advance: "${trig.query.slice(0, 60)}"`);
+    await consolidateAndAdvance(trig.query, focusId);
     return;
   }
+
+  // R6 — ACTIVE DB INTEGRATION: consult her memory + the master DB BEFORE the web. Rich coverage →
+  // don't re-derive; surface what she knows AND redirect to a NOVEL frontier gap (not just stop).
+  try {
+    const ar = require('./active_recall');
+    const r = await ar.recall(trig.query, { minRelevance: 0.5 });   // gate precision ≥0.5 (not the 0.33 surfacing floor)
+    if (r.coverage === 'rich') {
+      await consolidateAndAdvance(trig.query, focusId, r);
+      return;
+    }
+  } catch (e) { console.error('[active_recall] gate failed:', e.message); }
+
   await runSearch(trig.query, 'curiosity', focusId);
+}
+
+// Turn a braked/known query into FORWARD motion: bank a consolidation of what she already holds, then
+// append the next NOVEL gap-question from her agenda — so the next tick pursues the frontier instead
+// of re-asking. No recursive search here (that would risk a fresh swirl); the loop picks the gap up.
+async function consolidateAndAdvance(query, focusId = null, pre = null) {
+  try {
+    const ar = require('./active_recall');
+    const r = pre || await ar.recall(query, { minRelevance: 0.5 });
+    let block = ar.formatConsolidation(r);
+    const gap = nextNovelGap(query);
+    if (gap) block += `\nInstead of re-asking this, the next thing I don't yet know is: ${gap}`;
+    const row = db.insertMonologue({ content: block, model: 'recall', type: 'reading', query });
+    try { pushSheep({ id: row.id, ts: row.ts, content: `(consolidated — moving on) ${query.slice(0, 50)}`, type: 'reading', query }); } catch {}
+    try { blackboard.append({ source: 'monologue', kind: 'reading', focusId: focusId || null, refTable: 'monologue', refId: row.id, content: query }); } catch {}
+  } catch (e) { console.error('[monologue] consolidate+advance failed:', e.message); }
+}
+
+// Freshest OPEN agenda gap-question NOT in the same vein as `query` — the meta pass generates these
+// as deduped, evolved deepenings, so they're genuine novelty rather than reworded sameness.
+function nextNovelGap(query) {
+  try {
+    const rows = db.getDb().prepare("SELECT question FROM agenda WHERE status='open' ORDER BY id DESC LIMIT 12").all();
+    const qwords = new Set(String(query || '').toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 4));
+    for (const r of rows) {
+      const q = String(r.question || '').toLowerCase();
+      const overlap = q.split(/[^a-z0-9]+/).filter(w => w.length >= 4 && qwords.has(w)).length;
+      if (q && overlap < 2) return r.question;   // different vein → real forward step
+    }
+  } catch {}
+  return null;
 }
 
 // SELF-FRAGMENT GUARD (anti-glob phase 3): the self-feeding loop's intake was curiosity
@@ -1462,6 +1730,10 @@ async function runSearch(query, source, focusId = null) {
     // REAL reading into her graph as 'read' facts (throttled, best-effort, non-blocking) — so
     // she accumulates real-world structure to think from, not just transient reading text.
     try { require('./graph_extract').maybeIngestReading({ text: content, ref: (urls && urls[0]) || query }); } catch {}
+    // VERIFIED-FACT CAPTURE (Accrete/B): this is the "I wondered about X and searched it" path —
+    // a real question + a real answer + a source URL. The pre-gate keeps it to fact-seeking
+    // queries; the gate keeps it to clean, sourced claims. This is the president-lookup scenario.
+    try { require('./learning').maybeCaptureLearnings({ query, content, urls }); } catch {}
     // write-bottom: a reading is an "observation" on the timeline — it breaks a
     // run of pure thoughts, which is exactly what the StuckDetector keys on. When
     // the search was fired to advance a focus, tag it so it joins that focus's
@@ -1529,9 +1801,11 @@ module.exports = {
   markUserActivity,
   isRepeatOfRecentSearch,  // exported for smoke test
   assessSearchNovelty,     // exported for smoke test (R4 cluster-density brake)
+  nextNovelGap,            // exported for smoke test (R7 swirl→iterate: novel agenda gap)
   splitIdleBrowserTags,    // exported for smoke test
   diversifySeeds,          // exported for smoke test (recency-fixation guard)
   looksLikeOwnFragment,    // exported for smoke test (self-fragment search guard)
   shouldSuppressSearch,    // exported for smoke test (universal guard wiring)
+  generateThought,         // exported for smoke test (cloud subconscious routing)
   MODEL
 };

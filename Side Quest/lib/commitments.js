@@ -1,7 +1,7 @@
 const db = require('./db');
 const { streamChat } = require('./ollama');
 
-const EXTRACTOR_MODEL = require('./config').model();
+const EXTRACTOR_MODEL = require('./config').extractionModel();
 const MAX_NEW_PER_TURN = 3;
 
 // GUARDRAIL (mirrors self_model.SELF_REJECT): never canonize a capability-denial or

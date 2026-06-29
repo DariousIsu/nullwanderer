@@ -15,7 +15,7 @@
 const db = require('./db');
 const memory = require('./memory');
 const { streamChat } = require('./ollama');
-const MODEL = require('./config').model();
+const MODEL = require('./config').extractionModel();
 
 // bge-small can't separate same-trait paraphrases (~0.75) from distinct traits
 // (~0.61) by threshold alone (measured), so cosine is only a cheap PREFILTER to

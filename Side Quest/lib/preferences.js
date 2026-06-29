@@ -19,13 +19,18 @@
 const db = require('./db');
 const selfModel = require('./self_model');
 const { streamChat } = require('./ollama');
-const MODEL = require('./config').model();
+const MODEL = require('./config').extractionModel();
 
 // NARROW on purpose. "favorite" is the dominant personal-taste marker; "would you
 // rather"/"are you a fan of" are clearly preference. We do NOT match "your take/
 // opinion/view on X" or bare "do you like this approach" — those are analysis and must
 // flow through the normal pipeline (capability protection).
 const PREF_RE = /\b(favou?rites?|would you rather|are you a fan of|do you have a (?:favou?rite|preference))\b/i;
+
+// Identity / name statements must NEVER be returned as a "favorite". Guards against a
+// mis-categorized identity row (the name line was filed under 'preference') hijacking a
+// taste question and answering "favorite color?" with "My name is Zoe Lane…".
+const IDENTITYISH = /\bmy name is\b|\bi(?:'?m| am) (?:called|named)\b|\banswers? to it\b|\bnamed (?:after|for)\b/i;
 
 function detectPreferenceIntent(text) { return PREF_RE.test(String(text || '')); }
 
@@ -52,17 +57,51 @@ async function scopedPick(subject) {
 
 const PERSONALITY = /^(preference|taste|value|opinion)$/;
 
+// The favorite-SLOT noun, e.g. "My favorite color is teal" → "color". Mirrors
+// self_model.favoriteSlot so recall can match a held taste by its SLOT, not only by the
+// literal subject word appearing in the value text.
+const favoriteSlot = (s) => { const m = String(s || '').match(/\bfavou?rite\s+([a-z][a-z-]+)/i); return m ? m[1].toLowerCase() : null; };
+
+// Canonicalize a formed pick for STORAGE so it carries the slot word ("color"). This is what
+// makes the NEXT "favorite color?" RECALL it (subject-gate + slot-dedup) instead of re-forming
+// a new color every time — the ocean-blue ↔ emerald-green oscillation. The spoken answer stays
+// the natural pick; only the stored text is canonicalized.
+function canonicalPref(subject, pick) {
+  const p = String(pick || '').trim();
+  if (!subject) return p;
+  const slot = subject.split(/\s+/)[0];
+  if (new RegExp('favou?rite\\s+' + slot, 'i').test(p)) return p;   // already canonical
+  let core = p.replace(/^\s*(?:i'?d (?:pick|choose|go with|say)|i would (?:pick|choose)|my favou?rite(?:\s+[a-z]+)? is|it'?s|i (?:like|love|prefer))\s+/i, '').trim();
+  if (!core) core = p;
+  core = core.charAt(0).toLowerCase() + core.slice(1);
+  return `My favorite ${subject} is ${core}`;
+}
+
 // Produce her answer to a taste question as { thought, say }, or null to fall through.
 // retrieveFn/pickFn injectable for offline tests.
 async function answer(userMessage, userName = 'Lucas', { retrieveFn = selfModel.retrieveRelevant, pickFn = scopedPick } = {}) {
   const subject = subjectOf(userMessage);
+  const subjFirst = subject ? subject.split(/\s+/)[0] : null;
+  const subjRe = (subjFirst && subjFirst.length >= 3)
+    ? new RegExp('\\b' + subjFirst.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+    : null;
 
   // 1) Already hold a confident, relevant preference? Speak it (no model — 100% reliable).
+  // SUBJECT-GATED: when we know the subject ("color"), the stored taste must actually be
+  // ABOUT that subject — NOT merely cosine-near the whole sentence. Pure cosine let a stored
+  // preference about anything (even the mis-filed name line) hijack every "favorite X"
+  // question. If we can't confirm subject relevance we FORM a fresh pick below — a correct
+  // formed answer beats a wrong stored one.
   let rel = [];
   try { rel = await retrieveFn(userMessage, 3); } catch {}
-  const match = (rel || []).find(r => PERSONALITY.test(r.category) && (
-    (r._sim != null && r._sim >= 0.5) || (subject && new RegExp(subject.split(/\s+/)[0], 'i').test(r.content))
-  ));
+  const match = (rel || []).find(r => {
+    if (!PERSONALITY.test(r.category)) return false;
+    if (IDENTITYISH.test(r.content)) return false;            // never answer a taste with an identity line
+    if (subjFirst) {                                          // subject known → the held taste must be ABOUT it:
+      return subjRe.test(r.content) || favoriteSlot(r.content) === subjFirst;  // value names it, OR same favorite-slot
+    }
+    return r._sim != null && r._sim >= 0.6;                   // no subject (e.g. "would you rather") → require strong cosine
+  });
   if (match) {
     return { thought: `${userName} is asking about my taste — I know this one.`, say: match.content };
   }
@@ -70,7 +109,10 @@ async function answer(userMessage, userName = 'Lucas', { retrieveFn = selfModel.
   // 2) Otherwise FORM one (reframed pick-one) and STORE it so she develops interests.
   const picked = await pickFn(subject);
   if (!picked) return null;
-  try { await selfModel.record(picked, { category: 'preference', importance: 0.8 }); } catch {}
+  // Store CANONICALLY (with the slot word) so the next ask RECALLS this one instead of forming
+  // a fresh pick, and so self_model dedups future picks of the same slot rather than splitting
+  // into competing rows (the ocean-blue vs emerald-green bug). Spoken answer stays natural.
+  try { await selfModel.record(canonicalPref(subject, picked), { category: 'preference', importance: 0.8 }); } catch {}
   return { thought: `${userName} asked what I like — I'll decide and own it, and it's mine now.`, say: picked };
 }
 
@@ -133,4 +175,4 @@ async function interceptSelf(userMessage, userName = 'Lucas') {
   return null;
 }
 
-module.exports = { detectPreferenceIntent, detectIdentityIntent, subjectOf, scopedPick, scopedIntro, answer, answerIdentity, interceptSelf, PREF_RE, IDENTITY_RE };
+module.exports = { detectPreferenceIntent, detectIdentityIntent, subjectOf, scopedPick, scopedIntro, answer, answerIdentity, interceptSelf, canonicalPref, favoriteSlot, PREF_RE, IDENTITY_RE };

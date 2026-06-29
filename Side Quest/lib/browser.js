@@ -411,6 +411,7 @@ function buildPromptBlock() {
   lines.push(`  <browse-read tab="2"/>                    — read tab by index`);
   lines.push(`  <browse-read tab="last"/>                 — read most-recently-mentioned URL`);
   lines.push(`  <browse-read tab="crushon.ai"/>           — read by URL substring`);
+  lines.push(`  <browse-see/>                             — SEE the active tab (a screenshot through your vision): images, charts, photos, layout the text can't show. <browse-see tab="2"/> for a specific tab.`);
   lines.push(`  <browse>https://...</browse>              — OPEN a NEW tab to a URL`);
   lines.push(`  <browse tab="active">https://...</browse>  — navigate the CURRENT tab to a URL (in place, no new tab)`);
   lines.push(`  <browse-close tab="2"/>                   — CLOSE a tab by index/domain/title (frees clutter)`);
@@ -802,7 +803,7 @@ function walkA11y(node, lines, depth) {
 
 // --- Tag parser ---
 
-const BROWSER_TAG_RE = /<(browse(?:-read|-click|-type|-scroll|-close)?|chat-(?:send|watch|unwatch))\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
+const BROWSER_TAG_RE = /<(browse(?:-read|-see|-click|-type|-scroll|-close)?|chat-(?:send|watch|unwatch))\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
 const ATTR_RE = /(\w+)\s*=\s*"([^"]*)"/g;
 
 function parseAttrs(attrStr) {
@@ -862,6 +863,18 @@ function splitBrowseOpens(parsed) {
  * Dispatch a single parsed tag to its handler. Returns the result for logging
  * or for storing as a reading.
  */
+// Screenshot a shared-browser tab (Lucas's open page) as base64 PNG so a vision model can SEE it.
+// resolveTab(null) → the active tab. Model-free; main runs it through lib/vision.
+async function actionSee(tabAttr) {
+  if (!browserInstance) return { ok: false, reason: 'browser not connected' };
+  const page = resolveTab(tabAttr);
+  if (!page) return { ok: false, reason: `could not resolve tab="${tabAttr || 'active'}"` };
+  try {
+    const buf = await page.screenshot({ type: 'png' });
+    return { ok: true, base64: Buffer.from(buf).toString('base64'), url: page.url(), title: await page.title().catch(() => '') };
+  } catch (e) { return { ok: false, reason: e.message }; }
+}
+
 async function dispatch({ tag, attrs, body }) {
   switch (tag.toLowerCase()) {
     case 'browse':
@@ -870,6 +883,8 @@ async function dispatch({ tag, attrs, body }) {
       return actionClose(attrs.tab);
     case 'browse-read':
       return actionRead(attrs.tab);
+    case 'browse-see':
+      return actionSee(attrs.tab);
     case 'browse-click':
       return actionClick(body, attrs.tab);
     case 'browse-type':

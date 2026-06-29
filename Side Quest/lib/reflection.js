@@ -18,7 +18,7 @@ const IDLE_THRESHOLD_MS = 3 * 60 * 1000;     // 3 min of no user input
 const MIN_GAP_MS = 10 * 60 * 1000;            // at most one reflection per 10 min
 const MIN_TURNS_SINCE_LAST = 6;               // need at least 6 new turns
 const TICK_INTERVAL_MS = 30 * 1000;           // check every 30s
-const MODEL = require('./config').model();
+const MODEL = require('./config').extractionModel();
 
 // Nearest existing knowledge note (A-MEM-lite linking) so new facts connect to
 // related ones instead of forming a flat bag. Returns an id or null.

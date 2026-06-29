@@ -16,7 +16,7 @@
 const db = require('./db');
 const memory = require('./memory');
 const { streamChat } = require('./ollama');
-const MODEL = require('./config').model();
+const MODEL = require('./config').extractionModel();
 
 const PREFILTER_SIM = 0.80;  // cosine prefilter for the dedup candidate
 

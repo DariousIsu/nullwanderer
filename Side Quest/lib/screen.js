@@ -73,13 +73,13 @@ function formatObservation(result) {
 
 // --- Tag parsing (mirrors browser.js / files.js) ---
 
-const SCREEN_TAG_RE = /<observe-screen\s*\/?>/gi;
+const SCREEN_TAG_RE = /<(observe-screen|screen-see)\s*\/?>/gi;
 
 function parseTags(text) {
   if (!text) return [];
   const tags = [];
   let m; SCREEN_TAG_RE.lastIndex = 0;
-  while ((m = SCREEN_TAG_RE.exec(text)) !== null) tags.push({ tag: 'observe-screen' });
+  while ((m = SCREEN_TAG_RE.exec(text)) !== null) tags.push({ tag: m[1].toLowerCase() });
   return tags;
 }
 
@@ -92,12 +92,37 @@ async function dispatch() {
   return { ...r, text: formatObservation(r) };
 }
 
+// Did Lucas ask her to LOOK AT his screen / an on-screen image? High-precision, so the chat turn
+// can auto-capture + describe when she'd otherwise just CLAIM she sees it (the confabulation seen
+// in the logs: "I can see the image on your screen" with no actual screenshot).
+function detectScreenSightRequest(text) {
+  const s = String(text || '');
+  if (/\bon (?:my|the|your) screen\b/i.test(s)) return true;
+  if (/\b(see|look at|view|describe|read|what'?s on|check)\b[^.?!]*\b(screen|monitor|display)\b/i.test(s)) return true;
+  if (/\bpulled up\b/i.test(s) && /\b(see|look|picture|image|photo|it|this)\b/i.test(s)) return true;
+  return false;
+}
+
+// Visually SEE the screen — a real screenshot (Electron desktopCapturer) as base64 PNG, so a
+// vision model can describe what's actually on Lucas's display. Model-free; main runs it through
+// lib/vision. Distinct from <observe-screen/> (which only lists window titles).
+async function capture() {
+  try {
+    const { desktopCapturer } = require('electron');
+    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1280, height: 720 } });
+    if (!sources || !sources.length) return { ok: false, reason: 'no screen source available' };
+    const b64 = sources[0].thumbnail.toPNG().toString('base64');
+    if (!b64) return { ok: false, reason: 'empty screenshot' };
+    return { ok: true, base64: b64, label: sources[0].name || 'the screen' };
+  } catch (e) { return { ok: false, reason: e.message }; }
+}
+
 function buildPromptBlock() {
-  return `SCREEN — you can see what applications and windows are open on Lucas's machine, and which one he's focused on. Emit <observe-screen/> and the list arrives in your next-turn context. This is observation only — you see window titles and the focused app, NOT the contents inside other apps, and you cannot control them. Use it to understand what he's working on so you have context.`;
+  return `SCREEN — you can see Lucas's screen two ways. <observe-screen/> lists which apps/windows are open and which is focused (titles only). <screen-see/> actually LOOKS at the screen — a screenshot through your vision — so you can read what's visible: text, images, charts, a document or page he has up. Use <observe-screen/> for "what's open", <screen-see/> for "what's on his screen right now". Observation only — you can't control anything.`;
 }
 
 module.exports = {
-  observeWindows, formatObservation,
+  observeWindows, formatObservation, capture, detectScreenSightRequest,
   parseTags, stripTags, dispatch,
   buildPromptBlock
 };

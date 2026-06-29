@@ -249,7 +249,7 @@ function defaultDeps() {
   return {
     web: require('./web'),
     streamChat: require('./ollama').streamChat,
-    MODEL: require('./config').model(),
+    MODEL: require('./config').extractionModel(),
     scrapeAttendees: liveScrapeAttendees,
     scrapeCaptions: liveScrapeCaptions,
     enableCaptions: liveEnableCaptions,

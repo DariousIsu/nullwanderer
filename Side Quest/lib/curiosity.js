@@ -137,10 +137,73 @@ function parseBoredomResponse(text) {
   return firstLine;
 }
 
+/**
+ * Is the user asking for up-to-the-minute info only a live source can answer
+ * (weather, prices, markets, today's news)? High-precision: needs a "now"-ish
+ * marker AND a live domain, OR an explicit live phrase. Used by the chat turn to
+ * auto-run a live lookup when she reached for no retrieval tool herself.
+ */
+function isLiveInfoQuestion(msg) {
+  const s = (msg || '').toLowerCase();
+  if (s.length < 6) return false;
+  const askish = /\?|\b(what'?s?|what is|what are|how(?:'s| much| is| are)?|tell me|give me|can you|could you|do you know|look up|check|find|get me|pull up|price of|how'?s the)\b/.test(s);
+  if (!askish) return false;
+  const temporal = /\b(right now|currently|today|tonight|this (?:morning|afternoon|evening|week)|at the moment|as of|these days|latest|current|real[- ]?time|up[- ]?to[- ]?date|up-to-the-minute)\b/.test(s);
+  const domain = /\b(weather|temperature|forecast|rain|snow|price|prices|stock|stocks|share|shares|ticker|market|markets|commodity|commodities|oil|crude|gold|silver|gas|gasoline|fuel|exchange rate|currency|bitcoin|crypto|news|headlines|happening|score|election|inflation|interest rate|yield)\b/.test(s);
+  const livePhrase = /\b(price of|stock price|share price|spot price|what'?s the weather|today'?s (?:weather|news|headlines)|latest news|current events|exchange rate)\b/.test(s);
+  return livePhrase || (temporal && domain);
+}
+
+/**
+ * Turn a raw live-info question into a clean search query (used when she gave no
+ * stated intent of her own to mine via detectCuriosity).
+ */
+function deriveLiveQuery(msg) {
+  let q = (msg || '').trim();
+  q = q.replace(/^(?:ok(?:ay)?|hey|so|and|well|um|zoe)[,\s]+/i, '');
+  q = q.replace(/\b(?:can|could|would) you (?:please )?(?:tell me|let me know|find out|look up|check|get me|pull up)\b/gi, '');
+  q = q.replace(/\b(?:do you know|please tell me|tell me|give me|i want to know|i'?d like to know)\b/gi, '');
+  q = q.replace(/^\s*(?:what(?:'?s| is| are| the)?|how much (?:is|are)|how'?s)\s+/i, '');
+  q = q.replace(/\b(?:right now|currently|today|at the moment|please)\b/gi, '');
+  q = q.replace(/\s+is\s*$/i, '');
+  q = q.replace(/[?.!]+\s*$/, '').replace(/\s{2,}/g, ' ').trim();
+  if (q.length < 3) q = (msg || '').replace(/[?]/g, '').trim();
+  return (q.slice(0, 160) || '').trim() || null;
+}
+
+// RESEARCH COMMAND — an explicit order to GO FIND OUT ("do some research", "look into it", "dig
+// into that", "find out more", "read up on her"). Unlike isLiveInfoQuestion (current facts), the
+// SUBJECT lives in the prior conversation, not this message. She tends to NARRATE the intent
+// ("[I'll research…]") without emitting a tag, so nothing happens — this lets the harness run a real
+// lookup with a subject derived from recent turns.
+function isResearchCommand(msg) {
+  const s = (msg || '').toLowerCase().trim();
+  if (s.length < 4) return false;
+  return /\b(do (?:some |a little |more |further )?research|research (?:that|it|this|her|him|them)|look (?:in)?to (?:it|that|this|him|her|them)|dig (?:in)?to (?:it|that|this)|find out more|do your research|go (?:and )?(?:research|look it up|find out)|look it up|read up on (?:it|that|this|him|her|them))\b/i.test(s)
+    || /^\s*research\b/i.test(s);
+}
+
+// Build the research SUBJECT from recent USER turns (chronological, oldest→newest), since the command
+// itself carries none. Drops the command turns and tiny turns; keeps the last ~2 substantive asks so
+// pronouns ("her") still have their antecedent. Pure (turns passed in) → smoke-testable.
+function deriveResearchSubject(currentMsg, recentUserContents = []) {
+  const cur = String(currentMsg || '').trim();
+  const subs = (recentUserContents || [])
+    .map(c => String(c || '').trim())
+    .filter(c => c && c !== cur && c.length > 8 && !isResearchCommand(c));
+  const pick = subs.slice(-2);
+  let q = pick.join(' ').replace(/[?!.]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  return q ? q.slice(0, 180) : null;
+}
+
 module.exports = {
   detectCuriosity,
   buildBoredomPrompt,
   parseBoredomResponse,
   cleanQuery,
-  isMetaQuery
+  isMetaQuery,
+  isLiveInfoQuestion,
+  deriveLiveQuery,
+  isResearchCommand,
+  deriveResearchSubject
 };

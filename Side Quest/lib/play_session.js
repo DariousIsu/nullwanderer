@@ -19,7 +19,7 @@
 const db = require('./db');
 const webLib = require('./web');
 const ollama = require('./ollama');  // call ollama.streamChat at use-time (stub-friendly)
-const MODEL = require('./config').model();
+const MODEL = require('./config').frontModel();
 
 const STEPS = ['none', 'open', 'inventory', 'choose', 'startchat', 'chat'];
 const MAX_STEP_STRIKES = 3;   // consecutive failures on a step before we reset the session

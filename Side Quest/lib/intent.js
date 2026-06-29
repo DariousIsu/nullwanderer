@@ -18,6 +18,11 @@ function detectWebIntent(text) {
   const url = t.match(/https?:\/\/\S+/i) || t.match(/\b[a-z0-9-]+\.[a-z]{2,}(?:\/\S*)?\b/i);
   const search = t.match(/\b(?:search(?:\s+for)?|look\s*up|google|find)\b\s+(?:the\s+|for\s+)?(.{2,90})/i);
   const verb = /(open|opening|launch|fire up|pull up|go to|browse|web-open|\buse\b)/i.test(t);
+  // A TRUE "open a browser fresh" verb — distinct from the loose `verb` (which includes "use",
+  // "browse", "go to"). ONLY an openVerb may reset to the blank search home; merely MENTIONING
+  // the browser ("use your browser", "test your browser", "your browser is slow") must NOT
+  // navigate it. This was the bug: any verb+"browser" wiped her open page to the DDG home.
+  const openVerb = /\b(open|opening|launch|fire (?:up|it up)|pull up|boot up|bring up|start up)\b/i.test(t);
   const webCue = /\b(browser|web|online|internet|web-open)\b/i.test(t);
   // viewing/visiting verbs that, with a URL, mean "open this for me"
   const viewVerb = /\b(look|check|see|read|view|visit|peek|here'?s|this is)\b/i.test(t);
@@ -32,7 +37,11 @@ function detectWebIntent(text) {
     // a request to open the search home. Don't fire the SEARCH_HOME fallback — let it
     // fall through to the act-on-open-page (read) handler.
     if (/\bread\b/i.test(t)) return null;
-    return { target: SEARCH_HOME };
+    // BARE (no URL, no search query): only a real OPEN verb resets to the blank search home,
+    // and it's marked `bare` so the caller can refuse to wipe an ALREADY-OPEN browser. A loose
+    // mention ("use/browse your browser") with no destination → null (just talk, don't navigate).
+    if (openVerb) return { target: SEARCH_HOME, bare: true };
+    return null;
   }
   // A search COMMAND → web search. Fires when the message is an imperative search
   // ("search X", "can you look up X", "google X") OR references the web/browser

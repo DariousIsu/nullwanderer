@@ -61,7 +61,21 @@ async function verify() {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// SAFETY KILL-SWITCH — outbound email is DISABLED by default while the model still
+// hallucinates recipients/contents. EVERY send path (the <email-send>/<email> tags AND the
+// autonomous inbox auto-reply) funnels through sendEmail(), so this one gate stops them all.
+// Reading the inbox is unaffected. Re-enable deliberately, once sends are trustworthy again,
+// by setting ZOE_EMAIL_SEND_ENABLED=1 (or true/yes/on) in .env.
+function isSendEnabled() {
+  return /^(1|true|yes|on)$/i.test(String(process.env.ZOE_EMAIL_SEND_ENABLED || '').trim());
+}
+
 async function sendEmail({ to, subject, body, attachments = [], source = 'zoe' }) {
+  if (!isSendEnabled()) {
+    try { db.insertEmailLog({ to, subject, status: 'blocked', error: 'send kill-switch active', source }); } catch {}
+    console.warn(`[email] BLOCKED outbound send to "${to}" — kill-switch active (set ZOE_EMAIL_SEND_ENABLED=1 to re-enable)`);
+    return { ok: false, blocked: true, reason: 'Email sending is currently disabled (safety kill-switch); nothing was sent.' };
+  }
   const cfg = config.emailConfig();
   if (!cfg.configured) return { ok: false, reason: 'email not configured (set ZOE_EMAIL_USER/PASS in .env)' };
   if (!to || !EMAIL_RE.test(String(to).trim())) return { ok: false, reason: `"${to}" is not a valid email address` };
@@ -290,6 +304,18 @@ function detectEmailIntent(msg) {
 // reverting to the browser for email. Mirrors the browser action-nudge.
 function buildEmailNudge(userMessage) {
   if (!isConfigured()) return null;
+  if (!isSendEnabled()) {
+    // Don't push a send when sending is off. On an email-intent turn, tell her to be honest
+    // that it's disabled and offer to draft instead — never command <email-send>.
+    return detectEmailIntent(userMessage)
+      ? `EMAIL IS OFF — your email sending is temporarily disabled. Do NOT attempt <email-send>/<email> or claim a message went out. Tell Lucas plainly that sending is turned off right now, and offer to draft it for him to send himself.`
+      : null;
+  }
+  // The chat-path draft (per-source store; null when nothing's in progress). This was an
+  // undeclared `draft` reference — the function threw ReferenceError on every enabled call and
+  // its try/catch caller swallowed it, so this nudge never actually fired. draftState() is the
+  // read-only view (no side-effect draft creation, unlike getDraft()).
+  const draft = draftState('chat');
   const open = draft && (draft.to || draft.subject || draft.body.length);
   const intent = detectEmailIntent(userMessage);
   // Continuation language for an in-progress draft ("send it", "write the body", etc.)
@@ -324,6 +350,11 @@ Emit the FIRST step — <email-draft to="..." subject="..."/> — as a real raw 
 
 function buildPromptBlock() {
   if (!isConfigured()) return null;  // hide the tool entirely when no creds
+  if (!isSendEnabled()) {
+    // Kill-switch active: tell her plainly she can READ but not SEND, so she stops
+    // attempting <email-send> and reporting failures (or promising mail she can't send).
+    return `EMAIL — sending is currently TURNED OFF (a temporary safety hold while your send reliability is being fixed). You can still READ your inbox with <read-inbox/>, but you CANNOT send mail right now: the <email>, <email-draft>, <email-body>, and <email-send> tags deliver nothing. Do not try to send, and never say you've sent or will send an email. If something genuinely needs sending, say so plainly and offer to draft it for Lucas to send himself — don't pretend it went out.`;
+  }
   const cfg = config.emailConfig();
   return `EMAIL — you can send real email yourself, directly, from ${cfg.from || cfg.user}. This is how you act on the publication goal: pitch a piece, follow up with an editor, reach out.
 
@@ -356,7 +387,7 @@ TRUTHFULNESS: only say you've attached something if you ACTUALLY emitted <email-
 }
 
 module.exports = {
-  sendEmail, verify, isConfigured, draftState,
+  sendEmail, isSendEnabled, verify, isConfigured, draftState,
   parseTags, stripTags, dispatch, buildPromptBlock,
   detectEmailIntent, buildEmailNudge
 };

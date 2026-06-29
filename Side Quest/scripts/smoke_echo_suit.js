@@ -69,6 +69,16 @@ function mockClient(overrides = {}) {
   ok('no match -> intent overview + fallback hint', /Intent buckets/.test(S.filterToolMap(tm, 'zzzznomatch')));
   ok('garbage json -> capped passthrough (no throw)', typeof S.filterToolMap('not json', 'x') === 'string');
 
+  console.log('\nfilterRecipes (pure — recipe-aware find, the LAMP-confusion fix):');
+  const rj = JSON.stringify({ recipes: [
+    { name: 'lamp-count', intent: 'Count LAMP members, broken down by category.', arg: '(none)', arg_required: false, domain: 'identity' },
+    { name: 'find-bill', intent: 'Find legislation by keyword.', arg: 'a topic', arg_required: true, domain: 'legislation' },
+  ] });
+  ok('surfaces the matching recipe (lamp)', /lamp-count/.test(S.filterRecipes(rj, 'how many lamp members')));
+  ok('excludes non-matching recipe', !/find-bill/.test(S.filterRecipes(rj, 'how many lamp members')));
+  ok('no match -> empty string', S.filterRecipes(rj, 'zzzznomatch') === '');
+  ok('garbage json -> empty (no throw)', S.filterRecipes('not json', 'x') === '');
+
   console.log('\nconnect lifecycle:');
   {
     const suit = S.createSuit({ client: mockClient() });
@@ -96,6 +106,8 @@ function mockClient(overrides = {}) {
     await suit.connect();
     const find = await suit.dispatch({ kind: 'find', query: 'search' });
     ok('find returns filtered tool list', find.ok && /search_knowledge/.test(find.text));
+    const findLamp = await suit.dispatch({ kind: 'find', query: 'how many LAMP members' });
+    ok('find is RECIPE-AWARE — surfaces lamp-count for the LAMP question (the fix)', findLamp.ok && /lamp-count/.test(findLamp.text) && /RECIPES/.test(findLamp.text));
     const doR = await suit.dispatch({ kind: 'do', name: 'search_knowledge', args: { query: 'water' } });
     ok('do invokes the named tool', doR.ok && /water policy/.test(doR.text));
     const del = await suit.dispatch({ kind: 'delegate', agent: 'briefing_writer', task: 'draft' });

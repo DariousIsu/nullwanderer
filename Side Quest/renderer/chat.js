@@ -86,7 +86,7 @@ if (window.sq && window.sq.browserStatus) {
   window.sq.browserStatus().then(s => setBrowserStatus(s)).catch(() => {});
 }
 
-const pendingAttachments = [];  // [{ name, text }]
+const pendingAttachments = [];  // [{ name, text } | { name, mime, dataUrl, image:true }]
 
 function renderAttachments() {
   attachmentsBar.innerHTML = '';
@@ -94,7 +94,7 @@ function renderAttachments() {
     const chip = document.createElement('span');
     chip.className = 'attachment-chip';
     const label = document.createElement('span');
-    label.textContent = `${a.name} (${a.text.length} ch)`;
+    label.textContent = a.image ? `${a.name} (image)` : `${a.name} (${(a.text || '').length} ch)`;
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.textContent = '×';
@@ -113,9 +113,20 @@ if (attachInput) attachInput.addEventListener('change', async (e) => {
   const files = Array.from(e.target.files || []);
   for (const f of files) {
     try {
-      const text = await f.text();
-      const truncated = text.length > 50000 ? text.slice(0, 50000) : text;
-      pendingAttachments.push({ name: f.name, text: truncated });
+      if (f.type && f.type.startsWith('image/')) {
+        // Image → read as a base64 data URL so Zoe can actually SEE it (vision).
+        const dataUrl = await new Promise((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(fr.result);
+          fr.onerror = reject;
+          fr.readAsDataURL(f);
+        });
+        pendingAttachments.push({ name: f.name, mime: f.type, dataUrl, image: true });
+      } else {
+        const text = await f.text();
+        const truncated = text.length > 50000 ? text.slice(0, 50000) : text;
+        pendingAttachments.push({ name: f.name, text: truncated });
+      }
     } catch (err) {
       console.error('attach failed:', err);
     }
@@ -127,6 +138,13 @@ if (attachInput) attachInput.addEventListener('change', async (e) => {
 let currentAiTurnDiv = null;     // the .turn.ai div for the in-progress AI response
 let currentAiSaidNode = null;    // the .said span where streamed tokens go
 let sending = false;
+// MAIN CHAT = user-prompted dialogue ONLY. A reply to the user's message streams into
+// the transcript; her UNPROMPTED utterances (heartbeat/autonomous) are diverted to the
+// sheep panel instead — until real autonomous chatting is good enough to promote back.
+let promptedReplyPending = false;  // true between a user send() and that reply's complete
+let unpromptedActive = false;      // the in-flight stream is an autonomous utterance
+let unpromptedBuffer = '';         // accumulates an autonomous utterance for the sheep panel
+let lastSheepThoughtId = null;     // dedup guard so a thought isn't filed to sheep twice
 
 function autosizeInput() {
   input.style.height = 'auto';
@@ -226,20 +244,43 @@ function cleanLiveSay(s) {
 }
 
 window.sq.onSayToken((token) => {
-  hideThinking();
-  if (!currentAiTurnDiv) {
-    currentAiTurnDiv = makeAiTurn();
-    currentAiSaidNode = makeSaidNode('');
-    currentAiTurnDiv.appendChild(currentAiSaidNode);
-    transcript.appendChild(currentAiTurnDiv);
-    liveSayBuffer = '';
+  // Decide destination on the first token of a stream. A user-prompted reply streams into
+  // the dialogue transcript; an autonomous (unprompted) utterance is buffered for the sheep
+  // panel and never touches the transcript.
+  if (!currentAiTurnDiv && !unpromptedActive) {
+    if (promptedReplyPending) {
+      hideThinking();
+      currentAiTurnDiv = makeAiTurn();
+      currentAiSaidNode = makeSaidNode('');
+      currentAiTurnDiv.appendChild(currentAiSaidNode);
+      transcript.appendChild(currentAiTurnDiv);
+      liveSayBuffer = '';
+    } else {
+      unpromptedActive = true;
+      unpromptedBuffer = '';
+    }
   }
+  if (unpromptedActive) { unpromptedBuffer += token; return; }
   liveSayBuffer += token;
   currentAiSaidNode.textContent = cleanLiveSay(liveSayBuffer);
   scrollMaybe();
 });
 
 window.sq.onComplete((info) => {
+  // Autonomous utterance → sheep panel, never the dialogue transcript. Leave the user's
+  // input state untouched (an unprompted completion isn't a reply to anything they sent).
+  // GUARD: only when NO prompted reply is in flight. A tool-result followup is flagged
+  // unprompted but IS the reply to the user's message — routing it to the panel here would
+  // abandon the half-streamed transcript turn AND never re-enable the input (the stuck-textbox
+  // hang). If a prompted reply is pending or already streaming, fall through and finish it.
+  if (!promptedReplyPending && !currentAiTurnDiv && (unpromptedActive || (info && info.unprompted))) {
+    const text = (info && typeof info.say === 'string' && info.say.trim())
+      ? info.say.trim() : cleanLiveSay(unpromptedBuffer).trim();
+    if (text) appendSheep({ ts: Date.now(), content: text, type: 'utterance' });
+    unpromptedActive = false;
+    unpromptedBuffer = '';
+    return;
+  }
   hideThinking();
   const turnDiv = currentAiTurnDiv;
   const saidNode = currentAiSaidNode;
@@ -252,26 +293,29 @@ window.sq.onComplete((info) => {
     } else {
       saidNode.textContent = cleanLiveSay(liveSayBuffer).trim();
     }
-    backfillThoughtIntoTurn(turnDiv, saidNode);
   }
+  routeThoughtToSheep();   // her <think> is filed to the sheep panel, not the transcript
   currentAiTurnDiv = null;
   currentAiSaidNode = null;
   liveSayBuffer = '';
+  promptedReplyPending = false;
   sending = false;
   input.disabled = false;
   input.focus();
 });
 
-async function backfillThoughtIntoTurn(turnDiv, saidNode) {
+// Her conversational <think> is private cognition, not dialogue — so after a reply
+// completes we file it into the sheep panel (the one-way mirror) rather than the
+// transcript. Strict adjacency (thought.id === said.id - 1) guarantees it's THIS turn's
+// thought; the dedup guard stops a double-file if onComplete fires more than once.
+async function routeThoughtToSheep() {
   try {
     const recent = await window.sq.getRecentHistory();
-    // Find the most recent ai_said (the one we just stored)
     let lastSaid = null;
     for (let i = recent.length - 1; i >= 0; i--) {
       if (recent[i].speaker === 'ai_said') { lastSaid = recent[i]; break; }
     }
     if (!lastSaid) return;
-    // Only pair if there is an ai_thought whose id is exactly lastSaid.id - 1
     let pairedThought = null;
     for (let i = 0; i < recent.length; i++) {
       if (recent[i].id === lastSaid.id - 1 && recent[i].speaker === 'ai_thought') {
@@ -279,14 +323,12 @@ async function backfillThoughtIntoTurn(turnDiv, saidNode) {
         break;
       }
     }
-    if (pairedThought && turnDiv && saidNode && turnDiv.isConnected) {
-      const existing = turnDiv.querySelector('.thought');
-      if (!existing) {
-        turnDiv.insertBefore(makeThoughtNode(pairedThought.content), saidNode);
-      }
+    if (pairedThought && pairedThought.content && pairedThought.id !== lastSheepThoughtId) {
+      lastSheepThoughtId = pairedThought.id;
+      appendSheep({ ts: pairedThought.ts || Date.now(), content: pairedThought.content, type: 'thought' });
     }
   } catch (err) {
-    console.error('thought backfill failed:', err);
+    console.error('thought→sheep route failed:', err);
   }
 }
 
@@ -309,6 +351,27 @@ if (window.sq.onBusy) {
     div.appendChild(makeSaidNode(text));
     transcript.appendChild(div);
     scrollMaybe();
+  });
+}
+
+// Image she CREATED (vision out) → show it inline as its own AI bubble.
+if (window.sq.onImage) {
+  window.sq.onImage((info) => {
+    try {
+      const { dataUrl, path, prompt } = info || {};
+      const src = dataUrl || (path ? 'file://' + path : '');
+      if (!src) return;
+      const div = makeAiTurn();
+      const img = document.createElement('img');
+      img.className = 'gen-image';
+      img.src = src;
+      img.alt = prompt || 'generated image';
+      img.style.maxWidth = '100%';
+      img.style.borderRadius = '8px';
+      div.appendChild(img);
+      transcript.appendChild(div);
+      scrollMaybe();
+    } catch (err) { console.error('image render failed:', err); }
   });
 }
 
@@ -346,6 +409,8 @@ function appendSheep({ ts, content, type, query }) {
   if (type === 'reading') cls += ' reading';
   if (type === 'self_q') cls += ' self-q';
   if (type === 'self_a') cls += ' self-a';
+  if (type === 'thought') cls += ' thought';
+  if (type === 'utterance') cls += ' utterance';
   if (type === 'inbound') cls += ' inbound';
   if (type === 'inbound-timeout') cls += ' inbound-timeout';
   div.className = cls;
@@ -359,6 +424,8 @@ function appendSheep({ ts, content, type, query }) {
   if (type === 'reading' && query) timeLabel += `  ↗ ${query}`;
   else if (type === 'self_q') timeLabel += '  ↻ subconscious';
   else if (type === 'self_a') timeLabel += '  ↻ articulate self';
+  else if (type === 'thought') timeLabel += '  · thinking';
+  else if (type === 'utterance') timeLabel += '  💬 unprompted';
   else if (type === 'inbound') timeLabel += '  ⇐ incoming';
   else if (type === 'inbound-timeout') timeLabel += '  ⌛ timeout';
   timeNode.textContent = timeLabel;
@@ -385,6 +452,7 @@ async function send() {
     ? `\n[attached: ${pendingAttachments.map(a => a.name).join(', ')}]`
     : '');
   renderUserTurn(displayText);
+  promptedReplyPending = true;   // the next streamed reply belongs in the transcript
   showThinking();
   const attachmentsToSend = pendingAttachments.slice();
   pendingAttachments.length = 0;
@@ -451,42 +519,34 @@ function renderSatWith(thoughtText) {
 }
 
 async function loadHistory() {
-  // Pair ai_thought with the following ai_said ONLY when adjacent (id+1).
-  // Lone ai_thought rows (heartbeats with empty say) render distinctly so
-  // they don't masquerade as prefixes for unrelated subsequent responses.
+  // Transcript is dialogue ONLY: user messages + her spoken replies. All thought
+  // (ai_thought) is rendered in the sheep panel instead (see loadSheep).
   const turns = await window.sq.getRecentHistory();
-  let i = 0;
-  while (i < turns.length) {
-    const t = turns[i];
-    if (t.speaker === 'user') {
-      renderUserTurn(t.content);
-      i++;
-    } else if (t.speaker === 'ai_thought') {
-      const next = turns[i + 1];
-      if (next && next.speaker === 'ai_said' && next.id === t.id + 1) {
-        renderHistoricalAiPair(t.content, next.content);
-        i += 2;
-      } else {
-        // Lone thought — she contemplated and stayed silent
-        renderSatWith(t.content);
-        i++;
-      }
-    } else if (t.speaker === 'ai_said') {
-      renderHistoricalAiPair(null, t.content);
-      i++;
-    } else {
-      i++;
-    }
+  for (const t of turns) {
+    if (t.speaker === 'user') renderUserTurn(t.content);
+    // Prompted replies only. Unprompted said-turns (heartbeat/continuity/follow-ups) are
+    // diverted to the sheep panel, matching the live behavior. ai_thought never shows here.
+    else if (t.speaker === 'ai_said' && !t.unprompted) renderHistoricalAiPair(null, t.content);
   }
   transcript.scrollTop = transcript.scrollHeight;
 }
 
 async function loadSheep() {
   try {
-    const monologue = await window.sq.getRecentMonologue(30);
-    for (const m of monologue) {
-      appendSheep({ ts: m.ts, content: m.content, type: m.type, query: m.query });
+    // The sheep panel is her full inner stream: idle monologue/readings (from `monologue`)
+    // interleaved with her conversational <think> (ai_thought turns), in time order.
+    const [monologue, history] = await Promise.all([
+      window.sq.getRecentMonologue(40),
+      window.sq.getRecentHistory()
+    ]);
+    const items = [];
+    for (const m of monologue) items.push({ ts: m.ts, content: m.content, type: m.type, query: m.query });
+    for (const t of history) {
+      if (t.speaker === 'ai_thought' && t.content) items.push({ ts: t.ts, content: t.content, type: 'thought' });
+      else if (t.speaker === 'ai_said' && t.unprompted && t.content) items.push({ ts: t.ts, content: t.content, type: 'utterance' });
     }
+    items.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    for (const it of items) appendSheep(it);
   } catch (err) {
     console.error('sheep load failed:', err);
   }

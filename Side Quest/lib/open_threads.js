@@ -17,7 +17,7 @@ const db = require('./db');
 const { streamChat } = require('./ollama');
 const consolidate = require('./consolidate');
 
-const EXTRACTION_MODEL = require('./config').model();
+const EXTRACTION_MODEL = require('./config').extractionModel();
 const EXTRACTION_NUM_PREDICT = 220;
 
 const EXTRACTION_PROMPT = (userMessage, userName) => [
@@ -64,6 +64,20 @@ Is the user assigning DURABLE STANDING WORK that should persist across sessions?
   }
 ];
 
+// UNBOUNDED-GOAL GUARD — a goal needs an implicit completion condition. Open-ended goals
+// ("learn EVERYTHING about X", "keep tracking Y", "stay updated on Z") can never resolve, so the
+// idle loop pursues them forever and fixates (live: thread #66, "learn everything about federal
+// permitting reform", reached 389 actions and bled permitting into every conversation). She can
+// hold a BOUNDED version ("summarize X", "draft a brief on Y") — just not an infinite one. Rejected
+// at the source. (Goal-management: a goal must be falsifiable/terminable; cf. Generative Agents
+// plan horizons, 2304.03442.)
+// No trailing \b — the verb stems (research, track…) must match their inflected forms
+// ("keep researching"), which a trailing word-boundary would block mid-word. Leading \b anchors.
+const UNBOUNDED_RE = /\b(everything|all there is|as much as (?:i|you) can|keep (?:research|learn|explor|track|monitor|study|read)|stay (?:updated|current|on top|abreast|informed)|continuous|ongoing|never stop|deepen (?:my|your) understanding|fully (?:understand|grasp|master)|become an expert|master the (?:topic|subject|field)|all about)/i;
+function isUnboundedGoal(text) {
+  return UNBOUNDED_RE.test(String(text || ''));
+}
+
 /**
  * Extract any goals from a user message and insert into open_threads.
  * Returns array of inserted thread objects.
@@ -100,6 +114,7 @@ async function extractFromUserTurn({ userMessage, sourceTurnId, userName }) {
   for (const g of goals.slice(0, 4)) {
     const cleaned = (g || '').trim();
     if (cleaned.length < 4 || cleaned.length > 200) continue;
+    if (isUnboundedGoal(cleaned)) { console.log(`[open_threads] rejected unbounded goal (no completion condition): ${cleaned.slice(0, 60)}`); continue; }
     if (activeNorms.has(normalize(cleaned))) continue; // exact-dup fast path
     let decision = { action: 'ADD' };
     try { decision = await consolidate.decideForCandidate(cleaned); }
@@ -266,6 +281,7 @@ function detectAndCountMentions(text, activeThreads) {
 
 module.exports = {
   extractFromUserTurn,
+  isUnboundedGoal,
   formatTopBlock,
   formatDepth2Block,
   parseAndApplyStatusUpdates,

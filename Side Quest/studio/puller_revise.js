@@ -1,0 +1,139 @@
+/* studio/puller_revise.js — Puller single-dossier WRITE engine (the negative-signal loop in action).
+ *
+ * Three operator actions, all deterministic over the store (lib/puller_db) + the pure math
+ * (puller_beliefs) + the qualification ratchet (puller_confidence). No model. The xlsx/CSV/API
+ * readers are separate — they all funnel into applyVerification, which is the single pathway.
+ *
+ *   applyVerification   one verify result → record evidence, nudge the domain pattern belief,
+ *                       re-qualify the held value; on a negative, derive the next pattern and
+ *                       PROPOSE a flip (operator approves) + enqueue a retest. Catch-all gated.
+ *   decideRevision      accept → apply the proposed flip (new held value, re-qualified) ;
+ *                       reject → keep the (now-conflicted) current value, tombstone the proposal.
+ *   markDedicatedSource grade-A path: record an official source (business card / directory) →
+ *                       set it as the held value → qualification ratchets to 100%.
+ *
+ * Promotion / Echo-write live in the IPC layer (Slice 5) — kept out so this stays offline-testable.
+ */
+'use strict';
+const db = require('../lib/puller_db');
+const B = require('./puller_beliefs');
+const Q = require('./puller_confidence');
+
+const norm = (s) => String(s == null ? '' : s).trim().toLowerCase();
+const domainOf = (email, fallback) => { const e = norm(email); const i = e.indexOf('@'); return i > 0 ? e.slice(i + 1) : (fallback || null); };
+
+// verify raw status → (observation kind, is-negative, is-catch-all)
+const KIND = { valid: 'verified', deliverable: 'verified', invalid: 'bounce', undeliverable: 'bounce',
+               accept_all: 'accept_all', 'catch-all': 'accept_all', catchall: 'accept_all',
+               unknown: 'unknown', risky: 'unknown' };
+
+// Re-qualify a target's email belief for the value it currently holds, and persist the confidence.
+function requalifyEmail(targetId, heldValue) {
+  const obs = db.listObservations(targetId, { attr: 'email' });
+  const q = Q.qualify(obs, heldValue);
+  db.upsertBelief(targetId, 'email', {
+    value: heldValue, confidence: q.confidence,
+    derivation: `qualified:${q.grade || 'none'}${q.conflicted ? '/conflict' : ''}`,
+  });
+  return q;
+}
+
+// Apply one verification result to a contact's email (the funnel for manual / file / API negatives).
+function applyVerification(targetId, { value, result } = {}) {
+  const t = db.getTarget(targetId);
+  if (!t) throw new Error(`applyVerification: no target ${targetId}`);
+  const email = norm(value);
+  const r = norm(result);
+  const domain = domainOf(email, t.domain);
+  const obsKind = KIND[r] || 'unknown';
+  const out = { result: r, observationId: null, confidence: null, grade: null,
+                revisionId: null, retestId: null, patternFlip: null, catchAll: false, infraSuspect: false };
+
+  out.observationId = db.addObservation(targetId, { attr: 'email', value: email, kind: obsKind, source: 'verification', meta: { result: r } });
+
+  // domain pattern belief — catch-all marks the domain untrustworthy; otherwise credit hit/miss
+  let st = db.getPatternState(domain);
+  if (obsKind === 'accept_all') {
+    st = B.updateBelief(st, null, 'accept_all'); db.savePatternState(domain, st); out.catchAll = true;
+  } else if (domain && (r === 'valid' || r === 'deliverable' || r === 'invalid' || r === 'undeliverable') && !B.isCatchAll(st)) {
+    const pat = B.detectPatternUsed(email, t.name, domain);
+    if (pat) { st = B.updateBelief(st, pat, r); db.savePatternState(domain, st); }
+  }
+
+  // re-qualify the value the dossier holds (may differ from the just-verified value)
+  const cur = db.getBelief(targetId, 'email');
+  const heldValue = cur && cur.value ? cur.value : email;
+  const q = requalifyEmail(targetId, heldValue);
+  out.confidence = q.confidence; out.grade = q.grade;
+
+  // negative on the HELD value → propose the next-pattern flip + enqueue a retest (unless catch-all)
+  if ((r === 'invalid' || r === 'undeliverable') && norm(heldValue) === email && domain && !B.isCatchAll(st)) {
+    if (B.looksInfraBlocked(st)) {
+      // Gateway-block: a strong-prior domain that only bounces is a sender-reputation/infra problem,
+      // not a pattern miss — pausing beats burning retests + chasing the wrong fix. No flip, no retest.
+      out.infraSuspect = true;
+    } else {
+      const usedPat = B.detectPatternUsed(heldValue, t.name, domain);
+      const tried = usedPat ? [usedPat] : [];
+      const nc = B.nextCandidate(st, t.name, domain, tried);   // skips non-derivable (e.g. middle-name) patterns
+      if (nc) {
+        out.patternFlip = { from: heldValue, fromPattern: usedPat, toPattern: nc.pattern, to: nc.email };
+        out.revisionId = db.proposeRevision({
+          subjectKind: 'belief', subjectRef: String(cur ? cur.id : targetId), targetId, attr: 'email',
+          fromValue: heldValue, toValue: nc.email, triggerObsId: out.observationId,
+          rationale: `${heldValue} bounced; next pattern ${nc.pattern} → ${nc.email}`,
+        });
+        out.retestId = db.enqueueRetest({
+          targetId, person: t.name, company: t.company, domain,
+          patternsTried: tried, nextPattern: nc.pattern,
+          previousAttempts: [{ email: heldValue, result: r }],
+        });
+      }
+    }
+  }
+  return out;
+}
+
+// Cascade (§4.4 r2): after a domain's belief shifts, re-derive every QUEUED retest at that domain so a
+// pending guess reflects the current best pattern. Returns the list of items whose next-pattern changed.
+function cascadeForDomain(domain) {
+  const st = db.getPatternState(domain);
+  const updated = [];
+  for (const item of db.listRetests({ status: 'queued' }).filter(r => r.domain === domain)) {
+    const nc = B.nextCandidate(st, item.person, domain, item.patterns_tried || []);
+    if (nc && nc.pattern !== item.next_pattern) {
+      db.updateRetest(item.id, { nextPattern: nc.pattern });
+      updated.push({ id: item.id, person: item.person, from: item.next_pattern, to: nc.pattern, email: nc.email });
+    }
+  }
+  return updated;
+}
+
+// Operator decides a proposed revision. Accept applies the flip (new held value, re-qualified);
+// reject tombstones it and the current (conflicted) value stands.
+function decideRevision(revisionId, decision) {
+  const rev = db.decideRevision(revisionId, decision);
+  if (!rev) return null;
+  const out = { id: revisionId, decision, applied: false, confidence: null, grade: null };
+  if (decision === 'accepted' && rev.subject_kind === 'belief' && rev.attr === 'email' && rev.target_id && rev.to_value) {
+    const newV = norm(rev.to_value);
+    db.addObservation(rev.target_id, { attr: 'email', value: newV, kind: 'derived', source: 'revision-accept' });
+    const q = requalifyEmail(rev.target_id, newV);
+    out.applied = true; out.confidence = q.confidence; out.grade = q.grade;
+  }
+  return out;
+}
+
+// Grade-A path: an official dedicated source (business card / directory / owner-confirmed). Sets that
+// value as held and ratchets qualification to 100% (capped ratchet — A is the only path to 100).
+function markDedicatedSource(targetId, { value, note } = {}) {
+  const t = db.getTarget(targetId);
+  if (!t) throw new Error(`markDedicatedSource: no target ${targetId}`);
+  const v = norm(value);
+  if (!v) throw new Error('markDedicatedSource: value required');
+  db.addObservation(targetId, { attr: 'email', value: v, kind: 'business_card', source: note || 'dedicated source' });
+  const q = requalifyEmail(targetId, v);
+  return { confidence: q.confidence, grade: q.grade };
+}
+
+module.exports = { applyVerification, decideRevision, markDedicatedSource, requalifyEmail, cascadeForDomain };

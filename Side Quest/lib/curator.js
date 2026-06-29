@@ -15,6 +15,7 @@ const db = require('./db');
 const STALE_THREAD_DAYS = 14;
 const ACTIVE_STALE_DAYS = 10; // an active/pending thread untouched this long → stalled (decay)
 const STALE_GAP_DAYS = 21; // an un-acted capability gap this old → dismissed
+const MAX_THREAD_ACTIONS = 60; // a goal worked this many times without resolving = not converging → retire (over-pursuit backstop)
 
 // SPIRAL/JUNK classifier — the aggressive-curation core. A free-association thought (or
 // a reading) matching this is hygiene-deleted at write time AND swept periodically, so the
@@ -71,6 +72,17 @@ function curateThreads({ staleDays = STALE_THREAD_DAYS, activeStaleDays = ACTIVE
       .all(cutoff);
     for (const r of stale) {
       db.markOpenThreadStatus(r.id, 'abandoned', { reason: `curator: stalled > ${staleDays}d untouched` });
+      aged++;
+    }
+    // 3) RUNAWAY CIRCUIT-BREAKER — a goal that has accumulated many actions WITHOUT resolving is not
+    //    converging (an unbounded goal slipped the creation guard, or pursuit looped). Retire it
+    //    regardless of recency. Live: thread #66 ("learn everything about federal permitting reform")
+    //    hit 389 actions and fixated her. Healthy goals resolve well before MAX_THREAD_ACTIONS.
+    const runaway = db.getDb()
+      .prepare(`SELECT id, action_count FROM open_threads WHERE status IN ('active','pending','stalled') AND action_count > ?`)
+      .all(MAX_THREAD_ACTIONS);
+    for (const r of runaway) {
+      db.markOpenThreadStatus(r.id, 'abandoned', { reason: `curator: over-pursued (${r.action_count} actions, never resolved)` });
       aged++;
     }
   } catch (e) { console.error('[curator] curateThreads failed:', e.message); }

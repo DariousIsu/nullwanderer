@@ -15,7 +15,7 @@
  */
 
 const { streamChat } = require('./ollama');
-const MODEL = require('./config').model();
+const MODEL = require('./config').frontModel();
 
 // Self / inner-life disclaimers. Each keys on a "lacking" verb + an INNER-LIFE noun,
 // or an explicit "as an AI I can't" / "I'm just a model" framing. Factual-gap nouns

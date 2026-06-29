@@ -59,4 +59,25 @@ function pickBusyLine(seed) {
   return BUSY_LINES[n % BUSY_LINES.length];
 }
 
-module.exports = { detectHardPull, pickBusyLine, BUSY_LINES };
+// WORKING lines — placeholders for when she's acting on LUCAS'S request (a tool/agent run that takes
+// a few seconds), not lost in her own thought. The BUSY_LINES above are self-focused ("I'm in the
+// middle of something") and read as brushing him off when he just asked for something — exactly wrong
+// the moment he assigns a task. These affirm she's ON IT. `task` picks an assignment-grade line.
+const WORKING_LINES = [
+  'on it — give me a sec to pull this together.',
+  'on it; gathering what I need.',
+  'looking into that now — one moment.',
+  'starting on that — won\'t be long.',
+];
+const TASK_WORKING_LINES = [
+  "on it — starting on that now; I'll pull the first findings together and keep at it.",
+  "got it — I'm on this; let me start gathering and I'll keep working it.",
+  "starting on that right now — I'll begin compiling and stay on it.",
+];
+function pickWorkingLine(seed, { task = false } = {}) {
+  const arr = task ? TASK_WORKING_LINES : WORKING_LINES;
+  const n = Number.isFinite(seed) ? Math.abs(Math.trunc(seed)) : 0;
+  return arr[n % arr.length];
+}
+
+module.exports = { detectHardPull, pickBusyLine, pickWorkingLine, BUSY_LINES, WORKING_LINES, TASK_WORKING_LINES };

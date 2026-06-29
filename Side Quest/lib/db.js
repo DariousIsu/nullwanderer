@@ -409,7 +409,75 @@ const MIGRATIONS = [
     text TEXT NOT NULL,
     ts INTEGER NOT NULL
   )`,
-  `CREATE INDEX IF NOT EXISTS idx_meeting_transcript_ts ON meeting_transcript(ts)`
+  `CREATE INDEX IF NOT EXISTS idx_meeting_transcript_ts ON meeting_transcript(ts)`,
+
+  // UI ROUTING: distinguish her UNPROMPTED utterances (heartbeat / continuity / tool-result
+  // follow-ups) from replies to a user message. The main chat renders prompted dialogue only;
+  // unprompted=1 said-turns are diverted to the sheep panel — live AND on history reload (they
+  // streamed via the same channel, so without this flag a reload couldn't tell them apart).
+  `ALTER TABLE turns ADD COLUMN unprompted INTEGER DEFAULT 0`,
+
+  // CLOUD REASONING TRACES — every cloud-assisted logic call (lib/cloud_logic) writes one row:
+  // the COMPACT packaged input + the raw response + the validated/parsed output + whether it was
+  // accepted. Two jobs: (1) the cache (skip an identical call by input_hash) and budget audit,
+  // (2) THE TRAINING SET — a task-tagged corpus of (compact_input → validated_output) pairs to
+  // later distill the cloud "tutor" into Zoe's own model. Never store secrets here.
+  `CREATE TABLE IF NOT EXISTS cloud_traces (
+    id INTEGER PRIMARY KEY,
+    ts INTEGER NOT NULL,
+    task TEXT NOT NULL,
+    v INTEGER DEFAULT 1,
+    model TEXT,
+    input_hash TEXT,
+    input_json TEXT,
+    raw_response TEXT,
+    parsed_json TEXT,
+    valid INTEGER DEFAULT 0,
+    accepted INTEGER DEFAULT 0,
+    repaired INTEGER DEFAULT 0,
+    cached INTEGER DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_cloud_traces_hash ON cloud_traces(input_hash)`,
+  `CREATE INDEX IF NOT EXISTS idx_cloud_traces_task ON cloud_traces(task)`,
+
+  // INTEREST MODEL (autonomy roadmap, Slice 1) — Zoe's self-directed agenda. A persistent,
+  // weighted set of intellectual pursuits the idle loop SAMPLES from, instead of echoing the last
+  // conversation. Seeded with a floor of deep domains (source='seed'); 'emergent' interests form
+  // from what her own research actually yields. weight = sampling priority (learning-progress ×
+  // novelty, gated by a cloud interestingness ranker); lp_ema = EMA of new facts banked on-topic;
+  // mastery = rough competence (depth ratchet, later). This is what makes her pursue markets over
+  // cheerleading. See lib/interests.js.
+  `CREATE TABLE IF NOT EXISTS interests (
+    id INTEGER PRIMARY KEY,
+    topic TEXT NOT NULL,
+    slug TEXT UNIQUE,
+    weight REAL DEFAULT 1.0,
+    mastery REAL DEFAULT 0.0,
+    lp_ema REAL DEFAULT 0.0,
+    visits INTEGER DEFAULT 0,
+    last_visited_ts INTEGER,
+    source TEXT DEFAULT 'seed',
+    status TEXT DEFAULT 'active',
+    embedding TEXT,
+    created_ts INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_interests_status ON interests(status)`,
+
+  // LEARNING AGENDA (autonomy roadmap, depth ratchet) — open QUESTIONS she means to answer next,
+  // per interest. The meta pass generates gap-questions ("what don't I know yet about X that my
+  // notes don't cover?"); the idle loop pulls the top open one so a focus works a SPECIFIC unknown
+  // (STORM-style depth) instead of re-circling the topic. Answered → linked to the note that closed it.
+  `CREATE TABLE IF NOT EXISTS agenda (
+    id INTEGER PRIMARY KEY,
+    interest_id INTEGER,
+    question TEXT NOT NULL,
+    status TEXT DEFAULT 'open',
+    priority REAL DEFAULT 1.0,
+    created_ts INTEGER NOT NULL,
+    answered_ts INTEGER,
+    answered_note_id INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_agenda_interest ON agenda(interest_id, status)`
 ];
 
 function init() {
@@ -440,11 +508,11 @@ function endSession(id) {
   getDb().prepare('UPDATE sessions SET ended_at = ? WHERE id = ? AND ended_at IS NULL').run(Date.now(), id);
 }
 
-function insertTurn({ sessionId, speaker, content, model = null, truncated = 0 }) {
+function insertTurn({ sessionId, speaker, content, model = null, truncated = 0, unprompted = 0 }) {
   const ts = Date.now();
   const info = getDb()
-    .prepare('INSERT INTO turns (session_id, ts, speaker, content, model, truncated) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(sessionId, ts, speaker, content, model, truncated);
+    .prepare('INSERT INTO turns (session_id, ts, speaker, content, model, truncated, unprompted) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(sessionId, ts, speaker, content, model, truncated, unprompted ? 1 : 0);
   return { id: info.lastInsertRowid, ts };
 }
 
@@ -597,10 +665,17 @@ function insertOpenThread({ content, parentId = null, sourceTurnId = null }) {
 
 // Active threads ordered by recency-of-touch; returns oldest-touched first within active
 // (so the staler ones rise; the agent's prompt sees what's been neglected)
-function getActiveOpenThreads(limit = 10) {
+// includeStalled=true (default) → pending/active/stalled, for DEDUP and cleanup callers that
+// must see parked goals. includeStalled=false → pending/active ONLY, for the WORKING set (the
+// idle thread-review loop + chat-prompt injection): a STALLED thread means "couldn't progress —
+// park it", so re-feeding it as "what you're working on" is exactly the fixation loop (it gets
+// re-picked stalest-first and re-ground forever — the cheer-team / Salesforce obsession). Parked
+// threads stay in the DB (resurfaceable by an explicit user mention), just not auto-pursued.
+function getActiveOpenThreads(limit = 10, { includeStalled = true } = {}) {
+  const statuses = includeStalled ? `('pending','active','stalled')` : `('pending','active')`;
   return getDb()
     .prepare(`SELECT * FROM open_threads
-      WHERE status IN ('pending','active','stalled')
+      WHERE status IN ${statuses}
       ORDER BY last_touched_ts ASC LIMIT ?`)
     .all(limit);
 }
@@ -1032,6 +1107,20 @@ function updateKnowledge(id, { content, embedding = null, importance = null } = 
   return true;
 }
 
+// Flip a knowledge row's source (and optionally rewrite its provenance) WITHOUT touching
+// content/embedding/FTS. Used by the curator's verified-fact reconcile to SUPERSEDE an older
+// fact (source → 'verified_fact_superseded' + provenance.superseded_by) — kept addressable,
+// not deleted (HippoRAG: don't delete sources). provenance omitted → left as-is.
+function setKnowledgeSource(id, source, provenance = undefined) {
+  if (!id || !source) return false;
+  const sets = ['source = ?'];
+  const args = [source];
+  if (provenance !== undefined) { sets.push('provenance = ?'); args.push(provenance ? JSON.stringify(provenance) : null); }
+  args.push(id);
+  getDb().prepare(`UPDATE knowledge SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+  return true;
+}
+
 // Fetch a single monologue row by id — used to resolve a provenance marker
 // (refTable='monologue') back to the raw reading/thought it points at.
 function getMonologueById(id) {
@@ -1250,6 +1339,55 @@ function setMeta(key, value) {
     .run(key, String(value));
 }
 
+// --- cloud reasoning traces (lib/cloud_logic) — cache + budget audit + training corpus ---
+function insertCloudTrace(t) {
+  const info = getDb()
+    .prepare(`INSERT INTO cloud_traces (ts, task, v, model, input_hash, input_json, raw_response, parsed_json, valid, accepted, repaired, cached)
+      VALUES (@ts, @task, @v, @model, @input_hash, @input_json, @raw_response, @parsed_json, @valid, @accepted, @repaired, @cached)`)
+    .run({
+      ts: t.ts, task: t.task, v: t.v == null ? 1 : t.v, model: t.model || null,
+      input_hash: t.inputHash || null, input_json: t.inputJson || null,
+      raw_response: t.raw || null, parsed_json: t.parsedJson || null,
+      valid: t.valid ? 1 : 0, accepted: t.accepted ? 1 : 0, repaired: t.repaired ? 1 : 0, cached: t.cached ? 1 : 0
+    });
+  return { id: info.lastInsertRowid };
+}
+// Most recent ACCEPTED trace for an input hash — the cache lookup (skip an identical call).
+function getCachedCloudTrace(inputHash) {
+  if (!inputHash) return null;
+  return getDb()
+    .prepare('SELECT * FROM cloud_traces WHERE input_hash = ? AND accepted = 1 ORDER BY id DESC LIMIT 1')
+    .get(inputHash) || null;
+}
+
+// --- learning agenda (depth ratchet) ---
+function insertAgenda({ interestId = null, question, priority = 1.0, now = Date.now() }) {
+  if (!question || !String(question).trim()) return null;
+  const info = getDb()
+    .prepare('INSERT INTO agenda (interest_id, question, priority, created_ts) VALUES (?, ?, ?, ?)')
+    .run(interestId, String(question).trim(), priority, now);
+  return { id: info.lastInsertRowid };
+}
+function getOpenAgenda(interestId, limit = 10) {
+  return getDb()
+    .prepare("SELECT * FROM agenda WHERE interest_id = ? AND status = 'open' ORDER BY priority DESC, id ASC LIMIT ?")
+    .all(interestId, limit);
+}
+function getTopAgenda(interestId) {
+  return getDb()
+    .prepare("SELECT * FROM agenda WHERE interest_id = ? AND status = 'open' ORDER BY priority DESC, id ASC LIMIT 1")
+    .get(interestId) || null;
+}
+function countOpenAgenda(interestId) {
+  return getDb().prepare("SELECT COUNT(*) n FROM agenda WHERE interest_id = ? AND status = 'open'").get(interestId).n;
+}
+function setAgendaStatus(id, status, { answeredNoteId = null, now = Date.now() } = {}) {
+  if (!id || !status) return false;
+  getDb().prepare('UPDATE agenda SET status = ?, answered_ts = ?, answered_note_id = ? WHERE id = ?')
+    .run(status, status === 'answered' ? now : null, answeredNoteId, id);
+  return true;
+}
+
 // --- graph memory (anti-glob relational store; see docs/MEMORY_GROUNDING.md) ---
 // Raw table accessors only. The propose→promote gate + epistemic rules + name
 // normalization live in lib/graph_memory.js (semantic logic out of db.js, per house style).
@@ -1432,6 +1570,14 @@ module.exports = {
   getMonologueById,
   markReadingsConsolidated,
   updateKnowledge,
+  setKnowledgeSource,
+  insertCloudTrace,
+  getCachedCloudTrace,
+  insertAgenda,
+  getOpenAgenda,
+  getTopAgenda,
+  countOpenAgenda,
+  setAgendaStatus,
   getUserAssignedThreads,
   getAllKnowledgeEmbeddings,
   ftsSearchKnowledge,

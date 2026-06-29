@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('sq', {
 
   onSayToken: (cb) => ipcRenderer.on('chat:say-token', (_e, token) => cb(token)),
   onComplete: (cb) => ipcRenderer.on('chat:complete', (_e, info) => cb(info)),
+  onImage: (cb) => ipcRenderer.on('chat:image', (_e, info) => cb(info)),
   onError: (cb) => ipcRenderer.on('chat:error', (_e, err) => cb(err)),
   onBusy: (cb) => ipcRenderer.on('chat:busy', (_e, text) => cb(text)),
   onReflectionFired: (cb) => ipcRenderer.on('reflection:fired', (_e, info) => cb(info)),
@@ -101,5 +102,19 @@ contextBridge.exposeInMainWorld('sq', {
     advise: (docJson, context) => ipcRenderer.invoke('creator:advise', { docJson, context }),
     openSource: (docId) => ipcRenderer.invoke('creator:open-source', { docId }),
     openExternal: (url) => ipcRenderer.invoke('creator:open-external', { url })
+  },
+
+  // Puller — person/org research workbench (dossier surface + single-dossier write actions).
+  puller: {
+    listTargets: (opts) => ipcRenderer.invoke('puller:list-targets', opts || {}),
+    getDossier: (targetId) => ipcRenderer.invoke('puller:get-dossier', { targetId }),
+    markVerification: (targetId, result, value) => ipcRenderer.invoke('puller:mark-verification', { targetId, result, value }),
+    decideRevision: (targetId, revisionId, decision) => ipcRenderer.invoke('puller:decide-revision', { targetId, revisionId, decision }),
+    markDedicated: (targetId, value, note) => ipcRenderer.invoke('puller:mark-dedicated', { targetId, value, note }),
+    promote: (targetId, crmId) => ipcRenderer.invoke('puller:promote', { targetId, crmId }),
+    exportContacts: (opts) => ipcRenderer.invoke('puller:export', opts || {}),
+    seedPriors: () => ipcRenderer.invoke('puller:seed-priors'),
+    cascade: (domain) => ipcRenderer.invoke('puller:cascade', { domain }),
+    ingestNegatives: (text) => ipcRenderer.invoke('puller:ingest-negatives', { text })
   }
 });

@@ -1,6 +1,6 @@
 const OLLAMA_BASE = process.env.OLLAMA_BASE || 'http://localhost:11434';
 
-async function streamChat({ model, messages, options = {}, onToken, signal }) {
+async function streamChat({ model, messages, options = {}, onToken, signal, inactivityMs = 90000 }) {
   const body = {
     model,
     messages,
@@ -15,42 +15,61 @@ async function streamChat({ model, messages, options = {}, onToken, signal }) {
     }
   };
 
-  const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal
-  });
+  // WATCHDOG: abort if the stream STALLS (no token for inactivityMs). Without this a hung
+  // generation blocks the awaiting caller forever — and since there's one local model
+  // instance, that freezes BOTH the idle loop AND chat (observed: a 15-min wedge). The timer
+  // resets on every chunk (so a slow-but-progressing reply is never killed) and composes with
+  // any externally-passed signal. On fire/abort the fetch rejects → the caller's try/catch
+  // recovers and the loop ticks again.
+  const ctrl = new AbortController();
+  const onExternalAbort = () => ctrl.abort();
+  if (signal) { if (signal.aborted) ctrl.abort(); else signal.addEventListener('abort', onExternalAbort, { once: true }); }
+  let watchdog = null;
+  const kick = () => { if (inactivityMs > 0) { clearTimeout(watchdog); watchdog = setTimeout(() => ctrl.abort(), inactivityMs); } };
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Ollama HTTP ${res.status}: ${text || res.statusText}`);
-  }
+  try {
+    kick();
+    const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ctrl.signal
+    });
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Ollama HTTP ${res.status}: ${text || res.statusText}`);
+    }
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
 
-    let nl;
-    while ((nl = buf.indexOf('\n')) !== -1) {
-      const line = buf.slice(0, nl);
-      buf = buf.slice(nl + 1);
-      if (!line.trim()) continue;
-      try {
-        const obj = JSON.parse(line);
-        if (obj.message && obj.message.content) {
-          onToken(obj.message.content);
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      kick();   // activity → reset the inactivity watchdog
+      buf += decoder.decode(value, { stream: true });
+
+      let nl;
+      while ((nl = buf.indexOf('\n')) !== -1) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        try {
+          const obj = JSON.parse(line);
+          if (obj.message && obj.message.content) {
+            onToken(obj.message.content);
+          }
+          if (obj.done) return;
+        } catch {
+          // ignore malformed line
         }
-        if (obj.done) return;
-      } catch {
-        // ignore malformed line
       }
     }
+  } finally {
+    clearTimeout(watchdog);
+    if (signal) { try { signal.removeEventListener('abort', onExternalAbort); } catch {} }
   }
 }
 
@@ -60,25 +79,47 @@ async function streamChat({ model, messages, options = {}, onToken, signal }) {
  * a schema, not token-by-token. Low temperature by default (these are judgements, not prose).
  * Optional `base` selects a non-default endpoint (e.g. an Ollama-Cloud base for the frontier tier).
  */
-async function complete({ model, messages, options = {}, base = OLLAMA_BASE, headers = {}, signal }) {
+async function completeDetailed({ model, messages, options = {}, base = OLLAMA_BASE, headers = {}, signal, timeoutMs = 180000 }) {
   base = base || OLLAMA_BASE;          // coalesce explicit null (default params only fill undefined)
   headers = headers || {};
-  const res = await fetch(`${base}/api/chat`, {
-    method: 'POST',
-    headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
-    body: JSON.stringify({
-      model, messages, stream: false, keep_alive: '24h',
-      options: Object.assign({ temperature: 0, top_p: 0.9, num_ctx: 8192 }, options),
-    }),
-    signal,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Ollama HTTP ${res.status}: ${text || res.statusText}`);
+  // Non-streaming: there's no per-token activity to watch, so cap the WHOLE call. Generous
+  // (frontier/cloud models over a big context are slow) but bounded, so a hung request can't
+  // block a caller forever the way the streaming path did. Composes with an external signal.
+  const ctrl = new AbortController();
+  const onExternalAbort = () => ctrl.abort();
+  if (signal) { if (signal.aborted) ctrl.abort(); else signal.addEventListener('abort', onExternalAbort, { once: true }); }
+  const timer = timeoutMs > 0 ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+  try {
+    const res = await fetch(`${base}/api/chat`, {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
+      body: JSON.stringify({
+        model, messages, stream: false, keep_alive: '24h',
+        options: Object.assign({ temperature: 0, top_p: 0.9, num_ctx: 8192 }, options),
+      }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Ollama HTTP ${res.status}: ${text || res.statusText}`);
+    }
+    const obj = await res.json();
+    // Ollama reports token counts on the non-stream response — surface them so callers (the tiered
+    // subconscious budget) can account real spend instead of estimating. prompt_eval_count = input,
+    // eval_count = output.
+    return {
+      text: (obj && obj.message && obj.message.content) || '',
+      usage: { prompt_tokens: (obj && obj.prompt_eval_count) || 0, eval_tokens: (obj && obj.eval_count) || 0 },
+      model: (obj && obj.model) || model
+    };
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (signal) { try { signal.removeEventListener('abort', onExternalAbort); } catch {} }
   }
-  const obj = await res.json();
-  return (obj && obj.message && obj.message.content) || '';
 }
+
+// Back-compat string-returning wrapper (the vast majority of callers want just the text).
+async function complete(opts) { return (await completeDetailed(opts)).text; }
 
 /**
  * Splits a streamed string into <think>...</think> and <say>...</say> segments.
@@ -236,4 +277,49 @@ class TagStreamParser {
   }
 }
 
-module.exports = { streamChat, complete, TagStreamParser, OLLAMA_BASE };
+// --- Resident-model housekeeping --------------------------------------------
+// A stale model pinned by keep_alive (e.g. one loaded before a model swap/reboot) squats VRAM and
+// collides with the front model — the "call goes nowhere" hang. At boot we sweep any big resident
+// model that isn't the one(s) we mean to keep.
+
+// PURE: pick resident models to evict — not in `keep`, big enough to matter (skip tiny embedding
+// models, which are cheap and needed). Separated from IO so the decision is unit-testable.
+function selectStale(loaded, { keep = [], minVramBytes = 2e9 } = {}) {
+  const keepSet = new Set((keep || []).filter(Boolean));
+  return (loaded || [])
+    .filter(m => m && m.name && !keepSet.has(m.name)
+      && (m.size_vram || m.size || 0) >= minVramBytes
+      && !/bge|embed|nomic|minilm/i.test(m.name))
+    .map(m => m.name);
+}
+
+async function listLoaded({ base = OLLAMA_BASE } = {}) {
+  try {
+    const res = await fetch(`${base}/api/ps`);
+    if (!res.ok) return [];
+    const j = await res.json();
+    return (j && j.models) || [];
+  } catch { return []; }
+}
+
+async function unload(model, { base = OLLAMA_BASE } = {}) {
+  try {
+    await fetch(`${base}/api/generate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, keep_alive: 0 }),
+    });
+    return true;
+  } catch { return false; }
+}
+
+// Boot housekeeping: unload stale big residents, keeping the front (and whatever else is passed).
+// Fail-safe: any error → returns [] (never blocks boot). Returns the names it unloaded.
+async function sweepLoaded({ keep = [], minVramBytes = 2e9, base = OLLAMA_BASE } = {}) {
+  try {
+    const stale = selectStale(await listLoaded({ base }), { keep, minVramBytes });
+    for (const m of stale) await unload(m, { base });
+    return stale;
+  } catch { return []; }
+}
+
+module.exports = { streamChat, complete, completeDetailed, TagStreamParser, OLLAMA_BASE, selectStale, listLoaded, unload, sweepLoaded };

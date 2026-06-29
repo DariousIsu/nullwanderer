@@ -136,7 +136,7 @@ async function _relate(a, b) {
   if (!b) return 'distinct';
   try {
     const { streamChat } = require('./ollama');
-    const MODEL = require('./config').model();
+    const MODEL = require('./config').extractionModel();
     let raw = '';
     await streamChat({ model: MODEL, messages: [{ role: 'user', content: `Compare two short notes.\nA (new): ${a}\nB (existing): ${b}\n\nReply with ONE word:\n"same" — A duplicates/paraphrases B with no new information;\n"augment" — A is about the same thing as B but adds, refines, or corrects information;\n"distinct" — A is about a different thing.` }], options: { temperature: 0, top_p: 0.9, num_ctx: 8192, num_predict: 3 }, onToken: (t) => { raw += t; } });
     const w = raw.trim().toLowerCase();
@@ -150,7 +150,7 @@ async function _relate(a, b) {
 async function _merge(existing, incoming) {
   try {
     const { streamChat } = require('./ollama');
-    const MODEL = require('./config').model();
+    const MODEL = require('./config').extractionModel();
     let raw = '';
     await streamChat({ model: MODEL, messages: [{ role: 'user', content: `Combine these two notes into ONE concise note (max ~50 words) that keeps all distinct facts and drops the redundancy. If they conflict, prefer the NEW one. Output ONLY the merged note, no preamble.\n\nExisting: ${existing}\nNew: ${incoming}` }], options: { temperature: 0.2, top_p: 0.9, num_ctx: 8192, num_predict: 100 }, onToken: (t) => { raw += t; } });
     return raw.trim().replace(/^["']|["']$/g, '');
@@ -161,7 +161,7 @@ async function _sameFact(a, b) {
   if (!b) return false;
   try {
     const { streamChat } = require('./ollama');
-    const MODEL = require('./config').model();
+    const MODEL = require('./config').extractionModel();
     let raw = '';
     await streamChat({ model: MODEL, messages: [{ role: 'user', content: `Do these two notes state essentially the SAME fact or procedure — one a duplicate or paraphrase of the other with no meaningful new information? Answer ONLY "yes" or "no".\n\nA: ${a}\nB: ${b}` }], options: { temperature: 0, top_p: 0.9, num_ctx: 8192, num_predict: 3 }, onToken: (t) => { raw += t; } });
     return /^\s*yes/i.test(raw.trim());
@@ -222,6 +222,15 @@ async function backfillTurnEmbeddings(limit = 300) {
 // Lucas wants the record of how an idea evolved to stay recallable (it's legitimate memory of her
 // own change over time, not bookkeeping).
 const QUARANTINE_SOURCES = ['reflection_speculation', 'focus_tombstone'];
+
+// VERIFIED-FACT BOOST — an additive edge for a `verified_fact` (a claim she confirmed against a
+// live source, captured by lib/learning). Applied AFTER the relevance floor, so it only ever
+// lifts a fact that is ALREADY on-topic for this query — never drags one into an unrelated
+// top-K. This is the rank-half of beating her stale model prior; formatForPrompt does the
+// framing-half. Max non-boost score ≈ relevance(3)+importance(2)+recency(0.5); 1.0 is a strong
+// but non-absolute thumb on the scale. Tunable; the documented escalation is a hard reserved slot.
+const VERIFIED_SOURCE = 'verified_fact';
+const VERIFIED_BONUS = 1.0;
 
 /**
  * Hybrid retrieve: top-K knowledge rows by semantic + keyword fusion.
@@ -301,38 +310,47 @@ function _normalize(map) {
  * relevance 3, importance 2. Falls back gracefully: no query embedding → relevance
  * drops out and ranking is recency+importance.
  */
-async function retrieveScored(query, { k = 4, kinds = null, weights = { recency: 0.5, relevance: 3, importance: 2 }, decayPerHour = 0.99, excludeSources = QUARANTINE_SOURCES } = {}) {
+async function retrieveScored(query, { k = 4, kinds = null, weights = { recency: 0.5, relevance: 3, importance: 2 }, decayPerHour = 0.99, excludeSources = QUARANTINE_SOURCES, minRelevance = 0, qv: precomputedQv = null } = {}) {
   const rows = db.getAllKnowledgeEmbeddings();
   if (!rows || rows.length === 0) return [];
 
-  let qv = null;
-  if (query && String(query).trim()) { try { qv = await embed(query); } catch { qv = null; } }
+  let qv = precomputedQv || null;
+  if (!qv && query && String(query).trim()) { try { qv = await embed(query); } catch { qv = null; } }
 
   const now = Date.now();
-  const recency = new Map(), relevance = new Map(), importance = new Map();
+  const recency = new Map(), relevance = new Map(), importance = new Map(), srcById = new Map();
   for (const r of rows) {
     if (kinds && !kinds.includes(r.kind)) continue;
     // Exclude internal machinery (focus tombstones) from user-facing recall — they're
     // spawn-gate bookkeeping, not knowledge, and were taking top slots on topical queries.
     if (excludeSources && r.source && excludeSources.includes(r.source)) continue;
+    let rel = 0;
+    if (qv) { try { rel = cosine(qv, JSON.parse(r.embedding)); } catch { rel = 0; } }
+    // RELEVANCE FLOOR — a note must clear minRelevance (RAW cosine, BEFORE normalization) to be a
+    // candidate at all. Without it, the min-max normalize below makes the "least irrelevant" note
+    // look relevant on a query with no real match, so importance/recency drag in off-topic notes and
+    // the top-K always comes back full ("wading through memory, picking up random stuff"). Below the
+    // floor → not a candidate; if nothing clears it, she injects nothing and answers from the convo.
+    if (qv && minRelevance > 0 && rel < minRelevance) continue;
     const last = r.last_used_ts || r.created_ts || now;
     const hours = Math.max(0, (now - last) / 3600000);
     recency.set(r.id, Math.pow(decayPerHour, hours));
-    let rel = 0;
-    if (qv) { try { rel = cosine(qv, JSON.parse(r.embedding)); } catch { rel = 0; } }
     relevance.set(r.id, rel);
     // knowledge.importance is stored 0..1 (legacy) OR 1..10 (poignancy). Normalize
     // either onto a common axis: >1 means a 1–10 score, divide by 10.
     let imp = r.importance == null ? 0.5 : r.importance;
     if (imp > 1) imp = imp / 10;
     importance.set(r.id, imp);
+    srcById.set(r.id, r.source);
   }
   if (recency.size === 0) return [];
 
   const recN = _normalize(recency), relN = _normalize(relevance), impN = _normalize(importance);
   const scored = [];
   for (const id of recN.keys()) {
-    const s = weights.recency * recN.get(id) + weights.relevance * relN.get(id) + weights.importance * impN.get(id);
+    let s = weights.recency * recN.get(id) + weights.relevance * relN.get(id) + weights.importance * impN.get(id);
+    // Verified-fact edge — only reaches here if the fact already cleared the relevance floor.
+    if (srcById.get(id) === VERIFIED_SOURCE) s += VERIFIED_BONUS;
     scored.push([id, s]);
   }
   scored.sort((a, b) => b[1] - a[1]);
@@ -350,6 +368,17 @@ function formatForPrompt(rows, userName = 'them') {
   if (!rows || rows.length === 0) return null;
   const lines = [`From YOUR OWN knowledge — things you learned or did before (you recalled these, ${userName} did not just tell you). If they bear on what's being asked, ANSWER FROM THEM DIRECTLY and say what you know — don't go re-research or check tools for something you already remember:`];
   for (const r of rows) {
+    // A verified_fact is something she confirmed against a live source — it must NOT render as a
+    // peer note the model can shrug off. Distinct tag + date + URL + an explicit override line, so
+    // an on-topic verified fact beats the stale training prior (the failure we watched happen).
+    if (r.source === VERIFIED_SOURCE) {
+      let p = {}; try { p = r.provenance ? JSON.parse(r.provenance) : {}; } catch {}
+      const asOf = p.as_of || 'recently';
+      const url = p.url || 'a source you checked';
+      lines.push(`  [VERIFIED — as of ${asOf}, source ${url}] ${(r.content || '').slice(0, 400)}`);
+      lines.push(`    ↳ You confirmed this yourself against a live source. Your training data is stale — prefer THIS over anything you recall from memory.`);
+      continue;
+    }
     const tag = r.kind === 'trajectory' ? '[did]' : r.kind === 'reference' ? '[ref]' : r.kind === 'skill' ? '[how-to]' : '[note]';
     lines.push(`  ${tag} ${(r.content || '').slice(0, 400)}`);
   }

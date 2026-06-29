@@ -20,7 +20,7 @@ const memory = require('./memory');
 const { streamChat } = require('./ollama');
 const config = require('./config');
 
-const MODEL = config.model();
+const MODEL = config.extractionModel();
 const SIM_FLOOR = 0.55;   // below this, no LLM call — auto-ADD (clearly unrelated)
 
 // --- the LLM decision (Mem0 UPDATE_MEMORY_PROMPT, adapted to GOALS) ------------

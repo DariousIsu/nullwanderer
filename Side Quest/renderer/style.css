@@ -460,6 +460,24 @@ html, body {
   color: #5a3a4a;
 }
 
+/* Conversational <think> filed into the sheep panel (her private cognition during a reply). */
+.sheep.thought {
+  font-style: normal;
+  color: #9a9aa8;
+  padding-left: 8px;
+  border-left: 2px solid #303040;
+}
+.sheep.thought .sheep-time { color: #44445a; }
+
+/* An unprompted/autonomous utterance — diverted here instead of the dialogue transcript. */
+.sheep.utterance {
+  font-style: normal;
+  color: #b0a890;
+  padding-left: 8px;
+  border-left: 2px solid #4a4030;
+}
+.sheep.utterance .sheep-time { color: #6a5a3a; }
+
 @keyframes sheepFade {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: translateY(0); }

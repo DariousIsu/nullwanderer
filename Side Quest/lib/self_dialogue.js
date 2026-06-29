@@ -15,7 +15,7 @@ const db = require('./db');
 const { streamChat } = require('./ollama');
 const governor = require('./governor');
 
-const MODEL = require('./config').model();
+const MODEL = require('./config').frontModel();
 const MAX_ITERATIONS = 3;
 const MIN_GAP_BETWEEN_DIALOGUES_MS = 2 * 60 * 1000;  // 2 min cooldown — self-dialogue should be a frequent driver, not a rarity
 const PER_TURN_NUM_PREDICT = 220;

@@ -156,6 +156,17 @@ function listTargets({ status = null, domain = null, limit = 200, offset = 0 } =
                ORDER BY last_accessed_at DESC LIMIT ? OFFSET ?`;
   return _db().prepare(sql).all(...args, limit, offset);
 }
+// Resolve a target by one of its email values (held belief first, then any observation) — the bridge
+// for ingesting a vendor bounce file keyed only by email. Case-insensitive. null if no match.
+function findTargetByEmail(email) {
+  const e = String(email == null ? '' : email).trim().toLowerCase();
+  if (!e) return null;
+  const b = _db().prepare(`SELECT target_id FROM beliefs WHERE type='email' AND lower(value) = ? ORDER BY id LIMIT 1`).get(e);
+  if (b) return getTarget(b.target_id);
+  const o = _db().prepare(`SELECT target_id FROM observations WHERE attr='email' AND lower(value) = ? ORDER BY id LIMIT 1`).get(e);
+  return o ? getTarget(o.target_id) : null;
+}
+
 // Promote an ad-hoc dossier into the CRM (records the crm row id; status → promoted).
 function promoteTarget(id, crmId) {
   _db().prepare(`UPDATE targets SET status = 'promoted', crm_id = ?, last_accessed_at = ? WHERE id = ?`)
@@ -279,7 +290,7 @@ function updateRetest(id, { status = null, patternsTried = null, nextPattern = n
 
 module.exports = {
   init, close,
-  createTarget, getTarget, listTargets, promoteTarget,
+  createTarget, getTarget, listTargets, promoteTarget, findTargetByEmail,
   addObservation, listObservations,
   upsertBelief, getBelief, listBeliefs,
   getPatternState, savePatternState,

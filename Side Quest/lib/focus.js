@@ -35,7 +35,14 @@ const memoryLib = require('./memory');
 const MAX_TICKS = 8;                       // a focus gets at most this many ticks
 const MAX_STRIKES = 3;                     // consecutive no-progress ticks → stall
 const MAX_WALLCLOCK_MS = 10 * 60 * 1000;   // and at most ten minutes of wall-clock
-const FOCUS_STATE_KEY = 'focus_state';     // meta JSON: { id, ticks, strikes, startedTs }
+// DIRECTED focus = a task Lucas explicitly assigned ("spend the night studying every think tank").
+// The tiny self-spawned caps above are wrong for it: he WANTS hours of sustained work. Directed
+// focuses get overnight-scale caps (still bounded — loop safety never goes away: strikes/stuck/
+// wall-clock all still apply, just sized for a real project instead of a 10-minute musing).
+const MAX_TICKS_DIRECTED = 2000;                    // ceiling; a 45s driver cadence ⇒ ~hundreds/night
+const MAX_STRIKES_DIRECTED = 12;                    // tolerant of a few hard sub-steps, still bounded
+const MAX_WALLCLOCK_MS_DIRECTED = 14 * 60 * 60 * 1000; // ~one night
+const FOCUS_STATE_KEY = 'focus_state';     // meta JSON: { id, ticks, strikes, startedTs, directed }
 const CURRENT_KEY = 'current_focus_id';
 const REFRACTORY_MS = 24 * 60 * 60 * 1000; // a just-closed focus can't respawn for 24h
 const SIM_THRESHOLD = 0.82;                // semantic similarity that counts as "the same focus"
@@ -62,15 +69,52 @@ function getCurrent() {
 
 function isActive() { return !!getCurrent(); }
 
-// Promote an existing open_thread to the current focus.
-function setCurrent(threadId) {
+// Promote an existing open_thread to the current focus. opts.directed marks it as a Lucas-assigned
+// task (overnight caps + driven by the directed-focus driver in main.js rather than the monologue).
+function setCurrent(threadId, { directed = false } = {}) {
   const t = db.getOpenThread(threadId);
   if (!t) return null;
   db.setMeta(CURRENT_KEY, String(threadId));
-  _saveState({ id: threadId, ticks: 0, strikes: 0, startedTs: Date.now() });
+  _saveState({ id: threadId, ticks: 0, strikes: 0, startedTs: Date.now(), directed: !!directed });
   db.touchOpenThread(threadId);  // pending → active
   try { blackboard.append({ source: 'monologue', kind: 'focus_set', focusId: threadId, content: t.content }); } catch {}
   return db.getOpenThread(threadId);
+}
+
+// Is the currently-served focus a Lucas-assigned (directed) task? Reads the per-run state, so it's
+// true only while that directed focus is the active pointer.
+function isDirected(focus) {
+  if (!focus) return false;
+  const s = _loadState();
+  return !!(s && s.id === focus.id && s.directed);
+}
+
+// Create a DIRECTED focus straight from a user instruction (the chat entry-point the focus system
+// was missing). Unlike setFromText this does NOT require an explicit <focus> tag and does NOT honor
+// the 24h refractory — Lucas explicitly assigned it, so his word overrides the anti-thrash gate. A
+// directed assignment DISPLACES a self-spawned musing focus (user priority > her own wandering), but
+// is idempotent against an already-active directed focus on a near-identical goal (a follow-up like
+// "start now" must not spawn a duplicate). Returns { focus, goal } or null.
+async function setFromDirective(goal, sourceTurnId = null) {
+  const g = String(goal || '').trim();
+  if (g.length < 6) return null;
+  const active = getCurrent();
+  if (active) {
+    if (isDirected(active)) {
+      // already running a directed task — only keep the SAME one (avoid duplicates on follow-ups)
+      const asig = blackboard.signature(active.content || '');
+      const gsig = blackboard.signature(g);
+      if (asig && gsig && (asig.includes(gsig) || gsig.includes(asig))) { db.touchOpenThread(active.id); return { focus: active, goal: active.content }; }
+      // a genuinely different directed task supersedes the old one (user changed the assignment)
+      clear('superseded-by-new-directive');
+    } else {
+      clear('displaced-by-directive');  // user task outranks a self-spawned musing
+    }
+  }
+  const row = db.insertOpenThread({ content: g, sourceTurnId });
+  const focus = setCurrent(row.id, { directed: true });
+  console.log(`[focus] DIRECTED set from user → #${row.id}: ${g.slice(0, 80)}`);
+  return { focus, goal: g };
 }
 
 function clear(reason = null) {
@@ -193,10 +237,13 @@ function recordOutcome(focus, { progressed = false, control = null } = {}) {
   const st = stuck.check({ focusId: focus.id });
   if (st.stuck) return _close(focus, 'stalled', `stuck:${st.scenario}`);
 
-  // hard caps
-  if (Date.now() - state.startedTs > MAX_WALLCLOCK_MS) return _close(focus, 'stalled', 'wall-clock cap');
-  if (state.ticks >= MAX_TICKS) return _close(focus, 'stalled', 'tick cap');
-  if (state.strikes >= MAX_STRIKES) return _close(focus, 'stalled', 'no-progress strikes');
+  // hard caps — overnight-scale for a Lucas-assigned (directed) task, tight for a self-spawned musing
+  const maxWall = state.directed ? MAX_WALLCLOCK_MS_DIRECTED : MAX_WALLCLOCK_MS;
+  const maxTicks = state.directed ? MAX_TICKS_DIRECTED : MAX_TICKS;
+  const maxStrikes = state.directed ? MAX_STRIKES_DIRECTED : MAX_STRIKES;
+  if (Date.now() - state.startedTs > maxWall) return _close(focus, 'stalled', 'wall-clock cap');
+  if (state.ticks >= maxTicks) return _close(focus, 'stalled', 'tick cap');
+  if (state.strikes >= maxStrikes) return _close(focus, 'stalled', 'no-progress strikes');
 
   _saveState(state);
   return { action: 'continue', reason: progressed ? 'progressed' : `strike ${state.strikes}/${MAX_STRIKES}` };
@@ -224,8 +271,10 @@ function _close(focus, status, reason) {
 }
 
 module.exports = {
-  getCurrent, isActive, setCurrent, clear,
+  getCurrent, isActive, setCurrent, isDirected, setFromDirective, clear,
   setFromText, recentlyTombstoned, stripControlTags, parseControlTags,
   isNovel, recordOutcome,
-  MAX_TICKS, MAX_STRIKES, MAX_WALLCLOCK_MS, REFRACTORY_MS, SIM_THRESHOLD
+  MAX_TICKS, MAX_STRIKES, MAX_WALLCLOCK_MS,
+  MAX_TICKS_DIRECTED, MAX_STRIKES_DIRECTED, MAX_WALLCLOCK_MS_DIRECTED,
+  REFRACTORY_MS, SIM_THRESHOLD
 };

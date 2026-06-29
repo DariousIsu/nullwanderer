@@ -5,7 +5,7 @@
  *
  * Run: node scripts/smoke_snapback.js
  */
-const { detectHardPull, pickBusyLine, BUSY_LINES } = require('../lib/snapback');
+const { detectHardPull, pickBusyLine, pickWorkingLine, BUSY_LINES, TASK_WORKING_LINES } = require('../lib/snapback');
 
 let pass = 0, fail = 0;
 function ok(name, cond, detail = '') {
@@ -50,6 +50,16 @@ ok('busy line is a non-empty string', typeof pickBusyLine(0) === 'string' && pic
 ok('busy picker wraps the array', pickBusyLine(BUSY_LINES.length) === pickBusyLine(0));
 ok('busy picker varies by seed', pickBusyLine(0) !== pickBusyLine(1));
 ok('busy picker tolerates junk seed', typeof pickBusyLine(undefined) === 'string');
+
+// --- working-line picker (request-serving placeholder, NOT the self-focused busy line) ---
+ok('working line is a non-empty string', typeof pickWorkingLine(0) === 'string' && pickWorkingLine(0).length > 0);
+ok('task working line affirms she is ON IT (not "in the middle of something")',
+  /\bon (it|this)|starting on that|got it\b/i.test(pickWorkingLine(0, { task: true })));
+ok('task working line is one of the assignment-grade lines', TASK_WORKING_LINES.includes(pickWorkingLine(0, { task: true })));
+ok('a working line never reuses the self-focused "middle of something" brush-off',
+  !/middle of something|chasing a thought/i.test(pickWorkingLine(0, { task: true })) &&
+  !/middle of something|chasing a thought/i.test(pickWorkingLine(0, { task: false })));
+ok('working picker tolerates junk seed', typeof pickWorkingLine(undefined, { task: true }) === 'string');
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

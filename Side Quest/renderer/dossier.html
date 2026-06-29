@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Puller</title>
+<style>
+/* === Puller surface — canonical dark kit (mirrors creator/reader/crm) ====================== */
+:root{
+  --bg:#0d0d10;--bg-deep:#0a0a0d;--bg-panel:#121218;--bg-raised:#1a1a20;
+  --line-faint:#15151a;--line:#1f1f24;--line-strong:#2a2a30;--line-hover:#4a4a52;
+  --tx:#e8e8eb;--tx-soft:#d8d8db;--tx-muted:#9a9aa3;--tx-dim:#6a6a73;--tx-fainter:#4a4a52;
+  --accent:#6a86b6;--info-fg:#9ab2cc;--ok-fg:#a8d8a8;--warn-fg:#d8c79a;--bad-fg:#d8a0a0;
+  --r-sm:3px;--r:4px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;background:var(--bg);color:var(--tx-soft);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Inter",system-ui,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;}
+[hidden]{display:none !important;}
+.studio{height:100vh;display:flex;flex-direction:column;overflow:hidden;}
+.studio-head{flex-shrink:0;display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--line-faint);}
+.studio-mark{font-size:16px;color:var(--tx-dim);}
+.studio-title{font-size:10px;letter-spacing:0.2em;text-transform:uppercase;color:var(--tx-muted);}
+.studio-sub{font-size:11px;color:var(--tx-fainter);}
+.spacer{flex:1;}
+.btn{background:transparent;border:1px solid var(--line-strong);color:var(--tx-muted);font:inherit;font-size:12px;letter-spacing:0.03em;padding:6px 12px;border-radius:var(--r-sm);cursor:pointer;transition:border-color 150ms,color 150ms;white-space:nowrap;}
+.btn:hover{border-color:var(--line-hover);color:var(--tx-soft);}
+
+.main{flex:1;display:flex;min-height:0;}
+
+/* ---- target list (left) ---- */
+.tlist{width:264px;flex-shrink:0;border-right:1px solid var(--line);display:flex;flex-direction:column;background:var(--bg-deep);}
+.tlist-head{flex-shrink:0;padding:10px 14px;font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--tx-fainter);border-bottom:1px solid var(--line-faint);display:flex;align-items:center;}
+.tlist-head .count{margin-left:auto;color:var(--tx-dim);}
+.tfilter{flex-shrink:0;display:flex;gap:6px;padding:8px 10px;border-bottom:1px solid var(--line-faint);}
+.tfilter input{flex:1;min-width:0;background:var(--bg-deep);border:1px solid var(--line-strong);color:var(--tx-soft);font:inherit;font-size:12px;padding:5px 8px;border-radius:var(--r-sm);outline:none;}
+.tfilter input:focus{border-color:var(--accent);}
+.tfilter select{background:var(--bg-deep);border:1px solid var(--line-strong);color:var(--tx-soft);font:inherit;font-size:11px;padding:5px 6px;border-radius:var(--r-sm);outline:none;}
+.tlist-scroll{flex:1;overflow-y:auto;}
+.titem{display:flex;flex-direction:column;gap:2px;padding:9px 14px;border-left:2px solid transparent;border-bottom:1px solid var(--line-faint);cursor:pointer;}
+.titem:hover{background:var(--bg-panel);}
+.titem.active{background:var(--bg-panel);border-left-color:var(--accent);}
+.titem .nm{font-size:13px;color:var(--tx-soft);font-weight:600;}
+.titem .meta{font-size:11px;color:var(--tx-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.titem .pill{font-size:9px;letter-spacing:0.06em;text-transform:uppercase;padding:1px 5px;border-radius:3px;border:1px solid var(--line-strong);color:var(--tx-fainter);align-self:flex-start;}
+.titem .pill.promoted{color:var(--ok-fg);border-color:var(--accent-soft,#3a4a66);}
+
+/* ---- dossier (right) ---- */
+.dossier{flex:1;overflow-y:auto;min-width:0;}
+.scroll::-webkit-scrollbar,.tlist-scroll::-webkit-scrollbar,.dossier::-webkit-scrollbar{width:8px;}
+.dossier::-webkit-scrollbar-thumb,.tlist-scroll::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:4px;}
+.wrap{max-width:880px;margin:0 auto;padding:26px 36px 80px;}
+
+.identity{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:4px;}
+.identity h1{font-size:24px;font-weight:600;color:var(--tx);}
+.identity .sub{font-size:13px;color:var(--tx-muted);}
+.identity .status{font-size:10px;letter-spacing:0.1em;text-transform:uppercase;padding:2px 7px;border-radius:3px;border:1px solid var(--line-strong);color:var(--tx-fainter);}
+.identity .status.promoted{color:var(--ok-fg);border-color:#3a4a66;}
+.idline{font-size:12px;color:var(--tx-dim);margin-bottom:14px;}
+
+/* qualification badge (axis-1, what gets sent) + action bar */
+.qual{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:var(--r);background:var(--bg-panel);margin-bottom:14px;}
+.qual .qgrade{font-size:11px;letter-spacing:0.08em;text-transform:uppercase;font-weight:700;padding:2px 8px;border-radius:3px;border:1px solid var(--line-strong);color:var(--tx-muted);}
+.qual.gA .qgrade{color:var(--ok-fg);border-color:#3a5a3a;} .qual.gB .qgrade{color:var(--info-fg);border-color:var(--accent-soft,#3a4a66);}
+.qual.gC .qgrade{color:var(--warn-fg);} .qual.gD .qgrade,.qual.gE .qgrade{color:var(--tx-dim);}
+.qual.conflict{border-color:#5a3a3a;} .qual.conflict .qgrade{color:var(--bad-fg);border-color:#5a3a3a;}
+.qual .qpct{font-size:18px;font-weight:600;color:var(--tx);} .qual .qval{font-size:13px;color:var(--tx-soft);}
+.qual .qnote{margin-left:auto;font-size:11px;color:var(--tx-fainter);}
+.qual.conflict .qnote{color:var(--bad-fg);}
+.actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:24px;}
+.actions .dedrow{display:flex;align-items:center;gap:6px;margin-left:auto;}
+.actions input{background:var(--bg-deep);border:1px solid var(--line-strong);color:var(--tx-soft);font:inherit;font-size:12px;padding:5px 8px;border-radius:var(--r-sm);outline:none;width:170px;}
+.actions input:focus{border-color:var(--accent);}
+.revact{display:flex;gap:7px;margin-top:8px;}
+
+.sec{margin-bottom:26px;}
+.sec-h{display:flex;align-items:center;gap:8px;font-size:10px;letter-spacing:0.16em;text-transform:uppercase;color:var(--tx-muted);padding-bottom:8px;margin-bottom:10px;border-bottom:1px solid var(--line-faint);}
+.sec-h .n{margin-left:auto;color:var(--tx-fainter);font-size:11px;letter-spacing:0;}
+.empty{color:var(--tx-fainter);font-size:12px;font-style:italic;padding:4px 0;}
+
+/* beliefs */
+.belief{display:flex;align-items:center;gap:12px;padding:7px 0;border-bottom:1px solid var(--line-faint);}
+.belief .ty{width:96px;flex-shrink:0;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:var(--tx-dim);}
+.belief .val{flex:1;color:var(--tx-soft);font-size:13px;word-break:break-word;}
+.belief .conf{width:120px;flex-shrink:0;display:flex;align-items:center;gap:7px;}
+.bar{flex:1;height:5px;background:var(--bg-raised);border-radius:3px;overflow:hidden;}
+.bar > i{display:block;height:100%;background:var(--accent);}
+.conf .pct{font-size:11px;color:var(--tx-muted);width:30px;text-align:right;}
+
+/* domain pattern panel */
+.patgrid{display:flex;flex-direction:column;gap:5px;}
+.pat{display:flex;align-items:center;gap:10px;font-size:12px;}
+.pat .name{width:96px;flex-shrink:0;font-family:ui-monospace,Consolas,monospace;color:var(--tx-soft);}
+.pat.best .name{color:var(--info-fg);font-weight:600;}
+.pat.dead .name{color:var(--tx-fainter);text-decoration:line-through;}
+.pat .bar{max-width:340px;}
+.pat .bar > i{background:var(--tx-dim);}
+.pat.best .bar > i{background:var(--accent);}
+.pat .pct{font-size:11px;color:var(--tx-muted);width:34px;text-align:right;}
+.pat .hm{font-size:10px;color:var(--tx-fainter);width:74px;}
+.catchall{margin-top:8px;font-size:11px;color:var(--warn-fg);}
+
+/* revisions (the gate — read-only in this slice) */
+.rev{background:var(--bg-panel);border:1px solid var(--line);border-left:2px solid var(--warn-fg);border-radius:var(--r);padding:10px 13px;margin-bottom:8px;}
+.rev .hd{font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:var(--tx-muted);margin-bottom:5px;}
+.rev .flip{font-size:13px;color:var(--tx-soft);}
+.rev .flip .from{color:var(--bad-fg);text-decoration:line-through;}
+.rev .flip .to{color:var(--ok-fg);}
+.rev .why{font-size:12px;color:var(--tx-dim);margin-top:4px;}
+.rev .pend{font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--warn-fg);margin-top:6px;}
+
+/* observation timeline */
+.obs{display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--line-faint);}
+.obs .kind{width:78px;flex-shrink:0;font-size:10px;letter-spacing:0.05em;text-transform:uppercase;color:var(--tx-fainter);padding-top:1px;}
+.obs .body{flex:1;min-width:0;}
+.obs .av{font-size:13px;color:var(--tx-soft);}
+.obs .av .a{color:var(--tx-dim);}
+.obs .src{font-size:11px;color:var(--tx-fainter);margin-top:2px;}
+.obs .when{flex-shrink:0;font-size:11px;color:var(--tx-fainter);}
+
+/* retests */
+.rt{display:flex;align-items:center;gap:10px;font-size:12px;padding:6px 0;border-bottom:1px solid var(--line-faint);}
+.rt .who{color:var(--tx-soft);}
+.rt .next{font-family:ui-monospace,Consolas,monospace;color:var(--info-fg);}
+.rt .st{margin-left:auto;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--tx-fainter);}
+
+.placeholder{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--tx-dim);text-align:center;padding:40px;}
+.placeholder .big{font-size:15px;color:var(--tx-muted);}
+.placeholder .small{font-size:12px;color:var(--tx-fainter);max-width:420px;line-height:1.6;}
+</style>
+</head>
+<body>
+  <div class="studio">
+    <header class="studio-head">
+      <span class="studio-mark">&#128269;</span>
+      <span class="studio-title">Puller</span>
+      <span class="studio-sub">Person/org dossiers · evidence → beliefs → revisions</span>
+      <span class="spacer"></span>
+      <span class="studio-sub" id="exportmsg"></span>
+      <button class="btn" id="seed">Seed priors</button>
+      <button class="btn" id="export">Export promoted → Echo</button>
+      <button class="btn" id="refresh">Refresh</button>
+    </header>
+    <div class="main">
+      <aside class="tlist">
+        <div class="tlist-head">Targets <span class="count" id="tcount">0</span></div>
+        <div class="tfilter">
+          <input id="tsearch" type="search" placeholder="search name · company · domain" />
+          <select id="tstatus">
+            <option value="">all</option>
+            <option value="adhoc">ad-hoc</option>
+            <option value="promoted">promoted</option>
+          </select>
+        </div>
+        <div class="tlist-scroll" id="tlist"></div>
+      </aside>
+      <section class="dossier" id="dossier">
+        <div class="placeholder" id="placeholder">
+          <div class="big">No dossier selected</div>
+          <div class="small">Pick a target on the left to see its evidence, derived beliefs, the email-pattern belief distribution, and any revisions awaiting your approval.</div>
+        </div>
+      </section>
+    </div>
+  </div>
+  <script src="dossier.js"></script>
+</body>
+</html>

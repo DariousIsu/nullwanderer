@@ -1,0 +1,125 @@
+/**
+ * research — the DEPTH-FIRST loop logic for a directed research run.
+ *
+ * The first driver was breadth-first + one-and-done: pick an org, ONE pass, next org. Lucas wanted it
+ * to FOLLOW a target until a decent share of the material on it is gathered before moving on, and for
+ * the data to be ORGANIZED with cloud passes as it goes (not only at the end). This module is the pure
+ * brain of that two-level loop: parse a pass's control lines, decide whether to keep deepening the
+ * current target or advance, estimate how much NEW material a pass added, and build the three prompts
+ * (new-target overview / deepen-a-facet / organize-one-target). All I/O (operator + reasoner cloud
+ * calls, file, db) lives in main.js; this stays pure + offline-testable.
+ */
+'use strict';
+
+const MAX_PASSES_PER_TARGET = 6;   // depth cap per org — "a decent percentage", not infinite
+const MIN_NEW_CHARS = 220;         // a deepen pass adding less than this = diminishing returns → advance
+
+// Parse one research pass. The prompts make the operator end with a control line:
+//   TARGET: <org>   (new-target pass)   |   FACET: <what was added>   (deepen pass)
+//   SATURATED       (target well-covered)   |   ALL-COVERED   (whole universe done)
+function parsePass(answer) {
+  const ans = String(answer || '').trim();
+  const allCovered = /\bALL[-\s]?COVERED\b/i.test(ans);
+  const saturated = /\bSATURATED\b/i.test(ans);
+  const tm = ans.match(/^\s*TARGET:\s*(.+?)\s*$/im);
+  const fm = ans.match(/^\s*FACET:\s*(.+?)\s*$/im);
+  const clean = (s) => String(s || '').trim().replace(/[*_#`]/g, '').slice(0, 80);
+  const target = tm ? clean(tm[1]) : '';
+  const facet = fm ? clean(fm[1]) : '';
+  const body = ans
+    .replace(/^\s*(?:TARGET|FACET):.*$/gim, '')
+    .replace(/\bALL[-\s]?COVERED\b/i, '')
+    .replace(/\bSATURATED\b/i, '')
+    // strip any leaked operator control JSON ({"thought":…,"action":…}) so it never reaches the
+    // deliverable file (the line-30 `{"thought":…}` blob misattributing a CEI fact to Heritage).
+    .replace(/\{[^{}]*"(?:thought|action)"[^{}]*\}/gi, '')
+    .trim();
+  return { target, facet, saturated, allCovered, body };
+}
+
+// How much of `body` is genuinely NEW vs what we already gathered for this target — a cheap repeat
+// detector so a pass that just restates known material counts as diminishing returns.
+function newContentChars(existing, body) {
+  const ex = String(existing || '');
+  const segs = String(body || '').split(/[\n.]+/).map(s => s.trim()).filter(s => s.length > 20);
+  if (!ex) return segs.reduce((n, s) => n + s.length, 0);
+  let novel = 0;
+  for (const s of segs) if (!ex.includes(s)) novel += s.length;
+  return novel;
+}
+
+// Stay on the target or advance to the next one. Advance when the model says it's SATURATED, when the
+// depth cap is hit, or when a pass (after the first couple) stops adding meaningful new material.
+function decideAdvance({ passes = 1, newChars = 0, saturated = false, maxPasses = MAX_PASSES_PER_TARGET, minNew = MIN_NEW_CHARS } = {}) {
+  if (saturated) return { advance: true, reason: 'saturated' };
+  if (passes >= maxPasses) return { advance: true, reason: 'pass cap' };
+  if (passes >= 2 && newChars < minNew) return { advance: true, reason: 'diminishing returns' };
+  return { advance: false, reason: 'keep deepening' };
+}
+
+function facetsSummary(facets = []) {
+  const f = (Array.isArray(facets) ? facets : []).filter(Boolean);
+  return f.length ? f.join('; ') : '(nothing yet)';
+}
+
+// --- mid-run CLARIFICATION (Lucas refining the standing task while it runs) -----------------------
+
+// While a directed run is active, decide whether a message is a CLARIFICATION/refinement to fold into
+// the task (vs unrelated chatter). Two triggers: she just asked a question (so this is his answer), or
+// the message carries refinement language. Kept liberal — captured guidance is additive, and the caller
+// already gates on "a directed run is active and this isn't a stop/expand", so it can't run off.
+const REFINE_RE = /\b(also|as well|in addition|additionally|make sure|focus on|prioriti[sz]e|priority|include|exclude|only|don'?t|do not|instead|actually|i want|i'?d like|i need|should|besides|on top of|skip|ignore|add|plus|but also|prefer|narrow|broaden|limit (?:it )?to|make it|as well as|yes|no\b)\b/i;
+function isClarification({ message = '', assistantAskedQuestion = false } = {}) {
+  const s = String(message).trim();
+  if (s.length < 3) return false;
+  return !!assistantAskedQuestion || REFINE_RE.test(s);
+}
+
+// Is the user asking for a STATUS/progress update on the running task? (Concern 1: these were falling
+// to the local voice model, which truncates + lacks the real state — they should be answered by a
+// frontier model reading the actual progress. Caller gates on "a directed run is active".)
+// Broadened (2026-06-29) — the old version missed the most natural phrasings: "How IS the think tank
+// project going?" (needs "how's") and "what is the LIST you've done so far". Three shapes: a how-…-going
+// progress check (handles "how is/are/'s … going/coming/progressing", words between), explicit status
+// words, and a what/which/how-many … done/covered/list enumeration request.
+const STATUS_RE = /(\bhow(?:'?s| is| are| has| have)?\b[^?.!]{0,45}\b(?:go(?:ing|ne)|coming|progress(?:ing)?|along|far)\b)|(\b(?:status|update|progress|so far|fill me in|catch me up|where (?:are|r) (?:you|we|u))\b)|(\b(?:what|which|how many)\b[^?.!]{0,45}\b(?:done|covered|researched|finished|found|the list|a list|list of|organi[sz]ations|think tanks|ones)\b)/i;
+function isStatusRequest(text) { return STATUS_RE.test(String(text || '')); }
+
+// Render the accumulated clarifications as a guidance block injected into every subsequent pass.
+function buildGuidanceBlock(clarifications = []) {
+  const c = (Array.isArray(clarifications) ? clarifications : []).filter(Boolean);
+  if (!c.length) return '';
+  return `ADDITIONAL GUIDANCE FROM LUCAS — incorporate ALL of these into your research from here on (they refine the task):\n${c.map(x => `- ${x}`).join('\n')}`;
+}
+
+// --- the three prompts -------------------------------------------------------
+
+// New-target pass: pick ONE not-yet-done org and establish an overview (deepened over later passes).
+function buildNewTargetPrompt({ goal = '', covered = [], guidance = '' } = {}) {
+  const done = (covered && covered.length)
+    ? `ORGANIZATIONS ALREADY FULLY DOCUMENTED (do NOT pick any of these again):\n${covered.map(c => `- ${c}`).join('\n')}`
+    : 'None documented yet.';
+  const g = guidance ? `\n\n${guidance}` : '';
+  return `You are researching a standing task for Lucas, ONE organization at a time, in DEPTH.\n\nTASK: ${goal}${g}\n\n${done}\n\nTHIS PASS: pick ONE specific organization that fits the task and is NOT already documented, and write an OVERVIEW — full name, what it is, its main focus areas — grounded ONLY in what web_search / browser_read / echo / recall actually return (never invent). You will deepen it (staff, contacts, positions) over the next passes, so just establish it now.\nIf EVERY relevant organization is already documented, reply with exactly ALL-COVERED.\nEnd with a final line: TARGET: <the organization name>`;
+}
+
+// Deepen pass: stay on the current target, pursue the next missing facet, or declare it SATURATED.
+function buildDeepenPrompt({ goal = '', target = '', facets = [], guidance = '' } = {}) {
+  const g = guidance ? `\n${guidance}\n` : '';
+  return `You are DEEP-researching ONE organization for Lucas's task, staying on it until it is well covered.\n\nTASK: ${goal}\nCURRENT ORGANIZATION: ${target}\nFacets already gathered on it: ${facetsSummary(facets)}\n${g}\nTHIS PASS: pursue the NEXT most valuable facet you do NOT yet have on ${target}, in priority order: (1) named leadership & key staff with their roles, (2) direct contact details (work emails, phone numbers, mailing address, key social/LinkedIn) — check the org's own /contact or /about page, (3) detailed policy positions / notable work, (4) funding & affiliations, (5) recent activity / publications. EXHAUST a good source before moving on: when you land on the organization's OWN site, use open_page to go straight into its /team, /leadership, /about and /contact pages (and follow promising links) — do NOT bounce to a fresh web_search until you've actually used the site you're on. Ground EVERY detail in what the tools return — never invent a name, email, or number. If you cannot verify a real, FULL name, write "not found" — NEVER use initials, abbreviations, or any placeholder (e.g. "R. Z." or "VP") in place of a real name.\nIf you have already gathered a solid, well-rounded picture of ${target} (what it is, its people, how to reach it, its positions), reply with exactly SATURATED and nothing else.\nEnd with a final line: FACET: <the facet you added this pass>`;
+}
+
+// Organize pass (reasoner): fold ONE target's accumulated raw passes into a single clean section.
+function buildOrganizeTargetPrompt({ target = '', raw = '' } = {}) {
+  return [
+    { role: 'system', content: `You organize raw research notes on ONE organization into a single clean dossier section. Ground ONLY in the notes — never add a name, email, or number not present; write "not found" for anything missing. NEVER use initials, abbreviations, or a placeholder in place of a real name (e.g. "R. Z." or "P. C." is NOT a name — write "not found" instead). Drop any leaked JSON or tool/control text. Dedupe repeats. Output EXACTLY this Markdown and nothing else:\n## ${target || '<organization>'}\n- **Focus:** …\n- **Key people:** <named individuals with roles, or "not found">\n- **Contact:** <website / email / phone / address / social, or "not found">\n- **Positions / work:** …\n- **Funding & affiliations:** <or "not found">` },
+    { role: 'user', content: `RAW NOTES ON ${target}:\n"""\n${String(raw).slice(0, 16000)}\n"""\n\nProduce the clean section now.` }
+  ];
+}
+
+module.exports = {
+  parsePass, newContentChars, decideAdvance, facetsSummary,
+  isClarification, buildGuidanceBlock, isStatusRequest,
+  buildNewTargetPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt,
+  MAX_PASSES_PER_TARGET, MIN_NEW_CHARS
+};

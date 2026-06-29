@@ -21,7 +21,7 @@ const MAX_WORDS = 120;
 async function _modelGenerate(messages) {
   let out = '';
   await streamChat({
-    model: config.model(),
+    model: config.extractionModel(),
     messages,
     options: { temperature: 0.2, top_p: 0.9, num_ctx: 8192, num_predict: 200 },
     onToken: (t) => { out += t; }

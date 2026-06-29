@@ -114,7 +114,7 @@ function defaultDeps() {
     web: require('./web'),
     files: require('./files'),
     streamChat: require('./ollama').streamChat,
-    MODEL: require('./config').model()
+    MODEL: require('./config').frontModel()
   };
 }
 

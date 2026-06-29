@@ -12,7 +12,7 @@
 const db = require('./db');
 const gm = require('./graph_memory');
 const { streamChat } = require('./ollama');
-const MODEL = require('./config').model();
+const MODEL = require('./config').extractionModel();
 
 const EXTRACT_MIN_GAP_MS = 5 * 60 * 1000;   // at most one extraction per 5 min (bounded cost)
 const MIN_TEXT_LEN = 200;

@@ -1,6 +1,22 @@
 const path = require('path');
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 
+// CRASH SAFETY — before this there were NO global handlers, so any unhandled error/rejection killed
+// her with nothing logged (the meeting crash was invisible for exactly this reason). Log the stack
+// to data/crash.log + console. Policy: KEEP HER ALIVE — for a long-lived companion in testing,
+// staying up with the cause captured beats dying silently (the prior behavior). uncaughtException
+// leaves an undefined state in theory, but that's still strictly better than the hard crash it
+// replaces, and the log gives us the root cause to fix. Tighten to exit-on-uncaught later if needed.
+function logCrash(kind, info) {
+  const detail = (info && info.stack) || (() => { try { return JSON.stringify(info); } catch { return String(info); } })();
+  try { require('fs').appendFileSync(path.join(__dirname, 'data', 'crash.log'), `[${new Date().toISOString()}] ${kind}: ${detail}\n`); } catch {}
+  console.error(`[crash] ${kind}:`, detail);
+}
+process.on('unhandledRejection', (reason) => logCrash('unhandledRejection', reason));
+process.on('uncaughtException', (err) => logCrash('uncaughtException', err));
+app.on('render-process-gone', (_e, _wc, details) => logCrash('render-process-gone', details));
+app.on('child-process-gone', (_e, details) => logCrash('child-process-gone', details));
+
 const db = require('./lib/db');
 const editorRegistry = require('./lib/editor_registry');   // Editor Studio: document registry + lifecycle
 const editorImport = require('./lib/editor_import');         // Editor Studio: normalize-on-import
@@ -21,8 +37,10 @@ const creatorStats = require('./studio/creator_stats');      // Creator clinical
 const creatorProofread = require('./studio/creator_proofread'); // Creator clinical panel: caged proofread leaf (spelling/grammar/style)
 const creatorSources = require('./studio/creator_sources');     // Creator clinical panel: external (web/academic) classifier — reused by research
 const creatorResearch = require('./studio/creator_research');   // Creator clinical panel: entity research + cloud writing-advisor
+const pullerIpc = require('./lib/puller_ipc');               // Puller suite: dossier IPC + aggregator (Slice 1, read-only)
+pullerIpc.register(ipcMain);                                 // registers puller:list-targets / puller:get-dossier + inits data/puller.db
 const modelsLib = require('./lib/models');                   // model sources (cloud frontier + local) resolver
-const { streamChat, complete, TagStreamParser } = require('./lib/ollama');
+const { streamChat, complete, TagStreamParser, sweepLoaded } = require('./lib/ollama');
 const { buildChatPrompt, buildAwarenessBlock } = require('./lib/context');
 const {
   startReflectionScheduler,
@@ -41,7 +59,7 @@ const {
   isBusy: monologueBusy,
   markUserActivity: markMonologueActivity
 } = require('./lib/monologue');
-const { detectHardPull, pickBusyLine } = require('./lib/snapback');
+const { detectHardPull } = require('./lib/snapback');
 const {
   startHeartbeatScheduler,
   stopHeartbeatScheduler,
@@ -94,6 +112,7 @@ const actionLoop = require('./lib/action_loop');
 const experience = require('./lib/experience');
 const blackboard = require('./lib/blackboard');
 const curatorLib = require('./lib/curator');
+const cloudCurator = require('./lib/cloud_curator');
 const gapsLib = require('./lib/gaps');
 const webLib = require('./lib/web');
 const {
@@ -105,7 +124,7 @@ const {
 } = require('./lib/continuity');
 const selfDialogue = require('./lib/self_dialogue');
 
-const MODEL = config.model();
+const MODEL = config.frontModel();   // her VOICE model (front); cognition/extraction may differ
 const RECENT_TURN_LIMIT = 14;
 const RECENT_REFLECTION_LIMIT = 5;
 const DISPLAY_HISTORY_LIMIT = 50;
@@ -236,6 +255,64 @@ app.whenReady().then(() => {
   // Keep pruning spiral/junk during long sessions (write-time guard catches most; this
   // sweeps anything that slips through, e.g. junk readings from tool output).
   setInterval(() => { try { curatorLib.curateMonologue(); } catch (e) { console.error('[main] periodic curateMonologue failed:', e.message); } }, 20 * 60 * 1000).unref?.();
+
+  // DAILY CURATION PASS (gated, default OFF). The cloud_curator orchestrator — quarantine prune +
+  // cloud near-dup/self-evo merge + graph adjudication — once per ~20h, ONLY when she's been idle
+  // (not mid-conversation) and ONLY when ZOE_CURATION_ENABLED is set. Runs in THIS process (the
+  // app's own db connection → no WAL contention) and backs up first (rotating single file), so a
+  // pass is reversible. Cloud stages fail-safe to no-ops if the tier is unreachable.
+  // Cadence tunable via env (production defaults; lower for a testing window).
+  const CURATION_MIN_GAP_MS = (parseFloat(process.env.ZOE_CURATION_MIN_GAP_HRS) || 20) * 60 * 60 * 1000;
+  const CURATION_IDLE_MS = (parseFloat(process.env.ZOE_CURATION_IDLE_MIN) || 15) * 60 * 1000;
+  const CURATION_CHECK_MS = (parseFloat(process.env.ZOE_CURATION_CHECK_MIN) || 30) * 60 * 1000;
+  let curationRunning = false;
+  // Timestamped backup before each pass, keeping only the most recent 5 (so an unattended bad
+  // pass can't erase the good recovery point the way a single overwritten file would).
+  const curationBackup = () => {
+    const fs = require('fs');
+    db.getDb().pragma('wal_checkpoint(TRUNCATE)');                 // fold WAL → a single-file snapshot is complete
+    const d = new Date(), p = (n) => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+    fs.copyFileSync(db.DB_PATH, `${db.DB_PATH}.precuration_${stamp}`);
+    try {
+      const dir = path.dirname(db.DB_PATH), pre = path.basename(db.DB_PATH) + '.precuration_';
+      const baks = fs.readdirSync(dir).filter((f) => f.startsWith(pre)).sort();
+      for (const old of baks.slice(0, -5)) { try { fs.unlinkSync(path.join(dir, old)); } catch {} }
+    } catch {}
+  };
+  // Perception beat: leave a first-person note in the sheep panel of what the pass tidied, so the
+  // pass is observable (not silent console) and she's aware she consolidated.
+  const curationBeat = (stages) => {
+    const parts = [];
+    if (stages.nearDup && stages.nearDup.collapsed) parts.push(`folded ${stages.nearDup.collapsed} near-duplicate notes together`);
+    if (stages.selfEvo && stages.selfEvo.collapsed) parts.push(`consolidated ${stages.selfEvo.collapsed} repeated self-notes`);
+    if (stages.quarantine && stages.quarantine.removed) parts.push(`cleared ${stages.quarantine.removed} stale markers`);
+    if (stages.graph && stages.graph.rejected) parts.push(`retired ${stages.graph.rejected} stale proposals`);
+    const text = parts.length
+      ? `[Memory consolidation] I took a moment to tidy my memory — ${parts.join(', ')}. It feels a little clearer.`
+      : `[Memory consolidation] I looked over my memory for clutter; nothing needed tidying this time.`;
+    try {
+      const row = db.insertMonologue({ content: text, model: 'curation', type: 'reading' });
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
+    } catch (e) { console.error('[curation] beat failed:', e.message); }
+  };
+  const maybeRunCuration = async () => {
+    if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_CURATION_ENABLED || '').trim())) return;
+    if (curationRunning) return;
+    if (Date.now() - parseInt(db.getMeta('last_curation_pass_at') || '0', 10) < CURATION_MIN_GAP_MS) return;
+    if (Date.now() - lastUserTurnTs < CURATION_IDLE_MS) return;    // not while recently active
+    try { curationBackup(); } catch (e) { console.error('[curation] backup failed — skipping pass:', e.message); return; }
+    curationRunning = true;
+    db.setMeta('last_curation_pass_at', String(Date.now()));       // claim the slot before running
+    console.log('[curation] starting daily pass…');
+    try {
+      const r = await cloudCurator.runDailyPass({ apply: true, onLog: (m) => console.log('[curation]', m) });
+      console.log('[curation] pass complete:', JSON.stringify(r.stages));
+      curationBeat(r.stages);
+    } catch (e) { console.error('[curation] pass failed:', e.message); }
+    finally { curationRunning = false; }
+  };
+  setInterval(() => { maybeRunCuration().catch(() => {}); }, CURATION_CHECK_MS).unref?.();
   // Episodic recall backfill: embed past turns lacking an embedding so "what did we say earlier
   // about X" works over EXISTING history too. The one-shot 300 left ~half of turns unembedded
   // (episodic recall was blind to old history); DRAIN it in bounded batches until caught up, paced
@@ -265,6 +342,9 @@ app.whenReady().then(() => {
   const ECHO_CWD = process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo';
   const echoCfg = readEchoConfig(ECHO_CWD);
   echoSuit = echoSuitLib.createSuit({ client: require('./lib/echo').fromEnv({ url: echoCfg.url, token: echoCfg.token }) });
+  // Register this connected suit as the live singleton so active_recall can query the master DB
+  // (search_knowledge) through the SAME connection — automatic recall, not just her explicit tags.
+  try { echoSuitLib.setLiveSuit(echoSuit); } catch {}
   // Spawn path uses Echo's OWN venv interpreter by default (its deps aren't on bare `python`);
   // ECHO_PYTHON env still overrides. The adopt path doesn't touch this.
   const ECHO_PYTHON = process.env.ECHO_PYTHON || path.join(ECHO_CWD, '.venv', 'Scripts', 'python.exe');
@@ -317,6 +397,10 @@ app.whenReady().then(() => {
     const downtimeLib = require('./lib/downtime');
     const dt = downtimeLib.recordBoot();
     if (dt) console.log(`[main] downtime: offline ~${downtimeLib.formatGap(dt.ms)}${dt.graceful ? '' : ' (unclean stop)'}`);
+    // Reawaken bridge (self-awareness Layer 5): compose "where we left off" from the prior session
+    // BEFORE the heartbeat overwrites the gap, so she wakes up continuous, not cold.
+    try { const rb = require('./lib/reawaken').recordBoot({ gapMs: dt ? dt.ms : null }); if (rb) console.log('[main] reawaken bridge composed'); }
+    catch (e) { console.error('[main] reawaken init failed:', e.message); }
     downtimeLib.startHeartbeat();
   } catch (e) { console.error('[main] downtime init failed:', e.message); }
   // Capability self-check at boot — a cheap model-free sweep so there's always a fresh
@@ -328,22 +412,30 @@ app.whenReady().then(() => {
   } catch (e) { console.error('[main] self-check at boot failed:', e.message); }
   createWindow();
 
-  // Warm the single Dans-24B model at boot. One model now serves both chat and
-  // the between-turn monologue. Mistral-3 arch unlocks KV-cache quantization
-  // (set OLLAMA_FLASH_ATTENTION=1 + OLLAMA_KV_CACHE_TYPE=q8_0 in env), which keeps
-  // 24B Q4 + 16K context comfortably inside the RX 7900 XT's ~18GB usable VRAM.
-  fetch('http://localhost:11434/api/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: MODEL,
-      messages: [{ role: 'user', content: 'ping' }],
-      stream: false,
-      keep_alive: '24h',
-      options: { num_predict: 1, num_ctx: 8192 }
-    })
-  }).then(() => console.log('[main] model warmed at 8192 ctx:', MODEL))
-    .catch(err => console.error('[main] model warmup failed:', err.message));
+  // BOOT HOUSEKEEPING: a model pinned by keep_alive from a PRIOR run (e.g. the old front model after
+  // a swap, or a leftover extraction model) squats VRAM and collides with the current front — loads
+  // time out and replies hang ("call goes nowhere"). Sweep any stale BIG resident that isn't the
+  // front, THEN warm the front into the freed VRAM. Embeddings/tiny models are left alone.
+  // Warm the single Dans-24B model at boot. One model now serves both chat and the between-turn
+  // monologue. Mistral-3 arch unlocks KV-cache quantization (OLLAMA_FLASH_ATTENTION=1 +
+  // OLLAMA_KV_CACHE_TYPE=q8_0), keeping 24B Q4 + 16K ctx inside the RX 7900 XT's ~18GB usable VRAM.
+  sweepLoaded({ keep: [MODEL], minVramBytes: 2e9 })
+    .then(swept => { if (swept.length) console.log('[boot] swept stale resident model(s):', swept.join(', ')); })
+    .catch(() => {})
+    .finally(() => {
+      fetch('http://localhost:11434/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: MODEL,
+          messages: [{ role: 'user', content: 'ping' }],
+          stream: false,
+          keep_alive: '24h',
+          options: { num_predict: 1, num_ctx: 8192 }
+        })
+      }).then(() => console.log('[main] model warmed at 8192 ctx:', MODEL))
+        .catch(err => console.error('[main] model warmup failed:', err.message));
+    });
   startReflectionScheduler({
     getSessionId: () => currentSessionId,
     getWindow: () => mainWindow
@@ -375,6 +467,14 @@ app.whenReady().then(() => {
       maybeHeartbeat().catch(err => console.error('[main] scheduler heartbeat kick failed:', err.message));
     }
   });
+
+  // Resume an overnight DIRECTED focus across a restart: if a Lucas-assigned task was still active
+  // when the app last closed, pick it back up so the work continues through the night uninterrupted.
+  try {
+    const focusLib = require('./lib/focus');
+    const f = focusLib.getCurrent();
+    if (f && focusLib.isDirected(f)) { startDirectedFocusDriver(); console.log(`[directed] resumed standing focus #${f.id} after restart`); }
+  } catch (e) { console.error('[main] directed-focus resume failed:', e.message); }
 
   // Email: surface a credential problem early rather than at first send.
   if (emailLib.isConfigured()) {
@@ -1431,7 +1531,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     try { interruptMonologue(); } catch {}
     pulledFromThought = true;
   } else if (channel !== 'discord' && monologueBusy()) {
-    try { sendBusy(pickBusyLine(Date.now())); } catch {}
+    // RESPONSIVENESS: a normal message used to let the in-flight thought finish before
+    // her reply got the model — that wait IS the 25-40s reply latency (Ollama serializes
+    // on one local model). Hard-interrupt it now so the reply gets the model immediately.
+    // A between-turn musing is not precious; losing it is the right trade for a fast reply.
+    try { interruptMonologue(); } catch {}
+    // NO busy-line placeholder here. It was a leftover from the old "let the thought finish,
+    // queue a placeholder, then reply" design — but monologueBusy() is true ~70% of idle time
+    // (10s tick, multi-second thoughts), so a "hold on, I'm deep in something" line fired on
+    // nearly every message arriving after a lull (the memory-calibration "welcome back" case),
+    // reading as constant evasion + a double-reply. We now interrupt and answer NOW, so there is
+    // no wait to apologize for. The genuine long-wait placeholder lives on the operator path only.
   }
 
   const sessionId = currentSessionId;
@@ -1483,6 +1593,31 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   } catch (e) { console.error('[recorder] interceptor failed:', e.message); }
   // === END RECIPE RECORDER INTERCEPTOR ===
 
+  // === SCREEN-SIGHT INTERCEPTOR ===
+  // "can you see my screen / the picture on my screen" → capture + describe + answer in ONE
+  // response, instead of a wasted "I'll use the tool" turn followed 40s later by the description
+  // (the slow, split, "no response" feel in the logs). Deterministic: the 24B confabulates sight
+  // ("I can see it") rather than reliably looking, so we look FOR her. Skips when an image is
+  // attached (that's the normal vision-in path, not the screen).
+  try {
+    const hasImageAtt = Array.isArray(attachments) && attachments.some(a => a && (a.image || /^image\//.test(a.mime || '')));
+    if (!hasImageAtt && screenLib.detectScreenSightRequest && screenLib.detectScreenSightRequest(userMessage)) {
+      const siUser = db.getMeta('user_name') || 'Lucas';
+      db.setMeta('last_ai_utterance_at', String(Date.now()));
+      resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
+      const cap = await screenLib.capture();
+      if (cap && cap.ok && cap.base64) {
+        await seeImage({ io, channel, sessionId, userName: siUser, base64: cap.base64, label: `${siUser}'s screen`,
+          question: 'This is a screenshot of the whole screen. Describe what is visible — especially any image or photo on it — concretely and specifically.', surface: 'screen-see' });
+      } else {
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You tried to look at ${siUser}'s screen but couldn't capture it (${cap && cap.reason}). Tell him plainly you couldn't see it this time — don't pretend you did.]` }); } catch {}
+      }
+      console.log(`[main] screen-sight interceptor → ${cap && cap.ok ? 'captured + described' : 'FAIL ' + (cap && cap.reason)}`);
+      return { ok: true, screenSight: true, say: null };
+    }
+  } catch (e) { console.error('[main] screen-sight interceptor failed:', e.message); }
+  // === END SCREEN-SIGHT INTERCEPTOR ===
+
   // GOOGLE MEET — a meet.google.com link from Lucas means "join this". Start the
   // join → mandatory-intro → observe stepper (advances in the idle loop). The normal
   // turn still runs so she acknowledges.
@@ -1498,13 +1633,66 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // captions on → follow the live caption stream, advanced in the idle loop). Requires an
   // explicit watch verb so a YouTube link merely referenced isn't auto-watched; a live
   // meeting takes precedence. The normal turn still runs so she acknowledges.
+  let mediaWatchNote = null;   // set when a watch actually starts → she acknowledges accurately (vs the honesty guard)
   try {
     const mediaCcLib = require('./lib/media_cc');
-    if (!mediaCcLib.active() && !require('./lib/gmeet').active() && /\b(watch|play|put on|stream)\b/i.test(userMessage)) {
-      const mediaUrl = mediaCcLib.detectMediaUrl(userMessage);
-      if (mediaUrl) { mediaCcLib.start(mediaUrl); console.log(`[main] media watch started: ${mediaUrl}`); }
+    const uName = db.getMeta('user_name') || 'Lucas';
+    if (!mediaCcLib.active() && !require('./lib/gmeet').active()) {
+      // (a) direct link + watch verb → watch it
+      if (/\b(watch|play|put on|stream)\b/i.test(userMessage)) {
+        const mediaUrl = mediaCcLib.detectMediaUrl(userMessage);
+        if (mediaUrl) {
+          mediaCcLib.start(mediaUrl);
+          mediaWatchNote = `[You are now opening ${mediaUrl} in your own browser with captions ON. Tell ${uName} you're putting it on now; you'll follow the captions live as it plays. Do NOT invent what happens — just acknowledge you're starting it.]`;
+          console.log(`[main] media watch started: ${mediaUrl}`);
+        }
+      }
+      // (b) NO link — "pull up / find clips of X on youtube": search YouTube, watch the top clip
+      if (!mediaCcLib.active()) {
+        const swQuery = mediaCcLib.detectSearchWatch(userMessage);
+        if (swQuery) {
+          const r = await mediaCcLib.findAndStart({ query: swQuery, deps: { search: require('./lib/web_search').search } });
+          if (r.ok) {
+            mediaWatchNote = `[You just searched YouTube for "${swQuery}" and are opening the top clip (${r.url}) in your own browser with captions ON. Tell ${uName} you're pulling it up now; you'll follow the captions live as it plays. Do NOT invent scenes or dialogue — just acknowledge you're starting it.]`;
+            console.log(`[main] search-and-watch started: "${swQuery}" → ${r.url}`);
+          } else {
+            mediaWatchNote = `[You tried to find "${swQuery}" on YouTube but couldn't get a usable clip link (${r.reason}). Tell ${uName} plainly you couldn't pull one up; ask him to paste a link, or offer to talk about it from what you actually know. Do NOT pretend you watched anything.]`;
+            console.log(`[main] search-and-watch found nothing for "${swQuery}" (${r.reason})`);
+          }
+        }
+      }
     }
-  } catch (e) { console.error('[main] media watch detect failed:', e.message); }
+  } catch (e) { console.error('[main] media watch/search detect failed:', e.message); }
+
+  // LISTEN (audio via Echo transcription) — "listen to me / transcribe this call": start an Echo
+  // capture (mic by default; loopback for a call/video). "stop listening" stops + transcribes +
+  // feeds the transcript back so she responds to what was ACTUALLY said. Record→stop→transcribe
+  // (not live). Fail-safe: Echo down / no transcript → honest note, never fabrication.
+  let listenNote = null;
+  try {
+    const listenLib = require('./lib/listen');
+    const uName = db.getMeta('user_name') || 'Lucas';
+    const echoDispatch = (t) => echoSuit.dispatch(t);
+    if (listenLib.active() && listenLib.detectStop(userMessage)) {
+      const r = await listenLib.stop({ deps: { dispatch: echoDispatch } });
+      if (r.ok && r.ready && r.transcript) {
+        listenNote = `[You were listening; Echo transcribed what was just said:\n${r.transcript}\n\nRespond to ${uName} about it in your own voice — this is real, you actually captured it. Don't add anything that isn't in the transcript.]`;
+      } else if (r.ok) {
+        listenNote = `[You stopped listening, but Echo is still transcribing — no lines back yet. Tell ${uName} you've got the recording and it's still processing; you'll have what was said shortly. Do NOT invent the content.]`;
+      } else {
+        listenNote = `[You tried to stop/transcribe but Echo couldn't return a transcript (${r.reason}). Tell ${uName} plainly; don't make up what was said.]`;
+      }
+      console.log(`[main] listen stop → ${r.ok ? (r.ready ? r.segments.length + ' segments' : 'pending') : 'FAIL ' + r.reason}`);
+    } else if (!listenLib.active()) {
+      const st = listenLib.detectStart(userMessage);
+      if (st && echoSuit) {
+        const r = await listenLib.start({ source: st.source, deps: { dispatch: echoDispatch } });
+        if (r.ok) listenNote = `[You are now LISTENING via Echo (${st.source === 'loopback' ? 'system/loopback audio' : 'your mic'}). Tell ${uName} you're listening and to say "stop listening" when done — the transcript comes when you stop. Do NOT make up what you hear in the meantime.]`;
+        else listenNote = `[You tried to start listening but Echo couldn't begin a capture (${r.reason}). Tell ${uName} plainly you couldn't start it right now.]`;
+        console.log(`[main] listen start (${st.source}) → ${r.ok ? 'session ' + r.sessionId : 'FAIL ' + r.reason}`);
+      }
+    }
+  } catch (e) { console.error('[main] listen detect failed:', e.message); }
 
   // BYLINE START — "write/publish a post about X" kicks off her autonomous byline
   // pipeline (research→read→write→publish, advanced one stage per idle tick). Side
@@ -1590,7 +1778,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // Mirrors the protocol interceptor + the email reply-intent trigger.
   try {
     const webIntent = detectWebIntent(userMessage);
-    if (webIntent) {
+    // Don't WIPE an already-open browser on a bare "open a browser" with no destination — a mention
+    // shouldn't reset her page to the DDG home. Only act on a bare-open when nothing's open yet.
+    if (webIntent && webIntent.bare && webLib.isConnected()) {
+      console.log('[web-intent] bare open ignored — browser already open, not resetting to search home');
+    } else if (webIntent) {
       const o = await webLib.open(webIntent.target);
       let resultText;
       if (o.ok) {
@@ -1788,7 +1980,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // of reciting goals/professionalism at him. Her threads still drive her idle loop + tools;
   // they just stop colonizing a warm "how are you". (Root cause of the corporate-reply bug.)
   const socialTurn = isSocialTurn(userMessage);
-  const openThreads = socialTurn ? [] : db.getActiveOpenThreads(3);
+  const openThreads = socialTurn ? [] : db.getActiveOpenThreads(3, { includeStalled: false });  // don't pull parked/stalled threads into chat replies
   // WHERE-WE-ARE (conversation harness, Piece 3): the running summary of this conversation,
   // so she stays on-thread even after raw turns scroll out of the recency window.
   const convoStateBlock = require('./lib/convo_state').buildBlock(sessionId, userName);
@@ -1847,6 +2039,26 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   if (attachmentText) {
     composedUserMessage = `${composedUserMessage}\n\n--- Attachments ---\n${attachmentText}`;
   }
+  // VISION IN — image attachments: actually SEE them via the vision model (cloud-first, local
+  // fallback), then feed what she sees into the turn so she responds to the picture, not its
+  // filename. Awaited (she needs the description to reply); bounded; fail-safe (she says she
+  // couldn't see it rather than pretending).
+  const imageAtts = (Array.isArray(attachments) ? attachments : [])
+    .filter(a => a && (a.image || /^image\//.test(a.mime || '')) && (a.dataUrl || a.base64));
+  if (imageAtts.length) {
+    try {
+      const vision = require('./lib/vision');
+      const seen = [];
+      for (const a of imageAtts.slice(0, 3)) {
+        const r = await vision.describe({ imageBase64: a.dataUrl || a.base64 });
+        seen.push(r.ok
+          ? `[You looked at the image "${a.name || 'image'}" ${userName} sent you. What you actually see: ${r.text}]`
+          : `[${userName} sent an image "${a.name || 'image'}" but you couldn't view it this time (${r.reason}). Tell him plainly you couldn't see it — do not pretend or guess at its contents.]`);
+        console.log(`[main] vision-in "${a.name || 'image'}": ${r.ok ? r.tier + '/' + r.model + ' ok' : 'FAIL ' + r.reason}`);
+      }
+      if (seen.length) composedUserMessage = `${composedUserMessage}\n\n${seen.join('\n\n')}`;
+    } catch (e) { console.error('[main] vision-in failed:', e.message); }
+  }
   // ECHO NUDGE (F1) — when Lucas explicitly invokes the suit / our data ("use the db", "the power
   // suit", "our records/KB/graph", "echo"), bind that to the echo tags right at the message tail
   // (highest recency) so she reaches for Echo instead of defaulting to her web browser (the LAMP →
@@ -1854,6 +2066,30 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   if (echoSuit && echoSuit.connected && ECHO_INVOKE_RE.test(userMessage)) {
     composedUserMessage = `${composedUserMessage}\n\n[You are wearing the Echo suit and ${userName} is asking you to use it / OUR data — not the open web. Do this with your echo tags: <echo-find>what you need</echo-find> then <echo-do name="tool">{json}</echo-do> (or directly if you know the tool). Echo is our knowledge base / entity graph / contacts / bills / the LAMP network. Do NOT use <web-open> for this — that's the open internet, the wrong tool for our data.]`;
   }
+  // RETRIEVE-OR-ADMIT (anti-confabulation) — a personal-fact question ("what's my daughter's
+  // name?") must be answered from real memory or honestly declined, never guessed. She once
+  // fabricated a child's name AND a fake "you just mentioned it" justification. The directive
+  // rides at the message tail (highest recency) and is safe whether or not she holds the fact.
+  let personalFactQ = false;
+  try {
+    const pf = require('./lib/personal_facts');
+    if (pf.detectPersonalFactQuestion(userMessage)) {
+      personalFactQ = true;
+      composedUserMessage = `${composedUserMessage}\n\n${pf.groundingDirective(userName)}`;
+    }
+  } catch (e) { console.error('[main] personal-fact guard failed:', e.message); }
+
+  // SELF-DEV (self-awareness Layer 2) — is Lucas asking about her own development / program /
+  // what's changed? If so, her real changelog gets surfaced below so she answers from fact, not
+  // half-remembered dev-talk. Detected here (cheap) so the metacognition gate can defer to it.
+  let devQ = false;
+  try { devQ = require('./lib/self_dev').detectDevQuestion(userMessage); } catch (e) { console.error('[main] self-dev detect failed:', e.message); }
+
+  // SELF-STATE (self-awareness Layer 1) — is Lucas asking what she's doing / what's running / what
+  // she can see? If so, her real live operational snapshot gets surfaced below so she reads her
+  // state instead of inferring it. Detected here so the metacognition gate can defer.
+  let stateQ = false;
+  try { stateQ = require('./lib/self_state').detectStateQuestion(userMessage); } catch (e) { console.error('[main] self-state detect failed:', e.message); }
 
   const chosenName = db.getMeta('chosen_name');
   const awareness = buildAwarenessBlock({
@@ -1868,12 +2104,39 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   //  • broad/open → scored recency×relevance×importance at wider K (keeps her texture).
   const qClass = classifyQuery(userMessage);
   let retrievedKnowledgeBlock = null;
+  let rkRows = [];   // captured for the calibration assessor below (grounding signal)
   try {
     const rk = qClass === 'narrow'
       ? await memoryLib.retrieve(userMessage, { k: 3, preferLeaf: true })   // entity-exact, leaf-first
-      : await memoryLib.retrieveScored(userMessage, { k: 6 });             // open, high-signal, wider
+      : await memoryLib.retrieveScored(userMessage, { k: 6, minRelevance: 0.35 }); // floored: off-topic notes can't fill K (retrieveScored embeds the query itself)
+    rkRows = rk || [];
     retrievedKnowledgeBlock = memoryLib.formatForPrompt(rk, userName);
   } catch (err) { console.error('[main] knowledge retrieve failed:', err.message); }
+
+  // SELF-DEV LEDGER — on a question about her own development, prepend her real changelog (by
+  // recency) so "what have you been working on / what's new with you / how have you changed" is
+  // answered from genuine history. Reuses the knowledge-block injection path (no signature churn).
+  if (devQ) {
+    try {
+      const selfDev = require('./lib/self_dev');
+      const block = selfDev.buildBlock(selfDev.recentEntries(8), userName);
+      if (block) { retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${block}\n\n${retrievedKnowledgeBlock}` : block; console.log('[main] self-dev ledger surfaced'); }
+    } catch (e) { console.error('[main] self-dev block failed:', e.message); }
+  }
+
+  // SELF-STATE LEDGER — on a "what are you doing / what can you see / status" question, prepend her
+  // real live operational snapshot so she reads her actual state. Reuses the knowledge-block path.
+  if (stateQ) {
+    try {
+      const ss = require('./lib/self_state');
+      const block = ss.buildBlock(ss.snapshot({
+        echoConnected: !!(echoSuit && echoSuit.connected),
+        sharedBrowser: browserLib.isConnected(),
+        ownBrowser: webLib.isConnected()
+      }), userName);
+      if (block) { retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${block}\n\n${retrievedKnowledgeBlock}` : block; console.log('[main] self-state snapshot surfaced'); }
+    } catch (e) { console.error('[main] self-state block failed:', e.message); }
+  }
 
   // SELF-MODEL block — query-relevant self entries (so a question about a specific
   // taste/preference surfaces THAT entry, e.g. "favorite flower" → her ranunculus)
@@ -1881,6 +2144,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let selfModelBlock = null;
   try { selfModelBlock = await require('./lib/self_model').buildContextBlock(userMessage); }
   catch (e) { console.error('[main] self-model block failed:', e.message); }
+
+  // SELF-NARRATIVE (self-awareness Layer 4) — pin her unified first-person self-account (composed
+  // from her own memory, refreshed on a TTL) as the identity anchor ABOVE the query-relevant self
+  // fragments, so who-she-is is continuous, not reassembled per turn.
+  try {
+    const sn = require('./lib/self_narrative');
+    const narr = sn.current();
+    if (narr) { const nb = sn.buildBlock(narr, userName); if (nb) selfModelBlock = selfModelBlock ? `${nb}\n\n${selfModelBlock}` : nb; }
+  } catch (e) { console.error('[main] self-narrative anchor failed:', e.message); }
 
   // PERSONAL-LIFE block — when she's off the clock, reframe the chat toward play
   // and suppress the work reflexes. Null when on the clock (no behavior change).
@@ -1909,6 +2181,52 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (userQv) relevantPastTurns = await memoryLib.retrieveTurns(userMessage, { k: recall ? 4 : 3, excludeIds: recentTurns.map(t => t.id), qv: userQv, userOnly: recall, dropQuestions: recall });
   } catch (e) { console.error('[main] episodic recall failed:', e.message); }
 
+  // CALIBRATED METACOGNITION (self-awareness, Layer 3) — match her assertiveness to her ACTUAL
+  // grounding, computed from what this turn already retrieved. A factual question with nothing
+  // grounded → tell her to admit the gap, not confabulate; partial grounding → separate what she
+  // knows from what she's inferring; rich grounding or non-factual turns → no directive (never
+  // over-hedge). Generalizes the personal-fact guard to all factual claims; skipped when that
+  // already fired or it's a social turn.
+  if (!personalFactQ && !devQ && !stateQ && !socialTurn) {
+    try {
+      const meta = require('./lib/metacognition');
+      const dir = meta.groundingDirective({ userMessage, knowledgeRows: rkRows, pastTurns: relevantPastTurns, userName });
+      if (dir) {
+        composedUserMessage = `${composedUserMessage}\n\n${dir}`;
+        console.log(`[main] calibration: ${meta.assessGrounding({ knowledgeRows: rkRows, pastTurns: relevantPastTurns }).level} grounding → directive injected`);
+      }
+    } catch (e) { console.error('[main] metacognition directive failed:', e.message); }
+  }
+
+  // ACTION HONESTY — if Lucas asked her to watch/find/open/read something and the turn fell through
+  // to a normal reply (no interceptor/tool fired above), guard against narrating first-hand results
+  // she never produced (the "I watched the clips, here are the scenes" confabulation). She should
+  // emit the real tag, or say plainly she can't and offer what she genuinely can do.
+  try {
+    const preNote = mediaWatchNote || listenNote;
+    if (preNote) {
+      // A real action fired this turn (watch started, or listen start/stop) → she acknowledges THAT,
+      // which supersedes the generic honesty guard (no contradiction about whether she has the tool).
+      composedUserMessage = `${composedUserMessage}\n\n${preNote}`;
+      console.log('[main] action acknowledgment note injected');
+    } else {
+      const meta = require('./lib/metacognition');
+      const adir = meta.actionHonestyDirective({ userMessage, userName });
+      if (adir) { composedUserMessage = `${composedUserMessage}\n\n${adir}`; console.log('[main] action-honesty directive injected'); }
+    }
+  } catch (e) { console.error('[main] action-honesty directive failed:', e.message); }
+
+  // WATCHING-QUESTION GROUND — "what are you watching?" while a video is active. Dans tends to read
+  // the leading "what are you…" as an identity prompt and recite her self-narrative. Force the answer
+  // onto the actual on-screen content (her captions/understanding are already in context).
+  try {
+    const mcl = require('./lib/media_cc');
+    if (mcl.active() && mcl.detectWatchingQuestion(userMessage)) {
+      composedUserMessage = `${composedUserMessage}\n\n[${userName} is asking about the VIDEO you're watching RIGHT NOW. Answer with what the captions / your running understanding (above in your context) ACTUALLY show — concretely, in a sentence or two. Do NOT answer with a description of yourself, your nature, or your interests; that is not what he asked. If the captions don't make it clear yet, say so plainly.]`;
+      console.log('[main] watching-question ground directive injected');
+    }
+  } catch (e) { console.error('[main] watching-question ground failed:', e.message); }
+
   // OPEN-QUESTION SURFACING (conversation harness, Piece 1) — if she asked Lucas something on
   // a prior turn, his message is very likely the answer. Surface it (exactly once) as
   // high-recency state so a terse reply binds to her question instead of floating free;
@@ -1919,14 +2237,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     openQuestionBlock = require('./lib/open_questions').buildBlock(pend, userName);
   } catch (e) { console.error('[main] open-question surface failed:', e.message); }
 
-  // SCOPED CONTEXT — relevance-gate the recency blocks (recent monologue + readings) against
-  // the message so off-topic between-turn musing can't ride along. Runs when the TASK should
-  // own the turn: a NARROW factual question OR an ACTIONABLE turn (a URL/file/imperative —
-  // classifyQuery defaults to 'broad' and misses these, which is exactly how idle water-shortage
-  // rumination bled into reading a shared spreadsheet). On a genuinely open/social turn we keep
-  // them raw — that's her continuous-mind texture, and there's no task to corrupt. This is the
-  // structural fix that replaces the earlier prompt-level "treat these as idle musing" reframe.
-  if ((qClass === 'narrow' || isActionable(userMessage)) && userQv) {
+  // SCOPED CONTEXT — relevance-gate the recency blocks (recent monologue + readings) against the
+  // message so off-topic between-turn musing can't ride along ("picking up random stuff"). Now runs
+  // on EVERY turn (was: only narrow/actionable). The texture argument lost to the symptom — on a
+  // social turn her recent permitting-rumination IS the random noise; a recent thought genuinely
+  // related to what's being said still clears 0.4 and comes through, so relevant texture survives.
+  if (userQv) {
     const gate = async (rows) => {
       const out = [];
       for (const r of rows || []) {
@@ -1939,23 +2255,246 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     catch (e) { console.error('[main] recency gate failed:', e.message); }
   }
 
+  // CONTEXT DISTILLATION (Front/Cortex P1) — the front model is overloaded by the bulky variable
+  // context. On a heavy turn, a fast cloud "utility" model distills it into a tight BRIEF that
+  // replaces the firehose (knowledge/past-turns/thoughts/readings/threads/positions/reflections);
+  // the anchors (awareness, persona, self-model, self-narrative, protocols, live dialogue) stay.
+  // Fail-safe: cloud down → null → full local context unchanged. Skipped on light/social turns.
+  let distilledBrief = null;
+  try {
+    const distillLib = require('./lib/distill');
+    const distillBlocks = { knowledge: retrievedKnowledgeBlock, monologue: recentMonologue, readings: recentReadings, pastTurns: relevantPastTurns, threads: openThreads, commitments: heldCommitments, reflections: recentReflections };
+    if (!socialTurn && distillLib.shouldDistill(distillBlocks)) {
+      distilledBrief = await distillLib.distill({ userMessage, blocks: distillBlocks });
+      if (distilledBrief) console.log(`[main] context distilled → brief ${distilledBrief.length}c (from ~${distillLib.contextSize(distillBlocks)}c of context)`);
+    }
+  } catch (e) { console.error('[main] distill step failed:', e.message); }
+
+  // CLOUD-DRAFTED ANSWER (Front/Cortex — "cloud thinks, local speaks" for the ANSWER). On a
+  // grounding-critical turn the local voice (Dans) tends to confabulate over injected context, so the
+  // CLOUD drafts the grounded answer and the front model just VOICES it. v1 fires for an active-watch
+  // "what are you watching?" (grounding = her real captions/understanding). Fail-safe: no draft → normal.
+  // A status/list question about a RUNNING directed task gets its own grounded path below (frontier
+  // report + the real covered list). Compute it early so the answer-draft and operator paths step
+  // aside — otherwise they each inject a competing directive and the 24B confabulates/echoes them.
+  const _directedFocus = (() => { try { const fl = require('./lib/focus'); const f = fl.getCurrent(); return (f && fl.isDirected(f)) ? f : null; } catch { return null; } })();
+  const _isStatusReq = !!_directedFocus && (() => { try { return require('./lib/research').isStatusRequest(userMessage); } catch { return false; } })();
+
+  try {
+    const ad = require('./lib/answer_draft');
+    let drafted = false;
+    // (1) active-watch "what are you watching?" → draft from her REAL captions/understanding
+    const mcl = require('./lib/media_cc');
+    if (mcl.active() && mcl.detectWatchingQuestion(userMessage)) {
+      const u = (db.getMeta('media_understanding') || '').trim();
+      const recent = (db.getMeta('media_recent') || '').trim();
+      const grounding = [u && ('Running understanding of what is on screen: ' + u), recent && ('Most recent captions: ' + recent)].filter(Boolean).join('\n');
+      if (grounding) {
+        const d = await ad.draft({ userMessage, grounding, kind: 'watching' });
+        if (d) { composedUserMessage = `${composedUserMessage}\n\n${ad.buildVoiceBlock(d, userName)}`; drafted = true; console.log(`[main] cloud-drafted watching answer → "${d.slice(0, 70)}"`); }
+      }
+    }
+    // (2) factual / shared-history turn WITH retrieved grounding → draft the faithful answer FROM her
+    // memory (closes both confabulation AND over-hedging where she actually has the facts). Only fires
+    // when real grounding exists — no grounding → normal flow (general knowledge / admit-the-gap).
+    if (!drafted && !socialTurn && !followupFired && !_isStatusReq) {
+      const factual = (() => { try { return require('./lib/metacognition').classifyClaimType(userMessage) === 'factual'; } catch { return false; } })();
+      if (factual || personalFactQ) {
+        const grounding = ad.factualGrounding({ knowledgeBlock: retrievedKnowledgeBlock, pastTurns: relevantPastTurns });
+        if (grounding) {
+          const d = await ad.draft({ userMessage, grounding, kind: 'knowledge' });
+          if (d) { composedUserMessage = `${composedUserMessage}\n\n${ad.buildVoiceBlock(d, userName)}`; console.log(`[main] cloud-drafted knowledge answer → "${d.slice(0, 70)}"`); }
+        }
+      }
+    }
+  } catch (e) { console.error('[main] answer-draft failed:', e.message); }
+
+  // STOP A STANDING TASK — Lucas's control over the overnight driver. Checked BEFORE the operator/
+  // focus blocks so "stop working on the project" isn't misread as a NEW directed task. Only acts when
+  // a directed focus is actually active; clears it, halts the driver, and sets directedStopHandled so
+  // the operator + focus-setup blocks below skip this turn (she just acknowledges).
+  let directedStopHandled = false;
+  try {
+    const focusLib = require('./lib/focus');
+    const f = focusLib.getCurrent();
+    if (f && focusLib.isDirected(f) && /\b(stop|drop|cancel|forget|abandon|pause|quit|never ?mind|that'?s enough|enough (?:for now|of that))\b/i.test(userMessage)
+        && /\b(task|project|research|focus|working|that|it|this)\b/i.test(userMessage)) {
+      focusLib.clear('user-stop');
+      try { stopDirectedFocusDriver(); } catch {}
+      directedStopHandled = true;
+      composedUserMessage += `\n\n[${userName} just told you to STOP the standing task you were working ("${String(f.content).slice(0, 80)}"). You've set it down. Acknowledge briefly that you've stopped and that what you gathered so far is saved. Do NOT keep working it.]`;
+      console.log(`[focus] directed task #${f.id} stopped by user`);
+    }
+  } catch (e) { console.error('[main] directed-stop check failed:', e.message); }
+
+  // EXPAND ORDER (Iterate) — "expand / go deeper on the prior research". Re-inflate a slice of the last
+  // condensed dossier into a FRESH, deeper directed run, seeded with the orgs already found so it
+  // DEEPENS (full staff + contacts) rather than restarting. Only acts when a prior dossier exists.
+  // Checked before the operator/directed-setup blocks (and gates them) so it owns the turn.
+  let expandHandled = false;
+  try {
+    const cd = require('./lib/condense');
+    const ex = cd.detectExpandOrder(userMessage);
+    const opOn = (() => { try { return (db.getMeta('operator.mode') || 'full').trim() !== 'off'; } catch { return true; } })();
+    if (ex.isExpand && opOn && !socialTurn && !followupFired && !directedStopHandled) {
+      let last = null; try { last = JSON.parse(db.getMeta('research.last_dossier') || 'null'); } catch {}
+      if (last && last.path) {
+        let dossier = ''; try { const r = await filesLib.dispatch({ tag: 'file-read', attrs: { path: last.path } }); dossier = (r && (r.text || r.content)) || ''; } catch {}
+        const goal = cd.buildExpandGoal({ priorGoal: last.goal, target: ex.target, dossier });
+        const focusLib = require('./lib/focus');
+        const r = await focusLib.setFromDirective(goal, userTurnRow && userTurnRow.id);
+        if (r && r.focus) {
+          kickDirectedFocusDriver();
+          expandHandled = true;
+          composedUserMessage += `\n\n[${userName} asked you to EXPAND / go deeper on your prior research${ex.target ? ` — specifically: ${ex.target}` : ''}. You've started a focused DEEPENING pass on it (building on the dossier you already have, chasing full staff + contacts) and will keep at it. Tell him plainly you're expanding that now, in one or two sentences. Do NOT fabricate — only report what you actually have.]`;
+          console.log(`[expand] expand order → deepening focus #${r.focus.id} (target: ${ex.target || 'all'})`);
+        }
+      } else {
+        composedUserMessage += `\n\n[${userName} asked you to expand/go deeper on prior research, but you have no finished dossier on file to expand. Say that plainly and ask what he'd like you to research, rather than inventing one.]`;
+        console.log('[expand] expand order with NO prior dossier → honest note');
+      }
+    }
+  } catch (e) { console.error('[main] expand-order failed:', e.message); }
+
+  // STATUS REQUEST (Concern 1) — "how's the project going?" on a running directed task. Answer it with
+  // a FRONTIER-generated report over the real progress state, NOT the local voice model (which
+  // truncated + half-guessed). Runs even on a social-classified turn ("how's it going") since it's
+  // about the project; gates the blocks below so they don't double-handle.
+  let statusHandled = false;
+  try {
+    if (_isStatusReq && _directedFocus && !directedStopHandled && !expandHandled && !followupFired) {
+      const f = _directedFocus;
+      // DETERMINISTIC ground truth FIRST — the actual covered list straight from meta, so the answer
+      // can't omit it or confabulate (the "Wayne Crews leads CEI and Mercatus" failure was her riffing
+      // from rumination because the real list never reached the reply).
+      let cov = []; try { cov = JSON.parse(db.getMeta(`focus.${f.id}.covered`) || '[]'); } catch {}
+      let tgt = null; try { tgt = JSON.parse(db.getMeta(`focus.${f.id}.target`) || 'null'); } catch {}
+      const listLine = cov.length
+        ? `So far you have completed ${cov.length} organizations: ${cov.join(', ')}.${tgt ? ` You're currently researching ${tgt.name}.` : ''}`
+        : `You haven't completed any organizations yet — still getting going.`;
+      const report = await statusReport(f);   // frontier narrative (what's solid, what's thin) — enrichment
+      const body = report && report.trim() ? `${listLine}\n\n${report.trim()}` : listLine;
+      composedUserMessage += `\n\n[${userName} asked how your research is going / what you've covered. Answer using THESE REAL FACTS from your task state — present the FULL organization list (every one, exactly as written; do not drop or invent any), then the progress notes, naturally in your own voice:\n${body}]`;
+      statusHandled = true;
+      console.log(`[status] grounded status+list delivered for focus #${f.id} (${cov.length} orgs)`);
+    }
+  } catch (e) { console.error('[main] status request failed:', e.message); }
+
+  // MID-RUN CLARIFICATION — Lucas refining the standing task WHILE it runs (often answering a question
+  // she just asked). Without this his guidance was dropped: a non-task-shaped clarification ("yes,
+  // include state-level ones") fell through to a normal reply and the run kept going on the old goal.
+  // Capture it onto the focus (meta focus.<id>.clarifications) so EVERY subsequent research pass folds
+  // it in. Only while a directed run is active; never a stop/expand/social turn.
+  let clarificationCaptured = false;
+  try {
+    const focusLib = require('./lib/focus');
+    const f = (() => { try { return focusLib.getCurrent(); } catch { return null; } })();
+    if (f && focusLib.isDirected(f) && !directedStopHandled && !expandHandled && !statusHandled && !socialTurn && !followupFired) {
+      const lastAssistant = [...recentTurns].reverse().find(t => t.speaker !== 'user');
+      const askedQ = !!(lastAssistant && /\?/.test(String(lastAssistant.content || '')));
+      if (require('./lib/research').isClarification({ message: userMessage, assistantAskedQuestion: askedQ })) {
+        const key = `focus.${f.id}.clarifications`;
+        let list = []; try { list = JSON.parse(db.getMeta(key) || '[]'); } catch {}
+        list.push(userMessage.replace(/\s+/g, ' ').trim().slice(0, 300));
+        try { db.setMeta(key, JSON.stringify(list.slice(-10))); } catch {}
+        clarificationCaptured = true;
+        composedUserMessage += `\n\n[${userName} just gave you a CLARIFICATION for the task you're researching right now. You've noted it and will fold it into the rest of the run. Acknowledge briefly + concretely what you'll do differently going forward, in your own voice — do NOT restate the whole task or fabricate progress.]`;
+        console.log(`[clarify] captured for focus #${f.id}: "${userMessage.slice(0, 60)}"`);
+      }
+    }
+  } catch (e) { console.error('[main] clarification capture failed:', e.message); }
+
+  // CLOUD OPERATOR (full mode) — the frontier cloud model DRIVES this turn as a real tool-calling
+  // agent (web / Echo's catalog / her browser / memory / files), and Dans just VOICES the result.
+  // This is the autonomy + tool-usage payoff: the capable model decides + acts, instead of the local
+  // 24B trying to remember a tag. Substantive turns only; fail-safe (null → the normal local reply).
+  // Reversible: db meta operator.mode = full (default) | off.
+  let operatorAnswer = null;
+  try {
+    const opMode = (() => { try { return (db.getMeta('operator.mode') || 'full').trim(); } catch { return 'full'; } })();
+    // The operator is for turns that NEED external capability (a task, a lookup, our data) — NOT for
+    // conversation. Fronting every turn with "operator answer → Dans voices it" flattened dialogue
+    // into transactional Q&A and cost cohesion/complexity. So gate it: capability turns → operator;
+    // conversational/relational/opinion/reflective turns → Dans dialogue with rich grounding.
+    const needsExternal = (() => {
+      try {
+        const opLib = require('./lib/operator'); const cu = require('./lib/curiosity');
+        // The DATE/TIME/DAY itself is held in her awareness block — never a tool turn. Without this
+        // carve-out the broad "what'?s the" pattern below catches "what's the date today" and fires a
+        // busy stall + a pointless web lookup for something she already has (see metacognition carve).
+        if (require('./lib/metacognition').DATETIME_SELF_RE.test(userMessage)) return false;
+        return opLib.isDirectedTask(userMessage) || cu.isLiveInfoQuestion(userMessage) || cu.isResearchCommand(userMessage)
+          || /\b(look ?up|search|find|pull ?up|fetch|what'?s the|how much|how many|latest|current|when (is|was|did|does)|where (is|was)|who (is|was|are)|our (data|records|numbers|polling|crm|bills|contacts|knowledge))\b/i.test(userMessage);
+      } catch { return false; }
+    })();
+    if (opMode !== 'off' && needsExternal && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && userMessage && userMessage.trim().length > 6) {
+      const directed = (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
+      // Immediate feedback — the agent loop can take a few seconds. Use a REQUEST-SERVING placeholder
+      // ("on it — starting on that now"), NOT the self-focused "I'm in the middle of something" busy
+      // line, which reads as brushing Lucas off the instant he hands her a task.
+      try { sendBusy(require('./lib/snapback').pickWorkingLine(Date.now(), { task: directed })); } catch {}
+      const opRes = await runCloudOperator({ userMessage, context: distilledBrief || retrievedKnowledgeBlock || '', task: directed });
+      if (directed) console.log('[operator] directed TASK → in-turn completion mode (8 steps / 90s)');
+      if (opRes && opRes.answer) {
+        operatorAnswer = opRes.answer;
+        const block = directed
+          ? `[DELIVER THIS TO ${userName} — the complete result of the task you just ran. Present the FULL thing in your own voice: keep EVERY item, do NOT summarize, shorten, or drop any of it. A brief one-line intro is fine, then the complete result. If you also saved it to a file, mention where, but still include it all here:\n${operatorAnswer}]`
+          : require('./lib/answer_draft').buildVoiceBlock(operatorAnswer, userName);
+        composedUserMessage = `${composedUserMessage}\n\n${block}`;
+        try { db.insertMonologue({ content: `operator drove the turn [${(opRes.toolsUsed || []).join('+') || 'no tools'}]: ${operatorAnswer.slice(0, 200)}`, model: 'operator', type: 'reading' }); } catch {}
+        console.log(`[operator] drove turn (${(opRes.toolsUsed || []).join('+') || 'no tools'}) → "${operatorAnswer.slice(0, 80)}"`);
+      }
+    }
+  } catch (e) { console.error('[main] operator turn failed:', e.message); }
+
+  // STANDING OVERNIGHT FOCUS — a directed task isn't just answered once; it becomes a persistent focus
+  // the overnight driver works slice-by-slice (web / her browser / Echo) until done or capped,
+  // accreting to memory + a deliverable file. Create it on the FIRST directed message; a follow-up
+  // ("start now", "make it priority") just lets the in-turn operator above give a progress slice — no
+  // duplicate focus. The honesty note kills the "based on this spreadsheet" confabulation: she states
+  // she's started, never invents sources/results she doesn't have.
+  try {
+    const focusLib = require('./lib/focus');
+    const opModeOn = (() => { try { return (db.getMeta('operator.mode') || 'full').trim() !== 'off'; } catch { return true; } })();
+    if (opModeOn && require('./lib/operator').isDirectedTask(userMessage) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled) {
+      const already = (() => { try { const f = focusLib.getCurrent(); return !!(f && focusLib.isDirected(f)); } catch { return false; } })();
+      if (!already) {
+        // Keep the WHOLE assignment — a 240-char cap was severing the task mid-sentence (it cut "study
+        // every think tank that deal with politics, policy, energy," and dropped "…the environment,
+        // AI… what they are, WHO WORKS THERE, and HOW TO CONTACT them"), so the driver never saw the
+        // staff/contact requirement and produced only generic org blurbs. 800 captures a full directive.
+        const goal = userMessage.replace(/\s+/g, ' ').trim().slice(0, 800);
+        const r = await focusLib.setFromDirective(goal, userTurnRow && userTurnRow.id);
+        if (r && r.focus) {
+          kickDirectedFocusDriver();
+          composedUserMessage += `\n\n[You have ACCEPTED this as a standing task and STARTED working it for real — it is now your active focus, and you will keep researching it slice by slice (saving what you find) until it's done or ${userName} tells you to stop. Tell him plainly you've started and are on it, in one or two sentences, in your own voice. CRITICAL: do NOT invent findings, a "spreadsheet", a document, or any source you do not actually have yet — if you have nothing concrete to show in THIS reply, simply say you've begun and will keep at it.]`;
+          console.log(`[focus] directed task → standing focus #${r.focus.id} created + driver kicked`);
+        }
+      } else {
+        composedUserMessage += `\n\n[This is the task you are ALREADY working as your standing focus. Give ${userName} a brief, honest status from what you've ACTUALLY gathered so far (see your context/memory above) and confirm you're still on it. Do NOT fabricate progress, findings, or sources.]`;
+      }
+    }
+  } catch (e) { console.error('[main] directed-focus setup failed:', e.message); }
+
   const messages = buildChatPrompt({
     userName,
-    recentReflections,
+    recentReflections: distilledBrief ? [] : recentReflections,
     recentTurns,
-    recentMonologue,
-    recentReadings,
-    heldCommitments,
+    recentMonologue: distilledBrief ? [] : recentMonologue,
+    recentReadings: distilledBrief ? [] : recentReadings,
+    heldCommitments: distilledBrief ? [] : heldCommitments,
     openThreads,
     awareness,
     protocols,
     browserBlock,
     pendingInbounds,
-    retrievedKnowledgeBlock,
+    retrievedKnowledgeBlock: distilledBrief
+      ? `FOCUS BRIEF — the distilled essence of your memory + context relevant to THIS turn. Use it directly; it already contains what matters, so don't ask for more or say you lack context:\n${distilledBrief}`
+      : retrievedKnowledgeBlock,
     capabilityProposalBlock,
     selfModelBlock,
     personalBlock,
-    relevantPastTurns,
+    relevantPastTurns: distilledBrief ? [] : relevantPastTurns,
     openQuestionBlock,
     socialTurn,
     convoStateBlock,
@@ -1964,7 +2503,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     newUserMessage: composedUserMessage
   });
 
-  const parser = new TagStreamParser({
+  let parser = new TagStreamParser({
     onSayToken: (token) => {
       try {
         emit(token);
@@ -1976,17 +2515,42 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     await streamChat({
       model: MODEL,
       messages,
-      onToken: (chunk) => parser.feed(chunk)
+      onToken: (chunk) => parser.feed(chunk),
+      inactivityMs: 180000,   // generous: a cold model load under GPU pressure can delay the first token
+      // CONSTANT num_ctx — every local Dans call (voice/byline/narrative/dialogue/play) uses 8192, so
+      // the reply MUST too. The old `bigReply ? 16384 : 8192` flipped the context size between turns,
+      // and ollama fixes num_ctx at load time → each flip cold-reloaded the 24B (the 23–38s VRAM
+      // 20→0→20 churn). Long deliverables now live in the dossier file, not the chat reply, so 8192
+      // is plenty here. One context size ⇒ Dans loads once and stays warm (keep_alive 24h).
+      options: { num_ctx: 8192 }
     });
   } catch (err) {
-    console.error('[main] streamChat failed:', err);
-    try { sendError(err.message || String(err)); } catch {}
-    resumeMonologue();
-    resumeHeartbeat();
-    resumeContinuity();
-    resumeReflection();
-    selfDialogue.resume();
-    return { ok: false, error: err.message, say: null };
+    // A stall BEFORE the first token is almost always the local model cold-loading (evict/reload
+    // under GPU pressure), not a real fault — NEVER surface the raw "This operation was aborted" to
+    // Lucas. Retry ONCE (the model is warm now); only a second failure gets a soft in-voice line.
+    const isStall = err && (err.name === 'AbortError' || /abort/i.test(err.message || ''));
+    const saidNothing = !parser.say || !parser.say.trim();
+    if (isStall && saidNothing) {
+      console.warn('[main] reply stalled before first token (model cold-load?) — retrying once');
+      parser = new TagStreamParser({ onSayToken: (token) => { try { emit(token); } catch {} } });
+      try {
+        await streamChat({ model: MODEL, messages, onToken: (chunk) => parser.feed(chunk), inactivityMs: 180000, options: { num_ctx: 8192 } });
+      } catch (err2) {
+        console.error('[main] reply retry failed:', err2.message);
+        try { sendError('Sorry — that hung on me for a second. Mind saying that again?'); } catch {}
+        resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume();
+        return { ok: false, error: 'stalled', say: null };
+      }
+    } else {
+      console.error('[main] streamChat failed:', err);
+      try { sendError(err.message || String(err)); } catch {}
+      resumeMonologue();
+      resumeHeartbeat();
+      resumeContinuity();
+      resumeReflection();
+      selfDialogue.resume();
+      return { ok: false, error: err.message, say: null };
+    }
   }
 
   // Turn succeeded → mark the injected inbounds consumed (they're now in her
@@ -2114,6 +2678,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     ...recallLib.parseRecallTags(thought || ''),
     ...recallLib.parseRecallTags(say || '')
   ];
+  // VISION OUT — <image-gen>/<draw>/<imagine> prompts she emitted → generate an image (gated OFF
+  // until a provider key is set). Off the clock she still gets to make images (it's expressive).
+  const imageGenToRun = [
+    ...require('./lib/vision').parseGenTags(thought || ''),
+    ...require('./lib/vision').parseGenTags(say || '')
+  ];
 
   let thoughtStripped = (thought || '').replace(/<wonder>[\s\S]*?<\/wonder>/gi, '').trim();
   thoughtStripped = openThreadsLib.stripStatusTags(thoughtStripped);
@@ -2168,6 +2738,23 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   sayStripped = discordLib.stripTags(sayStripped);
   sayStripped = echoSuitLib.stripEchoTags(sayStripped);
   sayStripped = recallLib.stripRecallTags(sayStripped);
+  sayStripped = require('./lib/vision').stripGenTags(sayStripped);   // <image-gen> tags don't render
+  // LEAKED-DIRECTIVE GUARD: the injected instruction blocks ([ANSWER TO GIVE…], [DELIVER THIS…],
+  // [Calibration…], a model-hallucinated [THAT'S YOUR TASK…]) are meant FOR her, not Lucas — but the
+  // 24B sometimes echoes them verbatim into the reply (confirmed live). Strip any bracketed block
+  // carrying a directive signature, whether embedded among prose or a trailing unterminated fragment.
+  const _DIRSIG = /(ANSWER TO GIVE|THAT'?S YOUR TASK|DELIVER THIS|Calibration:|ACTION HONESTY|REMEMBER IT ACROSS|Say THIS in your own voice|STATUS UPDATE|ADDITIONAL GUIDANCE|standing (?:task|focus)|ACCEPTED this as|do NOT (?:invent|fabricate|summarize|contract|drift)|in your own voice|grounded answer|present the FULL|REAL FACTS|ACCESSIBLE VIA)/i;
+  sayStripped = sayStripped.replace(/\[[^\]]*\]/g, (m) => (_DIRSIG.test(m) ? '' : m));   // bracketed blocks (incl. multi-line)
+  sayStripped = sayStripped.replace(/\[[^\]]*$/g, (m) => (_DIRSIG.test(m) ? '' : m));     // trailing unterminated leak
+  sayStripped = sayStripped.replace(/\n{3,}/g, '\n\n').trim();
+  // LEAKED-PLANNING GUARD: a reply that is ONLY a bracketed fragment (e.g. "[No need for an
+  // argument since we want the total count…]") is internal tool/arg reasoning that leaked instead
+  // of a tag — never her actual answer. Drop it so the tool-followup's real result is what shows.
+  if (/^\s*\[[^\]]*\]\s*$/.test(sayStripped)) { console.log('[main] dropped leaked bracket-only reply:', sayStripped.slice(0, 80)); sayStripped = ''; }
+  // Strip markdown horizontal-rule lines ("---") she emits — they leaked to the front of replies
+  // ("---\n\n---\n\nGood morning…"). Drop standalone dash-rule lines, then collapse the blank gaps
+  // they leave (preserving real paragraph breaks).
+  sayStripped = sayStripped.replace(/^[ \t]*-{3,}[ \t]*$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
   let trimmedSay = sayStripped;
   // VOICE GUARD: if she disclaimed her inner life ("I don't experience…/as an AI I…"),
   // rewrite it in her own voice. It streamed live, so we pass the corrected text in the
@@ -2234,6 +2821,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               query: u,
               urls: [u]
             });
+            // CAPTURE (autonomy/KB): the navigate-read path had no capture hook, so authoritative
+            // reads (e.g. whitehouse.gov for "who is president") banked nothing and she re-checked
+            // forever. Bank the facts the page asserts (dated→verified_fact, surfaced+boosted next ask).
+            try { require('./lib/learning').maybeCaptureLearnings({ query: page.title || u, content: page.text, urls: [u] }); } catch {}
             try {
               if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('monologue:tick', {
@@ -2274,6 +2865,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               }
             } catch {}
             if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: content }); }
+          } else if (result && result.ok && t.tag === 'browse-see' && result.base64) {
+            // VISUAL sight of Lucas's open tab (shared browser) through her vision model.
+            if (!followupFired) {
+              followupFired = true;
+              await seeImage({ io, channel, sessionId, userName, base64: result.base64,
+                label: `Lucas's open page "${result.title || result.url || 'tab'}"`, url: result.url,
+                question: `This is a screenshot of a web page open in ${userName}'s browser. ${t.body || 'Describe what is visible — images, charts, photos, headlines, layout — concretely.'}`,
+                surface: 'browse-see' });
+            }
           } else if (result && result.ok && t.tag === 'browse' && result.url) {
             const row = db.insertMonologue({
               content: `I opened "${result.title || result.url}" (${result.url})`,
@@ -2302,6 +2902,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // controls (port 9223), distinct from the shared attach above. web-read results
   // are stored as a reading + voiced via the tool follow-up.
   if (webTagsToRun.length > 0) {
+    const webVerify = require('./lib/web_verify');
+    let webVisionVerifies = 0;   // cap vision calls per turn (latency)
     (async () => {
       for (const t of webTagsToRun.slice(0, 4)) {
         try {
@@ -2321,14 +2923,64 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             const row = db.insertMonologue({ content, model: 'web-read', type: 'reading', query: r.url, urls: r.url ? [r.url] : null });
             try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(my browser) ${label}`, type: 'reading', query: r.url }); } catch {}
             if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: content }); }
+          } else if (r && r.ok && t.tag === 'web-see' && r.base64) {
+            // VISUAL web sight — screenshot her page through the vision model (images/charts/layout).
+            if (!followupFired) {
+              followupFired = true;
+              await seeImage({ io, channel, sessionId, userName, base64: r.base64,
+                label: `the web page "${r.title || r.url || 'page'}"`, url: r.url,
+                question: `This is a screenshot of a web page. ${t.body || 'Describe what is visible — images, charts, photos, headlines, layout — concretely.'}`,
+                surface: 'web-see' });
+            }
           } else if (r && r.ok && t.tag === 'web-open') {
-            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[You opened ${r.url} in your own browser. Emit <web-read/> to see it, then tell ${userName} what you find — don't describe the page until you've read it.]` }); }
+            // She opened her browser to a page/search. Don't ask her to emit <web-read/> —
+            // the tool-followup strips it (only echo tags chain), so the second hop would die.
+            // Read + deepen inline now and feed the real content back so she answers in one flow.
+            const qLabel = (t.body || (t.attrs && t.attrs.q) || r.title || r.url || 'that').toString().slice(0, 120);
+            const body = await readHerBrowserDeep();
+            if (body) {
+              const content = `I looked up "${qLabel}" in my own browser (${r.url}):\n${body}`;
+              try { db.insertMonologue({ content, model: 'web-read', type: 'reading', query: r.url, urls: [r.url] }); } catch {}
+              try { require('./lib/learning').maybeCaptureLearnings({ query: qLabel, content, urls: [r.url] }); } catch {}
+              try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(my browser) ${qLabel}`, type: 'reading', query: r.url }); } catch {}
+              if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: content }); }
+            } else if (!followupFired) {
+              followupFired = true;
+              fireToolFollowup({ io, channel, sessionId, resultText: `[You opened ${r.url} but couldn't pull any readable text. Tell ${userName} plainly and offer to try again — don't invent page content.]` });
+            }
           } else if (r && r.ok && t.tag === 'web-chat' && r.text) {
             const who = r.speaker || 'the character';
             const content = `In my own browser I sent a line to ${who}, and they replied:\n${r.text}`;
             const row = db.insertMonologue({ content, model: 'web-chat', type: 'reading', query: r.url, urls: r.url ? [r.url] : null });
             try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(${who} replied) ${(r.text || '').slice(0, 80)}`, type: 'reading', query: r.url }); } catch {}
             if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[${who} replied to you:\n${r.text}\n\nThat's the actual reply — react to it in your own voice.]` }); }
+          } else if (r && r.ok && webVerify.isStateChanging(t.tag)) {
+            // VERIFIED ACTION (Vision→Action P1): act → auto fresh-read + gated vision verify +
+            // recovery directive, fed back in one followup. Was the gap: a successful click/type
+            // surfaced nothing, so she acted blind. Her OWN browser only.
+            const fresh = await webLib.read().catch(() => null);
+            const readText = (fresh && fresh.ok && fresh.text) || '';
+            const expect = (t.attrs && t.attrs.expect) || null;
+            const actionDesc = `${t.tag}${t.body ? ' ' + String(t.body).slice(0, 60) : ''}${t.attrs && t.attrs.selector ? ' @' + t.attrs.selector : ''}`.trim();
+            let verdict = null, note = '';
+            if (webVisionVerifies < webVerify.maxVisionPerTurn()
+              && webVerify.shouldVisionVerify({ mode: webVerify.verifyMode(), readText, expect, minChars: webVerify.minReadChars() })) {
+              try {
+                const shot = await webLib.screenshot({ fullPage: false }).catch(() => null);
+                if (shot && shot.ok && shot.base64) {
+                  webVisionVerifies++;
+                  const desc = await require('./lib/vision').describe({ imageBase64: shot.base64, prompt: webVerify.buildVerifyPrompt({ action: actionDesc, expect }), source: 'web-act' });
+                  verdict = webVerify.parseVerdict(desc);
+                  note = webVerify.noteFrom(desc);
+                }
+              } catch (e) { console.error('[web-act] vision verify failed:', e.message); }
+            }
+            try {
+              db.insertMonologue({ content: `web-act: ${actionDesc} → ${verdict || 'a11y-only'}${note ? ': ' + note : ''}`, model: 'web-act', type: 'reading', query: (fresh && fresh.url) || r.url || null });
+              if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(acted) ${t.tag} → ${verdict || 'read'}`, type: 'reading' });
+            } catch {}
+            console.log(`[web-act] ${actionDesc} → ${verdict || 'a11y-only'}${verdict ? ' (vision)' : ''}`);
+            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: webVerify.buildFollowupText({ action: actionDesc, expect, readText, verdict, note, userName }) }); }
           } else if (!(r && r.ok)) {
             if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[Your own-browser action "${t.tag}" didn't work: ${r && r.reason}. Tell ${userName} plainly; don't invent page content.]` }); }
           }
@@ -2346,7 +2998,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       for (const t of fileTagsToRun.slice(0, 5)) {
         try {
           const result = await filesLib.dispatch(t);
-          if (result && result.ok && (t.tag === 'file-read') && result.text != null) {
+          if (result && result.ok && t.tag === 'file-read' && result.image && result.base64) {
+            // An image file → SEE it through vision instead of dumping bytes.
+            if (!followupFired) {
+              followupFired = true;
+              await seeImage({ io, channel, sessionId, userName, base64: result.base64,
+                label: `your image file ${result.path}`, surface: 'file-see' });
+            }
+          } else if (result && result.ok && (t.tag === 'file-read') && result.text != null) {
             const row = db.insertMonologue({
               content: `I read my file ${result.path}:\n${result.text}`,
               model: 'file-read', type: 'reading', query: result.path
@@ -2376,15 +3035,37 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // Background: dispatch any screen-observe tags. Result (open windows + focused
   // app) is stored as a reading so it lands in her next-turn context.
   if (screenTagsToRun.length > 0) {
+    const wantSee = screenTagsToRun.some(t => t.tag === 'screen-see');
+    const wantObserve = screenTagsToRun.some(t => t.tag === 'observe-screen');
     (async () => {
       try {
-        const r = await screenLib.dispatch();
-        if (r && r.ok) {
-          const row = db.insertMonologue({ content: r.text, model: 'screen-observe', type: 'reading' });
-          try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(observed screen — focused: ${r.foreground || '?'})`, type: 'reading' }); } catch {}
-          if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: r.text }); }
+        // <screen-see/> — actually LOOK at the screen (desktopCapturer screenshot → vision).
+        if (wantSee) {
+          const cap = await screenLib.capture();
+          if (cap && cap.ok && cap.base64) {
+            if (!followupFired) {
+              followupFired = true;
+              await seeImage({ io, channel, sessionId, userName, base64: cap.base64,
+                label: `${userName}'s screen`,
+                question: 'This is a screenshot of the whole screen. Describe what is visible — the app/window in focus, any text, images, charts, or documents — concretely.',
+                surface: 'screen-see' });
+            }
+          } else if (!followupFired) {
+            followupFired = true;
+            fireToolFollowup({ io, channel, sessionId, resultText: `[You tried to see the screen but couldn't (${cap && cap.reason}). Tell ${userName} plainly you couldn't this time.]` });
+          }
+          console.log(`[main] screen-see: ${cap?.ok ? 'ok' : 'FAIL ' + cap?.reason}`);
         }
-        console.log(`[main] screen observe: ${r?.ok ? 'ok (' + (r.windows||[]).length + ' windows)' : 'FAIL ' + r?.reason}`);
+        // <observe-screen/> — list open windows + focused app (text only).
+        if (wantObserve) {
+          const r = await screenLib.dispatch();
+          if (r && r.ok) {
+            const row = db.insertMonologue({ content: r.text, model: 'screen-observe', type: 'reading' });
+            try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(observed screen — focused: ${r.foreground || '?'})`, type: 'reading' }); } catch {}
+            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: r.text }); }
+          }
+          console.log(`[main] screen observe: ${r?.ok ? 'ok (' + (r.windows||[]).length + ' windows)' : 'FAIL ' + r?.reason}`);
+        }
       } catch (err) { console.error('[main] screen dispatch error:', err.message); }
     })().catch(() => {});
   }
@@ -2458,6 +3139,126 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
     })().catch(err => console.error('[main] recall async error:', err.message));
   }
+
+  // Background: VISION OUT — dispatch <image-gen> prompts → create an image (gated OFF until a
+  // provider key is set). On success: save it, show it in chat, and have her comment via a
+  // tool-followup. On disabled/failure: tell Lucas honestly (never pretend she made one).
+  if (imageGenToRun.length > 0) {
+    (async () => {
+      const vision = require('./lib/vision');
+      for (const prompt of imageGenToRun.slice(0, 2)) {
+        try {
+          const r = await vision.generate({ prompt });
+          if (r.ok) {
+            try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:image', { path: r.path || null, dataUrl: r.base64 ? `data:image/png;base64,${r.base64}` : null, prompt }); } catch {}
+            try { db.insertMonologue({ content: `I generated an image for "${prompt}"${r.path ? ' → ' + r.path : ''}`, model: 'image-gen', type: 'reading', query: prompt }); } catch {}
+            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[You just CREATED an image from "${prompt}" and it's now shown to ${userName}. Tell him briefly what you made, in your own voice — you made it on purpose, so own it.]` }); }
+            console.log(`[main] image-gen ok: ${r.path || '(no save)'}`);
+          } else {
+            if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `[You tried to create an image from "${prompt}" but ${r.disabled ? 'image generation is switched off right now' : 'it failed'}: ${r.reason}. Tell ${userName} plainly you couldn't make it ${r.disabled ? "(it needs to be turned on first)" : 'this time'} — don't pretend you did.]` }); }
+            console.log(`[main] image-gen ${r.disabled ? 'disabled' : 'FAIL'}: ${r.reason}`);
+          }
+        } catch (e) { console.error('[main] image-gen dispatch error:', e.message); }
+      }
+    })().catch(err => console.error('[main] image-gen async error:', err.message));
+  }
+
+  // LIVE-INFO SAFETY NET — Lucas asked for up-to-the-minute info (price/weather/news/etc.)
+  // but she emitted NO retrieval tag (she stated intent in prose, or just promised to look).
+  // Without this the desire only gets picked up later by the idle monologue and the answer
+  // never returns to chat. Auto-run ONE live lookup now and answer him in this flow. Only
+  // fires when she reached for nothing herself, so it never double-searches.
+  {
+    const curiosityLib = require('./lib/curiosity');
+    const noRetrievalTag = webTagsToRun.length === 0 && browserTagsToRun.length === 0
+      && aiUrlsToFetch.length === 0 && echoTagsToRun.length === 0;
+
+    // RESEARCH COMMAND — "do some research / look into it / dig into that": an explicit order to GO
+    // FIND OUT, with the SUBJECT in the PRIOR conversation (not this message). She narrates intent
+    // ("[I'll research…]") without emitting a tag, so it never happens. Derive the subject from recent
+    // user turns and run a real web lookup now, answering in this flow. Fires before live-info.
+    if (!followupFired && noRetrievalTag && curiosityLib.isResearchCommand(userMessage)) {
+      const recentU = (db.getRecentTurns(8) || []).filter(t => t.speaker === 'user').sort((a, b) => (a.ts || 0) - (b.ts || 0)).map(t => t.content);
+      const subject = curiosityLib.deriveResearchSubject(userMessage, recentU);
+      if (subject) {
+        followupFired = true;
+        console.log(`[main] research command → web lookup "${subject}"`);
+        liveLookupAndAnswer({ io, channel, sessionId, userName, query: subject })
+          .catch(e => console.error('[main] research command lookup failed:', e.message));
+      }
+    }
+
+    if (!followupFired && noRetrievalTag && curiosityLib.isLiveInfoQuestion(userMessage)) {
+      let q = null;
+      try { const cur = curiosityLib.detectCuriosity(finalSaid || ''); if (cur.triggered) q = cur.query; } catch {}
+      if (!q) q = curiosityLib.deriveLiveQuery(userMessage);
+      if (q) {
+        followupFired = true;
+        console.log(`[main] live-info auto-lookup → "${q}" (she emitted no retrieval tag)`);
+        liveLookupAndAnswer({ io, channel, sessionId, userName, query: q })
+          .catch(e => console.error('[main] live-info auto-lookup failed:', e.message));
+      }
+    }
+
+    // GENERAL TOOL ROUTER (Front/Cortex P3) — the cloud decides the surface for a lookup the front
+    // didn't reach for and memory can't answer: open-web, OUR data (Echo), or nothing. Generalizes
+    // the regex nets so the conversational front needn't emit the right tag. Fires only when she
+    // reached for NO tool, NO relevant memory was retrieved, it's not social, and the live-info
+    // fast-path above didn't already handle it. Dispatches via the existing gated paths.
+    if (!followupFired && noRetrievalTag && !socialTurn && Array.isArray(rkRows) && rkRows.length === 0) {
+      try {
+        const plan = await require('./lib/tool_router').planTool({ userMessage });
+        if (plan && plan.surface === 'web' && plan.arg) {
+          followupFired = true;
+          console.log(`[main] tool-router → web "${plan.arg}" (${plan.reason || ''})`);
+          liveLookupAndAnswer({ io, channel, sessionId, userName, query: plan.arg })
+            .catch(e => console.error('[main] tool-router web failed:', e.message));
+        } else if (plan && plan.surface === 'echo' && plan.arg && echoSuit) {
+          // Do NOT gate on echoSuit.connected — routeNeed/dispatch SELF-HEAL the connection
+          // (reconnect on demand). Gating here silently dropped OUR-data answers when the attach
+          // was momentarily down, so she fell back to the open web (the "LAMP → Japanese band" miss).
+          followupFired = true;
+          console.log(`[main] tool-router → echo "${plan.arg}" (${plan.reason || ''})`);
+          (async () => {
+            try {
+              const r = await echoSuit.routeNeed(plan.arg);
+              await fireToolFollowup({ io, channel, sessionId, resultText: `I checked our Echo data for "${plan.arg}":\n${(r.text || '').slice(0, 1800)}` });
+            } catch (e) { console.error('[main] tool-router echo dispatch failed:', e.message); }
+          })();
+        } else if (plan && plan.surface !== 'none') {
+          console.log(`[main] tool-router → ${plan.surface} but not actionable (no arg / no echo suit)`);
+        }
+      } catch (e) { console.error('[main] tool-router failed:', e.message); }
+    }
+
+    // HER EXPRESSED INTENT → cloud tool flow. When she SAYS in her own reply that she'll look
+    // something up / find / research / check it (curiosity in her words) but emits no tag, route that
+    // intent through the cloud tool-router so the right tool actually runs and the answer comes back —
+    // instead of the intent stalling ("I'll find that…" then nothing). This is what lets tool-calls
+    // flow freely: her voice → cloud decides the tool → execute → back to her voice, no tag needed.
+    // NOT gated on retrieved memory (an explicit intent to go look overrides). planTool='none' → skip.
+    if (!followupFired && noRetrievalTag && !socialTurn) {
+      try {
+        const cur = curiosityLib.detectCuriosity(finalSaid || '');
+        if (cur.triggered && cur.query) {
+          const plan = await require('./lib/tool_router').planTool({ userMessage: cur.query });
+          if (plan && plan.surface === 'web' && plan.arg) {
+            followupFired = true;
+            console.log(`[main] intent→cloud → web "${plan.arg}" (from her: "${cur.query.slice(0, 50)}")`);
+            liveLookupAndAnswer({ io, channel, sessionId, userName, query: plan.arg })
+              .catch(e => console.error('[main] intent→web failed:', e.message));
+          } else if (plan && plan.surface === 'echo' && plan.arg && echoSuit) {
+            followupFired = true;
+            console.log(`[main] intent→cloud → echo "${plan.arg}"`);
+            (async () => { try { const r = await echoSuit.routeNeed(plan.arg); await fireToolFollowup({ io, channel, sessionId, resultText: `I checked our Echo data for "${plan.arg}":\n${(r.text || '').slice(0, 1800)}` }); } catch (e) { console.error('[main] intent→echo failed:', e.message); } })();
+          }
+        }
+      } catch (e) { console.error('[main] intent→cloud route failed:', e.message); }
+    }
+  }
+
+  // (Screen-sight is handled by the early SCREEN-SIGHT INTERCEPTOR above, which answers in one
+  // response and returns before this point — so no late safety net is needed here.)
 
   // Background: dispatch scheduling tags — set/list/cancel her own timers.
   if (schedTagsToRun.length > 0) {
@@ -2577,6 +3378,24 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   }).catch(err => console.error('[main] open_threads extract failed:', err.message));
 
+  // Background: capture durable PERSONAL FACTS about Lucas (family, names, biography) from
+  // this message → retrievable knowledge (source 'personal_fact'), so "what's my daughter's
+  // name?" surfaces the real answer next time instead of a fabrication. Conservative model
+  // call; non-blocking; lands after the reply is already streaming.
+  require('./lib/personal_facts').extractFromUserTurn({
+    userMessage,
+    sourceTurnId: userTurnRow ? userTurnRow.id : null,
+    userName
+  }).then(stored => {
+    if (stored && stored.length > 0) console.log('[main] personal_facts captured:', stored.map(s => `${s.action || 'add'}: ${s.content.slice(0, 60)}`));
+  }).catch(err => console.error('[main] personal_facts extract failed:', err.message));
+
+  // Background: refresh her unified self-narrative if stale (self-awareness Layer 4). Lazy — at
+  // most once per TTL — so identity stays current with how she's grown without a per-turn cost.
+  require('./lib/self_narrative').maybeRefresh({ userName })
+    .then(t => { if (t) console.log('[main] self-narrative recomposed'); })
+    .catch(err => console.error('[main] self-narrative refresh failed:', err.message));
+
   // Background: extract any newly-established PROTOCOLS from this user message.
   // Conservative — only fires when Lucas is explicitly setting/changing rules.
   // Survives across sessions and is always injected into future context.
@@ -2671,6 +3490,11 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
 // in the follow-up (stripped) — no recursion.
 const MAX_ECHO_HOPS = 4;   // bounded in-turn Echo chain (find → pick tool → do → answer)
 async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 0 }) {
+  // R2 — keep idle PAUSED for the whole user-answer (incl. echo-chain recursion) so the monologue
+  // can't tick mid-answer and drift to another topic (the LAMP→STDP drift). Callers resume before
+  // calling us; we re-pause for our duration and resume only when the OUTERMOST followup finishes.
+  const _topHop = echoHop === 0;
+  if (_topHop) { try { pauseMonologue(); pauseHeartbeat(); pauseContinuity(); pauseReflection(); selfDialogue.pause(); } catch {} }
   try {
     const userName = db.getMeta('user_name') || 'them';
     const recentTurns = db.getRecentTurns(8);
@@ -2745,6 +3569,375 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     }
   } catch (err) {
     console.error('[main] fireToolFollowup failed:', err.message);
+  } finally {
+    if (_topHop) { try { resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume(); } catch {} }
+  }
+}
+
+// LIVE-INFO ANSWERING — when Lucas asks for up-to-the-minute facts (weather, prices,
+// markets, today's news), she must SEARCH and ANSWER in the same chat flow. Two real
+// failures this closes: (1) she emits prose intent ("I want to know the price of oil")
+// and no tag, so the idle monologue picks up the desire in the background and the answer
+// lands in the thought panel, never back in chat; (2) she emits <web-open> but the
+// tool-followup strips the follow-on <web-read/>, so the second hop never runs. Both now
+// route through one synchronous open→read→deepen (the same path the monologue already uses
+// successfully) and one tool-followup, so the answer comes back to Lucas.
+
+// Read her own browser's current page AND auto-deepen into the top result, returning the
+// combined text (not just a SERP). Mirrors monologue.runSearch's deepen step.
+async function readHerBrowserDeep() {
+  let body = '';
+  try {
+    const r = await webLib.read();
+    if (r && r.ok && r.text) body = r.text.replace(/\n{3,}/g, '\n\n').slice(0, 1200);
+  } catch {}
+  try {
+    const top = await webLib.openTopResult();
+    if (top && top.ok) {
+      const pr = await webLib.read();
+      if (pr && pr.ok && pr.text) body += `\n\nTop result (${top.title || top.url}):\n` + pr.text.replace(/\n{3,}/g, '\n\n').slice(0, 2000);
+    }
+  } catch {}
+  return body;
+}
+
+// Do a complete live lookup for `query` and answer Lucas in chat via one tool-followup.
+// Idle is paused around the lookup so the monologue can't grab the shared browser mid-search.
+async function liveLookupAndAnswer({ io, channel, sessionId, userName, query }) {
+  try { pauseMonologue(); pauseHeartbeat(); } catch {}
+  let content = '';
+  const urls = [];
+  try {
+    const opened = await webLib.open(query).catch(() => ({ ok: false }));
+    if (opened && opened.ok) {
+      if (opened.url) urls.push(opened.url);
+      const body = await readHerBrowserDeep();
+      if (body) content = `I looked up "${query}" just now in my own browser. What I found:\n${body}`;
+    }
+    // Fallback: Echo's web_search if her browser couldn't read anything.
+    if (!content && echoSuit && echoSuit.connected) {
+      try {
+        const er = await echoSuit.dispatch({ kind: 'do', name: 'web_search', args: { query } });
+        if (er && er.text && !er.isError) content = `I searched "${query}" with my research tools. What I found:\n${String(er.text).slice(0, 2200)}`;
+      } catch (e) { console.error('[main] live lookup echo fallback failed:', e.message); }
+    }
+  } catch (err) {
+    console.error('[main] liveLookupAndAnswer search failed:', err.message);
+  }
+  if (content) {
+    try { require('./lib/learning').maybeCaptureLearnings({ query, content, urls }); } catch {}
+    try {
+      const row = db.insertMonologue({ content, model: 'live-lookup', type: 'reading', query, urls: urls.length ? urls : null });
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(looked up) ${query}`, type: 'reading', query });
+    } catch {}
+  } else {
+    content = `[You tried to look up "${query}" for ${userName} but couldn't reach a live source this moment. Tell him plainly you couldn't pull it right now and offer to try again — do NOT make up a number or a fact.]`;
+  }
+  try { resumeMonologue(); resumeHeartbeat(); } catch {}
+  await fireToolFollowup({ io, channel, sessionId, resultText: content });
+}
+
+// CLOUD OPERATOR executors — map the operator's small tool menu to her real capabilities. Each
+// returns a TEXT result (or an honest ERROR string); the cloud agent loops over these. The deep
+// Echo catalog (500+ tools) is reached through the single `echo` tool, which cloud-picks the exact
+// tool via routeNeed. Safe surfaces only (her own browser / Echo / memory / workspace files).
+const operatorTools = {
+  web_search: async ({ query } = {}) => {
+    try { const o = await webLib.open(String(query || '')); if (o && o.ok) { const body = await readHerBrowserDeep(); return body || `(opened ${o.url} but no readable text)`; } return 'search did not open a page'; }
+    catch (e) { return 'ERROR: ' + e.message; }
+  },
+  // Navigate her browser to a SPECIFIC url and read THAT page deeply (no SERP top-result hop). This is
+  // what lets a research pass go DEEPER into a good site — open the org's /team or /contact page, or
+  // follow a link it saw — instead of the only-move-is-a-new-search loop.
+  open_page: async ({ url } = {}) => {
+    try {
+      const o = await webLib.open(String(url || ''));
+      if (!o || !o.ok) return `could not open ${url}: ${(o && o.reason) || 'failed'}`;
+      if (o.blocker) return `${o.url} needs a human (sign-in/CAPTCHA/paywall) — skip it, don't retry`;
+      const r = await webLib.read();
+      return (r && r.ok && r.text) ? r.text.replace(/\n{3,}/g, '\n\n').slice(0, 4000) : `opened ${o.url} but no readable text`;
+    } catch (e) { return 'ERROR: ' + e.message; }
+  },
+  echo: async ({ need } = {}) => {
+    try { if (!echoSuit) return 'Echo is not available right now.'; const r = await echoSuit.routeNeed(String(need || '')); return (r && r.text) || 'no result from Echo'; }
+    catch (e) { return 'ERROR: ' + e.message; }
+  },
+  browser_read: async () => {
+    try { const r = await webLib.read(); return (r && r.ok && r.text) || 'no page open in your browser'; }
+    catch (e) { return 'ERROR: ' + e.message; }
+  },
+  recall: async ({ query } = {}) => {
+    try { const rows = await memoryLib.retrieve(String(query || ''), { k: 5 }); const t = (rows || []).map(r => '- ' + String((r && r.content) || '').replace(/\s+/g, ' ').slice(0, 220)).join('\n'); return t || 'nothing relevant in memory'; }
+    catch (e) { return 'ERROR: ' + e.message; }
+  },
+  file: async ({ op, path, content } = {}) => {
+    try { const r = await filesLib.dispatch({ tag: 'file-' + (op || 'read'), attrs: { path: path || '' }, body: content || '' }); return (r && (r.text || r.message)) || (r && r.ok ? 'ok' : 'file op failed'); }
+    catch (e) { return 'ERROR: ' + e.message; }
+  },
+};
+
+// Run the cloud operator for a turn: the frontier model drives the tools; returns { answer, toolsUsed }
+// or null (→ caller falls back to the normal local reply). Fail-safe.
+async function runCloudOperator({ userMessage, context, task = false }) {
+  try {
+    const operator = require('./lib/operator');
+    // Per-tool timeout: a slow/hung capability (Echo down, a stalled page) can't block the turn —
+    // it returns an ERROR string the agent can route around.
+    const TO = (p, ms = 20000) => Promise.race([Promise.resolve().then(() => p), new Promise(res => setTimeout(() => res('ERROR: tool timed out'), ms))]);
+    const tools = {};
+    for (const k of Object.keys(operatorTools)) tools[k] = (a) => TO(operatorTools[k](a));
+    // DIRECTED TASK → in-turn completion: more steps + a longer budget + a mandate to deliver the WHOLE
+    // thing this turn (gather all of it, save long deliverables to a file, don't stop at a teaser).
+    const taskNote = task
+      ? '\n\nThis is an ASSIGNED TASK — drive it to a COMPLETE deliverable in THIS turn: gather everything needed across multiple tool steps, do NOT stop after one step or hand back a partial teaser, and produce the FULL result (the entire list / the complete write-up). If the deliverable is long, save it with the file tool (op:"write", a notes/… path) and tell Lucas where it is. Only give a final answer once the deliverable is actually complete.'
+      : '';
+    const res = await operator.runOperator({
+      userMessage, context: (context || '') + taskNote,
+      deps: { complete: operator._operatorComplete, tools },
+      maxSteps: task ? 8 : undefined, maxMs: task ? 90000 : undefined,
+      numPredict: task ? 3000 : undefined   // a list/write-up can be long — don't truncate it at generation
+    });
+    // GROWTH — "Zoe" IS the memory, not the model: the operator only grows her if what it gathers
+    // ACCRETES back into her knowledge. Capture the web findings it pulled as durable learnings, so
+    // the cloud driving the turn feeds her development instead of answering-and-forgetting. (Echo
+    // results already live in Echo's system-of-record; recall came from memory already.)
+    if (res && Array.isArray(res.steps)) {
+      for (const s of res.steps) {
+        if ((s.tool === 'web_search' || s.tool === 'browser_read') && s.result && !/^ERROR/.test(s.result) && s.result.length > 80) {
+          try { require('./lib/learning').maybeCaptureLearnings({ query: (s.args && (s.args.query || s.args.need)) || userMessage, content: s.result }); } catch {}
+        }
+      }
+    }
+    return res;
+  } catch (e) { console.error('[operator] run failed:', e.message); return null; }
+}
+
+// === DIRECTED-FOCUS OVERNIGHT DRIVER =============================================================
+// A Lucas-ASSIGNED task (focus.isDirected) is worked slice-by-slice by the cloud OPERATOR here in
+// main.js (where the tools live). Each slice: the operator researches the NEXT concrete part not yet
+// covered, appends findings to a workspace deliverable file, accretes to memory, and the focus
+// lifecycle (focus.recordOutcome) bounds the whole project (strikes / stuck / overnight wall-clock).
+// Cloud-only (gemma operator) → no local-GPU contention, so it proceeds while Lucas is away OR
+// chatting. Reuses focus.js for all loop safety; the monologue think-loop skips directed focuses.
+let directedDriverTimer = null;
+let directedStepInFlight = false;
+const DIRECTED_CADENCE_MS = 45 * 1000;   // a slice every ~45s while a directed task is active
+
+function startDirectedFocusDriver() {
+  if (directedDriverTimer) return;
+  directedDriverTimer = setInterval(() => { directedFocusTick().catch(e => console.error('[directed] tick failed:', e.message)); }, DIRECTED_CADENCE_MS);
+  console.log('[directed] overnight driver started');
+}
+function stopDirectedFocusDriver() {
+  if (directedDriverTimer) { clearInterval(directedDriverTimer); directedDriverTimer = null; }
+}
+function kickDirectedFocusDriver() {
+  startDirectedFocusDriver();
+  directedFocusTick().catch(e => console.error('[directed] kick failed:', e.message));   // start NOW, don't wait a cadence
+}
+
+// One driver tick: advance the active directed focus by a single research slice, record the outcome.
+async function directedFocusTick() {
+  if (directedStepInFlight) return;
+  const focusLib = require('./lib/focus');
+  let focus = null;
+  try { focus = focusLib.getCurrent(); } catch {}
+  if (!focus || !focusLib.isDirected(focus)) { stopDirectedFocusDriver(); return; }   // nothing assigned → idle off
+  if ((db.getMeta('operator.mode') || 'full').trim() === 'off') return;
+  directedStepInFlight = true;
+  try {
+    const outcome = await runDirectedResearchPass(focus);   // depth-first state machine; records the focus outcome
+    if (outcome && outcome.action && outcome.action !== 'continue') {
+      stopDirectedFocusDriver();
+      // CONSOLIDATE — the run is closing; fold the per-target sections into one clean dossier (+ recall
+      // node) before we let go. This is what Lucas opens in the morning; it notifies him itself.
+      const done = await condenseRun(focus, { reason: outcome.action });
+      if (!done) { try { require('./lib/presence').notify('Zoe — task', `${outcome.action}: ${String(focus.content).slice(0, 60)}`); } catch {} }
+    }
+  } catch (e) { console.error('[directed] tick error:', e.message); }
+  finally { directedStepInFlight = false; }
+}
+
+// Reasoner cloud call for the condense pass — uses the deeper subconscious model (gpt-oss:120b), not
+// the fast operator, because consolidation is a quality/judgment job. Returns text or '' (fail-safe).
+async function condenseComplete(messages, { numPredict = 2500 } = {}) {
+  try {
+    const models = require('./lib/models');
+    const src = (models.sources() || []).find(s => s.tier === 'cloud' && s.token);
+    if (!src) return '';
+    const model = (() => { try { return require('./lib/config').subconsciousModel() || 'gpt-oss:120b'; } catch { return 'gpt-oss:120b'; } })();
+    const r = await require('./lib/ollama').completeDetailed({
+      model, messages, base: src.base,
+      headers: src.token ? { Authorization: `Bearer ${src.token}` } : {},
+      options: { temperature: 0.3, num_ctx: 32768, num_predict: numPredict }
+    });
+    return (r && (r.text || '')) || '';
+  } catch (e) { console.error('[condense] cloud failed:', e.message); return ''; }
+}
+
+// CONDENSE a finished directed run into one clean dossier: read the accreted file, fold it (map-reduce
+// if large) via the reasoner, write notes/directed-<id>-dossier.md, store ONE recall-friendly knowledge
+// node, remember it as research.last_dossier (so a later "expand" can find it), and notify Lucas.
+async function condenseRun(focus, { reason = 'done' } = {}) {
+  try {
+    const cd = require('./lib/condense');
+    const goal = String(focus.content || '');
+    const file = db.getMeta(`focus.${focus.id}.file`);
+    let raw = '';
+    if (file) { try { const r = await filesLib.dispatch({ tag: 'file-read', attrs: { path: file } }); raw = (r && (r.text || r.content)) || ''; } catch {} }
+    if (!raw || raw.trim().length < 80) { console.log('[condense] nothing substantial to condense'); return null; }
+    const chunks = cd.chunkForCondense(raw, 24000);
+    let condensed = '';
+    if (chunks.length <= 1) {
+      condensed = await condenseComplete(cd.buildCondensePrompt({ goal, raw: chunks[0] || raw }), { numPredict: 3000 });
+    } else {
+      const parts = [];
+      for (const ch of chunks) { const p = await condenseComplete(cd.buildCondensePrompt({ goal, raw: ch }), { numPredict: 2000 }); if (p && p.trim()) parts.push(p); }
+      condensed = parts.length ? await condenseComplete(cd.buildMergePrompt({ goal, parts }), { numPredict: 3000 }) : '';
+    }
+    if (!condensed || condensed.trim().length < 40) { console.log('[condense] empty result — leaving raw run file in place'); return null; }
+    const dossierPath = `notes/directed-${focus.id}-dossier.md`;
+    try { await filesLib.dispatch({ tag: 'file-write', attrs: { path: dossierPath }, body: `# Research dossier\n\n**Task:** ${goal}\n**Completed:** ${reason}\n\n${condensed.trim()}\n` }); }
+    catch (e) { console.error('[condense] dossier write failed:', e.message); }
+    try { await memoryLib.store({ kind: 'note', content: `Research dossier — ${goal.slice(0, 90)}:\n${condensed.slice(0, 4000)}`, source: 'research_dossier', importance: 0.85, embedText: goal }); } catch {}
+    try { db.setMeta('research.last_dossier', JSON.stringify({ focusId: focus.id, path: dossierPath, goal, reason })); } catch {}
+    try {
+      const rr = db.insertMonologue({ content: `Condensed the research run into a dossier (${dossierPath}). ${condensed.slice(0, 280)}`, model: 'condense', type: 'reading' });
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: rr.id, ts: rr.ts, content: `(dossier ready) ${dossierPath}`, type: 'reading' });
+    } catch {}
+    try { require('./lib/presence').notify('Zoe — dossier ready', `${goal.slice(0, 50)} → ${dossierPath}`); } catch {}
+    console.log(`[condense] dossier written → ${dossierPath} (${condensed.length} chars, from ${chunks.length} chunk(s))`);
+    return { path: dossierPath };
+  } catch (e) { console.error('[condense] run failed:', e.message); return null; }
+}
+
+// FRONTIER STATUS REPORT (Concern 1) — when Lucas asks how a running task is going, the local voice
+// model gave a truncated, half-blind answer. Instead read the REAL state (orgs done, current target,
+// clarifications, the deliverable so far) and have the reasoner write a crisp, usable progress update.
+// Returns the report text (Dans then relays it in full) or '' (fail-safe → normal reply).
+async function statusReport(focus) {
+  try {
+    const goal = String(focus.content || '');
+    let covered = []; try { covered = JSON.parse(db.getMeta(`focus.${focus.id}.covered`) || '[]'); } catch {}
+    let target = null; try { target = JSON.parse(db.getMeta(`focus.${focus.id}.target`) || 'null'); } catch {}
+    let clar = []; try { clar = JSON.parse(db.getMeta(`focus.${focus.id}.clarifications`) || '[]'); } catch {}
+    let fileExcerpt = '';
+    const file = db.getMeta(`focus.${focus.id}.file`);
+    if (file) { try { const r = await filesLib.dispatch({ tag: 'file-read', attrs: { path: file } }); fileExcerpt = String((r && (r.text || r.content)) || '').slice(0, 3500); } catch {} }
+    let ticks = 0; try { ticks = JSON.parse(db.getMeta('focus_state') || '{}').ticks || 0; } catch {}
+    const state = `TASK: ${goal}\nRESEARCH PASSES RUN: ${ticks}\nORGANIZATIONS COMPLETED (${covered.length}): ${covered.join(', ') || 'none yet'}\nCURRENTLY RESEARCHING: ${target ? `${target.name} (pass ${target.passes || 1})` : '(between targets)'}\n${clar.length ? `LUCAS'S CLARIFICATIONS SO FAR: ${clar.join(' | ')}\n` : ''}DELIVERABLE SO FAR (excerpt):\n${fileExcerpt || '(nothing written yet)'}`;
+    const messages = [
+      { role: 'system', content: `You write Lucas a crisp, USEFUL progress update on his running research task. Ground ONLY in the state provided — never invent. Cover concretely: how many organizations are done and NAME them; what's solidly in hand (named staff? real contacts?) vs still thin; what you're on right now; and what's missing or weak (gaps worth knowing). A tight bulleted list or 4–8 sentences. No filler, no restating the whole task.` },
+      { role: 'user', content: state + '\n\nWrite the progress update now.' }
+    ];
+    return await condenseComplete(messages, { numPredict: 900 });
+  } catch (e) { console.error('[status] report failed:', e.message); return ''; }
+}
+
+// ONE driver tick of the DEPTH-FIRST research loop (lib/research is the pure brain). Either OPENS a
+// new target (overview pass) or DEEPENS the current one (next missing facet — staff, contacts,
+// positions…), staying on a target across passes until it saturates / hits the depth cap / stops
+// adding new material. When a target completes, a CLOUD ORGANIZE pass (reasoner) folds its raw passes
+// into a clean dossier section appended right then — so organization is continuous, not just at run-end.
+// Research passes are the cloud operator. State (covered orgs, current target, file) lives in meta.
+// Records + returns the focus outcome. Fully fail-safe.
+async function runDirectedResearchPass(focus) {
+  const focusLib = require('./lib/focus');
+  const blackboard = require('./lib/blackboard');
+  const rs = require('./lib/research');
+  const goal = String(focus.content || '');
+  const coveredKey = `focus.${focus.id}.covered`;
+  const targetKey = `focus.${focus.id}.target`;
+  const fileKey = `focus.${focus.id}.file`;
+  let covered = []; try { covered = JSON.parse(db.getMeta(coveredKey) || '[]'); } catch {}
+  let target = null; try { target = JSON.parse(db.getMeta(targetKey) || 'null'); } catch {}
+  let file = db.getMeta(fileKey); if (!file) { file = `notes/directed-${focus.id}.md`; try { db.setMeta(fileKey, file); } catch {} }
+  // Mid-run clarifications Lucas gave → guidance folded into EVERY pass from here on.
+  let clar = []; try { clar = JSON.parse(db.getMeta(`focus.${focus.id}.clarifications`) || '[]'); } catch {}
+  const guidance = rs.buildGuidanceBlock(clar);
+
+  const runPass = async (prompt) => {
+    try {
+      const r = await runCloudOperator({ userMessage: prompt, context: '', task: true });
+      return { ans: (r && r.answer ? String(r.answer).trim() : ''), usedTool: !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.some(t => ['web_search', 'browser_read', 'echo'].includes(t))) };
+    } catch (e) { return { ans: '', usedTool: false }; }
+  };
+
+  let progressed = false, done = false, note = '', sig = '';
+
+  if (!target || !target.name) {
+    // OPEN A NEW TARGET — overview pass.
+    const { ans, usedTool } = await runPass(rs.buildNewTargetPrompt({ goal, covered, guidance }));
+    const p = rs.parsePass(ans);
+    if (p.allCovered && covered.length) { done = true; note = `all organizations covered (${covered.length})`; }
+    else if (p.target && !covered.some(c => String(c).toLowerCase() === p.target.toLowerCase())) {
+      target = { name: p.target, passes: 1, raw: p.body || ans, facets: ['overview'] };
+      try { db.setMeta(targetKey, JSON.stringify(target)); } catch {}
+      progressed = !!(p.body && usedTool); sig = p.target.toLowerCase(); note = `started ${p.target}`;
+    } else { note = p.target ? `(repeat target) ${p.target}` : 'no new target found'; sig = String(p.target || '').toLowerCase(); }
+  } else {
+    // DEEPEN the current target — next missing facet.
+    const { ans, usedTool } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance }));
+    const p = rs.parsePass(ans);
+    const newChars = rs.newContentChars(target.raw, p.body);
+    target.passes = (target.passes || 1) + 1;
+    if (p.body) target.raw = `${target.raw}\n\n${p.body}`.slice(-16000);
+    if (p.facet) target.facets = (target.facets || []).concat(p.facet).slice(-12);
+    const adv = rs.decideAdvance({ passes: target.passes, newChars, saturated: p.saturated });
+    if (adv.advance) {
+      // CLOUD ORGANIZE this target → one clean section, appended to the deliverable NOW (continuous).
+      let section = '';
+      try { section = await condenseComplete(rs.buildOrganizeTargetPrompt({ target: target.name, raw: target.raw }), { numPredict: 1500 }); } catch {}
+      section = (section && section.trim()) ? section.trim() : `## ${target.name}\n${target.raw.slice(0, 1500)}`;
+      const header = covered.length === 0 ? `# Directed research deliverable\n\n**Task:** ${goal}\n\n---\n\n` : '';
+      try { await filesLib.dispatch({ tag: 'file-append', attrs: { path: file }, body: `${header}${section}\n\n` }); }
+      catch (e) { console.error('[directed] append failed:', e.message); }
+      covered.push(target.name); try { db.setMeta(coveredKey, JSON.stringify(covered.slice(-300))); } catch {}
+      note = `completed ${target.name} (${target.passes} passes, ${adv.reason}) + organized`; sig = target.name.toLowerCase(); progressed = true;
+      target = null; try { db.setMeta(targetKey, ''); } catch {}
+    } else {
+      try { db.setMeta(targetKey, JSON.stringify(target)); } catch {}
+      progressed = newChars >= 120 && usedTool; sig = `${target.name}#${target.passes}`.toLowerCase();
+      note = `deepening ${target.name}: +${p.facet || 'detail'} (${newChars} new chars)`;
+    }
+  }
+
+  // surface to her thought-stream + accrete to the focus working set (signature = org identity so the
+  // stuck detector catches a real loop, while normal deepening passes stay distinct).
+  if (note) {
+    try {
+      const rr = db.insertMonologue({ content: note, model: 'operator', type: 'reading' });
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: rr.id, ts: rr.ts, content: `(researching: ${String(focus.content).slice(0, 36)}) ${note.slice(0, 80)}`, type: 'reading' });
+    } catch {}
+    try { blackboard.append({ source: 'monologue', kind: 'reading', focusId: focus.id, content: note, signature: sig }); } catch {}
+  }
+  const outcome = done
+    ? focusLib.recordOutcome(focus, { control: { type: 'done', note } })
+    : focusLib.recordOutcome(focus, { progressed });
+  console.log(`[directed] #${focus.id} → ${done ? 'ALL-COVERED' : note} → ${outcome.action}`);
+  return outcome;
+}
+
+// SEE — run any image (base64, from ANY surface: her browser, the shared browser, the screen, an
+// image file) through her vision model and answer in chat: store it as a reading, capture facts,
+// and tool-follow-up so she speaks what she saw. One path so every surface behaves identically and
+// fails the same honest way. Caller guards with followupFired.
+async function seeImage({ io, channel, sessionId, userName, base64, label, url = null, question = null, surface = 'vision' }) {
+  let vr;
+  try { vr = await require('./lib/vision').describe({ imageBase64: base64, prompt: question || null }); }
+  catch (e) { vr = { ok: false, reason: e.message }; }
+  if (vr && vr.ok) {
+    const content = `I visually looked at ${label}${url ? ` (${url})` : ''} and SAW:\n${vr.text}`;
+    try {
+      const row = db.insertMonologue({ content, model: surface, type: 'reading', query: url || label, urls: url ? [url] : null });
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(saw) ${label}`, type: 'reading', query: url || label });
+    } catch {}
+    try { require('./lib/learning').maybeCaptureLearnings({ query: label, content, urls: url ? [url] : null }); } catch {}
+    console.log(`[main] ${surface} "${label}": ok ${vr.tier}/${vr.model}`);
+    await fireToolFollowup({ io, channel, sessionId, resultText: content });
+  } else {
+    console.log(`[main] ${surface} "${label}": FAIL ${vr && vr.reason}`);
+    await fireToolFollowup({ io, channel, sessionId, resultText: `[You tried to visually SEE ${label} but couldn't (${vr && vr.reason}). Tell ${userName} plainly you couldn't see it this time — don't invent what's there.]` });
   }
 }
 

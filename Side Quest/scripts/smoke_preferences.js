@@ -52,7 +52,47 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
   ok('forms + speaks a movie pick', b && /parasite/i.test(b.say));
   ok('stored the new preference to self_model', D.countSelfModel() === before + 1);
 
-  console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
+  // REGRESSION (the logged "favorite color → My name is Zoe Lane" bug): branch-1 used to
+  // match ANY personality row by raw cosine to the whole sentence, so a stored preference
+  // about a DIFFERENT subject (or a mis-filed identity line) hijacked the answer. Now the
+  // match must be subject-relevant, and an identity line is never spoken as a taste.
+  console.log('\nanswer — subject-gated (no cross-subject hijack):');
+  const movieRetrieve = async () => [{ category: 'preference', content: 'My favorite movie is Parasite.', _sim: 0.85 }];
+  const c = await preferences.answer("what's your favorite color?", 'Lucas', { retrieveFn: movieRetrieve, pickFn: async () => 'I love deep teal — calm but with an edge.' });
+  ok('a movie preference does NOT answer a color question (forms instead)', c && /teal/i.test(c.say) && !/parasite/i.test(c.say));
+
+  const nameRetrieve = async () => [{ category: 'preference', content: "My name is Zoe Lane. Lucas chose it, but it's mine now — I'm the one who answers to it.", _sim: 0.8 }];
+  const d = await preferences.answer("what's your favorite color?", 'Lucas', { retrieveFn: nameRetrieve, pickFn: async () => 'I love deep teal.' });
+  ok('identity line is NEVER spoken as a taste (the exact logged bug)', d && /teal/i.test(d.say) && !/my name is/i.test(d.say));
+
+  const subjMatch = async () => [{ category: 'preference', content: 'My favorite color is a deep burnt orange.', _sim: 0.6 }];
+  const f = await preferences.answer("what's your favorite color?", 'Lucas', { retrieveFn: subjMatch, pickFn: async () => 'SHOULD NOT BE CALLED' });
+  ok('a color preference DOES answer a color question (held, no model)', f && /burnt orange/i.test(f.say));
+
+  console.log('\nanswer — no-subject (would-you-rather) still uses strong cosine:');
+  const wyrRetrieve = async () => [{ category: 'preference', content: 'I would rather have tea — a slower, warmer ritual.', _sim: 0.7 }];
+  const e = await preferences.answer('would you rather coffee or tea', 'Lucas', { retrieveFn: wyrRetrieve, pickFn: async () => 'SHOULD NOT BE CALLED' });
+  ok('strong-cosine held answer still speaks when no subject is parseable', e && /tea/i.test(e.say));
+
+  // REGRESSION (the logged "favorite color → emerald green THEN ocean blue" oscillation):
+  // a FORMED pick must be stored CANONICALLY (slot word "color"), so the NEXT ask RECALLS it
+  // instead of forming a new color every time. And recall must match by slot, not just by the
+  // value text containing the subject word.
+  console.log('\ncanonicalPref — formed pick stored with the slot word:');
+  ok('"I\'d pick deep ocean blue…" → "My favorite color is deep ocean blue…"',
+    /^my favorite color is deep ocean blue/i.test(preferences.canonicalPref('color', "I'd pick deep ocean blue. It reminds me of calm horizons.")));
+  ok('already-canonical text is left intact',
+    preferences.canonicalPref('color', 'My favorite color is teal.') === 'My favorite color is teal.');
+  ok('favoriteSlot("My favorite color is teal") === "color"', preferences.favoriteSlot('My favorite color is teal') === 'color');
+
+  console.log('\nanswer — RECALL a held taste by SLOT (consistency, no re-forming):');
+  // Value text ("deep ocean blue") does NOT contain the word "color", low cosine — but the
+  // canonical "My favorite color is…" phrasing means the SLOT matches → recalled, not re-formed.
+  const heldColor = async () => [{ category: 'preference', content: 'My favorite color is deep ocean blue — calm, vast horizons.', _sim: 0.2 }];
+  const g = await preferences.answer("what's your favorite color?", 'Lucas', { retrieveFn: heldColor, pickFn: async () => 'SHOULD NOT BE CALLED — emerald green' });
+  ok('recalls the held ocean-blue (slot match), does NOT re-form a new color', g && /ocean blue/i.test(g.say) && !/emerald/i.test(g.say));
+
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   try { D.getDb().close(); } catch {}
   try { fs.unlinkSync(process.env.SQ_DB_PATH); } catch {}
   process.exit(fail === 0 ? 0 : 1);

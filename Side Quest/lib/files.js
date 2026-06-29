@@ -81,6 +81,11 @@ function fileRead(p) {
     if (!fs.existsSync(abs)) return { ok: false, reason: 'file does not exist', path: abs };
     const stat = fs.statSync(abs);
     if (stat.isDirectory()) return { ok: false, reason: 'that is a directory — use <file-list/>', path: abs };
+    // Image file → return base64 (not garbled utf8) so the caller can run it through vision (she SEES it).
+    if (/\.(png|jpe?g|gif|webp|bmp|tiff?)$/i.test(abs)) {
+      if (stat.size > 12 * 1024 * 1024) return { ok: false, reason: 'image too large to view (>12MB)', path: abs };
+      return { ok: true, path: abs, image: true, base64: fs.readFileSync(abs).toString('base64'), size: stat.size };
+    }
     let text = fs.readFileSync(abs, 'utf8');
     const truncated = text.length > MAX_READ_CHARS;
     if (truncated) text = text.slice(0, MAX_READ_CHARS) + '\n…(truncated)';

@@ -67,6 +67,42 @@ function model() {
   return get('ZOE_MODEL').trim() || 'mistral-small3.2:24b';
 }
 
+// The FRONT (voice) model — her conversational, persona-bearing local model. Distinct from
+// model() so COGNITION/extraction can stay on a different local model (or move to cloud) while
+// her VOICE uses this. Override via ZOE_FRONT_MODEL in .env; unset → model() (no behavior change).
+// Resolved from env (not db) so it's available at module-load before db.init().
+function frontModel() {
+  return get('ZOE_FRONT_MODEL').trim() || model();
+}
+
+// The SUBCONSCIOUS model — her between-turn monologue/thinking. This is private cognition, not her
+// spoken voice, so it should be a DEEP model (a cloud reasoner) for richer material. Set a cloud
+// model name in ZOE_SUBCONSCIOUS_MODEL to route the monologue's thinking to the cloud; empty/unset
+// → local front model (current behavior). The monologue falls back to local if the cloud is down.
+function subconsciousModel() {
+  return get('ZOE_SUBCONSCIOUS_MODEL').trim();
+}
+
+// The EXTRACTION / COGNITION model — the structured background work: dedup/merge decisions,
+// importance scoring, fact/preference/relation/thread extraction, summaries, classifications.
+// Routed to a CLOUD utility model by default so it uses ZERO local VRAM. This is what stops her
+// front voice (Dans-24b) and a SECOND local 24B (mistral) from evicting each other on the GPU —
+// the load/unload thrash that showed up as 20–40s hangs. The local Ollama daemon transparently
+// proxies '-cloud' model names to ollama.com, so no token/base plumbing is needed at the callsite.
+// Override via ZOE_EXTRACT_MODEL (set a LOCAL model name to keep extraction on-device). Resolved
+// from env (not db) so it's available at module-load before db.init(), like the other model slots.
+function extractionModel() {
+  return get('ZOE_EXTRACT_MODEL').trim() || 'gemma4:31b-cloud';
+}
+
+// --- Tiered subconscious (local volume + cloud depth; see docs/SUBCONSCIOUS_TIERED_SPEC.md) ---
+// All env-resolved (safe at module-load), all reversible/fail-safe to local.
+//   mode: hybrid (default) | triage | local (never cloud, $0) | all (legacy every-tick-cloud)
+function subcTierMode() { return get('ZOE_SUBC_TIER_MODE').trim() || 'hybrid'; }
+function subcMeritThreshold() { const n = parseInt(get('ZOE_SUBC_MERIT_THRESHOLD', '').trim(), 10); return Number.isFinite(n) ? n : 3; }
+function subcSynthIntervalMin() { const n = parseInt(get('ZOE_SUBC_SYNTH_MIN', '').trim(), 10); return Number.isFinite(n) ? n : 20; }
+function subcBudgetTokensPerHour() { const n = parseInt(get('ZOE_SUBC_BUDGET_TOKPH', '').trim(), 10); return Number.isFinite(n) ? n : 120000; }
+
 // --- Email ---
 function emailConfig() {
   const user = get('ZOE_EMAIL_USER').trim();
@@ -83,4 +119,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, model, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, emailConfig, discordConfig, APP_ROOT, ENV_PATH };

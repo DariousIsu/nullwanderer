@@ -128,7 +128,44 @@ async function run() {
   const st2 = focus.recordOutcome(fk, { progressed: false });
   ok('3 identical focus thoughts → stalled via stuck detector', st2.action === 'stalled' && st2.reason.startsWith('stuck:'));
 
-  console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
+  // --- DIRECTED focus (Lucas-assigned overnight task): chat entry-point + overnight caps ---
+  console.log('\ndirected focus (user-assigned, overnight):');
+  reset();
+  const dres = await focus.setFromDirective('study every right-of-center think tank: who they are, staff, and contacts');
+  ok('setFromDirective creates + activates a focus', !!dres && !!dres.focus && focus.isActive());
+  ok('the active focus is flagged directed', focus.isDirected(focus.getCurrent()) === true);
+  // overnight tick cap: a directed focus survives FAR past the self-spawned MAX_TICKS (8)
+  let dlast;
+  for (let i = 0; i < focus.MAX_TICKS + 4; i++) dlast = focus.recordOutcome(dres.focus, { progressed: true });
+  ok(`directed focus still CONTINUES past MAX_TICKS=${focus.MAX_TICKS} (ran ${focus.MAX_TICKS + 4})`, dlast.action === 'continue');
+  // overnight strike tolerance: stalls at MAX_STRIKES_DIRECTED, not the tight 3
+  reset();
+  const dstrk = await focus.setFromDirective('research X overnight in depth');
+  let dstrikeLast;
+  for (let i = 0; i < focus.MAX_STRIKES_DIRECTED; i++) dstrikeLast = focus.recordOutcome(dstrk.focus, { progressed: false });
+  ok(`directed focus tolerates >${focus.MAX_STRIKES} strikes, stalls at MAX_STRIKES_DIRECTED=${focus.MAX_STRIKES_DIRECTED}`,
+    dstrikeLast.action === 'stalled' && dstrikeLast.reason === 'no-progress strikes');
+  // overnight wall-clock cap (much larger than the 10-min musing cap)
+  reset();
+  const dwc = await focus.setFromDirective('compile a long dossier overnight');
+  const dst = JSON.parse(db.getMeta('focus_state'));
+  ok('directed state carries the directed flag', dst.directed === true);
+  dst.startedTs = Date.now() - (focus.MAX_WALLCLOCK_MS_DIRECTED + 1000);
+  db.setMeta('focus_state', JSON.stringify(dst));
+  ok('directed survives a duration that would cap a normal focus',
+    focus.MAX_WALLCLOCK_MS_DIRECTED > focus.MAX_WALLCLOCK_MS);
+  const dwcOut = focus.recordOutcome(dwc.focus, { progressed: true });
+  ok('directed stalls only at its OWN (overnight) wall-clock cap', dwcOut.action === 'stalled' && dwcOut.reason === 'wall-clock cap');
+  // displacement + idempotency
+  reset();
+  fresh('a self-spawned musing about email tone');   // a normal (non-directed) focus
+  ok('a self-spawned focus is NOT directed', focus.isDirected(focus.getCurrent()) === false);
+  const disp = await focus.setFromDirective('catalog every right-of-center energy think tank');
+  ok('a directive DISPLACES a self-spawned musing', !!disp && focus.isDirected(focus.getCurrent()) === true);
+  const dup = await focus.setFromDirective('catalog every right-of-center energy think tank');
+  ok('a near-identical follow-up does NOT spawn a duplicate (idempotent)', dup.focus.id === disp.focus.id);
+
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   try { db.getDb().close(); } catch {}
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(tmp + ext); } catch {} }
   process.exit(fail === 0 ? 0 : 1);
