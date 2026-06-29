@@ -2556,6 +2556,34 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   } catch (e) { console.error('[main] directed-stop check failed:', e.message); }
 
+  // WRAP-UP / FINALIZE — distinct from STOP (which abandons + saves). "Wrap up / finish / finalize the
+  // research" means CONCLUDE it into its deliverable: halt the driver, condense the run into the lossless
+  // dossier (→ Canvas via condenseRun's canvasEmit), resolve the focus, and POINT chat at the Canvas with
+  // a GROUNDED count (the fuzzy "13-14" came from this falling through to an ungrounded reply). Sets
+  // directedStopHandled so the downstream query/operator/setup blocks skip — this turn is fully handled.
+  try {
+    const focusLib = require('./lib/focus');
+    const f = focusLib.getCurrent();
+    if (f && focusLib.isDirected(f) && !directedStopHandled
+        && /\b(wrap (?:it |this |that )?up|wrap up|finish (?:up|it|the|this|that)|finali[sz]e|conclude|call it (?:done|a wrap)|that'?s a wrap|pull (?:it|the findings|everything) together)\b/i.test(userMessage)) {
+      try { stopDirectedFocusDriver(); } catch {}
+      const goal = String(f.content || '');
+      const tabTitle = (() => { try { return require('./studio/canvas_emit').tabTitleForGoal(goal); } catch { return 'your research'; } })();
+      let cov = []; try { cov = JSON.parse(db.getMeta(`focus.${f.id}.covered`) || '[]'); } catch {}
+      // Condense in the BACKGROUND (one cloud wrapper call) so the chat reply isn't blocked; the per-org
+      // sections are already on the Canvas from the live run, the dossier block lands a moment later.
+      (async () => {
+        try { await condenseRun(f, { reason: 'done' }); }
+        catch (e) { console.error('[wrapup] condense failed:', e.message); }
+        try { db.markOpenThreadStatus(f.id, 'resolved', { reason: 'user wrap-up' }); } catch {}
+        try { focusLib.clear('user-wrapup'); } catch {}
+      })();
+      composedUserMessage += `\n\n[${userName} told you to WRAP UP the research. You're finalizing it now — assembling the complete ${cov.length}-organization dossier onto his Canvas (tab "${tabTitle}"). Tell him briefly that you're wrapping it up and the full dossier is going to the Canvas. Give ONLY the count headline (${cov.length} organizations); do NOT recite the list, and do NOT say you're "starting" or "continuing" — you are CONCLUDING it.]`;
+      directedStopHandled = true;   // reuse the gate: this turn is fully handled, skip the blocks below
+      console.log(`[focus] directed task #${f.id} WRAP-UP → condense + canvas (${cov.length} orgs)`);
+    }
+  } catch (e) { console.error('[main] wrap-up check failed:', e.message); }
+
   // EXPAND ORDER (Iterate) — "expand / go deeper on the prior research". Re-inflate a slice of the last
   // condensed dossier into a FRESH, deeper directed run, seeded with the orgs already found so it
   // DEEPENS (full staff + contacts) rather than restarting. Only acts when a prior dossier exists.
@@ -2612,16 +2640,35 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         const ans = tk.buildAnswer(track, userMessage);
         const skip = ans.kind === 'status' && track.kind !== 'active' && socialTurn;   // greeting, not a project query
         if (ans.handled && ans.block && !skip) {
-          let body = ans.block;
-          // status-kind on a LIVE run gets the frontier narrative (what's solid vs thin) layered on the list
-          if (ans.kind === 'status' && track.kind === 'active') {
-            const f = (() => { try { return require('./lib/focus').getCurrent(); } catch { return null; } })();
-            if (f) { const report = await statusReport(f); if (report && report.trim()) body = `${ans.block}\n\n${report.trim()}`; }
+          // CANVAS ROUTE — answers in chat, complete works on the Canvas, ask when the medium is unsure
+          // (she's canvas-aware). The directed run already emits its org sections + dossier to the Canvas
+          // via canvasEmit, so a pointer is truthful.
+          const route = require('./lib/canvas_route').routeDeliverable({ text: userMessage, kind: ans.kind });
+          const count = (track.covered || []).length || (track.sections || []).length;
+          const tabTitle = (() => { try { return require('./studio/canvas_emit').tabTitleForGoal(track.goal); } catch { return 'your research'; } })();
+          if (route.target === 'canvas') {
+            // POINTER only — chat does NOT recite the big content; it lives on the Canvas.
+            composedUserMessage += `\n\n[${userName} asked for ${ans.kind === 'facet' ? 'the leadership across all the organizations' : 'the full list / write-up'}. It is on your Canvas (tab "${tabTitle}"). Tell him briefly it's on the Canvas and give ONLY the one-line headline (${count} organizations) — do NOT recite the list or the details here.]`;
+            statusHandled = true;
+            console.log(`[poll→canvas] deliverable pointed to canvas (${route.reason})`);
+          } else if (route.target === 'ask') {
+            // ASK — genuinely unsure of the medium → one short question (the priority-gate "ask when unsure" pattern).
+            composedUserMessage += `\n\n[${userName} asked for ${ans.kind === 'facet' ? 'the leadership of each organization' : 'the list'} (${count} organizations on file). You can show it here in chat OR display the full thing on your Canvas — you're not sure which he wants. Ask him in ONE short line whether to put it on the Canvas or give it here. Do NOT recite the list yet.]`;
+            statusHandled = true;
+            console.log(`[poll→ask] deliverable medium unclear — asking (${route.reason})`);
+          } else {
+            // CHAT — short/specific answer stays here (count / sample / status).
+            let body = ans.block;
+            if (ans.kind === 'status' && track.kind === 'active') {
+              const f = (() => { try { return require('./lib/focus').getCurrent(); } catch { return null; } })();
+              if (f) { const report = await statusReport(f); if (report && report.trim()) body = `${ans.block}\n\n${report.trim()}`; }
+            }
+            const ptr = ans.kind === 'count' ? ` You may also add, briefly, that the full breakdown is on his Canvas (tab "${tabTitle}") if he wants it.` : '';
+            const where = track.kind === 'active' ? 'your IN-PROGRESS research' : 'your research';
+            composedUserMessage += `\n\n[${userName} asked about ${where}. These are your REAL task facts — present them EXACTLY and COMPLETELY in your own voice: state the count as given and name EVERY organization listed, in order. Do NOT stop early, summarize, round the number, drop any, or invent any. The count is whatever this block says — not any other number you may recall:\n${body}]${ptr}`;
+            statusHandled = true;
+            console.log(`[poll] deliverable answered in chat from ${track.kind} track (${ans.note}, route=${route.reason})`);
           }
-          const where = track.kind === 'active' ? 'your IN-PROGRESS research' : 'your research';
-          composedUserMessage += `\n\n[${userName} asked about ${where}. These are your REAL task facts — present them EXACTLY and COMPLETELY in your own voice: state the count as given and name EVERY organization listed, in order. Do NOT stop early, summarize, round the number, drop any, or invent any. The count is whatever this block says — not any other number you may recall:\n${body}]`;
-          statusHandled = true;
-          console.log(`[poll] deliverable answered from ${track.kind} track (${ans.note})`);
         }
       } else if (top && top.kind === 'activity' && !socialTurn) {
         const snap = await laneSnapshot();
