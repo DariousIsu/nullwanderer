@@ -48,6 +48,17 @@ const c1 = tk.buildAnswer(complete, 'how many think tanks have you done?');
 ok(c1.handled && /\b3 organizations\b/.test(c1.block), 'count comes from the artifact (3), not a guess');
 ok(/Heritage Foundation/.test(c1.block) && /Heartland Institute/.test(c1.block), 'count answer names every org');
 
+// --- COUNT from the INDEX when the document is short/truncated (the live "5 vs 13" miss) ---
+const truncated = {
+  kind: 'active', goal: 'g', completed: null,
+  covered: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M'],   // index = 13
+  sections: [mk('A', 'x', 'y'), mk('B', 'x', 'y'), mk('C', 'x', 'y'), mk('D', 'x', 'y'), mk('E', 'x', 'y')],  // doc parsed only 5 (read cap)
+  target: null
+};
+const tc = tk.buildAnswer(truncated, 'how many have you covered?');
+ok(tc.handled && /\b13 organizations\b/.test(tc.block), 'count uses the INDEX (13), not the short/truncated document (5)');
+ok(/A, B, C, D, E, F, G, H, I, J, K, L, M/.test(tc.block), 'list names every indexed org, not just the parsed ones');
+
 // --- LIST ---
 const l1 = tk.buildAnswer(complete, "what's the full list?");
 ok(l1.handled && /3 organizations/.test(l1.block) && /Cato Institute/.test(l1.block), 'list answer = full grounded list');

@@ -95,6 +95,22 @@ function fileRead(p) {
   }
 }
 
+// Untruncated read for PROGRAM-INTERNAL use (assembly, counting, parsing) — never for direct model
+// injection. fileRead's MAX_READ_CHARS cap exists to bound what goes into the prompt; the deliverable
+// assembly + the count/list query must see the WHOLE file (a 33KB, 13-org run was being cut to ~5 orgs).
+function fileReadFull(p) {
+  const abs = resolvePath(p);
+  if (!abs) return { ok: false, reason: 'no path given' };
+  try {
+    if (!fs.existsSync(abs)) return { ok: false, reason: 'file does not exist', path: abs };
+    const stat = fs.statSync(abs);
+    if (stat.isDirectory()) return { ok: false, reason: 'that is a directory', path: abs };
+    return { ok: true, path: abs, text: fs.readFileSync(abs, 'utf8'), truncated: false, size: stat.size };
+  } catch (err) {
+    return { ok: false, reason: err.message, path: abs };
+  }
+}
+
 function fileList(p) {
   // Default to workspace when no path given
   const abs = p && p.trim() ? resolvePath(p) : WORKSPACE;
@@ -258,7 +274,7 @@ A bare name like "notes/idea.md" lands in your workspace (${WORKSPACE}). An abso
 module.exports = {
   WORKSPACE,
   ensureWorkspace, resolvePath,
-  fileWrite, fileAppend, fileRead, fileList, fileMove, fileCopy, fileSearch,
+  fileWrite, fileAppend, fileRead, fileReadFull, fileList, fileMove, fileCopy, fileSearch,
   parseTags, stripTags, dispatch,
   buildPromptBlock
 };

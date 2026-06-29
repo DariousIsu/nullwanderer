@@ -125,7 +125,14 @@ function extractTopic(track, text) {
 
 // --- the grounded answer block ----------------------------------------------
 
-function _orgList(track) { return (track.sections || []).map(s => s.heading); }
+// The org list for count/list answers. Per design §2 the INDEX (covered) is the source of truth for
+// the count — it can't be truncated and never lags the run; the parsed document sections are the
+// fallback. (Using sections alone gave the live "5 vs 13" miss when the file read was capped.)
+function _orgList(track) {
+  const cov = Array.isArray(track.covered) ? track.covered.filter(Boolean) : [];
+  const secs = (track.sections || []).map(s => s.heading);
+  return cov.length >= secs.length ? cov : secs;
+}
 
 // Build the deterministic grounded fact block the chat path injects (Dans then relays it in his
 // voice). Returns { handled, kind, block, note } — `block` is null when nothing can be grounded.

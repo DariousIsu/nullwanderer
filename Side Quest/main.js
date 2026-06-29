@@ -2305,6 +2305,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let activityQ = false;
   try { activityQ = require('./lib/activity').isActivityQuestion(userMessage); } catch (e) { console.error('[main] activity detect failed:', e.message); }
 
+  // DELIVERABLE aggregate (Slice I) — count/list/facet/status are answered by the deliverable poll off
+  // the Track's live artifact; suppress the competing RAG for those too, so a STALE dossier node
+  // ("(5 orgs)" from an earlier run) can't override the live count (the "5 vs 12" miss, caught live).
+  // SAMPLE ("what do you have on X") deliberately keeps RAG — its section answer benefits from the
+  // enrichment and showed no competition (the MIRI answer was rich and correct).
+  let deliverableAggQ = false;
+  try { const dq = require('./lib/track').classifyQuery(userMessage); deliverableAggQ = dq.is && ['count', 'list', 'facet', 'status'].includes(dq.kind); } catch {}
+
   const chosenName = db.getMeta('chosen_name');
   const awareness = buildAwarenessBlock({
     chosenName,
@@ -2327,10 +2335,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     retrievedKnowledgeBlock = memoryLib.formatForPrompt(rk, userName);
   } catch (err) { console.error('[main] knowledge retrieve failed:', err.message); }
 
-  // ACTIVITY turn: the activity poll owns it (answers from live lanes), so suppress the generic
-  // semantic retrieval — it pulls self_dev/dev knowledge that Dans then narrates as current activity
-  // ("implementing batching and Bulk API…"). The grounded lane answer must DOMINATE, not compete.
-  if (activityQ) { retrievedKnowledgeBlock = null; rkRows = []; }
+  // POLL OWNS THE TURN: when the activity poll or an aggregate deliverable poll (count/list/facet/
+  // status) will answer from the live Track, suppress the generic semantic retrieval — it pulls
+  // self_dev/dev nodes ("batching and Bulk API…") or a stale "(5 orgs)" dossier node that Dans then
+  // relays over the live truth. The grounded answer must DOMINATE, not compete.
+  if (activityQ || deliverableAggQ) { retrievedKnowledgeBlock = null; rkRows = []; }
 
   // SELF-DEV LEDGER — on a question about her own development, prepend her real changelog (by
   // recency) so "what have you been working on / what's new with you / how have you changed" is
@@ -2610,7 +2619,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             if (f) { const report = await statusReport(f); if (report && report.trim()) body = `${ans.block}\n\n${report.trim()}`; }
           }
           const where = track.kind === 'active' ? 'your IN-PROGRESS research' : 'your research';
-          composedUserMessage += `\n\n[${userName} asked about ${where}. Answer using THESE REAL FACTS from your task state — present them exactly (do not drop or invent any organization, name, or contact), naturally in your own voice:\n${body}]`;
+          composedUserMessage += `\n\n[${userName} asked about ${where}. These are your REAL task facts — present them EXACTLY and COMPLETELY in your own voice: state the count as given and name EVERY organization listed, in order. Do NOT stop early, summarize, round the number, drop any, or invent any. The count is whatever this block says — not any other number you may recall:\n${body}]`;
           statusHandled = true;
           console.log(`[poll] deliverable answered from ${track.kind} track (${ans.note})`);
         }
@@ -4040,7 +4049,7 @@ async function condenseRun(focus, { reason = 'done' } = {}) {
     const goal = String(focus.content || '');
     const file = db.getMeta(`focus.${focus.id}.file`);
     let raw = '';
-    if (file) { try { const r = await filesLib.dispatch({ tag: 'file-read', attrs: { path: file } }); raw = (r && (r.text || r.content)) || ''; } catch {} }
+    if (file) { try { const r = filesLib.fileReadFull(file); raw = (r && r.text) || ''; } catch {} }   // FULL read — the 8000-char cap would silently drop orgs from the lossless stitch
     if (!raw || raw.trim().length < 80) { console.log('[condense] nothing substantial to condense'); return null; }
     const { sections } = as.parseSections(raw);
     if (!sections.length) { console.log('[condense] no parseable org sections — leaving raw run file in place'); return null; }
@@ -4096,7 +4105,7 @@ async function buildQueryTrack() {
     if (kind === 'active') { try { const t = JSON.parse(db.getMeta(`focus.${id}.target`) || 'null'); if (t && t.name) target = { name: t.name, rawExcerpt: String(t.raw || '').slice(0, 1200) }; } catch {} }
     let sections = [];
     const file = db.getMeta(`focus.${id}.file`);
-    if (file) { try { const r = await filesLib.dispatch({ tag: 'file-read', attrs: { path: file } }); sections = as.parseSections((r && (r.text || r.content)) || '').sections; } catch {} }
+    if (file) { try { const r = filesLib.fileReadFull(file); sections = as.parseSections((r && r.text) || '').sections; } catch {} }   // FULL read — the 8000-char cap was cutting a 13-org run to ~5
     if (!goal) { try { const t = db.getOpenThread(id); goal = t ? String(t.content || '') : ''; } catch {} }
     return { kind, goal, covered, sections, target, completed };
   } catch (e) { console.error('[track] build failed:', e.message); return { kind: 'none' }; }
