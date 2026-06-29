@@ -1339,6 +1339,12 @@ function setMeta(key, value) {
     .run(key, String(value));
 }
 
+// List meta keys matching a SQL LIKE pattern (e.g. 'focus.%.covered') — used to enumerate all directed
+// research Tracks for the track index. Returns an array of key strings.
+function getMetaKeysLike(like) {
+  return getDb().prepare('SELECT key FROM meta WHERE key LIKE ?').all(String(like)).map((r) => r.key);
+}
+
 // --- cloud reasoning traces (lib/cloud_logic) — cache + budget audit + training corpus ---
 function insertCloudTrace(t) {
   const info = getDb()
@@ -1606,6 +1612,7 @@ module.exports = {
   getAgentEventsSinceLastUser,
   getMeta,
   setMeta,
+  getMetaKeysLike,
   // graph memory (anti-glob relational store)
   graphInsertEntity,
   graphGetEntityByKey,

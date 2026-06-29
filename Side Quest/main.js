@@ -2636,7 +2636,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       ];
       const top = poll.pick(userMessage, sources);
       if (top && top.kind === 'deliverable') {
-        const track = await buildQueryTrack();
+        const track = await buildQueryTrack(userMessage);
         const ans = tk.buildAnswer(track, userMessage);
         const skip = ans.kind === 'status' && track.kind !== 'active' && socialTurn;   // greeting, not a project query
         if (ans.handled && ans.block && !skip) {
@@ -4133,19 +4133,53 @@ async function condenseRun(focus, { reason = 'done' } = {}) {
 // Reads the covered index + the accreted "## <org>" sections + any in-flight target, so a question is
 // answered off the Track's own artifact whether the run is ACTIVE or COMPLETE. Returns a plain track
 // object for lib/track, or { kind:'none' }. Fail-safe.
-async function buildQueryTrack() {
+// The Tracks REGISTRY — every directed research run, for topic resolution. One descriptor per
+// focus.<id>.covered meta key: { id, goal, covered, status, hasDossier }. Cheap (no file bodies; just
+// the dossier's existence). Skips empty runs (the junk-focus mis-fires never accreted an org).
+function buildTrackIndex() {
+  const out = [];
+  let keys = []; try { keys = db.getMetaKeysLike('focus.%.covered'); } catch {}
+  for (const k of keys) {
+    const id = parseInt(String(k).split('.')[1], 10);
+    if (!id) continue;
+    let covered = []; try { covered = JSON.parse(db.getMeta(k) || '[]'); } catch {}
+    if (!covered.length) continue;
+    let goal = '', status = null;
+    try { const t = db.getOpenThread(id); if (t) { goal = String(t.content || ''); status = t.status; } } catch {}
+    let hasDossier = false; try { const r = filesLib.fileReadFull(`notes/directed-${id}-dossier.md`); hasDossier = !!(r && r.ok); } catch {}
+    out.push({ id, goal, covered, status, hasDossier });
+  }
+  return out;
+}
+
+// Resolve which Track a deliverable question is about. Order: (1) TOPIC-ADDRESSED across the whole
+// registry ("the think tanks" → the completed #2027 dossier, not just the most-recent run), (2) the
+// ACTIVE directed focus, (3) the last completed/stalled run. Returns a track object for lib/track.
+async function buildQueryTrack(userMessage = '') {
   try {
     const as = require('./lib/assemble');
     const focusLib = require('./lib/focus');
     let id = null, kind = 'complete', completed = null, goal = '';
-    const active = (() => { try { return focusLib.getCurrent(); } catch { return null; } })();
-    if (active && focusLib.isDirected(active)) { id = active.id; kind = 'active'; goal = String(active.content || ''); }
+    // (1) topic-addressed: does the question name a specific past project?
+    try {
+      const hit = require('./lib/track_index').resolveByTopic(buildTrackIndex(), userMessage);
+      if (hit && hit.id) { id = hit.id; goal = String(hit.goal || ''); console.log(`[track] topic-resolved → #${id}`); }
+    } catch (e) { console.error('[track] topic resolve failed:', e.message); }
+    // (2) the active directed focus
+    if (id == null) {
+      const active = (() => { try { return focusLib.getCurrent(); } catch { return null; } })();
+      if (active && focusLib.isDirected(active)) { id = active.id; goal = String(active.content || ''); }
+    }
+    // (3) the last completed/stalled run
     if (id == null) {
       let last = null; try { last = JSON.parse(db.getMeta('research.last_dossier') || 'null'); } catch {}
       if (last && last.focusId != null) { id = last.focusId; goal = String(last.goal || ''); completed = last.reason || 'done'; }
       else { const lf = db.getMeta('research.last_focus_id'); if (lf) { id = parseInt(lf, 10) || null; const t = id != null ? db.getOpenThread(id) : null; goal = t ? String(t.content || '') : ''; completed = t ? t.status : 'done'; } }
     }
     if (id == null) return { kind: 'none' };
+    // kind = 'active' only if this id IS the live directed focus; else complete (with its status)
+    try { const a = focusLib.getCurrent(); kind = (a && a.id === id && focusLib.isDirected(a)) ? 'active' : 'complete'; } catch { kind = 'complete'; }
+    if (kind === 'complete' && completed == null) { try { const t = db.getOpenThread(id); completed = t ? t.status : 'done'; } catch {} }
     let covered = []; try { covered = JSON.parse(db.getMeta(`focus.${id}.covered`) || '[]'); } catch {}
     let target = null;
     if (kind === 'active') { try { const t = JSON.parse(db.getMeta(`focus.${id}.target`) || 'null'); if (t && t.name) target = { name: t.name, rawExcerpt: String(t.raw || '').slice(0, 1200) }; } catch {} }

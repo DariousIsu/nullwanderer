@@ -47,6 +47,7 @@ const smokes = [
   'smoke_condense.js',
   'smoke_assemble.js',
   'smoke_track.js',
+  'smoke_track_index.js',
   'smoke_poll.js',
   'smoke_activity.js',
   'smoke_canvas_route.js',
