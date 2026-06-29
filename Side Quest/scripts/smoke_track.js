@@ -59,6 +59,24 @@ ok(s1.handled && /Kevin Roberts/.test(s1.block) && /heritage\.org/.test(s1.block
 const s2 = tk.buildAnswer(complete, 'what do you have on the Brookings Institution?');
 ok(s2.handled && /don't have/.test(s2.block) && /Heritage Foundation/.test(s2.block), 'sample for an absent org → honest "don\'t have", lists what we do');
 
+// --- SAMPLE by ACRONYM / short name (the live #2050 "what do you have on MIRI" bug) ---
+const acro = {
+  kind: 'complete', goal: 'AI safety orgs', completed: 'done',
+  covered: ['Machine Intelligence Research Institute (MIRI)', 'Center for AI Safety (CAIS)'],
+  sections: [
+    mk('Machine Intelligence Research Institute (MIRI)', 'Eliezer Yudkowsky — Research Lead', 'intelligence.org'),
+    mk('Center for AI Safety (CAIS)', 'Dan Hendrycks — Director', 'safe.ai')
+  ],
+  target: null
+};
+const m1 = tk.buildAnswer(acro, 'what do you have on MIRI?');
+ok(m1.handled && /Eliezer Yudkowsky/.test(m1.block) && !/don't have/.test(m1.block), 'sample by ACRONYM "MIRI" hits its full-name section (live bug fixed)');
+const m2 = tk.buildAnswer(acro, 'who leads CAIS?');
+ok(m2.handled && /Dan Hendrycks/.test(m2.block), 'sample by acronym "CAIS" hits its section');
+ok(tk.mentions('what about MIRI', 'Machine Intelligence Research Institute (MIRI)'), 'mentions(): acronym in question matches full name');
+ok(tk.mentions('tell me about Cato', 'Cato Institute'), 'mentions(): distinctive token "Cato" matches');
+ok(!tk.mentions('what do you have on the institute', 'Cato Institute'), 'mentions(): generic word "institute" alone does NOT match');
+
 // --- FACET sweep: leadership across all entries (the "head of policy for each" failure) ---
 const f1 = tk.buildAnswer(complete, "who's the head of policy for each of them?");
 ok(f1.handled && /Kevin Roberts/.test(f1.block) && /Peter Goettler/.test(f1.block) && /James Taylor/.test(f1.block), 'facet sweep returns leadership for EVERY org');

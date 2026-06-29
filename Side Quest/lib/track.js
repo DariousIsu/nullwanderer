@@ -64,20 +64,44 @@ function classifyQuery(text) {
 
 function _norm(s) { return String(s || '').toLowerCase().replace(/^the\s+/, '').replace(/[^a-z0-9]+/g, ' ').trim(); }
 
-// Find the section whose heading best matches a named topic (tolerant containment). Also matches an
-// in-flight active target. Returns { heading, body, inFlight } or null.
-function findSection(track, topic) {
-  const t = _norm(topic);
-  if (!t) return null;
+// Generic org words that must NOT, alone, match a question to a section ("Institute", "Center"…).
+const _GENERIC = new Set(['institute', 'center', 'centre', 'foundation', 'council', 'association', 'project', 'network', 'institution', 'org', 'organization', 'the', 'for', 'of', 'and', 'on', 'research', 'policy', 'american', 'america', 'national', 'global', 'group', 'fund', 'action', 'enterprise', 'alliance']);
+
+// Acronyms for an org name: parenthetical "(MIRI)" + bare ALL-CAPS tokens, lowercased.
+function _acronyms(name) {
+  const out = [];
+  const paren = String(name).match(/\(([A-Za-z]{2,6})\)/g);
+  if (paren) for (const p of paren) out.push(p.replace(/[()]/g, '').toLowerCase());
+  const caps = String(name).match(/\b[A-Z]{2,6}\b/g);
+  if (caps) for (const c of caps) out.push(c.toLowerCase());
+  return out;
+}
+// Distinctive (non-generic, >=4-char) name tokens — e.g. "machine", "intelligence", "cato", "heritage".
+function _tokens(name) { return _norm(name).split(' ').filter(w => w.length >= 4 && !_GENERIC.has(w)); }
+
+// Does `text` plausibly refer to org `name`? Full-name containment, OR a parenthetical / ALL-CAPS
+// acronym appears as a standalone word (so "MIRI" matches "Machine Intelligence Research Institute
+// (MIRI)" — the live bug), OR a distinctive (non-generic, >=4-char) token of the name appears.
+function mentions(text, name) {
+  const nt = _norm(text), nn = _norm(name);
+  if (!nt || !nn) return false;
+  if (nt.includes(nn) || nn.includes(nt)) return true;
+  const words = new Set(nt.split(' '));
+  for (const a of _acronyms(name)) if (words.has(a)) return true;
+  for (const tok of _tokens(name)) if (words.has(tok)) return true;
+  return false;
+}
+
+// Find the section the text refers to — by full name, acronym, or a distinctive token. Also matches an
+// in-flight active target. `textOrTopic` may be the raw question or an extracted topic. Returns
+// { heading, body, inFlight } or null.
+function findSection(track, textOrTopic) {
+  if (!textOrTopic) return null;
   for (const sec of (track.sections || [])) {
-    const h = _norm(sec.heading);
-    if (h && (h === t || h.includes(t) || t.includes(h))) return { heading: sec.heading, body: sec.body, inFlight: false };
+    if (mentions(textOrTopic, sec.heading)) return { heading: sec.heading, body: sec.body, inFlight: false };
   }
-  if (track.target && track.target.name) {
-    const tn = _norm(track.target.name);
-    if (tn && (tn === t || tn.includes(t) || t.includes(tn))) {
-      return { heading: track.target.name, body: track.target.rawExcerpt || '', inFlight: true };
-    }
+  if (track.target && track.target.name && mentions(textOrTopic, track.target.name)) {
+    return { heading: track.target.name, body: track.target.rawExcerpt || '', inFlight: true };
   }
   return null;
 }
@@ -89,17 +113,13 @@ function _facetLine(body, label) {
   return m ? m[1].trim().replace(/\s+/g, ' ') : '';
 }
 
-// Extract the named topic from an "about X" question, if any covered org / target is named in the text.
-// Grounded: only returns a topic we actually hold (so we never claim to "have" something we don't).
+// Extract the named topic from an "about X" question, if any covered org / target is named in the text
+// (by full name, acronym, or distinctive token). Grounded: only returns an org we actually hold.
 function extractTopic(track, text) {
-  const s = String(text || '');
   const candidates = (track.sections || []).map(x => x.heading);
   if (track.target && track.target.name) candidates.push(track.target.name);
   let best = '';
-  for (const c of candidates) {
-    const n = _norm(c);
-    if (n && _norm(s).includes(n) && c.length > best.length) best = c;
-  }
+  for (const c of candidates) if (mentions(text, c) && c.length > best.length) best = c;
   return best;
 }
 
@@ -142,15 +162,14 @@ function buildAnswer(track, text) {
     return { handled: true, kind: 'facet', block, note: `facet:${q.scope}=${rows.length}` };
   }
   if (q.kind === 'sample') {
-    const topic = extractTopic(track, text);
-    if (topic) {
-      const sec = findSection(track, topic);
-      if (sec && sec.body) {
-        const tail = sec.inFlight ? `\n\n(This one is still in progress — that's what you have on it so far.)` : '';
-        return { handled: true, kind: 'sample', block: `Here is exactly what you have on ${sec.heading} from ${where}:\n\n${sec.body}${tail}`, note: `sample:${sec.heading}` };
-      }
+    // Match against the RAW question so an acronym / short name ("MIRI") finds its full-name section.
+    const sec = findSection(track, text);
+    if (sec && sec.body) {
+      const tail = sec.inFlight ? `\n\n(This one is still in progress — that's what you have on it so far.)` : '';
+      return { handled: true, kind: 'sample', block: `Here is exactly what you have on ${sec.heading} from ${where}:\n\n${sec.body}${tail}`, note: `sample:${sec.heading}` };
     }
     // "about X" where X isn't on file → honest, grounded in the index (don't invent).
+    const topic = extractTopic(track, text);
     const block = `You don't have ${topic || 'that'} on file from ${where}. What you do have (${count}): ${orgs.join(', ') || 'nothing yet'}.${liveTail}`;
     return { handled: true, kind: 'sample', block, note: 'sample:not-found' };
   }
@@ -162,6 +181,6 @@ function buildAnswer(track, text) {
 }
 
 module.exports = {
-  classifyQuery, findSection, extractTopic, buildAnswer,
+  classifyQuery, findSection, extractTopic, mentions, buildAnswer,
   COUNT_RE, LIST_RE, STATUS_RE, ABOUT_RE
 };
