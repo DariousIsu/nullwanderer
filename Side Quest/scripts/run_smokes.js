@@ -50,6 +50,7 @@ const smokes = [
   'smoke_poll.js',
   'smoke_activity.js',
   'smoke_canvas_route.js',
+  'smoke_leakguard.js',
   'smoke_research.js',
   'smoke_self_dev.js',
   'smoke_self_state.js',

@@ -2805,10 +2805,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     newUserMessage: composedUserMessage
   });
 
+  // STREAM directive-filter: hold any "[" open until it closes; drop it if it reads as a leaked
+  // directive, so an echoed [ANSWER TO GIVE…]/[Lucas asked…] never reaches the UI live (the final-text
+  // strip alone was too late — the reply streams token-by-token). flush() after the stream.
+  const _streamFilter = require('./lib/leakguard').makeStreamFilter(emit);
   let parser = new TagStreamParser({
     onSayToken: (token) => {
       try {
-        emit(token);
+        _streamFilter.feed(token);
       } catch {}
     }
   });
@@ -2834,7 +2838,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const saidNothing = !parser.say || !parser.say.trim();
     if (isStall && saidNothing) {
       console.warn('[main] reply stalled before first token (model cold-load?) — retrying once');
-      parser = new TagStreamParser({ onSayToken: (token) => { try { emit(token); } catch {} } });
+      parser = new TagStreamParser({ onSayToken: (token) => { try { _streamFilter.feed(token); } catch {} } });
       try {
         await streamChat({ model: MODEL, messages, onToken: (chunk) => parser.feed(chunk), inactivityMs: 180000, options: { num_ctx: 8192 } });
       } catch (err2) {
@@ -2854,6 +2858,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       return { ok: false, error: err.message, say: null };
     }
   }
+  try { _streamFilter.flush(); } catch {}   // emit any trailing non-directive bracket held by the filter
 
   // Turn succeeded → mark the injected inbounds consumed (they're now in her
   // context). Done AFTER the stream so a model failure above doesn't silently
@@ -3042,24 +3047,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   sayStripped = recallLib.stripRecallTags(sayStripped);
   sayStripped = require('./lib/vision').stripGenTags(sayStripped);   // <image-gen> tags don't render
   // LEAKED-DIRECTIVE GUARD: the injected instruction blocks ([ANSWER TO GIVE…], [DELIVER THIS…],
-  // [Calibration…], a model-hallucinated [THAT'S YOUR TASK…]) are meant FOR her, not Lucas — but the
-  // 24B sometimes echoes them verbatim into the reply (confirmed live). Strip any bracketed block
-  // carrying a directive signature, whether embedded among prose or a trailing unterminated fragment.
-  const _DIRSIG = /(ANSWER TO GIVE|THAT'?S YOUR TASK|DELIVER THIS|Calibration:|ACTION HONESTY|REMEMBER IT ACROSS|Say THIS in your own voice|STATUS UPDATE|ADDITIONAL GUIDANCE|standing (?:task|focus)|ACCEPTED this as|do NOT (?:invent|fabricate|summarize|contract|drift)|in your own voice|grounded answer|present the FULL|REAL FACTS|ACCESSIBLE VIA)/i;
-  // Also catch model-HALLUCINATED meta brackets with no fixed signature ("[Lucas clarified that I
-  // should include moderate … Going forward I will expand my search criteria …]"): a LONG bracketed
-  // block (>60 chars) that talks about the task/Lucas/research in directive-ish terms is leaked
-  // self-narration, never a real short aside. _LEAKY tests both classes.
-  const _METASIG = /\b(Lucas|going forward|i will|do not|deliver|present|dossier|clarif|criteria|scope|the task|my research|remember|REMEMBER|going to (?:expand|include|focus)|search criteria)\b/i;
-  const _leaky = (m) => _DIRSIG.test(m) || (m.length > 60 && _METASIG.test(m));
-  sayStripped = sayStripped.replace(/\[[^\]]*\]/g, (m) => (_leaky(m) ? '' : m));   // bracketed blocks (incl. multi-line)
-  sayStripped = sayStripped.replace(/\[[^\]]*$/g, (m) => (_leaky(m) ? '' : m));     // trailing unterminated leak
-  // STACKED / UNTERMINATED directives: when she echoes several directive openers as a template
-  // ("[DELIVER THIS…\n…[ANSWER TO GIVE…\n…[YOU HAVE ACCEPTED…") none close, so the two strips above
-  // (which need a closing ] or end-of-string) miss the middle ones. Catch each '[' + directive-signature
-  // run up to its ']' OR the NEXT '[' OR end-of-string. (Live leak 2026-06-29 — the think-tank turn.)
-  sayStripped = sayStripped.replace(/\[[^\[]*?(?:DELIVER THIS|ANSWER TO GIVE|THAT'?S YOUR TASK|ACCEPTED (?:this|THIS) as|standing (?:task|focus)|Calibration:|do NOT (?:invent|fabricate|summarize)|present the FULL|keep EVERY item|REAL FACTS|complete result of the task)[^\[]*?(?:\]|(?=\[)|$)/gi, '');
-  sayStripped = sayStripped.replace(/\n{3,}/g, '\n\n').trim();
+  // [Lucas asked for the list…]) are meant FOR her, not Lucas — but the 24B sometimes echoes them. The
+  // STREAM filter above already suppresses them live; this is the final-text backstop (closed, trailing,
+  // and stacked/unterminated brackets). Both share lib/leakguard (one tested source of truth).
+  sayStripped = require('./lib/leakguard').stripLeakedDirectives(sayStripped);
   // LEAKED-PLANNING GUARD: a reply that is ONLY a bracketed fragment (e.g. "[No need for an
   // argument since we want the total count…]") is internal tool/arg reasoning that leaked instead
   // of a tag — never her actual answer. Drop it so the tool-followup's real result is what shows.
@@ -3831,8 +3822,10 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       pendingInbounds: [], newUserMessage: note
     });
     const emit = io && io.emit ? io.emit : (() => {});
-    const parser = new TagStreamParser({ onSayToken: (t) => { try { emit(t); } catch {} } });
+    const _ff = require('./lib/leakguard').makeStreamFilter(emit);   // same live directive filter as the main path
+    const parser = new TagStreamParser({ onSayToken: (t) => { try { _ff.feed(t); } catch {} } });
     await streamChat({ model: MODEL, messages, onToken: (c) => parser.feed(c) });
+    try { _ff.flush(); } catch {}
     const { thought, say } = parser.finalize();
     // Capture any follow-on Echo tag BEFORE stripping (the strip below removes all tags).
     const chainTags = canChain ? [
@@ -3848,6 +3841,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     sayOut = screenLib.stripTags(filesLib.stripTags(browserLib.stripTags(sayOut)));
     sayOut = echoSuitLib.stripEchoTags(sayOut);
     sayOut = sayOut.replace(/<[^>]+>/g, '').trim();
+    sayOut = require('./lib/leakguard').stripLeakedDirectives(sayOut);   // final-text backstop (this path bypassed the main strip)
     // Deliver her words (the visible step — "I'll run db_query…" or the final answer). May be
     // empty when she emitted only a tag — that's fine; the Echo chain below still runs.
     if (sayOut) {
