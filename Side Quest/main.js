@@ -1313,6 +1313,9 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       const b64 = fs.readFileSync(filePath).toString('base64');
       data = { src: `data:${IMG_MIME[ext]};base64,${b64}`, alt: baseName };
       blockType = 'image'; mode = 'ILLUSTRATIVE';
+    } else if (ext === 'pdf') {                            // PDF → embed the REAL document (Chromium PDF viewer)
+      data = { src: 'file:///' + filePath.replace(/\\/g, '/').replace(/^\/+/, ''), alt: baseName };
+      blockType = 'document_file';                          // 'pdf' is not a valid engine block type
     } else if (ext === 'csv' || ext === 'tsv') {           // SPREADSHEET (delimited) → table
       const tbl = require('./studio/sheet_view').csvToTable(fs.readFileSync(filePath, 'utf8'), ext === 'tsv' ? '\t' : ',');
       data = { headers: tbl.headers, rows: tbl.rows, caption: tbl.truncated ? `+${tbl.truncated} more rows` : null };
@@ -1327,7 +1330,14 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       const tbl = require('./studio/sheet_view').toTable(rows);
       data = { headers: tbl.headers, rows: tbl.rows, caption: ws ? `${ws.name}${tbl.truncated ? ` · +${tbl.truncated} more rows` : ''}` : null };
       blockType = 'table';
-    } else {                                               // DOCUMENT (docx/pdf/md/txt/…) → markdown
+    } else if (ext === 'docx') {                           // WORD → rich HTML (tables, emphasis, inline images)
+      try { const r = await require('./lib/doc_extract').extractDocxHtml(filePath); if (r && r.html && r.html.trim()) { data = { html: r.html }; blockType = 'document_file'; } } catch {}
+      if (!data) {                                         // fallback: flattened markdown as a paragraph
+        let markdown = ''; try { markdown = (await require('./lib/doc_extract').extractDocx(filePath)).markdown || ''; } catch {}
+        if (!markdown.trim()) return { ok: false, error: 'empty / unreadable .docx' };
+        data = { markdown: markdown.slice(0, 200000) };    // blockType stays 'paragraph'
+      }
+    } else {                                               // DOCUMENT (md/txt/code/pdf-text-fallback/…) → markdown
       let markdown = '';
       try { markdown = (await require('./lib/doc_extract').extractToMarkdown(filePath)).markdown || ''; }
       catch (e) { try { markdown = fs.readFileSync(filePath, 'utf8'); } catch { return { ok: false, error: `could not read ${path.basename(filePath)}: ${e.message}` }; } }
@@ -2287,6 +2297,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let stateQ = false;
   try { stateQ = require('./lib/self_state').detectStateQuestion(userMessage); } catch (e) { console.error('[main] self-state detect failed:', e.message); }
 
+  // ACTIVITY (Slice I) — is Lucas asking what she's DOING right now? The cross-lane activity poll owns
+  // that turn and answers from live lane state, so the competing generic grounding (RAG semantic noise,
+  // self-dev changelog, self-state "Mode") is SUPPRESSED below — otherwise the grounded answer is just
+  // one ingredient Dans narrates around (the live "Substack/Bulk API/meeting-notes" confab, 2026-06-29,
+  // came from RAG pulling her self_dev nodes into a "what are you doing" answer).
+  let activityQ = false;
+  try { activityQ = require('./lib/activity').isActivityQuestion(userMessage); } catch (e) { console.error('[main] activity detect failed:', e.message); }
+
   const chosenName = db.getMeta('chosen_name');
   const awareness = buildAwarenessBlock({
     chosenName,
@@ -2309,10 +2327,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     retrievedKnowledgeBlock = memoryLib.formatForPrompt(rk, userName);
   } catch (err) { console.error('[main] knowledge retrieve failed:', err.message); }
 
+  // ACTIVITY turn: the activity poll owns it (answers from live lanes), so suppress the generic
+  // semantic retrieval — it pulls self_dev/dev knowledge that Dans then narrates as current activity
+  // ("implementing batching and Bulk API…"). The grounded lane answer must DOMINATE, not compete.
+  if (activityQ) { retrievedKnowledgeBlock = null; rkRows = []; }
+
   // SELF-DEV LEDGER — on a question about her own development, prepend her real changelog (by
   // recency) so "what have you been working on / what's new with you / how have you changed" is
   // answered from genuine history. Reuses the knowledge-block injection path (no signature churn).
-  if (devQ) {
+  if (devQ && !activityQ) {
     try {
       const selfDev = require('./lib/self_dev');
       const block = selfDev.buildBlock(selfDev.recentEntries(8), userName);
@@ -2320,9 +2343,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     } catch (e) { console.error('[main] self-dev block failed:', e.message); }
   }
 
-  // SELF-STATE LEDGER — on a "what are you doing / what can you see / status" question, prepend her
-  // real live operational snapshot so she reads her actual state. Reuses the knowledge-block path.
-  if (stateQ) {
+  // SELF-STATE LEDGER — on a "what can you see / what's running / status" question, prepend her real
+  // live operational snapshot. Skipped when it's an ACTIVITY question (the activity poll owns those,
+  // and the "Mode: working" line seeds the confab) — self-state still serves pure can-you-see turns.
+  if (stateQ && !activityQ) {
     try {
       const ss = require('./lib/self_state');
       const block = ss.buildBlock(ss.snapshot({
@@ -2593,11 +2617,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       } else if (top && top.kind === 'activity' && !socialTurn) {
         const snap = await laneSnapshot();
         const a = act.summarize(snap);
-        if (a.active) {
-          composedUserMessage += `\n\n[${userName} asked what you're doing right now. Answer from THIS REAL live state of your active work — exactly, no invention, in your own voice:\n${a.block}]`;
-          statusHandled = true;
-          console.log(`[poll] activity answered (${a.active} active lane(s))`);
-        }
+        // Authoritative: this IS the answer. Forbid Dans from adding any other project/task — the live
+        // confab ("implementing batching and Bulk API for Substack sync…") was invented on top of the truth.
+        composedUserMessage += `\n\n[${userName} asked what you're doing right now. The following is your COMPLETE and ONLY active work — answer with EXACTLY this, in your own voice. Do NOT add, infer, or mention any other project, task, app, API, sync, document, or activity that is not stated here; if it is not in this list, you are NOT doing it:\n${a.block}]`;
+        statusHandled = true;
+        console.log(`[poll] activity answered (${a.active} active lane(s))`);
       }
     }
   } catch (e) { console.error('[main] interface poll failed:', e.message); }
