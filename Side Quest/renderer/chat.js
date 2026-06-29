@@ -17,6 +17,13 @@ if (editorBtn && window.sq && (window.sq.openWorkspace || window.sq.openEditor))
   editorBtn.addEventListener('click', () => (window.sq.openWorkspace || window.sq.openEditor)());
 }
 
+const canvasBtn = document.getElementById('canvas-btn');
+if (canvasBtn && window.sq && window.sq.openCanvas) {
+  // ◫ opens Zoe's Canvas — her own window for deliverables + visual aids (its own window, NOT a tab
+  // inside the operator workbench).
+  canvasBtn.addEventListener('click', () => window.sq.openCanvas());
+}
+
 // --- Browser layer UI ---
 let browserConnected = false;
 function setBrowserStatus(s) {

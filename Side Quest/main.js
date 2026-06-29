@@ -29,6 +29,7 @@ const ssLedger = require('./lib/super_search_ledger');       // Super Search: pe
 const pollView = require('./studio/poll_view');              // Polling surface: tool payloads → view shapes
 const crmView = require('./studio/crm_view');                // CRM surface: contact tool payloads → view shapes
 const legView = require('./studio/leg_view');                // Legislation surface: bill tool payloads → view shapes
+const canvasView = require('./studio/canvas_view');          // Canvas surface: saga canvas tabs/blocks → view shapes
 const kgView = require('./studio/kg_view');                  // Knowledge Graph surface: graph tool payloads → nodes/links
 const docView = require('./studio/doc_view');                // Reader/Library surface: corpus doc payloads → reader view
 const docExtract = require('./lib/doc_extract');             // writing suite: local .docx/.pdf extractors (rich render)
@@ -242,6 +243,32 @@ function createWorkspaceWindow() {
   workspaceWindow.once('ready-to-show', () => { workspaceWindow.show(); workspaceWindow.focus(); });
   workspaceWindow.on('closed', () => { workspaceWindow = null; });
   return workspaceWindow;
+}
+
+let canvasWindow = null;
+// Zoe's Canvas — the THIRD window of the model, distinct from the operator workbench: ZOE's own
+// surface for large deliverables + visual aids (she populates it; the saga store is the system of
+// record). Loads canvas.html directly as a full page (no webview host). Read-only in Slice 1.
+function createCanvasWindow() {
+  if (canvasWindow && !canvasWindow.isDestroyed()) { canvasWindow.focus(); return canvasWindow; }
+  canvasWindow = new BrowserWindow({
+    width: 1280,
+    height: 860,
+    backgroundColor: '#0d0d10',
+    title: "Zoe's Canvas",
+    autoHideMenuBar: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    }
+  });
+  canvasWindow.loadFile(path.join(__dirname, 'renderer', 'canvas.html'));
+  canvasWindow.once('ready-to-show', () => { canvasWindow.show(); canvasWindow.focus(); });
+  canvasWindow.on('closed', () => { canvasWindow = null; });
+  return canvasWindow;
 }
 
 app.whenReady().then(() => {
@@ -679,6 +706,7 @@ app.on('window-all-closed', async () => {
 // Editor Studio — open the window + the registry/import surface (runs in main; renderer invokes).
 ipcMain.handle('editor:open', () => { createEditorWindow(); return { ok: true }; });
 ipcMain.handle('workspace:open', () => { createWorkspaceWindow(); return { ok: true }; });
+ipcMain.handle('canvas:open', () => { createCanvasWindow(); return { ok: true }; });
 
 ipcMain.handle('editor:list-documents', (_e, opts = {}) => {
   try { return { ok: true, documents: editorRegistry.listDocuments(opts) }; }
@@ -1171,6 +1199,43 @@ ipcMain.handle('crm:get', async (_e, { contactId } = {}) => {
     const payload = await callTool('get_contact', { contact_id: Number(contactId), include_related: true });
     return { ok: true, card: crmView.contactCard(payload) };
   } catch (e) { console.error('[crm] get failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// ============================ CANVAS (studio — saga canvas renderer) =========================
+// Read-only Slice 1: render Echo's saga canvas (tenant_rainey.canvas_tabs / canvas_blocks). The
+// canvas is the live surface; the saga store is the system of record. We read via db_query through
+// the Echo suit (same callTool boundary as the other browsers) and map via studio/canvas_view.js.
+// Drive (saga_canvas_* writes) is Slice 2 — this slice only renders. No model.
+ipcMain.handle('canvas:list-tabs', async (_e, opts = {}) => {
+  try {
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const openOnly = !!(opts && opts.openOnly);
+    const sql = `SELECT tab_key, mode, title, opened_at, closed_at FROM tenant_rainey.canvas_tabs${openOnly ? ' WHERE closed_at IS NULL' : ''} ORDER BY opened_at DESC LIMIT 200`;
+    const payload = await callTool('db_query', { sql });
+    const rows = (payload && Array.isArray(payload.rows)) ? payload.rows : [];
+    return { ok: true, tabs: rows.map(canvasView.normalizeTab) };
+  } catch (e) { console.error('[canvas] list-tabs failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('canvas:get-tab', async (_e, { tabKey } = {}) => {
+  try {
+    if (!tabKey) return { ok: false, error: 'no tab key' };
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const callTool = pollCallTool();
+    const tabRes = await callTool('db_query', {
+      sql: 'SELECT tab_key, mode, title, opened_at, closed_at FROM tenant_rainey.canvas_tabs WHERE tab_key = ? LIMIT 1',
+      params: [String(tabKey)],
+    });
+    const tabRow = (tabRes && Array.isArray(tabRes.rows) && tabRes.rows[0]) || null;
+    if (!tabRow) return { ok: false, error: 'tab not found' };
+    const blkRes = await callTool('db_query', {
+      sql: 'SELECT block_id, tab_key, block_type, data, position, created_at, updated_at FROM tenant_rainey.canvas_blocks WHERE tab_key = ? ORDER BY position IS NULL, position, created_at',
+      params: [String(tabKey)],
+    });
+    const blocks = (blkRes && Array.isArray(blkRes.rows)) ? blkRes.rows : [];
+    return { ok: true, tab: canvasView.normalizeTab(tabRow), stream: canvasView.normalizeStream(blocks) };
+  } catch (e) { console.error('[canvas] get-tab failed:', e.message); return { ok: false, error: e.message }; }
 });
 
 // ============================ LEGISLATION (studio — data browser) ============================
@@ -2349,10 +2414,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           composedUserMessage += `\n\n[${userName} asked you to EXPAND / go deeper on your prior research${ex.target ? ` — specifically: ${ex.target}` : ''}. You've started a focused DEEPENING pass on it (building on the dossier you already have, chasing full staff + contacts) and will keep at it. Tell him plainly you're expanding that now, in one or two sentences. Do NOT fabricate — only report what you actually have.]`;
           console.log(`[expand] expand order → deepening focus #${r.focus.id} (target: ${ex.target || 'all'})`);
         }
-      } else {
-        composedUserMessage += `\n\n[${userName} asked you to expand/go deeper on prior research, but you have no finished dossier on file to expand. Say that plainly and ask what he'd like you to research, rather than inventing one.]`;
-        console.log('[expand] expand order with NO prior dossier → honest note');
+      } else if (!_directedFocus) {
+        // No prior dossier AND no run in progress → honestly nothing to expand.
+        composedUserMessage += `\n\n[${userName} asked you to expand/go deeper on prior research, but you have no finished dossier on file and nothing in progress. Say that plainly and ask what he'd like you to research, rather than inventing one.]`;
+        expandHandled = true;
+        console.log('[expand] expand order, no dossier + no active run → honest note');
       }
+      // else: a directed run IS active but no dossier yet → "expand to X" is a SCOPE refinement, not an
+      // expand-the-prior-dossier order. Do nothing here; the clarification path below captures it.
     }
   } catch (e) { console.error('[main] expand-order failed:', e.message); }
 
@@ -2744,8 +2813,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // 24B sometimes echoes them verbatim into the reply (confirmed live). Strip any bracketed block
   // carrying a directive signature, whether embedded among prose or a trailing unterminated fragment.
   const _DIRSIG = /(ANSWER TO GIVE|THAT'?S YOUR TASK|DELIVER THIS|Calibration:|ACTION HONESTY|REMEMBER IT ACROSS|Say THIS in your own voice|STATUS UPDATE|ADDITIONAL GUIDANCE|standing (?:task|focus)|ACCEPTED this as|do NOT (?:invent|fabricate|summarize|contract|drift)|in your own voice|grounded answer|present the FULL|REAL FACTS|ACCESSIBLE VIA)/i;
-  sayStripped = sayStripped.replace(/\[[^\]]*\]/g, (m) => (_DIRSIG.test(m) ? '' : m));   // bracketed blocks (incl. multi-line)
-  sayStripped = sayStripped.replace(/\[[^\]]*$/g, (m) => (_DIRSIG.test(m) ? '' : m));     // trailing unterminated leak
+  // Also catch model-HALLUCINATED meta brackets with no fixed signature ("[Lucas clarified that I
+  // should include moderate … Going forward I will expand my search criteria …]"): a LONG bracketed
+  // block (>60 chars) that talks about the task/Lucas/research in directive-ish terms is leaked
+  // self-narration, never a real short aside. _LEAKY tests both classes.
+  const _METASIG = /\b(Lucas|going forward|i will|do not|deliver|present|dossier|clarif|criteria|scope|the task|my research|remember|REMEMBER|going to (?:expand|include|focus)|search criteria)\b/i;
+  const _leaky = (m) => _DIRSIG.test(m) || (m.length > 60 && _METASIG.test(m));
+  sayStripped = sayStripped.replace(/\[[^\]]*\]/g, (m) => (_leaky(m) ? '' : m));   // bracketed blocks (incl. multi-line)
+  sayStripped = sayStripped.replace(/\[[^\]]*$/g, (m) => (_leaky(m) ? '' : m));     // trailing unterminated leak
   sayStripped = sayStripped.replace(/\n{3,}/g, '\n\n').trim();
   // LEAKED-PLANNING GUARD: a reply that is ONLY a bracketed fragment (e.g. "[No need for an
   // argument since we want the total count…]") is internal tool/arg reasoning that leaked instead

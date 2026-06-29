@@ -39,6 +39,19 @@ ok('knowledge_graph known but not supported', kg.known && !kg.supported && /node
 const u = V.normalizeBlock({ block_type: 'wat', data: {} });
 ok('unknown type not known, has preview', !u.known && !u.supported && typeof u.view.preview === 'string');
 
+// ---- Slice 1: tab open/closed status + timestamps ----
+const openTab = V.normalizeTab({ tab_key: 'doc-1', mode: 'DOC', title: 'Live', opened_at: 1780623699, closed_at: null });
+ok('tab open when closed_at null', openTab.open === true && openTab.closedAt === null && openTab.openedAt === 1780623699);
+const closedTab = V.normalizeTab({ tab_key: 'doc-2', mode: 'DOC', title: 'Done', opened_at: 1, closed_at: 99 });
+ok('tab closed when closed_at set', closedTab.open === false && closedTab.closedAt === 99);
+
+// ---- Slice 1: data arrives as a JSON string (the canvas_blocks.data TEXT column) ----
+const strData = V.normalizeBlock({ block_id: 'b9', block_type: 'paragraph', data: '{"markdown":"**hi**"}', position: 3, created_at: 1780623699 });
+ok('JSON-string data parsed', strData.view.markdown === '**hi**' && strData.position === 3 && strData.createdAt === 1780623699);
+ok('table from JSON string', V.normalizeBlock({ block_type: 'table', data: '{"headers":["A"],"rows":[["1"]]}' }).view.rows[0][0] === '1');
+ok('malformed JSON string → empty fallback', V.normalizeBlock({ block_type: 'paragraph', data: '{not json' }).view.markdown === '');
+ok('parseData object passthrough', V.parseData({ x: 1 }).x === 1 && Object.keys(V.parseData('nope')).length === 0);
+
 // ---- stream summary ----
 const s = V.normalizeStream([
   { block_type: 'heading', data: { text: 'T' } },

@@ -19,14 +19,29 @@ const CHART_KINDS = new Set(['line', 'bar', 'area']);
 
 const str = (v) => (v == null ? '' : String(v));
 const clampInt = (v, lo, hi, dflt) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt; };
+const intOrNull = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : null; };
+
+// canvas_blocks.data is stored as a JSON TEXT column; accept either a parsed object or the raw
+// string and fail soft to {} so a malformed payload renders a labelled fallback, never throws.
+function parseData(raw) {
+  if (raw && typeof raw === 'object') return raw;
+  if (typeof raw === 'string' && raw.trim()) {
+    try { const o = JSON.parse(raw); return (o && typeof o === 'object') ? o : {}; } catch { return {}; }
+  }
+  return {};
+}
 
 function normalizeTab(tab) {
   const t = tab || {};
   const mode = String(t.mode || '').toUpperCase();
+  const closedAt = intOrNull(t.closed_at);
   return {
     key: str(t.tab_key || t.key || t.id),
     mode: MODES.has(mode) ? mode : 'DOC',
     title: str(t.title).trim() || '(untitled)',
+    openedAt: intOrNull(t.opened_at),
+    closedAt,
+    open: closedAt == null,
   };
 }
 
@@ -65,8 +80,12 @@ function preview(data) {
 function normalizeBlock(block) {
   const b = block || {};
   const type = String(b.block_type || b.type || '').toLowerCase();
-  const data = (b.data && typeof b.data === 'object') ? b.data : {};
-  const base = { id: str(b.block_id || b.id), type, known: KNOWN_BLOCKS.has(type), supported: STAGE4.has(type) };
+  const data = parseData(b.data);
+  const base = {
+    id: str(b.block_id || b.id), type,
+    known: KNOWN_BLOCKS.has(type), supported: STAGE4.has(type),
+    position: intOrNull(b.position), createdAt: intOrNull(b.created_at), updatedAt: intOrNull(b.updated_at),
+  };
   if (type === 'heading') return { ...base, view: viewHeading(data) };
   if (type === 'paragraph') return { ...base, view: viewParagraph(data) };
   if (type === 'table') return { ...base, view: viewTable(data) };
@@ -89,6 +108,6 @@ function normalizeStream(blocks) {
 
 module.exports = {
   MODES, KNOWN_BLOCKS, STAGE4, CHART_KINDS,
-  normalizeTab, normalizeBlock, normalizeStream,
+  normalizeTab, normalizeBlock, normalizeStream, parseData,
   viewHeading, viewParagraph, viewTable, viewChart,
 };

@@ -28,8 +28,10 @@ contextBridge.exposeInMainWorld('sq', {
 
   // Open the Editor Studio window directly (kept for back-compat / direct access)
   openEditor: () => ipcRenderer.invoke('editor:open'),
-  // Open the My Workspace workbench (Window 3) — hosts the Editor + future surfaces
+  // Open the My Workspace workbench — the operator surfaces + studios
   openWorkspace: () => ipcRenderer.invoke('workspace:open'),
+  // Open Zoe's Canvas — her own window for deliverables + visual aids (distinct from the workbench)
+  openCanvas: () => ipcRenderer.invoke('canvas:open'),
 
   // Editor Studio — document registry / lifecycle / checks (all run in main over IPC)
   editor: {
@@ -116,5 +118,11 @@ contextBridge.exposeInMainWorld('sq', {
     seedPriors: () => ipcRenderer.invoke('puller:seed-priors'),
     cascade: (domain) => ipcRenderer.invoke('puller:cascade', { domain }),
     ingestNegatives: (text) => ipcRenderer.invoke('puller:ingest-negatives', { text })
+  },
+
+  // Canvas — read-only renderer over Echo's saga canvas (tenant_rainey.canvas_tabs/blocks).
+  canvas: {
+    listTabs: (opts) => ipcRenderer.invoke('canvas:list-tabs', opts || {}),
+    getTab: (tabKey) => ipcRenderer.invoke('canvas:get-tab', { tabKey })
   }
 });
