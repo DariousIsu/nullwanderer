@@ -4647,12 +4647,40 @@ async function runDirectedResearchPass(focus) {
   return outcome;
 }
 
+// KNOWN→UNKNOWN grounding: before researching an entity, pull what WE ALREADY HOLD — our prior dossier
+// record on it, Zoe's memory DB, and the Echo databases — so the lanes build on that foundation and spend
+// tokens only on the gaps (Lucas: "put the mapped data to work instead of redoing the same things"). Read-
+// only, fail-safe (any miss → less context, never a crash). Returns a "known" block (or '').
+async function gatherKnown(entity, { sourceFocusId = null, facet = '' } = {}) {
+  const knownLib = require('./lib/known');
+  let existing = '';
+  if (sourceFocusId) {
+    try {
+      const r = filesLib.fileReadFull(`notes/directed-${sourceFocusId}-dossier.md`);
+      const txt = (r && r.text) || '';
+      if (txt) { const { sections } = require('./lib/assemble').parseSections(txt); const sec = (sections || []).find(s => require('./lib/track').mentions(entity, s.heading)); if (sec) existing = sec.body; }
+    } catch {}
+  }
+  let local = [];
+  try { const rows = await memoryLib.retrieve(entity, { k: 4 }); local = (rows || []).map(x => String((x && x.content) || '')); } catch {}
+  let echo = [];
+  try {
+    if (echoSuit) {
+      const e = await echoSuit.dispatch({ kind: 'do', name: 'search_entities', args: { query: entity, top_k: 3 } });
+      if (e && e.ok && e.text && !/^\s*(no |0 )/i.test(e.text)) echo.push(e.text.slice(0, 500));
+      const k = await echoSuit.dispatch({ kind: 'do', name: 'search_knowledge', args: { query: entity, top_k: 3 } });
+      if (k && k.ok && k.text) echo.push(k.text.slice(0, 500));
+    }
+  } catch {}
+  return knownLib.buildKnownBlock({ entity, existing, local, echo });
+}
+
 // TWO-LANE DEEP RESEARCH for ONE target: the WEB lane (her browser + Echo web tools, on the fast model)
 // and the DEEP lane (structured DBs + our knowledge graph, on the 120B reasoner) run CONCURRENTLY, then
 // a merge pass folds both raw streams into one section. This is the multi-cloud win — each lane runs the
 // model that fits its work, in parallel. Fail-safe: a lane that dies → '' for that side; the merge still
 // runs on whatever came back. Returns { section, webRaw, deepRaw, lanes }.
-async function runDeepResearchTarget({ org, goal = '', facet = '', guidance = '' }) {
+async function runDeepResearchTarget({ org, goal = '', facet = '', guidance = '', known = '' }) {
   const rs = require('./lib/research');
   const tier = require('./lib/echo_tier');
   const operatorMod = require('./lib/operator');
@@ -4672,13 +4700,13 @@ async function runDeepResearchTarget({ org, goal = '', facet = '', guidance = ''
     '- recall {"query":"…"}          her own memory', '', tail].join('\n');
 
   const [web, deep] = await Promise.all([
-    runCloudOperator({ userMessage: rs.buildWebLanePrompt({ goal, org, facet, guidance }), context: '', task: true, autonomous: true, toolNames: tier.laneToolNames('web'), model: fastModel, toolSpec: webSpec }).catch(() => null),
-    runCloudOperator({ userMessage: rs.buildDeepLanePrompt({ goal, org, facet, guidance }), context: '', task: true, autonomous: true, toolNames: tier.laneToolNames('deep'), model: deepModel, toolSpec: deepSpec }).catch(() => null)
+    runCloudOperator({ userMessage: rs.buildWebLanePrompt({ goal, org, facet, guidance, known }), context: '', task: true, autonomous: true, toolNames: tier.laneToolNames('web'), model: fastModel, toolSpec: webSpec }).catch(() => null),
+    runCloudOperator({ userMessage: rs.buildDeepLanePrompt({ goal, org, facet, guidance, known }), context: '', task: true, autonomous: true, toolNames: tier.laneToolNames('deep'), model: deepModel, toolSpec: deepSpec }).catch(() => null)
   ]);
   const webRaw = (web && web.answer) ? String(web.answer).trim() : '';
   const deepRaw = (deep && deep.answer) ? String(deep.answer).trim() : '';
   let section = '';
-  try { section = await condenseComplete(rs.buildMergeLanesPrompt({ org, facet, webRaw, deepRaw }), { numPredict: 1300 }); } catch {}
+  try { section = await condenseComplete(rs.buildMergeLanesPrompt({ org, facet, webRaw, deepRaw, known }), { numPredict: 1300 }); } catch {}
   section = (section && section.trim()) ? section.trim() : `## ${org}\n- **${rs.facetLabel(facet)}:** ${((webRaw || deepRaw) || '').slice(0, 800).trim() || 'not found'}`;
   const used = (r) => !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.length);
   return { section, webRaw, deepRaw, lanes: { web: used(web), deep: used(deep) } };
@@ -4713,16 +4741,20 @@ async function runEnrichResearchPass(focus) {
   if (!org) {
     done = true; note = `facet filled across all ${enriched.length} organization(s): ${rs.facetLabel(facet)}`;
   } else {
+    // KNOWN→UNKNOWN: gather what we already hold on this org (prior dossier record + Zoe's memory + Echo)
+    // so the lanes build on it and chase only the gaps, instead of re-researching from scratch.
+    const enrichSource = (() => { try { return parseInt(db.getMeta(`focus.${focus.id}.enrich_source`) || '0', 10) || null; } catch { return null; } })();
+    const known = await gatherKnown(org, { sourceFocusId: enrichSource, facet });
     // Build this org's section — two-lane (deep) or single-pass (default).
     let section = '', laneNote = '';
     if (deepMode) {
-      const dr = await runDeepResearchTarget({ org, goal, facet, guidance });
-      section = dr.section; laneNote = ` [web:${dr.lanes.web ? '✓' : '–'} deep:${dr.lanes.deep ? '✓' : '–'}]`;
+      const dr = await runDeepResearchTarget({ org, goal, facet, guidance, known });
+      section = dr.section; laneNote = ` [web:${dr.lanes.web ? '✓' : '–'} deep:${dr.lanes.deep ? '✓' : '–'}${known ? ' known✓' : ''}]`;
     } else {
       // ONE focused pass: fill ONLY the named facet for THIS org.
       let ans = '';
       try {
-        const r = await runCloudOperator({ userMessage: rs.buildEnrichPrompt({ goal, org, facet, guidance }), context: '', task: true, autonomous: true });
+        const r = await runCloudOperator({ userMessage: rs.buildEnrichPrompt({ goal, org, facet, guidance, known }), context: '', task: true, autonomous: true });
         ans = (r && r.answer) ? String(r.answer).trim() : '';
       } catch (e) { console.error('[enrich] pass failed:', e.message); }
       const p = rs.parsePass(ans);

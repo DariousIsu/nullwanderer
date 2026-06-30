@@ -70,10 +70,11 @@ const deepP = rs.buildDeepLanePrompt({ org: 'Cato Institute', facet: 'policy VPs
 ok(/STRUCTURED-DATA lane/i.test(deepP) && /Do NOT browse/i.test(deepP), 'deep-lane prompt: structured only, do NOT browse');
 ok(/nonprofit_lookup/.test(deepP) && /gov_funding/.test(deepP) && /kg_search/.test(deepP), 'deep-lane prompt steers to 990s / funding / our graph');
 
-const mp = rs.buildMergeLanesPrompt({ org: 'Cato Institute', facet: 'policy VPs', webRaw: 'Peter Goettler — President (web)', deepRaw: '990: revenue $40M; David Boaz — EVP' });
+const mp = rs.buildMergeLanesPrompt({ org: 'Cato Institute', facet: 'policy VPs', webRaw: 'Peter Goettler — President (web)', deepRaw: '990: revenue $40M; David Boaz — EVP', known: '## Cato Institute\n- Key people: Clark Neily — VP' });
 ok(Array.isArray(mp) && /## Cato Institute/.test(mp[0].content), 'merge prompt emits the exact org heading');
-ok(/DEDUPE across lanes/i.test(mp[0].content) && /Financials & funding/i.test(mp[0].content), 'merge prompt dedupes + adds a structured financials line');
+ok(/DEDUPE/i.test(mp[0].content) && /Financials & funding/i.test(mp[0].content), 'merge prompt dedupes + adds a structured financials line');
 ok(/Peter Goettler/.test(mp[1].content) && /David Boaz/.test(mp[1].content), 'merge prompt carries BOTH lane streams');
+ok(/OUR EXISTING RECORD/.test(mp[1].content) && /Clark Neily/.test(mp[1].content) && /GROW|PRESERVE/i.test(mp[0].content), 'merge prompt carries the KNOWN record + grows from it (does not restart)');
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
