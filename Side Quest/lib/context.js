@@ -237,7 +237,7 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
  *   then    = alternating user / assistant from recentTurns (assistant carries <think>/<say>)
  *   finally = the new user message
  */
-function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, retrievedKnowledgeBlock, capabilityProposalBlock, selfModelBlock, personalBlock, relevantPastTurns, openQuestionBlock, socialTurn, convoStateBlock, varietyNudge, echoSuitBlock, newUserMessage }) {
+function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonologue, recentReadings, heldCommitments, openThreads, awareness, protocols, browserBlock, pendingInbounds, retrievedKnowledgeBlock, capabilityProposalBlock, selfModelBlock, moodBlock, personalBlock, relevantPastTurns, openQuestionBlock, socialTurn, convoStateBlock, varietyNudge, echoSuitBlock, newUserMessage }) {
   let systemContent = sub(BOOTSTRAP, userName);
 
   // AWARENESS — temporal + system facts prepended to system prompt so she knows
@@ -248,7 +248,12 @@ function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonol
 
   // BASE PERSONA — fixed core identity, pinned just under the protocol/permission band
   // and above the mutable self-model, so it always anchors who she is.
-  systemContent = sub(BASE_PERSONA, userName) + '\n\n' + systemContent;
+  // MOOD leads right under it: her living feeling colors the voice before any fact does (the cloud
+  // cultivates it slowly; facts/self-model are backing, placed lower). This is the "talking to Zoe,
+  // not told about Zoe" fix — she speaks FROM a feeling instead of reciting herself.
+  systemContent = sub(BASE_PERSONA, userName) + '\n\n'
+    + (moodBlock ? moodBlock + '\n\n' : '')
+    + systemContent;
 
   // PERMISSIONS — the authoritative grant list ("what's already yours"). Pinned
   // high so she stops asking for / proposing capabilities she already has.

@@ -2383,6 +2383,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (narr) { const nb = sn.buildBlock(narr, userName); if (nb) selfModelBlock = selfModelBlock ? `${nb}\n\n${selfModelBlock}` : nb; }
   } catch (e) { console.error('[main] self-narrative anchor failed:', e.message); }
 
+  // MOOD (self-awareness Layer 5) — her LIVING feeling, cloud-cultivated slowly over time. Passed
+  // SEPARATELY so it LEADS the voice (placed right under the core persona, above the factual self-model):
+  // mood colors HOW she speaks. It is NOT identity — never written to self_model.
+  let moodBlock = null;
+  try { const md = require('./lib/mood'); moodBlock = md.buildBlock(md.current(), userName); }
+  catch (e) { console.error('[main] mood block failed:', e.message); }
+
   // PERSONAL-LIFE block — when she's off the clock, reframe the chat toward play
   // and suppress the work reflexes. Null when on the clock (no behavior change).
   let personalBlock = null;
@@ -2795,6 +2802,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       : retrievedKnowledgeBlock,
     capabilityProposalBlock,
     selfModelBlock,
+    moodBlock,
     personalBlock,
     relevantPastTurns: distilledBrief ? [] : relevantPastTurns,
     openQuestionBlock,
@@ -3699,6 +3707,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   require('./lib/self_narrative').maybeRefresh({ userName })
     .then(t => { if (t) console.log('[main] self-narrative recomposed'); })
     .catch(err => console.error('[main] self-narrative refresh failed:', err.message));
+
+  // Background: cloud-cultivate her MOOD if stale (self-awareness Layer 5). The deeper (CLOUD) part of
+  // her evolves how she FEELS — slowly (~90 min TTL), grounded in her real recent lived experience —
+  // so her feelings develop over time and color her voice. Lazy, fail-safe; never writes identity.
+  try {
+    require('./lib/mood').maybeRefresh({
+      userName,
+      recentRows: (() => { try { return db.getRecentTurns(12); } catch { return []; } })(),
+      genFn: (prompt) => condenseComplete([{ role: 'user', content: prompt }], { numPredict: 220 }),
+    }).then(m => { if (m) console.log('[main] mood cultivated:', m.feeling); }).catch(() => {});
+  } catch {}
 
   // Background: extract any newly-established PROTOCOLS from this user message.
   // Conservative — only fires when Lucas is explicitly setting/changing rules.
