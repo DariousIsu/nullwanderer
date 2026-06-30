@@ -2602,8 +2602,19 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const opOn = (() => { try { return (db.getMeta('operator.mode') || 'full').trim() !== 'off'; } catch { return true; } })();
     if (ex.isExpand && opOn && !socialTurn && !followupFired && !directedStopHandled) {
       let last = null; try { last = JSON.parse(db.getMeta('research.last_dossier') || 'null'); } catch {}
+      // TOPIC-ADDRESSED expand: if he named a project ("expand the THINK TANK research"), resolve THAT
+      // track via the registry — else expand would deepen the most-recent dossier (the AI-safety run),
+      // not the think tanks. Falls back to last_dossier when no topic is named.
+      try {
+        const hit = require('./lib/track_index').resolveByTopic(buildTrackIndex(), ex.target || userMessage);
+        if (hit && hit.id) {
+          const t = (() => { try { return db.getOpenThread(hit.id); } catch { return null; } })();
+          last = { focusId: hit.id, path: `notes/directed-${hit.id}-dossier.md`, goal: (t && t.content) || (last && last.goal) || '' };
+          console.log(`[expand] topic-resolved → #${hit.id} (${(hit.covered || []).length} orgs)`);
+        }
+      } catch (e) { console.error('[expand] topic resolve failed:', e.message); }
       if (last && last.path) {
-        let dossier = ''; try { const r = await filesLib.dispatch({ tag: 'file-read', attrs: { path: last.path } }); dossier = (r && (r.text || r.content)) || ''; } catch {}
+        let dossier = ''; try { const r = filesLib.fileReadFull(last.path); dossier = (r && r.text) || ''; } catch {}   // FULL read — the 8000-char cap would drop orgs from buildExpandGoal's list
         const goal = cd.buildExpandGoal({ priorGoal: last.goal, target: ex.target, dossier });
         const focusLib = require('./lib/focus');
         const r = await focusLib.setFromDirective(goal, userTurnRow && userTurnRow.id);
