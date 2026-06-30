@@ -32,6 +32,21 @@ ok('chart height clamped', c.view.height === 600);
 ok('chart points mapped, bad y → null', c.view.points[0].rev === 10 && c.view.points[1].rev === null && c.view.points[0].x === 'Q1');
 ok('chart bad kind → line', V.normalizeBlock({ block_type: 'chart', data: { kind: 'pie' } }).view.kind === 'line');
 
+// ---- image (renderable by our canvas; carried as a data URI) ----
+const img = V.normalizeBlock({ block_type: 'image', data: { src: 'data:image/png;base64,AAAA', alt: 'pic' } });
+ok('image supported + src/alt', img.supported && img.view.src.startsWith('data:image/png') && img.view.alt === 'pic');
+ok('image alt falls back to title', V.normalizeBlock({ block_type: 'image', data: { url: 'x.png', title: 'T' } }).view.src === 'x.png' && V.normalizeBlock({ block_type: 'image', data: { title: 'T' } }).view.alt === 'T');
+
+// ---- pdf + html (rich embeds; renderable by our canvas) ----
+const pdf = V.normalizeBlock({ block_type: 'pdf', data: { src: 'data:application/pdf;base64,JVBER', alt: 'doc.pdf' } });
+ok('pdf supported + src/alt', pdf.supported && pdf.view.src.startsWith('data:application/pdf') && pdf.view.alt === 'doc.pdf');
+const htmlB = V.normalizeBlock({ block_type: 'html', data: { html: '<h1>Hi</h1>' } });
+ok('html supported + html', htmlB.supported && htmlB.view.html === '<h1>Hi</h1>');
+// document_file is the VALID engine carrier for both embedded pdf (src) and rich html
+const dfPdf = V.normalizeBlock({ block_type: 'document_file', data: { src: 'file:///x.pdf', alt: 'd' } });
+ok('document_file carries src', dfPdf.supported && dfPdf.view.src === 'file:///x.pdf' && dfPdf.view.alt === 'd');
+ok('document_file carries html', V.normalizeBlock({ block_type: 'document_file', data: { html: '<p>x</p>' } }).view.html === '<p>x</p>');
+
 // ---- fallback for non-Stage-4 known type ----
 const kg = V.normalizeBlock({ block_type: 'knowledge_graph', data: { nodes: [1, 2] } });
 ok('knowledge_graph known but not supported', kg.known && !kg.supported && /nodes/.test(kg.view.preview));

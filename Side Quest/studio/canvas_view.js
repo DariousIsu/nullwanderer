@@ -14,7 +14,8 @@ const KNOWN_BLOCKS = new Set([
   'diagram', 'knowledge_graph', 'document_file', 'browser_snapshot', 'map', 'three',
   'draft_review', 'citation', 'source_card',
 ]);
-const STAGE4 = new Set(['heading', 'paragraph', 'table', 'chart']);   // fully-rendered set first
+const STAGE4 = new Set(['heading', 'paragraph', 'table', 'chart']);   // Echo's first-shipped renderers
+const RENDERABLE = new Set(['heading', 'paragraph', 'table', 'chart', 'image', 'pdf', 'html', 'document_file']);   // what OUR canvas draws
 const CHART_KINDS = new Set(['line', 'bar', 'area']);
 
 const str = (v) => (v == null ? '' : String(v));
@@ -70,6 +71,16 @@ function viewChart(d) {
   };
 }
 
+// image block — a dropped/produced image, carried as a data URI (or URL). alt for accessibility.
+function viewImage(d) { return { src: str(d.src || d.url || d.dataUri || d.data_uri || ''), alt: str(d.alt || d.title || '') }; }
+// pdf block — embedded document (Chromium PDF viewer); src is a data: URI or file URL.
+function viewPdf(d) { return { src: str(d.src || d.url || ''), alt: str(d.alt || d.title || '') }; }
+// html block — rich HTML (e.g. docx → mammoth HTML). The renderer sanitizes before paint.
+function viewHtml(d) { return { html: str(d.html || d.markup || '') }; }
+// document_file — the taxonomy's file-artifact carrier (pdf/html etc.; 'pdf'/'html' are NOT valid
+// engine block types). Carries an embeddable src (PDF file URL) OR rich html; renderer picks.
+function viewDocumentFile(d) { return { src: str(d.src || d.url || ''), html: str(d.html || d.markup || ''), alt: str(d.alt || d.title || '') }; }
+
 // A short, safe preview of an unsupported block's payload (so the fallback card shows something).
 function preview(data) {
   try { const s = JSON.stringify(data); return s.length > 240 ? s.slice(0, 240) + '…' : s; }
@@ -83,13 +94,17 @@ function normalizeBlock(block) {
   const data = parseData(b.data);
   const base = {
     id: str(b.block_id || b.id), type,
-    known: KNOWN_BLOCKS.has(type), supported: STAGE4.has(type),
+    known: KNOWN_BLOCKS.has(type), supported: RENDERABLE.has(type),
     position: intOrNull(b.position), createdAt: intOrNull(b.created_at), updatedAt: intOrNull(b.updated_at),
   };
   if (type === 'heading') return { ...base, view: viewHeading(data) };
   if (type === 'paragraph') return { ...base, view: viewParagraph(data) };
   if (type === 'table') return { ...base, view: viewTable(data) };
   if (type === 'chart') return { ...base, view: viewChart(data) };
+  if (type === 'image') return { ...base, view: viewImage(data) };
+  if (type === 'pdf') return { ...base, view: viewPdf(data) };
+  if (type === 'html') return { ...base, view: viewHtml(data) };
+  if (type === 'document_file') return { ...base, view: viewDocumentFile(data) };
   return { ...base, view: { preview: preview(data) } };   // labelled fallback for non-Stage-4 types
 }
 
@@ -107,7 +122,7 @@ function normalizeStream(blocks) {
 }
 
 module.exports = {
-  MODES, KNOWN_BLOCKS, STAGE4, CHART_KINDS,
+  MODES, KNOWN_BLOCKS, STAGE4, RENDERABLE, CHART_KINDS,
   normalizeTab, normalizeBlock, normalizeStream, parseData,
-  viewHeading, viewParagraph, viewTable, viewChart,
+  viewHeading, viewParagraph, viewTable, viewChart, viewImage, viewPdf, viewHtml, viewDocumentFile,
 };

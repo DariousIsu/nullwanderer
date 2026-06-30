@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('sq', {
   getMeta: (key) => ipcRenderer.invoke('meta:get', key),
@@ -120,9 +120,17 @@ contextBridge.exposeInMainWorld('sq', {
     ingestNegatives: (text) => ipcRenderer.invoke('puller:ingest-negatives', { text })
   },
 
-  // Canvas — read-only renderer over Echo's saga canvas (tenant_rainey.canvas_tabs/blocks).
+  // Canvas — Zoe's freeform whiteboard over Echo's saga canvas (live /canvas snapshot). Content is
+  // read-only (Echo owns blocks); the spatial LAYOUT (block positions) is Side-Quest-owned + persisted.
   canvas: {
+    getAll: () => ipcRenderer.invoke('canvas:get-all'),
     listTabs: (opts) => ipcRenderer.invoke('canvas:list-tabs', opts || {}),
-    getTab: (tabKey) => ipcRenderer.invoke('canvas:get-tab', { tabKey })
-  }
+    getTab: (tabKey) => ipcRenderer.invoke('canvas:get-tab', { tabKey }),
+    setDocPos: (tabKey, x, y) => ipcRenderer.invoke('canvas:set-doc-pos', { tabKey, x, y }),
+    updateDoc: (tabKey, patch) => ipcRenderer.invoke('canvas:update-doc', { tabKey, patch }),
+    resetLayout: (tabKey) => ipcRenderer.invoke('canvas:reset-layout', { tabKey }),
+    dropDoc: (filePath, x, y) => ipcRenderer.invoke('canvas:drop-doc', { path: filePath, x, y })
+  },
+  // Resolve a dropped File's real OS path (Electron removed File.path; webUtils is the supported way).
+  pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return null; } }
 });
