@@ -48,10 +48,28 @@ not the visible output.
 3. Wire into condenseRun (it already writes the dossier file + emits to canvas) → emit the COMPOSED document.
 
 ### Slice B — citations / source trail (Pillar 1)
-1. Each research pass records its real provenance — URL, the Echo tool + exact record pulled, the evidence
-   snippet — into a per-run ledger (focus.<id>.sources or a sidecar). Echo has record_web_source/save_source/
-   cite tools to leverage; the deep lane already touches authoritative sources (heritage.org 990, FEC) to RECORD.
-2. The composer renders inline citations + a Sources section so every claim is traceable.
+**DECISION (Lucas, 2026-06-30): route provenance through ECHO's source tools** (reusable across the app,
+Echo owns the source store) — NOT a local ledger, NOT extract-only.
+
+Echo's provenance model is DOCUMENT-CENTRIC (introspected 2026-06-30):
+- `save_source({original_url, content_md, citing_doc_ids:[docId], frontmatter:{source, collection_date, …}})`
+  archives a cited source + writes bidirectional rows to `source_citations`. LIGHT (no disk bundle needed).
+- `record_web_source(...)` is the HEAVY path — needs an on-disk Vault/Sources bundle (.html/.png/.notes) first.
+  Skip it for now; use save_source.
+- `get_sources_for(doc_id)` → the sources cited by a document (the render input).
+- `save_document` / `update_document` → the deliverable must be an ECHO DOCUMENT (a doc_id) to anchor cites.
+
+CAPTURE (the part Echo doesn't solve — the operator only returns tool NAMES, not URLs): extract the real
+URLs from each pass's raw output + the deep lane's structured-record refs (990/FEC/KG). lib/sources.js (pure)
+does the extraction/normalize/frontmatter/render; main.js does the live Echo calls. If extract-from-raw proves
+thin in live testing, instrument the operator to emit each URL as it hits it (the more-accurate fallback).
+
+BUILD:
+1. lib/sources.js (PURE) — extractUrls(raw)+structuredRefs(deepRaw) → collectSources(); frontmatterFor(src)
+   for save_source; renderSourcesSection(normalizedSources) for the doc. + smoke.
+2. main.js wiring — at finalize: save the deliverable as an Echo document (→ docId); for each collected source
+   call save_source(citing_doc_ids:[docId]); render the Sources section + inline [n] markers from get_sources_for.
+3. The composer (Slice A) takes the rendered Sources section so every org section's claims trace to a source.
 
 ### Slice C — live-grow display (#2)
 1. Re-run the compose on a cadence during the run and UPDATE the Canvas document block as it grows (re-compose

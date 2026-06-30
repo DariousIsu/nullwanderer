@@ -53,6 +53,7 @@ const smokes = [
   'smoke_research_plan.js',
   'smoke_compose.js',
   'smoke_canvas_ingest.js',
+  'smoke_sources.js',
   'smoke_localdb.js',
   'smoke_intake.js',
   'smoke_estimate_correction.js',
