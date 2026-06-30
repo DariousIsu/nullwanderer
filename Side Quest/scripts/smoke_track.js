@@ -40,6 +40,12 @@ ok(tk.classifyQuery('who leads Heritage?').kind === 'sample', '"who leads X" →
 ok(tk.classifyQuery("who's the head of policy for each?").kind === 'facet', '"head of policy for each" → facet (all-entries sweep)');
 ok(tk.classifyQuery("who's the head of policy for each?").scope === 'people', 'facet scope = people');
 ok(tk.classifyQuery('contacts for all of them').kind === 'facet' && tk.classifyQuery('contacts for all of them').scope === 'contact', '"contacts for all" → facet/contact');
+ok(tk.classifyQuery('can you find the right wing think tank research?').kind === 'find', '"can you find the X research" → find (locate the deliverable)');
+ok(tk.classifyQuery('pull up the AI safety dossier').kind === 'find', '"pull up the X dossier" → find');
+ok(tk.classifyQuery('where is the think tank research').kind === 'find', '"where is the X research" → find');
+ok(tk.classifyQuery('find me a good restaurant').is === false, '"find me a restaurant" (no deliverable noun) → NOT a query');
+const fnd = tk.buildAnswer(complete, 'can you find the think tank research?');
+ok(fnd.handled && /Yes — you DO have/.test(fnd.block) && /3 organizations/.test(fnd.block), 'find → confirms it exists + count + list');
 ok(tk.classifyQuery('I love that, thank you').is === false, 'gratitude is NOT a deliverable query');
 ok(tk.classifyQuery('lets get pizza later').is === false, 'unrelated chatter is NOT a deliverable query');
 

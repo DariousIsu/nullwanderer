@@ -12,6 +12,7 @@ const route = (text, kind) => cr.routeDeliverable({ text, kind }).target;
 ok(route('how many AI safety orgs?', 'count') === 'chat', 'count → chat');
 ok(route('what do you have on MIRI?', 'sample') === 'chat', 'sample → chat');
 ok(route("how's the research going?", 'status') === 'chat', 'status → chat');
+ok(route('can you find the think tank research?', 'find') === 'chat', 'find → chat (locate/confirm in chat)');
 
 // --- big enumerations with no medium → ASK ---
 ok(route("what's the full list?", 'list') === 'ask', 'list (no medium) → ask');

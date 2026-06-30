@@ -2670,7 +2670,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               const f = (() => { try { return require('./lib/focus').getCurrent(); } catch { return null; } })();
               if (f) { const report = await statusReport(f); if (report && report.trim()) body = `${ans.block}\n\n${report.trim()}`; }
             }
-            const ptr = ans.kind === 'count' ? ` You may also add, briefly, that the full breakdown is on his Canvas (tab "${tabTitle}") if he wants it.` : '';
+            const ptr = (ans.kind === 'count' || ans.kind === 'find') ? ` You may also add, briefly, that the full breakdown is in your notes and on his Canvas (tab "${tabTitle}") if he wants it.` : '';
             const where = track.kind === 'active' ? 'your IN-PROGRESS research' : 'your research';
             composedUserMessage += `\n\n[${userName} asked about ${where}. These are your REAL task facts — present them EXACTLY and COMPLETELY in your own voice: state the count as given and name EVERY organization listed, in order. Do NOT stop early, summarize, round the number, drop any, or invent any. The count is whatever this block says — not any other number you may recall:\n${body}]${ptr}`;
             statusHandled = true;

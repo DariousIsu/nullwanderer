@@ -38,6 +38,8 @@ const EACH_RE = /\b(?:for |of |across )?(?:each|every|all)\b|\ball (?:of )?(?:th
 // Facet words used to narrow an all-entries sweep (leadership / contacts).
 const PEOPLE_FACET_RE = /\b(?:head|heads|leader|leadership|director|president|ceo|chair|staff|people|policy|who(?:'?s| is| runs| leads| heads))\b/i;
 const CONTACT_FACET_RE = /\b(?:contacts?|emails?|e-mail|phones?|address(?:es)?|reach|websites?)\b/i;
+// Find/locate a deliverable: "can you find / pull up / where's / do you have the X research/dossier/notes".
+const FIND_RE = /\b(?:find|pull up|bring up|locate|retrieve|open up|get me|show me|where(?:'?s| is| are)|do (?:you|we) have|have you got|got)\b[^?.!]{0,45}\b(?:research|dossier|notes?|write[\s-]?up|report|study|findings|deliverable|the\s+[\w-]+(?:\s+[\w-]+)?\s+(?:think tanks?|orgs?|organi[sz]ations?))\b/i;
 
 // Classify a turn as a deliverable query (and which kind). Order matters: a specific "about X" /
 // "for each" beats a generic list/count. Returns { is, kind, scope }.
@@ -55,6 +57,7 @@ function classifyQuery(text) {
   }
   if (ABOUT_RE.test(s)) return { is: true, kind: 'sample', scope: null };
   if (COUNT_RE.test(s)) return { is: true, kind: 'count', scope: null };
+  if (FIND_RE.test(s)) return { is: true, kind: 'find', scope: null };   // "find/pull up the X research" → locate the deliverable
   if (LIST_RE.test(s)) return { is: true, kind: 'list', scope: null };
   if (STATUS_RE.test(s)) return { is: true, kind: 'status', scope: null };
   return { is: false, kind: null, scope: null };
@@ -150,6 +153,13 @@ function buildAnswer(track, text) {
   if (q.kind === 'count') {
     const block = `You have ${count} organization${count === 1 ? '' : 's'} on file from ${where}: ${orgs.join(', ') || '(none yet)'}.${liveTail}`;
     return { handled: true, kind: 'count', block, note: `count=${count}` };
+  }
+  if (q.kind === 'find') {
+    // locate/confirm the deliverable: yes, it exists, here's the count + where to see it.
+    const block = count
+      ? `Yes — you DO have that research on file: ${count} organization${count === 1 ? '' : 's'} from ${where} (${orgs.join(', ')}).${liveTail}`
+      : `You don't have that research on file yet — nothing's been gathered for it.${liveTail}`;
+    return { handled: true, kind: 'find', block, note: `find=${count}` };
   }
   if (q.kind === 'list') {
     const block = count
