@@ -207,6 +207,28 @@ const MIGRATIONS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_kind ON knowledge(kind)`,
   `CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(content)`,
+  // documents — the SHORT-TERM landing store for whole new material (a doc Lucas drops on the canvas, a
+  // finished research deliverable, meeting notes). Lands here IMMEDIATELY + durably (full body), so it
+  // survives an engine/app restart (the canvas is in-memory in the engine and does NOT) and is recallable
+  // the same day, BEFORE the nightly pass promotes it into Echo long-term. promoted=0 until consolidated;
+  // parent_id/version carry the iteration model (an update is a new iteration of the original, never an
+  // in-place overwrite). ref = an external key (e.g. the canvas tab_key) for idempotent landing.
+  `CREATE TABLE IF NOT EXISTS documents (
+    id INTEGER PRIMARY KEY,
+    title TEXT,
+    body TEXT NOT NULL,
+    source TEXT,
+    ref TEXT,
+    understanding TEXT,
+    parent_id INTEGER,
+    version INTEGER DEFAULT 1,
+    promoted INTEGER DEFAULT 0,
+    promoted_ref TEXT,
+    created_ts INTEGER NOT NULL,
+    updated_ts INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_documents_ref ON documents(ref)`,
+  `CREATE INDEX IF NOT EXISTS idx_documents_promoted ON documents(promoted)`,
   // agent_events — the BLACKBOARD. One append-only timeline that every idle loop
   // writes to at the end of its tick and reads from at the top, so tick N+1 sees
   // tick N (the "continuous consciousness" substrate). Reference-not-copy: each
@@ -1090,6 +1112,55 @@ function insertKnowledge({ kind = 'note', content, embedding = null, source = nu
   return { id, ts };
 }
 
+// --- Documents (short-term landing store) ---
+// Whole new material lands here durably the moment it arrives; the nightly pass promotes it to Echo
+// long-term. parentId/version carry the iteration model (an update = a new iteration of the original).
+
+function insertDocument({ title = null, body, source = null, ref = null, understanding = null, parentId = null, version = 1 }) {
+  if (!body || !String(body).trim()) return null;
+  const ts = Date.now();
+  const info = getDb()
+    .prepare(`INSERT INTO documents (title, body, source, ref, understanding, parent_id, version, promoted, created_ts, updated_ts)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`)
+    .run(title, String(body), source, ref, understanding, parentId, version, ts, ts);
+  return { id: info.lastInsertRowid, ts };
+}
+
+// Latest document row for an external ref (idempotent landing + iteration parent lookup). Newest first.
+function getDocumentByRef(ref) {
+  if (!ref) return null;
+  return getDb().prepare('SELECT * FROM documents WHERE ref = ? ORDER BY id DESC LIMIT 1').get(ref) || null;
+}
+
+function getDocument(id) {
+  if (!id) return null;
+  return getDb().prepare('SELECT * FROM documents WHERE id = ?').get(id) || null;
+}
+
+// Recent documents, newest first. opts.unpromotedOnly limits to short-term (not yet consolidated).
+function recentDocuments(n = 20, { unpromotedOnly = false } = {}) {
+  const where = unpromotedOnly ? 'WHERE promoted = 0' : '';
+  return getDb().prepare(`SELECT * FROM documents ${where} ORDER BY id DESC LIMIT ?`).all(Math.max(1, n | 0));
+}
+
+// Un-promoted documents for the nightly promotion pass (Slice 2), oldest first (FIFO consolidation).
+function listUnpromotedDocuments(limit = 100) {
+  return getDb().prepare('SELECT * FROM documents WHERE promoted = 0 ORDER BY id ASC LIMIT ?').all(Math.max(1, limit | 0));
+}
+
+// Keyword search over title+body (simple LIKE; embedding search can layer on later). Newest first.
+function searchDocuments(queryLike, n = 10) {
+  const q = `%${String(queryLike || '').trim()}%`;
+  return getDb().prepare('SELECT * FROM documents WHERE title LIKE ? OR body LIKE ? ORDER BY id DESC LIMIT ?').all(q, q, Math.max(1, n | 0));
+}
+
+// Mark a document consolidated into Echo long-term (promotedRef = where it landed, e.g. an Echo doc_id).
+function markDocumentPromoted(id, promotedRef = null) {
+  if (!id) return false;
+  getDb().prepare('UPDATE documents SET promoted = 1, promoted_ref = ?, updated_ts = ? WHERE id = ?').run(promotedRef, Date.now(), id);
+  return true;
+}
+
 // Phase 3: rewrite a knowledge note in place (Mem0 UPDATE/merge) — content + its
 // embedding + FTS index, bumping last_used_ts. Used when a new takeaway AUGMENTS an
 // existing one rather than duplicating it, so one topic doesn't pile up near-dup rows.
@@ -1573,6 +1644,13 @@ module.exports = {
   countEmailsSentSince,
   hasEmailedAddress,
   insertKnowledge,
+  insertDocument,
+  getDocumentByRef,
+  getDocument,
+  recentDocuments,
+  listUnpromotedDocuments,
+  searchDocuments,
+  markDocumentPromoted,
   getMonologueById,
   markReadingsConsolidated,
   updateKnowledge,

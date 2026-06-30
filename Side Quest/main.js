@@ -254,7 +254,10 @@ function createWorkspaceWindow() {
 }
 
 let canvasWindow = null;
+let meetWebContents = null;   // the Meet <webview>'s guest webContents (captured on attach) — the driver's handle
 let zoeMeetPartitionReady = false;
+// The driver (lib/meet_canvas) operates the Meet pane from main via this live guest webContents.
+function getMeetWebContents() { return (meetWebContents && !meetWebContents.isDestroyed()) ? meetWebContents : null; }
 // The Meet-in-canvas pane hosts Google Meet in a <webview partition="persist:zoe-google"> — ZOE's
 // OWN Google session (zoelanai@…), distinct from the operator's calendar OAuth. Grant camera/mic to
 // that partition's session (scoped — never to the whole app) so getUserMedia works inside the pane.
@@ -298,6 +301,12 @@ function createCanvasWindow() {
     webPreferences.nodeIntegration = false;
     webPreferences.contextIsolation = true;
     delete webPreferences.preload;
+  });
+  // Capture the Meet webview's guest webContents so the driver (lib/meet_canvas) can operate the
+  // meeting from main directly (executeJavaScript / sendInputEvent) — no renderer hop.
+  canvasWindow.webContents.on('did-attach-webview', (_e, guest) => {
+    meetWebContents = guest;
+    try { guest.once('destroyed', () => { if (meetWebContents === guest) meetWebContents = null; }); } catch {}
   });
   canvasWindow.loadFile(path.join(__dirname, 'renderer', 'canvas.html'));
   canvasWindow.once('ready-to-show', () => { canvasWindow.show(); canvasWindow.focus(); });
@@ -684,6 +693,9 @@ app.whenReady().then(() => {
             let understanding = '';
             try { understanding = await condenseComplete(ci.buildUnderstandingPrompt({ title: label, markdown }), { numPredict: 600 }); } catch {}
             const note = ci.ingestNote({ title: label, understanding, markdown });
+            // LAND the FULL document durably in the short-term store (survives engine/app restart, unlike
+            // the in-memory canvas) so doc-QA + recall work even after the canvas clears. Idempotent on tab.
+            try { require('./lib/doc_store').land({ title: label, body: markdown, source: 'canvas_drop', ref: t.tabKey, understanding }); } catch (e) { console.error('[canvas-ingest] doc land failed:', e.message); }
             // ACCRETE — a reading in her stream + a durable memory + captured learnings/entities.
             try {
               const row = db.insertMonologue({ content: `I read the document Lucas dropped on my canvas — "${label}":\n${understanding || markdown.slice(0, 400)}`, model: 'canvas_ingest', type: 'reading', query: label });
@@ -797,16 +809,54 @@ ipcMain.handle('canvas:open', () => { createCanvasWindow(); return { ok: true };
 // Meet-in-canvas (Slice 6): route a Meet URL into Zoe's Canvas pane (she joins as herself in the
 // persist:zoe-google partition), freeing her dedicated CDP browser. Opens/focuses the Canvas window
 // and tells its renderer to mount the Meet webview. Operator/Zoe-initiated only.
+// The canvas Meet driver (lib/meet_canvas) — operates the Meet pane via the captured guest webContents.
+// Registered as the live driver so gmeet's canvasMeetDeps() can reach it from the idle loop.
+let meetDriver = null;
+function meetDriverInst() {
+  if (!meetDriver) {
+    const mc = require('./lib/meet_canvas');
+    meetDriver = mc.createMeetDriver(getMeetWebContents);
+    mc.setLiveDriver(meetDriver);
+  }
+  return meetDriver;
+}
+
+// START A CANVAS-HOSTED MEETING — the one path all join routes funnel through (calendar "Zoe: Join",
+// a Meet link in chat, autonomous). Opens/focuses the Canvas, mounts the Meet pane, marks the meeting
+// canvas-hosted, and kicks gmeet's stage machine — which now runs through the canvas driver (join →
+// intro → captions → follow/answer → leave), freeing her dedicated browser. She joins as herself.
+function startCanvasMeeting(url, title) {
+  if (!url || !/^https?:\/\//i.test(String(url))) return false;
+  const win = createCanvasWindow();
+  meetDriverInst();   // ensure the live driver is registered before the idle loop ticks
+  const payload = { url: String(url), title: title || 'Google Meet' };
+  const send = () => { try { win.webContents.send('canvas:meet-join', payload); } catch {} };
+  if (win.webContents.isLoading()) win.webContents.once('did-finish-load', send); else send();
+  win.focus();
+  try { db.setMeta('gmeet_host', 'canvas'); require('./lib/gmeet').start(String(url)); } catch (e) { console.error('[meet] gmeet start failed:', e.message); }
+  return true;
+}
+
+// Meet-in-canvas (Slice 6): route a Meet URL into Zoe's Canvas pane (she joins as herself in the
+// persist:zoe-google partition), freeing her dedicated CDP browser. Runs the full meeting flow.
 ipcMain.handle('meet:join', (_e, { url, title } = {}) => {
   try {
-    if (!url || !/^https?:\/\//i.test(String(url))) return { ok: false, error: 'invalid meet url' };
-    const win = createCanvasWindow();
-    const payload = { url: String(url), title: title || 'Google Meet' };
-    const send = () => { try { win.webContents.send('canvas:meet-join', payload); } catch {} };
-    if (win.webContents.isLoading()) win.webContents.once('did-finish-load', send); else send();
-    win.focus();
+    if (!startCanvasMeeting(url, title)) return { ok: false, error: 'invalid meet url' };
     return { ok: true };
   } catch (e) { console.error('[meet] join failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// P1 verification probe — read live state from the Meet pane (run window.sq.meetProbe() in the
+// Canvas console after joining). Confirms the driver can see the meeting + scrape captions/attendees.
+ipcMain.handle('meet:probe', async () => {
+  try {
+    if (!getMeetWebContents()) return { ok: false, error: 'no Meet webview attached — join a meeting in the canvas first' };
+    const d = meetDriverInst();
+    const inMeeting = await d.inMeeting();
+    const captions = (await d.scrapeCaptions()) || '';
+    const attendees = ((await d.scrapeAttendees()) || '').split('\n').filter(Boolean).slice(0, 20);
+    return { ok: true, inMeeting, captionLines: captions ? captions.split('\n').length : 0, captionsSample: captions.slice(0, 1500), attendees };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('editor:list-documents', (_e, opts = {}) => {
@@ -2020,7 +2070,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const gmeetLib = require('./lib/gmeet');
     if (!gmeetLib.active()) {
       const meetUrl = gmeetLib.detectMeetUrl(userMessage);
-      if (meetUrl) { gmeetLib.start(meetUrl); console.log(`[main] gmeet join started: ${meetUrl}`); }
+      // ALL ROADS → CANVAS: a Meet link now runs the full meeting flow IN the canvas pane (she joins
+      // as herself), freeing her dedicated browser. startCanvasMeeting mounts the pane + kicks gmeet.
+      if (meetUrl) { startCanvasMeeting(meetUrl, 'Google Meet'); console.log(`[main] gmeet (canvas) join started: ${meetUrl}`); }
     }
   } catch (e) { console.error('[main] gmeet start detect failed:', e.message); }
 
@@ -2936,14 +2988,22 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     const docQa = require('./lib/doc_qa');
     if (!socialTurn && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled && docQa.isDocQuery(userMessage)) {
-      let snap = null; try { snap = await canvasSnapshot(); } catch {}
-      const ci = require('./lib/canvas_ingest');
-      const tabs = (snap && Array.isArray(snap.tabs)) ? snap.tabs : [];
-      const candidates = tabs.filter(t => ci.isIngestableTab(t)).map(t => {
-        const key = ci.tabKeyOf(t);
-        const blocks = (snap.blocks_by_tab && Array.isArray(snap.blocks_by_tab[key])) ? snap.blocks_by_tab[key] : [];
-        return { title: ci.cleanTitle(t.title), markdown: ci.extractMarkdown(blocks), openedAt: t.opened_at || t.openedAt || 0 };
-      });
+      // Candidates come from the DURABLE short-term store (reboot-proof) FIRST, then any FRESH canvas drop
+      // not yet landed (just dropped, before the 45s ingest tick) — so the held doc is findable whether or
+      // not the volatile engine canvas still has it.
+      const candidates = require('./lib/doc_store').candidates(20);
+      try {
+        const snap = await canvasSnapshot();
+        if (snap && Array.isArray(snap.tabs)) {
+          const ci = require('./lib/canvas_ingest');
+          for (const t of snap.tabs.filter(x => ci.isIngestableTab(x))) {
+            const key = ci.tabKeyOf(t);
+            const blocks = (snap.blocks_by_tab && Array.isArray(snap.blocks_by_tab[key])) ? snap.blocks_by_tab[key] : [];
+            const md = ci.extractMarkdown(blocks);
+            if (md && md.length > 40 && !candidates.some(c => c.markdown === md)) candidates.push({ title: ci.cleanTitle(t.title), markdown: md, openedAt: t.opened_at || t.openedAt || 0 });
+          }
+        }
+      } catch {}
       const doc = docQa.pickRelevantDoc(userMessage, candidates);
       if (doc && doc.markdown && doc.markdown.length > 40) {
         const answer = await condenseComplete(docQa.buildExtractPrompt({ question: userMessage, docTitle: doc.title, docText: doc.markdown }), { numPredict: 1200 });
