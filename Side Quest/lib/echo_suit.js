@@ -214,8 +214,27 @@ class EchoSuit {
 
   // Execute one parsed tag → a normalized { ok, kind, isError?, text } the caller surfaces back
   // to her (errors included, so she can self-correct args / pick another tool).
-  async dispatch(tag) {
+  // opts.autonomous=true → the unattended research loop: only READ tools/recipes run; WRITE/HEAVY/
+  // LOCKED are blocked with a message (she can READ from Echo unattended, but not mutate it or spawn
+  // agents). Interactive turns (default) allow read+write+heavy; LOCKED (email-send/image-gen) never.
+  async dispatch(tag, opts = {}) {
     if (!tag || !tag.kind) return { ok: false, text: 'no tag' };
+    // TIER GATE — block a mutating/heavy/locked call before it reaches Echo.
+    try {
+      const tier = require('./echo_tier');
+      let toolName = null;
+      if (tag.kind === 'do') toolName = tag.name;
+      else if (tag.kind === 'propose') toolName = 'propose_' + tag.proposeKind;
+      else if (tag.kind === 'delegate') toolName = 'spawn_agent_async';
+      // find / guide / recipe = navigation / read / curated procedure → not gated here.
+      if (toolName) {
+        const pol = tier.policyFor(toolName, { autonomous: !!opts.autonomous });
+        if (!pol.allow) {
+          console.log(`[echo] tier-gate BLOCKED ${toolName} (${pol.tier}, autonomous=${!!opts.autonomous})`);
+          return { ok: false, kind: tag.kind, isError: true, blocked: true, tier: pol.tier, text: `Echo tool "${toolName}" is a ${pol.tier} action — ${pol.reason}. ${opts.autonomous ? 'On the autonomous loop you may READ from Echo but not write to it or spawn agents — surface this to Lucas instead of doing it unattended.' : 'This one stays off by design.'}` };
+        }
+      }
+    } catch (e) { console.error('[echo] tier-gate check failed (allowing):', e.message); }
     // Self-heal: if she reaches for the suit before the warm-connect finished (or after Echo
     // dropped), try to connect now. guide connects on its own below.
     if (!this.connected && tag.kind !== 'guide') {
@@ -238,7 +257,7 @@ class EchoSuit {
         // echo-do JSON. Falls back to returning the catalog LIST (below) if cloud is unavailable.
         if (echoCloudRouteEnabled()) {
           try {
-            const routed = await this.routeNeed(tag.query);
+            const routed = await this.routeNeed(tag.query, { autonomous: !!opts.autonomous });
             if (routed && routed.routed) { if (routed.chose) console.log(`[echo] cloud-routed "${tag.query}" → ${routed.chose}`); return routed; }
           } catch (e) { console.error('[echo] cloud route failed, falling back to catalog list:', e.message); }
         }
@@ -293,7 +312,7 @@ class EchoSuit {
   // Echo tool-calling off the conversational front (which shouldn't author echo-do JSON) and onto
   // the cloud. Returns the executed result ({...,routed:true,chose}); fail-safe — any miss/empty
   // returns a plain message the front can voice (never throws). `ask` injectable for tests.
-  async routeNeed(query, { ask = null } = {}) {
+  async routeNeed(query, { ask = null, autonomous = false } = {}) {
     const cloudAsk = ask || (() => { try { return require('./cloud_logic').ask; } catch { return null; } })();
     if (!cloudAsk) return { ok: false, kind: 'find', isError: true, routed: false, text: 'cloud router unavailable' };
     if (!this.connected) { await this.connect(); if (!this.connected) return { ok: false, kind: 'find', isError: true, routed: true, text: `Echo isn't connected right now (${this.lastError || 'offline'}). Tell Lucas you couldn't reach it.` }; }
@@ -313,12 +332,22 @@ class EchoSuit {
     if (!pick || pick.type === 'none' || !pick.name) {
       return { ok: false, kind: 'find', isError: false, routed: true, text: `I looked for an Echo tool for "${query}" but nothing fit${pick && pick.reason ? ` (${pick.reason})` : ''}. Tell Lucas, or this may be an open-web question.` };
     }
-    // 3a) Recipe → run directly (one plain arg).
+    // 3a) Recipe → run directly (one plain arg). Recipes are curated read/compile procedures → allowed
+    // even on the autonomous loop.
     if (pick.type === 'recipe') {
-      const res = await this.dispatch({ kind: 'recipe', name: pick.name, arg: pick.arg || null });
+      const res = await this.dispatch({ kind: 'recipe', name: pick.name, arg: pick.arg || null }, { autonomous });
       return { ...res, kind: 'find', routed: true, chose: `recipe ${pick.name}` };
     }
-    // 3b) Tool → fetch its schema, then PASS 2 — the Reasoner writes args to match it.
+    // 3b) Tool → TIER GATE first (the auto loop reads but never writes/spawns via a cloud-picked tool),
+    // then fetch its schema + PASS 2 to write args.
+    try {
+      const tier = require('./echo_tier');
+      const pol = tier.policyFor(pick.name, { autonomous });
+      if (!pol.allow) {
+        console.log(`[echo] routeNeed tier-gate BLOCKED ${pick.name} (${pol.tier}, autonomous=${autonomous})`);
+        return { ok: false, kind: 'find', isError: true, blocked: true, routed: true, text: `The best Echo match for "${query}" is "${pick.name}", a ${pol.tier} action — ${pol.reason}. ${autonomous ? 'On the autonomous loop you may READ from Echo but not write/spawn — note it for Lucas instead of doing it unattended.' : 'That one is off by design.'}` };
+      }
+    } catch (e) { console.error('[echo] routeNeed tier-gate failed (allowing):', e.message); }
     let schema = '';
     try { schema = normalizeToolResult(await c.callTool('describe_tool', { name: pick.name })).text; } catch {}
     const argObj = await cloudAsk({
@@ -328,7 +357,7 @@ class EchoSuit {
       validate: (raw) => { const m = String(raw || '').match(/\{[\s\S]*\}/); if (!m) return { valid: false, error: 'no json' }; try { return { valid: true, value: JSON.parse(m[0]) }; } catch (e) { return { valid: false, error: e.message }; } }
     });
     const args = (argObj && typeof argObj === 'object') ? argObj : {};
-    const res = await this.dispatch({ kind: 'do', name: pick.name, args });
+    const res = await this.dispatch({ kind: 'do', name: pick.name, args }, { autonomous });
     return { ...res, kind: 'find', routed: true, chose: `tool ${pick.name}` };
   }
 

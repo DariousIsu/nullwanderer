@@ -39,18 +39,27 @@ async function _operatorComplete(messages, opts = {}) {
   });
 }
 
-const TOOL_SPEC = `TOOLS (call exactly ONE per step):
+// Core tool menu. The curated Echo READ tools (echo_tier.operatorReadSpec) are appended below so the
+// operator reaches for the right structured source deliberately; the generic `echo` tool still covers
+// the long tail of the 500+ surface.
+const TOOL_SPEC_CORE = `TOOLS (call exactly ONE per step):
 - web_search {"query":"…"}      search the open web + read the top result (current facts, news, prices, finding a page/video)
 - open_page {"url":"…"}         open a SPECIFIC page in her browser and read it in full — use this to go DEEPER into a good source instead of bouncing to a new search: follow a promising link you saw, or go straight to an org's own /team, /leadership, /about, or /contact page
-- echo {"need":"…"}             OUR private data + 500+ research tools (legislative/gov/CRM/knowledge-graph) — say the need in plain words
+- echo {"need":"…"}             OUR private data + 500+ research tools (legislative/gov/CRM/knowledge-graph) — say the need in plain words (use this for anything the named ECHO DATA TOOLS below don't cover)
 - browser_read {}               read the page currently open in her browser
 - recall {"query":"…"}          search her OWN memory (past conversations, facts, notes she's kept)
-- file {"op":"read|write|append|list","path":"notes/x.md","content":"…"}   her workspace files
+- file {"op":"read|write|append|list","path":"notes/x.md","content":"…"}   her workspace files`;
 
-To use a tool, reply with ONE JSON object and nothing else:
+const TOOL_SPEC_TAIL = `To use a tool, reply with ONE JSON object and nothing else:
   {"thought":"why","action":{"tool":"web_search","args":{"query":"…"}}}
 When you're ready to answer, do NOT use JSON — just write the COMPLETE answer as plain text (this is what lets a long list or write-up come through whole and untruncated; never cut it short).
 Ground every claim in what the tools returned. If a tool errors or finds nothing, say so honestly — never invent. Prefer answering once you have enough; don't over-search.`;
+
+const TOOL_SPEC = (() => {
+  let readSpec = '';
+  try { readSpec = require('./echo_tier').operatorReadSpec(); } catch {}
+  return [TOOL_SPEC_CORE, readSpec, TOOL_SPEC_TAIL].filter(Boolean).join('\n\n');
+})();
 
 function _buildPrompt({ userMessage, context, history, stepsLeft }) {
   return [{

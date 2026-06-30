@@ -65,6 +65,7 @@ const smokes = [
   'smoke_vision_surfaces.js',
   'smoke_distill.js',
   'smoke_echo_cloud_route.js',
+  'smoke_echo_tier.js',
   'smoke_tool_router.js',
   'smoke_subconscious.js',
   'smoke_extract_offload.js',

@@ -4037,10 +4037,26 @@ const operatorTools = {
     catch (e) { return 'ERROR: ' + e.message; }
   },
 };
+// CURATED ECHO READ TOOLS (first-class) — promote high-value structured reads (nonprofit 990s, our KG,
+// federal funding, FEC, bills) so the operator reaches for the right source deliberately instead of a
+// web scrape. Built from lib/echo_tier.READ_TOOLS (single source of truth, shared with the menu in
+// operator.js). Routed through echoSuit.dispatch so the tier gate covers them too — all READ, so always
+// allowed (the gate only blocks write/heavy/locked). The generic `echo` tool covers the long tail.
+try {
+  for (const t of require('./lib/echo_tier').READ_TOOLS) {
+    operatorTools[t.op] = async (a = {}) => {
+      try {
+        if (!echoSuit) return 'Echo is not available right now.';
+        const r = await echoSuit.dispatch({ kind: 'do', name: t.tool, args: t.map(a) });
+        return (r && r.text) || 'no result from Echo';
+      } catch (e) { return 'ERROR: ' + e.message; }
+    };
+  }
+} catch (e) { console.error('[operator] echo read-tools wiring failed:', e.message); }
 
 // Run the cloud operator for a turn: the frontier model drives the tools; returns { answer, toolsUsed }
 // or null (→ caller falls back to the normal local reply). Fail-safe.
-async function runCloudOperator({ userMessage, context, task = false }) {
+async function runCloudOperator({ userMessage, context, task = false, autonomous = false }) {
   try {
     const operator = require('./lib/operator');
     // Per-tool timeout: a slow/hung capability (Echo down, a stalled page) can't block the turn —
@@ -4048,6 +4064,14 @@ async function runCloudOperator({ userMessage, context, task = false }) {
     const TO = (p, ms = 20000) => Promise.race([Promise.resolve().then(() => p), new Promise(res => setTimeout(() => res('ERROR: tool timed out'), ms))]);
     const tools = {};
     for (const k of Object.keys(operatorTools)) tools[k] = (a) => TO(operatorTools[k](a));
+    // TIER GATE on the generic `echo` need-router: on the AUTONOMOUS loop the cloud may pick ANY of the
+    // 500+ tools, so pass `autonomous` so routeNeed blocks a write/heavy/locked pick (reads stay open).
+    // The curated read tools above are READ-only and need no flag. Interactive turns (autonomous=false)
+    // keep full write/heavy access (Echo applies its own verification + Lucas gate on proposals).
+    tools.echo = (a) => TO((async () => {
+      try { if (!echoSuit) return 'Echo is not available right now.'; const r = await echoSuit.routeNeed(String((a && a.need) || ''), { autonomous }); return (r && r.text) || 'no result from Echo'; }
+      catch (e) { return 'ERROR: ' + e.message; }
+    })());
     // DIRECTED TASK → in-turn completion: more steps + a longer budget + a mandate to deliver the WHOLE
     // thing this turn (gather all of it, save long deliverables to a file, don't stop at a teaser).
     const taskNote = task
@@ -4331,7 +4355,7 @@ async function runDirectedResearchPass(focus) {
 
   const runPass = async (prompt) => {
     try {
-      const r = await runCloudOperator({ userMessage: prompt, context: '', task: true });
+      const r = await runCloudOperator({ userMessage: prompt, context: '', task: true, autonomous: true });
       return { ans: (r && r.answer ? String(r.answer).trim() : ''), usedTool: !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.some(t => ['web_search', 'browser_read', 'echo'].includes(t))) };
     } catch (e) { return { ans: '', usedTool: false }; }
   };
@@ -4422,7 +4446,7 @@ async function runEnrichResearchPass(focus) {
     // ONE focused pass: fill ONLY the named facet for THIS org.
     let ans = '', usedTool = false;
     try {
-      const r = await runCloudOperator({ userMessage: rs.buildEnrichPrompt({ goal, org, facet, guidance }), context: '', task: true });
+      const r = await runCloudOperator({ userMessage: rs.buildEnrichPrompt({ goal, org, facet, guidance }), context: '', task: true, autonomous: true });
       ans = (r && r.answer) ? String(r.answer).trim() : '';
       usedTool = !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.some(t => ['web_search', 'browser_read', 'echo'].includes(t)));
     } catch (e) { console.error('[enrich] pass failed:', e.message); }
