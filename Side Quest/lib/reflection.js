@@ -69,10 +69,14 @@ async function routeReflection(raw, sourceRows = [], { decideFn = null } = {}) {
         const r = await selfModelLib.record(t.text, { category: 'insight', importance: 0.7 });
         if (r) { nSelf++; kept.push(`[self] ${t.text}`); }
       } else if (t.type === 'INTEREST') {
-        // EXPERIENCE → TASTE: a thing she's drawn to from what she read/did becomes
-        // a developing interest in her identity track (goes through record's revision).
-        const r = await selfModelLib.record(t.text, { category: 'preference', importance: 0.72 });
-        if (r) { nSelf++; kept.push(`[interest] ${t.text}`); }
+        // A research-derived "thing she's drawn to" is CURIOSITY, NOT IDENTITY. Routing it to self_model
+        // flooded her identity with ~93 academic "preferences" — the personality-drift root (2026-06-29):
+        // her self-model said she IS "interested in graviton mass limits / epistemic contextualism" instead
+        // of WHO she is. Store it as a low-importance curiosity note (retained, recall-able) — never
+        // identity. Genuine BROAD interests still emerge through the controlled interest system
+        // (interests.reweight / _emergentFromUnmatched), not by dumping reflections into self_model.
+        const r = await memoryLib.storeDeduped({ kind: 'note', content: t.text, source: 'reflection_interest', importance: 0.45, provenance: prov, decideFn });
+        if (r && (r.action === 'add' || r.action === 'update')) { nKnow++; kept.push(`[curiosity] ${t.text}`); }
       } else if (!grounded) {
         // DE-LAUNDER (anti-glob phase 2): a KNOWLEDGE/SKILL takeaway distilled purely from
         // her OWN thoughts (no external reading/URL this window) is SPECULATION — it must NOT
