@@ -14,7 +14,21 @@
 'use strict';
 const db = require('./db');
 const cfg = require('./config');
-const { _sessionFromResult, _segmentsFromResult, formatTranscript } = require('./listen');
+const { _sessionFromResult, _segmentsFromResult, formatTranscript, _obj } = require('./listen');
+
+// Resolve a device NAME substring → a current device index (indices shift across reboots; names don't).
+// Looks in the mic or loopback pool matching the source. Returns the index, or null. Fail-safe.
+async function resolveDeviceIndex(dispatch, source, deviceName) {
+  if (!deviceName || typeof dispatch !== 'function') return null;
+  try {
+    const r = await dispatch({ kind: 'do', name: 'transcription_list_devices', args: {} });
+    const o = _obj(r) || {};
+    const pool = (source === 'mic') ? (o.mic || []) : (o.loopback || []);
+    const want = String(deviceName).toLowerCase();
+    const hit = (Array.isArray(pool) ? pool : []).find(d => String(d && d.name || '').toLowerCase().includes(want));
+    return hit ? hit.index : null;
+  } catch { return null; }
+}
 
 function active() { try { return db.getMeta('meeting_audio_active') === '1'; } catch { return false; } }
 function sessionId() { try { const v = parseInt(db.getMeta('meeting_audio_session') || '', 10); return Number.isFinite(v) ? v : null; } catch { return null; } }
@@ -25,15 +39,18 @@ async function start({ dispatch, name = 'zoe-meeting', deps = {} } = {}) {
   const c = (deps.config || cfg).meetingAudioConfig();
   if (!c.enabled) return { ok: false, reason: 'disabled' };
   if (typeof dispatch !== 'function') return { ok: false, reason: 'no-echo' };
+  // Target device: an explicit index wins; else resolve the configured NAME → a current index.
+  let deviceIndex = c.deviceIndex;
+  if (deviceIndex == null && c.deviceName) deviceIndex = await resolveDeviceIndex(dispatch, c.source, c.deviceName);
   const args = { name, source_type: c.source, model_size: 'base', diarize: true };
-  if (c.deviceIndex != null) args.device_index = c.deviceIndex;
+  if (deviceIndex != null) args.device_index = deviceIndex;
   let r;
   try { r = await dispatch({ kind: 'do', name: 'transcription_capture_start', args }); }
   catch (e) { return { ok: false, reason: e.message }; }
   const sid = _sessionFromResult(r);
   if (!sid) return { ok: false, reason: (r && r.text) ? String(r.text).slice(0, 160) : 'no session_id' };
   try { db.setMeta('meeting_audio_active', '1'); db.setMeta('meeting_audio_session', String(sid)); } catch {}
-  return { ok: true, sessionId: sid, source: c.source, deviceIndex: c.deviceIndex };
+  return { ok: true, sessionId: sid, source: c.source, deviceIndex };
 }
 
 // Stop the capture + poll for the diarized transcript. Returns { ok, transcript, segments, ready }.

@@ -123,7 +123,10 @@ function meetingAudioConfig() {
   const source = get('ZOE_MEETING_AUDIO_SOURCE').trim() || 'loopback';
   const di = parseInt(get('ZOE_MEETING_AUDIO_DEVICE_INDEX', '').trim(), 10);
   const deviceIndex = Number.isFinite(di) ? di : null;
-  return { enabled, source, deviceIndex };
+  // Prefer targeting the cable by NAME (e.g. "CABLE Input") — device indices shift across reboots, names
+  // don't. meeting_audio resolves the name → a current index at capture time.
+  const deviceName = get('ZOE_MEETING_AUDIO_DEVICE').trim() || '';
+  return { enabled, source, deviceIndex, deviceName };
 }
 
 // --- Tiered subconscious (local volume + cloud depth; see docs/SUBCONSCIOUS_TIERED_SPEC.md) ---

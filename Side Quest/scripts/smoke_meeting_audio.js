@@ -57,6 +57,24 @@ const fastDeps = { delay: async () => {}, maxPolls: 2, pollMs: 0 };
   const micCall = calls.find(c => c.name === 'transcription_capture_start');
   ok(micCall.args.source_type === 'mic' && micCall.args.device_index === undefined, 'mic source → no device_index');
 
+  // --- device NAME resolution (indices shift; names don't) ---
+  delete process.env.ZOE_MEETING_AUDIO_DEVICE_INDEX;
+  process.env.ZOE_MEETING_AUDIO_SOURCE = 'loopback';
+  process.env.ZOE_MEETING_AUDIO_DEVICE = 'CABLE Input';
+  calls.length = 0;
+  const nameDispatch = async ({ name, args }) => {
+    calls.push({ name, args });
+    if (name === 'transcription_list_devices') return { text: JSON.stringify({ ok: true, mic: [], loopback: [{ index: 108, name: 'CABLE Input (VB-Audio Virtual Cable) [Loopback]' }, { index: 99, name: 'Hi-Fi Cable Input [Loopback]' }] }) };
+    if (name === 'transcription_capture_start') return { text: JSON.stringify({ ok: true, session_id: 5, recording: true }) };
+    return { text: '{}' };
+  };
+  const byName = await ma.start({ dispatch: nameDispatch });
+  ok(byName.ok === true && byName.deviceIndex === 108, 'device NAME "CABLE Input" resolves → current loopback index 108');
+  const sc = calls.find(c => c.name === 'transcription_capture_start');
+  ok(sc.args.device_index === 108, 'resolved index passed to capture');
+  await ma.stop({ dispatch: nameDispatch, deps: fastDeps });
+  delete process.env.ZOE_MEETING_AUDIO_DEVICE;
+
   // --- fail-safe: no dispatch ---
   const nod = await ma.start({ dispatch: null });
   ok(nod.ok === false && nod.reason === 'no-echo', 'no dispatch → {ok:false} (no throw)');

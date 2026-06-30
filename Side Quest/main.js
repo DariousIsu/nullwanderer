@@ -307,16 +307,22 @@ function createCanvasWindow() {
     webPreferences.contextIsolation = true;
     delete webPreferences.preload;
   });
-  // Capture the Meet webview's guest webContents so the driver (lib/meet_canvas) can operate the
-  // meeting from main directly (executeJavaScript / sendInputEvent) — no renderer hop.
+  // Capture ONLY the Meet webview's guest webContents (not the video-monitor webviews) so the driver
+  // can operate the meeting from main. Scoped by URL: a guest that navigates to meet.google.com becomes
+  // the meet endpoint (and gets its audio OUTPUT muted — captions are her signal, so no room echo).
   canvasWindow.webContents.on('did-attach-webview', (_e, guest) => {
-    meetWebContents = guest;
-    // MUTE her endpoint's audio OUTPUT — she follows via captions + chat, not by hearing the call.
-    // Without this the pane plays the meeting aloud and echoes against the room / other endpoints
-    // (the same reason her dedicated browser runs with --mute-audio). Re-assert on each navigation.
-    const mute = () => { try { guest.setAudioMuted(true); } catch {} };
-    mute();
-    try { guest.on('did-finish-load', mute); guest.on('did-navigate', mute); } catch {}
+    const tag = () => {
+      let url = ''; try { url = guest.getURL() || ''; } catch {}
+      if (/meet\.google\.com/i.test(url)) {
+        meetWebContents = guest;
+        // MUTE the pane (no aloud playback / no echo) UNLESS the Echo audio-fusion path is on — then the
+        // audio must FLOW so it reaches the operator's virtual cable (which Echo loopback-captures); the
+        // physical speakers stay silent because that cable isn't them. The config flag = "I've routed it."
+        const muteIt = !(() => { try { return require('./lib/config').meetingAudioConfig().enabled; } catch { return false; } })();
+        try { guest.setAudioMuted(muteIt); } catch {}
+      }
+    };
+    try { guest.on('did-navigate', tag); guest.on('did-finish-load', tag); } catch {}
     try { guest.once('destroyed', () => { if (meetWebContents === guest) meetWebContents = null; }); } catch {}
   });
   canvasWindow.loadFile(path.join(__dirname, 'renderer', 'canvas.html'));
@@ -467,7 +473,11 @@ app.whenReady().then(() => {
     // came online by another route — the heartbeat keeps retrying regardless.
     engineSupervisor.ensure({ spawnIfDown: true })
       .then(r => { console.log(`[main] engine ${r.state}${r.pid ? ' (pid ' + r.pid + ')' : ''}`); return tryEchoAttach(); })
-      .catch(e => { console.error('[main] engine ensure failed:', e.message); return tryEchoAttach(); });
+      .catch(e => { console.error('[main] engine ensure failed:', e.message); return tryEchoAttach(); })
+      // STAGGER the Canvas behind the engine: only spawn it once the engine ensure+attach attempt has
+      // completed, so its first load finds Echo connected (no "Echo engine not connected" flash). The
+      // renderer still self-retries as a backstop if the engine is merely slow to finish warming.
+      .finally(() => { try { createCanvasWindow(); } catch (e) { console.error('[main] canvas auto-spawn failed:', e.message); } });
     // Permanent heartbeat: a cheap no-op while connected; reattaches within 60s whenever the engine
     // comes online or comes back (a dropped connection / supervisor restart flips connected=false,
     // the next beat re-attaches and refreshes the status light).
@@ -509,9 +519,8 @@ app.whenReady().then(() => {
     if (sc.due()) { const l = sc.run(); console.log(`[main] capability self-check: ${l.green}/${l.total} green${l.allGreen ? '' : ' — RED: ' + l.red.map(r => r.name).join(', ')}`); }
   } catch (e) { console.error('[main] self-check at boot failed:', e.message); }
   createWindow();
-  // Zoe's Canvas auto-spawns at launch (it's a primary surface, not on-demand). The renderer
-  // self-retries its first load until the engine attaches, so an early spawn is fine.
-  try { createCanvasWindow(); } catch (e) { console.error('[main] canvas auto-spawn failed:', e.message); }
+  // Zoe's Canvas auto-spawns AFTER the engine attaches (see the engine .finally above) so its first
+  // load finds Echo connected — staggered behind the server, no "not connected" flash.
 
   // BOOT HOUSEKEEPING: a model pinned by keep_alive from a PRIOR run (e.g. the old front model after
   // a swap, or a leftover extraction model) squats VRAM and collides with the current front — loads
