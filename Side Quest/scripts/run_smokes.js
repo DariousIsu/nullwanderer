@@ -52,6 +52,7 @@ const smokes = [
   'smoke_records_interp.js',
   'smoke_localdb.js',
   'smoke_intake.js',
+  'smoke_estimate_correction.js',
   'smoke_poll.js',
   'smoke_activity.js',
   'smoke_canvas_route.js',

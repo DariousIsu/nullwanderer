@@ -2728,6 +2728,49 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   } catch (e) { console.error('[main] expand-order failed:', e.message); }
 
+  // MID-RUN CORRECTION — Lucas correcting/refining an ACTIVE run (fixing a misread goal, narrowing the
+  // org list, changing depth). RESHAPES the focus meta the driver reads each tick — not just guidance.
+  // The live gap: a "money"→"many" misread + "just the 5" had no way to take effect. Takes precedence
+  // over intake/poll/operator/standing-focus below (correctionHandled gates them).
+  let correctionHandled = false;
+  try {
+    const focusLib = require('./lib/focus');
+    const f = (() => { try { return focusLib.getCurrent(); } catch { return null; } })();
+    const opOnC = (() => { try { return (db.getMeta('operator.mode') || 'full').trim() !== 'off'; } catch { return true; } })();
+    if (opOnC && f && focusLib.isDirected(f) && !directedStopHandled && !expandHandled && !socialTurn && !followupFired && userMessage && userMessage.trim().length > 3) {
+      const fid = f.id;
+      const activeRun = {
+        goal: String(f.content || ''),
+        facet: db.getMeta(`focus.${fid}.enrich_facet`) || '',
+        orgs: (() => { try { return JSON.parse(db.getMeta(`focus.${fid}.enrich_orgs`) || '[]'); } catch { return []; } })(),
+        deep: db.getMeta(`focus.${fid}.deep`) === '1'
+      };
+      const corr = require('./lib/correction');
+      const decision = await corr.classify(userMessage, { activeRun });
+      const plan = corr.applyPlan(decision, activeRun);
+      if (plan.changed) {
+        try {
+          if (plan.changes.facet) db.setMeta(`focus.${fid}.enrich_facet`, plan.changes.facet);
+          if (plan.changes.orgs) db.setMeta(`focus.${fid}.enrich_orgs`, JSON.stringify(plan.changes.orgs));
+          if (typeof plan.changes.deep === 'boolean') db.setMeta(`focus.${fid}.deep`, plan.changes.deep ? '1' : '');
+        } catch (e) { console.error('[correction] apply meta failed:', e.message); }
+        const rb = (() => {
+          try {
+            const orgs = plan.changes.orgs || activeRun.orgs;
+            const facet = plan.changes.facet || activeRun.facet;
+            const deep = typeof plan.changes.deep === 'boolean' ? plan.changes.deep : activeRun.deep;
+            let cov = []; try { cov = JSON.parse(db.getMeta(`focus.${fid}.covered`) || '[]'); } catch {}
+            const remaining = Math.max(0, (orgs.length || 0) - cov.length);
+            return require('./lib/estimate').readbackLine({ facet, orgCount: remaining, deep });
+          } catch { return ''; }
+        })();
+        composedUserMessage += `\n\n[${userName} CORRECTED the active research run — you've applied it LIVE (the run continues on the corrected scope, nothing restarts): ${plan.summary}. Confirm back in ONE short line, RESTATING the corrected goal/scope so he sees you understood, with the updated estimate. ${rb}]`;
+        correctionHandled = true;
+        console.log(`[correction] applied to #${fid}: ${plan.summary}`);
+      }
+    }
+  } catch (e) { console.error('[correction] handler failed:', e.message); }
+
   // INTAKE GATE — runs BEFORE the deliverable poll so an ASSIGNMENT ("spin up a project generating
   // contacts for the 5, deep") is recognized as work to DO, not swallowed as a QUESTION by the poll
   // (his assignment matches the records/contact detectors → the poll set statusHandled and gated off
@@ -2739,7 +2782,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let isAssignment = false;
   try {
     const opOn2 = (() => { try { return (db.getMeta('operator.mode') || 'full').trim() !== 'off'; } catch { return true; } })();
-    if (opOn2 && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && userMessage && userMessage.trim().length > 6) {
+    if (opOn2 && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled && userMessage && userMessage.trim().length > 6) {
       const intake = require('./lib/intake');
       const af = (() => { try { const f = require('./lib/focus').getCurrent(); return f ? String(f.content || '') : ''; } catch { return ''; } })();
       const recent = (recentTurns || []).slice(-3).map(t => `${t.speaker || '?'}: ${String(t.content || '').slice(0, 120)}`).join(' | ');
@@ -2772,7 +2815,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // Lanes (media/meeting/news) register more sources here as they land — no new branch in the pipeline.
   let statusHandled = false;
   try {
-    if (!directedStopHandled && !expandHandled && !followupFired && !isAssignment) {
+    if (!directedStopHandled && !expandHandled && !followupFired && !isAssignment && !correctionHandled) {
       const tk = require('./lib/track');
       const act = require('./lib/activity');
       const ri = require('./lib/records_interp');
@@ -2893,7 +2936,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           || /\b(look ?up|search|find|pull ?up|fetch|what'?s the|how much|how many|latest|current|when (is|was|did|does)|where (is|was)|who (is|was|are)|our (data|records|numbers|polling|crm|bills|contacts|knowledge))\b/i.test(userMessage);
       } catch { return false; }
     })();
-    if (opMode !== 'off' && (needsExternal || isAssignment) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && userMessage && userMessage.trim().length > 6) {
+    if (opMode !== 'off' && (needsExternal || isAssignment) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && userMessage && userMessage.trim().length > 6) {
       // directed (in-turn completion mode) when this is an assignment (intake gate, or regex fallback).
       const directed = isAssignment;
       // Immediate feedback — the agent loop can take a few seconds. Use a REQUEST-SERVING placeholder
@@ -2927,7 +2970,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // i.e. intakeRoute is null). Either way we only CREATE a run when there's a real project to run.
     const intakeSaysProject = !!(intakeRoute && intakeRoute.action !== 'none');
     const regexFallback = (intakeRoute === null) && (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
-    if (opModeOn && (intakeSaysProject || regexFallback) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled) {
+    if (opModeOn && (intakeSaysProject || regexFallback) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled) {
       const already = (() => { try { const f = focusLib.getCurrent(); return !!(f && focusLib.isDirected(f)); } catch { return false; } })();
       if (!already) {
         const clarTail = (intakeRoute && intakeRoute.clarify && intakeRoute.clarify.length)
@@ -2946,7 +2989,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               const topN = require('./lib/intake').subsetTopN(intakeRoute.subset);
               const facet = intakeRoute.facet || `more detail and contacts${intakeRoute.target ? ' on ' + intakeRoute.target : ''}`;
               const er = await establishEnrichRun({ sourceFocusId: srcId, facet, sourceTurnId: userTurnRow && userTurnRow.id, deep: intakeRoute.deep, topN, priority: intakeRoute.priority });
-              if (er && er.focus) { kickDirectedFocusDriver(); created = { id: er.focus.id, kind: `${intakeRoute.deep ? 'deep ' : ''}enrich of ${er.orgs.length} org(s) for ${facet}` }; }
+              if (er && er.focus) { kickDirectedFocusDriver(); created = { id: er.focus.id, kind: `${intakeRoute.deep ? 'deep ' : ''}enrich of ${er.orgs.length} org(s) for ${facet}`, orgCount: er.orgs.length }; }
             }
           } catch (e) { console.error('[intake] enrich setup failed:', e.message); }
         }
@@ -2960,12 +3003,25 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             try { if (intakeRoute && intakeRoute.deep) db.setMeta(`focus.${r.focus.id}.deep`, '1'); } catch {}
             try { if (intakeRoute && intakeRoute.priority) db.setMeta(`focus.${r.focus.id}.priority`, String(intakeRoute.priority)); } catch {}
             kickDirectedFocusDriver();
-            created = { id: r.focus.id, kind: `${intakeRoute && intakeRoute.deep ? 'deep ' : ''}research run` };
+            created = { id: r.focus.id, kind: `${intakeRoute && intakeRoute.deep ? 'deep ' : ''}research run`, orgCount: 0 };
           }
         }
 
         if (created) {
-          composedUserMessage += `\n\n[You have ACCEPTED this as a standing task and STARTED working it for real — it is now your active focus (a ${created.kind}) and you will keep working it slice by slice (saving what you find) until it's done or ${userName} tells you to stop. Tell him plainly you've started and are on it, in one or two sentences, in your own voice.${clarTail} ${honesty}]`;
+          // READBACK + ESTIMATE — state the UNDERSTOOD goal/facet/scope + an ETA so a misread (the
+          // "money"→"many" typo) is VISIBLE and correctable, and invite a correction. This is the
+          // confirm half of the gate that was missing when the run was created silently.
+          const readback = (() => {
+            try {
+              const est = require('./lib/estimate');
+              const facet = (intakeRoute && intakeRoute.facet) || '';
+              const orgCount = created.orgCount || 0;
+              const deep = !!(intakeRoute && intakeRoute.deep);
+              const priority = (intakeRoute && intakeRoute.priority) || null;
+              return orgCount ? est.readbackLine({ facet, orgCount, deep, priority }) : (facet ? `Understood as: gather "${String(facet).slice(0, 120)}".` : '');
+            } catch { return ''; }
+          })();
+          composedUserMessage += `\n\n[You have ACCEPTED this as a standing task and STARTED working it for real — it is now your active focus (a ${created.kind}) and you'll keep at it slice by slice until done or ${userName} stops you. In ONE or two sentences: (1) say you've started, AND (2) READ BACK your understanding + the estimate so he can catch a misread — use this exactly: "${readback}" — then (3) invite him to correct you if the goal or scope is off.${clarTail} ${honesty}]`;
           console.log(`[focus] intake → standing focus #${created.id} created (${created.kind}) + driver kicked`);
         } else {
           // We RECOGNIZED a project but could NOT create the run — be honest, never claim it's underway.
