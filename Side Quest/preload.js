@@ -69,6 +69,17 @@ contextBridge.exposeInMainWorld('sq', {
     get: (contactId) => ipcRenderer.invoke('crm:get', { contactId })
   },
 
+  // Calendar — near-1:1 Google Calendar (operator's account, via Echo's OAuth). Read-only in Slice 1.
+  calendar: {
+    authStatus: () => ipcRenderer.invoke('calendar:auth-status'),
+    connect: () => ipcRenderer.invoke('calendar:connect'),
+    listCalendars: () => ipcRenderer.invoke('calendar:list-calendars'),
+    events: (calendars, timeMin, timeMax) => ipcRenderer.invoke('calendar:events', { calendars, timeMin, timeMax }),
+    createEvent: (calendarId, form) => ipcRenderer.invoke('calendar:create-event', { calendarId, form }),
+    updateEvent: (calendarId, eventId, form) => ipcRenderer.invoke('calendar:update-event', { calendarId, eventId, form }),
+    deleteEvent: (calendarId, eventId) => ipcRenderer.invoke('calendar:delete-event', { calendarId, eventId })
+  },
+
   // Legislation — read-only bill browser (facets + FTS search + offset-paginated browse + detail).
   leg: {
     facets: (filters) => ipcRenderer.invoke('leg:facets', filters || {}),
