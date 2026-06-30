@@ -20,17 +20,21 @@ const cloud = require('./cloud_logic');
 
 // Cloud classification of one turn. Returns the decision object, or null (cloud down / invalid / over
 // budget → caller falls back to the regex). Never throws.
-async function classify(message, { recent = '', activeFocus = '', deps = {} } = {}) {
+async function classify(message, { recent = '', activeFocus = '', existingRecords = '', deps = {} } = {}) {
   const ask = deps.ask || cloud.ask;
   const s = String(message || '').trim();
   if (s.length < 6) return { isProject: false };   // trivially not a project; skip the cloud call
+  // Intake is a mechanical classification → run it on the FAST non-reasoning model (gemma) with token
+  // headroom, so a reasoning model can't spend the budget on hidden "thinking" and return empty JSON.
+  const fastModel = (() => { try { return require('./models').getModelFor('editor', null); } catch { return null; } })();
   try {
     return await ask({
-      task: 'work_intake', v: 1,
-      input: { user: s.slice(0, 800), recent: String(recent).slice(0, 400), active_task: String(activeFocus).slice(0, 160) },
+      task: 'work_intake', v: 2, model: fastModel, numPredict: 700,
+      input: { user: s.slice(0, 800), recent: String(recent).slice(0, 400), active_task: String(activeFocus).slice(0, 160), existing_records: String(existingRecords).slice(0, 700) },
       want: 'You are the intake gate for Zoe. Decide whether the user is ASSIGNING A SUSTAINED TASK/PROJECT — work Zoe should carry out over time (research, gather, find, compile, generate, build, monitor, produce a deliverable) — as opposed to asking a question, a status check, or chatting. '
         + 'Output ONLY JSON: {"isProject":true|false,"mode":"enrich"|"discover","target":"short — what to work on","facet":"specifically what to gather/produce","priority":"red"|"orange"|"yellow"|null,"deep":true|false,"budget":{"kind":"deadline"|"duration"|"none","value":"the deadline or duration text, else null"},"subset":"a named subset like \'the 5 most complete\', else null","clarify":["at most 2 SHORT questions, ONLY if genuinely ambiguous; else []"]}. '
         + 'mode="enrich" when it DEEPENS or EXTENDS research/records we ALREADY hold (refers to "those", "the 5", "the think tanks", an existing dossier/list/the ones we have); mode="discover" for brand-new research. '
+        + 'CRITICAL: if the input includes EXISTING_RECORDS and the user\'s target topic or named organizations APPEAR in those existing records, choose mode="enrich" (we already have them — deepen/extend, do not start over). '
         + 'priority: ONLY for an explicit tag ("red tag"/"red-tagged"/"top priority"/"drop everything"→red; "orange"/"high"→orange; "yellow"/"when you can"→yellow); else null. '
         + 'deep:true when they ask for thorough/deep/exhaustive/comprehensive/"as much as you can". '
         + 'Be decisive. isProject=false for a plain question, a "how is X going" status check, or chat. Do NOT ask to clarify things you can reasonably infer.',

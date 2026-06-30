@@ -52,12 +52,12 @@ async function _resolveModel(models, cloud) {
   if (m) _modelCache = m;
   return m;
 }
-async function _complete(messages, { temperature = 0.2, num_predict = 400 } = {}) {
+async function _complete(messages, { temperature = 0.2, num_predict = 400, model: modelOverride = null } = {}) {
   let models, ollama;
   try { models = require('./models'); ollama = require('./ollama'); } catch { return null; }
   const cloud = (models.sources() || []).find(s => s.tier === 'cloud' && s.token);
   if (!cloud) return null;
-  const model = await _resolveModel(models, cloud);
+  const model = modelOverride || await _resolveModel(models, cloud);
   if (!model) return null;
   try {
     const text = await ollama.complete({
@@ -131,10 +131,15 @@ function _budgetInc() {
  *   validate (raw)=>{valid,value,error}; omit for default-JSON parsing
  *   deps     { complete, now, dailyCap, maxInputChars, noCache, skipBudget } — test seams
  */
-async function ask({ task, v = 1, input = {}, want = '', validate = null, deps = {} } = {}) {
+async function ask({ task, v = 1, input = {}, want = '', validate = null, model = null, numPredict = null, deps = {} } = {}) {
   if (!task) return null;
   const now = deps.now || Date.now();
   const complete = deps.complete || _complete;
+  // Per-task model / token overrides (e.g. intake → the fast non-reasoning model + more headroom, so a
+  // reasoning model can't burn the budget on hidden "thinking" and return empty). Default = curator/400.
+  const cOpts = {};
+  if (model) cOpts.model = model;
+  if (numPredict) cOpts.num_predict = numPredict;
   const cap = deps.dailyCap || dailyCap();
   const maxChars = deps.maxInputChars || DEFAULT_MAX_INPUT_CHARS;
   const inputStr = _packInput(input, maxChars);
@@ -157,10 +162,10 @@ async function ask({ task, v = 1, input = {}, want = '', validate = null, deps =
   }
 
   const messages = _buildMessages({ task, v, want, inputStr });
-  let res = await complete(messages);
+  let res = await complete(messages, cOpts);
   if (!deps.skipBudget) _budgetInc();
   let raw = (res && res.text) || '';
-  const model = (res && res.model) || 'cloud';
+  const usedModel = (res && res.model) || model || 'cloud';
 
   let parsed = null, valid = false, repaired = 0;
   const v1 = _runValidate(validate, raw);
@@ -171,7 +176,7 @@ async function ask({ task, v = 1, input = {}, want = '', validate = null, deps =
       { role: 'assistant', content: raw },
       { role: 'user', content: `That response was INVALID: ${v1.error}. Re-emit ONLY the correct format — nothing else.` }
     ]);
-    const res2 = await complete(repairMsgs);
+    const res2 = await complete(repairMsgs, cOpts);
     if (!deps.skipBudget) _budgetInc();
     repaired = 1;
     const raw2 = (res2 && res2.text) || '';
@@ -183,7 +188,7 @@ async function ask({ task, v = 1, input = {}, want = '', validate = null, deps =
   // 5. TRACE — always log (cache + audit + training corpus). Best-effort; never blocks the result.
   try {
     db.insertCloudTrace({
-      ts: now, task, v, model, inputHash, inputJson: inputStr,
+      ts: now, task, v, model: usedModel, inputHash, inputJson: inputStr,
       raw, parsedJson: valid ? JSON.stringify(parsed) : null,
       valid, accepted: valid, repaired, cached: 0
     });

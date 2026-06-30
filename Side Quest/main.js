@@ -2743,7 +2743,18 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const intake = require('./lib/intake');
       const af = (() => { try { const f = require('./lib/focus').getCurrent(); return f ? String(f.content || '') : ''; } catch { return ''; } })();
       const recent = (recentTurns || []).slice(-3).map(t => `${t.speaker || '?'}: ${String(t.content || '').slice(0, 120)}`).join(' | ');
-      const decision = await intake.classify(userMessage, { recent, activeFocus: af });
+      // EXISTING-RECORDS context so the classifier can route enrich vs discover correctly (named orgs we
+      // already hold → enrich, not start-over). Brief: the last dossier's topic + its org list.
+      const existingRecords = (() => {
+        try {
+          const ld = JSON.parse(db.getMeta('research.last_dossier') || 'null');
+          if (!ld || !ld.focusId) return '';
+          let txt = ''; try { const r = filesLib.fileReadFull(`notes/directed-${ld.focusId}-dossier.md`); txt = (r && r.text) || ''; } catch {}
+          const orgs = require('./lib/condense').dossierOrgs(txt).slice(0, 25);
+          return orgs.length ? `"${String(ld.goal || '').slice(0, 80)}" — covering: ${orgs.join(', ')}` : '';
+        } catch { return ''; }
+      })();
+      const decision = await intake.classify(userMessage, { recent, activeFocus: af, existingRecords });
       if (decision) intakeRoute = intake.route(decision);
       // PRIMARY = the cloud decision; the regex is the FALLBACK only when the cloud was unavailable (null).
       isAssignment = decision ? !!(intakeRoute && intakeRoute.action !== 'none')
