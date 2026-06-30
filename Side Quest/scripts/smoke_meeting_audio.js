@@ -53,9 +53,10 @@ const fastDeps = { delay: async () => {}, maxPolls: 2, pollMs: 0 };
   process.env.ZOE_MEETING_AUDIO_SOURCE = 'mic';
   delete process.env.ZOE_MEETING_AUDIO_DEVICE_INDEX;
   calls.length = 0;
-  await ma.start({ dispatch: mkDispatch() });
+  const micRes = await ma.start({ dispatch: mkDispatch() });
   const micCall = calls.find(c => c.name === 'transcription_capture_start');
   ok(micCall.args.source_type === 'mic' && micCall.args.device_index === undefined, 'mic source → no device_index');
+  ok(micRes.isolated === false, 'no device → isolated=false (default mix, footgun-flagged)');
 
   // --- device NAME resolution (indices shift; names don't) ---
   delete process.env.ZOE_MEETING_AUDIO_DEVICE_INDEX;
@@ -70,6 +71,7 @@ const fastDeps = { delay: async () => {}, maxPolls: 2, pollMs: 0 };
   };
   const byName = await ma.start({ dispatch: nameDispatch });
   ok(byName.ok === true && byName.deviceIndex === 108, 'device NAME "CABLE Input" resolves → current loopback index 108');
+  ok(byName.isolated === true, 'a resolved device → isolated capture (parallel-meeting safe)');
   const sc = calls.find(c => c.name === 'transcription_capture_start');
   ok(sc.args.device_index === 108, 'resolved index passed to capture');
   await ma.stop({ dispatch: nameDispatch, deps: fastDeps });

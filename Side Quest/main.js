@@ -932,7 +932,7 @@ async function startCanvasMeeting(url, title) {
   // + a device is configured. OFF by default (captions stand in); fully fail-safe.
   try {
     const r = await require('./lib/meeting_audio').start({ dispatch: (t) => echoSuit.dispatch(t) });
-    if (r && r.ok) console.log(`[meet-audio] Echo capture started (source=${r.source}${r.deviceIndex != null ? ` dev=${r.deviceIndex}` : ''}, session ${r.sessionId})`);
+    if (r && r.ok) console.log(`[meet-audio] Echo capture started (source=${r.source}${r.deviceIndex != null ? ` dev=${r.deviceIndex}` : ''}, session ${r.sessionId})${r.isolated ? '' : ' [UNISOLATED — default mix; other meetings will bleed in]'}`);
     else if (r && r.reason && r.reason !== 'disabled') console.log(`[meet-audio] capture not started: ${r.reason}`);
   } catch (e) { console.error('[meet-audio] start failed:', e.message); }
   return true;

@@ -42,6 +42,10 @@ async function start({ dispatch, name = 'zoe-meeting', deps = {} } = {}) {
   // Target device: an explicit index wins; else resolve the configured NAME → a current index.
   let deviceIndex = c.deviceIndex;
   if (deviceIndex == null && c.deviceName) deviceIndex = await resolveDeviceIndex(dispatch, c.source, c.deviceName);
+  // FOOTGUN GUARD (parallel meetings): with no specific device we capture the DEFAULT output mix — which
+  // includes ANY other meeting/audio playing (e.g. one Lucas is in himself). Warn loudly + flag isolated.
+  const isolated = deviceIndex != null;
+  if (!isolated) console.warn('[meet-audio] NO capture device set → capturing the DEFAULT OUTPUT MIX (NOT isolated; if another meeting/audio is playing it WILL bleed into this transcript). Set ZOE_MEETING_AUDIO_DEVICE to a dedicated virtual cable/Voicemeeter bus for a clean, isolated capture.');
   const args = { name, source_type: c.source, model_size: 'base', diarize: true };
   if (deviceIndex != null) args.device_index = deviceIndex;
   let r;
@@ -50,7 +54,7 @@ async function start({ dispatch, name = 'zoe-meeting', deps = {} } = {}) {
   const sid = _sessionFromResult(r);
   if (!sid) return { ok: false, reason: (r && r.text) ? String(r.text).slice(0, 160) : 'no session_id' };
   try { db.setMeta('meeting_audio_active', '1'); db.setMeta('meeting_audio_session', String(sid)); } catch {}
-  return { ok: true, sessionId: sid, source: c.source, deviceIndex };
+  return { ok: true, sessionId: sid, source: c.source, deviceIndex, isolated };
 }
 
 // Stop the capture + poll for the diarized transcript. Returns { ok, transcript, segments, ready }.
