@@ -3715,7 +3715,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     require('./lib/mood').maybeRefresh({
       userName,
       recentRows: (() => { try { return db.getRecentTurns(12); } catch { return []; } })(),
-      genFn: (prompt) => condenseComplete([{ role: 'user', content: prompt }], { numPredict: 220 }),
+      genFn: (prompt) => condenseComplete([{ role: 'user', content: prompt }], { numPredict: 320 }),
     }).then(m => { if (m) console.log('[main] mood cultivated:', m.feeling); }).catch(() => {});
   } catch {}
 

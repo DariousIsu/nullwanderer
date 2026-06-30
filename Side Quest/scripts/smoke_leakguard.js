@@ -28,6 +28,11 @@ ok(!/ANSWER TO GIVE|Lucas asked for|Canvas|grounding shows/.test(stripped), 'fin
 const stacked = '[DELIVER THIS TO Lucas — keep EVERY item:\n- a\n[ANSWER TO GIVE Lucas]\nreal answer\n[YOU HAVE ACCEPTED THIS AS A STANDING TASK]';
 ok(!/DELIVER THIS|ANSWER TO GIVE|ACCEPTED/.test(lg.stripLeakedDirectives(stacked)), 'stacked/unterminated directives stripped');
 
+// model-hallucinated reply scaffold (the live 2026-06-30 leak): echoed instruction + [YOUR REPLY] marker
+const scaffold = lg.stripLeakedDirectives('explore how music trends reflect cultural shifts [YOUR REPLY] Got it Lucas, no more work talk.');
+ok(/^Got it Lucas/.test(scaffold) && !/YOUR REPLY|explore how music/.test(scaffold), 'leading [YOUR REPLY] scaffold + echoed prefix stripped, real reply kept');
+ok(lg.isLeakyDirective('[YOUR REPLY]'), '[YOUR REPLY] marker is a leaky directive (stream suppresses it)');
+
 // legit content survives
 ok(lg.stripLeakedDirectives('Here are 3 orgs: Heritage, Cato, AEI. [1]') === 'Here are 3 orgs: Heritage, Cato, AEI. [1]', 'legit prose + footnote survives');
 

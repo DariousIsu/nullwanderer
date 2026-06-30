@@ -28,7 +28,10 @@ for (const m of [
   // the live miss (2026-06-29): these didn't flip the mode, so she pivoted back to work
   "its not work time, its play and rest time",
   'play time now',
-  'time to relax'
+  'time to relax',
+  // 2026-06-30: bare "relaxing" didn't flip it → she kept pivoting to work
+  'no, we are relaxing Zoe',
+  "let's just chill"
 ]) ok(`enter: "${m.slice(0, 40)}"`, personal.detectEnter(m));
 
 console.log('\nENTER detection (should NOT fire — ordinary work turns):');

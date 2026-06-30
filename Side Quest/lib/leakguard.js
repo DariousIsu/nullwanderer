@@ -15,7 +15,7 @@
 
 // A bracket block is a leaked directive if it carries a directive SIGNATURE, or (for model-hallucinated
 // meta brackets with no fixed signature) it's a long block talking about the task/Lucas in directive terms.
-const _DIRSIG = /(ANSWER TO GIVE|THAT'?S YOUR TASK|DELIVER THIS|Calibration:|ACTION HONESTY|REMEMBER IT ACROSS|Say THIS in your own voice|STATUS UPDATE|ADDITIONAL GUIDANCE|standing (?:task|focus)|ACCEPTED this as|do NOT (?:invent|fabricate|summarize|contract|drift|recite)|in your own voice|grounded answer|present the FULL|REAL FACTS|ACCESSIBLE VIA|asked (?:for the|what you|about)|on your Canvas|put (?:it|this) on the Canvas|complete result of the task)/i;
+const _DIRSIG = /(ANSWER TO GIVE|THAT'?S YOUR TASK|DELIVER THIS|Calibration:|ACTION HONESTY|REMEMBER IT ACROSS|Say THIS in your own voice|STATUS UPDATE|ADDITIONAL GUIDANCE|standing (?:task|focus)|ACCEPTED this as|do NOT (?:invent|fabricate|summarize|contract|drift|recite)|in your own voice|grounded answer|present the FULL|REAL FACTS|ACCESSIBLE VIA|asked (?:for the|what you|about)|on your Canvas|put (?:it|this) on the Canvas|complete result of the task|YOUR (?:REPLY|ANSWER|RESPONSE))/i;
 const _METASIG = /\b(Lucas|going forward|i will|do not|deliver|present|dossier|clarif|criteria|scope|the task|my research|remember|REMEMBER|going to (?:expand|include|focus)|search criteria|Canvas)\b/i;
 
 function isLeakyDirective(bracket) {
@@ -27,6 +27,11 @@ function isLeakyDirective(bracket) {
 // unterminated mid-text (each '[' + signature run up to its ']' OR the next '[' OR end-of-string).
 function stripLeakedDirectives(text) {
   let s = String(text || '');
+  // LEADING REPLY-SCAFFOLD: the 24B sometimes prefixes its answer with an echoed instruction + a fake
+  // marker ("explore how music trends … [YOUR REPLY] Got it Lucas …"). Strip everything up to and
+  // including a leading [YOUR REPLY] / [REPLY] / [ANSWER] / [RESPONSE] scaffold (bounded so it can't eat
+  // a real reply that mentions one deep in).
+  s = s.replace(/^[\s\S]{0,250}?\[\/?\s*(?:YOUR\s+)?(?:REPLY|ANSWER|RESPONSE)\s*\]\s*/i, '');
   s = s.replace(/\[[^\]]*\]/g, (m) => (isLeakyDirective(m) ? '' : m));   // closed blocks (incl. multi-line)
   s = s.replace(/\[[^\]]*$/g, (m) => (isLeakyDirective(m) ? '' : m));     // trailing unterminated
   s = s.replace(/\[[^\[]*?(?:DELIVER THIS|ANSWER TO GIVE|THAT'?S YOUR TASK|ACCEPTED (?:this|THIS) as|standing (?:task|focus)|Calibration:|do NOT (?:invent|fabricate|summarize|recite)|present the FULL|keep EVERY item|REAL FACTS|complete result of the task|asked (?:for the|what you)|on your Canvas)[^\[]*?(?:\]|(?=\[)|$)/gi, '');
