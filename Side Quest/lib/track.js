@@ -40,6 +40,20 @@ const PEOPLE_FACET_RE = /\b(?:head|heads|leader|leadership|director|president|ce
 const CONTACT_FACET_RE = /\b(?:contacts?|emails?|e-mail|phones?|address(?:es)?|reach|websites?)\b/i;
 // Find/locate a deliverable: "can you find / pull up / where's / do you have the X research/dossier/notes".
 const FIND_RE = /\b(?:find|pull up|bring up|locate|retrieve|open up|get me|show me|where(?:'?s| is| are)|do (?:you|we) have|have you got|got)\b[^?.!]{0,45}\b(?:research|dossier|notes?|write[\s-]?up|report|study|findings|deliverable|the\s+[\w-]+(?:\s+[\w-]+)?\s+(?:think tanks?|orgs?|organi[sz]ations?))\b/i;
+// Rank / superlative recall over what we ALREADY hold: "which 5 do we have the MOST information on",
+// "which orgs do we know the most about", "best-documented think tanks". A superlative (most/best/top)
+// paired with a recall-noun (information/detail/documented/covered/know/about). The live miss: this fell
+// through to the operator, which went "let me go search the web" instead of ranking the existing dossier.
+const RANK_RE = /\b(?:most|best|top|deepest|richest|greatest)\b[^?.!]{0,40}\b(?:info(?:rmation)?|detail|data|documented|on file|covered|know(?:ledge)?|complete|robust|fleshed|materials?|research|about)\b|\b(?:info(?:rmation)?|detail|documented|covered|know(?:ledge)?|materials?)\b[^?.!]{0,25}\b(?:most|best|top|deepest|richest)\b|\bbest[\s-]?documented\b/i;
+const _NUMWORD = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+// The N in a top-N request ("top 5", "what 5", "the three"), or null.
+function _topN(text) {
+  const s = String(text || '');
+  let m = s.match(/\btop\s+(\d{1,2})\b/i) || s.match(/\b(\d{1,2})\b/);
+  if (m) { const n = parseInt(m[1], 10); return (n > 0 && n <= 50) ? n : null; }
+  m = s.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/i);
+  return m ? (_NUMWORD[m[1].toLowerCase()] || null) : null;
+}
 
 // Classify a turn as a deliverable query (and which kind). Order matters: a specific "about X" /
 // "for each" beats a generic list/count. Returns { is, kind, scope }.
@@ -57,6 +71,7 @@ function classifyQuery(text) {
   }
   if (ABOUT_RE.test(s)) return { is: true, kind: 'sample', scope: null };
   if (COUNT_RE.test(s)) return { is: true, kind: 'count', scope: null };
+  if (RANK_RE.test(s)) return { is: true, kind: 'rank', scope: null, n: _topN(s) };   // "which 5 do we have the most info on" → rank the existing dossier
   if (FIND_RE.test(s)) return { is: true, kind: 'find', scope: null };   // "find/pull up the X research" → locate the deliverable
   if (LIST_RE.test(s)) return { is: true, kind: 'list', scope: null };
   if (STATUS_RE.test(s)) return { is: true, kind: 'status', scope: null };
@@ -153,6 +168,24 @@ function buildAnswer(track, text) {
   if (q.kind === 'count') {
     const block = `You have ${count} organization${count === 1 ? '' : 's'} on file from ${where}: ${orgs.join(', ') || '(none yet)'}.${liveTail}`;
     return { handled: true, kind: 'count', block, note: `count=${count}` };
+  }
+  if (q.kind === 'rank') {
+    // Rank what we ACTUALLY hold by how much is gathered (section body length = depth proxy), top-N.
+    const ranked = (track.sections || [])
+      .map(s => ({ heading: s.heading, size: String(s.body || '').replace(/\s+/g, ' ').trim().length }))
+      .filter(x => x.heading)
+      .sort((a, b) => b.size - a.size);
+    const n = (q.n && q.n > 0) ? Math.min(q.n, Math.max(ranked.length, orgs.length)) : Math.min(5, Math.max(ranked.length, orgs.length));
+    if (ranked.length) {
+      const top = ranked.slice(0, n);
+      const block = `From ${where}, the ${top.length === 1 ? 'one you have' : `${top.length} you have`} the most on (ranked by how much is gathered):\n${top.map((t, i) => `${i + 1}. ${t.heading}`).join('\n')}.${liveTail}`;
+      return { handled: true, kind: 'rank', block, note: `rank top${top.length}/${ranked.length}` };
+    }
+    // index-only (no parsed bodies to rank by) → honest: name what's on file, can't rank by depth.
+    const block = count
+      ? `You have ${count} organization${count === 1 ? '' : 's'} on file from ${where} (${orgs.slice(0, n).join(', ')}${count > n ? ', …' : ''}); I can't rank them by depth right now — open the dossier to compare.${liveTail}`
+      : `You don't have any organizations on file yet from ${where}.${liveTail}`;
+    return { handled: true, kind: 'rank', block, note: `rank:index-only=${count}` };
   }
   if (q.kind === 'find') {
     // locate/confirm the deliverable: yes, it exists, here's the count + where to see it.

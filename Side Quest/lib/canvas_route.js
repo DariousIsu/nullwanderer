@@ -27,7 +27,7 @@ function routeDeliverable({ text = '', kind = null } = {}) {
   // 2) a clearly-complete work → canvas regardless of kind
   if (COMPLETE_WORK_RE.test(s)) return { target: 'canvas', reason: 'complete-work' };
   // 3) by kind: short, specific answers stay in chat
-  if (kind === 'count' || kind === 'sample' || kind === 'status' || kind === 'find') return { target: 'chat', reason: kind };
+  if (kind === 'count' || kind === 'sample' || kind === 'status' || kind === 'find' || kind === 'rank') return { target: 'chat', reason: kind };
   // 4) big enumerations with no stated medium → genuinely unsure → ask
   if (kind === 'list' || kind === 'facet') return { target: 'ask', reason: `${kind}-medium-unspecified` };
   return { target: 'chat', reason: 'default' };

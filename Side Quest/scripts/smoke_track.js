@@ -44,6 +44,22 @@ ok(tk.classifyQuery('can you find the right wing think tank research?').kind ===
 ok(tk.classifyQuery('pull up the AI safety dossier').kind === 'find', '"pull up the X dossier" → find');
 ok(tk.classifyQuery('where is the think tank research').kind === 'find', '"where is the X research" → find');
 ok(tk.classifyQuery('find me a good restaurant').is === false, '"find me a restaurant" (no deliverable noun) → NOT a query');
+// --- RANK / superlative recall (the live miss: "what 5 do we have the most information on" → she went
+//     to web-search instead of ranking the existing dossier) ---
+ok(tk.classifyQuery('what 5 right wing think tanks do we have the most information on?').kind === 'rank', "Lucas's exact phrasing → rank");
+ok(tk.classifyQuery('what 5 right wing think tanks do we have the most information on?').n === 5, 'rank extracts N=5');
+ok(tk.classifyQuery('which orgs do we know the most about').kind === 'rank', '"know the most about" → rank');
+ok(tk.classifyQuery('the best-documented think tanks we have').kind === 'rank', '"best-documented" → rank');
+ok(tk.classifyQuery('top three we have the most detail on').kind === 'rank' && tk.classifyQuery('top three we have the most detail on').n === 3, '"top three … most detail" → rank, N=3');
+ok(tk.classifyQuery('what do you have on Cato?').kind === 'sample', 'rank does not steal a plain "about X" (still sample)');
+ok(tk.classifyQuery('lets grab the most pizza').kind !== 'rank', '"most pizza" (no recall noun) → NOT rank');
+// rank answer ranks by section depth, names the top-N from the ARTIFACT
+const rk = tk.buildAnswer(complete, 'what 2 do we have the most information on?');
+ok(rk.handled && rk.kind === 'rank' && /Heritage Foundation/.test(rk.block) && /1\./.test(rk.block), 'rank answer is grounded + numbered, top org first');
+ok(!/I.?ll (?:go )?search|let me (?:go )?search|directories/i.test(rk.block), 'rank answer does NOT propose a fresh web search — it uses what we have');
+const rkAll = tk.buildAnswer(complete, 'which do we have the most info on');
+ok(rkAll.handled && rkAll.kind === 'rank', 'rank with no number defaults to a grounded top list');
+
 const fnd = tk.buildAnswer(complete, 'can you find the think tank research?');
 ok(fnd.handled && /Yes — you DO have/.test(fnd.block) && /3 organizations/.test(fnd.block), 'find → confirms it exists + count + list');
 ok(tk.classifyQuery('I love that, thank you').is === false, 'gratitude is NOT a deliverable query');

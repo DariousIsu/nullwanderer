@@ -2311,7 +2311,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // SAMPLE ("what do you have on X") deliberately keeps RAG — its section answer benefits from the
   // enrichment and showed no competition (the MIRI answer was rich and correct).
   let deliverableAggQ = false;
-  try { const dq = require('./lib/track').classifyQuery(userMessage); deliverableAggQ = dq.is && ['count', 'list', 'facet', 'status'].includes(dq.kind); } catch {}
+  try { const dq = require('./lib/track').classifyQuery(userMessage); deliverableAggQ = dq.is && ['count', 'list', 'facet', 'status', 'rank'].includes(dq.kind); } catch {}
 
   const chosenName = db.getMeta('chosen_name');
   const awareness = buildAwarenessBlock({
