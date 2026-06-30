@@ -49,8 +49,12 @@ const TOOL_SPEC_CORE = `TOOLS (call exactly ONE per step):
 - open_page {"url":"…"}         open a SPECIFIC page in her browser and read it in full — use this to go DEEPER into a good source instead of bouncing to a new search: follow a promising link you saw, or go straight to an org's own /team, /leadership, /about, or /contact page
 - echo {"need":"…"}             OUR private data + 500+ research tools (legislative/gov/CRM/knowledge-graph) — say the need in plain words (use this for anything the named ECHO DATA TOOLS below don't cover)
 - browser_read {}               read the page currently open in her browser
-- recall {"query":"…"}          search her OWN memory (past conversations, facts, notes she's kept)
-- file {"op":"read|write|append|list","path":"notes/x.md","content":"…"}   her workspace files`;
+- recall {"query":"…"}          semantic search of her OWN memory (past conversations, facts, notes she's kept)
+- localdb {"sql":"SELECT …"}    query her OWN local memory store DIRECTLY — read-only SELECT over her tables (knowledge, notes, open_threads, monologue, self_model…). Use this to look across ALL of her stored memory, not just the top semantic hits. Run localdb_map first if you don't know the tables.
+- localdb_map {}                list her local store's tables + row counts
+- file {"op":"read|write|append|list","path":"notes/x.md","content":"…"}   her workspace files
+
+YOU HAVE TWO FIRST-CLASS DATABASES — use BOTH as needed: localdb (her own accumulated memory) and echo (OUR research databases: the knowledge graph, vault, CRM, gov/legal/financial records, plus db_query for raw SELECTs across them). Before answering "do we have / what do we know" from guesswork, check them.`;
 
 const TOOL_SPEC_TAIL = `To use a tool, reply with ONE JSON object and nothing else:
   {"thought":"why","action":{"tool":"web_search","args":{"query":"…"}}}

@@ -50,6 +50,7 @@ const smokes = [
   'smoke_track_index.js',
   'smoke_record_completeness.js',
   'smoke_records_interp.js',
+  'smoke_localdb.js',
   'smoke_poll.js',
   'smoke_activity.js',
   'smoke_canvas_route.js',

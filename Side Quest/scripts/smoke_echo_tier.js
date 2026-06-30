@@ -17,7 +17,7 @@ ok(tier.classifyTool('propublica_nonprofit_search') === 'read', 'propublica_nonp
 ok(tier.classifyTool('usaspending_search') === 'read', 'usaspending_search → read');
 ok(tier.classifyTool('kg_neighborhood') === 'read', 'kg_neighborhood → read');
 ok(tier.classifyTool('get_document') === 'read', 'get_document → read');
-ok(tier.classifyTool('db_query') === 'write', 'db_query → write (unknown-shaped ⇒ safe default, not auto-readable)');
+ok(tier.classifyTool('db_query') === 'read', 'db_query → read (Echo db_query is SELECT-only — first-class DB read)');
 ok(tier.classifyTool('propose_entity') === 'write', 'propose_entity → write');
 ok(tier.classifyTool('ingest_file') === 'write', 'ingest_file → write');
 ok(tier.classifyTool('save_document') === 'write', 'save_document → write');

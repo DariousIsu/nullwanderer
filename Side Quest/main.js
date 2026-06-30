@@ -31,6 +31,8 @@ const crmView = require('./studio/crm_view');                // CRM surface: con
 const legView = require('./studio/leg_view');                // Legislation surface: bill tool payloads → view shapes
 const canvasView = require('./studio/canvas_view');          // Canvas surface: saga canvas tabs/blocks → view shapes
 const canvasLayout = require('./studio/canvas_layout');      // Canvas freeform board: pure placement math
+const calendarView = require('./studio/calendar_view');      // Calendar surface: Google Calendar v3 JSON → view shapes
+const gcal = require('./lib/gcal');                          // Calendar surface: Google token bridge + Calendar v3 read client
 const canvasLayoutStore = require('./lib/canvas_layout');    // Canvas freeform board: operator's saved block positions
 const kgView = require('./studio/kg_view');                  // Knowledge Graph surface: graph tool payloads → nodes/links
 const docView = require('./studio/doc_view');                // Reader/Library surface: corpus doc payloads → reader view
@@ -77,6 +79,7 @@ const { EngineSupervisor } = require('./lib/engine');   // Zoe OWNS the absorbed
 const recallLib = require('./lib/recall');   // <recall ref="rID"/> — expand a memory marker on demand
 let echoSuit = null;   // Echo "suit" — the MCP tool surface Zoe wears; bound to the engine she owns
 let echoHttp = null;   // {base,token} for the engine's HTTP custom routes (e.g. GET /canvas live snapshot)
+let echoVenv = null;   // {python,cwd} — Echo's venv interpreter + repo root, for the Google-token bridge (lib/gcal)
 let engineSupervisor = null;   // supervises the engine process: adopts a running one, else spawns + owns it
 // Lucas explicitly invoking the suit / our data → bind to echo tags (F1 nudge). Deliberately
 // specific so it doesn't fire on casual mentions of "data" etc.
@@ -379,6 +382,7 @@ app.whenReady().then(() => {
   // Spawn path uses Echo's OWN venv interpreter by default (its deps aren't on bare `python`);
   // ECHO_PYTHON env still overrides. The adopt path doesn't touch this.
   const ECHO_PYTHON = process.env.ECHO_PYTHON || path.join(ECHO_CWD, '.venv', 'Scripts', 'python.exe');
+  echoVenv = { python: ECHO_PYTHON, cwd: ECHO_CWD };   // for the Calendar surface's Google token bridge (lib/gcal)
   // Inherit Echo's cloud credential (env → OS keychain "nx-echo" → .env) via Echo's own resolver,
   // so Zoe's verification classify leaf can reach the cloud frontier with the SAME key the engine
   // uses. Resolved into memory only — never written or logged (names only).
@@ -1206,6 +1210,70 @@ ipcMain.handle('crm:get', async (_e, { contactId } = {}) => {
     const payload = await callTool('get_contact', { contact_id: Number(contactId), include_related: true });
     return { ok: true, card: crmView.contactCard(payload) };
   } catch (e) { console.error('[crm] get failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// ============================ CALENDAR (studio — Google Calendar surface) ====================
+// Near-1:1 Google Calendar as a Data surface. Auth is brought forward from Echo: lib/gcal shells to
+// Echo's venv get_credentials() for a live access token (the operator's grant), then calls Calendar
+// v3 REST directly. Reads land first (Slice 1); writes are operator-initiated (later slices). main
+// maps payloads to view shapes via studio/calendar_view; the renderer draws. The token is in-memory
+// only — never written or logged. Identity: this is the OPERATOR'S calendar (his Google account).
+function gcalOpts() { return echoVenv || {}; }
+
+ipcMain.handle('calendar:auth-status', async () => {
+  try {
+    // Prefer Echo's own status route (gives email + scopes); fall back to a token probe.
+    if (echoHttp && echoHttp.base) {
+      const headers = { Accept: 'application/json' };
+      if (echoHttp.token) headers.Authorization = `Bearer ${echoHttp.token}`;
+      const res = await fetch(`${echoHttp.base}/saga/google/auth/status`, { headers });
+      if (res && res.ok) { const s = await res.json(); return { ok: true, connected: !!s.connected, email: s.email || null, scopes: s.scopes || [] }; }
+    }
+    return { ok: true, connected: gcal.isConnected(gcalOpts()), email: null, scopes: [] };
+  } catch (e) { return { ok: false, error: e.message, connected: false }; }
+});
+
+// Kick Echo's one-time OAuth consent flow (opens the operator's browser; blocks ≤300s server-side).
+ipcMain.handle('calendar:connect', async () => {
+  try {
+    if (!echoHttp || !echoHttp.base) return { ok: false, error: 'engine HTTP unavailable' };
+    const headers = { Accept: 'application/json' };
+    if (echoHttp.token) headers.Authorization = `Bearer ${echoHttp.token}`;
+    const res = await fetch(`${echoHttp.base}/saga/google/auth/start`, { method: 'POST', headers });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body || body.ok === false) return { ok: false, error: (body && body.error) || `connect failed (${res.status})` };
+    gcal.getToken({ ...gcalOpts(), force: true });   // warm the in-mem token cache post-connect
+    return { ok: true, email: body.email || null, scopes: body.scopes || [] };
+  } catch (e) { console.error('[calendar] connect failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// Calendar list + color palette together (the surface keeps both; events reuse the colors).
+ipcMain.handle('calendar:list-calendars', async () => {
+  try {
+    const calsRaw = await gcal.listCalendars(gcalOpts());
+    let colorsRaw = null;
+    try { colorsRaw = await gcal.colors(gcalOpts()); } catch { /* colors are optional */ }
+    return { ok: true, calendars: calendarView.normalizeCalendarList(calsRaw), colors: calendarView.colorMap(colorsRaw) };
+  } catch (e) { console.error('[calendar] list-calendars failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// Events across the selected calendars within [timeMin, timeMax]. `calendars` = [{id,color}]; we
+// fetch each in parallel, inject the calendar color, merge + sort. Per-calendar failures are
+// collected (errors[]) without sinking the whole request.
+ipcMain.handle('calendar:events', async (_e, { calendars = [], timeMin, timeMax } = {}) => {
+  try {
+    if (!Array.isArray(calendars) || !calendars.length) return { ok: true, events: [], errors: [] };
+    if (!gcal.isConnected(gcalOpts())) return { ok: false, error: 'Google not connected' };
+    const errors = [];
+    const lists = await Promise.all(calendars.map(async (c) => {
+      try {
+        const raw = await gcal.listEvents({ calendarId: c.id, timeMin, timeMax, maxResults: 2500 }, gcalOpts());
+        return calendarView.normalizeEventList(raw, { calendarId: c.id, calColor: c.color || '' }).events;
+      } catch (err) { errors.push({ calendarId: c.id, error: err.message }); return []; }
+    }));
+    const events = lists.flat().sort((a, b) => a.startMs - b.startMs || a.summary.localeCompare(b.summary));
+    return { ok: true, events, errors };
+  } catch (e) { console.error('[calendar] events failed:', e.message); return { ok: false, error: e.message }; }
 });
 
 // ============================ CANVAS (studio — saga canvas renderer) =========================
@@ -4051,6 +4119,20 @@ const operatorTools = {
   },
   file: async ({ op, path, content } = {}) => {
     try { const r = await filesLib.dispatch({ tag: 'file-' + (op || 'read'), attrs: { path: path || '' }, body: content || '' }); return (r && (r.text || r.message)) || (r && r.ok ? 'ok' : 'file op failed'); }
+    catch (e) { return 'ERROR: ' + e.message; }
+  },
+  // FIRST-CLASS local memory: read-only SELECT over her OWN store (sq.db) — her notes, knowledge,
+  // threads, monologue, self-model. The local counterpart to Echo's db_query. Read-only by construction.
+  localdb: async ({ sql } = {}) => {
+    try {
+      const r = require('./lib/localdb').query(String(sql || ''));
+      if (!r.ok) return 'ERROR: ' + r.error;
+      if (!r.rows.length) return 'no rows';
+      return JSON.stringify(r.rows).slice(0, 3000) + (r.truncated ? `\n…(${r.count} rows total, showing ${r.rows.length})` : '');
+    } catch (e) { return 'ERROR: ' + e.message; }
+  },
+  localdb_map: async () => {
+    try { const inv = require('./lib/localdb').inventory(); return inv.length ? inv.map(t => `${t.table} (${t.rows})`).join(', ') : '(empty)'; }
     catch (e) { return 'ERROR: ' + e.message; }
   },
 };
