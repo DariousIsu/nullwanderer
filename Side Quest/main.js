@@ -2606,11 +2606,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // track via the registry — else expand would deepen the most-recent dossier (the AI-safety run),
       // not the think tanks. Falls back to last_dossier when no topic is named.
       try {
-        const hit = require('./lib/track_index').resolveByTopic(buildTrackIndex(), ex.target || userMessage);
+        const tgt = String(ex.target || '').trim();
+        // VAGUE back-reference ("expand THAT research / it / this") has no topic terms → resolve to the
+        // project he was JUST engaging (research.last_referenced_focus_id), NOT a weak registry guess
+        // (which sent "expand that research" to the AI-safety run instead of the think tanks).
+        const vague = !tgt || /^(that|this|it|those|these|the)\b/i.test(tgt);
+        let hit = null;
+        if (vague) {
+          const ref = parseInt(db.getMeta('research.last_referenced_focus_id') || '0', 10) || 0;
+          if (ref) { const t = (() => { try { return db.getOpenThread(ref); } catch { return null; } })(); hit = { id: ref, goal: t ? t.content : '' }; console.log(`[expand] vague target → last-referenced #${ref}`); }
+        }
+        if (!hit) hit = require('./lib/track_index').resolveByTopic(buildTrackIndex(), tgt || userMessage);
         if (hit && hit.id) {
           const t = (() => { try { return db.getOpenThread(hit.id); } catch { return null; } })();
-          last = { focusId: hit.id, path: `notes/directed-${hit.id}-dossier.md`, goal: (t && t.content) || (last && last.goal) || '' };
-          console.log(`[expand] topic-resolved → #${hit.id} (${(hit.covered || []).length} orgs)`);
+          last = { focusId: hit.id, path: `notes/directed-${hit.id}-dossier.md`, goal: (t && t.content) || hit.goal || (last && last.goal) || '' };
+          console.log(`[expand] resolved → #${hit.id}`);
         }
       } catch (e) { console.error('[expand] topic resolve failed:', e.message); }
       if (last && last.path) {
@@ -4193,7 +4203,7 @@ async function buildQueryTrack(userMessage = '') {
     // (1) topic-addressed: does the question name a specific past project?
     try {
       const hit = require('./lib/track_index').resolveByTopic(buildTrackIndex(), userMessage);
-      if (hit && hit.id) { id = hit.id; goal = String(hit.goal || ''); console.log(`[track] topic-resolved → #${id}`); }
+      if (hit && hit.id) { id = hit.id; goal = String(hit.goal || ''); try { db.setMeta('research.last_referenced_focus_id', String(hit.id)); } catch {} console.log(`[track] topic-resolved → #${id}`); }
     } catch (e) { console.error('[track] topic resolve failed:', e.message); }
     // (2) the active directed focus
     if (id == null) {
