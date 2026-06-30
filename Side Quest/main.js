@@ -147,9 +147,9 @@ let lastUserTurnTs = Date.now(); // for detecting "return after a long absence" 
 const RETURN_IDLE_MS = 10 * 60 * 1000; // gap that counts as "they were away"
 
 function createWindow() {
+  const windowState = require('./lib/window_state');
   mainWindow = new BrowserWindow({
-    width: 900,
-    height: 800,
+    ...windowState.options('main', { width: 900, height: 800 }),
     backgroundColor: '#0d0d10',
     title: 'Zoe Lane',
     autoHideMenuBar: true,
@@ -161,6 +161,7 @@ function createWindow() {
     }
   });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  windowState.track(mainWindow, 'main');
   // Right-click context menu in the chat window: spellcheck suggestions + cut/copy/paste.
   // Self-contained (inline require) so it stays out of the way of other edits to this file.
   mainWindow.webContents.on('context-menu', (_event, params) => {
@@ -200,9 +201,9 @@ let editorWindow = null;
 // instance: re-focus if already open. Shares the chat preload (adds window.sq.editor.*).
 function createEditorWindow() {
   if (editorWindow && !editorWindow.isDestroyed()) { editorWindow.focus(); return editorWindow; }
+  const windowState = require('./lib/window_state');
   editorWindow = new BrowserWindow({
-    width: 1100,
-    height: 820,
+    ...windowState.options('editor', { width: 1100, height: 820 }),
     backgroundColor: '#0d0d10',
     title: "Editor's Studio",
     autoHideMenuBar: true,
@@ -215,6 +216,7 @@ function createEditorWindow() {
     }
   });
   editorWindow.loadFile(path.join(__dirname, 'renderer', 'editor.html'));
+  windowState.track(editorWindow, 'editor');
   editorWindow.once('ready-to-show', () => { editorWindow.show(); editorWindow.focus(); });
   editorWindow.on('closed', () => { editorWindow = null; });
   return editorWindow;
@@ -226,9 +228,9 @@ let workspaceWindow = null;
 // onto every webview so embedded surfaces (the Editor) get window.sq.* untouched.
 function createWorkspaceWindow() {
   if (workspaceWindow && !workspaceWindow.isDestroyed()) { workspaceWindow.focus(); return workspaceWindow; }
+  const windowState = require('./lib/window_state');
   workspaceWindow = new BrowserWindow({
-    width: 1280,
-    height: 860,
+    ...windowState.options('workspace', { width: 1280, height: 860 }),
     backgroundColor: '#0d0d10',
     title: 'My Workspace',
     autoHideMenuBar: true,
@@ -248,6 +250,7 @@ function createWorkspaceWindow() {
     webPreferences.nodeIntegration = false;
   });
   workspaceWindow.loadFile(path.join(__dirname, 'renderer', 'workspace.html'));
+  windowState.track(workspaceWindow, 'workspace');
   workspaceWindow.once('ready-to-show', () => { workspaceWindow.show(); workspaceWindow.focus(); });
   workspaceWindow.on('closed', () => { workspaceWindow = null; });
   return workspaceWindow;
@@ -280,9 +283,9 @@ function configureZoeMeetPartition() {
 function createCanvasWindow() {
   if (canvasWindow && !canvasWindow.isDestroyed()) { canvasWindow.focus(); return canvasWindow; }
   configureZoeMeetPartition();
+  const windowState = require('./lib/window_state');
   canvasWindow = new BrowserWindow({
-    width: 1280,
-    height: 860,
+    ...windowState.options('canvas', { width: 1280, height: 860 }),
     backgroundColor: '#0d0d10',
     title: "Zoe's Canvas",
     autoHideMenuBar: true,
@@ -309,6 +312,7 @@ function createCanvasWindow() {
     try { guest.once('destroyed', () => { if (meetWebContents === guest) meetWebContents = null; }); } catch {}
   });
   canvasWindow.loadFile(path.join(__dirname, 'renderer', 'canvas.html'));
+  windowState.track(canvasWindow, 'canvas');
   canvasWindow.once('ready-to-show', () => { canvasWindow.show(); canvasWindow.focus(); });
   canvasWindow.on('closed', () => { canvasWindow = null; });
   return canvasWindow;
@@ -379,6 +383,17 @@ app.whenReady().then(() => {
       const r = await cloudCurator.runDailyPass({ apply: true, onLog: (m) => console.log('[curation]', m) });
       console.log('[curation] pass complete:', JSON.stringify(r.stages));
       curationBeat(r.stages);
+      // PROMOTION (short-term → long-term): consolidate the day's new short-term documents into Echo
+      // long-term (vault doc + KG entities), on the SAME nightly cadence as curation.
+      try {
+        const pr = await promoteDocumentsPass({});
+        const beat = require('./lib/promote').promotionBeat(pr);
+        if (beat) {
+          const text = `[Memory consolidation] I ${beat} — they're part of my long-term memory now.`;
+          const row = db.insertMonologue({ content: text, model: 'promotion', type: 'reading' });
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
+        }
+      } catch (e) { console.error('[promote] pass failed:', e.message); }
     } catch (e) { console.error('[curation] pass failed:', e.message); }
     finally { curationRunning = false; }
   };
@@ -825,10 +840,36 @@ function meetDriverInst() {
 // a Meet link in chat, autonomous). Opens/focuses the Canvas, mounts the Meet pane, marks the meeting
 // canvas-hosted, and kicks gmeet's stage machine — which now runs through the canvas driver (join →
 // intro → captions → follow/answer → leave), freeing her dedicated browser. She joins as herself.
-function startCanvasMeeting(url, title) {
+// PORT Zoe's Google session into the canvas Meet partition — copy her live google.com cookies from
+// her already-signed-in dedicated browser into persist:zoe-google, so Meet loads signed-in AS HER.
+// (Google blocks interactive sign-in inside embedded webviews; an already-authed cookie session is
+// fine.) Best-effort + idempotent; returns the count copied.
+async function portZoeGoogleSession() {
+  try {
+    const cks = await require('./lib/web').cookies(['https://google.com', 'https://www.google.com', 'https://accounts.google.com', 'https://meet.google.com']);
+    if (!cks || !cks.length) return { ok: false, count: 0 };
+    const sess = session.fromPartition('persist:zoe-google');
+    const SS = { None: 'no_restriction', Lax: 'lax', Strict: 'strict' };
+    let n = 0;
+    for (const c of cks) {
+      const host = String(c.domain || '').replace(/^\./, '');
+      if (!/(^|\.)google\.com$/.test(host)) continue;
+      const set = { url: `https://${host}${c.path || '/'}`, name: c.name, value: c.value, path: c.path || '/', secure: !!c.secure, httpOnly: !!c.httpOnly };
+      if (String(c.domain || '').startsWith('.')) set.domain = c.domain;
+      if (Number.isFinite(c.expires) && c.expires > 0) set.expirationDate = c.expires;
+      if (SS[c.sameSite]) set.sameSite = SS[c.sameSite];
+      try { await sess.cookies.set(set); n++; } catch { /* skip a cookie Electron rejects */ }
+    }
+    console.log(`[meet] ported ${n} Google cookie(s) into the canvas partition`);
+    return { ok: n > 0, count: n };
+  } catch (e) { console.error('[meet] cookie port failed:', e.message); return { ok: false, count: 0, error: e.message }; }
+}
+
+async function startCanvasMeeting(url, title) {
   if (!url || !/^https?:\/\//i.test(String(url))) return false;
   const win = createCanvasWindow();
   meetDriverInst();   // ensure the live driver is registered before the idle loop ticks
+  await portZoeGoogleSession();   // sign the partition in AS HER before the webview loads Meet
   const payload = { url: String(url), title: title || 'Google Meet' };
   const send = () => { try { win.webContents.send('canvas:meet-join', payload); } catch {} };
   if (win.webContents.isLoading()) win.webContents.once('did-finish-load', send); else send();
@@ -839,9 +880,9 @@ function startCanvasMeeting(url, title) {
 
 // Meet-in-canvas (Slice 6): route a Meet URL into Zoe's Canvas pane (she joins as herself in the
 // persist:zoe-google partition), freeing her dedicated CDP browser. Runs the full meeting flow.
-ipcMain.handle('meet:join', (_e, { url, title } = {}) => {
+ipcMain.handle('meet:join', async (_e, { url, title } = {}) => {
   try {
-    if (!startCanvasMeeting(url, title)) return { ok: false, error: 'invalid meet url' };
+    if (!(await startCanvasMeeting(url, title))) return { ok: false, error: 'invalid meet url' };
     return { ok: true };
   } catch (e) { console.error('[meet] join failed:', e.message); return { ok: false, error: e.message }; }
 });
@@ -4598,6 +4639,41 @@ async function directedFocusTick() {
     }
   } catch (e) { console.error('[directed] tick error:', e.message); }
   finally { directedStepInFlight = false; }
+}
+
+// NIGHTLY PROMOTION (Slice 2) — consolidate the day's un-promoted SHORT-TERM documents (lib/doc_store,
+// the `documents` table) into Echo LONG-TERM. Locked recipe: each document is processed WHOLE into Echo's
+// vault (ingest_file → a doc_id) + its entities extracted into the KG (extract_entities_from_doc), then
+// marked promoted with the Echo ref. Runs on the daily curation cadence (maybeRunCuration). Fully fail-safe:
+// Echo down → skip; a single doc's failure doesn't block the rest. Returns { promoted, failed, skipped }.
+async function promoteDocumentsPass({ limit = 20 } = {}) {
+  if (!echoSuit || !echoSuit.connected) { console.log('[promote] Echo not connected — skipping promotion'); return { promoted: 0, failed: 0, skipped: true }; }
+  const promote = require('./lib/promote');
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  let promoted = 0, failed = 0;
+  let docs = []; try { docs = db.listUnpromotedDocuments(limit); } catch (e) { console.error('[promote] list failed:', e.message); return { promoted, failed }; }
+  for (const doc of docs) {
+    if (!promote.shouldPromote(doc)) { try { db.markDocumentPromoted(doc.id, 'skipped:thin'); } catch {} continue; }
+    const recipe = promote.recipeFor(doc);
+    const tmp = path.join(os.tmpdir(), `zoe-promote-${doc.id}-${promote.tempFileName(doc)}`);
+    try {
+      fs.writeFileSync(tmp, `# ${doc.title || 'Document'}\n\n${doc.body}`, 'utf8');
+      const res = await echoSuit.dispatch({ kind: 'do', name: 'ingest_file', args: { source_path: tmp, project_name: recipe.projectName, move: false } });
+      const echoDocId = (res && res.ok) ? promote.parseEchoDocId(res.text) : null;
+      if (echoDocId) {
+        if (recipe.extractEntities) {
+          try { await echoSuit.dispatch({ kind: 'do', name: 'extract_entities_from_doc', args: { doc_id: echoDocId } }); }
+          catch (e) { console.error('[promote] entity extract failed (non-fatal):', e.message); }
+        }
+        try { db.markDocumentPromoted(doc.id, `echo:${echoDocId}`); } catch {}
+        promoted++;
+        console.log(`[promote] doc #${doc.id} "${String(doc.title || '').slice(0, 40)}" → Echo doc ${echoDocId}${recipe.extractEntities ? ' (+entities)' : ''}`);
+      } else { failed++; console.error(`[promote] doc #${doc.id} ingest returned no doc_id:`, String((res && res.text) || (res && res.error) || '').slice(0, 160)); }
+    } catch (e) { failed++; console.error(`[promote] doc #${doc.id} failed:`, e.message); }
+    finally { try { fs.unlinkSync(tmp); } catch {} }
+  }
+  if (promoted || failed) console.log(`[promote] pass done — ${promoted} promoted, ${failed} failed`);
+  return { promoted, failed };
 }
 
 // Reasoner cloud call for the condense pass — uses the deeper subconscious model (gpt-oss:120b), not

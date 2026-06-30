@@ -56,6 +56,7 @@ const smokes = [
   'smoke_sources.js',
   'smoke_doc_qa.js',
   'smoke_doc_store.js',
+  'smoke_promote.js',
   'smoke_localdb.js',
   'smoke_intake.js',
   'smoke_estimate_correction.js',
