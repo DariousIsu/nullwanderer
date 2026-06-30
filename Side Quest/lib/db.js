@@ -1161,6 +1161,25 @@ function markDocumentPromoted(id, promotedRef = null) {
   return true;
 }
 
+// Promoted documents (for the retention pass), oldest first.
+function listPromotedDocuments(limit = 200) {
+  return getDb().prepare('SELECT * FROM documents WHERE promoted = 1 ORDER BY id ASC LIMIT ?').all(Math.max(1, limit | 0));
+}
+
+// Retention: trim a promoted doc's body down to a pointer (the full text now lives in Echo long-term).
+function trimDocumentBody(id, body) {
+  if (!id) return false;
+  getDb().prepare('UPDATE documents SET body = ?, updated_ts = ? WHERE id = ?').run(String(body || ''), Date.now(), id);
+  return true;
+}
+
+// Retention: drop a short-term document outright (skip-marked / never reached Echo).
+function deleteDocument(id) {
+  if (!id) return false;
+  getDb().prepare('DELETE FROM documents WHERE id = ?').run(id);
+  return true;
+}
+
 // Phase 3: rewrite a knowledge note in place (Mem0 UPDATE/merge) — content + its
 // embedding + FTS index, bumping last_used_ts. Used when a new takeaway AUGMENTS an
 // existing one rather than duplicating it, so one topic doesn't pile up near-dup rows.
@@ -1651,6 +1670,9 @@ module.exports = {
   listUnpromotedDocuments,
   searchDocuments,
   markDocumentPromoted,
+  listPromotedDocuments,
+  trimDocumentBody,
+  deleteDocument,
   getMonologueById,
   markReadingsConsolidated,
   updateKnowledge,

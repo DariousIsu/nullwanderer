@@ -309,6 +309,12 @@ function createCanvasWindow() {
   // meeting from main directly (executeJavaScript / sendInputEvent) — no renderer hop.
   canvasWindow.webContents.on('did-attach-webview', (_e, guest) => {
     meetWebContents = guest;
+    // MUTE her endpoint's audio OUTPUT — she follows via captions + chat, not by hearing the call.
+    // Without this the pane plays the meeting aloud and echoes against the room / other endpoints
+    // (the same reason her dedicated browser runs with --mute-audio). Re-assert on each navigation.
+    const mute = () => { try { guest.setAudioMuted(true); } catch {} };
+    mute();
+    try { guest.on('did-finish-load', mute); guest.on('did-navigate', mute); } catch {}
     try { guest.once('destroyed', () => { if (meetWebContents === guest) meetWebContents = null; }); } catch {}
   });
   canvasWindow.loadFile(path.join(__dirname, 'renderer', 'canvas.html'));
@@ -394,6 +400,9 @@ app.whenReady().then(() => {
           if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
         }
       } catch (e) { console.error('[promote] pass failed:', e.message); }
+      // RETENTION (Slice 3): tidy the short-term store — trim long-promoted docs to a pointer (full text
+      // lives in Echo now) + drop skip-marked stragglers, so short-term stays a fast working set.
+      try { retentionPass({}); } catch (e) { console.error('[retention] pass failed:', e.message); }
     } catch (e) { console.error('[curation] pass failed:', e.message); }
     finally { curationRunning = false; }
   };
@@ -4674,6 +4683,21 @@ async function promoteDocumentsPass({ limit = 20 } = {}) {
   }
   if (promoted || failed) console.log(`[promote] pass done — ${promoted} promoted, ${failed} failed`);
   return { promoted, failed };
+}
+
+// RETENTION (Slice 3) — tidy the short-term `documents` store after promotion so it stays a fast working
+// set: trim a doc that's been in Echo long-term past the retention window down to a POINTER (its Echo ref +
+// understanding; the full text lives in Echo), and drop skip-marked stragglers that never reached Echo.
+// Synchronous (DB only), fail-safe. Returns { pruned, deleted }.
+function retentionPass({ limit = 200, windowMs = null } = {}) {
+  const retention = require('./lib/retention');
+  let docs = []; try { docs = db.listPromotedDocuments(limit); } catch (e) { console.error('[retention] list failed:', e.message); return { pruned: 0, deleted: 0 }; }
+  const p = retention.plan(docs, windowMs ? { windowMs } : {});
+  let pruned = 0, deleted = 0;
+  for (const item of p.prune) { try { if (db.trimDocumentBody(item.id, item.pointer)) pruned++; } catch {} }
+  for (const id of p.delete) { try { if (db.deleteDocument(id)) deleted++; } catch {} }
+  if (pruned || deleted) console.log(`[retention] short-term tidy — ${pruned} trimmed to pointers, ${deleted} dropped`);
+  return { pruned, deleted };
 }
 
 // Reasoner cloud call for the condense pass — uses the deeper subconscious model (gpt-oss:120b), not
