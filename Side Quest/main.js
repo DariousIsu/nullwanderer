@@ -141,6 +141,8 @@ let currentSessionId = null;
 let currentSessionStartedAt = null;
 let inboxPollTimer = null;     // setInterval id for the inbox poller (cleared on shutdown)
 let inboxPollTimeout = null;   // initial-sweep setTimeout id
+let canvasIngestTimer = null;  // setInterval id for the canvas drop→ingest poller (cleared on shutdown)
+let canvasIngestTimeout = null;// initial-sweep setTimeout id
 let lastUserTurnTs = Date.now(); // for detecting "return after a long absence" (capability proposals)
 const RETURN_IDLE_MS = 10 * 60 * 1000; // gap that counts as "they were away"
 
@@ -630,6 +632,51 @@ app.whenReady().then(() => {
     console.log('[main] inbox poller started (unread-based, every 4 min)');
   }
 
+  // CANVAS DROP → INGEST: when Lucas drops a DOCUMENT onto Zoe's canvas, the engine shows it as a block
+  // but nothing made her READ it (she kept musing, blind to it). This poller notices a new dropped tab
+  // ("drop-…", distinct from her own "directed-…" emits), pulls its text, has the cloud write a grounded
+  // understanding, and ACCRETES it: a reading in her stream + a memory note + captured learnings, so the
+  // document becomes something she actually knows. Dedup on the persisted ingested-tab set (no re-read).
+  {
+    const CANVAS_INGEST_MS = 45 * 1000;
+    const runCanvasIngest = async () => {
+      try {
+        if (!echoSuit || !echoSuit.connected) return;       // engine not attached → nothing to read
+        let snap = null; try { snap = await canvasSnapshot(); } catch (e) { return; }
+        if (!snap || !Array.isArray(snap.tabs)) return;
+        const ci = require('./lib/canvas_ingest');
+        let seen = []; try { seen = JSON.parse(db.getMeta('canvas.ingested_tabs') || '[]'); } catch {}
+        const fresh = ci.newDropTabs(snap, seen);
+        if (!fresh.length) return;
+        for (const t of fresh) {
+          const blocks = (snap.blocks_by_tab && Array.isArray(snap.blocks_by_tab[t.tabKey])) ? snap.blocks_by_tab[t.tabKey] : [];
+          const markdown = ci.extractMarkdown(blocks);
+          const label = ci.cleanTitle(t.title);
+          if (markdown.length < 40) { console.log(`[canvas-ingest] "${label}" too thin to ingest — skipping (still marking seen)`); }
+          else {
+            // grounded cloud UNDERSTANDING (fail-safe to the raw doc if the cloud is down)
+            let understanding = '';
+            try { understanding = await condenseComplete(ci.buildUnderstandingPrompt({ title: label, markdown }), { numPredict: 600 }); } catch {}
+            const note = ci.ingestNote({ title: label, understanding, markdown });
+            // ACCRETE — a reading in her stream + a durable memory + captured learnings/entities.
+            try {
+              const row = db.insertMonologue({ content: `I read the document Lucas dropped on my canvas — "${label}":\n${understanding || markdown.slice(0, 400)}`, model: 'canvas_ingest', type: 'reading', query: label });
+              if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(read drop) ${label}`, type: 'reading', query: label });
+            } catch {}
+            try { await memoryLib.store({ kind: 'reference', content: note, source: 'canvas_drop', importance: 0.6, embedText: `${label}\n${markdown.slice(0, 800)}` }); } catch (e) { console.error('[canvas-ingest] memory store failed:', e.message); }
+            try { require('./lib/learning').maybeCaptureLearnings({ query: label, content: markdown, urls: null }); } catch {}
+            console.log(`[canvas-ingest] ingested drop "${label}" (${markdown.length} chars)${understanding ? ' + understanding' : ''}`);
+          }
+          seen.push(t.tabKey);
+        }
+        try { db.setMeta('canvas.ingested_tabs', JSON.stringify(seen.slice(-300))); } catch {}
+      } catch (e) { console.error('[canvas-ingest]', e.message); }
+    };
+    canvasIngestTimeout = setTimeout(() => { runCanvasIngest().catch(() => {}); }, 15000); // initial sweep ~15s after boot
+    canvasIngestTimer = setInterval(() => { runCanvasIngest().catch(() => {}); }, CANVAS_INGEST_MS);
+    console.log('[main] canvas drop→ingest poller started (every 45s)');
+  }
+
   // Browser layer status → forward to renderer
   browserLib.setListeners({
     onStatusChange: (s) => {
@@ -693,6 +740,8 @@ app.whenReady().then(() => {
 app.on('window-all-closed', async () => {
   if (inboxPollTimer) { clearInterval(inboxPollTimer); inboxPollTimer = null; }
   if (inboxPollTimeout) { clearTimeout(inboxPollTimeout); inboxPollTimeout = null; }
+  if (canvasIngestTimer) { clearInterval(canvasIngestTimer); canvasIngestTimer = null; }
+  if (canvasIngestTimeout) { clearTimeout(canvasIngestTimeout); canvasIngestTimeout = null; }
   try { actionLoop.abort(); } catch {}
   stopMonologueScheduler();
   stopHeartbeatScheduler();
