@@ -110,13 +110,17 @@ function dossierOrgs(dossier = '', limit = 60) {
     .slice(0, limit);
 }
 
+// "deep" framing → run the two-lane (web ∥ structured) researcher rather than the single web-leaning pass.
+const DEEP_RE = /\b(deep(?:ly|er)?|in[- ]depth|go deep|deep[- ]dive|deep research|exhaustive(?:ly)?|thorough(?:ly)?|every angle|all the angles|dig (?:in )?deep)\b/i;
+function detectDeep(text) { return DEEP_RE.test(String(text || '')); }
+
 function detectExpandOrder(text) {
   const s = String(text || '');
-  if (!EXPAND_RE.test(s)) return { isExpand: false, target: '', enrichFacet: '' };
+  if (!EXPAND_RE.test(s)) return { isExpand: false, target: '', enrichFacet: '', deep: false };
   const m = s.match(EXPAND_TARGET_RE);
   let target = m && m[1] ? m[1].trim() : '';
   target = target.replace(/^(the|on|about)\s+/i, '').replace(/[.?!]+$/, '').replace(/\s+/g, ' ').slice(0, 120);
-  return { isExpand: true, target, enrichFacet: detectEnrichFacet(s) };
+  return { isExpand: true, target, enrichFacet: detectEnrichFacet(s), deep: detectDeep(s) };
 }
 
 // Build the goal for the deepening sub-run. Concise + self-contained (it becomes the focus content,
@@ -132,6 +136,6 @@ function buildExpandGoal({ priorGoal = '', target = '', dossier = '' } = {}) {
 
 module.exports = {
   buildCondensePrompt, buildMergePrompt, chunkForCondense,
-  detectExpandOrder, buildExpandGoal, detectEnrichFacet, dossierOrgs,
+  detectExpandOrder, buildExpandGoal, detectEnrichFacet, dossierOrgs, detectDeep,
   EXPAND_RE, CONDENSE_SYS
 };

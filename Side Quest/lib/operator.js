@@ -27,11 +27,13 @@ function operatorModel() {
   catch { return 'gemma4:31b'; }
 }
 
-// Real cloud call bound to the operator (reasoner) model. Returns {text, usage} or null (no cloud).
+// Real cloud call bound to the operator model. opts.model overrides (lets a caller run a specific lane
+// on a specific cloud model — e.g. the deep lane on the 120B reasoner, the web lane on fast gemma).
+// Returns {text, usage} or null (no cloud).
 async function _operatorComplete(messages, opts = {}) {
   const src = (models.sources() || []).find(s => s.tier === 'cloud' && s.token);
   if (!src) return null;
-  const model = operatorModel();
+  const model = opts.model || operatorModel();
   return completeDetailed({
     model, messages, base: src.base,
     headers: src.token ? { Authorization: `Bearer ${src.token}` } : {},
@@ -61,7 +63,7 @@ const TOOL_SPEC = (() => {
   return [TOOL_SPEC_CORE, readSpec, TOOL_SPEC_TAIL].filter(Boolean).join('\n\n');
 })();
 
-function _buildPrompt({ userMessage, context, history, stepsLeft }) {
+function _buildPrompt({ userMessage, context, history, stepsLeft, toolSpec = null }) {
   return [{
     role: 'user',
     content: `You are the cognition/agent for Zoe (a local AI). DECIDE and ACT to fully handle this turn for her; she will voice your answer in her own words.
@@ -69,7 +71,7 @@ function _buildPrompt({ userMessage, context, history, stepsLeft }) {
 ${context ? 'CONTEXT (her memory/state relevant to this turn):\n' + String(context).slice(0, 3000) + '\n\n' : ''}USER MESSAGE:
 ${String(userMessage).slice(0, 1500)}
 
-${TOOL_SPEC}
+${toolSpec || TOOL_SPEC}
 
 ${history ? 'WORK SO FAR:' + history + '\n' : ''}Steps remaining: ${stepsLeft}. Respond with ONE JSON object now.`
   }];
@@ -135,7 +137,7 @@ function parseSliceResult(answer, covered = []) {
  * Run the agent loop. deps.complete(messages)->{text}|string ; deps.tools = { web_search, echo,
  * browser_read, recall, file } each (args)->string. Returns { answer, steps, toolsUsed } or null.
  */
-async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DEFAULT_MAX_STEPS, maxMs = DEFAULT_MAX_MS, numPredict = 900 } = {}) {
+async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DEFAULT_MAX_STEPS, maxMs = DEFAULT_MAX_MS, numPredict = 900, model = null, toolSpec = null } = {}) {
   const complete = deps.complete || _operatorComplete;
   const tools = deps.tools || {};
   const nowFn = deps.now || Date.now;
@@ -144,12 +146,13 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
   const steps = [];
   let history = '';
   // numPredict governs how big the model's response (incl. the {final:…} deliverable) can be — large
-  // for directed tasks so a long list/write-up isn't truncated at generation.
-  const cOpts = { num_predict: numPredict };
+  // for directed tasks so a long list/write-up isn't truncated at generation. model = optional cloud
+  // model override (per-lane); toolSpec = optional lane-scoped tool menu.
+  const cOpts = { num_predict: numPredict, ...(model ? { model } : {}) };
   for (let i = 0; i < maxSteps; i++) {
     if (nowFn() - t0 > maxMs) break;   // over the wall-clock budget → stop looping, force a final below
     let res;
-    try { res = await complete(_buildPrompt({ userMessage, context, history, stepsLeft: maxSteps - i }), cOpts); }
+    try { res = await complete(_buildPrompt({ userMessage, context, history, stepsLeft: maxSteps - i, toolSpec }), cOpts); }
     catch (e) { return steps.length ? _finalize(steps, null) : null; }
     if (res == null) return steps.length ? _finalize(steps, null) : null;   // no cloud configured
     const text = (typeof res === 'string') ? res : (res.text || '');
@@ -174,4 +177,4 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
   } catch { return _finalize(steps, null); }
 }
 
-module.exports = { runOperator, parseAction, isDirectedTask, parseSliceResult, operatorModel, _operatorComplete, TOOL_SPEC, DEFAULT_MAX_STEPS };
+module.exports = { runOperator, parseAction, isDirectedTask, parseSliceResult, operatorModel, _operatorComplete, TOOL_SPEC, TOOL_SPEC_CORE, TOOL_SPEC_TAIL, DEFAULT_MAX_STEPS };

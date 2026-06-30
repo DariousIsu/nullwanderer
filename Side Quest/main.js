@@ -2629,12 +2629,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // instead of a discovery expand (which would drift to NEW orgs — the live #2027 failure).
         const srcId = last.focusId || null;
         if (ex.enrichFacet && srcId) {
-          const er = await establishEnrichRun({ sourceFocusId: srcId, facet: ex.enrichFacet, sourceTurnId: userTurnRow && userTurnRow.id, priorGoal: last.goal });
+          const er = await establishEnrichRun({ sourceFocusId: srcId, facet: ex.enrichFacet, sourceTurnId: userTurnRow && userTurnRow.id, priorGoal: last.goal, deep: ex.deep });
           if (er && er.focus) {
             kickDirectedFocusDriver();
             expandHandled = true;
-            composedUserMessage += `\n\n[${userName} asked you to EXPAND your prior research by filling a specific facet across the organizations you already have — specifically: ${ex.enrichFacet}. You've started a FACET-FILL pass: going back through the ${er.orgs.length} organizations on file and gathering exactly that for each, one at a time. Tell him plainly you're going back through those ${er.orgs.length} orgs to fill in ${ex.enrichFacet} now, in one or two sentences. Do NOT fabricate — only report what you actually have.]`;
-            console.log(`[expand] ENRICH order → facet-fill focus #${er.focus.id} over #${srcId} (${er.orgs.length} orgs, facet: ${ex.enrichFacet.slice(0, 50)})`);
+            composedUserMessage += `\n\n[${userName} asked you to EXPAND your prior research by filling a specific facet across the organizations you already have — specifically: ${ex.enrichFacet}.${ex.deep ? ' He wants it done DEEPLY, so each org gets BOTH an open-web pass AND a structured-data pass (990s/funding/our graph) that merge together.' : ''} You've started a FACET-FILL pass: going back through the ${er.orgs.length} organizations on file and gathering exactly that for each, one at a time. Tell him plainly you're going back through those ${er.orgs.length} orgs to fill in ${ex.enrichFacet} now, in one or two sentences. Do NOT fabricate — only report what you actually have.]`;
+            console.log(`[expand] ENRICH order → facet-fill focus #${er.focus.id} over #${srcId} (${er.orgs.length} orgs, facet: ${ex.enrichFacet.slice(0, 50)}${ex.deep ? ', DEEP' : ''})`);
           }
         }
         if (!expandHandled) {
@@ -4043,7 +4043,7 @@ const operatorTools = {
 // operator.js). Routed through echoSuit.dispatch so the tier gate covers them too — all READ, so always
 // allowed (the gate only blocks write/heavy/locked). The generic `echo` tool covers the long tail.
 try {
-  for (const t of require('./lib/echo_tier').READ_TOOLS) {
+  for (const t of require('./lib/echo_tier').ALL_CURATED) {
     operatorTools[t.op] = async (a = {}) => {
       try {
         if (!echoSuit) return 'Echo is not available right now.';
@@ -4056,19 +4056,21 @@ try {
 
 // Run the cloud operator for a turn: the frontier model drives the tools; returns { answer, toolsUsed }
 // or null (→ caller falls back to the normal local reply). Fail-safe.
-async function runCloudOperator({ userMessage, context, task = false, autonomous = false }) {
+async function runCloudOperator({ userMessage, context, task = false, autonomous = false, toolNames = null, model = null, toolSpec = null }) {
   try {
     const operator = require('./lib/operator');
     // Per-tool timeout: a slow/hung capability (Echo down, a stalled page) can't block the turn —
     // it returns an ERROR string the agent can route around.
     const TO = (p, ms = 20000) => Promise.race([Promise.resolve().then(() => p), new Promise(res => setTimeout(() => res('ERROR: tool timed out'), ms))]);
     const tools = {};
-    for (const k of Object.keys(operatorTools)) tools[k] = (a) => TO(operatorTools[k](a));
+    // toolNames (when given) restricts this run to ONE lane's tools (web vs deep). Default = all.
+    const keys = (Array.isArray(toolNames) && toolNames.length) ? toolNames.filter(k => operatorTools[k]) : Object.keys(operatorTools);
+    for (const k of keys) tools[k] = (a) => TO(operatorTools[k](a));
     // TIER GATE on the generic `echo` need-router: on the AUTONOMOUS loop the cloud may pick ANY of the
     // 500+ tools, so pass `autonomous` so routeNeed blocks a write/heavy/locked pick (reads stay open).
     // The curated read tools above are READ-only and need no flag. Interactive turns (autonomous=false)
     // keep full write/heavy access (Echo applies its own verification + Lucas gate on proposals).
-    tools.echo = (a) => TO((async () => {
+    if (!toolNames || keys.includes('echo')) tools.echo = (a) => TO((async () => {
       try { if (!echoSuit) return 'Echo is not available right now.'; const r = await echoSuit.routeNeed(String((a && a.need) || ''), { autonomous }); return (r && r.text) || 'no result from Echo'; }
       catch (e) { return 'ERROR: ' + e.message; }
     })());
@@ -4081,7 +4083,8 @@ async function runCloudOperator({ userMessage, context, task = false, autonomous
       userMessage, context: (context || '') + taskNote,
       deps: { complete: operator._operatorComplete, tools },
       maxSteps: task ? 8 : undefined, maxMs: task ? 90000 : undefined,
-      numPredict: task ? 3000 : undefined   // a list/write-up can be long — don't truncate it at generation
+      numPredict: task ? 3000 : undefined,   // a list/write-up can be long — don't truncate it at generation
+      model, toolSpec                         // per-lane model + tool menu (null = single-lane defaults)
     });
     // GROWTH — "Zoe" IS the memory, not the model: the operator only grows her if what it gathers
     // ACCRETES back into her knowledge. Capture the web findings it pulled as durable learnings, so
@@ -4417,6 +4420,43 @@ async function runDirectedResearchPass(focus) {
   return outcome;
 }
 
+// TWO-LANE DEEP RESEARCH for ONE target: the WEB lane (her browser + Echo web tools, on the fast model)
+// and the DEEP lane (structured DBs + our knowledge graph, on the 120B reasoner) run CONCURRENTLY, then
+// a merge pass folds both raw streams into one section. This is the multi-cloud win — each lane runs the
+// model that fits its work, in parallel. Fail-safe: a lane that dies → '' for that side; the merge still
+// runs on whatever came back. Returns { section, webRaw, deepRaw, lanes }.
+async function runDeepResearchTarget({ org, goal = '', facet = '', guidance = '' }) {
+  const rs = require('./lib/research');
+  const tier = require('./lib/echo_tier');
+  const operatorMod = require('./lib/operator');
+  const fastModel = (() => { try { return operatorMod.operatorModel(); } catch { return 'gemma4:31b'; } })();
+  const deepModel = (() => { try { return require('./lib/config').subconsciousModel() || 'gpt-oss:120b'; } catch { return 'gpt-oss:120b'; } })();
+  const tail = operatorMod.TOOL_SPEC_TAIL || '';
+  const webSpec = ['TOOLS (call exactly ONE per step):',
+    '- web_search {"query":"…"}      search the open web + read the top result',
+    '- open_page {"url":"…"}         open a SPECIFIC page in her browser and read it fully (go to the org\'s /team, /leadership, /about, /contact)',
+    '- browser_read {}               read the page currently open in her browser',
+    tier.laneSpec('web'),
+    '- echo {"need":"…"}             open-web / reference lookups (read-only)',
+    '- recall {"query":"…"}          her own memory', '', tail].join('\n');
+  const deepSpec = ['TOOLS (call exactly ONE per step):',
+    tier.laneSpec('deep'),
+    '- echo {"need":"…"}             OUR private data + the 500+ structured research tools — say the need in plain words',
+    '- recall {"query":"…"}          her own memory', '', tail].join('\n');
+
+  const [web, deep] = await Promise.all([
+    runCloudOperator({ userMessage: rs.buildWebLanePrompt({ goal, org, facet, guidance }), context: '', task: true, autonomous: true, toolNames: tier.laneToolNames('web'), model: fastModel, toolSpec: webSpec }).catch(() => null),
+    runCloudOperator({ userMessage: rs.buildDeepLanePrompt({ goal, org, facet, guidance }), context: '', task: true, autonomous: true, toolNames: tier.laneToolNames('deep'), model: deepModel, toolSpec: deepSpec }).catch(() => null)
+  ]);
+  const webRaw = (web && web.answer) ? String(web.answer).trim() : '';
+  const deepRaw = (deep && deep.answer) ? String(deep.answer).trim() : '';
+  let section = '';
+  try { section = await condenseComplete(rs.buildMergeLanesPrompt({ org, facet, webRaw, deepRaw }), { numPredict: 1300 }); } catch {}
+  section = (section && section.trim()) ? section.trim() : `## ${org}\n- **${rs.facetLabel(facet)}:** ${((webRaw || deepRaw) || '').slice(0, 800).trim() || 'not found'}`;
+  const used = (r) => !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.length);
+  return { section, webRaw, deepRaw, lanes: { web: used(web), deep: used(deep) } };
+}
+
 // ENRICH / FACET-FILL pass: walk the KNOWN org work-list (from a prior dossier) and fill ONE named facet
 // (e.g. "policy / government-relations VPs + contacts") for the next not-yet-enriched org. Mirror of the
 // discovery pass, but the org is GIVEN (no TARGET discovery) and the run terminates when every source org
@@ -4437,25 +4477,33 @@ async function runEnrichResearchPass(focus) {
   try { db.setMeta('research.last_focus_id', String(focus.id)); } catch {}
   let clar = []; try { clar = JSON.parse(db.getMeta(`focus.${focus.id}.clarifications`) || '[]'); } catch {}
   const guidance = rs.buildGuidanceBlock(clar);
+  // DEEP MODE: when set, each org is worked by the two-lane runner (web ∥ structured → merge) instead
+  // of a single web-leaning pass. Opt-in per focus so the cheap single-lane path stays the default.
+  const deepMode = (() => { try { return (db.getMeta(`focus.${focus.id}.deep`) || '') === '1'; } catch { return false; } })();
 
   let progressed = false, done = false, note = '', sig = '';
   const org = rs.pickEnrichTarget({ sourceOrgs, enriched });
   if (!org) {
     done = true; note = `facet filled across all ${enriched.length} organization(s): ${rs.facetLabel(facet)}`;
   } else {
-    // ONE focused pass: fill ONLY the named facet for THIS org.
-    let ans = '', usedTool = false;
-    try {
-      const r = await runCloudOperator({ userMessage: rs.buildEnrichPrompt({ goal, org, facet, guidance }), context: '', task: true, autonomous: true });
-      ans = (r && r.answer) ? String(r.answer).trim() : '';
-      usedTool = !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.some(t => ['web_search', 'browser_read', 'echo'].includes(t)));
-    } catch (e) { console.error('[enrich] pass failed:', e.message); }
-    const p = rs.parsePass(ans);
-    // ORGANIZE this org's facet findings → one clean section, appended NOW (continuous, like discovery).
-    let section = '';
-    try { section = await condenseComplete(rs.buildOrganizeEnrichPrompt({ org, facet, raw: p.body || ans }), { numPredict: 1100 }); } catch {}
-    section = (section && section.trim()) ? section.trim() : `## ${org}\n- **${rs.facetLabel(facet)}:** ${((p.body || ans) || '').slice(0, 800).trim() || 'not found'}`;
-    const header = enriched.length === 0 ? `# Enrichment deliverable\n\n**Task:** ${goal}\n\n**Facet:** ${facet}\n\n---\n\n` : '';
+    // Build this org's section — two-lane (deep) or single-pass (default).
+    let section = '', laneNote = '';
+    if (deepMode) {
+      const dr = await runDeepResearchTarget({ org, goal, facet, guidance });
+      section = dr.section; laneNote = ` [web:${dr.lanes.web ? '✓' : '–'} deep:${dr.lanes.deep ? '✓' : '–'}]`;
+    } else {
+      // ONE focused pass: fill ONLY the named facet for THIS org.
+      let ans = '';
+      try {
+        const r = await runCloudOperator({ userMessage: rs.buildEnrichPrompt({ goal, org, facet, guidance }), context: '', task: true, autonomous: true });
+        ans = (r && r.answer) ? String(r.answer).trim() : '';
+      } catch (e) { console.error('[enrich] pass failed:', e.message); }
+      const p = rs.parsePass(ans);
+      // ORGANIZE this org's facet findings → one clean section, appended NOW (continuous, like discovery).
+      try { section = await condenseComplete(rs.buildOrganizeEnrichPrompt({ org, facet, raw: p.body || ans }), { numPredict: 1100 }); } catch {}
+      section = (section && section.trim()) ? section.trim() : `## ${org}\n- **${rs.facetLabel(facet)}:** ${((p.body || ans) || '').slice(0, 800).trim() || 'not found'}`;
+    }
+    const header = enriched.length === 0 ? `# Enrichment deliverable\n\n**Task:** ${goal}\n\n**Facet:** ${facet}${deepMode ? ' (deep two-lane research)' : ''}\n\n---\n\n` : '';
     try { await filesLib.dispatch({ tag: 'file-append', attrs: { path: file }, body: `${header}${section}\n\n` }); }
     catch (e) { console.error('[enrich] append failed:', e.message); }
     // DRIVE → Canvas: mirror the organized section as a live per-org block as the run advances.
@@ -4464,7 +4512,7 @@ async function runEnrichResearchPass(focus) {
     // Advancing one org per pass with a distinct signature = never looks "stuck"; progressed reflects real
     // content (so a run of empty "not found" passes still moves forward but is honestly logged).
     progressed = !!(section && section.length > 40);
-    note = `enriched ${org} → ${rs.facetLabel(facet)} (${enriched.length}/${sourceOrgs.length})`; sig = `enrich:${org.toLowerCase()}`;
+    note = `enriched ${org} → ${rs.facetLabel(facet)} (${enriched.length}/${sourceOrgs.length})${laneNote}`; sig = `enrich:${org.toLowerCase()}`;
   }
 
   if (note) {
@@ -4485,7 +4533,7 @@ async function runEnrichResearchPass(focus) {
 // dossier's orgs and whose single job is to fill `facet` across all of them. Returns { focus, orgs } or
 // null. Does NOT kick the driver — the caller decides when to start (live entry kicks it; the re-establish
 // script lets Lucas start it deliberately). Pure-ish: only focus/meta writes + a full dossier read.
-async function establishEnrichRun({ sourceFocusId = null, facet = '', sourceTurnId = null, priorGoal = '' } = {}) {
+async function establishEnrichRun({ sourceFocusId = null, facet = '', sourceTurnId = null, priorGoal = '', deep = false } = {}) {
   const cd = require('./lib/condense');
   const focusLib = require('./lib/focus');
   if (!facet || !facet.trim()) return null;
@@ -4504,8 +4552,9 @@ async function establishEnrichRun({ sourceFocusId = null, facet = '', sourceTurn
     db.setMeta(`focus.${fid}.enrich_source`, String(sourceFocusId || ''));
     db.setMeta(`focus.${fid}.covered`, '[]');
     db.setMeta(`focus.${fid}.file`, `notes/directed-${fid}.md`);
+    if (deep) db.setMeta(`focus.${fid}.deep`, '1');   // two-lane (web ∥ structured) per org
   } catch (e) { console.error('[enrich] establish meta failed:', e.message); }
-  console.log(`[enrich] established #${fid} over #${sourceFocusId} — ${orgs.length} orgs, facet: ${facet.slice(0, 60)}`);
+  console.log(`[enrich] established #${fid} over #${sourceFocusId} — ${orgs.length} orgs, facet: ${facet.slice(0, 60)}${deep ? ' [DEEP two-lane]' : ''}`);
   return { focus: r.focus, orgs };
 }
 

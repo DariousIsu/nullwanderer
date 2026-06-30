@@ -56,5 +56,24 @@ const dossier = `# Directed research deliverable\n\n## Summary\nblah\n\n## Herit
 const dorgs = cd.dossierOrgs(dossier);
 ok(dorgs.length === 2 && dorgs[0] === 'Heritage Foundation' && dorgs[1] === 'Cato Institute', 'dossierOrgs pulls real orgs, skips Summary/Gaps');
 
+// --- TWO-LANE DEEP RESEARCH: detection + lane prompts + merge ---
+ok(cd.detectDeep('expand the think tanks deeply') === true, '"deeply" → deep mode');
+ok(cd.detectDeep('do a deep dive on each') === true, '"deep dive" → deep mode');
+ok(cd.detectDeep('expand the think tank research for their VPs') === false, 'plain expand → NOT deep');
+const exd = cd.detectExpandOrder('expand the think tanks deeply for their policy VPs');
+ok(exd.isExpand && exd.deep === true && exd.enrichFacet !== '', 'expand order carries deep + facet together');
+
+const webP = rs.buildWebLanePrompt({ org: 'Cato Institute', facet: 'policy VPs', guidance: '' });
+ok(/WEB-RESEARCH lane/i.test(webP) && /OPEN INTERNET/i.test(webP) && /Cato Institute/.test(webP), 'web-lane prompt: open-internet, names the org');
+ok(/another lane is separately pulling structured/i.test(webP), 'web-lane prompt tells it the deep lane handles structured data (no overlap)');
+const deepP = rs.buildDeepLanePrompt({ org: 'Cato Institute', facet: 'policy VPs', guidance: '' });
+ok(/STRUCTURED-DATA lane/i.test(deepP) && /Do NOT browse/i.test(deepP), 'deep-lane prompt: structured only, do NOT browse');
+ok(/nonprofit_lookup/.test(deepP) && /gov_funding/.test(deepP) && /kg_search/.test(deepP), 'deep-lane prompt steers to 990s / funding / our graph');
+
+const mp = rs.buildMergeLanesPrompt({ org: 'Cato Institute', facet: 'policy VPs', webRaw: 'Peter Goettler — President (web)', deepRaw: '990: revenue $40M; David Boaz — EVP' });
+ok(Array.isArray(mp) && /## Cato Institute/.test(mp[0].content), 'merge prompt emits the exact org heading');
+ok(/DEDUPE across lanes/i.test(mp[0].content) && /Financials & funding/i.test(mp[0].content), 'merge prompt dedupes + adds a structured financials line');
+ok(/Peter Goettler/.test(mp[1].content) && /David Boaz/.test(mp[1].content), 'merge prompt carries BOTH lane streams');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

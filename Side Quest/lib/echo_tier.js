@@ -67,7 +67,7 @@ function policyFor(name, { autonomous = false } = {}) {
 // text, args = an example arg hint, map(a) = turn the operator's simple args into the Echo schema.
 const READ_TOOLS = [
   {
-    op: 'nonprofit_lookup', tool: 'propublica_nonprofit_search',
+    op: 'nonprofit_lookup', tool: 'propublica_nonprofit_search', lane: 'deep',
     desc: 'find a 501(c)/nonprofit org by name + its IRS 990 financials, revenue, and exec-comp (great for think tanks, advocacy orgs, foundations)',
     args: '{"query":"Heritage Foundation","state":"DC"}',
     map: (a = {}) => ({ query: String(a.query || a.name || a.q || ''), state: a.state || null, c_code: a.c_code || null, page: a.page || 0 })
@@ -110,17 +110,69 @@ const READ_TOOLS = [
   }
 ];
 
-// The TOOL_SPEC block for the curated read tools — appended to the operator's menu. Kept compact so
-// the menu stays learnable; the generic `echo` tool covers everything not listed here.
-function operatorReadSpec() {
-  const lines = READ_TOOLS.map(t => `- ${t.op} ${t.args}\n    ${t.desc}`);
-  return `ECHO DATA TOOLS (OUR structured data + public records — prefer these over a web scrape when one fits; say so honestly if a result is empty):\n${lines.join('\n')}`;
+// --- the WEB lane (open-internet Echo tools, folded into the web-browsing track) -------------------
+// These do the SAME kind of work as her own browser (fetch + read a page on the open web), so they
+// belong in the WEB lane next to web_search/open_page/browser_read — NOT in the deep/structured lane.
+const WEB_TOOLS = [
+  {
+    op: 'web_fetch', tool: 'web_fetch', lane: 'web',
+    desc: 'fetch a URL reliably (4-tier fallback — beats the browser on plain pages, PDFs, and bot-walls)',
+    args: '{"url":"https://example.org/team"}',
+    map: (a = {}) => ({ url: String(a.url || ''), depth: a.depth || 'auto' })
+  },
+  {
+    op: 'web_extract', tool: 'web_extract', lane: 'web',
+    desc: 'fetch a URL and pull just its readable article/body text (strips nav/boilerplate)',
+    args: '{"url":"https://example.org/about"}',
+    map: (a = {}) => ({ url: String(a.url || ''), min_text_chars: a.min_text_chars || 200 })
+  },
+  {
+    op: 'news_search', tool: 'gdelt_article_search', lane: 'web',
+    desc: 'search global news coverage for an org/person/topic (recent activity, controversies, statements)',
+    args: '{"query":"Heritage Foundation"}',
+    map: (a = {}) => ({ query: String(a.query || ''), timespan: a.timespan || null, max_records: a.max_records || 25 })
+  }
+];
+
+// Every curated first-class tool (read + web), so main.js can wire all executors in one loop.
+const ALL_CURATED = READ_TOOLS.concat(WEB_TOOLS);
+
+// --- lanes: which RESEARCH lane a tool belongs to (the two-track split) ----------------------------
+// 'web'  = open-internet fetch/read/news (her browser + the web_* / gdelt / wiki / feed tools)
+// 'deep' = structured/authoritative databases + our own knowledge graph (the rest of the read surface)
+const WEB_LANE_RE = /^(web_|gdelt_|wayback|verify_url|mediawiki_|fetch_feed|hackernews|spaceflight_news|rag.?web|chronicling_america)/i;
+function laneOf(name) {
+  if (classifyTool(name) !== 'read') return null;       // only read tools have a research lane
+  return WEB_LANE_RE.test(String(name || '')) ? 'web' : 'deep';
 }
 
-// Look up a curated read tool by its operator-facing op name.
-function readToolByOp(op) { return READ_TOOLS.find(t => t.op === String(op || '')) || null; }
+// The operator-facing tool NAMES for one lane (used by runCloudOperator to filter executors). The web
+// lane carries her browser tools; the deep lane carries the structured tools. Both keep recall + the
+// generic `echo` escape hatch (read-gated). Neither writes files — the driver merges + writes.
+function laneToolNames(lane) {
+  if (lane === 'web') return ['web_search', 'open_page', 'browser_read'].concat(WEB_TOOLS.map(t => t.op)).concat(['recall', 'echo']);
+  return READ_TOOLS.map(t => t.op).concat(['recall', 'echo']);
+}
+
+// The curated-tool spec lines for one lane (the Echo tools only; main.js prepends the browser lines
+// for the web lane). Compact, lane-scoped.
+function laneSpec(lane) {
+  const set = lane === 'web' ? WEB_TOOLS : READ_TOOLS;
+  return set.map(t => `- ${t.op} ${t.args}\n    ${t.desc}`).join('\n');
+}
+
+// The TOOL_SPEC block for the curated read tools — appended to the operator's (single-lane) menu. Kept
+// compact so the menu stays learnable; the generic `echo` tool covers everything not listed here.
+function operatorReadSpec() {
+  const lines = ALL_CURATED.map(t => `- ${t.op} ${t.args}\n    ${t.desc}`);
+  return `ECHO DATA TOOLS (OUR structured data + public records + reliable web fetch — prefer these over a raw scrape when one fits; say so honestly if a result is empty):\n${lines.join('\n')}`;
+}
+
+// Look up a curated tool by its operator-facing op name (read or web).
+function readToolByOp(op) { return ALL_CURATED.find(t => t.op === String(op || '')) || null; }
 
 module.exports = {
-  classifyTool, allowedOnAuto, policyFor, operatorReadSpec, readToolByOp, READ_TOOLS,
-  LOCKED_RE, HEAVY_RE, WRITE_RE, READ_RE
+  classifyTool, allowedOnAuto, policyFor, operatorReadSpec, readToolByOp,
+  READ_TOOLS, WEB_TOOLS, ALL_CURATED, laneOf, laneToolNames, laneSpec,
+  LOCKED_RE, HEAVY_RE, WRITE_RE, READ_RE, WEB_LANE_RE
 };

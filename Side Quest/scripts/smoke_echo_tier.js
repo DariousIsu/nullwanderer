@@ -53,6 +53,21 @@ ok(/ECHO DATA TOOLS/.test(spec), 'operator menu has the ECHO DATA TOOLS section 
 ok(tier.READ_TOOLS.every(t => tier.classifyTool(t.tool) === 'read'), 'every curated tool classifies as read (none can be blocked on auto)');
 ok(typeof tier.readToolByOp('fec_lookup') === 'object' && tier.readToolByOp('fec_lookup').tool === 'fec_committee_search', 'readToolByOp resolves op → real tool');
 
+// --- LANES: the web/deep split (the two-track research architecture) ---
+ok(tier.classifyTool('web_fetch') === 'read' && tier.classifyTool('web_extract') === 'read', 'web_fetch/web_extract → read (so they run on auto)');
+ok(tier.laneOf('web_fetch') === 'web' && tier.laneOf('gdelt_article_search') === 'web', 'web_fetch / gdelt → web lane');
+ok(tier.laneOf('search_entities') === 'deep' && tier.laneOf('propublica_nonprofit_search') === 'deep', 'KG / nonprofit → deep lane');
+ok(tier.laneOf('ingest_file') === null, 'a write tool has no research lane (null)');
+const webNames = tier.laneToolNames('web');
+const deepNames = tier.laneToolNames('deep');
+ok(webNames.includes('web_search') && webNames.includes('web_fetch') && webNames.includes('news_search') && webNames.includes('echo'), 'web lane tools = browser + web_fetch + news + echo');
+ok(!webNames.includes('nonprofit_lookup') && !webNames.includes('gov_funding'), 'web lane EXCLUDES the structured tools');
+ok(deepNames.includes('nonprofit_lookup') && deepNames.includes('kg_search') && deepNames.includes('echo'), 'deep lane tools = structured + echo');
+ok(!deepNames.includes('web_search') && !deepNames.includes('open_page') && !deepNames.includes('web_fetch'), 'deep lane EXCLUDES all browsing tools (web folds into the web lane)');
+ok(/web_fetch/.test(tier.laneSpec('web')) && /nonprofit_lookup/.test(tier.laneSpec('deep')), 'laneSpec lists the right tools per lane');
+ok(tier.ALL_CURATED.length === tier.READ_TOOLS.length + tier.WEB_TOOLS.length, 'ALL_CURATED = read + web tools');
+ok(/web_fetch/.test(tier.operatorReadSpec()), 'single-lane operator menu now also lists the web tools');
+
 // --- the GATE in echo_suit.dispatch, with a mock connected suit ---
 const calls = [];
 const mkResult = (txt) => ({ content: [{ text: txt }] });

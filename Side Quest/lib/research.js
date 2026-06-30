@@ -148,6 +148,35 @@ function buildEnrichPrompt({ goal = '', org = '', facet = '', guidance = '' } = 
   return `You are FILLING IN one specific piece of information about a KNOWN organization for Lucas. You are NOT looking for new organizations — the organization is fixed below.\n\nTASK: ${goal}\nORGANIZATION: ${org}\nWHAT TO FIND THIS PASS: ${facet}\n${g}\nGo to ${org}'s OWN website — its /team, /leadership, /staff, /about, /contact, /press pages — and any reliable source, and gather ONLY: ${facet}. For EACH person, give their FULL name and exact title, plus a direct work email / phone / LinkedIn where available. When you land on the org's own site, use open_page to go straight into its /team, /leadership, /about and /contact pages and follow promising links — do NOT bounce to a fresh web_search until you've actually used the site you're on. Ground EVERY detail in what web_search / browser_read / echo actually return — never invent a name, title, email, or number. If a real, FULL name cannot be verified, write "not found" — NEVER use initials, abbreviations, or "VP"/"the VP" as a stand-in for a real name.\nReport what you found for ${org} now.`;
 }
 
+// --- TWO-LANE DEEP RESEARCH (web lane ∥ deep/structured lane → merge) ------------------------------
+// One target, worked CONCURRENTLY by two operators on two cloud models: the WEB lane hunts primary
+// sources on the open internet (her browser + reliable fetch), the DEEP lane pulls authoritative
+// STRUCTURED records the web won't surface (990 financials, federal funding, FEC, our knowledge graph).
+// A merge pass then reconciles both raw streams into one section. This is the multi-cloud win: each
+// lane runs the model that fits its work, in parallel, then we fold the results together.
+
+// WEB lane: find the people/contacts/recent-activity on the open web. Browser + web fetch only.
+function buildWebLanePrompt({ goal = '', org = '', facet = '', guidance = '' } = {}) {
+  const g = guidance ? `\n${guidance}\n` : '';
+  return `You are the WEB-RESEARCH lane for a known organization. Use the OPEN INTERNET only (her browser + web fetch) — another lane is separately pulling structured database records, so you do NOT need those.\n\nORGANIZATION: ${org}\nWHAT TO FIND: ${facet}\n${g}\nGo to ${org}'s OWN website (/team, /leadership, /staff, /about, /contact, /press) and reputable open-web sources, and gather: ${facet}. Give each person's FULL name, exact title, and any direct work email / phone / LinkedIn. Ground EVERY detail in what the tools actually return — never invent; write "not found" rather than a placeholder or initials. Report what you found for ${org}.`;
+}
+
+// DEEP lane: pull STRUCTURED, authoritative records — the things you can't get by browsing.
+function buildDeepLanePrompt({ goal = '', org = '', facet = '', guidance = '' } = {}) {
+  const g = guidance ? `\n${guidance}\n` : '';
+  return `You are the DEEP / STRUCTURED-DATA lane for a known organization. Do NOT browse the open web (another lane does that). Use the STRUCTURED tools — IRS 990 financials, federal funding, FEC, and OUR knowledge graph — to surface authoritative records.\n\nORGANIZATION: ${org}\nFACET OF INTEREST: ${facet}\n${g}\nGATHER, where available: (1) nonprofit_lookup → the org's 990 leadership/board + exec-comp + revenue (often names the very officers the facet asks about); (2) gov_funding → federal grants/contracts it receives; (3) fec_lookup → any affiliated committees/PACs; (4) kg_search (+ kg_neighborhood on the id) → what OUR graph already knows about it and its people; (5) knowledge_search → our vault. Ground EVERY detail in what the tools return — never invent; write "not found" for anything missing. Report the structured findings for ${org}.`;
+}
+
+// MERGE: a reasoner folds the two raw lanes into ONE clean, deduped section. Reconcile overlaps (a
+// person found by BOTH lanes = one entry, richest version), keep the union, mark provenance lightly.
+function buildMergeLanesPrompt({ org = '', facet = '', webRaw = '', deepRaw = '' } = {}) {
+  const label = facetLabel(facet);
+  return [
+    { role: 'system', content: `You merge two research streams on ONE organization — a WEB-lane stream (open-internet) and a DEEP-lane stream (structured databases: 990s, funding, FEC, our graph) — into a SINGLE clean section. Rules:\n• Ground ONLY in the two streams below — never add a name, title, email, or number not present; write "not found" for anything missing. NEVER use initials/abbreviations/placeholders as a name.\n• DEDUPE across lanes: a person or fact found by BOTH lanes is ONE entry — keep the richest version (e.g. web gives the LinkedIn, the 990 gives the comp/role) and combine them.\n• Drop any leaked JSON / tool/control text.\nOutput EXACTLY this Markdown and nothing else:\n## ${org || '<organization>'}\n- **${label}:** <named individuals with roles + direct contacts, one per line; or "not found">\n- **Financials & funding (structured):** <990 revenue / exec-comp / federal funding / FEC ties the deep lane found; or "not found">` },
+    { role: 'user', content: `WEB-LANE FINDINGS on ${org}:\n"""\n${String(webRaw || '(none)').slice(0, 7000)}\n"""\n\nDEEP-LANE FINDINGS on ${org}:\n"""\n${String(deepRaw || '(none)').slice(0, 7000)}\n"""\n\nProduce the single merged section now.` }
+  ];
+}
+
 // Organize the enrich findings on ONE org into a clean, facet-scoped section appended to the deliverable.
 function buildOrganizeEnrichPrompt({ org = '', facet = '', raw = '' } = {}) {
   const label = facetLabel(facet);
@@ -170,5 +199,6 @@ module.exports = {
   isClarification, buildGuidanceBlock, isStatusRequest,
   buildNewTargetPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt,
   pickEnrichTarget, facetLabel, buildEnrichPrompt, buildOrganizeEnrichPrompt,
+  buildWebLanePrompt, buildDeepLanePrompt, buildMergeLanesPrompt,
   MAX_PASSES_PER_TARGET, MIN_NEW_CHARS
 };

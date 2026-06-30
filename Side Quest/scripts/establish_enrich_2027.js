@@ -20,6 +20,7 @@ const db = require('../lib/db');
 const cd = require('../lib/condense');
 
 const GO = process.argv.includes('--go');
+const DEEP = process.argv.includes('--deep');   // two-lane (web ∥ structured) per org
 const SOURCE_FOCUS_ID = 2027;
 const DOSSIER = path.join(__dirname, '..', 'data', 'zoe_workspace', 'notes', `directed-${SOURCE_FOCUS_ID}-dossier.md`);
 // Lucas's exact intent, pinned (turns 04:04 + 04:07): policy / public / government relations VPs + contacts.
@@ -56,9 +57,10 @@ const FACET = 'VPs (and equivalent senior leaders) of policy, public affairs, an
   db.setMeta(`focus.${fid}.enrich_source`, String(SOURCE_FOCUS_ID));
   db.setMeta(`focus.${fid}.covered`, '[]');
   db.setMeta(`focus.${fid}.file`, `notes/directed-${fid}.md`);
+  if (DEEP) db.setMeta(`focus.${fid}.deep`, '1');
   db.setMeta('research.last_referenced_focus_id', String(fid));
 
-  console.log(`\n[established] enrich focus #${fid} seeded (mode=enrich, ${orgs.length} orgs).`);
+  console.log(`\n[established] enrich focus #${fid} seeded (mode=enrich, ${orgs.length} orgs${DEEP ? ', DEEP two-lane' : ''}).`);
   console.log('NEXT: reboot the app — boot directed-resume will start the enrich driver on this focus.');
   process.exit(0);
 })();
