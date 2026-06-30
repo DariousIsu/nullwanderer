@@ -1,5 +1,5 @@
 const path = require('path');
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session } = require('electron');
 
 // CRASH SAFETY — before this there were NO global handlers, so any unhandled error/rejection killed
 // her with nothing logged (the meeting crash was invisible for exactly this reason). Log the stack
@@ -254,11 +254,29 @@ function createWorkspaceWindow() {
 }
 
 let canvasWindow = null;
+let zoeMeetPartitionReady = false;
+// The Meet-in-canvas pane hosts Google Meet in a <webview partition="persist:zoe-google"> — ZOE's
+// OWN Google session (zoelanai@…), distinct from the operator's calendar OAuth. Grant camera/mic to
+// that partition's session (scoped — never to the whole app) so getUserMedia works inside the pane.
+// Idempotent; called when the Canvas window is created.
+function configureZoeMeetPartition() {
+  if (zoeMeetPartitionReady) return;
+  try {
+    const sess = session.fromPartition('persist:zoe-google');
+    const ALLOW = new Set(['media', 'audioCapture', 'videoCapture', 'fullscreen', 'notifications', 'display-capture']);
+    sess.setPermissionRequestHandler((_wc, permission, cb) => cb(ALLOW.has(permission)));
+    sess.setPermissionCheckHandler((_wc, permission) => ALLOW.has(permission));
+    zoeMeetPartitionReady = true;
+  } catch (e) { console.error('[meet] partition config failed:', e.message); }
+}
+
 // Zoe's Canvas — the THIRD window of the model, distinct from the operator workbench: ZOE's own
 // surface for large deliverables + visual aids (she populates it; the saga store is the system of
-// record). Loads canvas.html directly as a full page (no webview host). Read-only in Slice 1.
+// record). Also hosts the Meet-in-canvas pane (Slice 6) so she can join meetings as herself without
+// monopolizing her dedicated CDP browser. Loads canvas.html directly as a full page.
 function createCanvasWindow() {
   if (canvasWindow && !canvasWindow.isDestroyed()) { canvasWindow.focus(); return canvasWindow; }
+  configureZoeMeetPartition();
   canvasWindow = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -271,7 +289,15 @@ function createCanvasWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      webviewTag: true,   // hosts the Meet pane's <webview> (Slice 6)
     }
+  });
+  // The Meet <webview> runs Google content — keep it locked down (no node, isolated) and never force
+  // our preload onto it (it's not a Side-Quest surface). The canvas page itself keeps the sq preload.
+  canvasWindow.webContents.on('will-attach-webview', (_e, webPreferences) => {
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    delete webPreferences.preload;
   });
   canvasWindow.loadFile(path.join(__dirname, 'renderer', 'canvas.html'));
   canvasWindow.once('ready-to-show', () => { canvasWindow.show(); canvasWindow.focus(); });
@@ -767,6 +793,21 @@ app.on('window-all-closed', async () => {
 ipcMain.handle('editor:open', () => { createEditorWindow(); return { ok: true }; });
 ipcMain.handle('workspace:open', () => { createWorkspaceWindow(); return { ok: true }; });
 ipcMain.handle('canvas:open', () => { createCanvasWindow(); return { ok: true }; });
+
+// Meet-in-canvas (Slice 6): route a Meet URL into Zoe's Canvas pane (she joins as herself in the
+// persist:zoe-google partition), freeing her dedicated CDP browser. Opens/focuses the Canvas window
+// and tells its renderer to mount the Meet webview. Operator/Zoe-initiated only.
+ipcMain.handle('meet:join', (_e, { url, title } = {}) => {
+  try {
+    if (!url || !/^https?:\/\//i.test(String(url))) return { ok: false, error: 'invalid meet url' };
+    const win = createCanvasWindow();
+    const payload = { url: String(url), title: title || 'Google Meet' };
+    const send = () => { try { win.webContents.send('canvas:meet-join', payload); } catch {} };
+    if (win.webContents.isLoading()) win.webContents.once('did-finish-load', send); else send();
+    win.focus();
+    return { ok: true };
+  } catch (e) { console.error('[meet] join failed:', e.message); return { ok: false, error: e.message }; }
+});
 
 ipcMain.handle('editor:list-documents', (_e, opts = {}) => {
   try { return { ok: true, documents: editorRegistry.listDocuments(opts) }; }
@@ -2886,6 +2927,37 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   } catch (e) { console.error('[intake] gate failed:', e.message); }
 
+  // DOC-QA — a question/extraction AGAINST a document Lucas handed her (a canvas drop she ingested), e.g.
+  // "pull my responsibilities out of the meeting notes". This is the completion of canvas-ingest: READ the
+  // held doc + extract the GROUNDED answer NOW, instead of the intake gate spinning it into a research run
+  // (the live misfire that created #2693 with a hollow "search the databases" plan). When it answers it
+  // SHORT-CIRCUITS the poll / operator / standing-focus below (so no project is created).
+  let docQaHandled = false;
+  try {
+    const docQa = require('./lib/doc_qa');
+    if (!socialTurn && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled && docQa.isDocQuery(userMessage)) {
+      let snap = null; try { snap = await canvasSnapshot(); } catch {}
+      const ci = require('./lib/canvas_ingest');
+      const tabs = (snap && Array.isArray(snap.tabs)) ? snap.tabs : [];
+      const candidates = tabs.filter(t => ci.isIngestableTab(t)).map(t => {
+        const key = ci.tabKeyOf(t);
+        const blocks = (snap.blocks_by_tab && Array.isArray(snap.blocks_by_tab[key])) ? snap.blocks_by_tab[key] : [];
+        return { title: ci.cleanTitle(t.title), markdown: ci.extractMarkdown(blocks), openedAt: t.opened_at || t.openedAt || 0 };
+      });
+      const doc = docQa.pickRelevantDoc(userMessage, candidates);
+      if (doc && doc.markdown && doc.markdown.length > 40) {
+        const answer = await condenseComplete(docQa.buildExtractPrompt({ question: userMessage, docTitle: doc.title, docText: doc.markdown }), { numPredict: 1200 });
+        if (answer && answer.trim()) {
+          docQaHandled = true;
+          composedUserMessage += `\n\n[DELIVER TO ${userName} — he asked you to extract this FROM a document he gave you ("${doc.title}"), and you READ it and pulled the answer grounded in it. Present it in your own voice: keep every item, do not summarize away detail or pad. A one-line lead-in is fine, then the answer:\n${answer}]`;
+          try { db.insertMonologue({ content: `Answered Lucas from the document "${doc.title}": ${answer.slice(0, 200)}`, model: 'doc_qa', type: 'reading', query: doc.title }); } catch {}
+          console.log(`[doc-qa] answered "${String(userMessage).slice(0, 50)}" from "${doc.title}" (${doc.markdown.length} chars)`);
+        }
+      }
+      if (!docQaHandled) console.log('[doc-qa] doc query detected but no usable held doc found — falling through');
+    }
+  } catch (e) { console.error('[doc-qa]', e.message); }
+
   // INTERFACE POLL (Slice I) — the interface polls the brain through ONE deterministic router instead of
   // answering from its own (lossy) memory. Sources register here; the router picks who answers, preferring
   // deterministic (program-grounded) sources. Two registered today:
@@ -2895,7 +2967,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // Lanes (media/meeting/news) register more sources here as they land — no new branch in the pipeline.
   let statusHandled = false;
   try {
-    if (!directedStopHandled && !expandHandled && !followupFired && !isAssignment && !correctionHandled) {
+    if (!directedStopHandled && !expandHandled && !followupFired && !isAssignment && !correctionHandled && !docQaHandled) {
       const tk = require('./lib/track');
       const act = require('./lib/activity');
       const ri = require('./lib/records_interp');
@@ -3016,7 +3088,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           || /\b(look ?up|search|find|pull ?up|fetch|what'?s the|how much|how many|latest|current|when (is|was|did|does)|where (is|was)|who (is|was|are)|our (data|records|numbers|polling|crm|bills|contacts|knowledge))\b/i.test(userMessage);
       } catch { return false; }
     })();
-    if (opMode !== 'off' && (needsExternal || isAssignment) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && userMessage && userMessage.trim().length > 6) {
+    if (opMode !== 'off' && (needsExternal || isAssignment) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && userMessage && userMessage.trim().length > 6) {
       // directed (in-turn completion mode) when this is an assignment (intake gate, or regex fallback).
       const directed = isAssignment;
       // Immediate feedback — the agent loop can take a few seconds. Use a REQUEST-SERVING placeholder
@@ -3050,7 +3122,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // i.e. intakeRoute is null). Either way we only CREATE a run when there's a real project to run.
     const intakeSaysProject = !!(intakeRoute && intakeRoute.action !== 'none');
     const regexFallback = (intakeRoute === null) && (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
-    if (opModeOn && (intakeSaysProject || regexFallback) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled) {
+    if (opModeOn && (intakeSaysProject || regexFallback) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled) {
       const already = (() => { try { const f = focusLib.getCurrent(); return !!(f && focusLib.isDirected(f)); } catch { return false; } })();
       if (!already) {
         const clarTail = (intakeRoute && intakeRoute.clarify && intakeRoute.clarify.length)

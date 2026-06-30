@@ -29,9 +29,10 @@ async function classify(message, { recent = '', activeFocus = '', existingRecord
   const fastModel = (() => { try { return require('./models').getModelFor('editor', null); } catch { return null; } })();
   try {
     return await ask({
-      task: 'work_intake', v: 2, model: fastModel, numPredict: 700,
+      task: 'work_intake', v: 3, model: fastModel, numPredict: 700,
       input: { user: s.slice(0, 800), recent: String(recent).slice(0, 400), active_task: String(activeFocus).slice(0, 160), existing_records: String(existingRecords).slice(0, 700) },
       want: 'You are the intake gate for Zoe. Decide whether the user is ASSIGNING A SUSTAINED TASK/PROJECT — work Zoe should carry out over time (research, gather, find, compile, generate, build, monitor, produce a deliverable) — as opposed to asking a question, a status check, or chatting. '
+        + 'CRITICAL: isProject=false when the user asks to EXTRACT / PULL / LIST / SUMMARIZE / FIND something FROM a document they already gave you (phrases like "from the notes", "in the meeting notes", "out of this document", "from the transcript", "what I dropped/gave you", "on the canvas") — that is a ONE-SHOT extraction answered immediately by READING that document, NOT a sustained research project. Only "research/gather/find/compile X" about the OUTSIDE WORLD (not from a doc they handed you) is a project. '
         + 'Output ONLY JSON: {"isProject":true|false,"mode":"enrich"|"discover","target":"short — what to work on","facet":"specifically what to gather/produce","priority":"red"|"orange"|"yellow"|null,"deep":true|false,"budget":{"kind":"deadline"|"duration"|"none","value":"the deadline or duration text, else null"},"subset":"a named subset like \'the 5 most complete\', else null","clarify":["at most 2 SHORT questions, ONLY if genuinely ambiguous; else []"]}. '
         + 'mode="enrich" when it DEEPENS or EXTENDS research/records we ALREADY hold (refers to "those", "the 5", "the think tanks", an existing dossier/list/the ones we have); mode="discover" for brand-new research. '
         + 'CRITICAL: if the input includes EXISTING_RECORDS and the user\'s target topic or named organizations APPEAR in those existing records, choose mode="enrich" (we already have them — deepen/extend, do not start over). '
