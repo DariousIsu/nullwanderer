@@ -2840,8 +2840,23 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // 24B trying to remember a tag. Substantive turns only; fail-safe (null → the normal local reply).
   // Reversible: db meta operator.mode = full (default) | off.
   let operatorAnswer = null;
+  let intakeRoute = null;   // the INTAKE GATE decision (project? how to run it?), used by the operator + standing-focus blocks below
   try {
     const opMode = (() => { try { return (db.getMeta('operator.mode') || 'full').trim(); } catch { return 'full'; } })();
+    // INTAKE GATE — the systemic project recognizer (replaces brittle isDirectedTask as the PRIMARY
+    // signal): one cloud pass decides is-this-a-project + how to run it (discover/enrich, deep, priority,
+    // budget, subset). Gated to substantive, not-already-handled turns. FAIL-SAFE: null (cloud down/over
+    // budget) → the isDirectedTask regex fallback still applies below, so we never regress to nothing.
+    try {
+      if (opMode !== 'off' && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && userMessage && userMessage.trim().length > 6) {
+        const intake = require('./lib/intake');
+        const af = (() => { try { const f = require('./lib/focus').getCurrent(); return f ? String(f.content || '') : ''; } catch { return ''; } })();
+        const recent = (recentTurns || []).slice(-3).map(t => `${t.speaker || '?'}: ${String(t.content || '').slice(0, 120)}`).join(' | ');
+        const decision = await intake.classify(userMessage, { recent, activeFocus: af });
+        if (decision) intakeRoute = intake.route(decision);
+        if (intakeRoute && intakeRoute.action !== 'none') console.log(`[intake] → ${intakeRoute.action}${intakeRoute.deep ? ' deep' : ''}${intakeRoute.priority ? ' ' + intakeRoute.priority : ''} (facet: ${String(intakeRoute.facet).slice(0, 50)})`);
+      }
+    } catch (e) { console.error('[intake] gate failed:', e.message); }
     // The operator is for turns that NEED external capability (a task, a lookup, our data) — NOT for
     // conversation. Fronting every turn with "operator answer → Dans voices it" flattened dialogue
     // into transactional Q&A and cost cohesion/complexity. So gate it: capability turns → operator;
@@ -2857,8 +2872,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           || /\b(look ?up|search|find|pull ?up|fetch|what'?s the|how much|how many|latest|current|when (is|was|did|does)|where (is|was)|who (is|was|are)|our (data|records|numbers|polling|crm|bills|contacts|knowledge))\b/i.test(userMessage);
       } catch { return false; }
     })();
-    if (opMode !== 'off' && needsExternal && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && userMessage && userMessage.trim().length > 6) {
-      const directed = (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
+    const intakeProject = !!(intakeRoute && intakeRoute.action !== 'none');
+    if (opMode !== 'off' && (needsExternal || intakeProject) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && userMessage && userMessage.trim().length > 6) {
+      // directed (in-turn completion mode) = the intake gate says project, else the regex fallback.
+      const directed = intakeProject || (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
       // Immediate feedback — the agent loop can take a few seconds. Use a REQUEST-SERVING placeholder
       // ("on it — starting on that now"), NOT the self-focused "I'm in the middle of something" busy
       // line, which reads as brushing Lucas off the instant he hands her a task.
@@ -2886,19 +2903,54 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     const focusLib = require('./lib/focus');
     const opModeOn = (() => { try { return (db.getMeta('operator.mode') || 'full').trim() !== 'off'; } catch { return true; } })();
-    if (opModeOn && require('./lib/operator').isDirectedTask(userMessage) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled) {
+    // PRIMARY = the intake gate; FALLBACK = the isDirectedTask regex (only when the cloud was unavailable,
+    // i.e. intakeRoute is null). Either way we only CREATE a run when there's a real project to run.
+    const intakeSaysProject = !!(intakeRoute && intakeRoute.action !== 'none');
+    const regexFallback = (intakeRoute === null) && (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
+    if (opModeOn && (intakeSaysProject || regexFallback) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled) {
       const already = (() => { try { const f = focusLib.getCurrent(); return !!(f && focusLib.isDirected(f)); } catch { return false; } })();
       if (!already) {
-        // Keep the WHOLE assignment — a 240-char cap was severing the task mid-sentence (it cut "study
-        // every think tank that deal with politics, policy, energy," and dropped "…the environment,
-        // AI… what they are, WHO WORKS THERE, and HOW TO CONTACT them"), so the driver never saw the
-        // staff/contact requirement and produced only generic org blurbs. 800 captures a full directive.
-        const goal = userMessage.replace(/\s+/g, ' ').trim().slice(0, 800);
-        const r = await focusLib.setFromDirective(goal, userTurnRow && userTurnRow.id);
-        if (r && r.focus) {
-          kickDirectedFocusDriver();
-          composedUserMessage += `\n\n[You have ACCEPTED this as a standing task and STARTED working it for real — it is now your active focus, and you will keep researching it slice by slice (saving what you find) until it's done or ${userName} tells you to stop. Tell him plainly you've started and are on it, in one or two sentences, in your own voice. CRITICAL: do NOT invent findings, a "spreadsheet", a document, or any source you do not actually have yet — if you have nothing concrete to show in THIS reply, simply say you've begun and will keep at it.]`;
-          console.log(`[focus] directed task → standing focus #${r.focus.id} created + driver kicked`);
+        const clarTail = (intakeRoute && intakeRoute.clarify && intakeRoute.clarify.length)
+          ? ` You've STARTED already; you may ALSO ask this one clarifying question to sharpen it (without implying you haven't begun): "${intakeRoute.clarify[0]}"` : '';
+        const honesty = `CRITICAL: do NOT invent findings, a "spreadsheet", a document, or any source you do not actually have yet — if you have nothing concrete to show in THIS reply, simply say you've begun and will keep at it.`;
+        let created = null;   // { id, kind } — set ONLY when a run is genuinely created (the ack is conditional on this)
+
+        // ENRICH branch — the intake gate says DEEPEN records we already hold ("more contacts for those 5").
+        if (intakeRoute && intakeRoute.action === 'enrich') {
+          try {
+            const srcId = (() => {
+              try { const ref = parseInt(db.getMeta('research.last_referenced_focus_id') || '0', 10); if (ref) return ref; } catch {}
+              try { const ld = JSON.parse(db.getMeta('research.last_dossier') || 'null'); return (ld && ld.focusId) || null; } catch { return null; }
+            })();
+            if (srcId) {
+              const topN = require('./lib/intake').subsetTopN(intakeRoute.subset);
+              const facet = intakeRoute.facet || `more detail and contacts${intakeRoute.target ? ' on ' + intakeRoute.target : ''}`;
+              const er = await establishEnrichRun({ sourceFocusId: srcId, facet, sourceTurnId: userTurnRow && userTurnRow.id, deep: intakeRoute.deep, topN, priority: intakeRoute.priority });
+              if (er && er.focus) { kickDirectedFocusDriver(); created = { id: er.focus.id, kind: `${intakeRoute.deep ? 'deep ' : ''}enrich of ${er.orgs.length} org(s) for ${facet}` }; }
+            }
+          } catch (e) { console.error('[intake] enrich setup failed:', e.message); }
+        }
+        // DISCOVER branch (or enrich that couldn't resolve a source) — a fresh standing research focus.
+        if (!created) {
+          const goal = (intakeRoute && (intakeRoute.target || intakeRoute.facet))
+            ? `${intakeRoute.target}${intakeRoute.facet ? ` — gather: ${intakeRoute.facet}` : ''}`.slice(0, 800)
+            : userMessage.replace(/\s+/g, ' ').trim().slice(0, 800);
+          const r = await focusLib.setFromDirective(goal, userTurnRow && userTurnRow.id);
+          if (r && r.focus) {
+            try { if (intakeRoute && intakeRoute.deep) db.setMeta(`focus.${r.focus.id}.deep`, '1'); } catch {}
+            try { if (intakeRoute && intakeRoute.priority) db.setMeta(`focus.${r.focus.id}.priority`, String(intakeRoute.priority)); } catch {}
+            kickDirectedFocusDriver();
+            created = { id: r.focus.id, kind: `${intakeRoute && intakeRoute.deep ? 'deep ' : ''}research run` };
+          }
+        }
+
+        if (created) {
+          composedUserMessage += `\n\n[You have ACCEPTED this as a standing task and STARTED working it for real — it is now your active focus (a ${created.kind}) and you will keep working it slice by slice (saving what you find) until it's done or ${userName} tells you to stop. Tell him plainly you've started and are on it, in one or two sentences, in your own voice.${clarTail} ${honesty}]`;
+          console.log(`[focus] intake → standing focus #${created.id} created (${created.kind}) + driver kicked`);
+        } else {
+          // We RECOGNIZED a project but could NOT create the run — be honest, never claim it's underway.
+          composedUserMessage += `\n\n[${userName} just gave you a task but you could not actually start it (the run couldn't be set up). Tell him plainly that you understand the task but ran into a problem starting it — do NOT claim you've begun or invent any progress.]`;
+          console.log('[focus] intake recognized a project but run creation failed — honest no-start ack');
         }
       } else {
         composedUserMessage += `\n\n[This is the task you are ALREADY working as your standing focus. Give ${userName} a brief, honest status from what you've ACTUALLY gathered so far (see your context/memory above) and confirm you're still on it. Do NOT fabricate progress, findings, or sources.]`;
@@ -4632,14 +4684,23 @@ async function runEnrichResearchPass(focus) {
 // dossier's orgs and whose single job is to fill `facet` across all of them. Returns { focus, orgs } or
 // null. Does NOT kick the driver — the caller decides when to start (live entry kicks it; the re-establish
 // script lets Lucas start it deliberately). Pure-ish: only focus/meta writes + a full dossier read.
-async function establishEnrichRun({ sourceFocusId = null, facet = '', sourceTurnId = null, priorGoal = '', deep = false } = {}) {
+async function establishEnrichRun({ sourceFocusId = null, facet = '', sourceTurnId = null, priorGoal = '', deep = false, topN = null, priority = null } = {}) {
   const cd = require('./lib/condense');
   const focusLib = require('./lib/focus');
   if (!facet || !facet.trim()) return null;
   const path = `notes/directed-${sourceFocusId}-dossier.md`;
   let dossier = ''; try { const r = filesLib.fileReadFull(path); dossier = (r && r.text) || ''; } catch {}
-  const orgs = cd.dossierOrgs(dossier);
+  let orgs = cd.dossierOrgs(dossier);
   if (!orgs.length) { console.log(`[enrich] no orgs in ${path} — cannot establish`); return null; }
+  // SUBSET ("the 5 most complete"): narrow the work-list to the top-N by MEASURED completeness.
+  if (topN && topN > 0 && topN < orgs.length) {
+    try {
+      const as = require('./lib/assemble'); const rc = require('./lib/record_completeness');
+      const { sections } = as.parseSections(dossier);
+      const ranked = rc.rankByCompleteness(sections).slice(0, topN).map(s => s.heading);
+      if (ranked.length) orgs = ranked;
+    } catch (e) { console.error('[enrich] subset rank failed, using all:', e.message); }
+  }
   const goal = `Enrich the existing research on ${orgs.length} organization(s) by filling, FOR EACH, this facet: ${facet}. These orgs are already documented — deepen them, do NOT find new ones.${priorGoal ? ` (Deepens: "${String(priorGoal).slice(0, 140)}".)` : ''}`.slice(0, 780);
   const r = await focusLib.setFromDirective(goal, sourceTurnId);
   if (!r || !r.focus) return null;
@@ -4652,8 +4713,9 @@ async function establishEnrichRun({ sourceFocusId = null, facet = '', sourceTurn
     db.setMeta(`focus.${fid}.covered`, '[]');
     db.setMeta(`focus.${fid}.file`, `notes/directed-${fid}.md`);
     if (deep) db.setMeta(`focus.${fid}.deep`, '1');   // two-lane (web ∥ structured) per org
+    if (priority) db.setMeta(`focus.${fid}.priority`, String(priority));
   } catch (e) { console.error('[enrich] establish meta failed:', e.message); }
-  console.log(`[enrich] established #${fid} over #${sourceFocusId} — ${orgs.length} orgs, facet: ${facet.slice(0, 60)}${deep ? ' [DEEP two-lane]' : ''}`);
+  console.log(`[enrich] established #${fid} over #${sourceFocusId} — ${orgs.length} orgs, facet: ${facet.slice(0, 60)}${deep ? ' [DEEP]' : ''}${priority ? ' [' + priority + ']' : ''}`);
   return { focus: r.focus, orgs };
 }
 
