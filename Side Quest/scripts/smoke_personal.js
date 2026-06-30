@@ -24,7 +24,11 @@ for (const m of [
   'This is separate from your professional work, consider this your personal life',
   "it's your free time now",
   'off the clock, have some fun',
-  'take some personal time'
+  'take some personal time',
+  // the live miss (2026-06-29): these didn't flip the mode, so she pivoted back to work
+  "its not work time, its play and rest time",
+  'play time now',
+  'time to relax'
 ]) ok(`enter: "${m.slice(0, 40)}"`, personal.detectEnter(m));
 
 console.log('\nENTER detection (should NOT fire — ordinary work turns):');
@@ -76,6 +80,6 @@ ok('captures body', tags[0] && /heist/.test(tags[0].body));
 ok('web-watch parses', web.parseTags('<web-watch speaker="Mira"/>').length === 1);
 ok('buildPromptBlock advertises web-chat', /<web-chat/i.test(web.buildPromptBlock()));
 
-console.log(`\n${fail === 0 ? 'ALL PERSONAL-LANE TESTS OK' : 'SOME FAILURES'} — ${pass} passed, ${fail} failed`);
+console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 try { D.getDb().close(); } catch {}
 process.exit(fail === 0 ? 0 : 1);

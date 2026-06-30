@@ -29,7 +29,7 @@ const DEFAULT_DURATION_MS = 3 * 60 * 60 * 1000;  // "play for a few hours"
 // ordinary work turns never flip the mode by accident. Matched against the raw
 // user message (case-insensitive). Enter is the bigger net (Lucas grants leisure
 // many ways); exit is tight (only unmistakable "resume work" phrases).
-const ENTER_RE = /\b(go play|have some fun|have fun|indulge yourself|personal (?:time|life)|free time|off the clock|clock out|down\s?time|your own time|time (?:to|off) (?:yourself|relax)|enjoy yourself|do your own thing|go enjoy|play (?:on the internet|around|for a while))\b/i;
+const ENTER_RE = /\b(go play|have some fun|have fun|indulge yourself|personal (?:time|life)|free time|off the clock|clock out|down\s?time|your own time|time (?:to|off) (?:yourself|relax)|enjoy yourself|do your own thing|go enjoy|play (?:on the internet|around|for a while)|play\s?time|rest time|play and rest|not work time|it'?s not work\b|no more work|time to (?:rest|relax|unwind|chill)|kick back|wind down|relax time)\b/i;
 const EXIT_RE = /\b(back to work|clock in|on the clock|enough play|playtime'?s over|that'?s enough (?:play|fun)|let'?s (?:get to )?work|focus up|back on task|time to work)\b/i;
 
 function isOn() {
