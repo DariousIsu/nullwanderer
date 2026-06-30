@@ -854,8 +854,16 @@ async function runOneTick() {
     try {
       const scribe = require('./meeting_scribe');
       if (scribe.hasPending() && !gmeetLib.active()) {
+        const finalMinutes = (() => { try { return scribe.minutes(); } catch { return ''; } })();   // grab before finalize clears it
         const recap = await scribe.finalize();
         if (recap) { try { const rr = db.insertMonologue({ content: `Meeting record (scribe):\n${recap}`, model: 'scribe', type: 'reading' }); pushSheep({ id: rr.id, ts: rr.ts, content: '(scribe) meeting record', type: 'reading' }); } catch {} }
+        // INTEGRATE + GATE: land the completed notes (building-project document) + a companion transcript
+        // into the short-term documents store → nightly promotion to Echo. The meeting becomes first-class
+        // in the land→answer→promote memory pipeline, not just a one-off knowledge note.
+        try {
+          const ml = require('./meeting_lane').land({ minutes: finalMinutes, recap });
+          if (ml.landed) console.log(`[meeting] notes${ml.hasTranscript ? ' + companion transcript' : ''} landed in short-term store (doc ${ml.notesId}${ml.transcriptId ? `, transcript ${ml.transcriptId}` : ''})`);
+        } catch (e) { console.error('[meeting] artifact landing failed:', e.message); }
         console.log(`[scribe] finalized${recap ? ' (recap stored)' : ' (nothing substantive)'}`);
       }
     } catch (e) { console.error('[scribe] finalize failed:', e.message); }
