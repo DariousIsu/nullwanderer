@@ -838,36 +838,14 @@ async function runOneTick() {
         }
       });
       console.log(`[gmeet] ${res.stage}: ${res.note}`);
-      // SCRIBE (separate channel, own model) — record/document/analyze the meeting from the transcript
-      // she's capturing. Parallel to her actor (gmeet, above), which is untouched. Canvas meetings only.
-      if (canvasHosted) {
-        try { const sr = await require('./meeting_scribe').tick(); if (sr && sr.updated) console.log('[scribe] minutes updated'); }
-        catch (e) { console.error('[scribe] tick failed:', e.message); }
-      }
+      // SCRIBE runs on its OWN dedicated heartbeat now (main.startScribeHeartbeat), started when a canvas
+      // meeting begins — truly parallel to her actor (gmeet), never serialized with this idle tick.
     } catch (e) { console.error('[monologue] gmeet tick failed:', e.message); }
     return;
   }
 
-  // SCRIBE FINALIZE — the meeting ended (gmeet no longer active) but the scribe still has an open
-  // session: write the final record on its own model, then clear. Runs once, outside the meeting block.
-  if (!personalMode) {
-    try {
-      const scribe = require('./meeting_scribe');
-      if (scribe.hasPending() && !gmeetLib.active()) {
-        const finalMinutes = (() => { try { return scribe.minutes(); } catch { return ''; } })();   // grab before finalize clears it
-        const recap = await scribe.finalize();
-        if (recap) { try { const rr = db.insertMonologue({ content: `Meeting record (scribe):\n${recap}`, model: 'scribe', type: 'reading' }); pushSheep({ id: rr.id, ts: rr.ts, content: '(scribe) meeting record', type: 'reading' }); } catch {} }
-        // INTEGRATE + GATE: land the completed notes (building-project document) + a companion transcript
-        // into the short-term documents store → nightly promotion to Echo. The meeting becomes first-class
-        // in the land→answer→promote memory pipeline, not just a one-off knowledge note.
-        try {
-          const ml = require('./meeting_lane').land({ minutes: finalMinutes, recap });
-          if (ml.landed) console.log(`[meeting] notes${ml.hasTranscript ? ' + companion transcript' : ''} landed in short-term store (doc ${ml.notesId}${ml.transcriptId ? `, transcript ${ml.transcriptId}` : ''})`);
-        } catch (e) { console.error('[meeting] artifact landing failed:', e.message); }
-        console.log(`[scribe] finalized${recap ? ' (recap stored)' : ' (nothing substantive)'}`);
-      }
-    } catch (e) { console.error('[scribe] finalize failed:', e.message); }
-  }
+  // SCRIBE tick + finalize + artifact-landing moved to main.scribeHeartbeatTick — its OWN heartbeat owns
+  // the meeting-scribe lane (started on canvas-meeting begin), so it runs truly parallel to this idle tick.
 
   // MEDIA WATCH — caption-following now runs on its OWN faster heartbeat (scheduleCaption /
   // captionTick), a separate cloud model (gemma4:31b-cloud) from this thinking tick (gpt-oss:120b).

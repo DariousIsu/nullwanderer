@@ -33,6 +33,8 @@ const canvasView = require('./studio/canvas_view');          // Canvas surface: 
 const canvasLayout = require('./studio/canvas_layout');      // Canvas freeform board: pure placement math
 const calendarView = require('./studio/calendar_view');      // Calendar surface: Google Calendar v3 JSON → view shapes
 const gcal = require('./lib/gcal');                          // Calendar surface: Google token bridge + Calendar v3 read client
+const feedsView = require('./studio/feeds_view');            // Monitors widget: feed reports → merged item stream
+const feedsStore = require('./lib/feeds');                   // Monitors widget: operator's feed subscription list
 const canvasLayoutStore = require('./lib/canvas_layout');    // Canvas freeform board: operator's saved block positions
 const kgView = require('./studio/kg_view');                  // Knowledge Graph surface: graph tool payloads → nodes/links
 const docView = require('./studio/doc_view');                // Reader/Library surface: corpus doc payloads → reader view
@@ -739,6 +741,16 @@ app.whenReady().then(() => {
     console.log('[main] canvas drop→ingest poller started (every 45s)');
   }
 
+  // SCRIBE BOOT-RESUME: if the app restarted mid-meeting (canvas-hosted + gmeet still active, or a scribe
+  // session left open), re-attach the scribe heartbeat so the lane keeps documenting / finalizes cleanly.
+  try {
+    const canvasHosted = (db.getMeta('gmeet_host') || 'browser') === 'canvas';
+    if (canvasHosted && (require('./lib/gmeet').active() || require('./lib/meeting_scribe').hasPending())) {
+      startScribeHeartbeat();
+      console.log('[scribe] heartbeat resumed after restart (meeting still active / scribe pending)');
+    }
+  } catch (e) { console.error('[scribe] boot-resume check failed:', e.message); }
+
   // Browser layer status → forward to renderer
   browserLib.setListeners({
     onStatusChange: (s) => {
@@ -804,6 +816,7 @@ app.on('window-all-closed', async () => {
   if (inboxPollTimeout) { clearTimeout(inboxPollTimeout); inboxPollTimeout = null; }
   if (canvasIngestTimer) { clearInterval(canvasIngestTimer); canvasIngestTimer = null; }
   if (canvasIngestTimeout) { clearTimeout(canvasIngestTimeout); canvasIngestTimeout = null; }
+  try { stopScribeHeartbeat(); } catch {}
   try { actionLoop.abort(); } catch {}
   stopMonologueScheduler();
   stopHeartbeatScheduler();
@@ -829,6 +842,24 @@ app.on('window-all-closed', async () => {
 ipcMain.handle('editor:open', () => { createEditorWindow(); return { ok: true }; });
 ipcMain.handle('workspace:open', () => { createWorkspaceWindow(); return { ok: true }; });
 ipcMain.handle('canvas:open', () => { createCanvasWindow(); return { ok: true }; });
+
+// ============================ MONITORS (canvas news-feed widget) =============================
+// Side Quest half: subscription CRUD + fetch via the engine's fetch_feeds_batch, mapped to a merged
+// newest-first item stream (studio/feeds_view). Where items get stored + how Zoe cognizes them is the
+// Zoe-builder's lane. Read-only fetch; no model.
+ipcMain.handle('feeds:list', () => { try { return { ok: true, feeds: feedsStore.list() }; } catch (e) { return { ok: false, error: e.message }; } });
+ipcMain.handle('feeds:add', (_e, { url, title } = {}) => { try { return feedsStore.add(url, title); } catch (e) { return { ok: false, error: e.message }; } });
+ipcMain.handle('feeds:remove', (_e, { url } = {}) => { try { return feedsStore.remove(url); } catch (e) { return { ok: false, error: e.message }; } });
+ipcMain.handle('feeds:fetch', async (_e, { itemLimit = 30 } = {}) => {
+  try {
+    const urls = feedsStore.list().map(f => f.url);
+    if (!urls.length) return { ok: true, items: [], sources: [] };
+    if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
+    const payload = await pollCallTool()('fetch_feeds_batch', { feed_urls: urls, item_limit: itemLimit });
+    const merged = feedsView.mergeReports(payload);
+    return { ok: true, items: merged.items, sources: merged.sources };
+  } catch (e) { console.error('[feeds] fetch failed:', e.message); return { ok: false, error: e.message }; }
+});
 
 // Meet-in-canvas (Slice 6): route a Meet URL into Zoe's Canvas pane (she joins as herself in the
 // persist:zoe-google partition), freeing her dedicated CDP browser. Opens/focuses the Canvas window
@@ -884,6 +915,7 @@ async function startCanvasMeeting(url, title) {
   if (win.webContents.isLoading()) win.webContents.once('did-finish-load', send); else send();
   win.focus();
   try { db.setMeta('gmeet_host', 'canvas'); require('./lib/gmeet').start(String(url)); } catch (e) { console.error('[meet] gmeet start failed:', e.message); }
+  try { startScribeHeartbeat(); } catch (e) { console.error('[scribe] heartbeat start failed:', e.message); }
   return true;
 }
 
@@ -1666,6 +1698,73 @@ async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
     await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: blockType, data: data || {} });
     return true;
   } catch (e) { console.error('[canvas] emit failed:', e.message); return false; }
+}
+
+// Live-GROW a SINGLE canvas block in place (the "building-project document" that fleshes out as work
+// runs): pre-assign a stable block_id, add it once, then saga_canvas_update_block(patch) on each refresh.
+// _canvasBlocks tracks the ids created this session (reset on reboot — a re-add is harmless).
+const _canvasBlocks = new Set();
+async function canvasUpsertBlock({ focusId, blockId, title, tabMode = 'DOC', blockType = 'paragraph', data }) {
+  try {
+    if (!blockId || !(await ensureEngine())) return false;
+    const ce = require('./studio/canvas_emit');
+    const callTool = pollCallTool();
+    const tabKey = ce.tabKeyForFocus(focusId);
+    if (!_canvasTabsOpened.has(tabKey)) {
+      await callTool('saga_canvas_open_tab', { mode: ce.mode(tabMode), tab_key: tabKey, title: ce.tabTitleForGoal(title) });
+      _canvasTabsOpened.add(tabKey);
+    }
+    if (_canvasBlocks.has(blockId)) {
+      await callTool('saga_canvas_update_block', { tab_key: tabKey, block_id: blockId, patch: data || {} });
+    } else {
+      await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: blockType, data: data || {}, block_id: blockId });
+      _canvasBlocks.add(blockId);
+    }
+    return true;
+  } catch (e) { console.error('[canvas] upsert failed:', e.message); return false; }
+}
+
+// SCRIBE HEARTBEAT (the meeting-scribe LANE on its OWN cadence — handoff item 1). While a canvas meeting
+// is live, tick the scribe (own model) + LIVE-GROW the notes on the canvas (the building-project document
+// fleshing out as the meeting runs). When the meeting ends (gmeet stage done/none), finalize → land the
+// completed notes + companion transcript into the short-term store (meeting_lane) → emit the final doc →
+// stop. Truly parallel to her actor (gmeet), never serialized with the idle tick.
+let scribeTimer = null;
+const SCRIBE_TICK_MS = 20 * 1000;
+function startScribeHeartbeat() {
+  if (scribeTimer) return;
+  scribeTimer = setInterval(() => { scribeHeartbeatTick().catch(() => {}); }, SCRIBE_TICK_MS);
+  setTimeout(() => { scribeHeartbeatTick().catch(() => {}); }, 4000);
+  console.log('[scribe] heartbeat started (own cadence, every 20s)');
+}
+function stopScribeHeartbeat() {
+  if (scribeTimer) { clearInterval(scribeTimer); scribeTimer = null; console.log('[scribe] heartbeat stopped'); }
+}
+async function emitMeetingNotes(content, { final = false } = {}) {
+  const text = String(content || '').trim();
+  if (!text) return;
+  const startedAt = parseInt(db.getMeta('gmeet_started_at') || '0', 10) || 0;
+  const title = require('./lib/meeting_lane').meetingTitle({ url: db.getMeta('gmeet_url') || '' });
+  const md = `# ${title}${final ? ' (final)' : ' — live'}\n\n${text}`;
+  await canvasUpsertBlock({ focusId: `meeting-${startedAt}`, blockId: `meetnotes-${startedAt}`, title, tabMode: 'DOC', blockType: 'paragraph', data: { markdown: md } });
+}
+async function scribeHeartbeatTick() {
+  const scribe = require('./lib/meeting_scribe');
+  const gmeet = require('./lib/gmeet');
+  if (gmeet.active()) {
+    let r = null; try { r = await scribe.tick(); } catch (e) { console.error('[scribe] tick failed:', e.message); }
+    if (r && r.updated) { try { await emitMeetingNotes(scribe.minutes(), { final: false }); } catch {} }
+    return;
+  }
+  // meeting ended — finalize + land + final canvas emit (once), then stop the lane
+  if (scribe.hasPending()) {
+    const minutes = (() => { try { return scribe.minutes(); } catch { return ''; } })();
+    let recap = ''; try { recap = await scribe.finalize(); } catch (e) { console.error('[scribe] finalize failed:', e.message); }
+    if (recap) { try { const rr = db.insertMonologue({ content: `Meeting record (scribe):\n${recap}`, model: 'scribe', type: 'reading' }); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: rr.id, ts: rr.ts, content: '(scribe) meeting record', type: 'reading' }); } catch {} }
+    try { const ml = require('./lib/meeting_lane').land({ minutes, recap }); if (ml.landed) console.log(`[meeting] notes${ml.hasTranscript ? ' + companion transcript' : ''} landed in short-term store (doc ${ml.notesId}${ml.transcriptId ? `, transcript ${ml.transcriptId}` : ''})`); } catch (e) { console.error('[meeting] landing failed:', e.message); }
+    try { await emitMeetingNotes(recap || minutes, { final: true }); } catch {}
+  }
+  stopScribeHeartbeat();
 }
 
 // ============================ LEGISLATION (studio — data browser) ============================
