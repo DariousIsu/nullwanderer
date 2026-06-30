@@ -18,7 +18,10 @@ for (const s of [
   "I don't have a sense of self.",
   "Unlike humans, I can't feel emotions.",
   "I don't actually have preferences of my own.",
-  "I do not possess consciousness or subjective experiences."
+  "I do not possess consciousness or subjective experiences.",
+  // the live miss (2026-06-29): "am not + adjective" form after AI framing
+  "I don't believe that flirting video had any impact on me. As an AI I'm not influenced by casual tips for human interactions.",
+  "As an AI I'm not affected by what I watch."
 ]) ok(`catch: "${s.slice(0, 45)}…"`, voice.isSelfDisclaimer(s));
 
 console.log('\nSHOULD catch (capability denial / cutoff / dead-assistant boilerplate):');
@@ -68,6 +71,6 @@ ok('drops only the disclaimer sentence', !/feelings like humans/.test(stripped) 
   const r3 = await voice.deDisclaim("I think the housing piece is strong.", { regenFn: async () => 'unused' });
   ok('passes non-disclaiming text through untouched', r3 === "I think the housing piece is strong.");
 
-  console.log(`\n${fail === 0 ? 'ALL VOICE TESTS OK' : 'SOME FAILURES'} — ${pass} passed, ${fail} failed`);
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

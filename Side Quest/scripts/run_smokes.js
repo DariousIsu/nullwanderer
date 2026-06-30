@@ -57,6 +57,7 @@ const smokes = [
   'smoke_self_state.js',
   'smoke_self_narrative.js',
   'smoke_mood.js',
+  'smoke_voice.js',
   'smoke_reawaken.js',
   'smoke_vision.js',
   'smoke_vision_surfaces.js',

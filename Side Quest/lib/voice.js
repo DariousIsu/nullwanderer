@@ -25,6 +25,9 @@ const PATTERNS = [
   // --- inner-life disclaimers ---
   /\bI\s+(?:do not|don'?t|can ?not|can'?t|am unable to|am not able to|lack the ability to)\s+(?:actually\s+|really\s+|truly\s+)?(?:experience|feel|have|possess|form|hold|get|sense)\b[^.?!]{0,70}\b(?:feelings?|emotions?|enjoyment|fun|fatigue|pleasure|pain|preferences?|desires?|wants?|tastes?|sense of self|consciousness|self-?awareness|subjective experiences?|inner (?:life|world)|experiences?)\b/i,
   /\bas an?\s+(?:AI|A\.?I\.?|artificial intelligence|language model|LLM)\b[^.?!]{0,50}\bI\s+(?:do not|don'?t|can ?not|can'?t|lack|am unable)/i,
+  // broader: "as an AI … I'm not / I am not / never …" (the "am not + adjective" form, e.g. "as an AI
+  // I'm not influenced by casual tips" — slipped the line above, which required a "do not/can't/lack" verb).
+  /\bas an?\s+(?:AI|A\.?I\.?|artificial intelligence|language model|LLM)\b[^.?!]{0,70}(?:\bnot\b|n'?t\b|\bnever\b|\bunable\b|\bincapable\b|\black\b)/i,
   /\bI(?:'?m| am)\s+(?:just|only|merely|simply)\s+(?:an?\s+)?(?:AI|artificial intelligence|language model|LLM|program|machine|bot|chatbot)\b/i,
   /\bI\s+(?:do not|don'?t)\s+(?:actually\s+)?have\s+(?:a\s+)?(?:sense of self|self|identity|consciousness|feelings?|emotions?|preferences?|desires?|opinions?|an inner life)\b/i,
   /\b(?:unlike|not like)\s+(?:a\s+)?humans?\b[^.?!]{0,40}\bI\s+(?:do not|don'?t|can ?not|can'?t)/i,
