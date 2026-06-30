@@ -284,10 +284,18 @@ function renderMeets() {
       <div class="nm">${esc(e.summary)}</div>
       <div class="tm">${esc(when)}</div>
       ${ds ? `<div class="ds">${esc(ds)}</div>` : ''}
-      <a class="joinbtn" href="${esc(e.meetLink)}" target="_blank" rel="noreferrer" data-join="1">Zoe: Join &rarr;</a>
+      <button class="joinbtn" data-join="1" data-meet="${esc(e.meetLink)}" data-title="${esc(e.summary)}">Zoe: Join &rarr;</button>
     </div>`;
   }).join('');
   meetsEl.querySelectorAll('.meet').forEach(el => el.addEventListener('click', (ev) => { if (ev.target.closest('[data-join]')) return; openEvent(el.dataset.ev); }));
+  meetsEl.querySelectorAll('[data-join]').forEach(el => el.addEventListener('click', (ev) => { ev.stopPropagation(); joinMeet(el.dataset.meet, el.dataset.title); }));
+}
+// Join a Meet inside Zoe's Canvas (she joins as herself). Falls back to opening the link if the
+// bridge is unavailable.
+function joinMeet(url, title) {
+  if (!url) return;
+  if (window.sq && window.sq.joinMeet) window.sq.joinMeet(url, title);
+  else window.open(url, '_blank');
 }
 
 // ============================ event / day modal ============================
@@ -309,7 +317,7 @@ function openEvent(id) {
     ${e.location ? `<div class="mrow"><span class="k">Where</span><span class="v">${esc(e.location)}</span></div>` : ''}
     ${e.organizer ? `<div class="mrow"><span class="k">Organizer</span><span class="v">${esc(e.organizer)}</span></div>` : ''}
     ${att}
-    ${e.hasMeet ? `<a class="join" href="${esc(e.meetLink)}" target="_blank" rel="noreferrer">Join Google Meet</a>` : ''}
+    ${e.hasMeet ? `<button class="join" id="joinMeetBtn" data-meet="${esc(e.meetLink)}" data-title="${esc(e.summary)}">Zoe: Join in Canvas</button>` : ''}
     ${e.description ? `<div class="desc">${sanitizeDesc(e.description)}</div>` : ''}
     <div class="mactions">
       ${writable ? `<button class="btn primary" id="editBtn">Edit</button><button class="btn danger" id="delBtn">Delete</button>` : `<span class="note">This calendar is read-only — events can't be edited here.</span>`}
@@ -319,6 +327,7 @@ function openEvent(id) {
     $('editBtn').addEventListener('click', () => openEditor(CV.eventToForm(e), { isNew: false, eventId: e.id, recurring: e.recurring }));
     $('delBtn').addEventListener('click', () => confirmDelete(e));
   }
+  if ($('joinMeetBtn')) $('joinMeetBtn').addEventListener('click', () => { joinMeet(e.meetLink, e.summary); closeModal(); });
   modalBg.classList.add('show');
 }
 

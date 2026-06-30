@@ -32,6 +32,11 @@ contextBridge.exposeInMainWorld('sq', {
   openWorkspace: () => ipcRenderer.invoke('workspace:open'),
   // Open Zoe's Canvas — her own window for deliverables + visual aids (distinct from the workbench)
   openCanvas: () => ipcRenderer.invoke('canvas:open'),
+  // Meet-in-canvas (Slice 6): route a Meet URL into Zoe's Canvas pane (she joins as herself). The
+  // calendar surface calls joinMeet; the Canvas window listens via onMeetJoin to mount the webview.
+  joinMeet: (url, title) => ipcRenderer.invoke('meet:join', { url, title }),
+  onMeetJoin: (cb) => ipcRenderer.on('canvas:meet-join', (_e, info) => cb(info)),
+  meetProbe: () => ipcRenderer.invoke('meet:probe'),   // P1 verification: read live Meet-pane state
 
   // Editor Studio — document registry / lifecycle / checks (all run in main over IPC)
   editor: {

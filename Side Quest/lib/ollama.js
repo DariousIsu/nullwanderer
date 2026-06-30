@@ -1,6 +1,6 @@
 const OLLAMA_BASE = process.env.OLLAMA_BASE || 'http://localhost:11434';
 
-async function streamChat({ model, messages, options = {}, onToken, signal, inactivityMs = 90000 }) {
+async function streamChat({ model, messages, options = {}, onToken, signal, inactivityMs = 90000, think }) {
   const body = {
     model,
     messages,
@@ -14,6 +14,9 @@ async function streamChat({ model, messages, options = {}, onToken, signal, inac
       ...options
     }
   };
+  // Optional top-level `think` toggle for reasoning models (ollama /api/chat) — e.g. the meeting
+  // scribe disables thinking so its whole budget goes to the minutes, not hidden reasoning.
+  if (typeof think === 'boolean') body.think = think;
 
   // WATCHDOG: abort if the stream STALLS (no token for inactivityMs). Without this a hung
   // generation blocks the awaiting caller forever — and since there's one local model

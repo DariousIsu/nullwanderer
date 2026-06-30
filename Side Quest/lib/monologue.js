@@ -821,8 +821,14 @@ async function runOneTick() {
   // mandatory intro → observe captions). A sign-in wall is surfaced to Lucas (notify).
   if (!personalMode && gmeetLib.active()) {
     try {
+      // ALL ROADS → CANVAS: when the meeting is canvas-hosted, run gmeet's SAME stage machine on the
+      // canvas driver deps (Meet in the canvas pane, dedicated browser freed). Else the legacy browser
+      // deps (gmeet's defaultDeps). Flag set by main.startCanvasMeeting.
+      const canvasHosted = (db.getMeta('gmeet_host') || 'browser') === 'canvas';
+      const deps = canvasHosted ? (() => { try { return require('./meet_canvas').canvasMeetDeps(); } catch { return undefined; } })() : undefined;
       const res = await gmeetLib.runTick({
         userName,
+        deps,
         onReading: (content, label) => {
           try { const rr = db.insertMonologue({ content, model: 'gmeet', type: 'reading' }); pushSheep({ id: rr.id, ts: rr.ts, content: label || content, type: 'reading' }); } catch (e) { console.error('[gmeet] reading insert failed:', e.message); }
         },
@@ -832,8 +838,27 @@ async function runOneTick() {
         }
       });
       console.log(`[gmeet] ${res.stage}: ${res.note}`);
+      // SCRIBE (separate channel, own model) — record/document/analyze the meeting from the transcript
+      // she's capturing. Parallel to her actor (gmeet, above), which is untouched. Canvas meetings only.
+      if (canvasHosted) {
+        try { const sr = await require('./meeting_scribe').tick(); if (sr && sr.updated) console.log('[scribe] minutes updated'); }
+        catch (e) { console.error('[scribe] tick failed:', e.message); }
+      }
     } catch (e) { console.error('[monologue] gmeet tick failed:', e.message); }
     return;
+  }
+
+  // SCRIBE FINALIZE — the meeting ended (gmeet no longer active) but the scribe still has an open
+  // session: write the final record on its own model, then clear. Runs once, outside the meeting block.
+  if (!personalMode) {
+    try {
+      const scribe = require('./meeting_scribe');
+      if (scribe.hasPending() && !gmeetLib.active()) {
+        const recap = await scribe.finalize();
+        if (recap) { try { const rr = db.insertMonologue({ content: `Meeting record (scribe):\n${recap}`, model: 'scribe', type: 'reading' }); pushSheep({ id: rr.id, ts: rr.ts, content: '(scribe) meeting record', type: 'reading' }); } catch {} }
+        console.log(`[scribe] finalized${recap ? ' (recap stored)' : ' (nothing substantive)'}`);
+      }
+    } catch (e) { console.error('[scribe] finalize failed:', e.message); }
   }
 
   // MEDIA WATCH — caption-following now runs on its OWN faster heartbeat (scheduleCaption /

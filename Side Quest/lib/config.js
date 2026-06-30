@@ -95,6 +95,24 @@ function extractionModel() {
   return get('ZOE_EXTRACT_MODEL').trim() || 'gemma4:31b-cloud';
 }
 
+// The MEETING-CORTEX model — a DEDICATED channel for real-time meeting processing (live
+// understanding, addressed-detection answers, recap) when she's in a Meet hosted in the Canvas.
+// Separate role so it doesn't contend with extraction; point it at ANY Ollama model via
+// ZOE_MEETING_MODEL (local or '-cloud'). Defaults to the fast cloud utility model for low-latency
+// turn-by-turn following; the existing web-search plumbing is just invoked from this channel.
+function meetingModel() {
+  return get('ZOE_MEETING_MODEL').trim() || extractionModel();
+}
+
+// The MEETING-SCRIBE model — a SEPARATE, dedicated channel that records/documents/analyzes the
+// meeting (running minutes + end-of-meeting recap/action-items) from the transcript she captures.
+// Distinct from her ACTOR (participation) model and from extraction — its own cloud model so it
+// doesn't contend. Default gemini-3-flash-preview:cloud (fast, frontier, multimodal — a path to
+// ingesting meeting AUDIO directly later). Override via ZOE_MEETING_SCRIBE_MODEL (any Ollama model).
+function scribeModel() {
+  return get('ZOE_MEETING_SCRIBE_MODEL').trim() || 'gemini-3-flash-preview:cloud';
+}
+
 // --- Tiered subconscious (local volume + cloud depth; see docs/SUBCONSCIOUS_TIERED_SPEC.md) ---
 // All env-resolved (safe at module-load), all reversible/fail-safe to local.
 //   mode: hybrid (default) | triage | local (never cloud, $0) | all (legacy every-tick-cloud)
@@ -119,4 +137,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, emailConfig, discordConfig, APP_ROOT, ENV_PATH };

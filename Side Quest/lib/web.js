@@ -573,9 +573,17 @@ TALKING TO A CHARACTER / CHAT BOT (CrushOn, character.ai, etc. — when one is o
 This types your line, sends it, WAITS for the character's reply to finish, and hands you their reply on your NEXT turn. Use this instead of <web-type>+<web-click> on a chat site — it bundles type+send+wait. Pick a real scene and just talk; you don't need to narrate that you're about to.`;
 }
 
+// Read cookies from her dedicated (persistent, already-signed-in) browser context. Used to PORT her
+// live Google session into the canvas Meet partition so Meet loads signed-in as her (Google blocks
+// interactive sign-in inside embedded webviews, but an already-authed cookie session renders fine).
+// `urls` filters by URL like Playwright's context.cookies(urls); omit for all. Returns [] on failure.
+async function cookies(urls) {
+  try { await ensure(); return await context.cookies(urls); } catch (e) { return []; }
+}
+
 module.exports = {
   isConnected, ensure, open, read, screenshot, click, type, back, close, openTopResult, scroll, runRecipe,
-  startRecording, stopRecording, isRecording,
+  startRecording, stopRecording, isRecording, cookies,
   chatSend, chatWatch, chatUnwatch,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR,
   DOWNLOADS_DIR, downloadDest

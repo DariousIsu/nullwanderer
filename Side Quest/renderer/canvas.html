@@ -108,6 +108,25 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
 .titem.closed{opacity:.5;}
 .titem.closed .nm{color:var(--tx-dim);}
 .err{color:#d8c79a;}
+
+/* Meet-in-canvas pane (Slice 6) — a fixed floating panel (NOT on the zoom/pan board) hosting a
+   <webview> logged into Zoe's Google. Draggable by its header, resizable; a shield over the webview
+   captures the mouse during drag/resize so the embedded content doesn't swallow the events. */
+.meetpane{position:fixed;top:58px;width:820px;height:560px;z-index:60;display:flex;flex-direction:column;
+  background:#000;border:1px solid var(--accent);border-radius:var(--r-lg);box-shadow:0 16px 54px rgba(0,0,0,.72);overflow:hidden;}
+.meetpane[hidden]{display:none;}
+.meetpane.minimized{height:auto !important;}
+.meetpane.minimized .meet-body,.meetpane .resize-grip{}
+.meetpane.minimized .meet-body,.meetpane.minimized .resize-grip{display:none;}
+.meet-head{flex-shrink:0;display:flex;align-items:center;gap:9px;padding:8px 12px;background:var(--bg-raised);border-bottom:1px solid var(--line);cursor:grab;user-select:none;}
+.meet-head.dragging{cursor:grabbing;}
+.meet-head .grip{color:var(--tx-fainter);font-size:13px;}
+.meet-head .live{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--ok-fg);border:1px solid var(--ok-fg);border-radius:3px;padding:1px 5px;flex-shrink:0;}
+.meet-head .meet-title{flex:1;font-size:12px;color:var(--tx);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.meet-body{flex:1;position:relative;background:#000;min-height:0;}
+.meet-body webview{position:absolute;inset:0;width:100%;height:100%;border:0;display:inline-flex;}
+.meet-shield{position:absolute;inset:0;z-index:5;display:none;}
+.meetpane.interacting .meet-shield{display:block;}
 </style>
 </head>
 <body>
@@ -130,6 +149,19 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
     <div class="board" id="board"></div>
     <div class="surface-msg" id="msg">Loading canvas…</div>
     <div class="toast" id="toast"></div>
+  </div>
+
+  <div class="meetpane" id="meetpane" hidden>
+    <div class="meet-head" id="meetHead">
+      <span class="grip">⠿</span>
+      <span class="live">● live</span>
+      <span class="meet-title" id="meetTitle">Google Meet</span>
+      <button class="dbtn" id="meetReload" title="Reload">⟳</button>
+      <button class="dbtn" id="meetMin" title="Minimize">–</button>
+      <button class="dbtn" id="meetClose" title="Leave &amp; close">✕</button>
+    </div>
+    <div class="meet-body" id="meetBody"><div class="meet-shield" id="meetShield"></div></div>
+    <div class="resize-grip" id="meetResize"></div>
   </div>
 
   <script src="canvas.js"></script>

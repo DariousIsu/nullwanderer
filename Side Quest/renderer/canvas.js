@@ -273,4 +273,48 @@ $('trayBtn').addEventListener('click', () => trayEl.classList.toggle('open'));
 $('refreshBtn').addEventListener('click', () => loadCanvas(0));
 $('resetBtn').addEventListener('click', async () => { try { await window.sq.canvas.resetLayout(); } catch {} loadCanvas(0); });
 
+/* ---- Meet-in-canvas pane (Slice 6) — host Google Meet in a webview on Zoe's own Google session,
+   so she joins as herself without monopolizing her dedicated CDP browser. Fixed floating panel
+   (not on the zoom/pan board); a shield over the webview captures the mouse during drag/resize. ---- */
+const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+const meetpane = $('meetpane'), meetHead = $('meetHead'), meetBody = $('meetBody'), meetTitle = $('meetTitle');
+let meetWV = null, meetPlaced = false;
+
+function mountMeet(info) {
+  const url = info && info.url; if (!url) return;
+  meetTitle.textContent = (info && info.title) || 'Google Meet';
+  if (!meetWV) {
+    meetWV = document.createElement('webview');
+    meetWV.setAttribute('partition', 'persist:zoe-google');   // Zoe's own Google session
+    meetWV.setAttribute('allowpopups', '');
+    meetWV.setAttribute('useragent', CHROME_UA);              // present as Chrome (avoid Meet "unsupported browser")
+    meetBody.appendChild(meetWV);
+  }
+  meetWV.src = url;
+  if (!meetPlaced) { meetpane.style.left = Math.max(20, window.innerWidth - 844) + 'px'; meetpane.style.top = '58px'; meetPlaced = true; }
+  meetpane.hidden = false; meetpane.classList.remove('minimized'); $('meetMin').textContent = '–';
+}
+function closeMeet() { if (meetWV) { try { meetWV.src = 'about:blank'; } catch {} meetWV.remove(); meetWV = null; } meetpane.hidden = true; meetpane.classList.remove('minimized'); }
+$('meetClose').addEventListener('click', closeMeet);
+$('meetReload').addEventListener('click', () => { if (meetWV) { try { meetWV.reload(); } catch {} } });
+$('meetMin').addEventListener('click', () => { const m = !meetpane.classList.contains('minimized'); meetpane.classList.toggle('minimized', m); $('meetMin').textContent = m ? '▢' : '–'; });
+
+let mDrag = null, mResize = null;
+meetHead.addEventListener('mousedown', (e) => {
+  if (e.target.closest('.dbtn')) return;
+  mDrag = { sx: e.clientX, sy: e.clientY, sl: meetpane.offsetLeft, st: meetpane.offsetTop };
+  meetHead.classList.add('dragging'); meetpane.classList.add('interacting'); e.preventDefault();
+});
+$('meetResize').addEventListener('mousedown', (e) => {
+  mResize = { sx: e.clientX, sy: e.clientY, w: meetpane.offsetWidth, h: meetpane.offsetHeight };
+  meetpane.classList.add('interacting'); e.preventDefault(); e.stopPropagation();
+});
+window.addEventListener('mousemove', (e) => {
+  if (mDrag) { meetpane.style.left = Math.max(0, mDrag.sl + (e.clientX - mDrag.sx)) + 'px'; meetpane.style.top = Math.max(40, mDrag.st + (e.clientY - mDrag.sy)) + 'px'; }
+  else if (mResize) { meetpane.style.width = Math.max(360, mResize.w + (e.clientX - mResize.sx)) + 'px'; meetpane.style.height = Math.max(280, mResize.h + (e.clientY - mResize.sy)) + 'px'; }
+});
+window.addEventListener('mouseup', () => { if (mDrag) { meetHead.classList.remove('dragging'); mDrag = null; } if (mResize) mResize = null; meetpane.classList.remove('interacting'); });
+
+if (window.sq && window.sq.onMeetJoin) window.sq.onMeetJoin(mountMeet);
+
 loadCanvas();
