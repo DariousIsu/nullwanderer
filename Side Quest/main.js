@@ -2728,6 +2728,30 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   } catch (e) { console.error('[main] expand-order failed:', e.message); }
 
+  // INTAKE GATE — runs BEFORE the deliverable poll so an ASSIGNMENT ("spin up a project generating
+  // contacts for the 5, deep") is recognized as work to DO, not swallowed as a QUESTION by the poll
+  // (his assignment matches the records/contact detectors → the poll set statusHandled and gated off
+  // run creation — the live failure). One cloud pass decides is-this-a-project + how (discover/enrich,
+  // deep, priority, subset). FAIL-SAFE: cloud null → isDirectedTask regex fallback. When it's an
+  // assignment, the poll + records-interp below are SUPPRESSED (!isAssignment) and the standing-focus
+  // block creates the real run.
+  let intakeRoute = null;
+  let isAssignment = false;
+  try {
+    const opOn2 = (() => { try { return (db.getMeta('operator.mode') || 'full').trim() !== 'off'; } catch { return true; } })();
+    if (opOn2 && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && userMessage && userMessage.trim().length > 6) {
+      const intake = require('./lib/intake');
+      const af = (() => { try { const f = require('./lib/focus').getCurrent(); return f ? String(f.content || '') : ''; } catch { return ''; } })();
+      const recent = (recentTurns || []).slice(-3).map(t => `${t.speaker || '?'}: ${String(t.content || '').slice(0, 120)}`).join(' | ');
+      const decision = await intake.classify(userMessage, { recent, activeFocus: af });
+      if (decision) intakeRoute = intake.route(decision);
+      // PRIMARY = the cloud decision; the regex is the FALLBACK only when the cloud was unavailable (null).
+      isAssignment = decision ? !!(intakeRoute && intakeRoute.action !== 'none')
+        : (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
+      if (isAssignment) console.log(`[intake] ASSIGNMENT → ${intakeRoute ? intakeRoute.action : 'discover(regex-fallback)'}${intakeRoute && intakeRoute.deep ? ' deep' : ''}${intakeRoute && intakeRoute.priority ? ' ' + intakeRoute.priority : ''}`);
+    }
+  } catch (e) { console.error('[intake] gate failed:', e.message); }
+
   // INTERFACE POLL (Slice I) — the interface polls the brain through ONE deterministic router instead of
   // answering from its own (lossy) memory. Sources register here; the router picks who answers, preferring
   // deterministic (program-grounded) sources. Two registered today:
@@ -2737,7 +2761,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // Lanes (media/meeting/news) register more sources here as they land — no new branch in the pipeline.
   let statusHandled = false;
   try {
-    if (!directedStopHandled && !expandHandled && !followupFired) {
+    if (!directedStopHandled && !expandHandled && !followupFired && !isAssignment) {
       const tk = require('./lib/track');
       const act = require('./lib/activity');
       const ri = require('./lib/records_interp');
@@ -2840,23 +2864,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // 24B trying to remember a tag. Substantive turns only; fail-safe (null → the normal local reply).
   // Reversible: db meta operator.mode = full (default) | off.
   let operatorAnswer = null;
-  let intakeRoute = null;   // the INTAKE GATE decision (project? how to run it?), used by the operator + standing-focus blocks below
   try {
     const opMode = (() => { try { return (db.getMeta('operator.mode') || 'full').trim(); } catch { return 'full'; } })();
-    // INTAKE GATE — the systemic project recognizer (replaces brittle isDirectedTask as the PRIMARY
-    // signal): one cloud pass decides is-this-a-project + how to run it (discover/enrich, deep, priority,
-    // budget, subset). Gated to substantive, not-already-handled turns. FAIL-SAFE: null (cloud down/over
-    // budget) → the isDirectedTask regex fallback still applies below, so we never regress to nothing.
-    try {
-      if (opMode !== 'off' && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && userMessage && userMessage.trim().length > 6) {
-        const intake = require('./lib/intake');
-        const af = (() => { try { const f = require('./lib/focus').getCurrent(); return f ? String(f.content || '') : ''; } catch { return ''; } })();
-        const recent = (recentTurns || []).slice(-3).map(t => `${t.speaker || '?'}: ${String(t.content || '').slice(0, 120)}`).join(' | ');
-        const decision = await intake.classify(userMessage, { recent, activeFocus: af });
-        if (decision) intakeRoute = intake.route(decision);
-        if (intakeRoute && intakeRoute.action !== 'none') console.log(`[intake] → ${intakeRoute.action}${intakeRoute.deep ? ' deep' : ''}${intakeRoute.priority ? ' ' + intakeRoute.priority : ''} (facet: ${String(intakeRoute.facet).slice(0, 50)})`);
-      }
-    } catch (e) { console.error('[intake] gate failed:', e.message); }
+    // (intakeRoute / isAssignment were computed BEFORE the deliverable poll above — reused here.)
     // The operator is for turns that NEED external capability (a task, a lookup, our data) — NOT for
     // conversation. Fronting every turn with "operator answer → Dans voices it" flattened dialogue
     // into transactional Q&A and cost cohesion/complexity. So gate it: capability turns → operator;
@@ -2872,10 +2882,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           || /\b(look ?up|search|find|pull ?up|fetch|what'?s the|how much|how many|latest|current|when (is|was|did|does)|where (is|was)|who (is|was|are)|our (data|records|numbers|polling|crm|bills|contacts|knowledge))\b/i.test(userMessage);
       } catch { return false; }
     })();
-    const intakeProject = !!(intakeRoute && intakeRoute.action !== 'none');
-    if (opMode !== 'off' && (needsExternal || intakeProject) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && userMessage && userMessage.trim().length > 6) {
-      // directed (in-turn completion mode) = the intake gate says project, else the regex fallback.
-      const directed = intakeProject || (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
+    if (opMode !== 'off' && (needsExternal || isAssignment) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && userMessage && userMessage.trim().length > 6) {
+      // directed (in-turn completion mode) when this is an assignment (intake gate, or regex fallback).
+      const directed = isAssignment;
       // Immediate feedback — the agent loop can take a few seconds. Use a REQUEST-SERVING placeholder
       // ("on it — starting on that now"), NOT the self-focused "I'm in the middle of something" busy
       // line, which reads as brushing Lucas off the instant he hands her a task.
