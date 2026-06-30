@@ -79,13 +79,44 @@ function chunkForCondense(raw, maxChars = 24000) {
 const EXPAND_RE = /\b(expand|go(?:ing)? deeper|dig(?:ging)? deeper|drill (?:down|into)|flesh(?:ing)? out|elaborate|deepen|go further|more detail|in more depth)\b/i;
 const EXPAND_TARGET_RE = /\b(?:expand(?: on| the)?|go(?:ing)? deeper (?:on|into)|dig(?:ging)? deeper (?:on|into)|drill (?:down (?:on|into)|into)|flesh(?:ing)? out|elaborate on|deepen|more detail on|go further on)\s+(.*)$/i;
 
+// A FACET-FILL expand names an ATTRIBUTE to collect ACROSS the already-known set ("…for their policy
+// VPs", "get the government-relations contacts for each", "find the press leads at all of them"). When
+// present, the expand is ENRICH (re-enter the known orgs + fill this facet), NOT discovery. The attribute
+// vocabulary is deliberately about PEOPLE/CONTACTS/ROLES — the things a first-pass overview misses.
+const ENRICH_ATTR = '(?:vice[\\s-]?presidents?|VPs?|directors?|heads?|chiefs?|officers?|leads?|managers?|executives?|leadership|staff|personnel|spokes\\w*|press\\s+(?:contacts?|leads?|secretar\\w+)|points?\\s+of\\s+contact|contacts?|emails?|phone\\s*numbers?|government[\\s-]?(?:affairs|relations)|public[\\s-]?(?:affairs|relations)|legislative\\s+(?:affairs|directors?)|policy\\s+(?:directors?|leads?|staff|teams?))';
+// "for each / for their / on each / at all of them / across them …" + an attribute → a facet clause.
+const ENRICH_FRAME_RE = new RegExp(`\\b(?:for|on|at|of|with|get|find|gather|pull|fill\\s+in|add)\\b[^.?!]{0,40}?\\b${ENRICH_ATTR}\\b`, 'i');
+// Or the attribute simply appears alongside an "each / all of them / every one / their" quantifier.
+const ENRICH_EACH_RE = new RegExp(`\\b${ENRICH_ATTR}\\b[^.?!]{0,40}?\\b(?:for\\s+)?(?:each|all\\s+of\\s+them|every\\s+(?:one|org\\w*)|their|them)\\b|\\b(?:each|all\\s+of\\s+them|every\\s+(?:one|org\\w*)|their|them|across)\\b[^.?!]{0,40}?\\b${ENRICH_ATTR}\\b`, 'i');
+
+// Pull the facet phrase from a message that asks to enrich a known set. Returns a concise, self-contained
+// description for the enrich prompt, or '' when no attribute clause is present.
+function detectEnrichFacet(text) {
+  const s = String(text || '');
+  const m = s.match(ENRICH_FRAME_RE) || s.match(ENRICH_EACH_RE);
+  if (!m) return '';
+  // Use the whole clause around the match (clean, bounded) as the facet description.
+  let facet = String(m[0] || '').replace(/\s+/g, ' ').trim().replace(/[.?!,;:]+$/, '');
+  facet = facet.replace(/^(?:for|on|at|of|with|get|find|gather|pull|and|also)\s+/i, '').trim();
+  return facet.slice(0, 140);
+}
+
+// The org names already in a dossier ("## <Org>" headings) — the work-list for an enrich run.
+function dossierOrgs(dossier = '', limit = 60) {
+  return (String(dossier).match(/^##\s+(.+)$/gim) || [])
+    .map(h => h.replace(/^##\s+/, '').trim())
+    .filter(Boolean)
+    .filter(h => !/^(summary|gaps?|overview|notes?|task)\b/i.test(h))   // skip the dossier's own header sections
+    .slice(0, limit);
+}
+
 function detectExpandOrder(text) {
   const s = String(text || '');
-  if (!EXPAND_RE.test(s)) return { isExpand: false, target: '' };
+  if (!EXPAND_RE.test(s)) return { isExpand: false, target: '', enrichFacet: '' };
   const m = s.match(EXPAND_TARGET_RE);
   let target = m && m[1] ? m[1].trim() : '';
   target = target.replace(/^(the|on|about)\s+/i, '').replace(/[.?!]+$/, '').replace(/\s+/g, ' ').slice(0, 120);
-  return { isExpand: true, target };
+  return { isExpand: true, target, enrichFacet: detectEnrichFacet(s) };
 }
 
 // Build the goal for the deepening sub-run. Concise + self-contained (it becomes the focus content,
@@ -101,6 +132,6 @@ function buildExpandGoal({ priorGoal = '', target = '', dossier = '' } = {}) {
 
 module.exports = {
   buildCondensePrompt, buildMergePrompt, chunkForCondense,
-  detectExpandOrder, buildExpandGoal,
+  detectExpandOrder, buildExpandGoal, detectEnrichFacet, dossierOrgs,
   EXPAND_RE, CONDENSE_SYS
 };

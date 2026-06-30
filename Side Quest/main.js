@@ -2624,15 +2624,30 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         }
       } catch (e) { console.error('[expand] topic resolve failed:', e.message); }
       if (last && last.path) {
-        let dossier = ''; try { const r = filesLib.fileReadFull(last.path); dossier = (r && r.text) || ''; } catch {}   // FULL read — the 8000-char cap would drop orgs from buildExpandGoal's list
-        const goal = cd.buildExpandGoal({ priorGoal: last.goal, target: ex.target, dossier });
-        const focusLib = require('./lib/focus');
-        const r = await focusLib.setFromDirective(goal, userTurnRow && userTurnRow.id);
-        if (r && r.focus) {
-          kickDirectedFocusDriver();
-          expandHandled = true;
-          composedUserMessage += `\n\n[${userName} asked you to EXPAND / go deeper on your prior research${ex.target ? ` — specifically: ${ex.target}` : ''}. You've started a focused DEEPENING pass on it (building on the dossier you already have, chasing full staff + contacts) and will keep at it. Tell him plainly you're expanding that now, in one or two sentences. Do NOT fabricate — only report what you actually have.]`;
-          console.log(`[expand] expand order → deepening focus #${r.focus.id} (target: ${ex.target || 'all'})`);
+        // ENRICH branch: he named a FACET to fill across the known set ("…for their policy/gov-relations
+        // VPs + contacts") AND we resolved which dossier — stand up a FACET-FILL run over those orgs
+        // instead of a discovery expand (which would drift to NEW orgs — the live #2027 failure).
+        const srcId = last.focusId || null;
+        if (ex.enrichFacet && srcId) {
+          const er = await establishEnrichRun({ sourceFocusId: srcId, facet: ex.enrichFacet, sourceTurnId: userTurnRow && userTurnRow.id, priorGoal: last.goal });
+          if (er && er.focus) {
+            kickDirectedFocusDriver();
+            expandHandled = true;
+            composedUserMessage += `\n\n[${userName} asked you to EXPAND your prior research by filling a specific facet across the organizations you already have — specifically: ${ex.enrichFacet}. You've started a FACET-FILL pass: going back through the ${er.orgs.length} organizations on file and gathering exactly that for each, one at a time. Tell him plainly you're going back through those ${er.orgs.length} orgs to fill in ${ex.enrichFacet} now, in one or two sentences. Do NOT fabricate — only report what you actually have.]`;
+            console.log(`[expand] ENRICH order → facet-fill focus #${er.focus.id} over #${srcId} (${er.orgs.length} orgs, facet: ${ex.enrichFacet.slice(0, 50)})`);
+          }
+        }
+        if (!expandHandled) {
+          let dossier = ''; try { const r = filesLib.fileReadFull(last.path); dossier = (r && r.text) || ''; } catch {}   // FULL read — the 8000-char cap would drop orgs from buildExpandGoal's list
+          const goal = cd.buildExpandGoal({ priorGoal: last.goal, target: ex.target, dossier });
+          const focusLib = require('./lib/focus');
+          const r = await focusLib.setFromDirective(goal, userTurnRow && userTurnRow.id);
+          if (r && r.focus) {
+            kickDirectedFocusDriver();
+            expandHandled = true;
+            composedUserMessage += `\n\n[${userName} asked you to EXPAND / go deeper on your prior research${ex.target ? ` — specifically: ${ex.target}` : ''}. You've started a focused DEEPENING pass on it (building on the dossier you already have, chasing full staff + contacts) and will keep at it. Tell him plainly you're expanding that now, in one or two sentences. Do NOT fabricate — only report what you actually have.]`;
+            console.log(`[expand] expand order → deepening focus #${r.focus.id} (target: ${ex.target || 'all'})`);
+          }
         }
       } else if (!_directedFocus) {
         // No prior dossier AND no run in progress → honestly nothing to expand.
@@ -4291,6 +4306,12 @@ async function statusReport(focus) {
 // Research passes are the cloud operator. State (covered orgs, current target, file) lives in meta.
 // Records + returns the focus outcome. Fully fail-safe.
 async function runDirectedResearchPass(focus) {
+  // MODE GATE: an ENRICH run re-enters a KNOWN set of orgs and fills one named facet across them — the
+  // opposite of the discovery loop below (which avoids the covered set and opens NEW orgs). Branch early
+  // so the two modes never entangle.
+  const mode = (() => { try { return (db.getMeta(`focus.${focus.id}.mode`) || 'discover').trim(); } catch { return 'discover'; } })();
+  if (mode === 'enrich') return runEnrichResearchPass(focus);
+
   const focusLib = require('./lib/focus');
   const blackboard = require('./lib/blackboard');
   const rs = require('./lib/research');
@@ -4370,6 +4391,98 @@ async function runDirectedResearchPass(focus) {
     : focusLib.recordOutcome(focus, { progressed });
   console.log(`[directed] #${focus.id} → ${done ? 'ALL-COVERED' : note} → ${outcome.action}`);
   return outcome;
+}
+
+// ENRICH / FACET-FILL pass: walk the KNOWN org work-list (from a prior dossier) and fill ONE named facet
+// (e.g. "policy / government-relations VPs + contacts") for the next not-yet-enriched org. Mirror of the
+// discovery pass, but the org is GIVEN (no TARGET discovery) and the run terminates when every source org
+// has been enriched. Reuses the SAME `.covered` meta + `## <org>` file shape, so condenseRun + the
+// deliverable-query path work unchanged. This is the build that makes "expand the 21 FOR THEIR VPs"
+// actually deepen the 21 instead of drifting into new orgs.
+async function runEnrichResearchPass(focus) {
+  const focusLib = require('./lib/focus');
+  const blackboard = require('./lib/blackboard');
+  const rs = require('./lib/research');
+  const goal = String(focus.content || '');
+  const coveredKey = `focus.${focus.id}.covered`;     // reuse .covered = the orgs ENRICHED so far (uniform with discovery)
+  const fileKey = `focus.${focus.id}.file`;
+  const facet = (() => { try { return db.getMeta(`focus.${focus.id}.enrich_facet`) || ''; } catch { return ''; } })();
+  let sourceOrgs = []; try { sourceOrgs = JSON.parse(db.getMeta(`focus.${focus.id}.enrich_orgs`) || '[]'); } catch {}
+  let enriched = []; try { enriched = JSON.parse(db.getMeta(coveredKey) || '[]'); } catch {}
+  let file = db.getMeta(fileKey); if (!file) { file = `notes/directed-${focus.id}.md`; try { db.setMeta(fileKey, file); } catch {} }
+  try { db.setMeta('research.last_focus_id', String(focus.id)); } catch {}
+  let clar = []; try { clar = JSON.parse(db.getMeta(`focus.${focus.id}.clarifications`) || '[]'); } catch {}
+  const guidance = rs.buildGuidanceBlock(clar);
+
+  let progressed = false, done = false, note = '', sig = '';
+  const org = rs.pickEnrichTarget({ sourceOrgs, enriched });
+  if (!org) {
+    done = true; note = `facet filled across all ${enriched.length} organization(s): ${rs.facetLabel(facet)}`;
+  } else {
+    // ONE focused pass: fill ONLY the named facet for THIS org.
+    let ans = '', usedTool = false;
+    try {
+      const r = await runCloudOperator({ userMessage: rs.buildEnrichPrompt({ goal, org, facet, guidance }), context: '', task: true });
+      ans = (r && r.answer) ? String(r.answer).trim() : '';
+      usedTool = !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.some(t => ['web_search', 'browser_read', 'echo'].includes(t)));
+    } catch (e) { console.error('[enrich] pass failed:', e.message); }
+    const p = rs.parsePass(ans);
+    // ORGANIZE this org's facet findings → one clean section, appended NOW (continuous, like discovery).
+    let section = '';
+    try { section = await condenseComplete(rs.buildOrganizeEnrichPrompt({ org, facet, raw: p.body || ans }), { numPredict: 1100 }); } catch {}
+    section = (section && section.trim()) ? section.trim() : `## ${org}\n- **${rs.facetLabel(facet)}:** ${((p.body || ans) || '').slice(0, 800).trim() || 'not found'}`;
+    const header = enriched.length === 0 ? `# Enrichment deliverable\n\n**Task:** ${goal}\n\n**Facet:** ${facet}\n\n---\n\n` : '';
+    try { await filesLib.dispatch({ tag: 'file-append', attrs: { path: file }, body: `${header}${section}\n\n` }); }
+    catch (e) { console.error('[enrich] append failed:', e.message); }
+    // DRIVE → Canvas: mirror the organized section as a live per-org block as the run advances.
+    try { const blk = require('./studio/canvas_emit').orgSectionBlock(section); await canvasEmit({ focusId: focus.id, title: goal, tabMode: 'RESEARCH', blockType: blk.blockType, data: blk.data }); } catch {}
+    enriched.push(org); try { db.setMeta(coveredKey, JSON.stringify(enriched.slice(-300))); } catch {}
+    // Advancing one org per pass with a distinct signature = never looks "stuck"; progressed reflects real
+    // content (so a run of empty "not found" passes still moves forward but is honestly logged).
+    progressed = !!(section && section.length > 40);
+    note = `enriched ${org} → ${rs.facetLabel(facet)} (${enriched.length}/${sourceOrgs.length})`; sig = `enrich:${org.toLowerCase()}`;
+  }
+
+  if (note) {
+    try {
+      const rr = db.insertMonologue({ content: note, model: 'operator', type: 'reading' });
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: rr.id, ts: rr.ts, content: `(enriching: ${String(focus.content).slice(0, 30)}) ${note.slice(0, 80)}`, type: 'reading' });
+    } catch {}
+    try { blackboard.append({ source: 'monologue', kind: 'reading', focusId: focus.id, content: note, signature: sig }); } catch {}
+  }
+  const outcome = done
+    ? focusLib.recordOutcome(focus, { control: { type: 'done', note } })
+    : focusLib.recordOutcome(focus, { progressed });
+  console.log(`[enrich] #${focus.id} → ${done ? 'ALL-ENRICHED' : note} → ${outcome.action}`);
+  return outcome;
+}
+
+// Stand up an ENRICH run over a prior dossier: a NEW directed focus whose work-list is the source
+// dossier's orgs and whose single job is to fill `facet` across all of them. Returns { focus, orgs } or
+// null. Does NOT kick the driver — the caller decides when to start (live entry kicks it; the re-establish
+// script lets Lucas start it deliberately). Pure-ish: only focus/meta writes + a full dossier read.
+async function establishEnrichRun({ sourceFocusId = null, facet = '', sourceTurnId = null, priorGoal = '' } = {}) {
+  const cd = require('./lib/condense');
+  const focusLib = require('./lib/focus');
+  if (!facet || !facet.trim()) return null;
+  const path = `notes/directed-${sourceFocusId}-dossier.md`;
+  let dossier = ''; try { const r = filesLib.fileReadFull(path); dossier = (r && r.text) || ''; } catch {}
+  const orgs = cd.dossierOrgs(dossier);
+  if (!orgs.length) { console.log(`[enrich] no orgs in ${path} — cannot establish`); return null; }
+  const goal = `Enrich the existing research on ${orgs.length} organization(s) by filling, FOR EACH, this facet: ${facet}. These orgs are already documented — deepen them, do NOT find new ones.${priorGoal ? ` (Deepens: "${String(priorGoal).slice(0, 140)}".)` : ''}`.slice(0, 780);
+  const r = await focusLib.setFromDirective(goal, sourceTurnId);
+  if (!r || !r.focus) return null;
+  const fid = r.focus.id;
+  try {
+    db.setMeta(`focus.${fid}.mode`, 'enrich');
+    db.setMeta(`focus.${fid}.enrich_facet`, facet.trim());
+    db.setMeta(`focus.${fid}.enrich_orgs`, JSON.stringify(orgs));
+    db.setMeta(`focus.${fid}.enrich_source`, String(sourceFocusId || ''));
+    db.setMeta(`focus.${fid}.covered`, '[]');
+    db.setMeta(`focus.${fid}.file`, `notes/directed-${fid}.md`);
+  } catch (e) { console.error('[enrich] establish meta failed:', e.message); }
+  console.log(`[enrich] established #${fid} over #${sourceFocusId} — ${orgs.length} orgs, facet: ${facet.slice(0, 60)}`);
+  return { focus: r.focus, orgs };
 }
 
 // SEE — run any image (base64, from ANY surface: her browser, the shared browser, the screen, an

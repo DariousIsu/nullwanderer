@@ -53,6 +53,7 @@ const smokes = [
   'smoke_canvas_route.js',
   'smoke_leakguard.js',
   'smoke_research.js',
+  'smoke_research_enrich.js',
   'smoke_self_dev.js',
   'smoke_self_state.js',
   'smoke_self_narrative.js',

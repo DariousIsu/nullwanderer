@@ -114,6 +114,49 @@ function buildDeepenPrompt({ goal = '', target = '', facets = [], guidance = '' 
   return `You are DEEP-researching ONE organization for Lucas's task, staying on it until it is well covered.\n\nTASK: ${goal}\nCURRENT ORGANIZATION: ${target}\nFacets already gathered on it: ${facetsSummary(facets)}\n${g}\nTHIS PASS: pursue the NEXT most valuable facet you do NOT yet have on ${target}, in priority order: (1) named leadership & key staff with their roles, (2) direct contact details (work emails, phone numbers, mailing address, key social/LinkedIn) — check the org's own /contact or /about page, (3) detailed policy positions / notable work, (4) funding & affiliations, (5) recent activity / publications. EXHAUST a good source before moving on: when you land on the organization's OWN site, use open_page to go straight into its /team, /leadership, /about and /contact pages (and follow promising links) — do NOT bounce to a fresh web_search until you've actually used the site you're on. Ground EVERY detail in what the tools return — never invent a name, email, or number. If you cannot verify a real, FULL name, write "not found" — NEVER use initials, abbreviations, or any placeholder (e.g. "R. Z." or "VP") in place of a real name.\nIf you have already gathered a solid, well-rounded picture of ${target} (what it is, its people, how to reach it, its positions), reply with exactly SATURATED and nothing else.\nEnd with a final line: FACET: <the facet you added this pass>`;
 }
 
+// --- ENRICH / FACET-FILL mode -----------------------------------------------
+// The discovery loop above WALKS NEW orgs and AVOIDS the covered set (buildNewTargetPrompt tells the
+// model "do NOT pick any already-documented org"). Enrich is its mirror image: re-ENTER a KNOWN set of
+// orgs (pulled from a prior dossier) and fill ONE named facet across all of them — "expand the 21 think
+// tanks FOR THEIR policy/government-relations VPs + contacts". Without this, an "expand … for their VPs"
+// order drifts into discovering brand-new orgs (the live #2027 failure), because the only deepening the
+// discovery loop knows is its own next-facet pass on the org it JUST opened — never the existing set.
+
+// Pick the next source org not yet enriched (case-insensitive), or null when the facet is filled across
+// all of them. Deterministic order = the source dossier's order, so the run is resumable + predictable.
+function pickEnrichTarget({ sourceOrgs = [], enriched = [] } = {}) {
+  const done = new Set((Array.isArray(enriched) ? enriched : []).map(s => String(s || '').trim().toLowerCase()).filter(Boolean));
+  for (const o of (Array.isArray(sourceOrgs) ? sourceOrgs : [])) {
+    const name = String(o || '').trim();
+    if (name && !done.has(name.toLowerCase())) return name;
+  }
+  return null;
+}
+
+// A short, clean label for the facet (used as the section field name). The full facet text stays in the
+// prompt; this is only for the "## Org\n- **<label>:** …" header so sections read uniformly.
+function facetLabel(facet = '') {
+  const s = String(facet || '').replace(/[*_#`"]/g, '').replace(/\s+/g, ' ').trim();
+  if (!s) return 'Findings';
+  return (s.length > 56 ? s.slice(0, 56).replace(/\s+\S*$/, '') + '…' : s);
+}
+
+// Enrich pass: fill ONLY the named facet for ONE KNOWN org. No TARGET/discovery control line — the org
+// is given, the pass is single-purpose. parsePass still strips any leaked control JSON from the body.
+function buildEnrichPrompt({ goal = '', org = '', facet = '', guidance = '' } = {}) {
+  const g = guidance ? `\n${guidance}\n` : '';
+  return `You are FILLING IN one specific piece of information about a KNOWN organization for Lucas. You are NOT looking for new organizations — the organization is fixed below.\n\nTASK: ${goal}\nORGANIZATION: ${org}\nWHAT TO FIND THIS PASS: ${facet}\n${g}\nGo to ${org}'s OWN website — its /team, /leadership, /staff, /about, /contact, /press pages — and any reliable source, and gather ONLY: ${facet}. For EACH person, give their FULL name and exact title, plus a direct work email / phone / LinkedIn where available. When you land on the org's own site, use open_page to go straight into its /team, /leadership, /about and /contact pages and follow promising links — do NOT bounce to a fresh web_search until you've actually used the site you're on. Ground EVERY detail in what web_search / browser_read / echo actually return — never invent a name, title, email, or number. If a real, FULL name cannot be verified, write "not found" — NEVER use initials, abbreviations, or "VP"/"the VP" as a stand-in for a real name.\nReport what you found for ${org} now.`;
+}
+
+// Organize the enrich findings on ONE org into a clean, facet-scoped section appended to the deliverable.
+function buildOrganizeEnrichPrompt({ org = '', facet = '', raw = '' } = {}) {
+  const label = facetLabel(facet);
+  return [
+    { role: 'system', content: `You organize raw research findings about ONE named facet for ONE organization into a single clean section. Ground ONLY in the notes — never add a name, title, email, or number not present; write "not found" for anything missing. NEVER use initials, abbreviations, or a placeholder in place of a real name (e.g. "R. Z." or "VP" is NOT a name — write "not found"). Drop any leaked JSON or tool/control text. Dedupe repeats. Output EXACTLY this Markdown and nothing else:\n## ${org || '<organization>'}\n- **${label}:** <named individuals with their roles and direct contact details, one per line; or "not found">` },
+    { role: 'user', content: `RAW FINDINGS ON ${org} (facet: ${facet}):\n"""\n${String(raw).slice(0, 12000)}\n"""\n\nProduce the clean section now.` }
+  ];
+}
+
 // Organize pass (reasoner): fold ONE target's accumulated raw passes into a single clean section.
 function buildOrganizeTargetPrompt({ target = '', raw = '' } = {}) {
   return [
@@ -126,5 +169,6 @@ module.exports = {
   parsePass, newContentChars, decideAdvance, facetsSummary,
   isClarification, buildGuidanceBlock, isStatusRequest,
   buildNewTargetPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt,
+  pickEnrichTarget, facetLabel, buildEnrichPrompt, buildOrganizeEnrichPrompt,
   MAX_PASSES_PER_TARGET, MIN_NEW_CHARS
 };
