@@ -56,7 +56,11 @@ const fastDeps = { delay: async () => {}, maxPolls: 2, pollMs: 0 };
   const micRes = await ma.start({ dispatch: mkDispatch() });
   const micCall = calls.find(c => c.name === 'transcription_capture_start');
   ok(micCall.args.source_type === 'mic' && micCall.args.device_index === undefined, 'mic source → no device_index');
-  ok(micRes.isolated === false, 'no device → isolated=false (default mix, footgun-flagged)');
+  ok(micRes.isolated === false, 'unresolved device → isolated=false (default mix, footgun-flagged)');
+
+  // --- default capture device = VB-CABLE "CABLE Input" (standalone, no Voicemeeter app) ---
+  delete process.env.ZOE_MEETING_AUDIO_DEVICE; delete process.env.ZOE_MEETING_AUDIO_DEVICE_INDEX;
+  ok(require('../lib/config').meetingAudioConfig().deviceName === 'CABLE Input', 'default capture device = "CABLE Input" (VB-CABLE, no app to run)');
 
   // --- device NAME resolution (indices shift; names don't) ---
   delete process.env.ZOE_MEETING_AUDIO_DEVICE_INDEX;

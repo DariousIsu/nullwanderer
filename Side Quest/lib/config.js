@@ -123,9 +123,11 @@ function meetingAudioConfig() {
   const source = get('ZOE_MEETING_AUDIO_SOURCE').trim() || 'loopback';
   const di = parseInt(get('ZOE_MEETING_AUDIO_DEVICE_INDEX', '').trim(), 10);
   const deviceIndex = Number.isFinite(di) ? di : null;
-  // Prefer targeting the cable by NAME (e.g. "CABLE Input") — device indices shift across reboots, names
-  // don't. meeting_audio resolves the name → a current index at capture time.
-  const deviceName = get('ZOE_MEETING_AUDIO_DEVICE').trim() || '';
+  // Target the cable by NAME (indices shift across reboots, names don't) — resolved → a current index at
+  // capture time. DEFAULT = "CABLE Input" (VB-CABLE: a standalone driver-level virtual cable, no app to run,
+  // unlike Voicemeeter's buses). This is also the SAFE default — a dedicated cable, never the default output
+  // mix, so a parallel meeting's audio can't bleed in. Override via ZOE_MEETING_AUDIO_DEVICE.
+  const deviceName = get('ZOE_MEETING_AUDIO_DEVICE').trim() || 'CABLE Input';
   return { enabled, source, deviceIndex, deviceName };
 }
 
