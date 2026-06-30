@@ -170,20 +170,20 @@ function buildAnswer(track, text) {
     return { handled: true, kind: 'count', block, note: `count=${count}` };
   }
   if (q.kind === 'rank') {
-    // Rank what we ACTUALLY hold by how much is gathered (section body length = depth proxy), top-N.
-    const ranked = (track.sections || [])
-      .map(s => ({ heading: s.heading, size: String(s.body || '').replace(/\s+/g, ' ').trim().length }))
-      .filter(x => x.heading)
-      .sort((a, b) => b.size - a.size);
+    // Rank what we ACTUALLY hold by MEASURED completeness — real data points (named people, contacts,
+    // links) vs fields that came back "not found" — NOT raw length (a long record full of "not found"
+    // is not complete). The program reads each record and determines it.
+    const ranked = require('./record_completeness').rankByCompleteness(track.sections || []);
     const n = (q.n && q.n > 0) ? Math.min(q.n, Math.max(ranked.length, orgs.length)) : Math.min(5, Math.max(ranked.length, orgs.length));
     if (ranked.length) {
       const top = ranked.slice(0, n);
-      const block = `From ${where}, the ${top.length === 1 ? 'one you have' : `${top.length} you have`} the most on (ranked by how much is gathered):\n${top.map((t, i) => `${i + 1}. ${t.heading}`).join('\n')}.${liveTail}`;
+      const line = (t) => `${t.heading} (${t.dataPoints} data point${t.dataPoints === 1 ? '' : 's'}${t.notFound ? `, ${t.notFound} still missing` : ''})`;
+      const block = `From ${where}, the ${top.length === 1 ? 'record you have' : `${top.length} you have`} the most complete (by real detail gathered, not length):\n${top.map((t, i) => `${i + 1}. ${line(t)}`).join('\n')}.${liveTail}`;
       return { handled: true, kind: 'rank', block, note: `rank top${top.length}/${ranked.length}` };
     }
-    // index-only (no parsed bodies to rank by) → honest: name what's on file, can't rank by depth.
+    // index-only (no parsed bodies to score) → honest: name what's on file, can't rank by completeness.
     const block = count
-      ? `You have ${count} organization${count === 1 ? '' : 's'} on file from ${where} (${orgs.slice(0, n).join(', ')}${count > n ? ', …' : ''}); I can't rank them by depth right now — open the dossier to compare.${liveTail}`
+      ? `You have ${count} organization${count === 1 ? '' : 's'} on file from ${where} (${orgs.slice(0, n).join(', ')}${count > n ? ', …' : ''}); I can't rank them by completeness right now — open the dossier to compare.${liveTail}`
       : `You don't have any organizations on file yet from ${where}.${liveTail}`;
     return { handled: true, kind: 'rank', block, note: `rank:index-only=${count}` };
   }

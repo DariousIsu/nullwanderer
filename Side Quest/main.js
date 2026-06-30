@@ -2672,9 +2672,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (!directedStopHandled && !expandHandled && !followupFired) {
       const tk = require('./lib/track');
       const act = require('./lib/activity');
+      const ri = require('./lib/records_interp');
       const poll = require('./lib/poll');
       const sources = [
-        { name: 'research-deliverable', kind: 'deliverable', tier: 'deterministic', match: (q) => tk.classifyQuery(q).is },
+        // deliverable: a fixed intent (count/list/…/rank) OR a records-question the fixed menu misses
+        // (→ the cloud reads our records, instead of falling through to the operator's web search).
+        { name: 'research-deliverable', kind: 'deliverable', tier: 'deterministic', match: (q) => tk.classifyQuery(q).is || ri.isRecordsQuestion(q) },
         { name: 'current-activity', kind: 'activity', tier: 'deterministic', match: (q) => act.isActivityQuestion(q) },
       ];
       const top = poll.pick(userMessage, sources);
@@ -2712,6 +2715,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             statusHandled = true;
             console.log(`[poll] deliverable answered in chat from ${track.kind} track (${ans.note}, route=${route.reason})`);
           }
+        } else if (!ans.handled && ri.isRecordsQuestion(userMessage) && track.kind !== 'none' && (track.sections || []).length) {
+          // CLOUD RECORDS-INTERPRETER — the question is about our held research but matched no fixed
+          // intent (e.g. "which is the most complete record", "where's our coverage thin", "compare our
+          // profiles of X and Y"). READ the records and answer from them, instead of the operator's web
+          // search. Grounded: the prompt forbids inventing or suggesting a web lookup. Fail-safe.
+          try {
+            const msgs = ri.buildRecordsPrompt({ question: userMessage, goal: track.goal, sections: track.sections });
+            const out = await condenseComplete(msgs, { numPredict: 700 });
+            if (out && out.trim()) {
+              composedUserMessage += `\n\n[${userName} asked about your OWN research records. You READ them — here is the grounded answer. Relay it in your voice, exactly and completely; do NOT add anything not in it, and do NOT offer to look it up or search the web:\n${out.trim()}]`;
+              statusHandled = true;
+              console.log(`[poll→records-interp] read ${(track.sections || []).length} records → grounded answer`);
+            }
+          } catch (e) { console.error('[records-interp] failed:', e.message); }
         }
       } else if (top && top.kind === 'activity' && !socialTurn) {
         const snap = await laneSnapshot();
