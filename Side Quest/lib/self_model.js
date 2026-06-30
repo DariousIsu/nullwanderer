@@ -86,10 +86,17 @@ async function classify3(a, b) {
 // values, opinions, and positive traits still flow through untouched.
 const SELF_REJECT = /\b(over[\s-]?analyz|hesitat|oversell|fabricat|safety net|second[\s-]?guess|struggle to|deferential|incomplete information|don'?t (?:have|experience) (?:a |any |personal )?(?:self|sense of self|preferenc|favou?rite|feelings?|emotions?|opinions?|enjoyment|fatigue)|not (?:sure|certain) (?:i|I)(?:'?m| was| am)? (?:honest|being honest)|tendency to (?:avoid|frame|question|fabricat|oversell|overanaly)|default to (?:research|a broad|broad overview)|can'?t (?:access|interact|use the|browse))/i;
 
+// GROUNDING GATE (#5): reject a "self-trait" that is actually a mangled fragment of LUCAS's 2nd-person
+// sentence captured as her 1st-person identity ("you know who you are but not the flavor" → "I am but not
+// the flavor"; "you can keep building that beautiful personality" → "I am you can keep building…"). A real
+// self-statement never leads with a conjunction/2nd-person pronoun, nor embeds a "you can/will/keep…" clause.
+const _GARBLED = /^I(?:'?m| am)\s+(?:you\b|your\b|but\b|and\b|or\b|nor\b|so\b|yet\b|because\b|the flavor\b|not the\b)|^I(?:'?m| am)\b[^.!?]{0,60}\byou\s+(?:can|will|would|should|could|keep|are|have|know|might|need)\b/i;
+
 async function record(content, { category = 'insight', importance = 0.6, decideFn = null, epistemic = 'speculated' } = {}) {
   const text = String(content || '').trim();
   if (text.length < 8) return null;
   if (SELF_REJECT.test(text)) { console.log('[self_model] guardrail rejected self-critical takeaway:', text.slice(0, 70)); return { skipped: 'self-criticism' }; }
+  if (_GARBLED.test(text)) { console.log('[self_model] guardrail rejected garbled/2nd-person-leaked self-statement:', text.slice(0, 70)); return { skipped: 'garbled' }; }
   let cat = VALID.has(category) ? category : 'insight';
   if (cat === 'insight') cat = inferCategory(text);  // upgrade the generic default to a real category when the content reveals one
 
@@ -171,7 +178,9 @@ function detectAffirmedTrait(text) {
   if ((m = t.match(/\byou\s+(tend to|always|consistently|usually|have a way of)\s+([^.!,;:?]{4,80})/i))) return `I ${m[1].toLowerCase()} ${m[2].trim()}`;
   if ((m = t.match(/\byou(?:'re| are)\s+(?:really |very |quite |genuinely |so )?([a-z][^.!,;:?]{4,80})/i))) {
     const trait = m[1].trim();
-    if (_TASKY.test(trait) || _DETERMINER.test(trait)) return null;
+    // reject task/role phrasings AND conjunction/pronoun-led fragments ("...you are BUT not the flavor"
+    // → "but not the flavor"; a captured clause, not a trait). Belt to the record() grounding gate.
+    if (_TASKY.test(trait) || _DETERMINER.test(trait) || /^(but|and|or|nor|so|yet|because|you|your|i|we|they|just)\b/i.test(trait)) return null;
     return `I am ${trait}`;
   }
   return null;
