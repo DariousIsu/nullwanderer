@@ -52,6 +52,12 @@ ok(txDoc.source === 'meeting_transcript' && txDoc.parent_id === res.notesId, 'co
 ok(/Lucas: We should cover Louisiana/.test(txDoc.body), 'companion transcript holds the diarized lines');
 ok(db.listUnpromotedDocuments(10).length === 2, 'both land un-promoted → flow into the nightly promotion');
 
+// --- audio transcript (virtual-cable path) overrides captions as the companion ---
+db.setMeta('gmeet_started_at', '1000');
+const res2 = ml.land({ minutes: 'm', recap: 'r', audioTranscript: 'Sean McElwee: I will pull the polling data and email Devon about the study.' });
+const audioTx = db.getDocument(res2.transcriptId);
+ok(/I will pull the polling data and email Devon/.test(audioTx.body), 'Echo AUDIO transcript is used as the companion when provided (preferred over captions)');
+
 // --- fail-safe: nothing to land ---
 db.setMeta('gmeet_started_at', '9999999999999');   // no transcript after this
 const empty = ml.land({ minutes: '', recap: '' });

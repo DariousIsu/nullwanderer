@@ -59,6 +59,7 @@ const smokes = [
   'smoke_promote.js',
   'smoke_retention.js',
   'smoke_meeting_lane.js',
+  'smoke_meeting_audio.js',
   'smoke_localdb.js',
   'smoke_intake.js',
   'smoke_estimate_correction.js',

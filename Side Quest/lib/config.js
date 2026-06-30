@@ -113,6 +113,19 @@ function scribeModel() {
   return get('ZOE_MEETING_SCRIBE_MODEL').trim() || 'gemini-3-flash-preview:cloud';
 }
 
+// MEETING AUDIO → Echo transcription fusion (the authoritative diarized companion transcript). OFF by
+// default — captions feed the live scribe; this adds high-quality audio transcription once the operator
+// routes the Meet pane's audio to a VIRTUAL OUTPUT DEVICE (e.g. VB-CABLE) and points Echo's loopback at
+// it (physical speakers stay silent → no echo). Enable: ZOE_MEETING_AUDIO=1. Source: ZOE_MEETING_AUDIO_SOURCE
+// (loopback|mic, default loopback). Device: ZOE_MEETING_AUDIO_DEVICE_INDEX (the virtual cable's index).
+function meetingAudioConfig() {
+  const enabled = /^(1|true|yes|on)$/i.test(get('ZOE_MEETING_AUDIO', '').trim());
+  const source = get('ZOE_MEETING_AUDIO_SOURCE').trim() || 'loopback';
+  const di = parseInt(get('ZOE_MEETING_AUDIO_DEVICE_INDEX', '').trim(), 10);
+  const deviceIndex = Number.isFinite(di) ? di : null;
+  return { enabled, source, deviceIndex };
+}
+
 // --- Tiered subconscious (local volume + cloud depth; see docs/SUBCONSCIOUS_TIERED_SPEC.md) ---
 // All env-resolved (safe at module-load), all reversible/fail-safe to local.
 //   mode: hybrid (default) | triage | local (never cloud, $0) | all (legacy every-tick-cloud)
@@ -137,4 +150,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, emailConfig, discordConfig, APP_ROOT, ENV_PATH };

@@ -53,13 +53,15 @@ function pointer({ title = 'a meeting', lines = 0 } = {}) {
 
 // I/O: land the completed notes + companion transcript into the short-term documents store. Returns
 // { landed, notesId, transcriptId, hasTranscript }. Idempotent-ish via the meeting-anchored ref.
-function land({ minutes = '', recap = '', dateStr = '', deps = {} } = {}) {
+function land({ minutes = '', recap = '', audioTranscript = '', dateStr = '', deps = {} } = {}) {
   const _db = deps.db || db;
   try {
     const url = _db.getMeta('gmeet_url') || '';
     const startedAt = parseInt(_db.getMeta('gmeet_started_at') || '0', 10) || 0;
+    // Companion transcript = the high-quality Echo AUDIO transcript when available (Lucas's virtual-cable
+    // path), else the caption-driven transcript Meet gave us. Audio is authoritative + fully diarized.
     const rows = startedAt ? (_db.getTranscriptSince(startedAt, 5000) || []) : [];
-    const transcriptText = formatTranscript(rows);
+    const transcriptText = (String(audioTranscript || '').trim().length >= 40) ? String(audioTranscript).trim() : formatTranscript(rows);
     const { notes, transcript } = buildArtifacts({ title: meetingTitle({ url, dateStr }), minutes, recap, transcriptText });
     if (!notes) return { landed: false };
     const n = _db.insertDocument({ title: notes.title, body: notes.body, source: notes.source, ref: `meeting:${startedAt}`, understanding: notes.understanding });

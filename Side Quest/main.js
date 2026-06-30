@@ -850,6 +850,9 @@ ipcMain.handle('canvas:open', () => { createCanvasWindow(); return { ok: true };
 ipcMain.handle('feeds:list', () => { try { return { ok: true, feeds: feedsStore.list() }; } catch (e) { return { ok: false, error: e.message }; } });
 ipcMain.handle('feeds:add', (_e, { url, title } = {}) => { try { return feedsStore.add(url, title); } catch (e) { return { ok: false, error: e.message }; } });
 ipcMain.handle('feeds:remove', (_e, { url } = {}) => { try { return feedsStore.remove(url); } catch (e) { return { ok: false, error: e.message }; } });
+ipcMain.handle('feeds:video-list', () => { try { return { ok: true, videos: feedsStore.videoList() }; } catch (e) { return { ok: false, error: e.message }; } });
+ipcMain.handle('feeds:video-add', (_e, { url, title } = {}) => { try { return feedsStore.videoAdd(url, title); } catch (e) { return { ok: false, error: e.message }; } });
+ipcMain.handle('feeds:video-remove', (_e, { url } = {}) => { try { return feedsStore.videoRemove(url); } catch (e) { return { ok: false, error: e.message }; } });
 ipcMain.handle('feeds:fetch', async (_e, { itemLimit = 30 } = {}) => {
   try {
     const urls = feedsStore.list().map(f => f.url);
@@ -916,6 +919,13 @@ async function startCanvasMeeting(url, title) {
   win.focus();
   try { db.setMeta('gmeet_host', 'canvas'); require('./lib/gmeet').start(String(url)); } catch (e) { console.error('[meet] gmeet start failed:', e.message); }
   try { startScribeHeartbeat(); } catch (e) { console.error('[scribe] heartbeat start failed:', e.message); }
+  // MEETING AUDIO (Lucas's virtual-cable path) — start Echo transcription of the meeting audio when enabled
+  // + a device is configured. OFF by default (captions stand in); fully fail-safe.
+  try {
+    const r = await require('./lib/meeting_audio').start({ dispatch: (t) => echoSuit.dispatch(t) });
+    if (r && r.ok) console.log(`[meet-audio] Echo capture started (source=${r.source}${r.deviceIndex != null ? ` dev=${r.deviceIndex}` : ''}, session ${r.sessionId})`);
+    else if (r && r.reason && r.reason !== 'disabled') console.log(`[meet-audio] capture not started: ${r.reason}`);
+  } catch (e) { console.error('[meet-audio] start failed:', e.message); }
   return true;
 }
 
@@ -1761,7 +1771,11 @@ async function scribeHeartbeatTick() {
     const minutes = (() => { try { return scribe.minutes(); } catch { return ''; } })();
     let recap = ''; try { recap = await scribe.finalize(); } catch (e) { console.error('[scribe] finalize failed:', e.message); }
     if (recap) { try { const rr = db.insertMonologue({ content: `Meeting record (scribe):\n${recap}`, model: 'scribe', type: 'reading' }); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: rr.id, ts: rr.ts, content: '(scribe) meeting record', type: 'reading' }); } catch {} }
-    try { const ml = require('./lib/meeting_lane').land({ minutes, recap }); if (ml.landed) console.log(`[meeting] notes${ml.hasTranscript ? ' + companion transcript' : ''} landed in short-term store (doc ${ml.notesId}${ml.transcriptId ? `, transcript ${ml.transcriptId}` : ''})`); } catch (e) { console.error('[meeting] landing failed:', e.message); }
+    // Stop the Echo meeting-audio capture (if it was running) → its diarized transcript becomes the
+    // authoritative companion (else the caption transcript stands in). Fail-safe.
+    let audioTranscript = '';
+    try { const a = await require('./lib/meeting_audio').stop({ dispatch: (t) => echoSuit.dispatch(t) }); if (a && a.ok && a.transcript) { audioTranscript = a.transcript; console.log(`[meet-audio] diarized transcript: ${a.segments.length} segments`); } } catch (e) { console.error('[meet-audio] stop failed:', e.message); }
+    try { const ml = require('./lib/meeting_lane').land({ minutes, recap, audioTranscript }); if (ml.landed) console.log(`[meeting] notes${ml.hasTranscript ? ` + companion transcript (${audioTranscript ? 'audio' : 'captions'})` : ''} landed in short-term store (doc ${ml.notesId}${ml.transcriptId ? `, transcript ${ml.transcriptId}` : ''})`); } catch (e) { console.error('[meeting] landing failed:', e.message); }
     try { await emitMeetingNotes(recap || minutes, { final: true }); } catch {}
   }
   stopScribeHeartbeat();
