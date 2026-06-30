@@ -2868,7 +2868,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           // search. Grounded: the prompt forbids inventing or suggesting a web lookup. Fail-safe.
           try {
             const msgs = ri.buildRecordsPrompt({ question: userMessage, goal: track.goal, sections: track.sections });
-            const out = await condenseComplete(msgs, { numPredict: 700 });
+            const out = await condenseComplete(msgs, { numPredict: 1400 });
             if (out && out.trim()) {
               composedUserMessage += `\n\n[${userName} asked about your OWN research records. You READ them — here is the grounded answer. Relay it in your voice, exactly and completely; do NOT add anything not in it, and do NOT offer to look it up or search the web:\n${out.trim()}]`;
               statusHandled = true;
@@ -4614,7 +4614,7 @@ async function runDirectedResearchPass(focus) {
     if (adv.advance) {
       // CLOUD ORGANIZE this target → one clean section, appended to the deliverable NOW (continuous).
       let section = '';
-      try { section = await condenseComplete(rs.buildOrganizeTargetPrompt({ target: target.name, raw: target.raw }), { numPredict: 1500 }); } catch {}
+      try { section = await condenseComplete(rs.buildOrganizeTargetPrompt({ target: target.name, raw: target.raw }), { numPredict: 2000 }); } catch {}
       section = (section && section.trim()) ? section.trim() : `## ${target.name}\n${target.raw.slice(0, 1500)}`;
       const header = covered.length === 0 ? `# Directed research deliverable\n\n**Task:** ${goal}\n\n---\n\n` : '';
       try { await filesLib.dispatch({ tag: 'file-append', attrs: { path: file }, body: `${header}${section}\n\n` }); }
@@ -4706,7 +4706,7 @@ async function runDeepResearchTarget({ org, goal = '', facet = '', guidance = ''
   const webRaw = (web && web.answer) ? String(web.answer).trim() : '';
   const deepRaw = (deep && deep.answer) ? String(deep.answer).trim() : '';
   let section = '';
-  try { section = await condenseComplete(rs.buildMergeLanesPrompt({ org, facet, webRaw, deepRaw, known }), { numPredict: 1300 }); } catch {}
+  try { section = await condenseComplete(rs.buildMergeLanesPrompt({ org, facet, webRaw, deepRaw, known }), { numPredict: 2000 }); } catch {}
   section = (section && section.trim()) ? section.trim() : `## ${org}\n- **${rs.facetLabel(facet)}:** ${((webRaw || deepRaw) || '').slice(0, 800).trim() || 'not found'}`;
   const used = (r) => !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.length);
   return { section, webRaw, deepRaw, lanes: { web: used(web), deep: used(deep) } };
@@ -4759,7 +4759,7 @@ async function runEnrichResearchPass(focus) {
       } catch (e) { console.error('[enrich] pass failed:', e.message); }
       const p = rs.parsePass(ans);
       // ORGANIZE this org's facet findings → one clean section, appended NOW (continuous, like discovery).
-      try { section = await condenseComplete(rs.buildOrganizeEnrichPrompt({ org, facet, raw: p.body || ans }), { numPredict: 1100 }); } catch {}
+      try { section = await condenseComplete(rs.buildOrganizeEnrichPrompt({ org, facet, raw: p.body || ans }), { numPredict: 1800 }); } catch {}
       section = (section && section.trim()) ? section.trim() : `## ${org}\n- **${rs.facetLabel(facet)}:** ${((p.body || ans) || '').slice(0, 800).trim() || 'not found'}`;
     }
     const header = enriched.length === 0 ? `# Enrichment deliverable\n\n**Task:** ${goal}\n\n**Facet:** ${facet}${deepMode ? ' (deep two-lane research)' : ''}\n\n---\n\n` : '';
