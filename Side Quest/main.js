@@ -1276,6 +1276,37 @@ ipcMain.handle('calendar:events', async (_e, { calendars = [], timeMin, timeMax 
   } catch (e) { console.error('[calendar] events failed:', e.message); return { ok: false, error: e.message }; }
 });
 
+// Event writes — OPERATOR-INITIATED only (their own workbench, their own calendar). `form` is the
+// editor-form shape; calendar_view.toGoogleEvent builds the validated Calendar v3 body. NEVER auto.
+ipcMain.handle('calendar:create-event', async (_e, { calendarId, form } = {}) => {
+  try {
+    if (!calendarId || !form) return { ok: false, error: 'calendar + form required' };
+    if (!gcal.isConnected(gcalOpts())) return { ok: false, error: 'Google not connected' };
+    const body = calendarView.toGoogleEvent(form, { timeZone: form.timeZone });
+    const created = await gcal.createEvent(calendarId, body, gcalOpts());
+    return { ok: true, id: created.id };
+  } catch (e) { console.error('[calendar] create failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('calendar:update-event', async (_e, { calendarId, eventId, form } = {}) => {
+  try {
+    if (!calendarId || !eventId || !form) return { ok: false, error: 'calendar + event + form required' };
+    if (!gcal.isConnected(gcalOpts())) return { ok: false, error: 'Google not connected' };
+    const body = calendarView.toGoogleEvent(form, { timeZone: form.timeZone });
+    const updated = await gcal.updateEvent(calendarId, eventId, body, gcalOpts());
+    return { ok: true, id: updated.id };
+  } catch (e) { console.error('[calendar] update failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('calendar:delete-event', async (_e, { calendarId, eventId } = {}) => {
+  try {
+    if (!calendarId || !eventId) return { ok: false, error: 'calendar + event required' };
+    if (!gcal.isConnected(gcalOpts())) return { ok: false, error: 'Google not connected' };
+    await gcal.deleteEvent(calendarId, eventId, gcalOpts());
+    return { ok: true };
+  } catch (e) { console.error('[calendar] delete failed:', e.message); return { ok: false, error: e.message }; }
+});
+
 // ============================ CANVAS (studio — saga canvas renderer) =========================
 // Render Zoe's LIVE canvas. CRITICAL: the canvas lives IN-MEMORY in the engine (canvas_publisher
 // _TABS/_BLOCKS + websocket fan-out); the engine serves it over GET /canvas (full snapshot). The
@@ -2989,7 +3020,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               const topN = require('./lib/intake').subsetTopN(intakeRoute.subset);
               const facet = intakeRoute.facet || `more detail and contacts${intakeRoute.target ? ' on ' + intakeRoute.target : ''}`;
               const er = await establishEnrichRun({ sourceFocusId: srcId, facet, sourceTurnId: userTurnRow && userTurnRow.id, deep: intakeRoute.deep, topN, priority: intakeRoute.priority });
-              if (er && er.focus) { kickDirectedFocusDriver(); created = { id: er.focus.id, kind: `${intakeRoute.deep ? 'deep ' : ''}enrich of ${er.orgs.length} org(s) for ${facet}`, orgCount: er.orgs.length }; }
+              if (er && er.focus) { kickDirectedFocusDriver(); created = { id: er.focus.id, kind: `${intakeRoute.deep ? 'deep ' : ''}enrich of ${er.orgs.length} org(s) for ${facet}`, orgCount: er.orgs.length, plan: er.plan || null }; }
             }
           } catch (e) { console.error('[intake] enrich setup failed:', e.message); }
         }
@@ -3002,8 +3033,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           if (r && r.focus) {
             try { if (intakeRoute && intakeRoute.deep) db.setMeta(`focus.${r.focus.id}.deep`, '1'); } catch {}
             try { if (intakeRoute && intakeRoute.priority) db.setMeta(`focus.${r.focus.id}.priority`, String(intakeRoute.priority)); } catch {}
+            // PAGE-1 PLAN (Pillar 0) — author + store it now so it's reviewable up front + ready as page 1.
+            // A discover run has no targets yet → the plan states objective/approach/databases (targets TBD).
+            let plan = null;
+            try { plan = await generateResearchPlan(r.focus, { goal, targets: [], facet: (intakeRoute && intakeRoute.facet) || '', deep: !!(intakeRoute && intakeRoute.deep) }); } catch {}
             kickDirectedFocusDriver();
-            created = { id: r.focus.id, kind: `${intakeRoute && intakeRoute.deep ? 'deep ' : ''}research run`, orgCount: 0 };
+            created = { id: r.focus.id, kind: `${intakeRoute && intakeRoute.deep ? 'deep ' : ''}research run`, orgCount: 0, plan };
           }
         }
 
@@ -3021,7 +3056,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               return orgCount ? est.readbackLine({ facet, orgCount, deep, priority }) : (facet ? `Understood as: gather "${String(facet).slice(0, 120)}".` : '');
             } catch { return ''; }
           })();
-          composedUserMessage += `\n\n[You have ACCEPTED this as a standing task and STARTED working it for real — it is now your active focus (a ${created.kind}) and you'll keep at it slice by slice until done or ${userName} stops you. In ONE or two sentences: (1) say you've started, AND (2) READ BACK your understanding + the estimate so he can catch a misread — use this exactly: "${readback}" — then (3) invite him to correct you if the goal or scope is off.${clarTail} ${honesty}]`;
+          // PLAN PREVIEW — the page-1 plan, proposed up front so Lucas can steer it before hours of work
+          // (the "plan shown" half of the acceptance test). Objective + approach + a target/db count.
+          const planLine = (() => {
+            try {
+              const p = created.plan; if (!p) return '';
+              const tgt = Array.isArray(p.targets) ? p.targets.length : 0;
+              const dbs = Array.isArray(p.databases) ? p.databases.length : 0;
+              return `Plan — Objective: ${String(p.objective || '').slice(0, 240)} Approach: ${String(p.approach || '').slice(0, 240)} (${tgt} target${tgt === 1 ? '' : 's'}; checking ${dbs} of our databases first).`;
+            } catch { return ''; }
+          })();
+          composedUserMessage += `\n\n[You have ACCEPTED this as a standing task and STARTED working it for real — it is now your active focus (a ${created.kind}) and you'll keep at it slice by slice until done or ${userName} stops you. In ONE or two sentences: (1) say you've started, AND (2) READ BACK your understanding + the estimate so he can catch a misread — use this exactly: "${readback}"${planLine ? ` — and briefly share the plan you'll follow: "${planLine}"` : ''} — then (3) invite him to correct you if the goal or scope is off.${clarTail} ${honesty}]`;
           console.log(`[focus] intake → standing focus #${created.id} created (${created.kind}) + driver kicked`);
         } else {
           // We RECOGNIZED a project but could NOT create the run — be honest, never claim it's underway.
@@ -4391,6 +4436,90 @@ async function condenseComplete(messages, { numPredict = 2500 } = {}) {
   } catch (e) { console.error('[condense] cloud failed:', e.message); return ''; }
 }
 
+// GENERATE + STORE the structured research PLAN (Pillar 0, page 1). The cloud authors it at project
+// start from what we know (goal, targets, facet, deep) + the canonical database list; we normalize to a
+// canonical shape and persist it on focus.<id>.plan so it's reviewable (surfaced in the readback,
+// editable by the correction handler) and rendered as page 1 at finalize. Fail-safe: cloud down → a
+// fully deterministic fallback plan (a plan ALWAYS exists). Run on the FAST editor model (like intake),
+// so a reasoning model can't burn the budget on hidden thinking and return empty.
+async function generateResearchPlan(focus, { goal = '', targets = [], facet = '', deep = false } = {}) {
+  const rp = require('./lib/research_plan');
+  const est = require('./lib/estimate');
+  let estimate = '';
+  try { estimate = est.estimateRun({ orgCount: (targets || []).length, deep }).human; if (estimate === '(nothing to do)') estimate = ''; } catch {}
+  const ctx = { goal, targets, facet, deep, estimate };
+  let plan = null;
+  try {
+    const fastModel = (() => { try { return require('./lib/models').getModelFor('editor', null); } catch { return null; } })();
+    const cloud = require('./lib/cloud_logic');
+    const raw = await cloud.ask({
+      task: 'research_plan', v: 1, model: fastModel, numPredict: 800,
+      input: rp.planInput(ctx), want: rp.planWant(), validate: rp.planValidator
+    });
+    if (raw) plan = rp.normalizePlan(raw, ctx);
+  } catch (e) { console.error('[plan] cloud generate failed:', e.message); }
+  if (!plan) plan = rp.fallbackPlan(ctx);
+  try { if (focus && focus.id != null) db.setMeta(`focus.${focus.id}.plan`, JSON.stringify(plan)); } catch {}
+  return plan;
+}
+
+// COMPOSE the deliverable as a CLOUD-AUTHORED professional document (Pillar 3) — "cloud writes
+// everything". Page 1 = the plan; then the cloud composes the whole product from the per-org sections,
+// COMPLETENESS-GATED against those same lossless sections (the ORACLE): any org the composer drops is
+// patched back verbatim, so N-in ≥ N-out always holds. Large runs are CHUNKED (map) so no call
+// truncates. Fail-safe: cloud down / empty → fall back to the deterministic lossless stitch (page 1 +
+// assemble.stitchDocument), so a finished run NEVER loses its deliverable. Returns the final markdown.
+async function composeDocument(focus, { goal = '', sections = [], completed = 'done', summary = '', gaps = '', indexedMissing = [] } = {}) {
+  const cp = require('./lib/compose');
+  const as = require('./lib/assemble');
+  const rp = require('./lib/research_plan');
+  const secs = (Array.isArray(sections) ? sections : []).filter(s => s && s.heading);
+  // page 1 — the stored plan, or generate one now (targets = the orgs we actually covered).
+  let plan = null;
+  try { const stored = db.getMeta(`focus.${focus.id}.plan`); if (stored) plan = JSON.parse(stored); } catch {}
+  if (!plan) {
+    const deep = (() => { try { return db.getMeta(`focus.${focus.id}.deep`) === '1'; } catch { return false; } })();
+    const facet = (() => { try { return db.getMeta(`focus.${focus.id}.enrich_facet`) || ''; } catch { return ''; } })();
+    try { plan = await generateResearchPlan(focus, { goal, targets: secs.map(s => s.heading), facet, deep }); } catch {}
+  }
+  const planPage = rp.renderPlanPage(plan || {});
+
+  // honest deterministic Gaps footer (indexed-but-missing + anything the composer dropped and we patched).
+  const gapLines = [];
+  for (const m of (Array.isArray(indexedMissing) ? indexedMissing : [])) gapLines.push(`- ${m} — section not captured in the deliverable file (indexed but missing)`);
+  if (String(gaps || '').trim()) gapLines.unshift(String(gaps).trim());
+
+  // CLOUD COMPOSE — chunked so a large run never truncates; the gate runs over the concatenation.
+  let composedBody = '';
+  try {
+    const groups = cp.chunkSections(secs, 14000);
+    const parts = [];
+    for (let i = 0; i < groups.length; i++) {
+      const msgs = cp.buildComposePrompt({ goal, sections: groups[i], chunkIndex: i, chunkTotal: groups.length });
+      const out = await condenseComplete(msgs, { numPredict: cp.composeBudget(groups[i]) });
+      if (out && out.trim()) parts.push(out.trim());
+    }
+    composedBody = parts.join('\n\n');
+  } catch (e) { console.error('[compose] cloud compose failed:', e.message); }
+
+  // FAIL-SAFE: cloud produced nothing usable → deterministic lossless stitch (page 1 + the oracle).
+  if (!composedBody || composedBody.trim().length < 80) {
+    console.warn('[compose] empty/short composition → falling back to lossless stitch');
+    const stitched = as.stitchDocument({ goal, completed, sections: secs, summary, gaps, indexedMissing });
+    return `${planPage}\n\n---\n\n${stitched}`;
+  }
+
+  // COMPLETENESS GATE — the lossless sections are the oracle; patch back any org the composer dropped.
+  const gate = cp.verifyComposition(composedBody, secs);
+  if (!gate.ok) {
+    console.warn(`[compose] composer dropped ${gate.missing.length} org(s) — patching verbatim from oracle: ${gate.missing.map(s => s.heading).join(', ')}`);
+    composedBody = cp.patchMissing(composedBody, gate.missing);
+    for (const s of gate.missing) gapLines.push(`- ${s.heading} — recovered from the research notes (composer omitted it)`);
+  }
+
+  return cp.assembleFinal({ goal, planPage, composedBody, gaps: gapLines.join('\n'), completed, count: secs.length });
+}
+
 // ASSEMBLE a finished directed run into one clean dossier by LOSSLESS DETERMINISTIC STITCH (Slice 1):
 // the accreted run file already holds one clean "## <org>" section per covered org (continuous organize
 // pass). We stitch those sections verbatim — N-in = N-out — and use the reasoner ONLY for the
@@ -4412,7 +4541,11 @@ async function condenseRun(focus, { reason = 'done' } = {}) {
     const rec = as.reconcileIndex(covered, sections);
     let wrapper = { summary: '', gaps: '' };
     try { const w = await condenseComplete(as.buildWrapperPrompt({ goal, sections }), { numPredict: 900 }); wrapper = as.parseWrapper(w); } catch {}
-    const condensed = as.stitchDocument({ goal, completed: reason, sections, summary: wrapper.summary, gaps: wrapper.gaps, indexedMissing: rec.indexedMissing });
+    // CLOUD-AUTHORED document (Pillar 3): page 1 plan → cloud-composed product → honest Gaps, with the
+    // lossless sections as the completeness ORACLE. composeDocument is fully fail-safe (falls back to the
+    // deterministic stitch if the cloud is down), so the deliverable is never lost. The wrapper Gaps seed
+    // the honest footer; the composer writes its own executive summary.
+    const condensed = await composeDocument(focus, { goal, sections, completed: reason, summary: wrapper.summary, gaps: wrapper.gaps, indexedMissing: rec.indexedMissing });
     const dossierPath = `notes/directed-${focus.id}-dossier.md`;
     try { await filesLib.dispatch({ tag: 'file-write', attrs: { path: dossierPath }, body: condensed }); }
     catch (e) { console.error('[condense] dossier write failed:', e.message); }
@@ -4823,8 +4956,12 @@ async function establishEnrichRun({ sourceFocusId = null, facet = '', sourceTurn
     if (deep) db.setMeta(`focus.${fid}.deep`, '1');   // two-lane (web ∥ structured) per org
     if (priority) db.setMeta(`focus.${fid}.priority`, String(priority));
   } catch (e) { console.error('[enrich] establish meta failed:', e.message); }
-  console.log(`[enrich] established #${fid} over #${sourceFocusId} — ${orgs.length} orgs, facet: ${facet.slice(0, 60)}${deep ? ' [DEEP]' : ''}${priority ? ' [' + priority + ']' : ''}`);
-  return { focus: r.focus, orgs };
+  // PAGE-1 PLAN (Pillar 0) — author + store it now, so it's reviewable at the start (the readback can
+  // surface it) and ready as page 1 at finalize. Best-effort; never blocks the run.
+  let plan = null;
+  try { plan = await generateResearchPlan(r.focus, { goal, targets: orgs, facet, deep }); } catch {}
+  console.log(`[enrich] established #${fid} over #${sourceFocusId} — ${orgs.length} orgs, facet: ${facet.slice(0, 60)}${deep ? ' [DEEP]' : ''}${priority ? ' [' + priority + ']' : ''}${plan ? ' [+plan]' : ''}`);
+  return { focus: r.focus, orgs, plan };
 }
 
 // SEE — run any image (base64, from ANY surface: her browser, the shared browser, the screen, an

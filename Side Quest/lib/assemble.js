@@ -149,5 +149,6 @@ function stitchDocument({ goal = '', completed = 'done', sections = [], summary 
 module.exports = {
   parseSections, countSections, reconcileIndex,
   buildWrapperPrompt, parseWrapper, WRAPPER_SYS,
-  stitchDocument
+  stitchDocument,
+  namesMatch: _namesMatch,   // exported so the cloud composer's completeness gate (lib/compose) reuses the EXACT oracle match
 };
