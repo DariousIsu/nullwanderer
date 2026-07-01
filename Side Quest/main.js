@@ -2852,12 +2852,35 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const qClass = classifyQuery(userMessage);
   let retrievedKnowledgeBlock = null;
   let rkRows = [];   // captured for the calibration assessor below (grounding signal)
+  let recallResult = null;   // OBJECT-FIRST recall (Phase 1) — the pulled Echo object + coverage, kept for the thin→enrich branch (Phase 2)
   try {
-    const rk = qClass === 'narrow'
-      ? await memoryLib.retrieve(userMessage, { k: 3, preferLeaf: true })   // entity-exact, leaf-first
-      : await memoryLib.retrieveScored(userMessage, { k: 6, minRelevance: 0.35 }); // floored: off-topic notes can't fill K (retrieveScored embeds the query itself)
-    rkRows = rk || [];
-    retrievedKnowledgeBlock = memoryLib.formatForPrompt(rk, userName);
+    if (qClass === 'narrow') {
+      // OBJECT-FIRST memory access — the object-graph path finally wired into CONVERSATION (was
+      // research-lane only). A narrow who/what question resolves its named entity to the canonical Echo
+      // OBJECT in ONE cheap call (quick_lookup: facts + bio + committees + degree) and answers FROM the
+      // whole record, not a 3-note local snapshot. coverage ('rich'|'thin') drives the wall→enrich reflex.
+      // Fail-safe: Echo down / no entity → object null → falls back to the local notes recall() also gathers.
+      const ar = require('./lib/active_recall');
+      recallResult = await ar.recall(userMessage, { k: 4 });
+      rkRows = (recallResult.notes || []).slice();
+      const parts = [];
+      const objLines = ar._objectLines(recallResult.object);
+      if (objLines.length) {
+        parts.push('What you already hold on this — your memory-graph record (answer directly FROM this, it is yours):\n' + objLines.join('\n'));
+        rkRows.unshift({ content: objLines.join(' '), source: 'object' });   // so the grounding assessor counts the pulled object as real grounding
+      }
+      // notes = local memory rows + Echo master-DB hits (mixed shapes) → format defensively, object leads.
+      const noteLines = (recallResult.notes || []).slice(0, 6)
+        .map(n => { const c = String((n && n.content) || '').replace(/\s+/g, ' ').trim().slice(0, 200); return c ? `  • ${c}` : ''; })
+        .filter(Boolean);
+      if (noteLines.length) parts.push('Related from your memory:\n' + noteLines.join('\n'));
+      retrievedKnowledgeBlock = parts.length ? parts.join('\n\n') : null;
+    } else {
+      // Broad/open turn — scored recency×relevance×importance retrieval keeps her texture (unchanged).
+      const rk = await memoryLib.retrieveScored(userMessage, { k: 6, minRelevance: 0.35 });
+      rkRows = rk || [];
+      retrievedKnowledgeBlock = memoryLib.formatForPrompt(rk, userName);
+    }
   } catch (err) { console.error('[main] knowledge retrieve failed:', err.message); }
 
   // POLL OWNS THE TURN: when the activity poll or an aggregate deliverable poll (count/list/facet/
