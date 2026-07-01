@@ -483,6 +483,7 @@ app.whenReady().then(() => {
     // came online by another route — the heartbeat keeps retrying regardless.
     engineSupervisor.ensure({ spawnIfDown: true })
       .then(r => { console.log(`[main] engine ${r.state}${r.pid ? ' (pid ' + r.pid + ')' : ''}`); return tryEchoAttach(); })
+      .then((attached) => { if (attached) rehydrateRecentCanvasDeliverables().catch(() => {}); })   // restore completed deliverables to the canvas after a restart
       .catch(e => { console.error('[main] engine ensure failed:', e.message); return tryEchoAttach(); })
       // STAGGER the Canvas behind the engine: only spawn it once the engine ensure+attach attempt has
       // completed, so its first load finds Echo connected (no "Echo engine not connected" flash). The
@@ -1808,6 +1809,16 @@ async function canvasUpsertBlock({ focusId, blockId, title, tabMode = 'DOC', blo
 // the canvas. Idempotent block_ids match the live-grow scheme, so this refills the same blocks. Once/run.
 const _canvasRehydrated = new Set();
 function _secBlockId(focusId, name) { return `sec-${focusId}-${String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 32)}`; }
+// Emit each `## Heading` section of a deliverable body as its own idempotent canvas block (same ids the
+// live-grow uses, so this REFILLS the same blocks rather than duplicating).
+async function emitDeliverableSections(focusId, goal, body) {
+  let n = 0;
+  for (const sec of String(body || '').split(/\n(?=##\s)/)) {
+    const m = sec.trim().match(/^##\s+(.+)/); if (!m) continue;
+    try { await canvasUpsertBlock({ focusId, blockId: _secBlockId(focusId, m[1].trim()), title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: sec.trim() } }); n++; } catch {}
+  }
+  return n;
+}
 async function rehydrateCanvasFromDeliverable(focus, file, target) {
   if (!focus || _canvasRehydrated.has(focus.id)) return;
   _canvasRehydrated.add(focus.id);
@@ -1815,20 +1826,33 @@ async function rehydrateCanvasFromDeliverable(focus, file, target) {
     if (!(await ensureEngine())) return;
     const goal = String(focus.content || '');
     let body = ''; try { const r = filesLib.fileReadFull(file); body = (r && r.text) || ''; } catch {}
-    let n = 0;
-    if (body) {
-      for (const sec of body.split(/\n(?=##\s)/)) {
-        const m = sec.trim().match(/^##\s+(.+)/); if (!m) continue;
-        await canvasUpsertBlock({ focusId: focus.id, blockId: _secBlockId(focus.id, m[1].trim()), title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: sec.trim() } });
-        n++;
-      }
-    }
+    let n = await emitDeliverableSections(focus.id, goal, body);
     if (target && target.name && target.raw) {
       const cleaned = String(target.raw).replace(/^PRIOR KNOWLEDGE[\s\S]*?(?:\n\n|$)/, '').replace(/^\s*(TARGET|FACET):.*$/gim, '').replace(/\n{3,}/g, '\n\n').trim();
-      if (cleaned) { await canvasUpsertBlock({ focusId: focus.id, blockId: _secBlockId(focus.id, target.name), title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: `## ${target.name}\n\n${cleaned.slice(0, 8000)}` } }); n++; }
+      if (cleaned) { try { await canvasUpsertBlock({ focusId: focus.id, blockId: _secBlockId(focus.id, target.name), title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: `## ${target.name}\n\n${cleaned.slice(0, 8000)}` } }); n++; } catch {} }
     }
     if (n) console.log(`[directed] #${focus.id} canvas rehydrated after restart (${n} block(s))`);
   } catch (e) { console.error('[directed] canvas rehydrate failed:', e.message); }
+}
+// BOOT durability — re-emit recent COMPLETED deliverables to the canvas after a restart (an active run
+// self-rehydrates on its next tick, but a finished run has no tick, so its blocks would stay wiped).
+async function rehydrateRecentCanvasDeliverables(limit = 6) {
+  try {
+    if (!(await ensureEngine())) return;
+    const fsx = require('fs'); const p = require('path');
+    const dir = p.join(__dirname, 'data', 'zoe_workspace', 'notes');
+    let files = [];
+    try { files = fsx.readdirSync(dir).filter(f => /^directed-\d+\.md$/.test(f)).map(f => ({ f, m: fsx.statSync(p.join(dir, f)).mtimeMs })).sort((a, b) => b.m - a.m).slice(0, limit); } catch { return; }
+    for (const { f } of files) {
+      const id = Number((f.match(/directed-(\d+)\.md/) || [])[1]); if (!id || _canvasRehydrated.has(id)) continue;
+      let body = ''; try { body = fsx.readFileSync(p.join(dir, f), 'utf8'); } catch {}
+      if (!body || body.length < 40) continue;
+      const goal = ((body.match(/\*\*Task:\*\*\s*(.+)/) || [])[1] || 'Directed research').trim();
+      _canvasRehydrated.add(id);
+      await emitDeliverableSections(id, goal, body);
+    }
+    if (files.length) console.log(`[canvas] re-emitted ${files.length} recent deliverable(s) on boot`);
+  } catch (e) { console.error('[canvas] boot rehydrate failed:', e.message); }
 }
 
 // SCRIBE HEARTBEAT (the meeting-scribe LANE on its OWN cadence — handoff item 1). While a canvas meeting
