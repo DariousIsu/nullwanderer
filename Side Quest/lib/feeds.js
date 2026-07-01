@@ -8,19 +8,32 @@ const fs = require('fs');
 const path = require('path');
 const FILE = path.join(__dirname, '..', 'data', 'feeds.json');
 
-// Curated + live-validated (2026-06-30) — a balanced US news/business/tech wall. The operator
-// edits this freely from the Monitors widget; this is just the first-run seed.
+// Curated + live-validated (2026-06-30, re-validated + widened 2026-07-01) — a 20-source wall
+// spanning US politics, world, business, and tech, weighted toward HIGH-VELOCITY feeds (Google
+// News aggregator, Al Jazeera, TechCrunch, The Hill, Fox Politics, DW) so a 2-min poll almost
+// always surfaces something new. The operator edits this freely from the Monitors widget; this
+// is just the first-run seed.
 const DEFAULTS = [
+  { url: 'https://news.google.com/rss', title: 'Google News' },
   { url: 'https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml', title: 'NYT Top Stories' },
   { url: 'http://feeds.foxnews.com/foxnews/latest', title: 'Fox News' },
+  { url: 'https://moxie.foxnews.com/google-publisher/politics.xml', title: 'Fox Politics' },
   { url: 'https://feeds.npr.org/1001/rss.xml', title: 'NPR News' },
   { url: 'https://feeds.bbci.co.uk/news/world/rss.xml', title: 'BBC World' },
+  { url: 'https://feeds.bbci.co.uk/news/technology/rss.xml', title: 'BBC Tech' },
   { url: 'https://feeds.washingtonpost.com/rss/world', title: 'WaPo World' },
   { url: 'http://rss.cnn.com/rss/edition.rss', title: 'CNN' },
+  { url: 'https://www.theguardian.com/world/rss', title: 'Guardian World' },
+  { url: 'https://www.aljazeera.com/xml/rss/all.xml', title: 'Al Jazeera' },
+  { url: 'https://rss.dw.com/rdf/rss-en-all', title: 'Deutsche Welle' },
+  { url: 'https://abcnews.go.com/abcnews/topstories', title: 'ABC News' },
+  { url: 'https://thehill.com/homenews/feed/', title: 'The Hill' },
   { url: 'https://rss.politico.com/playbook.xml', title: 'Politico Playbook' },
   { url: 'https://www.cnbc.com/id/100003114/device/rss/rss.html', title: 'CNBC Business' },
+  { url: 'https://techcrunch.com/feed/', title: 'TechCrunch' },
   { url: 'https://feeds.arstechnica.com/arstechnica/index', title: 'Ars Technica' },
   { url: 'https://www.theverge.com/rss/index.xml', title: 'The Verge' },
+  { url: 'https://www.reddit.com/r/worldnews/.rss', title: 'Reddit WorldNews' },
 ];
 
 function read() { try { const a = JSON.parse(fs.readFileSync(FILE, 'utf8')); return Array.isArray(a) ? a : null; } catch { return null; } }
