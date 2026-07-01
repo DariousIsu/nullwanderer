@@ -32,13 +32,29 @@ function onScreen(s) {
   } catch { return true; }
 }
 
+// Fit saved bounds FULLY within the workArea of the display they're on. A window that straddles two
+// monitors — or overflows one, or lands in a gap in a multi-monitor layout — is the state Windows
+// oscillates ("violent shake"): it can't settle which monitor owns the window and nudges it forever.
+// This is independent of DPI (it happens at uniform 100% scaling across a non-rectangular layout).
+function clampToDisplay(s) {
+  try {
+    const { screen } = require('electron');
+    const wa = screen.getDisplayMatching({ x: s.x, y: s.y, width: s.width, height: s.height }).workArea;
+    const width = Math.max(320, Math.min(s.width, wa.width));
+    const height = Math.max(240, Math.min(s.height, wa.height));
+    const x = Math.max(wa.x, Math.min(s.x, wa.x + wa.width - width));
+    const y = Math.max(wa.y, Math.min(s.y, wa.y + wa.height - height));
+    return { x, y, width, height };
+  } catch { return { x: s.x, y: s.y, width: s.width, height: s.height }; }
+}
+
 // Bounds to spread into `new BrowserWindow({ ...options(key, {width,height}) })`.
 function options(key, fallback = {}) {
   const s = load(key);
   if (!s) return fallback;
-  const o = { width: s.width, height: s.height };
-  if (onScreen(s)) { o.x = s.x; o.y = s.y; }
-  return o;
+  if (!onScreen(s)) return { width: s.width, height: s.height };   // saved monitor gone → default size, OS centers
+  const c = clampToDisplay(s);
+  return { x: c.x, y: c.y, width: c.width, height: c.height };
 }
 
 // Attach persistence to a created window: restore maximized state, then save on change (debounced).
