@@ -65,6 +65,23 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   const r3 = await mc.findAndStart({ query: 'x', deps: { search: async () => [{ url: 'https://reddit.com/x' }], start: () => true } });
   ok(!r3.ok && r3.reason === 'no-result', 'no usable clip → ok:false (caller tells Lucas honestly, no fabrication)');
 
+  // --- WATCHED REGISTRY: no autonomous re-watch + it accretes a recap (the "5x Condoleezza Rice" fix) ---
+  const now = Date.now();
+  ok(mc.wasWatchedRecently('Condoleezza Rice interview', { nowMs: now }) === false, 'not watched yet → wasWatchedRecently false');
+  mc.recordWatched('https://www.youtube.com/watch?v=abc123XYZ', 'Condoleezza Rice interview', now);
+  ok(mc.wasWatchedRecently('Condoleezza Rice interview', { nowMs: now }) === true, 'after watching → same TOPIC blocked (no autonomous re-pick)');
+  ok(mc.wasWatchedRecently('condoleezza rice', { nowMs: now }) === true, 'fuzzy topic match → blocked');
+  ok(mc.wasWatchedRecently('https://www.youtube.com/watch?v=abc123XYZ', { nowMs: now }) === true, 'same URL/id → blocked');
+  ok(mc.wasWatchedRecently('a totally different documentary', { nowMs: now }) === false, 'a different topic → NOT blocked (she can watch new things)');
+  ok(mc.wasWatchedRecently('Condoleezza Rice interview', { nowMs: now + 5 * 24 * 3600 * 1000 }) === false, 'past the 3-day window → re-watch allowed again');
+  mc.markRecap('https://www.youtube.com/watch?v=abc123XYZ', 'Rice discussed diplomacy and leadership.');
+  const wl = JSON.parse(require('../lib/db').getMeta('media.watched') || '[]');
+  ok(wl.length === 1 && /diplomacy/.test(wl[0].recap), 'markRecap: the viewing accretes a recap into the registry');
+  // start() records the watch immediately (dedups even before a recap lands)
+  mc.reset(); require('../lib/db').setMeta('media.watched', '[]');
+  mc.start('https://youtu.be/def456GHI', { topic: 'jazz history' });
+  ok(mc.wasWatchedRecently('jazz history') === true, 'start() records the watch immediately → re-pick guarded even mid-watch');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   try { require('../lib/db').getDb().close(); } catch {}
   try { require('fs').unlinkSync(process.env.SQ_DB_PATH); } catch {}

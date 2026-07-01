@@ -37,6 +37,39 @@ const FOLLOW_MAX_WAIT_MS = 25000; // ...or after this long with ANY pending line
 // In-memory: captions are ephemeral.
 let _seen = new Set();
 
+// --- WATCHED REGISTRY (durable) — so she doesn't autonomously RE-WATCH the same video (the "5th time on
+// the Condoleezza Rice interview" loop) and each watch leaves a real artifact. Keyed by video id/url. ---
+const WATCHED_KEY = 'media.watched';
+const WATCH_DEDUP_MS = 3 * 24 * 60 * 60 * 1000;   // don't autonomously re-watch within 3 days
+function _watchedList() { try { const a = JSON.parse(db.getMeta(WATCHED_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
+function _saveWatched(list) { try { db.setMeta(WATCHED_KEY, JSON.stringify(list.slice(-40))); } catch {} }
+function recordWatched(mediaUrl, topic = '', nowMs = Date.now()) {
+  const u = String(mediaUrl || '').trim(); if (!u) return;
+  const id = mediaId(u) || u;
+  const list = _watchedList().filter(w => w.id !== id);
+  list.push({ id, url: u, topic: String(topic || '').trim(), ts: nowMs, recap: '' });
+  _saveWatched(list);
+}
+function markRecap(mediaUrl, recap) {
+  const id = mediaId(String(mediaUrl || '')) || String(mediaUrl || '');
+  const list = _watchedList(); const w = list.find(x => x.id === id);
+  if (w) { w.recap = String(recap || '').slice(0, 600); _saveWatched(list); }
+}
+// Has she watched this (by url/id OR fuzzy topic) within `withinMs`? Gates the AUTONOMOUS re-watch — a
+// user-initiated "watch this again" still goes straight through start().
+function wasWatchedRecently(query, { withinMs = WATCH_DEDUP_MS, nowMs = Date.now() } = {}) {
+  const q = String(query || '').trim().toLowerCase(); if (!q) return false;
+  const id = mediaId(query) || null;
+  for (const w of _watchedList()) {
+    if ((nowMs - (w.ts || 0)) > withinMs) continue;
+    if (id && w.id === id) return true;
+    if (w.url && q.includes(String(w.url).toLowerCase())) return true;
+    const wt = String(w.topic || '').toLowerCase();
+    if (wt && (wt === q || wt.includes(q) || q.includes(wt))) return true;
+  }
+  return false;
+}
+
 // --- pure helpers (unit-tested) ---
 
 // A YouTube watch/live URL (the slice-1 target). Scheme OPTIONAL (Lucas often pastes a bare
@@ -163,7 +196,7 @@ async function findAndStart({ query, deps = {} } = {}) {
   let url = pickYouTubeUrl(await run(query + ' site:youtube.com'));
   if (!url) url = pickYouTubeUrl(await run(query + ' youtube'));
   if (!url) return { ok: false, reason: 'no-result' };
-  const ok = (deps.start || start)(url);
+  const ok = (deps.start || start)(url, { topic: query });
   return ok ? { ok: true, url, query } : { ok: false, reason: 'start-failed' };
 }
 
@@ -181,10 +214,12 @@ function set(s) { if (STAGES.includes(s)) db.setMeta('media_stage', s); }
 function active() { const s = get(); return s !== 'none' && s !== 'done'; }
 function url() { return db.getMeta('media_url') || ''; }
 
-function start(mediaUrl) {
+function start(mediaUrl, { topic = '' } = {}) {
   const u = detectMediaUrl(mediaUrl) || String(mediaUrl || '').trim();
   if (!u) return false;
   db.setMeta('media_url', u);
+  db.setMeta('media_topic', String(topic || ''));
+  try { recordWatched(u, topic); } catch {}   // remember she started this — dedups a re-pick even before the recap lands
   db.setMeta('media_strikes', '0');
   db.setMeta('media_left_ticks', '0');
   db.setMeta('media_started_at', String(Date.now()));
@@ -368,6 +403,21 @@ async function synthesizeWatch(d, ctx) {
   try { if (d.storeMeeting) await d.storeMeeting(episodic, { kind: 'episodic', source: 'media_watch', importance: 0.7 }); } catch {}
   db.setMeta('media_last_recap', recap);
   db.setMeta('media_understanding_log', '');
+  // ACCRETE — land a durable DOCUMENT (short-term store → nightly promotion to Echo) so the viewing leaves
+  // a real artifact (not just an ephemeral episodic note) AND records the recap in the watched-registry so
+  // it's never re-watched. Idempotent on the video id (ref).
+  try {
+    const u = (db.getMeta('media_url') || '').trim();
+    const topic = (db.getMeta('media_topic') || '').trim();
+    const id = mediaId(u) || u;
+    markRecap(u, recap);
+    const captionsTail = (db.getMeta('media_recent') || '').trim();
+    require('./doc_store').land({
+      title: `Video — ${topic || hostOf(u) || 'watched'}`.slice(0, 120),
+      body: `# Watched: ${topic || u}\n\n**Source:** ${u}\n\n## Recap\n${recap}${captionsTail ? `\n\n## Captions (tail)\n${captionsTail}` : ''}`,
+      source: 'media_watch', ref: `media:${id}`, understanding: recap,
+    });
+  } catch (e) { console.error('[media_cc] doc land failed:', e.message); }
   return recap;
 }
 
@@ -475,6 +525,8 @@ async function runTick(ctx = {}) {
 
 module.exports = {
   STAGES, get, set, active, start, reset, url, runTick, defaultDeps, synthesizeWatch,
+  // watched registry (durable re-watch guard + artifact)
+  recordWatched, markRecap, wasWatchedRecently,
   // pure helpers (tested)
   detectMediaUrl, mediaId, hostOf, siteConfig, parseCaptionBlock, freshFrom,
   detectSearchWatch, pickYouTubeUrl, findAndStart, detectWatchingQuestion,

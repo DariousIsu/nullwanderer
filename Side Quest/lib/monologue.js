@@ -942,7 +942,12 @@ async function runOneTick() {
       try {
         const t = require('./interests').sampleTopic();
         const topic = t && t.topic;
-        if (topic) {
+        // DON'T re-watch: if she's already watched this topic/video in the last few days, skip (the
+        // "5th time on the same interview" loop). A user-asked "watch it again" still works — this only
+        // gates the AUTONOMOUS pick.
+        if (topic && mediaCcLib.wasWatchedRecently(topic)) {
+          console.log(`[auto-watch] skipped "${String(topic).slice(0, 50)}" — already watched recently`);
+        } else if (topic) {
           const r = await mediaCcLib.findAndStart({ query: topic, deps: { search: webSearch } });
           if (r && r.ok) {
             const note = `I got curious about ${topic}, so I pulled up a video on it to watch and follow along.`;
