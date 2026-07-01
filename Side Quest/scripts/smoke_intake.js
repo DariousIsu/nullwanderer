@@ -87,6 +87,24 @@ ok(intake.subsetTopN('') === null, 'empty → null');
   // salientTargets filter (only salient + resolve)
   ok(intake.salientTargets({ objects: [{ mention: 'A', salient: true, op: 'resolve' }, { mention: 'B', salient: false, op: 'resolve' }, { mention: 'C', salient: true, op: 'create' }] }).length === 1, 'salientTargets: only salient + resolve');
 
+  // ─── Slice 2b: resolve-before-decompose (resolvePlan) ─────────────────────
+  const rpPlan = { intent: 'research', objects: [
+    { mention: 'Sen. Curtis', type: 'person', op: 'resolve', salient: true },
+    { mention: 'the webinar', type: 'event', op: 'resolve', salient: true },
+    { mention: 'background', type: null, op: 'resolve', salient: false },
+  ], clarify: [] };
+  const rf = async (mention) => mention === 'Sen. Curtis' ? { status: 'resolved', mention, object: { degree: 320 } } : { status: 'nil', mention, reason: 'no-match' };
+  const rp = await intake.resolvePlan(rpPlan, { resolveFn: rf });
+  ok(rp.resolved.length === 2, 'resolvePlan: resolves only the salient targets (non-salient skipped)');
+  ok(rp.resolved[0].resolution.status === 'resolved' && rp.resolved[0].resolution.object.degree === 320, 'resolved salient object carries its Echo object');
+  ok(rp.needsClarification === true && rp.clarifications.some(q => /the webinar/.test(q)), 'nil salient target → a "which" clarify question (bias-to-clarify)');
+  const rpAmb = await intake.resolvePlan({ objects: [{ mention: 'John Curtis', type: 'person', op: 'resolve', salient: true }] }, { resolveFn: async (m) => ({ status: 'ambiguous', mention: m, candidates: ['John Curtis (US)', 'John Curtis Marion'] }) });
+  ok(rpAmb.needsClarification && /Which "John Curtis"/.test(rpAmb.clarifications[0]) && /John Curtis Marion/.test(rpAmb.clarifications[0]), 'ambiguous target → "which one?" listing the candidates');
+  const rpClean = await intake.resolvePlan({ objects: [{ mention: 'A', type: 'person', op: 'resolve', salient: true }], clarify: [] }, { resolveFn: async (m) => ({ status: 'resolved', mention: m, object: { degree: 9 } }) });
+  ok(rpClean.needsClarification === false && rpClean.clarifications.length === 0, 'all salient resolved → no clarification needed');
+  const rpMerge = await intake.resolvePlan({ objects: [{ mention: 'B', type: 'person', op: 'resolve', salient: true }], clarify: ['pre-existing q'] }, { resolveFn: async (m) => ({ status: 'nil', mention: m }) });
+  ok(rpMerge.clarifications.includes('pre-existing q') && rpMerge.clarifications.length <= 3, 'resolvePlan merges the parse clarify with its own, capped at 3');
+
   // decompose: short-circuit + fail-safe
   let dcalled = false;
   const dshort = await intake.decompose('hi', { deps: { ask: async () => { dcalled = true; return null; } } });

@@ -104,6 +104,52 @@ const noGraph = () => [];
     await es.recallObject('John Curtis', { preferType: 'person', dispatch: sweepDispatch });
     ok(sweepCalls.length === 1 && sweepCalls[0] === 'person', 'recallObject: explicit preferType → single lookup, no sweep');
 
+    // ── resolveMention (Slice 2b) — candidate scan → resolved | ambiguous | nil ──
+    // pure name-key: duplicate records collapse; different names stay distinct
+    ok(es._coreNameKey('John Curtis (US)') === es._coreNameKey('CURTIS, JOHN [S4UT00282]'), '_coreNameKey: dup records (paren/bracket IDs stripped) → same key');
+    ok(es._coreNameKey('John Curtis Marion') !== es._coreNameKey('John Curtis (US)'), '_coreNameKey: genuinely different name → different key');
+    ok(es._coreNameKey('John R. Curtis (US)') === es._coreNameKey('John Curtis (US)'), '_coreNameKey: middle initial ignored (John R. Curtis == John Curtis)');
+    ok(es._coreNameKey('Sen. Curtis') === es._coreNameKey('Curtis'), '_coreNameKey: honorific stripped (Sen. Curtis == Curtis)');
+    ok(es._distinctNames([{ name: 'John Curtis (US)' }, { name: 'John Curtis (US-US)' }, { name: 'CURTIS, JOHN [S4UT00282]' }, { name: 'John R. Curtis (US)' }]).length === 1, '_distinctNames: 4 records incl. an initial variant → 1 distinct entity');
+    // name-gate drops summary-only FTS noise (a staffer whose bio names the target)
+    ok(es._nameGate([{ name: 'John Curtis (US)' }, { name: 'Lorie Fowlke (UT)' }], es._coreNameKey('John Curtis')).length === 1, '_nameGate: drops the summary-match staffer, keeps the real name');
+    // resolved: many dup records of ONE person → collapse to 1 → pull the degree-320 object
+    const resDispatch = async (tag) => {
+      if (tag.name === 'search_entities') return { ok: true, text: JSON.stringify({ result: [{ id: 1519559, name: 'John Curtis (US)', entity_type: 'person' }, { id: 1524282, name: 'John Curtis (US-US)', entity_type: 'person' }, { id: 1681322, name: 'CURTIS, JOHN [S4UT00282]', entity_type: 'person' }] }) };
+      if (tag.name === 'quick_lookup') return { ok: true, text: JSON.stringify({ result: curtisResult }) };
+      if (tag.name === 'kg_neighborhood') return { ok: true, text: JSON.stringify({ neighbors: [] }) };
+      return { ok: false, text: '{}' };
+    };
+    const rmRes = await es.resolveMention('John Curtis', { preferType: 'person', dispatch: resDispatch });
+    ok(rmRes.status === 'resolved' && rmRes.object && rmRes.object.degree === 320, 'resolveMention: dup records collapse → resolved to the degree-320 object');
+    // ambiguous: two DISTINCT same-type entities → trip NIL (bias-to-clarify), do NOT pick by degree
+    const ambDispatch = async (tag) => tag.name === 'search_entities' ? { ok: true, text: JSON.stringify({ result: [{ id: 1519559, name: 'John Curtis (US)', entity_type: 'person' }, { id: 999, name: 'John Curtis Marion', entity_type: 'person' }] }) } : { ok: false, text: '{}' };
+    const rmAmb = await es.resolveMention('John Curtis', { preferType: 'person', dispatch: ambDispatch });
+    ok(rmAmb.status === 'ambiguous' && rmAmb.candidates.length === 2, 'resolveMention: two distinct same-type entities → ambiguous (never popularity-pick)');
+    // nil + error
+    const nilDispatch = async (tag) => tag.name === 'search_entities' ? { ok: true, text: JSON.stringify({ result: [] }) } : { ok: false, text: '{}' };
+    ok((await es.resolveMention('Nobody McNobody', { dispatch: nilDispatch })).status === 'nil', 'resolveMention: no candidates → nil');
+    ok((await es.resolveMention('X', { dispatch: null })).status === 'error', 'resolveMention: no dispatch (suit down) → error');
+    // summary-noise staffer gated out + initial variant collapsed → resolves (the live Curtis fix)
+    const noiseDispatch = async (tag) => {
+      if (tag.name === 'search_entities') return { ok: true, text: JSON.stringify({ result: [{ id: 1519559, name: 'John Curtis (US)', entity_type: 'person' }, { id: 1524282, name: 'John R. Curtis (US)', entity_type: 'person' }, { id: 1519714, name: 'Lorie Fowlke (UT)', entity_type: 'person' }] }) };
+      if (tag.name === 'quick_lookup') return { ok: true, text: JSON.stringify({ result: curtisResult }) };
+      if (tag.name === 'kg_neighborhood') return { ok: true, text: JSON.stringify({ neighbors: [] }) };
+      return { ok: false, text: '{}' };
+    };
+    const rmNoise = await es.resolveMention('John Curtis', { preferType: 'person', dispatch: noiseDispatch });
+    ok(rmNoise.status === 'resolved' && rmNoise.object.degree === 320, 'resolveMention: summary-noise gated + initial variant collapsed → resolved (not falsely ambiguous)');
+    // one distinct name but only THIN records (no dominant winner) → ambiguous low-confidence, ASK
+    const thinResult = { entity: { id: 5, name: 'Jane Roe', entity_type: 'person', degree: 1 }, facts: [], committees: [] };
+    const thinDispatch = async (tag) => {
+      if (tag.name === 'search_entities') return { ok: true, text: JSON.stringify({ result: [{ id: 5, name: 'Jane Roe', entity_type: 'person' }, { id: 6, name: 'Jane Roe', entity_type: 'person' }] }) };
+      if (tag.name === 'quick_lookup') return { ok: true, text: JSON.stringify({ result: thinResult }) };
+      if (tag.name === 'kg_neighborhood') return { ok: true, text: JSON.stringify({ neighbors: [] }) };
+      return { ok: false, text: '{}' };
+    };
+    const rmThin = await es.resolveMention('Jane Roe', { preferType: 'person', dispatch: thinDispatch });
+    ok(rmThin.status === 'ambiguous' && rmThin.reason === 'low-confidence', 'resolveMention: no dominant record (all thin) → ambiguous low-confidence (ask, no popularity-guess)');
+
     // recall() folds the object in → RICH even with 0 notes/facts/echo (the #2915 fix: one object = rich)
     const objFn = async () => nObj;
     const rObj = await ar.recall('John Curtis', { retrieveFn: async () => [], graphFn: noGraph, echoFn: async () => [], objectFn: objFn });

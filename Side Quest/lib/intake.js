@@ -151,4 +151,26 @@ function salientTargets(plan) {
   return (plan && Array.isArray(plan.objects) ? plan.objects : []).filter(o => o.salient && o.op === 'resolve');
 }
 
-module.exports = { classify, route, subsetTopN, decompose, routeDecomposition, salientTargets, INTENTS, ENTITY_TYPES };
+// RESOLVE-BEFORE-DECOMPOSE (Slice 2b): resolve each salient object to its Echo record via resolveFn
+// (default → echo_suit.resolveMention, type-directed) BEFORE it becomes a sub-task, so downstream carries
+// canonical objects, not dangling pronouns. Bias-toward-clarifying: any nil/ambiguous salient target yields
+// a "which X?" question (merged with the parse's own clarify, capped). resolveFn injectable for offline tests.
+async function resolvePlan(plan, { resolveFn = null } = {}) {
+  const resolve = resolveFn || ((mention, opts) => { try { return require('./echo_suit').resolveMention(mention, opts); } catch { return Promise.resolve({ status: 'error', mention }); } });
+  const targets = salientTargets(plan || {});
+  const resolved = [];
+  for (const o of targets) {
+    let r; try { r = await resolve(o.mention, { preferType: o.type || null }); } catch { r = { status: 'error', mention: o.mention }; }
+    resolved.push({ ...o, resolution: r || { status: 'error', mention: o.mention } });
+  }
+  const clar = [];
+  for (const r of resolved) {
+    const res = r.resolution || {};
+    if (res.status === 'ambiguous') clar.push(`Which "${r.mention}" do you mean${Array.isArray(res.candidates) && res.candidates.length ? ` — ${res.candidates.slice(0, 3).join('; ')}?` : '?'}`);
+    else if (res.status === 'nil') clar.push(`I don't have a clear match for "${r.mention}" — can you point me to who or what you mean?`);
+  }
+  const clarifications = [...(Array.isArray(plan && plan.clarify) ? plan.clarify : []), ...clar].slice(0, 3);
+  return { ...plan, resolved, clarifications, needsClarification: clarifications.length > 0 };
+}
+
+module.exports = { classify, route, subsetTopN, decompose, routeDecomposition, salientTargets, resolvePlan, INTENTS, ENTITY_TYPES };

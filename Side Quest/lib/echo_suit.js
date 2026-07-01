@@ -467,6 +467,70 @@ function normalizeObject(res) {
   };
 }
 
+// RESOLVE a mention to a decision: resolved | ambiguous | nil (Slice 2b — resolve-before-decompose).
+// Candidate scan via search_entities (cheap, one call), then: 0 candidates → nil; >1 DISTINCT same-type
+// entity (names that aren't near-dupes of each other) → ambiguous (trip the NIL "which X?" branch —
+// bias-toward-clarifying: we ASK rather than guess between different real entities); a single distinct
+// entity (even across several duplicate records) → pull its object via recallObject. Fail-soft. Coherence
+// note: preferType comes from the whole-utterance parse — that IS the primary coherence signal; full
+// candidate-ranking against sibling mentions is a later refinement.
+async function resolveMention(name, { preferType = null, dispatch = null } = {}) {
+  const d = dispatch || (liveReady() ? (tag) => _live.dispatch(tag) : null);
+  const n = String(name || '').trim();
+  if (!d) return { status: 'error', mention: n };
+  if (!n) return { status: 'nil', mention: n, reason: 'empty' };
+  const cands = await _searchEntities(d, n, preferType);
+  if (!cands.length) return { status: 'nil', mention: n, reason: 'no-match' };
+  // NAME-GATE: search_entities also matches on SUMMARIES, so it drags in tangential people (a staffer
+  // whose bio names the target). Keep only candidates whose NAME actually carries the query's core tokens.
+  const gated = _nameGate(cands, _coreNameKey(n));
+  const distinct = _distinctNames(gated);
+  // >1 genuinely-different name (not dup records / initial variants) → ambiguous → ASK (bias-to-clarify).
+  if (distinct.length > 1) return { status: 'ambiguous', mention: n, candidates: distinct.slice(0, 4).map(c => c.name) };
+  const obj = await recallObject(n, { preferType, dispatch: d });
+  if (!obj) return { status: 'nil', mention: n, reason: 'no-object' };
+  // Resolve ONLY when a record genuinely DOMINATES (rich object). Several thin same-name records with no
+  // clear winner = we can't safely pick → ask rather than popularity-guess (the overshadowing trap).
+  const dominant = obj.degree >= 8 || (obj.facts || []).length >= 4 || (obj.committees || []).length >= 1;
+  if (!dominant) return { status: 'ambiguous', mention: n, reason: 'low-confidence', candidates: distinct.map(c => c.name) };
+  return { status: 'resolved', mention: n, object: obj };
+}
+async function _searchEntities(d, name, preferType) {
+  const args = { query: name, top_k: 10 };
+  if (preferType) args.entity_type = preferType;
+  let r; try { r = await d({ kind: 'do', name: 'search_entities', args }); } catch { return []; }
+  if (!r || !r.ok) return [];
+  let data; try { data = JSON.parse(r.text); } catch { return []; }
+  const rows = Array.isArray(data && data.result) ? data.result : (Array.isArray(data) ? data : []);
+  return rows.map(e => ({ id: e.id, name: String(e.name || ''), entity_type: e.entity_type, rank: e.rank })).filter(e => e.name);
+}
+// Pure: collapse a candidate list to DISTINCT entities by a normalized core-name key — so the many
+// duplicate records of one entity ("John Curtis (US)", "John Curtis (US-US)", "CURTIS, JOHN [S4UT00282]")
+// count ONCE, while genuinely different names ("John Curtis Marion") count separately.
+const _NAME_TITLES = new Set(['sen', 'senator', 'rep', 'representative', 'dr', 'mr', 'mrs', 'ms', 'hon', 'honorable', 'gov', 'governor', 'pres', 'president']);
+function _coreNameKey(name) {
+  let s = String(name || '').toLowerCase();
+  s = s.replace(/\([^)]*\)/g, ' ').replace(/\[[^\]]*\]/g, ' ');   // strip paren/bracket qualifiers + IDs
+  s = s.replace(/[^a-z0-9\s]/g, ' ');
+  // drop id-like tokens (any digit), single letters (middle initials — "John R. Curtis" == "John Curtis"),
+  // and honorifics ("Sen. Curtis" == "Curtis").
+  const toks = s.split(/\s+/).filter(t => t && t.length > 1 && !/\d/.test(t) && !_NAME_TITLES.has(t));
+  return toks.sort().join(' ').trim();
+}
+function _distinctNames(cands) {
+  const seen = new Map();
+  for (const c of cands) { const k = _coreNameKey(c.name) || String(c.name || '').toLowerCase(); if (!seen.has(k)) seen.set(k, c); }
+  return [...seen.values()];
+}
+// Keep only candidates whose NAME carries every core token of the query (drops summary-only FTS matches).
+// Falls back to the raw list if the gate removes everything (never leave the caller empty-handed).
+function _nameGate(cands, queryKey) {
+  const q = String(queryKey || '').split(' ').filter(Boolean);
+  if (!q.length) return cands;
+  const named = cands.filter(c => { const ck = _coreNameKey(c.name).split(' '); return q.every(t => ck.includes(t)); });
+  return named.length ? named : cands;
+}
+
 // Pure: kg_neighborhood's `.neighbors` → capped name strings (background concepts).
 function normalizeNeighbors(kd) {
   const ns = Array.isArray(kd && kd.neighbors) ? kd.neighbors : [];
@@ -485,5 +549,5 @@ function _setLiveForTest(suit) { _live = suit; }
 
 module.exports = {
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, normalizeObject, normalizeNeighbors, _setLiveForTest
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, _coreNameKey, _distinctNames, _nameGate, _setLiveForTest
 };
