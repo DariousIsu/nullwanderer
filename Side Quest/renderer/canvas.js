@@ -357,7 +357,7 @@ const FV = window.FeedsView;
 const monitors = $('monitors'), monList = $('monList'), monSources = $('monSources'), monN = $('monN'), monVideos = $('monVideos');
 const monSeen = new Set();
 let monPrimed = false, monTimer = null;
-const MON_REFRESH_MS = 5 * 60 * 1000;
+const MON_REFRESH_MS = 2 * 60 * 1000;
 
 function renderMonitors(items, sources) {
   const marked = FV ? FV.markNew(items, monSeen) : (items || []).map(i => ({ ...i, isNew: false }));
@@ -368,7 +368,8 @@ function renderMonitors(items, sources) {
       <div class="it-title">${it.link ? `<a href="${esc(it.link)}" target="_blank" rel="noreferrer">${esc(it.title)}</a>` : esc(it.title)}</div>
       ${it.summary ? `<div class="it-sum">${esc(it.summary)}</div>` : ''}
     </div>`).join('') : '<div class="mon-empty">No items yet. Add a feed URL above, or hit ⟳.</div>';
-  monN.textContent = marked.length ? `${marked.length} items` : '';
+  const upd = new Date(now); const hh = String(upd.getHours()).padStart(2, '0'), mm = String(upd.getMinutes()).padStart(2, '0'), ss = String(upd.getSeconds()).padStart(2, '0');
+  monN.textContent = `${marked.length ? `${marked.length} items · ` : ''}updated ${hh}:${mm}:${ss}`;
   monSources.innerHTML = (sources || []).map(s => `<span class="mon-src${s.ok ? '' : ' bad'}" title="${esc(s.sourceUrl)}">${esc(s.source)}<span class="x" data-url="${esc(s.sourceUrl)}">×</span></span>`).join('');
   monSources.querySelectorAll('.x').forEach(el => el.addEventListener('click', () => removeFeed(el.dataset.url)));
   // seed the seen-set so the NEXT fetch highlights only genuinely new items (first load isn't a flood)
@@ -435,7 +436,7 @@ async function addMonitor(url) {
 
 function openMonitors() {
   monitors.hidden = false;
-  if (!monPrimed) loadFeeds();   // feeds: fetch only on first open (avoid re-hammering on every toggle)
+  loadFeeds();                   // always pull fresh on open (news moves; a stale wall reads as "broken")
   loadVideos();                  // videos: cheap (no network) — refresh every open so re-seeds show
   if (!monTimer) monTimer = setInterval(loadFeeds, MON_REFRESH_MS);
 }
