@@ -18,6 +18,16 @@
 'use strict';
 const cloud = require('./cloud_logic');
 
+// ─── Slice 2 (object-memory): the DECOMPOSITION front door ───────────────────
+// Generalizes this gate from "is this a project + which mode" into the full parse:
+// utterance → {objects, relations, intent, constraints}. Every content token sorts into ONE bucket
+// (object / constraint-binder / intent-action) — that sort replaces the pile of per-scenario recognizers.
+// Spec: docs/SLICE2_DECOMPOSITION_SPEC.md. 2a = the parse contract + PURE route, offline-tested, NO wiring.
+// Object types + relation predicates are Echo-native (config.toml [graph]) so the plan resolves cleanly.
+const INTENTS = ['research', 'monitor', 'extract_from_doc', 'schedule', 'answer', 'status', 'stop', 'expand', 'chat'];
+const ENTITY_TYPES = ['person', 'organization', 'place', 'bill', 'committee', 'government_body', 'event', 'document', 'claim', 'concept'];
+const CONSTRAINT_KINDS = ['temporal', 'speaker', 'location', 'other'];
+
 // Cloud classification of one turn. Returns the decision object, or null (cloud down / invalid / over
 // budget → caller falls back to the regex). Never throws.
 async function classify(message, { recent = '', activeFocus = '', existingRecords = '', deps = {} } = {}) {
@@ -76,4 +86,69 @@ function subsetTopN(subset) {
   m = s.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/); return m ? map[m[1]] : null;
 }
 
-module.exports = { classify, route, subsetTopN };
+// DECOMPOSE one utterance into the {objects, relations, intent, constraints} plan (the cloud seam).
+// Returns the raw parse object, or null (cloud down / invalid → caller falls back to classify()/regex).
+// Never throws. deps.ask injectable. Runs on the FAST model with headroom (same reason as classify).
+async function decompose(message, { recent = '', activeFocus = '', existingRecords = '', deps = {} } = {}) {
+  const ask = deps.ask || cloud.ask;
+  const s = String(message || '').trim();
+  if (s.length < 6) return { intent: 'chat', objects: [], relations: [], constraints: [], deliverable: null, clarify: [] };
+  const fastModel = (() => { try { return require('./models').getModelFor('editor', null); } catch { return null; } })();
+  try {
+    return await ask({
+      task: 'decompose', v: 1, model: fastModel, numPredict: 900,
+      input: { user: s.slice(0, 900), recent: String(recent).slice(0, 400), active_task: String(activeFocus).slice(0, 160), existing_records: String(existingRecords).slice(0, 700) },
+      want: 'You are Zoe\'s decomposition front door. Parse ONE user utterance into a structured plan. Sort every meaningful token into EXACTLY ONE bucket:\n'
+        + '1) OBJECTS — things to look up or act on (a person, org, place, bill, committee, government_body, event, document, claim, concept). op="resolve" if we likely already hold it, op="create" if it is new. salient=true for the ones central to the request. Use the MOST COMPLETE identifier for the mention (resolve "his team"/"the meeting"/"they" to what they refer to — never leave a dangling pronoun).\n'
+        + '2) CONSTRAINTS — binders that FILTER an object but are NOT themselves lookups: kind="temporal" (e.g. "tomorrow","last week"), "speaker" (who is talking / who it is for, e.g. "we","I"), "location", or "other". `binds` names which object mention it constrains.\n'
+        + '3) INTENT — the ONE action the user wants, from: research (a sustained gather/find/compile/build/produce-a-deliverable task about the OUTSIDE world) | monitor (watch/alert over time) | extract_from_doc (pull/list/summarize/find FROM a document they already gave you — "from the notes/transcript/what I dropped/on the canvas") | schedule (calendar create/change) | answer (a plain question) | status (how is X going) | stop (halt a running task) | expand (extend/deepen an existing task) | chat (social).\n'
+        + 'Also give `deliverable` (short phrase, e.g. "prep sheet", when a rendered artifact is wanted, else null) and `relations` between objects using a predicate verb (e.g. attends, works_for, about, scheduled_for, member_of, located_in, or a legislative one like AMENDS/CITES).\n'
+        + 'BIAS TOWARD CLARIFYING: if the intent OR any salient object is genuinely ambiguous (which person? which meeting? unclear what is wanted), put up to 3 SHORT questions in `clarify` — Lucas would rather answer an extra question than get a wrong answer. Do NOT ask about things you can reasonably infer.\n'
+        + 'Output ONLY JSON: {"intent":"...","objects":[{"mention":"...","type":"person|organization|place|bill|committee|government_body|event|document|claim|concept","op":"resolve|create","salient":true|false}],"relations":[{"source":"mention","type":"predicate","target":"mention"}],"constraints":[{"kind":"temporal|speaker|location|other","value":"...","binds":"mention or null"}],"deliverable":"phrase or null","clarify":["..."]}',
+      validate: (raw) => {
+        const m = String(raw || '').match(/\{[\s\S]*\}/);
+        if (!m) return { valid: false, error: 'no json' };
+        try { const o = JSON.parse(m[0]); return (o && typeof o.intent === 'string') ? { valid: true, value: o } : { valid: false, error: 'no intent' }; }
+        catch (e) { return { valid: false, error: e.message }; }
+      },
+      deps
+    });
+  } catch (e) { console.error('[decompose] failed:', e.message); return null; }
+}
+
+// PURE: normalize a raw parse into a safe plan for main.js. Fail-safe — null/invalid → an inert chat plan
+// (never fires an action on a bad parse). Unknown intent → 'answer' (respond, don't trigger heavy machinery).
+function routeDecomposition(parsed) {
+  const empty = { ok: false, intent: 'chat', objects: [], relations: [], constraints: [], deliverable: null, clarify: [] };
+  if (!parsed || typeof parsed !== 'object' || typeof parsed.intent !== 'string') return empty;
+  const clean = (x, n = 200) => String(x == null ? '' : x).replace(/\s+/g, ' ').trim().slice(0, n);
+  const intent = INTENTS.includes(parsed.intent) ? parsed.intent : 'answer';
+  const objects = (Array.isArray(parsed.objects) ? parsed.objects : []).map(o => {
+    const mention = clean(o && o.mention, 120);
+    if (!mention) return null;
+    const type = ENTITY_TYPES.includes(o && o.type) ? o.type : null;
+    return { mention, type, op: (o && o.op === 'create') ? 'create' : 'resolve', salient: (o && o.salient === true) };
+  }).filter(Boolean);
+  const relations = (Array.isArray(parsed.relations) ? parsed.relations : []).map(r => {
+    const source = clean(r && r.source, 120), type = clean(r && r.type, 40), target = clean(r && r.target, 120);
+    return (source && type && target) ? { source, type, target } : null;
+  }).filter(Boolean);
+  const constraints = (Array.isArray(parsed.constraints) ? parsed.constraints : []).map(c => {
+    const value = clean(c && c.value, 120);
+    if (!value) return null;
+    const kind = CONSTRAINT_KINDS.includes(c && c.kind) ? c.kind : 'other';
+    const binds = clean(c && c.binds, 120) || null;
+    return { kind, value, binds };
+  }).filter(Boolean);
+  const deliverable = clean(parsed.deliverable, 80) || null;
+  // Bias toward clarifying: allow up to 3 (vs intake's 2) — an extra question beats a wrong answer.
+  const clarify = Array.isArray(parsed.clarify) ? parsed.clarify.map(q => clean(q, 120)).filter(Boolean).slice(0, 3) : [];
+  return { ok: true, intent, objects, relations, constraints, deliverable, clarify };
+}
+
+// The salient objects a plan should resolve first (the Slice-1 object pull consumes these in 2b).
+function salientTargets(plan) {
+  return (plan && Array.isArray(plan.objects) ? plan.objects : []).filter(o => o.salient && o.op === 'resolve');
+}
+
+module.exports = { classify, route, subsetTopN, decompose, routeDecomposition, salientTargets, INTENTS, ENTITY_TYPES };
