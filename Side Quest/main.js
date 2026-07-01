@@ -3292,7 +3292,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const recent = (recentTurns || []).slice(-3).map(t => `${t.speaker || '?'}: ${String(t.content || '').slice(0, 120)}`).join(' | ');
       // EXISTING-RECORDS context so the classifier can route enrich vs discover correctly (named orgs we
       // already hold → enrich, not start-over). Brief: the last dossier's topic + its org list.
-      const existingRecords = (() => {
+      // GATE (turn→object-graph): a NARROW factual "who/what is X" is NEVER an enrich request, so it must
+      // NOT be primed with the standing-research org list — that priming made "Who is Sen. Thune?" misfire
+      // into "list all 19 organizations" (the bleed that survived clearing the focus + the grounding). Only
+      // broader/request-shaped turns, where enrich-vs-discover actually matters, get the existing records.
+      const existingRecords = (qClass === 'narrow') ? '' : (() => {
         try {
           const ld = JSON.parse(db.getMeta('research.last_dossier') || 'null');
           if (!ld || !ld.focusId) return '';
