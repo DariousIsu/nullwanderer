@@ -5297,7 +5297,10 @@ async function runDirectedResearchPass(focus) {
       // BUILD-AS-IT-GOES: grow the target's draft block with the accumulating content each pass (raw, minus
       // the prior-knowledge preamble + control lines) so the canvas shows the document being built live.
       try {
-        const draftMd = `## ${target.name}\n\n${String(target.raw || '').replace(/^PRIOR KNOWLEDGE[^\n]*\n?/, '').replace(/^\s*(TARGET|FACET):.*$/gim, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, 8000)}`;
+        const cleaned = String(target.raw || '')
+          .replace(/^PRIOR KNOWLEDGE[\s\S]*?(?:\n\n|$)/, '')   // drop the whole raw prior-knowledge dossier block (the [object] • fact dump)
+          .replace(/^\s*(TARGET|FACET):.*$/gim, '').replace(/\n{3,}/g, '\n\n').trim();
+        const draftMd = `## ${target.name}\n\n${cleaned.slice(0, 8000)}`;
         await canvasUpsertBlock({ focusId: focus.id, blockId: secBlockId, title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: draftMd } });
       } catch {}
       progressed = newChars >= 120 && usedTool; sig = `${target.name}#${target.passes}`.toLowerCase();

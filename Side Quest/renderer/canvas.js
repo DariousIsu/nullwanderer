@@ -131,6 +131,7 @@ function render(docs) {
   if (!visible.length) msgEl.innerHTML = docs.length ? 'All documents are closed.<div class="small">Open one from the ☰ tray.</div>' : 'Canvas is empty.<div class="small">Drop a document, or documents appear as Zoe produces deliverables.</div>';
 }
 
+let _canvasSig = '';
 async function loadCanvas(retries = 6) {
   try {
     const res = await window.sq.canvas.getAll();
@@ -138,7 +139,15 @@ async function loadCanvas(retries = 6) {
       if (retries > 0) { msgEl.textContent = 'Waiting for the engine…'; msgEl.style.display = 'block'; setTimeout(() => loadCanvas(retries - 1), 1500); return; }
       msgEl.innerHTML = `<span class="err">⚠ ${esc((res && res.error) || 'failed to load canvas')}</span>`; msgEl.style.display = 'block'; return;
     }
+    // CHANGE-DETECTION: only re-render when the content actually changed, so the auto-refresh poll doesn't
+    // flicker the board or drop the user's selection while nothing new has landed (documents Zoe is
+    // BUILDING grow every pass; between passes nothing changes).
+    const sig = JSON.stringify(res.docs || []);
+    if (sig === _canvasSig) return;
+    _canvasSig = sig;
+    const keep = activeKey;
     render(res.docs || []);
+    if (keep) { try { selectDoc(keep); } catch {} }   // preserve the focused card across a live update
   } catch (e) {
     if (retries > 0) { setTimeout(() => loadCanvas(retries - 1), 1500); return; }
     msgEl.innerHTML = `<span class="err">⚠ ${esc(e.message || String(e))}</span>`; msgEl.style.display = 'block';
@@ -463,3 +472,8 @@ window.addEventListener('mousemove', (e) => {
 window.addEventListener('mouseup', () => { if (monDrag) { $('monHead').classList.remove('dragging'); monDrag = null; } if (monResize) monResize = null; });
 
 loadCanvas();
+// AUTO-REFRESH: poll so documents Zoe is BUILDING (research deliverables growing pass-by-pass) appear and
+// grow LIVE without a manual refresh. Change-detection in loadCanvas means an unchanged canvas is a no-op
+// (no flicker). Paused while the window is hidden/minimized.
+const CANVAS_REFRESH_MS = 5000;
+setInterval(() => { if (!document.hidden) loadCanvas(0); }, CANVAS_REFRESH_MS);
