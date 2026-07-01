@@ -134,7 +134,7 @@ const {
 const selfDialogue = require('./lib/self_dialogue');
 
 const MODEL = config.frontModel();   // her VOICE model (front); cognition/extraction may differ
-const RECENT_TURN_LIMIT = 14;
+const RECENT_TURN_LIMIT = 28;   // freed by the stripped voice-renderer prompt (Slice 3) — ~20-30 rounds
 const RECENT_REFLECTION_LIMIT = 5;
 const DISPLAY_HISTORY_LIMIT = 50;
 
