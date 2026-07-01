@@ -5204,6 +5204,25 @@ async function runDirectedResearchPass(focus) {
   let clar = []; try { clar = JSON.parse(db.getMeta(`focus.${focus.id}.clarifications`) || '[]'); } catch {}
   const guidance = rs.buildGuidanceBlock(clar);
 
+  // OBJECT-FIRST OPEN (Slice 2c): if we were HANDED resolved objects (Slice 2 seeds) and have no current
+  // target, OPEN the next seed as the target with its dossier ALREADY in hand — no blind "pick a new org"
+  // discovery when the request named the entity. Its known facts ride into the deepen prompt as GIVEN, so
+  // passes fill gaps instead of re-deriving the biography (the #2915 fix, deep half). One seed per open.
+  if (!target || !target.name) {
+    try {
+      const seeds = JSON.parse(db.getMeta(`focus.${focus.id}.seed_objects`) || '[]');
+      const consumed = JSON.parse(db.getMeta(`focus.${focus.id}.seed_consumed`) || '[]');
+      const next = rs.pickSeedTarget({ seeds, consumed, covered });
+      if (next) {
+        let known = ''; try { known = require('./lib/active_recall')._objectLines(next).join('\n'); } catch {}
+        target = { name: next.name, passes: 1, raw: known ? `PRIOR KNOWLEDGE (already in our graph):\n${known}` : '', facets: ['overview'], known, seeded: true };
+        try { db.setMeta(targetKey, JSON.stringify(target)); } catch {}
+        try { db.setMeta(`focus.${focus.id}.seed_consumed`, JSON.stringify(consumed.concat(next.name).slice(-50))); } catch {}
+        console.log(`[directed] #${focus.id} seed-open → ${next.name} (object-first${known ? ', dossier in hand' : ''})`);
+      }
+    } catch (e) { console.error('[directed] seed-open failed:', e.message); }
+  }
+
   const runPass = async (prompt) => {
     try {
       const r = await runCloudOperator({ userMessage: prompt, context: '', task: true, autonomous: true });
@@ -5224,8 +5243,9 @@ async function runDirectedResearchPass(focus) {
       progressed = !!(p.body && usedTool); sig = p.target.toLowerCase(); note = `started ${p.target}`;
     } else { note = p.target ? `(repeat target) ${p.target}` : 'no new target found'; sig = String(p.target || '').toLowerCase(); }
   } else {
-    // DEEPEN the current target — next missing facet.
-    const { ans, usedTool } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance }));
+    // DEEPEN the current target — next missing facet. A seeded target carries its graph dossier as `known`,
+    // injected as GIVEN so the pass builds PAST what we already hold (object-first, Slice 2c).
+    const { ans, usedTool } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance, known: target.known || '' }));
     const p = rs.parsePass(ans);
     const newChars = rs.newContentChars(target.raw, p.body);
     target.passes = (target.passes || 1) + 1;

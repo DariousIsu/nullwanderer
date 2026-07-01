@@ -108,10 +108,22 @@ function buildNewTargetPrompt({ goal = '', covered = [], guidance = '' } = {}) {
   return `You are researching a standing task for Lucas, ONE organization at a time, in DEPTH.\n\nTASK: ${goal}${g}\n\n${done}\n\nTHIS PASS: pick ONE specific organization that fits the task and is NOT already documented, and write an OVERVIEW — full name, what it is, its main focus areas — grounded ONLY in what web_search / browser_read / echo / recall actually return (never invent). You will deepen it (staff, contacts, positions) over the next passes, so just establish it now.\nIf EVERY relevant organization is already documented, reply with exactly ALL-COVERED.\nEnd with a final line: TARGET: <the organization name>`;
 }
 
+// Object-first open (Slice 2c): the next SEED object to OPEN as a target — one we were handed (resolved
+// from the request) that isn't already consumed or covered. Lets a named-entity run start ON the entity
+// instead of blind discovery. Pure. Returns the seed object or null.
+function pickSeedTarget({ seeds = [], consumed = [], covered = [] } = {}) {
+  const lc = s => String(s || '').toLowerCase();
+  const used = new Set([...(consumed || []), ...(covered || [])].map(lc));
+  return (Array.isArray(seeds) ? seeds : []).find(o => o && o.name && !used.has(lc(o.name))) || null;
+}
+
 // Deepen pass: stay on the current target, pursue the next missing facet, or declare it SATURATED.
-function buildDeepenPrompt({ goal = '', target = '', facets = [], guidance = '' } = {}) {
+// `known` (Slice 2c) = what we ALREADY hold on the target (from our graph) — injected as GIVEN so the pass
+// builds PAST it instead of re-deriving the biography we already have (the #2915 fix, deep half).
+function buildDeepenPrompt({ goal = '', target = '', facets = [], guidance = '', known = '' } = {}) {
   const g = guidance ? `\n${guidance}\n` : '';
-  return `You are DEEP-researching ONE organization for Lucas's task, staying on it until it is well covered.\n\nTASK: ${goal}\nCURRENT ORGANIZATION: ${target}\nFacets already gathered on it: ${facetsSummary(facets)}\n${g}\nTHIS PASS: pursue the NEXT most valuable facet you do NOT yet have on ${target}, in priority order: (1) named leadership & key staff with their roles, (2) direct contact details (work emails, phone numbers, mailing address, key social/LinkedIn) — check the org's own /contact or /about page, (3) detailed policy positions / notable work, (4) funding & affiliations, (5) recent activity / publications. EXHAUST a good source before moving on: when you land on the organization's OWN site, use open_page to go straight into its /team, /leadership, /about and /contact pages (and follow promising links) — do NOT bounce to a fresh web_search until you've actually used the site you're on. Ground EVERY detail in what the tools return — never invent a name, email, or number. If you cannot verify a real, FULL name, write "not found" — NEVER use initials, abbreviations, or any placeholder (e.g. "R. Z." or "VP") in place of a real name.\nIf you have already gathered a solid, well-rounded picture of ${target} (what it is, its people, how to reach it, its positions), reply with exactly SATURATED and nothing else.\nEnd with a final line: FACET: <the facet you added this pass>`;
+  const k = known ? `\nWHAT WE ALREADY HOLD on ${target} (from our own knowledge graph — treat as GIVEN, do NOT re-derive or re-report it; build PAST it toward what's missing):\n${known}\n` : '';
+  return `You are DEEP-researching ONE organization for Lucas's task, staying on it until it is well covered.\n\nTASK: ${goal}\nCURRENT ORGANIZATION: ${target}\nFacets already gathered on it: ${facetsSummary(facets)}\n${k}${g}\nTHIS PASS: pursue the NEXT most valuable facet you do NOT yet have on ${target}, in priority order: (1) named leadership & key staff with their roles, (2) direct contact details (work emails, phone numbers, mailing address, key social/LinkedIn) — check the org's own /contact or /about page, (3) detailed policy positions / notable work, (4) funding & affiliations, (5) recent activity / publications. EXHAUST a good source before moving on: when you land on the organization's OWN site, use open_page to go straight into its /team, /leadership, /about and /contact pages (and follow promising links) — do NOT bounce to a fresh web_search until you've actually used the site you're on. Ground EVERY detail in what the tools return — never invent a name, email, or number. If you cannot verify a real, FULL name, write "not found" — NEVER use initials, abbreviations, or any placeholder (e.g. "R. Z." or "VP") in place of a real name.\nIf you have already gathered a solid, well-rounded picture of ${target} (what it is, its people, how to reach it, its positions), reply with exactly SATURATED and nothing else.\nEnd with a final line: FACET: <the facet you added this pass>`;
 }
 
 // --- ENRICH / FACET-FILL mode -----------------------------------------------
@@ -203,7 +215,7 @@ function buildOrganizeTargetPrompt({ target = '', raw = '' } = {}) {
 module.exports = {
   parsePass, newContentChars, decideAdvance, facetsSummary,
   isClarification, buildGuidanceBlock, isStatusRequest,
-  buildNewTargetPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt,
+  buildNewTargetPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt, pickSeedTarget,
   pickEnrichTarget, facetLabel, buildEnrichPrompt, buildOrganizeEnrichPrompt,
   buildWebLanePrompt, buildDeepLanePrompt, buildMergeLanesPrompt,
   MAX_PASSES_PER_TARGET, MIN_NEW_CHARS

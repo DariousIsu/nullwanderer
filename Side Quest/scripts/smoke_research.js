@@ -82,5 +82,16 @@ ok(/ADDITIONAL GUIDANCE/i.test(gb) && /include state-level ones/.test(gb) && /sk
 ok(r.buildNewTargetPrompt({ goal: 'g', covered: [], guidance: gb }).includes('include state-level ones'), 'new-target prompt carries the clarification guidance');
 ok(r.buildDeepenPrompt({ goal: 'g', target: 'X', facets: [], guidance: gb }).includes('skip any already'), 'deepen prompt carries the clarification guidance');
 
+// --- Slice 2c: object-first open (pickSeedTarget) + known-injection into the deepen prompt ---
+const seeds = [{ name: 'John Curtis (US)', degree: 320 }, { name: 'R Street Institute' }];
+ok(r.pickSeedTarget({ seeds, consumed: [], covered: [] }).name === 'John Curtis (US)', 'pickSeedTarget: first unconsumed seed');
+ok(r.pickSeedTarget({ seeds, consumed: ['John Curtis (US)'], covered: [] }).name === 'R Street Institute', 'pickSeedTarget: skips a consumed seed → next');
+ok(r.pickSeedTarget({ seeds, consumed: [], covered: ['john curtis (us)'] }).name === 'R Street Institute', 'pickSeedTarget: skips an already-covered seed (case-insensitive)');
+ok(r.pickSeedTarget({ seeds, consumed: ['John Curtis (US)', 'R Street Institute'], covered: [] }) === null, 'pickSeedTarget: all seeds used → null (fall through to discovery)');
+ok(r.pickSeedTarget({ seeds: [], consumed: [], covered: [] }) === null, 'pickSeedTarget: no seeds → null');
+const dpKnown = r.buildDeepenPrompt({ goal: 'g', target: 'John Curtis (US)', facets: ['overview'], known: '[object] John Curtis (US) — person, degree 320\n  • title: U.S. Senator' });
+ok(/WHAT WE ALREADY HOLD on John Curtis/.test(dpKnown) && /do NOT re-derive/.test(dpKnown) && /U\.S\. Senator/.test(dpKnown), 'buildDeepenPrompt: known dossier injected as GIVEN prior knowledge');
+ok(!/WHAT WE ALREADY HOLD/.test(r.buildDeepenPrompt({ goal: 'g', target: 'X', facets: [] })), 'buildDeepenPrompt: no known → no prior-knowledge block (unchanged default)');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
