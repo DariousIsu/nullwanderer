@@ -2862,18 +2862,28 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // Fail-safe: Echo down / no entity → object null → falls back to the local notes recall() also gathers.
       const ar = require('./lib/active_recall');
       recallResult = await ar.recall(userMessage, { k: 4 });
-      rkRows = (recallResult.notes || []).slice();
+      // DROP internal research/focus artifacts — a research dossier / focus tombstone is stored at high
+      // importance (0.85), so retrieveScored surfaces it for ANY entity query and it bled "Enrich 19
+      // organizations" into unrelated turns (the Thune leak). These are her internal work artifacts, not
+      // facts to relay in conversation.
+      const cleanNotes = (recallResult.notes || []).filter(n => n && !/research_dossier|focus_tombstone|focus_state|tombstone|dossier/i.test(String((n && n.source) || '')));
+      rkRows = cleanNotes.slice();
       const parts = [];
       const objLines = ar._objectLines(recallResult.object);
       if (objLines.length) {
         parts.push('What you already hold on this — your memory-graph record (answer directly FROM this, it is yours):\n' + objLines.join('\n'));
-        rkRows.unshift({ content: objLines.join(' '), source: 'object' });   // so the grounding assessor counts the pulled object as real grounding
+        rkRows.unshift({ content: objLines.join(' '), source: 'object' });   // so the grounding assessor counts the pulled object
       }
-      // notes = local memory rows + Echo master-DB hits (mixed shapes) → format defensively, object leads.
-      const noteLines = (recallResult.notes || []).slice(0, 6)
-        .map(n => { const c = String((n && n.content) || '').replace(/\s+/g, ' ').trim().slice(0, 200); return c ? `  • ${c}` : ''; })
-        .filter(Boolean);
-      if (noteLines.length) parts.push('Related from your memory:\n' + noteLines.join('\n'));
+      // Include the artifact-filtered notes UNLESS the object is already RICH — a rich object is
+      // authoritative (facts + bio + committees + neighbors) and supplementary notes are exactly where
+      // off-topic importance-boosted globs sneak in (the Thune leak). A thin/stub object or no object
+      // still needs its notes (e.g. an entity we only hold via a dropped document → Russ Walker case).
+      if (!ar._objectRich(recallResult.object)) {
+        const noteLines = cleanNotes.slice(0, 6)
+          .map(n => { const c = String((n && n.content) || '').replace(/\s+/g, ' ').trim().slice(0, 200); return c ? `  • ${c}` : ''; })
+          .filter(Boolean);
+        if (noteLines.length) parts.push('Related from your memory:\n' + noteLines.join('\n'));
+      }
       retrievedKnowledgeBlock = parts.length ? parts.join('\n\n') : null;
     } else {
       // Broad/open turn — scored recency×relevance×importance retrieval keeps her texture (unchanged).
