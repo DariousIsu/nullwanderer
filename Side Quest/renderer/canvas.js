@@ -304,7 +304,10 @@ surface.addEventListener('drop', async (e) => {
       if (res && res.ok) { okN += 1; lastKey = res.tabKey; } else { showToast(`Drop failed: ${(res && res.error) || f.name}`); }
     } catch (err) { showToast(`Drop error: ${err.message}`); }
   }
-  if (okN) { await loadCanvas(0); if (lastKey) focusDoc(lastKey); showToast(`Added ${okN} document${okN === 1 ? '' : 's'}`); }
+  // Full render to pick up the new card, then just SELECT it (raise/highlight) — do NOT focusDoc, which
+  // recenters the whole board on it and makes the view "jump" even though the doc is already sitting where
+  // you dropped it.
+  if (okN) { await loadCanvas(0, true); if (lastKey) { try { selectDoc(lastKey); } catch {} } showToast(`Added ${okN} document${okN === 1 ? '' : 's'}`); }
 });
 
 $('trayBtn').addEventListener('click', () => trayEl.classList.toggle('open'));
