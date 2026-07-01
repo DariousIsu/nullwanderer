@@ -5,7 +5,7 @@
  *
  * Run: ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_live_info.js
  */
-const { isLiveInfoQuestion, deriveLiveQuery, detectCuriosity, isResearchCommand, deriveResearchSubject } = require('../lib/curiosity');
+const { isLiveInfoQuestion, deriveLiveQuery, detectCuriosity, isResearchCommand, deriveResearchSubject, isBareCuriositySeed } = require('../lib/curiosity');
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++; console.log('  ✗', m); } };
@@ -54,6 +54,19 @@ const subj = deriveResearchSubject('do some research then', [
 ok(/zoe barnes/i.test(subj) && /personality|daring/i.test(subj), 'subject pulled from recent user turns (Zoe Barnes + personality)');
 ok(!/do some research/i.test(subj), 'the command turns are excluded from the subject');
 ok(deriveResearchSubject('research it', ['research it']) === null, 'no prior topic → null (nothing to look up)');
+
+// --- BARE CURIOSITY SEED SUPPRESSION (idle-stream de-bloat) ---
+// These bare "I want to know X" seeds are the QUERY half of a curiosity tick — not mentation.
+// They must be recognized so the tick fires the lookup but does NOT store the query as a thought.
+ok(isBareCuriositySeed('I want to know the title and publication date of the most recent R Street Institute policy brief released in 2026.'), 'bare "I want to know the title/date…" seed → suppressed');
+ok(isBareCuriositySeed('I want to know the winning distance achieved by Zoe Barnes when she won the 2026 Indoor D3 Shot Put National Championship.'), 'bare "winning distance…" seed → suppressed');
+ok(isBareCuriositySeed('I want to find out the record label of the original Fifth Element soundtrack.'), 'bare "I want to find out…" seed → suppressed');
+ok(isBareCuriositySeed('I wonder what the headquarters city of the Nuclear Innovation Alliance is.'), 'bare "I wonder what…" seed → suppressed');
+// Real mentation that merely CONTAINS a curiosity phrase must be KEPT (not a bare seed).
+ok(!isBareCuriositySeed('I want to know why he went quiet — but chasing that feeling just pulls me into the same spiral, so I should let it sit and come back to what he actually asked for.'), 'multi-clause reasoning around a want → kept');
+ok(!isBareCuriositySeed('Moral patienthood for advanced AI systems is the status of being an entity toward which moral obligations can be held; it turns on sentience and interests, not intelligence alone.'), 'a real declarative thought → kept');
+ok(!isBareCuriositySeed('He seems tired today.'), 'a plain observation → not a seed');
+ok(!isBareCuriositySeed(''), 'empty → not a seed');
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

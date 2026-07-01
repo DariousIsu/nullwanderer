@@ -1,7 +1,7 @@
 const db = require('./db');
 const { streamChat, complete, completeDetailed } = require('./ollama');
 const { search: webSearch, fetchPage } = require('./web_search');
-const { detectCuriosity, buildBoredomPrompt, parseBoredomResponse } = require('./curiosity');
+const { detectCuriosity, isBareCuriositySeed, buildBoredomPrompt, parseBoredomResponse } = require('./curiosity');
 const { runSelfDialogue } = require('./self_dialogue');
 const openThreadsLib = require('./open_threads');
 const filesLib = require('./files');
@@ -1369,6 +1369,17 @@ async function runOneTick() {
   // (self_model has SELF_REJECT, commitments COMMIT_REJECT); it's where the spiral kept
   // regenerating. Cheap: she re-ticks in ~35s, so a dropped tick just stays silent.
   if (curatorLib.isJunk(trimmed)) { console.log('[curation] dropped spiral/junk thought:', trimmed.replace(/\s+/g, ' ').slice(0, 70)); return; }
+
+  // CURIOSITY-SEED SUPPRESSION: a bare "I want to know X" is the QUERY half of a curiosity
+  // tick, not mentation — and it was the dominant source of idle-stream bloat (~85% of recent
+  // "thoughts" were these bare seeds, clustering hard by entity). STILL fire the lookup — its
+  // ANSWER (a reading) carries the value and surfaces normally — but do NOT store/surface the
+  // query itself as a thought. Applies even during gap-fill (a bare seed is never good filler).
+  if (!personalMode && isBareCuriositySeed(trimmed)) {
+    console.log('[curiosity-seed] suppressed bare seed from thought stream:', trimmed.replace(/\s+/g, ' ').slice(0, 70));
+    maybeSearchFromThought(trimmed).catch(err => console.error('[monologue] search trigger error:', err.message));
+    return;
+  }
 
   // SUBCONSCIOUS MEMORY RECONCILE: if this idle thought is about to conclude she has "no record
   // / didn't we discuss this / I should check my notes or ask Lucas", SEARCH her conversation

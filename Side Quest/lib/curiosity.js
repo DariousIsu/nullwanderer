@@ -68,6 +68,33 @@ function detectCuriosity(content) {
   return { triggered: false, query: null, source: null };
 }
 
+// Opener stems that mark a bare SEARCH SEED ("I want to know the title of…") as opposed to a
+// real thought that merely contains a curiosity phrase. Anchored at string start.
+const SEED_OPENER = /^\s*(?:i\s+(?:want|'?d\s+like|would\s+like)\s+to\s+(?:know|find\s+out|learn(?:\s+about)?|understand)|i\s+wonder\s+(?:what|whether|if|how|why|when|who|where)|i\s+want\s+to\s+find)\b/i;
+
+/**
+ * Is this monologue content a BARE curiosity seed — the QUERY half of a curiosity tick
+ * ("I want to know the publication date of the most recent R Street brief") rather than
+ * genuine mentation? These are internal search queries; storing/surfacing them as thoughts
+ * is the dominant source of idle-stream bloat. The tick still FIRES the lookup (its answer,
+ * a reading, carries the value) — it just doesn't store the query as a thought.
+ *
+ * Conservative: fires only when the content BOTH opens as a seed AND is query-dominated
+ * (single sentence, or the extracted query spans most of the text). A multi-clause thought
+ * that happens to open "I want to know why he said that — which made me think about …" is
+ * kept, because real reasoning surrounds the query.
+ */
+function isBareCuriositySeed(content) {
+  const t = String(content || '').trim();
+  if (!t) return false;
+  if (!SEED_OPENER.test(t)) return false;
+  const trig = detectCuriosity(t);
+  if (!trig.triggered || !trig.query) return false;   // no searchable query → not a seed
+  const sentences = t.split(/[.?!]+(?:\s|$)/).filter(s => s.trim().length > 3);
+  const ratio = trig.query.length / Math.max(1, t.length);
+  return sentences.length <= 1 || ratio >= 0.5;
+}
+
 /**
  * Build a one-shot prompt that asks Lana what she'd want to learn about
  * right now. Used by the periodic boredom trigger.
@@ -198,6 +225,7 @@ function deriveResearchSubject(currentMsg, recentUserContents = []) {
 
 module.exports = {
   detectCuriosity,
+  isBareCuriositySeed,
   buildBoredomPrompt,
   parseBoredomResponse,
   cleanQuery,
