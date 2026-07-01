@@ -127,6 +127,52 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
 .meet-body webview{position:absolute;inset:0;width:100%;height:100%;border:0;display:inline-flex;}
 .meet-shield{position:absolute;inset:0;z-index:5;display:none;}
 .meetpane.interacting .meet-shield{display:block;}
+
+/* Monitors widget — the persistent news-feed wall. A floating, draggable/resizable canvas pane
+   (text only, no browser) rendering a merged newest-first item stream with new-item highlight. */
+.monitors{position:fixed;top:58px;left:24px;width:380px;height:640px;z-index:55;display:flex;flex-direction:column;
+  background:var(--bg-panel);border:1px solid var(--line-strong);border-radius:var(--r-lg);box-shadow:0 14px 44px rgba(0,0,0,.6);overflow:hidden;}
+.monitors[hidden]{display:none;}
+.mon-head{flex-shrink:0;display:flex;align-items:center;gap:8px;padding:8px 11px;background:var(--bg-raised);border-bottom:1px solid var(--line);cursor:grab;user-select:none;}
+.mon-head.dragging{cursor:grabbing;}
+.mon-head .grip{color:var(--tx-fainter);font-size:13px;}
+.mon-head .mon-title{flex:1;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--tx-muted);font-weight:700;}
+.mon-head .mon-n{font-size:10px;color:var(--tx-dim);}
+.mon-bar{flex-shrink:0;display:flex;gap:6px;padding:7px 10px;border-bottom:1px solid var(--line-faint);}
+.mon-bar input{flex:1;background:var(--bg-deep);border:1px solid var(--line-strong);color:var(--tx);font:inherit;font-size:11px;padding:5px 8px;border-radius:var(--r-sm);outline:none;}
+.mon-bar input:focus{border-color:var(--accent);}
+.mon-bar button{background:var(--bg-deep);border:1px solid var(--line-strong);color:var(--tx-muted);font:inherit;font-size:11px;padding:5px 9px;border-radius:var(--r-sm);cursor:pointer;}
+.mon-bar button:hover{border-color:var(--line-hover);color:var(--tx-soft);}
+.mon-list{flex:1;overflow-y:auto;padding:4px 6px 10px;}
+.mon-list::-webkit-scrollbar{width:8px;}.mon-list::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:4px;}
+.mon-item{padding:7px 9px;border-bottom:1px solid var(--line-faint);position:relative;}
+.mon-item.new{background:rgba(106,134,182,.08);}
+.mon-item.new::before{content:"";position:absolute;left:2px;top:11px;width:5px;height:5px;border-radius:50%;background:var(--accent);}
+.mon-item .it-top{display:flex;gap:7px;align-items:baseline;font-size:10px;color:var(--tx-dim);margin-bottom:2px;}
+.mon-item .it-src{color:var(--info-fg);font-weight:600;}
+.mon-item .it-ago{margin-left:auto;font-variant-numeric:tabular-nums;}
+.mon-item .it-title{font-size:12.5px;color:var(--tx-soft);line-height:1.35;}
+.mon-item .it-title a{color:var(--tx-soft);text-decoration:none;}
+.mon-item .it-title a:hover{color:var(--tx);text-decoration:underline;}
+.mon-item .it-sum{font-size:11px;color:var(--tx-fainter);margin-top:2px;line-height:1.35;max-height:46px;overflow:hidden;}
+.mon-empty{padding:16px 10px;font-size:11px;color:var(--tx-fainter);text-align:center;}
+.mon-sources{flex-shrink:0;border-top:1px solid var(--line-faint);padding:5px 10px;display:flex;flex-wrap:wrap;gap:5px;}
+.mon-src{font-size:10px;color:var(--tx-muted);background:var(--bg-raised);border:1px solid var(--line-strong);border-radius:9px;padding:1px 7px 1px 8px;display:inline-flex;gap:5px;align-items:center;cursor:default;}
+.mon-src .x{color:var(--tx-fainter);cursor:pointer;font-size:11px;}
+.mon-src .x:hover{color:#e08a8a;}
+.mon-src.bad{border-color:#4a3a22;color:var(--warn-fg);}
+.mon-list{min-height:0;}
+.mon-videos{flex-shrink:0;border-top:1px solid var(--line);max-height:52%;overflow-y:auto;padding:6px;display:flex;flex-direction:column;gap:7px;}
+.mon-videos:empty{display:none;}
+.mon-videos::-webkit-scrollbar{width:8px;}.mon-videos::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:4px;}
+.vid{position:relative;}
+.vid webview{width:100%;height:200px;border:0;border-radius:var(--r);background:#000;display:flex;}
+.vid .vx{position:absolute;top:5px;right:5px;background:rgba(0,0,0,.62);color:#fff;border:0;border-radius:3px;font-size:13px;line-height:1;width:20px;height:20px;cursor:pointer;z-index:2;}
+.vid .vx:hover{background:rgba(200,70,70,.85);}
+.vid .vspk{position:absolute;top:5px;left:5px;background:rgba(0,0,0,.62);border:0;border-radius:3px;font-size:11px;line-height:1;height:20px;padding:0 6px;cursor:pointer;z-index:2;}
+.vid .vspk:hover{background:rgba(0,0,0,.85);}
+.vid .ving{position:absolute;top:5px;left:40px;background:rgba(0,0,0,.62);color:#fff;border:0;border-radius:3px;font-size:12px;line-height:1;height:20px;padding:0 6px;cursor:pointer;z-index:2;}
+.vid .ving:hover{background:var(--illu);color:#0a0a0d;}
 </style>
 </head>
 <body>
@@ -136,6 +182,7 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
     <span class="count" id="count"></span>
     <span class="spacer"></span>
     <span class="hint">scroll = zoom · drag bg = pan · drag ⠿ = move</span>
+    <button id="monitorsBtn" title="News monitors">📡 monitors</button>
     <button id="resetBtn" title="Reset arrangement">reset layout</button>
     <button id="refreshBtn">Refresh</button>
   </div>
@@ -164,6 +211,37 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
     <div class="resize-grip" id="meetResize"></div>
   </div>
 
+  <div class="monitors" id="monitors" hidden>
+    <div class="mon-head" id="monHead">
+      <span class="grip">⠿</span>
+      <span class="mon-title">Monitors</span>
+      <span class="mon-n" id="monN"></span>
+      <button class="dbtn" id="monRefresh" title="Refresh now">⟳</button>
+      <button class="dbtn" id="monClose" title="Close">✕</button>
+    </div>
+    <div class="mon-bar">
+      <input type="text" id="monAdd" placeholder="Add RSS/Atom feed or YouTube URL…" autocomplete="off" spellcheck="false">
+      <button id="monAddBtn">Add</button>
+    </div>
+    <div class="mon-list" id="monList"></div>
+    <div class="mon-sources" id="monSources"></div>
+    <div class="mon-videos" id="monVideos"></div>
+    <div class="resize-grip" id="monResize"></div>
+  </div>
+
+  <div class="meetpane" id="ingestpane" hidden>
+    <div class="meet-head" id="ingestHead">
+      <span class="grip">⠿</span>
+      <span class="live" style="color:var(--illu);border-color:var(--illu)">● ingesting</span>
+      <span class="meet-title" id="ingestTitle">Full ingestion</span>
+      <button class="dbtn" id="ingestReload" title="Reload">⟳</button>
+      <button class="dbtn" id="ingestClose" title="Close">✕</button>
+    </div>
+    <div class="meet-body" id="ingestBody"><div class="meet-shield" id="ingestShield"></div></div>
+    <div class="resize-grip" id="ingestResize"></div>
+  </div>
+
+  <script src="../studio/feeds_view.js"></script>
   <script src="canvas.js"></script>
 </body>
 </html>

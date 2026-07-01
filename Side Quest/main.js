@@ -260,9 +260,12 @@ function createWorkspaceWindow() {
 
 let canvasWindow = null;
 let meetWebContents = null;   // the Meet <webview>'s guest webContents (captured on attach) — the driver's handle
+let ingestWebContents = null; // the full-ingestion video pane's guest webContents — transcription attach point (Zoe-builder)
 let zoeMeetPartitionReady = false;
 // The driver (lib/meet_canvas) operates the Meet pane from main via this live guest webContents.
 function getMeetWebContents() { return (meetWebContents && !meetWebContents.isDestroyed()) ? meetWebContents : null; }
+// The full-ingestion video pane's webContents (audio ON) — the Zoe-builder attaches transcription here.
+function getIngestWebContents() { return (ingestWebContents && !ingestWebContents.isDestroyed()) ? ingestWebContents : null; }
 // The Meet-in-canvas pane hosts Google Meet in a <webview partition="persist:zoe-google"> — ZOE's
 // OWN Google session (zoelanai@…), distinct from the operator's calendar OAuth. Grant camera/mic to
 // that partition's session (scoped — never to the whole app) so getUserMedia works inside the pane.
@@ -306,6 +309,9 @@ function createCanvasWindow() {
     webPreferences.nodeIntegration = false;
     webPreferences.contextIsolation = true;
     delete webPreferences.preload;
+    // Allow autoplay so the full-INGESTION pane starts with sound (its embed passes autoplay; the muted
+    // monitor tiles don't autoplay, so they stay paused regardless).
+    webPreferences.autoplayPolicy = 'no-user-gesture-required';
   });
   // Capture ONLY the Meet webview's guest webContents (not the video-monitor webviews) so the driver
   // can operate the meeting from main. Scoped by URL: a guest that navigates to meet.google.com becomes
@@ -320,10 +326,14 @@ function createCanvasWindow() {
         // physical speakers stay silent because that cable isn't them. The config flag = "I've routed it."
         const muteIt = !(() => { try { return require('./lib/config').meetingAudioConfig().enabled; } catch { return false; } })();
         try { guest.setAudioMuted(muteIt); } catch {}
+      } else if (/[?&]a=1(&|$)/.test(url) && /\/yt\b/.test(url)) {
+        // The full-INGESTION video pane (player URL carries a=1). Expose its webContents so the
+        // Zoe-builder can attach transcription/caption-follow. Audio stays ON (ingestion needs sound).
+        ingestWebContents = guest;
       }
     };
     try { guest.on('did-navigate', tag); guest.on('did-finish-load', tag); } catch {}
-    try { guest.once('destroyed', () => { if (meetWebContents === guest) meetWebContents = null; }); } catch {}
+    try { guest.once('destroyed', () => { if (meetWebContents === guest) meetWebContents = null; if (ingestWebContents === guest) ingestWebContents = null; }); } catch {}
   });
   canvasWindow.loadFile(path.join(__dirname, 'renderer', 'canvas.html'));
   windowState.track(canvasWindow, 'canvas');
@@ -519,6 +529,7 @@ app.whenReady().then(() => {
     if (sc.due()) { const l = sc.run(); console.log(`[main] capability self-check: ${l.green}/${l.total} green${l.allGreen ? '' : ' — RED: ' + l.red.map(r => r.name).join(', ')}`); }
   } catch (e) { console.error('[main] self-check at boot failed:', e.message); }
   createWindow();
+  try { ensureYtPlayerServer(); } catch {}   // warm the clean-player server so the Monitors videos load fast
   // Zoe's Canvas auto-spawns AFTER the engine attaches (see the engine .finally above) so its first
   // load finds Echo connected — staggered behind the server, no "not connected" flash.
 
@@ -862,6 +873,54 @@ ipcMain.handle('feeds:remove', (_e, { url } = {}) => { try { return feedsStore.r
 ipcMain.handle('feeds:video-list', () => { try { return { ok: true, videos: feedsStore.videoList() }; } catch (e) { return { ok: false, error: e.message }; } });
 ipcMain.handle('feeds:video-add', (_e, { url, title } = {}) => { try { return feedsStore.videoAdd(url, title); } catch (e) { return { ok: false, error: e.message }; } });
 ipcMain.handle('feeds:video-remove', (_e, { url } = {}) => { try { return feedsStore.videoRemove(url); } catch (e) { return { ok: false, error: e.message }; } });
+// CLEAN YouTube player: the /embed player errors (153) top-level and from a file:// host. Serve a tiny
+// page over http://127.0.0.1 that FRAMES the embed with a matching ?origin= — the handshake YouTube
+// needs — so the canvas gets a chrome-free player (no search bar / sign-in / live chat / watch-page junk).
+let ytServer = null, ytReady = null, ytPort = 0;
+function ensureYtPlayerServer() {
+  if (ytReady) return ytReady;
+  ytReady = new Promise((resolve) => {
+    try {
+      const http = require('http');
+      ytServer = http.createServer((req, res) => {
+        try {
+          const u = new URL(req.url, 'http://127.0.0.1');
+          if (u.pathname === '/yt') {
+            const id = (u.searchParams.get('v') || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 20);
+            const auto = u.searchParams.get('a') === '1' ? '&autoplay=1' : '';   // full-ingestion pane autoplays w/ sound
+            const origin = `http://127.0.0.1:${ytPort}`;
+            const frame = id
+              ? `<iframe src="https://www.youtube-nocookie.com/embed/${id}?rel=0&modestbranding=1&playsinline=1${auto}&origin=${encodeURIComponent(origin)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>`
+              : 'no video';
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(`<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;height:100%;background:#000;overflow:hidden}iframe{border:0;width:100%;height:100%;display:block}</style></head><body>${frame}</body></html>`);
+            return;
+          }
+          res.writeHead(404); res.end('not found');
+        } catch { try { res.writeHead(500); res.end('err'); } catch {} }
+      });
+      ytServer.on('error', (e) => { console.error('[yt] player server error:', e.message); resolve(0); });
+      ytServer.listen(0, '127.0.0.1', () => { ytPort = ytServer.address().port; console.log(`[yt] clean player server on 127.0.0.1:${ytPort}`); resolve(ytPort); });
+    } catch (e) { console.error('[yt] player server failed:', e.message); resolve(0); }
+  });
+  return ytReady;
+}
+ipcMain.handle('feeds:player-base', async () => { const p = await ensureYtPlayerServer(); return { ok: !!p, base: p ? `http://127.0.0.1:${p}/yt` : '' }; });
+
+// FULL-INGESTION gate: launch a YouTube video in its OWN dedicated canvas pane with AUDIO ON, so the
+// soundtrack can be transcribed (for videos/lives without CCs). Opens/focuses the Canvas + tells the
+// renderer to mount the ingestion pane. Operator- or Zoe-triggered (sq.ingestVideo / autonomous).
+ipcMain.handle('video:ingest', (_e, { url, title } = {}) => {
+  try {
+    if (!url || !/^https?:\/\//i.test(String(url))) return { ok: false, error: 'invalid url' };
+    const win = createCanvasWindow();
+    const payload = { url: String(url), title: title || 'Full ingestion' };
+    const send = () => { try { win.webContents.send('canvas:video-ingest', payload); } catch {} };
+    if (win.webContents.isLoading()) win.webContents.once('did-finish-load', send); else send();
+    win.focus();
+    return { ok: true };
+  } catch (e) { console.error('[video] ingest failed:', e.message); return { ok: false, error: e.message }; }
+});
 ipcMain.handle('feeds:fetch', async (_e, { itemLimit = 30 } = {}) => {
   try {
     const urls = feedsStore.list().map(f => f.url);

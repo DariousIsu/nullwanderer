@@ -317,4 +317,143 @@ window.addEventListener('mouseup', () => { if (mDrag) { meetHead.classList.remov
 
 if (window.sq && window.sq.onMeetJoin) window.sq.onMeetJoin(mountMeet);
 
+/* ---- Full-ingestion video pane (own pane, AUDIO ON) — the gate for deep-watching a video/live for
+   full ingestion (soundtrack → transcription; needed for content without CCs). Mirrors the Meet pane
+   (drag/resize/shield) but never mutes and autoplays. Reuses the .meetpane chrome. ---- */
+const ingestpane = $('ingestpane'), ingestHead = $('ingestHead'), ingestBody = $('ingestBody'), ingestTitle = $('ingestTitle');
+let ingestWV = null, ingestPlaced = false, ingestBase = '';
+async function mountIngest(info) {
+  const url = info && info.url; if (!url) return;
+  const id = FV ? FV.youtubeId(url) : null;
+  ingestTitle.textContent = (info && info.title) || 'Full ingestion';
+  if (!ingestBase) { try { const pb = await window.sq.feeds.playerBase(); ingestBase = (pb && pb.base) || ''; } catch {} }
+  if (ingestWV) { try { ingestWV.remove(); } catch {} ingestWV = null; }
+  ingestWV = document.createElement('webview');
+  ingestWV.setAttribute('partition', 'persist:zoe-media');
+  ingestWV.setAttribute('allowpopups', '');
+  // AUDIO ON + autoplay (a=1) via the clean local player when it's a YouTube id; else load the URL directly.
+  ingestWV.setAttribute('src', (id && ingestBase) ? `${ingestBase}?v=${id}&a=1` : url);
+  ingestBody.appendChild(ingestWV);
+  if (!ingestPlaced) { ingestpane.style.width = '880px'; ingestpane.style.height = '560px'; ingestpane.style.left = Math.max(20, Math.round((window.innerWidth - 900) / 2)) + 'px'; ingestpane.style.top = '70px'; ingestPlaced = true; }
+  ingestpane.hidden = false; ingestpane.classList.remove('minimized');
+}
+function closeIngest() { if (ingestWV) { try { ingestWV.src = 'about:blank'; } catch {} ingestWV.remove(); ingestWV = null; } ingestpane.hidden = true; }
+$('ingestClose').addEventListener('click', closeIngest);
+$('ingestReload').addEventListener('click', () => { if (ingestWV) { try { ingestWV.reload(); } catch {} } });
+let iDrag = null, iResize = null;
+ingestHead.addEventListener('mousedown', (e) => { if (e.target.closest('.dbtn')) return; iDrag = { sx: e.clientX, sy: e.clientY, sl: ingestpane.offsetLeft, st: ingestpane.offsetTop }; ingestHead.classList.add('dragging'); ingestpane.classList.add('interacting'); e.preventDefault(); });
+$('ingestResize').addEventListener('mousedown', (e) => { iResize = { sx: e.clientX, sy: e.clientY, w: ingestpane.offsetWidth, h: ingestpane.offsetHeight }; ingestpane.classList.add('interacting'); e.preventDefault(); e.stopPropagation(); });
+window.addEventListener('mousemove', (e) => {
+  if (iDrag) { ingestpane.style.left = Math.max(0, iDrag.sl + (e.clientX - iDrag.sx)) + 'px'; ingestpane.style.top = Math.max(40, iDrag.st + (e.clientY - iDrag.sy)) + 'px'; }
+  else if (iResize) { ingestpane.style.width = Math.max(360, iResize.w + (e.clientX - iResize.sx)) + 'px'; ingestpane.style.height = Math.max(280, iResize.h + (e.clientY - iResize.sy)) + 'px'; }
+});
+window.addEventListener('mouseup', () => { if (iDrag) { ingestHead.classList.remove('dragging'); iDrag = null; } if (iResize) iResize = null; ingestpane.classList.remove('interacting'); });
+if (window.sq && window.sq.onVideoIngest) window.sq.onVideoIngest(mountIngest);
+
+/* ---- Monitors widget (news feeds) — the persistent live-monitor wall. Fetches merged feed items
+   via window.sq.feeds.*, renders newest-first with new-item highlight, auto-refreshes while open.
+   Display-only here (Side Quest half); storage + her cognition over items = Zoe-builder. ---- */
+const FV = window.FeedsView;
+const monitors = $('monitors'), monList = $('monList'), monSources = $('monSources'), monN = $('monN'), monVideos = $('monVideos');
+const monSeen = new Set();
+let monPrimed = false, monTimer = null;
+const MON_REFRESH_MS = 5 * 60 * 1000;
+
+function renderMonitors(items, sources) {
+  const marked = FV ? FV.markNew(items, monSeen) : (items || []).map(i => ({ ...i, isNew: false }));
+  const now = Date.now();
+  monList.innerHTML = marked.length ? marked.map(it => `
+    <div class="mon-item${monPrimed && it.isNew ? ' new' : ''}">
+      <div class="it-top"><span class="it-src">${esc(it.source)}</span><span class="it-ago">${esc(FV ? FV.relTime(it.publishedMs, now) : '')}</span></div>
+      <div class="it-title">${it.link ? `<a href="${esc(it.link)}" target="_blank" rel="noreferrer">${esc(it.title)}</a>` : esc(it.title)}</div>
+      ${it.summary ? `<div class="it-sum">${esc(it.summary)}</div>` : ''}
+    </div>`).join('') : '<div class="mon-empty">No items yet. Add a feed URL above, or hit ⟳.</div>';
+  monN.textContent = marked.length ? `${marked.length} items` : '';
+  monSources.innerHTML = (sources || []).map(s => `<span class="mon-src${s.ok ? '' : ' bad'}" title="${esc(s.sourceUrl)}">${esc(s.source)}<span class="x" data-url="${esc(s.sourceUrl)}">×</span></span>`).join('');
+  monSources.querySelectorAll('.x').forEach(el => el.addEventListener('click', () => removeFeed(el.dataset.url)));
+  // seed the seen-set so the NEXT fetch highlights only genuinely new items (first load isn't a flood)
+  for (const it of marked) monSeen.add(it.id);
+  monPrimed = true;
+}
+async function loadFeeds() {
+  monN.textContent = '…';
+  try {
+    const res = await window.sq.feeds.fetch(30);
+    if (!res || !res.ok) { monList.innerHTML = `<div class="mon-empty err">⚠ ${esc((res && res.error) || 'fetch failed')}</div>`; monN.textContent = ''; return; }
+    renderMonitors(res.items || [], res.sources || []);
+  } catch (e) { monList.innerHTML = `<div class="mon-empty err">⚠ ${esc(e.message)}</div>`; monN.textContent = ''; }
+}
+async function removeFeed(url) { try { await window.sq.feeds.remove(url); } catch {} await loadFeeds(); }
+
+// Embedded YouTube monitors at the bottom of the widget (paused until clicked → no echo/cacophony).
+async function loadVideos() {
+  try {
+    const [res, pb] = await Promise.all([window.sq.feeds.videoList(), window.sq.feeds.playerBase()]);
+    renderVideos((res && res.videos) || [], (pb && pb.base) || '');
+  } catch {}
+}
+function renderVideos(videos, playerBase) {
+  // <webview> (not <iframe>): a file:// page can't host a YouTube embed (Error 153 — no web origin).
+  // MUST be built with createElement — <webview> tags injected via innerHTML don't instantiate in
+  // Electron (same reason the Meet pane creates its webview programmatically). Loaded top-level in a
+  // webview the player's origin is youtube.com, so it plays; the partition keeps it off her main browser.
+  monVideos.innerHTML = '';
+  for (const v of (videos || [])) {
+    const id = FV ? FV.youtubeId(v.url) : null;
+    if (!id) continue;
+    const wrap = document.createElement('div'); wrap.className = 'vid';
+    const x = document.createElement('button'); x.className = 'vx'; x.title = 'Remove'; x.textContent = '×';
+    x.addEventListener('click', async () => { try { await window.sq.feeds.videoRemove(v.url); } catch {} loadVideos(); });
+    const spk = document.createElement('button'); spk.className = 'vspk'; spk.title = 'Unmute (mutes the others)'; spk.textContent = '🔇';
+    const ing = document.createElement('button'); ing.className = 'ving'; ing.title = 'Full ingestion (own pane, audio on)'; ing.textContent = '⤢';
+    ing.addEventListener('click', () => { try { window.sq.ingestVideo(v.url, v.title || ''); } catch {} });
+    const wv = document.createElement('webview');
+    wv.setAttribute('partition', 'persist:zoe-media');
+    wv.setAttribute('allowpopups', '');
+    // Clean chrome-free player via the local http origin (frames the embed with a matching ?origin=,
+    // dodging Error 153). Fall back to the full watch page only if the player server isn't up. Muted by
+    // default so multiple tiles don't blast; 🔊 unmutes just this one.
+    wv.setAttribute('src', playerBase ? `${playerBase}?v=${id}` : `https://www.youtube.com/watch?v=${id}`);
+    wv.addEventListener('dom-ready', () => { try { wv.setAudioMuted(true); } catch {} });
+    spk.addEventListener('click', () => {
+      const on = spk.textContent === '🔇';
+      monVideos.querySelectorAll('webview').forEach(o => { try { o.setAudioMuted(!(on && o === wv)); } catch {} });
+      monVideos.querySelectorAll('.vspk').forEach(b => { b.textContent = '🔇'; });
+      spk.textContent = on ? '🔊' : '🔇';
+    });
+    wrap.appendChild(x); wrap.appendChild(spk); wrap.appendChild(ing); wrap.appendChild(wv);
+    monVideos.appendChild(wrap);
+  }
+}
+
+// Smart add: a YouTube URL → a video tile; anything else → an RSS/Atom feed.
+async function addMonitor(url) {
+  if (!url) return;
+  if (FV && FV.youtubeId(url)) { const r = await window.sq.feeds.videoAdd(url); if (r && r.ok) { $('monAdd').value = ''; await loadVideos(); } }
+  else { const r = await window.sq.feeds.add(url); if (r && r.ok) { $('monAdd').value = ''; monPrimed = false; monSeen.clear(); await loadFeeds(); } }
+}
+
+function openMonitors() {
+  monitors.hidden = false;
+  if (!monPrimed) loadFeeds();   // feeds: fetch only on first open (avoid re-hammering on every toggle)
+  loadVideos();                  // videos: cheap (no network) — refresh every open so re-seeds show
+  if (!monTimer) monTimer = setInterval(loadFeeds, MON_REFRESH_MS);
+}
+function closeMonitors() { monitors.hidden = true; if (monTimer) { clearInterval(monTimer); monTimer = null; } }
+$('monitorsBtn').addEventListener('click', () => { if (monitors.hidden) openMonitors(); else closeMonitors(); });
+$('monClose').addEventListener('click', closeMonitors);
+$('monRefresh').addEventListener('click', loadFeeds);
+$('monAddBtn').addEventListener('click', () => addMonitor($('monAdd').value.trim()));
+$('monAdd').addEventListener('keydown', (e) => { if (e.key === 'Enter') addMonitor($('monAdd').value.trim()); });
+
+// drag + resize (fixed pane; no webview, so no shield needed)
+let monDrag = null, monResize = null;
+$('monHead').addEventListener('mousedown', (e) => { if (e.target.closest('.dbtn')) return; monDrag = { sx: e.clientX, sy: e.clientY, sl: monitors.offsetLeft, st: monitors.offsetTop }; $('monHead').classList.add('dragging'); e.preventDefault(); });
+$('monResize').addEventListener('mousedown', (e) => { monResize = { sx: e.clientX, sy: e.clientY, w: monitors.offsetWidth, h: monitors.offsetHeight }; e.preventDefault(); e.stopPropagation(); });
+window.addEventListener('mousemove', (e) => {
+  if (monDrag) { monitors.style.left = Math.max(0, monDrag.sl + (e.clientX - monDrag.sx)) + 'px'; monitors.style.top = Math.max(40, monDrag.st + (e.clientY - monDrag.sy)) + 'px'; }
+  else if (monResize) { monitors.style.width = Math.max(280, monResize.w + (e.clientX - monResize.sx)) + 'px'; monitors.style.height = Math.max(220, monResize.h + (e.clientY - monResize.sy)) + 'px'; }
+});
+window.addEventListener('mouseup', () => { if (monDrag) { $('monHead').classList.remove('dragging'); monDrag = null; } if (monResize) monResize = null; });
+
 loadCanvas();

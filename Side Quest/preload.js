@@ -37,6 +37,21 @@ contextBridge.exposeInMainWorld('sq', {
   joinMeet: (url, title) => ipcRenderer.invoke('meet:join', { url, title }),
   onMeetJoin: (cb) => ipcRenderer.on('canvas:meet-join', (_e, info) => cb(info)),
   meetProbe: () => ipcRenderer.invoke('meet:probe'),   // P1 verification: read live Meet-pane state
+  // Full-ingestion gate: launch a YouTube video in its own canvas pane with audio ON (for transcription).
+  ingestVideo: (url, title) => ipcRenderer.invoke('video:ingest', { url, title }),
+  onVideoIngest: (cb) => ipcRenderer.on('canvas:video-ingest', (_e, info) => cb(info)),
+
+  // Monitors widget (canvas news feeds) — subscription CRUD + merged item fetch. Read-only.
+  feeds: {
+    list: () => ipcRenderer.invoke('feeds:list'),
+    add: (url, title) => ipcRenderer.invoke('feeds:add', { url, title }),
+    remove: (url) => ipcRenderer.invoke('feeds:remove', { url }),
+    fetch: (itemLimit) => ipcRenderer.invoke('feeds:fetch', { itemLimit }),
+    videoList: () => ipcRenderer.invoke('feeds:video-list'),
+    videoAdd: (url, title) => ipcRenderer.invoke('feeds:video-add', { url, title }),
+    videoRemove: (url) => ipcRenderer.invoke('feeds:video-remove', { url }),
+    playerBase: () => ipcRenderer.invoke('feeds:player-base')
+  },
 
   // Editor Studio — document registry / lifecycle / checks (all run in main over IPC)
   editor: {
