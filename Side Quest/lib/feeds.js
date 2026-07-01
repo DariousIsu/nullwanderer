@@ -53,7 +53,7 @@ function remove(url) { const l = list().filter(f => f.url !== url); write(l); re
 const VFILE = path.join(__dirname, '..', 'data', 'monitor_videos.json');
 const DEFAULT_VIDEOS = [
   { url: 'https://www.youtube.com/watch?v=gCNeDWCI0vo', title: '' },
-  { url: 'https://www.youtube.com/watch?v=EBJ-uKRmrdE', title: '' },
+  { url: 'https://www.youtube.com/watch?v=iipR5yUp36o', title: 'ABC News' },
   { url: 'https://www.youtube.com/watch?v=GotlA1KKWoo', title: 'CNN' },
 ];
 function vread() { try { const a = JSON.parse(fs.readFileSync(VFILE, 'utf8')); return Array.isArray(a) ? a : null; } catch { return null; } }
