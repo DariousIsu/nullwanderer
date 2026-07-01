@@ -5275,24 +5275,33 @@ async function runDirectedResearchPass(focus) {
     target.passes = (target.passes || 1) + 1;
     if (p.body) target.raw = `${target.raw}\n\n${p.body}`.slice(-16000);
     if (p.facet) target.facets = (target.facets || []).concat(p.facet).slice(-12);
+    // ONE live-growing canvas block per target (the "building-project document"): stable block_id so the
+    // draft FLESHES OUT in place as passes run, then finalizes into the cloud-organized section on advance.
+    const secBlockId = `sec-${focus.id}-${String(target.name).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 32)}`;
     const adv = rs.decideAdvance({ passes: target.passes, newChars, saturated: p.saturated });
     if (adv.advance) {
-      // CLOUD ORGANIZE this target → one clean section, appended to the deliverable NOW (continuous).
+      // CLOUD ORGANIZE this target → one clean section (the usable DRAFT), appended to the deliverable NOW.
       let section = '';
       try { section = await condenseComplete(rs.buildOrganizeTargetPrompt({ target: target.name, raw: target.raw }), { numPredict: 2000 }); } catch {}
       section = (section && section.trim()) ? section.trim() : `## ${target.name}\n${target.raw.slice(0, 1500)}`;
       const header = covered.length === 0 ? `# Directed research deliverable\n\n**Task:** ${goal}\n\n---\n\n` : '';
       try { await filesLib.dispatch({ tag: 'file-append', attrs: { path: file }, body: `${header}${section}\n\n` }); }
       catch (e) { console.error('[directed] append failed:', e.message); }
-      // DRIVE → Zoe's canvas: mirror the organized section as a live per-org block as the run advances.
-      try { const blk = require('./studio/canvas_emit').orgSectionBlock(section); await canvasEmit({ focusId: focus.id, title: goal, tabMode: 'RESEARCH', blockType: blk.blockType, data: blk.data }); } catch {}
+      // FINALIZE the live block in place with the organized draft (same block_id → replaces the raw draft).
+      try { await canvasUpsertBlock({ focusId: focus.id, blockId: secBlockId, title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: section } }); } catch {}
       covered.push(target.name); try { db.setMeta(coveredKey, JSON.stringify(covered.slice(-300))); } catch {}
-      note = `completed ${target.name} (${target.passes} passes, ${adv.reason}) + organized`; sig = target.name.toLowerCase(); progressed = true;
+      note = `completed ${target.name} (${target.passes} passes, ${adv.reason}) + organized → canvas`; sig = target.name.toLowerCase(); progressed = true;
       target = null; try { db.setMeta(targetKey, ''); } catch {}
     } else {
       try { db.setMeta(targetKey, JSON.stringify(target)); } catch {}
+      // BUILD-AS-IT-GOES: grow the target's draft block with the accumulating content each pass (raw, minus
+      // the prior-knowledge preamble + control lines) so the canvas shows the document being built live.
+      try {
+        const draftMd = `## ${target.name}\n\n${String(target.raw || '').replace(/^PRIOR KNOWLEDGE[^\n]*\n?/, '').replace(/^\s*(TARGET|FACET):.*$/gim, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, 8000)}`;
+        await canvasUpsertBlock({ focusId: focus.id, blockId: secBlockId, title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: draftMd } });
+      } catch {}
       progressed = newChars >= 120 && usedTool; sig = `${target.name}#${target.passes}`.toLowerCase();
-      note = `deepening ${target.name}: +${p.facet || 'detail'} (${newChars} new chars)`;
+      note = `deepening ${target.name}: +${p.facet || 'detail'} (${newChars} new chars) → canvas`;
     }
   }
 
