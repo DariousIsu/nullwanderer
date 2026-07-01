@@ -117,10 +117,8 @@ function trayRow(doc) {
 function applyTransform() { board.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`; }
 function raise(card) { if (card) card.style.zIndex = ++zTop; }
 
-function render(docs) {
-  docPos = {}; for (const d of docs) docPos[d.tab.key] = d.pos || { x: 48, y: 48 };
+function renderTray(docs) {
   const visible = docs.filter(d => !d.hidden);
-  board.innerHTML = visible.map(docCard).join('');
   trayRows.innerHTML = docs.length ? docs.map(trayRow).join('') : '<div class="titem"><div class="nm" style="color:var(--tx-dim)">No documents yet.</div></div>';
   trayRows.querySelectorAll('.titem').forEach(el => el.dataset.key && el.addEventListener('click', () => {
     if (el.dataset.hidden === '1') reopenDoc(el.dataset.key); else focusDoc(el.dataset.key);
@@ -130,26 +128,57 @@ function render(docs) {
   msgEl.style.display = visible.length ? 'none' : 'block';
   if (!visible.length) msgEl.innerHTML = docs.length ? 'All documents are closed.<div class="small">Open one from the ☰ tray.</div>' : 'Canvas is empty.<div class="small">Drop a document, or documents appear as Zoe produces deliverables.</div>';
 }
+// FULL render — rebuilds every card (positions/sizes re-applied from the server). Use on structural change.
+function render(docs) {
+  docPos = {}; for (const d of docs) docPos[d.tab.key] = d.pos || { x: 48, y: 48 };
+  board.innerHTML = docs.filter(d => !d.hidden).map(docCard).join('');
+  renderTray(docs);
+}
+// IN-PLACE patch — update ONLY each card's body content (the part that grows as Zoe builds), leaving the
+// card element, its POSITION, SIZE, and scroll untouched. This keeps cards where you placed them and at
+// the size you set across the auto-refresh (a full re-render would snap them back to the server defaults).
+function structureSig(docs) { return (docs || []).map(d => `${d.tab.key}:${d.hidden ? 'h' : ''}${d.minimized ? 'm' : ''}`).sort().join('|'); }
+function patchBodies(docs) {
+  docPos = {}; for (const d of docs) docPos[d.tab.key] = d.pos || { x: 48, y: 48 };
+  for (const d of docs) {
+    if (d.hidden) continue;
+    const card = board.querySelector(`.doc[data-key="${(window.CSS && CSS.escape) ? CSS.escape(d.tab.key) : d.tab.key}"]`);
+    const body = card && card.querySelector('.doc-body');
+    if (!body) continue;
+    const inner = d.stream.blocks.length ? d.stream.blocks.map(blockContent).join('') : '<div class="doc-empty">No content yet.</div>';
+    if (body.innerHTML !== inner) body.innerHTML = inner;   // only touch the DOM when content actually changed
+  }
+  renderTray(docs);
+}
 
-let _canvasSig = '';
-async function loadCanvas(retries = 6) {
+let _canvasSig = '', _structSig = '';
+async function loadCanvas(retries = 6, force = false) {
   try {
     const res = await window.sq.canvas.getAll();
     if (!res || !res.ok) {
-      if (retries > 0) { msgEl.textContent = 'Waiting for the engine…'; msgEl.style.display = 'block'; setTimeout(() => loadCanvas(retries - 1), 1500); return; }
+      if (retries > 0) { msgEl.textContent = 'Waiting for the engine…'; msgEl.style.display = 'block'; setTimeout(() => loadCanvas(retries - 1, force), 1500); return; }
       msgEl.innerHTML = `<span class="err">⚠ ${esc((res && res.error) || 'failed to load canvas')}</span>`; msgEl.style.display = 'block'; return;
     }
-    // CHANGE-DETECTION: only re-render when the content actually changed, so the auto-refresh poll doesn't
-    // flicker the board or drop the user's selection while nothing new has landed (documents Zoe is
-    // BUILDING grow every pass; between passes nothing changes).
-    const sig = JSON.stringify(res.docs || []);
-    if (sig === _canvasSig) return;
+    const docs = res.docs || [];
+    // CHANGE-DETECTION: skip when nothing changed (unless forced), so the auto-refresh poll is a no-op
+    // between passes.
+    const sig = JSON.stringify(docs);
+    if (sig === _canvasSig && !force) return;
+    // NEVER re-render mid-interaction — don't consume the sig either, so it applies on the next poll after
+    // the drag/resize/pan ends. This is what stops a poll from yanking a card you're moving/resizing.
+    if (!force && (drag || resizing || panning)) return;
     _canvasSig = sig;
-    const keep = activeKey;
-    render(res.docs || []);
-    if (keep) { try { selectDoc(keep); } catch {} }   // preserve the focused card across a live update
+    const struct = structureSig(docs);
+    if (force || struct !== _structSig) {   // cards added/removed/minimized/closed → full render
+      _structSig = struct;
+      const keep = activeKey;
+      render(docs);
+      if (keep) { try { selectDoc(keep); } catch {} }
+    } else {                                 // content-only growth → patch bodies IN PLACE (keep pos/size/scroll)
+      patchBodies(docs);
+    }
   } catch (e) {
-    if (retries > 0) { setTimeout(() => loadCanvas(retries - 1), 1500); return; }
+    if (retries > 0) { setTimeout(() => loadCanvas(retries - 1, force), 1500); return; }
     msgEl.innerHTML = `<span class="err">⚠ ${esc(e.message || String(e))}</span>`; msgEl.style.display = 'block';
   }
 }
@@ -279,8 +308,8 @@ surface.addEventListener('drop', async (e) => {
 });
 
 $('trayBtn').addEventListener('click', () => trayEl.classList.toggle('open'));
-$('refreshBtn').addEventListener('click', () => loadCanvas(0));
-$('resetBtn').addEventListener('click', async () => { try { await window.sq.canvas.resetLayout(); } catch {} loadCanvas(0); });
+$('refreshBtn').addEventListener('click', () => loadCanvas(0, true));
+$('resetBtn').addEventListener('click', async () => { try { await window.sq.canvas.resetLayout(); } catch {} loadCanvas(0, true); });
 
 /* ---- Meet-in-canvas pane (Slice 6) — host Google Meet in a webview on Zoe's own Google session,
    so she joins as herself without monopolizing her dedicated CDP browser. Fixed floating panel
