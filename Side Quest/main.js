@@ -3633,11 +3633,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       messages,
       onToken: (chunk) => parser.feed(chunk),
       inactivityMs: 180000,   // generous: a cold model load under GPU pressure can delay the first token
-      // CONSTANT num_ctx — every local Dans call (voice/byline/narrative/dialogue/play) uses 8192, so
-      // the reply MUST too. The old `bigReply ? 16384 : 8192` flipped the context size between turns,
-      // and ollama fixes num_ctx at load time → each flip cold-reloaded the 24B (the 23–38s VRAM
-      // 20→0→20 churn). Long deliverables now live in the dossier file, not the chat reply, so 8192
-      // is plenty here. One context size ⇒ Dans loads once and stays warm (keep_alive 24h).
+      // think:false — the front model is a VOICE-RENDERER bound to the <think>/<say> tag contract. A
+      // native reasoning model (gemma4) otherwise silos its reasoning to message.thinking (which our
+      // stream reader drops) and answers in bare content with NO tags → the parser flags truncated=1
+      // and captures no interior. Disabling native thinking makes it obey the prompt's literal tags
+      // (proven: think:false → content carries <think>+<say>, .thinking empty). Harmless on a
+      // non-thinking model (no-op). Also trims latency — no hidden reasoning tokens are generated then dropped.
+      think: false,
+      // CONSTANT num_ctx — every local front-model call (voice/byline/narrative/dialogue/play) uses 8192,
+      // so the reply MUST too. ollama fixes num_ctx at load time → a mismatched ctx cold-reloads the model
+      // (the 23–38s VRAM churn). Long deliverables live in the dossier file, not the chat reply, so 8192
+      // is plenty here; raising it is the front-num_ctx centralization slice. One size ⇒ loads once, stays warm.
       options: { num_ctx: 8192 }
     });
   } catch (err) {
@@ -3650,7 +3656,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       console.warn('[main] reply stalled before first token (model cold-load?) — retrying once');
       parser = new TagStreamParser({ onSayToken: (token) => { try { _streamFilter.feed(token); } catch {} } });
       try {
-        await streamChat({ model: MODEL, messages, onToken: (chunk) => parser.feed(chunk), inactivityMs: 180000, options: { num_ctx: 8192 } });
+        await streamChat({ model: MODEL, messages, onToken: (chunk) => parser.feed(chunk), inactivityMs: 180000, think: false, options: { num_ctx: 8192 } });
       } catch (err2) {
         console.error('[main] reply retry failed:', err2.message);
         try { sendError('Sorry — that hung on me for a second. Mind saying that again?'); } catch {}
@@ -3699,6 +3705,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       await streamChat({
         model: MODEL,
         messages: messages.concat([{ role: 'user', content: nudge }]),
+        think: false,   // same tag-contract reason as the main call — the nudge asks for a literal <say>
         options: { num_predict: 240 },
         onToken: (c) => retryParser.feed(c)
       });
