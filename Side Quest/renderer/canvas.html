@@ -130,7 +130,7 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
 
 /* Monitors widget — the persistent news-feed wall. A floating, draggable/resizable canvas pane
    (text only, no browser) rendering a merged newest-first item stream with new-item highlight. */
-.monitors{position:fixed;top:58px;left:24px;width:380px;height:900px;max-height:calc(100vh - 74px);z-index:55;display:flex;flex-direction:column;
+.monitors{position:fixed;top:58px;left:24px;width:380px;height:calc(100vh - 74px);max-height:calc(100vh - 74px);z-index:55;display:flex;flex-direction:column;
   background:var(--bg-panel);border:1px solid var(--line-strong);border-radius:var(--r-lg);box-shadow:0 14px 44px rgba(0,0,0,.6);overflow:hidden;}
 .monitors[hidden]{display:none;}
 .mon-head{flex-shrink:0;display:flex;align-items:center;gap:8px;padding:8px 11px;background:var(--bg-raised);border-bottom:1px solid var(--line);cursor:grab;user-select:none;}
@@ -170,7 +170,7 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
 .mon-videos:empty{display:none;}
 .mon-videos::-webkit-scrollbar{width:8px;}.mon-videos::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:4px;}
 .vid{position:relative;}
-.vid webview{width:100%;height:168px;border:0;border-radius:var(--r);background:#000;display:flex;}
+.vid webview{width:100%;height:204px;border:0;border-radius:var(--r);background:#000;display:flex;}
 .vid .vx{position:absolute;top:5px;right:5px;background:rgba(0,0,0,.62);color:#fff;border:0;border-radius:3px;font-size:13px;line-height:1;width:20px;height:20px;cursor:pointer;z-index:2;}
 .vid .vx:hover{background:rgba(200,70,70,.85);}
 .vid .vspk{position:absolute;top:5px;left:5px;background:rgba(0,0,0,.62);border:0;border-radius:3px;font-size:11px;line-height:1;height:20px;padding:0 6px;cursor:pointer;z-index:2;}
