@@ -556,7 +556,16 @@ function normalizeNeighbors(kd) {
 // test seam: inject a fake connected suit
 function _setLiveForTest(suit) { _live = suit; }
 
+// Generic dispatch to ANY Echo tool via the live suit — the graph-builder needs kg_neighborhood /
+// propose_entity / propose_relation / web_search / the data tools, not just the wrapped recalls.
+// Returns the raw normalized {ok,text,isError} (null when Echo isn't connected). Fail-soft.
+async function dispatch(tag, opts) {
+  if (!liveReady()) return null;
+  try { return await _live.dispatch(tag, opts); } catch { return null; }
+}
+function liveDispatch() { return liveReady() ? (tag) => _live.dispatch(tag) : null; }
+
 module.exports = {
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _setLiveForTest
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _setLiveForTest
 };

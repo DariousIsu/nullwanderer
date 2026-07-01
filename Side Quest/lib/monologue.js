@@ -24,18 +24,21 @@ const playSession = require('./play_session');
 const bylineLib = require('./byline');
 const gmeetLib = require('./gmeet');
 const mediaCcLib = require('./media_cc');
+const graphWalk = require('./graph_walk');
+const echoSuit = require('./echo_suit');
 const { buildAwarenessBlock, BASE_PERSONA } = require('./context');
 
 const MODEL = require('./config').frontModel();   // her VOICE model (front)
 const TICK_INTERVAL_MS = 10 * 1000;     // 10s between ticks while idle
 const CAPTION_INTERVAL_MS = Math.max(2000, Math.round(TICK_INTERVAL_MS / 2));  // half-tick caption heartbeat
-const AUTO_WATCH_PROB = 0.06;          // chance per idle tick she picks something of her own to WATCH
 const TICK_INTERVAL_BUSY_MS = 30 * 1000; // back off when conversation is active
 const RECENT_MONOLOGUE_WINDOW = 6;
 const ANTI_LOOP_RECENT = 10;            // last N monologue lines checked for repetition
 const ANTI_LOOP_THRESHOLD = 0.30;       // Jaccard similarity above this = skip
 const BOREDOM_INTERVAL_MS = 5 * 60 * 1000;  // every 5 min, ask her what she'd want to look up
 const MIN_GAP_BETWEEN_SEARCHES_MS = 60 * 1000;  // at most one search per minute
+const GRAPHWALK_MIN_INTERVAL_MS = 30 * 1000;    // graph-building moves are slow + deliberate (not the 10s tick)
+const GRAPHWALK_LAST_KEY = 'graphwalk.lastAt';
 
 let timer = null;
 let captionTimer = null;  // separate, faster heartbeat for caption-following (perception ≠ thinking)
@@ -917,50 +920,11 @@ async function runOneTick() {
     } catch (e) { console.error('[monologue] rumination guard failed:', e.message); }
   }
 
-  // SELF-DIRECTED AGENDA (autonomy roadmap, Slice 1): with no active focus and nothing escalated,
-  // pursue HER OWN interests instead of echoing the last conversation — sample the weighted agenda
-  // (lib/interests) and make the pick the current focus, so the focus lifecycle + the frontier push
-  // drive it. prob-gated so she still free-associates sometimes; no-op if the agenda is empty or in
-  // personal mode (play wanders freely).
-  if (!activeFocus && !personalMode) {
-    try {
-      const spawned = await require('./interests').maybeSpawnFocus({ focusLib });
-      if (spawned && spawned.focus) {
-        activeFocus = spawned.focus;
-        console.log(`[interests] pursuing agenda → "${(spawned.interest.topic || '').slice(0, 60)}"`);
-      }
-    } catch (e) { console.error('[monologue] interest spawn failed:', e.message); }
-  }
-
-  // AUTONOMOUS WATCHING — sometimes she picks something to WATCH on her own (not only when asked):
-  // sample one of HER interests, search YouTube, and start following it. Low prob so she isn't
-  // constantly opening videos; only when nothing's already playing and she isn't on a focus. The
-  // caption heartbeat then follows it; a thought surfaces what + why. Toggle via meta media.autoWatch.
-  if (!activeFocus && !mediaCcLib.active() && Math.random() < AUTO_WATCH_PROB) {
-    let on = true; try { on = (db.getMeta('media.autoWatch') || 'on') !== 'off'; } catch {}
-    if (on) {
-      try {
-        const t = require('./interests').sampleTopic();
-        const topic = t && t.topic;
-        // DON'T re-watch: if she's already watched this topic/video in the last few days, skip (the
-        // "5th time on the same interview" loop). A user-asked "watch it again" still works — this only
-        // gates the AUTONOMOUS pick.
-        if (topic && mediaCcLib.wasWatchedRecently(topic)) {
-          console.log(`[auto-watch] skipped "${String(topic).slice(0, 50)}" — already watched recently`);
-        } else if (topic) {
-          const r = await mediaCcLib.findAndStart({ query: topic, deps: { search: webSearch } });
-          if (r && r.ok) {
-            const note = `I got curious about ${topic}, so I pulled up a video on it to watch and follow along.`;
-            const row = db.insertMonologue({ content: note, model: MODEL, type: 'thought' });
-            pushSheep({ id: row.id, ts: row.ts, content: note, type: 'thought' });
-            try { blackboard.append({ source: 'monologue', kind: 'thought', refTable: 'monologue', refId: row.id, content: note }); } catch {}
-            console.log(`[auto-watch] she chose to watch "${topic}" → ${r.url}`);
-            return;   // tick spent starting the watch; the caption heartbeat takes it from here
-          }
-        }
-      } catch (e) { console.error('[monologue] auto-watch failed:', e.message); }
-    }
-  }
+  // NOTE: the old SELF-DIRECTED INTEREST AGENDA + AUTONOMOUS-WATCH-FROM-INTERESTS anchors were removed
+  // here (object-memory Slice 5). They sampled a bag of self-accreted "interests" disconnected from any
+  // real gap — the rootless noise generator. Idle work is now the GRAPH-BUILDER (see the idle branch
+  // below): anchor on a recent-conversation gap and grow the graph. A directed focus / thread / meeting
+  // still takes precedence above; personal/play still wanders freely.
 
   // PERSONAL/PLAY MODE — off the clock. Either advance the play session ONE step,
   // or REST. We NEVER fall through to the work free-association loop here: the 24B
@@ -1029,12 +993,21 @@ async function runOneTick() {
     });
     modeIsThreadReview = true;
   } else {
-    // INTAKE-FIRST (lever 1): if a reading arrived that she hasn't digested yet, make this
-    // tick digest it rather than free-associate — flip the think-heavy ratio toward intake.
+    // IDLE. Two cases:
+    // (1) INTAKE-FIRST — a fresh reading arrived she hasn't digested: that's real material, so
+    //     think about it (genuine cognition, kept).
+    // (2) Otherwise → GRAPH-BUILDER (object-memory Slice 5). No new material to digest → instead of
+    //     free-associating (the old "I want to know X" noise generator), advance the graph one move:
+    //     anchor on a recent-conversation gap, build/enrich the object, forge connections. The move
+    //     is cadence- + budget-gated and voices only notable results; between moves she stays quiet.
     const freshReadingId = recentReadings.length ? recentReadings[recentReadings.length - 1].id : 0;
     const lastDigested = parseInt(db.getMeta('monologue_last_digested_reading_id') || '0', 10);
     const intakeFirst = freshReadingId > lastDigested;
-    if (intakeFirst) db.setMeta('monologue_last_digested_reading_id', String(freshReadingId));
+    if (!intakeFirst) {
+      await runGraphWalkMove(recentTurns);
+      return;   // idle tick spent on graph-building (or deliberately quiet) — do NOT free-associate
+    }
+    db.setMeta('monologue_last_digested_reading_id', String(freshReadingId));
     messages = buildPrompt({
       userName,
       recentMonologue: recentThoughts,
@@ -1498,6 +1471,71 @@ function pushSheep(payload) {
       win.webContents.send('monologue:tick', payload);
     }
   } catch {}
+}
+
+// IDLE = GRAPH-BUILDING (object-memory Slice 5). When she's idle (no focus/thread/meeting), the tick
+// no longer free-associates (that was the noise generator). Instead it advances the graph-builder ONE
+// move: anchor on a recent-conversation gap, resolve/build the object from web+tools, walk connected
+// branches forging connections. The CLOUD interprets + writes (propose_*, gated); a notable move
+// surfaces one line. Cadence- and budget-gated; goes quiet when there's no gap. Returns true if a
+// move ran (so the tick doesn't also free-associate). Fail-soft — any error → false (quiet).
+async function runGraphWalkMove(recentTurns) {
+  const nowTs = Date.now();
+  // cadence: slow, deliberate — not every 10s tick
+  try { const last = parseInt(db.getMeta(GRAPHWALK_LAST_KEY) || '0', 10) || 0; if (nowTs - last < GRAPHWALK_MIN_INTERVAL_MS) return false; } catch {}
+  // budget: share the subconscious rolling token ceiling (cloud spend stays bounded)
+  const subc = require('./subconscious');
+  const cfg = require('./config');
+  const _gm = (k) => { try { return db.getMeta(k); } catch { return null; } };
+  const _sm = (k, v) => { try { db.setMeta(k, v); } catch {} };
+  if (!subc.budgetOk(_gm, nowTs, cfg.subcBudgetTokensPerHour())) return false;
+  if (!echoSuit.liveReady()) return false;   // no graph → nothing to build; stay quiet
+
+  // CLOUD cortex seam: the interpreter (candidate extraction + dossier synthesis). Records spend.
+  const cloud = async (messages, o = {}) => {
+    const sub = cfg.subconsciousModel();
+    const src = (() => { try { return (require('./models').sources() || []).find(s => s.tier === 'cloud' && s.token); } catch { return null; } })();
+    if (!sub || !src) return null;
+    try {
+      const r = await completeDetailed({
+        model: sub, messages, base: src.base,
+        headers: src.token ? { Authorization: `Bearer ${src.token}` } : {},
+        options: { temperature: o.temperature ?? 0.3, top_p: 0.9, num_ctx: 8192, num_predict: o.num_predict || 400 },
+        timeoutMs: 120000
+      });
+      const text = typeof r === 'string' ? r : (r && r.text) || '';
+      const usage = (r && typeof r === 'object' && r.usage) ? r.usage : null;
+      try { subc.recordSpend({ getMeta: _gm, setMeta: _sm, now: Date.now(), tokens: (usage && ((usage.prompt_tokens || 0) + (usage.eval_tokens || 0))) || subc.estimateTokens(messages, text) }); } catch {}
+      return text;
+    } catch { return null; }
+  };
+  const web = async (q) => { try { const { results } = await webSearch(q); return (results || []).map(r => ({ title: r.title, text: r.snippet, url: r.url })); } catch { return []; } };
+  const recall = async (name) => { try { return await echoSuit.recallObject(name); } catch { return null; } };
+  const dispatch = async (tag) => { try { return await echoSuit.dispatch(tag, { autonomous: true }); } catch { return null; } };
+  const kgNeighbors = async (id) => {
+    try { const r = await echoSuit.dispatch({ kind: 'do', name: 'kg_neighborhood', args: { entity_id: id, top_k: 12 } }, { autonomous: true }); if (!r || !r.ok) return []; let kd; try { kd = JSON.parse(r.text); } catch { return []; } return echoSuit.normalizeNeighbors(kd); } catch { return []; }
+  };
+
+  const move = await graphWalk.runMove({
+    recentTurns, cloud, web, recall, dispatch, kgNeighbors,
+    getMeta: _gm, setMeta: _sm, now: () => Date.now(), log: (m) => console.log(m)
+  });
+  try { db.setMeta(GRAPHWALK_LAST_KEY, String(Date.now())); } catch {}
+
+  if (move && move.acted && move.voiceLine) {
+    // surface ONE compact line (graph growth is the output; this is the rare voiced move). Low volume:
+    // gated by cadence + notability, so it does NOT reproduce the old free-association bloat.
+    try {
+      const imp = await importanceLib.score(move.voiceLine, { userName: db.getMeta('user_name') || 'them', kind: 'thought' });
+      const row = db.insertMonologue({ content: move.voiceLine, model: 'graph-walk', type: 'thought', importance: imp });
+      pushSheep({ id: row.id, ts: row.ts, content: move.voiceLine, type: 'thought', importance: imp });
+      try { blackboard.append({ source: 'monologue', kind: 'thought', refTable: 'monologue', refId: row.id, content: move.voiceLine }); } catch {}
+    } catch (e) { console.error('[graph-walk] voice surface failed:', e.message); }
+    console.log(`[graph-walk] ${move.kind} "${move.anchor}" → +${move.entities} obj / +${move.connections} conn`);
+  } else if (move && !move.acted) {
+    console.log(`[graph-walk] no move (${move.reason || 'quiet'})`);
+  }
+  return true;   // a move ran (or was deliberately quiet) — the tick should NOT free-associate
 }
 
 async function maybeSearchFromThought(thoughtText, focusId = null) {

@@ -18,7 +18,9 @@ ok(tier.classifyTool('usaspending_search') === 'read', 'usaspending_search → r
 ok(tier.classifyTool('kg_neighborhood') === 'read', 'kg_neighborhood → read');
 ok(tier.classifyTool('get_document') === 'read', 'get_document → read');
 ok(tier.classifyTool('db_query') === 'read', 'db_query → read (Echo db_query is SELECT-only — first-class DB read)');
-ok(tier.classifyTool('propose_entity') === 'write', 'propose_entity → write');
+ok(tier.classifyTool('propose_entity') === 'propose', 'propose_entity → propose (non-committing, gated)');
+ok(tier.classifyTool('propose_relation') === 'propose', 'propose_relation → propose');
+ok(tier.classifyTool('propose_hire') === 'heavy', 'propose_hire → heavy (spawns an agent, not a KG proposal)');
 ok(tier.classifyTool('ingest_file') === 'write', 'ingest_file → write');
 ok(tier.classifyTool('save_document') === 'write', 'save_document → write');
 ok(tier.classifyTool('update_contact') === 'write', 'update_contact → write');
@@ -34,14 +36,16 @@ ok(tier.classifyTool('') === 'locked', 'empty name → locked (fail-safe)');
 
 // --- allowedOnAuto: read-only allowlist ---
 ok(tier.allowedOnAuto('search_bills') === true, 'allowedOnAuto: read tool true');
+ok(tier.allowedOnAuto('propose_entity') === true, 'allowedOnAuto: propose tool true (non-committing, gated)');
 ok(tier.allowedOnAuto('ingest_file') === false, 'allowedOnAuto: write tool false');
 ok(tier.allowedOnAuto('spawn_agent_async') === false, 'allowedOnAuto: heavy tool false');
 
 // --- policyFor: auto vs interactive ---
 ok(tier.policyFor('search_entities', { autonomous: true }).allow === true, 'auto + read → allow');
-ok(tier.policyFor('propose_entity', { autonomous: true }).allow === false, 'auto + write → block');
+ok(tier.policyFor('propose_entity', { autonomous: true }).allow === true, 'auto + propose → allow (non-committing; Echo gates promotion — lets the graph-builder run unattended)');
+ok(tier.policyFor('merge_entities', { autonomous: true }).allow === false, 'auto + write (merge commits) → block');
 ok(tier.policyFor('spawn_agent_async', { autonomous: true }).allow === false, 'auto + heavy → block');
-ok(tier.policyFor('propose_entity', { autonomous: false }).allow === true, 'interactive + write → allow (Echo gates proposals itself)');
+ok(tier.policyFor('propose_entity', { autonomous: false }).allow === true, 'interactive + propose → allow');
 ok(tier.policyFor('spawn_agent_async', { autonomous: false }).allow === true, 'interactive + heavy → allow (Lucas present)');
 ok(tier.policyFor('send_email', { autonomous: false }).allow === false, 'interactive + locked → STILL block');
 
@@ -93,8 +97,9 @@ async function run() {
   calls.length = 0;
   r = await suit.dispatch({ kind: 'do', name: 'ingest_file', args: {} }, { autonomous: true });
   ok(r.blocked && r.isError && !calls.includes('ingest_file'), 'auto dispatch: WRITE tool BLOCKED (never reaches Echo)');
-  r = await suit.dispatch({ kind: 'propose', proposeKind: 'entity', payload: {} }, { autonomous: true });
-  ok(r.blocked === true, 'auto dispatch: propose BLOCKED');
+  calls.length = 0;
+  r = await suit.dispatch({ kind: 'propose', proposeKind: 'entity', payload: { name: 'X' } }, { autonomous: true });
+  ok(!r.blocked && calls.includes('propose_entity'), 'auto dispatch: propose ALLOWED (non-committing, gated → reaches Echo as a pending proposal)');
   r = await suit.dispatch({ kind: 'delegate', task: 'do a big thing' }, { autonomous: true });
   ok(r.blocked === true, 'auto dispatch: delegate (heavy) BLOCKED');
   calls.length = 0;

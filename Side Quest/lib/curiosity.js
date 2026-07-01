@@ -84,15 +84,20 @@ const SEED_OPENER = /^\s*(?:i\s+(?:want|'?d\s+like|would\s+like)\s+to\s+(?:know|
  * that happens to open "I want to know why he said that — which made me think about …" is
  * kept, because real reasoning surrounds the query.
  */
+// A seed STEM anywhere in the text (used to count stacked seeds). Global variant of SEED_OPENER.
+const SEED_STEM_G = /\b(?:i\s+(?:want|'?d\s+like|would\s+like)\s+to\s+(?:know|find\s+out|learn(?:\s+about)?|understand)|i\s+wonder\s+(?:what|whether|if|how|why|when|who|where)|i\s+want\s+to\s+find)\b/gi;
+// Reflective-mentation markers: judgment, feeling, or a pivot around the query. Their PRESENCE means
+// real reasoning wraps the want — keep it. (Note we do NOT lean on detectCuriosity here: its capture
+// caps at 160 chars, so verbose seeds — the common bloat shape — parse as "no query" and would slip.)
+const REFLECTIVE_MARKER = /\b(?:but|however|makes me|made me|reminds me|reminded me|i feel|i felt|i keep|i can'?t|i notice|i noticed|i realize|i realized|which is why|the thing is|part of me|pulls me|spiral|let it sit|come back to|it bothers|bothers me|worry|worries|i think i|i suspect|honestly|i miss|i wish)\b/i;
+
 function isBareCuriositySeed(content) {
   const t = String(content || '').trim();
   if (!t) return false;
-  if (!SEED_OPENER.test(t)) return false;
-  const trig = detectCuriosity(t);
-  if (!trig.triggered || !trig.query) return false;   // no searchable query → not a seed
-  const sentences = t.split(/[.?!]+(?:\s|$)/).filter(s => s.trim().length > 3);
-  const ratio = trig.query.length / Math.max(1, t.length);
-  return sentences.length <= 1 || ratio >= 0.5;
+  if (!SEED_OPENER.test(t)) return false;                 // must OPEN as a seed
+  const seedCount = (t.match(SEED_STEM_G) || []).length;
+  if (seedCount >= 2) return true;                        // stacked queries mashed into one row → bare
+  return !REFLECTIVE_MARKER.test(t);                      // single seed: bare unless real reasoning wraps it
 }
 
 /**

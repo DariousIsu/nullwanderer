@@ -26,6 +26,12 @@ const LOCKED_RE = /(?:^|_)(send_email|email_send|send_mail|generate_image|image_
 // HEAVY — spawns background agents / workflows / heavy delegation. Off the AUTONOMOUS loop (usable
 // interactively when Lucas is present), because one tag can fan out into a fleet of cloud agents.
 const HEAVY_RE = /^(spawn_agent|spawn_agent_async|spawn_workflow|team_spawn|agent_fire|hire_card|propose_hire|run_pass|run_engagement_auto_promotion|delegate_to_)/i;
+// PROPOSE — a NON-COMMITTING, verification-gated write: propose_entity / propose_relation /
+// propose_link / propose_question_concept only enqueue a PENDING proposal that Echo (and Lucas)
+// gate before it enters the system-of-record. Because it can never directly mutate, it is safe on
+// the AUTONOMOUS loop — this is what lets the subconscious graph-builder grow the KG unattended
+// while promotion stays gated. (propose_hire is HEAVY, caught above — it spawns an agent.)
+const PROPOSE_RE = /^propose_(entity|relation|link|question_concept)$/i;
 // WRITE — mutates Echo's system-of-record (the KG, the vault, CRM, hubs, QR, the desktop/browser, a
 // live capture/session). Blocked on auto; allowed interactively (Echo applies its own verification +
 // Lucas gate on proposals). Also: os_* desktop control and browser_* session writes live here.
@@ -43,13 +49,15 @@ function classifyTool(name) {
   if (!n) return 'locked';
   if (LOCKED_RE.test(n)) return 'locked';
   if (HEAVY_RE.test(n)) return 'heavy';
+  if (PROPOSE_RE.test(n)) return 'propose';   // before WRITE: propose_* also matches WRITE_RE
   if (WRITE_RE.test(n)) return 'write';
   if (READ_RE.test(n)) return 'read';
   return 'write';   // SAFE DEFAULT: unknown ⇒ treat as mutating ⇒ blocked on the auto loop
 }
 
-// May the autonomous loop use this tool? Read-only allowlist.
-function allowedOnAuto(name) { return classifyTool(name) === 'read'; }
+// May the autonomous loop use this tool? READ (lookups) and PROPOSE (gated, non-committing) are
+// allowed unattended; direct WRITE / HEAVY / LOCKED are not.
+function allowedOnAuto(name) { const t = classifyTool(name); return t === 'read' || t === 'propose'; }
 
 // The policy for one tool call. autonomous=true → the unattended research loop (read only).
 // autonomous=false → an interactive turn with Lucas present (read+write+heavy; locked still never).
@@ -57,9 +65,9 @@ function policyFor(name, { autonomous = false } = {}) {
   const tier = classifyTool(name);
   if (tier === 'locked') return { allow: false, tier, reason: 'hard-locked (email-send / image-gen are off by design)' };
   if (autonomous) {
-    return tier === 'read'
-      ? { allow: true, tier, reason: 'read tool — allowed on the autonomous loop' }
-      : { allow: false, tier, reason: `${tier} tool — blocked on the autonomous loop (needs Lucas present)` };
+    if (tier === 'read') return { allow: true, tier, reason: 'read tool — allowed on the autonomous loop' };
+    if (tier === 'propose') return { allow: true, tier, reason: 'propose tool — allowed on the autonomous loop (non-committing; Echo gates promotion)' };
+    return { allow: false, tier, reason: `${tier} tool — blocked on the autonomous loop (needs Lucas present)` };
   }
   return { allow: true, tier, reason: 'interactive turn' };   // Lucas present: read+write+heavy ok
 }

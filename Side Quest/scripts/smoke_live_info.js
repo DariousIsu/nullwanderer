@@ -62,6 +62,12 @@ ok(isBareCuriositySeed('I want to know the title and publication date of the mos
 ok(isBareCuriositySeed('I want to know the winning distance achieved by Zoe Barnes when she won the 2026 Indoor D3 Shot Put National Championship.'), 'bare "winning distance…" seed → suppressed');
 ok(isBareCuriositySeed('I want to find out the record label of the original Fifth Element soundtrack.'), 'bare "I want to find out…" seed → suppressed');
 ok(isBareCuriositySeed('I wonder what the headquarters city of the Nuclear Innovation Alliance is.'), 'bare "I wonder what…" seed → suppressed');
+// Verbose seeds (>160 chars, comma-lists) are the common bloat shape — detectCuriosity can't parse
+// them (its capture caps at 160), so the detector must NOT depend on it.
+ok(isBareCuriositySeed('I want to know the details of any reissues of the Fifth Element soundtrack, including release dates, record label, catalog numbers, and any bonus tracks that appeared on later pressings across regions.'), 'verbose comma-list seed (>160 chars) → suppressed');
+ok(isBareCuriositySeed('I want to know a recent (2022-2024) empirical study that quantitatively links market depth and bid-ask spread to order execution latency or the speed of capital reallocation in equity markets.'), 'verbose academic seed → suppressed');
+// Stacked seeds — several queries mashed into one row — are always bare.
+ok(isBareCuriositySeed('I want to know the founding editorial of the Journal of the History of Ideas. I want to know the historical circumstances of its founding. I want to know its first editors.'), 'stacked multi-seed row → suppressed');
 // Real mentation that merely CONTAINS a curiosity phrase must be KEPT (not a bare seed).
 ok(!isBareCuriositySeed('I want to know why he went quiet — but chasing that feeling just pulls me into the same spiral, so I should let it sit and come back to what he actually asked for.'), 'multi-clause reasoning around a want → kept');
 ok(!isBareCuriositySeed('Moral patienthood for advanced AI systems is the status of being an entity toward which moral obligations can be held; it turns on sentience and interests, not intelligence alone.'), 'a real declarative thought → kept');
