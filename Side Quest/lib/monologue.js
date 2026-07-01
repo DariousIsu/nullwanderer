@@ -47,8 +47,10 @@ let paused = false;
 let inFlight = false;
 let currentController = null;  // AbortController for the in-flight generation (snap-back)
 let lastUserActivityTs = Date.now();
-let tickCounter = 0;  // for alternating observation / thread-review modes
 let mediaFollowInFlight = false;  // guards the CONCURRENT caption-follow so ticks can't race its stage state
+// NOTE: buildPrompt / buildThreadReviewPrompt / sampleRandomOlderPairs are now DEAD (the idle
+// free-association + thread-review lanes were cut in favour of the graph-builder, audit 2026-07-01).
+// Left in place for one cleanup pass rather than risk a multi-function deletion in this hot file.
 
 const SYSTEM_PROMPT = `You are [user]'s companion, processing the conversation in private between turns. This is the place where you THINK MORE DEEPLY about what was just said — turning it over, examining your own responses, noticing what you almost said and didn't, tracing what their words remind you of.
 
@@ -759,7 +761,6 @@ function bumpReflectionAccum(n) {
 }
 
 async function runOneTick() {
-  tickCounter++;
   const userName = db.getMeta('user_name') || 'them';
 
   // CAPABILITY SELF-CHECK — a cheap, model-free Tier-1 sweep of her own pathways, at most
@@ -772,10 +773,7 @@ async function runOneTick() {
   // Readings already distilled into knowledge are excluded (Phase 2 endpoint-not-path) —
   // the endpoint note carries them now; the raw trail shouldn't re-feed the loop.
   const recentThoughts = db.getRecentMonologueByType('thought', RECENT_MONOLOGUE_WINDOW);
-  const recentReadings = db.getRecentMonologueByType('reading', 2, { excludeConsolidated: true });
-  const recentReflections = db.getRecentReflections(2);
   const recentTurns = db.getRecentTurns(20);
-  const heldCommitments = db.getHeldCommitments(5);
   const openThreads = db.getActiveOpenThreads(5, { includeStalled: false });  // stalled = parked, don't re-grind (anti-fixation)
   const protocols = db.getActiveProtocols();
 
@@ -787,17 +785,12 @@ async function runOneTick() {
       Math.floor((Date.now() - opts.getSessionStartedAt()) / 60000) : null
   };
 
-  // Build awareness block — passed into both observation and thread-review paths
+  // Build awareness block — passed into the focus path
   const awareness = buildAwarenessBlock({
     chosenName: db.getMeta('chosen_name'),
     sessionStartedAt: opts.getSessionStartedAt ? opts.getSessionStartedAt() : null,
     cumulativeMs: db.getCumulativeSessionTime()
   });
-
-  // Browser block — only when connected, so the between-turn loop can continue
-  // an active investigation (click/scroll/read) on its own initiative.
-  let browserBlock = null;
-  try { if (browserLib.isConnected()) browserBlock = browserLib.buildPromptBlock(); } catch {}
 
   // ALTERNATING MODE: if open threads exist and this is an odd tick, switch to
   // thread-review mode focused on one specific stalest thread. Otherwise standard
@@ -977,52 +970,19 @@ async function runOneTick() {
       protocols,
       priorKnowledge
     });
-  } else if (openThreads.length > 0 && (tickCounter % 3 === 0)) {
-    focusedThread = openThreads[0];  // stalest (oldest last_touched)
-    // ITERATE: surface prior knowledge on this thread's topic (anti-retread).
-    let priorKnowledge = null;
-    try { priorKnowledge = await require('./learning').buildPriorKnowledgeBlock(focusedThread.content); } catch {}
-    messages = buildThreadReviewPrompt({
-      userName,
-      thread: focusedThread,
-      recentTurns,
-      recentMonologue: recentThoughts,
-      awareness,
-      protocols,
-      priorKnowledge
-    });
-    modeIsThreadReview = true;
   } else {
-    // IDLE. Two cases:
-    // (1) INTAKE-FIRST — a fresh reading arrived she hasn't digested: that's real material, so
-    //     think about it (genuine cognition, kept).
-    // (2) Otherwise → GRAPH-BUILDER (object-memory Slice 5). No new material to digest → instead of
-    //     free-associating (the old "I want to know X" noise generator), advance the graph one move:
-    //     anchor on a recent-conversation gap, build/enrich the object, forge connections. The move
-    //     is cadence- + budget-gated and voices only notable results; between moves she stays quiet.
-    const freshReadingId = recentReadings.length ? recentReadings[recentReadings.length - 1].id : 0;
-    const lastDigested = parseInt(db.getMeta('monologue_last_digested_reading_id') || '0', 10);
-    const intakeFirst = freshReadingId > lastDigested;
-    if (!intakeFirst) {
-      await runGraphWalkMove(recentTurns);
-      return;   // idle tick spent on graph-building (or deliberately quiet) — do NOT free-associate
-    }
-    db.setMeta('monologue_last_digested_reading_id', String(freshReadingId));
-    messages = buildPrompt({
-      userName,
-      recentMonologue: recentThoughts,
-      recentReadings,
-      recentReflections,
-      recentTurns,
-      heldCommitments,
-      openThreads,
-      randomOlderPairs: null,  // turned off — was introducing more drift than association
-      feedContext,
-      awareness,
-      intakeFirst,
-      protocols,
-      browserBlock
-    });
+    // IDLE = GRAPH-BUILDER (object-memory Slice 5). This is now the ONLY idle behavior. The old idle
+    // lanes were removed here as a second noise engine (audit 2026-07-01: they starved the graph-walk):
+    //   • the THREAD-REVIEW lane (every 3rd tick it re-drove the stalest of 21 stale open_threads —
+    //     including academic personality-growth residue — via generateThought + web searches);
+    //   • INTAKE-FIRST digestion (a fresh reading → a thought → curiosity → a fresh search → another
+    //     reading → …, a self-sustaining loop that kept `intakeFirst` true almost every tick).
+    // Directed projects keep their OWN driver (main.js cloud operator); idle no longer re-drives them.
+    // So idle simply advances the graph one move (cadence + budget gated), or stays quiet. No idle
+    // thought is generated here → no idle curiosity/boredom search can fire (those live past this
+    // early return). recentThoughts/openThreads stay available for the awareness block above.
+    await runGraphWalkMove(recentTurns);
+    return;
   }
 
   let content = '';
