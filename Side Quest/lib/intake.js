@@ -180,8 +180,12 @@ function buildAssignmentSeed(resolvedPlan) {
   const resolved = (resolvedPlan && Array.isArray(resolvedPlan.resolved)) ? resolvedPlan.resolved : [];
   const objects = resolved.filter(r => r.resolution && r.resolution.status === 'resolved' && r.resolution.object).map(r => r.resolution.object);
   const targets = [...new Set(objects.map(o => String(o.name || '').trim()).filter(Boolean))].slice(0, 12);
+  // intendedTargets = EVERY salient named entity the user asked us to work (resolved canonical name when we
+  // have it, else the raw mention). This is the run's SCOPE. bounded = the assignment named specific entities
+  // → research is confined to THEM and the run TERMINATES when they're covered (no open-ended discovery).
+  const intendedTargets = [...new Set(resolved.map(r => { const o = r.resolution && r.resolution.object; return String((o && o.name) || r.mention || '').trim(); }).filter(Boolean))].slice(0, 12);
   const clarify = (resolvedPlan && Array.isArray(resolvedPlan.clarifications)) ? resolvedPlan.clarifications.slice(0, 2) : [];
-  return { targets, objects, clarify };
+  return { targets, objects, intendedTargets, bounded: intendedTargets.length > 0, clarify };
 }
 
 module.exports = { classify, route, subsetTopN, decompose, routeDecomposition, salientTargets, resolvePlan, buildAssignmentSeed, INTENTS, ENTITY_TYPES };

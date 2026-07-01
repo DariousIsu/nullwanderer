@@ -116,6 +116,8 @@ ok(intake.subsetTopN('') === null, 'empty → null');
   ok(seed.targets.length === 1 && seed.targets[0] === 'John Curtis (US)', 'buildAssignmentSeed: resolved entity → canonical name as a known target');
   ok(seed.objects.length === 1 && seed.objects[0].degree === 320, 'buildAssignmentSeed: carries the resolved object (prior knowledge)');
   ok(seed.clarify.length === 1 && /the webinar/.test(seed.clarify[0]), 'buildAssignmentSeed: carries the bias-to-clarify question');
+  ok(seed.intendedTargets.length === 2 && seed.intendedTargets.includes('John Curtis (US)') && seed.intendedTargets.includes('the webinar') && seed.bounded === true, 'buildAssignmentSeed: intendedTargets = all salient named entities (resolved name or mention); bounded=true → run confined + terminates');
+  ok(intake.buildAssignmentSeed({ resolved: [], clarifications: [] }).bounded === false, 'buildAssignmentSeed: no salient entities → bounded=false (open discovery)');
   const seed0 = intake.buildAssignmentSeed(null);
   ok(seed0.targets.length === 0 && seed0.objects.length === 0 && seed0.clarify.length === 0, 'buildAssignmentSeed(null) → empty seed (fail-safe)');
   ok(intake.buildAssignmentSeed({ resolved: [{ mention: 'A', resolution: { status: 'resolved', object: { name: 'X' } } }, { mention: 'B', resolution: { status: 'resolved', object: { name: 'X' } } }] }).targets.length === 1, 'buildAssignmentSeed: duplicate target names deduped');

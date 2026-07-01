@@ -117,6 +117,17 @@ function pickSeedTarget({ seeds = [], consumed = [], covered = [] } = {}) {
   return (Array.isArray(seeds) ? seeds : []).find(o => o && o.name && !used.has(lc(o.name))) || null;
 }
 
+// Bounded-run TERMINATION (guardrails): are ALL intended targets covered? Fuzzy (case-insensitive + either-
+// contains) so "John Curtis (US)" covered satisfies intended "John Curtis". Empty intended → false (an open
+// run has no bounded terminus). This is what stops a named-entity assignment from crawling forever.
+function allTargetsCovered({ intended = [], covered = [] } = {}) {
+  const lc = s => String(s || '').toLowerCase().trim();
+  const cov = (covered || []).map(lc).filter(Boolean);
+  const want = (intended || []).map(lc).filter(Boolean);
+  if (!want.length) return false;
+  return want.every(t => cov.some(c => c === t || c.includes(t) || t.includes(c)));
+}
+
 // Deepen pass: stay on the current target, pursue the next missing facet, or declare it SATURATED.
 // `known` (Slice 2c) = what we ALREADY hold on the target (from our graph) — injected as GIVEN so the pass
 // builds PAST it instead of re-deriving the biography we already have (the #2915 fix, deep half).
@@ -215,7 +226,7 @@ function buildOrganizeTargetPrompt({ target = '', raw = '' } = {}) {
 module.exports = {
   parsePass, newContentChars, decideAdvance, facetsSummary,
   isClarification, buildGuidanceBlock, isStatusRequest,
-  buildNewTargetPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt, pickSeedTarget,
+  buildNewTargetPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt, pickSeedTarget, allTargetsCovered,
   pickEnrichTarget, facetLabel, buildEnrichPrompt, buildOrganizeEnrichPrompt,
   buildWebLanePrompt, buildDeepLanePrompt, buildMergeLanesPrompt,
   MAX_PASSES_PER_TARGET, MIN_NEW_CHARS

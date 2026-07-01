@@ -3469,6 +3469,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // OBJECT SEED — persist the resolved entity objects as the run's prior knowledge (the executor
             // reads these to build FROM what we hold, not re-derive it). Slice 2c consumes them fully.
             try { if (assignmentSeed && assignmentSeed.objects && assignmentSeed.objects.length) db.setMeta(`focus.${r.focus.id}.seed_objects`, JSON.stringify(assignmentSeed.objects).slice(0, 20000)); } catch {}
+            // SCOPE (guardrails): a bounded assignment (named specific entities) confines research to those
+            // targets and TERMINATES when covered — no open-ended crawl. Open = genuine discovery.
+            try { db.setMeta(`focus.${r.focus.id}.scope`, (assignmentSeed && assignmentSeed.bounded) ? 'bounded' : 'open'); } catch {}
+            try { if (assignmentSeed && assignmentSeed.intendedTargets && assignmentSeed.intendedTargets.length) db.setMeta(`focus.${r.focus.id}.intended_targets`, JSON.stringify(assignmentSeed.intendedTargets)); } catch {}
             // PAGE-1 PLAN (Pillar 0) — author + store it now so it's reviewable up front + ready as page 1.
             // Seed it with the RESOLVED entities as known targets (a named-entity run starts FROM the object,
             // not "to be identified") — else empty targets → discovery states objective/approach/databases.
@@ -5204,24 +5208,12 @@ async function runDirectedResearchPass(focus) {
   let clar = []; try { clar = JSON.parse(db.getMeta(`focus.${focus.id}.clarifications`) || '[]'); } catch {}
   const guidance = rs.buildGuidanceBlock(clar);
 
-  // OBJECT-FIRST OPEN (Slice 2c): if we were HANDED resolved objects (Slice 2 seeds) and have no current
-  // target, OPEN the next seed as the target with its dossier ALREADY in hand — no blind "pick a new org"
-  // discovery when the request named the entity. Its known facts ride into the deepen prompt as GIVEN, so
-  // passes fill gaps instead of re-deriving the biography (the #2915 fix, deep half). One seed per open.
-  if (!target || !target.name) {
-    try {
-      const seeds = JSON.parse(db.getMeta(`focus.${focus.id}.seed_objects`) || '[]');
-      const consumed = JSON.parse(db.getMeta(`focus.${focus.id}.seed_consumed`) || '[]');
-      const next = rs.pickSeedTarget({ seeds, consumed, covered });
-      if (next) {
-        let known = ''; try { known = require('./lib/active_recall')._objectLines(next).join('\n'); } catch {}
-        target = { name: next.name, passes: 1, raw: known ? `PRIOR KNOWLEDGE (already in our graph):\n${known}` : '', facets: ['overview'], known, seeded: true };
-        try { db.setMeta(targetKey, JSON.stringify(target)); } catch {}
-        try { db.setMeta(`focus.${focus.id}.seed_consumed`, JSON.stringify(consumed.concat(next.name).slice(-50))); } catch {}
-        console.log(`[directed] #${focus.id} seed-open → ${next.name} (object-first${known ? ', dossier in hand' : ''})`);
-      }
-    } catch (e) { console.error('[directed] seed-open failed:', e.message); }
-  }
+  // SCOPE — a BOUNDED run (the assignment named specific entities) confines research to those intended
+  // targets and TERMINATES when they're covered; an OPEN run genuinely discovers. Loaded before deciding.
+  const lc = s => String(s || '').toLowerCase();
+  let scope = 'open', intended = [];
+  try { scope = (db.getMeta(`focus.${focus.id}.scope`) || 'open').trim(); } catch {}
+  try { intended = JSON.parse(db.getMeta(`focus.${focus.id}.intended_targets`) || '[]'); } catch {}
 
   const runPass = async (prompt) => {
     try {
@@ -5232,19 +5224,51 @@ async function runDirectedResearchPass(focus) {
 
   let progressed = false, done = false, note = '', sig = '';
 
+  // OBJECT-FIRST OPEN + BOUNDED TERMINATION (Slice 2c + guardrails). Ground every target in its Echo object;
+  // a bounded run opens ONLY its intended targets and STOPS when covered — no "profile Sen Curtis → Curtis
+  // Auto Sales" drift, no endless crawl. An open run still discovers, but grounds each find in Echo too.
   if (!target || !target.name) {
-    // OPEN A NEW TARGET — overview pass.
-    const { ans, usedTool } = await runPass(rs.buildNewTargetPrompt({ goal, covered, guidance }));
-    const p = rs.parsePass(ans);
-    if (p.allCovered && covered.length) { done = true; note = `all organizations covered (${covered.length})`; }
-    else if (p.target && !covered.some(c => String(c).toLowerCase() === p.target.toLowerCase())) {
-      target = { name: p.target, passes: 1, raw: p.body || ans, facets: ['overview'] };
-      try { db.setMeta(targetKey, JSON.stringify(target)); } catch {}
-      progressed = !!(p.body && usedTool); sig = p.target.toLowerCase(); note = `started ${p.target}`;
-    } else { note = p.target ? `(repeat target) ${p.target}` : 'no new target found'; sig = String(p.target || '').toLowerCase(); }
-  } else {
-    // DEEPEN the current target — next missing facet. A seeded target carries its graph dossier as `known`,
-    // injected as GIVEN so the pass builds PAST what we already hold (object-first, Slice 2c).
+    if (scope === 'bounded' && rs.allTargetsCovered({ intended, covered })) {
+      done = true; note = `deliverable complete — covered ${covered.slice(0, 8).join(', ')}`;
+      console.log(`[directed] #${focus.id} BOUNDED complete → done`);
+    } else {
+      let seeds = [], consumed = [];
+      try { seeds = JSON.parse(db.getMeta(`focus.${focus.id}.seed_objects`) || '[]'); } catch {}
+      try { consumed = JSON.parse(db.getMeta(`focus.${focus.id}.seed_consumed`) || '[]'); } catch {}
+      const seedObj = rs.pickSeedTarget({ seeds, consumed, covered });
+      let nextName = seedObj ? seedObj.name : null;
+      if (!nextName && scope === 'bounded') nextName = (intended || []).find(t => !covered.some(c => lc(c) === lc(t) || lc(c).includes(lc(t)) || lc(t).includes(lc(c)))) || null;
+      if (nextName) {
+        let obj = seedObj, known = '';
+        if (!obj) { try { const rm = await echoSuitLib.resolveMention(nextName); if (rm && rm.status === 'resolved') obj = rm.object; } catch {} }
+        if (obj) { try { known = require('./lib/active_recall')._objectLines(obj).join('\n'); } catch {} }
+        target = { name: nextName, passes: 1, raw: known ? `PRIOR KNOWLEDGE (already in our graph):\n${known}` : '', facets: ['overview'], known, seeded: !!seedObj };
+        try { db.setMeta(targetKey, JSON.stringify(target)); } catch {}
+        if (seedObj) { try { db.setMeta(`focus.${focus.id}.seed_consumed`, JSON.stringify(consumed.concat(seedObj.name).slice(-50))); } catch {} }
+        console.log(`[directed] #${focus.id} object-first open → ${nextName} (${scope}${known ? ', dossier in hand' : ''})`);
+      }
+    }
+  }
+
+  if (!done && (!target || !target.name)) {
+    if (scope === 'bounded') {
+      // bounded, nothing left to ground and not everything covered → finish rather than crawl foreign orgs.
+      done = true; note = `deliverable complete (bounded) — covered ${covered.slice(0, 8).join(', ') || 'none yet'}`;
+    } else {
+      // OPEN A NEW TARGET — discovery overview pass (open scope only). Ground the pick in Echo too.
+      const { ans, usedTool } = await runPass(rs.buildNewTargetPrompt({ goal, covered, guidance }));
+      const p = rs.parsePass(ans);
+      if (p.allCovered && covered.length) { done = true; note = `all organizations covered (${covered.length})`; }
+      else if (p.target && !covered.some(c => lc(c) === p.target.toLowerCase())) {
+        let known = ''; try { const rm = await echoSuitLib.resolveMention(p.target); if (rm && rm.status === 'resolved') known = require('./lib/active_recall')._objectLines(rm.object).join('\n'); } catch {}
+        target = { name: p.target, passes: 1, raw: (known ? `PRIOR KNOWLEDGE (already in our graph):\n${known}\n\n` : '') + (p.body || ans), facets: ['overview'], known };
+        try { db.setMeta(targetKey, JSON.stringify(target)); } catch {}
+        progressed = !!(p.body && usedTool); sig = p.target.toLowerCase(); note = `started ${p.target}`;
+      } else { note = p.target ? `(repeat target) ${p.target}` : 'no new target found'; sig = String(p.target || '').toLowerCase(); }
+    }
+  } else if (!done) {
+    // DEEPEN the current target — next missing facet. A grounded target carries its graph dossier as `known`,
+    // injected as GIVEN so the pass builds PAST what we already hold (object-first).
     const { ans, usedTool } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance, known: target.known || '' }));
     const p = rs.parsePass(ans);
     const newChars = rs.newContentChars(target.raw, p.body);

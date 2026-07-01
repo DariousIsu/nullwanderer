@@ -93,5 +93,12 @@ const dpKnown = r.buildDeepenPrompt({ goal: 'g', target: 'John Curtis (US)', fac
 ok(/WHAT WE ALREADY HOLD on John Curtis/.test(dpKnown) && /do NOT re-derive/.test(dpKnown) && /U\.S\. Senator/.test(dpKnown), 'buildDeepenPrompt: known dossier injected as GIVEN prior knowledge');
 ok(!/WHAT WE ALREADY HOLD/.test(r.buildDeepenPrompt({ goal: 'g', target: 'X', facets: [] })), 'buildDeepenPrompt: no known → no prior-knowledge block (unchanged default)');
 
+// --- guardrails: bounded-run termination (allTargetsCovered) ---
+ok(r.allTargetsCovered({ intended: ['John Curtis (US)'], covered: ['John Curtis (US)'] }) === true, 'allTargetsCovered: single intended, covered → true (terminate)');
+ok(r.allTargetsCovered({ intended: ['John Curtis'], covered: ['John Curtis (US)'] }) === true, 'allTargetsCovered: fuzzy — "John Curtis (US)" satisfies intended "John Curtis"');
+ok(r.allTargetsCovered({ intended: ['John Curtis', 'R Street'], covered: ['John Curtis (US)'] }) === false, 'allTargetsCovered: one of two covered → false (keep going)');
+ok(r.allTargetsCovered({ intended: [], covered: ['anything'] }) === false, 'allTargetsCovered: no intended (open run) → false (no bounded terminus)');
+ok(r.allTargetsCovered({ intended: ['Curtis Auto Sales'], covered: ['John Curtis (US)'] }) === false, 'allTargetsCovered: a drift org does NOT satisfy the intended person');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
