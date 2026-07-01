@@ -355,6 +355,7 @@ if (window.sq && window.sq.onVideoIngest) window.sq.onVideoIngest(mountIngest);
    Display-only here (Side Quest half); storage + her cognition over items = Zoe-builder. ---- */
 const FV = window.FeedsView;
 const monitors = $('monitors'), monList = $('monList'), monSources = $('monSources'), monN = $('monN'), monVideos = $('monVideos');
+const monSrcHead = $('monSrcHead'), monSrcChev = $('monSrcChev'), monSrcLbl = $('monSrcLbl');
 const monSeen = new Set();
 let monPrimed = false, monTimer = null;
 const MON_REFRESH_MS = 2 * 60 * 1000;
@@ -372,6 +373,8 @@ function renderMonitors(items, sources) {
   monN.textContent = `${marked.length ? `${marked.length} items · ` : ''}updated ${hh}:${mm}:${ss}`;
   monSources.innerHTML = (sources || []).map(s => `<span class="mon-src${s.ok ? '' : ' bad'}" title="${esc(s.sourceUrl)}">${esc(s.source)}<span class="x" data-url="${esc(s.sourceUrl)}">×</span></span>`).join('');
   monSources.querySelectorAll('.x').forEach(el => el.addEventListener('click', () => removeFeed(el.dataset.url)));
+  const badCount = (sources || []).filter(s => !s.ok).length;
+  monSrcLbl.textContent = `sources (${(sources || []).length})${badCount ? ` · ${badCount} down` : ''}`;
   // seed the seen-set so the NEXT fetch highlights only genuinely new items (first load isn't a flood)
   for (const it of marked) monSeen.add(it.id);
   monPrimed = true;
@@ -444,6 +447,8 @@ function closeMonitors() { monitors.hidden = true; if (monTimer) { clearInterval
 $('monitorsBtn').addEventListener('click', () => { if (monitors.hidden) openMonitors(); else closeMonitors(); });
 $('monClose').addEventListener('click', closeMonitors);
 $('monRefresh').addEventListener('click', loadFeeds);
+// Source selector collapses by default (20+ chips otherwise dwarf the feed); click the bar to toggle.
+monSrcHead.addEventListener('click', () => { const collapsed = monSources.classList.toggle('collapsed'); monSrcChev.textContent = collapsed ? '▸' : '▾'; });
 $('monAddBtn').addEventListener('click', () => addMonitor($('monAdd').value.trim()));
 $('monAdd').addEventListener('keydown', (e) => { if (e.key === 'Enter') addMonitor($('monAdd').value.trim()); });
 

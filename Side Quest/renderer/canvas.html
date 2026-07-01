@@ -156,7 +156,11 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
 .mon-item .it-title a:hover{color:var(--tx);text-decoration:underline;}
 .mon-item .it-sum{font-size:11px;color:var(--tx-fainter);margin-top:2px;line-height:1.35;max-height:46px;overflow:hidden;}
 .mon-empty{padding:16px 10px;font-size:11px;color:var(--tx-fainter);text-align:center;}
-.mon-sources{flex-shrink:0;border-top:1px solid var(--line-faint);padding:5px 10px;display:flex;flex-wrap:wrap;gap:5px;}
+.mon-srchead{flex-shrink:0;display:flex;align-items:center;gap:6px;padding:4px 10px;border-top:1px solid var(--line-faint);font-size:10px;letter-spacing:.04em;color:var(--tx-dim);cursor:pointer;user-select:none;}
+.mon-srchead:hover{color:var(--tx-muted);}
+.mon-srchead .chev{margin-left:auto;font-size:9px;color:var(--tx-fainter);}
+.mon-sources{flex-shrink:0;max-height:104px;overflow-y:auto;padding:6px 10px;display:flex;flex-wrap:wrap;gap:5px;}
+.mon-sources.collapsed{display:none;}
 .mon-src{font-size:10px;color:var(--tx-muted);background:var(--bg-raised);border:1px solid var(--line-strong);border-radius:9px;padding:1px 7px 1px 8px;display:inline-flex;gap:5px;align-items:center;cursor:default;}
 .mon-src .x{color:var(--tx-fainter);cursor:pointer;font-size:11px;}
 .mon-src .x:hover{color:#e08a8a;}
@@ -224,7 +228,8 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
       <button id="monAddBtn">Add</button>
     </div>
     <div class="mon-list" id="monList"></div>
-    <div class="mon-sources" id="monSources"></div>
+    <div class="mon-srchead" id="monSrcHead"><span id="monSrcLbl">sources</span><span class="chev" id="monSrcChev">▸</span></div>
+    <div class="mon-sources collapsed" id="monSources"></div>
     <div class="mon-videos" id="monVideos"></div>
     <div class="resize-grip" id="monResize"></div>
   </div>
