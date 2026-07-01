@@ -165,7 +165,17 @@ const noGraph = () => [];
     ok(ar._looksLikeEntity('John Curtis') === true && ar._looksLikeEntity('what is the historical background of epistemology and its rivals') === false, '_looksLikeEntity: name yes, sentence no');
     let objCalled = false;
     await ar.recall('what is the historical background of epistemology and its rivals', { retrieveFn: async () => [], graphFn: noGraph, echoFn: async () => [], objectFn: async () => { objCalled = true; return nObj; } });
-    ok(objCalled === false, 'recall: long prose topic → object pull skipped');
+    ok(objCalled === false, 'recall: long prose (no proper noun) → object pull skipped');
+
+    // extractEntity — pull the entity out of an elaborated idle-loop phrase (the web-first fix)
+    ok(ar.extractEntity('Senator John Curtis personal background') === 'John Curtis', 'extractEntity: "Senator John Curtis personal background" → "John Curtis" (title dropped)');
+    ok(ar.extractEntity('Fifth Element soundtrack chart performance') === 'Fifth Element', 'extractEntity: "Fifth Element soundtrack chart" → "Fifth Element"');
+    ok(ar.extractEntity('Conservative Climate Caucus overview mission') === 'Conservative Climate Caucus', 'extractEntity: keeps a multi-word org name');
+    ok(ar.extractEntity('what is the optimal spacing interval') === null, 'extractEntity: no proper noun → null (generic musing skips object pull)');
+    // recall on a PHRASE now pulls the extracted entity's object → rich → idle loop consolidates, no web
+    let capName = null;
+    const rPhrase = await ar.recall('Senator John Curtis personal background', { retrieveFn: async () => [], graphFn: noGraph, echoFn: async () => [], objectFn: async (name) => { capName = name; return nObj; } });
+    ok(capName === 'John Curtis' && rPhrase.coverage === 'rich', 'recall: 5-token phrase w/ title → extracts "John Curtis" → object pull → RICH (extractEntity tried FIRST, not just >6 tokens)');
 
     // knowledgeBlock leads with the object dossier (header + facts + committees)
     const blkObj = await ar.knowledgeBlock('John Curtis', { retrieveFn: async () => [], graphFn: noGraph, echoFn: async () => [], objectFn: objFn });

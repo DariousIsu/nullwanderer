@@ -32,8 +32,16 @@ async function recall(topic, { k = 6, minRelevance = 0.33, retrieveFn = null, gr
   // ECHO-SEARCH-FIRST: resolve the target to its canonical Echo OBJECT and pull the whole thing in
   // ONE cheap call (facts + bio + committees + degree) — the mandatory first move that #2915 skipped.
   // Only for entity-shaped targets (a name/short phrase, not a paragraph) so we don't quick_lookup prose.
+  // ECHO-SEARCH-FIRST also works on a PHRASE: when the topic isn't a bare name (the idle loop hands us
+  // "Senator John Curtis personal background"), EXTRACT the entity and pull ITS object — so a web-first
+  // idle search on someone we already hold as a rich object is caught and short-circuited.
   let obj = null;
-  if (object && _looksLikeEntity(t)) { try { obj = (objectFn ? await objectFn(t) : await _echoObject(t)) || null; } catch { obj = null; } }
+  if (object) {
+    // Prefer the extracted proper-noun entity ("Senator John Curtis personal background" → "John Curtis")
+    // even for short phrases, since titles/extra words break the lookup; fall back to a bare-name topic.
+    const entTopic = extractEntity(t) || (_looksLikeEntity(t) ? t : null);
+    if (entTopic) { try { obj = (objectFn ? await objectFn(entTopic) : await _echoObject(entTopic)) || null; } catch { obj = null; } }
+  }
   // ECHO MASTER DB: query the system-of-record corpus (search_knowledge) — the real "she already
   // knows it" pool. Reference-not-copy: snippets surface into recall, never copied into sq.db.
   let echoHits = []; try { echoHits = (echoFn ? await echoFn(t) : await _echoSearch(t)) || []; } catch { echoHits = []; }
@@ -44,6 +52,22 @@ async function recall(topic, { k = 6, minRelevance = 0.33, retrieveFn = null, gr
 // Entity-shaped = a name/short phrase we can hand to quick_lookup (single-name → dossier), not a
 // full sentence. Keeps the object pull cheap + on-target.
 function _looksLikeEntity(t) { const toks = String(t).trim().split(/\s+/); return toks.length >= 1 && toks.length <= 6; }
+// Pull the entity out of a longer phrase: the longest run of Capitalized words (a proper noun), leading
+// honorifics dropped ("Senator John Curtis personal background" → "John Curtis"; "Fifth Element soundtrack
+// chart" → "Fifth Element"). null when no proper noun (so a generic musing doesn't trigger an object pull).
+const _ENT_TITLES = new Set(['senator', 'sen', 'rep', 'representative', 'dr', 'mr', 'mrs', 'ms', 'gov', 'governor', 'president', 'pres', 'the', 'a', 'an']);
+function extractEntity(text) {
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  let best = [], cur = [];
+  for (const w of words) {
+    if (/^[A-Z][A-Za-z'’.\-]*$/.test(w)) cur.push(w);
+    else { if (cur.length > best.length) best = cur; cur = []; }
+  }
+  if (cur.length > best.length) best = cur;
+  while (best.length && _ENT_TITLES.has(best[0].toLowerCase().replace(/\.$/, ''))) best = best.slice(1);
+  const name = best.join(' ').replace(/[.,]+$/, '').trim();
+  return name.replace(/\s+/g, '').length >= 3 ? name : null;
+}
 function _echoSearch(topic) { try { return require('./echo_suit').recallKnowledge(topic); } catch { return Promise.resolve([]); } }
 function _echoObject(topic) { try { return require('./echo_suit').recallObject(topic); } catch { return Promise.resolve(null); } }
 
@@ -123,4 +147,4 @@ function formatConsolidation(r) {
 
 async function coverage(topic, opts = {}) { return (await recall(topic, opts)).coverage; }
 
-module.exports = { recall, knowledgeBlock, formatConsolidation, coverage, _graphFacts, _relStr, _objectLines, _objectRich, _looksLikeEntity, RICH_NOTES };
+module.exports = { recall, knowledgeBlock, formatConsolidation, coverage, _graphFacts, _relStr, _objectLines, _objectRich, _looksLikeEntity, extractEntity, RICH_NOTES };
