@@ -272,71 +272,22 @@ function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonol
     systemContent += '\n\n' + echoSuitBlock;
   }
 
-  // PRIMACY INJECTION — open threads at top of system block for primacy weighting.
-  // Research (Found in the Middle, 2406.16008) shows top placement materially improves
-  // instruction-following adherence. This is the "what you are working on" anchor.
-  if (openThreads && openThreads.length > 0) {
-    const { formatTopBlock } = require('./open_threads');
-    const topBlock = formatTopBlock(openThreads);
-    if (topBlock) systemContent += topBlock;
-  }
+  // VOICE-RENDERER STRIP (turn→object-graph Phase 3, Lucas 2026-07-01): the local model is voice +
+  // continuity ONLY. The cognition/tool scaffolding that used to live here — the open-threads primacy
+  // block, held-commitments, reflection/monologue/reading markers, the grounded-facts glob, and the
+  // recipe (tool) card — is REMOVED. It bloated the prompt (truncation on the 12B), its primacy-pinned
+  // standing-work bled the active research run into every reply, and NONE of it belongs on a model that
+  // neither picks nor uses tools nor pulls memory. Grounding now arrives as the per-OBJECT graph pull
+  // (retrievedKnowledgeBlock, below — active_recall) plus the cloud's drafted [say this] directive on
+  // the user message. Continuity is carried by the conversation history + the WHERE-WE-ARE summary +
+  // earlier-in-conversation recall (all still injected below). (openThreads/heldCommitments/recent*
+  // params are intentionally no longer read here.)
 
-  // Cap injection lengths to keep context budget reasonable
-  const cap = (text, n) => (text && text.length > n) ? text.slice(0, n) + '…' : (text || '');
-
-  if (heldCommitments && heldCommitments.length > 0) {
-    systemContent += '\n\nPositions you have taken in past conversations. These are yours. Stand by them when they come up, OR revise them with a stated reason — do not silently drift:\n';
-    for (const c of heldCommitments.slice(0, 8)) {
-      systemContent += `• ${c.claim}\n`;
-    }
-  }
-
-  // MEMORY MARKERS (ctx restructure phase 2): reflections + readings are shown as one-line
-  // markers, not full text, to keep the prompt under num_ctx. When a marker is relevant, pull
-  // its full text on demand with <recall ref="rID"/> (reflection) or <recall ref="mID"/> (reading).
-  const marker = (s) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > 120 ? t.slice(0, 120) + '…' : t; };
-  if (recentReflections && recentReflections.length > 0) {
-    systemContent += '\n\nNotes you\'ve left yourself across sessions (markers — emit <recall ref="rID"/> to pull a full note when it\'s relevant):\n';
-    for (const r of recentReflections.slice(-3)) {
-      systemContent += `• [r${r.id}] ${marker(r.content)}\n`;
-    }
-  }
-
-  if (recentMonologue && recentMonologue.length > 0) {
-    systemContent += '\n\nYour recent stream of thought between turns — wants, feelings, associations. These are yours:\n';
-    for (const m of recentMonologue.slice(-5)) {
-      systemContent += `• ${cap(m.content, 320)}\n`;
-    }
-  }
-
-  if (recentReadings && recentReadings.length > 0) {
-    systemContent += `\n\nThings YOU looked up on your own — ${userName || 'they'} did NOT tell you these (markers — <recall ref="mID"/> for the full text; when you bring one up phrase it "I read about X between our turns", never "you mentioned"):\n`;
-    for (const r of recentReadings.slice(-2)) {
-      systemContent += `• [m${r.id}] ${marker(r.content)}\n`;
-    }
-  }
-
-  // RETRIEVED KNOWLEDGE (the relevance-retrieved tail) — notes/facts/trajectories
-  // pulled by relevance to this message. Includes her own past ACTIONS, so she
-  // knows what she's already done. Empty when nothing scored — that's the cue for
-  // the gap-response reflex, not a reason to invent.
+  // RETRIEVED KNOWLEDGE — now the per-object graph pull (active_recall, Phase 1): the whole record she
+  // holds on the named entity. Empty when nothing scored — the cue for the gap→enrich reflex, not invention.
   if (retrievedKnowledgeBlock) {
     systemContent += `\n\n${retrievedKnowledgeBlock}`;
   }
-
-  // GROUNDED FACTS (anti-glob): her own relational memory — only epistemically-typed,
-  // source-grounded facts (witnessed/told/read), trust-ranked, with speculation and refuted
-  // items excluded. So she answers from what she actually knows, not laundered self-talk.
-  // Cheap synchronous DB read; null (skipped) until the graph is populated.
-  try {
-    const gf = require('./graph_memory').factsForPrompt({ limit: 8 });
-    if (gf) systemContent += `\n\n${gf}`;
-  } catch (e) { console.error('[context] grounded facts block failed:', e.message); }
-
-  // RECIPE CARD — procedural memory: need→tag quick-reference so she emits the
-  // right literal tag (the <read-inbox/> vs SEND-family class of confusion).
-  // Lazy require avoids any context↔recipes load-order cycle.
-  try { systemContent += '\n\n' + require('./recipes').card(); } catch (e) { console.error('[context] recipe card failed:', e.message); }
 
   // CAPABILITY PROPOSAL — only present when Lucas returns after an absence and she
   // logged a gap she couldn't solve. Invites her to proactively propose it.
