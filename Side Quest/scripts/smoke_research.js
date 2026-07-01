@@ -92,6 +92,10 @@ ok(r.pickSeedTarget({ seeds: [], consumed: [], covered: [] }) === null, 'pickSee
 const dpKnown = r.buildDeepenPrompt({ goal: 'g', target: 'John Curtis (US)', facets: ['overview'], known: '[object] John Curtis (US) — person, degree 320\n  • title: U.S. Senator' });
 ok(/WHAT WE ALREADY HOLD on John Curtis/.test(dpKnown) && /do NOT re-derive/.test(dpKnown) && /U\.S\. Senator/.test(dpKnown), 'buildDeepenPrompt: known dossier injected as GIVEN prior knowledge');
 ok(!/WHAT WE ALREADY HOLD/.test(r.buildDeepenPrompt({ goal: 'g', target: 'X', facets: [] })), 'buildDeepenPrompt: no known → no prior-knowledge block (unchanged default)');
+// visited memory: tell the pass not to re-open the same URLs/searches (the "same websites over and over" fix)
+const dpVis = r.buildDeepenPrompt({ goal: 'g', target: 'Curtis', facets: [], visited: ['https://curtis.senate.gov/contact/', 'search: Senator John Curtis background'] });
+ok(/ALREADY VISITED THIS RUN/.test(dpVis) && /do NOT open these again/.test(dpVis) && /go DEEPER/.test(dpVis) && /curtis\.senate\.gov\/contact/.test(dpVis), 'buildDeepenPrompt: visited URLs/searches listed with a go-deeper directive');
+ok(!/ALREADY VISITED/.test(r.buildDeepenPrompt({ goal: 'g', target: 'X', facets: [] })), 'buildDeepenPrompt: no visited → no block (unchanged default)');
 
 // --- guardrails: bounded-run termination (allTargetsCovered) ---
 ok(r.allTargetsCovered({ intended: ['John Curtis (US)'], covered: ['John Curtis (US)'] }) === true, 'allTargetsCovered: single intended, covered → true (terminate)');

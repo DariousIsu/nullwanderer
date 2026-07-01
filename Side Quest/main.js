@@ -5244,13 +5244,30 @@ async function runDirectedResearchPass(focus) {
   // SCOPE — a BOUNDED run (the assignment named specific entities) confines research to those intended
   // targets and TERMINATES when they're covered; an OPEN run genuinely discovers. Loaded before deciding.
   const lc = s => String(s || '').toLowerCase();
-  let scope = 'open', intended = [];
+  let scope = 'open', intended = [], visited = [];
   try { scope = (db.getMeta(`focus.${focus.id}.scope`) || 'open').trim(); } catch {}
   try { intended = JSON.parse(db.getMeta(`focus.${focus.id}.intended_targets`) || '[]'); } catch {}
+  try { visited = JSON.parse(db.getMeta(`focus.${focus.id}.visited`) || '[]'); } catch {}
 
   const runPass = async (prompt) => {
     try {
       const r = await runCloudOperator({ userMessage: prompt, context: '', task: true, autonomous: true });
+      // VISITED MEMORY — record the URLs opened + searches run this step, so the NEXT pass is told not to
+      // repeat them (the "same websites over and over" fix). Steps carry the tool + args.
+      try {
+        if (r && Array.isArray(r.steps)) {
+          const opened = [];
+          for (const s of r.steps) {
+            if (s.tool === 'open_page' && s.args && s.args.url) opened.push(String(s.args.url));
+            else if (s.tool === 'web_search' && s.args && s.args.query) opened.push(`search: ${String(s.args.query)}`);
+          }
+          if (opened.length) {
+            let vis = []; try { vis = JSON.parse(db.getMeta(`focus.${focus.id}.visited`) || '[]'); } catch {}
+            for (const u of opened) if (!vis.includes(u)) vis.push(u);
+            db.setMeta(`focus.${focus.id}.visited`, JSON.stringify(vis.slice(-40)));
+          }
+        }
+      } catch {}
       return { ans: (r && r.answer ? String(r.answer).trim() : ''), usedTool: !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.some(t => ['web_search', 'browser_read', 'echo'].includes(t))) };
     } catch (e) { return { ans: '', usedTool: false }; }
   };
@@ -5302,7 +5319,7 @@ async function runDirectedResearchPass(focus) {
   } else if (!done) {
     // DEEPEN the current target — next missing facet. A grounded target carries its graph dossier as `known`,
     // injected as GIVEN so the pass builds PAST what we already hold (object-first).
-    const { ans, usedTool } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance, known: target.known || '' }));
+    const { ans, usedTool } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance, known: target.known || '', visited }));
     const p = rs.parsePass(ans);
     const newChars = rs.newContentChars(target.raw, p.body);
     target.passes = (target.passes || 1) + 1;
