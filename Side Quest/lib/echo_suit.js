@@ -402,10 +402,88 @@ async function recallKnowledge(query, { topK = 6 } = {}) {
   } catch { return []; }
 }
 
+// OBJECT recall — the Echo-search-FIRST move (object-memory architecture, Slice 1). Resolve a name
+// to its canonical Echo entity and pull the WHOLE object in one cheap call, instead of re-deriving
+// what we already hold. quick_lookup is the resolver: it returns the RICH record's full dossier
+// (facts + bio + committees + role + degree), not a naive name match — the Curtis proof: get_entity
+// exact-matched a degree-1 stub, quick_lookup resolved the degree-320 Senator with his whole bio.
+// kg_neighborhood adds bounded background concepts (fail-soft — the Wikipedia sidecar is often
+// unanchored → empty). Fully defensive; any miss → null. `dispatch` injectable for offline tests.
+const OBJ_RICH_DEGREE = 8;   // a base resolution below this is "thin" → sweep types for a richer record
+async function recallObject(name, { maxNeighbors = 8, preferType = null, dispatch = null } = {}) {
+  const d = dispatch || (liveReady() ? (tag) => _live.dispatch(tag) : null);
+  if (!d) return null;
+  const n = String(name || '').trim();
+  if (!n) return null;
+  // RESOLUTION. quick_lookup ranks by FTS text match, NOT degree — so a bare "John Curtis" resolves
+  // to a degree-1 bill titled "…John Curtis…" over the degree-320 Senator. Fix (generic, not per-case):
+  // if the caller knows the type, trust it (one call). Otherwise do a DEGREE-AWARE resolve — base
+  // lookup, and only if it's thin, sweep the dossier-bearing types and KEEP THE RICHEST record.
+  let best = await _lookupObject(d, n, preferType);
+  if (!preferType && (!best || best.degree < OBJ_RICH_DEGREE)) {
+    for (const t of ['person', 'organization']) {
+      const alt = await _lookupObject(d, n, t);
+      if (alt && (!best || alt.degree > best.degree)) best = alt;
+    }
+  }
+  if (!best) return null;
+  // bounded neighborhood — degree-capped background (open decision #2: can't pull all 320 edges).
+  if (maxNeighbors > 0 && best.id) {
+    try {
+      const kr = await d({ kind: 'do', name: 'kg_neighborhood', args: { entity_id: best.id, top_k: maxNeighbors } });
+      if (kr && kr.ok) { let kd; try { kd = JSON.parse(kr.text); } catch {} if (kd) best.neighbors = normalizeNeighbors(kd); }
+    } catch {}
+  }
+  return best;
+}
+// One quick_lookup → normalized object (or null). Fail-soft on transport/JSON errors.
+async function _lookupObject(d, name, preferType) {
+  let r; try { r = await d({ kind: 'do', name: 'quick_lookup', args: preferType ? { name, prefer_type: preferType } : { name } }); } catch { return null; }
+  if (!r || !r.ok) return null;
+  let data; try { data = JSON.parse(r.text); } catch { return null; }
+  return normalizeObject(data && (data.result || data));
+}
+
+// Pure: quick_lookup's `.result` → a flat, render-ready object. facts already carry the attributes
+// ("Curtis — title: U.S. Senator"); committee names are usually "(unnamed)" so the role is what
+// matters (dedup them). Keeps the raw bio for structured access.
+function normalizeObject(res) {
+  if (!res || typeof res !== 'object') return null;
+  const ent = res.entity || {};
+  if (!ent.id && !ent.name) return null;
+  const clean = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  const facts = (Array.isArray(res.facts) ? res.facts : []).map(f => clean(f && f.text)).filter(Boolean);
+  const seen = new Set(); const committees = [];
+  for (const c of (Array.isArray(res.committees) ? res.committees : [])) {
+    const nm = c && c.name && c.name !== '(unnamed)' ? clean(c.name) : '';
+    const role = clean(c && c.role);
+    const s = nm ? `${nm}${role ? ` (${role})` : ''}` : role;
+    if (s && !seen.has(s.toLowerCase())) { seen.add(s.toLowerCase()); committees.push(s); }
+  }
+  return {
+    id: ent.id || null, name: clean(ent.name), type: ent.entity_type || null, subtype: ent.entity_subtype || null,
+    degree: Number(ent.degree) || 0, role: clean(res.role) || null, citation: clean(res.citation) || null,
+    facts, committees, bio: (res.bio && typeof res.bio === 'object') ? res.bio : null, neighbors: []
+  };
+}
+
+// Pure: kg_neighborhood's `.neighbors` → capped name strings (background concepts).
+function normalizeNeighbors(kd) {
+  const ns = Array.isArray(kd && kd.neighbors) ? kd.neighbors : [];
+  const out = [];
+  for (const n of ns) {
+    const s = typeof n === 'string' ? n : (n && (n.name || n.title || n.target_name || n.label));
+    const c = String(s || '').replace(/\s+/g, ' ').trim();
+    if (c) out.push(c);
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+
 // test seam: inject a fake connected suit
 function _setLiveForTest(suit) { _live = suit; }
 
 module.exports = {
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, _setLiveForTest
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, normalizeObject, normalizeNeighbors, _setLiveForTest
 };

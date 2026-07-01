@@ -65,6 +65,66 @@ const noGraph = () => [];
     ok(hits.length === 1 && hits[0].source === 'echo:wikipedia' && /QCD is a theory/.test(hits[0].content), 'recallKnowledge normalizes a master-DB hit (mark tags stripped)');
     es._setLiveForTest(null);
     ok((await es.recallKnowledge('anything')).length === 0, 'recallKnowledge fail-safe [] when suit not connected');
+
+    // ── OBJECT PULL (Slice 1 — Echo-search-first) — the real Curtis quick_lookup shape ──
+    const curtisResult = { entity: { id: 1519559, name: 'John Curtis (US)', entity_type: 'person', entity_subtype: 'legislator_legacy', degree: 320 }, role: 'US_Senate R (US-US)', citation: 'John Curtis (US) [ocd-person/7cc5139d]', facts: [{ text: 'John Curtis (US) — title: U.S. Senator', family: 'role' }, { text: 'John Curtis (US) — party: R', family: 'affiliation' }, { text: 'John Curtis (US) — bioguide_id: C001114', family: 'identity' }, { text: 'John Curtis (US) — state_represented: UT', family: 'role' }], bio: { Bioguide_Id__c: 'C001114', Chamber__c: 'US_Senate' }, committees: [{ name: '(unnamed)', role: 'Chair' }, { name: '(unnamed)', role: 'Chair' }, { name: '(unnamed)', role: 'Member' }] };
+    // normalizeObject: flattens + dedups committees (roles, names all "(unnamed)")
+    const nObj = es.normalizeObject(curtisResult);
+    ok(nObj && nObj.id === 1519559 && nObj.degree === 320 && nObj.facts.length === 4, 'normalizeObject: id + degree 320 + facts');
+    ok(nObj.committees.length === 2 && nObj.committees.includes('Chair') && nObj.committees.includes('Member'), 'normalizeObject: committee roles deduped (Chair×2→Chair, Member)');
+    ok(es.normalizeObject({}) === null && es.normalizeObject(null) === null, 'normalizeObject: empty/null → null');
+    ok(es.normalizeNeighbors({ neighbors: ['Utah', { name: 'Congress' }] }).join(',') === 'Utah,Congress', 'normalizeNeighbors: strings + {name} shapes');
+
+    // recallObject: quick_lookup resolves the RICH record, then bounded kg_neighborhood (fail-soft empty)
+    const objDispatch = async (tag) => {
+      if (tag.name === 'quick_lookup') return { ok: true, text: JSON.stringify({ result: curtisResult }) };
+      if (tag.name === 'kg_neighborhood') return { ok: true, text: JSON.stringify({ anchors: [], neighbors: [] }) };
+      return { ok: false, text: '{}' };
+    };
+    const ro = await es.recallObject('John Curtis', { dispatch: objDispatch });
+    ok(ro && ro.degree === 320 && ro.role === 'US_Senate R (US-US)' && ro.neighbors.length === 0, 'recallObject: pulls the degree-320 dossier (neighborhood empty, fail-soft)');
+    ok((await es.recallObject('', { dispatch: objDispatch })) === null, 'recallObject: empty name → null');
+    ok((await es.recallObject('X', { dispatch: async () => ({ ok: false, text: 'err' }) })) === null, 'recallObject: quick_lookup miss → null');
+    ok((await es.recallObject('X', { dispatch: null })) === null, 'recallObject: no dispatch (suit down) → null');
+
+    // DEGREE-AWARE RESOLUTION — the live Curtis bug: bare name resolves to a degree-1 bill; the
+    // type sweep recovers the degree-320 person. base(no type)=thin bill → sweep person → keep it.
+    const thinBill = { entity: { id: 1337649, name: 'HJ 12 (VA, 2020)', entity_type: 'bill', degree: 1 }, facts: [{ text: 'Title: Celebrating the life of John Curtis Marion.' }] };
+    let sweepCalls = [];
+    const sweepDispatch = async (tag) => {
+      if (tag.name === 'quick_lookup') { sweepCalls.push(tag.args.prefer_type || '(none)'); return { ok: true, text: JSON.stringify({ result: tag.args.prefer_type === 'person' ? curtisResult : thinBill }) }; }
+      if (tag.name === 'kg_neighborhood') return { ok: true, text: JSON.stringify({ neighbors: [] }) };
+      return { ok: false, text: '{}' };
+    };
+    const swept = await es.recallObject('John Curtis', { dispatch: sweepDispatch });
+    ok(swept && swept.degree === 320 && swept.type === 'person', 'recallObject: thin base → type sweep recovers the degree-320 person');
+    ok(sweepCalls.includes('(none)') && sweepCalls.includes('person'), 'recallObject: sweep tried base + prefer_type=person');
+    // when the caller KNOWS the type, one call, no sweep
+    sweepCalls = [];
+    await es.recallObject('John Curtis', { preferType: 'person', dispatch: sweepDispatch });
+    ok(sweepCalls.length === 1 && sweepCalls[0] === 'person', 'recallObject: explicit preferType → single lookup, no sweep');
+
+    // recall() folds the object in → RICH even with 0 notes/facts/echo (the #2915 fix: one object = rich)
+    const objFn = async () => nObj;
+    const rObj = await ar.recall('John Curtis', { retrieveFn: async () => [], graphFn: noGraph, echoFn: async () => [], objectFn: objFn });
+    ok(rObj.coverage === 'rich' && rObj.object && rObj.object.degree === 320, 'recall: resolved degree-320 object alone → rich (0 notes)');
+    // a degree-1 stub with no facts does NOT flip coverage
+    const stub = { id: 9, name: 'Nobody', type: 'person', degree: 1, facts: [], committees: [], neighbors: [] };
+    const rStub = await ar.recall('nobody here', { retrieveFn: async () => [], graphFn: noGraph, echoFn: async () => [], objectFn: async () => stub });
+    ok(rStub.coverage === 'thin', 'recall: degree-1 empty stub → still thin (no false rich)');
+    ok(ar._objectRich(nObj) === true && ar._objectRich(stub) === false, '_objectRich: rich object vs stub');
+
+    // entity-shape guard: object pull SKIPPED for a long prose topic (never quick_lookup a paragraph)
+    ok(ar._looksLikeEntity('John Curtis') === true && ar._looksLikeEntity('what is the historical background of epistemology and its rivals') === false, '_looksLikeEntity: name yes, sentence no');
+    let objCalled = false;
+    await ar.recall('what is the historical background of epistemology and its rivals', { retrieveFn: async () => [], graphFn: noGraph, echoFn: async () => [], objectFn: async () => { objCalled = true; return nObj; } });
+    ok(objCalled === false, 'recall: long prose topic → object pull skipped');
+
+    // knowledgeBlock leads with the object dossier (header + facts + committees)
+    const blkObj = await ar.knowledgeBlock('John Curtis', { retrieveFn: async () => [], graphFn: noGraph, echoFn: async () => [], objectFn: objFn });
+    ok(/\[object\] John Curtis \(US\) — person\/legislator_legacy, degree 320 — US_Senate R/.test(blkObj), 'knowledgeBlock: object header (type/subtype/degree/role)');
+    ok(/• John Curtis \(US\) — title: U\.S\. Senator/.test(blkObj) && /committees: Chair; Member/.test(blkObj), 'knowledgeBlock: renders facts + deduped committees');
+    ok(/do NOT restate it or look it up again/.test(blkObj), 'knowledgeBlock: object-rich → the "do not re-research" directive');
   } catch (e) {
     fail++; console.error('  ✗ threw:', e.stack || e.message);
   }
