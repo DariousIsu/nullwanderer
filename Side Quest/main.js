@@ -1802,6 +1802,35 @@ async function canvasUpsertBlock({ focusId, blockId, title, tabMode = 'DOC', blo
   } catch (e) { console.error('[canvas] upsert failed:', e.message); return false; }
 }
 
+// CANVAS DURABILITY — the engine canvas is IN-MEMORY, so an engine/app restart WIPES a run's blocks even
+// though the deliverable FILE persists. On the first tick of a run in this process, RE-EMIT its blocks from
+// the durable file (covered-org sections) + the in-progress target's draft, so a restart no longer blanks
+// the canvas. Idempotent block_ids match the live-grow scheme, so this refills the same blocks. Once/run.
+const _canvasRehydrated = new Set();
+function _secBlockId(focusId, name) { return `sec-${focusId}-${String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 32)}`; }
+async function rehydrateCanvasFromDeliverable(focus, file, target) {
+  if (!focus || _canvasRehydrated.has(focus.id)) return;
+  _canvasRehydrated.add(focus.id);
+  try {
+    if (!(await ensureEngine())) return;
+    const goal = String(focus.content || '');
+    let body = ''; try { const r = filesLib.fileReadFull(file); body = (r && r.text) || ''; } catch {}
+    let n = 0;
+    if (body) {
+      for (const sec of body.split(/\n(?=##\s)/)) {
+        const m = sec.trim().match(/^##\s+(.+)/); if (!m) continue;
+        await canvasUpsertBlock({ focusId: focus.id, blockId: _secBlockId(focus.id, m[1].trim()), title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: sec.trim() } });
+        n++;
+      }
+    }
+    if (target && target.name && target.raw) {
+      const cleaned = String(target.raw).replace(/^PRIOR KNOWLEDGE[\s\S]*?(?:\n\n|$)/, '').replace(/^\s*(TARGET|FACET):.*$/gim, '').replace(/\n{3,}/g, '\n\n').trim();
+      if (cleaned) { await canvasUpsertBlock({ focusId: focus.id, blockId: _secBlockId(focus.id, target.name), title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: `## ${target.name}\n\n${cleaned.slice(0, 8000)}` } }); n++; }
+    }
+    if (n) console.log(`[directed] #${focus.id} canvas rehydrated after restart (${n} block(s))`);
+  } catch (e) { console.error('[directed] canvas rehydrate failed:', e.message); }
+}
+
 // SCRIBE HEARTBEAT (the meeting-scribe LANE on its OWN cadence — handoff item 1). While a canvas meeting
 // is live, tick the scribe (own model) + LIVE-GROW the notes on the canvas (the building-project document
 // fleshing out as the meeting runs). When the meeting ends (gmeet stage done/none), finalize → land the
@@ -5207,6 +5236,10 @@ async function runDirectedResearchPass(focus) {
   // Mid-run clarifications Lucas gave → guidance folded into EVERY pass from here on.
   let clar = []; try { clar = JSON.parse(db.getMeta(`focus.${focus.id}.clarifications`) || '[]'); } catch {}
   const guidance = rs.buildGuidanceBlock(clar);
+
+  // DURABILITY: re-emit this run's canvas blocks from the persisted deliverable on the first tick of the
+  // process (an engine/app restart wiped the in-memory canvas). No-op after the first call per run.
+  try { await rehydrateCanvasFromDeliverable(focus, file, target); } catch {}
 
   // SCOPE — a BOUNDED run (the assignment named specific entities) confines research to those intended
   // targets and TERMINATES when they're covered; an OPEN run genuinely discovers. Loaded before deciding.
