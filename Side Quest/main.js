@@ -2711,7 +2711,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // of reciting goals/professionalism at him. Her threads still drive her idle loop + tools;
   // they just stop colonizing a warm "how are you". (Root cause of the corporate-reply bug.)
   const socialTurn = isSocialTurn(userMessage);
-  const openThreads = socialTurn ? [] : db.getActiveOpenThreads(3, { includeStalled: false });  // don't pull parked/stalled threads into chat replies
+  let openThreads = socialTurn ? [] : db.getActiveOpenThreads(3, { includeStalled: false });  // don't pull parked/stalled threads into chat replies (gated for relevance below, alongside recentMonologue/recentReadings)
   // WHERE-WE-ARE (conversation harness, Piece 3): the running summary of this conversation,
   // so she stays on-thread even after raw turns scroll out of the recency window.
   const convoStateBlock = require('./lib/convo_state').buildBlock(sessionId, userName);
@@ -2998,11 +2998,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     openQuestionBlock = require('./lib/open_questions').buildBlock(pend, userName);
   } catch (e) { console.error('[main] open-question surface failed:', e.message); }
 
-  // SCOPED CONTEXT — relevance-gate the recency blocks (recent monologue + readings) against the
-  // message so off-topic between-turn musing can't ride along ("picking up random stuff"). Now runs
-  // on EVERY turn (was: only narrow/actionable). The texture argument lost to the symptom — on a
-  // social turn her recent permitting-rumination IS the random noise; a recent thought genuinely
-  // related to what's being said still clears 0.4 and comes through, so relevant texture survives.
+  // SCOPED CONTEXT — relevance-gate the recency blocks (recent monologue + readings) against the message
+  // so off-topic between-turn musing can't ride along ("picking up random stuff"). Runs on EVERY turn.
+  // A recent thought genuinely related to what's being said still clears 0.4 and comes through, so
+  // relevant texture survives. NOTE: openThreads is deliberately NOT gated here — the cosine test can't
+  // discriminate short task-shaped sentences (an unrelated "identify contacts for institutes" scores
+  // 0.44–0.59 against "list the companies in the article", well above 0.4), so gating it did nothing.
+  // The open-threads → chat leak is handled structurally in the Lane split instead (grounding-critical
+  // turns don't carry standing-work primacy), not by an ineffective embedding gate.
   if (userQv) {
     const gate = async (rows) => {
       const out = [];
@@ -3061,10 +3064,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (!drafted && !socialTurn && !followupFired && !_isStatusReq) {
       const factual = (() => { try { return require('./lib/metacognition').classifyClaimType(userMessage) === 'factual'; } catch { return false; } })();
       if (factual || personalFactQ) {
-        const grounding = ad.factualGrounding({ knowledgeBlock: retrievedKnowledgeBlock, pastTurns: relevantPastTurns });
+        // Lane B grounding sources: her knowledge block + relevant past turns + READINGS she holds (the
+        // article/page the question is about). Readings were the missing source — a reading-grounded fact
+        // question ("what companies are in the article") now drafts from the real article instead of
+        // falling through to raw local generation (the confabulation fix).
+        const grounding = ad.factualGrounding({ knowledgeBlock: retrievedKnowledgeBlock, pastTurns: relevantPastTurns, readings: recentReadings });
         if (grounding) {
           const d = await ad.draft({ userMessage, grounding, kind: 'knowledge' });
-          if (d) { composedUserMessage = `${composedUserMessage}\n\n${ad.buildVoiceBlock(d, userName)}`; console.log(`[main] cloud-drafted knowledge answer → "${d.slice(0, 70)}"`); }
+          if (d) {
+            composedUserMessage = `${composedUserMessage}\n\n${ad.buildVoiceBlock(d, userName)}`;
+            // Lane B: this is a grounded fact answer. Drop standing-work threads from the prompt so their
+            // top-of-block PRIMACY can't bleed an unrelated task into the reply (the companies-list leak).
+            openThreads = [];
+            console.log(`[main] cloud-drafted knowledge answer → "${d.slice(0, 70)}"`);
+          }
         }
       }
     }

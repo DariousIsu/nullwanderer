@@ -68,14 +68,23 @@ async function draft({ userMessage, grounding, kind = 'general', deps = {} } = {
 // (knowledge block + relevant past turns). Returns '' when there isn't enough REAL grounding — the
 // caller then uses the normal flow (general knowledge from training, or the admit-the-gap directive)
 // rather than drafting from thin air. Pure → testable; the >40-char floor keeps thin blocks out.
-function factualGrounding({ knowledgeBlock = null, pastTurns = [] } = {}) {
+function factualGrounding({ knowledgeBlock = null, pastTurns = [], readings = [] } = {}) {
   const parts = [];
   if (knowledgeBlock && String(knowledgeBlock).trim()) parts.push(String(knowledgeBlock).trim());
+  // READINGS — pages/articles SHE looked up (full text, not the 120-char prompt markers). This is the
+  // grounding that was missing: "what companies are in the article" / "summarize the article" hold the
+  // answer HERE, not in the knowledge block or past turns — so without this the turn fell through to raw
+  // local generation and confabulated. Give the cloud the actual article to draft from.
+  const rd = (readings || []).slice(0, 2)
+    .map(r => String((r && r.content) || '').replace(/\s+/g, ' ').trim())
+    .filter(s => s.length > 40)
+    .map(s => '- ' + s.slice(0, 2600));
+  if (rd.length) parts.push('What you read / looked up (draft strictly from this — it is the source the question is about):\n' + rd.join('\n'));
   const pt = (pastTurns || []).slice(0, 4)
     .map(t => `- ${(t && t.speaker) || ''}: ${String((t && t.content) || '').replace(/\s+/g, ' ').slice(0, 200)}`)
     .filter(l => l.length > 6);
   if (pt.length) parts.push('Relevant past conversation:\n' + pt.join('\n'));
-  const g = parts.join('\n\n').slice(0, 4000);
+  const g = parts.join('\n\n').slice(0, 4600);
   return g.trim().length > 40 ? g : '';
 }
 

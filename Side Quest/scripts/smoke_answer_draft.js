@@ -47,6 +47,13 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(/ship Friday/.test(g2) && /Relevant past conversation/.test(g2), 'factualGrounding folds in relevant past turns');
   ok(ad.factualGrounding({ knowledgeBlock: 'tiny', pastTurns: [] }) === '', 'thin/empty grounding → "" (caller uses normal flow, does NOT draft from thin air)');
   ok(ad.factualGrounding({}) === '', 'no grounding at all → ""');
+  // READINGS as grounding (the confabulation fix): a fact question ABOUT an article she read must draft
+  // from the reading, not fall through to raw local generation. This is the exact companies-list failure.
+  const article = 'I looked at "Water Joins Power" (datacenterfrontier.com): Emergence Water has partnered with Nimbus Advanced Process Cooling Systems. Emergence Water Chief Product Officer Leif Percifield and Nimbus Technical Director Vamsi Mokkapati described how water is becoming a site-selection constraint for AI data centers.';
+  const g3 = ad.factualGrounding({ knowledgeBlock: null, pastTurns: [], readings: [{ content: article }] });
+  ok(/Emergence Water/.test(g3) && /Nimbus/.test(g3) && /read \/ looked up|What you read/.test(g3), 'factualGrounding includes the READING she holds (article → grounding, not "")');
+  ok(g3 !== '' && !/OpenAI|Walmart|Anthropic/.test(g3), 'grounding carries the REAL article, no fabricated companies');
+  ok(ad.factualGrounding({ readings: [{ content: 'hi' }] }) === '', 'a trivial reading (<40c) does not manufacture grounding');
 
   // voice block: rephrase as her, NO new facts, carries the draft verbatim
   const b = ad.buildVoiceBlock('The clip is a montage about the movie Secretary.', 'Lucas');
