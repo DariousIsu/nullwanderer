@@ -156,20 +156,26 @@ async function assessGaps(candidates, { recall, log } = {}) {
   return out;
 }
 
-// Propose one entity into the graph (pending, gated). Fail-soft; returns true iff the proposal reached Echo.
+// Add one entity to the graph — additive + auto-disambiguated (Levenshtein 0.85 → 'created' /
+// 'already_exists' / 'merge_suggested', never a blind dup). Echo's propose_entity schema is
+// {name, entity_type, summary?, entity_subtype?, confidence?} with additionalProperties:false — do
+// NOT pass extra keys (they're rejected). Fail-soft; true iff Echo accepted.
 async function proposeEntity({ dispatch, name, entity_type, summary }) {
   if (typeof dispatch !== 'function' || !name) return false;
   try {
-    const r = await dispatch({ kind: 'do', name: 'propose_entity', args: { name, entity_type: entity_type || 'concept', summary: summary || '', proposed_by: 'graph-walk' } });
+    const args = { name, entity_type: entity_type || 'concept' };
+    if (summary) args.summary = String(summary).slice(0, 1200);
+    const r = await dispatch({ kind: 'do', name: 'propose_entity', args });
     return !!(r && r.ok);
   } catch { return false; }
 }
 
-// Propose one relation (edge) into the graph (pending, gated). Fail-soft.
+// Add one edge — BOTH endpoints must already exist (we propose the entities first). Schema is
+// {source_name, target_name, relation_type, confidence?}, additionalProperties:false. Fail-soft.
 async function proposeRelation({ dispatch, source, target, relation_type }) {
   if (typeof dispatch !== 'function' || !source || !target || source === target) return false;
   try {
-    const r = await dispatch({ kind: 'do', name: 'propose_relation', args: { source_name: source, target_name: target, relation_type: relation_type || 'related_to', proposed_by: 'graph-walk' } });
+    const r = await dispatch({ kind: 'do', name: 'propose_relation', args: { source_name: source, target_name: target, relation_type: relation_type || 'related_to' } });
     return !!(r && r.ok);
   } catch { return false; }
 }

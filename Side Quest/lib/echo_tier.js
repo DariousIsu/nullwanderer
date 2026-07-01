@@ -26,11 +26,12 @@ const LOCKED_RE = /(?:^|_)(send_email|email_send|send_mail|generate_image|image_
 // HEAVY — spawns background agents / workflows / heavy delegation. Off the AUTONOMOUS loop (usable
 // interactively when Lucas is present), because one tag can fan out into a fleet of cloud agents.
 const HEAVY_RE = /^(spawn_agent|spawn_agent_async|spawn_workflow|team_spawn|agent_fire|hire_card|propose_hire|run_pass|run_engagement_auto_promotion|delegate_to_)/i;
-// PROPOSE — a NON-COMMITTING, verification-gated write: propose_entity / propose_relation /
-// propose_link / propose_question_concept only enqueue a PENDING proposal that Echo (and Lucas)
-// gate before it enters the system-of-record. Because it can never directly mutate, it is safe on
-// the AUTONOMOUS loop — this is what lets the subconscious graph-builder grow the KG unattended
-// while promotion stays gated. (propose_hire is HEAVY, caught above — it spawns an agent.)
+// PROPOSE — an ADDITIVE, auto-disambiguated, reversible write: propose_entity / propose_relation /
+// propose_link / propose_question_concept only ADD nodes/edges, and Echo auto-disambiguates against
+// existing entities (Levenshtein 0.85 → created / already_exists / merge_suggested, never a blind
+// dup). They never delete, merge, or overwrite the system-of-record — and merge/delete stay 'write'
+// (blocked on auto). So propose_* is the SAFE subset that lets the subconscious graph-builder grow
+// the KG unattended. (propose_hire is HEAVY, caught above — it spawns an agent.)
 const PROPOSE_RE = /^propose_(entity|relation|link|question_concept)$/i;
 // WRITE — mutates Echo's system-of-record (the KG, the vault, CRM, hubs, QR, the desktop/browser, a
 // live capture/session). Blocked on auto; allowed interactively (Echo applies its own verification +
