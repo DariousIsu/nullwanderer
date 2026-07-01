@@ -113,6 +113,7 @@ const noGraph = () => [];
     ok(es._distinctNames([{ name: 'John Curtis (US)' }, { name: 'John Curtis (US-US)' }, { name: 'CURTIS, JOHN [S4UT00282]' }, { name: 'John R. Curtis (US)' }]).length === 1, '_distinctNames: 4 records incl. an initial variant → 1 distinct entity');
     // name-gate drops summary-only FTS noise (a staffer whose bio names the target)
     ok(es._nameGate([{ name: 'John Curtis (US)' }, { name: 'Lorie Fowlke (UT)' }], es._coreNameKey('John Curtis')).length === 1, '_nameGate: drops the summary-match staffer, keeps the real name');
+    ok(es._cleanMention('Sen. John Curtis') === 'John Curtis' && es._cleanMention('Sen. Curtis') === 'Curtis', '_cleanMention: strips honorifics so the FTS search runs on real name tokens');
     // resolved: many dup records of ONE person → collapse to 1 → pull the degree-320 object
     const resDispatch = async (tag) => {
       if (tag.name === 'search_entities') return { ok: true, text: JSON.stringify({ result: [{ id: 1519559, name: 'John Curtis (US)', entity_type: 'person' }, { id: 1524282, name: 'John Curtis (US-US)', entity_type: 'person' }, { id: 1681322, name: 'CURTIS, JOHN [S4UT00282]', entity_type: 'person' }] }) };

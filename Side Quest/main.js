@@ -3184,6 +3184,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // block creates the real run.
   let intakeRoute = null;
   let isAssignment = false;
+  let assignmentSeed = null;   // object-memory Slice 2: resolved entity targets + clarify for the run
   try {
     const opOn2 = (() => { try { return (db.getMeta('operator.mode') || 'full').trim() !== 'off'; } catch { return true; } })();
     if (opOn2 && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled && userMessage && userMessage.trim().length > 6) {
@@ -3209,6 +3210,22 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       if (isAssignment) console.log(`[intake] ASSIGNMENT → ${intakeRoute ? intakeRoute.action : 'discover(regex-fallback)'}${intakeRoute && intakeRoute.deep ? ' deep' : ''}${intakeRoute && intakeRoute.priority ? ' ' + intakeRoute.priority : ''}`);
     }
   } catch (e) { console.error('[intake] gate failed:', e.message); }
+
+  // OBJECT SEED (object-memory Slice 2 activation) — on a recognized assignment, DECOMPOSE the request and
+  // RESOLVE its named entities against Echo BEFORE the run is built, so a "profile Sen. Curtis" run starts
+  // FROM his resolved object (degree-320 dossier) as a known target instead of a blind discovery walk (the
+  // #2915 drift). Bias-toward-clarifying: an ambiguous/unknown salient entity surfaces a question so she
+  // asks BEFORE burning hours. Fail-safe: any miss / cloud|Echo down → assignmentSeed null → unchanged.
+  if (isAssignment) {
+    try {
+      const intake = require('./lib/intake');
+      const parsed = await intake.decompose(userMessage, {});
+      if (parsed) {
+        assignmentSeed = intake.buildAssignmentSeed(await intake.resolvePlan(intake.routeDecomposition(parsed)));
+        if (assignmentSeed && (assignmentSeed.targets.length || assignmentSeed.clarify.length)) console.log(`[object-seed] ${assignmentSeed.targets.length} resolved target(s)${assignmentSeed.clarify.length ? `, ${assignmentSeed.clarify.length} clarify` : ''}`);
+      }
+    } catch (e) { console.error('[object-seed] failed:', e.message); }
+  }
 
   // DOC-QA — a question/extraction AGAINST a document Lucas handed her (a canvas drop she ingested), e.g.
   // "pull my responsibilities out of the meeting notes". This is the completion of canvas-ingest: READ the
@@ -3416,8 +3433,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (opModeOn && (intakeSaysProject || regexFallback) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled) {
       const already = (() => { try { const f = focusLib.getCurrent(); return !!(f && focusLib.isDirected(f)); } catch { return false; } })();
       if (!already) {
-        const clarTail = (intakeRoute && intakeRoute.clarify && intakeRoute.clarify.length)
-          ? ` You've STARTED already; you may ALSO ask this one clarifying question to sharpen it (without implying you haven't begun): "${intakeRoute.clarify[0]}"` : '';
+        // Prefer the RESOLUTION-grounded clarify (e.g. "which Curtis?" / "I don't have a match for the
+        // webinar") over the intake gate's generic one — bias-toward-clarifying, grounded in real lookups.
+        const clarQ = (assignmentSeed && assignmentSeed.clarify && assignmentSeed.clarify[0])
+          || (intakeRoute && intakeRoute.clarify && intakeRoute.clarify[0]) || '';
+        const clarTail = clarQ
+          ? ` You've STARTED already; you may ALSO ask this one clarifying question to sharpen it (without implying you haven't begun): "${clarQ}"` : '';
         const honesty = `CRITICAL: do NOT invent findings, a "spreadsheet", a document, or any source you do not actually have yet — if you have nothing concrete to show in THIS reply, simply say you've begun and will keep at it.`;
         let created = null;   // { id, kind } — set ONLY when a run is genuinely created (the ack is conditional on this)
 
@@ -3445,10 +3466,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           if (r && r.focus) {
             try { if (intakeRoute && intakeRoute.deep) db.setMeta(`focus.${r.focus.id}.deep`, '1'); } catch {}
             try { if (intakeRoute && intakeRoute.priority) db.setMeta(`focus.${r.focus.id}.priority`, String(intakeRoute.priority)); } catch {}
+            // OBJECT SEED — persist the resolved entity objects as the run's prior knowledge (the executor
+            // reads these to build FROM what we hold, not re-derive it). Slice 2c consumes them fully.
+            try { if (assignmentSeed && assignmentSeed.objects && assignmentSeed.objects.length) db.setMeta(`focus.${r.focus.id}.seed_objects`, JSON.stringify(assignmentSeed.objects).slice(0, 20000)); } catch {}
             // PAGE-1 PLAN (Pillar 0) — author + store it now so it's reviewable up front + ready as page 1.
-            // A discover run has no targets yet → the plan states objective/approach/databases (targets TBD).
+            // Seed it with the RESOLVED entities as known targets (a named-entity run starts FROM the object,
+            // not "to be identified") — else empty targets → discovery states objective/approach/databases.
+            const seedTargets = (assignmentSeed && assignmentSeed.targets) || [];
             let plan = null;
-            try { plan = await generateResearchPlan(r.focus, { goal, targets: [], facet: (intakeRoute && intakeRoute.facet) || '', deep: !!(intakeRoute && intakeRoute.deep) }); } catch {}
+            try { plan = await generateResearchPlan(r.focus, { goal, targets: seedTargets, facet: (intakeRoute && intakeRoute.facet) || '', deep: !!(intakeRoute && intakeRoute.deep) }); } catch {}
             kickDirectedFocusDriver();
             created = { id: r.focus.id, kind: `${intakeRoute && intakeRoute.deep ? 'deep ' : ''}research run`, orgCount: 0, plan };
           }

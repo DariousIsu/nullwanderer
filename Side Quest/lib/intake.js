@@ -173,4 +173,15 @@ async function resolvePlan(plan, { resolveFn = null } = {}) {
   return { ...plan, resolved, clarifications, needsClarification: clarifications.length > 0 };
 }
 
-module.exports = { classify, route, subsetTopN, decompose, routeDecomposition, salientTargets, resolvePlan, INTENTS, ENTITY_TYPES };
+// From a resolved plan → the RUN SEED (Slice 2 activation): the resolved entities' canonical names become
+// known targets (so a "profile Sen. Curtis" run starts FROM his object, not a blind discovery walk), their
+// objects ride along as prior knowledge, and any clarify questions surface (bias-to-clarify). Pure/offline.
+function buildAssignmentSeed(resolvedPlan) {
+  const resolved = (resolvedPlan && Array.isArray(resolvedPlan.resolved)) ? resolvedPlan.resolved : [];
+  const objects = resolved.filter(r => r.resolution && r.resolution.status === 'resolved' && r.resolution.object).map(r => r.resolution.object);
+  const targets = [...new Set(objects.map(o => String(o.name || '').trim()).filter(Boolean))].slice(0, 12);
+  const clarify = (resolvedPlan && Array.isArray(resolvedPlan.clarifications)) ? resolvedPlan.clarifications.slice(0, 2) : [];
+  return { targets, objects, clarify };
+}
+
+module.exports = { classify, route, subsetTopN, decompose, routeDecomposition, salientTargets, resolvePlan, buildAssignmentSeed, INTENTS, ENTITY_TYPES };

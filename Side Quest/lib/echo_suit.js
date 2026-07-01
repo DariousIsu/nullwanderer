@@ -479,15 +479,18 @@ async function resolveMention(name, { preferType = null, dispatch = null } = {})
   const n = String(name || '').trim();
   if (!d) return { status: 'error', mention: n };
   if (!n) return { status: 'nil', mention: n, reason: 'empty' };
-  const cands = await _searchEntities(d, n, preferType);
+  // Strip honorifics before hitting Echo — "Sen. Curtis" as a raw FTS query matches nothing (no entity
+  // name carries "sen"); the search must run on the actual name tokens.
+  const q = _cleanMention(n);
+  const cands = await _searchEntities(d, q, preferType);
   if (!cands.length) return { status: 'nil', mention: n, reason: 'no-match' };
   // NAME-GATE: search_entities also matches on SUMMARIES, so it drags in tangential people (a staffer
   // whose bio names the target). Keep only candidates whose NAME actually carries the query's core tokens.
-  const gated = _nameGate(cands, _coreNameKey(n));
+  const gated = _nameGate(cands, _coreNameKey(q));
   const distinct = _distinctNames(gated);
   // >1 genuinely-different name (not dup records / initial variants) → ambiguous → ASK (bias-to-clarify).
   if (distinct.length > 1) return { status: 'ambiguous', mention: n, candidates: distinct.slice(0, 4).map(c => c.name) };
-  const obj = await recallObject(n, { preferType, dispatch: d });
+  const obj = await recallObject(q, { preferType, dispatch: d });
   if (!obj) return { status: 'nil', mention: n, reason: 'no-object' };
   // Resolve ONLY when a record genuinely DOMINATES (rich object). Several thin same-name records with no
   // clear winner = we can't safely pick → ask rather than popularity-guess (the overshadowing trap).
@@ -522,6 +525,12 @@ function _distinctNames(cands) {
   for (const c of cands) { const k = _coreNameKey(c.name) || String(c.name || '').toLowerCase(); if (!seen.has(k)) seen.set(k, c); }
   return [...seen.values()];
 }
+// Strip honorifics/titles from a mention so the search runs on real name tokens ("Sen. John Curtis" →
+// "John Curtis"). Falls back to the original if stripping empties it.
+function _cleanMention(name) {
+  const toks = String(name || '').replace(/[.,]/g, ' ').split(/\s+/).filter(Boolean).filter(t => !_NAME_TITLES.has(t.toLowerCase()));
+  return toks.join(' ').trim() || String(name || '').trim();
+}
 // Keep only candidates whose NAME carries every core token of the query (drops summary-only FTS matches).
 // Falls back to the raw list if the gate removes everything (never leave the caller empty-handed).
 function _nameGate(cands, queryKey) {
@@ -549,5 +558,5 @@ function _setLiveForTest(suit) { _live = suit; }
 
 module.exports = {
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, _coreNameKey, _distinctNames, _nameGate, _setLiveForTest
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _setLiveForTest
 };
