@@ -55,7 +55,7 @@ const DEFAULT_VIDEOS = [
   { url: 'https://www.youtube.com/watch?v=gCNeDWCI0vo', title: '' },
   { url: 'https://www.youtube.com/watch?v=iipR5yUp36o', title: 'ABC News' },
   { url: 'https://www.youtube.com/watch?v=GotlA1KKWoo', title: 'CNN' },
-  { url: 'https://www.youtube.com/watch?v=f39oHo6vFLg', title: 'Bloomberg' },
+  { url: 'https://www.youtube.com/watch?v=KQp-e_XQnDE', title: 'Yahoo Finance' },
 ];
 function vread() { try { const a = JSON.parse(fs.readFileSync(VFILE, 'utf8')); return Array.isArray(a) ? a : null; } catch { return null; } }
 function vwrite(l) { try { fs.mkdirSync(path.dirname(VFILE), { recursive: true }); fs.writeFileSync(VFILE, JSON.stringify(l, null, 2)); } catch (e) { /* non-fatal */ } }
