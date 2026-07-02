@@ -100,6 +100,18 @@ function dispatch({ sibling = true } = {}) {
   ok(echo._sameEntity([{ name: 'John Adam Smith' }, { name: 'John Robert Smith' }]) === false, '_sameEntity: incompatible extras → different people');
   ok(echo._sameEntity([{ name: 'Lee Zeldin' }]) === true, '_sameEntity: single candidate → same');
 
+  // ── wikiLookup — search → web_extract top page (full body) + lead extracts (the recovery-tier wiring) ──
+  const wikiDispatch = async (tag) => {
+    if (tag.name === 'mediawiki_search') return { ok: true, text: JSON.stringify({ results: [{ title: 'Administrator of the EPA' }, { title: 'Lisa P. Jackson' }] }) };
+    if (tag.name === 'web_extract') return { ok: true, text: JSON.stringify({ url: 'x', text: 'The administrator is the head of the EPA. Lee Zeldin is the current administrator of the EPA.' }) };
+    if (tag.name === 'mediawiki_get_extract') return { ok: true, text: JSON.stringify({ title: tag.args.title, extract: 'Lead extract for ' + tag.args.title + ', long enough to pass the forty-character floor easily.' }) };
+    return { ok: false };
+  };
+  const wl = await echo.wikiLookup('current EPA administrator', { dispatch: wikiDispatch });
+  ok(wl.length >= 2 && /Zeldin/.test(wl[0].extract) && !/^\s*\{/.test(wl[0].extract), 'wikiLookup: top page body via web_extract carries the incumbent (unwrapped, not raw JSON)');
+  ok(wl.some(p => /Lead extract/.test(p.extract)), 'wikiLookup: remaining pages get lead extracts');
+  ok((await echo.wikiLookup('x', { dispatch: async () => ({ ok: true, text: '{"results":[]}' }) })).length === 0, 'wikiLookup: no search hits → []');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

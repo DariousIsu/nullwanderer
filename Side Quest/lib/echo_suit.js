@@ -667,7 +667,55 @@ async function routeNeed(query, opts = {}) {
   try { return await _live.routeNeed(query, opts); } catch { return null; }
 }
 
+// WIKIPEDIA recovery — the reliable, keyless encyclopedic tier for the enrich loop. The audit that
+// exposed "dying on simple questions": DDG web search returns 0 results (endpoint blocked) and Echo's
+// web_search has no provider keys, so the loop's "let me find out" reached nothing — while mediawiki (one
+// of the 521 working tools) returns the exact answer page. This wires that in: search → pull the lead
+// extracts of the top pages. Covers the whole who/what/current-X space ("Lee Zeldin → 17th EPA
+// Administrator since Jan 2025"). Returns [{title, extract}] (or []). Fail-soft; never throws.
+const _wikiUrl = (title) => 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String(title || '').trim().replace(/ /g, '_'));
+async function wikiLookup(query, { dispatch = null, pages = 3, sentences = 4 } = {}) {
+  const d = dispatch || (liveReady() ? (tag) => _live.dispatch(tag) : null);
+  const q = String(query || '').trim();
+  if (!d || !q) return [];
+  let titles = [];
+  try {
+    const r = await d({ kind: 'do', name: 'mediawiki_search', args: { query: q, limit: 6 } });
+    if (r && r.ok) { const j = JSON.parse(r.text); const rows = (j && j.results) || []; titles = rows.map(x => x && x.title).filter(Boolean); }
+  } catch {}
+  if (!titles.length) return [];
+  const out = [];
+  // TOP page — the FULL readable body via web_extract, not just the lead. The lead extract of an OFFICE
+  // page is generic ("the administrator of the EPA is the head of…"); the INCUMBENT ("Lee Zeldin is the
+  // current administrator") lives in the body/infobox. web_extract catches it (mediawiki_get_extract
+  // can't). This is what makes "who is the current X?" answerable, not just "who is <person>?".
+  try {
+    const r = await d({ kind: 'do', name: 'web_extract', args: { url: _wikiUrl(titles[0]) } });
+    if (r && r.ok) {
+      let body = '';
+      try {
+        const j = JSON.parse(r.text);
+        if (j && typeof j === 'object') {
+          body = String(j.text || j.content || j.markdown || j.extract || j.body || '').trim();
+          if (!body) { let longest = ''; for (const v of Object.values(j)) if (typeof v === 'string' && v.length > longest.length) longest = v; body = longest.trim(); }  // unknown shape → longest string field
+        }
+      } catch {}
+      if (!body) body = String(r.text || '').trim();   // web_extract may return plain text (not JSON)
+      body = body.replace(/\s+/g, ' ').trim();
+      if (body.length > 80) out.push({ title: titles[0], extract: body.slice(0, 1800) });
+    }
+  } catch {}
+  // REMAINING pages — cheap lead extracts for breadth (covers plain "who/what is X").
+  for (const title of titles.slice(out.length ? 1 : 0, pages + 1)) {
+    try {
+      const r = await d({ kind: 'do', name: 'mediawiki_get_extract', args: { title, sentences } });
+      if (r && r.ok) { const j = JSON.parse(r.text); const ex = j && String(j.extract || '').replace(/\s+/g, ' ').trim(); if (ex && ex.length > 40) out.push({ title: (j && j.title) || title, extract: ex.slice(0, 500) }); }
+    } catch {}
+  }
+  return out;
+}
+
 module.exports = {
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, expandNeighbors, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _setLiveForTest
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _setLiveForTest
 };

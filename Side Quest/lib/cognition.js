@@ -23,6 +23,10 @@ const echo = require('./echo_suit');
 const ad = require('./answer_draft');
 
 const NEED_RE = /^\s*NEED:\s*(.+)$/is;
+// A question whose answer TURNS OVER — the records we hold may be stale (we store Lee Zeldin as
+// "Representative"; he's been EPA Administrator since Jan 2025). These force a fresh-source verify before
+// we trust a plausible grounded answer. Read-time slice of the self-heal (verify-when-currency-signaled).
+const _CURRENCY_RE = /\b(current(ly)?|now(adays)?|today|latest|recently|these days|right now|as of|this (?:week|month|year)|who is the)\b/i;
 
 // One cloud pass: draft the grounded answer, or emit NEED:<thing>. Timeless general knowledge may be
 // answered from the model's own knowledge (we don't search "what is photosynthesis"); NEED is for
@@ -99,6 +103,19 @@ async function _enrichGraph(need, object, deps = {}) {
   return parts.join('\n').trim();
 }
 
+// ENRICH tier — WIKIPEDIA (echo_suit.wikiLookup → mediawiki_search + get_extract). The reliable, keyless
+// encyclopedic recovery: this is what actually answers the who/what/current-X class the loop was DYING on
+// ("current EPA administrator" → "Lee Zeldin, 17th administrator since Jan 2025"). It exists because the
+// audit found DDG dead (0 results) and Echo web_search keyless — the loop's prior tiers reached nothing
+// while a working tool held the answer. Returns text (or ''). Fail-safe.
+async function _enrichWiki(need, deps = {}) {
+  const wiki = deps.wikiLookup || ((q) => { try { return require('./echo_suit').wikiLookup(q); } catch { return Promise.resolve([]); } });
+  let pages = [];
+  try { pages = (await wiki(need)) || []; } catch {}
+  if (!pages.length) return '';
+  return 'From Wikipedia:\n' + pages.map(p => `• ${p.title}: ${p.extract}`).join('\n');
+}
+
 // ENRICH tier 2 — the live web, via the app's OWN DuckDuckGo search (lib/web_search; Echo's web_search
 // has no provider keys). The "let me find out" for anything not in our records. Returns text (or '').
 async function _enrichWeb(need, deps = {}) {
@@ -146,14 +163,32 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   let g = String(grounding || '').trim();
   let step = await _draftOrNeed(userMessage, g, deps);
   if (!step) return null;                                    // cloud down → local flow
+  // CURRENCY VERIFY — the grounding produced a plausible answer, but the question asks for a CURRENT fact
+  // and our records may be stale. Check a fresh source (Wikipedia) and re-draft before trusting it. Only
+  // fires on currency-marked questions, so normal turns pay nothing. ("what does Lee Zeldin do now?" →
+  // records say "Representative" → verify → "EPA Administrator since 2025".)
+  if (step.answer && _CURRENCY_RE.test(String(userMessage))) {
+    const topic = String((object && object.name) || userMessage).replace(/\[[^\]]*\]/g, '').replace(/\([^)]*\)/g, '').trim();
+    let fresh = '';
+    try { fresh = await _enrichWiki(topic, deps); } catch {}
+    if (fresh) {
+      const gv = [g, `Fresh check for the current fact (${topic}):\n${fresh}`].filter(Boolean).join('\n\n');
+      const v = await _draftOrNeed(userMessage, gv, deps);
+      if (v && v.answer) return { say: v.answer, enriched: true, enrichSource: 'wiki-verify' };
+    }
+    return { say: step.answer, enriched: false, enrichSource: null };
+  }
   if (step.answer) return { say: step.answer, enriched: false, enrichSource: null };
   if (!step.need) return null;
   const need0 = step.need;
-  // ENRICH escalation: OUR graph first, then the live web. Re-draft after each; stop as soon as the
-  // grounding can actually answer. This is "let me find out" — never a dead-end, never invented.
-  for (const mode of ['graph', 'routed', 'web']) {
+  // ENRICH escalation: OUR graph → Wikipedia (reliable, keyless — the who/what/current-X recovery) →
+  // the cloud tool-executor (specialized Echo tools: counts/lists) → last-ditch DDG. Re-draft after each;
+  // stop as soon as the grounding can actually answer. This is "let me find out" — never a dead-end, never
+  // invented. Wiki sits before routed/web because the audit proved those two reach nothing on simple facts.
+  for (const mode of ['graph', 'wiki', 'routed', 'web']) {
     if (!step || !step.need) break;
     const found = mode === 'graph' ? await _enrichGraph(step.need, object, deps)
+                : mode === 'wiki' ? await _enrichWiki(step.need, deps)
                 : mode === 'routed' ? await _enrichRouted(step.need, deps)
                 : await _enrichWeb(step.need, deps);
     if (!found) continue;
@@ -165,4 +200,4 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   return { say: `I checked our records and searched, but I couldn't pin down ${need0}.`, enriched: true, missed: true, need: need0 };
 }
 
-module.exports = { answerGrounded, _draftOrNeed, _enrichGraph, _enrichRouted, _enrichWeb, _entLine, NEED_RE };
+module.exports = { answerGrounded, _draftOrNeed, _enrichGraph, _enrichWiki, _enrichRouted, _enrichWeb, _entLine, NEED_RE };
