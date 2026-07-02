@@ -246,7 +246,10 @@ function cleanLiveSay(s) {
     .replace(/<wonder>[\s\S]*?<\/wonder>/gi, '')
     .replace(/<\|[a-z_]+\|>/gi, '')   // tokenizer special tokens like <|system|>, <|user|>
     .replace(/<\|[a-z_]+/gi, '')       // unfinished tokenizer tokens still streaming
-    .replace(/\*[^*\n]{1,200}\*/g, '') // asterisked stage directions
+    // Asterisk spans: a *stage direction* (starts with a lowercase action verb, e.g. *grins*) is
+    // dropped; a *Title/Emphasis* (starts capitalized, e.g. *Almost Famous*) is KEPT as plain text.
+    // The blanket strip used to delete markdown-italic movie/book titles → "My favorite movie is because…".
+    .replace(/\*([^*\n]{1,200})\*/g, (_m, inner) => { const t = inner.trim(); return /^[a-z]/.test(t) ? '' : t; })
     .replace(/[ \t]+/g, ' ');
 }
 
