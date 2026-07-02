@@ -125,7 +125,13 @@ async function _enrichExcavate(need, deps = {}) {
   const fn = deps.excavate || ((n) => { try { return require('./excavate').excavate(n, { deps }); } catch { return Promise.resolve(null); } });
   let r = null;
   try { r = await fn(need); } catch {}
-  if (r && r.found && r.answer) return `Read directly off the rendered page (${r.url || 'web'}): ${r.answer}`;
+  if (r && r.found && r.answer) {
+    // SELF-HEAL — bank what the expensive dig recovered so she's never on the same page twice. Non-blocking
+    // (kick, don't await): answer now, write back in the background → next time it's local + free.
+    const wb = deps.writeBack || ((a) => { try { return require('./learning').captureRecovered(a); } catch { return Promise.resolve(); } });
+    Promise.resolve().then(() => wb({ query: need, answer: r.answer, url: r.url, source: 'excavation' })).catch(() => {});
+    return `Read directly off the rendered page (${r.url || 'web'}): ${r.answer}`;
+  }
   return '';
 }
 

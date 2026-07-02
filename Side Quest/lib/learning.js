@@ -195,6 +195,30 @@ async function maybeCaptureLearnings({ query, content, urls, deps = {} } = {}) {
 }
 
 /**
+ * SELF-HEAL write-back. An answer Zoe had to recover EXTERNALLY (forensic excavation / web) is banked as a
+ * verified_fact so active_recall surfaces it next time — "once we own the data it lives in our DB for free,
+ * never on the same page twice" (Lucas). Direct store (no claim-extraction cloud call — the answer is
+ * already a clean claim); dated (as_of=today) so reconcileVerifiedFacts supersedes a stale same-subject
+ * fact, and the nightly promotion carries it to Echo. Idempotent-ish (subject_key). Fail-soft; safe to
+ * fire-and-forget. deps/storeFn injectable for offline smokes.
+ */
+async function captureRecovered({ query, answer, url, source = 'excavation', now = null, storeFn = null } = {}) {
+  try {
+    const q = String(query || '').trim(), a = String(answer || '').replace(/\s+/g, ' ').trim();
+    if (!q || a.length < 3 || !url) return { skipped: 'incomplete' };
+    const store = storeFn || ((rec) => memory.store(rec));
+    const ts = now || Date.now();
+    const key = slugify(q).slice(0, 80);
+    const rec = {
+      kind: 'note', content: a, source: 'verified_fact', importance: VERIFIED_IMPORTANCE, level: 'fact',
+      provenance: { url, as_of: new Date(ts).toISOString().slice(0, 10), dated: true, subject: q.slice(0, 120), subject_key: key, query: q.slice(0, 200), capturedBy: source }
+    };
+    await store(rec);
+    return { captured: 1, subject_key: key };
+  } catch (e) { return { error: e.message }; }
+}
+
+/**
  * THE ITERATE BLOCK. Surface what she already knows on a topic before a research tick AND push
  * her to the frontier so she extends instead of circling. Reuses retrieveScored (floor-gated →
  * genuinely on-topic); verified facts surface first via the boost. Returns a string or null.
@@ -233,7 +257,7 @@ async function seedIdentityFacts({ apply = true, facts = IDENTITY_FACTS, storeFn
 }
 
 module.exports = {
-  maybeCaptureLearnings, buildPriorKnowledgeBlock, seedIdentityFacts, IDENTITY_FACTS,
+  maybeCaptureLearnings, captureRecovered, buildPriorKnowledgeBlock, seedIdentityFacts, IDENTITY_FACTS,
   // exported for unit tests
   parseClaims, slugify, normalizeAsOf, extractClaims, buildPrompt,
   CAPTURE_MIN_GAP_MS, VERIFIED_IMPORTANCE, LEARNING_IMPORTANCE

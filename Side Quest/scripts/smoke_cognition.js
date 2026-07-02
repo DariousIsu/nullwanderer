@@ -78,6 +78,13 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   ok(x && x.enrichSource === 'excavate' && /Hegseth/.test(x.say), 'all text tiers miss → forensic excavation recovers the answer');
   ok((await cog._enrichExcavate('x', { excavate: async () => ({ found: false }) })) === '', '_enrichExcavate not-found → empty string');
 
+  // 11) SELF-HEAL — a found excavation kicks the write-back (non-blocking) with the recovered Q/answer/url.
+  let wbCall = null;
+  const found = await cog._enrichExcavate('who is the SecDef', { excavate: async () => ({ found: true, answer: 'Pete Hegseth is SecDef.', url: 'https://en.wikipedia.org/wiki/United_States_Secretary_of_Defense' }), writeBack: async (a) => { wbCall = a; } });
+  ok(/Hegseth/.test(found), '_enrichExcavate returns the answer immediately (does not block on write-back)');
+  await new Promise(r => setTimeout(r, 5));   // let the fire-and-forget write-back run
+  ok(wbCall && wbCall.query === 'who is the SecDef' && /Hegseth/.test(wbCall.answer) && /Secretary_of_Defense/.test(wbCall.url), 'self-heal: found excavation kicks the write-back with query + answer + source URL');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
