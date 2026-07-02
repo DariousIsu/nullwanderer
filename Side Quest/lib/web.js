@@ -351,6 +351,26 @@ async function click(handle) {
   } catch (err) { return { ok: false, reason: `click ${handle} failed: ${err.message}` }; }
 }
 
+// Click a link/button by its VISIBLE TEXT (accessible name), not a handle — for the forensic excavator,
+// where vision reads the screenshot and names the link to follow ("Mercury (element)"). Bypasses read()'s
+// capped, chrome-heavy handle list. Prefers an exact-ish link/button match, falls back to any anchor
+// containing the text. Returns { ok, url, clicked }. Fail-soft.
+async function clickText(text) {
+  if (!page) return { ok: false, reason: 'no page open' };
+  const t = String(text || '').trim();
+  if (t.length < 2) return { ok: false, reason: 'no text' };
+  try {
+    let loc = page.getByRole('link', { name: t }).first();
+    if (!(await withTimeout(loc.count(), 1500, 0))) loc = page.getByRole('button', { name: t }).first();
+    if (!(await withTimeout(loc.count(), 1500, 0))) loc = page.locator(`a:has-text(${JSON.stringify(t)}), [role=link]:has-text(${JSON.stringify(t)})`).first();
+    if (!(await withTimeout(loc.count(), 1500, 0))) return { ok: false, reason: `no clickable element matching "${t}"` };
+    await loc.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+    await loc.click({ timeout: 5000 });
+    registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
+    return { ok: true, url: page.url(), clicked: t };
+  } catch (err) { return { ok: false, reason: `clickText "${t}" failed: ${err.message}` }; }
+}
+
 async function type(handle, text) {
   if (!page) return { ok: false, reason: 'no page open' };
   if (!text) return { ok: false, reason: 'no text' };
@@ -582,7 +602,7 @@ async function cookies(urls) {
 }
 
 module.exports = {
-  isConnected, ensure, open, read, screenshot, click, type, back, close, openTopResult, scroll, runRecipe,
+  isConnected, ensure, open, read, screenshot, click, clickText, type, back, close, openTopResult, scroll, runRecipe,
   startRecording, stopRecording, isRecording, cookies,
   chatSend, chatWatch, chatUnwatch,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR,

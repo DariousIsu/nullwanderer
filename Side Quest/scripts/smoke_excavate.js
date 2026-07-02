@@ -34,7 +34,7 @@ function fakeWeb({ shots }) {
   // 2) bottom detection — screenshots stop changing → stop (never loops forever).
   const web2 = fakeWeb({ shots: ['SAME', 'SAME', 'SAME'] });
   const visionNo = { describe: async () => ({ ok: true, text: 'NOT_VISIBLE' }) };
-  const r2 = await excavate.excavate('x', { url: 'https://x', deps: { web: web2, vision: visionNo } });
+  const r2 = await excavate.excavate('x', { url: 'https://x', maxClicks: 0, deps: { web: web2, vision: visionNo } });
   ok(!r2.found && web2._scrolls() <= 1, 'identical consecutive screenshots → detects bottom, stops');
 
   // 3) genuinely not on the page — exhausts the step cap, returns not-found (never invents).
@@ -52,6 +52,41 @@ function fakeWeb({ shots }) {
   const vision5 = { describe: async () => ({ ok: true, text: 'NOT_VISIBLE (I could not find it)' }) };
   const r5 = await excavate.excavate('x', { url: 'https://x', maxSteps: 2, deps: { web: web5, vision: vision5 } });
   ok(!r5.found, 'NOT_VISIBLE is honored even when the text mentions "find"');
+
+  // ── Slice 2: vision-guided CLICK to dig (vision NAMES the visible link → web.clickText) ───────────
+  // a stateful page: page-1 never shows it → vision names a link → clickText → page-2 shows it.
+  function clickableWeb() {
+    let clicked = false, i = 0, clicks = 0, lastText = null;
+    return {
+      _clicks: () => clicks, _lastText: () => lastText,
+      open: async () => ({ ok: true, url: 'https://en.wikipedia.org/wiki/Office' }),
+      openTopResult: async () => ({ ok: true }), isConnected: () => true,
+      screenshot: async () => ({ ok: true, base64: (clicked ? 'PAGE2_' : 'PAGE1_') + (i++), url: clicked ? 'https://en.wikipedia.org/wiki/Person' : 'https://en.wikipedia.org/wiki/Office' }),
+      scroll: async () => ({ ok: true }),
+      clickText: async (t) => { clicked = true; clicks++; i = 0; lastText = t; return { ok: true, url: 'https://en.wikipedia.org/wiki/Person', clicked: t }; },
+    };
+  }
+  const visionClick = { describe: async ({ imageBase64, prompt }) => {
+    if (/CLICK:/.test(prompt)) return { ok: true, text: 'CLICK: Lee Zeldin' };                 // vision NAMES the link text
+    if (String(imageBase64).startsWith('PAGE2')) return { ok: true, text: 'FOUND: Lee Zeldin is the 17th EPA Administrator.' };
+    return { ok: true, text: 'NOT_VISIBLE' };                                                  // page-1 scan
+  } };
+  const web6 = clickableWeb();
+  const r6 = await excavate.excavate('what does Lee Zeldin do', { url: 'https://en.wikipedia.org/wiki/Office', maxSteps: 2, maxClicks: 1, deps: { web: web6, vision: visionClick, settle: false } });
+  ok(r6.found && /Zeldin/.test(r6.answer), 'scan misses → vision names the link → clickText → finds it on the next page');
+  ok(web6._clicks() === 1 && web6._lastText() === 'Lee Zeldin' && r6.clicks === 1, 'clicked exactly once by TEXT (tactile dig), reported depth');
+
+  // NONE → she does not click blindly; bounded not-found (never wanders forever).
+  const web7 = clickableWeb();
+  const visionNone = { describe: async ({ prompt }) => /CLICK:/.test(prompt) ? { ok: true, text: 'NONE' } : { ok: true, text: 'NOT_VISIBLE' } };
+  const r7 = await excavate.excavate('x', { url: 'https://x', maxSteps: 2, maxClicks: 2, deps: { web: web7, vision: visionNone, settle: false } });
+  ok(!r7.found && web7._clicks() === 0, 'no useful link (NONE) → does not click, bounded not-found');
+
+  // a weak model names browser CHROME ("Main menu") → guard refuses to follow it.
+  const web8 = clickableWeb();
+  const visionChrome = { describe: async ({ prompt }) => /CLICK:/.test(prompt) ? { ok: true, text: 'CLICK: Main menu' } : { ok: true, text: 'NOT_VISIBLE' } };
+  const r8 = await excavate.excavate('x', { url: 'https://x', maxSteps: 2, maxClicks: 2, deps: { web: web8, vision: visionChrome, settle: false } });
+  ok(!r8.found && web8._clicks() === 0, 'vision names chrome ("Main menu") → guard skips it, no wander');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

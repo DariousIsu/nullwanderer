@@ -2,21 +2,23 @@
  * lib/excavate.js — the FINAL, forensic tier of the enrich/recovery ladder (turn→object-graph).
  *
  * When every cheaper tier fails (graph → wiki → routed → web_extract), the answer is often STILL on the
- * page — in an infobox, a table, a JS-rendered widget — that the text extractors strip or truncate (the
- * office-holder incumbent lives in the Wikipedia infobox; web_extract caps before it). So Zoe does what a
- * person does: she drives HER OWN visible browser (lib/web.js) to the best source and READS THE RENDERED
- * PAGE WITH HER EYES — screenshot → vision → scroll → repeat, until she sees the answer or hits the bottom.
+ * page — in an infobox, a table, a JS-rendered widget, or one CLICK away — that the text extractors strip
+ * or truncate (the office-holder incumbent lives in the Wikipedia infobox; web_extract caps before it). So
+ * Zoe does what a person does: she drives HER OWN visible browser (lib/web.js) and READS THE RENDERED PAGE
+ * WITH HER EYES — screenshot → vision → scroll — and, when the answer isn't on the page, she CLICKS toward
+ * it (vision picks the link) and digs deeper.
  *
- * Design (Lucas's spec): use HER browser (headful, on purpose) so he can watch her, catch stuck loops, and
- * confirm she's actually scrolling. Fire LAST and bounded (a real browser + a vision call per step is
- * heavy). Whatever she excavates is meant to write BACK to the DB (self-heal, Slice 3) so she's never on
- * the same page twice. Slice 1 = scroll+screenshot+vision READ; Slice 2 = click/tactile interaction.
+ * Design (Lucas's spec): HER browser (headful, on purpose) so he can watch her, catch stuck loops, and
+ * confirm she's actually scrolling AND clicking. Fire LAST and bounded (a real browser + a vision call per
+ * step is heavy). Whatever she excavates writes BACK to the DB (self-heal, Slice 3) so she's never on the
+ * same page twice. Slice 1 = scroll+screenshot+vision READ; Slice 2 = vision-guided CLICK to dig.
  *
  * Fully dep-injectable (web / vision / dispatch / complete) so the offline gate needs no browser or cloud.
  */
 'use strict';
 
 const FOUND_RE = /FOUND:\s*(.+)/is;
+const CLICK_RE = /CLICK:\s*(.+)/i;   // captures the visible link TEXT vision named (clicked via web.clickText)
 
 function _visionPrompt(need) {
   return `You are visually reading a web page to answer ONE question:\n"${String(need).slice(0, 220)}"\n\n`
@@ -26,6 +28,18 @@ function _visionPrompt(need) {
     + `If the answer is present on THIS screen, reply EXACTLY one line:\nFOUND: <the answer, one short sentence>\n`
     + `If it is NOT visible on this screen, reply EXACTLY:\nNOT_VISIBLE\n`
     + `Only use what you can SEE — do not guess or fall back on prior knowledge.`;
+}
+
+// The click decision: vision LOOKS at the page and names the ONE visible link most likely to lead to the
+// answer (a "List of…" page, a details tab, the person's own article — e.g. a disambiguation entry
+// "Mercury (element)"). We click it by its text (web.clickText), so we never depend on read()'s capped,
+// chrome-heavy handle list — vision reads the rendered page directly, which is the whole point.
+function _clickPrompt(need) {
+  return `You are digging through a website to answer ONE question:\n"${String(need).slice(0, 220)}"\n\n`
+    + `The answer was NOT on the visible page. Look at the links, entries, and headings you can SEE.\n`
+    + `Which ONE link, if clicked, is most likely to lead to the answer? Reply EXACTLY one line:\n`
+    + `CLICK: <the exact visible link text, copied as it appears>\n`
+    + `If nothing visible would plausibly help, reply EXACTLY:\nNONE`;
 }
 
 // The richest forensic target for a need is usually the Wikipedia PAGE (its infobox is the gold the text
@@ -42,9 +56,69 @@ async function _wikiUrl(need, deps = {}) {
   return null;
 }
 
-// Excavate the answer to `need` by driving HER browser: open the best source, then screenshot→vision→scroll
-// until the answer appears or the page bottoms out. Returns { found, answer?, url, steps, reason? }.
-async function excavate(need, { url = null, maxSteps = 8, deps = {} } = {}) {
+// Chrome/boilerplate link texts vision must never follow (nav, account, tools, footer) — a guard on the
+// text it names, so a weak model can't send her to "Main menu" / "Log in".
+const _CHROME_LINK = /^(main menu|jump to.*|search|log ?in|sign ?in|create account|contents|current events|random article|about wikipedia|community portal|recent changes|upload file|help|learn to edit|donate|tools|what links here|related changes|special pages|permanent link|page information|cite this page|talk|read|edit|edit source|view history|view source|watch|namespaces|views|more|personal tools|languages|add links|toggle .*|hide|show|back to top|privacy policy|disclaimers|mobile view|home|menu|skip to content|accessibility help)$/i;
+
+// Scroll-scan ONE page: screenshot → vision → scroll, bounded, with bottom-detection + NOT_VISIBLE honored.
+// Returns { found, answer?, url, steps }.
+async function _scanPage(need, { web, vision, deps, log, maxSteps }) {
+  let prevShot = null, url = '';
+  for (let step = 0; step < maxSteps; step++) {
+    let shot;
+    try { shot = await web.screenshot({}); } catch (e) { shot = { ok: false, reason: e.message }; }
+    if (!shot || !shot.ok) { log(`screenshot failed: ${shot && shot.reason}`); break; }
+    url = shot.url || url;
+    if (prevShot && shot.base64 === prevShot) { log(`no movement → bottom at step ${step}`); break; }
+    prevShot = shot.base64;
+    let v;
+    try { v = await vision.describe({ imageBase64: shot.base64, prompt: _visionPrompt(need), completeFn: deps.complete }); }
+    catch (e) { v = { ok: false, reason: e.message }; }
+    const txt = (v && v.ok && v.text) ? v.text : '';
+    log(`  scan step ${step} @${url}: ${v && v.ok ? txt.replace(/\s+/g, ' ').slice(0, 90) : 'vision FAIL ' + (v && v.reason)}`);
+    if (txt && !/not[_\s-]?visible/i.test(txt)) {
+      const m = txt.match(FOUND_RE);
+      if (m) return { found: true, answer: m[1].trim().replace(/\s+/g, ' '), url, steps: step + 1 };
+    }
+    try { const s = await web.scroll('down'); if (!s || !s.ok) { log('scroll failed → stop'); break; } }
+    catch { break; }
+  }
+  return { found: false, url, steps: maxSteps };
+}
+
+// Vision-guided CLICK: screenshot → vision NAMES the visible link to follow → click it by text. No handle
+// list (read() caps out the content links behind nav chrome); vision reads the rendered page directly.
+// Returns the clicked link text (the trail), or null if nothing worth clicking / it failed. Fail-soft.
+async function _clickToward(need, { web, vision, deps, log, visited, maxSteps = 8 }) {
+  // the scan left the page scrolled DOWN; the primary links (disambiguation entries, nav to sub-articles)
+  // live at the TOP — return there (over-scroll; extra up-scrolls are harmless) so the click decision
+  // actually sees them.
+  try { for (let k = 0; k < maxSteps + 3; k++) await web.scroll('up'); } catch {}
+  let shot; try { shot = await web.screenshot({}); } catch { return null; }
+  if (!shot || !shot.ok) return null;
+  let v;
+  try { v = await vision.describe({ imageBase64: shot.base64, prompt: _clickPrompt(need), completeFn: deps.complete }); }
+  catch { v = null; }
+  const txt = ((v && v.ok && v.text) || '').trim();
+  log(`  click decision: "${(txt || (v && v.reason) || 'no response').replace(/\s+/g, ' ').slice(0, 70)}"`);
+  if (!txt || /^\s*NONE\b/i.test(txt)) return null;
+  const m = txt.match(CLICK_RE);
+  if (!m) return null;
+  const linkText = m[1].trim().replace(/^["'\[]+|["'\]]+$/g, '').trim();
+  if (linkText.length < 2 || /\bNONE\b/i.test(linkText) || _CHROME_LINK.test(linkText)) { log(`vision named a non-content link ("${linkText}") → skip`); return null; }
+  let cr; try { cr = await web.clickText(linkText); } catch { return null; }
+  if (!cr || !cr.ok) { log(`clickText "${linkText}" failed: ${cr && cr.reason}`); return null; }
+  // A navigating click returns page.url() BEFORE the nav settles — let the new page load before the next
+  // scan screenshots it (else we'd shoot the old page). Depth (maxClicks) is the loop bound.
+  try { if (deps.settle !== false) await new Promise(res => setTimeout(res, 1800)); } catch {}
+  try { if (cr.url) visited.add(cr.url); } catch {}
+  return linkText;
+}
+
+// Excavate the answer to `need` by driving HER browser: open the best source, scroll-scan it, and if the
+// answer isn't there, CLICK toward it (vision picks the link) and scan the next page — bounded by scroll
+// steps AND click depth. Returns { found, answer?, url, steps, clicks, reason? }.
+async function excavate(need, { url = null, maxSteps = 8, maxClicks = 2, deps = {} } = {}) {
   const web = deps.web || require('./web');
   const vision = deps.vision || require('./vision');
   const log = deps.log || ((m) => console.log('[excavate] ' + m));
@@ -56,33 +130,26 @@ async function excavate(need, { url = null, maxSteps = 8, deps = {} } = {}) {
   let nav;
   try {
     if (target) nav = await web.open(target);
-    else { nav = await web.open(n); if (nav && nav.ok) { try { await web.openTopResult(); nav = { ...nav, ...(web.isConnected() ? {} : {}) }; } catch {} } }
+    else { nav = await web.open(n); if (nav && nav.ok) { try { await web.openTopResult(); } catch {} } }
   } catch (e) { return { found: false, reason: 'open failed: ' + e.message }; }
   if (!nav || !nav.ok) return { found: false, reason: 'could not open (' + ((nav && nav.reason) || '?') + ')' };
   if (nav.blocker) return { found: false, reason: 'blocker:' + nav.blocker.type, blocker: nav.blocker };
   log(`opened ${nav.url}`);
 
-  // 2) screenshot → vision → scroll, bounded; stop at the answer, at the bottom, or at the step cap
-  let prevShot = null;
-  for (let step = 0; step < maxSteps; step++) {
-    let shot;
-    try { shot = await web.screenshot({}); } catch (e) { shot = { ok: false, reason: e.message }; }
-    if (!shot || !shot.ok) { log(`screenshot failed: ${shot && shot.reason}`); break; }
-    if (prevShot && shot.base64 === prevShot) { log(`no movement → bottom at step ${step}`); break; }
-    prevShot = shot.base64;
-    let v;
-    try { v = await vision.describe({ imageBase64: shot.base64, prompt: _visionPrompt(n), completeFn: deps.complete }); }
-    catch (e) { v = { ok: false, reason: e.message }; }
-    const txt = (v && v.ok && v.text) ? v.text : '';
-    log(`step ${step} @${shot.url || ''}: ${v && v.ok ? txt.replace(/\s+/g, ' ').slice(0, 90) : 'vision FAIL ' + (v && v.reason)}`);
-    if (txt && !/not[_\s-]?visible/i.test(txt)) {
-      const m = txt.match(FOUND_RE);
-      if (m) return { found: true, answer: m[1].trim().replace(/\s+/g, ' '), url: shot.url, steps: step + 1 };
-    }
-    try { const s = await web.scroll('down'); if (!s || !s.ok) { log('scroll failed → stop'); break; } }
-    catch { break; }
+  // 2) scan → (click deeper → scan)… bounded by click depth
+  const visited = new Set([nav.url]);
+  const ctx = { web, vision, deps, log, maxSteps, visited };
+  let lastScan = null;
+  for (let depth = 0; depth <= maxClicks; depth++) {
+    const scan = await _scanPage(n, ctx);
+    lastScan = scan;
+    if (scan.found) return { found: true, answer: scan.answer, url: scan.url, steps: scan.steps, clicks: depth };
+    if (depth >= maxClicks) break;
+    const clicked = await _clickToward(n, ctx);
+    if (!clicked) { log('no useful link to click → stop'); break; }
+    log(`clicked "${clicked}" → digging deeper (${depth + 1}/${maxClicks})`);
   }
-  return { found: false, steps: maxSteps, url: nav.url };
+  return { found: false, url: nav.url, steps: lastScan ? lastScan.steps : 0 };
 }
 
-module.exports = { excavate, _visionPrompt, _wikiUrl, FOUND_RE };
+module.exports = { excavate, _scanPage, _clickToward, _visionPrompt, _clickPrompt, _wikiUrl, FOUND_RE, CLICK_RE };
