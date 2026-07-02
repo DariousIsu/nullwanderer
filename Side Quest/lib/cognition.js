@@ -193,6 +193,22 @@ function _kickWriteBack({ query, answer, url, source, deps = {} }) {
   Promise.resolve().then(() => wb({ query, answer, url, source: source || 'browsing' })).catch(() => {});
 }
 
+// STALENESS — active_recall tags banked facts "[VERIFIED as of YYYY-MM-DD]". A banked answer would be
+// served from our DB forever (confidently stale after a role turns over). Parse those dates and, if a
+// VOLATILE fact (current office/role) is past its freshness window, re-verify before trusting it. Uses the
+// pure lib/staleness classifier. `now` injected for stable tests.
+const _VERIFIED_TAG_RE = /\[VERIFIED as of (\d{4}-\d{2}-\d{2})[^\]]*\]\s*([^\n]+)/gi;
+function _hasStaleGrounding(grounding, now) {
+  let st; try { st = require('./staleness'); } catch { return false; }
+  const s = String(grounding || '');
+  _VERIFIED_TAG_RE.lastIndex = 0;
+  let m;
+  while ((m = _VERIFIED_TAG_RE.exec(s)) !== null) {
+    if (st.isStale({ content: m[2], provenance: { as_of: m[1] } }, now)) return true;
+  }
+  return false;
+}
+
 // The turn's grounded answer with the enrich/recovery reflex. Returns:
 //   { say, enriched, enrichSource, missed?, need? }  — the substance for the voice block, or
 //   null  → cloud unavailable → caller uses the normal local flow.
@@ -205,14 +221,22 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   // and our records may be stale. Check a fresh source (Wikipedia) and re-draft before trusting it. Only
   // fires on currency-marked questions, so normal turns pay nothing. ("what does Lee Zeldin do now?" →
   // records say "Representative" → verify → "EPA Administrator since 2025".)
-  if (step.answer && _CURRENCY_RE.test(String(userMessage))) {
+  if (step.answer && (_CURRENCY_RE.test(String(userMessage)) || _hasStaleGrounding(g, deps.now || Date.now()))) {
     const topic = String((object && object.name) || userMessage).replace(/\[[^\]]*\]/g, '').replace(/\([^)]*\)/g, '').trim();
-    let fresh = { text: '', url: null };
-    try { fresh = (await _enrichWiki(topic, deps)) || fresh; } catch {}
-    if (fresh.text) {
+    // Fresh check escalates: Wikipedia lead/body first, then — for the current-office facts wiki can't
+    // read off the page — EXCAVATION (her eyes on the infobox). Whichever confirms a fresh value writes
+    // back (supersedes the stale one) and wins.
+    for (const tier of ['wiki', 'excavate']) {
+      let fresh = { text: '', url: null };
+      try { fresh = (tier === 'wiki' ? await _enrichWiki(topic, deps) : await _enrichExcavate(topic, deps)) || fresh; } catch {}
+      if (!fresh.text) continue;
       const gv = [g, `Fresh check for the current fact (${topic}):\n${fresh.text}`].filter(Boolean).join('\n\n');
       const v = await _draftOrNeed(userMessage, gv, deps);
-      if (v && v.answer) { _kickWriteBack({ query: userMessage, answer: v.answer, url: fresh.url, source: 'wiki-verify', deps }); return { say: v.answer, enriched: true, enrichSource: 'wiki-verify' }; }
+      if (v && v.answer) {
+        const src = tier === 'wiki' ? 'wiki-verify' : 'excavate-verify';
+        _kickWriteBack({ query: userMessage, answer: v.answer, url: fresh.url, source: src, deps });
+        return { say: v.answer, enriched: true, enrichSource: src };
+      }
     }
     return { say: step.answer, enriched: false, enrichSource: null };
   }
@@ -244,4 +268,4 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   return { say: `I checked our records and searched, but I couldn't pin down ${need0}.`, enriched: true, missed: true, need: need0 };
 }
 
-module.exports = { answerGrounded, _draftOrNeed, _enrichGraph, _enrichWiki, _enrichRouted, _enrichWeb, _enrichExcavate, _kickWriteBack, _worthExcavating, _entLine, NEED_RE };
+module.exports = { answerGrounded, _draftOrNeed, _enrichGraph, _enrichWiki, _enrichRouted, _enrichWeb, _enrichExcavate, _kickWriteBack, _worthExcavating, _hasStaleGrounding, _entLine, NEED_RE };
