@@ -854,8 +854,15 @@ app.whenReady().then(() => {
           capturesDir: path.join(__dirname, 'data', 'news_captures'),
           intervalMs: parseInt(process.env.NEWS_VIDEO_POLL_MS || '', 10) || 3000,
           sampleMs: parseInt(process.env.NEWS_VIDEO_SAMPLE_MS || '', 10) || 30000,   // re-read the screen every ~30s during a music/chart stretch
-          // vision-read each captured frame → on-screen market data (tickers/indexes/charts) as text (gemma4:31b vision)
-          visionRead: async ({ base64 }) => require('./lib/vision').describe({ imageBase64: base64, prompt: videoCapture.SCREEN_READ_PROMPT }),
+          // vision-read each captured frame → on-screen market data (tickers/indexes/charts) as text. Pinned to
+          // mistral-large-3:675b (it IS multimodal and reads frames more thoroughly than gemma4:31b — proven on
+          // real Yahoo frames); scoped to the screen-read only, NOT her general vision. Overridable via env/meta.
+          visionRead: async ({ base64 }) => {
+            const screenModel = process.env.NEWS_VIDEO_VISION_MODEL
+              || (() => { try { return db.getMeta('model.news_vision'); } catch { return null; } })()
+              || 'mistral-large-3:675b';
+            return require('./lib/vision').describe({ imageBase64: base64, prompt: videoCapture.SCREEN_READ_PROMPT, model: screenModel });
+          },
           log: (m) => console.log(m),
         });
         newsVideoLane.start();
