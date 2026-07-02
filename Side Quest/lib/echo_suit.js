@@ -426,6 +426,15 @@ async function recallObject(name, { maxNeighbors = 8, preferType = null, dispatc
       if (alt && (!best || alt.degree > best.degree)) best = alt;
     }
   }
+  // SEARCH FALLBACK — quick_lookup resolves against the STORED name form, so a caller's name that matches
+  // no stored form ("Lee Zeldin" vs stored "Lee M. Zeldin (US-US)" / "ZELDIN, LEE MICHAEL") dead-ends to
+  // null even though the entity plainly exists (search_entities finds it). Recover it via the candidate
+  // scan → pull the richest by its EXACT stored name. Only fires when quick_lookup left us empty/thin, so
+  // rich direct hits pay nothing. The instance-blind-resolution fix (the null that made "what does Lee do?"
+  // confabulate). Bias-to-clarify preserved: _resolveViaSearch declines when candidates are DIFFERENT people.
+  if (!best || best.degree < OBJ_RICH_DEGREE) {
+    try { const viaSearch = await _resolveViaSearch(d, n, preferType); if (viaSearch && (!best || (viaSearch.degree || 0) > (best.degree || 0))) best = viaSearch; } catch {}
+  }
   if (!best) return null;
   // SAME-ENTITY CANONICALIZATION (duplicate-QID fix) — quick_lookup's FTS pick can return a THIN duplicate
   // over the canonical rich record (Donald Trump's degree-3 "mayor" twin vs his degree-13 "President"
@@ -451,6 +460,38 @@ async function _lookupObject(d, name, preferType) {
   if (!r || !r.ok) return null;
   let data; try { data = JSON.parse(r.text); } catch { return null; }
   return normalizeObject(data && (data.result || data));
+}
+// SEARCH-based resolution — the fallback when quick_lookup can't match the caller's name form to a stored
+// one. search_entities surfaces the entity's (often duplicate) records; name-gate drops summary-only FTS
+// matches; then pull the RICHEST candidate's full object by its exact stored name (which quick_lookup DOES
+// resolve). Bias-to-clarify: if the gated candidates are GENUINELY DIFFERENT people (>1 distinct core
+// name), decline — don't popularity-guess; leave arbitration to the ambiguity/enrich path. Bounded to a
+// few candidate pulls. Returns the richest object, or null. Fail-soft.
+async function _resolveViaSearch(d, name, preferType) {
+  const cands = await _searchEntities(d, name, preferType);
+  if (!cands.length) return null;
+  const gated = _nameGate(cands, _coreNameKey(name));
+  const pool = gated.length ? gated : cands;
+  if (!_sameEntity(pool)) return null;   // genuinely different same-named people → don't guess, leave to ask/enrich
+  let best = null;
+  for (const c of pool.slice(0, 4)) {
+    if (!c || !c.name) continue;
+    const obj = await _lookupObject(d, c.name, preferType || c.entity_type || null);
+    if (obj && (!best || (obj.degree || 0) > (best.degree || 0))) best = obj;
+  }
+  return best;
+}
+// Are these name-gated candidates all plausibly the SAME person? After the gate each core-name key already
+// carries every query token, so the only divergence is EXTRA tokens (middle names / suffixes). Same person
+// = the extras form a subset chain ("Lee Zeldin" ⊆ "Lee Michael Zeldin"); DIFFERENT people carry
+// incompatible extras ("John Adam Smith" vs "John Robert Smith" — neither contains the other). Pure.
+function _sameEntity(cands) {
+  const keys = [...new Set((cands || []).map(c => _coreNameKey(c && c.name)).filter(Boolean))];
+  for (let i = 0; i < keys.length; i++) for (let j = i + 1; j < keys.length; j++) {
+    const a = keys[i].split(' '), b = keys[j].split(' ');
+    if (!a.every(t => b.includes(t)) && !b.every(t => a.includes(t))) return false;   // incompatible → different people
+  }
+  return true;
 }
 
 // Among all records sharing this wikidata QID (i.e. the SAME real-world entity), pull the RICHEST one's
@@ -628,5 +669,5 @@ async function routeNeed(query, opts = {}) {
 
 module.exports = {
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, expandNeighbors, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _setLiveForTest
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, expandNeighbors, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _setLiveForTest
 };

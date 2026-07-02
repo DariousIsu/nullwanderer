@@ -65,6 +65,41 @@ function dispatch({ sibling = true } = {}) {
   const o5 = await echo.recallObject('NoQid', { dispatch: noQidD, maxNeighbors: 0, preferType: 'person' });
   ok(o5 && o5.degree === 2 && !dbCalled2, 'no QID on the base → canonicalization skipped (no db_query)');
 
+  // ── SEARCH FALLBACK (the "what does Lee do?" null → object fix) ────────────────────────────────────
+  // quick_lookup dead-ends on the caller's name form ("Lee Zeldin"), but search_entities finds the
+  // (duplicate) records; recover the richest by its exact stored name.
+  function fallbackDispatch({ people = 'same' } = {}) {
+    const SAME = [
+      { id: 1, name: 'Lee M Zeldin', entity_type: 'person' },
+      { id: 2, name: 'ZELDIN, LEE MICHAEL [H8NY01148]', entity_type: 'person' },
+      { id: 3, name: 'Lee M. Zeldin (US-US)', entity_type: 'person' },
+    ];
+    const DIFF = [
+      { id: 4, name: 'John Adam Smith', entity_type: 'person' },
+      { id: 5, name: 'John Robert Smith', entity_type: 'person' },
+    ];
+    const RICH = { result: { entity: { id: 3, name: 'Lee M. Zeldin (US-US)', entity_type: 'person', entity_subtype: 'us_representative', degree: 1600 }, role: 'U.S. Representative', facts: ['Zeldin — title: U.S. Representative'], committees: [], bio: null } };
+    return async (tag) => {
+      const nm = tag && tag.args && tag.args.name;
+      if (tag.name === 'quick_lookup') return { ok: true, text: nm === 'Lee M. Zeldin (US-US)' ? JSON.stringify(RICH) : '' }; // '' → JSON parse fails → null (mirrors the live "Unexpected end of JSON input")
+      if (tag.name === 'search_entities') return { ok: true, text: JSON.stringify({ result: people === 'same' ? SAME : DIFF }) };
+      if (tag.name === 'db_query') return { ok: true, text: '{"rows":[]}' };
+      if (tag.name === 'kg_neighborhood') return { ok: true, text: '{"neighbors":[]}' };
+      return { ok: false };
+    };
+  }
+  const oF = await echo.recallObject('Lee Zeldin', { dispatch: fallbackDispatch(), maxNeighbors: 0 });
+  ok(oF && oF.degree === 1600, 'quick_lookup dead-end → search fallback recovers the rich record');
+  ok(oF && /Representative/i.test(oF.role || ''), 'fallback returns the right person\'s grounding (not null → confab)');
+
+  const oD = await echo.recallObject('John Smith', { dispatch: fallbackDispatch({ people: 'diff' }), maxNeighbors: 0 });
+  ok(oD === null, 'different same-named people → fallback declines (bias-to-clarify, no popularity guess)');
+
+  // _sameEntity — subset-containment same-person test (pure).
+  ok(echo._sameEntity([{ name: 'Lee Zeldin' }, { name: 'ZELDIN, LEE MICHAEL [H8]' }]) === true, '_sameEntity: middle-name variant is the same person');
+  ok(echo._sameEntity([{ name: 'John Adam Smith' }, { name: 'John Robert Smith' }]) === false, '_sameEntity: incompatible extras → different people');
+  ok(echo._sameEntity([{ name: 'Lee Zeldin' }]) === true, '_sameEntity: single candidate → same');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
