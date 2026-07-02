@@ -72,7 +72,7 @@ async function _scanPage(need, { web, vision, deps, log, maxSteps }) {
     if (prevShot && shot.base64 === prevShot) { log(`no movement → bottom at step ${step}`); break; }
     prevShot = shot.base64;
     let v;
-    try { v = await vision.describe({ imageBase64: shot.base64, prompt: _visionPrompt(need), completeFn: deps.complete }); }
+    try { v = await vision.describe({ imageBase64: shot.base64, prompt: _visionPrompt(need), model: deps.visionModel, tier: deps.visionTier, completeFn: deps.complete }); }
     catch (e) { v = { ok: false, reason: e.message }; }
     const txt = (v && v.ok && v.text) ? v.text : '';
     log(`  scan step ${step} @${url}: ${v && v.ok ? txt.replace(/\s+/g, ' ').slice(0, 90) : 'vision FAIL ' + (v && v.reason)}`);
@@ -97,7 +97,7 @@ async function _clickToward(need, { web, vision, deps, log, visited, maxSteps = 
   let shot; try { shot = await web.screenshot({}); } catch { return null; }
   if (!shot || !shot.ok) return null;
   let v;
-  try { v = await vision.describe({ imageBase64: shot.base64, prompt: _clickPrompt(need), completeFn: deps.complete }); }
+  try { v = await vision.describe({ imageBase64: shot.base64, prompt: _clickPrompt(need), model: deps.visionModel, tier: deps.visionTier, completeFn: deps.complete }); }
   catch { v = null; }
   const txt = ((v && v.ok && v.text) || '').trim();
   log(`  click decision: "${(txt || (v && v.reason) || 'no response').replace(/\s+/g, ' ').slice(0, 70)}"`);
@@ -124,6 +124,9 @@ async function excavate(need, { url = null, maxSteps = 8, maxClicks = 2, deps = 
   const log = deps.log || ((m) => console.log('[excavate] ' + m));
   const n = String(need || '').trim();
   if (!n) return { found: false, reason: 'no need' };
+  // Forensic browsing gets a DEDICATED top-tier vision+logic model (not screen-see's) — resolve it once so
+  // every scan/click uses it. Live path only; offline tests inject their own deps.vision and skip this.
+  if (deps.visionModel == null && !deps.vision) { try { const cfg = require('./vision').visionModelFor('excavate'); deps = { ...deps, visionModel: cfg.model, visionTier: cfg.tier }; } catch {} }
 
   // 1) get to the best source in HER visible browser
   let target = url || await _wikiUrl(n, deps);

@@ -24,6 +24,15 @@ function visionModel() {
   return process.env.VISION_MODEL || 'qwen2.5vl';   // configurable; set model.vision once verified
 }
 function visionTier() { try { return db.getMeta('vision.tier') || 'auto'; } catch { return 'auto'; } }
+// A dedicated, top-tier model for a specific vision PURPOSE (e.g. 'excavate' — forensic browsing needs the
+// best vision+logic we can get, and shouldn't share screen-see's model). Falls back to the global vision
+// model/tier when no purpose-specific override is set. Returns { model, tier }.
+function visionModelFor(purpose) {
+  let model = null, tier = null;
+  try { model = db.getMeta(`model.vision.${purpose}`) || null; } catch {}
+  try { tier = db.getMeta(`vision.tier.${purpose}`) || null; } catch {}
+  return { model: model || visionModel(), tier: tier || visionTier() };
+}
 function generationEnabled() { return process.env.ZOE_IMAGE_GEN_ENABLED === '1'; }
 
 function _stripDataUrl(b64) { return String(b64 || '').replace(/^data:[^;]+;base64,/, '').trim(); }
@@ -111,6 +120,6 @@ async function generate({ prompt, genFn = null, saveFn = null, size = '1024x1024
 
 module.exports = {
   describe, generate, parseGenTags, stripGenTags,
-  visionModel, visionTier, generationEnabled,
+  visionModel, visionTier, visionModelFor, generationEnabled,
   GEN_TAG_RE, DEFAULT_VISION_PROMPT, _stripDataUrl, _pickSource
 };
