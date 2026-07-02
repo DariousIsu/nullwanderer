@@ -23,9 +23,9 @@ const RICH_NOTES = 3;   // ≥ this many on-topic notes (or any verified_fact, o
 function _objectRich(obj) { return !!(obj && (obj.degree >= 8 || (obj.facts || []).length >= 4 || (obj.committees || []).length >= 1)); }
 function _hasObject(obj) { return !!(obj && ((obj.facts || []).length || (obj.committees || []).length || (obj.neighbors || []).length)); }
 
-async function recall(topic, { k = 6, minRelevance = 0.33, retrieveFn = null, graphFn = null, echoFn = null, objectFn = null, object = true } = {}) {
+async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retrieveFn = null, graphFn = null, echoFn = null, objectFn = null, object = true } = {}) {
   const t = String(topic || '').trim();
-  if (!t) return { topic: t, notes: [], facts: [], object: null, coverage: 'thin', echo: 0 };
+  if (!t) return { topic: t, notes: [], facts: [], object: null, coverage: 'thin', echo: 0, mention: null };
   const retrieve = retrieveFn || ((q) => memory.retrieveScored(q, { k, minRelevance }));
   let local = []; try { local = (await retrieve(t)) || []; } catch { local = []; }
   let facts = []; try { facts = (graphFn ? graphFn(t) : _graphFacts(t)) || []; } catch { facts = []; }
@@ -35,19 +35,25 @@ async function recall(topic, { k = 6, minRelevance = 0.33, retrieveFn = null, gr
   // ECHO-SEARCH-FIRST also works on a PHRASE: when the topic isn't a bare name (the idle loop hands us
   // "Senator John Curtis personal background"), EXTRACT the entity and pull ITS object — so a web-first
   // idle search on someone we already hold as a rich object is caught and short-circuited.
-  let obj = null;
+  let obj = null, mentionUsed = null;
   if (object) {
-    // Prefer the extracted proper-noun entity ("Senator John Curtis personal background" → "John Curtis")
-    // even for short phrases, since titles/extra words break the lookup; fall back to a bare-name topic.
-    const entTopic = extractEntity(t) || (_looksLikeEntity(t) ? t : null);
-    if (entTopic) { try { obj = (objectFn ? await objectFn(entTopic) : await _echoObject(entTopic)) || null; } catch { obj = null; } }
+    // MENTION → OBJECT via the tiered chain (lib/mention): local NER (fast) → cloud decompose
+    // (casing/pronoun/KG-type) → robust regex fallback. Replaces the capitalized-run regex that mis-read
+    // "Who is Donald Trump?" as the entity "Who" (→ a lobby firm), starving the pull. objectFn (tests)
+    // stays on the deterministic regex path so the offline gate needs no model/cloud.
+    let det = null;
+    if (!objectFn) { try { det = await require('./mention').detectMention(t, { context }); } catch {} }
+    const entTopic = (det && det.mention) || extractEntity(t) || (_looksLikeEntity(t) ? t : null);
+    const preferType = (det && det.kgType) || null;
+    mentionUsed = entTopic;
+    if (entTopic) { try { obj = (objectFn ? await objectFn(entTopic) : await _echoObject(entTopic, preferType)) || null; } catch { obj = null; } }
   }
   // ECHO MASTER DB: query the system-of-record corpus (search_knowledge) — the real "she already
   // knows it" pool. Reference-not-copy: snippets surface into recall, never copied into sq.db.
   let echoHits = []; try { echoHits = (echoFn ? await echoFn(t) : await _echoSearch(t)) || []; } catch { echoHits = []; }
   const notes = local.concat(echoHits);
   const rich = _objectRich(obj) || notes.length >= RICH_NOTES || local.some(n => n.source === 'verified_fact') || facts.length >= 3 || echoHits.length >= 2;
-  return { topic: t, notes, facts, object: obj, coverage: rich ? 'rich' : 'thin', echo: echoHits.length };
+  return { topic: t, notes, facts, object: obj, coverage: rich ? 'rich' : 'thin', echo: echoHits.length, mention: mentionUsed };
 }
 // Entity-shaped = a name/short phrase we can hand to quick_lookup (single-name → dossier), not a
 // full sentence. Keeps the object pull cheap + on-target.
@@ -55,21 +61,32 @@ function _looksLikeEntity(t) { const toks = String(t).trim().split(/\s+/); retur
 // Pull the entity out of a longer phrase: the longest run of Capitalized words (a proper noun), leading
 // honorifics dropped ("Senator John Curtis personal background" → "John Curtis"; "Fifth Element soundtrack
 // chart" → "Fifth Element"). null when no proper noun (so a generic musing doesn't trigger an object pull).
-const _ENT_TITLES = new Set(['senator', 'sen', 'rep', 'representative', 'dr', 'mr', 'mrs', 'ms', 'gov', 'governor', 'president', 'pres', 'the', 'a', 'an']);
+// tier-3 fallback (both NER + cloud unavailable): a HARDENED capitalized-run extractor. Interrogatives
+// and question verbs are treated as run-BREAKERS (never part of an entity), and surrounding punctuation is
+// stripped per word — so "Who is Donald Trump?" yields "Donald Trump", not "Who" (the original bug). Cased
+// only by nature; lowercase names are the NER/cloud tiers' job.
+const _ENT_TITLES = new Set([
+  'senator', 'sen', 'rep', 'representative', 'dr', 'mr', 'mrs', 'ms', 'gov', 'governor', 'president', 'pres', 'the', 'a', 'an',
+  'who', 'what', 'which', 'when', 'where', 'why', 'how', 'whose', 'whom',   // interrogatives
+  'is', 'are', 'was', 'were', 'do', 'does', 'did', 'tell', 'me', 'about', 'of',  // question glue
+]);
 function extractEntity(text) {
-  const words = String(text || '').split(/\s+/).filter(Boolean);
+  // strip surrounding punctuation per token so a sentence-final entity ("Trump?") isn't split off
+  const words = String(text || '').split(/\s+/)
+    .map(w => w.replace(/^[^A-Za-z0-9]+/, '').replace(/[^A-Za-z0-9.'’\-]+$/, ''))
+    .filter(Boolean);
   let best = [], cur = [];
   for (const w of words) {
-    if (/^[A-Z][A-Za-z'’.\-]*$/.test(w)) cur.push(w);
+    const key = w.toLowerCase().replace(/[.?!,]+$/, '');
+    if (!_ENT_TITLES.has(key) && /^[A-Z][A-Za-z'’.\-]*$/.test(w)) cur.push(w);   // stoplist words break the run
     else { if (cur.length > best.length) best = cur; cur = []; }
   }
   if (cur.length > best.length) best = cur;
-  while (best.length && _ENT_TITLES.has(best[0].toLowerCase().replace(/\.$/, ''))) best = best.slice(1);
   const name = best.join(' ').replace(/[.,]+$/, '').trim();
   return name.replace(/\s+/g, '').length >= 3 ? name : null;
 }
 function _echoSearch(topic) { try { return require('./echo_suit').recallKnowledge(topic); } catch { return Promise.resolve([]); } }
-function _echoObject(topic) { try { return require('./echo_suit').recallObject(topic); } catch { return Promise.resolve(null); } }
+function _echoObject(topic, preferType = null) { try { return require('./echo_suit').recallObject(topic, preferType ? { preferType } : {}); } catch { return Promise.resolve(null); } }
 
 // The resolved OBJECT as render-ready lines — leads the prior-knowledge block: "you already hold
 // this person's whole record." Pure (no Echo dep) so active_recall stays offline-testable.
