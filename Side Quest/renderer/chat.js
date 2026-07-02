@@ -246,10 +246,11 @@ function cleanLiveSay(s) {
     .replace(/<wonder>[\s\S]*?<\/wonder>/gi, '')
     .replace(/<\|[a-z_]+\|>/gi, '')   // tokenizer special tokens like <|system|>, <|user|>
     .replace(/<\|[a-z_]+/gi, '')       // unfinished tokenizer tokens still streaming
-    // Asterisk spans: a *stage direction* (starts with a lowercase action verb, e.g. *grins*) is
-    // dropped; a *Title/Emphasis* (starts capitalized, e.g. *Almost Famous*) is KEPT as plain text.
-    // The blanket strip used to delete markdown-italic movie/book titles → "My favorite movie is because…".
-    .replace(/\*([^*\n]{1,200})\*/g, (_m, inner) => { const t = inner.trim(); return /^[a-z]/.test(t) ? '' : t; })
+    // Markdown-italic markers: drop the ASTERISKS, keep the WORDS. The display never destroys content
+    // (the old blanket strip ate "*Almost Famous*" → "My favorite movie is because…"). Whether stage
+    // directions appear at all is the PROMPT's job, per mode (normal suppresses them; fantasy wants
+    // them) — not the renderer's to guess and delete.
+    .replace(/\*([^*\n]{1,200})\*/g, '$1')
     .replace(/[ \t]+/g, ' ');
 }
 
