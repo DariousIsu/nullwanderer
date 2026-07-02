@@ -93,6 +93,7 @@ const smokes = [
   'smoke_web_verify.js',
   'smoke_listen.js',
   'smoke_answer_draft.js',
+  'smoke_turn_router.js',
   'smoke_operator.js',
 ];
 

@@ -2961,6 +2961,29 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     try { capabilityProposalBlock = gapsLib.buildReturnProposalBlock(userName); } catch (e) { console.error('[main] gap proposal failed:', e.message); }
   }
 
+  // ── SINGLE-DISPATCH TURN ROUTER (turn→object-graph Phase A) ──────────────────────────────────────
+  // Classify the turn ONCE into a single route so the work-machinery blocks below (intake, deliverable-
+  // poll, operator, directed-focus) are MUTUALLY EXCLUSIVE with the conversational/answer path — no more
+  // competing directives stapled onto one composedUserMessage (the proven "who is Trump → also list 19
+  // orgs" bug). Built from the cheap signals already computed here; isAssignment uses the isDirectedTask
+  // regex as an early proxy (the precise cloud intake still runs below, gated on route==='task').
+  // Reversible via the `turn.router` meta flag (default on) → when off, the gates are no-ops (old flow).
+  const routerOn = (() => { try { return (db.getMeta('turn.router') || 'on').trim() !== 'off'; } catch { return true; } })();
+  const _factualR = (() => { try { return require('./lib/metacognition').classifyClaimType(userMessage) === 'factual'; } catch { return false; } })();
+  const _liveInfoR = (() => { try { return require('./lib/curiosity').isLiveInfoQuestion(userMessage); } catch { return false; } })();
+  const _hasDirectedFocusR = (() => { try { const fl = require('./lib/focus'); const f = fl.getCurrent(); return !!(f && fl.isDirected(f)); } catch { return false; } })();
+  const _isStatusReqR = _hasDirectedFocusR && (() => { try { return require('./lib/research').isStatusRequest(userMessage); } catch { return false; } })();
+  const _isDirectedTaskR = (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
+  const turnRoute = require('./lib/turn_router').computeTurnRoute({
+    socialTurn, activityQ, deliverableAggQ,
+    factual: _factualR, personalFactQ, devQ, stateQ,
+    isLiveInfo: _liveInfoR, isStatusReq: _isStatusReqR,
+    hasDirectedFocus: _hasDirectedFocusR, isAssignment: _isDirectedTaskR
+  });
+  if (routerOn) console.log(`[turn-router] route=${turnRoute.route} (${turnRoute.reason}, conf ${turnRoute.confidence})`);
+  const routeAllows = (r) => !routerOn || turnRoute.route === r;
+  const routeAllowsAny = (...rs) => !routerOn || rs.includes(turnRoute.route);
+
   // EPISODIC RECALL — embed THIS user message (store it on the turn for future recall),
   // and pull the few most-relevant PAST turns that scrolled out of the recency window, so
   // "what did we say earlier about X" works instead of diverting to a tool.
@@ -3286,7 +3309,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let assignmentSeed = null;   // object-memory Slice 2: resolved entity targets + clarify for the run
   try {
     const opOn2 = (() => { try { return (db.getMeta('operator.mode') || 'full').trim() !== 'off'; } catch { return true; } })();
-    if (opOn2 && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled && userMessage && userMessage.trim().length > 6) {
+    if (opOn2 && routeAllows('task') && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled && userMessage && userMessage.trim().length > 6) {
       const intake = require('./lib/intake');
       const af = (() => { try { const f = require('./lib/focus').getCurrent(); return f ? String(f.content || '') : ''; } catch { return ''; } })();
       const recent = (recentTurns || []).slice(-3).map(t => `${t.speaker || '?'}: ${String(t.content || '').slice(0, 120)}`).join(' | ');
@@ -3378,7 +3401,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // Lanes (media/meeting/news) register more sources here as they land — no new branch in the pipeline.
   let statusHandled = false;
   try {
-    if (!directedStopHandled && !expandHandled && !followupFired && !isAssignment && !correctionHandled && !docQaHandled) {
+    if (routeAllows('status') && !directedStopHandled && !expandHandled && !followupFired && !isAssignment && !correctionHandled && !docQaHandled) {
       const tk = require('./lib/track');
       const act = require('./lib/activity');
       const ri = require('./lib/records_interp');
@@ -3499,7 +3522,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           || /\b(look ?up|search|find|pull ?up|fetch|what'?s the|how much|how many|latest|current|when (is|was|did|does)|where (is|was)|who (is|was|are)|our (data|records|numbers|polling|crm|bills|contacts|knowledge))\b/i.test(userMessage);
       } catch { return false; }
     })();
-    if (opMode !== 'off' && (needsExternal || isAssignment) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && userMessage && userMessage.trim().length > 6) {
+    if (opMode !== 'off' && routeAllowsAny('lookup', 'task') && (needsExternal || isAssignment) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && userMessage && userMessage.trim().length > 6) {
       // directed (in-turn completion mode) when this is an assignment (intake gate, or regex fallback).
       const directed = isAssignment;
       // Immediate feedback — the agent loop can take a few seconds. Use a REQUEST-SERVING placeholder
@@ -3533,7 +3556,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // i.e. intakeRoute is null). Either way we only CREATE a run when there's a real project to run.
     const intakeSaysProject = !!(intakeRoute && intakeRoute.action !== 'none');
     const regexFallback = (intakeRoute === null) && (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
-    if (opModeOn && (intakeSaysProject || regexFallback) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled) {
+    if (opModeOn && routeAllows('task') && (intakeSaysProject || regexFallback) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled) {
       const already = (() => { try { const f = focusLib.getCurrent(); return !!(f && focusLib.isDirected(f)); } catch { return false; } })();
       if (!already) {
         // Prefer the RESOLUTION-grounded clarify (e.g. "which Curtis?" / "I don't have a match for the
@@ -3651,6 +3674,19 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     echoSuitBlock: echoSuit ? echoSuit.suitContextBlock() : null,
     newUserMessage: composedUserMessage
   });
+
+  // TEMP DIAGNOSTIC (turn→object-graph): dump the EXACT final local prompt so we can SEE whether the
+  // voice model receives ONE authoritative answer or a pile of stapled directives. Remove after diagnosis.
+  try {
+    const sys = (messages[0] && messages[0].content) || '';
+    const directives = (composedUserMessage.match(/\[[^\]]{20,}\]/g) || []).map((d, i) => `  [${i + 1}] ${d.replace(/\s+/g, ' ').slice(0, 260)}`);
+    require('fs').appendFileSync(require('path').join(__dirname, 'data', 'prompt_debug.log'),
+      `\n\n===== TURN ${new Date().toISOString()} | user="${String(userMessage).replace(/\s+/g, ' ').slice(0, 90)}" =====\n`
+      + `ROUTE: ${turnRoute.route} (${turnRoute.reason}, conf ${turnRoute.confidence})\n`
+      + `SYSTEM prompt: ${sys.length} chars (~${Math.round(sys.length / 4)} tok)\n`
+      + `STAPLED DIRECTIVES in composedUserMessage: ${directives.length}\n${directives.join('\n')}\n`
+      + `--- FULL composedUserMessage ---\n${composedUserMessage}\n`);
+  } catch (e) { console.error('[promptdump] failed:', e.message); }
 
   // STREAM directive-filter: hold any "[" open until it closes; drop it if it reads as a leaked
   // directive, so an echoed [ANSWER TO GIVE…]/[Lucas asked…] never reaches the UI live (the final-text
