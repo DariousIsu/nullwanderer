@@ -100,7 +100,7 @@ async function _enrichGraph(need, object, deps = {}) {
     const titled = await echo.expandNeighbors(uniq, { dispatch: d, top: 8 });
     if (titled.length) parts.push('Connected people and their roles (from our records):\n' + titled.map(e => `  • ${e.name} — ${e.title}`).join('\n'));
   } catch {}
-  return parts.join('\n').trim();
+  return { text: parts.join('\n').trim(), url: null };   // OUR KG — already local, nothing to write back
 }
 
 // ENRICH tier — WIKIPEDIA (echo_suit.wikiLookup → mediawiki_search + get_extract). The reliable, keyless
@@ -112,8 +112,9 @@ async function _enrichWiki(need, deps = {}) {
   const wiki = deps.wikiLookup || ((q) => { try { return require('./echo_suit').wikiLookup(q); } catch { return Promise.resolve([]); } });
   let pages = [];
   try { pages = (await wiki(need)) || []; } catch {}
-  if (!pages.length) return '';
-  return 'From Wikipedia:\n' + pages.map(p => `• ${p.title}: ${p.extract}`).join('\n');
+  if (!pages.length) return { text: '', url: null };
+  const url = pages[0] && pages[0].title ? 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String(pages[0].title).replace(/ /g, '_')) : null;
+  return { text: 'From Wikipedia:\n' + pages.map(p => `• ${p.title}: ${p.extract}`).join('\n'), url };
 }
 
 // ENRICH tier FINAL — FORENSIC EXCAVATION (lib/excavate): drive HER visible browser to the best source and
@@ -125,14 +126,8 @@ async function _enrichExcavate(need, deps = {}) {
   const fn = deps.excavate || ((n) => { try { return require('./excavate').excavate(n, { deps }); } catch { return Promise.resolve(null); } });
   let r = null;
   try { r = await fn(need); } catch {}
-  if (r && r.found && r.answer) {
-    // SELF-HEAL — bank what the expensive dig recovered so she's never on the same page twice. Non-blocking
-    // (kick, don't await): answer now, write back in the background → next time it's local + free.
-    const wb = deps.writeBack || ((a) => { try { return require('./learning').captureRecovered(a); } catch { return Promise.resolve(); } });
-    Promise.resolve().then(() => wb({ query: need, answer: r.answer, url: r.url, source: 'excavation' })).catch(() => {});
-    return `Read directly off the rendered page (${r.url || 'web'}): ${r.answer}`;
-  }
-  return '';
+  if (r && r.found && r.answer) return { text: `Read directly off the rendered page (${r.url || 'web'}): ${r.answer}`, url: r.url || null };
+  return { text: '', url: null };
 }
 
 // ENRICH tier 2 — the live web, via the app's OWN DuckDuckGo search (lib/web_search; Echo's web_search
@@ -142,7 +137,7 @@ async function _enrichWeb(need, deps = {}) {
   const fetchFn = deps.fetchPage || ((u) => { try { return require('./web_search').fetchPage(u, { maxChars: 3000 }); } catch { return Promise.resolve(null); } });
   let results = [];
   try { const r = await searchFn(need); results = (r && r.results) || (Array.isArray(r) ? r : []); } catch {}
-  if (!results.length) return '';
+  if (!results.length) return { text: '', url: null };
   const parts = [];
   // FETCH the top TWO result pages — DDG snippets are often just the title, and the #1 hit can be messy
   // (Wikipedia serves raw infobox wikitext); a cleaner source (Ballotpedia etc.) at #2 carries the answer.
@@ -156,7 +151,8 @@ async function _enrichWeb(need, deps = {}) {
     return '• ' + [t, s].filter(Boolean).join(' — ');
   }).filter(l => l.length > 3);
   if (snip.length) parts.push(snip.join('\n'));
-  return parts.join('\n\n').trim();
+  const url = (results.find(x => x && x.url) || {}).url || null;
+  return { text: parts.join('\n\n').trim(), url };
 }
 
 // ENRICH tier 1.5 — the cloud TOOL EXECUTOR: let the cloud pick + run the right recipe / db_query / tool
@@ -168,10 +164,20 @@ async function _enrichRouted(need, deps = {}) {
     const r = await route(need);
     if (r && (r.ok || r.text)) {
       const t = String(r.text || '').replace(/\s+/g, ' ').trim();
-      if (t.length > 40) return `Looked up in our records (${r.chose || 'tool'}): ${t.slice(0, 2400)}`;
+      if (t.length > 40) return { text: `Looked up in our records (${r.chose || 'tool'}): ${t.slice(0, 2400)}`, url: null };   // Echo tool — our data
     }
   } catch {}
-  return '';
+  return { text: '', url: null };
+}
+
+// SELF-HEAL write-back — bank an externally-recovered answer (wiki / web / excavation / wiki-verify) onto
+// the verified_fact rail so browsing FEEDS our DB (gold for research/database-building) and she's never on
+// the same page twice. Non-blocking (kick, don't await): answer now, bank in the background. Only fires for
+// tiers with a real source URL (graph/routed are our own data → nothing to bank). Fail-safe.
+function _kickWriteBack({ query, answer, url, source, deps = {} }) {
+  if (!url || !answer || !query) return;
+  const wb = deps.writeBack || ((a) => { try { return require('./learning').captureRecovered(a); } catch { return Promise.resolve(); } });
+  Promise.resolve().then(() => wb({ query, answer, url, source: source || 'browsing' })).catch(() => {});
 }
 
 // The turn's grounded answer with the enrich/recovery reflex. Returns:
@@ -188,12 +194,12 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   // records say "Representative" → verify → "EPA Administrator since 2025".)
   if (step.answer && _CURRENCY_RE.test(String(userMessage))) {
     const topic = String((object && object.name) || userMessage).replace(/\[[^\]]*\]/g, '').replace(/\([^)]*\)/g, '').trim();
-    let fresh = '';
-    try { fresh = await _enrichWiki(topic, deps); } catch {}
-    if (fresh) {
-      const gv = [g, `Fresh check for the current fact (${topic}):\n${fresh}`].filter(Boolean).join('\n\n');
+    let fresh = { text: '', url: null };
+    try { fresh = (await _enrichWiki(topic, deps)) || fresh; } catch {}
+    if (fresh.text) {
+      const gv = [g, `Fresh check for the current fact (${topic}):\n${fresh.text}`].filter(Boolean).join('\n\n');
       const v = await _draftOrNeed(userMessage, gv, deps);
-      if (v && v.answer) return { say: v.answer, enriched: true, enrichSource: 'wiki-verify' };
+      if (v && v.answer) { _kickWriteBack({ query: userMessage, answer: v.answer, url: fresh.url, source: 'wiki-verify', deps }); return { say: v.answer, enriched: true, enrichSource: 'wiki-verify' }; }
     }
     return { say: step.answer, enriched: false, enrichSource: null };
   }
@@ -206,18 +212,23 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   // invented. Wiki sits before routed/web because the audit proved those two reach nothing on simple facts.
   for (const mode of ['graph', 'wiki', 'routed', 'web', 'excavate']) {
     if (!step || !step.need) break;
-    const found = mode === 'graph' ? await _enrichGraph(step.need, object, deps)
-                : mode === 'wiki' ? await _enrichWiki(step.need, deps)
-                : mode === 'routed' ? await _enrichRouted(step.need, deps)
-                : mode === 'web' ? await _enrichWeb(step.need, deps)
-                : await _enrichExcavate(step.need, deps);
-    if (!found) continue;
-    g = [g, `Just retrieved for this (${mode}):\n${found}`].filter(Boolean).join('\n\n');
+    const res = mode === 'graph' ? await _enrichGraph(step.need, object, deps)
+              : mode === 'wiki' ? await _enrichWiki(step.need, deps)
+              : mode === 'routed' ? await _enrichRouted(step.need, deps)
+              : mode === 'web' ? await _enrichWeb(step.need, deps)
+              : await _enrichExcavate(step.need, deps);
+    if (!res || !res.text) continue;
+    g = [g, `Just retrieved for this (${mode}):\n${res.text}`].filter(Boolean).join('\n\n');
     step = await _draftOrNeed(userMessage, g, deps);
-    if (step && step.answer) return { say: step.answer, enriched: true, enrichSource: mode };
+    if (step && step.answer) {
+      // SELF-HEAL — any tier that recovered from an external SOURCE (wiki/web/excavation) feeds the answer
+      // back to the DB so browsing builds our knowledge and she's never on the same page twice.
+      _kickWriteBack({ query: userMessage, answer: step.answer, url: res.url, source: mode, deps });
+      return { say: step.answer, enriched: true, enrichSource: mode };
+    }
   }
   // couldn't confirm it anywhere — honest, never a bare dead-end, never a confabulation.
   return { say: `I checked our records and searched, but I couldn't pin down ${need0}.`, enriched: true, missed: true, need: need0 };
 }
 
-module.exports = { answerGrounded, _draftOrNeed, _enrichGraph, _enrichWiki, _enrichRouted, _enrichWeb, _enrichExcavate, _entLine, NEED_RE };
+module.exports = { answerGrounded, _draftOrNeed, _enrichGraph, _enrichWiki, _enrichRouted, _enrichWeb, _enrichExcavate, _kickWriteBack, _entLine, NEED_RE };

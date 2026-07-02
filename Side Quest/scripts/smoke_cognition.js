@@ -53,37 +53,43 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
 
   // 6) THE dying-question fix: graph empty → WIKIPEDIA tier recovers a fact no local tier held.
   const wikiMock = async () => [{ title: 'Lee Zeldin', extract: 'Lee Zeldin is the 17th administrator of the EPA since January 2025.' }];
-  const f = await cog.answerGrounded({ userMessage: 'who is the head of the EPA?', grounding: '', deps: { ask: async ({ input }) => /Zeldin|EPA/i.test(input.grounding) ? 'Lee Zeldin is the head of the EPA.' : 'NEED: head of the EPA', dispatch: emptyGraph, wikiLookup: wikiMock } });
+  let wikiWb = null;
+  const f = await cog.answerGrounded({ userMessage: 'who is the head of the EPA?', grounding: '', deps: { ask: async ({ input }) => /Zeldin|EPA/i.test(input.grounding) ? 'Lee Zeldin is the head of the EPA.' : 'NEED: head of the EPA', dispatch: emptyGraph, wikiLookup: wikiMock, webSearch: async () => ({ results: [] }), writeBack: async (a) => { wikiWb = a; } } });
   ok(f && f.enriched === true && f.enrichSource === 'wiki' && /Zeldin/.test(f.say), 'graph empty → WIKI tier recovers the answer (the dying-question fix)');
+  await new Promise(r => setTimeout(r, 5));
+  ok(wikiWb && /Zeldin/.test(wikiWb.answer) && /wikipedia\.org/.test(wikiWb.url) && wikiWb.source === 'wiki', 'write-back EXTENDED: a WIKI recovery also feeds the DB (source url + answer)');
 
   // 7) CURRENCY VERIFY: grounding gives a plausible (stale) answer, but the question asks "now" → verify
   // against a fresh source and correct it.
   const askStale = async ({ input }) => /EPA|administrator/i.test(String(input.grounding)) ? 'Lee Zeldin is the EPA Administrator, since 2025.' : 'Lee Zeldin is a U.S. Representative.';
-  const g = await cog.answerGrounded({ userMessage: 'what does Lee Zeldin do now?', grounding: 'Lee Zeldin — title: U.S. Representative', object: { name: 'Lee Zeldin' }, deps: { ask: askStale, wikiLookup: async () => [{ title: 'Lee Zeldin', extract: 'Lee Zeldin is the 17th administrator of the EPA since Jan 2025.' }] } });
+  const g = await cog.answerGrounded({ userMessage: 'what does Lee Zeldin do now?', grounding: 'Lee Zeldin — title: U.S. Representative', object: { name: 'Lee Zeldin' }, deps: { ask: askStale, wikiLookup: async () => [{ title: 'Lee Zeldin', extract: 'Lee Zeldin is the 17th administrator of the EPA since Jan 2025.' }], writeBack: async () => {} } });
   ok(g && g.enrichSource === 'wiki-verify' && /EPA/.test(g.say), 'currency-marked question verifies stale records via wiki-verify');
 
   // 8) currency-marked but NO fresh source → keep the grounded answer (never worse than before).
   const h = await cog.answerGrounded({ userMessage: 'who is the CEO now?', grounding: 'Acme CEO is Jane Doe', object: { name: 'Acme' }, deps: { ask: async () => 'Jane Doe is the CEO.', wikiLookup: async () => [] } });
   ok(h && h.enrichSource === null && /Jane/.test(h.say), 'currency-marked but no fresh source → keep the grounded answer');
 
-  // 9) _enrichWiki formatting unit.
-  ok(/From Wikipedia/.test(await cog._enrichWiki('x', { wikiLookup: async () => [{ title: 'T', extract: 'E' }] })), '_enrichWiki formats found pages');
-  ok((await cog._enrichWiki('x', { wikiLookup: async () => [] })) === '', '_enrichWiki no pages → empty string');
+  // 9) _enrichWiki unit — returns { text, url } (source url for the write-back).
+  const wr = await cog._enrichWiki('x', { wikiLookup: async () => [{ title: 'Lee Zeldin', extract: 'E' }] });
+  ok(/From Wikipedia/.test(wr.text) && /wikipedia\.org\/wiki\/Lee_Zeldin/.test(wr.url), '_enrichWiki returns {text, source url}');
+  ok((await cog._enrichWiki('x', { wikiLookup: async () => [] })).text === '', '_enrichWiki no pages → empty');
 
-  // 10) ALL cheaper tiers miss → FORENSIC EXCAVATION (screenshot+vision) reads it off the rendered page.
+  // 10) ALL cheaper tiers miss → FORENSIC EXCAVATION reads it off the rendered page AND kicks the write-back.
+  let wbCall = null;
   const excavateMock = async () => ({ found: true, answer: 'Pete Hegseth is the U.S. Secretary of Defense.', url: 'https://en.wikipedia.org/wiki/United_States_Secretary_of_Defense' });
   const x = await cog.answerGrounded({ userMessage: 'who is the current secretary of defense?', grounding: '', deps: {
     ask: async ({ input }) => /Hegseth|rendered page/i.test(String(input.grounding)) ? 'Pete Hegseth is the Secretary of Defense.' : 'NEED: current US Secretary of Defense',
-    dispatch: emptyGraph, webSearch: async () => ({ results: [] }), excavate: excavateMock } });
+    dispatch: emptyGraph, webSearch: async () => ({ results: [] }), excavate: excavateMock, writeBack: async (a) => { wbCall = a; } } });
   ok(x && x.enrichSource === 'excavate' && /Hegseth/.test(x.say), 'all text tiers miss → forensic excavation recovers the answer');
-  ok((await cog._enrichExcavate('x', { excavate: async () => ({ found: false }) })) === '', '_enrichExcavate not-found → empty string');
-
-  // 11) SELF-HEAL — a found excavation kicks the write-back (non-blocking) with the recovered Q/answer/url.
-  let wbCall = null;
-  const found = await cog._enrichExcavate('who is the SecDef', { excavate: async () => ({ found: true, answer: 'Pete Hegseth is SecDef.', url: 'https://en.wikipedia.org/wiki/United_States_Secretary_of_Defense' }), writeBack: async (a) => { wbCall = a; } });
-  ok(/Hegseth/.test(found), '_enrichExcavate returns the answer immediately (does not block on write-back)');
+  ok((await cog._enrichExcavate('x', { excavate: async () => ({ found: false }) })).text === '', '_enrichExcavate not-found → empty');
   await new Promise(r => setTimeout(r, 5));   // let the fire-and-forget write-back run
-  ok(wbCall && wbCall.query === 'who is the SecDef' && /Hegseth/.test(wbCall.answer) && /Secretary_of_Defense/.test(wbCall.url), 'self-heal: found excavation kicks the write-back with query + answer + source URL');
+  ok(wbCall && /Hegseth/.test(wbCall.answer) && /Secretary_of_Defense/.test(wbCall.url) && wbCall.source === 'excavate', 'self-heal: excavation kicks the write-back with answer + source URL (non-blocking)');
+
+  // 11) _kickWriteBack skips when there's no source URL (graph/routed = our own data → nothing to bank).
+  let kicked = false;
+  cog._kickWriteBack({ query: 'q', answer: 'a', url: null, source: 'graph', deps: { writeBack: async () => { kicked = true; } } });
+  await new Promise(r => setTimeout(r, 5));
+  ok(!kicked, '_kickWriteBack: no source URL → no write-back (our-own-data tiers do not re-bank)');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
