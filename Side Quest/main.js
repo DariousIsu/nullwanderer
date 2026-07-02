@@ -3675,19 +3675,6 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     newUserMessage: composedUserMessage
   });
 
-  // TEMP DIAGNOSTIC (turn→object-graph): dump the EXACT final local prompt so we can SEE whether the
-  // voice model receives ONE authoritative answer or a pile of stapled directives. Remove after diagnosis.
-  try {
-    const sys = (messages[0] && messages[0].content) || '';
-    const directives = (composedUserMessage.match(/\[[^\]]{20,}\]/g) || []).map((d, i) => `  [${i + 1}] ${d.replace(/\s+/g, ' ').slice(0, 260)}`);
-    require('fs').appendFileSync(require('path').join(__dirname, 'data', 'prompt_debug.log'),
-      `\n\n===== TURN ${new Date().toISOString()} | user="${String(userMessage).replace(/\s+/g, ' ').slice(0, 90)}" =====\n`
-      + `ROUTE: ${turnRoute.route} (${turnRoute.reason}, conf ${turnRoute.confidence})\n`
-      + `SYSTEM prompt: ${sys.length} chars (~${Math.round(sys.length / 4)} tok)\n`
-      + `STAPLED DIRECTIVES in composedUserMessage: ${directives.length}\n${directives.join('\n')}\n`
-      + `--- FULL composedUserMessage ---\n${composedUserMessage}\n`);
-  } catch (e) { console.error('[promptdump] failed:', e.message); }
-
   // STREAM directive-filter: hold any "[" open until it closes; drop it if it reads as a leaked
   // directive, so an echoed [ANSWER TO GIVE…]/[Lucas asked…] never reaches the UI live (the final-text
   // strip alone was too late — the reply streams token-by-token). flush() after the stream.
