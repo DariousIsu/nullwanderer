@@ -144,6 +144,8 @@ let currentSessionId = null;
 let currentSessionStartedAt = null;
 let inboxPollTimer = null;     // setInterval id for the inbox poller (cleared on shutdown)
 let inboxPollTimeout = null;   // initial-sweep setTimeout id
+let emailIntakeTimer = null;   // setInterval id for the read-only newsletter/meeting-notes intake lane
+let emailIntakeTimeout = null; // initial-sweep setTimeout id
 let canvasIngestTimer = null;  // setInterval id for the canvas drop→ingest poller (cleared on shutdown)
 let canvasIngestTimeout = null;// initial-sweep setTimeout id
 let lastUserTurnTs = Date.now(); // for detecting "return after a long absence" (capability proposals)
@@ -804,6 +806,46 @@ app.whenReady().then(() => {
     console.log(`[main] news collector started (every ${Math.round(FEED_POLL_MS / 1000)}s → isolated bucket)`);
   }
 
+  // EMAIL INTAKE LANE — Zoe's own inbox is a subscription surface (newsletters + Gemini meeting-notes).
+  // READ-ONLY (EXAMINE): this connection provably cannot mark-read/delete. Newsletters route into the
+  // SAME isolated news bucket as RSS (source_kind='newsletter') → they ride the hourly briefing rail;
+  // Gemini meeting-notes land as memory documents (promoted nightly). A UID cursor is the dedup key.
+  // Routed UIDs are folded into inbox_surfaced_uids so the chat-surfacing inbox poller stays QUIET on
+  // them — a newsletter is data-stream fuel, not a chat nudge. Gated on email being configured.
+  if (inboxLib.isConfigured()) {
+    const EMAIL_INTAKE_MS = parseInt(process.env.EMAIL_INTAKE_MS || '', 10) || 5 * 60 * 1000;
+    const emailIntake = require('./lib/email_intake');
+    const newsStore = require('./lib/news_store');
+    const docStore = require('./lib/doc_store');
+    const runEmailIntake = async () => {
+      try {
+        const r = await emailIntake.runIntakeTick({
+          poll: (sinceUid, cap) => inboxLib.pollForIntake(sinceUid, cap),
+          store: newsStore,
+          landDoc: (doc) => { try { docStore.land(doc); } catch (e) { console.error('[email-intake] doc land failed:', e.message); } },
+          cursor: () => { try { return parseInt(db.getMeta('email_intake_cursor_uid') || '0', 10) || 0; } catch { return 0; } },
+          saveCursor: (uid) => { try { db.setMeta('email_intake_cursor_uid', String(uid)); } catch {} },
+          onRouted: (uids) => {
+            // Mark lane-claimed UIDs as already-surfaced so runInboxPoll skips them (no chat nudge).
+            try {
+              const surfaced = JSON.parse(db.getMeta('inbox_surfaced_uids') || '[]');
+              db.setMeta('inbox_surfaced_uids', JSON.stringify([...surfaced, ...uids].slice(-500)));
+            } catch {}
+          },
+          cap: parseInt(process.env.EMAIL_INTAKE_CAP || '', 10) || 12,
+          log: (m) => console.log(m),
+        });
+        if (r && r.ok && (r.newsletters || r.meetings) && mainWindow && !mainWindow.isDestroyed() && r.newsletters) {
+          // a newsletter dropped into the bucket may deserve a fresh briefing on the next compression tick;
+          // no immediate push — it clusters on the hour like everything else.
+        }
+      } catch (e) { console.error('[email-intake]', e.message); }
+    };
+    emailIntakeTimeout = setTimeout(() => { runEmailIntake().catch(() => {}); }, 45000); // initial sweep ~45s after boot
+    emailIntakeTimer = setInterval(() => { runEmailIntake().catch(() => {}); }, EMAIL_INTAKE_MS);
+    console.log(`[main] email intake lane started (read-only, every ${Math.round(EMAIL_INTAKE_MS / 60000)}m → newsletters+meeting-notes)`);
+  }
+
   // NEWS HOURLY COMPRESSION (Phase B) — turns the raw reservoir into clean rolling STORIES + an hourly
   // briefing layer. Model-free clustering with a cloud adjudicator for the ambiguous cross-source band;
   // corroboration is syndication-aware (a wire story republished across N outlets counts as ONE report,
@@ -943,6 +985,8 @@ app.whenReady().then(() => {
 app.on('window-all-closed', async () => {
   if (inboxPollTimer) { clearInterval(inboxPollTimer); inboxPollTimer = null; }
   if (inboxPollTimeout) { clearTimeout(inboxPollTimeout); inboxPollTimeout = null; }
+  if (emailIntakeTimer) { clearInterval(emailIntakeTimer); emailIntakeTimer = null; }
+  if (emailIntakeTimeout) { clearTimeout(emailIntakeTimeout); emailIntakeTimeout = null; }
   if (canvasIngestTimer) { clearInterval(canvasIngestTimer); canvasIngestTimer = null; }
   if (canvasIngestTimeout) { clearTimeout(canvasIngestTimeout); canvasIngestTimeout = null; }
   try { require('./lib/news_poll').stop(); } catch {}

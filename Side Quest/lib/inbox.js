@@ -121,6 +121,65 @@ async function pollUnread(surfacedUids = [], cap = 3) {
   return { ok: true, messages };
 }
 
+// READ-ONLY intake poll for the newsletter/meeting-notes lane (lib/email_intake). Opens the mailbox
+// with { readOnly: true } → the server issues EXAMINE, so this connection PROVABLY cannot mark-read,
+// flag, move, or delete anything (a hard guarantee the user asked for: her inbox is read-only to Zoe).
+// Drains OLDEST-first everything with UID > sinceUid, capped per call, and returns the raw headers
+// (List-Unsubscribe / List-Id / Precedence) + a fuller body than the 600-char snippet so the intake
+// classifier can tell a bulk newsletter from a Gemini meeting-notes mail from a real person. The UID
+// cursor (not \Seen flags) is the dedup key — consistent with read-only mode.
+async function pollForIntake(sinceUid = 0, cap = 12) {
+  const cfg = config.emailConfig();
+  if (!cfg.configured || !ImapFlow) return { ok: false, reason: 'email not configured' };
+  const client = new ImapFlow({ host: HOST, port: 993, secure: true, auth: { user: cfg.user, pass: cfg.pass }, logger: false });
+  try { await client.connect(); } catch (e) { return { ok: false, reason: e.message }; }
+
+  let lock;
+  const collected = [];
+  try {
+    lock = await client.getMailboxLock('INBOX', { readOnly: true });   // EXAMINE — server-enforced read-only
+    const since = Math.max(0, Number(sinceUid) || 0);
+    const start = since + 1;
+    // UID range `start:*` — note IMAP returns the highest message even when start > highest UID, so we
+    // must filter uid > since ourselves (below). Fetch specific header lines + the text body part.
+    for await (const msg of client.fetch(
+      `${start}:*`,
+      { uid: true, envelope: true, internalDate: true, headers: ['list-unsubscribe', 'list-id', 'precedence', 'auto-submitted'], bodyParts: ['text'] },
+      { uid: true }
+    )) {
+      if (!msg || msg.uid == null || msg.uid <= since) continue;   // the N:* quirk guard
+      let body = '';
+      try {
+        const part = msg.bodyParts && msg.bodyParts.get ? msg.bodyParts.get('text') : null;
+        if (part) body = part.toString('utf8').replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 8000);
+      } catch {}
+      let headersRaw = '';
+      try { if (msg.headers) headersRaw = msg.headers.toString('utf8'); } catch {}
+      const env = msg.envelope || {};
+      const fromObj = (env.from && env.from[0]) || {};
+      collected.push({
+        uid: msg.uid,
+        from: fromObj.name || fromObj.address || 'unknown',
+        fromAddr: (fromObj.address || '').toLowerCase(),
+        subject: env.subject || '(no subject)',
+        messageId: env.messageId || '',
+        date: env.date ? new Date(env.date).toISOString() : (msg.internalDate ? new Date(msg.internalDate).toISOString() : ''),
+        ts: env.date ? new Date(env.date).getTime() : (msg.internalDate ? new Date(msg.internalDate).getTime() : 0),
+        headersRaw,
+        body,
+      });
+    }
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  } finally {
+    try { if (lock) lock.release(); } catch {}
+    try { await client.logout(); } catch {}
+  }
+  collected.sort((a, b) => a.uid - b.uid);          // oldest-first
+  const batch = collected.slice(0, Math.max(1, cap)); // cap per tick; cursor advances to batch max → nothing skipped
+  return { ok: true, messages: batch, remaining: Math.max(0, collected.length - batch.length) };
+}
+
 function formatInbox(result) {
   if (!result || !result.ok) return `(couldn't read the inbox: ${result?.reason || 'unknown'})`;
   if (!result.messages || result.messages.length === 0) return 'Your inbox has no messages to show right now.';
@@ -224,4 +283,4 @@ function buildPromptBlock() {
 Your recent messages (sender, subject, snippet) then arrive in your next-turn context. Use it whenever Lucas asks you to check or read your email/inbox, or to see replies to mail you sent. This is a DIFFERENT action from sending: <read-inbox/> READS; <email>/<email-draft>/<email-send> SEND. When asked to read, emit <read-inbox/> — never draft or send.`;
 }
 
-module.exports = { fetchInbox, pollUnread, formatInbox, parseTags, stripTags, dispatch, buildPromptBlock, isConfigured, isJunkSender, detectInboxIntent, inboxReferent, buildInboxNudge };
+module.exports = { fetchInbox, pollUnread, pollForIntake, formatInbox, parseTags, stripTags, dispatch, buildPromptBlock, isConfigured, isJunkSender, detectInboxIntent, inboxReferent, buildInboxNudge };
