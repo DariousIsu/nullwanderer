@@ -161,7 +161,7 @@ function laneOf(name) {
 // lane carries her browser tools; the deep lane carries the structured tools. Both keep recall + the
 // generic `echo` escape hatch (read-gated). Neither writes files — the driver merges + writes.
 function laneToolNames(lane) {
-  if (lane === 'web') return ['web_search', 'open_page', 'browser_read'].concat(WEB_TOOLS.map(t => t.op)).concat(['recall', 'echo']);
+  if (lane === 'web') return ['web_search', 'open_page', 'see_page', 'browser_read'].concat(WEB_TOOLS.map(t => t.op)).concat(['recall', 'echo']);
   return READ_TOOLS.map(t => t.op).concat(['recall', 'echo']);
 }
 

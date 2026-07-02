@@ -88,6 +88,16 @@ function fakeWeb({ shots }) {
   const r8 = await excavate.excavate('x', { url: 'https://x', maxSteps: 2, maxClicks: 2, deps: { web: web8, vision: visionChrome, settle: false } });
   ok(!r8.found && web8._clicks() === 0, 'vision names chrome ("Main menu") → guard skips it, no wander');
 
+  // ── seePage: research vision-EXTRACT across views (reads infoboxes/tables the a11y text misses) ──
+  let si = 0;
+  const seeWeb = { open: async () => ({ ok: true, url: 'https://org.example/team' }), screenshot: async () => ({ ok: true, base64: 'V' + (si++), url: 'https://org.example/team' }), scroll: async () => ({ ok: true }) };
+  const seeVision = { describe: async ({ imageBase64 }) => imageBase64 === 'V1' ? { ok: true, text: '(nothing relevant)' } : { ok: true, text: 'Jane Roe — VP of Policy. Board formed 2019.' } };
+  const sp = await excavate.seePage('leadership of the org', { url: 'https://org.example/team', maxViews: 2, deps: { web: seeWeb, vision: seeVision } });
+  ok(sp.ok && /Jane Roe/.test(sp.text) && /VP of Policy/.test(sp.text) && sp.url === 'https://org.example/team', 'seePage extracts facts across views (with source url for the write-back)');
+  ok(!/nothing relevant/i.test(sp.text), 'seePage drops "(nothing relevant)" views');
+  const spFail = await excavate.seePage('x', { url: 'https://x', deps: { web: { open: async () => ({ ok: false, reason: 'nav timeout' }) }, vision: seeVision } });
+  ok(spFail.ok === false && /open failed/.test(spFail.reason), 'seePage: open failure → graceful not-ok');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

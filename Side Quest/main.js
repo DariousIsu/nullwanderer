@@ -5034,6 +5034,17 @@ const operatorTools = {
     try { const r = await webLib.read(); return (r && r.ok && r.text) || 'no page open in your browser'; }
     catch (e) { return 'ERROR: ' + e.message; }
   },
+  // SEE a page with her EYES (vision) — reads infoboxes, tables, charts, and JS-rendered content that the
+  // a11y text (open_page/browser_read) misses. Extracts the facts relevant to `focus` AND banks them with
+  // the source url, so deep research BUILDS our DB from what she saw. Uses the dedicated top-tier vision model.
+  see_page: async ({ url, focus } = {}) => {
+    try {
+      const r = await require('./lib/excavate').seePage(String(focus || ''), url ? { url } : {});
+      if (!r || !r.ok) return `could not see ${url || 'the page'}: ${(r && r.reason) || 'failed'}`;
+      if (r.text && r.url) { try { require('./lib/learning').maybeCaptureLearnings({ query: String(focus || 'research'), content: r.text, urls: [r.url] }); } catch {} }
+      return r.text ? `SAW ${r.url}:\n${r.text.slice(0, 4000)}` : `looked at ${r.url} but saw nothing relevant to "${focus}"`;
+    } catch (e) { return 'ERROR: ' + e.message; }
+  },
   recall: async ({ query } = {}) => {
     try { const rows = await memoryLib.retrieve(String(query || ''), { k: 5 }); const t = (rows || []).map(r => '- ' + String((r && r.content) || '').replace(/\s+/g, ' ').slice(0, 220)).join('\n'); return t || 'nothing relevant in memory'; }
     catch (e) { return 'ERROR: ' + e.message; }
@@ -5694,6 +5705,7 @@ async function runDeepResearchTarget({ org, goal = '', facet = '', guidance = ''
   const webSpec = ['TOOLS (call exactly ONE per step):',
     '- web_search {"query":"…"}      search the open web + read the top result',
     '- open_page {"url":"…"}         open a SPECIFIC page in her browser and read it fully (go to the org\'s /team, /leadership, /about, /contact)',
+    '- see_page {"url":"…","focus":"…"}  SEE a page with your EYES (vision) — reads infoboxes, tables, charts, and JS-rendered content the text read MISSES. Use when open_page returned thin/empty text or the facts live in a table/infobox. `focus` = what you\'re after.',
     '- browser_read {}               read the page currently open in her browser',
     tier.laneSpec('web'),
     '- echo {"need":"…"}             open-web / reference lookups (read-only)',

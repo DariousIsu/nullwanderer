@@ -155,4 +155,41 @@ async function excavate(need, { url = null, maxSteps = 8, maxClicks = 2, deps = 
   return { found: false, url: nav.url, steps: lastScan ? lastScan.steps : 0 };
 }
 
-module.exports = { excavate, _scanPage, _clickToward, _visionPrompt, _clickPrompt, _wikiUrl, FOUND_RE, CLICK_RE };
+// Research-oriented vision EXTRACTION (vs excavate's find-ONE-answer): read a page with her EYES and pull
+// EVERY fact relevant to `focus` — infoboxes, tables, charts, JS-rendered content the a11y text (open_page/
+// browser_read) drops. This is what makes deep research build the DB: the operator SEES a source, extracts
+// its facts, and they get banked. Scrolls a few views; dedicated top-tier vision model. Returns
+// { ok, url, text }. Fail-soft.
+function _seePrompt(focus) {
+  return `Read this web page image and extract EVERY concrete fact relevant to:\n"${String(focus).slice(0, 220)}"\n\n`
+    + `Copy names, titles, dates, numbers, roles, affiliations, and any table/infobox values EXACTLY as shown. `
+    + `If nothing on THIS screen is relevant, reply exactly "(nothing relevant)". Be factual and concise — never invent.`;
+}
+async function seePage(focus, { url = null, maxViews = 3, deps = {} } = {}) {
+  const web = deps.web || require('./web');
+  const vision = deps.vision || require('./vision');
+  const log = deps.log || ((m) => console.log('[seePage] ' + m));
+  if (deps.visionModel == null && !deps.vision) { try { const cfg = require('./vision').visionModelFor('excavate'); deps = { ...deps, visionModel: cfg.model, visionTier: cfg.tier }; } catch {} }
+  const f = String(focus || '').trim() || 'the topic';
+  if (url) {
+    try { const nav = await web.open(url); if (!nav || !nav.ok) return { ok: false, url, reason: 'open failed: ' + ((nav && nav.reason) || '?') }; if (nav.blocker) return { ok: false, url: nav.url, reason: 'blocker:' + nav.blocker.type }; }
+    catch (e) { return { ok: false, url, reason: e.message }; }
+  }
+  const parts = []; let prev = null, pageUrl = url || '';
+  for (let i = 0; i < maxViews; i++) {
+    let shot; try { shot = await web.screenshot({}); } catch { break; }
+    if (!shot || !shot.ok) break;
+    pageUrl = shot.url || pageUrl;
+    if (prev && shot.base64 === prev) break;   // bottom
+    prev = shot.base64;
+    let v;
+    try { v = await vision.describe({ imageBase64: shot.base64, prompt: _seePrompt(f), model: deps.visionModel, tier: deps.visionTier, completeFn: deps.complete }); } catch {}
+    const t = ((v && v.ok && v.text) || '').trim();
+    log(`view ${i} @${pageUrl}: ${t ? t.replace(/\s+/g, ' ').slice(0, 70) : 'vision ' + (v && v.reason || 'empty')}`);
+    if (t && !/^\(nothing relevant/i.test(t)) parts.push(t);
+    try { const s = await web.scroll('down'); if (!s || !s.ok) break; } catch { break; }
+  }
+  return { ok: true, url: pageUrl, text: parts.join('\n').replace(/\n{3,}/g, '\n\n').trim() };
+}
+
+module.exports = { excavate, seePage, _scanPage, _clickToward, _visionPrompt, _clickPrompt, _seePrompt, _wikiUrl, FOUND_RE, CLICK_RE };
