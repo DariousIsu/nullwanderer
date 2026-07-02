@@ -65,6 +65,38 @@ function mockClient() {
   const r4 = await suit.routeNeed('x', { ask: async () => null });   // ask returns null pick
   ok(r4.routed === true && r4.ok === false, 'cloud pick null → graceful no-fit (no crash)');
 
+  // --- ARG-VALIDATION RETRY: cloud writes bad args → tool errors → corrected args → succeeds ---
+  suit = new EchoSuit({ client: (() => {
+    const calls = [];
+    return { calls, async callTool(name, args) {
+      calls.push({ name, args });
+      const J = (o) => ({ content: [{ text: typeof o === 'string' ? o : JSON.stringify(o) }] });
+      if (name === 'list_recipes') return J({ recipes: [] });
+      if (name === 'get_tool_map') return J({ by_intent: { retrieve: [{ name: 'summarize_universe', description: 'summarize the whole knowledge graph' }] } });
+      if (name === 'describe_tool') return J({ name: args.name, parameters: {} });   // takes NO args
+      if (name === 'summarize_universe') return (args && Object.keys(args).length)
+        ? J('1 validation error for call[summarize_universe] query Unexpected keyword argument [type=unexpected_keyword_argument]')   // bad: has a key
+        : J('Universe: 1200 entities across 8 corpora');                                                                              // good: {}
+      return J('');
+    } };
+  })() }); suit.connected = true;
+  const askFix = async ({ task }) => {
+    if (task === 'echo_pick') return { type: 'tool', name: 'summarize_universe', reason: 'summary' };
+    if (task === 'echo_args') return { query: 'everything' };   // BAD — summarize_universe takes no args
+    if (task === 'echo_args_fix') return {};                    // CORRECTED — no args
+    return null;
+  };
+  const rFix = await suit.routeNeed('summarize the knowledge graph', { ask: askFix });
+  ok(rFix.routed === true && /1200 entities/.test(rFix.text), 'arg retry: bad args → validation error → corrected args → success');
+  const fixCalls = suit.client().calls.filter(c => c.name === 'summarize_universe');
+  ok(fixCalls.length === 2 && Object.keys(fixCalls[0].args).length > 0 && Object.keys(fixCalls[1].args).length === 0, 'called twice: first with bad args, then corrected {}');
+  // a NON-arg error (real data miss) does NOT retry
+  suit = new EchoSuit({ client: mockClient() }); suit.connected = true;
+  let argFixAsked = false;
+  const askNoRetry = async ({ task }) => { if (task === 'echo_args_fix') { argFixAsked = true; } if (task === 'echo_pick') return { type: 'tool', name: 'search_knowledge', reason: 'x' }; if (task === 'echo_args') return { query: 'X' }; return null; };
+  await suit.routeNeed('search vault', { ask: askNoRetry });
+  ok(argFixAsked === false, 'a successful (or non-arg-error) call does NOT trigger the arg-fix retry');
+
   // --- enable flag: meta echo.cloudRoute=off → disabled ---
   D.setMeta('echo.cloudRoute', 'off');
   ok(echoCloudRouteEnabled() === false, 'echo.cloudRoute=off → routing disabled (falls back to manual list)');

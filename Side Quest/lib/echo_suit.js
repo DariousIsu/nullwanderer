@@ -19,6 +19,8 @@
 const echo = require('./echo');
 
 const cap = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s || ''));
+// A tool call that failed on ARGS (not data) — worth one corrected retry in routeNeed.
+const ARG_ERR_RE = /unexpected keyword|validation error|field required|missing .*argument|not a valid|invalid argument|no such (?:column|table)|required (?:property|argument)/i;
 
 // ---------- pure helpers (unit-tested in isolation) ----------
 
@@ -326,7 +328,7 @@ class EchoSuit {
     const pick = await cloudAsk({
       task: 'echo_pick', v: 1,
       input: { need: query, recipes, tools },
-      want: 'Pick the SINGLE best way to satisfy the need from the catalog. Prefer a recipe. Output ONLY JSON: {"type":"recipe"|"tool"|"none","name":"exact name from the catalog","arg":"the one plain arg, only for a recipe","reason":"short"}. Use "none" only if nothing fits.',
+      want: 'Pick the SINGLE best way to satisfy the need from the catalog. Prefer a recipe. Output ONLY JSON: {"type":"recipe"|"tool"|"none","name":"exact name from the catalog","arg":"the one plain arg, only for a recipe","reason":"short"}. Use "none" when nothing GENUINELY fits — INCLUDING when the need is an open-web / general-knowledge / current-news question rather than OUR own private structured data (the caller falls back to web + vision for those). Do NOT force a CRM/list/summary tool onto a question it does not actually answer.',
       validate: (raw) => { const m = String(raw || '').match(/\{[\s\S]*\}/); if (!m) return { valid: false, error: 'no json' }; try { const o = JSON.parse(m[0]); return o && o.type ? { valid: true, value: o } : { valid: false, error: 'no type' }; } catch (e) { return { valid: false, error: e.message }; } }
     });
     if (!pick || pick.type === 'none' || !pick.name) {
@@ -356,8 +358,23 @@ class EchoSuit {
       want: `Write the JSON arguments object for the tool "${pick.name}" to satisfy the need, matching its schema. Output ONLY a JSON object (e.g. {"query":"..."}). Use {} if it takes no args.`,
       validate: (raw) => { const m = String(raw || '').match(/\{[\s\S]*\}/); if (!m) return { valid: false, error: 'no json' }; try { return { valid: true, value: JSON.parse(m[0]) }; } catch (e) { return { valid: false, error: e.message }; } }
     });
-    const args = (argObj && typeof argObj === 'object') ? argObj : {};
-    const res = await this.dispatch({ kind: 'do', name: pick.name, args }, { autonomous });
+    let args = (argObj && typeof argObj === 'object') ? argObj : {};
+    let res = await this.dispatch({ kind: 'do', name: pick.name, args }, { autonomous });
+    // ARG-VALIDATION RETRY — the cloud often writes args that violate the tool schema (a `query` key on a
+    // tool that doesn't take one → pydantic "unexpected keyword argument"; a db_query on a hallucinated
+    // table). Feed the error back ONCE and let it correct the args, then re-run — turning a hard miss into a
+    // working lookup. Bounded to a single retry; fail-soft.
+    if (res && ARG_ERR_RE.test(String(res.text || ''))) {
+      try {
+        const fixed = await cloudAsk({
+          task: 'echo_args_fix', v: 1,
+          input: { need: query, tool: pick.name, schema: cap(schema, 1800), bad_args: JSON.stringify(args).slice(0, 400), error: String(res.text || '').slice(0, 300) },
+          want: `The previous arguments for "${pick.name}" FAILED with the error shown. Output a CORRECTED JSON arguments object matching the schema EXACTLY — use ONLY keys the schema defines, drop any it doesn't, and fix any bad value (e.g. a wrong table/column name). Output ONLY the JSON object.`,
+          validate: (raw) => { const m = String(raw || '').match(/\{[\s\S]*\}/); if (!m) return { valid: false, error: 'no json' }; try { return { valid: true, value: JSON.parse(m[0]) }; } catch (e) { return { valid: false, error: e.message }; } }
+        });
+        if (fixed && typeof fixed === 'object') { args = fixed; res = await this.dispatch({ kind: 'do', name: pick.name, args }, { autonomous }); }
+      } catch {}
+    }
     return { ...res, kind: 'find', routed: true, chose: `tool ${pick.name}` };
   }
 
