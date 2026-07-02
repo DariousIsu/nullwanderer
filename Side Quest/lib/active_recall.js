@@ -47,6 +47,11 @@ async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retriev
     const preferType = (det && det.kgType) || null;
     mentionUsed = entTopic;
     if (entTopic) { try { obj = (objectFn ? await objectFn(entTopic) : await _echoObject(entTopic, preferType)) || null; } catch { obj = null; } }
+    // RELEVANCE GATE — reject a junk FTS resolve (a FL bill for "Cuban Missile Crisis", "Hispanic Heritage
+    // Foundation" for "Heritage Foundation", "AH DEFENSE LLC" for "Secretary of Defense") so we never ground
+    // on — or half-trust — the wrong object. Junk → null → the cloud/wiki answers cleanly. Live path only;
+    // objectFn (offline tests) keeps its deterministic object.
+    if (obj && !objectFn) { try { if (!require('./echo_suit')._relevanceGate(entTopic, obj)) obj = null; } catch {} }
   }
   // ECHO MASTER DB: query the system-of-record corpus (search_knowledge) — the real "she already
   // knows it" pool. Reference-not-copy: snippets surface into recall, never copied into sq.db.

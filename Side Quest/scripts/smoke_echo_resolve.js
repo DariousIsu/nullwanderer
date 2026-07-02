@@ -112,6 +112,21 @@ function dispatch({ sibling = true } = {}) {
   ok(wl.some(p => /Lead extract/.test(p.extract)), 'wikiLookup: remaining pages get lead extracts');
   ok((await echo.wikiLookup('x', { dispatch: async () => ({ ok: true, text: '{"results":[]}' }) })).length === 0, 'wikiLookup: no search hits → []');
 
+  // ── _relevanceGate — reject junk FTS resolves, keep legitimate ones (the battery-proven root) ──
+  const G = echo._relevanceGate;
+  // REJECT: org/place with a qualifier the query didn't ask for (name superset ≠ same entity)
+  ok(G('Heritage Foundation', { name: 'HISPANIC HERITAGE FOUNDATION', type: 'organization', subtype: 'lobby_client' }) === false, 'gate: "Hispanic Heritage Foundation" ⊃ "Heritage Foundation" → reject');
+  ok(G('Defense', { name: 'AH DEFENSE LLC DBA JVIS DEFENSE', type: 'organization', subtype: 'lobby_client' }) === false, 'gate: "AH DEFENSE LLC" for "Defense" → reject');
+  ok(G('Senate', { name: 'CALIFORNIA STATE SENATE', type: 'organization', subtype: 'lobby_client' }) === false, 'gate: "California State Senate" for "Senate" → reject');
+  // KEEP: same core name (exact org), and person middle-name variance
+  ok(G('Nvidia', { name: 'NVIDIA', type: 'organization', subtype: 'lobby_client' }) === true, 'gate: exact core name "Nvidia" → keep (even a lobby record — currency/wiki uses it correctly)');
+  ok(G('NATO', { name: 'NATO', type: 'organization', subtype: 'wikidata_target' }) === true, 'gate: "NATO" == "NATO" → keep');
+  ok(G('Lee Zeldin', { name: 'ZELDIN, LEE MICHAEL [H8]', type: 'person', subtype: 'us_representative' }) === true, 'gate: person middle-name variant → keep');
+  ok(G('Donald Trump', { name: 'Donald J. Trump [FEC:P80001571]', type: 'person', subtype: 'us_executive' }) === true, 'gate: "Donald Trump" vs "Donald J. Trump" → keep');
+  // KEEP: the bill carve-out — canonical name is a number, matches on title → must NOT be name-gated away
+  ok(G('Inflation Reduction Act', { name: 'HR 5376 (US, 117)', type: 'bill', subtype: 'bill' }) === true, 'gate: bill carve-out keeps "Inflation Reduction Act" → HR 5376');
+  ok(G('anything', null) === false, 'gate: null object → reject');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

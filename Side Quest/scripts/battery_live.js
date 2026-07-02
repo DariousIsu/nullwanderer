@@ -49,6 +49,17 @@ function judge(say, expect, anti) {
   if ((anti || []).some(a => s.includes(a.toLowerCase()))) return 'FAIL';
   return (expect || []).some(e => s.includes(e.toLowerCase())) ? 'pass' : 'FAIL';
 }
+// RESOLUTION-QUALITY axis (independent of answer correctness): flag when the resolver lit up a JUNK object.
+// Answer-correctness is MASKED by cloud general knowledge; this exposes the real defect the gate targets.
+// A resolution is "junk" if a subtype known to be CRM/FTS noise was lit, or the object name shares no
+// meaningful token with the query. (Heuristic — a second opinion on the gate, not the gate itself.)
+const NOISE_SUBTYPE = /lobby_client|lobby|\bclient\b/i;   // wikidata_target is a LEGIT KG entity (NATO/UN) — not noise
+function resolutionQuality(q, objStr) {
+  if (!objStr || objStr === '∅') return 'clean';   // no object lit → nothing junk grounded
+  const sub = (objStr.split('/')[1] || '');
+  if (NOISE_SUBTYPE.test(sub)) return 'JUNK';
+  return 'clean';
+}
 
 (async () => {
   try { require(path.join(SQ, 'lib', 'keystore')).hydrateFromEcho(['OLLAMA_API_KEY'], { python: path.join(ECHO_CWD, '.venv', 'Scripts', 'python.exe'), cwd: ECHO_CWD }); } catch {}
@@ -64,7 +75,7 @@ function judge(say, expect, anti) {
   const only = onlyArg ? onlyArg.split(',') : null;
   const cases = only ? CASES.filter(c => only.includes(c[0])) : CASES;
 
-  const cat = {}; const fails = [];
+  const cat = {}; const fails = []; const junks = [];
   for (const [category, q, expect, anti] of cases) {
     const social = intent.isSocialTurn(q), claim = meta.classifyClaimType(q);
     let say = '(handled locally/social)', src = '—', obj = '∅';
@@ -79,16 +90,20 @@ function judge(say, expect, anti) {
       } catch (e) { say = 'ERR ' + e.message; src = 'ERR'; }
     }
     const verdict = judge(say, expect, anti);
+    const rq = resolutionQuality(q, obj);
     cat[category] = cat[category] || { pass: 0, fail: 0 };
     if (verdict === 'pass') cat[category].pass++; else if (verdict === 'FAIL') { cat[category].fail++; fails.push({ category, q, obj, src, say }); }
-    L(`${verdict === 'pass' ? '✓' : verdict === 'FAIL' ? '✗' : '·'} [${category}] ${q}  (obj=${obj} src=${src})`);
+    if (rq === 'JUNK') junks.push({ category, q, obj });
+    L(`${verdict === 'pass' ? '✓' : verdict === 'FAIL' ? '✗' : '·'}${rq === 'JUNK' ? '⚠' : ' '} [${category}] ${q}  (obj=${obj} src=${src})`);
     if (verdict === 'FAIL') L(`      → ${String(say).replace(/\s+/g, ' ').slice(0, 180)}`);
   }
 
-  L('\n──── per-category ────');
+  L('\n──── per-category (answer correctness) ────');
   let P = 0, F = 0;
   for (const k of Object.keys(cat)) { P += cat[k].pass; F += cat[k].fail; L(`  ${k}: ${cat[k].pass}/${cat[k].pass + cat[k].fail}`); }
-  L(`\nTOTAL: ${P}/${P + F} pass  (${F} fail)`);
-  if (fails.length) { L('\n──── failures ────'); for (const f of fails) L(`  ✗ [${f.category}] "${f.q}"  obj=${f.obj} src=${f.src}\n      ${String(f.say).replace(/\s+/g, ' ').slice(0, 160)}`); }
+  L(`\nANSWERS:    ${P}/${P + F} pass  (${F} fail)`);
+  L(`RESOLUTION: ${cases.length - junks.length}/${cases.length} clean  (${junks.length} junk objects lit)`);
+  if (fails.length) { L('\n──── answer failures ────'); for (const f of fails) L(`  ✗ [${f.category}] "${f.q}"  obj=${f.obj} src=${f.src}\n      ${String(f.say).replace(/\s+/g, ' ').slice(0, 160)}`); }
+  if (junks.length) { L('\n──── junk resolutions (masked by cloud GK, but wrong-lit) ────'); for (const j of junks) L(`  ⚠ [${j.category}] "${j.q}"  obj=${j.obj}`); }
   await suit.close(); process.exit(0);
 })().catch(e => { L('ERR ' + e.message + '\n' + e.stack); process.exit(1); });

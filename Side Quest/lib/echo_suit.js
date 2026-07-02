@@ -494,6 +494,32 @@ function _sameEntity(cands) {
   return true;
 }
 
+// RELEVANCE GATE — is this resolved object a LEGITIMATE match for what was asked, or FTS junk? The diverse
+// battery proved the resolver lights up off-topic records: a Florida bill (HB 4635) for "Cuban Missile
+// Crisis", "HISPANIC HERITAGE FOUNDATION" (a lobby client) for "Heritage Foundation", "AH DEFENSE LLC" for
+// "Secretary of Defense", "CALIFORNIA STATE SENATE" for "US Senate". Mostly MASKED (the cloud ignores junk
+// grounding) but fragile + occasionally fatal (junk poisons the recovery topic). Gate by TYPE:
+//   • bills / legislation / documents: their canonical name is a number/ID and they match on TITLE/summary,
+//     so trust the resolve — "Inflation Reduction Act" → HR 5376 is CORRECT (a naive name-gate wrongly kills
+//     it). This is the carve-out that makes the gate safe.
+//   • person: the object may carry EXTRA name tokens (middle names) → mention ⊆ object (or ⊇) is fine
+//     ("Lee Zeldin" resolving "Lee Michael Zeldin").
+//   • org / place / everything else: require the SAME core name — drops the "Hispanic …" superset and the
+//     "AH DEFENSE LLC …" / "CALIFORNIA STATE …" qualifier-junk that merely CONTAINS the query tokens.
+// Rejecting junk → the object becomes ∅ → the cloud/wiki answers cleanly (and deterministically). Pure.
+const _BILLISH_RE = /bill|legislation|resolution|statute|\blaw\b|document|ordinance|act\b/i;
+function _relevanceGate(mention, obj) {
+  if (!obj) return false;
+  const typeStr = `${obj.type || ''}/${obj.subtype || ''}`;
+  if (_BILLISH_RE.test(typeStr)) return true;                     // bill/doc: matches on title, not name → trust
+  const mk = _coreNameKey(mention), ok = _coreNameKey(obj.name);
+  if (!mk || !ok) return true;                                    // can't judge names → don't block
+  const a = mk.split(' '), b = ok.split(' ');
+  const mSubO = a.every(x => b.includes(x)), oSubM = b.every(x => a.includes(x));
+  if (/person/i.test(String(obj.type || ''))) return mSubO || oSubM;   // people: allow middle-name variance
+  return mSubO && oSubM;                                          // org/place/other: same core name required
+}
+
 // Among all records sharing this wikidata QID (i.e. the SAME real-world entity), pull the RICHEST one's
 // full object — the duplicate-resolution fix. db_query gives id/name/degree in one exact call; we then
 // quick_lookup the winner by name for its full dossier. Returns null (keep the base) if there's no
@@ -717,5 +743,5 @@ async function wikiLookup(query, { dispatch = null, pages = 3, sentences = 4 } =
 
 module.exports = {
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _setLiveForTest
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _setLiveForTest
 };
