@@ -28,6 +28,29 @@ function _shouldEscalate(text) {
   return true;
 }
 
+// CONVERSATIONAL COREFERENCE — bind a bare partial name to the fuller name just used in the dialogue.
+// The break this fixes: "who are his cabinet? → Lee Zeldin, Ryan Zinke…" then "what does Lee do?" —
+// NER tags the bare surname "Lee", and a prominence-ranked FTS resolve returns Curt Lee (a lobbyist) /
+// Mike Lee (a senator), NOT the Lee Zeldin we were just discussing. Anaphora against the recent turns is
+// exactly what makes a conversation flow through the graph. Deterministic, most-recent-wins: only fires
+// when the mention is a single name-token that is a component of a multi-token proper name in context.
+// Returns the fuller name, or null when there's no such antecedent (leave the mention untouched).
+const _PROPER_NAME_RE = /\b[A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+)+\b/g;
+function _expandFromContext(mention, context) {
+  const m = String(mention || '').trim();
+  const ctx = String(context || '');
+  if (m.length < 2 || /\s/.test(m) || !ctx) return null;   // multi-word mention isn't a partial → skip
+  const low = m.toLowerCase().replace(/[.,]+$/, '');
+  const names = ctx.match(_PROPER_NAME_RE) || [];
+  let hit = null;   // context is oldest→newest, so the LAST matching full name is the most recent antecedent
+  for (const name of names) {
+    const toks = name.split(/\s+/);
+    if (toks.length < 2) continue;
+    if (toks.some(tk => tk.toLowerCase().replace(/[.,]+$/, '') === low)) hit = name;
+  }
+  return (hit && hit.toLowerCase() !== m.toLowerCase()) ? hit : null;
+}
+
 // Pick the single object to look up from a decompose plan: the salient resolve target first, then any
 // resolve target, then the first object. Mirrors intake.salientTargets' intent for a single-pull turn.
 function _pickObject(plan) {
@@ -45,24 +68,34 @@ async function detectMention(text, { context = '', deps = {} } = {}) {
   const t = String(text == null ? '' : text).trim();
   if (!t) return null;
 
+  let result = null;
+
   // TIER 1 — local NER
   try {
     const top = await ner.topMention(t);
-    if (top && top.mention) return { mention: top.mention, kgType: top.kgType || null, score: top.score, source: 'ner' };
+    if (top && top.mention) result = { mention: top.mention, kgType: top.kgType || null, score: top.score, source: 'ner' };
   } catch (e) { /* fall through to cloud */ }
 
   // TIER 2 — cloud decompose (selective)
-  if (!deps.noCloud && _shouldEscalate(t)) {
+  if (!result && !deps.noCloud && _shouldEscalate(t)) {
     try {
       const intake = require('./intake');
       const raw = await intake.decompose(t, { recent: String(context || '').slice(0, 400), deps });
       const plan = intake.routeDecomposition(raw);
       const obj = _pickObject(plan);
-      if (obj && obj.mention) return { mention: obj.mention, kgType: obj.type || null, source: 'decompose' };
+      if (obj && obj.mention) result = { mention: obj.mention, kgType: obj.type || null, source: 'decompose' };
     } catch (e) { /* fall through → null */ }
   }
 
-  return null;
+  if (!result) return null;
+
+  // COREFERENCE — expand a bare surname/given-name to the fuller name just used in the conversation, so
+  // the object-pull resolves the person we're actually discussing ("Lee" → "Lee Zeldin"), not a
+  // prominence-ranked stranger. Applied to BOTH tiers; tier-1 NER never saw `context` on its own.
+  const expanded = _expandFromContext(result.mention, context);
+  if (expanded) { result.mention = expanded; result.source += '+ctx'; }
+
+  return result;
 }
 
-module.exports = { detectMention, _shouldEscalate, _pickObject };
+module.exports = { detectMention, _shouldEscalate, _pickObject, _expandFromContext };

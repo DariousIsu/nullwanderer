@@ -29,5 +29,19 @@ ok(m._pickObject({ objects: [
   { mention: 'X', type: null, op: 'create', salient: false },
 ] }).mention === 'X', 'falls back to first object');
 
+// _expandFromContext — conversational coreference: a bare partial name binds to the fuller name just used
+// in the dialogue (the "what does Lee do?" → Lee Zeldin fix), most-recent-wins, and declines when there's
+// no antecedent or the mention is already full.
+const CTX = 'Lucas: who are his cabinet members?\nZoe: Marco Rubio is Secretary of State. It also includes Lee Zeldin, Ryan Zinke, and Lori Chavez-DeRemer.';
+ok(m._expandFromContext('Lee', CTX) === 'Lee Zeldin', 'bare surname → fuller name from context');
+ok(m._expandFromContext('Marco', CTX) === 'Marco Rubio', 'bare given name → fuller name from context');
+ok(m._expandFromContext('Ryan', CTX) === 'Ryan Zinke', 'another antecedent in the same turn');
+ok(m._expandFromContext('Lee Zeldin', CTX) === null, 'already-full mention → no expansion');
+ok(m._expandFromContext('Biden', CTX) === null, 'no antecedent in context → null');
+ok(m._expandFromContext('Lee', '') === null, 'no context → null');
+ok(m._expandFromContext('Lee', 'Lucas: tell me about lee') === null, 'no capitalized full-name antecedent → null');
+// most-recent-wins: two full names carry the surname; the later (more recent) one binds.
+ok(m._expandFromContext('Lee', 'Zoe: Spike Lee directed it.\nLucas: and Lee Zeldin?') === 'Lee Zeldin', 'most-recent antecedent wins');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
