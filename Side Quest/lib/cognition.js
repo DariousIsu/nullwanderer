@@ -112,6 +112,21 @@ async function _enrichWeb(need, deps = {}) {
   return parts.join('\n\n').trim();
 }
 
+// ENRICH tier 1.5 — the cloud TOOL EXECUTOR: let the cloud pick + run the right recipe / db_query / tool
+// for the need (counts, lists, structured records our neighborhood-walk doesn't surface — the LAMP-count
+// class). This is what the interface used to fumble with a local <echo-find>; now the cloud does it.
+async function _enrichRouted(need, deps = {}) {
+  const route = deps.routeNeed || ((q) => { try { return require('./echo_suit').routeNeed(q); } catch { return Promise.resolve(null); } });
+  try {
+    const r = await route(need);
+    if (r && (r.ok || r.text)) {
+      const t = String(r.text || '').replace(/\s+/g, ' ').trim();
+      if (t.length > 40) return `Looked up in our records (${r.chose || 'tool'}): ${t.slice(0, 2400)}`;
+    }
+  } catch {}
+  return '';
+}
+
 // The turn's grounded answer with the enrich/recovery reflex. Returns:
 //   { say, enriched, enrichSource, missed?, need? }  — the substance for the voice block, or
 //   null  → cloud unavailable → caller uses the normal local flow.
@@ -125,9 +140,11 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   const need0 = step.need;
   // ENRICH escalation: OUR graph first, then the live web. Re-draft after each; stop as soon as the
   // grounding can actually answer. This is "let me find out" — never a dead-end, never invented.
-  for (const mode of ['graph', 'web']) {
+  for (const mode of ['graph', 'routed', 'web']) {
     if (!step || !step.need) break;
-    const found = mode === 'graph' ? await _enrichGraph(step.need, object, deps) : await _enrichWeb(step.need, deps);
+    const found = mode === 'graph' ? await _enrichGraph(step.need, object, deps)
+                : mode === 'routed' ? await _enrichRouted(step.need, deps)
+                : await _enrichWeb(step.need, deps);
     if (!found) continue;
     g = [g, `Just retrieved for this (${mode}):\n${found}`].filter(Boolean).join('\n\n');
     step = await _draftOrNeed(userMessage, g, deps);
@@ -137,4 +154,4 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   return { say: `I checked our records and searched, but I couldn't pin down ${need0}.`, enriched: true, missed: true, need: need0 };
 }
 
-module.exports = { answerGrounded, _draftOrNeed, _enrichGraph, _enrichWeb, _entLine, NEED_RE };
+module.exports = { answerGrounded, _draftOrNeed, _enrichGraph, _enrichRouted, _enrichWeb, _entLine, NEED_RE };

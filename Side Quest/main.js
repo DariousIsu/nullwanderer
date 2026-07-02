@@ -2245,6 +2245,7 @@ const voice = require('./lib/voice');
 // io.emit(token) streams say-tokens; io.onComplete/onError fire UI events. For
 // headless callers (Discord) these default to no-ops and the final say is
 // returned in { ok, say } so the caller can deliver it however it likes.
+let _chatTurnGen = 0;   // monotonic per chat turn — used to discard a prior turn's stale tool follow-ups
 async function runChatTurn(userMessage, attachments = [], io = {}) {
   if (!userMessage || !userMessage.trim()) return { ok: false, error: 'empty', say: null };
   const emit = io.emit || (() => {});
@@ -2255,6 +2256,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // Guard: a chat-initiated tool result triggers exactly ONE auto-continuation
   // turn (so she voices what the tool returned without Lucas having to prompt).
   let followupFired = false;
+  // TURN ISOLATION — stamp this turn's generation on the io callback. A prior turn's fire-and-forget
+  // tool dispatch runs AFTER runChatTurn returns; without this it renders into the NEXT turn (the bleed
+  // where "Who is Donald Trump?" got the prior cabinet-task follow-up). fireToolFollowup discards a
+  // follow-up whose stamped generation is stale.
+  const _myGen = ++_chatTurnGen;
+  try { io._gen = _myGen; } catch {}
 
   // Measure the gap since her last turn BEFORE resetting activity — a long gap
   // means Lucas is "back", which is when a capability proposal may surface.
@@ -2818,7 +2825,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // turns the local model must NOT pick or emit Echo tags itself (the interface-uses-tools regression:
   // it was emitting <echo-find> and its async follow-up bled into the next turn). Non-factual turns
   // (curation / delegate / a deliverable) still carry the echo path until those move to the cloud too.
-  const cloudOwnsAnswer = !socialTurn && (() => { try { return require('./lib/metacognition').classifyClaimType(userMessage) === 'factual'; } catch { return false; } })();
+  const cloudOwnsAnswer = !socialTurn && ((() => { try { return require('./lib/metacognition').classifyClaimType(userMessage) === 'factual'; } catch { return false; } })() || ECHO_INVOKE_RE.test(userMessage));
   // ECHO NUDGE (F1) — when Lucas explicitly invokes the suit / our data ("use the db", "the power
   // suit", "our records/KB/graph", "echo"), bind that to the echo tags right at the message tail
   // (highest recency) so she reaches for Echo instead of defaulting to her web browser (the LAMP →
@@ -3149,8 +3156,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // memory (closes both confabulation AND over-hedging where she actually has the facts). Only fires
     // when real grounding exists — no grounding → normal flow (general knowledge / admit-the-gap).
     if (!drafted && !socialTurn && !followupFired && !_isStatusReq) {
-      const factual = (() => { try { return require('./lib/metacognition').classifyClaimType(userMessage) === 'factual'; } catch { return false; } })();
-      if (factual || personalFactQ) {
+      if (cloudOwnsAnswer || personalFactQ) {
         // Grounding sources: her object/knowledge block + relevant past turns + READINGS she holds (the
         // article/page the question is about).
         const grounding = ad.factualGrounding({ knowledgeBlock: retrievedKnowledgeBlock, pastTurns: relevantPastTurns, readings: recentReadings });
@@ -3161,7 +3167,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // with no object stays on the model's own knowledge. Fail-safe: cloud/Echo down → null → local flow.
         let _scope = 'general';
         try { _scope = require('./lib/metacognition').groundingScope(userMessage); } catch {}
-        const _runEnrich = !!(recallResult && recallResult.object) || !!(grounding && grounding.length) || _scope !== 'general' || personalFactQ;
+        const _runEnrich = cloudOwnsAnswer || personalFactQ || !!(recallResult && recallResult.object) || !!(grounding && grounding.length) || _scope !== 'general';
         if (_runEnrich) {
           try {
             const res = await require('./lib/cognition').answerGrounded({ userMessage, grounding, object: recallResult && recallResult.object, userName });
@@ -4720,6 +4726,9 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
 // in the follow-up (stripped) — no recursion.
 const MAX_ECHO_HOPS = 4;   // bounded in-turn Echo chain (find → pick tool → do → answer)
 async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 0 }) {
+  // TURN ISOLATION — if a newer chat turn has started since this follow-up's turn, discard it: a prior
+  // turn's fire-and-forget tool result must never render into the current turn (the cross-turn bleed).
+  if (io && io._gen != null && io._gen !== _chatTurnGen) { console.log(`[main] stale tool-followup discarded (gen ${io._gen} vs ${_chatTurnGen})`); return; }
   // R2 — keep idle PAUSED for the whole user-answer (incl. echo-chain recursion) so the monologue
   // can't tick mid-answer and drift to another topic (the LAMP→STDP drift). Callers resume before
   // calling us; we re-pause for our duration and resume only when the OUTERMOST followup finishes.

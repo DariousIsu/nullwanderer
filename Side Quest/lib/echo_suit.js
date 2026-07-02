@@ -591,8 +591,14 @@ async function dispatch(tag, opts) {
   try { return await _live.dispatch(tag, opts); } catch { return null; }
 }
 function liveDispatch() { return liveReady() ? (tag) => _live.dispatch(tag) : null; }
+// Cloud tool executor (Phase 4): let the CLOUD pick + run the right recipe/tool for a plain-language
+// need — so the interface never has to. Fail-soft; null when Echo/cloud unavailable.
+async function routeNeed(query, opts = {}) {
+  if (!liveReady()) return null;
+  try { return await _live.routeNeed(query, opts); } catch { return null; }
+}
 
 module.exports = {
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _setLiveForTest
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _setLiveForTest
 };
