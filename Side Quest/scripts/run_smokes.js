@@ -85,6 +85,7 @@ const smokes = [
   'smoke_echo_cloud_route.js',
   'smoke_echo_tier.js',
   'smoke_tool_router.js',
+  'smoke_echo_resolve.js',
   'smoke_subconscious.js',
   'smoke_extract_offload.js',
   'smoke_subconscious_tier.js',

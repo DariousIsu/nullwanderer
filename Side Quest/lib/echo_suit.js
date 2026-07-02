@@ -427,6 +427,15 @@ async function recallObject(name, { maxNeighbors = 8, preferType = null, dispatc
     }
   }
   if (!best) return null;
+  // SAME-ENTITY CANONICALIZATION (duplicate-QID fix) — quick_lookup's FTS pick can return a THIN duplicate
+  // over the canonical rich record (Donald Trump's degree-3 "mayor" twin vs his degree-13 "President"
+  // record — same wikidata QID, never merged; the type-sweep above is BLIND to this since both are
+  // 'person'). If the resolved record is thin but carries a QID, pull the RICHEST record sharing that QID
+  // (exact identity — QID covers 100% of the duplicate groups here vs SAME_AS's ~75%). Only runs on a
+  // thin base result, so clean hits pay nothing.
+  if (best.degree < OBJ_RICH_DEGREE && best.wikidata_qid) {
+    try { const richer = await _richestByQid(d, best.wikidata_qid, best); if (richer) best = richer; } catch {}
+  }
   // bounded neighborhood — degree-capped background (open decision #2: can't pull all 320 edges).
   if (maxNeighbors > 0 && best.id) {
     try {
@@ -442,6 +451,23 @@ async function _lookupObject(d, name, preferType) {
   if (!r || !r.ok) return null;
   let data; try { data = JSON.parse(r.text); } catch { return null; }
   return normalizeObject(data && (data.result || data));
+}
+
+// Among all records sharing this wikidata QID (i.e. the SAME real-world entity), pull the RICHEST one's
+// full object — the duplicate-resolution fix. db_query gives id/name/degree in one exact call; we then
+// quick_lookup the winner by name for its full dossier. Returns null (keep the base) if there's no
+// strictly-richer sibling or the pull doesn't beat what we already had. Fail-soft on any transport error.
+async function _richestByQid(d, qid, best) {
+  if (!qid) return null;
+  let r;
+  try { r = await d({ kind: 'do', name: 'db_query', args: { sql: 'SELECT id, name, degree FROM entities WHERE wikidata_qid = ? AND id != ? ORDER BY degree DESC LIMIT 1', params: [qid, best.id || 0] } }); }
+  catch { return null; }
+  if (!r || !r.ok) return null;
+  let rows; try { const j = JSON.parse(r.text); rows = (j && j.rows) || j; } catch { return null; }
+  const top = Array.isArray(rows) ? rows[0] : null;
+  if (!top || (Number(top.degree) || 0) <= (best.degree || 0)) return null;   // no strictly-richer twin
+  const obj = await _lookupObject(d, top.name, best.type);                     // pull the winner's full dossier
+  return (obj && (obj.degree || 0) > (best.degree || 0)) ? obj : null;
 }
 
 // Pure: quick_lookup's `.result` → a flat, render-ready object. facts already carry the attributes
@@ -463,6 +489,7 @@ function normalizeObject(res) {
   return {
     id: ent.id || null, name: clean(ent.name), type: ent.entity_type || null, subtype: ent.entity_subtype || null,
     degree: Number(ent.degree) || 0, role: clean(res.role) || null, citation: clean(res.citation) || null,
+    wikidata_qid: clean(ent.wikidata_qid) || null,   // canonical identity — drives duplicate-QID resolution
     facts, committees, bio: (res.bio && typeof res.bio === 'object') ? res.bio : null, neighbors: []
   };
 }
