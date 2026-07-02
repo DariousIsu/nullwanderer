@@ -35,6 +35,7 @@ const calendarView = require('./studio/calendar_view');      // Calendar surface
 const gcal = require('./lib/gcal');                          // Calendar surface: Google token bridge + Calendar v3 read client
 const feedsView = require('./studio/feeds_view');            // Monitors widget: feed reports → merged item stream
 const feedsStore = require('./lib/feeds');                   // Monitors widget: operator's feed subscription list
+let newsVideoLane = null;                                    // always-on video-caption capture lane (Data-Stream Phase A)
 const canvasLayoutStore = require('./lib/canvas_layout');    // Canvas freeform board: operator's saved block positions
 const kgView = require('./studio/kg_view');                  // Knowledge Graph surface: graph tool payloads → nodes/links
 const docView = require('./studio/doc_view');                // Reader/Library surface: corpus doc payloads → reader view
@@ -407,6 +408,25 @@ app.whenReady().then(() => {
       const r = await cloudCurator.runDailyPass({ apply: true, onLog: (m) => console.log('[curation]', m) });
       console.log('[curation] pass complete:', JSON.stringify(r.stages));
       curationBeat(r.stages);
+      // NEWS daily pass (Data-Stream lane): worthy rolling stories → Echo `event` objects + edges, plus an
+      // evidence doc per story landed into short-term — which rides the promote pass right below into Echo
+      // long-term (+ entity extraction). Idempotent on event_ref. Non-autonomous (this nightly slot only).
+      try {
+        if (echoSuit && echoSuit.connected) {
+          const news_lane = require('./lib/news_lane');
+          const docStore = require('./lib/doc_store');
+          const nr = await news_lane.runDailyPass({
+            dispatch: (t) => echoSuit.dispatch(t),
+            landDoc: (d) => docStore.land(d),
+            log: (m) => console.log('[news-daily]', m),
+          });
+          if (nr && (nr.promoted || nr.updated)) {
+            const text = `[Memory consolidation] I folded ${nr.promoted} new world event${nr.promoted === 1 ? '' : 's'} into my long-term memory from the news I've been tracking.`;
+            const row = db.insertMonologue({ content: text, model: 'news', type: 'reading' });
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
+          }
+        }
+      } catch (e) { console.error('[news-daily] pass failed:', e.message); }
       // PROMOTION (short-term → long-term): consolidate the day's new short-term documents into Echo
       // long-term (vault doc + KG entities), on the SAME nightly cadence as curation.
       try {
@@ -784,6 +804,65 @@ app.whenReady().then(() => {
     console.log(`[main] news collector started (every ${Math.round(FEED_POLL_MS / 1000)}s → isolated bucket)`);
   }
 
+  // NEWS HOURLY COMPRESSION (Phase B) — turns the raw reservoir into clean rolling STORIES + an hourly
+  // briefing layer. Model-free clustering with a cloud adjudicator for the ambiguous cross-source band;
+  // corroboration is syndication-aware (a wire story republished across N outlets counts as ONE report,
+  // not N). The story_id-NULL guard makes it idempotent, so this and an on-demand snapshot never collide.
+  // Emits the hourly briefing to the Monitors widget (no canvas-chat interruption).
+  {
+    const NEWS_COMPRESS_MS = parseInt(process.env.NEWS_COMPRESS_MS || '', 10) || 60 * 60 * 1000;
+    const news_lane = require('./lib/news_lane');
+    const newsStore = require('./lib/news_store');
+    const runHourlyCompression = async () => {
+      try {
+        const engineUp = await ensureEngine();       // adjudicator (ambiguous band) needs the cloud; the deterministic gate runs regardless
+        const cloud = engineUp ? require('./lib/cloud_logic') : null;
+        const now = Date.now();
+        const startMs = now - 25 * 3600 * 1000;       // wide window; the story_id-NULL guard bounds it to UN-clustered items (idempotent + cheap)
+        const r = await news_lane.runCompression({
+          store: newsStore, startMs, endMs: now, now,
+          adjudicate: cloud ? (s, i) => news_lane.adjudicateSameEvent(s, i, { ask: cloud.ask }) : null,
+          classifyAds: cloud ? (segs) => require('./lib/news_ads').classifyBatch(segs, { ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null) }) : null,
+          writeLayer: true,
+          log: (m) => console.log(m),
+        });
+        console.log(`[news] hourly compression: ${r.items} new items → +${r.created}/${r.attached} stories, ${r.closed} closed, layer ${r.layerId}, ${r.storyCount} active`);
+        if (mainWindow && !mainWindow.isDestroyed() && r.briefing) {
+          try { mainWindow.webContents.send('news:layer', { at: now, storyCount: r.storyCount, briefing: r.briefing }); } catch {}
+        }
+      } catch (e) { console.error('[news] hourly compression failed:', e.message); }
+    };
+    const newsCompressTimer = setInterval(() => { runHourlyCompression().catch(() => {}); }, NEWS_COMPRESS_MS);
+    newsCompressTimer.unref?.();
+    setTimeout(() => { runHourlyCompression().catch(() => {}); }, 90 * 1000);   // one pass shortly after boot so a briefing exists without waiting an hour
+    console.log(`[main] news hourly compression scheduled (every ${Math.round(NEWS_COMPRESS_MS / 60000)}m)`);
+  }
+
+  // NEWS VIDEO-CAPTION CAPTURE (Phase A completion) — hidden always-on webContents read the Monitor video
+  // streams' closed captions into the SAME isolated bucket as source_kind='video' SEGMENTS (clustered like
+  // any source), and a bare "[Music]" caption grabs a SCREENSHOT of the frame — show start/stop stings and
+  // full-screen charts/graphs (e.g. Yahoo Finance) that captions can't convey. HEAVY (N hidden windows) →
+  // gated by NEWS_VIDEO_CAPTURE (default on; set 0/off to disable). Reuses feedsStore.videoList().
+  if (!/^(0|false|off|no)$/i.test(String(process.env.NEWS_VIDEO_CAPTURE || 'on').trim())) {
+    try {
+      const videoCapture = require('./lib/video_capture');
+      const newsStore = require('./lib/news_store');
+      const videos = (feedsStore.videoList() || []).filter((v) => v && v.url);
+      if (videos.length) {
+        newsVideoLane = new videoCapture.CaptureLane({
+          store: newsStore, feeds: videos,
+          capturesDir: path.join(__dirname, 'data', 'news_captures'),
+          intervalMs: parseInt(process.env.NEWS_VIDEO_POLL_MS || '', 10) || 3000,
+          sampleMs: parseInt(process.env.NEWS_VIDEO_SAMPLE_MS || '', 10) || 30000,   // re-read the screen every ~30s during a music/chart stretch
+          // vision-read each captured frame → on-screen market data (tickers/indexes/charts) as text (gemma4:31b vision)
+          visionRead: async ({ base64 }) => require('./lib/vision').describe({ imageBase64: base64, prompt: videoCapture.SCREEN_READ_PROMPT }),
+          log: (m) => console.log(m),
+        });
+        newsVideoLane.start();
+      } else { console.log('[main] news video capture: no video streams configured'); }
+    } catch (e) { console.error('[main] news video capture failed to start:', e.message); }
+  }
+
   // SCRIBE BOOT-RESUME: if the app restarted mid-meeting (canvas-hosted + gmeet still active, or a scribe
   // session left open), re-attach the scribe heartbeat so the lane keeps documenting / finalizes cleanly.
   try {
@@ -860,6 +939,7 @@ app.on('window-all-closed', async () => {
   if (canvasIngestTimer) { clearInterval(canvasIngestTimer); canvasIngestTimer = null; }
   if (canvasIngestTimeout) { clearTimeout(canvasIngestTimeout); canvasIngestTimeout = null; }
   try { require('./lib/news_poll').stop(); } catch {}
+  try { newsVideoLane && newsVideoLane.stop(); } catch {}
   try { stopScribeHeartbeat(); } catch {}
   try { actionLoop.abort(); } catch {}
   stopMonologueScheduler();
@@ -897,6 +977,45 @@ ipcMain.handle('feeds:remove', (_e, { url } = {}) => { try { return feedsStore.r
 ipcMain.handle('feeds:video-list', () => { try { return { ok: true, videos: feedsStore.videoList() }; } catch (e) { return { ok: false, error: e.message }; } });
 ipcMain.handle('feeds:video-add', (_e, { url, title } = {}) => { try { return feedsStore.videoAdd(url, title); } catch (e) { return { ok: false, error: e.message }; } });
 ipcMain.handle('feeds:video-remove', (_e, { url } = {}) => { try { return feedsStore.videoRemove(url); } catch (e) { return { ok: false, error: e.message }; } });
+// NEWS BRIEFING ("dam" snapshot, Phase B): freshen the un-clustered tail (compression) then render the
+// consistent, schema-locked brief DOCUMENT over the active stories. Default window = today→now; pass
+// sinceMs for "what's the update since <time>". Corroboration is syndication-aware (reports, not raw
+// outlet reach). Fail-safe: cloud down → deterministic fallback brief (a brief ALWAYS renders).
+ipcMain.handle('news:briefing', async (_e, { sinceMs = null } = {}) => {
+  try {
+    const news_lane = require('./lib/news_lane');
+    const news_brief = require('./lib/news_brief');
+    const newsStore = require('./lib/news_store');
+    const engineUp = await ensureEngine();
+    const cloud = engineUp ? require('./lib/cloud_logic') : null;
+    const now = Date.now();
+    const snap = await news_lane.snapshot({
+      store: newsStore, sinceMs,
+      adjudicate: cloud ? (s, i) => news_lane.adjudicateSameEvent(s, i, { ask: cloud.ask }) : null,
+      classifyAds: cloud ? (segs) => require('./lib/news_ads').classifyBatch(segs, { ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null) }) : null,
+      log: (m) => console.log('[news-brief]', m),
+    });
+    const stories = news_lane.storiesActiveInWindow(snap.since, { limit: 40 });
+    const deltasByStory = {};
+    for (const s of stories.slice(0, 12)) { try { deltasByStory[s.id] = news_lane.storyDeltas(s.id); } catch {} }
+    // The brief is ON-DEMAND (not always-on), so pin it to the best-WRITING model, not the fast tier. Live
+    // A/B on real stories: mistral-large-3:675b wrote the richest VALID prose (12/12 stories, ~14s);
+    // reasoning models (kimi/qwen3.5/gpt-oss) return EMPTY via ollama.complete (answer hidden in `thinking`);
+    // gemma4:31b is terser. Overridable via env ZOE_NEWS_BRIEF_MODEL or db meta `model.news_brief`; ask()
+    // fails safe to the deterministic snippet fallback if the pinned model is ever unavailable.
+    const briefModel = process.env.ZOE_NEWS_BRIEF_MODEL
+      || (() => { try { return db.getMeta('model.news_brief'); } catch { return null; } })()
+      || 'mistral-large-3:675b';
+    const brief = await news_brief.generateBrief({
+      stories, deltasByStory,
+      windowLabel: sinceMs ? 'since then' : 'today so far',
+      nowIso: new Date(now).toISOString(),
+      ask: cloud ? cloud.ask : null,
+      model: briefModel, numPredict: 2200,
+    });
+    return { ok: true, markdown: brief.markdown, viaCloud: brief.viaCloud, storyCount: stories.length, freshItems: snap.freshItems, since: snap.since, now };
+  } catch (e) { console.error('[news] briefing failed:', e.message); return { ok: false, error: e.message }; }
+});
 // CLEAN YouTube player: the /embed player errors (153) top-level and from a file:// host. Serve a tiny
 // page over http://127.0.0.1 that FRAMES the embed with a matching ?origin= — the handshake YouTube
 // needs — so the canvas gets a chrome-free player (no search bar / sign-in / live chat / watch-page junk).

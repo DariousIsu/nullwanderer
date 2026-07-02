@@ -478,13 +478,62 @@ async function addMonitor(url) {
   else { const r = await window.sq.feeds.add(url); if (r && r.ok) { $('monAdd').value = ''; monPrimed = false; monSeen.clear(); await loadFeeds(); } }
 }
 
+// NEWS BRIEFING panel (Phase B) — the on-demand "dam" snapshot: freshen + render the schema-locked brief.
+const monBriefPanel = $('monBriefPanel'), monBriefBody = $('monBriefBody');
+// markdown-lite → HTML (headers / bold / italic / links / lists / blockquotes). The brief is our own
+// deterministic format, so this small renderer is enough (no md library in the renderer).
+function mdLite(md) {
+  const lines = String(md || '').split('\n'); let html = '', inList = false;
+  const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/_(.+?)_/g, '<em>$1</em>').replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+  const closeList = () => { if (inList) { html += '</ul>'; inList = false; } };
+  for (const ln of lines) {
+    if (/^### /.test(ln)) { closeList(); html += '<h4>' + inline(ln.slice(4)) + '</h4>'; }
+    else if (/^## /.test(ln)) { closeList(); html += '<h3>' + inline(ln.slice(3)) + '</h3>'; }
+    else if (/^# /.test(ln)) { closeList(); html += '<h2>' + inline(ln.slice(2)) + '</h2>'; }
+    else if (/^> /.test(ln)) { closeList(); html += '<blockquote>' + inline(ln.slice(2)) + '</blockquote>'; }
+    else if (/^- /.test(ln)) { if (!inList) { html += '<ul>'; inList = true; } html += '<li>' + inline(ln.slice(2)) + '</li>'; }
+    else if (ln.trim() === '') { closeList(); }
+    else { closeList(); html += '<p>' + inline(ln) + '</p>'; }
+  }
+  closeList();
+  return html;
+}
+// The drawer is a sibling of .monitors (which clips overflow), so JS pins it flush to the monitor's
+// right edge — flipping to the LEFT if it would run off the viewport — and tracks drag/resize.
+function positionBriefDrawer() {
+  const gap = 8, w = monBriefPanel.offsetWidth || 400;
+  const mL = monitors.offsetLeft, mT = monitors.offsetTop, mW = monitors.offsetWidth, mH = monitors.offsetHeight;
+  let left = mL + mW + gap;
+  if (left + w > window.innerWidth - 8) left = Math.max(8, mL - w - gap);   // flip left when there's no room on the right
+  monBriefPanel.style.left = left + 'px';
+  monBriefPanel.style.top = mT + 'px';
+  monBriefPanel.style.height = mH + 'px';
+}
+async function showBriefing() {
+  if (!monBriefPanel.hidden) { monBriefPanel.hidden = true; return; }        // toggle closed
+  monBriefPanel.hidden = false;
+  positionBriefDrawer();
+  const b = $('monBrief'); if (b) b.classList.remove('pulse');
+  monBriefBody.innerHTML = '<div class="mon-empty">Compiling the briefing…</div>';
+  try {
+    const r = await window.sq.feeds.briefing();
+    if (!r || !r.ok) { monBriefBody.innerHTML = `<div class="mon-empty err">⚠ ${esc((r && r.error) || 'briefing failed')}</div>`; return; }
+    monBriefBody.innerHTML = mdLite(r.markdown) + `<div class="mon-brief-foot">${r.viaCloud ? 'cloud-written' : 'auto-compiled'} · ${r.storyCount} stories tracked · ${r.freshItems} fresh items</div>`;
+  } catch (e) { monBriefBody.innerHTML = `<div class="mon-empty err">⚠ ${esc(e.message)}</div>`; }
+}
+$('monBrief').addEventListener('click', showBriefing);
+$('monBriefClose').addEventListener('click', () => { monBriefPanel.hidden = true; });
+window.addEventListener('resize', () => { if (!monBriefPanel.hidden) positionBriefDrawer(); });
+// hourly layer push → pulse the briefing button so the operator knows a fresh hour has compiled
+try { window.sq.feeds.onLayer(() => { const b = $('monBrief'); if (b && monBriefPanel.hidden) b.classList.add('pulse'); }); } catch {}
+
 function openMonitors() {
   monitors.hidden = false;
   loadFeeds();                   // always pull fresh on open (news moves; a stale wall reads as "broken")
   loadVideos();                  // videos: cheap (no network) — refresh every open so re-seeds show
   if (!monTimer) monTimer = setInterval(loadFeeds, MON_REFRESH_MS);
 }
-function closeMonitors() { monitors.hidden = true; if (monTimer) { clearInterval(monTimer); monTimer = null; } }
+function closeMonitors() { monitors.hidden = true; monBriefPanel.hidden = true; if (monTimer) { clearInterval(monTimer); monTimer = null; } }
 $('monitorsBtn').addEventListener('click', () => { if (monitors.hidden) openMonitors(); else closeMonitors(); });
 $('monClose').addEventListener('click', closeMonitors);
 $('monRefresh').addEventListener('click', loadFeeds);
@@ -500,6 +549,7 @@ $('monResize').addEventListener('mousedown', (e) => { monResize = { sx: e.client
 window.addEventListener('mousemove', (e) => {
   if (monDrag) { monitors.style.left = Math.max(0, monDrag.sl + (e.clientX - monDrag.sx)) + 'px'; monitors.style.top = Math.max(40, monDrag.st + (e.clientY - monDrag.sy)) + 'px'; }
   else if (monResize) { monitors.style.width = Math.max(280, monResize.w + (e.clientX - monResize.sx)) + 'px'; monitors.style.height = Math.max(220, monResize.h + (e.clientY - monResize.sy)) + 'px'; }
+  if ((monDrag || monResize) && !monBriefPanel.hidden) positionBriefDrawer();   // keep the briefing drawer glued to the monitor
 });
 window.addEventListener('mouseup', () => { if (monDrag) { $('monHead').classList.remove('dragging'); monDrag = null; } if (monResize) monResize = null; });
 

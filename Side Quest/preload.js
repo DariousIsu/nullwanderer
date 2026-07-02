@@ -50,7 +50,10 @@ contextBridge.exposeInMainWorld('sq', {
     videoList: () => ipcRenderer.invoke('feeds:video-list'),
     videoAdd: (url, title) => ipcRenderer.invoke('feeds:video-add', { url, title }),
     videoRemove: (url) => ipcRenderer.invoke('feeds:video-remove', { url }),
-    playerBase: () => ipcRenderer.invoke('feeds:player-base')
+    playerBase: () => ipcRenderer.invoke('feeds:player-base'),
+    // News lane (Phase B): on-demand brief ("what's going on right now") + the hourly layer push.
+    briefing: (sinceMs) => ipcRenderer.invoke('news:briefing', { sinceMs: sinceMs || null }),
+    onLayer: (cb) => { const h = (_e, p) => cb(p); ipcRenderer.on('news:layer', h); return () => ipcRenderer.removeListener('news:layer', h); }
   },
 
   // Editor Studio — document registry / lifecycle / checks (all run in main over IPC)

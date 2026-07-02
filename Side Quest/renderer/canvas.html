@@ -138,6 +138,16 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
 .mon-head .grip{color:var(--tx-fainter);font-size:13px;}
 .mon-head .mon-title{flex:1;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--tx-muted);font-weight:700;}
 .mon-head .mon-n{font-size:10px;color:var(--tx-dim);}
+#monBrief.pulse{animation:monpulse 1s ease-in-out infinite;}
+@keyframes monpulse{0%,100%{opacity:.5}50%{opacity:1}}
+.mon-brief{position:fixed;width:400px;z-index:54;display:flex;flex-direction:column;background:var(--bg-panel);border:1px solid var(--line-strong);border-radius:var(--r-lg);box-shadow:0 14px 44px rgba(0,0,0,.6);overflow:hidden;}
+.mon-brief[hidden]{display:none;}
+.mon-brief-head{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:8px 11px;border-bottom:1px solid var(--line);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--tx-muted);font-weight:700;}
+.mon-brief-body{flex:1;overflow-y:auto;padding:12px 14px;font-size:13px;line-height:1.5;color:var(--tx);}
+.mon-brief-body h2{font-size:15px;margin:2px 0 8px;} .mon-brief-body h3{font-size:13px;margin:12px 0 3px;} .mon-brief-body h4{font-size:12px;margin:9px 0 2px;color:var(--tx-muted);}
+.mon-brief-body p{margin:4px 0;} .mon-brief-body ul{margin:4px 0;padding-left:18px;} .mon-brief-body li{margin:2px 0;}
+.mon-brief-body blockquote{margin:4px 0;padding:3px 9px;border-left:2px solid var(--line);color:var(--tx-muted);font-size:12px;}
+.mon-brief-body a{color:var(--illu);} .mon-brief-foot{margin-top:14px;padding-top:8px;border-top:1px solid var(--line);font-size:10px;color:var(--tx-dim);}
 .mon-bar{flex-shrink:0;display:flex;gap:6px;padding:7px 10px;border-bottom:1px solid var(--line-faint);}
 .mon-bar input{flex:1;background:var(--bg-deep);border:1px solid var(--line-strong);color:var(--tx);font:inherit;font-size:11px;padding:5px 8px;border-radius:var(--r-sm);outline:none;}
 .mon-bar input:focus{border-color:var(--accent);}
@@ -220,6 +230,7 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
       <span class="grip">⠿</span>
       <span class="mon-title">Monitors</span>
       <span class="mon-n" id="monN"></span>
+      <button class="dbtn" id="monBrief" title="News briefing — what's going on right now">📰</button>
       <button class="dbtn" id="monRefresh" title="Refresh now">⟳</button>
       <button class="dbtn" id="monClose" title="Close">✕</button>
     </div>
@@ -232,6 +243,12 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
     <div class="mon-sources collapsed" id="monSources"></div>
     <div class="mon-videos" id="monVideos"></div>
     <div class="resize-grip" id="monResize"></div>
+  </div>
+
+  <!-- News Briefing drawer — a sibling of .monitors (which clips overflow); JS pins it beside the monitor. -->
+  <div class="mon-brief" id="monBriefPanel" hidden>
+    <div class="mon-brief-head"><span>📰 News Briefing</span><button class="dbtn" id="monBriefClose" title="Close">✕</button></div>
+    <div class="mon-brief-body" id="monBriefBody"></div>
   </div>
 
   <div class="meetpane" id="ingestpane" hidden>

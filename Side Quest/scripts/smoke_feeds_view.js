@@ -60,5 +60,20 @@ ok('ytEmbed from url', V.ytEmbed('https://www.youtube.com/watch?v=gCNeDWCI0vo') 
 ok('ytEmbed from bare id', V.ytEmbed('SIxTgKoSXNM') === 'https://www.youtube-nocookie.com/embed/SIxTgKoSXNM');
 ok('ytEmbed empty for non-yt', V.ytEmbed('https://example.com') === '');
 
-console.log(`\nsmoke_feeds_view: ${pass} passed, ${fail} failed`);
+// ---- aggregator member extraction (Google News <ol>) — corroboration must survive stripHtml ----
+const gn = {
+  feed_url: 'https://news.google.com/rss', title: 'Top stories - Google News', bozo: false,
+  items: [{
+    title: 'Kyiv attack', link: 'https://news.google/x', guid: 'gn-1', published_iso: '2026-07-02T12:00:00Z',
+    summary: '<ol><li><a href="x">Kyiv attack kills 18</a>&nbsp;&nbsp;<font color="#6f6f6f">NBC News</font></li><li><a href="y">Russia hammers capital</a>&nbsp;&nbsp;<font color="#6f6f6f">The New York Times</font></li></ol>',
+  }],
+};
+const gnItem = V.normalizeFeedReport(gn).items[0];
+ok('aggregator members parsed (outlet+headline)', Array.isArray(gnItem.members) && gnItem.members.length === 2 && gnItem.members[0].outlet === 'NBC News' && /Kyiv attack/.test(gnItem.members[0].headline));
+ok('aggregator summary still stripped to text for display', /Kyiv attack kills 18/.test(gnItem.summary) && gnItem.summary.indexOf('<') === -1);
+ok('non-aggregator item has no members', V.normalizeFeedReport(bbc).items[0].members === undefined);
+ok('parseAggMembers null for plain text', V.parseAggMembers('just a plain summary') === null);
+ok('members survive mergeReports', (V.mergeReports({ feeds: [gn] }).items[0].members || []).length === 2);
+
+console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

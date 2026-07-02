@@ -15,6 +15,22 @@
   function hostname(url) { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return String(url || '').slice(0, 40); } }
   function stripHtml(s) { return String(s == null ? '' : s).replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim(); }
 
+  // Aggregator (e.g. Google News) items carry an <ol> of member outlets in the summary. Extract them
+  // BEFORE stripHtml flattens the markup, so real-world corroboration (distinct outlet count) survives to
+  // the reservoir. Returns [{outlet, headline}] or null when the summary isn't an aggregator list.
+  function parseAggMembers(rawSummary) {
+    const s = String(rawSummary == null ? '' : rawSummary);
+    if (!/<li[\s>]/i.test(s)) return null;
+    const out = []; const liRe = /<li[^>]*>([\s\S]*?)<\/li>/gi; let m;
+    while ((m = liRe.exec(s)) !== null) {
+      const li = m[1];
+      const outlet = stripHtml((li.match(/<font[^>]*>([\s\S]*?)<\/font>/i) || [])[1] || '');
+      const headline = stripHtml((li.match(/<a[^>]*>([\s\S]*?)<\/a>/i) || [])[1] || '');
+      if (outlet || headline) out.push({ outlet: outlet || null, headline: headline || null });
+    }
+    return out.length ? out : null;
+  }
+
   // One feed report (from fetch_feed / a fetch_feeds_batch entry) → { source, ok, items[] }.
   function normalizeFeedReport(report) {
     const r = report || {};
@@ -22,7 +38,8 @@
     const items = (Array.isArray(r.items) ? r.items : []).map(it => {
       const link = it.link || '';
       const ms = it.published_iso ? (Date.parse(it.published_iso) || 0) : 0;
-      return {
+      const members = parseAggMembers(it.summary);   // aggregator outlets, captured before stripHtml
+      const item = {
         id: it.guid || link || `${r.feed_url}|${it.title || ''}`,
         title: (it.title || '(untitled)').trim(),
         link,
@@ -30,6 +47,8 @@
         source, sourceUrl: r.feed_url || '',
         publishedIso: it.published_iso || '', publishedMs: ms,
       };
+      if (members) item.members = members;
+      return item;
     });
     return { source, sourceUrl: r.feed_url || '', ok: r.bozo !== true, count: items.length, items };
   }
@@ -75,5 +94,5 @@
     return id ? `https://www.youtube-nocookie.com/embed/${id}` : '';
   }
 
-  return { hostname, stripHtml, normalizeFeedReport, mergeReports, markNew, relTime, youtubeId, ytEmbed };
+  return { hostname, stripHtml, parseAggMembers, normalizeFeedReport, mergeReports, markNew, relTime, youtubeId, ytEmbed };
 });
