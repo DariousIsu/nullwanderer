@@ -175,6 +175,13 @@ function isSocialTurn(text) {
   const checkin = _CHECKIN_RE.test(t), greeting = _GREETING_RE.test(t), endear = _ENDEARMENT_RE.test(t);
   if (!checkin && !greeting && !endear) return false;
   if (_WORK_REF_RE.test(t)) return false;               // "how are you doing on the op-ed" = work
+  // A greeting FOLLOWED by a real question ("Hey Zoe, who is X?") is a QUESTION with a friendly opener,
+  // not a social turn — it must NOT skip the grounding/cognition pipeline (the Trump-admin deflection).
+  const afterGreeting = t.replace(/^\s*(?:hi|hey|hello|yo|sup|hiya|heya|howdy|morning|evening|good\s*(?:morning|afternoon|evening|night)|goodnight)\b[\s,!.]*(?:zoe|there|girl|hun)?[\s,!.—-]*/i, '').trim();
+  const isRealQuestion = afterGreeting && afterGreeting !== t && /\?/.test(afterGreeting)
+    && /\b(who|what|which|when|where|why|whose|is|are|was|were|do|does|did|can|could|list|name|find|pull|how many|how much|how old|how long)\b/i.test(afterGreeting)
+    && !_CHECKIN_RE.test(afterGreeting);
+  if (isRealQuestion) return false;
   const words = t.split(/\s+/).length;
   if (checkin) return true;                             // a state check-in is social at any length
   if (greeting && words <= 12) return true;            // a bare/opening greeting

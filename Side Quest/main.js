@@ -762,6 +762,28 @@ app.whenReady().then(() => {
     console.log('[main] canvas drop→ingest poller started (every 45s)');
   }
 
+  // NEWS DATA-STREAM COLLECTOR — fills the ISOLATED news bucket (data/news_bucket.db) from the RSS
+  // subscriptions on a backend timer, independent of the Monitors widget. Model-free; raw items NEVER
+  // reach memory (sq.db) — only compressed news objects promote (nightly). Reuses the feeds:fetch path.
+  {
+    const FEED_POLL_MS = parseInt(process.env.FEED_POLL_MS || '', 10) || 3 * 60 * 1000;
+    const newsPoll = require('./lib/news_poll');
+    const newsStore = require('./lib/news_store');
+    const fetchFeeds = async () => {
+      const urls = feedsStore.list().map(f => f.url);
+      if (!urls.length) return { items: [] };
+      if (!(await ensureEngine())) return { items: [] };
+      const payload = await pollCallTool()('fetch_feeds_batch', { feed_urls: urls, item_limit: 30 });
+      return { items: feedsView.mergeReports(payload).items };
+    };
+    newsPoll.start({
+      fetch: fetchFeeds, store: newsStore, intervalMs: FEED_POLL_MS, initialDelayMs: 30000,
+      onTick: (r) => { try { if (r && (r.inserted || r.error)) console.log(`[news-poll] +${r.inserted || 0} new / ${r.duplicates || 0} dup (${r.fetched || 0} fetched)${r.error ? ' err:' + r.error : ''} · bucket=${newsStore.countItems()}`); } catch {} },
+      log: (m) => console.log(m),
+    });
+    console.log(`[main] news collector started (every ${Math.round(FEED_POLL_MS / 1000)}s → isolated bucket)`);
+  }
+
   // SCRIBE BOOT-RESUME: if the app restarted mid-meeting (canvas-hosted + gmeet still active, or a scribe
   // session left open), re-attach the scribe heartbeat so the lane keeps documenting / finalizes cleanly.
   try {
@@ -837,6 +859,7 @@ app.on('window-all-closed', async () => {
   if (inboxPollTimeout) { clearTimeout(inboxPollTimeout); inboxPollTimeout = null; }
   if (canvasIngestTimer) { clearInterval(canvasIngestTimer); canvasIngestTimer = null; }
   if (canvasIngestTimeout) { clearTimeout(canvasIngestTimeout); canvasIngestTimeout = null; }
+  try { require('./lib/news_poll').stop(); } catch {}
   try { stopScribeHeartbeat(); } catch {}
   try { actionLoop.abort(); } catch {}
   stopMonologueScheduler();
@@ -2790,11 +2813,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       if (seen.length) composedUserMessage = `${composedUserMessage}\n\n${seen.join('\n\n')}`;
     } catch (e) { console.error('[main] vision-in failed:', e.message); }
   }
+  // CLOUD OWNS THE ANSWER on a factual turn — the enrich/recovery cognition loop below does the tool
+  // work (search our graph, then the web) and hands the interface ONE grounded answer to voice. On such
+  // turns the local model must NOT pick or emit Echo tags itself (the interface-uses-tools regression:
+  // it was emitting <echo-find> and its async follow-up bled into the next turn). Non-factual turns
+  // (curation / delegate / a deliverable) still carry the echo path until those move to the cloud too.
+  const cloudOwnsAnswer = !socialTurn && (() => { try { return require('./lib/metacognition').classifyClaimType(userMessage) === 'factual'; } catch { return false; } })();
   // ECHO NUDGE (F1) — when Lucas explicitly invokes the suit / our data ("use the db", "the power
   // suit", "our records/KB/graph", "echo"), bind that to the echo tags right at the message tail
   // (highest recency) so she reaches for Echo instead of defaulting to her web browser (the LAMP →
-  // Japanese-band miss). Only when the suit is actually connected.
-  if (echoSuit && echoSuit.connected && ECHO_INVOKE_RE.test(userMessage)) {
+  // Japanese-band miss). Only when the suit is connected AND the cloud isn't already owning the answer.
+  if (echoSuit && echoSuit.connected && ECHO_INVOKE_RE.test(userMessage) && !cloudOwnsAnswer) {
     composedUserMessage = `${composedUserMessage}\n\n[You are wearing the Echo suit and ${userName} is asking you to use it / OUR data — not the open web. Do this with your echo tags: <echo-find>what you need</echo-find> then <echo-do name="tool">{json}</echo-do> (or directly if you know the tool). Echo is our knowledge base / entity graph / contacts / bills / the LAMP network. Do NOT use <web-open> for this — that's the open internet, the wrong tool for our data.]`;
   }
   // RETRIEVE-OR-ADMIT (anti-confabulation) — a personal-fact question ("what's my daughter's
@@ -3680,7 +3709,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     socialTurn,
     convoStateBlock,
     varietyNudge,
-    echoSuitBlock: echoSuit ? echoSuit.suitContextBlock() : null,
+    echoSuitBlock: (echoSuit && !cloudOwnsAnswer) ? echoSuit.suitContextBlock() : null,   // cloud owns factual turns → no local tool menu
     newUserMessage: composedUserMessage
   });
 

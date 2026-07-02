@@ -24,9 +24,15 @@ const SOCIAL_RE = /\b(how are you|how'?s it going|how was your|good morning|good
 const CREATIVE_CMD_RE = /\b(write|draft|compose|summari[sz]e|rewrite|edit|translate|generate|make me|create|brainstorm|outline|explain|describe how|walk me through|help me|give me a)\b/i;
 const FACTUAL_Q_RE = /\b(who|what|what'?s|when|when'?s|where|where'?s|which|whose|how many|how much|how old|how long|did|does|do|is|are|was|were|has|have|had|tell me about|remind me|look up)\b/i;
 
+// A leading greeting/vocative ("Hey Zoe,", "Hi there —") was making real factual questions read as
+// SOCIAL, so the whole grounding/cognition pipeline was skipped ("Hey Zoe, who is X?" → deflection).
+// Strip it before classifying so the QUESTION decides the type, not the friendly opener.
+const _GREETING_PREFIX_RE = /^\s*(?:hey|hi|hello|yo|hiya|heya|howdy|good\s*(?:morning|afternoon|evening|night))\b[\s,!.]*(?:zoe|there|girl|hun)?[\s,!.—-]*/i;
 function classifyClaimType(text) {
-  const s = String(text || '').trim();
-  if (s.length < 4) return 'other';
+  const s0 = String(text || '').trim();
+  if (s0.length < 4) return 'other';
+  const stripped = s0.replace(_GREETING_PREFIX_RE, '').trim();
+  const s = stripped.length >= 4 ? stripped : s0;
   if (OPINION_RE.test(s) || SOCIAL_RE.test(s) || CREATIVE_CMD_RE.test(s)) return 'other';
   const looksFactual = s.includes('?') || FACTUAL_Q_RE.test(s);
   return looksFactual ? 'factual' : 'other';
