@@ -28,6 +28,18 @@ const NEED_RE = /^\s*NEED:\s*(.+)$/is;
 // we trust a plausible grounded answer. Read-time slice of the self-heal (verify-when-currency-signaled).
 const _CURRENCY_RE = /\b(current(ly)?|now(adays)?|today|latest|recently|these days|right now|as of|this (?:week|month|year)|who is the)\b/i;
 
+// GUARD for the heavy, visible EXCAVATION tier — a rendered page can only settle a FACT lookup. Fire freely
+// for entity/encyclopedic needs (the research fuel Lucas wants), but skip subjective/advice/personal needs
+// that no web page decides (else we'd pop her browser to "look up" an opinion). Deterministic. Pure.
+const _NOT_EXCAVATABLE = /\b(best|worst|should i|worth it|recommend|opinion|favou?rite|pros and cons|better than|how do i feel|what should i|do you think|your (?:opinion|advice|take)|is it worth|good idea)\b/i;
+function _worthExcavating(need) {
+  const n = String(need || '').trim();
+  if (n.length < 5) return false;
+  if (_NOT_EXCAVATABLE.test(n)) return false;                                  // subjective/advice → a page won't settle it
+  if (/[A-Z][a-z]/.test(n)) return true;                                       // names a proper-noun entity
+  return /\b(who|what|when|where|which|whom|how many|number of|current|latest|list of|capital of|ceo of|head of|founder|population|born|died|located)\b/i.test(n);
+}
+
 // One cloud pass: draft the grounded answer, or emit NEED:<thing>. Timeless general knowledge may be
 // answered from the model's own knowledge (we don't search "what is photosynthesis"); NEED is for
 // OUR-records / current / live facts the grounding lacks. Returns {answer} | {need} | null.
@@ -123,6 +135,7 @@ async function _enrichWiki(need, deps = {}) {
 // image-only facts. Heavy + visible on purpose (Lucas supervises); fires only after everything cheaper
 // missed. Returns text (or ''). Fail-safe.
 async function _enrichExcavate(need, deps = {}) {
+  if (!_worthExcavating(need)) return { text: '', url: null };   // don't pop her browser for a need no page can settle
   const fn = deps.excavate || ((n) => { try { return require('./excavate').excavate(n, { deps }); } catch { return Promise.resolve(null); } });
   let r = null;
   try { r = await fn(need); } catch {}
@@ -231,4 +244,4 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   return { say: `I checked our records and searched, but I couldn't pin down ${need0}.`, enriched: true, missed: true, need: need0 };
 }
 
-module.exports = { answerGrounded, _draftOrNeed, _enrichGraph, _enrichWiki, _enrichRouted, _enrichWeb, _enrichExcavate, _kickWriteBack, _entLine, NEED_RE };
+module.exports = { answerGrounded, _draftOrNeed, _enrichGraph, _enrichWiki, _enrichRouted, _enrichWeb, _enrichExcavate, _kickWriteBack, _worthExcavating, _entLine, NEED_RE };

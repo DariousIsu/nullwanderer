@@ -91,6 +91,17 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   await new Promise(r => setTimeout(r, 5));
   ok(!kicked, '_kickWriteBack: no source URL → no write-back (our-own-data tiers do not re-bank)');
 
+  // 12) EXCAVATION GUARD — fire for fact lookups (research fuel), skip subjective/advice (don't pop browser).
+  ok(cog._worthExcavating('current US Secretary of Defense') === true, 'guard: fact lookup → excavate');
+  ok(cog._worthExcavating('who is grace hopper') === true, 'guard: who-is entity → excavate');
+  ok(cog._worthExcavating('population of mongolia') === true, 'guard: quantity fact → excavate');
+  ok(cog._worthExcavating('what is the best pizza topping') === false, 'guard: subjective "best" → skip');
+  ok(cog._worthExcavating('should i invest in crypto') === false, 'guard: advice → skip');
+  ok(cog._worthExcavating('hi') === false, 'guard: too short → skip');
+  let excCalled = false;
+  const skip = await cog._enrichExcavate('what is the best movie ever', { excavate: async () => { excCalled = true; return { found: true, answer: 'x', url: 'u' }; } });
+  ok(skip.text === '' && !excCalled, 'guard: _enrichExcavate skips the browser for a subjective need');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
