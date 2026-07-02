@@ -76,15 +76,26 @@ async function _enrichGraph(need, object, deps = {}) {
   for (const e of hits.slice(0, 6)) { const l = _entLine(e); if (l) parts.push(l); }
   const seen = new Set();
   const toWalk = [];
+  const neighborNames = [];
   if (object && object.id) toWalk.push({ id: object.id, name: object.name });
+  if (object && Array.isArray(object.neighbors)) for (const n of object.neighbors) neighborNames.push(n);
   for (const e of hits.slice(0, 2)) if (e && e.id) toWalk.push({ id: e.id, name: e.name });
   for (const w of toWalk) {
     if (!w.id || seen.has(w.id)) continue; seen.add(w.id);
     try {
       const kr = await d({ kind: 'do', name: 'kg_neighborhood', args: { entity_id: w.id, top_k: 12 } });
-      if (kr && kr.ok) { const ns = echo.normalizeNeighbors(_json(kr.text) || {}); if (ns.length) parts.push(`Connected to ${w.name || 'it'}: ${ns.slice(0, 12).join(', ')}`); }
+      if (kr && kr.ok) { const ns = echo.normalizeNeighbors(_json(kr.text) || {}); for (const n of ns) neighborNames.push(n); if (ns.length) parts.push(`Connected to ${w.name || 'it'}: ${ns.slice(0, 12).join(', ')}`); }
     } catch {}
   }
+  // FOLLOW THE EDGES to the connected OBJECTS — resolve each connected entity to ITS OWN object and read
+  // its title/role (which lives in the neighbor's facts: Rubio → "Secretary of State", NOT in Trump's).
+  // This is the graph traversal that makes a conversation flow: "his cabinet" comes back WITH titles and
+  // "their titles" resolves straight from our records instead of the flaky web tier. Deduped + capped.
+  const uniq = [...new Set(neighborNames.map(n => String(n || '').trim()).filter(Boolean))].slice(0, 8);
+  try {
+    const titled = await echo.expandNeighbors(uniq, { dispatch: d, top: 8 });
+    if (titled.length) parts.push('Connected people and their roles (from our records):\n' + titled.map(e => `  • ${e.name} — ${e.title}`).join('\n'));
+  } catch {}
   return parts.join('\n').trim();
 }
 

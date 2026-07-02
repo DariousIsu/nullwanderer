@@ -470,6 +470,34 @@ async function _richestByQid(d, qid, best) {
   return (obj && (obj.degree || 0) > (best.degree || 0)) ? obj : null;
 }
 
+// GRAPH WALK — follow a resolved object's EDGES to the connected OBJECTS and read each one's key fact
+// (its title/role). This is the graph's whole point: Trump's object holds the edges to his cabinet; we
+// FOLLOW them to each member's own object → "Marco Rubio — Secretary of State" (which lives in Rubio's
+// facts, not Trump's). One cheap quick_lookup per neighbor (no sub-neighborhood). Returns
+// [{name, title}], titles-first. Fail-soft → []. Lets a conversation flow across the graph instead of
+// re-searching from scratch each turn.
+async function expandNeighbors(namesOrObject, { dispatch = null, top = 8 } = {}) {
+  const d = dispatch || (liveReady() ? (tag) => _live.dispatch(tag) : null);
+  const names = Array.isArray(namesOrObject)
+    ? namesOrObject
+    : (namesOrObject && Array.isArray(namesOrObject.neighbors) ? namesOrObject.neighbors : []);
+  if (!d || !names.length) return [];
+  const out = [];
+  for (const nm of names.slice(0, top)) {
+    let title = null;
+    try {
+      const o = await _lookupObject(d, String(nm), null);   // resolve the neighbor to ITS object (role only)
+      if (o) {
+        const tf = (o.facts || []).find(f => /—\s*title:/i.test(f));
+        title = tf ? tf.replace(/.*—\s*title:\s*/i, '').trim()
+              : (o.subtype && !/legacy|target|unknown/i.test(o.subtype) ? o.subtype.replace(/_/g, ' ') : null);
+      }
+    } catch {}
+    if (title) out.push({ name: String(nm), title });   // only connections we actually hold a role for
+  }
+  return out;
+}
+
 // Pure: quick_lookup's `.result` → a flat, render-ready object. facts already carry the attributes
 // ("Curtis — title: U.S. Senator"); committee names are usually "(unnamed)" so the role is what
 // matters (dedup them). Keeps the raw bio for structured access.
@@ -600,5 +628,5 @@ async function routeNeed(query, opts = {}) {
 
 module.exports = {
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _setLiveForTest
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, expandNeighbors, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _setLiveForTest
 };
