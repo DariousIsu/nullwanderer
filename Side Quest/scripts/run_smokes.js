@@ -98,6 +98,7 @@ const smokes = [
   'smoke_operator.js',
   'smoke_ner.js',
   'smoke_mention.js',
+  'smoke_cognition.js',
 ];
 
 let passed = 0, failed = 0;

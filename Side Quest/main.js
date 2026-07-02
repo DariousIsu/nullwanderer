@@ -2861,7 +2861,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // whole record, not a 3-note local snapshot. coverage ('rich'|'thin') drives the wall→enrich reflex.
       // Fail-safe: Echo down / no entity → object null → falls back to the local notes recall() also gathers.
       const ar = require('./lib/active_recall');
-      recallResult = await ar.recall(userMessage, { k: 4 });
+      // recent conversation → the cloud extractor can bind pronouns/anaphora ("his cabinet" → Trump).
+      const _recentCtx = (recentTurns || []).slice(-4).map(t => `${t.speaker || '?'}: ${String(t.content || '').replace(/\s+/g, ' ').slice(0, 160)}`).join('\n');
+      recallResult = await ar.recall(userMessage, { k: 4, context: _recentCtx });
       // DROP internal research/focus artifacts — a research dossier / focus tombstone is stored at high
       // importance (0.85), so retrieveScored surfaces it for ANY entity query and it bled "Enrich 19
       // organizations" into unrelated turns (the Thune leak). These are her internal work artifacts, not
@@ -3120,20 +3122,27 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (!drafted && !socialTurn && !followupFired && !_isStatusReq) {
       const factual = (() => { try { return require('./lib/metacognition').classifyClaimType(userMessage) === 'factual'; } catch { return false; } })();
       if (factual || personalFactQ) {
-        // Lane B grounding sources: her knowledge block + relevant past turns + READINGS she holds (the
-        // article/page the question is about). Readings were the missing source — a reading-grounded fact
-        // question ("what companies are in the article") now drafts from the real article instead of
-        // falling through to raw local generation (the confabulation fix).
+        // Grounding sources: her object/knowledge block + relevant past turns + READINGS she holds (the
+        // article/page the question is about).
         const grounding = ad.factualGrounding({ knowledgeBlock: retrievedKnowledgeBlock, pastTurns: relevantPastTurns, readings: recentReadings });
-        if (grounding) {
-          const d = await ad.draft({ userMessage, grounding, kind: 'knowledge' });
-          if (d) {
-            composedUserMessage = `${composedUserMessage}\n\n${ad.buildVoiceBlock(d, userName)}`;
-            // Lane B: this is a grounded fact answer. Drop standing-work threads from the prompt so their
-            // top-of-block PRIMACY can't bleed an unrelated task into the reply (the companies-list leak).
-            openThreads = [];
-            console.log(`[main] cloud-drafted knowledge answer → "${d.slice(0, 70)}"`);
-          }
+        // ENRICH/RECOVERY loop (lib/cognition, turn→object Phase 2+4): draft from grounding, OR go FIND
+        // what's missing (our graph → web) then draft — so a wall becomes "let me find out", never a
+        // dead-end ("records don't specify") or a confabulation. Runs when the turn is about an object we
+        // hold, has real grounding, or needs a current/personal lookup; a timeless general-knowledge Q
+        // with no object stays on the model's own knowledge. Fail-safe: cloud/Echo down → null → local flow.
+        let _scope = 'general';
+        try { _scope = require('./lib/metacognition').groundingScope(userMessage); } catch {}
+        const _runEnrich = !!(recallResult && recallResult.object) || !!(grounding && grounding.length) || _scope !== 'general' || personalFactQ;
+        if (_runEnrich) {
+          try {
+            const res = await require('./lib/cognition').answerGrounded({ userMessage, grounding, object: recallResult && recallResult.object, userName });
+            if (res && res.say) {
+              composedUserMessage = `${composedUserMessage}\n\n${ad.buildVoiceBlock(res.say, userName)}`;
+              openThreads = [];   // grounded answer owns the turn — no standing-work primacy bleed
+              drafted = true;
+              console.log(`[main] cognition → ${res.enriched ? 'enriched:' + res.enrichSource : (res.missed ? 'searched-miss' : 'grounded')} → "${res.say.slice(0, 70)}"`);
+            }
+          } catch (e) { console.error('[main] cognition loop failed:', e.message); }
         }
       }
     }
