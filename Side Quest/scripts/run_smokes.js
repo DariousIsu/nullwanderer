@@ -99,6 +99,16 @@ const smokes = [
   'smoke_ner.js',
   'smoke_mention.js',
   'smoke_cognition.js',
+  'smoke_excavate.js',
+  // Data-Stream (news) lane — isolated NEWS_DB_PATH / pure; offline-deterministic
+  'smoke_feeds_view.js',
+  'smoke_news_store.js',
+  'smoke_news_poll.js',
+  'smoke_news_watch.js',
+  'smoke_news_lane.js',
+  'smoke_news_brief.js',
+  'smoke_news_ads.js',
+  'smoke_video_capture.js',
 ];
 
 let passed = 0, failed = 0;

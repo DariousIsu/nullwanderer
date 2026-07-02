@@ -37,7 +37,7 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   ok(b && /Rubio/.test(b.say), 'enriched answer names the members it went and found');
 
   // 3) NEED but nothing found anywhere → honest recovery, NOT a dead-end, NOT invented
-  const c = await cog.answerGrounded({ userMessage: 'who are the members of his cabinet?', grounding: 'Donald Trump (US) — President', object: { id: 1528616, name: 'Donald Trump (US)' }, deps: { ask: askMock, dispatch: emptyDispatch } });
+  const c = await cog.answerGrounded({ userMessage: 'who are the members of his cabinet?', grounding: 'Donald Trump (US) — President', object: { id: 1528616, name: 'Donald Trump (US)' }, deps: { ask: askMock, dispatch: emptyDispatch, webSearch: async () => ({ results: [] }), excavate: async () => ({ found: false }) } });
   ok(c && c.missed === true && /couldn't/i.test(c.say) && !/Rubio/.test(c.say), 'nothing found → honest "couldn\'t pin down", never invented');
 
   // 4) graph empty → escalate to WEB via deps.webSearch (the app's own DDG, not Echo's keyless one)
@@ -69,6 +69,14 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   // 9) _enrichWiki formatting unit.
   ok(/From Wikipedia/.test(await cog._enrichWiki('x', { wikiLookup: async () => [{ title: 'T', extract: 'E' }] })), '_enrichWiki formats found pages');
   ok((await cog._enrichWiki('x', { wikiLookup: async () => [] })) === '', '_enrichWiki no pages → empty string');
+
+  // 10) ALL cheaper tiers miss → FORENSIC EXCAVATION (screenshot+vision) reads it off the rendered page.
+  const excavateMock = async () => ({ found: true, answer: 'Pete Hegseth is the U.S. Secretary of Defense.', url: 'https://en.wikipedia.org/wiki/United_States_Secretary_of_Defense' });
+  const x = await cog.answerGrounded({ userMessage: 'who is the current secretary of defense?', grounding: '', deps: {
+    ask: async ({ input }) => /Hegseth|rendered page/i.test(String(input.grounding)) ? 'Pete Hegseth is the Secretary of Defense.' : 'NEED: current US Secretary of Defense',
+    dispatch: emptyGraph, webSearch: async () => ({ results: [] }), excavate: excavateMock } });
+  ok(x && x.enrichSource === 'excavate' && /Hegseth/.test(x.say), 'all text tiers miss → forensic excavation recovers the answer');
+  ok((await cog._enrichExcavate('x', { excavate: async () => ({ found: false }) })) === '', '_enrichExcavate not-found → empty string');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

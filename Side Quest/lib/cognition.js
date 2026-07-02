@@ -116,6 +116,19 @@ async function _enrichWiki(need, deps = {}) {
   return 'From Wikipedia:\n' + pages.map(p => `• ${p.title}: ${p.extract}`).join('\n');
 }
 
+// ENRICH tier FINAL — FORENSIC EXCAVATION (lib/excavate): drive HER visible browser to the best source and
+// READ THE RENDERED PAGE WITH VISION (screenshot → vision → scroll). The last resort for what the text
+// tiers physically can't reach — the office-holder incumbent in a Wikipedia infobox, JS-rendered widgets,
+// image-only facts. Heavy + visible on purpose (Lucas supervises); fires only after everything cheaper
+// missed. Returns text (or ''). Fail-safe.
+async function _enrichExcavate(need, deps = {}) {
+  const fn = deps.excavate || ((n) => { try { return require('./excavate').excavate(n, { deps }); } catch { return Promise.resolve(null); } });
+  let r = null;
+  try { r = await fn(need); } catch {}
+  if (r && r.found && r.answer) return `Read directly off the rendered page (${r.url || 'web'}): ${r.answer}`;
+  return '';
+}
+
 // ENRICH tier 2 — the live web, via the app's OWN DuckDuckGo search (lib/web_search; Echo's web_search
 // has no provider keys). The "let me find out" for anything not in our records. Returns text (or '').
 async function _enrichWeb(need, deps = {}) {
@@ -185,12 +198,13 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   // the cloud tool-executor (specialized Echo tools: counts/lists) → last-ditch DDG. Re-draft after each;
   // stop as soon as the grounding can actually answer. This is "let me find out" — never a dead-end, never
   // invented. Wiki sits before routed/web because the audit proved those two reach nothing on simple facts.
-  for (const mode of ['graph', 'wiki', 'routed', 'web']) {
+  for (const mode of ['graph', 'wiki', 'routed', 'web', 'excavate']) {
     if (!step || !step.need) break;
     const found = mode === 'graph' ? await _enrichGraph(step.need, object, deps)
                 : mode === 'wiki' ? await _enrichWiki(step.need, deps)
                 : mode === 'routed' ? await _enrichRouted(step.need, deps)
-                : await _enrichWeb(step.need, deps);
+                : mode === 'web' ? await _enrichWeb(step.need, deps)
+                : await _enrichExcavate(step.need, deps);
     if (!found) continue;
     g = [g, `Just retrieved for this (${mode}):\n${found}`].filter(Boolean).join('\n\n');
     step = await _draftOrNeed(userMessage, g, deps);
@@ -200,4 +214,4 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   return { say: `I checked our records and searched, but I couldn't pin down ${need0}.`, enriched: true, missed: true, need: need0 };
 }
 
-module.exports = { answerGrounded, _draftOrNeed, _enrichGraph, _enrichWiki, _enrichRouted, _enrichWeb, _entLine, NEED_RE };
+module.exports = { answerGrounded, _draftOrNeed, _enrichGraph, _enrichWiki, _enrichRouted, _enrichWeb, _enrichExcavate, _entLine, NEED_RE };
