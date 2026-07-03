@@ -75,5 +75,26 @@ ok('non-aggregator item has no members', V.normalizeFeedReport(bbc).items[0].mem
 ok('parseAggMembers null for plain text', V.parseAggMembers('just a plain summary') === null);
 ok('members survive mergeReports', (V.mergeReports({ feeds: [gn] }).items[0].members || []).length === 2);
 
+// ---- normTitle + collapseDuplicates (VIEW-ONLY syndication collapse) ----
+ok('normTitle strips source suffix + punctuation', V.normTitle('CDC warns of parasite; symptoms - cleveland.com') === V.normTitle('CDC warns of parasite; symptoms - nj.com'));
+ok('normTitle differs for different stories', V.normTitle('Kyiv attack kills 18') !== V.normTitle('Vatican conclave begins'));
+// 5 metros reprinting ONE wire story (distinct links/ids/sources, identical headline)
+const metros = ['cleveland.com', 'masslive.com', 'nj.com', 'pennlive.com', 'syracuse.com'].map((h, i) => ({
+  id: 'u' + i, title: 'CDC warns of explosive diarrhea parasite on rise in US; Here symptoms and how to treat',
+  link: 'https://' + h + '/x', source: h, sourceUrl: 'https://' + h + '/rss', publishedMs: 1000 + i,
+}));
+const solo = { id: 's1', title: 'Local council approves new budget', source: 'somepaper.com', publishedMs: 5000 };
+const collapsed = V.collapseDuplicates([...metros, solo]);
+ok('collapse: 5 syndicated copies → 1 card + the solo story = 2 items', collapsed.length === 2);
+const dupCard = collapsed.find(i => /CDC warns/.test(i.title));
+ok('collapse: dup card carries outlet count', dupCard && dupCard.dupCount === 5 && dupCard.dupOutlets === 5);
+ok('collapse: dup card keeps the NEWEST copy as representative', dupCard && dupCard.publishedMs === 1004);
+ok('collapse: dupSources lists the outlets', dupCard && dupCard.dupSources.includes('cleveland.com') && dupCard.dupSources.includes('syracuse.com'));
+ok('collapse: solo story untouched (no dupCount)', collapsed.find(i => /council/.test(i.title)).dupCount === undefined);
+ok('collapse: newest-first by representative', collapsed[0].title.includes('council'));   // solo @5000 > dup @1004
+// CRITICAL: the collector path (mergeReports) must NOT collapse — the reservoir needs distinct copies for corroboration
+const notCollapsed = V.mergeReports({ feeds: metros.map(mt => ({ feed_url: mt.sourceUrl, title: mt.source, items: [{ title: mt.title, link: mt.link, guid: mt.id, published_iso: '2026-07-02T12:00:00Z' }] })) });
+ok('mergeReports does NOT collapse (collector keeps all 5 for corroboration)', notCollapsed.items.length === 5);
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

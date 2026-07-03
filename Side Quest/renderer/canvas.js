@@ -402,11 +402,14 @@ let monPrimed = false, monTimer = null;
 const MON_REFRESH_MS = 2 * 60 * 1000;
 
 function renderMonitors(items, sources) {
-  const marked = FV ? FV.markNew(items, monSeen) : (items || []).map(i => ({ ...i, isNew: false }));
+  // Collapse cross-outlet SYNDICATION for display only (the collector keeps every copy for corroboration):
+  // 5 metros reprinting one wire story → one card with a "+N outlets" badge. Un-blots the firehose.
+  const collapsed = FV ? FV.collapseDuplicates(items) : (items || []);
+  const marked = FV ? FV.markNew(collapsed, monSeen) : collapsed.map(i => ({ ...i, isNew: false }));
   const now = Date.now();
   monList.innerHTML = marked.length ? marked.map(it => `
     <div class="mon-item${monPrimed && it.isNew ? ' new' : ''}">
-      <div class="it-top"><span class="it-src">${esc(it.source)}</span><span class="it-ago">${esc(FV ? FV.relTime(it.publishedMs, now) : '')}</span></div>
+      <div class="it-top"><span class="it-src">${esc(it.source)}</span>${it.dupCount > 1 ? `<span class="it-dup" title="${esc((it.dupSources || []).join(', '))}">+${it.dupOutlets - 1} more outlet${it.dupOutlets - 1 === 1 ? '' : 's'}</span>` : ''}<span class="it-ago">${esc(FV ? FV.relTime(it.publishedMs, now) : '')}</span></div>
       <div class="it-title">${it.link ? `<a href="${esc(it.link)}" target="_blank" rel="noreferrer">${esc(it.title)}</a>` : esc(it.title)}</div>
       ${it.summary ? `<div class="it-sum">${esc(it.summary)}</div>` : ''}
     </div>`).join('') : '<div class="mon-empty">No items yet. Add a feed URL above, or hit ⟳.</div>';

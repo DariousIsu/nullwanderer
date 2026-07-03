@@ -65,6 +65,43 @@
     return { items: out.slice(0, limit), sources: sources.map(s => ({ source: s.source, sourceUrl: s.sourceUrl, ok: s.ok, count: s.count })) };
   }
 
+  // Normalized headline key for syndication grouping: lowercase, drop a trailing " - Outlet" aggregator
+  // suffix, strip punctuation/emoji, collapse whitespace. Two outlets reprinting one wire story share this.
+  function normTitle(t) {
+    return String(t == null ? '' : t).toLowerCase()
+      .replace(/\s+[-–—|]\s+[^-–—|]{1,40}$/, '')      // "…how to treat - cleveland.com" → drop the source tag
+      .replace(/[^a-z0-9 ]+/g, ' ')
+      .replace(/\s+/g, ' ').trim();
+}
+
+  // VIEW-ONLY syndication collapse (the Monitors widget, NOT the collector): items whose normalized
+  // headlines match are the SAME story reprinted across outlets — collapse to ONE card carrying dupCount
+  // + the outlet list, so the firehose stays scannable (the Advance Local "5× CDC parasite" wall). The
+  // representative is the newest copy. NEVER call this on the collector path — the reservoir needs the
+  // distinct copies for cross-outlet corroboration. Pure; order preserved by representative recency.
+  function collapseDuplicates(items) {
+    const groups = new Map();
+    for (const it of (items || [])) {
+      const key = normTitle(it.title);
+      const gk = key || ('__solo_' + it.id);          // untitled/edge items never merge with each other
+      const g = groups.get(gk);
+      if (!g) groups.set(gk, { rep: it, sources: [it.source], seen: new Set([it.source]), count: 1 });
+      else {
+        g.count++;
+        if (!g.seen.has(it.source)) { g.seen.add(it.source); g.sources.push(it.source); }
+        if ((it.publishedMs || 0) > (g.rep.publishedMs || 0)) g.rep = it;
+      }
+    }
+    const out = [];
+    for (const g of groups.values()) {
+      const rep = Object.assign({}, g.rep);
+      if (g.count > 1) { rep.dupCount = g.count; rep.dupOutlets = g.sources.length; rep.dupSources = g.sources.slice(0, 10); }
+      out.push(rep);
+    }
+    out.sort((a, b) => (b.publishedMs || 0) - (a.publishedMs || 0));
+    return out;
+  }
+
   // Flag items not in seenIds as new (for highlight). Mutates a copy; returns it.
   function markNew(items, seenIds) {
     const seen = seenIds instanceof Set ? seenIds : new Set(seenIds || []);
@@ -94,5 +131,5 @@
     return id ? `https://www.youtube-nocookie.com/embed/${id}` : '';
   }
 
-  return { hostname, stripHtml, parseAggMembers, normalizeFeedReport, mergeReports, markNew, relTime, youtubeId, ytEmbed };
+  return { hostname, stripHtml, parseAggMembers, normalizeFeedReport, mergeReports, normTitle, collapseDuplicates, markNew, relTime, youtubeId, ytEmbed };
 });
