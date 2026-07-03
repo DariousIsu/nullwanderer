@@ -91,7 +91,8 @@ contextBridge.exposeInMainWorld('sq', {
   // (lib/forecast_service) from the poll connectors; read-only, no prod DB.
   forecast: {
     widgets: () => ipcRenderer.invoke('forecast:widgets'),
-    pollAverage: (opts) => ipcRenderer.invoke('forecast:poll-average', opts || {})
+    pollAverage: (opts) => ipcRenderer.invoke('forecast:poll-average', opts || {}),
+    balance: (opts) => ipcRenderer.invoke('forecast:balance', opts || {})
   },
 
   // Polling — read-only data browser over the engine's polling tools (main maps to view shapes).

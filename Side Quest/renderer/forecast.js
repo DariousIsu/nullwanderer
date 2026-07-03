@@ -1,0 +1,168 @@
+/* Forecasting studio — a glass-box R&D instrument. Three regions: a compact POLL rail (left), the
+   BALANCE-OF-POWER centerpiece (center), and the WORK inspector (right) that shows the active widget's
+   variable inputs + live computation reads. Data from window.sq.forecast.*; embedded samples when absent. */
+'use strict';
+(function () {
+  const $ = (s, r = document) => r.querySelector(s);
+  const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+  const bridge = !!(window.sq && window.sq.forecast);
+  const C = { dem: '#4B79D6', rep: '#D6534B', approve: '#43B89F', disapprove: '#E4694F', accent: '#D9A441', muted: '#98A1B2' };
+  const pctCol = (name) => /disapprov|unfavor|\bno\b/i.test(name) ? C.disapprove : /approv|favor|\byes\b/i.test(name) ? C.approve : C.accent;
+  const fmt = (n) => (n == null ? '—' : Number(n).toLocaleString());
+
+  let active = 'balance_of_power';
+  const cache = {};
+
+  // ---- fetchers ----
+  const getPoll = (force) => bridge ? window.sq.forecast.pollAverage({ subject: 'Donald Trump', poll_type: 'approval', force }) : Promise.resolve(SAMPLE_POLL);
+  const getBalance = (opts) => bridge ? window.sq.forecast.balance(opts || {}) : Promise.resolve(SAMPLE_BALANCE);
+
+  // ---- POLL (compact, left rail) ----
+  function renderPoll(host, d) {
+    host.innerHTML = '';
+    const card = el('div', 'card'); card.dataset.id = 'poll_average';
+    const head = el('div', 'w-head');
+    head.appendChild(el('span', 'tag', 'Model'));
+    head.appendChild(el('h2', null, 'Poll Average'));
+    head.appendChild(el('span', 'sub', d.subject || ''));
+    head.addEventListener('click', () => setActive('poll_average'));
+    const body = el('div', 'w-body');
+    const sorted = (d.choices || []).slice();
+    const lead = sorted[0], run = sorted[1];
+    const net = lead && run ? +(lead.pct - run.pct).toFixed(1) : null;
+    const netCol = lead && /disapprov/i.test(lead.choice) ? C.disapprove : C.approve;
+    const nb = el('div', 'p-net');
+    const num = el('div', 'num', net == null ? '—' : (lead && /disapprov/i.test(lead.choice) ? '−' : '+') + Math.abs(net)); num.style.color = netCol;
+    nb.appendChild(num); nb.appendChild(el('div', 'lbl', 'net margin')); body.appendChild(nb);
+    const bars = el('div', 'p-bars');
+    sorted.forEach((c) => {
+      const col = pctCol(c.choice); const row = el('div', 'p-row');
+      const ph = el('div', 'ph'); const nm = el('span', 'nm'); const i = el('i'); i.style.background = col; nm.appendChild(i); nm.appendChild(document.createTextNode(c.choice));
+      const v = el('span', 'v', c.pct.toFixed(1)); v.style.color = col; ph.appendChild(nm); ph.appendChild(v);
+      const tr = el('div', 'track'); const f = el('div', 'fill'); f.style.width = Math.max(0, Math.min(100, c.pct)) + '%'; f.style.background = col; tr.appendChild(f);
+      row.appendChild(ph); row.appendChild(tr); bars.appendChild(row);
+    });
+    const corr = el('div', 'p-corr'); corr.innerHTML = `<b>${fmt(d.n_polls)}</b> polls · <b>${fmt(d.n_pollsters)}</b> pollsters`;
+    bars.appendChild(corr); body.appendChild(bars);
+    card.appendChild(head); card.appendChild(body); host.appendChild(card);
+    markActive();
+  }
+
+  // ---- BALANCE OF POWER (center) ----
+  function verdict(ch) { const d = ch.pD_control; return d >= .9 ? 'D safe' : d >= .6 ? 'D favored' : d > .4 ? 'Toss-up' : d > .1 ? 'R favored' : 'R safe'; }
+  function chamberCard(name, ch) {
+    const c = el('div', 'cham');
+    const hh = el('div', 'ch-head'); hh.appendChild(el('h3', null, name));
+    const meta = el('div', 'ch-meta'); meta.innerHTML = `${ch.total} seats<br>${ch.need} to win · ${ch.competitive} in play`; hh.appendChild(meta); c.appendChild(hh);
+    const v = el('div', 'verdict'); const who = el('div', 'who', verdict(ch)); who.style.color = ch.pD_control > ch.pR_control ? C.dem : (ch.pR_control > .6 ? C.rep : C.ink);
+    const p = el('div', 'pct'); p.innerHTML = `<b style="color:${C.dem}">D ${Math.round(ch.pD_control * 100)}%</b> &nbsp; <b style="color:${C.rep}">R ${Math.round(ch.pR_control * 100)}%</b>`;
+    v.appendChild(who); v.appendChild(p); c.appendChild(v);
+    // bar
+    const dPct = ch.dSeats_mean / ch.total * 100, needPct = ch.need / ch.total * 100, p10 = ch.dSeats_p10 / ch.total * 100, p90 = ch.dSeats_p90 / ch.total * 100;
+    const bar = el('div', 'bar');
+    const dem = el('div', 'dem'); dem.style.width = dPct + '%'; bar.appendChild(dem);
+    const rep = el('div', 'rep'); rep.style.width = (100 - dPct) + '%'; bar.appendChild(rep);
+    const band = el('div', 'band'); band.style.left = p10 + '%'; band.style.width = (p90 - p10) + '%'; bar.appendChild(band);
+    const maj = el('div', 'maj'); maj.style.left = needPct + '%'; bar.appendChild(maj);
+    const ml = el('div', 'maj-label', ch.need); ml.style.left = needPct + '%'; bar.appendChild(ml);
+    c.appendChild(bar);
+    const sr = el('div', 'seat-row'); sr.innerHTML = `<span class="d">D ${Math.round(ch.dSeats_mean)} <span class="rng">(${ch.dSeats_p10}–${ch.dSeats_p90})</span></span><span class="r">${Math.round(ch.total - ch.dSeats_mean)} R</span>`; c.appendChild(sr);
+    const tip = el('div', 'tip'); tip.appendChild(el('div', 'tl', 'Tipping-point races'));
+    (ch.tipping || []).forEach((r) => { const row = el('div', 'race'); row.innerHTML = `<span class="rid">${String(r.id).toUpperCase()}</span><span class="m" style="color:${r.margin >= 0 ? C.dem : C.rep}">${r.margin >= 0 ? 'D' : 'R'} +${Math.abs(r.margin).toFixed(1)}</span>`; tip.appendChild(row); });
+    c.appendChild(tip); return c;
+  }
+  function renderBalance(host, d) {
+    host.innerHTML = '';
+    const pay = d.payload || d;
+    const card = el('div', 'card'); card.dataset.id = 'balance_of_power';
+    const head = el('div', 'w-head');
+    head.appendChild(el('span', d.illustrative ? 'tag illus' : 'tag', d.illustrative ? 'Illustrative' : 'Model'));
+    head.appendChild(el('h2', null, 'Balance of Power'));
+    head.appendChild(el('span', 'sub', d.work ? `${d.work.sim.iterations.toLocaleString()} runs · ${d.work.timing_ms}ms` : ''));
+    head.addEventListener('click', () => setActive('balance_of_power'));
+    const body = el('div', 'w-body');
+    const chambers = el('div', 'chambers'); chambers.appendChild(chamberCard('House', pay.house)); chambers.appendChild(chamberCard('Senate', pay.senate)); body.appendChild(chambers);
+    const scen = el('div', 'scen'); scen.appendChild(el('div', 'sl', 'Government scenarios'));
+    const max = Math.max.apply(null, (pay.scenarios || []).map((s) => s.prob).concat([0.01]));
+    (pay.scenarios || []).forEach((s, i) => {
+      const hd = s.label.indexOf('House D') >= 0, sd = s.label.indexOf('Senate D') >= 0;
+      const row = el('div', 'scen-row');
+      const nm = el('div', 'name'); nm.innerHTML = `<span class="chip" style="background:${hd ? C.dem : C.rep}"></span><span class="chip" style="background:${sd ? C.dem : C.rep}"></span>${s.label}`;
+      const tr = el('div', 'scen-track'); const f = el('div', 'scen-fill'); f.style.width = (s.prob / max * 100) + '%'; f.style.background = (hd === sd) ? (hd ? C.dem : C.rep) : 'linear-gradient(90deg,' + C.dem + ',' + C.rep + ')'; f.style.animationDelay = (i * .07) + 's'; tr.appendChild(f);
+      row.appendChild(nm); row.appendChild(tr); row.appendChild(el('div', 'p', Math.round(s.prob * 100) + '%')); scen.appendChild(row);
+    });
+    body.appendChild(scen);
+    card.appendChild(head); card.appendChild(body); host.appendChild(card);
+    markActive();
+  }
+
+  // ---- INSPECTOR (right: the WORK) ----
+  function sec(title, right) { const s = el('div', 'insp-sec'); const h = el('div', 'h'); h.appendChild(el('span', null, title)); if (right) h.appendChild(el('span', 'live', right)); s.appendChild(h); return s; }
+  function chip(label, val) { const c = el('div', 'chip'); c.appendChild(el('b', null, label)); c.appendChild(document.createTextNode(' ' + val)); return c; }
+  function kv(pairs) { const g = el('div', 'kv'); pairs.forEach(([k, v]) => { g.appendChild(el('div', 'k', k)); const vd = el('div', 'v', v); g.appendChild(vd); }); return g; }
+
+  function renderInspector(id, pulse) {
+    const host = $('#insp-col'); host.innerHTML = '';
+    const data = cache[id]; if (!data) { host.appendChild(el('div', 'w-loading', 'No widget selected.')); return; }
+    const insp = el('div', 'insp');
+    const hd = el('div', 'insp-head'); hd.appendChild(el('span', 'k', 'Work')); hd.appendChild(el('span', 't', id === 'balance_of_power' ? 'Balance of Power' : 'Poll Average')); insp.appendChild(hd);
+    const b = el('div', 'insp-body');
+
+    if (id === 'balance_of_power' && data.work) {
+      const w = data.work, cfg = w.inputs.config;
+      const inS = sec('Variable inputs');
+      const chips = el('div', 'chips');
+      chips.appendChild(chip('nat. σ', cfg.nationalSigma)); chips.appendChild(chip('iters', cfg.iterations.toLocaleString())); chips.appendChild(chip('seed', cfg.seed));
+      chips.appendChild(chip('House maj', cfg.majority.house)); chips.appendChild(chip('Senate maj', cfg.majority.senate));
+      inS.appendChild(chips);
+      const dt = el('div', 'datatable'); const tbl = el('table');
+      tbl.innerHTML = '<thead><tr><th>race</th><th>chamber</th><th>margin</th><th>σ</th></tr></thead>';
+      const tb = el('tbody');
+      w.inputs.races.forEach((r) => { const tr = el('tr'); tr.innerHTML = `<td>${r.id}</td><td>${r.chamber}</td><td class="${r.margin >= 0 ? 'pos' : 'neg'}">${r.margin > 0 ? '+' : ''}${r.margin}</td><td>${r.sigma}</td>`; tb.appendChild(tr); });
+      tbl.appendChild(tb); dt.appendChild(tbl); inS.appendChild(dt); b.appendChild(inS);
+
+      const liveS = sec('Live simulator reads', pulse ? 'updated' : ''); if (pulse) liveS.classList.add('pulse');
+      const H = w.sim.chambers.house, S = w.sim.chambers.senate;
+      liveS.appendChild(kv([
+        ['House P(D control)', (H.pA_control * 100).toFixed(1) + '%'],
+        ['House D seats', `${H.seatsA_mean} (${H.seatsA_p10}–${H.seatsA_p90})`],
+        ['Senate P(D control)', (S.pA_control * 100).toFixed(1) + '%'],
+        ['Senate D seats', `${S.seatsA_mean} (${S.seatsA_p10}–${S.seatsA_p90})`],
+        ['iterations', w.sim.iterations.toLocaleString()],
+        ['compute', w.timing_ms + ' ms'],
+      ]));
+      b.appendChild(liveS);
+      const note = el('div', 'insp-sec'); note.appendChild(el('div', 'h', 'Provenance')); note.appendChild(el('div', 'chip', 'Synthetic margins — mechanism demo. Real per-race poll averages wire in with the recompute loop.')); b.appendChild(note);
+    } else if (id === 'poll_average') {
+      const inS = sec('Variable inputs');
+      const chips = el('div', 'chips');
+      [['½-life', '21d'], ['sample', '√n'], ['quality', '538'], ['house-fx', 'on'], ['choice-set', (data.applied && data.applied.choiceSet) || 'modal']].forEach(([k, v]) => chips.appendChild(chip(k, v)));
+      inS.appendChild(chips);
+      inS.appendChild(kv([['polls', fmt(data.n_polls)], ['pollsters', fmt(data.n_pollsters)], ['as of', data.as_of || '—']]));
+      b.appendChild(inS);
+      const liveS = sec('Live model reads');
+      liveS.appendChild(kv((data.choices || []).map((c) => [c.choice, c.pct.toFixed(1) + '%']).concat([['leader', data.leader || '—'], ['margin', data.margin != null ? '+' + Math.abs(data.margin) : '—']])));
+      b.appendChild(liveS);
+    }
+    insp.appendChild(b); host.appendChild(insp);
+  }
+
+  function markActive() { document.querySelectorAll('.card').forEach((c) => c.classList.toggle('active', c.dataset.id === active)); }
+  function setActive(id) { active = id; markActive(); renderInspector(id); }
+
+  // ---- mount + controls ----
+  function loadPoll() { return Promise.resolve().then(() => getPoll(false)).then((d) => { if (d && d.ok !== false) { cache.poll_average = d; renderPoll($('#poll-col'), d); } else { $('#poll-col').innerHTML = ''; $('#poll-col').appendChild(el('div', 'card', '')).appendChild(el('div', 'w-error', 'Poll model unavailable' + (d && d.error ? ' — ' + d.error : ''))); } }).catch((e) => { $('#poll-col').innerHTML = `<div class="card"><div class="w-error">Error — ${e.message}</div></div>`; }); }
+  function loadBalance(opts, pulse) { $('#balance-col').innerHTML = '<div class="card"><div class="w-loading">Simulating…</div></div>'; return Promise.resolve().then(() => getBalance(opts)).then((d) => { if (d && d.ok !== false) { cache.balance_of_power = d; renderBalance($('#balance-col'), d); if (active === 'balance_of_power') renderInspector('balance_of_power', pulse); } else { $('#balance-col').innerHTML = `<div class="card"><div class="w-error">Balance model unavailable${d && d.error ? ' — ' + d.error : ''}</div></div>`; } }).catch((e) => { $('#balance-col').innerHTML = `<div class="card"><div class="w-error">Error — ${e.message}</div></div>`; }); }
+
+  function mount() { loadPoll(); loadBalance({}).then(() => { setActive('balance_of_power'); }); }
+  document.addEventListener('DOMContentLoaded', () => {
+    mount();
+    const rr = $('#rerun'); if (rr) rr.addEventListener('click', () => { rr.disabled = true; loadBalance({ seed: Math.floor(Math.random() * 1e9) }, true).finally(() => { rr.disabled = false; }); });
+    const rf = $('#refresh'); if (rf) rf.addEventListener('click', () => { rf.disabled = true; Promise.all([loadPoll(), loadBalance({ force: true })]).finally(() => { rf.disabled = false; renderInspector(active); }); });
+  });
+
+  // ---- embedded samples (standalone preview only) ----
+  const SAMPLE_POLL = { ok: true, as_of: '2026-07-03', subject: 'Donald Trump', choices: [{ choice: 'Disapprove', pct: 57.2 }, { choice: 'Approve', pct: 39.8 }], leader: 'Disapprove', margin: 17.4, n_polls: 1015, n_pollsters: 91, applied: { choiceSet: 'approve|disapprove' } };
+  const SB_RACES = Array.from({ length: 6 }, (_, i) => ({ id: 'house-' + i, chamber: 'house', margin: (i - 2.5), sigma: 6 })).concat(Array.from({ length: 3 }, (_, i) => ({ id: 'senate-' + i, chamber: 'senate', margin: (i - 1) - 1, sigma: 6 })));
+  const SAMPLE_BALANCE = { ok: true, illustrative: true, as_of: 'illustrative', payload: { house: { need: 218, total: 435, pD_control: .383, pR_control: .617, dSeats_mean: 215.4, dSeats_p10: 207, dSeats_p90: 224, competitive: 37, tipping: [{ id: 'house-19', margin: -0.2 }, { id: 'house-20', margin: 0.2 }, { id: 'house-21', margin: 0.5 }] }, senate: { need: 51, total: 100, pD_control: .241, pR_control: .759, dSeats_mean: 48.7, dSeats_p10: 46, dSeats_p90: 52, competitive: 11, tipping: [{ id: 'senate-7', margin: 0.4 }, { id: 'senate-6', margin: -0.5 }] }, scenarios: [{ label: 'House R | Senate R', prob: .575 }, { label: 'House D | Senate D', prob: .199 }, { label: 'House D | Senate R', prob: .184 }, { label: 'House R | Senate D', prob: .042 }] }, work: { inputs: { config: { nationalSigma: 3.4, iterations: 40000, seed: 2026, majority: { house: 218, senate: 51 } }, races: SB_RACES }, sim: { chambers: { house: { pA_control: .383, seatsA_mean: 215.4, seatsA_p10: 207, seatsA_p90: 224 }, senate: { pA_control: .241, seatsA_mean: 48.7, seatsA_p10: 46, seatsA_p90: 52 } }, iterations: 40000 }, timing_ms: 42 } };
+})();

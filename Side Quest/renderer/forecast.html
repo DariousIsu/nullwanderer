@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Forecasting</title>
+<style>
+  :root{
+    --bg:#0d0d10; --panel:#15161b; --panel-2:#1b1d24; --raise:#22242d;
+    --ink:#E7E9EF; --muted:#98A1B2; --faint:#646D7D; --line:#2A2D37; --line-2:#343845;
+    --approve:#43B89F; --disapprove:#E4694F; --accent:#D9A441;
+    --dem:#4B79D6; --dem-dim:#1b2949; --rep:#D6534B; --rep-dim:#3a221f;
+    --serif:"Iowan Old Style","Palatino Linotype",Georgia,"Times New Roman",serif;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code",Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0; height:100%}
+  body{background:var(--bg); color:var(--ink); font-family:var(--sans); -webkit-font-smoothing:antialiased; line-height:1.5; font-size:14px}
+
+  .topbar{position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:14px; padding:12px 20px;
+    background:rgba(13,13,16,.85); backdrop-filter:blur(8px); border-bottom:1px solid var(--line)}
+  .brand{display:flex; align-items:center; gap:9px; font-family:var(--mono); font-size:.72rem; letter-spacing:.16em; text-transform:uppercase; color:var(--muted)}
+  .brand .dot{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+  .brand b{color:var(--ink); font-weight:600}
+  .topbar .spacer{flex:1}
+  .btn{font-family:var(--sans); font-size:.8rem; color:var(--ink); background:var(--panel-2); border:1px solid var(--line-2); padding:6px 12px; border-radius:8px; cursor:pointer}
+  .btn:hover{background:var(--raise)} .btn:disabled{opacity:.5;cursor:default}
+
+  .studio{display:grid; grid-template-columns:288px minmax(0,1fr) 340px; gap:16px; padding:16px; align-items:start}
+  @media(max-width:1180px){.studio{grid-template-columns:1fr}}
+  .col-label{font-family:var(--mono); font-size:.62rem; letter-spacing:.14em; text-transform:uppercase; color:var(--faint); margin:2px 2px 10px}
+
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; overflow:hidden}
+  .card.active{border-color:var(--accent); box-shadow:0 0 0 1px rgba(217,164,65,.25)}
+  .w-head{display:flex; align-items:center; gap:9px; padding:12px 16px; border-bottom:1px solid var(--line); cursor:pointer}
+  .w-head .tag{font-family:var(--mono); font-size:.58rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); border:1px solid #4a3d1e; background:#22200f; padding:2px 6px; border-radius:100px}
+  .w-head .tag.illus{color:#caa24a}
+  .w-head h2{margin:0; font-family:var(--serif); font-weight:600; font-size:1.05rem}
+  .w-head .sub{font-size:.72rem; color:var(--faint); margin-left:auto; font-variant-numeric:tabular-nums}
+  .w-body{padding:16px; display:flex; flex-direction:column; gap:16px}
+  .w-loading,.w-error{padding:26px 16px; text-align:center; color:var(--muted); font-size:.85rem}
+  .w-error{color:var(--disapprove)}
+
+  /* ---- compact poll (left rail) ---- */
+  .p-net{display:flex; align-items:baseline; gap:8px}
+  .p-net .num{font-family:var(--serif); font-weight:600; font-variant-numeric:tabular-nums; font-size:2.4rem; line-height:.9}
+  .p-net .lbl{font-family:var(--mono); font-size:.6rem; text-transform:uppercase; letter-spacing:.1em; color:var(--muted)}
+  .p-bars{display:flex; flex-direction:column; gap:9px}
+  .p-row .ph{display:flex; justify-content:space-between; align-items:baseline; font-size:.78rem}
+  .p-row .ph .nm{display:flex; align-items:center; gap:6px; font-weight:600}
+  .p-row .ph .nm i{width:8px;height:8px;border-radius:2px}
+  .p-row .ph .v{font-family:var(--serif); font-size:1.1rem; font-weight:600; font-variant-numeric:tabular-nums}
+  .track{height:7px; background:var(--panel-2); border-radius:100px; overflow:hidden; margin-top:3px}
+  .fill{height:100%; border-radius:100px; transform-origin:left; animation:grow 1s cubic-bezier(.2,.7,.2,1) both}
+  @keyframes grow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+  .p-corr{font-size:.72rem; color:var(--muted); font-variant-numeric:tabular-nums}
+  .p-corr b{color:var(--ink)}
+
+  /* ---- balance of power (center) ---- */
+  .chambers{display:grid; grid-template-columns:1fr 1fr; gap:14px}
+  @media(max-width:620px){.chambers{grid-template-columns:1fr}}
+  .cham{background:var(--panel-2); border:1px solid var(--line); border-radius:12px; padding:16px; display:flex; flex-direction:column; gap:13px}
+  .cham .ch-head{display:flex; justify-content:space-between; align-items:baseline}
+  .cham h3{margin:0; font-family:var(--serif); font-size:1.25rem; font-weight:600}
+  .cham .ch-meta{font-family:var(--mono); font-size:.6rem; color:var(--faint); text-align:right; line-height:1.5}
+  .verdict{display:flex; align-items:baseline; gap:9px; flex-wrap:wrap}
+  .verdict .who{font-family:var(--serif); font-size:1.05rem; font-weight:600}
+  .verdict .pct{font-size:.76rem; color:var(--muted); font-variant-numeric:tabular-nums}
+  .bar{position:relative; height:30px; border-radius:6px; overflow:hidden; background:var(--bg); border:1px solid var(--line)}
+  .bar .dem{position:absolute;left:0;top:0;bottom:0;background:var(--dem)}
+  .bar .rep{position:absolute;right:0;top:0;bottom:0;background:var(--rep)}
+  .bar .band{position:absolute;top:0;bottom:0;background:rgba(231,233,239,.15);border-left:1px dashed rgba(231,233,239,.45);border-right:1px dashed rgba(231,233,239,.45)}
+  .bar .maj{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--accent);box-shadow:0 0 6px rgba(217,164,65,.6)}
+  .maj-label{position:absolute;top:-15px;transform:translateX(-50%);font-family:var(--mono);font-size:.58rem;color:var(--accent)}
+  .seat-row{display:flex;justify-content:space-between;font-variant-numeric:tabular-nums;font-size:.78rem}
+  .seat-row .d{color:var(--dem);font-weight:600} .seat-row .r{color:var(--rep);font-weight:600} .seat-row .rng{color:var(--faint);font-family:var(--mono);font-size:.68rem}
+  .tip{border-top:1px solid var(--line); padding-top:9px}
+  .tip .tl{font-family:var(--mono);font-size:.56rem;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:6px}
+  .tip .race{display:flex;justify-content:space-between;padding:3px 0;font-size:.76rem}
+  .tip .rid{font-family:var(--mono);font-size:.7rem;color:var(--muted)}
+  .tip .m{font-variant-numeric:tabular-nums;font-weight:600}
+
+  .scen{margin-top:2px}
+  .scen .sl{font-family:var(--mono);font-size:.6rem;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-bottom:10px}
+  .scen-row{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .scen-row .name{width:176px;flex:none;font-size:.8rem;display:flex;gap:5px;align-items:center;white-space:nowrap}
+  .scen-row .name .chip{width:8px;height:8px;border-radius:2px}
+  .scen-track{flex:1;height:18px;background:var(--panel-2);border-radius:5px;overflow:hidden}
+  .scen-fill{height:100%;border-radius:5px;animation:grow .9s cubic-bezier(.2,.7,.2,1) both}
+  .scen-row .p{width:40px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;font-size:.8rem}
+
+  /* ---- inspector (right: the WORK panel) ---- */
+  .inspector{position:sticky; top:70px}
+  .insp{background:var(--panel); border:1px solid var(--line); border-radius:14px; overflow:hidden}
+  .insp-head{padding:12px 16px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:8px}
+  .insp-head .k{font-family:var(--mono); font-size:.58rem; letter-spacing:.12em; text-transform:uppercase; color:var(--accent)}
+  .insp-head .t{font-family:var(--serif); font-weight:600; font-size:.98rem}
+  .insp-body{padding:14px 16px; display:flex; flex-direction:column; gap:16px; max-height:calc(100vh - 130px); overflow:auto}
+  .insp-sec .h{font-family:var(--mono); font-size:.58rem; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); margin-bottom:8px; display:flex; justify-content:space-between}
+  .chips{display:flex; flex-wrap:wrap; gap:6px}
+  .chip{font-size:.7rem; background:var(--panel-2); border:1px solid var(--line); padding:4px 8px; border-radius:7px; font-variant-numeric:tabular-nums}
+  .chip b{font-family:var(--mono); font-size:.64rem; color:var(--accent); font-weight:600}
+  .kv{display:grid; grid-template-columns:auto 1fr; gap:3px 12px; font-size:.76rem; font-variant-numeric:tabular-nums}
+  .kv .k{color:var(--muted)} .kv .v{text-align:right; font-family:var(--mono); font-size:.72rem}
+  .live{color:var(--approve)}
+  .datatable{max-height:210px; overflow:auto; border:1px solid var(--line); border-radius:8px}
+  table{width:100%; border-collapse:collapse; font-size:.72rem; font-variant-numeric:tabular-nums}
+  th,td{text-align:right; padding:4px 8px; border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  thead th{position:sticky; top:0; background:var(--panel-2); font-family:var(--mono); font-size:.56rem; letter-spacing:.06em; text-transform:uppercase; color:var(--faint); font-weight:600}
+  tbody tr:last-child td{border-bottom:0}
+  td.pos{color:var(--dem)} td.neg{color:var(--rep)}
+  .pulse{animation:pulse .6s ease}
+  @keyframes pulse{0%{background:rgba(67,184,159,.14)}100%{background:transparent}}
+
+  .foot{padding:6px 20px 34px; max-width:1600px; margin:0 auto; color:var(--faint); font-size:.74rem; line-height:1.6}
+  :focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:6px}
+  @media(prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand"><span class="dot"></span>Side Quest · <b>Forecasting</b></div>
+    <div class="spacer"></div>
+    <button class="btn" id="rerun" title="Re-run the simulator (new random seed) — watch the estimate jitter">Re-run sim</button>
+    <button class="btn" id="refresh">Refresh</button>
+  </div>
+
+  <div class="studio">
+    <section>
+      <div class="col-label">Sentiment</div>
+      <div id="poll-col"></div>
+    </section>
+    <section>
+      <div class="col-label">Balance of Power · 2026 Midterms</div>
+      <div id="balance-col"></div>
+    </section>
+    <aside class="inspector">
+      <div class="col-label">The Work · live reads</div>
+      <div id="insp-col"></div>
+    </aside>
+  </div>
+  <div class="foot" id="foot">Glass-box R&amp;D instrument — every widget shows its variable inputs and live computation in the Work panel. Balance-of-power runs on the correlated Monte-Carlo simulator; margins are illustrative until per-race poll averages wire in.</div>
+
+  <script src="forecast.js"></script>
+</body>
+</html>

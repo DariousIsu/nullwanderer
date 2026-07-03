@@ -150,6 +150,9 @@ let apiStreamTimer = null;     // setInterval id for the API management stream s
 let apiStreamTimeout = null;   // initial-sweep setTimeout id
 let canvasIngestTimer = null;  // setInterval id for the canvas drop→ingest poller (cleared on shutdown)
 let canvasIngestTimeout = null;// initial-sweep setTimeout id
+let forecastLoopTimer = null;  // setInterval id for the forecasting recompute loop (Suite B capstone)
+let forecastLoopTimeout = null;// initial-sweep setTimeout id
+let lastForecast = null;       // last forecast_loop.runOnce() result — served by forecast:balance, re-simmed on seed re-run
 let lastUserTurnTs = Date.now(); // for detecting "return after a long absence" (capability proposals)
 const RETURN_IDLE_MS = 10 * 60 * 1000; // gap that counts as "they were away"
 
@@ -938,6 +941,52 @@ app.whenReady().then(() => {
     console.log(`[main] news hourly compression scheduled (every ${Math.round(NEWS_COMPRESS_MS / 60000)}m)`);
   }
 
+  // FORECASTING RECOMPUTE LOOP (Suite B capstone) — the whole machine on a cadence: VoteHub race slate +
+  // per-race poll averages → news_feed signals → gpt-oss direction pre-assess → reactor perturbs margin/σ →
+  // correlated Monte-Carlo sim → balance-of-power payload. Cached in `lastForecast`, served by forecast:balance
+  // (the studio pulls it; a seed re-run re-sims the SAME live slate for the jitter demo). DOWNSTREAM-ONLY:
+  // reads the poll connectors + news lane + cloud, writes nothing. Fail-soft — a dead feed degrades a race to a
+  // prior, never a throw. Race polls are fetched in ONE bulk call per poll-type (not one HTTP call per race).
+  {
+    const FORECAST_LOOP_MS = parseInt(process.env.FORECAST_LOOP_MS || '', 10) || 30 * 60 * 1000;   // recompute every 30m
+    const loop = require('./lib/forecast_loop');
+    const votehub = require('./lib/poll_votehub');
+    const legacy = require('./lib/poll_538legacy');
+    const fcNorm = (s) => String(s == null ? '' : s).trim().toLowerCase();
+    let ratingsCache = null;   // 538 pollster ratings — slow-moving; fetched once per process
+    const runForecastLoop = async () => {
+      try {
+        // one bulk poll fetch per race poll-type → index by subject (avoids an HTTP call per race)
+        const pollIndex = {};
+        for (const pt of ['us-senator', 'us-representative']) {
+          try {
+            const r = await votehub.fetchPolls({ fetchJson: votehub.defaultFetchJson, poll_type: pt });
+            for (const p of (r.polls || [])) { const k = fcNorm(p.subject); (pollIndex[k] = pollIndex[k] || []).push(p); }
+          } catch (e) { console.error('[forecast] poll fetch', pt, e.message); }
+        }
+        if (ratingsCache == null) { try { ratingsCache = (await legacy.fetchRatings({ fetchText: legacy.defaultFetchText })).ratings || []; } catch { ratingsCache = []; } }
+        const engineUp = await ensureEngine();                       // gpt-oss direction judgments need the cloud; absent it, news is volatility-only
+        const cloud = engineUp ? require('./lib/cloud_logic') : null;
+        const res = await loop.runOnce({
+          fetchSubjects: () => votehub.fetchSubjects({ fetchJson: votehub.defaultFetchJson }),
+          getRacePolls: (race) => pollIndex[fcNorm(race.subject)] || [],
+          ratings: ratingsCache,
+          ask: cloud ? cloud.ask : null,
+          // resolve (read-only Echo enrichment) intentionally left off the hot loop — margins/sim don't need
+          // echo_ref, and enriching the whole slate every cycle would hammer Echo. Opt-in follow-on.
+        });
+        if (res && res.ok) {
+          lastForecast = res;
+          console.log(`[forecast] recompute: ${res.work.margins.polled}/${res.work.margins.total} races polled · House P(D) ${(res.payload.house.pD_control * 100).toFixed(0)}% · Senate P(D) ${(res.payload.senate.pD_control * 100).toFixed(0)}%${res.live ? ' · LIVE' : ''} · ${res.work.timing_ms}ms`);
+        } else if (res) { console.log(`[forecast] recompute skipped: ${res.error}`); }
+      } catch (e) { console.error('[forecast] recompute loop failed:', e.message); }
+    };
+    forecastLoopTimeout = setTimeout(() => { runForecastLoop().catch(() => {}); }, 2 * 60 * 1000);   // first run ~2m after boot
+    forecastLoopTimer = setInterval(() => { runForecastLoop().catch(() => {}); }, FORECAST_LOOP_MS);
+    forecastLoopTimer.unref?.();
+    console.log(`[main] forecasting recompute loop scheduled (every ${Math.round(FORECAST_LOOP_MS / 60000)}m → balance of power)`);
+  }
+
   // NEWS VIDEO-CAPTION CAPTURE (Phase A completion) — hidden always-on webContents read the Monitor video
   // streams' closed captions into the SAME isolated bucket as source_kind='video' SEGMENTS (clustered like
   // any source), and a bare "[Music]" caption grabs a SCREENSHOT of the frame — show start/stop stings and
@@ -1049,6 +1098,8 @@ app.on('window-all-closed', async () => {
   if (emailIntakeTimeout) { clearTimeout(emailIntakeTimeout); emailIntakeTimeout = null; }
   if (canvasIngestTimer) { clearInterval(canvasIngestTimer); canvasIngestTimer = null; }
   if (canvasIngestTimeout) { clearTimeout(canvasIngestTimeout); canvasIngestTimeout = null; }
+  if (forecastLoopTimer) { clearInterval(forecastLoopTimer); forecastLoopTimer = null; }
+  if (forecastLoopTimeout) { clearTimeout(forecastLoopTimeout); forecastLoopTimeout = null; }
   try { require('./lib/news_poll').stop(); } catch {}
   try { newsVideoLane && newsVideoLane.stop(); } catch {}
   try { stopScribeHeartbeat(); } catch {}
@@ -1086,9 +1137,19 @@ ipcMain.handle('forecast:poll-average', async (_e, opts) => {
   try { return await require('./lib/forecast_service').pollAverageWidget(opts || {}); }
   catch (e) { return { ok: false, model: 'poll_average', error: e.message }; }
 });
-ipcMain.handle('forecast:balance', (_e, opts) => {
-  try { return require('./lib/forecast_service').balanceWidget(opts || {}); }
-  catch (e) { return { ok: false, model: 'balance_of_power', error: e.message }; }
+// Serves the recompute loop's live result (lastForecast). A seed override re-sims the SAME live slate (fast,
+// no network) → the studio's "Re-run sim" jitter now plays on REAL margins. Before the first loop run (or if
+// it hasn't produced one yet) falls back to the illustrative synthetic slate so the surface is never empty.
+ipcMain.handle('forecast:balance', (_e, opts = {}) => {
+  try {
+    if (opts && opts.seed != null && lastForecast && lastForecast.work && lastForecast.work.inputs) {
+      const { races, config } = lastForecast.work.inputs;
+      const r = require('./lib/forecast_loop').recompute(races, { events: [], momentum: [] }, { config: { ...config, seed: opts.seed } });
+      return { ...lastForecast, payload: r.payload, work: { ...lastForecast.work, sim: r.work.sim, timing_ms: r.work.timing_ms } };
+    }
+    if (lastForecast) return lastForecast;
+    return require('./lib/forecast_service').balanceWidget(opts || {});
+  } catch (e) { return { ok: false, model: 'balance_of_power', error: e.message }; }
 });
 
 // ============================ MONITORS (canvas news-feed widget) =============================
