@@ -96,11 +96,19 @@ async function _enrichGraph(need, object, deps = {}) {
   if (object && object.id) toWalk.push({ id: object.id, name: object.name });
   if (object && Array.isArray(object.neighbors)) for (const n of object.neighbors) neighborNames.push(n);
   for (const e of hits.slice(0, 2)) if (e && e.id) toWalk.push({ id: e.id, name: e.name });
+  const _cleanEnt = (s) => String(s || '').replace(/\s*\[(?:wd:)?[^\]]*\]/gi, '').replace(/\s+/g, ' ').trim();
   for (const w of toWalk) {
     if (!w.id || seen.has(w.id)) continue; seen.add(w.id);
     try {
-      const kr = await d({ kind: 'do', name: 'kg_neighborhood', args: { entity_id: w.id, top_k: 12 } });
-      if (kr && kr.ok) { const ns = echo.normalizeNeighbors(_json(kr.text) || {}); for (const n of ns) neighborNames.push(n); if (ns.length) parts.push(`Connected to ${w.name || 'it'}: ${ns.slice(0, 12).join(', ')}`); }
+      // TRAVERSE THE REAL GRAPH (relations table) — kg_neighborhood returns EMPTY here. Pull the connected
+      // objects AND, for a person, their CURRENT offices (HELD_OFFICE, tenure_end=null) — which IS "their
+      // title" straight from the graph (Rubio → "Secretary of State"). This is the spreading-activation.
+      const rel = await echo.relatedEntities(w.id, { dispatch: d, limit: 20 });
+      const roles = rel.filter(r => r.relation === 'HELD_OFFICE' && r.current).map(r => _cleanEnt(r.name)).filter(Boolean);
+      if (roles.length) parts.push(`${_cleanEnt(w.name) || 'It'} currently holds: ${roles.slice(0, 4).join('; ')}`);
+      const named = [];
+      for (const r of rel) { const nm = _cleanEnt(r.name); if (nm) { neighborNames.push(nm); named.push(nm); } }
+      if (named.length) parts.push(`Connected to ${_cleanEnt(w.name) || 'it'}: ${[...new Set(named)].slice(0, 12).join(', ')}`);
     } catch {}
   }
   // FOLLOW THE EDGES to the connected OBJECTS — resolve each connected entity to ITS OWN object and read

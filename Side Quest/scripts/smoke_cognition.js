@@ -15,10 +15,14 @@ const askMock = async ({ input }) => {
   if (/Marco Rubio|cabinet:/i.test(g)) return 'Trump’s cabinet includes Marco Rubio and Lee Zeldin.';
   return 'NEED: members of Donald Trump’s cabinet';
 };
-// A mock dispatch: search_entities → the cabinet entity; kg_neighborhood → the members.
+// A mock dispatch: search_entities → the cabinet entity; db_query → the relations-table members (the graph
+// traversal now reads `relations`, not the dead kg_neighborhood).
 const dispatchMock = async (tag) => {
   if (tag.name === 'search_entities') return { ok: true, text: JSON.stringify({ result: [{ id: 1656102, name: 'second cabinet of Donald J. Trump', entity_type: 'organization', entity_subtype: 'cabinet', summary: 'the cabinet of the second Trump administration' }] }) };
-  if (tag.name === 'kg_neighborhood') return { ok: true, text: JSON.stringify({ neighbors: [{ name: 'Marco Rubio' }, { name: 'Lee Zeldin' }, { name: 'Ryan Zinke' }] }) };
+  if (tag.name === 'db_query') return { ok: true, text: JSON.stringify({ ok: true, rows: [
+    { rt: 'HELD_OFFICE', md: '{"tenure_end":null,"role_type":"Secretary of State"}', id: 1484834, nm: 'Marco Rubio', et: 'person', est: '' },
+    { rt: 'MEMBER_OF', md: '{}', id: 2, nm: 'Lee Zeldin', et: 'person', est: '' },
+    { rt: 'MEMBER_OF', md: '{}', id: 3, nm: 'Ryan Zinke', et: 'person', est: '' } ] }) };
   if (tag.name === 'web_search') return { ok: true, text: JSON.stringify({ results: [{ title: 'Trump cabinet', snippet: 'Rubio Secretary of State' }] }) };
   return { ok: false };
 };

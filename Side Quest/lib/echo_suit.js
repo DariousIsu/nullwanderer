@@ -498,6 +498,48 @@ async function _resolveViaSearch(d, name, preferType) {
   }
   return best;
 }
+
+// GRAPH TRAVERSAL via the `relations` table — kg_neighborhood returns EMPTY for these nodes, but the REAL
+// edges live here (a person can have thousands). Walk an entity's edges to the connected objects, joining
+// `entities` for names, and pull role/tenure out of relation_metadata. The model is office-centric: a
+// person HELD_OFFICE → an OFFICE node with tenure_start/tenure_end (end=null ⇒ CURRENT). So this is what
+// makes "his cabinet / their titles / X's current role" actually flow across the graph. Fail-soft → [].
+const _SAFE_ID = (v) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : 0; };
+async function relatedEntities(entityId, { dispatch = null, limit = 30, relTypes = null } = {}) {
+  const d = dispatch || (liveReady() ? (tag) => _live.dispatch(tag) : null);
+  const id = _SAFE_ID(entityId);
+  if (!d || !id) return [];
+  let typeFilter = '';
+  if (relTypes && relTypes.length) { const safe = relTypes.map(t => String(t).replace(/[^A-Z_]/gi, '')).filter(Boolean); if (safe.length) typeFilter = ` AND r.relation_type IN (${safe.map(t => `'${t}'`).join(',')})`; }
+  const sql = `SELECT r.relation_type rt, r.relation_metadata md, e.id id, e.name nm, e.entity_type et, e.entity_subtype est`
+    + ` FROM relations r JOIN entities e ON e.id = (CASE WHEN r.source_id=${id} THEN r.target_id ELSE r.source_id END)`
+    + ` WHERE (r.source_id=${id} OR r.target_id=${id}) AND r.deleted=0${typeFilter} ORDER BY r.confidence DESC LIMIT ${_SAFE_ID(limit) || 30}`;
+  let rows = [];
+  try { const r = await d({ kind: 'do', name: 'db_query', args: { sql } }); const j = JSON.parse(r.text); rows = (j && j.rows) || []; } catch {}
+  return rows.map(x => {
+    let md = {}; try { md = JSON.parse(x.md || '{}'); } catch {}
+    const until = md.tenure_end || md.end_date || null;
+    return { id: x.id, name: String(x.nm || ''), type: x.et || null, subtype: x.est || null, relation: x.rt || null, role: md.role_type || md.role || null, since: md.tenure_start || md.start_date || null, until, current: !until };
+  }).filter(x => x.name);
+}
+
+// OFFICE-HOLDER resolution — "who is Trump's Secretary of State / the current EPA administrator" maps to the
+// CURRENT holder of that office (the office-centric model). Resolve the office name → its OFFICE node →
+// people who HELD_OFFICE it, current first. Returns [{ name, since, until, current }]. Fail-soft → [].
+async function officeHolders(office, { dispatch = null, currentOnly = true, top = 3 } = {}) {
+  const d = dispatch || (liveReady() ? (tag) => _live.dispatch(tag) : null);
+  const q = String(office || '').replace(/^.*\b(?:the\s+)?(secretary|administrator|director|chair|chancellor|minister|president|governor|mayor|justice|ambassador|attorney general|speaker)\b/i, '$1').trim() || String(office || '').trim();
+  if (!d || !q) return [];
+  const cands = await _searchEntities(d, q, null);
+  // an OFFICE node's name IS the office title (e.g. "United States Secretary of State [wd:Q14213]")
+  const office_ = cands.find(c => /office|position|Q\d/i.test(c.name) || _coreNameKey(c.name).includes(_coreNameKey(q).split(' ').pop()));
+  const target = office_ || cands[0];
+  if (!target || !target.id) return [];
+  const holders = (await relatedEntities(target.id, { dispatch: d, relTypes: ['HELD_OFFICE'], limit: 20 }))
+    .filter(h => !currentOnly || h.current)
+    .sort((a, b) => String(b.since || '').localeCompare(String(a.since || '')));
+  return holders.slice(0, top).map(h => ({ name: h.name, since: h.since, until: h.until, current: h.current, office: target.name }));
+}
 // Are these name-gated candidates all plausibly the SAME person? After the gate each core-name key already
 // carries every query token, so the only divergence is EXTRA tokens (middle names / suffixes). Same person
 // = the extras form a subset chain ("Lee Zeldin" ⊆ "Lee Michael Zeldin"); DIFFERENT people carry
@@ -760,5 +802,5 @@ async function wikiLookup(query, { dispatch = null, pages = 3, sentences = 4 } =
 
 module.exports = {
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _setLiveForTest
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _setLiveForTest
 };

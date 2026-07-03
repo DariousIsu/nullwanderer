@@ -127,6 +127,18 @@ function dispatch({ sibling = true } = {}) {
   ok(G('Inflation Reduction Act', { name: 'HR 5376 (US, 117)', type: 'bill', subtype: 'bill' }) === true, 'gate: bill carve-out keeps "Inflation Reduction Act" → HR 5376');
   ok(G('anything', null) === false, 'gate: null object → reject');
 
+  // ── relatedEntities — GRAPH TRAVERSAL via the relations table (kg_neighborhood returns 0; the real edges
+  // live here). Extracts role + current (tenure_end=null) from relation_metadata. ──
+  const relDispatch = async (tag) => tag.name === 'db_query' ? { ok: true, text: JSON.stringify({ ok: true, rows: [
+    { rt: 'HELD_OFFICE', md: '{"tenure_start":"2025-01-20","tenure_end":null,"role_type":"Secretary of State"}', id: 1, nm: 'United States Secretary of State [wd:Q14213]', et: 'position', est: '' },
+    { rt: 'HELD_OFFICE', md: '{"tenure_start":"2011-01-03","tenure_end":"2025-01-20"}', id: 2, nm: 'United States senator', et: 'position', est: '' } ] }) } : { ok: false };
+  const rel = await echo.relatedEntities(1484834, { dispatch: relDispatch });
+  ok(rel.length === 2 && rel[0].relation === 'HELD_OFFICE', 'relatedEntities: walks the relations table (not the dead kg_neighborhood)');
+  const current = rel.filter(r => r.current);
+  ok(current.length === 1 && /Secretary of State/.test(current[0].name), 'relatedEntities: tenure_end=null → CURRENT office (the live title)');
+  ok(rel[1].current === false && rel[1].until === '2025-01-20', 'relatedEntities: tenure_end set → past office');
+  ok((await echo.relatedEntities(0, { dispatch: relDispatch })).length === 0, 'relatedEntities: bad id → [] (fail-safe)');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
