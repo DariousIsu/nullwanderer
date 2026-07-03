@@ -1086,6 +1086,10 @@ ipcMain.handle('forecast:poll-average', async (_e, opts) => {
   try { return await require('./lib/forecast_service').pollAverageWidget(opts || {}); }
   catch (e) { return { ok: false, model: 'poll_average', error: e.message }; }
 });
+ipcMain.handle('forecast:balance', (_e, opts) => {
+  try { return require('./lib/forecast_service').balanceWidget(opts || {}); }
+  catch (e) { return { ok: false, model: 'balance_of_power', error: e.message }; }
+});
 
 // ============================ MONITORS (canvas news-feed widget) =============================
 // Side Quest half: subscription CRUD + fetch via the engine's fetch_feeds_batch, mapped to a merged
@@ -3227,6 +3231,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           .map(n => { const c = String((n && n.content) || '').replace(/\s+/g, ' ').trim().slice(0, 200); return c ? `  • ${c}` : ''; })
           .filter(Boolean);
         if (noteLines.length) parts.push('Related from your memory:\n' + noteLines.join('\n'));
+      }
+      // DATA STREAMS (integration fix) — landed DOCUMENTS (meeting notes / research dossiers / API / email)
+      // + tracked NEWS relevant to this entity, surfaced INDEPENDENTLY of the object so a rich KG record can't
+      // hide them (chat answering was blind to news_bucket + the documents table). Capped; artifact-tagged.
+      if (recallResult.streamHits && recallResult.streamHits.length) {
+        const sLines = recallResult.streamHits.slice(0, 5)
+          .map(h => { const c = String((h && h.content) || '').replace(/\s+/g, ' ').trim().slice(0, 240); return c ? `  • [${h.source || 'stream'}] ${c}` : ''; })
+          .filter(Boolean);
+        if (sLines.length) { parts.push('From your live data streams (news + documents you hold on this):\n' + sLines.join('\n')); recallResult.streamHits.forEach(h => rkRows.unshift({ content: h.content, source: h.source })); }
       }
       retrievedKnowledgeBlock = parts.length ? parts.join('\n\n') : null;
     } else {
@@ -5882,6 +5895,11 @@ async function gatherKnown(entity, { sourceFocusId = null, facet = '' } = {}) {
   }
   let local = [];
   try { const rows = await memoryLib.retrieve(entity, { k: 4 }); local = (rows || []).map(x => String((x && x.content) || '')); } catch {}
+  // DATA STREAMS (integration fix) — also pull landed DOCUMENTS (prior dossiers / meeting notes / API / email)
+  // and TRACKED NEWS on this entity, so research BUILDS ON them instead of re-discovering (research was blind
+  // to news_bucket + the documents table). Fail-soft.
+  try { const docs = require('./lib/doc_store').recall(entity, 3) || []; for (const d of docs) { const c = `${d.title ? d.title + ': ' : ''}${String(d.markdown || '').replace(/\s+/g, ' ').slice(0, 300)}`.trim(); if (c) local.push(c); } } catch {}
+  try { const nl = require('./lib/news_lane'); for (const n of nl.storiesAsNotes(nl.storiesForTopic(entity, { k: 3 }), { max: 3 })) if (n && n.content) local.push(n.content); } catch {}
   let echo = [];
   try {
     if (echoSuit) {

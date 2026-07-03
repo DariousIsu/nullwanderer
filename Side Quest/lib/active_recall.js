@@ -23,9 +23,9 @@ const RICH_NOTES = 3;   // ≥ this many on-topic notes (or any verified_fact, o
 function _objectRich(obj) { return !!(obj && (obj.degree >= 8 || (obj.facts || []).length >= 4 || (obj.committees || []).length >= 1)); }
 function _hasObject(obj) { return !!(obj && ((obj.facts || []).length || (obj.committees || []).length || (obj.neighbors || []).length)); }
 
-async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retrieveFn = null, graphFn = null, echoFn = null, objectFn = null, prominenceFn = null, object = true } = {}) {
+async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retrieveFn = null, graphFn = null, echoFn = null, objectFn = null, prominenceFn = null, docFn = null, newsFn = null, object = true } = {}) {
   const t = String(topic || '').trim();
-  if (!t) return { topic: t, notes: [], facts: [], object: null, coverage: 'thin', echo: 0, mention: null, identityNote: null, precedenceFact: null };
+  if (!t) return { topic: t, notes: [], facts: [], object: null, coverage: 'thin', echo: 0, mention: null, identityNote: null, precedenceFact: null, streamHits: [] };
   const retrieve = retrieveFn || ((q) => memory.retrieveScored(q, { k, minRelevance }));
   let local = []; try { local = (await retrieve(t)) || []; } catch { local = []; }
   let facts = []; try { facts = (graphFn ? graphFn(t) : _graphFacts(t)) || []; } catch { facts = []; }
@@ -69,11 +69,22 @@ async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retriev
   // knows it" pool. Reference-not-copy: snippets surface into recall, never copied into sq.db.
   let echoHits = []; try { echoHits = (echoFn ? await echoFn(t) : await _echoSearch(t)) || []; } catch { echoHits = []; }
   const notes = local.concat(echoHits);
+  // DATA-STREAM RECALL — factor in the OTHER short-term stores she'd otherwise be blind to: landed DOCUMENTS
+  // (meeting notes / research dossiers / API + email + canvas) and tracked NEWS. Both are topic-searched +
+  // capped, and returned SEPARATELY so a rich KG object can't hide them (main.js/knowledgeBlock surface them
+  // independently). Live defaults gated to !objectFn so the offline gate is unaffected; docFn/newsFn
+  // injectable for tests. Fail-soft — a store miss never breaks recall.
+  let streamHits = [];
+  try {
+    const docs = docFn ? (await docFn(t)) : (retrieveFn ? [] : _docRecall(t));   // retrieveFn injected = offline test → skip live stores
+    const news = newsFn ? (await newsFn(t)) : (retrieveFn ? [] : _newsRecall(t));
+    streamHits = _docNotes(docs).concat(Array.isArray(news) ? news : []);
+  } catch {}
   const rich = _objectRich(obj) || notes.length >= RICH_NOTES || local.some(n => n.source === 'verified_fact') || facts.length >= 3 || echoHits.length >= 2;
   // PRECEDENCE — a fresh, deliberate verified_fact about this object leads over its (stale) KG dossier.
   let precedenceFact = null;
   if (obj) { try { precedenceFact = _precedenceFact(obj, notes, mentionUsed); } catch {} }
-  return { topic: t, notes, facts, object: obj, coverage: rich ? 'rich' : 'thin', echo: echoHits.length, mention: mentionUsed, identityNote, precedenceFact };
+  return { topic: t, notes, facts, object: obj, coverage: rich ? 'rich' : 'thin', echo: echoHits.length, mention: mentionUsed, identityNote, precedenceFact, streamHits };
 }
 // Entity-shaped = a name/short phrase we can hand to quick_lookup (single-name → dossier), not a
 // full sentence. Keeps the object pull cheap + on-target.
@@ -107,6 +118,18 @@ function extractEntity(text) {
 }
 function _echoSearch(topic) { try { return require('./echo_suit').recallKnowledge(topic); } catch { return Promise.resolve([]); } }
 function _echoObject(topic, preferType = null) { try { return require('./echo_suit').recallObject(topic, preferType ? { preferType } : {}); } catch { return Promise.resolve(null); } }
+// DATA-STREAM stores (the lanes chat/research were blind to). Keyword recall over landed DOCUMENTS and a
+// topic query over tracked NEWS stories. Fail-soft → []. Live-only (require the app's DBs); tests inject.
+function _docRecall(topic) { try { return require('./doc_store').recall(topic, 4) || []; } catch { return []; } }
+function _newsRecall(topic) { try { const nl = require('./news_lane'); return nl.storiesAsNotes(nl.storiesForTopic(topic, { k: 4 }), { max: 4 }); } catch { return []; } }
+// doc candidates (doc_store shape {title, markdown, source}) → knowledge-shaped notes, artifact-tagged so
+// grounding shows their provenance ("[doc:meeting_notes] ..."). Pure.
+function _docNotes(cands) {
+  return (Array.isArray(cands) ? cands : []).slice(0, 4).map(d => ({
+    content: `${d.title ? d.title + ': ' : ''}${String(d.markdown || '').replace(/\s+/g, ' ').slice(0, 240)}`.trim(),
+    source: `doc:${d.source || 'document'}`,
+  })).filter(n => n.content);
+}
 
 // ── PRECEDENCE GATE (reconciliation §5 — the Pam Bondi fix) ─────────────────────────────────────────────
 // A FRESH, deliberately-banked verified_fact about the resolved object's subject must LEAD the grounding
@@ -198,7 +221,8 @@ function _relStr(n) {
 }
 
 function _tag(src) {
-  if (src && src.startsWith('echo:')) return src;   // [echo:wikipedia] — from the master DB
+  if (src && (src.startsWith('echo:') || src.startsWith('doc:'))) return src;   // [echo:wikipedia] / [doc:meeting_notes]
+  if (src === 'news') return 'news';   // the tracked news lane
   return src === 'learning' ? 'learned' : src === 'interest_summary' ? 'summary' : src === 'trajectory' ? 'did' : 'note';
 }
 
@@ -206,7 +230,7 @@ function _tag(src) {
 // PAST what she holds, not re-derive it. (learning.buildPriorKnowledgeBlock delegates here.)
 async function knowledgeBlock(topic, opts = {}) {
   const r = await recall(topic, opts);
-  if (!r.notes.length && !r.facts.length && !_hasObject(r.object)) return null;
+  if (!r.notes.length && !r.facts.length && !_hasObject(r.object) && !(r.streamHits && r.streamHits.length)) return null;
   const lines = [`WHAT YOU ALREADY KNOW about "${r.topic.replace(/\s+/g, ' ').slice(0, 80)}" (from your own memory — you may already hold this without realizing):`];
   // PRECEDENCE — a fresh verified fact leads over the record and supersedes any stale role/office detail in it.
   if (r.precedenceFact) lines.push(`  [MOST CURRENT — verified${r.precedenceFact.asOf ? ` as of ${r.precedenceFact.asOf}` : ''}; supersedes older role/office details in the record below] ${r.precedenceFact.content}`);
@@ -221,6 +245,8 @@ async function knowledgeBlock(topic, opts = {}) {
     } else lines.push(`  [${_tag(n.source)}] ${s}`);
   }
   for (const f of r.facts) lines.push(`  [graph] ${f}`);
+  // DATA STREAMS — landed documents (meetings / dossiers / API / email) + tracked news on this topic.
+  for (const sh of (r.streamHits || [])) { const s = (sh.content || '').replace(/\s+/g, ' ').slice(0, 200); if (s) lines.push(`  [${_tag(sh.source)}] ${s}`); }
   if (lines.length === 1) return null;
   if (r.coverage === 'rich') {
     lines.push(`You ALREADY hold substantial knowledge here — do NOT restate it or look it up again. Find the ONE thing you do not yet know and learn THAT. Extend the frontier; do not circle.`);

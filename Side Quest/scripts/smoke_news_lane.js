@@ -223,6 +223,14 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   ok(forDaily.length === 1 && /Kyiv/.test(forDaily[0].title), 'storiesForDaily gate: only the corroborated story is worthy (single-source antitrust stays in the raw pool)');
   ok(lane.storiesForDaily({ now: NOW, minCorroboration: 1 }).length === 2, 'lowering the corroboration bar widens the net (antitrust included)');
 
+  // TOPIC RECALL (the silo-fix producer) — chat answering + research can pull the tracked stories for a topic
+  // NOW, not just the next-day Echo promotion. Token LIKE over title/summary/entity_set + a note shaper.
+  const kyivHits = lane.storiesForTopic('Kyiv strike', { now: NOW });
+  ok(kyivHits.length >= 1 && /Kyiv/.test(kyivHits[0].title), 'storiesForTopic: token match surfaces the tracked Kyiv story');
+  ok(lane.storiesForTopic('zzzznomatchtoken', { now: NOW }).length === 0, 'storiesForTopic: no token match → []');
+  const newsNotes = lane.storiesAsNotes(kyivHits);
+  ok(newsNotes.length >= 1 && newsNotes[0].source === 'news' && /Kyiv/.test(newsNotes[0].content), 'storiesAsNotes: stories → knowledge-shaped [news] notes for the recall pipeline');
+
   const DP = mkDispatchState();
   const r1 = await lane.runDailyPass({ dispatch: DP.dispatch, landDoc: DP.landDoc, now: NOW });
   ok(r1.promoted === 1 && r1.docs === 1, 'runDailyPass promotes ONLY the worthy (corroborated) story');

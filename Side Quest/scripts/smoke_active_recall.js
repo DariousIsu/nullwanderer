@@ -227,6 +227,21 @@ const noGraph = () => [];
     const unknownVol = note('verified_fact', 'Pam Bondi is currently the Attorney General', { subject: 'Pam Bondi', as_of: '2026-01-01' });
     const rUnknown = await ar.recall('Pam Bondi', { retrieveFn: async () => [unknownVol], graphFn: noGraph, echoFn: async () => [], objectFn: async () => bondiObj });
     ok(!rUnknown.precedenceFact, 'recall: unknown-provenance volatile claim → conservative authority 2 → below the bar');
+
+    // ── DATA-STREAM RECALL — landed DOCUMENTS + tracked NEWS folded into recall (the silo fix: chat/research
+    // were blind to news_bucket + the documents table). docFn/newsFn injected; live path uses doc_store/news_lane. ──
+    const rStream = await ar.recall('Heritage Foundation', {
+      retrieveFn: async () => [], graphFn: noGraph, echoFn: async () => [], objectFn: async () => null,
+      docFn: async () => [{ title: 'Meeting notes', markdown: 'We discussed Heritage Foundation leadership with Kevin Roberts.', source: 'meeting_notes' }],
+      newsFn: async () => [{ content: 'Heritage Foundation names new president (as of 2026-07-01, 4-source)', source: 'news' }],
+    });
+    ok(rStream.streamHits.length === 2 && rStream.streamHits.some(h => h.source === 'doc:meeting_notes') && rStream.streamHits.some(h => h.source === 'news'), 'recall: streamHits fold in landed docs + tracked news (the silo fix)');
+    ok(/Kevin Roberts/.test(rStream.streamHits.find(h => h.source === 'doc:meeting_notes').content), 'recall: doc hit carries the doc body + is artifact-tagged doc:<source>');
+    const blkStream = await ar.knowledgeBlock('Heritage Foundation', { retrieveFn: async () => [], graphFn: noGraph, echoFn: async () => [], objectFn: async () => null, docFn: async () => [{ title: 'Notes', markdown: 'Kevin Roberts leads Heritage.', source: 'meeting_notes' }], newsFn: async () => [{ content: 'Heritage news headline', source: 'news' }] });
+    ok(/\[doc:meeting_notes\]/.test(blkStream) && /\[news\]/.test(blkStream), 'knowledgeBlock: renders the data-stream hits tagged [doc:*] and [news]');
+    ok((await ar.knowledgeBlock('nothing', { retrieveFn: async () => [], graphFn: noGraph, echoFn: async () => [], objectFn: async () => null, docFn: async () => [], newsFn: async () => [] })) === null, 'knowledgeBlock: no streams + nothing else → null (no empty section)');
+    // existing tests (no docFn/newsFn, objectFn provided) get empty streamHits → unchanged behavior
+    ok(Array.isArray(rBondi.streamHits) && rBondi.streamHits.length === 0, 'recall: no injected stream fns + objectFn present → streamHits empty (offline-safe, no regression)');
   } catch (e) {
     fail++; console.error('  ✗ threw:', e.stack || e.message);
   }

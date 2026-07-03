@@ -491,6 +491,33 @@ function storiesActiveInWindow(startMs, { limit = 200 } = {}) {
   return newsdb.get().prepare('SELECT * FROM news_stories WHERE last_ts >= ? ORDER BY MIN(outlet_count, report_count) DESC, outlet_count DESC, source_count DESC, last_ts DESC LIMIT ?').all(startMs, limit).map(hydrateStory);
 }
 
+// TOPIC RECALL — the tracked stories relevant to a topic, so chat answering + research can factor in the
+// news lane she's been following RIGHT NOW (not just the next-day Echo promotion). Token LIKE over
+// title/summary/entity_set, ranked by independent corroboration then recency, within a freshness window.
+// Returns hydrated stories. Fail-soft []. (This closes the "news is invisible to conversation/research" gap.)
+function storiesForTopic(topic, { k = 4, maxAgeMs = 14 * 24 * 3600 * 1000, now = Date.now() } = {}) {
+  ensureSchema();
+  const toks = String(topic || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(t => t.length >= 3).slice(0, 6);
+  if (!toks.length) return [];
+  const clause = toks.map(() => '(LOWER(title) LIKE ? OR LOWER(summary) LIKE ? OR LOWER(entity_set) LIKE ?)').join(' OR ');
+  const likeParams = [];
+  for (const t of toks) { const p = `%${t}%`; likeParams.push(p, p, p); }
+  const sql = `SELECT * FROM news_stories WHERE last_ts >= ? AND (${clause}) ORDER BY MIN(outlet_count, report_count) DESC, last_ts DESC LIMIT ?`;
+  try { return newsdb.get().prepare(sql).all(now - maxAgeMs, ...likeParams, k).map(hydrateStory); }
+  catch { return []; }
+}
+// Stories → knowledge-shaped notes for the recall pipeline (active_recall / gatherKnown). Pure. Each note
+// carries the corroboration + as-of so grounding can weight it (a 5-source story reads stronger than 1).
+function storiesAsNotes(stories, { max = 4 } = {}) {
+  return (Array.isArray(stories) ? stories : []).slice(0, max).map((s) => {
+    const corrob = Math.min(Number(s.outlet_count) || 0, Number(s.report_count) || 0);
+    const when = s.last_ts ? new Date(s.last_ts).toISOString().slice(0, 10) : '';
+    const body = `${displayClean(s.title)}${s.summary ? ' — ' + displayClean(s.summary).slice(0, 240) : ''}`;
+    const tag = [when ? `as of ${when}` : '', corrob >= 2 ? `${corrob}-source` : ''].filter(Boolean).join(', ');
+    return { content: `${body}${tag ? ` (${tag})` : ''}`, source: 'news', ts: s.last_ts || 0 };
+  });
+}
+
 // Local start-of-day in ms (the snapshot's default "today" window).
 function startOfDayMs(now = Date.now()) { const d = new Date(now); d.setHours(0, 0, 0, 0); return d.getTime(); }
 
@@ -814,7 +841,7 @@ module.exports = {
   // cluster adjudicator (ambiguous-band tiebreaker)
   adjInput, adjValidate, adjudicateSameEvent,
   // daily pass (stories → Echo event objects)
-  setEventRef, buildStoryDoc, storiesForDaily, proposeEventObject, promoteProposal, promoteStory, runDailyPass,
+  setEventRef, buildStoryDoc, storiesForDaily, storiesForTopic, storiesAsNotes, proposeEventObject, promoteProposal, promoteStory, runDailyPass,
   // full-article ingestion (web_extract → richer evidence doc → object extraction) — HOURLY read pass
   representativeArticleUrl, fetchArticle, isJunkBody, setArticle, readArticlesPass,
   // reconciliation adapter (spec §7: story → Claim, consumed by lib/reconcile)
