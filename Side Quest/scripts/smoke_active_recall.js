@@ -218,9 +218,15 @@ const noGraph = () => [];
     const passiveVol = note('verified_fact', 'Pam Bondi is currently the Attorney General', { subject: 'Pam Bondi', as_of: '2026-01-01', capturedBy: 'realtime' });
     const rPassive = await ar.recall('Pam Bondi', { retrieveFn: async () => [passiveVol], graphFn: noGraph, echoFn: async () => [], objectFn: async () => bondiObj });
     ok(!rPassive.precedenceFact, 'recall: passive single-source volatile role claim (authority 2) → below the bar → no precedence');
-    const deliberateVol = note('verified_fact', 'Pam Bondi is currently the Attorney General', { subject: 'Pam Bondi', as_of: '2026-01-01', capturedBy: 'excavation' });
+    // REGRESSION GUARD (audit): the commonest live recovery is the WIKI tier — capturedBy 'wiki'/'wiki-verify'.
+    // The old authority whitelist missed it (→ authority 2 → this would NOT have led). Must clear the bar now.
+    const deliberateVol = note('verified_fact', 'Pam Bondi is currently the Attorney General', { subject: 'Pam Bondi', as_of: '2026-01-01', capturedBy: 'wiki-verify' });
     const rDelib = await ar.recall('Pam Bondi', { retrieveFn: async () => [deliberateVol], graphFn: noGraph, echoFn: async () => [], objectFn: async () => bondiObj });
-    ok(!!rDelib.precedenceFact, 'recall: deliberately-excavated volatile role fact (authority 3) → clears the bar → precedence');
+    ok(!!rDelib.precedenceFact, 'recall: wiki-recovered volatile role fact (deliberate recovery → authority 3) → clears the bar → precedence (guards the audit fix)');
+    // sanity: an unknown/blank provenance is conservatively de-rated (below the volatile bar)
+    const unknownVol = note('verified_fact', 'Pam Bondi is currently the Attorney General', { subject: 'Pam Bondi', as_of: '2026-01-01' });
+    const rUnknown = await ar.recall('Pam Bondi', { retrieveFn: async () => [unknownVol], graphFn: noGraph, echoFn: async () => [], objectFn: async () => bondiObj });
+    ok(!rUnknown.precedenceFact, 'recall: unknown-provenance volatile claim → conservative authority 2 → below the bar');
   } catch (e) {
     fail++; console.error('  ✗ threw:', e.stack || e.message);
   }

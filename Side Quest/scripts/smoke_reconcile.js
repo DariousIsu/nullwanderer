@@ -73,6 +73,18 @@ const cite = (o) => Object.assign({ authority_tier: 1 }, o);
   const agree = R.reconcile({ ...bondiClaim, citations: [cite({ title: 'new report', url: 'https://c.com' })] }, { ...bondiIncumbent, citations: [cite({ title: 'old report', url: 'https://d.com' })] }, { relation: 'agree' });
   ok(agree.action === 'merge' && agree.corroboration.reports === 2, 'reconcile: agrees → merge, corroboration boosted (union of distinct reports)');
 
+  // ── AUTO agree/contradict — the DEFAULT _agrees derivation (no relation passed) the live lanes will hit ──
+  const edgeInc = { predicate: 'HELD_OFFICE', object: { name: 'US Attorney General' }, value: 'x', ref: 1, citations: [cite({ title: 'i' })] };
+  const edgeSame = { kind: 'edge', predicate: 'HELD_OFFICE', object: { name: 'US Attorney General' }, value: 'y', as_of: '2026-01-01', citations: [cite({ title: 'j', url: 'https://j.com' })] };
+  ok(R.reconcile(edgeSame, edgeInc).action === 'merge', 'reconcile(auto): same predicate + same target → agrees → merge (no relation passed)');
+  const edgeDiff = { kind: 'edge', predicate: 'HELD_OFFICE', object: { name: 'Governor of Florida' }, value: 'z', as_of: '2026-05-01', ttl_class: 'volatile', citations: [doj] };
+  ok(R.reconcile(edgeDiff, edgeInc).action !== 'merge', 'reconcile(auto): same predicate + DIFFERENT target → contradicts (not merged)');
+  ok(R._agrees({ predicate: 'HELD_OFFICE', object: { ref: 'Q1' } }, { predicate: 'HELD_OFFICE', object: { ref: 'Q1' } }) === true, '_agrees: same predicate + same object ref → true');
+  ok(R._agrees({ value: 'Acme is based in Ohio' }, { value: 'Acme is based in Ohio' }) === true, '_agrees: identical value → true');
+  ok(R._agrees({ value: 'Acme is based in Ohio' }, { value: 'Acme is based in Texas' }) === false, '_agrees: differing value → false');
+  ok(R._isNewer('2026-04-02', null) === true && R._isNewer(null, '2020') === false && R._isNewer('2026', '2025') === true, '_isNewer: dated>undated true, undated-claim false, later>earlier true');
+  ok(R._corrobAtLeast({ tier: 'corroborated', authority: 2, reports: 2 }, { tier: 'single-source', authority: 3, reports: 1 }) === true, '_corrobAtLeast: higher tier wins over higher authority (lexicographic tier→authority→reports)');
+
   // ── §5 precedence — the grounding gate ──
   ok(R.precedence(null, 'echo line') === 'long-term-wins', 'precedence: no short-term fact → long-term-wins');
   const vfCleared = { value: 'Bondi served as AG until 2026-04-02', ttl_class: 'volatile', tier: 'corroborated', authority: 3, status: 'open' };

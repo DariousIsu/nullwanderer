@@ -116,8 +116,19 @@ function _echoObject(topic, preferType = null) { try { return require('./echo_su
 // the call; authority is derived from HOW the fact was banked (a deliberate correction — she excavated it or
 // Lucas told her — is authoritative), so no capture-code change. Only VOLATILE facts (roles/offices — the
 // class that turns over) can supersede a dossier detail. Returns the winning fact note, or null. Pure.
-const _PC_DELIBERATE = /excavat|directed|research|chat|correction|told|operator|\bweb\b/i;
-function _factAuthority(prov) { return _PC_DELIBERATE.test(String((prov && prov.capturedBy) || '')) ? 3 : 2; }
+// Authority from HOW the fact was banked. DELIBERATE recovery — the enrich loop went and looked it up
+// (capturedBy = the tier that found it: wiki / wiki-verify / web / excavate / routed / graph), or a chat
+// correction, or the canonical identity seed — is authoritative (3). Only PASSIVE realtime capture (banked
+// from text she happened to read) is de-rated (2); unknown provenance is conservatively 2. Derived at
+// grounding time so capture code stays untouched. (Audit fix: the prior regex whitelist matched 'excavat'/
+// 'web' but MISSED the wiki tier — the commonest recovery path — capping deliberate wiki corrections at 2 so
+// volatile ones never cleared the bar. Whitelisting-deliberate was fragile; de-rate the one passive source.)
+const _PC_PASSIVE_CAPTURE = /^realtime$/i;
+function _factAuthority(prov) {
+  const by = String((prov && prov.capturedBy) || '').trim();
+  if (!by || _PC_PASSIVE_CAPTURE.test(by)) return 2;
+  return 3;
+}
 function _coreKeyOf(s) { try { return require('./echo_suit')._coreNameKey(s); } catch { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim(); } }
 // Subset containment on the name tokens — "Pam Bondi" ⊆ the object's core key, but "Jane Smith" ⊄ "John Smith"
 // (a shared surname alone must NOT match). Pure.
