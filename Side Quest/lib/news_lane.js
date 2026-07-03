@@ -242,6 +242,8 @@ function ensureSchema() {
     if (!cols.includes('report_set')) newsdb.get().exec('ALTER TABLE news_stories ADD COLUMN report_set TEXT');
     if (!cols.includes('report_count')) newsdb.get().exec('ALTER TABLE news_stories ADD COLUMN report_count INTEGER NOT NULL DEFAULT 0');
     if (!cols.includes('category')) newsdb.get().exec('ALTER TABLE news_stories ADD COLUMN category TEXT');   // news-tuner topic key
+    if (!cols.includes('article_text')) newsdb.get().exec('ALTER TABLE news_stories ADD COLUMN article_text TEXT');   // full-article body (web_extract), fetched once for worthy stories
+    if (!cols.includes('article_url')) newsdb.get().exec('ALTER TABLE news_stories ADD COLUMN article_url TEXT');
   } catch { /* fresh table already has the columns */ }
   _schemaReady = true;
 }
@@ -559,9 +561,51 @@ function setEventRef(storyId, ref) {
 }
 
 // Markdown evidence doc for a story → doc_store.land → the promote rail ingests it + extract_entities.
+// Carries the FULL ARTICLE body when we've fetched it (story.article_text) so the extraction learns real
+// objects (people/orgs/quotes/numbers) from the reporting — not just the headline+summary lede.
 function buildStoryDoc(story) {
   const sources = [...(story.source_set || [])];
-  return `# ${story.title}\n\n**Sources:** ${sources.join(', ') || 'n/a'}  \n**First seen:** ${new Date(story.first_ts).toISOString()}  \n**Last update:** ${new Date(story.last_ts).toISOString()}\n\n${story.summary || ''}`.trim();
+  const head = `# ${story.title}\n\n**Sources:** ${sources.join(', ') || 'n/a'}  \n**First seen:** ${new Date(story.first_ts).toISOString()}  \n**Last update:** ${new Date(story.last_ts).toISOString()}`;
+  const lede = story.summary ? `\n\n${story.summary}` : '';
+  const body = (story.article_text && String(story.article_text).trim()) ? `\n\n## Full article\n\n${String(story.article_text).trim()}` : '';
+  return `${head}${lede}${body}`.trim();
+}
+
+// The best article URL to READ for a story: a direct RSS article link, skipping Google-News redirects and
+// the synthetic video: keys. Prefers rss, then any non-video http URL. null when the story has none (an
+// aggregator-only or video story) → it keeps the summary-only doc. Reads the story's clustered items.
+function representativeArticleUrl(storyId) {
+  ensureSchema();
+  try {
+    const pick = (extra) => newsdb.get().prepare(
+      `SELECT url_or_guid u FROM news_items WHERE story_id = ? AND url_or_guid LIKE 'http%' AND url_or_guid NOT LIKE '%news.google.com%' ${extra} ORDER BY ts DESC LIMIT 1`
+    ).get(storyId);
+    const r = pick("AND source_kind = 'rss'") || pick("AND source_kind <> 'video'") || pick('');
+    return r ? r.u : null;
+  } catch { return null; }   // news_items belongs to news_store — absent in a news_lane-only context → no URL
+}
+
+// Read an article's clean body via Echo web_extract (trafilatura clean text — the same rung echo_suit uses
+// to read a page). Returns bounded clean text or null. Fail-soft; `dispatch` injected (offline tests mock it).
+async function fetchArticle({ dispatch, url, maxChars = 6000 } = {}) {
+  if (typeof dispatch !== 'function' || !url) return null;
+  try {
+    const r = await dispatch({ kind: 'do', name: 'web_extract', args: { url } });
+    if (!r || !r.ok) return null;
+    let text = '';
+    try { const o = JSON.parse(r.text); text = String((o && (o.text || o.body || o.content || o.markdown)) || '').trim(); } catch { /* not json */ }
+    if (!text) text = String((r && r.text) || '').trim();
+    text = text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    return text ? text.slice(0, maxChars) : null;
+  } catch { return null; }
+}
+
+// Persist the fetched article body on the story (fetch-once). '' marks an ATTEMPTED-but-empty fetch so a
+// dead/paywalled URL isn't re-fetched every pass.
+function setArticle(storyId, url, text) {
+  ensureSchema();
+  return newsdb.get().prepare('UPDATE news_stories SET article_url = ?, article_text = ? WHERE id = ?')
+    .run(url || null, text == null ? '' : String(text), storyId).changes;
 }
 
 // Worthy stories to promote: open OR closed within the grace window, source-corroborated enough. Newest+
@@ -643,7 +687,7 @@ function storyToClaim(story, { now = Date.now() } = {}) {
 // forms on a later pass (eventually consistent, never a mistyped dup). Returns a per-story result.
 async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdges = 5, log } = {}) {
   ensureSchema();
-  const res = { storyId: story.id, doc: false, event: false, updated: false, edges: 0, decision: null };
+  const res = { storyId: story.id, doc: false, event: false, updated: false, edges: 0, article: false, decision: null };
   // RECONCILIATION GATE (spec §4): route the story through the shared belief-revision decision as a Claim.
   // For a citationed event this returns 'append' (events cluster, never supersede) — the story's own
   // corroboration pre-filter (storiesForDaily) is the worthiness bar; reconcile enforces the hard invariant
@@ -653,6 +697,19 @@ async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdg
   if (decision.action !== 'append' && decision.action !== 'new' && decision.action !== 'merge') {
     log && log(`[news-daily] story ${story.id} NOT promoted (reconcile: ${decision.action}/${decision.reason})`);
     return res;
+  }
+  // FULL-ARTICLE INGESTION: read the real article body ONCE (web_extract = trafilatura clean text) and
+  // persist it on the story, so the evidence doc below carries the actual reporting (people/quotes/numbers)
+  // — the extraction rail then learns objects from the ARTICLE, not just the headline. Fail-soft + idempotent
+  // (article_text null = not yet fetched; '' = attempted-but-empty so a dead/paywalled URL isn't re-tried).
+  if (story.article_text == null && typeof dispatch === 'function') {
+    const url = representativeArticleUrl(story.id);
+    if (url) {
+      const body = await fetchArticle({ dispatch, url });
+      setArticle(story.id, url, body || '');
+      story.article_url = url; story.article_text = body || '';
+      if (body) { res.article = true; log && log(`[news-daily] read article for story ${story.id} (${body.length} chars) — ${url}`); }
+    }
   }
   if (typeof landDoc === 'function') {
     try { await landDoc({ title: `News — ${story.title}`.slice(0, 120), body: buildStoryDoc(story), source: 'news', ref: `news:story:${story.id}`, understanding: story.summary || '' }); res.doc = true; }
@@ -691,10 +748,11 @@ async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdg
 async function runDailyPass({ dispatch, landDoc, now = Date.now(), limit = 100, minCorroboration = 2, log } = {}) {
   ensureSchema();
   const stories = storiesForDaily({ now, limit, minCorroboration });
-  let promoted = 0, updated = 0, docs = 0, edges = 0, rejected = 0;
+  let promoted = 0, updated = 0, docs = 0, edges = 0, rejected = 0, articles = 0;
   for (const s of stories) {
     const r = await promoteStory(s, { dispatch, landDoc, now, log });
     if (r.event) promoted++; if (r.updated) updated++; if (r.doc) docs++; edges += r.edges;
+    if (r.article) articles++;
     if (r.decision && r.decision !== 'append' && r.decision !== 'new' && r.decision !== 'merge') rejected++;
   }
   // DAILY (24h) MEMORY MARKER: a durable digest of the day — the corroboration-ranked briefing + the Echo
@@ -703,8 +761,8 @@ async function runDailyPass({ dispatch, landDoc, now = Date.now(), limit = 100, 
   const dayStart = startOfDayMs(now);
   const eventRefs = stories.map((s) => s.event_ref).filter((x) => x != null);
   recordDayMarker({ dayStart, dayEnd: now, briefing: buildBriefing(stories, {}), storyCount: stories.length, promoted, eventRefs, now });
-  if (log) log(`[news-daily] pass: ${promoted} new event objects, ${updated} updated, ${docs} docs, ${edges} edges${rejected ? `, ${rejected} reconcile-rejected` : ''} over ${stories.length} stories`);
-  return { promoted, updated, docs, edges, rejected, stories: stories.length, dayMarker: dayStart };
+  if (log) log(`[news-daily] pass: ${promoted} new event objects, ${updated} updated, ${docs} docs, ${articles} articles read, ${edges} edges${rejected ? `, ${rejected} reconcile-rejected` : ''} over ${stories.length} stories`);
+  return { promoted, updated, docs, edges, rejected, articles, stories: stories.length, dayMarker: dayStart };
 }
 
 module.exports = {
@@ -726,6 +784,8 @@ module.exports = {
   adjInput, adjValidate, adjudicateSameEvent,
   // daily pass (stories → Echo event objects)
   setEventRef, buildStoryDoc, storiesForDaily, proposeEventObject, promoteProposal, promoteStory, runDailyPass,
+  // full-article ingestion (web_extract → richer evidence doc → object extraction)
+  representativeArticleUrl, fetchArticle, setArticle,
   // reconciliation adapter (spec §7: story → Claim, consumed by lib/reconcile)
   storyToClaim,
 };

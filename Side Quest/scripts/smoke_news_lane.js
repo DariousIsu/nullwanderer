@@ -196,9 +196,11 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
 
   // ===== DAILY PASS (worthy stories → PUBLIC Echo event objects via propose→promote; mocked dispatch) =====
   function mkDispatchState({ knownTargets = null } = {}) {
-    const calls = { propose_entity: [], promote_proposal: [], propose_relation: [], landDoc: [] };
+    const calls = { propose_entity: [], promote_proposal: [], propose_relation: [], landDoc: [], web_extract: [] };
     let pid = 100;
     const dispatch = async (tag) => {
+      // web_extract (trafilatura clean article text) — the full-article read path.
+      if (tag.name === 'web_extract') { calls.web_extract.push(tag.args); return { ok: true, text: JSON.stringify({ text: 'FULL ARTICLE BODY: Ukrainian officials named the districts hit in Kyiv; 18 dead, 40 wounded.' }) }; }
       // Echo's external write surface lands every write as a tenant PROPOSAL (action:'proposed', a proposal id).
       if (tag.name === 'propose_entity') { calls.propose_entity.push(tag.args); return { ok: true, text: JSON.stringify({ action: 'proposed', entity_id: ++pid, name: tag.args.name }) }; }
       // promote_proposal copies the tenant proposal into the PUBLIC graph → returns the public entity_id (id+4900 here, so the chain is assertable).
@@ -319,6 +321,36 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   ok(bal.filter(s => s.category === 'sports').length <= 2, 'tuner: sports is capped, cannot flood even when most-corroborated');
   const brief = lane.buildBriefing(pool, { top: 6, tuner });
   ok(/Ceasefire|Senate|County|Flu/.test(brief.split('\n')[0]), 'buildBriefing with tuner: hard news heads the briefing');
+
+  // ===== FULL-ARTICLE INGESTION (worthy stories → web_extract → richer evidence doc) =====
+  clearStories(); newsdb.get().exec('DELETE FROM news_story_updates'); newsdb.get().exec('DELETE FROM news_items');
+  const a1 = store.insertItem({ source: 'Reuters', sourceKind: 'rss', urlOrGuid: 'https://www.reuters.com/world/kyiv-strike', title: 'Deadly strike on Kyiv', summary: 'A lede.', ts: T });
+  const a2 = store.insertItem({ source: 'AP', sourceKind: 'rss', urlOrGuid: 'https://apnews.com/kyiv-attack', title: 'Kyiv attack kills many', summary: 'Another lede.', ts: T + 1 });
+  const arows = store.recentItems({ limit: 10 });
+  await lane.clusterItems([arows.find((r) => r.id === a1.id)], { now: NOW });
+  await lane.clusterItems([arows.find((r) => r.id === a2.id)], { now: NOW, adjudicate: async () => true });   // → ONE corroborated story (2 reports)
+  const artStory = lane.allStories()[0];
+  ok(/^https?:\/\//.test(lane.representativeArticleUrl(artStory.id) || ''), 'representativeArticleUrl returns a direct RSS http article link');
+  // fetchArticle parses web_extract clean text (mock dispatch); fail-soft on !ok
+  const AF = mkDispatchState();
+  ok(/FULL ARTICLE/.test(await lane.fetchArticle({ dispatch: AF.dispatch, url: 'https://x/y' }) || ''), 'fetchArticle returns web_extract trafilatura clean text');
+  ok((await lane.fetchArticle({ dispatch: async () => ({ ok: false }), url: 'x' })) === null, 'fetchArticle fail-soft → null on a failed extract');
+  ok((await lane.fetchArticle({ dispatch: AF.dispatch, url: '' })) === null, 'fetchArticle → null with no URL');
+  // promoteStory reads the article once, persists it, and the evidence doc carries the FULL body
+  const AP = mkDispatchState();
+  const ar = await lane.promoteStory(artStory, { dispatch: AP.dispatch, landDoc: AP.landDoc, now: NOW });
+  ok(ar.article === true && AP.calls.web_extract.length === 1, 'promoteStory web_extracts the worthy story’s article exactly once');
+  ok(AP.calls.landDoc.some((d) => /## Full article/.test(d.body) && /FULL ARTICLE BODY/.test(d.body)), 'the evidence doc carries the FULL ARTICLE body (not just title+summary)');
+  ok(lane.allStories()[0].article_text && /FULL ARTICLE BODY/.test(lane.allStories()[0].article_text), 'the fetched article body is persisted on the story');
+  // idempotent: a second pass does NOT re-fetch (already stored)
+  const AP2 = mkDispatchState();
+  await lane.promoteStory(lane.allStories()[0], { dispatch: AP2.dispatch, landDoc: AP2.landDoc, now: NOW });
+  ok(AP2.calls.web_extract.length === 0, 'idempotent: the article is NOT re-fetched once stored on the story');
+  // a story with no fetchable URL (video/aggregator) keeps the summary doc, no fetch attempted
+  clearStories(); newsdb.get().exec('DELETE FROM news_items');
+  await lane.clusterItems([{ source: 'CNN', source_kind: 'video', title: 'Broadcast segment on Kyiv', summary: 'seg', ts: T }], { now: NOW });
+  const vStory = lane.allStories()[0];
+  ok(lane.representativeArticleUrl(vStory.id) === null, 'a video/aggregator story with no http article link → representativeArticleUrl null (keeps summary doc)');
 
   try { fs.unlinkSync(tmp); } catch {}
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
