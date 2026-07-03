@@ -5556,6 +5556,13 @@ async function condenseRun(focus, { reason = 'done' } = {}) {
     try { await filesLib.dispatch({ tag: 'file-write', attrs: { path: dossierPath }, body: condensed }); }
     catch (e) { console.error('[condense] dossier write failed:', e.message); }
     try { await memoryLib.store({ kind: 'note', content: `Research dossier — ${goal.slice(0, 90)} (${sections.length} orgs):\n${condensed.slice(0, 4000)}`, source: 'research_dossier', importance: 0.85, embedText: goal }); } catch {}
+    // LONG-TERM DURABILITY — land the dossier in doc_store so the nightly promote carries it INTO Echo (vault
+    // document + entity extraction). Without this the report lived ONLY as a local file + a recall note and
+    // never reached long-term memory — its data (orgs, people, the Sources trail) evaporated from the graph.
+    // source:'research' → promote.recipeFor files it as a deliverable; ref=directed-<id> dedups a same-body
+    // re-condense. Fail-safe: a land miss never blocks the dossier.
+    try { const dl = require('./lib/doc_store').land({ title: `Research — ${goal.slice(0, 100)}`, body: condensed, source: 'research', ref: `directed-${focus.id}`, understanding: goal.slice(0, 300) }); if (dl && dl.landed) console.log(`[condense] landed dossier in doc_store (#${dl.id}) → promotes into Echo long-term`); }
+    catch (e) { console.error('[condense] doc_store land failed:', e.message); }
     try { db.setMeta('research.last_dossier', JSON.stringify({ focusId: focus.id, path: dossierPath, goal, reason, count: sections.length })); } catch {}
     try { db.setMeta('research.last_focus_id', String(focus.id)); } catch {}
     // DRIVE → Zoe's canvas: emit the count headline (from the artifact) + the stitched dossier as DOC blocks.
