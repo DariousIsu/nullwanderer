@@ -12,6 +12,7 @@
 'use strict';
 const catalog = require('./api_catalog');
 const client = require('./api_client');
+const store = require('./api_store');   // durable rate-usage + response cache (survives restart)
 
 const WINDOW_MS = { perMin: 60_000, perHour: 3_600_000, perDay: 86_400_000 };
 
@@ -37,15 +38,14 @@ const HEALTH_PATH = {
   polygon: ['v1/marketstatus/now', {}],
 };
 
-let _usage = [];            // [{ apiId, ts }] — the call log (rate accounting)
-const _cache = new Map();   // cacheKey → { data, status, expires }
-
 const limitsFor = (id) => LIMITS[id] || {};
 const cacheTtlFor = (id) => (Object.prototype.hasOwnProperty.call(CACHE_TTL, id) ? CACHE_TTL[id] : 0);
 const cacheKey = (apiId, path, params) => `${apiId}|${path}|${JSON.stringify(params || {})}`;
 
-function recordCall(apiId, ts) { _usage.push({ apiId, ts }); if (_usage.length > 20000) _usage = _usage.slice(-10000); }
-function countIn(apiId, windowMs, now) { const since = now - windowMs; let n = 0; for (const u of _usage) if (u.apiId === apiId && u.ts >= since) n++; return n; }
+// Rate accounting is now DURABLE (api_store): counts survive a restart so a reboot can't reset a spent daily
+// quota. Prune keeps ~2 days (the longest window is a day) so the usage log stays bounded.
+function recordCall(apiId, ts) { store.recordUsage(apiId, ts); store.pruneUsage(ts - 2 * WINDOW_MS.perDay); }
+function countIn(apiId, windowMs, now) { return store.countUsage(apiId, now - windowMs); }
 
 // The window (if any) currently at/over its cap → null when clear.
 function rateHit(apiId, now) {
@@ -63,14 +63,14 @@ async function managedCall(apiId, path, { params = {}, force = false, now = null
   const ttl = cacheTtlFor(apiId);
   const key = cacheKey(apiId, path, params);
 
-  if (!force && ttl > 0) { const c = _cache.get(key); if (c && c.expires > t) return { ok: true, status: c.status, data: c.data, cached: true }; }
+  if (!force && ttl > 0) { const c = store.getCache(key, t); if (c) return { ok: true, status: c.status, data: c.data, cached: true }; }
 
   const hit = rateHit(apiId, t);
   if (hit) return { ok: false, rateLimited: true, error: `rate limit reached: ${hit.limit}/${hit.window} for ${apiId}`, window: hit.window, limit: hit.limit };
 
   const r = await (callFn || client.call)(apiId, path, { params, ...rest });
   recordCall(apiId, t);                                                  // only real (non-cached, non-blocked) calls count
-  if (r && r.ok && ttl > 0) _cache.set(key, { data: r.data, status: r.status, expires: t + ttl });
+  if (r && r.ok && ttl > 0) store.putCache(key, r.data, r.status, t + ttl);
   return r;
 }
 
@@ -96,6 +96,6 @@ async function healthAll({ callFn = null } = {}) {
   return out;
 }
 
-function resetUsage() { _usage = []; _cache.clear(); }
+function resetUsage() { store.clearUsage(); store.clearCache(); }
 
 module.exports = { managedCall, usage, health, healthAll, rateHit, countIn, cacheKey, resetUsage, LIMITS, CACHE_TTL, WINDOW_MS, HEALTH_PATH };

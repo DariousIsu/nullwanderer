@@ -2,6 +2,10 @@
  * injected callFn + clock (no network). Run:
  *   ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_api_manager.js */
 'use strict';
+const os = require('os'), path = require('path'), fs = require('fs');
+const tmp = path.join(os.tmpdir(), `sq_apimgr_${process.pid}.db`);
+try { fs.unlinkSync(tmp); } catch {}
+process.env.API_DB_PATH = tmp;   // rate usage + cache are now durable (api_store) → isolated temp DB
 const mgr = require('../lib/api_manager');
 
 let pass = 0, fail = 0;
@@ -55,6 +59,15 @@ const T = 1_760_000_000_000;
   // ===== unknown api =====
   ok((await mgr.managedCall('nope', 'x', { callFn: mock })).ok === false, 'unknown api → error');
 
+  // ===== PERSISTENCE: rate usage + cache survive a restart (durable store, not in-memory) =====
+  mgr.resetUsage(); calls = 0;
+  await mgr.managedCall('newsapi', 'everything', { params: { q: 'x' }, now: T, callFn: mock });   // 1 usage row + cached (newsapi TTL 5m)
+  require('../lib/api_store').close();   // simulate a RESTART — drop the DB connection; the file persists
+  ok(mgr.usage('newsapi', { now: T }).used.perDay === 1, 'rate usage SURVIVES a restart (durable — a reboot cannot reset a spent quota)');
+  const afterRestart = await mgr.managedCall('newsapi', 'everything', { params: { q: 'x' }, now: T + 1000, callFn: mock });
+  ok(afterRestart.cached === true && calls === 1, 'the response cache SURVIVES a restart (served from the durable cache, no re-fetch)');
+
+  try { require('../lib/api_store').close(); fs.unlinkSync(tmp); } catch {}
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

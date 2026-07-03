@@ -46,6 +46,19 @@ function ensureSchema() {
       changed_ts  INTEGER                     -- when the content last actually CHANGED (landing trigger)
     );
     CREATE INDEX IF NOT EXISTS idx_api_snapshots_api ON api_snapshots(api_id);
+    CREATE TABLE IF NOT EXISTS api_usage (           -- durable rate-limit accounting (survives restart)
+      id     INTEGER PRIMARY KEY,
+      api_id TEXT NOT NULL,
+      ts     INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_usage ON api_usage(api_id, ts);
+    CREATE TABLE IF NOT EXISTS api_cache (            -- durable response cache (a cached snapshot survives a reboot)
+      cache_key TEXT PRIMARY KEY,
+      data      TEXT,                                 -- JSON
+      status    INTEGER,
+      expires   INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_cache_expires ON api_cache(expires);
   `);
   // migration: landed_hash tracks the content last PROCESSED into memory (the landing pass), so a snapshot
   // is (re)landed only when its content actually changed — never re-processing an unchanged monthly series.
@@ -113,4 +126,26 @@ function markLanded(datasetId, hash) {
   return get().prepare('UPDATE api_snapshots SET landed_hash = ? WHERE dataset_id = ?').run(String(hash || ''), datasetId).changes;
 }
 
-module.exports = { get, close, ensureSchema, hashOf, putSnapshot, getSnapshot, listSnapshots, changedSince, unlandedChanged, markLanded, DB_PATH };
+// --- durable rate usage (the management layer's accounting; survives restart) ---
+function recordUsage(apiId, ts) { ensureSchema(); get().prepare('INSERT INTO api_usage (api_id, ts) VALUES (?, ?)').run(String(apiId), ts); }
+function countUsage(apiId, sinceMs) { ensureSchema(); return get().prepare('SELECT COUNT(*) n FROM api_usage WHERE api_id = ? AND ts >= ?').get(String(apiId), sinceMs).n; }
+function pruneUsage(cutoffMs) { ensureSchema(); return get().prepare('DELETE FROM api_usage WHERE ts < ?').run(cutoffMs).changes; }
+function clearUsage() { ensureSchema(); get().exec('DELETE FROM api_usage'); }
+
+// --- durable response cache ---
+function getCache(key, now) {
+  ensureSchema();
+  const r = get().prepare('SELECT data, status, expires FROM api_cache WHERE cache_key = ? AND expires > ?').get(String(key), now);
+  return r ? { data: jparse(r.data), status: r.status, expires: r.expires } : null;
+}
+function putCache(key, data, status, expires) {
+  ensureSchema();
+  get().prepare('INSERT INTO api_cache (cache_key, data, status, expires) VALUES (@k, @d, @s, @e) ON CONFLICT(cache_key) DO UPDATE SET data=@d, status=@s, expires=@e')
+    .run({ k: String(key), d: data == null ? null : JSON.stringify(data), s: status == null ? null : status, e: expires });
+}
+function clearCache() { ensureSchema(); get().exec('DELETE FROM api_cache'); }
+
+module.exports = {
+  get, close, ensureSchema, hashOf, putSnapshot, getSnapshot, listSnapshots, changedSince, unlandedChanged, markLanded, DB_PATH,
+  recordUsage, countUsage, pruneUsage, clearUsage, getCache, putCache, clearCache,
+};
