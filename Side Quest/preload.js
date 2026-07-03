@@ -58,6 +58,16 @@ contextBridge.exposeInMainWorld('sq', {
     onLayer: (cb) => { const h = (_e, p) => cb(p); ipcRenderer.on('news:layer', h); return () => ipcRenderer.removeListener('news:layer', h); }
   },
 
+  // API management stream — raw-pull hooks for other sections (forecasting) + management views.
+  api: {
+    datasets: () => ipcRenderer.invoke('api:datasets'),
+    snapshot: (datasetId) => ipcRenderer.invoke('api:snapshot', { datasetId }),           // persisted snapshot, no network
+    pull: (apiId, path, params) => ipcRenderer.invoke('api:pull', { apiId, path, params }), // on-demand live pull (rate-limited/cached)
+    refresh: (datasetId, force) => ipcRenderer.invoke('api:refresh', { datasetId, force }),
+    keyStatus: () => ipcRenderer.invoke('api:key-status'),
+    health: () => ipcRenderer.invoke('api:health')
+  },
+
   // Editor Studio — document registry / lifecycle / checks (all run in main over IPC)
   editor: {
     listDocuments: (opts) => ipcRenderer.invoke('editor:list-documents', opts || {}),
@@ -75,6 +85,13 @@ contextBridge.exposeInMainWorld('sq', {
     run: (query, opts) => ipcRenderer.invoke('search:run', { query, opts: opts || {} }),
     revert: (id) => ipcRenderer.invoke('search:revert', { id }),
     status: () => ipcRenderer.invoke('search:status')
+  },
+
+  // Forecasting — downstream processing surface. Each model's widget payload is built in main
+  // (lib/forecast_service) from the poll connectors; read-only, no prod DB.
+  forecast: {
+    widgets: () => ipcRenderer.invoke('forecast:widgets'),
+    pollAverage: (opts) => ipcRenderer.invoke('forecast:poll-average', opts || {})
   },
 
   // Polling — read-only data browser over the engine's polling tools (main maps to view shapes).

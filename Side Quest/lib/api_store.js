@@ -47,6 +47,12 @@ function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_api_snapshots_api ON api_snapshots(api_id);
   `);
+  // migration: landed_hash tracks the content last PROCESSED into memory (the landing pass), so a snapshot
+  // is (re)landed only when its content actually changed — never re-processing an unchanged monthly series.
+  try {
+    const cols = get().prepare('PRAGMA table_info(api_snapshots)').all().map((c) => c.name);
+    if (!cols.includes('landed_hash')) get().exec('ALTER TABLE api_snapshots ADD COLUMN landed_hash TEXT');
+  } catch { /* fresh table */ }
   _ready = true;
 }
 
@@ -94,4 +100,17 @@ function changedSince(sinceMs) {
   return get().prepare('SELECT dataset_id, api_id, changed_ts FROM api_snapshots WHERE ok = 1 AND changed_ts >= ? ORDER BY changed_ts DESC').all(sinceMs);
 }
 
-module.exports = { get, close, ensureSchema, hashOf, putSnapshot, getSnapshot, listSnapshots, changedSince, DB_PATH };
+// Snapshots whose current content has NOT yet been landed into memory (new or changed since last landing).
+// Full rows (parsed) — the DB-landing pass consumes these. Deterministic order (oldest change first).
+function unlandedChanged() {
+  ensureSchema();
+  const rows = get().prepare('SELECT * FROM api_snapshots WHERE ok = 1 AND (landed_hash IS NULL OR landed_hash <> hash) ORDER BY changed_ts ASC').all();
+  return rows.map((r) => ({ datasetId: r.dataset_id, apiId: r.api_id, path: r.path, params: jparse(r.params), body: jparse(r.body), hash: r.hash, status: r.status, fetched_ts: r.fetched_ts, changed_ts: r.changed_ts }));
+}
+// Mark a dataset's content as landed (processed into memory) so it isn't re-landed until it changes again.
+function markLanded(datasetId, hash) {
+  ensureSchema();
+  return get().prepare('UPDATE api_snapshots SET landed_hash = ? WHERE dataset_id = ?').run(String(hash || ''), datasetId).changes;
+}
+
+module.exports = { get, close, ensureSchema, hashOf, putSnapshot, getSnapshot, listSnapshots, changedSince, unlandedChanged, markLanded, DB_PATH };

@@ -146,6 +146,8 @@ let inboxPollTimer = null;     // setInterval id for the inbox poller (cleared o
 let inboxPollTimeout = null;   // initial-sweep setTimeout id
 let emailIntakeTimer = null;   // setInterval id for the read-only newsletter/meeting-notes intake lane
 let emailIntakeTimeout = null; // initial-sweep setTimeout id
+let apiStreamTimer = null;     // setInterval id for the API management stream scheduler (snapshots + landing)
+let apiStreamTimeout = null;   // initial-sweep setTimeout id
 let canvasIngestTimer = null;  // setInterval id for the canvas drop→ingest poller (cleared on shutdown)
 let canvasIngestTimeout = null;// initial-sweep setTimeout id
 let lastUserTurnTs = Date.now(); // for detecting "return after a long absence" (capability proposals)
@@ -821,6 +823,27 @@ app.whenReady().then(() => {
     console.log(`[main] news collector started (every ${Math.round(FEED_POLL_MS / 1000)}s → isolated bucket)`);
   }
 
+  // API MANAGEMENT STREAM scheduler — slow-moving public series (FRED/Census) refresh on their OWN conservative
+  // cadence (dueDatasets skips anything still fresh), and a CHANGED snapshot lands into short-term memory
+  // (doc_store) → rides the overnight promote into Echo, like a news evidence doc (the processed→DB path). The
+  // raw hooks (getSnapshot / pull) are reachable via the api:* IPC for the forecasting section. Gated on any
+  // key present so it no-ops on a keyless install; pulls are rate-limited + cached by lib/api_manager.
+  {
+    const API_STREAM_MS = parseInt(process.env.API_STREAM_MS || '', 10) || 6 * 3600 * 1000;   // due-check every 6h
+    const apiClient = require('./lib/api_client');
+    const runApiStream = async () => {
+      try {
+        if (!apiClient.keyStatus().some((s) => s.hasKey)) return;                              // no keys → nothing to do
+        const due = await require('./lib/api_stream').runDue({ limit: 20 });                   // pull only what's past cadence
+        const land = await require('./lib/api_landing').landChanged({ landDoc: (d) => require('./lib/doc_store').land(d) });
+        if (due.refreshed || land.landed) console.log(`[api-stream] refreshed ${due.refreshed}/${due.due} due · landed ${land.landed} changed → memory`);
+      } catch (e) { console.error('[api-stream]', e.message); }
+    };
+    apiStreamTimeout = setTimeout(() => { runApiStream().catch(() => {}); }, 5 * 60 * 1000);   // first sweep ~5m after boot
+    apiStreamTimer = setInterval(() => { runApiStream().catch(() => {}); }, API_STREAM_MS);
+    console.log(`[main] API stream scheduler started (due-check every ${Math.round(API_STREAM_MS / 3600000)}h → snapshots + landing)`);
+  }
+
   // EMAIL INTAKE LANE — Zoe's own inbox is a subscription surface (newsletters + Gemini meeting-notes).
   // READ-ONLY (EXAMINE): this connection provably cannot mark-read/delete. Newsletters route into the
   // SAME isolated news bucket as RSS (source_kind='newsletter') → they ride the hourly briefing rail;
@@ -1003,6 +1026,8 @@ app.whenReady().then(() => {
 app.on('window-all-closed', async () => {
   if (inboxPollTimer) { clearInterval(inboxPollTimer); inboxPollTimer = null; }
   if (inboxPollTimeout) { clearTimeout(inboxPollTimeout); inboxPollTimeout = null; }
+  if (apiStreamTimer) { clearInterval(apiStreamTimer); apiStreamTimer = null; }
+  if (apiStreamTimeout) { clearTimeout(apiStreamTimeout); apiStreamTimeout = null; }
   if (emailIntakeTimer) { clearInterval(emailIntakeTimer); emailIntakeTimer = null; }
   if (emailIntakeTimeout) { clearTimeout(emailIntakeTimeout); emailIntakeTimeout = null; }
   if (canvasIngestTimer) { clearInterval(canvasIngestTimer); canvasIngestTimer = null; }
@@ -1070,6 +1095,13 @@ ipcMain.handle('news:tuner-set', (_e, { tuner } = {}) => {
     return { ok: true, tuner: norm };
   } catch (e) { return { ok: false, error: e.message }; }
 });
+// ===== API MANAGEMENT STREAM — raw-pull hooks (for the forecasting section) + management views =====
+ipcMain.handle('api:datasets', () => { try { return { ok: true, datasets: require('./lib/api_stream').datasets(), catalog: require('./lib/api_catalog').list() }; } catch (e) { return { ok: false, error: e.message }; } });
+ipcMain.handle('api:snapshot', (_e, { datasetId } = {}) => { try { return { ok: true, snapshot: require('./lib/api_stream').getSnapshot(datasetId) }; } catch (e) { return { ok: false, error: e.message }; } });
+ipcMain.handle('api:pull', async (_e, { apiId, path, params, method, body } = {}) => { try { return await require('./lib/api_stream').pull(apiId, path, { params: params || {}, method, body }); } catch (e) { return { ok: false, error: e.message }; } });
+ipcMain.handle('api:refresh', async (_e, { datasetId, force } = {}) => { try { return await require('./lib/api_stream').refreshDataset(datasetId, { force: !!force }); } catch (e) { return { ok: false, error: e.message }; } });
+ipcMain.handle('api:key-status', () => { try { return { ok: true, keys: require('./lib/api_client').keyStatus() }; } catch (e) { return { ok: false, error: e.message }; } });
+ipcMain.handle('api:health', async () => { try { return { ok: true, health: await require('./lib/api_manager').healthAll() }; } catch (e) { return { ok: false, error: e.message }; } });
 // NEWS BRIEFING ("dam" snapshot, Phase B): freshen the un-clustered tail (compression) then render the
 // consistent, schema-locked brief DOCUMENT over the active stories. Default window = today→now; pass
 // sinceMs for "what's the update since <time>". Corroboration is syndication-aware (reports, not raw
