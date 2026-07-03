@@ -91,7 +91,114 @@ async function classifyBatch(segments, { ask = null, model = null, numPredict = 
   return verdict;
 }
 
+// =====================================================================
+// EMAIL NEWSLETTER promo filter — the second lane's SNR fix.
+//
+// Zoe's inbox catches sign-up newsletters; those often carry SOME ads, and the inbox also fills with
+// PURE-promo mail (LinkedIn/Yelp/Capterra notifications, retail deals, pump-and-dump stock spam). The
+// governing rule (Lucas): a real newsletter that merely CONTAINS an ad is KEPT — only a wholly
+// promotional/marketing/notification email is dropped. Same two-tier shape as the video filter:
+//   1. emailPromoHeuristic({from,fromAddr,subject,summary}) — PURE, free. Decisive on promo senders,
+//      promo subjects, stock-pump patterns → 'promo'; on long editorial bodies → 'keep'; else 'unsure'.
+//      Used at INTAKE to hard-drop the obvious junk before it ever enters the bucket.
+//   2. classifyEmailBatch(items,{ask}) — the 'unsure' remainder → the model, ONE batched call, at hourly
+//      compression. Prompt is biased to KEEP (a newsletter-with-ads is not an ad). Fail-safe → keep.
+// -----------------------------------------------------------------------------------------------------
+
+// Registrable domains that only ever send promo/notification mail (never editorial content we'd want).
+const PROMO_DOMAINS = new Set([
+  'linkedin.com', 'yelp.com', 'indeed.com', 'glassdoor.com', 'ziprecruiter.com', 'monster.com',
+  'capterra.com', 'getapp.com', 'softwareadvice.com', 'g2.com', 'trustradius.com',
+  'groupon.com', 'meetup.com', 'nextdoor.com', 'quora.com', 'pinterest.com', 'facebookmail.com',
+  'instagram.com', 'expedia.com', 'booking.com', 'grubhub.com', 'doordash.com', 'ubereats.com',
+]);
+function domainOf(addr) {
+  const a = str(addr).toLowerCase().trim();
+  const at = a.lastIndexOf('@');
+  return (at >= 0 ? a.slice(at + 1) : a).replace(/[>\s].*$/, '');
+}
+function isPromoDomain(addr) {
+  const d = domainOf(addr);
+  if (!d) return false;
+  for (const p of PROMO_DOMAINS) if (d === p || d.endsWith('.' + p)) return true;
+  return false;
+}
+
+// Subjects that betray a purely promotional/notification email (a Substack issue doesn't say these).
+const PROMO_SUBJECT = [
+  /\b\d{1,3}\s*%\s*off\b/i, /\bsave \$?\d/i, /\bfree shipping\b/i, /\bflash sale\b/i, /\bsale ends\b/i,
+  /\b(final|last)[-\s]chance\b/i, /\blimited[-\s]time\b/i, /\bexclusive (offer|deal|discount)\b/i,
+  /\bcoupon\b/i, /\bpromo code\b/i, /\bdon'?t miss (out|this deal)\b/i, /\bcyber monday|black friday\b/i,
+  /\b(add|connect with) [A-Z][a-z]+/,                       // LinkedIn "add Linda C."
+  /\bviewed your (profile|post|page)\b/i, /\bpeople you may know\b/i, /\bnew connection\b/i,
+  /\binvitation to connect\b/i, /\bendorsed you\b/i, /\byou (have|appeared in) \d+ (new )?(searches|notifications)\b/i,
+  /\bwho'?s hiring\b/i, /\bjobs? (for you|you may|near you|matching)\b/i, /\b\d+ new jobs?\b/i, /\bis hiring\b/i,
+  /\btop \w+ (revealed|of \d{4})\b/i, /\bsee who'?s #?1\b/i, /\brated #?1\b/i,
+  /\bverify your (account|email)\b/i, /\bcomplete your (profile|registration)\b/i,
+];
+// Pump-and-dump / penny-stock spam ("(Nasdaq: USAU) fully permitted gold project"). A ticker in
+// PARENTHESES in the subject/body is the tell — real market journalism writes "Nebius stock", not "(NBIS)".
+const STOCK_SPAM = [
+  /\((?:nasdaq|nyse|otc|otcmkts|amex|nyseamerican|cboe|tsx)\s*:\s*[A-Z.]{1,6}\)/i,
+  /\bfully[-\s]permitted\b/i, /\bpenny stock\b/i, /\bmicro[-\s]?cap\b/i, /\bnano[-\s]?cap\b/i,
+  /\bbuy alert\b/i, /\bhot stock\b/i, /\btable[-\s]pounding\b/i, /\bstock (to watch|pick of)\b/i,
+  /\bnext (tesla|nvidia|apple|amazon|bitcoin|microsoft)\b/i, /\bskyrocket\b/i, /\bto the moon\b/i,
+  /\bbefore it (explodes|takes off|runs)\b/i, /\b\d{2,4}%\s+(gain|upside|potential)\b/i,
+];
+
+// 'promo' | 'keep' | 'unsure'. Accepts the intake msg shape OR a bucket row (flexible field names).
+function emailPromoHeuristic(msg) {
+  if (!msg) return 'unsure';
+  const addr = str(msg.fromAddr != null ? msg.fromAddr : msg.source_url);
+  const subj = str(msg.subject != null ? msg.subject : msg.title);
+  const body = str(msg.body != null ? msg.body : msg.summary);
+  const both = subj + '\n' + body;
+  if (isPromoDomain(addr)) return 'promo';
+  if (STOCK_SPAM.some((r) => r.test(both))) return 'promo';
+  if (PROMO_SUBJECT.some((r) => r.test(subj))) return 'promo';
+  // Clearly editorial: a substantial body with multiple news-register markers → keep (skip the model).
+  if (body.length > 800 && NEWS_STRONG.filter((r) => r.test(body)).length >= 2) return 'keep';
+  return 'unsure';
+}
+
+const EMAIL_CLASSIFY_WANT = `You are labeling whole EMAILS as PROMO or NEWSLETTER.
+PROMO = a purely promotional/marketing/transactional message: retail sale/discount/coupon, product pitch,
+affiliate offer, social-network notification ("someone added you", "profile views"), job-board alert,
+stock-pump/penny-stock spam, "verify your account".
+NEWSLETTER = an email with editorial/journalistic/analytical CONTENT worth reading (news, commentary,
+analysis, a Substack issue). A real newsletter that merely CONTAINS some ads or a sponsor blurb is still
+NEWSLETTER — keep it. When unsure, choose NEWSLETTER.
+For EACH input id, respond with ONLY a JSON array, one entry per id: [{"id": <id>, "ad": true|false}]
+(ad:true = PROMO).`;
+// For email the SUBJECT is strong signal, so fold it into the text the model sees.
+function emailClassifyInput(items) {
+  return (items || []).map((s) => ({ id: s.id, text: (str(s.title) + ' — ' + str(s.summary)).replace(/\s+/g, ' ').slice(0, 400) }));
+}
+
+// Classify newsletter bucket rows → { [id]: 'ad' | 'news' }. Heuristic first (free); only 'unsure' hits
+// the model, in one batched call. deps.ask = cloud_logic.ask. Fail-safe: unclassifiable → 'news' (keep).
+async function classifyEmailBatch(items, { ask = null, model = null, numPredict = 1600 } = {}) {
+  const verdict = {};
+  const unsure = [];
+  for (const s of (items || [])) {
+    const h = emailPromoHeuristic(s);
+    if (h === 'promo') verdict[s.id] = 'ad';
+    else if (h === 'keep') verdict[s.id] = 'news';
+    else unsure.push(s);
+  }
+  if (unsure.length && typeof ask === 'function') {
+    try {
+      const r = await ask({ task: 'email_promo_classify', v: 1, input: emailClassifyInput(unsure), want: EMAIL_CLASSIFY_WANT, validate: classifyValidator, model, numPredict });
+      if (Array.isArray(r)) for (const e of r) if (e && e.id != null) verdict[e.id] = e.ad ? 'ad' : 'news';
+    } catch { /* fail-safe below */ }
+  }
+  for (const s of (items || [])) if (!verdict[s.id]) verdict[s.id] = 'news';   // never drop the unclassifiable
+  return verdict;
+}
+
 module.exports = {
   AD_STRONG, NEWS_STRONG, adHeuristic,
   classifyInput, classifyValidator, CLASSIFY_WANT, classifyBatch,
+  PROMO_DOMAINS, PROMO_SUBJECT, STOCK_SPAM, domainOf, isPromoDomain,
+  emailPromoHeuristic, EMAIL_CLASSIFY_WANT, emailClassifyInput, classifyEmailBatch,
 };

@@ -43,6 +43,7 @@ const fakePoll = async (sinceUid, cap) => ({ ok: true, remaining: 0, messages: [
   { uid: 10, from: 'Sub A', fromAddr: 'a@substack.com', subject: 'A', messageId: '<a>', ts: 1, headersRaw: '', body: 'aa' },
   { uid: 11, from: 'Google', fromAddr: 'meetings-noreply@google.com', subject: 'Notes', messageId: '<b>', ts: 2, headersRaw: '', body: 'bb' },
   { uid: 12, from: 'Lucas', fromAddr: 'lucas@gmail.com', subject: 'hi', messageId: '<c>', ts: 3, headersRaw: '', body: 'cc' },
+  { uid: 13, from: 'LinkedIn', fromAddr: 'invitations@linkedin.com', subject: 'Zoe, add Linda C.', messageId: '<d>', ts: 4, headersRaw: 'List-Unsubscribe: <x>\r\n', body: 'People you may know' }, // promo newsletter → dropped
 ].filter(m => m.uid > sinceUid).slice(0, cap) });
 const store = { insertItem: (r) => { inserted.push(r); return { inserted: true }; } };
 
@@ -51,15 +52,15 @@ const store = { insertItem: (r) => { inserted.push(r); return { inserted: true }
     poll: fakePoll, store, landDoc: (d) => landed.push(d),
     cursor: () => 0, saveCursor: (u) => { savedCursor = u; }, onRouted: (u) => { routedUids = u; }, cap: 12,
   });
-  ok(r.ok && r.fetched === 3 && r.newsletters === 1 && r.meetings === 1 && r.other === 1, 'tick tallies 1 newsletter / 1 meeting / 1 other');
-  ok(inserted.length === 1 && inserted[0].urlOrGuid === 'a', 'newsletter routed to store.insertItem');
+  ok(r.ok && r.fetched === 4 && r.newsletters === 1 && r.meetings === 1 && r.other === 1 && r.promos === 1, 'tick tallies 1 newsletter / 1 meeting / 1 other / 1 promo-dropped');
+  ok(inserted.length === 1 && inserted[0].urlOrGuid === 'a', 'newsletter routed to store.insertItem; the LinkedIn promo was NOT inserted');
   ok(landed.length === 1 && landed[0].ref === 'b', 'meeting-notes routed to landDoc');
-  ok(savedCursor === 12, 'cursor advances to max uid seen');
-  ok(Array.isArray(routedUids) && routedUids.length === 2 && routedUids.includes(10) && routedUids.includes(11) && !routedUids.includes(12), 'onRouted gets only lane-claimed UIDs (not the "other")');
+  ok(savedCursor === 13, 'cursor advances to max uid seen (incl. the dropped promo)');
+  ok(Array.isArray(routedUids) && routedUids.length === 3 && routedUids.includes(10) && routedUids.includes(11) && routedUids.includes(13) && !routedUids.includes(12), 'onRouted claims newsletter+meeting+promo UIDs (quiet), NOT the "other"');
 
   // cursor skips already-seen; empty batch advances nothing
-  const r2 = await intake.runIntakeTick({ poll: fakePoll, store, landDoc: (d) => landed.push(d), cursor: () => 12, saveCursor: () => {}, cap: 12 });
-  ok(r2.ok && r2.fetched === 0 && r2.newsletters === 0, 'cursor at 12 → nothing new fetched (dedup by UID)');
+  const r2 = await intake.runIntakeTick({ poll: fakePoll, store, landDoc: (d) => landed.push(d), cursor: () => 13, saveCursor: () => {}, cap: 12 });
+  ok(r2.ok && r2.fetched === 0 && r2.newsletters === 0, 'cursor at 13 → nothing new fetched (dedup by UID)');
 
   // fail-soft: poll error never throws
   const r3 = await intake.runIntakeTick({ poll: async () => { throw new Error('imap down'); }, store, cursor: () => 0, saveCursor: () => {} });

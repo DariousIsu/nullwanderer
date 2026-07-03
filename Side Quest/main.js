@@ -865,6 +865,7 @@ app.whenReady().then(() => {
           store: newsStore, startMs, endMs: now, now,
           adjudicate: cloud ? (s, i) => news_lane.adjudicateSameEvent(s, i, { ask: cloud.ask }) : null,
           classifyAds: cloud ? (segs) => require('./lib/news_ads').classifyBatch(segs, { ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null) }) : null,
+          classifyEmailAds: cloud ? (items) => require('./lib/news_ads').classifyEmailBatch(items, { ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null) }) : null,
           writeLayer: true,
           log: (m) => console.log(m),
         });
@@ -1044,6 +1045,7 @@ ipcMain.handle('news:briefing', async (_e, { sinceMs = null } = {}) => {
       store: newsStore, sinceMs,
       adjudicate: cloud ? (s, i) => news_lane.adjudicateSameEvent(s, i, { ask: cloud.ask }) : null,
       classifyAds: cloud ? (segs) => require('./lib/news_ads').classifyBatch(segs, { ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null) }) : null,
+      classifyEmailAds: cloud ? (items) => require('./lib/news_ads').classifyEmailBatch(items, { ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null) }) : null,
       log: (m) => console.log('[news-brief]', m),
     });
     const stories = news_lane.storiesActiveInWindow(snap.since, { limit: 40 });

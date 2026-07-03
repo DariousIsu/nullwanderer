@@ -19,6 +19,8 @@
  */
 'use strict';
 
+const ads = require('./news_ads');   // pure — the newsletter promo/ad filter (shared with the video lane)
+
 const clean = (s) => (s == null ? '' : String(s)).replace(/\s+/g, ' ').trim();
 
 // Does the raw header block carry a bulk/list signal? List-Unsubscribe and List-Id are the RFC-2369/
@@ -109,14 +111,17 @@ async function runIntakeTick({ poll, store, landDoc, cursor, saveCursor, onRoute
   catch (e) { log && log('[email-intake] poll failed: ' + e.message); return { ok: false, error: e.message, fetched: 0, newsletters: 0, meetings: 0, other: 0 }; }
   if (!res || !res.ok) return { ok: false, error: (res && res.reason) || 'poll not ok', fetched: 0, newsletters: 0, meetings: 0, other: 0 };
   const msgs = Array.isArray(res.messages) ? res.messages : [];
-  let newsletters = 0, meetings = 0, other = 0, maxUid = sinceUid;
-  const routed = [];
+  let newsletters = 0, meetings = 0, other = 0, promos = 0, maxUid = sinceUid;
+  const routed = [];   // UIDs this lane CLAIMED (inserted, landed, OR dropped-as-promo) → suppressed from chat surfacing
   for (const m of msgs) {
     try {
       const kind = classify(m);
       if (kind === 'newsletter') {
-        store.insertItem(toNewsRow(m));
-        newsletters++; routed.push(m.uid);
+        // Tier-1 promo hard-drop (free heuristic): a pure-promo email (LinkedIn/Yelp/deals/stock-pump)
+        // never enters the bucket. A newsletter that merely CONTAINS an ad is NOT dropped here (→ 'unsure'
+        // /'keep'); the soft cases ride the tier-2 model pass at hourly compression. Still claimed (quiet).
+        if (ads.emailPromoHeuristic(m) === 'promo') { promos++; routed.push(m.uid); }
+        else { store.insertItem(toNewsRow(m)); newsletters++; routed.push(m.uid); }
       } else if (kind === 'meeting-notes') {
         if (typeof landDoc === 'function') landDoc(toMeetingDoc(m));
         meetings++; routed.push(m.uid);
@@ -128,8 +133,8 @@ async function runIntakeTick({ poll, store, landDoc, cursor, saveCursor, onRoute
   }
   if (maxUid > sinceUid && typeof saveCursor === 'function') { try { saveCursor(maxUid); } catch {} }
   if (routed.length && typeof onRouted === 'function') { try { onRouted(routed); } catch {} }
-  if (log && msgs.length) log(`[email-intake] ${msgs.length} new: ${newsletters} newsletter, ${meetings} meeting-notes, ${other} other → cursor ${maxUid}${res.remaining ? ` (+${res.remaining} queued)` : ''}`);
-  return { ok: true, fetched: msgs.length, newsletters, meetings, other, cursor: maxUid, remaining: res.remaining || 0 };
+  if (log && msgs.length) log(`[email-intake] ${msgs.length} new: ${newsletters} newsletter, ${promos} promo-dropped, ${meetings} meeting-notes, ${other} other → cursor ${maxUid}${res.remaining ? ` (+${res.remaining} queued)` : ''}`);
+  return { ok: true, fetched: msgs.length, newsletters, promos, meetings, other, cursor: maxUid, remaining: res.remaining || 0 };
 }
 
 module.exports = { classify, hasBulkHeader, isMeetingNotes, looksLikeNewsletter, toNewsRow, toMeetingDoc, newsIdOf, runIntakeTick };

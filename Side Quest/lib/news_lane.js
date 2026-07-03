@@ -428,22 +428,28 @@ function startOfDayMs(now = Date.now()) { const d = new Date(now); d.setHours(0,
 // snapshot (writeLayer:false). Reads UN-CLUSTERED reservoir items in the window, clusters them into the
 // rolling stories, closes stale stories, and returns a briefing over the stories active in the window.
 // Idempotent via the story_id-IS-NULL guard in the store, so on-demand + scheduled runs never collide.
-async function runCompression({ store, startMs, endMs = Date.now(), now = Date.now(), adjudicate = null, classifyAds = null, writeLayer = false, coldMs = 6 * 3600 * 1000, log } = {}) {
+async function runCompression({ store, startMs, endMs = Date.now(), now = Date.now(), adjudicate = null, classifyAds = null, classifyEmailAds = null, writeLayer = false, coldMs = 6 * 3600 * 1000, log } = {}) {
   ensureSchema();
   let items = (store && typeof store.unclusteredInWindow === 'function') ? store.unclusteredInWindow(startMs, endMs) : [];
-  // Stage-1 (video): drop ADVERTISEMENT segments before clustering so ad breaks never become "stories".
-  // Only video items are classified (RSS/aggregator text is editorial); the batched classifier does the
-  // soft ads the capture-time heuristic can't. Fail-safe: classifier error → keep everything.
+  // Stage-1 AD FILTER: drop ADVERTISEMENT items before clustering so they never become "stories". Two
+  // independent classifiers, each scoped to its own source_kind (RSS/aggregator text is editorial, never
+  // touched): 'video' → broadcast-ad classifier; 'newsletter' → email-promo classifier (the tier-2 soft
+  // cases the intake heuristic passed). Both do the soft calls the free heuristics can't. Fail-safe:
+  // classifier error → keep everything.
   let droppedAds = 0;
-  if (typeof classifyAds === 'function') {
-    const vids = items.filter((i) => i.source_kind === 'video');
-    if (vids.length) {
-      let verdict = {}; try { verdict = (await classifyAds(vids)) || {}; } catch { verdict = {}; }
-      const adIds = vids.filter((v) => verdict[v.id] === 'ad').map((v) => v.id);
-      if (adIds.length) {
-        try { store.markDropped && store.markDropped(adIds); } catch {}
-        const adSet = new Set(adIds); items = items.filter((i) => !adSet.has(i.id)); droppedAds = adIds.length;
-      }
+  const adStages = [
+    { kinds: ['video'], fn: classifyAds },
+    { kinds: ['newsletter'], fn: classifyEmailAds },
+  ];
+  for (const stage of adStages) {
+    if (typeof stage.fn !== 'function') continue;
+    const subset = items.filter((i) => stage.kinds.includes(i.source_kind));
+    if (!subset.length) continue;
+    let verdict = {}; try { verdict = (await stage.fn(subset)) || {}; } catch { verdict = {}; }
+    const adIds = subset.filter((v) => verdict[v.id] === 'ad').map((v) => v.id);
+    if (adIds.length) {
+      try { store.markDropped && store.markDropped(adIds); } catch {}
+      const adSet = new Set(adIds); items = items.filter((i) => !adSet.has(i.id)); droppedAds += adIds.length;
     }
   }
   const cluster = await clusterItems(items, { now, adjudicate, log });
@@ -459,9 +465,9 @@ async function runCompression({ store, startMs, endMs = Date.now(), now = Date.n
 // SNAPSHOT ("dam") — triggers the compression on the un-clustered tail so "right now" is FRESH, then
 // returns the briefing over the window. Default window = today→now; pass sinceMs for "update since <t>".
 // No separate summarizer — the snapshot IS a compression run + its briefing (writeLayer:false).
-async function snapshot({ store, sinceMs = null, now = Date.now(), adjudicate = null, classifyAds = null, log } = {}) {
+async function snapshot({ store, sinceMs = null, now = Date.now(), adjudicate = null, classifyAds = null, classifyEmailAds = null, log } = {}) {
   const startMs = sinceMs != null ? sinceMs : startOfDayMs(now);
-  const c = await runCompression({ store, startMs, endMs: now, now, adjudicate, classifyAds, writeLayer: false, log });
+  const c = await runCompression({ store, startMs, endMs: now, now, adjudicate, classifyAds, classifyEmailAds, writeLayer: false, log });
   return { since: startMs, now, briefing: c.briefing, storyCount: c.storyCount, freshItems: c.items };
 }
 
