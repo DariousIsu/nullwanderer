@@ -324,29 +324,34 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
 
   // ===== FULL-ARTICLE INGESTION (worthy stories → web_extract → richer evidence doc) =====
   clearStories(); newsdb.get().exec('DELETE FROM news_story_updates'); newsdb.get().exec('DELETE FROM news_items');
-  const a1 = store.insertItem({ source: 'Reuters', sourceKind: 'rss', urlOrGuid: 'https://www.reuters.com/world/kyiv-strike', title: 'Deadly strike on Kyiv', summary: 'A lede.', ts: T });
-  const a2 = store.insertItem({ source: 'AP', sourceKind: 'rss', urlOrGuid: 'https://apnews.com/kyiv-attack', title: 'Kyiv attack kills many', summary: 'Another lede.', ts: T + 1 });
+  // near-identical (auto-continue S≥.60) but non-identical headlines from 2 outlets → ONE corroborated story (2 reports)
+  const a1 = store.insertItem({ source: 'BBC', sourceKind: 'rss', urlOrGuid: 'https://www.bbc.com/news/kyiv-strike', title: 'At least 18 killed in most massive Russian attack on Kyiv', summary: 'A lede.', ts: T });
+  const a2 = store.insertItem({ source: 'CNN', sourceKind: 'rss', urlOrGuid: 'https://www.cnn.com/kyiv-attack', title: 'At least 18 killed in most massive Russian attack on Kyiv city', summary: 'Another lede.', ts: T + 1 });
   const arows = store.recentItems({ limit: 10 });
   await lane.clusterItems([arows.find((r) => r.id === a1.id)], { now: NOW });
-  await lane.clusterItems([arows.find((r) => r.id === a2.id)], { now: NOW, adjudicate: async () => true });   // → ONE corroborated story (2 reports)
+  await lane.clusterItems([arows.find((r) => r.id === a2.id)], { now: NOW });
   const artStory = lane.allStories()[0];
   ok(/^https?:\/\//.test(lane.representativeArticleUrl(artStory.id) || ''), 'representativeArticleUrl returns a direct RSS http article link');
-  // fetchArticle parses web_extract clean text (mock dispatch); fail-soft on !ok
+  // fetchArticle parses web_extract clean text (mock dispatch); fail-soft on !ok / no url
   const AF = mkDispatchState();
   ok(/FULL ARTICLE/.test(await lane.fetchArticle({ dispatch: AF.dispatch, url: 'https://x/y' }) || ''), 'fetchArticle returns web_extract trafilatura clean text');
   ok((await lane.fetchArticle({ dispatch: async () => ({ ok: false }), url: 'x' })) === null, 'fetchArticle fail-soft → null on a failed extract');
   ok((await lane.fetchArticle({ dispatch: AF.dispatch, url: '' })) === null, 'fetchArticle → null with no URL');
-  // promoteStory reads the article once, persists it, and the evidence doc carries the FULL body
-  const AP = mkDispatchState();
-  const ar = await lane.promoteStory(artStory, { dispatch: AP.dispatch, landDoc: AP.landDoc, now: NOW });
-  ok(ar.article === true && AP.calls.web_extract.length === 1, 'promoteStory web_extracts the worthy story’s article exactly once');
-  ok(AP.calls.landDoc.some((d) => /## Full article/.test(d.body) && /FULL ARTICLE BODY/.test(d.body)), 'the evidence doc carries the FULL ARTICLE body (not just title+summary)');
+  // HOURLY readArticlesPass is the driver: reads the worthy story's article once + persists it
+  const RA = mkDispatchState();
+  const rap = await lane.readArticlesPass({ dispatch: RA.dispatch, now: NOW });
+  ok(rap.read === 1 && RA.calls.web_extract.length === 1, 'readArticlesPass reads the worthy story’s article exactly once');
   ok(lane.allStories()[0].article_text && /FULL ARTICLE BODY/.test(lane.allStories()[0].article_text), 'the fetched article body is persisted on the story');
-  // idempotent: a second pass does NOT re-fetch (already stored)
-  const AP2 = mkDispatchState();
-  await lane.promoteStory(lane.allStories()[0], { dispatch: AP2.dispatch, landDoc: AP2.landDoc, now: NOW });
-  ok(AP2.calls.web_extract.length === 0, 'idempotent: the article is NOT re-fetched once stored on the story');
-  // a story with no fetchable URL (video/aggregator) keeps the summary doc, no fetch attempted
+  // idempotent: a second hourly pass does NOT re-read an already-read story
+  const RA2 = mkDispatchState();
+  const rap2 = await lane.readArticlesPass({ dispatch: RA2.dispatch, now: NOW });
+  ok(rap2.read === 0 && RA2.calls.web_extract.length === 0, 'idempotent: readArticlesPass does NOT re-read a story with a stored article');
+  // promoteStory (nightly) does NOT fetch — it just INCLUDES the stored body in the evidence doc
+  const AP = mkDispatchState();
+  await lane.promoteStory(lane.allStories()[0], { dispatch: AP.dispatch, landDoc: AP.landDoc, now: NOW });
+  ok(AP.calls.web_extract.length === 0, 'promoteStory does NOT fetch (reading is the hourly pass now)');
+  ok(AP.calls.landDoc.some((d) => /## Full article/.test(d.body) && /FULL ARTICLE BODY/.test(d.body)), 'the evidence doc carries the stored full-article body');
+  // a story with no fetchable URL (video/aggregator) → no read attempted, keeps summary doc
   clearStories(); newsdb.get().exec('DELETE FROM news_items');
   await lane.clusterItems([{ source: 'CNN', source_kind: 'video', title: 'Broadcast segment on Kyiv', summary: 'seg', ts: T }], { now: NOW });
   const vStory = lane.allStories()[0];

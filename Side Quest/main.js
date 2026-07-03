@@ -921,6 +921,15 @@ app.whenReady().then(() => {
         if (mainWindow && !mainWindow.isDestroyed() && r.briefing) {
           try { mainWindow.webContents.send('news:layer', { at: now, storyCount: r.storyCount, briefing: r.briefing }); } catch {}
         }
+        // FULL-ARTICLE READ (read-tier): promptly read the real article body for worthy stories via Echo
+        // web_extract, so the extraction learns objects from the article — not the headline. Runs on the
+        // hourly cadence (soon after a story forms), decoupled from the nightly write pass. Gated on Echo.
+        if (echoSuit && echoSuit.connected) {
+          try {
+            const ra = await news_lane.readArticlesPass({ dispatch: (t) => echoSuit.dispatch(t), now, log: (m) => console.log(m) });
+            if (ra.attempted) console.log(`[news] hourly article read: ${ra.read}/${ra.attempted} worthy stories`);
+          } catch (e) { console.error('[news] hourly article read failed:', e.message); }
+        }
       } catch (e) { console.error('[news] hourly compression failed:', e.message); }
     };
     const newsCompressTimer = setInterval(() => { runHourlyCompression().catch(() => {}); }, NEWS_COMPRESS_MS);

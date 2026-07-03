@@ -687,7 +687,7 @@ function storyToClaim(story, { now = Date.now() } = {}) {
 // forms on a later pass (eventually consistent, never a mistyped dup). Returns a per-story result.
 async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdges = 5, log } = {}) {
   ensureSchema();
-  const res = { storyId: story.id, doc: false, event: false, updated: false, edges: 0, article: false, decision: null };
+  const res = { storyId: story.id, doc: false, event: false, updated: false, edges: 0, decision: null };
   // RECONCILIATION GATE (spec §4): route the story through the shared belief-revision decision as a Claim.
   // For a citationed event this returns 'append' (events cluster, never supersede) — the story's own
   // corroboration pre-filter (storiesForDaily) is the worthiness bar; reconcile enforces the hard invariant
@@ -698,19 +698,9 @@ async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdg
     log && log(`[news-daily] story ${story.id} NOT promoted (reconcile: ${decision.action}/${decision.reason})`);
     return res;
   }
-  // FULL-ARTICLE INGESTION: read the real article body ONCE (web_extract = trafilatura clean text) and
-  // persist it on the story, so the evidence doc below carries the actual reporting (people/quotes/numbers)
-  // — the extraction rail then learns objects from the ARTICLE, not just the headline. Fail-soft + idempotent
-  // (article_text null = not yet fetched; '' = attempted-but-empty so a dead/paywalled URL isn't re-tried).
-  if (story.article_text == null && typeof dispatch === 'function') {
-    const url = representativeArticleUrl(story.id);
-    if (url) {
-      const body = await fetchArticle({ dispatch, url });
-      setArticle(story.id, url, body || '');
-      story.article_url = url; story.article_text = body || '';
-      if (body) { res.article = true; log && log(`[news-daily] read article for story ${story.id} (${body.length} chars) — ${url}`); }
-    }
-  }
+  // The full-article body (story.article_text) is read by the HOURLY readArticlesPass (a read-tier op, done
+  // promptly), not here — buildStoryDoc below simply INCLUDES it when present so the extraction learns from
+  // the article. (A story reaches promotion hours after forming, so it's normally already been read.)
   if (typeof landDoc === 'function') {
     try { await landDoc({ title: `News — ${story.title}`.slice(0, 120), body: buildStoryDoc(story), source: 'news', ref: `news:story:${story.id}`, understanding: story.summary || '' }); res.doc = true; }
     catch (e) { log && log('[news-daily] doc land failed: ' + (e && e.message)); }
@@ -744,15 +734,37 @@ async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdg
   return res;
 }
 
+// HOURLY article-read pass: for WORTHY (corroborated) stories not yet read, fetch the real article body
+// (web_extract clean text) and persist it — DECOUPLED from the nightly write pass so reading (a read-tier op)
+// happens promptly, soon after a story forms. Idempotent: skips stories that already have article_text. On a
+// fetch failure we leave article_text NULL so a transient error retries next hour; a success stores it (fetch-
+// once). `limit` bounds network calls per pass. dispatch = Echo web_extract (injected). Returns { read, attempted, worthy }.
+async function readArticlesPass({ dispatch, now = Date.now(), minCorroboration = 2, limit = 25, log } = {}) {
+  ensureSchema();
+  if (typeof dispatch !== 'function') return { read: 0, attempted: 0, worthy: 0 };
+  const worthy = storiesForDaily({ now, limit: Math.max(limit * 4, 100), minCorroboration }).filter((s) => s.article_text == null);
+  let read = 0, attempted = 0;
+  for (const s of worthy) {
+    if (attempted >= limit) break;
+    const url = representativeArticleUrl(s.id);
+    if (!url) continue;                                   // aggregator/video story → no article link, keeps summary doc
+    attempted++;
+    const body = await fetchArticle({ dispatch, url });
+    if (body) { setArticle(s.id, url, body); read++; if (log) log(`[news-hourly] read article for story ${s.id} (${body.length} chars) — ${url}`); }
+    // failure → leave article_text NULL so a transient error retries next hour
+  }
+  if (log) log(`[news-hourly] articles: read ${read}/${attempted} attempted (${worthy.length} worthy unread)`);
+  return { read, attempted, worthy: worthy.length };
+}
+
 // The nightly news-organization pass. Returns { promoted, updated, docs, edges, stories }.
 async function runDailyPass({ dispatch, landDoc, now = Date.now(), limit = 100, minCorroboration = 2, log } = {}) {
   ensureSchema();
   const stories = storiesForDaily({ now, limit, minCorroboration });
-  let promoted = 0, updated = 0, docs = 0, edges = 0, rejected = 0, articles = 0;
+  let promoted = 0, updated = 0, docs = 0, edges = 0, rejected = 0;
   for (const s of stories) {
     const r = await promoteStory(s, { dispatch, landDoc, now, log });
     if (r.event) promoted++; if (r.updated) updated++; if (r.doc) docs++; edges += r.edges;
-    if (r.article) articles++;
     if (r.decision && r.decision !== 'append' && r.decision !== 'new' && r.decision !== 'merge') rejected++;
   }
   // DAILY (24h) MEMORY MARKER: a durable digest of the day — the corroboration-ranked briefing + the Echo
@@ -761,8 +773,8 @@ async function runDailyPass({ dispatch, landDoc, now = Date.now(), limit = 100, 
   const dayStart = startOfDayMs(now);
   const eventRefs = stories.map((s) => s.event_ref).filter((x) => x != null);
   recordDayMarker({ dayStart, dayEnd: now, briefing: buildBriefing(stories, {}), storyCount: stories.length, promoted, eventRefs, now });
-  if (log) log(`[news-daily] pass: ${promoted} new event objects, ${updated} updated, ${docs} docs, ${articles} articles read, ${edges} edges${rejected ? `, ${rejected} reconcile-rejected` : ''} over ${stories.length} stories`);
-  return { promoted, updated, docs, edges, rejected, articles, stories: stories.length, dayMarker: dayStart };
+  if (log) log(`[news-daily] pass: ${promoted} new event objects, ${updated} updated, ${docs} docs, ${edges} edges${rejected ? `, ${rejected} reconcile-rejected` : ''} over ${stories.length} stories`);
+  return { promoted, updated, docs, edges, rejected, stories: stories.length, dayMarker: dayStart };
 }
 
 module.exports = {
@@ -784,8 +796,8 @@ module.exports = {
   adjInput, adjValidate, adjudicateSameEvent,
   // daily pass (stories → Echo event objects)
   setEventRef, buildStoryDoc, storiesForDaily, proposeEventObject, promoteProposal, promoteStory, runDailyPass,
-  // full-article ingestion (web_extract → richer evidence doc → object extraction)
-  representativeArticleUrl, fetchArticle, setArticle,
+  // full-article ingestion (web_extract → richer evidence doc → object extraction) — HOURLY read pass
+  representativeArticleUrl, fetchArticle, setArticle, readArticlesPass,
   // reconciliation adapter (spec §7: story → Claim, consumed by lib/reconcile)
   storyToClaim,
 };
