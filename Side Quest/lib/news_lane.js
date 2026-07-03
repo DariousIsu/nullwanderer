@@ -216,6 +216,17 @@ function ensureSchema() {
       organized_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_news_layers_start ON news_layers(hour_start);
+    CREATE TABLE IF NOT EXISTS news_days (
+      day_start    INTEGER PRIMARY KEY,          -- start-of-day ms (idempotency key; a re-run same day updates)
+      day_end      INTEGER NOT NULL,             -- when the daily pass ran
+      briefing     TEXT,                          -- the day's corroboration-ranked digest
+      story_count  INTEGER NOT NULL DEFAULT 0,   -- worthy stories the day covered
+      promoted     INTEGER NOT NULL DEFAULT 0,   -- new public Echo event objects this pass
+      event_refs   TEXT,                          -- JSON array of the day's promoted Echo entity ids (long-term links)
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_news_days_start ON news_days(day_start);
   `);
   // migration: add the syndication-aware corroboration columns to a pre-existing news_stories table.
   try {
@@ -446,6 +457,21 @@ function createLayer({ hourStart, hourEnd, briefing, itemCount, storyCount, now 
 }
 function recentLayers(limit = 24) { ensureSchema(); return newsdb.get().prepare('SELECT * FROM news_layers ORDER BY hour_start DESC LIMIT ?').all(limit); }
 
+// --- daily (24h) MEMORY MARKER — a durable per-day digest row (the stable "what happened on day X"
+// pointer), written by runDailyPass, keyed by start-of-day (idempotent; a re-run same day updates it).
+function recordDayMarker({ dayStart, dayEnd, briefing = '', storyCount = 0, promoted = 0, eventRefs = [], now = Date.now() }) {
+  ensureSchema();
+  newsdb.get().prepare(
+    `INSERT INTO news_days (day_start, day_end, briefing, story_count, promoted, event_refs, created_at, updated_at)
+     VALUES (@ds, @de, @b, @sc, @p, @er, @now, @now)
+     ON CONFLICT(day_start) DO UPDATE SET day_end=@de, briefing=@b, story_count=@sc, promoted=@p, event_refs=@er, updated_at=@now`
+  ).run({ ds: dayStart, de: dayEnd, b: briefing || '', sc: storyCount || 0, p: promoted || 0, er: JSON.stringify(eventRefs || []), now });
+  return dayStart;
+}
+const _hydrateDay = (r) => (r ? Object.assign({}, r, { event_refs: jparse(r.event_refs, []) }) : r);
+function recentDays(limit = 30) { ensureSchema(); return newsdb.get().prepare('SELECT * FROM news_days ORDER BY day_start DESC LIMIT ?').all(limit).map(_hydrateDay); }
+function dayMarker(dayStart) { ensureSchema(); return _hydrateDay(newsdb.get().prepare('SELECT * FROM news_days WHERE day_start = ?').get(Number(dayStart))); }
+
 // Stories updated within the window (last_ts >= startMs), most-corroborated first — the read side of
 // the snapshot + the hourly briefing.
 function storiesActiveInWindow(startMs, { limit = 200 } = {}) {
@@ -663,8 +689,14 @@ async function runDailyPass({ dispatch, landDoc, now = Date.now(), limit = 100, 
     if (r.event) promoted++; if (r.updated) updated++; if (r.doc) docs++; edges += r.edges;
     if (r.decision && r.decision !== 'append' && r.decision !== 'new' && r.decision !== 'merge') rejected++;
   }
+  // DAILY (24h) MEMORY MARKER: a durable digest of the day — the corroboration-ranked briefing + the Echo
+  // event ids promoted (long-term traversal links). promoteStory mutates story.event_ref in place, so the
+  // worthy-story set now carries the refs. Idempotent per start-of-day (a re-run updates the same row).
+  const dayStart = startOfDayMs(now);
+  const eventRefs = stories.map((s) => s.event_ref).filter((x) => x != null);
+  recordDayMarker({ dayStart, dayEnd: now, briefing: buildBriefing(stories, {}), storyCount: stories.length, promoted, eventRefs, now });
   if (log) log(`[news-daily] pass: ${promoted} new event objects, ${updated} updated, ${docs} docs, ${edges} edges${rejected ? `, ${rejected} reconcile-rejected` : ''} over ${stories.length} stories`);
-  return { promoted, updated, docs, edges, rejected, stories: stories.length };
+  return { promoted, updated, docs, edges, rejected, stories: stories.length, dayMarker: dayStart };
 }
 
 module.exports = {
@@ -676,6 +708,8 @@ module.exports = {
   // stories/layers store
   ensureSchema, openStories, createStory, attachItem, closeStaleStories, allStories,
   buildBriefing, balanceStories, createLayer, recentLayers, storiesActiveInWindow, startOfDayMs,
+  // daily (24h) memory markers
+  recordDayMarker, recentDays, dayMarker,
   // developing-story deltas
   recordUpdate, storyDeltas, formatDeltas,
   // orchestration

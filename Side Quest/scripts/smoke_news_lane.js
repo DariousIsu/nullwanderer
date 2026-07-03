@@ -224,6 +224,25 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   const r2 = await lane.runDailyPass({ dispatch: DP.dispatch, landDoc: DP.landDoc, now: NOW });
   ok(r2.promoted === 0 && r2.updated === 1 && DP.calls.propose_entity.length === 1, 'second daily pass is idempotent (0 new, updated=1, no re-propose/promote)');
 
+  // ===== DAILY (24h) MEMORY MARKER: runDailyPass writes a durable per-day digest row (self-contained) =====
+  clearStories(); newsdb.get().exec('DELETE FROM news_story_updates');
+  await lane.clusterItems([kyivBBC], { now: NOW });
+  await lane.clusterItems([kyivDup], { now: NOW });     // BBC+CNN → corroborated (2 reports), worthy
+  const DM = mkDispatchState();
+  const dpm = await lane.runDailyPass({ dispatch: DM.dispatch, landDoc: DM.landDoc, now: NOW });
+  const dayStart = lane.startOfDayMs(NOW);
+  ok(dpm.dayMarker === dayStart, 'runDailyPass returns the day-marker key (start-of-day)');
+  const dm = lane.dayMarker(dayStart);
+  const kStory = lane.allStories().find((s) => /Kyiv/.test(s.title));
+  ok(dm && dm.story_count === 1 && dm.promoted === 1, 'the day marker records the day’s worthy-story + promoted counts');
+  ok(Array.isArray(dm.event_refs) && dm.event_refs.length === 1 && Number(dm.event_refs[0]) === Number(kStory.event_ref), 'the day marker carries the promoted Echo event_refs (the long-term links)');
+  ok(/Kyiv/.test(dm.briefing || ''), 'the day marker stores the corroboration-ranked digest briefing');
+  ok(lane.recentDays(5)[0].day_start === dayStart, 'recentDays returns the marker newest-first');
+  // idempotent per day: a second same-day pass UPDATES the one row (promoted now 0, still one marker for the day)
+  const daysBefore = lane.recentDays(50).length;
+  const dpm2 = await lane.runDailyPass({ dispatch: DM.dispatch, landDoc: DM.landDoc, now: NOW });
+  ok(dpm2.dayMarker === dayStart && lane.recentDays(50).length === daysBefore && lane.dayMarker(dayStart).promoted === 0, 'a same-day re-run UPDATES the one marker (idempotent per start-of-day; promoted=0 on the idempotent pass)');
+
   // edges only form to endpoints that already exist (fail-soft, eventually consistent, no mistyped dups)
   clearStories();
   await lane.clusterItems([kyivDup], { now: NOW });
