@@ -75,17 +75,38 @@ function reconstructValidator(raw) {
   return { valid: false, error: 'no reconstructed segments parsed' };
 }
 
-// Cloud reconstruction of a batch of segments → { [repId]: { headline, summary, isNews } }. deps.ask =
-// cloud_logic.ask. Fail-safe: on cloud error / unparseable / omitted id, the segment is left UNRECONSTRUCTED
-// (caller keeps its raw text — never blocks, never invents).
-async function reconstructBatch(segments, { ask = null, model = null, numPredict = 1400 } = {}) {
+// CHUNKING — split the (stream-ordered) segment list into cloud-call groups bounded on BOTH ends: at most
+// maxSegments (the output num_predict budget) AND at most maxChars of caption text (the input num_ctx / input
+// packaging budget), and NEVER spanning two streams (each call is ONE broadcast's block). This is the fix for
+// the single-batch truncation: one giant call capped at ~1400 output tokens / ~24k input chars reconstructed
+// only the first handful of segments and left the rest (~half) raw. Bounded chunks each return COMPLETE JSON.
+function chunkSegments(segments, { maxSegments = 6, maxChars = 16000 } = {}) {
+  const chunks = [];
+  let cur = [], curChars = 0;
+  for (const s of (segments || [])) {
+    const len = ((s && s.captions) || '').length;
+    const streamBreak = cur.length && cur[0].stream !== s.stream;                 // keep each call to ONE broadcast
+    const full = cur.length >= maxSegments || (cur.length && curChars + len > maxChars);
+    if (streamBreak || full) { if (cur.length) chunks.push(cur); cur = []; curChars = 0; }
+    cur.push(s); curChars += len;
+  }
+  if (cur.length) chunks.push(cur);
+  return chunks;
+}
+
+// Cloud reconstruction of segments → { [repId]: { headline, summary, isNews, entities } }. deps.ask =
+// cloud_logic.ask. Runs in bounded, per-stream CHUNKS (one ask per chunk) so no call is truncated on input or
+// output. Fail-safe: a chunk's cloud error / unparseable / omitted id leaves THAT chunk's segments raw — the
+// other chunks still proceed (caller keeps raw text — never blocks, never invents).
+async function reconstructBatch(segments, { ask = null, model = null, numPredict = 1600, maxSegments = 6, maxChars = 16000 } = {}) {
   const out = {};
-  const input = (segments || []).map((s) => ({ id: s.repId, text: s.captions }));
-  if (input.length && typeof ask === 'function') {
+  if (!(Array.isArray(segments) && segments.length) || typeof ask !== 'function') return out;
+  for (const chunk of chunkSegments(segments, { maxSegments, maxChars })) {
+    const input = chunk.map((s) => ({ id: s.repId, text: s.captions }));
     try {
       const r = await ask({ task: 'video_reconstruct', v: 1, input, want: RECONSTRUCT_WANT, validate: reconstructValidator, model, numPredict });
       if (Array.isArray(r)) for (const e of r) if (e && e.id != null) out[e.id] = { headline: e.headline, summary: e.summary, entities: e.entities || [], isNews: e.is_news !== false };
-    } catch { /* fail-safe: leave raw */ }
+    } catch { /* fail-safe: this chunk stays raw, others proceed */ }
   }
   return out;
 }
@@ -94,14 +115,21 @@ async function reconstructBatch(segments, { ask = null, model = null, numPredict
 // and ABSORB the rest (so ONE clean report per segment clusters); drop non-news segments. Deps injected:
 //   store = news_store (needs updateItemText / absorbItems / markDropped), ask = cloud_logic.ask.
 // Returns { segments, reconstructed, absorbed, dropped }. Never throws.
-async function runReconstruct(videoItems, { store, ask = null, model = null, gapMs = 120000, log } = {}) {
-  const res = { segments: 0, reconstructed: 0, absorbed: 0, dropped: 0 };
+async function runReconstruct(videoItems, { store, ask = null, model = null, gapMs = 120000, maxSegments = 6, maxChars = 16000, maxSegmentsPerPass = 250, log } = {}) {
+  const res = { segments: 0, reconstructed: 0, absorbed: 0, dropped: 0, deferred: 0 };
   try {
     if (!store) return res;
-    const segs = groupIntoSegments(videoItems, { gapMs });
+    let segs = groupIntoSegments(videoItems, { gapMs });
     res.segments = segs.length;
     if (!segs.length) return res;
-    const verdicts = await reconstructBatch(segs, { ask, model });
+    // Runaway backstop: reconstruct at most maxSegmentsPerPass segments (FRESHEST first) so a huge backlog
+    // after downtime can't spike the shared daily cloud budget in one pass. The overflow clusters WITHOUT a
+    // clean reconstruction this pass (same as the pre-chunking tail) and is picked up next pass — logged, never silent.
+    if (segs.length > maxSegmentsPerPass) {
+      res.deferred = segs.length - maxSegmentsPerPass;
+      segs = segs.slice().sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0)).slice(0, maxSegmentsPerPass);
+    }
+    const verdicts = await reconstructBatch(segs, { ask, model, maxSegments, maxChars });
     for (const seg of segs) {
       const v = verdicts[seg.repId];
       const others = seg.itemIds.filter((id) => id !== seg.repId);
@@ -118,9 +146,9 @@ async function runReconstruct(videoItems, { store, ask = null, model = null, gap
       // absorb the non-representative flushes so only ONE clean report per segment enters clustering
       if (others.length && store.absorbItems) { store.absorbItems(others); res.absorbed += others.length; }
     }
-    if (log && (res.reconstructed || res.dropped)) log(`[video-reconstruct] ${res.segments} segments → ${res.reconstructed} reconstructed, ${res.absorbed} absorbed, ${res.dropped} dropped(non-news)`);
+    if (log && (res.reconstructed || res.dropped || res.deferred)) log(`[video-reconstruct] ${res.segments} segments → ${res.reconstructed} reconstructed, ${res.absorbed} absorbed, ${res.dropped} dropped(non-news)${res.deferred ? `, ${res.deferred} deferred(over cap)` : ''}`);
   } catch (e) { log && log('[video-reconstruct] failed: ' + e.message); }
   return res;
 }
 
-module.exports = { groupIntoSegments, RECONSTRUCT_WANT, reconstructValidator, reconstructBatch, runReconstruct };
+module.exports = { groupIntoSegments, chunkSegments, RECONSTRUCT_WANT, reconstructValidator, reconstructBatch, runReconstruct };
