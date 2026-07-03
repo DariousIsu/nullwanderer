@@ -491,19 +491,31 @@ function storiesActiveInWindow(startMs, { limit = 200 } = {}) {
   return newsdb.get().prepare('SELECT * FROM news_stories WHERE last_ts >= ? ORDER BY MIN(outlet_count, report_count) DESC, outlet_count DESC, source_count DESC, last_ts DESC LIMIT ?').all(startMs, limit).map(hydrateStory);
 }
 
+// Query-shape words that are never topical (STOP is syntactic; these are the interrogatives a question
+// carries in). Kept out of the token set so "who is X" doesn't match on "who".
+const QWORDS = new Set(['who', 'what', 'when', 'where', 'why', 'how', 'whom', 'whose', 'which']);
 // TOPIC RECALL — the tracked stories relevant to a topic, so chat answering + research can factor in the
-// news lane she's been following RIGHT NOW (not just the next-day Echo promotion). Token LIKE over
-// title/summary/entity_set, ranked by independent corroboration then recency, within a freshness window.
-// Returns hydrated stories. Fail-soft []. (This closes the "news is invisible to conversation/research" gap.)
+// news lane she's been following RIGHT NOW (not just the next-day Echo promotion). Within a freshness window,
+// each story is SCORED by distinct query-token relevance — an exact entity-token match is worth 2, a plain
+// title/summary substring is worth 1 — and must clear a floor of 2. So one real entity ("Kyiv", "Iran")
+// qualifies a story, but a lone generic substring ("national", "live", "today") does NOT drag in unrelated
+// news. Entity matching is word-exact (%"national"% over the JSON token array) so "national" no longer
+// collides with "Nationals". Ranked by relevance, then corroboration, then recency. Fail-soft [].
+// (Fixes the OR-of-substring-LIKE precision leak the data-lane audit caught — it was polluting grounding.)
 function storiesForTopic(topic, { k = 4, maxAgeMs = 14 * 24 * 3600 * 1000, now = Date.now() } = {}) {
   ensureSchema();
-  const toks = String(topic || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(t => t.length >= 3).slice(0, 6);
+  const toks = String(topic || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+    .filter(t => t.length >= 3 && !STOP.has(t) && !QWORDS.has(t)).slice(0, 6);
   if (!toks.length) return [];
-  const clause = toks.map(() => '(LOWER(title) LIKE ? OR LOWER(summary) LIKE ? OR LOWER(entity_set) LIKE ?)').join(' OR ');
-  const likeParams = [];
-  for (const t of toks) { const p = `%${t}%`; likeParams.push(p, p, p); }
-  const sql = `SELECT * FROM news_stories WHERE last_ts >= ? AND (${clause}) ORDER BY MIN(outlet_count, report_count) DESC, last_ts DESC LIMIT ?`;
-  try { return newsdb.get().prepare(sql).all(now - maxAgeMs, ...likeParams, k).map(hydrateStory); }
+  // Per-token relevance: entity-exact (2) beats title/summary substring (1). Summed → _mscore.
+  const perTok = toks.map(() =>
+    '(CASE WHEN LOWER(entity_set) LIKE ? THEN 2 WHEN (LOWER(title) LIKE ? OR LOWER(summary) LIKE ?) THEN 1 ELSE 0 END)'
+  ).join(' + ');
+  const params = [];
+  for (const t of toks) { const p = `%${t}%`; params.push(`%"${t}"%`, p, p); }  // entity-exact quoted, then two substrings
+  const sql = `SELECT * FROM (SELECT *, (${perTok}) AS _mscore FROM news_stories WHERE last_ts >= ?)
+    WHERE _mscore >= 2 ORDER BY _mscore DESC, MIN(outlet_count, report_count) DESC, last_ts DESC LIMIT ?`;
+  try { return newsdb.get().prepare(sql).all(...params, now - maxAgeMs, k).map(hydrateStory); }
   catch { return []; }
 }
 // Stories → knowledge-shaped notes for the recall pipeline (active_recall / gatherKnown). Pure. Each note

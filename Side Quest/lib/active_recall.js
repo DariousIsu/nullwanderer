@@ -72,8 +72,8 @@ async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retriev
   // DATA-STREAM RECALL — factor in the OTHER short-term stores she'd otherwise be blind to: landed DOCUMENTS
   // (meeting notes / research dossiers / API + email + canvas) and tracked NEWS. Both are topic-searched +
   // capped, and returned SEPARATELY so a rich KG object can't hide them (main.js/knowledgeBlock surface them
-  // independently). Live defaults gated to !objectFn so the offline gate is unaffected; docFn/newsFn
-  // injectable for tests. Fail-soft — a store miss never breaks recall.
+  // independently). Live defaults gated to !retrieveFn (the offline-test signal — every recall smoke injects
+  // retrieveFn) so the gate is unaffected; docFn/newsFn injectable for tests. Fail-soft — a store miss never breaks recall.
   let streamHits = [];
   try {
     const docs = docFn ? (await docFn(t)) : (retrieveFn ? [] : _docRecall(t));   // retrieveFn injected = offline test → skip live stores

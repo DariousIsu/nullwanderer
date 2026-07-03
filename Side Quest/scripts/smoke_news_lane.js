@@ -226,8 +226,13 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   // TOPIC RECALL (the silo-fix producer) — chat answering + research can pull the tracked stories for a topic
   // NOW, not just the next-day Echo promotion. Token LIKE over title/summary/entity_set + a note shaper.
   const kyivHits = lane.storiesForTopic('Kyiv strike', { now: NOW });
-  ok(kyivHits.length >= 1 && /Kyiv/.test(kyivHits[0].title), 'storiesForTopic: token match surfaces the tracked Kyiv story');
+  ok(kyivHits.length >= 1 && /Kyiv/.test(kyivHits[0].title), 'storiesForTopic: an entity token ("Kyiv") surfaces the tracked story');
   ok(lane.storiesForTopic('zzzznomatchtoken', { now: NOW }).length === 0, 'storiesForTopic: no token match → []');
+  // RELEVANCE FLOOR (audit fix): an entity token clears the floor alone; a generic word that only appears in a
+  // summary substring does NOT (was the OR-of-LIKE noise leak). "mourning" is in the Kyiv summary but not an entity.
+  ok(lane.storiesForTopic('Kyiv', { now: NOW }).length >= 1, 'storiesForTopic: a lone ENTITY token clears the relevance floor');
+  ok(lane.storiesForTopic('mourning', { now: NOW }).length === 0, 'storiesForTopic: a lone generic summary-word stays BELOW the floor (no spurious pull)');
+  ok(lane.storiesForTopic('who', { now: NOW }).length === 0, 'storiesForTopic: an interrogative ("who") is not a topic token');
   const newsNotes = lane.storiesAsNotes(kyivHits);
   ok(newsNotes.length >= 1 && newsNotes[0].source === 'news' && /Kyiv/.test(newsNotes[0].content), 'storiesAsNotes: stories → knowledge-shaped [news] notes for the recall pipeline');
 
