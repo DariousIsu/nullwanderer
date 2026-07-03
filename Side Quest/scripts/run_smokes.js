@@ -32,6 +32,7 @@ const smokes = [
   'smoke_verified_capture.js',
   'smoke_verified_reconcile.js',
   'smoke_verified_boost.js',
+  'smoke_reconcile.js',
   'smoke_iterate_block.js',
   'smoke_cloud_logic.js',
   'smoke_interests.js',
