@@ -33,6 +33,7 @@ Fixed taxonomy — small enough to tune, big enough to matter:
 | `local` | Local / Civic | ✅ |
 | `markets` | Business / Markets | ✅ |
 | `health` | Health / Science | ✅ |
+| `weather` | Weather & Disaster | ✅ (protected **and uncapped** — Lucas) |
 | `tech` | Technology | ⬜ |
 | `sports` | Sports | ⬜ |
 | `culture` | Culture / Other | ⬜ |
@@ -68,6 +69,7 @@ the bucket, which the lane already owns).
     "local":   { "weight": 1.3, "capPct": null, "protected": true  },
     "markets": { "weight": 1.0, "capPct": null, "protected": true  },
     "health":  { "weight": 1.0, "capPct": null, "protected": true  },
+    "weather": { "weight": 1.2, "capPct": null, "protected": true  },   // uncapped — hurricanes/wildfires never capped
     "tech":    { "weight": 1.0, "capPct": 25,   "protected": false },
     "sports":  { "weight": 0.6, "capPct": 20,   "protected": false },  // World Cup: on, weighted down, capped
     "culture": { "weight": 0.5, "capPct": 15,   "protected": false }
@@ -110,10 +112,10 @@ this" nudging the category weight.
 
 ## 5. Build slices
 
-1. `news_topics.js` — cloud classifier (classify-once) + deterministic provisional/fail-safe + smoke.
+1. ✅ **DONE** `news_topics.js` — cloud classifier (classify-once) + deterministic provisional/fail-safe + smoke (24). 9 cats incl. weather.
 2. Bucket: `news_items.category` + `news_stories.category` migrations; classify new items at the collector
    (batched, cached); classify stories at clustering. Wire cloud in main.js (editor model).
-3. `news_rank.js` — the shared reserve/weight/cap selector + smoke.
+3. ✅ **DONE** `news_rank.js` — the shared reserve/weight/cap selector + smoke (17). Weather uncapped verified.
 4. Feed: enrich `feeds:fetch` items with cached categories; apply `arrange` in `renderMonitors`; badges.
 5. Brief: apply `arrange` in `buildBriefing` / `storiesActiveInWindow`; keep corroboration badges.
 6. Tuner UI panel + `news_tuner` meta persistence + IPC; live-apply.
