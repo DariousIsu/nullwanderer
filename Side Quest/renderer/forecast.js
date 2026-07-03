@@ -115,11 +115,58 @@
       chips.appendChild(chip('nat. σ', cfg.nationalSigma)); chips.appendChild(chip('iters', cfg.iterations.toLocaleString())); chips.appendChild(chip('seed', cfg.seed));
       chips.appendChild(chip('House maj', cfg.majority.house)); chips.appendChild(chip('Senate maj', cfg.majority.senate));
       inS.appendChild(chips);
+      b.appendChild(inS);
+
+      // COVERAGE — how many races carry a real signed margin vs a prior (the real-vs-illustrative read)
+      if (w.margins) {
+        const covS = sec('Coverage', `${w.margins.polled}/${w.margins.total} polled`);
+        covS.appendChild(kv([
+          ['races (total)', fmt(w.margins.total)],
+          ['on real polls', fmt(w.margins.polled)],
+          ['on priors', fmt(w.margins.prior)],
+        ]));
+        b.appendChild(covS);
+      }
+
+      // FUNDAMENTALS — the national economic environment lean + its component audit (the "outside conditions" leg)
+      if (w.fundamentals && w.fundamentals.has_data) {
+        const f = w.fundamentals;
+        const favCol = f.favors === 'A' ? C.dem : (f.favors === 'B' ? C.rep : C.muted);
+        const fS = sec('Fundamentals · economy', `${f.lean > 0 ? '+' : ''}${f.lean} → ${f.favors === 'A' ? 'D' : f.favors === 'B' ? 'R' : 'neutral'}`);
+        fS.querySelector('.live').style.color = favCol;
+        fS.appendChild(kv((f.components || []).map((c) => [c.note || c.name, (c.points_incumbent > 0 ? '+' : '') + c.points_incumbent])));
+        const nb = el('div', 'chip'); nb.textContent = `national lean ${f.lean} pts (incumbent = ${f.incumbentParty === 'A' ? 'D' : 'R'}); applied uniformly to every race, capped, provisional.`; fS.appendChild(nb);
+        b.appendChild(fS);
+      }
+
+      // SIGNALS — the live news volume feeding the reactor (events = corroborated; momentum = raw incl. CC)
+      if (w.signals) {
+        const sgS = sec('News signals', w.assess ? `${w.assess.assessed}/${w.assess.pairs} judged` : '');
+        sgS.appendChild(kv([
+          ['corroborated events', fmt(w.signals.events)],
+          ['momentum (raw/CC)', fmt(w.signals.momentum)],
+          ['shift-eligible pairs', w.assess ? fmt(w.assess.pairs) : '—'],
+          ['gpt-oss judged', w.assess ? fmt(w.assess.assessed) : '—'],
+        ]));
+        b.appendChild(sgS);
+      }
+
+      // RACE LEDGER — every race, its margin + where it came from (polls vs prior) + what news/econ moved it
+      const races = (w.inputs.races || []).slice().sort((a, z) => (a.margin_source === 'polls' ? 0 : 1) - (z.margin_source === 'polls' ? 0 : 1) || Math.abs(z.margin) - Math.abs(a.margin));
+      const dtS = sec('Race ledger', `${races.length} races`);
       const dt = el('div', 'datatable'); const tbl = el('table');
-      tbl.innerHTML = '<thead><tr><th>race</th><th>chamber</th><th>margin</th><th>σ</th></tr></thead>';
+      tbl.innerHTML = '<thead><tr><th>race</th><th>src</th><th>margin</th><th>n</th><th>σ</th></tr></thead>';
       const tb = el('tbody');
-      w.inputs.races.forEach((r) => { const tr = el('tr'); tr.innerHTML = `<td>${r.id}</td><td>${r.chamber}</td><td class="${r.margin >= 0 ? 'pos' : 'neg'}">${r.margin > 0 ? '+' : ''}${r.margin}</td><td>${r.sigma}</td>`; tb.appendChild(tr); });
-      tbl.appendChild(tb); dt.appendChild(tbl); inS.appendChild(dt); b.appendChild(inS);
+      races.forEach((r) => {
+        const polled = r.margin_source === 'polls';
+        const tr = el('tr');
+        tr.innerHTML = `<td>${r.id || r.subject || ''}</td>`
+          + `<td style="color:${polled ? C.accent : C.muted}">${polled ? 'poll' : 'prior'}</td>`
+          + `<td class="${r.margin >= 0 ? 'pos' : 'neg'}">${r.margin >= 0 ? 'D+' : 'R+'}${Math.abs(r.margin).toFixed(1)}</td>`
+          + `<td>${r.n_polls || 0}</td><td>${r.sigma}</td>`;
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb); dt.appendChild(tbl); dtS.appendChild(dt); b.appendChild(dtS);
 
       const liveS = sec('Live simulator reads', pulse ? 'updated' : ''); if (pulse) liveS.classList.add('pulse');
       const H = w.sim.chambers.house, S = w.sim.chambers.senate;
@@ -132,7 +179,11 @@
         ['compute', w.timing_ms + ' ms'],
       ]));
       b.appendChild(liveS);
-      const note = el('div', 'insp-sec'); note.appendChild(el('div', 'h', 'Provenance')); note.appendChild(el('div', 'chip', 'Synthetic margins — mechanism demo. Real per-race poll averages wire in with the recompute loop.')); b.appendChild(note);
+      const note = el('div', 'insp-sec'); note.appendChild(el('div', 'h', 'Provenance'));
+      const provTxt = data.illustrative
+        ? 'Illustrative — no race has a real signed margin yet (all priors). Balance is driven by holdovers + fundamentals.'
+        : `Real signal — ${w.margins ? w.margins.polled : '?'} races on live poll averages (FEC-signed), + fundamentals + news. Holdovers/coverage still approximate.`;
+      note.appendChild(el('div', 'chip', provTxt)); b.appendChild(note);
     } else if (id === 'poll_average') {
       const inS = sec('Variable inputs');
       const chips = el('div', 'chips');
