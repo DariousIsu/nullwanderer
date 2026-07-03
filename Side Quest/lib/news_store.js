@@ -45,12 +45,14 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_news_items_first_seen ON news_items(first_seen_ts);
     CREATE INDEX IF NOT EXISTS idx_news_items_story ON news_items(story_id);
     CREATE INDEX IF NOT EXISTS idx_news_items_layer ON news_items(layer_id);
-    CREATE INDEX IF NOT EXISTS idx_news_items_category ON news_items(category);
   `);
-  // migration: add `category` to a pre-existing news_items table (the tuner's topic key).
+  // migration: add `category` to a pre-existing news_items table (the tuner's topic key), THEN index it.
+  // The index must come AFTER the ALTER — on an existing DB the column isn't there until we add it, so a
+  // CREATE INDEX on `category` inside the block above would throw and abort the whole schema setup.
   try {
     const cols = newsdb.get().prepare('PRAGMA table_info(news_items)').all().map((c) => c.name);
     if (!cols.includes('category')) newsdb.get().exec('ALTER TABLE news_items ADD COLUMN category TEXT');
+    newsdb.get().exec('CREATE INDEX IF NOT EXISTS idx_news_items_category ON news_items(category)');
   } catch { /* fresh table already has it */ }
   _schemaReady = true;
 }

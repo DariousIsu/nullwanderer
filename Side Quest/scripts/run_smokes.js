@@ -105,6 +105,7 @@ const smokes = [
   // Data-Stream (news) lane — isolated NEWS_DB_PATH / pure; offline-deterministic
   'smoke_feeds_view.js',
   'smoke_news_store.js',
+  'smoke_news_migrate.js',
   'smoke_news_poll.js',
   'smoke_news_watch.js',
   'smoke_news_lane.js',
