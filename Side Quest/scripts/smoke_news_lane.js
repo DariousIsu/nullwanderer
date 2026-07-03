@@ -185,12 +185,15 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   ok(/▸ \[BBC\]/.test(fmt) && /• \[CNN\]/.test(fmt), 'formatDeltas renders the developing-story timeline');
   ok(/\(developing\)/.test(lane.buildBriefing(lane.allStories())), 'buildBriefing flags a developing story');
 
-  // ===== DAILY PASS (stories → Echo event objects; mocked dispatch/landDoc) =====
+  // ===== DAILY PASS (worthy stories → PUBLIC Echo event objects via propose→promote; mocked dispatch) =====
   function mkDispatchState({ knownTargets = null } = {}) {
-    const calls = { propose_entity: [], propose_relation: [], landDoc: [] };
-    let c = 100;
+    const calls = { propose_entity: [], promote_proposal: [], propose_relation: [], landDoc: [] };
+    let pid = 100;
     const dispatch = async (tag) => {
-      if (tag.name === 'propose_entity') { calls.propose_entity.push(tag.args); return { ok: true, text: JSON.stringify({ action: 'created', entity_id: ++c, name: tag.args.name }) }; }
+      // Echo's external write surface lands every write as a tenant PROPOSAL (action:'proposed', a proposal id).
+      if (tag.name === 'propose_entity') { calls.propose_entity.push(tag.args); return { ok: true, text: JSON.stringify({ action: 'proposed', entity_id: ++pid, name: tag.args.name }) }; }
+      // promote_proposal copies the tenant proposal into the PUBLIC graph → returns the public entity_id (id+4900 here, so the chain is assertable).
+      if (tag.name === 'promote_proposal') { calls.promote_proposal.push(tag.args); return { ok: true, text: JSON.stringify({ entity_id: Number(tag.args.proposal_id) + 4900 }) }; }
       // REALISTIC Echo behavior: a rejected proposal (missing endpoint / not-whitelisted) still returns
       // transport ok=true, with action:'rejected' in the body — only the body distinguishes accept vs reject.
       if (tag.name === 'propose_relation') { calls.propose_relation.push(tag.args); const good = knownTargets ? knownTargets.includes(tag.args.target_name) : true; return { ok: true, text: JSON.stringify({ action: good ? 'created' : 'rejected' }) }; }
@@ -202,28 +205,31 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
 
   clearStories();
   await lane.clusterItems([kyivBBC], { now: NOW });
-  await lane.clusterItems([kyivDup], { now: NOW });   // → same story, source_count 2
-  await lane.clusterItems([antitrust], { now: NOW });  // → separate
+  await lane.clusterItems([kyivDup], { now: NOW });   // BBC+CNN, distinct headlines → ONE story, corroboration 2
+  await lane.clusterItems([antitrust], { now: NOW });  // single-source → corroboration 1
+  // ANTI-GLOB gate: only stories past the corroboration bar (default 2) are worthy of the public graph
   const forDaily = lane.storiesForDaily({ now: NOW });
-  ok(forDaily.length === 2 && forDaily[0].source_count === 2, 'storiesForDaily returns worthy stories, most-corroborated first');
+  ok(forDaily.length === 1 && /Kyiv/.test(forDaily[0].title), 'storiesForDaily gate: only the corroborated story is worthy (single-source antitrust stays in the raw pool)');
+  ok(lane.storiesForDaily({ now: NOW, minCorroboration: 1 }).length === 2, 'lowering the corroboration bar widens the net (antitrust included)');
 
   const DP = mkDispatchState();
   const r1 = await lane.runDailyPass({ dispatch: DP.dispatch, landDoc: DP.landDoc, now: NOW });
-  ok(r1.promoted === 2 && r1.docs === 2, 'runDailyPass: an event object + an evidence doc per story');
-  ok(DP.calls.propose_entity.length === 2 && DP.calls.propose_entity.every(a => a.entity_type === 'event'), 'every proposed hub is entity_type=event');
-  ok(lane.allStories().every(s => s.event_ref != null), 'each story captured an event_ref');
-  ok(/^\d+$/.test(String(lane.allStories()[0].event_ref)), 'event_ref is the captured numeric entity_id (not discarded)');
-  ok(DP.calls.landDoc.every(d => d.source === 'news' && /^news:story:/.test(d.ref)), 'evidence docs land with source=news + a stable story ref');
+  ok(r1.promoted === 1 && r1.docs === 1, 'runDailyPass promotes ONLY the worthy (corroborated) story');
+  ok(DP.calls.propose_entity.length === 1 && DP.calls.propose_entity[0].entity_type === 'event', 'the worthy story is proposed as entity_type=event');
+  ok(DP.calls.promote_proposal.length === 1 && DP.calls.promote_proposal[0].proposal_id != null, 'the tenant proposal is PROMOTED into the public graph (propose → promote_proposal, two-step)');
+  const kyivStory = lane.allStories().find(s => /Kyiv/.test(s.title));
+  ok(kyivStory && Number(kyivStory.event_ref) === Number(DP.calls.promote_proposal[0].proposal_id) + 4900, 'event_ref = the PUBLIC entity_id from promote_proposal (not the tenant proposal id)');
+  ok(DP.calls.landDoc.some(d => d.source === 'news' && /^news:story:/.test(d.ref)), 'the evidence doc lands with source=news + a stable story ref');
 
-  const beforeEntities = DP.calls.propose_entity.length;
   const r2 = await lane.runDailyPass({ dispatch: DP.dispatch, landDoc: DP.landDoc, now: NOW });
-  ok(r2.promoted === 0 && r2.updated === 2 && DP.calls.propose_entity.length === beforeEntities, 'second daily pass is idempotent (0 new events, updated=2, no re-propose)');
+  ok(r2.promoted === 0 && r2.updated === 1 && DP.calls.propose_entity.length === 1, 'second daily pass is idempotent (0 new, updated=1, no re-propose/promote)');
 
   // edges only form to endpoints that already exist (fail-soft, eventually consistent, no mistyped dups)
   clearStories();
   await lane.clusterItems([kyivDup], { now: NOW });
   const D2 = mkDispatchState({ knownTargets: ['Kyiv'] });
   const rp = await lane.promoteStory(lane.allStories()[0], { dispatch: D2.dispatch, landDoc: D2.landDoc, now: NOW });
+  ok(rp.event === true && D2.calls.promote_proposal.length === 1, 'promoteStory: propose→promote makes the event public before edging');
   ok(rp.edges >= 1 && D2.calls.propose_relation.some(a => a.target_name === 'Kyiv' && a.relation_type === 'LINKED_TO'), 'promoteStory forges event→principal edges with a WHITELISTED type (LINKED_TO, not the rejected "involves")');
   ok(D2.calls.propose_relation.some(a => a.target_name !== 'Kyiv'), 'promoteStory also ATTEMPTS edges to not-yet-existing principals (they fail soft, form on a later pass)');
   ok(rp.edges === D2.calls.propose_relation.filter(a => a.target_name === 'Kyiv').length, 'only ACCEPTED edges count — a rejected proposal (transport-ok, action:rejected) is NOT miscounted as an edge');

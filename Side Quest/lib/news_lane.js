@@ -531,17 +531,22 @@ function buildStoryDoc(story) {
 
 // Worthy stories to promote: open OR closed within the grace window, source-corroborated enough. Newest+
 // most-corroborated first. (Idempotent on event_ref, so re-promoting an open story just updates it.)
-function storiesForDaily({ now = Date.now(), closedGraceMs = 36 * 3600 * 1000, minSourceCount = 1, limit = 100 } = {}) {
+// ANTI-GLOB worthiness gate: only stories past an independent-corroboration bar (min(outlets, reports) >=
+// minCorroboration) are worthy of the PUBLIC graph — single-source noise stays in the raw pool. Default 2
+// = "corroborated" (multi-outlet wire OR a cross-modal broadcast+wire pair). Tunable down for a wider net.
+function storiesForDaily({ now = Date.now(), closedGraceMs = 36 * 3600 * 1000, minCorroboration = 2, limit = 100 } = {}) {
   ensureSchema();
   return newsdb.get().prepare(
     `SELECT * FROM news_stories
-     WHERE source_count >= ? AND (status = 'open' OR (status = 'closed' AND closed_at >= ?))
-     ORDER BY source_count DESC, last_ts DESC LIMIT ?`
-  ).all(minSourceCount, now - closedGraceMs, limit).map(hydrateStory);
+     WHERE MIN(outlet_count, report_count) >= ? AND (status = 'open' OR (status = 'closed' AND closed_at >= ?))
+     ORDER BY MIN(outlet_count, report_count) DESC, source_count DESC, last_ts DESC LIMIT ?`
+  ).all(minCorroboration, now - closedGraceMs, limit).map(hydrateStory);
 }
 
-// Propose the story as an Echo `event` entity and CAPTURE its entity_id (the graph_walk helper discards
-// it — we need it for event_ref idempotency). propose_entity → {action, entity_id, name}. Fail-soft.
+// Propose the story as an Echo `event` entity and CAPTURE its id. Echo's external write surface lands
+// EVERY write as a tenant PROPOSAL (action:'proposed', a tenant proposal_id) awaiting promotion — that's
+// the normal happy path here, NOT a failure. 'created'/'already_exists' mean already public. Only a
+// 'rejected'/'merge_suggested'/no-id is unusable. Returns { ok, entityId, action, proposed }. Fail-soft.
 async function proposeEventObject({ dispatch, name, summary }) {
   if (typeof dispatch !== 'function' || !name) return { ok: false };
   try {
@@ -551,12 +556,25 @@ async function proposeEventObject({ dispatch, name, summary }) {
     if (!r || !r.ok) return { ok: false, error: (r && (r.error || r.text)) || 'dispatch failed' };
     let entityId = null, action = null;
     try { const p = JSON.parse(r.text); entityId = p.entity_id != null ? p.entity_id : (p.result && p.result.entity_id); action = p.action; } catch {}
-    // A usable event hub requires a REAL entity_id from a create/exists — 'rejected' / 'merge_suggested' /
-    // an unparsed body is NOT a hub (transport ok=true does not mean the write was accepted). Surface why.
-    if (entityId == null || (action && action !== 'created' && action !== 'already_exists')) {
-      return { ok: false, action, error: 'no usable entity_id (action=' + (action || 'unparsed') + ')' };
-    }
-    return { ok: true, entityId, action };
+    const usable = entityId != null && (action === 'proposed' || action === 'created' || action === 'already_exists');
+    if (!usable) return { ok: false, action, error: 'no usable entity_id (action=' + (action || 'unparsed') + ')' };
+    return { ok: true, entityId, action, proposed: action === 'proposed' };
+  } catch (e) { return { ok: false, error: e && e.message }; }
+}
+
+// Promote a tenant proposal into the PUBLIC civic_graph so it becomes a real object (edges can only attach
+// to public endpoints). Two-step: propose_entity → promote_proposal. deps.dispatch(promote_proposal). Fail-
+// soft: tool absent / not-yet-exposed / error → ok:false → caller leaves the story un-reffed and RETRIES
+// next pass (idempotent). NOTE: promote_proposal's exact arg/return shape is the Echo context's to finalize
+// — parsed flexibly (proposal_id in; entity_id | public_id out); reconcile if their tool differs.
+async function promoteProposal({ dispatch, proposalId }) {
+  if (typeof dispatch !== 'function' || proposalId == null) return { ok: false };
+  try {
+    const r = await dispatch({ kind: 'do', name: 'promote_proposal', args: { proposal_id: proposalId } });
+    if (!r || !r.ok) return { ok: false, error: (r && (r.error || r.text)) || 'promote_proposal unavailable' };
+    let entityId = null;
+    try { const p = JSON.parse(r.text); entityId = p.entity_id != null ? p.entity_id : (p.public_id != null ? p.public_id : (p.result && p.result.entity_id)); } catch {}
+    return entityId != null ? { ok: true, entityId } : { ok: false, error: 'no public entity_id in promote response' };
   } catch (e) { return { ok: false, error: e && e.message }; }
 }
 
@@ -574,8 +592,17 @@ async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdg
   }
   if (!story.event_ref) {
     const ev = await proposeEventObject({ dispatch, name: story.title, summary: story.summary });
-    if (ev.ok && ev.entityId != null) { setEventRef(story.id, ev.entityId); story.event_ref = String(ev.entityId); res.event = true; }
-    else if (log) log(`[news-daily] event propose failed (story ${story.id}): ${ev.error || 'unknown'}`);
+    if (ev.ok && ev.entityId != null) {
+      // Two-step: a tenant proposal must be PROMOTED into the public graph before it's a real object (and
+      // before edges can attach). 'created'/'already_exists' are already public — no promote needed.
+      let publicId = ev.entityId;
+      if (ev.proposed) {
+        const pr = await promoteProposal({ dispatch, proposalId: ev.entityId });
+        publicId = (pr.ok && pr.entityId != null) ? pr.entityId : null;
+        if (publicId == null && log) log(`[news-daily] event proposed (id ${ev.entityId}) but promote failed/unavailable (story ${story.id}) — retry next pass`);
+      }
+      if (publicId != null) { setEventRef(story.id, publicId); story.event_ref = String(publicId); res.event = true; }
+    } else if (log) log(`[news-daily] event propose failed (story ${story.id}): ${ev.error || 'unknown'}`);
   } else { res.updated = true; }
   const principals = extractProperNouns(`${story.title}. ${story.summary || ''}`).slice(0, maxEdges);
   for (const p of principals) {
@@ -593,9 +620,9 @@ async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdg
 }
 
 // The nightly news-organization pass. Returns { promoted, updated, docs, edges, stories }.
-async function runDailyPass({ dispatch, landDoc, now = Date.now(), limit = 100, log } = {}) {
+async function runDailyPass({ dispatch, landDoc, now = Date.now(), limit = 100, minCorroboration = 2, log } = {}) {
   ensureSchema();
-  const stories = storiesForDaily({ now, limit });
+  const stories = storiesForDaily({ now, limit, minCorroboration });
   let promoted = 0, updated = 0, docs = 0, edges = 0;
   for (const s of stories) {
     const r = await promoteStory(s, { dispatch, landDoc, now, log });
@@ -621,5 +648,5 @@ module.exports = {
   // cluster adjudicator (ambiguous-band tiebreaker)
   adjInput, adjValidate, adjudicateSameEvent,
   // daily pass (stories → Echo event objects)
-  setEventRef, buildStoryDoc, storiesForDaily, proposeEventObject, promoteStory, runDailyPass,
+  setEventRef, buildStoryDoc, storiesForDaily, proposeEventObject, promoteProposal, promoteStory, runDailyPass,
 };
