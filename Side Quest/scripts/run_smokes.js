@@ -109,6 +109,7 @@ const smokes = [
   'smoke_news_poll.js',
   'smoke_news_watch.js',
   'smoke_news_lane.js',
+  'smoke_news_objects.js',
   'smoke_news_brief.js',
   'smoke_news_ads.js',
   'smoke_video_capture.js',
@@ -116,6 +117,12 @@ const smokes = [
   'smoke_email_intake.js',
   'smoke_news_topics.js',
   'smoke_news_rank.js',
+  // Forecasting suite — Suite-A polling adapters (pure, offline-deterministic)
+  'smoke_poll_wikipedia.js',
+  'smoke_poll_votehub.js',
+  'smoke_poll_538legacy.js',
+  // Forecasting suite — Suite-B models (pure, offline-deterministic)
+  'smoke_poll_average.js',
 ];
 
 let passed = 0, failed = 0;
