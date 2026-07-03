@@ -349,14 +349,39 @@ function _asOfMs(prov, createdTs) {
   return createdTs || 0;
 }
 
-// Pick the winner of a group: newest as_of, tiebreak newest created_ts. Returns {keep, drop[]}.
+// A fact's corroboration for the reconcile-aware tiebreak: the stored score (from lib/revise's
+// provenance.corroboration), else computed from its citations, else null (legacy fact — no data).
+function _corrob(row, R) {
+  const prov = _provParse(row);
+  if (prov.corroboration && typeof prov.corroboration === 'object') return prov.corroboration;
+  const cites = Array.isArray(prov.citations) ? prov.citations : [];
+  return cites.length ? R.score(cites) : null;
+}
+
+// Pick the winner of a group — RECONCILE-AWARE (Consolidate/C). Newest as_of by default (the legacy
+// behavior), BUT when BOTH facts carry corroboration AND the claim is STABLE/PERMANENT, a strictly-more-
+// corroborated fact beats a newer weakly-sourced one — reconcile's rule that a newer stable claim supersedes
+// only if its corroboration >= the incumbent's, so a fresh single read can't overturn a well-corroborated
+// durable fact. VOLATILE stays recency-led (a current office/role turns over — freshest wins) and LEGACY
+// facts with no corroboration fall through to pure recency, so the existing consolidation is unchanged.
+// Returns {keep, drop[]}.
 function _pickWinner(group) {
-  const keep = group.reduce((a, b) => {
-    const am = _asOfMs(_provParse(a), a.created_ts), bm = _asOfMs(_provParse(b), b.created_ts);
-    if (bm > am) return b;
-    if (bm < am) return a;
-    return (b.created_ts || 0) > (a.created_ts || 0) ? b : a;
-  });
+  let R = null; try { R = require('./reconcile'); } catch {}
+  const beats = (cand, keep) => {
+    if (R) {
+      const cc = _corrob(cand, R), kc = _corrob(keep, R);
+      if (cc && kc && R.classifyTtl(String(keep.content || '')) !== 'volatile') {
+        const candStronger = R._corrobAtLeast(cc, kc) && !R._corrobAtLeast(kc, cc);
+        const keepStronger = R._corrobAtLeast(kc, cc) && !R._corrobAtLeast(cc, kc);
+        if (candStronger) return true;
+        if (keepStronger) return false;   // more-corroborated incumbent holds against a newer weak claim
+      }
+    }
+    const cm = _asOfMs(_provParse(cand), cand.created_ts), km = _asOfMs(_provParse(keep), keep.created_ts);
+    if (cm !== km) return cm > km;
+    return (cand.created_ts || 0) > (keep.created_ts || 0);
+  };
+  const keep = group.reduce((a, b) => (beats(b, a) ? b : a));
   return { keep, drop: group.filter(r => r.id !== keep.id) };
 }
 

@@ -47,6 +47,22 @@ const provOf = (id) => { try { return JSON.parse(db.getDb().prepare('SELECT prov
     ok(srcOf(c1) === 'verified_fact_superseded' && srcOf(c2) === 'verified_fact', 'layer-2: c1 superseded, c2 kept');
     ok(provOf(c1).superseded_by === c2, 'c1 records superseded_by = c2 (cross-key phrasing drift)');
     ok(srcOf(b1) === 'verified_fact' && srcOf(b2) === 'verified_fact', 'same-as_of contradiction left BOTH live');
+
+    // CORROBORATION-AWARE (reconcile) — a well-corroborated STABLE fact is NOT overturned by a newer, weakly-
+    // sourced contradicting fact. This is the value the reconcile swap adds over naive as_of-wins.
+    // (null embeddings → layer-1 subject_key only, which is where the corroboration override lives — avoids
+    // the layer-2 semantic pass, which treats vectors as pre-normalized.)
+    const strongOld = db.insertKnowledge({ kind: 'note', content: 'Acme Corp was founded in 2001', source: 'verified_fact', importance: 0.9, embedding: null, provenance: { subject_key: 'acme-founded', as_of: '2020', corroboration: { reports: 5, outlets: 5, authority: 3, tier: 'widely reported' } } }).id;
+    const weakNew = db.insertKnowledge({ kind: 'note', content: 'Acme Corp was founded in 1999', source: 'verified_fact', importance: 0.9, embedding: null, provenance: { subject_key: 'acme-founded', as_of: '2026', citations: [{ url: 'https://blog/x', authority_tier: 1 }] } }).id;
+    await curator.reconcileVerifiedFacts({ apply: true });
+    ok(srcOf(strongOld) === 'verified_fact' && srcOf(weakNew) === 'verified_fact_superseded', 'corroboration override: a newer weak fact is superseded by an older WELL-CORROBORATED stable fact (not naive as_of-wins)');
+    ok(provOf(weakNew).superseded_by === strongOld, 'the weak-new fact records superseded_by = the corroborated old fact');
+
+    // control: WITHOUT corroboration on both, the same shape falls back to newest-as_of (legacy behavior)
+    const legacyOld = db.insertKnowledge({ kind: 'note', content: 'Beta LLC was founded in 2001', source: 'verified_fact', importance: 0.9, embedding: null, provenance: { subject_key: 'beta-founded', as_of: '2020' } }).id;
+    const legacyNew = db.insertKnowledge({ kind: 'note', content: 'Beta LLC was founded in 1999', source: 'verified_fact', importance: 0.9, embedding: null, provenance: { subject_key: 'beta-founded', as_of: '2026' } }).id;
+    await curator.reconcileVerifiedFacts({ apply: true });
+    ok(srcOf(legacyNew) === 'verified_fact' && srcOf(legacyOld) === 'verified_fact_superseded', 'legacy (no corroboration) → newest as_of still wins (unchanged behavior)');
   } catch (e) {
     fail++; console.error('  ✗ threw:', e.stack || e.message);
   } finally {
