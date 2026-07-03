@@ -65,6 +65,20 @@ vc.setCaptureDescription(capId, 'A candlestick chart of the S&P 500 trending up'
 const caps = vc.recentCaptures({ sinceMs: T - 1 });
 ok(caps.length === 1 && caps[0].cue === 'music' && /candlestick/.test(caps[0].description), 'recentCaptures returns the row incl. the vision description');
 
+// ===== captures retention (prune old rows + their PNG files) =====
+const capDir = path.join(os.tmpdir(), `sq_vidcap_png_${process.pid}`);
+try { fs.mkdirSync(capDir, { recursive: true }); } catch {}
+const oldPng = path.join(capDir, 'old.png'), newPng = path.join(capDir, 'new.png');
+fs.writeFileSync(oldPng, 'x'); fs.writeFileSync(newPng, 'y');
+const DAY = 86400000;
+vc.recordCapture({ source: 'S', ts: T - 10 * DAY, cue: 'music', imagePath: oldPng });   // stale
+vc.recordCapture({ source: 'S', ts: T - 1 * DAY, cue: 'music', imagePath: newPng });    // fresh
+const pr = vc.pruneCapturesOlderThan(T - 7 * DAY);
+ok(pr.rows === 1 && pr.files === 1, 'pruneCapturesOlderThan drops the stale row + its PNG file');
+ok(!fs.existsSync(oldPng) && fs.existsSync(newPng), 'the stale PNG is deleted; the fresh one is kept');
+ok(vc.recentCaptures({ sinceMs: 0, limit: 50 }).some((c) => c.image_path === newPng) && !vc.recentCaptures({ sinceMs: 0, limit: 50 }).some((c) => c.image_path === oldPng), 'only the fresh capture row remains');
+try { fs.rmSync(capDir, { recursive: true, force: true }); } catch {}
+
 // ===== url helpers =====
 ok(vc.videoId('https://www.youtube.com/watch?v=abcdEFGHijk') === 'abcdEFGHijk' && vc.videoId('https://youtu.be/abcdEFGHijk') === 'abcdEFGHijk', 'videoId parses watch + short URLs');
 

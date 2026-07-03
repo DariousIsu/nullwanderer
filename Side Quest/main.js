@@ -445,6 +445,14 @@ app.whenReady().then(() => {
       // RETENTION (Slice 3): tidy the short-term store — trim long-promoted docs to a pointer (full text
       // lives in Echo now) + drop skip-marked stragglers, so short-term stays a fast working set.
       try { retentionPass({}); } catch (e) { console.error('[retention] pass failed:', e.message); }
+      // NEWS CAPTURES retention: drop broadcast screenshot PNGs (derived/regenerable) + rows past the window
+      // so data/news_captures stays bounded. Window via NEWS_CAPTURES_RETAIN_DAYS (default 7). Raw RSS items
+      // are NOT pruned here — that reservoir's retention policy is intentionally left to an explicit decision.
+      try {
+        const retainDays = parseInt(process.env.NEWS_CAPTURES_RETAIN_DAYS || '', 10) || 7;
+        const pc = require('./lib/video_capture').pruneCapturesOlderThan(Date.now() - retainDays * 86400000);
+        if (pc.files || pc.rows) console.log(`[news-captures] retention — ${pc.files} PNGs + ${pc.rows} rows older than ${retainDays}d dropped`);
+      } catch (e) { console.error('[news-captures] retention failed:', e.message); }
     } catch (e) { console.error('[curation] pass failed:', e.message); }
     finally { curationRunning = false; }
   };

@@ -198,6 +198,17 @@ function recentCaptures({ sinceMs = 0, limit = 100 } = {}) {
   ensureSchema();
   return newsdb.get().prepare('SELECT * FROM news_captures WHERE ts >= ? ORDER BY ts DESC LIMIT ?').all(sinceMs, limit);
 }
+// Retention: drop capture rows AND their PNG files older than cutoffMs. Screenshots are derived/regenerable
+// and accumulate unbounded on disk, so this keeps the frames dir bounded. Deletes the file first (fail-soft
+// per file) then the row. Returns { rows, files } removed.
+function pruneCapturesOlderThan(cutoffMs) {
+  ensureSchema();
+  const rows = newsdb.get().prepare('SELECT image_path FROM news_captures WHERE ts < ?').all(cutoffMs);
+  let files = 0;
+  for (const r of rows) { try { if (r.image_path && fs.existsSync(r.image_path)) { fs.unlinkSync(r.image_path); files++; } } catch { /* file already gone */ } }
+  const del = newsdb.get().prepare('DELETE FROM news_captures WHERE ts < ?').run(cutoffMs).changes;
+  return { rows: del, files };
+}
 
 // --- in-page scripts (from the proven probe) ---------------------------------
 const JS_ENABLE_CC = `(() => { try {
@@ -319,7 +330,7 @@ module.exports = {
   parseCaptionLines, isNonSpeechCue, cueOf, deriveTitle, buildSegmentItem, buildVisionItem, feedKey, captureFileName,
   newFeedState, resetBuffer, processPoll, videoId, SCREEN_READ_PROMPT,
   // store
-  ensureSchema, recordCapture, setCaptureDescription, recentCaptures,
+  ensureSchema, recordCapture, setCaptureDescription, recentCaptures, pruneCapturesOlderThan,
   // engine
   CaptureLane,
 };

@@ -26,6 +26,14 @@ const reconcile = require('./reconcile');       // the shared belief-revision de
 const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'as', 'by', 'from', 'that', 'this', 'these', 'those', 'is', 'are', 'was', 'were', 'be', 'been', 'has', 'have', 'had', 'will', 'new', 'over', 'after', 'says', 'said', 'most', 'least', 'into', 'about', 'more', 'than', 'amid', 'his', 'her', 'their', 'its']);
 const norm = (s) => String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim();
 const stripHtml = (s) => String(s == null ? '' : s).replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim();
+// Drop a trailing " - Outlet" / " | Outlet" aggregator source tag (Google News appends it to headlines),
+// CASE-PRESERVING — for the STORY TITLE display. Same heuristic feeds_view uses for its syndication key.
+// Falls back to the original if a strip would empty the title (never returns '').
+function stripSourceSuffix(title) {
+  const t = String(title == null ? '' : title).trim();
+  const stripped = t.replace(/\s+[-–—|]\s+[^-–—|]{1,40}$/, '').trim();
+  return stripped || t;
+}
 
 function tokenSet(text, minLen = 4) {
   return new Set(norm(text).replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length >= minLen && !STOP.has(w)));
@@ -265,7 +273,7 @@ function createStory(item, sig, nowMs) {
   const info = newsdb.get().prepare(
     `INSERT INTO news_stories (cluster_key, title, entity_set, source_set, source_count, outlet_set, outlet_count, report_set, report_count, redaction, redaction_note, first_ts, last_ts, summary, category, status, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`
-  ).run(entities.slice().sort().join(' '), displayClean(item.title) || '(untitled)', JSON.stringify(entities),
+  ).run(entities.slice().sort().join(' '), displayClean(stripSourceSuffix(item.title)) || '(untitled)', JSON.stringify(entities),
     JSON.stringify([item.source]), 1, JSON.stringify(outlets), outlets.length, JSON.stringify(reports), reports.length,
     redaction ? 1 : 0, redaction ? `${redaction.kind}: "${redaction.phrase}"` : null,
     item.ts || nowMs, item.ts || nowMs, displayClean(item.summary).slice(0, 500) || null, category, nowMs);
@@ -701,7 +709,7 @@ async function runDailyPass({ dispatch, landDoc, now = Date.now(), limit = 100, 
 
 module.exports = {
   // pure
-  tokenSet, entitySet, jaccard, continuationScore, classifyContinuation, signatureOf,
+  tokenSet, entitySet, jaccard, continuationScore, classifyContinuation, signatureOf, stripSourceSuffix,
   parseAggregatorMembers, dedupeGrowingCaptions, isAdLine, stripAdLines, collapseRepeatedTitles,
   // confirmation: corroboration + redaction
   outletsOf, reportIdent, reportKeysOf, isSyndicatedRepublication, detectRedactionSignal, corroborationTier, newOutletsSince, storyConfirmation,

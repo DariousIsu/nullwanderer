@@ -58,6 +58,15 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   const collapsed = lane.collapseRepeatedTitles([kyivBBC, { title: 'At least 18 killed in the most massive Russian attack on Kyiv' }, antitrust]);
   ok(collapsed.length === 2, 'collapseRepeatedTitles drops a near-identical looped headline');
 
+  // stripSourceSuffix: drop the Google-News " - Outlet" / " | Outlet" tag, case-preserving
+  ok(lane.stripSourceSuffix('Senate passes the budget bill - Politico') === 'Senate passes the budget bill', 'stripSourceSuffix drops a trailing " - Outlet" aggregator tag');
+  ok(lane.stripSourceSuffix('Oil prices spike | Reuters') === 'Oil prices spike', 'stripSourceSuffix drops a trailing " | Outlet" tag');
+  ok(lane.stripSourceSuffix('Massive attack on Kyiv') === 'Massive attack on Kyiv', 'stripSourceSuffix leaves a plain headline unchanged');
+  ok(lane.stripSourceSuffix('- Politico') === '- Politico', 'stripSourceSuffix never empties a title (fallback to original)');
+  clearStories();
+  await lane.clusterItems([{ source: 'Google News', title: 'Historic climate deal reached at summit - The New York Times', summary: 'x', ts: T }], { now: NOW });
+  ok(lane.allStories()[0].title === 'Historic climate deal reached at summit', 'a story from a Google-News item stores the title WITHOUT the aggregator suffix');
+
   // ===== CONFIRMATION (corroboration + redaction) =====
   ok(JSON.stringify(lane.outletsOf({ source: 'Google News', members: [{ outlet: 'NBC' }, { outlet: 'NYT' }, { outlet: 'NBC' }] })) === JSON.stringify(['NBC', 'NYT']), 'outletsOf pulls + dedups aggregator member outlets');
   ok(JSON.stringify(lane.outletsOf({ source: 'BBC News' })) === JSON.stringify(['BBC News']), 'outletsOf falls back to the source for a plain feed');
