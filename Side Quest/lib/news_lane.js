@@ -20,6 +20,7 @@ const newsdb = require('./news_db');
 const { extractProperNouns } = require('./graph_walk');
 const newsTopics = require('./news_topics');   // pure — story category (news tuner)
 const newsRank = require('./news_rank');        // pure — the reserve/weight/cap balancer
+const reconcile = require('./reconcile');       // the shared belief-revision decision (spec §7: the news lane is its consumer)
 
 // --- pure text helpers -------------------------------------------------------
 const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'as', 'by', 'from', 'that', 'this', 'these', 'those', 'is', 'are', 'was', 'were', 'be', 'been', 'has', 'have', 'had', 'will', 'new', 'over', 'after', 'says', 'said', 'most', 'least', 'into', 'about', 'more', 'than', 'amid', 'his', 'her', 'their', 'its']);
@@ -578,6 +579,29 @@ async function promoteProposal({ dispatch, proposalId }) {
   } catch (e) { return { ok: false, error: e && e.message }; }
 }
 
+// NEWS LANE ADAPTER (reconciliation spec §7): a rolling story → the shared `Claim{kind:'event'}` shape the
+// reconciliation core consumes. The story already carries the syndication-aware corroboration (report_set =
+// independent reports, outlet_set = reach); we surface those as Citations so reconcile.score() reproduces the
+// SAME independent-corroboration math (the spec's "reuse the news-lane primitives"). Reports and outlets are
+// INDEPENDENT dimensions (syndication → outlets ≫ reports), so we decompose them into disjoint citations —
+// report-only (carries report_key, no outlet) and outlet-only (carries outlet, no report_key) — and score()
+// counts each set cleanly. Pure. `now` injected. authority_tier 2 = major outlet (news default).
+function storyToClaim(story, { now = Date.now() } = {}) {
+  const citations = [];
+  for (const rk of (story.report_set || [])) citations.push({ report_key: rk, authority_tier: 2, fetched_at: story.last_ts || now });
+  for (const o of (story.outlet_set || [])) citations.push({ outlet: o, authority_tier: 2, fetched_at: story.last_ts || now });
+  return {
+    kind: 'event',
+    subject: { name: story.title, type: 'event', ref: story.event_ref || null },
+    value: story.summary || story.title,
+    as_of: null,               // an event is timestamped by clustering, not an effective-date assertion
+    ttl_class: 'stable',       // events append regardless; set explicitly so reconcile needn't classify text
+    citations,
+    provenance: 'read',        // graph_memory epistemic gate: news is READ, not witnessed
+    lane: 'news',
+  };
+}
+
 // Promote ONE story: land evidence doc (→ promote rail extracts entities later), propose the event hub
 // (idempotent on event_ref), then forge event→principal edges. Edges use propose_relation ONLY (both
 // endpoints must already exist) — we do NOT guess principal types (extract_entities_from_doc creates
@@ -585,7 +609,17 @@ async function promoteProposal({ dispatch, proposalId }) {
 // forms on a later pass (eventually consistent, never a mistyped dup). Returns a per-story result.
 async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdges = 5, log } = {}) {
   ensureSchema();
-  const res = { storyId: story.id, doc: false, event: false, updated: false, edges: 0 };
+  const res = { storyId: story.id, doc: false, event: false, updated: false, edges: 0, decision: null };
+  // RECONCILIATION GATE (spec §4): route the story through the shared belief-revision decision as a Claim.
+  // For a citationed event this returns 'append' (events cluster, never supersede) — the story's own
+  // corroboration pre-filter (storiesForDaily) is the worthiness bar; reconcile enforces the hard invariant
+  // that NOTHING enters long-term memory without a citation. A story with no reports/outlets → 'reject' → skip.
+  const decision = reconcile.reconcile(storyToClaim(story, { now }), null, { resolution: 'nil', now });
+  res.decision = decision.action;
+  if (decision.action !== 'append' && decision.action !== 'new' && decision.action !== 'merge') {
+    log && log(`[news-daily] story ${story.id} NOT promoted (reconcile: ${decision.action}/${decision.reason})`);
+    return res;
+  }
   if (typeof landDoc === 'function') {
     try { await landDoc({ title: `News — ${story.title}`.slice(0, 120), body: buildStoryDoc(story), source: 'news', ref: `news:story:${story.id}`, understanding: story.summary || '' }); res.doc = true; }
     catch (e) { log && log('[news-daily] doc land failed: ' + (e && e.message)); }
@@ -623,13 +657,14 @@ async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdg
 async function runDailyPass({ dispatch, landDoc, now = Date.now(), limit = 100, minCorroboration = 2, log } = {}) {
   ensureSchema();
   const stories = storiesForDaily({ now, limit, minCorroboration });
-  let promoted = 0, updated = 0, docs = 0, edges = 0;
+  let promoted = 0, updated = 0, docs = 0, edges = 0, rejected = 0;
   for (const s of stories) {
     const r = await promoteStory(s, { dispatch, landDoc, now, log });
     if (r.event) promoted++; if (r.updated) updated++; if (r.doc) docs++; edges += r.edges;
+    if (r.decision && r.decision !== 'append' && r.decision !== 'new' && r.decision !== 'merge') rejected++;
   }
-  if (log) log(`[news-daily] pass: ${promoted} new event objects, ${updated} updated, ${docs} docs, ${edges} edges over ${stories.length} stories`);
-  return { promoted, updated, docs, edges, stories: stories.length };
+  if (log) log(`[news-daily] pass: ${promoted} new event objects, ${updated} updated, ${docs} docs, ${edges} edges${rejected ? `, ${rejected} reconcile-rejected` : ''} over ${stories.length} stories`);
+  return { promoted, updated, docs, edges, rejected, stories: stories.length };
 }
 
 module.exports = {
@@ -649,4 +684,6 @@ module.exports = {
   adjInput, adjValidate, adjudicateSameEvent,
   // daily pass (stories → Echo event objects)
   setEventRef, buildStoryDoc, storiesForDaily, proposeEventObject, promoteProposal, promoteStory, runDailyPass,
+  // reconciliation adapter (spec §7: story → Claim, consumed by lib/reconcile)
+  storyToClaim,
 };

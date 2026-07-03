@@ -110,6 +110,7 @@ const smokes = [
   'smoke_news_poll.js',
   'smoke_news_watch.js',
   'smoke_news_lane.js',
+  'smoke_news_claim.js',
   'smoke_news_objects.js',
   'smoke_news_brief.js',
   'smoke_news_ads.js',
@@ -125,6 +126,7 @@ const smokes = [
   // Forecasting suite — Suite-B models (pure, offline-deterministic)
   'smoke_poll_average.js',
   'smoke_forecast_service.js',
+  'smoke_forecast_sim.js',
   // API management stream — catalog + authenticated client + management layer (pure, offline; mocked fetch/clock)
   'smoke_api_client.js',
   'smoke_api_manager.js',
