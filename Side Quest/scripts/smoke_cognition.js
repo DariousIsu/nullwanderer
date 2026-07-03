@@ -50,6 +50,11 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   const routeMock = async (q) => ({ ok: true, text: 'John Curtis sponsored 42 bills in the 118th Congress.', chose: 'recipe count-bills' });
   const e = await cog.answerGrounded({ userMessage: 'how many bills did Curtis sponsor?', grounding: 'John Curtis (US-US) — US Senator', object: { id: 1524282, name: 'John Curtis (US-US)' }, deps: { ask: async ({ input }) => /42/.test(input.grounding) ? 'Curtis sponsored 42 bills.' : 'NEED: number of bills sponsored by John Curtis', dispatch: emptyGraph, routeNeed: routeMock } });
   ok(e && e.enriched === true && e.enrichSource === 'routed' && /42/.test(e.say), 'graph empty → routeNeed (cloud tool executor) answers the count');
+  // _enrichRouted must NOT feed an error / no-fit result as grounding (the stale "Lloyd Austin" bug: an
+  // error-as-grounding made the model confabulate from training AND short-circuit excavation).
+  ok((await cog._enrichRouted('x', { routeNeed: async () => ({ ok: false, isError: true, text: '1 validation error: unexpected keyword argument for the tool' }) })).text === '', '_enrichRouted: tool error → no grounding (never confabulate from an error)');
+  ok((await cog._enrichRouted('x', { routeNeed: async () => ({ ok: false, routed: true, text: 'I looked for an Echo tool but nothing fit; this may be an open-web question.' }) })).text === '', '_enrichRouted: no-fit message → no grounding');
+  ok(/42/.test((await cog._enrichRouted('x', { routeNeed: async () => ({ ok: true, text: 'John Curtis sponsored 42 bills in the 118th Congress.', chose: 'recipe count' }) })).text), '_enrichRouted: genuine success → grounding');
 
   // 6) THE dying-question fix: graph empty → WIKIPEDIA tier recovers a fact no local tier held.
   const wikiMock = async () => [{ title: 'Lee Zeldin', extract: 'Lee Zeldin is the 17th administrator of the EPA since January 2025.' }];

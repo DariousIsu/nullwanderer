@@ -175,9 +175,14 @@ async function _enrichRouted(need, deps = {}) {
   const route = deps.routeNeed || ((q) => { try { return require('./echo_suit').routeNeed(q); } catch { return Promise.resolve(null); } });
   try {
     const r = await route(need);
-    if (r && (r.ok || r.text)) {
+    // ONLY genuine SUCCESS data — never feed an error / no-fit / validation message as "grounding". Doing so
+    // made the model confabulate from stale training ("current SecDef" → "Lloyd Austin") AND short-circuit
+    // the escalation before excavation. r.ok && !isError is the success gate; ARG/no-fit results fall through.
+    if (r && r.ok && !r.isError) {
       const t = String(r.text || '').replace(/\s+/g, ' ').trim();
-      if (t.length > 40) return { text: `Looked up in our records (${r.chose || 'tool'}): ${t.slice(0, 2400)}`, url: null };   // Echo tool — our data
+      if (t.length > 40 && !/^(no|nothing|I looked|could(n't| not)|error)\b/i.test(t)) {
+        return { text: `Looked up in our records (${r.chose || 'tool'}): ${t.slice(0, 2400)}`, url: null };   // Echo tool — our data
+      }
     }
   } catch {}
   return { text: '', url: null };
