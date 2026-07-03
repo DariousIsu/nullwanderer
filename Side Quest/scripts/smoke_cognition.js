@@ -131,6 +131,28 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
     writeBack: async () => {} } });
   ok(pB && pB.enrichSource === 'web' && /Trump/.test(pB.say) && !/Biden/i.test(pB.say), 'currency guard: fresh-check fails but the fall-through ladder (web) recovers the current answer');
 
+  // 10d) OFFICE-HOLDER Q → FRESH SOURCES LEAD (our KG may be stale). Regression lock for the live "who's the
+  // president?" → graph tier served Echo's stale "Joe Biden". The graph would answer "Biden"; wiki answers the
+  // fresh "Trump". Because it's an office-holder question the ladder must run wiki FIRST → Trump, not the KG's
+  // stale Biden. ("who's the" isn't matched by _CURRENCY_RE — the office-word signal is what triggers it.)
+  const staleKgDispatch = async ({ name }) => name === 'search_entities'
+    ? { ok: true, text: JSON.stringify([{ name: 'Joe Biden', entity_type: 'person', summary: '46th president of the United States' }]) }
+    : { ok: true, text: JSON.stringify({ rows: [] }) };
+  const od = await cog.answerGrounded({ userMessage: "who's the president?", grounding: '', deps: {
+    ask: async ({ input }) => { const gg = String(input.grounding); return /trump/i.test(gg) ? 'Donald Trump is the president.' : (/biden/i.test(gg) ? 'Joe Biden is the president.' : 'NEED: current US president'); },
+    dispatch: staleKgDispatch, wikiLookup: async () => [{ title: 'President of the United States', extract: 'The current president of the United States is Donald Trump, who assumed office on January 20, 2025.' }],
+    webSearch: async () => ({ results: [] }), excavate: async () => ({ found: false }), routeNeed: async () => ({ ok: false }), writeBack: async () => {} } });
+  ok(od && od.enrichSource === 'wiki' && /Trump/.test(od.say) && !/Biden/i.test(od.say), 'office-holder Q: FRESH (wiki) leads over our stale graph → "Trump", not the KG stale "Biden"');
+  // 10e) CONTROL: a multi-hop question (no office word) must STILL lead with the graph — the reorder is office-scoped.
+  const graphDispatch = async ({ name }) => name === 'search_entities'
+    ? { ok: true, text: JSON.stringify([{ name: 'Sam Altman', entity_type: 'person', summary: 'CEO of OpenAI, the company that makes ChatGPT' }]) }
+    : { ok: true, text: JSON.stringify({ rows: [] }) };
+  const md = await cog.answerGrounded({ userMessage: 'who leads the company that makes ChatGPT?', grounding: '', deps: {
+    ask: async ({ input }) => /altman/i.test(String(input.grounding)) ? 'Sam Altman leads OpenAI.' : 'NEED: leader of the company that makes ChatGPT',
+    dispatch: graphDispatch, wikiLookup: async () => [{ title: 'x', extract: 'irrelevant filler' }],
+    webSearch: async () => ({ results: [] }), excavate: async () => ({ found: false }), routeNeed: async () => ({ ok: false }), writeBack: async () => {} } });
+  ok(md && md.enrichSource === 'graph' && /Altman/.test(md.say), 'multi-hop Q (no office word): graph still leads → OpenAI→Altman (reorder is office-scoped)');
+
   // 11) _kickWriteBack skips when there's no source URL (graph/routed = our own data → nothing to bank).
   let kicked = false;
   cog._kickWriteBack({ query: 'q', answer: 'a', url: null, source: 'graph', deps: { writeBack: async () => { kicked = true; } } });

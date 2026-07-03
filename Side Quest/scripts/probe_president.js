@@ -22,7 +22,7 @@ const L = (s) => console.log(s);
   const ad = require(path.join(SQ, 'lib', 'answer_draft')), ar = require(path.join(SQ, 'lib', 'active_recall'));
   const mention = require(path.join(SQ, 'lib', 'mention'));
 
-  const Q = 'who is the president of the United States?';
+  const Q = process.argv.slice(2).join(' ').trim() || 'who is president now?';
   L(`\nQ: ${Q}`);
   L(`_CURRENCY_RE match: ${/\b(current(ly)?|now(adays)?|today|latest|recently|these days|right now|as of|this (?:week|month|year)|who is the)\b/i.test(Q)}`);
 

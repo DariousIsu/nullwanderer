@@ -27,6 +27,13 @@ const NEED_RE = /^\s*NEED:\s*(.+)$/is;
 // "Representative"; he's been EPA Administrator since Jan 2025). These force a fresh-source verify before
 // we trust a plausible grounded answer. Read-time slice of the self-heal (verify-when-currency-signaled).
 const _CURRENCY_RE = /\b(current(ly)?|now(adays)?|today|latest|recently|these days|right now|as of|this (?:week|month|year)|who is the)\b/i;
+// A CURRENT-OFFICE-HOLDER question ("who's the president?", "who is the CEO of Nvidia?", "who's the governor
+// of Texas?"). The answer TURNS OVER, so our own KG (the graph tier) may be stale (Echo still records Biden
+// as president). For these, FRESH sources must LEAD the enrich ladder — the graph is not the authority on who
+// holds an office NOW. Requires an explicit OFFICE word after "who ('s/is/are)", so multi-hop "who LEADS the
+// company that makes ChatGPT" (no office word → graph-first, OpenAI→Altman) is untouched. Pairs with the
+// echo_suit office-title GATE (which stops the bare title resolving to a same-named junk person).
+const _OFFICE_HOLDER_Q = /\bwho(?:'s|\s+is|\s+are|\s+se)\b[^?.!]*\b(president|potus|vice[-\s]?president|governor|senators?|congress(?:man|woman|person)|representatives?|mayor|secretary|attorney\s+general|prime\s+minister|premier|chancellor|chair(?:man|woman|person)?|ceo|cfo|cto|coo|administrator|pope|king|queen|monarch|ambassador|speaker|chief\s+justice|justices?|commissioner|treasurer|comptroller|sheriff)\b/i;
 
 // GUARD for the heavy, visible EXCAVATION tier — a rendered page can only settle a FACT lookup. Fire freely
 // for entity/encyclopedic needs (the research fuel Lucas wants), but skip subjective/advice/personal needs
@@ -268,7 +275,16 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   // the cloud tool-executor (specialized Echo tools: counts/lists) → last-ditch DDG. Re-draft after each;
   // stop as soon as the grounding can actually answer. This is "let me find out" — never a dead-end, never
   // invented. Wiki sits before routed/web because the audit proved those two reach nothing on simple facts.
-  for (const mode of ['graph', 'wiki', 'routed', 'web', 'excavate']) {
+  // Tier order by question kind. An OFFICE-HOLDER question ("who's the president/SecDef/CEO?") is answered
+  // ONLY from FRESH external sources — our own KG (graph/routed) is precisely the stale source here (Echo
+  // records Biden as president, Austin as SecDef), and it sits before the forensic tiers, so it would
+  // intercept with a confidently-stale name. Exclude it. A general CURRENT fact (counts, "latest bill")
+  // keeps our data but leads with wiki. Everything else leads with the graph (multi-hop/relational).
+  const _msg = String(userMessage);
+  const _modes = _OFFICE_HOLDER_Q.test(_msg) ? ['wiki', 'web', 'excavate']
+    : _CURRENCY_RE.test(_msg) ? ['wiki', 'graph', 'routed', 'web', 'excavate']
+    : ['graph', 'wiki', 'routed', 'web', 'excavate'];
+  for (const mode of _modes) {
     if (!step || !step.need) break;
     const res = mode === 'graph' ? await _enrichGraph(step.need, object, deps)
               : mode === 'wiki' ? await _enrichWiki(step.need, deps)

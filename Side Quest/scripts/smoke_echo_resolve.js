@@ -126,6 +126,15 @@ function dispatch({ sibling = true } = {}) {
   // KEEP: the bill carve-out — canonical name is a number, matches on title → must NOT be name-gated away
   ok(G('Inflation Reduction Act', { name: 'HR 5376 (US, 117)', type: 'bill', subtype: 'bill' }) === true, 'gate: bill carve-out keeps "Inflation Reduction Act" → HR 5376');
   ok(G('anything', null) === false, 'gate: null object → reject');
+  // ── office-title gate — a bare office/role title is a CURRENT-HOLDER question, never a same-named junk person ──
+  const OT = echo._isBareOfficeTitle;
+  ok(OT('president') === true && OT('the president') === true && OT('the CEO') === true, 'office-title: bare "president"/"the president"/"the CEO" → true');
+  ok(OT('governor') === true && OT('attorney general') === true && OT('the current chair') === true, 'office-title: "governor"/"attorney general"/"the current chair" → true');
+  ok(OT('Marco Rubio') === false && OT('Nvidia') === false && OT('') === false, 'office-title: a real name / org / empty → false');
+  ok(OT('president of Microsoft') === false && OT('governor of Texas') === false, 'office-title: a QUALIFIED office (keeps a non-title token) → false (only the bare generic is caught)');
+  // the live bug: "who\'s the president?" → "THE PRESIDENT" (a Wisconsin city councilmember) must be REJECTED
+  ok(G('president', { name: 'THE PRESIDENT', type: 'person', subtype: 'city_councilmember' }) === false, 'gate: bare "president" → "THE PRESIDENT" councilmember → REJECT (→ ∅ → recovery ladder)');
+  ok(G('the CEO', { name: 'THE CEO INC', type: 'person', subtype: 'unclassified' }) === false, 'gate: bare "the CEO" → junk person → REJECT');
 
   // ── relatedEntities — GRAPH TRAVERSAL via the relations table (kg_neighborhood returns 0; the real edges
   // live here). Extracts role + current (tenure_end=null) from relation_metadata. ──

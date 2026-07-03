@@ -567,8 +567,25 @@ function _sameEntity(cands) {
 //     "AH DEFENSE LLC …" / "CALIFORNIA STATE …" qualifier-junk that merely CONTAINS the query tokens.
 // Rejecting junk → the object becomes ∅ → the cloud/wiki answers cleanly (and deterministically). Pure.
 const _BILLISH_RE = /bill|legislation|resolution|statute|\blaw\b|document|ordinance|act\b/i;
+// A BARE OFFICE/ROLE TITLE ("president", "the president", "the CEO", "governor", "attorney general") is NOT an
+// entity reference — it's a CURRENT-OFFICE-HOLDER question, and it must NEVER resolve to a same-named junk
+// PERSON record: "who's the president?" lit up "THE PRESIDENT" (a Wisconsin city councilmember) → a confidently
+// wrong answer; "president now" lit up "PRESIDENT QUINCI" (a PR candidate). These slip `_coreNameKey` because
+// it strips title words → an empty/degenerate key the name-gate then waves through. Detect the bare-title
+// mention and REJECT the resolve → object ∅ → the turn drafts a NEED → the recovery ladder finds the CURRENT
+// holder from a fresh source (proven reliable). A QUALIFIED office ("governor of Texas", "president of
+// Microsoft") keeps a non-title token, so it is NOT caught — only the generic-title junk magnet is. Pure.
+const _OFFICE_STOP = new Set(['the', 'a', 'an', 'current', 'currently', 'sitting', 'incumbent', 'present', 'new', 'us', 'u', 's', 'usa', 'american', 'united', 'states', 'state', 'of', 'our', 'my', 'your', 'who', 'is', 'now', 'today', 'this', 'that', 'country', 'nation']);
+const _OFFICE_WORD = new Set(['president', 'vice', 'vp', 'potus', 'flotus', 'governor', 'gov', 'senator', 'sen', 'congressman', 'congresswoman', 'congressperson', 'representative', 'rep', 'mayor', 'secretary', 'attorney', 'general', 'prime', 'minister', 'premier', 'chancellor', 'chair', 'chairman', 'chairwoman', 'chairperson', 'ceo', 'cfo', 'cto', 'coo', 'director', 'administrator', 'pope', 'king', 'queen', 'monarch', 'emperor', 'ambassador', 'speaker', 'justice', 'commissioner', 'treasurer', 'comptroller', 'sheriff', 'taoiseach']);
+function _isBareOfficeTitle(mention) {
+  const toks = String(mention || '').toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
+  const content = toks.filter(t => !_OFFICE_STOP.has(t));
+  if (!content.length) return false;                 // nothing but stopwords → let other logic handle it
+  return content.every(t => _OFFICE_WORD.has(t));     // every meaningful token is an office word → bare title
+}
 function _relevanceGate(mention, obj) {
   if (!obj) return false;
+  if (_isBareOfficeTitle(mention)) return false;      // office-title question → never a same-named person; route to recovery
   const typeStr = `${obj.type || ''}/${obj.subtype || ''}`;
   if (_BILLISH_RE.test(typeStr)) return true;                     // bill/doc: matches on title, not name → trust
   const mk = _coreNameKey(mention), ok = _coreNameKey(obj.name);
@@ -802,5 +819,5 @@ async function wikiLookup(query, { dispatch = null, pages = 3, sentences = 4 } =
 
 module.exports = {
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _setLiveForTest
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _setLiveForTest
 };
