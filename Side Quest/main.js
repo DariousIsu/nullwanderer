@@ -345,28 +345,6 @@ function createCanvasWindow() {
   return canvasWindow;
 }
 
-let forecastWindow = null;
-// Forecasting — the downstream processing surface: a widget host where each MODEL renders as its own
-// widget (lib/forecast_service builds each payload from the poll connectors; no prod DB touched). Own
-// standalone window (mirrors Canvas/Editor); loads renderer/forecast.html.
-function createForecastWindow() {
-  if (forecastWindow && !forecastWindow.isDestroyed()) { forecastWindow.focus(); return forecastWindow; }
-  const windowState = require('./lib/window_state');
-  forecastWindow = new BrowserWindow({
-    ...windowState.options('forecast', { width: 1200, height: 880 }),
-    backgroundColor: '#0d0d10',
-    title: 'Forecasting',
-    autoHideMenuBar: true,
-    show: false,
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false },
-  });
-  forecastWindow.loadFile(path.join(__dirname, 'renderer', 'forecast.html'));
-  windowState.track(forecastWindow, 'forecast');
-  forecastWindow.once('ready-to-show', () => { forecastWindow.show(); forecastWindow.focus(); });
-  forecastWindow.on('closed', () => { forecastWindow = null; });
-  return forecastWindow;
-}
-
 app.whenReady().then(() => {
   config.loadEnv();
   db.init();
@@ -1057,9 +1035,9 @@ app.on('window-all-closed', async () => {
 ipcMain.handle('editor:open', () => { createEditorWindow(); return { ok: true }; });
 ipcMain.handle('workspace:open', () => { createWorkspaceWindow(); return { ok: true }; });
 ipcMain.handle('canvas:open', () => { createCanvasWindow(); return { ok: true }; });
-ipcMain.handle('forecast:open', () => { createForecastWindow(); return { ok: true }; });
 
-// Forecasting processing side — each widget's payload is built in lib/forecast_service (reads the poll
+// Forecasting processing side — the Forecasting STUDIO (renderer/forecast.html, a surface inside My
+// Workspace) invokes these. Each widget's payload is built in lib/forecast_service (reads the poll
 // connectors; no prod DB). Fail-soft so a feed error never breaks the surface.
 ipcMain.handle('forecast:widgets', () => { try { return require('./lib/forecast_service').listWidgets(); } catch (e) { return []; } });
 ipcMain.handle('forecast:poll-average', async (_e, opts) => {
@@ -3155,6 +3133,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const cleanNotes = (recallResult.notes || []).filter(n => n && !/research_dossier|focus_tombstone|focus_state|tombstone|dossier/i.test(String((n && n.source) || '')));
       rkRows = cleanNotes.slice();
       const parts = [];
+      // PRECEDENCE (reconciliation §5) — a fresh, cited verified_fact about this entity LEADS and supersedes
+      // the stored dossier's stale role/office detail. Surfaced independently (and rkRows-first) so the
+      // rich-object note suppression below can't drop it — the Pam Bondi bug was a rich object hiding the
+      // correction entirely, leaving recall to serve the stale "is the AG" record.
+      if (recallResult.precedenceFact) {
+        const pf = recallResult.precedenceFact;
+        parts.push(`MOST CURRENT — VERIFIED${pf.asOf ? ` as of ${pf.asOf}` : ''}. This is more recent than the stored record; trust it over any conflicting current-role/office detail below:\n  • ${pf.content}`);
+        rkRows.unshift({ content: pf.content, source: 'verified_fact' });
+      }
       const objLines = ar._objectLines(recallResult.object);
       if (objLines.length) {
         parts.push('What you already hold on this — your memory-graph record (answer directly FROM this, it is yours):\n' + objLines.join('\n'));

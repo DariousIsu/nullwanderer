@@ -194,6 +194,33 @@ const noGraph = () => [];
     // pass-through: an "ok" verdict keeps the resolved object untouched (the legislative-research case)
     const rOk = await ar.recall('John F. Kennedy', { retrieveFn: async () => [], graphFn: noGraph, echoFn: async () => [], objectFn: async () => jfkGa, prominenceFn: async () => ({ status: 'ok' }) });
     ok(rOk.object && rOk.object.degree === 1533 && !rOk.identityNote, 'recall: prominence "ok" → the KG record is kept (legislative-research path unbroken)');
+
+    // ── PRECEDENCE GATE (reconciliation §5) — a fresh, cited role correction LEADS over the stale KG dossier
+    // (the Pam Bondi fix). The dossier claims she IS the AG; a researched correction says she served UNTIL Apr. ──
+    const bondiObj = { id: 1, name: 'Pam Bondi (US)', type: 'person', subtype: 'us_executive', degree: 20, facts: ['Pam Bondi (US) — title: Attorney General'], committees: [], neighbors: [] };
+    const bondiFix = note('verified_fact', 'Pam Bondi served as US Attorney General until 2026-04-02', { subject: 'Pam Bondi', subject_key: 'pam-bondi', as_of: '2026-04-02', capturedBy: 'directed-research', url: 'https://justice.gov/x' });
+    const rBondi = await ar.recall('Pam Bondi', { retrieveFn: async () => [bondiFix], graphFn: noGraph, echoFn: async () => [], objectFn: async () => bondiObj });
+    ok(rBondi.precedenceFact && /until 2026-04-02/.test(rBondi.precedenceFact.content) && rBondi.precedenceFact.asOf === '2026-04-02', 'recall: fresh role correction about the object → precedenceFact set (the Pam Bondi fix)');
+    const blkBondi = await ar.knowledgeBlock('Pam Bondi', { retrieveFn: async () => [bondiFix], graphFn: noGraph, echoFn: async () => [], objectFn: async () => bondiObj });
+    ok(/MOST CURRENT/.test(blkBondi) && blkBondi.indexOf('MOST CURRENT') < blkBondi.indexOf('[object]'), 'knowledgeBlock: the correction LEADS above the stale dossier (recall stops serving the stale record)');
+
+    // subject match is subset-containment — a shared SURNAME alone must not trigger a false supersession
+    const janeNote = note('verified_fact', 'Jane Smith served as mayor until 2025', { subject: 'Jane Smith', as_of: '2025-01-01', capturedBy: 'directed' });
+    const rMis = await ar.recall('John Smith', { retrieveFn: async () => [janeNote], graphFn: noGraph, echoFn: async () => [], objectFn: async () => ({ id: 2, name: 'John Smith (US)', type: 'person', degree: 10, facts: ['x'], committees: [], neighbors: [] }) });
+    ok(!rMis.precedenceFact, 'recall: verified_fact about a different same-surname subject → no precedence (subset match, not shared surname)');
+
+    // a minor (non-role) fact must NOT override the whole dossier
+    const voteNote = note('verified_fact', 'Pam Bondi voted yes on HR 123 on 2026-01-15', { subject: 'Pam Bondi', as_of: '2026-01-15', capturedBy: 'directed' });
+    const rVote = await ar.recall('Pam Bondi', { retrieveFn: async () => [voteNote], graphFn: noGraph, echoFn: async () => [], objectFn: async () => bondiObj });
+    ok(!rVote.precedenceFact, 'recall: a minor non-role verified_fact → no precedence (does not override the dossier)');
+
+    // a PASSIVE single-source VOLATILE role claim is below the bar; a DELIBERATE one clears it
+    const passiveVol = note('verified_fact', 'Pam Bondi is currently the Attorney General', { subject: 'Pam Bondi', as_of: '2026-01-01', capturedBy: 'realtime' });
+    const rPassive = await ar.recall('Pam Bondi', { retrieveFn: async () => [passiveVol], graphFn: noGraph, echoFn: async () => [], objectFn: async () => bondiObj });
+    ok(!rPassive.precedenceFact, 'recall: passive single-source volatile role claim (authority 2) → below the bar → no precedence');
+    const deliberateVol = note('verified_fact', 'Pam Bondi is currently the Attorney General', { subject: 'Pam Bondi', as_of: '2026-01-01', capturedBy: 'excavation' });
+    const rDelib = await ar.recall('Pam Bondi', { retrieveFn: async () => [deliberateVol], graphFn: noGraph, echoFn: async () => [], objectFn: async () => bondiObj });
+    ok(!!rDelib.precedenceFact, 'recall: deliberately-excavated volatile role fact (authority 3) → clears the bar → precedence');
   } catch (e) {
     fail++; console.error('  ✗ threw:', e.stack || e.message);
   }

@@ -25,7 +25,7 @@ function _hasObject(obj) { return !!(obj && ((obj.facts || []).length || (obj.co
 
 async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retrieveFn = null, graphFn = null, echoFn = null, objectFn = null, prominenceFn = null, object = true } = {}) {
   const t = String(topic || '').trim();
-  if (!t) return { topic: t, notes: [], facts: [], object: null, coverage: 'thin', echo: 0, mention: null, identityNote: null };
+  if (!t) return { topic: t, notes: [], facts: [], object: null, coverage: 'thin', echo: 0, mention: null, identityNote: null, precedenceFact: null };
   const retrieve = retrieveFn || ((q) => memory.retrieveScored(q, { k, minRelevance }));
   let local = []; try { local = (await retrieve(t)) || []; } catch { local = []; }
   let facts = []; try { facts = (graphFn ? graphFn(t) : _graphFacts(t)) || []; } catch { facts = []; }
@@ -70,7 +70,10 @@ async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retriev
   let echoHits = []; try { echoHits = (echoFn ? await echoFn(t) : await _echoSearch(t)) || []; } catch { echoHits = []; }
   const notes = local.concat(echoHits);
   const rich = _objectRich(obj) || notes.length >= RICH_NOTES || local.some(n => n.source === 'verified_fact') || facts.length >= 3 || echoHits.length >= 2;
-  return { topic: t, notes, facts, object: obj, coverage: rich ? 'rich' : 'thin', echo: echoHits.length, mention: mentionUsed, identityNote };
+  // PRECEDENCE — a fresh, deliberate verified_fact about this object leads over its (stale) KG dossier.
+  let precedenceFact = null;
+  if (obj) { try { precedenceFact = _precedenceFact(obj, notes, mentionUsed); } catch {} }
+  return { topic: t, notes, facts, object: obj, coverage: rich ? 'rich' : 'thin', echo: echoHits.length, mention: mentionUsed, identityNote, precedenceFact };
 }
 // Entity-shaped = a name/short phrase we can hand to quick_lookup (single-name → dossier), not a
 // full sentence. Keeps the object pull cheap + on-target.
@@ -104,6 +107,51 @@ function extractEntity(text) {
 }
 function _echoSearch(topic) { try { return require('./echo_suit').recallKnowledge(topic); } catch { return Promise.resolve([]); } }
 function _echoObject(topic, preferType = null) { try { return require('./echo_suit').recallObject(topic, preferType ? { preferType } : {}); } catch { return Promise.resolve(null); } }
+
+// ── PRECEDENCE GATE (reconciliation §5 — the Pam Bondi fix) ─────────────────────────────────────────────
+// A FRESH, deliberately-banked verified_fact about the resolved object's subject must LEAD the grounding
+// over the object's (possibly stale) KG dossier. Without this a RICH Echo object dominates: main.js drops
+// the notes when the object is rich, so the cited correction ("Bondi served as AG until 2026-04-02") never
+// reaches the grounding and recall serves the stale record ("Bondi is the AG"). reconcile.precedence makes
+// the call; authority is derived from HOW the fact was banked (a deliberate correction — she excavated it or
+// Lucas told her — is authoritative), so no capture-code change. Only VOLATILE facts (roles/offices — the
+// class that turns over) can supersede a dossier detail. Returns the winning fact note, or null. Pure.
+const _PC_DELIBERATE = /excavat|directed|research|chat|correction|told|operator|\bweb\b/i;
+function _factAuthority(prov) { return _PC_DELIBERATE.test(String((prov && prov.capturedBy) || '')) ? 3 : 2; }
+function _coreKeyOf(s) { try { return require('./echo_suit')._coreNameKey(s); } catch { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim(); } }
+// Subset containment on the name tokens — "Pam Bondi" ⊆ the object's core key, but "Jane Smith" ⊄ "John Smith"
+// (a shared surname alone must NOT match). Pure.
+function _subjectMatches(a, b) {
+  const A = String(a || '').split(' ').filter(Boolean), B = String(b || '').split(' ').filter(Boolean);
+  if (!A.length || !B.length) return false;
+  const [short, longSet] = A.length <= B.length ? [A, new Set(B)] : [B, new Set(A)];
+  return short.every(t => longSet.has(t));
+}
+// The belief-REVISION domain: a role/office/status fact — the kind that goes stale in a dossier and that a
+// correction overturns. This is the precedence trigger, NOT the fact's own ttl_class: "Bondi served as AG
+// until 2026-04-02" reads as a CLOSED (permanent-classified) historical statement, yet it revises the
+// object's CURRENT-role claim ("is the AG"). Gating on role/office language captures that while excluding
+// minor events ("voted yes on HR123") that should never override the whole dossier. Reuses office terms.
+const _ROLE_RE = /\b(president|vice[\s-]?president|potus|secretary|attorney general|administrator|director|governor|senator|representative|congress(?:man|woman|person)|minister|chancellor|premier|mayor|chair(?:man|woman|person)?|c[eo]o|cto|ambassador|speaker|justice|commissioner|chief|leader|office|title|role|serves?\s+as|served\s+as|appointed|resign(?:ed|s|ation)?|stepp?ed\s+down|removed|ousted|confirmed\s+as|sworn\s+in|took\s+office|left\s+office|no\s+longer|until\s+\d)\b/i;
+function _precedenceFact(obj, notes, mention, deps = {}) {
+  const R = deps.reconcile || (() => { try { return require('./reconcile'); } catch { return null; } })();
+  if (!R || !obj) return null;
+  const objKey = _coreKeyOf(obj.name) || _coreKeyOf(mention);
+  if (!objKey) return null;
+  let best = null;
+  for (const n of (notes || [])) {
+    if (!n || n.source !== 'verified_fact') continue;
+    let prov = {}; try { prov = n.provenance ? (typeof n.provenance === 'string' ? JSON.parse(n.provenance) : n.provenance) : {}; } catch {}
+    const subjKey = _coreKeyOf(prov.subject || prov.subject_key || '');
+    if (!subjKey || !_subjectMatches(objKey, subjKey)) continue;      // the fact must be ABOUT this object
+    const value = String(n.content || '');
+    if (!_ROLE_RE.test(value)) continue;                             // belief-revision domain only (role/office/status)
+    const fact = { value, as_of: prov.as_of || null, ttl_class: R.classifyTtl(value), tier: 'single-source', authority: _factAuthority(prov), status: 'open' };
+    if (R.precedence(fact, obj) !== 'short-term-wins') continue;
+    if (!best || String(prov.as_of || '') > String(best.asOf || '')) best = { content: value, asOf: prov.as_of || null, subject: prov.subject || subjKey };
+  }
+  return best;
+}
 
 // The resolved OBJECT as render-ready lines — leads the prior-knowledge block: "you already hold
 // this person's whole record." Pure (no Echo dep) so active_recall stays offline-testable.
@@ -149,6 +197,8 @@ async function knowledgeBlock(topic, opts = {}) {
   const r = await recall(topic, opts);
   if (!r.notes.length && !r.facts.length && !_hasObject(r.object)) return null;
   const lines = [`WHAT YOU ALREADY KNOW about "${r.topic.replace(/\s+/g, ' ').slice(0, 80)}" (from your own memory — you may already hold this without realizing):`];
+  // PRECEDENCE — a fresh verified fact leads over the record and supersedes any stale role/office detail in it.
+  if (r.precedenceFact) lines.push(`  [MOST CURRENT — verified${r.precedenceFact.asOf ? ` as of ${r.precedenceFact.asOf}` : ''}; supersedes older role/office details in the record below] ${r.precedenceFact.content}`);
   // Lead with the resolved Echo object — the whole record we already hold on the target.
   if (_hasObject(r.object)) for (const l of _objectLines(r.object)) lines.push(l);
   for (const n of r.notes) {
