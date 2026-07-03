@@ -191,7 +191,9 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
     let c = 100;
     const dispatch = async (tag) => {
       if (tag.name === 'propose_entity') { calls.propose_entity.push(tag.args); return { ok: true, text: JSON.stringify({ action: 'created', entity_id: ++c, name: tag.args.name }) }; }
-      if (tag.name === 'propose_relation') { calls.propose_relation.push(tag.args); const good = knownTargets ? knownTargets.includes(tag.args.target_name) : true; return { ok: good, text: good ? '{"ok":true}' : 'missing endpoint' }; }
+      // REALISTIC Echo behavior: a rejected proposal (missing endpoint / not-whitelisted) still returns
+      // transport ok=true, with action:'rejected' in the body — only the body distinguishes accept vs reject.
+      if (tag.name === 'propose_relation') { calls.propose_relation.push(tag.args); const good = knownTargets ? knownTargets.includes(tag.args.target_name) : true; return { ok: true, text: JSON.stringify({ action: good ? 'created' : 'rejected' }) }; }
       return { ok: false };
     };
     const landDoc = async (d) => { calls.landDoc.push(d); return { landed: true }; };
@@ -222,8 +224,9 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   await lane.clusterItems([kyivDup], { now: NOW });
   const D2 = mkDispatchState({ knownTargets: ['Kyiv'] });
   const rp = await lane.promoteStory(lane.allStories()[0], { dispatch: D2.dispatch, landDoc: D2.landDoc, now: NOW });
-  ok(rp.edges >= 1 && D2.calls.propose_relation.some(a => a.target_name === 'Kyiv' && a.relation_type === 'involves'), 'promoteStory forges event→principal edges only to existing endpoints');
+  ok(rp.edges >= 1 && D2.calls.propose_relation.some(a => a.target_name === 'Kyiv' && a.relation_type === 'LINKED_TO'), 'promoteStory forges event→principal edges with a WHITELISTED type (LINKED_TO, not the rejected "involves")');
   ok(D2.calls.propose_relation.some(a => a.target_name !== 'Kyiv'), 'promoteStory also ATTEMPTS edges to not-yet-existing principals (they fail soft, form on a later pass)');
+  ok(rp.edges === D2.calls.propose_relation.filter(a => a.target_name === 'Kyiv').length, 'only ACCEPTED edges count — a rejected proposal (transport-ok, action:rejected) is NOT miscounted as an edge');
 
   // ===== CLUSTER ADJUDICATOR (ambiguous-band tiebreaker) =====
   ok(lane.adjValidate('{"same":true}').value.same === true && lane.adjValidate('prose {"same":false} x').value.same === false, 'adjValidate parses {same:bool} (even in prose)');

@@ -548,11 +548,16 @@ async function proposeEventObject({ dispatch, name, summary }) {
     const args = { name: String(name).slice(0, 200), entity_type: 'event' };
     if (summary) args.summary = String(summary).slice(0, 1200);
     const r = await dispatch({ kind: 'do', name: 'propose_entity', args });
-    if (!r || !r.ok) return { ok: false };
+    if (!r || !r.ok) return { ok: false, error: (r && (r.error || r.text)) || 'dispatch failed' };
     let entityId = null, action = null;
     try { const p = JSON.parse(r.text); entityId = p.entity_id != null ? p.entity_id : (p.result && p.result.entity_id); action = p.action; } catch {}
+    // A usable event hub requires a REAL entity_id from a create/exists — 'rejected' / 'merge_suggested' /
+    // an unparsed body is NOT a hub (transport ok=true does not mean the write was accepted). Surface why.
+    if (entityId == null || (action && action !== 'created' && action !== 'already_exists')) {
+      return { ok: false, action, error: 'no usable entity_id (action=' + (action || 'unparsed') + ')' };
+    }
     return { ok: true, entityId, action };
-  } catch { return { ok: false }; }
+  } catch (e) { return { ok: false, error: e && e.message }; }
 }
 
 // Promote ONE story: land evidence doc (→ promote rail extracts entities later), propose the event hub
@@ -570,12 +575,18 @@ async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdg
   if (!story.event_ref) {
     const ev = await proposeEventObject({ dispatch, name: story.title, summary: story.summary });
     if (ev.ok && ev.entityId != null) { setEventRef(story.id, ev.entityId); story.event_ref = String(ev.entityId); res.event = true; }
+    else if (log) log(`[news-daily] event propose failed (story ${story.id}): ${ev.error || 'unknown'}`);
   } else { res.updated = true; }
   const principals = extractProperNouns(`${story.title}. ${story.summary || ''}`).slice(0, maxEdges);
   for (const p of principals) {
     try {
-      const rr = await dispatch({ kind: 'do', name: 'propose_relation', args: { source_name: String(story.title).slice(0, 200), target_name: String(p).slice(0, 200), relation_type: 'involves' } });
-      if (rr && rr.ok) res.edges++;
+      // LINKED_TO is a whitelisted core (symmetric) relation type; 'involves' is NOT whitelisted → always
+      // rejected. Both endpoints must already exist, so an edge to a not-yet-created principal fails soft.
+      const rr = await dispatch({ kind: 'do', name: 'propose_relation', args: { source_name: String(story.title).slice(0, 200), target_name: String(p).slice(0, 200), relation_type: 'LINKED_TO' } });
+      let action = null; try { action = JSON.parse(rr && rr.text).action; } catch {}
+      // Count ONLY an accepted edge — a rejected proposal (missing endpoint / not-whitelisted) still returns
+      // transport ok=true with action:'rejected', so ok alone would report phantom edges.
+      if (rr && rr.ok && (action === 'created' || action === 'already_exists')) res.edges++;
     } catch { /* endpoint not present yet — forms on a later pass */ }
   }
   return res;
