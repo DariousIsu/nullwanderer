@@ -148,6 +148,8 @@ let emailIntakeTimer = null;   // setInterval id for the read-only newsletter/me
 let emailIntakeTimeout = null; // initial-sweep setTimeout id
 let apiStreamTimer = null;     // setInterval id for the API management stream scheduler (snapshots + landing)
 let apiStreamTimeout = null;   // initial-sweep setTimeout id
+let apiBulkTimer = null;       // setInterval id for the API bulk-pull scheduler (legislation → memory)
+let apiBulkTimeout = null;     // initial bulk pass setTimeout id
 let canvasIngestTimer = null;  // setInterval id for the canvas drop→ingest poller (cleared on shutdown)
 let canvasIngestTimeout = null;// initial-sweep setTimeout id
 let forecastLoopTimer = null;  // setInterval id for the forecasting recompute loop (Suite B capstone)
@@ -855,6 +857,29 @@ app.whenReady().then(() => {
     console.log(`[main] API stream scheduler started (due-check every ${Math.round(API_STREAM_MS / 3600000)}h → snapshots + landing)`);
   }
 
+  // API BULK-PULL — large paginated corpora (legislation first, via Echo's legiscan_* domain tools) → memory
+  // objects on the SAME promotion rail as news/api docs. CONSERVATIVE cadence (legislation moves slowly;
+  // per-bill change_hash makes steady-state cheap), bounded per pass, resumable. Gated on the Echo engine.
+  {
+    const API_BULK_MS = parseInt(process.env.API_BULK_MS || '', 10) || 12 * 3600 * 1000;   // every 12h
+    const runApiBulk = async () => {
+      try {
+        if (!echoSuit || !echoSuit.connected) return;                                        // needs Echo domain tools
+        const r = await require('./lib/api_bulk').runDueBulk({
+          dispatch: (t) => echoSuit.dispatch(t),
+          landDoc: (d) => require('./lib/doc_store').land(d),
+          billLimit: parseInt(process.env.API_BULK_LIMIT || '', 10) || 50,
+          log: (m) => console.log(m),
+        });
+        const landed = (r || []).reduce((n, j) => n + ((j && j.landed) || 0), 0);
+        if (landed) console.log(`[api-bulk] landed ${landed} bills → memory across ${r.length} job(s)`);
+      } catch (e) { console.error('[api-bulk]', e.message); }
+    };
+    apiBulkTimeout = setTimeout(() => { runApiBulk().catch(() => {}); }, 8 * 60 * 1000);      // first pass ~8m after boot
+    apiBulkTimer = setInterval(() => { runApiBulk().catch(() => {}); }, API_BULK_MS);
+    console.log(`[main] API bulk-pull scheduler started (every ${Math.round(API_BULK_MS / 3600000)}h → legislation → memory)`);
+  }
+
   // EMAIL INTAKE LANE — Zoe's own inbox is a subscription surface (newsletters + Gemini meeting-notes).
   // READ-ONLY (EXAMINE): this connection provably cannot mark-read/delete. Newsletters route into the
   // SAME isolated news bucket as RSS (source_kind='newsletter') → they ride the hourly briefing rail;
@@ -972,12 +997,15 @@ app.whenReady().then(() => {
           getRacePolls: (race) => pollIndex[fcNorm(race.subject)] || [],
           ratings: ratingsCache,
           ask: cloud ? cloud.ask : null,
+          getSnapshot: require('./lib/api_stream').getSnapshot,   // FUNDAMENTALS leg: seeded econ signals (GDP/CPI/unrate/yields) → national environment lean
           // resolve (read-only Echo enrichment) intentionally left off the hot loop — margins/sim don't need
           // echo_ref, and enriching the whole slate every cycle would hammer Echo. Opt-in follow-on.
         });
         if (res && res.ok) {
           lastForecast = res;
-          console.log(`[forecast] recompute: ${res.work.margins.polled}/${res.work.margins.total} races polled · House P(D) ${(res.payload.house.pD_control * 100).toFixed(0)}% · Senate P(D) ${(res.payload.senate.pD_control * 100).toFixed(0)}%${res.live ? ' · LIVE' : ''} · ${res.work.timing_ms}ms`);
+          const fx = res.work.fundamentals;
+          const env = fx && fx.has_data ? ` · env ${fx.lean > 0 ? '+' : ''}${fx.lean} (${fx.favors})` : '';
+          console.log(`[forecast] recompute: ${res.work.margins.polled}/${res.work.margins.total} races polled · House P(D) ${(res.payload.house.pD_control * 100).toFixed(0)}% · Senate P(D) ${(res.payload.senate.pD_control * 100).toFixed(0)}%${env}${res.live ? ' · LIVE' : ''} · ${res.work.timing_ms}ms`);
         } else if (res) { console.log(`[forecast] recompute skipped: ${res.error}`); }
       } catch (e) { console.error('[forecast] recompute loop failed:', e.message); }
     };
@@ -1094,6 +1122,8 @@ app.on('window-all-closed', async () => {
   if (inboxPollTimeout) { clearTimeout(inboxPollTimeout); inboxPollTimeout = null; }
   if (apiStreamTimer) { clearInterval(apiStreamTimer); apiStreamTimer = null; }
   if (apiStreamTimeout) { clearTimeout(apiStreamTimeout); apiStreamTimeout = null; }
+  if (apiBulkTimer) { clearInterval(apiBulkTimer); apiBulkTimer = null; }
+  if (apiBulkTimeout) { clearTimeout(apiBulkTimeout); apiBulkTimeout = null; }
   if (emailIntakeTimer) { clearInterval(emailIntakeTimer); emailIntakeTimer = null; }
   if (emailIntakeTimeout) { clearTimeout(emailIntakeTimeout); emailIntakeTimeout = null; }
   if (canvasIngestTimer) { clearInterval(canvasIngestTimer); canvasIngestTimer = null; }

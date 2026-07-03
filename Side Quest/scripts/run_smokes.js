@@ -139,6 +139,7 @@ const smokes = [
   'smoke_api_manager.js',
   'smoke_api_stream.js',
   'smoke_api_landing.js',
+  'smoke_api_bulk.js',
 ];
 
 let passed = 0, failed = 0;
