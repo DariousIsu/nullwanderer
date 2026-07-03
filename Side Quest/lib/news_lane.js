@@ -585,6 +585,22 @@ function representativeArticleUrl(storyId) {
   } catch { return null; }   // news_items belongs to news_store — absent in a news_lane-only context → no URL
 }
 
+// Some sites serve a JS-wall / paywall / bot-check page to server-side extraction instead of the article
+// (e.g. "Please enable JS and disable any ad blocker"). Detect those short non-article bodies so we DON'T
+// store the wall text as the article — treat it as a failed read (fall back to summary; retry next hour).
+const JUNK_RE = [
+  /\benable (javascript|js)\b/i, /\bad ?block(er|ing)?\b/i, /\bplease enable\b/i,
+  /\bsubscribe to (continue|read)\b/i, /\byou have reached your\b/i, /\bsign in to (read|continue)\b/i,
+  /\b(verify you are (a )?human|are you a robot|access denied|403 forbidden|checking your browser)\b/i,
+  /\b(unsupported browser|enable cookies|cookies to continue)\b/i, /\bbecome a (subscriber|member)\b/i,
+];
+function isJunkBody(text) {
+  const t = String(text || '').trim();
+  if (t.length < 40) return true;                                   // too little to be an article
+  if (t.length < 400 && JUNK_RE.some((re) => re.test(t))) return true;   // short + a wall/paywall/bot marker
+  return false;
+}
+
 // Read an article's clean body via Echo web_extract (trafilatura clean text — the same rung echo_suit uses
 // to read a page). Returns bounded clean text or null. Fail-soft; `dispatch` injected (offline tests mock it).
 async function fetchArticle({ dispatch, url, maxChars = 6000 } = {}) {
@@ -598,7 +614,8 @@ async function fetchArticle({ dispatch, url, maxChars = 6000 } = {}) {
     try { const o = JSON.parse(r.text); text = String((o && (o.text_preview || o.text || o.body || o.content || o.markdown)) || '').trim(); } catch { /* not json → plain text */ }
     if (!text) text = String((r && r.text) || '').trim();
     text = text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-    return text ? text.slice(0, maxChars) : null;
+    if (isJunkBody(text)) return null;                              // JS-wall / paywall / bot-check → not a real read
+    return text.slice(0, maxChars);
   } catch { return null; }
 }
 
@@ -799,7 +816,7 @@ module.exports = {
   // daily pass (stories → Echo event objects)
   setEventRef, buildStoryDoc, storiesForDaily, proposeEventObject, promoteProposal, promoteStory, runDailyPass,
   // full-article ingestion (web_extract → richer evidence doc → object extraction) — HOURLY read pass
-  representativeArticleUrl, fetchArticle, setArticle, readArticlesPass,
+  representativeArticleUrl, fetchArticle, isJunkBody, setArticle, readArticlesPass,
   // reconciliation adapter (spec §7: story → Claim, consumed by lib/reconcile)
   storyToClaim,
 };

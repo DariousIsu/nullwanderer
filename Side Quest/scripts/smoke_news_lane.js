@@ -337,6 +337,13 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   ok(/FULL ARTICLE/.test(await lane.fetchArticle({ dispatch: AF.dispatch, url: 'https://x/y' }) || ''), 'fetchArticle returns web_extract trafilatura clean text');
   ok((await lane.fetchArticle({ dispatch: async () => ({ ok: false }), url: 'x' })) === null, 'fetchArticle fail-soft → null on a failed extract');
   ok((await lane.fetchArticle({ dispatch: AF.dispatch, url: '' })) === null, 'fetchArticle → null with no URL');
+  // JS-wall / paywall / bot-check guard: don't store the wall text as the article
+  ok(lane.isJunkBody('Please enable JS and disable any ad blocker') === true, 'isJunkBody flags a JS/ad-blocker wall');
+  ok(lane.isJunkBody('Verify you are a human to continue') === true, 'isJunkBody flags a bot-check page');
+  ok(lane.isJunkBody('short') === true, 'isJunkBody flags a too-short body');
+  ok(lane.isJunkBody('DEARBORN, Mich. (AP) — Police said there was a shooting at a shopping mall Friday, and several people were hurt in the incident that unfolded in the afternoon.') === false, 'isJunkBody passes a real article lede');
+  const WALL = { dispatch: async () => ({ ok: true, text: JSON.stringify({ url: 'x', extractor: 'trafilatura', text_preview: 'Please enable JS and disable any ad blocker' }) }) };
+  ok((await lane.fetchArticle({ dispatch: WALL.dispatch, url: 'https://paywalled.example/x' })) === null, 'fetchArticle → null when web_extract returns a JS-wall (not stored as the article)');
   // HOURLY readArticlesPass is the driver: reads the worthy story's article once + persists it
   const RA = mkDispatchState();
   const rap = await lane.readArticlesPass({ dispatch: RA.dispatch, now: NOW });
