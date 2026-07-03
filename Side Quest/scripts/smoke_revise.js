@@ -35,6 +35,14 @@ const webCite = (u, t = 2) => ({ url: u, title: u, authority_tier: t });
   ok(rSup.action === 'supersede', 'reviseBelief: dated authoritative correction vs stale incumbent → supersede');
   ok(rSup.supersedes === 42 && s.records[0].provenance.supersedes === 42, 'reviseBelief: supersedes_ref = incumbent.ref carried into the record (→ promote.js SUPERSEDES edge)');
 
+  // onSupersede fires on a supersede decision (retire the stale incumbent); NOT on new/merge
+  let retiredRef = null;
+  const rRetire = await V.reviseBelief(claimNew, { lookupIncumbent: async () => incumbent, writeFact: async () => {}, onSupersede: async (ref) => { retiredRef = ref; }, capturedBy: 'chat-correction' });
+  ok(rRetire.action === 'supersede' && rRetire.retired === true && retiredRef === 42, 'reviseBelief: supersede → onSupersede(incumbent.ref) fires (the stale fact is retired — the correction sticks)');
+  let calledOnNew = false;
+  await V.reviseBelief(claimNew, { lookupIncumbent: async () => null, writeFact: async () => {}, onSupersede: async () => { calledOnNew = true; } });
+  ok(!calledOnNew, 'reviseBelief: onSupersede NOT called on a new (non-supersede) decision');
+
   // lookupIncumbent is called with the subject key
   let sawKey = null;
   await V.reviseBelief(claimNew, { lookupIncumbent: async (k) => { sawKey = k; return null; }, capturedBy: 'x' });

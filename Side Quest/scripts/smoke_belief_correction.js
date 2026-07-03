@@ -39,10 +39,12 @@ const NOW = Date.parse('2026-07-03T12:00:00Z');
   ok(rNew.captured === 1 && s.recs.length === 1, 'capture: correction → 1 verified_fact written');
   ok(s.recs[0].source === 'verified_fact' && s.recs[0].provenance.capturedBy === 'chat-correction', 'capture: banked as verified_fact with capturedBy=chat-correction (→ precedence authority 3)');
 
-  // supersede an existing belief
+  // supersede an existing belief — and onSupersede threads through to retire it
   s = sink();
-  const rSup = await C.captureCorrection({ userMessage: "That's wrong, Bondi is no longer AG as of 2026-04-02.", extractFn: extractOK, lookupIncumbent: async () => ({ value: 'Pam Bondi is the Attorney General', as_of: null, ref: 99, citations: [{ title: 'old', authority_tier: 1 }] }), writeFact: s.fn, now: NOW });
+  let retired99 = null;
+  const rSup = await C.captureCorrection({ userMessage: "That's wrong, Bondi is no longer AG as of 2026-04-02.", extractFn: extractOK, lookupIncumbent: async () => ({ value: 'Pam Bondi is the Attorney General', as_of: null, ref: 99, citations: [{ title: 'old', authority_tier: 1 }] }), onSupersede: async (ref) => { retired99 = ref; }, writeFact: s.fn, now: NOW });
   ok(rSup.captured === 1 && rSup.outcomes[0].action === 'supersede' && rSup.outcomes[0].supersedes === 99, 'capture: correction vs stale incumbent → supersede, supersedes_ref=99');
+  ok(retired99 === 99, 'capture: onSupersede threads through → the stale incumbent (99) is retired (the correction sticks)');
 
   // a non-correction banks nothing
   s = sink();

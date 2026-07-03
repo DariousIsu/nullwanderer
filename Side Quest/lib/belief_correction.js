@@ -55,7 +55,7 @@ function _normAsOf(raw) { const m = String(raw || '').trim().match(/^(\d{4}(?:-\
 
 // The adapter: detect → extract (injected cloud) → build Claim → reviseBelief. Returns a per-correction
 // outcome. Fail-soft: any miss returns {captured:0}. extractFn(userMessage, {priorAnswer}) → [candidate].
-async function captureCorrection({ userMessage, priorAnswer = '', extractFn = null, lookupIncumbent = null, writeFact = null, now = Date.now(), deps = {} } = {}) {
+async function captureCorrection({ userMessage, priorAnswer = '', extractFn = null, lookupIncumbent = null, writeFact = null, onSupersede = null, now = Date.now(), deps = {} } = {}) {
   const det = detectCorrection(userMessage, { priorAnswer });
   if (!det.isCorrection) return { captured: 0, skipped: 'not-a-correction' };
   if (!extractFn) return { captured: 0, skipped: 'no-extractor' };
@@ -67,7 +67,7 @@ async function captureCorrection({ userMessage, priorAnswer = '', extractFn = nu
   for (const cand of cands.slice(0, 3)) {
     const claim = buildCorrectionClaim(cand, { now });
     if (!claim) continue;
-    try { out.push(await revise(claim, { lookupIncumbent, writeFact, capturedBy: 'chat-correction', now, deps })); } catch {}
+    try { out.push(await revise(claim, { lookupIncumbent, writeFact, onSupersede, capturedBy: 'chat-correction', now, deps })); } catch {}
   }
   return { captured: out.filter(r => r && r.wrote).length, cue: det.cue, outcomes: out };
 }

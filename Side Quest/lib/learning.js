@@ -202,19 +202,60 @@ async function maybeCaptureLearnings({ query, content, urls, deps = {} } = {}) {
  * fact, and the nightly promotion carries it to Echo. Idempotent-ish (subject_key). Fail-soft; safe to
  * fire-and-forget. deps/storeFn injectable for offline smokes.
  */
-async function captureRecovered({ query, answer, url, source = 'excavation', now = null, storeFn = null } = {}) {
+// The current verified_fact filling a subject SLOT (newest as_of), as a reconcile INCUMBENT — or null.
+// Read-only; fail-soft. Used by captureRecovered / the chat adapter so a recovery reconciles against what
+// we already hold (supersede/merge) instead of blindly banking a duplicate.
+function verifiedFactBySlot(subjectKey) {
+  if (!subjectKey) return null;
+  let rows = [];
+  try { rows = db.getDb().prepare("SELECT id, content, provenance FROM knowledge WHERE source='verified_fact'").all(); } catch { return null; }
+  let best = null, bestMs = -1;
+  for (const r of rows) {
+    let p = {}; try { p = JSON.parse(r.provenance || '{}'); } catch {}
+    if (p.subject_key !== subjectKey || p.superseded) continue;   // skip already-retired records
+    const ms = Date.parse(p.as_of || '') || 0;
+    if (ms >= bestMs) { bestMs = ms; best = { value: r.content, as_of: p.as_of || null, ref: r.id, citations: Array.isArray(p.citations) ? p.citations : [] }; }
+  }
+  return best;
+}
+// RETIRE a superseded verified_fact — demote it out of recall contention + tag it superseded, so the
+// correction STICKS (not merely out-ranks). Fail-soft; returns whether it retired a row.
+function retireVerifiedFact(id, { by = null, now = Date.now() } = {}) {
+  const rid = Number(id); if (!Number.isInteger(rid) || rid <= 0) return false;
+  try {
+    const row = db.getDb().prepare('SELECT provenance FROM knowledge WHERE id=?').get(rid);
+    if (!row) return false;
+    let p = {}; try { p = JSON.parse(row.provenance || '{}'); } catch {}
+    p.superseded = true; p.superseded_at = new Date(now).toISOString().slice(0, 10); if (by != null) p.superseded_by = String(by);
+    db.getDb().prepare('UPDATE knowledge SET importance = MIN(importance, 0.2), provenance = ? WHERE id = ?').run(JSON.stringify(p), rid);
+    return true;
+  } catch { return false; }
+}
+
+async function captureRecovered({ query, answer, url, source = 'excavation', now = null, storeFn = null, lookupFn = null } = {}) {
   try {
     const q = String(query || '').trim(), a = String(answer || '').replace(/\s+/g, ' ').trim();
     if (!q || a.length < 3 || !url) return { skipped: 'incomplete' };
     const store = storeFn || ((rec) => memory.store(rec));
     const ts = now || Date.now();
     const key = slugify(q).slice(0, 80);
-    const rec = {
-      kind: 'note', content: a, source: 'verified_fact', importance: VERIFIED_IMPORTANCE, level: 'fact',
-      provenance: { url, as_of: new Date(ts).toISOString().slice(0, 10), dated: true, subject: q.slice(0, 120), subject_key: key, query: q.slice(0, 200), capturedBy: source }
+    // ROUTE through the shared belief-revision pipeline (reconciliation §7, research lane): a recovered fact
+    // that CONTRADICTS a held belief SUPERSEDES + retires it (corroboration/authority-weighted); no incumbent
+    // → new. Deliberate recovery (the enrich loop went and found it) is authoritative (tier 3; realtime is 2).
+    const revise = require('./revise').reviseBelief;
+    const claim = {
+      kind: 'entity', subject: { name: q.slice(0, 120), key },
+      value: a, as_of: new Date(ts).toISOString().slice(0, 10),
+      citations: [{ url, title: q.slice(0, 80), authority_tier: source === 'realtime' ? 2 : 3 }],
+      provenance: 'read', lane: 'research',
     };
-    await store(rec);
-    return { captured: 1, subject_key: key };
+    const r = await revise(claim, {
+      lookupIncumbent: lookupFn || ((k) => verifiedFactBySlot(k)),
+      writeFact: (rec) => store(rec),
+      onSupersede: (ref) => retireVerifiedFact(ref, { by: `recovered:${source}`, now: ts }),
+      capturedBy: source, now: ts,
+    });
+    return r.wrote ? { captured: 1, subject_key: key, action: r.action } : { captured: 0, action: r.action, reason: r.reason };
   } catch (e) { return { error: e.message }; }
 }
 
@@ -258,6 +299,7 @@ async function seedIdentityFacts({ apply = true, facts = IDENTITY_FACTS, storeFn
 
 module.exports = {
   maybeCaptureLearnings, captureRecovered, buildPriorKnowledgeBlock, seedIdentityFacts, IDENTITY_FACTS,
+  verifiedFactBySlot, retireVerifiedFact,
   // exported for unit tests
   parseClaims, slugify, normalizeAsOf, extractClaims, buildPrompt,
   CAPTURE_MIN_GAP_MS, VERIFIED_IMPORTANCE, LEARNING_IMPORTANCE

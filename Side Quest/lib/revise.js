@@ -53,7 +53,7 @@ function toVerifiedRecord(claim, decision, { subjectKey, capturedBy, now = Date.
 // THE PIPELINE. claim → reconcile(claim, incumbent) → on new|merge|supersede|append, produce + write the
 // verified_fact record. reject|ask → write nothing (the caller may surface an ASK). Returns the outcome so a
 // producer/UI can report ("superseded the stale record", "asked which entity", "rejected — no citation").
-async function reviseBelief(claim, { lookupIncumbent = null, writeFact = null, capturedBy = null, now = Date.now(), importance = VERIFIED_IMPORTANCE, deps = {} } = {}) {
+async function reviseBelief(claim, { lookupIncumbent = null, writeFact = null, onSupersede = null, capturedBy = null, now = Date.now(), importance = VERIFIED_IMPORTANCE, deps = {} } = {}) {
   const R = deps.reconcile || require('./reconcile');
   const subjectKey = subjectKeyOf(claim, deps);
   let incumbent = null;
@@ -65,7 +65,13 @@ async function reviseBelief(claim, { lookupIncumbent = null, writeFact = null, c
   const record = toVerifiedRecord(claim, decision, { subjectKey, capturedBy, now, importance });
   let wrote = false;
   if (writeFact) { try { await writeFact(record, decision, incumbent); wrote = true; } catch (e) { return { action: decision.action, wrote: false, error: e.message, record, decision, subjectKey }; } }
-  return { action: decision.action, reason: decision.reason, wrote, record, decision, subjectKey, supersedes: record.provenance.supersedes };
+  // On SUPERSEDE, RETIRE the stale incumbent so it stops competing in recall (the correction sticks, not
+  // just out-ranks). onSupersede(incumbentRef, record, incumbent) is the caller's demote/tag — fail-soft.
+  let retired = false;
+  if (decision.action === 'supersede' && onSupersede && decision.supersedes_ref != null) {
+    try { await onSupersede(decision.supersedes_ref, record, incumbent); retired = true; } catch {}
+  }
+  return { action: decision.action, reason: decision.reason, wrote, retired, record, decision, subjectKey, supersedes: record.provenance.supersedes };
 }
 
 module.exports = { reviseBelief, toVerifiedRecord, subjectKeyOf, VERIFIED_IMPORTANCE, _slug };

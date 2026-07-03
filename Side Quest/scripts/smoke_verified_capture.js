@@ -88,6 +88,22 @@ const LONG = 'The page states durable facts about the topic in detail. '.repeat(
     ok(rec[0].source === 'verified_fact' && rec[0].provenance.dated === true && rec[0].provenance.as_of === '2026-07-02', 'banked as a DATED verified_fact (as_of=today) → reconcile can supersede stale');
     ok(rec[0].provenance.url === 'https://en.wikipedia.org/wiki/United_States_Secretary_of_Defense' && rec[0].provenance.capturedBy === 'excavation' && /Hegseth/.test(rec[0].content), 'carries source URL + capturedBy=excavation + the answer');
     ok((await learning.captureRecovered({ query: 'x', answer: 'y', url: null, storeFn: async () => ({}) })).skipped === 'incomplete', 'no URL → skipped (provenance gate)');
+
+    // RECONCILE-AWARE recovery (research adapter, §7): a recovered fact that CONTRADICTS a held verified_fact
+    // SUPERSEDES it and RETIRES the stale one (the correction sticks) — not a naive re-bank.
+    db.insertKnowledge({ kind: 'note', content: 'Lloyd Austin is the current US Secretary of Defense.', source: 'verified_fact', importance: 0.9, embedding: null, provenance: { subject_key: 'who-is-the-current-us-secretary-of-defense', as_of: '2025-01-01', capturedBy: 'wiki' } });
+    const recS = [];
+    const supS = await learning.captureRecovered({ query: 'who is the current US Secretary of Defense', answer: 'Pete Hegseth is the current US Secretary of Defense.', url: 'https://en.wikipedia.org/wiki/x', source: 'excavation', now: Date.parse('2026-07-02'), storeFn: async (r) => { recS.push(r); return { id: 99 }; } });
+    ok(supS.action === 'supersede' && supS.captured === 1, 'captureRecovered: contradicting recovery vs a held belief → SUPERSEDE (reconcile-aware, not a naive re-bank)');
+    const austin = db.getDb().prepare("SELECT importance, provenance FROM knowledge WHERE content LIKE 'Lloyd Austin%'").get();
+    const ap = (() => { try { return JSON.parse(austin.provenance); } catch { return {}; } })();
+    ok(austin.importance <= 0.2 && ap.superseded === true, 'captureRecovered supersede → the stale verified_fact is RETIRED (demoted + tagged superseded) — the correction sticks');
+    ok(learning.verifiedFactBySlot('who-is-the-current-us-secretary-of-defense') === null, 'verifiedFactBySlot: skips the now-retired record (slot empty)');
+
+    // no incumbent → the recovered fact banks as NEW (unchanged behavior for the common path)
+    const recN = [];
+    const newR = await learning.captureRecovered({ query: 'who founded Acme Corp', answer: 'Jane Doe founded Acme Corp.', url: 'https://acme.com/about', source: 'wiki', now: Date.parse('2026-07-02'), storeFn: async (r) => { recN.push(r); return { id: 5 }; } });
+    ok(newR.action === 'new' && newR.captured === 1 && recN[0].source === 'verified_fact', 'captureRecovered: no incumbent → NEW verified_fact (backward-compatible)');
   } catch (e) {
     fail++; console.error('  ✗ threw:', e.stack || e.message);
   } finally {

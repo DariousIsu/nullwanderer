@@ -3049,6 +3049,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         priorAnswer: _priorSay,
         extractFn: (msg, { priorAnswer }) => _learning.extractClaims({ query: priorAnswer || msg, content: msg }),
         writeFact: (rec) => _mem.store(rec),
+        lookupIncumbent: (k) => _learning.verifiedFactBySlot(k),                        // reconcile vs what we hold
+        onSupersede: (ref) => _learning.retireVerifiedFact(ref, { by: 'chat-correction' }), // retire the stale one
       })).then(r => { if (r && r.captured) console.log(`[main] chat-correction: banked ${r.captured} verified fact(s) (cue: ${r.cue})`); })
         .catch(e => console.error('[main] chat-correction capture failed:', e && e.message));
     }
