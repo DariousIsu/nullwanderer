@@ -124,8 +124,9 @@ const smokes = [
   // Forecasting suite — Suite-B models (pure, offline-deterministic)
   'smoke_poll_average.js',
   'smoke_forecast_service.js',
-  // API management stream — catalog + authenticated client (pure, offline; mocked fetch/config)
+  // API management stream — catalog + authenticated client + management layer (pure, offline; mocked fetch/clock)
   'smoke_api_client.js',
+  'smoke_api_manager.js',
 ];
 
 let passed = 0, failed = 0;
