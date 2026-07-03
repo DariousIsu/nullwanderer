@@ -80,7 +80,9 @@ function toNewsRow(msg) {
     title: clean(msg.subject) || '(newsletter)',
     urlOrGuid: newsIdOf(msg),
     ts: Number(msg.ts) || 0,          // 0 → news_store stamps collection time
-    summary: msg.body != null ? String(msg.body).slice(0, 2000) : null,
+    // strip a LEADING sponsor block (a kept newsletter may open with "Together with …") before storing —
+    // conservative + safety-gated, so a false strip can't eat editorial (news_ads.stripLeadingSponsor).
+    summary: msg.body != null ? ads.stripLeadingSponsor(String(msg.body)).slice(0, 2000) : null,
   };
 }
 

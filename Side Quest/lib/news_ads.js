@@ -196,9 +196,26 @@ async function classifyEmailBatch(items, { ask = null, model = null, numPredict 
   return verdict;
 }
 
+// A KEPT newsletter (not wholly promo) may still OPEN with a sponsor block ("Together with Acme…") before
+// the editorial. Strip that LEADING block so it doesn't pollute the stored summary. CONSERVATIVE by design —
+// only fires when a sponsor marker sits in the first ~400 chars AND there's a clean paragraph boundary after
+// it AND ≥200 chars of real content remain; otherwise returns the body UNCHANGED (never risk eating editorial).
+// Relies on the email body's paragraph structure (newlines). Does NOT chase mid-body embedded ads — that
+// needs full body segmentation (flagged), and a false strip there would delete real reporting.
+const SPONSOR_RE = /\b(sponsored by|together with|presented by|brought to you by|a message from(?: our)? sponsor|paid partnership|this (?:issue|email|newsletter) is sponsored)\b/i;
+function stripLeadingSponsor(body) {
+  const t = str(body);
+  const firstBreak = t.search(/\n\s*\n/);                  // end of the FIRST paragraph (needs structure)
+  if (firstBreak < 0) return t;                            // no paragraph break → don't risk a cut
+  if (!SPONSOR_RE.test(t.slice(0, firstBreak))) return t;  // the FIRST paragraph isn't a sponsor block → untouched
+  const kept = t.slice(firstBreak).trim();                // drop the leading sponsor paragraph
+  return kept.length >= 200 ? kept : t;                   // would leave too little → keep the original (safety)
+}
+
 module.exports = {
   AD_STRONG, NEWS_STRONG, adHeuristic,
   classifyInput, classifyValidator, CLASSIFY_WANT, classifyBatch,
   PROMO_DOMAINS, PROMO_SUBJECT, STOCK_SPAM, domainOf, isPromoDomain,
   emailPromoHeuristic, EMAIL_CLASSIFY_WANT, emailClassifyInput, classifyEmailBatch,
+  stripLeadingSponsor,
 };

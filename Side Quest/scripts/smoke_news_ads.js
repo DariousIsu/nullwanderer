@@ -83,6 +83,16 @@ const segs = [
   const evSafe = await ads.classifyEmailBatch(mails, { ask: async () => { throw new Error('down'); } });
   ok(evSafe[3] === 'news' && evSafe[1] === 'ad', 'classifyEmailBatch: cloud down → unsure default to keep, heuristic promo still dropped');
 
+  // ===== stripLeadingSponsor: remove a LEADING sponsor block, conservatively =====
+  const editorial = 'The Senate advanced the budget bill today after a long debate on the chamber floor, and committee leaders said the measure now heads to a final vote that is expected before the recess begins next week, with several amendments still under active negotiation.';
+  const withSponsor = `Together with Acme Corp — check out their new tool, 20% off this week.\n\n${editorial}`;
+  ok(ads.stripLeadingSponsor(withSponsor) === editorial, 'stripLeadingSponsor removes a leading sponsor block, keeps the editorial');
+  ok(ads.stripLeadingSponsor(editorial) === editorial, 'stripLeadingSponsor leaves a body with no sponsor marker unchanged');
+  ok(ads.stripLeadingSponsor(`Together with Acme — buy now. ${editorial}`) === `Together with Acme — buy now. ${editorial}`, 'no clean paragraph boundary after the marker → unchanged (never risk cutting)');
+  ok(ads.stripLeadingSponsor('Together with Acme Corp — 20% off.\n\nThanks, see you next week.') === 'Together with Acme Corp — 20% off.\n\nThanks, see you next week.', 'strip that would leave < 200 chars → keeps the original (safety)');
+  const midBody = `${editorial}\n\nSponsored by Acme — 20% off this week for readers.\n\n${editorial}`;
+  ok(ads.stripLeadingSponsor(midBody) === midBody, 'a mid-body sponsor (not leading) is left alone (avoids eating real reporting)');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

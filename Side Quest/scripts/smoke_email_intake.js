@@ -33,6 +33,10 @@ ok(nr.source === 'Robert Reich' && nr.sourceKind === 'newsletter' && nr.urlOrGui
 ok(nr.summary.length === 2000, 'toNewsRow caps summary at 2000');
 const nr2 = intake.toNewsRow({ from: 'X', fromAddr: 'x@y', subject: 'S', messageId: '', uid: 42, ts: 0 });
 ok(nr2.urlOrGuid === 'email-uid|42', 'toNewsRow falls back to uid key when no Message-ID');
+// toNewsRow strips a LEADING sponsor block from the stored summary (kept newsletter with an opening ad)
+const edi = 'The committee released its long-awaited report today, detailing findings that lawmakers say will shape the coming session and the debates that follow it over the months ahead, with several recommendations already drawing sharp responses from members of both parties.';
+const nr3 = intake.toNewsRow({ from: 'Author', fromAddr: 'a@substack.com', subject: 'Weekly', messageId: '<w@x>', ts: 1, body: `Together with Acme — 20% off this week.\n\n${edi}` });
+ok(nr3.summary === edi, 'toNewsRow strips a leading sponsor block from the summary (keeps the editorial)');
 
 const md = intake.toMeetingDoc({ subject: 'Standup notes', body: 'agenda...', messageId: '<m1@google.com>', uid: 7 });
 ok(md.title === 'Standup notes' && md.source === 'email_meeting_notes' && md.ref === 'm1@google.com' && md.body === 'agenda...', 'toMeetingDoc maps subject/body/ref');
