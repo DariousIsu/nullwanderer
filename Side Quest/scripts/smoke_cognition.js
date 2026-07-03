@@ -94,6 +94,24 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   await new Promise(r => setTimeout(r, 5));   // let the fire-and-forget write-back run
   ok(wbCall && /Hegseth/.test(wbCall.answer) && /Secretary_of_Defense/.test(wbCall.url) && wbCall.source === 'excavate', 'self-heal: excavation kicks the write-back with answer + source URL (non-blocking)');
 
+  // 10b) TRUNCATION GUARD — the freshest tier must LEAD the re-draft grounding. Regression lock for the proven
+  // SecDef bug: an early verbose tier (a full wiki body) had already pinned the grounding at _draftOrNeed's
+  // 4200-char cap, so the LATER excavate answer — appended last under the old ordering — fell past the cap and
+  // the cloud never saw it. Here wiki returns >4200 chars of filler WITHOUT the answer, excavate returns the
+  // answer; the mock ask only answers when the answer token survives into the (already-4200-sliced) grounding
+  // it receives. PASSES iff fresh leads; would MISS under fresh-last (answer truncated away).
+  const bigFiller = 'FILLER FILLER FILLER '.repeat(300);   // ~6300 chars, well past the 4200 cap, no answer token
+  ok(bigFiller.length > 4200, 'guard precondition: filler exceeds the 4200-char draft cap');
+  const y = await cog.answerGrounded({ userMessage: 'who holds the office of the thing?', grounding: '', deps: {
+    ask: async ({ input }) => /Zephyr Kellander/.test(String(input.grounding)) ? 'The officeholder is Zephyr Kellander.' : 'NEED: current officeholder of the thing',
+    dispatch: emptyGraph,
+    wikiLookup: async () => [{ title: 'Office of the Thing', extract: bigFiller }],
+    routeNeed: async () => ({ ok: false }),
+    webSearch: async () => ({ results: [] }),
+    excavate: async () => ({ found: true, answer: 'Zephyr Kellander holds the office.', url: 'https://en.wikipedia.org/wiki/Office_of_the_Thing' }),
+    writeBack: async () => {} } });
+  ok(y && y.enrichSource === 'excavate' && /Zephyr/.test(y.say), 'truncation guard: a late-tier answer survives the draft cap because the freshest tier LEADS the grounding');
+
   // 11) _kickWriteBack skips when there's no source URL (graph/routed = our own data → nothing to bank).
   let kicked = false;
   cog._kickWriteBack({ query: 'q', answer: 'a', url: null, source: 'graph', deps: { writeBack: async () => { kicked = true; } } });

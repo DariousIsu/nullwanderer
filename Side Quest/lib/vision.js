@@ -21,7 +21,7 @@ const db = require('./db');
 // ---- config ----
 function visionModel() {
   try { const m = db.getMeta('model.vision'); if (m) return m; } catch {}
-  return process.env.VISION_MODEL || 'qwen2.5vl';   // configurable; set model.vision once verified
+  return process.env.VISION_MODEL || 'gemma4:31b';   // configurable via model.vision meta; the hardcoded fallback must be a model that ACTUALLY EXISTS on the cloud — 'qwen2.5vl' 404s, which silently killed excavation any time the meta was absent (fresh DBs / the battery harness). gemma4:31b is the live-verified vision model.
 }
 function visionTier() { try { return db.getMeta('vision.tier') || 'auto'; } catch { return 'auto'; } }
 // A dedicated, top-tier model for a specific vision PURPOSE (e.g. 'excavate' — forensic browsing needs the

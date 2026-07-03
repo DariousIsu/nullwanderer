@@ -243,7 +243,7 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
       let fresh = { text: '', url: null };
       try { fresh = (tier === 'wiki' ? await _enrichWiki(topic, deps) : await _enrichExcavate(topic, deps)) || fresh; } catch {}
       if (!fresh.text) continue;
-      const gv = [g, `Fresh check for the current fact (${topic}):\n${fresh.text}`].filter(Boolean).join('\n\n');
+      const gv = [`Fresh check for the current fact (${topic}):\n${fresh.text}`, g].filter(Boolean).join('\n\n');   // fresh check LEADS so the draft cap keeps the verified value, not the stale grounding it's meant to override
       const v = await _draftOrNeed(userMessage, gv, deps);
       if (v && v.answer) {
         const src = tier === 'wiki' ? 'wiki-verify' : 'excavate-verify';
@@ -268,7 +268,12 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
               : mode === 'web' ? await _enrichWeb(step.need, deps)
               : await _enrichExcavate(step.need, deps);
     if (!res || !res.text) continue;
-    g = [g, `Just retrieved for this (${mode}):\n${res.text}`].filter(Boolean).join('\n\n');
+    // LEAD with the freshest retrieval. It was fetched specifically for THIS need, so it is the highest-value
+    // grounding; the earlier tiers already FAILED to answer, so they are the least valuable and should be the
+    // part that trails off past _draftOrNeed's char cap. Proven bug (probe_truncation): grounding was already
+    // pinned at the 4200-char cap by a full wiki body + two web pages BEFORE excavate ran, so excavate's
+    // vision-read "Pete Hegseth" — appended LAST — fell entirely past the cap and the cloud never saw it.
+    g = [`Just retrieved for this (${mode}):\n${res.text}`, g].filter(Boolean).join('\n\n');
     step = await _draftOrNeed(userMessage, g, deps);
     if (step && step.answer) {
       // SELF-HEAL — any tier that recovered from an external SOURCE (wiki/web/excavation) feeds the answer
