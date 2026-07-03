@@ -91,6 +91,18 @@ ok('buildAssessPairs: keeps only corroborated + touching (1 of 3)', pairs.length
   const empty = await L.runOnce({ now: NOW, fetchSubjects: async () => ({ subjects: [] }) });
   ok('runOnce: empty slate → fail-soft (no throw)', empty.ok === false && /empty slate/.test(empty.error));
 
+  // FUNDAMENTALS tie-in end-to-end: api_stream econ snapshots (weak economy → national lean toward A) shift
+  // every race margin via runOnce. Proves the econ_feed → forecast_fundamentals → loop wiring is live.
+  const econBodies = {
+    'fred:gdp': { observations: [{ date: '2025-06-01', value: '100' }, { date: '2026-06-01', value: '100' }] },   // 0% growth
+    'fred:cpi': { observations: [{ date: '2025-06-01', value: '100' }, { date: '2026-06-01', value: '107' }] },   // +7% inflation
+    'fred:unrate': { observations: [{ date: '2025-06-01', value: '6.5' }, { date: '2026-06-01', value: '7.0' }] },
+  };
+  const resF = await L.runOnce({ now: NOW, fetchSubjects, getRacePolls, ask, getSnapshot: (id) => (econBodies[id] ? { body: econBodies[id] } : null), config: { iterations: 4000, seed: 3 } });
+  ok('runOnce: fundamentals leg present + has_data (api_stream consumed)', resF.work.fundamentals && resF.work.fundamentals.has_data && resF.work.fundamentals.favors === 'A', JSON.stringify(resF.work.fundamentals && { lean: resF.work.fundamentals.lean, favors: resF.work.fundamentals.favors }));
+  const azF = resF.work.inputs.races.find((r) => r.subject === '2026 Arizona');
+  ok('runOnce: national env lean applied to race margins (env_delta + base_margin_pre_env set)', azF.env_delta > 0 && azF.base_margin_pre_env === 5);
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

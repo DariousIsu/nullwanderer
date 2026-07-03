@@ -25,6 +25,7 @@ const reactor = require('./forecast_reactor');
 const assess = require('./forecast_assess');
 const sim = require('./forecast_sim');
 const service = require('./forecast_service');
+const fundamentals = require('./forecast_fundamentals');
 
 // Sim defaults for the 2026 midterm balance target. holdovers = safe/unpolled seats folded in (the slate is
 // only the POLLED universe); majority = control threshold per chamber. Overridable per run + by calibration.
@@ -165,6 +166,17 @@ async function runOnce(opts = {}) {
   // 2. MARGINS — signed per-race poll averages (prior fallback).
   races = await computeMargins({ races, getRacePolls: opts.getRacePolls, ratings: opts.ratings, partyOf: opts.partyOf, now, cfg: opts.avgCfg || {}, priorSigma: opts.priorSigma });
 
+  // 2b. FUNDAMENTALS — the national ECONOMIC ENVIRONMENT (api_stream econ signals via econ_feed) → a uniform
+  // swing applied to every race margin, BEFORE news. News is a per-race shock ON TOP of this environment
+  // baseline. Fail-soft: no getSnapshot / no data → lean 0 → margins untouched.
+  let econScore = null;
+  if (opts.getSnapshot || typeof opts.assessFundamentals === 'function') {
+    econScore = typeof opts.assessFundamentals === 'function'
+      ? opts.assessFundamentals()
+      : fundamentals.assess({ getSnapshot: opts.getSnapshot, cfg: opts.fundamentalsCfg, incumbentParty: opts.incumbentParty });
+    if (econScore && econScore.has_data) races = fundamentals.applyToSlate(races, econScore);
+  }
+
   // 3. SIGNALS — the news_feed contract (compressed events + raw/CC momentum), scoped to the slate's entities.
   const entities = slateEntities(races);
   const events = opts.events || (typeof opts.newsEvents === 'function'
@@ -185,6 +197,7 @@ async function runOnce(opts = {}) {
   res.illustrative = polled === 0;                 // no real signed margin anywhere → the run is illustrative
   res.work.margins = { total: races.length, polled, prior: races.length - polled };
   res.work.assess = { pairs: pa.n_pairs, assessed: pa.assessed };
+  res.work.fundamentals = econScore;               // national economic environment lean + component audit (null if no econ data)
   res.live_entities = reactor.detectLive(momentum, { cfg: opts.reactorCfg });
   return res;
 }

@@ -133,6 +133,8 @@ const smokes = [
   'smoke_forecast_reactor.js',
   'smoke_forecast_registry.js',
   'smoke_forecast_assess.js',
+  'smoke_econ_feed.js',
+  'smoke_forecast_fundamentals.js',
   'smoke_forecast_loop.js',
   // API management stream — catalog + authenticated client + management layer (pure, offline; mocked fetch/clock)
   'smoke_api_client.js',

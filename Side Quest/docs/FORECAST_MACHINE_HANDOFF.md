@@ -19,11 +19,15 @@ months out, so confidence comes from **backtests + calibration**, not from launc
 ```
 forecast_registry (race slate: VoteHub /subjects + Echo enrich, read-only)
    → poll_average (per-race SIGNED margin)   [WIRED via forecast_loop.computeMargins; prior fallback]
-   → forecast_reactor (news → margin/σ perturbation)
+   → forecast_fundamentals (national ECONOMIC ENVIRONMENT → uniform swing, capped/audited)
+        ← econ_feed.environment ← api_stream getSnapshot (GDP/CPI/unrate/yields, read-only)
+   → forecast_reactor (news → per-race margin/σ perturbation, ON TOP of the environment baseline)
         ← news_feed.events/momentum (news signals)  +  forecast_assess (gpt-oss judges direction)
    → forecast_sim (correlated Monte-Carlo → chamber control + seat dist + govt scenarios)
    → forecast_service.buildBalancePayload → the UI (studio) + (PENDING) forecast/analysis objects → 24h rail
 ```
+Two signal legs feed the sim: **fundamentals** (macro, national, uniform — the economy) and **news** (per-race
+shocks). Fundamentals is the correlated environment baseline; news perturbs individual races on top of it.
 ★ **forecast_loop.js is the single call that runs this whole chain** (`runOnce`), fired on main.js's 30-min
 cadence (first run ~2m after boot) and cached in `lastForecast`; the `forecast:balance` IPC serves it and
 re-sims the same live slate on a seed override (the studio's "Re-run sim" jitter, now on REAL margins).
@@ -43,15 +47,18 @@ re-sims the same live slate on a seed override (the studio's "Re-run sim" jitter
 
 **Bridges (read-only contracts, "never reach past"):**
 - `news_feed.js` — the news⇄forecast contract: `events`(corroborated), `momentum`(raw incl. CC volume), `raw`/`layers`/`digest`/`today` (36 smoke; live 151 stories + Trump 138 mentions/89 CC).
-- `api_stream` (other context) — fundamentals: `getSnapshot(id)` + `pull()`. 6 datasets seeded live (FRED/Census). Contract: `docs/API_STREAM_TIEIN_HANDOFF.md`.
+- `econ_feed.js` — the **api_stream⇄forecast contract** (NEW): reads the seeded FRED snapshots via `api_stream.getSnapshot` and derives forecasting-shaped indicators (level + YoY% + 90-day trend; converts CPI/GDP LEVELS→rates). `environment()`/`indicators()` (13 smoke). This is the api_stream consumer the suite was missing.
+- `forecast_fundamentals.js` — the **FUNDAMENTALS leg** (NEW): `scoreEnvironment` maps the econ environment → a national `lean` (points toward A=Dem), incumbent-aware, capped (`envCap` 3), audited per-component, provisional; `applyToSlate` shifts every race margin uniformly; `assess` is the live entry (12 smoke). **Real-data verified 2026-07-03:** GDP +6.07% YoY / CPI +4.17% / unrate 4.2% → lean −0.17 (neutral) — a correct, modest incumbent tilt.
+- `api_stream` (other context) — the managed data surface: `getSnapshot(id)` + `pull()`. 6 datasets seeded live (FRED/Census). Contract: `docs/API_STREAM_TIEIN_HANDOFF.md`.
 
 **The recompute loop (Suite B capstone) — ★ BUILT + wired:**
 - `forecast_loop.js` — the whole chain in one call. PURE core `recompute(races, signals, opts)` (react→sim→
-  payload, inject now/assessLookup) + LIVE `runOnce(opts)` (slate→signed margins→news→gpt-oss pre-assess→
-  react→sim→payload). Signs margins via injected `partyOf` (Echo/FEC map or a label heuristic); un-polled/
+  payload, inject now/assessLookup) + LIVE `runOnce(opts)` (slate→signed margins→**fundamentals env lean**→
+  news→gpt-oss pre-assess→react→sim→payload; `work.fundamentals` carries the econ audit). Signs margins via
+  injected `partyOf` (Echo/FEC map or a label heuristic); un-polled/
   un-attributable races fall back to a neutral PRIOR with wide σ and the run flags `illustrative`. Helpers:
   `computeMargins`, `signMargin`, `buildAssessPairs`, `preAssess`, `slateEntities` (24 smoke, all green).
-- **main.js wiring (REBOOT-GATED, uncommitted):** a `FORECAST_LOOP_MS` (30m) cadence block runs `runOnce`
+- **main.js wiring (committed 7fbbe44, REBOOT-GATED):** a `FORECAST_LOOP_MS` (30m) cadence block runs `runOnce`
   with live feeds (VoteHub subjects+polls bulk-fetched per poll-type, 538 ratings cached, cloud_logic.ask),
   caches `lastForecast`; the `forecast:balance` IPC serves it + re-sims on a seed override; timers cleared on
   shutdown. Downstream-only — reads connectors/news/cloud, writes nothing.
@@ -87,7 +94,7 @@ re-sims the same live slate on a seed override (the studio's "Re-run sim" jitter
 - Entity-routing in reactor/news_feed is **string-match**; upgrade path = graph traversal (races+news both Echo events).
 - Older/RSS news stories have empty `entity_set` (only video-reconstruction populates entities).
 - gpt-oss:120b MUST use num_predict≥1500 (else empty content — starves in `thinking`).
-- **Nothing committed** — all forecasting work is working-tree changes in the shared repo (parallel contexts active).
+- **Committed 7fbbe44** (whole forecasting suite, 30 files, on `feature/idle-passive-intelligence`) — the machine will run on the next app reboot (main.js cadence is reboot-gated).
 
 ## 7. Related docs
 `WORLD_MODEL_FORECAST_BRAINSTORM.md` (vision/scope/decisions) · `POLLING_SOURCE_MAP.md` (538-replacement sources) ·
