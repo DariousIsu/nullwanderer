@@ -47,14 +47,17 @@ function groupIntoSegments(videoItems, { gapMs = 120000 } = {}) {
   return segs;
 }
 
-const RECONSTRUCT_WANT = `You reconstruct a clean NEWS HEADLINE + one-sentence summary from FRAGMENTARY live TV
-closed-caption text (partial words, ALL-CAPS, mid-sentence — a broadcast segment). Rules:
+const RECONSTRUCT_WANT = `You reconstruct a clean NEWS HEADLINE + one-sentence summary + key entities from FRAGMENTARY
+live TV closed-caption text (partial words, ALL-CAPS, mid-sentence — a broadcast segment). Rules:
 - Report ONLY what the captions clearly convey. DO NOT invent names, numbers, places, or facts not present.
 - Fill obvious gaps (broken words, dropped articles) but never fabricate; when in doubt, stay vague.
 - If the text is an advertisement, promo, station bumper, or too fragmentary to tell what the story is, set is_news=false.
 - headline: a specific wire-style news headline. summary: one factual sentence.
+- entities: 3-8 KEY named entities (people, organizations, places, events) central to the story. Use the
+  COMMON / CANONICAL names a national WIRE story would use (e.g. "Iran", "Strait of Hormuz", "Federal Reserve")
+  so this broadcast segment can be matched to wire coverage of the SAME event.
 For EACH input id respond with ONLY a JSON array, one entry per id, nothing else:
-[{"id": <id>, "headline": "...", "summary": "...", "is_news": true}]`;
+[{"id": <id>, "headline": "...", "summary": "...", "entities": ["...","..."], "is_news": true}]`;
 
 // Tolerant parse: strip code fences, JSON.parse; on failure recover complete objects up to the last '}'.
 function reconstructValidator(raw) {
@@ -63,7 +66,8 @@ function reconstructValidator(raw) {
     if (!e || e.id == null) return null;
     const isNews = e.is_news !== false;
     if (isNews && !e.headline) return null;                         // a "news" verdict with no headline is useless
-    return { id: Number(e.id), headline: clean(e.headline).slice(0, 200), summary: clean(e.summary).slice(0, 400), is_news: isNews };
+    const entities = Array.isArray(e.entities) ? e.entities.map((x) => clean(x)).filter(Boolean).slice(0, 8) : [];
+    return { id: Number(e.id), headline: clean(e.headline).slice(0, 200), summary: clean(e.summary).slice(0, 400), entities, is_news: isNews };
   }).filter(Boolean);
   try { const v = coerce(JSON.parse(s)); if (v.length) return { valid: true, value: v }; } catch {}
   const cut = s.lastIndexOf('}');                                   // truncation recovery: trim to last complete object
@@ -80,7 +84,7 @@ async function reconstructBatch(segments, { ask = null, model = null, numPredict
   if (input.length && typeof ask === 'function') {
     try {
       const r = await ask({ task: 'video_reconstruct', v: 1, input, want: RECONSTRUCT_WANT, validate: reconstructValidator, model, numPredict });
-      if (Array.isArray(r)) for (const e of r) if (e && e.id != null) out[e.id] = { headline: e.headline, summary: e.summary, isNews: e.is_news !== false };
+      if (Array.isArray(r)) for (const e of r) if (e && e.id != null) out[e.id] = { headline: e.headline, summary: e.summary, entities: e.entities || [], isNews: e.is_news !== false };
     } catch { /* fail-safe: leave raw */ }
   }
   return out;
@@ -106,7 +110,9 @@ async function runReconstruct(videoItems, { store, ask = null, model = null, gap
         continue;
       }
       if (v && v.headline) {
-        if (store.updateItemText) store.updateItemText(seg.repId, { title: v.headline, summary: v.summary || null });
+        // write the clean headline + the CANONICAL ENTITIES (the bridge: wire-style names so clustering can
+        // match this broadcast segment to the wire story of the same event, via entitySet).
+        if (store.updateItemText) store.updateItemText(seg.repId, { title: v.headline, summary: v.summary || null, entities: v.entities || [] });
         res.reconstructed++;
       }
       // absorb the non-representative flushes so only ONE clean report per segment enters clustering

@@ -31,13 +31,15 @@ function tokenSet(text, minLen = 4) {
 }
 // Principal entities of an item = proper-noun tokens from title+summary (reuses graph_walk's extractor).
 function entitySet(item) {
-  const text = `${(item && item.title) || ''}. ${(item && item.summary) || ''}`;
   const s = new Set();
-  for (const name of extractProperNouns(text)) {
-    for (const w of norm(name).replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)) {
-      if (w.length >= 3 && !STOP.has(w)) s.add(w);
-    }
-  }
+  const addName = (name) => { for (const w of norm(name).replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)) if (w.length >= 3 && !STOP.has(w)) s.add(w); };
+  // Explicit reconstructed entities (video segments): the CANONICAL wire-style names the reconstruction
+  // emitted — the bridge that lets a broadcast segment match the wire story of the same event.
+  let ex = item && item.entities;
+  if (typeof ex === 'string') { try { ex = JSON.parse(ex); } catch { ex = null; } }
+  if (Array.isArray(ex)) for (const name of ex) addName(name);
+  // Plus proper nouns from the (clean) title + summary.
+  for (const name of extractProperNouns(`${(item && item.title) || ''}. ${(item && item.summary) || ''}`)) addName(name);
   return s;
 }
 function jaccard(a, b) {
@@ -347,13 +349,19 @@ async function clusterItems(items, { now = Date.now(), adjudicate = null, bands 
       const s = continuationScore({ entities: st.entity_set, title: tokenSet(st.title, 4) }, sig);
       if (s > bestS) { bestS = s; best = st; }
     }
-    const verdict = best ? classifyContinuation(bestS, bands) : 'new';
+    // ENTITY-BRIDGE for video: a reconstructed broadcast segment shares canonical entities with the wire
+    // story (via entitySet) but its headline is worded differently, so its score often lands just below the
+    // normal 0.30 'new' cutoff. Lower the floor for video (VIDEO_LO) so a same-entity pair reaches the
+    // AMBIGUOUS band → the adjudicator decides, instead of silently forking a duplicate single-source story.
+    const isVideo = item && item.source_kind === 'video';
+    const itemBands = isVideo ? { hi: (bands && bands.hi) || 0.60, lo: (bands && bands.videoLo) || 0.15 } : bands;
+    const verdict = best ? classifyContinuation(bestS, itemBands) : 'new';
     let decision = verdict;
     // CROSS-MODAL GATE (video CC → wire story): a reconstructed broadcast segment must NEVER auto-attach on
     // score alone — even a high-band match is adjudicator-CONFIRMED before it corroborates a wire story. This
     // guards against a loose caption reconstruction inflating a real story. Fail-safe (no ask / ask throws) →
     // do NOT merge (open a new story), so an unconfirmed video segment stays an isolated single-source island.
-    const videoGate = best && item && item.source_kind === 'video';
+    const videoGate = best && isVideo;
     if (verdict === 'ambiguous' || (verdict === 'continue' && videoGate)) {
       let same = false;
       if (typeof adjudicate === 'function') { try { same = !!(await adjudicate(best, item)); } catch { same = false; } }

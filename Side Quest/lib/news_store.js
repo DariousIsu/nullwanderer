@@ -38,6 +38,7 @@ function ensureSchema() {
       story_id      INTEGER,                        -- filled by Stage-2 clustering (later slice)
       layer_id      INTEGER,                        -- filled by the hourly pass (later slice)
       category      TEXT,                            -- news-tuner topic key (cloud-classified once, cached); NULL = not yet classified
+      entities      TEXT,                            -- reconstructed canonical entities (JSON array); set on video segments by reconstruction
       seen          INTEGER NOT NULL DEFAULT 0,
       UNIQUE(source, url_or_guid)
     );
@@ -46,12 +47,14 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_news_items_story ON news_items(story_id);
     CREATE INDEX IF NOT EXISTS idx_news_items_layer ON news_items(layer_id);
   `);
-  // migration: add `category` to a pre-existing news_items table (the tuner's topic key), THEN index it.
-  // The index must come AFTER the ALTER — on an existing DB the column isn't there until we add it, so a
-  // CREATE INDEX on `category` inside the block above would throw and abort the whole schema setup.
+  // migration: add `category` (tuner topic key) + `entities` (reconstructed canonical entities, JSON) to a
+  // pre-existing news_items table, THEN index category. The index must come AFTER the ALTER — on an existing
+  // DB the column isn't there until we add it, so a CREATE INDEX on it inside the block above would throw and
+  // abort the whole schema setup.
   try {
     const cols = newsdb.get().prepare('PRAGMA table_info(news_items)').all().map((c) => c.name);
     if (!cols.includes('category')) newsdb.get().exec('ALTER TABLE news_items ADD COLUMN category TEXT');
+    if (!cols.includes('entities')) newsdb.get().exec('ALTER TABLE news_items ADD COLUMN entities TEXT');
     newsdb.get().exec('CREATE INDEX IF NOT EXISTS idx_news_items_category ON news_items(category)');
   } catch { /* fresh table already has it */ }
   _schemaReady = true;
@@ -179,12 +182,13 @@ function markDropped(ids = []) {
 
 // Overwrite an item's title/summary — used by video-segment RECONSTRUCTION to replace a garbled caption
 // fragment with a clean reconstructed headline before clustering. Only the given fields are touched.
-function updateItemText(id, { title = undefined, summary = undefined } = {}) {
+function updateItemText(id, { title = undefined, summary = undefined, entities = undefined } = {}) {
   ensureSchema();
   if (id == null) return false;
   const sets = [], args = {};
   if (title !== undefined) { sets.push('title = @title'); args.title = title == null ? null : String(title).slice(0, 500); }
   if (summary !== undefined) { sets.push('summary = @summary'); args.summary = summary == null ? null : String(summary).slice(0, 2000); }
+  if (entities !== undefined) { sets.push('entities = @entities'); args.entities = (Array.isArray(entities) && entities.length) ? JSON.stringify(entities.slice(0, 12)) : null; }
   if (!sets.length) return false;
   args.id = Number(id);
   return newsdb.get().prepare(`UPDATE news_items SET ${sets.join(', ')} WHERE id = @id`).run(args).changes > 0;

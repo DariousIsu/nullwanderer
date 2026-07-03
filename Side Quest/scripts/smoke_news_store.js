@@ -97,9 +97,10 @@ ok(!store.uncategorizedItems({ limit: 100 }).some(r => r.id === droppedItem.id),
 // --- video reconstruction helpers: updateItemText (clean headline) + absorbItems (fold flushes) ---
 const rep = store.insertItem({ source: 'CNN', sourceKind: 'video', urlOrGuid: 'vid-rep', title: 'RAW ALL CAPS FRAGMENT', summary: 'raw', ts: T0 + 300 });
 const mem = store.insertItem({ source: 'CNN', sourceKind: 'video', urlOrGuid: 'vid-mem', title: 'another fragment', ts: T0 + 301 });
-ok(store.updateItemText(rep.id, { title: 'US-Iran tensions rise over Strait of Hormuz', summary: 'clean' }) === true, 'updateItemText overwrites a garbled caption with a clean headline');
+ok(store.updateItemText(rep.id, { title: 'US-Iran tensions rise over Strait of Hormuz', summary: 'clean', entities: ['Iran', 'Strait of Hormuz'] }) === true, 'updateItemText overwrites a garbled caption with a clean headline');
 const cleaned = store.recentItems({ limit: 200 }).find(r => r.id === rep.id);
 ok(cleaned && /Hormuz/.test(cleaned.title) && cleaned.summary === 'clean', 'updateItemText persisted the reconstructed title + summary');
+ok(cleaned && JSON.parse(cleaned.entities || '[]').includes('Iran'), 'updateItemText persisted the canonical entities (JSON) for the bridge');
 ok(store.absorbItems([mem.id]) === 1, 'absorbItems folds a non-representative flush (story_id=-2)');
 ok(!store.unclusteredInWindow(T0, T0 + 1000).some(r => r.id === mem.id), 'absorbed item is excluded from clustering (unclusteredInWindow)');
 ok(store.unclusteredInWindow(T0, T0 + 1000).some(r => r.id === rep.id), 'the representative still clusters');

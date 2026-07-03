@@ -36,9 +36,10 @@ ok(VR.reconstructValidator('[{"id":5,"is_news":true}]').valid === false, 'valida
 
 (async () => {
   // ===== reconstructBatch: cloud + fail-safe =====
-  const askMock = async ({ input }) => input.map((i) => (i.id === 5 ? { id: 5, is_news: false } : { id: i.id, headline: 'US-Iran tensions over Hormuz', summary: 'Tensions rise.', is_news: true }));
+  const askMock = async ({ input }) => input.map((i) => (i.id === 5 ? { id: 5, is_news: false } : { id: i.id, headline: 'US-Iran tensions over Hormuz', summary: 'Tensions rise.', entities: ['Iran', 'Strait of Hormuz', 'United States'], is_news: true }));
   const v = await VR.reconstructBatch(segs, { ask: askMock });
   ok(v[3] && /Hormuz/.test(v[3].headline) && v[3].isNews === true, 'reconstructBatch: news segment → clean headline');
+  ok(v[3] && Array.isArray(v[3].entities) && v[3].entities.includes('Iran'), 'reconstructBatch: news segment → canonical entities (the bridge)');
   ok(v[5] && v[5].isNews === false, 'reconstructBatch: ad segment → is_news false');
   const vDown = await VR.reconstructBatch(segs, { ask: async () => { throw new Error('cloud down'); } });
   ok(Object.keys(vDown).length === 0, 'reconstructBatch: cloud down → empty (caller keeps raw, never invents)');
@@ -51,7 +52,7 @@ ok(VR.reconstructValidator('[{"id":5,"is_news":true}]').valid === false, 'valida
     markDropped: (ids) => { calls.dropped.push(...ids); return ids.length; },
   };
   const r = await VR.runReconstruct(vids, { store, ask: askMock });
-  ok(calls.text.some((t) => t.id === 3 && /Hormuz/.test(t.title)), 'runReconstruct: clean headline written onto the representative (id3)');
+  ok(calls.text.some((t) => t.id === 3 && /Hormuz/.test(t.title) && Array.isArray(t.entities) && t.entities.includes('Iran')), 'runReconstruct: clean headline + canonical entities written onto the representative (id3)');
   ok(calls.absorbed.includes(1) && calls.absorbed.includes(2) && !calls.absorbed.includes(3), 'runReconstruct: non-representative flushes absorbed (1,2 not 3)');
   ok(calls.dropped.includes(5), 'runReconstruct: the ABC ad segment dropped (is_news false)');
   ok(r.reconstructed >= 2 && r.dropped >= 1, 'runReconstruct: tallies reconstructed + dropped');

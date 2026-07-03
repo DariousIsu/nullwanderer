@@ -251,6 +251,19 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   ok(g2.attached === 1 && lane.allStories().length === 1, 'video segment MERGES into the wire story when the adjudicator CONFIRMS (cross-modal corroboration)');
   clearStories(); newsdb.get().exec('DELETE FROM news_story_updates');
 
+  // ===== ENTITY-BRIDGE: a differently-WORDED video segment merges via shared CANONICAL entities =====
+  const wire = { id: 601, source: 'Reuters', source_kind: 'rss', title: 'US and Iran clash over Strait of Hormuz', summary: '', ts: NOW };
+  const vidBridge = { source: 'CNN', source_kind: 'video', title: 'Oil Prices Spike on Gulf Tensions', summary: '', entities: ['Iran', 'Strait of Hormuz'], ts: NOW };  // NO headline-word overlap with the wire
+  await lane.clusterItems([wire], { now: NOW });
+  const yb = await lane.clusterItems([{ ...vidBridge, id: 602 }], { now: NOW, adjudicate: async () => true });
+  ok(yb.attached === 1 && lane.allStories().length === 1, 'entity-bridge: a differently-worded video segment MERGES into the wire story via shared canonical entities (reaches adjudicator via the lowered video floor)');
+  // control: the SAME differently-worded video WITHOUT the reconstructed entities scores below the floor → never reaches the adjudicator → stays separate (proves the entities are the bridge)
+  clearStories(); newsdb.get().exec('DELETE FROM news_story_updates');
+  await lane.clusterItems([wire], { now: NOW });
+  const nb = await lane.clusterItems([{ ...vidBridge, id: 603, entities: undefined }], { now: NOW, adjudicate: async () => true });
+  ok(nb.attached === 0 && lane.allStories().length === 2, 'control: without canonical entities the same video scores below the floor → no merge (the entities ARE the bridge)');
+  clearStories(); newsdb.get().exec('DELETE FROM news_story_updates');
+
   // ===== NEWS TUNER: balanceStories / buildBriefing apply reserve+cap so a corroborated topic can't drown out =====
   const S = (category, oc, rc, title) => ({ title, category, outlet_count: oc, report_count: rc, last_ts: NOW });
   const pool = [
