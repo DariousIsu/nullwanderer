@@ -199,8 +199,8 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
     const calls = { propose_entity: [], promote_proposal: [], propose_relation: [], landDoc: [], web_extract: [] };
     let pid = 100;
     const dispatch = async (tag) => {
-      // web_extract (trafilatura clean article text) — the full-article read path.
-      if (tag.name === 'web_extract') { calls.web_extract.push(tag.args); return { ok: true, text: JSON.stringify({ text: 'FULL ARTICLE BODY: Ukrainian officials named the districts hit in Kyiv; 18 dead, 40 wounded.' }) }; }
+      // web_extract (trafilatura) — clean body under `text_preview` (the REAL shape, guards the parse key).
+      if (tag.name === 'web_extract') { calls.web_extract.push(tag.args); return { ok: true, text: JSON.stringify({ url: tag.args.url, extractor: 'trafilatura', text_preview: 'FULL ARTICLE BODY: Ukrainian officials named the districts hit in Kyiv; 18 dead, 40 wounded.', text_chars: 86 }) }; }
       // Echo's external write surface lands every write as a tenant PROPOSAL (action:'proposed', a proposal id).
       if (tag.name === 'propose_entity') { calls.propose_entity.push(tag.args); return { ok: true, text: JSON.stringify({ action: 'proposed', entity_id: ++pid, name: tag.args.name }) }; }
       // promote_proposal copies the tenant proposal into the PUBLIC graph → returns the public entity_id (id+4900 here, so the chain is assertable).

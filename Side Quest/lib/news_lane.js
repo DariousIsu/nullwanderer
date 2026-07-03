@@ -593,7 +593,9 @@ async function fetchArticle({ dispatch, url, maxChars = 6000 } = {}) {
     const r = await dispatch({ kind: 'do', name: 'web_extract', args: { url } });
     if (!r || !r.ok) return null;
     let text = '';
-    try { const o = JSON.parse(r.text); text = String((o && (o.text || o.body || o.content || o.markdown)) || '').trim(); } catch { /* not json */ }
+    // web_extract (trafilatura) returns JSON with the clean body under `text_preview` (+ text_chars/…);
+    // keep the other keys as fallbacks for a different extractor shape.
+    try { const o = JSON.parse(r.text); text = String((o && (o.text_preview || o.text || o.body || o.content || o.markdown)) || '').trim(); } catch { /* not json → plain text */ }
     if (!text) text = String((r && r.text) || '').trim();
     text = text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
     return text ? text.slice(0, maxChars) : null;
