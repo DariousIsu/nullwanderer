@@ -44,8 +44,26 @@ eq('momentum: Vance total mentions', vance.mentions, 3);
 eq('momentum: video CC mentions counted separately', vance.video_mentions, 2);
 eq('momentum: by_source_kind split', vance.by_source_kind, { rss: 1, video: 2 });
 eq('momentum: first/last ts tracked', [vance.first_ts, vance.last_ts], [100, 200]);
-eq('momentum: sentiment placeholder null', vance.sentiment, null);
 eq('momentum: Florida picked up from newsletter', mo.find((m) => m.entity === 'Florida').mentions, 1);
+
+// --- toneOf: the polarity lexicon (pos/neg counts, negation-aware) ---
+eq('toneOf: positive words', NF.toneOf('stocks surge as markets rally to a record high'), { pos: 3, neg: 0 });
+eq('toneOf: negative words', NF.toneOf('markets crash amid a deepening crisis and layoffs'), { pos: 0, neg: 3 });
+eq('toneOf: neutral text → no polarity', NF.toneOf('the committee met on Tuesday to review the schedule'), { pos: 0, neg: 0 });
+eq('toneOf: a negator flips a polar word', NF.toneOf('no growth this quarter'), { pos: 0, neg: 1 });
+
+// --- momentum sentiment: aggregate tone + confidence sample size ---
+const toneItems = [
+  { source_kind: 'rss', title: 'Vance rally draws record crowd, campaign gains momentum', ts: 100 },   // 4 pos (rally, record, gains, momentum)
+  { source_kind: 'rss', title: 'Vance faces scandal and criticism over the vote', ts: 110 },            // 2 neg (scandal, criticism)
+  { source_kind: 'rss', title: 'Ohio weather is mild today', ts: 120 },                                 // neutral, no Vance
+];
+const toneMo = NF.momentumFrom(toneItems, { entities: ['Vance'] });
+const vt = toneMo[0];
+eq('momentum: sentiment = aggregate lexicon tone in [-1,1]', vt.sentiment, Math.round(((4 - 2) / 6) * 10000) / 10000);
+eq('momentum: sentiment_n = polar-token sample size', vt.sentiment_n, 6);
+eq('momentum: no polar tokens → sentiment null', NF.momentumFrom([{ source_kind: 'rss', title: 'Vance met with staff on Tuesday', ts: 1 }], { entities: ['Vance'] })[0].sentiment, null);
+eq('momentum: zero mentions → sentiment null, n 0', NF.momentumFrom(toneItems, { entities: ['Nobody'] })[0].sentiment, null);
 
 // --- live wrappers with INJECTED readers (no bucket) ---
 const fakeLane = { storiesActiveInWindow: () => stories };

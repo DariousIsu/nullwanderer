@@ -14,9 +14,13 @@
  *     continuous covariate where noise averages out (NOT a trigger). This is the real-time / CC-inclusive
  *     path; a tighter window + more frequent calls = the opt-in "live mode" (debate / election night).
  *
- * Sentiment is a PLACEHOLDER (null) until the per-entity sentiment pass (sentiment.ai / gpt-oss) is built —
- * momentum returns volume now, tone later, same shape. PURE cores (eventsFrom / momentumFrom) take arrays →
- * offline-testable; the live wrappers inject the news readers (default to the real libs). Fail-soft.
+ * Sentiment: momentum now carries a DETERMINISTIC per-entity tone (toneOf, a compact news polarity lexicon)
+ * aggregated over the mentioning items — `sentiment` ∈ [-1,1] (null when no polar tokens) + `sentiment_n` =
+ * the polar-token sample size (confidence). It stays lexicon-based ON PURPOSE: momentum() is the hot,
+ * frequently-polled real-time path, so tone must be free + network-free; over many mentions the noise
+ * averages out (same "continuous covariate" logic as volume). A model-grade tone pass, if ever wanted,
+ * belongs at the BATCHED compression tier (annotating stories), not per momentum() call. PURE cores
+ * (eventsFrom / momentumFrom / toneOf) take arrays → offline-testable; live wrappers inject the readers. Fail-soft.
  */
 'use strict';
 
@@ -71,17 +75,48 @@ function eventsFrom(stories, opts = {}) {
   return out.sort((a, b) => b.corroboration - a.corroboration || b.last_ts - a.last_ts);
 }
 
+// A compact NEWS polarity lexicon. Not exhaustive — a DIRECTIONAL covariate, so recall over precision;
+// aggregated over many mentions it's stable. Deliberately deterministic + free (see header). Word-stem-ish.
+const POS_WORDS = new Set(('win wins won victory victories triumph gain gains gained surge surges surged rally rallies rallied ' +
+  'rise rises rose soar soars soared jump jumps climbs climbed advance advances approve approved approval support supports supported ' +
+  'backs backed lead leads leading ahead boost boosts boosted growth grow grew record breakthrough deal deals agreement agree agrees ' +
+  'praise praised optimistic strong strengthen strengthens recovery recover relief secures secured wins peace progress upgrade upgraded ' +
+  'landmark historic hopeful hope momentum resilient thrive thriving').split(' '));
+const NEG_WORDS = new Set(('loss losses lost defeat defeats defeated fall falls fell drop drops dropped plunge plunges plunged crash ' +
+  'crashes crashed slump slumps decline declines declined slid tumble tumbles collapse collapses crisis scandal scandals fraud corruption ' +
+  'attack attacks attacked killed kill dead death deaths war conflict violence violent protest protests fear fears warn warns warned ' +
+  'threat threats threaten threatens sanction sanctions ban bans banned deny denies denied reject rejects rejected criticism criticize ' +
+  'criticized probe investigation lawsuit lawsuits recession layoffs cuts shortage shortages outbreak disaster weak weakens worsen worse ' +
+  'crackdown blast strike strikes turmoil unrest slowdown default').split(' '));
+const NEGATORS = new Set(['not', 'no', 'never', 'without', 'nothing', 'none']);
+
+// PURE — signed tone of a text via the polarity lexicon. Returns { pos, neg } counts (a negator within the
+// preceding 3 tokens FLIPS a polar word: "no growth" → negative). Aggregate then normalize for a [-1,1] score.
+function toneOf(text) {
+  const toks = norm(text).split(' ').filter(Boolean);
+  let pos = 0, neg = 0;
+  for (let i = 0; i < toks.length; i++) {
+    let polarity = POS_WORDS.has(toks[i]) ? 1 : (NEG_WORDS.has(toks[i]) ? -1 : 0);
+    if (!polarity) continue;
+    for (let j = Math.max(0, i - 3); j < i; j++) { if (NEGATORS.has(toks[j])) { polarity = -polarity; break; } }
+    if (polarity > 0) pos++; else neg++;
+  }
+  return { pos, neg };
+}
+
 /**
  * PURE — per-entity mention momentum from raw items (incl. video CCs).
  * opts: { entities (required — the candidates/issues to track) }.
  * Each result: { entity, mentions, by_source_kind:{rss,video,...}, video_mentions, first_ts, last_ts,
- *                sentiment:null }  // sentiment filled by a later pass; volume is the signal now.
+ *                sentiment:[-1,1]|null, sentiment_n }  // sentiment = aggregate lexicon tone over the
+ *                mentioning items; null when no polar tokens; sentiment_n = polar-token sample size (confidence).
  */
 function momentumFrom(items, opts = {}) {
   const list = Array.isArray(items) ? items : [];
   const entities = (opts.entities || []);
   return entities.map((entity) => {
-    const acc = { entity, mentions: 0, by_source_kind: {}, video_mentions: 0, first_ts: null, last_ts: null, sentiment: null };
+    const acc = { entity, mentions: 0, by_source_kind: {}, video_mentions: 0, first_ts: null, last_ts: null, sentiment: null, sentiment_n: 0 };
+    let pos = 0, neg = 0;
     for (const it of list) {
       if (!it || !mentions(itemText(it), entity)) continue;
       acc.mentions++;
@@ -90,7 +125,11 @@ function momentumFrom(items, opts = {}) {
       if (k === 'video') acc.video_mentions++;
       const ts = Number(it.ts) || 0;
       if (ts) { acc.first_ts = acc.first_ts == null ? ts : Math.min(acc.first_ts, ts); acc.last_ts = acc.last_ts == null ? ts : Math.max(acc.last_ts, ts); }
+      const t = toneOf(itemText(it)); pos += t.pos; neg += t.neg;
     }
+    const denom = pos + neg;
+    acc.sentiment_n = denom;
+    acc.sentiment = denom ? Math.round(((pos - neg) / denom) * 10000) / 10000 : null;
     return acc;
   });
 }
@@ -106,7 +145,7 @@ function momentum({ sinceMs = 0, entities = [], limit = 500, store = null } = {}
   try {
     const S = store || require('./news_store');
     return momentumFrom(S.recentItems({ sinceMs, limit }), { entities });
-  } catch { return (entities || []).map((entity) => ({ entity, mentions: 0, by_source_kind: {}, video_mentions: 0, first_ts: null, last_ts: null, sentiment: null })); }
+  } catch { return (entities || []).map((entity) => ({ entity, mentions: 0, by_source_kind: {}, video_mentions: 0, first_ts: null, last_ts: null, sentiment: null, sentiment_n: 0 })); }
 }
 
 // ---- RAW tier: the firehose passthrough — every collected item incl. broadcast video CCs. For a consumer
@@ -158,4 +197,4 @@ function today({ sinceMs = null, entities = null, minCorroboration = 2, limit = 
   } catch { return []; }
 }
 
-module.exports = { events, momentum, raw, layers, digest, today, eventsFrom, momentumFrom, storyCorroboration, tierOf, mentions };
+module.exports = { events, momentum, raw, layers, digest, today, eventsFrom, momentumFrom, toneOf, storyCorroboration, tierOf, mentions };
