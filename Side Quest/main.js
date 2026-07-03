@@ -3034,6 +3034,26 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const varietyNudge = require('./lib/voice').buildAntiRepetitionNudge(
     recentTurns.filter(t => t.speaker === 'ai_said').map(t => t.content), userName);
 
+  // CHAT-CORRECTION capture (reconciliation §7, chat lane) — when Lucas corrects a FACT ("no — Bondi stepped
+  // down in April"), bank it as a HIGH-AUTHORITY verified_fact so recall LEADS with it next time (the live
+  // precedence gate; capturedBy='chat-correction' → authority 3). Fire-and-forget: detection is cheap + pure,
+  // extraction/write happen OFF the reply path so nothing blocks her response. Non-corrections and
+  // cue-without-a-claim bank nothing (extraction gates the write). Fail-soft.
+  try {
+    const _bc = require('./lib/belief_correction');
+    if (_bc.detectCorrection(userMessage, {}).isCorrection) {
+      const _priorSay = (recentTurns.filter(t => t.speaker === 'ai_said').slice(-1)[0] || {}).content || '';
+      const _learning = require('./lib/learning'), _mem = require('./lib/memory');
+      Promise.resolve().then(() => _bc.captureCorrection({
+        userMessage,
+        priorAnswer: _priorSay,
+        extractFn: (msg, { priorAnswer }) => _learning.extractClaims({ query: priorAnswer || msg, content: msg }),
+        writeFact: (rec) => _mem.store(rec),
+      })).then(r => { if (r && r.captured) console.log(`[main] chat-correction: banked ${r.captured} verified fact(s) (cue: ${r.cue})`); })
+        .catch(e => console.error('[main] chat-correction capture failed:', e && e.message));
+    }
+  } catch (e) { console.error('[main] chat-correction detect failed:', e && e.message); }
+
   // If the user shared links or attached files, surface them prominently in the message
   let composedUserMessage = userMessage;
 
