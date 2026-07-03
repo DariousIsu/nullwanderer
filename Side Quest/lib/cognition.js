@@ -23,17 +23,10 @@ const echo = require('./echo_suit');
 const ad = require('./answer_draft');
 
 const NEED_RE = /^\s*NEED:\s*(.+)$/is;
-// A question whose answer TURNS OVER — the records we hold may be stale (we store Lee Zeldin as
-// "Representative"; he's been EPA Administrator since Jan 2025). These force a fresh-source verify before
-// we trust a plausible grounded answer. Read-time slice of the self-heal (verify-when-currency-signaled).
-const _CURRENCY_RE = /\b(current(ly)?|now(adays)?|today|latest|recently|these days|right now|as of|this (?:week|month|year)|who is the)\b/i;
-// A CURRENT-OFFICE-HOLDER question ("who's the president?", "who is the CEO of Nvidia?", "who's the governor
-// of Texas?"). The answer TURNS OVER, so our own KG (the graph tier) may be stale (Echo still records Biden
-// as president). For these, FRESH sources must LEAD the enrich ladder — the graph is not the authority on who
-// holds an office NOW. Requires an explicit OFFICE word after "who ('s/is/are)", so multi-hop "who LEADS the
-// company that makes ChatGPT" (no office word → graph-first, OpenAI→Altman) is untouched. Pairs with the
-// echo_suit office-title GATE (which stops the bare title resolving to a same-named junk person).
-const _OFFICE_HOLDER_Q = /\bwho(?:'s|\s+is|\s+are|\s+se)\b[^?.!]*\b(president|potus|vice[-\s]?president|governor|senators?|congress(?:man|woman|person)|representatives?|mayor|secretary|attorney\s+general|prime\s+minister|premier|chancellor|chair(?:man|woman|person)?|ceo|cfo|cto|coo|administrator|pope|king|queen|monarch|ambassador|speaker|chief\s+justice|justices?|commissioner|treasurer|comptroller|sheriff)\b/i;
+// Whether a turn asks for something that TURNS OVER (office holder, current fact) — and the clean topic to
+// look it up by — is decided by lib/intent_parse (a fast model reads the phrasing; regex is only its
+// fallback). answerGrounded consumes that structured intent instead of matching phrase patterns here, which
+// is what kept breaking ("who's" vs "who is", "now" vs "the"). See intent_parse.js.
 
 // GUARD for the heavy, visible EXCAVATION tier — a rendered page can only settle a FACT lookup. Fire freely
 // for entity/encyclopedic needs (the research fuel Lucas wants), but skip subjective/advice/personal needs
@@ -235,14 +228,26 @@ function _hasStaleGrounding(grounding, now) {
 async function answerGrounded({ userMessage, grounding = '', object = null, userName = 'Lucas', deps = {} } = {}) {
   if (!userMessage) return null;
   let g = String(grounding || '').trim();
-  let step = await _draftOrNeed(userMessage, g, deps);
+  // INTENT PARSE (model-primary, regex fallback) runs CONCURRENTLY with the first draft — a fast cloud model
+  // reads what the turn is actually asking (kind / clean topic / does-it-turn-over) so routing no longer
+  // hinges on brittle phrase regexes ("who's" vs "who is", "now" vs "the"). Parallel with the draft it always
+  // makes → ~zero added latency. Fail-safe: parseIntent never throws and degrades to the regex fallback.
+  const _ip = () => { try { return require('./intent_parse'); } catch { return null; } };
+  const [step0, it0] = await Promise.all([
+    _draftOrNeed(userMessage, g, deps),
+    deps.intent ? Promise.resolve(deps.intent) : (async () => { const ip = _ip(); return ip ? ip.parseIntent(userMessage, {}) : null; })()
+  ]);
+  let step = step0;
   if (!step) return null;                                    // cloud down → local flow
+  const it = it0 || (_ip() ? _ip()._regexIntent(String(userMessage)) : { kind: 'other', topic: '', needs_fresh: false });
   // CURRENCY VERIFY — the grounding produced a plausible answer, but the question asks for a CURRENT fact
   // and our records may be stale. Check a fresh source (Wikipedia) and re-draft before trusting it. Only
   // fires on currency-marked questions, so normal turns pay nothing. ("what does Lee Zeldin do now?" →
   // records say "Representative" → verify → "EPA Administrator since 2025".)
-  if (step.answer && (_CURRENCY_RE.test(String(userMessage)) || _hasStaleGrounding(g, deps.now || Date.now()))) {
-    const topic = String((object && object.name) || userMessage).replace(/\[[^\]]*\]/g, '').replace(/\([^)]*\)/g, '').trim();
+  if (step.answer && (it.needs_fresh || _hasStaleGrounding(g, deps.now || Date.now()))) {
+    // The model's clean topic ("President of the United States") is a far better fresh-lookup key than the raw
+    // question ("who is president now?") or a junk-resolved object name — fall back to those only if it's empty.
+    const topic = String(it.topic || (object && object.name) || userMessage).replace(/\[[^\]]*\]/g, '').replace(/\([^)]*\)/g, '').trim();
     // Fresh check escalates: Wikipedia lead/body first, then — for the current-office facts wiki can't
     // read off the page — EXCAVATION (her eyes on the infobox). Whichever confirms a fresh value writes
     // back (supersedes the stale one) and wins.
@@ -275,22 +280,25 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   // the cloud tool-executor (specialized Echo tools: counts/lists) → last-ditch DDG. Re-draft after each;
   // stop as soon as the grounding can actually answer. This is "let me find out" — never a dead-end, never
   // invented. Wiki sits before routed/web because the audit proved those two reach nothing on simple facts.
-  // Tier order by question kind. An OFFICE-HOLDER question ("who's the president/SecDef/CEO?") is answered
-  // ONLY from FRESH external sources — our own KG (graph/routed) is precisely the stale source here (Echo
-  // records Biden as president, Austin as SecDef), and it sits before the forensic tiers, so it would
-  // intercept with a confidently-stale name. Exclude it. A general CURRENT fact (counts, "latest bill")
-  // keeps our data but leads with wiki. Everything else leads with the graph (multi-hop/relational).
-  const _msg = String(userMessage);
-  const _modes = _OFFICE_HOLDER_Q.test(_msg) ? ['wiki', 'web', 'excavate']
-    : _CURRENCY_RE.test(_msg) ? ['wiki', 'graph', 'routed', 'web', 'excavate']
+  // Tier order by the PARSED intent kind. An OFFICE-HOLDER question ("who's the president/SecDef/CEO?") is
+  // answered ONLY from FRESH external sources — our own KG (graph/routed) is precisely the stale source here
+  // (Echo records Biden as president, Austin as SecDef), and it sits before the forensic tiers, so it would
+  // intercept with a confidently-stale name. Exclude it. A general CURRENT fact (counts, "latest bill") keeps
+  // our data but leads with wiki. Everything else leads with the graph (multi-hop/relational).
+  const _modes = it.kind === 'office_holder' ? ['wiki', 'web', 'excavate']
+    : it.needs_fresh ? ['wiki', 'graph', 'routed', 'web', 'excavate']
     : ['graph', 'wiki', 'routed', 'web', 'excavate'];
   for (const mode of _modes) {
     if (!step || !step.need) break;
-    const res = mode === 'graph' ? await _enrichGraph(step.need, object, deps)
-              : mode === 'wiki' ? await _enrichWiki(step.need, deps)
-              : mode === 'routed' ? await _enrichRouted(step.need, deps)
-              : mode === 'web' ? await _enrichWeb(step.need, deps)
-              : await _enrichExcavate(step.need, deps);
+    // Search key: for a fresh question the model's normalized topic ("President of the United States") is a
+    // far cleaner lookup than the draft's raw NEED ("who runs the country" → the wiki "Country" article). Use
+    // it.topic when the intent flagged fresh + gave one; otherwise the draft's need (entity Qs, no topic).
+    const q = (it.needs_fresh && it.topic) ? it.topic : step.need;
+    const res = mode === 'graph' ? await _enrichGraph(q, object, deps)
+              : mode === 'wiki' ? await _enrichWiki(q, deps)
+              : mode === 'routed' ? await _enrichRouted(q, deps)
+              : mode === 'web' ? await _enrichWeb(q, deps)
+              : await _enrichExcavate(q, deps);
     if (!res || !res.text) continue;
     // LEAD with the freshest retrieval. It was fetched specifically for THIS need, so it is the highest-value
     // grounding; the earlier tiers already FAILED to answer, so they are the least valuable and should be the

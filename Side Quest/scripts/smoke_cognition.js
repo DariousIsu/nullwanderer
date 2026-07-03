@@ -152,6 +152,16 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
     dispatch: graphDispatch, wikiLookup: async () => [{ title: 'x', extract: 'irrelevant filler' }],
     webSearch: async () => ({ results: [] }), excavate: async () => ({ found: false }), routeNeed: async () => ({ ok: false }), writeBack: async () => {} } });
   ok(md && md.enrichSource === 'graph' && /Altman/.test(md.say), 'multi-hop Q (no office word): graph still leads → OpenAI→Altman (reorder is office-scoped)');
+  // 10f) cognition consumes the PARSED INTENT (the model-primary replacement for the phrase regexes). The
+  // deps.intent seam supplies what a model would return for "who runs the country?" — a phrasing with NO
+  // office word, which the regex fallback classifies "other" (→ graph-first → stale Biden). With the parsed
+  // office_holder intent it routes fresh-only → wiki → Trump. This is the phrasing-robustness the model buys.
+  const ri = await cog.answerGrounded({ userMessage: 'who runs the country?', grounding: '', deps: {
+    intent: { kind: 'office_holder', topic: 'President of the United States', needs_fresh: true },
+    ask: async ({ input }) => /trump/i.test(String(input.grounding)) ? 'Donald Trump runs the country as president.' : 'NEED: current US president',
+    dispatch: staleKgDispatch, wikiLookup: async () => [{ title: 'President of the United States', extract: 'The current president of the United States is Donald Trump, since January 20, 2025.' }],
+    webSearch: async () => ({ results: [] }), excavate: async () => ({ found: false }), routeNeed: async () => ({ ok: false }), writeBack: async () => {} } });
+  ok(ri && ri.enrichSource === 'wiki' && /Trump/.test(ri.say) && !/Biden/i.test(ri.say), 'cognition consumes parsed intent: "who runs the country?" (no office word) → office_holder → wiki → Trump');
 
   // 11) _kickWriteBack skips when there's no source URL (graph/routed = our own data → nothing to bank).
   let kicked = false;
