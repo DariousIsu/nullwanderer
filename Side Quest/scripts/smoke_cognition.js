@@ -112,6 +112,25 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
     writeBack: async () => {} } });
   ok(y && y.enrichSource === 'excavate' && /Zephyr/.test(y.say), 'truncation guard: a late-tier answer survives the draft cap because the freshest tier LEADS the grounding');
 
+  // 10c) CURRENCY-VERIFY MUST NOT SERVE A STALE GUESS ON FAILURE — the live "who is the president?" → "Joe
+  // Biden" bug. A currency question with NO grounding drafts a pure model guess (stale training); when the
+  // fresh check reaches nothing (Echo not ready seconds after a reboot), the OLD code returned that guess.
+  // Fix: a pure guess (empty grounding) for a current fact that can't be verified falls through to the full
+  // ladder → honest-miss if all fail; a grounded answer is still best-effort served.
+  const presAsk = async ({ input }) => /trump/i.test(String(input.grounding)) ? 'Donald Trump is the president.' : 'Joe Biden is the president.';
+  // (A) fresh check AND every ladder tier fail → honest miss, NEVER the stale guess
+  const pA = await cog.answerGrounded({ userMessage: 'who is the president of the united states?', grounding: '', deps: {
+    ask: presAsk, dispatch: emptyGraph, wikiLookup: async () => [], excavate: async () => ({ found: false }),
+    routeNeed: async () => ({ ok: false }), webSearch: async () => ({ results: [] }), writeBack: async () => {} } });
+  ok(pA && pA.missed === true && !/Biden/i.test(pA.say), 'currency guard: unverifiable pure guess → honest miss, NOT the stale "Joe Biden"');
+  // (B) fresh check fails but the WEB tier (which the verify loop lacks) recovers → correct current answer
+  const pB = await cog.answerGrounded({ userMessage: 'who is the president of the united states?', grounding: '', deps: {
+    ask: presAsk, dispatch: emptyGraph, wikiLookup: async () => [], excavate: async () => ({ found: false }), routeNeed: async () => ({ ok: false }),
+    webSearch: async () => ({ results: [{ url: 'https://x/pres', title: 'President', snippet: 'Donald Trump' }] }),
+    fetchPage: async () => ({ ok: true, title: 'President', text: 'The current president of the United States is Donald Trump, who assumed office on January 20, 2025. '.repeat(2) }),
+    writeBack: async () => {} } });
+  ok(pB && pB.enrichSource === 'web' && /Trump/.test(pB.say) && !/Biden/i.test(pB.say), 'currency guard: fresh-check fails but the fall-through ladder (web) recovers the current answer');
+
   // 11) _kickWriteBack skips when there's no source URL (graph/routed = our own data → nothing to bank).
   let kicked = false;
   cog._kickWriteBack({ query: 'q', answer: 'a', url: null, source: 'graph', deps: { writeBack: async () => { kicked = true; } } });

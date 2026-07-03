@@ -251,7 +251,15 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
         return { say: v.answer, enriched: true, enrichSource: src };
       }
     }
-    return { say: step.answer, enriched: false, enrichSource: null };
+    // Couldn't verify against a fresh source. If the "answer" was a PURE MODEL GUESS (no grounding backed it)
+    // for a CURRENT fact, DO NOT serve it — an unverifiable current fact from stale training is the exact
+    // confabulation this guard exists to kill: the live "who is the president?" returned stale "Joe Biden"
+    // whenever the fresh check momentarily reached nothing (e.g. Echo not ready seconds after a reboot).
+    // Convert to a NEED and fall through to the FULL ladder (graph/routed/web add tiers the wiki+excavate
+    // verify lacked, and give a transient Echo miss a second chance); honest-miss if everything fails. A
+    // grounded answer (g non-empty) is from our real records → best-effort serve is acceptable.
+    if (!g) step = { need: topic };
+    else return { say: step.answer, enriched: false, enrichSource: null };
   }
   if (step.answer) return { say: step.answer, enriched: false, enrichSource: null };
   if (!step.need) return null;
