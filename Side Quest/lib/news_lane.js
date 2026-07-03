@@ -18,6 +18,8 @@
 'use strict';
 const newsdb = require('./news_db');
 const { extractProperNouns } = require('./graph_walk');
+const newsTopics = require('./news_topics');   // pure — story category (news tuner)
+const newsRank = require('./news_rank');        // pure — the reserve/weight/cap balancer
 
 // --- pure text helpers -------------------------------------------------------
 const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'as', 'by', 'from', 'that', 'this', 'these', 'those', 'is', 'are', 'was', 'were', 'be', 'been', 'has', 'have', 'had', 'will', 'new', 'over', 'after', 'says', 'said', 'most', 'least', 'into', 'about', 'more', 'than', 'amid', 'his', 'her', 'their', 'its']);
@@ -217,6 +219,7 @@ function ensureSchema() {
     const cols = newsdb.get().prepare('PRAGMA table_info(news_stories)').all().map((c) => c.name);
     if (!cols.includes('report_set')) newsdb.get().exec('ALTER TABLE news_stories ADD COLUMN report_set TEXT');
     if (!cols.includes('report_count')) newsdb.get().exec('ALTER TABLE news_stories ADD COLUMN report_count INTEGER NOT NULL DEFAULT 0');
+    if (!cols.includes('category')) newsdb.get().exec('ALTER TABLE news_stories ADD COLUMN category TEXT');   // news-tuner topic key
   } catch { /* fresh table already has the columns */ }
   _schemaReady = true;
 }
@@ -243,13 +246,15 @@ function createStory(item, sig, nowMs) {
   const outlets = outletsOf(item);
   const reports = reportKeysOf(item);
   const redaction = detectRedactionSignal(`${item.title || ''}. ${item.summary || ''}`);
+  // Story topic (news tuner): inherit the item's cloud-classified category; else the deterministic guess.
+  const category = (item.category && String(item.category)) || newsTopics.categorizeFast({ title: item.title, summary: item.summary, source: item.source }).category;
   const info = newsdb.get().prepare(
-    `INSERT INTO news_stories (cluster_key, title, entity_set, source_set, source_count, outlet_set, outlet_count, report_set, report_count, redaction, redaction_note, first_ts, last_ts, summary, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`
+    `INSERT INTO news_stories (cluster_key, title, entity_set, source_set, source_count, outlet_set, outlet_count, report_set, report_count, redaction, redaction_note, first_ts, last_ts, summary, category, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`
   ).run(entities.slice().sort().join(' '), displayClean(item.title) || '(untitled)', JSON.stringify(entities),
     JSON.stringify([item.source]), 1, JSON.stringify(outlets), outlets.length, JSON.stringify(reports), reports.length,
     redaction ? 1 : 0, redaction ? `${redaction.kind}: "${redaction.phrase}"` : null,
-    item.ts || nowMs, item.ts || nowMs, displayClean(item.summary).slice(0, 500) || null, nowMs);
+    item.ts || nowMs, item.ts || nowMs, displayClean(item.summary).slice(0, 500) || null, category, nowMs);
   if (item.id != null) newsdb.get().prepare('UPDATE news_items SET story_id = ? WHERE id = ?').run(info.lastInsertRowid, item.id);
   recordUpdate(info.lastInsertRowid, 'born', item, nowMs, { outlets, signal: redaction && redaction.kind });
   return info.lastInsertRowid;
@@ -386,14 +391,29 @@ async function adjudicateSameEvent(story, item, { ask } = {}) {
 
 // --- hourly layer + deterministic briefing ----------------------------------
 // A plain, model-free briefing over the stories touched this hour, ranked by corroboration then recency.
-function buildBriefing(stories, { top = 8 } = {}) {
+// Apply the news tuner to a story list → the balanced top-N (reserve hard-news slots / weight / cap), scored
+// by independent corroboration. Shared by the deterministic briefing AND the prose brief (news_brief) so both
+// surfaces balance identically. No tuner → corroboration-first order (unchanged). Ensures each story carries a
+// category (legacy rows → deterministic guess).
+function balanceStories(stories, tuner = null, { top = 12 } = {}) {
+  const rc = (s) => Number(s.report_count) || (s.report_set instanceof Set ? s.report_set.size : 0);
+  const oc = (s) => Number(s.outlet_count) || 0;
+  const corr = (s) => Math.min(oc(s), rc(s));
+  const withCat = (stories || []).map((s) => s.category ? s : Object.assign({}, s, { category: newsTopics.categorizeFast({ title: s.title, summary: s.summary }).category }));
+  if (!tuner) return withCat.slice().sort((a, b) => (corr(b) - corr(a)) || (oc(b) - oc(a)) || (b.last_ts - a.last_ts)).slice(0, top);
+  const reserved = (tuner.reservedSlots && tuner.reservedSlots.brief) || 0;
+  return newsRank.arrange(withCat, tuner, { slots: top, reserved, scoreOf: corr }).items;
+}
+
+function buildBriefing(stories, { top = 8, tuner = null } = {}) {
   const rc = (s) => Number(s.report_count) || (s.report_set instanceof Set ? s.report_set.size : 0);
   const oc = (s) => Number(s.outlet_count) || 0;
   const corr = (s) => Math.min(oc(s), rc(s));                          // independent corroboration = min(outlets, reports)
-  // rank by INDEPENDENT corroboration, then reach, then recency — a widely-syndicated OR single-outlet
-  // spread story does NOT outrank a genuinely multi-outlet, multi-report one.
-  const ranked = (stories || []).slice().sort((a, b) => (corr(b) - corr(a)) || (oc(b) - oc(a)) || (b.source_count - a.source_count) || (b.last_ts - a.last_ts));
-  const lines = ranked.slice(0, top).map((s) => {
+  // NEWS TUNER: balance categories (reserve hard-news slots, weight, cap) so a heavily-corroborated topic
+  // (e.g. a World Cup result — genuine corroboration, not syndication) can't drown out real news. No tuner →
+  // the original corroboration-first ranking (unchanged behavior). See balanceStories.
+  const ranked = balanceStories(stories, tuner, { top });
+  const lines = ranked.map((s) => {
     let badge = '';
     if (corr(s) > 1) badge += ` (${corr(s)} reports)`;                // independent corroboration (NOT syndicated / single-outlet inflation)
     if (oc(s) > corr(s) && oc(s) > 1) badge += ` (${oc(s)} outlets)`; // reach, shown separately from corroboration
@@ -428,7 +448,7 @@ function startOfDayMs(now = Date.now()) { const d = new Date(now); d.setHours(0,
 // snapshot (writeLayer:false). Reads UN-CLUSTERED reservoir items in the window, clusters them into the
 // rolling stories, closes stale stories, and returns a briefing over the stories active in the window.
 // Idempotent via the story_id-IS-NULL guard in the store, so on-demand + scheduled runs never collide.
-async function runCompression({ store, startMs, endMs = Date.now(), now = Date.now(), adjudicate = null, classifyAds = null, classifyEmailAds = null, writeLayer = false, coldMs = 6 * 3600 * 1000, log } = {}) {
+async function runCompression({ store, startMs, endMs = Date.now(), now = Date.now(), adjudicate = null, classifyAds = null, classifyEmailAds = null, tuner = null, writeLayer = false, coldMs = 6 * 3600 * 1000, log } = {}) {
   ensureSchema();
   let items = (store && typeof store.unclusteredInWindow === 'function') ? store.unclusteredInWindow(startMs, endMs) : [];
   // Stage-1 AD FILTER: drop ADVERTISEMENT items before clustering so they never become "stories". Two
@@ -455,7 +475,7 @@ async function runCompression({ store, startMs, endMs = Date.now(), now = Date.n
   const cluster = await clusterItems(items, { now, adjudicate, log });
   const closed = closeStaleStories({ now, coldMs });
   const stories = storiesActiveInWindow(startMs);
-  const briefing = buildBriefing(stories);
+  const briefing = buildBriefing(stories, { tuner });
   let layerId = null;
   if (writeLayer) layerId = createLayer({ hourStart: startMs, hourEnd: endMs, briefing, itemCount: items.length, storyCount: cluster.touchedStoryIds.length, now });
   if (log) log(`[news-compress] ${items.length} items → +${cluster.created}/${cluster.attached} stories, ${closed} closed${droppedAds ? `, ${droppedAds} ads dropped` : ''}${writeLayer ? `, layer ${layerId}` : ''}`);
@@ -465,9 +485,9 @@ async function runCompression({ store, startMs, endMs = Date.now(), now = Date.n
 // SNAPSHOT ("dam") — triggers the compression on the un-clustered tail so "right now" is FRESH, then
 // returns the briefing over the window. Default window = today→now; pass sinceMs for "update since <t>".
 // No separate summarizer — the snapshot IS a compression run + its briefing (writeLayer:false).
-async function snapshot({ store, sinceMs = null, now = Date.now(), adjudicate = null, classifyAds = null, classifyEmailAds = null, log } = {}) {
+async function snapshot({ store, sinceMs = null, now = Date.now(), adjudicate = null, classifyAds = null, classifyEmailAds = null, tuner = null, log } = {}) {
   const startMs = sinceMs != null ? sinceMs : startOfDayMs(now);
-  const c = await runCompression({ store, startMs, endMs: now, now, adjudicate, classifyAds, classifyEmailAds, writeLayer: false, log });
+  const c = await runCompression({ store, startMs, endMs: now, now, adjudicate, classifyAds, classifyEmailAds, tuner, writeLayer: false, log });
   return { since: startMs, now, briefing: c.briefing, storyCount: c.storyCount, freshItems: c.items };
 }
 
@@ -559,7 +579,7 @@ module.exports = {
   outletsOf, reportIdent, reportKeysOf, isSyndicatedRepublication, detectRedactionSignal, corroborationTier, newOutletsSince, storyConfirmation,
   // stories/layers store
   ensureSchema, openStories, createStory, attachItem, closeStaleStories, allStories,
-  buildBriefing, createLayer, recentLayers, storiesActiveInWindow, startOfDayMs,
+  buildBriefing, balanceStories, createLayer, recentLayers, storiesActiveInWindow, startOfDayMs,
   // developing-story deltas
   recordUpdate, storyDeltas, formatDeltas,
   // orchestration

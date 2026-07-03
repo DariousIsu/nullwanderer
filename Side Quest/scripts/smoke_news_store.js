@@ -79,6 +79,21 @@ ok(fv2 && fv2.urlOrGuid === 'http://only/link' && fv2.ts === 0, 'fromFeedItem fa
 const fvm = store.fromFeedItem({ id: 'agg1', title: 'X', source: 'Google News', publishedMs: 5, members: [{ outlet: 'NBC' }, { outlet: 'NYT' }] });
 ok(fvm && Array.isArray(fvm.members) && fvm.members.length === 2, 'fromFeedItem carries aggregator members through to the store');
 
+// --- news-tuner category: classify-once + cache (uncategorizedItems / setCategories / categoriesByGuid) ---
+const c1 = store.insertItem({ source: 'ESPN', urlOrGuid: 'cat-1', title: 'World Cup result', ts: T0 + 200 });
+const c2 = store.insertItem({ source: 'NWS', urlOrGuid: 'cat-2', title: 'Hurricane nears coast', ts: T0 + 201 });
+const uncat = store.uncategorizedItems({ limit: 100 });
+ok(uncat.some(r => r.id === c1.id) && uncat.some(r => r.id === c2.id), 'uncategorizedItems returns items with NULL category');
+const wrote = store.setCategories({ [c1.id]: 'sports', [c2.id]: 'weather' });
+ok(wrote === 2, 'setCategories writes both verdicts');
+const after = store.uncategorizedItems({ limit: 100 }).map(r => r.id);
+ok(!after.includes(c1.id) && !after.includes(c2.id), 'classified items drop out of uncategorizedItems (cached, never re-classified)');
+const byGuid = store.categoriesByGuid(['cat-1', 'cat-2', 'nope']);
+ok(byGuid['cat-1'] === 'sports' && byGuid['cat-2'] === 'weather' && byGuid['nope'] === undefined, 'categoriesByGuid returns cached categories by dedup key');
+const droppedItem = store.insertItem({ source: 'X', urlOrGuid: 'cat-drop', title: 'ad' });
+store.markDropped([droppedItem.id]);
+ok(!store.uncategorizedItems({ limit: 100 }).some(r => r.id === droppedItem.id), 'uncategorizedItems excludes dropped (story_id=-1) items');
+
 try { fs.unlinkSync(tmp); } catch {}
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

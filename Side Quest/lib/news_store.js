@@ -37,6 +37,7 @@ function ensureSchema() {
       members       TEXT,                          -- aggregator sub-items [{outlet,headline}] as JSON
       story_id      INTEGER,                        -- filled by Stage-2 clustering (later slice)
       layer_id      INTEGER,                        -- filled by the hourly pass (later slice)
+      category      TEXT,                            -- news-tuner topic key (cloud-classified once, cached); NULL = not yet classified
       seen          INTEGER NOT NULL DEFAULT 0,
       UNIQUE(source, url_or_guid)
     );
@@ -44,7 +45,13 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_news_items_first_seen ON news_items(first_seen_ts);
     CREATE INDEX IF NOT EXISTS idx_news_items_story ON news_items(story_id);
     CREATE INDEX IF NOT EXISTS idx_news_items_layer ON news_items(layer_id);
+    CREATE INDEX IF NOT EXISTS idx_news_items_category ON news_items(category);
   `);
+  // migration: add `category` to a pre-existing news_items table (the tuner's topic key).
+  try {
+    const cols = newsdb.get().prepare('PRAGMA table_info(news_items)').all().map((c) => c.name);
+    if (!cols.includes('category')) newsdb.get().exec('ALTER TABLE news_items ADD COLUMN category TEXT');
+  } catch { /* fresh table already has it */ }
   _schemaReady = true;
 }
 
@@ -129,6 +136,33 @@ function countItems() {
   return newsdb.get().prepare('SELECT COUNT(*) AS n FROM news_items').get().n;
 }
 
+// --- News-tuner topic classification (cloud-on-everything, classify-once, cached) ---
+// The un-classified NEWEST-first items the collector's topic pass should label (feed shows recent first, so
+// classify recent first). Excludes dropped (story_id = -1). Limited per call → paced backfill of the backlog.
+function uncategorizedItems({ limit = 40 } = {}) {
+  ensureSchema();
+  return newsdb.get().prepare('SELECT * FROM news_items WHERE category IS NULL AND (story_id IS NULL OR story_id <> -1) ORDER BY first_seen_ts DESC LIMIT ?').all(limit).map(hydrate);
+}
+// Write category verdicts back. `verdict` = { [itemId]: 'topicKey' }. Cached forever (never re-classified).
+function setCategories(verdict = {}) {
+  ensureSchema();
+  const entries = Object.entries(verdict || {}).filter(([, c]) => c);
+  if (!entries.length) return 0;
+  const stmt = newsdb.get().prepare('UPDATE news_items SET category = ? WHERE id = ?');
+  const tx = newsdb.get().transaction((list) => { let n = 0; for (const [id, cat] of list) n += stmt.run(String(cat), Number(id)).changes; return n; });
+  return tx(entries);
+}
+// Look up cached categories for a set of dedup keys (feed enrichment): { [url_or_guid]: category }.
+function categoriesByGuid(guids = []) {
+  ensureSchema();
+  const list = (Array.isArray(guids) ? guids : []).filter(Boolean).map(String);
+  if (!list.length) return {};
+  const out = {};
+  const stmt = newsdb.get().prepare('SELECT url_or_guid, category FROM news_items WHERE url_or_guid = ? AND category IS NOT NULL LIMIT 1');
+  for (const g of list) { const r = stmt.get(g); if (r && r.category) out[g] = r.category; }
+  return out;
+}
+
 // Mark items as PROCESSED-BUT-DROPPED (story_id = -1 sentinel): excluded from clustering and from
 // unclusteredInWindow's `story_id IS NULL` guard, so they're never re-fetched. Used by the compression
 // ad-filter to retire advertisement video segments without deleting them (auditable). Returns count.
@@ -161,4 +195,5 @@ function fromFeedItem(fi, { sourceKind = 'rss' } = {}) {
 
 module.exports = {
   ensureSchema, insertItem, insertItems, recentItems, itemsInWindow, unclusteredInWindow, pruneOlderThan, countItems, markDropped, fromFeedItem,
+  uncategorizedItems, setCategories, categoriesByGuid,
 };

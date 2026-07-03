@@ -398,18 +398,31 @@ const FV = window.FeedsView;
 const monitors = $('monitors'), monList = $('monList'), monSources = $('monSources'), monN = $('monN'), monVideos = $('monVideos');
 const monSrcHead = $('monSrcHead'), monSrcChev = $('monSrcChev'), monSrcLbl = $('monSrcLbl');
 const monSeen = new Set();
-let monPrimed = false, monTimer = null;
+let monPrimed = false, monTimer = null, monTuner = null;   // monTuner = topical-balance config (from feeds.fetch / tunerGet)
 const MON_REFRESH_MS = 2 * 60 * 1000;
+const NT = window.NewsTopics, NR = window.NewsRank;
+const catLabel = (k) => (NT && NT.BY_KEY[k] && NT.BY_KEY[k].label) || '';
 
 function renderMonitors(items, sources) {
   // Collapse cross-outlet SYNDICATION for display only (the collector keeps every copy for corroboration):
   // 5 metros reprinting one wire story → one card with a "+N outlets" badge. Un-blots the firehose.
   const collapsed = FV ? FV.collapseDuplicates(items) : (items || []);
-  const marked = FV ? FV.markNew(collapsed, monSeen) : collapsed.map(i => ({ ...i, isNew: false }));
+  // NEWS TUNER: balance topics (reserve hard-news slots / weight / cap) so a hot topic (World Cup) can't
+  // flood the feed. Base score = recency. No tuner/module yet → the plain collapsed list (unchanged).
+  let arranged = collapsed;
+  if (NR && monTuner) {
+    try {
+      arranged = NR.arrange(collapsed, monTuner, {
+        slots: 50, reserved: (monTuner.reservedSlots && monTuner.reservedSlots.feed) || 0,
+        scoreOf: (it) => it.publishedMs || 0,
+      }).items;
+    } catch {}
+  }
+  const marked = FV ? FV.markNew(arranged, monSeen) : arranged.map(i => ({ ...i, isNew: false }));
   const now = Date.now();
   monList.innerHTML = marked.length ? marked.map(it => `
     <div class="mon-item${monPrimed && it.isNew ? ' new' : ''}">
-      <div class="it-top"><span class="it-src">${esc(it.source)}</span>${it.dupCount > 1 ? `<span class="it-dup" title="${esc((it.dupSources || []).join(', '))}">+${it.dupOutlets - 1} more outlet${it.dupOutlets - 1 === 1 ? '' : 's'}</span>` : ''}<span class="it-ago">${esc(FV ? FV.relTime(it.publishedMs, now) : '')}</span></div>
+      <div class="it-top"><span class="it-src">${esc(it.source)}</span>${it.category ? `<span class="it-cat">${esc(catLabel(it.category) || it.category)}</span>` : ''}${it.dupCount > 1 ? `<span class="it-dup" title="${esc((it.dupSources || []).join(', '))}">+${it.dupOutlets - 1} more outlet${it.dupOutlets - 1 === 1 ? '' : 's'}</span>` : ''}<span class="it-ago">${esc(FV ? FV.relTime(it.publishedMs, now) : '')}</span></div>
       <div class="it-title">${it.link ? `<a href="${esc(it.link)}" target="_blank" rel="noreferrer">${esc(it.title)}</a>` : esc(it.title)}</div>
       ${it.summary ? `<div class="it-sum">${esc(it.summary)}</div>` : ''}
     </div>`).join('') : '<div class="mon-empty">No items yet. Add a feed URL above, or hit ⟳.</div>';
@@ -428,6 +441,7 @@ async function loadFeeds() {
   try {
     const res = await window.sq.feeds.fetch(30);
     if (!res || !res.ok) { monList.innerHTML = `<div class="mon-empty err">⚠ ${esc((res && res.error) || 'fetch failed')}</div>`; monN.textContent = ''; return; }
+    if (res.tuner) monTuner = res.tuner;   // topical-balance config rides along with the fetch
     renderMonitors(res.items || [], res.sources || []);
   } catch (e) { monList.innerHTML = `<div class="mon-empty err">⚠ ${esc(e.message)}</div>`; monN.textContent = ''; }
 }
@@ -514,6 +528,7 @@ function positionBriefDrawer() {
 }
 async function showBriefing() {
   if (!monBriefPanel.hidden) { monBriefPanel.hidden = true; return; }        // toggle closed
+  try { $('monTunePanel').hidden = true; } catch {}                          // one drawer at a time
   monBriefPanel.hidden = false;
   positionBriefDrawer();
   const b = $('monBrief'); if (b) b.classList.remove('pulse');
@@ -526,9 +541,64 @@ async function showBriefing() {
 }
 $('monBrief').addEventListener('click', showBriefing);
 $('monBriefClose').addEventListener('click', () => { monBriefPanel.hidden = true; });
-window.addEventListener('resize', () => { if (!monBriefPanel.hidden) positionBriefDrawer(); });
+window.addEventListener('resize', () => { if (!monBriefPanel.hidden) positionBriefDrawer(); try { if (!monTunePanel.hidden) positionTuneDrawer(); } catch {} });
 // hourly layer push → pulse the briefing button so the operator knows a fresh hour has compiled
 try { window.sq.feeds.onLayer(() => { const b = $('monBrief'); if (b && monBriefPanel.hidden) b.classList.add('pulse'); }); } catch {}
+
+// ---- TOPIC TUNER panel (news tuner slice 6): per-category weight/cap sliders + reserved hard-news slots ----
+const monTunePanel = $('monTunePanel'), monTuneBody = $('monTuneBody');
+function positionTuneDrawer() {
+  const gap = 8, w = monTunePanel.offsetWidth || 400;
+  const mL = monitors.offsetLeft, mT = monitors.offsetTop, mW = monitors.offsetWidth, mH = monitors.offsetHeight;
+  let left = mL + mW + gap;
+  if (left + w > window.innerWidth - 8) left = Math.max(8, mL - w - gap);
+  monTunePanel.style.left = left + 'px'; monTunePanel.style.top = mT + 'px'; monTunePanel.style.height = mH + 'px';
+}
+function renderTunerRows() {
+  const cfg = monTuner || (NR ? NR.defaultTuner() : null);
+  if (!cfg || !NT) { monTuneBody.innerHTML = '<div class="mon-empty">tuner unavailable</div>'; return; }
+  const hd = '<div class="mon-tune-hd"><span>topic</span><span>mute ← weight → boost</span><span>cap%</span><span>🛡</span></div>';
+  monTuneBody.innerHTML = hd + NT.TAXONOMY.map((t) => {
+    const c = cfg.categories[t.key] || { weight: 1, capPct: null, protected: t.protected };
+    const w = (c.weight == null ? 1 : c.weight);
+    return `<div class="mon-tune-row" data-key="${t.key}">
+      <span class="tc-name${c.protected ? ' prot' : ''}" title="${esc(t.label)}">${esc(t.label)}</span>
+      <input class="tc-w" type="range" min="0" max="3" step="0.1" value="${w}" title="weight (0 = mute)">
+      <input class="tc-cap" type="number" min="0" max="100" placeholder="—" value="${c.capPct == null ? '' : c.capPct}" title="max % of the surface (blank = uncapped)">
+      <span class="tc-prot${c.protected ? ' on' : ''}" title="protected — counts toward the reserved hard-news slots">🛡</span>
+    </div>`;
+  }).join('');
+  $('monTuneRsvFeed').value = (cfg.reservedSlots && cfg.reservedSlots.feed) || 0;
+  $('monTuneRsvBrief').value = (cfg.reservedSlots && cfg.reservedSlots.brief) || 0;
+  monTuneBody.querySelectorAll('.tc-prot').forEach((el) => el.addEventListener('click', () => el.classList.toggle('on')));
+}
+function collectTuner() {
+  const cats = {};
+  monTuneBody.querySelectorAll('.mon-tune-row').forEach((row) => {
+    const capRaw = row.querySelector('.tc-cap').value.trim();
+    cats[row.dataset.key] = {
+      weight: parseFloat(row.querySelector('.tc-w').value),
+      capPct: capRaw === '' ? null : Math.max(0, Math.min(100, parseFloat(capRaw) || 0)),
+      protected: row.querySelector('.tc-prot').classList.contains('on'),
+    };
+  });
+  return { version: 1, reservedSlots: { feed: parseInt($('monTuneRsvFeed').value, 10) || 0, brief: parseInt($('monTuneRsvBrief').value, 10) || 0 }, categories: cats };
+}
+async function showTuner() {
+  if (!monTunePanel.hidden) { monTunePanel.hidden = true; return; }
+  monBriefPanel.hidden = true;                                   // one drawer at a time
+  if (!monTuner) { try { const r = await window.sq.feeds.tunerGet(); if (r && r.ok) monTuner = r.tuner; } catch {} }
+  monTunePanel.hidden = false; positionTuneDrawer(); renderTunerRows();
+}
+$('monTune').addEventListener('click', showTuner);
+$('monTuneClose').addEventListener('click', () => { monTunePanel.hidden = true; });
+$('monTuneReset').addEventListener('click', () => { monTuner = NR ? NR.defaultTuner() : monTuner; renderTunerRows(); });
+$('monTuneSave').addEventListener('click', async () => {
+  const cfg = collectTuner();
+  try { const r = await window.sq.feeds.tunerSet(cfg); if (r && r.ok) monTuner = r.tuner; } catch {}
+  monTunePanel.hidden = true;
+  loadFeeds();                                                   // re-arrange the feed with the new config
+});
 
 function openMonitors() {
   monitors.hidden = false;
@@ -536,7 +606,7 @@ function openMonitors() {
   loadVideos();                  // videos: cheap (no network) — refresh every open so re-seeds show
   if (!monTimer) monTimer = setInterval(loadFeeds, MON_REFRESH_MS);
 }
-function closeMonitors() { monitors.hidden = true; monBriefPanel.hidden = true; if (monTimer) { clearInterval(monTimer); monTimer = null; } }
+function closeMonitors() { monitors.hidden = true; monBriefPanel.hidden = true; try { monTunePanel.hidden = true; } catch {} if (monTimer) { clearInterval(monTimer); monTimer = null; } }
 $('monitorsBtn').addEventListener('click', () => { if (monitors.hidden) openMonitors(); else closeMonitors(); });
 $('monClose').addEventListener('click', closeMonitors);
 $('monRefresh').addEventListener('click', loadFeeds);
@@ -552,7 +622,7 @@ $('monResize').addEventListener('mousedown', (e) => { monResize = { sx: e.client
 window.addEventListener('mousemove', (e) => {
   if (monDrag) { monitors.style.left = Math.max(0, monDrag.sl + (e.clientX - monDrag.sx)) + 'px'; monitors.style.top = Math.max(40, monDrag.st + (e.clientY - monDrag.sy)) + 'px'; }
   else if (monResize) { monitors.style.width = Math.max(280, monResize.w + (e.clientX - monResize.sx)) + 'px'; monitors.style.height = Math.max(220, monResize.h + (e.clientY - monResize.sy)) + 'px'; }
-  if ((monDrag || monResize) && !monBriefPanel.hidden) positionBriefDrawer();   // keep the briefing drawer glued to the monitor
+  if (monDrag || monResize) { if (!monBriefPanel.hidden) positionBriefDrawer(); if (!monTunePanel.hidden) positionTuneDrawer(); }   // keep the drawers glued to the monitor
 });
 window.addEventListener('mouseup', () => { if (monDrag) { $('monHead').classList.remove('dragging'); monDrag = null; } if (monResize) monResize = null; });
 

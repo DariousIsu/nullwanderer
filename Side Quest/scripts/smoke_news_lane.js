@@ -238,6 +238,25 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   const adjMerge = await lane.clusterItems([kyivNBC], { now: NOW, adjudicate: (s, i) => lane.adjudicateSameEvent(s, i, { ask: async () => ({ same: true }) }) });
   ok(adjMerge.attached === 1 && lane.allStories().length === 1, 'the adjudicator MERGES the ambiguous cross-source pair into ONE story');
 
+  // ===== NEWS TUNER: balanceStories / buildBriefing apply reserve+cap so a corroborated topic can't drown out =====
+  const S = (category, oc, rc, title) => ({ title, category, outlet_count: oc, report_count: rc, last_ts: NOW });
+  const pool = [
+    S('sports', 8, 8, 'World Cup final recap'),   // genuinely highly-corroborated (NOT syndication) — would top a flat brief
+    S('sports', 7, 7, 'Transfer news'),
+    S('world', 3, 3, 'Ceasefire talks'),
+    S('politics', 2, 2, 'Senate vote'),
+    S('local', 1, 1, 'County budget'),
+    S('health', 1, 1, 'Flu season update'),
+  ];
+  const flat = lane.balanceStories(pool, null, { top: 6 });          // no tuner → corroboration-first
+  ok(flat[0].category === 'sports', 'no tuner: the most-corroborated (sports) leads — the drown-out problem');
+  const tuner = require('../lib/news_rank').defaultTuner();
+  const bal = lane.balanceStories(pool, tuner, { top: 6 });          // tuner → reserve hard-news + cap sports
+  ok(tuner.categories[bal[0].category].protected === true, 'tuner: a PROTECTED hard-news category leads (reserved slot), not sports');
+  ok(bal.filter(s => s.category === 'sports').length <= 2, 'tuner: sports is capped, cannot flood even when most-corroborated');
+  const brief = lane.buildBriefing(pool, { top: 6, tuner });
+  ok(/Ceasefire|Senate|County|Flu/.test(brief.split('\n')[0]), 'buildBriefing with tuner: hard news heads the briefing');
+
   try { fs.unlinkSync(tmp); } catch {}
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

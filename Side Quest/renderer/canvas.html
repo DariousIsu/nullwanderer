@@ -148,6 +148,19 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
 .mon-brief-body p{margin:4px 0;} .mon-brief-body ul{margin:4px 0;padding-left:18px;} .mon-brief-body li{margin:2px 0;}
 .mon-brief-body blockquote{margin:4px 0;padding:3px 9px;border-left:2px solid var(--line);color:var(--tx-muted);font-size:12px;}
 .mon-brief-body a{color:var(--illu);} .mon-brief-foot{margin-top:14px;padding-top:8px;border-top:1px solid var(--line);font-size:10px;color:var(--tx-dim);}
+/* Topic tuner panel */
+.mon-tune-body{flex:1;overflow-y:auto;padding:8px 12px;}
+.mon-tune-row{display:grid;grid-template-columns:92px 1fr 42px 30px;gap:7px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line-faint);}
+.mon-tune-row .tc-name{font-size:11px;color:var(--tx-soft);} .mon-tune-row .tc-name.prot{color:var(--info-fg);font-weight:600;}
+.mon-tune-row input[type=range]{width:100%;accent-color:var(--accent);height:3px;}
+.mon-tune-row .tc-cap{width:38px;font-size:10px;padding:2px 3px;background:var(--bg-raised);border:1px solid var(--line);border-radius:4px;color:var(--tx-soft);text-align:right;}
+.mon-tune-row .tc-prot{cursor:pointer;font-size:12px;text-align:center;opacity:.4;} .mon-tune-row .tc-prot.on{opacity:1;}
+.mon-tune-row .tc-mute{font-size:9px;color:var(--tx-fainter);}
+.mon-tune-foot{flex-shrink:0;border-top:1px solid var(--line);padding:8px 12px;display:flex;flex-direction:column;gap:7px;}
+.mon-tune-reserved{font-size:10px;color:var(--tx-dim);} .mon-tune-reserved input{width:38px;background:var(--bg-raised);border:1px solid var(--line);border-radius:4px;color:var(--tx-soft);font-size:10px;padding:2px 3px;text-align:right;}
+.mon-tune-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center;}
+.mon-tune-hd{display:grid;grid-template-columns:92px 1fr 42px 30px;gap:7px;font-size:9px;color:var(--tx-fainter);text-transform:uppercase;letter-spacing:.08em;padding-bottom:3px;border-bottom:1px solid var(--line);}
+.mon-item .it-cat{color:var(--tx-fainter);font-size:9px;text-transform:uppercase;letter-spacing:.03em;}
 .mon-bar{flex-shrink:0;display:flex;gap:6px;padding:7px 10px;border-bottom:1px solid var(--line-faint);}
 .mon-bar input{flex:1;background:var(--bg-deep);border:1px solid var(--line-strong);color:var(--tx);font:inherit;font-size:11px;padding:5px 8px;border-radius:var(--r-sm);outline:none;}
 .mon-bar input:focus{border-color:var(--accent);}
@@ -232,6 +245,7 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
       <span class="mon-title">Monitors</span>
       <span class="mon-n" id="monN"></span>
       <button class="dbtn" id="monBrief" title="News briefing — what's going on right now">📰</button>
+      <button class="dbtn" id="monTune" title="Tune topics — weight, cap, reserve hard-news slots">⚙</button>
       <button class="dbtn" id="monRefresh" title="Refresh now">⟳</button>
       <button class="dbtn" id="monClose" title="Close">✕</button>
     </div>
@@ -247,6 +261,15 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
   </div>
 
   <!-- News Briefing drawer — a sibling of .monitors (which clips overflow); JS pins it beside the monitor. -->
+  <div class="mon-brief" id="monTunePanel" hidden>
+    <div class="mon-brief-head"><span>⚙ Topic Tuner</span><button class="dbtn" id="monTuneClose" title="Close">✕</button></div>
+    <div class="mon-tune-body" id="monTuneBody"></div>
+    <div class="mon-tune-foot">
+      <label class="mon-tune-reserved">Reserved hard-news slots — feed <input type="number" id="monTuneRsvFeed" min="0" max="30" step="1"> · brief <input type="number" id="monTuneRsvBrief" min="0" max="12" step="1"></label>
+      <div class="mon-tune-actions"><button class="dbtn" id="monTuneReset" title="Restore defaults">reset</button><button id="monTuneSave">Save</button></div>
+    </div>
+  </div>
+
   <div class="mon-brief" id="monBriefPanel" hidden>
     <div class="mon-brief-head"><span>📰 News Briefing</span><button class="dbtn" id="monBriefClose" title="Close">✕</button></div>
     <div class="mon-brief-body" id="monBriefBody"></div>
@@ -265,6 +288,8 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
   </div>
 
   <script src="../studio/feeds_view.js"></script>
+  <script src="../lib/news_topics.js"></script>
+  <script src="../lib/news_rank.js"></script>
   <script src="canvas.js"></script>
 </body>
 </html>

@@ -113,12 +113,20 @@ this" nudging the category weight.
 ## 5. Build slices
 
 1. ✅ **DONE** `news_topics.js` — cloud classifier (classify-once) + deterministic provisional/fail-safe + smoke (24). 9 cats incl. weather.
-2. Bucket: `news_items.category` + `news_stories.category` migrations; classify new items at the collector
-   (batched, cached); classify stories at clustering. Wire cloud in main.js (editor model).
+2. ✅ **DONE** Bucket: `news_items.category` + `news_stories.category` migrations; classify new items at the
+   collector (batched 50/tick, cached, cloud via editor model in main.js `classifyNewItems`); story category
+   set at `createStory`. Store helpers `uncategorizedItems`/`setCategories`/`categoriesByGuid`.
 3. ✅ **DONE** `news_rank.js` — the shared reserve/weight/cap selector + smoke (17). Weather uncapped verified.
-4. Feed: enrich `feeds:fetch` items with cached categories; apply `arrange` in `renderMonitors`; badges.
-5. Brief: apply `arrange` in `buildBriefing` / `storiesActiveInWindow`; keep corroboration badges.
-6. Tuner UI panel + `news_tuner` meta persistence + IPC; live-apply.
+4. ✅ **DONE** Feed: `feeds:fetch` enriches items with cached categories (+ provisional) & ships the tuner;
+   `renderMonitors` applies `arrange` (recency score) + category chip.
+5. ✅ **DONE** Brief: `buildBriefing` + the prose-brief path apply `balanceStories` (`arrange`, corroboration
+   score); threaded through `runCompression`/`snapshot`/`news:briefing`.
+6. ✅ **DONE** Tuner UI panel (⚙ on the Monitor head → per-category weight slider + cap + 🛡 protected +
+   reserved-slot fields) + `news_tuner` meta persistence + `news:tuner-get/set` IPC; save re-arranges live.
+
+**All slices built + committed. Reboot-gated (renderer/main.js) to go live — request per [[request-reboots]].**
+Default config balances out-of-the-box (sports capped 20% / weather uncapped / hard-news reserved), so the
+tuner works before the operator touches a slider.
 
 ## Open / notes
 

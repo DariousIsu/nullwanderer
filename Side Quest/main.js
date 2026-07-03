@@ -798,9 +798,24 @@ app.whenReady().then(() => {
       const payload = await pollCallTool()('fetch_feeds_batch', { feed_urls: urls, item_limit: 30 });
       return { items: feedsView.mergeReports(payload).items };
     };
+    // NEWS TUNER topic classification (cloud-on-everything, classify-once, cached): after each poll, label the
+    // newest un-classified items. Paced (50/tick) so the backlog backfills over time without a cost spike;
+    // each item is classified exactly once then cached on its row. Feed shows deterministic provisional labels
+    // until the cloud verdict lands. Cheap when caught up (early-returns before touching the cloud).
+    const classifyNewItems = async () => {
+      try {
+        const batch = newsStore.uncategorizedItems({ limit: 50 });
+        if (!batch.length) return;
+        if (!(await ensureEngine())) return;
+        const cloud = require('./lib/cloud_logic');
+        const verdict = await require('./lib/news_topics').classifyTopicsBatch(batch, { ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null) });
+        const n = newsStore.setCategories(verdict);
+        if (n) console.log(`[news-topics] classified ${n} items (bucket has ${newsStore.uncategorizedItems({ limit: 1 }).length ? 'more queued' : 'none'} left)`);
+      } catch (e) { console.error('[news-topics]', e.message); }
+    };
     newsPoll.start({
       fetch: fetchFeeds, store: newsStore, intervalMs: FEED_POLL_MS, initialDelayMs: 30000,
-      onTick: (r) => { try { if (r && (r.inserted || r.error)) console.log(`[news-poll] +${r.inserted || 0} new / ${r.duplicates || 0} dup (${r.fetched || 0} fetched)${r.error ? ' err:' + r.error : ''} · bucket=${newsStore.countItems()}`); } catch {} },
+      onTick: (r) => { try { if (r && (r.inserted || r.error)) console.log(`[news-poll] +${r.inserted || 0} new / ${r.duplicates || 0} dup (${r.fetched || 0} fetched)${r.error ? ' err:' + r.error : ''} · bucket=${newsStore.countItems()}`); } catch {} classifyNewItems().catch(() => {}); },
       log: (m) => console.log(m),
     });
     console.log(`[main] news collector started (every ${Math.round(FEED_POLL_MS / 1000)}s → isolated bucket)`);
@@ -866,6 +881,7 @@ app.whenReady().then(() => {
           adjudicate: cloud ? (s, i) => news_lane.adjudicateSameEvent(s, i, { ask: cloud.ask }) : null,
           classifyAds: cloud ? (segs) => require('./lib/news_ads').classifyBatch(segs, { ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null) }) : null,
           classifyEmailAds: cloud ? (items) => require('./lib/news_ads').classifyEmailBatch(items, { ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null) }) : null,
+          tuner: getNewsTuner(),
           writeLayer: true,
           log: (m) => console.log(m),
         });
@@ -1029,6 +1045,21 @@ ipcMain.handle('feeds:remove', (_e, { url } = {}) => { try { return feedsStore.r
 ipcMain.handle('feeds:video-list', () => { try { return { ok: true, videos: feedsStore.videoList() }; } catch (e) { return { ok: false, error: e.message }; } });
 ipcMain.handle('feeds:video-add', (_e, { url, title } = {}) => { try { return feedsStore.videoAdd(url, title); } catch (e) { return { ok: false, error: e.message }; } });
 ipcMain.handle('feeds:video-remove', (_e, { url } = {}) => { try { return feedsStore.videoRemove(url); } catch (e) { return { ok: false, error: e.message }; } });
+// NEWS TUNER (topical balance) — db meta 'news_tuner' JSON. Read fresh at each use so a save takes effect on
+// the next feed fetch / compression WITHOUT a reboot. Always returns a full normalized config (defaults when
+// unset → balancing is ON by default: sports capped, weather uncapped, hard-news reserved).
+function getNewsTuner() {
+  const rank = require('./lib/news_rank');
+  try { const raw = db.getMeta('news_tuner'); return rank.normalizeTuner(raw ? JSON.parse(raw) : null); } catch { return rank.defaultTuner(); }
+}
+ipcMain.handle('news:tuner-get', () => { try { return { ok: true, tuner: getNewsTuner() }; } catch (e) { return { ok: false, error: e.message }; } });
+ipcMain.handle('news:tuner-set', (_e, { tuner } = {}) => {
+  try {
+    const norm = require('./lib/news_rank').normalizeTuner(tuner);
+    db.setMeta('news_tuner', JSON.stringify(norm));
+    return { ok: true, tuner: norm };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
 // NEWS BRIEFING ("dam" snapshot, Phase B): freshen the un-clustered tail (compression) then render the
 // consistent, schema-locked brief DOCUMENT over the active stories. Default window = today→now; pass
 // sinceMs for "what's the update since <time>". Corroboration is syndication-aware (reports, not raw
@@ -1041,14 +1072,17 @@ ipcMain.handle('news:briefing', async (_e, { sinceMs = null } = {}) => {
     const engineUp = await ensureEngine();
     const cloud = engineUp ? require('./lib/cloud_logic') : null;
     const now = Date.now();
+    const tuner = getNewsTuner();
     const snap = await news_lane.snapshot({
-      store: newsStore, sinceMs,
+      store: newsStore, sinceMs, tuner,
       adjudicate: cloud ? (s, i) => news_lane.adjudicateSameEvent(s, i, { ask: cloud.ask }) : null,
       classifyAds: cloud ? (segs) => require('./lib/news_ads').classifyBatch(segs, { ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null) }) : null,
       classifyEmailAds: cloud ? (items) => require('./lib/news_ads').classifyEmailBatch(items, { ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null) }) : null,
       log: (m) => console.log('[news-brief]', m),
     });
-    const stories = news_lane.storiesActiveInWindow(snap.since, { limit: 40 });
+    // NEWS TUNER: balance the story selection (reserve hard-news slots / weight / cap) before the prose brief,
+    // so a heavily-corroborated topic (e.g. World Cup) can't dominate the brief. Same balance as the widget.
+    const stories = news_lane.balanceStories(news_lane.storiesActiveInWindow(snap.since, { limit: 60 }), tuner, { top: 12 });
     const deltasByStory = {};
     for (const s of stories.slice(0, 12)) { try { deltasByStory[s.id] = news_lane.storyDeltas(s.id); } catch {} }
     // The brief is ON-DEMAND (not always-on), so pin it to the best-WRITING model, not the fast tier. Live
@@ -1124,7 +1158,16 @@ ipcMain.handle('feeds:fetch', async (_e, { itemLimit = 30 } = {}) => {
     if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
     const payload = await pollCallTool()('fetch_feeds_batch', { feed_urls: urls, item_limit: itemLimit });
     const merged = feedsView.mergeReports(payload);
-    return { ok: true, items: merged.items, sources: merged.sources };
+    // Enrich each item with its cached topic category (feed tuner). Uncategorized (not yet cloud-classified)
+    // → the deterministic provisional label, so the widget can balance immediately. Also ship the tuner
+    // config so the renderer arranges in one round-trip.
+    try {
+      const newsStore = require('./lib/news_store');
+      const topics = require('./lib/news_topics');
+      const cats = newsStore.categoriesByGuid(merged.items.map((i) => i.id));
+      for (const it of merged.items) it.category = cats[it.id] || topics.categorizeFast(it).category;
+    } catch (e) { console.error('[feeds] category enrich failed:', e.message); }
+    return { ok: true, items: merged.items, sources: merged.sources, tuner: getNewsTuner() };
   } catch (e) { console.error('[feeds] fetch failed:', e.message); return { ok: false, error: e.message }; }
 });
 

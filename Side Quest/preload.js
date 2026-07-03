@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld('sq', {
     playerBase: () => ipcRenderer.invoke('feeds:player-base'),
     // News lane (Phase B): on-demand brief ("what's going on right now") + the hourly layer push.
     briefing: (sinceMs) => ipcRenderer.invoke('news:briefing', { sinceMs: sinceMs || null }),
+    tunerGet: () => ipcRenderer.invoke('news:tuner-get'),
+    tunerSet: (tuner) => ipcRenderer.invoke('news:tuner-set', { tuner }),
     onLayer: (cb) => { const h = (_e, p) => cb(p); ipcRenderer.on('news:layer', h); return () => ipcRenderer.removeListener('news:layer', h); }
   },
 
