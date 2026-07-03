@@ -42,7 +42,8 @@ re-sims the same live slate on a seed override (the studio's "Re-run sim" jitter
 - `poll_average.js` — quality/recency/house-effect weighted average + trend + modal-choice-set (31 smoke; live Trump approval 39.8/57.2).
 - `forecast_sim.js` — ★ correlated Monte-Carlo scenario simulator (chamber control, seat p10/p90, govt scenarios); own PRNG + Φ/inverse (20 smoke; correlation-fattens-tails proven).
 - `forecast_reactor.js` — news → race perturbation: VOLATILITY (σ↑, direction-free, immediate/live-mode) vs MARGIN SHIFT (needs gpt-oss attribution); provisional+audited+capped+decayed (19 smoke; demo P(win) 43→50 on breaking news).
-- `forecast_registry.js` — read-only race slate from VoteHub /subjects → sim-ready skeletons; Echo enrich hook (18 smoke; 113 live races).
+- `forecast_registry.js` — read-only race slate from VoteHub /subjects → sim-ready skeletons; Echo enrich hook; `isPrimarySubject` (party-primary filter) (18 smoke; 113 live races).
+- `candidate_party.js` — candidate NAME → party (A=Dem/B=Rep) via FEC. Pure match cores + async pre-resolve→sync `partyOf(choice)` (like assessBatch); cached, fail-safe → null=prior (12 smoke; live 63/147 resolved). THE piece that signs poll margins.
 - `forecast_assess.js` — gpt-oss:120b direction judgment (num_predict≥1500 floor); async assessBatch→sync lookup for the reactor (15 smoke; live "union endorses D"→favors A/medium/0.85).
 
 **Bridges (read-only contracts, "never reach past"):**
@@ -80,7 +81,7 @@ re-sims the same live slate on a seed override (the studio's "Re-run sim" jitter
 
 ## 5. PENDING (next builds)
 - **✅ DONE — the recompute loop + main.js wiring** (`forecast_loop.js` + the cadence block). Awaiting a REBOOT to go live (main.js changed). Live-mode fast-tick off `detectLive` is a follow-on (the loop already reports `live`/`live_entities`; a shorter interval when live is the next refinement).
-- **Party attribution (`partyOf`):** the loop signs margins only when the leader's party is known. The default is a label heuristic — VoteHub race choices are candidate NAMES, so most sign as `prior` today. Wire a candidate→party map (Echo enrichment / FEC) into `runOnce({ partyOf })` to turn priors into real signed margins. **This is what makes the balance real vs illustrative.**
+- **✅ DONE — Party attribution (`partyOf`) via FEC + primary filter.** `lib/candidate_party.js` resolves each VoteHub candidate NAME → party through FEC (`api_stream.pull('fec','candidates/search')`), cached; `signMargin` now requires opposite parties (rejects same-party/top-two); `registry.isPrimarySubject` drops party-primary subjects ("2026 Texas Democratic") from the general slate. **LIVE-PROVEN 2026-07-03:** 63/147 candidates resolved → **16 races on real signed margins (illustrative=false)**, directionally correct (MA D+19, KS R+8, MI D+1). Wired in main.js. Refinements: nickname/unfiled-candidate match rate (63/147≈43%; unmatched → prior, safe).
 - **Calibration/backtest harness:** score the chain vs 2014–2024 (`poll_538legacy.raw_polls` = poll-vs-actual). Build BEFORE trusting live output.
 - **Real seat totals / holdovers:** the sim config's holdovers are 2026 priors; refine from the actual class-of-2026 seat map (which seats are up vs safe).
 - **Forecast/analysis object emission** to the 24h memory rail (§4.2 shapes) — gate ON when forecasts are trustworthy.

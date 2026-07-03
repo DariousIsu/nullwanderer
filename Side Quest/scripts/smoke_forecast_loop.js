@@ -19,6 +19,8 @@ ok('signMargin: Dem leader → +margin, source polls', s1 && s1.margin === 5 && 
 const s2 = L.signMargin({ leader: 'Williams (R)', runner_up: 'Goodlander (D)', margin: 3, n_polls: 2 }, {}, L.defaultPartyOf);
 ok('signMargin: Rep leader → -margin', s2 && s2.margin === -3 && s2.leader_party === 'B');
 ok('signMargin: unattributable → null', L.signMargin({ leader: 'Smith', runner_up: 'Jones', margin: 2 }, {}, L.defaultPartyOf) === null);
+ok('signMargin: same-party runner (primary/top-two) → null', L.signMargin({ leader: 'X', runner_up: 'Y', margin: 4 }, {}, () => 'A') === null);
+ok('signMargin: opposite parties → signed +4', (() => { const r = L.signMargin({ leader: 'X', runner_up: 'Y', margin: 4 }, {}, (c) => (c === 'X' ? 'A' : 'B')); return r && r.margin === 4 && r.runner_party === 'B'; })());
 ok('pollSigma tightens with polls, floored', L.pollSigma(0) > L.pollSigma(6) && L.pollSigma(20) >= 3.5);
 
 // ---- pure recompute core: deterministic, payload shape ----
@@ -73,6 +75,7 @@ ok('buildAssessPairs: keeps only corroborated + touching (1 of 3)', pairs.length
     { subject: '2026 Arizona', poll_types: ['us-senator'] },
     { subject: '2026 NH-02', poll_types: ['us-representative'] },
     { subject: '2024 Ohio', poll_types: ['us-senator'] },        // wrong year → filtered
+    { subject: '2026 Texas Democratic', poll_types: ['us-senator'] },  // party primary → filtered
     { subject: 'Donald Trump', poll_types: ['approval'] },        // not a race → dropped
   ] });
   const newsEvents = () => [evAZ];
@@ -80,7 +83,8 @@ ok('buildAssessPairs: keeps only corroborated + touching (1 of 3)', pairs.length
 
   const res = await L.runOnce({ now: NOW, fetchSubjects, getRacePolls, newsEvents, newsMomentum, ask, config: { iterations: 6000, seed: 9 } });
   ok('runOnce: ok + as_of + not illustrative (has polled margins)', res.ok && res.as_of === '2026-07-03' && res.illustrative === false);
-  ok('runOnce: slate filtered to 2 target-year races', res.work.margins.total === 2 && res.work.margins.polled === 2, JSON.stringify(res.work.margins));
+  ok('runOnce: slate filtered to 2 target-year races (primary + wrong-year + non-race dropped)', res.work.margins.total === 2 && res.work.margins.polled === 2, JSON.stringify(res.work.margins));
+  ok('runOnce: party-primary subject excluded from the general slate', !res.work.inputs.races.some((r) => /Texas Democratic/i.test(r.subject)));
   ok('runOnce: balance payload present (house+senate)', res.payload.house && res.payload.senate && res.payload.house.need === 218);
   ok('runOnce: gpt-oss assessed the AZ pair', res.work.assess.pairs >= 1 && res.work.assess.assessed >= 1);
   ok('runOnce: news moved a race (reactor applied signal)', Array.isArray(res.moved) && res.moved.length >= 1);

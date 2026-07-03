@@ -58,6 +58,13 @@ function raceFromSubject(subject, pollType) {
   };
 }
 
+// A party-PRIMARY subject (same-party contest), not a D-vs-R general — VoteHub encodes these as a trailing
+// party word, e.g. "2026 Texas Democratic" / "2026 Texas Republican". These must NOT feed the general-election
+// balance (both candidates are the same party); they belong to the future primary→general cascade instead.
+function isPrimarySubject(subject) {
+  return /\b(democratic|republican|gop|libertarian|green|independent)\b\s*(primary)?\s*$/i.test(String(subject == null ? '' : subject).trim());
+}
+
 // build the slate from VoteHub /subjects rows [{subject, poll_types:[…]}]. opts.pollTypes filters offices.
 function buildSlate(subjects, { pollTypes = null } = {}) {
   const out = [];
@@ -86,4 +93,4 @@ async function fetchSlate({ fetchSubjects, pollTypes = null } = {}) {
   catch { return []; }
 }
 
-module.exports = { OFFICE, STATE_ABBR, parseSubject, raceFromSubject, buildSlate, enrich, fetchSlate };
+module.exports = { OFFICE, STATE_ABBR, parseSubject, raceFromSubject, isPrimarySubject, buildSlate, enrich, fetchSlate };

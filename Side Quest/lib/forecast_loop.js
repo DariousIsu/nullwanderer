@@ -48,14 +48,17 @@ function defaultPartyOf(choice) {
 }
 
 // PURE — turn an unsigned poll_average result into a SIGNED party-A margin (+ = Dem ahead). null when the
-// leader's party can't be attributed (→ caller uses a prior). partyOf(choice, race) → 'A'|'B'|null.
+// leader's party can't be attributed OR the runner-up is the SAME party (a same-party / primary contest, not
+// a D-vs-R race → don't fabricate a margin). partyOf(choice, race) → 'A'|'B'|null.
 function signMargin(avgResult, race, partyOf) {
   if (!avgResult || avgResult.margin == null || !avgResult.leader) return null;
   const pf = typeof partyOf === 'function' ? partyOf : defaultPartyOf;
   const lp = pf(avgResult.leader, race);
-  if (lp !== 'A' && lp !== 'B') return null;
+  if (lp !== 'A' && lp !== 'B') return null;                       // leader party unknown → prior
+  const rp = avgResult.runner_up ? pf(avgResult.runner_up, race) : null;
+  if (rp && rp === lp) return null;                                // both same party (primary / top-two) → not a signed D-vs-R margin
   const sign = lp === 'A' ? 1 : -1;
-  return { margin: Number((sign * Math.abs(avgResult.margin)).toFixed(2)), leader_party: lp, leader: avgResult.leader, n_polls: avgResult.n_polls, source: 'polls' };
+  return { margin: Number((sign * Math.abs(avgResult.margin)).toFixed(2)), leader_party: lp, runner_party: rp, leader: avgResult.leader, n_polls: avgResult.n_polls, source: 'polls' };
 }
 
 // race σ from poll support: more polls → tighter, floored so a single poll never claims false certainty.
@@ -159,6 +162,7 @@ async function runOnce(opts = {}) {
   // 1. SLATE — forecasting-local, built from its own connectors; chamber + (target) year filtered.
   let races = opts.races || await registry.fetchSlate({ fetchSubjects: opts.fetchSubjects, pollTypes: opts.pollTypes || ['us-senator', 'us-representative'] });
   races = (races || []).filter((r) => r && (r.chamber === 'house' || r.chamber === 'senate'));
+  races = races.filter((r) => !registry.isPrimarySubject(r.subject));   // drop party-primary subjects — general-election balance only
   if (targetYear != null) races = races.filter((r) => { const y = registry.parseSubject(r.subject).year; return y == null || y === targetYear; });
   if (opts.resolve) races = await Promise.all(races.map((r) => registry.enrich(r, { resolve: opts.resolve })));   // read-only Echo enrichment
   if (!races.length) return { ok: false, model: 'balance_of_power', error: 'empty slate', payload: null };

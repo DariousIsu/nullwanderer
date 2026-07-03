@@ -977,8 +977,11 @@ app.whenReady().then(() => {
     const loop = require('./lib/forecast_loop');
     const votehub = require('./lib/poll_votehub');
     const legacy = require('./lib/poll_538legacy');
+    const registry = require('./lib/forecast_registry');
+    const candidateParty = require('./lib/candidate_party');
     const fcNorm = (s) => String(s == null ? '' : s).trim().toLowerCase();
     let ratingsCache = null;   // 538 pollster ratings — slow-moving; fetched once per process
+    const partyCache = new Map();   // candidate name → party ('A'|'B'|null) via FEC; static per person, persists across cycles
     const runForecastLoop = async () => {
       try {
         // one bulk poll fetch per race poll-type → index by subject (avoids an HTTP call per race)
@@ -990,12 +993,35 @@ app.whenReady().then(() => {
           } catch (e) { console.error('[forecast] poll fetch', pt, e.message); }
         }
         if (ratingsCache == null) { try { ratingsCache = (await legacy.fetchRatings({ fetchText: legacy.defaultFetchText })).ratings || []; } catch { ratingsCache = []; } }
+
+        // CANDIDATE→PARTY (FEC): VoteHub gives bare candidate names with no party, so a poll margin can't be
+        // signed D-vs-R. Resolve every name to a party via FEC (through the managed api_stream surface), cached
+        // across cycles (party is static). Fail-soft — an unresolved name leaves that race on a prior.
+        let partyOf = null;
+        try {
+          const apiStream = require('./lib/api_stream');
+          const entries = [];
+          for (const k of Object.keys(pollIndex)) for (const p of pollIndex[k]) {
+            const office = candidateParty.officeCode(p.poll_type);
+            const state = registry.parseSubject(p.subject).stateAbbr || null;
+            for (const a of (p.answers || [])) if (a && a.choice) entries.push({ name: a.choice, office, state });
+          }
+          const search = async (name, opts) => {
+            const r = await apiStream.pull('fec', 'candidates/search', { params: { q: name, office: opts.office || undefined, state: opts.state || undefined, per_page: 5 } });
+            return r && r.ok && r.data ? (r.data.results || []) : [];
+          };
+          const built = await candidateParty.resolveMany(entries, { search, cache: partyCache, concurrency: 4 });
+          partyOf = built.partyOf;
+          console.log(`[forecast] party resolve: ${built.resolved}/${built.total} candidates → D/R (via FEC)`);
+        } catch (e) { console.error('[forecast] party resolve', e.message); }
+
         const engineUp = await ensureEngine();                       // gpt-oss direction judgments need the cloud; absent it, news is volatility-only
         const cloud = engineUp ? require('./lib/cloud_logic') : null;
         const res = await loop.runOnce({
           fetchSubjects: () => votehub.fetchSubjects({ fetchJson: votehub.defaultFetchJson }),
           getRacePolls: (race) => pollIndex[fcNorm(race.subject)] || [],
           ratings: ratingsCache,
+          partyOf,                                                 // FEC-resolved candidate→party → signs the poll margins
           ask: cloud ? cloud.ask : null,
           getSnapshot: require('./lib/api_stream').getSnapshot,   // FUNDAMENTALS leg: seeded econ signals (GDP/CPI/unrate/yields) → national environment lean
           // resolve (read-only Echo enrichment) intentionally left off the hot loop — margins/sim don't need
