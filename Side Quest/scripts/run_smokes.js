@@ -128,6 +128,7 @@ const smokes = [
   // API management stream — catalog + authenticated client + management layer (pure, offline; mocked fetch/clock)
   'smoke_api_client.js',
   'smoke_api_manager.js',
+  'smoke_api_stream.js',
 ];
 
 let passed = 0, failed = 0;
