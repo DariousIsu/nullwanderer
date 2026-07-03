@@ -148,6 +148,55 @@ function dispatch({ sibling = true } = {}) {
   ok(rel[1].current === false && rel[1].until === '2025-01-20', 'relatedEntities: tenure_end set → past office');
   ok((await echo.relatedEntities(0, { dispatch: relDispatch })).length === 0, 'relatedEntities: bad id → [] (fail-safe)');
 
+  // ── PROMINENCE GATE (R1) — a bare famous name must NOT resolve to a high-degree, QID-less civic namesake
+  // when a far-more-prominent same-name human exists (the JFK → GA-state-senator bug). External Wikidata
+  // sitelinks are the oracle; the gate fires only on the suspect signature. ──
+  const CIVIC = echo._isCivicLocalNamesake;
+  ok(CIVIC({ type: 'person', subtype: 'state_senator', wikidata_qid: null }) === true, 'civic-namesake: person / state_senator / no QID → suspect');
+  ok(CIVIC({ type: 'person', subtype: 'state_senator', wikidata_qid: 'Q9696' }) === false, 'civic-namesake: a QID (global identity) → trusted, not suspect');
+  ok(CIVIC({ type: 'person', subtype: 'us_senator', wikidata_qid: null }) === false, 'civic-namesake: FEDERAL subtype (us_senator) → not suspect (legit answer)');
+  ok(CIVIC({ type: 'person', subtype: 'legislator_legacy', wikidata_qid: null }) === true, 'civic-namesake: legislator_legacy / no QID → suspect');
+  ok(CIVIC({ type: 'organization', subtype: 'lobby_client', wikidata_qid: null }) === false, 'civic-namesake: non-person → never suspect');
+
+  const JFK_GA = { id: 1461086, name: 'John F. Kennedy (GA)', type: 'person', subtype: 'state_senator', degree: 1533, wikidata_qid: null, facts: [], committees: [] };
+  const probePresident = async () => ({ found: true, qid: 'Q9696', sitelinks: 250, description: 'president of the United States from 1961 to 1963 (1917-1963)', label: 'John F. Kennedy' });
+
+  const pc = await echo.prominenceCheck('John F. Kennedy', JFK_GA, { probeFn: probePresident });
+  ok(pc && pc.status === 'mismatch', 'prominenceCheck: famous name + QID-less state senator + prominent Wikidata human → MISMATCH');
+  ok(pc && pc.prominent && pc.prominent.qid === 'Q9696' && pc.prominent.sitelinks === 250, 'prominenceCheck: surfaces the prominent referent (Q9696, 250 sitelinks)');
+  ok(pc && /president/i.test(pc.note) && /state senator/i.test(pc.note) && /John F\. Kennedy \(GA\)/.test(pc.note), 'prominenceCheck: IDENTITY note answers-famous + footnotes the namesake we hold');
+
+  // Below the sitelinks floor → NOT a mismatch (don't decline a genuinely local record).
+  const pcLow = await echo.prominenceCheck('John F. Kennedy', JFK_GA, { probeFn: async () => ({ found: true, qid: 'Qx', sitelinks: 2, description: 'a person' }) });
+  ok(pcLow && pcLow.status === 'ok', 'prominenceCheck: same-name human below the sitelinks floor → ok (no false decline)');
+
+  // Probe not called when the KG record already carries a QID (global identity → trusted, no external cost).
+  let probedQid = false;
+  const pcQid = await echo.prominenceCheck('John Kennedy', { type: 'person', subtype: 'us_senator', wikidata_qid: 'Q6250211', name: 'John Kennedy (US-US)' }, { probeFn: async () => { probedQid = true; return { found: true, sitelinks: 300 }; } });
+  ok(pcQid.status === 'ok' && !probedQid, 'prominenceCheck: KG record has a QID → skip the probe entirely (no latency)');
+
+  // Bare single-token surname → not a confident famous-name query → no probe.
+  let probedBare = false;
+  const pcBare = await echo.prominenceCheck('Kennedy', JFK_GA, { probeFn: async () => { probedBare = true; return { found: true, sitelinks: 250 }; } });
+  ok(pcBare.status === 'ok' && !probedBare, 'prominenceCheck: bare surname (1 token) → no probe (avoids over-firing)');
+
+  // Probe absent / not-found → fail-soft ok (keeps the resolved object).
+  const pcMiss = await echo.prominenceCheck('John F. Kennedy', JFK_GA, { probeFn: async () => ({ found: false }) });
+  ok(pcMiss.status === 'ok', 'prominenceCheck: probe finds nothing → ok (fail-soft, keeps the object)');
+
+  // ── prominenceProbe — parse the Wikidata SPARQL response through both web_fetch shapes (wrapped preview /
+  // direct body) and extract QID + sitelink count. ──
+  const SPARQL_JFK = JSON.stringify({ results: { bindings: [{ item: { value: 'http://www.wikidata.org/entity/Q9696' }, sitelinks: { value: '250' }, desc: { value: 'president of the United States from 1961 to 1963' } }] } });
+  const wrapped = async (tag) => tag.name === 'web_fetch' ? { ok: true, text: JSON.stringify({ status_code: 200, tier: 'curl_cffi', text_preview: SPARQL_JFK }) } : { ok: false };
+  const direct = async (tag) => tag.name === 'web_fetch' ? { ok: true, text: SPARQL_JFK } : { ok: false };
+  const empty = async (tag) => tag.name === 'web_fetch' ? { ok: true, text: JSON.stringify({ text_preview: JSON.stringify({ results: { bindings: [] } }) }) } : { ok: false };
+  const pw = await echo.prominenceProbe('John F. Kennedy', { dispatch: wrapped });
+  ok(pw.found && pw.qid === 'Q9696' && pw.sitelinks === 250 && /president/i.test(pw.description || ''), 'prominenceProbe: parses web_fetch-wrapped SPARQL (Q9696, 250 sitelinks, desc)');
+  const pd = await echo.prominenceProbe('John F. Kennedy', { dispatch: direct });
+  ok(pd.found && pd.qid === 'Q9696' && pd.sitelinks === 250, 'prominenceProbe: parses direct-body SPARQL shape too');
+  ok((await echo.prominenceProbe('Nobody At All', { dispatch: empty })).found === false, 'prominenceProbe: no bindings → {found:false}');
+  ok((await echo.prominenceProbe('X', { dispatch: async () => ({ ok: true, text: 'not json' }) })).found === false, 'prominenceProbe: unparseable response → fail-soft {found:false}');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

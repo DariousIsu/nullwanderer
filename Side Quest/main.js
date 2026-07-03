@@ -345,6 +345,28 @@ function createCanvasWindow() {
   return canvasWindow;
 }
 
+let forecastWindow = null;
+// Forecasting — the downstream processing surface: a widget host where each MODEL renders as its own
+// widget (lib/forecast_service builds each payload from the poll connectors; no prod DB touched). Own
+// standalone window (mirrors Canvas/Editor); loads renderer/forecast.html.
+function createForecastWindow() {
+  if (forecastWindow && !forecastWindow.isDestroyed()) { forecastWindow.focus(); return forecastWindow; }
+  const windowState = require('./lib/window_state');
+  forecastWindow = new BrowserWindow({
+    ...windowState.options('forecast', { width: 1200, height: 880 }),
+    backgroundColor: '#0d0d10',
+    title: 'Forecasting',
+    autoHideMenuBar: true,
+    show: false,
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false },
+  });
+  forecastWindow.loadFile(path.join(__dirname, 'renderer', 'forecast.html'));
+  windowState.track(forecastWindow, 'forecast');
+  forecastWindow.once('ready-to-show', () => { forecastWindow.show(); forecastWindow.focus(); });
+  forecastWindow.on('closed', () => { forecastWindow = null; });
+  return forecastWindow;
+}
+
 app.whenReady().then(() => {
   config.loadEnv();
   db.init();
@@ -1035,6 +1057,15 @@ app.on('window-all-closed', async () => {
 ipcMain.handle('editor:open', () => { createEditorWindow(); return { ok: true }; });
 ipcMain.handle('workspace:open', () => { createWorkspaceWindow(); return { ok: true }; });
 ipcMain.handle('canvas:open', () => { createCanvasWindow(); return { ok: true }; });
+ipcMain.handle('forecast:open', () => { createForecastWindow(); return { ok: true }; });
+
+// Forecasting processing side — each widget's payload is built in lib/forecast_service (reads the poll
+// connectors; no prod DB). Fail-soft so a feed error never breaks the surface.
+ipcMain.handle('forecast:widgets', () => { try { return require('./lib/forecast_service').listWidgets(); } catch (e) { return []; } });
+ipcMain.handle('forecast:poll-average', async (_e, opts) => {
+  try { return await require('./lib/forecast_service').pollAverageWidget(opts || {}); }
+  catch (e) { return { ok: false, model: 'poll_average', error: e.message }; }
+});
 
 // ============================ MONITORS (canvas news-feed widget) =============================
 // Side Quest half: subscription CRUD + fetch via the engine's fetch_feeds_batch, mapped to a merged
@@ -3153,6 +3184,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // self_dev/dev nodes ("batching and Bulk API…") or a stale "(5 orgs)" dossier node that Dans then
   // relays over the live truth. The grounded answer must DOMINATE, not compete.
   if (activityQ || deliverableAggQ) { retrievedKnowledgeBlock = null; rkRows = []; }
+
+  // PROMINENCE / IDENTITY note (R1) — a bare famous name resolved (in our civic KG) to a low-prominence
+  // same-name record; recall() declined the namesake and surfaced who is actually meant (Wikidata-verified).
+  // Prepend so the grounded answer is ABOUT the prominent referent and only footnotes the record we hold.
+  // Rides the same knowledge-block rail as the self-dev / self-state blocks below.
+  if (recallResult && recallResult.identityNote) {
+    retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${recallResult.identityNote}\n\n${retrievedKnowledgeBlock}` : recallResult.identityNote;
+    console.log('[main] prominence: declined civic namesake, answering the prominent referent');
+  }
 
   // SELF-DEV LEDGER — on a question about her own development, prepend her real changelog (by
   // recency) so "what have you been working on / what's new with you / how have you changed" is

@@ -738,6 +738,85 @@ function _nameGate(cands, queryKey) {
   return named.length ? named : cands;
 }
 
+// ── PROMINENCE-AWARE RESOLUTION (R1) ──────────────────────────────────────────────────────────────────
+// The KG ranks people by `degree`, which in a LEGISLATIVE graph = bill-cosponsorship volume — so a bare
+// famous name resolves to a high-degree, QID-less STATE legislator while the actual referent isn't in the
+// graph at all. Proven live: "John F. Kennedy" → "John F. Kennedy (GA)" state_senator (degree 1533, no
+// QID); the President (Wikidata Q9696, 250 sitelinks) is absent. No KG re-ranking fixes this (the referent
+// isn't there) and we can NOT blanket-drop civic records — legislative research IS the KG's core job. The
+// only correct disambiguator is an EXTERNAL prominence signal, and only for the suspect signature.
+//
+// Suspect signature (pure): a PERSON with NO wikidata_qid and a SUB-NATIONAL/local legislative subtype.
+// A record WITH a QID has an established global identity → trust it. Federal subtypes (us_senator/
+// us_representative) are excluded — a sitting federal figure is a legitimate answer, not a namesake.
+const _SUBNATIONAL_SUBTYPE_RE = /state_senator|state_rep|state_representative|assembly|delegate|counc[\s_-]?member|alderman|county|city_|local|school_board|^legislator$|legislator_legacy/i;
+function _isCivicLocalNamesake(obj) {
+  if (!obj || !/person/i.test(String(obj.type || ''))) return false;
+  if (obj.wikidata_qid) return false;                 // has a global identity → the KG record is trustworthy
+  return _SUBNATIONAL_SUBTYPE_RE.test(String(obj.subtype || '').toLowerCase());
+}
+
+// PROMINENCE PROBE — Wikidata sitelinks ARE the prominence oracle (keyless, ~2-4s, tiny payload). Query the
+// most-linked HUMAN sharing this label. A globally-prominent person clears the floor easily (JFK 250); a
+// civic namesake sits at ~0-1. Exact-label match (canonical full names match their rdfs:label — "John F.
+// Kennedy" → Q9696); an altLabel UNION catches common variants. Returns the prominent human or {found:false}.
+// Fail-soft; never throws. web_fetch is reached through the same dispatch tier wikiLookup uses.
+const _WD_SPARQL = 'https://query.wikidata.org/sparql';
+function _sparqlBindings(rawText) {
+  const tryParse = (s) => { try { return JSON.parse(s); } catch { return null; } };
+  let o = tryParse(rawText);
+  if (o && !o.results && (o.text_preview || o.text || o.body)) { const inner = tryParse(o.text_preview || o.text || o.body || ''); if (inner) o = inner; }  // web_fetch wraps the body
+  return o && o.results && Array.isArray(o.results.bindings) ? o.results.bindings : null;
+}
+async function prominenceProbe(name, { dispatch = null } = {}) {
+  const d = dispatch || (liveReady() ? (tag) => _live.dispatch(tag) : null);
+  const nm = String(name || '').trim();
+  if (!d || nm.length < 3) return { found: false };
+  const lit = nm.replace(/\\/g, '\\\\').replace(/"/g, '\\"');   // SPARQL string literal
+  const sparql = 'SELECT ?item ?sitelinks ?desc WHERE {'
+    + ` { ?item rdfs:label "${lit}"@en } UNION { ?item skos:altLabel "${lit}"@en }`
+    + ' ?item wdt:P31 wd:Q5 . ?item wikibase:sitelinks ?sitelinks .'
+    + ' OPTIONAL { ?item schema:description ?desc . FILTER(LANG(?desc)="en") } }'
+    + ' ORDER BY DESC(?sitelinks) LIMIT 1';
+  const url = _WD_SPARQL + '?format=json&query=' + encodeURIComponent(sparql);
+  let r; try { r = await d({ kind: 'do', name: 'web_fetch', args: { url } }); } catch { return { found: false }; }
+  if (!r || !r.ok) return { found: false };
+  const b = (_sparqlBindings(r.text) || [])[0];
+  if (!b || !b.item) return { found: false };
+  const qid = String(b.item.value || '').split('/').pop() || null;
+  const sitelinks = b.sitelinks ? parseInt(b.sitelinks.value, 10) : 0;
+  return { found: !!qid, qid, sitelinks: Number.isFinite(sitelinks) ? sitelinks : 0, description: b.desc ? String(b.desc.value) : null, label: nm };
+}
+
+// PROMINENCE CHECK — the gate + verdict. Fires the external probe ONLY on the suspect signature and a
+// full-name mention (≥2 substantive tokens — never a bare surname). On a far-more-prominent same-name human
+// (sitelinks ≥ floor; the KG namesake has ~0 so the floor alone separates them), returns a `mismatch` verdict
+// carrying a ready-to-inject IDENTITY note: answer about the prominent referent, footnote the record we hold.
+// probeFn injectable for offline tests. Everything else → {status:'ok'} (resolve exactly as before; no probe,
+// no latency). Fail-soft → 'ok'.
+const _PROMINENCE_FLOOR = 15;
+function _identityNote(m) {
+  const p = m.prominent, n = m.namesake;
+  const who = p.description ? `${p.label} — ${p.description}` : p.label;
+  const alt = `${n.name}${n.subtype ? ` (${String(n.subtype).replace(/_/g, ' ')})` : ''}`;
+  return `IDENTITY: "${p.label}" most prominently refers to ${who}. Answer about THAT person. Our records also hold a far less prominent same-name entry — ${alt} — which is almost certainly NOT who is meant; mention it only as a brief aside ("we also have a ${alt} on file"), never answer about them.`;
+}
+async function prominenceCheck(mention, obj, { dispatch = null, probeFn = null, minSitelinks = _PROMINENCE_FLOOR } = {}) {
+  if (!_isCivicLocalNamesake(obj)) return { status: 'ok' };
+  const toks = String(mention || '').toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(t => t.length >= 2);
+  if (toks.length < 2) return { status: 'ok' };            // bare surname → not a confident famous-name query
+  const probe = probeFn || ((nm) => prominenceProbe(nm, { dispatch }));
+  let p = null; try { p = await probe(mention); } catch { p = null; }
+  if (!p || !p.found || (p.sitelinks || 0) < minSitelinks) return { status: 'ok' };
+  const verdict = {
+    status: 'mismatch',
+    prominent: { qid: p.qid, label: p.label || mention, description: p.description || null, sitelinks: p.sitelinks },
+    namesake: { name: obj.name, type: obj.type, subtype: obj.subtype || null, degree: obj.degree || 0 },
+  };
+  verdict.note = _identityNote(verdict);
+  return verdict;
+}
+
 // Pure: kg_neighborhood's `.neighbors` → capped name strings (background concepts).
 function normalizeNeighbors(kd) {
   const ns = Array.isArray(kd && kd.neighbors) ? kd.neighbors : [];
@@ -819,5 +898,5 @@ async function wikiLookup(query, { dispatch = null, pages = 3, sentences = 4 } =
 
 module.exports = {
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _setLiveForTest
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest
 };

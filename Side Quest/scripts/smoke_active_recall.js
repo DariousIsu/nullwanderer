@@ -182,6 +182,18 @@ const noGraph = () => [];
     ok(/\[object\] John Curtis \(US\) — person\/legislator_legacy, degree 320 — US_Senate R/.test(blkObj), 'knowledgeBlock: object header (type/subtype/degree/role)');
     ok(/• John Curtis \(US\) — title: U\.S\. Senator/.test(blkObj) && /committees: Chair; Member/.test(blkObj), 'knowledgeBlock: renders facts + deduped committees');
     ok(/do NOT restate it or look it up again/.test(blkObj), 'knowledgeBlock: object-rich → the "do not re-research" directive');
+
+    // ── PROMINENCE GATE (R1) wiring — a bare famous name that resolves (in our civic KG) to a QID-less
+    // same-name state legislator is DECLINED, and recall() surfaces an IDENTITY note for the answer. ──
+    const jfkGa = { id: 1461086, name: 'John F. Kennedy (GA)', type: 'person', subtype: 'state_senator', degree: 1533, wikidata_qid: null, facts: [], committees: [], neighbors: [] };
+    const mismatchFn = async (mention, obj) => ({ status: 'mismatch', note: `IDENTITY: "${mention}" most prominently refers to the 35th US President. Our records also hold ${obj.name} (state senator).` });
+    const rMismatch = await ar.recall('John F. Kennedy', { retrieveFn: async () => [], graphFn: noGraph, echoFn: async () => [], objectFn: async () => jfkGa, prominenceFn: mismatchFn });
+    ok(rMismatch.object === null, 'recall: prominence mismatch → the civic namesake object is DECLINED (→ enrich/wiki answers the prominent one)');
+    ok(/35th US President/.test(rMismatch.identityNote || '') && /state senator/.test(rMismatch.identityNote || ''), 'recall: mismatch surfaces the IDENTITY note (answer-famous + footnote-namesake)');
+    ok(rMismatch.coverage === 'thin', 'recall: declined object + 0 notes → thin (no false rich off the wrong record)');
+    // pass-through: an "ok" verdict keeps the resolved object untouched (the legislative-research case)
+    const rOk = await ar.recall('John F. Kennedy', { retrieveFn: async () => [], graphFn: noGraph, echoFn: async () => [], objectFn: async () => jfkGa, prominenceFn: async () => ({ status: 'ok' }) });
+    ok(rOk.object && rOk.object.degree === 1533 && !rOk.identityNote, 'recall: prominence "ok" → the KG record is kept (legislative-research path unbroken)');
   } catch (e) {
     fail++; console.error('  ✗ threw:', e.stack || e.message);
   }

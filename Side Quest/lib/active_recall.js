@@ -23,9 +23,9 @@ const RICH_NOTES = 3;   // ≥ this many on-topic notes (or any verified_fact, o
 function _objectRich(obj) { return !!(obj && (obj.degree >= 8 || (obj.facts || []).length >= 4 || (obj.committees || []).length >= 1)); }
 function _hasObject(obj) { return !!(obj && ((obj.facts || []).length || (obj.committees || []).length || (obj.neighbors || []).length)); }
 
-async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retrieveFn = null, graphFn = null, echoFn = null, objectFn = null, object = true } = {}) {
+async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retrieveFn = null, graphFn = null, echoFn = null, objectFn = null, prominenceFn = null, object = true } = {}) {
   const t = String(topic || '').trim();
-  if (!t) return { topic: t, notes: [], facts: [], object: null, coverage: 'thin', echo: 0, mention: null };
+  if (!t) return { topic: t, notes: [], facts: [], object: null, coverage: 'thin', echo: 0, mention: null, identityNote: null };
   const retrieve = retrieveFn || ((q) => memory.retrieveScored(q, { k, minRelevance }));
   let local = []; try { local = (await retrieve(t)) || []; } catch { local = []; }
   let facts = []; try { facts = (graphFn ? graphFn(t) : _graphFacts(t)) || []; } catch { facts = []; }
@@ -35,7 +35,7 @@ async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retriev
   // ECHO-SEARCH-FIRST also works on a PHRASE: when the topic isn't a bare name (the idle loop hands us
   // "Senator John Curtis personal background"), EXTRACT the entity and pull ITS object — so a web-first
   // idle search on someone we already hold as a rich object is caught and short-circuited.
-  let obj = null, mentionUsed = null;
+  let obj = null, mentionUsed = null, identityNote = null;
   if (object) {
     // MENTION → OBJECT via the tiered chain (lib/mention): local NER (fast) → cloud decompose
     // (casing/pronoun/KG-type) → robust regex fallback. Replaces the capitalized-run regex that mis-read
@@ -52,13 +52,25 @@ async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retriev
     // on — or half-trust — the wrong object. Junk → null → the cloud/wiki answers cleanly. Live path only;
     // objectFn (offline tests) keeps its deterministic object.
     if (obj && !objectFn) { try { if (!require('./echo_suit')._relevanceGate(entTopic, obj)) obj = null; } catch {} }
+    // PROMINENCE GATE (R1) — the KG ranks people by degree (= bill-cosponsorship volume), so a bare famous
+    // name resolves to a high-degree, QID-less STATE legislator while the real referent (e.g. JFK the
+    // President, absent from this civic graph) is who's meant. If a far-more-prominent same-name human exists
+    // on Wikidata, DECLINE the civic namesake (obj→null → the enrich/wiki ladder answers about the prominent
+    // one) and surface an IDENTITY note so the answer footnotes the record we do hold. Live path only (external
+    // Wikidata probe); offline tests inject prominenceFn. Fail-soft — any miss keeps the resolved object.
+    if (obj && (prominenceFn || !objectFn)) {
+      try {
+        const pc = prominenceFn ? await prominenceFn(entTopic, obj) : await require('./echo_suit').prominenceCheck(entTopic, obj);
+        if (pc && pc.status === 'mismatch') { identityNote = pc.note || null; obj = null; }
+      } catch {}
+    }
   }
   // ECHO MASTER DB: query the system-of-record corpus (search_knowledge) — the real "she already
   // knows it" pool. Reference-not-copy: snippets surface into recall, never copied into sq.db.
   let echoHits = []; try { echoHits = (echoFn ? await echoFn(t) : await _echoSearch(t)) || []; } catch { echoHits = []; }
   const notes = local.concat(echoHits);
   const rich = _objectRich(obj) || notes.length >= RICH_NOTES || local.some(n => n.source === 'verified_fact') || facts.length >= 3 || echoHits.length >= 2;
-  return { topic: t, notes, facts, object: obj, coverage: rich ? 'rich' : 'thin', echo: echoHits.length, mention: mentionUsed };
+  return { topic: t, notes, facts, object: obj, coverage: rich ? 'rich' : 'thin', echo: echoHits.length, mention: mentionUsed, identityNote };
 }
 // Entity-shaped = a name/short phrase we can hand to quick_lookup (single-name → dossier), not a
 // full sentence. Keeps the object pull cheap + on-target.
