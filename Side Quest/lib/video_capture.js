@@ -249,6 +249,14 @@ class CaptureLane {
     if (!id) { this.log(`[video-capture] skip (not a YouTube stream): ${feed.url}`); return; }
     const win = new BrowserWindow({ show: false, width: 960, height: 600,
       webPreferences: { autoplayPolicy: 'no-user-gesture-required', partition: 'persist:news-capture', backgroundThrottling: false, offscreen: false } });
+    // AUDIO LEAK FIX: mute at the webContents level (authoritative + element-independent), applied at CREATION
+    // so the window is never audible. The in-page `v.muted` alone leaked: it only caught the first <video>
+    // after a 9s settle, missed YouTube's ad/quality element swaps, and stopped being reapplied once CC turned
+    // on. This is the same guard the visible monitor tiles + Meet pane use (main.js setAudioMuted). Muting the
+    // audio OUTPUT does not pause playback, so captions still advance. Reassert on media-started-playing so an
+    // ad or a full in-page navigation can't reset it audible.
+    try { win.webContents.setAudioMuted(true); } catch {}
+    try { win.webContents.on('media-started-playing', () => { try { win.webContents.setAudioMuted(true); } catch {} }); } catch {}
     win.webContents.on('render-process-gone', () => { try { win.destroy(); } catch {} this.wins.delete(feed); if (!this.stopped) setTimeout(() => this._open(feed), 5000); });
     win.loadURL(`https://www.youtube.com/watch?v=${id}`).catch((e) => this.log(`[video-capture] load failed ${feed.title}: ${e.message}`));
     this.wins.set(feed, { win, ready: 0, ccOn: false });
