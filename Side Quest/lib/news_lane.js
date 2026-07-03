@@ -349,7 +349,12 @@ async function clusterItems(items, { now = Date.now(), adjudicate = null, bands 
     }
     const verdict = best ? classifyContinuation(bestS, bands) : 'new';
     let decision = verdict;
-    if (verdict === 'ambiguous') {
+    // CROSS-MODAL GATE (video CC → wire story): a reconstructed broadcast segment must NEVER auto-attach on
+    // score alone — even a high-band match is adjudicator-CONFIRMED before it corroborates a wire story. This
+    // guards against a loose caption reconstruction inflating a real story. Fail-safe (no ask / ask throws) →
+    // do NOT merge (open a new story), so an unconfirmed video segment stays an isolated single-source island.
+    const videoGate = best && item && item.source_kind === 'video';
+    if (verdict === 'ambiguous' || (verdict === 'continue' && videoGate)) {
       let same = false;
       if (typeof adjudicate === 'function') { try { same = !!(await adjudicate(best, item)); } catch { same = false; } }
       decision = same ? 'continue' : 'new';
@@ -448,9 +453,19 @@ function startOfDayMs(now = Date.now()) { const d = new Date(now); d.setHours(0,
 // snapshot (writeLayer:false). Reads UN-CLUSTERED reservoir items in the window, clusters them into the
 // rolling stories, closes stale stories, and returns a briefing over the stories active in the window.
 // Idempotent via the story_id-IS-NULL guard in the store, so on-demand + scheduled runs never collide.
-async function runCompression({ store, startMs, endMs = Date.now(), now = Date.now(), adjudicate = null, classifyAds = null, classifyEmailAds = null, tuner = null, writeLayer = false, coldMs = 6 * 3600 * 1000, log } = {}) {
+async function runCompression({ store, startMs, endMs = Date.now(), now = Date.now(), adjudicate = null, classifyAds = null, classifyEmailAds = null, reconstructVideo = null, tuner = null, writeLayer = false, coldMs = 6 * 3600 * 1000, log } = {}) {
   ensureSchema();
   let items = (store && typeof store.unclusteredInWindow === 'function') ? store.unclusteredInWindow(startMs, endMs) : [];
+  // Stage-0 VIDEO RECONSTRUCTION: group broadcast caption flushes into segments, reconstruct a clean headline
+  // per segment onto its representative item + absorb the rest — so ONE clean report per segment (with real
+  // entities) enters clustering and can cross-corroborate the wire stories. Then RE-PULL (representatives now
+  // carry clean text; absorbed/dropped flushes are excluded). Fail-safe: no reconstructor → raw video as before.
+  if (typeof reconstructVideo === 'function') {
+    const vids = items.filter((i) => i.source_kind === 'video');
+    if (vids.length) {
+      try { await reconstructVideo(vids); items = store.unclusteredInWindow(startMs, endMs); } catch { /* keep raw items */ }
+    }
+  }
   // Stage-1 AD FILTER: drop ADVERTISEMENT items before clustering so they never become "stories". Two
   // independent classifiers, each scoped to its own source_kind (RSS/aggregator text is editorial, never
   // touched): 'video' → broadcast-ad classifier; 'newsletter' → email-promo classifier (the tier-2 soft
@@ -485,9 +500,9 @@ async function runCompression({ store, startMs, endMs = Date.now(), now = Date.n
 // SNAPSHOT ("dam") — triggers the compression on the un-clustered tail so "right now" is FRESH, then
 // returns the briefing over the window. Default window = today→now; pass sinceMs for "update since <t>".
 // No separate summarizer — the snapshot IS a compression run + its briefing (writeLayer:false).
-async function snapshot({ store, sinceMs = null, now = Date.now(), adjudicate = null, classifyAds = null, classifyEmailAds = null, tuner = null, log } = {}) {
+async function snapshot({ store, sinceMs = null, now = Date.now(), adjudicate = null, classifyAds = null, classifyEmailAds = null, reconstructVideo = null, tuner = null, log } = {}) {
   const startMs = sinceMs != null ? sinceMs : startOfDayMs(now);
-  const c = await runCompression({ store, startMs, endMs: now, now, adjudicate, classifyAds, classifyEmailAds, tuner, writeLayer: false, log });
+  const c = await runCompression({ store, startMs, endMs: now, now, adjudicate, classifyAds, classifyEmailAds, reconstructVideo, tuner, writeLayer: false, log });
   return { since: startMs, now, briefing: c.briefing, storyCount: c.storyCount, freshItems: c.items };
 }
 

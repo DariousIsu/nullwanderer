@@ -881,6 +881,7 @@ app.whenReady().then(() => {
           adjudicate: cloud ? (s, i) => news_lane.adjudicateSameEvent(s, i, { ask: cloud.ask }) : null,
           classifyAds: cloud ? (segs) => require('./lib/news_ads').classifyBatch(segs, { ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null) }) : null,
           classifyEmailAds: cloud ? (items) => require('./lib/news_ads').classifyEmailBatch(items, { ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null) }) : null,
+          reconstructVideo: cloud ? (vids) => require('./lib/video_reconstruct').runReconstruct(vids, { store: newsStore, ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null), log: (m) => console.log(m) }) : null,
           tuner: getNewsTuner(),
           writeLayer: true,
           log: (m) => console.log(m),
@@ -1078,6 +1079,7 @@ ipcMain.handle('news:briefing', async (_e, { sinceMs = null } = {}) => {
       adjudicate: cloud ? (s, i) => news_lane.adjudicateSameEvent(s, i, { ask: cloud.ask }) : null,
       classifyAds: cloud ? (segs) => require('./lib/news_ads').classifyBatch(segs, { ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null) }) : null,
       classifyEmailAds: cloud ? (items) => require('./lib/news_ads').classifyEmailBatch(items, { ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null) }) : null,
+      reconstructVideo: cloud ? (vids) => require('./lib/video_reconstruct').runReconstruct(vids, { store: newsStore, ask: cloud.ask, model: require('./lib/models').getModelFor('editor', null), log: (m) => console.log('[news-brief]', m) }) : null,
       log: (m) => console.log('[news-brief]', m),
     });
     // NEWS TUNER: balance the story selection (reserve hard-news slots / weight / cap) before the prose brief,

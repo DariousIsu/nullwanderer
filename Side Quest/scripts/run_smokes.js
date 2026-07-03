@@ -112,6 +112,7 @@ const smokes = [
   'smoke_news_brief.js',
   'smoke_news_ads.js',
   'smoke_video_capture.js',
+  'smoke_video_reconstruct.js',
   'smoke_email_intake.js',
   'smoke_news_topics.js',
   'smoke_news_rank.js',

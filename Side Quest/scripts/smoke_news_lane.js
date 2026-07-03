@@ -238,6 +238,19 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   const adjMerge = await lane.clusterItems([kyivNBC], { now: NOW, adjudicate: (s, i) => lane.adjudicateSameEvent(s, i, { ask: async () => ({ same: true }) }) });
   ok(adjMerge.attached === 1 && lane.allStories().length === 1, 'the adjudicator MERGES the ambiguous cross-source pair into ONE story');
 
+  // ===== CROSS-MODAL GATE: a video (broadcast CC) segment must be adjudicator-CONFIRMED to merge into a wire story =====
+  clearStories(); newsdb.get().exec('DELETE FROM news_story_updates');
+  const rssIran = { id: 501, source: 'Reuters', source_kind: 'rss', title: 'US and Iran clash over Strait of Hormuz shipping lanes', summary: 'Tensions rise.', ts: NOW };
+  const vidIran = { source: 'CNN', source_kind: 'video', title: 'US and Iran clash over Strait of Hormuz shipping lanes', summary: 'Broadcast segment.', ts: NOW };
+  await lane.clusterItems([rssIran], { now: NOW });
+  const g1 = await lane.clusterItems([{ ...vidIran, id: 502 }], { now: NOW });   // identical headline (high score) but NO adjudicator
+  ok(g1.attached === 0 && lane.allStories().length === 2, 'video segment does NOT auto-attach to a wire story on score alone (gate → new when unconfirmed)');
+  clearStories(); newsdb.get().exec('DELETE FROM news_story_updates');
+  await lane.clusterItems([rssIran], { now: NOW });
+  const g2 = await lane.clusterItems([{ ...vidIran, id: 503 }], { now: NOW, adjudicate: async () => true });
+  ok(g2.attached === 1 && lane.allStories().length === 1, 'video segment MERGES into the wire story when the adjudicator CONFIRMS (cross-modal corroboration)');
+  clearStories(); newsdb.get().exec('DELETE FROM news_story_updates');
+
   // ===== NEWS TUNER: balanceStories / buildBriefing apply reserve+cap so a corroborated topic can't drown out =====
   const S = (category, oc, rc, title) => ({ title, category, outlet_count: oc, report_count: rc, last_ts: NOW });
   const pool = [

@@ -177,6 +177,30 @@ function markDropped(ids = []) {
   return tx(list);
 }
 
+// Overwrite an item's title/summary — used by video-segment RECONSTRUCTION to replace a garbled caption
+// fragment with a clean reconstructed headline before clustering. Only the given fields are touched.
+function updateItemText(id, { title = undefined, summary = undefined } = {}) {
+  ensureSchema();
+  if (id == null) return false;
+  const sets = [], args = {};
+  if (title !== undefined) { sets.push('title = @title'); args.title = title == null ? null : String(title).slice(0, 500); }
+  if (summary !== undefined) { sets.push('summary = @summary'); args.summary = summary == null ? null : String(summary).slice(0, 2000); }
+  if (!sets.length) return false;
+  args.id = Number(id);
+  return newsdb.get().prepare(`UPDATE news_items SET ${sets.join(', ')} WHERE id = @id`).run(args).changes > 0;
+}
+// Mark items ABSORBED into another (story_id = -2 sentinel): excluded from clustering + unclusteredInWindow's
+// `story_id IS NULL` guard, like markDropped's -1 but semantically "folded into a sibling" (the non-
+// representative flushes of a reconstructed broadcast segment). Auditable, not deleted. Returns count.
+function absorbItems(ids = []) {
+  ensureSchema();
+  const list = (Array.isArray(ids) ? ids : []).filter((x) => x != null);
+  if (!list.length) return 0;
+  const stmt = newsdb.get().prepare('UPDATE news_items SET story_id = -2 WHERE id = ? AND story_id IS NULL');
+  const tx = newsdb.get().transaction((l) => { let n = 0; for (const id of l) n += stmt.run(id).changes; return n; });
+  return tx(list);
+}
+
 // PURE: a studio/feeds_view merged item {id,title,link,summary,source,sourceUrl,publishedMs} →
 // an insertItem() shape. `id` there is already guid||link||"feed|title" (a stable dedup key). null on junk.
 function fromFeedItem(fi, { sourceKind = 'rss' } = {}) {
@@ -198,4 +222,5 @@ function fromFeedItem(fi, { sourceKind = 'rss' } = {}) {
 module.exports = {
   ensureSchema, insertItem, insertItems, recentItems, itemsInWindow, unclusteredInWindow, pruneOlderThan, countItems, markDropped, fromFeedItem,
   uncategorizedItems, setCategories, categoriesByGuid,
+  updateItemText, absorbItems,
 };
