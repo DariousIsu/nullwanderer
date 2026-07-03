@@ -141,7 +141,25 @@ function dedupe(sources = []) {
   });
 }
 
+// --- run-level (the deliverable finalize seam) ------------------------------------------------------
+
+// Collect + run-wide dedupe the sources across ALL org sections of a run. sections = [{heading, body}]
+// (lib/assemble.parseSections shape). Each section's URLs/structured-refs are attributed to its heading;
+// a URL cited under two orgs collapses to one entry with both entities. Pure.
+function collectRunSources(sections = []) {
+  const all = [];
+  for (const s of (Array.isArray(sections) ? sections : [])) {
+    if (!s) continue;
+    for (const src of collectSources({ entity: s.heading || s.title || '', raw: s.body || s.content || '' })) all.push(src);
+  }
+  return dedupe(all);
+}
+// Render the run-wide "## Sources" section (deduped across orgs) — the deliverable's citation trail. '' when none.
+function renderRunSources(sections = []) {
+  return renderSourcesSection(collectRunSources(sections));
+}
+
 module.exports = {
   URL_RE, domainOf, extractUrls, structuredRefs, collectSources,
-  frontmatterFor, renderSourcesSection, dedupe,
+  frontmatterFor, renderSourcesSection, dedupe, collectRunSources, renderRunSources,
 };

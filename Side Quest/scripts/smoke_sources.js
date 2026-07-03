@@ -67,5 +67,21 @@ ok(/1\. \[cato\.org\]\(https:\/\/cato\.org\/people\) — Cato Institute/.test(se
 ok(/2\. IRS Form 990 filing \(structured\) — Cato Institute/.test(sec), 'structured source rendered with (structured) tag');
 ok(S.renderSourcesSection([]) === '', 'empty sources → "" (no section)');
 
+// --- collectRunSources / renderRunSources: the deliverable finalize seam (per-org → run-wide) ---
+const runSections = [
+  { heading: 'Heritage Foundation', body: 'Leadership at https://www.heritage.org/staff. Revenue from the Form 990.' },
+  { heading: 'Cato Institute', body: 'See https://cato.org/people/peter-goettler and also https://heritage.org/staff (shared).' },
+  { heading: 'Empty Org', body: 'No links or records here, just prose.' },
+];
+const runSrc = S.collectRunSources(runSections);
+ok(runSrc.some(s => s.domain === 'cato.org') && runSrc.some(s => s.domain === 'heritage.org'), 'collectRunSources: pulls sources from every org section');
+ok(runSrc.filter(s => s.domain === 'heritage.org' && s.kind === 'web').length === 1, 'collectRunSources: a URL shared across two orgs collapses run-wide to one');
+const shared = runSrc.find(s => s.domain === 'heritage.org' && s.kind === 'web');
+ok(/Heritage Foundation/.test(shared.entity) && /Cato Institute/.test(shared.entity), 'collectRunSources: the shared source merges BOTH citing orgs');
+ok(runSrc.some(s => s.kind === 'structured' && /990/.test(s.label)), 'collectRunSources: structured record classes captured too');
+const runSec = S.renderRunSources(runSections);
+ok(/^## Sources/m.test(runSec) && /heritage\.org/.test(runSec) && /cato\.org/.test(runSec), 'renderRunSources: a numbered ## Sources section for the whole run');
+ok(S.renderRunSources([]) === '' && S.renderRunSources([{ heading: 'x', body: 'no links' }]) === '', 'renderRunSources: no sources → "" (no empty section)');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

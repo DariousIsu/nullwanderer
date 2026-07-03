@@ -5534,7 +5534,15 @@ async function condenseRun(focus, { reason = 'done' } = {}) {
     // lossless sections as the completeness ORACLE. composeDocument is fully fail-safe (falls back to the
     // deterministic stitch if the cloud is down), so the deliverable is never lost. The wrapper Gaps seed
     // the honest footer; the composer writes its own executive summary.
-    const condensed = await composeDocument(focus, { goal, sections, completed: reason, summary: wrapper.summary, gaps: wrapper.gaps, indexedMissing: rec.indexedMissing });
+    let condensed = await composeDocument(focus, { goal, sections, completed: reason, summary: wrapper.summary, gaps: wrapper.gaps, indexedMissing: rec.indexedMissing });
+    // PROVENANCE (Pillar 1) — append the run's citation trail so the report's data is TRACEABLE, not just
+    // asserted. Sources are extracted per-org from the accreted raw (real URLs the operator read + structured
+    // record classes) and deduped run-wide. The section rides INTO Echo long-term via the nightly promote (it
+    // is part of the vault document), so the facts stay grounded. Fail-safe: a render miss never blocks the dossier.
+    try {
+      const srcSection = require('./lib/sources').renderRunSources(sections);
+      if (srcSection) { condensed = `${String(condensed).trim()}\n\n${srcSection}`; console.log(`[condense] appended Sources trail (${(srcSection.match(/\n\d+\. /g) || []).length} cited)`); }
+    } catch (e) { console.error('[condense] sources render failed:', e.message); }
     const dossierPath = `notes/directed-${focus.id}-dossier.md`;
     try { await filesLib.dispatch({ tag: 'file-write', attrs: { path: dossierPath }, body: condensed }); }
     catch (e) { console.error('[condense] dossier write failed:', e.message); }
