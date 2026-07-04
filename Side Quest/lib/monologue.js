@@ -1513,8 +1513,11 @@ async function runGraphWalkMove(recentTurns) {
   console.log(`[idle-anchors] raw tiers: news=${_news.length} thin=${_thin.length} visited=${visitedKeys.size}`);
   const anchors = await idleAnchors.provideAnchors({ recentNews: _news, thinNodes: _thin, convoNames, visitedKeys, log: (m) => console.log(m) });
 
+  // CITATION observation sink (curation substrate Slice 0): every PROMOTED fact carries its grade +
+  // backing url. Slice 0 logs it (the durable shared observation store is Slice 1).
+  const observe = async (o) => { try { console.log(`[cite] ${o.sourceEntity} —[${o.relation}]→ ${o.target} (grade ${o.grade} ${Math.round((o.confidence || 0) * 100)}% ${o.url || 'no-url'})`); } catch {} };
   const move = await graphWalk.runMove({
-    recentTurns, candidates: anchors, cloud, web, recall, dispatch, kgNeighbors,
+    recentTurns, candidates: anchors, cloud, web, recall, dispatch, kgNeighbors, observe,
     getMeta: _gm, setMeta: _sm, now: () => Date.now(), log: (m) => console.log(m)
   });
   try { db.setMeta(GRAPHWALK_LAST_KEY, String(Date.now())); } catch {}

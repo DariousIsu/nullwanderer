@@ -21,6 +21,8 @@
  */
 'use strict';
 
+const CG = require('./curation_gate');   // the citation gate: existence + fact gates over the shared grade ladder
+
 // --- knobs (the guard) ------------------------------------------------------
 const THIN_DEGREE = 8;            // an object below this degree is "thin" → worth filling
 const THIN_FACTS = 3;             // …or with fewer than this many facts
@@ -119,7 +121,7 @@ function buildDossierPrompt(mention, sources, { existing = null, neighbors = [] 
   const have = existing ? `\nWHAT THE GRAPH ALREADY HOLDS on "${mention}" (build PAST this, do not repeat): ${String(existing.role || '')} ${(existing.facts || []).slice(0, 4).join('; ')}`.slice(0, 400) : '';
   const nbr = neighbors && neighbors.length ? `\nAlready-linked neighbours (do not re-propose these edges): ${neighbors.slice(0, 10).join(', ')}` : '';
   return [
-    { role: 'system', content: 'You turn sources into a knowledge-graph object. Ground every claim in the sources; invent nothing. Output ONLY JSON of the shape {"entity_type":"person|organization|place|work|event|concept","summary":"2-4 dense factual sentences","related":[{"name":"Other Entity","type":"person|organization|...","relation":"short_relation_label"}]}. `related` = up to 6 OTHER entities this one is genuinely connected to (per the sources), each a real connection worth adding to the graph. No prose outside the JSON.' },
+    { role: 'system', content: 'You turn sources into a knowledge-graph object. Ground every claim in the sources; invent nothing. Output ONLY JSON of the shape {"entity_type":"person|organization|place|work|event|concept","summary":"2-4 dense factual sentences","related":[{"name":"Other Entity","type":"person|organization|...","relation":"short_relation_label","source":"S#"}]}. `related` = up to 6 OTHER entities this one is genuinely connected to. For EACH related entity you MUST set "source" to the [S#] label of the source that STATES this connection. If a connection is your own INFERENCE beyond what the sources say, set "source":"inferred" — be honest: an inferred connection is HELD OUT, not added to the graph. No prose outside the JSON.' },
     { role: 'user', content: `Entity: "${mention}"${have}${nbr}\n\nSources:\n${src || '(none)'}\n\nJSON:` }
   ];
 }
@@ -184,7 +186,7 @@ async function proposeRelation({ dispatch, source, target, relation_type }) {
 // GROW the graph around one anchor gap: fill from web+tools into a dossier, propose the object (if
 // missing) + its related objects + the connecting edges — all under the node/connection budget.
 // Returns { built, entities, connections, related:[names], summary }.
-async function growAround(gap, { web, cloud, dispatch, kgNeighbors, log } = {}) {
+async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, log } = {}) {
   const mention = gap.mention;
   // CANONICAL name for propose_* — the exact stored graph name (with its "[Q…]" tag) so the edge targets
   // the precise node we selected, not a clean-named twin (a wikiquote doc, a lower-degree dup). Web search
@@ -209,19 +211,25 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, log } = {}) 
       dossier = parseJsonLoose(out);
     } catch (e) { log && log('[graph-walk] dossier synth failed: ' + e.message); }
   }
-  if (!dossier || typeof dossier !== 'object') { log && log(`[grow] "${mention}" sources=${sources.length} dossier=NULL (rawLen=${_rawLen}) → no enrich`); return { built: false, entities: 0, connections: 0, related: [], summary: '' }; }
+  if (!dossier || typeof dossier !== 'object') { log && log(`[grow] "${mention}" sources=${sources.length} dossier=NULL (rawLen=${_rawLen}) → no enrich`); return { built: false, entities: 0, connections: 0, related: [], summary: '', held: 0 }; }
 
   const nbrKeys = new Set(neighbors.map(visitKey));
-  let entities = 0, connections = 0; const related = [];
+  let entities = 0, connections = 0, held = 0; const related = [];
   const _relRaw = Array.isArray(dossier.related) ? dossier.related.length : 0;
 
-  // 1) the anchor object itself — only if MISSING (we can't rewrite an existing one on the auto loop;
-  //    for a thin object we enrich by CONNECTION, below).
+  // 1) the anchor object itself — only if MISSING. EXISTENCE gate: mint only if the web pull cites it as
+  //    real (≥ C). No citable source → held, never minted (kills the hallucinated-object failure mode).
   if (gap.kind === 'missing') {
+    const eg = CG.gateAnchorExistence(sources);
+    if (!eg.mint) {
+      log && log(`[grow] "${mention}" existence uncited (grade ${eg.grade}) → HELD, not minted`);
+      return { built: false, entities: 0, connections: 0, related: [], summary: String(dossier.summary || '').trim(), held: 1 };
+    }
     if (await proposeEntity({ dispatch, name: canonical, entity_type: dossier.entity_type, summary: dossier.summary })) entities++;
   }
 
-  // 2) related objects + the connecting edges (the "walk" / gap-fill), under budget.
+  // 2) related objects + the connecting edges. FACT gate: only a claim the dossier cites to a source
+  //    (≥ B) enters Echo; an INFERRED claim (grade D) is HELD — "requires citation", enforced here.
   const rel = Array.isArray(dossier.related) ? dossier.related : [];
   for (const r of rel) {
     if (entities + connections >= (WALK_MAX_NODES + WALK_MAX_CONNECTIONS)) break;
@@ -229,19 +237,24 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, log } = {}) 
     const rname = String((r && r.name) || '').trim();
     if (!rname || visitKey(rname) === visitKey(mention)) continue;
     if (nbrKeys.has(visitKey(rname))) continue;   // edge already in the graph — skip
+    const fg = CG.gateFact(r && r.source, sources);
+    if (!fg.promote) { held++; continue; }        // uncited / inferred → does NOT enter the graph
     // propose the related entity (harmless if it already exists — Echo dedups on promotion)
     if (entities < WALK_MAX_NODES && await proposeEntity({ dispatch, name: rname, entity_type: r.type, summary: '' })) entities++;
-    if (await proposeRelation({ dispatch, source: canonical, target: rname, relation_type: (r && r.relation) || 'related_to' })) { connections++; related.push(rname); }
+    if (await proposeRelation({ dispatch, source: canonical, target: rname, relation_type: (r && r.relation) || 'related_to' })) {
+      connections++; related.push(rname);
+      // record the CITATION for the promoted fact (the observation trail; grade + backing url).
+      if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: fg.url, grade: fg.grade, confidence: fg.confidence }); } catch {} }
+    }
   }
-
-  log && log(`[grow] "${mention}" [${gap.kind}] sources=${sources.length} neighbors=${neighbors.length} related=${_relRaw} → +${entities} ent +${connections} conn`);
-  return { built: gap.kind === 'missing' && entities > 0, entities, connections, related, summary: String(dossier.summary || '').trim() };
+  log && log(`[grow] "${mention}" [${gap.kind}] sources=${sources.length} neighbors=${neighbors.length} related=${_relRaw} → +${entities} ent +${connections} conn (${held} held: uncited)`);
+  return { built: gap.kind === 'missing' && entities > 0, entities, connections, related, summary: String(dossier.summary || '').trim(), held };
 }
 
 // One full graph-building MOVE. Orchestrates anchor → grow → record → voice. Returns a result the
 // caller uses to (optionally) voice one line and log. Never throws (fail-soft everywhere).
 async function runMove(deps = {}) {
-  const { recentTurns = [], candidates: injected, cloud, web, recall, dispatch, kgNeighbors, getMeta, setMeta, now = () => Date.now(), log } = deps;
+  const { recentTurns = [], candidates: injected, cloud, web, recall, dispatch, kgNeighbors, observe, getMeta, setMeta, now = () => Date.now(), log } = deps;
   const nowTs = now();
   try {
     // ANCHOR SOURCE: prefer an injected, already-sourced candidate list (idle_anchors: news → thin
@@ -275,11 +288,11 @@ async function runMove(deps = {}) {
     let anchor = queue[0], grown = null;
     for (const cand of queue.slice(0, WALK_MAX_TRIES)) {
       anchor = cand;
-      grown = await growAround(cand, { web, cloud, dispatch, kgNeighbors, log });
+      grown = await growAround(cand, { web, cloud, dispatch, kgNeighbors, observe, log });
       tried.push(cand.mention);
       if (grown && (grown.built || grown.connections > 0)) break;   // productive → stop
     }
-    grown = grown || { built: false, entities: 0, connections: 0, related: [], summary: '' };
+    grown = grown || { built: false, entities: 0, connections: 0, related: [], summary: '', held: 0 };
     recordVisited({ getMeta, setMeta, now: nowTs, names: [...tried, ...grown.related] });
 
     const notable = grown.built || grown.connections > 0;
@@ -291,7 +304,7 @@ async function runMove(deps = {}) {
     return {
       acted: notable, anchor: anchor.mention, kind: anchor.kind, source: anchor.source,
       built: grown.built, entities: grown.entities, connections: grown.connections,
-      related: grown.related, summary: grown.summary, voiceLine,
+      related: grown.related, summary: grown.summary, voiceLine, held: grown.held || 0,
       reason: notable ? 'grew' : 'no-growth'
     };
   } catch (e) { log && log('[graph-walk] move failed: ' + (e && e.message)); return { acted: false, reason: 'error', error: e && e.message }; }

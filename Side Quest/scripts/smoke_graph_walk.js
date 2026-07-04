@@ -56,13 +56,13 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   // --- growAround a MISSING anchor: proposes the entity + related + edges, under budget ---
   const calls = [];
   const dispatch = async (tag) => { calls.push([tag.name, tag.args]); return { ok: true, text: '{"status":"pending_verification"}' }; };
-  const web = async () => [{ text: 'The Nuclear Innovation Alliance is a nuclear policy nonprofit that works with Congress.' }];
+  const web = async () => [{ text: 'The Nuclear Innovation Alliance is a nuclear policy nonprofit that works with Congress.', url: 'https://ex.com/nia' }];
   const dossierCloud = async () => JSON.stringify({
     entity_type: 'organization',
     summary: 'A nuclear-energy policy nonprofit that advances advanced reactor deployment and works with Congress.',
     related: [
-      { name: 'Advanced Reactor Demonstration Program', type: 'concept', relation: 'advocates_for' },
-      { name: 'John Curtis', type: 'person', relation: 'engages_with' }
+      { name: 'Advanced Reactor Demonstration Program', type: 'concept', relation: 'advocates_for', source: 'S1' },
+      { name: 'John Curtis', type: 'person', relation: 'engages_with', source: 'S1' }
     ]
   });
   const grown = await G.growAround(
@@ -77,7 +77,7 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
 
   // --- growAround a THIN anchor: does NOT re-propose an existing neighbour edge ---
   calls.length = 0;
-  const thinCloud = async () => JSON.stringify({ entity_type: 'organization', summary: 'x', related: [{ name: 'Existing Ally', type: 'organization', relation: 'allied_with' }, { name: 'New Partner', type: 'organization', relation: 'partners_with' }] });
+  const thinCloud = async () => JSON.stringify({ entity_type: 'organization', summary: 'x', related: [{ name: 'Existing Ally', type: 'organization', relation: 'allied_with', source: 'S1' }, { name: 'New Partner', type: 'organization', relation: 'partners_with', source: 'S1' }] });
   const grownThin = await G.growAround(
     { mention: 'Thin Org', kind: 'thin', object: { id: 42, degree: 2, neighbors: ['Existing Ally'] } },
     { web, cloud: thinCloud, dispatch }
@@ -108,7 +108,7 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   const meta2 = {}; const gM = (k) => meta2[k]; const sM = (k, v) => { meta2[k] = v; };
   const iterCloud = async (msgs) => {
     const u = String((msgs[1] && msgs[1].content) || (msgs[0] && msgs[0].content) || '');
-    if (/Entity: "Buildable Co"/.test(u)) return JSON.stringify({ entity_type: 'organization', summary: 'A real org that partners with others on water technology and policy.', related: [{ name: 'Partner X', type: 'organization', relation: 'partners_with' }] });
+    if (/Entity: "Buildable Co"/.test(u)) return JSON.stringify({ entity_type: 'organization', summary: 'A real org that partners with others on water technology and policy.', related: [{ name: 'Partner X', type: 'organization', relation: 'partners_with', source: 'S1' }] });
     if (/Entity: "Dud Co"/.test(u)) return 'not json — no dossier here';   // dud → dossier null → no growth
     return '[]';
   };
@@ -126,7 +126,7 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   // (selected by graph degree), so runMove enriches it instead of dropping it.
   const meta3 = {}; const gM3 = (k) => meta3[k]; const sM3 = (k, v) => { meta3[k] = v; };
   const richRecall = async () => ({ degree: 999, facts: ['a', 'b', 'c', 'd'] });   // recall says RICH (a famous twin)
-  const thinCloud2 = async () => JSON.stringify({ entity_type: 'organization', summary: 'A small local org.', related: [{ name: 'New Ally Org', type: 'organization', relation: 'allied_with' }] });
+  const thinCloud2 = async () => JSON.stringify({ entity_type: 'organization', summary: 'A small local org.', related: [{ name: 'New Ally Org', type: 'organization', relation: 'allied_with', source: 'S1' }] });
   const kgNbr = async () => [];   // the real thin node has no existing neighbours
   const preCalls = [];
   const dispatchPre = async (tag) => { preCalls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created"}' }; };
@@ -138,6 +138,32 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   ok(movePre.acted === true && movePre.source === 'frontier', 'runMove: a pre-classified frontier node is enriched, NOT rich-flipped by recall');
   ok(movePre.connections >= 1, 'runMove: frontier enrichment forges a new connection');
   ok(preCalls.some(c => c[0] === 'propose_relation' && c[1].source_name === 'Thin Local Org [Q999]'), 'runMove: propose_relation targets the CANONICAL name (exact node), not the clean mention');
+
+  // --- CITATION GATE (Slice 0): cited claim promotes + is observed; inferred claim is HELD ---
+  const gcalls = []; const observed = [];
+  const gdisp = async (tag) => { gcalls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created"}' }; };
+  const gweb = async () => [{ text: 'Acme Corp partners with Beta Inc.', url: 'https://ex.com/acme' }];
+  const gcloud = async () => JSON.stringify({ entity_type: 'organization', summary: 'Acme Corp.', related: [
+    { name: 'Beta Inc', type: 'organization', relation: 'partners_with', source: 'S1' },          // cited → promote
+    { name: 'Gamma Guess', type: 'organization', relation: 'rumored_tie', source: 'inferred' }    // inferred → HELD
+  ] });
+  const gGrown = await G.growAround(
+    { mention: 'Acme Corp', kind: 'thin', object: { id: 1, degree: 2, neighbors: [] } },
+    { web: gweb, cloud: gcloud, dispatch: gdisp, kgNeighbors: async () => [], observe: async (o) => observed.push(o) }
+  );
+  ok(gGrown.connections === 1 && gGrown.held === 1, 'growAround: cited claim promotes, inferred claim is HELD (requires-citation)');
+  ok(gcalls.some(c => c[0] === 'propose_relation' && c[1].target_name === 'Beta Inc'), 'growAround: the CITED edge is proposed');
+  ok(!gcalls.some(c => c[0] === 'propose_relation' && c[1].target_name === 'Gamma Guess'), 'growAround: the INFERRED edge NEVER reaches Echo');
+  ok(observed.length === 1 && observed[0].target === 'Beta Inc' && observed[0].url === 'https://ex.com/acme' && observed[0].grade === 'B', 'growAround: observe() records the citation (url + grade B) for the promoted fact');
+
+  // --- EXISTENCE gate: a MISSING anchor with no citable source is HELD, not minted ---
+  const ecalls = [];
+  const edisp = async (tag) => { ecalls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created"}' }; };
+  const eweb = async () => [{ text: 'a snippet with no url' }];   // no url → existence ungradeable
+  const ecloud = async () => JSON.stringify({ entity_type: 'organization', summary: 'x', related: [{ name: 'Whatever', type: 'organization', relation: 'related_to', source: 'S1' }] });
+  const eGrown = await G.growAround({ mention: 'Ghost Org', kind: 'missing', object: null }, { web: eweb, cloud: ecloud, dispatch: edisp });
+  ok(eGrown.built === false && eGrown.held === 1, 'growAround: a missing anchor with no citable existence is HELD, not minted');
+  ok(!ecalls.some(c => c[0] === 'propose_entity'), 'growAround: no propose_entity for an uncitable object (no hallucinated node)');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
