@@ -1464,9 +1464,10 @@ async function runGraphWalkMove(recentTurns) {
         model: sub, messages, base: src.base,
         headers: src.token ? { Authorization: `Bearer ${src.token}` } : {},
         options: { temperature: o.temperature ?? 0.3, top_p: 0.9, num_ctx: 8192, num_predict: o.num_predict || 400 },
+        think: false,   // gpt-oss:120b is a reasoning model — without this its hidden reasoning eats the budget and the JSON comes back empty (dossier=NULL)
         timeoutMs: 120000
       });
-      const text = typeof r === 'string' ? r : (r && r.text) || '';
+      const text = typeof r === 'string' ? r : ((r && r.text) || (r && r.thinking) || '');   // fall back to `thinking` if a reasoner still stashed the answer there
       const usage = (r && typeof r === 'object' && r.usage) ? r.usage : null;
       try { subc.recordSpend({ getMeta: _gm, setMeta: _sm, now: Date.now(), tokens: (usage && ((usage.prompt_tokens || 0) + (usage.eval_tokens || 0))) || subc.estimateTokens(messages, text), key: GRAPHWALK_BUDGET_KEY }); } catch {}
       return text;

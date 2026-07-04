@@ -82,7 +82,7 @@ async function streamChat({ model, messages, options = {}, onToken, signal, inac
  * a schema, not token-by-token. Low temperature by default (these are judgements, not prose).
  * Optional `base` selects a non-default endpoint (e.g. an Ollama-Cloud base for the frontier tier).
  */
-async function completeDetailed({ model, messages, options = {}, base = OLLAMA_BASE, headers = {}, signal, timeoutMs = 180000 }) {
+async function completeDetailed({ model, messages, options = {}, base = OLLAMA_BASE, headers = {}, signal, timeoutMs = 180000, think }) {
   base = base || OLLAMA_BASE;          // coalesce explicit null (default params only fill undefined)
   headers = headers || {};
   // Non-streaming: there's no per-token activity to watch, so cap the WHOLE call. Generous
@@ -96,10 +96,10 @@ async function completeDetailed({ model, messages, options = {}, base = OLLAMA_B
     const res = await fetch(`${base}/api/chat`, {
       method: 'POST',
       headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
-      body: JSON.stringify({
+      body: JSON.stringify(Object.assign({
         model, messages, stream: false, keep_alive: '24h',
         options: Object.assign({ temperature: 0, top_p: 0.9, num_ctx: 8192 }, options),
-      }),
+      }, typeof think === 'boolean' ? { think } : {})),   // think:false → reasoning models emit the answer directly, not hidden in `thinking`
       signal: ctrl.signal,
     });
     if (!res.ok) {
@@ -112,6 +112,7 @@ async function completeDetailed({ model, messages, options = {}, base = OLLAMA_B
     // eval_count = output.
     return {
       text: (obj && obj.message && obj.message.content) || '',
+      thinking: (obj && obj.message && obj.message.thinking) || '',   // reasoning models stash output here; a safety net for callers
       usage: { prompt_tokens: (obj && obj.prompt_eval_count) || 0, eval_tokens: (obj && obj.eval_count) || 0 },
       model: (obj && obj.model) || model
     };

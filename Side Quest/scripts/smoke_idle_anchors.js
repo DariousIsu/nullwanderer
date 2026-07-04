@@ -34,6 +34,10 @@ ok(fc[0].name === 'R Street Institute' && fc[0].id === 10, 'frontierCandidates: 
 ok(fc.filter(r => r.name === 'Cicero Institute').length === 1, 'frontierCandidates: dedups repeats');
 ok(!fc.some(r => r.name === 'I'), 'frontierCandidates: drops junk single-stopword node');
 
+// --- QID display-tag stripping (graph names come with "[Q…]"/"[wd:Q…]" suffixes) ---
+const qidStripped = A.frontierCandidates([{ id: 1, name: 'Toyota [Q53268]', degree: 7 }, { id: 2, name: 'Woodrow Wilson [wd:Q34296]', degree: 6 }]);
+ok(qidStripped[0].name === 'Toyota' && qidStripped[1].name === 'Woodrow Wilson', 'frontierCandidates: strips the [Q…]/[wd:Q…] display tag from graph names');
+
 // --- tier 3: convo names ---
 const cc = A.convoCandidates(['Nuclear Innovation Alliance', 'it', 'Nuclear Innovation Alliance']);
 ok(cc.length === 1 && cc[0] === 'Nuclear Innovation Alliance', 'convoCandidates: dedup + junk filter');

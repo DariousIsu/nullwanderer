@@ -197,14 +197,15 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, log } = {}) 
     neighbors = gap.object.neighbors;
   }
 
-  let dossier = null;
+  let dossier = null, _rawLen = 0;
   if (typeof cloud === 'function') {
     try {
-      const out = await cloud(buildDossierPrompt(mention, sources, { existing: gap.object, neighbors }), { num_predict: 500, temperature: 0.3 });
+      const out = await cloud(buildDossierPrompt(mention, sources, { existing: gap.object, neighbors }), { num_predict: 1000, temperature: 0.3 });
+      _rawLen = (out || '').length;
       dossier = parseJsonLoose(out);
     } catch (e) { log && log('[graph-walk] dossier synth failed: ' + e.message); }
   }
-  if (!dossier || typeof dossier !== 'object') { log && log(`[grow] "${mention}" sources=${sources.length} dossier=NULL (cloud empty/unparseable) → no enrich`); return { built: false, entities: 0, connections: 0, related: [], summary: '' }; }
+  if (!dossier || typeof dossier !== 'object') { log && log(`[grow] "${mention}" sources=${sources.length} dossier=NULL (rawLen=${_rawLen}) → no enrich`); return { built: false, entities: 0, connections: 0, related: [], summary: '' }; }
 
   const nbrKeys = new Set(neighbors.map(visitKey));
   let entities = 0, connections = 0; const related = [];

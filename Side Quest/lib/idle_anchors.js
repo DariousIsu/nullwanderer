@@ -33,7 +33,9 @@ const NEWS_MAX = 4, FRONTIER_MAX = 6, CONVO_MAX = 3;
 const STOPNAMES = new Set(['i', 'you', 'he', 'she', 'they', 'it', 'we', 'us', 'lucas', 'zoe', 'the', 'a', 'an', 'this', 'that', 'them', 'his', 'her', 'their']);
 
 function _clean(name) {
-  return String(name == null ? '' : name).replace(/\s+/g, ' ').trim();
+  return String(name == null ? '' : name)
+    .replace(/\s*\[(?:wd:)?Q\d+\]\s*$/i, '')   // strip the graph QID display tag: "Toyota [Q53268]" → "Toyota"
+    .replace(/\s+/g, ' ').trim();               // (cleaner web search + name resolution; no-op for news/convo names)
 }
 function _usable(name) {
   const n = _clean(name);
