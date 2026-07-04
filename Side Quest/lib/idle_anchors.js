@@ -34,8 +34,10 @@ const STOPNAMES = new Set(['i', 'you', 'he', 'she', 'they', 'it', 'we', 'us', 'l
 
 function _clean(name) {
   return String(name == null ? '' : name)
-    .replace(/\s*\[(?:wd:)?Q\d+\]\s*$/i, '')   // strip the graph QID display tag: "Toyota [Q53268]" → "Toyota"
-    .replace(/\s+/g, ' ').trim();               // (cleaner web search + name resolution; no-op for news/convo names)
+    // strip a trailing graph ID tag: wikidata "[Q53268]"/"[wd:Q34296]" or bioguide "[T000058]"/"[C001044]"
+    // → cleaner web search + dossier prompt + voice. (The RAW name is kept as `canonical` for propose_*.)
+    .replace(/\s*\[[A-Za-z0-9:]*\d[A-Za-z0-9:]*\]\s*$/, '')
+    .replace(/\s+/g, ' ').trim();               // no-op for news/convo names (they carry no such tag)
 }
 function _usable(name) {
   const n = _clean(name);
@@ -76,7 +78,7 @@ function newsCandidates(newsObjects, { max = MAX_PER_TIER } = {}) {
 // graph degree we selected on is the truth, not recallObject's rich-sweep resolution downstream.
 function frontierCandidates(thinNodes, { max = FRONTIER_MAX } = {}) {
   const rows = (Array.isArray(thinNodes) ? thinNodes : [])
-    .map(r => ({ name: _clean(r && (r.name || r.entity || r)), id: (r && r.id != null) ? r.id : null, degree: Number(r && r.degree) || 0 }))
+    .map(r => { const raw = String((r && (r.name || r.entity || r)) || ''); return { name: _clean(raw), raw, id: (r && r.id != null) ? r.id : null, degree: Number(r && r.degree) || 0 }; })
     .filter(r => _usable(r.name));
   const seen = new Set(); const out = [];
   rows.sort((a, b) => b.degree - a.degree);   // MOST-connectable first (degree DESC): more web presence + edges to forge
@@ -120,7 +122,10 @@ function assembleAnchors({ news = [], frontier = [], convo = [], visitedKeys = n
     }
   };
   addTier(newsCandidates(news, { max: newsMax * 4 }).map(n => ({ mention: _clean(n), source: 'news' })), newsMax);
-  addTier(frontierCandidates(frontier, { max: 500 }).map(r => ({ mention: _clean(r.name), source: 'frontier', kind: 'thin', object: { id: r.id, degree: r.degree } })), frontierMax);
+  // canonical = the RAW graph name (with its "[Q…]" tag): the clean `mention` drives web search + voice,
+  // but propose_* must target the EXACT node we selected (else "Woodrow Wilson" hits a wikiquote-doc twin,
+  // not the person) — so growAround uses object.canonical for the propose calls.
+  addTier(frontierCandidates(frontier, { max: 500 }).map(r => ({ mention: _clean(r.name), source: 'frontier', kind: 'thin', object: { id: r.id, degree: r.degree, canonical: r.raw } })), frontierMax);
   addTier(convoCandidates(convo, { max: convoMax * 4 }).map(n => ({ mention: _clean(n), source: 'convo' })), convoMax);
   return out;
 }

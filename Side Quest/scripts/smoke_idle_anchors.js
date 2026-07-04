@@ -37,6 +37,11 @@ ok(!fc.some(r => r.name === 'I'), 'frontierCandidates: drops junk single-stopwor
 // --- QID display-tag stripping (graph names come with "[Q…]"/"[wd:Q…]" suffixes) ---
 const qidStripped = A.frontierCandidates([{ id: 1, name: 'Toyota [Q53268]', degree: 7 }, { id: 2, name: 'Woodrow Wilson [wd:Q34296]', degree: 6 }]);
 ok(qidStripped[0].name === 'Toyota' && qidStripped[1].name === 'Woodrow Wilson', 'frontierCandidates: strips the [Q…]/[wd:Q…] display tag from graph names');
+ok(qidStripped[0].raw === 'Toyota [Q53268]', 'frontierCandidates: preserves the raw canonical name (for propose targeting)');
+const bioguide = A.frontierCandidates([{ id: 3, name: 'William Tauzin [T000058]', degree: 5 }]);
+ok(bioguide[0].name === 'William Tauzin' && bioguide[0].raw === 'William Tauzin [T000058]', 'frontierCandidates: strips bioguide tag "[T000058]" too, keeps raw');
+const canonQ = A.assembleAnchors({ frontier: [{ id: 5, name: 'Toyota [Q53268]', degree: 7 }] });
+ok(canonQ[0].mention === 'Toyota' && canonQ[0].object.canonical === 'Toyota [Q53268]', 'assembleAnchors: frontier carries clean mention + canonical raw for propose');
 
 // --- tier 3: convo names ---
 const cc = A.convoCandidates(['Nuclear Innovation Alliance', 'it', 'Nuclear Innovation Alliance']);

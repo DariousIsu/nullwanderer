@@ -1454,9 +1454,12 @@ async function runGraphWalkMove(recentTurns) {
   if (!subc.budgetOk(_gm, nowTs, cfg.graphwalkBudgetTokensPerHour(), GRAPHWALK_BUDGET_KEY)) return false;
   if (!echoSuit.liveReady()) return false;   // no graph → nothing to build; stay quiet
 
-  // CLOUD cortex seam: the interpreter (candidate extraction + dossier synthesis). Records spend.
+  // CLOUD cortex seam: the interpreter (candidate extraction + dossier synthesis). This is STRUCTURED
+  // EXTRACTION (entity lists, JSON dossiers), not deep reasoning — so it uses the EXTRACTION model
+  // (gemma4:31b-cloud), not the gpt-oss:120b reasoner, whose reasoning detours produced unparseable
+  // dossiers (dossier=NULL, rawLen 62–4710). Records spend.
   const cloud = async (messages, o = {}) => {
-    const sub = cfg.subconsciousModel();
+    const sub = cfg.extractionModel() || cfg.subconsciousModel();
     const src = (() => { try { return (require('./models').sources() || []).find(s => s.tier === 'cloud' && s.token); } catch { return null; } })();
     if (!sub || !src) return null;
     try {

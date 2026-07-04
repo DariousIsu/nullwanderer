@@ -128,13 +128,16 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   const richRecall = async () => ({ degree: 999, facts: ['a', 'b', 'c', 'd'] });   // recall says RICH (a famous twin)
   const thinCloud2 = async () => JSON.stringify({ entity_type: 'organization', summary: 'A small local org.', related: [{ name: 'New Ally Org', type: 'organization', relation: 'allied_with' }] });
   const kgNbr = async () => [];   // the real thin node has no existing neighbours
+  const preCalls = [];
+  const dispatchPre = async (tag) => { preCalls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created"}' }; };
   const movePre = await G.runMove({
     recentTurns: [],
-    candidates: [{ mention: 'Thin Local Org', source: 'frontier', kind: 'thin', object: { id: 555, degree: 2 } }],
-    cloud: thinCloud2, web, recall: richRecall, dispatch, kgNeighbors: kgNbr, getMeta: gM3, setMeta: sM3, now: () => 7000
+    candidates: [{ mention: 'Thin Local Org', source: 'frontier', kind: 'thin', object: { id: 555, degree: 2, canonical: 'Thin Local Org [Q999]' } }],
+    cloud: thinCloud2, web, recall: richRecall, dispatch: dispatchPre, kgNeighbors: kgNbr, getMeta: gM3, setMeta: sM3, now: () => 7000
   });
   ok(movePre.acted === true && movePre.source === 'frontier', 'runMove: a pre-classified frontier node is enriched, NOT rich-flipped by recall');
   ok(movePre.connections >= 1, 'runMove: frontier enrichment forges a new connection');
+  ok(preCalls.some(c => c[0] === 'propose_relation' && c[1].source_name === 'Thin Local Org [Q999]'), 'runMove: propose_relation targets the CANONICAL name (exact node), not the clean mention');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

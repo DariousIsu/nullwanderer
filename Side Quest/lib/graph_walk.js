@@ -186,6 +186,10 @@ async function proposeRelation({ dispatch, source, target, relation_type }) {
 // Returns { built, entities, connections, related:[names], summary }.
 async function growAround(gap, { web, cloud, dispatch, kgNeighbors, log } = {}) {
   const mention = gap.mention;
+  // CANONICAL name for propose_* — the exact stored graph name (with its "[Q…]" tag) so the edge targets
+  // the precise node we selected, not a clean-named twin (a wikiquote doc, a lower-degree dup). Web search
+  // + the dossier + the voice line all use the clean `mention`; only the writes use `canonical`.
+  const canonical = (gap.object && gap.object.canonical) || mention;
   let sources = [];
   if (typeof web === 'function') { try { sources = (await web(mention, 5)) || []; } catch (e) { log && log('[graph-walk] web fill failed: ' + e.message); } }
 
@@ -214,7 +218,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, log } = {}) 
   // 1) the anchor object itself — only if MISSING (we can't rewrite an existing one on the auto loop;
   //    for a thin object we enrich by CONNECTION, below).
   if (gap.kind === 'missing') {
-    if (await proposeEntity({ dispatch, name: mention, entity_type: dossier.entity_type, summary: dossier.summary })) entities++;
+    if (await proposeEntity({ dispatch, name: canonical, entity_type: dossier.entity_type, summary: dossier.summary })) entities++;
   }
 
   // 2) related objects + the connecting edges (the "walk" / gap-fill), under budget.
@@ -227,7 +231,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, log } = {}) 
     if (nbrKeys.has(visitKey(rname))) continue;   // edge already in the graph — skip
     // propose the related entity (harmless if it already exists — Echo dedups on promotion)
     if (entities < WALK_MAX_NODES && await proposeEntity({ dispatch, name: rname, entity_type: r.type, summary: '' })) entities++;
-    if (await proposeRelation({ dispatch, source: mention, target: rname, relation_type: (r && r.relation) || 'related_to' })) { connections++; related.push(rname); }
+    if (await proposeRelation({ dispatch, source: canonical, target: rname, relation_type: (r && r.relation) || 'related_to' })) { connections++; related.push(rname); }
   }
 
   log && log(`[grow] "${mention}" [${gap.kind}] sources=${sources.length} neighbors=${neighbors.length} related=${_relRaw} → +${entities} ent +${connections} conn`);
