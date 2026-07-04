@@ -106,8 +106,24 @@ function coveredFacets(text, portions) {
   return out;
 }
 
+// The Puller CONTACT sub-tasks the deliverable evidences: an exec title/role → the roster is being built
+// (enumerate + title/role); a real email address → the email step; a phone number → the phone step. The
+// CONFIDENCE-GRADE step is deliberately NOT auto-checked — grading is Puller's own belief/verify job (real
+// Hunter/Apollo), not something visible in the prose. Returns exact PULLER_SUBTASKS labels for the todo. Pure.
+const _EMAIL_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i;
+const _PHONE_RE = /(?:\+?1[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}/;
+const _TITLE_RE = /\b(ceo|cfo|coo|cto|president|founder|co-?founder|director|vice[\s-]?president|\bvp\b|chairman|chairwoman|chief\s+\w+\s+officer|head of|managing director|executive director)\b/i;
+function coveredSubtasks(text) {
+  const t = str(text);
+  const done = [];
+  if (_TITLE_RE.test(t)) { done.push(PULLER_SUBTASKS[0], PULLER_SUBTASKS[3]); }   // roster building + title/role
+  if (_EMAIL_RE.test(t)) done.push(PULLER_SUBTASKS[1]);                            // email found
+  if (_PHONE_RE.test(t)) done.push(PULLER_SUBTASKS[2]);                            // phone found
+  return done;                                                                     // [4] confidence-grade → Puller's job
+}
+
 module.exports = {
   MODES, tabKeyForFocus, tabTitleForGoal, mode, orgSectionBlock, dossierBlock, countHeading,
   contractBlockId, todoBlockId, portionsFromPlan, contractBlock, facetTodoMarkdown,
-  CONTACT_FACET_RE, PULLER_SUBTASKS, facetKeywords, coveredFacets,
+  CONTACT_FACET_RE, PULLER_SUBTASKS, facetKeywords, coveredFacets, coveredSubtasks,
 };

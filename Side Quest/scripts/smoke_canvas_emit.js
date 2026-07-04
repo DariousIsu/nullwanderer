@@ -67,5 +67,17 @@ ok('facetKeywords drops stopwords/short words', !E.facetKeywords('Leadership tea
 const liveMd = E.facetTodoMarkdown(plan, E.coveredFacets(deliverable, plan.facets));
 ok('todo checks off exactly the covered facets', /- \[x\] Leadership team and board/.test(liveMd) && /- \[ \] Financial health and funding/.test(liveMd));
 
+// ---- Puller contact sub-task checkoff (finish: the full tree fills in from deliverable content) ----
+const contactsText = 'CEO Jane Doe, jane.doe@acme.com, (415) 555-0132. CFO John Roe.';
+const subs = E.coveredSubtasks(contactsText);
+ok('coveredSubtasks: a title → roster + title/role sub-tasks', subs.includes(E.PULLER_SUBTASKS[0]) && subs.includes(E.PULLER_SUBTASKS[3]));
+ok('coveredSubtasks: a real email → email sub-task', subs.includes(E.PULLER_SUBTASKS[1]));
+ok('coveredSubtasks: a phone number → phone sub-task', subs.includes(E.PULLER_SUBTASKS[2]));
+ok('coveredSubtasks: confidence-grade is NOT auto-checked (Puller\'s job)', !subs.includes(E.PULLER_SUBTASKS[4]));
+ok('coveredSubtasks: bare prose (no contacts) → none', E.coveredSubtasks('Acme makes water systems.').length === 0);
+// end-to-end: the contacts sub-tree ticks in the rendered todo
+const subMd = E.facetTodoMarkdown(plan, E.coveredFacets(contactsText, plan.facets).concat(E.coveredSubtasks(contactsText)));
+ok('rendered sub-tree checks email+phone but leaves confidence-grade pending', /- \[x\] Per exec — email/.test(subMd) && /- \[x\] Per exec — phone/.test(subMd) && /- \[ \] Confidence-grade each/.test(subMd));
+
 console.log(`\nsmoke_canvas_emit: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

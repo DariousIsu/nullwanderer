@@ -5954,7 +5954,9 @@ async function runDirectedResearchPass(focus) {
     try {
       const ce = require('./studio/canvas_emit');
       let fileText = ''; try { const rr = await filesLib.dispatch({ tag: 'file-read', attrs: { path: file } }); fileText = String((rr && (rr.text || rr.content)) || ''); } catch {}
-      const done = ce.coveredFacets(`${fileText}\n${(target && target.raw) || ''}`, planFacets);
+      const text = `${fileText}\n${(target && target.raw) || ''}`;
+      // done = covered facets + the Puller contact sub-tasks the deliverable evidences (emails/phones/titles).
+      const done = ce.coveredFacets(text, planFacets).concat(ce.coveredSubtasks(text));
       await canvasUpsertBlock({ focusId: focus.id, blockId: ce.todoBlockId(focus.id), title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: ce.facetTodoMarkdown({ facets: planFacets }, done) } });
     } catch {}
   };
