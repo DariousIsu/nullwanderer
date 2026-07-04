@@ -51,21 +51,24 @@ function decideTier(signals = {}, { threshold = DEFAULT_THRESHOLD, budgetOk = tr
 }
 
 // --- 4. BUDGET (rolling 1h window) -----------------------------------------
-function _window(getMeta, now) {
+// The `key` param lets an isolated lane keep its OWN spend window (the idle graph-walk uses
+// GRAPHWALK_BUDGET_KEY so the noisy news/curation/forecast lanes can't starve it out of the shared
+// pool). Defaults to BUDGET_KEY → every existing caller is unchanged.
+function _window(getMeta, now, key = BUDGET_KEY) {
   let arr = [];
-  try { arr = JSON.parse((getMeta && getMeta(BUDGET_KEY)) || '[]'); } catch {}
+  try { arr = JSON.parse((getMeta && getMeta(key)) || '[]'); } catch {}
   const cutoff = now - 3600 * 1000;
   return (Array.isArray(arr) ? arr : []).filter(e => Array.isArray(e) && e[0] >= cutoff);
 }
-function spentLastHour(getMeta, now) { return _window(getMeta, now).reduce((a, e) => a + (e[1] || 0), 0); }
-function budgetOk(getMeta, now, capPerHour = DEFAULT_BUDGET_TOKPH) {
+function spentLastHour(getMeta, now, key = BUDGET_KEY) { return _window(getMeta, now, key).reduce((a, e) => a + (e[1] || 0), 0); }
+function budgetOk(getMeta, now, capPerHour = DEFAULT_BUDGET_TOKPH, key = BUDGET_KEY) {
   if (!capPerHour || capPerHour <= 0) return true;           // 0/unset → uncapped
-  return spentLastHour(getMeta, now) < capPerHour;
+  return spentLastHour(getMeta, now, key) < capPerHour;
 }
-function recordSpend({ getMeta, setMeta, now, tokens }) {
-  const arr = _window(getMeta, now);
+function recordSpend({ getMeta, setMeta, now, tokens, key = BUDGET_KEY }) {
+  const arr = _window(getMeta, now, key);
   arr.push([now, Math.max(0, tokens | 0)]);
-  try { setMeta(BUDGET_KEY, JSON.stringify(arr)); } catch {}
+  try { setMeta(key, JSON.stringify(arr)); } catch {}
   return arr.reduce((a, e) => a + (e[1] || 0), 0);
 }
 // Rough token estimate when the model didn't report usage (chars/4).

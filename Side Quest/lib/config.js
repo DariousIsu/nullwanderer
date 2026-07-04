@@ -138,6 +138,9 @@ function subcTierMode() { return get('ZOE_SUBC_TIER_MODE').trim() || 'hybrid'; }
 function subcMeritThreshold() { const n = parseInt(get('ZOE_SUBC_MERIT_THRESHOLD', '').trim(), 10); return Number.isFinite(n) ? n : 3; }
 function subcSynthIntervalMin() { const n = parseInt(get('ZOE_SUBC_SYNTH_MIN', '').trim(), 10); return Number.isFinite(n) ? n : 20; }
 function subcBudgetTokensPerHour() { const n = parseInt(get('ZOE_SUBC_BUDGET_TOKPH', '').trim(), 10); return Number.isFinite(n) ? n : 120000; }
+// Idle graph-builder gets its OWN rolling token ceiling, isolated from the shared subconscious pool the
+// news/curation/forecast lanes fill — so knowledge-expansion can't be starved to zero by background noise.
+function graphwalkBudgetTokensPerHour() { const n = parseInt(get('ZOE_GRAPHWALK_BUDGET_TOKPH', '').trim(), 10); return Number.isFinite(n) ? n : 60000; }
 
 // --- Email ---
 function emailConfig() {
@@ -155,4 +158,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, emailConfig, discordConfig, APP_ROOT, ENV_PATH };

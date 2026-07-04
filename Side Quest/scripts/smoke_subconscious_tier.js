@@ -36,6 +36,14 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(S.budgetOk(getMeta, T0 + 120000, 100000) === false, 'over cap → not ok (fail-safe to local)');
   ok(S.spentLastHour(getMeta, T0 + 2 * 3600 * 1000) === 0, 'window prunes entries older than 1h');
   ok(S.budgetOk(getMeta, T0, 0) === true, 'cap 0/unset = uncapped');
+  // BUDGET ISOLATION: a lane with its OWN window key is unaffected by the shared pool being maxed out.
+  // (the idle graph-walk uses this so news/curation/forecast spend can't starve knowledge-expansion.)
+  const LANE = 'graphwalk.budget.window';
+  ok(S.budgetOk(getMeta, T0 + 120000, 100000, LANE) === true, 'isolated lane is within budget though the shared window is over cap');
+  S.recordSpend({ getMeta, setMeta, now: T0 + 120000, tokens: 70000, key: LANE });
+  ok(S.spentLastHour(getMeta, T0 + 120000, LANE) === 70000, 'isolated lane accrues only its OWN spend');
+  ok(S.spentLastHour(getMeta, T0 + 120000) === 110000, 'shared window is untouched by the lane spend');
+  ok(S.budgetOk(getMeta, T0 + 120000, 60000, LANE) === false, 'the isolated lane enforces its own cap');
   ok(S.estimateTokens([{ content: 'a'.repeat(400) }], 'b'.repeat(400)) === 200, 'estimateTokens ~chars/4');
 
   // --- SOURCE SUPPORT ---

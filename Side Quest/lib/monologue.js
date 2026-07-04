@@ -39,6 +39,7 @@ const BOREDOM_INTERVAL_MS = 5 * 60 * 1000;  // every 5 min, ask her what she'd w
 const MIN_GAP_BETWEEN_SEARCHES_MS = 60 * 1000;  // at most one search per minute
 const GRAPHWALK_MIN_INTERVAL_MS = 30 * 1000;    // graph-building moves are slow + deliberate (not the 10s tick)
 const GRAPHWALK_LAST_KEY = 'graphwalk.lastAt';
+const GRAPHWALK_BUDGET_KEY = 'graphwalk.budget.window';   // idle builder's OWN rolling token window (isolated from the shared subc pool)
 
 let timer = null;
 let captionTimer = null;  // separate, faster heartbeat for caption-following (perception ≠ thinking)
@@ -1443,12 +1444,14 @@ async function runGraphWalkMove(recentTurns) {
   const nowTs = Date.now();
   // cadence: slow, deliberate — not every 10s tick
   try { const last = parseInt(db.getMeta(GRAPHWALK_LAST_KEY) || '0', 10) || 0; if (nowTs - last < GRAPHWALK_MIN_INTERVAL_MS) return false; } catch {}
-  // budget: share the subconscious rolling token ceiling (cloud spend stays bounded)
+  // budget: the idle builder has its OWN rolling window (GRAPHWALK_BUDGET_KEY) with its own ceiling, so the
+  // shared subc pool that news/curation/forecast fill can't starve knowledge-expansion to zero (the audit
+  // root: subc window pinned at 136k/120k → graph-walk never ran).
   const subc = require('./subconscious');
   const cfg = require('./config');
   const _gm = (k) => { try { return db.getMeta(k); } catch { return null; } };
   const _sm = (k, v) => { try { db.setMeta(k, v); } catch {} };
-  if (!subc.budgetOk(_gm, nowTs, cfg.subcBudgetTokensPerHour())) return false;
+  if (!subc.budgetOk(_gm, nowTs, cfg.graphwalkBudgetTokensPerHour(), GRAPHWALK_BUDGET_KEY)) return false;
   if (!echoSuit.liveReady()) return false;   // no graph → nothing to build; stay quiet
 
   // CLOUD cortex seam: the interpreter (candidate extraction + dossier synthesis). Records spend.
@@ -1465,7 +1468,7 @@ async function runGraphWalkMove(recentTurns) {
       });
       const text = typeof r === 'string' ? r : (r && r.text) || '';
       const usage = (r && typeof r === 'object' && r.usage) ? r.usage : null;
-      try { subc.recordSpend({ getMeta: _gm, setMeta: _sm, now: Date.now(), tokens: (usage && ((usage.prompt_tokens || 0) + (usage.eval_tokens || 0))) || subc.estimateTokens(messages, text) }); } catch {}
+      try { subc.recordSpend({ getMeta: _gm, setMeta: _sm, now: Date.now(), tokens: (usage && ((usage.prompt_tokens || 0) + (usage.eval_tokens || 0))) || subc.estimateTokens(messages, text), key: GRAPHWALK_BUDGET_KEY }); } catch {}
       return text;
     } catch { return null; }
   };
@@ -1476,8 +1479,27 @@ async function runGraphWalkMove(recentTurns) {
     try { const r = await echoSuit.dispatch({ kind: 'do', name: 'kg_neighborhood', args: { entity_id: id, top_k: 12 } }, { autonomous: true }); if (!r || !r.ok) return []; let kd; try { kd = JSON.parse(r.text); } catch { return []; } return echoSuit.normalizeNeighbors(kd); } catch { return []; }
   };
 
+  // ANCHOR CASCADE (idle_anchors): the move is no longer conversation-only. Gather GROUNDED anchors —
+  // fresh news principals → thin Echo frontier nodes → recent-conversation gaps — so idle time keeps
+  // expanding knowledge even when Lucas is quiet (the audit root: no non-convo fuel → 2 days silent).
+  const idleAnchors = require('./idle_anchors');
+  const newsObjects = require('./news_objects');
+  const recentNews = async () => { try { return newsObjects.recentNewsObjects({ sinceMs: nowTs - 24 * 3600 * 1000, limit: 20, minCorroboration: 2 }); } catch { return []; } };
+  const thinNodes = async () => {
+    try {
+      const r = await dispatch({ kind: 'do', name: 'db_query', args: { sql: 'SELECT name, degree FROM entities WHERE degree BETWEEN 1 AND 7 AND wikidata_qid IS NOT NULL ORDER BY degree ASC, id DESC LIMIT 40', params: [] } });
+      if (!r || !r.ok) return [];
+      let j; try { j = JSON.parse(r.text); } catch { return []; }
+      const rows = (j && j.rows) || j;
+      return Array.isArray(rows) ? rows : [];
+    } catch { return []; }
+  };
+  const convoNames = async () => { try { return await graphWalk.extractCandidates(recentTurns, { cloud, log: (m) => console.log(m) }); } catch { return []; } };
+  const visitedKeys = graphWalk.visitedKeySet(_gm, nowTs);
+  const anchors = await idleAnchors.provideAnchors({ recentNews, thinNodes, convoNames, visitedKeys, log: (m) => console.log(m) });
+
   const move = await graphWalk.runMove({
-    recentTurns, cloud, web, recall, dispatch, kgNeighbors,
+    recentTurns, candidates: anchors, cloud, web, recall, dispatch, kgNeighbors,
     getMeta: _gm, setMeta: _sm, now: () => Date.now(), log: (m) => console.log(m)
   });
   try { db.setMeta(GRAPHWALK_LAST_KEY, String(Date.now())); } catch {}
@@ -1491,7 +1513,7 @@ async function runGraphWalkMove(recentTurns) {
       pushSheep({ id: row.id, ts: row.ts, content: move.voiceLine, type: 'thought', importance: imp });
       try { blackboard.append({ source: 'monologue', kind: 'thought', refTable: 'monologue', refId: row.id, content: move.voiceLine }); } catch {}
     } catch (e) { console.error('[graph-walk] voice surface failed:', e.message); }
-    console.log(`[graph-walk] ${move.kind} "${move.anchor}" → +${move.entities} obj / +${move.connections} conn`);
+    console.log(`[graph-walk] [${move.source || 'convo'}] ${move.kind} "${move.anchor}" → +${move.entities} obj / +${move.connections} conn`);
   } else if (move && !move.acted) {
     console.log(`[graph-walk] no move (${move.reason || 'quiet'})`);
   }
