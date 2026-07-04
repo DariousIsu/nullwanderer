@@ -1,6 +1,6 @@
 # Curation Substrate — cited, qualified knowledge ingestion
 
-**Status:** SPEC + **Slice 0 & 0.5 BUILT + LIVE-PROVEN** (2026-07-04, branch `feature/idle-passive-intelligence`).
+**Status:** SPEC + **Slices 0, 0.5 & 1 BUILT** (0 & 0.5 LIVE-PROVEN; 1 gate-green, reboot-pending) — 2026-07-04, branch `feature/idle-passive-intelligence`.
 Author: this session, with Lucas.
 **One line:** every data stream that introduces entities/facts flows through ONE cited path —
 `observation → qualify() → two-gate promotion → Echo`. Nothing reaches the graph uncited.
@@ -9,8 +9,10 @@ Author: this session, with Lucas.
 > A/B/C/D ladder and gates it — cited (≥B) promotes, inferred (D) is HELD, a missing anchor with no
 > citable source is never minted. Source acquisition is WEB-FIRST (`graph_walk.fetchLayeredSources`): live
 > Wikipedia fetch → local Echo corpus → web search; DDG scraping retired. Live proof: `Francis Lindquist`
-> enriched with 4 grade-B facts each cited to `en.wikipedia.org/wiki/Francis_Lindquist`. Gate: 128 suites.
-> **Still open on this feed:** the durable observation STORE (Slice 1 — `observe()` currently only logs `[cite]`).
+> enriched with 4 grade-B facts each cited to `en.wikipedia.org/wiki/Francis_Lindquist`. Gate: 129 suites.
+> **Slice 1 (durable store) BUILT** (reboot-pending): every graded claim — promoted or held — now lands a
+> row in `kg_observations` via `lib/curation_store`, so the trail is provable and held claims queue for
+> enrichment. `observe()` no longer just logs.
 
 ---
 
@@ -123,7 +125,7 @@ built) — it reads the curated result, it does not feed the substrate.
 
 | # | Feed | Source citation | Notes |
 |---|---|---|---|
-| 1 | **Idle graph-walk** (web-enrichment) — **CITATION-GATED + WEB-FIRST, LIVE** | live Wikipedia / local corpus URL (grade B) | Slice 0 + 0.5 done; `lib/curation_gate.js` + `fetchLayeredSources`; DDG retired |
+| 1 | **Idle graph-walk** (web-enrichment) — **CITATION-GATED + WEB-FIRST, LIVE; durable trail BUILT** | live Wikipedia / local corpus URL (grade B) | Slice 0 + 0.5 + 1 done; `curation_gate` + `fetchLayeredSources` + `curation_store` (`kg_observations`); DDG retired |
 | 2 | **Document decomposition** | the document itself (grade A/B) | citation-native, highest-yield; `graph_extract` seed + Echo `extract_entities_from_doc` |
 | 3 | **Directed research / contract** | the research source | contacts already Puller-bridged (`puller_add`) |
 | 4 | **News / data-stream lane** | outlet(s); corroboration=min(outlets,reports) | events + principals; email intake included |
@@ -171,9 +173,13 @@ later pulled fully in.
 - **Slice 0.5 — web-first source acquisition. ✅ DONE + LIVE-PROVEN.** `graph_walk.fetchLayeredSources`
   (pure): live Wikipedia fetch → local Echo corpus (`recallKnowledge`) → web search last-resort; every
   source carries a url. Retired DDG scraping (was throttling to `sources=0`).
-- **Slice 1 — the shared promotion path + durable observation STORE.** `observe()` currently only logs;
-  persist graded observations and factor the `observation → qualify → two-gate → Echo` step into one
-  module every feed calls. Generalize the existing `puller_ingest` contacts bridge into it. *(NEXT.)*
+- **Slice 1 — the durable observation STORE. ✅ BUILT (gate 129 green; reboot-pending live verify).**
+  `kg_observations` table + `lib/curation_store` (pure, db-injected): `record`/`recordMany`/`list`/
+  `stats`/`heldFor`, idempotent on `obs_key`. `observe()` now persists (feed-tagged) instead of only
+  logging, recording BOTH promoted and HELD claims (the held set is the enrichment queue). The shared
+  qualifier (`puller_confidence`) and the two gates (`curation_gate`) were already the reusable grading
+  step; `curation_store.fromContact()` generalizes the Puller contact bridge into the same trail. *(NEXT:
+  live-verify post-reboot, then Slice 2.)*
 - **Slice 2 — document decomposition.** Extend `graph_extract` to typed objects + doc-object
   input + disambiguation; route through the gate. (Highest-yield feed.)
 - **Slice 3+ — fold the remaining streams** one at a time (news → meetings → reconciliation →
