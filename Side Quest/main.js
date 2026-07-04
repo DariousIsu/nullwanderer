@@ -3457,7 +3457,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const _hasDirectedFocusR = (() => { try { const fl = require('./lib/focus'); const f = fl.getCurrent(); return !!(f && fl.isDirected(f)); } catch { return false; } })();
   const _isStatusReqR = _hasDirectedFocusR && (() => { try { return require('./lib/research').isStatusRequest(userMessage); } catch { return false; } })();
   const _isDirectedTaskR = (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
-  const turnRoute = require('./lib/turn_router').computeTurnRoute({
+  let turnRoute = require('./lib/turn_router').computeTurnRoute({
     socialTurn, activityQ, deliverableAggQ,
     factual: _factualR, personalFactQ, devQ, stateQ,
     isLiveInfo: _liveInfoR, isStatusReq: _isStatusReqR,
@@ -3466,6 +3466,35 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   if (routerOn) console.log(`[turn-router] route=${turnRoute.route} (${turnRoute.reason}, conf ${turnRoute.confidence})`);
   const routeAllows = (r) => !routerOn || turnRoute.route === r;
   const routeAllowsAny = (...rs) => !routerOn || rs.includes(turnRoute.route);
+
+  // ── OPTION 2 — the LLM is the assignment classifier, not the narrow isDirectedTask regex ────────────
+  // The regex only fed the router's isAssignment signal, so a genuine assignment it didn't match ("deep
+  // background brief on Emergence Water") never reached the cloud intake and fell through to chat — she
+  // acknowledged it and started NOTHING (confabulation). Fix: kick the intake classification CONCURRENTLY
+  // here so it overlaps the grounding/distill/answer-draft awaits below (~1s call → ~no added latency), on
+  // any substantive, non-social candidate turn (converse/answer/task — where a real assignment can hide).
+  // Its decision OVERRIDES the route to 'task' at the intake gate below. Speculative — the result is used
+  // only if no control/correction handler claims the turn first. The regex survives as an in-gate fallback
+  // (cloud down) and the router fast-path, never again the sole veto. Fail-safe: cloud null → regex.
+  let intakeClassifyPromise = null;
+  try {
+    const _opOnKick = (db.getMeta('operator.mode') || 'full').trim() !== 'off';
+    if (routerOn && _opOnKick && !socialTurn && userMessage && userMessage.trim().length > 6 && routeAllowsAny('task', 'converse', 'answer')) {
+      const _intake = require('./lib/intake');
+      const _af = (() => { try { const f = require('./lib/focus').getCurrent(); return f ? String(f.content || '') : ''; } catch { return ''; } })();
+      const _recentK = (recentTurns || []).slice(-3).map(t => `${t.speaker || '?'}: ${String(t.content || '').slice(0, 120)}`).join(' | ');
+      const _existingRecords = (qClass === 'narrow') ? '' : (() => {
+        try {
+          const ld = JSON.parse(db.getMeta('research.last_dossier') || 'null');
+          if (!ld || !ld.focusId) return '';
+          let txt = ''; try { const r = filesLib.fileReadFull(`notes/directed-${ld.focusId}-dossier.md`); txt = (r && r.text) || ''; } catch {}
+          const orgs = require('./lib/condense').dossierOrgs(txt).slice(0, 25);
+          return orgs.length ? `"${String(ld.goal || '').slice(0, 80)}" — covering: ${orgs.join(', ')}` : '';
+        } catch { return ''; }
+      })();
+      intakeClassifyPromise = _intake.classify(userMessage, { recent: _recentK, activeFocus: _af, existingRecords: _existingRecords }).catch(() => null);
+    }
+  } catch (e) { console.error('[intake] concurrent kick failed:', e.message); }
 
   // EPISODIC RECALL — embed THIS user message (store it on the turn for future recall),
   // and pull the few most-relevant PAST turns that scrolled out of the recency window, so
@@ -3797,31 +3826,23 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let isAssignment = false;
   let assignmentSeed = null;   // object-memory Slice 2: resolved entity targets + clarify for the run
   try {
-    const opOn2 = (() => { try { return (db.getMeta('operator.mode') || 'full').trim() !== 'off'; } catch { return true; } })();
-    if (opOn2 && routeAllows('task') && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled && userMessage && userMessage.trim().length > 6) {
+    // Consume the CONCURRENT intake classification kicked right after the router. The LLM decision — not the
+    // narrow regex — decides whether this is a project. Guarded by the same control/correction flags so a
+    // stop/wrap/correct turn is never re-read as a new assignment. When the cloud was unavailable the promise
+    // resolves to null and the isDirectedTask regex is the fallback (unchanged behavior on cloud-down).
+    if (intakeClassifyPromise && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled) {
       const intake = require('./lib/intake');
-      const af = (() => { try { const f = require('./lib/focus').getCurrent(); return f ? String(f.content || '') : ''; } catch { return ''; } })();
-      const recent = (recentTurns || []).slice(-3).map(t => `${t.speaker || '?'}: ${String(t.content || '').slice(0, 120)}`).join(' | ');
-      // EXISTING-RECORDS context so the classifier can route enrich vs discover correctly (named orgs we
-      // already hold → enrich, not start-over). Brief: the last dossier's topic + its org list.
-      // GATE (turn→object-graph): a NARROW factual "who/what is X" is NEVER an enrich request, so it must
-      // NOT be primed with the standing-research org list — that priming made "Who is Sen. Thune?" misfire
-      // into "list all 19 organizations" (the bleed that survived clearing the focus + the grounding). Only
-      // broader/request-shaped turns, where enrich-vs-discover actually matters, get the existing records.
-      const existingRecords = (qClass === 'narrow') ? '' : (() => {
-        try {
-          const ld = JSON.parse(db.getMeta('research.last_dossier') || 'null');
-          if (!ld || !ld.focusId) return '';
-          let txt = ''; try { const r = filesLib.fileReadFull(`notes/directed-${ld.focusId}-dossier.md`); txt = (r && r.text) || ''; } catch {}
-          const orgs = require('./lib/condense').dossierOrgs(txt).slice(0, 25);
-          return orgs.length ? `"${String(ld.goal || '').slice(0, 80)}" — covering: ${orgs.join(', ')}` : '';
-        } catch { return ''; }
-      })();
-      const decision = await intake.classify(userMessage, { recent, activeFocus: af, existingRecords });
+      const decision = await intakeClassifyPromise;
       if (decision) intakeRoute = intake.route(decision);
-      // PRIMARY = the cloud decision; the regex is the FALLBACK only when the cloud was unavailable (null).
       isAssignment = decision ? !!(intakeRoute && intakeRoute.action !== 'none')
         : (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
+      // ROUTE OVERRIDE — a real assignment the sync router left as converse/answer becomes a 'task' now, so the
+      // run-creation + operator blocks fire and the conversational/status directives suppress (single-dispatch
+      // preserved). This is what removes the narrow regex as the sole gate to the directed-research subsystem.
+      if (isAssignment && turnRoute.route !== 'task') {
+        turnRoute = { route: 'task', confidence: 0.85, reason: 'intake-llm' };
+        console.log('[intake] LLM classified an assignment → route overridden to task');
+      }
       if (isAssignment) console.log(`[intake] ASSIGNMENT → ${intakeRoute ? intakeRoute.action : 'discover(regex-fallback)'}${intakeRoute && intakeRoute.deep ? ' deep' : ''}${intakeRoute && intakeRoute.priority ? ' ' + intakeRoute.priority : ''}`);
     }
   } catch (e) { console.error('[intake] gate failed:', e.message); }
