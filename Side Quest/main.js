@@ -5435,6 +5435,19 @@ const operatorTools = {
       return r.text ? `SAW ${r.url}:\n${r.text.slice(0, 4000)}` : `looked at ${r.url} but saw nothing relevant to "${focus}"`;
     } catch (e) { return 'ERROR: ' + e.message; }
   },
+  // BANK the executive contacts a research pass found into PULLER (our contact-intelligence store) so its
+  // email-pattern belief + confidence algorithm runs on real data — Lucas's "contacts get the tools from the
+  // Puller workplace": the run does the gathering, this tool call feeds Puller. Local + safe (its own puller.db).
+  puller_add: async ({ company, contacts } = {}) => {
+    try {
+      const pdb = require('./lib/puller_db'); const ingest = require('./studio/puller_ingest');
+      pdb.init();
+      const rows = ingest.contactsToRows(contacts, company || '');
+      if (!rows.length) return 'puller_add: no contacts with a name were provided';
+      const s = ingest.ingestRows(pdb, rows, { source: `research:${String(company || 'run').slice(0, 40)}` });
+      return `Banked into Puller: +${s.targets} contact(s), ${s.observations} observation(s), ${s.patternHits} email-pattern hit(s)${s.skippedDup ? `, ${s.skippedDup} already tracked` : ''}.`;
+    } catch (e) { return 'ERROR: ' + e.message; }
+  },
   recall: async ({ query } = {}) => {
     try { const rows = await memoryLib.retrieve(String(query || ''), { k: 5 }); const t = (rows || []).map(r => '- ' + String((r && r.content) || '').replace(/\s+/g, ' ').slice(0, 220)).join('\n'); return t || 'nothing relevant in memory'; }
     catch (e) { return 'ERROR: ' + e.message; }

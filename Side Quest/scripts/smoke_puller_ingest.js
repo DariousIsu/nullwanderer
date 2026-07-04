@@ -18,6 +18,14 @@ ok('tierKind generic', I.tierKind(0.30) === 'generic');
 ok('domainOf', I.domainOf('a.b@aes.com') === 'aes.com');
 ok('creditsPattern verified/pattern only', I.creditsPattern('verified') && I.creditsPattern('pattern') && !I.creditsPattern('guess') && !I.creditsPattern('generic'));
 
+// ---- contactToRow / contactsToRows (the puller_add tool bridge: research find → ingest row) ----
+ok('contactToRow: verified email → 95%', I.contactToRow({ name: 'Ann Lee', title: 'CEO', email: 'ann.lee@acme.com', verified: true }, 'Acme').confidence === '95%');
+ok('contactToRow: plain email → 50% candidate (no pattern pollution)', I.contactToRow({ name: 'Ann Lee', email: 'ann.lee@acme.com' }, 'Acme').confidence === '50%');
+ok('contactToRow: role/position aliases → title', I.contactToRow({ name: 'B', role: 'CFO' }).title === 'CFO' && I.contactToRow({ name: 'C', position: 'COO' }).title === 'COO');
+ok('contactToRow: default company filled', I.contactToRow({ name: 'D', email: 'd@x.com' }, 'DefaultCo').company === 'DefaultCo');
+ok('contactToRow: explicit confidence wins', I.contactToRow({ name: 'E', confidence: '80%', email: 'e@x.com' }).confidence === '80%');
+ok('contactsToRows: parses a JSON string + drops the nameless', I.contactsToRows('[{"name":"F","email":"f@x.com"},{"name":""}]', 'Co').length === 1);
+
 const DB = require('../lib/puller_db');
 DB.init({ path: ':memory:' });
 
@@ -60,6 +68,12 @@ ok('Mark has 2 observations (email+role)', DB.listObservations(mark.id).length =
 // idempotency: re-running creates nothing new
 const s2 = I.ingestRows(DB, rows, { source: 'test' });
 ok('re-run creates 0 targets (idempotent)', s2.targets === 0 && s2.skippedDup === 6);
+
+// puller_add bridge end-to-end: contactsToRows → ingestRows credits the pattern for a verified email
+const bridged = I.contactsToRows([{ name: 'Tina Fox', title: 'CEO', email: 'tina.fox@newco.io', verified: true }], 'NewCo');
+ok('contactsToRows → one verified NewCo row', bridged.length === 1 && bridged[0].confidence === '95%');
+const s3 = I.ingestRows(DB, bridged, { source: 'research:NewCo' });
+ok('bridged verified contact credits the newco.io first.last pattern', s3.targets === 1 && s3.patternHits === 1 && !!DB.getPatternState('newco.io').patterns['first.last']);
 
 DB.close();
 console.log(`\nsmoke_puller_ingest: ${pass} passed, ${fail} failed`);

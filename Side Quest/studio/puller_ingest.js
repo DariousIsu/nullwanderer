@@ -97,4 +97,27 @@ function ingestRows(db, rows, opts = {}) {
   return stats;
 }
 
-module.exports = { ingestRows, parseConfidence, tierKind, domainOf, creditsPattern, clean, key };
+// A research-gathered contact → an ingestRows row (the bridge for the puller_add tool call: the research
+// run does the gathering, this normalizes each find into what ingestRows wants). `verified` (email came from
+// an official/public source) grades it 95% → credits the domain's email pattern; a pattern-DERIVED email is
+// 50% → a candidate, no credit. name/company/title/phone carried through. Pure.
+function contactToRow(c, defaultCompany = '') {
+  c = c || {};
+  const name = clean(c.name || c.full_name || c.person);
+  const email = clean(c.email).toLowerCase();
+  const title = clean(c.title || c.role || c.position);
+  const phone = clean(c.phone || c.phone2 || c.tel);
+  let confidence = c.confidence;
+  if (confidence == null || confidence === '') {
+    confidence = (c.verified === true || /verified|official|primary[_\s-]?source/i.test(String(c.source || ''))) ? '95%' : '50%';
+  }
+  return { name, company: clean(c.company) || clean(defaultCompany), title, email, phone, confidence };
+}
+// Normalize a list (or a JSON string of a list) of gathered contacts → ingestRows rows; drop the nameless.
+function contactsToRows(contacts, defaultCompany = '') {
+  let arr = contacts;
+  if (typeof arr === 'string') { try { arr = JSON.parse(arr); } catch { arr = []; } }
+  return (Array.isArray(arr) ? arr : []).map((c) => contactToRow(c, defaultCompany)).filter((r) => r.name);
+}
+
+module.exports = { ingestRows, parseConfidence, tierKind, domainOf, creditsPattern, clean, key, contactToRow, contactsToRows };

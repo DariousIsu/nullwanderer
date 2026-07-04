@@ -53,6 +53,7 @@ const TOOL_SPEC_CORE = `TOOLS (call exactly ONE per step):
 - localdb {"sql":"SELECT …"}    query her OWN local memory store DIRECTLY — read-only SELECT over her tables (knowledge, notes, open_threads, monologue, self_model…). Use this to look across ALL of her stored memory, not just the top semantic hits. Run localdb_map first if you don't know the tables.
 - localdb_map {}                list her local store's tables + row counts
 - file {"op":"read|write|append|list","path":"notes/x.md","content":"…"}   her workspace files
+- puller_add {"company":"…","contacts":[{"name":"…","title":"…","email":"…","phone":"…","verified":true}]}   BANK the real people you found into Puller (our contact store) — it learns the company's email pattern + grades confidence. On a CONTACTS task, call this as you find each executive: name + title always; email/phone when found; verified:true ONLY if the email came from an official/public source (else it's treated as a pattern candidate)
 
 YOU HAVE TWO FIRST-CLASS DATABASES — use BOTH as needed: localdb (her own accumulated memory) and echo (OUR research databases: the knowledge graph, vault, CRM, gov/legal/financial records, plus db_query for raw SELECTs across them). Before answering "do we have / what do we know" from guesswork, check them.`;
 
