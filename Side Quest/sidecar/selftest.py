@@ -14,11 +14,11 @@ import orchestrator
 
 JOB = {
     "models": ["poll_baseline", "uniform_swing", "fundamentals"],
-    "config": {"stub_delay": 0.5, "national_swing": -0.17},
+    "config": {"stub_delay": 0.5, "national_swing": -0.17, "incumbency_adv": 0.0},
     "inputs": {"races": [
-        {"seat": "S-AZ", "chamber": "senate", "poll_margin": 1.2, "base": 1.2, "pres_lean": -3, "incumbent_party": "B"},
-        {"seat": "S-TX", "chamber": "senate", "poll_margin": 0.6, "base": 0.6, "pres_lean": -8, "incumbent_party": "B"},
-        {"seat": "H-CA-22", "chamber": "house", "poll_margin": -0.2, "base": -0.2, "pres_lean": 2, "incumbent_party": "B"},
+        {"seat": "S-AZ", "chamber": "senate", "poll_margin": 1.2, "base": 1.2, "incumbent_party": "B"},
+        {"seat": "S-TX", "chamber": "senate", "poll_margin": 0.6, "base": 0.6, "incumbent_party": "B"},
+        {"seat": "H-CA-22", "chamber": "house", "poll_margin": -0.2, "base": -0.2, "incumbent_party": "B"},
     ]},
 }
 
@@ -54,10 +54,22 @@ def main():
         ok("%s emits contract (seats+chambers+elapsed)" % r["model"],
            isinstance(r.get("seats"), list) and "chambers" in r and "elapsed_ms" in r)
 
-    # models genuinely differ (poll_baseline sees Senate D-leaning; fundamentals sees it R after pres+incumbency)
+    # models genuinely differ (poll_baseline sees Senate D-leaning; fundamentals reads the real 538 R lean)
     pb = next(r for r in out["results"] if r["model"] == "poll_baseline")
     fx = next(r for r in out["results"] if r["model"] == "fundamentals")
     ok("models produce distinct views (not identical)", pb["chambers"]["senate"] != fx["chambers"]["senate"])
+
+    # fundamentals reads REAL 538 partisan lean from data/elections (AZ~-7.2, TX~-15, CA-22~+10.3).
+    # Skips gracefully on a fresh checkout where the data hasn't been fetched yet (run fetch_data.py).
+    fx_by_seat = {s["seat"]: s for s in fx["seats"]}
+    if fx["diagnostics"]["leans_loaded"] == 0:
+        print("  SKIP fundamentals real-data checks (no data/elections - run: python fetch_data.py)")
+    else:
+        ok("fundamentals matched real 538 leans (all 3 seats)", fx["diagnostics"]["matched"] == 3 and fx["diagnostics"]["leans_loaded"] >= 480,
+           "matched=%s loaded=%s" % (fx["diagnostics"].get("matched"), fx["diagnostics"].get("leans_loaded")))
+        ok("fundamentals AZ Senate reads R lean (real, not stub)", -12 < fx_by_seat["S-AZ"]["margin"] < -3 and fx_by_seat["S-AZ"]["source"] == "partisan_lean",
+           "AZ margin=%s" % fx_by_seat["S-AZ"]["margin"])
+        ok("fundamentals CA-22 reads D+10 (real district lean)", 6 < fx_by_seat["H-CA-22"]["margin"] < 15)
 
     # ensemble blends per seat across models
     ens = out["ensemble"]

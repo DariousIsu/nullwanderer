@@ -5,9 +5,19 @@ models in parallel and feeds results back to the live JS machine. Design: [../do
 Why a sidecar + the model roster: [../docs/MODEL_METHODOLOGY_RESEARCH.md](../docs/MODEL_METHODOLOGY_RESEARCH.md).
 
 ## Status
-**Phase 0 — skeleton (stdlib only, no deps).** The orchestrator + model interface + registry + 3 stub models +
-self-test are live and proven: the pool runs models concurrently and Node (Electron) can spawn it and read
-results. Real models (XGBoost fundamentals, Bayesian/Stan, SHAP) slot into this proven harness next.
+**Phase 0 skeleton + first REAL model (stdlib only, no heavy deps).** The orchestrator + model interface +
+registry + self-test run the pool concurrently and Node (Electron) can spawn it and read results. The
+`fundamentals` model is REAL — it reads 538 partisan-lean data (via `fetch_data.py`) → per-seat prior margins
+for the whole seat universe (AZ Senate R-5, CA-22 D+8, NY-14 D+59). `poll_baseline`/`uniform_swing` remain
+stubs. XGBoost/SHAP/Bayesian slot in next (they need the venv).
+
+## Data
+```bash
+python fetch_data.py        # downloads reference datasets into ../data/elections/ (idempotent; --force to refresh)
+```
+Sources (free/unrestricted, no Harvard Dataverse guestbook): **538 partisan lean** (CC-BY, per-district +
+per-state Cook-PVI-style lean — the coverage-prior backbone) + **MEDSL presidential** (MIT, state results
+1976-2024, via keithpotz). `data/` is gitignored, so `fetch_data.py` is the reproducible source of record.
 
 ## Run
 ```bash
@@ -42,11 +52,12 @@ main.js locates `.venv` python; if absent, the sidecar is skipped and the JS mac
 sidecar/
 ├── orchestrator.py     # runs the model pool concurrently (multiprocessing); job in → results out
 ├── registry.py         # name → Model class
-├── selftest.py         # stdlib self-test (concurrency + contract + ensemble)
-├── requirements.txt    # deps for the REAL models (skeleton needs none)
+├── fetch_data.py       # downloads reference datasets → ../data/elections/ (stdlib)
+├── selftest.py         # stdlib self-test (concurrency + contract + ensemble + real-lean lookup)
+├── requirements.txt    # deps for the heavy models (skeleton + fundamentals need none)
 └── models/
     ├── base.py             # Model interface + ModelResult helpers
     ├── poll_baseline.py    # stub — poll-margin passthrough
     ├── uniform_swing.py    # stub — base + national swing
-    └── fundamentals.py*    # stub — pres_lean + incumbency (→ real prior: past-two elections + XGBoost)
+    └── fundamentals.py     # REAL — 538 partisan lean + incumbency → per-seat prior (→ XGBoost upgrade later)
 ```
