@@ -56,5 +56,16 @@ const mdDone = E.facetTodoMarkdown(plan, ['Organizational mission']);
 ok('todo checks off a completed portion', mdDone.includes('- [x] Organizational mission') && mdDone.includes('- [ ] Leadership team and board'));
 ok('todo with no portions → pending placeholder', /\(plan pending\)/.test(E.facetTodoMarkdown({}, [])));
 
+// ---- coverage detection (Slice 2: todo fills in as portions complete) ----
+const deliverable = '## Emergence Water\nThe leadership team and board includes CEO Jane Doe. Contact: emails and phones listed on the site.';
+const cov = E.coveredFacets(deliverable, plan.facets);
+ok('coveredFacets marks a facet the deliverable discusses', cov.includes('Leadership team and board') && cov.includes('Comprehensive contact information (emails, phones)'));
+ok('coveredFacets does NOT mark an unmentioned facet', !cov.includes('Financial health and funding'));
+ok('coveredFacets on empty text → []', E.coveredFacets('', plan.facets).length === 0);
+ok('facetKeywords drops stopwords/short words', !E.facetKeywords('Leadership team and board of directors').includes('and') && E.facetKeywords('Leadership team and board of directors').includes('leadership'));
+// the todo reflects coverage end-to-end
+const liveMd = E.facetTodoMarkdown(plan, E.coveredFacets(deliverable, plan.facets));
+ok('todo checks off exactly the covered facets', /- \[x\] Leadership team and board/.test(liveMd) && /- \[ \] Financial health and funding/.test(liveMd));
+
 console.log(`\nsmoke_canvas_emit: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

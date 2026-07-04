@@ -113,5 +113,16 @@ ok(r.isConcreteTarget('21 conservative organizations') === false, 'isConcreteTar
 ok(r.isConcreteTarget('') === false && r.isConcreteTarget(null) === false, 'isConcreteTarget: empty/nil → false');
 ok(r.isConcreteTarget('a very long descriptive phrase that is clearly not a proper name') === false, 'isConcreteTarget: an over-long phrase → not a concrete entity');
 
+// --- Slice 3: facet → toolset map + coverage plan injected into the deepen pass ---
+ok(/fec_committee_search/.test(r.facetToolset('Financial health and funding sources').tools.join(' ')), 'facetToolset: financial → the FEC/990 tree');
+ok(/Puller pattern/i.test(r.facetToolset('Comprehensive contact information').note) && /derive.*pattern|pattern.*verify/i.test(r.facetToolset('Comprehensive contact information').tools.join(' ')), 'facetToolset: contacts → the Puller email-pattern+verify pattern');
+ok(/kg_neighborhood|kg_query/.test(r.facetToolset('Key affiliations and partners').tools.join(' ')), 'facetToolset: affiliations → the KG relation tools');
+ok(Array.isArray(r.facetToolset('something unmapped').tools) && r.facetToolset('something unmapped').tools.length >= 1, 'facetToolset: unmapped facet → a safe default toolset');
+const cp = r.buildCoveragePlan(['Leadership team and board', 'Financial health and funding', 'Comprehensive contact information']);
+ok(/COVERAGE PLAN/.test(cp) && /Leadership/.test(cp) && /fec_committee_search/.test(cp) && /EXHAUSTION/.test(cp), 'buildCoveragePlan: lists every facet with its tools + an exhaustion directive');
+ok(r.buildCoveragePlan([]) === '', 'buildCoveragePlan: no facets → empty');
+ok(r.buildDeepenPrompt({ goal: 'g', target: 'X', facets: [], coveragePlan: cp }).includes('COVERAGE PLAN'), 'buildDeepenPrompt: carries the coverage plan into the pass');
+ok(!r.buildDeepenPrompt({ goal: 'g', target: 'X', facets: [] }).includes('COVERAGE PLAN'), 'buildDeepenPrompt: no coverage plan → unchanged default');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

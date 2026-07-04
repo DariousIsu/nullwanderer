@@ -84,8 +84,30 @@ function facetTodoMarkdown(plan, done = []) {
   return lines.join('\n');
 }
 
+// ── COVERAGE (Slice 2: the todo fills in as portions complete) ──────────────────────────────────────────
+// Which portions the deliverable-so-far actually COVERS — a portion is "done" when a meaningful share of its
+// content words appear in the accumulated text. Deterministic + no executor change: the checklist reflects
+// what's genuinely been written (a facet like "Leadership & board" checks off once the draft discusses it;
+// an org portion checks off when its "## <org>" section lands). Pure.
+const _FSTOP = new Set(['and', 'the', 'of', 'for', 'with', 'its', 'their', 'to', 'in', 'on', 'sources', 'information', 'comprehensive', 'recent', 'health', 'strategic', 'goals', 'positions', 'other', 'more', 'each', 'every']);
+function facetKeywords(portion) {
+  return str(portion).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length >= 4 && !_FSTOP.has(w));
+}
+function coveredFacets(text, portions) {
+  const t = str(text).toLowerCase();
+  if (!t) return [];
+  const out = [];
+  for (const f of (Array.isArray(portions) ? portions : [])) {
+    const kw = facetKeywords(f);
+    if (!kw.length) continue;
+    const hits = kw.filter((w) => t.includes(w)).length;
+    if (hits >= Math.max(1, Math.ceil(kw.length * 0.5))) out.push(f);
+  }
+  return out;
+}
+
 module.exports = {
   MODES, tabKeyForFocus, tabTitleForGoal, mode, orgSectionBlock, dossierBlock, countHeading,
   contractBlockId, todoBlockId, portionsFromPlan, contractBlock, facetTodoMarkdown,
-  CONTACT_FACET_RE, PULLER_SUBTASKS,
+  CONTACT_FACET_RE, PULLER_SUBTASKS, facetKeywords, coveredFacets,
 };

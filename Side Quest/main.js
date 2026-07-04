@@ -5942,6 +5942,23 @@ async function runDirectedResearchPass(focus) {
   try { intended = JSON.parse(db.getMeta(`focus.${focus.id}.intended_targets`) || '[]'); } catch {}
   try { visited = JSON.parse(db.getMeta(`focus.${focus.id}.visited`) || '[]'); } catch {}
 
+  // CONTRACT (Slices 2+3): the plan's facets are the run's PORTIONS. Slice 3 = feed the facet→toolset
+  // COVERAGE PLAN into every deepen pass so each facet drives its full tool array (financial → the FEC/990
+  // tree; contacts → the Puller email-pattern+verify pattern), not one web search. Slice 2 = after each pass
+  // refresh the contract TODO from what the deliverable now covers, so portions check off live.
+  let planFacets = [];
+  try { const pl = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || 'null'); planFacets = (pl && Array.isArray(pl.facets) && pl.facets.length) ? pl.facets : (pl && Array.isArray(pl.targets) ? pl.targets : []); } catch {}
+  const coveragePlan = (() => { try { return rs.buildCoveragePlan(planFacets); } catch { return ''; } })();
+  const refreshContractTodo = async () => {
+    if (!planFacets.length) return;
+    try {
+      const ce = require('./studio/canvas_emit');
+      let fileText = ''; try { const rr = await filesLib.dispatch({ tag: 'file-read', attrs: { path: file } }); fileText = String((rr && (rr.text || rr.content)) || ''); } catch {}
+      const done = ce.coveredFacets(`${fileText}\n${(target && target.raw) || ''}`, planFacets);
+      await canvasUpsertBlock({ focusId: focus.id, blockId: ce.todoBlockId(focus.id), title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: ce.facetTodoMarkdown({ facets: planFacets }, done) } });
+    } catch {}
+  };
+
   const runPass = async (prompt) => {
     try {
       const r = await runCloudOperator({ userMessage: prompt, context: '', task: true, autonomous: true });
@@ -6012,7 +6029,7 @@ async function runDirectedResearchPass(focus) {
   } else if (!done) {
     // DEEPEN the current target — next missing facet. A grounded target carries its graph dossier as `known`,
     // injected as GIVEN so the pass builds PAST what we already hold (object-first).
-    const { ans, usedTool } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance, known: target.known || '', visited }));
+    const { ans, usedTool } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance, known: target.known || '', visited, coveragePlan }));
     const p = rs.parsePass(ans);
     const newChars = rs.newContentChars(target.raw, p.body);
     target.passes = (target.passes || 1) + 1;
@@ -6050,6 +6067,9 @@ async function runDirectedResearchPass(focus) {
       note = `deepening ${target.name}: +${p.facet || 'detail'} (${newChars} new chars) → canvas`;
     }
   }
+
+  // CONTRACT TODO (Slice 2): reflect what the deliverable now covers → the facet checklist fills in live.
+  try { await refreshContractTodo(); } catch {}
 
   // surface to her thought-stream + accrete to the focus working set (signature = org identity so the
   // stuck detector catches a real loop, while normal deepening passes stay distinct).

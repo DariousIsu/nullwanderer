@@ -140,17 +140,45 @@ function isConcreteTarget(target) {
   return t.split(/\s+/).length <= 6;   // a short proper-noun phrase, not a descriptive category
 }
 
+// FACET → TOOLSET map (Slice 3): each research facet drives its FULL array of tools/sources, so "financial"
+// pulls the entire FEC/990/USAspending tree and "contacts" runs the Puller pattern (every exec's email
+// derived from the domain pattern + verified) — not two web searches. Keyword-matched over the plan's facet
+// text; the executor already has these Echo tools. Pure.
+const FACET_TOOLSETS = [
+  { re: /contact|email|phone|reach|directory|outreach/i, tools: ['the org site /contact & /team pages', 'per-exec email — DERIVE from the domain pattern (first.last@, flast@, first@) and VERIFY', 'kg_neighborhood for known contacts'], note: 'Get EVERY executive: full name, title, work email (pattern-derive + verify), phone. The Puller pattern — never leave a person without at least a pattern-derived email + a confidence note.' },
+  { re: /financ|fund|revenue|donor|grant|money|budget|\btax\b/i, tools: ['propublica_nonprofit_search/get (IRS 990)', 'usaspending_search (federal grants & contracts)', 'fec_committee_search + fec_candidate_search (the FULL PAC/donation tree)', 'edgar_full_text_search (SEC)'], note: 'Pull the ENTIRE financial tree — 990s, federal grants/contracts, every affiliated FEC committee and its donations, SEC filings.' },
+  { re: /leader|board|executive|founder|staff|\bteam\b|management|director/i, tools: ['search_entities/get_entity (Echo KG)', 'the org /leadership & /about pages', 'per-exec background'], note: 'Name EVERY leader & board member with title + a source.' },
+  { re: /affiliat|partner|network|relationship|associat|subsidiar/i, tools: ['kg_neighborhood/kg_query_local (Echo KG relations)', 'opensanctions_search', 'propublica_nonprofit (related orgs)'], note: 'Map all affiliations/partners/subsidiaries from the graph + related-org sources.' },
+  { re: /policy|position|project|program|initiative|advocacy|legislat|regulat/i, tools: ['gdelt_article_search & news', 'legiscan_search / fr_search (bills & regs)', 'the org site'], note: 'Recent projects, policy positions, and public advocacy — with dates + sources.' },
+  { re: /mission|strateg|overview|background|about|profile|history/i, tools: ['search_documents_semantic (Echo vault — what we already hold)', 'search_entities (KG)', 'the org /about & reputable profiles'], note: 'Mission, strategy, background — ground in what we already hold FIRST.' },
+];
+function facetToolset(facet) {
+  for (const m of FACET_TOOLSETS) if (m.re.test(String(facet == null ? '' : facet))) return { tools: m.tools.slice(), note: m.note };
+  return { tools: ['the open web', 'Echo KG (search_entities)'], note: '' };
+}
+// A coverage directive: every plan facet + the tools to EXHAUST for it. Injected into the deepen pass so the
+// executor drives breadth (all facets) AND depth (the full tool array per facet), not a single search. Pure.
+function buildCoveragePlan(facets = []) {
+  const fs = (Array.isArray(facets) ? facets : []).map((f) => String(f || '').trim()).filter(Boolean);
+  if (!fs.length) return '';
+  const lines = ['COVERAGE PLAN — the deliverable must cover EVERY facet below; for each, drive the listed tools/sources to EXHAUSTION (do not stop at one web search):'];
+  for (const f of fs) { const t = facetToolset(f); lines.push(`• ${f} → ${t.tools.join('; ')}${t.note ? ` — ${t.note}` : ''}`); }
+  return lines.join('\n');
+}
+
 // Deepen pass: stay on the current target, pursue the next missing facet, or declare it SATURATED.
 // `known` (Slice 2c) = what we ALREADY hold on the target (from our graph) — injected as GIVEN so the pass
 // builds PAST it instead of re-deriving the biography we already have (the #2915 fix, deep half).
-function buildDeepenPrompt({ goal = '', target = '', facets = [], guidance = '', known = '', visited = [] } = {}) {
+// `coveragePlan` (Slice 3) = the facet→toolset directive so each facet drives its full tool array.
+function buildDeepenPrompt({ goal = '', target = '', facets = [], guidance = '', known = '', visited = [], coveragePlan = '' } = {}) {
   const g = guidance ? `\n${guidance}\n` : '';
+  const cp = coveragePlan ? `\n${coveragePlan}\n` : '';
   const k = known ? `\nWHAT WE ALREADY HOLD on ${target} (from our own knowledge graph — treat as GIVEN, do NOT re-derive or re-report it; build PAST it toward what's missing):\n${known}\n` : '';
   // ALREADY-VISITED memory — stop the "same websites over and over" loop: name the URLs/searches already
   // used this run and push toward DEPTH (a new page on a site, a followed link) or a NEW source.
   const v = (Array.isArray(visited) && visited.length)
     ? `\nALREADY VISITED THIS RUN — do NOT open these again or re-run these searches; instead go DEEPER (open a NEW page/section on a site you've seen, or follow a link from it) or to a DIFFERENT source:\n${visited.slice(-18).map(u => `- ${u}`).join('\n')}\n` : '';
-  return `You are DEEP-researching ONE organization for Lucas's task, staying on it until it is well covered.\n\nTASK: ${goal}\nCURRENT ORGANIZATION: ${target}\nFacets already gathered on it: ${facetsSummary(facets)}\n${k}${v}${g}\nTHIS PASS: pursue the NEXT most valuable facet you do NOT yet have on ${target}, in priority order: (1) named leadership & key staff with their roles, (2) direct contact details (work emails, phone numbers, mailing address, key social/LinkedIn) — check the org's own /contact or /about page, (3) detailed policy positions / notable work, (4) funding & affiliations, (5) recent activity / publications. EXHAUST a good source before moving on: when you land on the organization's OWN site, use open_page to go straight into its /team, /leadership, /about and /contact pages (and follow promising links) — do NOT bounce to a fresh web_search until you've actually used the site you're on. Ground EVERY detail in what the tools return — never invent a name, email, or number. If you cannot verify a real, FULL name, write "not found" — NEVER use initials, abbreviations, or any placeholder (e.g. "R. Z." or "VP") in place of a real name.\nIf you have already gathered a solid, well-rounded picture of ${target} (what it is, its people, how to reach it, its positions), reply with exactly SATURATED and nothing else.\nEnd with a final line: FACET: <the facet you added this pass>`;
+  return `You are DEEP-researching ONE organization for Lucas's task, staying on it until it is well covered.\n\nTASK: ${goal}\nCURRENT ORGANIZATION: ${target}\nFacets already gathered on it: ${facetsSummary(facets)}\n${k}${v}${cp}${g}\nTHIS PASS: pursue the NEXT most valuable facet you do NOT yet have on ${target}, in priority order: (1) named leadership & key staff with their roles, (2) direct contact details (work emails, phone numbers, mailing address, key social/LinkedIn) — check the org's own /contact or /about page, (3) detailed policy positions / notable work, (4) funding & affiliations, (5) recent activity / publications. EXHAUST a good source before moving on: when you land on the organization's OWN site, use open_page to go straight into its /team, /leadership, /about and /contact pages (and follow promising links) — do NOT bounce to a fresh web_search until you've actually used the site you're on. Ground EVERY detail in what the tools return — never invent a name, email, or number. If you cannot verify a real, FULL name, write "not found" — NEVER use initials, abbreviations, or any placeholder (e.g. "R. Z." or "VP") in place of a real name.\nIf you have already gathered a solid, well-rounded picture of ${target} (what it is, its people, how to reach it, its positions), reply with exactly SATURATED and nothing else.\nEnd with a final line: FACET: <the facet you added this pass>`;
 }
 
 // --- ENRICH / FACET-FILL mode -----------------------------------------------
@@ -243,6 +271,7 @@ module.exports = {
   parsePass, newContentChars, decideAdvance, facetsSummary,
   isClarification, buildGuidanceBlock, isStatusRequest,
   buildNewTargetPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt, pickSeedTarget, allTargetsCovered, isConcreteTarget,
+  facetToolset, buildCoveragePlan,
   pickEnrichTarget, facetLabel, buildEnrichPrompt, buildOrganizeEnrichPrompt,
   buildWebLanePrompt, buildDeepLanePrompt, buildMergeLanesPrompt,
   MAX_PASSES_PER_TARGET, MIN_NEW_CHARS
