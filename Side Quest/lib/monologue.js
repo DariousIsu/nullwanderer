@@ -1487,16 +1487,27 @@ async function runGraphWalkMove(recentTurns) {
   const recentNews = async () => { try { return newsObjects.recentNewsObjects({ sinceMs: nowTs - 24 * 3600 * 1000, limit: 20, minCorroboration: 2 }); } catch { return []; } };
   const thinNodes = async () => {
     try {
-      const r = await dispatch({ kind: 'do', name: 'db_query', args: { sql: 'SELECT name, degree FROM entities WHERE degree BETWEEN 1 AND 7 AND wikidata_qid IS NOT NULL ORDER BY degree ASC, id DESC LIMIT 40', params: [] } });
+      // degree DESC: prefer the MOST-connectable underdeveloped nodes (degree 6-7 = world-notable
+      // entities our graph barely links, e.g. General Motors/Reagan) over rock-bottom degree-1 stubs
+      // (obscure, no web presence → nothing to enrich). A DEEP pool (200) so the visited-filter always
+      // has fresh thin nodes to surface as she works through them move after move.
+      const r = await dispatch({ kind: 'do', name: 'db_query', args: { sql: 'SELECT id, name, degree FROM entities WHERE degree BETWEEN 2 AND 7 AND wikidata_qid IS NOT NULL ORDER BY degree DESC, id DESC LIMIT 200', params: [] } });
       if (!r || !r.ok) return [];
       let j; try { j = JSON.parse(r.text); } catch { return []; }
       const rows = (j && j.rows) || j;
       return Array.isArray(rows) ? rows : [];
     } catch { return []; }
   };
-  const convoNames = async () => { try { return await graphWalk.extractCandidates(recentTurns, { cloud, log: (m) => console.log(m) }); } catch { return []; } };
+  // CONVO tier only when there's GENUINE recent conversation — a user turn in the last 30 min. Otherwise
+  // extractCandidates mines her own idle musings (silence-protocol fragments like "core operating logic")
+  // into junk "missing" anchors that rank first and waste moves on NULL dossiers. Idle ≠ conversation.
+  const _lastUser = (recentTurns || []).filter(t => t.speaker === 'user').reduce((mx, t) => Math.max(mx, Number(t.ts) || 0), 0);
+  const _convoFresh = _lastUser > 0 && (nowTs - _lastUser < 30 * 60 * 1000);
+  const convoNames = async () => { if (!_convoFresh) return []; try { return await graphWalk.extractCandidates(recentTurns, { cloud, log: (m) => console.log(m) }); } catch { return []; } };
   const visitedKeys = graphWalk.visitedKeySet(_gm, nowTs);
-  const anchors = await idleAnchors.provideAnchors({ recentNews, thinNodes, convoNames, visitedKeys, log: (m) => console.log(m) });
+  const _news = await recentNews(); const _thin = await thinNodes();
+  console.log(`[idle-anchors] raw tiers: news=${_news.length} thin=${_thin.length} visited=${visitedKeys.size}`);
+  const anchors = await idleAnchors.provideAnchors({ recentNews: _news, thinNodes: _thin, convoNames, visitedKeys, log: (m) => console.log(m) });
 
   const move = await graphWalk.runMove({
     recentTurns, candidates: anchors, cloud, web, recall, dispatch, kgNeighbors,

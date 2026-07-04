@@ -204,10 +204,11 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, log } = {}) 
       dossier = parseJsonLoose(out);
     } catch (e) { log && log('[graph-walk] dossier synth failed: ' + e.message); }
   }
-  if (!dossier || typeof dossier !== 'object') return { built: false, entities: 0, connections: 0, related: [], summary: '' };
+  if (!dossier || typeof dossier !== 'object') { log && log(`[grow] "${mention}" sources=${sources.length} dossier=NULL (cloud empty/unparseable) → no enrich`); return { built: false, entities: 0, connections: 0, related: [], summary: '' }; }
 
   const nbrKeys = new Set(neighbors.map(visitKey));
   let entities = 0, connections = 0; const related = [];
+  const _relRaw = Array.isArray(dossier.related) ? dossier.related.length : 0;
 
   // 1) the anchor object itself — only if MISSING (we can't rewrite an existing one on the auto loop;
   //    for a thin object we enrich by CONNECTION, below).
@@ -228,6 +229,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, log } = {}) 
     if (await proposeRelation({ dispatch, source: mention, target: rname, relation_type: (r && r.relation) || 'related_to' })) { connections++; related.push(rname); }
   }
 
+  log && log(`[grow] "${mention}" [${gap.kind}] sources=${sources.length} neighbors=${neighbors.length} related=${_relRaw} → +${entities} ent +${connections} conn`);
   return { built: gap.kind === 'missing' && entities > 0, entities, connections, related, summary: String(dossier.summary || '').trim() };
 }
 
@@ -242,15 +244,21 @@ async function runMove(deps = {}) {
     // and the smoke's direct call). Each candidate carries a `source` tag for logging/steering.
     let candList;
     if (Array.isArray(injected) && injected.length) {
-      candList = injected.map(c => (typeof c === 'string' ? { mention: c, source: 'convo' } : { mention: c.mention, source: c.source || 'convo' })).filter(c => c.mention);
+      candList = injected.map(c => (typeof c === 'string' ? { mention: c, source: 'convo' } : { mention: c.mention, source: c.source || 'convo', kind: c.kind, object: c.object })).filter(c => c.mention);
     } else {
       candList = (await extractCandidates(recentTurns, { cloud, log })).map(m => ({ mention: m, source: 'convo' }));
     }
     if (!candList.length) return { acted: false, reason: 'no-candidates' };
     const srcByKey = new Map(candList.map(c => [visitKey(c.mention), c.source]));
 
-    const assessed = (await assessGaps(candList.map(c => c.mention), { recall, log }))
-      .map(a => ({ ...a, source: srcByKey.get(visitKey(a.mention)) || 'convo' }));
+    // PRE-CLASSIFIED candidates (frontier: selected BY graph degree) trust that gap classification and
+    // skip recallObject's rich-sweep, which would resolve a famous same-name twin and flip a genuinely
+    // thin node to 'rich'. Only the unclassified tiers (news/convo) go through Echo-first assessment.
+    const pre = candList.filter(c => c.kind && c.object).map(c => ({ mention: c.mention, kind: c.kind, object: c.object, source: c.source }));
+    const toAssess = candList.filter(c => !(c.kind && c.object)).map(c => c.mention);
+    const recalled = (await assessGaps(toAssess, { recall, log })).map(a => ({ ...a, source: srcByKey.get(visitKey(a.mention)) || 'convo' }));
+    const assessed = [...pre, ...recalled];
+    log && log(`[graph-walk] assessed ${assessed.length}: ${assessed.map(a => `${a.source}:${a.kind}`).join(', ') || '(none)'}`);
     const visited = visitedKeySet(getMeta, nowTs);
     const queue = rankGaps(assessed, visited);
     if (!queue.length) return { acted: false, reason: 'no-gap' };   // nothing worth building → go quiet

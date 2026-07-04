@@ -26,7 +26,10 @@
 const { visitKey } = require('./graph_walk');   // shared dedup key (no cycle: graph_walk never requires this)
 
 const MAX_PER_TIER = 6;
-const MAX_TOTAL = 8;
+const MAX_TOTAL = 10;
+// per-tier slot caps (news is priority-first per Lucas's cascade, but it's mostly already-rich famous
+// entities, so it's capped LOW so it can't crowd out the frontier tier — the reliable gap source).
+const NEWS_MAX = 4, FRONTIER_MAX = 6, CONVO_MAX = 3;
 const STOPNAMES = new Set(['i', 'you', 'he', 'she', 'they', 'it', 'we', 'us', 'lucas', 'zoe', 'the', 'a', 'an', 'this', 'that', 'them', 'his', 'her', 'their']);
 
 function _clean(name) {
@@ -66,14 +69,16 @@ function newsCandidates(newsObjects, { max = MAX_PER_TIER } = {}) {
 
 // --- tier 2: FRONTIER thin nodes -------------------------------------------
 // Input: rows of already-in-graph objects worth enriching (e.g. db_query for low-degree entities). Each
-// row is {name, degree, ...}. Thinnest first (most in need of filling). Deduped, junk-filtered.
-function frontierCandidates(thinNodes, { max = MAX_PER_TIER } = {}) {
+// row is {id, name, degree, ...}. Thinnest first (most in need of filling). Deduped, junk-filtered.
+// Returns the ROWS (name + id + degree) so the assembler can carry the KNOWN gap classification — the
+// graph degree we selected on is the truth, not recallObject's rich-sweep resolution downstream.
+function frontierCandidates(thinNodes, { max = FRONTIER_MAX } = {}) {
   const rows = (Array.isArray(thinNodes) ? thinNodes : [])
-    .map(r => ({ name: _clean(r && (r.name || r.entity || r)), degree: Number(r && r.degree) || 0 }))
+    .map(r => ({ name: _clean(r && (r.name || r.entity || r)), id: (r && r.id != null) ? r.id : null, degree: Number(r && r.degree) || 0 }))
     .filter(r => _usable(r.name));
   const seen = new Set(); const out = [];
-  rows.sort((a, b) => a.degree - b.degree);
-  for (const r of rows) { const k = visitKey(r.name); if (seen.has(k)) continue; seen.add(k); out.push(r.name); if (out.length >= max) break; }
+  rows.sort((a, b) => b.degree - a.degree);   // MOST-connectable first (degree DESC): more web presence + edges to forge
+  for (const r of rows) { const k = visitKey(r.name); if (seen.has(k)) continue; seen.add(k); out.push(r); if (out.length >= max) break; }
   return out;
 }
 
@@ -90,19 +95,31 @@ function convoCandidates(names, { max = MAX_PER_TIER } = {}) {
 }
 
 // Assemble the prioritized, cross-tier-deduped, visited-filtered anchor queue. Each entry carries its
-// SOURCE so the move can log/steer by provenance. Pure.
-function assembleAnchors({ news = [], frontier = [], convo = [], visitedKeys = new Set(), max = MAX_TOTAL } = {}) {
+// SOURCE (provenance); FRONTIER entries also carry a pre-classification {kind:'thin', object:{id,degree}}
+// so the downstream assess step trusts the graph degree we selected on instead of re-resolving the name
+// to a famous same-name twin and flipping it 'rich'. Pure.
+function assembleAnchors({ news = [], frontier = [], convo = [], visitedKeys = new Set(),
+  max = MAX_TOTAL, newsMax = NEWS_MAX, frontierMax = FRONTIER_MAX, convoMax = CONVO_MAX } = {}) {
   const out = [];
   const seen = new Set(visitedKeys instanceof Set ? visitedKeys : []);
-  const push = (name, source) => {
-    const k = visitKey(name);
-    if (!k || seen.has(k)) return;
-    seen.add(k);
-    out.push({ mention: _clean(name), source });
+  let full = false;
+  // Scan a DEEP per-tier pool, skipping visited/dup, adding FRESH entries up to the tier cap. This is the
+  // fix for frontier visited-exhaustion: the deterministic db_query returns the same top nodes every tick,
+  // so capping BEFORE the visited filter (old bug) meant once the top few were visited the tier went empty.
+  // Now we filter-then-cap over the whole pool → always surfaces fresh thin nodes until the pool is dry.
+  const addTier = (entries, cap) => {
+    let added = 0;
+    for (const e of entries) {
+      if (full || added >= cap) break;
+      const k = visitKey(e.mention);
+      if (!k || seen.has(k)) continue;   // visited / dup / junk → skip, keep scanning for fresh ones
+      seen.add(k); out.push(e); added++;
+      if (out.length >= max) full = true;
+    }
   };
-  for (const n of newsCandidates(news)) { push(n, 'news'); if (out.length >= max) return out; }
-  for (const n of frontierCandidates(frontier)) { push(n, 'frontier'); if (out.length >= max) return out; }
-  for (const n of convoCandidates(convo)) { push(n, 'convo'); if (out.length >= max) return out; }
+  addTier(newsCandidates(news, { max: newsMax * 4 }).map(n => ({ mention: _clean(n), source: 'news' })), newsMax);
+  addTier(frontierCandidates(frontier, { max: 500 }).map(r => ({ mention: _clean(r.name), source: 'frontier', kind: 'thin', object: { id: r.id, degree: r.degree } })), frontierMax);
+  addTier(convoCandidates(convo, { max: convoMax * 4 }).map(n => ({ mention: _clean(n), source: 'convo' })), convoMax);
   return out;
 }
 
@@ -121,5 +138,5 @@ async function provideAnchors({ recentNews, thinNodes, convoNames, visitedKeys, 
 
 module.exports = {
   newsCandidates, frontierCandidates, convoCandidates, assembleAnchors, provideAnchors,
-  MAX_PER_TIER, MAX_TOTAL
+  MAX_PER_TIER, MAX_TOTAL, NEWS_MAX, FRONTIER_MAX, CONVO_MAX
 };

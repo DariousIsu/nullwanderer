@@ -22,17 +22,17 @@ ok(nc[0] === 'Emergence Water', 'newsCandidates: most-corroborated principal (5+
 ok(nc.includes('Tyler Breton') && nc.includes('Watergen'), 'newsCandidates: keeps other real principals');
 ok(!nc.some(n => /^(zoe|the)$/i.test(n)), 'newsCandidates: drops stopword/self principals');
 
-// --- tier 2: frontier thin nodes, thinnest first, deduped ---
+// --- tier 2: frontier thin nodes, thinnest first, deduped, id preserved ---
 const thin = [
-  { name: 'R Street Institute', degree: 6 },
-  { name: 'Cicero Institute', degree: 2 },
-  { name: 'Cicero Institute', degree: 2 },   // dup
-  { name: 'I', degree: 0 }                    // junk
+  { id: 10, name: 'R Street Institute', degree: 6 },
+  { id: 11, name: 'Cicero Institute', degree: 2 },
+  { id: 11, name: 'Cicero Institute', degree: 2 },   // dup
+  { id: 99, name: 'I', degree: 0 }                    // junk
 ];
 const fc = A.frontierCandidates(thin);
-ok(fc[0] === 'Cicero Institute', 'frontierCandidates: thinnest (degree 2) first');
-ok(fc.filter(n => n === 'Cicero Institute').length === 1, 'frontierCandidates: dedups repeats');
-ok(!fc.some(n => n === 'I'), 'frontierCandidates: drops junk single-stopword node');
+ok(fc[0].name === 'R Street Institute' && fc[0].id === 10, 'frontierCandidates: most-connectable (degree 6, DESC) first, id preserved');
+ok(fc.filter(r => r.name === 'Cicero Institute').length === 1, 'frontierCandidates: dedups repeats');
+ok(!fc.some(r => r.name === 'I'), 'frontierCandidates: drops junk single-stopword node');
 
 // --- tier 3: convo names ---
 const cc = A.convoCandidates(['Nuclear Innovation Alliance', 'it', 'Nuclear Innovation Alliance']);
@@ -41,18 +41,32 @@ ok(cc.length === 1 && cc[0] === 'Nuclear Innovation Alliance', 'convoCandidates:
 // --- assembleAnchors: priority order, cross-tier dedup, source tags, visited filter ---
 const q = A.assembleAnchors({
   news: [{ principals: ['Alpha Corp'], corroboration: { independent: 4 } }],
-  frontier: [{ name: 'Beta Org', degree: 3 }, { name: 'Alpha Corp', degree: 1 }],  // Alpha also in news → deduped
+  frontier: [{ id: 7, name: 'Beta Org', degree: 3 }, { id: 8, name: 'Alpha Corp', degree: 1 }],  // Alpha also in news → deduped
   convo: ['Gamma Inc', 'Beta Org'],                                                 // Beta also in frontier → deduped
   visitedKeys: new Set([visitKey('Gamma Inc')])                                     // Gamma already worked → skip
 });
 ok(q[0].mention === 'Alpha Corp' && q[0].source === 'news', 'assembleAnchors: news tier leads, tagged source=news');
-ok(q.some(x => x.mention === 'Beta Org' && x.source === 'frontier'), 'assembleAnchors: Beta from frontier (not re-added from convo)');
+const beta = q.find(x => x.mention === 'Beta Org');
+ok(beta && beta.source === 'frontier', 'assembleAnchors: Beta from frontier (not re-added from convo)');
+ok(beta && beta.kind === 'thin' && beta.object && beta.object.id === 7, 'assembleAnchors: frontier entry carries pre-classification {kind:thin, object.id}');
 ok(!q.some(x => x.mention === 'Alpha Corp' && x.source === 'frontier'), 'assembleAnchors: Alpha not duplicated into frontier tier');
 ok(!q.some(x => x.mention === 'Gamma Inc'), 'assembleAnchors: a visited anchor is filtered out');
 
-// --- max cap ---
-const many = Array.from({ length: 20 }, (_, i) => ({ name: `Org ${i}`, degree: i }));
-ok(A.assembleAnchors({ frontier: many }).length <= A.MAX_TOTAL, 'assembleAnchors: respects MAX_TOTAL cap');
+// --- per-tier caps: news can't crowd out frontier ---
+const manyNews = Array.from({ length: 10 }, (_, i) => ({ principals: [`News ${i}`], corroboration: { independent: 10 - i } }));
+const manyFrontier = Array.from({ length: 10 }, (_, i) => ({ id: 100 + i, name: `Frontier ${i}`, degree: i + 1 }));
+const capped = A.assembleAnchors({ news: manyNews, frontier: manyFrontier });
+ok(capped.filter(x => x.source === 'news').length <= A.NEWS_MAX, 'assembleAnchors: news capped at NEWS_MAX (no crowding)');
+ok(capped.filter(x => x.source === 'frontier').length >= 4, 'assembleAnchors: frontier still gets a healthy share');
+ok(capped.length <= A.MAX_TOTAL, 'assembleAnchors: respects MAX_TOTAL cap');
+
+// --- visited-exhaustion: when the top frontier nodes are all visited, FRESH ones still surface ---
+// (the old bug: cap-before-filter meant the same top-N got visited then filtered → tier went empty)
+const pool = Array.from({ length: 12 }, (_, i) => ({ id: 200 + i, name: `Node ${i}`, degree: 12 - i }));  // Node 0 = degree 12 (highest)
+const visitedTop = new Set(['Node 0', 'Node 1', 'Node 2', 'Node 3', 'Node 4', 'Node 5'].map(visitKey));  // top 6 by degree already worked
+const fresh = A.assembleAnchors({ frontier: pool, visitedKeys: visitedTop });
+ok(fresh.filter(x => x.source === 'frontier').length >= 4, 'assembleAnchors: surfaces FRESH frontier nodes past the visited top (no exhaustion)');
+ok(!fresh.some(x => visitedTop.has(visitKey(x.mention))), 'assembleAnchors: never re-offers a visited node');
 
 (async () => {
   // --- provideAnchors: async providers, fail-soft (one tier throws → others still contribute) ---
