@@ -92,7 +92,8 @@ contextBridge.exposeInMainWorld('sq', {
   forecast: {
     widgets: () => ipcRenderer.invoke('forecast:widgets'),
     pollAverage: (opts) => ipcRenderer.invoke('forecast:poll-average', opts || {}),
-    balance: (opts) => ipcRenderer.invoke('forecast:balance', opts || {})
+    balance: (opts) => ipcRenderer.invoke('forecast:balance', opts || {}),
+    calibration: () => ipcRenderer.invoke('forecast:calibration')
   },
 
   // Polling — read-only data browser over the engine's polling tools (main maps to view shapes).

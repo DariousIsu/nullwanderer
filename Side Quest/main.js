@@ -1233,6 +1233,24 @@ ipcMain.handle('forecast:balance', (_e, opts = {}) => {
     return require('./lib/forecast_service').balanceWidget(opts || {});
   } catch (e) { return { ok: false, model: 'balance_of_power', error: e.message }; }
 });
+// CALIBRATION — the trust readout: the structural model's full-chain backtest vs real presidential history
+// (Brier / skill / ECE / interval coverage + reliability curve + tuned σ). Static (backtest of the model, not
+// the live run), cached. The glass box surfaces it so trust is visible, not just in a script.
+let calibrationCache = null;
+ipcMain.handle('forecast:calibration', () => {
+  try {
+    if (calibrationCache) return calibrationCache;
+    const p = require('path'), fs = require('fs'), dir = p.join(__dirname, 'data', 'elections');
+    const backtest = require('./lib/backtest');
+    const h = backtest.parsePresHistory([fs.readFileSync(p.join(dir, 'complete_data.csv'), 'utf8'), fs.readFileSync(p.join(dir, '2024president.csv'), 'utf8')]);
+    if (!Object.keys(h.margins).length) return { ok: false, error: 'no history (run sidecar/fetch_data.py)' };
+    const tuned = backtest.tuneSigma(h);
+    const r = backtest.backtestChain(h, { sigma: tuned.sigma });
+    calibrationCache = { ok: true, model: 'structural (lean prior + national)', tuned_sigma: tuned.sigma,
+      n: r.n, rmse: r.rmse, brier: r.brier, brier_skill: r.brier_skill, ece: r.ece, coverage95: r.coverage95, reliability: r.reliability };
+    return calibrationCache;
+  } catch (e) { return { ok: false, error: e.message }; }
+});
 
 // ============================ MONITORS (canvas news-feed widget) =============================
 // Side Quest half: subscription CRUD + fetch via the engine's fetch_feeds_batch, mapped to a merged

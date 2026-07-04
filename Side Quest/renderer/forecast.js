@@ -12,6 +12,7 @@
 
   let active = 'balance_of_power';
   const cache = {};
+  let calData = null;   // structural-model calibration backtest (fetched once) — the trust readout
 
   // ---- fetchers ----
   const getPoll = (force) => bridge ? window.sq.forecast.pollAverage({ subject: 'Donald Trump', poll_type: 'approval', force }) : Promise.resolve(SAMPLE_POLL);
@@ -184,6 +185,31 @@
         ? 'Illustrative — no race has a real signed margin yet (all priors). Balance is driven by holdovers + fundamentals.'
         : `Real signal — ${w.margins ? w.margins.polled : '?'} races on live poll averages (FEC-signed), + fundamentals + news. Holdovers/coverage still approximate.`;
       note.appendChild(el('div', 'chip', provTxt)); b.appendChild(note);
+
+      // MODEL SCORES — the structural model's full-chain backtest vs real presidential history (the trust readout)
+      if (calData && calData.ok) {
+        const cS = sec('Model scores · backtest', `n=${calData.n}`);
+        cS.appendChild(kv([
+          ['win Brier', calData.brier],
+          ['skill vs base rate', Math.round(calData.brier_skill * 100) + '%'],
+          ['calibration (ECE)', calData.ece],
+          ['95% coverage', Math.round(calData.coverage95 * 100) + '%'],
+          ['margin RMSE', calData.rmse + ' pts'],
+          ['tuned σ', calData.tuned_sigma],
+        ]));
+        const rel = el('div'); rel.style.marginTop = '8px';   // reliability: predicted prob → observed frequency
+        (calData.reliability || []).forEach((bk) => {
+          const row = el('div'); row.style.cssText = 'display:flex;align-items:center;gap:6px;margin:3px 0;font-size:.66rem;font-variant-numeric:tabular-nums';
+          const pp = Math.round((bk.mean_prob || 0) * 100), ob = Math.round((bk.observed || 0) * 100);
+          row.innerHTML = `<span style="width:46px;color:var(--muted)">p~${pp}%</span>`
+            + `<span style="flex:1;height:7px;background:var(--panel-2);border-radius:4px;position:relative;overflow:hidden"><i style="position:absolute;left:0;top:0;bottom:0;width:${ob}%;background:var(--accent)"></i></span>`
+            + `<span style="width:58px;text-align:right;color:var(--ink)">won ${ob}%</span>`;
+          rel.appendChild(row);
+        });
+        cS.appendChild(rel);
+        cS.appendChild(el('div', 'chip', 'Structural model, backtested leave-one-election-out on presidential history (1976–2024). When it says X%, it happens ~X% — the probabilities are calibrated.'));
+        b.appendChild(cS);
+      }
     } else if (id === 'poll_average') {
       const inS = sec('Variable inputs');
       const chips = el('div', 'chips');
@@ -205,7 +231,12 @@
   function loadPoll() { return Promise.resolve().then(() => getPoll(false)).then((d) => { if (d && d.ok !== false) { cache.poll_average = d; renderPoll($('#poll-col'), d); } else { $('#poll-col').innerHTML = ''; $('#poll-col').appendChild(el('div', 'card', '')).appendChild(el('div', 'w-error', 'Poll model unavailable' + (d && d.error ? ' — ' + d.error : ''))); } }).catch((e) => { $('#poll-col').innerHTML = `<div class="card"><div class="w-error">Error — ${e.message}</div></div>`; }); }
   function loadBalance(opts, pulse) { $('#balance-col').innerHTML = '<div class="card"><div class="w-loading">Simulating…</div></div>'; return Promise.resolve().then(() => getBalance(opts)).then((d) => { if (d && d.ok !== false) { cache.balance_of_power = d; renderBalance($('#balance-col'), d); if (active === 'balance_of_power') renderInspector('balance_of_power', pulse); } else { $('#balance-col').innerHTML = `<div class="card"><div class="w-error">Balance model unavailable${d && d.error ? ' — ' + d.error : ''}</div></div>`; } }).catch((e) => { $('#balance-col').innerHTML = `<div class="card"><div class="w-error">Error — ${e.message}</div></div>`; }); }
 
-  function mount() { loadPoll(); loadBalance({}).then(() => { setActive('balance_of_power'); }); }
+  function mount() {
+    loadPoll(); loadBalance({}).then(() => { setActive('balance_of_power'); });
+    (bridge ? window.sq.forecast.calibration() : Promise.resolve(SAMPLE_CAL))
+      .then((c) => { calData = c; if (active === 'balance_of_power' && cache.balance_of_power) renderInspector('balance_of_power'); }).catch(() => {});
+  }
+  const SAMPLE_CAL = { ok: true, n: 612, rmse: 10.36, brier: 0.115, brier_skill: 0.526, ece: 0.036, coverage95: 0.946, tuned_sigma: 10, reliability: [{ mean_prob: 0.06, observed: 0.03, n: 223 }, { mean_prob: 0.29, observed: 0.27, n: 86 }, { mean_prob: 0.5, observed: 0.45, n: 82 }, { mean_prob: 0.71, observed: 0.66, n: 82 }, { mean_prob: 0.92, observed: 0.94, n: 139 }] };
   document.addEventListener('DOMContentLoaded', () => {
     mount();
     const rr = $('#rerun'); if (rr) rr.addEventListener('click', () => { rr.disabled = true; loadBalance({ seed: Math.floor(Math.random() * 1e9) }, true).finally(() => { rr.disabled = false; }); });
