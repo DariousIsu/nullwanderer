@@ -128,12 +128,16 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
 .meet-shield{position:absolute;inset:0;z-index:5;display:none;}
 .meetpane.interacting .meet-shield{display:block;}
 
-/* Monitors widget — the persistent news-feed wall. A floating, draggable/resizable canvas pane
-   (text only, no browser) rendering a merged newest-first item stream with new-item highlight. */
-.monitors{position:fixed;top:58px;left:24px;width:380px;height:calc(100vh - 74px);max-height:calc(100vh - 74px);z-index:55;display:flex;flex-direction:column;
-  background:var(--bg-panel);border:1px solid var(--line-strong);border-radius:var(--r-lg);box-shadow:0 14px 44px rgba(0,0,0,.6);overflow:hidden;}
+/* Monitors — a DOCKED hard container on the RIGHT (no longer a floating widget). Fixed to the right edge,
+   full height below the topbar, square (no radius), left border + left-edge shadow. The canvas surface
+   insets to reserve its column (body.mon-open) so documents on the canvas never sit under it. */
+.monitors{position:fixed;top:40px;right:0;bottom:0;width:380px;z-index:55;display:flex;flex-direction:column;
+  background:var(--bg-panel);border:0;border-left:1px solid var(--line-strong);box-shadow:-6px 0 22px rgba(0,0,0,.28);overflow:hidden;}
 .monitors[hidden]{display:none;}
-.mon-head{flex-shrink:0;display:flex;align-items:center;gap:8px;padding:8px 11px;background:var(--bg-raised);border-bottom:1px solid var(--line);cursor:grab;user-select:none;}
+.monitors #monResize{display:none;}            /* docked → no drag-resize grip */
+.mon-head .grip{display:none;}                 /* docked → no drag handle */
+body.mon-open .surface{right:380px;}           /* reserve the docked monitor's column so the board never goes under it */
+.mon-head{flex-shrink:0;display:flex;align-items:center;gap:8px;padding:8px 11px;background:var(--bg-raised);border-bottom:1px solid var(--line);cursor:default;user-select:none;}
 .mon-head.dragging{cursor:grabbing;}
 .mon-head .grip{color:var(--tx-fainter);font-size:13px;}
 .mon-head .mon-title{flex:1;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--tx-muted);font-weight:700;}

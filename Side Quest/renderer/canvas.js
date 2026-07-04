@@ -602,11 +602,12 @@ $('monTuneSave').addEventListener('click', async () => {
 
 function openMonitors() {
   monitors.hidden = false;
+  document.body.classList.add('mon-open');   // reserve the docked monitor's column (surface insets right)
   loadFeeds();                   // always pull fresh on open (news moves; a stale wall reads as "broken")
   loadVideos();                  // videos: cheap (no network) — refresh every open so re-seeds show
   if (!monTimer) monTimer = setInterval(loadFeeds, MON_REFRESH_MS);
 }
-function closeMonitors() { monitors.hidden = true; monBriefPanel.hidden = true; try { monTunePanel.hidden = true; } catch {} if (monTimer) { clearInterval(monTimer); monTimer = null; } }
+function closeMonitors() { monitors.hidden = true; document.body.classList.remove('mon-open'); monBriefPanel.hidden = true; try { monTunePanel.hidden = true; } catch {} if (monTimer) { clearInterval(monTimer); monTimer = null; } }
 $('monitorsBtn').addEventListener('click', () => { if (monitors.hidden) openMonitors(); else closeMonitors(); });
 $('monClose').addEventListener('click', closeMonitors);
 $('monRefresh').addEventListener('click', loadFeeds);
@@ -615,16 +616,8 @@ monSrcHead.addEventListener('click', () => { const collapsed = monSources.classL
 $('monAddBtn').addEventListener('click', () => addMonitor($('monAdd').value.trim()));
 $('monAdd').addEventListener('keydown', (e) => { if (e.key === 'Enter') addMonitor($('monAdd').value.trim()); });
 
-// drag + resize (fixed pane; no webview, so no shield needed)
-let monDrag = null, monResize = null;
-$('monHead').addEventListener('mousedown', (e) => { if (e.target.closest('.dbtn')) return; monDrag = { sx: e.clientX, sy: e.clientY, sl: monitors.offsetLeft, st: monitors.offsetTop }; $('monHead').classList.add('dragging'); e.preventDefault(); });
-$('monResize').addEventListener('mousedown', (e) => { monResize = { sx: e.clientX, sy: e.clientY, w: monitors.offsetWidth, h: monitors.offsetHeight }; e.preventDefault(); e.stopPropagation(); });
-window.addEventListener('mousemove', (e) => {
-  if (monDrag) { monitors.style.left = Math.max(0, monDrag.sl + (e.clientX - monDrag.sx)) + 'px'; monitors.style.top = Math.max(40, monDrag.st + (e.clientY - monDrag.sy)) + 'px'; }
-  else if (monResize) { monitors.style.width = Math.max(280, monResize.w + (e.clientX - monResize.sx)) + 'px'; monitors.style.height = Math.max(220, monResize.h + (e.clientY - monResize.sy)) + 'px'; }
-  if (monDrag || monResize) { if (!monBriefPanel.hidden) positionBriefDrawer(); if (!monTunePanel.hidden) positionTuneDrawer(); }   // keep the drawers glued to the monitor
-});
-window.addEventListener('mouseup', () => { if (monDrag) { $('monHead').classList.remove('dragging'); monDrag = null; } if (monResize) monResize = null; });
+// The monitor is DOCKED (a hard right-side container) — it no longer floats, drags, or free-resizes.
+// Its width is fixed and the surface reserves its column, so drag/resize handlers are intentionally gone.
 
 loadCanvas();
 // AUTO-REFRESH: poll so documents Zoe is BUILDING (research deliverables growing pass-by-pass) appear and
