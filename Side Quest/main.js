@@ -1044,7 +1044,7 @@ app.whenReady().then(() => {
           ask: cloud ? cloud.ask : null,
           getSnapshot: require('./lib/api_stream').getSnapshot,   // FUNDAMENTALS leg: seeded econ signals (GDP/CPI/unrate/yields) → national environment lean
           coverage: (() => { const L = loadLeans(); return L ? { districts: L.districts, states: L.states, senateUp: coverageLib.SENATE_2026, senateHoldovers: SENATE_HOLDOVERS, incumbentBySeat: L.incumbentBySeat } : null; })(),   // full 435+35 universe from 538 lean + incumbency; polled seats override
-          midtermSwing: parseFloat(process.env.FORECAST_MIDTERM_SWING || '') || 2.0,   // uniform out-party swing (president's party loses at the midterm) — TUNABLE PRIOR, calibration will set it; env-override
+          midtermSwing: parseFloat(process.env.FORECAST_MIDTERM_SWING || '') || 3.0,   // uniform out-party swing (president's party loses at the midterm). CALIBRATION-INFORMED (lib/congress_results backtest, MEDSL 1976-2018): realized penalty averaged House +7.4 / Senate +5.9 pts, per-seat-Brier-optimal ~2-3.5 (flat); 3.0 = a measured, conservative value (fundamentals lean carries the rest). env-override.
 
           presidentParty: 'B',                                     // 2026: sitting president is Republican → midterm swing favors D
           // resolve (read-only Echo enrichment) intentionally left off the hot loop — margins/sim don't need

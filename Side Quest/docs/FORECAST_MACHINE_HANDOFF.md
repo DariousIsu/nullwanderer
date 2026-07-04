@@ -54,12 +54,18 @@ poll rail · balance-of-power · Work inspector with Coverage/Fundamentals/News/
   the calibration/backtest ground truth + pres-lean.
 - **congress-legislators** (unitedstates project, public domain): `legislators-current.json` — 537 current
   members → the incumbency term (House by district, Senate by class-2).
+- **MEDSL congressional results 1976-2018** (CC0, `MEDSL/constituency-returns` on GitHub): `1976-2018-house.csv`
+  (all 435 districts, 11 midterm cycles) + `1976-2018-senate.csv` (statewide) — **the congressional ground
+  truth** for the midterm-swing backtest. This is the non-guestbooked GitHub mirror; the Harvard Dataverse
+  House *file* is guestbook-gated but the GitHub mirror (and the Dataverse Senate file) are open. Parsed by
+  `lib/congress_results.js` into per-seat two-party margins.
 - Live feeds (not files): VoteHub (polls, no auth), FEC (party via api_stream.pull), api_stream (FRED econ),
   news lane (via news_feed).
-- **⚠ DATA GAP:** congressional election RESULTS (past House/Senate margins) are NOT freely available — Harvard
-  Dataverse MEDSL is guestbook-gated; FEC has no vote tallies (422); OpenElections is per-state/heavy. 538
-  partisan lean is the accessible substitute (pre-blended presidential lean). Consequence: congressional-specific
-  priors (midterm/incAdv/holdover) can't yet be BACKTESTED — only presidential mechanics are validated.
+- **GAP (mostly CLOSED):** congressional RESULTS are now in hand (MEDSL 1976-2018, above) → the midterm swing is
+  BACKTESTED + tuned (§6). Still open: the freshest House cycles (2020/22/24) sit behind the Dataverse
+  guestbook (Senate 1976-2024 streams via the Dataverse access API if wanted); and MEDSL carries no
+  incumbency flag, so incumbency-advantage magnitude is not yet separately backtested (needs open-seat vs
+  incumbent-defending labels).
 
 ## 5. The Python sidecar (`sidecar/`, docs/FORECAST_SIDECAR_DESIGN.md)
 Heavy compute layer — a concurrent **model POOL** (multiprocessing, cap cores-2; 24 cores here). Contract:
@@ -84,6 +90,21 @@ Heavy compute layer — a concurrent **model POOL** (multiprocessing, cap cores-
 - Scores are surfaced in the studio ("Model scores · backtest" section + reliability curve) via the
   `forecast:calibration` IPC.
 
+**Congressional backtest** (`lib/congress_results.js`, LOEO on MEDSL 1976-2018 — 9,545 House seat-years +
+730 Senate; the first validation of a congressional-SPECIFIC mechanic):
+- **Realized midterm penalty** (national two-party swing against the president's party, mean of 11 midterms):
+  **House +7.4 pts, Senate +5.9** — large and real (recent comps: 2018 R +11.6, 2010 D +17, 2006 R +11.5,
+  1994 D +13.7). High variance (House range +0.3 → +17).
+- **Per-seat Brier skill** of the House chain: **~23-25%** (positive — the lean+swing chain genuinely predicts
+  seat winners). But the *swing-magnitude* curve is FLAT (skill 23.1%→23.6% across swing 0→3.5): seat-level
+  win prediction is baseline-dominated, so a uniform swing rarely flips a safe seat. **The swing's value is at
+  the CHAMBER-AGGREGATE level** — exactly where the correlated sim consumes it — not per-seat.
+- **Live prior tuned:** `midtermSwing` 2.0 → **3.0** — a measured, conservative step (above the flat per-seat
+  optimum midpoint ~2.75, well below the 7.4/5.9 realized mean since the econ-fundamentals lean carries the
+  rest of the environment, and deliberately restrained given the high variance / "no fake precision" law).
+- **Caveat (follow-on):** congressional seat-σ is much larger than presidential (uncontested seats read ±100,
+  so RMSE ~40 and σ=12 under-covers) — congressional interval tuning + uncontested-seat handling is future work.
+
 ## 7. Design LAWS (do not relitigate)
 1. Two engines: deterministic MATH (numbers never through an LLM) + gpt-oss:120b for JUDGMENT (structure, num_predict≥1500).
 2. Downstream-only: read Echo/news/API; derive locally; produce forecast/analysis objects → 24h memory rail (emission still PENDING).
@@ -98,8 +119,12 @@ Heavy compute layer — a concurrent **model POOL** (multiprocessing, cap cores-
 - **REBOOT PENDING**: the studio Model-scores panel (799089a) + the refinements (b11efd7: assess-gate/midterm/
   incumbency) + coverage (649a4d8) are committed but need the app restarted to be fully live. Post-reboot the
   `[forecast]` log shows `coverage 470 seats · midterm +2.0 · N/420 judged`.
-- **Congressional outcome data** — the key unlock: a real source for past House/Senate margins (OpenElections
-  aggregation is the realistic path) → lets the harness BACKTEST + tune midterm/incAdv/holdover (currently guesses).
+- ~~**Congressional outcome data** — the key unlock~~ **DONE** (MEDSL 1976-2018 via GitHub; §4/§6): midterm
+  swing backtested + tuned to 3.0. Remaining threads: (a) **incumbency-advantage** backtest — needs open-seat vs
+  incumbent-defending flags MEDSL lacks; (b) **holdover** composition still the {A:34,B:31} estimate; (c) fresh
+  House 2020/22/24 behind the Dataverse guestbook (Senate 1976-2024 streams via the access API).
+- **Congressional seat-σ tuning** — uncontested seats (±100) break RMSE/coverage at σ=12; congressional needs
+  its own interval calibration + an uncontested-seat path (§6 caveat).
 - **Apply tuned σ** to the live sim (backtest says σ≈10 for presidential; congressional needs its own).
 - **Exact Echo Senate holdover composition** (replace the {A:34,B:31} estimate; seat_map has the data).
 - **Bayesian/Stan** sidecar model (Economist/Linzer, MIT-liftable) + SHAP explainability — each scored on arrival.

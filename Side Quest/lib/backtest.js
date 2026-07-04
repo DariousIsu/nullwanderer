@@ -1,9 +1,9 @@
 /**
  * lib/backtest.js — the FULL-CHAIN backtest: validate the structural forecasting model end-to-end against real
  * outcomes, and TUNE the uncertainty prior to a calibrated value. Uses presidential history (state margins
- * 1976-2024) as ground truth — the only end-to-end backtest our data supports (congressional results are
- * guestbook-gated); the mechanics it validates (lean-prior → national swing → margin → win-prob → interval)
- * are exactly the ones the congressional chain reuses.
+ * 1976-2024) as ground truth; the mechanics it validates (lean-prior → national swing → margin → win-prob →
+ * interval) are exactly the ones the congressional chain reuses. The congressional-SPECIFIC mechanic (the
+ * midterm swing) is backtested separately in lib/congress_results.js against MEDSL 1976-2018 results.
  *
  * The chain under test, leave-one-election-out: for each (state, year) with prior history,
  *   prior_lean  = mean of the state's PRIOR presidential margins        (the partisan baseline)

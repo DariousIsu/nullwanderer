@@ -8,9 +8,13 @@ record. All sources are free + unrestricted (NO Harvard Dataverse guestbook):
       from weighted recent presidential results. THE coverage-prior backbone (every House seat + every state).
   MEDSL presidential (MIT, via keithpotz's committed copy) — state presidential results 1976-2024, for the
       2024-freshness pres-lean layer.
+  MEDSL congressional (CC0, MEDSL/constituency-returns on GitHub) — real U.S. House + Senate results 1976-2018
+      (11 midterm cycles), the ground truth for lib/congress_results.js's midterm-swing backtest. This is the
+      non-guestbooked GitHub mirror of the Harvard Dataverse returns (the Dataverse House file itself is
+      guestbook-gated; the GitHub mirror and the Dataverse *Senate* file are open — GitHub used for both here
+      so the format is uniform CSV).
 
-Harvard Dataverse MEDSL House/Senate returns (1976-2024) are guestbook-gated and NOT used — 538's lean is the
-accessible equivalent of the "past-elections" partisan signal. Run:  python fetch_data.py [--force]
+Run:  python fetch_data.py [--force]
 """
 import os
 import sys
@@ -28,6 +32,11 @@ SOURCES = [
     # current members of Congress (unitedstates project, public domain) — for the INCUMBENCY term
     ("legislators-current.json",
      "https://unitedstates.github.io/congress-legislators/legislators-current.json"),
+    # MEDSL congressional results 1976-2018 (CC0, no guestbook) — ground truth for the midterm-swing backtest
+    ("1976-2018-house.csv",
+     "https://raw.githubusercontent.com/MEDSL/constituency-returns/master/1976-2018-house.csv"),
+    ("1976-2018-senate.csv",
+     "https://raw.githubusercontent.com/MEDSL/constituency-returns/master/1976-2018-senate.csv"),
 ]
 
 
