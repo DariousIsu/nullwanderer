@@ -154,7 +154,12 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   ok(gGrown.connections === 1 && gGrown.held === 1, 'growAround: cited claim promotes, inferred claim is HELD (requires-citation)');
   ok(gcalls.some(c => c[0] === 'propose_relation' && c[1].target_name === 'Beta Inc'), 'growAround: the CITED edge is proposed');
   ok(!gcalls.some(c => c[0] === 'propose_relation' && c[1].target_name === 'Gamma Guess'), 'growAround: the INFERRED edge NEVER reaches Echo');
-  ok(observed.length === 1 && observed[0].target === 'Beta Inc' && observed[0].url === 'https://ex.com/acme' && observed[0].grade === 'B', 'growAround: observe() records the citation (url + grade B) for the promoted fact');
+  // Slice 1: BOTH the promoted fact AND the held (inferred) claim are observed — the held one queues
+  // as an enrichment candidate (the durable trail records what we SAW, not just what promoted).
+  const oProm = observed.find(o => o.target === 'Beta Inc');
+  const oHeld = observed.find(o => o.target === 'Gamma Guess');
+  ok(oProm && oProm.url === 'https://ex.com/acme' && oProm.grade === 'B' && oProm.status === 'promoted', 'growAround: observe() records the PROMOTED fact (url + grade B, status promoted)');
+  ok(oHeld && oHeld.status === 'held' && oHeld.grade === 'D' && !oHeld.url, 'growAround: observe() records the HELD inferred claim (grade D, no url, status held) — the enrichment queue');
 
   // --- EXISTENCE gate: a MISSING anchor with no citable source is HELD, not minted ---
   const ecalls = [];

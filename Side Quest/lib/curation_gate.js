@@ -60,9 +60,10 @@ function gateExistence(sourceRef, sources) {
 // is cited by the web pull that produced its dossier. Real sources present → grade C (named in the web),
 // mint; nothing found → grade D, hold (a potential hallucination we won't create).
 function gateAnchorExistence(sources) {
-  const has = Array.isArray(sources) && sources.some(s => (s && (s.url || s.link)));
-  const grade = has ? 'C' : 'D';
-  return { grade, confidence: PC.cap(grade), mint: meets(grade, EXISTENCE_FLOOR) };
+  const cited = Array.isArray(sources) ? sources.find(s => (s && (s.url || s.link))) : null;
+  const grade = cited ? 'C' : 'D';
+  const url = cited ? (cited.url || cited.link) : null;
+  return { grade, confidence: PC.cap(grade), url, mint: meets(grade, EXISTENCE_FLOOR) };
 }
 
 module.exports = {

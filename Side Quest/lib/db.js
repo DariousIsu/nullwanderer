@@ -499,7 +499,32 @@ const MIGRATIONS = [
     answered_ts INTEGER,
     answered_note_id INTEGER
   )`,
-  `CREATE INDEX IF NOT EXISTS idx_agenda_interest ON agenda(interest_id, status)`
+  `CREATE INDEX IF NOT EXISTS idx_agenda_interest ON agenda(interest_id, status)`,
+
+  // CURATION OBSERVATION STORE (curation substrate Slice 1; docs/CURATION_SUBSTRATE_DESIGN.md).
+  // The durable, cross-feed trail of every GRADED claim the substrate saw — the "observation" leg of
+  // the Puller isomorphism (source, source_url, confidence). Every feed (graph-walk, puller, news,
+  // doc decomposition …) records here through lib/curation_store, whether the claim PROMOTED to Echo
+  // or was HELD (uncited/inferred). This is the home of record for "requires citation": a promotion is
+  // provable back to its source, and held candidates queue for later enrichment. Append-only;
+  // idempotent on obs_key so a feed re-seeing the same cited claim is a no-op.
+  `CREATE TABLE IF NOT EXISTS kg_observations (
+    id INTEGER PRIMARY KEY,
+    feed TEXT NOT NULL,
+    source_entity TEXT NOT NULL,
+    relation TEXT,
+    target TEXT,
+    value TEXT,
+    url TEXT,
+    grade TEXT,
+    confidence REAL,
+    kind TEXT,
+    status TEXT NOT NULL DEFAULT 'promoted',
+    obs_key TEXT NOT NULL UNIQUE,
+    captured_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_kg_obs_entity ON kg_observations(source_entity, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_kg_obs_feed ON kg_observations(feed, captured_at)`
 ];
 
 function init() {
@@ -1580,6 +1605,31 @@ function graphListPendingEntityProposals(limit = 200) { return getDb().prepare("
 function graphListPendingRelationProposals(limit = 200) { return getDb().prepare("SELECT * FROM graph_relation_proposals WHERE status = 'pending' ORDER BY id LIMIT ?").all(limit); }
 function graphSetEntityProposalStatus(id, status) { getDb().prepare('UPDATE graph_entity_proposals SET status = ? WHERE id = ?').run(status, id); }
 function graphSetRelationProposalStatus(id, status) { getDb().prepare('UPDATE graph_relation_proposals SET status = ? WHERE id = ?').run(status, id); }
+// --- curation observation store (curation substrate Slice 1) ---
+// Append a graded observation. Idempotent on obs_key (INSERT OR IGNORE) so a feed re-seeing the same
+// cited claim doesn't double-count. Returns { id, inserted }. obs_key is the caller's natural key.
+function recordKgObservation({ feed, sourceEntity, relation = null, target = null, value = null, url = null, grade = null, confidence = null, kind = null, status = 'promoted', obsKey, capturedAt = null }) {
+  const ts = capturedAt == null ? Date.now() : capturedAt;
+  const info = getDb().prepare(
+    `INSERT OR IGNORE INTO kg_observations
+       (feed, source_entity, relation, target, value, url, grade, confidence, kind, status, obs_key, captured_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).run(feed, sourceEntity, relation, target, value, url, grade, confidence, kind, status, obsKey, ts);
+  return { id: info.lastInsertRowid, inserted: info.changes > 0 };
+}
+function listKgObservations({ sourceEntity = null, feed = null, status = null, limit = 200 } = {}) {
+  const where = [], args = [];
+  if (sourceEntity != null) { where.push('source_entity = ?'); args.push(sourceEntity); }
+  if (feed != null) { where.push('feed = ?'); args.push(feed); }
+  if (status != null) { where.push('status = ?'); args.push(status); }
+  const sql = `SELECT * FROM kg_observations${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ?`;
+  return getDb().prepare(sql).all(...args, limit);
+}
+function kgObservationStats() {
+  const rows = getDb().prepare('SELECT feed, status, grade, COUNT(*) AS n FROM kg_observations GROUP BY feed, status, grade').all();
+  const total = getDb().prepare('SELECT COUNT(*) AS n FROM kg_observations').get().n;
+  return { total, byGroup: rows };
+}
 // --- meeting transcript (M1) ---
 function insertTranscriptLine({ meeting = null, speaker = null, text, ts = null }) {
   const t = ts == null ? Date.now() : ts;
@@ -1737,6 +1787,9 @@ module.exports = {
   graphSetEntityProposalStatus,
   graphSetRelationProposalStatus,
   graphCounts,
+  recordKgObservation,
+  listKgObservations,
+  kgObservationStats,
   insertTranscriptLine,
   getTranscriptSince,
   countTranscriptSince,

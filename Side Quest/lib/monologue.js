@@ -25,6 +25,7 @@ const bylineLib = require('./byline');
 const gmeetLib = require('./gmeet');
 const mediaCcLib = require('./media_cc');
 const graphWalk = require('./graph_walk');
+const curationStore = require('./curation_store');
 const echoSuit = require('./echo_suit');
 const { buildAwarenessBlock, BASE_PERSONA } = require('./context');
 
@@ -1521,9 +1522,14 @@ async function runGraphWalkMove(recentTurns) {
   console.log(`[idle-anchors] raw tiers: news=${_news.length} thin=${_thin.length} visited=${visitedKeys.size}`);
   const anchors = await idleAnchors.provideAnchors({ recentNews: _news, thinNodes: _thin, convoNames, visitedKeys, log: (m) => console.log(m) });
 
-  // CITATION observation sink (curation substrate Slice 0): every PROMOTED fact carries its grade +
-  // backing url. Slice 0 logs it (the durable shared observation store is Slice 1).
-  const observe = async (o) => { try { console.log(`[cite] ${o.sourceEntity} —[${o.relation}]→ ${o.target} (grade ${o.grade} ${Math.round((o.confidence || 0) * 100)}% ${o.url || 'no-url'})`); } catch {} };
+  // CITATION observation sink (curation substrate Slice 1): every graded claim — PROMOTED or HELD —
+  // lands a durable row in the shared observation store (lib/curation_store), the home of record for
+  // "requires citation". Held (uncited/inferred) claims queue as enrichment candidates. Still echoes a
+  // compact [cite]/[held] line to the log. Fail-soft — a store hiccup never breaks a move.
+  const observe = async (o) => {
+    try { curationStore.record(db, { ...o, feed: 'graph-walk' }); } catch (e) { console.error('[cite] store failed:', e.message); }
+    try { const tag = o.status === 'held' ? 'held' : 'cite'; console.log(`[${tag}] ${o.sourceEntity} —[${o.relation}]→ ${o.target || ''} (grade ${o.grade} ${Math.round((o.confidence || 0) * 100)}% ${o.url || 'no-url'})`); } catch {}
+  };
   const move = await graphWalk.runMove({
     recentTurns, candidates: anchors, cloud, web, recall, dispatch, kgNeighbors, observe,
     getMeta: _gm, setMeta: _sm, now: () => Date.now(), log: (m) => console.log(m)

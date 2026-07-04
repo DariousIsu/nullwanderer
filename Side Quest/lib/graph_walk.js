@@ -222,10 +222,14 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, log
   if (gap.kind === 'missing') {
     const eg = CG.gateAnchorExistence(sources);
     if (!eg.mint) {
+      if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: 'exists', target: null, url: eg.url, grade: eg.grade, confidence: eg.confidence, status: 'held' }); } catch {} }
       log && log(`[grow] "${mention}" existence uncited (grade ${eg.grade}) → HELD, not minted`);
       return { built: false, entities: 0, connections: 0, related: [], summary: String(dossier.summary || '').trim(), held: 1 };
     }
-    if (await proposeEntity({ dispatch, name: canonical, entity_type: dossier.entity_type, summary: dossier.summary })) entities++;
+    if (await proposeEntity({ dispatch, name: canonical, entity_type: dossier.entity_type, summary: dossier.summary })) {
+      entities++;
+      if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: 'exists', target: null, url: eg.url, grade: eg.grade, confidence: eg.confidence, status: 'promoted' }); } catch {} }
+    }
   }
 
   // 2) related objects + the connecting edges. FACT gate: only a claim the dossier cites to a source
@@ -238,13 +242,18 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, log
     if (!rname || visitKey(rname) === visitKey(mention)) continue;
     if (nbrKeys.has(visitKey(rname))) continue;   // edge already in the graph — skip
     const fg = CG.gateFact(r && r.source, sources);
-    if (!fg.promote) { held++; continue; }        // uncited / inferred → does NOT enter the graph
+    if (!fg.promote) {                            // uncited / inferred → does NOT enter the graph
+      held++;
+      // still record the HELD claim — the enrichment queue (what to chase a real citation for next).
+      if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: fg.url, grade: fg.grade, confidence: fg.confidence, status: 'held' }); } catch {} }
+      continue;
+    }
     // propose the related entity (harmless if it already exists — Echo dedups on promotion)
     if (entities < WALK_MAX_NODES && await proposeEntity({ dispatch, name: rname, entity_type: r.type, summary: '' })) entities++;
     if (await proposeRelation({ dispatch, source: canonical, target: rname, relation_type: (r && r.relation) || 'related_to' })) {
       connections++; related.push(rname);
       // record the CITATION for the promoted fact (the observation trail; grade + backing url).
-      if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: fg.url, grade: fg.grade, confidence: fg.confidence }); } catch {} }
+      if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: fg.url, grade: fg.grade, confidence: fg.confidence, status: 'promoted' }); } catch {} }
     }
   }
   log && log(`[grow] "${mention}" [${gap.kind}] sources=${sources.length} neighbors=${neighbors.length} related=${_relRaw} → +${entities} ent +${connections} conn (${held} held: uncited)`);
