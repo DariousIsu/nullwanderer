@@ -37,7 +37,8 @@ def ok(name, cond, detail=""):
 
 
 def main():
-    ok("registry lists the 3 models", set(registry.names()) == {"poll_baseline", "uniform_swing", "fundamentals"})
+    ok("registry lists the models (incl. fundamentals + xgboost_quantile)",
+       set(registry.names()) >= {"poll_baseline", "uniform_swing", "fundamentals", "xgboost_quantile"})
 
     out = orchestrator.orchestrate(JOB)
     ok("orchestrate ok", out["ok"] is True)

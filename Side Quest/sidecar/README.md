@@ -5,11 +5,15 @@ models in parallel and feeds results back to the live JS machine. Design: [../do
 Why a sidecar + the model roster: [../docs/MODEL_METHODOLOGY_RESEARCH.md](../docs/MODEL_METHODOLOGY_RESEARCH.md).
 
 ## Status
-**Phase 0 skeleton + first REAL model (stdlib only, no heavy deps).** The orchestrator + model interface +
-registry + self-test run the pool concurrently and Node (Electron) can spawn it and read results. The
-`fundamentals` model is REAL — it reads 538 partisan-lean data (via `fetch_data.py`) → per-seat prior margins
-for the whole seat universe (AZ Senate R-5, CA-22 D+8, NY-14 D+59). `poll_baseline`/`uniform_swing` remain
-stubs. XGBoost/SHAP/Bayesian slot in next (they need the venv).
+**Pool + two real models; venv stood up.** The orchestrator + interface + registry + self-test run the pool
+concurrently, and `lib/sidecar.js` (Node/Electron) spawns it and reads results (auto-uses the venv python).
+Real models: `fundamentals` (538 partisan lean + incumbency → per-seat prior, stdlib) and `xgboost_quantile`
+(XGBoost median + 95% CI, trained on real presidential history — LOEO RMSE + interval coverage in diagnostics;
+needs the venv). `poll_baseline`/`uniform_swing` remain stubs. SHAP + dynamic-Bayesian (Stan) slot in next.
+
+Note on `xgboost_quantile`: it's trained on PRESIDENTIAL outcomes (congressional MEDSL results are guestbook-
+gated), so applying it to congressional seats via their lean is a transfer — the machinery (quantile CIs +
+backtest) is real; congressional calibration awaits congressional training data. It's the template.
 
 ## Data
 ```bash
@@ -59,5 +63,6 @@ sidecar/
     ├── base.py             # Model interface + ModelResult helpers
     ├── poll_baseline.py    # stub — poll-margin passthrough
     ├── uniform_swing.py    # stub — base + national swing
-    └── fundamentals.py     # REAL — 538 partisan lean + incumbency → per-seat prior (→ XGBoost upgrade later)
+    ├── fundamentals.py     # REAL — 538 partisan lean + incumbency → per-seat prior (stdlib)
+    └── xgboost_quantile.py # REAL — XGBoost median + 95% CI, trained on presidential history (needs venv)
 ```

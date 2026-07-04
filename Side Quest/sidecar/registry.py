@@ -2,8 +2,9 @@
 from models.poll_baseline import PollBaseline
 from models.uniform_swing import UniformSwing
 from models.fundamentals import Fundamentals
+from models.xgboost_quantile import XGBoostQuantile
 
-REGISTRY = {m.name: m for m in [PollBaseline, UniformSwing, Fundamentals]}
+REGISTRY = {m.name: m for m in [PollBaseline, UniformSwing, Fundamentals, XGBoostQuantile]}
 
 
 def get(name):
