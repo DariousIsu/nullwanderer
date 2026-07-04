@@ -137,6 +137,7 @@ const smokes = [
   'smoke_forecast_fundamentals.js',
   'smoke_candidate_party.js',
   'smoke_seat_map.js',
+  'smoke_sidecar.js',
   'smoke_forecast_loop.js',
   // API management stream — catalog + authenticated client + management layer (pure, offline; mocked fetch/clock)
   'smoke_api_client.js',
