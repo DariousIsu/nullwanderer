@@ -98,8 +98,11 @@ class XGBoostQuantile(Model):
                                     n_estimators=n, max_depth=3, learning_rate=0.04, subsample=0.9,
                                     reg_lambda=1.0, verbosity=0).fit(Xt, Yt)
 
-        # LOEO backtest (median model) — RMSE + empirical 95% interval coverage (calibration signal)
+        # LOEO backtest (median model) — RMSE + 95% interval coverage + win Brier/ECE (same metrics as the JS
+        # structural backtest, so the learned model is directly comparable to the simple prior).
+        from scipy.stats import norm
         se, covered, ntest = 0.0, 0, 0
+        win_probs, outcomes = [], []
         for hold in sorted(set(years.tolist())):
             tr = years != hold
             te = years == hold
@@ -112,8 +115,22 @@ class XGBoostQuantile(Model):
             se += float(np.sum((pm - Y[te]) ** 2))
             covered += int(np.sum((Y[te] >= np.minimum(pl, ph)) & (Y[te] <= np.maximum(pl, ph))))
             ntest += int(te.sum())
+            sig = np.maximum((np.maximum(ph, pl) - np.minimum(ph, pl)) / (2 * 1.96), 1e-6)   # CI → implied σ
+            win_probs.extend(norm.cdf(pm / sig).tolist())                                      # P(margin > 0)
+            outcomes.extend((Y[te] > 0).astype(int).tolist())
         rmse = round((se / ntest) ** 0.5, 2) if ntest else None
         coverage = round(covered / ntest, 3) if ntest else None
+        wp, oc = np.array(win_probs), np.array(outcomes)
+        brier = round(float(np.mean((wp - oc) ** 2)), 4) if wp.size else None
+        ece = None
+        if wp.size:
+            e = 0.0
+            for b in range(5):
+                lo_b, hi_b = b / 5.0, (b + 1) / 5.0
+                mask = (wp >= lo_b) & (wp <= hi_b if b == 4 else wp < hi_b)
+                if mask.sum():
+                    e += mask.sum() / wp.size * abs(float(wp[mask].mean()) - float(oc[mask].mean()))
+            ece = round(e, 4)
 
         # production models on all data
         med, lo, hi = fit(0.5, X, Y), fit(0.025, X, Y), fit(0.975, X, Y)
@@ -134,4 +151,5 @@ class XGBoostQuantile(Model):
         return result(self.name, seats, t0, diagnostics={
             "note": "XGBoost quantile (lean→margin+CI), trained on presidential history",
             "train_rows": len(X), "loeo_rmse": rmse, "interval_coverage_95": coverage,
+            "loeo_brier": brier, "loeo_ece": ece,
             "matched": matched, "total": len(seats)})
