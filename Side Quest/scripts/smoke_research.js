@@ -124,5 +124,18 @@ ok(r.buildCoveragePlan([]) === '', 'buildCoveragePlan: no facets → empty');
 ok(r.buildDeepenPrompt({ goal: 'g', target: 'X', facets: [], coveragePlan: cp }).includes('COVERAGE PLAN'), 'buildDeepenPrompt: carries the coverage plan into the pass');
 ok(!r.buildDeepenPrompt({ goal: 'g', target: 'X', facets: [] }).includes('COVERAGE PLAN'), 'buildDeepenPrompt: no coverage plan → unchanged default');
 
+// --- anti-loop: searchSignature collapses re-worded permutations to one key ---
+const sA = r.searchSignature("Emergence Water 'Tyler Breton' co-founder team leadership executives LinkedIn");
+const sB = r.searchSignature("search: Emergence Water 'Tyler Breton' team executives co-founder leadership LinkedIn");
+const sC = r.searchSignature("Emergence Water 'Tyler Breton' leadership team executives founders LinkedIn");
+ok(sA === sB, 'searchSignature: two word-order permutations collapse to the SAME signature (the loop the guard missed)');
+ok(sA !== r.searchSignature('Emergence Water financial funding 990 revenue'), 'searchSignature: a genuinely different search → different signature');
+ok(r.searchSignature('search: FOO bar') === r.searchSignature('bar foo'), 'searchSignature: strips the "search:" prefix + is order/case-insensitive');
+ok(r.searchSignature('') === '' && r.searchSignature(null) === '', 'searchSignature: empty/nil → empty');
+// the deepen prompt steers to uncovered facets
+const dpu = r.buildDeepenPrompt({ goal: 'g', target: 'X', facets: [], uncovered: ['Financial health', 'Recent projects'] });
+ok(/FACETS STILL MISSING/.test(dpu) && /Financial health/.test(dpu) && /Recent projects/.test(dpu), 'buildDeepenPrompt: lists the uncovered facets to steer off a loop');
+ok(/RE-WORDED version of a listed search counts as the SAME/.test(r.buildDeepenPrompt({ goal: 'g', target: 'X', facets: [], visited: ['search: a b c'] })), 'buildDeepenPrompt: visited block forbids re-worded repeats');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

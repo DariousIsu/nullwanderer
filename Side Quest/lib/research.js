@@ -166,19 +166,34 @@ function buildCoveragePlan(facets = []) {
   return lines.join('\n');
 }
 
+// Normalize a search query to a token-set SIGNATURE so re-worded permutations of the same search collapse to
+// ONE key. "Emergence Water Tyler Breton leadership LinkedIn" and its 8 word-order variants → one signature,
+// so the visited-guard + strike detector see them as the SAME search (fixes the permutation-loop evasion:
+// she was re-wording the same search each pass to slip past the exact-string dedup). Pure.
+const _SIG_STOP = new Set(['the', 'a', 'an', 'of', 'for', 'and', 'or', 'to', 'in', 'on', 'site', 'www', 'com', 'http', 'https', 'with', 'their', 'his', 'her', 'about', 'search']);
+function searchSignature(query) {
+  const q = String(query == null ? '' : query).toLowerCase().replace(/^search:\s*/, '').replace(/[^a-z0-9 ]/g, ' ');
+  const toks = [...new Set(q.split(/\s+/).filter((w) => w.length >= 3 && !_SIG_STOP.has(w)))].sort();
+  return toks.join(' ');
+}
+
 // Deepen pass: stay on the current target, pursue the next missing facet, or declare it SATURATED.
 // `known` (Slice 2c) = what we ALREADY hold on the target (from our graph) — injected as GIVEN so the pass
 // builds PAST it instead of re-deriving the biography we already have (the #2915 fix, deep half).
 // `coveragePlan` (Slice 3) = the facet→toolset directive so each facet drives its full tool array.
-function buildDeepenPrompt({ goal = '', target = '', facets = [], guidance = '', known = '', visited = [], coveragePlan = '' } = {}) {
+// `uncovered` = the plan facets NOT yet in the deliverable — pushes her to a NEW facet instead of re-searching
+// one she has (the anti-loop steer).
+function buildDeepenPrompt({ goal = '', target = '', facets = [], guidance = '', known = '', visited = [], coveragePlan = '', uncovered = [] } = {}) {
   const g = guidance ? `\n${guidance}\n` : '';
   const cp = coveragePlan ? `\n${coveragePlan}\n` : '';
+  const uc = (Array.isArray(uncovered) && uncovered.length)
+    ? `\nFACETS STILL MISSING from the deliverable — pursue ONE of THESE this pass, do NOT keep re-searching a facet you already have:\n${uncovered.map((f) => `- ${f}`).join('\n')}\n` : '';
   const k = known ? `\nWHAT WE ALREADY HOLD on ${target} (from our own knowledge graph — treat as GIVEN, do NOT re-derive or re-report it; build PAST it toward what's missing):\n${known}\n` : '';
   // ALREADY-VISITED memory — stop the "same websites over and over" loop: name the URLs/searches already
   // used this run and push toward DEPTH (a new page on a site, a followed link) or a NEW source.
   const v = (Array.isArray(visited) && visited.length)
-    ? `\nALREADY VISITED THIS RUN — do NOT open these again or re-run these searches; instead go DEEPER (open a NEW page/section on a site you've seen, or follow a link from it) or to a DIFFERENT source:\n${visited.slice(-18).map(u => `- ${u}`).join('\n')}\n` : '';
-  return `You are DEEP-researching ONE organization for Lucas's task, staying on it until it is well covered.\n\nTASK: ${goal}\nCURRENT ORGANIZATION: ${target}\nFacets already gathered on it: ${facetsSummary(facets)}\n${k}${v}${cp}${g}\nTHIS PASS: pursue the NEXT most valuable facet you do NOT yet have on ${target}, in priority order: (1) named leadership & key staff with their roles, (2) direct contact details (work emails, phone numbers, mailing address, key social/LinkedIn) — check the org's own /contact or /about page, (3) detailed policy positions / notable work, (4) funding & affiliations, (5) recent activity / publications. EXHAUST a good source before moving on: when you land on the organization's OWN site, use open_page to go straight into its /team, /leadership, /about and /contact pages (and follow promising links) — do NOT bounce to a fresh web_search until you've actually used the site you're on. Ground EVERY detail in what the tools return — never invent a name, email, or number. If you cannot verify a real, FULL name, write "not found" — NEVER use initials, abbreviations, or any placeholder (e.g. "R. Z." or "VP") in place of a real name.\nIf you have already gathered a solid, well-rounded picture of ${target} (what it is, its people, how to reach it, its positions), reply with exactly SATURATED and nothing else.\nEnd with a final line: FACET: <the facet you added this pass>`;
+    ? `\nALREADY VISITED THIS RUN — do NOT open these again or re-run these searches; a RE-WORDED version of a listed search counts as the SAME search — do not run it again in any phrasing. Instead go DEEPER (open a NEW page/section on a site you've seen, or follow a link from it), OPEN the org's own /contact or /team page directly, or switch to a facet you have NOT covered:\n${visited.slice(-18).map(u => `- ${u}`).join('\n')}\n` : '';
+  return `You are DEEP-researching ONE organization for Lucas's task, staying on it until it is well covered.\n\nTASK: ${goal}\nCURRENT ORGANIZATION: ${target}\nFacets already gathered on it: ${facetsSummary(facets)}\n${k}${v}${uc}${cp}${g}\nTHIS PASS: pursue the NEXT most valuable facet you do NOT yet have on ${target}, in priority order: (1) named leadership & key staff with their roles, (2) direct contact details (work emails, phone numbers, mailing address, key social/LinkedIn) — check the org's own /contact or /about page, (3) detailed policy positions / notable work, (4) funding & affiliations, (5) recent activity / publications. EXHAUST a good source before moving on: when you land on the organization's OWN site, use open_page to go straight into its /team, /leadership, /about and /contact pages (and follow promising links) — do NOT bounce to a fresh web_search until you've actually used the site you're on. Ground EVERY detail in what the tools return — never invent a name, email, or number. If you cannot verify a real, FULL name, write "not found" — NEVER use initials, abbreviations, or any placeholder (e.g. "R. Z." or "VP") in place of a real name.\nIf you have already gathered a solid, well-rounded picture of ${target} (what it is, its people, how to reach it, its positions), reply with exactly SATURATED and nothing else.\nEnd with a final line: FACET: <the facet you added this pass>`;
 }
 
 // --- ENRICH / FACET-FILL mode -----------------------------------------------
@@ -271,7 +286,7 @@ module.exports = {
   parsePass, newContentChars, decideAdvance, facetsSummary,
   isClarification, buildGuidanceBlock, isStatusRequest,
   buildNewTargetPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt, pickSeedTarget, allTargetsCovered, isConcreteTarget,
-  facetToolset, buildCoveragePlan,
+  facetToolset, buildCoveragePlan, searchSignature,
   pickEnrichTarget, facetLabel, buildEnrichPrompt, buildOrganizeEnrichPrompt,
   buildWebLanePrompt, buildDeepLanePrompt, buildMergeLanesPrompt,
   MAX_PASSES_PER_TARGET, MIN_NEW_CHARS

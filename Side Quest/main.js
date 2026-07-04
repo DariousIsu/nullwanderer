@@ -5997,22 +5997,31 @@ async function runDirectedResearchPass(focus) {
       const r = await runCloudOperator({ userMessage: prompt, context: '', task: true, autonomous: true });
       // VISITED MEMORY — record the URLs opened + searches run this step, so the NEXT pass is told not to
       // repeat them (the "same websites over and over" fix). Steps carry the tool + args.
+      let repeats = 0;
       try {
         if (r && Array.isArray(r.steps)) {
+          let vis = []; try { vis = JSON.parse(db.getMeta(`focus.${focus.id}.visited`) || '[]'); } catch {}
+          // FUZZY search dedup: a re-worded permutation of a search she already ran counts as a REPEAT (not a
+          // new visit) — the "Tyler Breton leadership LinkedIn" x8 loop evaded the exact-string guard.
+          const sigs = new Set(vis.filter(v => /^search:/.test(v)).map(v => rs.searchSignature(v)));
           const opened = [];
           for (const s of r.steps) {
             if (s.tool === 'open_page' && s.args && s.args.url) opened.push(String(s.args.url));
-            else if (s.tool === 'web_search' && s.args && s.args.query) opened.push(`search: ${String(s.args.query)}`);
+            else if (s.tool === 'web_search' && s.args && s.args.query) {
+              const entry = `search: ${String(s.args.query)}`;
+              const sg = rs.searchSignature(entry);
+              if (sg && sigs.has(sg)) { repeats++; }        // reworded repeat → do NOT record as a new visit
+              else { if (sg) sigs.add(sg); opened.push(entry); }
+            }
           }
           if (opened.length) {
-            let vis = []; try { vis = JSON.parse(db.getMeta(`focus.${focus.id}.visited`) || '[]'); } catch {}
             for (const u of opened) if (!vis.includes(u)) vis.push(u);
             db.setMeta(`focus.${focus.id}.visited`, JSON.stringify(vis.slice(-40)));
           }
         }
       } catch {}
-      return { ans: (r && r.answer ? String(r.answer).trim() : ''), usedTool: !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.some(t => ['web_search', 'browser_read', 'echo'].includes(t))) };
-    } catch (e) { return { ans: '', usedTool: false }; }
+      return { ans: (r && r.answer ? String(r.answer).trim() : ''), usedTool: !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.some(t => ['web_search', 'browser_read', 'echo'].includes(t))), repeats };
+    } catch (e) { return { ans: '', usedTool: false, repeats: 0 }; }
   };
 
   let progressed = false, done = false, note = '', sig = '';
@@ -6062,7 +6071,11 @@ async function runDirectedResearchPass(focus) {
   } else if (!done) {
     // DEEPEN the current target — next missing facet. A grounded target carries its graph dossier as `known`,
     // injected as GIVEN so the pass builds PAST what we already hold (object-first).
-    const { ans, usedTool } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance, known: target.known || '', visited, coveragePlan }));
+    // Anti-loop steer: tell the pass which facets are STILL missing so it pursues a new one instead of
+    // re-searching one it has (paired with the fuzzy repeat-detection in runPass).
+    const _cov = (() => { try { return require('./studio/canvas_emit').coveredFacets(target.raw || '', planFacets); } catch { return []; } })();
+    const uncovered = planFacets.filter(f => !_cov.includes(f));
+    const { ans, usedTool, repeats } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance, known: target.known || '', visited, coveragePlan, uncovered }));
     const p = rs.parsePass(ans);
     const newChars = rs.newContentChars(target.raw, p.body);
     target.passes = (target.passes || 1) + 1;
@@ -6096,8 +6109,12 @@ async function runDirectedResearchPass(focus) {
         const draftMd = `## ${target.name}\n\n${cleaned.slice(0, 8000)}`;
         await canvasUpsertBlock({ focusId: focus.id, blockId: secBlockId, title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: draftMd } });
       } catch {}
-      progressed = newChars >= 120 && usedTool; sig = `${target.name}#${target.passes}`.toLowerCase();
-      note = `deepening ${target.name}: +${p.facet || 'detail'} (${newChars} new chars) → canvas`;
+      // A pass that only RE-RAN searches she'd already done (fuzzy repeats) is NOT progress — kills the false
+      // "new chars" from re-fetched SERP text so it counts as a strike; and its signature collapses to
+      // "<target>:repeat" so the stuck detector catches consecutive loop passes (both were evaded before).
+      progressed = newChars >= 120 && usedTool && repeats === 0;
+      sig = (repeats > 0 ? `${target.name}:repeat` : `${target.name}#${target.passes}`).toLowerCase();
+      note = `deepening ${target.name}: +${p.facet || 'detail'} (${newChars} new chars${repeats ? `, ${repeats} repeat-search skipped` : ''}) → canvas`;
     }
   }
 
