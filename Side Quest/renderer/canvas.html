@@ -133,22 +133,6 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
 .monitors{position:fixed;top:58px;left:24px;width:380px;height:calc(100vh - 74px);max-height:calc(100vh - 74px);z-index:55;display:flex;flex-direction:column;
   background:var(--bg-panel);border:1px solid var(--line-strong);border-radius:var(--r-lg);box-shadow:0 14px 44px rgba(0,0,0,.6);overflow:hidden;}
 .monitors[hidden]{display:none;}
-
-/* Incoming documents rail — a fixed RIGHT-side container where NEW (un-positioned) documents dock + stack,
-   so the left-pinned Monitors panel can never cover them. Cards REUSE the .doc look (identical), just flowed
-   into the rail (static, width-fit) instead of freely positioned. Operator-arranged docs stay on the board;
-   ⤢ on a card moves it onto the board. Auto-shows only when there are incoming docs. */
-.incoming{position:fixed;top:58px;right:24px;width:440px;max-width:calc(100vw - 60px);height:calc(100vh - 74px);z-index:54;display:flex;flex-direction:column;
-  background:var(--bg-panel);border:1px solid var(--line-strong);border-radius:var(--r-lg);box-shadow:0 14px 44px rgba(0,0,0,.6);overflow:hidden;}
-.incoming[hidden]{display:none;}
-.inc-head{flex-shrink:0;display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-raised);border-bottom:1px solid var(--line);}
-.inc-head .inc-title{flex:1;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--tx-muted);font-weight:700;}
-.inc-head .inc-n{font-size:10px;color:var(--tx-dim);}
-.inc-list{flex:1;min-height:0;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:10px;}
-.inc-list::-webkit-scrollbar{width:8px;}.inc-list::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:4px;}
-.incoming .doc{position:static;width:auto;max-width:none;max-height:360px;flex-shrink:0;box-shadow:0 2px 10px rgba(0,0,0,.35);}
-.incoming .doc-head{cursor:default;}
-.incoming .doc-head .grip{display:none;}
 .mon-head{flex-shrink:0;display:flex;align-items:center;gap:8px;padding:8px 11px;background:var(--bg-raised);border-bottom:1px solid var(--line);cursor:grab;user-select:none;}
 .mon-head.dragging{cursor:grabbing;}
 .mon-head .grip{color:var(--tx-fainter);font-size:13px;}
@@ -275,16 +259,6 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
     <div class="mon-videos" id="monVideos"></div>
     <div class="resize-grip" id="monResize"></div>
   </div>
-
-  <!-- Incoming documents rail — new (un-positioned) docs dock here on the RIGHT so the left Monitors panel
-       never covers them. Auto-shows when there are incoming docs; ⤢ on a card places it on the board. -->
-  <aside class="incoming" id="incoming" hidden>
-    <div class="inc-head">
-      <span class="inc-title">Incoming</span>
-      <span class="inc-n" id="incN"></span>
-    </div>
-    <div class="inc-list" id="incList"></div>
-  </aside>
 
   <!-- News Briefing drawer — a sibling of .monitors (which clips overflow); JS pins it beside the monitor. -->
   <div class="mon-brief" id="monTunePanel" hidden>

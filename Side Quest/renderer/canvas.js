@@ -6,8 +6,7 @@
 'use strict';
 const $ = (id) => document.getElementById(id);
 const surface = $('surface'), board = $('board'), trayEl = $('tray'), trayRows = $('trayRows'),
-      countEl = $('count'), msgEl = $('msg'),
-      incoming = $('incoming'), incList = $('incList'), incN = $('incN');
+      countEl = $('count'), msgEl = $('msg');
 
 let panX = 0, panY = 0, zoom = 1;
 let docPos = {};                 // tabKey -> {x,y} (for tray focus)
@@ -107,22 +106,6 @@ function docCard(doc) {
   </div>`;
 }
 
-// A card for the fixed right "Incoming" rail — same .doc markup/styling as a board card (so it looks
-// identical), minus the freeform grip; adds ⤢ to place it on the board. The rail's CSS flows + sizes it.
-function railCard(doc) {
-  const t = doc.tab;
-  const inner = doc.stream.blocks.length ? doc.stream.blocks.map(blockContent).join('') : '<div class="doc-empty">No content yet.</div>';
-  return `<div class="doc" data-key="${esc(t.key)}">
-    <div class="doc-head">
-      <span class="dtitle">${esc(t.title)}</span>
-      <span class="mode ${esc(t.mode)}">${esc(t.mode)}</span>
-      <button class="dbtn" data-ract="board" title="Place on the board">⤢</button>
-      <button class="dbtn" data-ract="close" title="Close (keep in tray)">✕</button>
-    </div>
-    <div class="doc-body">${inner}</div>
-  </div>`;
-}
-
 function trayRow(doc) {
   const t = doc.tab;
   return `<div class="titem${t.key === activeKey ? ' active' : ''}${doc.hidden ? ' closed' : ''}" data-key="${esc(t.key)}" data-hidden="${doc.hidden ? 1 : 0}">
@@ -145,31 +128,21 @@ function renderTray(docs) {
   msgEl.style.display = visible.length ? 'none' : 'block';
   if (!visible.length) msgEl.innerHTML = docs.length ? 'All documents are closed.<div class="small">Open one from the ☰ tray.</div>' : 'Canvas is empty.<div class="small">Drop a document, or documents appear as Zoe produces deliverables.</div>';
 }
-// A visible, un-positioned (source:'auto') doc is NEW/incoming → the right rail; operator-arranged
-// (source:'saved') docs stay on the freeform board. Missing source → treat as board (safe default).
-const isRailed = (d) => (d.pos && d.pos.source) === 'auto';
 // FULL render — rebuilds every card (positions/sizes re-applied from the server). Use on structural change.
 function render(docs) {
   docPos = {}; for (const d of docs) docPos[d.tab.key] = d.pos || { x: 48, y: 48 };
-  const visible = docs.filter(d => !d.hidden);
-  const railed = visible.filter(isRailed);
-  board.innerHTML = visible.filter(d => !isRailed(d)).map(docCard).join('');
-  incList.innerHTML = railed.map(railCard).join('');
-  incoming.hidden = railed.length === 0;
-  incN.textContent = railed.length ? String(railed.length) : '';
+  board.innerHTML = docs.filter(d => !d.hidden).map(docCard).join('');
   renderTray(docs);
 }
 // IN-PLACE patch — update ONLY each card's body content (the part that grows as Zoe builds), leaving the
 // card element, its POSITION, SIZE, and scroll untouched. This keeps cards where you placed them and at
 // the size you set across the auto-refresh (a full re-render would snap them back to the server defaults).
-// Sig includes the RAILED flag so a doc moving rail↔board (source change) forces a full render, not a body patch.
-function structureSig(docs) { return (docs || []).map(d => `${d.tab.key}:${isRailed(d) ? 'r' : ''}${d.hidden ? 'h' : ''}${d.minimized ? 'm' : ''}`).sort().join('|'); }
+function structureSig(docs) { return (docs || []).map(d => `${d.tab.key}:${d.hidden ? 'h' : ''}${d.minimized ? 'm' : ''}`).sort().join('|'); }
 function patchBodies(docs) {
   docPos = {}; for (const d of docs) docPos[d.tab.key] = d.pos || { x: 48, y: 48 };
   for (const d of docs) {
     if (d.hidden) continue;
-    const scope = isRailed(d) ? incList : board;   // a railed doc's card lives in the rail, not the board
-    const card = scope.querySelector(`.doc[data-key="${(window.CSS && CSS.escape) ? CSS.escape(d.tab.key) : d.tab.key}"]`);
+    const card = board.querySelector(`.doc[data-key="${(window.CSS && CSS.escape) ? CSS.escape(d.tab.key) : d.tab.key}"]`);
     const body = card && card.querySelector('.doc-body');
     if (!body) continue;
     const inner = d.stream.blocks.length ? d.stream.blocks.map(blockContent).join('') : '<div class="doc-empty">No content yet.</div>';
@@ -231,21 +204,6 @@ function focusDoc(key) {
 async function reopenDoc(key) { try { await window.sq.canvas.updateDoc(key, { hidden: false }); } catch {} await loadCanvas(0); focusDoc(key); }
 
 /* ---- interactions ---- */
-// Incoming rail actions: ⤢ places a doc on the board (persists a position → it becomes 'saved' → leaves the
-// rail on the next render); ✕ closes it (kept in the tray). Placed at a visible spot clear of the left monitor.
-incList.addEventListener('click', async (e) => {
-  const btn = e.target.closest('.dbtn'); if (!btn) return;
-  const card = btn.closest('.doc'); const key = card && card.dataset.key; if (!key) return;
-  const act = btn.dataset.ract;
-  if (act === 'close') { try { await window.sq.canvas.updateDoc(key, { hidden: true }); } catch {} await loadCanvas(0, true); }
-  else if (act === 'board') {
-    const sx = Math.max(460, Math.round(window.innerWidth * 0.42)), sy = 96;   // screen spot right of the monitor
-    const x = Math.round((sx - panX) / zoom), y = Math.round((sy - panY) / zoom);
-    try { await window.sq.canvas.setDocPos(key, x, y); } catch {}
-    await loadCanvas(0, true);
-  }
-});
-
 board.addEventListener('click', (e) => {
   const btn = e.target.closest('.dbtn'); if (!btn) return;
   const card = btn.closest('.doc'); const key = card.dataset.key;
