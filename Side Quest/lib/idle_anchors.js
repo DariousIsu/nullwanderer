@@ -143,7 +143,18 @@ async function provideAnchors({ recentNews, thinNodes, convoNames, visitedKeys, 
   return assembleAnchors({ news, frontier, convo, visitedKeys: visitedKeys || new Set() });
 }
 
+// Rotate the frontier query window so the graph-walk walks the WHOLE thin set over time rather than
+// re-offering the same deterministic top-N (which the visited-filter drains to empty → permanent no-gap,
+// the exhaustion we hit at visited=392 > a 200 pool). Advance by one window each cycle; wrap to 0 when a
+// short page signals the end of the set. Pure.
+function rotateFrontierCursor(cursor, returnedCount, windowSize) {
+  const w = Math.max(1, Number(windowSize) || 1);
+  const c = Math.max(0, Number(cursor) || 0);
+  if ((Number(returnedCount) || 0) < w) return 0;   // hit the end of the set → wrap around
+  return c + w;
+}
+
 module.exports = {
-  newsCandidates, frontierCandidates, convoCandidates, assembleAnchors, provideAnchors,
+  newsCandidates, frontierCandidates, convoCandidates, assembleAnchors, provideAnchors, rotateFrontierCursor,
   MAX_PER_TIER, MAX_TOTAL, NEWS_MAX, FRONTIER_MAX, CONVO_MAX
 };

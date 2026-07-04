@@ -1489,17 +1489,22 @@ async function runGraphWalkMove(recentTurns) {
   const idleAnchors = require('./idle_anchors');
   const newsObjects = require('./news_objects');
   const recentNews = async () => { try { return newsObjects.recentNewsObjects({ sinceMs: nowTs - 24 * 3600 * 1000, limit: 20, minCorroboration: 2 }); } catch { return []; } };
+  const FRONTIER_WINDOW = 200;
   const thinNodes = async () => {
     try {
       // degree DESC: prefer the MOST-connectable underdeveloped nodes (degree 6-7 = world-notable
-      // entities our graph barely links, e.g. General Motors/Reagan) over rock-bottom degree-1 stubs
-      // (obscure, no web presence → nothing to enrich). A DEEP pool (200) so the visited-filter always
-      // has fresh thin nodes to surface as she works through them move after move.
-      const r = await dispatch({ kind: 'do', name: 'db_query', args: { sql: 'SELECT id, name, degree FROM entities WHERE degree BETWEEN 2 AND 7 AND wikidata_qid IS NOT NULL ORDER BY degree DESC, id DESC LIMIT 200', params: [] } });
+      // entities our graph barely links, e.g. General Motors/Reagan) over rock-bottom degree-1 stubs.
+      // ROTATING WINDOW (cursor OFFSET): the query is deterministic, so a fixed top-N gets fully visited
+      // and the tier goes permanently no-gap (hit at visited=392 > 200); advancing the offset each cycle
+      // walks the WHOLE thin set so fresh nodes always flow. Cursor is a validated int → safe to inline.
+      const cursor = Math.max(0, parseInt(_gm('graphwalk.frontier_cursor') || '0', 10) || 0);
+      const r = await dispatch({ kind: 'do', name: 'db_query', args: { sql: `SELECT id, name, degree FROM entities WHERE degree BETWEEN 2 AND 7 AND wikidata_qid IS NOT NULL ORDER BY degree DESC, id DESC LIMIT ${FRONTIER_WINDOW} OFFSET ${cursor}`, params: [] } });
       if (!r || !r.ok) return [];
       let j; try { j = JSON.parse(r.text); } catch { return []; }
       const rows = (j && j.rows) || j;
-      return Array.isArray(rows) ? rows : [];
+      const arr = Array.isArray(rows) ? rows : [];
+      try { _sm('graphwalk.frontier_cursor', String(idleAnchors.rotateFrontierCursor(cursor, arr.length, FRONTIER_WINDOW))); } catch {}
+      return arr;
     } catch { return []; }
   };
   // CONVO tier only when there's GENUINE recent conversation — a user turn in the last 30 min. Otherwise

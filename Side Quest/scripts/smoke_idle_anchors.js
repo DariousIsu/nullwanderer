@@ -77,6 +77,12 @@ const fresh = A.assembleAnchors({ frontier: pool, visitedKeys: visitedTop });
 ok(fresh.filter(x => x.source === 'frontier').length >= 4, 'assembleAnchors: surfaces FRESH frontier nodes past the visited top (no exhaustion)');
 ok(!fresh.some(x => visitedTop.has(visitKey(x.mention))), 'assembleAnchors: never re-offers a visited node');
 
+// --- rotateFrontierCursor: walk the whole thin set, wrap at the end ---
+ok(A.rotateFrontierCursor(0, 200, 200) === 200, 'rotateFrontierCursor: a full page advances the window');
+ok(A.rotateFrontierCursor(200, 200, 200) === 400, 'rotateFrontierCursor: keeps advancing');
+ok(A.rotateFrontierCursor(400, 137, 200) === 0, 'rotateFrontierCursor: a short page (end of set) wraps to 0');
+ok(A.rotateFrontierCursor(0, 0, 200) === 0, 'rotateFrontierCursor: empty page wraps to 0');
+
 (async () => {
   // --- provideAnchors: async providers, fail-soft (one tier throws → others still contribute) ---
   const out = await A.provideAnchors({
