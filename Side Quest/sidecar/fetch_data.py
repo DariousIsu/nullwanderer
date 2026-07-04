@@ -25,6 +25,9 @@ SOURCES = [
      "https://raw.githubusercontent.com/keithpotz/Election-Prediction/main/src/data/polling_data/2024president.csv"),
     ("complete_data.csv",
      "https://raw.githubusercontent.com/keithpotz/Election-Prediction/main/src/data/polling_data/complete_data.csv"),
+    # current members of Congress (unitedstates project, public domain) — for the INCUMBENCY term
+    ("legislators-current.json",
+     "https://unitedstates.github.io/congress-legislators/legislators-current.json"),
 ]
 
 

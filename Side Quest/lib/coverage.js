@@ -106,6 +106,28 @@ function buildCoverage(opts = {}) {
   };
 }
 
+// PURE — congress-legislators JSON (unitedstates project) → { seatId: party }. House by district; Senate by
+// state, preferring the CLASS-2 senator (the seat up in 2026). Independents → skipped (caucus varies).
+const PARTY_CODE = { Democrat: 'A', Democratic: 'A', Republican: 'B' };
+function parseIncumbents(legislators) {
+  const out = {};
+  for (const m of (Array.isArray(legislators) ? legislators : [])) {
+    const t = m && m.terms && m.terms[m.terms.length - 1];
+    if (!t || !t.state) continue;
+    const party = PARTY_CODE[t.party];
+    if (!party) continue;
+    if (t.type === 'rep') {
+      const dist = (t.district === 0 || t.district == null) ? 1 : Number(t.district);   // at-large 0 → 1 (matches 538)
+      out['H-' + t.state + '-' + dist] = party;
+    } else if (t.type === 'sen') {
+      const seat = 'S-' + t.state;
+      if (t.class === 2) out[seat] = party;            // class 2 = up in 2026 → this seat's incumbent
+      else if (!(seat in out)) out[seat] = party;      // fallback if class-2 not present (specials/edge)
+    }
+  }
+  return out;
+}
+
 // map a loop race (forecast_registry shape: chamber + state + district) → a seat id matching the 538 keys.
 // house → 'H-<ABBR>-<district>' (no zero-pad, e.g. H-NH-2); senate → 'S-<ABBR>'. null if unresolvable.
 function seatIdForRace(race, stateAbbr) {
@@ -124,4 +146,4 @@ function seatIdForRace(race, stateAbbr) {
   return null;
 }
 
-module.exports = { parseLeanCsv, seatRace, buildCoverage, seatIdForRace, SENATE_2026 };
+module.exports = { parseLeanCsv, parseIncumbents, seatRace, buildCoverage, seatIdForRace, SENATE_2026 };

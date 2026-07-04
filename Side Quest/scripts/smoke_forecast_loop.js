@@ -43,6 +43,17 @@ const evOff = { id: 'e3', title: 'Ohio unrelated', entities: ['Ohio'], corrobora
 const pairRaces = [{ id: 'AZ:sen', chamber: 'senate', subject: '2026 Arizona', office: 'U.S. Senate', margin: 5, sigma: 4, entities: ['Arizona', 'U.S. Senate'] }];
 const pairs = L.buildAssessPairs([evAZ, evWeak, evOff], pairRaces);
 ok('buildAssessPairs: keeps only corroborated + touching (1 of 3)', pairs.length === 1 && pairs[0].event.id === 'e1', `got ${pairs.length}`);
+ok('buildAssessPairs: gates out SAFE seats (|margin|>8), keeps competitive', (() => {
+  const ev = { id: 'e', corroboration: 3, entities: ['Zed'], title: 'Zed news' };
+  const safe = { id: 'safe', margin: 40, entities: ['Zed'] }, comp = { id: 'comp', margin: 2, entities: ['Zed'] };
+  const p = L.buildAssessPairs([ev], [safe, comp]);
+  return p.length === 1 && p[0].race.id === 'comp';
+})());
+ok('applyMidterm: president R → uniform swing toward D (+)', (() => {
+  const r = L.applyMidterm([{ margin: 0 }, { margin: -5 }], { swing: 2.5, presidentParty: 'B' });
+  return r[0].margin === 2.5 && r[1].margin === -2.5 && r[0].midterm_delta === 2.5 && r[1].base_margin_pre_midterm === -5;
+})());
+ok('applyMidterm: swing 0 → untouched', L.applyMidterm([{ margin: 3 }], { swing: 0 })[0].margin === 3);
 
 (async () => {
   // ---- preAssess with a fake gpt-oss `ask` (returns the validated value directly) ----

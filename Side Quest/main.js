@@ -992,7 +992,9 @@ app.whenReady().then(() => {
         const p = require('path'), fs = require('fs'), dir = p.join(__dirname, 'data', 'elections');
         const districts = coverageLib.parseLeanCsv(fs.readFileSync(p.join(dir, '538_partisan_lean_districts.csv'), 'utf8'));
         const states = coverageLib.parseLeanCsv(fs.readFileSync(p.join(dir, '538_partisan_lean_states.csv'), 'utf8'));
-        leanData = (Object.keys(districts).length && Object.keys(states).length) ? { districts, states } : false;
+        let incumbentBySeat = {};   // current-member party per seat (incumbency term) — congress-legislators
+        try { incumbentBySeat = coverageLib.parseIncumbents(JSON.parse(fs.readFileSync(p.join(dir, 'legislators-current.json'), 'utf8'))); } catch {}
+        leanData = (Object.keys(districts).length && Object.keys(states).length) ? { districts, states, incumbentBySeat } : false;
       } catch { leanData = false; }
       return leanData;
     };
@@ -1041,7 +1043,10 @@ app.whenReady().then(() => {
           partyOf,                                                 // FEC-resolved candidate→party → signs the poll margins
           ask: cloud ? cloud.ask : null,
           getSnapshot: require('./lib/api_stream').getSnapshot,   // FUNDAMENTALS leg: seeded econ signals (GDP/CPI/unrate/yields) → national environment lean
-          coverage: (() => { const L = loadLeans(); return L ? { districts: L.districts, states: L.states, senateUp: coverageLib.SENATE_2026, senateHoldovers: SENATE_HOLDOVERS } : null; })(),   // full 435+35 universe from 538 lean; polled seats override
+          coverage: (() => { const L = loadLeans(); return L ? { districts: L.districts, states: L.states, senateUp: coverageLib.SENATE_2026, senateHoldovers: SENATE_HOLDOVERS, incumbentBySeat: L.incumbentBySeat } : null; })(),   // full 435+35 universe from 538 lean + incumbency; polled seats override
+          midtermSwing: parseFloat(process.env.FORECAST_MIDTERM_SWING || '') || 2.0,   // uniform out-party swing (president's party loses at the midterm) — TUNABLE PRIOR, calibration will set it; env-override
+
+          presidentParty: 'B',                                     // 2026: sitting president is Republican → midterm swing favors D
           // resolve (read-only Echo enrichment) intentionally left off the hot loop — margins/sim don't need
           // echo_ref, and enriching the whole slate every cycle would hammer Echo. Opt-in follow-on.
         });
@@ -1049,8 +1054,10 @@ app.whenReady().then(() => {
           lastForecast = res;
           const fx = res.work.fundamentals;
           const env = fx && fx.has_data ? ` · env ${fx.lean > 0 ? '+' : ''}${fx.lean} (${fx.favors})` : '';
+          const mt = res.work.midterm ? ` · midterm ${res.work.midterm.delta > 0 ? '+' : ''}${res.work.midterm.delta}` : '';
           const cov = res.work.coverage ? ` · coverage ${res.work.coverage.races} seats` : '';
-          console.log(`[forecast] recompute: ${res.work.margins.polled}/${res.work.margins.total} polled${cov} · House P(D) ${(res.payload.house.pD_control * 100).toFixed(0)}% · Senate P(D) ${(res.payload.senate.pD_control * 100).toFixed(0)}%${env}${res.live ? ' · LIVE' : ''} · ${res.work.timing_ms}ms`);
+          const jd = res.work.assess ? ` · ${res.work.assess.assessed}/${res.work.assess.pairs} judged` : '';
+          console.log(`[forecast] recompute: ${res.work.margins.polled}/${res.work.margins.total} polled${cov} · House P(D) ${(res.payload.house.pD_control * 100).toFixed(0)}% · Senate P(D) ${(res.payload.senate.pD_control * 100).toFixed(0)}%${env}${mt}${jd}${res.live ? ' · LIVE' : ''} · ${res.work.timing_ms}ms`);
         } else if (res) { console.log(`[forecast] recompute skipped: ${res.error}`); }
       } catch (e) { console.error('[forecast] recompute loop failed:', e.message); }
     };

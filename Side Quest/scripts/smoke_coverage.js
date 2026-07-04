@@ -43,5 +43,18 @@ ok('buildCoverage: house has no holdovers, senate carries them', cov.holdovers.h
 ok('buildCoverage: majority thresholds', cov.majority.house === 218 && cov.majority.senate === 51);
 ok('buildCoverage: counts (2 polled, 4 lean)', cov.counts.polled === 2 && cov.counts.lean === 4 && cov.counts.senate_up === 3);
 
+// parseIncumbents: congress-legislators JSON → seat → party
+const inc = C.parseIncumbents([
+  { terms: [{ type: 'rep', state: 'AL', district: 4, party: 'Republican' }] },
+  { terms: [{ type: 'rep', state: 'AK', district: 0, party: 'Republican' }] },   // at-large 0 → 1
+  { terms: [{ type: 'sen', state: 'ME', class: 2, party: 'Republican' }] },       // class 2 = up 2026 (Collins)
+  { terms: [{ type: 'sen', state: 'ME', class: 1, party: 'Independent' }] },       // King (I) not up → I skipped, R kept
+  { terms: [{ type: 'sen', state: 'AZ', class: 3, party: 'Democrat' }] },          // no class-2 → fallback fills
+]);
+ok('parseIncumbents: rep by district → party', inc['H-AL-4'] === 'B');
+ok('parseIncumbents: at-large district 0 → 1', inc['H-AK-1'] === 'B');
+ok('parseIncumbents: senate prefers class-2 (ME R, not the Independent)', inc['S-ME'] === 'B');
+ok('parseIncumbents: senate fallback when no class-2 (AZ D)', inc['S-AZ'] === 'A');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

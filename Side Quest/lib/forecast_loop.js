@@ -88,18 +88,32 @@ async function computeMargins({ races, getRacePolls, ratings = [], partyOf = nul
   return out;
 }
 
-// PURE — the (event, race) pairs worth a gpt-oss direction call: only CORROBORATED events that TOUCH a race
-// (mirrors the reactor's own shift gate, so we never spend a cloud call the reactor would ignore).
+// PURE — the (event, race) pairs worth a gpt-oss direction call: only CORROBORATED events that TOUCH a
+// COMPETITIVE race (|margin| ≤ competitiveMargin). News can't flip a safe R+40 seat, so judging its direction
+// there is wasted cloud spend — full-universe coverage would otherwise explode this to thousands of calls.
+// Safe seats still get direction-free VOLATILITY in the reactor; only the expensive directional judgment is gated.
+const ASSESS_COMPETITIVE_MARGIN = 8;
 function buildAssessPairs(events, races, cfg = {}) {
   const c = { ...reactor.DEFAULTS, ...cfg };
+  const compMargin = c.competitiveMargin != null ? c.competitiveMargin : ASSESS_COMPETITIVE_MARGIN;
   const pairs = [];
   for (const race of (Array.isArray(races) ? races : [])) {
+    if (Math.abs(race.margin || 0) > compMargin) continue;   // safe seat → skip the gpt-oss judgment
     const ents = race.entities || [];
     for (const e of (Array.isArray(events) ? events : [])) {
       if ((e.corroboration || 0) >= c.minCorroborationForShift && reactor.eventTouchesRace(e, ents)) pairs.push({ event: e, race });
     }
   }
   return pairs;
+}
+
+// PURE — a uniform MIDTERM swing toward the OUT-party (the president's party historically loses seats at the
+// midterm). Applied like the fundamentals env lean: a national shift, flagged provisional. presidentParty =
+// the sitting president's party ('B'=Rep in 2026) → the swing goes toward A(Dem). Tunable prior; off when swing 0.
+function applyMidterm(races, { swing = 0, presidentParty = 'B' } = {}) {
+  if (!swing) return (races || []).map((r) => ({ ...r, midterm_delta: 0 }));
+  const delta = Number(((presidentParty === 'A' ? -1 : 1) * Math.abs(swing)).toFixed(3));   // toward the out-party
+  return (races || []).map((r) => ({ ...r, base_margin_pre_midterm: r.margin, margin: Number((r.margin + delta).toFixed(3)), midterm_delta: delta }));
 }
 
 // LIVE — pre-run the gpt-oss judgments (assessBatch) for the shift-eligible pairs → a SYNC lookup the reactor
@@ -206,6 +220,14 @@ async function runOnce(opts = {}) {
     if (econScore && econScore.has_data) races = fundamentals.applyToSlate(races, econScore);
   }
 
+  // 2c. MIDTERM — a uniform swing toward the out-party (the president's party loses seats at the midterm).
+  // Applied on top of the environment baseline. Config: midtermSwing (points), presidentParty ('B'=Rep 2026).
+  let midterm = null;
+  if (opts.midtermSwing) {
+    races = applyMidterm(races, { swing: opts.midtermSwing, presidentParty: opts.presidentParty || 'B' });
+    midterm = { swing: opts.midtermSwing, presidentParty: opts.presidentParty || 'B', delta: races[0] ? races[0].midterm_delta : 0 };
+  }
+
   // 3. SIGNALS — the news_feed contract (compressed events + raw/CC momentum), scoped to the slate's entities.
   const entities = slateEntities(races);
   const events = opts.events || (typeof opts.newsEvents === 'function'
@@ -227,6 +249,7 @@ async function runOnce(opts = {}) {
   res.work.margins = { total: races.length, polled, prior: races.length - polled };
   res.work.assess = { pairs: pa.n_pairs, assessed: pa.assessed };
   res.work.fundamentals = econScore;               // national economic environment lean + component audit (null if no econ data)
+  res.work.midterm = midterm;                       // uniform midterm out-party swing (null if not configured)
   if (covCounts) res.work.coverage = covCounts;    // full-universe coverage (races, polled vs lean, senate_up)
   res.live_entities = reactor.detectLive(momentum, { cfg: opts.reactorCfg });
   return res;
@@ -235,6 +258,6 @@ async function runOnce(opts = {}) {
 module.exports = {
   DEFAULT_CONFIG, DEFAULT_TARGET_YEAR, PRIOR_SIGMA,
   defaultPartyOf, signMargin, pollSigma, computeMargins,
-  buildAssessPairs, preAssess, slateEntities, recompute, runOnce,
+  buildAssessPairs, applyMidterm, preAssess, slateEntities, recompute, runOnce,
   detectLive: reactor.detectLive,
 };
