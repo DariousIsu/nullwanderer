@@ -41,6 +41,7 @@ const smokes = [
   'smoke_meta.js',
   'smoke_active_recall.js',
   'smoke_graph_walk.js',
+  'smoke_idle_anchors.js',
   'smoke_swirl_iterate.js',
   'smoke_live_info.js',
   'smoke_preferences.js',

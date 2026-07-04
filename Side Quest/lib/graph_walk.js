@@ -27,6 +27,7 @@ const THIN_FACTS = 3;             // …or with fewer than this many facts
 const WALK_MAX_NODES = 5;         // nodes touched per move before we re-anchor
 const WALK_MAX_CONNECTIONS = 8;   // connections proposed per move before we re-anchor
 const MAX_CANDIDATES = 6;         // recent-conversation mentions we consider per move
+const WALK_MAX_TRIES = 3;         // anchors we'll ATTEMPT per move before giving up (no-op-move fix)
 const VISITED_TTL_MS = 6 * 3600 * 1000;   // don't re-anchor the same object within this window
 const VISITED_KEY = 'graphwalk.visited';  // JSON [[key, ts], …]
 const STOPNAMES = new Set(['i', 'you', 'he', 'she', 'they', 'it', 'we', 'lucas', 'zoe', 'the', 'a', 'an', 'this', 'that']);
@@ -233,19 +234,40 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, log } = {}) 
 // One full graph-building MOVE. Orchestrates anchor → grow → record → voice. Returns a result the
 // caller uses to (optionally) voice one line and log. Never throws (fail-soft everywhere).
 async function runMove(deps = {}) {
-  const { recentTurns = [], cloud, web, recall, dispatch, kgNeighbors, getMeta, setMeta, now = () => Date.now(), log } = deps;
+  const { recentTurns = [], candidates: injected, cloud, web, recall, dispatch, kgNeighbors, getMeta, setMeta, now = () => Date.now(), log } = deps;
   const nowTs = now();
   try {
-    const candidates = await extractCandidates(recentTurns, { cloud, log });
-    if (!candidates.length) return { acted: false, reason: 'no-candidates' };
-    const assessed = await assessGaps(candidates, { recall, log });
+    // ANCHOR SOURCE: prefer an injected, already-sourced candidate list (idle_anchors: news → thin
+    // frontier → convo). Fall back to conversation-only extraction when none is supplied (legacy path,
+    // and the smoke's direct call). Each candidate carries a `source` tag for logging/steering.
+    let candList;
+    if (Array.isArray(injected) && injected.length) {
+      candList = injected.map(c => (typeof c === 'string' ? { mention: c, source: 'convo' } : { mention: c.mention, source: c.source || 'convo' })).filter(c => c.mention);
+    } else {
+      candList = (await extractCandidates(recentTurns, { cloud, log })).map(m => ({ mention: m, source: 'convo' }));
+    }
+    if (!candList.length) return { acted: false, reason: 'no-candidates' };
+    const srcByKey = new Map(candList.map(c => [visitKey(c.mention), c.source]));
+
+    const assessed = (await assessGaps(candList.map(c => c.mention), { recall, log }))
+      .map(a => ({ ...a, source: srcByKey.get(visitKey(a.mention)) || 'convo' }));
     const visited = visitedKeySet(getMeta, nowTs);
     const queue = rankGaps(assessed, visited);
     if (!queue.length) return { acted: false, reason: 'no-gap' };   // nothing worth building → go quiet
 
-    const anchor = queue[0];
-    const grown = await growAround(anchor, { web, cloud, dispatch, kgNeighbors, log });
-    recordVisited({ getMeta, setMeta, now: nowTs, names: [anchor.mention, ...grown.related] });
+    // NO-OP-MOVE FIX: try anchors in rank order until one actually GROWS the graph (a build or a new
+    // edge), up to WALK_MAX_TRIES. A dud (rich/un-connectable) anchor no longer wastes the whole move —
+    // and every anchor we touch is recorded visited so we don't re-grind it next tick.
+    const tried = [];
+    let anchor = queue[0], grown = null;
+    for (const cand of queue.slice(0, WALK_MAX_TRIES)) {
+      anchor = cand;
+      grown = await growAround(cand, { web, cloud, dispatch, kgNeighbors, log });
+      tried.push(cand.mention);
+      if (grown && (grown.built || grown.connections > 0)) break;   // productive → stop
+    }
+    grown = grown || { built: false, entities: 0, connections: 0, related: [], summary: '' };
+    recordVisited({ getMeta, setMeta, now: nowTs, names: [...tried, ...grown.related] });
 
     const notable = grown.built || grown.connections > 0;
     const voiceLine = notable
@@ -254,9 +276,10 @@ async function runMove(deps = {}) {
         : `Filled in ${anchor.mention} — connected it to ${grown.related.slice(0, 2).join(' and ')}.`)
       : '';
     return {
-      acted: notable, anchor: anchor.mention, kind: anchor.kind,
+      acted: notable, anchor: anchor.mention, kind: anchor.kind, source: anchor.source,
       built: grown.built, entities: grown.entities, connections: grown.connections,
-      related: grown.related, summary: grown.summary, voiceLine
+      related: grown.related, summary: grown.summary, voiceLine,
+      reason: notable ? 'grew' : 'no-growth'
     };
   } catch (e) { log && log('[graph-walk] move failed: ' + (e && e.message)); return { acted: false, reason: 'error', error: e && e.message }; }
 }

@@ -101,6 +101,26 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   const moveQuiet = await G.runMove({ recentTurns: [], cloud: async () => '[]', web, recall: recall2, dispatch, getMeta, setMeta, now: () => 3000 });
   ok(moveQuiet.acted === false, 'runMove: empty conversation → quiet (no forced noise)');
 
+  // --- injected candidates (idle_anchors cascade) + iterate-until-grow (no-op-move fix) ---
+  // Two MISSING anchors: the first yields no dossier (a dud → no growth); the move must iterate PAST it
+  // to the second, which builds. This is the fix for the "anchor on one un-growable node, voice nothing"
+  // stall. recentTurns is empty, so ONLY the injected list can be driving this.
+  const meta2 = {}; const gM = (k) => meta2[k]; const sM = (k, v) => { meta2[k] = v; };
+  const iterCloud = async (msgs) => {
+    const u = String((msgs[1] && msgs[1].content) || (msgs[0] && msgs[0].content) || '');
+    if (/Entity: "Buildable Co"/.test(u)) return JSON.stringify({ entity_type: 'organization', summary: 'A real org that partners with others on water technology and policy.', related: [{ name: 'Partner X', type: 'organization', relation: 'partners_with' }] });
+    if (/Entity: "Dud Co"/.test(u)) return 'not json — no dossier here';   // dud → dossier null → no growth
+    return '[]';
+  };
+  const moveInj = await G.runMove({
+    recentTurns: [],
+    candidates: [{ mention: 'Dud Co', source: 'frontier' }, { mention: 'Buildable Co', source: 'news' }],
+    cloud: iterCloud, web, recall: async () => null, dispatch, getMeta: gM, setMeta: sM, now: () => 5000
+  });
+  ok(moveInj.acted === true && moveInj.anchor === 'Buildable Co', 'runMove: injected candidates drive it; iterates PAST the dud to the buildable anchor');
+  ok(moveInj.source === 'news', 'runMove: carries the winning anchor source tag (news)');
+  ok(G.visitedKeySet(gM, 5000).has(G.visitKey('Dud Co')), 'runMove: the tried-but-dud anchor is still recorded visited (no re-grind next tick)');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
