@@ -128,6 +128,18 @@ function allTargetsCovered({ intended = [], covered = [] } = {}) {
   return want.every(t => cov.some(c => c === t || c.includes(t) || t.includes(c)));
 }
 
+// SCOPE DRIFT GUARD — is `target` a single CONCRETE named entity (bounds a run) vs a CATEGORY/discovery
+// request (stays open)? "Emergence Water" / "Sen. Mike Lee" → bounded; "right-of-center think tanks" / "all
+// the companies" → open. Used when the object-graph seed's salient path misses a novel single company (which
+// left scope=open and let a run drift to an adjacent entity once its good first draft was covered). Pure.
+const _CATEGORY_RE = /\b(orgs?|organi[sz]ations?|companies|corporations?|institutes?|foundations?|groups?|firms?|think[\s-]?tanks?|nonprofits?|agencies|committees|associations?|councils?|people|everyone|all|each|every|various|several|multiple)\b/i;
+function isConcreteTarget(target) {
+  const t = String(target == null ? '' : target).trim();
+  if (t.length < 2) return false;
+  if (_CATEGORY_RE.test(t)) return false;
+  return t.split(/\s+/).length <= 6;   // a short proper-noun phrase, not a descriptive category
+}
+
 // Deepen pass: stay on the current target, pursue the next missing facet, or declare it SATURATED.
 // `known` (Slice 2c) = what we ALREADY hold on the target (from our graph) — injected as GIVEN so the pass
 // builds PAST it instead of re-deriving the biography we already have (the #2915 fix, deep half).
@@ -230,7 +242,7 @@ function buildOrganizeTargetPrompt({ target = '', raw = '' } = {}) {
 module.exports = {
   parsePass, newContentChars, decideAdvance, facetsSummary,
   isClarification, buildGuidanceBlock, isStatusRequest,
-  buildNewTargetPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt, pickSeedTarget, allTargetsCovered,
+  buildNewTargetPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt, pickSeedTarget, allTargetsCovered, isConcreteTarget,
   pickEnrichTarget, facetLabel, buildEnrichPrompt, buildOrganizeEnrichPrompt,
   buildWebLanePrompt, buildDeepLanePrompt, buildMergeLanesPrompt,
   MAX_PASSES_PER_TARGET, MIN_NEW_CHARS

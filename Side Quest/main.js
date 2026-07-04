@@ -4124,16 +4124,40 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // OBJECT SEED — persist the resolved entity objects as the run's prior knowledge (the executor
             // reads these to build FROM what we hold, not re-derive it). Slice 2c consumes them fully.
             try { if (assignmentSeed && assignmentSeed.objects && assignmentSeed.objects.length) db.setMeta(`focus.${r.focus.id}.seed_objects`, JSON.stringify(assignmentSeed.objects).slice(0, 20000)); } catch {}
-            // SCOPE (guardrails): a bounded assignment (named specific entities) confines research to those
-            // targets and TERMINATES when covered — no open-ended crawl. Open = genuine discovery.
-            try { db.setMeta(`focus.${r.focus.id}.scope`, (assignmentSeed && assignmentSeed.bounded) ? 'bounded' : 'open'); } catch {}
-            try { if (assignmentSeed && assignmentSeed.intendedTargets && assignmentSeed.intendedTargets.length) db.setMeta(`focus.${r.focus.id}.intended_targets`, JSON.stringify(assignmentSeed.intendedTargets)); } catch {}
+            // SCOPE (guardrails + DRIFT FIX): a run is BOUNDED when the assignment named a concrete target —
+            // from the object-graph seed OR the intake classifier's extracted target. The seed's salient path
+            // can MISS a novel single company ("Emergence Water"), which left scope=open and let the run drift
+            // to the CEO's OTHER company once the (good) first draft was covered. A concrete classify target now
+            // bounds the run too; a category ("think tanks") stays OPEN discovery. Bounded → confined to these
+            // targets, TERMINATES when covered.
+            const _classifyTarget = (intakeRoute && intakeRoute.target) ? String(intakeRoute.target).trim() : '';
+            const _concrete = (() => { try { return require('./lib/research').isConcreteTarget(_classifyTarget); } catch { return false; } })();
+            const _bounded = !!(assignmentSeed && assignmentSeed.bounded) || _concrete;
+            const _intended = (assignmentSeed && assignmentSeed.intendedTargets && assignmentSeed.intendedTargets.length)
+              ? assignmentSeed.intendedTargets
+              : (_concrete ? [_classifyTarget] : []);
+            try { db.setMeta(`focus.${r.focus.id}.scope`, _bounded ? 'bounded' : 'open'); } catch {}
+            try { if (_intended.length) db.setMeta(`focus.${r.focus.id}.intended_targets`, JSON.stringify(_intended)); } catch {}
+            if (_bounded && _intended.length) console.log(`[focus] #${r.focus.id} BOUNDED to ${_intended.join(', ')} (drift guard)`);
             // PAGE-1 PLAN (Pillar 0) — author + store it now so it's reviewable up front + ready as page 1.
             // Seed it with the RESOLVED entities as known targets (a named-entity run starts FROM the object,
             // not "to be identified") — else empty targets → discovery states objective/approach/databases.
             const seedTargets = (assignmentSeed && assignmentSeed.targets) || [];
             let plan = null;
             try { plan = await generateResearchPlan(r.focus, { goal, targets: seedTargets, facet: (intakeRoute && intakeRoute.facet) || '', deep: !!(intakeRoute && intakeRoute.deep) }); } catch {}
+            // CONTRACT → CANVAS (Slice 1): START the document NOW with the plan (objective/approach/estimate)
+            // + a hierarchical facet TODO (Contacts nests the Puller sub-tree), via stable block ids so later
+            // passes update them in place. So the doc appears the instant the run starts — not when the first
+            // section lands — and Lucas can watch the portions fill in.
+            try {
+              const ce = require('./studio/canvas_emit');
+              if (plan) {
+                const cb = ce.contractBlock(plan, goal);
+                await canvasUpsertBlock({ focusId: r.focus.id, blockId: ce.contractBlockId(r.focus.id), title: goal, tabMode: 'RESEARCH', blockType: cb.blockType, data: cb.data });
+                await canvasUpsertBlock({ focusId: r.focus.id, blockId: ce.todoBlockId(r.focus.id), title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: ce.facetTodoMarkdown(plan, []) } });
+                console.log(`[contract] canvas doc started for #${r.focus.id} (${ce.portionsFromPlan(plan).length} portions)`);
+              }
+            } catch (e) { console.error('[contract] canvas emit failed:', e.message); }
             kickDirectedFocusDriver();
             created = { id: r.focus.id, kind: `${intakeRoute && intakeRoute.deep ? 'deep ' : ''}research run`, orgCount: 0, plan };
           }

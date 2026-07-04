@@ -104,5 +104,14 @@ ok(r.allTargetsCovered({ intended: ['John Curtis', 'R Street'], covered: ['John 
 ok(r.allTargetsCovered({ intended: [], covered: ['anything'] }) === false, 'allTargetsCovered: no intended (open run) → false (no bounded terminus)');
 ok(r.allTargetsCovered({ intended: ['Curtis Auto Sales'], covered: ['John Curtis (US)'] }) === false, 'allTargetsCovered: a drift org does NOT satisfy the intended person');
 
+// --- scope drift guard: isConcreteTarget (bounds a single named entity, leaves categories open) ---
+ok(r.isConcreteTarget('Emergence Water') === true, 'isConcreteTarget: a single named company → bounded (the drift fix)');
+ok(r.isConcreteTarget('Sen. Mike Lee') === true, 'isConcreteTarget: a named person → bounded');
+ok(r.isConcreteTarget('right-of-center think tanks') === false, 'isConcreteTarget: a category ("think tanks") → open discovery');
+ok(r.isConcreteTarget('all the companies in the article') === false, 'isConcreteTarget: "all … companies" → open');
+ok(r.isConcreteTarget('21 conservative organizations') === false, 'isConcreteTarget: "organizations" category → open');
+ok(r.isConcreteTarget('') === false && r.isConcreteTarget(null) === false, 'isConcreteTarget: empty/nil → false');
+ok(r.isConcreteTarget('a very long descriptive phrase that is clearly not a proper name') === false, 'isConcreteTarget: an over-long phrase → not a concrete entity');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

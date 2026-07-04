@@ -27,5 +27,34 @@ ok('countHeading is level-2 heading', h.blockType === 'heading' && h.data.level 
 ok('countHeading custom label', E.countHeading(3, 'people').data.text === '3 people researched');
 ok('countHeading clamps junk to 0', E.countHeading(undefined).data.text === '0 organizations researched' && E.countHeading(-5).data.text === '0 organizations researched');
 
+// ---- CONTRACT + TODO (Slice 1: contract starts the document) ----
+ok('block ids stable', E.contractBlockId(3361) === 'contract-3361' && E.todoBlockId(3361) === 'todo-3361');
+
+const plan = {
+  objective: 'Deep brief + contacts for Emergence Water.',
+  approach: 'Depth-first, KG then web + structured DBs.',
+  estimate: '4-6 hours',
+  databases: ['Echo KG', 'IRS 990', 'FEC'],
+  targets: ['Emergence Water'],
+  facets: ['Organizational mission', 'Leadership team and board', 'Comprehensive contact information (emails, phones)', 'Financial health and funding'],
+};
+const cb = E.contractBlock(plan, 'deep brief on Emergence Water');
+ok('contractBlock is paragraph w/ objective+approach+estimate+sources', cb.blockType === 'paragraph'
+  && /Objective:/.test(cb.data.markdown) && /Approach:/.test(cb.data.markdown) && /4-6 hours/.test(cb.data.markdown) && /Echo KG · IRS 990 · FEC/.test(cb.data.markdown));
+
+ok('portionsFromPlan prefers facets', JSON.stringify(E.portionsFromPlan(plan)) === JSON.stringify(plan.facets));
+ok('portionsFromPlan falls back to targets', JSON.stringify(E.portionsFromPlan({ targets: ['A', 'B'] })) === JSON.stringify(['A', 'B']));
+ok('portionsFromPlan empty → []', E.portionsFromPlan({}).length === 0);
+
+const md = E.facetTodoMarkdown(plan, []);
+ok('todo has a Progress heading', /^## Progress/m.test(md));
+ok('todo lists every facet as an unchecked box', plan.facets.every(f => md.includes(`- [ ] ${f}`)));
+ok('contacts facet nests the Puller sub-tree (indented)', /\n {2}- \[ \] Per exec — email \(domain pattern → Hunter\/Apollo verify\)/.test(md));
+ok('non-contact facet does NOT nest sub-tasks', !new RegExp(`- \\[ \\] Leadership team and board\\n {2}- \\[`).test(md));
+
+const mdDone = E.facetTodoMarkdown(plan, ['Organizational mission']);
+ok('todo checks off a completed portion', mdDone.includes('- [x] Organizational mission') && mdDone.includes('- [ ] Leadership team and board'));
+ok('todo with no portions → pending placeholder', /\(plan pending\)/.test(E.facetTodoMarkdown({}, [])));
+
 console.log(`\nsmoke_canvas_emit: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
