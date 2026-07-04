@@ -1,116 +1,118 @@
 # Forecasting Machine — Build Handoff / Status Log
 
-> **Durable state capture (2026-07-03) ahead of a context compact.** The forecasting suite = a downstream
+> **Durable state capture, refreshed 2026-07-03 for a context compact.** The forecasting suite = a downstream
 > R&D workspace for **world modeling / social forecasting / election prediction**. First target: **2026
-> midterms — balance of the House & Senate.** Everything below is BUILT + smoke-tested + (mostly) live-proven
-> unless marked PENDING. Companion memory: `forecast-suite.md`. Related docs listed in §7.
+> midterms — balance of the House & Senate.** The machine is BUILT, LIVE end-to-end, and **VALIDATED** against
+> 48 years of real outcomes. Companion memory: `forecast-suite.md`. Related docs listed in §9.
 
 ---
 
-## 1. What it is (one paragraph)
-A **live, correlated, scenario-generating forecast machine**: read structured signals (polls, fundamentals,
-news) → per-race models → a **correlated Monte-Carlo simulator** that rolls races up into **who controls each
-chamber** + joint government scenarios → react to breaking news on the fly. It is **downstream**: it CONSUMES
-Echo objects + the news lane + the API feed (read-only), DERIVES forecasts in its own store, and PRODUCES
-forecast/analysis objects onto the short-term→long-term memory rail. It is **pure R&D** — real validation is
-months out, so confidence comes from **backtests + calibration**, not from launch.
+## 1. What it is
+A **live, correlated, scenario-generating, self-scoring forecast machine**. It reads structured signals (polls,
+FEC, econ fundamentals, news) → per-seat models over the **full 435 House + 100 Senate universe** → a
+**correlated Monte-Carlo simulator** rolling seats up into chamber control + joint government scenarios →
+reacts to breaking news → and **scores its own trustworthiness** via a calibration harness. Downstream-only:
+consumes Echo / news lane / API feed read-only, derives locally, produces forecast/analysis objects.
 
-## 2. Pipeline (how the pieces connect)
+## 2. The LIVE pipeline (one call: `forecast_loop.runOnce`, main.js 30-min cadence)
 ```
-forecast_registry (race slate: VoteHub /subjects + Echo enrich, read-only)
-   → poll_average (per-race SIGNED margin)   [WIRED via forecast_loop.computeMargins; prior fallback]
-   → forecast_fundamentals (national ECONOMIC ENVIRONMENT → uniform swing, capped/audited)
-        ← econ_feed.environment ← api_stream getSnapshot (GDP/CPI/unrate/yields, read-only)
-   → forecast_reactor (news → per-race margin/σ perturbation, ON TOP of the environment baseline)
-        ← news_feed.events/momentum (news signals)  +  forecast_assess (gpt-oss judges direction)
-   → forecast_sim (correlated Monte-Carlo → chamber control + seat dist + govt scenarios)
-   → forecast_service.buildBalancePayload → the UI (studio) + (PENDING) forecast/analysis objects → 24h rail
+forecast_registry (VoteHub /subjects → race slate; year+chamber+primary filtered)
+  → poll_average (per-race SIGNED margin; candidate_party FEC-signs it; prior fallback)
+  → COVERAGE (coverage.js: expand to ALL 435 House + 35 up-Senate seats; 538 lean + incumbency priors;
+              polled seats override; not-up Senate → holdover counts) [replaces holdover lumps]
+  → FUNDAMENTALS (econ_feed ← api_stream getSnapshot → forecast_fundamentals: national econ lean, uniform)
+  → MIDTERM (uniform swing toward out-party; president=Rep 2026 → toward D; tunable prior 2.0)
+  → forecast_reactor (news → per-race margin/σ; gpt-oss assess GATED to competitive |margin|≤8 races)
+        ← news_feed.events/momentum  +  forecast_assess (gpt-oss:120b direction)
+  → forecast_sim (correlated Monte-Carlo → chamber control + seat p10/p90 + govt scenarios)
+  → forecast_service.buildBalancePayload → studio (forecast:balance IPC, cached in lastForecast)
 ```
-Two signal legs feed the sim: **fundamentals** (macro, national, uniform — the economy) and **news** (per-race
-shocks). Fundamentals is the correlated environment baseline; news perturbs individual races on top of it.
-★ **forecast_loop.js is the single call that runs this whole chain** (`runOnce`), fired on main.js's 30-min
-cadence (first run ~2m after boot) and cached in `lastForecast`; the `forecast:balance` IPC serves it and
-re-sims the same live slate on a seed override (the studio's "Re-run sim" jitter, now on REAL margins).
+Parallel: the **Python sidecar** runs heavy models (see §5); the **calibration harness** scores the chain (§6).
 
-## 3. BUILT + tested (status)
-**Signal adapters (Suite A, read-only sources):**
-- `poll_wikipedia.js` — Wikipedia poll-table parser (38 smoke; 332 real polls live). Free backbone.
-- `poll_votehub.js` — VoteHub REST API (approval/favorability/generic-ballot/races), no auth (27 smoke; 2,931+ live).
-- `poll_538legacy.js` — 538 CC-BY repo: pollster ratings (`bias_ppm` house-effect) + `raw_polls` (backtest) (20 smoke; 540 ratings + 20,466 historical live).
+## 3. BUILT + tested inventory (all pure + injected I/O + offline smoke unless noted)
+**Signal adapters:** `poll_wikipedia` (38), `poll_votehub` (27; live REST), `poll_538legacy` (20; ratings +
+raw_polls backtest data).
+**Models / core:** `poll_average` (31), `forecast_sim` (correlated MC; 20), `forecast_reactor` (news→perturb;
+assess-gated; 19), `forecast_registry` (slate + isPrimarySubject; 18), `forecast_assess` (gpt-oss:120b,
+num_predict≥1500; 15), `forecast_fundamentals` (econ lean; 12).
+**Bridges/contracts:** `news_feed` (news⇄forecast; events/momentum; 43), `econ_feed` (api_stream⇄forecast;
+FRED level→YoY; 13).
+**Party + universe:** `candidate_party` (name→party via FEC; 12), `seat_map` (Echo-native 2026 candidate
+universe; 20; NOT wired), `coverage` (full seat universe + 538 lean priors + incumbency + SENATE_2026 class +
+parseIncumbents; 20).
+**Capstone:** `forecast_loop` (`runOnce` = the whole chain; `recompute` pure core; assess-gate + applyMidterm; 35).
+**Processing/UI:** `forecast_service` (payload builders; 20), `renderer/forecast.{html,js}` (3-region studio:
+poll rail · balance-of-power · Work inspector with Coverage/Fundamentals/News/Race-ledger/**Model-scores** sections).
+**Trust layer:** `calibration` (Brier/logLoss/skill/reliability+ECE/RMSE/coverage/backtestPollAverage; 16),
+`backtest` (full-chain LOEO on presidential history + tuneSigma; 10).
+**Gate:** `npm test` = 125 offline smokes, ALL GREEN.
 
-**Models (Suite B):**
-- `poll_average.js` — quality/recency/house-effect weighted average + trend + modal-choice-set (31 smoke; live Trump approval 39.8/57.2).
-- `forecast_sim.js` — ★ correlated Monte-Carlo scenario simulator (chamber control, seat p10/p90, govt scenarios); own PRNG + Φ/inverse (20 smoke; correlation-fattens-tails proven).
-- `forecast_reactor.js` — news → race perturbation: VOLATILITY (σ↑, direction-free, immediate/live-mode) vs MARGIN SHIFT (needs gpt-oss attribution); provisional+audited+capped+decayed (19 smoke; demo P(win) 43→50 on breaking news).
-- `forecast_registry.js` — read-only race slate from VoteHub /subjects → sim-ready skeletons; Echo enrich hook; `isPrimarySubject` (party-primary filter) (18 smoke; 113 live races).
-- `candidate_party.js` — candidate NAME → party (A=Dem/B=Rep) via LIVE FEC. Pure match cores + async pre-resolve→sync `partyOf(choice)` (like assessBatch); cached, fail-safe → null=prior (12 smoke; live 63-101/147 resolved). Signs poll margins.
-- `seat_map.js` — the ECHO-native seat universe + `partyOf` (Phase-1 coverage substrate): parses Echo's 2026 FEC-bulk records → every seat + its candidates (deduped) + an exact offline `partyOf` (20 smoke, real shapes). Read-only via injected Echo query. NOT yet wired.
-- `forecast_assess.js` — gpt-oss:120b direction judgment (num_predict≥1500 floor); async assessBatch→sync lookup for the reactor (15 smoke; live "union endorses D"→favors A/medium/0.85).
+## 4. Data (data/elections/, gitignored; reproduced by `sidecar/fetch_data.py`)
+- **538 partisan lean** (fivethirtyeight/data, CC-BY): per-district (435) + per-state (50+DC) — the coverage
+  prior backbone. `538_partisan_lean_{districts,states}.csv`.
+- **MEDSL presidential** (state 1976-2024, via keithpotz MIT repo): `complete_data.csv` + `2024president.csv` —
+  the calibration/backtest ground truth + pres-lean.
+- **congress-legislators** (unitedstates project, public domain): `legislators-current.json` — 537 current
+  members → the incumbency term (House by district, Senate by class-2).
+- Live feeds (not files): VoteHub (polls, no auth), FEC (party via api_stream.pull), api_stream (FRED econ),
+  news lane (via news_feed).
+- **⚠ DATA GAP:** congressional election RESULTS (past House/Senate margins) are NOT freely available — Harvard
+  Dataverse MEDSL is guestbook-gated; FEC has no vote tallies (422); OpenElections is per-state/heavy. 538
+  partisan lean is the accessible substitute (pre-blended presidential lean). Consequence: congressional-specific
+  priors (midterm/incAdv/holdover) can't yet be BACKTESTED — only presidential mechanics are validated.
 
-**Bridges (read-only contracts, "never reach past"):**
-- `news_feed.js` — the news⇄forecast contract: `events`(corroborated), `momentum`(raw incl. CC volume), `raw`/`layers`/`digest`/`today` (36 smoke; live 151 stories + Trump 138 mentions/89 CC).
-- `econ_feed.js` — the **api_stream⇄forecast contract** (NEW): reads the seeded FRED snapshots via `api_stream.getSnapshot` and derives forecasting-shaped indicators (level + YoY% + 90-day trend; converts CPI/GDP LEVELS→rates). `environment()`/`indicators()` (13 smoke). This is the api_stream consumer the suite was missing.
-- `forecast_fundamentals.js` — the **FUNDAMENTALS leg** (NEW): `scoreEnvironment` maps the econ environment → a national `lean` (points toward A=Dem), incumbent-aware, capped (`envCap` 3), audited per-component, provisional; `applyToSlate` shifts every race margin uniformly; `assess` is the live entry (12 smoke). **Real-data verified 2026-07-03:** GDP +6.07% YoY / CPI +4.17% / unrate 4.2% → lean −0.17 (neutral) — a correct, modest incumbent tilt.
-- `api_stream` (other context) — the managed data surface: `getSnapshot(id)` + `pull()`. 6 datasets seeded live (FRED/Census). Contract: `docs/API_STREAM_TIEIN_HANDOFF.md`.
+## 5. The Python sidecar (`sidecar/`, docs/FORECAST_SIDECAR_DESIGN.md)
+Heavy compute layer — a concurrent **model POOL** (multiprocessing, cap cores-2; 24 cores here). Contract:
+`orchestrator.py` reads a job (stdin) → runs registered models in parallel → ModelResult JSON (stdout).
+- **`lib/sidecar.js`** = the JS⇄Python bridge (spawn, pipe job, parse; tries venv→launchers; fail-soft; 9 smoke).
+- **venv**: `sidecar/.venv` (uv, Python 3.12; numpy/pandas/scikit-learn/xgboost/scipy; gitignored — recreate via
+  `uv venv --python 3.12 .venv && uv pip install -r requirements.txt`).
+- **Models**: `poll_baseline`/`uniform_swing` (stubs), `fundamentals` (REAL: 538 lean + incumbency, stdlib),
+  `xgboost_quantile` (REAL: 3 quantile regressors, median+95%CI, trained on 612 pres state-years).
+- **`selftest.py`** 13/13 (concurrency + contract + real-lean lookup).
+- NOT wired into the live loop yet (the JS coverage prior is the live path; sidecar is for heavy/batch models).
 
-**The recompute loop (Suite B capstone) — ★ BUILT + wired:**
-- `forecast_loop.js` — the whole chain in one call. PURE core `recompute(races, signals, opts)` (react→sim→
-  payload, inject now/assessLookup) + LIVE `runOnce(opts)` (slate→signed margins→**fundamentals env lean**→
-  news→gpt-oss pre-assess→react→sim→payload; `work.fundamentals` carries the econ audit). Signs margins via
-  injected `partyOf` (Echo/FEC map or a label heuristic); un-polled/
-  un-attributable races fall back to a neutral PRIOR with wide σ and the run flags `illustrative`. Helpers:
-  `computeMargins`, `signMargin`, `buildAssessPairs`, `preAssess`, `slateEntities` (24 smoke, all green).
-- **main.js wiring (committed 7fbbe44, REBOOT-GATED):** a `FORECAST_LOOP_MS` (30m) cadence block runs `runOnce`
-  with live feeds (VoteHub subjects+polls bulk-fetched per poll-type, 538 ratings cached, cloud_logic.ask),
-  caches `lastForecast`; the `forecast:balance` IPC serves it + re-sims on a seed override; timers cleared on
-  shutdown. Downstream-only — reads connectors/news/cloud, writes nothing.
+## 6. VALIDATION — the machine scores itself (the big result)
+**Full-chain backtest** (`lib/backtest.js`, LOEO on 612 real presidential state-elections 1976-2024):
+- **Win Brier 0.115, skill +52.6% vs base rate; ECE 0.036 (WELL CALIBRATED — reliability tracks the diagonal:
+  p~.50→.45, .71→.66, .92→.94); margin RMSE 10.4; 95% coverage 0.91@σ9, TUNED σ=10 → 0.946.**
+- **Poll-aggregation backtest** (538 raw_polls, 20,466 polls/2,466 races): our weighting RMSE 7.89 beats naive
+  mean 8.04 (+1.9%) and latest-poll 8.47 (+6.9%).
+- **Model comparison** (same 612 elections): STRUCTURAL prior BEATS xgboost on every metric (RMSE 10.36 vs
+  12.08, Brier 0.115 vs 0.138, ECE 0.039 vs 0.046, coverage 0.946 vs 0.882) → lean→margin is near-linear; the
+  harness kept a fancier model from silently making it worse. Don't use xgboost for this mapping.
+- Scores are surfaced in the studio ("Model scores · backtest" section + reliability curve) via the
+  `forecast:calibration` IPC.
 
-**Processing + UI:**
-- `forecast_service.js` — main-process orchestration: `pollAverageWidget`, `balanceWidget` (illustrative slate — now the pre-first-run fallback), `buildBalancePayload`, `listWidgets` (20 smoke).
-- `renderer/forecast.html` + `forecast.js` — **the Forecasting STUDIO** (in My Workspace → Studios): 3-region glass-box — LEFT compact poll rail · CENTER Balance-of-Power (House/Senate meters + majority line + uncertainty band + scenarios) · RIGHT **Work inspector** (variable inputs + live simulator reads + "Re-run sim" seed-jitter). LIVE (screenshot-confirmed reboot). Wired: `forecast:balance`/`poll-average`/`widgets` IPC + `sq.forecast.*`.
-- Gate: all forecasting smokes registered in `scripts/run_smokes.js` (10+ entries), green.
+## 7. Design LAWS (do not relitigate)
+1. Two engines: deterministic MATH (numbers never through an LLM) + gpt-oss:120b for JUDGMENT (structure, num_predict≥1500).
+2. Downstream-only: read Echo/news/API; derive locally; produce forecast/analysis objects → 24h memory rail (emission still PENDING).
+3. Registry = read-only ingest (races/candidates are Echo objects; never proposed).
+4. **Calibration is the selection pressure** — nothing counts until scored; it already killed the xgboost mapping.
+5. No fake precision: perturbation/midterm/incumbency magnitudes are TUNABLE PRIORS, capped, provisional, audited, calibration-gated.
+6. Live-moment priority (Lucas): election nights/speeches → reactor low-latency mode off CC spikes.
+7. Separate DBs until heavier testing (isolated stores; only curated products memorialized).
+8. Every seat accounted for (full 435+100 universe), individually (per-seat prior/poll) AND as-a-whole (correlated sim).
 
-## 4. Design LAWS (do not relitigate)
-1. **Two engines:** deterministic MATH (forecast numbers never through an LLM; Python sidecar Stan/PyMC later) + gpt-oss:120b for JUDGMENT (structure not numbers; num_predict≥1500).
-2. **Downstream-only:** consume Echo/news/API read-only; derive locally; PRODUCE forecast/analysis objects onto the short-term→long-term (24h) memory rail (doc_store.land → promoteDocumentsPass → Echo), same as news evidence docs. NEVER rewrite the registry entities.
-3. **Registry = read-only ingest:** races/candidates are Echo objects (race≈event, candidate=person…); forecasting reads/enriches, never proposes. Whitelist caveat MOOT for us.
-4. **Calibration is the selection pressure AND guardrail** — no model/perturbation counts until scored (Brier/log/CRPS on 2014–2024). Self-generation without backtest = how gleipnir died.
-5. **No fake precision:** perturbation magnitudes are TUNABLE PRIORS, flagged provisional, capped, decayed, audited.
-6. **Live-moment priority (Lucas):** highest value = election nights / breaking speeches / press conferences → the reactor's low-latency LIVE MODE off the raw CC stream (react provisionally fast, firm-up on corroboration). `momentum.video_mentions` spike = the detector.
-7. **Separate DBs until heavier testing:** volatile working state = forecasting's own store; only curated products memorialized.
-8. **Model families for "band of many concepts":** open TS foundation models (Chronos/TimesFM/AutoGluon, all Apache-2.0) = zero-shot generalist; hierarchical reconciliation (Nixtla `hierarchicalforecast`) = parts↔whole coherence.
+## 8. PENDING / next (ordered by testability, Lucas's stated priority)
+- **REBOOT PENDING**: the studio Model-scores panel (799089a) + the refinements (b11efd7: assess-gate/midterm/
+  incumbency) + coverage (649a4d8) are committed but need the app restarted to be fully live. Post-reboot the
+  `[forecast]` log shows `coverage 470 seats · midterm +2.0 · N/420 judged`.
+- **Congressional outcome data** — the key unlock: a real source for past House/Senate margins (OpenElections
+  aggregation is the realistic path) → lets the harness BACKTEST + tune midterm/incAdv/holdover (currently guesses).
+- **Apply tuned σ** to the live sim (backtest says σ≈10 for presidential; congressional needs its own).
+- **Exact Echo Senate holdover composition** (replace the {A:34,B:31} estimate; seat_map has the data).
+- **Bayesian/Stan** sidecar model (Economist/Linzer, MIT-liftable) + SHAP explainability — each scored on arrival.
+- **Forecast/analysis object emission** to the 24h memory rail (§7.2 — gate ON when trustworthy).
+- Poll-quality pass (VoteHub senate margins skew D — hypothetical/favorability matchups).
 
-## 5. PENDING (next builds)
-- **✅ DONE — the recompute loop + main.js wiring** (`forecast_loop.js` + the cadence block). Awaiting a REBOOT to go live (main.js changed). Live-mode fast-tick off `detectLive` is a follow-on (the loop already reports `live`/`live_entities`; a shorter interval when live is the next refinement).
-- **✅ DONE — Party attribution (`partyOf`) via FEC + primary filter.** `lib/candidate_party.js` resolves each VoteHub candidate NAME → party through FEC (`api_stream.pull('fec','candidates/search')`), cached; `signMargin` now requires opposite parties (rejects same-party/top-two); `registry.isPrimarySubject` drops party-primary subjects ("2026 Texas Democratic") from the general slate. **LIVE-PROVEN 2026-07-03:** 63/147 candidates resolved → **16 races on real signed margins (illustrative=false)**, directionally correct (MA D+19, KS R+8, MI D+1). Wired in main.js. Refinements: nickname/unfiled-candidate match rate (63/147≈43%; unmatched → prior, safe).
-- **Calibration/backtest harness:** score the chain vs 2014–2024 (`poll_538legacy.raw_polls` = poll-vs-actual). Build BEFORE trusting live output.
-- **★ COVERAGE — the full seat universe (in progress; the topline-trust fix).** Replaces the crude holdover LUMPS with a real per-seat map so the topline isn't distorted by which races got polled (the Senate-95% artifact).
-  - **Data source = Echo (the main DB), confirmed:** ~5,700 person records for cycle 2026 (entity_subtype us_senator/us_representative) carry structured FEC fields — `party: REP|DEM`, `office: S ME 00 / H AL 01` (chamber+state+district), `cycle`. Incumbents + every FILED candidate are already there (FEC bulk mended in). Discovery = READ + disambiguate Echo, NOT scrape. Only un-filed/late challengers need external discovery.
-  - **Phase 1 BUILT — `lib/seat_map.js` (20 smoke, real record shapes):** parses Echo records → the seat universe (every seat + its candidate set, deduped) + an Echo-native `partyOf(name)` (exact, offline; upgrades the 69% live-FEC fuzzy match). PURE cores + injected Echo query (`loadFromEcho`). NOT yet wired into the loop/main.js (Phase 2).
-  - **Phase 2 — the PRIOR MODEL (Lucas's spec, LOCKED):** an unpolled seat's prior = **past TWO elections' margins** (captures midterm-vs-general turnout differences) + **≥1 counter-variable** (ideally more); **minimum fallback** = the Trump up/down (presidential) margin in that geography as a partisan lean; **every prior-based race FLAGGED for deeper research** (→ the verifiable-research track).
-  - **⚠ Phase-2 data GAP (honest):** past-election RESULTS + Trump-by-geography are **NOT structured in Echo** (search finds only Wikipedia prose; the 287 poll entities are current polls, not results). So Phase 2 has a real data-acquisition dependency: an FEC historical-results pull (per-seat past margins) + a presidential-lean source (state-level easy; CD-level needs a dataset e.g. DK Elections). Scope this before building the prior.
-  - Wiring: read Echo through `echo_suit` (same read-only path `registry.enrich` uses); seats + priors merge with the VoteHub-polled slate (polls override priors), replacing `illustrativeSlate()`/holdover lumps.
-- **Forecast/analysis object emission** to the 24h memory rail (§4.2 shapes) — gate ON when forecasts are trustworthy.
-- **Python sidecar (B0):** for the bespoke Bayesian model + foundation models + Monte Carlo at scale; harvest gleipnir's FRED/BLS/Census `APIClient` + R²-weighted ensemble + horizon-widening fan-chart formula (`docs/GLEIPNIR_SALVAGE.md`).
-- **UI tweaks batched (next reboot):** scenario-label wrap FIXED (uncommitted); optional: topbar right-padding, datatable scroll affordance.
+## 9. Related docs
+`MODEL_METHODOLOGY_RESEARCH.md` (3 real models deep-read: keithpotz XGBoost / TheEconomist Bayesian / 24cast
+SHAP; both reference repos MIT) · `FORECAST_SIDECAR_DESIGN.md` (pool architecture) · `WORLD_MODEL_FORECAST_BRAINSTORM.md`
+· `POLLING_SOURCE_MAP.md` · `RECURSIVE_FORECASTING_RESEARCH.md` · `GLEIPNIR_SALVAGE.md` · `API_STREAM_TIEIN_HANDOFF.md`.
 
-## 6. Gotchas / caveats
-- Balance margins are **synthetic/illustrative** (labeled) until the recompute loop wires real ones.
-- Real-time **market data deferred** (polygon 401 / fmp 403 dead keys) — market-dependent models degrade gracefully.
-- `news_feed.digest()` returns 0 until the nightly daily pass writes a `news_days` row (works, no data yet).
-- Entity-routing in reactor/news_feed is **string-match**; upgrade path = graph traversal (races+news both Echo events).
-- Older/RSS news stories have empty `entity_set` (only video-reconstruction populates entities).
-- gpt-oss:120b MUST use num_predict≥1500 (else empty content — starves in `thinking`).
-- **Committed 7fbbe44** (whole forecasting suite, 30 files, on `feature/idle-passive-intelligence`) — the machine will run on the next app reboot (main.js cadence is reboot-gated).
-
-## 7. Related docs
-`WORLD_MODEL_FORECAST_BRAINSTORM.md` (vision/scope/decisions) · `POLLING_SOURCE_MAP.md` (538-replacement sources) ·
-`RECURSIVE_FORECASTING_RESEARCH.md` (meta-forecaster + hierarchical) · `GLEIPNIR_SALVAGE.md` (port list) ·
-`API_STREAM_TIEIN_HANDOFF.md` (fundamentals contract).
-
-## 8. Next actions (ordered)
-1. ✅ Recompute loop (`lib/forecast_loop.js`) + main.js cadence wiring + IPC — BUILT, gate green (24 smoke). **REBOOT** to run it live.
-2. Post-reboot: watch the `[forecast] recompute:` log line (polled/total races, House/Senate P(D), timing) — confirm the machine runs against live VoteHub + news.
-3. Party attribution (`partyOf` candidate→party map) — turns `prior` margins into real signed ones (illustrative → real).
-4. Calibration/backtest harness (score vs history).
-5. Forecast/analysis object emission to the 24h memory rail.
+## 10. Commit trail (this session, on `feature/idle-passive-intelligence`)
+7fbbe44 suite+recompute-loop · 95f2ed9 econ fundamentals · 54194c9 FEC party+primary · 8bc6847 glass-box inspector ·
+c3fd055 seat_map · 171be21 sidecar Phase-0 · 6327c0e data+fundamentals model · c36a4d1 sidecar bridge ·
+252a836 venv+xgboost · 649a4d8 coverage · b11efd7 assess-gate+midterm+incumbency · ee9e799 calibration harness ·
+46fffed full-chain backtest · 76b6d61 xgboost-vs-structural · 799089a studio model-scores panel.
