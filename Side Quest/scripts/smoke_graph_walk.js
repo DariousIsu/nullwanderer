@@ -165,6 +165,26 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   ok(eGrown.built === false && eGrown.held === 1, 'growAround: a missing anchor with no citable existence is HELD, not minted');
   ok(!ecalls.some(c => c[0] === 'propose_entity'), 'growAround: no propose_entity for an uncitable object (no hallucinated node)');
 
+  // --- fetchLayeredSources (Slice 0.5): WEB-first → local corpus → search, every source cited (url) ---
+  const okPage = async (url) => ({ ok: true, url, title: 'T', text: 'x'.repeat(500) });
+  const badPage = async (url) => ({ ok: false, url, error: 'HTTP 429' });          // throttled/blocked live fetch
+  const wiki = (n) => 'https://en.wikipedia.org/wiki/' + String(n).replace(/\s+/g, '_');
+  const kb = async () => [{ source: 'echo:wikipedia', content: 'a corpus passage about the entity' }];
+  const search = async () => ({ results: [{ title: 'r', snippet: 'a web snippet', url: 'https://ex.com/r' }] });
+
+  const s1 = await G.fetchLayeredSources('James Inhofe', { fetchPage: okPage, recallKnowledge: kb, webSearch: search, wikiUrl: wiki });
+  ok(s1.length === 1 && s1[0].source === 'web:wikipedia' && /wikipedia\.org\/wiki\/James_Inhofe/.test(s1[0].url), 'fetchLayeredSources: LIVE page FIRST (web:wikipedia + real url)');
+  const s2 = await G.fetchLayeredSources('James Inhofe', { fetchPage: badPage, recallKnowledge: kb, webSearch: search, wikiUrl: wiki });
+  ok(s2.length === 1 && s2[0].source === 'echo:wikipedia' && !!s2[0].url && !!s2[0].text, 'fetchLayeredSources: live miss → LOCAL corpus (cited, url synthesized)');
+  const s3 = await G.fetchLayeredSources('X', { fetchPage: badPage, recallKnowledge: async () => [], webSearch: search, wikiUrl: wiki });
+  ok(s3.length === 1 && s3[0].source === 'web:search' && s3[0].url === 'https://ex.com/r', 'fetchLayeredSources: live+corpus miss → web search (last resort)');
+  const s4 = await G.fetchLayeredSources('X', { fetchPage: badPage, recallKnowledge: async () => [], webSearch: async () => ({ results: [] }), wikiUrl: wiki });
+  ok(s4.length === 0, 'fetchLayeredSources: all sources dry → [] (nothing to cite)');
+  ok((await G.fetchLayeredSources('', { fetchPage: okPage, wikiUrl: wiki })).length === 0, 'fetchLayeredSources: empty name → []');
+  const shortPage = async (url) => ({ ok: true, url, text: 'tiny' });   // <200 chars → not enough, fall through
+  const s5 = await G.fetchLayeredSources('Y', { fetchPage: shortPage, recallKnowledge: kb, webSearch: search, wikiUrl: wiki });
+  ok(s5[0].source === 'echo:wikipedia', 'fetchLayeredSources: a too-short live page falls through to the corpus');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

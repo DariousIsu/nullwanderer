@@ -1476,7 +1476,10 @@ async function runGraphWalkMove(recentTurns) {
       return text;
     } catch { return null; }
   };
-  const web = async (q) => { try { const { results } = await webSearch(q); return (results || []).map(r => ({ title: r.title, text: r.snippet, url: r.url })); } catch { return []; } };
+  // WEB-FIRST source acquisition (Slice 0.5): live page → local Echo corpus → web search. Replaces bare
+  // DDG scraping (throttled + snippet-only). Every source carries a url so the citation gate can grade it.
+  const wikiUrl = (n) => 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String(n || '').trim().replace(/\s+/g, '_'));
+  const web = async (q) => graphWalk.fetchLayeredSources(q, { fetchPage, recallKnowledge: (nm, o) => echoSuit.recallKnowledge(nm, o), webSearch, wikiUrl, log: (m) => console.log(m) });
   const recall = async (name) => { try { return await echoSuit.recallObject(name); } catch { return null; } };
   const dispatch = async (tag) => { try { return await echoSuit.dispatch(tag, { autonomous: true }); } catch { return null; } };
   const kgNeighbors = async (id) => {

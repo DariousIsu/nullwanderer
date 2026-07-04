@@ -251,6 +251,40 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, log
   return { built: gap.kind === 'missing' && entities > 0, entities, connections, related, summary: String(dossier.summary || '').trim(), held };
 }
 
+// WEB-FIRST layered source acquisition for an anchor (replaces bare DDG scraping — throttled + snippet-
+// only + no citable artifact). Order: LIVE page (freshest — the entity's Wikipedia article; redirects
+// resolve name variants like James→Jim Inhofe) → LOCAL Echo corpus (offline, robust FTS name-match) →
+// web search (last resort). Returns normalized CITED sources [{text, url, source}] — every source carries
+// a url so the citation gate can grade it. Pure; every fetcher injected → offline-testable.
+async function fetchLayeredSources(name, { fetchPage, recallKnowledge, webSearch, wikiUrl, log } = {}) {
+  const clean = String(name || '').trim();
+  if (!clean) return [];
+  // 1) LIVE page first — fresher than the local ZIM snapshot; a real url → archivable to a grade-A source.
+  if (typeof fetchPage === 'function' && typeof wikiUrl === 'function') {
+    try {
+      const url = wikiUrl(clean);
+      const p = await fetchPage(url);
+      if (p && p.ok && p.text && p.text.length > 200) {
+        return [{ text: String(p.text).slice(0, 4000), url: p.url || url, source: 'web:wikipedia', title: p.title || '' }];
+      }
+    } catch (e) { log && log('[graph-walk] live fetch failed: ' + (e && e.message)); }
+  }
+  // 2) LOCAL corpus — Echo's Wikipedia/general FTS (no network, resolves name variants by search).
+  if (typeof recallKnowledge === 'function') {
+    try {
+      const kb = (await recallKnowledge(clean, { topK: 5 })) || [];
+      const rows = kb.map((h, i) => ({ text: h.content, url: h.url || (h.source ? `${h.source}#${i + 1}` : null), source: h.source || 'echo:kb' })).filter(h => h.text && h.url);
+      if (rows.length) return rows;
+    } catch (e) { log && log('[graph-walk] corpus recall failed: ' + (e && e.message)); }
+  }
+  // 3) WEB SEARCH — last resort (snippet-only, throttle-prone).
+  if (typeof webSearch === 'function') {
+    try { const { results } = await webSearch(clean); return (results || []).map(r => ({ text: r.snippet, url: r.url, source: 'web:search' })).filter(h => h.text && h.url); }
+    catch (e) { log && log('[graph-walk] web search failed: ' + (e && e.message)); }
+  }
+  return [];
+}
+
 // One full graph-building MOVE. Orchestrates anchor → grow → record → voice. Returns a result the
 // caller uses to (optionally) voice one line and log. Never throws (fail-soft everywhere).
 async function runMove(deps = {}) {
@@ -311,7 +345,7 @@ async function runMove(deps = {}) {
 }
 
 module.exports = {
-  runMove, extractCandidates, assessGaps, growAround, proposeEntity, proposeRelation,
+  runMove, extractCandidates, assessGaps, growAround, fetchLayeredSources, proposeEntity, proposeRelation,
   parseJsonLoose, extractProperNouns, classifyObject, rankGaps, visitKey,
   loadVisited, visitedKeySet, recordVisited, buildCandidatePrompt, buildDossierPrompt,
   THIN_DEGREE, THIN_FACTS, WALK_MAX_NODES, WALK_MAX_CONNECTIONS, MAX_CANDIDATES, VISITED_TTL_MS, VISITED_KEY
