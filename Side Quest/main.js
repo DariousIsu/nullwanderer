@@ -982,6 +982,23 @@ app.whenReady().then(() => {
     const fcNorm = (s) => String(s == null ? '' : s).trim().toLowerCase();
     let ratingsCache = null;   // 538 pollster ratings — slow-moving; fetched once per process
     const partyCache = new Map();   // candidate name → party ('A'|'B'|null) via FEC; static per person, persists across cycles
+    // COVERAGE: 538 partisan-lean data (all 435 districts + 50 states), read once from data/elections
+    // (fetched by sidecar/fetch_data.py). Gives every unpolled seat a real prior so the sim runs the full map.
+    const coverageLib = require('./lib/coverage');
+    let leanData = null;
+    const loadLeans = () => {
+      if (leanData !== null) return leanData;
+      try {
+        const p = require('path'), fs = require('fs'), dir = p.join(__dirname, 'data', 'elections');
+        const districts = coverageLib.parseLeanCsv(fs.readFileSync(p.join(dir, '538_partisan_lean_districts.csv'), 'utf8'));
+        const states = coverageLib.parseLeanCsv(fs.readFileSync(p.join(dir, '538_partisan_lean_states.csv'), 'utf8'));
+        leanData = (Object.keys(districts).length && Object.keys(states).length) ? { districts, states } : false;
+      } catch { leanData = false; }
+      return leanData;
+    };
+    // Senate holdover composition (seats NOT up in 2026), by caucus — ESTIMATE as of 2025 (53R/47D; Class 2 up
+    // ~22R/13D). Approximate until exact Echo Senate composition is wired; override via env.
+    const SENATE_HOLDOVERS = { A: parseInt(process.env.SENATE_HOLDOVER_A || '', 10) || 34, B: parseInt(process.env.SENATE_HOLDOVER_B || '', 10) || 31 };
     const runForecastLoop = async () => {
       try {
         // one bulk poll fetch per race poll-type → index by subject (avoids an HTTP call per race)
@@ -1024,6 +1041,7 @@ app.whenReady().then(() => {
           partyOf,                                                 // FEC-resolved candidate→party → signs the poll margins
           ask: cloud ? cloud.ask : null,
           getSnapshot: require('./lib/api_stream').getSnapshot,   // FUNDAMENTALS leg: seeded econ signals (GDP/CPI/unrate/yields) → national environment lean
+          coverage: (() => { const L = loadLeans(); return L ? { districts: L.districts, states: L.states, senateUp: coverageLib.SENATE_2026, senateHoldovers: SENATE_HOLDOVERS } : null; })(),   // full 435+35 universe from 538 lean; polled seats override
           // resolve (read-only Echo enrichment) intentionally left off the hot loop — margins/sim don't need
           // echo_ref, and enriching the whole slate every cycle would hammer Echo. Opt-in follow-on.
         });
@@ -1031,7 +1049,8 @@ app.whenReady().then(() => {
           lastForecast = res;
           const fx = res.work.fundamentals;
           const env = fx && fx.has_data ? ` · env ${fx.lean > 0 ? '+' : ''}${fx.lean} (${fx.favors})` : '';
-          console.log(`[forecast] recompute: ${res.work.margins.polled}/${res.work.margins.total} races polled · House P(D) ${(res.payload.house.pD_control * 100).toFixed(0)}% · Senate P(D) ${(res.payload.senate.pD_control * 100).toFixed(0)}%${env}${res.live ? ' · LIVE' : ''} · ${res.work.timing_ms}ms`);
+          const cov = res.work.coverage ? ` · coverage ${res.work.coverage.races} seats` : '';
+          console.log(`[forecast] recompute: ${res.work.margins.polled}/${res.work.margins.total} polled${cov} · House P(D) ${(res.payload.house.pD_control * 100).toFixed(0)}% · Senate P(D) ${(res.payload.senate.pD_control * 100).toFixed(0)}%${env}${res.live ? ' · LIVE' : ''} · ${res.work.timing_ms}ms`);
         } else if (res) { console.log(`[forecast] recompute skipped: ${res.error}`); }
       } catch (e) { console.error('[forecast] recompute loop failed:', e.message); }
     };

@@ -107,6 +107,17 @@ ok('buildAssessPairs: keeps only corroborated + touching (1 of 3)', pairs.length
   const azF = resF.work.inputs.races.find((r) => r.subject === '2026 Arizona');
   ok('runOnce: national env lean applied to race margins (env_delta + base_margin_pre_env set)', azF.env_delta > 0 && azF.base_margin_pre_env === 5);
 
+  // COVERAGE tie-in: expand to the full seat universe from 538-style lean fixtures (polled seats override priors)
+  const covRes = await L.runOnce({ now: NOW, fetchSubjects, getRacePolls, ask, config: { iterations: 4000, seed: 4 },
+    coverage: {
+      districts: { 'AZ-6': -2, 'NH-2': 3, 'CA-22': 10.3, 'TX-1': -50 },
+      states: { Arizona: -7, 'New Hampshire': 2, Texas: -13 },
+      senateHoldovers: { A: 20, B: 22 },
+    } });
+  ok('runOnce: coverage expands to the full universe (districts + up-senate)', covRes.work.coverage && covRes.work.coverage.races >= 5, JSON.stringify(covRes.work.coverage));
+  ok('runOnce: coverage keeps polled seats + adds lean priors', covRes.work.coverage.polled >= 2 && covRes.work.coverage.lean >= 3);
+  ok('runOnce: coverage sets senate holdovers, zero house holdovers', covRes.work.inputs.config.holdovers.house.A === 0 && covRes.work.inputs.config.holdovers.senate.B === 22);
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

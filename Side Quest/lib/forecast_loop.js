@@ -26,6 +26,7 @@ const assess = require('./forecast_assess');
 const sim = require('./forecast_sim');
 const service = require('./forecast_service');
 const fundamentals = require('./forecast_fundamentals');
+const coverage = require('./coverage');
 
 // Sim defaults for the 2026 midterm balance target. holdovers = safe/unpolled seats folded in (the slate is
 // only the POLLED universe); majority = control threshold per chamber. Overridable per run + by calibration.
@@ -170,6 +171,30 @@ async function runOnce(opts = {}) {
   // 2. MARGINS — signed per-race poll averages (prior fallback).
   races = await computeMargins({ races, getRacePolls: opts.getRacePolls, ratings: opts.ratings, partyOf: opts.partyOf, now, cfg: opts.avgCfg || {}, priorSigma: opts.priorSigma });
 
+  // 2a. COVERAGE — expand the polled slate into the FULL seat universe (all 435 House + up-Senate seats), priors
+  // from 538 partisan lean; a polled seat keeps its poll margin. Replaces the holdover LUMPS so the sim runs on
+  // the real map (fixes the "which races got polled" topline distortion). opts.coverage = { districts, states,
+  // senateUp?, senateHoldovers?, incumbentBySeat?, cfg? }. Fail-soft: absent → the polled slate runs as before.
+  let covCounts = null;
+  if (opts.coverage && opts.coverage.districts) {
+    const polledBySeat = {};
+    for (const r of races) {
+      const sid = coverage.seatIdForRace(r);
+      if (sid) polledBySeat[sid] = { margin: r.margin, margin_source: r.margin_source, sigma: r.sigma, n_polls: r.n_polls };
+    }
+    const senateUp = opts.coverage.senateUp
+      || [...new Set(races.filter((r) => r.chamber === 'senate').map((r) => registry.parseSubject(r.subject).state || r.state).filter(Boolean))];
+    const cov = coverage.buildCoverage({
+      districts: opts.coverage.districts, states: opts.coverage.states, senateUp,
+      senateHoldovers: opts.coverage.senateHoldovers, polledBySeat,
+      incumbentBySeat: opts.coverage.incumbentBySeat || {}, cfg: opts.coverage.cfg,
+    });
+    races = cov.races;
+    config.holdovers = cov.holdovers;
+    config.majority = cov.majority;
+    covCounts = cov.counts;
+  }
+
   // 2b. FUNDAMENTALS — the national ECONOMIC ENVIRONMENT (api_stream econ signals via econ_feed) → a uniform
   // swing applied to every race margin, BEFORE news. News is a per-race shock ON TOP of this environment
   // baseline. Fail-soft: no getSnapshot / no data → lean 0 → margins untouched.
@@ -202,6 +227,7 @@ async function runOnce(opts = {}) {
   res.work.margins = { total: races.length, polled, prior: races.length - polled };
   res.work.assess = { pairs: pa.n_pairs, assessed: pa.assessed };
   res.work.fundamentals = econScore;               // national economic environment lean + component audit (null if no econ data)
+  if (covCounts) res.work.coverage = covCounts;    // full-universe coverage (races, polled vs lean, senate_up)
   res.live_entities = reactor.detectLive(momentum, { cfg: opts.reactorCfg });
   return res;
 }
