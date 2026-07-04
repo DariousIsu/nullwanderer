@@ -6084,7 +6084,11 @@ async function runDirectedResearchPass(focus) {
     // ONE live-growing canvas block per target (the "building-project document"): stable block_id so the
     // draft FLESHES OUT in place as passes run, then finalizes into the cloud-organized section on advance.
     const secBlockId = `sec-${focus.id}-${String(target.name).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 32)}`;
-    const adv = rs.decideAdvance({ passes: target.passes, newChars, saturated: p.saturated });
+    // FACET-AWARE cap: a SINGLE bounded deep target keeps deepening past the base 6-pass cap (up to the deep
+    // ceiling) while facets are still uncovered + passes stay productive — so a 6-facet brief actually finishes
+    // its checklist instead of being force-finalized half-covered (the #3364 thin-doc bug).
+    const deepTarget = scope === 'bounded' && Array.isArray(intended) && intended.length <= 1;
+    const adv = rs.decideAdvance({ passes: target.passes, newChars, saturated: p.saturated, uncovered: uncovered.length, deep: deepTarget });
     if (adv.advance) {
       // CLOUD ORGANIZE this target → one clean section (the usable DRAFT), appended to the deliverable NOW.
       let section = '';

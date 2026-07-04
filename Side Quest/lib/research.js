@@ -11,7 +11,8 @@
  */
 'use strict';
 
-const MAX_PASSES_PER_TARGET = 6;   // depth cap per org — "a decent percentage", not infinite
+const MAX_PASSES_PER_TARGET = 6;   // depth cap per org in a MULTI-org run — "a decent percentage", not infinite
+const MAX_PASSES_DEEP_TARGET = 18; // a SINGLE bounded deep target may work each facet (6-facet brief needs >6)
 const MIN_NEW_CHARS = 220;         // a deepen pass adding less than this = diminishing returns → advance
 
 // Parse one research pass. The prompts make the operator end with a control line:
@@ -48,12 +49,17 @@ function newContentChars(existing, body) {
   return novel;
 }
 
-// Stay on the target or advance to the next one. Advance when the model says it's SATURATED, when the
-// depth cap is hit, or when a pass (after the first couple) stops adding meaningful new material.
-function decideAdvance({ passes = 1, newChars = 0, saturated = false, maxPasses = MAX_PASSES_PER_TARGET, minNew = MIN_NEW_CHARS } = {}) {
+// Stay on the target or advance to the next one. Advance when the model says it's SATURATED, when a pass
+// (after the first couple) stops adding meaningful new material, or when the depth cap is hit. FACET-AWARE:
+// a SINGLE bounded deep target (deep=true) with facets STILL uncovered keeps deepening past the base cap
+// (up to MAX_PASSES_DEEP_TARGET) as long as passes stay productive — a 6-facet brief needs more than 6
+// passes, and the flat cap was force-finalizing a half-covered doc (#3364). Diminishing-returns still
+// self-limits, so a genuinely sparse 1-person company bows out early instead of grinding "not found".
+function decideAdvance({ passes = 1, newChars = 0, saturated = false, uncovered = 0, deep = false, maxPasses = MAX_PASSES_PER_TARGET, minNew = MIN_NEW_CHARS } = {}) {
   if (saturated) return { advance: true, reason: 'saturated' };
-  if (passes >= maxPasses) return { advance: true, reason: 'pass cap' };
   if (passes >= 2 && newChars < minNew) return { advance: true, reason: 'diminishing returns' };
+  const cap = (deep && uncovered > 0) ? Math.max(maxPasses, MAX_PASSES_DEEP_TARGET) : maxPasses;
+  if (passes >= cap) return { advance: true, reason: cap > maxPasses ? 'deep cap' : 'pass cap' };
   return { advance: false, reason: 'keep deepening' };
 }
 
@@ -289,5 +295,5 @@ module.exports = {
   facetToolset, buildCoveragePlan, searchSignature,
   pickEnrichTarget, facetLabel, buildEnrichPrompt, buildOrganizeEnrichPrompt,
   buildWebLanePrompt, buildDeepLanePrompt, buildMergeLanesPrompt,
-  MAX_PASSES_PER_TARGET, MIN_NEW_CHARS
+  MAX_PASSES_PER_TARGET, MAX_PASSES_DEEP_TARGET, MIN_NEW_CHARS
 };

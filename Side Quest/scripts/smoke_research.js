@@ -137,5 +137,13 @@ const dpu = r.buildDeepenPrompt({ goal: 'g', target: 'X', facets: [], uncovered:
 ok(/FACETS STILL MISSING/.test(dpu) && /Financial health/.test(dpu) && /Recent projects/.test(dpu), 'buildDeepenPrompt: lists the uncovered facets to steer off a loop');
 ok(/RE-WORDED version of a listed search counts as the SAME/.test(r.buildDeepenPrompt({ goal: 'g', target: 'X', facets: [], visited: ['search: a b c'] })), 'buildDeepenPrompt: visited block forbids re-worded repeats');
 
+// --- facet-aware pass cap: a single bounded deep target works its facets past the base cap (#3364 thin-doc fix) ---
+ok(r.decideAdvance({ passes: 6, newChars: 800, saturated: false }).advance === true, 'decideAdvance: base 6-pass cap unchanged for a multi-org run (deep=false)');
+ok(r.decideAdvance({ passes: 6, newChars: 800, uncovered: 3, deep: true }).advance === false, 'decideAdvance: deep target + uncovered facets + productive → KEEP deepening past 6 (was force-finalizing)');
+ok(r.decideAdvance({ passes: 18, newChars: 800, uncovered: 3, deep: true }).advance === true && r.decideAdvance({ passes: 18, newChars: 800, uncovered: 3, deep: true }).reason === 'deep cap', 'decideAdvance: deep target hits the deep ceiling → advance (deep cap)');
+ok(r.decideAdvance({ passes: 6, newChars: 800, uncovered: 0, deep: true }).advance === true, 'decideAdvance: deep target with ALL facets covered → base cap (do not over-work)');
+ok(r.decideAdvance({ passes: 3, newChars: 100, uncovered: 5, deep: true }).advance === true && r.decideAdvance({ passes: 3, newChars: 100, uncovered: 5, deep: true }).reason === 'diminishing returns', 'decideAdvance: diminishing returns still self-limits a deep run (sparse 1-person company bows out)');
+ok(r.decideAdvance({ passes: 2, newChars: 900, saturated: true }).advance === true, 'decideAdvance: SATURATED always advances');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
