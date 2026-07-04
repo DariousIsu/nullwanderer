@@ -1,0 +1,10 @@
+# Forecasting sidecar — Python deps for the REAL models (Phase 1+). The skeleton (orchestrator + stub models +
+# selftest) is stdlib-only and needs NONE of these. Bootstrap with uv on Python 3.12 (3.13 lacks some wheels):
+#   uv venv --python 3.12 .venv  &&  uv pip install -r requirements.txt
+numpy>=1.26
+pandas>=2.1
+scikit-learn>=1.4
+xgboost>=2.0
+shap>=0.44
+# bayesian capstone (Layer C) — add when building the dynamic-Bayesian model:
+# cmdstanpy>=1.2
