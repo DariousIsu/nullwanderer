@@ -12,7 +12,7 @@ let G = null;             // force-graph instance
 let full = { nodes: [], links: [] };   // pristine current-mode graph (string-keyed links)
 let selected = new Set(); // active entity-type filter
 let hovered = null;
-let mode = 'overview', submitted = '';
+let mode = 'overview', submitted = '', submittedQuery = '';
 // --- demo animation state (cosmetic): shimmer the focal node's edges + pulse on each move ---
 let focalId = null, pulseAt = 0;
 const linkEnd = (x) => (x && typeof x === 'object') ? x.id : x;
@@ -121,9 +121,17 @@ async function loadOverview() {
   mode = 'overview'; submitted = ''; backBtn.hidden = true; setOverlay('Loading corpus overview…');
   try { setData(await window.sq.kg.overview(), 'overview'); } catch (e) { setOverlay(String(e.message || e), 'fail'); }
 }
-async function focus(name) {
-  submitted = name; qEl.value = name; ddEl.hidden = true; setOverlay('Walking the graph…');
-  try { setData(await window.sq.kg.ego(name, Number(hopsEl.value)), 'ego'); } catch (e) { setOverlay(String(e.message || e), 'fail'); }
+// focus(displayName, opt): query_graph is name-based and needs the EXACT stored name (with its "[…]" tag),
+// but we show the clean name. opt.query = the exact name to walk (defaults to displayName). opt.soft = a
+// follow auto-recenter: if it misses, keep the current graph instead of blanking (a dead panel mid-demo).
+async function focus(name, opt = {}) {
+  const queryName = opt.query || name;
+  submitted = name; submittedQuery = queryName; qEl.value = name; ddEl.hidden = true; setOverlay('Walking the graph…');
+  try {
+    const res = await window.sq.kg.ego(queryName, Number(hopsEl.value));
+    if (opt.soft && res && (!res.ok || res.error) && full.nodes.length) { setOverlay(null); return; }  // keep the working view
+    setData(res, 'ego');
+  } catch (e) { if (!opt.soft || !full.nodes.length) setOverlay(String(e.message || e), 'fail'); }
 }
 
 // fuzzy search dropdown
@@ -150,7 +158,7 @@ qEl.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') ddEl.hidden = true;
 });
 document.addEventListener('mousedown', (e) => { if (!qEl.parentElement.contains(e.target)) ddEl.hidden = true; });
-hopsEl.addEventListener('change', () => { if (mode === 'ego' && submitted) focus(submitted); });
+hopsEl.addEventListener('change', () => { if (mode === 'ego' && submitted) focus(submitted, { query: submittedQuery }); });
 backBtn.addEventListener('click', () => { qEl.value = ''; loadOverview(); });
 
 // --- LIVE-FOLLOW the idle graph-walk -----------------------------------------
@@ -184,7 +192,7 @@ function pulseFocal() {
 function onFocusMove(p) {
   if (!p || !p.anchor) return;
   lastMove = p; renderNow();
-  if (follow && p.anchor !== submitted) focus(p.anchor).then(pulseFocal).catch(() => {});   // re-center + animate
+  if (follow && p.anchor !== submitted) focus(p.anchor, { query: p.canonical || p.anchor, soft: true }).then(pulseFocal).catch(() => {});   // re-center on the exact node + animate
 }
 followBtn.addEventListener('click', () => setFollow(!follow));
 try {

@@ -360,6 +360,10 @@ async function runMove(deps = {}) {
       : '';
     return {
       acted: notable, anchor: anchor.mention, kind: anchor.kind, source: anchor.source,
+      // canonical = the EXACT Echo node name (with its "[M000057]"/"[wd:Q…]" tag). The clean `anchor` is
+      // for display/voice; consumers that must query the graph (e.g. the KG follow-panel's query_graph)
+      // need this exact form — the stripped name won't resolve ("entity not found").
+      canonical: (anchor.object && anchor.object.canonical) || anchor.mention,
       built: grown.built, entities: grown.entities, connections: grown.connections,
       related: grown.related, summary: grown.summary, voiceLine, held: grown.held || 0,
       reason: notable ? 'grew' : 'no-growth'
