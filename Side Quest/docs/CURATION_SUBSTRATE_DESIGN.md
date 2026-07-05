@@ -197,12 +197,17 @@ later pulled fully in.
     - **2c — driver + wiring:** extract → **HYBRID** (Echo's `extract_entities_from_doc` surfaces
       candidates → merged with our typed extraction → our disambiguation/gate/observe) → propose to
       Echo + observe (feed=`doc-decomp`), under a per-doc volume cap + shared budget.
-  - **Split 2 (fold in the streams) — ADDITIVE, non-invasive.** Rather than rewriting each stream's
-    processing, **append the decomposition track AFTER the existing hooks** in each datastream
-    sequence. The subsystems with targeted raw-data usage (news→briefing/forecast, docs→doc-QA) run
-    first, untouched; decomposition is a new terminal consumer at whatever point the stream already
-    reaches. No cadence rewrite, no per-stream impact review; the hourly/daily passes keep their
-    corroboration/consolidation role. (Later track, after Split 1 is proven.)
+  - **Split 2 (fold in the streams) — PER-STREAM INLINE + fall-through to the lake** (Lucas-locked).
+    Each stream gets its OWN inline decomposition hook with **stream-specific extraction guidelines**
+    (a news item, a meeting transcript, a dropped doc, a video caption each want different rules),
+    appended AFTER that stream's existing targeted-usage hooks (news→briefing/forecast, docs→doc-QA
+    run first, untouched). Every hook calls the SAME shared machine (2a–2c) with its own injected
+    `extract`. **Fall-throughs** — the `hold` (ambiguous) + unresolved-endpoint claims the inline pass
+    can't cleanly place — collect in the **hourly pool** (the "lake") and ride the existing **standard
+    upgrade pass** (corroboration / dedup / promotion) in its proper secondary role. The `held`
+    observations in `curation_store` (Slice 1) ARE that fall-through queue. No cadence rewrite; the
+    batch passes keep their consolidation job and now also catch inline's strays. (Per-stream, one at
+    a time, after Split 1 is proven.)
 
 Each slice: pure + deps-injected where possible, offline smoke, gate green, reboot-gated verify.
 

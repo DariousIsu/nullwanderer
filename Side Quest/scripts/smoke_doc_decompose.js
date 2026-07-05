@@ -128,6 +128,60 @@ function mockResolver(map) {
   ok(plan.byKey.get(D.coreKey('Woodrow Wilson')).action === 'reuse', '2b: decision map lets a relation endpoint look up its entity decision');
   ok(plan.decisions.length === 3, '2b: planEntities returns a decision per entity');
 
+  // -------------------------------------------------------------------------
+  // 2c — the DRIVER (decomposeDoc): extract → hybrid → disambiguate → gate → propose → observe.
+  // -------------------------------------------------------------------------
+  const DOC = { title: 'Woodrow Wilson', url: 'https://en.wikipedia.org/wiki/Woodrow_Wilson', text: 'x'.repeat(50) };
+  // per-stream extractor (mock): 3 entities + 3 relations (one endpoint 'Ghost' not in the entity set).
+  const extract = async () => ({
+    entities: [{ name: 'Woodrow Wilson', type: 'person' }, { name: 'Princeton University', type: 'organization' }, { name: 'Edith Wilson', type: 'person' }],
+    relations: [
+      { source: 'Woodrow Wilson', relation: 'LEADS', target: 'Princeton University' },   // both resolve → promote
+      { source: 'Woodrow Wilson', relation: 'MARRIED_TO', target: 'Edith Wilson' },       // Edith held → fall-through
+      { source: 'Woodrow Wilson', relation: 'RELATED_TO', target: 'Ghost Entity' },       // endpoint not extracted → fall-through
+    ],
+  });
+  const echoExtract = async () => [{ name: 'Colonel House', type: 'person' }];            // hybrid adds one
+  const resolve = mockResolver({
+    'Woodrow Wilson': { status: 'resolved', object: { id: 1, name: 'Woodrow Wilson [Q34296]' } },  // reuse
+    'Princeton University': { status: 'nil' },                                            // mint
+    'Edith Wilson': { status: 'ambiguous', candidates: ['Edith Wilson', 'Edith B. Wilson'] },      // hold
+    'Colonel House': { status: 'nil' },                                                   // mint (echo-surfaced)
+  });
+  const calls = []; const obs = [];
+  const dispatch = async (tag) => { calls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created"}' }; };
+  const observe = async (o) => obs.push(o);
+
+  const res = await D.decomposeDoc(DOC, { extract, echoExtract, resolve, dispatch, observe });
+  ok(res.reused === 1 && res.minted === 2, '2c: 1 reuse (Wilson) + 2 mints (Princeton, echo-surfaced House)');
+  ok(res.ambiguous === 1, '2c: Edith Wilson (ambiguous) counted as ambiguous');
+  ok(res.connections === 1, '2c: only the fully-resolved relation (Wilson→Princeton) is proposed');
+  ok(res.held === 3, '2c: 3 fall-throughs held (Edith existence + 2 unresolved-endpoint relations)');
+  // canonical-name edge: the proposed relation uses Wilson\'s EXACT stored node name, not the surface form
+  const relCall = calls.find(c => c[0] === 'propose_relation');
+  ok(relCall && relCall[1].source_name === 'Woodrow Wilson [Q34296]' && relCall[1].target_name === 'Princeton University', '2c: edge targets the CANONICAL reused node name (not a twin)');
+  ok(!calls.some(c => c[0] === 'propose_entity' && c[1].name === 'Woodrow Wilson'), '2c: the REUSED entity is NOT re-minted (no dup)');
+  ok(calls.some(c => c[0] === 'propose_entity' && c[1].name === 'Princeton University' && c[1].entity_type === 'organization'), '2c: a minted entity carries its TYPE');
+  // observations: promoted for mints + the cited edge; held for the fall-throughs
+  ok(obs.filter(o => o.status === 'promoted').length === 3, '2c: 3 promoted observations (2 mints + 1 edge)');
+  ok(obs.filter(o => o.status === 'held').length === 3, '2c: 3 held observations (the fall-through queue)');
+  ok(obs.filter(o => o.status === 'promoted').every(o => o.grade === 'B' && o.url === DOC.url), '2c: every promoted claim is grade B, cited to the doc url');
+  const heldEdith = obs.find(o => o.sourceEntity === 'Edith Wilson' && o.status === 'held');
+  ok(heldEdith && heldEdith.relation === 'exists', '2c: the ambiguous entity is held as an existence fall-through');
+
+  // requires-citation: a doc with no url yields nothing.
+  ok((await D.decomposeDoc({ text: 'body', url: null }, { extract, resolve, dispatch, observe })).reason === 'no-citation', '2c: no doc url → nothing lands (requires citation)');
+  ok((await D.decomposeDoc({ text: '', url: 'u' }, { extract, resolve, dispatch, observe })).reason === 'empty-text', '2c: empty text → nothing');
+
+  // volume cap on mints.
+  const NAMES = ['Alpha Grady', 'Bravo Hensley', 'Charlie Ipswich', 'Delta Jung', 'Echo Kramer', 'Foxtrot Lorne', 'Golf Mendez', 'Hotel Novak', 'India Osei', 'Juliet Pratt'];
+  const bigExtract = async () => ({ entities: NAMES.map(name => ({ name, type: 'person' })), relations: [] });
+  const capRes = await D.decomposeDoc({ text: 'x'.repeat(50), url: 'https://ex.com/big' }, { extract: bigExtract, resolve: mockResolver({}), dispatch, observe, cap: { entities: 3 } });
+  ok(capRes.minted === 3, '2c: per-doc mint cap enforced (3 of 10)');
+
+  // extractor throws → fail-soft.
+  ok((await D.decomposeDoc({ text: 'x'.repeat(50), url: 'u' }, { extract: async () => { throw new Error('boom'); }, resolve, dispatch, observe })).reason === 'extract-failed', '2c: extractor throw → fail-soft (extract-failed)');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

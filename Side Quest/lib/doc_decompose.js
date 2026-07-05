@@ -18,6 +18,8 @@
  */
 'use strict';
 
+const CG = require('./curation_gate');   // the shared two gates (existence + fact), doc = grade B
+
 // Closed entity-type vocab, aligned with Echo's types. Anything unrecognized → 'other' (still a real
 // object, just untyped — the richness axis, not the reality axis). Normalizes common model synonyms.
 const ENTITY_TYPES = ['person', 'organization', 'location', 'event', 'work', 'bill', 'document', 'other'];
@@ -190,8 +192,98 @@ async function planEntities(entities, { resolve } = {}) {
   return { decisions, byKey, tally };
 }
 
+// ---------------------------------------------------------------------------
+// 2c — THE DRIVER. Decompose ONE document into Echo, through the hybrid extractor → disambiguation →
+// the two gates → the observation store. The shared machine every per-stream inline hook (Split 2)
+// will call with its own injected `extract` (stream-specific guidelines).
+//
+// `doc` = { text, url (THE citation), title? }. Deps (all injected → offline-testable):
+//   extract    (text) → { entities, relations }          the per-stream TYPED extractor
+//   echoExtract(doc)  → [{name,type?}]  (optional)        HYBRID: Echo's candidate entities
+//   resolve    (name,{preferType}) → resolveMention result   disambiguation (echo_suit.resolveMention)
+//   dispatch   (tag)  → {ok}                              Echo propose_entity/propose_relation
+//   observe    (o)    → void                              curation_store sink (caller feed-tags)
+//   cap = { entities, relations }                         per-doc volume discipline
+//
+// Citation is UNIFORM: the document is the single source of every claim it yields (grade B — stated in
+// a named source), so the gate is fed a one-source list [{url}] with ref 'S1'. FALL-THROUGHS — an
+// `ambiguous` entity or a relation whose endpoint didn't cleanly resolve — are recorded as HELD (the
+// queue the hourly "standard upgrade pass" re-attempts). Returns tallies. Never throws.
+async function _proposeEntity(dispatch, name, entity_type, summary) {
+  try { const r = await dispatch({ kind: 'do', name: 'propose_entity', args: { name, entity_type: entity_type || 'other', summary: summary || '' } }); return !!(r && r.ok); } catch { return false; }
+}
+async function _proposeRelation(dispatch, source, target, relation_type) {
+  try { const r = await dispatch({ kind: 'do', name: 'propose_relation', args: { source_name: source, target_name: target, relation_type: relation_type || 'related_to' } }); return !!(r && r.ok); } catch { return false; }
+}
+async function _observe(observe, o) { if (typeof observe === 'function') { try { await observe(o); } catch {} } }
+
+async function decomposeDoc(doc = {}, deps = {}) {
+  const { extract, echoExtract, resolve, dispatch, observe, cap = {}, log } = deps;
+  const text = String(doc.text || '');
+  const url = doc.url || null;
+  const maxEnt = cap.entities || 20, maxRel = cap.relations || 20;
+  const out = { minted: 0, reused: 0, connections: 0, held: 0, ambiguous: 0, skipped: 0, related: [] };
+  if (!url) return { ...out, reason: 'no-citation' };       // requires-citation: no doc url → nothing lands
+  if (!text.trim()) return { ...out, reason: 'empty-text' };
+  const docSources = [{ url }];                              // the doc IS the citation (grade B)
+
+  // 1) per-stream extract + hybrid Echo candidates → merged typed entity set
+  let ex;
+  try { ex = (await extract(text, { title: doc.title })) || { entities: [], relations: [] }; }
+  catch (e) { log && log('[doc-decomp] extract failed: ' + (e && e.message)); return { ...out, reason: 'extract-failed' }; }
+  const entities = Array.isArray(ex.entities) ? ex.entities : [];
+  const relations = Array.isArray(ex.relations) ? ex.relations : [];
+  let echoCands = [];
+  if (typeof echoExtract === 'function') { try { echoCands = (await echoExtract(doc)) || []; } catch {} }
+  const merged = mergeCandidates(entities, echoCands);
+
+  // 2) disambiguate every entity
+  const plan = await planEntities(merged, { resolve });
+
+  // 3) entities: mint (existence-gated by the doc) / reuse / hold (fall-through) / skip
+  const usable = new Map();   // coreKey → the canonical name to use in an edge
+  for (const d of plan.decisions) {
+    const key = coreKey(d.name) || d.name.toLowerCase();
+    if (d.action === 'reuse') { usable.set(key, d.canonical || d.name); out.reused++; continue; }
+    if (d.action === 'mint') {
+      if (out.minted >= maxEnt) continue;                    // volume cap on NEW objects
+      const eg = CG.gateExistence('S1', docSources);         // doc-cited → grade B ≥ C floor → mint
+      if (eg.mint && await _proposeEntity(dispatch, d.name, d.type, '')) {
+        usable.set(key, d.name); out.minted++;
+        await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: eg.grade, confidence: eg.confidence, status: 'promoted' });
+      }
+      continue;
+    }
+    if (d.action === 'hold') {                               // ambiguous → fall-through
+      out.ambiguous++; out.held++;
+      await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: 'D', confidence: 0, status: 'held' });
+      continue;
+    }
+    out.skipped++;                                           // bad-name / resolver error
+  }
+
+  // 4) relations: propose only when BOTH endpoints resolved (reuse/mint); else a HELD fall-through
+  for (const r of relations) {
+    if (out.connections >= maxRel) break;
+    const sName = usable.get(coreKey(r.source) || r.source.toLowerCase());
+    const tName = usable.get(coreKey(r.target) || r.target.toLowerCase());
+    if (sName && tName && sName.toLowerCase() !== tName.toLowerCase()) {
+      const fg = CG.gateFact('S1', docSources);              // doc-cited → B → promote
+      if (fg.promote && await _proposeRelation(dispatch, sName, tName, r.relation)) {
+        out.connections++; out.related.push(tName);
+        await _observe(observe, { sourceEntity: sName, relation: r.relation, target: tName, url, grade: fg.grade, confidence: fg.confidence, status: 'promoted' });
+      }
+    } else {
+      out.held++;                                            // endpoint unresolved → upgrade-pass queue
+      await _observe(observe, { sourceEntity: r.source, relation: r.relation, target: r.target, url, grade: 'D', confidence: 0, status: 'held' });
+    }
+  }
+  log && log(`[doc-decomp] "${doc.title || url}" → +${out.minted} mint / ${out.reused} reuse / +${out.connections} conn (${out.held} held: ${out.ambiguous} ambiguous, ${out.skipped} skipped)`);
+  return out;
+}
+
 module.exports = {
   ENTITY_TYPES, REL_VOCAB, canonType, badField, coreKey,
   buildTypedPrompt, parseTypedExtraction, mergeCandidates,
-  resolveExtracted, planEntities,
+  resolveExtracted, planEntities, decomposeDoc,
 };
