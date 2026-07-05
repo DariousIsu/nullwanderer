@@ -153,18 +153,22 @@ function mockResolver(map) {
   const observe = async (o) => obs.push(o);
 
   const res = await D.decomposeDoc(DOC, { extract, echoExtract, resolve, dispatch, observe });
-  ok(res.reused === 1 && res.minted === 2, '2c: 1 reuse (Wilson) + 2 mints (Princeton, echo-surfaced House)');
+  // ENDPOINT RECOVERY: "Ghost Entity" was named only as an edge target (never an ENTITY line) → it is now
+  // folded in as an 'other' candidate, resolves (nil→mint), and its edge promotes instead of auto-holding.
+  ok(res.reused === 1 && res.minted === 3, '2c: 1 reuse (Wilson) + 3 mints (Princeton, echo House, recovered endpoint Ghost)');
   ok(res.ambiguous === 1, '2c: Edith Wilson (ambiguous) counted as ambiguous');
-  ok(res.connections === 1, '2c: only the fully-resolved relation (Wilson→Princeton) is proposed');
-  ok(res.held === 3, '2c: 3 fall-throughs held (Edith existence + 2 unresolved-endpoint relations)');
+  ok(res.connections === 2, '2c: Wilson→Princeton AND Wilson→Ghost (recovered endpoint) both promote');
+  ok(res.held === 2, '2c: 2 fall-throughs held (Edith existence + the Wilson→Edith edge to her)');
+  ok(calls.some(c => c[0] === 'propose_entity' && c[1].name === 'Ghost Entity'), '2c: a relation-only endpoint is recovered + minted (not lost to the held queue)');
+  ok(calls.some(c => c[0] === 'propose_relation' && c[1].target_name === 'Ghost Entity'), '2c: the edge to the recovered endpoint promotes');
   // canonical-name edge: the proposed relation uses Wilson\'s EXACT stored node name, not the surface form
-  const relCall = calls.find(c => c[0] === 'propose_relation');
-  ok(relCall && relCall[1].source_name === 'Woodrow Wilson [Q34296]' && relCall[1].target_name === 'Princeton University', '2c: edge targets the CANONICAL reused node name (not a twin)');
+  const relCall = calls.find(c => c[0] === 'propose_relation' && c[1].target_name === 'Princeton University');
+  ok(relCall && relCall[1].source_name === 'Woodrow Wilson [Q34296]', '2c: edge targets the CANONICAL reused node name (not a twin)');
   ok(!calls.some(c => c[0] === 'propose_entity' && c[1].name === 'Woodrow Wilson'), '2c: the REUSED entity is NOT re-minted (no dup)');
   ok(calls.some(c => c[0] === 'propose_entity' && c[1].name === 'Princeton University' && c[1].entity_type === 'organization'), '2c: a minted entity carries its TYPE');
-  // observations: promoted for mints + the cited edge; held for the fall-throughs
-  ok(obs.filter(o => o.status === 'promoted').length === 3, '2c: 3 promoted observations (2 mints + 1 edge)');
-  ok(obs.filter(o => o.status === 'held').length === 3, '2c: 3 held observations (the fall-through queue)');
+  // observations: promoted for mints + the cited edges; held for the genuine fall-throughs
+  ok(obs.filter(o => o.status === 'promoted').length === 5, '2c: 5 promoted observations (3 mints + 2 edges)');
+  ok(obs.filter(o => o.status === 'held').length === 2, '2c: 2 held observations (the fall-through queue)');
   ok(obs.filter(o => o.status === 'promoted').every(o => o.grade === 'B' && o.url === DOC.url), '2c: every promoted claim is grade B, cited to the doc url');
   const heldEdith = obs.find(o => o.sourceEntity === 'Edith Wilson' && o.status === 'held');
   ok(heldEdith && heldEdith.relation === 'exists', '2c: the ambiguous entity is held as an existence fall-through');

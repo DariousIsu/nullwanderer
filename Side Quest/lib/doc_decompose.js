@@ -237,6 +237,23 @@ async function decomposeDoc(doc = {}, deps = {}) {
   if (typeof echoExtract === 'function') { try { echoCands = (await echoExtract(doc)) || []; } catch {} }
   const merged = mergeCandidates(entities, echoCands);
 
+  // 1b) ENDPOINT RECOVERY — a relation's source/target is an entity too. If the extractor named one only
+  // as an edge endpoint (never as its own ENTITY line — e.g. a roster's "…WORKS_FOR Rainey Center" where
+  // the org header was never listed), fold it in as an 'other'-typed candidate so it resolves (mint/reuse/
+  // hold) instead of auto-holding every edge to it. Without this, a doc's central entity + all its edges
+  // sink into the fall-through queue.
+  const haveKey = new Set(merged.map(e => coreKey(e.name) || String(e.name).toLowerCase()));
+  for (const r of relations) {
+    for (const nm of [r && r.source, r && r.target]) {
+      const name = String(nm == null ? '' : nm).trim();
+      if (!name || badField(name)) continue;
+      const k = coreKey(name) || name.toLowerCase();
+      if (haveKey.has(k)) continue;
+      haveKey.add(k);
+      merged.push({ name, type: 'other' });
+    }
+  }
+
   // 2) disambiguate every entity
   const plan = await planEntities(merged, { resolve });
 
