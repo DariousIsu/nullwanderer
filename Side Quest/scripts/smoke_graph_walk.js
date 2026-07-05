@@ -152,6 +152,11 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
     { web: gweb, cloud: gcloud, dispatch: gdisp, kgNeighbors: async () => [], observe: async (o) => observed.push(o) }
   );
   ok(gGrown.connections === 1 && gGrown.held === 1, 'growAround: cited claim promotes, inferred claim is HELD (requires-citation)');
+  ok(gGrown.sourceUrl === 'https://ex.com/acme', 'growAround: returns the citation sourceUrl of the promoted fact');
+  // sourceLabel: friendly tag for the voiced "via …"
+  ok(G.sourceLabel('https://en.wikipedia.org/wiki/X') === 'Wikipedia', 'sourceLabel: wikipedia → "Wikipedia"');
+  ok(G.sourceLabel('https://www.example.com/a') === 'example.com', 'sourceLabel: other host → its domain');
+  ok(G.sourceLabel('') === '' && G.sourceLabel(null) === '', 'sourceLabel: empty → ""');
   ok(gcalls.some(c => c[0] === 'propose_relation' && c[1].target_name === 'Beta Inc'), 'growAround: the CITED edge is proposed');
   ok(!gcalls.some(c => c[0] === 'propose_relation' && c[1].target_name === 'Gamma Guess'), 'growAround: the INFERRED edge NEVER reaches Echo');
   // Slice 1: BOTH the promoted fact AND the held (inferred) claim are observed — the held one queues

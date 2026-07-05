@@ -214,7 +214,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, log
   if (!dossier || typeof dossier !== 'object') { log && log(`[grow] "${mention}" sources=${sources.length} dossier=NULL (rawLen=${_rawLen}) → no enrich`); return { built: false, entities: 0, connections: 0, related: [], summary: '', held: 0 }; }
 
   const nbrKeys = new Set(neighbors.map(visitKey));
-  let entities = 0, connections = 0, held = 0; const related = [];
+  let entities = 0, connections = 0, held = 0, sourceUrl = null; const related = [];
   const _relRaw = Array.isArray(dossier.related) ? dossier.related.length : 0;
 
   // 1) the anchor object itself — only if MISSING. EXISTENCE gate: mint only if the web pull cites it as
@@ -228,6 +228,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, log
     }
     if (await proposeEntity({ dispatch, name: canonical, entity_type: dossier.entity_type, summary: dossier.summary })) {
       entities++;
+      if (!sourceUrl) sourceUrl = eg.url || null;
       if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: 'exists', target: null, url: eg.url, grade: eg.grade, confidence: eg.confidence, status: 'promoted' }); } catch {} }
     }
   }
@@ -252,12 +253,23 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, log
     if (entities < WALK_MAX_NODES && await proposeEntity({ dispatch, name: rname, entity_type: r.type, summary: '' })) entities++;
     if (await proposeRelation({ dispatch, source: canonical, target: rname, relation_type: (r && r.relation) || 'related_to' })) {
       connections++; related.push(rname);
+      if (!sourceUrl) sourceUrl = fg.url || null;
       // record the CITATION for the promoted fact (the observation trail; grade + backing url).
       if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: fg.url, grade: fg.grade, confidence: fg.confidence, status: 'promoted' }); } catch {} }
     }
   }
   log && log(`[grow] "${mention}" [${gap.kind}] sources=${sources.length} neighbors=${neighbors.length} related=${_relRaw} → +${entities} ent +${connections} conn (${held} held: uncited)`);
-  return { built: gap.kind === 'missing' && entities > 0, entities, connections, related, summary: String(dossier.summary || '').trim(), held };
+  return { built: gap.kind === 'missing' && entities > 0, entities, connections, related, summary: String(dossier.summary || '').trim(), held, sourceUrl };
+}
+
+// A compact, human-friendly label for a citation url — for the voiced "via …" tag. Pure.
+function sourceLabel(url) {
+  const u = String(url || '');
+  if (!u) return '';
+  if (/wikipedia\.org/i.test(u)) return 'Wikipedia';
+  if (/^echo:|echo\.|wikidata\.org/i.test(u)) return /wikidata/i.test(u) ? 'Wikidata' : 'Echo corpus';
+  const m = u.match(/^https?:\/\/(?:www\.)?([^/]+)/i);
+  return m ? m[1] : '';
 }
 
 // WEB-FIRST layered source acquisition for an anchor (replaces bare DDG scraping — throttled + snippet-
@@ -339,10 +351,12 @@ async function runMove(deps = {}) {
     recordVisited({ getMeta, setMeta, now: nowTs, names: [...tried, ...grown.related] });
 
     const notable = grown.built || grown.connections > 0;
+    const via = sourceLabel(grown.sourceUrl);   // the citation source that verified the connections
+    const _tag = via ? ` (via ${via})` : '';
     const voiceLine = notable
       ? (grown.built
-        ? `I didn't have anything on ${anchor.mention} — pulled it together${grown.connections ? ` and linked it to ${grown.related.slice(0, 2).join(' and ')}` : ''}.`
-        : `Filled in ${anchor.mention} — connected it to ${grown.related.slice(0, 2).join(' and ')}.`)
+        ? `I didn't have anything on ${anchor.mention} — pulled it together${grown.connections ? ` and linked it to ${grown.related.slice(0, 2).join(' and ')}` : ''}.${_tag}`
+        : `Filled in ${anchor.mention} — connected it to ${grown.related.slice(0, 2).join(' and ')}.${_tag}`)
       : '';
     return {
       acted: notable, anchor: anchor.mention, kind: anchor.kind, source: anchor.source,
@@ -354,7 +368,7 @@ async function runMove(deps = {}) {
 }
 
 module.exports = {
-  runMove, extractCandidates, assessGaps, growAround, fetchLayeredSources, proposeEntity, proposeRelation,
+  runMove, extractCandidates, assessGaps, growAround, fetchLayeredSources, sourceLabel, proposeEntity, proposeRelation,
   parseJsonLoose, extractProperNouns, classifyObject, rankGaps, visitKey,
   loadVisited, visitedKeySet, recordVisited, buildCandidatePrompt, buildDossierPrompt,
   THIN_DEGREE, THIN_FACTS, WALK_MAX_NODES, WALK_MAX_CONNECTIONS, MAX_CANDIDATES, VISITED_TTL_MS, VISITED_KEY
