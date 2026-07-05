@@ -779,7 +779,8 @@ app.whenReady().then(() => {
             const note = ci.ingestNote({ title: label, understanding, markdown });
             // LAND the FULL document durably in the short-term store (survives engine/app restart, unlike
             // the in-memory canvas) so doc-QA + recall work even after the canvas clears. Idempotent on tab.
-            try { require('./lib/doc_store').land({ title: label, body: markdown, source: 'canvas_drop', ref: t.tabKey, understanding }); } catch (e) { console.error('[canvas-ingest] doc land failed:', e.message); }
+            let landed = null;
+            try { landed = require('./lib/doc_store').land({ title: label, body: markdown, source: 'canvas_drop', ref: t.tabKey, understanding }); } catch (e) { console.error('[canvas-ingest] doc land failed:', e.message); }
             // ACCRETE — a reading in her stream + a durable memory + captured learnings/entities.
             try {
               const row = db.insertMonologue({ content: `I read the document Lucas dropped on my canvas — "${label}":\n${understanding || markdown.slice(0, 400)}`, model: 'canvas_ingest', type: 'reading', query: label });
@@ -787,6 +788,10 @@ app.whenReady().then(() => {
             } catch {}
             try { await memoryLib.store({ kind: 'reference', content: note, source: 'canvas_drop', importance: 0.6, embedText: `${label}\n${markdown.slice(0, 800)}` }); } catch (e) { console.error('[canvas-ingest] memory store failed:', e.message); }
             try { require('./lib/learning').maybeCaptureLearnings({ query: label, content: markdown, urls: null }); } catch {}
+            // SPLIT 2 / stream 1 (curation substrate) — decompose the landed doc into its constituent
+            // typed objects in Echo, AFTER the existing hooks. Async + fail-soft so it never blocks or
+            // breaks ingest; fall-throughs queue as `held` for the nightly upgrade pass.
+            try { if (landed && landed.landed) decomposeLandedDoc({ id: landed.id, title: label, body: markdown, source: 'canvas_drop' }).catch(() => {}); } catch {}
             console.log(`[canvas-ingest] ingested drop "${label}" (${markdown.length} chars)${understanding ? ' + understanding' : ''}`);
           }
           seen.push(t.tabKey);
@@ -5597,6 +5602,33 @@ async function directedFocusTick() {
     }
   } catch (e) { console.error('[directed] tick error:', e.message); }
   finally { directedStepInFlight = false; }
+}
+
+// INLINE DOC DECOMPOSITION (curation substrate Slice 2, Split 2 — stream 1: doc_store landings). After a
+// document lands, decompose it into its constituent typed objects in Echo through the shared machine
+// (lib/doc_decompose via lib/decomp_lane): typed extract → disambiguate (resolveMention: reuse-existing /
+// mint / hold) → two gates → propose to Echo → observe (feed=doc-decomp). The document is the citation
+// (grade B). Fall-throughs (ambiguous / unresolved) land as `held` observations for the nightly upgrade
+// pass. Async + fail-soft — never blocks or breaks a landing; runs AFTER the stream's existing hooks.
+async function decomposeLandedDoc(doc) {
+  try {
+    if (!echoSuit || !echoSuit.connected) return;
+    if (!doc || doc.id == null || !String(doc.body || '').trim()) return;
+    const src = (() => { try { return (require('./lib/models').sources() || []).find(s => s.tier === 'cloud' && s.token); } catch { return null; } })();
+    if (!src) return;   // no cloud extractor available → skip (the nightly promote still consolidates it)
+    const decompLane = require('./lib/decomp_lane');
+    const echoSuitLib = require('./lib/echo_suit');
+    const curationStore = require('./lib/curation_store');
+    const { completeDetailed } = require('./lib/ollama');
+    const model = config.extractionModel() || config.subconsciousModel();
+    const extract = decompLane.makeCloudExtractor({ completeFn: completeDetailed, model, base: src.base, token: src.token });
+    const resolve = (name, opts) => echoSuitLib.resolveMention(name, opts);
+    const dispatch = (tag) => echoSuit.dispatch(tag);
+    const observe = (o) => { try { curationStore.record(db, { ...o, feed: 'doc-decomp' }); } catch {} };
+    // NOTE: no `ref` passed → the citation is the stable `docstore:<id>` pointer, not the ephemeral tab key.
+    const r = await decompLane.decomposeLanding({ id: doc.id, title: doc.title, body: doc.body }, { extract, resolve, dispatch, observe, cap: { entities: 12, relations: 12 }, log: (m) => console.log(m) });
+    if (r && !r.skipped) console.log(`[doc-decomp] landing #${doc.id} → +${r.minted} mint / ${r.reused} reuse / +${r.connections} conn (${r.held} held: ${r.ambiguous} ambiguous)`);
+  } catch (e) { console.error('[doc-decomp] landing decompose failed:', e.message); }
 }
 
 // NIGHTLY PROMOTION (Slice 2) — consolidate the day's un-promoted SHORT-TERM documents (lib/doc_store,
