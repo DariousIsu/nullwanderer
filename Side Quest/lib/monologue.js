@@ -25,6 +25,7 @@ const bylineLib = require('./byline');
 const gmeetLib = require('./gmeet');
 const mediaCcLib = require('./media_cc');
 const graphWalk = require('./graph_walk');
+const pullerWalk = require('./puller_walk');
 const curationStore = require('./curation_store');
 const echoSuit = require('./echo_suit');
 const { buildAwarenessBlock, BASE_PERSONA } = require('./context');
@@ -41,6 +42,11 @@ const MIN_GAP_BETWEEN_SEARCHES_MS = 60 * 1000;  // at most one search per minute
 const GRAPHWALK_MIN_INTERVAL_MS = 30 * 1000;    // graph-building moves are slow + deliberate (not the 10s tick)
 const GRAPHWALK_LAST_KEY = 'graphwalk.lastAt';
 const GRAPHWALK_BUDGET_KEY = 'graphwalk.budget.window';   // idle builder's OWN rolling token window (isolated from the shared subc pool)
+// PULLER lane — the sibling of the graph-walk that fills MISSING contact info; runs on the idle tick too,
+// sharing the graph-walk's focus (activeSetNames). Its own cadence + rolling budget so it interleaves.
+const PULLER_MIN_INTERVAL_MS = 45 * 1000;
+const PULLER_LAST_KEY = 'pullerwalk.lastAt';
+const PULLER_BUDGET_KEY = 'pullerwalk.budget.window';
 
 let timer = null;
 let captionTimer = null;  // separate, faster heartbeat for caption-following (perception ≠ thinking)
@@ -984,6 +990,7 @@ async function runOneTick() {
     // thought is generated here → no idle curiosity/boredom search can fire (those live past this
     // early return). recentThoughts/openThreads stay available for the awareness block above.
     await runGraphWalkMove(recentTurns);
+    try { await runPullerMove(recentTurns); } catch (e) { console.error('[puller-walk] tick error:', e.message); }
     return;
   }
 
@@ -1435,6 +1442,23 @@ function pushSheep(payload) {
   } catch {}
 }
 
+// SHARED FOCUS — the one active-name set both subconscious lanes (graph-walk + puller) steer by. Sourced
+// from REAL OBJECTS first — his Puller targets (discovered people/orgs he's working) and the freshly-
+// surfaced cards — because the old doc-decomp entity STRINGS mostly don't resolve to clean graph nodes (a
+// bureaucratic org-chart CSV yielded "Office of Enforcement" etc.), which starved the relevant tier to 0
+// and dropped the walk back onto random history. Real objects lead (within the relevant SQL's 40-name
+// window); doc-decomp mentions fill in behind them. Order-preserving dedup.
+function activeSetNames() {
+  const names = [];
+  const push = (n) => { const s = String(n == null ? '' : n).trim(); if (s.length >= 3) names.push(s); };
+  try { for (const t of require('./puller_db').listTargets({ limit: 40 })) push(t && t.name); } catch {}
+  try { for (const c of db.listRecentCards({ types: ['org', 'place', 'event'], limit: 20 })) push(c && c.name); } catch {}
+  try { for (const o of db.listKgObservations({ feed: 'doc-decomp', limit: 40 })) { push(o && o.source_entity); push(o && o.target); } } catch {}
+  const seen = new Set(); const out = [];
+  for (const n of names) { const k = n.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(n); } }
+  return out;
+}
+
 // IDLE = GRAPH-BUILDING (object-memory Slice 5). When she's idle (no focus/thread/meeting), the tick
 // no longer free-associates (that was the noise generator). Instead it advances the graph-builder ONE
 // move: anchor on a recent-conversation gap, resolve/build the object from web+tools, walk connected
@@ -1518,20 +1542,7 @@ async function runGraphWalkMove(recentTurns) {
   const _convoFresh = _lastUser > 0 && (nowTs - _lastUser < 30 * 60 * 1000);
   const convoNames = async () => { if (!_convoFresh) return []; try { return await graphWalk.extractCandidates(recentTurns, { cloud, log: (m) => console.log(m) }); } catch { return []; } };
 
-  // FOCUS: the RELEVANT frontier steers enrichment toward Lucas's actual work instead of random history.
-  // ACTIVE SET = entity names he recently touched — the source/target of recent dropped-document
-  // decomposition (feed='doc-decomp') plus any fresh conversation names — and the relevant tier returns
-  // thin (degree 2-7) nodes that are those entities or their 1-hop neighbors in Echo's relations graph.
-  const activeSetNames = () => {
-    const names = new Set();
-    try {
-      for (const o of db.listKgObservations({ feed: 'doc-decomp', limit: 80 })) {
-        if (o && o.source_entity) names.add(o.source_entity);
-        if (o && o.target) names.add(o.target);
-      }
-    } catch {}
-    return [...names];
-  };
+  // FOCUS: the SHARED active set (module-level activeSetNames) steers BOTH lanes onto the operator's work.
   const relevantNodes = async () => {
     try {
       const active = activeSetNames();
@@ -1581,6 +1592,86 @@ async function runGraphWalkMove(recentTurns) {
     try { opts.emitFocusMove({ anchor: move.anchor, canonical: move.canonical || move.anchor, source: move.source || 'convo', kind: move.kind, entities: move.entities, connections: move.connections, at: Date.now() }); } catch {}
   }
   return true;   // a move ran (or was deliberately quiet) — the tick should NOT free-associate
+}
+
+// PULLER LANE — the sibling of runGraphWalkMove. Where the graph-walk enriches a node's KG facts, this
+// fills a MISSING contact detail (email) for a person the operator is working: pattern-fill from the
+// domain's learned email format, else web-discovery (search + extract a stated address, cited). Shares
+// the graph-walk's focus (activeSetNames); own cadence + rolling budget so the two lanes interleave on
+// the idle tick. Consume-only w.r.t. the CRM — lands the Puller's own discovered facet. Fail-soft → false.
+async function runPullerMove(_recentTurns) {
+  const nowTs = Date.now();
+  try { const last = parseInt(db.getMeta(PULLER_LAST_KEY) || '0', 10) || 0; if (nowTs - last < PULLER_MIN_INTERVAL_MS) return false; } catch {}
+  const cfg = require('./config');
+  const subc = require('./subconscious');
+  const _gm = (k) => db.getMeta(k); const _sm = (k, v) => db.setMeta(k, v);
+  if (!subc.budgetOk(_gm, nowTs, cfg.pullerBudgetTokensPerHour(), PULLER_BUDGET_KEY)) return false;
+  const pdb = require('./puller_db');
+  const contactCard = require('../studio/contact_card');
+  const beliefsLib = require('../studio/puller_beliefs');
+
+  const activeKeys = new Set((activeSetNames() || []).map(n => pullerWalk.norm(n)));
+
+  // candidates: local Puller targets, each flagged whether it already has an email belief (the gap we fill)
+  const candidates = () => {
+    const out = [];
+    try {
+      for (const t of pdb.listTargets({ limit: 120 })) {
+        const has = !!pdb.getBelief(t.id, 'email');
+        out.push({ id: t.id, name: t.name, company: t.company, domain: t.domain, hasEmail: has, ts: t.last_accessed_at || t.created_at || 0 });
+      }
+    } catch {}
+    return out;
+  };
+
+  // web = the same layered fetch the graph-walk uses; extract = a budget-metered cloud CONTACT extractor
+  const wikiUrl = (n) => 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String(n || '').trim().replace(/\s+/g, '_'));
+  const web = async (q) => graphWalk.fetchLayeredSources(q, { fetchPage, recallKnowledge: (nm, o) => echoSuit.recallKnowledge(nm, o), webSearch, wikiUrl, log: (m) => console.log(m) });
+  let extract = null;
+  try {
+    const src = (require('./models').sources() || []).find(s => s.tier === 'cloud' && s.token);
+    if (src) {
+      const decompLane = require('./decomp_lane');
+      const contactExtract = require('./contact_extract');
+      const model = cfg.extractionModel() || cfg.subconsciousModel();
+      const base = decompLane.makeCloudExtractor({ completeFn: completeDetailed, model, base: src.base, token: src.token, buildPrompt: contactExtract.buildCardsPrompt, parse: contactExtract.parseDocCards, numPredict: 500 });
+      extract = async (text, o) => {
+        const r = await base(text, o);
+        try { subc.recordSpend({ getMeta: _gm, setMeta: _sm, now: Date.now(), tokens: subc.estimateTokens([{ content: text }], JSON.stringify(r || {})), key: PULLER_BUDGET_KEY }); } catch {}
+        return r;
+      };
+    }
+  } catch {}
+
+  // land: append the cited observation + set the active belief on the EXISTING target (NOT puller_ingest,
+  // which is create-only). A verified email also credits its domain's email-pattern belief.
+  const land = async (o) => {
+    try {
+      pdb.addObservation(o.targetId, { attr: o.attr, value: o.value, kind: o.kind, source: o.source, sourceUrl: o.sourceUrl, confidence: o.confidence });
+      pdb.upsertBelief(o.targetId, o.attr, { value: o.value, confidence: o.confidence, derivation: o.derivation });
+      if (o.attr === 'email' && (o.kind === 'verified' || o.kind === 'pattern')) {
+        const t = pdb.getTarget(o.targetId); const domain = t && t.domain;
+        if (domain) { const pat = beliefsLib.detectPatternUsed(o.value, t.name, domain); if (pat) pdb.savePatternState(domain, beliefsLib.updateBelief(pdb.getPatternState(domain), pat, 'valid')); }
+      }
+    } catch (e) { console.error('[puller-walk] land failed:', e.message); }
+  };
+  const triedFor = (id) => { try { return pdb.listObservations(id, { attr: 'email' }).map(x => x.value).filter(Boolean); } catch { return []; } };
+  const refresh = (id) => {
+    try {
+      if (!opts.emitContactCard) return;
+      const t = pdb.getTarget(id); if (!t) return;
+      opts.emitContactCard(contactCard.cardFromTarget({ ...t, last_accessed_at: Date.now() }, pdb.listBeliefs(id), {}));
+    } catch {}
+  };
+
+  const move = await pullerWalk.runPullerMove({
+    candidates, activeKeys, getPatternState: (d) => pdb.getPatternState(d), triedFor,
+    land, web, extract, refresh, getMeta: _gm, setMeta: _sm, now: () => Date.now(), log: (m) => console.log(m),
+  });
+  try { db.setMeta(PULLER_LAST_KEY, String(Date.now())); } catch {}
+  if (move && move.acted) console.log(`[puller-walk] ${move.mode} "${move.name}" → ${move.email || move.phone || ''}`);
+  else if (move) console.log(`[puller-walk] no move (${move.reason})`);
+  return !!(move && move.acted);
 }
 
 async function maybeSearchFromThought(thoughtText, focusId = null) {

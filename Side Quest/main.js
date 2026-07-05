@@ -604,7 +604,10 @@ app.whenReady().then(() => {
     getSessionStartedAt: () => currentSessionStartedAt,
     // Live-follow: broadcast each idle graph-walk move so the KG surface (a webview) can re-center on the
     // entity she's enriching. Broadcast to all webContents — only the KG panel registers kg:focus-move.
-    emitFocusMove: (payload) => { try { let n = 0; for (const wc of require('electron').webContents.getAllWebContents()) { try { if (!wc.isDestroyed()) { wc.send('kg:focus-move', payload); n++; } } catch (e) {} } console.log(`[kg-follow] broadcast "${payload && payload.anchor}" → ${n} view(s)`); } catch (e) {} }
+    emitFocusMove: (payload) => { try { let n = 0; for (const wc of require('electron').webContents.getAllWebContents()) { try { if (!wc.isDestroyed()) { wc.send('kg:focus-move', payload); n++; } } catch (e) {} } console.log(`[kg-follow] broadcast "${payload && payload.anchor}" → ${n} view(s)`); } catch (e) {} },
+    // Puller lane: an autonomous contact fill → refresh the person's card on the canvas People rail (same
+    // channel a doc-drop discovery uses), so the operator sees the enrichment land live.
+    emitContactCard: (card) => { try { if (card && canvasWindow && !canvasWindow.isDestroyed()) canvasWindow.webContents.send('contacts:card', card); } catch (e) {} }
   });
   startHeartbeatScheduler({
     getWindow: () => mainWindow,

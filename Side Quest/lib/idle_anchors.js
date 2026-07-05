@@ -31,7 +31,11 @@ const MAX_TOTAL = 10;
 // entities, so it's capped LOW so it can't crowd out the frontier tier — the reliable gap source).
 // RELEVANT (Lucas's neighborhood) is the FOCUS tier — capped generously so it dominates the queue when he
 // has recent work, pushing the global frontier into a fallback role. News stays first (fresh external world).
-const NEWS_MAX = 4, RELEVANT_MAX = 6, FRONTIER_MAX = 6, CONVO_MAX = 3;
+// LEANED HARD toward Lucas's neighborhood (his call, 2026-07-05): RELEVANT gets the lion's share so a move
+// spends its 10 slots on HIS people; NEWS is trimmed (its principals assess 'rich'/barren — he never saw a
+// news move land) and the global FRONTIER (random 1800s history) drops to a thin fallback that only fills
+// when his neighborhood is exhausted. Priority order (news→relevant→frontier→convo) + MAX_TOTAL do the rest.
+const NEWS_MAX = 2, RELEVANT_MAX = 8, FRONTIER_MAX = 3, CONVO_MAX = 3;
 const STOPNAMES = new Set(['i', 'you', 'he', 'she', 'they', 'it', 'we', 'us', 'lucas', 'zoe', 'the', 'a', 'an', 'this', 'that', 'them', 'his', 'her', 'their']);
 
 function _clean(name) {
@@ -113,7 +117,9 @@ const _RELEVANT_TYPES = ['person', 'organization', 'event', 'government_body'];
 // an under-developed degree band instead. We match BOTH the cleaned name AND the raw stored form because
 // doc-decomp nodes keep a disambiguation tag ("Brad Overcash [dfacde1f]") whose person node only matches
 // the raw string (the cleaned "Brad Overcash" hits the document twin, which the type gate then drops).
-function buildRelevantFrontierSql(activeNames, { min = 1, max = 15, limit = 200, types = _RELEVANT_TYPES } = {}) {
+// min=0: a freshly-minted doc entity sits at degree 0 until the relations index reindexes on a curation
+// pass — a degree-1 floor excluded Lucas's newest people the moment they landed (a cause of relevant=0).
+function buildRelevantFrontierSql(activeNames, { min = 0, max = 15, limit = 200, types = _RELEVANT_TYPES } = {}) {
   const forms = new Set();
   let considered = 0;
   for (const nm of (Array.isArray(activeNames) ? activeNames : [])) {

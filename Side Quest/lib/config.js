@@ -141,6 +141,9 @@ function subcBudgetTokensPerHour() { const n = parseInt(get('ZOE_SUBC_BUDGET_TOK
 // Idle graph-builder gets its OWN rolling token ceiling, isolated from the shared subconscious pool the
 // news/curation/forecast lanes fill — so knowledge-expansion can't be starved to zero by background noise.
 function graphwalkBudgetTokensPerHour() { const n = parseInt(get('ZOE_GRAPHWALK_BUDGET_TOKPH', '').trim(), 10); return Number.isFinite(n) ? n : 60000; }
+// The PULLER lane (autonomous contact enrichment) gets its OWN rolling ceiling too — pattern-fills are
+// free (no model), so this only bounds the web-discovery search+extract moves. Lower than graph-walk.
+function pullerBudgetTokensPerHour() { const n = parseInt(get('ZOE_PULLER_BUDGET_TOKPH', '').trim(), 10); return Number.isFinite(n) ? n : 40000; }
 
 // --- Email ---
 function emailConfig() {
@@ -158,4 +161,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, emailConfig, discordConfig, APP_ROOT, ENV_PATH };

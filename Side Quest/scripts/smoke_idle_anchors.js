@@ -66,7 +66,7 @@ const manyNews = Array.from({ length: 10 }, (_, i) => ({ principals: [`News ${i}
 const manyFrontier = Array.from({ length: 10 }, (_, i) => ({ id: 100 + i, name: `Frontier ${i}`, degree: i + 1 }));
 const capped = A.assembleAnchors({ news: manyNews, frontier: manyFrontier });
 ok(capped.filter(x => x.source === 'news').length <= A.NEWS_MAX, 'assembleAnchors: news capped at NEWS_MAX (no crowding)');
-ok(capped.filter(x => x.source === 'frontier').length >= 4, 'assembleAnchors: frontier still gets a healthy share');
+ok(capped.filter(x => x.source === 'frontier').length >= A.FRONTIER_MAX, 'assembleAnchors: frontier still fills its (leaner) cap — news does not crowd it out');
 ok(capped.length <= A.MAX_TOTAL, 'assembleAnchors: respects MAX_TOTAL cap');
 
 // --- visited-exhaustion: when the top frontier nodes are all visited, FRESH ones still surface ---
@@ -74,13 +74,13 @@ ok(capped.length <= A.MAX_TOTAL, 'assembleAnchors: respects MAX_TOTAL cap');
 const pool = Array.from({ length: 12 }, (_, i) => ({ id: 200 + i, name: `Node ${i}`, degree: 12 - i }));  // Node 0 = degree 12 (highest)
 const visitedTop = new Set(['Node 0', 'Node 1', 'Node 2', 'Node 3', 'Node 4', 'Node 5'].map(visitKey));  // top 6 by degree already worked
 const fresh = A.assembleAnchors({ frontier: pool, visitedKeys: visitedTop });
-ok(fresh.filter(x => x.source === 'frontier').length >= 4, 'assembleAnchors: surfaces FRESH frontier nodes past the visited top (no exhaustion)');
+ok(fresh.filter(x => x.source === 'frontier').length >= A.FRONTIER_MAX, 'assembleAnchors: surfaces FRESH frontier nodes past the visited top (no exhaustion)');
 ok(!fresh.some(x => visitedTop.has(visitKey(x.mention))), 'assembleAnchors: never re-offers a visited node');
 
 // --- RELEVANT frontier: SQL builder (pure) ---
 const relSql = A.buildRelevantFrontierSql(['Rainey Center', "O'Brien Group", 'ab']);  // 'ab' too short → dropped
 ok(relSql && /name IN \('Rainey Center','O''Brien Group'\)/.test(relSql), 'buildRelevantFrontierSql: names listed, quote-escaped, <3-char dropped');
-ok(relSql && /UNION/.test(relSql) && /degree BETWEEN 1 AND 15/.test(relSql), 'buildRelevantFrontierSql: active ∪ neighbors, focus degree band 1-15');
+ok(relSql && /UNION/.test(relSql) && /degree BETWEEN 0 AND 15/.test(relSql), 'buildRelevantFrontierSql: active ∪ neighbors, focus degree band 0-15 (includes freshly-minted degree-0)');
 ok(relSql && /entity_type IN \('person','organization','event','government_body'\)/.test(relSql), 'buildRelevantFrontierSql: gated on real-entity types (not QID)');
 ok(relSql && !/wikidata_qid/.test(relSql), 'buildRelevantFrontierSql: does NOT require a QID (his neighborhood is QID-less local material)');
 ok(relSql && /ORDER BY degree DESC LIMIT 200/.test(relSql), 'buildRelevantFrontierSql: degree DESC, default limit');
