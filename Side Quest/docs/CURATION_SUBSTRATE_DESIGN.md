@@ -197,6 +197,15 @@ later pulled fully in.
     - **2c — driver + wiring:** extract → **HYBRID** (Echo's `extract_entities_from_doc` surfaces
       candidates → merged with our typed extraction → our disambiguation/gate/observe) → propose to
       Echo + observe (feed=`doc-decomp`), under a per-doc volume cap + shared budget.
+
+    **✅ Split 1 BUILT + LIVE-PROVEN (2026-07-04, gate 130).** `lib/doc_decompose.js` (2a+2b+2c),
+    `smoke_doc_decompose` 60 assertions. Live end-to-end proof (2nd client attached to the running
+    engine, local model): a Woodrow Wilson passage → **reused the existing `[wd:Q34296]` node (no dup)**,
+    5 cited mints, **Princeton University → ambiguous → held** (fall-through) — 12 `kg_observations`
+    (10 promoted grade-B + 2 held). NOTE on the hybrid: `extract_entities_from_doc` takes a vault
+    `doc_id` and SELF-proposes (side-effecting, not a read-only candidate lister) — so for graph-leaf
+    input `echoExtract` is omitted; the vault-doc hybrid needs rethinking in Split 2. `resolveMention`
+    runs conservative (nil→mint on common nodes; Echo's propose dedup is the backstop) — a tuning item.
   - **Split 2 (fold in the streams) — PER-STREAM INLINE + fall-through to the lake** (Lucas-locked).
     Each stream gets its OWN inline decomposition hook with **stream-specific extraction guidelines**
     (a news item, a meeting transcript, a dropped doc, a video caption each want different rules),
