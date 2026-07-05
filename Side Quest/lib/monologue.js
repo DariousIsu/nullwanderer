@@ -1696,7 +1696,9 @@ async function runPullerMove(_recentTurns) {
     try { for (const c of db.listRecentCards({ types: ['org'], limit: 20 })) add(c && c.name, null); } catch {}   // freshest active orgs first
     try {
       const byCompany = new Map();
-      for (const t of pdb.listTargets({ limit: 400 })) {
+      // ALL targets, not a recency-capped window — the sector orgs (Google, Duke Energy, …) were bulk-
+      // loaded and aren't recently-accessed, so a 400-row window missed them entirely (→ no sector seed).
+      for (const t of pdb.listTargets({ limit: 100000 })) {
         if (!t.company || t.company.includes(';')) continue;   // skip concatenated org-chart junk ("DOE; Office of the Secretary; …")
         const k = t.company.toLowerCase(); const e = byCompany.get(k);
         if (!e) byCompany.set(k, { name: t.company, domain: t.domain || null }); else if (!e.domain && t.domain) e.domain = t.domain;
