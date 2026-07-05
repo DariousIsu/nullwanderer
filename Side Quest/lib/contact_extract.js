@@ -32,15 +32,16 @@ function buildContactPrompt(text, { title } = {}) {
     {
       role: 'system',
       content:
-        'You extract CONTACT INFORMATION for people and organizations from a document.\n' +
+        'You extract CONTACTS — PEOPLE (and organizations you would contact directly, like a company or office) — from a document.\n' +
         'Output ONLY lines in this EXACT pipe-delimited format, nothing else:\n' +
         'CONTACT | name | title | affiliation | email | phone | address\n' +
         'Rules:\n' +
-        '- One line per person or organization that has AT LEAST a stated email, phone, or mailing address.\n' +
+        '- Emit a line for each PERSON who is presented with a title/role OR with any contact detail (email/phone). A named person with a role but no email still counts — email/phone/address are optional.\n' +
+        '- Do NOT emit a line for a VENUE, hotel, building, room, city, or for the EVENT itself. The location or address where an event is held is NOT a contact — attach an address only to a real person/org, never as its own entry.\n' +
+        '- Skip people merely mentioned in passing who have neither a title/role nor any contact detail.\n' +
         '- Use a single hyphen - for any field that is not present in the text.\n' +
         '- NEVER invent, guess, or infer an email or phone. Only emit values explicitly written in the text.\n' +
         '- name = the person or org name; title = their role; affiliation = their employer/organization.\n' +
-        '- Do NOT emit a line for a name that has no email, phone, or address.\n' +
         '- No prose, no headers, no numbering, no commentary — only CONTACT lines.',
     },
     { role: 'user', content: `${head}${body}` },
@@ -65,6 +66,12 @@ function _phone(s) {
   const digits = v.replace(/[^\d]/g, '');
   return digits.length >= 7 ? v : null;   // needs enough digits to be a real number
 }
+// A VENUE / EVENT / street-address name is NOT a contact (the "AC Hotel Raleigh Downtown 9 Glenwood Ave"
+// bug: a flyer's event location landed as a person). Deliberately narrow so real orgs survive — it does
+// NOT match generic org words (center/institute/group/foundation/association/LLC/office).
+const _VENUE_EVENT_RE = /\b(hotel|motel|inn|resort|ballroom|banquet|auditorium|arena|stadium|theat(?:er|re)|conference|convention|symposium|breakfast|luncheon|gala|reception|summit|downtown|uptown)\b/i;
+const _STREET_RE = /\b\d{1,6}\s+\S+.*\b(st|street|ave|avenue|blvd|boulevard|road|rd|drive|dr|lane|ln|way|suite|ste|room|rm|floor|fl)\b/i;
+function _looksLikeVenueOrEvent(name) { const n = String(name || ''); return _VENUE_EVENT_RE.test(n) || _STREET_RE.test(n); }
 
 // Parse the model's pipe-delimited lines into Puller ingest rows ({name, company, title, email, phone,
 // address, confidence}). Drops any tuple without a name or without at least one contact field. Pure.
@@ -80,6 +87,7 @@ function parseContactTuples(raw) {
     const [name, title, company, email, phone, address] = parts;
     const nm = _clean(name);
     if (!nm || nm.length < 2) continue;
+    if (_looksLikeVenueOrEvent(nm)) continue;                 // a venue/event/street-address is not a contact
     const row = {
       name: nm,
       title: _clean(title),
@@ -89,7 +97,9 @@ function parseContactTuples(raw) {
       address: _clean(address),
       confidence: DOC_CONFIDENCE,
     };
-    if (!row.email && !row.phone && !row.address) continue;   // a bare name is not contact intelligence
+    // QUALIFY on a person-signal: a contact detail OR a title/role. An address ALONE does not qualify —
+    // that's how a venue's event-address slipped in as a contact. (A titled person with no email still counts.)
+    if (!row.email && !row.phone && !row.title) continue;
     out.push(row);
   }
   return out;

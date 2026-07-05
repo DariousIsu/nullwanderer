@@ -2456,7 +2456,7 @@ ipcMain.handle('contacts:recent', async (_e, { n = 60 } = {}) => {
     const withIntel = [];
     for (const t of targets) {
       const beliefs = pdb.listBeliefs(t.id);
-      if (!beliefs.some(b => b.type === 'email' || b.type === 'phone' || b.type === 'address')) continue;   // skip bare targets (no contact intel)
+      if (!beliefs.some(b => b.type === 'email' || b.type === 'phone' || b.type === 'address' || b.type === 'role')) continue;   // needs contact intel OR a title/role (titled people enrich later)
       withIntel.push({ t, beliefs });
     }
     const crmByName = await lookupCrmContacts(withIntel.map(x => x.t.name));

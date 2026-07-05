@@ -24,28 +24,43 @@ ok(prompt[1].content.startsWith('Document title: Roster'), 'buildContactPrompt: 
 const raw = [
   'CONTACT | Brad Overcash | State Senator | NC General Assembly | Brad.Overcash@ncleg.gov | 919-733-5745 | 300 N. Salisbury St, Raleigh, NC 27603',
   'CONTACT | Rainey Center | - | - | info@raineycenter.org | (202) 555-0100 | 1455 Pennsylvania Ave NW, Washington DC',
-  'CONTACT | Jane Doe | Director | Rainey Center | - | - | -',            // no contact field → dropped
-  'CONTACT | Bogus Person | - | - | not-an-email | 12 | -',               // bad email + too-short phone → dropped
+  'CONTACT | Jane Doe | Director | Rainey Center | - | - | -',            // title qualifies (a real person) → KEPT
+  'CONTACT | Bogus Person | - | - | not-an-email | 12 | -',               // no email/phone/title → dropped
   'Ted Alexander | Senator | NC Senate | ted.alexander@NCLEG.gov | - | -', // no CONTACT tag; email only; mixed case
   'Here is a prose summary line that should be ignored.',                  // no pipes → ignored
 ].join('\n');
 const rows = CE.parseContactTuples(raw);
-ok(rows.length === 3, `parseContactTuples: keeps 3 contactable tuples (got ${rows.length})`);
+ok(rows.length === 4, `parseContactTuples: keeps 4 contactable tuples (got ${rows.length})`);
 const brad = rows.find(r => r.name === 'Brad Overcash');
 ok(brad && brad.email === 'brad.overcash@ncleg.gov', 'parseContactTuples: email lowercased');
 ok(brad && brad.phone === '919-733-5745' && /Raleigh/.test(brad.address), 'parseContactTuples: phone + address captured');
 ok(brad && brad.company === 'NC General Assembly' && brad.title === 'State Senator', 'parseContactTuples: title + affiliation');
 ok(brad && brad.confidence === CE.DOC_CONFIDENCE, 'parseContactTuples: doc confidence stamped (pattern tier)');
-ok(!rows.some(r => r.name === 'Jane Doe'), 'parseContactTuples: drops a bare name with no contact field');
-ok(!rows.some(r => r.name === 'Bogus Person'), 'parseContactTuples: drops invalid email + too-short phone (no field left)');
+ok(rows.some(r => r.name === 'Jane Doe' && r.title === 'Director'), 'parseContactTuples: KEEPS a titled person even with no email');
+ok(!rows.some(r => r.name === 'Bogus Person'), 'parseContactTuples: drops a row with no email/phone/title');
 const ted = rows.find(r => r.name === 'Ted Alexander');
 ok(ted && ted.email === 'ted.alexander@ncleg.gov', 'parseContactTuples: tolerates a missing CONTACT tag, normalizes email case');
+
+// --- the "missed people, landed place" fix: venues/events out, titled people in, address-alone out ---
+const flyer = [
+  'CONTACT | AC Hotel Raleigh Downtown | - | - | - | - | 9 Glenwood Ave, Raleigh, NC 27603',   // VENUE → rejected
+  'CONTACT | Faith in Elections Prayer Breakfast | - | - | - | - | -',                         // EVENT → rejected
+  'CONTACT | Ted Alexander | Senator, North Carolina | - | - | - | -',                          // titled person, no email → KEPT
+  'CONTACT | Brad Overcash | Senator, North Carolina | - | - | - | -',                          // titled person, no email → KEPT
+  'CONTACT | Address Only | - | - | - | - | 500 Main St, Raleigh NC',                           // no title/email, address alone → dropped
+].join('\n');
+const fr = CE.parseContactTuples(flyer);
+ok(!fr.some(r => /hotel/i.test(r.name)), 'flyer: the VENUE (AC Hotel) is NOT landed as a contact');
+ok(!fr.some(r => /breakfast/i.test(r.name)), 'flyer: the EVENT (Prayer Breakfast) is NOT landed as a contact');
+ok(fr.some(r => r.name === 'Ted Alexander') && fr.some(r => r.name === 'Brad Overcash'), 'flyer: the two titled senators ARE captured (email pending)');
+ok(!fr.some(r => r.name === 'Address Only'), 'flyer: an address-alone row (no title/contact) does NOT qualify');
+ok(fr.length === 2, `flyer: exactly the 2 people, 0 places (got ${fr.length})`);
 
 // --- land into an in-memory Puller: targets + observations + CITED beliefs ---
 pdb.init({ path: ':memory:' });
 const url = 'docstore:4242';
 const stats = ingest.ingestRows(pdb, rows, { source: 'doc:Faith in Elections roster', sourceUrl: url, obsKind: 'doc' });
-ok(stats.targets === 3, `ingestRows: minted 3 new targets — the "new objects" (got ${stats.targets})`);
+ok(stats.targets === 4, `ingestRows: minted 4 new targets — the "new objects" (got ${stats.targets})`);
 ok(stats.observations >= 7 && stats.beliefs >= 7, `ingestRows: landed observations + beliefs (obs=${stats.observations}, beliefs=${stats.beliefs})`);
 
 const bt = pdb.findTargetByEmail('brad.overcash@ncleg.gov');
@@ -60,7 +75,7 @@ ok(bbeliefs.some(b => b.type === 'role' && b.value === 'State Senator'), 'ingest
 
 // --- idempotent: re-dropping the same doc doesn't double-count ---
 const again = ingest.ingestRows(pdb, rows, { source: 'doc:Faith in Elections roster', sourceUrl: url, obsKind: 'doc' });
-ok(again.targets === 0 && again.skippedDup === 3, 'ingestRows: re-drop is idempotent (0 new, 3 already tracked)');
+ok(again.targets === 0 && again.skippedDup === 4, 'ingestRows: re-drop is idempotent (0 new, 4 already tracked)');
 
 pdb.close();
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
