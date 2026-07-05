@@ -13,6 +13,9 @@ let full = { nodes: [], links: [] };   // pristine current-mode graph (string-ke
 let selected = new Set(); // active entity-type filter
 let hovered = null;
 let mode = 'overview', submitted = '';
+// --- demo animation state (cosmetic): shimmer the focal node's edges + pulse on each move ---
+let focalId = null, pulseAt = 0;
+const linkEnd = (x) => (x && typeof x === 'object') ? x.id : x;
 
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function setOverlay(text, cls) { if (!text) { overlay.hidden = true; return; } overlay.hidden = false; overlay.className = 'overlay' + (cls ? ' ' + cls : ''); overlay.textContent = text; }
@@ -24,6 +27,11 @@ function ensureGraph() {
     .cooldownTicks(120).d3VelocityDecay(0.3)
     .linkColor(l => l.color).linkWidth(l => l.width)
     .linkDirectionalArrowLength(3).linkDirectionalArrowRelPos(1)
+    // COSMETIC (demo): animate ONLY the current focal node's edges — a light amber shimmer so the panel
+    // looks alive on whatever the subconscious is working. 0 particles elsewhere (overview stays static →
+    // perf-safe). Keeps the canvas render loop ticking in follow mode, which also drives the pulse ring.
+    .linkDirectionalParticles(l => (focalId && (linkEnd(l.source) === focalId || linkEnd(l.target) === focalId)) ? 2 : 0)
+    .linkDirectionalParticleSpeed(0.011).linkDirectionalParticleWidth(2).linkDirectionalParticleColor(() => 'rgba(251,191,36,0.9)')
     .linkLabel(l => `${l.relType} (${l.category})`)
     .onNodeHover(n => { hovered = n || null; renderHover(); if (G) G.nodeColor(G.nodeColor()); })
     .onNodeClick(n => { if (n && !n.isFocal) focus(n.id); })
@@ -34,6 +42,9 @@ function ensureGraph() {
       else if (n.overviewSource && n.degree !== undefined) r = Math.max(4, Math.min(10, 4 + Math.log10((n.degree || 0) + 1) * 1.5));
       ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI, false); ctx.fillStyle = n.color || '#7dd3fc'; ctx.fill();
       if (n.isFocal) { ctx.lineWidth = 2 / scale; ctx.strokeStyle = '#FBBF24'; ctx.stroke(); }
+      // COSMETIC (demo): an expanding amber ring on the focal node for ~1.4s after each move — reads as
+      // "new activity landed here". Time-based off pulseAt; the edge particles keep frames coming so it draws.
+      if (n.isFocal && pulseAt) { const dt = performance.now() - pulseAt; if (dt >= 0 && dt < 1400) { const p = dt / 1400; ctx.beginPath(); ctx.arc(n.x, n.y, r + 3 + p * 22, 0, 2 * Math.PI, false); ctx.strokeStyle = `rgba(251,191,36,${(1 - p) * 0.7})`; ctx.lineWidth = 2 / scale; ctx.stroke(); } }
       if (n.overviewSource === 'recent' || n.overviewSource === 'both') { ctx.beginPath(); ctx.arc(n.x, n.y, r + 2, 0, 2 * Math.PI, false); ctx.setLineDash([2, 2]); ctx.lineWidth = 1.2 / scale; ctx.strokeStyle = '#FBBF24'; ctx.stroke(); ctx.setLineDash([]); }
       if (hovered && hovered.id === n.id) { ctx.beginPath(); ctx.arc(n.x, n.y, r * 1.8, 0, 2 * Math.PI, false); ctx.strokeStyle = 'rgba(125,211,252,0.85)'; ctx.lineWidth = 1.5 / scale; ctx.stroke(); }
       if (scale > 0.6 || n.isFocal) {
@@ -94,6 +105,7 @@ function setData(res, m) {
   if (!res || !res.ok) { setOverlay((res && res.error) || 'failed to load', 'fail'); full = { nodes: [], links: [] }; renderPills([]); statsEl.hidden = true; return; }
   if (res.error) { setOverlay(`${res.error}: ${submitted}`, 'warn'); full = { nodes: [], links: [] }; renderPills([]); applyFilter(); statsEl.hidden = true; return; }
   full = { nodes: res.nodes || [], links: res.links || [] };
+  focalId = (full.nodes.find(n => n.isFocal) || {}).id || null;   // drives the edge-shimmer + pulse target
   selected = new Set();
   renderPills(res.availableTypes || []);
   renderLegend(res.legend || []);
@@ -159,10 +171,20 @@ function setFollow(on) {
   // turning follow ON snaps straight to the last known anchor so there's no wait for the next move
   if (follow && lastMove && lastMove.anchor && lastMove.anchor !== submitted) focus(lastMove.anchor);
 }
+// COSMETIC (demo): fire the pulse ring + a staggered particle burst down the focal node's edges. Pure
+// eye-candy — no data changes; the particles just make "she just did something here" visible for ~1.5s.
+function pulseFocal() {
+  pulseAt = performance.now();
+  if (!G || !focalId) return;
+  try {
+    const links = (G.graphData().links || []).filter(l => linkEnd(l.source) === focalId || linkEnd(l.target) === focalId);
+    links.slice(0, 8).forEach((l, i) => setTimeout(() => { try { G.emitParticle(l); } catch (e) {} }, (i % 4) * 130));
+  } catch (e) {}
+}
 function onFocusMove(p) {
   if (!p || !p.anchor) return;
   lastMove = p; renderNow();
-  if (follow && p.anchor !== submitted) focus(p.anchor);   // re-center the ego walk on her current node
+  if (follow && p.anchor !== submitted) focus(p.anchor).then(pulseFocal).catch(() => {});   // re-center + animate
 }
 followBtn.addEventListener('click', () => setFollow(!follow));
 try {
