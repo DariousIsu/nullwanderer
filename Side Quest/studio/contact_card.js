@@ -32,11 +32,31 @@ function initialsOf(name) {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+// The consume-only CRM record surfaced on the card: the full entry the click-through opens, plus the
+// key/value rows the inline expand shows. Only built when the contact is actually in the CRM (crmId).
+// Pure — every value comes from the injected `crm` lookup (main.lookupCrmContacts).
+function crmBlock(crm = {}) {
+  if (crm.crmId == null) return null;
+  const fields = [
+    ['Title', crm.title], ['Party', crm.party], ['Chamber', crm.chamber],
+    ['State', crm.state], ['District', crm.district], ['Tier', crm.tier],
+    ['Engagement', crm.engagement], ['Email', crm.email], ['Phone', crm.phone],
+    ['Address', crm.address],
+  ].filter(([, v]) => str(v)).map(([k, v]) => ({ k, v: str(v) }));
+  return {
+    crmId: crm.crmId,
+    fields,
+    notes: str(crm.notesPublic) || null,
+    wikipedia: str(crm.wikipedia) || null,
+  };
+}
+
 // Build a card payload. `contact` = { name, title, company, email, phone, address, confidence, targetId,
-// kind }. `crm` (optional, injected consume-only lookup) = { photo, bio, crmId }. Pure.
+// kind }. `crm` (optional, injected consume-only lookup) = the full CRM record (see lookupCrmContacts).
+// A discovered contact detail (Puller belief) WINS over the CRM value; the CRM fills any gap. Pure.
 function buildCardData(contact = {}, crm = {}) {
   const name = str(contact.name);
-  const title = str(contact.title);
+  const title = str(contact.title) || str(crm.title);
   const org = str(contact.company);
   const role = [title, org].filter(Boolean).join(' · ');
   return {
@@ -47,16 +67,33 @@ function buildCardData(contact = {}, crm = {}) {
     role: role || null,
     photo: str(crm.photo) || null,
     initials: initialsOf(name),
-    email: str(contact.email) || null,
-    phone: str(contact.phone) || null,
-    address: str(contact.address) || null,
+    email: str(contact.email) || str(crm.email) || null,   // Puller belief wins; CRM fills the gap
+    phone: str(contact.phone) || str(crm.phone) || null,
+    address: str(contact.address) || str(crm.address) || null,
     bio: str(crm.bio) || null,
     grade: gradeFor(contact.confidence),
     confidence: (typeof contact.confidence === 'number') ? contact.confidence : null,
     targetId: (contact.targetId != null) ? contact.targetId : null,
     crmId: (crm.crmId != null) ? crm.crmId : null,
+    crm: crmBlock(crm),                                     // the full entry for inline expand + click-through
     kind: contact.kind === 'org' ? 'org' : 'person',
     ts: (typeof contact.ts === 'number') ? contact.ts : null,   // recency for the waterfall
+  };
+}
+
+// An ORG card — for a "place" that RESOLVED to an organization in Echo (the Rainey Center bug: an org
+// was landing as a blank place). `entity` = a search_entities hit { id, name, entity_type, summary }.
+// Rendered like a contact card (org-styled), with the Echo summary as its bio. Pure.
+function buildOrgCard(entity = {}, { ts = null } = {}) {
+  const name = str(entity.name);
+  const summary = str(entity.summary);
+  return {
+    type: 'org', name, initials: initialsOf(name),
+    role: 'Organization',
+    bio: summary ? summary.slice(0, 400) : null,
+    entityId: (entity.id != null) ? entity.id : null,
+    subtype: str(entity.entity_subtype) || null,
+    key: name.toLowerCase(), ts: (typeof ts === 'number') ? ts : null,
   };
 }
 
@@ -88,4 +125,4 @@ function cardFromTarget(target = {}, beliefs = [], crm = {}) {
   }, crm);
 }
 
-module.exports = { buildCardData, cardFromTarget, buildPlaceCard, buildEventCard, gradeFor, initialsOf };
+module.exports = { buildCardData, cardFromTarget, buildPlaceCard, buildEventCard, buildOrgCard, crmBlock, gradeFor, initialsOf };

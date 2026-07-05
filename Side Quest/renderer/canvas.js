@@ -632,7 +632,7 @@ function cardHtml(c, isNew) {
     ? `<img class="pc-photo" src="${esc(c.photo)}" alt="${esc(c.name)}" draggable="false" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pc-initials',textContent:'${esc((c.initials || '?').replace(/'/g, ''))}'}))">`
     : `<div class="pc-initials pc-av-${esc(t)}">${esc(c.initials || '?')}</div>`;
   const rows = [];
-  let sub = '', roleLine = '', grade = '', brief = '';
+  let sub = '', roleLine = '', grade = '', brief = '', expand = '', actions = '';
   if (t === 'place') {
     if (c.address) rows.push(`<div class="pc-row"><span class="pc-ic">📍</span>${esc(c.address)}</div>`);
     sub = c.note ? `<div class="pc-bio">${esc(c.note)}</div>` : '';
@@ -642,6 +642,9 @@ function cardHtml(c, isNew) {
     if (c.location) rows.push(`<div class="pc-row"><span class="pc-ic">📍</span>${esc(c.location)}</div>`);
     sub = c.note ? `<div class="pc-bio">${esc(c.note)}</div>` : '';
     roleLine = 'Event';
+  } else if (t === 'org') {
+    sub = c.bio ? `<div class="pc-bio">${esc(c.bio)}</div>` : '';
+    roleLine = c.role || 'Organization';
   } else {
     if (c.email) rows.push(`<div class="pc-row"><span class="pc-ic">✉</span><a href="mailto:${esc(c.email)}">${esc(c.email)}</a></div>`);
     if (c.phone) rows.push(`<div class="pc-row"><span class="pc-ic">☎</span>${esc(c.phone)}</div>`);
@@ -649,11 +652,21 @@ function cardHtml(c, isNew) {
     sub = c.bio ? `<div class="pc-bio">${esc(c.bio)}</div>` : '';
     roleLine = c.role || '';
     grade = c.grade ? `<span class="pc-grade g-${esc(c.grade)}" title="confidence ${esc(c.grade)}">${esc(c.grade)}</span>` : '';
-    brief = c.targetId != null ? `<button class="pc-briefing" data-target="${esc(String(c.targetId))}">Full briefing →</button>` : '';
+    // INLINE EXPAND — the complete CRM entry, revealed on click (the card is a CRM contact).
+    if (c.crm && Array.isArray(c.crm.fields)) {
+      const fr = c.crm.fields.map(f => `<div class="pc-crm-row"><span class="k">${esc(f.k)}</span><span class="v">${esc(f.v)}</span></div>`).join('');
+      const notes = c.crm.notes ? `<div class="pc-crm-notes">${esc(c.crm.notes)}</div>` : '';
+      const wiki = c.crm.wikipedia ? `<a class="pc-crm-wiki" href="${esc(c.crm.wikipedia)}" target="_blank" rel="noreferrer">Wikipedia ↗</a>` : '';
+      expand = `<div class="pc-crm">${fr}${notes}${wiki}</div>`;
+    }
+    const crmBtn = (c.crm && c.crm.crmId != null) ? `<button class="pc-crmbtn" data-crm="${esc(String(c.crm.crmId))}">Open in CRM →</button>` : '';
+    const briefBtn = c.targetId != null ? `<button class="pc-briefing" data-target="${esc(String(c.targetId))}">Full briefing →</button>` : '';
+    actions = (crmBtn || briefBtn) ? `<div class="pc-actions">${crmBtn}${briefBtn}</div>` : '';
   }
-  return `<div class="ppl-card ppl-${esc(t)}${isNew ? ' new' : ''}" data-card="${esc(cardKeyOf(c))}">
+  const expandable = expand ? ' pc-can-expand' : '';
+  return `<div class="ppl-card ppl-${esc(t)}${expandable}${isNew ? ' new' : ''}" data-card="${esc(cardKeyOf(c))}">
     <div class="pc-head">${avatar}<div class="pc-id"><div class="pc-name">${esc(c.name)}</div>${roleLine ? `<div class="pc-role">${esc(roleLine)}</div>` : ''}</div>${grade}</div>
-    ${rows.length ? `<div class="pc-rows">${rows.join('')}</div>` : ''}${sub}${brief}
+    ${rows.length ? `<div class="pc-rows">${rows.join('')}</div>` : ''}${sub}${expand}${actions}${brief}
   </div>`;
 }
 function pplCount() { pplN.textContent = String(pplList.querySelectorAll('.ppl-card').length || ''); }
@@ -678,7 +691,15 @@ function openPeople() { people.hidden = false; document.body.classList.add('ppl-
 function closePeople() { people.hidden = true; document.body.classList.remove('ppl-open'); }
 $('peopleBtn').addEventListener('click', () => { if (people.hidden) openPeople(); else closePeople(); });
 $('pplClose').addEventListener('click', closePeople);
-pplList.addEventListener('click', (e) => { const b = e.target.closest('.pc-briefing'); if (b && b.dataset.target) { try { window.sq.contacts.openBriefing(Number(b.dataset.target)); } catch (err) {} } });
+pplList.addEventListener('click', (e) => {
+  const crmBtn = e.target.closest('.pc-crmbtn');
+  if (crmBtn && crmBtn.dataset.crm) { e.stopPropagation(); try { window.sq.contacts.openCrm(Number(crmBtn.dataset.crm)); } catch (err) {} return; }
+  const brief = e.target.closest('.pc-briefing');
+  if (brief && brief.dataset.target) { e.stopPropagation(); try { window.sq.contacts.openBriefing(Number(brief.dataset.target)); } catch (err) {} return; }
+  if (e.target.closest('a')) return;                       // let mailto:/wiki links through
+  const card = e.target.closest('.ppl-card.pc-can-expand'); // click the card body → reveal the full CRM entry
+  if (card) card.classList.toggle('pc-expanded');
+});
 // live push: a doc drop just discovered someone → pop the rail open (if closed) and flash the new card in
 try { window.sq.contacts.onCard((c) => { if (people.hidden) { people.hidden = false; document.body.classList.add('ppl-open'); } prependCard(c); }); } catch (e) {}
 

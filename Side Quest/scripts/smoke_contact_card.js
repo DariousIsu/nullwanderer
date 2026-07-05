@@ -33,6 +33,33 @@ const enriched = CC.buildCardData({ name: 'Sarah Vance', confidence: 0.95, targe
 ok(enriched.photo === 'http://akleg.gov/vance.jpg' && enriched.bio === 'AK State Rep' && enriched.crmId === 1, 'buildCardData: CRM photo/bio/crmId passed through');
 ok(enriched.grade === 'A', 'buildCardData: 0.95 → grade A');
 
+// --- buildCardData: FULL CRM record → the crm block (inline expand) + gap-fill ---
+const crmFull = {
+  crmId: 42, photo: 'http://x/p.jpg', bio: 'Senator',
+  title: 'State Senator', email: 'ted@ncleg.gov', phone: '919-000-0000', address: '16 W Jones St, Raleigh, NC',
+  party: 'Republican', chamber: 'State Senate', state: 'NC', district: 'NC-44', tier: '1', engagement: 'Warm',
+  wikipedia: 'https://en.wikipedia.org/wiki/Ted', notesPublic: 'LAMP Tier 1 Active Elected.',
+};
+// no Puller contact detail → CRM fills the gap
+const crmCard = CC.buildCardData({ name: 'Ted Alexander', confidence: 0.8, targetId: 9 }, crmFull);
+ok(crmCard.email === 'ted@ncleg.gov' && crmCard.phone === '919-000-0000' && crmCard.address === '16 W Jones St, Raleigh, NC', 'buildCardData: CRM fills missing email/phone/address');
+ok(crmCard.title === 'State Senator' && crmCard.role === 'State Senator', 'buildCardData: CRM title fills the role line');
+ok(crmCard.crm && crmCard.crm.crmId === 42 && Array.isArray(crmCard.crm.fields), 'buildCardData: crm block attached with fields[]');
+ok(crmCard.crm.fields.some(f => f.k === 'Party' && f.v === 'Republican') && crmCard.crm.fields.some(f => f.k === 'Tier' && f.v === '1'), 'buildCardData: crm fields carry party + tier');
+ok(crmCard.crm.notes === 'LAMP Tier 1 Active Elected.' && /wikipedia/.test(crmCard.crm.wikipedia), 'buildCardData: crm block carries notes + wikipedia');
+// Puller belief WINS over CRM for the same attr
+const bothCard = CC.buildCardData({ name: 'Ted Alexander', email: 'discovered@ncleg.gov', confidence: 0.8 }, crmFull);
+ok(bothCard.email === 'discovered@ncleg.gov', 'buildCardData: a discovered (Puller) email wins over the CRM value');
+// no CRM → no crm block
+ok(CC.buildCardData({ name: 'Nobody', confidence: 0.5 }, {}).crm === null, 'buildCardData: no crmId → crm block is null');
+ok(CC.crmBlock({}) === null && CC.crmBlock({ crmId: 1, party: 'R' }).fields.length === 1, 'crmBlock: null without crmId; drops empty fields');
+
+// --- buildOrgCard: a "place" that resolved to an ORG (the Rainey Center bug) → an org card, not a blank place ---
+const org = CC.buildOrgCard({ id: 1550486, name: 'Joseph Rainey Center for Public Policy', entity_type: 'organization', entity_subtype: 'poll_sponsor', summary: 'Polling-domain organization.' }, { ts: 77 });
+ok(org.type === 'org' && org.name === 'Joseph Rainey Center for Public Policy', 'buildOrgCard: type=org + name');
+ok(org.role === 'Organization' && org.bio === 'Polling-domain organization.' && org.entityId === 1550486, 'buildOrgCard: role + Echo summary as bio + entityId');
+ok(org.initials === 'JP' && org.key === 'joseph rainey center for public policy' && org.ts === 77, 'buildOrgCard: initials (first+last token) + dedup key + ts');
+
 // --- cardFromTarget: Puller target + beliefs → card ---
 const target = { id: 12, name: 'Ted Alexander', company: 'NC Senate', kind: 'person', last_accessed_at: 999 };
 const beliefs = [

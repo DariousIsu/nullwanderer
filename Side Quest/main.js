@@ -2492,8 +2492,8 @@ ipcMain.handle('contacts:recent', async (_e, { n = 60 } = {}) => {
     }
     const crmByName = await lookupCrmContacts(withIntel.map(x => x.t.name));
     const people = withIntel.map(x => contactCard.cardFromTarget(x.t, x.beliefs, crmByName.get(String(x.t.name).toLowerCase()) || {}));
-    // merge in the PLACE / EVENT cards (recent_cards store) — one typed waterfall, newest-first
-    let placeEvent = []; try { placeEvent = db.listRecentCards({ types: ['place', 'event'], limit: Math.max(1, Math.min(200, Number(n) || 60)) }); } catch (e) {}
+    // merge in the PLACE / EVENT / ORG cards (recent_cards store) — one typed waterfall, newest-first
+    let placeEvent = []; try { placeEvent = db.listRecentCards({ types: ['place', 'event', 'org'], limit: Math.max(1, Math.min(200, Number(n) || 60)) }); } catch (e) {}
     const cards = [...people, ...placeEvent].sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, Math.max(1, Math.min(200, Number(n) || 60)));
     return { ok: true, cards };
   } catch (e) { console.error('[contacts] recent failed:', e.message); return { ok: false, error: e.message, cards: [] }; }
@@ -2503,6 +2503,19 @@ ipcMain.handle('contacts:open-briefing', async (_e, { targetId } = {}) => {
     const win = createWorkspaceWindow();
     if (win && !win.isDestroyed()) {
       const send = () => { try { win.webContents.send('workspace:open-surface', { surface: 'puller', targetId: Number(targetId) }); } catch {} };
+      if (win.webContents.isLoading()) win.webContents.once('did-finish-load', send); else send();
+    }
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+// "Open in CRM →" — pull up the COMPLETE CRM entry for a card that's an actual CRM contact. Opens the
+// CRM surface (crm.html) deep-linked to the contact id (crm.js reads the #target= hash on load).
+ipcMain.handle('contacts:open-crm', async (_e, { crmId } = {}) => {
+  try {
+    if (crmId == null) return { ok: false, error: 'no crmId' };
+    const win = createWorkspaceWindow();
+    if (win && !win.isDestroyed()) {
+      const send = () => { try { win.webContents.send('workspace:open-surface', { surface: 'crm', targetId: Number(crmId) }); } catch {} };
       if (win.webContents.isLoading()) win.webContents.once('did-finish-load', send); else send();
     }
     return { ok: true };
@@ -5762,7 +5775,7 @@ async function surfaceDocCards(doc) {
     try { pdb.init(); } catch {}
     const sourceUrl = doc.ref || (doc.id != null ? `docstore:${doc.id}` : null);   // the landed doc is the citation
     const push = (c) => { try { if (canvasWindow && !canvasWindow.isDestroyed()) canvasWindow.webContents.send('contacts:card', c); } catch {} };
-    let totPeople = 0, totPlaces = 0, totEvents = 0;
+    let totPeople = 0, totPlaces = 0, totEvents = 0, totOrgs = 0;
     for (let i = 0; i < chunks.length; i++) {
       let cards; try { cards = await extract(chunks[i], { title: doc.title }); } catch (e) { continue; }
       const people = (cards && cards.people) || [], places = (cards && cards.places) || [], events = (cards && cards.events) || [];
@@ -5775,10 +5788,30 @@ async function surfaceDocCards(doc) {
         }
         totPeople += s.targets;
       }
-      for (const p of places) { try { const c = contactCard.buildPlaceCard(p, { ts: now }); db.recordRecentCard({ type: 'place', cardKey: c.key, data: c, ts: now }); push(c); totPlaces++; } catch (e) {} }
+      // PLACES resolve against Echo (root fix): a real LOCATION → rich place card; something that
+      // resolves to an ORGANIZATION/person (the "Rainey Center" bug) → an org card, NOT a blank place;
+      // an unresolved place surfaces ONLY if it carries a real address (no blank place cards).
+      if (places.length) {
+        const placeRes = await resolvePlaces(places.map(p => p && p.name));
+        for (const p of places) {
+          try {
+            const r = placeRes.get(String((p && p.name) || '').toLowerCase());
+            if (r && r.type === 'location') {
+              const c = contactCard.buildPlaceCard({ name: r.name || p.name, address: p.address || null, note: p.note || r.summary || null }, { ts: now });
+              db.recordRecentCard({ type: 'place', cardKey: c.key, data: c, ts: now }); push(c); totPlaces++;
+            } else if (r && (r.type === 'organization' || r.type === 'person' || r.type === 'network')) {
+              const c = contactCard.buildOrgCard(r, { ts: now });   // reroute: an org is not a place
+              db.recordRecentCard({ type: 'org', cardKey: c.key, data: c, ts: now }); push(c); totOrgs++;
+            } else if (String((p && p.address) || '').trim()) {
+              const c = contactCard.buildPlaceCard(p, { ts: now });   // unresolved but has a real address
+              db.recordRecentCard({ type: 'place', cardKey: c.key, data: c, ts: now }); push(c); totPlaces++;
+            }   // else: unresolved + no address → drop (no blank place card)
+          } catch (e) {}
+        }
+      }
       for (const ev of events) { try { const c = contactCard.buildEventCard(ev, { ts: now }); db.recordRecentCard({ type: 'event', cardKey: c.key, data: c, ts: now }); push(c); totEvents++; } catch (e) {} }
     }
-    console.log(`[doc-cards] #${doc.id} ${chunks.length} pass(es) → +${totPeople} people / ${totPlaces} places / ${totEvents} events${truncated ? ` (${truncated} chars beyond the ${chunks.length}-pass cap unscanned)` : ''}`);
+    console.log(`[doc-cards] #${doc.id} ${chunks.length} pass(es) → +${totPeople} people / ${totPlaces} places / ${totOrgs} orgs / ${totEvents} events${truncated ? ` (${truncated} chars beyond the ${chunks.length}-pass cap unscanned)` : ''}`);
   } catch (e) { console.error('[doc-cards] surface failed:', e.message); }
 }
 
@@ -5870,15 +5903,70 @@ async function lookupCrmContacts(names) {
     const clean = [...new Set((names || []).map(n => String(n == null ? '' : n).trim()).filter(n => n.length >= 2))].slice(0, 80);
     if (!clean.length) return out;
     const inList = clean.map(n => `'${n.replace(/'/g, "''")}'`).join(',');
-    const sql = `SELECT id, FirstName, LastName, Image_Url__c, Notes_Public__c FROM electoral.contact WHERE deleted=0 AND TRIM(COALESCE(FirstName,'')||' '||COALESCE(LastName,'')) IN (${inList}) LIMIT 200`;
+    // The FULL useful CRM record (consume-only) — the card shows a summary and the click-through pulls
+    // the complete entry. Party_Roster/State_Represented/Tier_Canonical are the humanized rollups.
+    const sql = `SELECT id, FirstName, LastName, Title, Email, Phone, MobilePhone,
+        MailingStreet, MailingCity, MailingState, MailingPostalCode,
+        District__c, Party_Roster, Chamber__c, State_Represented, Tier_Canonical, Engagement_Stage__c,
+        Notes_Public__c, Wikipedia_Url__c, Image_Url__c
+      FROM electoral.contact
+      WHERE deleted=0 AND TRIM(COALESCE(FirstName,'')||' '||COALESCE(LastName,'')) IN (${inList}) LIMIT 200`;
     const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql, params: [] } });
     if (!r || !r.ok) return out;
     let j; try { j = JSON.parse(r.text); } catch { return out; }
+    const humanize = (s) => String(s || '').replace(/_/g, ' ').trim();
     for (const row of ((j && j.rows) || j || [])) {
       const nm = `${String(row.FirstName || '').trim()} ${String(row.LastName || '').trim()}`.trim();
       if (!nm) continue;
-      const bio = String(row.Notes_Public__c || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || null;
-      if (!out.has(nm.toLowerCase())) out.set(nm.toLowerCase(), { photo: row.Image_Url__c || null, bio, crmId: row.id });
+      const notes = String(row.Notes_Public__c || '').trim();
+      const bio = notes.split('\n').map(x => x.trim()).filter(Boolean)[0] || null;   // first line for the collapsed card
+      const address = [row.MailingStreet, row.MailingCity, row.MailingState, row.MailingPostalCode]
+        .map(x => String(x == null ? '' : x).trim()).filter(Boolean).join(', ') || null;
+      if (!out.has(nm.toLowerCase())) out.set(nm.toLowerCase(), {
+        crmId: row.id, photo: row.Image_Url__c || null, bio,
+        title: String(row.Title || '').trim() || null,
+        email: String(row.Email || '').trim() || null,
+        phone: String(row.Phone || row.MobilePhone || '').trim() || null,
+        address,
+        party: String(row.Party_Roster || '').trim() || null,
+        chamber: humanize(row.Chamber__c) || null,
+        state: String(row.State_Represented || '').trim() || null,
+        district: String(row.District__c || '').trim() || null,
+        tier: String(row.Tier_Canonical || '').trim() || null,
+        engagement: String(row.Engagement_Stage__c || '').trim() || null,
+        wikipedia: String(row.Wikipedia_Url__c || '').trim() || null,
+        notesPublic: notes ? notes.slice(0, 600) : null,   // fuller text for the inline expand
+      });
+    }
+  } catch {}
+  return out;
+}
+
+// Resolve extracted PLACE names against Echo — the root fix for "Rainey Center landed as a blank place".
+// Each place name → its best NAME-matching entity in Echo (search_entities), so the surfacer can tell a
+// real LOCATION (→ rich place card) from an ORGANIZATION/person that was mislabeled a place (→ reroute to
+// an org card, never a blank place). Consume-only, fail-soft → an empty map (everything falls back to the
+// address rule). Returns Map(nameLower → { id, name, type, subtype, summary }).
+async function resolvePlaces(names) {
+  const out = new Map();
+  try {
+    if (!echoSuit || !echoSuit.connected) return out;
+    const clean = [...new Set((names || []).map(n => String(n == null ? '' : n).trim()).filter(n => n.length >= 2))].slice(0, 40);
+    for (const nm of clean) {
+      try {
+        const r = await echoSuit.dispatch({ kind: 'do', name: 'search_entities', args: { query: nm, limit: 5 } });
+        if (!r || !r.ok) continue;
+        let j; try { j = JSON.parse(r.text); } catch { continue; }
+        const rows = (j && (j.result || j.rows || j.entities)) || (Array.isArray(j) ? j : []);
+        const qL = nm.toLowerCase();
+        // NAME-GATE: search_entities also matches summaries, so keep only a candidate whose NAME actually
+        // overlaps the query ("Rainey Center" ⊂ "Joseph Rainey Center for Public Policy"), never a bio hit.
+        const hit = (Array.isArray(rows) ? rows : []).find((e) => {
+          const en = String((e && e.name) || '').toLowerCase().trim();
+          return en && (en.includes(qL) || qL.includes(en));
+        });
+        if (hit) out.set(qL, { id: hit.id, name: hit.name, type: String(hit.entity_type || '').toLowerCase(), subtype: hit.entity_subtype || null, summary: hit.summary || null });
+      } catch {}
     }
   } catch {}
   return out;

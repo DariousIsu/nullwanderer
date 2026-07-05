@@ -136,6 +136,7 @@ contextBridge.exposeInMainWorld('sq', {
   contacts: {
     recent: (n) => ipcRenderer.invoke('contacts:recent', { n }),
     openBriefing: (targetId) => ipcRenderer.invoke('contacts:open-briefing', { targetId }),
+    openCrm: (crmId) => ipcRenderer.invoke('contacts:open-crm', { crmId }),
     onCard: (cb) => { const h = (_e, c) => { try { cb(c); } catch (e) {} }; ipcRenderer.on('contacts:card', h); return () => ipcRenderer.removeListener('contacts:card', h); },
   },
 

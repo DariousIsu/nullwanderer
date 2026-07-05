@@ -139,4 +139,9 @@ Object.keys(selators).forEach(k => selators[k].addEventListener('change', () => 
 let t; qEl.addEventListener('input', () => { clearTimeout(t); t = setTimeout(refresh, 300); });
 qEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { clearTimeout(t); refresh(); } });
 
-(async () => { await loadFacets(); await refresh(); })();
+// DEEP-LINK: "Open in CRM →" from the canvas People rail loads this surface with #target=<contactId> —
+// open that contact's complete entry straight away (the browse list still loads behind it).
+function deepLinkId() { const m = /(?:^|[#&])target=(\d+)/.exec(location.hash || ''); return m ? m[1] : null; }
+window.addEventListener('hashchange', () => { const id = deepLinkId(); if (id) openContact(id); });
+
+(async () => { await loadFacets(); await refresh(); const id = deepLinkId(); if (id) openContact(id); })();
