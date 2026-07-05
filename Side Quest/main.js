@@ -2444,6 +2444,37 @@ ipcMain.handle('leg:get', async (_e, { billId } = {}) => {
   } catch (e) { console.error('[leg] get failed:', e.message); return { ok: false, error: e.message }; }
 });
 
+// ============================ PEOPLE RAIL (contact cards) =====================================
+// The left-docked contact-card waterfall on the canvas. Recent Puller contacts (newest-first) that carry
+// contact intel become cards; a doc drop pushes a new card live (see bankDocContacts). CRM photo/bio is a
+// consume-only enrichment. "Full briefing →" opens the Puller dossier surface for that person.
+ipcMain.handle('contacts:recent', async (_e, { n = 60 } = {}) => {
+  try {
+    const pdb = require('./lib/puller_db'); pdb.init();
+    const contactCard = require('./studio/contact_card');
+    const targets = pdb.listTargets({ limit: Math.max(1, Math.min(200, Number(n) || 60)) });   // ORDER BY last_accessed_at DESC
+    const withIntel = [];
+    for (const t of targets) {
+      const beliefs = pdb.listBeliefs(t.id);
+      if (!beliefs.some(b => b.type === 'email' || b.type === 'phone' || b.type === 'address')) continue;   // skip bare targets (no contact intel)
+      withIntel.push({ t, beliefs });
+    }
+    const crmByName = await lookupCrmContacts(withIntel.map(x => x.t.name));
+    const cards = withIntel.map(x => contactCard.cardFromTarget(x.t, x.beliefs, crmByName.get(String(x.t.name).toLowerCase()) || {}));
+    return { ok: true, cards };
+  } catch (e) { console.error('[contacts] recent failed:', e.message); return { ok: false, error: e.message, cards: [] }; }
+});
+ipcMain.handle('contacts:open-briefing', async (_e, { targetId } = {}) => {
+  try {
+    const win = createWorkspaceWindow();
+    if (win && !win.isDestroyed()) {
+      const send = () => { try { win.webContents.send('workspace:open-surface', { surface: 'puller', targetId: Number(targetId) }); } catch {} };
+      if (win.webContents.isLoading()) win.webContents.once('did-finish-load', send); else send();
+    }
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 // ============================ KNOWLEDGE GRAPH (studio — data browser) =========================
 // Read-only entity-network explorer over graph_overview / query_graph / search_entities. main
 // unwraps + builds the {nodes,links} graph (with style) via studio/kg_view.js; the renderer draws
@@ -5685,7 +5716,43 @@ async function bankDocContacts(doc) {
     const sourceUrl = doc.ref || (doc.id != null ? `docstore:${doc.id}` : null);   // the landed doc is the citation
     const s = ingest.ingestRows(pdb, rows, { source: `doc:${String(doc.title || doc.id || 'drop').slice(0, 60)}`, sourceUrl, obsKind: 'doc' });
     console.log(`[doc-contacts] landing #${doc.id} → +${s.targets} target / ${s.observations} obs / ${s.beliefs} belief${s.skippedDup ? ` / ${s.skippedDup} already tracked` : ''}`);
+    // PROOF OF PURCHASE: waterfall each landed contact into the People rail (canvas window), newest-first.
+    try {
+      const contactCard = require('./studio/contact_card');
+      const crmByName = await lookupCrmContacts((s.landed || []).map(L => L.name));
+      for (const L of (s.landed || [])) {
+        try {
+          const beliefs = pdb.listBeliefs(L.targetId);
+          const card = contactCard.cardFromTarget({ id: L.targetId, name: L.name, company: L.company, kind: 'person', last_accessed_at: Date.now() }, beliefs, crmByName.get(String(L.name).toLowerCase()) || {});
+          if (canvasWindow && !canvasWindow.isDestroyed()) canvasWindow.webContents.send('contacts:card', card);
+        } catch (e) {}
+      }
+    } catch (e) {}
   } catch (e) { console.error('[doc-contacts] bank failed:', e.message); }
+}
+
+// CONSUME-ONLY CRM read: batch-look up photo (Image_Url__c) + a one-line bio (Notes_Public__c) + crm id for a
+// set of discovered names, matched on full name. One db_query for the whole batch (fail-soft → empty Map). We
+// never write the CRM — this only enriches the card. Returns Map(lowercased "First Last" → {photo,bio,crmId}).
+async function lookupCrmContacts(names) {
+  const out = new Map();
+  try {
+    if (!echoSuit || !echoSuit.connected) return out;
+    const clean = [...new Set((names || []).map(n => String(n == null ? '' : n).trim()).filter(n => n.length >= 2))].slice(0, 80);
+    if (!clean.length) return out;
+    const inList = clean.map(n => `'${n.replace(/'/g, "''")}'`).join(',');
+    const sql = `SELECT id, FirstName, LastName, Image_Url__c, Notes_Public__c FROM electoral.contact WHERE deleted=0 AND TRIM(COALESCE(FirstName,'')||' '||COALESCE(LastName,'')) IN (${inList}) LIMIT 200`;
+    const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql, params: [] } });
+    if (!r || !r.ok) return out;
+    let j; try { j = JSON.parse(r.text); } catch { return out; }
+    for (const row of ((j && j.rows) || j || [])) {
+      const nm = `${String(row.FirstName || '').trim()} ${String(row.LastName || '').trim()}`.trim();
+      if (!nm) continue;
+      const bio = String(row.Notes_Public__c || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || null;
+      if (!out.has(nm.toLowerCase())) out.set(nm.toLowerCase(), { photo: row.Image_Url__c || null, bio, crmId: row.id });
+    }
+  } catch {}
+  return out;
 }
 
 // NIGHTLY PROMOTION (Slice 2) — consolidate the day's un-promoted SHORT-TERM documents (lib/doc_store,

@@ -137,6 +137,36 @@ table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:60
 .monitors #monResize{display:none;}            /* docked → no drag-resize grip */
 .mon-head .grip{display:none;}                 /* docked → no drag handle */
 body.mon-open .surface{right:380px;}           /* reserve the docked monitor's column so the board never goes under it */
+
+/* People — a DOCKED contact-card rail on the LEFT (mirror of Monitors). Cards waterfall newest-first as
+   contacts are discovered from dropped documents; the surface insets (body.ppl-open) to reserve its column. */
+.people{position:fixed;top:40px;left:0;bottom:0;width:340px;z-index:55;display:flex;flex-direction:column;
+  background:var(--bg-panel);border:0;border-right:1px solid var(--line-strong);box-shadow:6px 0 22px rgba(0,0,0,.28);overflow:hidden;}
+.people[hidden]{display:none;}
+body.ppl-open .surface{left:340px;}
+.ppl-head{flex-shrink:0;display:flex;align-items:center;gap:8px;padding:8px 11px;background:var(--bg-raised);border-bottom:1px solid var(--line);user-select:none;}
+.ppl-head .ppl-title{flex:1;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--tx-muted);font-weight:700;}
+.ppl-head .ppl-n{font-size:10px;color:var(--tx-dim);}
+.ppl-list{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:9px;}
+.ppl-empty{color:var(--tx-dim);font-size:12px;text-align:center;padding:24px 12px;line-height:1.5;}
+.ppl-card{background:var(--bg-raised);border:1px solid var(--line);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:7px;}
+.ppl-card.new{animation:pcflash 1.6s ease-out;}
+@keyframes pcflash{0%{border-color:#7dd3fc;box-shadow:0 0 0 2px rgba(125,211,252,.25);}100%{border-color:var(--line);box-shadow:none;}}
+.pc-head{display:flex;align-items:center;gap:9px;}
+.pc-photo{width:38px;height:38px;border-radius:50%;object-fit:cover;flex-shrink:0;background:var(--bg-panel);}
+.pc-initials{width:38px;height:38px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:#3a4a6a;color:#fff;font-size:13px;font-weight:700;}
+.pc-id{flex:1;min-width:0;}
+.pc-name{font-size:13px;font-weight:600;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.pc-role{font-size:11px;color:var(--tx-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.pc-grade{flex-shrink:0;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;}
+.pc-grade.g-A{background:#22C55E;}.pc-grade.g-B{background:#4ade80;color:#052e16;}.pc-grade.g-C{background:#F59E0B;color:#3a2600;}.pc-grade.g-D{background:#94a3b8;color:#1e293b;}.pc-grade.g-E{background:#64748b;}
+.pc-rows{display:flex;flex-direction:column;gap:3px;}
+.pc-row{font-size:11.5px;color:var(--tx-soft);display:flex;align-items:center;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.pc-row .pc-ic{color:var(--tx-fainter);width:12px;flex-shrink:0;text-align:center;}
+.pc-row a{color:#7dd3fc;text-decoration:none;overflow:hidden;text-overflow:ellipsis;}
+.pc-bio{font-size:11px;color:var(--tx-muted);line-height:1.4;max-height:3.2em;overflow:hidden;}
+.pc-briefing{align-self:flex-start;background:transparent;border:1px solid var(--line-strong);color:var(--tx-muted);font:inherit;font-size:11px;padding:3px 9px;border-radius:5px;cursor:pointer;}
+.pc-briefing:hover{border-color:#7dd3fc;color:var(--tx-soft);}
 .mon-head{flex-shrink:0;display:flex;align-items:center;gap:8px;padding:8px 11px;background:var(--bg-raised);border-bottom:1px solid var(--line);cursor:default;user-select:none;}
 .mon-head.dragging{cursor:grabbing;}
 .mon-head .grip{color:var(--tx-fainter);font-size:13px;}
@@ -214,6 +244,7 @@ body.mon-open .surface{right:380px;}           /* reserve the docked monitor's c
     <span class="count" id="count"></span>
     <span class="spacer"></span>
     <span class="hint">scroll = zoom · drag bg = pan · drag ⠿ = move</span>
+    <button id="peopleBtn" title="People — contacts discovered from documents">👥 people</button>
     <button id="monitorsBtn" title="News monitors">📡 monitors</button>
     <button id="resetBtn" title="Reset arrangement">reset layout</button>
     <button id="refreshBtn">Refresh</button>
@@ -241,6 +272,15 @@ body.mon-open .surface{right:380px;}           /* reserve the docked monitor's c
     </div>
     <div class="meet-body" id="meetBody"><div class="meet-shield" id="meetShield"></div></div>
     <div class="resize-grip" id="meetResize"></div>
+  </div>
+
+  <div class="people" id="people" hidden>
+    <div class="ppl-head">
+      <span class="ppl-title">People</span>
+      <span class="ppl-n" id="pplN"></span>
+      <button class="dbtn" id="pplClose" title="Close">✕</button>
+    </div>
+    <div class="ppl-list" id="pplList"><div class="ppl-empty">No contacts yet.<br>Drop a roster on the canvas.</div></div>
   </div>
 
   <div class="monitors" id="monitors" hidden>

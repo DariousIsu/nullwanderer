@@ -249,7 +249,11 @@ dossierEl.addEventListener('click', async (ev) => {
 });
 
 if (window.sq && window.sq.puller) {
-  loadTargets();
+  // deep-link: a "Full briefing →" click from the People rail loads dossier.html#target=<id> → auto-select it
+  loadTargets().then(() => {
+    const m = /(?:^|[#&])target=(\d+)/.exec(location.hash || '');
+    if (m) { try { selectTarget(Number(m[1])); } catch (e) {} }
+  });
 } else {
   dossierEl.innerHTML = `<div class="placeholder"><div class="big">Bridge unavailable</div><div class="small">window.sq.puller is missing — preload didn't load. Restart the app.</div></div>`;
 }

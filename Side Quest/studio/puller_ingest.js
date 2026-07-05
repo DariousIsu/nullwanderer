@@ -52,6 +52,7 @@ function ingestRows(db, rows, opts = {}) {
   const seen = new Map();
   for (const t of db.listTargets({ limit: 1e7 })) seen.set(key(t.name, t.company), t.id);
   const patternStates = new Map();   // domain -> pure belief state
+  const landed = [];   // every row mapped to a target ({name, company, targetId, created}) — feeds the People rail
   const stats = { rows: 0, targets: 0, skippedDup: 0, noName: 0, observations: 0, beliefs: 0,
                   patternHits: 0, generic: 0, domains: 0 };
 
@@ -63,12 +64,13 @@ function ingestRows(db, rows, opts = {}) {
     const kind = tierKind(conf);
     if (!name) { stats.noName++; continue; }
     const k = key(name, company);
-    if (seen.has(k)) { stats.skippedDup++; continue; }
+    if (seen.has(k)) { stats.skippedDup++; landed.push({ name, company, targetId: seen.get(k), created: false }); continue; }
 
     const domain = domainOf(email);
     const t = db.createTarget({ kind: 'person', name, company: company || null, domain, notes: title || null });
     seen.set(k, t.id);
     stats.targets++;
+    landed.push({ name, company, targetId: t.id, created: true });
 
     if (email) {
       db.addObservation(t.id, { attr: 'email', value: email, kind, source, sourceUrl, confidence: conf }); stats.observations++;
@@ -101,6 +103,7 @@ function ingestRows(db, rows, opts = {}) {
     }
   }
   for (const [domain, st] of patternStates) { db.savePatternState(domain, st); stats.domains++; }
+  stats.landed = landed;
   return stats;
 }
 

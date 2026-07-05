@@ -616,6 +616,53 @@ monSrcHead.addEventListener('click', () => { const collapsed = monSources.classL
 $('monAddBtn').addEventListener('click', () => addMonitor($('monAdd').value.trim()));
 $('monAdd').addEventListener('keydown', (e) => { if (e.key === 'Enter') addMonitor($('monAdd').value.trim()); });
 
+/* ---- People rail — a left-docked waterfall of contact cards discovered from dropped documents. Fetches
+   recent Puller contacts on open (newest-first) + receives a live push per new discovery (main →
+   contacts:card), which pops the rail open and flashes the new card. Click a card's briefing → Puller. ---- */
+const people = $('people'), pplList = $('pplList'), pplN = $('pplN');
+function cardHtml(c, isNew) {
+  const photo = c.photo
+    ? `<img class="pc-photo" src="${esc(c.photo)}" alt="${esc(c.name)}" draggable="false" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pc-initials',textContent:'${esc((c.initials || '?').replace(/'/g, ''))}'}))">`
+    : `<div class="pc-initials">${esc(c.initials || '?')}</div>`;
+  const rows = [];
+  if (c.email) rows.push(`<div class="pc-row"><span class="pc-ic">✉</span><a href="mailto:${esc(c.email)}">${esc(c.email)}</a></div>`);
+  if (c.phone) rows.push(`<div class="pc-row"><span class="pc-ic">☎</span>${esc(c.phone)}</div>`);
+  if (c.address) rows.push(`<div class="pc-row"><span class="pc-ic">⌂</span>${esc(c.address)}</div>`);
+  const grade = c.grade ? `<span class="pc-grade g-${esc(c.grade)}" title="confidence ${esc(c.grade)}">${esc(c.grade)}</span>` : '';
+  const bio = c.bio ? `<div class="pc-bio">${esc(c.bio)}</div>` : '';
+  const brief = c.targetId != null ? `<button class="pc-briefing" data-target="${esc(String(c.targetId))}">Full briefing →</button>` : '';
+  return `<div class="ppl-card${isNew ? ' new' : ''}" data-target="${esc(String(c.targetId))}">
+    <div class="pc-head">${photo}<div class="pc-id"><div class="pc-name">${esc(c.name)}</div>${c.role ? `<div class="pc-role">${esc(c.role)}</div>` : ''}</div>${grade}</div>
+    ${rows.length ? `<div class="pc-rows">${rows.join('')}</div>` : ''}${bio}${brief}
+  </div>`;
+}
+function pplCount() { pplN.textContent = String(pplList.querySelectorAll('.ppl-card').length || ''); }
+function renderPeople(cards) {
+  const list = (Array.isArray(cards) ? cards : []).filter(c => c && c.name);
+  pplList.innerHTML = list.length ? list.map(c => cardHtml(c, false)).join('') : '<div class="ppl-empty">No contacts yet.<br>Drop a roster on the canvas.</div>';
+  pplCount();
+}
+function prependCard(c) {
+  if (!c || !c.name) return;
+  const key = String(c.targetId);
+  const existing = key !== 'null' ? pplList.querySelector(`.ppl-card[data-target="${CSS.escape(key)}"]`) : null;
+  if (existing) existing.remove();                         // same person already shown → moves to top, refreshed
+  const empty = pplList.querySelector('.ppl-empty'); if (empty) empty.remove();
+  pplList.insertAdjacentHTML('afterbegin', cardHtml(c, true));
+  pplCount();
+}
+async function loadPeople() {
+  try { const r = await window.sq.contacts.recent(60); renderPeople((r && r.cards) || []); }
+  catch (e) { pplList.innerHTML = `<div class="ppl-empty">⚠ ${esc(e.message)}</div>`; }
+}
+function openPeople() { people.hidden = false; document.body.classList.add('ppl-open'); loadPeople(); }
+function closePeople() { people.hidden = true; document.body.classList.remove('ppl-open'); }
+$('peopleBtn').addEventListener('click', () => { if (people.hidden) openPeople(); else closePeople(); });
+$('pplClose').addEventListener('click', closePeople);
+pplList.addEventListener('click', (e) => { const b = e.target.closest('.pc-briefing'); if (b && b.dataset.target) { try { window.sq.contacts.openBriefing(Number(b.dataset.target)); } catch (err) {} } });
+// live push: a doc drop just discovered someone → pop the rail open (if closed) and flash the new card in
+try { window.sq.contacts.onCard((c) => { if (people.hidden) { people.hidden = false; document.body.classList.add('ppl-open'); } prependCard(c); }); } catch (e) {}
+
 // The monitor is DOCKED (a hard right-side container) — it no longer floats, drags, or free-resizes.
 // Its width is fixed and the surface reserves its column, so drag/resize handlers are intentionally gone.
 

@@ -30,6 +30,17 @@ function select(btn) {
 
 document.querySelectorAll('.surface').forEach(btn => btn.addEventListener('click', () => select(btn)));
 
+// Main asks to open a surface (e.g. "Full briefing →" from the canvas People rail → the Puller dossier,
+// deep-linked to a target via a #target=<id> hash the surface reads on load).
+if (window.sq && window.sq.workspace) {
+  window.sq.workspace.onOpenSurface(({ surface, targetId } = {}) => {
+    const btn = document.querySelector(`.surface[data-surface="${surface}"]`);
+    if (!btn) return;
+    select(btn);
+    if (targetId != null && btn.dataset.src) view.setAttribute('src', `${btn.dataset.src}#target=${targetId}`);   // force a load carrying the deep-link
+  });
+}
+
 // surface a clearer message if the embedded surface fails to load
 view.addEventListener('did-fail-load', (e) => {
   if (e.errorCode === -3) return; // aborted (normal on src swap)

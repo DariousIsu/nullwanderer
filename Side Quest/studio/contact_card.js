@@ -1,0 +1,77 @@
+/**
+ * studio/contact_card.js — assemble a CONTACT CARD payload for the People rail from a discovered contact.
+ *
+ * The doc-ingestion contact pass (main.bankDocContacts) discovers people/orgs and lands them in the Puller
+ * as certainty-scored beliefs. This turns a Puller target + its beliefs into the data for a card in the
+ * left "People" rail (renderer/canvas.js) — the VISIBLE proof: photo (or initials), name, role, the
+ * discovered contact rows, a bio, a confidence grade, click-through to the full Puller briefing. Pure: the
+ * CRM photo/bio (consume-only) is looked up upstream and passed in, so this is offline-smoke-testable.
+ */
+'use strict';
+
+const str = (v) => (v == null ? '' : String(v)).replace(/\s+/g, ' ').trim();
+
+// Coarse card grade from the belief confidence — mirrors the Puller send-safety ladder bands (A official /
+// B verified / C pattern / D best-guess / E generic). Just the letter for the card's confidence dot.
+function gradeFor(confidence) {
+  if (confidence == null || confidence === '') return null;   // Number(null)===0 would misgrade as 'E'
+  const c = Number(confidence);
+  if (!Number.isFinite(c)) return null;
+  if (c >= 0.95) return 'A';
+  if (c >= 0.80) return 'B';
+  if (c >= 0.50) return 'C';
+  if (c >= 0.30) return 'D';
+  return 'E';
+}
+
+// Photo fallback: up to two initials from a person/org name.
+function initialsOf(name) {
+  const parts = str(name).split(' ').filter(Boolean);
+  if (!parts.length) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+// Build a card payload. `contact` = { name, title, company, email, phone, address, confidence, targetId,
+// kind }. `crm` (optional, injected consume-only lookup) = { photo, bio, crmId }. Pure.
+function buildCardData(contact = {}, crm = {}) {
+  const name = str(contact.name);
+  const title = str(contact.title);
+  const org = str(contact.company);
+  const role = [title, org].filter(Boolean).join(' · ');
+  return {
+    name,
+    title: title || null,
+    org: org || null,
+    role: role || null,
+    photo: str(crm.photo) || null,
+    initials: initialsOf(name),
+    email: str(contact.email) || null,
+    phone: str(contact.phone) || null,
+    address: str(contact.address) || null,
+    bio: str(crm.bio) || null,
+    grade: gradeFor(contact.confidence),
+    confidence: (typeof contact.confidence === 'number') ? contact.confidence : null,
+    targetId: (contact.targetId != null) ? contact.targetId : null,
+    crmId: (crm.crmId != null) ? crm.crmId : null,
+    kind: contact.kind === 'org' ? 'org' : 'person',
+    ts: (typeof contact.ts === 'number') ? contact.ts : null,   // recency for the waterfall
+  };
+}
+
+// Bridge: a Puller target row + its beliefs (lib/puller_db.listBeliefs shape) → a card. The belief value is
+// the current best answer per attr; confidence rides the email belief (else phone). Pure.
+function cardFromTarget(target = {}, beliefs = [], crm = {}) {
+  const list = Array.isArray(beliefs) ? beliefs : [];
+  const bv = (t) => { const b = list.find((x) => x.type === t); return b ? b.value : null; };
+  const bc = (t) => { const b = list.find((x) => x.type === t); return (b && typeof b.confidence === 'number') ? b.confidence : null; };
+  return buildCardData({
+    name: target.name, company: target.company, title: bv('role'),
+    email: bv('email'), phone: bv('phone'), address: bv('address'),
+    confidence: bc('email') != null ? bc('email') : bc('phone'),
+    targetId: target.id, kind: target.kind,
+    ts: target.last_accessed_at || target.created_at || null,
+  }, crm);
+}
+
+module.exports = { buildCardData, cardFromTarget, gradeFor, initialsOf };

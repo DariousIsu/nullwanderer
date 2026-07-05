@@ -132,6 +132,18 @@ contextBridge.exposeInMainWorld('sq', {
     get: (billId) => ipcRenderer.invoke('leg:get', { billId })
   },
 
+  // People rail — contact cards discovered from dropped docs (recency waterfall + live push).
+  contacts: {
+    recent: (n) => ipcRenderer.invoke('contacts:recent', { n }),
+    openBriefing: (targetId) => ipcRenderer.invoke('contacts:open-briefing', { targetId }),
+    onCard: (cb) => { const h = (_e, c) => { try { cb(c); } catch (e) {} }; ipcRenderer.on('contacts:card', h); return () => ipcRenderer.removeListener('contacts:card', h); },
+  },
+
+  // Workspace shell — main asks it to activate a surface (e.g. Puller, deep-linked to a target).
+  workspace: {
+    onOpenSurface: (cb) => { const h = (_e, d) => { try { cb(d); } catch (e) {} }; ipcRenderer.on('workspace:open-surface', h); return () => ipcRenderer.removeListener('workspace:open-surface', h); },
+  },
+
   // Knowledge Graph — read-only entity-network explorer (overview + ego-walk + fuzzy search).
   kg: {
     overview: () => ipcRenderer.invoke('kg:overview'),
