@@ -774,26 +774,26 @@ app.whenReady().then(() => {
           const blocks = (snap.blocks_by_tab && Array.isArray(snap.blocks_by_tab[t.tabKey])) ? snap.blocks_by_tab[t.tabKey] : [];
           let markdown = ci.extractMarkdown(blocks);
           const label = ci.cleanTitle(t.title);
-          // FILE DROPS: a dropped PDF/image/docx has NO text blocks — read the actual file. Text layer
-          // (doc_extract) for text PDFs/docx; VISION (gemma4:31b) for image drops or graphic docs.
-          if (markdown.length < 40) {
-            const fileSrc = ci.fileSrcOf(blocks);
-            if (fileSrc) {
-              try {
-                const fi = require('./lib/file_ingest');
-                const de = require('./lib/doc_extract');
-                const vis = require('./lib/vision');
-                const fsm = require('fs');
-                const r = await fi.extractDroppedFile(fileSrc, { deps: {
-                  extractToMarkdown: (p) => de.extractToMarkdown(p),
-                  describe: (o) => vis.describe(o),
-                  readFileBase64: (p) => fsm.readFileSync(p).toString('base64'),
-                  fileExists: (p) => fsm.existsSync(p),
-                  log: (m) => console.log(m),
-                } });
-                if (r && r.text && r.text.length >= 40) { markdown = r.text; console.log(`[canvas-ingest] "${label}" read from FILE via ${r.via} (${markdown.length}ch)`); }
-              } catch (e) { console.error('[canvas-ingest] file read failed:', e.message); }
-            }
+          // FILE DROPS: read the ACTUAL file for the FULL text — always, when a file src is present. This
+          // decouples INGEST (whole file) from the DISPLAY (a capped/progressive-chunk preview that may be
+          // mid-build): a PDF/xlsx has no text blocks, and a large text doc's preview blocks are only the
+          // top so far. Text layer (doc_extract) for text PDFs/docx/sheets; VISION for image/graphic drops.
+          const fileSrc = ci.fileSrcOf(blocks);
+          if (fileSrc) {
+            try {
+              const fi = require('./lib/file_ingest');
+              const de = require('./lib/doc_extract');
+              const vis = require('./lib/vision');
+              const fsm = require('fs');
+              const r = await fi.extractDroppedFile(fileSrc, { deps: {
+                extractToMarkdown: (p) => de.extractToMarkdown(p),
+                describe: (o) => vis.describe(o),
+                readFileBase64: (p) => fsm.readFileSync(p).toString('base64'),
+                fileExists: (p) => fsm.existsSync(p),
+                log: (m) => console.log(m),
+              } });
+              if (r && r.text && r.text.length >= 40) { markdown = r.text; console.log(`[canvas-ingest] "${label}" read FULL from FILE via ${r.via} (${markdown.length}ch)`); }
+            } catch (e) { console.error('[canvas-ingest] file read failed:', e.message); }
           }
           if (markdown.length < 40) { console.log(`[canvas-ingest] "${label}" too thin to ingest — skipping (still marking seen)`); }
           else {
@@ -2230,7 +2230,7 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       if (!data) {                                         // fallback: flattened markdown as a paragraph
         let markdown = ''; try { markdown = (await require('./lib/doc_extract').extractDocx(filePath)).markdown || ''; } catch {}
         if (!markdown.trim()) return { ok: false, error: 'empty / unreadable .docx' };
-        data = { markdown: markdown.slice(0, 5000000) };   // blockType stays 'paragraph' — land in full (Lucas)
+        data = { markdown, src: 'file:///' + filePath.replace(/\\/g, '/').replace(/^\/+/, '') };   // full; rendered in progressive chunks below
       }
     } else {                                               // DOCUMENT (md/txt/code/pdf-text-fallback/…) → markdown
       let markdown = '';
@@ -2239,13 +2239,29 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       if (!markdown.trim()) return { ok: false, error: 'empty / unreadable document' };
       const firstH = markdown.split(/\r?\n/).map(l => l.trim()).find(l => /^#{1,6}\s+\S/.test(l));
       if (firstH) title = firstH.replace(/^#{1,6}\s+/, '').slice(0, 120);
-      data = { markdown: markdown.slice(0, 5000000) };   // land in full (Lucas: every document ingested whole)
+      data = { markdown, src: 'file:///' + filePath.replace(/\\/g, '/').replace(/^\/+/, '') };   // full; rendered in progressive chunks below
     }
 
     const tabKey = `drop-${path.basename(filePath).replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 40)}-${Date.now().toString(36)}`;
     const callTool = pollCallTool();
     await callTool('saga_canvas_open_tab', { mode, tab_key: tabKey, title });
-    await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: blockType, data });
+    const PREVIEW_CHUNK = 40000;   // a large text doc renders one chunk at a time from the top so it never hangs
+    if (blockType === 'paragraph' && data && typeof data.markdown === 'string' && data.markdown.length > PREVIEW_CHUNK) {
+      // RECURSIVE BUILD (Lucas): split on line boundaries and add the FIRST chunk now (instant top-of-doc
+      // preview), then stream the rest as blocks — the tab builds up as each finishes. Ingest is decoupled:
+      // the poller re-reads the whole file via `src`, so background extraction stays full regardless.
+      const parts = require('./lib/contact_extract').chunkForExtraction(data.markdown, { size: PREVIEW_CHUNK }).chunks;
+      await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'paragraph', data: { markdown: parts[0], src: data.src } });
+      (async () => {
+        for (let i = 1; i < parts.length; i++) {
+          try { await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'paragraph', data: { markdown: parts[i] } }); } catch (e) {}
+          await new Promise(res => setTimeout(res, 80));   // yield so each chunk paints before the next
+        }
+        console.log(`[canvas] "${title}" built in ${parts.length} progressive chunks`);
+      })().catch(() => {});
+    } else {
+      await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: blockType, data });
+    }
     try { canvasLayoutStore.setPosition(tabKey, x, y); } catch {}
     return { ok: true, tabKey, title };
   } catch (e) { console.error('[canvas] drop-doc failed:', e.message); return { ok: false, error: e.message }; }
