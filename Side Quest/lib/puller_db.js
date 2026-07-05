@@ -167,6 +167,25 @@ function findTargetByEmail(email) {
   return o ? getTarget(o.target_id) : null;
 }
 
+// Resolve a target by NAME — for meeting-mention → known-card resolution ("Russ" pops Russ Walker's card).
+// Exact full-name first; else a UNIQUE token/prefix/suffix match (a first name → the one full name it fits).
+// Ambiguous (>1 candidate) → null (bias to clarify; don't pop the wrong person). Case-insensitive.
+function findTargetByName(name) {
+  // strip a leading honorific ("Sen. Alexander" → "alexander") so titled mentions still resolve
+  const n = String(name == null ? '' : name).replace(/\s+/g, ' ').trim().toLowerCase()
+    .replace(/^(sen|rep|dr|mr|mrs|ms|hon|gov|rev|prof|amb|congressman|congresswoman|senator|representative)\.?\s+/i, '').trim();
+  if (n.length < 2) return null;
+  const rows = _db().prepare(`SELECT * FROM targets`).all();
+  let hits = rows.filter((t) => String(t.name || '').toLowerCase() === n);
+  if (hits.length) return hits.length === 1 ? hits[0] : null;
+  hits = rows.filter((t) => {
+    const tn = String(t.name || '').toLowerCase();
+    const toks = tn.split(/\s+/);
+    return toks.includes(n) || tn.startsWith(n + ' ') || tn.endsWith(' ' + n);
+  });
+  return hits.length === 1 ? hits[0] : null;
+}
+
 // Promote an ad-hoc dossier into the CRM (records the crm row id; status → promoted).
 function promoteTarget(id, crmId) {
   _db().prepare(`UPDATE targets SET status = 'promoted', crm_id = ?, last_accessed_at = ? WHERE id = ?`)
@@ -290,7 +309,7 @@ function updateRetest(id, { status = null, patternsTried = null, nextPattern = n
 
 module.exports = {
   init, close,
-  createTarget, getTarget, listTargets, promoteTarget, findTargetByEmail,
+  createTarget, getTarget, listTargets, promoteTarget, findTargetByEmail, findTargetByName,
   addObservation, listObservations,
   upsertBelief, getBelief, listBeliefs,
   getPatternState, savePatternState,

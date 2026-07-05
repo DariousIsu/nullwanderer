@@ -125,7 +125,49 @@ function parseDocCards(raw) {
 // Back-compat: the people-only view (older callers used parseContactTuples).
 function parseContactTuples(raw) { return parseDocCards(raw).people; }
 
+// MEETING MENTIONS — a live meeting RESOLVES what's mentioned to KNOWN cards (unlike a document, which
+// MINTS new objects). This lists WHO/WHAT was named, by type — BARE names included ("Russ said…") — for
+// the resolver to match against existing people / places / events. Names only, no fields.
+function buildMentionsPrompt(text) {
+  const body = String(text == null ? '' : text).slice(-MAX_CHARS);   // recent tail of the transcript
+  return [
+    {
+      role: 'system',
+      content:
+        'You read a live MEETING TRANSCRIPT and list the PEOPLE, PLACES, and EVENTS mentioned in it.\n' +
+        'Output ONLY lines in these EXACT formats, one per line, nothing else:\n' +
+        'PERSON | name\nPLACE | name\nEVENT | name\n' +
+        'Rules:\n' +
+        '- List each distinct person NAMED — a first name, full name, or "Sen. X" — exactly as spoken.\n' +
+        '- List each place (venue/office/city) and each event (meeting/breakfast/summit) named.\n' +
+        '- Only things actually NAMED. Do NOT invent. No pronouns, no bare generic roles.\n' +
+        '- No duplicates, no commentary — only PERSON / PLACE / EVENT lines.',
+    },
+    { role: 'user', content: body },
+  ];
+}
+// Parse mention lines → { people: [names], places: [names], events: [names] }, deduped. Pure.
+function parseMentions(raw) {
+  const people = [], places = [], events = [];
+  const seen = new Set();
+  for (const lineRaw of String(raw == null ? '' : raw).split(/\r?\n/)) {
+    const line = lineRaw.trim();
+    if (!line || !line.includes('|')) continue;
+    const parts = line.split('|').map((p) => p.trim());
+    const tag = (parts[0] || '').toUpperCase();
+    const name = _clean(parts[1]);
+    if (!name || name.length < 2) continue;
+    const k = tag + ':' + name.toLowerCase();
+    if (seen.has(k)) continue; seen.add(k);
+    if (tag === 'PERSON') people.push(name);
+    else if (tag === 'PLACE') places.push(name);
+    else if (tag === 'EVENT') events.push(name);
+  }
+  return { people, places, events };
+}
+
 module.exports = {
   buildCardsPrompt, buildContactPrompt, parseDocCards, parseContactTuples,
+  buildMentionsPrompt, parseMentions,
   MAX_CHARS, DOC_CONFIDENCE,
 };

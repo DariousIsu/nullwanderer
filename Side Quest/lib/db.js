@@ -1655,6 +1655,12 @@ function listRecentCards({ types = null, limit = 60 } = {}) {
   const sql = `SELECT type, card_key, data, ts FROM recent_cards${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY ts DESC LIMIT ?`;
   return getDb().prepare(sql).all(...args, limit).map(r => { let d = {}; try { d = JSON.parse(r.data); } catch {} return { ...d, ts: r.ts }; });
 }
+function getRecentCard(type, cardKey) {
+  const r = getDb().prepare('SELECT data, ts FROM recent_cards WHERE type = ? AND card_key = ?').get(type, String(cardKey));
+  if (!r) return null;
+  let d = {}; try { d = JSON.parse(r.data); } catch {}
+  return { ...d, ts: r.ts };
+}
 // --- meeting transcript (M1) ---
 function insertTranscriptLine({ meeting = null, speaker = null, text, ts = null }) {
   const t = ts == null ? Date.now() : ts;
@@ -1817,6 +1823,7 @@ module.exports = {
   kgObservationStats,
   recordRecentCard,
   listRecentCards,
+  getRecentCard,
   insertTranscriptLine,
   getTranscriptSince,
   countTranscriptSince,

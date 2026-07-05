@@ -31,6 +31,16 @@ ok(typed.people.length === 1 && typed.people[0].name === 'Ted Alexander', 'parse
 ok(typed.places.length === 1 && typed.places[0].name === 'AC Hotel Raleigh Downtown' && /Glenwood/.test(typed.places[0].address), 'parseDocCards: PLACE routed with address');
 ok(typed.events.length === 1 && typed.events[0].name === 'Faith in Elections Prayer Breakfast' && /June 30/.test(typed.events[0].date) && /AC Hotel/.test(typed.events[0].location), 'parseDocCards: EVENT routed with date + location');
 
+// --- parseMentions (Slice B — meeting mentions, names only) ---
+const mentions = CE.parseMentions([
+  'PERSON | Russ Walker', 'PERSON | Sen. Curtis', 'PLACE | AC Hotel', 'EVENT | Prayer Breakfast',
+  'PERSON | Russ Walker',   // dup → collapsed
+  'a prose line with no pipe',
+].join('\n'));
+ok(mentions.people.length === 2 && mentions.people.includes('Russ Walker') && mentions.people.includes('Sen. Curtis'), 'parseMentions: people deduped, bare/"Sen." names kept');
+ok(mentions.places[0] === 'AC Hotel' && mentions.events[0] === 'Prayer Breakfast', 'parseMentions: place + event routed');
+ok(CE.buildMentionsPrompt('x')[0].content.includes('PERSON | name'), 'buildMentionsPrompt: names-only format');
+
 // --- parseContactTuples: what a model would emit → clean ingest rows ---
 const raw = [
   'CONTACT | Brad Overcash | State Senator | NC General Assembly | Brad.Overcash@ncleg.gov | 919-733-5745 | 300 N. Salisbury St, Raleigh, NC 27603',
@@ -87,6 +97,12 @@ ok(bbeliefs.some(b => b.type === 'role' && b.value === 'State Senator'), 'ingest
 // --- idempotent: re-dropping the same doc doesn't double-count ---
 const again = ingest.ingestRows(pdb, rows, { source: 'doc:Faith in Elections roster', sourceUrl: url, obsKind: 'doc' });
 ok(again.targets === 0 && again.skippedDup === 4, 'ingestRows: re-drop is idempotent (0 new, 4 already tracked)');
+
+// --- findTargetByName (Slice B — meeting mention → known target) ---
+ok(pdb.findTargetByName('Ted Alexander') && pdb.findTargetByName('Ted Alexander').name === 'Ted Alexander', 'findTargetByName: exact full name');
+ok(pdb.findTargetByName('Overcash') && pdb.findTargetByName('Overcash').name === 'Brad Overcash', 'findTargetByName: unique last-name token → the full target');
+ok(pdb.findTargetByName('Sen. Alexander') && pdb.findTargetByName('Sen. Alexander').name === 'Ted Alexander', 'findTargetByName: strips honorific ("Sen. Alexander" → Ted Alexander)');
+ok(pdb.findTargetByName('Zzz Nobody') === null, 'findTargetByName: unknown → null (not surfaced)');
 
 pdb.close();
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

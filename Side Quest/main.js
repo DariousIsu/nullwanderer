@@ -2378,6 +2378,17 @@ async function scribeHeartbeatTick() {
   if (gmeet.active()) {
     let r = null; try { r = await scribe.tick(); } catch (e) { console.error('[scribe] tick failed:', e.message); }
     if (r && r.updated) { try { await emitMeetingNotes(scribe.minutes(), { final: false }); } catch {} }
+    // MEETING CARDS (Slice B): surface a card for every person / place / event NAMED in the fresh transcript
+    // (our own cursor, independent of the scribe's) — "in a meeting with Russ and Traci, their cards pop up".
+    try {
+      const cur = parseInt(db.getMeta('cards_cursor') || db.getMeta('gmeet_started_at') || '0', 10) || 0;
+      const rows = db.getTranscriptSince(cur, 400) || [];
+      if (rows.length) {
+        const fresh = rows.map(t => `${t.speaker ? t.speaker + ': ' : ''}${t.text}`).join('\n');
+        db.setMeta('cards_cursor', String(rows[rows.length - 1].ts + 1));
+        surfaceMeetingMentions(fresh).catch(() => {});
+      }
+    } catch (e) {}
     return;
   }
   // meeting ended — finalize + land + final canvas emit (once), then stop the lane
@@ -5738,6 +5749,84 @@ async function surfaceDocCards(doc) {
     for (const ev of events) { try { const c = contactCard.buildEventCard(ev, { ts: now }); db.recordRecentCard({ type: 'event', cardKey: c.key, data: c, ts: now }); push(c); } catch (e) {} }
     if (places.length || events.length) console.log(`[doc-cards] #${doc.id} places: +${places.length} / events: +${events.length}`);
   } catch (e) { console.error('[doc-cards] surface failed:', e.message); }
+}
+
+// MEETING CARDS (Slice B): surface cards for people / places / events MENTIONED in the fresh transcript.
+// Unlike a document (surfaceDocCards MINTS new objects), a meeting RESOLVES a mention to a KNOWN card:
+// a named person → their Puller/CRM card (bare "Russ" → Russ Walker); a place/event → its stored rich card
+// (from an earlier drop) else a thin name-only card. Unresolved people are skipped (no minting from noisy
+// live captions). Fail-soft — never breaks the scribe.
+async function surfaceMeetingMentions(freshText) {
+  try {
+    const text = String(freshText || '').trim();
+    if (text.length < 12) return;
+    const src = (() => { try { return (require('./lib/models').sources() || []).find(s => s.tier === 'cloud' && s.token); } catch { return null; } })();
+    if (!src) return;
+    const decompLane = require('./lib/decomp_lane');
+    const contactExtract = require('./lib/contact_extract');
+    const contactCard = require('./studio/contact_card');
+    const { completeDetailed } = require('./lib/ollama');
+    const model = config.extractionModel() || config.subconsciousModel();
+    const extract = decompLane.makeCloudExtractor({
+      completeFn: completeDetailed, model, base: src.base, token: src.token,
+      buildPrompt: contactExtract.buildMentionsPrompt, parse: contactExtract.parseMentions, numPredict: 400,
+    });
+    const m = await extract(text, {}) || {};   // { people, places, events }
+    const now = Date.now();
+    const push = (c) => { try { if (canvasWindow && !canvasWindow.isDestroyed()) canvasWindow.webContents.send('contacts:card', c); } catch {} };
+    let n = 0;
+    for (const name of (m.people || []).slice(0, 8)) { const c = await resolveKnownPerson(name); if (c) { push({ ...c, ts: now }); n++; } }
+    for (const kind of ['place', 'event']) {
+      for (const name of ((kind === 'place' ? m.places : m.events) || []).slice(0, 6)) {
+        const key = String(name).toLowerCase();
+        const stored = db.getRecentCard(kind, key);   // known from an earlier drop → push the rich card
+        if (stored) { push({ ...stored, ts: now }); n++; continue; }
+        const c = kind === 'place' ? contactCard.buildPlaceCard({ name }, { ts: now }) : contactCard.buildEventCard({ name }, { ts: now });
+        try { db.recordRecentCard({ type: kind, cardKey: c.key, data: c, ts: now }); } catch (e) {}
+        push(c); n++;
+      }
+    }
+    if (n) console.log(`[meeting-cards] surfaced ${n} card(s) from mentions (people ${(m.people || []).length}/places ${(m.places || []).length}/events ${(m.events || []).length})`);
+  } catch (e) { console.error('[meeting-cards] failed:', e.message); }
+}
+
+// Resolve a mentioned NAME to a known person card: Puller target first (rich beliefs + CRM photo), else a
+// CRM contact. Returns a card or null (unknown → not surfaced). Consume-only.
+async function resolveKnownPerson(name) {
+  try {
+    const pdb = require('./lib/puller_db'); pdb.init();
+    const contactCard = require('./studio/contact_card');
+    const t = pdb.findTargetByName(name);
+    if (t) {
+      const beliefs = pdb.listBeliefs(t.id);
+      const crm = await lookupCrmContacts([t.name]);
+      return contactCard.cardFromTarget({ ...t, last_accessed_at: Date.now() }, beliefs, crm.get(String(t.name).toLowerCase()) || {});
+    }
+    return await crmPersonCard(name);
+  } catch (e) { return null; }
+}
+
+// Build a person card straight from a CRM contact matched by full name (consume-only). CRM = authoritative
+// (grade A). No Puller targetId → no "Full briefing" button. null if no match / Echo down.
+async function crmPersonCard(name) {
+  try {
+    if (!echoSuit || !echoSuit.connected) return null;
+    const nm = String(name || '').replace(/'/g, "''").trim();
+    if (nm.length < 2) return null;
+    const sql = `SELECT id, FirstName, LastName, Title, Email, Phone, MailingStreet, Image_Url__c, Notes_Public__c FROM electoral.contact WHERE deleted=0 AND TRIM(COALESCE(FirstName,'')||' '||COALESCE(LastName,'')) = '${nm}' LIMIT 1`;
+    const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql, params: [] } });
+    if (!r || !r.ok) return null;
+    let j; try { j = JSON.parse(r.text); } catch { return null; }
+    const row = ((j && j.rows) || j || [])[0];
+    if (!row) return null;
+    const contactCard = require('./studio/contact_card');
+    const full = `${String(row.FirstName || '').trim()} ${String(row.LastName || '').trim()}`.trim() || nm;
+    const bio = String(row.Notes_Public__c || '').split('\n').map(s => s.trim()).filter(Boolean)[0] || null;
+    return contactCard.buildCardData(
+      { name: full, title: row.Title, email: row.Email, phone: row.Phone, address: row.MailingStreet, confidence: 0.95, ts: Date.now() },
+      { photo: row.Image_Url__c || null, bio, crmId: row.id }
+    );
+  } catch (e) { return null; }
 }
 
 // CONSUME-ONLY CRM read: batch-look up photo (Image_Url__c) + a one-line bio (Notes_Public__c) + crm id for a
