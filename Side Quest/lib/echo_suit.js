@@ -782,16 +782,23 @@ async function _affiliatedPrimary(d, distinct) {
 // per significant query token) filtered by a token-level edit-distance gate. Validated on the real pool for
 // "Rainy Center": {Joseph Rainey Center…, RAINEY CENTER FREEDOM PROJECT…} pass; RAINBOW ENERGY CENTER,
 // RAINMAKER…, RAIN AND HAIL… are rejected (the "center" token + the 0.8 similarity floor exclude them).
+// Damerau-Levenshtein (optimal string alignment): counts an adjacent TRANSPOSITION as ONE edit — the most
+// common typo class ("Jerome"→"Jermoe", "Commerce"→"Commrece"). Plain Levenshtein scores those as 2, which
+// sank them below the 0.8 similarity floor. Keeps two prior rows for the transposition check.
 function _levenshtein(a, b) {
   a = String(a == null ? '' : a); b = String(b == null ? '' : b);
   if (a === b) return 0;
   const m = a.length, n = b.length;
   if (!m) return n; if (!n) return m;
-  let prev = new Array(n + 1); for (let j = 0; j <= n; j++) prev[j] = j;
+  let pp = null, prev = new Array(n + 1); for (let j = 0; j <= n; j++) prev[j] = j;
   for (let i = 1; i <= m; i++) {
-    const cur = [i];
-    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-    prev = cur;
+    const cur = new Array(n + 1); cur[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) cur[j] = Math.min(cur[j], pp[j - 2] + cost);
+    }
+    pp = prev; prev = cur;
   }
   return prev[n];
 }
@@ -803,14 +810,22 @@ function _fuzzyNameMatch(query, candidateName, threshold = 0.8) {
   if (!qt.length || !ct.length) return false;
   return qt.every(q => ct.some(c => _tokenSim(q, c) >= threshold));
 }
-// Recover fuzzy candidates for a query that exact-missed. Bounded AND-of-prefixes fetch → JS gate. Fail-soft.
+// Recover fuzzy candidates for a query that exact-missed. The fetch uses a 2-CHAR word-boundary prefix per
+// token AND-ed across tokens: a single typo at position ≥2 leaves the 2-char prefix intact, and AND-ing the
+// tokens keeps the pool tight (validated: "ve% AND llp%" → 10 rows incl. VENABLE LLP; a 4-char prefix
+// FAILED — a mid-token typo like VOGEL→VOEL breaks "Voge"). Fetch tokens are ≥3 chars (so a distinctive
+// short suffix like "llp"/"inc" helps narrow); the precision filter (_fuzzyNameMatch, ≥4-char tokens, 0.8
+// floor) then rejects the near-misses. Bounded + JS-gated. Fail-soft. NOTE: a typo in the first 2 chars, or
+// a single short-token name, can still miss — a fully-universal fix needs a spellfix1/trigram index in Echo.
+const _FETCH_STOP = new Set(['the', 'and', 'for', 'of']);
 async function _fuzzyCandidates(d, name, preferType) {
-  const toks = _sigTokens(name).slice(0, 3);
-  if (!toks.length) return [];
+  const ftoks = String(name == null ? '' : name).toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+    .filter(t => t.length >= 3 && !_FETCH_STOP.has(t)).slice(0, 4);
+  if (!ftoks.length) return [];
   const where = [], params = [];
   if (preferType) { where.push('entity_type = ?'); params.push(preferType); }
-  for (const t of toks) { const pre = t.slice(0, 4); where.push('(name LIKE ? OR name LIKE ?)'); params.push(pre + '%', '% ' + pre + '%'); }
-  const sql = `SELECT id, name, entity_type FROM entities WHERE ${where.join(' AND ')} ORDER BY degree DESC LIMIT 25`;
+  for (const t of ftoks) { const p = t.slice(0, 2); where.push('(name LIKE ? OR name LIKE ?)'); params.push(p + '%', '% ' + p + '%'); }
+  const sql = `SELECT id, name, entity_type FROM entities WHERE ${where.join(' AND ')} ORDER BY degree DESC LIMIT 50`;
   let r; try { r = await d({ kind: 'do', name: 'db_query', args: { sql, params } }); } catch { return []; }
   if (!r || !r.ok) return [];
   let data; try { data = JSON.parse(r.text); } catch { return []; }
@@ -851,8 +866,22 @@ async function resolveMention(name, { preferType = null, dispatch = null, contex
       const primary = await _affiliatedPrimary(d, distinct);
       if (primary) { const obj = await recallObject(primary.name, { preferType, dispatch: d }); if (obj) return { status: 'resolved', mention: n, object: obj, via: 'affiliation' }; }
     } catch {}
+    // fuzzy multi-candidate (R4): the typo brought back >1 near-name; resolve to the CLOSEST edit-distance
+    // match when it strictly beats the runner-up (else genuinely ambiguous → ask). Runs AFTER context +
+    // affiliation so an org cluster still resolves to its primary, not the nearest arm.
+    if (fuzzy) {
+      const qk = _coreNameKey(q);
+      const ranked = distinct.map(c => ({ c, dist: _levenshtein(qk, _coreNameKey(c.name)) })).sort((a, b) => a.dist - b.dist);
+      if (ranked.length === 1 || ranked[0].dist < ranked[1].dist) {
+        const obj = await recallObject(ranked[0].c.name, { preferType, dispatch: d });
+        if (obj) return { status: 'resolved', mention: n, object: obj, via: 'fuzzy' };
+      }
+    }
     return { status: 'ambiguous', mention: n, candidates: distinct.slice(0, 4).map(c => c.name) };
   }
+  // single candidate — resolve it. For a FUZZY match, use the recovered stored name (q is the typo, which
+  // quick_lookup can't resolve); a fuzzy single match is already name-verified, so trust it even if thin.
+  if (fuzzy) { const obj = await recallObject(distinct[0].name, { preferType, dispatch: d }); return obj ? { status: 'resolved', mention: n, object: obj, via: 'fuzzy' } : { status: 'nil', mention: n, reason: 'no-object' }; }
   const obj = await recallObject(q, { preferType, dispatch: d });
   if (!obj) return { status: 'nil', mention: n, reason: 'no-object' };
   // Resolve ONLY when a record genuinely DOMINATES (rich object). Several thin same-name records with no

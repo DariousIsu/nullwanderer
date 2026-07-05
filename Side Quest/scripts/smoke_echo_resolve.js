@@ -287,6 +287,8 @@ function dispatch({ sibling = true } = {}) {
   // _levenshtein: classic cases + the actual typo.
   ok(echo._levenshtein('rainy', 'rainey') === 1, '_levenshtein: rainy→rainey = 1');
   ok(echo._levenshtein('kitten', 'sitting') === 3 && echo._levenshtein('abc', 'abc') === 0 && echo._levenshtein('', 'abc') === 3, '_levenshtein: classic distances');
+  ok(echo._levenshtein('ab', 'ba') === 1 && echo._levenshtein('jerome', 'jermoe') === 1 && echo._levenshtein('commerce', 'commrece') === 1, '_levenshtein: Damerau — an adjacent transposition is ONE edit (not two)');
+  ok(echo._fuzzyNameMatch('Jermoe Amos', 'Jerome Amos') && echo._fuzzyNameMatch('CHAMBER OF COMMRECE', 'CHAMBER OF COMMERCE'), '_fuzzyNameMatch: transposition typos now clear the 0.8 floor');
   ok(Math.abs(echo._tokenSim('rainy', 'rainey') - 0.8333) < 0.01, '_tokenSim: rainy/rainey ≈ 0.83');
   // _fuzzyNameMatch: the two Rainey orgs PASS, the near-misses are REJECTED (validated real names).
   ok(echo._fuzzyNameMatch('Rainy Center', 'Joseph Rainey Center for Public Policy'), '_fuzzyNameMatch: "Rainy Center" ~ "Joseph Rainey Center for Public Policy" (typo tolerated)');
@@ -295,8 +297,10 @@ function dispatch({ sibling = true } = {}) {
   ok(!echo._fuzzyNameMatch('Rainy Center', 'RAINMAKER TECHNOLOGY CORPORATION'), '_fuzzyNameMatch: REJECTS "Rainmaker Technology" (no center + rainy≁rainmaker)');
   ok(!echo._fuzzyNameMatch('Rainy Center', 'RAIN AND HAIL INSURANCE SOCIETY'), '_fuzzyNameMatch: REJECTS "Rain and Hail" (no center token)');
   // _fuzzyCandidates: the real db_query pool → filter keeps ONLY the two Rainey orgs.
+  let lastFuzzySql = null, lastFuzzyParams = null;
   const fuzzyDb = async (tag) => {
     if (tag.name !== 'db_query') return { ok: false };
+    lastFuzzySql = tag.args.sql; lastFuzzyParams = tag.args.params;
     return { ok: true, text: JSON.stringify({ rows: [
       { id: 1550486, name: 'Joseph Rainey Center for Public Policy', entity_type: 'organization' },
       { id: 1720818, name: 'RAINEY CENTER FREEDOM PROJECT, INC.', entity_type: 'organization' },
@@ -305,6 +309,9 @@ function dispatch({ sibling = true } = {}) {
   };
   const fc = await echo._fuzzyCandidates(fuzzyDb, 'Rainy Center', 'organization');
   ok(fc.length === 2 && fc.every(c => /Rainey/i.test(c.name)), '_fuzzyCandidates: real pool → keeps ONLY the 2 Rainey orgs (Rainbow filtered out)');
+  // the fetch uses a 2-CHAR prefix per token, AND-ed (survives a mid-token typo; a 4-char prefix did not)
+  ok(/ AND /.test(lastFuzzySql) && lastFuzzyParams.includes('ra%') && lastFuzzyParams.includes('ce%'), '_fuzzyCandidates: fetch is 2-char-prefix AND-ed across tokens (ra% AND ce%)');
+  ok(lastFuzzyParams.includes('% ra%') && lastFuzzyParams.includes('% ce%'), '_fuzzyCandidates: prefixes are word-boundary (leading + mid-name)');
   ok((await echo._fuzzyCandidates(fuzzyDb, 'x', null)).length === 0, '_fuzzyCandidates: sub-threshold query (no sig tokens) → []');
 
   // resolveMention END-TO-END: exact miss → fuzzy recovery → affiliation cluster → resolves to the primary.
@@ -318,6 +325,19 @@ function dispatch({ sibling = true } = {}) {
   };
   const rmR4 = await echo.resolveMention('Rainy Center', { dispatch: rmTypo });
   ok(rmR4.status === 'resolved' && rmR4.object.name === PRIMARY, 'resolveMention: TYPO "Rainy Center" → fuzzy recovery → affiliation → RESOLVED to the primary c3 (end-to-end)');
+  // HEAVY MATRIX (offline regression of the universality proven live): every typo class of a distinctive
+  // name must fuzzy-match its base; genuinely different names must NOT (precision). Mirrors the live 99%.
+  const MATRIX = [
+    { base: 'Monument Advocacy', typos: ['Monment Advocacy', 'Monumemt Advocacy', 'Monumnet Advocacy', 'Monumeent Advocacy'] }, // del/sub/transpose/insert
+    { base: 'Venable LLP', typos: ['Venble LLP', 'Vanable LLP', 'Venabel LLP', 'Venaable LLP'] },
+    { base: 'Continental Strategy', typos: ['Contnental Strategy', 'Contimental Strategy', 'Continetnal Strategy', 'Continnental Strategy'] },
+    { base: 'Jerome Amos', typos: ['Jrome Amos', 'Jarome Amos', 'Jermoe Amos', 'Jeroome Amos'] },
+  ];
+  let mp = 0, mf = 0; const mfails = [];
+  for (const row of MATRIX) for (const t of row.typos) { if (echo._fuzzyNameMatch(t, row.base)) mp++; else { mf++; mfails.push(`${t} ≁ ${row.base}`); } }
+  ok(mf === 0, `matrix: all ${mp} typo variants (del/sub/transpose/insert × 4 names) fuzzy-match their base${mf ? ' — FAILS: ' + mfails.join(', ') : ''}`);
+  ok(!echo._fuzzyNameMatch('Monument Advocacy', 'Continental Strategy') && !echo._fuzzyNameMatch('Venable LLP', 'Verizon LLC') && !echo._fuzzyNameMatch('Jerome Amos', 'Jerry Adams'), 'matrix: genuinely different names do NOT fuzzy-match (precision — no over-matching)');
+
   // a genuine non-match query still returns nil (fuzzy doesn't hallucinate).
   const rmNil = await echo.resolveMention('Zorblax Institute', { dispatch: async (tag) => tag.name === 'search_entities' ? { ok: true, text: '{"result":[]}' } : (tag.name === 'db_query' ? { ok: true, text: '{"rows":[]}' } : { ok: false }) });
   ok(rmNil.status === 'nil', 'resolveMention: a true non-match → nil (fuzzy recovery finds nothing, no false resolve)');
