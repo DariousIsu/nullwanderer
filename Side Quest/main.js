@@ -769,8 +769,29 @@ app.whenReady().then(() => {
         if (!fresh.length) return;
         for (const t of fresh) {
           const blocks = (snap.blocks_by_tab && Array.isArray(snap.blocks_by_tab[t.tabKey])) ? snap.blocks_by_tab[t.tabKey] : [];
-          const markdown = ci.extractMarkdown(blocks);
+          let markdown = ci.extractMarkdown(blocks);
           const label = ci.cleanTitle(t.title);
+          // FILE DROPS: a dropped PDF/image/docx has NO text blocks — read the actual file. Text layer
+          // (doc_extract) for text PDFs/docx; VISION (gemma4:31b) for image drops or graphic docs.
+          if (markdown.length < 40) {
+            const fileSrc = ci.fileSrcOf(blocks);
+            if (fileSrc) {
+              try {
+                const fi = require('./lib/file_ingest');
+                const de = require('./lib/doc_extract');
+                const vis = require('./lib/vision');
+                const fsm = require('fs');
+                const r = await fi.extractDroppedFile(fileSrc, { deps: {
+                  extractToMarkdown: (p) => de.extractToMarkdown(p),
+                  describe: (o) => vis.describe(o),
+                  readFileBase64: (p) => fsm.readFileSync(p).toString('base64'),
+                  fileExists: (p) => fsm.existsSync(p),
+                  log: (m) => console.log(m),
+                } });
+                if (r && r.text && r.text.length >= 40) { markdown = r.text; console.log(`[canvas-ingest] "${label}" read from FILE via ${r.via} (${markdown.length}ch)`); }
+              } catch (e) { console.error('[canvas-ingest] file read failed:', e.message); }
+            }
+          }
           if (markdown.length < 40) { console.log(`[canvas-ingest] "${label}" too thin to ingest — skipping (still marking seen)`); }
           else {
             // grounded cloud UNDERSTANDING (fail-safe to the raw doc if the cloud is down)

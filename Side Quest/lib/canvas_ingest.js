@@ -55,6 +55,18 @@ function extractMarkdown(blocks) {
     .trim();
 }
 
+// The dropped FILE's src, if this tab is a file drop (a `document_file` block whose data.src is a
+// file:// path to a PDF / image / docx). Returns the first such src, or '' — the caller reads the actual
+// file (lib/file_ingest) when the canvas blocks carry no extractable text.
+function fileSrcOf(blocks) {
+  for (const b of (Array.isArray(blocks) ? blocks : [])) {
+    const d = (b && b.data) || b || {};
+    const src = str(d.src || d.url || d.href || d.path);
+    if (src && (/^file:/i.test(src) || /\.(pdf|png|jpe?g|webp|gif|bmp|docx)$/i.test(src))) return src;
+  }
+  return '';
+}
+
 // A clean human label from a noisy block/tab title ("**📝 Notes**" → "Notes").
 function cleanTitle(title) {
   let s = str(title).replace(/[*_`#]/g, '').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '').replace(/\s+/g, ' ').trim();
@@ -80,5 +92,5 @@ function ingestNote({ title = '', understanding = '', markdown = '' } = {}) {
 
 module.exports = {
   INGEST_PREFIX, isIngestableTab, tabKeyOf, newDropTabs,
-  blockText, extractMarkdown, cleanTitle, buildUnderstandingPrompt, ingestNote,
+  blockText, extractMarkdown, fileSrcOf, cleanTitle, buildUnderstandingPrompt, ingestNote,
 };
