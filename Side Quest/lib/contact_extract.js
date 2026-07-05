@@ -125,6 +125,26 @@ function parseDocCards(raw) {
 // Back-compat: the people-only view (older callers used parseContactTuples).
 function parseContactTuples(raw) { return parseDocCards(raw).people; }
 
+// Split a large document into ~MAX_CHARS passes on LINE boundaries (so a table row / roster line is never
+// cut mid-record), for multi-pass extraction — the fix for the single-6000-char-slice cap losing the rest
+// of a big roster/sheet. Bounded by `max` passes; `truncated` = chars beyond the cap left unscanned. Pure.
+function chunkForExtraction(text, { size = MAX_CHARS, max = 24 } = {}) {
+  const s = String(text == null ? '' : text);
+  if (!s.trim()) return { chunks: [], truncated: 0 };
+  if (s.length <= size) return { chunks: [s], truncated: 0 };
+  const chunks = []; let cur = '';
+  for (const ln of s.split(/\r?\n/)) {
+    if (cur && (cur.length + ln.length + 1) > size) {
+      chunks.push(cur); cur = '';
+      if (chunks.length >= max) break;
+    }
+    cur += (cur ? '\n' : '') + ln;
+  }
+  if (cur && chunks.length < max) chunks.push(cur);
+  const included = chunks.reduce((n, c) => n + c.length + 1, 0);
+  return { chunks, truncated: Math.max(0, s.length - included) };
+}
+
 // MEETING MENTIONS — a live meeting RESOLVES what's mentioned to KNOWN cards (unlike a document, which
 // MINTS new objects). This lists WHO/WHAT was named, by type — BARE names included ("Russ said…") — for
 // the resolver to match against existing people / places / events. Names only, no fields.
@@ -168,6 +188,6 @@ function parseMentions(raw) {
 
 module.exports = {
   buildCardsPrompt, buildContactPrompt, parseDocCards, parseContactTuples,
-  buildMentionsPrompt, parseMentions,
+  buildMentionsPrompt, parseMentions, chunkForExtraction,
   MAX_CHARS, DOC_CONFIDENCE,
 };

@@ -41,6 +41,16 @@ ok(mentions.people.length === 2 && mentions.people.includes('Russ Walker') && me
 ok(mentions.places[0] === 'AC Hotel' && mentions.events[0] === 'Prayer Breakfast', 'parseMentions: place + event routed');
 ok(CE.buildMentionsPrompt('x')[0].content.includes('PERSON | name'), 'buildMentionsPrompt: names-only format');
 
+// --- chunkForExtraction (multi-pass for large docs) ---
+ok(CE.chunkForExtraction('short doc').chunks.length === 1 && CE.chunkForExtraction('').chunks.length === 0, 'chunkForExtraction: small → 1 pass, empty → 0');
+const bigLines = Array.from({ length: 300 }, (_, i) => `PERSON | Person ${i} | Title ${i} | Org ${i} | p${i}@example.org | - | -`);
+const big = CE.chunkForExtraction(bigLines.join('\n'));   // ~19k chars → several passes
+ok(big.chunks.length >= 2, `chunkForExtraction: large doc → multiple passes (got ${big.chunks.length})`);
+ok(big.chunks.every(c => c.length <= CE.MAX_CHARS), 'chunkForExtraction: every pass within MAX_CHARS');
+ok(big.chunks.join('\n') === bigLines.join('\n') && big.truncated === 0, 'chunkForExtraction: passes reassemble to the original (line-clean, nothing lost or split mid-record)');
+const capped = CE.chunkForExtraction(bigLines.join('\n'), { max: 2 });
+ok(capped.chunks.length === 2 && capped.truncated > 0, 'chunkForExtraction: respects the max-pass cap + reports the unscanned tail');
+
 // --- parseContactTuples: what a model would emit → clean ingest rows ---
 const raw = [
   'CONTACT | Brad Overcash | State Senator | NC General Assembly | Brad.Overcash@ncleg.gov | 919-733-5745 | 300 N. Salisbury St, Raleigh, NC 27603',

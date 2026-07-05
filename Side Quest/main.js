@@ -5727,29 +5727,31 @@ async function surfaceDocCards(doc) {
       completeFn: completeDetailed, model, base: src.base, token: src.token,
       buildPrompt: contactExtract.buildCardsPrompt, parse: contactExtract.parseDocCards, numPredict: 800,
     });
-    const cards = await extract(String(doc.body), { title: doc.title });   // { people, places, events }
-    const people = (cards && cards.people) || [], places = (cards && cards.places) || [], events = (cards && cards.events) || [];
-    const now = Date.now();
+    // MULTI-PASS: a big roster/sheet exceeds one 6000-char extraction slice, so split it into line-boundary
+    // passes and extract each. ingestRows dedups people ACROSS passes (it rebuilds its seen-set from the DB
+    // each call), so we land+push each pass as it finishes — cards stream into the rail progressively.
+    const { chunks, truncated } = contactExtract.chunkForExtraction(String(doc.body), { max: 24 });
+    if (!chunks.length) return;
+    try { pdb.init(); } catch {}
+    const sourceUrl = doc.ref || (doc.id != null ? `docstore:${doc.id}` : null);   // the landed doc is the citation
     const push = (c) => { try { if (canvasWindow && !canvasWindow.isDestroyed()) canvasWindow.webContents.send('contacts:card', c); } catch {} };
-
-    // PEOPLE → Puller (cited beliefs, new objects) + person cards
-    if (people.length) {
-      try { pdb.init(); } catch {}
-      const sourceUrl = doc.ref || (doc.id != null ? `docstore:${doc.id}` : null);   // the landed doc is the citation
-      const s = ingest.ingestRows(pdb, people, { source: `doc:${String(doc.title || doc.id || 'drop').slice(0, 60)}`, sourceUrl, obsKind: 'doc' });
-      const crmByName = await lookupCrmContacts((s.landed || []).map(L => L.name));
-      for (const L of (s.landed || [])) {
-        try {
-          const beliefs = pdb.listBeliefs(L.targetId);
-          push(contactCard.cardFromTarget({ id: L.targetId, name: L.name, company: L.company, kind: 'person', last_accessed_at: now }, beliefs, crmByName.get(String(L.name).toLowerCase()) || {}));
-        } catch (e) {}
+    let totPeople = 0, totPlaces = 0, totEvents = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      let cards; try { cards = await extract(chunks[i], { title: doc.title }); } catch (e) { continue; }
+      const people = (cards && cards.people) || [], places = (cards && cards.places) || [], events = (cards && cards.events) || [];
+      const now = Date.now();
+      if (people.length) {
+        const s = ingest.ingestRows(pdb, people, { source: `doc:${String(doc.title || doc.id || 'drop').slice(0, 60)}`, sourceUrl, obsKind: 'doc' });
+        const crmByName = await lookupCrmContacts((s.landed || []).map(L => L.name));
+        for (const L of (s.landed || [])) {
+          try { const beliefs = pdb.listBeliefs(L.targetId); push(contactCard.cardFromTarget({ id: L.targetId, name: L.name, company: L.company, kind: 'person', last_accessed_at: now }, beliefs, crmByName.get(String(L.name).toLowerCase()) || {})); } catch (e) {}
+        }
+        totPeople += s.targets;
       }
-      console.log(`[doc-cards] #${doc.id} people: +${s.targets} target / ${s.beliefs} belief${s.skippedDup ? ` / ${s.skippedDup} tracked` : ''}`);
+      for (const p of places) { try { const c = contactCard.buildPlaceCard(p, { ts: now }); db.recordRecentCard({ type: 'place', cardKey: c.key, data: c, ts: now }); push(c); totPlaces++; } catch (e) {} }
+      for (const ev of events) { try { const c = contactCard.buildEventCard(ev, { ts: now }); db.recordRecentCard({ type: 'event', cardKey: c.key, data: c, ts: now }); push(c); totEvents++; } catch (e) {} }
     }
-    // PLACES + EVENTS → recent_cards store (persist) + cards
-    for (const p of places) { try { const c = contactCard.buildPlaceCard(p, { ts: now }); db.recordRecentCard({ type: 'place', cardKey: c.key, data: c, ts: now }); push(c); } catch (e) {} }
-    for (const ev of events) { try { const c = contactCard.buildEventCard(ev, { ts: now }); db.recordRecentCard({ type: 'event', cardKey: c.key, data: c, ts: now }); push(c); } catch (e) {} }
-    if (places.length || events.length) console.log(`[doc-cards] #${doc.id} places: +${places.length} / events: +${events.length}`);
+    console.log(`[doc-cards] #${doc.id} ${chunks.length} pass(es) → +${totPeople} people / ${totPlaces} places / ${totEvents} events${truncated ? ` (${truncated} chars beyond the ${chunks.length}-pass cap unscanned)` : ''}`);
   } catch (e) { console.error('[doc-cards] surface failed:', e.message); }
 }
 
