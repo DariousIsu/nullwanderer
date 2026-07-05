@@ -99,14 +99,65 @@ async function extractPdf(filePath) {
 }
 
 const TEXT_EXT = new Set(['md', 'markdown', 'txt', 'text']);
+const SHEET_EXT = new Set(['xlsx', 'xlsm', 'csv', 'tsv']);   // .xls (legacy BIFF) is NOT read by exceljs — unsupported
+
+// --- spreadsheets → markdown table (so a dropped roster/contact sheet flows through the doc pipeline) ---
+// A minimal RFC-4180-ish delimited parse (quoted fields, escaped "", CRLF). Returns rows of string cells.
+function parseCsv(text, delim = ',') {
+  const rows = []; let row = [], field = '', q = false;
+  const s = String(text == null ? '' : text);
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q) { if (c === '"') { if (s[i + 1] === '"') { field += '"'; i++; } else q = false; } else field += c; }
+    else if (c === '"') q = true;
+    else if (c === delim) { row.push(field); field = ''; }
+    else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+    else if (c !== '\r') field += c;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+// Rows (array of string-cell arrays) → a GitHub markdown table. First non-empty row is the header. Pure.
+function rowsToMarkdownTable(rows) {
+  const clean = (Array.isArray(rows) ? rows : []).filter(r => Array.isArray(r) && r.some(c => String(c == null ? '' : c).trim() !== ''));
+  if (!clean.length) return '';
+  const width = Math.max(...clean.map(r => r.length));
+  const esc = (c) => String(c == null ? '' : c).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ').trim();
+  const pad = (r) => { const a = r.map(esc); while (a.length < width) a.push(''); return a; };
+  const header = pad(clean[0]);
+  const out = ['| ' + header.join(' | ') + ' |', '| ' + header.map(() => '---').join(' | ') + ' |'];
+  for (const r of clean.slice(1)) out.push('| ' + pad(r).join(' | ') + ' |');
+  return out.join('\n');
+}
+// Read an .xlsx (every sheet) or .csv into markdown table text. exceljs (MIT) for xlsx; plain parse for csv.
+async function extractSpreadsheet(filePath) {
+  const ext = path.extname(filePath).replace(/^\./, '').toLowerCase();
+  if (ext === 'csv' || ext === 'tsv') return { markdown: rowsToMarkdownTable(parseCsv(fs.readFileSync(filePath, 'utf8'), ext === 'tsv' ? '\t' : ',')), format: ext };
+  const ExcelJS = require('exceljs');
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(filePath);
+  const parts = [];
+  wb.eachSheet((ws) => {
+    const rows = [];
+    ws.eachRow({ includeEmpty: false }, (row) => {
+      const cells = [];
+      row.eachCell({ includeEmpty: true }, (cell) => cells.push(cell && cell.text != null ? String(cell.text) : ''));
+      rows.push(cells);
+    });
+    const table = rowsToMarkdownTable(rows);
+    if (table) { parts.push(`## ${ws.name || 'Sheet'}`); parts.push(table); }
+  });
+  return { markdown: parts.join('\n\n'), format: 'xlsx' };
+}
 
 // Dispatch a file path to the right extractor → { markdown, format, ... }. Text formats read directly.
 async function extractToMarkdown(filePath) {
   const ext = path.extname(filePath).replace(/^\./, '').toLowerCase();
   if (TEXT_EXT.has(ext)) return { markdown: fs.readFileSync(filePath, 'utf8'), format: ext === 'markdown' ? 'md' : (ext === 'text' ? 'txt' : ext) };
+  if (SHEET_EXT.has(ext)) return { ...(await extractSpreadsheet(filePath)), format: ext };
   if (ext === 'docx') return { ...(await extractDocx(filePath)), format: 'docx' };
   if (ext === 'pdf') return { ...(await extractPdf(filePath)), format: 'pdf' };
   throw new Error(`extractToMarkdown: unsupported extension .${ext}`);
 }
 
-module.exports = { decodeEntities, inlineMd, htmlToMarkdown, sanitizeHtml, extractDocx, extractDocxHtml, extractPdf, extractToMarkdown, TEXT_EXT };
+module.exports = { decodeEntities, inlineMd, htmlToMarkdown, sanitizeHtml, extractDocx, extractDocxHtml, extractPdf, extractToMarkdown, parseCsv, rowsToMarkdownTable, extractSpreadsheet, TEXT_EXT, SHEET_EXT };

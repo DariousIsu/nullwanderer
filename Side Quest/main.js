@@ -2211,7 +2211,9 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       blockType = 'document_file';                          // 'pdf' is not a valid engine block type
     } else if (ext === 'csv' || ext === 'tsv') {           // SPREADSHEET (delimited) → table
       const tbl = require('./studio/sheet_view').csvToTable(fs.readFileSync(filePath, 'utf8'), ext === 'tsv' ? '\t' : ',');
-      data = { headers: tbl.headers, rows: tbl.rows, caption: tbl.truncated ? `+${tbl.truncated} more rows` : null };
+      // src = the on-disk file → the ingest poller re-reads the FULL sheet (not the truncated display rows)
+      // via file_ingest → doc_extract.extractSpreadsheet → markdown table → surfaceDocCards → cards.
+      data = { headers: tbl.headers, rows: tbl.rows, caption: tbl.truncated ? `+${tbl.truncated} more rows` : null, src: 'file:///' + filePath.replace(/\\/g, '/').replace(/^\/+/, '') };
       blockType = 'table';
     } else if (ext === 'xlsx' || ext === 'xlsm' || ext === 'xls') {   // EXCEL → table (first sheet)
       const ExcelJS = require('exceljs');
@@ -2221,7 +2223,7 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       const rows = [];
       if (ws) ws.eachRow((r) => rows.push((r.values || []).slice(1).map(v => (v == null ? '' : (typeof v === 'object' ? (v.text || v.result || v.hyperlink || JSON.stringify(v)) : v)))));
       const tbl = require('./studio/sheet_view').toTable(rows);
-      data = { headers: tbl.headers, rows: tbl.rows, caption: ws ? `${ws.name}${tbl.truncated ? ` · +${tbl.truncated} more rows` : ''}` : null };
+      data = { headers: tbl.headers, rows: tbl.rows, caption: ws ? `${ws.name}${tbl.truncated ? ` · +${tbl.truncated} more rows` : ''}` : null, src: 'file:///' + filePath.replace(/\\/g, '/').replace(/^\/+/, '') };
       blockType = 'table';
     } else if (ext === 'docx') {                           // WORD → rich HTML (tables, emphasis, inline images)
       try { const r = await require('./lib/doc_extract').extractDocxHtml(filePath); if (r && r.html && r.html.trim()) { data = { html: r.html }; blockType = 'document_file'; } } catch {}

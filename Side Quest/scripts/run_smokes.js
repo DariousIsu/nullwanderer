@@ -48,6 +48,7 @@ const smokes = [
   'smoke_decomp_lane.js',
   'smoke_contact_extract.js',
   'smoke_contact_card.js',
+  'smoke_sheet_extract.js',
   'smoke_file_ingest.js',
   'smoke_swirl_iterate.js',
   'smoke_live_info.js',

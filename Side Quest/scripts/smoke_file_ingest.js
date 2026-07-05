@@ -49,8 +49,10 @@ const baseDeps = (over) => Object.assign({ path, fileExists: () => true, log: ()
   // doc_extract throws → fail-soft (pdf, no image fallback → thin)
   ok((await FI.extractDroppedFile('file:///d/bad.pdf', { deps: baseDeps({ extractToMarkdown: async () => { throw new Error('corrupt'); } }) })).via === 'thin', 'extract: doc_extract throw → fail-soft → thin');
 
-  // unsupported extension
-  ok((await FI.extractDroppedFile('file:///d/data.xlsx', { deps: baseDeps({}) })).via === 'unsupported', 'extract: unsupported ext (.xlsx) → unsupported');
+  // spreadsheets are now SUPPORTED (routed to the text layer via doc_extract), not 'unsupported'
+  ok((await FI.extractDroppedFile('file:///d/roster.xlsx', { deps: baseDeps({ extractToMarkdown: async () => ({ markdown: '| Name | Email |\n| --- | --- |\n| Brad | brad@x.gov |' }) }) })).via === 'doc_extract:xlsx', 'extract: .xlsx → doc_extract:xlsx (spreadsheet supported)');
+  // a genuinely unsupported binary type still returns 'unsupported'
+  ok((await FI.extractDroppedFile('file:///d/archive.zip', { deps: baseDeps({}) })).via === 'unsupported', 'extract: unsupported ext (.zip) → unsupported');
 
   // --- canvas_ingest.fileSrcOf: find the document_file src among blocks ---
   const fileBlocks = [{ type: 'document_file', data: { src: 'file:///C:/Users/x/flyer.pdf', alt: 'flyer' } }];

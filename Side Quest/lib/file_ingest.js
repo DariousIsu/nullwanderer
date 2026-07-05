@@ -15,7 +15,9 @@
 'use strict';
 
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp']);
-const TEXT_DOC_EXT = new Set(['pdf', 'docx', 'txt', 'text', 'md', 'markdown']);
+// spreadsheets (xlsx/csv) read via doc_extract → a markdown table, so a dropped roster flows through the
+// same text pipeline as any doc (doc_store.land → surfaceDocCards → cards).
+const TEXT_DOC_EXT = new Set(['pdf', 'docx', 'txt', 'text', 'md', 'markdown', 'xlsx', 'xlsm', 'csv', 'tsv']);
 const MIN_TEXT = 40;   // below this a "document" is too thin to be worth landing (mirrors the canvas guard)
 
 // A transcription-first prompt so the returned text is decomposition-ready (raw content, not a summary).

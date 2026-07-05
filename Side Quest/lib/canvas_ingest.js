@@ -62,7 +62,7 @@ function fileSrcOf(blocks) {
   for (const b of (Array.isArray(blocks) ? blocks : [])) {
     const d = (b && b.data) || b || {};
     const src = str(d.src || d.url || d.href || d.path);
-    if (src && (/^file:/i.test(src) || /\.(pdf|png|jpe?g|webp|gif|bmp|docx)$/i.test(src))) return src;
+    if (src && (/^file:/i.test(src) || /\.(pdf|png|jpe?g|webp|gif|bmp|docx|xlsx|xlsm|csv|tsv)$/i.test(src))) return src;
   }
   return '';
 }
