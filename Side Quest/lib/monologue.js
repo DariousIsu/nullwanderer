@@ -1669,8 +1669,21 @@ async function runPullerMove(_recentTurns) {
     land, web, extract, refresh, getMeta: _gm, setMeta: _sm, now: () => Date.now(), log: (m) => console.log(m),
   });
   try { db.setMeta(PULLER_LAST_KEY, String(Date.now())); } catch {}
-  if (move && move.acted) console.log(`[puller-walk] ${move.mode} "${move.name}" → ${move.email || move.phone || ''}`);
-  else if (move) console.log(`[puller-walk] no move (${move.reason})`);
+  if (move && move.acted) {
+    console.log(`[puller-walk] ${move.mode} "${move.name}" → ${move.email || move.phone || ''}`);
+    // Surface ONE compact line into the electric-sheep stream so the Puller lane is visible alongside the
+    // graph-walk (Lucas). A grounded 'reading' (not a chatty 'thought'): cited — the web URL, or the
+    // domain email-pattern it was derived from. Only on an acted move, so it can't spam.
+    try {
+      const val = move.email || move.phone || '';
+      const via = move.mode === 'web'
+        ? (move.url ? ` (${graphWalk.sourceLabel(move.url)})` : ' (web)')
+        : (move.email ? ` (${String(move.email).split('@')[1] || ''} email pattern)` : '');
+      const content = `Found a contact for ${move.name}: ${val}${via}`;
+      const rr = db.insertMonologue({ content, model: 'puller-walk', type: 'reading', query: move.url || null });
+      pushSheep({ id: rr.id, ts: rr.ts, content: `(found contact) ${move.name} → ${val}`, type: 'reading', query: move.url || null });
+    } catch (e) { console.error('[puller-walk] sheep surface failed:', e.message); }
+  } else if (move) console.log(`[puller-walk] no move (${move.reason})`);
   return !!(move && move.acted);
 }
 
