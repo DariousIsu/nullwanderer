@@ -29,6 +29,9 @@ const beliefs = require('../studio/puller_beliefs');
 const ATTEMPT_TTL_MS = 6 * 60 * 60 * 1000;   // don't re-attempt the same target for 6h (avoid burning moves on a stubborn one)
 const ATTEMPT_KEY = 'pullerwalk.attempted';   // getMeta/setMeta JSON [[key, ts], …], TTL-pruned
 const PATTERN_FLOOR = 0.45;                    // only pattern-fill when the domain has a real learned lean (not a bare prior)
+const PROSPECT_TTL_MS = 24 * 60 * 60 * 1000;  // don't re-prospect the same org more than once a day
+const PROSPECT_KEY = 'pullerwalk.prospected';
+const MAX_NEW_PER_ORG = 5;                     // cap net-new targets minted per discovery move (quality > volume)
 
 const norm = (s) => String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 function attemptKeyOf(t) { return norm(`${t && t.name}|${t && (t.company || t.domain || '')}`); }
@@ -168,8 +171,96 @@ async function runPullerMove(deps = {}) {
   } catch (e) { log && log('[puller-walk] move failed: ' + (e && e.message)); return { acted: false, reason: 'error' }; }
 }
 
+// ===================================================================================================
+// DISCOVERY MODE — when there's nothing left to enrich, PROSPECT: seed on an org already in the operator's
+// focus, web-search its people, keep only the ones NOT already in the CRM/Puller, and mint them as new
+// targets (the enrichment modes then fill their contact info). This is the "find new targets" engine —
+// net-new people, seeded from orgs we already have (Lucas). Cooldown per org so it doesn't re-prospect.
+// ===================================================================================================
+function orgKeyOf(o) { return norm(o && (o.name || o)); }
+
+// TTL cooldown for prospected orgs — same shape as the attempt set, separate key/TTL.
+function loadProspected(getMeta, now) {
+  let arr = []; try { arr = JSON.parse((getMeta && getMeta(PROSPECT_KEY)) || '[]'); } catch {}
+  const fresh = (Array.isArray(arr) ? arr : []).filter(e => Array.isArray(e) && (now - (Number(e[1]) || 0) < PROSPECT_TTL_MS));
+  return { set: new Set(fresh.map(e => e[0])), arr: fresh };
+}
+function recordProspected({ getMeta, setMeta, now, key }) {
+  const { arr } = loadProspected(getMeta, now);
+  if (!arr.some(e => e[0] === key)) arr.push([key, now]);
+  try { setMeta && setMeta(PROSPECT_KEY, JSON.stringify(arr.slice(-500))); } catch {}
+}
+
+// pure: pick the org to prospect. orgs: [{name, domain?}] (the caller supplies them ACTIVE-first). Skip
+// recently-prospected + junk names; prefer a domain-bearing org (its finds get a domain → pattern-fill later).
+const _JUNK_ORG = /^(not reported|unknown|n\/?a|none|office of|the office)$/i;
+function pickSeedOrg(orgs, { prospectedKeys = new Set() } = {}) {
+  const usable = (Array.isArray(orgs) ? orgs : []).filter((o) => {
+    const nm = String((o && o.name) || '').trim();
+    if (nm.length < 3 || _JUNK_ORG.test(nm)) return false;
+    if (prospectedKeys.has(orgKeyOf(o))) return false;
+    return true;
+  });
+  if (!usable.length) return null;
+  return usable.slice().sort((a, b) => (b.domain ? 1 : 0) - (a.domain ? 1 : 0))[0] || null;   // stable: domain-bearing first, else active order
+}
+
+// pure: the staff/roster search query for an org.
+function buildOrgProspectQuery(org) {
+  const n = String((org && org.name) || org || '').trim();
+  return `${n} staff directory team leadership`;
+}
+
+// The DISCOVERY move. deps:
+//   seedOrgs()               → [{name, domain?}]  (active orgs first)
+//   filterNew(people)        → subset NOT already in CRM/Puller (the caller batches the dedup)
+//   createTarget({name,company,domain,title,sourceUrl}) → new target id | null
+//   web(query) → sources; extract(text,{title}) → {people,…}; land(o); refresh(id); observe(o)
+//   getMeta/setMeta, now, log, maxNew
+async function runDiscoveryMove(deps = {}) {
+  const { seedOrgs, filterNew, createTarget, web, extract, land, refresh, observe,
+          getMeta, setMeta, now = () => Date.now(), log, maxNew = MAX_NEW_PER_ORG } = deps;
+  const nowTs = now();
+  try {
+    if (typeof web !== 'function' || typeof extract !== 'function' || typeof createTarget !== 'function') return { acted: false, reason: 'no-deps' };
+    const orgs = (typeof seedOrgs === 'function' ? await seedOrgs() : seedOrgs) || [];
+    const { set: prospectedKeys } = loadProspected(getMeta, nowTs);
+    const seed = pickSeedOrg(orgs, { prospectedKeys });
+    if (!seed) return { acted: false, reason: 'no-seed' };
+    recordProspected({ getMeta, setMeta, now: nowTs, key: orgKeyOf(seed) });
+
+    let sources = []; try { sources = (await web(buildOrgProspectQuery(seed))) || []; } catch {}
+    if (!sources.length) return { acted: false, reason: 'no-sources', org: seed.name };
+    const text = sources.map(s => s && s.text).filter(Boolean).join('\n\n').slice(0, 6000);
+    const url = (sources[0] && sources[0].url) || null;
+    let cards = null; try { cards = await extract(text, { title: seed.name }); } catch {}
+    const people = (cards && cards.people) || [];
+    if (!people.length) return { acted: false, reason: 'no-people', org: seed.name };
+
+    let fresh = people;
+    try { if (typeof filterNew === 'function') fresh = (await filterNew(people)) || []; } catch { fresh = []; }
+    if (!fresh.length) return { acted: false, reason: 'no-new', org: seed.name };   // all already in CRM/Puller
+
+    const created = [];
+    for (const p of fresh.slice(0, maxNew)) {
+      if (!p || !p.name) continue;
+      let id = null;
+      try { id = await createTarget({ name: p.name, company: seed.name, domain: seed.domain || null, title: p.title || null, sourceUrl: url }); } catch {}
+      if (id == null) continue;
+      created.push({ id, name: p.name });
+      if (p.email && typeof land === 'function') { try { await land({ targetId: id, attr: 'email', value: p.email, kind: 'guess', confidence: 0.6, source: 'web', sourceUrl: url, derivation: 'web-prospect' }); } catch {} }
+      if (typeof observe === 'function') { try { await observe({ sourceEntity: p.name, relation: 'works_for', target: seed.name, url, grade: 'C', confidence: 0.6, status: 'promoted' }); } catch {} }
+      if (typeof refresh === 'function') { try { await refresh(id); } catch {} }
+    }
+    if (!created.length) return { acted: false, reason: 'no-create', org: seed.name };
+    log && log(`[puller-walk] discovered ${created.length} new @ "${seed.name}" (${url || 'no-url'})`);
+    return { acted: true, mode: 'discover', org: seed.name, created, count: created.length, url };
+  } catch (e) { log && log('[puller-walk] discovery failed: ' + (e && e.message)); return { acted: false, reason: 'error' }; }
+}
+
 module.exports = {
-  runPullerMove, pickTarget, patternFillCandidate, buildContactSearchQuery, pickPersonRow,
+  runPullerMove, runDiscoveryMove, pickTarget, patternFillCandidate, buildContactSearchQuery, pickPersonRow,
+  pickSeedOrg, buildOrgProspectQuery, orgKeyOf, loadProspected, recordProspected,
   attemptKeyOf, loadAttempted, recordAttempt, norm,
-  ATTEMPT_TTL_MS, ATTEMPT_KEY, PATTERN_FLOOR,
+  ATTEMPT_TTL_MS, ATTEMPT_KEY, PATTERN_FLOOR, PROSPECT_TTL_MS, PROSPECT_KEY, MAX_NEW_PER_ORG,
 };

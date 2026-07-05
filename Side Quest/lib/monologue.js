@@ -1683,8 +1683,74 @@ async function runPullerMove(_recentTurns) {
       const rr = db.insertMonologue({ content, model: 'puller-walk', type: 'reading', query: move.url || null });
       pushSheep({ id: rr.id, ts: rr.ts, content: `(found contact) ${move.name} → ${val}`, type: 'reading', query: move.url || null });
     } catch (e) { console.error('[puller-walk] sheep surface failed:', e.message); }
-  } else if (move) console.log(`[puller-walk] no move (${move.reason})`);
-  return !!(move && move.acted);
+    return true;
+  }
+
+  // ENRICH found nothing to do → DISCOVERY: prospect an active org for NET-NEW people (Lucas: "when
+  // there's nothing to enrich, find new targets — similar contacts from orgs already in the database").
+  // Seed orgs = the operator's active orgs (recent org cards + the companies his targets belong to),
+  // active-first; net-new means NOT already in the CRM or the Puller.
+  const seedOrgs = () => {
+    const seen = new Set(); const orgs = [];
+    const add = (name, domain) => { const nm = String(name == null ? '' : name).trim(); const k = nm.toLowerCase(); if (nm.length >= 3 && !seen.has(k)) { seen.add(k); orgs.push({ name: nm, domain: domain || null }); } };
+    try { for (const c of db.listRecentCards({ types: ['org'], limit: 20 })) add(c && c.name, null); } catch {}   // freshest active orgs first
+    try {
+      const byCompany = new Map();
+      for (const t of pdb.listTargets({ limit: 400 })) {
+        if (!t.company || t.company.includes(';')) continue;   // skip concatenated org-chart junk ("DOE; Office of the Secretary; …")
+        const k = t.company.toLowerCase(); const e = byCompany.get(k);
+        if (!e) byCompany.set(k, { name: t.company, domain: t.domain || null }); else if (!e.domain && t.domain) e.domain = t.domain;
+      }
+      for (const o of byCompany.values()) add(o.name, o.domain);
+    } catch {}
+    return orgs;
+  };
+  // dedup vs CRM (consume-only name match) + Puller — only keep people we don't already have
+  const crmKnownNames = async (names) => {
+    const set = new Set();
+    try {
+      const clean = [...new Set((names || []).map(n => String(n == null ? '' : n).trim()).filter(n => n.length >= 2))].slice(0, 40);
+      if (!clean.length) return set;
+      const inList = clean.map(n => `'${n.replace(/'/g, "''")}'`).join(',');
+      const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql: `SELECT DISTINCT TRIM(COALESCE(FirstName,'')||' '||COALESCE(LastName,'')) nm FROM electoral.contact WHERE deleted=0 AND TRIM(COALESCE(FirstName,'')||' '||COALESCE(LastName,'')) IN (${inList})`, params: [] } });
+      if (r && r.ok) { let j; try { j = JSON.parse(r.text); } catch {} for (const row of ((j && j.rows) || [])) if (row.nm) set.add(String(row.nm).toLowerCase()); }
+    } catch {}
+    return set;
+  };
+  const filterNew = async (people) => {
+    const inCrm = await crmKnownNames((people || []).map(p => p && p.name));
+    return (people || []).filter(p => {
+      const nm = String((p && p.name) || '').trim(); if (!nm) return false;
+      if (inCrm.has(nm.toLowerCase())) return false;
+      try { if (pdb.findTargetByName(nm)) return false; } catch {}
+      return true;
+    });
+  };
+  const createTargetFn = ({ name, company, domain, title, sourceUrl }) => {
+    try {
+      const t = pdb.createTarget({ kind: 'person', name, company: company || null, domain: domain || null, notes: title || null });
+      if (t && title) { try { pdb.addObservation(t.id, { attr: 'role', value: title, kind: 'web', source: 'web-prospect', sourceUrl }); pdb.upsertBelief(t.id, 'role', { value: title, confidence: 0.6, derivation: 'web-prospect' }); } catch {} }
+      return t ? t.id : null;
+    } catch { return null; }
+  };
+  const observe = (o) => { try { curationStore.record(db, { ...o, feed: 'puller' }); } catch {} };
+
+  const disc = await pullerWalk.runDiscoveryMove({
+    seedOrgs, filterNew, createTarget: createTargetFn, web, extract, land, refresh, observe,
+    getMeta: _gm, setMeta: _sm, now: () => Date.now(), log: (m) => console.log(m),
+  });
+  if (disc && disc.acted) {
+    console.log(`[puller-walk] discover "${disc.org}" → +${disc.count} new`);
+    try {
+      const names = (disc.created || []).map(c => c.name).join(', ');
+      const content = `Prospected ${disc.org} — found ${disc.count} new contact${disc.count === 1 ? '' : 's'}: ${names}`;
+      const rr = db.insertMonologue({ content, model: 'puller-walk', type: 'reading', query: disc.url || null });
+      pushSheep({ id: rr.id, ts: rr.ts, content: `(new contacts) +${disc.count} at ${disc.org}`, type: 'reading', query: disc.url || null });
+    } catch (e) { console.error('[puller-walk] sheep surface failed:', e.message); }
+    return true;
+  }
+  console.log(`[puller-walk] no move (enrich ${(move && move.reason) || '?'} · discover ${(disc && disc.reason) || '?'})`);
+  return false;
 }
 
 async function maybeSearchFromThought(thoughtText, focusId = null) {

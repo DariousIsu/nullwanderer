@@ -94,6 +94,47 @@ ok(PW.pickPersonRow([{ name: 'Bob Jones', email: 'b@j.com' }], 'Jane Smith') ===
   const empty = await PW.runPullerMove({ candidates: [], getMeta: (k) => null, setMeta: () => {}, now: () => 1 });
   ok(!empty.acted && empty.reason === 'no-target', 'runPullerMove: empty candidate set → no-target');
 
+  // === DISCOVERY MODE ===
+  // pickSeedOrg: skips junk + prospected; prefers a domain-bearing org
+  ok(PW.pickSeedOrg([{ name: 'Not Reported' }, { name: 'Rainey Center', domain: 'raineycenter.org' }]).name === 'Rainey Center', 'pickSeedOrg: skips junk ("Not Reported"), takes the real org');
+  ok(PW.pickSeedOrg([{ name: 'Acme' }, { name: 'Beta Org', domain: 'beta.com' }]).name === 'Beta Org', 'pickSeedOrg: prefers a domain-bearing org');
+  ok(PW.pickSeedOrg([{ name: 'Rainey Center' }], { prospectedKeys: new Set([PW.orgKeyOf({ name: 'Rainey Center' })]) }) === null, 'pickSeedOrg: a recently-prospected org is skipped');
+  ok(PW.pickSeedOrg([{ name: 'Office of' }, { name: 'na' }]) === null, 'pickSeedOrg: all junk/too-short → null');
+  ok(PW.buildOrgProspectQuery({ name: 'Rainey Center' }) === 'Rainey Center staff directory team leadership', 'buildOrgProspectQuery: org staff/roster query');
+
+  // runDiscoveryMove: search org → extract people → filterNew dedup → mint net-new targets
+  const meta3 = new Map();
+  const createdIds = []; const landed3 = [];
+  let filteredInput = null;
+  const disc = await PW.runDiscoveryMove({
+    seedOrgs: [{ name: 'Rainey Center', domain: 'raineycenter.org' }],
+    web: async () => [{ text: 'Team: Jane Roe (Director), Bob Known (Fellow, bob@raineycenter.org)', url: 'https://raineycenter.org/team' }],
+    extract: async () => ({ people: [{ name: 'Jane Roe', title: 'Director' }, { name: 'Bob Known', email: 'bob@raineycenter.org' }], places: [], events: [] }),
+    filterNew: async (people) => { filteredInput = people; return people.filter(p => p.name !== 'Bob Known'); },   // Bob already in CRM → dropped
+    createTarget: async ({ name, company, domain }) => { createdIds.push({ name, company, domain }); return 900 + createdIds.length; },
+    land: (o) => landed3.push(o),
+    getMeta: (k) => meta3.get(k) || null, setMeta: (k, v) => meta3.set(k, v), now: () => 10000,
+  });
+  ok(disc.acted && disc.mode === 'discover' && disc.count === 1, 'runDiscoveryMove: mints the ONE net-new person (dedup dropped the known one)');
+  ok(createdIds.length === 1 && createdIds[0].name === 'Jane Roe' && createdIds[0].company === 'Rainey Center' && createdIds[0].domain === 'raineycenter.org', 'runDiscoveryMove: new target carries the seed org + domain');
+  ok(filteredInput && filteredInput.length === 2, 'runDiscoveryMove: passes all extracted people through the CRM/Puller dedup');
+  ok(meta3.get(PW.PROSPECT_KEY) && /rainey/.test(meta3.get(PW.PROSPECT_KEY)), 'runDiscoveryMove: records the org cooldown');
+
+  // all extracted people already known → no-new (mints nothing)
+  const discKnown = await PW.runDiscoveryMove({
+    seedOrgs: [{ name: 'Rainey Center' }],
+    web: async () => [{ text: 'x', url: 'u' }],
+    extract: async () => ({ people: [{ name: 'Bob Known' }], places: [], events: [] }),
+    filterNew: async () => [],
+    createTarget: async () => 1,
+    getMeta: (k) => null, setMeta: () => {}, now: () => 20000,
+  });
+  ok(!discKnown.acted && discKnown.reason === 'no-new', 'runDiscoveryMove: every extracted person already known → no-new (mints nothing)');
+
+  // no seed org available → no-seed
+  const discNoSeed = await PW.runDiscoveryMove({ seedOrgs: [], web: async () => [], extract: async () => ({}), createTarget: async () => 1, getMeta: (k) => null, setMeta: () => {}, now: () => 1 });
+  ok(!discNoSeed.acted && discNoSeed.reason === 'no-seed', 'runDiscoveryMove: no seed org → no-seed');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
