@@ -136,7 +136,9 @@ contextBridge.exposeInMainWorld('sq', {
   kg: {
     overview: () => ipcRenderer.invoke('kg:overview'),
     ego: (entity, hops) => ipcRenderer.invoke('kg:ego', { entity, hops }),
-    search: (query) => ipcRenderer.invoke('kg:search', { query })
+    search: (query) => ipcRenderer.invoke('kg:search', { query }),
+    // live-follow: main broadcasts kg:focus-move on each idle graph-walk move → the panel can re-center.
+    onFocusMove: (cb) => { const h = (_e, p) => { try { cb(p); } catch (e) {} }; ipcRenderer.on('kg:focus-move', h); return () => ipcRenderer.removeListener('kg:focus-move', h); }
   },
 
   // Reader / Library — read-only corpus reader on the document substrate.

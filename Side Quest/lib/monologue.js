@@ -1575,6 +1575,11 @@ async function runGraphWalkMove(recentTurns) {
   } else if (move && !move.acted) {
     console.log(`[graph-walk] no move (${move.reason || 'quiet'})`);
   }
+  // Live-follow: tell the KG surface which entity she just enriched so a "Follow" toggle can re-center the
+  // ego view on it. Only on a real acted move with an anchor. Fail-soft — the emit never breaks the move.
+  if (move && move.acted && move.anchor && opts.emitFocusMove) {
+    try { opts.emitFocusMove({ anchor: move.anchor, source: move.source || 'convo', kind: move.kind, entities: move.entities, connections: move.connections, at: Date.now() }); } catch {}
+  }
   return true;   // a move ran (or was deliberately quiet) — the tick should NOT free-associate
 }
 

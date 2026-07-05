@@ -601,7 +601,10 @@ app.whenReady().then(() => {
   });
   startMonologueScheduler({
     getWindow: () => mainWindow,
-    getSessionStartedAt: () => currentSessionStartedAt
+    getSessionStartedAt: () => currentSessionStartedAt,
+    // Live-follow: broadcast each idle graph-walk move so the KG surface (a webview) can re-center on the
+    // entity she's enriching. Broadcast to all webContents — only the KG panel registers kg:focus-move.
+    emitFocusMove: (payload) => { try { let n = 0; for (const wc of require('electron').webContents.getAllWebContents()) { try { if (!wc.isDestroyed()) { wc.send('kg:focus-move', payload); n++; } } catch (e) {} } console.log(`[kg-follow] broadcast "${payload && payload.anchor}" → ${n} view(s)`); } catch (e) {} }
   });
   startHeartbeatScheduler({
     getWindow: () => mainWindow,

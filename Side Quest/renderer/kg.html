@@ -33,6 +33,11 @@ html,body{height:100%;background:var(--bg);color:var(--tx-soft);font-family:-app
 .lbl select{background:var(--bg-raised);border:1px solid var(--line-strong);color:var(--tx-soft);font:inherit;font-size:12px;padding:4px 7px;border-radius:var(--r-sm);outline:none;}
 .btn{background:transparent;border:1px solid var(--line-strong);color:var(--tx-muted);font:inherit;font-size:12px;padding:5px 11px;border-radius:var(--r-sm);cursor:pointer;}
 .btn:hover{border-color:var(--line-hover);color:var(--tx-soft);}
+.btn.on{border-color:var(--accent);color:var(--accent);background:rgba(106,134,182,0.14);}
+.now{font-size:11px;color:var(--tx-dim);display:flex;align-items:center;gap:6px;font-family:ui-monospace,monospace;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.now .dot{width:6px;height:6px;border-radius:50%;background:#FBBF24;flex-shrink:0;animation:kgpulse 1.6s ease-in-out infinite;}
+.now .src{font-size:9px;text-transform:uppercase;letter-spacing:0.06em;color:var(--tx-fainter);}
+@keyframes kgpulse{0%,100%{opacity:0.35;}50%{opacity:1;}}
 .pills{flex-shrink:0;display:flex;flex-wrap:wrap;gap:6px;padding:8px 18px;border-bottom:1px solid var(--line-faint);background:var(--bg-panel);}
 .pills:empty{display:none;}
 .pill{font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-family:ui-monospace,monospace;padding:1px 8px;border-radius:4px;border:1px solid;cursor:pointer;background:transparent;}
@@ -61,6 +66,8 @@ html,body{height:100%;background:var(--bg);color:var(--tx-soft);font-family:-app
       <div class="qwrap"><input id="q" type="text" placeholder="Focus an entity… (fuzzy search)" autocomplete="off" spellcheck="false"><div class="dd" id="dd" hidden></div></div>
       <label class="lbl">hops <select id="hops"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></label>
       <button class="btn" id="backBtn" hidden>← overview</button>
+      <button class="btn" id="followBtn" title="Follow the idle graph-walk — re-center on each entity she enriches">Follow &#9654;</button>
+      <span class="now" id="nowLbl" hidden></span>
     </div>
     <div class="pills" id="pills"></div>
     <div class="stage">

@@ -5,7 +5,8 @@
 'use strict';
 const $ = (id) => document.getElementById(id);
 const graphEl = $('graph'), overlay = $('overlay'), pillsEl = $('pills'), legendEl = $('legend'),
-  statsEl = $('stats'), hoverEl = $('hovercard'), qEl = $('q'), ddEl = $('dd'), hopsEl = $('hops'), backBtn = $('backBtn');
+  statsEl = $('stats'), hoverEl = $('hovercard'), qEl = $('q'), ddEl = $('dd'), hopsEl = $('hops'), backBtn = $('backBtn'),
+  followBtn = $('followBtn'), nowLbl = $('nowLbl');
 
 let G = null;             // force-graph instance
 let full = { nodes: [], links: [] };   // pristine current-mode graph (string-keyed links)
@@ -139,5 +140,35 @@ qEl.addEventListener('keydown', (e) => {
 document.addEventListener('mousedown', (e) => { if (!qEl.parentElement.contains(e.target)) ddEl.hidden = true; });
 hopsEl.addEventListener('change', () => { if (mode === 'ego' && submitted) focus(submitted); });
 backBtn.addEventListener('click', () => { qEl.value = ''; loadOverview(); });
+
+// --- LIVE-FOLLOW the idle graph-walk -----------------------------------------
+// When ON, the panel re-centers the ego view on each entity the idle graph-builder enriches, so you can
+// watch it walk your neighborhood (Brad Overcash → Janet Cowell → …). The "now" label ticks on every
+// move even when follow is OFF, so the panel always shows what she's working. main broadcasts kg:focus-move.
+let follow = false, lastMove = null;
+function renderNow() {
+  if (!lastMove) { nowLbl.hidden = true; return; }
+  nowLbl.hidden = false;
+  nowLbl.innerHTML = `<span class="dot"></span>now: <span>${esc(lastMove.anchor)}</span>${lastMove.source ? `<span class="src">${esc(lastMove.source)}</span>` : ''}`;
+}
+function setFollow(on) {
+  follow = !!on;
+  followBtn.classList.toggle('on', follow);
+  followBtn.innerHTML = follow ? 'Following &#9209;' : 'Follow &#9654;';   // ⏹ when active, ▶ when idle
+  try { localStorage.setItem('kg.follow', follow ? '1' : '0'); } catch (e) {}
+  // turning follow ON snaps straight to the last known anchor so there's no wait for the next move
+  if (follow && lastMove && lastMove.anchor && lastMove.anchor !== submitted) focus(lastMove.anchor);
+}
+function onFocusMove(p) {
+  if (!p || !p.anchor) return;
+  lastMove = p; renderNow();
+  if (follow && p.anchor !== submitted) focus(p.anchor);   // re-center the ego walk on her current node
+}
+followBtn.addEventListener('click', () => setFollow(!follow));
+try {
+  if (window.sq && window.sq.kg && typeof window.sq.kg.onFocusMove === 'function') window.sq.kg.onFocusMove(onFocusMove);
+  else followBtn.disabled = true;   // older host without the live channel → toggle inert
+} catch (e) { followBtn.disabled = true; }
+try { if (localStorage.getItem('kg.follow') === '1') setFollow(true); } catch (e) {}
 
 loadOverview();
