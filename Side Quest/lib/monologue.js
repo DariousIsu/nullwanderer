@@ -1624,9 +1624,12 @@ async function runPullerMove(_recentTurns) {
     return out;
   };
 
-  // web = the same layered fetch the graph-walk uses; extract = a budget-metered cloud CONTACT extractor
+  // web = BROWSER-FIRST fetch (Lucas: "use her browser") — search finds candidate URLs, HER BROWSER
+  // renders + extracts the real page, falling back to the layered wiki/corpus/search fetch when the
+  // browser is unavailable. Used by BOTH enrich (web-fill) and discovery (org staff pages).
   const wikiUrl = (n) => 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String(n || '').trim().replace(/\s+/g, '_'));
-  const web = async (q) => graphWalk.fetchLayeredSources(q, { fetchPage, recallKnowledge: (nm, o) => echoSuit.recallKnowledge(nm, o), webSearch, wikiUrl, log: (m) => console.log(m) });
+  const fallbackWeb = async (q) => graphWalk.fetchLayeredSources(q, { fetchPage, recallKnowledge: (nm, o) => echoSuit.recallKnowledge(nm, o), webSearch, wikiUrl, log: (m) => console.log(m) });
+  const web = require('./prospect_fetch').makeWebFetcher({ dispatch: (t) => echoSuit.dispatch(t), webSearch, fallback: fallbackWeb, log: (m) => console.log(m) });
   let extract = null;
   try {
     const src = (require('./models').sources() || []).find(s => s.tier === 'cloud' && s.token);
