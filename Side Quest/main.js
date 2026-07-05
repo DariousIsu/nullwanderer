@@ -2230,7 +2230,7 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       if (!data) {                                         // fallback: flattened markdown as a paragraph
         let markdown = ''; try { markdown = (await require('./lib/doc_extract').extractDocx(filePath)).markdown || ''; } catch {}
         if (!markdown.trim()) return { ok: false, error: 'empty / unreadable .docx' };
-        data = { markdown: markdown.slice(0, 200000) };    // blockType stays 'paragraph'
+        data = { markdown: markdown.slice(0, 5000000) };   // blockType stays 'paragraph' — land in full (Lucas)
       }
     } else {                                               // DOCUMENT (md/txt/code/pdf-text-fallback/…) → markdown
       let markdown = '';
@@ -2239,7 +2239,7 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       if (!markdown.trim()) return { ok: false, error: 'empty / unreadable document' };
       const firstH = markdown.split(/\r?\n/).map(l => l.trim()).find(l => /^#{1,6}\s+\S/.test(l));
       if (firstH) title = firstH.replace(/^#{1,6}\s+/, '').slice(0, 120);
-      data = { markdown: markdown.slice(0, 200000) };
+      data = { markdown: markdown.slice(0, 5000000) };   // land in full (Lucas: every document ingested whole)
     }
 
     const tabKey = `drop-${path.basename(filePath).replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 40)}-${Date.now().toString(36)}`;
@@ -5700,8 +5700,17 @@ async function decomposeLandedDoc(doc) {
     // NOTE: no `ref` passed → the citation is the stable `docstore:<id>` pointer, not the ephemeral tab key.
     // cap sized for a real document (a roster/dossier easily names 20-40 constituents); the ~6000-char
     // decomposition slice is the outer bound. 12 was too tight — a live 18-person roster lost 6 to the cap.
-    const r = await decompLane.decomposeLanding({ id: doc.id, title: doc.title, body: doc.body }, { extract, resolve, dispatch, observe, cap: { entities: 40, relations: 40 }, log: (m) => console.log(m) });
-    if (r && !r.skipped) console.log(`[doc-decomp] landing #${doc.id} → +${r.minted} mint / ${r.reused} reuse / +${r.connections} conn (${r.held} held: ${r.ambiguous} ambiguous)`);
+    // FULL-doc entity decomposition: chunk the whole body on line boundaries and decompose each pass (the
+    // ~6000-char slice was losing everything past page 1). Echo's resolveMention dedups entities across passes.
+    const { chunks } = require('./lib/contact_extract').chunkForExtraction(String(doc.body));
+    let minted = 0, reused = 0, connections = 0, held = 0;
+    for (const chunk of chunks) {
+      try {
+        const r = await decompLane.decomposeLanding({ id: doc.id, title: doc.title, body: chunk }, { extract, resolve, dispatch, observe, cap: { entities: 40, relations: 40 }, log: (m) => console.log(m) });
+        if (r && !r.skipped) { minted += r.minted || 0; reused += r.reused || 0; connections += r.connections || 0; held += r.held || 0; }
+      } catch (e) { console.error('[doc-decomp] chunk failed:', e.message); }
+    }
+    if (chunks.length) console.log(`[doc-decomp] landing #${doc.id} ${chunks.length} pass(es) → +${minted} mint / ${reused} reuse / +${connections} conn (${held} held)`);
   } catch (e) { console.error('[doc-decomp] landing decompose failed:', e.message); }
 }
 
@@ -5730,7 +5739,7 @@ async function surfaceDocCards(doc) {
     // MULTI-PASS: a big roster/sheet exceeds one 6000-char extraction slice, so split it into line-boundary
     // passes and extract each. ingestRows dedups people ACROSS passes (it rebuilds its seen-set from the DB
     // each call), so we land+push each pass as it finishes — cards stream into the rail progressively.
-    const { chunks, truncated } = contactExtract.chunkForExtraction(String(doc.body), { max: 24 });
+    const { chunks, truncated } = contactExtract.chunkForExtraction(String(doc.body));   // FULL doc — every pass
     if (!chunks.length) return;
     try { pdb.init(); } catch {}
     const sourceUrl = doc.ref || (doc.id != null ? `docstore:${doc.id}` : null);   // the landed doc is the citation

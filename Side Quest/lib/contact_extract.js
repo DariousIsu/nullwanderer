@@ -125,10 +125,11 @@ function parseDocCards(raw) {
 // Back-compat: the people-only view (older callers used parseContactTuples).
 function parseContactTuples(raw) { return parseDocCards(raw).people; }
 
-// Split a large document into ~MAX_CHARS passes on LINE boundaries (so a table row / roster line is never
-// cut mid-record), for multi-pass extraction — the fix for the single-6000-char-slice cap losing the rest
-// of a big roster/sheet. Bounded by `max` passes; `truncated` = chars beyond the cap left unscanned. Pure.
-function chunkForExtraction(text, { size = MAX_CHARS, max = 24 } = {}) {
+// Split a document into ~MAX_CHARS passes on LINE boundaries (so a table row / roster line is never cut
+// mid-record), for multi-pass extraction — the fix for the single-6000-char-slice cap losing the rest of a
+// big roster/sheet. Every document is scanned IN FULL (Lucas): `max` is only a runaway guard (100k passes ≈
+// 600M chars), not a real limit; `truncated` = chars beyond the guard (≈never). Pure.
+function chunkForExtraction(text, { size = MAX_CHARS, max = 100000 } = {}) {
   const s = String(text == null ? '' : text);
   if (!s.trim()) return { chunks: [], truncated: 0 };
   if (s.length <= size) return { chunks: [s], truncated: 0 };
