@@ -2204,7 +2204,9 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
 
     if (IMG_MIME[ext]) {                                   // IMAGE → render as an actual image
       const b64 = fs.readFileSync(filePath).toString('base64');
-      data = { src: `data:${IMG_MIME[ext]};base64,${b64}`, alt: baseName };
+      // `src` = inline data URI (the picture renders); `file` = the real path so the ingest poller
+      // re-reads it via file_ingest → VISION OCR → surfaceDocCards → cards (a data URI can't be re-read).
+      data = { src: `data:${IMG_MIME[ext]};base64,${b64}`, alt: baseName, file: 'file:///' + filePath.replace(/\\/g, '/').replace(/^\/+/, '') };
       blockType = 'image'; mode = 'ILLUSTRATIVE';
     } else if (ext === 'pdf') {                            // PDF → embed the REAL document (Chromium PDF viewer)
       data = { src: 'file:///' + filePath.replace(/\\/g, '/').replace(/^\/+/, ''), alt: baseName };

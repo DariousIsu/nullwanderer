@@ -61,6 +61,12 @@ const baseDeps = (over) => Object.assign({ path, fileExists: () => true, log: ()
   ok(CI.fileSrcOf([{ data: { url: 'https://x/img.png' } }]) === 'https://x/img.png', 'fileSrcOf: honors a url to an image/pdf');
   ok(CI.fileSrcOf([]) === '' && CI.fileSrcOf(null) === '', 'fileSrcOf: empty/null → ""');
 
+  // IMAGE drop: block renders from a data: URI in `src` but carries the real file path in `file` — the
+  // poller must re-read the FILE (for vision OCR), never the un-re-readable data URI.
+  const imgBlock = [{ type: 'image', data: { src: 'data:image/png;base64,AAAA', alt: 'invite', file: 'file:///C:/Users/x/invite.png' } }];
+  ok(CI.fileSrcOf(imgBlock) === 'file:///C:/Users/x/invite.png', 'fileSrcOf: image block → the file:// path, NOT the data: URI');
+  ok(CI.fileSrcOf([{ type: 'image', data: { src: 'data:image/png;base64,AAAA', alt: 'x' } }]) === '', 'fileSrcOf: a data:-URI-only image (no file path) → "" (nothing to re-read)');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

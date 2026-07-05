@@ -55,14 +55,22 @@ function extractMarkdown(blocks) {
     .trim();
 }
 
-// The dropped FILE's src, if this tab is a file drop (a `document_file` block whose data.src is a
-// file:// path to a PDF / image / docx). Returns the first such src, or '' — the caller reads the actual
-// file (lib/file_ingest) when the canvas blocks carry no extractable text.
+// The dropped FILE's re-readable src, if this tab is a file drop. Returns the first candidate that is a
+// real on-disk path (file:// or a bare path with a known ext), or '' — the caller reads the actual file
+// (lib/file_ingest) when the canvas blocks carry no extractable text.
+//
+// SCANS several fields per block, not just `data.src`: an IMAGE block renders from a `data:` base64 URI in
+// `src` (so the picture shows), and carries the real file path in `file`/`path` for re-reading. A `data:`
+// URI is NOT a re-readable file, so we skip it and keep looking — the fix for a dropped image never
+// reaching vision OCR (its `src` short-circuited the old lookup to the un-re-readable data URI).
 function fileSrcOf(blocks) {
   for (const b of (Array.isArray(blocks) ? blocks : [])) {
     const d = (b && b.data) || b || {};
-    const src = str(d.src || d.url || d.href || d.path);
-    if (src && (/^file:/i.test(src) || /\.(pdf|png|jpe?g|webp|gif|bmp|docx|xlsx|xlsm|csv|tsv)$/i.test(src))) return src;
+    for (const cand of [d.file, d.path, d.src, d.url, d.href]) {
+      const src = str(cand);
+      if (!src || /^data:/i.test(src)) continue;   // a data: URI is inline bytes, not a file to re-read
+      if (/^file:/i.test(src) || /\.(pdf|png|jpe?g|webp|gif|bmp|docx|xlsx|xlsm|csv|tsv)$/i.test(src)) return src;
+    }
   }
   return '';
 }
