@@ -29,7 +29,9 @@ const MAX_PER_TIER = 6;
 const MAX_TOTAL = 10;
 // per-tier slot caps (news is priority-first per Lucas's cascade, but it's mostly already-rich famous
 // entities, so it's capped LOW so it can't crowd out the frontier tier — the reliable gap source).
-const NEWS_MAX = 4, FRONTIER_MAX = 6, CONVO_MAX = 3;
+// RELEVANT (Lucas's neighborhood) is the FOCUS tier — capped generously so it dominates the queue when he
+// has recent work, pushing the global frontier into a fallback role. News stays first (fresh external world).
+const NEWS_MAX = 4, RELEVANT_MAX = 6, FRONTIER_MAX = 6, CONVO_MAX = 3;
 const STOPNAMES = new Set(['i', 'you', 'he', 'she', 'they', 'it', 'we', 'us', 'lucas', 'zoe', 'the', 'a', 'an', 'this', 'that', 'them', 'his', 'her', 'their']);
 
 function _clean(name) {
@@ -86,6 +88,56 @@ function frontierCandidates(thinNodes, { max = FRONTIER_MAX } = {}) {
   return out;
 }
 
+// --- tier 1.5: RELEVANT frontier — thin nodes in Lucas's neighborhood -------
+// The global FRONTIER tier walks the WHOLE thin set (random 1800s congressmen etc.) — grounded but not
+// FOCUSED on what Lucas actually works on. This tier steers enrichment toward HIS graph: given the entity
+// names he recently touched (dropped-document decomposition + fresh conversation = the "active set"), it
+// returns thin (degree 2-7) nodes that are EITHER in that active set OR 1-hop neighbors of it via Echo
+// `relations`. So the builder fills in the region around his work first, and only falls through to the
+// global walk when his neighborhood is exhausted. Deps-injected async `query` (SQL runner → {rows}) keeps
+// it offline-testable; fail-soft (no names / dead query → []).
+const _RELEVANT_MAX_NAMES = 40;    // cap the IN() list so the neighbor query stays cheap
+function _sqlName(n) { return `'${String(n).replace(/'/g, "''")}'`; }   // SELECT-only db_query; escape quotes
+
+// Build the active-thin ∪ thin-neighbors-of-active SQL (pure — no DB). Returns null when no usable names,
+// so the caller can skip the query entirely and fall straight through to the global frontier.
+function buildRelevantFrontierSql(activeNames, { min = 2, max = 7, limit = 200 } = {}) {
+  const names = [];
+  const seen = new Set();
+  for (const nm of (Array.isArray(activeNames) ? activeNames : [])) {
+    const n = _clean(nm);
+    if (n.length < 3) continue;
+    const k = visitKey(n); if (!k || seen.has(k)) continue; seen.add(k);
+    names.push(n);
+    if (names.length >= _RELEVANT_MAX_NAMES) break;
+  }
+  if (!names.length) return null;
+  const inList = names.map(_sqlName).join(',');
+  const mn = Math.max(1, parseInt(min, 10) || 2), mx = Math.max(mn, parseInt(max, 10) || 7), lim = Math.max(1, parseInt(limit, 10) || 200);
+  // UNION: (a) active entities that are themselves thin — direct enrichment of what he touched; and
+  // (b) thin neighbors reached through the relations graph — expand his neighborhood outward.
+  return `SELECT id, name, degree FROM entities`
+    + ` WHERE name IN (${inList}) AND degree BETWEEN ${mn} AND ${mx} AND wikidata_qid IS NOT NULL`
+    + ` UNION `
+    + `SELECT e2.id, e2.name, e2.degree FROM entities e1`
+    + ` JOIN relations r ON (r.source_id = e1.id OR r.target_id = e1.id) AND r.deleted = 0`
+    + ` JOIN entities e2 ON e2.id = (CASE WHEN r.source_id = e1.id THEN r.target_id ELSE r.source_id END)`
+    + ` WHERE e1.name IN (${inList}) AND e2.degree BETWEEN ${mn} AND ${mx} AND e2.wikidata_qid IS NOT NULL`
+    + ` ORDER BY degree DESC LIMIT ${lim}`;
+}
+
+// Run the relevant-frontier query via an injected SQL runner. Returns {id,name,degree} rows (same shape as
+// the global frontier tier) so the assembler treats them identically downstream.
+async function relevantFrontier(activeNames, { query, min = 2, max = 7, limit = 200, log } = {}) {
+  const sql = buildRelevantFrontierSql(activeNames, { min, max, limit });
+  if (!sql || typeof query !== 'function') return [];
+  try {
+    const r = await query(sql);
+    const rows = (r && (r.rows || r)) || [];
+    return Array.isArray(rows) ? rows : [];
+  } catch (e) { log && log(`[idle-anchors] relevant frontier failed: ${e && e.message}`); return []; }
+}
+
 // --- tier 3: CONVO names (already extracted upstream) ----------------------
 function convoCandidates(names, { max = MAX_PER_TIER } = {}) {
   const seen = new Set(); const out = [];
@@ -102,8 +154,8 @@ function convoCandidates(names, { max = MAX_PER_TIER } = {}) {
 // SOURCE (provenance); FRONTIER entries also carry a pre-classification {kind:'thin', object:{id,degree}}
 // so the downstream assess step trusts the graph degree we selected on instead of re-resolving the name
 // to a famous same-name twin and flipping it 'rich'. Pure.
-function assembleAnchors({ news = [], frontier = [], convo = [], visitedKeys = new Set(),
-  max = MAX_TOTAL, newsMax = NEWS_MAX, frontierMax = FRONTIER_MAX, convoMax = CONVO_MAX } = {}) {
+function assembleAnchors({ news = [], relevant = [], frontier = [], convo = [], visitedKeys = new Set(),
+  max = MAX_TOTAL, newsMax = NEWS_MAX, relevantMax = RELEVANT_MAX, frontierMax = FRONTIER_MAX, convoMax = CONVO_MAX } = {}) {
   const out = [];
   const seen = new Set(visitedKeys instanceof Set ? visitedKeys : []);
   let full = false;
@@ -122,6 +174,10 @@ function assembleAnchors({ news = [], frontier = [], convo = [], visitedKeys = n
     }
   };
   addTier(newsCandidates(news, { max: newsMax * 4 }).map(n => ({ mention: _clean(n), source: 'news' })), newsMax);
+  // RELEVANT (Lucas's neighborhood) sits ABOVE the global frontier so idle enrichment focuses on his work;
+  // the global frontier stays below as the always-available fallback so the walk never starves when his
+  // neighborhood is exhausted. Same thin-row shape as frontier → same canonical/degree handling downstream.
+  addTier(frontierCandidates(relevant, { max: 500 }).map(r => ({ mention: _clean(r.name), source: 'relevant', kind: 'thin', object: { id: r.id, degree: r.degree, canonical: r.raw } })), relevantMax);
   // canonical = the RAW graph name (with its "[Q…]" tag): the clean `mention` drives web search + voice,
   // but propose_* must target the EXACT node we selected (else "Woodrow Wilson" hits a wikiquote-doc twin,
   // not the person) — so growAround uses object.canonical for the propose calls.
@@ -132,15 +188,16 @@ function assembleAnchors({ news = [], frontier = [], convo = [], visitedKeys = n
 
 // Async gatherer: resolves the three tiers from injected providers (each a value or an async fn) and
 // assembles the queue. Every source is fail-soft — a dead tier just contributes nothing, never throws.
-async function provideAnchors({ recentNews, thinNodes, convoNames, visitedKeys, log } = {}) {
+async function provideAnchors({ recentNews, relevantNodes, thinNodes, convoNames, visitedKeys, log } = {}) {
   const resolve = async (src, label) => {
     try { return typeof src === 'function' ? ((await src()) || []) : (src || []); }
     catch (e) { log && log(`[idle-anchors] ${label} source failed: ${e && e.message}`); return []; }
   };
   const news = await resolve(recentNews, 'news');
+  const relevant = await resolve(relevantNodes, 'relevant');
   const frontier = await resolve(thinNodes, 'frontier');
   const convo = await resolve(convoNames, 'convo');
-  return assembleAnchors({ news, frontier, convo, visitedKeys: visitedKeys || new Set() });
+  return assembleAnchors({ news, relevant, frontier, convo, visitedKeys: visitedKeys || new Set() });
 }
 
 // Rotate the frontier query window so the graph-walk walks the WHOLE thin set over time rather than
@@ -155,6 +212,7 @@ function rotateFrontierCursor(cursor, returnedCount, windowSize) {
 }
 
 module.exports = {
-  newsCandidates, frontierCandidates, convoCandidates, assembleAnchors, provideAnchors, rotateFrontierCursor,
-  MAX_PER_TIER, MAX_TOTAL, NEWS_MAX, FRONTIER_MAX, CONVO_MAX
+  newsCandidates, frontierCandidates, convoCandidates, buildRelevantFrontierSql, relevantFrontier,
+  assembleAnchors, provideAnchors, rotateFrontierCursor,
+  MAX_PER_TIER, MAX_TOTAL, NEWS_MAX, RELEVANT_MAX, FRONTIER_MAX, CONVO_MAX
 };

@@ -1517,10 +1517,36 @@ async function runGraphWalkMove(recentTurns) {
   const _lastUser = (recentTurns || []).filter(t => t.speaker === 'user').reduce((mx, t) => Math.max(mx, Number(t.ts) || 0), 0);
   const _convoFresh = _lastUser > 0 && (nowTs - _lastUser < 30 * 60 * 1000);
   const convoNames = async () => { if (!_convoFresh) return []; try { return await graphWalk.extractCandidates(recentTurns, { cloud, log: (m) => console.log(m) }); } catch { return []; } };
+
+  // FOCUS: the RELEVANT frontier steers enrichment toward Lucas's actual work instead of random history.
+  // ACTIVE SET = entity names he recently touched — the source/target of recent dropped-document
+  // decomposition (feed='doc-decomp') plus any fresh conversation names — and the relevant tier returns
+  // thin (degree 2-7) nodes that are those entities or their 1-hop neighbors in Echo's relations graph.
+  const activeSetNames = () => {
+    const names = new Set();
+    try {
+      for (const o of db.listKgObservations({ feed: 'doc-decomp', limit: 80 })) {
+        if (o && o.source_entity) names.add(o.source_entity);
+        if (o && o.target) names.add(o.target);
+      }
+    } catch {}
+    return [...names];
+  };
+  const relevantNodes = async () => {
+    try {
+      const active = activeSetNames();
+      if (!active.length) return [];   // no touched work → skip; global frontier fallback carries the move
+      return await idleAnchors.relevantFrontier(active, {
+        query: async (sql) => { const r = await dispatch({ kind: 'do', name: 'db_query', args: { sql, params: [] } }); if (!r || !r.ok) return []; try { const j = JSON.parse(r.text); return (j && j.rows) || j || []; } catch { return []; } },
+        limit: FRONTIER_WINDOW, log: (m) => console.log(m)
+      });
+    } catch { return []; }
+  };
+
   const visitedKeys = graphWalk.visitedKeySet(_gm, nowTs);
-  const _news = await recentNews(); const _thin = await thinNodes();
-  console.log(`[idle-anchors] raw tiers: news=${_news.length} thin=${_thin.length} visited=${visitedKeys.size}`);
-  const anchors = await idleAnchors.provideAnchors({ recentNews: _news, thinNodes: _thin, convoNames, visitedKeys, log: (m) => console.log(m) });
+  const _news = await recentNews(); const _relevant = await relevantNodes(); const _thin = await thinNodes();
+  console.log(`[idle-anchors] raw tiers: news=${_news.length} relevant=${_relevant.length} thin=${_thin.length} visited=${visitedKeys.size}`);
+  const anchors = await idleAnchors.provideAnchors({ recentNews: _news, relevantNodes: _relevant, thinNodes: _thin, convoNames, visitedKeys, log: (m) => console.log(m) });
 
   // CITATION observation sink (curation substrate Slice 1): every graded claim — PROMOTED or HELD —
   // lands a durable row in the shared observation store (lib/curation_store), the home of record for

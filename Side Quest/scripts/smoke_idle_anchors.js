@@ -77,6 +77,34 @@ const fresh = A.assembleAnchors({ frontier: pool, visitedKeys: visitedTop });
 ok(fresh.filter(x => x.source === 'frontier').length >= 4, 'assembleAnchors: surfaces FRESH frontier nodes past the visited top (no exhaustion)');
 ok(!fresh.some(x => visitedTop.has(visitKey(x.mention))), 'assembleAnchors: never re-offers a visited node');
 
+// --- RELEVANT frontier: SQL builder (pure) ---
+const relSql = A.buildRelevantFrontierSql(['Rainey Center', "O'Brien Group", 'ab']);  // 'ab' too short → dropped
+ok(relSql && /name IN \('Rainey Center','O''Brien Group'\)/.test(relSql), 'buildRelevantFrontierSql: names listed, quote-escaped, <3-char dropped');
+ok(relSql && /UNION/.test(relSql) && /degree BETWEEN 2 AND 7/.test(relSql), 'buildRelevantFrontierSql: active-thin ∪ thin-neighbors, degree band');
+ok(relSql && /wikidata_qid IS NOT NULL/.test(relSql) && /ORDER BY degree DESC LIMIT 200/.test(relSql), 'buildRelevantFrontierSql: QID-gated, degree DESC, default limit');
+ok(A.buildRelevantFrontierSql([]) === null && A.buildRelevantFrontierSql(['x', 'yy']) === null, 'buildRelevantFrontierSql: no usable names → null (caller falls through to global)');
+ok(A.buildRelevantFrontierSql(['Toyota [Q53268]'], { limit: 50 }).includes("name IN ('Toyota')"), 'buildRelevantFrontierSql: strips display tag before matching; honors limit');
+
+// --- assembleAnchors: RELEVANT sits above the global frontier, dedups against it ---
+const blended = A.assembleAnchors({
+  news: [{ principals: ['Fresh News Co'], corroboration: { independent: 3 } }],
+  relevant: [{ id: 1, name: 'Rainey Center', degree: 4 }, { id: 2, name: 'Shared Node', degree: 3 }],
+  frontier: [{ id: 2, name: 'Shared Node', degree: 3 }, { id: 9, name: 'Random Historical Figure', degree: 5 }],  // Shared also relevant → deduped to relevant
+  convo: []
+});
+const rainey = blended.find(x => x.mention === 'Rainey Center');
+ok(rainey && rainey.source === 'relevant' && rainey.object && rainey.object.id === 1, 'assembleAnchors: relevant tier present, tagged source=relevant, carries {kind:thin, object.id}');
+const shared = blended.find(x => x.mention === 'Shared Node');
+ok(shared && shared.source === 'relevant', 'assembleAnchors: a node in BOTH relevant+frontier resolves to relevant (higher tier)');
+ok(!blended.some(x => x.mention === 'Shared Node' && x.source === 'frontier'), 'assembleAnchors: not duplicated into the global frontier tier');
+const newsIdx = blended.findIndex(x => x.source === 'news'), relIdx = blended.findIndex(x => x.source === 'relevant'), frontIdx = blended.findIndex(x => x.source === 'frontier');
+ok(newsIdx < relIdx && relIdx < frontIdx, 'assembleAnchors: priority order news → relevant → global frontier');
+
+// --- RELEVANT_MAX cap: relevant can't fully starve the global fallback ---
+const manyRel = Array.from({ length: 12 }, (_, i) => ({ id: 300 + i, name: `Rel ${i}`, degree: 12 - i }));
+const cappedRel = A.assembleAnchors({ relevant: manyRel });
+ok(cappedRel.filter(x => x.source === 'relevant').length <= A.RELEVANT_MAX, 'assembleAnchors: relevant capped at RELEVANT_MAX');
+
 // --- rotateFrontierCursor: walk the whole thin set, wrap at the end ---
 ok(A.rotateFrontierCursor(0, 200, 200) === 200, 'rotateFrontierCursor: a full page advances the window');
 ok(A.rotateFrontierCursor(200, 200, 200) === 400, 'rotateFrontierCursor: keeps advancing');
@@ -84,15 +112,23 @@ ok(A.rotateFrontierCursor(400, 137, 200) === 0, 'rotateFrontierCursor: a short p
 ok(A.rotateFrontierCursor(0, 0, 200) === 0, 'rotateFrontierCursor: empty page wraps to 0');
 
 (async () => {
+  // --- RELEVANT frontier: injected query runner, fail-soft ---
+  const rows = await A.relevantFrontier(['Rainey Center'], { query: async () => ({ rows: [{ id: 42, name: 'R Street Institute', degree: 5 }] }) });
+  ok(rows.length === 1 && rows[0].id === 42, 'relevantFrontier: returns rows from the injected query');
+  ok((await A.relevantFrontier([], { query: async () => { throw new Error('x'); } })).length === 0, 'relevantFrontier: no names → [] (query never called)');
+  ok((await A.relevantFrontier(['X Corp'], { query: async () => { throw new Error('echo down'); }, log: () => {} })).length === 0, 'relevantFrontier: dead query → [] (fail-soft)');
+
   // --- provideAnchors: async providers, fail-soft (one tier throws → others still contribute) ---
   const out = await A.provideAnchors({
     recentNews: async () => [{ principals: ['Live News Co'], corroboration: { independent: 2 } }],
+    relevantNodes: async () => [{ id: 55, name: 'Lucas Work Node', degree: 4 }],
     thinNodes: async () => { throw new Error('echo down'); },   // dead tier → contributes nothing, no throw
     convoNames: ['Convo Thing'],
     visitedKeys: new Set(),
     log: () => {}
   });
   ok(out.some(x => x.mention === 'Live News Co' && x.source === 'news'), 'provideAnchors: resolves async news provider');
+  ok(out.some(x => x.mention === 'Lucas Work Node' && x.source === 'relevant'), 'provideAnchors: resolves async relevant provider');
   ok(out.some(x => x.mention === 'Convo Thing' && x.source === 'convo'), 'provideAnchors: convo tier survives a dead frontier tier');
   ok(!out.some(x => x.source === 'frontier'), 'provideAnchors: a throwing tier is fail-soft (no frontier anchors, no crash)');
 
