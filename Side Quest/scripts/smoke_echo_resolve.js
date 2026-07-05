@@ -241,6 +241,48 @@ function dispatch({ sibling = true } = {}) {
   const rmNo = await echo.resolveMention('Rainey Center', { dispatch: rmDispatch });
   ok(rmNo.status === 'ambiguous' && rmNo.candidates.length === 2, 'resolveMention: NO context → ambiguous (unchanged behavior)');
 
+  // ── STRUCTURAL AFFILIATION (R3) — a c4 arm + its c3 (legally distinct, one org) → generic resolves to primary.
+  const PRIMARY = 'Joseph Rainey Center for Public Policy', ARM = 'RAINEY CENTER FREEDOM PROJECT, INC.';
+  const orgCands = [{ name: PRIMARY, entity_type: 'organization' }, { name: ARM, entity_type: 'organization' }, { name: 'Rainey Center Happy Hour', entity_type: 'event' }];
+  // PRIMARY→ARM convention (the real Rainey edge: Center PARENT_OF Freedom Project). arm's mirror IN edge ignored.
+  const parentDispatch = async (tag) => {
+    if (tag.name !== 'get_entity') return { ok: false };
+    const nm = tag.args.name;
+    if (nm === PRIMARY) return { ok: true, text: JSON.stringify({ result: { relations: [{ direction: 'out', relation_type: 'PARENT_OF', target_name: ARM }] } }) };
+    if (nm === ARM) return { ok: true, text: JSON.stringify({ result: { relations: [{ direction: 'in', relation_type: 'PARENT_OF', target_name: PRIMARY }] } }) };
+    return { ok: true, text: JSON.stringify({ result: { relations: [] } }) };
+  };
+  const prim = await echo._affiliatedPrimary(parentDispatch, orgCands);
+  ok(prim && prim.name === PRIMARY, '_affiliatedPrimary: PRIMARY→ARM (PARENT_OF) edge → resolves the cluster to the PRIMARY (c3)');
+  ok(prim && prim.name === PRIMARY, '_affiliatedPrimary: non-org candidates (events) ignored');
+  // ARM→PRIMARY convention (subsidiary_of / affiliate_of) resolves the same way.
+  const affilDispatch = async (tag) => {
+    const nm = tag.args.name;
+    if (nm === ARM) return { ok: true, text: JSON.stringify({ result: { relations: [{ direction: 'out', relation_type: 'SUBSIDIARY_OF', target_name: PRIMARY }] } }) };
+    return { ok: true, text: JSON.stringify({ result: { relations: [] } }) };
+  };
+  ok((await echo._affiliatedPrimary(affilDispatch, orgCands)).name === PRIMARY, '_affiliatedPrimary: ARM→PRIMARY (SUBSIDIARY_OF) edge → same PRIMARY');
+  // no affiliation edge → null (stay ambiguous)
+  const noEdge = await echo._affiliatedPrimary(async () => ({ ok: true, text: '{"result":{"relations":[]}}' }), orgCands);
+  ok(noEdge === null, '_affiliatedPrimary: no affiliation edge → null (stays ambiguous)');
+  // two orgs each claiming to be arm of a DIFFERENT primary → >1 head → null (don't guess)
+  const twoHeads = async (tag) => { const nm = tag.args.name; return { ok: true, text: JSON.stringify({ result: { relations: [{ direction: 'out', relation_type: 'AFFILIATE_OF', target_name: nm === PRIMARY ? ARM : PRIMARY }] } }) }; };
+  ok((await echo._affiliatedPrimary(twoHeads, orgCands.slice(0, 2))) === null, '_affiliatedPrimary: circular/>1-head → null (bias-to-clarify)');
+  // fewer than 2 orgs → null
+  ok((await echo._affiliatedPrimary(affilDispatch, [orgCands[0], orgCands[2]])) === null, '_affiliatedPrimary: <2 org candidates → null');
+
+  // resolveMention end-to-end: ambiguous org cluster + NO context → resolves via affiliation to the c3.
+  const rmAffil = async (tag) => {
+    if (tag.name === 'search_entities') return { ok: true, text: JSON.stringify({ result: [{ id: 1, name: PRIMARY, entity_type: 'organization' }, { id: 2, name: ARM, entity_type: 'organization' }] }) };
+    if (tag.name === 'get_entity') return affilDispatch(tag);
+    if (tag.name === 'quick_lookup') return { ok: true, text: JSON.stringify({ result: { entity: { id: 1, name: PRIMARY, entity_type: 'organization', degree: 15 }, facts: [], committees: [] } }) };
+    if (tag.name === 'db_query') return { ok: true, text: '{"rows":[]}' };
+    if (tag.name === 'kg_neighborhood') return { ok: true, text: '{"neighbors":[]}' };
+    return { ok: false };
+  };
+  const rmR3 = await echo.resolveMention('Rainey Center', { dispatch: rmAffil });
+  ok(rmR3.status === 'resolved' && rmR3.via === 'affiliation' && rmR3.object.name === PRIMARY, 'resolveMention: affiliated org cluster (no context) → RESOLVED to the primary via affiliation');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

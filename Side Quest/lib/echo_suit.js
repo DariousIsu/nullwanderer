@@ -722,6 +722,59 @@ async function _disambiguateByContext(d, distinct, contextNames, selfKey) {
   return winner ? ((scored.find(s => s.cand.name === winner.name) || {}).cand || null) : null;
 }
 
+// ── STRUCTURAL AFFILIATION RESOLUTION (R3) ─────────────────────────────────────────────────────────────
+// A c4 arm + its c3 parent (or a subsidiary, a DBA) are LEGALLY DISTINCT entities but ONE org structurally.
+// They must NOT be merged (the legal split matters for compliance) — instead they're kept as separate nodes
+// LINKED by an arm→primary affiliation edge. A GENERIC mention ("Rainey Center") then resolves to the
+// PRIMARY (the structural head), while an explicit arm mention still lands on the arm. This collapses an
+// affiliation cluster the way _distinctNames collapses duplicate records — but across legal entities.
+// Two directional conventions for a structural-hierarchy edge (both point across the SAME cluster):
+//   ARM→PRIMARY  (source = arm, target = primary): subsidiary_of, affiliate_of, arm_of, division_of, …
+//   PRIMARY→ARM  (source = primary, target = arm): parent_of  (Echo's whitelisted org-parent edge)
+const _ARM_TO_PRIMARY_RE = /affiliate_of|arm_of|subsidiary_of|dba_of|division_of|chapter_of|c4_of|c3_of/i;
+const _PRIMARY_TO_ARM_RE = /^parent_of$/i;
+
+// A candidate's typed OUT relations (via get_entity): [{type, target, direction}].
+async function _entityRelations(d, name) {
+  let r; try { r = await d({ kind: 'do', name: 'get_entity', args: { name } }); } catch { return []; }
+  if (!r || !r.ok) return [];
+  let data; try { data = JSON.parse(r.text); } catch { return []; }
+  const e = (data && (data.result || data)) || {};
+  const rels = Array.isArray(e.relations) ? e.relations : [];
+  return rels.map(x => ({
+    type: String((x && (x.relation_type || x.type)) || '').toUpperCase(),
+    target: String((x && (x.target_name || x.target || x.name)) || ''),
+    direction: (x && x.direction) || 'out',
+  }));
+}
+// Among the ORG candidates, find a clean single-head affiliation cluster (every non-primary org is an arm
+// pointing to ONE primary). Returns the primary candidate, or null (no cluster / >1 head → stay ambiguous).
+// Non-org candidates (same-named events, etc.) are ignored — the org cluster is the referent for a mention
+// that names an organization.
+async function _affiliatedPrimary(d, distinct) {
+  const orgs = (distinct || []).filter(c => /organization/i.test(String(c.entity_type || c.type || ''))).slice(0, 4);
+  if (orgs.length < 2) return null;
+  const keyOf = c => _coreNameKey(c.name) || String(c.name || '').toLowerCase();
+  const byKey = new Map(orgs.map(c => [keyOf(c), c]));
+  const armToPrimary = new Map();
+  for (const c of orgs) {
+    const ck = keyOf(c);
+    for (const rel of await _entityRelations(d, c.name)) {
+      if (rel.direction === 'in') continue;                    // OUT edges only (avoid double-counting mirrors)
+      const tk = _coreNameKey(rel.target);
+      if (!byKey.has(tk) || tk === ck) continue;               // the other endpoint must also be a candidate org
+      if (_ARM_TO_PRIMARY_RE.test(rel.type)) armToPrimary.set(ck, tk);       // c is the arm, target is primary
+      else if (_PRIMARY_TO_ARM_RE.test(rel.type)) armToPrimary.set(tk, ck);  // target is the arm, c is primary
+    }
+  }
+  if (!armToPrimary.size) return null;
+  const primaries = new Set([...armToPrimary.values()]);
+  if (primaries.size !== 1) return null;                        // >1 candidate head → don't guess
+  const primaryKey = [...primaries][0];
+  for (const c of orgs) { const k = keyOf(c); if (k === primaryKey) continue; if (armToPrimary.get(k) !== primaryKey) return null; }
+  return byKey.get(primaryKey) || null;
+}
+
 async function resolveMention(name, { preferType = null, dispatch = null, context = null } = {}) {
   const d = dispatch || (liveReady() ? (tag) => _live.dispatch(tag) : null);
   const n = String(name || '').trim();
@@ -746,6 +799,11 @@ async function resolveMention(name, { preferType = null, dispatch = null, contex
         if (winner) { const obj = await recallObject(winner.name, { preferType, dispatch: d }); if (obj) return { status: 'resolved', mention: n, object: obj, via: 'context' }; }
       } catch {}
     }
+    // structural affiliation (R3): a c4 arm + its c3 (legally distinct, one org) → resolve generic to primary.
+    try {
+      const primary = await _affiliatedPrimary(d, distinct);
+      if (primary) { const obj = await recallObject(primary.name, { preferType, dispatch: d }); if (obj) return { status: 'resolved', mention: n, object: obj, via: 'affiliation' }; }
+    } catch {}
     return { status: 'ambiguous', mention: n, candidates: distinct.slice(0, 4).map(c => c.name) };
   }
   const obj = await recallObject(q, { preferType, dispatch: d });
@@ -958,5 +1016,5 @@ async function wikiLookup(query, { dispatch = null, pages = 3, sentences = 4 } =
 
 module.exports = {
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary
 };
