@@ -816,6 +816,7 @@ app.whenReady().then(() => {
             // typed objects in Echo, AFTER the existing hooks. Async + fail-soft so it never blocks or
             // breaks ingest; fall-throughs queue as `held` for the nightly upgrade pass.
             try { if (landed && landed.landed) decomposeLandedDoc({ id: landed.id, title: label, body: markdown, source: 'canvas_drop' }).catch(() => {}); } catch {}
+            try { if (landed && landed.landed) bankDocContacts({ id: landed.id, title: label, body: markdown }).catch(() => {}); } catch {}
             console.log(`[canvas-ingest] ingested drop "${label}" (${markdown.length} chars)${understanding ? ' + understanding' : ''}`);
           }
           seen.push(t.tabKey);
@@ -5655,6 +5656,36 @@ async function decomposeLandedDoc(doc) {
     const r = await decompLane.decomposeLanding({ id: doc.id, title: doc.title, body: doc.body }, { extract, resolve, dispatch, observe, cap: { entities: 40, relations: 40 }, log: (m) => console.log(m) });
     if (r && !r.skipped) console.log(`[doc-decomp] landing #${doc.id} → +${r.minted} mint / ${r.reused} reuse / +${r.connections} conn (${r.held} held: ${r.ambiguous} ambiguous)`);
   } catch (e) { console.error('[doc-decomp] landing decompose failed:', e.message); }
+}
+
+// CONTACT INTELLIGENCE (Puller) — the sibling of decomposeLandedDoc for the OTHER facet: the same landed
+// document, read for STATED contact fields (email / phone / title / address), which land in the Puller as
+// cited observations + certainty-scored beliefs (studio/puller_ingest.ingestRows). People not yet tracked
+// become new Puller targets ("new objects"); the document is the citation (source_url). The extractor is
+// forbidden to invent contact data — only values written in the text. Async + fail-soft — never blocks a
+// landing; runs alongside the entity decomposition, not instead of it.
+async function bankDocContacts(doc) {
+  try {
+    if (!doc || !String(doc.body || '').trim()) return;
+    const src = (() => { try { return (require('./lib/models').sources() || []).find(s => s.tier === 'cloud' && s.token); } catch { return null; } })();
+    if (!src) return;   // no cloud extractor available → skip
+    const decompLane = require('./lib/decomp_lane');
+    const contactExtract = require('./lib/contact_extract');
+    const ingest = require('./studio/puller_ingest');
+    const pdb = require('./lib/puller_db');
+    const { completeDetailed } = require('./lib/ollama');
+    const model = config.extractionModel() || config.subconsciousModel();
+    const extract = decompLane.makeCloudExtractor({
+      completeFn: completeDetailed, model, base: src.base, token: src.token,
+      buildPrompt: contactExtract.buildContactPrompt, parse: contactExtract.parseContactTuples, numPredict: 700,
+    });
+    const rows = await extract(String(doc.body), { title: doc.title });
+    if (!Array.isArray(rows) || !rows.length) return;
+    try { pdb.init(); } catch {}
+    const sourceUrl = doc.ref || (doc.id != null ? `docstore:${doc.id}` : null);   // the landed doc is the citation
+    const s = ingest.ingestRows(pdb, rows, { source: `doc:${String(doc.title || doc.id || 'drop').slice(0, 60)}`, sourceUrl, obsKind: 'doc' });
+    console.log(`[doc-contacts] landing #${doc.id} → +${s.targets} target / ${s.observations} obs / ${s.beliefs} belief${s.skippedDup ? ` / ${s.skippedDup} already tracked` : ''}`);
+  } catch (e) { console.error('[doc-contacts] bank failed:', e.message); }
 }
 
 // NIGHTLY PROMOTION (Slice 2) — consolidate the day's un-promoted SHORT-TERM documents (lib/doc_store,

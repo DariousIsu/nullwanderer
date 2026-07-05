@@ -47,6 +47,8 @@ function creditsPattern(kind) { return kind === 'verified' || kind === 'pattern'
 // memory across the batch and saved once per domain at the end.
 function ingestRows(db, rows, opts = {}) {
   const source = opts.source || 'handoff sheet';
+  const sourceUrl = opts.sourceUrl || null;   // CITATION: the document/page these contacts came from (Lucas's cite mandate)
+  const obsKind = opts.obsKind || 'handoff';  // evidence kind for the non-email attrs (a doc drop passes 'doc')
   const seen = new Map();
   for (const t of db.listTargets({ limit: 1e7 })) seen.set(key(t.name, t.company), t.id);
   const patternStates = new Map();   // domain -> pure belief state
@@ -69,17 +71,22 @@ function ingestRows(db, rows, opts = {}) {
     stats.targets++;
 
     if (email) {
-      db.addObservation(t.id, { attr: 'email', value: email, kind, source, confidence: conf }); stats.observations++;
-      db.upsertBelief(t.id, 'email', { value: email, confidence: conf, derivation: `handoff:${kind}` }); stats.beliefs++;
+      db.addObservation(t.id, { attr: 'email', value: email, kind, source, sourceUrl, confidence: conf }); stats.observations++;
+      db.upsertBelief(t.id, 'email', { value: email, confidence: conf, derivation: `${obsKind}:${kind}` }); stats.beliefs++;
     }
     if (title) {
-      db.addObservation(t.id, { attr: 'role', value: title, kind: 'handoff', source }); stats.observations++;
-      db.upsertBelief(t.id, 'role', { value: title, confidence: conf, derivation: 'handoff' }); stats.beliefs++;
+      db.addObservation(t.id, { attr: 'role', value: title, kind: obsKind, source, sourceUrl }); stats.observations++;
+      db.upsertBelief(t.id, 'role', { value: title, confidence: conf, derivation: obsKind }); stats.beliefs++;
     }
     const phone = clean(r.phone) || clean(r.phone2);
     if (phone) {
-      db.addObservation(t.id, { attr: 'phone', value: phone, kind: 'handoff', source }); stats.observations++;
-      db.upsertBelief(t.id, 'phone', { value: phone, confidence: conf, derivation: 'handoff' }); stats.beliefs++;
+      db.addObservation(t.id, { attr: 'phone', value: phone, kind: obsKind, source, sourceUrl }); stats.observations++;
+      db.upsertBelief(t.id, 'phone', { value: phone, confidence: conf, derivation: obsKind }); stats.beliefs++;
+    }
+    const address = clean(r.address);
+    if (address) {
+      db.addObservation(t.id, { attr: 'address', value: address, kind: obsKind, source, sourceUrl }); stats.observations++;
+      db.upsertBelief(t.id, 'address', { value: address, confidence: conf, derivation: obsKind }); stats.beliefs++;
     }
     if (kind === 'generic') stats.generic++;
 
@@ -107,11 +114,12 @@ function contactToRow(c, defaultCompany = '') {
   const email = clean(c.email).toLowerCase();
   const title = clean(c.title || c.role || c.position);
   const phone = clean(c.phone || c.phone2 || c.tel);
+  const address = clean(c.address || c.mailing || c.mailing_address);
   let confidence = c.confidence;
   if (confidence == null || confidence === '') {
     confidence = (c.verified === true || /verified|official|primary[_\s-]?source/i.test(String(c.source || ''))) ? '95%' : '50%';
   }
-  return { name, company: clean(c.company) || clean(defaultCompany), title, email, phone, confidence };
+  return { name, company: clean(c.company) || clean(defaultCompany), title, email, phone, address, confidence };
 }
 // Normalize a list (or a JSON string of a list) of gathered contacts → ingestRows rows; drop the nameless.
 function contactsToRows(contacts, defaultCompany = '') {
