@@ -5959,12 +5959,22 @@ async function resolvePlaces(names) {
         let j; try { j = JSON.parse(r.text); } catch { continue; }
         const rows = (j && (j.result || j.rows || j.entities)) || (Array.isArray(j) ? j : []);
         const qL = nm.toLowerCase();
-        // NAME-GATE: search_entities also matches summaries, so keep only a candidate whose NAME actually
+        // NAME-GATE: search_entities also matches summaries, so keep only candidates whose NAME actually
         // overlaps the query ("Rainey Center" ⊂ "Joseph Rainey Center for Public Policy"), never a bio hit.
-        const hit = (Array.isArray(rows) ? rows : []).find((e) => {
+        const gated = (Array.isArray(rows) ? rows : []).filter((e) => {
           const en = String((e && e.name) || '').toLowerCase().trim();
           return en && (en.includes(qL) || qL.includes(en));
         });
+        // TYPE-PRIORITY, not first-ranked: Echo ranks an EVENT ("Rainey Center Monthly Hill Happy Hour")
+        // above the actual ORG, so picking the top hit mislabels the place. Prefer a real place-decidable
+        // type — location (a genuine place) > organization > network — and IGNORE event/person matches
+        // (they leave the place unresolved → the address rule decides). Exact name match wins outright.
+        const PRIO = { location: 0, organization: 1, network: 2 };
+        let hit = gated.find((e) => String((e && e.name) || '').toLowerCase().trim() === qL && PRIO[String(e.entity_type || '').toLowerCase()] != null) || null;
+        if (!hit) {
+          let best = 99;
+          for (const e of gated) { const p = PRIO[String((e && e.entity_type) || '').toLowerCase()]; if (p != null && p < best) { best = p; hit = e; } }
+        }
         if (hit) out.set(qL, { id: hit.id, name: hit.name, type: String(hit.entity_type || '').toLowerCase(), subtype: hit.entity_subtype || null, summary: hit.summary || null });
       } catch {}
     }
