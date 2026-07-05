@@ -80,10 +80,16 @@ ok(!fresh.some(x => visitedTop.has(visitKey(x.mention))), 'assembleAnchors: neve
 // --- RELEVANT frontier: SQL builder (pure) ---
 const relSql = A.buildRelevantFrontierSql(['Rainey Center', "O'Brien Group", 'ab']);  // 'ab' too short → dropped
 ok(relSql && /name IN \('Rainey Center','O''Brien Group'\)/.test(relSql), 'buildRelevantFrontierSql: names listed, quote-escaped, <3-char dropped');
-ok(relSql && /UNION/.test(relSql) && /degree BETWEEN 2 AND 7/.test(relSql), 'buildRelevantFrontierSql: active-thin ∪ thin-neighbors, degree band');
-ok(relSql && /wikidata_qid IS NOT NULL/.test(relSql) && /ORDER BY degree DESC LIMIT 200/.test(relSql), 'buildRelevantFrontierSql: QID-gated, degree DESC, default limit');
+ok(relSql && /UNION/.test(relSql) && /degree BETWEEN 1 AND 15/.test(relSql), 'buildRelevantFrontierSql: active ∪ neighbors, focus degree band 1-15');
+ok(relSql && /entity_type IN \('person','organization','event','government_body'\)/.test(relSql), 'buildRelevantFrontierSql: gated on real-entity types (not QID)');
+ok(relSql && !/wikidata_qid/.test(relSql), 'buildRelevantFrontierSql: does NOT require a QID (his neighborhood is QID-less local material)');
+ok(relSql && /ORDER BY degree DESC LIMIT 200/.test(relSql), 'buildRelevantFrontierSql: degree DESC, default limit');
 ok(A.buildRelevantFrontierSql([]) === null && A.buildRelevantFrontierSql(['x', 'yy']) === null, 'buildRelevantFrontierSql: no usable names → null (caller falls through to global)');
-ok(A.buildRelevantFrontierSql(['Toyota [Q53268]'], { limit: 50 }).includes("name IN ('Toyota')"), 'buildRelevantFrontierSql: strips display tag before matching; honors limit');
+// tagged doc-decomp name → match BOTH the cleaned form AND the raw tagged form (the person node only
+// matches the raw string; the cleaned form hits the document twin, which the type gate then drops)
+const taggedSql = A.buildRelevantFrontierSql(['Brad Overcash [dfacde1f]'], { limit: 50 });
+ok(taggedSql.includes("'Brad Overcash'") && taggedSql.includes("'Brad Overcash [dfacde1f]'"), 'buildRelevantFrontierSql: matches both cleaned + raw tagged form');
+ok(taggedSql.includes('LIMIT 50'), 'buildRelevantFrontierSql: honors custom limit');
 
 // --- assembleAnchors: RELEVANT sits above the global frontier, dedups against it ---
 const blended = A.assembleAnchors({

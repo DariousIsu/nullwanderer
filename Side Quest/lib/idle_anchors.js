@@ -98,38 +98,55 @@ function frontierCandidates(thinNodes, { max = FRONTIER_MAX } = {}) {
 // it offline-testable; fail-soft (no names / dead query → []).
 const _RELEVANT_MAX_NAMES = 40;    // cap the IN() list so the neighbor query stays cheap
 function _sqlName(n) { return `'${String(n).replace(/'/g, "''")}'`; }   // SELECT-only db_query; escape quotes
+// The web-enrichable, "who/what-org/what-happened" entity types — the surface Lucas actually works on
+// (people, orgs, the summit event, agencies). Deliberately EXCLUDES the 1.5M `bill` rows, `document`
+// (vault-doc nodes like the "Rainey Center Offer Letter" pollution), and legislative-structure types
+// (committee/decision/legal_instrument/office_held) which aren't objects you enrich from the open web.
+const _RELEVANT_TYPES = ['person', 'organization', 'event', 'government_body'];
 
-// Build the active-thin ∪ thin-neighbors-of-active SQL (pure — no DB). Returns null when no usable names,
-// so the caller can skip the query entirely and fall straight through to the global frontier.
-function buildRelevantFrontierSql(activeNames, { min = 2, max = 7, limit = 200 } = {}) {
-  const names = [];
-  const seen = new Set();
+// Build the active ∪ neighbors-of-active SQL (pure — no DB). Returns null when no usable names, so the
+// caller can skip the query and fall straight through to the global frontier.
+//
+// UNLIKE the global frontier, this tier does NOT gate on wikidata_qid: Lucas's neighborhood is freshly
+// curated local material (his dropped-doc people/orgs, the LAMP summit) that carries no QID — the very
+// nodes the global QID gate would exclude. Focus comes from active-set membership + real-entity type +
+// an under-developed degree band instead. We match BOTH the cleaned name AND the raw stored form because
+// doc-decomp nodes keep a disambiguation tag ("Brad Overcash [dfacde1f]") whose person node only matches
+// the raw string (the cleaned "Brad Overcash" hits the document twin, which the type gate then drops).
+function buildRelevantFrontierSql(activeNames, { min = 1, max = 15, limit = 200, types = _RELEVANT_TYPES } = {}) {
+  const forms = new Set();
+  let considered = 0;
   for (const nm of (Array.isArray(activeNames) ? activeNames : [])) {
-    const n = _clean(nm);
-    if (n.length < 3) continue;
-    const k = visitKey(n); if (!k || seen.has(k)) continue; seen.add(k);
-    names.push(n);
-    if (names.length >= _RELEVANT_MAX_NAMES) break;
+    if (considered >= _RELEVANT_MAX_NAMES) break;
+    const raw = String(nm == null ? '' : nm).trim();
+    const cleaned = _clean(nm);
+    if (cleaned.length < 3) continue;          // gate on the cleaned form; a real entity name is ≥3 chars
+    considered++;
+    forms.add(cleaned);
+    if (raw && raw !== cleaned && raw.length >= 3) forms.add(raw);   // also match the tagged/raw node
   }
-  if (!names.length) return null;
-  const inList = names.map(_sqlName).join(',');
-  const mn = Math.max(1, parseInt(min, 10) || 2), mx = Math.max(mn, parseInt(max, 10) || 7), lim = Math.max(1, parseInt(limit, 10) || 200);
-  // UNION: (a) active entities that are themselves thin — direct enrichment of what he touched; and
-  // (b) thin neighbors reached through the relations graph — expand his neighborhood outward.
+  if (!forms.size) return null;
+  const inList = [...forms].map(_sqlName).join(',');
+  const typeList = (Array.isArray(types) && types.length ? types : _RELEVANT_TYPES).map(_sqlName).join(',');
+  const mn = Math.max(0, parseInt(min, 10)); const mx = Math.max(mn, parseInt(max, 10) || 15), lim = Math.max(1, parseInt(limit, 10) || 200);
+  // UNION: (a) active entities that are themselves under-developed real entities — direct enrichment of
+  // what he touched; and (b) their under-developed real-entity neighbors via the relations graph — his
+  // rich hubs (Ted Alexander deg 79, the summit deg 29) are kept as e1 SEEDS (no degree cap on e1) so they
+  // radiate to thin neighbors, but excluded as enrichment TARGETS (the e2/self degree band skips them).
   return `SELECT id, name, degree FROM entities`
-    + ` WHERE name IN (${inList}) AND degree BETWEEN ${mn} AND ${mx} AND wikidata_qid IS NOT NULL`
+    + ` WHERE name IN (${inList}) AND entity_type IN (${typeList}) AND degree BETWEEN ${mn} AND ${mx}`
     + ` UNION `
     + `SELECT e2.id, e2.name, e2.degree FROM entities e1`
     + ` JOIN relations r ON (r.source_id = e1.id OR r.target_id = e1.id) AND r.deleted = 0`
     + ` JOIN entities e2 ON e2.id = (CASE WHEN r.source_id = e1.id THEN r.target_id ELSE r.source_id END)`
-    + ` WHERE e1.name IN (${inList}) AND e2.degree BETWEEN ${mn} AND ${mx} AND e2.wikidata_qid IS NOT NULL`
+    + ` WHERE e1.name IN (${inList}) AND e2.entity_type IN (${typeList}) AND e2.degree BETWEEN ${mn} AND ${mx}`
     + ` ORDER BY degree DESC LIMIT ${lim}`;
 }
 
 // Run the relevant-frontier query via an injected SQL runner. Returns {id,name,degree} rows (same shape as
 // the global frontier tier) so the assembler treats them identically downstream.
-async function relevantFrontier(activeNames, { query, min = 2, max = 7, limit = 200, log } = {}) {
-  const sql = buildRelevantFrontierSql(activeNames, { min, max, limit });
+async function relevantFrontier(activeNames, { query, min, max, limit = 200, log } = {}) {
+  const sql = buildRelevantFrontierSql(activeNames, { min, max, limit });   // undefined min/max → builder's focus defaults (1..15)
   if (!sql || typeof query !== 'function') return [];
   try {
     const r = await query(sql);
