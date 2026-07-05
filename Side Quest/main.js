@@ -5877,7 +5877,9 @@ async function crmPersonCard(name) {
     if (!echoSuit || !echoSuit.connected) return null;
     const nm = String(name || '').replace(/'/g, "''").trim();
     if (nm.length < 2) return null;
-    const sql = `SELECT id, FirstName, LastName, Title, Email, Phone, MailingStreet, Image_Url__c, Notes_Public__c FROM electoral.contact WHERE deleted=0 AND TRIM(COALESCE(FirstName,'')||' '||COALESCE(LastName,'')) = '${nm}' LIMIT 1`;
+    const sql = `SELECT id, FirstName, LastName, Title, Email, Phone, MailingStreet, Image_Url__c, Notes_Public__c FROM electoral.contact WHERE deleted=0 AND TRIM(COALESCE(FirstName,'')||' '||COALESCE(LastName,'')) = '${nm}'
+      ORDER BY (Email IS NOT NULL AND TRIM(Email) <> '') DESC, (Active_Elected__c = 1) DESC, (Image_Url__c IS NOT NULL) DESC, (Notes_Public__c IS NOT NULL) DESC, COALESCE(Last_Interaction_Date__c, 0) DESC, COALESCE(updated_at, 0) DESC
+      LIMIT 1`;
     const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql, params: [] } });
     if (!r || !r.ok) return null;
     let j; try { j = JSON.parse(r.text); } catch { return null; }
@@ -5910,7 +5912,19 @@ async function lookupCrmContacts(names) {
         District__c, Party_Roster, Chamber__c, State_Represented, Tier_Canonical, Engagement_Stage__c,
         Notes_Public__c, Wikipedia_Url__c, Image_Url__c
       FROM electoral.contact
-      WHERE deleted=0 AND TRIM(COALESCE(FirstName,'')||' '||COALESCE(LastName,'')) IN (${inList}) LIMIT 200`;
+      WHERE deleted=0 AND TRIM(COALESCE(FirstName,'')||' '||COALESCE(LastName,'')) IN (${inList})
+      -- richest / most-active row per name floats to the top; the first-wins dedup below then keeps it
+      -- (fixes a bare duplicate — e.g. a sparse 2nd "Ted Alexander" or an off-domain "Sarah Vance" judge —
+      -- winning over the real, emailed, currently-elected contact).
+      ORDER BY (Email IS NOT NULL AND TRIM(Email) <> '') DESC,
+               (Active_Elected__c = 1) DESC,
+               (Engagement_Stage__c IS NOT NULL AND Engagement_Stage__c <> 'Cold') DESC,
+               (Enrichment_Stage__c = 'complete') DESC,
+               (Image_Url__c IS NOT NULL) DESC,
+               (Notes_Public__c IS NOT NULL) DESC,
+               COALESCE(Last_Interaction_Date__c, 0) DESC,
+               COALESCE(updated_at, 0) DESC
+      LIMIT 400`;
     const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql, params: [] } });
     if (!r || !r.ok) return out;
     let j; try { j = JSON.parse(r.text); } catch { return out; }
