@@ -197,6 +197,50 @@ function dispatch({ sibling = true } = {}) {
   ok((await echo.prominenceProbe('Nobody At All', { dispatch: empty })).found === false, 'prominenceProbe: no bindings → {found:false}');
   ok((await echo.prominenceProbe('X', { dispatch: async () => ({ ok: true, text: 'not json' }) })).found === false, 'prominenceProbe: unparseable response → fail-soft {found:false}');
 
+  // ── CONTEXT-AWARE DISAMBIGUATION (R2) — an ambiguous mention resolved by its doc's co-occurring entities.
+  // The Rainey Center case: two org records; the one whose signature overlaps the roster's people wins. ──
+  const CS = echo._contextScore, PK = echo._pickByContext;
+  // _contextScore: counts context entities (by core-name key) present in a candidate signature.
+  ok(CS('board members: sean mcelwee, devan patel; lamp network', ['sean mcelwee', 'devan patel']) === 2, '_contextScore: 2 context entities present → 2');
+  ok(CS('a lobbying registration, no people', ['sean mcelwee', 'devan patel']) === 0, '_contextScore: none present → 0');
+  ok(CS('john robert smith gave a talk', ['john smith']) === 1, '_contextScore: all core tokens present (order-free) → match');
+  ok(CS('', ['x']) === 0 && CS('sig', []) === 0, '_contextScore: empty signature or context → 0');
+  // _pickByContext: strict dominance only (bias-to-clarify).
+  ok(PK([{ name: 'A', score: 3 }, { name: 'B', score: 1 }]).name === 'A', '_pickByContext: strict winner → A');
+  ok(PK([{ name: 'A', score: 2 }, { name: 'B', score: 2 }]) === null, '_pickByContext: a TIE stays ambiguous (null)');
+  ok(PK([{ name: 'A', score: 0 }, { name: 'B', score: 0 }]) === null, '_pickByContext: all-zero → null (no signal)');
+  ok(PK([{ name: 'A', score: 1 }]).name === 'A', '_pickByContext: single candidate with a hit → resolve');
+
+  // _disambiguateByContext: pulls each candidate signature via get_entity, picks the overlap winner.
+  const distinct = [{ name: 'Joseph Rainey Center for Public Policy' }, { name: 'RAINEY CENTER FREEDOM PROJECT, INC.' }];
+  const sigDispatch = async (tag) => {
+    if (tag.name !== 'get_entity') return { ok: false };
+    const nm = tag.args.name;
+    if (/Public Policy/.test(nm)) return { ok: true, text: JSON.stringify({ result: { summary: 'policy think tank', relations: [{ target_name: 'Sean McElwee' }, { target_name: 'Devan Patel' }] } }) };
+    return { ok: true, text: JSON.stringify({ result: { summary: 'lobbying registration', relations: [] } }) };
+  };
+  const winner = await echo._disambiguateByContext(sigDispatch, distinct, ['Sean McElwee', 'Devan Patel', 'Rainey Center'], echo._coreNameKey('Rainey Center'));
+  ok(winner && /Public Policy/.test(winner.name), '_disambiguateByContext: the org whose signature overlaps the roster wins');
+  // no distinguishing context → null (both score 0)
+  const noWin = await echo._disambiguateByContext(sigDispatch, distinct, ['Unrelated Person'], echo._coreNameKey('Rainey Center'));
+  ok(noWin === null, '_disambiguateByContext: no overlap → null (stays ambiguous)');
+  ok((await echo._disambiguateByContext(sigDispatch, distinct, [], 'k')) === null, '_disambiguateByContext: empty context → null');
+
+  // resolveMention end-to-end: two candidates + context → resolves via context (status resolved, via:context).
+  const rmDispatch = async (tag) => {
+    if (tag.name === 'search_entities') return { ok: true, text: JSON.stringify({ result: [{ id: 1, name: 'Joseph Rainey Center for Public Policy', entity_type: 'organization' }, { id: 2, name: 'RAINEY CENTER FREEDOM PROJECT, INC.', entity_type: 'organization' }] }) };
+    if (tag.name === 'get_entity') { const nm = tag.args.name; return { ok: true, text: JSON.stringify({ result: /Public Policy/.test(nm) ? { summary: 'x', relations: [{ target_name: 'Sean McElwee' }] } : { summary: 'y', relations: [] } }) }; }
+    if (tag.name === 'quick_lookup') return { ok: true, text: JSON.stringify({ result: { entity: { id: 1, name: 'Joseph Rainey Center for Public Policy', entity_type: 'organization', degree: 12 }, facts: [], committees: [] } }) };
+    if (tag.name === 'db_query') return { ok: true, text: '{"rows":[]}' };
+    if (tag.name === 'kg_neighborhood') return { ok: true, text: '{"neighbors":[]}' };
+    return { ok: false };
+  };
+  const rmCtx = await echo.resolveMention('Rainey Center', { dispatch: rmDispatch, context: ['Sean McElwee', 'Rainey Center'] });
+  ok(rmCtx.status === 'resolved' && rmCtx.via === 'context' && /Public Policy/.test(rmCtx.object.name), 'resolveMention: ambiguous + context → RESOLVED via context to the overlapping org');
+  // WITHOUT context → still ambiguous (backward-compatible; no popularity guess)
+  const rmNo = await echo.resolveMention('Rainey Center', { dispatch: rmDispatch });
+  ok(rmNo.status === 'ambiguous' && rmNo.candidates.length === 2, 'resolveMention: NO context → ambiguous (unchanged behavior)');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

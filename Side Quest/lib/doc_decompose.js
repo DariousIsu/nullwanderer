@@ -162,14 +162,15 @@ function mergeCandidates(local = [], echo = []) {
 //   ambiguous → HOLD (bias-to-clarify: >1 genuinely-different candidate → don't popularity-guess)
 //   error     → SKIP (Echo unavailable this pass)
 // Pure w.r.t. the injected resolver. Never throws.
-async function resolveExtracted(entity, { resolve } = {}) {
+async function resolveExtracted(entity, { resolve, context = null } = {}) {
   const name = stripLead(entity && entity.name);
   const type = canonType(entity && entity.type);
   if (!name || badField(name)) return { action: 'skip', name, type, reason: 'bad-name' };
   if (typeof resolve !== 'function') return { action: 'skip', name, type, reason: 'no-resolver' };
   const preferType = type !== 'other' ? type : null;
   let r;
-  try { r = await resolve(name, { preferType }); } catch { return { action: 'skip', name, type, reason: 'resolver-threw' }; }
+  // context = the doc's OTHER entities, so an ambiguous candidate can be disambiguated by co-occurrence.
+  try { r = await resolve(name, { preferType, context }); } catch { return { action: 'skip', name, type, reason: 'resolver-threw' }; }
   const status = r && r.status;
   if (status === 'resolved') return { action: 'reuse', name, type, object: r.object, canonical: (r.object && r.object.name) || name };
   if (status === 'nil') return { action: 'mint', name, type };
@@ -180,11 +181,11 @@ async function resolveExtracted(entity, { resolve } = {}) {
 // Batch-resolve extracted entities → { decisions, byKey, tally }. `byKey` is keyed by coreKey so a
 // relation endpoint can look up its entity's decision (2c only proposes a relation when BOTH endpoints
 // reuse-or-mint; a hold/skip endpoint means we don't know which node, so the edge waits). Never throws.
-async function planEntities(entities, { resolve } = {}) {
+async function planEntities(entities, { resolve, context = null } = {}) {
   const decisions = [], byKey = new Map();
   const tally = { reuse: 0, mint: 0, hold: 0, skip: 0 };
   for (const e of (Array.isArray(entities) ? entities : [])) {
-    const d = await resolveExtracted(e, { resolve });
+    const d = await resolveExtracted(e, { resolve, context });
     decisions.push(d);
     byKey.set(coreKey(d.name) || d.name.toLowerCase(), d);
     tally[d.action] = (tally[d.action] || 0) + 1;
@@ -254,8 +255,10 @@ async function decomposeDoc(doc = {}, deps = {}) {
     }
   }
 
-  // 2) disambiguate every entity
-  const plan = await planEntities(merged, { resolve });
+  // 2) disambiguate every entity — the doc's full entity set is the CONTEXT that resolves an ambiguous
+  // candidate (e.g. "Rainey Center" among a roster of policy people → the policy org, not the lobbying twin).
+  const context = merged.map(e => e.name);
+  const plan = await planEntities(merged, { resolve, context });
 
   // 3) entities: mint (existence-gated by the doc) / reuse / hold (fall-through) / skip
   const usable = new Map();   // coreKey → the canonical name to use in an edge

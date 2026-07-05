@@ -128,6 +128,15 @@ function mockResolver(map) {
   ok(plan.byKey.get(D.coreKey('Woodrow Wilson')).action === 'reuse', '2b: decision map lets a relation endpoint look up its entity decision');
   ok(plan.decisions.length === 3, '2b: planEntities returns a decision per entity');
 
+  // context threading (R2): resolveExtracted + decomposeDoc forward the doc's co-occurring entities so the
+  // resolver can disambiguate an ambiguous candidate by context.
+  let seenCtx = null;
+  await D.resolveExtracted({ name: 'X', type: 'person' }, { resolve: async (name, opts) => { seenCtx = opts && opts.context; return { status: 'nil' }; }, context: ['A', 'B'] });
+  ok(Array.isArray(seenCtx) && seenCtx.length === 2, '2b: resolveExtracted forwards context to the resolver');
+  const ctxSeen = [];
+  await D.decomposeDoc({ title: 't', url: 'u', text: 'x'.repeat(50) }, { extract: async () => ({ entities: [{ name: 'Alpha One', type: 'person' }, { name: 'Beta Two', type: 'organization' }], relations: [] }), resolve: async (name, opts) => { ctxSeen.push((opts && opts.context) || []); return { status: 'nil' }; }, dispatch: async () => ({ ok: true, text: '{}' }), observe: () => {} });
+  ok(ctxSeen.length >= 2 && ctxSeen[0].includes('Alpha One') && ctxSeen[0].includes('Beta Two'), '2c: decomposeDoc passes the doc entity set as context to resolve');
+
   // -------------------------------------------------------------------------
   // 2c — the DRIVER (decomposeDoc): extract → hybrid → disambiguate → gate → propose → observe.
   // -------------------------------------------------------------------------

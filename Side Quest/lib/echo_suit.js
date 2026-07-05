@@ -672,7 +672,57 @@ function normalizeObject(res) {
 // entity (even across several duplicate records) → pull its object via recallObject. Fail-soft. Coherence
 // note: preferType comes from the whole-utterance parse — that IS the primary coherence signal; full
 // candidate-ranking against sibling mentions is a later refinement.
-async function resolveMention(name, { preferType = null, dispatch = null } = {}) {
+// ── CONTEXT-AWARE DISAMBIGUATION (R2) ──────────────────────────────────────────────────────────────────
+// When a mention resolves to >1 genuinely-different candidate, the co-occurring entities in the SAME
+// document are a disambiguator: the right candidate's Echo signature (summary + neighbor names) overlaps
+// the doc's OTHER entities more than the wrong one does. Score each candidate by that overlap; resolve to
+// the winner ONLY if it STRICTLY dominates (bias-to-clarify preserved — a tie or all-zero stays ambiguous).
+// Pure scoring (offline-testable); the per-candidate fetch is injected via `d`. Fail-soft.
+
+// Overlap score: how many context entities (by core-name key) appear in the candidate's signature text.
+function _contextScore(signature, contextKeys) {
+  const sig = ' ' + String(signature || '').toLowerCase() + ' ';
+  let score = 0;
+  for (const key of (contextKeys || [])) {
+    const toks = String(key || '').split(' ').filter(Boolean);
+    if (toks.length && toks.every(t => sig.includes(t))) score++;
+  }
+  return score;
+}
+// Winner iff top score >= 1 AND STRICTLY beats the runner-up (never popularity-guess on a tie/zero).
+function _pickByContext(scored) {
+  const s = [...(scored || [])].sort((a, b) => b.score - a.score);
+  if (s.length && s[0].score >= 1 && (s.length === 1 || s[0].score > s[1].score)) return s[0];
+  return null;
+}
+// A candidate's signature = summary + subtype + neighbor/relation target names (via get_entity), lower-cased.
+async function _entitySignature(d, name) {
+  let r; try { r = await d({ kind: 'do', name: 'get_entity', args: { name } }); } catch { return ''; }
+  if (!r || !r.ok) return '';
+  let data; try { data = JSON.parse(r.text); } catch { return ''; }
+  const e = (data && (data.result || data)) || {};
+  const parts = [e.summary || '', e.entity_subtype || e.subtype || ''];
+  const rels = Array.isArray(e.relations) ? e.relations : (Array.isArray(e.neighbors) ? e.neighbors : []);
+  for (const rel of rels) parts.push((rel && (rel.target_name || rel.target || rel.name)) || '');
+  const dossier = e.knowledge_dossier;
+  if (dossier && Array.isArray(dossier.neighbors)) for (const nb of dossier.neighbors) parts.push((typeof nb === 'string' ? nb : (nb && nb.name)) || '');
+  return parts.join(' ').toLowerCase();
+}
+// Pull each candidate's signature, score against the context, return a dominant winner candidate (or null).
+// `selfKey` = the query's own core-name key, excluded (a candidate matching the query name is not a signal).
+async function _disambiguateByContext(d, distinct, contextNames, selfKey) {
+  const contextKeys = [...new Set((contextNames || []).map(_coreNameKey).filter(k => k && k.length > 1 && k !== selfKey))];
+  if (!contextKeys.length) return null;
+  const scored = [];
+  for (const c of (distinct || []).slice(0, 4)) {
+    const sig = await _entitySignature(d, c.name);
+    scored.push({ cand: c, score: _contextScore(sig, contextKeys) });
+  }
+  const winner = _pickByContext(scored.map(s => ({ name: s.cand.name, score: s.score })));
+  return winner ? ((scored.find(s => s.cand.name === winner.name) || {}).cand || null) : null;
+}
+
+async function resolveMention(name, { preferType = null, dispatch = null, context = null } = {}) {
   const d = dispatch || (liveReady() ? (tag) => _live.dispatch(tag) : null);
   const n = String(name || '').trim();
   if (!d) return { status: 'error', mention: n };
@@ -686,8 +736,18 @@ async function resolveMention(name, { preferType = null, dispatch = null } = {})
   // whose bio names the target). Keep only candidates whose NAME actually carries the query's core tokens.
   const gated = _nameGate(cands, _coreNameKey(q));
   const distinct = _distinctNames(gated);
-  // >1 genuinely-different name (not dup records / initial variants) → ambiguous → ASK (bias-to-clarify).
-  if (distinct.length > 1) return { status: 'ambiguous', mention: n, candidates: distinct.slice(0, 4).map(c => c.name) };
+  // >1 genuinely-different name (not dup records / initial variants) → ambiguous. Before asking, try
+  // CONTEXT: the doc's co-occurring entities may pick the right candidate (R2). Only a strict winner
+  // resolves; otherwise stay ambiguous (bias-to-clarify).
+  if (distinct.length > 1) {
+    if (Array.isArray(context) && context.length) {
+      try {
+        const winner = await _disambiguateByContext(d, distinct, context, _coreNameKey(q));
+        if (winner) { const obj = await recallObject(winner.name, { preferType, dispatch: d }); if (obj) return { status: 'resolved', mention: n, object: obj, via: 'context' }; }
+      } catch {}
+    }
+    return { status: 'ambiguous', mention: n, candidates: distinct.slice(0, 4).map(c => c.name) };
+  }
   const obj = await recallObject(q, { preferType, dispatch: d });
   if (!obj) return { status: 'nil', mention: n, reason: 'no-object' };
   // Resolve ONLY when a record genuinely DOMINATES (rich object). Several thin same-name records with no
@@ -898,5 +958,5 @@ async function wikiLookup(query, { dispatch = null, pages = 3, sentences = 4 } =
 
 module.exports = {
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature
 };
