@@ -218,6 +218,15 @@ later pulled fully in.
     batch passes keep their consolidation job and now also catch inline's strays. (Per-stream, one at
     a time, after Split 1 is proven.)
 
+    **✅ Split 2 / stream 1 (doc_store landings) BUILT + WIRED + LIVE-PROVEN (2026-07-04, gate 131).**
+    `lib/decomp_lane.js` — `makeCloudExtractor` (shared cloud typed-extractor factory + a per-stream
+    `buildPrompt` guidelines seam) + `decomposeLanding` (the doc is the citation: `url = ref |
+    docstore:<id>`). `main.js:decomposeLandedDoc()` builds the live deps and is wired into the
+    canvas-drop ingest poller AFTER its existing hooks (async, fail-soft). Live proof: a Grace Hopper
+    passage → 3 mints + 2 edges + 2 held, every observation cited to `docstore:<id>`, US Navy →
+    ambiguous → held. Remaining streams (email-intake, meeting_lane, research; api = numeric, exempt)
+    fold in one at a time on the same pattern.
+
 Each slice: pure + deps-injected where possible, offline smoke, gate green, reboot-gated verify.
 
 ---
