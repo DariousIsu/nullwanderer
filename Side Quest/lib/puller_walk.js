@@ -191,18 +191,40 @@ function recordProspected({ getMeta, setMeta, now, key }) {
   try { setMeta && setMeta(PROSPECT_KEY, JSON.stringify(arr.slice(-500))); } catch {}
 }
 
-// pure: pick the org to prospect. orgs: [{name, domain?}] (the caller supplies them ACTIVE-first). Skip
-// recently-prospected + junk names; prefer a domain-bearing org (its finds get a domain → pattern-fill later).
+// The operator's prospecting SECTORS (Lucas): AI, datacenters, power generation, power/energy transition,
+// weather/climate — and the adjacent industry. Org NAMES rarely say "AI", so a keyword regex is paired
+// with a set of KNOWN sector companies. Prospecting is STEERED toward these (ranked first); a generic
+// legislative body is off-theme AND generic → skipped entirely (the "State Senate" junk-seed problem).
+const SECTOR_RE = /\b(a\.?i\.?|artificial intelligence|machine learning|data ?cent(?:er|re)|cloud|hyperscal|semiconductor|chip(?:maker)?|gpu|power|energy|electric(?:al|ity)?|utilit|grid|nuclear|renewabl|solar|\bwind\b|hydro|geothermal|turbine|transmission|pipeline|decarbon|clean energy|net.?zero|emission|transition|weather|climate|meteorolog|forecast)\b/i;
+const SECTOR_ORGS = new Set(['openai', 'anthropic', 'google', 'google cloud', 'alphabet', 'amazon', 'aws', 'microsoft', 'azure', 'meta', 'apple', 'nvidia', 'oracle', 'salesforce', 'ibm', 'intel', 'amd', 'tsmc', 'equinix', 'digital realty', 'coreweave', 'crusoe', 'databricks', 'palantir']);
+const LEGISLATIVE_JUNK = /\b(state (house|senate|legislature|assembly)|u\.?s\.? (house|senate)|congress|city council|board of supervisors|city of|county of)\b/i;
+// Sector affinity of an org NAME: >0 = a target sector (rank first), 0 = neutral (kept as fallback),
+// -1 = a generic legislature (skip). Pure — name-only (a policy org like "Rainey Center" scores 0, not
+// negative, so it's still prospected, just after the explicit sector companies).
+function orgSectorScore(name) {
+  const n = String(name || '').trim(); const lc = n.toLowerCase();
+  if (LEGISLATIVE_JUNK.test(n)) return -1;
+  let s = 0;
+  if (SECTOR_ORGS.has(lc)) s += 3;
+  else { for (const org of SECTOR_ORGS) { if (lc.includes(org)) { s += 3; break; } } }
+  if (SECTOR_RE.test(n)) s += 2;
+  return s;
+}
+
+// pure: pick the org to prospect. orgs: [{name, domain?}] (caller supplies them ACTIVE-first). Skip
+// recently-prospected + junk + generic legislatures; RANK the operator's sectors first (AI/datacenter/
+// power/weather), then domain-bearing, then active order.
 const _JUNK_ORG = /^(not reported|unknown|n\/?a|none|office of|the office)$/i;
 function pickSeedOrg(orgs, { prospectedKeys = new Set() } = {}) {
-  const usable = (Array.isArray(orgs) ? orgs : []).filter((o) => {
+  const usable = (Array.isArray(orgs) ? orgs : []).map((o, i) => ({ o, i, score: orgSectorScore(o && o.name) })).filter(({ o, score }) => {
     const nm = String((o && o.name) || '').trim();
-    if (nm.length < 3 || _JUNK_ORG.test(nm)) return false;
+    if (nm.length < 3 || _JUNK_ORG.test(nm) || score < 0) return false;   // too short / junk / generic legislature
     if (prospectedKeys.has(orgKeyOf(o))) return false;
     return true;
   });
   if (!usable.length) return null;
-  return usable.slice().sort((a, b) => (b.domain ? 1 : 0) - (a.domain ? 1 : 0))[0] || null;   // stable: domain-bearing first, else active order
+  usable.sort((a, b) => (b.score - a.score) || ((b.o.domain ? 1 : 0) - (a.o.domain ? 1 : 0)) || (a.i - b.i));   // sector → domain → active order
+  return usable[0].o;
 }
 
 // pure: the staff/roster search query for an org.
@@ -260,7 +282,7 @@ async function runDiscoveryMove(deps = {}) {
 
 module.exports = {
   runPullerMove, runDiscoveryMove, pickTarget, patternFillCandidate, buildContactSearchQuery, pickPersonRow,
-  pickSeedOrg, buildOrgProspectQuery, orgKeyOf, loadProspected, recordProspected,
+  pickSeedOrg, orgSectorScore, buildOrgProspectQuery, orgKeyOf, loadProspected, recordProspected,
   attemptKeyOf, loadAttempted, recordAttempt, norm,
   ATTEMPT_TTL_MS, ATTEMPT_KEY, PATTERN_FLOOR, PROSPECT_TTL_MS, PROSPECT_KEY, MAX_NEW_PER_ORG,
 };

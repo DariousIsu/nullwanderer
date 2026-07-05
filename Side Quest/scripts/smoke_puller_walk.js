@@ -95,12 +95,18 @@ ok(PW.pickPersonRow([{ name: 'Bob Jones', email: 'b@j.com' }], 'Jane Smith') ===
   ok(!empty.acted && empty.reason === 'no-target', 'runPullerMove: empty candidate set → no-target');
 
   // === DISCOVERY MODE ===
-  // pickSeedOrg: skips junk + prospected; prefers a domain-bearing org
-  ok(PW.pickSeedOrg([{ name: 'Not Reported' }, { name: 'Rainey Center', domain: 'raineycenter.org' }]).name === 'Rainey Center', 'pickSeedOrg: skips junk ("Not Reported"), takes the real org');
-  ok(PW.pickSeedOrg([{ name: 'Acme' }, { name: 'Beta Org', domain: 'beta.com' }]).name === 'Beta Org', 'pickSeedOrg: prefers a domain-bearing org');
-  ok(PW.pickSeedOrg([{ name: 'Rainey Center' }], { prospectedKeys: new Set([PW.orgKeyOf({ name: 'Rainey Center' })]) }) === null, 'pickSeedOrg: a recently-prospected org is skipped');
-  ok(PW.pickSeedOrg([{ name: 'Office of' }, { name: 'na' }]) === null, 'pickSeedOrg: all junk/too-short → null');
-  ok(PW.buildOrgProspectQuery({ name: 'Rainey Center' }) === 'Rainey Center staff directory team leadership', 'buildOrgProspectQuery: org staff/roster query');
+  // orgSectorScore: sectors positive, legislatures negative, neutral policy orgs zero
+  ok(PW.orgSectorScore('OpenAI') >= 3 && PW.orgSectorScore('Duke Energy') >= 2 && PW.orgSectorScore('GE Vernova') >= 0, 'orgSectorScore: AI/power orgs score positive');
+  ok(PW.orgSectorScore('State Senate') === -1 && PW.orgSectorScore('U.S. House') === -1, 'orgSectorScore: generic legislatures score -1 (skipped)');
+  ok(PW.orgSectorScore('Rainey Center') === 0, 'orgSectorScore: a neutral policy org scores 0 (kept as fallback)');
+
+  // pickSeedOrg: sector-first ranking; skips legislatures + junk + prospected
+  ok(PW.pickSeedOrg([{ name: 'State Senate' }, { name: 'Duke Energy', domain: 'duke-energy.com' }]).name === 'Duke Energy', 'pickSeedOrg: a power-sector org beats a generic legislature (which is skipped)');
+  ok(PW.pickSeedOrg([{ name: 'Rainey Center', domain: 'raineycenter.org' }, { name: 'OpenAI' }]).name === 'OpenAI', 'pickSeedOrg: an explicit sector org outranks a neutral policy org');
+  ok(PW.pickSeedOrg([{ name: 'Not Reported' }, { name: 'Rainey Center', domain: 'raineycenter.org' }]).name === 'Rainey Center', 'pickSeedOrg: skips junk, takes the neutral org when no sector org present');
+  ok(PW.pickSeedOrg([{ name: 'State Senate' }, { name: 'State House' }, { name: 'U.S. House' }]) === null, 'pickSeedOrg: only generic legislatures → null (nothing on-theme to prospect)');
+  ok(PW.pickSeedOrg([{ name: 'OpenAI' }], { prospectedKeys: new Set([PW.orgKeyOf({ name: 'OpenAI' })]) }) === null, 'pickSeedOrg: a recently-prospected org is skipped');
+  ok(PW.buildOrgProspectQuery({ name: 'Duke Energy' }) === 'Duke Energy staff directory team leadership', 'buildOrgProspectQuery: org staff/roster query');
 
   // runDiscoveryMove: search org → extract people → filterNew dedup → mint net-new targets
   const meta3 = new Map();
