@@ -180,10 +180,29 @@ later pulled fully in.
   qualifier (`puller_confidence`) and the two gates (`curation_gate`) were already the reusable grading
   step; `curation_store.fromContact()` generalizes the Puller contact bridge into the same trail. *(NEXT:
   live-verify post-reboot, then Slice 2.)*
-- **Slice 2 — document decomposition.** Extend `graph_extract` to typed objects + doc-object
-  input + disambiguation; route through the gate. (Highest-yield feed.)
-- **Slice 3+ — fold the remaining streams** one at a time (news → meetings → reconciliation →
-  calendar), each converted to emit graded/cited observations into the shared gate.
+- **Slice 2 — document decomposition** (Lucas-locked plan, 2026-07-04). Break a document into its
+  constituent **typed** objects (person/event/location/org), each cited to the doc, disambiguated
+  against what exists, routed through the two gates + `curation_store` — writing to **Echo** (via
+  `dispatch propose_*`, like the walk), NOT the local `graph_memory` the old `graph_extract` used.
+  Split into TWO tracks:
+  - **Split 1 (the machine) — build on graph-resident DOC-OBJECT LEAVES first** (the wikiquote
+    "Woodrow Wilson" twins already in Echo). Chosen because it's **cadence-isolated**: decomposing
+    objects already in the graph touches ZERO live stream, so the machine is built + proven with no
+    downstream impact. Sub-slices:
+    - **2a — typed extractor (pure):** typed entities + typed relations, closed vocab, slop-rejected,
+      the doc as the uniform citation (grade B — stated in a named source). `lib/doc_decompose.js`.
+    - **2b — disambiguation-on-ingest:** each extracted entity → `echo_suit.resolveMention` →
+      `resolved` (reuse the existing node) / `nil` (mint, existence-gated) / `ambiguous` (hold, don't
+      guess). The "Woodrow Wilson resolves to the existing person, not a 4th dup" case is the point.
+    - **2c — driver + wiring:** extract → **HYBRID** (Echo's `extract_entities_from_doc` surfaces
+      candidates → merged with our typed extraction → our disambiguation/gate/observe) → propose to
+      Echo + observe (feed=`doc-decomp`), under a per-doc volume cap + shared budget.
+  - **Split 2 (fold in the streams) — ADDITIVE, non-invasive.** Rather than rewriting each stream's
+    processing, **append the decomposition track AFTER the existing hooks** in each datastream
+    sequence. The subsystems with targeted raw-data usage (news→briefing/forecast, docs→doc-QA) run
+    first, untouched; decomposition is a new terminal consumer at whatever point the stream already
+    reaches. No cadence rewrite, no per-stream impact review; the hourly/daily passes keep their
+    corroboration/consolidation role. (Later track, after Split 1 is proven.)
 
 Each slice: pure + deps-injected where possible, offline smoke, gate green, reboot-gated verify.
 
