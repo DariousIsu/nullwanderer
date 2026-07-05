@@ -210,6 +210,53 @@ async function planEntities(entities, { resolve, context = null } = {}) {
 // a named source), so the gate is fed a one-source list [{url}] with ref 'S1'. FALL-THROUGHS — an
 // `ambiguous` entity or a relation whose endpoint didn't cleanly resolve — are recorded as HELD (the
 // queue the hourly "standard upgrade pass" re-attempts). Returns tallies. Never throws.
+// ---------------------------------------------------------------------------
+// STATE-ALIAS NORMALIZATION. An extractor emits both "North Carolina" (a senator REPRESENTED it) and the
+// abbreviation "NC" (an address LOCATED_IN it) → two separate location nodes for one place. USPS state
+// codes are a fixed, well-known set, so expand them to canonical full names. SAFETY: expand a code only
+// when it appears as a GEOGRAPHIC-relation endpoint (LOCATED_IN / REPRESENTED / BORN_IN / …) — that context
+// is what tells "OR"/"IN"/"OK"/"ME"/"DE" (Oregon/Indiana/… but also common words) apart from prose. Pure.
+const US_STATES = {
+  AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado', CT: 'Connecticut',
+  DE: 'Delaware', FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana',
+  IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland', MA: 'Massachusetts',
+  MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada',
+  NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York', NC: 'North Carolina', ND: 'North Dakota',
+  OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island', SC: 'South Carolina',
+  SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington',
+  WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming', DC: 'District of Columbia', PR: 'Puerto Rico',
+};
+const PLACE_REL = /^(LOCATED_IN|REPRESENTED|BORN_IN|DIED_IN|BASED_IN|HEADQUARTERED_IN|REPRESENTS)$/;
+// A bare USPS state code ("NC", "N.C.", "n.c.") → its full name; else null.
+function stateFull(name) {
+  const k = String(name == null ? '' : name).toUpperCase().replace(/[.\s]/g, '');
+  return (k.length === 2 && US_STATES[k]) ? US_STATES[k] : null;
+}
+// Expand state codes that appear as geographic-relation endpoints, everywhere they occur (entities +
+// relations), and ensure the canonical state is a location entity — so "NC" and "North Carolina" unify.
+function normalizeStateAliases(entities, relations) {
+  const rename = new Map();   // lc code → full name (only for codes seen in a place relation)
+  for (const r of (Array.isArray(relations) ? relations : [])) {
+    if (!PLACE_REL.test(String((r && r.relation) || '').toUpperCase())) continue;
+    for (const nm of [r && r.source, r && r.target]) { const full = stateFull(nm); if (full) rename.set(String(nm).trim().toLowerCase(), full); }
+  }
+  if (!rename.size) return { entities: entities || [], relations: relations || [] };
+  const fix = (nm) => rename.get(String(nm == null ? '' : nm).trim().toLowerCase()) || nm;
+  const newRels = (relations || []).map(r => ({ ...r, source: fix(r && r.source), target: fix(r && r.target) }));
+  // rewrite entities, then DEDUP by name (renaming NC→North Carolina can collide with an existing one).
+  const remapped = (entities || []).map(e => { const f = rename.get(String((e && e.name) || '').trim().toLowerCase()); return f ? { name: f, type: 'location' } : e; });
+  for (const full of rename.values()) remapped.push({ name: full, type: 'location' });   // ensure canonical present
+  const byName = new Map();
+  for (const e of remapped) {
+    const k = String((e && e.name) || '').trim().toLowerCase();
+    if (!k) continue;
+    const prev = byName.get(k);
+    if (!prev) byName.set(k, e);
+    else if (prev.type === 'other' && e.type && e.type !== 'other') byName.set(k, e);   // prefer a specific type
+  }
+  return { entities: [...byName.values()], relations: newRels };
+}
+
 async function _proposeEntity(dispatch, name, entity_type, summary) {
   try { const r = await dispatch({ kind: 'do', name: 'propose_entity', args: { name, entity_type: entity_type || 'other', summary: summary || '' } }); return !!(r && r.ok); } catch { return false; }
 }
@@ -232,8 +279,11 @@ async function decomposeDoc(doc = {}, deps = {}) {
   let ex;
   try { ex = (await extract(text, { title: doc.title })) || { entities: [], relations: [] }; }
   catch (e) { log && log('[doc-decomp] extract failed: ' + (e && e.message)); return { ...out, reason: 'extract-failed' }; }
-  const entities = Array.isArray(ex.entities) ? ex.entities : [];
-  const relations = Array.isArray(ex.relations) ? ex.relations : [];
+  // normalize state-code aliases (NC → North Carolina) before resolution, so abbreviation + full name
+  // don't split into two location nodes.
+  const _norm = normalizeStateAliases(Array.isArray(ex.entities) ? ex.entities : [], Array.isArray(ex.relations) ? ex.relations : []);
+  const entities = _norm.entities;
+  const relations = _norm.relations;
   let echoCands = [];
   if (typeof echoExtract === 'function') { try { echoCands = (await echoExtract(doc)) || []; } catch {} }
   const merged = mergeCandidates(entities, echoCands);
@@ -312,5 +362,5 @@ async function decomposeDoc(doc = {}, deps = {}) {
 module.exports = {
   ENTITY_TYPES, REL_VOCAB, canonType, badField, coreKey,
   buildTypedPrompt, parseTypedExtraction, mergeCandidates,
-  resolveExtracted, planEntities, decomposeDoc,
+  resolveExtracted, planEntities, decomposeDoc, stateFull, normalizeStateAliases, US_STATES,
 };

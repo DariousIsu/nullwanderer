@@ -202,6 +202,31 @@ function mockResolver(map) {
   // extractor throws → fail-soft.
   ok((await D.decomposeDoc({ text: 'x'.repeat(50), url: 'u' }, { extract: async () => { throw new Error('boom'); }, resolve, dispatch, observe })).reason === 'extract-failed', '2c: extractor throw → fail-soft (extract-failed)');
 
+  // -------------------------------------------------------------------------
+  // STATE-ALIAS NORMALIZATION — matrix: every USPS code maps; the geographic-relation gate keeps
+  // ambiguous codes (IN/OR/OK) from expanding in prose; abbreviation + full name unify to one node.
+  // -------------------------------------------------------------------------
+  ok(Object.keys(D.US_STATES).length >= 51, 'state-alias: full USPS map present (50 states + DC + PR)');
+  let sp = 0, sf = 0;
+  for (const [code, full] of Object.entries(D.US_STATES)) { if (D.stateFull(code) === full && D.stateFull(code.toLowerCase()) === full) sp++; else sf++; }
+  ok(sf === 0, `state-alias: all ${sp} codes map to their full name (case-insensitive)`);
+  ok(D.stateFull('N.C.') === 'North Carolina' && D.stateFull('n.c.') === 'North Carolina', 'state-alias: dotted form "N.C." → North Carolina');
+  ok(D.stateFull('North Carolina') === null && D.stateFull('XY') === null && D.stateFull('Raleigh') === null, 'state-alias: full names / non-codes → null (no false expansion)');
+
+  // normalizeStateAliases: expands ONLY codes seen in a geographic relation; unifies NC & North Carolina.
+  const nz = D.normalizeStateAliases(
+    [{ name: 'Ted Alexander', type: 'person' }, { name: 'North Carolina', type: 'location' }, { name: 'Raleigh', type: 'location' }, { name: 'NC', type: 'other' }],
+    [{ source: 'Ted Alexander', relation: 'REPRESENTED', target: 'North Carolina' }, { source: 'Raleigh', relation: 'LOCATED_IN', target: 'NC' }]
+  );
+  ok(nz.relations.every(r => r.target !== 'NC') && nz.relations.some(r => r.source === 'Raleigh' && r.target === 'North Carolina'), 'normalizeStateAliases: "Raleigh LOCATED_IN NC" → LOCATED_IN North Carolina (unified)');
+  ok(!nz.entities.some(e => String(e.name).toLowerCase() === 'nc') && nz.entities.filter(e => e.name === 'North Carolina').length === 1, 'normalizeStateAliases: the bare "NC" entity folds into the single North Carolina node');
+  // the GATE: an ambiguous code NOT in a place relation is left alone (no "IN"→Indiana in prose).
+  const gz = D.normalizeStateAliases([{ name: 'IN', type: 'other' }], [{ source: 'X', relation: 'RELATED_TO', target: 'IN' }]);
+  ok(gz.relations[0].target === 'IN' && !gz.entities.some(e => e.name === 'Indiana'), 'normalizeStateAliases: an ambiguous code in a NON-place relation is NOT expanded (the gate)');
+  // but the SAME code IS expanded when it IS a place endpoint
+  const gz2 = D.normalizeStateAliases([], [{ source: 'Indianapolis', relation: 'LOCATED_IN', target: 'IN' }]);
+  ok(gz2.relations[0].target === 'Indiana', 'normalizeStateAliases: "…LOCATED_IN IN" → Indiana (place context makes it safe)');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
