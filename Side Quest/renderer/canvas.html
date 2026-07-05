@@ -155,6 +155,9 @@ body.ppl-open .surface{left:340px;}
 .pc-head{display:flex;align-items:center;gap:9px;}
 .pc-photo{width:38px;height:38px;border-radius:50%;object-fit:cover;flex-shrink:0;background:var(--bg-panel);}
 .pc-initials{width:38px;height:38px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:#3a4a6a;color:#fff;font-size:13px;font-weight:700;}
+.pc-initials.pc-av-place{background:#2f5d4a;font-size:17px;}
+.pc-initials.pc-av-event{background:#5a4633;font-size:17px;}
+.ppl-place{border-left:2px solid #2f9e6a;} .ppl-event{border-left:2px solid #d98a3a;}
 .pc-id{flex:1;min-width:0;}
 .pc-name{font-size:13px;font-weight:600;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .pc-role{font-size:11px;color:var(--tx-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -276,7 +279,7 @@ body.ppl-open .surface{left:340px;}
 
   <div class="people" id="people" hidden>
     <div class="ppl-head">
-      <span class="ppl-title">People</span>
+      <span class="ppl-title">People · Places · Events</span>
       <span class="ppl-n" id="pplN"></span>
       <button class="dbtn" id="pplClose" title="Close">✕</button>
     </div>

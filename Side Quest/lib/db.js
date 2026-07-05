@@ -524,7 +524,18 @@ const MIGRATIONS = [
     captured_at INTEGER NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_kg_obs_entity ON kg_observations(source_entity, status)`,
-  `CREATE INDEX IF NOT EXISTS idx_kg_obs_feed ON kg_observations(feed, captured_at)`
+  `CREATE INDEX IF NOT EXISTS idx_kg_obs_feed ON kg_observations(feed, captured_at)`,
+  // recent_cards — PLACE / EVENT cards surfaced to the canvas People rail (people persist in the Puller;
+  // places/events have no other home). Upsert on (type, card_key) so re-seeing one refreshes its recency.
+  `CREATE TABLE IF NOT EXISTS recent_cards (
+    id INTEGER PRIMARY KEY,
+    type TEXT NOT NULL,
+    card_key TEXT NOT NULL,
+    data TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    UNIQUE(type, card_key)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_recent_cards_ts ON recent_cards(ts)`
 ];
 
 function init() {
@@ -1630,6 +1641,20 @@ function kgObservationStats() {
   const total = getDb().prepare('SELECT COUNT(*) AS n FROM kg_observations').get().n;
   return { total, byGroup: rows };
 }
+// --- recent_cards (PLACE / EVENT cards for the People rail) ---
+function recordRecentCard({ type, cardKey, data, ts = null }) {
+  const t = ts == null ? Date.now() : ts;
+  getDb().prepare(
+    `INSERT INTO recent_cards (type, card_key, data, ts) VALUES (?,?,?,?)
+     ON CONFLICT(type, card_key) DO UPDATE SET data = excluded.data, ts = excluded.ts`
+  ).run(type, String(cardKey), typeof data === 'string' ? data : JSON.stringify(data), t);
+}
+function listRecentCards({ types = null, limit = 60 } = {}) {
+  const where = [], args = [];
+  if (Array.isArray(types) && types.length) { where.push(`type IN (${types.map(() => '?').join(',')})`); args.push(...types); }
+  const sql = `SELECT type, card_key, data, ts FROM recent_cards${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY ts DESC LIMIT ?`;
+  return getDb().prepare(sql).all(...args, limit).map(r => { let d = {}; try { d = JSON.parse(r.data); } catch {} return { ...d, ts: r.ts }; });
+}
 // --- meeting transcript (M1) ---
 function insertTranscriptLine({ meeting = null, speaker = null, text, ts = null }) {
   const t = ts == null ? Date.now() : ts;
@@ -1790,6 +1815,8 @@ module.exports = {
   recordKgObservation,
   listKgObservations,
   kgObservationStats,
+  recordRecentCard,
+  listRecentCards,
   insertTranscriptLine,
   getTranscriptSince,
   countTranscriptSince,

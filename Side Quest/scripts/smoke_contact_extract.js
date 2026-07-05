@@ -12,13 +12,24 @@ const pdb = require('../lib/puller_db');
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++; console.log('  ✗', m); } };
 
-// --- buildContactPrompt: on-rails, forbids invention ---
-const prompt = CE.buildContactPrompt('some text', { title: 'Roster' });
+// --- buildCardsPrompt: on-rails, three typed line formats, forbids invention ---
+const prompt = CE.buildCardsPrompt('some text', { title: 'Roster' });
 const sys = prompt[0].content;
-ok(prompt.length === 2 && prompt[1].content.includes('some text'), 'buildContactPrompt: system + user with the body');
-ok(sys.includes('CONTACT | name | title | affiliation | email | phone | address'), 'buildContactPrompt: fixed pipe-delimited format');
-ok(/NEVER invent|guess/i.test(sys), 'buildContactPrompt: forbids inventing/guessing contact data');
-ok(prompt[1].content.startsWith('Document title: Roster'), 'buildContactPrompt: carries the title');
+ok(prompt.length === 2 && prompt[1].content.includes('some text'), 'buildCardsPrompt: system + user with the body');
+ok(sys.includes('PERSON | name | title | affiliation | email | phone | address'), 'buildCardsPrompt: PERSON format');
+ok(sys.includes('PLACE | name | address | note') && sys.includes('EVENT | name | date | location | note'), 'buildCardsPrompt: PLACE + EVENT formats');
+ok(/NEVER invent|guess/i.test(sys), 'buildCardsPrompt: forbids inventing/guessing contact data');
+ok(prompt[1].content.startsWith('Document title: Roster'), 'buildCardsPrompt: carries the title');
+
+// --- parseDocCards: typed routing (people / places / events) ---
+const typed = CE.parseDocCards([
+  'PERSON | Ted Alexander | Senator, North Carolina | - | - | - | -',
+  'PLACE | AC Hotel Raleigh Downtown | 9 Glenwood Ave, Raleigh, NC 27603 | event venue',
+  'EVENT | Faith in Elections Prayer Breakfast | Tuesday June 30, 2026 | AC Hotel Raleigh Downtown | 8:30-10am',
+].join('\n'));
+ok(typed.people.length === 1 && typed.people[0].name === 'Ted Alexander', 'parseDocCards: PERSON routed to people');
+ok(typed.places.length === 1 && typed.places[0].name === 'AC Hotel Raleigh Downtown' && /Glenwood/.test(typed.places[0].address), 'parseDocCards: PLACE routed with address');
+ok(typed.events.length === 1 && typed.events[0].name === 'Faith in Elections Prayer Breakfast' && /June 30/.test(typed.events[0].date) && /AC Hotel/.test(typed.events[0].location), 'parseDocCards: EVENT routed with date + location');
 
 // --- parseContactTuples: what a model would emit → clean ingest rows ---
 const raw = [

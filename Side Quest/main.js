@@ -816,7 +816,7 @@ app.whenReady().then(() => {
             // typed objects in Echo, AFTER the existing hooks. Async + fail-soft so it never blocks or
             // breaks ingest; fall-throughs queue as `held` for the nightly upgrade pass.
             try { if (landed && landed.landed) decomposeLandedDoc({ id: landed.id, title: label, body: markdown, source: 'canvas_drop' }).catch(() => {}); } catch {}
-            try { if (landed && landed.landed) bankDocContacts({ id: landed.id, title: label, body: markdown }).catch(() => {}); } catch {}
+            try { if (landed && landed.landed) surfaceDocCards({ id: landed.id, title: label, body: markdown }).catch(() => {}); } catch {}
             console.log(`[canvas-ingest] ingested drop "${label}" (${markdown.length} chars)${understanding ? ' + understanding' : ''}`);
           }
           seen.push(t.tabKey);
@@ -2460,7 +2460,10 @@ ipcMain.handle('contacts:recent', async (_e, { n = 60 } = {}) => {
       withIntel.push({ t, beliefs });
     }
     const crmByName = await lookupCrmContacts(withIntel.map(x => x.t.name));
-    const cards = withIntel.map(x => contactCard.cardFromTarget(x.t, x.beliefs, crmByName.get(String(x.t.name).toLowerCase()) || {}));
+    const people = withIntel.map(x => contactCard.cardFromTarget(x.t, x.beliefs, crmByName.get(String(x.t.name).toLowerCase()) || {}));
+    // merge in the PLACE / EVENT cards (recent_cards store) — one typed waterfall, newest-first
+    let placeEvent = []; try { placeEvent = db.listRecentCards({ types: ['place', 'event'], limit: Math.max(1, Math.min(200, Number(n) || 60)) }); } catch (e) {}
+    const cards = [...people, ...placeEvent].sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, Math.max(1, Math.min(200, Number(n) || 60)));
     return { ok: true, cards };
   } catch (e) { console.error('[contacts] recent failed:', e.message); return { ok: false, error: e.message, cards: [] }; }
 });
@@ -5695,40 +5698,46 @@ async function decomposeLandedDoc(doc) {
 // become new Puller targets ("new objects"); the document is the citation (source_url). The extractor is
 // forbidden to invent contact data — only values written in the text. Async + fail-soft — never blocks a
 // landing; runs alongside the entity decomposition, not instead of it.
-async function bankDocContacts(doc) {
+async function surfaceDocCards(doc) {
   try {
     if (!doc || !String(doc.body || '').trim()) return;
     const src = (() => { try { return (require('./lib/models').sources() || []).find(s => s.tier === 'cloud' && s.token); } catch { return null; } })();
     if (!src) return;   // no cloud extractor available → skip
     const decompLane = require('./lib/decomp_lane');
     const contactExtract = require('./lib/contact_extract');
+    const contactCard = require('./studio/contact_card');
     const ingest = require('./studio/puller_ingest');
     const pdb = require('./lib/puller_db');
     const { completeDetailed } = require('./lib/ollama');
     const model = config.extractionModel() || config.subconsciousModel();
     const extract = decompLane.makeCloudExtractor({
       completeFn: completeDetailed, model, base: src.base, token: src.token,
-      buildPrompt: contactExtract.buildContactPrompt, parse: contactExtract.parseContactTuples, numPredict: 700,
+      buildPrompt: contactExtract.buildCardsPrompt, parse: contactExtract.parseDocCards, numPredict: 800,
     });
-    const rows = await extract(String(doc.body), { title: doc.title });
-    if (!Array.isArray(rows) || !rows.length) return;
-    try { pdb.init(); } catch {}
-    const sourceUrl = doc.ref || (doc.id != null ? `docstore:${doc.id}` : null);   // the landed doc is the citation
-    const s = ingest.ingestRows(pdb, rows, { source: `doc:${String(doc.title || doc.id || 'drop').slice(0, 60)}`, sourceUrl, obsKind: 'doc' });
-    console.log(`[doc-contacts] landing #${doc.id} → +${s.targets} target / ${s.observations} obs / ${s.beliefs} belief${s.skippedDup ? ` / ${s.skippedDup} already tracked` : ''}`);
-    // PROOF OF PURCHASE: waterfall each landed contact into the People rail (canvas window), newest-first.
-    try {
-      const contactCard = require('./studio/contact_card');
+    const cards = await extract(String(doc.body), { title: doc.title });   // { people, places, events }
+    const people = (cards && cards.people) || [], places = (cards && cards.places) || [], events = (cards && cards.events) || [];
+    const now = Date.now();
+    const push = (c) => { try { if (canvasWindow && !canvasWindow.isDestroyed()) canvasWindow.webContents.send('contacts:card', c); } catch {} };
+
+    // PEOPLE → Puller (cited beliefs, new objects) + person cards
+    if (people.length) {
+      try { pdb.init(); } catch {}
+      const sourceUrl = doc.ref || (doc.id != null ? `docstore:${doc.id}` : null);   // the landed doc is the citation
+      const s = ingest.ingestRows(pdb, people, { source: `doc:${String(doc.title || doc.id || 'drop').slice(0, 60)}`, sourceUrl, obsKind: 'doc' });
       const crmByName = await lookupCrmContacts((s.landed || []).map(L => L.name));
       for (const L of (s.landed || [])) {
         try {
           const beliefs = pdb.listBeliefs(L.targetId);
-          const card = contactCard.cardFromTarget({ id: L.targetId, name: L.name, company: L.company, kind: 'person', last_accessed_at: Date.now() }, beliefs, crmByName.get(String(L.name).toLowerCase()) || {});
-          if (canvasWindow && !canvasWindow.isDestroyed()) canvasWindow.webContents.send('contacts:card', card);
+          push(contactCard.cardFromTarget({ id: L.targetId, name: L.name, company: L.company, kind: 'person', last_accessed_at: now }, beliefs, crmByName.get(String(L.name).toLowerCase()) || {}));
         } catch (e) {}
       }
-    } catch (e) {}
-  } catch (e) { console.error('[doc-contacts] bank failed:', e.message); }
+      console.log(`[doc-cards] #${doc.id} people: +${s.targets} target / ${s.beliefs} belief${s.skippedDup ? ` / ${s.skippedDup} tracked` : ''}`);
+    }
+    // PLACES + EVENTS → recent_cards store (persist) + cards
+    for (const p of places) { try { const c = contactCard.buildPlaceCard(p, { ts: now }); db.recordRecentCard({ type: 'place', cardKey: c.key, data: c, ts: now }); push(c); } catch (e) {} }
+    for (const ev of events) { try { const c = contactCard.buildEventCard(ev, { ts: now }); db.recordRecentCard({ type: 'event', cardKey: c.key, data: c, ts: now }); push(c); } catch (e) {} }
+    if (places.length || events.length) console.log(`[doc-cards] #${doc.id} places: +${places.length} / events: +${events.length}`);
+  } catch (e) { console.error('[doc-cards] surface failed:', e.message); }
 }
 
 // CONSUME-ONLY CRM read: batch-look up photo (Image_Url__c) + a one-line bio (Notes_Public__c) + crm id for a

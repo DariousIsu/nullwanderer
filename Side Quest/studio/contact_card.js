@@ -40,6 +40,7 @@ function buildCardData(contact = {}, crm = {}) {
   const org = str(contact.company);
   const role = [title, org].filter(Boolean).join(' · ');
   return {
+    type: 'person',
     name,
     title: title || null,
     org: org || null,
@@ -59,6 +60,19 @@ function buildCardData(contact = {}, crm = {}) {
   };
 }
 
+// A PLACE card (venue/office/city). `p` = { name, address, note }. Pure.
+function buildPlaceCard(p = {}, { ts = null } = {}) {
+  const name = str(p.name);
+  return { type: 'place', name, initials: '📍', address: str(p.address) || null, note: str(p.note) || null,
+    key: name.toLowerCase(), ts: (typeof ts === 'number') ? ts : null };
+}
+// An EVENT card (meeting/breakfast/summit). `e` = { name, date, location, note }. Pure.
+function buildEventCard(e = {}, { ts = null } = {}) {
+  const name = str(e.name);
+  return { type: 'event', name, initials: '📅', date: str(e.date) || null, location: str(e.location) || null,
+    note: str(e.note) || null, key: name.toLowerCase(), ts: (typeof ts === 'number') ? ts : null };
+}
+
 // Bridge: a Puller target row + its beliefs (lib/puller_db.listBeliefs shape) → a card. The belief value is
 // the current best answer per attr; confidence rides the email belief (else phone). Pure.
 function cardFromTarget(target = {}, beliefs = [], crm = {}) {
@@ -74,4 +88,4 @@ function cardFromTarget(target = {}, beliefs = [], crm = {}) {
   }, crm);
 }
 
-module.exports = { buildCardData, cardFromTarget, gradeFor, initialsOf };
+module.exports = { buildCardData, cardFromTarget, buildPlaceCard, buildEventCard, gradeFor, initialsOf };

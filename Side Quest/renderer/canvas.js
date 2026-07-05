@@ -620,33 +620,52 @@ $('monAdd').addEventListener('keydown', (e) => { if (e.key === 'Enter') addMonit
    recent Puller contacts on open (newest-first) + receives a live push per new discovery (main →
    contacts:card), which pops the rail open and flashes the new card. Click a card's briefing → Puller. ---- */
 const people = $('people'), pplList = $('pplList'), pplN = $('pplN');
+// stable dedup key across fetch + live push (person by targetId, place/event by their key/name)
+function cardKeyOf(c) {
+  const t = c.type || 'person';
+  if (t === 'person') return c.targetId != null ? 'p' + c.targetId : 'person:' + String(c.name || '').toLowerCase();
+  return t + ':' + String(c.key || c.name || '').toLowerCase();
+}
 function cardHtml(c, isNew) {
-  const photo = c.photo
+  const t = c.type || 'person';
+  const avatar = (t === 'person' && c.photo)
     ? `<img class="pc-photo" src="${esc(c.photo)}" alt="${esc(c.name)}" draggable="false" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pc-initials',textContent:'${esc((c.initials || '?').replace(/'/g, ''))}'}))">`
-    : `<div class="pc-initials">${esc(c.initials || '?')}</div>`;
+    : `<div class="pc-initials pc-av-${esc(t)}">${esc(c.initials || '?')}</div>`;
   const rows = [];
-  if (c.email) rows.push(`<div class="pc-row"><span class="pc-ic">✉</span><a href="mailto:${esc(c.email)}">${esc(c.email)}</a></div>`);
-  if (c.phone) rows.push(`<div class="pc-row"><span class="pc-ic">☎</span>${esc(c.phone)}</div>`);
-  if (c.address) rows.push(`<div class="pc-row"><span class="pc-ic">⌂</span>${esc(c.address)}</div>`);
-  const grade = c.grade ? `<span class="pc-grade g-${esc(c.grade)}" title="confidence ${esc(c.grade)}">${esc(c.grade)}</span>` : '';
-  const bio = c.bio ? `<div class="pc-bio">${esc(c.bio)}</div>` : '';
-  const brief = c.targetId != null ? `<button class="pc-briefing" data-target="${esc(String(c.targetId))}">Full briefing →</button>` : '';
-  return `<div class="ppl-card${isNew ? ' new' : ''}" data-target="${esc(String(c.targetId))}">
-    <div class="pc-head">${photo}<div class="pc-id"><div class="pc-name">${esc(c.name)}</div>${c.role ? `<div class="pc-role">${esc(c.role)}</div>` : ''}</div>${grade}</div>
-    ${rows.length ? `<div class="pc-rows">${rows.join('')}</div>` : ''}${bio}${brief}
+  let sub = '', roleLine = '', grade = '', brief = '';
+  if (t === 'place') {
+    if (c.address) rows.push(`<div class="pc-row"><span class="pc-ic">📍</span>${esc(c.address)}</div>`);
+    sub = c.note ? `<div class="pc-bio">${esc(c.note)}</div>` : '';
+    roleLine = 'Place';
+  } else if (t === 'event') {
+    if (c.date) rows.push(`<div class="pc-row"><span class="pc-ic">🕒</span>${esc(c.date)}</div>`);
+    if (c.location) rows.push(`<div class="pc-row"><span class="pc-ic">📍</span>${esc(c.location)}</div>`);
+    sub = c.note ? `<div class="pc-bio">${esc(c.note)}</div>` : '';
+    roleLine = 'Event';
+  } else {
+    if (c.email) rows.push(`<div class="pc-row"><span class="pc-ic">✉</span><a href="mailto:${esc(c.email)}">${esc(c.email)}</a></div>`);
+    if (c.phone) rows.push(`<div class="pc-row"><span class="pc-ic">☎</span>${esc(c.phone)}</div>`);
+    if (c.address) rows.push(`<div class="pc-row"><span class="pc-ic">⌂</span>${esc(c.address)}</div>`);
+    sub = c.bio ? `<div class="pc-bio">${esc(c.bio)}</div>` : '';
+    roleLine = c.role || '';
+    grade = c.grade ? `<span class="pc-grade g-${esc(c.grade)}" title="confidence ${esc(c.grade)}">${esc(c.grade)}</span>` : '';
+    brief = c.targetId != null ? `<button class="pc-briefing" data-target="${esc(String(c.targetId))}">Full briefing →</button>` : '';
+  }
+  return `<div class="ppl-card ppl-${esc(t)}${isNew ? ' new' : ''}" data-card="${esc(cardKeyOf(c))}">
+    <div class="pc-head">${avatar}<div class="pc-id"><div class="pc-name">${esc(c.name)}</div>${roleLine ? `<div class="pc-role">${esc(roleLine)}</div>` : ''}</div>${grade}</div>
+    ${rows.length ? `<div class="pc-rows">${rows.join('')}</div>` : ''}${sub}${brief}
   </div>`;
 }
 function pplCount() { pplN.textContent = String(pplList.querySelectorAll('.ppl-card').length || ''); }
 function renderPeople(cards) {
   const list = (Array.isArray(cards) ? cards : []).filter(c => c && c.name);
-  pplList.innerHTML = list.length ? list.map(c => cardHtml(c, false)).join('') : '<div class="ppl-empty">No contacts yet.<br>Drop a roster on the canvas.</div>';
+  pplList.innerHTML = list.length ? list.map(c => cardHtml(c, false)).join('') : '<div class="ppl-empty">No cards yet.<br>Drop a document on the canvas.</div>';
   pplCount();
 }
 function prependCard(c) {
   if (!c || !c.name) return;
-  const key = String(c.targetId);
-  const existing = key !== 'null' ? pplList.querySelector(`.ppl-card[data-target="${CSS.escape(key)}"]`) : null;
-  if (existing) existing.remove();                         // same person already shown → moves to top, refreshed
+  const existing = pplList.querySelector(`.ppl-card[data-card="${CSS.escape(cardKeyOf(c))}"]`);
+  if (existing) existing.remove();                         // same object already shown → moves to top, refreshed
   const empty = pplList.querySelector('.ppl-empty'); if (empty) empty.remove();
   pplList.insertAdjacentHTML('afterbegin', cardHtml(c, true));
   pplCount();

@@ -47,5 +47,15 @@ ok(fromT.grade === 'B' && fromT.targetId === 12 && fromT.ts === 999, 'cardFromTa
 const noEmail = CC.cardFromTarget({ id: 5, name: 'No Email Org', kind: 'org' }, [{ type: 'phone', value: '555', confidence: 0.5 }], {});
 ok(noEmail.confidence === 0.5 && noEmail.kind === 'org', 'cardFromTarget: falls back to phone confidence; org kind');
 
+ok(card.type === 'person', 'buildCardData: type=person');
+
+// --- buildPlaceCard / buildEventCard ---
+const place = CC.buildPlaceCard({ name: 'AC Hotel Raleigh Downtown', address: '9 Glenwood Ave, Raleigh, NC 27603', note: 'event venue' }, { ts: 5 });
+ok(place.type === 'place' && place.name === 'AC Hotel Raleigh Downtown' && /Glenwood/.test(place.address), 'buildPlaceCard: type + name + address');
+ok(place.initials === '📍' && place.key === 'ac hotel raleigh downtown' && place.ts === 5, 'buildPlaceCard: pin avatar + dedup key + ts');
+const event = CC.buildEventCard({ name: 'Faith in Elections Prayer Breakfast', date: 'Jun 30, 2026', location: 'AC Hotel Raleigh', note: '8:30am' }, { ts: 9 });
+ok(event.type === 'event' && event.date === 'Jun 30, 2026' && event.location === 'AC Hotel Raleigh', 'buildEventCard: type + date + location');
+ok(event.initials === '📅' && event.key === 'faith in elections prayer breakfast', 'buildEventCard: calendar avatar + dedup key');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);
