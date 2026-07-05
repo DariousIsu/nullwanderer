@@ -5626,7 +5626,9 @@ async function decomposeLandedDoc(doc) {
     const dispatch = (tag) => echoSuit.dispatch(tag);
     const observe = (o) => { try { curationStore.record(db, { ...o, feed: 'doc-decomp' }); } catch {} };
     // NOTE: no `ref` passed → the citation is the stable `docstore:<id>` pointer, not the ephemeral tab key.
-    const r = await decompLane.decomposeLanding({ id: doc.id, title: doc.title, body: doc.body }, { extract, resolve, dispatch, observe, cap: { entities: 12, relations: 12 }, log: (m) => console.log(m) });
+    // cap sized for a real document (a roster/dossier easily names 20-40 constituents); the ~6000-char
+    // decomposition slice is the outer bound. 12 was too tight — a live 18-person roster lost 6 to the cap.
+    const r = await decompLane.decomposeLanding({ id: doc.id, title: doc.title, body: doc.body }, { extract, resolve, dispatch, observe, cap: { entities: 40, relations: 40 }, log: (m) => console.log(m) });
     if (r && !r.skipped) console.log(`[doc-decomp] landing #${doc.id} → +${r.minted} mint / ${r.reused} reuse / +${r.connections} conn (${r.held} held: ${r.ambiguous} ambiguous)`);
   } catch (e) { console.error('[doc-decomp] landing decompose failed:', e.message); }
 }

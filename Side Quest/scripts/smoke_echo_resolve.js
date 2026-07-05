@@ -283,6 +283,45 @@ function dispatch({ sibling = true } = {}) {
   const rmR3 = await echo.resolveMention('Rainey Center', { dispatch: rmAffil });
   ok(rmR3.status === 'resolved' && rmR3.via === 'affiliation' && rmR3.object.name === PRIMARY, 'resolveMention: affiliated org cluster (no context) → RESOLVED to the primary via affiliation');
 
+  // ── TYPO-TOLERANT RECOVERY (R4) — validated against the REAL candidate pool observed for "Rainy Center". ──
+  // _levenshtein: classic cases + the actual typo.
+  ok(echo._levenshtein('rainy', 'rainey') === 1, '_levenshtein: rainy→rainey = 1');
+  ok(echo._levenshtein('kitten', 'sitting') === 3 && echo._levenshtein('abc', 'abc') === 0 && echo._levenshtein('', 'abc') === 3, '_levenshtein: classic distances');
+  ok(Math.abs(echo._tokenSim('rainy', 'rainey') - 0.8333) < 0.01, '_tokenSim: rainy/rainey ≈ 0.83');
+  // _fuzzyNameMatch: the two Rainey orgs PASS, the near-misses are REJECTED (validated real names).
+  ok(echo._fuzzyNameMatch('Rainy Center', 'Joseph Rainey Center for Public Policy'), '_fuzzyNameMatch: "Rainy Center" ~ "Joseph Rainey Center for Public Policy" (typo tolerated)');
+  ok(echo._fuzzyNameMatch('Rainy Center', 'RAINEY CENTER FREEDOM PROJECT, INC.'), '_fuzzyNameMatch: "Rainy Center" ~ "RAINEY CENTER FREEDOM PROJECT, INC."');
+  ok(!echo._fuzzyNameMatch('Rainy Center', 'RAINBOW ENERGY CENTER'), '_fuzzyNameMatch: REJECTS "Rainbow Energy Center" (rainy≁rainbow)');
+  ok(!echo._fuzzyNameMatch('Rainy Center', 'RAINMAKER TECHNOLOGY CORPORATION'), '_fuzzyNameMatch: REJECTS "Rainmaker Technology" (no center + rainy≁rainmaker)');
+  ok(!echo._fuzzyNameMatch('Rainy Center', 'RAIN AND HAIL INSURANCE SOCIETY'), '_fuzzyNameMatch: REJECTS "Rain and Hail" (no center token)');
+  // _fuzzyCandidates: the real db_query pool → filter keeps ONLY the two Rainey orgs.
+  const fuzzyDb = async (tag) => {
+    if (tag.name !== 'db_query') return { ok: false };
+    return { ok: true, text: JSON.stringify({ rows: [
+      { id: 1550486, name: 'Joseph Rainey Center for Public Policy', entity_type: 'organization' },
+      { id: 1720818, name: 'RAINEY CENTER FREEDOM PROJECT, INC.', entity_type: 'organization' },
+      { id: 1724964, name: 'RAINBOW ENERGY CENTER', entity_type: 'organization' },
+    ] }) };
+  };
+  const fc = await echo._fuzzyCandidates(fuzzyDb, 'Rainy Center', 'organization');
+  ok(fc.length === 2 && fc.every(c => /Rainey/i.test(c.name)), '_fuzzyCandidates: real pool → keeps ONLY the 2 Rainey orgs (Rainbow filtered out)');
+  ok((await echo._fuzzyCandidates(fuzzyDb, 'x', null)).length === 0, '_fuzzyCandidates: sub-threshold query (no sig tokens) → []');
+
+  // resolveMention END-TO-END: exact miss → fuzzy recovery → affiliation cluster → resolves to the primary.
+  const rmTypo = async (tag) => {
+    if (tag.name === 'search_entities') return { ok: true, text: JSON.stringify({ result: [] }) };   // exact FTS miss
+    if (tag.name === 'db_query') return fuzzyDb(tag);                                                 // fuzzy pool
+    if (tag.name === 'get_entity') return affilDispatch(tag);                                         // PARENT_OF/SUBSIDIARY edge
+    if (tag.name === 'quick_lookup') return { ok: true, text: JSON.stringify({ result: { entity: { id: 1, name: PRIMARY, entity_type: 'organization', degree: 15 }, facts: [], committees: [] } }) };
+    if (tag.name === 'kg_neighborhood') return { ok: true, text: '{"neighbors":[]}' };
+    return { ok: false };
+  };
+  const rmR4 = await echo.resolveMention('Rainy Center', { dispatch: rmTypo });
+  ok(rmR4.status === 'resolved' && rmR4.object.name === PRIMARY, 'resolveMention: TYPO "Rainy Center" → fuzzy recovery → affiliation → RESOLVED to the primary c3 (end-to-end)');
+  // a genuine non-match query still returns nil (fuzzy doesn't hallucinate).
+  const rmNil = await echo.resolveMention('Zorblax Institute', { dispatch: async (tag) => tag.name === 'search_entities' ? { ok: true, text: '{"result":[]}' } : (tag.name === 'db_query' ? { ok: true, text: '{"rows":[]}' } : { ok: false }) });
+  ok(rmNil.status === 'nil', 'resolveMention: a true non-match → nil (fuzzy recovery finds nothing, no false resolve)');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

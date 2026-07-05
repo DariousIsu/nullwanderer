@@ -136,6 +136,13 @@ function mockResolver(map) {
   const ctxSeen = [];
   await D.decomposeDoc({ title: 't', url: 'u', text: 'x'.repeat(50) }, { extract: async () => ({ entities: [{ name: 'Alpha One', type: 'person' }, { name: 'Beta Two', type: 'organization' }], relations: [] }), resolve: async (name, opts) => { ctxSeen.push((opts && opts.context) || []); return { status: 'nil' }; }, dispatch: async () => ({ ok: true, text: '{}' }), observe: () => {} });
   ok(ctxSeen.length >= 2 && ctxSeen[0].includes('Alpha One') && ctxSeen[0].includes('Beta Two'), '2c: decomposeDoc passes the doc entity set as context to resolve');
+  // endpoint TYPE INFERENCE: a WORKS_FOR target (recovered endpoint) is an organization → resolved typed,
+  // so an untyped summary-FTS match on the wrong type can't leak in (the "Rainy Center → CT bill" live bug).
+  const seenT = [];
+  await D.decomposeDoc({ title: 't', url: 'u', text: 'x'.repeat(50) }, { extract: async () => ({ entities: [{ name: 'Jane Doe', type: 'person' }], relations: [{ source: 'Jane Doe', relation: 'WORKS_FOR', target: 'Acme Org' }] }), resolve: async (name, opts) => { seenT.push({ name, preferType: opts && opts.preferType }); return { status: 'nil' }; }, dispatch: async () => ({ ok: true, text: '{"action":"created"}' }), observe: () => {} });
+  const acme = seenT.find(s => s.name === 'Acme Org'), jane = seenT.find(s => s.name === 'Jane Doe');
+  ok(acme && acme.preferType === 'organization', '2c: a WORKS_FOR target is inferred organization (resolved with preferType=organization)');
+  ok(jane && jane.preferType === 'person', '2c: the person source keeps its own type (preferType=person)');
 
   // -------------------------------------------------------------------------
   // 2c — the DRIVER (decomposeDoc): extract → hybrid → disambiguate → gate → propose → observe.

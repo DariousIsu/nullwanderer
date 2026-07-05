@@ -775,6 +775,49 @@ async function _affiliatedPrimary(d, distinct) {
   return byKey.get(primaryKey) || null;
 }
 
+// ── TYPO-TOLERANT CANDIDATE RECOVERY (R4) ──────────────────────────────────────────────────────────────
+// Echo's search is exact-token FTS5 — an extraction typo ("Rainy Center" for "Rainey Center") matches
+// NOTHING (validated: search_entities/quick_lookup/find_mentions all miss; no spellfix1 in the DB). So on
+// an exact miss we recover candidates ourselves: a TIGHT db_query pool (AND-of-word-boundary-prefixes, one
+// per significant query token) filtered by a token-level edit-distance gate. Validated on the real pool for
+// "Rainy Center": {Joseph Rainey Center…, RAINEY CENTER FREEDOM PROJECT…} pass; RAINBOW ENERGY CENTER,
+// RAINMAKER…, RAIN AND HAIL… are rejected (the "center" token + the 0.8 similarity floor exclude them).
+function _levenshtein(a, b) {
+  a = String(a == null ? '' : a); b = String(b == null ? '' : b);
+  if (a === b) return 0;
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = new Array(n + 1); for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n];
+}
+function _tokenSim(a, b) { const L = Math.max(String(a).length, String(b).length); return L ? 1 - _levenshtein(a, b) / L : 1; }
+function _sigTokens(name, min = 4) { return String(name == null ? '' : name).toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(t => t.length >= min); }
+// EVERY significant query token must have a candidate token within the similarity floor → a fuzzy match.
+function _fuzzyNameMatch(query, candidateName, threshold = 0.8) {
+  const qt = _sigTokens(query), ct = _sigTokens(candidateName);
+  if (!qt.length || !ct.length) return false;
+  return qt.every(q => ct.some(c => _tokenSim(q, c) >= threshold));
+}
+// Recover fuzzy candidates for a query that exact-missed. Bounded AND-of-prefixes fetch → JS gate. Fail-soft.
+async function _fuzzyCandidates(d, name, preferType) {
+  const toks = _sigTokens(name).slice(0, 3);
+  if (!toks.length) return [];
+  const where = [], params = [];
+  if (preferType) { where.push('entity_type = ?'); params.push(preferType); }
+  for (const t of toks) { const pre = t.slice(0, 4); where.push('(name LIKE ? OR name LIKE ?)'); params.push(pre + '%', '% ' + pre + '%'); }
+  const sql = `SELECT id, name, entity_type FROM entities WHERE ${where.join(' AND ')} ORDER BY degree DESC LIMIT 25`;
+  let r; try { r = await d({ kind: 'do', name: 'db_query', args: { sql, params } }); } catch { return []; }
+  if (!r || !r.ok) return [];
+  let data; try { data = JSON.parse(r.text); } catch { return []; }
+  const rows = Array.isArray(data && data.rows) ? data.rows : [];
+  return rows.filter(e => e && e.name && _fuzzyNameMatch(name, e.name)).map(e => ({ id: e.id, name: String(e.name), entity_type: e.entity_type }));
+}
+
 async function resolveMention(name, { preferType = null, dispatch = null, context = null } = {}) {
   const d = dispatch || (liveReady() ? (tag) => _live.dispatch(tag) : null);
   const n = String(name || '').trim();
@@ -783,11 +826,15 @@ async function resolveMention(name, { preferType = null, dispatch = null, contex
   // Strip honorifics before hitting Echo — "Sen. Curtis" as a raw FTS query matches nothing (no entity
   // name carries "sen"); the search must run on the actual name tokens.
   const q = _cleanMention(n);
-  const cands = await _searchEntities(d, q, preferType);
+  let cands = await _searchEntities(d, q, preferType);
+  // TYPO FALLBACK (R4): exact FTS missed → recover fuzzy candidates (edit-distance gated). These are
+  // already name-verified, so they bypass the exact name-gate below.
+  let fuzzy = false;
+  if (!cands.length) { try { cands = await _fuzzyCandidates(d, q, preferType); fuzzy = cands.length > 0; } catch {} }
   if (!cands.length) return { status: 'nil', mention: n, reason: 'no-match' };
   // NAME-GATE: search_entities also matches on SUMMARIES, so it drags in tangential people (a staffer
   // whose bio names the target). Keep only candidates whose NAME actually carries the query's core tokens.
-  const gated = _nameGate(cands, _coreNameKey(q));
+  const gated = fuzzy ? cands : _nameGate(cands, _coreNameKey(q));
   const distinct = _distinctNames(gated);
   // >1 genuinely-different name (not dup records / initial variants) → ambiguous. Before asking, try
   // CONTEXT: the doc's co-occurring entities may pick the right candidate (R2). Only a strict winner
@@ -1016,5 +1063,5 @@ async function wikiLookup(query, { dispatch = null, pages = 3, sentences = 4 } =
 
 module.exports = {
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates
 };

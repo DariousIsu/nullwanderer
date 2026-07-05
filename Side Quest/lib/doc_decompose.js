@@ -240,18 +240,25 @@ async function decomposeDoc(doc = {}, deps = {}) {
 
   // 1b) ENDPOINT RECOVERY — a relation's source/target is an entity too. If the extractor named one only
   // as an edge endpoint (never as its own ENTITY line — e.g. a roster's "…WORKS_FOR Rainey Center" where
-  // the org header was never listed), fold it in as an 'other'-typed candidate so it resolves (mint/reuse/
-  // hold) instead of auto-holding every edge to it. Without this, a doc's central entity + all its edges
-  // sink into the fall-through queue.
+  // the org header was never listed), fold it in so it resolves (mint/reuse/hold) instead of auto-holding
+  // every edge to it. The TARGET of an org-membership relation is inferred to be an ORGANIZATION — without
+  // that type, resolution runs untyped and a summary-FTS match on the wrong type leaks in (the live bug:
+  // "…WORKS_FOR Rainy Center" resolved to a CT bill whose summary contained "Rainy Day Fund" + "Center").
+  const ORG_TARGET_REL = /^(WORKS_FOR|EMPLOYED_BY|MEMBER_OF|MEMBER_OF_ORG|PART_OF|SUBSIDIARY_OF|AFFILIATE_OF|FOUNDED|LEADS|DIRECTED_BY)$/;
   const haveKey = new Set(merged.map(e => coreKey(e.name) || String(e.name).toLowerCase()));
   for (const r of relations) {
-    for (const nm of [r && r.source, r && r.target]) {
-      const name = String(nm == null ? '' : nm).trim();
+    const relType = String((r && r.relation) || '').toUpperCase();
+    const endpoints = [
+      { name: r && r.source, type: 'other' },
+      { name: r && r.target, type: ORG_TARGET_REL.test(relType) ? 'organization' : 'other' },
+    ];
+    for (const ep of endpoints) {
+      const name = String(ep.name == null ? '' : ep.name).trim();
       if (!name || badField(name)) continue;
       const k = coreKey(name) || name.toLowerCase();
       if (haveKey.has(k)) continue;
       haveKey.add(k);
-      merged.push({ name, type: 'other' });
+      merged.push({ name, type: ep.type });
     }
   }
 
