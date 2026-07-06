@@ -131,4 +131,45 @@ function enrichUsernames(usernames, { topSites = 50, timeout = 8, wallMs = 18000
   });
 }
 
-module.exports = { candidateUsernames, knownHandles, corroborate, enrichUsernames, PERSONAL_DOMAINS, VENV_PY, RUNNER };
+// --- pure: detect an on-demand "find social/online accounts for <Name>" request -------------------
+// Conservative: needs an enrich verb + a social/handle noun + a capitalized target name. Returns
+// { isEnrich, target }. (The idle lane, Slice 2b, needs no trigger — it picks targets itself.)
+const _ENRICH_VERB = /\b(find|get|look ?up|search|enrich|discover|dig up|pull)\b/i;
+const _SOCIAL_NOUN = /\b(social(?:[ -]?media)?|handles?|online (?:accounts?|presence|profiles?)|instagram|twitter|linkedin|profiles?)\b/i;
+function detectSocialEnrich(message) {
+  const m = String(message == null ? '' : message);
+  if (!_ENRICH_VERB.test(m) || !_SOCIAL_NOUN.test(m)) return { isEnrich: false };
+  let target = null;
+  let mt = /\bfor\s+([A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){0,3})/.exec(m);          // "... for Vince Ille"
+  if (mt) target = mt[1].trim();
+  else { mt = /\b([A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){0,2})['’]s\b/.exec(m); if (mt) target = mt[1].trim(); }   // "Vince Ille's ..."
+  return { isEnrich: !!target, target: target || null };
+}
+
+// --- orchestration: enrich ONE contact end-to-end -------------------------------------------------
+// knownHandles → run maigret on them → corroborate each discovered account (2+ signals) → return only the
+// survivors, each tagged grade 'E' (unverified-but-corroborated; verify before promote). CONSUME-ONLY:
+// returns data, writes nothing — the caller (main.js) stages survivors as Puller observations. `search`
+// is injectable (defaults to the real sidecar) so this is unit-testable offline.
+async function enrichContact(contact, crmHandles = [], { topSites = 50, timeout = 8, search = enrichUsernames } = {}) {
+  const handles = knownHandles(contact, crmHandles);
+  if (!handles.length) return { contact: contact && contact.name, handles: 0, staged: [], reason: 'no-known-handles' };
+  const srcByUser = new Map(handles.map((h) => [h.username, h.source]));
+  const res = await search(handles.map((h) => h.username), { topSites, timeout });
+  if (!res || !res.ok) return { contact: contact && contact.name, handles: handles.length, staged: [], error: (res && res.error) || 'search-failed' };
+  const staged = [];
+  const seen = new Set();
+  for (const r of (res.results || [])) {
+    const source = srcByUser.get(r.username) || null;
+    for (const a of (r.accounts || [])) {
+      const v = corroborate(a, contact, { source });
+      if (!v.corroborated) continue;
+      const key = _norm(a.site) + '|' + _norm(a.url);
+      if (seen.has(key)) continue; seen.add(key);
+      staged.push({ site: a.site, url: a.url, handle: r.username, source, signals: v.signals, score: v.score, grade: 'E' });
+    }
+  }
+  return { contact: contact && contact.name, handles: handles.length, staged };
+}
+
+module.exports = { candidateUsernames, knownHandles, corroborate, detectSocialEnrich, enrichContact, enrichUsernames, PERSONAL_DOMAINS, VENV_PY, RUNNER };

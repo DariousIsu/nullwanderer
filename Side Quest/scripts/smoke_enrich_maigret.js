@@ -40,5 +40,29 @@ ok(c3.corroborated && c3.signals.includes('prov'), 'corroborate: name + CRM prov
 // CRM provenance ALONE (no name/org confirmation) is only 1 signal → not enough
 ok(!EM.corroborate({ site: 'Instagram', ids: {} }, contact, { source: 'crm' }).corroborated, 'corroborate: CRM provenance alone (1 signal) is NOT enough');
 
-console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// --- detectSocialEnrich: on-demand trigger ---
+ok(EM.detectSocialEnrich('find social handles for Vince Ille').isEnrich === true && EM.detectSocialEnrich('find social handles for Vince Ille').target === 'Vince Ille', 'detectSocialEnrich: "find social handles for Vince Ille" → target');
+ok(EM.detectSocialEnrich("look up Brad Overcash's online accounts").target === 'Brad Overcash', 'detectSocialEnrich: possessive form');
+ok(!EM.detectSocialEnrich('list our energy contacts').isEnrich, 'detectSocialEnrich: a contacts-list ask is NOT a social-enrich');
+ok(!EM.detectSocialEnrich('what is the weather').isEnrich, 'detectSocialEnrich: unrelated → false');
+
+// --- enrichContact: end-to-end with a STUBBED search (offline) ---
+(async () => {
+  const target = { name: 'Vince Ille', email: 'vinceille@gmail.com', company: 'North Carolina Athletics' };
+  // stub returns: one corroborating hit (name+org) + one false positive (wrong name, no org)
+  const stub = async (usernames) => ({
+    ok: true, results: usernames.map((u) => ({ username: u, accounts: [
+      { site: 'LinkedIn', url: `https://linkedin.com/in/${u}`, ids: { name: 'Vince Ille', bio: 'North Carolina Athletics' } },
+      { site: 'SoundCloud', url: `https://soundcloud.com/${u}`, ids: { name: 'Ilirjana Alushaj' } },
+    ] })),
+  });
+  const out = await EM.enrichContact(target, [], { search: stub });
+  ok(out.handles === 1, 'enrichContact: derived the personal-email handle');
+  ok(out.staged.length === 1 && out.staged[0].site === 'LinkedIn' && out.staged[0].grade === 'E', 'enrichContact: stages ONLY the corroborated hit (LinkedIn), drops the false positive, grade E');
+
+  const none = await EM.enrichContact({ name: 'No Handle', email: 'x@ferc.gov' }, [], { search: stub });
+  ok(none.staged.length === 0 && none.reason === 'no-known-handles', 'enrichContact: no known handle → nothing searched/staged');
+
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();

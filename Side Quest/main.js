@@ -3655,6 +3655,28 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     } catch (e) { console.error('[contacts-query] handler failed:', e.message); }
   }
 
+  // SOCIAL-ENRICH (maigret leaf, on-demand) — "find social/online accounts for <Name>". Local + sidecar;
+  // handled EARLY (before the cloud intake) so it can't be misread as a research assignment. The maigret
+  // run is slow (network to N sites), so we ACK now and run it fire-and-forget, reporting on completion.
+  // Consume-only: corroborated survivors stage as grade-E Puller observations (verify-before-promote).
+  let socialEnrichHandled = false;
+  if (!followupFired && !contactsHandled) {
+    let _se = { isEnrich: false };
+    try { _se = require('./lib/enrich_maigret').detectSocialEnrich(userMessage); } catch {}
+    if (_se.isEnrich && _se.target) {
+      followupFired = true; socialEnrichHandled = true;
+      try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked you to find social/online accounts for "${_se.target}". Tell him briefly you're checking public profiles for handles you already hold and will surface only matches you can corroborate (2+ signals) — one sentence.]` }); }
+      catch (e) { console.error('[social-enrich] ack failed:', e.message); }
+      runSocialEnrich(_se.target).then(async (r) => {
+        try {
+          if (!r || !r.found) { await fireToolFollowup({ io, channel, sessionId, resultText: `[You looked but couldn't find "${_se.target}" among the contacts you hold, so there was nothing to enrich. Tell him plainly, one sentence.]` }); return; }
+          const n = (r.staged || []).length;
+          await fireToolFollowup({ io, channel, sessionId, resultText: `[Done enriching ${r.name}: ${n} corroborated public account(s)${n ? ' — ' + r.staged.map((s) => s.site).join(', ') : ''}. ${n ? "They're staged on his card as UNVERIFIED (grade E) for review — not promoted." : 'Nothing cleared the corroboration bar, so nothing was staged.'} One or two sentences, your voice.]` });
+        } catch (e) { console.error('[social-enrich] report failed:', e.message); }
+      }).catch((e) => console.error('[social-enrich] run failed:', e.message));
+    }
+  }
+
   // ── OPTION 2 — the LLM is the assignment classifier, not the narrow isDirectedTask regex ────────────
   // The regex only fed the router's isAssignment signal, so a genuine assignment it didn't match ("deep
   // background brief on Emergence Water") never reached the cloud intake and fell through to chat — she
@@ -6036,6 +6058,54 @@ async function resolvePlaces(names) {
     }
   } catch {}
   return out;
+}
+
+// SOCIAL ENRICH (maigret leaf, Slice 2) — resolve a named contact, source its KNOWN handles (CRM
+// social_handle + personal-email localpart), run maigret, and STAGE only corroborated (2+ signal) accounts
+// as grade-E Puller OBSERVATIONS (verify-before-promote — NOT beliefs, NOT the CRM). Returns
+// { found, name, staged:[{site,url,...}] }. Fully fail-soft. CONSUME-ONLY: the CRM is read, never written.
+async function runSocialEnrich(targetName) {
+  const name = String(targetName || '').trim();
+  if (name.length < 2) return { found: false };
+  try {
+    const pdb = require('./lib/puller_db'); pdb.init();
+    const em = require('./lib/enrich_maigret');
+
+    // resolve the person across BOTH stores (Puller has company; CRM has crm_id + email + known handles)
+    let pullerT = null; try { pullerT = pdb.findTargetByName(name); } catch {}
+    let crm = null; try { crm = (await lookupCrmContacts([name])).get(name.toLowerCase()) || null; } catch {}
+    if (!pullerT && !crm) return { found: false, name };
+
+    const pEmail = pullerT ? ((pdb.getBelief(pullerT.id, 'email') || {}).value || null) : null;
+    const crmId = (pullerT && pullerT.crm_id != null) ? pullerT.crm_id : (crm && crm.crmId) || null;
+    const contact = { name: (pullerT && pullerT.name) || name, email: pEmail || (crm && crm.email) || null, company: (pullerT && pullerT.company) || null, crmId };
+
+    // KNOWN handles from the CRM (consume-only read) for this contact
+    let crmHandles = [];
+    if (crmId != null && echoSuit && echoSuit.connected) {
+      try {
+        const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql: `SELECT Platform__c AS platform, Handle__c AS handle FROM electoral.social_handle__c WHERE deleted=0 AND Contact__c = ${Number(crmId)}`, params: [] } });
+        if (r && r.ok) { let j; try { j = JSON.parse(r.text); } catch {} crmHandles = ((j && j.rows) || []).filter((x) => x && x.handle); }
+      } catch (e) { console.error('[social-enrich] handle query failed:', e.message); }
+    }
+
+    const result = await em.enrichContact(contact, crmHandles, { topSites: 50, timeout: 8 });
+    const staged = result.staged || [];
+    console.log(`[social-enrich] ${contact.name}: ${result.handles || 0} known handle(s) → ${staged.length} corroborated account(s)${staged.length ? ': ' + staged.map((s) => s.site).join(', ') : ''}`);
+    if (!staged.length) return { found: true, name: contact.name, staged: [] };
+
+    // ensure a Puller target to hang the observations on (adhoc if this person is CRM-only)
+    let targetId = pullerT && pullerT.id;
+    if (!targetId) { try { const t = pdb.createTarget({ kind: 'person', name: contact.name, company: contact.company || null, crmId: crmId || null }); targetId = t && t.id; } catch {} }
+    if (targetId) {
+      for (const s of staged) {
+        try { pdb.addObservation(targetId, { attr: 'social', value: `${s.site}|${s.url}`, kind: 'osint', source: `maigret:${s.handle}`, sourceUrl: s.url, confidence: 0.3 }); }
+        catch (e) { console.error('[social-enrich] observe failed:', e.message); }
+      }
+      console.log(`[social-enrich] staged ${staged.length} grade-E social observation(s) on target ${targetId} (unverified; not promoted)`);
+    }
+    return { found: true, name: contact.name, staged };
+  } catch (e) { console.error('[social-enrich] failed:', e.message); return { found: false, name }; }
 }
 
 // Pull the contacts we HOLD for a contacts-query — from BOTH stores the operator has: the Puller's
