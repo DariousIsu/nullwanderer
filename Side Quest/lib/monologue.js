@@ -1624,12 +1624,25 @@ async function runPullerMove(_recentTurns) {
     return out;
   };
 
-  // web = BROWSER-FIRST fetch (Lucas: "use her browser") — search finds candidate URLs, HER BROWSER
-  // renders + extracts the real page, falling back to the layered wiki/corpus/search fetch when the
-  // browser is unavailable. Used by BOTH enrich (web-fill) and discovery (org staff pages).
+  // web = BROWSER-FIRST fetch (Lucas: "use her browser") — search finds candidate URLs, then HER OWN
+  // browser (lib/web — the ungated, prewarmed Chrome the chat chain uses; NOT the gated Echo browser_*
+  // tools) opens + reads the real page. Falls back to the layered wiki/corpus/search fetch when her
+  // browser yields nothing. Only fires on the idle tick, when her browser is otherwise free.
   const wikiUrl = (n) => 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String(n || '').trim().replace(/\s+/g, '_'));
   const fallbackWeb = async (q) => graphWalk.fetchLayeredSources(q, { fetchPage, recallKnowledge: (nm, o) => echoSuit.recallKnowledge(nm, o), webSearch, wikiUrl, log: (m) => console.log(m) });
-  const web = require('./prospect_fetch').makeWebFetcher({ dispatch: (t) => echoSuit.dispatch(t), webSearch, fallback: fallbackWeb, log: (m) => console.log(m) });
+  const ownBrowser = require('./web');
+  const pageFetch = async (url) => {
+    try {
+      if (!ownBrowser.isConnected()) { try { await ownBrowser.ensure(); } catch { return null; } }
+      const o = await ownBrowser.open(url);
+      if (!o || !o.ok || o.blocker) return null;   // nav failed or hit a sign-in/CAPTCHA wall → skip
+      const r = await ownBrowser.read();
+      if (!r || !r.ok) return null;
+      const text = String(r.text || '').trim();
+      return text ? { text, url: o.url || url } : null;
+    } catch { return null; }
+  };
+  const web = require('./prospect_fetch').makeWebFetcher({ pageFetch, webSearch, fallback: fallbackWeb, log: (m) => console.log(m) });
   let extract = null;
   try {
     const src = (require('./models').sources() || []).find(s => s.tier === 'cloud' && s.token);
