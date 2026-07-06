@@ -3623,6 +3623,38 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const routeAllows = (r) => !routerOn || turnRoute.route === r;
   const routeAllowsAny = (...rs) => !routerOn || rs.includes(turnRoute.route);
 
+  // CONTACTS — served LOCAL and EARLY, before ANY cloud call. A "list the contacts we hold" request is
+  // pure Puller/CRM data; it must NOT depend on the cognition/grounding cloud path. (Regression: with the
+  // cloud endpoint down (ECONNREFUSED), an unguarded upstream fetch aborted the whole turn → the list
+  // request died as "fetch failed" even though the answer is entirely local.) Router priority already put
+  // control/correction/stop ABOVE contacts, so if the route is 'contacts' this is not one of those turns —
+  // safe to short-circuit here. The canvas emit is local IPC; only the voice line (fireToolFollowup) uses
+  // the model, and it runs AFTER the table lands + is wrapped, so a cloud outage still leaves the list.
+  let contactsHandled = false;
+  if (routerOn && turnRoute.route === 'contacts' && !followupFired) {
+    try {
+      const cq = require('./lib/contacts_query');
+      const ask = _contactsQ && _contactsQ.isQuery ? _contactsQ : cq.detect(userMessage);
+      const rows = await gatherHeldContacts();
+      const sel = cq.select(rows, { sectors: ask.sectors, company: ask.company, limit: ask.limit || 200 });
+      const lbl = cq.label(ask);
+      if (sel.total > 0) {
+        const tbl = cq.toTable(sel);
+        const tabKey = `contacts-${lbl.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 32)}-${Date.now().toString(36)}`;
+        try { const callTool = pollCallTool(); await callTool('saga_canvas_open_tab', { mode: 'DOC', tab_key: tabKey, title: lbl }); await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'table', data: { headers: tbl.headers, rows: tbl.rows, caption: tbl.caption } }); }
+        catch (e) { console.error('[contacts-query] canvas emit failed:', e.message); }
+        console.log(`[contacts-query] "${lbl}" → ${sel.shown}/${sel.total} on canvas (${sel.withEmail} w/ email)`);
+        followupFired = true; contactsHandled = true;
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You just pulled ${sel.total} ${lbl} you ALREADY HAVE onto ${userName}'s canvas${sel.total > sel.shown ? ` (showing the top ${sel.shown})` : ''} — ${sel.withEmail} with emails. Tell him briefly you put the list on his canvas; make clear these are contacts you already hold, NOT a new research run. Offer to research more or narrow it if he wants. Your own voice, one or two sentences.]` }); }
+        catch (e) { console.error('[contacts-query] voice line failed (list already on canvas):', e.message); }
+      } else {
+        followupFired = true; contactsHandled = true;
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked for ${lbl}, but you don't hold any matching contacts yet. Tell him plainly you don't have those on hand, and ASK whether you should research them (that would kick off a run) — don't start researching without his go. One or two sentences.]` }); }
+        catch (e) { console.error('[contacts-query] voice line failed:', e.message); }
+      }
+    } catch (e) { console.error('[contacts-query] handler failed:', e.message); }
+  }
+
   // ── OPTION 2 — the LLM is the assignment classifier, not the narrow isDirectedTask regex ────────────
   // The regex only fed the router's isAssignment signal, so a genuine assignment it didn't match ("deep
   // background brief on Emergence Water") never reached the cloud intake and fell through to chat — she
@@ -3981,32 +4013,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // CONTACTS QUERY — "list / give me the contacts we HOLD" → pull from the Puller (+CRM), drop a canvas
   // list, and reply. Runs ABOVE the intake/assignment blocks so a contact-list ask never becomes a
   // research run (the "cleanest energy industry contacts → deep-research" bug). Sets followupFired so the
-  // intake/operator blocks below suppress. Only when we actually hold matching contacts; else it says so
-  // and offers to research (never silently starts one).
-  let contactsHandled = false;
-  // NOTE: docQaHandled is declared later in this function — do NOT reference it here (TDZ). The
-  // route==='contacts' check already excludes a doc-QA turn (mutually-exclusive routes).
-  if (routerOn && turnRoute.route === 'contacts' && !directedStopHandled && !expandHandled && !correctionHandled && !followupFired) {
-    try {
-      const cq = require('./lib/contacts_query');
-      const ask = _contactsQ && _contactsQ.isQuery ? _contactsQ : cq.detect(userMessage);
-      const rows = await gatherHeldContacts();
-      const sel = cq.select(rows, { sectors: ask.sectors, company: ask.company, limit: ask.limit || 200 });
-      const lbl = cq.label(ask);
-      if (sel.total > 0) {
-        const tbl = cq.toTable(sel);
-        const tabKey = `contacts-${lbl.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 32)}-${Date.now().toString(36)}`;
-        try { const callTool = pollCallTool(); await callTool('saga_canvas_open_tab', { mode: 'DOC', tab_key: tabKey, title: lbl }); await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'table', data: { headers: tbl.headers, rows: tbl.rows, caption: tbl.caption } }); }
-        catch (e) { console.error('[contacts-query] canvas emit failed:', e.message); }
-        console.log(`[contacts-query] "${lbl}" → ${sel.shown}/${sel.total} on canvas (${sel.withEmail} w/ email)`);
-        followupFired = true; contactsHandled = true;
-        await fireToolFollowup({ io, channel, sessionId, resultText: `[You just pulled ${sel.total} ${lbl} you ALREADY HAVE onto ${userName}'s canvas${sel.total > sel.shown ? ` (showing the top ${sel.shown})` : ''} — ${sel.withEmail} with emails. Tell him briefly you put the list on his canvas; make clear these are contacts you already hold, NOT a new research run. Offer to research more or narrow it if he wants. Your own voice, one or two sentences.]` });
-      } else {
-        followupFired = true; contactsHandled = true;
-        await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked for ${lbl}, but you don't hold any matching contacts yet. Tell him plainly you don't have those on hand, and ASK whether you should research them (that would kick off a run) — don't start researching without his go. One or two sentences.]` });
-      }
-    } catch (e) { console.error('[contacts-query] handler failed:', e.message); }
-  }
+  // (The CONTACTS route is handled LOCAL + EARLY, right after routing above — before any cloud call — so a
+  // cloud outage can't kill a local list request. `contactsHandled` set there still gates the blocks below.)
 
   let intakeRoute = null;
   let isAssignment = false;
