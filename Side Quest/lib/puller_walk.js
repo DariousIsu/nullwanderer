@@ -29,7 +29,10 @@ const beliefs = require('../studio/puller_beliefs');
 const ATTEMPT_TTL_MS = 6 * 60 * 60 * 1000;   // don't re-attempt the same target for 6h (avoid burning moves on a stubborn one)
 const ATTEMPT_KEY = 'pullerwalk.attempted';   // getMeta/setMeta JSON [[key, ts], …], TTL-pruned
 const PATTERN_FLOOR = 0.45;                    // only pattern-fill when the domain has a real learned lean (not a bare prior)
-const PROSPECT_TTL_MS = 24 * 60 * 60 * 1000;  // don't re-prospect the same org more than once a day
+const PROSPECT_TTL_MS = 24 * 60 * 60 * 1000;  // a SUCCESSFUL prospect: don't re-mine the same org for a day
+const PROSPECT_BARREN_TTL_MS = 3 * 60 * 60 * 1000;  // a BARREN attempt (no page/people/net-new): retry in 3h,
+//   NOT 24h. The old code burned a full-day cooldown the instant an org was picked — before the fetch — so a
+//   single fruitless pass benched a viable org for a day and the lane churned all ~250 orgs then slept for hours.
 const PROSPECT_KEY = 'pullerwalk.prospected';
 const MAX_NEW_PER_ORG = 20;                    // a real leadership page lists 15-20 people; take the whole team
                                                // (safe now that discovery only mints from a real page her browser read)
@@ -105,6 +108,14 @@ function orgVerified(found, target, text) {
   return false;
 }
 
+// --- pure: a MASKED / partial contact value — a data-broker "reveal" teaser ("03XXXX", "j***@x.com",
+// "•••", "[redacted]"). Never land one: it's not a real address, and it read as a confident value in the
+// rocketreach leak. Belt-and-suspenders alongside the BROKER_RE domain skip. ---------------------------
+function looksMasked(v) {
+  const s = String(v == null ? '' : v);
+  return /\*{2,}|[•●]{2,}|X{3,}|\.{4,}|\b(redacted|hidden|protected)\b/i.test(s);
+}
+
 // --- pure: from extracted people, the row that matches our target (token overlap on the name) -------
 function pickPersonRow(people, name) {
   const want = norm(name).split(' ').filter(Boolean);
@@ -176,10 +187,13 @@ async function runPullerMove(deps = {}) {
         const found = pickPersonRow((cards && cards.people) || [], pick.name);
         // VERIFY the found contact is actually at THIS org before landing (don't trust a same-name hit at
         // another company). Unverified → skip (fall through to no-fill) rather than land a maybe-wrong email.
-        if (found && (found.email || found.phone) && orgVerified(found, pick, text)) {
-          if (found.email) { await doLand({ targetId: pick.id, attr: 'email', value: found.email, kind: 'guess', confidence: 0.6, source: 'web', sourceUrl: url, derivation: 'web' });
-                             await doObserve({ sourceEntity: pick.name, relation: 'email', target: found.email, url, grade: 'C', confidence: 0.6, status: 'promoted' }); }
-          if (found.phone) { await doLand({ targetId: pick.id, attr: 'phone', value: found.phone, kind: 'guess', confidence: 0.6, source: 'web', sourceUrl: url, derivation: 'web' }); }
+        // reject MASKED values (broker teasers) before landing — a partial "03XXXX" is not a contact
+        const fEmail = (found && found.email && !looksMasked(found.email)) ? found.email : null;
+        const fPhone = (found && found.phone && !looksMasked(found.phone)) ? found.phone : null;
+        if ((fEmail || fPhone) && orgVerified(found, pick, text)) {
+          if (fEmail) { await doLand({ targetId: pick.id, attr: 'email', value: fEmail, kind: 'guess', confidence: 0.6, source: 'web', sourceUrl: url, derivation: 'web' });
+                        await doObserve({ sourceEntity: pick.name, relation: 'email', target: fEmail, url, grade: 'C', confidence: 0.6, status: 'promoted' }); }
+          if (fPhone) { await doLand({ targetId: pick.id, attr: 'phone', value: fPhone, kind: 'guess', confidence: 0.6, source: 'web', sourceUrl: url, derivation: 'web' }); }
           await doRefresh();
           log && log(`[puller-walk] web-fill ${pick.name} → ${found.email || found.phone} (${url || 'no-url'})`);
           return { acted: true, mode: 'web', targetId: pick.id, name: pick.name, email: found.email || null, phone: found.phone || null, url };
@@ -199,16 +213,24 @@ async function runPullerMove(deps = {}) {
 // ===================================================================================================
 function orgKeyOf(o) { return norm(o && (o.name || o)); }
 
-// TTL cooldown for prospected orgs — same shape as the attempt set, separate key/TTL.
+// TTL cooldown for prospected orgs. Each entry = [key, ts, barren] — a BARREN attempt expires after the
+// short TTL (retry-able soon), a SUCCESSFUL one after the full day.
 function loadProspected(getMeta, now) {
   let arr = []; try { arr = JSON.parse((getMeta && getMeta(PROSPECT_KEY)) || '[]'); } catch {}
-  const fresh = (Array.isArray(arr) ? arr : []).filter(e => Array.isArray(e) && (now - (Number(e[1]) || 0) < PROSPECT_TTL_MS));
+  const fresh = (Array.isArray(arr) ? arr : []).filter(e => {
+    if (!Array.isArray(e)) return false;
+    const ttl = (Number(e[2]) === 1) ? PROSPECT_BARREN_TTL_MS : PROSPECT_TTL_MS;
+    return (now - (Number(e[1]) || 0)) < ttl;
+  });
   return { set: new Set(fresh.map(e => e[0])), arr: fresh };
 }
-function recordProspected({ getMeta, setMeta, now, key }) {
+// Upsert the org's cooldown. barren=true → short TTL (reserve it so it isn't re-picked this tick, but let it
+// come back in ~3h); barren=false → full-day cooldown (it actually yielded contacts).
+function recordProspected({ getMeta, setMeta, now, key, barren = false }) {
   const { arr } = loadProspected(getMeta, now);
-  if (!arr.some(e => e[0] === key)) arr.push([key, now]);
-  try { setMeta && setMeta(PROSPECT_KEY, JSON.stringify(arr.slice(-500))); } catch {}
+  const next = arr.filter(e => e[0] !== key);
+  next.push([key, now, barren ? 1 : 0]);
+  try { setMeta && setMeta(PROSPECT_KEY, JSON.stringify(next.slice(-500))); } catch {}
 }
 
 // The operator's prospecting SECTORS (Lucas): AI, datacenters, power generation, power/energy transition,
@@ -235,10 +257,20 @@ function orgSectorScore(name) {
 // recently-prospected + junk + generic legislatures; RANK the operator's sectors first (AI/datacenter/
 // power/weather), then domain-bearing, then active order.
 const _JUNK_ORG = /^(not reported|unknown|n\/?a|none|office of|the office)$/i;
+// A "company" that's actually a bare JOB TITLE or an org-chart FRAGMENT, not a prospectable organization —
+// these leaked from bad company data ("Treasurer", "Auditor", "Office of X / Chief Y Officer"). A title
+// alone → wrong seed (prospecting "Auditor" found a random staff directory). Pure name checks.
+const _TITLE_JUNK = /^(treasurer|auditor|comptroller|secretary|clerk|registrar|director|administrator|manager|chief|officer|president|chair(?:man|woman|person)?|commissioner|coordinator|analyst|associate|assistant|deputy|counsel)$/i;
+function _looksLikeTitleNotOrg(nm) {
+  if (_TITLE_JUNK.test(nm)) return true;                     // a bare title as the whole "company"
+  if (/\s\/\s/.test(nm)) return true;                        // an org-chart PATH ("Office of X / Chief Y Officer")
+  if (/^chief\b[\s\S]*\bofficer$/i.test(nm)) return true;    // "Chief Environmental Officer" — a role, not an org
+  return false;
+}
 function pickSeedOrg(orgs, { prospectedKeys = new Set() } = {}) {
   const usable = (Array.isArray(orgs) ? orgs : []).map((o, i) => ({ o, i, score: orgSectorScore(o && o.name) })).filter(({ o, score }) => {
     const nm = String((o && o.name) || '').trim();
-    if (nm.length < 3 || _JUNK_ORG.test(nm) || score < 0) return false;   // too short / junk / generic legislature
+    if (nm.length < 3 || _JUNK_ORG.test(nm) || _looksLikeTitleNotOrg(nm) || score < 0) return false;   // too short / junk / a title, not an org / generic legislature
     if (prospectedKeys.has(orgKeyOf(o))) return false;
     return true;
   });
@@ -269,7 +301,7 @@ async function runDiscoveryMove(deps = {}) {
     const { set: prospectedKeys } = loadProspected(getMeta, nowTs);
     const seed = pickSeedOrg(orgs, { prospectedKeys });
     if (!seed) return { acted: false, reason: 'no-seed' };
-    recordProspected({ getMeta, setMeta, now: nowTs, key: orgKeyOf(seed) });
+    recordProspected({ getMeta, setMeta, now: nowTs, key: orgKeyOf(seed), barren: true });   // reserve short; upgraded on success
 
     let sources = []; try { sources = (await web(buildOrgProspectQuery(seed))) || []; } catch {}
     if (!sources.length) return { acted: false, reason: 'no-sources', org: seed.name };
@@ -295,19 +327,20 @@ async function runDiscoveryMove(deps = {}) {
       try { id = await createTarget({ name: p.name, company: seed.name, domain: seed.domain || null, title: p.title || null, sourceUrl: url }); } catch {}
       if (id == null) continue;
       created.push({ id, name: p.name });
-      if (p.email && typeof land === 'function') { try { await land({ targetId: id, attr: 'email', value: p.email, kind: 'guess', confidence: 0.6, source: 'web', sourceUrl: url, derivation: 'web-prospect' }); } catch {} }
+      if (p.email && !looksMasked(p.email) && typeof land === 'function') { try { await land({ targetId: id, attr: 'email', value: p.email, kind: 'guess', confidence: 0.6, source: 'web', sourceUrl: url, derivation: 'web-prospect' }); } catch {} }
       if (typeof observe === 'function') { try { await observe({ sourceEntity: p.name, relation: 'works_for', target: seed.name, url, grade: 'C', confidence: 0.6, status: 'promoted' }); } catch {} }
       if (typeof refresh === 'function') { try { await refresh(id); } catch {} }
     }
     if (!created.length) return { acted: false, reason: 'no-create', org: seed.name };
+    recordProspected({ getMeta, setMeta, now: nowTs, key: orgKeyOf(seed), barren: false });   // yielded contacts → full-day cooldown
     log && log(`[puller-walk] discovered ${created.length} new @ "${seed.name}" (${url || 'no-url'})`);
     return { acted: true, mode: 'discover', org: seed.name, created, count: created.length, url };
   } catch (e) { log && log('[puller-walk] discovery failed: ' + (e && e.message)); return { acted: false, reason: 'error' }; }
 }
 
 module.exports = {
-  runPullerMove, runDiscoveryMove, pickTarget, patternFillCandidate, buildContactSearchQuery, pickPersonRow, orgVerified,
+  runPullerMove, runDiscoveryMove, pickTarget, patternFillCandidate, buildContactSearchQuery, pickPersonRow, orgVerified, looksMasked,
   pickSeedOrg, orgSectorScore, buildOrgProspectQuery, orgKeyOf, loadProspected, recordProspected,
   attemptKeyOf, loadAttempted, recordAttempt, norm,
-  ATTEMPT_TTL_MS, ATTEMPT_KEY, PATTERN_FLOOR, PROSPECT_TTL_MS, PROSPECT_KEY, MAX_NEW_PER_ORG,
+  ATTEMPT_TTL_MS, ATTEMPT_KEY, PATTERN_FLOOR, PROSPECT_TTL_MS, PROSPECT_BARREN_TTL_MS, PROSPECT_KEY, MAX_NEW_PER_ORG,
 };

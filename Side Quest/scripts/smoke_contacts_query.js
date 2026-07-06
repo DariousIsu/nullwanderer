@@ -49,6 +49,12 @@ const compRows = [
 ];
 ok(CQ.select(compRows, { sectors: ['energy'] }).rows[0].name === 'Full Guy', 'select: at equal confidence, MOST COMPLETE sorts first');
 ok(energy.total === 3 && !energy.rows.some((r, i) => energy.rows.findIndex(x => x.name === r.name && x.company === r.company) !== i), 'select: dedups by name+company');
+// cross-source: same person in Puller + CRM under a DIFFERENT company string, but the SAME email → collapse
+const xsrc = CQ.select([
+  { name: 'Pat Green', email: 'pat@aep.com', company: 'AEP Energy', title: 'VP', confidence: 0.7 },        // Puller
+  { name: 'Pat Green', email: 'pat@aep.com', company: 'American Electric Power', confidence: 0.9 },        // CRM (diff company str)
+], { sectors: ['energy'] });
+ok(xsrc.total === 1 && xsrc.rows[0].confidence === 0.9, 'select: cross-source same-email dup collapses (keeps the higher-confidence row)');
 ok(CQ.select(rows, { sectors: ['energy'], limit: 1 }).shown === 1, 'select: honors an explicit limit');
 // malformed initials-only names (from a bad extraction) are dropped even at high confidence
 ok(CQ.select([{ name: 'P. C. V. C.', email: 'p.c@ferc.gov', company: 'Duke Energy', confidence: 0.97 }, { name: 'Real Person', email: 'r@aep.com', company: 'AEP', confidence: 0.6 }], { sectors: ['energy'] }).rows.every(r => r.name !== 'P. C. V. C.'), 'select: drops initials-only junk names even at 97% confidence');

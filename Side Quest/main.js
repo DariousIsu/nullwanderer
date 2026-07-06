@@ -6142,12 +6142,14 @@ async function gatherHeldContacts() {
     }
   } catch (e) { console.error('[contacts-query] puller gather failed:', e.message); }
   // 2) CRM — every emailed contact + its org (account) name, most-complete first. Bounded safety cap. The
-  // CRM has NO per-row email-quality score (Email_Quality_Score__c is 100% null), so confidence is a flat
-  // authoritative prior modulated only by the deliverable flag: deliverable→0.95, undeliverable→0.6, else 0.9.
+  // CRM has NO per-row email-quality score (Email_Quality_Score__c is 100% null). If the deliverable flag
+  // is ever set it governs (deliverable→0.95, undeliverable→0.6); otherwise, instead of a dead-flat 0.9 for
+  // all ~13k, spread by the real quality signals that DO exist: a currently-active/elected contact and a
+  // 'complete' enrichment stage are more trustworthy → 0.88 base + up to +0.07, so ranking isn't arbitrary.
   try {
     if (echoSuit && echoSuit.connected) {
       const sql = `SELECT c.id, c.FirstName, c.LastName, c.Title, c.Email, c.Phone, c.MobilePhone,
-            c.Email_Deliverable__c AS deliverable, a.Name AS account_name
+            c.Email_Deliverable__c AS deliverable, c.Active_Elected__c AS active, c.Enrichment_Stage__c AS enrichment, a.Name AS account_name
           FROM electoral.contact c
           LEFT JOIN electoral.account a ON a.id = c.AccountId
           WHERE c.deleted=0 AND c.Email IS NOT NULL AND TRIM(c.Email) <> ''
@@ -6162,7 +6164,14 @@ async function gatherHeldContacts() {
         const name = `${String(row.FirstName || '').trim()} ${String(row.LastName || '').trim()}`.trim();
         if (name.length < 2) continue;
         const del = row.deliverable;
-        const confidence = (del === 1 || del === '1') ? 0.95 : ((del === 0 || del === '0') ? 0.6 : 0.9);
+        let confidence;
+        if (del === 1 || del === '1') confidence = 0.95;
+        else if (del === 0 || del === '0') confidence = 0.6;
+        else {   // no deliverable signal → spread by active-elected + enrichment-complete (0.88–0.95)
+          const active = row.active === 1 || row.active === '1';
+          const enriched = String(row.enrichment || '').toLowerCase() === 'complete';
+          confidence = 0.88 + (active ? 0.04 : 0) + (enriched ? 0.03 : 0);
+        }
         out.push({ name, email: String(row.Email || '').trim() || null, phone: String(row.Phone || row.MobilePhone || '').trim() || null,
                    company: String(row.account_name || '').trim() || null, title: String(row.Title || '').trim() || null, confidence });
       }

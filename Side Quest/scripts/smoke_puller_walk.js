@@ -133,6 +133,24 @@ ok(PW.orgVerified({ email: 'x@sub.duke-energy.com' }, { domain: 'duke-energy.com
   ok(PW.pickSeedOrg([{ name: 'OpenAI' }], { prospectedKeys: new Set([PW.orgKeyOf({ name: 'OpenAI' })]) }) === null, 'pickSeedOrg: a recently-prospected org is skipped');
   ok(PW.buildOrgProspectQuery({ name: 'Duke Energy' }) === 'Duke Energy staff directory team leadership', 'buildOrgProspectQuery: org staff/roster query');
 
+  // pickSeedOrg: a bare TITLE or an org-chart FRAGMENT is NOT a prospectable org (bad company data)
+  ok(PW.pickSeedOrg([{ name: 'Treasurer' }, { name: 'Auditor' }]) === null, 'pickSeedOrg: bare job titles (Treasurer/Auditor) are not orgs → null');
+  ok(PW.pickSeedOrg([{ name: 'Office of Environmental Programs / Chief Environmental Officer' }]) === null, 'pickSeedOrg: an org-chart path (" / ") is skipped');
+  ok(PW.pickSeedOrg([{ name: 'Treasurer' }, { name: 'Duke Energy', domain: 'd.com' }]).name === 'Duke Energy', 'pickSeedOrg: skips the title, takes the real org');
+
+  // looksMasked: reject broker "reveal" teasers, keep real values
+  ok(PW.looksMasked('+44 7841 03XXXX') && PW.looksMasked('j***@x.com') && PW.looksMasked('[redacted]'), 'looksMasked: catches XXXX / *** / redacted');
+  ok(!PW.looksMasked('jane.doe@raineycenter.org') && !PW.looksMasked('919-715-3038'), 'looksMasked: passes real email + phone');
+
+  // cooldown split: a BARREN attempt expires in 3h; a SUCCESSFUL one holds for 24h
+  const cd = new Map();
+  const cdG = (k) => cd.get(k) || null, cdS = (k, v) => cd.set(k, v);
+  PW.recordProspected({ getMeta: cdG, setMeta: cdS, now: 0, key: 'barrenorg', barren: true });
+  PW.recordProspected({ getMeta: cdG, setMeta: cdS, now: 0, key: 'goodorg', barren: false });
+  const at4h = PW.loadProspected(cdG, 4 * 60 * 60 * 1000).set;
+  ok(!at4h.has('barrenorg'), 'cooldown: a barren org is retry-able after 4h (short TTL expired)');
+  ok(at4h.has('goodorg'), 'cooldown: a successful org is still cooling at 4h (24h TTL)');
+
   // runDiscoveryMove: search org → extract people → filterNew dedup → mint net-new targets
   const meta3 = new Map();
   const createdIds = []; const landed3 = [];

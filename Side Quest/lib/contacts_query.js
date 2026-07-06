@@ -86,7 +86,6 @@ function matchesSectors(company, sectors) {
 // Returns { rows, total, shown, headers }. Pure.
 function select(rows, { sectors = [], company = null, limit = 200 } = {}) {
   const comp = company ? _norm(company) : null;
-  const seen = new Set();
   const filtered = [];
   for (const r of (Array.isArray(rows) ? rows : [])) {
     const name = String((r && r.name) || '').trim();
@@ -94,8 +93,6 @@ function select(rows, { sectors = [], company = null, limit = 200 } = {}) {
     const rc = String((r && r.company) || '');
     if (!matchesSectors(rc, sectors)) continue;
     if (comp && !_norm(rc).includes(comp)) continue;
-    const key = _norm(name) + '|' + _norm(rc);
-    if (seen.has(key)) continue; seen.add(key);
     filtered.push({
       name,
       email: String((r && r.email) || '').trim() || null,
@@ -109,9 +106,22 @@ function select(rows, { sectors = [], company = null, limit = 200 } = {}) {
   // 200 most complete" is a common ask), then emailed contacts, then company.
   const completeness = (r) => (r.email ? 1 : 0) + (r.phone ? 1 : 0) + (r.company ? 1 : 0) + (r.title ? 1 : 0);
   filtered.sort((a, b) => (b.confidence - a.confidence) || (completeness(b) - completeness(a)) || ((b.email ? 1 : 0) - (a.email ? 1 : 0)) || _norm(a.company).localeCompare(_norm(b.company)));
-  const total = filtered.length;
-  const shown = filtered.slice(0, Math.max(1, limit || 200));
-  return { rows: shown, total, shown: shown.length, withEmail: filtered.filter(r => r.email).length, headers: ['Name', 'Email', 'Company', 'Title', 'Confidence'] };
+  // DEDUP after sorting (so the BEST row per person wins): collapse same name+company AND same email — the
+  // latter catches a person held in BOTH the Puller and the CRM under a different company string (the
+  // crm_id-link dedup upstream only catches linked pairs). Different people who share a name survive (they
+  // differ by email/company); only true same-person duplicates fold.
+  const seenNC = new Set(), seenEmail = new Set(), deduped = [];
+  for (const r of filtered) {
+    const nc = _norm(r.name) + '|' + _norm(r.company);
+    const em = r.email ? _norm(r.email) : null;
+    if (seenNC.has(nc)) continue;
+    if (em && seenEmail.has(em)) continue;
+    seenNC.add(nc); if (em) seenEmail.add(em);
+    deduped.push(r);
+  }
+  const total = deduped.length;
+  const shown = deduped.slice(0, Math.max(1, limit || 200));
+  return { rows: shown, total, shown: shown.length, withEmail: deduped.filter(r => r.email).length, headers: ['Name', 'Email', 'Company', 'Title', 'Confidence'] };
 }
 
 // The canvas TABLE payload (headers + rows) for saga_canvas_add_block block_type='table'. Pure.
