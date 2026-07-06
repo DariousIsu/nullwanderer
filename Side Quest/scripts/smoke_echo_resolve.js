@@ -342,6 +342,29 @@ function dispatch({ sibling = true } = {}) {
   const rmNil = await echo.resolveMention('Zorblax Institute', { dispatch: async (tag) => tag.name === 'search_entities' ? { ok: true, text: '{"result":[]}' } : (tag.name === 'db_query' ? { ok: true, text: '{"rows":[]}' } : { ok: false }) });
   ok(rmNil.status === 'nil', 'resolveMention: a true non-match → nil (fuzzy recovery finds nothing, no false resolve)');
 
+  // --- _distinctEntities: group by ENTITY IDENTITY (QID), not name-key — the instance-blind fix ---
+  // a db_query dispatch that returns the given entity rows for the requested ids
+  const dbOf = (byId) => async (tag) => tag.name === 'db_query'
+    ? { ok: true, text: JSON.stringify({ rows: Object.values(byId) }) } : { ok: false };
+  // Trump: two records share Q22686 (collapse) + an FEC stub with NO qid but a compatible name (folds) → 1 entity
+  const trumpRows = {
+    a: { id: 1528616, name: 'Donald Trump (US)', degree: 13, qid: 'Q22686', et: 'person', est: 'us_executive' },
+    b: { id: 1655518, name: 'Donald Trump [wd:Q22686]', degree: 8, qid: 'Q22686', et: 'person', est: 'mayor' },
+    c: { id: 1547331, name: 'Donald J. Trump [FEC:P80001571]', degree: 1556, qid: null, et: 'person', est: null },
+  };
+  const dTrump = await echo._distinctEntities(dbOf(trumpRows), [{ id: 1528616 }, { id: 1655518 }, { id: 1547331 }]);
+  ok(dTrump.length === 1 && dTrump[0].qid === 'Q22686', '_distinctEntities: Trump twins (same QID) + FEC stub (name-compatible) collapse to ONE entity');
+
+  // Two genuinely DIFFERENT people (different QIDs, incompatible extra names) → TWO distinct entities → ambiguous
+  const kennedyRows = {
+    a: { id: 900, name: 'John F. Kennedy', degree: 40, qid: 'Q9696', et: 'person', est: 'us_president' },
+    b: { id: 901, name: 'John F. Kennedy (GA)', degree: 1533, qid: 'Q111', et: 'person', est: 'state_senator' },
+  };
+  const dK = await echo._distinctEntities(dbOf(kennedyRows), [{ id: 900 }, { id: 901 }]);
+  ok(dK.length === 2, '_distinctEntities: two same-name people with DIFFERENT QIDs → two entities (→ ambiguous/ASK)');
+
+  ok(echo._nameCompatible('Donald Trump', 'Donald J. Trump') && !echo._nameCompatible('John Adam Smith', 'John Robert Smith'), '_nameCompatible: subset-chain same person; incompatible extras different people');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

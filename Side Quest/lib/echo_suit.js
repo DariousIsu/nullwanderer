@@ -850,7 +850,10 @@ async function resolveMention(name, { preferType = null, dispatch = null, contex
   // NAME-GATE: search_entities also matches on SUMMARIES, so it drags in tangential people (a staffer
   // whose bio names the target). Keep only candidates whose NAME actually carries the query's core tokens.
   const gated = fuzzy ? cands : _nameGate(cands, _coreNameKey(q));
-  const distinct = _distinctNames(gated);
+  // DISTINCT by ENTITY IDENTITY (QID), not name-key — so same-name-DIFFERENT-entity ("John F. Kennedy" the
+  // President vs "…(GA)" the state senator) is correctly ambiguous, while duplicate records of ONE entity
+  // collapse to their richest. This is the instance-blind-resolution fix.
+  const distinct = await _distinctEntities(d, gated);
   // >1 genuinely-different name (not dup records / initial variants) → ambiguous. Before asking, try
   // CONTEXT: the doc's co-occurring entities may pick the right candidate (R2). Only a strict winner
   // resolves; otherwise stay ambiguous (bias-to-clarify).
@@ -879,10 +882,12 @@ async function resolveMention(name, { preferType = null, dispatch = null, contex
     }
     return { status: 'ambiguous', mention: n, candidates: distinct.slice(0, 4).map(c => c.name) };
   }
-  // single candidate — resolve it. For a FUZZY match, use the recovered stored name (q is the typo, which
-  // quick_lookup can't resolve); a fuzzy single match is already name-verified, so trust it even if thin.
-  if (fuzzy) { const obj = await recallObject(distinct[0].name, { preferType, dispatch: d }); return obj ? { status: 'resolved', mention: n, object: obj, via: 'fuzzy' } : { status: 'nil', mention: n, reason: 'no-object' }; }
-  const obj = await recallObject(q, { preferType, dispatch: d });
+  // single ENTITY — resolve its RICHEST record (distinct[0] is already the richest by degree). Using the
+  // rep's exact stored name (not the raw query q) is what defeats the instance-blind FTS pick: q="John
+  // Curtis" fed to quick_lookup grabs a degree-1 bill, but the rep name is the degree-320 Senator's record.
+  const rep = distinct[0];
+  if (fuzzy) { const obj = await recallObject(rep.name, { preferType, dispatch: d }); return obj ? { status: 'resolved', mention: n, object: obj, via: 'fuzzy' } : { status: 'nil', mention: n, reason: 'no-object' }; }
+  const obj = await recallObject((rep && rep.name) || q, { preferType: preferType || (rep && rep.type) || null, dispatch: d });
   if (!obj) return { status: 'nil', mention: n, reason: 'no-object' };
   // Resolve ONLY when a record genuinely DOMINATES (rich object). Several thin same-name records with no
   // clear winner = we can't safely pick → ask rather than popularity-guess (the overshadowing trap).
@@ -916,6 +921,50 @@ function _distinctNames(cands) {
   const seen = new Map();
   for (const c of cands) { const k = _coreNameKey(c.name) || String(c.name || '').toLowerCase(); if (!seen.has(k)) seen.set(k, c); }
   return [...seen.values()];
+}
+// DISTINCT ENTITIES by IDENTITY (wikidata_qid, else entity id) — THE instance-blind fix. "John F. Kennedy"
+// (President) and "John F. Kennedy (GA)" (a state senator) collapse to the SAME core-NAME key (the "(GA)" is
+// stripped), so _distinctNames wrongly sees ONE entity and the naive FTS picks the higher-degree wrong one.
+// Grouping by QID instead: the two are DIFFERENT entities (different QIDs) → genuinely ambiguous (→ ASK),
+// while the many duplicate records of ONE entity (Trump's mayor+president twins share a QID) collapse to
+// their RICHEST record. One db_query enriches every candidate with qid+degree. Returns one richest
+// representative per distinct entity, degree-desc. Fail-soft → name-key distinctness. Never throws.
+async function _distinctEntities(d, cands) {
+  const list = Array.isArray(cands) ? cands : [];
+  const ids = [...new Set(list.map(c => Number(c && c.id)).filter(Number.isInteger))];
+  if (ids.length < 2) return _distinctNames(list).map(c => ({ id: c.id, name: c.name, qid: null, degree: 0, type: c.entity_type || null, subtype: null }));
+  let rows = [];
+  try {
+    const r = await d({ kind: 'do', name: 'db_query', args: { sql: `SELECT id, name, degree, wikidata_qid qid, entity_type et, entity_subtype est FROM entities WHERE id IN (${ids.join(',')})` } });
+    const j = JSON.parse(r.text); rows = (j && j.rows) || [];
+  } catch { rows = []; }
+  if (!rows.length) return _distinctNames(list).map(c => ({ id: c.id, name: c.name, qid: null, degree: 0, type: c.entity_type || null, subtype: null }));
+  const cs = rows.map(row => ({ id: row.id, name: String(row.name || ''), qid: (row.qid && String(row.qid).trim()) || null, degree: Number(row.degree) || 0, type: row.et || null, subtype: row.est || null }))
+    .sort((a, b) => (b.degree || 0) - (a.degree || 0));   // richest first so groups seed on the best record
+  // 1) records that SHARE a wikidata_qid are the same entity — collapse to the richest.
+  const groups = [];   // each: the richest representative of a distinct entity
+  const byQid = new Map();
+  for (const c of cs) {
+    if (!c.qid) continue;
+    if (byQid.has(c.qid)) continue;   // richest-first → first seen is the representative
+    byQid.set(c.qid, c); groups.push(c);
+  }
+  // 2) a QID-LESS record (an FEC/committee stub of the same person, e.g. "Donald J. Trump [FEC:…]") folds
+  // into a name-compatible same-core-type group rather than counting as a separate entity (which would
+  // trigger a spurious "did you mean…?"). No compatible group → it's its own distinct entity.
+  for (const c of cs) {
+    if (c.qid) continue;
+    const host = groups.find(g => (g.type || null) === (c.type || null) && _nameCompatible(g.name, c.name));
+    if (!host) groups.push(c);
+  }
+  return groups.sort((a, b) => (b.degree || 0) - (a.degree || 0));
+}
+// Pure: two names are the same person if one core-name is a token-subset of the other ("Donald Trump" ⊆
+// "Donald J Trump"); different people carry incompatible extras. Mirrors _sameEntity's pairwise rule.
+function _nameCompatible(a, b) {
+  const ka = _coreNameKey(a).split(' ').filter(Boolean), kb = _coreNameKey(b).split(' ').filter(Boolean);
+  if (!ka.length || !kb.length) return false;
+  return ka.every(t => kb.includes(t)) || kb.every(t => ka.includes(t));
 }
 // Strip honorifics/titles from a mention so the search runs on real name tokens ("Sen. John Curtis" →
 // "John Curtis"). Falls back to the original if stripping empties it.
@@ -1092,5 +1141,5 @@ async function wikiLookup(query, { dispatch = null, pages = 3, sentences = 4 } =
 
 module.exports = {
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _distinctEntities, _nameCompatible, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates
 };
