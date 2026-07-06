@@ -2494,7 +2494,10 @@ ipcMain.handle('contacts:recent', async (_e, { n = 60 } = {}) => {
       withIntel.push({ t, beliefs });
     }
     const crmByName = await lookupCrmContacts(withIntel.map(x => x.t.name));
-    const people = withIntel.map(x => contactCard.cardFromTarget(x.t, x.beliefs, crmByName.get(String(x.t.name).toLowerCase()) || {}));
+    const people = withIntel.map(x => {
+      let social = []; try { social = contactCard.socialFromObservations(pdb.listObservations(x.t.id, { attr: 'social' })); } catch {}
+      return contactCard.cardFromTarget(x.t, x.beliefs, crmByName.get(String(x.t.name).toLowerCase()) || {}, { social });
+    });
     // merge in the PLACE / EVENT / ORG cards (recent_cards store) — one typed waterfall, newest-first
     let placeEvent = []; try { placeEvent = db.listRecentCards({ types: ['place', 'event', 'org'], limit: Math.max(1, Math.min(200, Number(n) || 60)) }); } catch (e) {}
     const cards = [...people, ...placeEvent].sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, Math.max(1, Math.min(200, Number(n) || 60)));
@@ -6103,6 +6106,14 @@ async function runSocialEnrich(targetName) {
         catch (e) { console.error('[social-enrich] observe failed:', e.message); }
       }
       console.log(`[social-enrich] staged ${staged.length} grade-E social observation(s) on target ${targetId} (unverified; not promoted)`);
+      // push the refreshed card so the handles appear on the rail immediately (labeled unverified)
+      try {
+        const cc = require('./studio/contact_card');
+        const social = cc.socialFromObservations(pdb.listObservations(targetId, { attr: 'social' }));
+        const crmRec = crmId != null ? ((await lookupCrmContacts([contact.name])).get(contact.name.toLowerCase()) || {}) : {};
+        const card = cc.cardFromTarget(pdb.getTarget(targetId) || { id: targetId, name: contact.name, company: contact.company }, pdb.listBeliefs(targetId), crmRec, { social });
+        if (canvasWindow && !canvasWindow.isDestroyed()) canvasWindow.webContents.send('contacts:card', card);
+      } catch (e) { console.error('[social-enrich] card push failed:', e.message); }
     }
     return { found: true, name: contact.name, staged };
   } catch (e) { console.error('[social-enrich] failed:', e.message); return { found: false, name }; }

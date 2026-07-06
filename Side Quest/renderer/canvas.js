@@ -655,7 +655,7 @@ function cardHtml(c, isNew) {
     ? `<img class="pc-photo" src="${esc(c.photo)}" alt="${esc(c.name)}" draggable="false" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pc-initials',textContent:'${esc((c.initials || '?').replace(/'/g, ''))}'}))">`
     : `<div class="pc-initials pc-av-${esc(t)}">${esc(c.initials || '?')}</div>`;
   const rows = [];
-  let sub = '', roleLine = '', grade = '', brief = '', expand = '', actions = '';
+  let sub = '', roleLine = '', grade = '', brief = '', expand = '', actions = '', social = '';
   if (t === 'place') {
     if (c.address) rows.push(`<div class="pc-row"><span class="pc-ic">📍</span>${esc(c.address)}</div>`);
     sub = c.note ? `<div class="pc-bio">${esc(c.note)}</div>` : '';
@@ -685,11 +685,17 @@ function cardHtml(c, isNew) {
     const crmBtn = (c.crm && c.crm.crmId != null) ? `<button class="pc-crmbtn" data-crm="${esc(String(c.crm.crmId))}">Open in CRM →</button>` : '';
     const briefBtn = c.targetId != null ? `<button class="pc-briefing" data-target="${esc(String(c.targetId))}">Full briefing →</button>` : '';
     actions = (crmBtn || briefBtn) ? `<div class="pc-actions">${crmBtn}${briefBtn}</div>` : '';
+    // Discovered social handles (maigret) — corroborated but UNVERIFIED (grade-E). Labeled so nobody
+    // mistakes them for confirmed CRM handles; each links out to the profile for a human to eyeball.
+    if (Array.isArray(c.social) && c.social.length) {
+      const links = c.social.map(s => `<a class="pc-social-link" href="${esc(s.url)}" target="_blank" rel="noreferrer">${esc(s.site || s.url)} ↗</a>`).join('');
+      social = `<div class="pc-social"><div class="pc-social-lbl">Possible handles · unverified</div><div class="pc-social-links">${links}</div></div>`;
+    }
   }
   const expandable = expand ? ' pc-can-expand' : '';
   return `<div class="ppl-card ppl-${esc(t)}${expandable}${isNew ? ' new' : ''}" data-card="${esc(cardKeyOf(c))}">
     <div class="pc-head">${avatar}<div class="pc-id"><div class="pc-name">${esc(c.name)}</div>${roleLine ? `<div class="pc-role">${esc(roleLine)}</div>` : ''}</div>${grade}</div>
-    ${rows.length ? `<div class="pc-rows">${rows.join('')}</div>` : ''}${sub}${expand}${actions}${brief}
+    ${rows.length ? `<div class="pc-rows">${rows.join('')}</div>` : ''}${sub}${social}${expand}${actions}${brief}
   </div>`;
 }
 function pplCount() { pplN.textContent = String(pplList.querySelectorAll('.ppl-card').length || ''); }

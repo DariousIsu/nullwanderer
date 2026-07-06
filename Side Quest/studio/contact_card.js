@@ -76,9 +76,22 @@ function buildCardData(contact = {}, crm = {}) {
     targetId: (contact.targetId != null) ? contact.targetId : null,
     crmId: (crm.crmId != null) ? crm.crmId : null,
     crm: crmBlock(crm),                                     // the full entry for inline expand + click-through
+    social: socialList(contact.social),                     // discovered handles (maigret) — UNVERIFIED, grade-E
     kind: contact.kind === 'org' ? 'org' : 'person',
     ts: (typeof contact.ts === 'number') ? contact.ts : null,   // recency for the waterfall
   };
+}
+
+// Normalize discovered social handles for the card: [{site,url}], deduped by url, capped. These are
+// grade-E OBSERVATIONS (corroborated but UNVERIFIED) — the renderer labels them as such. Pure.
+function socialList(social) {
+  const out = []; const seen = new Set();
+  for (const s of (Array.isArray(social) ? social : [])) {
+    const url = str(s && s.url); if (!url || seen.has(url)) continue; seen.add(url);
+    out.push({ site: str(s && s.site) || null, url });
+    if (out.length >= 8) break;
+  }
+  return out;
 }
 
 // An ORG card — for a "place" that RESOLVED to an organization in Echo (the Rainey Center bug: an org
@@ -112,7 +125,7 @@ function buildEventCard(e = {}, { ts = null } = {}) {
 
 // Bridge: a Puller target row + its beliefs (lib/puller_db.listBeliefs shape) → a card. The belief value is
 // the current best answer per attr; confidence rides the email belief (else phone). Pure.
-function cardFromTarget(target = {}, beliefs = [], crm = {}) {
+function cardFromTarget(target = {}, beliefs = [], crm = {}, { social = [] } = {}) {
   const list = Array.isArray(beliefs) ? beliefs : [];
   const bv = (t) => { const b = list.find((x) => x.type === t); return b ? b.value : null; };
   const bc = (t) => { const b = list.find((x) => x.type === t); return (b && typeof b.confidence === 'number') ? b.confidence : null; };
@@ -120,9 +133,19 @@ function cardFromTarget(target = {}, beliefs = [], crm = {}) {
     name: target.name, company: target.company, title: bv('role'),
     email: bv('email'), phone: bv('phone'), address: bv('address'),
     confidence: bc('email') != null ? bc('email') : bc('phone'),
-    targetId: target.id, kind: target.kind,
+    targetId: target.id, kind: target.kind, social,
     ts: target.last_accessed_at || target.created_at || null,
   }, crm);
 }
 
-module.exports = { buildCardData, cardFromTarget, buildPlaceCard, buildEventCard, buildOrgCard, crmBlock, gradeFor, initialsOf };
+// Parse the Puller's social OBSERVATIONS (attr='social', value='Site|url') into [{site,url}] for a card.
+// Pure — the caller passes lib/puller_db.listObservations(id,{attr:'social'}) rows.
+function socialFromObservations(observations) {
+  return (Array.isArray(observations) ? observations : []).map((o) => {
+    const v = String((o && o.value) || '');
+    const i = v.indexOf('|');
+    return i > 0 ? { site: v.slice(0, i), url: v.slice(i + 1) } : { site: null, url: v };
+  }).filter((s) => s.url);
+}
+
+module.exports = { buildCardData, cardFromTarget, socialFromObservations, buildPlaceCard, buildEventCard, buildOrgCard, crmBlock, gradeFor, initialsOf };

@@ -1839,6 +1839,12 @@ async function runSocialEnrichMove() {
       catch (e) { console.error('[social-enrich] observe failed:', e.message); }
     }
     console.log(`[social-enrich] idle: ${contact.name} → +${staged.length} grade-E social obs (${staged.map((s) => s.site).join(', ')})`);
+    // refresh the rail card so the handles show (labeled unverified)
+    try {
+      const cc = require('../studio/contact_card');
+      const social = cc.socialFromObservations(pdb.listObservations(pick.id, { attr: 'social' }));
+      if (opts.emitContactCard) opts.emitContactCard(cc.cardFromTarget(pdb.getTarget(pick.id) || pick, pdb.listBeliefs(pick.id), {}, { social }));
+    } catch (e) { console.error('[social-enrich] card refresh failed:', e.message); }
     try {
       const content = `Found social accounts for ${contact.name}: ${staged.map((s) => s.site).join(', ')} (unverified)`;
       const rr = db.insertMonologue({ content, model: 'social-enrich', type: 'reading', query: staged[0].url || null });

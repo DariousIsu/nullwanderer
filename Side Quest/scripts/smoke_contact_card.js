@@ -76,6 +76,14 @@ ok(noEmail.confidence === 0.5 && noEmail.kind === 'org', 'cardFromTarget: falls 
 
 ok(card.type === 'person', 'buildCardData: type=person');
 
+// --- social handles (maigret grade-E observations) on the card ---
+const socialObs = [{ value: 'LinkedIn|https://linkedin.com/in/x' }, { value: 'Instagram|https://instagram.com/x' }, { value: 'nolink' }];
+const parsed = CC.socialFromObservations(socialObs);
+ok(parsed.length === 3 && parsed[0].site === 'LinkedIn' && parsed[0].url === 'https://linkedin.com/in/x' && parsed[2].site === null, 'socialFromObservations: parses Site|url, tolerates bare value');
+const withSocial = CC.cardFromTarget(target, beliefs, {}, { social: parsed });
+ok(Array.isArray(withSocial.social) && withSocial.social.length === 3 && withSocial.social[0].url === 'https://linkedin.com/in/x', 'cardFromTarget: threads social handles onto the card');
+ok(CC.cardFromTarget(target, beliefs, {}).social.length === 0, 'cardFromTarget: no social param → empty social array');
+
 // --- buildPlaceCard / buildEventCard ---
 const place = CC.buildPlaceCard({ name: 'AC Hotel Raleigh Downtown', address: '9 Glenwood Ave, Raleigh, NC 27603', note: 'event venue' }, { ts: 5 });
 ok(place.type === 'place' && place.name === 'AC Hotel Raleigh Downtown' && /Glenwood/.test(place.address), 'buildPlaceCard: type + name + address');
