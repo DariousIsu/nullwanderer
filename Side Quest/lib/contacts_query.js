@@ -10,7 +10,9 @@
  */
 'use strict';
 
-const CONTACT_NOUN = /\b(contacts?|people|persons?|e-?mails?|roster|leads?|directory|rolodex)\b/i;
+// "targets"/"names"/"orgs" are contact-list nouns too — the Puller calls its held contacts "targets",
+// and "a list of 100 high-confidence targets" is a list-what-we-hold ask, not a research assignment.
+const CONTACT_NOUN = /\b(contacts?|people|persons?|e-?mails?|roster|leads?|directory|rolodex|targets?|names|orgs?|organi[sz]ations?)\b/i;
 const LIST_INTENT = /\b(list|give|show|pull|get|compile|export|send|grab|fetch|need|want|hand|make (?:me )?a list|who (?:do we have|are|'?s))\b/i;
 // A phrasing that is clearly RESEARCH ("find NEW", "go discover", "research"), not a list-what-we-have.
 const RESEARCH_INTENT = /\b(research|find (?:new|more)|discover|dig up|go get new|source new|build a (?:new )?list from scratch)\b/i;
@@ -24,7 +26,13 @@ const SECTORS = {
   datacenter: /\b(data ?cent(?:er|re)|cloud|hyperscal|semiconductor|chip|gpu|compute|equinix|digital realty|coreweave|crusoe|nvidia|google|amazon|aws|microsoft|azure|meta|apple|oracle|ibm|intel)\b/i,
   transition: /\b(transition|decarbon|clean energy|net.?zero|emission|climate tech)\b/i,
   weather: /\b(weather|climate|meteorolog|forecast)\b/i,
+  // think tanks / policy shops / private (non-government) orgs. One regex serves both roles: it matches
+  // the request phrasing ("think tanks", "private organizations") AND the org NAMES we hold (Brookings,
+  // R Street, "Center for …", foundations, institutes) so select() can filter held contacts by it.
+  thinktank: /\b(think.?tanks?|policy (?:institute|shop|org|center)|non.?profit|private organi[sz]ations?|foundation|institute|council|center for|brookings|heritage|cato|niskanen|rainey|american enterprise|\baei\b|urban institute|r street|manhattan institute|hoover|carnegie|hudson institute|new america|third way)\b/i,
 };
+// Prettier display names for sectors whose key isn't the phrase we'd show the operator.
+const SECTOR_LABELS = { thinktank: 'think tank', ai: 'AI' };
 
 const _norm = (s) => String(s == null ? '' : s).toLowerCase();
 // A malformed extraction where the name collapsed to bare initials ("P. C. V. C.", "A. G.") — every token
@@ -116,7 +124,7 @@ function toTable(sel) {
 // A short human title for the canvas tab + the chat line, from the request's sectors/company.
 function label({ sectors = [], company = null } = {}) {
   if (company) return `${company} contacts`;
-  if (sectors.length) return `${sectors.join(' / ')} contacts`;
+  if (sectors.length) return `${sectors.map((s) => SECTOR_LABELS[s] || s).join(' / ')} contacts`;
   return 'Contacts';
 }
 

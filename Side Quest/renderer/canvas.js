@@ -60,7 +60,8 @@ function blockContent(b) {
     const head = b.view.headers.length ? `<thead><tr>${b.view.headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>` : '';
     const body = `<tbody>${b.view.rows.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody>`;
     const cap = b.view.caption ? `<div class="tcaption">${esc(b.view.caption)}</div>` : '';
-    return `<table class="b-table">${head}${body}</table>${cap}`;
+    const tools = `<div class="tbl-tools"><button class="tbl-dl" title="Download as CSV (opens in Excel/Sheets)">⬇ CSV</button></div>`;
+    return `<div class="b-tablewrap">${tools}<table class="b-table">${head}${body}</table>${cap}</div>`;
   }
   if (b.type === 'chart') {
     const v = b.view;
@@ -217,8 +218,30 @@ board.addEventListener('click', (e) => {
   }
 });
 
+// Download a table block as CSV (Excel/Sheets-openable). Serialized from the rendered rows so it
+// matches exactly what the operator sees; BOM + CRLF for Excel, RFC-4180 quoting.
+board.addEventListener('click', (e) => {
+  const dl = e.target.closest('.tbl-dl'); if (!dl) return;
+  e.stopPropagation();
+  const table = dl.closest('.b-tablewrap') && dl.closest('.b-tablewrap').querySelector('table');
+  if (!table) return;
+  const csv = [...table.querySelectorAll('tr')].map(tr =>
+    [...tr.querySelectorAll('th,td')].map(cell => {
+      const v = cell.textContent || '';
+      return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+    }).join(',')
+  ).join('\r\n');
+  const card = dl.closest('.doc'), titleEl = card && card.querySelector('.dtitle');
+  const name = ((titleEl && titleEl.textContent) || 'contacts').trim().replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || 'contacts';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = name + '.csv';
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { try { URL.revokeObjectURL(a.href); } catch {} a.remove(); }, 0);
+});
+
 surface.addEventListener('mousedown', (e) => {
-  if (e.target.closest('.dbtn')) return;                         // button click handled separately
+  if (e.target.closest('.dbtn') || e.target.closest('.tbl-dl')) return;   // button click handled separately
   const grip = e.target.closest('.resize-grip');
   if (grip) {
     const card = grip.closest('.doc');

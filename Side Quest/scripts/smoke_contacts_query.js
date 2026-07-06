@@ -25,6 +25,11 @@ ok(CQ.detect('pull our 100 highest confidence energy contacts').limit === 100, '
 ok(CQ.detect('list the top 25 energy contacts').limit === 25, 'detect: "top 25" → 25');
 ok(CQ.detect('list our energy contacts').limit === null, 'detect: no number → null limit');
 
+// --- "targets" / "orgs" are contact-list nouns; think-tank sector (regression: this went to a "project") ---
+const tt = CQ.detect('do another list of 100 high confidence targets but only from think tanks and private organizations');
+ok(tt.isQuery && tt.limit === 100 && tt.sectors.includes('thinktank'), 'detect: "list of 100 high-confidence targets from think tanks" → query, thinktank, 100 (was routed to a project)');
+ok(CQ.detect('pull our AI orgs').isQuery, 'detect: "orgs" is a contact-list noun');
+
 // --- select: sector filter, CONFIDENCE-first, dedup, cap ---
 const rows = [
   { name: 'Jim Burke', email: 'jim.burke@vistra.com', company: 'Vistra Energy', title: 'CEO', confidence: 0.7 },
@@ -43,6 +48,14 @@ ok(CQ.select(rows, { sectors: ['energy'], limit: 1 }).shown === 1, 'select: hono
 ok(CQ.select([{ name: 'P. C. V. C.', email: 'p.c@ferc.gov', company: 'Duke Energy', confidence: 0.97 }, { name: 'Real Person', email: 'r@aep.com', company: 'AEP', confidence: 0.6 }], { sectors: ['energy'] }).rows.every(r => r.name !== 'P. C. V. C.'), 'select: drops initials-only junk names even at 97% confidence');
 const ai = CQ.select(rows, { sectors: ['ai', 'datacenter'] });
 ok(ai.total === 1 && ai.rows[0].company === 'OpenAI', 'select: AI/datacenter filter → OpenAI');
+// think-tank sector matches think-tank org NAMES (Brookings, "Center for …", institutes), not energy/AI cos
+const ttRows = [
+  { name: 'Wonk One', email: 'w1@brookings.edu', company: 'Brookings Institution', confidence: 0.8 },
+  { name: 'Wonk Two', email: 'w2@rstreet.org', company: 'R Street Institute', confidence: 0.7 },
+  { name: 'Energy Exec', email: 'e@vistra.com', company: 'Vistra Energy', confidence: 0.9 },
+];
+const ttSel = CQ.select(ttRows, { sectors: ['thinktank'] });
+ok(ttSel.total === 2 && ttSel.rows.every(r => /brookings|street/i.test(r.company)), 'select: thinktank filter keeps think-tank orgs, drops the energy co');
 const all = CQ.select(rows, {});
 ok(all.total === 5, 'select: no sector → all (deduped)');
 ok(CQ.select(rows, { company: 'duke' }).total === 1, 'select: company filter → just Duke');
@@ -52,6 +65,7 @@ const tbl = CQ.toTable(energy);
 ok(tbl.headers.length === 5 && tbl.headers[4] === 'Confidence' && tbl.rows.length === 3 && tbl.rows[0][0] === 'Hi Conf' && /with email/.test(tbl.caption), 'toTable: headers (incl. Confidence) + rows sorted by confidence + caption');
 ok(tbl.rows[0][4] === '96%', 'toTable: confidence rendered as a %');
 ok(CQ.label({ sectors: ['energy'] }) === 'energy contacts' && CQ.label({ company: 'Duke Energy' }) === 'Duke Energy contacts', 'label: sector / company titles');
+ok(CQ.label({ sectors: ['thinktank'] }) === 'think tank contacts', 'label: thinktank → "think tank contacts"');
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);
