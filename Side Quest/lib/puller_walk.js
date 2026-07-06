@@ -131,8 +131,11 @@ async function runPullerMove(deps = {}) {
     const doRefresh = async () => { if (typeof refresh === 'function') { try { await refresh(pick.id); } catch {} } };
     const doObserve = async (o) => { if (typeof observe === 'function') { try { await observe(o); } catch {} } };
 
-    // 1) PATTERN-FILL — the domain's own learned email format
-    if (pick.domain && typeof getPatternState === 'function') {
+    // 1) PATTERN-FILL — the domain's own learned email format. GROUNDED-ONLY: a pattern-fill is a pure
+    // guess (name × domain), so it's only as trustworthy as the person↔org link. Skip it for an ungrounded
+    // target (one minted from a wiki/web fallback, not a real page/doc/CRM) — that's what produced the
+    // confidently-wrong "red.berenson@xcelenergy.com" (a hockey coach). Web-fill (reads a real page) still runs.
+    if (pick.domain && pick.grounded && typeof getPatternState === 'function') {
       let tried = []; try { tried = (typeof triedFor === 'function' ? await triedFor(pick.id) : []) || []; } catch {}
       const state = await getPatternState(pick.domain);
       const cand = patternFillCandidate(state, pick.name, pick.domain, { tried });
@@ -253,8 +256,13 @@ async function runDiscoveryMove(deps = {}) {
 
     let sources = []; try { sources = (await web(buildOrgProspectQuery(seed))) || []; } catch {}
     if (!sources.length) return { acted: false, reason: 'no-sources', org: seed.name };
-    const text = sources.map(s => s && s.text).filter(Boolean).join('\n\n').slice(0, 6000);
-    const url = (sources[0] && sources[0].url) || null;
+    // ONLY mint from a REAL page her browser actually read (source:'browser') — NOT the wiki/corpus
+    // fallback. The fallback is fine for reading a KNOWN entity, but for DISCOVERING an org's staff it
+    // pulls Wikipedia noise (the "Reuben Dummy Stephenson at TC Energy" / hockey-coaches-at-Xcel junk).
+    const real = sources.filter(s => s && s.source === 'browser' && s.text);
+    if (!real.length) return { acted: false, reason: 'no-browser-source', org: seed.name };
+    const text = real.map(s => s.text).join('\n\n').slice(0, 6000);
+    const url = real[0].url || null;
     let cards = null; try { cards = await extract(text, { title: seed.name }); } catch {}
     const people = (cards && cards.people) || [];
     if (!people.length) return { acted: false, reason: 'no-people', org: seed.name };

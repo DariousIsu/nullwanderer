@@ -19,6 +19,10 @@ ok('derive last.first', B.deriveEmail('Brian Huseman', 'x.com', 'last.first') ==
 ok('unknown pattern falls back to first.last', B.deriveEmail('Brian Huseman', 'x.com', 'weird') === 'brian.huseman@x.com');
 ok('strips generational suffix', B.deriveEmail('John Smith Jr', 'x.com', 'first.last') === 'john.smith@x.com');
 ok('strips apostrophe', B.deriveEmail("Brian O'Neil", 'x.com', 'flast') === 'boneil@x.com');
+// credential/honorific stripping (the "sean.ph.d.@…" bug)
+ok('strips post-nominal credential (Ph.D.)', B.deriveEmail('Sean I. Plasynski, Ph.D.', 'hq.doe.gov', 'first.last') === 'sean.plasynski@hq.doe.gov');
+ok('strips leading honorific (Dr.)', B.deriveEmail('Dr. Kam Ghaffarian', 'x-energy.com', 'first.last') === 'kam.ghaffarian@x-energy.com');
+ok('strips comma + MD', B.deriveEmail('Jane Roe, MD', 'x.com', 'flast') === 'jroe@x.com');
 ok('mononym not derivable → empty', B.deriveEmail('Cher', 'x.com', 'first.last') === '');
 ok('no domain → empty', B.deriveEmail('Brian Huseman', '', 'first.last') === '');
 

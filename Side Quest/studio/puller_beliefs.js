@@ -37,20 +37,27 @@ const UNDELIVERABLE = new Set(['invalid', 'undeliverable']);
 const CATCH_ALL = new Set(['accept_all', 'catch_all', 'catch-all', 'catchall']);
 
 const NAME_SUFFIXES = new Set(['jr', 'sr', 'ii', 'iii', 'iv', 'v']);
+// Post-nominal CREDENTIALS/degrees (usually after a comma) — never part of an email local-part. The
+// "Sean I. Plasynski, Ph.D." → sean.ph.d.@… bug: the degree was taken as the surname.
+const CREDENTIALS = new Set(['phd', 'md', 'jd', 'mba', 'esq', 'cfa', 'cpa', 'pe', 'rn', 'dds', 'dvm', 'mph', 'msc', 'edd', 'psyd', 'llm', 'do', 'faia']);
+// Leading HONORIFICS — "Dr. Kam Ghaffarian" must derive kam.ghaffarian, not dr.ghaffarian.
+const HONORIFICS = new Set(['mr', 'mrs', 'ms', 'miss', 'dr', 'prof', 'professor', 'sir', 'hon', 'rev', 'sen', 'rep', 'gov', 'the']);
+const _norm = (p) => String(p || '').toLowerCase().replace(/\./g, '');   // "Ph.D." → "phd", "Jr." → "jr"
 
-// Split a display name into {first, middle, last}, dropping generational suffixes + apostrophes
-// (playbook §3). middle = the second of 3+ tokens (used for the middle-name patterns). Returns null if
-// fewer than two usable parts (mononyms can't be derived). (Particle handling — van/de la — is a
-// tracked edge; rare in the corporate-prospect data.)
+// Split a display name into {first, middle, last}, dropping honorifics, generational suffixes, and
+// post-nominal credentials + apostrophes (playbook §3). middle = the second of 3+ tokens. Returns null
+// if fewer than two usable parts (mononyms can't be derived).
 function nameParts(name) {
-  const parts = String(name || '').replace(/['’]/g, '').split(/\s+/)
-    .filter(Boolean)
-    .filter(p => !NAME_SUFFIXES.has(p.toLowerCase().replace(/\.$/, '')));
+  let s = String(name || '').replace(/['’]/g, '');
+  s = s.split(',')[0];                                   // drop everything after the first comma (credentials/suffixes)
+  let parts = s.split(/\s+/).filter(Boolean).filter(p => { const k = _norm(p); return !NAME_SUFFIXES.has(k) && !CREDENTIALS.has(k); });
+  while (parts.length && HONORIFICS.has(_norm(parts[0]))) parts.shift();   // strip leading honorific(s)
   if (parts.length < 2) return null;
+  const clean = (p) => p.toLowerCase().replace(/\.$/, '');
   return {
-    first: parts[0].toLowerCase(),
-    last: parts[parts.length - 1].toLowerCase(),
-    middle: parts.length >= 3 ? parts[1].toLowerCase() : null,
+    first: clean(parts[0]),
+    last: clean(parts[parts.length - 1]),
+    middle: parts.length >= 3 ? clean(parts[1]) : null,
   };
 }
 

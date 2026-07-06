@@ -48,14 +48,23 @@ ok(PW.pickPersonRow([{ name: 'Bob Jones', email: 'b@j.com' }], 'Jane Smith') ===
   const landed = [];
   let refreshed = null;
   const patternMove = await PW.runPullerMove({
-    candidates: [{ id: 3, name: 'Jane Smith', company: 'Rainey Center', domain: 'raineycenter.org', hasEmail: false }],
+    candidates: [{ id: 3, name: 'Jane Smith', company: 'Rainey Center', domain: 'raineycenter.org', hasEmail: false, grounded: true }],
     getPatternState: () => learned,
     triedFor: () => [],
     land: (o) => landed.push(o),
     refresh: (id) => { refreshed = id; },
     getMeta: gm, setMeta: sm, now: () => 1000,
   });
-  ok(patternMove.acted && patternMove.mode === 'pattern' && patternMove.email === 'jane.smith@raineycenter.org', 'runPullerMove: PATTERN path fills the learned address');
+  ok(patternMove.acted && patternMove.mode === 'pattern' && patternMove.email === 'jane.smith@raineycenter.org', 'runPullerMove: PATTERN path fills the learned address (grounded target)');
+
+  // GROUNDED GATE: an UNGROUNDED target (minted from a wiki fallback) is NOT pattern-filled — no web dep
+  // → no-fill (never a guessed email on a maybe-wrong-org person). The "red.berenson@xcelenergy.com" fix.
+  const ungrounded = await PW.runPullerMove({
+    candidates: [{ id: 99, name: 'Red Berenson', company: 'Xcel Energy', domain: 'xcelenergy.com', hasEmail: false, grounded: false }],
+    getPatternState: () => learned, land: () => { throw new Error('should not land a pattern email on an ungrounded target'); },
+    getMeta: (k) => null, setMeta: () => {}, now: () => 3000,
+  });
+  ok(!ungrounded.acted && ungrounded.reason === 'no-fill', 'runPullerMove: ungrounded target → pattern-fill SKIPPED (no guessed email)');
   ok(landed.length === 1 && landed[0].attr === 'email' && landed[0].sourceUrl === 'puller-pattern:raineycenter.org', 'runPullerMove: lands a CITED email observation (pattern derivation)');
   ok(refreshed === 3, 'runPullerMove: refreshes the target card');
   ok(gm(PW.ATTEMPT_KEY) && /Jane Smith/i.test(gm(PW.ATTEMPT_KEY)) || gm(PW.ATTEMPT_KEY).includes('jane smith'), 'runPullerMove: records the attempt (cooldown)');
@@ -114,7 +123,7 @@ ok(PW.pickPersonRow([{ name: 'Bob Jones', email: 'b@j.com' }], 'Jane Smith') ===
   let filteredInput = null;
   const disc = await PW.runDiscoveryMove({
     seedOrgs: [{ name: 'Rainey Center', domain: 'raineycenter.org' }],
-    web: async () => [{ text: 'Team: Jane Roe (Director), Bob Known (Fellow, bob@raineycenter.org)', url: 'https://raineycenter.org/team' }],
+    web: async () => [{ text: 'Team: Jane Roe (Director), Bob Known (Fellow, bob@raineycenter.org)', url: 'https://raineycenter.org/team', source: 'browser' }],
     extract: async () => ({ people: [{ name: 'Jane Roe', title: 'Director' }, { name: 'Bob Known', email: 'bob@raineycenter.org' }], places: [], events: [] }),
     filterNew: async (people) => { filteredInput = people; return people.filter(p => p.name !== 'Bob Known'); },   // Bob already in CRM → dropped
     createTarget: async ({ name, company, domain }) => { createdIds.push({ name, company, domain }); return 900 + createdIds.length; },
@@ -129,7 +138,7 @@ ok(PW.pickPersonRow([{ name: 'Bob Jones', email: 'b@j.com' }], 'Jane Smith') ===
   // all extracted people already known → no-new (mints nothing)
   const discKnown = await PW.runDiscoveryMove({
     seedOrgs: [{ name: 'Rainey Center' }],
-    web: async () => [{ text: 'x', url: 'u' }],
+    web: async () => [{ text: 'x'.repeat(50), url: 'https://raineycenter.org/team', source: 'browser' }],
     extract: async () => ({ people: [{ name: 'Bob Known' }], places: [], events: [] }),
     filterNew: async () => [],
     createTarget: async () => 1,
@@ -140,6 +149,19 @@ ok(PW.pickPersonRow([{ name: 'Bob Jones', email: 'b@j.com' }], 'Jane Smith') ===
   // no seed org available → no-seed
   const discNoSeed = await PW.runDiscoveryMove({ seedOrgs: [], web: async () => [], extract: async () => ({}), createTarget: async () => 1, getMeta: (k) => null, setMeta: () => {}, now: () => 1 });
   ok(!discNoSeed.acted && discNoSeed.reason === 'no-seed', 'runDiscoveryMove: no seed org → no-seed');
+
+  // BROWSER-ONLY MINT: the web layer returned a wiki FALLBACK source (not source:'browser') → mint NOTHING
+  // (the "Reuben Dummy Stephenson at TC Energy" wiki-junk fix). Only a real page her browser read counts.
+  let mintedOnFallback = false;
+  const discFallback = await PW.runDiscoveryMove({
+    seedOrgs: [{ name: 'TC Energy', domain: 'tcenergy.com' }],
+    web: async () => [{ text: 'Reuben Dummy Stephenson was a baseball player. '.repeat(6), url: 'echo:wikipedia#1', source: 'web:wikipedia' }],
+    extract: async () => ({ people: [{ name: 'Reuben Stephenson' }], places: [], events: [] }),
+    filterNew: async (p) => p,
+    createTarget: async () => { mintedOnFallback = true; return 1; },
+    getMeta: (k) => null, setMeta: () => {}, now: () => 40000,
+  });
+  ok(!discFallback.acted && discFallback.reason === 'no-browser-source' && !mintedOnFallback, 'runDiscoveryMove: a wiki FALLBACK source mints nothing (browser-read pages only)');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);

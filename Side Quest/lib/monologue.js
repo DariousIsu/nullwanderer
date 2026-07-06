@@ -1618,7 +1618,14 @@ async function runPullerMove(_recentTurns) {
     try {
       for (const t of pdb.listTargets({ limit: 120 })) {
         const has = !!pdb.getBelief(t.id, 'email');
-        out.push({ id: t.id, name: t.name, company: t.company, domain: t.domain, hasEmail: has, ts: t.last_accessed_at || t.created_at || 0 });
+        // GROUNDED = the target has a REAL provenance (an http page her browser read, a docstore drop, or
+        // a CRM link) — not a wiki/web fallback. Only computed for pattern-fill-eligible targets (cost).
+        let grounded = false;
+        if (!has && t.domain) {
+          if (t.crm_id != null) grounded = true;
+          else { try { grounded = pdb.listObservations(t.id).some(o => /^(https?:\/\/|docstore:)/i.test(String(o.source_url || '')) || o.kind === 'doc'); } catch {} }
+        }
+        out.push({ id: t.id, name: t.name, company: t.company, domain: t.domain, hasEmail: has, grounded, ts: t.last_accessed_at || t.created_at || 0 });
       }
     } catch {}
     return out;
