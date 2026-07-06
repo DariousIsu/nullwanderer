@@ -1630,19 +1630,24 @@ async function runPullerMove(_recentTurns) {
   // browser yields nothing. Only fires on the idle tick, when her browser is otherwise free.
   const wikiUrl = (n) => 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String(n || '').trim().replace(/\s+/g, '_'));
   const fallbackWeb = async (q) => graphWalk.fetchLayeredSources(q, { fetchPage, recallKnowledge: (nm, o) => echoSuit.recallKnowledge(nm, o), webSearch, wikiUrl, log: (m) => console.log(m) });
+  // browserSearch: her real browser SEARCHES (open(query) → DDG SERP, served to a real browser where the
+  // raw scraper is blocked) → opens the top result → reads the actual page. One {text,url,source} row.
+  const prospectFetch = require('./prospect_fetch');
   const ownBrowser = require('./web');
-  const pageFetch = async (url) => {
+  const browserSearch = async (query) => {
     try {
-      if (!ownBrowser.isConnected()) { try { await ownBrowser.ensure(); } catch { return null; } }
-      const o = await ownBrowser.open(url);
-      if (!o || !o.ok || o.blocker) return null;   // nav failed or hit a sign-in/CAPTCHA wall → skip
-      const r = await ownBrowser.read();
-      if (!r || !r.ok) return null;
-      const text = String(r.text || '').trim();
-      return text ? { text, url: o.url || url } : null;
-    } catch { return null; }
+      if (!ownBrowser.isConnected()) { try { await ownBrowser.ensure(); } catch { return []; } }
+      const s = await ownBrowser.open(query);                 // → search results page
+      if (!s || !s.ok || s.blocker) return [];
+      const top = await ownBrowser.openTopResult();           // → click through to the real org page
+      if (!top || !top.ok) return [];
+      const r = await ownBrowser.read();                      // → its text
+      if (!r || !r.ok) return [];
+      const row = prospectFetch.pageResult(r, top.url || (r && r.url));
+      return row ? [row] : [];
+    } catch { return []; }
   };
-  const web = require('./prospect_fetch').makeWebFetcher({ pageFetch, webSearch, fallback: fallbackWeb, log: (m) => console.log(m) });
+  const web = prospectFetch.makeWebFetcher({ browserSearch, fallback: fallbackWeb, log: (m) => console.log(m) });
   let extract = null;
   try {
     const src = (require('./models').sources() || []).find(s => s.tier === 'cloud' && s.token);
