@@ -73,6 +73,11 @@ function computeTurnRoute(sig = {}) {
     return _r('status', 0.6, 'deliverable-agg+active-focus');
   }
 
+  // 3.7) CONTACTS — "list / give me / who do we have — the contacts we HOLD" → query the Puller/CRM and
+  //      drop a canvas list. Sits ABOVE `task` so a contact-list ask isn't mistaken for a research
+  //      assignment (the "cleanest energy industry contacts → deep-research run" bug).
+  if (sig.isContactsQuery) return _r('contacts', 0.85, 'contacts-query');
+
   // 4) TASK — a genuine work assignment (start / extend a deliverable).
   if (sig.isAssignment) return _r('task', 0.8, 'assignment');
 

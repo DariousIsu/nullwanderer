@@ -27,6 +27,9 @@ ok(route({ isLiveInfo: true }) === 'lookup', 'live-info question → lookup');
 
 // ── work / status paths ──
 ok(route({ isAssignment: true }) === 'task', 'assignment → task');
+ok(route({ isContactsQuery: true }) === 'contacts', 'contacts-query → contacts');
+ok(route({ isContactsQuery: true, isAssignment: true }) === 'contacts', 'contacts-query OUTRANKS assignment (list-what-we-have, not research)');
+ok(route({ socialTurn: true, isContactsQuery: true }) === 'converse', 'social still outranks a contacts-query');
 ok(route({ isStatusReq: true }) === 'status', 'explicit status request → status');
 ok(route({ activityQ: true }) === 'status', 'activity question ("what are you working on") → status');
 ok(route({ deliverableAggQ: true, hasDirectedFocus: true, factual: false }) === 'status',

@@ -3612,11 +3612,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const _hasDirectedFocusR = (() => { try { const fl = require('./lib/focus'); const f = fl.getCurrent(); return !!(f && fl.isDirected(f)); } catch { return false; } })();
   const _isStatusReqR = _hasDirectedFocusR && (() => { try { return require('./lib/research').isStatusRequest(userMessage); } catch { return false; } })();
   const _isDirectedTaskR = (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
+  const _contactsQ = (() => { try { return require('./lib/contacts_query').detect(userMessage); } catch { return { isQuery: false }; } })();
   let turnRoute = require('./lib/turn_router').computeTurnRoute({
     socialTurn, activityQ, deliverableAggQ,
     factual: _factualR, personalFactQ, devQ, stateQ,
     isLiveInfo: _liveInfoR, isStatusReq: _isStatusReqR,
-    hasDirectedFocus: _hasDirectedFocusR, isAssignment: _isDirectedTaskR
+    hasDirectedFocus: _hasDirectedFocusR, isAssignment: _isDirectedTaskR, isContactsQuery: _contactsQ.isQuery
   });
   if (routerOn) console.log(`[turn-router] route=${turnRoute.route} (${turnRoute.reason}, conf ${turnRoute.confidence})`);
   const routeAllows = (r) => !routerOn || turnRoute.route === r;
@@ -3977,6 +3978,34 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // deep, priority, subset). FAIL-SAFE: cloud null → isDirectedTask regex fallback. When it's an
   // assignment, the poll + records-interp below are SUPPRESSED (!isAssignment) and the standing-focus
   // block creates the real run.
+  // CONTACTS QUERY — "list / give me the contacts we HOLD" → pull from the Puller (+CRM), drop a canvas
+  // list, and reply. Runs ABOVE the intake/assignment blocks so a contact-list ask never becomes a
+  // research run (the "cleanest energy industry contacts → deep-research" bug). Sets followupFired so the
+  // intake/operator blocks below suppress. Only when we actually hold matching contacts; else it says so
+  // and offers to research (never silently starts one).
+  let contactsHandled = false;
+  if (routerOn && turnRoute.route === 'contacts' && !directedStopHandled && !expandHandled && !correctionHandled && !docQaHandled && !followupFired) {
+    try {
+      const cq = require('./lib/contacts_query');
+      const ask = _contactsQ && _contactsQ.isQuery ? _contactsQ : cq.detect(userMessage);
+      const rows = await gatherHeldContacts();
+      const sel = cq.select(rows, { sectors: ask.sectors, company: ask.company, limit: 200 });
+      const lbl = cq.label(ask);
+      if (sel.total > 0) {
+        const tbl = cq.toTable(sel);
+        const tabKey = `contacts-${lbl.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 32)}-${Date.now().toString(36)}`;
+        try { const callTool = pollCallTool(); await callTool('saga_canvas_open_tab', { mode: 'DOC', tab_key: tabKey, title: lbl }); await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'table', data: { headers: tbl.headers, rows: tbl.rows, caption: tbl.caption } }); }
+        catch (e) { console.error('[contacts-query] canvas emit failed:', e.message); }
+        console.log(`[contacts-query] "${lbl}" → ${sel.shown}/${sel.total} on canvas (${sel.withEmail} w/ email)`);
+        followupFired = true; contactsHandled = true;
+        await fireToolFollowup({ io, channel, sessionId, resultText: `[You just pulled ${sel.total} ${lbl} you ALREADY HAVE onto ${userName}'s canvas${sel.total > sel.shown ? ` (showing the top ${sel.shown})` : ''} — ${sel.withEmail} with emails. Tell him briefly you put the list on his canvas; make clear these are contacts you already hold, NOT a new research run. Offer to research more or narrow it if he wants. Your own voice, one or two sentences.]` });
+      } else {
+        followupFired = true; contactsHandled = true;
+        await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked for ${lbl}, but you don't hold any matching contacts yet. Tell him plainly you don't have those on hand, and ASK whether you should research them (that would kick off a run) — don't start researching without his go. One or two sentences.]` });
+      }
+    } catch (e) { console.error('[contacts-query] handler failed:', e.message); }
+  }
+
   let intakeRoute = null;
   let isAssignment = false;
   let assignmentSeed = null;   // object-memory Slice 2: resolved entity targets + clarify for the run
@@ -4007,7 +4036,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // FROM his resolved object (degree-320 dossier) as a known target instead of a blind discovery walk (the
   // #2915 drift). Bias-toward-clarifying: an ambiguous/unknown salient entity surfaces a question so she
   // asks BEFORE burning hours. Fail-safe: any miss / cloud|Echo down → assignmentSeed null → unchanged.
-  if (isAssignment) {
+  if (isAssignment && !contactsHandled) {
     try {
       const intake = require('./lib/intake');
       const parsed = await intake.decompose(userMessage, {});
@@ -5996,6 +6025,23 @@ async function resolvePlaces(names) {
       } catch {}
     }
   } catch {}
+  return out;
+}
+
+// Pull the contacts we HOLD for a contacts-query — the Puller's discovered contacts (name + email/phone/
+// role beliefs + company). The Puller holds the operator's industry targets (energy/AI/datacenter cos);
+// the CRM is mostly officials, so it's skipped here (a sector-filtered CRM add is a follow-up). Returns
+// [{ name, email, phone, company, title }]. Fail-safe → [].
+async function gatherHeldContacts() {
+  const out = [];
+  try {
+    const pdb = require('./lib/puller_db'); pdb.init();
+    for (const t of pdb.listTargets({ limit: 100000 })) {
+      const bl = pdb.listBeliefs(t.id) || [];
+      const bv = (type) => { const b = bl.find((x) => x.type === type); return b ? b.value : null; };
+      out.push({ name: t.name, email: bv('email'), phone: bv('phone'), company: t.company, title: bv('role') });
+    }
+  } catch (e) { console.error('[contacts-query] gather failed:', e.message); }
   return out;
 }
 
