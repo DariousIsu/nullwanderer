@@ -47,6 +47,13 @@ const GRAPHWALK_BUDGET_KEY = 'graphwalk.budget.window';   // idle builder's OWN 
 const PULLER_MIN_INTERVAL_MS = 45 * 1000;
 const PULLER_LAST_KEY = 'pullerwalk.lastAt';
 const PULLER_BUDGET_KEY = 'pullerwalk.budget.window';
+// Social-enrich idle lane (Lane C, maigret). Slow + low-yield → infrequent; each known-handle target is
+// processed ~once/month (the web presence won't change fast). No cloud-token budget (maigret is a local
+// sidecar + network, not a model call), so cadence + a per-target cooldown are the only gates.
+const SOCIAL_MIN_INTERVAL_MS = 90 * 1000;
+const SOCIAL_LAST_KEY = 'socialenrich.lastAt';
+const SOCIAL_ATTEMPT_KEY = 'socialenrich.attempted';
+const SOCIAL_ATTEMPT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 let timer = null;
 let captionTimer = null;  // separate, faster heartbeat for caption-following (perception ≠ thinking)
@@ -991,6 +998,7 @@ async function runOneTick() {
     // early return). recentThoughts/openThreads stay available for the awareness block above.
     await runGraphWalkMove(recentTurns);
     try { await runPullerMove(recentTurns); } catch (e) { console.error('[puller-walk] tick error:', e.message); }
+    try { await runSocialEnrichMove(); } catch (e) { console.error('[social-enrich] tick error:', e.message); }
     return;
   }
 
@@ -1777,6 +1785,67 @@ async function runPullerMove(_recentTurns) {
   }
   console.log(`[puller-walk] no move (enrich ${(move && move.reason) || '?'} · discover ${(disc && disc.reason) || '?'})`);
   return false;
+}
+
+// LANE C — SOCIAL ENRICH (maigret, idle). Picks ONE held target that has a KNOWN handle (personal-email
+// localpart or a CRM social_handle) and hasn't been processed this month, runs maigret, and stages ONLY
+// corroborated (2+ signal) accounts as grade-E Puller observations. Consume-only, verify-before-promote.
+// Known-handles-only + a strict gate mean it acts on FEW targets and stages little (see the yield note) —
+// deliberately low-volume. Cadence + a 30-day per-target cooldown are the gates. Never throws.
+async function runSocialEnrichMove() {
+  const nowTs = Date.now();
+  try { const last = parseInt(db.getMeta(SOCIAL_LAST_KEY) || '0', 10) || 0; if (nowTs - last < SOCIAL_MIN_INTERVAL_MS) return false; } catch {}
+  try {
+    const pdb = require('./puller_db'); pdb.init();
+    const em = require('./enrich_maigret');
+
+    // attempted-cooldown set (per target, 30-day TTL) — doubles as the "already processed" marker
+    let attArr = []; try { attArr = JSON.parse(db.getMeta(SOCIAL_ATTEMPT_KEY) || '[]'); } catch {}
+    attArr = (Array.isArray(attArr) ? attArr : []).filter((e) => Array.isArray(e) && (nowTs - (Number(e[1]) || 0) < SOCIAL_ATTEMPT_TTL_MS));
+    const attempted = new Set(attArr.map((e) => e[0]));
+
+    // pick the first eligible target: not attempted, and a KNOWN-handle source exists (personal email → a
+    // localpart, or a crm_id whose CRM handles we'll fetch below). Bounded scan so a tick stays cheap.
+    let pick = null, contact = null, scanned = 0;
+    for (const t of pdb.listTargets({ limit: 100000 })) {
+      if (attempted.has(String(t.id))) continue;
+      if (++scanned > 300) break;
+      const email = (pdb.getBelief(t.id, 'email') || {}).value || null;
+      const c = { name: t.name, email, company: t.company || null };
+      if (em.knownHandles(c, []).length === 0 && t.crm_id == null) continue;   // no known-handle source
+      pick = t; contact = { ...c, crmId: t.crm_id || null }; break;
+    }
+    try { db.setMeta(SOCIAL_LAST_KEY, String(nowTs)); } catch {}
+    if (!pick) return false;
+
+    // mark processed BEFORE the run (once/month; a barren result shouldn't cause a re-scan next tick)
+    attArr.push([String(pick.id), nowTs]);
+    try { db.setMeta(SOCIAL_ATTEMPT_KEY, JSON.stringify(attArr.slice(-2000))); } catch {}
+
+    // KNOWN CRM handles (consume-only read) if this person is linked to a CRM row
+    let crmHandles = [];
+    if (contact.crmId != null && echoSuit && echoSuit.connected) {
+      try {
+        const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql: `SELECT Platform__c AS platform, Handle__c AS handle FROM electoral.social_handle__c WHERE deleted=0 AND Contact__c = ${Number(contact.crmId)}`, params: [] } });
+        if (r && r.ok) { let j; try { j = JSON.parse(r.text); } catch {} crmHandles = ((j && j.rows) || []).filter((x) => x && x.handle); }
+      } catch {}
+    }
+
+    const res = await em.enrichContact(contact, crmHandles, { topSites: 50, timeout: 8 });
+    const staged = res.staged || [];
+    if (!staged.length) { console.log(`[social-enrich] idle: ${contact.name} — ${res.handles || 0} known handle(s), 0 corroborated`); return false; }
+    for (const s of staged) {
+      try { pdb.addObservation(pick.id, { attr: 'social', value: `${s.site}|${s.url}`, kind: 'osint', source: `maigret:${s.handle}`, sourceUrl: s.url, confidence: 0.3 }); }
+      catch (e) { console.error('[social-enrich] observe failed:', e.message); }
+    }
+    console.log(`[social-enrich] idle: ${contact.name} → +${staged.length} grade-E social obs (${staged.map((s) => s.site).join(', ')})`);
+    try {
+      const content = `Found social accounts for ${contact.name}: ${staged.map((s) => s.site).join(', ')} (unverified)`;
+      const rr = db.insertMonologue({ content, model: 'social-enrich', type: 'reading', query: staged[0].url || null });
+      pushSheep({ id: rr.id, ts: rr.ts, content: `(social) ${contact.name} → ${staged.map((s) => s.site).join(', ')}`, type: 'reading', query: staged[0].url || null });
+    } catch (e) { console.error('[social-enrich] sheep surface failed:', e.message); }
+    return true;
+  } catch (e) { console.error('[social-enrich] idle move failed:', e.message); return false; }
 }
 
 async function maybeSearchFromThought(thoughtText, focusId = null) {
