@@ -92,11 +92,32 @@ const SELF_REJECT = /\b(over[\s-]?analyz|hesitat|oversell|fabricat|safety net|se
 // self-statement never leads with a conjunction/2nd-person pronoun, nor embeds a "you can/will/keep…" clause.
 const _GARBLED = /^I(?:'?m| am)\s+(?:you\b|your\b|but\b|and\b|or\b|nor\b|so\b|yet\b|because\b|the flavor\b|not the\b)|^I(?:'?m| am)\b[^.!?]{0,60}\byou\s+(?:can|will|would|should|could|keep|are|have|know|might|need)\b/i;
 
+// #5 (cont.) — two more extraction-leak shapes seen live:
+//  • REASSURANCE: a bare compliment TO her captured as a trait ("You're fine, doing great" → "I am fine /
+//    I am doing a great job"). Content-free praise is not identity.
+//  • OWN-NAME VOCATIVE: a self-statement that ADDRESSES her by her own name ("...fine, Zoe" / "...great job
+//    Zoe") — she never calls herself by name, so the name is a leaked 2nd-person vocative ("You're fine, Zoe"
+//    → "I am fine Zoe"). The identity statement "I am Zoe" (name straight after the copula) is PRESERVED.
+const _SELF_NAME = (() => { try { return String(db.getMeta('assistant_name') || '').trim() || 'Zoe'; } catch { return 'Zoe'; } })();
+// Only a BARE, terminal reassurance ("I am fine", "I am doing a great job.") — NOT "I am good at research"
+// (a real trait). Terminal = end of string or punctuation; the "… fine Zoe" vocative form is caught below.
+const _REASSURANCE = /^I(?:'?m| am)\s+(?:fine|okay|ok|alright|good|great)\s*(?:[.!?,]|$)|^I(?:'?m| am)\s+doing\b[^.!?]{0,24}\b(?:great|good|fine|well|amazing|wonderful)\b(?:\s+(?:job|work))?\s*(?:[.!?,]|$)/i;
+function _addressedByOwnName(text) {
+  const n = _SELF_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (new RegExp(',\\s*' + n + '\\b', 'i').test(text)) return true;                                       // "..., Zoe" — comma vocative
+  return new RegExp("\\b(?!am\\b|I\\b|I'?m\\b)[A-Za-z']+\\s+" + n + "\\b\\s*[.!?]*$", 'i').test(text);      // trailing "… <word> Zoe", but NOT "I am Zoe"
+}
+// The single leak gate used on every self_model write path.
+function _leakedSelfStatement(text) {
+  const t = String(text || '');
+  return _GARBLED.test(t) || _REASSURANCE.test(t) || _addressedByOwnName(t);
+}
+
 async function record(content, { category = 'insight', importance = 0.6, decideFn = null, epistemic = 'speculated' } = {}) {
   const text = String(content || '').trim();
   if (text.length < 8) return null;
   if (SELF_REJECT.test(text)) { console.log('[self_model] guardrail rejected self-critical takeaway:', text.slice(0, 70)); return { skipped: 'self-criticism' }; }
-  if (_GARBLED.test(text)) { console.log('[self_model] guardrail rejected garbled/2nd-person-leaked self-statement:', text.slice(0, 70)); return { skipped: 'garbled' }; }
+  if (_leakedSelfStatement(text)) { console.log('[self_model] guardrail rejected garbled/reassurance/vocative 2nd-person leak:', text.slice(0, 70)); return { skipped: 'garbled' }; }
   let cat = VALID.has(category) ? category : 'insight';
   if (cat === 'insight') cat = inferCategory(text);  // upgrade the generic default to a real category when the content reveals one
 
@@ -279,4 +300,4 @@ async function buildContextBlock(query, { limit = 10, relevantK = 4 } = {}) {
   return render(out.slice(0, limit));
 }
 
-module.exports = { record, recordTold, detectAffirmedTrait, buildPromptBlock, buildContextBlock, retrieveRelevant, selectDiverse, _priority, inferCategory, defaultDecide, classify3, PREFILTER_SIM, SELF_REJECT, SELF_TRUST };
+module.exports = { record, recordTold, detectAffirmedTrait, buildPromptBlock, buildContextBlock, retrieveRelevant, selectDiverse, _priority, inferCategory, defaultDecide, classify3, _leakedSelfStatement, PREFILTER_SIM, SELF_REJECT, SELF_TRUST };

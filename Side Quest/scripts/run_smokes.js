@@ -116,6 +116,7 @@ const smokes = [
   'smoke_mention.js',
   'smoke_cognition.js',
   'smoke_intent_parse.js',
+  'smoke_self_guardrail.js',
   'smoke_excavate.js',
   'smoke_staleness.js',
   // Data-Stream (news) lane — isolated NEWS_DB_PATH / pure; offline-deterministic
