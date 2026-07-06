@@ -23,9 +23,9 @@ const RICH_NOTES = 3;   // ≥ this many on-topic notes (or any verified_fact, o
 function _objectRich(obj) { return !!(obj && (obj.degree >= 8 || (obj.facts || []).length >= 4 || (obj.committees || []).length >= 1)); }
 function _hasObject(obj) { return !!(obj && ((obj.facts || []).length || (obj.committees || []).length || (obj.neighbors || []).length)); }
 
-async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retrieveFn = null, graphFn = null, echoFn = null, objectFn = null, prominenceFn = null, docFn = null, newsFn = null, object = true } = {}) {
+async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retrieveFn = null, graphFn = null, echoFn = null, objectFn = null, prominenceFn = null, docFn = null, newsFn = null, resolveFn = null, object = true } = {}) {
   const t = String(topic || '').trim();
-  if (!t) return { topic: t, notes: [], facts: [], object: null, coverage: 'thin', echo: 0, mention: null, identityNote: null, precedenceFact: null, streamHits: [] };
+  if (!t) return { topic: t, notes: [], facts: [], object: null, coverage: 'thin', echo: 0, mention: null, identityNote: null, precedenceFact: null, streamHits: [], ambiguous: null };
   const retrieve = retrieveFn || ((q) => memory.retrieveScored(q, { k, minRelevance }));
   let local = []; try { local = (await retrieve(t)) || []; } catch { local = []; }
   let facts = []; try { facts = (graphFn ? graphFn(t) : _graphFacts(t)) || []; } catch { facts = []; }
@@ -35,7 +35,7 @@ async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retriev
   // ECHO-SEARCH-FIRST also works on a PHRASE: when the topic isn't a bare name (the idle loop hands us
   // "Senator John Curtis personal background"), EXTRACT the entity and pull ITS object — so a web-first
   // idle search on someone we already hold as a rich object is caught and short-circuited.
-  let obj = null, mentionUsed = null, identityNote = null;
+  let obj = null, mentionUsed = null, identityNote = null, ambiguous = null;
   if (object) {
     // MENTION → OBJECT via the tiered chain (lib/mention): local NER (fast) → cloud decompose
     // (casing/pronoun/KG-type) → robust regex fallback. Replaces the capitalized-run regex that mis-read
@@ -46,7 +46,22 @@ async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retriev
     const entTopic = (det && det.mention) || extractEntity(t) || (_looksLikeEntity(t) ? t : null);
     const preferType = (det && det.kgType) || null;
     mentionUsed = entTopic;
-    if (entTopic) { try { obj = (objectFn ? await objectFn(entTopic) : await _echoObject(entTopic, preferType)) || null; } catch { obj = null; } }
+    if (entTopic) {
+      if (objectFn) { try { obj = await objectFn(entTopic) || null; } catch { obj = null; } }
+      else {
+        // DISAMBIGUATING resolve — route the pull through resolveMention so 2+ genuinely-DIFFERENT same-name
+        // entities we hold in Echo (distinct QIDs) surface as an ASK instead of a silent wrong pick (the
+        // instance-blind bug). A single/thin/nil resolve falls back to the direct object pull — unchanged
+        // behavior for a lone thin hold (a degree-1 contact). Fail-soft.
+        try {
+          const resolve = resolveFn || ((m, o) => require('./echo_suit').resolveMention(m, o));
+          const rm = await resolve(entTopic, { preferType, context: null });
+          if (rm && rm.status === 'ambiguous' && Array.isArray(rm.candidates) && rm.candidates.length >= 2) ambiguous = { mention: entTopic, candidates: rm.candidates.slice(0, 4) };
+          else if (rm && rm.status === 'resolved' && rm.object) obj = rm.object;
+          else obj = await _echoObject(entTopic, preferType) || null;
+        } catch { try { obj = await _echoObject(entTopic, preferType) || null; } catch { obj = null; } }
+      }
+    }
     // RELEVANCE GATE — reject a junk FTS resolve (a FL bill for "Cuban Missile Crisis", "Hispanic Heritage
     // Foundation" for "Heritage Foundation", "AH DEFENSE LLC" for "Secretary of Defense") so we never ground
     // on — or half-trust — the wrong object. Junk → null → the cloud/wiki answers cleanly. Live path only;
@@ -84,7 +99,7 @@ async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retriev
   // PRECEDENCE — a fresh, deliberate verified_fact about this object leads over its (stale) KG dossier.
   let precedenceFact = null;
   if (obj) { try { precedenceFact = _precedenceFact(obj, notes, mentionUsed); } catch {} }
-  return { topic: t, notes, facts, object: obj, coverage: rich ? 'rich' : 'thin', echo: echoHits.length, mention: mentionUsed, identityNote, precedenceFact, streamHits };
+  return { topic: t, notes, facts, object: obj, coverage: rich ? 'rich' : 'thin', echo: echoHits.length, mention: mentionUsed, identityNote, precedenceFact, streamHits, ambiguous };
 }
 // Entity-shaped = a name/short phrase we can hand to quick_lookup (single-name → dossier), not a
 // full sentence. Keeps the object pull cheap + on-target.

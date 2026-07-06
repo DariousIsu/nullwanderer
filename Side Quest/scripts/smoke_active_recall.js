@@ -29,6 +29,13 @@ const noGraph = () => [];
     const rg = await ar.recall('kant', { retrieveFn: async () => [], graphFn: () => ['Kant influenced epistemology', 'Kant wrote Critique', 'Kant relates to ethics'] });
     ok(rg.coverage === 'rich', '3 graph facts → rich');
 
+    // DISAMBIGUATION (Stage 2): resolveMention finds 2+ genuinely-different same-name entities → recall
+    // surfaces `ambiguous` (main.js ASKs) and pulls NO object; a single resolved entity → object, no ambiguity.
+    const rAmb = await ar.recall('John Kennedy', { retrieveFn: async () => [], graphFn: noGraph, resolveFn: async () => ({ status: 'ambiguous', candidates: ['John F. Kennedy', 'John F. Kennedy (GA)'] }) });
+    ok(rAmb.ambiguous && rAmb.ambiguous.candidates.length === 2 && !rAmb.object, 'recall: 2+ same-name entities → ambiguous (ASK), no object');
+    const rRes = await ar.recall('John Curtis', { retrieveFn: async () => [], graphFn: noGraph, prominenceFn: async () => ({ status: 'ok' }), resolveFn: async () => ({ status: 'resolved', object: { id: 1, name: 'John Curtis', entity_type: 'person', degree: 320, facts: ['a', 'b', 'c', 'd'], committees: [] } }) });
+    ok(!rRes.ambiguous && rRes.object && rRes.object.degree === 320, 'recall: single resolved entity → object, no ambiguity');
+
     // knowledgeBlock: rich → ACTIVE directive
     const blk = await ar.knowledgeBlock('epistemology', { retrieveFn: async () => [note('verified_fact', 'X is fact', { as_of: '2026' }), note('learning', 'Y learned'), note('reflection_knowledge', 'Z noted')], graphFn: noGraph });
     ok(/WHAT YOU ALREADY KNOW about "epistemology"/.test(blk), 'block headers the topic');

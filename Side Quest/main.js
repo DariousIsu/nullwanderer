@@ -3539,6 +3539,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${recallResult.identityNote}\n\n${retrievedKnowledgeBlock}` : recallResult.identityNote;
     console.log('[main] prominence: declined civic namesake, answering the prominent referent');
   }
+  // AMBIGUOUS ENTITY → ASK, don't guess (bias-to-clarify). When the object pull found 2+ genuinely-different
+  // same-name entities we hold (distinct QIDs — e.g. two real people named "John Kennedy"), she can't tell
+  // which he means, so she asks rather than silently picking one. Fires ONCE and suppresses the answer draft.
+  if (recallResult && recallResult.ambiguous && recallResult.ambiguous.candidates && recallResult.ambiguous.candidates.length >= 2 && !followupFired && !socialTurn) {
+    const amb = recallResult.ambiguous;
+    console.log(`[main] ambiguous entity "${amb.mention}" → ASK (${amb.candidates.length} candidates)`);
+    followupFired = true;
+    try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked about "${amb.mention}", but you hold more than one distinct person/entity by that name: ${amb.candidates.join('; ')}. You genuinely can't tell which he means. Ask him which one — name the options briefly. Do NOT guess or answer about either yet. One or two sentences, your voice.]` }); }
+    catch (e) { console.error('[main] ambiguity ASK failed:', e.message); }
+  }
 
   // SELF-DEV LEDGER — on a question about her own development, prepend her real changelog (by
   // recency) so "what have you been working on / what's new with you / how have you changed" is
