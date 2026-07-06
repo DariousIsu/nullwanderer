@@ -1809,14 +1809,14 @@ async function runSocialEnrichMove() {
     let pick = null, contact = null, scanned = 0;
     for (const t of pdb.listTargets({ limit: 100000 })) {
       if (attempted.has(String(t.id))) continue;
-      if (++scanned > 300) break;
+      scanned++;
       const email = (pdb.getBelief(t.id, 'email') || {}).value || null;
       const c = { name: t.name, email, company: t.company || null };
       if (em.knownHandles(c, []).length === 0 && t.crm_id == null) continue;   // no known-handle source
       pick = t; contact = { ...c, crmId: t.crm_id || null }; break;
     }
     try { db.setMeta(SOCIAL_LAST_KEY, String(nowTs)); } catch {}
-    if (!pick) return false;
+    if (!pick) { console.log(`[social-enrich] idle: no eligible target (scanned ${scanned} unprocessed, none with a known handle)`); return false; }
 
     // mark processed BEFORE the run (once/month; a barren result shouldn't cause a re-scan next tick)
     attArr.push([String(pick.id), nowTs]);
