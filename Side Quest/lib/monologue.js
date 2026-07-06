@@ -1644,14 +1644,10 @@ async function runPullerMove(_recentTurns) {
   const browserSearch = async (query) => {
     try {
       if (!ownBrowser.isConnected()) { try { await ownBrowser.ensure(); } catch { return []; } }
-      const s = await ownBrowser.open(query);                 // → search results page
-      if (!s || !s.ok || s.blocker) return [];
-      const top = await ownBrowser.openTopResult();           // → click through to the real org page
-      if (!top || !top.ok) return [];
-      const r = await ownBrowser.read();                      // → its text
-      if (!r || !r.ok) return [];
-      const row = prospectFetch.pageResult(r, top.url || (r && r.url));
-      return row ? [row] : [];
+      // MULTI-LAYER: land on the top result, then click THROUGH relevant sub-links (real team page, a
+      // Contact page, individual bios) one layer deeper — merged as browser sources.
+      const rows = await prospectFetch.deepBrowse(ownBrowser, query, { maxHops: 3, log: (m) => console.log(m) });
+      return (rows || []).filter(r => r && r.text && r.text.length >= 200);
     } catch { return []; }
   };
   const web = prospectFetch.makeWebFetcher({ browserSearch, fallback: fallbackWeb, log: (m) => console.log(m) });

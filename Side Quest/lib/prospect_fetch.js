@@ -37,4 +37,59 @@ function pageResult(read, url, { minText = 200 } = {}) {
   return { text: text.slice(0, 8000), url: url || (read && read.url) || null, source: 'browser' };
 }
 
-module.exports = { makeWebFetcher, pageResult };
+// A relevant sub-link to DRILL into from a landing page — nav to the real team/contact page, or an
+// individual bio/profile. Deliberately scoped so we don't wander the whole site.
+const RELEVANT_LINK = /\b(leader(?:ship)?|team|our[-\s]?people|staff|about[-\s]?us|contact|bio(?:graphy)?|profile|management|executives?|leadership[-\s]?team|board|directors?|officers?|who[-\s]?we[-\s]?are)\b/i;
+// read().text lists interactive elements as "  [L0] link: Some Name" / "[B1] button: …". Parse them.
+const HANDLE_RE = /\[([LBC]\d+)\]\s+(?:link|card|button):\s*(.+)/gi;
+function parseHandles(text) {
+  const out = []; let m; HANDLE_RE.lastIndex = 0;
+  while ((m = HANDLE_RE.exec(String(text || ''))) !== null) { const name = m[2].trim(); if (name && name !== '(unlabeled)') out.push({ handle: m[1], name }); }
+  return out;
+}
+// Pick the sub-links worth drilling into: dedupe by name, keep the RELEVANT ones, cap at maxHops. Pure.
+function pickFollowLinks(text, { maxHops = 3 } = {}) {
+  const seen = new Set(); const out = [];
+  for (const h of parseHandles(text)) {
+    const k = h.name.toLowerCase();
+    if (seen.has(k)) continue; seen.add(k);
+    if (RELEVANT_LINK.test(h.name)) out.push(h);
+    if (out.length >= maxHops) break;
+  }
+  return out;
+}
+
+// MULTI-LAYER browse (Lucas: "make sure we are actually clicking through multiple layers"). Land on the
+// top search result, read it, then CLICK THROUGH up to `maxHops` relevant sub-links (the real team page,
+// a Contact page, individual bios) one layer deeper — returning to the index between hops so each click
+// resolves against a fresh element registry. Merges every layer as a browser source. `browser` = lib/web
+// (injected: open/openTopResult/read/click/back). Fail-soft: any hop that errors is skipped. Never throws.
+async function deepBrowse(browser, query, { maxHops = 3, minText = 200, log } = {}) {
+  const rows = [];
+  if (!browser) return rows;
+  try {
+    const s = await browser.open(query); if (!s || !s.ok) return rows;
+    const top = await browser.openTopResult(); if (!top || !top.ok) return rows;
+    let r = await browser.read(); if (!r || !r.ok) return rows;
+    const seenUrl = new Set();
+    const landingUrl = top.url || r.url;
+    if (String(r.text || '').trim().length >= minText) { rows.push({ text: String(r.text).slice(0, 8000), url: landingUrl, source: 'browser' }); }
+    seenUrl.add(landingUrl);
+    const follow = pickFollowLinks(r.text, { maxHops });
+    for (const h of follow) {
+      try {
+        const c = await browser.click(h.handle);
+        if (c && c.ok && c.url && !seenUrl.has(c.url)) {
+          const r2 = await browser.read();
+          const t2 = String((r2 && r2.text) || '').trim();
+          if (r2 && r2.ok && t2.length >= minText) { rows.push({ text: t2.slice(0, 8000), url: r2.url || c.url, source: 'browser', via: h.name }); seenUrl.add(r2.url || c.url); }
+        }
+      } catch {}
+      try { await browser.back(); await browser.read(); } catch {}   // back to the index + rebuild the registry for the next hop
+    }
+    log && log(`[browser] deep-browsed ${rows.length} layer(s) from ${landingUrl}${follow.length ? ' (via ' + follow.map(f => f.name).join(', ') + ')' : ''}`);
+  } catch (e) { log && log(`[browser] deepBrowse failed: ${e && e.message}`); }
+  return rows;
+}
+
+module.exports = { makeWebFetcher, pageResult, deepBrowse, pickFollowLinks, parseHandles, RELEVANT_LINK };

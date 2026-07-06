@@ -44,6 +44,34 @@ ok(PF.pageResult(null) === null, 'pageResult: no read → null');
   const res4 = await PF.makeWebFetcher({})('x');
   ok(Array.isArray(res4) && res4.length === 0, 'makeWebFetcher: no sources → [] (fail-soft)');
 
+  // === MULTI-LAYER: pickFollowLinks + deepBrowse ===
+  const handleText = 'Body text.\nInteractive elements:\n  [L0] link: Home\n  [L1] link: Leadership Team\n  [L2] link: Jane Roe\n  [L3] link: Contact Us\n  [L4] link: Careers';
+  const follow = PF.pickFollowLinks(handleText, { maxHops: 3 });
+  ok(follow.length === 2 && follow.some(f => f.name === 'Leadership Team') && follow.some(f => f.name === 'Contact Us'), 'pickFollowLinks: keeps only relevant nav (Leadership/Contact), drops Home/Careers');
+  ok(!follow.some(f => f.name === 'Jane Roe'), 'pickFollowLinks: a person-name link that is not nav-relevant is not auto-followed');
+  ok(PF.pickFollowLinks('no handles here').length === 0, 'pickFollowLinks: no handles → []');
+
+  // deepBrowse: land → read → click through 2 relevant sub-links → merge layers
+  const nav = {
+    _page: 'serp', _clicks: [],
+    open: async () => ({ ok: true, url: 'https://duckduckgo.com/html/?q=x' }),
+    openTopResult: async function () { this._page = 'index'; return { ok: true, url: 'https://acme.com/' }; },
+    read: async function () {
+      if (this._page === 'index') return { ok: true, url: 'https://acme.com/', text: 'Acme home. '.repeat(30) + '\nInteractive elements:\n  [L0] link: Leadership\n  [L1] link: Contact\n  [L2] link: Careers' };
+      if (this._page === 'leadership') return { ok: true, url: 'https://acme.com/leadership', text: 'Leadership: Jane Roe CEO, Bob Fell CFO. '.repeat(10) };
+      if (this._page === 'contact') return { ok: true, url: 'https://acme.com/contact', text: 'Contact: press@acme.com, 555-1000. '.repeat(10) };
+      return { ok: true, url: 'x', text: '' };
+    },
+    click: async function (h) { this._clicks.push(h); this._page = h === 'L0' ? 'leadership' : h === 'L1' ? 'contact' : 'other'; return { ok: true, url: 'https://acme.com/' + this._page }; },
+    back: async function () { this._page = 'index'; return { ok: true, url: 'https://acme.com/' }; },
+  };
+  const layers = await PF.deepBrowse(nav, 'Acme leadership', { maxHops: 3 });
+  ok(layers.length === 3, `deepBrowse: merges landing + 2 drilled layers (got ${layers.length})`);
+  ok(layers.every(l => l.source === 'browser'), 'deepBrowse: every layer is a browser source');
+  ok(layers.some(l => /Jane Roe CEO/.test(l.text)) && layers.some(l => /press@acme.com/.test(l.text)), 'deepBrowse: captured the deeper leadership + contact pages');
+  ok(nav._clicks.includes('L0') && nav._clicks.includes('L1') && !nav._clicks.includes('L2'), 'deepBrowse: clicked the relevant links (Leadership, Contact), not Careers');
+  ok((await PF.deepBrowse(null, 'x')).length === 0 && (await PF.deepBrowse({ open: async () => ({ ok: false }) }, 'x')).length === 0, 'deepBrowse: no browser / failed open → [] (fail-soft)');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
