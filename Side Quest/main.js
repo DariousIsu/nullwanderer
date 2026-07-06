@@ -2490,14 +2490,14 @@ ipcMain.handle('contacts:recent', async (_e, { n = 60 } = {}) => {
     const withIntel = [];
     for (const t of targets) {
       const beliefs = pdb.listBeliefs(t.id);
-      if (!beliefs.some(b => b.type === 'email' || b.type === 'phone' || b.type === 'address' || b.type === 'role')) continue;   // needs contact intel OR a title/role (titled people enrich later)
-      withIntel.push({ t, beliefs });
+      let social = []; try { social = contactCard.socialFromObservations(pdb.listObservations(t.id, { attr: 'social' })); } catch {}
+      // needs contact intel (email/phone/address/role belief) OR discovered social handles — so a
+      // person enriched ONLY with social observations (e.g. a CRM-only mint) still surfaces on the rail.
+      if (!beliefs.some(b => b.type === 'email' || b.type === 'phone' || b.type === 'address' || b.type === 'role') && !social.length) continue;
+      withIntel.push({ t, beliefs, social });
     }
     const crmByName = await lookupCrmContacts(withIntel.map(x => x.t.name));
-    const people = withIntel.map(x => {
-      let social = []; try { social = contactCard.socialFromObservations(pdb.listObservations(x.t.id, { attr: 'social' })); } catch {}
-      return contactCard.cardFromTarget(x.t, x.beliefs, crmByName.get(String(x.t.name).toLowerCase()) || {}, { social });
-    });
+    const people = withIntel.map(x => contactCard.cardFromTarget(x.t, x.beliefs, crmByName.get(String(x.t.name).toLowerCase()) || {}, { social: x.social }));
     // merge in the PLACE / EVENT / ORG cards (recent_cards store) — one typed waterfall, newest-first
     let placeEvent = []; try { placeEvent = db.listRecentCards({ types: ['place', 'event', 'org'], limit: Math.max(1, Math.min(200, Number(n) || 60)) }); } catch (e) {}
     const cards = [...people, ...placeEvent].sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, Math.max(1, Math.min(200, Number(n) || 60)));
