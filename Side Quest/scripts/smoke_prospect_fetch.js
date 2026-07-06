@@ -81,6 +81,18 @@ ok(PF.pageResult(null) === null, 'pageResult: no read → null');
   ok(nav._clicks.includes('L0') && nav._clicks.includes('L1') && nav._clicks.includes('L3') && !nav._clicks.includes('L2'), 'deepBrowse: clicked nav (Leadership, Contact) + person (Jane Roe), not Careers');
   ok((await PF.deepBrowse(null, 'x')).length === 0 && (await PF.deepBrowse({ open: async () => ({ ok: false }) }, 'x')).length === 0, 'deepBrowse: no browser / failed open → [] (fail-soft)');
 
+  // --- broker filter ---
+  ok(PF.isBrokerUrl('https://www.zoominfo.com/p/Jane-Roe/123') && PF.isBrokerUrl('https://wiza.co/d/acme/jane') && PF.isBrokerUrl('https://contactout.com/Jane-Roe-99') && PF.isBrokerUrl('https://rocketreach.co/jane'), 'isBrokerUrl: flags known data-broker domains');
+  ok(!PF.isBrokerUrl('https://www.duke-energy.com/our-company/leadership') && !PF.isBrokerUrl('https://raineycenter.org/about/team') && !PF.isBrokerUrl('https://floridadep.gov/contacts'), 'isBrokerUrl: real company/org/gov pages are NOT brokers');
+  // deepBrowse on a broker LANDING → mints nothing (falls back)
+  const brokerNav = {
+    open: async () => ({ ok: true, url: 'ddg' }),
+    openTopResult: async () => ({ ok: true, url: 'https://www.zoominfo.com/p/Jane-Roe/123' }),
+    read: async () => ({ ok: true, url: 'https://www.zoominfo.com/p/Jane-Roe/123', text: 'Reveal Jane Roe email. '.repeat(20) + '\nInteractive elements:\n  [L0] link: Free Email Reveal' }),
+    click: async () => ({ ok: true, url: 'https://www.zoominfo.com/upgrade' }), back: async () => ({ ok: true, url: 'x' }),
+  };
+  ok((await PF.deepBrowse(brokerNav, 'Jane Roe Acme email')).length === 0, 'deepBrowse: a data-broker landing → [] (skipped, no broker CTA minted)');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

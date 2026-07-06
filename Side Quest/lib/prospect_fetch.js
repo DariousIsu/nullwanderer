@@ -37,6 +37,15 @@ function pageResult(read, url, { minText = 200 } = {}) {
   return { text: text.slice(0, 8000), url: url || (read && read.url) || null, source: 'browser' };
 }
 
+// DATA-BROKER / contact-aggregator domains — paywalled "reveal email" walls (often Cloudflare-gated),
+// NOT the person's real bio. Skip them so the multi-layer drill spends its hops on real company pages.
+const BROKER_RE = /(?:^|\.)(?:zoominfo|wiza|contactout|rocketreach|apollo|lusha|signalhire|leadiq|hunter|clearbit|datanyze|uplead|seamless|cufinder|adapt|kaspr|snov|getprospect|findymail|anymailfinder|nymeria|swordfish|lead411|spokeo|beenverified|radaris|whitepages|usphonebook|peoplefinder|truepeoplesearch|fastpeoplesearch)\.[a-z.]{2,}$/i;
+function isBrokerUrl(url) {
+  let host = '';
+  try { host = new URL(String(url)).hostname.replace(/^www\./, ''); } catch { host = String(url || '').replace(/^https?:\/\//i, '').split(/[\/?#]/)[0].replace(/^www\./, ''); }
+  return BROKER_RE.test(host);
+}
+
 // A relevant sub-link to DRILL into from a landing page — nav to the real team/contact page, or an
 // individual bio/profile. Deliberately scoped so we don't wander the whole site.
 const RELEVANT_LINK = /\b(leader(?:ship)?|team|our[-\s]?people|staff|about[-\s]?us|contact|bio(?:graphy)?|profile|management|executives?|leadership[-\s]?team|board|directors?|officers?|who[-\s]?we[-\s]?are)\b/i;
@@ -102,6 +111,9 @@ async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 
     const norm = (u) => String(u || '').split('#')[0].replace(/\/+$/, '').toLowerCase();   // ignore #anchors + trailing slash
     const seenUrl = new Set();
     const landingUrl = top.url || r.url;
+    // Skip a data-broker landing entirely (paywalled aggregator, not a real bio) → [] so the caller falls
+    // back to the layered fetch instead of minting broker-CTA junk.
+    if (isBrokerUrl(landingUrl)) { log && log(`[browser] skipped data-broker landing: ${landingUrl}`); return rows; }
     if (String(r.text || '').trim().length >= minText) { rows.push({ text: String(r.text).slice(0, 8000), url: landingUrl, source: 'browser' }); }
     seenUrl.add(norm(landingUrl));
     // nav links first (reach the real team page if we landed on a homepage), then individual bios.
@@ -110,7 +122,7 @@ async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 
       try {
         const c = await browser.click(h.handle);
         const cu = c && c.ok ? norm(c.url) : '';
-        if (cu && !seenUrl.has(cu)) {   // a genuinely NEW page (not a same-page #anchor)
+        if (cu && !seenUrl.has(cu) && !isBrokerUrl(c.url)) {   // a genuinely NEW, non-broker page
           seenUrl.add(cu);
           const r2 = await browser.read();
           const t2 = String((r2 && r2.text) || '').trim();
@@ -124,4 +136,4 @@ async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 
   return rows;
 }
 
-module.exports = { makeWebFetcher, pageResult, deepBrowse, pickFollowLinks, pickPersonLinks, looksLikePersonLink, parseHandles, RELEVANT_LINK };
+module.exports = { makeWebFetcher, pageResult, deepBrowse, pickFollowLinks, pickPersonLinks, looksLikePersonLink, isBrokerUrl, parseHandles, RELEVANT_LINK };
