@@ -21,6 +21,15 @@ ok(intake.route({ isProject: true, priority: 'purple' }).priority === null, 'inv
 ok(intake.route({ isProject: true, clarify: ['a', 'b', 'c', 'd'] }).clarify.length === 2, 'clarify capped at 2');
 ok(intake.route({ isProject: true, budget: { kind: 'deadline', value: 'the 1030 meeting' } }).budget.kind === 'deadline', 'budget carried when set');
 
+// --- RUN SHAPE (systemic reframe): shape + anchor carried; action agrees with shape ---
+const prof = intake.route({ isProject: true, shape: 'profile', target: 'Emergence Water' });
+ok(prof.shape === 'profile' && prof.action === 'discover', 'shape=profile → carried, action=discover (a profile is a discover-action run, bounded downstream)');
+const comp = intake.route({ isProject: true, shape: 'comparables', anchor: 'Emergence Water', target: 'companies similar to Emergence Water' });
+ok(comp.shape === 'comparables' && comp.anchor === 'Emergence Water', 'shape=comparables → carries the reference anchor');
+ok(intake.route({ isProject: true, shape: 'enrich', mode: 'discover' }).action === 'enrich', 'shape=enrich forces action=enrich even if mode says discover');
+ok(intake.route({ isProject: true, shape: 'bogus' }).shape === null, 'invalid shape dropped → null (main falls back to the regex)');
+ok(intake.route({ isProject: true, mode: 'discover' }).shape === null, 'no shape field → null (cloud-down fallback path)');
+
 // --- subsetTopN ---
 ok(intake.subsetTopN('the 5 most complete') === 5, '"the 5 most complete" → 5');
 ok(intake.subsetTopN('top three') === 3, '"top three" → 3');

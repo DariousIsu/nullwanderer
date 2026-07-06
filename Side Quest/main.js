@@ -4324,25 +4324,40 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // OBJECT SEED — persist the resolved entity objects as the run's prior knowledge (the executor
             // reads these to build FROM what we hold, not re-derive it). Slice 2c consumes them fully.
             try { if (assignmentSeed && assignmentSeed.objects && assignmentSeed.objects.length) db.setMeta(`focus.${r.focus.id}.seed_objects`, JSON.stringify(assignmentSeed.objects).slice(0, 20000)); } catch {}
-            // SCOPE (guardrails + DRIFT FIX): a run is BOUNDED when the assignment named a concrete target —
-            // from the object-graph seed OR the intake classifier's extracted target. The seed's salient path
-            // can MISS a novel single company ("Emergence Water"), which left scope=open and let the run drift
-            // to the CEO's OTHER company once the (good) first draft was covered. A concrete classify target now
-            // bounds the run too; a category ("think tanks") stays OPEN discovery. Bounded → confined to these
-            // targets, TERMINATES when covered.
+            // SCOPE — driven by the LLM RUN SHAPE (the systemic reframe, replacing the isConcreteTarget regex
+            // point-signal). The shape decides scope COHERENTLY: only a "profile" of a named entity is BOUNDED
+            // (confined to it, terminates when covered); "discover" and "comparables" are OPEN discovery — and
+            // "comparables" ("companies similar to Emergence Water") records the named entity as a REFERENCE
+            // anchor, NOT a subject to profile (the bug where it bounded to the reference and never discovered
+            // the comparables). When the cloud was down (no shape), fall back to the old isConcreteTarget regex.
             const _classifyTarget = (intakeRoute && intakeRoute.target) ? String(intakeRoute.target).trim() : '';
-            const _concrete = (() => { try { return require('./lib/research').isConcreteTarget(_classifyTarget); } catch { return false; } })();
-            const _bounded = !!(assignmentSeed && assignmentSeed.bounded) || _concrete;
-            const _intended = (assignmentSeed && assignmentSeed.intendedTargets && assignmentSeed.intendedTargets.length)
-              ? assignmentSeed.intendedTargets
-              : (_concrete ? [_classifyTarget] : []);
+            const _shape = (intakeRoute && intakeRoute.shape) || null;
+            const _anchor = (intakeRoute && intakeRoute.anchor) ? String(intakeRoute.anchor).trim() : '';
+            let _bounded, _intended;
+            if (_shape) {
+              _bounded = _shape === 'profile';
+              _intended = _bounded
+                ? ((assignmentSeed && assignmentSeed.intendedTargets && assignmentSeed.intendedTargets.length) ? assignmentSeed.intendedTargets : [_classifyTarget].filter(Boolean))
+                : [];
+              if (_shape === 'comparables' && _anchor) { try { db.setMeta(`focus.${r.focus.id}.anchor`, _anchor); } catch {} }
+              console.log(`[focus] #${r.focus.id} shape=${_shape}${_anchor ? ` anchor="${_anchor}"` : ''} → scope=${_bounded ? 'bounded' : 'open'}`);
+            } else {   // cloud down → regex fallback (unchanged prior behavior)
+              const _concrete = (() => { try { return require('./lib/research').isConcreteTarget(_classifyTarget); } catch { return false; } })();
+              _bounded = !!(assignmentSeed && assignmentSeed.bounded) || _concrete;
+              _intended = (assignmentSeed && assignmentSeed.intendedTargets && assignmentSeed.intendedTargets.length)
+                ? assignmentSeed.intendedTargets
+                : (_concrete ? [_classifyTarget] : []);
+            }
             try { db.setMeta(`focus.${r.focus.id}.scope`, _bounded ? 'bounded' : 'open'); } catch {}
             try { if (_intended.length) db.setMeta(`focus.${r.focus.id}.intended_targets`, JSON.stringify(_intended)); } catch {}
             if (_bounded && _intended.length) console.log(`[focus] #${r.focus.id} BOUNDED to ${_intended.join(', ')} (drift guard)`);
             // PAGE-1 PLAN (Pillar 0) — author + store it now so it's reviewable up front + ready as page 1.
             // Seed it with the RESOLVED entities as known targets (a named-entity run starts FROM the object,
             // not "to be identified") — else empty targets → discovery states objective/approach/databases.
-            const seedTargets = (assignmentSeed && assignmentSeed.targets) || [];
+            let seedTargets = (assignmentSeed && assignmentSeed.targets) || [];
+            // COMPARABLES: the anchor is a REFERENCE, not a subject — drop it from the seed targets so the run
+            // DISCOVERS things like it instead of starting by profiling it (the seed-level half of the bug).
+            if (_shape === 'comparables' && _anchor) { const _an = _anchor.toLowerCase(); seedTargets = seedTargets.filter(t => String(t || '').trim().toLowerCase() !== _an); }
             let plan = null;
             try { plan = await generateResearchPlan(r.focus, { goal, targets: seedTargets, facet: (intakeRoute && intakeRoute.facet) || '', deep: !!(intakeRoute && intakeRoute.deep) }); } catch {}
             // CONTRACT → CANVAS (Slice 1): START the document NOW with the plan (objective/approach/estimate)

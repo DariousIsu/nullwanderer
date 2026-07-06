@@ -43,7 +43,13 @@ async function classify(message, { recent = '', activeFocus = '', existingRecord
       input: { user: s.slice(0, 800), recent: String(recent).slice(0, 400), active_task: String(activeFocus).slice(0, 160), existing_records: String(existingRecords).slice(0, 700) },
       want: 'You are the intake gate for Zoe. Decide whether the user is ASSIGNING A SUSTAINED TASK/PROJECT — work Zoe should carry out over time (research, gather, find, compile, generate, build, monitor, produce a deliverable) — as opposed to asking a question, a status check, or chatting. '
         + 'CRITICAL: isProject=false when the user asks to EXTRACT / PULL / LIST / SUMMARIZE / FIND something FROM a document they already gave you (phrases like "from the notes", "in the meeting notes", "out of this document", "from the transcript", "what I dropped/gave you", "on the canvas") — that is a ONE-SHOT extraction answered immediately by READING that document, NOT a sustained research project. Only "research/gather/find/compile X" about the OUTSIDE WORLD (not from a doc they handed you) is a project. '
-        + 'Output ONLY JSON: {"isProject":true|false,"mode":"enrich"|"discover","target":"short — what to work on","facet":"specifically what to gather/produce","priority":"red"|"orange"|"yellow"|null,"deep":true|false,"budget":{"kind":"deadline"|"duration"|"none","value":"the deadline or duration text, else null"},"subset":"a named subset like \'the 5 most complete\', else null","clarify":["at most 2 SHORT questions, ONLY if genuinely ambiguous; else []"]}. '
+        + 'Output ONLY JSON: {"isProject":true|false,"shape":"profile"|"discover"|"comparables"|"enrich","anchor":"the REFERENCE entity for a comparables task (the X in \'like X\'), else null","mode":"enrich"|"discover","target":"short — what to work on","facet":"specifically what to gather/produce","priority":"red"|"orange"|"yellow"|null,"deep":true|false,"budget":{"kind":"deadline"|"duration"|"none","value":"the deadline or duration text, else null"},"subset":"a named subset like \'the 5 most complete\', else null","clarify":["at most 2 SHORT questions, ONLY if genuinely ambiguous; else []"]}. '
+        + 'shape is the RUN SHAPE and it decides how the run is scoped — pick EXACTLY one: '
+        + '"profile" = a deep brief/dossier on a SPECIFIC named entity ("profile X", "background on Senator Y", "everything on Acme Corp") — the run is BOUNDED to that entity and target = that entity. '
+        + '"discover" = find/list entities matching CRITERIA with no reference entity ("find AI datacenter companies in Texas", "identify energy think tanks") — OPEN; target = the criteria. '
+        + '"comparables" = find entities LIKE / SIMILAR TO / competitors of a named entity ("companies similar to Emergence Water", "orgs like the Rainey Center", "Acme\'s competitors") — this is OPEN DISCOVERY, and the named entity is only a REFERENCE, NOT the thing to profile: set anchor = that entity ("Emergence Water") and target = the discovery description ("companies similar to Emergence Water"). Do NOT profile the anchor. '
+        + '"enrich" = deepen/extend records we ALREADY hold ("more contacts for those 5", "flesh out the think-tank list"). '
+        + 'mode MUST agree with shape: mode="enrich" iff shape="enrich"; otherwise mode="discover". '
         + 'mode="enrich" when it DEEPENS or EXTENDS research/records we ALREADY hold (refers to "those", "the 5", "the think tanks", an existing dossier/list/the ones we have); mode="discover" for brand-new research. '
         + 'CRITICAL: if the input includes EXISTING_RECORDS and the user\'s target topic or named organizations APPEAR in those existing records, choose mode="enrich" (we already have them — deepen/extend, do not start over). '
         + 'priority: ONLY for an explicit tag ("red tag"/"red-tagged"/"top priority"/"drop everything"→red; "orange"/"high"→orange; "yellow"/"when you can"→yellow); else null. '
@@ -73,8 +79,13 @@ function route(decision) {
   const budget = (decision.budget && decision.budget.kind && decision.budget.kind !== 'none')
     ? { kind: decision.budget.kind, value: clean(decision.budget.value, 60) } : null;
   const clarify = Array.isArray(decision.clarify) ? decision.clarify.map(q => clean(q, 120)).filter(Boolean).slice(0, 2) : [];
-  const action = decision.mode === 'enrich' ? 'enrich' : 'discover';
-  return { action, target, facet, deep, priority, subset, budget, clarify };
+  // RUN SHAPE (the systemic signal that drives scope+cap+termination). Validated to the known set, else null
+  // → main.js falls back to the isConcreteTarget regex. anchor = the REFERENCE entity for a comparables run.
+  const shape = ['profile', 'discover', 'comparables', 'enrich'].includes(decision.shape) ? decision.shape : null;
+  const anchor = clean(decision.anchor, 120) || null;
+  // action agrees with shape when we have one (shape='enrich' ⇒ enrich); else fall back to the mode field.
+  const action = (shape === 'enrich' || (!shape && decision.mode === 'enrich')) ? 'enrich' : 'discover';
+  return { action, shape, anchor, target, facet, deep, priority, subset, budget, clarify };
 }
 
 // "N most complete / top N" subset → the integer N, or null (so main.js can pick that many by completeness).
