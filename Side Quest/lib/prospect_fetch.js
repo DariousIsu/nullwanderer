@@ -47,12 +47,15 @@ function parseHandles(text) {
   while ((m = HANDLE_RE.exec(String(text || ''))) !== null) { const name = m[2].trim(); if (name && name !== '(unlabeled)') out.push({ handle: m[1], name }); }
   return out;
 }
-// Pick the sub-links worth drilling into: dedupe by name, keep the RELEVANT ones, cap at maxHops. Pure.
+// Pick the sub-links worth drilling into: a REAL nav link is short ("Leadership", "Our Team", "Contact")
+// — skip long hero/heading text ("Meet the Team Dedicated to Building a Better Future") that happens to
+// contain a keyword. Dedupe by name, keep the RELEVANT short ones, cap at maxHops. Pure.
 function pickFollowLinks(text, { maxHops = 3 } = {}) {
   const seen = new Set(); const out = [];
   for (const h of parseHandles(text)) {
     const k = h.name.toLowerCase();
     if (seen.has(k)) continue; seen.add(k);
+    if (h.name.split(/\s+/).length > 4 || h.name.length > 40) continue;   // nav links are short; skip hero/heading text
     if (RELEVANT_LINK.test(h.name)) out.push(h);
     if (out.length >= maxHops) break;
   }
@@ -71,18 +74,21 @@ async function deepBrowse(browser, query, { maxHops = 3, minText = 200, log } = 
     const s = await browser.open(query); if (!s || !s.ok) return rows;
     const top = await browser.openTopResult(); if (!top || !top.ok) return rows;
     let r = await browser.read(); if (!r || !r.ok) return rows;
+    const norm = (u) => String(u || '').split('#')[0].replace(/\/+$/, '').toLowerCase();   // ignore #anchors + trailing slash
     const seenUrl = new Set();
     const landingUrl = top.url || r.url;
     if (String(r.text || '').trim().length >= minText) { rows.push({ text: String(r.text).slice(0, 8000), url: landingUrl, source: 'browser' }); }
-    seenUrl.add(landingUrl);
+    seenUrl.add(norm(landingUrl));
     const follow = pickFollowLinks(r.text, { maxHops });
     for (const h of follow) {
       try {
         const c = await browser.click(h.handle);
-        if (c && c.ok && c.url && !seenUrl.has(c.url)) {
+        const cu = c && c.ok ? norm(c.url) : '';
+        if (cu && !seenUrl.has(cu)) {   // a genuinely NEW page (not a same-page #anchor)
+          seenUrl.add(cu);
           const r2 = await browser.read();
           const t2 = String((r2 && r2.text) || '').trim();
-          if (r2 && r2.ok && t2.length >= minText) { rows.push({ text: t2.slice(0, 8000), url: r2.url || c.url, source: 'browser', via: h.name }); seenUrl.add(r2.url || c.url); }
+          if (r2 && r2.ok && t2.length >= minText) rows.push({ text: t2.slice(0, 8000), url: r2.url || c.url, source: 'browser', via: h.name });
         }
       } catch {}
       try { await browser.back(); await browser.read(); } catch {}   // back to the index + rebuild the registry for the next hop

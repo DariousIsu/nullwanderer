@@ -45,10 +45,11 @@ ok(PF.pageResult(null) === null, 'pageResult: no read → null');
   ok(Array.isArray(res4) && res4.length === 0, 'makeWebFetcher: no sources → [] (fail-soft)');
 
   // === MULTI-LAYER: pickFollowLinks + deepBrowse ===
-  const handleText = 'Body text.\nInteractive elements:\n  [L0] link: Home\n  [L1] link: Leadership Team\n  [L2] link: Jane Roe\n  [L3] link: Contact Us\n  [L4] link: Careers';
+  const handleText = 'Body text.\nInteractive elements:\n  [L0] link: Home\n  [L1] link: Leadership Team\n  [L2] link: Jane Roe\n  [L3] link: Contact Us\n  [L4] link: Careers\n  [L5] link: Meet the Team Dedicated to Building a Better Future';
   const follow = PF.pickFollowLinks(handleText, { maxHops: 3 });
   ok(follow.length === 2 && follow.some(f => f.name === 'Leadership Team') && follow.some(f => f.name === 'Contact Us'), 'pickFollowLinks: keeps only relevant nav (Leadership/Contact), drops Home/Careers');
   ok(!follow.some(f => f.name === 'Jane Roe'), 'pickFollowLinks: a person-name link that is not nav-relevant is not auto-followed');
+  ok(!follow.some(f => /Meet the Team/.test(f.name)), 'pickFollowLinks: a long hero heading (>4 words) is NOT treated as a nav link');
   ok(PF.pickFollowLinks('no handles here').length === 0, 'pickFollowLinks: no handles → []');
 
   // deepBrowse: land → read → click through 2 relevant sub-links → merge layers
