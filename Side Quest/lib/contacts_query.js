@@ -105,8 +105,10 @@ function select(rows, { sectors = [], company = null, limit = 200 } = {}) {
       confidence: typeof (r && r.confidence) === 'number' ? r.confidence : 0,
     });
   }
-  // HIGHEST CONFIDENCE first (the operator's ask), then emailed contacts, then company.
-  filtered.sort((a, b) => (b.confidence - a.confidence) || ((b.email ? 1 : 0) - (a.email ? 1 : 0)) || _norm(a.company).localeCompare(_norm(b.company)));
+  // HIGHEST CONFIDENCE first (the operator's ask), then MOST COMPLETE (most contact fields filled — "the
+  // 200 most complete" is a common ask), then emailed contacts, then company.
+  const completeness = (r) => (r.email ? 1 : 0) + (r.phone ? 1 : 0) + (r.company ? 1 : 0) + (r.title ? 1 : 0);
+  filtered.sort((a, b) => (b.confidence - a.confidence) || (completeness(b) - completeness(a)) || ((b.email ? 1 : 0) - (a.email ? 1 : 0)) || _norm(a.company).localeCompare(_norm(b.company)));
   const total = filtered.length;
   const shown = filtered.slice(0, Math.max(1, limit || 200));
   return { rows: shown, total, shown: shown.length, withEmail: filtered.filter(r => r.email).length, headers: ['Name', 'Email', 'Company', 'Title', 'Confidence'] };

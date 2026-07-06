@@ -42,6 +42,12 @@ const rows = [
 const energy = CQ.select(rows, { sectors: ['energy'] });
 ok(energy.rows.every(r => /energy|vistra|duke|electric/i.test(r.company)) && !energy.rows.some(r => r.company === 'OpenAI' || r.company === 'State Senate'), 'select: energy filter keeps energy companies, drops AI/politicians');
 ok(energy.rows[0].name === 'Hi Conf' && energy.rows[0].confidence === 0.96, 'select: HIGHEST CONFIDENCE sorts first');
+// at EQUAL confidence, the MORE COMPLETE row (more contact fields filled) sorts first
+const compRows = [
+  { name: 'Sparse Guy', email: 's@aep.com', company: 'American Electric Power', confidence: 0.9 },
+  { name: 'Full Guy', email: 'f@aep.com', phone: '555-1212', company: 'American Electric Power', title: 'VP', confidence: 0.9 },
+];
+ok(CQ.select(compRows, { sectors: ['energy'] }).rows[0].name === 'Full Guy', 'select: at equal confidence, MOST COMPLETE sorts first');
 ok(energy.total === 3 && !energy.rows.some((r, i) => energy.rows.findIndex(x => x.name === r.name && x.company === r.company) !== i), 'select: dedups by name+company');
 ok(CQ.select(rows, { sectors: ['energy'], limit: 1 }).shown === 1, 'select: honors an explicit limit');
 // malformed initials-only names (from a bad extraction) are dropped even at high confidence

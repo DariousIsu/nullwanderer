@@ -6038,22 +6038,56 @@ async function resolvePlaces(names) {
   return out;
 }
 
-// Pull the contacts we HOLD for a contacts-query — the Puller's discovered contacts (name + email/phone/
-// role beliefs + company). The Puller holds the operator's industry targets (energy/AI/datacenter cos);
-// the CRM is mostly officials, so it's skipped here (a sector-filtered CRM add is a follow-up). Returns
-// [{ name, email, phone, company, title }]. Fail-safe → [].
+// Pull the contacts we HOLD for a contacts-query — from BOTH stores the operator has: the Puller's
+// discovered contacts (name + email/phone/role beliefs + company) AND the Echo CRM (electoral.contact,
+// ~110k rows, ~13k with an email). CONSUME-ONLY: the CRM read is a plain SELECT; we never write it.
+// The org/company for a CRM row is electoral.account.Name (via AccountId) — sector-rich (e.g. "Office of
+// Fossil Energy", "Idaho National Laboratory"), so the sector filter in contacts_query.select matches it.
+// Puller targets that reference a crm_id are de-duped against the CRM rows (skip the CRM twin). Returns
+// [{ name, email, phone, company, title, confidence }]. Fail-safe: Echo down → Puller-only (prior behavior).
 async function gatherHeldContacts() {
   const out = [];
+  const heldCrmIds = new Set();
+  // 1) PULLER — discovered targets + their beliefs (email/phone/role), carrying real per-attr confidence.
   try {
     const pdb = require('./lib/puller_db'); pdb.init();
     for (const t of pdb.listTargets({ limit: 100000 })) {
+      if (t.crm_id != null) heldCrmIds.add(Number(t.crm_id));
       const bl = pdb.listBeliefs(t.id) || [];
       const b = (type) => bl.find((x) => x.type === type) || null;
       const email = b('email');
       out.push({ name: t.name, email: email && email.value, phone: (b('phone') || {}).value || null, company: t.company, title: (b('role') || {}).value || null,
                  confidence: email && typeof email.confidence === 'number' ? email.confidence : ((b('phone') || {}).confidence || 0) });
     }
-  } catch (e) { console.error('[contacts-query] gather failed:', e.message); }
+  } catch (e) { console.error('[contacts-query] puller gather failed:', e.message); }
+  // 2) CRM — every emailed contact + its org (account) name, most-complete first. Bounded safety cap. The
+  // CRM has NO per-row email-quality score (Email_Quality_Score__c is 100% null), so confidence is a flat
+  // authoritative prior modulated only by the deliverable flag: deliverable→0.95, undeliverable→0.6, else 0.9.
+  try {
+    if (echoSuit && echoSuit.connected) {
+      const sql = `SELECT c.id, c.FirstName, c.LastName, c.Title, c.Email, c.Phone, c.MobilePhone,
+            c.Email_Deliverable__c AS deliverable, a.Name AS account_name
+          FROM electoral.contact c
+          LEFT JOIN electoral.account a ON a.id = c.AccountId
+          WHERE c.deleted=0 AND c.Email IS NOT NULL AND TRIM(c.Email) <> ''
+          ORDER BY (c.Phone IS NOT NULL AND TRIM(c.Phone) <> '') DESC,
+                   (c.AccountId IS NOT NULL) DESC,
+                   (c.Title IS NOT NULL AND TRIM(c.Title) <> '') DESC
+          LIMIT 20000`;
+      const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql, params: [] } });
+      let j = null; if (r && r.ok) { try { j = JSON.parse(r.text); } catch {} }
+      for (const row of ((j && j.rows) || [])) {
+        if (row.id != null && heldCrmIds.has(Number(row.id))) continue;   // the Puller already holds this person
+        const name = `${String(row.FirstName || '').trim()} ${String(row.LastName || '').trim()}`.trim();
+        if (name.length < 2) continue;
+        const del = row.deliverable;
+        const confidence = (del === 1 || del === '1') ? 0.95 : ((del === 0 || del === '0') ? 0.6 : 0.9);
+        out.push({ name, email: String(row.Email || '').trim() || null, phone: String(row.Phone || row.MobilePhone || '').trim() || null,
+                   company: String(row.account_name || '').trim() || null, title: String(row.Title || '').trim() || null, confidence });
+      }
+      console.log(`[contacts-query] gathered ${out.length} held contacts (Puller + CRM, ${heldCrmIds.size} CRM dupes skipped)`);
+    }
+  } catch (e) { console.error('[contacts-query] crm gather failed:', e.message); }
   return out;
 }
 
