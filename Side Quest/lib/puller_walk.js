@@ -31,7 +31,8 @@ const ATTEMPT_KEY = 'pullerwalk.attempted';   // getMeta/setMeta JSON [[key, ts]
 const PATTERN_FLOOR = 0.45;                    // only pattern-fill when the domain has a real learned lean (not a bare prior)
 const PROSPECT_TTL_MS = 24 * 60 * 60 * 1000;  // don't re-prospect the same org more than once a day
 const PROSPECT_KEY = 'pullerwalk.prospected';
-const MAX_NEW_PER_ORG = 5;                     // cap net-new targets minted per discovery move (quality > volume)
+const MAX_NEW_PER_ORG = 20;                    // a real leadership page lists 15-20 people; take the whole team
+                                               // (safe now that discovery only mints from a real page her browser read)
 
 const norm = (s) => String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 function attemptKeyOf(t) { return norm(`${t && t.name}|${t && (t.company || t.domain || '')}`); }
@@ -88,6 +89,20 @@ function buildContactSearchQuery(name, company) {
   const n = String(name || '').trim();
   const c = String(company || '').trim();
   return c ? `${n} ${c} email contact` : `${n} email contact`;
+}
+
+// pure: LIGHT person↔org verification for a web-fill. A search for "<name> <org> email" can surface a
+// same-named person at a DIFFERENT org; only land the contact when it's actually tied to THIS org — the
+// email sits at the org's own domain, OR the source text names the org. Belt-and-suspenders on web-fill
+// (discovery is already source-verified — the person is ON the org's leadership page).
+function orgVerified(found, target, text) {
+  const dom = String((target && target.domain) || '').toLowerCase().replace(/^www\./, '');
+  const email = String((found && found.email) || '').toLowerCase();
+  const emailDom = email.includes('@') ? email.split('@')[1] : '';
+  if (dom && emailDom && (emailDom === dom || emailDom.endsWith('.' + dom) || dom.endsWith('.' + emailDom))) return true;   // email at the org domain
+  const company = String((target && target.company) || '').toLowerCase().trim();
+  if (company && company.length >= 5 && String(text || '').toLowerCase().includes(company)) return true;                     // org named in the source
+  return false;
 }
 
 // --- pure: from extracted people, the row that matches our target (token overlap on the name) -------
@@ -159,7 +174,9 @@ async function runPullerMove(deps = {}) {
         const url = (sources[0] && sources[0].url) || null;
         let cards = null; try { cards = await extract(text, { title: pick.name }); } catch {}
         const found = pickPersonRow((cards && cards.people) || [], pick.name);
-        if (found && (found.email || found.phone)) {
+        // VERIFY the found contact is actually at THIS org before landing (don't trust a same-name hit at
+        // another company). Unverified → skip (fall through to no-fill) rather than land a maybe-wrong email.
+        if (found && (found.email || found.phone) && orgVerified(found, pick, text)) {
           if (found.email) { await doLand({ targetId: pick.id, attr: 'email', value: found.email, kind: 'guess', confidence: 0.6, source: 'web', sourceUrl: url, derivation: 'web' });
                              await doObserve({ sourceEntity: pick.name, relation: 'email', target: found.email, url, grade: 'C', confidence: 0.6, status: 'promoted' }); }
           if (found.phone) { await doLand({ targetId: pick.id, attr: 'phone', value: found.phone, kind: 'guess', confidence: 0.6, source: 'web', sourceUrl: url, derivation: 'web' }); }
@@ -289,7 +306,7 @@ async function runDiscoveryMove(deps = {}) {
 }
 
 module.exports = {
-  runPullerMove, runDiscoveryMove, pickTarget, patternFillCandidate, buildContactSearchQuery, pickPersonRow,
+  runPullerMove, runDiscoveryMove, pickTarget, patternFillCandidate, buildContactSearchQuery, pickPersonRow, orgVerified,
   pickSeedOrg, orgSectorScore, buildOrgProspectQuery, orgKeyOf, loadProspected, recordProspected,
   attemptKeyOf, loadAttempted, recordAttempt, norm,
   ATTEMPT_TTL_MS, ATTEMPT_KEY, PATTERN_FLOOR, PROSPECT_TTL_MS, PROSPECT_KEY, MAX_NEW_PER_ORG,

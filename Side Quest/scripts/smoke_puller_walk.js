@@ -41,6 +41,12 @@ ok(rowHit && rowHit.email === 'jane@rc.org' && rowHit.phone === '555', 'pickPers
 ok(PW.pickPersonRow([{ name: 'Jane Smith' }], 'Jane Smith') === null, 'pickPersonRow: a name match with NO contact field → null');
 ok(PW.pickPersonRow([{ name: 'Bob Jones', email: 'b@j.com' }], 'Jane Smith') === null, 'pickPersonRow: a non-matching name is not taken');
 
+// --- orgVerified: person↔org check for web-fill ---
+ok(PW.orgVerified({ email: 'jane@duke-energy.com' }, { domain: 'duke-energy.com', company: 'Duke Energy' }, 'anything') === true, 'orgVerified: email at the org domain → verified');
+ok(PW.orgVerified({ email: 'jane@gmail.com' }, { domain: 'duke-energy.com', company: 'Duke Energy' }, '... Jane at Duke Energy leadership ...') === true, 'orgVerified: org named in the source text → verified');
+ok(PW.orgVerified({ email: 'jane@springfield.gov' }, { domain: 'duke-energy.com', company: 'Duke Energy' }, 'Jane is the mayor of Springfield') === false, 'orgVerified: wrong-domain email + org not in text → NOT verified');
+ok(PW.orgVerified({ email: 'x@sub.duke-energy.com' }, { domain: 'duke-energy.com' }, '') === true, 'orgVerified: a subdomain of the org domain counts');
+
 // --- runPullerMove: PATTERN path ---
 (async () => {
   const meta = new Map();
@@ -81,16 +87,26 @@ ok(PW.pickPersonRow([{ name: 'Bob Jones', email: 'b@j.com' }], 'Jane Smith') ===
   const landed2 = [];
   let webQuery = null;
   const webMove = await PW.runPullerMove({
-    candidates: [{ id: 4, name: 'John Doe', company: 'Acme', domain: null, hasEmail: false }],
+    candidates: [{ id: 4, name: 'John Doe', company: 'Acme', domain: 'acme.com', hasEmail: false }],   // domain matches the found email → org-verified
     web: async (q) => { webQuery = q; return [{ text: 'John Doe — Acme Corp. Reach him at john.doe@acme.com or 704-555-1212.', url: 'https://acme.com/team' }]; },
     extract: async () => ({ people: [{ name: 'John Doe', email: 'john.doe@acme.com', phone: '704-555-1212' }], places: [], events: [] }),
     land: (o) => landed2.push(o),
     refresh: () => {},
     getMeta: (k) => meta2.get(k) || null, setMeta: (k, v) => meta2.set(k, v), now: () => 5000,
   });
-  ok(webMove.acted && webMove.mode === 'web' && webMove.email === 'john.doe@acme.com', 'runPullerMove: WEB path extracts a stated email from search results');
+  ok(webMove.acted && webMove.mode === 'web' && webMove.email === 'john.doe@acme.com', 'runPullerMove: WEB path extracts a stated, ORG-VERIFIED email');
   ok(webQuery === 'John Doe Acme email contact', 'runPullerMove: web query built from the target');
   ok(landed2.some(o => o.attr === 'email' && o.sourceUrl === 'https://acme.com/team') && landed2.some(o => o.attr === 'phone'), 'runPullerMove: web fills are CITED to the source URL (email + phone)');
+
+  // WEB-FILL org verification: a same-name person at a DIFFERENT org (email @othercorp, org not in text) → NOT landed
+  const badWeb = await PW.runPullerMove({
+    candidates: [{ id: 44, name: 'John Doe', company: 'Acme Corporation', domain: 'acme.com', hasEmail: false }],
+    web: async () => [{ text: 'John Doe is the mayor of Springfield. Contact john.doe@springfield.gov.', url: 'https://springfield.gov' }],
+    extract: async () => ({ people: [{ name: 'John Doe', email: 'john.doe@springfield.gov' }], places: [], events: [] }),
+    land: () => { throw new Error('should not land a wrong-org email'); }, refresh: () => {},
+    getMeta: (k) => null, setMeta: () => {}, now: () => 6000,
+  });
+  ok(!badWeb.acted && badWeb.reason === 'no-fill', 'runPullerMove: an unverified (wrong-org) web hit is NOT landed');
 
   // --- runPullerMove: NO-FILL (domain but unlearned pattern, no web dep) ---
   const noFill = await PW.runPullerMove({
