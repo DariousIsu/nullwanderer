@@ -22,6 +22,59 @@ const VENV_PY = IS_WIN
   : path.join(ROOT, 'sidecar', 'maigret_venv', 'bin', 'python');
 const RUNNER = path.join(ROOT, 'sidecar', 'maigret_enrich.py');
 
+// Personal email providers — a localpart from one of these is a plausible personal handle. A WORK-email
+// localpart (jsmith@ferc.gov) is NOT treated as a handle here (that was the noisy path in the spike).
+const PERSONAL_DOMAINS = new Set(['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com',
+  'yahoo.com', 'ymail.com', 'icloud.com', 'me.com', 'mac.com', 'proton.me', 'protonmail.com', 'aol.com', 'gmx.com']);
+const _norm = (s) => String(s == null ? '' : s).toLowerCase().trim();
+const _tokens = (s) => _norm(s).split(/[^a-z0-9]+/).filter((t) => t.length >= 2);
+
+// --- pure: the KNOWN handles for a contact (his choice: known handles only, NOT work-email/name guesses).
+// Sources: (1) CRM social_handle rows already linked to this contact [{platform,handle}], carried as a
+// high-provenance source; (2) the localpart of a PERSONAL email only. Returns [{username, source, platform}].
+function knownHandles(contact, crmHandles = []) {
+  const out = [];
+  const seen = new Set();
+  const add = (u, source, platform) => {
+    const s = _norm(u).replace(/[^a-z0-9._-]/g, '');
+    const key = s + '|' + (platform || '');
+    if (s.length >= 3 && s.length <= 40 && !seen.has(key)) { seen.add(key); out.push({ username: s, source, platform: platform || null }); }
+  };
+  for (const h of (Array.isArray(crmHandles) ? crmHandles : [])) add(h && (h.handle || h.Handle__c), 'crm', h && (h.platform || h.Platform__c));
+  const email = _norm((contact && contact.email) || '');
+  if (email.includes('@')) {
+    const [local, domain] = email.split('@');
+    if (PERSONAL_DOMAINS.has(domain) && !/^(info|contact|hello|admin|office|press|media|team|support|sales|general|noreply)$/.test(local)) add(local, 'personal-email', null);
+  }
+  return out;
+}
+
+// --- pure: CORROBORATION gate (his choice: require 2+ signals before staging anything). A discovered
+// account is kept ONLY if at least TWO independent signals tie it to the contact. Signals:
+//   name  — the account's extracted profile name token-matches the contact's name
+//   org   — the account's profile text mentions the contact's company/employer
+//   prov  — the searched handle came from a CRM official/verified handle (high provenance)
+// Returns { corroborated, score, signals:[...] }. Pure; no I/O.
+function corroborate(account, contact, { source = null } = {}) {
+  const signals = [];
+  const ids = (account && account.ids) || {};
+  const idsText = Object.values(ids).map((v) => _norm(v)).join(' ');
+  // name signal
+  const profileName = _norm(ids.fullname || ids.full_name || ids.name || [ids.first_name, ids.last_name].filter(Boolean).join(' '));
+  const want = _tokens(contact && contact.name);
+  if (profileName && want.length) {
+    const got = new Set(_tokens(profileName));
+    const overlap = want.filter((w) => got.has(w)).length;
+    if (overlap >= Math.min(2, want.length)) signals.push('name');
+  }
+  // org signal — a distinctive company token (len>=4) appears in the profile text
+  const orgToks = _tokens(contact && contact.company).filter((t) => t.length >= 4);
+  if (orgToks.length && orgToks.some((t) => idsText.includes(t))) signals.push('org');
+  // provenance signal — a CRM official handle (we already trust it points at this person)
+  if ((source || (account && account.source)) === 'crm') signals.push('prov');
+  return { corroborated: signals.length >= 2, score: signals.length, signals };
+}
+
 // --- pure: candidate usernames for a contact ------------------------------------------------------
 // The strongest signal is the email LOCALPART (jsmith@x.com → "jsmith"); we add a couple of name-derived
 // forms (first.last / firstlast / flast). Deduped, lowercased, junk-stripped. A real integration would
@@ -78,4 +131,4 @@ function enrichUsernames(usernames, { topSites = 50, timeout = 8, wallMs = 18000
   });
 }
 
-module.exports = { candidateUsernames, enrichUsernames, VENV_PY, RUNNER };
+module.exports = { candidateUsernames, knownHandles, corroborate, enrichUsernames, PERSONAL_DOMAINS, VENV_PY, RUNNER };
