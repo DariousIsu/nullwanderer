@@ -62,12 +62,37 @@ function pickFollowLinks(text, { maxHops = 3 } = {}) {
   return out;
 }
 
+// nav labels that are NOT a person's name — used to gate the person-bio link heuristic.
+const NAV_STOP = /\b(home|about|contact|leader|leadership|team|careers?|jobs?|login|sign|search|menu|news|media|press|privacy|terms|cookie|subscribe|donate|events?|resources?|blog|services?|products?|solutions?|investors?|governance|sitemap|faq|help|support|more|read|learn|view|our|company|overview|board|directors?|officers?|staff|people|profile)\b/i;
+// Does a link's TEXT look like a person's name (2-4 capitalized tokens, e.g. "Jane Roe", "J. Clay Sell")?
+// On a team INDEX page each leader's name links to their bio (where the direct email/title lives).
+function looksLikePersonLink(name) {
+  const n = String(name || '').trim();
+  const toks = n.split(/\s+/);
+  if (toks.length < 2 || toks.length > 4) return false;
+  if (NAV_STOP.test(n)) return false;
+  const capish = toks.filter(t => /^[A-Z][a-z'’.\-]+$/.test(t) || /^[A-Z]\.?$/.test(t) || /^(de|la|van|von|del|di)$/i.test(t)).length;
+  return capish >= 2;   // at least a capitalized first + last
+}
+// Pick individual-bio links (person names) from the index, deduped, capped. Pure.
+function pickPersonLinks(text, { max = 4 } = {}) {
+  const seen = new Set(); const out = [];
+  for (const h of parseHandles(text)) {
+    const k = h.name.toLowerCase();
+    if (seen.has(k)) continue; seen.add(k);
+    if (looksLikePersonLink(h.name)) out.push(h);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 // MULTI-LAYER browse (Lucas: "make sure we are actually clicking through multiple layers"). Land on the
-// top search result, read it, then CLICK THROUGH up to `maxHops` relevant sub-links (the real team page,
-// a Contact page, individual bios) one layer deeper — returning to the index between hops so each click
-// resolves against a fresh element registry. Merges every layer as a browser source. `browser` = lib/web
-// (injected: open/openTopResult/read/click/back). Fail-soft: any hop that errors is skipped. Never throws.
-async function deepBrowse(browser, query, { maxHops = 3, minText = 200, log } = {}) {
+// top search result, read it, then CLICK THROUGH one layer deeper: up to `maxHops` relevant NAV links
+// (the real team page, a Contact page) AND up to `maxBios` individual PERSON-name links (each leader's
+// bio, where the direct email/title lives). Returns to the index between hops so each click resolves
+// against a fresh element registry. Merges every layer as a browser source. `browser` = lib/web (injected:
+// open/openTopResult/read/click/back). Fail-soft: any hop that errors is skipped. Never throws.
+async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 200, log } = {}) {
   const rows = [];
   if (!browser) return rows;
   try {
@@ -79,7 +104,8 @@ async function deepBrowse(browser, query, { maxHops = 3, minText = 200, log } = 
     const landingUrl = top.url || r.url;
     if (String(r.text || '').trim().length >= minText) { rows.push({ text: String(r.text).slice(0, 8000), url: landingUrl, source: 'browser' }); }
     seenUrl.add(norm(landingUrl));
-    const follow = pickFollowLinks(r.text, { maxHops });
+    // nav links first (reach the real team page if we landed on a homepage), then individual bios.
+    const follow = [...pickFollowLinks(r.text, { maxHops }), ...pickPersonLinks(r.text, { max: maxBios })];
     for (const h of follow) {
       try {
         const c = await browser.click(h.handle);
@@ -98,4 +124,4 @@ async function deepBrowse(browser, query, { maxHops = 3, minText = 200, log } = 
   return rows;
 }
 
-module.exports = { makeWebFetcher, pageResult, deepBrowse, pickFollowLinks, parseHandles, RELEVANT_LINK };
+module.exports = { makeWebFetcher, pageResult, deepBrowse, pickFollowLinks, pickPersonLinks, looksLikePersonLink, parseHandles, RELEVANT_LINK };

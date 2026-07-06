@@ -52,25 +52,33 @@ ok(PF.pageResult(null) === null, 'pageResult: no read → null');
   ok(!follow.some(f => /Meet the Team/.test(f.name)), 'pickFollowLinks: a long hero heading (>4 words) is NOT treated as a nav link');
   ok(PF.pickFollowLinks('no handles here').length === 0, 'pickFollowLinks: no handles → []');
 
+  // person-bio links (individual leaders on an index page)
+  ok(PF.looksLikePersonLink('Jane Roe') && PF.looksLikePersonLink('J. Clay Sell') && PF.looksLikePersonLink('José N. Reyes'), 'looksLikePersonLink: real names (incl. initials/accents)');
+  ok(!PF.looksLikePersonLink('Leadership Team') && !PF.looksLikePersonLink('Contact Us') && !PF.looksLikePersonLink('Careers') && !PF.looksLikePersonLink('Read More'), 'looksLikePersonLink: nav labels are NOT people');
+  const persons = PF.pickPersonLinks(handleText, { max: 4 });
+  ok(persons.length === 1 && persons[0].name === 'Jane Roe', 'pickPersonLinks: picks the person-name link (Jane Roe), not the nav links');
+
   // deepBrowse: land → read → click through 2 relevant sub-links → merge layers
   const nav = {
     _page: 'serp', _clicks: [],
     open: async () => ({ ok: true, url: 'https://duckduckgo.com/html/?q=x' }),
     openTopResult: async function () { this._page = 'index'; return { ok: true, url: 'https://acme.com/' }; },
     read: async function () {
-      if (this._page === 'index') return { ok: true, url: 'https://acme.com/', text: 'Acme home. '.repeat(30) + '\nInteractive elements:\n  [L0] link: Leadership\n  [L1] link: Contact\n  [L2] link: Careers' };
+      if (this._page === 'index') return { ok: true, url: 'https://acme.com/', text: 'Acme home. '.repeat(30) + '\nInteractive elements:\n  [L0] link: Leadership\n  [L1] link: Contact\n  [L2] link: Careers\n  [L3] link: Jane Roe' };
       if (this._page === 'leadership') return { ok: true, url: 'https://acme.com/leadership', text: 'Leadership: Jane Roe CEO, Bob Fell CFO. '.repeat(10) };
       if (this._page === 'contact') return { ok: true, url: 'https://acme.com/contact', text: 'Contact: press@acme.com, 555-1000. '.repeat(10) };
+      if (this._page === 'bio') return { ok: true, url: 'https://acme.com/people/jane-roe', text: 'Jane Roe, CEO. Direct: jane.roe@acme.com, 555-2222. '.repeat(8) };
       return { ok: true, url: 'x', text: '' };
     },
-    click: async function (h) { this._clicks.push(h); this._page = h === 'L0' ? 'leadership' : h === 'L1' ? 'contact' : 'other'; return { ok: true, url: 'https://acme.com/' + this._page }; },
+    click: async function (h) { this._clicks.push(h); this._page = h === 'L0' ? 'leadership' : h === 'L1' ? 'contact' : h === 'L3' ? 'bio' : 'other'; return { ok: true, url: 'https://acme.com/' + (this._page === 'bio' ? 'people/jane-roe' : this._page) }; },
     back: async function () { this._page = 'index'; return { ok: true, url: 'https://acme.com/' }; },
   };
-  const layers = await PF.deepBrowse(nav, 'Acme leadership', { maxHops: 3 });
-  ok(layers.length === 3, `deepBrowse: merges landing + 2 drilled layers (got ${layers.length})`);
+  const layers = await PF.deepBrowse(nav, 'Acme leadership', { maxHops: 2, maxBios: 4 });
+  ok(layers.length === 4, `deepBrowse: merges landing + nav layers + a person BIO (got ${layers.length})`);
   ok(layers.every(l => l.source === 'browser'), 'deepBrowse: every layer is a browser source');
   ok(layers.some(l => /Jane Roe CEO/.test(l.text)) && layers.some(l => /press@acme.com/.test(l.text)), 'deepBrowse: captured the deeper leadership + contact pages');
-  ok(nav._clicks.includes('L0') && nav._clicks.includes('L1') && !nav._clicks.includes('L2'), 'deepBrowse: clicked the relevant links (Leadership, Contact), not Careers');
+  ok(layers.some(l => /jane\.roe@acme\.com/.test(l.text)), 'deepBrowse: drilled into the individual BIO for the direct email');
+  ok(nav._clicks.includes('L0') && nav._clicks.includes('L1') && nav._clicks.includes('L3') && !nav._clicks.includes('L2'), 'deepBrowse: clicked nav (Leadership, Contact) + person (Jane Roe), not Careers');
   ok((await PF.deepBrowse(null, 'x')).length === 0 && (await PF.deepBrowse({ open: async () => ({ ok: false }) }, 'x')).length === 0, 'deepBrowse: no browser / failed open → [] (fail-soft)');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

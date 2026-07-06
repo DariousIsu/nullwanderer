@@ -1646,7 +1646,7 @@ async function runPullerMove(_recentTurns) {
       if (!ownBrowser.isConnected()) { try { await ownBrowser.ensure(); } catch { return []; } }
       // MULTI-LAYER: land on the top result, then click THROUGH relevant sub-links (real team page, a
       // Contact page, individual bios) one layer deeper — merged as browser sources.
-      const rows = await prospectFetch.deepBrowse(ownBrowser, query, { maxHops: 3, log: (m) => console.log(m) });
+      const rows = await prospectFetch.deepBrowse(ownBrowser, query, { maxHops: 2, maxBios: 4, log: (m) => console.log(m) });
       return (rows || []).filter(r => r && r.text && r.text.length >= 200);
     } catch { return []; }
   };
