@@ -27,6 +27,13 @@ const SECTORS = {
 };
 
 const _norm = (s) => String(s == null ? '' : s).toLowerCase();
+// A malformed extraction where the name collapsed to bare initials ("P. C. V. C.", "A. G.") — every token
+// a single letter. These pattern-fill to high confidence and would otherwise top a "highest confidence"
+// list, so they're dropped as unusable contacts.
+function isInitialsOnly(name) {
+  const toks = String(name || '').trim().split(/\s+/).filter(Boolean);
+  return toks.length > 0 && toks.every((t) => /^[A-Za-z]\.?$/.test(t));
+}
 
 // Which sectors did the request mention? [] = no sector filter (all held contacts).
 function sectorsFrom(message) {
@@ -43,14 +50,20 @@ function companyFrom(message) {
 
 // "who do we have / who are our [people] at <X>" — a contact ask with no explicit noun.
 const WHO_HAVE = /\bwho\s+(?:do we have|are (?:our|we|the)|'?s (?:our|on))\b/i;
-// Detect a list-the-contacts-we-hold request. Returns { isQuery, sectors, company }.
+// A requested count ("100 highest confidence contacts", "top 50", "the 25 best") → the limit, else null.
+function countFrom(message) {
+  const m = /\b(?:top|first|best|give me|list|our|the)?\s*(\d{1,4})\b/i.exec(String(message || ''));
+  const n = m ? parseInt(m[1], 10) : null;
+  return (n && n >= 1 && n <= 5000) ? n : null;
+}
+// Detect a list-the-contacts-we-hold request. Returns { isQuery, sectors, company, limit }.
 function detect(message) {
   const m = String(message == null ? '' : message);
   const nounish = CONTACT_NOUN.test(m) || (WHO_HAVE.test(m) && /\bat\b/i.test(m));
   if (!nounish) return { isQuery: false };
   if (RESEARCH_INTENT.test(m) && !LIST_INTENT.test(m)) return { isQuery: false };   // an explicit "research NEW" → not a list
   if (!LIST_INTENT.test(m) && !WHO_HAVE.test(m)) return { isQuery: false };
-  return { isQuery: true, sectors: sectorsFrom(m), company: companyFrom(m) };
+  return { isQuery: true, sectors: sectorsFrom(m), company: companyFrom(m), limit: countFrom(m) };
 }
 
 // A company matches the requested sectors if ANY requested sector's matcher hits its name. No sectors → all.
@@ -69,7 +82,7 @@ function select(rows, { sectors = [], company = null, limit = 200 } = {}) {
   const filtered = [];
   for (const r of (Array.isArray(rows) ? rows : [])) {
     const name = String((r && r.name) || '').trim();
-    if (name.length < 2) continue;
+    if (name.length < 2 || isInitialsOnly(name)) continue;   // drop malformed initials-only junk
     const rc = String((r && r.company) || '');
     if (!matchesSectors(rc, sectors)) continue;
     if (comp && !_norm(rc).includes(comp)) continue;
@@ -81,19 +94,21 @@ function select(rows, { sectors = [], company = null, limit = 200 } = {}) {
       phone: String((r && r.phone) || '').trim() || null,
       company: rc.trim() || null,
       title: String((r && r.title) || '').trim() || null,
+      confidence: typeof (r && r.confidence) === 'number' ? r.confidence : 0,
     });
   }
-  // emailed contacts first (the useful ones), then by company
-  filtered.sort((a, b) => (b.email ? 1 : 0) - (a.email ? 1 : 0) || _norm(a.company).localeCompare(_norm(b.company)));
+  // HIGHEST CONFIDENCE first (the operator's ask), then emailed contacts, then company.
+  filtered.sort((a, b) => (b.confidence - a.confidence) || ((b.email ? 1 : 0) - (a.email ? 1 : 0)) || _norm(a.company).localeCompare(_norm(b.company)));
   const total = filtered.length;
-  const shown = filtered.slice(0, Math.max(1, limit));
-  return { rows: shown, total, shown: shown.length, withEmail: filtered.filter(r => r.email).length, headers: ['Name', 'Email', 'Company', 'Title'] };
+  const shown = filtered.slice(0, Math.max(1, limit || 200));
+  return { rows: shown, total, shown: shown.length, withEmail: filtered.filter(r => r.email).length, headers: ['Name', 'Email', 'Company', 'Title', 'Confidence'] };
 }
 
 // The canvas TABLE payload (headers + rows) for saga_canvas_add_block block_type='table'. Pure.
 function toTable(sel) {
-  const headers = sel.headers || ['Name', 'Email', 'Company', 'Title'];
-  const rows = (sel.rows || []).map(r => [r.name || '', r.email || '', r.company || '', r.title || '']);
+  const headers = sel.headers || ['Name', 'Email', 'Company', 'Title', 'Confidence'];
+  const pct = (c) => (typeof c === 'number' && c > 0) ? `${Math.round(c * 100)}%` : '';
+  const rows = (sel.rows || []).map(r => [r.name || '', r.email || '', r.company || '', r.title || '', pct(r.confidence)]);
   const caption = sel.total > sel.shown ? `${sel.shown} of ${sel.total} contacts (${sel.withEmail} with email)` : `${sel.total} contacts (${sel.withEmail} with email)`;
   return { headers, rows, caption };
 }

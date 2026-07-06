@@ -3984,12 +3984,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // intake/operator blocks below suppress. Only when we actually hold matching contacts; else it says so
   // and offers to research (never silently starts one).
   let contactsHandled = false;
-  if (routerOn && turnRoute.route === 'contacts' && !directedStopHandled && !expandHandled && !correctionHandled && !docQaHandled && !followupFired) {
+  // NOTE: docQaHandled is declared later in this function — do NOT reference it here (TDZ). The
+  // route==='contacts' check already excludes a doc-QA turn (mutually-exclusive routes).
+  if (routerOn && turnRoute.route === 'contacts' && !directedStopHandled && !expandHandled && !correctionHandled && !followupFired) {
     try {
       const cq = require('./lib/contacts_query');
       const ask = _contactsQ && _contactsQ.isQuery ? _contactsQ : cq.detect(userMessage);
       const rows = await gatherHeldContacts();
-      const sel = cq.select(rows, { sectors: ask.sectors, company: ask.company, limit: 200 });
+      const sel = cq.select(rows, { sectors: ask.sectors, company: ask.company, limit: ask.limit || 200 });
       const lbl = cq.label(ask);
       if (sel.total > 0) {
         const tbl = cq.toTable(sel);
@@ -6038,8 +6040,10 @@ async function gatherHeldContacts() {
     const pdb = require('./lib/puller_db'); pdb.init();
     for (const t of pdb.listTargets({ limit: 100000 })) {
       const bl = pdb.listBeliefs(t.id) || [];
-      const bv = (type) => { const b = bl.find((x) => x.type === type); return b ? b.value : null; };
-      out.push({ name: t.name, email: bv('email'), phone: bv('phone'), company: t.company, title: bv('role') });
+      const b = (type) => bl.find((x) => x.type === type) || null;
+      const email = b('email');
+      out.push({ name: t.name, email: email && email.value, phone: (b('phone') || {}).value || null, company: t.company, title: (b('role') || {}).value || null,
+                 confidence: email && typeof email.confidence === 'number' ? email.confidence : ((b('phone') || {}).confidence || 0) });
     }
   } catch (e) { console.error('[contacts-query] gather failed:', e.message); }
   return out;

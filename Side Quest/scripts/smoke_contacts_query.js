@@ -20,27 +20,37 @@ ok(CQ.detect('list our energy and datacenter contacts').sectors.join(',') === 'e
 ok(CQ.detect('give me the contacts at Duke Energy').company === 'Duke Energy', 'detect: pulls the company filter ("at Duke Energy")');
 ok(CQ.detect('list all the contacts we have').sectors.length === 0, 'detect: no sector mentioned → no filter (all)');
 
-// --- select: sector filter, email-first, dedup, cap ---
+// --- count parsing ---
+ok(CQ.detect('pull our 100 highest confidence energy contacts').limit === 100, 'detect: parses a requested count (100)');
+ok(CQ.detect('list the top 25 energy contacts').limit === 25, 'detect: "top 25" → 25');
+ok(CQ.detect('list our energy contacts').limit === null, 'detect: no number → null limit');
+
+// --- select: sector filter, CONFIDENCE-first, dedup, cap ---
 const rows = [
-  { name: 'Jim Burke', email: 'jim.burke@vistra.com', company: 'Vistra Energy', title: 'CEO' },
-  { name: 'No Email Person', company: 'Duke Energy', title: 'VP' },
-  { name: 'Ada Lovelace', email: 'ada@openai.com', company: 'OpenAI', title: 'Researcher' },
-  { name: 'Bob Politician', email: 'bob@ncleg.gov', company: 'State Senate', title: 'Senator' },
-  { name: 'Jim Burke', email: 'dup@vistra.com', company: 'Vistra Energy', title: 'CEO' },   // dup name+company → collapsed
+  { name: 'Jim Burke', email: 'jim.burke@vistra.com', company: 'Vistra Energy', title: 'CEO', confidence: 0.7 },
+  { name: 'No Email Person', company: 'Duke Energy', title: 'VP', confidence: 0 },
+  { name: 'Ada Lovelace', email: 'ada@openai.com', company: 'OpenAI', title: 'Researcher', confidence: 0.9 },
+  { name: 'Bob Politician', email: 'bob@ncleg.gov', company: 'State Senate', title: 'Senator', confidence: 0.95 },
+  { name: 'Hi Conf', email: 'hc@aep.com', company: 'American Electric Power', title: 'Dir', confidence: 0.96 },
+  { name: 'Jim Burke', email: 'dup@vistra.com', company: 'Vistra Energy', title: 'CEO', confidence: 0.5 },   // dup name+company → collapsed
 ];
 const energy = CQ.select(rows, { sectors: ['energy'] });
-ok(energy.rows.every(r => /energy|vistra|duke/i.test(r.company)) && !energy.rows.some(r => r.company === 'OpenAI' || r.company === 'State Senate'), 'select: energy filter keeps energy companies, drops AI/politicians');
-ok(energy.rows[0].email && energy.rows[0].name === 'Jim Burke', 'select: emailed contacts sort first');
-ok(energy.total === 2 && !energy.rows.some((r, i) => energy.rows.findIndex(x => x.name === r.name && x.company === r.company) !== i), 'select: dedups by name+company');
+ok(energy.rows.every(r => /energy|vistra|duke|electric/i.test(r.company)) && !energy.rows.some(r => r.company === 'OpenAI' || r.company === 'State Senate'), 'select: energy filter keeps energy companies, drops AI/politicians');
+ok(energy.rows[0].name === 'Hi Conf' && energy.rows[0].confidence === 0.96, 'select: HIGHEST CONFIDENCE sorts first');
+ok(energy.total === 3 && !energy.rows.some((r, i) => energy.rows.findIndex(x => x.name === r.name && x.company === r.company) !== i), 'select: dedups by name+company');
+ok(CQ.select(rows, { sectors: ['energy'], limit: 1 }).shown === 1, 'select: honors an explicit limit');
+// malformed initials-only names (from a bad extraction) are dropped even at high confidence
+ok(CQ.select([{ name: 'P. C. V. C.', email: 'p.c@ferc.gov', company: 'Duke Energy', confidence: 0.97 }, { name: 'Real Person', email: 'r@aep.com', company: 'AEP', confidence: 0.6 }], { sectors: ['energy'] }).rows.every(r => r.name !== 'P. C. V. C.'), 'select: drops initials-only junk names even at 97% confidence');
 const ai = CQ.select(rows, { sectors: ['ai', 'datacenter'] });
 ok(ai.total === 1 && ai.rows[0].company === 'OpenAI', 'select: AI/datacenter filter → OpenAI');
 const all = CQ.select(rows, {});
-ok(all.total === 4, 'select: no sector → all (deduped)');
+ok(all.total === 5, 'select: no sector → all (deduped)');
 ok(CQ.select(rows, { company: 'duke' }).total === 1, 'select: company filter → just Duke');
 
 // --- toTable + label ---
 const tbl = CQ.toTable(energy);
-ok(tbl.headers.length === 4 && tbl.rows.length === 2 && tbl.rows[0][0] === 'Jim Burke' && /with email/.test(tbl.caption), 'toTable: headers + rows + caption');
+ok(tbl.headers.length === 5 && tbl.headers[4] === 'Confidence' && tbl.rows.length === 3 && tbl.rows[0][0] === 'Hi Conf' && /with email/.test(tbl.caption), 'toTable: headers (incl. Confidence) + rows sorted by confidence + caption');
+ok(tbl.rows[0][4] === '96%', 'toTable: confidence rendered as a %');
 ok(CQ.label({ sectors: ['energy'] }) === 'energy contacts' && CQ.label({ company: 'Duke Energy' }) === 'Duke Energy contacts', 'label: sector / company titles');
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
