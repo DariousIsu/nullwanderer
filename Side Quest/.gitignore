@@ -1,5 +1,9 @@
 # Dependencies
 node_modules/
+# Python sidecar virtualenvs (forecasting + maigret enrichment) — large, machine-built, never commit
+sidecar/.venv/
+sidecar/maigret_venv/
+sidecar/**/reports/
 
 # Credentials — email password, Discord bot token. NEVER commit.
 .env
