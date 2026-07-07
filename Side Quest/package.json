@@ -7,6 +7,7 @@
     "start": "electron .",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
     "build:editor": "node scripts/build_editor.js",
+    "build:avatar": "node scripts/build_avatar.js",
     "test": "node scripts/run_smokes.js",
     "lint": "eslint lib main.js preload.js studio scripts renderer"
   },
@@ -15,6 +16,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@pixiv/three-vrm": "^3.5.4",
     "@tiptap/core": "^3.27.1",
     "@tiptap/pm": "^3.27.1",
     "@tiptap/starter-kit": "^3.27.1",
@@ -31,7 +33,8 @@
     "nodemailer": "^6.9.16",
     "patchright": "^1.61.0",
     "pdfjs-dist": "^6.0.227",
-    "playwright": "^1.61.0"
+    "playwright": "^1.61.0",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",

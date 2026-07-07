@@ -30,4 +30,11 @@ module.exports = [
     languageOptions: { ecmaVersion: 2023, sourceType: 'script', globals: { ...globals.browser } },
     rules: RULES,
   },
+  {
+    // esbuild ESM entry files (bundled → renderer/vendor/*.bundle.js): real ES modules, browser-targeted.
+    // They mix `import` (bundled deps) with `require` (our own CommonJS libs), which esbuild resolves.
+    files: ['scripts/*_entry.js'],
+    languageOptions: { ecmaVersion: 2023, sourceType: 'module', globals: { ...globals.browser, require: 'readonly' } },
+    rules: RULES,
+  },
 ];

@@ -128,6 +128,7 @@ const smokes = [
   'smoke_tts.js',
   'smoke_tts_service.js',
   'smoke_avatar_state.js',
+  'smoke_vrm_state.js',
   'smoke_excavate.js',
   'smoke_staleness.js',
   // Data-Stream (news) lane — isolated NEWS_DB_PATH / pure; offline-deterministic
