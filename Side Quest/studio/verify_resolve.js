@@ -174,6 +174,19 @@
       return { fr, blocked: b.blocked };
     };
 
+    // Rung 0 — ATTACHED in-house source. When the operator has tagged an in-hand document to THIS
+    // citation (by uid), resolve straight from its text and skip the web ladder entirely. The tag
+    // decides the source; the downstream classify still judges whether the claim actually follows.
+    const att = opts.attachments && uid ? opts.attachments[uid] : null;
+    const attBody = att && String((att.text != null ? att.text : att.source_text) || '');
+    if (attBody && attBody.trim().length >= MIN_BODY) {
+      trail.push({ step: 'attached', tool: 'in-house-source', ok: true, reason: null });
+      return {
+        uid, resolved: true, tier: 'reference', source_text: attBody,
+        source_url: (att.title || att.ref || att.docRef || 'in-house source'), archive_url: null, reason: null, trail,
+      };
+    }
+
     // Rung 1 — direct fetch.
     if (unit && unit.url) {
       const { fr, blocked } = await tryFetch(unit.url, 'fetch');

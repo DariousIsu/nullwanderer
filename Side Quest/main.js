@@ -1566,6 +1566,29 @@ async function importEditorDoc(filePath) {
   return { ok: true, document: editorRegistry.getDocument(doc.id) };
 }
 
+// Extract a file's readable text as markdown (.md/.txt read directly; binary docs via file_ingest —
+// doc_extract text layer + vision OCR). Used when attaching an in-hand source to a citation. → { text, via }.
+async function extractFileMarkdown(filePath) {
+  const fsm = require('fs');
+  if (!filePath || !fsm.existsSync(filePath)) return { text: '', via: 'missing' };
+  const ext = require('path').extname(filePath).replace(/^\./, '').toLowerCase();
+  if (editorImport.TEXT_FORMATS.has(ext)) {
+    try { return { text: fsm.readFileSync(filePath, 'utf8'), via: 'text:' + ext }; }
+    catch (e) { return { text: '', via: 'read-failed' }; }
+  }
+  const fi = require('./lib/file_ingest');
+  const de = require('./lib/doc_extract');
+  const vis = require('./lib/vision');
+  const r = await fi.extractDroppedFile(filePath, { deps: {
+    extractToMarkdown: (p) => de.extractToMarkdown(p),
+    describe: (o) => vis.describe(o),
+    readFileBase64: (p) => fsm.readFileSync(p).toString('base64'),
+    fileExists: (p) => fsm.existsSync(p),
+    log: (m) => console.log(m),
+  } });
+  return { text: (r && r.text) || '', via: (r && r.via) || 'none' };
+}
+
 // New document → pick a file (real documents extract automatically), normalize, register.
 ipcMain.handle('editor:import-document', async () => {
   try {
@@ -1591,6 +1614,55 @@ ipcMain.handle('editor:import-document', async () => {
 ipcMain.handle('editor:import-path', async (_e, filePath) => {
   try { return await importEditorDoc(filePath); }
   catch (e) { console.error('[editor] import-path failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// List the citations the extractor finds in a doc — populates the findings rail on OPEN (before Run
+// checks) so the operator can attach an in-hand source to specific citations. Marks which already have
+// one attached. Deterministic + model-free (studio/verify_extract).
+ipcMain.handle('editor:list-citations', (_e, docId) => {
+  try {
+    const doc = editorRegistry.getDocument(docId);
+    if (!doc) return { ok: false, error: 'no such document' };
+    const wc = editorRegistry.getWorkingCopy(docId, doc.current_version);
+    if (!wc || !Array.isArray(wc.blocks)) return { ok: true, citations: [], version: doc.current_version };
+    const { extractUnits } = require('./studio/verify_extract');
+    const units = (extractUnits(wc).units) || [];
+    const attach = editorRegistry.getAttachmentMap(docId, doc.current_version);
+    const citations = units.map(u => ({
+      uid: u.uid, kind: u.kind, text: u.text, quote: u.quote || null, url: u.url || null,
+      attached: attach[u.uid] ? { title: attach[u.uid].title, ref: attach[u.uid].ref } : null,
+    }));
+    return { ok: true, citations, version: doc.current_version };
+  } catch (e) { console.error('[editor] list-citations failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+// Attach an in-hand source document to a specific citation (uid). Extracts the doc's text (same
+// machinery as import) → stores it against that citation → also lands it in the main DB as a source
+// (established ingest protocol, fail-soft). Run checks then resolves this citation from it (rung 0).
+ipcMain.handle('editor:attach-source', async (_e, { docId, uid, filePath } = {}) => {
+  try {
+    const doc = editorRegistry.getDocument(docId);
+    if (!doc) return { ok: false, error: 'no such document' };
+    if (!uid) return { ok: false, error: 'no citation uid' };
+    const ex = await extractFileMarkdown(filePath);
+    if (!ex.text || ex.text.trim().length < 40) return { ok: false, error: `couldn't extract readable text (${ex.via})` };
+    const title = require('path').basename(filePath).replace(/\.[^.]+$/, '');
+    const att = editorRegistry.saveAttachment(docId, doc.current_version, uid, { title, docRef: filePath, text: ex.text });
+    // established ingest protocol: also land the source in the main DB for provenance (fail-soft).
+    try { require('./lib/doc_store').land({ title, body: ex.text, source: 'editor_reference', ref: `attach:${docId}:${uid}` }); }
+    catch (e) { console.error('[editor] attach land failed:', e.message); }
+    console.log(`[editor] attached "${title}" to citation ${uid} of doc ${docId} via ${ex.via} (${ex.text.length}ch)`);
+    return { ok: true, attachment: { uid, title: att.title, ref: att.doc_ref } };
+  } catch (e) { console.error('[editor] attach-source failed:', e.message); return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('editor:detach-source', (_e, { docId, uid } = {}) => {
+  try {
+    const doc = editorRegistry.getDocument(docId);
+    if (!doc) return { ok: false, error: 'no such document' };
+    editorRegistry.deleteAttachment(docId, doc.current_version, uid);
+    return { ok: true };
+  } catch (e) { console.error('[editor] detach-source failed:', e.message); return { ok: false, error: e.message }; }
 });
 
 // Run checks → drives the DETERMINISTIC verification harness (studio/verify_harness via
@@ -1626,8 +1698,10 @@ ipcMain.handle('editor:run-checks', async (_e, docId) => {
       cheapModel: MODEL,                              // homework-check stays local/cheap (coherence gate)
       embed: memoryLib.embed, cosine: memoryLib.cosine,
       // fetch via Echo web_extract (clean text); SEARCH via Zoe's own DuckDuckGo provider so
-      // no-URL claims resolve without an engine-side search-provider key.
-      resolveOpts: { tools: { fetch: 'web_extract' }, search: (q) => webSearch(q) },
+      // no-URL claims resolve without an engine-side search-provider key. ATTACHMENTS (uid → in-hand
+      // source text) let the resolve ladder's rung 0 resolve tagged citations from the operator's own
+      // document instead of the web.
+      resolveOpts: { tools: { fetch: 'web_extract' }, search: (q) => webSearch(q), attachments: editorRegistry.getAttachmentMap(docId, doc.current_version) },
       onStage: (name, payload) => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('editor:check-progress', { name, payload }); } catch {} },
     });
     return { ok: true, gate: res.gate, mapped: res.mapped };

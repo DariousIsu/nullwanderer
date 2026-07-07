@@ -127,6 +127,19 @@ html,body{height:100%;background:var(--bg);color:var(--tx-soft);font-family:-app
 .fcard-actions{display:flex;justify-content:space-between;align-items:center;}
 .fcard-resolve{font-size:11px;color:var(--tx-dim);cursor:pointer;user-select:none;}
 .fcard-resolve.done{color:var(--ok-fg);}
+/* citation cards (pre-run list — attach an in-hand source to a citation) */
+.ccard{background:var(--bg-panel);border:1px solid var(--line);border-radius:var(--r);padding:9px;}
+.ccard.has-src{border-left:2px solid var(--ok-line);}
+.ccard-top{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px;}
+.ckind{font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx-dim);}
+.ctext{font-size:11px;color:var(--tx-soft);line-height:1.5;margin-bottom:8px;}
+.attach-btn{font-size:11px;color:var(--info-fg);background:transparent;border:1px solid var(--info-line);border-radius:var(--r-sm);padding:2px 9px;cursor:pointer;font-family:inherit;}
+.attach-btn:hover{border-color:var(--info-fg);}
+.attach-btn:disabled{opacity:0.5;cursor:default;}
+.attached-src{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ok-fg);}
+.attached-src .tt{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.detach-x{color:var(--tx-dim);cursor:pointer;font-size:13px;line-height:1;}
+.detach-x:hover{color:var(--bad-fg);}
 /* drag-drop import overlay — shown while a file is dragged over the window */
 body.drop-hover::after{content:"Drop to import — PDF, Word, Markdown, spreadsheet, or image";position:fixed;inset:14px;z-index:9999;display:flex;align-items:center;justify-content:center;text-align:center;background:rgba(10,10,13,.86);border:2px dashed var(--info-line);border-radius:var(--r-lg);color:var(--info-fg);font-size:15px;letter-spacing:.03em;pointer-events:none;}
 </style>
@@ -172,6 +185,9 @@ body.drop-hover::after{content:"Drop to import — PDF, Word, Markdown, spreadsh
     <span><span class="ic">&#8645;</span>click headers: sort</span>
   </footer>
 </div>
+
+<!-- hidden picker used by the per-citation "Attach source" action -->
+<input type="file" id="attach-file-input" hidden accept=".pdf,.docx,.md,.markdown,.txt,.text,.xlsx,.xlsm,.csv,.tsv,.png,.jpg,.jpeg,.webp,.gif,.bmp">
 
 <!-- ============ VIEW B — document (read view; findings/checks land next slice) ============ -->
 <div class="studio" id="view-doc" hidden style="position:relative;">

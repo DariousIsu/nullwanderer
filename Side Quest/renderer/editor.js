@@ -124,7 +124,8 @@ async function openDoc(id){
   pubBtn.disabled = (doc.status !== 'certified');
   pubBtn.innerHTML = (doc.status === 'published') ? 'Published' : 'Publish';
   renderDocBody(wcR && wcR.workingCopy);
-  resetFindings();
+  CITATIONS = [];
+  loadCitations(id);                 // list the doc's citations in the rail (pre-run) so sources can be attached
   document.getElementById('view-index').hidden = true;
   document.getElementById('view-doc').hidden = false;
 }
@@ -165,6 +166,79 @@ document.getElementById('findings').addEventListener('click', e => {
   const f = FINDINGS.find(x => x.id === r.dataset.resolve);
   if(f){ f.resolved = !f.resolved; renderFindings(); }
 });
+
+/* ---------- citations (pre-run list + attach an in-hand source to a citation) ---------- */
+let CITATIONS = [];
+let attachPendingUid = null;
+
+async function loadCitations(docId){
+  if(!E || !E.listCitations) return;
+  try {
+    const r = await E.listCitations(docId);
+    CITATIONS = (r && r.ok && r.citations) ? r.citations : [];
+    renderCitations();
+  } catch(err){ console.error('[editor] list-citations', err); }
+}
+function citationCardHTML(c){
+  const foot = c.attached
+    ? `<span class="attached-src" title="${esc(c.attached.title||'')}">&#9745; <span class="tt">${esc(c.attached.title||'source')}</span> <span class="detach-x" data-detach="${esc(c.uid)}" title="remove attached source">&#10005;</span></span>`
+    : `<button class="attach-btn" data-attach="${esc(c.uid)}">&#128206; Attach source</button>`;
+  return `<div class="ccard ${c.attached?'has-src':''}" data-ccard="${esc(c.uid)}">
+    <div class="ccard-top"><span class="ckind">${esc(c.kind||'claim')}</span></div>
+    <div class="ctext">${esc((c.text||'').slice(0,240))}</div>
+    <div class="fcard-actions"><span></span>${foot}</div></div>`;
+}
+function renderCitations(){
+  const el = document.getElementById('findings');
+  if(!CITATIONS.length){
+    el.innerHTML = '<div class="rail-empty">No citations found to verify in this document.</div>';
+    document.getElementById('rail-count').textContent = '0';
+    return;
+  }
+  const withSrc = CITATIONS.filter(c => c.attached).length;
+  el.innerHTML = `<div class="rail-empty" style="padding-bottom:6px">${CITATIONS.length} citation${CITATIONS.length===1?'':'s'} found${withSrc?` &middot; ${withSrc} with attached source`:''}. Attach an in-hand source to any, then <b>Run checks</b> &mdash; attached citations verify against your document instead of the web.</div>`
+    + CITATIONS.map(citationCardHTML).join('');
+  document.getElementById('rail-count').textContent = CITATIONS.length;
+}
+
+// attach / detach (delegated; separate from the resolve toggle above)
+document.getElementById('findings').addEventListener('click', e => {
+  const a = e.target.closest('[data-attach]');
+  if(a){ attachPendingUid = a.dataset.attach; document.getElementById('attach-file-input').click(); return; }
+  const d = e.target.closest('[data-detach]');
+  if(d){ detachSource(d.dataset.detach); return; }
+});
+
+document.getElementById('attach-file-input').addEventListener('change', async (ev) => {
+  const input = ev.target;
+  const file = input.files && input.files[0];
+  const uid = attachPendingUid;
+  input.value = '';                    // reset so the same file can be re-picked later
+  attachPendingUid = null;
+  if(!file || !uid || !currentDoc || !E || !E.attachSource || !E.pathForFile) return;
+  const p = E.pathForFile(file);
+  if(!p){ alert('Could not resolve the file path.'); return; }
+  const btn = document.querySelector(`[data-ccard="${CSS.escape(uid)}"] .attach-btn`);
+  if(btn){ btn.disabled = true; btn.textContent = 'Attaching…'; }
+  try {
+    const r = await E.attachSource(currentDoc.id, uid, p);
+    if(r && r.ok){
+      const c = CITATIONS.find(x => x.uid === uid);
+      if(c) c.attached = { title: r.attachment.title, ref: r.attachment.ref };
+    } else {
+      alert('Attach failed: ' + (r && r.error || 'unknown error'));
+    }
+  } catch(err){ alert('Attach errored: ' + err.message); }
+  renderCitations();
+});
+
+async function detachSource(uid){
+  if(!currentDoc || !E || !E.detachSource) return;
+  try {
+    const r = await E.detachSource(currentDoc.id, uid);
+    if(r && r.ok){ const c = CITATIONS.find(x => x.uid === uid); if(c) c.attached = null; renderCitations(); }
+  } catch(err){ console.error('[editor] detach', err); }
+}
 
 document.getElementById('run-checks-btn').addEventListener('click', async () => {
   if(!E || !currentDoc) return;

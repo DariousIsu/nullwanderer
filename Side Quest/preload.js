@@ -76,6 +76,9 @@ contextBridge.exposeInMainWorld('sq', {
     getWorkingCopy: (docId, version) => ipcRenderer.invoke('editor:get-working-copy', { docId, version }),
     importPath: (filePath) => ipcRenderer.invoke('editor:import-path', filePath),      // drag-drop import
     pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return null; } },  // File → OS path (Electron 42: File.path removed)
+    listCitations: (docId) => ipcRenderer.invoke('editor:list-citations', docId),      // citations found in the doc (pre-run)
+    attachSource: (docId, uid, filePath) => ipcRenderer.invoke('editor:attach-source', { docId, uid, filePath }),  // tag in-hand source to a citation
+    detachSource: (docId, uid) => ipcRenderer.invoke('editor:detach-source', { docId, uid }),
     runChecks: (docId) => ipcRenderer.invoke('editor:run-checks', docId),
     certify: (docId, mapped) => ipcRenderer.invoke('editor:certify', { docId, mapped }),
     publish: (docId, publicCopyRef) => ipcRenderer.invoke('editor:publish', { docId, publicCopyRef })

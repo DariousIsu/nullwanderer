@@ -107,6 +107,19 @@ CREATE TABLE IF NOT EXISTS working_copies (
   UNIQUE(doc_id, version)
 );
 CREATE INDEX IF NOT EXISTS idx_wc_doc ON working_copies(doc_id);
+
+CREATE TABLE IF NOT EXISTS citation_attachments (
+  id INTEGER PRIMARY KEY,
+  doc_id INTEGER NOT NULL REFERENCES pipeline_documents(id),
+  version INTEGER NOT NULL,
+  uid TEXT NOT NULL,                    -- verify_extract unit uid (<block-anchor>.s<n>) — the citation this backs
+  title TEXT,                           -- attached in-house doc title (shown as the source on the finding + cert)
+  doc_ref TEXT,                         -- source file path / Echo ref, for provenance
+  source_text TEXT NOT NULL,            -- extracted markdown the verifier resolves against (rung 0)
+  created_at INTEGER NOT NULL,
+  UNIQUE(doc_id, version, uid)
+);
+CREATE INDEX IF NOT EXISTS idx_attach_doc ON citation_attachments(doc_id, version);
 `;
 
 function init(opts = {}) {
@@ -313,6 +326,36 @@ function updateEchoRef(docId, { echoDocId = null, echoDocPath = null } = {}) {
   _db().prepare(`UPDATE pipeline_documents SET ${sets.join(', ')} WHERE id = ?`).run(...args, docId);
 }
 
+// ---- citation attachments (in-house source docs tagged to a specific citation uid) ----
+// The operator attaches an in-hand source to the exact citation it backs (keyed by the stable
+// verify_extract unit uid). At Run checks the resolve ladder's rung 0 resolves that citation from
+// this stored text instead of the web. Upsert per (doc, version, uid).
+function saveAttachment(docId, version, uid, { title = null, docRef = null, text = '' } = {}) {
+  if (!uid) throw new Error('saveAttachment: uid required');
+  _db().prepare(
+    `INSERT INTO citation_attachments (doc_id, version, uid, title, doc_ref, source_text, created_at)
+     VALUES (?,?,?,?,?,?,?)
+     ON CONFLICT(doc_id, version, uid) DO UPDATE SET
+       title = excluded.title, doc_ref = excluded.doc_ref, source_text = excluded.source_text, created_at = excluded.created_at`
+  ).run(docId, version, uid, title, docRef, String(text || ''), now());
+  return getAttachment(docId, version, uid);
+}
+function getAttachment(docId, version, uid) {
+  return _db().prepare(`SELECT * FROM citation_attachments WHERE doc_id = ? AND version = ? AND uid = ?`).get(docId, version, uid) || null;
+}
+function listAttachments(docId, version) {
+  return _db().prepare(`SELECT * FROM citation_attachments WHERE doc_id = ? AND version = ? ORDER BY created_at ASC`).all(docId, version);
+}
+// uid → { title, ref, text } — the shape verify_resolve rung 0 reads (resolveOpts.attachments).
+function getAttachmentMap(docId, version) {
+  const out = {};
+  for (const r of listAttachments(docId, version)) out[r.uid] = { title: r.title, ref: r.doc_ref, text: r.source_text };
+  return out;
+}
+function deleteAttachment(docId, version, uid) {
+  _db().prepare(`DELETE FROM citation_attachments WHERE doc_id = ? AND version = ? AND uid = ?`).run(docId, version, uid);
+}
+
 // Close-out: mark actually-published, record the public copy (url or file). Terminal state.
 function closeOut(docId, { publicCopyRef = null } = {}) {
   const doc = getDocument(docId);
@@ -330,6 +373,7 @@ module.exports = {
   recordCheckRun, updateCheckRun, latestCheckRun,
   setStatus, attachCertificate, listCertificates, closeOut,
   saveWorkingCopy, getWorkingCopy, updateEchoRef,
+  saveAttachment, getAttachment, listAttachments, getAttachmentMap, deleteAttachment,
   // pure helpers
   formatCertNumber, dateStamp, nextCertSeq,
 };
