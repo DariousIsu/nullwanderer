@@ -192,6 +192,19 @@ function ttsConfig() {
   return { enabled, voice, speaker: Number.isFinite(speaker) ? speaker : null, wallMs, idleMs, configured: !!voice };
 }
 
+// --- DESKTOP COMPANION (voice-avatar-plan, presence layer) — the floating always-on-top window that
+// renders Zoe's VRM face for "general living on the desktop": blinks, reflects her mood, lip-syncs when she
+// speaks (V4). ON by default (it's the point), but main.js only creates it when data/avatars/zoe.vrm exists,
+// so a clone without her character never pops an empty window. ZOE_COMPANION=0 disables.
+function companionConfig() {
+  const enabled = !/^(0|false|no|off)$/i.test(get('ZOE_COMPANION', '').trim());   // default ON
+  const width = getInt('ZOE_COMPANION_W', 240);
+  const height = getInt('ZOE_COMPANION_H', 300);
+  const corner = (get('ZOE_COMPANION_CORNER', '').trim() || 'bottom-right').toLowerCase();  // corner to dock
+  const alwaysOnTop = !/^(0|false|no|off)$/i.test(get('ZOE_COMPANION_ONTOP', '').trim());    // default ON
+  return { enabled, width, height, corner, alwaysOnTop };
+}
+
 // --- Email ---
 function emailConfig() {
   const user = get('ZOE_EMAIL_USER').trim();
@@ -208,4 +221,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, deepNumCtx, deepNumPredict, sectionNumPredict, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, pipelineOn, pipelineContactBacklogCap, ttsConfig, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, deepNumCtx, deepNumPredict, sectionNumPredict, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, pipelineOn, pipelineContactBacklogCap, ttsConfig, companionConfig, emailConfig, discordConfig, APP_ROOT, ENV_PATH };

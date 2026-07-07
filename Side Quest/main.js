@@ -354,6 +354,51 @@ function createCanvasWindow() {
   return canvasWindow;
 }
 
+// --- Desktop companion (voice-avatar-plan presence layer) — a small frameless, transparent, always-on-top
+// window that renders Zoe's VRM face so she's "just there" on the desktop: blinks, reflects her mood, and
+// (V4) lip-syncs when she speaks. Gated on companionConfig().enabled AND on her character existing, so a
+// clone without data/avatars/zoe.vrm never pops an empty window. Draggable; hide/toggle via IPC.
+let companionWindow = null;
+function createCompanionWindow() {
+  const cfg = config.companionConfig();
+  if (!cfg.enabled) return null;
+  const vrmPath = path.join(__dirname, 'data', 'avatars', 'zoe.vrm');
+  try { if (!require('fs').existsSync(vrmPath)) { console.log('[companion] no data/avatars/zoe.vrm — skipping the presence window'); return null; } } catch { return null; }
+  if (companionWindow && !companionWindow.isDestroyed()) { companionWindow.show(); return companionWindow; }
+
+  const windowState = require('./lib/window_state');
+  const saved = windowState.options('companion', { width: cfg.width, height: cfg.height });
+  // dock to a screen corner on first run (no saved position yet)
+  let pos = {};
+  if (saved.x == null || saved.y == null) {
+    try {
+      const { screen } = require('electron');
+      const wa = screen.getPrimaryDisplay().workArea;   // excludes the taskbar
+      const m = 24;
+      const right = cfg.corner.includes('right'), bottom = !cfg.corner.includes('top');
+      pos = {
+        x: right ? wa.x + wa.width - cfg.width - m : wa.x + m,
+        y: bottom ? wa.y + wa.height - cfg.height - m : wa.y + m,
+      };
+    } catch {}
+  }
+  companionWindow = new BrowserWindow({
+    ...saved, ...pos, width: cfg.width, height: cfg.height,
+    frame: false, transparent: true, backgroundColor: '#00000000', hasShadow: false,
+    resizable: true, skipTaskbar: true, alwaysOnTop: cfg.alwaysOnTop, fullscreenable: false,
+    title: 'Zoe',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true, nodeIntegration: false, sandbox: false,
+    },
+  });
+  if (cfg.alwaysOnTop) { try { companionWindow.setAlwaysOnTop(true, 'screen-saver'); } catch {} }
+  companionWindow.loadFile(path.join(__dirname, 'renderer', 'companion.html'));
+  windowState.track(companionWindow, 'companion');
+  companionWindow.on('closed', () => { companionWindow = null; });
+  return companionWindow;
+}
+
 app.whenReady().then(() => {
   config.loadEnv();
   db.init();
@@ -569,6 +614,7 @@ app.whenReady().then(() => {
     if (sc.due()) { const l = sc.run(); console.log(`[main] capability self-check: ${l.green}/${l.total} green${l.allGreen ? '' : ' — RED: ' + l.red.map(r => r.name).join(', ')}`); }
   } catch (e) { console.error('[main] self-check at boot failed:', e.message); }
   createWindow();
+  try { createCompanionWindow(); } catch (e) { console.error('[companion] spawn failed:', e.message); }   // floating desktop presence (gated on her .vrm)
   try { ensureYtPlayerServer(); } catch {}   // warm the clean-player server so the Monitors videos load fast
   // Zoe's Canvas auto-spawns AFTER the engine attaches (see the engine .finally above) so its first
   // load finds Echo connected — staggered behind the server, no "not connected" flash.
@@ -1280,6 +1326,15 @@ app.on('window-all-closed', async () => {
 ipcMain.handle('editor:open', () => { createEditorWindow(); return { ok: true }; });
 ipcMain.handle('workspace:open', () => { createWorkspaceWindow(); return { ok: true }; });
 ipcMain.handle('canvas:open', () => { createCanvasWindow(); return { ok: true }; });
+// Desktop companion: hide (keep the process/state, just tuck her away) + toggle (create/show or hide).
+ipcMain.handle('companion:hide', () => { try { if (companionWindow && !companionWindow.isDestroyed()) companionWindow.hide(); } catch {} return { ok: true }; });
+ipcMain.handle('companion:toggle', () => {
+  try {
+    if (companionWindow && !companionWindow.isDestroyed() && companionWindow.isVisible()) { companionWindow.hide(); return { ok: true, visible: false }; }
+    const w = createCompanionWindow(); if (w) { w.show(); return { ok: true, visible: true }; }
+    return { ok: false, error: 'companion unavailable (disabled or no zoe.vrm)' };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
 
 // Forecasting processing side — the Forecasting STUDIO (renderer/forecast.html, a surface inside My
 // Workspace) invokes these. Each widget's payload is built in lib/forecast_service (reads the poll
