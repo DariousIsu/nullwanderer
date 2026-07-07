@@ -6287,10 +6287,12 @@ async function generateResearchPlan(focus, { goal = '', targets = [], facet = ''
   const ctx = { goal, targets, facet, deep, estimate };
   let plan = null;
   try {
-    const fastModel = (() => { try { return require('./lib/models').getModelFor('editor', null); } catch { return null; } })();
+    // The PLAN shapes the whole project — author it on the deep reasoner with headroom (cloud-leverage
+    // Slice 5), not the fast utility model at 800 tokens. One call per project, so no throughput cost.
+    const planModel = (() => { try { return config.deepReasonerModel(); } catch { return require('./lib/models').getModelFor('editor', null); } })();
     const cloud = require('./lib/cloud_logic');
     const raw = await cloud.ask({
-      task: 'research_plan', v: 1, model: fastModel, numPredict: 800,
+      task: 'research_plan', v: 1, model: planModel, numPredict: config.deepNumPredict(),
       input: rp.planInput(ctx), want: rp.planWant(), validate: rp.planValidator
     });
     if (raw) plan = rp.normalizePlan(raw, ctx);

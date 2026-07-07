@@ -19,6 +19,13 @@ ok(cfg.sectionNumPredict() === 6000, `sectionNumPredict default 6000 (research s
 ok(cfg.graphwalkBudgetTokensPerHour() === 300000, `graphwalk ceiling lifted to 300k (was 60k) — got ${cfg.graphwalkBudgetTokensPerHour()}`);
 ok(cfg.pullerBudgetTokensPerHour() === 150000, `puller ceiling lifted to 150k (was 40k) — got ${cfg.pullerBudgetTokensPerHour()}`);
 
+// --- Slice 4: denser subconscious (concurrent lanes + graph-walk burst) ---
+ok(cfg.subcMovesPerTick() === 3, `subcMovesPerTick default 3 (graph-walk burst) — got ${cfg.subcMovesPerTick()}`);
+ok(cfg.subcConcurrentLanes() === true, `subcConcurrentLanes default ON (lanes fire in parallel) — got ${cfg.subcConcurrentLanes()}`);
+
+// --- Slice 5: the research PLAN (whole-project blueprint) authored on the deep reasoner, not the fast 31B ---
+ok(/gpt-oss|:120b|qwen|reason/i.test(cfg.deepReasonerModel()) && cfg.deepReasonerModel().length > 0, `deepReasonerModel is a big reasoner — got ${cfg.deepReasonerModel()}`);
+
 // --- the fatten is ACTUALLY APPLIED at a call site: decomp_lane feeds the deep num_ctx, not 8192 ---
 (async () => {
   let seenCtx = null, seenPredict = null;

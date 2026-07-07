@@ -157,6 +157,17 @@ function deepNumPredict() { const n = parseInt(get('ZOE_DEEP_NUM_PREDICT', '').t
 // Research SECTION synthesis (organize/merge a whole org's passes into prose) — the biggest single outputs.
 function sectionNumPredict() { const n = parseInt(get('ZOE_SECTION_NUM_PREDICT', '').trim(), 10); return Number.isFinite(n) ? n : 6000; }
 
+// --- DENSER SUBCONSCIOUS (cloud-leverage Slice 4) — the idle lanes ran ONE move each, SEQUENTIALLY, per
+// tick, so between-turn cognition barely touched the (now 2M/hr) budget. Run the lanes CONCURRENTLY and let
+// the knowledge-building graph-walk BURST several moves per tick (each still budget-gated, so it self-limits).
+function subcMovesPerTick() { const n = parseInt(get('ZOE_SUBC_MOVES_PER_TICK', '').trim(), 10); return Number.isFinite(n) && n >= 1 ? n : 3; }
+function subcConcurrentLanes() { return !/^(0|false|no|off)$/i.test(get('ZOE_SUBC_CONCURRENT', '').trim()); }   // default ON
+
+// --- DEEP REASONER (cloud-leverage Slice 5) — the big model to use on LOW-VOLUME, HIGH-VALUE blueprint/
+// synthesis calls (the research plan that shapes a whole project). The fast/deep split is intentional, so
+// this is NOT for high-volume tool-calling or utility extraction — only the calls where depth clearly wins.
+function deepReasonerModel() { return get('ZOE_DEEP_REASONER_MODEL').trim() || subconsciousModel() || 'gpt-oss:120b'; }
+
 // --- Email ---
 function emailConfig() {
   const user = get('ZOE_EMAIL_USER').trim();
@@ -173,4 +184,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, deepNumCtx, deepNumPredict, sectionNumPredict, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, deepNumCtx, deepNumPredict, sectionNumPredict, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, emailConfig, discordConfig, APP_ROOT, ENV_PATH };

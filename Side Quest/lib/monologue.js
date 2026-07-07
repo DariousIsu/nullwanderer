@@ -996,9 +996,18 @@ async function runOneTick() {
     // So idle simply advances the graph one move (cadence + budget gated), or stays quiet. No idle
     // thought is generated here → no idle curiosity/boredom search can fire (those live past this
     // early return). recentThoughts/openThreads stay available for the awareness block above.
-    await runGraphWalkMove(recentTurns);
-    try { await runPullerMove(recentTurns); } catch (e) { console.error('[puller-walk] tick error:', e.message); }
-    try { await runSocialEnrichMove(); } catch (e) { console.error('[social-enrich] tick error:', e.message); }
+    // DENSER SUBCONSCIOUS (Slice 4) — run the three idle lanes CONCURRENTLY (they're independent + fail-soft),
+    // and let the knowledge-building graph-walk BURST up to subcMovesPerTick moves this tick (each still
+    // budget-gated, so it self-limits). Was: one move each, sequentially → barely touched the 2M/hr budget.
+    const _cfg = require('./config');
+    const graphLane = (async () => {
+      const first = await runGraphWalkMove(recentTurns);
+      if (first) { const n = _cfg.subcMovesPerTick(); for (let i = 1; i < n; i++) { const more = await runGraphWalkMove(recentTurns, { force: true }); if (!more) break; } }
+    })();
+    const pullerLane = runPullerMove(recentTurns).catch((e) => console.error('[puller-walk] tick error:', e.message));
+    const socialLane = runSocialEnrichMove().catch((e) => console.error('[social-enrich] tick error:', e.message));
+    if (_cfg.subcConcurrentLanes()) { await Promise.allSettled([graphLane, pullerLane, socialLane]); }
+    else { try { await graphLane; } catch {} await pullerLane; await socialLane; }
     return;
   }
 
@@ -1473,10 +1482,11 @@ function activeSetNames() {
 // branches forging connections. The CLOUD interprets + writes (propose_*, gated); a notable move
 // surfaces one line. Cadence- and budget-gated; goes quiet when there's no gap. Returns true if a
 // move ran (so the tick doesn't also free-associate). Fail-soft — any error → false (quiet).
-async function runGraphWalkMove(recentTurns) {
+async function runGraphWalkMove(recentTurns, { force = false } = {}) {
   const nowTs = Date.now();
-  // cadence: slow, deliberate — not every 10s tick
-  try { const last = parseInt(db.getMeta(GRAPHWALK_LAST_KEY) || '0', 10) || 0; if (nowTs - last < GRAPHWALK_MIN_INTERVAL_MS) return false; } catch {}
+  // cadence: slow, deliberate — not every 10s tick. `force` skips it for a same-tick BURST (Slice 4); the
+  // budget check below still self-limits, so a burst can't run away.
+  if (!force) { try { const last = parseInt(db.getMeta(GRAPHWALK_LAST_KEY) || '0', 10) || 0; if (nowTs - last < GRAPHWALK_MIN_INTERVAL_MS) return false; } catch {} }
   // budget: the idle builder has its OWN rolling window (GRAPHWALK_BUDGET_KEY) with its own ceiling, so the
   // shared subc pool that news/curation/forecast fill can't starve knowledge-expansion to zero (the audit
   // root: subc window pinned at 136k/120k → graph-walk never ran).
