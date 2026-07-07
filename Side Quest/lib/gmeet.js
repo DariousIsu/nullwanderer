@@ -29,7 +29,7 @@ const STAGES = ['none', 'joining', 'intro', 'observing', 'done'];
 const MAX_STAGE_STRIKES = 3;
 const FOLLOW_EVERY_LINES = 4;   // synthesize a running understanding after this many new caption lines
 const FOLLOW_MAX_WAIT_MS = 25000;   // ...or after this long with ANY pending lines, so sparse meetings still get understood (don't sit forever short of the line count)
-const LEAVE_SILENCE_MS = 90000;   // after a clear sign-off, if captions go quiet THIS long she hangs up herself (instead of sitting alone in an ended call / improvising a tab-close)
+const LEAVE_SILENCE_MS = 300000;   // after a clear sign-off AND she's effectively alone, if captions stay quiet THIS long she hangs up (5 min; 90s was far too eager — a quiet stretch mid-meeting ≠ over)
 const MEETING_RESEARCH_GAP_MS = 30000;   // M2: governed cadence for in-meeting background research (steady, not spammy)
 
 // Captions she's already surfaced this meeting (exact speaker|text), so scrolling/repeat
@@ -725,20 +725,33 @@ async function runTick(ctx = {}) {
     const tNow = d.now ? d.now() : Date.now();
     if (fresh.length) {
       db.setMeta('gmeet_last_caption_at', String(tNow));
-      if (fresh.some(c => looksLikeSignOff(c.text))) db.setMeta('gmeet_signoff_seen', '1');
+      // Un-stick the sign-off latch: only ARM the leave when the LATEST captions are a sign-off. Real
+      // conversation continuing after an earlier "thanks everyone" DISARMS it — otherwise a single mid-
+      // meeting pleasantry latched the flag forever and the next quiet stretch hung her up while the
+      // meeting was still going (Lucas was still in the call).
+      db.setMeta('gmeet_signoff_seen', fresh.some(c => looksLikeSignOff(c.text)) ? '1' : '');
     } else {
       const lastCap = parseInt(db.getMeta('gmeet_last_caption_at') || '0', 10);
       const signoff = db.getMeta('gmeet_signoff_seen') === '1'
         || looksLikeSignOff(db.getMeta('gmeet_understanding') || '');
       if (signoff && lastCap > 0 && (tNow - lastCap) >= LEAVE_SILENCE_MS) {
-        const lv = await d.leaveMeeting(d.web).catch(() => ({ ok: false }));
-        const recap = await synthesizeMeeting(d, ctx).catch(() => '');
-        db.setMeta('gmeet_signoff_seen', ''); db.setMeta('gmeet_last_caption_at', ''); db.setMeta('gmeet_left_ticks', '0');
-        set('done');
-        db.setMeta('gmeet_ended_at', String(Date.now()));   // arms post-meeting recall in context.js
-        surface(`The meeting wrapped up, so I left the call — I'm back to my own time.`, '(gmeet) left after sign-off');
-        if (recap) surface(`Here's what I took from the meeting — ${recap}`, '(gmeet) meeting recap');
-        return { stage, ok: true, note: `sign-off + ${Math.round((tNow - lastCap) / 1000)}s quiet → left call → done${recap ? ' + recap' : ''}${lv && lv.ok ? '' : ' (leave click unconfirmed)'}` };
+        // GROUND TRUTH before hanging up: is anyone still here? A quiet operator is NOT a finished meeting.
+        // Only leave when effectively alone (attendee panel down to ≤1). If others remain, reset the clock
+        // and keep observing. Scrape failure → present:0 → fall back to the (now 5-min) time signal so she
+        // still won't sit forever in a genuinely ended call.
+        let present = 0; try { present = parseAttendees(await d.scrapeAttendees(d.web)).length; } catch { present = 0; }
+        if (present >= 2) {
+          db.setMeta('gmeet_last_caption_at', String(tNow));   // someone else is still in the call → don't leave
+        } else {
+          const lv = await d.leaveMeeting(d.web).catch(() => ({ ok: false }));
+          const recap = await synthesizeMeeting(d, ctx).catch(() => '');
+          db.setMeta('gmeet_signoff_seen', ''); db.setMeta('gmeet_last_caption_at', ''); db.setMeta('gmeet_left_ticks', '0');
+          set('done');
+          db.setMeta('gmeet_ended_at', String(Date.now()));   // arms post-meeting recall in context.js
+          surface(`The meeting wrapped up, so I left the call — I'm back to my own time.`, '(gmeet) left after sign-off');
+          if (recap) surface(`Here's what I took from the meeting — ${recap}`, '(gmeet) meeting recap');
+          return { stage, ok: true, note: `sign-off + ${Math.round((tNow - lastCap) / 1000)}s quiet + alone (${present}) → left call → done${recap ? ' + recap' : ''}${lv && lv.ok ? '' : ' (leave click unconfirmed)'}` };
+        }
       }
     }
     // ADDRESSED TO HER (active participation): if a fresh caption directly addresses Zoe

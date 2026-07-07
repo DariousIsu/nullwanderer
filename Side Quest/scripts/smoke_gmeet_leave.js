@@ -4,9 +4,12 @@
  *
  * Proves:
  *   1. looksLikeSignOff() catches real closers and ignores normal meeting chatter.
- *   2. After a sign-off caption THEN LEAVE_SILENCE_MS of quiet, she calls leaveMeeting()
- *      (Leave call in HER browser) and advances 'observing' → 'done'.
+ *   2. After a sign-off caption THEN LEAVE_SILENCE_MS of quiet AND effectively alone, she calls
+ *      leaveMeeting() (Leave call in HER browser) and advances 'observing' → 'done'.
  *   3. Without a sign-off, silence alone does NOT make her leave (she keeps observing).
+ *   4. ATTENDEE GROUND-TRUTH: sign-off + long quiet but others STILL present → she does NOT leave.
+ *   5. UN-STUCK LATCH: a sign-off followed by real conversation DISARMS the leave (an early
+ *      "thanks everyone" no longer latches a hang-up forever).
  */
 const os = require('os'); const path = require('path');
 process.env.SQ_DB_PATH = path.join(os.tmpdir(), `sq_gmeetleave_${Date.now()}`, 'sq.db');
@@ -88,7 +91,7 @@ function enterObserving() {
     ok('tick 1: did not leave yet', calls.leave === 0);
     ok('tick 1: sign-off recorded', db.getMeta('gmeet_signoff_seen') === '1');
 
-    CLOCK += 95_000;   // > LEAVE_SILENCE_MS (90s) of quiet
+    CLOCK += 305_000;   // > LEAVE_SILENCE_MS (5min) of quiet; scrapeAttendees:'' → alone → leave allowed
     const r2 = await gmeet.runTick(ctx);
     ok('tick 2: called leaveMeeting() once', calls.leave === 1);
     ok('tick 2: advanced to done', gmeet.get() === 'done');
@@ -108,7 +111,7 @@ function enterObserving() {
     const { ctx, calls } = makeDeps(['', ''], { recap: 'SHOULD NOT BE USED' });
     enterObserving();
     db.setMeta('gmeet_signoff_seen', '1');                 // pretend a sign-off was heard but nothing was transcribed
-    CLOCK += 200_000;
+    CLOCK += 305_000;
     await gmeet.runTick(ctx);
     ok('left the empty call', gmeet.get() === 'done' && calls.leave === 1);
     ok('did NOT store an empty/fabricated recap', calls.store === 0);
@@ -123,10 +126,37 @@ function enterObserving() {
     enterObserving();
     CLOCK += 10_000;
     await gmeet.runTick(ctx);
-    CLOCK += 95_000;
+    CLOCK += 305_000;
     await gmeet.runTick(ctx);
     ok('did NOT leave (no sign-off)', calls.leave === 0);
     ok('still observing', gmeet.get() === 'observing');
+  }
+
+  console.log('\nsign-off + long quiet BUT others still present → she does NOT leave (attendee ground-truth):');
+  {
+    const { ctx, calls } = makeDeps(['Joshua Fredrickson: Bye.', '', ''], {});
+    ctx.deps.scrapeAttendees = async () => 'Lucas Overby\nJoshua Fredrickson';   // two people still in the call
+    enterObserving();
+    CLOCK += 10_000; await gmeet.runTick(ctx);            // sign-off lands → armed
+    CLOCK += 305_000; await gmeet.runTick(ctx);           // long quiet, but the call is still populated
+    ok('did NOT leave (2 attendees still present)', calls.leave === 0);
+    ok('still observing (populated call)', gmeet.get() === 'observing');
+  }
+
+  console.log('\nsign-off THEN real conversation resumes → leave is DISARMED (un-stuck latch):');
+  {
+    const { ctx, calls } = makeDeps([
+      'Joshua Fredrickson: thanks everyone',               // an early pleasantry → arms the latch
+      'Lucas Overby: okay so back to the database scope',  // real talk continues → DISARMS it
+      '',                                                  // quiet
+    ], {});
+    enterObserving();
+    CLOCK += 10_000; await gmeet.runTick(ctx);
+    ok('armed after the pleasantry', db.getMeta('gmeet_signoff_seen') === '1');
+    CLOCK += 10_000; await gmeet.runTick(ctx);
+    ok('DISARMED after conversation resumed', db.getMeta('gmeet_signoff_seen') === '');
+    CLOCK += 305_000; await gmeet.runTick(ctx);
+    ok('did NOT leave (latch was disarmed)', calls.leave === 0);
   }
 
   gmeet.reset();

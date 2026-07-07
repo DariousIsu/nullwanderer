@@ -2616,7 +2616,10 @@ async function scribeHeartbeatTick() {
         decomposeLandedDoc({ id: mid, title: `Meeting — ${mtitle}`, body, source: 'meeting' }).catch((e) => console.error('[meeting] decompose failed:', e && e.message));
       }
     } catch (e) { console.error('[meeting] decompose wiring failed:', e && e.message); }
-    try { await emitMeetingNotes(recap || minutes, { final: true }); } catch {}
+    // FINAL VIEW = the full notes (recap header + the rich running minutes), matching the landed doc. Emitting
+    // the recap ALONE dropped the detailed Topics/Decisions the operator watched accrue ("notes ate themselves").
+    const finalBody = [recap, (minutes && minutes.trim()) ? `## Running minutes\n${minutes}` : ''].filter(Boolean).join('\n\n') || recap || minutes;
+    try { await emitMeetingNotes(finalBody, { final: true }); } catch {}
   }
   stopScribeHeartbeat();
 }
