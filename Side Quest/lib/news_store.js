@@ -27,7 +27,7 @@ function ensureSchema() {
     CREATE TABLE IF NOT EXISTS news_items (
       id            INTEGER PRIMARY KEY,
       source        TEXT NOT NULL,
-      source_kind   TEXT NOT NULL DEFAULT 'rss',   -- 'rss' | 'aggregator' | 'video'
+      source_kind   TEXT NOT NULL DEFAULT 'rss',   -- 'rss' | 'aggregator' | 'video' | 'newsletter' | 'social'
       source_url    TEXT,
       title         TEXT,
       url_or_guid   TEXT NOT NULL,

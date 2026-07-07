@@ -141,6 +141,7 @@ const smokes = [
   'smoke_video_capture.js',
   'smoke_video_reconstruct.js',
   'smoke_email_intake.js',
+  'smoke_truth_poll.js',
   'smoke_news_topics.js',
   'smoke_news_rank.js',
   // Forecasting suite — Suite-A polling adapters (pure, offline-deterministic)

@@ -150,6 +150,8 @@ let apiStreamTimer = null;     // setInterval id for the API management stream s
 let apiStreamTimeout = null;   // initial-sweep setTimeout id
 let apiBulkTimer = null;       // setInterval id for the API bulk-pull scheduler (legislation → memory)
 let apiBulkTimeout = null;     // initial bulk pass setTimeout id
+let truthTimer = null;         // setInterval id for the Truth Social social-feed poller
+let truthTimeout = null;       // initial Truth Social poll setTimeout id
 let canvasIngestTimer = null;  // setInterval id for the canvas drop→ingest poller (cleared on shutdown)
 let canvasIngestTimeout = null;// initial-sweep setTimeout id
 let forecastLoopTimer = null;  // setInterval id for the forecasting recompute loop (Suite B capstone)
@@ -930,6 +932,22 @@ app.whenReady().then(() => {
     console.log(`[main] API bulk-pull scheduler started (every ${Math.round(API_BULK_MS / 3600000)}h → legislation → memory)`);
   }
 
+  // TRUTH SOCIAL social-feed poller — tracked accounts' public posts → the news reservoir (source_kind='social'),
+  // riding the SAME hourly compression / stories / briefing rail as RSS. Public Mastodon API (a browser UA passes
+  // Cloudflare); no key. Accounts via TRUTH_ACCOUNTS (default realDonaldTrump). Fail-soft; conservative cadence.
+  {
+    const TRUTH_POLL_MS = parseInt(process.env.TRUTH_POLL_MS || '', 10) || 15 * 60 * 1000;   // every 15m
+    const runTruth = async () => {
+      try {
+        const r = await require('./lib/truth_poll').runPoll({ store: require('./lib/news_store'), log: (m) => console.log(m) });
+        if (r.inserted) console.log(`[truth] ${r.inserted} new social posts → reservoir (${r.accounts} account(s))`);
+      } catch (e) { console.error('[truth]', e.message); }
+    };
+    truthTimeout = setTimeout(() => { runTruth().catch(() => {}); }, 2 * 60 * 1000);          // first poll ~2m after boot
+    truthTimer = setInterval(() => { runTruth().catch(() => {}); }, TRUTH_POLL_MS);
+    console.log(`[main] Truth Social poller started (every ${Math.round(TRUTH_POLL_MS / 60000)}m → reservoir, source_kind=social)`);
+  }
+
   // EMAIL INTAKE LANE — Zoe's own inbox is a subscription surface (newsletters + Gemini meeting-notes).
   // READ-ONLY (EXAMINE): this connection provably cannot mark-read/delete. Newsletters route into the
   // SAME isolated news bucket as RSS (source_kind='newsletter') → they ride the hourly briefing rail;
@@ -1226,6 +1244,8 @@ app.on('window-all-closed', async () => {
   if (apiStreamTimeout) { clearTimeout(apiStreamTimeout); apiStreamTimeout = null; }
   if (apiBulkTimer) { clearInterval(apiBulkTimer); apiBulkTimer = null; }
   if (apiBulkTimeout) { clearTimeout(apiBulkTimeout); apiBulkTimeout = null; }
+  if (truthTimer) { clearInterval(truthTimer); truthTimer = null; }
+  if (truthTimeout) { clearTimeout(truthTimeout); truthTimeout = null; }
   if (emailIntakeTimer) { clearInterval(emailIntakeTimer); emailIntakeTimer = null; }
   if (emailIntakeTimeout) { clearTimeout(emailIntakeTimeout); emailIntakeTimeout = null; }
   if (canvasIngestTimer) { clearInterval(canvasIngestTimer); canvasIngestTimer = null; }
