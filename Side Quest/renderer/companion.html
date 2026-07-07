@@ -28,7 +28,7 @@
   function fit() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; if (window.__face) window.__face.resize(canvas.width, canvas.height); }
   fit();
 
-  const face = window.ZoeAvatarVRM.create(canvas, { vrmUrl: '../data/avatars/zoe.vrm', framing: 'full' });
+  const face = window.ZoeAvatarVRM.create(canvas, { vrmUrl: '../data/avatars/zoe.vrm', framing: 'bust' });
   window.__face = face;                       // V4 will attachAudio() here to lip-sync her speech
   face.loaded.then(() => { fit(); face.setFeeling('warm and content'); face.start(); })
              .catch((e) => console.error('[companion] vrm load failed:', e && e.message || e));

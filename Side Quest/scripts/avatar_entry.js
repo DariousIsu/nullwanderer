@@ -101,7 +101,10 @@ function create(canvas, opts = {}) {
         // frame the camera: 'portrait' = head-and-shoulders (default), 'full' = whole body from her
         // bounding box (fit the full height with a little margin). opts.framing chooses.
         try {
-          if ((opts.framing || 'portrait') === 'full') {
+          const framing = opts.framing || 'portrait';
+          const head = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode('head');
+          let hy = 1.35; if (head) { const p = new THREE.Vector3(); head.getWorldPosition(p); hy = p.y; }
+          if (framing === 'full') {
             const box = new THREE.Box3().setFromObject(vrm.scene);
             const size = new THREE.Vector3(); box.getSize(size);
             const center = new THREE.Vector3(); box.getCenter(center);
@@ -109,9 +112,16 @@ function create(canvas, opts = {}) {
             const dist = (size.y / 2) / Math.tan(fov / 2) * 1.12 + size.z;
             camera.position.set(0, center.y, dist);
             camera.lookAt(0, center.y, 0);
+          } else if (framing === 'bust') {
+            // head + shoulders + upper chest. The head BONE sits at the neck, so top-of-head is ~+0.14 above
+            // it — aim just below the bone and pull back enough to keep the whole head in frame.
+            const targetY = hy - 0.05;
+            camera.position.set(0, targetY + 0.02, 1.05);
+            camera.lookAt(0, targetY, 0);
           } else {
-            const head = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode('head');
-            if (head) { const p = new THREE.Vector3(); head.getWorldPosition(p); camera.position.set(0, p.y, 0.7); camera.lookAt(0, p.y, 0); }
+            // portrait — tight head-and-shoulders
+            camera.position.set(0, hy, 0.7);
+            camera.lookAt(0, hy, 0);
           }
         } catch {}
         st.vrm = vrm;

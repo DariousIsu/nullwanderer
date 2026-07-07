@@ -201,8 +201,8 @@ function ttsConfig() {
 // so a clone without her character never pops an empty window. ZOE_COMPANION=0 disables.
 function companionConfig() {
   const enabled = !/^(0|false|no|off)$/i.test(get('ZOE_COMPANION', '').trim());   // default ON
-  const width = getInt('ZOE_COMPANION_W', 240);
-  const height = getInt('ZOE_COMPANION_H', 520);   // tall by default → full body fits
+  const width = getInt('ZOE_COMPANION_W', 300);
+  const height = getInt('ZOE_COMPANION_H', 340);   // bust shape → head + shoulders
   const corner = (get('ZOE_COMPANION_CORNER', '').trim() || 'bottom-right').toLowerCase();  // corner to dock
   const alwaysOnTop = !/^(0|false|no|off)$/i.test(get('ZOE_COMPANION_ONTOP', '').trim());    // default ON
   return { enabled, width, height, corner, alwaysOnTop };
