@@ -1531,29 +1531,66 @@ ipcMain.handle('editor:get-working-copy', (_e, { docId, version } = {}) => {
   catch (e) { return { ok: false, error: e.message }; }
 });
 
-// New document → pick a text file, normalize it to a working copy, register it into the pipeline.
-// Slice 1 supports .md/.txt directly (editor_import reads them); .docx/.pdf land later via Echo
-// extraction (they need opts.markdown from the engine's ingest).
+// Import ANY supported document into the editor. .md/.txt read directly; real documents
+// (.pdf/.docx/.xlsx/.csv and images) are extracted to markdown FIRST via lib/file_ingest — text layer
+// through doc_extract, images through vision — the exact machinery the canvas drop-ingest uses. Then the
+// working copy is normalized + registered. Shared by the picker AND drag-drop. → { ok, document } | { ok:false, error }.
+async function importEditorDoc(filePath) {
+  const fsm = require('fs');
+  if (!filePath || !fsm.existsSync(filePath)) return { ok: false, error: 'file not found' };
+  const ext = require('path').extname(filePath).replace(/^\./, '').toLowerCase();
+  let wc;
+  if (editorImport.TEXT_FORMATS.has(ext)) {
+    wc = editorImport.importFile(filePath);                       // .md/.txt — no extraction needed
+  } else {
+    const fi = require('./lib/file_ingest');
+    const de = require('./lib/doc_extract');
+    const vis = require('./lib/vision');
+    const r = await fi.extractDroppedFile(filePath, { deps: {
+      extractToMarkdown: (p) => de.extractToMarkdown(p),
+      describe: (o) => vis.describe(o),
+      readFileBase64: (p) => fsm.readFileSync(p).toString('base64'),
+      fileExists: (p) => fsm.existsSync(p),
+      log: (m) => console.log(m),
+    } });
+    const md = (r && r.text) || '';
+    if (md.length < 40) return { ok: false, error: `couldn't extract readable text from .${ext} (${r ? r.via : 'no result'})` };
+    wc = editorImport.importFile(filePath, { markdown: md });
+    console.log(`[editor] imported "${wc.title}" from .${ext} via ${r.via} (${md.length}ch)`);
+  }
+  const doc = editorRegistry.registerDocument({
+    title: wc.title, docType: wc.format, source: 'upload',
+    echoDocPath: filePath, changeSummary: `imported from .${wc.format}`,
+  });
+  editorRegistry.saveWorkingCopy(doc.id, 1, wc);
+  return { ok: true, document: editorRegistry.getDocument(doc.id) };
+}
+
+// New document → pick a file (real documents extract automatically), normalize, register.
 ipcMain.handle('editor:import-document', async () => {
   try {
     const res = await dialog.showOpenDialog(editorWindow || mainWindow, {
       title: 'Import a document into the Editor',
       properties: ['openFile'],
-      filters: [{ name: 'Text / Markdown', extensions: ['md', 'markdown', 'txt', 'text'] }],
+      filters: [
+        { name: 'Documents', extensions: ['md', 'markdown', 'txt', 'text', 'pdf', 'docx', 'xlsx', 'xlsm', 'csv', 'tsv'] },
+        { name: 'Images (OCR)', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
     });
     if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
-    const filePath = res.filePaths[0];
-    const wc = editorImport.importFile(filePath);
-    const doc = editorRegistry.registerDocument({
-      title: wc.title, docType: wc.format, source: 'upload',
-      echoDocPath: filePath, changeSummary: `imported from .${wc.format}`,
-    });
-    editorRegistry.saveWorkingCopy(doc.id, 1, wc);
-    return { ok: true, document: editorRegistry.getDocument(doc.id) };
+    return await importEditorDoc(res.filePaths[0]);
   } catch (e) {
     console.error('[editor] import failed:', e.message);
     return { ok: false, error: e.message };
   }
+});
+
+// Drag-drop import → the renderer resolves the dropped file's OS path (webUtils.getPathForFile, since
+// File.path is gone in Electron 42) and sends it here for the SAME import pipeline as the picker.
+ipcMain.handle('editor:import-path', async (_e, filePath) => {
+  try { return await importEditorDoc(filePath); }
+  catch (e) { console.error('[editor] import-path failed:', e.message); return { ok: false, error: e.message }; }
 });
 
 // Run checks → drives the DETERMINISTIC verification harness (studio/verify_harness via

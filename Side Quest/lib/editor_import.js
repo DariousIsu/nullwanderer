@@ -111,26 +111,30 @@ function importText(content, { format = 'md', title = null } = {}) {
   return normalizeMarkdown(content, { title, format: fmt });
 }
 
-// Normalize a file. .md/.txt are read directly; .docx/.pdf require Echo-extracted markdown
-// passed via opts.markdown (Echo's ingest owns binary extraction — see header).
+// Normalize a file. .md/.txt are read directly; binary formats (.docx/.pdf/.xlsx/images/…) are extracted
+// to markdown UPSTREAM (main.js drop/import runs lib/file_ingest → doc_extract for text layers, vision for
+// images — the same machinery the canvas drop-ingest uses) and passed back in via opts.markdown.
 function importFile(filePath, opts = {}) {
   const ext = path.extname(filePath).replace(/^\./, '').toLowerCase();
   const fallbackName = path.basename(filePath, path.extname(filePath));
+  const fmtOf = (e) => (e === 'markdown' ? 'md' : (e === 'text' ? 'txt' : (e || 'md')));
   // Let the content's first heading win as the title; the filename is only a last resort.
   const finish = (content, format) => {
     const wc = normalizeMarkdown(content, { title: opts.title || null, format });
     if (!opts.title && (!wc.title || wc.title === 'Untitled')) wc.title = fallbackName;
     return wc;
   };
+  // Pre-extracted content normalizes regardless of the source format (any real document the caller
+  // already turned into markdown — pdf/docx/xlsx/csv/png/…).
+  if (typeof opts.markdown === 'string') return finish(opts.markdown, fmtOf(ext));
+  // .md / .txt read directly — no extraction needed.
   if (TEXT_FORMATS.has(ext)) {
     const content = fs.readFileSync(filePath, 'utf8');
-    return finish(content, ext === 'markdown' ? 'md' : (ext === 'text' ? 'txt' : ext));
+    return finish(content, fmtOf(ext));
   }
+  // A binary/real document with no extracted markdown supplied — the caller must run extraction first.
   if (ECHO_FORMATS.has(ext)) {
-    if (typeof opts.markdown !== 'string') {
-      throw new Error(`importFile: ${ext} extraction is Echo's job — pass opts.markdown (the engine-extracted markdown_current for this doc)`);
-    }
-    return finish(opts.markdown, ext);
+    throw new Error(`importFile: ${ext} needs extracted markdown — pass opts.markdown (doc_extract / Echo ingest), or drop it on the surface which extracts automatically`);
   }
   throw new Error(`importFile: unsupported extension .${ext}`);
 }

@@ -127,6 +127,8 @@ html,body{height:100%;background:var(--bg);color:var(--tx-soft);font-family:-app
 .fcard-actions{display:flex;justify-content:space-between;align-items:center;}
 .fcard-resolve{font-size:11px;color:var(--tx-dim);cursor:pointer;user-select:none;}
 .fcard-resolve.done{color:var(--ok-fg);}
+/* drag-drop import overlay — shown while a file is dragged over the window */
+body.drop-hover::after{content:"Drop to import — PDF, Word, Markdown, spreadsheet, or image";position:fixed;inset:14px;z-index:9999;display:flex;align-items:center;justify-content:center;text-align:center;background:rgba(10,10,13,.86);border:2px dashed var(--info-line);border-radius:var(--r-lg);color:var(--info-fg);font-size:15px;letter-spacing:.03em;pointer-events:none;}
 </style>
 </head>
 <body>
@@ -161,7 +163,7 @@ html,body{height:100%;background:var(--bg);color:var(--tx-soft);font-family:-app
     </table>
     <div id="empty" class="empty" hidden>
       <div class="big">No documents in the pipeline yet.</div>
-      <div>Use <b>New document</b> to import a .md or .txt file.</div>
+      <div>Use <b>New document</b> &mdash; or drag a PDF, Word doc, Markdown, spreadsheet, or image onto the window.</div>
     </div>
   </div>
   <footer class="studio-foot">

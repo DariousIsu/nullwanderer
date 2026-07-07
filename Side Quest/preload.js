@@ -74,6 +74,8 @@ contextBridge.exposeInMainWorld('sq', {
     importDocument: () => ipcRenderer.invoke('editor:import-document'),
     getDocument: (id) => ipcRenderer.invoke('editor:get-document', id),
     getWorkingCopy: (docId, version) => ipcRenderer.invoke('editor:get-working-copy', { docId, version }),
+    importPath: (filePath) => ipcRenderer.invoke('editor:import-path', filePath),      // drag-drop import
+    pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return null; } },  // File → OS path (Electron 42: File.path removed)
     runChecks: (docId) => ipcRenderer.invoke('editor:run-checks', docId),
     certify: (docId, mapped) => ipcRenderer.invoke('editor:certify', { docId, mapped }),
     publish: (docId, publicCopyRef) => ipcRenderer.invoke('editor:publish', { docId, publicCopyRef })

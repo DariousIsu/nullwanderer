@@ -250,6 +250,34 @@ document.getElementById('new-doc-btn').addEventListener('click', async () => {
   } finally { btn.disabled = false; }
 });
 
+/* ---------- drag-drop import (works over either view) ---------- */
+(function(){
+  let depth = 0;
+  const hasFiles = e => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+  const show = on => document.body.classList.toggle('drop-hover', on);
+  window.addEventListener('dragenter', e => { if(!hasFiles(e)) return; e.preventDefault(); depth++; show(true); });
+  window.addEventListener('dragover', e => { if(!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+  window.addEventListener('dragleave', e => { if(!hasFiles(e)) return; depth = Math.max(0, depth - 1); if(!depth) show(false); });
+  window.addEventListener('drop', async e => {
+    if(!hasFiles(e)) return;
+    e.preventDefault(); depth = 0; show(false);
+    if(!E || !E.importPath || !E.pathForFile){ alert('Import bridge unavailable — restart the app.'); return; }
+    const files = Array.from(e.dataTransfer.files || []);
+    let imported = 0, errs = [];
+    for(const f of files){
+      const p = E.pathForFile(f);
+      if(!p){ errs.push(`${f.name}: no file path`); continue; }
+      try {
+        const r = await E.importPath(p);
+        if(r && r.ok) imported++;
+        else errs.push(`${f.name}: ${(r && r.error) || 'failed'}`);
+      } catch(err){ errs.push(`${f.name}: ${err.message}`); }
+    }
+    if(imported) await loadIndex();
+    if(errs.length) alert(`Imported ${imported} of ${files.length}.\n\nNot imported:\n` + errs.join('\n'));
+  });
+})();
+
 document.getElementById('back-btn').addEventListener('click', showIndex);
 document.getElementById('rail-toggle').addEventListener('click', () => document.getElementById('rail').classList.toggle('collapsed'));
 document.getElementById('rail-collapse').addEventListener('click', () => document.getElementById('rail').classList.toggle('collapsed'));

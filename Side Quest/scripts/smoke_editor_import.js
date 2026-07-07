@@ -85,6 +85,15 @@ try {
   ok('importFile .docx without markdown → points at Echo', docxThrew);
   const docxWc = I.importFile('C:/x/report.docx', { markdown: '# Report\n\nExtracted by Echo.' });
   ok('importFile .docx WITH Echo markdown normalizes', docxWc.format === 'docx' && docxWc.title === 'Report');
+  // generalized: ANY real-document format works once the caller supplies extracted markdown (pdf/xlsx/img/…)
+  const xlsxWc = I.importFile('C:/x/roster.xlsx', { markdown: '# Roster\n\n| Name | Org |\n| --- | --- |\n| A | B |' });
+  ok('importFile any format w/ extracted markdown (xlsx → table)', xlsxWc.format === 'xlsx' && xlsxWc.title === 'Roster' && xlsxWc.blocks.some(b => b.type === 'table'));
+  const pdfWc = I.importFile('C:/x/brief.pdf', { markdown: 'Body text only, no heading here.' });
+  ok('importFile .pdf w/ markdown normalizes (title from first line)', pdfWc.format === 'pdf' && pdfWc.title === 'Body text only, no heading here.');
+  const blankWc = I.importFile('C:/x/scan-2024.pdf', { markdown: '   \n\n  ' });
+  ok('importFile filename fallback when content has no title', blankWc.format === 'pdf' && blankWc.title === 'scan-2024');
+  let unsupThrew = false; try { I.importFile('C:/x/thing.zip'); } catch { unsupThrew = true; }
+  ok('importFile unsupported ext (no markdown) still throws', unsupThrew);
 
   // --- workingCopyText round-trips structure ---
   ok('workingCopyText re-emits headings', /^# U\.S\.–Israel/.test(I.workingCopyText(wc)));
