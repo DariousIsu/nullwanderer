@@ -2602,7 +2602,20 @@ async function scribeHeartbeatTick() {
     // authoritative companion (else the caption transcript stands in). Fail-safe.
     let audioTranscript = '';
     try { const a = await require('./lib/meeting_audio').stop({ dispatch: (t) => echoSuit.dispatch(t) }); if (a && a.ok && a.transcript) { audioTranscript = a.transcript; console.log(`[meet-audio] diarized transcript: ${a.segments.length} segments`); } } catch (e) { console.error('[meet-audio] stop failed:', e.message); }
-    try { const ml = require('./lib/meeting_lane').land({ minutes, recap, audioTranscript }); if (ml.landed) console.log(`[meeting] notes${ml.hasTranscript ? ` + companion transcript (${audioTranscript ? 'audio' : 'captions'})` : ''} landed in short-term store (doc ${ml.notesId}${ml.transcriptId ? `, transcript ${ml.transcriptId}` : ''})`); } catch (e) { console.error('[meeting] landing failed:', e.message); }
+    let _notesId = null;
+    try { const ml = require('./lib/meeting_lane').land({ minutes, recap, audioTranscript }); if (ml.landed) { _notesId = ml.notesId; console.log(`[meeting] notes${ml.hasTranscript ? ` + companion transcript (${audioTranscript ? 'audio' : 'captions'})` : ''} landed in short-term store (doc ${ml.notesId}${ml.transcriptId ? `, transcript ${ml.transcriptId}` : ''})`); } } catch (e) { console.error('[meeting] landing failed:', e.message); }
+    // CLOUD-LEVERAGE (meeting → OBJECT GRAPH): decompose the meeting record through the SAME machine a canvas
+    // doc-drop uses — attendees + named orgs + relations become real Echo objects/cards (net-new people flow
+    // toward the Puller), not just a flat memory item. The audio transcript (if any) is the richest source.
+    // Fire-and-forget + fail-soft: never delays or breaks finalize.
+    try {
+      const body = [recap, minutes, audioTranscript].filter(Boolean).join('\n\n');
+      if (body.trim().length >= 40) {
+        const mtitle = (() => { try { return require('./lib/meeting_lane').meetingTitle({ url: db.getMeta('gmeet_url') || '' }); } catch { return 'Meeting'; } })();
+        const mid = _notesId != null ? `meeting:${_notesId}` : `meeting:${db.getMeta('gmeet_started_at') || 'session'}`;
+        decomposeLandedDoc({ id: mid, title: `Meeting — ${mtitle}`, body, source: 'meeting' }).catch((e) => console.error('[meeting] decompose failed:', e && e.message));
+      }
+    } catch (e) { console.error('[meeting] decompose wiring failed:', e && e.message); }
     try { await emitMeetingNotes(recap || minutes, { final: true }); } catch {}
   }
   stopScribeHeartbeat();

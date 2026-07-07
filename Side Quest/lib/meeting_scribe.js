@@ -29,7 +29,7 @@ function cleanModelText(s) {
 
 function buildMinutesPrompt(priorMinutes, newText) {
   const prior = (priorMinutes || '').trim() || '(no minutes yet)';
-  return `You are the MEETING SCRIBE — keep a running, factual record of a live meeting (you are documenting, not participating).\n\nMinutes so far:\n${prior}\n\nNew transcript since the last update:\n${String(newText || '').slice(-4000)}\n\nReturn the UPDATED minutes: concise bullets under three headings — Topics, Decisions, Action items (each action tagged with its owner). Merge the new transcript into the existing minutes; do not repeat points or invent anything. Output ONLY the updated minutes, no preamble.`;
+  return `You are the MEETING SCRIBE — keep a running, factual record of a live meeting (you are documenting, not participating).\n\nMinutes so far:\n${prior}\n\nNew transcript since the last update:\n${String(newText || '').slice(-8000)}\n\nReturn the UPDATED minutes: concise bullets under three headings — Topics, Decisions, Action items (each action tagged with its owner). Merge the new transcript into the existing minutes; do not repeat points or invent anything. Output ONLY the updated minutes, no preamble.`;
 }
 function buildRecapPrompt(minutes) {
   return `From these running meeting minutes, write the FINAL record for Lucas:\n- 2–4 sentences on what the meeting was about and what was decided.\n- Then "Action items:" — each concrete follow-up with its owner (Lucas / a named person / Zoe).\nBe specific (names, dates, numbers); only what the minutes support; no preamble.\n\nMinutes:\n${String(minutes || '').slice(-7000)}`;
@@ -45,13 +45,17 @@ function defaultDeps() {
   };
 }
 
-async function runModel(d, prompt, numPredict) {
+// modelOverride lets finalize route the one-time RECAP to the deep reasoner (gpt-oss:120b) while the
+// running minutes stay on the fast scribe model for cadence (cloud-leverage). num_ctx uses the deep window
+// so the scribe can read a fat transcript slice; think:false keeps the record, not chain-of-thought.
+async function runModel(d, prompt, numPredict, modelOverride) {
+  const cfg = require('./config');
   let out = '';
   try {
     await d.streamChat({
-      model: d.MODEL,
+      model: modelOverride || d.MODEL,
       messages: [{ role: 'user', content: prompt }],
-      options: { temperature: 0.3, top_p: 0.9, num_ctx: 16384, num_predict: numPredict },
+      options: { temperature: 0.3, top_p: 0.9, num_ctx: cfg.deepNumCtx(), num_predict: numPredict },
       think: false,   // scribe wants the record, not chain-of-thought — full budget to the output
       onToken: (t) => { out += t; },
     });
@@ -77,13 +81,13 @@ async function tick(ctx = {}) {
   const rows = d.getTranscriptSince(cursor, 800) || [];
   if (rows.length) {
     const block = rows.map(r => `${r.speaker ? r.speaker + ': ' : ''}${r.text}`).join('\n');
-    db.setMeta('scribe_buffer', ((db.getMeta('scribe_buffer') || '') + (db.getMeta('scribe_buffer') ? '\n' : '') + block).slice(-6000));
+    db.setMeta('scribe_buffer', ((db.getMeta('scribe_buffer') || '') + (db.getMeta('scribe_buffer') ? '\n' : '') + block).slice(-10000));
     db.setMeta('scribe_cursor', String(rows[rows.length - 1].ts + 1));
     db.setMeta('scribe_pending', String(parseInt(db.getMeta('scribe_pending') || '0', 10) + rows.length));
   }
   if (parseInt(db.getMeta('scribe_pending') || '0', 10) >= UPDATE_EVERY_LINES) {
-    const updated = await runModel(d, buildMinutesPrompt(db.getMeta('scribe_minutes') || '', db.getMeta('scribe_buffer') || ''), 1200);
-    if (updated) db.setMeta('scribe_minutes', updated.slice(-8000));
+    const updated = await runModel(d, buildMinutesPrompt(db.getMeta('scribe_minutes') || '', db.getMeta('scribe_buffer') || ''), require('./config').sectionNumPredict());
+    if (updated) db.setMeta('scribe_minutes', updated.slice(-12000));
     db.setMeta('scribe_pending', '0'); db.setMeta('scribe_buffer', '');
     return { updated: !!updated, lines: rows.length };
   }
@@ -95,11 +99,18 @@ async function tick(ctx = {}) {
 async function finalize(ctx = {}) {
   const d = ctx.deps || defaultDeps();
   if (db.getMeta('scribe_active') !== '1') return '';
+  const cfg = require('./config');
   let mins = db.getMeta('scribe_minutes') || '';
   const buffer = db.getMeta('scribe_buffer') || '';
-  if (buffer.trim()) { const u = await runModel(d, buildMinutesPrompt(mins, buffer), 1200); if (u) mins = u; }
+  if (buffer.trim()) { const u = await runModel(d, buildMinutesPrompt(mins, buffer), cfg.sectionNumPredict()); if (u) mins = u; }
   let recap = '';
-  if (mins.trim().length >= 30) recap = await runModel(d, buildRecapPrompt(mins), 1200);
+  if (mins.trim().length >= 30) {
+    // RECAP on the DEEP REASONER (gpt-oss:120b) — one-time, high-value, the durable record → sharper
+    // decisions/action-items. Fail-safe: a reasoner that returns empty (thinking-only) falls back to the
+    // fast scribe model so the record is never blank.
+    recap = await runModel(d, buildRecapPrompt(mins), cfg.sectionNumPredict(), cfg.deepReasonerModel());
+    if (!recap) recap = await runModel(d, buildRecapPrompt(mins), cfg.sectionNumPredict());
+  }
   if (recap && d.storeMeeting) { try { await d.storeMeeting(`Meeting record (scribe): ${recap}`, { kind: 'meeting', source: 'scribe', importance: 0.8 }); } catch {} }
   db.setMeta('scribe_active', '0'); db.setMeta('scribe_minutes', ''); db.setMeta('scribe_buffer', ''); db.setMeta('scribe_pending', '0');
   db.setMeta('scribe_last_recap', recap || '');
