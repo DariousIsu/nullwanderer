@@ -27,10 +27,20 @@ ok(tts.resolveVoice({ voice: '/models/en.onnx' }) === '/models/en.onnx', 'explic
 ok(tts.resolveVoice({}, { voice: '/cfg/voice.onnx' }) === '/cfg/voice.onnx', 'falls back to config voice');
 ok(tts.resolveVoice({}) === null && tts.resolveVoice({ voice: '  ' }) === null, 'no/blank voice → null');
 
-// --- config kill-switch: OFF by default, no voice ⇒ not configured ---
+// --- config kill-switch + voice resolution (env-controlled so the test is deterministic regardless of the
+// ambient .env or whether a bundled voice model happens to exist on disk) ---
+cfg.ttsConfig();   // trigger config's one-time loadEnv() FIRST, so our env edits below aren't clobbered by it
+const _envEnabled = process.env.ZOE_TTS_ENABLED, _envVoice = process.env.ZOE_TTS_VOICE;
+delete process.env.ZOE_TTS_ENABLED;
+ok(cfg.ttsConfig().enabled === false, 'TTS OFF when ZOE_TTS_ENABLED unset (kill-switch)');
+process.env.ZOE_TTS_ENABLED = '1';
+ok(cfg.ttsConfig().enabled === true, 'ZOE_TTS_ENABLED=1 → enabled');
+process.env.ZOE_TTS_VOICE = '/tmp/x.onnx';
 const tc = cfg.ttsConfig();
-ok(tc && tc.enabled === false, 'TTS is OFF by default (kill-switch)');
-ok(tc.configured === false && typeof tc.wallMs === 'number', 'unconfigured (no ZOE_TTS_VOICE) + sane wallMs');
+ok(tc.configured === true && tc.voice === '/tmp/x.onnx' && typeof tc.wallMs === 'number', 'explicit ZOE_TTS_VOICE → configured + sane wallMs');
+// restore ambient env so nothing leaks to other assertions
+if (_envEnabled === undefined) delete process.env.ZOE_TTS_ENABLED; else process.env.ZOE_TTS_ENABLED = _envEnabled;
+if (_envVoice === undefined) delete process.env.ZOE_TTS_VOICE; else process.env.ZOE_TTS_VOICE = _envVoice;
 
 // --- fail-soft: empty text / no voice / dead interpreter → {ok:false}, never throws or hangs ---
 (async () => {

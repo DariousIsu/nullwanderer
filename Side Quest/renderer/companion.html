@@ -35,14 +35,31 @@
   window.addEventListener('resize', fit);
 
   // reflect her LIVING mood: poll the same meta the rest of the app reads (lib/mood → 'mood_state').
+  let lastFeeling = 'warm and content';
   async function refreshMood() {
     try {
       const raw = await window.sq.getMeta('mood_state');
-      if (raw) { const m = JSON.parse(raw); if (m && m.feeling) face.setFeeling(m.feeling); }
+      if (raw) { const m = JSON.parse(raw); if (m && m.feeling) { lastFeeling = m.feeling; if (!speaking) face.setFeeling(m.feeling); } }
     } catch { /* fail-soft: keep her resting expression */ }
   }
   refreshMood();
   setInterval(refreshMood, 20000);
+
+  // V4: speak a chat reply — main synthesized the wav (local Piper) and hands us the URL. Play it and
+  // lip-sync the avatar to its live amplitude (attachAudio → AnalyserNode → mouth). Restore mood when done.
+  let speaking = false;
+  try {
+    window.sq.onCompanionSpeak(({ url }) => {
+      if (!url) return;
+      const a = new Audio(url);            // fresh element each utterance (createMediaElementSource is once-per-element)
+      try { face.attachAudio(a); } catch {}
+      speaking = true; face.setMood('talking');
+      const done = () => { speaking = false; face.setFeeling(lastFeeling); };
+      a.addEventListener('ended', done);
+      a.addEventListener('error', done);
+      a.play().catch(() => done());
+    });
+  } catch { /* no speech bridge → she stays silent, still present */ }
 
   document.getElementById('hide').addEventListener('click', () => { try { window.sq.companionHide(); } catch { window.close(); } });
 </script>

@@ -35,6 +35,8 @@ contextBridge.exposeInMainWorld('sq', {
   // Desktop companion (floating VRM presence): hide her, or toggle her on/off
   companionHide: () => ipcRenderer.invoke('companion:hide'),
   companionToggle: () => ipcRenderer.invoke('companion:toggle'),
+  // Companion speech (V4): main hands over a synthesized wav URL to play + lip-sync
+  onCompanionSpeak: (cb) => ipcRenderer.on('companion:speak', (_e, info) => cb(info)),
   // Meet-in-canvas (Slice 6): route a Meet URL into Zoe's Canvas pane (she joins as herself). The
   // calendar surface calls joinMeet; the Canvas window listens via onMeetJoin to mount the webview.
   joinMeet: (url, title) => ipcRenderer.invoke('meet:join', { url, title }),

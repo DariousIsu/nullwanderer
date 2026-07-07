@@ -183,7 +183,10 @@ function pipelineContactBacklogCap() { const n = parseInt(get('ZOE_PIPELINE_CONT
 // audio routing (getUserMedia override) is a LATER slice (V3); this knob only governs local synthesis.
 function ttsConfig() {
   const enabled = /^(1|true|yes|on)$/i.test(get('ZOE_TTS_ENABLED', '').trim());   // default OFF (kill-switch)
-  const voice = get('ZOE_TTS_VOICE', '').trim();          // path to a piper .onnx voice model (+ sibling .json)
+  let voice = get('ZOE_TTS_VOICE', '').trim();            // path to a piper .onnx voice model (+ sibling .json)
+  if (!voice) {                                           // auto-default to the bundled stock voice if present
+    try { const p = require('path').join(APP_ROOT, 'data', 'voices', 'en_US-lessac-medium.onnx'); if (require('fs').existsSync(p)) voice = p; } catch {}
+  }
   const speaker = parseInt(get('ZOE_TTS_SPEAKER', '').trim(), 10);   // multi-speaker model → speaker id
   const wallMs = getInt('ZOE_TTS_WALL_MS', 60000);        // hard cap per synthesis (fail-soft to silence)
   // persistent sidecar: keep the loaded voice model resident, but kill the process after this many ms idle

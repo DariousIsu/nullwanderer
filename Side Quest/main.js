@@ -390,6 +390,7 @@ function createCompanionWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true, nodeIntegration: false, sandbox: false,
+      autoplayPolicy: 'no-user-gesture-required',   // she speaks without a click gate
     },
   });
   if (cfg.alwaysOnTop) { try { companionWindow.setAlwaysOnTop(true, 'screen-saver'); } catch {} }
@@ -397,6 +398,25 @@ function createCompanionWindow() {
   windowState.track(companionWindow, 'companion');
   companionWindow.on('closed', () => { companionWindow = null; });
   return companionWindow;
+}
+
+// Speak a chat reply aloud through the companion (V4): synthesize her words with local Piper (persistent
+// sidecar, ~sub-100ms warm) → hand the wav to the companion window, which plays it AND lip-syncs the avatar
+// to its amplitude. Gated on TTS being enabled + a voice configured + the companion being present & visible
+// (hidden = muted). Fire-and-forget + fail-soft: never blocks or breaks the chat turn.
+async function speakThroughCompanion(text) {
+  try {
+    if (!companionWindow || companionWindow.isDestroyed() || !companionWindow.isVisible()) return;
+    const tc = config.ttsConfig();
+    if (!tc.enabled || !tc.configured) return;
+    const tts = require('./lib/tts');
+    const clean = tts.prepareText(text);
+    if (!clean || clean.length < 2) return;
+    const res = await tts.synthesize(clean, { voice: tc.voice, speaker: tc.speaker, wallMs: tc.wallMs });
+    if (!res || !res.ok) { if (res && res.error) console.error('[companion] tts failed:', res.error); return; }
+    const fileUrl = require('url').pathToFileURL(res.out).href;
+    if (companionWindow && !companionWindow.isDestroyed()) companionWindow.webContents.send('companion:speak', { url: fileUrl });
+  } catch (e) { console.error('[companion] speak failed:', e.message); }
 }
 
 app.whenReady().then(() => {
@@ -5762,9 +5782,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
 // Thin IPC wrapper — the renderer's chat turn. Streams say-tokens + UI events
 // to the sender; the shared runChatTurn does the work.
 ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
+  let sayBuf = '';   // accumulate her spoken tokens so the companion can voice the whole reply on complete
   return runChatTurn(userMessage, attachments, {
-    emit: (t) => { try { event.sender.send('chat:say-token', t); } catch {} },
-    onComplete: (info) => { try { event.sender.send('chat:complete', info); } catch {} },
+    emit: (t) => { sayBuf += t; try { event.sender.send('chat:say-token', t); } catch {} },
+    onComplete: (info) => { try { event.sender.send('chat:complete', info); } catch {} try { speakThroughCompanion(sayBuf); } catch {} sayBuf = ''; },
     onError: (e) => { try { event.sender.send('chat:error', e); } catch {} },
     busy: (text) => { try { event.sender.send('chat:busy', text); } catch {} }
   });
