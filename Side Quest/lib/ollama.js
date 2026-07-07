@@ -82,6 +82,19 @@ async function streamChat({ model, messages, options = {}, onToken, signal, inac
  * a schema, not token-by-token. Low temperature by default (these are judgements, not prose).
  * Optional `base` selects a non-default endpoint (e.g. an Ollama-Cloud base for the frontier tier).
  */
+// SLICE 2 (cloud-leverage) — a reasoning model (gpt-oss/qwen3/kimi/deepseek-r1…) emits a hidden
+// chain-of-thought in message.thinking and can leave message.content EMPTY. `complete()`/.text callers then
+// got "" even though the model produced output (the dossier=NULL / empty-section bug at small num_predict).
+// pickText falls back to thinking so a reasoner never returns empty. A caller that wants CLEAN structured
+// output still passes think:false (then content is populated and this fallback is inert). Pure.
+function pickText(message) {
+  const m = message || {};
+  const c = (m.content != null ? String(m.content) : '').trim();
+  return c || (m.thinking != null ? String(m.thinking) : '');
+}
+const _REASONING_RE = /(?:^|[\/:_-])(?:gpt-oss|qwen3|qwq|kimi|deepseek-r1|magistral|o1|o3)\b|:think\b/i;
+function isReasoningModel(name) { return _REASONING_RE.test(String(name || '')); }
+
 async function completeDetailed({ model, messages, options = {}, base = OLLAMA_BASE, headers = {}, signal, timeoutMs = 180000, think }) {
   base = base || OLLAMA_BASE;          // coalesce explicit null (default params only fill undefined)
   headers = headers || {};
@@ -111,7 +124,7 @@ async function completeDetailed({ model, messages, options = {}, base = OLLAMA_B
     // subconscious budget) can account real spend instead of estimating. prompt_eval_count = input,
     // eval_count = output.
     return {
-      text: (obj && obj.message && obj.message.content) || '',
+      text: pickText(obj && obj.message),   // content, else thinking (a reasoner never returns empty — Slice 2)
       thinking: (obj && obj.message && obj.message.thinking) || '',   // reasoning models stash output here; a safety net for callers
       usage: { prompt_tokens: (obj && obj.prompt_eval_count) || 0, eval_tokens: (obj && obj.eval_count) || 0 },
       model: (obj && obj.model) || model
@@ -326,4 +339,4 @@ async function sweepLoaded({ keep = [], minVramBytes = 2e9, base = OLLAMA_BASE }
   } catch { return []; }
 }
 
-module.exports = { streamChat, complete, completeDetailed, TagStreamParser, OLLAMA_BASE, selectStale, listLoaded, unload, sweepLoaded };
+module.exports = { streamChat, complete, completeDetailed, pickText, isReasoningModel, TagStreamParser, OLLAMA_BASE, selectStale, listLoaded, unload, sweepLoaded };
