@@ -650,6 +650,8 @@ function cardKeyOf(c) {
   return t + ':' + String(c.key || c.name || '').toLowerCase();
 }
 function cardHtml(c, isNew) {
+  const _key = cardKeyOf(c);
+  c = applyEdits(c);                          // merge any manual reference correction (persisted in meta)
   const t = c.type || 'person';
   const avatar = (t === 'person' && c.photo)
     ? `<img class="pc-photo" src="${esc(c.photo)}" alt="${esc(c.name)}" draggable="false" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pc-initials',textContent:'${esc((c.initials || '?').replace(/'/g, ''))}'}))">`
@@ -693,24 +695,74 @@ function cardHtml(c, isNew) {
     }
   }
   const expandable = expand ? ' pc-can-expand' : '';
-  return `<div class="ppl-card ppl-${esc(t)}${expandable}${isNew ? ' new' : ''}" data-card="${esc(cardKeyOf(c))}">
-    <div class="pc-head">${avatar}<div class="pc-id"><div class="pc-name">${esc(c.name)}</div>${roleLine ? `<div class="pc-role">${esc(roleLine)}</div>` : ''}</div>${grade}</div>
+  const editMark = cardEdits[_key] ? '<span class="pc-editmark" title="manually edited">✎</span>' : '';
+  return `<div class="ppl-card ppl-${esc(t)}${expandable}${isNew ? ' new' : ''}" data-card="${esc(_key)}">
+    <div class="pc-head">${avatar}<div class="pc-id"><div class="pc-name">${esc(c.name)}${editMark}</div>${roleLine ? `<div class="pc-role">${esc(roleLine)}</div>` : ''}</div>${grade}<button class="pc-edit" title="Edit references">✎</button></div>
     ${rows.length ? `<div class="pc-rows">${rows.join('')}</div>` : ''}${sub}${social}${expand}${actions}${brief}
   </div>`;
+}
+
+// ---- inline reference editing (people / places / events) — corrections persist in meta (window.sq.setMeta),
+// applied on render. NO main-process handler → NO app reboot; a card refresh picks up the new UI. ----------
+const cardEdits = {};   // cardKey -> patch object (loaded from meta once, applied by applyEdits)
+const cardData = {};    // cardKey -> the last raw card object (so a card can be re-rendered on save/cancel)
+const EDIT_FIELDS = {
+  person: [['name', 'Name'], ['role', 'Role'], ['email', 'Email'], ['phone', 'Phone'], ['address', 'Address']],
+  org:    [['name', 'Name'], ['role', 'Role'], ['bio', 'About']],
+  place:  [['name', 'Name'], ['address', 'Address'], ['note', 'Note']],
+  event:  [['name', 'Name'], ['date', 'Date'], ['location', 'Location'], ['note', 'Note']],
+};
+function applyEdits(c) {
+  const p = cardEdits[cardKeyOf(c)];
+  return (p && typeof p === 'object') ? Object.assign({}, c, p) : c;
+}
+function cardEditFormHtml(c) {
+  const fields = EDIT_FIELDS[c.type || 'person'] || EDIT_FIELDS.person;
+  const inputs = fields.map(([k, label]) =>
+    `<label class="pc-ef"><span>${esc(label)}</span><input class="pc-ei" data-k="${esc(k)}" value="${esc(c[k] == null ? '' : String(c[k]))}"></label>`).join('');
+  return `<div class="pc-editform">${inputs}<div class="pc-ef-actions"><button class="pc-edit-save">Save</button><button class="pc-edit-cancel">Cancel</button></div></div>`;
+}
+// re-render one card in place; editing=true swaps in the edit form.
+function refreshCard(key, editing) {
+  const c = cardData[key]; if (!c) return;
+  const el = pplList.querySelector(`.ppl-card[data-card="${CSS.escape(key)}"]`); if (!el) return;
+  if (editing) el.outerHTML = `<div class="ppl-card ppl-${esc(c.type || 'person')} pc-editing" data-card="${esc(key)}">${cardEditFormHtml(applyEdits(c))}</div>`;
+  else el.outerHTML = cardHtml(c, false);
+}
+function saveEdit(key) {
+  const el = pplList.querySelector(`.ppl-card[data-card="${CSS.escape(key)}"]`); if (!el) return;
+  const patch = {};
+  el.querySelectorAll('.pc-ei').forEach((inp) => { patch[inp.dataset.k] = String(inp.value || '').trim(); });
+  if (!patch.name) delete patch.name;         // never blank the name (it'd drop the card from the rail)
+  cardEdits[key] = patch;
+  try { window.sq.setMeta('cardedit:' + key, JSON.stringify(patch)); } catch (e) {}
+  refreshCard(key, false);
+}
+// load a persisted correction for a card that just appeared, and re-render it if one exists.
+async function ensureOverride(c) {
+  const key = cardKeyOf(c);
+  if (key in cardEdits) { if (cardEdits[key]) refreshCard(key, false); return; }
+  cardEdits[key] = null;                       // reserve so a burst of the same card only loads once
+  try { const raw = await window.sq.getMeta('cardedit:' + key); if (raw) { cardEdits[key] = JSON.parse(raw); refreshCard(key, false); } }
+  catch (e) {}
 }
 function pplCount() { pplN.textContent = String(pplList.querySelectorAll('.ppl-card').length || ''); }
 function renderPeople(cards) {
   const list = (Array.isArray(cards) ? cards : []).filter(c => c && c.name);
+  for (const c of list) cardData[cardKeyOf(c)] = c;
   pplList.innerHTML = list.length ? list.map(c => cardHtml(c, false)).join('') : '<div class="ppl-empty">No cards yet.<br>Drop a document on the canvas.</div>';
   pplCount();
+  for (const c of list) ensureOverride(c);                 // apply any persisted reference corrections
 }
 function prependCard(c) {
   if (!c || !c.name) return;
+  cardData[cardKeyOf(c)] = c;
   const existing = pplList.querySelector(`.ppl-card[data-card="${CSS.escape(cardKeyOf(c))}"]`);
   if (existing) existing.remove();                         // same object already shown → moves to top, refreshed
   const empty = pplList.querySelector('.ppl-empty'); if (empty) empty.remove();
   pplList.insertAdjacentHTML('afterbegin', cardHtml(c, true));
   pplCount();
+  ensureOverride(c);
 }
 async function loadPeople() {
   try { const r = await window.sq.contacts.recent(60); renderPeople((r && r.cards) || []); }
@@ -721,6 +773,14 @@ function closePeople() { people.hidden = true; document.body.classList.remove('p
 $('peopleBtn').addEventListener('click', () => { if (people.hidden) openPeople(); else closePeople(); });
 $('pplClose').addEventListener('click', closePeople);
 pplList.addEventListener('click', (e) => {
+  // inline reference editing: ✎ opens the form, Save persists (meta), Cancel restores.
+  const editBtn = e.target.closest('.pc-edit');
+  if (editBtn) { e.stopPropagation(); const cc = editBtn.closest('.ppl-card'); if (cc) refreshCard(cc.dataset.card, true); return; }
+  const saveBtn = e.target.closest('.pc-edit-save');
+  if (saveBtn) { e.stopPropagation(); const cc = saveBtn.closest('.ppl-card'); if (cc) saveEdit(cc.dataset.card); return; }
+  const cancelBtn = e.target.closest('.pc-edit-cancel');
+  if (cancelBtn) { e.stopPropagation(); const cc = cancelBtn.closest('.ppl-card'); if (cc) refreshCard(cc.dataset.card, false); return; }
+  if (e.target.closest('.pc-editform')) { e.stopPropagation(); return; }   // clicks inside the form never toggle expand
   const crmBtn = e.target.closest('.pc-crmbtn');
   if (crmBtn && crmBtn.dataset.crm) { e.stopPropagation(); try { window.sq.contacts.openCrm(Number(crmBtn.dataset.crm)); } catch (err) {} return; }
   const brief = e.target.closest('.pc-briefing');
