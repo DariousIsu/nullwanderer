@@ -1,0 +1,3 @@
+# Face-embedding sidecar (identity CONFIRMATION only). Recreate: uv venv sidecar/face_venv --python 3.12
+insightface
+onnxruntime
