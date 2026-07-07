@@ -105,11 +105,13 @@ async function finalize(ctx = {}) {
   if (buffer.trim()) { const u = await runModel(d, buildMinutesPrompt(mins, buffer), cfg.sectionNumPredict()); if (u) mins = u; }
   let recap = '';
   if (mins.trim().length >= 30) {
-    // RECAP on the DEEP REASONER (gpt-oss:120b) — one-time, high-value, the durable record → sharper
-    // decisions/action-items. Fail-safe: a reasoner that returns empty (thinking-only) falls back to the
-    // fast scribe model so the record is never blank.
-    recap = await runModel(d, buildRecapPrompt(mins), cfg.sectionNumPredict(), cfg.deepReasonerModel());
-    if (!recap) recap = await runModel(d, buildRecapPrompt(mins), cfg.sectionNumPredict());
+    // RECAP — one-time, high-value durable record, on the fat budget (sectionNumPredict). Optionally routed
+    // to a DEEP REASONER when one is actually reachable: deepReasonerModel's bare default (gpt-oss:120b)
+    // 404s here (needs a -cloud suffix), so only override when ZOE_DEEP_REASONER_MODEL names a real cloud
+    // model; else stay on the proven fast scribe model. Fail-safe: an empty override falls back.
+    const reasoner = (require('./config').get('ZOE_DEEP_REASONER_MODEL') || '').trim();
+    recap = await runModel(d, buildRecapPrompt(mins), cfg.sectionNumPredict(), reasoner || undefined);
+    if (!recap && reasoner) recap = await runModel(d, buildRecapPrompt(mins), cfg.sectionNumPredict());
   }
   if (recap && d.storeMeeting) { try { await d.storeMeeting(`Meeting record (scribe): ${recap}`, { kind: 'meeting', source: 'scribe', importance: 0.8 }); } catch {} }
   db.setMeta('scribe_active', '0'); db.setMeta('scribe_minutes', ''); db.setMeta('scribe_buffer', ''); db.setMeta('scribe_pending', '0');
