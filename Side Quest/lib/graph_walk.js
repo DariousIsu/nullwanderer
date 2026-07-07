@@ -206,7 +206,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, log
   let dossier = null, _rawLen = 0;
   if (typeof cloud === 'function') {
     try {
-      const out = await cloud(buildDossierPrompt(mention, sources, { existing: gap.object, neighbors }), { num_predict: 1000, temperature: 0.3 });
+      const out = await cloud(buildDossierPrompt(mention, sources, { existing: gap.object, neighbors }), { num_predict: 3000, temperature: 0.3 });   // deep KG extraction — room for MANY facts/edges per move (cloud-leverage)
       _rawLen = (out || '').length;
       dossier = parseJsonLoose(out);
     } catch (e) { log && log('[graph-walk] dossier synth failed: ' + e.message); }

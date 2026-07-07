@@ -140,10 +140,22 @@ function subcSynthIntervalMin() { const n = parseInt(get('ZOE_SUBC_SYNTH_MIN', '
 function subcBudgetTokensPerHour() { const n = parseInt(get('ZOE_SUBC_BUDGET_TOKPH', '').trim(), 10); return Number.isFinite(n) ? n : 120000; }
 // Idle graph-builder gets its OWN rolling token ceiling, isolated from the shared subconscious pool the
 // news/curation/forecast lanes fill — so knowledge-expansion can't be starved to zero by background noise.
-function graphwalkBudgetTokensPerHour() { const n = parseInt(get('ZOE_GRAPHWALK_BUDGET_TOKPH', '').trim(), 10); return Number.isFinite(n) ? n : 60000; }
+// Ceiling raised (cloud-leverage, 2026-07-06): the fatter deep calls (below) spend ~3× per move, so a 60k
+// cap would throttle knowledge-expansion to a trickle — lift it so the depth actually lands.
+function graphwalkBudgetTokensPerHour() { const n = parseInt(get('ZOE_GRAPHWALK_BUDGET_TOKPH', '').trim(), 10); return Number.isFinite(n) ? n : 300000; }
 // The PULLER lane (autonomous contact enrichment) gets its OWN rolling ceiling too — pattern-fills are
 // free (no model), so this only bounds the web-discovery search+extract moves. Lower than graph-walk.
-function pullerBudgetTokensPerHour() { const n = parseInt(get('ZOE_PULLER_BUDGET_TOKPH', '').trim(), 10); return Number.isFinite(n) ? n : 40000; }
+function pullerBudgetTokensPerHour() { const n = parseInt(get('ZOE_PULLER_BUDGET_TOKPH', '').trim(), 10); return Number.isFinite(n) ? n : 150000; }
+
+// --- DEEP CALL BUDGETS (cloud-leverage, 2026-07-06) — we were feeding frontier models a 1/16th window
+// (num_ctx 8192) and asking for a paragraph (num_predict 200-1000). These knobs, applied at the DEPTH
+// call sites (extraction, dossier-building, subconscious thinking, research-section synthesis), let the
+// 120B/675B actually work: a big context IN + room to write a rich answer OUT. Env-overridable; the
+// micro-calls (intent classifiers, keyword picks) are deliberately left small. Bold defaults.
+function deepNumCtx() { const n = parseInt(get('ZOE_DEEP_NUM_CTX', '').trim(), 10); return Number.isFinite(n) ? n : 32768; }
+function deepNumPredict() { const n = parseInt(get('ZOE_DEEP_NUM_PREDICT', '').trim(), 10); return Number.isFinite(n) ? n : 3000; }
+// Research SECTION synthesis (organize/merge a whole org's passes into prose) — the biggest single outputs.
+function sectionNumPredict() { const n = parseInt(get('ZOE_SECTION_NUM_PREDICT', '').trim(), 10); return Number.isFinite(n) ? n : 6000; }
 
 // --- Email ---
 function emailConfig() {
@@ -161,4 +173,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, deepNumCtx, deepNumPredict, sectionNumPredict, emailConfig, discordConfig, APP_ROOT, ENV_PATH };

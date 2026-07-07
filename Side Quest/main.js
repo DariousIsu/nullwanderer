@@ -5735,7 +5735,7 @@ async function runCloudOperator({ userMessage, context, task = false, autonomous
       userMessage, context: (context || '') + taskNote,
       deps: { complete: operator._operatorComplete, tools },
       maxSteps: task ? 8 : undefined, maxMs: task ? 90000 : undefined,
-      numPredict: task ? 3000 : undefined,   // a list/write-up can be long — don't truncate it at generation
+      numPredict: task ? config.sectionNumPredict() : undefined,   // a list/write-up can be long — don't truncate it at generation (cloud-leverage: deeper write-ups)
       model, toolSpec                         // per-lane model + tool menu (null = single-lane defaults)
     });
     // GROWTH — "Zoe" IS the memory, not the model: the operator only grows her if what it gathers
@@ -5857,7 +5857,7 @@ async function surfaceDocCards(doc) {
     const model = config.extractionModel() || config.subconsciousModel();
     const extract = decompLane.makeCloudExtractor({
       completeFn: completeDetailed, model, base: src.base, token: src.token,
-      buildPrompt: contactExtract.buildCardsPrompt, parse: contactExtract.parseDocCards, numPredict: 800,
+      buildPrompt: contactExtract.buildCardsPrompt, parse: contactExtract.parseDocCards, numPredict: config.deepNumPredict(),
     });
     // MULTI-PASS: a big roster/sheet exceeds one 6000-char extraction slice, so split it into line-boundary
     // passes and extract each. ingestRows dedups people ACROSS passes (it rebuilds its seen-set from the DB
@@ -6699,7 +6699,7 @@ async function runDirectedResearchPass(focus) {
     if (adv.advance) {
       // CLOUD ORGANIZE this target → one clean section (the usable DRAFT), appended to the deliverable NOW.
       let section = '';
-      try { section = await condenseComplete(rs.buildOrganizeTargetPrompt({ target: target.name, raw: target.raw }), { numPredict: 2000 }); } catch {}
+      try { section = await condenseComplete(rs.buildOrganizeTargetPrompt({ target: target.name, raw: target.raw }), { numPredict: config.sectionNumPredict() }); } catch {}
       section = (section && section.trim()) ? section.trim() : `## ${target.name}\n${target.raw.slice(0, 1500)}`;
       const header = covered.length === 0 ? `# Directed research deliverable\n\n**Task:** ${goal}\n\n---\n\n` : '';
       try { await filesLib.dispatch({ tag: 'file-append', attrs: { path: file }, body: `${header}${section}\n\n` }); }
@@ -6813,7 +6813,7 @@ async function runDeepResearchTarget({ org, goal = '', facet = '', guidance = ''
   const webRaw = (web && web.answer) ? String(web.answer).trim() : '';
   const deepRaw = (deep && deep.answer) ? String(deep.answer).trim() : '';
   let section = '';
-  try { section = await condenseComplete(rs.buildMergeLanesPrompt({ org, facet, webRaw, deepRaw, known }), { numPredict: 2000 }); } catch {}
+  try { section = await condenseComplete(rs.buildMergeLanesPrompt({ org, facet, webRaw, deepRaw, known }), { numPredict: config.sectionNumPredict() }); } catch {}
   section = (section && section.trim()) ? section.trim() : `## ${org}\n- **${rs.facetLabel(facet)}:** ${((webRaw || deepRaw) || '').slice(0, 800).trim() || 'not found'}`;
   const used = (r) => !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.length);
   return { section, webRaw, deepRaw, lanes: { web: used(web), deep: used(deep) } };
@@ -6866,7 +6866,7 @@ async function runEnrichResearchPass(focus) {
       } catch (e) { console.error('[enrich] pass failed:', e.message); }
       const p = rs.parsePass(ans);
       // ORGANIZE this org's facet findings → one clean section, appended NOW (continuous, like discovery).
-      try { section = await condenseComplete(rs.buildOrganizeEnrichPrompt({ org, facet, raw: p.body || ans }), { numPredict: 1800 }); } catch {}
+      try { section = await condenseComplete(rs.buildOrganizeEnrichPrompt({ org, facet, raw: p.body || ans }), { numPredict: config.sectionNumPredict() }); } catch {}
       section = (section && section.trim()) ? section.trim() : `## ${org}\n- **${rs.facetLabel(facet)}:** ${((p.body || ans) || '').slice(0, 800).trim() || 'not found'}`;
     }
     const header = enriched.length === 0 ? `# Enrichment deliverable\n\n**Task:** ${goal}\n\n**Facet:** ${facet}${deepMode ? ' (deep two-lane research)' : ''}\n\n---\n\n` : '';

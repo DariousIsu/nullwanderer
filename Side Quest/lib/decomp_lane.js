@@ -19,12 +19,13 @@ const doc_decompose = require('./doc_decompose');
 // (injected). `buildPrompt` is the per-stream guidelines seam — default is the generic typed prompt; a
 // stream that wants tailored rules passes its own. Returns extract(text,{title}) → { entities, relations }.
 function makeCloudExtractor({ completeFn, model, base = undefined, token = null, buildPrompt = doc_decompose.buildTypedPrompt, parse = doc_decompose.parseTypedExtraction, numPredict = 400, timeoutMs = 120000 } = {}) {
+  const _ctx = (() => { try { return require('./config').deepNumCtx(); } catch { return 8192; } })();   // ingest BIG doc chunks, not a 1/16th window
   return async (text, { title } = {}) => {
     if (typeof completeFn !== 'function' || !model) return { entities: [], relations: [] };
     const out = await completeFn({
       model, messages: buildPrompt(text, { title }), base,
       headers: token ? { Authorization: `Bearer ${token}` } : {},
-      options: { temperature: 0.2, top_p: 0.9, num_ctx: 8192, num_predict: numPredict },
+      options: { temperature: 0.2, top_p: 0.9, num_ctx: _ctx, num_predict: numPredict },
       think: false, timeoutMs,
     });
     const raw = typeof out === 'string' ? out : ((out && out.text) || (out && out.thinking) || '');

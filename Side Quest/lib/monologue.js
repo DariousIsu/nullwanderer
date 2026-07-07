@@ -718,7 +718,7 @@ async function generateThought({ messages, options = {}, signal, deps = {} } = {
         const r = await completeFn({
           model: subModel, messages, base: cloud.base,
           headers: cloud.token ? { Authorization: `Bearer ${cloud.token}` } : {},
-          options: { temperature: options.temperature ?? 0.9, top_p: options.top_p ?? 0.95, num_ctx: 8192, num_predict: Math.max(options.num_predict || 200, 700) },
+          options: { temperature: options.temperature ?? 0.9, top_p: options.top_p ?? 0.95, num_ctx: require('./config').deepNumCtx(), num_predict: Math.max(options.num_predict || 200, 1500) },
           signal, timeoutMs: 120000
         });
         // completeDetailed → { text, usage }; an injected string-returning complete (smokes) → string.
@@ -1499,7 +1499,7 @@ async function runGraphWalkMove(recentTurns) {
       const r = await completeDetailed({
         model: sub, messages, base: src.base,
         headers: src.token ? { Authorization: `Bearer ${src.token}` } : {},
-        options: { temperature: o.temperature ?? 0.3, top_p: 0.9, num_ctx: 8192, num_predict: o.num_predict || 400 },
+        options: { temperature: o.temperature ?? 0.3, top_p: 0.9, num_ctx: cfg.deepNumCtx(), num_predict: o.num_predict || cfg.deepNumPredict() },
         think: false,   // gpt-oss:120b is a reasoning model — without this its hidden reasoning eats the budget and the JSON comes back empty (dossier=NULL)
         timeoutMs: 120000
       });
@@ -1666,7 +1666,7 @@ async function runPullerMove(_recentTurns) {
       const decompLane = require('./decomp_lane');
       const contactExtract = require('./contact_extract');
       const model = cfg.extractionModel() || cfg.subconsciousModel();
-      const base = decompLane.makeCloudExtractor({ completeFn: completeDetailed, model, base: src.base, token: src.token, buildPrompt: contactExtract.buildCardsPrompt, parse: contactExtract.parseDocCards, numPredict: 500 });
+      const base = decompLane.makeCloudExtractor({ completeFn: completeDetailed, model, base: src.base, token: src.token, buildPrompt: contactExtract.buildCardsPrompt, parse: contactExtract.parseDocCards, numPredict: cfg.deepNumPredict() });
       extract = async (text, o) => {
         const r = await base(text, o);
         try { subc.recordSpend({ getMeta: _gm, setMeta: _sm, now: Date.now(), tokens: subc.estimateTokens([{ content: text }], JSON.stringify(r || {})), key: PULLER_BUDGET_KEY }); } catch {}
