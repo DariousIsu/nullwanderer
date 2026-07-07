@@ -9,6 +9,10 @@
  * timeout all resolve to { ok:false, error } — synthesis never throws and never blocks the caller. The
  * feature is kill-switched OFF by default (config.ttsConfig().enabled) so a fresh clone never spawns a
  * sidecar it doesn't have; callers should check cfg.ttsConfig().enabled before wiring speech into a lane.
+ *
+ * PERSISTENT by default (V1+): synthesize() routes to a resident --serve sidecar that loads the voice model
+ * once and streams utterances (call 1 pays ~1.5-2s load; calls 2+ are ~model-free). It idle-kills itself
+ * after ttsConfig().idleMs and respawns lazily. opts.oneShot / opts.python force a one-shot spawn instead.
  */
 'use strict';
 const path = require('path');
@@ -54,28 +58,34 @@ function resolveVoice(opts = {}, cfg = null) {
   return typeof v === 'string' && v.trim() ? v.trim() : null;
 }
 
-// Synthesize `text` → a WAV file. Returns { ok, out, bytes, sampleRate } or { ok:false, error }. Never throws.
-//   opts: { voice, speaker, out, wallMs, python, maxChars }
-function synthesize(text, opts = {}) {
+// pure: split a stdout buffer into complete NDJSON messages + the trailing incomplete remainder. The
+// persistent sidecar emits one JSON object per line; this frames the stream (garbage lines are skipped).
+function parseNdjson(buf) {
+  const parts = String(buf || '').split('\n');
+  const rest = parts.pop();                 // last element is the incomplete tail (or '' after a clean \n)
+  const messages = [];
+  for (const line of parts) {
+    const s = line.trim();
+    if (!s) continue;
+    try { messages.push(JSON.parse(s)); } catch { /* skip non-JSON noise */ }
+  }
+  return { messages, rest };
+}
+
+let _outSeq = 0;
+function _resolveOut(opts) {
+  if (opts.out) return opts.out;
+  try { fs.mkdirSync(OUT_DIR, { recursive: true }); } catch {}
+  return path.join(OUT_DIR, `tts_${Date.now()}_${process.pid}_${_outSeq++}.wav`);
+}
+
+// ONE-SHOT backend: spawn the sidecar, synthesize once, exit. Used for explicit python overrides / tests
+// (opts.python) and opts.oneShot. Pays the ~1.5-2s model load every call — the persistent path avoids that.
+function synthesizeOneShot({ text, voice, out, speaker, python, wallMs }) {
   return new Promise((resolve) => {
-    const clean = prepareText(text, { maxChars: opts.maxChars });
-    if (!clean) return resolve({ ok: false, error: 'empty text' });
-    const voice = resolveVoice(opts);
-    if (!voice) return resolve({ ok: false, error: 'no voice model configured' });
-
-    let out = opts.out;
-    if (!out) {
-      try { fs.mkdirSync(OUT_DIR, { recursive: true }); } catch {}
-      out = path.join(OUT_DIR, `tts_${Date.now()}_${process.pid}.wav`);
-    }
-    const python = opts.python || VENV_PY;
-    const wallMs = Number.isFinite(opts.wallMs) ? opts.wallMs : 60000;
-    const speaker = (opts.speaker === 0 || opts.speaker) ? opts.speaker : null;
-    const job = JSON.stringify({ text: clean, voice, out, speaker });
-
     let child;
     try {
-      child = spawn(python, [RUNNER], { cwd: ROOT, env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }, stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawn(python || VENV_PY, [RUNNER], { cwd: ROOT, env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (e) { return resolve({ ok: false, error: 'spawn failed: ' + e.message }); }
 
     let o = '', err = '', done = false, timer = null;
@@ -89,7 +99,91 @@ function synthesize(text, opts = {}) {
       try { finish(JSON.parse(line)); }
       catch { finish({ ok: false, error: code !== 0 ? `exit ${code}: ${err.slice(-200)}` : 'unparseable: ' + o.slice(0, 160) }); }
     });
-    try { child.stdin.write(job); child.stdin.end(); } catch (e) { finish({ ok: false, error: 'stdin failed: ' + e.message }); }
+    try { child.stdin.write(JSON.stringify({ text, voice, out, speaker })); child.stdin.end(); } catch (e) { finish({ ok: false, error: 'stdin failed: ' + e.message }); }
+  });
+}
+
+// PERSISTENT backend: a resident sidecar (--serve) that loads the voice model ONCE and answers newline-
+// delimited requests, so every call after the first skips the model reload. Requests are correlated to
+// responses by an incrementing id. Fail-soft: a crashed/absent sidecar fails the in-flight calls and lets
+// the next call respawn lazily. After `idleMs` with nothing pending the child is killed (frees the ~63MB
+// model); it respawns on demand. Factory form (not just a singleton) so tests can point it at a bad python.
+function createPiperService({ python = VENV_PY, idleMs = 300000 } = {}) {
+  const st = { child: null, buf: '', pending: new Map(), nextId: 1, ready: false, down: false, idleTimer: null };
+
+  const _failAll = (err) => {
+    for (const [, p] of st.pending) { try { clearTimeout(p.timer); } catch {} p.resolve({ ok: false, error: err }); }
+    st.pending.clear();
+  };
+  const _dropChild = (err) => { st.ready = false; if (st.child) { try { st.child.kill(); } catch {} st.child = null; } _failAll(err); };
+  const _armIdle = () => {
+    if (!idleMs) return;
+    try { clearTimeout(st.idleTimer); } catch {}
+    st.idleTimer = setTimeout(() => { if (st.pending.size === 0 && st.child) { try { st.child.stdin.end(); } catch {} try { st.child.kill(); } catch {} st.child = null; st.ready = false; } }, idleMs);
+    if (st.idleTimer && st.idleTimer.unref) st.idleTimer.unref();   // don't hold the event loop open
+  };
+
+  const _ensure = () => {
+    if (st.down || st.child) return !st.down;
+    let child;
+    try {
+      child = spawn(python, [RUNNER, '--serve'], { cwd: ROOT, env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }, stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch { return false; }
+    st.child = child;
+    child.stdout.on('data', (d) => {
+      st.buf += d.toString();
+      const { messages, rest } = parseNdjson(st.buf); st.buf = rest;
+      for (const m of messages) {
+        if (m && m.ready) { st.ready = true; continue; }
+        const p = m && st.pending.get(m.id);
+        if (p) { try { clearTimeout(p.timer); } catch {} st.pending.delete(m.id); p.resolve(m); }
+      }
+    });
+    child.stderr.on('data', () => { /* swallow piper init chatter */ });
+    child.on('error', () => _dropChild('sidecar spawn error'));   // ENOENT etc → fail pending, allow respawn
+    child.on('exit', () => { st.child = null; st.ready = false; _failAll('sidecar exited'); });
+    return true;
+  };
+
+  const request = ({ text, voice, out, speaker }, wallMs = 60000) => new Promise((resolve) => {
+    if (st.down) return resolve({ ok: false, error: 'service shut down' });
+    if (!_ensure() || !st.child) return resolve({ ok: false, error: 'sidecar unavailable' });
+    const id = st.nextId++;
+    const timer = setTimeout(() => { if (st.pending.has(id)) { st.pending.delete(id); resolve({ ok: false, error: 'timeout' }); } }, wallMs);
+    st.pending.set(id, { resolve, timer });
+    _armIdle();
+    try { st.child.stdin.write(JSON.stringify({ id, text, voice, out, speaker }) + '\n'); }
+    catch (e) { try { clearTimeout(timer); } catch {} st.pending.delete(id); resolve({ ok: false, error: 'stdin failed: ' + e.message }); }
+  });
+
+  const shutdown = () => { st.down = true; try { clearTimeout(st.idleTimer); } catch {} _dropChild('service shut down'); };
+
+  return { request, shutdown, _state: st };
+}
+
+let _singleton = null;
+function _idleMs() { try { return require('./config').ttsConfig().idleMs; } catch { return 300000; } }
+function _service() { if (!_singleton || _singleton._state.down) _singleton = createPiperService({ idleMs: _idleMs() }); return _singleton; }
+// stop the resident sidecar (clean app exit / tests). It respawns lazily on the next synthesize().
+function shutdownTts() { if (_singleton) { _singleton.shutdown(); _singleton = null; } }
+
+// Synthesize `text` → a WAV file. Returns { ok, out, bytes, sampleRate } or { ok:false, error }. Never throws.
+// Routes to the PERSISTENT sidecar by default (warm, no per-call reload); opts.oneShot or an explicit
+// opts.python forces a one-shot spawn.  opts: { voice, speaker, out, wallMs, python, oneShot, maxChars }
+function synthesize(text, opts = {}) {
+  return new Promise((resolve) => {
+    const clean = prepareText(text, { maxChars: opts.maxChars });
+    if (!clean) return resolve({ ok: false, error: 'empty text' });
+    const voice = resolveVoice(opts);
+    if (!voice) return resolve({ ok: false, error: 'no voice model configured' });
+    const out = _resolveOut(opts);
+    const speaker = (opts.speaker === 0 || opts.speaker) ? opts.speaker : null;
+    const wallMs = Number.isFinite(opts.wallMs) ? opts.wallMs : 60000;
+    if (opts.oneShot || opts.python) {
+      synthesizeOneShot({ text: clean, voice, out, speaker, python: opts.python, wallMs }).then(resolve);
+    } else {
+      _service().request({ text: clean, voice, out, speaker }, wallMs).then(resolve);
+    }
   });
 }
 
@@ -112,4 +206,4 @@ async function speak(text, opts = {}) {
   return res;
 }
 
-module.exports = { synthesize, speak, prepareText, resolveVoice, VENV_PY, RUNNER, OUT_DIR };
+module.exports = { synthesize, speak, shutdownTts, createPiperService, parseNdjson, prepareText, resolveVoice, VENV_PY, RUNNER, OUT_DIR };

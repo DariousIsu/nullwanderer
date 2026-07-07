@@ -186,7 +186,10 @@ function ttsConfig() {
   const voice = get('ZOE_TTS_VOICE', '').trim();          // path to a piper .onnx voice model (+ sibling .json)
   const speaker = parseInt(get('ZOE_TTS_SPEAKER', '').trim(), 10);   // multi-speaker model → speaker id
   const wallMs = getInt('ZOE_TTS_WALL_MS', 60000);        // hard cap per synthesis (fail-soft to silence)
-  return { enabled, voice, speaker: Number.isFinite(speaker) ? speaker : null, wallMs, configured: !!voice };
+  // persistent sidecar: keep the loaded voice model resident, but kill the process after this many ms idle
+  // so we don't hold ~63MB forever between utterances. It respawns lazily on the next call. 0 = never idle-kill.
+  const idleMs = getInt('ZOE_TTS_IDLE_MS', 300000);
+  return { enabled, voice, speaker: Number.isFinite(speaker) ? speaker : null, wallMs, idleMs, configured: !!voice };
 }
 
 // --- Email ---

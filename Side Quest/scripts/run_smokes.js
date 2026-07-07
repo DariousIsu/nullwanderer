@@ -126,6 +126,7 @@ const smokes = [
   'smoke_profile_confirm.js',
   'smoke_email_harvest.js',
   'smoke_tts.js',
+  'smoke_tts_service.js',
   'smoke_avatar_state.js',
   'smoke_excavate.js',
   'smoke_staleness.js',
