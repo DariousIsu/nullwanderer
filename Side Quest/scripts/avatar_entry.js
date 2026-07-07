@@ -90,11 +90,29 @@ function create(canvas, opts = {}) {
         // yaw 0 — PROVEN with the real Zoe.vrm (a VRM 1.0 export faced the camera at rotation.y 0, and PI
         // showed her back). opts.faceYaw overrides for any model that ships facing the other way.
         vrm.scene.rotation.y = (typeof opts.faceYaw === 'number') ? opts.faceYaw : 0;
-        scene.add(vrm.scene);
-        // frame the camera on the head bone so it's a portrait, whatever the model's proportions
+        // Relax the default T-pose into arms-at-sides (A-pose) so full-body framing looks natural, not stiff.
+        // Set once on the normalized humanoid bones; vrm.update() propagates it to the skeleton each frame.
         try {
-          const head = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode('head');
-          if (head) { const p = new THREE.Vector3(); head.getWorldPosition(p); camera.position.set(0, p.y, 0.7); camera.lookAt(0, p.y, 0); }
+          const setBone = (name, z, x) => { const b = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode(name); if (b) b.rotation.set(x || 0, 0, z); };
+          setBone('leftUpperArm', -1.25); setBone('rightUpperArm', 1.25);   // bring arms down to the sides
+          setBone('leftLowerArm', -0.15); setBone('rightLowerArm', 0.15);   // a touch of elbow bend
+        } catch {}
+        scene.add(vrm.scene);
+        // frame the camera: 'portrait' = head-and-shoulders (default), 'full' = whole body from her
+        // bounding box (fit the full height with a little margin). opts.framing chooses.
+        try {
+          if ((opts.framing || 'portrait') === 'full') {
+            const box = new THREE.Box3().setFromObject(vrm.scene);
+            const size = new THREE.Vector3(); box.getSize(size);
+            const center = new THREE.Vector3(); box.getCenter(center);
+            const fov = camera.fov * Math.PI / 180;
+            const dist = (size.y / 2) / Math.tan(fov / 2) * 1.12 + size.z;
+            camera.position.set(0, center.y, dist);
+            camera.lookAt(0, center.y, 0);
+          } else {
+            const head = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode('head');
+            if (head) { const p = new THREE.Vector3(); head.getWorldPosition(p); camera.position.set(0, p.y, 0.7); camera.lookAt(0, p.y, 0); }
+          }
         } catch {}
         st.vrm = vrm;
         resolve(api);
