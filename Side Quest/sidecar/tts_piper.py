@@ -49,14 +49,16 @@ def main():
         from piper import PiperVoice
         v = PiperVoice.load(voice)
         os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
-        syn_args = {}
+        syn_config = None
         if speaker is not None:
             try:
-                syn_args["speaker_id"] = int(speaker)
+                from piper.config import SynthesisConfig
+                syn_config = SynthesisConfig(speaker_id=int(speaker))
             except Exception:
-                pass
+                syn_config = None
         with wave.open(out, "wb") as wf:
-            v.synthesize(text, wf, **syn_args)
+            # piper 1.4.x: synthesize_wav sets the wav header (set_wav_format=True) then streams audio.
+            v.synthesize_wav(text, wf, syn_config=syn_config)
         sr = 0
         try:
             with wave.open(out, "rb") as rf:
