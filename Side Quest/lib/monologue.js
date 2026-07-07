@@ -2067,6 +2067,28 @@ async function runProfileConfirmMove(preferIds = null) {
     for (const m of res.matches) {
       try { pdb.addObservation(pick.id, { attr: 'social', value: `${m.platform}|${m.url}`, kind: 'face-confirmed', source: 'profile-confirm', sourceUrl: m.url, confidence: 0.7 }); } catch {}
     }
+    // HARVEST any STATED PUBLIC email off the confirmed profile pages (public info; cited; never invented;
+    // masked/broker teasers dropped). Lands as a cited observation + fills the email belief if empty.
+    try {
+      const emailHarvest = require('./email_harvest');
+      const already = new Set(pdb.listObservations(pick.id, { attr: 'email' }).map((x) => x.value));
+      let hasBelief = !!pdb.getBelief(pick.id, 'email');
+      const landed = [];
+      for (const m of res.matches) {
+        let text = '';
+        try { const o = await ownBrowser.open(m.url); if (o && o.ok) { const rd = await ownBrowser.read(); text = (rd && rd.text) || ''; } } catch {}
+        if (!text) continue;
+        for (const f of emailHarvest.extractEmails(text, { name: pick.name, orgDomain: pick.domain || '' }).slice(0, 3)) {
+          if (already.has(f.email)) continue; already.add(f.email);
+          try {
+            pdb.addObservation(pick.id, { attr: 'email', value: f.email, kind: 'public', source: `profile:${m.platform}`, sourceUrl: m.url, confidence: f.confidence });
+            if (!hasBelief) { pdb.upsertBelief(pick.id, 'email', { value: f.email, confidence: f.confidence, derivation: `public:${m.platform}` }); hasBelief = true; }
+            landed.push(f.email);
+          } catch {}
+        }
+      }
+      if (landed.length) console.log(`[profile-confirm] ${pick.name} → +${landed.length} public email(s): ${landed.join(', ')}`);
+    } catch (e) { console.error('[profile-confirm] email harvest failed:', e.message); }
     try {
       const social = cc.socialFromObservations(pdb.listObservations(pick.id, { attr: 'social' }));
       if (opts.emitContactCard) opts.emitContactCard(cc.cardFromTarget(pdb.getTarget(pick.id) || pick, pdb.listBeliefs(pick.id), {}, { social }));
