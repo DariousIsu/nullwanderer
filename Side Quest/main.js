@@ -1830,7 +1830,14 @@ ipcMain.handle('creator:advise', async (_e, { docJson, context } = {}) => {
       model: cloud ? cloudModel : MODEL, messages,
       base: cloud ? cloud.base : undefined,
       headers: cloud ? { Authorization: `Bearer ${cloud.token}` } : {},
-      options: { temperature: 0.3, num_ctx: 8192 },
+      // DEEP CALL (cloud-leverage): the advisor reads the WHOLE draft + research context and writes rich
+      // structured advice — a depth call, not a micro-classifier. On CLOUD, give it the fat window IN
+      // (deepNumCtx, was a 1/16th 8192 → the draft got truncated) + room to write OUT (deepNumPredict, was
+      // ollama's ~128 default → advice cut short). LOCAL fallback stays at 8192: the front 24B is pinned
+      // there to stay warm, so fattening it would force a cold num_ctx reload for a mere fallback path.
+      options: cloud
+        ? { temperature: 0.3, num_ctx: config.deepNumCtx(), num_predict: config.deepNumPredict() }
+        : { temperature: 0.3, num_ctx: 8192 },
     });
     console.log(`[creator] advise ← ${cloud ? 'CLOUD' : 'LOCAL'} ${Date.now() - t0}ms, ${text.length} chars out`);
     return { ok: true, advice: creatorResearch.parseAdvice(text), cloud: !!cloud };
