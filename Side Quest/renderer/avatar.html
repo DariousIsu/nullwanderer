@@ -1,0 +1,88 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Zoe — Avatar (V2)</title>
+<style>
+  :root{ --bg:#0d0d10; --panel:#121218; --line:#1f1f24; --line-strong:#2a2a30; --line-hover:#4a4a52;
+         --tx:#e8e8eb; --tx-muted:#9a9aa3; --tx-dim:#6a6a73; --accent:#6a86b6; }
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--tx);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Inter",system-ui,sans-serif;}
+  .wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:20px;}
+  .brand{font-size:10px;letter-spacing:0.2em;text-transform:uppercase;color:var(--tx-muted);font-weight:700;}
+  .stage{border:1px solid var(--line);border-radius:12px;background:
+    radial-gradient(circle at 50% 40%, #16161d 0%, #0d0d10 70%);box-shadow:0 8px 40px rgba(0,0,0,.5);}
+  canvas{display:block;border-radius:12px;}
+  .row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;max-width:520px;}
+  button{background:transparent;border:1px solid var(--line-strong);color:var(--tx-muted);font:inherit;
+    font-size:12px;padding:7px 13px;border-radius:4px;cursor:pointer;}
+  button:hover{border-color:var(--line-hover);color:var(--tx);}
+  button.on{border-color:var(--accent);color:var(--accent);}
+  .hint{font-size:11px;color:var(--tx-dim);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">Zoe · presence</div>
+  <div class="stage"><canvas id="face" width="360" height="360"></canvas></div>
+  <div class="row" id="moods">
+    <button data-feel="warm and content">warm</button>
+    <button data-feel="playful and bright">happy</button>
+    <button data-feel="curious, turning it over">thinking</button>
+    <button data-feel="slow and a little tired">tired</button>
+    <button data-feel="">neutral</button>
+  </div>
+  <div class="row">
+    <button id="speak">▶ Speak (lip-sync the V1 voice)</button>
+    <button id="synth">◈ Synthetic talk (no audio)</button>
+  </div>
+  <div class="hint" id="hint">Pick a mood to set her expression. Speak plays the V1 proof wav and lip-syncs to it.</div>
+</div>
+
+<script src="../lib/avatar_state.js"></script>
+<script src="./avatar.js"></script>
+<script>
+  const canvas = document.getElementById('face');
+  const face = new window.AvatarFace(canvas);
+  face.setExpression('warm').start();
+
+  // mood buttons
+  document.querySelectorAll('#moods button').forEach((b) => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('#moods button').forEach((x) => x.classList.remove('on'));
+      b.classList.add('on');
+      face.setFeeling(b.dataset.feel);
+    });
+  });
+
+  // Speak: play the V1 proof wav through WebAudio → lip-sync
+  const audio = new Audio('../data/tts/v1_proof.wav');
+  audio.crossOrigin = 'anonymous';
+  let attached = false;
+  document.getElementById('speak').addEventListener('click', () => {
+    if (!attached) { face.attachAudio(audio); attached = true; }
+    face.setMood('talking');
+    audio.currentTime = 0; audio.play().catch(() => {});
+    document.getElementById('hint').textContent = 'Speaking — mouth is driven by the live audio amplitude.';
+  });
+
+  // Synthetic talk: feed a fake amplitude envelope so lip-sync is visible with no audio device
+  let synthOn = false, synthT = 0, synthTimer = null;
+  document.getElementById('synth').addEventListener('click', (e) => {
+    synthOn = !synthOn;
+    e.target.classList.toggle('on', synthOn);
+    if (synthOn) {
+      synthTimer = setInterval(() => {
+        synthT += 0.12;
+        // babble: overlapping sines → speech-like amplitude 0..~0.6
+        const a = Math.max(0, (Math.sin(synthT * 7) * 0.5 + 0.5) * (Math.sin(synthT * 2.3) * 0.4 + 0.5)) * 0.6;
+        face.pushAmplitude(a);
+      }, 33);
+    } else { clearInterval(synthTimer); }
+  });
+
+  // expose for headless screenshot driving
+  window.__face = face;
+</script>
+</body>
+</html>
