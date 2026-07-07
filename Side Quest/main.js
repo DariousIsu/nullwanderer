@@ -1733,9 +1733,26 @@ ipcMain.handle('editor:certify', async (_e, { docId, mapped } = {}) => {
   }
 });
 
-// Export findings REPORT → the lightweight artifact handed back to the AUTHOR: renders the last
-// Run-checks findings into a printable HTML report (no CFC id, no seal, no status change — NOT a
-// certification), writes it to data/reports/, and opens it. Certification stays the separate formal step.
+// Render self-contained HTML → a PDF file via an offscreen window (Electron printToPDF; fully local, no
+// external dependency). Body padding provides the page margin, so printToPDF margins are 0 (no doubling).
+async function htmlToPdfFile(html, pdfPath) {
+  const fs = require('fs'), os = require('os');
+  const tmpHtml = path.join(os.tmpdir(), `sq-report-${Date.now()}.html`);
+  fs.writeFileSync(tmpHtml, html, 'utf8');
+  const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, javascript: false } });
+  try {
+    await win.loadFile(tmpHtml);
+    const pdf = await win.webContents.printToPDF({ printBackground: true, pageSize: 'Letter', margins: { top: 0, bottom: 0, left: 0, right: 0 } });
+    fs.writeFileSync(pdfPath, pdf);
+  } finally {
+    try { win.destroy(); } catch {}
+    try { fs.unlinkSync(tmpHtml); } catch {}
+  }
+}
+
+// Export findings REPORT → the lightweight artifact handed back to the AUTHOR as a PDF: renders the last
+// Run-checks findings (no CFC id, no seal, no status change — NOT a certification), converts to PDF, writes
+// it to data/reports/, and opens it. Certification stays the separate formal step.
 ipcMain.handle('editor:export-report', async (_e, { docId, mapped } = {}) => {
   try {
     const fs = require('fs');
@@ -1750,8 +1767,8 @@ ipcMain.handle('editor:export-report', async (_e, { docId, mapped } = {}) => {
     const safe = String(doc.title || 'document').replace(/[^\w.-]+/g, '_').slice(0, 60) || 'document';
     const d = new Date();
     const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
-    const reportRef = path.join(reportsDir, `Findings-${safe}-v${doc.current_version}-${stamp}.html`);
-    fs.writeFileSync(reportRef, html, 'utf8');
+    const reportRef = path.join(reportsDir, `Findings-${safe}-v${doc.current_version}-${stamp}.pdf`);
+    await htmlToPdfFile(html, reportRef);
     try { await shell.openPath(reportRef); } catch (e) { console.error('[editor] open report failed:', e.message); }
     return { ok: true, reportRef };
   } catch (e) {
