@@ -205,7 +205,8 @@ contextBridge.exposeInMainWorld('sq', {
     setDocPos: (tabKey, x, y) => ipcRenderer.invoke('canvas:set-doc-pos', { tabKey, x, y }),
     updateDoc: (tabKey, patch) => ipcRenderer.invoke('canvas:update-doc', { tabKey, patch }),
     resetLayout: (tabKey) => ipcRenderer.invoke('canvas:reset-layout', { tabKey }),
-    dropDoc: (filePath, x, y) => ipcRenderer.invoke('canvas:drop-doc', { path: filePath, x, y })
+    dropDoc: (filePath, x, y) => ipcRenderer.invoke('canvas:drop-doc', { path: filePath, x, y }),
+    exportDoc: (payload) => ipcRenderer.invoke('canvas:export-doc', payload)   // { title, html, format:'pdf'|'docx' }
   },
   // Resolve a dropped File's real OS path (Electron removed File.path; webUtils is the supported way).
   pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return null; } }

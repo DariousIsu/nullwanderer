@@ -64,12 +64,23 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx-soft);
 .b-heading{color:var(--tx);font-weight:600;margin:16px 0 6px;line-height:1.3;}
 .b-heading:first-child{margin-top:0;}
 h1.b-heading{font-size:20px;}h2.b-heading{font-size:16px;}h3.b-heading{font-size:14px;}
-.b-paragraph{font-size:13px;color:var(--tx-soft);margin:8px 0;}
+h4.b-heading{font-size:13px;}h5.b-heading{font-size:12px;}h6.b-heading{font-size:11px;color:var(--tx-muted);text-transform:uppercase;letter-spacing:.03em;}
+.b-paragraph{font-size:13.5px;color:var(--tx-soft);margin:8px 0;line-height:1.55;}
 .b-paragraph p{margin:7px 0;}
-.b-paragraph ul{margin:6px 0 6px 18px;}
+.b-paragraph ul,.b-paragraph ol,.b-list{margin:6px 0 8px 22px;padding:0;}
+ul.b-list{list-style:disc;}ol.b-list{list-style:decimal;}
+.b-list li{margin:3px 0;}
+.b-quote{margin:9px 0;padding:3px 13px;border-left:3px solid var(--line-strong);color:var(--tx-muted);font-style:italic;}
+.b-hr{border:none;border-top:1px solid var(--line);margin:15px 0;}
+.b-code{background:var(--bg-raised);border:1px solid var(--line);border-radius:6px;padding:10px 12px;margin:9px 0;overflow-x:auto;font-size:12px;line-height:1.5;}
+.b-code code{background:none;border:none;padding:0;white-space:pre;}
 .b-paragraph code{background:var(--bg-raised);border:1px solid var(--line);border-radius:3px;padding:1px 5px;font-size:12px;}
 .b-paragraph strong{color:var(--tx);}
 .b-paragraph a{color:var(--info-fg);text-decoration:none;}
+/* document download menu (⬇ → Markdown / PDF / Word) */
+.dl-menu{position:fixed;z-index:9999;width:150px;background:var(--bg-panel);border:1px solid var(--line-strong);border-radius:7px;box-shadow:0 8px 24px #0008;overflow:hidden;padding:3px;}
+.dl-menu button{display:block;width:100%;text-align:left;background:transparent;border:none;color:var(--tx-soft);font:inherit;font-size:12.5px;padding:7px 10px;border-radius:5px;cursor:pointer;}
+.dl-menu button:hover{background:var(--bg-raised);color:var(--tx);}
 table.b-table{border-collapse:collapse;width:100%;font-size:12px;margin:8px 0;}
 table.b-table th,table.b-table td{border:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top;}
 table.b-table th{background:var(--bg-raised);color:var(--tx-soft);font-weight:600;}

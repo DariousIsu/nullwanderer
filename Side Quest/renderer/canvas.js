@@ -27,18 +27,31 @@ function sanitizeHtml(html) {
     .replace(/(href|src)\s*=\s*("|')\s*javascript:[^"']*\2/gi, '$1=$2#$2');
 }
 
+// markdown → HTML. Fuller than the old lite pass: fenced code, headings h1-h6, horizontal rules,
+// blockquotes, and GROUPED ordered/unordered lists (the old one wrapped every bullet in its own <ul>,
+// so rich documents rendered like flat raw text). Inline handled by inline().
 function md(src) {
   const lines = String(src == null ? '' : src).split(/\r?\n/);
-  const out = []; let para = [];
-  const flush = () => { if (para.length) { out.push(`<p>${inline(para.join(' '))}</p>`); para = []; } };
-  for (const raw of lines) {
-    const line = raw.trimEnd();
-    const h = /^(#{1,3})\s+(.*)$/.exec(line);
-    const li = /^\s*[-*]\s+(.*)$/.exec(line);
-    if (line === '') { flush(); continue; }
-    if (h) { flush(); out.push(`<h${h[1].length} class="b-heading">${inline(h[2])}</h${h[1].length}>`); continue; }
-    if (li) { flush(); out.push(`<ul><li>${inline(li[1])}</li></ul>`); continue; }
-    para.push(line);
+  const out = []; let para = []; let list = null;   // list = { tag:'ul'|'ol', items:[] }
+  const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join(' '))}</p>`); para = []; } };
+  const flushList = () => { if (list) { out.push(`<${list.tag} class="b-list">${list.items.map(t => `<li>${inline(t)}</li>`).join('')}</${list.tag}>`); list = null; } };
+  const flush = () => { flushPara(); flushList(); };
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i].trimEnd();
+    const fence = /^\s*```/.test(line);
+    if (fence) { flush(); const buf = []; i++; while (i < lines.length && !/^\s*```/.test(lines[i])) { buf.push(lines[i]); i++; } i++; out.push(`<pre class="b-code"><code>${esc(buf.join('\n'))}</code></pre>`); continue; }
+    if (line === '') { flush(); i++; continue; }
+    const h = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (h) { flush(); const l = h[1].length; out.push(`<h${l} class="b-heading">${inline(h[2])}</h${l}>`); i++; continue; }
+    if (/^\s*([-*_])\1{2,}\s*$/.test(line)) { flush(); out.push('<hr class="b-hr">'); i++; continue; }   // --- *** ___
+    const bq = /^\s*>\s?(.*)$/.exec(line);
+    if (bq) { flushPara(); flushList(); const buf = [bq[1]]; i++; while (i < lines.length && /^\s*>\s?/.test(lines[i])) { buf.push(lines[i].replace(/^\s*>\s?/, '')); i++; } out.push(`<blockquote class="b-quote">${inline(buf.join(' '))}</blockquote>`); continue; }
+    const ul = /^\s*[-*+]\s+(.*)$/.exec(line);
+    const ol = /^\s*\d+[.)]\s+(.*)$/.exec(line);
+    if (ul) { flushPara(); if (list && list.tag !== 'ul') flushList(); if (!list) list = { tag: 'ul', items: [] }; list.items.push(ul[1]); i++; continue; }
+    if (ol) { flushPara(); if (list && list.tag !== 'ol') flushList(); if (!list) list = { tag: 'ol', items: [] }; list.items.push(ol[1]); i++; continue; }
+    flushList(); para.push(line); i++;
   }
   flush();
   return out.join('');
@@ -99,6 +112,7 @@ function docCard(doc) {
       <span class="grip">⠿</span>
       <span class="dtitle">${esc(t.title)}</span>
       <span class="mode ${esc(t.mode)}">${esc(t.mode)}</span>
+      <button class="dbtn" data-act="download" title="Download (Markdown / PDF / Word)">⬇</button>
       <button class="dbtn" data-act="min" title="${doc.minimized ? 'Restore' : 'Minimize'}">${doc.minimized ? '▢' : '–'}</button>
       <button class="dbtn" data-act="close" title="Close (keep in tray)">✕</button>
     </div>
@@ -106,6 +120,64 @@ function docCard(doc) {
     <div class="resize-grip" title="Resize"></div>
   </div>`;
 }
+
+// ---- document export (Markdown / PDF / Word) ---------------------------------------------------
+let docsByKey = {};
+function blockToMd(b) {
+  const v = b.view || {};
+  switch (b.type) {
+    case 'heading': return `${'#'.repeat(Math.min(6, v.level || 2))} ${v.text || ''}`;
+    case 'paragraph': return v.markdown || '';
+    case 'table': {
+      const h = v.headers || [], rows = v.rows || [];
+      if (!h.length && !rows.length) return '';
+      const head = h.length ? `| ${h.join(' | ')} |\n| ${h.map(() => '---').join(' | ')} |` : '';
+      const body = (rows || []).map(r => `| ${r.join(' | ')} |`).join('\n');
+      return [head, body].filter(Boolean).join('\n');
+    }
+    case 'image': return v.src ? `![${v.alt || ''}](${v.src})` : '';
+    case 'chart': return `_[chart: ${v.title || 'chart'} — ${(v.points || []).length} points]_`;
+    default: return v.preview ? v.preview : '';
+  }
+}
+function docToMarkdown(doc) {
+  const title = (doc.tab && doc.tab.title) ? `# ${doc.tab.title}\n\n` : '';
+  return title + (doc.stream.blocks || []).map(blockToMd).filter(s => s && s.trim()).join('\n\n') + '\n';
+}
+function docToExportHtml(doc) {
+  const title = (doc.tab && doc.tab.title) || 'Document';
+  const body = (doc.stream.blocks || []).map(blockContent).join('');
+  return `<h1 class="ex-title">${esc(title)}</h1>${body}`;
+}
+function safeName(s) { return String(s || 'document').replace(/[^\w.-]+/g, '_').slice(0, 60) || 'document'; }
+function downloadBlob(name, mime, data) {
+  const blob = new Blob([data], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+async function exportDoc(doc, fmt) {
+  if (!doc) return;
+  if (fmt === 'md') { downloadBlob(safeName(doc.tab && doc.tab.title) + '.md', 'text/markdown', docToMarkdown(doc)); return; }
+  // PDF / Word → main renders the doc's HTML into a real file (Electron printToPDF / html-to-docx) + opens it.
+  try {
+    const r = await window.sq.canvas.exportDoc({ title: (doc.tab && doc.tab.title) || 'Document', html: docToExportHtml(doc), format: fmt });
+    if (!r || !r.ok) msgEl.innerHTML = `<span class="err">⚠ export failed: ${esc((r && r.error) || 'unknown')}</span>`, msgEl.style.display = 'block';
+  } catch (e) { console.error('[canvas] export error:', e.message); }
+}
+let _dlMenu = null;
+function closeDownloadMenu() { if (_dlMenu) { _dlMenu.remove(); _dlMenu = null; } }
+function openDownloadMenu(btn, doc) {
+  closeDownloadMenu();
+  const m = document.createElement('div'); m.className = 'dl-menu';
+  m.innerHTML = `<button data-fmt="md">Markdown (.md)</button><button data-fmt="pdf">PDF</button><button data-fmt="docx">Word (.docx)</button>`;
+  const r = btn.getBoundingClientRect();
+  m.style.left = `${Math.round(r.right - 150)}px`; m.style.top = `${Math.round(r.bottom + 4)}px`;
+  m.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { exportDoc(doc, b.dataset.fmt); closeDownloadMenu(); } });
+  document.body.appendChild(m); _dlMenu = m;
+}
+document.addEventListener('click', (e) => { if (_dlMenu && !e.target.closest('.dl-menu') && !e.target.closest('[data-act="download"]')) closeDownloadMenu(); });
 
 function trayRow(doc) {
   const t = doc.tab;
@@ -161,6 +233,7 @@ async function loadCanvas(retries = 6, force = false) {
       msgEl.innerHTML = `<span class="err">⚠ ${esc((res && res.error) || 'failed to load canvas')}</span>`; msgEl.style.display = 'block'; return;
     }
     const docs = res.docs || [];
+    docsByKey = {}; for (const d of docs) if (d && d.tab) docsByKey[d.tab.key] = d;   // for the download/export menu
     // CHANGE-DETECTION: skip when nothing changed (unless forced), so the auto-refresh poll is a no-op
     // between passes.
     const sig = JSON.stringify(docs);
@@ -208,6 +281,7 @@ async function reopenDoc(key) { try { await window.sq.canvas.updateDoc(key, { hi
 board.addEventListener('click', (e) => {
   const btn = e.target.closest('.dbtn'); if (!btn) return;
   const card = btn.closest('.doc'); const key = card.dataset.key;
+  if (btn.dataset.act === 'download') { e.stopPropagation(); openDownloadMenu(btn, docsByKey[key]); return; }
   if (btn.dataset.act === 'close') { try { window.sq.canvas.updateDoc(key, { hidden: true }); } catch {} loadCanvas(0); }
   else if (btn.dataset.act === 'min') {
     const min = !card.classList.contains('minimized');

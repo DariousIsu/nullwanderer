@@ -1767,6 +1767,55 @@ async function htmlToPdfFile(html, pdfPath) {
   }
 }
 
+// Wrap a canvas document's rendered inner HTML (b-heading/b-paragraph/b-list/b-quote/b-code/b-table … the
+// dark canvas classes carry no color of their own) in a clean, LIGHT, print-ready document — so a PDF/Word
+// export reads like a real document, not a screenshot of the dark UI.
+function buildExportDocHtml(title, inner) {
+  const escT = String(title == null ? '' : title).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const css = `
+    body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;background:#fff;max-width:7.5in;margin:0 auto;padding:.6in;line-height:1.5;font-size:12pt;}
+    h1,h2,h3,h4,h5,h6{font-family:'Helvetica Neue',Arial,sans-serif;color:#111;line-height:1.25;margin:1.05em 0 .4em;}
+    h1{font-size:22pt;} h2{font-size:17pt;} h3{font-size:14pt;} h4{font-size:12.5pt;} h5{font-size:11.5pt;} h6{font-size:10.5pt;text-transform:uppercase;letter-spacing:.04em;color:#555;}
+    .ex-title{border-bottom:2px solid #ddd;padding-bottom:.3em;}
+    p{margin:.5em 0;} ul,ol{margin:.5em 0 .7em 1.6em;padding:0;} li{margin:.25em 0;}
+    blockquote{margin:.7em 0;padding:.2em 1em;border-left:3px solid #ccc;color:#555;font-style:italic;}
+    hr{border:none;border-top:1px solid #ddd;margin:1.2em 0;}
+    pre{background:#f5f5f5;border:1px solid #e0e0e0;border-radius:5px;padding:.7em .9em;overflow-x:auto;font-family:Consolas,'SF Mono',monospace;font-size:10.5pt;}
+    code{font-family:Consolas,'SF Mono',monospace;background:#f0f0f0;border-radius:3px;padding:.05em .35em;font-size:.9em;} pre code{background:none;padding:0;}
+    table{border-collapse:collapse;width:100%;margin:.7em 0;font-size:10.5pt;} th,td{border:1px solid #ccc;padding:5px 9px;text-align:left;} th{background:#f2f2f2;}
+    img{max-width:100%;} .tbl-tools,.chart-meta,.dl-menu{display:none;}
+  `;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escT}</title><style>${css}</style></head><body>${inner || ''}</body></html>`;
+}
+
+// Export a canvas document to a real file the operator can keep: Markdown is done in the renderer (Blob);
+// PDF (Electron printToPDF, no dep) and Word (.docx via html-to-docx) render the doc's HTML here, write to
+// data/exports/, and open it. Renderer passes the already-sanitized display HTML + the title + a format.
+ipcMain.handle('canvas:export-doc', async (_e, { title = 'Document', html = '', format = 'pdf' } = {}) => {
+  try {
+    const fs = require('fs');
+    const full = buildExportDocHtml(title, html);
+    const exportsDir = path.join(__dirname, 'data', 'exports');
+    try { fs.mkdirSync(exportsDir, { recursive: true }); } catch (e) { /* may exist */ }
+    const safe = String(title || 'document').replace(/[^\w.-]+/g, '_').slice(0, 60) || 'document';
+    const d = new Date();
+    const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
+    let outPath;
+    if (format === 'pdf') {
+      outPath = path.join(exportsDir, `${safe}-${stamp}.pdf`);
+      await htmlToPdfFile(full, outPath);
+    } else if (format === 'docx') {
+      let htmlToDocx; try { htmlToDocx = require('html-to-docx'); } catch { return { ok: false, error: 'Word export needs the html-to-docx dependency (not installed)' }; }
+      const buf = await htmlToDocx(full, null, { table: { row: { cantSplit: true } }, footer: false, pageNumber: false });
+      outPath = path.join(exportsDir, `${safe}-${stamp}.docx`);
+      fs.writeFileSync(outPath, buf);
+    } else return { ok: false, error: `unsupported format: ${format}` };
+    try { await shell.openPath(outPath); } catch (e) { console.error('[canvas] open export failed:', e.message); }
+    console.log(`[canvas] exported "${title}" → ${outPath}`);
+    return { ok: true, path: outPath };
+  } catch (e) { console.error('[canvas] export failed:', e.message); return { ok: false, error: e.message }; }
+});
+
 // Export findings REPORT → the lightweight artifact handed back to the AUTHOR as a PDF: renders the last
 // Run-checks findings (no CFC id, no seal, no status change — NOT a certification), converts to PDF, writes
 // it to data/reports/, and opens it. Certification stays the separate formal step.
