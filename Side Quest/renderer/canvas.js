@@ -162,7 +162,7 @@ async function exportDoc(doc, fmt) {
   if (fmt === 'md') { downloadBlob(safeName(doc.tab && doc.tab.title) + '.md', 'text/markdown', docToMarkdown(doc)); return; }
   // PDF / Word → main renders the doc's HTML into a real file (Electron printToPDF / html-to-docx) + opens it.
   try {
-    const r = await window.sq.canvas.exportDoc({ title: (doc.tab && doc.tab.title) || 'Document', html: docToExportHtml(doc), format: fmt });
+    const r = await window.sq.canvas.exportDoc({ title: (doc.tab && doc.tab.title) || 'Document', html: docToExportHtml(doc), markdown: docToMarkdown(doc), format: fmt });
     if (!r || !r.ok) msgEl.innerHTML = `<span class="err">⚠ export failed: ${esc((r && r.error) || 'unknown')}</span>`, msgEl.style.display = 'block';
   } catch (e) { console.error('[canvas] export error:', e.message); }
 }

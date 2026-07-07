@@ -1791,10 +1791,9 @@ function buildExportDocHtml(title, inner) {
 // Export a canvas document to a real file the operator can keep: Markdown is done in the renderer (Blob);
 // PDF (Electron printToPDF, no dep) and Word (.docx via html-to-docx) render the doc's HTML here, write to
 // data/exports/, and open it. Renderer passes the already-sanitized display HTML + the title + a format.
-ipcMain.handle('canvas:export-doc', async (_e, { title = 'Document', html = '', format = 'pdf' } = {}) => {
+ipcMain.handle('canvas:export-doc', async (_e, { title = 'Document', html = '', markdown = '', format = 'pdf' } = {}) => {
   try {
     const fs = require('fs');
-    const full = buildExportDocHtml(title, html);
     const exportsDir = path.join(__dirname, 'data', 'exports');
     try { fs.mkdirSync(exportsDir, { recursive: true }); } catch (e) { /* may exist */ }
     const safe = String(title || 'document').replace(/[^\w.-]+/g, '_').slice(0, 60) || 'document';
@@ -1802,11 +1801,12 @@ ipcMain.handle('canvas:export-doc', async (_e, { title = 'Document', html = '', 
     const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
     let outPath;
     if (format === 'pdf') {
+      // PDF ← the rendered HTML wrapped in a clean light print stylesheet (Electron printToPDF, no dep).
       outPath = path.join(exportsDir, `${safe}-${stamp}.pdf`);
-      await htmlToPdfFile(full, outPath);
+      await htmlToPdfFile(buildExportDocHtml(title, html), outPath);
     } else if (format === 'docx') {
-      let htmlToDocx; try { htmlToDocx = require('html-to-docx'); } catch { return { ok: false, error: 'Word export needs the html-to-docx dependency (not installed)' }; }
-      const buf = await htmlToDocx(full, null, { table: { row: { cantSplit: true } }, footer: false, pageNumber: false });
+      // Word ← built PROGRAMMATICALLY from the doc's markdown via the `docx` library (clean deps, no HTML parse).
+      const buf = await require('./lib/md_to_docx').buildDocxBuffer({ title, markdown });
       outPath = path.join(exportsDir, `${safe}-${stamp}.docx`);
       fs.writeFileSync(outPath, buf);
     } else return { ok: false, error: `unsupported format: ${format}` };

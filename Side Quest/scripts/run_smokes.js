@@ -120,6 +120,7 @@ const smokes = [
   'smoke_deep_budgets.js',
   'smoke_reasoning_headroom.js',
   'smoke_pipeline.js',
+  'smoke_md_to_docx.js',
   'smoke_excavate.js',
   'smoke_staleness.js',
   // Data-Stream (news) lane — isolated NEWS_DB_PATH / pure; offline-deterministic
