@@ -216,6 +216,42 @@ async function syncActivePage() {
   }
 }
 
+// Extract candidate PERSON PHOTOS from the current page: visible <img> above a min size, each with its alt
+// text, filename, dimensions, and nearest heading/caption/card text — enough for a later name→photo match.
+// Used by the Puller discovery lane to grab an OFFICIAL headshot off a team/bio page. Fail-soft → [].
+async function pageImages({ max = 40, minSize = 64 } = {}) {
+  try {
+    await ensure();
+    await syncActivePage();
+    if (!page) return [];
+    const imgs = await withTimeout(page.evaluate(({ maxN, minSz }) => {
+      const nearText = (el) => {
+        let n = el, hops = 0;
+        while (n && hops < 4) {
+          const cap = n.querySelector && n.querySelector('figcaption, h1, h2, h3, h4, h5, [class*="name"], [class*="title"]');
+          if (cap && cap.textContent && cap.textContent.trim()) return cap.textContent.trim().replace(/\s+/g, ' ').slice(0, 120);
+          n = n.parentElement; hops++;
+        }
+        const p = el.closest && el.closest('figure, li, article, [class*="card"], [class*="member"], [class*="person"], [class*="team"], [class*="profile"], [class*="staff"], [class*="bio"]');
+        const t = p && p.textContent ? p.textContent.replace(/\s+/g, ' ').trim() : '';
+        return t.slice(0, 120);
+      };
+      const out = [];
+      for (const img of Array.from(document.images || [])) {
+        const w = img.naturalWidth || img.width || 0, h = img.naturalHeight || img.height || 0;
+        if (w < minSz || h < minSz) continue;                       // skip icons/spacers
+        if (Math.max(w, h) / Math.max(1, Math.min(w, h)) > 3) continue;  // skip banners/logos (very non-square)
+        const src = img.currentSrc || img.src || '';
+        if (!/^https?:/i.test(src)) continue;
+        out.push({ src, alt: (img.alt || '').replace(/\s+/g, ' ').slice(0, 120), near: nearText(img), w, h });
+        if (out.length >= maxN) break;
+      }
+      return out;
+    }, { maxN: max, minSz: minSize }), 6000, []);
+    return Array.isArray(imgs) ? imgs : [];
+  } catch { return []; }
+}
+
 // Treat as a URL if it has a scheme or looks like a bare domain; else a search.
 function toUrl(target) {
   const t = (target || '').trim();
@@ -602,7 +638,7 @@ async function cookies(urls) {
 }
 
 module.exports = {
-  isConnected, ensure, open, read, screenshot, click, clickText, type, back, close, openTopResult, scroll, runRecipe,
+  isConnected, ensure, open, read, pageImages, screenshot, click, clickText, type, back, close, openTopResult, scroll, runRecipe,
   startRecording, stopRecording, isRecording, cookies,
   chatSend, chatWatch, chatUnwatch,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR,

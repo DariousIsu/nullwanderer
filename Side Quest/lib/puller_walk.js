@@ -292,7 +292,7 @@ function buildOrgProspectQuery(org) {
 //   web(query) → sources; extract(text,{title}) → {people,…}; land(o); refresh(id); observe(o)
 //   getMeta/setMeta, now, log, maxNew
 async function runDiscoveryMove(deps = {}) {
-  const { seedOrgs, filterNew, createTarget, web, extract, land, refresh, observe,
+  const { seedOrgs, filterNew, createTarget, web, extract, land, refresh, observe, attachPhoto,
           getMeta, setMeta, now = () => Date.now(), log, maxNew = MAX_NEW_PER_ORG } = deps;
   const nowTs = now();
   try {
@@ -311,6 +311,7 @@ async function runDiscoveryMove(deps = {}) {
     const real = sources.filter(s => s && s.source === 'browser' && s.text);
     if (!real.length) return { acted: false, reason: 'no-browser-source', org: seed.name };
     const text = real.map(s => s.text).join('\n\n').slice(0, 6000);
+    const allImages = real.flatMap(s => Array.isArray(s.images) ? s.images : []);   // official headshots from the team/bio pages
     const url = real[0].url || null;
     let cards = null; try { cards = await extract(text, { title: seed.name }); } catch {}
     const people = (cards && cards.people) || [];
@@ -327,6 +328,9 @@ async function runDiscoveryMove(deps = {}) {
       try { id = await createTarget({ name: p.name, company: seed.name, domain: seed.domain || null, title: p.title || null, sourceUrl: url }); } catch {}
       if (id == null) continue;
       created.push({ id, name: p.name });
+      // GRAB the official headshot: hand the person + the page's images to attachPhoto (it matches by
+      // alt/near/filename, stores the URL, downloads a local copy). Fail-soft — a miss never blocks the mint.
+      if (typeof attachPhoto === 'function' && allImages.length) { try { await attachPhoto(id, p.name, allImages); } catch {} }
       if (p.email && !looksMasked(p.email) && typeof land === 'function') { try { await land({ targetId: id, attr: 'email', value: p.email, kind: 'guess', confidence: 0.6, source: 'web', sourceUrl: url, derivation: 'web-prospect' }); } catch {} }
       if (typeof observe === 'function') { try { await observe({ sourceEntity: p.name, relation: 'works_for', target: seed.name, url, grade: 'C', confidence: 0.6, status: 'promoted' }); } catch {} }
       if (typeof refresh === 'function') { try { await refresh(id); } catch {} }

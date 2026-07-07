@@ -65,7 +65,7 @@ function buildCardData(contact = {}, crm = {}) {
     title: title || null,
     org: org || null,
     role: role || null,
-    photo: str(crm.photo) || null,
+    photo: str(crm.photo) || str(contact.photo) || null,   // CRM headshot wins; else the grabbed official photo
     initials: initialsOf(name),
     email: str(contact.email) || str(crm.email) || null,   // Puller belief wins; CRM fills the gap
     phone: str(contact.phone) || str(crm.phone) || null,
@@ -132,6 +132,7 @@ function cardFromTarget(target = {}, beliefs = [], crm = {}, { social = [] } = {
   return buildCardData({
     name: target.name, company: target.company, title: bv('role'),
     email: bv('email'), phone: bv('phone'), address: bv('address'),
+    photo: target.photo_url || null,                       // official headshot grabbed at discovery
     confidence: bc('email') != null ? bc('email') : bc('phone'),
     targetId: target.id, kind: target.kind, social,
     ts: target.last_accessed_at || target.created_at || null,

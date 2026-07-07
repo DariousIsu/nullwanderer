@@ -95,6 +95,31 @@ function pickPersonLinks(text, { max = 4 } = {}) {
   return out;
 }
 
+// pure: the filename tokens of an image URL ("jane-doe-2024.jpg" → [jane, doe, 2024]).
+function _fileTokens(src) {
+  try { const p = (new URL(String(src)).pathname.split('/').pop()) || ''; return p.toLowerCase().replace(/\.[a-z0-9]+$/, '').split(/[^a-z0-9]+/).filter(Boolean); }
+  catch { return String(src || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean); }
+}
+// pure: pick the best OFFICIAL PHOTO for a person from a page's images. Score = how many of the person's
+// name tokens appear in the image's alt / nearby text / filename. Requires ≥2 tokens matched (or the whole
+// name if single-token). Returns the src or null. Deterministic → offline-smoke-testable.
+function matchPhotoForPerson(name, images) {
+  const want = String(name || '').toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 2);
+  if (want.length < 2 || !Array.isArray(images) || !images.length) return null;   // need first+last; a lone token grabs the wrong person
+  let best = null, bestScore = 0;
+  for (const im of images) {
+    if (!im || !im.src) continue;
+    const hay = new Set([
+      ...String(im.alt || '').toLowerCase().split(/[^a-z0-9]+/),
+      ...String(im.near || '').toLowerCase().split(/[^a-z0-9]+/),
+      ..._fileTokens(im.src),
+    ].filter(Boolean));
+    const overlap = want.filter((w) => hay.has(w)).length;
+    if (overlap > bestScore) { bestScore = overlap; best = im; }
+  }
+  return bestScore >= 2 ? best.src : null;   // ≥2 name tokens must match — the corroboration bar for a confident grab
+}
+
 // MULTI-LAYER browse (Lucas: "make sure we are actually clicking through multiple layers"). Land on the
 // top search result, read it, then CLICK THROUGH one layer deeper: up to `maxHops` relevant NAV links
 // (the real team page, a Contact page) AND up to `maxBios` individual PERSON-name links (each leader's
@@ -114,7 +139,8 @@ async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 
     // Skip a data-broker landing entirely (paywalled aggregator, not a real bio) → [] so the caller falls
     // back to the layered fetch instead of minting broker-CTA junk.
     if (isBrokerUrl(landingUrl)) { log && log(`[browser] skipped data-broker landing: ${landingUrl}`); return rows; }
-    if (String(r.text || '').trim().length >= minText) { rows.push({ text: String(r.text).slice(0, 8000), url: landingUrl, source: 'browser' }); }
+    const imgsAt = async () => { try { return (typeof browser.pageImages === 'function') ? (await browser.pageImages()) || [] : []; } catch { return []; } };
+    if (String(r.text || '').trim().length >= minText) { rows.push({ text: String(r.text).slice(0, 8000), url: landingUrl, source: 'browser', images: await imgsAt() }); }
     seenUrl.add(norm(landingUrl));
     // nav links first (reach the real team page if we landed on a homepage), then individual bios.
     const follow = [...pickFollowLinks(r.text, { maxHops }), ...pickPersonLinks(r.text, { max: maxBios })];
@@ -126,7 +152,7 @@ async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 
           seenUrl.add(cu);
           const r2 = await browser.read();
           const t2 = String((r2 && r2.text) || '').trim();
-          if (r2 && r2.ok && t2.length >= minText) rows.push({ text: t2.slice(0, 8000), url: r2.url || c.url, source: 'browser', via: h.name });
+          if (r2 && r2.ok && t2.length >= minText) rows.push({ text: t2.slice(0, 8000), url: r2.url || c.url, source: 'browser', via: h.name, images: await imgsAt() });
         }
       } catch {}
       try { await browser.back(); await browser.read(); } catch {}   // back to the index + rebuild the registry for the next hop
@@ -136,4 +162,4 @@ async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 
   return rows;
 }
 
-module.exports = { makeWebFetcher, pageResult, deepBrowse, pickFollowLinks, pickPersonLinks, looksLikePersonLink, isBrokerUrl, parseHandles, RELEVANT_LINK };
+module.exports = { makeWebFetcher, pageResult, deepBrowse, matchPhotoForPerson, pickFollowLinks, pickPersonLinks, looksLikePersonLink, isBrokerUrl, parseHandles, RELEVANT_LINK };

@@ -1813,9 +1813,25 @@ async function runPullerMove(_recentTurns, { mode = 'both', candidatesOverride =
     } catch { return null; }
   };
   const observe = (o) => { try { curationStore.record(db, { ...o, feed: 'puller' }); } catch {} };
+  // GRAB + STORE the official headshot for a freshly-minted person: match them to a page image, store the
+  // URL (shows on the card), and download a local reference copy → data/faces/<id>.jpg (the image the later
+  // face-matching stage compares social avatars against). All fail-soft; a missing photo never blocks a mint.
+  const attachPhoto = async (id, name, images) => {
+    try {
+      const src = prospectFetch.matchPhotoForPerson(name, images);
+      if (!src) return;
+      try { pdb.setPhoto(id, { url: src }); } catch {}
+      try {
+        const dest = require('path').join(require('./config').APP_ROOT, 'data', 'faces', `${id}.jpg`);
+        const r = await require('./photo_grab').downloadPhoto(src, dest);
+        if (r && r.ok) { pdb.setPhoto(id, { path: dest }); console.log(`[puller-walk] grabbed headshot for ${name} → data/faces/${id}.jpg`); }
+      } catch {}
+      try { refresh(id); } catch {}
+    } catch {}
+  };
 
   const disc = await pullerWalk.runDiscoveryMove({
-    seedOrgs, filterNew, createTarget: createTargetFn, web, extract, land, refresh, observe,
+    seedOrgs, filterNew, createTarget: createTargetFn, web, extract, land, refresh, observe, attachPhoto,
     getMeta: _gm, setMeta: _sm, now: () => Date.now(), log: (m) => console.log(m),
   });
   if (disc && disc.acted) {

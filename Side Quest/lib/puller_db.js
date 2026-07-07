@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS targets (
   status TEXT NOT NULL DEFAULT 'adhoc' CHECK(status IN ('adhoc','promoted')),
   crm_id TEXT,                         -- ref CRM row id once promoted (null while ad-hoc)
   notes TEXT,
+  photo_url TEXT,                      -- official headshot URL grabbed at discovery (team/bio page)
+  photo_path TEXT,                     -- local copy (data/faces/<id>.jpg) — the reference for face-matching
   created_at INTEGER NOT NULL,
   last_accessed_at INTEGER NOT NULL
 );
@@ -127,6 +129,12 @@ function init(opts = {}) {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.exec(SCHEMA);
+  // MIGRATION: add photo columns to a pre-existing targets table (CREATE IF NOT EXISTS won't add them).
+  try {
+    const cols = new Set(db.prepare(`PRAGMA table_info(targets)`).all().map((c) => c.name));
+    if (!cols.has('photo_url')) db.exec(`ALTER TABLE targets ADD COLUMN photo_url TEXT`);
+    if (!cols.has('photo_path')) db.exec(`ALTER TABLE targets ADD COLUMN photo_path TEXT`);
+  } catch (e) { /* fresh DB already has them via SCHEMA */ }
   return db;
 }
 function _db() { return db || init(); }
@@ -184,6 +192,17 @@ function findTargetByName(name) {
     return toks.includes(n) || tn.startsWith(n + ' ') || tn.endsWith(' ' + n);
   });
   return hits.length === 1 ? hits[0] : null;
+}
+
+// Attach an official headshot to a target: photo_url (the source URL) and/or photo_path (a local copy).
+// Only sets a value when the target doesn't already have one (a CRM photo / earlier grab wins). Consume-only
+// w.r.t. the CRM — this is the Puller's own discovered facet.
+function setPhoto(id, { url = null, path: p = null, overwrite = false } = {}) {
+  const t = getTarget(id); if (!t) return null;
+  const nextUrl = (overwrite || !t.photo_url) ? (url || t.photo_url || null) : t.photo_url;
+  const nextPath = (overwrite || !t.photo_path) ? (p || t.photo_path || null) : t.photo_path;
+  _db().prepare(`UPDATE targets SET photo_url = ?, photo_path = ?, last_accessed_at = ? WHERE id = ?`).run(nextUrl, nextPath, now(), id);
+  return getTarget(id);
 }
 
 // Promote an ad-hoc dossier into the CRM (records the crm row id; status → promoted).
@@ -309,7 +328,7 @@ function updateRetest(id, { status = null, patternsTried = null, nextPattern = n
 
 module.exports = {
   init, close,
-  createTarget, getTarget, listTargets, promoteTarget, findTargetByEmail, findTargetByName,
+  createTarget, getTarget, listTargets, promoteTarget, setPhoto, findTargetByEmail, findTargetByName,
   addObservation, listObservations,
   upsertBelief, getBelief, listBeliefs,
   getPatternState, savePatternState,
