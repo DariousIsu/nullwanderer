@@ -843,8 +843,25 @@ app.whenReady().then(() => {
       const urls = feedsStore.list().map(f => f.url);
       if (!urls.length) return { items: [] };
       if (!(await ensureEngine())) return { items: [] };
-      const payload = await pollCallTool()('fetch_feeds_batch', { feed_urls: urls, item_limit: 30 });
-      return { items: feedsView.mergeReports(payload).items };
+      // CHUNKED (2026-07-07): all ~244 subscribed feeds in ONE fetch_feeds_batch overwhelmed the Echo MCP
+      // transport — ~half the polls came back "empty response to tools/call" (the "⚠ fetch failed" panel).
+      // MEASURED: a 39-feed batch at item_limit 30 = ~1MB of JSON; the full 244-feed call is multi-MB and the
+      // transport silently returns empty above its response ceiling. TWO levers: (1) small FEED-count chunks,
+      // (2) a low ITEM_LIMIT — 30/feed was overkill (the view dedups to ~120 total and only ~0-8 are ever new
+      // per 3-min poll). Sequential (not Promise.all) so we don't recreate the overload with concurrent big
+      // calls. Both env-tunable. Merge the per-chunk reports into one view; a failed chunk is skipped, not fatal.
+      const CHUNK = parseInt(process.env.FEED_BATCH_SIZE || '', 10) || 12;
+      const ITEM_LIMIT = parseInt(process.env.FEED_ITEM_LIMIT || '', 10) || 15;
+      const allFeeds = [];
+      for (let i = 0; i < urls.length; i += CHUNK) {
+        const slice = urls.slice(i, i + CHUNK);
+        try {
+          const payload = await pollCallTool()('fetch_feeds_batch', { feed_urls: slice, item_limit: ITEM_LIMIT });
+          const feeds = Array.isArray(payload) ? payload : (payload && Array.isArray(payload.feeds) ? payload.feeds : []);
+          for (const f of feeds) allFeeds.push(f);
+        } catch (e) { console.warn(`[news-poll] chunk (${slice.length} feeds) failed: ${e.message}`); }
+      }
+      return { items: feedsView.mergeReports({ feeds: allFeeds }).items };
     };
     // NEWS TUNER topic classification (cloud-on-everything, classify-once, cached): after each poll, label the
     // newest un-classified items. Paced (50/tick) so the backlog backfills over time without a cost spike;
