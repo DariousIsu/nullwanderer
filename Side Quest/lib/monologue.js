@@ -60,6 +60,13 @@ const SOCIAL_MIN_INTERVAL_MS = 90 * 1000;
 const SOCIAL_LAST_KEY = 'socialenrich.lastAt';
 const SOCIAL_ATTEMPT_KEY = 'socialenrich.attempted';
 const SOCIAL_ATTEMPT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+// Profile-confirm lane (face-match Slice 2b): confirm which PUBLIC profile is a contact via the reference
+// headshot. SLOW + human-paced (a browser open + a face-embed per candidate) → protect her own accounts
+// from platform bans. Cadence + a monthly per-target cooldown are the gates; no cloud-token budget.
+const PROFILE_MIN_INTERVAL_MS = 120 * 1000;
+const PROFILE_LAST_KEY = 'profileconfirm.lastAt';
+const PROFILE_ATTEMPT_KEY = 'profileconfirm.attempted';
+const PROFILE_ATTEMPT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 let timer = null;
 let captionTimer = null;  // separate, faster heartbeat for caption-following (perception ≠ thinking)
@@ -1876,7 +1883,11 @@ function _pullerCandidateSnapshot({ limit = 500 } = {}) {
 // keeping its own known-handle gate + monthly cooldown. Falls back to the full scan if the queue is dry.
 async function runEnrichStage(enrichQueue) {
   const preferIds = (Array.isArray(enrichQueue) ? enrichQueue : []).map((t) => t && t.id).filter((v) => v != null);
-  return runSocialEnrichMove(preferIds);
+  // Two deep-facet behaviors, each self-limited by its own cadence: face-confirm a PUBLIC profile (needs a
+  // reference headshot) + maigret social-enrich (needs a known handle). Both fail-soft.
+  const a = await runProfileConfirmMove(preferIds).catch((e) => { console.error('[profile-confirm] error:', e && e.message); return false; });
+  const b = await runSocialEnrichMove(preferIds).catch((e) => { console.error('[social-enrich] error:', e && e.message); return false; });
+  return a || b;
 }
 
 // SLICE 3 — the layered pipeline tick. DISCOVER → CONTACT → ENRICH run as three CONCURRENT stages that hand
@@ -1979,6 +1990,95 @@ async function runSocialEnrichMove(preferIds = null) {
     } catch (e) { console.error('[social-enrich] sheep surface failed:', e.message); }
     return true;
   } catch (e) { console.error('[social-enrich] idle move failed:', e.message); return false; }
+}
+
+// PROFILE-CONFIRM (face-match Slice 2b) — CONFIRM which PUBLIC social/professional profile is a contact,
+// using the reference headshot grabbed at discovery. Flow: pick a target that HAS a headshot → ensure its
+// reference face embedding (cache) → web-SEARCH candidate public profiles by name+org → for each, open it +
+// grab its profile photo → face-compare against the reference → store MATCHES as grade-E observations.
+// Confirmation only (never reverse-face-search); public info only; verify-before-promote. Slow + human-paced
+// (a browser open + a face-embed per candidate) — cadence + a monthly per-target cooldown are the gates.
+async function runProfileConfirmMove(preferIds = null) {
+  const nowTs = Date.now();
+  try { const last = parseInt(db.getMeta(PROFILE_LAST_KEY) || '0', 10) || 0; if (nowTs - last < PROFILE_MIN_INTERVAL_MS) return false; } catch {}
+  try {
+    const pdb = require('./puller_db'); pdb.init();
+    const faceMatch = require('./face_match');
+    const profileConfirm = require('./profile_confirm');
+    const ownBrowser = require('./web');
+    const cc = require('../studio/contact_card');
+
+    // per-target monthly cooldown (also the "already attempted" marker)
+    let attArr = []; try { attArr = JSON.parse(db.getMeta(PROFILE_ATTEMPT_KEY) || '[]'); } catch {}
+    attArr = (Array.isArray(attArr) ? attArr : []).filter((e) => Array.isArray(e) && (nowTs - (Number(e[1]) || 0) < PROFILE_ATTEMPT_TTL_MS));
+    const attempted = new Set(attArr.map((e) => e[0]));
+
+    // pick a target with a reference HEADSHOT (photo_path), enrich-queue first; skip attempted.
+    const ordered = () => {
+      const seen = new Set(); const list = [];
+      if (Array.isArray(preferIds)) for (const id of preferIds) { const t = pdb.getTarget(id); if (t && !seen.has(t.id)) { seen.add(t.id); list.push(t); } }
+      for (const t of pdb.listTargets({ limit: 100000 })) if (!seen.has(t.id)) { seen.add(t.id); list.push(t); }
+      return list;
+    };
+    let pick = null;
+    for (const t of ordered()) { if (attempted.has(String(t.id))) continue; if (!t.photo_path) continue; pick = t; break; }
+    try { db.setMeta(PROFILE_LAST_KEY, String(nowTs)); } catch {}
+    if (!pick) return false;
+    attArr.push([String(pick.id), nowTs]);
+    try { db.setMeta(PROFILE_ATTEMPT_KEY, JSON.stringify(attArr.slice(-2000))); } catch {}
+
+    // reference embedding — cache on the target so we don't re-embed the headshot each run.
+    let refEmb = pdb.getFaceEmbedding(pick.id);
+    if (!refEmb) {
+      const er = await faceMatch.embedImages([{ id: 'ref', path: pick.photo_path }]);
+      const r0 = er && er.ok && (er.results || []).find((x) => x.id === 'ref' && x.ok);
+      if (r0) { refEmb = r0.embedding; try { pdb.setFaceEmbedding(pick.id, refEmb); } catch {} }
+    }
+    if (!Array.isArray(refEmb) || !refEmb.length) { console.log(`[profile-confirm] ${pick.name}: no usable reference face`); return false; }
+
+    // live deps
+    const search = async (q) => { try { return (await webSearch(q)) || []; } catch { return []; } };
+    const fetchProfileImage = async (url) => {
+      try {
+        if (!ownBrowser.isConnected()) { try { await ownBrowser.ensure(); } catch { return null; } }
+        const o = await ownBrowser.open(url); if (!o || !o.ok) return null;
+        const imgs = (await ownBrowser.pageImages()) || [];
+        if (!imgs.length) return null;
+        imgs.sort((a, b) => (b.w * b.h) - (a.w * a.h));                     // profile photo = the largest sensible image
+        const best = imgs.find((im) => im.w >= 100 && im.h >= 100) || imgs[0];
+        return best ? best.src : null;
+      } catch { return null; }
+    };
+    const confirmFace = async (refEmbedding, imgUrl) => {
+      const er = await faceMatch.embedImages([{ id: 'c', url: imgUrl }]);
+      const c0 = er && er.ok && (er.results || []).find((x) => x.id === 'c' && x.ok);
+      if (!c0) return { same: false, similarity: 0 };
+      const sim = faceMatch.cosine(refEmbedding, c0.embedding);
+      return { same: sim >= faceMatch.SAME_FACE_THRESHOLD, similarity: sim };
+    };
+
+    const res = await profileConfirm.confirmProfiles({
+      name: pick.name, org: pick.company, refEmbedding: refEmb,
+      search, fetchProfileImage, confirmFace, max: 6, log: (m) => console.log(m),
+    });
+    if (!res || !res.ok || !res.matches.length) { console.log(`[profile-confirm] ${pick.name}: checked ${(res && res.checked) || 0}, 0 confirmed`); return false; }
+
+    // store each confirmed profile as a grade-E observation (face-confirmed → higher confidence than a bare handle)
+    for (const m of res.matches) {
+      try { pdb.addObservation(pick.id, { attr: 'social', value: `${m.platform}|${m.url}`, kind: 'face-confirmed', source: 'profile-confirm', sourceUrl: m.url, confidence: 0.7 }); } catch {}
+    }
+    try {
+      const social = cc.socialFromObservations(pdb.listObservations(pick.id, { attr: 'social' }));
+      if (opts.emitContactCard) opts.emitContactCard(cc.cardFromTarget(pdb.getTarget(pick.id) || pick, pdb.listBeliefs(pick.id), {}, { social }));
+    } catch (e) { console.error('[profile-confirm] card refresh failed:', e.message); }
+    try {
+      const plats = res.matches.map((m) => m.platform).join(', ');
+      const rr = db.insertMonologue({ content: `Confirmed ${pick.name}'s public profile(s) by face-match: ${plats}`, model: 'profile-confirm', type: 'reading', query: res.matches[0].url });
+      pushSheep({ id: rr.id, ts: rr.ts, content: `(profile) ${pick.name} → ${plats} (face-confirmed)`, type: 'reading', query: res.matches[0].url });
+    } catch (e) { console.error('[profile-confirm] sheep failed:', e.message); }
+    console.log(`[profile-confirm] ${pick.name} → ${res.matches.length} confirmed profile(s): ${res.matches.map((m) => m.platform).join(', ')}`);
+    return true;
+  } catch (e) { console.error('[profile-confirm] move failed:', e.message); return false; }
 }
 
 async function maybeSearchFromThought(thoughtText, focusId = null) {

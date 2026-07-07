@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS targets (
   notes TEXT,
   photo_url TEXT,                      -- official headshot URL grabbed at discovery (team/bio page)
   photo_path TEXT,                     -- local copy (data/faces/<id>.jpg) — the reference for face-matching
+  face_embedding TEXT,                 -- json 512-d ArcFace embedding of the reference headshot (cached)
   created_at INTEGER NOT NULL,
   last_accessed_at INTEGER NOT NULL
 );
@@ -134,6 +135,7 @@ function init(opts = {}) {
     const cols = new Set(db.prepare(`PRAGMA table_info(targets)`).all().map((c) => c.name));
     if (!cols.has('photo_url')) db.exec(`ALTER TABLE targets ADD COLUMN photo_url TEXT`);
     if (!cols.has('photo_path')) db.exec(`ALTER TABLE targets ADD COLUMN photo_path TEXT`);
+    if (!cols.has('face_embedding')) db.exec(`ALTER TABLE targets ADD COLUMN face_embedding TEXT`);
   } catch (e) { /* fresh DB already has them via SCHEMA */ }
   return db;
 }
@@ -203,6 +205,17 @@ function setPhoto(id, { url = null, path: p = null, overwrite = false } = {}) {
   const nextPath = (overwrite || !t.photo_path) ? (p || t.photo_path || null) : t.photo_path;
   _db().prepare(`UPDATE targets SET photo_url = ?, photo_path = ?, last_accessed_at = ? WHERE id = ?`).run(nextUrl, nextPath, now(), id);
   return getTarget(id);
+}
+
+// Cache the reference face embedding (json array) computed from the target's headshot — so the profile-
+// confirmation lane doesn't re-embed the reference on every candidate check.
+function setFaceEmbedding(id, embedding) {
+  _db().prepare(`UPDATE targets SET face_embedding = ?, last_accessed_at = ? WHERE id = ?`).run(embedding == null ? null : j(embedding), now(), id);
+  return getTarget(id);
+}
+function getFaceEmbedding(id) {
+  const r = _db().prepare(`SELECT face_embedding FROM targets WHERE id = ?`).get(id);
+  return r ? pj(r.face_embedding, null) : null;
 }
 
 // Promote an ad-hoc dossier into the CRM (records the crm row id; status → promoted).
@@ -328,7 +341,7 @@ function updateRetest(id, { status = null, patternsTried = null, nextPattern = n
 
 module.exports = {
   init, close,
-  createTarget, getTarget, listTargets, promoteTarget, setPhoto, findTargetByEmail, findTargetByName,
+  createTarget, getTarget, listTargets, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName,
   addObservation, listObservations,
   upsertBelief, getBelief, listBeliefs,
   getPatternState, savePatternState,
