@@ -176,6 +176,19 @@ function pipelineOn() { return !/^(0|false|no|off)$/i.test(get('ZOE_PIPELINE', '
 // many un-emailed targets — so the operator can't outrun the puller and flood the store with dead weight.
 function pipelineContactBacklogCap() { const n = parseInt(get('ZOE_PIPELINE_CONTACT_CAP', '').trim(), 10); return Number.isFinite(n) && n >= 0 ? n : 40; }
 
+// --- VOICE / TTS (voice-avatar-plan V1) — local Piper text-to-speech. The reduced-cost voice "guts":
+// text → wav, offline, ~$0/call, reused for meeting speech (V4) + desktop read-aloud + presence. OFF by
+// default (like the email send kill-switch) — synthesis only fires once a voice model is present and
+// ZOE_TTS_ENABLED is set, so a fresh clone never tries to spawn a sidecar it doesn't have. The Meet-side
+// audio routing (getUserMedia override) is a LATER slice (V3); this knob only governs local synthesis.
+function ttsConfig() {
+  const enabled = /^(1|true|yes|on)$/i.test(get('ZOE_TTS_ENABLED', '').trim());   // default OFF (kill-switch)
+  const voice = get('ZOE_TTS_VOICE', '').trim();          // path to a piper .onnx voice model (+ sibling .json)
+  const speaker = parseInt(get('ZOE_TTS_SPEAKER', '').trim(), 10);   // multi-speaker model → speaker id
+  const wallMs = getInt('ZOE_TTS_WALL_MS', 60000);        // hard cap per synthesis (fail-soft to silence)
+  return { enabled, voice, speaker: Number.isFinite(speaker) ? speaker : null, wallMs, configured: !!voice };
+}
+
 // --- Email ---
 function emailConfig() {
   const user = get('ZOE_EMAIL_USER').trim();
@@ -192,4 +205,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, deepNumCtx, deepNumPredict, sectionNumPredict, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, pipelineOn, pipelineContactBacklogCap, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, deepNumCtx, deepNumPredict, sectionNumPredict, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, pipelineOn, pipelineContactBacklogCap, ttsConfig, emailConfig, discordConfig, APP_ROOT, ENV_PATH };

@@ -1,0 +1,4 @@
+# Local text-to-speech sidecar (voice-avatar-plan V1). Recreate: uv venv sidecar/tts_venv --python 3.12
+# then: uv pip install --python sidecar/tts_venv -r sidecar/tts_requirements.txt
+# Voice models (piper .onnx + sibling .onnx.json) are downloaded separately and pointed at via ZOE_TTS_VOICE.
+piper-tts
