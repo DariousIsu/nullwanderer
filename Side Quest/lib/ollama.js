@@ -176,6 +176,10 @@ function stripTagBlocks(s) {
     .replace(/<([a-zA-Z][\w-]*)\b[^>]*>[\s\S]*?<\/\1>/g, '')
     .replace(/<[a-zA-Z][\w-]*\b[^>]*\/>/g, '')
     .replace(/<\/?[a-zA-Z][\w-]*\b[^>]*>/g, '')
+    // A generation truncated mid-open-tag emits an INCOMPLETE tag with no closing '>' (e.g. a bare
+    // "<think" when the reply is cut off right at the interior marker). None of the above match it, so
+    // it used to survive into the visible say (the "<think" leak). Scrub a trailing partial open/close.
+    .replace(/<\/?[a-zA-Z][\w-]*\b[^>]*$/g, '')
     .trim();
 }
 

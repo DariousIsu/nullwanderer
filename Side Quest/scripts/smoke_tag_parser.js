@@ -67,5 +67,20 @@ console.log('\nPlain reply, no tags at all:');
   ok('emitted as say', r.said === 'Just a normal answer.');
 }
 
-console.log(`\n${fail === 0 ? 'ALL PARSER TESTS OK' : 'SOME FAILURES'} — ${pass} passed, ${fail} failed`);
+console.log('\nTHE "<think" LEAK — generation truncated mid-open-tag (front 12B cut off at the marker):');
+{
+  const r = run('<think');   // the exact shape stored in ai_said #5535/#5537
+  ok('truncated "<think" does NOT reach say', r.said === '', JSON.stringify(r.said));
+  ok('nothing streamed to visible channel', r.streamed.trim() === '');
+}
+{
+  const r = run('<think>reasoning cut off here and then it stops');  // open seen, never closed
+  ok('unclosed <think> body stays in thought, not say', r.said === '' && /reasoning cut off/i.test(r.thought));
+}
+{
+  const r = run('Here is my point.<think');   // real say then a truncated marker
+  ok('trailing "<think" scrubbed, real prose kept', /here is my point\./i.test(r.said) && !/think/i.test(r.said));
+}
+
+console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
