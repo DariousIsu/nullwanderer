@@ -34,6 +34,14 @@ const OUT_DIR = path.join(ROOT, 'data', 'tts');
 function prepareText(text, { maxChars = 1000 } = {}) {
   if (typeof text !== 'string') return '';
   let t = text;
+  // FIRST, never voice her private cognition or structural/tool tags. Her stream is <think>…</think>
+  // <say>…</say> (+ action tags); the renderer files <think> to the sheep panel and shows only <say>.
+  // TTS must match: drop think blocks, keep only <say> content, and scrub any stray/unclosed tags
+  // (e.g. a bare "<think" or "<browse-read/>") so nothing internal is ever spoken aloud.
+  t = t.replace(/<think(?:ing)?\b[\s\S]*?<\/think(?:ing)?>/gi, ' ');   // whole think blocks
+  const say = [...t.matchAll(/<say>([\s\S]*?)<\/say>/gi)].map((m) => m[1]);
+  if (say.length) t = say.join(' ');                                    // if she used <say>, speak only that
+  t = t.replace(/<\/?[a-z][\w-]*\b[^>]*>?/gi, ' ');                     // any remaining tags, incl. unclosed
   t = t.replace(/```[\s\S]*?```/g, ' ');            // fenced code blocks — don't read code aloud
   t = t.replace(/`([^`]*)`/g, '$1');                // inline code ticks
   t = t.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1');  // links/images → keep the label text

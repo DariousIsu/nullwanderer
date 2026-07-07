@@ -10,6 +10,15 @@ const cfg = require('../lib/config');
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++; console.log('  ✗', m); } };
 
+// --- prepareText: NEVER voice her private cognition or structural/tool tags (the voice-leak fix) ---
+ok(tts.prepareText('<think>secret reasoning</think><say>Hello there</say>') === 'Hello there', 'think dropped, only <say> spoken');
+ok(tts.prepareText('<think>plan</think>Hello there') === 'Hello there', 'think block stripped even without <say> tags');
+ok(tts.prepareText('<thinking>\nlong plan\n</thinking><say>Hi Lucas</say>') === 'Hi Lucas', 'multiline <thinking> block stripped');
+ok(tts.prepareText('<think') === '' && tts.prepareText('Hello there.<think') === 'Hello there.', 'orphan/unclosed <think scrubbed (bare → empty; trailing → real text kept)');
+ok(tts.prepareText('Let me look <browse-read/> at that').replace(/\s+/g, ' ').trim() === 'Let me look at that', 'stray tool/action tag scrubbed');
+ok(tts.prepareText('<say>one</say> <say>two</say>') === 'one two', 'multiple say blocks joined');
+ok(tts.prepareText('<think>only thinking, nothing said</think>') === '', 'a think-only reply → nothing to speak');
+
 // --- prepareText: markdown scaffolding stripped, whitespace collapsed ---
 ok(tts.prepareText('# Hello **world**') === 'Hello world', 'strips heading + bold emphasis');
 ok(tts.prepareText('see `code` and _italics_') === 'see code and italics', 'strips inline code + italics');
