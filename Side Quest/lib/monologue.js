@@ -47,6 +47,12 @@ const GRAPHWALK_BUDGET_KEY = 'graphwalk.budget.window';   // idle builder's OWN 
 const PULLER_MIN_INTERVAL_MS = 45 * 1000;
 const PULLER_LAST_KEY = 'pullerwalk.lastAt';
 const PULLER_BUDGET_KEY = 'pullerwalk.budget.window';
+// DISCOVER stage cadence (pipeline Slice 3) — the operator layer runs CONCURRENTLY with the contact
+// layer now, so it needs its OWN cooldown key (sharing PULLER_LAST_KEY would let one stage starve the
+// other). Same rolling token budget (PULLER_BUDGET_KEY) — one "puller lane" spend pool. A touch slower
+// than contact: minting is cheaper to under- than over-do (backpressure already caps the backlog).
+const DISCOVER_MIN_INTERVAL_MS = 60 * 1000;
+const DISCOVER_LAST_KEY = 'pullerwalk.discover.lastAt';
 // Social-enrich idle lane (Lane C, maigret). Slow + low-yield → infrequent; each known-handle target is
 // processed ~once/month (the web presence won't change fast). No cloud-token budget (maigret is a local
 // sidecar + network, not a model call), so cadence + a per-target cooldown are the only gates.
@@ -1004,10 +1010,19 @@ async function runOneTick() {
       const first = await runGraphWalkMove(recentTurns);
       if (first) { const n = _cfg.subcMovesPerTick(); for (let i = 1; i < n; i++) { const more = await runGraphWalkMove(recentTurns, { force: true }); if (!more) break; } }
     })();
-    const pullerLane = runPullerMove(recentTurns).catch((e) => console.error('[puller-walk] tick error:', e.message));
-    const socialLane = runSocialEnrichMove().catch((e) => console.error('[social-enrich] tick error:', e.message));
-    if (_cfg.subcConcurrentLanes()) { await Promise.allSettled([graphLane, pullerLane, socialLane]); }
-    else { try { await graphLane; } catch {} await pullerLane; await socialLane; }
+    if (_cfg.pipelineOn()) {
+      // SLICE 3 — the Puller lanes become ONE staged pipeline (DISCOVER→CONTACT→ENRICH, concurrent stages
+      // with backpressure). Runs alongside the graph-walk lane. ZOE_PIPELINE=0 reverts to the legacy lanes.
+      const pipeLane = runPipelineTick(recentTurns).catch((e) => console.error('[pipeline] tick error:', e && e.message));
+      if (_cfg.subcConcurrentLanes()) { await Promise.allSettled([graphLane, pipeLane]); }
+      else { try { await graphLane; } catch {} await pipeLane; }
+    } else {
+      // Legacy coupled lanes: runPullerMove (enrich-then-discover) + independent runSocialEnrichMove.
+      const pullerLane = runPullerMove(recentTurns).catch((e) => console.error('[puller-walk] tick error:', e.message));
+      const socialLane = runSocialEnrichMove().catch((e) => console.error('[social-enrich] tick error:', e.message));
+      if (_cfg.subcConcurrentLanes()) { await Promise.allSettled([graphLane, pullerLane, socialLane]); }
+      else { try { await graphLane; } catch {} await pullerLane; await socialLane; }
+    }
     return;
   }
 
@@ -1617,9 +1632,20 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
 // domain's learned email format, else web-discovery (search + extract a stated address, cited). Shares
 // the graph-walk's focus (activeSetNames); own cadence + rolling budget so the two lanes interleave on
 // the idle tick. Consume-only w.r.t. the CRM — lands the Puller's own discovered facet. Fail-soft → false.
-async function runPullerMove(_recentTurns) {
+// mode: 'both' (legacy — enrich, then discover if enrich was dry) | 'contact' (enrich only, no discovery
+// fallback) | 'discover' (discovery only). The pipeline (Slice 3) calls the two halves as SEPARATE
+// concurrent stages ('contact' + 'discover'); 'both' preserves the exact pre-pipeline behavior for the
+// legacy fallback. candidatesOverride: a pre-partitioned contact queue (pipeline supplies the ordered
+// no-email targets) — replaces the internal full-store scan.
+async function runPullerMove(_recentTurns, { mode = 'both', candidatesOverride = null } = {}) {
   const nowTs = Date.now();
-  try { const last = parseInt(db.getMeta(PULLER_LAST_KEY) || '0', 10) || 0; if (nowTs - last < PULLER_MIN_INTERVAL_MS) return false; } catch {}
+  const wantContact = mode === 'both' || mode === 'contact';
+  const wantDiscover = mode === 'both' || mode === 'discover';
+  // cadence: contact/both on PULLER_LAST_KEY, a discover-only stage on its own key (so the concurrent
+  // pipeline stages don't share — and starve — one cooldown).
+  const _cadKey = (mode === 'discover') ? DISCOVER_LAST_KEY : PULLER_LAST_KEY;
+  const _cadMs = (mode === 'discover') ? DISCOVER_MIN_INTERVAL_MS : PULLER_MIN_INTERVAL_MS;
+  try { const last = parseInt(db.getMeta(_cadKey) || '0', 10) || 0; if (nowTs - last < _cadMs) return false; } catch {}
   const cfg = require('./config');
   const subc = require('./subconscious');
   const _gm = (k) => db.getMeta(k); const _sm = (k, v) => db.setMeta(k, v);
@@ -1706,28 +1732,37 @@ async function runPullerMove(_recentTurns) {
     } catch {}
   };
 
-  const move = await pullerWalk.runPullerMove({
-    candidates, activeKeys, getPatternState: (d) => pdb.getPatternState(d), triedFor,
-    land, web, extract, refresh, getMeta: _gm, setMeta: _sm, now: () => Date.now(), log: (m) => console.log(m),
-  });
-  try { db.setMeta(PULLER_LAST_KEY, String(Date.now())); } catch {}
-  if (move && move.acted) {
-    console.log(`[puller-walk] ${move.mode} "${move.name}" → ${move.email || move.phone || ''}`);
-    // Surface ONE compact line into the electric-sheep stream so the Puller lane is visible alongside the
-    // graph-walk (Lucas). A grounded 'reading' (not a chatty 'thought'): cited — the web URL, or the
-    // domain email-pattern it was derived from. Only on an acted move, so it can't spam.
-    try {
-      const val = move.email || move.phone || '';
-      const via = move.mode === 'web'
-        ? (move.url ? ` (${graphWalk.sourceLabel(move.url)})` : ' (web)')
-        : (move.email ? ` (${String(move.email).split('@')[1] || ''} email pattern)` : '');
-      const content = `Found a contact for ${move.name}: ${val}${via}`;
-      const rr = db.insertMonologue({ content, model: 'puller-walk', type: 'reading', query: move.url || null });
-      pushSheep({ id: rr.id, ts: rr.ts, content: `(found contact) ${move.name} → ${val}`, type: 'reading', query: move.url || null });
-    } catch (e) { console.error('[puller-walk] sheep surface failed:', e.message); }
-    return true;
+  // CONTACT stage (enrich an existing target's email). candidatesOverride = the pipeline's pre-partitioned
+  // no-email queue; else the internal full-store scan (legacy 'both').
+  if (wantContact) {
+    const candidatesFn = candidatesOverride ? (async () => candidatesOverride) : candidates;
+    const move = await pullerWalk.runPullerMove({
+      candidates: candidatesFn, activeKeys, getPatternState: (d) => pdb.getPatternState(d), triedFor,
+      land, web, extract, refresh, getMeta: _gm, setMeta: _sm, now: () => Date.now(), log: (m) => console.log(m),
+    });
+    try { db.setMeta(PULLER_LAST_KEY, String(Date.now())); } catch {}
+    if (move && move.acted) {
+      console.log(`[puller-walk] ${move.mode} "${move.name}" → ${move.email || move.phone || ''}`);
+      // Surface ONE compact line into the electric-sheep stream so the Puller lane is visible alongside the
+      // graph-walk (Lucas). A grounded 'reading' (not a chatty 'thought'): cited — the web URL, or the
+      // domain email-pattern it was derived from. Only on an acted move, so it can't spam.
+      try {
+        const val = move.email || move.phone || '';
+        const via = move.mode === 'web'
+          ? (move.url ? ` (${graphWalk.sourceLabel(move.url)})` : ' (web)')
+          : (move.email ? ` (${String(move.email).split('@')[1] || ''} email pattern)` : '');
+        const content = `Found a contact for ${move.name}: ${val}${via}`;
+        const rr = db.insertMonologue({ content, model: 'puller-walk', type: 'reading', query: move.url || null });
+        pushSheep({ id: rr.id, ts: rr.ts, content: `(found contact) ${move.name} → ${val}`, type: 'reading', query: move.url || null });
+      } catch (e) { console.error('[puller-walk] sheep surface failed:', e.message); }
+      return true;
+    }
+    // CONTACT-only stage does NOT fall through to discovery — that's the DISCOVER stage's job now.
+    if (mode === 'contact') { console.log(`[puller-walk] contact: no fill (${(move && move.reason) || '?'})`); return false; }
   }
 
+  if (!wantDiscover) return false;
+  try { db.setMeta(DISCOVER_LAST_KEY, String(Date.now())); } catch {}
   // ENRICH found nothing to do → DISCOVERY: prospect an active org for NET-NEW people (Lucas: "when
   // there's nothing to enrich, find new targets — similar contacts from orgs already in the database").
   // Seed orgs = the operator's active orgs (recent org cards + the companies his targets belong to),
@@ -1793,8 +1828,64 @@ async function runPullerMove(_recentTurns) {
     } catch (e) { console.error('[puller-walk] sheep surface failed:', e.message); }
     return true;
   }
-  console.log(`[puller-walk] no move (enrich ${(move && move.reason) || '?'} · discover ${(disc && disc.reason) || '?'})`);
+  console.log(`[puller-walk] discover: no move (${(disc && disc.reason) || '?'})`);
   return false;
+}
+
+// SLICE 3 — the flat candidate snapshot the pipeline partitions into the CONTACT / ENRICH queues. Each row
+// carries the two facets that define a target's lifecycle stage: hasEmail (an email belief) and hasDeep (a
+// social/OSINT observation, the maigret marker). Bounded scan — cheap, and deep enough to reach the
+// backpressure cap. Mirrors runPullerMove's internal candidates() shape (+ hasDeep) so the contact queue
+// can be handed straight to pullerWalk.pickTarget as candidatesOverride.
+function _pullerCandidateSnapshot({ limit = 500 } = {}) {
+  const pdb = require('./puller_db');
+  const out = [];
+  try {
+    for (const t of pdb.listTargets({ limit })) {
+      let hasEmail = false, hasDeep = false, grounded = false;
+      try { hasEmail = !!pdb.getBelief(t.id, 'email'); } catch {}
+      try { hasDeep = pdb.listObservations(t.id, { attr: 'social' }).length > 0; } catch {}
+      if (!hasEmail && t.domain) {
+        if (t.crm_id != null) grounded = true;
+        else { try { grounded = pdb.listObservations(t.id).some(o => /^(https?:\/\/|docstore:)/i.test(String(o.source_url || '')) || o.kind === 'doc'); } catch {} }
+      }
+      out.push({ id: t.id, name: t.name, company: t.company, domain: t.domain, hasEmail, hasDeep, grounded, ts: t.last_accessed_at || t.created_at || 0 });
+    }
+  } catch {}
+  return out;
+}
+
+// The ENRICH stage — deep social/OSINT facets (maigret) on CONTACTED targets. Thin wrapper that biases the
+// social-enrich pick toward the pipeline's enrich queue (has-email, not-yet-deepened, active-first) while
+// keeping its own known-handle gate + monthly cooldown. Falls back to the full scan if the queue is dry.
+async function runEnrichStage(enrichQueue) {
+  const preferIds = (Array.isArray(enrichQueue) ? enrichQueue : []).map((t) => t && t.id).filter((v) => v != null);
+  return runSocialEnrichMove(preferIds);
+}
+
+// SLICE 3 — the layered pipeline tick. DISCOVER → CONTACT → ENRICH run as three CONCURRENT stages that hand
+// work forward by target lifecycle stage; BACKPRESSURE holds DISCOVER when the contact backlog is deep so
+// the operator can't outrun the puller. Reuses the existing stage workers (runPullerMove contact/discover
+// modes + runSocialEnrichMove); lib/pipeline is the pure brain (partition + shouldDiscover). Fail-soft.
+async function runPipelineTick(recentTurns) {
+  const cfg = require('./config');
+  const pipeline = require('./pipeline');
+  const snapshot = _pullerCandidateSnapshot();
+  const activeKeys = new Set((activeSetNames() || []).map((n) => pullerWalk.norm(n)));
+  const { contact, enrich } = pipeline.partition(snapshot, { activeKeys, norm: pullerWalk.norm });
+  const cap = cfg.pipelineContactBacklogCap();
+  console.log(`[pipeline] ${pipeline.describe({ contact, enrich }, { cap })}`);
+
+  const stages = [];
+  // CONTACT — drain the no-email queue (pipeline supplies the ordered candidates; pickTarget re-ranks + honors its cooldown).
+  stages.push(runPullerMove(recentTurns, { mode: 'contact', candidatesOverride: contact }).catch((e) => console.error('[pipeline] contact error:', e && e.message)));
+  // DISCOVER — mint net-new targets, but only when CONTACT can keep up (backpressure on the backlog depth).
+  if (pipeline.shouldDiscover({ contactDepth: contact.length, cap })) {
+    stages.push(runPullerMove(recentTurns, { mode: 'discover' }).catch((e) => console.error('[pipeline] discover error:', e && e.message)));
+  }
+  // ENRICH — deep social/OSINT facets on contacted targets (biased to the enrich queue).
+  stages.push(runEnrichStage(enrich).catch((e) => console.error('[pipeline] enrich error:', e && e.message)));
+  await Promise.allSettled(stages);
 }
 
 // LANE C — SOCIAL ENRICH (maigret, idle). Picks ONE held target that has a KNOWN handle (personal-email
@@ -1802,7 +1893,7 @@ async function runPullerMove(_recentTurns) {
 // corroborated (2+ signal) accounts as grade-E Puller observations. Consume-only, verify-before-promote.
 // Known-handles-only + a strict gate mean it acts on FEW targets and stages little (see the yield note) —
 // deliberately low-volume. Cadence + a 30-day per-target cooldown are the gates. Never throws.
-async function runSocialEnrichMove() {
+async function runSocialEnrichMove(preferIds = null) {
   const nowTs = Date.now();
   try { const last = parseInt(db.getMeta(SOCIAL_LAST_KEY) || '0', 10) || 0; if (nowTs - last < SOCIAL_MIN_INTERVAL_MS) return false; } catch {}
   try {
@@ -1814,10 +1905,20 @@ async function runSocialEnrichMove() {
     attArr = (Array.isArray(attArr) ? attArr : []).filter((e) => Array.isArray(e) && (nowTs - (Number(e[1]) || 0) < SOCIAL_ATTEMPT_TTL_MS));
     const attempted = new Set(attArr.map((e) => e[0]));
 
+    // ENRICH-stage ordering (pipeline Slice 3): try the pipeline's enrich queue FIRST (contacted targets —
+    // has-email, not-yet-deepened, active-first), then the full store as a fallback. Without a queue this is
+    // the plain full scan (legacy). Dedup so a preferred id isn't re-visited in the fallback pass.
+    const orderedTargets = () => {
+      const seen = new Set(); const list = [];
+      if (Array.isArray(preferIds)) { for (const id of preferIds) { const t = pdb.getTarget(id); if (t && !seen.has(t.id)) { seen.add(t.id); list.push(t); } } }
+      for (const t of pdb.listTargets({ limit: 100000 })) { if (!seen.has(t.id)) { seen.add(t.id); list.push(t); } }
+      return list;
+    };
+
     // pick the first eligible target: not attempted, and a KNOWN-handle source exists (personal email → a
     // localpart, or a crm_id whose CRM handles we'll fetch below). Bounded scan so a tick stays cheap.
     let pick = null, contact = null, scanned = 0;
-    for (const t of pdb.listTargets({ limit: 100000 })) {
+    for (const t of orderedTargets()) {
       if (attempted.has(String(t.id))) continue;
       scanned++;
       const email = (pdb.getBelief(t.id, 'email') || {}).value || null;

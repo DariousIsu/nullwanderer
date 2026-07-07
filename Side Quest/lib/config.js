@@ -168,6 +168,14 @@ function subcConcurrentLanes() { return !/^(0|false|no|off)$/i.test(get('ZOE_SUB
 // this is NOT for high-volume tool-calling or utility extraction — only the calls where depth clearly wins.
 function deepReasonerModel() { return get('ZOE_DEEP_REASONER_MODEL').trim() || subconsciousModel() || 'gpt-oss:120b'; }
 
+// --- PULLER PIPELINE (cloud-leverage Slice 3) — the DISCOVER→CONTACT→ENRICH producer/consumer pipeline
+// (lib/pipeline.js). ON by default; ZOE_PIPELINE=0 reverts the idle tick to the legacy coupled lanes
+// (runPullerMove enrich-then-discover + independent runSocialEnrichMove) with no behavior change.
+function pipelineOn() { return !/^(0|false|no|off)$/i.test(get('ZOE_PIPELINE', '').trim()); }   // default ON
+// BACKPRESSURE cap: DISCOVER holds (mints no net-new targets) when the CONTACT backlog is at/above this
+// many un-emailed targets — so the operator can't outrun the puller and flood the store with dead weight.
+function pipelineContactBacklogCap() { const n = parseInt(get('ZOE_PIPELINE_CONTACT_CAP', '').trim(), 10); return Number.isFinite(n) && n >= 0 ? n : 40; }
+
 // --- Email ---
 function emailConfig() {
   const user = get('ZOE_EMAIL_USER').trim();
@@ -184,4 +192,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, deepNumCtx, deepNumPredict, sectionNumPredict, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, deepNumCtx, deepNumPredict, sectionNumPredict, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, pipelineOn, pipelineContactBacklogCap, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
