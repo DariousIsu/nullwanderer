@@ -19,7 +19,7 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const MOOD_FEELING = { idle: 'warm and content', thinking: 'curious, turning it over', talking: null };
 
 function create(canvas, opts = {}) {
-  const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+  const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(canvas.clientWidth || canvas.width, canvas.clientHeight || canvas.height, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -86,7 +86,10 @@ function create(canvas, opts = {}) {
         const vrm = gltf.userData.vrm;
         try { if (VRMUtils.removeUnnecessaryVertices) VRMUtils.removeUnnecessaryVertices(gltf.scene); } catch {}
         try { if (VRMUtils.combineSkeletons) VRMUtils.combineSkeletons(gltf.scene); } catch {}
-        vrm.scene.rotation.y = Math.PI;              // VRM faces -Z; turn to face the camera at +Z
+        // Face the +Z camera. three-vrm 3.x normalizes VRoid exports (both VRM 0.x and 1.0) to face +Z at
+        // yaw 0 — PROVEN with the real Zoe.vrm (a VRM 1.0 export faced the camera at rotation.y 0, and PI
+        // showed her back). opts.faceYaw overrides for any model that ships facing the other way.
+        vrm.scene.rotation.y = (typeof opts.faceYaw === 'number') ? opts.faceYaw : 0;
         scene.add(vrm.scene);
         // frame the camera on the head bone so it's a portrait, whatever the model's proportions
         try {
