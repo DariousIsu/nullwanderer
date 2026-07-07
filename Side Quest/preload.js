@@ -80,6 +80,7 @@ contextBridge.exposeInMainWorld('sq', {
     attachSource: (docId, uid, filePath) => ipcRenderer.invoke('editor:attach-source', { docId, uid, filePath }),  // tag in-hand source to a citation
     detachSource: (docId, uid) => ipcRenderer.invoke('editor:detach-source', { docId, uid }),
     runChecks: (docId) => ipcRenderer.invoke('editor:run-checks', docId),
+    exportReport: (docId, mapped) => ipcRenderer.invoke('editor:export-report', { docId, mapped }),  // findings report for the author (not a cert)
     certify: (docId, mapped) => ipcRenderer.invoke('editor:certify', { docId, mapped }),
     publish: (docId, publicCopyRef) => ipcRenderer.invoke('editor:publish', { docId, publicCopyRef })
   },

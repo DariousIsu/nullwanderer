@@ -74,6 +74,17 @@ ok('all-ok → grade clear', r4.grade === 'clear');
 ok('missing docId throws', (() => { try { issueCertificate({ mapped }); return false; } catch { return true; } })());
 ok('missing mapped throws', (() => { try { issueCertificate({ docId }); return false; } catch { return true; } })());
 
+// ---- findings REPORT (cert_template.renderReport) — the author handoff, NOT a certification ----
+const CT = require('../studio/cert_template');
+const report = CT.renderReport({ doc: registry.getDocument(docId), findings: mapped.findings, suggestions: mapped.suggestions, summary: mapped.summary, generatedAt: clock });
+ok('report lists each finding claim', /Claim A/.test(report) && /Claim B/.test(report) && /Claim C/.test(report));
+ok('report shows verdict pills', /pill (pass|fail|warn)/.test(report));
+ok('report includes the recommended corrections', /X/.test(report) && /Y/.test(report));
+ok('report is explicitly NOT a certification', /not a certification/i.test(report));
+ok('report carries NO CFC cert id', !/CFC-\d{4}-\d{2}-\d{2}/.test(report));
+ok('report carries NO certification seal', !/Certification Seal/.test(report));
+ok('report titled "Verification Findings"', /Verification Findings/.test(report));
+
 registry.close();
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);

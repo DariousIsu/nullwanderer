@@ -188,5 +188,71 @@
 </body></html>`;
   }
 
-  return { renderCertificate, gradeFor, scorelineOf, fmtDate, esc, PILL };
+  /**
+   * Render a plain FINDINGS REPORT — the same per-claim findings + corrections as the cert, but WITHOUT
+   * the certification apparatus (no CFC id, no seal, no "cleared for publication" ruling). This is the
+   * artifact handed back to the AUTHOR for revision; certification is a separate, later step.
+   * @param {object} a  { doc, findings, suggestions, summary, generatedAt(ms), method? }
+   * @returns {string} a complete, self-contained HTML document
+   */
+  function renderReport(a) {
+    const doc = a.doc || {};
+    const findings = a.findings || [];
+    const summary = a.summary || { byVerdict: {} };
+    const v = summary.byVerdict || {};
+    const gen = a.generatedAt != null ? a.generatedAt : Date.now();
+    const method = a.method || 'Deterministic verification harness — source resolution, lexical + local-embedding match, caged model classification';
+    const title = doc.title || 'Untitled document';
+    const ver = doc.current_version != null ? doc.current_version : 1;
+    const total = summary.total != null ? summary.total : findings.length;
+
+    return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Verification Findings — ${esc(title)} (v${esc(ver)})</title>
+<style>${STYLE}</style></head>
+<body>
+  <div class="mast">
+    <div class="org"><div class="name">Joseph Rainey Center for Public Policy</div>
+      <div class="tag">Verification Findings · Pre-publication review</div></div>
+    <div class="mast-right"><div class="label">Findings report</div>
+      <div style="margin-top:4pt"><b>Generated</b> ${esc(fmtDate(gen))}</div></div>
+  </div>
+
+  <h1>Verification Findings</h1>
+  <p class="subtitle">For: <span class="doc-name">${esc(title)}</span> · v${esc(ver)}<br>
+    By ${esc(doc.author || 'Unknown author')} &nbsp;·&nbsp; Author review copy</p>
+
+  <dl class="meta">
+    <dt>Document</dt><dd>${esc(title)} (v${esc(ver)})</dd>
+    <dt>Author</dt><dd>${esc(doc.author || '—')}</dd>
+    <dt>Claims reviewed</dt><dd>${esc(total)}</dd>
+    <dt>Generated</dt><dd>${esc(fmtDate(gen))}</dd>
+    <dt>Method</dt><dd>${esc(method)}</dd>
+    <dt>Summary</dt><dd>${esc(scorelineOf(summary))}</dd>
+  </dl>
+
+  <div class="kpis">
+    <div class="kpi"><div class="n">${esc(total)}</div><div class="lbl">Claims reviewed</div></div>
+    <div class="kpi gold"><div class="n">${v.ok || 0}</div><div class="lbl">Verified</div></div>
+    <div class="kpi warn"><div class="n">${v.warn || 0}</div><div class="lbl">Caveat / revise</div></div>
+    <div class="kpi fail"><div class="n">${v.bad || 0}</div><div class="lbl">Issues</div></div>
+  </div>
+
+  <h2><span class="num">1</span>Per-claim findings</h2>
+  <p class="small">Claims listed in document order. "Locator" is the working-copy anchor the finding attaches to.</p>
+  <table class="cite-table"><colgroup><col class="c-num"><col class="c-claim"><col class="c-status"><col class="c-finding"></colgroup>
+    <thead><tr><th class="num">#</th><th>Claim</th><th>Status</th><th>Finding &amp; locator</th></tr></thead>
+    <tbody>${claimRows(findings)}</tbody>
+  </table>
+
+  <h2><span class="num">2</span>Recommended corrections</h2>
+  ${fixItems(a.suggestions)}
+
+  <div class="signoff">
+    <div class="auditor-note"><p><strong>About this report.</strong> These are the findings from the Editor Studio's verification pass, provided to the author for revision. Each claim's source was resolved and matched (lexical + local embeddings) with model judgment applied only to residual gray-band claims. <strong>This is a findings report, not a certification</strong> — a formal certificate is issued separately once outstanding issues are resolved.</p></div>
+  </div>
+</body></html>`;
+  }
+
+  return { renderCertificate, renderReport, gradeFor, scorelineOf, fmtDate, esc, PILL };
 });

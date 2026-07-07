@@ -121,6 +121,7 @@ async function openDoc(id){
   const pubBtn = document.getElementById('publish-btn');
   certBtn.disabled = true;
   certBtn.innerHTML = (doc.cert_number && doc.status !== 'in-process') ? esc(doc.cert_number) : 'Certify';
+  const reportBtn0 = document.getElementById('report-btn'); if(reportBtn0) reportBtn0.disabled = true;   // needs a run first
   pubBtn.disabled = (doc.status !== 'certified');
   pubBtn.innerHTML = (doc.status === 'published') ? 'Published' : 'Publish';
   renderDocBody(wcR && wcR.workingCopy);
@@ -255,14 +256,27 @@ document.getElementById('run-checks-btn').addEventListener('click', async () => 
       FINDINGS = (res.mapped && res.mapped.findings) || [];
       renderFindings();
       if(!FINDINGS.length) document.getElementById('findings').innerHTML = '<div class="rail-empty">No verification units were extracted from this document (nothing with a quote, source reference, or statistic to check).</div>';
-      // Certify becomes available once a run has produced findings.
+      // Certify + Report become available once a run has produced findings.
       if(certBtn) certBtn.disabled = !FINDINGS.length;
+      const reportBtn = document.getElementById('report-btn'); if(reportBtn) reportBtn.disabled = !FINDINGS.length;
     } else {
       document.getElementById('findings').innerHTML = `<div class="rail-empty">Run checks failed: ${esc(res && res.error || 'unknown error')}</div>`;
     }
   } catch (err) {
     document.getElementById('findings').innerHTML = `<div class="rail-empty">Run checks errored: ${esc(err.message)}</div>`;
   } finally { btn.disabled = false; btn.innerHTML = orig; }
+});
+
+document.getElementById('report-btn').addEventListener('click', async () => {
+  if(!E || !currentDoc || !LAST_MAPPED){ return; }
+  const btn = document.getElementById('report-btn');
+  const orig = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = 'Exporting…';
+  try {
+    const r = await E.exportReport(currentDoc.id, LAST_MAPPED);
+    if(!(r && r.ok)) alert('Report failed: ' + (r && r.error || 'unknown error'));
+  } catch (err) { alert('Report errored: ' + err.message); }
+  finally { btn.innerHTML = orig; btn.disabled = false; }
 });
 
 document.getElementById('certify-btn').addEventListener('click', async () => {

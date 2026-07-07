@@ -1733,6 +1733,33 @@ ipcMain.handle('editor:certify', async (_e, { docId, mapped } = {}) => {
   }
 });
 
+// Export findings REPORT → the lightweight artifact handed back to the AUTHOR: renders the last
+// Run-checks findings into a printable HTML report (no CFC id, no seal, no status change — NOT a
+// certification), writes it to data/reports/, and opens it. Certification stays the separate formal step.
+ipcMain.handle('editor:export-report', async (_e, { docId, mapped } = {}) => {
+  try {
+    const fs = require('fs');
+    const doc = editorRegistry.getDocument(docId);
+    if (!doc) return { ok: false, error: 'no such document' };
+    if (!mapped || !Array.isArray(mapped.findings)) return { ok: false, error: 'no findings to report — run checks first' };
+    const html = require('./studio/cert_template').renderReport({
+      doc, findings: mapped.findings, suggestions: mapped.suggestions, summary: mapped.summary, generatedAt: Date.now(),
+    });
+    const reportsDir = path.join(__dirname, 'data', 'reports');
+    try { fs.mkdirSync(reportsDir, { recursive: true }); } catch (e) { /* may already exist */ }
+    const safe = String(doc.title || 'document').replace(/[^\w.-]+/g, '_').slice(0, 60) || 'document';
+    const d = new Date();
+    const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
+    const reportRef = path.join(reportsDir, `Findings-${safe}-v${doc.current_version}-${stamp}.html`);
+    fs.writeFileSync(reportRef, html, 'utf8');
+    try { await shell.openPath(reportRef); } catch (e) { console.error('[editor] open report failed:', e.message); }
+    return { ok: true, reportRef };
+  } catch (e) {
+    console.error('[editor] export-report failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
 // Publish / close-out (lifecycle terminal) → records the doc as actually published, optionally
 // attaching a public copy (URL or file). Forward-only: must be certified first.
 ipcMain.handle('editor:publish', async (_e, { docId, publicCopyRef } = {}) => {
