@@ -39,6 +39,25 @@ ok(nd.targets.length === 1 && /identified during discovery/i.test(nd.targets[0])
 ok(nd.facets.length >= 3, 'no facet → a default facet checklist');
 ok(/parallel|structured/i.test(nd.approach), 'deep run → approach mentions the parallel/structured pass');
 
+// --- RESEARCH KIND (entity | topical | forecast): facets + framing follow the kind, not always contacts ---
+const ent = rp.normalizePlan({}, { goal: 'profile energy orgs', kind: 'entity' });
+ok(ent.kind === 'entity' && ent.facets.some(f => /contact/i.test(f)), 'entity → contact facet present (the Puller path)');
+const top = rp.normalizePlan({}, { goal: 'brief me on the Strait of Hormuz', kind: 'topical' });
+ok(top.kind === 'topical' && !top.facets.some(f => /contact|email|phone/i.test(f)), 'topical → NO contact/email/phone facets');
+ok(top.facets.some(f => /development|driver|timeline|implication/i.test(f)), 'topical → subject facets (developments/drivers/timeline)');
+ok(/identified during discovery/i.test(top.targets[0]) === false, 'topical → targets are NOT "entities to discover"');
+const fc = rp.normalizePlan({}, { goal: 'who wins the House', kind: 'forecast' });
+ok(fc.kind === 'forecast' && fc.facets.some(f => /probabilit|estimate|base rate|driver/i.test(f)), 'forecast → forecast facets (probability/base rate/drivers)');
+ok(!fc.facets.some(f => /contact|email|phone/i.test(f)), 'forecast → NO contact facets');
+ok(/probability|forecast|calibrated/i.test(rp.normalizePlan({}, { kind: 'forecast' }).objective), 'forecast default objective is a prediction, not a dossier');
+ok(/briefing/i.test(rp.normalizePlan({}, { kind: 'topical' }).objective), 'topical default objective is a briefing');
+// planWant branches by kind
+ok(/do NOT gather personal contact/i.test(rp.planWant('topical')), 'planWant(topical) forbids contact-gathering');
+ok(/PROBABILITY with a range/i.test(rp.planWant('forecast')), 'planWant(forecast) demands a probability + range');
+ok(/organizations\/people to profile/i.test(rp.planWant('entity')), 'planWant(entity) keeps org/people profiling');
+// unknown kind → entity default (backward-compatible)
+ok(rp.normalizePlan({}, { goal: 'x' }).kind === 'entity', 'no kind → entity (prior behavior)');
+
 // --- fallbackPlan: a complete plan with the cloud absent ---
 const fb = rp.fallbackPlan({ goal: 'research X', targets: ['Org A', 'Org B'], facet: 'contacts' });
 ok(fb.objective && fb.approach && fb.targets.length === 2 && fb.databases.length > 0, 'fallback is a complete plan');
