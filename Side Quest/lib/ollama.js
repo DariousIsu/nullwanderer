@@ -64,7 +64,10 @@ async function streamChat({ model, messages, options = {}, onToken, signal, inac
           if (obj.message && obj.message.content) {
             onToken(obj.message.content);
           }
-          if (obj.done) return;
+          if (obj.done) {
+            try { const um = require('./usage_meter'); um.record(obj.model || (body && body.model), um.tokensOf({ prompt_eval_count: obj.prompt_eval_count, eval_count: obj.eval_count })); } catch {}   // meter real spend
+            return;
+          }
         } catch {
           // ignore malformed line
         }
@@ -123,10 +126,12 @@ async function completeDetailed({ model, messages, options = {}, base = OLLAMA_B
     // Ollama reports token counts on the non-stream response — surface them so callers (the tiered
     // subconscious budget) can account real spend instead of estimating. prompt_eval_count = input,
     // eval_count = output.
+    const usage = { prompt_tokens: (obj && obj.prompt_eval_count) || 0, eval_tokens: (obj && obj.eval_count) || 0 };
+    try { const um = require('./usage_meter'); um.record((obj && obj.model) || model, um.tokensOf(usage)); } catch {}   // meter real spend (canvas usage pill)
     return {
       text: pickText(obj && obj.message),   // content, else thinking (a reasoner never returns empty — Slice 2)
       thinking: (obj && obj.message && obj.message.thinking) || '',   // reasoning models stash output here; a safety net for callers
-      usage: { prompt_tokens: (obj && obj.prompt_eval_count) || 0, eval_tokens: (obj && obj.eval_count) || 0 },
+      usage,
       model: (obj && obj.model) || model
     };
   } finally {

@@ -875,3 +875,24 @@ loadCanvas();
 // (no flicker). Paused while the window is hidden/minimized.
 const CANVAS_REFRESH_MS = 5000;
 setInterval(() => { if (!document.hidden) loadCanvas(0); }, CANVAS_REFRESH_MS);
+
+// USAGE PILL — Zoe's own metered model-token usage (Ollama exposes no usage API, so we show what SHE spends,
+// windowed to track alongside the Ollama plan reset). Total over the window + a live /hr rate; per-model on hover.
+(function () {
+  const pill = document.getElementById('usagePill');
+  if (!pill || !window.sq || !window.sq.usageSummary) { if (pill) pill.hidden = true; return; }
+  const fmt = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n | 0));
+  async function tick() {
+    try {
+      const s = await window.sq.usageSummary();
+      if (!s || !s.ok) { pill.hidden = true; return; }
+      pill.hidden = false;
+      pill.innerHTML = `⚡ <b>${fmt(s.total)}</b> tok ${s.label || ''}${s.rate ? ` · ${fmt(s.rate)}/hr` : ''}`;
+      const byModel = Object.entries(s.byModel || {});
+      const lines = byModel.length ? byModel.map(([m, t]) => `${m}: ${fmt(t)}`).join('\n') : 'no calls yet in this window';
+      pill.title = `Zoe's measured model usage (${s.calls || 0} calls)\n${lines}\n\n(measured locally — Ollama exposes no usage API)`;
+    } catch { pill.hidden = true; }
+  }
+  tick();
+  setInterval(() => { if (!document.hidden) tick(); }, 12000);
+})();

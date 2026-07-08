@@ -27,6 +27,9 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx-soft);
 .topbar button{background:transparent;border:1px solid var(--line-strong);color:var(--tx-muted);font:inherit;font-size:11px;padding:5px 11px;border-radius:var(--r-sm);cursor:pointer;}
 .topbar button:hover{border-color:var(--line-hover);color:var(--tx-soft);}
 .topbar .hint{font-size:10px;color:var(--tx-fainter);}
+.topbar .usage{font-size:11px;color:var(--tx-dim);border:1px solid var(--line);border-radius:var(--r-sm);padding:3px 8px;white-space:nowrap;cursor:default;}
+.topbar .usage b{color:var(--tx-soft);font-weight:600;}
+.topbar .usage[hidden]{display:none;}
 
 /* the canvas viewport fills everything below the topbar */
 .surface{position:absolute;top:40px;left:0;right:0;bottom:0;overflow:hidden;cursor:grab;
@@ -293,6 +296,7 @@ body.ppl-open .surface{left:340px;}
     <span class="count" id="count"></span>
     <span class="spacer"></span>
     <span class="hint">scroll = zoom · drag bg = pan · drag ⠿ = move</span>
+    <span class="usage" id="usagePill" title="Zoe's measured model usage"></span>
     <button id="peopleBtn" title="People — contacts discovered from documents">👥 people</button>
     <button id="monitorsBtn" title="News monitors">📡 monitors</button>
     <button id="resetBtn" title="Reset arrangement">reset layout</button>

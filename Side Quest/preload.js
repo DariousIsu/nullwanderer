@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('sq', {
   openWorkspace: () => ipcRenderer.invoke('workspace:open'),
   // Open Zoe's Canvas — her own window for deliverables + visual aids (distinct from the workbench)
   openCanvas: () => ipcRenderer.invoke('canvas:open'),
+  // Usage pill (canvas top bar): Zoe's metered model-token usage over the window + a live /hr rate
+  usageSummary: () => ipcRenderer.invoke('usage:summary'),
   // Desktop companion (floating VRM presence): hide her, or toggle her on/off
   companionHide: () => ipcRenderer.invoke('companion:hide'),
   companionToggle: () => ipcRenderer.invoke('companion:toggle'),

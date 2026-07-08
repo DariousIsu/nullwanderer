@@ -1346,6 +1346,14 @@ app.on('window-all-closed', async () => {
 ipcMain.handle('editor:open', () => { createEditorWindow(); return { ok: true }; });
 ipcMain.handle('workspace:open', () => { createWorkspaceWindow(); return { ok: true }; });
 ipcMain.handle('canvas:open', () => { createCanvasWindow(); return { ok: true }; });
+// Usage pill (canvas top bar): Zoe's metered model-token usage over the configured window + a live /hr rate.
+ipcMain.handle('usage:summary', () => {
+  try {
+    const uc = config.usageConfig();
+    const s = require('./lib/usage_meter').summary({ windowMs: uc.windowMs, rateMs: uc.rateMs });
+    return { ok: true, ...s, label: uc.label };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
 // Desktop companion: hide (keep the process/state, just tuck her away) + toggle (create/show or hide).
 ipcMain.handle('companion:hide', () => { try { if (companionWindow && !companionWindow.isDestroyed()) companionWindow.hide(); } catch {} return { ok: true }; });
 ipcMain.handle('companion:toggle', () => {

@@ -129,6 +129,7 @@ const smokes = [
   'smoke_tts.js',
   'smoke_tts_service.js',
   'smoke_concept_ground.js',
+  'smoke_usage_meter.js',
   'smoke_avatar_state.js',
   'smoke_vrm_state.js',
   'smoke_excavate.js',

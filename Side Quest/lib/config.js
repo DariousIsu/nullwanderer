@@ -208,6 +208,16 @@ function companionConfig() {
   return { enabled, width, height, corner, alwaysOnTop };
 }
 
+// --- USAGE PILL (canvas top bar) — Zoe's own metered model-token usage. Ollama exposes no usage API/
+// headers, so we surface what WE spend. The WINDOW is set to track alongside the Ollama plan's reset
+// cadence (Pro resets daily → 24h). Configurable so it can match whatever the account page shows.
+function usageConfig() {
+  const windowMs = getInt('ZOE_USAGE_WINDOW_MS', 24 * 60 * 60 * 1000);   // default daily (mirrors Ollama Pro)
+  const rateMs = getInt('ZOE_USAGE_RATE_MS', 60 * 60 * 1000);            // the live "/hr" rate window
+  const label = get('ZOE_USAGE_LABEL', '').trim() || 'today';           // headline label ("today" | "this hour"…)
+  return { windowMs, rateMs, label };
+}
+
 // --- Email ---
 function emailConfig() {
   const user = get('ZOE_EMAIL_USER').trim();
@@ -224,4 +234,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, deepNumCtx, deepNumPredict, sectionNumPredict, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, pipelineOn, pipelineContactBacklogCap, ttsConfig, companionConfig, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, deepNumCtx, deepNumPredict, sectionNumPredict, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, pipelineOn, pipelineContactBacklogCap, ttsConfig, companionConfig, usageConfig, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
