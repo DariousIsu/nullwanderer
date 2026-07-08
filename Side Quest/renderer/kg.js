@@ -20,6 +20,42 @@ const linkEnd = (x) => (x && typeof x === 'object') ? x.id : x;
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function setOverlay(text, cls) { if (!text) { overlay.hidden = true; return; } overlay.hidden = false; overlay.className = 'overlay' + (cls ? ' ' + cls : ''); overlay.textContent = text; }
 
+// Drawn node radius (graph units). Shared by the canvas draw, the label anchor, and the collision
+// force so physics spacing matches what's painted.
+function nodeRadius(n) {
+  if (n.isFocal) return 7;
+  if (n.overviewSource && n.degree !== undefined) return Math.max(4, Math.min(10, 4 + Math.log10((n.degree || 0) + 1) * 1.5));
+  return 4;
+}
+
+// Minimal collision force (d3-force compatible: fn + .initialize) — the bundled force-graph doesn't
+// expose d3.forceCollide, so we roll a light grid-based one to stop node disks from stacking into the
+// tight overlapping balls seen at overview scale. Grid keeps it ~linear on big corpora.
+function makeCollide(radiusFn, strength = 0.8) {
+  let nodes = [];
+  function force() {
+    const n = nodes.length; if (!n) return;
+    const r = new Array(n); let maxR = 1;
+    for (let i = 0; i < n; i++) { r[i] = radiusFn(nodes[i]); if (r[i] > maxR) maxR = r[i]; }
+    const cell = maxR * 2, grid = new Map(), key = (x, y) => x + ',' + y;
+    for (let i = 0; i < n; i++) { const k = key(Math.floor(nodes[i].x / cell), Math.floor(nodes[i].y / cell)); (grid.get(k) || grid.set(k, []).get(k)).push(i); }
+    for (let i = 0; i < n; i++) {
+      const a = nodes[i], cx = Math.floor(a.x / cell), cy = Math.floor(a.y / cell);
+      for (let gx = cx - 1; gx <= cx + 1; gx++) for (let gy = cy - 1; gy <= cy + 1; gy++) {
+        const bucket = grid.get(key(gx, gy)); if (!bucket) continue;
+        for (const j of bucket) {
+          if (j <= i) continue; const b = nodes[j];
+          let dx = (b.x + (b.vx || 0)) - (a.x + (a.vx || 0)), dy = (b.y + (b.vy || 0)) - (a.y + (a.vy || 0));
+          const d2 = dx * dx + dy * dy, min = r[i] + r[j];
+          if (d2 < min * min && d2 > 1e-6) { const d = Math.sqrt(d2), f = (min - d) / d * strength; dx *= f; dy *= f; a.vx -= dx; a.vy -= dy; b.vx += dx; b.vy += dy; }
+        }
+      }
+    }
+  }
+  force.initialize = (n) => { nodes = n; };
+  return force;
+}
+
 function ensureGraph() {
   if (G) return G;
   G = ForceGraph()(graphEl)
@@ -37,9 +73,7 @@ function ensureGraph() {
     .onNodeClick(n => { if (n && !n.isFocal) focus(n.id); })
     .nodePointerAreaPaint((n, color, ctx) => { ctx.beginPath(); ctx.arc(n.x, n.y, n.isFocal ? 10 : 8, 0, 2 * Math.PI, false); ctx.fillStyle = color; ctx.fill(); })
     .nodeCanvasObject((n, ctx, scale) => {
-      let r = 4;
-      if (n.isFocal) r = 7;
-      else if (n.overviewSource && n.degree !== undefined) r = Math.max(4, Math.min(10, 4 + Math.log10((n.degree || 0) + 1) * 1.5));
+      const r = nodeRadius(n);
       ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI, false); ctx.fillStyle = n.color || '#7dd3fc'; ctx.fill();
       if (n.isFocal) { ctx.lineWidth = 2 / scale; ctx.strokeStyle = '#FBBF24'; ctx.stroke(); }
       // COSMETIC (demo): an expanding amber ring on the focal node for ~1.4s after each move — reads as
@@ -53,6 +87,14 @@ function ensureGraph() {
     // first, then by prominence, each skipped if its box would overlap an already-placed label. Kills the
     // pile-up seen at overview scale where every node stamped its text on top of the others.
     .onRenderFramePost(drawLabels);
+  // Force tuning: spread clusters and stop node disks stacking. Stronger bounded charge repels nodes
+  // without yanking distant clusters into one thread (distanceMax caps the pull range); softer, longer
+  // links give the graph room; the custom collide keeps disks off each other.
+  try {
+    const charge = G.d3Force('charge'); if (charge && charge.strength) charge.strength(-150).distanceMax(700);
+    const link = G.d3Force('link'); if (link && link.distance) link.distance(l => 36 + (l.category === 'generic' ? 12 : 0)).strength(0.32);
+    G.d3Force('collide', makeCollide(n => nodeRadius(n) + 3));
+  } catch (e) {}
   const fit = () => { const w = graphEl.clientWidth, h = graphEl.clientHeight; G.width(w).height(h); };
   fit(); new ResizeObserver(fit).observe(graphEl);
   return G;
