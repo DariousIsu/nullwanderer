@@ -26,6 +26,8 @@
  *   task       — a work assignment (start/extend a research deliverable)
  *   lookup     — a live/external fact ("latest X", "look up Y")
  *   answer     — a factual / shared-history / self question answered from memory (the object pull)
+ *   explore    — the brainstorm middle-gear: a topic being DISCUSSED (not commanded) — answer + pull a
+ *                grounded bit in + optionally float a project offer, but create NO run (set in main.js)
  *   converse   — chit-chat, opinion, brainstorm, greeting — the default; pure local voice
  *   clarify    — genuine ambiguity → ask one question (bias-toward-clarifying) [reserved; emitted only
  *                when a caller passes an explicit ambiguous flag; Phase A doesn't force it]
@@ -34,7 +36,10 @@
 
 // Which routes are "conversational/answering" (NOT work-machinery). On these, the deliverable-poll,
 // operator, intake and directed-focus blocks must NOT fire — they're what caused the directive pile-up.
-const CONVERSATIONAL = new Set(['converse', 'answer', 'lookup', 'correction', 'docqa', 'clarify']);
+// `explore` = the brainstorm middle-gear: she ANSWERS + pulls a grounded bit + may FLOAT a project offer,
+// but creates no run (it's conversational; a full run only auto-fires on the `task` route). Set by the
+// intake-gate arbitration in main.js when a topic is being DISCUSSED but not explicitly commanded.
+const CONVERSATIONAL = new Set(['converse', 'answer', 'lookup', 'correction', 'docqa', 'clarify', 'explore']);
 // Which routes may reach the cloud operator / external tools.
 const OPERATOR_OK = new Set(['lookup', 'task', 'operator']);
 

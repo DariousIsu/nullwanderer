@@ -4423,23 +4423,62 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let intakeRoute = null;
   let isAssignment = false;
   let assignmentSeed = null;   // object-memory Slice 2: resolved entity targets + clarify for the run
+  let projectOffer = null;     // brainstorm lane: a project she may FLOAT (discussed, not commanded)
+
+  // BRAINSTORM COMMIT — a bare "yes / do it / go for it" right after she floated a project offer promotes
+  // that seed to a real run (the seed → offer → commit arc). Synthesize the assignment here so the standing-
+  // focus block below fires it, and SKIP re-classifying "yes" (which the intake gate would read as chat).
+  let offerCommitted = false;
+  try {
+    const brain = require('./lib/brainstorm');
+    if (brain.isAffirmation(userMessage) && !socialTurn && !directedStopHandled && !expandHandled && !correctionHandled && !followupFired) {
+      const raw = (() => { try { return db.getMeta('brainstorm.open_offer') || ''; } catch { return ''; } })();
+      const offer = raw ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : null;
+      if (offer && brain.offerFresh(offer.ts, Date.now())) {
+        intakeRoute = { action: (offer.shape === 'enrich' ? 'enrich' : 'discover'), kind: offer.kind || 'topical', shape: offer.shape || null, anchor: null, target: offer.target || '', facet: offer.facet || '', deep: !!offer.deep, priority: null, subset: null, budget: null, clarify: [] };
+        isAssignment = true;
+        turnRoute = { route: 'task', confidence: 0.9, reason: 'brainstorm-offer-accepted' };
+        offerCommitted = true;
+        try { db.setMeta('brainstorm.open_offer', ''); } catch {}
+        console.log(`[brainstorm] offer ACCEPTED → committing run: "${String(offer.target || '').slice(0, 60)}" (kind=${offer.kind})`);
+      }
+    }
+  } catch (e) { console.error('[brainstorm] commit failed:', e.message); }
   try {
     // Consume the CONCURRENT intake classification kicked right after the router. The LLM decision — not the
     // narrow regex — decides whether this is a project. Guarded by the same control/correction flags so a
     // stop/wrap/correct turn is never re-read as a new assignment. When the cloud was unavailable the promise
     // resolves to null and the isDirectedTask regex is the fallback (unchanged behavior on cloud-down).
-    if (intakeClassifyPromise && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled) {
+    if (intakeClassifyPromise && !offerCommitted && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled) {
       const intake = require('./lib/intake');
+      const brain = require('./lib/brainstorm');
       const decision = await intakeClassifyPromise;
       if (decision) intakeRoute = intake.route(decision);
       isAssignment = decision ? !!(intakeRoute && intakeRoute.action !== 'none')
         : (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
-      // ROUTE OVERRIDE — a real assignment the sync router left as converse/answer becomes a 'task' now, so the
-      // run-creation + operator blocks fire and the conversational/status directives suppress (single-dispatch
-      // preserved). This is what removes the narrow regex as the sole gate to the directed-research subsystem.
+      // ARBITRATION (brainstorm middle-gear) — an intake isProject AUTO-FIRES a run ONLY when the turn
+      // EXPLICITLY commands sustained work ("research X", "go deep on that", "spin it up"). A topic merely
+      // being DISCUSSED (a question, musing, "what about X") is NOT a command: route to `explore`, remember
+      // the project as an OFFER she can float, and create NO run. This is the fix for the derail (focus
+      // #3385) where a confident `answer` turn got flipped to `task` and an org-walk fired unasked. A run
+      // still fires on an explicit imperative OR the sync router's regex `task` route (already an imperative).
       if (isAssignment && turnRoute.route !== 'task') {
-        turnRoute = { route: 'task', confidence: 0.85, reason: 'intake-llm' };
-        console.log('[intake] LLM classified an assignment → route overridden to task');
+        const explicit = brain.isImperativeAssignment(userMessage) || (decision && decision.explicit === true);
+        if (explicit) {
+          turnRoute = { route: 'task', confidence: 0.85, reason: 'intake-llm-explicit' };
+          console.log('[intake] explicit assignment → route=task');
+        } else {
+          projectOffer = {
+            kind: brain.reconcileKind(intakeRoute && intakeRoute.kind, userMessage),
+            target: (intakeRoute && intakeRoute.target) || '',
+            facet: (intakeRoute && intakeRoute.facet) || '',
+            shape: (intakeRoute && intakeRoute.shape) || null,
+            deep: !!(intakeRoute && intakeRoute.deep),
+          };
+          turnRoute = { route: 'explore', confidence: 0.7, reason: 'intake-topic-not-commanded' };
+          isAssignment = false;   // a discussed topic creates NO run — she answers + may float an offer
+          console.log(`[intake] topic discussed, not commanded → route=explore (offer "${projectOffer.target || '—'}", kind=${projectOffer.kind})`);
+        }
       }
       if (isAssignment) console.log(`[intake] ASSIGNMENT → ${intakeRoute ? intakeRoute.action : 'discover(regex-fallback)'}${intakeRoute && intakeRoute.deep ? ' deep' : ''}${intakeRoute && intakeRoute.priority ? ' ' + intakeRoute.priority : ''}`);
     }
@@ -4739,7 +4778,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             if (_shape === 'comparables' && _anchor) { const _an = _anchor.toLowerCase(); seedTargets = seedTargets.filter(t => String(t || '').trim().toLowerCase() !== _an); }
             // RESEARCH KIND (entity|topical|forecast) — persist it so the plan is shaped right AND the driver
             // can branch (entity = the org/contact walk; topical = a subject brief; forecast = a forecast).
-            const _kind = (intakeRoute && intakeRoute.kind) || 'entity';
+            // BACKSTOP: reconcile the cloud kind with a DETERMINISTIC signal so a topical/forecast request
+            // never silently collapses to an entity org-walk when the fast model was lazy or the cloud was
+            // down (the regex-fallback path has no kind at all → this is what sets it).
+            const _kind = (() => { try { return require('./lib/brainstorm').reconcileKind(intakeRoute && intakeRoute.kind, goal || userMessage); } catch { return (intakeRoute && intakeRoute.kind) || 'entity'; } })();
             try { db.setMeta(`focus.${r.focus.id}.kind`, _kind); } catch {}
             let plan = null;
             try { plan = await generateResearchPlan(r.focus, { goal, targets: seedTargets, facet: (intakeRoute && intakeRoute.facet) || '', deep: !!(intakeRoute && intakeRoute.deep), kind: _kind }); } catch {}
@@ -4797,6 +4839,47 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
     }
   } catch (e) { console.error('[main] directed-focus setup failed:', e.message); }
+
+  // BRAINSTORM LANE (active collaborator) — the middle gear. On a topical/`explore` turn, pull ONE grounded
+  // bit into the reply as fuel for the riff, and (on `explore`) float a low-key project OFFER she can commit
+  // later. NO run, NO focus, NO canvas — just substance so a good groove has something real to build on,
+  // instead of the old binary (bare chat ↔ a 3-hour org-walk firing unasked). Fail-soft + bounded.
+  try {
+    if (db.getMeta('brainstorm.disabled') !== '1' && !offerCommitted) {
+      const brain = require('./lib/brainstorm');
+      const gateOk = !followupFired && !directedStopHandled && !expandHandled && !correctionHandled && !docQaHandled && !statusHandled && !socialTurn && !isAssignment;
+      if (gateOk && brain.shouldLightPull({ route: turnRoute.route, socialTurn, personalFactQ, devQ, stateQ, activityQ, isStatusReq: _isStatusReqR, msgLen: userMessage.trim().length, message: userMessage })) {
+        const topic = (projectOffer && projectOffer.target) || brain.pullTopic(userMessage);
+        if (topic && topic.length >= 3) {
+          const fuel = await (async () => {
+            try {
+              const r = await Promise.race([webSearch(topic), new Promise((res) => setTimeout(() => res(null), 6000))]);
+              const hit = r && Array.isArray(r.results) ? r.results.find(x => x && (x.snippet || x.title)) : null;
+              if (!hit) return null;
+              const text = String(hit.snippet || hit.title || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+              let src = ''; try { src = hit.source || (hit.url ? new URL(hit.url).hostname.replace(/^www\./, '') : ''); } catch { src = hit.source || ''; }
+              return text ? { text, source: src } : null;
+            } catch { return null; }
+          })();
+          if (fuel && fuel.text) {
+            const srcTag = fuel.source ? ` [${fuel.source}]` : '';
+            composedUserMessage += `\n\n[BRAINSTORM FUEL — you just glanced this up on "${topic}"${srcTag}: ${fuel.text} Bring ONE relevant thread of it into the conversation naturally, as something you're adding to the riff — not a report, not a bulleted dump. If it doesn't actually fit what he said, don't force it.]`;
+            console.log(`[brainstorm] light-pull "${String(topic).slice(0, 60)}"${srcTag} → +fact`);
+          } else {
+            console.log(`[brainstorm] light-pull "${String(topic).slice(0, 60)}" → (no usable fact)`);
+          }
+        }
+      }
+      // Float the OFFER (explore only) + remember it so a bare "yes" next turn commits it (seed→offer→commit).
+      if (projectOffer && turnRoute.route === 'explore' && !followupFired && !docQaHandled) {
+        try { db.setMeta('brainstorm.open_offer', JSON.stringify({ ...projectOffer, ts: Date.now() })); } catch {}
+        const label = projectOffer.target || brain.pullTopic(userMessage) || 'this';
+        const kindPhrase = projectOffer.kind === 'forecast' ? 'run an actual forecast on it' : projectOffer.kind === 'entity' ? 'pull together the orgs/contacts on it' : 'do a proper research brief on it';
+        composedUserMessage += `\n\n[There's a real thread here worth a proper dig on "${String(label).slice(0, 120)}". You have NOT started anything and must not imply you have. After you answer him, add ONE short, low-key line offering to ${kindPhrase} if he wants — his call, genuinely optional, no pressure.]`;
+        console.log(`[brainstorm] floated offer "${String(label).slice(0, 60)}" (kind=${projectOffer.kind})`);
+      }
+    }
+  } catch (e) { console.error('[brainstorm] lane failed:', e.message); }
 
   const messages = buildChatPrompt({
     userName,
