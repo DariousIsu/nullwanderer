@@ -96,11 +96,27 @@
 
   function claimRows(findings) {
     if (!findings || !findings.length) return `<tr><td class="num">—</td><td colspan="3" class="small">No verification units were extracted from this document.</td></tr>`;
-    return findings.map((f, i) => `
+    return findings.map((f, i) => {
+      const cav = f.caveat && !String(f.ev || '').includes(f.caveat) ? ` <em>${esc(f.caveat)}</em>` : '';
+      return `
       <tr><td class="num">${i + 1}</td>
         <td>${esc(f.label)}</td>
         <td><span class="pill ${PILL[f.verdict] || 'info'}">${esc(f.vlabel || f.status)}</span></td>
-        <td>${esc(f.ev || '')}${f.locator ? ` <span class="src">${esc(f.locator)}</span>` : ''}</td></tr>`).join('');
+        <td>${esc(f.ev || '')}${cav}${f.locator ? ` <span class="src">${esc(f.locator)}</span>` : ''}</td></tr>`;
+    }).join('');
+  }
+
+  // Deduped "Sources consulted" list across all findings (the deep verifier records what it actually read).
+  function sourcesConsultedSection(findings, num) {
+    const seen = new Set(), list = [];
+    for (const f of (findings || [])) for (const s of (f.sources_consulted || [])) {
+      if (!s || !s.url) continue;
+      const k = String(s.url).replace(/#.*$/, '').replace(/\/+$/, '').toLowerCase();
+      if (seen.has(k)) continue; seen.add(k); list.push(s);
+    }
+    if (!list.length) return '';
+    const rows = list.map(s => `<li>${esc(s.title || s.url)} — <span class="src">${esc(s.url)}</span></li>`).join('');
+    return `<h2><span class="num">${num}</span>Sources consulted</h2><ol class="fixes">${rows}</ol>`;
   }
 
   function fixItems(suggestions) {
@@ -177,6 +193,8 @@
   <h2><span class="num">2</span>Recommended corrections</h2>
   ${fixItems(a.suggestions)}
 
+  ${sourcesConsultedSection(findings, 3)}
+
   <div class="signoff">
     <div class="auditor-note"><p><strong>Auditor's note.</strong> This certification was produced by the Editor Studio's deterministic verification harness: each claim's source was resolved and matched (lexical + local embeddings) with model judgment applied only to the residual gray-band claims. Verdicts and counts above are derived programmatically from that pass. This certification does not replace legal review or libel-risk assessment.</p></div>
     <div class="seal"><div class="lbl">Certification Seal</div>
@@ -247,6 +265,8 @@
 
   <h2><span class="num">2</span>Recommended corrections</h2>
   ${fixItems(a.suggestions)}
+
+  ${sourcesConsultedSection(findings, 3)}
 
   <div class="signoff">
     <div class="auditor-note"><p><strong>About this report.</strong> These are the findings from the Editor Studio's verification pass, provided to the author for revision. Each claim's source was resolved and matched (lexical + local embeddings) with model judgment applied only to residual gray-band claims. <strong>This is a findings report, not a certification</strong> — a formal certificate is issued separately once outstanding issues are resolved.</p></div>

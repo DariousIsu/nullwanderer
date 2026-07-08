@@ -85,6 +85,13 @@ ok('report carries NO CFC cert id', !/CFC-\d{4}-\d{2}-\d{2}/.test(report));
 ok('report carries NO certification seal', !/Certification Seal/.test(report));
 ok('report titled "Verification Findings"', /Verification Findings/.test(report));
 
+// deep-verify output: caveat + sources-consulted render in the report
+const reportDeep = CT.renderReport({ doc: registry.getDocument(docId), findings: [
+  { id: 'f1', label: 'China emitted 13B tons in 2024', verdict: 'warn', vlabel: 'Verified · caveat', status: 'VC', ev: 'source confirms ~13.1B', caveat: 'the "1990s" framing matches 1999-2000, not the whole decade', sources_consulted: [{ url: 'https://worldometers.info/china', title: 'Worldometer/EDGAR' }, { url: 'https://scienceinsights.example/a', title: 'ScienceInsights' }] },
+], suggestions: [], summary: { total: 1, byVerdict: { warn: 1 } }, generatedAt: clock });
+ok('report renders the deep-verify caveat', /1990s.*framing/.test(reportDeep));
+ok('report renders a "Sources consulted" section', /Sources consulted/.test(reportDeep) && /worldometers\.info\/china/.test(reportDeep) && /scienceinsights/.test(reportDeep));
+
 registry.close();
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
