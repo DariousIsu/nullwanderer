@@ -4707,8 +4707,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // COMPARABLES: the anchor is a REFERENCE, not a subject — drop it from the seed targets so the run
             // DISCOVERS things like it instead of starting by profiling it (the seed-level half of the bug).
             if (_shape === 'comparables' && _anchor) { const _an = _anchor.toLowerCase(); seedTargets = seedTargets.filter(t => String(t || '').trim().toLowerCase() !== _an); }
+            // RESEARCH KIND (entity|topical|forecast) — persist it so the plan is shaped right AND the driver
+            // can branch (entity = the org/contact walk; topical = a subject brief; forecast = a forecast).
+            const _kind = (intakeRoute && intakeRoute.kind) || 'entity';
+            try { db.setMeta(`focus.${r.focus.id}.kind`, _kind); } catch {}
             let plan = null;
-            try { plan = await generateResearchPlan(r.focus, { goal, targets: seedTargets, facet: (intakeRoute && intakeRoute.facet) || '', deep: !!(intakeRoute && intakeRoute.deep) }); } catch {}
+            try { plan = await generateResearchPlan(r.focus, { goal, targets: seedTargets, facet: (intakeRoute && intakeRoute.facet) || '', deep: !!(intakeRoute && intakeRoute.deep), kind: _kind }); } catch {}
             // CONTRACT → CANVAS (Slice 1): START the document NOW with the plan (objective/approach/estimate)
             // + a hierarchical facet TODO (Contacts nests the Puller sub-tree), via stable block ids so later
             // passes update them in place. So the doc appears the instant the run starts — not when the first
@@ -6619,12 +6623,12 @@ async function condenseComplete(messages, { numPredict = 2500 } = {}) {
 // editable by the correction handler) and rendered as page 1 at finalize. Fail-safe: cloud down → a
 // fully deterministic fallback plan (a plan ALWAYS exists). Run on the FAST editor model (like intake),
 // so a reasoning model can't burn the budget on hidden thinking and return empty.
-async function generateResearchPlan(focus, { goal = '', targets = [], facet = '', deep = false } = {}) {
+async function generateResearchPlan(focus, { goal = '', targets = [], facet = '', deep = false, kind = 'entity' } = {}) {
   const rp = require('./lib/research_plan');
   const est = require('./lib/estimate');
   let estimate = '';
   try { estimate = est.estimateRun({ orgCount: (targets || []).length, deep }).human; if (estimate === '(nothing to do)') estimate = ''; } catch {}
-  const ctx = { goal, targets, facet, deep, estimate };
+  const ctx = { goal, targets, facet, deep, estimate, kind };
   let plan = null;
   try {
     // The PLAN shapes the whole project — author it on the deep reasoner with headroom (cloud-leverage
@@ -6633,7 +6637,7 @@ async function generateResearchPlan(focus, { goal = '', targets = [], facet = ''
     const cloud = require('./lib/cloud_logic');
     const raw = await cloud.ask({
       task: 'research_plan', v: 1, model: planModel, numPredict: config.deepNumPredict(),
-      input: rp.planInput(ctx), want: rp.planWant(), validate: rp.planValidator
+      input: rp.planInput(ctx), want: rp.planWant(ctx.kind), validate: rp.planValidator
     });
     if (raw) plan = rp.normalizePlan(raw, ctx);
   } catch (e) { console.error('[plan] cloud generate failed:', e.message); }
