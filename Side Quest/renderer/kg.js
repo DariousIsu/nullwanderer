@@ -73,8 +73,12 @@ function ensureGraph() {
     .onNodeClick(n => { if (n && !n.isFocal) focus(n.id); })
     .nodePointerAreaPaint((n, color, ctx) => { ctx.beginPath(); ctx.arc(n.x, n.y, n.isFocal ? 10 : 8, 0, 2 * Math.PI, false); ctx.fillStyle = color; ctx.fill(); })
     .nodeCanvasObject((n, ctx, scale) => {
-      const r = nodeRadius(n);
-      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI, false); ctx.fillStyle = n.color || '#7dd3fc'; ctx.fill();
+      const r = nodeRadius(n), col = n.color || '#7dd3fc';
+      // hub bloom: a faint colored halo behind higher-degree nodes → hierarchy readable at a glance
+      if (r > 5.5) { ctx.beginPath(); ctx.arc(n.x, n.y, r + 3.5, 0, 2 * Math.PI, false); ctx.fillStyle = col + '22'; ctx.fill(); }
+      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI, false); ctx.fillStyle = col; ctx.fill();
+      // thin dark rim separates disks from edges + neighbours on the dark canvas
+      ctx.lineWidth = 1 / scale; ctx.strokeStyle = 'rgba(10,11,14,0.85)'; ctx.stroke();
       if (n.isFocal) { ctx.lineWidth = 2 / scale; ctx.strokeStyle = '#FBBF24'; ctx.stroke(); }
       // COSMETIC (demo): an expanding amber ring on the focal node for ~1.4s after each move — reads as
       // "new activity landed here". Time-based off pulseAt; the edge particles keep frames coming so it draws.
