@@ -47,15 +47,92 @@ function ensureGraph() {
       if (n.isFocal && pulseAt) { const dt = performance.now() - pulseAt; if (dt >= 0 && dt < 1400) { const p = dt / 1400; ctx.beginPath(); ctx.arc(n.x, n.y, r + 3 + p * 22, 0, 2 * Math.PI, false); ctx.strokeStyle = `rgba(251,191,36,${(1 - p) * 0.7})`; ctx.lineWidth = 2 / scale; ctx.stroke(); } }
       if (n.overviewSource === 'recent' || n.overviewSource === 'both') { ctx.beginPath(); ctx.arc(n.x, n.y, r + 2, 0, 2 * Math.PI, false); ctx.setLineDash([2, 2]); ctx.lineWidth = 1.2 / scale; ctx.strokeStyle = '#FBBF24'; ctx.stroke(); ctx.setLineDash([]); }
       if (hovered && hovered.id === n.id) { ctx.beginPath(); ctx.arc(n.x, n.y, r * 1.8, 0, 2 * Math.PI, false); ctx.strokeStyle = 'rgba(125,211,252,0.85)'; ctx.lineWidth = 1.5 / scale; ctx.stroke(); }
-      if (scale > 0.6 || n.isFocal) {
-        const fs = Math.max(9, 11 / Math.sqrt(scale));
-        ctx.font = `${fs}px sans-serif`; ctx.fillStyle = n.isFocal ? '#FBBF24' : '#CBD5E1'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-        ctx.fillText(n.id.length > 32 ? n.id.slice(0, 32) + '…' : n.id, n.x, n.y + r + 2);
-      }
-    });
+      n.__r = r;   // stash for the label pass (onRenderFramePost draws labels so it can rank + de-collide)
+    })
+    // Labels are drawn in ONE post pass (not per-node) so we control z-order: focal/hovered/neighbors
+    // first, then by prominence, each skipped if its box would overlap an already-placed label. Kills the
+    // pile-up seen at overview scale where every node stamped its text on top of the others.
+    .onRenderFramePost(drawLabels);
   const fit = () => { const w = graphEl.clientWidth, h = graphEl.clientHeight; G.width(w).height(h); };
   fit(); new ResizeObserver(fit).observe(graphEl);
   return G;
+}
+
+// --- label pass -------------------------------------------------------------
+// Adjacency + degree, rebuilt only when the links array identity changes (cheap; graphs here are
+// bounded). Degree drives label priority in ego mode where nodes carry no precomputed `degree`.
+let _adjLinks = null, _adj = new Map(), _deg = new Map();
+function ensureAdjacency(links) {
+  if (links === _adjLinks) return;
+  _adjLinks = links; _adj = new Map(); _deg = new Map();
+  for (const l of links) {
+    const a = linkEnd(l.source), b = linkEnd(l.target);
+    if (a == null || b == null) continue;
+    if (!_adj.has(a)) _adj.set(a, new Set()); if (!_adj.has(b)) _adj.set(b, new Set());
+    _adj.get(a).add(b); _adj.get(b).add(a);
+    _deg.set(a, (_deg.get(a) || 0) + 1); _deg.set(b, (_deg.get(b) || 0) + 1);
+  }
+}
+function roundRectPath(ctx, x, y, w, h, rad) {
+  const r = Math.min(rad, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+
+// Priority order for label placement (higher = placed first, wins collisions):
+// focal ≫ hovered ≫ hovered's neighbors ≫ node degree. Neighbors keep a hovered node's context legible.
+function labelPriority(n, hovId, neigh) {
+  if (n.isFocal) return 1e9;
+  if (hovId && n.id === hovId) return 1e8;
+  if (neigh && neigh.has(n.id)) return 1e7;
+  return (n.degree != null ? n.degree : (_deg.get(n.id) || 0));
+}
+
+function drawLabels(ctx, scale) {
+  if (!G) return;
+  const data = G.graphData(); const nodes = data.nodes;
+  if (!nodes || !nodes.length) return;
+  ensureAdjacency(data.links || []);
+  const hovId = hovered ? hovered.id : null;
+  const neigh = hovId ? _adj.get(hovId) : null;
+
+  const fs = Math.max(9, 11 / Math.sqrt(scale));   // font size in graph units (constant-ish on screen)
+  const padX = 4 / scale, padY = 2.5 / scale, gap = 2 / scale;
+  ctx.font = `${fs}px -apple-system, "Segoe UI", sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+
+  // Below this on-screen zoom, only the strongest labels (focal/hovered/neighbors + top hubs) show,
+  // so a zoomed-out overview stays a clean constellation instead of a wall of text.
+  const zoomGate = scale < 0.55 ? 3 : (scale < 1.1 ? 1 : 0);
+
+  const ranked = nodes
+    .filter(n => n.x != null && n.y != null)
+    .map(n => ({ n, p: labelPriority(n, hovId, neigh) }))
+    .sort((a, b) => b.p - a.p);
+
+  const placed = [];   // graph-space boxes {x0,y0,x1,y1}
+  const overlaps = (b) => placed.some(o => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
+  let count = 0;
+  for (const { n, p } of ranked) {
+    if (count > 70) break;                          // no point drawing more than a screenful
+    const forced = p >= 1e7;                         // focal / hovered / neighbor — always attempt
+    if (!forced && p < zoomGate) continue;           // prominence gate at low zoom
+    const label = n.id.length > 34 ? n.id.slice(0, 34) + '…' : n.id;
+    const w = ctx.measureText(label).width;
+    const r = n.__r || 4;
+    const bx0 = n.x - w / 2 - padX, bx1 = n.x + w / 2 + padX;
+    const by0 = n.y + r + gap, by1 = by0 + fs + padY * 2;
+    const box = { x0: bx0, y0: by0, x1: bx1, y1: by1 };
+    if (!forced && overlaps(box)) continue;          // skip low-priority labels that would collide
+    placed.push(box); count++;
+    const focal = n.isFocal, hov = hovId && n.id === hovId;
+    // halo plate for legibility over edges + neighbors; brighter for focal/hovered
+    roundRectPath(ctx, bx0, by0, bx1 - bx0, by1 - by0, 3 / scale);
+    ctx.fillStyle = focal || hov ? 'rgba(12,13,17,0.9)' : 'rgba(10,11,14,0.72)';
+    ctx.fill();
+    ctx.fillStyle = focal ? '#FBBF24' : hov ? '#E8E8EB' : (neigh && neigh.has(n.id)) ? '#CBD5E1' : '#9AA3B2';
+    ctx.fillText(label, n.x, by0 + padY);
+  }
 }
 
 // client-side type filter → fresh graphData (clone links so force-graph's source/target mutation
