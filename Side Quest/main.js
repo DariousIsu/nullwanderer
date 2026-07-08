@@ -1790,7 +1790,7 @@ ipcMain.handle('editor:detach-source', (_e, { docId, uid } = {}) => {
 // extract→resolve→match→preflight→classify→contract. Resolution + match are ~0-token; the model
 // is reached only at the caged classify leaf (local 24B), behind the preflight homework-check gate.
 // callTool reaches Echo's web tools (web_fetch/web_search/wayback/…); embed/cosine = local bge-small.
-ipcMain.handle('editor:run-checks', async (_e, docId, opts = {}) => {
+ipcMain.handle('editor:run-checks', async (_e, docId) => {
   try {
     const doc = editorRegistry.getDocument(docId);
     if (!doc) return { ok: false, error: 'no such document' };
@@ -1814,9 +1814,13 @@ ipcMain.handle('editor:run-checks', async (_e, docId, opts = {}) => {
     // sources, cross-checks an independent source, and reasons about precision. Default ON whenever the
     // cloud is reachable (env DEEP_VERIFY_MODEL overrides the tag); `mode:'quick'` opts back to the fast
     // local classify leaf. Without cloud it degrades to classify automatically.
+    // Deep verify is the ONLY verification path — there is no "quick" mode; the operator always wants
+    // frontier quality. On whenever the cloud is reachable; without cloud it auto-degrades to the local
+    // classify leaf (a can't-reach-cloud fallback, not an operator choice).
     const deepModel = process.env.DEEP_VERIFY_MODEL || 'gpt-oss:120b-cloud';
-    const useDeep = useCloud && !(opts && opts.mode === 'quick');
-    if (useDeep) console.log(`[editor] deep verify ON — ${deepModel}`);
+    const useDeep = useCloud;
+    if (useDeep) console.log(`[editor] deep verify — ${deepModel}`);
+    else console.warn('[editor] deep verify unavailable (no cloud) — degrading to local classify');
 
     const res = await editorChecks.runHarnessChecks({
       callTool, workingCopy, complete, docId,

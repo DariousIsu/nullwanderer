@@ -77,9 +77,10 @@ The findings contract + templates gain three fields the deep pass produces:
 - `studio/checks_contract.js` — carry `caveat` / `sources_consulted` through to findings.
 - `studio/cert_template.js` (`renderReport` + `renderCertificate`) — render caveats, the sources-consulted
   section, and the omission note.
-- `main.js` `editor:run-checks` — a **mode** flag: `deep` (agentic, default for real audits) vs `quick`
-  (today's local harness). Deep needs the cloud key (already resolved there).
-- `renderer/editor.{html,js}` — a "Deep verify" affordance + progress (the run is longer; stream stage ticks).
+- `main.js` `editor:run-checks` — deep is the ONLY path (no "quick" mode; the operator always wants frontier
+  quality). On whenever the cloud is reachable; auto-degrades to the local classify leaf only when the cloud is
+  unreachable (a fallback, not a choice). Deep needs the cloud key (already resolved there).
+- `renderer/editor.{html,js}` — progress streaming for the longer run (no mode toggle — nothing to choose).
 
 ## 6. Decision — local orchestration, not the Echo Rainey agents
 Echo has `delegate_to_rainey_fact_checker` + `delegate_to_rainey_citation_verifier` (a two-pass chain). We do
@@ -97,7 +98,7 @@ Rainey delegate path stays available as a future offload, not the primary engine
 - **S1 — harness routing.** `verify_harness` routes residue to deepVerify; `editor_checks` builds the
   injections + cloud creds; quick/deep mode in `editor:run-checks`.
 - **S2 — richer output.** contract + cert_template caveats / sources-consulted / omission note.
-- **S3 — studio UX.** Deep-verify mode toggle + stage-progress streaming (runs are longer).
+- **S3 — studio UX.** Stage-progress streaming (the run is longer). No mode toggle — deep is the only path.
 - **S4 — calibrate against the benchmark.** Run the ELI op-ed end-to-end; tune the rubric + routing until the
   studio's findings match the reference certification (the 13-claim matrix, the two caveats, the fairness note).
   Ship the ELI paper as a regression fixture.
