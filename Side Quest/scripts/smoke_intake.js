@@ -30,6 +30,13 @@ ok(intake.route({ isProject: true, shape: 'enrich', mode: 'discover' }).action =
 ok(intake.route({ isProject: true, shape: 'bogus' }).shape === null, 'invalid shape dropped → null (main falls back to the regex)');
 ok(intake.route({ isProject: true, mode: 'discover' }).shape === null, 'no shape field → null (cloud-down fallback path)');
 
+// --- RESEARCH KIND (entity | topical | forecast) — the top-level type that picks the subsystem ---
+ok(intake.route({ isProject: true, kind: 'topical', target: 'the Strait of Hormuz situation' }).kind === 'topical', 'kind=topical carried (a brief, not a contact run)');
+ok(intake.route({ isProject: true, kind: 'forecast', target: 'who wins the House' }).kind === 'forecast', 'kind=forecast carried (run a forecast)');
+ok(intake.route({ isProject: true, kind: 'entity', shape: 'discover', target: 'AI datacenter cos' }).kind === 'entity', 'kind=entity carried (the Puller path)');
+ok(intake.route({ isProject: true, shape: 'profile', target: 'X' }).kind === 'entity', 'no kind field → defaults to entity (prior behavior / cloud-down)');
+ok(intake.route({ isProject: true, kind: 'bogus', target: 'X' }).kind === 'entity', 'invalid kind → entity (safe default)');
+
 // --- subsetTopN ---
 ok(intake.subsetTopN('the 5 most complete') === 5, '"the 5 most complete" → 5');
 ok(intake.subsetTopN('top three') === 3, '"top three" → 3');
