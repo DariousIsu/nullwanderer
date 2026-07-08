@@ -6896,6 +6896,11 @@ async function runDirectedResearchPass(focus) {
   // so the two modes never entangle.
   const mode = (() => { try { return (db.getMeta(`focus.${focus.id}.mode`) || 'discover').trim(); } catch { return 'discover'; } })();
   if (mode === 'enrich') return runEnrichResearchPass(focus);
+  // KIND GATE (research A3b): a topical brief or a forecast is NOT an org-and-contacts walk — research the
+  // SUBJECT across its aspects. (forecast rides this same subject-research path for now; Part B adds the
+  // actual forecast engine.) entity kind falls through to the discovery/deepen org walk below, unchanged.
+  const kind = (() => { try { return (db.getMeta(`focus.${focus.id}.kind`) || 'entity').trim(); } catch { return 'entity'; } })();
+  if (kind === 'topical' || kind === 'forecast') return runTopicalResearchPass(focus);
 
   const focusLib = require('./lib/focus');
   const blackboard = require('./lib/blackboard');
@@ -7238,6 +7243,74 @@ async function runEnrichResearchPass(focus) {
     ? focusLib.recordOutcome(focus, { control: { type: 'done', note } })
     : focusLib.recordOutcome(focus, { progressed });
   console.log(`[enrich] #${focus.id} → ${done ? 'ALL-ENRICHED' : note} → ${outcome.action}`);
+  return outcome;
+}
+
+// TOPICAL / FORECAST pass (research A3b) — research a SUBJECT across the plan's aspects into a briefing,
+// one aspect per pass, NO org-walk and NO contact hunting. Mirrors runEnrichResearchPass's shape: pick the
+// next uncovered aspect → ONE grounded operator pass (buildTopicalPrompt) → organize into a clean section →
+// append to the file + Canvas → mark it covered → done when every aspect is covered. Fail-soft throughout.
+async function runTopicalResearchPass(focus) {
+  const focusLib = require('./lib/focus');
+  const blackboard = require('./lib/blackboard');
+  const rs = require('./lib/research');
+  const goal = String(focus.content || '');
+  const kind = (() => { try { return (db.getMeta(`focus.${focus.id}.kind`) || 'topical').trim(); } catch { return 'topical'; } })();
+  const fileKey = `focus.${focus.id}.file`;
+  let file = db.getMeta(fileKey); if (!file) { file = `notes/directed-${focus.id}.md`; try { db.setMeta(fileKey, file); } catch {} }
+  try { db.setMeta('research.last_focus_id', String(focus.id)); } catch {}
+  let clar = []; try { clar = JSON.parse(db.getMeta(`focus.${focus.id}.clarifications`) || '[]'); } catch {}
+  const guidance = rs.buildGuidanceBlock(clar);
+  // The aspects to cover = the plan's facets (kind-shaped in A2 — subject aspects, not org/contact facets).
+  let planFacets = [];
+  try { const pl = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || 'null'); planFacets = (pl && Array.isArray(pl.facets)) ? pl.facets : []; } catch {}
+  if (!planFacets.length) planFacets = ['Current state & key developments', 'Drivers & causes', 'Implications & what to watch', 'Sources & evidence'];
+  let covered = []; try { covered = JSON.parse(db.getMeta(`focus.${focus.id}.topical_covered`) || '[]'); } catch {}
+
+  let progressed = false, done = false, note = '', sig = '';
+  const nextFacet = planFacets.find(f => !covered.some(c => String(c).toLowerCase() === String(f).toLowerCase()));
+  if (!nextFacet) {
+    done = true; note = `briefing complete — ${covered.length} aspect(s) covered`;
+  } else {
+    let ans = '';
+    try {
+      const r = await runCloudOperator({ userMessage: rs.buildTopicalPrompt({ goal, facet: nextFacet, covered, guidance }), context: '', task: true, autonomous: true });
+      ans = (r && r.answer) ? String(r.answer).trim() : '';
+    } catch (e) { console.error('[topical] pass failed:', e.message); }
+    const p = rs.parsePass(ans);
+    const body = (p.body || ans || '').trim();
+    // Organize this aspect into a clean, sourced section (fail-safe to the raw body under an aspect heading).
+    let section = '';
+    try {
+      if (body && !/^COVERED$/i.test(body)) {
+        section = await condenseComplete(`Rewrite the following research notes into 1-3 clean, sourced paragraphs under a bold heading "${nextFacet}". Keep every fact and its source; drop any tool/JSON/control noise; never add anything not present in the notes.\n\n${body.slice(0, 6000)}`, { numPredict: config.sectionNumPredict() });
+      }
+    } catch {}
+    if (!section || !section.trim()) section = `## ${nextFacet}\n${body.slice(0, 1200) || '_not found this pass_'}`;
+    section = section.trim();
+    const header = covered.length === 0 ? `# ${kind === 'forecast' ? 'Forecast' : 'Briefing'}: ${goal}\n\n---\n\n` : '';
+    try { await filesLib.dispatch({ tag: 'file-append', attrs: { path: file }, body: `${header}${section}\n\n` }); }
+    catch (e) { console.error('[topical] append failed:', e.message); }
+    // Mirror the section onto the Canvas as a live-growing block, and check the aspect off the TODO.
+    try { const blk = require('./studio/canvas_emit').orgSectionBlock(section); await canvasEmit({ focusId: focus.id, title: goal, tabMode: 'RESEARCH', blockType: blk.blockType, data: blk.data }); } catch {}
+    covered.push(nextFacet); try { db.setMeta(`focus.${focus.id}.topical_covered`, JSON.stringify(covered.slice(-40))); } catch {}
+    try { const ce = require('./studio/canvas_emit'); await canvasUpsertBlock({ focusId: focus.id, blockId: ce.todoBlockId(focus.id), title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: ce.facetTodoMarkdown({ facets: planFacets }, covered) } }); } catch {}
+    progressed = !!(section && section.length > 40);
+    note = `${kind === 'forecast' ? 'forecast' : 'brief'}: covered "${nextFacet}" (${covered.length}/${planFacets.length})`;
+    sig = `topical:${String(nextFacet).toLowerCase().slice(0, 40)}`;
+  }
+
+  if (note) {
+    try {
+      const rr = db.insertMonologue({ content: note, model: 'operator', type: 'reading' });
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: rr.id, ts: rr.ts, content: `(${kind === 'forecast' ? 'forecasting' : 'briefing'}: ${String(focus.content).slice(0, 30)}) ${note.slice(0, 80)}`, type: 'reading' });
+    } catch {}
+    try { blackboard.append({ source: 'monologue', kind: 'reading', focusId: focus.id, content: note, signature: sig }); } catch {}
+  }
+  const outcome = done
+    ? focusLib.recordOutcome(focus, { control: { type: 'done', note } })
+    : focusLib.recordOutcome(focus, { progressed });
+  console.log(`[topical] #${focus.id} (${kind}) → ${done ? 'COMPLETE' : note} → ${outcome.action}`);
   return outcome;
 }
 

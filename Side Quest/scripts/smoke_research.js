@@ -61,6 +61,14 @@ ok(/CURRENT ORGANIZATION: R Street Institute/.test(dp) && /overview/.test(dp), '
 ok(/staff|leadership/i.test(dp) && /contact|email|phone/i.test(dp) && /SATURATED/.test(dp), 'deepen prompt prioritizes staff+contacts and offers SATURATED');
 const op = r.buildOrganizeTargetPrompt({ target: 'Cato', raw: 'notes…' });
 ok(op.length === 2 && /never add|Ground ONLY/i.test(op[0].content), 'organize prompt is grounded (no invention)');
+
+// --- TOPICAL prompt (research kind=topical/forecast): a SUBJECT brief, NOT an org/contact walk ---
+const tp = r.buildTopicalPrompt({ goal: 'the Strait of Hormuz situation', facet: 'Drivers & causes', covered: ['Current state'] });
+ok(/SUBJECT/i.test(tp) && /Strait of Hormuz/.test(tp), 'topical prompt frames the SUBJECT');
+ok(/Drivers & causes/.test(tp) && /ASPECT:/.test(tp), 'topical prompt targets ONE aspect + asks for ASPECT');
+ok(/NOT profiling organizations/i.test(tp) && /NOT gathering.*contact|do NOT.*emails\/phones/i.test(tp), 'topical prompt FORBIDS org-profiling + contact hunting (the misroute fix)');
+ok(/do NOT repeat/i.test(tp) && /Current state/.test(tp), 'topical prompt lists already-covered aspects (anti-repeat)');
+ok(/never invent|Ground EVERY claim/i.test(tp), 'topical prompt is grounded (no invention)');
 ok(/## Cato/.test(op[0].content) && /Key people|Contact/i.test(op[0].content), 'organize prompt enforces the per-org schema');
 
 // --- MID-RUN CLARIFICATION: detect his refinement, fold it into every pass ---

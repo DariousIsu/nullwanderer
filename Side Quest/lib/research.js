@@ -105,6 +105,17 @@ function buildGuidanceBlock(clarifications = []) {
 
 // --- the three prompts -------------------------------------------------------
 
+// TOPICAL pass (research kind='topical'/'forecast'): research ONE aspect of a SUBJECT for a briefing —
+// NOT an org roster, NOT contact hunting. `facet` is the aspect this pass covers; `covered` are the
+// aspects already done. The driver advances through the plan's aspects one pass at a time.
+function buildTopicalPrompt({ goal = '', facet = '', covered = [], guidance = '' } = {}) {
+  const g = guidance ? `\n\n${guidance}` : '';
+  const done = (covered && covered.length)
+    ? `\n\nASPECTS ALREADY COVERED (do NOT repeat these): ${covered.map(c => String(c)).join('; ')}.`
+    : '';
+  return `You are researching a SUBJECT for Lucas to produce a BRIEFING. You are NOT profiling organizations and NOT gathering anyone's personal contact details (emails/phones) — this is a subject brief.\n\nSUBJECT / TASK: ${goal}${g}${done}\n\nTHIS PASS: research this ONE aspect of the subject and nothing else — "${facet}". Use web_search / browser_read / echo / recall. Ground EVERY claim in what the tools actually return, name the source inline, and never invent. Write 1-3 tight, substantive paragraphs on this aspect (do NOT compile a leadership roster or chase emails/phones unless the aspect itself is explicitly about contacts).\nIf this aspect is already well covered by what we hold, reply with exactly COVERED.\nEnd with a final line: ASPECT: ${facet}`;
+}
+
 // New-target pass: pick ONE not-yet-done org and establish an overview (deepened over later passes).
 function buildNewTargetPrompt({ goal = '', covered = [], guidance = '' } = {}) {
   const done = (covered && covered.length)
@@ -291,7 +302,7 @@ function buildOrganizeTargetPrompt({ target = '', raw = '' } = {}) {
 module.exports = {
   parsePass, newContentChars, decideAdvance, facetsSummary,
   isClarification, buildGuidanceBlock, isStatusRequest,
-  buildNewTargetPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt, pickSeedTarget, allTargetsCovered, isConcreteTarget,
+  buildNewTargetPrompt, buildTopicalPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt, pickSeedTarget, allTargetsCovered, isConcreteTarget,
   facetToolset, buildCoveragePlan, searchSignature,
   pickEnrichTarget, facetLabel, buildEnrichPrompt, buildOrganizeEnrichPrompt,
   buildWebLanePrompt, buildDeepLanePrompt, buildMergeLanesPrompt,
