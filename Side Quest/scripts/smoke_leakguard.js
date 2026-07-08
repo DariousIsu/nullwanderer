@@ -52,5 +52,16 @@ ok(streamThrough('A markdown [link](http://x) here.') === 'A markdown [link](htt
 // unterminated non-directive bracket flushes through
 ok(/an open bracket \[oops/.test(streamThrough('an open bracket [oops')), 'unterminated non-directive bracket flushed on close');
 
+// --- STREAM filter: internal/tool TAGS suppressed live; genuine '<' content preserved ---
+ok(streamThrough('Here it is: <think>he wants the short version</think>done.').indexOf('<think') === -1, 'live <think> tag suppressed in the stream (the thought-flash)');
+const toolStream = streamThrough('Opening it <web-open>https://x.com</web-open> now');
+ok(!/<\/?web-open>/.test(toolStream) && /Opening it/.test(toolStream) && /now/.test(toolStream), 'live tool tag MARKERS suppressed (<web-open>…</web-open>)');
+ok(streamThrough('a bare <thought fragment cut off', 5).indexOf('<thought') === -1, 'truncated internal tag <thought… dropped on flush (no leak)');
+ok(streamThrough('the value 3 < 5 holds and a < b too') === 'the value 3 < 5 holds and a < b too', 'literal "<" ("3 < 5", "a < b") passes through untouched');
+ok(streamThrough('render a <div class="x">block</div> here') === 'render a <div class="x">block</div> here', 'a NON-internal tag (<div>) is preserved verbatim (not eaten)');
+const mixStream = streamThrough('mix [YOUR REPLY] and <say>hello there</say>');
+ok(!/YOUR REPLY|<\/?say>/.test(mixStream) && /hello there/.test(mixStream) && /mix/.test(mixStream), 'directives AND internal tags both stripped, say-interior kept');
+ok(lg._INTERNAL_TAG_RE.test('<think>') && lg._INTERNAL_TAG_RE.test('</web-open>') && !lg._INTERNAL_TAG_RE.test('<div>'), '_INTERNAL_TAG_RE: internal/tool tags match, <div> does not');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

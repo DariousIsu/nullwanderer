@@ -24,7 +24,15 @@ const DEFAULT_DATABASES = [
 ];
 
 const str = (v) => (v == null ? '' : String(v));
-const oneLine = (s, n = 600) => str(s).replace(/\s+/g, ' ').trim().slice(0, n);
+// The plan is authored on a REASONING model (deepReasonerModel), so its raw output can carry a <think>…
+// </think> block or stray tags that must NEVER bleed into the objective/approach/targets shown on the
+// canvas + page 1 (the project-description thought-leak). oneLine is the single choke-point for every plan
+// field, so strip reasoning blocks + tag-shaped artifacts here. Safe on normal prose ("< $1M" isn't a tag).
+const oneLine = (s, n = 600) => str(s)
+  .replace(/<(think|thoughts?|thinking)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+  .replace(/<\/?[a-zA-Z][\w-]*\b[^>]*>/g, ' ')
+  .replace(/<\/?[a-zA-Z][\w-]*\b[^>]*$/g, ' ')
+  .replace(/\s+/g, ' ').trim().slice(0, n);
 function _arr(v, max = 40) {
   if (Array.isArray(v)) return v.map(x => oneLine(x, 200)).filter(Boolean).slice(0, max);
   const s = oneLine(v, 1200);

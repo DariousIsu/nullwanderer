@@ -38,7 +38,7 @@ function prepareText(text, { maxChars = 1000 } = {}) {
   // <say>…</say> (+ action tags); the renderer files <think> to the sheep panel and shows only <say>.
   // TTS must match: drop think blocks, keep only <say> content, and scrub any stray/unclosed tags
   // (e.g. a bare "<think" or "<browse-read/>") so nothing internal is ever spoken aloud.
-  t = t.replace(/<think(?:ing)?\b[\s\S]*?<\/think(?:ing)?>/gi, ' ');   // whole think blocks
+  t = t.replace(/<(think|thinking|thought|thoughts)\b[\s\S]*?<\/\1>/gi, ' ');   // whole think blocks (all 4 spellings the parser tolerates)
   const say = [...t.matchAll(/<say>([\s\S]*?)<\/say>/gi)].map((m) => m[1]);
   if (say.length) t = say.join(' ');                                    // if she used <say>, speak only that
   t = t.replace(/<\/?[a-z][\w-]*\b[^>]*>?/gi, ' ');                     // any remaining tags, incl. unclosed

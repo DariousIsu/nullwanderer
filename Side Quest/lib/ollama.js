@@ -288,10 +288,13 @@ class TagStreamParser {
       const salvaged = stripTagBlocks(this.buf);
       if (salvaged) { this.say = salvaged; this.onSayToken(salvaged); }
     } else if (this.mode === 'say') {
-      // Unclosed <say>
-      if (this.buf) {
-        this.say += this.buf;
-        this.onSayToken(this.buf);
+      // Unclosed <say> — a truncated reply. Its tail can carry a stray/leaked tag (a tool tag or a bare
+      // "<think" the generation cut into), so scrub tag-shaped artifacts before emitting, same as the
+      // pre/between salvage branches. Genuine prose with no tags is untouched.
+      const salvaged = stripTagBlocks(this.buf);
+      if (salvaged) {
+        this.say += salvaged;
+        this.onSayToken(salvaged);
       }
     }
     this.buf = '';

@@ -38,39 +38,55 @@ function stripLeakedDirectives(text) {
   return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-// STREAM filter: wrap an emit(chunk) sink so directive brackets never reach the UI live. Holds an open
-// '[' (buffering, not emitting) until it closes or grows past MAXBUF; on close, drops it if it's a
-// directive, else emits it verbatim. Non-bracket text streams through unchanged. Call flush() at the end.
+// An angle-bracket run is an INTERNAL tag (her private cognition or a tool tag) if its name is in this set.
+// The TagStreamParser keeps well-formed <think> out of the stream already, but a stray/truncated think
+// fragment or a tool tag emitted INSIDE <say> used to flash in the live bubble and only vanish on reload
+// (the stored copy strips them). This lets the stream match the stored copy for those tags. A NON-internal
+// tag (<div>, a real "<") is emitted verbatim so genuine content and code are never eaten.
+const _INTERNAL_TAG_RE = /^<\/?(?:think|thinking|thought|thoughts|say|navigate|wonder|web[\w-]*|echo[\w-]*|browser[\w-]*|browse[\w-]*|files?[\w-]*|screen[\w-]*|inbox[\w-]*|sched[\w-]*|scheduler[\w-]*|presence[\w-]*|email[\w-]*|discord[\w-]*|recall[\w-]*|image-gen|open-?thread[\w-]*|status[\w-]*|tool[\w-]*|act[\w-]*|wait)\b/i;
+
+// STREAM filter: wrap an emit(chunk) sink so leaked control DIRECTIVES ('[…]') and internal/tool TAGS
+// ('<think>…', '<web-open>…') never reach the UI live. Holds an open '[' or a tag-shaped '<' (buffering,
+// not emitting) until it resolves or grows past MAXBUF; drops it if it's a directive/internal tag, else
+// emits verbatim. A '<' that isn't tag-shaped ("a < b", "3<5") streams through unchanged. Call flush() at end.
 function makeStreamFilter(emit) {
   const MAXBUF = 800;
   let buf = '';
   let inBracket = false;
+  let inTag = false;
   const send = (s) => { if (s) { try { emit(s); } catch {} } };
   return {
     feed(token) {
       let out = '';
+      const flushOut = () => { if (out) { send(out); out = ''; } };
       for (const ch of String(token || '')) {
-        if (!inBracket) {
-          if (ch === '[') { if (out) { send(out); out = ''; } inBracket = true; buf = '['; }
-          else out += ch;
-        } else {
+        if (inBracket) {
           buf += ch;
-          if (ch === ']') {
-            if (!isLeakyDirective(buf)) out += buf;   // legit bracket (e.g. a markdown link) → keep
-            inBracket = false; buf = '';
-          } else if (buf.length >= MAXBUF) {
-            if (!isLeakyDirective(buf)) out += buf;    // long non-directive bracket → flush it through
-            inBracket = false; buf = '';
-          }
+          if (ch === ']') { if (!isLeakyDirective(buf)) out += buf; inBracket = false; buf = ''; }
+          else if (buf.length >= MAXBUF) { if (!isLeakyDirective(buf)) out += buf; inBracket = false; buf = ''; }
+          continue;
         }
+        if (inTag) {
+          buf += ch;
+          // Disambiguate as soon as we have the char after '<': only '/' or a letter starts a tag; anything
+          // else ("< ", "<=", "<3") is a literal '<' → flush it and the char through.
+          if (buf.length === 2 && !/[a-zA-Z/]/.test(buf[1])) { out += buf; inTag = false; buf = ''; continue; }
+          if (ch === '>') { if (!_INTERNAL_TAG_RE.test(buf)) out += buf; inTag = false; buf = ''; }
+          else if (buf.length >= MAXBUF) { if (!_INTERNAL_TAG_RE.test(buf)) out += buf; inTag = false; buf = ''; }
+          continue;
+        }
+        if (ch === '[') { flushOut(); inBracket = true; buf = '['; continue; }
+        if (ch === '<') { flushOut(); inTag = true; buf = '<'; continue; }
+        out += ch;
       }
       if (out) send(out);
     },
     flush() {
-      if (inBracket && buf && !isLeakyDirective(buf)) send(buf);   // unterminated non-directive → emit
-      inBracket = false; buf = '';
+      if (inBracket && buf && !isLeakyDirective(buf)) send(buf);       // unterminated non-directive → emit
+      else if (inTag && buf && !_INTERNAL_TAG_RE.test(buf)) send(buf); // unterminated non-internal tag → emit
+      inBracket = false; inTag = false; buf = '';
     }
   };
 }
 
-module.exports = { isLeakyDirective, stripLeakedDirectives, makeStreamFilter, _DIRSIG, _METASIG };
+module.exports = { isLeakyDirective, stripLeakedDirectives, makeStreamFilter, _DIRSIG, _METASIG, _INTERNAL_TAG_RE };
