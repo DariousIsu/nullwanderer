@@ -28,15 +28,22 @@ function decodeEntities(s) {
     .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)));
 }
 
-// Inline HTML → markdown inline (bold/italic kept, links flattened to text, other tags stripped).
+// Inline HTML → markdown inline. Bold/italic kept. HYPERLINK TARGETS ARE PRESERVED — a citation
+// verifier lives or dies on the source URLs in footnotes/links, so an http(s) <a href> becomes
+// "text (url)" (or bare url when the text already is the url); anchor/fragment links (footnote refs
+// and ↑ backlinks) collapse to their text. Remaining tags stripped.
 function inlineMd(html) {
   return decodeEntities(String(html || '')
     .replace(/<\s*(strong|b)\s*>/gi, '**').replace(/<\/\s*(strong|b)\s*>/gi, '**')
     .replace(/<\s*(em|i)\s*>/gi, '_').replace(/<\/\s*(em|i)\s*>/gi, '_')
     .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/<a\b[^>]*>/gi, '').replace(/<\/a>/gi, '')
+    .replace(/<a\b[^>]*\bhref\s*=\s*["'](https?:\/\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_m, url, txt) => {
+      const t = String(txt).replace(/<[^>]+>/g, '').trim();
+      return (t && t !== url && !t.includes(url)) ? `${t} (${url})` : (t || url);
+    })
+    .replace(/<a\b[^>]*>/gi, '').replace(/<\/a>/gi, '')   // fragment/anchor links → text only
     .replace(/<[^>]+>/g, '')
-  ).replace(/[ \t]+/g, ' ').trim();
+  ).replace(/[ \t]+/g, ' ').replace(/\s*[↑^]\s*$/, '').trim();   // drop trailing footnote-return glyph
 }
 
 // mammoth's flat block HTML → markdown. Tables are flattened (their structural tags dropped, inner

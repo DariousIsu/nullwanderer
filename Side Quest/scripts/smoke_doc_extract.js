@@ -15,8 +15,21 @@ function ok(name, cond, detail = '') { if (cond) { pass++; console.log(`  PASS $
 ok('entities: amp/lt/gt/quote/apos', DX.decodeEntities('a &amp; b &lt;c&gt; &quot;d&quot; &#39;e&#39;') === 'a & b <c> "d" \'e\'');
 ok('inline: strong → **', DX.inlineMd('<strong>Bold</strong> text') === '**Bold** text');
 ok('inline: em → _', DX.inlineMd('<em>it</em>') === '_it_');
-ok('inline: link flattened to text', DX.inlineMd('see <a href="http://x">here</a>') === 'see here');
+// hyperlink TARGETS are preserved — a citation verifier needs the source URLs, not just link text
+ok('inline: http link → "text (url)"', DX.inlineMd('see <a href="https://x.org/a">here</a>') === 'see here (https://x.org/a)');
+ok('inline: link whose text IS the url → bare url', DX.inlineMd('<a href="https://x.org/a">https://x.org/a</a>') === 'https://x.org/a');
+ok('inline: fragment/anchor link → text only', DX.inlineMd('note<a href="#fn1">[1]</a>') === 'note[1]');
+ok('inline: trailing footnote backlink glyph dropped', DX.inlineMd('source text <a href="#ref1">↑</a>') === 'source text');
 ok('inline: stray tags stripped + ws collapsed', DX.inlineMd('<span class="x">a</span>   b') === 'a b');
+
+// footnote citations with hyperlinks: the URLs must survive extraction (the ELI-op-ed failure mode)
+{
+  const fn = '<ol><li id="fn3"><p>See the <a href="https://worldometers.info/china">EDGAR table</a>; report at <a href="https://statearmor.org/r.pdf">State Armor</a>. <a href="#ref3">↑</a></p></li></ol>';
+  const md = DX.htmlToMarkdown(fn);
+  const urls = md.match(/https?:\/\/[^\s)]+/g) || [];
+  ok('footnote hyperlink URLs survive extraction', urls.includes('https://worldometers.info/china') && urls.includes('https://statearmor.org/r.pdf'), md);
+  ok('footnote backlink glyph not leaked', !/↑/.test(md));
+}
 
 // --- htmlToMarkdown over mammoth-shaped HTML ---
 {
@@ -50,7 +63,7 @@ ok('inline: stray tags stripped + ws collapsed', DX.inlineMd('<span class="x">a<
 // --- dispatch guard ---
 (async () => {
   let threw = false;
-  try { await DX.extractToMarkdown('/x/y.xlsx'); } catch (e) { threw = /unsupported/.test(e.message); }
+  try { await DX.extractToMarkdown('/x/y.rtf'); } catch (e) { threw = /unsupported/.test(e.message); }
   ok('extractToMarkdown rejects unsupported ext', threw);
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
