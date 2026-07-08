@@ -27,6 +27,8 @@ const contract = require('../studio/checks_contract');
 const registry = require('./editor_registry');
 const { runHarness } = require('../studio/verify_harness');
 const { makeHomeworkCheck, makeClassifier } = require('../studio/verify_model_io');
+const { readFetch } = require('../studio/verify_resolve');
+const deepcheck = require('../studio/verify_deepcheck');
 
 const TERMINAL = new Set(['report_ready', 'accepted', 'revised', 'expired']);
 
@@ -151,6 +153,7 @@ async function runHarnessChecks({
   classifyModelName = null, classifyBase = null, classifyHeaders = null,
   cheapModel = null, cheapBase = null, cheapHeaders = null,
   frontierModel = null, frontierBase = null, frontierHeaders = null,
+  deep = false, deepModelName = null, deepBase = null, deepHeaders = null, deepNumPredict = 1200,
   embed = null, cosine = null, tier = 'harness', onStage = null,
   // Echo's fetch rung → web_extract (trafilatura clean text + status), not web_fetch (raw-HTML
   // preview). The ladder reads the body from `text_preview` (see verify_resolve.readFetch).
@@ -172,7 +175,25 @@ async function runHarnessChecks({
     checkRunId = registry.recordCheckRun(docId, { verificationSessionId: null, tier: classifyBase ? 'cloud' : tier, model: classifyModelName, status: 'running', version: sourceVersion });
   }
 
-  const result = await runHarness(workingCopy, { callTool, embed, cosine, homeworkCheck, classifyModel, classifyFrontier, resolveOpts, onStage });
+  // DEEP path (frontier-first): when enabled, the released residue is judged by the deep agentic verifier
+  // (studio/verify_deepcheck) instead of the single caged classify leaf — it reads primary sources, cross-
+  // checks an independent source, and judges precision. Web tools are the SAME ones the resolver uses
+  // (fetch via the injected fetch tool → readFetch's tolerant body reader; search via resolveOpts.search
+  // or web_search). Fail-soft: no deep model → the classify leaf still runs.
+  let deepVerify = null;
+  if (deep && deepModelName) {
+    const fetchTool = (resolveOpts.tools && resolveOpts.tools.fetch) || 'web_extract';
+    const fetchUrl = async (url) => { try { return readFetch(await callTool(fetchTool, { url })).body || ''; } catch { return ''; } };
+    const searchFn = typeof resolveOpts.search === 'function'
+      ? (q, o) => resolveOpts.search(q, o)
+      : async (q) => { try { return await callTool((resolveOpts.tools && resolveOpts.tools.webSearch) || 'web_search', { query: q, q }); } catch { return []; } };
+    deepVerify = (residue) => deepcheck.deepVerifyAll(
+      (residue || []).map(c => ({ uid: c.uid, claim: c.claim, text: c.claim, quote: c.quote || null, kind: c.kind || null, url: c.source_url || null, sourceText: c.passage || '' })),
+      { complete, model: deepModelName, base: deepBase, headers: deepHeaders, numPredict: deepNumPredict, fetch: fetchUrl, search: searchFn, embed, cosine, concurrency: 3 }
+    );
+  }
+
+  const result = await runHarness(workingCopy, { callTool, embed, cosine, homeworkCheck, classifyModel, classifyFrontier, deepVerify, resolveOpts, onStage });
 
   if (checkRunId != null) {
     registry.updateCheckRun(checkRunId, {

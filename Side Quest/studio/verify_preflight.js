@@ -47,6 +47,8 @@
         band: m.band || 'unsupported',
         needs_model: !!m.needs_model,
         claim: u.quote || u.text || '',
+        kind: u.kind || null,                        // carried for deep-verify cross-check gating (numeric → cross-check)
+        quote: u.quote || null,
         passage: rubric.best_passage || '',
         source_url: rubric.source_url || u.url || null,
         match_score: m.match_score != null ? m.match_score : null,

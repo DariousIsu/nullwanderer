@@ -90,6 +90,20 @@ const DOC = [
     ok('injected classifyModel is called for residue', used >= 1 && r.stages.classified.some(c => c.tier === 'local' && c.status_code === 'VP'));
   }
 
+  // --- injected deepVerify replaces the classify leaf; caveat + sources_consulted flow into findings ---
+  {
+    let used = 0;
+    const deepVerify = async (residue) => { used++; return residue.map(c => ({ uid: c.uid, status_code: 'VC', caveat: 'timeframe imprecise', evidence_quote: 'the source says 1999', sources_consulted: [{ url: 'https://indep.example/a', title: 'Independent' }] })); };
+    const r = await runHarness(wc, {
+      callTool, embed: async (t) => stubEmbed(t),
+      homeworkCheck: async (s) => s.map(x => ({ uid: x.uid, ok: true })),
+      deepVerify,
+    });
+    ok('injected deepVerify replaces the classify leaf (called once with residue)', used === 1 && r.stages.classified.length >= 1);
+    ok('deep verdict flows through contract (VC · caveat)', r.findings.some(f => f.vlabel === 'Verified · caveat' && f.caveat === 'timeframe imprecise'));
+    ok('sources_consulted carried onto findings', r.findings.some(f => Array.isArray(f.sources_consulted) && f.sources_consulted.some(s => /indep\.example/.test(s.url))));
+  }
+
   // --- guard: callTool required ---
   ok('missing callTool throws', await (async () => { try { await runHarness(wc, {}); return false; } catch { return true; } })());
 

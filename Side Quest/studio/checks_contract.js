@@ -104,6 +104,8 @@
       vlabel: k.vlabel,
       status: k.status,
       ev: c.evidence || c.finding || c.note || '',
+      caveat: c.caveat || '',                                   // deep-verify precision caveat (VC/VP/…)
+      sources_consulted: Array.isArray(c.sources_consulted) ? c.sources_consulted : [],   // deep-verify provenance
       hasFix,
       resolved: k.resolved,
       auto: k.resolved,

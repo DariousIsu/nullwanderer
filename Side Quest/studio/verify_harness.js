@@ -72,11 +72,16 @@
     const gate = await preflight(candidates, Object.assign({ homeworkCheck: opts.homeworkCheck }, opts.preflightOpts || {}));
     tick('preflight', { proceed: gate.proceed, reason: gate.reason, decided: gate.decided.length, residue: gate.residue.length });
 
-    // 5) classify the RELEASED residue (held residue is surfaced, not classified)
+    // 5) judge the RELEASED residue (held residue is surfaced, not judged). DEEP path when injected:
+    //    opts.deepVerify(residue) -> [{uid,status_code,caveat,evidence_quote,sources_consulted,...}]
+    //    (studio/verify_deepcheck — reads primary sources, cross-checks, precision-aware). Else the
+    //    single caged classify leaf. Same status enum either way, so the contract is unchanged.
     const classified = gate.proceed
-      ? await classifyAll(gate.residue, Object.assign({ model: opts.classifyModel, frontier: opts.classifyFrontier }, opts.classifyOpts || {}))
+      ? (typeof opts.deepVerify === 'function'
+          ? await opts.deepVerify(gate.residue)
+          : await classifyAll(gate.residue, Object.assign({ model: opts.classifyModel, frontier: opts.classifyFrontier }, opts.classifyOpts || {})))
       : [];
-    tick('classify', { classified: classified.length, gated: gate.sample && gate.sample.gated });
+    tick('classify', { classified: classified.length, deep: typeof opts.deepVerify === 'function', gated: gate.sample && gate.sample.gated });
 
     // 6) assemble standardized contract items (decided bands + classified residue + held residue)
     const byUid = Object.fromEntries(candidates.map(c => [c.uid, c]));
@@ -86,7 +91,10 @@
     }
     for (const c of classified) {
       const cand = byUid[c.uid] || {};
-      items.push({ id: c.uid, label: cand.claim || c.uid, status_code: c.status_code, finding: c.note, locator: c.uid, url: cand.source_url, evidence: c.note });
+      items.push({ id: c.uid, label: cand.claim || c.uid, status_code: c.status_code,
+        finding: c.caveat || c.note, evidence: c.evidence_quote || c.note,
+        caveat: c.caveat || '', sources_consulted: c.sources_consulted || [],
+        locator: c.uid, url: cand.source_url });
     }
     // held residue (gate aborted) → surfaced as not-checked (NK/info), never silently dropped
     const held = gate.heldResidue || [];

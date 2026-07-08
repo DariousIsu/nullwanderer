@@ -1790,7 +1790,7 @@ ipcMain.handle('editor:detach-source', (_e, { docId, uid } = {}) => {
 // extract→resolve→match→preflight→classify→contract. Resolution + match are ~0-token; the model
 // is reached only at the caged classify leaf (local 24B), behind the preflight homework-check gate.
 // callTool reaches Echo's web tools (web_fetch/web_search/wayback/…); embed/cosine = local bge-small.
-ipcMain.handle('editor:run-checks', async (_e, docId) => {
+ipcMain.handle('editor:run-checks', async (_e, docId, opts = {}) => {
   try {
     const doc = editorRegistry.getDocument(docId);
     if (!doc) return { ok: false, error: 'no such document' };
@@ -1809,12 +1809,25 @@ ipcMain.handle('editor:run-checks', async (_e, docId) => {
     const useCloud = !!cloud;
     if (!useCloud) console.warn('[editor] no cloud key — classify falling back to local', MODEL);
 
+    // DEEP verify (FRONTIER-FIRST): this operator-invoked audit judges each material claim with the deep
+    // agentic verifier (studio/verify_deepcheck) on the strongest reasoning tier — it reads the primary
+    // sources, cross-checks an independent source, and reasons about precision. Default ON whenever the
+    // cloud is reachable (env DEEP_VERIFY_MODEL overrides the tag); `mode:'quick'` opts back to the fast
+    // local classify leaf. Without cloud it degrades to classify automatically.
+    const deepModel = process.env.DEEP_VERIFY_MODEL || 'gpt-oss:120b-cloud';
+    const useDeep = useCloud && !(opts && opts.mode === 'quick');
+    if (useDeep) console.log(`[editor] deep verify ON — ${deepModel}`);
+
     const res = await editorChecks.runHarnessChecks({
       callTool, workingCopy, complete, docId,
       sourceDocPath: doc.echo_doc_path || null, author: doc.author, sourceVersion: doc.current_version,
       classifyModelName: useCloud ? cloudModel : MODEL,
       classifyBase: useCloud ? cloud.base : null,
       classifyHeaders: useCloud ? { Authorization: `Bearer ${cloud.token}` } : null,
+      deep: useDeep,                                  // route residue → deep agentic verifier
+      deepModelName: useDeep ? deepModel : null,
+      deepBase: useDeep ? cloud.base : null,
+      deepHeaders: useDeep ? { Authorization: `Bearer ${cloud.token}` } : null,
       cheapModel: MODEL,                              // homework-check stays local/cheap (coherence gate)
       embed: memoryLib.embed, cosine: memoryLib.cosine,
       // fetch via Echo web_extract (clean text); SEARCH via Zoe's own DuckDuckGo provider so
