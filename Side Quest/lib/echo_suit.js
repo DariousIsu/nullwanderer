@@ -880,7 +880,7 @@ async function resolveMention(name, { preferType = null, dispatch = null, contex
         if (obj) return { status: 'resolved', mention: n, object: obj, via: 'fuzzy' };
       }
     }
-    return { status: 'ambiguous', mention: n, candidates: distinct.slice(0, 4).map(c => c.name) };
+    return { status: 'ambiguous', mention: n, candidates: distinct.slice(0, 4).map(c => c.name), candidateObjs: distinct.slice(0, 4).map(c => ({ name: c.name, type: c.type || null })) };
   }
   // single ENTITY — resolve its RICHEST record (distinct[0] is already the richest by degree). Using the
   // rep's exact stored name (not the raw query q) is what defeats the instance-blind FTS pick: q="John
@@ -892,7 +892,7 @@ async function resolveMention(name, { preferType = null, dispatch = null, contex
   // Resolve ONLY when a record genuinely DOMINATES (rich object). Several thin same-name records with no
   // clear winner = we can't safely pick → ask rather than popularity-guess (the overshadowing trap).
   const dominant = obj.degree >= 8 || (obj.facts || []).length >= 4 || (obj.committees || []).length >= 1;
-  if (!dominant) return { status: 'ambiguous', mention: n, reason: 'low-confidence', candidates: distinct.map(c => c.name) };
+  if (!dominant) return { status: 'ambiguous', mention: n, reason: 'low-confidence', candidates: distinct.map(c => c.name), candidateObjs: distinct.slice(0, 4).map(c => ({ name: c.name, type: c.type || null })) };
   return { status: 'resolved', mention: n, object: obj };
 }
 async function _searchEntities(d, name, preferType) {

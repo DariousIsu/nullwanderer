@@ -128,6 +128,7 @@ const smokes = [
   'smoke_email_harvest.js',
   'smoke_tts.js',
   'smoke_tts_service.js',
+  'smoke_concept_ground.js',
   'smoke_avatar_state.js',
   'smoke_vrm_state.js',
   'smoke_excavate.js',

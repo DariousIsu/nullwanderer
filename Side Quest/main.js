@@ -3883,10 +3883,32 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // which he means, so she asks rather than silently picking one. Fires ONCE and suppresses the answer draft.
   if (recallResult && recallResult.ambiguous && recallResult.ambiguous.candidates && recallResult.ambiguous.candidates.length >= 2 && !followupFired && !socialTurn) {
     const amb = recallResult.ambiguous;
-    console.log(`[main] ambiguous entity "${amb.mention}" → ASK (${amb.candidates.length} candidates)`);
-    followupFired = true;
-    try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked about "${amb.mention}", but you hold more than one distinct person/entity by that name: ${amb.candidates.join('; ')}. You genuinely can't tell which he means. Ask him which one — name the options briefly. Do NOT guess or answer about either yet. One or two sentences, your voice.]` }); }
-    catch (e) { console.error('[main] ambiguity ASK failed:', e.message); }
+    const cg = require('./lib/concept_ground');
+    // ASK only when it's a genuine collision of 2+ distinct PEOPLE (a lookup can't tell which he means).
+    // For a CONCEPT collision (e.g. "the AI arms race" + a junk namesake), don't dump disambiguation on
+    // him — GROUND it herself: look it up → create a verified node (citation) or an unverified concept →
+    // proceed on that. (Lucas's resolve-or-create spec.)
+    const action = cg.disambiguationAction({ status: 'ambiguous', candidates: amb.candidateObjs || [] });
+    if (action === 'ask') {
+      console.log(`[main] ambiguous entity "${amb.mention}" → ASK (${amb.candidates.length} distinct people)`);
+      followupFired = true;
+      try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked about "${amb.mention}", but you hold more than one distinct person/entity by that name: ${amb.candidates.join('; ')}. You genuinely can't tell which he means. Ask him which one — name the options briefly. Do NOT guess or answer about either yet. One or two sentences, your voice.]` }); }
+      catch (e) { console.error('[main] ambiguity ASK failed:', e.message); }
+    } else {
+      try {
+        const g = await cg.groundAndCreate(amb.mention, { deps: {
+          search: (m) => webSearch(m),
+          create: (node) => echoSuit.dispatch({ kind: 'do', name: 'propose_entity', args: { name: node.name, entity_type: node.entity_type || 'concept', summary: node.summary || '', source: node.source || '' } }),
+        } });
+        if (g && g.node) {
+          const line = g.verified
+            ? `WHAT "${amb.mention}" IS — you just looked it up (${g.node.source}): ${g.node.summary || amb.mention}. Treat it as this; you've recorded it. Answer/act on it directly.`
+            : `You didn't have "${amb.mention}" clearly grounded and couldn't pull a citation just now. Treat it as an UNVERIFIED concept: proceed on its most likely public meaning and note lightly that you'll confirm the specifics. Do NOT ask ${userName} to pick between namesakes.`;
+          retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${line}\n\n${retrievedKnowledgeBlock}` : line;
+          console.log(`[concept-ground] "${amb.mention}" → ${g.verified ? 'grounded+verified' : 'unverified concept'} (no ASK)`);
+        }
+      } catch (e) { console.error('[concept-ground] failed:', e.message); }
+    }
   }
 
   // SELF-DEV LEDGER — on a question about her own development, prepend her real changelog (by

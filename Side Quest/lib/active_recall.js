@@ -56,7 +56,7 @@ async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retriev
         try {
           const resolve = resolveFn || ((m, o) => require('./echo_suit').resolveMention(m, o));
           const rm = await resolve(entTopic, { preferType, context: null });
-          if (rm && rm.status === 'ambiguous' && Array.isArray(rm.candidates) && rm.candidates.length >= 2) ambiguous = { mention: entTopic, candidates: rm.candidates.slice(0, 4) };
+          if (rm && rm.status === 'ambiguous' && Array.isArray(rm.candidates) && rm.candidates.length >= 2) ambiguous = { mention: entTopic, candidates: rm.candidates.slice(0, 4), candidateObjs: (rm.candidateObjs || []).slice(0, 4) };
           else if (rm && rm.status === 'resolved' && rm.object) obj = rm.object;
           else obj = await _echoObject(entTopic, preferType) || null;
         } catch { try { obj = await _echoObject(entTopic, preferType) || null; } catch { obj = null; } }
