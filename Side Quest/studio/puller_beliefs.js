@@ -132,6 +132,44 @@ function seedPrior(state, pattern, prior) {
   return next;
 }
 
+// COLD-START size prior (research 2026-07-09): company SIZE is the ONE real predictor of email format
+// (name-collision pressure forces last-name-bearing forms as headcount grows). Per-bucket top-pattern
+// distributions from the Interseller 5M-company dataset. Used only to SEED a cold domain's first-guess
+// ORDER — the prior is discarded the moment one address verifies (the domain becomes frequentist). NOT a
+// trained model: size is the only feature with real lift; industry / mail-provider are folklore (the admin,
+// not Google/Microsoft, picks the local-part). Our flat default already leads with first.last (right for
+// mid/large B2B); this mainly rescues the SMALL-company case where {first}@ dominates.
+const SIZE_PRIORS = [
+  { max: 49,       priors: { first: 0.55, flast: 0.20, 'first.last': 0.20 } },   // <50: {first}@ dominant
+  { max: 200,      priors: { flast: 0.42, 'first.last': 0.30, first: 0.17 } },
+  { max: 1000,     priors: { flast: 0.45, 'first.last': 0.35, first: 0.07 } },
+  { max: 5000,     priors: { 'first.last': 0.48, flast: 0.35 } },
+  { max: Infinity, priors: { 'first.last': 0.56, flast: 0.22 } },                 // enterprise: first.last wins
+];
+
+// The bucket's {pattern: prior} for an employee count, or null if unknown/invalid (→ caller keeps the flat
+// DEFAULT_PRIOR + PATTERN_PRIORITY order, which is already B2B-appropriate).
+function sizeBucketPriors(employeeCount) {
+  const n = Number(employeeCount);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  for (const b of SIZE_PRIORS) if (n <= b.max) return { ...b.priors };
+  return null;
+}
+
+// Seed a COLD domain's pattern priors from the org's employee count. Only seeds patterns with NO observation
+// (never overrides learned frequentist data). No/invalid count → unchanged. PURE (returns a new state).
+function seedSizePriors(state, employeeCount) {
+  const priors = sizeBucketPriors(employeeCount);
+  if (!priors) return cloneState(state);
+  let next = cloneState(state);
+  for (const [pattern, prior] of Object.entries(priors)) {
+    const e = next.patterns[pattern];
+    if (e && (((e.hits | 0) > 0) || ((e.misses | 0) > 0))) continue;   // real data present → don't override
+    next = seedPrior(next, pattern, prior);
+  }
+  return next;
+}
+
 // Fold one verification result into the belief. PURE — returns a new state. (playbook §4.3)
 function updateBelief(state, pattern, result, prior) {
   const next = cloneState(state);
@@ -219,4 +257,5 @@ module.exports = {
   emptyState, cloneState, seedPrior, updateBelief,
   currentBelief, isPatternDead, isCatchAll, looksInfraBlocked,
   bestUnusedPattern, bestPattern, nextCandidate,
+  SIZE_PRIORS, sizeBucketPriors, seedSizePriors,
 };

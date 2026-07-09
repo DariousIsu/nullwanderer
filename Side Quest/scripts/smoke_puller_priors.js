@@ -32,6 +32,17 @@ let ms = DB.getPatternState('microsoft.com');
 for (let i = 0; i < 3; i++) ms = B.updateBelief(ms, 'first.last', 'invalid');
 ok('seeded hyperscaler + 3 bounces → infra-blocked', B.looksInfraBlocked(ms) === true);
 
+// --- COLD-START size-bucket seed (research 2026-07-09: company size is the one real format predictor) ---
+ok('size bucket: small (<50) → {first}@ leads', B.bestPattern(B.seedSizePriors(B.emptyState(), 12)) === 'first');
+ok('size bucket: mid (50–1000) → flast leads', B.bestPattern(B.seedSizePriors(B.emptyState(), 300)) === 'flast');
+ok('size bucket: enterprise (>1000) → first.last leads', B.bestPattern(B.seedSizePriors(B.emptyState(), 8000)) === 'first.last');
+ok('size seed: unknown count → unchanged (falls back to flat default order)', Object.keys(B.seedSizePriors(B.emptyState(), null).patterns).length === 0);
+ok('sizeBucketPriors: invalid count → null', B.sizeBucketPriors(0) === null && B.sizeBucketPriors('x') === null);
+// size seed NEVER overrides a learned observation
+let learned = B.updateBelief(B.emptyState(), 'flast', 'valid');   // one real hit on flast
+learned = B.seedSizePriors(learned, 8000);                        // enterprise seed would prefer first.last
+ok('size seed does not override a learned hit', (learned.patterns.flast.hits | 0) === 1);
+
 DB.close();
 console.log(`\nsmoke_puller_priors: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

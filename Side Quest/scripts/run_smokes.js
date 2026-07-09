@@ -54,6 +54,7 @@ const smokes = [
   'smoke_supersession.js',
   'smoke_identity_gate.js',
   'smoke_ingest_lane.js',
+  'smoke_email_prefilter.js',
   'smoke_decomp_lane.js',
   'smoke_contact_extract.js',
   'smoke_contact_card.js',
