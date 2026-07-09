@@ -144,6 +144,38 @@ function mockResolver(map) {
   ok(acme && acme.preferType === 'organization', '2c: a WORKS_FOR target is inferred organization (resolved with preferType=organization)');
   ok(jane && jane.preferType === 'person', '2c: the person source keeps its own type (preferType=person)');
 
+  // --- RELATION SIGNATURE (official → body fix): type-constrained resolution + canonical predicate ---
+  ok(D.canonType('office_held') === 'office_held' && D.canonType('committee') === 'committee' && D.canonType('government_body') === 'government_body', 'sig: civic reference types survive canonType (underscores preserved, not stripped to other)');
+  ok(D.canonType('office held') === 'office_held' && D.canonType('position') === 'office_held', 'sig: canonType maps office/position synonyms → office_held');
+  ok(D.targetTypeFor('MEMBER_OF', 'Arkansas Senate') === 'office_held', 'sig: MEMBER_OF a legislative body → office_held (fences out same-token FEC PACs)');
+  ok(D.targetTypeFor('WORKS_FOR', 'Ohio House of Representatives') === 'office_held', 'sig: WORKS_FOR a chamber → office_held');
+  ok(D.targetTypeFor('MEMBER_OF', 'Senate Judiciary Committee') === 'committee', 'sig: MEMBER_OF a committee → committee');
+  ok(D.targetTypeFor('WORKS_FOR', 'Acme Corp') === 'organization', 'sig: WORKS_FOR a generic org → organization (unchanged)');
+  ok(D.targetTypeFor('CONTRIBUTED_TO', 'House Swing State Fund') === null, 'sig: a donation predicate is NOT membership → untyped, so a PAC still resolves normally as organization (PACs keep working)');
+  ok(D.normalizedRelation('MEMBER_OF', 'Ohio State Senate') === 'HELD_OFFICE', 'sig: body membership normalizes to the canonical HELD_OFFICE predicate');
+  ok(D.normalizedRelation('MEMBER_OF', 'Senate Judiciary Committee') === 'MEMBER_OF', 'sig: committee membership stays MEMBER_OF');
+
+  // e2e: an official → chamber edge resolves TYPED to office_held and proposes HELD_OFFICE → the real office
+  const seenSig = []; const sigCalls = [];
+  await D.decomposeDoc({ title: 't', url: 'u', text: 'x'.repeat(50) }, {
+    extract: async () => ({ entities: [{ name: 'Jane Legislator', type: 'person' }], relations: [{ source: 'Jane Legislator', relation: 'MEMBER_OF', target: 'Arkansas Senate' }] }),
+    resolve: async (name, opts) => { seenSig.push({ name, preferType: opts && opts.preferType }); return name === 'Arkansas Senate' ? { status: 'resolved', object: { id: 9, name: 'member of the Arkansas Senate [wd:Q21361754]' } } : { status: 'resolved', object: { id: 1, name } }; },
+    dispatch: async (tag) => { sigCalls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created"}' }; }, observe: () => {},
+  });
+  ok(seenSig.find((s) => s.name === 'Arkansas Senate')?.preferType === 'office_held', 'sig e2e: the body target is resolved with preferType=office_held (PAC family excluded at the source)');
+  const heldEdge = sigCalls.find((c) => c[0] === 'propose_relation');
+  ok(heldEdge && heldEdge[1].relation_type === 'HELD_OFFICE' && heldEdge[1].target_name === 'member of the Arkansas Senate [wd:Q21361754]', 'sig e2e: proposes HELD_OFFICE → the canonical office entity (official connected to the body they serve)');
+
+  // e2e: an UNRESOLVED office is HELD, never minted as a bare QID-less dup (reference-data guard)
+  const refCalls = [];
+  await D.decomposeDoc({ title: 't', url: 'u', text: 'x'.repeat(50) }, {
+    extract: async () => ({ entities: [{ name: 'Obscure Rep', type: 'person' }], relations: [{ source: 'Obscure Rep', relation: 'MEMBER_OF', target: 'Nowhere Senate' }] }),
+    resolve: async (name) => (name === 'Nowhere Senate' ? { status: 'nil' } : { status: 'resolved', object: { id: 2, name } }),
+    dispatch: async (tag) => { refCalls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created"}' }; }, observe: () => {},
+  });
+  ok(!refCalls.some((c) => c[0] === 'propose_entity' && c[1].name === 'Nowhere Senate'), 'sig: an unresolved office is NOT minted (no bare QID-less office dup)');
+  ok(!refCalls.some((c) => c[0] === 'propose_relation' && c[1].target_name === 'Nowhere Senate'), 'sig: the edge to an unresolved office is held, not forged onto the wrong node');
+
   // -------------------------------------------------------------------------
   // 2c — the DRIVER (decomposeDoc): extract → hybrid → disambiguate → gate → propose → observe.
   // -------------------------------------------------------------------------

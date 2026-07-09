@@ -24,7 +24,9 @@ const confModel = require('./confidence_model');      // C3 — calibrated, corr
 
 // Closed entity-type vocab, aligned with Echo's types. Anything unrecognized → 'other' (still a real
 // object, just untyped — the richness axis, not the reality axis). Normalizes common model synonyms.
-const ENTITY_TYPES = ['person', 'organization', 'location', 'event', 'work', 'bill', 'document', 'other'];
+// Aligned with Echo's entity vocab (list_entity_types). Includes the CIVIC reference types the resolver
+// must be able to target so a body-membership edge resolves to the OFFICE/COMMITTEE, not a same-token PAC.
+const ENTITY_TYPES = ['person', 'organization', 'location', 'event', 'work', 'bill', 'document', 'office_held', 'committee', 'government_body', 'other'];
 const TYPE_SYNONYM = {
   people: 'person', per: 'person', human: 'person', individual: 'person',
   org: 'organization', organisation: 'organization', company: 'organization', agency: 'organization', institution: 'organization', group: 'organization',
@@ -32,10 +34,16 @@ const TYPE_SYNONYM = {
   law: 'bill', legislation: 'bill', act: 'bill',
   doc: 'document', article: 'document', paper: 'document',
   creativework: 'work', book: 'work',
+  office: 'office_held', officeheld: 'office_held', position: 'office_held', seat: 'office_held', post: 'office_held',
+  legislature: 'government_body', chamber: 'government_body', governmentbody: 'government_body', govbody: 'government_body',
+  subcommittee: 'committee',
 };
 function canonType(t) {
-  const k = String(t == null ? '' : t).toLowerCase().trim().replace(/[^a-z]/g, '');
-  if (!k) return 'other';
+  const raw = String(t == null ? '' : t).toLowerCase().trim();
+  if (!raw) return 'other';
+  const under = raw.replace(/[\s-]+/g, '_');        // "office held" / "office-held" → office_held (keep multi-word civic types)
+  if (ENTITY_TYPES.includes(under)) return under;
+  const k = raw.replace(/[^a-z]/g, '');             // fully stripped → single-word types + synonym lookup
   if (ENTITY_TYPES.includes(k)) return k;
   return TYPE_SYNONYM[k] || 'other';
 }
@@ -300,8 +308,51 @@ async function _proposeRelation(dispatch, source, target, relation_type, confide
 // a same-token PAC — the hub-collision bug. Detect and HOLD it.
 const _FEC_COMMITTEE_RE = /\[(?:FEC:)?C\d{7,}\]/i;
 const _LEGIS_BODY_RE = /\b(senate|house of representatives|house|assembly|legislature|general assembly|delegates|city council|county commission|board of supervisors)\b/i;
+const _COMMITTEE_RE = /\b(committee|subcommittee)\b/i;
 function _isFecCommittee(name) { return _FEC_COMMITTEE_RE.test(String(name || '')); }
 function _isLegisBody(name) { return _LEGIS_BODY_RE.test(String(name || '')); }
+function _isCommittee(name) { return _COMMITTEE_RE.test(String(name || '')); }
+
+// Predicates whose TARGET is an organization/body the SOURCE belongs to or structures under
+// (membership / employment / org structure). Their target is inferred an organization-family type.
+const ORG_TARGET_REL = /^(WORKS_FOR|EMPLOYED_BY|MEMBER_OF|MEMBER_OF_ORG|PART_OF|SUBSIDIARY_OF|AFFILIATE_OF|FOUNDED|LEADS|DIRECTED_BY)$/;
+// The subset that asserts a person HOLDS A SEAT / is a member of a body or committee.
+const BODY_MEMBERSHIP_REL = /^(MEMBER_OF|MEMBER_OF_ORG|WORKS_FOR|EMPLOYED_BY)$/;
+// Civic REFERENCE entities (offices, committees, bodies) are canonical reference data — resolve to an
+// EXISTING one or HOLD; never MINT them from a prose mention (a bare "Ohio Senate" office would be a
+// QID-less dup that fragments the graph). Keyed by the resolver's expected target types.
+const REFERENCE_TYPES = new Set(['office_held', 'committee', 'government_body']);
+
+// RELATION SIGNATURE (domain/range typing — the anti-mis-resolution lever). Given a relation type and its
+// target's surface name, return the expected TARGET entity_type so resolution is TYPE-CONSTRAINED:
+//   • a body-membership edge to a legislative chamber → 'office_held' (the person HELD_OFFICE that seat),
+//     NOT a same-token FEC PAC (which is an 'organization') — this was the hub-collision bug.
+//   • a membership edge to a committee → 'committee'.
+//   • generic org membership / employment → 'organization' (a company, or a PAC named as an employer).
+// Returns null → leave untyped ('other') for an unconstrained search.
+function targetTypeFor(relType, targetName) {
+  const R = String(relType || '').toUpperCase();
+  if (BODY_MEMBERSHIP_REL.test(R)) {
+    // Committee is the MORE SPECIFIC type — check it first, since a committee name often contains a
+    // chamber token ("Senate Judiciary Committee", "House Ways and Means Committee").
+    if (_isCommittee(targetName)) return 'committee';
+    if (_isLegisBody(targetName)) return 'office_held';
+    return 'organization';
+  }
+  if (ORG_TARGET_REL.test(R)) return 'organization';
+  return null;
+}
+// The graph's CANONICAL predicate for a resolved legislative-body membership is HELD_OFFICE (person →
+// office_held; ~52k existing edges). Normalize a body-membership relation to it so the edge MERGES with
+// that pattern instead of forking a parallel MEMBER_OF→office representation. Committee membership stays
+// MEMBER_OF (the graph's canonical committee predicate).
+function normalizedRelation(relType, targetName) {
+  const R = String(relType || '').toUpperCase();
+  // Only a CHAMBER membership becomes HELD_OFFICE; a committee (even one named "… Senate … Committee")
+  // stays MEMBER_OF, the graph's canonical committee predicate.
+  if (BODY_MEMBERSHIP_REL.test(R) && _isLegisBody(targetName) && !_isCommittee(targetName)) return 'HELD_OFFICE';
+  return relType;
+}
 async function _observe(observe, o) { if (typeof observe === 'function') { try { await observe(o); } catch {} } }
 
 async function decomposeDoc(doc = {}, deps = {}) {
@@ -330,16 +381,15 @@ async function decomposeDoc(doc = {}, deps = {}) {
   // 1b) ENDPOINT RECOVERY — a relation's source/target is an entity too. If the extractor named one only
   // as an edge endpoint (never as its own ENTITY line — e.g. a roster's "…WORKS_FOR Rainey Center" where
   // the org header was never listed), fold it in so it resolves (mint/reuse/hold) instead of auto-holding
-  // every edge to it. The TARGET of an org-membership relation is inferred to be an ORGANIZATION — without
-  // that type, resolution runs untyped and a summary-FTS match on the wrong type leaks in (the live bug:
-  // "…WORKS_FOR Rainy Center" resolved to a CT bill whose summary contained "Rainy Day Fund" + "Center").
-  const ORG_TARGET_REL = /^(WORKS_FOR|EMPLOYED_BY|MEMBER_OF|MEMBER_OF_ORG|PART_OF|SUBSIDIARY_OF|AFFILIATE_OF|FOUNDED|LEADS|DIRECTED_BY)$/;
+  // every edge to it. The TARGET's type is inferred from the RELATION SIGNATURE (targetTypeFor) — a body
+  // membership → office_held, a committee → committee, a generic org → organization — so resolution is
+  // type-constrained and a same-token wrong-type match (a bill summary, or an FEC PAC) can't leak in.
   const haveKey = new Set(merged.map(e => coreKey(e.name) || String(e.name).toLowerCase()));
   for (const r of relations) {
     const relType = String((r && r.relation) || '').toUpperCase();
     const endpoints = [
       { name: r && r.source, type: 'other' },
-      { name: r && r.target, type: ORG_TARGET_REL.test(relType) ? 'organization' : 'other' },
+      { name: r && r.target, type: targetTypeFor(relType, r && r.target) || 'other' },
     ];
     for (const ep of endpoints) {
       const name = String(ep.name == null ? '' : ep.name).trim();
@@ -363,6 +413,11 @@ async function decomposeDoc(doc = {}, deps = {}) {
     if (d.action === 'reuse') { usable.set(key, d.canonical || d.name); out.reused++; continue; }
     if (d.action === 'mint') {
       if (out.minted >= maxEnt) continue;                    // volume cap on NEW objects
+      // REFERENCE-DATA guard: never MINT a civic office/committee/body from a prose mention. These are
+      // canonical reference entities (offices carry Wikidata QIDs) — a bare "Ohio Senate" office minted
+      // here would be a QID-less dup that fragments membership. Resolve to an existing one or HOLD (the
+      // edge to it holds too, and re-forms once the real entity exists). Keeps the body→office link clean.
+      if (REFERENCE_TYPES.has(d.type)) { out.held++; await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: 'D', confidence: 0, status: 'held' }); continue; }
       // NO topic gate — the graph absorbs every entity a cited doc yields; topic is not a
       // reality/quality axis (the existence gate below is). Off-domain ≠ untrue.
       const eg = CG.gateExistence('S1', docSources);         // doc-cited → grade B ≥ C floor → mint
@@ -397,6 +452,9 @@ async function decomposeDoc(doc = {}, deps = {}) {
     }
     if (sName && tName && sName.toLowerCase() !== tName.toLowerCase()) {
       const fg = CG.gateFact('S1', docSources);              // doc-cited → B → promote
+      // PREDICATE NORMALIZATION: a body-membership edge lands as the canonical HELD_OFFICE (person →
+      // office_held), merging with the graph's ~52k such edges instead of forking a MEMBER_OF→office form.
+      const relOut = normalizedRelation(r.relation, r.target);
       // C1 provenance: per-edge SOURCE SET (the doc is the single source here; C2
       // merges sets across independent proposals) + valid-time from prose.
       const meta = { source_set: [url], url, grade: fg.grade };
@@ -408,9 +466,9 @@ async function decomposeDoc(doc = {}, deps = {}) {
       const corrN = corroboration.corroborationCount(meta.source_set);
       const conf = confModel.calibratedConfidence({ grade: fg.grade, corroboration: corrN });
       meta.corroboration = corrN;
-      if (fg.promote && await _proposeRelation(dispatch, sName, tName, r.relation, conf, meta)) {
+      if (fg.promote && await _proposeRelation(dispatch, sName, tName, relOut, conf, meta)) {
         out.connections++; out.related.push(tName);
-        await _observe(observe, { sourceEntity: sName, relation: r.relation, target: tName, url, grade: fg.grade, confidence: conf, status: 'promoted', valid_from: r.valid_from, valid_to: r.valid_to });
+        await _observe(observe, { sourceEntity: sName, relation: relOut, target: tName, url, grade: fg.grade, confidence: conf, status: 'promoted', valid_from: r.valid_from, valid_to: r.valid_to });
       }
     } else {
       out.held++;                                            // endpoint unresolved → upgrade-pass queue
@@ -425,4 +483,5 @@ module.exports = {
   ENTITY_TYPES, REL_VOCAB, canonType, badField, coreKey,
   buildTypedPrompt, parseTypedExtraction, parseValidTime: _parseValidTime, mergeCandidates,
   resolveExtracted, planEntities, decomposeDoc, stateFull, normalizeStateAliases, US_STATES,
+  targetTypeFor, normalizedRelation,
 };
