@@ -513,7 +513,7 @@ async function relatedEntities(entityId, { dispatch = null, limit = 30, relTypes
   if (relTypes && relTypes.length) { const safe = relTypes.map(t => String(t).replace(/[^A-Z_]/gi, '')).filter(Boolean); if (safe.length) typeFilter = ` AND r.relation_type IN (${safe.map(t => `'${t}'`).join(',')})`; }
   const sql = `SELECT r.relation_type rt, r.relation_metadata md, e.id id, e.name nm, e.entity_type et, e.entity_subtype est`
     + ` FROM relations r JOIN entities e ON e.id = (CASE WHEN r.source_id=${id} THEN r.target_id ELSE r.source_id END)`
-    + ` WHERE (r.source_id=${id} OR r.target_id=${id}) AND r.deleted=0${typeFilter} ORDER BY r.confidence DESC LIMIT ${_SAFE_ID(limit) || 30}`;
+    + ` WHERE (r.source_id=${id} OR r.target_id=${id}) AND r.deleted=0 AND r.tx_to IS NULL${typeFilter} ORDER BY r.confidence DESC LIMIT ${_SAFE_ID(limit) || 30}`;
   let rows = [];
   try { const r = await d({ kind: 'do', name: 'db_query', args: { sql } }); const j = JSON.parse(r.text); rows = (j && j.rows) || []; } catch {}
   return rows.map(x => {

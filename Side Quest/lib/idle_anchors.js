@@ -143,7 +143,7 @@ function buildRelevantFrontierSql(activeNames, { min = 0, max = 15, limit = 200,
     + ` WHERE name IN (${inList}) AND entity_type IN (${typeList}) AND degree BETWEEN ${mn} AND ${mx}`
     + ` UNION `
     + `SELECT e2.id, e2.name, e2.degree FROM entities e1`
-    + ` JOIN relations r ON (r.source_id = e1.id OR r.target_id = e1.id) AND r.deleted = 0`
+    + ` JOIN relations r ON (r.source_id = e1.id OR r.target_id = e1.id) AND r.deleted = 0 AND r.tx_to IS NULL`
     + ` JOIN entities e2 ON e2.id = (CASE WHEN r.source_id = e1.id THEN r.target_id ELSE r.source_id END)`
     + ` WHERE e1.name IN (${inList}) AND e2.entity_type IN (${typeList}) AND e2.degree BETWEEN ${mn} AND ${mx}`
     + ` ORDER BY degree DESC LIMIT ${lim}`;
