@@ -34,6 +34,7 @@ const WALK_MAX_CONNECTIONS = 8;   // connections proposed per move before we re-
 const MAX_CANDIDATES = 6;         // recent-conversation mentions we consider per move
 const WALK_MAX_TRIES = 3;         // anchors we'll ATTEMPT per move before giving up (no-op-move fix)
 const VISITED_TTL_MS = 6 * 3600 * 1000;   // don't re-anchor the same object within this window
+const SATURATED_TTL_MS = 4 * VISITED_TTL_MS;   // a 0-YIELD (saturated) anchor lingers 4× longer — stop re-grinding nodes whose neighbourhood we already covered (audit: 96.5% of effort on pre-existing/saturated nodes)
 const VISITED_KEY = 'graphwalk.visited';  // JSON [[key, ts], …]
 const STOPNAMES = new Set(['i', 'you', 'he', 'she', 'they', 'it', 'we', 'lucas', 'zoe', 'the', 'a', 'an', 'this', 'that']);
 
@@ -94,14 +95,19 @@ function visitKey(name) {
 function loadVisited(getMeta, now) {
   let arr = [];
   try { arr = JSON.parse((getMeta && getMeta(VISITED_KEY)) || '[]'); } catch {}
-  const cutoff = now - VISITED_TTL_MS;
-  return (Array.isArray(arr) ? arr : []).filter(e => Array.isArray(e) && e[1] >= cutoff);
+  // per-entry TTL: a saturated entry (3rd slot === 's') lingers SATURATED_TTL_MS,
+  // a normal one VISITED_TTL_MS — so a 0-yield node isn't re-ground at the 6h mark.
+  return (Array.isArray(arr) ? arr : []).filter(e => {
+    if (!Array.isArray(e)) return false;
+    const ttl = e[2] === 's' ? SATURATED_TTL_MS : VISITED_TTL_MS;
+    return e[1] >= now - ttl;
+  });
 }
 function visitedKeySet(getMeta, now) { return new Set(loadVisited(getMeta, now).map(e => e[0])); }
-function recordVisited({ getMeta, setMeta, now, names }) {
+function recordVisited({ getMeta, setMeta, now, names, saturated = false }) {
   const arr = loadVisited(getMeta, now);
   const have = new Set(arr.map(e => e[0]));
-  for (const nm of (names || [])) { const k = visitKey(nm); if (k && !have.has(k)) { arr.push([k, now]); have.add(k); } }
+  for (const nm of (names || [])) { const k = visitKey(nm); if (k && !have.has(k)) { arr.push(saturated ? [k, now, 's'] : [k, now]); have.add(k); } }
   try { setMeta && setMeta(VISITED_KEY, JSON.stringify(arr)); } catch {}
   return arr.length;
 }
@@ -366,9 +372,13 @@ async function runMove(deps = {}) {
       if (grown && (grown.built || grown.connections > 0)) break;   // productive → stop
     }
     grown = grown || { built: false, entities: 0, connections: 0, related: [], summary: '', held: 0 };
-    recordVisited({ getMeta, setMeta, now: nowTs, names: [...tried, ...grown.related] });
-
     const notable = grown.built || grown.connections > 0;
+    // Diminishing-returns steer: the productive anchor + the new neighbours get the
+    // normal window; every anchor we TRIED that yielded nothing is "saturated" and
+    // lingers 4× longer so the walk stops re-grinding covered nodes each 6h.
+    const satTried = tried.filter(m => !(notable && m === anchor.mention));
+    recordVisited({ getMeta, setMeta, now: nowTs, names: notable ? [anchor.mention, ...grown.related] : [] });
+    recordVisited({ getMeta, setMeta, now: nowTs, names: satTried, saturated: true });
     const via = sourceLabel(grown.sourceUrl);   // the citation source that verified the connections
     const _tag = via ? ` (via ${via})` : '';
     const voiceLine = notable
@@ -393,5 +403,5 @@ module.exports = {
   runMove, extractCandidates, assessGaps, growAround, fetchLayeredSources, sourceLabel, proposeEntity, proposeRelation,
   parseJsonLoose, extractProperNouns, classifyObject, rankGaps, visitKey,
   loadVisited, visitedKeySet, recordVisited, buildCandidatePrompt, buildDossierPrompt,
-  THIN_DEGREE, THIN_FACTS, WALK_MAX_NODES, WALK_MAX_CONNECTIONS, MAX_CANDIDATES, VISITED_TTL_MS, VISITED_KEY
+  THIN_DEGREE, THIN_FACTS, WALK_MAX_NODES, WALK_MAX_CONNECTIONS, MAX_CANDIDATES, VISITED_TTL_MS, SATURATED_TTL_MS, VISITED_KEY
 };

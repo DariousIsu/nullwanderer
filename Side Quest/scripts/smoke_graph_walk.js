@@ -203,6 +203,25 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   const s5 = await G.fetchLayeredSources('Y', { fetchPage: shortPage, recallKnowledge: kb, webSearch: search, wikiUrl: wiki });
   ok(s5[0].source === 'echo:wikipedia', 'fetchLayeredSources: a too-short live page falls through to the corpus');
 
+  // ===== #3 SATURATION STEER: a 0-yield anchor lingers 4× longer (stop re-grinding covered nodes) =====
+  {
+    const store = {};
+    const getMeta = (k) => store[k];
+    const setMeta = (k, v) => { store[k] = v; };
+    const t0 = 1000000000000;
+    G.recordVisited({ getMeta, setMeta, now: t0, names: ['Productive Node'] });                 // normal window
+    G.recordVisited({ getMeta, setMeta, now: t0, names: ['Saturated Node'], saturated: true });  // 4× window
+    // just after normal TTL, before saturated TTL:
+    const midT = t0 + G.VISITED_TTL_MS + 1000;
+    const midSet = G.visitedKeySet(getMeta, midT);
+    ok(!midSet.has(G.visitKey('Productive Node')), 'saturation: a normal anchor is re-eligible after the 6h window');
+    ok(midSet.has(G.visitKey('Saturated Node')), 'saturation: a 0-yield anchor is STILL suppressed past the 6h window (lingers longer)');
+    // past the saturated TTL, even it clears:
+    const lateSet = G.visitedKeySet(getMeta, t0 + G.SATURATED_TTL_MS + 1000);
+    ok(!lateSet.has(G.visitKey('Saturated Node')), 'saturation: the saturated anchor eventually clears (not permanent)');
+    ok(G.SATURATED_TTL_MS > G.VISITED_TTL_MS, 'saturation: SATURATED_TTL_MS > VISITED_TTL_MS');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
