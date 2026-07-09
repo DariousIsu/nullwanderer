@@ -110,7 +110,7 @@ function drawFarField(ctx, w, h) {
     const ny = cy + (c.y - 0.5) * h * 1.1 + Math.cos(t * 0.025 + c.ph) * 20 * c.depth;
     const rad = c.r * Math.min(w, h);
     const g = ctx.createRadialGradient(nx, ny, 0, nx, ny, rad);
-    g.addColorStop(0, `rgba(${c.t},${Math.min(0.11, c.a * boost)})`); g.addColorStop(1, `rgba(${c.t},0)`);
+    g.addColorStop(0, `rgba(${c.t},${Math.min(0.085, c.a * boost)})`); g.addColorStop(1, `rgba(${c.t},0)`);
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(nx, ny, rad, 0, 2 * Math.PI, false); ctx.fill();
   }
   // 2) mesh + specks, depth-parallaxed: near band (high z) drifts + spreads more than the far band
@@ -118,8 +118,8 @@ function drawFarField(ctx, w, h) {
   const dxOf = (z) => Math.sin(t * 0.05) * (5 + z * 22), dyOf = (z) => Math.cos(t * 0.04) * (4 + z * 16);
   const X = p => cx + (p.x - 0.5) * w * spread(p.z) + dxOf(p.z), Y = p => cy + (p.y - 0.5) * h * spread(p.z) + dyOf(p.z);
   ctx.lineWidth = 0.6;
-  for (const [a, b] of F.edges) { const pa = F.pts[a], pb = F.pts[b]; ctx.strokeStyle = `rgba(${pa.t},${0.06 * boost})`; ctx.beginPath(); ctx.moveTo(X(pa), Y(pa)); ctx.lineTo(X(pb), Y(pb)); ctx.stroke(); }
-  for (const p of F.pts) { ctx.beginPath(); ctx.arc(X(p), Y(p), p.r, 0, 2 * Math.PI, false); ctx.fillStyle = `rgba(${p.t},${Math.min(0.55, p.b * 1.35 * boost)})`; ctx.fill(); }
+  for (const [a, b] of F.edges) { const pa = F.pts[a], pb = F.pts[b]; ctx.strokeStyle = `rgba(${pa.t},${0.075 * boost})`; ctx.beginPath(); ctx.moveTo(X(pa), Y(pa)); ctx.lineTo(X(pb), Y(pb)); ctx.stroke(); }
+  for (const p of F.pts) { ctx.beginPath(); ctx.arc(X(p), Y(p), p.r, 0, 2 * Math.PI, false); ctx.fillStyle = `rgba(${p.t},${Math.min(0.72, p.b * 1.7 * boost)})`; ctx.fill(); }
   // 3) connect shockwave — a faint ring expanding into the cosmos. Gated to bigger events (growth/clean,
   //    mag ≥ 1.2) so the frequent ambient curation tier never fires it.
   if (pulseAt && pulseMag >= 1.2 && !prefersReducedMotion) {
@@ -138,13 +138,16 @@ function drawTendrils(ctx, scale) {
   if (!G) return;
   const data = G.graphData(); const nodes = data.nodes || [], links = data.links || [];
   const shown = new Map(), dir = new Map();   // per node: shown-edge count + summed neighbour direction
+  let sumLen = 0, nLen = 0;
   for (const l of links) {
     const s = l.source, t = l.target;
     if (!s || !t || !Number.isFinite(s.x) || !Number.isFinite(s.y) || !Number.isFinite(t.x) || !Number.isFinite(t.y)) continue;
     shown.set(s.id, (shown.get(s.id) || 0) + 1); shown.set(t.id, (shown.get(t.id) || 0) + 1);
     const acc = (id, dx, dy) => { const a = dir.get(id) || { x: 0, y: 0 }; a.x += dx; a.y += dy; dir.set(id, a); };
     acc(s.id, t.x - s.x, t.y - s.y); acc(t.id, s.x - t.x, s.y - t.y);
+    const dl = Math.hypot(t.x - s.x, t.y - s.y); if (dl > 0) { sumLen += dl; nLen++; }
   }
+  const avgLen = nLen ? sumLen / nLen : 46;   // the layout's own node-spacing → tendrils reach "a region over"
   ctx.lineCap = 'round';
   for (const n of nodes) {
     const real = n.degree;
@@ -153,18 +156,20 @@ function drawTendrils(ctx, scale) {
     if (hidden < 1) continue;
     const r = n.__r || 4;
     const count = Math.min(9, Math.max(1, Math.round(Math.log2(hidden + 1))));
-    const len = (r + 5) * (1 + Math.log10(hidden + 1) * 0.85);   // hubs reach further into the dark
+    const len = Math.max(r + 8, avgLen * (0.85 + Math.log10(hidden + 1) * 0.5));   // scale to spacing → tail toward where a further node sits, not a fixed stub
     const d = dir.get(n.id), hasEdges = d && (d.x || d.y);
     const baseA = hasEdges ? Math.atan2(-d.y, -d.x) : (n.__tseed != null ? n.__tseed : (n.__tseed = (n.x * 12.9 + n.y * 78.2) % 6.283));   // fan away from existing edges
     const arc = hasEdges ? 1.8 : 6.283;
     const col = n.color || '#7dd3fc';
     ctx.lineWidth = Math.max(0.6, 1.0 / scale);
     for (let i = 0; i < count; i++) {
-      const a = baseA + (count > 1 ? (i / (count - 1) - 0.5) : 0) * arc;
-      const bx = n.x + Math.cos(a) * r, by = n.y + Math.sin(a) * r, ex = n.x + Math.cos(a) * len, ey = n.y + Math.sin(a) * len;
+      const a = baseA + (count > 1 ? (i / (count - 1) - 0.5) : 0) * arc, ca = Math.cos(a), sa = Math.sin(a);
+      const bx = n.x + ca * r, by = n.y + sa * r, ex = n.x + ca * len, ey = n.y + sa * len;
+      const sign = (i % 2) ? 1 : -1, cvx = (bx + ex) / 2 - sa * len * 0.1 * sign, cvy = (by + ey) / 2 + ca * len * 0.1 * sign;   // gentle tail curve
       const g = ctx.createLinearGradient(bx, by, ex, ey);
-      g.addColorStop(0, rgbaHex(col, 0.5)); g.addColorStop(1, rgbaHex(col, 0));
-      ctx.strokeStyle = g; ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(ex, ey); ctx.stroke();
+      g.addColorStop(0, rgbaHex(col, 0.5)); g.addColorStop(0.75, rgbaHex(col, 0.1)); g.addColorStop(1, rgbaHex(col, 0.05));
+      ctx.strokeStyle = g; ctx.beginPath(); ctx.moveTo(bx, by); ctx.quadraticCurveTo(cvx, cvy, ex, ey); ctx.stroke();
+      ctx.beginPath(); ctx.arc(ex, ey, 1.5, 0, 2 * Math.PI, false); ctx.fillStyle = rgbaHex(col, 0.3); ctx.fill();   // the faint "further node" it tails toward
     }
   }
 }
@@ -620,4 +625,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-09e: tendrils (off into the universe) + brighter far-field · persistent world');
+console.info('[kg] surface build 2026-07-09f: tendrils tail to a further node + brighter/cleaner far-field');
