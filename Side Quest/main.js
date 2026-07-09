@@ -503,6 +503,26 @@ app.whenReady().then(() => {
           }
         }
       } catch (e) { console.error('[news-daily] pass failed:', e.message); }
+      // SUPERSESSION (D2, PROPOSAL-FIRST): the nightly TERMINATION pass. Scan the functional-predicate edges
+      // (HAS_CEO/HAS_CHAIR/SUBSIDIARY_OF — tiny + relation_type-indexed) for REPLACEMENTS: a subject holding
+      // two different current values → the earlier valid_from is superseded by the later (decided on WORLD
+      // time, never ingest order). Candidates land in the short-term buffer as 'supersede-candidate'
+      // observations for operator review — NOTHING is written to the graph (that is D3, flagged/gated).
+      try {
+        if (echoSuit && echoSuit.connected) {
+          const supersession = require('./lib/supersession');
+          const curationStore = require('./lib/curation_store');
+          const sc = await supersession.runReplacementScan({ dispatch: (t) => echoSuit.dispatch(t) });
+          let landed = 0;
+          for (const c of sc.candidates) {
+            try {
+              const r = curationStore.record(db, { feed: 'supersession', sourceEntity: c.subjectName || String(c.source_id), relation: c.relation, target: c.loserTarget || String(c.supersededId), value: c.winnerTarget ? `superseded_by:${c.winnerTarget}` : `superseded_by:#${c.supersededBy}`, status: 'supersede-candidate', confidence: c.winnerConfidence });
+              if (r.inserted) landed++;
+            } catch { /* per-candidate fail-soft */ }
+          }
+          if (sc.candidates.length) console.log(`[supersession] ${sc.summary.assessed} functional edges → ${sc.candidates.length} replacement candidate(s), ${landed} new (operator review)`);
+        }
+      } catch (e) { console.error('[supersession] scan failed:', e.message); }
       // PROMOTION (short-term → long-term): consolidate the day's new short-term documents into Echo
       // long-term (vault doc + KG entities), on the SAME nightly cadence as curation.
       try {

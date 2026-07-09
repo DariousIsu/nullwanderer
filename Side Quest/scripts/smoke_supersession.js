@@ -83,5 +83,31 @@ ok(![...dirs].some((d) => { const [a, b] = d.split('->'); return dirs.has(`${b}-
 // nothing here mutates — proposal-only
 ok(Array.isArray(combined) && combined.every((c) => c.kind === 'termination' || c.kind === 'replacement'), 'proposal-only: returns candidate descriptors, never writes/expires an edge');
 
-console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// --- worldYear: comparable WORLD-TIME year, NEVER a bogus epoch year ---
+ok(S.worldYear(2023) === 2023, 'worldYear: a year int passes through');
+ok(S.worldYear('2019-05-01') === 2019 && S.worldYear('became CEO in 2021') === 2021, 'worldYear: extracts the 4-digit year from a date / prose string');
+ok(S.worldYear(T2023) === 2023 && S.worldYear(T2019) === 2019, 'worldYear: a unix-seconds epoch → its year (not misread digit-by-digit)');
+ok(S.worldYear(null) === null && S.worldYear(999) === null && S.worldYear('no year here') === null, 'worldYear: junk / no-year → null');
+
+// --- edgesFromRows: world-time valid_from from METADATA (tenure_start/valid_from), not the column ---
+const rows = [
+  { id: 1, source_id: 100, target_id: 200, rt: 'HAS_CEO', confidence: 0.9, md: JSON.stringify({ tenure_start: '2020-03-01' }), sn: 'Acme', tn: 'Old CEO' },
+  { id: 2, source_id: 100, target_id: 201, rt: 'HAS_CEO', confidence: 0.9, md: JSON.stringify({ valid_from: 2023 }), sn: 'Acme', tn: 'New CEO' },
+];
+const built = S.edgesFromRows(rows);
+ok(built[0].validFrom === 2020 && built[1].validFrom === 2023, 'edgesFromRows: valid_from parsed from metadata (tenure_start / valid_from), year-normalized');
+ok(built[0].sourceName === 'Acme' && built[0].targetName === 'Old CEO', 'edgesFromRows: carries joined subject + target names');
+
+(async () => {
+  // --- runReplacementScan: reads functional edges via dispatch → replacement candidates (proposal-only) ---
+  const dispatch = async () => ({ ok: true, text: JSON.stringify({ rows }) });
+  const scan = await S.runReplacementScan({ dispatch });
+  ok(scan.summary.assessed === 2 && scan.summary.candidates === 1, 'runReplacementScan: 2 functional edges assessed → 1 replacement candidate');
+  ok(scan.candidates[0].supersededBy === 2 && scan.candidates[0].winnerTarget === 'New CEO' && scan.candidates[0].subjectName === 'Acme', 'runReplacementScan: candidate carries the winning edge + subject/target names for operator review');
+  ok((await S.runReplacementScan({})).summary.candidates === 0, 'runReplacementScan: no dispatch → empty (fail-soft)');
+  const scanErr = await S.runReplacementScan({ dispatch: async () => { throw new Error('db down'); } });
+  ok(scanErr.candidates.length === 0 && scanErr.summary.error === true, 'runReplacementScan: a db_query failure → empty + error flag (never throws)');
+
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();

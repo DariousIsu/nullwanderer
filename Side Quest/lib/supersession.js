@@ -77,6 +77,8 @@ function replacementCandidates(edges, { functional = FUNCTIONAL_PREDICATES, conf
         source_id: loser.source_id, relation: String((loser.relation) || '').toUpperCase(),
         reason: 'newer_valid_from', loserValidFrom: _num(loser.validFrom), winnerValidFrom: _num(winner.validFrom),
         winnerConfidence: _num(winner.confidence),
+        subjectName: loser.sourceName || winner.sourceName || null,
+        loserTarget: loser.targetName || null, winnerTarget: winner.targetName || null,
       });
     }
   }
@@ -103,7 +105,62 @@ function supersessionCandidates(edges, opts = {}) {
   return safe;
 }
 
+// A comparable WORLD-TIME year from an extracted valid-time value (year int, ISO date, or a string with a
+// 4-digit year). NEVER derive from created_at. Guards against reading a unix-epoch number as a bogus year.
+function worldYear(v) {
+  if (v == null) return null;
+  if (typeof v === 'number') {
+    if (v >= 1600 && v <= 2200) return v;                          // already a year
+    if (v > 1e8) { const y = new Date(v > 1e11 ? v : v * 1000).getUTCFullYear(); return (y >= 1600 && y <= 2200) ? y : null; }  // epoch → year
+    return null;
+  }
+  const m = /\b(1[6-9]\d\d|2[0-1]\d\d)\b/.exec(String(v));
+  return m ? Number(m[1]) : null;
+}
+
+// civic_graph relation rows (with joined names + metadata) → the edge shape the candidate generators use.
+// WORLD-TIME valid_from is parsed from relation_metadata (valid_from / tenure_start / start_date) — NOT the
+// valid_from COLUMN, which was A1-backfilled to created_at (ingest time; ordering on it would BE the anti-pattern).
+function edgesFromRows(rows) {
+  return (Array.isArray(rows) ? rows : []).map((r) => {
+    let md = {};
+    try { md = typeof r.md === 'string' ? JSON.parse(r.md || '{}') : (r.md || {}); } catch { md = {}; }
+    const vfRaw = md.valid_from != null ? md.valid_from : (md.tenure_start != null ? md.tenure_start : md.start_date);
+    const vtRaw = md.valid_to != null ? md.valid_to : (md.tenure_end != null ? md.tenure_end : md.end_date);
+    return {
+      id: r.id, source_id: r.source_id, target_id: r.target_id,
+      relation: r.rt || r.relation_type, confidence: _num(r.confidence),
+      validFrom: worldYear(vfRaw), validTo: worldYear(vtRaw),
+      sourceName: r.sn || null, targetName: r.tn || null,
+    };
+  });
+}
+
+/**
+ * The nightly REPLACEMENT scan (read-only, PROPOSAL-FIRST). Reads the live functional-predicate edges via
+ * the injected `dispatch` (db_query; these predicates are tiny + relation_type-indexed, so it's cheap), then
+ * generates replacement candidates on WORLD-TIME valid_from. Termination-by-valid_to is intentionally NOT
+ * run here yet: valid_to is unpopulated + unindexed today (needs C1 valid-time to land + a partial index).
+ * Returns { candidates, summary }. Never writes to the graph.
+ */
+async function runReplacementScan({ dispatch, functional = FUNCTIONAL_PREDICATES, confFloor = DEFAULT_CONF_FLOOR } = {}) {
+  if (typeof dispatch !== 'function') return { candidates: [], summary: { assessed: 0, candidates: 0 } };
+  const types = [...functional].map((t) => `'${String(t).replace(/[^A-Z_]/g, '')}'`).filter((t) => t !== "''").join(',');
+  if (!types) return { candidates: [], summary: { assessed: 0, candidates: 0 } };
+  const sql = 'SELECT r.id, r.source_id, r.target_id, r.relation_type rt, r.confidence, r.relation_metadata md,'
+    + ' es.name sn, et.name tn'
+    + ' FROM relations r JOIN entities es ON es.id = r.source_id JOIN entities et ON et.id = r.target_id'
+    + ` WHERE r.relation_type IN (${types}) AND r.tx_to IS NULL AND r.deleted = 0`;
+  let rows = [];
+  try { const res = await dispatch({ kind: 'do', name: 'db_query', args: { sql } }); const j = JSON.parse(res.text); rows = (j && j.rows) || []; }
+  catch { return { candidates: [], summary: { assessed: 0, candidates: 0, error: true } }; }
+  const edges = edgesFromRows(rows);
+  const candidates = replacementCandidates(edges, { functional, confFloor });
+  return { candidates, summary: { assessed: edges.length, candidates: candidates.length } };
+}
+
 module.exports = {
   FUNCTIONAL_PREDICATES, DEFAULT_CONF_FLOOR,
   terminationCandidates, replacementCandidates, supersessionCandidates,
+  worldYear, edgesFromRows, runReplacementScan,
 };
