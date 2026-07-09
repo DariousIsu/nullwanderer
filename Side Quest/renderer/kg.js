@@ -118,8 +118,8 @@ function drawFarField(ctx, w, h) {
   const dxOf = (z) => Math.sin(t * 0.05) * (5 + z * 22), dyOf = (z) => Math.cos(t * 0.04) * (4 + z * 16);
   const X = p => cx + (p.x - 0.5) * w * spread(p.z) + dxOf(p.z), Y = p => cy + (p.y - 0.5) * h * spread(p.z) + dyOf(p.z);
   ctx.lineWidth = 0.6;
-  for (const [a, b] of F.edges) { const pa = F.pts[a], pb = F.pts[b]; ctx.strokeStyle = `rgba(${pa.t},${0.04 * boost})`; ctx.beginPath(); ctx.moveTo(X(pa), Y(pa)); ctx.lineTo(X(pb), Y(pb)); ctx.stroke(); }
-  for (const p of F.pts) { ctx.beginPath(); ctx.arc(X(p), Y(p), p.r, 0, 2 * Math.PI, false); ctx.fillStyle = `rgba(${p.t},${Math.min(0.4, p.b * boost)})`; ctx.fill(); }
+  for (const [a, b] of F.edges) { const pa = F.pts[a], pb = F.pts[b]; ctx.strokeStyle = `rgba(${pa.t},${0.06 * boost})`; ctx.beginPath(); ctx.moveTo(X(pa), Y(pa)); ctx.lineTo(X(pb), Y(pb)); ctx.stroke(); }
+  for (const p of F.pts) { ctx.beginPath(); ctx.arc(X(p), Y(p), p.r, 0, 2 * Math.PI, false); ctx.fillStyle = `rgba(${p.t},${Math.min(0.55, p.b * 1.35 * boost)})`; ctx.fill(); }
   // 3) connect shockwave — a faint ring expanding into the cosmos. Gated to bigger events (growth/clean,
   //    mag ≥ 1.2) so the frequent ambient curation tier never fires it.
   if (pulseAt && pulseMag >= 1.2 && !prefersReducedMotion) {
@@ -127,6 +127,46 @@ function drawFarField(ctx, w, h) {
     if (el >= 0 && el < 1600) { const p = el / 1600, rad = 20 + p * Math.max(w, h) * 0.6; ctx.strokeStyle = `rgba(251,191,36,${(1 - p) * Math.min(0.34, 0.18 * pulseMag)})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, rad, 0, 2 * Math.PI, false); ctx.stroke(); }
   }
   ctx.restore();
+}
+
+// "Off into the universe" tendrils: for each node whose REAL degree (entities.degree) exceeds the edges we
+// show, radiate faint threads into open space — count + length scaled by the HIDDEN connections (log). A
+// shared office/concept hub (degree ~1779) fans threads deep into the dark; a genuine leaf stays bare. So a
+// tiny near-field view still reads as plugged into a vast graph. Honest: needs node.degree (overview carries
+// it; ego gets it from main's db_query enrichment). Drawn in graph space under the nodes, guarded for NaN.
+function drawTendrils(ctx, scale) {
+  if (!G) return;
+  const data = G.graphData(); const nodes = data.nodes || [], links = data.links || [];
+  const shown = new Map(), dir = new Map();   // per node: shown-edge count + summed neighbour direction
+  for (const l of links) {
+    const s = l.source, t = l.target;
+    if (!s || !t || !Number.isFinite(s.x) || !Number.isFinite(s.y) || !Number.isFinite(t.x) || !Number.isFinite(t.y)) continue;
+    shown.set(s.id, (shown.get(s.id) || 0) + 1); shown.set(t.id, (shown.get(t.id) || 0) + 1);
+    const acc = (id, dx, dy) => { const a = dir.get(id) || { x: 0, y: 0 }; a.x += dx; a.y += dy; dir.set(id, a); };
+    acc(s.id, t.x - s.x, t.y - s.y); acc(t.id, s.x - t.x, s.y - t.y);
+  }
+  ctx.lineCap = 'round';
+  for (const n of nodes) {
+    const real = n.degree;
+    if (!(real > 0) || !Number.isFinite(n.x) || !Number.isFinite(n.y)) continue;
+    const hidden = real - (shown.get(n.id) || 0);
+    if (hidden < 1) continue;
+    const r = n.__r || 4;
+    const count = Math.min(9, Math.max(1, Math.round(Math.log2(hidden + 1))));
+    const len = (r + 5) * (1 + Math.log10(hidden + 1) * 0.85);   // hubs reach further into the dark
+    const d = dir.get(n.id), hasEdges = d && (d.x || d.y);
+    const baseA = hasEdges ? Math.atan2(-d.y, -d.x) : (n.__tseed != null ? n.__tseed : (n.__tseed = (n.x * 12.9 + n.y * 78.2) % 6.283));   // fan away from existing edges
+    const arc = hasEdges ? 1.8 : 6.283;
+    const col = n.color || '#7dd3fc';
+    ctx.lineWidth = Math.max(0.6, 1.0 / scale);
+    for (let i = 0; i < count; i++) {
+      const a = baseA + (count > 1 ? (i / (count - 1) - 0.5) : 0) * arc;
+      const bx = n.x + Math.cos(a) * r, by = n.y + Math.sin(a) * r, ex = n.x + Math.cos(a) * len, ey = n.y + Math.sin(a) * len;
+      const g = ctx.createLinearGradient(bx, by, ex, ey);
+      g.addColorStop(0, rgbaHex(col, 0.5)); g.addColorStop(1, rgbaHex(col, 0));
+      ctx.strokeStyle = g; ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(ex, ey); ctx.stroke();
+    }
+  }
 }
 
 // Atmosphere pass (onRenderFramePre → drawn under links/nodes): a screen-space vignette (subtle centre
@@ -152,6 +192,7 @@ function drawAtmosphere(ctx, scale) {
     bg.addColorStop(0, rgbaHex(col, 0.12)); bg.addColorStop(1, rgbaHex(col, 0));
     ctx.fillStyle = bg; ctx.beginPath(); ctx.arc(target.x, target.y, rad, 0, 2 * Math.PI, false); ctx.fill();
   }
+  drawTendrils(ctx, scale);   // threads from well-connected nodes reaching off into the universe
 }
 
 function ensureGraph() {
@@ -579,4 +620,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-09d: persistent world (merge-not-regrow + camera fly + trail) · NaN-guard · nebula · lit');
+console.info('[kg] surface build 2026-07-09e: tendrils (off into the universe) + brighter far-field · persistent world');

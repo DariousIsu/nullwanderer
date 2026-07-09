@@ -3061,6 +3061,16 @@ ipcMain.handle('kg:ego', async (_e, { entity, hops } = {}) => {
     const payload = await callTool('query_graph', { entity_name: String(entity), hops: Number(hops) || 2 });
     if (payload && payload.error) return { ok: true, error: payload.error };
     const g = kgView.buildEgo(payload);
+    // Enrich nodes with REAL total degree (entities.degree) so the renderer can draw "off into the universe"
+    // tendrils from nodes with more connections than we're showing. One batched query, best-effort.
+    try {
+      const names = g.nodes.map(n => n.id).filter(Boolean);
+      if (names.length) {
+        const dq = await callTool('db_query', { sql: `SELECT name, degree FROM entities WHERE name IN (${names.map(() => '?').join(',')})`, params: names });
+        const degOf = new Map(((dq && dq.rows) || []).map(r => [r.name, r.degree]));
+        for (const n of g.nodes) { const d = degOf.get(n.id); if (typeof d === 'number') n.degree = d; }
+      }
+    } catch (e) { /* degree is a nice-to-have; the ego view works without it */ }
     return { ok: true, nodes: g.nodes, links: g.links, availableTypes: kgView.availableTypes('ego', payload), legend: kgView.legend(),
       stats: { related: (payload && payload.result_count) || g.links.length, hops: (payload && payload.hops) || hops } };
   } catch (e) { console.error('[kg] ego failed:', e.message); return { ok: false, error: e.message }; }
