@@ -235,6 +235,37 @@ function mockResolver(map) {
   }
 
   // -------------------------------------------------------------------------
+  // C1 — VALID-TIME + SOURCE-SET extraction (the Step-3 supersession enabler)
+  // -------------------------------------------------------------------------
+  {
+    const p = D.parseTypedExtraction([
+      'REL: Jane Roe | LEADS | Acme Corp | 2023',
+      'REL: John Doe | MEMBER_OF | Senate | 2015–2019',
+      'REL: Ann Lee | WORKS_FOR | Beta LLC | since 2020',
+      'REL: Sam Poe | LEADS | Gamma | until 2018',
+      'REL: No Date | RELATED_TO | Thing',
+    ].join('\n'));
+    const byS = Object.fromEntries(p.relations.map(r => [r.source, r]));
+    ok(byS['Jane Roe'].valid_from === 2023 && byS['Jane Roe'].valid_to === null, 'C1: bare year → valid_from');
+    ok(byS['John Doe'].valid_from === 2015 && byS['John Doe'].valid_to === 2019, 'C1: year-range → valid_from..valid_to');
+    ok(byS['Ann Lee'].valid_from === 2020 && byS['Ann Lee'].valid_to === null, 'C1: "since Y" → valid_from');
+    ok(byS['Sam Poe'].valid_to === 2018 && byS['Sam Poe'].valid_from === null, 'C1: "until Y" → valid_to');
+    ok(byS['No Date'].valid_from === null && byS['No Date'].valid_to === null, 'C1: no 4th field → null valid-time (3-field REL still parses)');
+    ok(/<when>/.test(D.buildTypedPrompt('x')[0].content), 'C1: prompt requests the <when> valid-time field');
+
+    const C1DOC = { title: 'Bio', url: 'https://ex.com/bio', text: 'x'.repeat(50) };
+    const c1Extract = async () => ({ entities: [{ name: 'Jane Roe', type: 'person' }, { name: 'Acme Corp', type: 'organization' }], relations: [{ source: 'Jane Roe', relation: 'LEADS', target: 'Acme Corp', valid_from: 2023, valid_to: null }] });
+    const c1Resolve = mockResolver({ 'Jane Roe': { status: 'resolved', object: { id: 1, name: 'Jane Roe' } }, 'Acme Corp': { status: 'resolved', object: { id: 2, name: 'Acme Corp' } } });
+    const c1Calls = [];
+    const c1Dispatch = async (tag) => { c1Calls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created"}' }; };
+    await D.decomposeDoc(C1DOC, { extract: c1Extract, resolve: c1Resolve, dispatch: c1Dispatch, observe: async () => {} });
+    const c1Rel = c1Calls.find(c => c[0] === 'propose_relation' && c[1].target_name === 'Acme Corp');
+    const md = c1Rel && JSON.parse(c1Rel[1].relation_metadata);
+    ok(md && md.valid_from === 2023, 'C1: proposed edge carries valid_from in relation_metadata');
+    ok(md && Array.isArray(md.source_set) && md.source_set[0] === C1DOC.url, 'C1: proposed edge carries a source_set (the doc url)');
+  }
+
+  // -------------------------------------------------------------------------
   // STATE-ALIAS NORMALIZATION — matrix: every USPS code maps; the geographic-relation gate keeps
   // ambiguous codes (IN/OR/OK) from expanding in prose; abbreviation + full name unify to one node.
   // -------------------------------------------------------------------------

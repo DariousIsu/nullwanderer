@@ -69,10 +69,11 @@ function buildTypedPrompt(text, { title = null } = {}) {
 `From the document BELOW, extract the real-world OBJECTS it names and the relationships it STATES between them.
 Output ONLY these two line kinds, nothing else:
 ENTITY: <name> :: <type>
-REL: <source> | <RELATION> | <target>
+REL: <source> | <RELATION> | <target> | <when>
 
 <type> is one of: ${ENTITY_TYPES.join(', ')} (use "other" if unsure).
 <RELATION> is UPPER_SNAKE from: ${REL_VOCAB.join(', ')} (use RELATED_TO if none fit).
+<when> is the year or year-range the text says this became/was true (e.g. "2023", "2015–2019", "since 2020"). Leave it EMPTY if the text gives no date — never guess a date.
 Names must be CONCRETE NAMED ENTITIES (a person, org, place, event, bill) — never a pronoun, never a whole sentence.
 Only what the text STATES — do NOT infer, generalize, or invent. Every REL's source and target should also appear as an ENTITY line.
 Max 20 ENTITY lines and 20 REL lines. If there are none, output exactly: NONE
@@ -82,8 +83,26 @@ ${String(text || '').slice(0, 6000)}`
   }];
 }
 
-// Parse the model output into { entities:[{name,type}], relations:[{source,relation,target}] }. Rejects
-// slop (pronouns, sentences, malformed relations). Dedups entities by lowercased name. Caps volume.
+// Parse a valid-time hint the model emits on a REL line ("became true when") into
+// {valid_from, valid_to} as 4-digit YEARS (int) or null. Only the LLM can read this
+// from prose ("became CEO in 2023", "served 2015–2019", "since 2020", "until 2019");
+// it is the enabler Step-3 supersession needs (valid-time overlap, not ingest clock).
+// C1 (see docs/AUTONOMOUS_SELF_CURATING_DB_ARCHITECTURE.md §7d front).
+function _parseValidTime(s) {
+  const str = String(s == null ? '' : s).trim();
+  if (!str) return { valid_from: null, valid_to: null };
+  const yr = (x) => { const n = parseInt(x, 10); return (n >= 1000 && n <= 3000) ? n : null; };
+  let m;
+  if ((m = /(\d{4})\s*(?:[-–—]|to|until|through|thru)\s*(\d{4})/i.exec(str))) return { valid_from: yr(m[1]), valid_to: yr(m[2]) };
+  if ((m = /\b(?:since|from|as of|beginning|starting)\b[^\d]*(\d{4})/i.exec(str))) return { valid_from: yr(m[1]), valid_to: null };
+  if ((m = /\b(?:until|to|through|ended?)\b[^\d]*(\d{4})/i.exec(str))) return { valid_from: null, valid_to: yr(m[1]) };
+  if ((m = /(\d{4})/.exec(str))) return { valid_from: yr(m[1]), valid_to: null };   // a bare year → validity start
+  return { valid_from: null, valid_to: null };
+}
+
+// Parse the model output into { entities:[{name,type}], relations:[{source,relation,target,valid_from,valid_to}] }.
+// Rejects slop (pronouns, sentences, malformed relations). Dedups entities by lowercased name. Caps volume.
+// REL lines carry an OPTIONAL 4th pipe field — the valid-time the text states — parsed to years.
 function parseTypedExtraction(raw, { maxEntities = 25, maxRelations = 25 } = {}) {
   const entities = [], relations = [];
   const seenE = new Set(), seenR = new Set();
@@ -99,7 +118,7 @@ function parseTypedExtraction(raw, { maxEntities = 25, maxRelations = 25 } = {})
       if (seenE.has(k)) continue;
       seenE.add(k);
       entities.push({ name, type: canonType(m[2]) });
-    } else if ((m = /^REL\s*:\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+)$/i.exec(L))) {
+    } else if ((m = /^REL\s*:\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*(?:\|\s*(.*))?$/i.exec(L))) {
       if (relations.length >= maxRelations) continue;
       const source = stripLead(m[1]);
       const relation = String(m[2]).trim().toUpperCase().replace(/\s+/g, '_');
@@ -109,7 +128,8 @@ function parseTypedExtraction(raw, { maxEntities = 25, maxRelations = 25 } = {})
       const rk = `${source.toLowerCase()}|${relation}|${target.toLowerCase()}`;
       if (seenR.has(rk)) continue;
       seenR.add(rk);
-      relations.push({ source, relation, target });
+      const { valid_from, valid_to } = _parseValidTime(m[4]);   // optional 4th field; null when absent
+      relations.push({ source, relation, target, valid_from, valid_to });
     }
   }
   return { entities, relations };
@@ -373,9 +393,14 @@ async function decomposeDoc(doc = {}, deps = {}) {
     }
     if (sName && tName && sName.toLowerCase() !== tName.toLowerCase()) {
       const fg = CG.gateFact('S1', docSources);              // doc-cited → B → promote
-      if (fg.promote && await _proposeRelation(dispatch, sName, tName, r.relation, fg.confidence, { url, grade: fg.grade })) {
+      // C1 provenance: per-edge SOURCE SET (the doc is the single source here; C2
+      // merges sets across independent proposals) + valid-time from prose.
+      const meta = { source_set: [url], url, grade: fg.grade };
+      if (r.valid_from != null) meta.valid_from = r.valid_from;
+      if (r.valid_to != null) meta.valid_to = r.valid_to;
+      if (fg.promote && await _proposeRelation(dispatch, sName, tName, r.relation, fg.confidence, meta)) {
         out.connections++; out.related.push(tName);
-        await _observe(observe, { sourceEntity: sName, relation: r.relation, target: tName, url, grade: fg.grade, confidence: fg.confidence, status: 'promoted' });
+        await _observe(observe, { sourceEntity: sName, relation: r.relation, target: tName, url, grade: fg.grade, confidence: fg.confidence, status: 'promoted', valid_from: r.valid_from, valid_to: r.valid_to });
       }
     } else {
       out.held++;                                            // endpoint unresolved → upgrade-pass queue
