@@ -17,6 +17,11 @@ let mode = 'overview', submitted = '', submittedQuery = '';
 let focalId = null, pulseAt = 0;
 const linkEnd = (x) => (x && typeof x === 'object') ? x.id : x;
 
+// color helpers for the lit-node / atmosphere rendering (entity colors are hex; fallbacks are hex too)
+function hexToRgb(h) { h = String(h || '').replace('#', ''); if (h.length === 3) h = h.split('').map(c => c + c).join(''); const n = parseInt(h, 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+function rgbaHex(h, a) { const [r, g, b] = hexToRgb(h); return `rgba(${r},${g},${b},${a})`; }
+function lighten(h, t) { const [r, g, b] = hexToRgb(h); const m = (v) => Math.round(v + (255 - v) * t); return `rgb(${m(r)},${m(g)},${m(b)})`; }
+
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function setOverlay(text, cls) { if (!text) { overlay.hidden = true; return; } overlay.hidden = false; overlay.className = 'overlay' + (cls ? ' ' + cls : ''); overlay.textContent = text; }
 
@@ -56,12 +61,49 @@ function makeCollide(radiusFn, strength = 0.8) {
   return force;
 }
 
+// Atmosphere pass (onRenderFramePre → drawn under links/nodes): a screen-space vignette (subtle centre
+// lift, darker rim) turns the flat void into space, and a soft graph-space colour bloom behind the focal
+// node steers the eye to the active neighbourhood. Cheap — one gradient fill + one arc per frame.
+function drawAtmosphere(ctx, scale) {
+  const cv = ctx && ctx.canvas; if (!cv) return;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);   // vignette is screen-anchored → draw in device pixels
+  const w = cv.width, h = cv.height;
+  const vg = ctx.createRadialGradient(w * 0.5, h * 0.42, 0, w * 0.5, h * 0.42, Math.max(w, h) * 0.72);
+  vg.addColorStop(0, 'rgba(26,28,38,0.45)'); vg.addColorStop(0.55, 'rgba(10,11,16,0)'); vg.addColorStop(1, 'rgba(3,4,6,0.6)');
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, w, h);
+  ctx.restore();
+  if (!G) return;
+  const nodes = (G.graphData().nodes) || [];
+  let target = nodes.find(n => n.isFocal);
+  if (!target) { for (const n of nodes) if (!target || (n.degree || 0) > (target.degree || 0)) target = n; }   // richest hub in overview
+  if (target && target.x != null) {
+    const col = target.color || '#FBBF24', rad = 72;
+    const bg = ctx.createRadialGradient(target.x, target.y, 0, target.x, target.y, rad);
+    bg.addColorStop(0, rgbaHex(col, 0.12)); bg.addColorStop(1, rgbaHex(col, 0));
+    ctx.fillStyle = bg; ctx.beginPath(); ctx.arc(target.x, target.y, rad, 0, 2 * Math.PI, false); ctx.fill();
+  }
+}
+
 function ensureGraph() {
   if (G) return G;
   G = ForceGraph()(graphEl)
     .nodeId('id').backgroundColor('#0a0b0e')
     .cooldownTicks(120).d3VelocityDecay(0.3)
     .linkColor(l => l.color).linkWidth(l => l.width)
+    // Edges rendered ourselves so they read against the dark ground: a soft same-category glow + round caps.
+    // Category still drives COLOUR + WIDTH (the legend stays valid) — we add presence, not new meaning.
+    .linkCanvasObjectMode(() => 'replace')
+    .linkCanvasObject((l, ctx, scale) => {
+      const s = l.source, t = l.target;
+      if (!s || !t || s.x == null || t.x == null) return;
+      const base = l.color || 'rgba(148,163,184,0.5)', w = Math.max(0.7, (l.width || 0.6) * 1.4);
+      ctx.save();
+      ctx.shadowColor = base; ctx.shadowBlur = 3;
+      ctx.strokeStyle = base; ctx.lineWidth = w; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(t.x, t.y); ctx.stroke();
+      ctx.restore();
+    })
     .linkDirectionalArrowLength(3).linkDirectionalArrowRelPos(1)
     // COSMETIC (demo): animate ONLY the current focal node's edges — a light amber shimmer so the panel
     // looks alive on whatever the subconscious is working. 0 particles elsewhere (overview stays static →
@@ -74,11 +116,17 @@ function ensureGraph() {
     .nodePointerAreaPaint((n, color, ctx) => { ctx.beginPath(); ctx.arc(n.x, n.y, n.isFocal ? 10 : 8, 0, 2 * Math.PI, false); ctx.fillStyle = color; ctx.fill(); })
     .nodeCanvasObject((n, ctx, scale) => {
       const r = nodeRadius(n), col = n.color || '#7dd3fc';
-      // hub bloom: a faint colored halo behind higher-degree nodes → hierarchy readable at a glance
-      if (r > 5.5) { ctx.beginPath(); ctx.arc(n.x, n.y, r + 3.5, 0, 2 * Math.PI, false); ctx.fillStyle = col + '22'; ctx.fill(); }
+      // lit node: a soft same-hue glow (scales with radius → hubs shine brighter) makes the disk read as a
+      // lit object, then a radial gradient (light core → saturated rim) gives it depth instead of a flat fill.
+      ctx.save();
+      ctx.shadowColor = rgbaHex(col, 0.85); ctx.shadowBlur = r;
       ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI, false); ctx.fillStyle = col; ctx.fill();
-      // thin dark rim separates disks from edges + neighbours on the dark canvas
-      ctx.lineWidth = 1 / scale; ctx.strokeStyle = 'rgba(10,11,14,0.85)'; ctx.stroke();
+      ctx.restore();
+      const grad = ctx.createRadialGradient(n.x - r * 0.35, n.y - r * 0.4, r * 0.12, n.x, n.y, r);
+      grad.addColorStop(0, lighten(col, 0.55)); grad.addColorStop(0.55, col); grad.addColorStop(1, rgbaHex(col, 0.92));
+      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI, false); ctx.fillStyle = grad; ctx.fill();
+      // subtle rim for definition against the glow
+      ctx.lineWidth = 1 / scale; ctx.strokeStyle = 'rgba(0,0,0,0.38)'; ctx.stroke();
       if (n.isFocal) { ctx.lineWidth = 2 / scale; ctx.strokeStyle = '#FBBF24'; ctx.stroke(); }
       // COSMETIC (demo): an expanding amber ring on the focal node for ~1.4s after each move — reads as
       // "new activity landed here". Time-based off pulseAt; the edge particles keep frames coming so it draws.
@@ -90,6 +138,7 @@ function ensureGraph() {
     // Labels are drawn in ONE post pass (not per-node) so we control z-order: focal/hovered/neighbors
     // first, then by prominence, each skipped if its box would overlap an already-placed label. Kills the
     // pile-up seen at overview scale where every node stamped its text on top of the others.
+    .onRenderFramePre(drawAtmosphere)
     .onRenderFramePost(drawLabels);
   // Force tuning: spread clusters and stop node disks stacking. Stronger bounded charge repels nodes
   // without yanking distant clusters into one thread (distanceMax caps the pull range); softer, longer

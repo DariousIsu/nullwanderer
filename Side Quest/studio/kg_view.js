@@ -29,9 +29,9 @@
     RELATED_TO: 'generic', LINKED_TO: 'generic',
   };
   const CATEGORY_COLOR = {
-    projected: 'rgba(96,165,250,0.55)', funding: 'rgba(34,197,94,0.55)', legislative: 'rgba(20,184,166,0.45)', derived: 'rgba(245,158,11,0.50)', generic: 'rgba(148,163,184,0.30)',
+    projected: 'rgba(96,165,250,0.70)', funding: 'rgba(34,197,94,0.72)', legislative: 'rgba(20,184,166,0.62)', derived: 'rgba(245,158,11,0.64)', generic: 'rgba(148,163,184,0.50)',
   };
-  const CATEGORY_WIDTH = { projected: 1.1, funding: 1.4, legislative: 0.7, derived: 0.6, generic: 0.4 };
+  const CATEGORY_WIDTH = { projected: 1.3, funding: 1.6, legislative: 0.9, derived: 0.8, generic: 0.55 };
   const CATEGORIES = ['projected', 'funding', 'legislative', 'derived', 'generic'];
   const categoryFor = (rt) => EDGE_CATEGORY[(rt || '').toUpperCase()] || 'generic';
   const edgeColorFor = (rt) => CATEGORY_COLOR[categoryFor(rt)];
