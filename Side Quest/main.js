@@ -1,6 +1,13 @@
 const path = require('path');
 const { app, BrowserWindow, ipcMain, dialog, shell, session } = require('electron');
 
+// DEV DIAGNOSTICS — expose the renderer over Chrome DevTools Protocol so a CDP client can attach to the
+// LIVE webviews (real render loop, real canvas) instead of guessing from a proxy. Localhost-only, dev-only
+// (never in a packaged build), and opt-out via KG_NO_DEBUG=1. Must be set before app is ready.
+if (!app.isPackaged && process.env.KG_NO_DEBUG !== '1') {
+  try { app.commandLine.appendSwitch('remote-debugging-port', '9222'); app.commandLine.appendSwitch('remote-allow-origins', '*'); } catch (e) {}
+}
+
 // CRASH SAFETY — before this there were NO global handlers, so any unhandled error/rejection killed
 // her with nothing logged (the meeting crash was invisible for exactly this reason). Log the stack
 // to data/crash.log + console. Policy: KEEP HER ALIVE — for a long-lived companion in testing,
