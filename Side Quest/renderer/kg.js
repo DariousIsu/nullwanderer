@@ -488,3 +488,7 @@ try { if (window.sq && window.sq.kg && typeof window.sq.kg.onCurationMove === 'f
 try { if (localStorage.getItem('kg.follow') === '1') setFollow(true); } catch (e) {}
 
 loadOverview();
+// Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
+// open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
+// kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
+console.info('[kg] surface build 2026-07-09: tiered-metabolism · nebula far-field · lit nodes/edges · glow links');
