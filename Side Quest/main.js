@@ -441,6 +441,13 @@ app.whenReady().then(() => {
   const CURATION_IDLE_MS = (parseFloat(process.env.ZOE_CURATION_IDLE_MIN) || 15) * 60 * 1000;
   const CURATION_CHECK_MS = (parseFloat(process.env.ZOE_CURATION_CHECK_MIN) || 30) * 60 * 1000;
   let curationRunning = false;
+  // AUDITOR cadence — DECOUPLED from the 20h curation pass. The integrity auto-cleaner is a light
+  // background sweep, so it runs on its OWN fast tick and is write-triggered: Echo only pays for a full
+  // scan when civic_graph's fingerprint actually advanced (new data landed) or the safety net elapsed.
+  // Zoe just polls often and floors the dispatch rate so it can't thrash on a busy write day.
+  const AUDIT_CHECK_MS = (parseFloat(process.env.ZOE_AUDIT_CHECK_MIN) || 10) * 60 * 1000;   // how often we POLL
+  const AUDIT_MIN_GAP_MS = (parseFloat(process.env.ZOE_AUDIT_MIN_GAP_MIN) || 30) * 60 * 1000; // floor between sweeps
+  let auditRunning = false;
   // Timestamped backup before each pass, keeping only the most recent 5 (so an unattended bad
   // pass can't erase the good recovery point the way a single overwritten file would).
   const curationBackup = () => {
@@ -523,26 +530,8 @@ app.whenReady().then(() => {
           if (sc.candidates.length) console.log(`[supersession] ${sc.summary.assessed} functional edges → ${sc.candidates.length} replacement candidate(s), ${landed} new (operator review)`);
         }
       } catch (e) { console.error('[supersession] scan failed:', e.message); }
-      // RECURSIVE AUDITOR (E1, AUTOPILOT): the autonomous auto-cleaner. Reversibly heals STRUCTURAL graph
-      // errors (self-loops, dangling edges, strong-id-contradiction merges) to convergence — asserts NO
-      // facts, needs NO grounding (the create/promote/merge lane is separate + citation-gated). Reversible
-      // (audit_fix_log→revert) + backup-first + regression-auto-kill. Pull the plug LIVE: audit_state.autopilot='off'.
-      try {
-        if (echoSuit && echoSuit.connected) {
-          const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_integrity_audit', args: {} });
-          let rep = null; try { rep = JSON.parse(ar && ar.text); } catch {}
-          if (rep) {
-            console.log(rep.skipped
-              ? `[audit] auto-cleaner skipped (${rep.skipped})`
-              : `[audit] auto-cleaner: fixed=${rep.total_fixed || 0} converged=${!!rep.converged}${rep.halted ? ` HALTED(${rep.halted})` : ''}${rep.auto_killed ? ' AUTOPILOT-DISARMED' : ''}`);
-            if (rep.total_fixed) {
-              const text = `[Memory upkeep] My integrity auditor reversibly cleaned ${rep.total_fixed} structural error${rep.total_fixed === 1 ? '' : 's'} out of the graph.`;
-              const row = db.insertMonologue({ content: text, model: 'audit', type: 'reading' });
-              if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
-            }
-          }
-        }
-      } catch (e) { console.error('[audit] auto-cleaner failed:', e.message); }
+      // (The RECURSIVE AUDITOR auto-cleaner used to run here on the 20h curation cadence — it is now
+      // DECOUPLED onto its own fast, write-triggered tick: maybeRunAudit / AUDIT_CHECK_MS below.)
       // PROMOTION (short-term → long-term): consolidate the day's new short-term documents into Echo
       // long-term (vault doc + KG entities), on the SAME nightly cadence as curation.
       try {
@@ -569,6 +558,36 @@ app.whenReady().then(() => {
     finally { curationRunning = false; }
   };
   setInterval(() => { maybeRunCuration().catch(() => {}); }, CURATION_CHECK_MS).unref?.();
+  // RECURSIVE AUDITOR (E1, AUTOPILOT) — its OWN fast, write-triggered tick, decoupled from the 20h
+  // curation pass so the graph is swept minutes after new data lands, not once a day. Zoe polls every
+  // ~10min and floors dispatch to once/30min (can't thrash); Echo's run_foundation_audit is the real
+  // cost gate — it only pays for a full scan when civic_graph's fingerprint advanced (new writes) or the
+  // 12h safety net elapsed, and returns {skipped:'unchanged'} cheaply otherwise. Reversible + backup-first
+  // + regression-auto-kill. Pull the plug LIVE (no reboot): audit_state.autopilot='off'.
+  const maybeRunAudit = async () => {
+    if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_CURATION_ENABLED || '').trim())) return;  // same master switch
+    if (auditRunning) return;
+    if (!echoSuit || !echoSuit.connected) return;
+    if (Date.now() - parseInt(db.getMeta('last_audit_dispatch_at') || '0', 10) < AUDIT_MIN_GAP_MS) return;  // floor
+    auditRunning = true;
+    db.setMeta('last_audit_dispatch_at', String(Date.now()));    // claim the slot before the round-trip
+    try {
+      const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_integrity_audit', args: {} });
+      let rep = null; try { rep = JSON.parse(ar && ar.text); } catch {}
+      if (rep && !(rep.skipped === 'unchanged')) {                // don't log the cheap idle no-op
+        console.log(rep.skipped
+          ? `[audit] auto-cleaner skipped (${rep.skipped})`
+          : `[audit] auto-cleaner (${rep.reason || 'scan'}): fixed=${rep.total_fixed || 0} converged=${!!rep.converged}${rep.halted ? ` HALTED(${rep.halted})` : ''}${rep.auto_killed ? ' AUTOPILOT-DISARMED' : ''}`);
+        if (rep.total_fixed) {
+          const text = `[Memory upkeep] My integrity auditor reversibly cleaned ${rep.total_fixed} structural error${rep.total_fixed === 1 ? '' : 's'} out of the graph.`;
+          const row = db.insertMonologue({ content: text, model: 'audit', type: 'reading' });
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
+        }
+      }
+    } catch (e) { console.error('[audit] auto-cleaner failed:', e.message); }
+    finally { auditRunning = false; }
+  };
+  setInterval(() => { maybeRunAudit().catch(() => {}); }, AUDIT_CHECK_MS).unref?.();
   // Episodic recall backfill: embed past turns lacking an embedding so "what did we say earlier
   // about X" works over EXISTING history too. The one-shot 300 left ~half of turns unembedded
   // (episodic recall was blind to old history); DRAIN it in bounded batches until caught up, paced
