@@ -16,6 +16,16 @@ const highMeta = { name: 'Acme PAC', relation_metadata: JSON.stringify({ grade: 
 ok(Math.abs(G.effectiveConfidence(highMeta) - CM.calibratedConfidence({ grade: 'B', corroboration: 3 })) < 1e-9, 'effectiveConfidence: recomputed calibrated from metadata (B, corr 3)');
 ok(G.effectiveConfidence({ confidence: 0.8 }) === 0.8, 'effectiveConfidence: legacy proposal (no metadata) → stored value');
 
+// CORROBORATION ENRICHMENT (C-integration): the tenant UPSERT unions source_set + drops the stale
+// corroboration key, so the gate RECOMPUTES the mirror-collapsed independent count + calibrated
+// confidence from the merged set — a 2nd INDEPENDENT source scores strictly higher; a mirror does not.
+const oneSrc = { relation_metadata: JSON.stringify({ grade: 'B', source_set: ['https://ballotpedia.org/x'] }) };
+const twoSrc = { relation_metadata: JSON.stringify({ grade: 'B', source_set: ['https://ballotpedia.org/x', 'https://arktimes.com/y'] }) };
+const mirrorSrc = { relation_metadata: JSON.stringify({ grade: 'B', source_set: ['https://en.wikipedia.org/wiki/X', 'https://www.wikiwand.com/en/X'] }) };
+ok(G.effectiveConfidence(twoSrc) > G.effectiveConfidence(oneSrc), 'enrichment: a 2nd INDEPENDENT source raises confidence (gate recomputes from the merged source_set — no stale corroboration key)');
+ok(Math.abs(G.effectiveConfidence(twoSrc) - CM.calibratedConfidence({ grade: 'B', corroboration: 2 })) < 1e-9, 'enrichment: two independent sources → calibrated at corroboration=2 (0.94)');
+ok(Math.abs(G.effectiveConfidence(mirrorSrc) - G.effectiveConfidence(oneSrc)) < 1e-9, 'enrichment: a Wikipedia MIRROR does NOT raise confidence (collapses to 1 independent source — no self-echo-chamber)');
+
 // --- classify: decisions are CONFIDENCE-ONLY; domain is a tag, never a veto ---
 ok(G.classify({ name: 'Florida Democratic Party', relation_metadata: JSON.stringify({ grade: 'B', corroboration: 3 }) }).decision === 'promote', 'promote: A-band calibrated (corroborated)');
 const off = G.classify({ name: 'Dave Bowen (footballer)', relation_metadata: JSON.stringify({ grade: 'A', corroboration: 9 }) });
