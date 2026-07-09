@@ -151,6 +151,8 @@ function drawTendrils(ctx, scale) {
     const dl = Math.hypot(t.x - s.x, t.y - s.y); if (dl > 0) { sumLen += dl; nLen++; }
   }
   const avgLen = nLen ? sumLen / nLen : 46;   // the layout's own node-spacing → tendrils reach "a region over"
+  const now = performance.now(), tt = now / 1000;
+  let fireBoost = 1; if (pulseAt) { const el = now - pulseAt; if (el >= 0 && el < 1600) fireBoost = 1 + (1 - el / 1600) * 1.4; }   // dendrites fire brighter just after a batch lands
   ctx.lineCap = 'round';
   for (const n of nodes) {
     const real = (typeof n.degree === 'number') ? n.degree : degreeHint.get(n.id);
@@ -163,16 +165,35 @@ function drawTendrils(ctx, scale) {
     const d = dir.get(n.id), hasEdges = d && (d.x || d.y);
     const baseA = hasEdges ? Math.atan2(-d.y, -d.x) : (n.__tseed != null ? n.__tseed : (n.__tseed = (n.x * 12.9 + n.y * 78.2) % 6.283));   // fan away from existing edges
     const arc = hasEdges ? 1.8 : 6.283;
-    const col = n.color || '#7dd3fc';
+    const col = n.color || '#7dd3fc', lit = lighten(col, 0.4);
     ctx.lineWidth = Math.max(0.6, 1.0 / scale);
     for (let i = 0; i < count; i++) {
       const a = baseA + (count > 1 ? (i / (count - 1) - 0.5) : 0) * arc, ca = Math.cos(a), sa = Math.sin(a);
       const bx = n.x + ca * r, by = n.y + sa * r, ex = n.x + ca * len, ey = n.y + sa * len;
-      const sign = (i % 2) ? 1 : -1, cvx = (bx + ex) / 2 - sa * len * 0.1 * sign, cvy = (by + ey) / 2 + ca * len * 0.1 * sign;   // gentle tail curve
+      const sign = (i % 2) ? 1 : -1, cvx = (bx + ex) / 2 - sa * len * 0.1 * sign, cvy = (by + ey) / 2 + ca * len * 0.1 * sign;   // gentle dendrite curve
+      const bez = (p) => { const q = 1 - p; return [q * q * bx + 2 * q * p * cvx + p * p * ex, q * q * by + 2 * q * p * cvy + p * p * ey]; };
       const g = ctx.createLinearGradient(bx, by, ex, ey);
       g.addColorStop(0, rgbaHex(col, 0.5)); g.addColorStop(0.75, rgbaHex(col, 0.1)); g.addColorStop(1, rgbaHex(col, 0.05));
       ctx.strokeStyle = g; ctx.beginPath(); ctx.moveTo(bx, by); ctx.quadraticCurveTo(cvx, cvy, ex, ey); ctx.stroke();
-      ctx.beginPath(); ctx.arc(ex, ey, 1.5, 0, 2 * Math.PI, false); ctx.fillStyle = rgbaHex(col, 0.3); ctx.fill();   // the faint "further node" it tails toward
+      // (2) dendritic branching — the bigger reaches fork near the tip into little dendrite trees
+      if (hidden > 8 && i % 2 === 0) {
+        const f = bez(0.72), blen = len * 0.3;
+        for (let bs = -1; bs <= 1; bs += 2) {
+          const ba = a + bs * 0.5, bex = f[0] + Math.cos(ba) * blen, bey = f[1] + Math.sin(ba) * blen;
+          const bg = ctx.createLinearGradient(f[0], f[1], bex, bey); bg.addColorStop(0, rgbaHex(col, 0.22)); bg.addColorStop(1, rgbaHex(col, 0));
+          ctx.strokeStyle = bg; ctx.beginPath(); ctx.moveTo(f[0], f[1]); ctx.lineTo(bex, bey); ctx.stroke();
+          ctx.beginPath(); ctx.arc(bex, bey, 1.1, 0, 2 * Math.PI, false); ctx.fillStyle = rgbaHex(col, 0.16); ctx.fill();
+        }
+      }
+      const seed = n.x * 0.13 + n.y * 0.29 + i * 1.7;
+      // (4) synapse glint — the "further node" tip twinkles slowly, like a synaptic terminal
+      const glint = prefersReducedMotion ? 0.3 : 0.3 * (0.55 + 0.45 * Math.sin(tt * 1.6 + seed));
+      ctx.beginPath(); ctx.arc(ex, ey, 1.5, 0, 2 * Math.PI, false); ctx.fillStyle = rgbaHex(col, glint); ctx.fill();
+      // (1) signal pulse — a mote fires outward along the dendrite, staggered per thread; brighter after a batch lands
+      if (!prefersReducedMotion) {
+        const cyc = (((tt * 0.2 + seed * 0.37) % 1) + 1) % 1;
+        if (cyc < 0.4) { const p = cyc / 0.4, m = bez(p), ma = Math.sin(p * Math.PI) * 0.55 * fireBoost; ctx.beginPath(); ctx.arc(m[0], m[1], 1.3, 0, 2 * Math.PI, false); ctx.fillStyle = rgbaHex(lit, Math.min(0.9, ma)); ctx.fill(); }
+      }
     }
   }
 }
@@ -246,7 +267,10 @@ function ensureGraph() {
       if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) return;
       const r = nodeRadius(n), col = n.color || '#7dd3fc';
       const bornFade = n.bornAt ? Math.min(1, (performance.now() - n.bornAt) / 450) : 1;   // new nodes materialise in
-      if (bornFade < 1) ctx.globalAlpha = bornFade;
+      // (3) soma breathing — a slow, subtle brightness pulse per node, like a living cell at rest
+      const breathe = prefersReducedMotion ? 1 : (0.9 + 0.1 * Math.sin(performance.now() / 1000 * 0.85 + (n.__ph != null ? n.__ph : (n.__ph = (n.x * 0.7 + n.y * 0.3) % 6.283))));
+      const nodeAlpha = bornFade * breathe;
+      if (nodeAlpha < 1) ctx.globalAlpha = nodeAlpha;
       // lit node: a soft same-hue glow (scales with radius → hubs shine brighter) makes the disk read as a
       // lit object, then a radial gradient (light core → saturated rim) gives it depth instead of a flat fill.
       ctx.save();
@@ -630,4 +654,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-09g: galactic-core far-field + center-weighted specks + Follow-mode tendril bridge');
+console.info('[kg] surface build 2026-07-09h: neuron lean-in (signal pulses + dendritic branching + soma breathing + synapse glints)');
