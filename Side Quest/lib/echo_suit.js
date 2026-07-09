@@ -511,7 +511,7 @@ async function relatedEntities(entityId, { dispatch = null, limit = 30, relTypes
   if (!d || !id) return [];
   let typeFilter = '';
   if (relTypes && relTypes.length) { const safe = relTypes.map(t => String(t).replace(/[^A-Z_]/gi, '')).filter(Boolean); if (safe.length) typeFilter = ` AND r.relation_type IN (${safe.map(t => `'${t}'`).join(',')})`; }
-  const sql = `SELECT r.relation_type rt, r.relation_metadata md, e.id id, e.name nm, e.entity_type et, e.entity_subtype est`
+  const sql = `SELECT r.relation_type rt, r.relation_metadata md, r.confidence conf, r.created_at cat, r.valid_from vf, r.valid_to vt, e.id id, e.name nm, e.entity_type et, e.entity_subtype est`
     + ` FROM relations r JOIN entities e ON e.id = (CASE WHEN r.source_id=${id} THEN r.target_id ELSE r.source_id END)`
     + ` WHERE (r.source_id=${id} OR r.target_id=${id}) AND r.deleted=0 AND r.tx_to IS NULL${typeFilter} ORDER BY r.confidence DESC LIMIT ${_SAFE_ID(limit) || 30}`;
   let rows = [];
@@ -519,7 +519,18 @@ async function relatedEntities(entityId, { dispatch = null, limit = 30, relTypes
   return rows.map(x => {
     let md = {}; try { md = JSON.parse(x.md || '{}'); } catch {}
     const until = md.tenure_end || md.end_date || null;
-    return { id: x.id, name: String(x.nm || ''), type: x.et || null, subtype: x.est || null, relation: x.rt || null, role: md.role_type || md.role || null, since: md.tenure_start || md.start_date || null, until, current: !until };
+    return {
+      id: x.id, name: String(x.nm || ''), type: x.et || null, subtype: x.est || null,
+      relation: x.rt || null, role: md.role_type || md.role || null,
+      since: md.tenure_start || md.start_date || null, until, current: !until,
+      // decay + termination inputs (confidence engine): the edge's own confidence + system-time age
+      // basis (created_at, unix SECONDS) + world-time validity window. valid_to / tenure_end that has
+      // passed is a PREDETERMINED TERMINATION (the nightly pass's business, not gradual decay).
+      confidence: x.conf == null ? null : Number(x.conf),
+      createdAt: x.cat == null ? null : Number(x.cat),
+      validFrom: x.vf == null ? null : Number(x.vf),
+      validTo: x.vt == null ? null : Number(x.vt),
+    };
   }).filter(x => x.name);
 }
 

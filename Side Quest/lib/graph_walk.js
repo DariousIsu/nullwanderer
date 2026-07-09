@@ -25,6 +25,9 @@ const CG = require('./curation_gate');   // the citation gate: existence + fact 
 const corroboration = require('./corroboration');     // C2 — independent-source counting
 const confModel = require('./confidence_model');      // C3 — calibrated confidence
 const { parseValidTime } = require('./doc_decompose'); // C1 — shared valid-time-from-prose parser
+const { runDecayPass } = require('./decay_pass');      // C4 — per-predicate confidence decay → re-verify
+
+const DECAY_FLOOR = 0.5;   // an edge whose confidence has decayed below this needs a fresh citation
 
 // --- knobs (the guard) ------------------------------------------------------
 const THIN_DEGREE = 8;            // an object below this degree is "thin" → worth filling
@@ -331,9 +334,35 @@ async function fetchLayeredSources(name, { fetchPage, recallKnowledge, webSearch
 }
 
 // One full graph-building MOVE. Orchestrates anchor → grow → record → voice. Returns a result the
+// DECAY-CHECK the anchor's existing edges (C4). The walk is ALREADY visiting this node's neighbourhood,
+// so checking its edges for staleness here is FREE coverage — the walk does BOTH: grows the graph AND
+// flags facts whose confidence has decayed below the floor (a role/office edge halves in ~1.5yr). Each
+// stale edge lands a 'reverify' observation in Zoe's short-term buffer (the re-verify work-list). A fact
+// with a PREDETERMINED TERMINATION (valid_to already passed) is NOT gradual decay — that's the nightly
+// termination pass's job — so it's skipped here. Returns the count flagged. Fail-soft, never throws.
+async function decayVisitedEdges(objId, { kgEdges, observe, now, floor = DECAY_FLOOR, anchorName = null } = {}) {
+  if (typeof kgEdges !== 'function' || !objId) return 0;
+  let edges = [];
+  try { edges = (await kgEdges(objId)) || []; } catch { return 0; }
+  const nowSec = Math.floor((Number(now) || 0) / 1000);
+  const facts = [];
+  for (const e of (Array.isArray(edges) ? edges : [])) {
+    const vt = e && e.validTo != null ? Number(e.validTo) : null;   // world-time end
+    if (vt != null && isFinite(vt) && vt > 0 && vt < nowSec) continue;   // already terminated → nightly's job, not decay
+    facts.push({ predicate: e.relation, confidence: e.confidence, lastVerifiedMs: e.createdAt != null ? Number(e.createdAt) * 1000 : null, target_name: e.name });
+  }
+  const { reverify } = runDecayPass(facts, { now, floor });
+  for (const f of reverify) {
+    if (typeof observe === 'function') {
+      try { await observe({ sourceEntity: anchorName || '', relation: f.predicate, target: f.target_name, confidence: f.decayed, status: 'reverify' }); } catch { /* fail-soft */ }
+    }
+  }
+  return reverify.length;
+}
+
 // caller uses to (optionally) voice one line and log. Never throws (fail-soft everywhere).
 async function runMove(deps = {}) {
-  const { recentTurns = [], candidates: injected, cloud, web, recall, dispatch, kgNeighbors, observe, getMeta, setMeta, now = () => Date.now(), log } = deps;
+  const { recentTurns = [], candidates: injected, cloud, web, recall, dispatch, kgNeighbors, kgEdges, observe, getMeta, setMeta, now = () => Date.now(), log } = deps;
   const nowTs = now();
   try {
     // ANCHOR SOURCE: prefer an injected, already-sourced candidate list (idle_anchors: news → thin
@@ -379,6 +408,12 @@ async function runMove(deps = {}) {
     const satTried = tried.filter(m => !(notable && m === anchor.mention));
     recordVisited({ getMeta, setMeta, now: nowTs, names: notable ? [anchor.mention, ...grown.related] : [] });
     recordVisited({ getMeta, setMeta, now: nowTs, names: satTried, saturated: true });
+    // DECAY (C4): we just touched this node — decay-check its existing edges for free (build + decay = both).
+    // Stale ones → 'reverify' observations in the short-term buffer. Only the acted anchor with a real id.
+    let reverified = 0;
+    if (typeof kgEdges === 'function' && anchor.object && anchor.object.id) {
+      try { reverified = await decayVisitedEdges(anchor.object.id, { kgEdges, observe, now: nowTs, anchorName: (anchor.object && anchor.object.canonical) || anchor.mention }); } catch { /* fail-soft */ }
+    }
     const via = sourceLabel(grown.sourceUrl);   // the citation source that verified the connections
     const _tag = via ? ` (via ${via})` : '';
     const voiceLine = notable
@@ -394,13 +429,14 @@ async function runMove(deps = {}) {
       canonical: (anchor.object && anchor.object.canonical) || anchor.mention,
       built: grown.built, entities: grown.entities, connections: grown.connections,
       related: grown.related, summary: grown.summary, voiceLine, held: grown.held || 0,
+      reverify: reverified,
       reason: notable ? 'grew' : 'no-growth'
     };
   } catch (e) { log && log('[graph-walk] move failed: ' + (e && e.message)); return { acted: false, reason: 'error', error: e && e.message }; }
 }
 
 module.exports = {
-  runMove, extractCandidates, assessGaps, growAround, fetchLayeredSources, sourceLabel, proposeEntity, proposeRelation,
+  runMove, decayVisitedEdges, extractCandidates, assessGaps, growAround, fetchLayeredSources, sourceLabel, proposeEntity, proposeRelation,
   parseJsonLoose, extractProperNouns, classifyObject, rankGaps, visitKey,
   loadVisited, visitedKeySet, recordVisited, buildCandidatePrompt, buildDossierPrompt,
   THIN_DEGREE, THIN_FACTS, WALK_MAX_NODES, WALK_MAX_CONNECTIONS, MAX_CANDIDATES, VISITED_TTL_MS, SATURATED_TTL_MS, VISITED_KEY

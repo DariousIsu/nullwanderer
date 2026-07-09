@@ -1607,8 +1607,11 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
     try { curationStore.record(db, { ...o, feed: 'graph-walk' }); } catch (e) { console.error('[cite] store failed:', e.message); }
     try { const tag = o.status === 'held' ? 'held' : 'cite'; console.log(`[${tag}] ${o.sourceEntity} —[${o.relation}]→ ${o.target || ''} (grade ${o.grade} ${Math.round((o.confidence || 0) * 100)}% ${o.url || 'no-url'})`); } catch {}
   };
+  // kgEdges: the anchor's live edges WITH confidence + age, so the walk can decay-check what it's already
+  // visiting (build + decay in one move). Reuses the A2-hardened relatedEntities read (tx_to IS NULL).
+  const kgEdges = (id) => echoSuit.relatedEntities(id, { dispatch, limit: 50 });
   const move = await graphWalk.runMove({
-    recentTurns, candidates: anchors, cloud, web, recall, dispatch, kgNeighbors, observe,
+    recentTurns, candidates: anchors, cloud, web, recall, dispatch, kgNeighbors, kgEdges, observe,
     getMeta: _gm, setMeta: _sm, now: () => Date.now(), log: (m) => console.log(m)
   });
   try { db.setMeta(GRAPHWALK_LAST_KEY, String(Date.now())); } catch {}
@@ -1622,7 +1625,7 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
       pushSheep({ id: row.id, ts: row.ts, content: move.voiceLine, type: 'thought', importance: imp });
       try { blackboard.append({ source: 'monologue', kind: 'thought', refTable: 'monologue', refId: row.id, content: move.voiceLine }); } catch {}
     } catch (e) { console.error('[graph-walk] voice surface failed:', e.message); }
-    console.log(`[graph-walk] [${move.source || 'convo'}] ${move.kind} "${move.anchor}" → +${move.entities} obj / +${move.connections} conn`);
+    console.log(`[graph-walk] [${move.source || 'convo'}] ${move.kind} "${move.anchor}" → +${move.entities} obj / +${move.connections} conn${move.reverify ? ` / ${move.reverify} reverify` : ''}`);
   } else if (move && !move.acted) {
     console.log(`[graph-walk] no move (${move.reason || 'quiet'})`);
   }

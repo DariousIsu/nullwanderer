@@ -222,6 +222,42 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
     ok(G.SATURATED_TTL_MS > G.VISITED_TTL_MS, 'saturation: SATURATED_TTL_MS > VISITED_TTL_MS');
   }
 
+  // ===== C4 DECAY: the walk decay-checks the edges it's ALREADY visiting → 'reverify' obs (build + decay) =====
+  {
+    const NOWMS = 1_000_000_000_000;
+    const nowSec = Math.floor(NOWMS / 1000);
+    const DAYS = 86400;
+    const edges = [
+      { name: 'Old Employer', relation: 'WORKS_FOR', confidence: 0.9, createdAt: nowSec - 550 * DAYS },   // FAST 1 half-life → 0.45 (stale)
+      { name: 'Fresh Employer', relation: 'WORKS_FOR', confidence: 0.9, createdAt: nowSec - 1 * DAYS },    // fresh → 0.9
+      { name: 'Birthplace City', relation: 'BORN_IN', confidence: 0.6, createdAt: nowSec - 20000 * DAYS }, // IMMUTABLE → no decay
+      { name: 'Ended Role', relation: 'HELD_OFFICE', confidence: 0.9, createdAt: nowSec - 900 * DAYS, validTo: nowSec - 10 * DAYS }, // TERMINATED → skipped
+    ];
+    const reobs = [];
+    const n = await G.decayVisitedEdges(7, { kgEdges: async () => edges, observe: async (o) => reobs.push(o), now: NOWMS, anchorName: 'Jane Subject [Q1]' });
+    ok(n === 1, 'decayVisitedEdges: exactly ONE edge is stale (the aged WORKS_FOR) — flagged for re-verify');
+    ok(reobs.length === 1 && reobs[0].status === 'reverify' && reobs[0].target === 'Old Employer', 'decayVisitedEdges: stale edge → a reverify observation on the right target');
+    ok(reobs[0].sourceEntity === 'Jane Subject [Q1]' && reobs[0].relation === 'WORKS_FOR', 'decayVisitedEdges: reverify obs carries the anchor as subject + the predicate');
+    ok(reobs[0].confidence < 0.5, 'decayVisitedEdges: reverify obs carries the DECAYED (below-floor) confidence');
+    ok(!reobs.some((o) => o.target === 'Birthplace City'), 'decayVisitedEdges: an IMMUTABLE edge (BORN_IN) never decays → never re-verified');
+    ok(!reobs.some((o) => o.target === 'Ended Role'), 'decayVisitedEdges: a PREDETERMINED-TERMINATION edge (valid_to passed) is skipped — nightly termination, not decay');
+    ok((await G.decayVisitedEdges(0, { kgEdges: async () => edges, observe: async () => {}, now: NOWMS })) === 0, 'decayVisitedEdges: no object id → 0 (fail-soft)');
+    ok((await G.decayVisitedEdges(7, { observe: async () => {}, now: NOWMS })) === 0, 'decayVisitedEdges: no kgEdges reader → 0 (optional no-op)');
+
+    // end-to-end: runMove decay-checks the anchor inline → move.reverify (the walk does BOTH)
+    const store2 = {}; const gM2 = (k) => store2[k]; const sM2 = (k, v) => { store2[k] = v; };
+    const rmObs = [];
+    const mv = await G.runMove({
+      candidates: [{ mention: 'Focus Node', source: 'frontier', kind: 'thin', object: { id: 7, degree: 2, canonical: 'Focus Node [Q7]' } }],
+      cloud: async () => JSON.stringify({ entity_type: 'organization', summary: 'x', related: [] }),  // no new edges → decay still runs
+      web: async () => [], recall: async () => null, dispatch: async () => ({ ok: true, text: '{}' }),
+      kgEdges: async () => [{ name: 'Old Tie', relation: 'WORKS_FOR', confidence: 0.9, createdAt: nowSec - 550 * DAYS }],
+      observe: async (o) => rmObs.push(o),
+      getMeta: gM2, setMeta: sM2, now: () => NOWMS,
+    });
+    ok(mv.reverify === 1 && rmObs.some((o) => o.status === 'reverify' && o.sourceEntity === 'Focus Node [Q7]'), 'runMove: decay-checks the anchor edges inline (move.reverify) — build + decay in one move');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
