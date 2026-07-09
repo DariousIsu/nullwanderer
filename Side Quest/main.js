@@ -523,6 +523,26 @@ app.whenReady().then(() => {
           if (sc.candidates.length) console.log(`[supersession] ${sc.summary.assessed} functional edges → ${sc.candidates.length} replacement candidate(s), ${landed} new (operator review)`);
         }
       } catch (e) { console.error('[supersession] scan failed:', e.message); }
+      // RECURSIVE AUDITOR (E1, AUTOPILOT): the autonomous auto-cleaner. Reversibly heals STRUCTURAL graph
+      // errors (self-loops, dangling edges, strong-id-contradiction merges) to convergence — asserts NO
+      // facts, needs NO grounding (the create/promote/merge lane is separate + citation-gated). Reversible
+      // (audit_fix_log→revert) + backup-first + regression-auto-kill. Pull the plug LIVE: audit_state.autopilot='off'.
+      try {
+        if (echoSuit && echoSuit.connected) {
+          const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_integrity_audit', args: {} });
+          let rep = null; try { rep = JSON.parse(ar && ar.text); } catch {}
+          if (rep) {
+            console.log(rep.skipped
+              ? `[audit] auto-cleaner skipped (${rep.skipped})`
+              : `[audit] auto-cleaner: fixed=${rep.total_fixed || 0} converged=${!!rep.converged}${rep.halted ? ` HALTED(${rep.halted})` : ''}${rep.auto_killed ? ' AUTOPILOT-DISARMED' : ''}`);
+            if (rep.total_fixed) {
+              const text = `[Memory upkeep] My integrity auditor reversibly cleaned ${rep.total_fixed} structural error${rep.total_fixed === 1 ? '' : 's'} out of the graph.`;
+              const row = db.insertMonologue({ content: text, model: 'audit', type: 'reading' });
+              if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
+            }
+          }
+        }
+      } catch (e) { console.error('[audit] auto-cleaner failed:', e.message); }
       // PROMOTION (short-term → long-term): consolidate the day's new short-term documents into Echo
       // long-term (vault doc + KG entities), on the SAME nightly cadence as curation.
       try {
