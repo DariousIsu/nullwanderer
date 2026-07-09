@@ -182,6 +182,10 @@ function mockResolver(map) {
   ok(relCall && relCall[1].source_name === 'Woodrow Wilson [Q34296]', '2c: edge targets the CANONICAL reused node name (not a twin)');
   ok(!calls.some(c => c[0] === 'propose_entity' && c[1].name === 'Woodrow Wilson'), '2c: the REUSED entity is NOT re-minted (no dup)');
   ok(calls.some(c => c[0] === 'propose_entity' && c[1].name === 'Princeton University' && c[1].entity_type === 'organization'), '2c: a minted entity carries its TYPE');
+  // confidence + metadata forwarding: a promoted edge carries the graded fact-gate
+  // confidence (NOT the flat 0.8 propose_relation default) + provenance metadata.
+  ok(relCall && typeof relCall[1].confidence === 'number', '2c: edge forwards a numeric graded confidence (not the 0.8 default)');
+  ok(relCall && typeof relCall[1].relation_metadata === 'string' && JSON.parse(relCall[1].relation_metadata).url === DOC.url, '2c: edge carries relation_metadata provenance (source url)');
   // observations: promoted for mints + the cited edges; held for the genuine fall-throughs
   ok(obs.filter(o => o.status === 'promoted').length === 5, '2c: 5 promoted observations (3 mints + 2 edges)');
   ok(obs.filter(o => o.status === 'held').length === 2, '2c: 2 held observations (the fall-through queue)');
@@ -201,6 +205,34 @@ function mockResolver(map) {
 
   // extractor throws → fail-soft.
   ok((await D.decomposeDoc({ text: 'x'.repeat(50), url: 'u' }, { extract: async () => { throw new Error('boom'); }, resolve, dispatch, observe })).reason === 'extract-failed', '2c: extractor throw → fail-soft (extract-failed)');
+
+  // -------------------------------------------------------------------------
+  // MIS-RESOLUTION GUARD — a chamber-membership edge must never resolve its
+  // target to an FEC committee/PAC (the "N legislators WORKS_FOR one PAC" hub-
+  // collision). Original target reads as a body; resolver stretched it to a
+  // same-token PAC → HOLD, never forge the spurious hub.
+  // -------------------------------------------------------------------------
+  {
+    const MRDOC = { title: 'AR legislators', url: 'https://ex.com/ar', text: 'x'.repeat(50) };
+    const mrExtract = async () => ({
+      entities: [{ name: 'Ben Gilmore (AR)', type: 'person' }],
+      relations: [
+        { source: 'Ben Gilmore (AR)', relation: 'MEMBER_OF', target: 'Arkansas Senate' },   // body → mis-resolves to a PAC
+        { source: 'Ben Gilmore (AR)', relation: 'WORKS_FOR', target: 'Acme Corp' },          // genuine employer → allowed
+      ],
+    });
+    const mrResolve = mockResolver({
+      'Ben Gilmore (AR)': { status: 'resolved', object: { id: 10, name: 'Ben Gilmore (AR)' } },
+      'Arkansas Senate': { status: 'resolved', object: { id: 20, name: 'MR FOR OHIO STATE SENATE [FEC:C00890582]' } }, // the bug
+      'Acme Corp': { status: 'resolved', object: { id: 30, name: 'Acme Corp' } },
+    });
+    const mrCalls = []; const mrObs = [];
+    const mrDispatch = async (tag) => { mrCalls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created"}' }; };
+    const mrRes = await D.decomposeDoc(MRDOC, { extract: mrExtract, resolve: mrResolve, dispatch: mrDispatch, observe: async (o) => mrObs.push(o) });
+    ok(mrRes.misresolved === 1, 'guard: the body→PAC edge is flagged mis-resolved');
+    ok(!mrCalls.some(c => c[0] === 'propose_relation' && c[1].target_name.includes('[FEC:')), 'guard: NO edge is proposed to the FEC committee (hub-collision blocked)');
+    ok(mrCalls.some(c => c[0] === 'propose_relation' && c[1].target_name === 'Acme Corp'), 'guard: a GENUINE WORKS_FOR edge (target is not a body) is still proposed');
+  }
 
   // -------------------------------------------------------------------------
   // STATE-ALIAS NORMALIZATION — matrix: every USPS code maps; the geographic-relation gate keeps

@@ -260,9 +260,26 @@ function normalizeStateAliases(entities, relations) {
 async function _proposeEntity(dispatch, name, entity_type, summary) {
   try { const r = await dispatch({ kind: 'do', name: 'propose_entity', args: { name, entity_type: entity_type || 'other', summary: summary || '' } }); return !!(r && r.ok); } catch { return false; }
 }
-async function _proposeRelation(dispatch, source, target, relation_type) {
-  try { const r = await dispatch({ kind: 'do', name: 'propose_relation', args: { source_name: source, target_name: target, relation_type: relation_type || 'related_to' } }); return !!(r && r.ok); } catch { return false; }
+async function _proposeRelation(dispatch, source, target, relation_type, confidence, metadata) {
+  try {
+    const args = { source_name: source, target_name: target, relation_type: relation_type || 'related_to' };
+    if (typeof confidence === 'number') args.confidence = confidence;       // graded, not the flat 0.8 default
+    if (metadata) args.relation_metadata = JSON.stringify(metadata);        // provenance (url/grade) on the edge
+    const r = await dispatch({ kind: 'do', name: 'propose_relation', args });
+    return !!(r && r.ok);
+  } catch { return false; }
 }
+
+// A legislative-body membership edge (WORKS_FOR/MEMBER_OF to a body) must NEVER
+// resolve its target to an FEC committee/PAC. FEC committees carry a trailing
+// "[C0…]" / "[FEC:C0…]" id tag; state chambers read as "… Senate/House/Assembly".
+// When the ORIGINAL target names a chamber but the RESOLVED target is an FEC
+// committee, the resolver stretched a generic "State Senate"/"House" token onto
+// a same-token PAC — the hub-collision bug. Detect and HOLD it.
+const _FEC_COMMITTEE_RE = /\[(?:FEC:)?C\d{7,}\]/i;
+const _LEGIS_BODY_RE = /\b(senate|house of representatives|house|assembly|legislature|general assembly|delegates|city council|county commission|board of supervisors)\b/i;
+function _isFecCommittee(name) { return _FEC_COMMITTEE_RE.test(String(name || '')); }
+function _isLegisBody(name) { return _LEGIS_BODY_RE.test(String(name || '')); }
 async function _observe(observe, o) { if (typeof observe === 'function') { try { await observe(o); } catch {} } }
 
 async function decomposeDoc(doc = {}, deps = {}) {
@@ -344,9 +361,19 @@ async function decomposeDoc(doc = {}, deps = {}) {
     if (out.connections >= maxRel) break;
     const sName = usable.get(coreKey(r.source) || r.source.toLowerCase());
     const tName = usable.get(coreKey(r.target) || r.target.toLowerCase());
+    const relTypeU = String((r && r.relation) || '').toUpperCase();
+    // MIS-RESOLUTION GUARD: a body-membership edge whose ORIGINAL target names a
+    // legislative chamber but RESOLVED to an FEC committee/PAC is the hub-collision
+    // bug (e.g. "…MEMBER_OF Arkansas Senate" → "MR FOR OHIO STATE SENATE [FEC:C0…]").
+    // Never forge it — hold for a corrected resolution.
+    if (sName && tName && ORG_TARGET_REL.test(relTypeU) && _isLegisBody(r.target) && _isFecCommittee(tName)) {
+      out.held++; out.misresolved = (out.misresolved || 0) + 1;
+      await _observe(observe, { sourceEntity: sName, relation: r.relation, target: tName, url, grade: 'D', confidence: 0, status: 'held' });
+      continue;
+    }
     if (sName && tName && sName.toLowerCase() !== tName.toLowerCase()) {
       const fg = CG.gateFact('S1', docSources);              // doc-cited → B → promote
-      if (fg.promote && await _proposeRelation(dispatch, sName, tName, r.relation)) {
+      if (fg.promote && await _proposeRelation(dispatch, sName, tName, r.relation, fg.confidence, { url, grade: fg.grade })) {
         out.connections++; out.related.push(tName);
         await _observe(observe, { sourceEntity: sName, relation: r.relation, target: tName, url, grade: fg.grade, confidence: fg.confidence, status: 'promoted' });
       }
