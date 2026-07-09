@@ -163,11 +163,14 @@ async function assessGaps(candidates, { recall, log } = {}) {
 // 'already_exists' / 'merge_suggested', never a blind dup). Echo's propose_entity schema is
 // {name, entity_type, summary?, entity_subtype?, confidence?} with additionalProperties:false — do
 // NOT pass extra keys (they're rejected). Fail-soft; true iff Echo accepted.
-async function proposeEntity({ dispatch, name, entity_type, summary }) {
+async function proposeEntity({ dispatch, name, entity_type, summary, confidence }) {
   if (typeof dispatch !== 'function' || !name) return false;
   try {
     const args = { name, entity_type: entity_type || 'concept' };
     if (summary) args.summary = String(summary).slice(0, 1200);
+    // Carry the GRADE confidence (curation_gate cap: A=1.0 / B=0.95 / C=0.80 …) so Echo's hybrid
+    // promotion gate can auto-promote well-cited (A/B) proposals and queue weaker (C/D) ones for review.
+    if (typeof confidence === 'number') args.confidence = confidence;
     const r = await dispatch({ kind: 'do', name: 'propose_entity', args });
     return !!(r && r.ok);
   } catch { return false; }
@@ -175,10 +178,12 @@ async function proposeEntity({ dispatch, name, entity_type, summary }) {
 
 // Add one edge — BOTH endpoints must already exist (we propose the entities first). Schema is
 // {source_name, target_name, relation_type, confidence?}, additionalProperties:false. Fail-soft.
-async function proposeRelation({ dispatch, source, target, relation_type }) {
+async function proposeRelation({ dispatch, source, target, relation_type, confidence }) {
   if (typeof dispatch !== 'function' || !source || !target || source === target) return false;
   try {
-    const r = await dispatch({ kind: 'do', name: 'propose_relation', args: { source_name: source, target_name: target, relation_type: relation_type || 'related_to' } });
+    const args = { source_name: source, target_name: target, relation_type: relation_type || 'related_to' };
+    if (typeof confidence === 'number') args.confidence = confidence;   // grade cap → Echo hybrid promotion gate
+    const r = await dispatch({ kind: 'do', name: 'propose_relation', args });
     return !!(r && r.ok);
   } catch { return false; }
 }
@@ -226,7 +231,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, log
       log && log(`[grow] "${mention}" existence uncited (grade ${eg.grade}) → HELD, not minted`);
       return { built: false, entities: 0, connections: 0, related: [], summary: String(dossier.summary || '').trim(), held: 1 };
     }
-    if (await proposeEntity({ dispatch, name: canonical, entity_type: dossier.entity_type, summary: dossier.summary })) {
+    if (await proposeEntity({ dispatch, name: canonical, entity_type: dossier.entity_type, summary: dossier.summary, confidence: eg.confidence })) {
       entities++;
       if (!sourceUrl) sourceUrl = eg.url || null;
       if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: 'exists', target: null, url: eg.url, grade: eg.grade, confidence: eg.confidence, status: 'promoted' }); } catch {} }
@@ -250,8 +255,8 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, log
       continue;
     }
     // propose the related entity (harmless if it already exists — Echo dedups on promotion)
-    if (entities < WALK_MAX_NODES && await proposeEntity({ dispatch, name: rname, entity_type: r.type, summary: '' })) entities++;
-    if (await proposeRelation({ dispatch, source: canonical, target: rname, relation_type: (r && r.relation) || 'related_to' })) {
+    if (entities < WALK_MAX_NODES && await proposeEntity({ dispatch, name: rname, entity_type: r.type, summary: '', confidence: fg.confidence })) entities++;
+    if (await proposeRelation({ dispatch, source: canonical, target: rname, relation_type: (r && r.relation) || 'related_to', confidence: fg.confidence })) {
       connections++; related.push(rname);
       if (!sourceUrl) sourceUrl = fg.url || null;
       // record the CITATION for the promoted fact (the observation trail; grade + backing url).
