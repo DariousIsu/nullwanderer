@@ -421,6 +421,6 @@ async function decomposeDoc(doc = {}, deps = {}) {
 
 module.exports = {
   ENTITY_TYPES, REL_VOCAB, canonType, badField, coreKey,
-  buildTypedPrompt, parseTypedExtraction, mergeCandidates,
+  buildTypedPrompt, parseTypedExtraction, parseValidTime: _parseValidTime, mergeCandidates,
   resolveExtracted, planEntities, decomposeDoc, stateFull, normalizeStateAliases, US_STATES,
 };

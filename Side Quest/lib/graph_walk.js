@@ -22,6 +22,9 @@
 'use strict';
 
 const CG = require('./curation_gate');   // the citation gate: existence + fact gates over the shared grade ladder
+const corroboration = require('./corroboration');     // C2 — independent-source counting
+const confModel = require('./confidence_model');      // C3 — calibrated confidence
+const { parseValidTime } = require('./doc_decompose'); // C1 — shared valid-time-from-prose parser
 
 // --- knobs (the guard) ------------------------------------------------------
 const THIN_DEGREE = 8;            // an object below this degree is "thin" → worth filling
@@ -121,7 +124,7 @@ function buildDossierPrompt(mention, sources, { existing = null, neighbors = [] 
   const have = existing ? `\nWHAT THE GRAPH ALREADY HOLDS on "${mention}" (build PAST this, do not repeat): ${String(existing.role || '')} ${(existing.facts || []).slice(0, 4).join('; ')}`.slice(0, 400) : '';
   const nbr = neighbors && neighbors.length ? `\nAlready-linked neighbours (do not re-propose these edges): ${neighbors.slice(0, 10).join(', ')}` : '';
   return [
-    { role: 'system', content: 'You turn sources into a knowledge-graph object. Ground every claim in the sources; invent nothing. Output ONLY JSON of the shape {"entity_type":"person|organization|place|work|event|concept","summary":"2-4 dense factual sentences","related":[{"name":"Other Entity","type":"person|organization|...","relation":"short_relation_label","source":"S#"}]}. `related` = up to 6 OTHER entities this one is genuinely connected to. For EACH related entity you MUST set "source" to the [S#] label of the source that STATES this connection. If a connection is your own INFERENCE beyond what the sources say, set "source":"inferred" — be honest: an inferred connection is HELD OUT, not added to the graph. No prose outside the JSON.' },
+    { role: 'system', content: 'You turn sources into a knowledge-graph object. Ground every claim in the sources; invent nothing. Output ONLY JSON of the shape {"entity_type":"person|organization|place|work|event|concept","summary":"2-4 dense factual sentences","related":[{"name":"Other Entity","type":"person|organization|...","relation":"short_relation_label","source":"S#","when":"year or year-range the sources state this connection became/was true, e.g. 2023 or 2015-2019; empty if undated"}]}. `related` = up to 6 OTHER entities this one is genuinely connected to. For EACH related entity you MUST set "source" to the [S#] label of the source that STATES this connection. Set "when" ONLY from an explicit date in the sources — never guess. If a connection is your own INFERENCE beyond what the sources say, set "source":"inferred" — be honest: an inferred connection is HELD OUT, not added to the graph. No prose outside the JSON.' },
     { role: 'user', content: `Entity: "${mention}"${have}${nbr}\n\nSources:\n${src || '(none)'}\n\nJSON:` }
   ];
 }
@@ -178,11 +181,12 @@ async function proposeEntity({ dispatch, name, entity_type, summary, confidence 
 
 // Add one edge — BOTH endpoints must already exist (we propose the entities first). Schema is
 // {source_name, target_name, relation_type, confidence?}, additionalProperties:false. Fail-soft.
-async function proposeRelation({ dispatch, source, target, relation_type, confidence }) {
+async function proposeRelation({ dispatch, source, target, relation_type, confidence, metadata }) {
   if (typeof dispatch !== 'function' || !source || !target || source === target) return false;
   try {
     const args = { source_name: source, target_name: target, relation_type: relation_type || 'related_to' };
-    if (typeof confidence === 'number') args.confidence = confidence;   // grade cap → Echo hybrid promotion gate
+    if (typeof confidence === 'number') args.confidence = confidence;   // calibrated → Echo promotion gate
+    if (metadata) args.relation_metadata = JSON.stringify(metadata);    // C1 provenance (source_set/valid-time)
     const r = await dispatch({ kind: 'do', name: 'propose_relation', args });
     return !!(r && r.ok);
   } catch { return false; }
@@ -256,11 +260,20 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, log
     }
     // propose the related entity (harmless if it already exists — Echo dedups on promotion)
     if (entities < WALK_MAX_NODES && await proposeEntity({ dispatch, name: rname, entity_type: r.type, summary: '', confidence: fg.confidence })) entities++;
-    if (await proposeRelation({ dispatch, source: canonical, target: rname, relation_type: (r && r.relation) || 'related_to', confidence: fg.confidence })) {
+    // C1/C2/C3 provenance + calibrated confidence (mirrors doc_decompose): per-edge
+    // source_set + valid-time from prose; confidence from the independent-source count.
+    const vt = parseValidTime(r && r.when);
+    const meta = { source_set: fg.url ? [fg.url] : [], url: fg.url || null, grade: fg.grade };
+    if (vt.valid_from != null) meta.valid_from = vt.valid_from;
+    if (vt.valid_to != null) meta.valid_to = vt.valid_to;
+    const corrN = corroboration.corroborationCount(meta.source_set);
+    meta.corroboration = corrN;
+    const conf = confModel.calibratedConfidence({ grade: fg.grade, corroboration: corrN });
+    if (await proposeRelation({ dispatch, source: canonical, target: rname, relation_type: (r && r.relation) || 'related_to', confidence: conf, metadata: meta })) {
       connections++; related.push(rname);
       if (!sourceUrl) sourceUrl = fg.url || null;
       // record the CITATION for the promoted fact (the observation trail; grade + backing url).
-      if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: fg.url, grade: fg.grade, confidence: fg.confidence, status: 'promoted' }); } catch {} }
+      if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: fg.url, grade: fg.grade, confidence: conf, status: 'promoted', valid_from: vt.valid_from, valid_to: vt.valid_to }); } catch {} }
     }
   }
   log && log(`[grow] "${mention}" [${gap.kind}] sources=${sources.length} neighbors=${neighbors.length} related=${_relRaw} → +${entities} ent +${connections} conn (${held} held: uncited)`);

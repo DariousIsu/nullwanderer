@@ -144,7 +144,7 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   const gdisp = async (tag) => { gcalls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created"}' }; };
   const gweb = async () => [{ text: 'Acme Corp partners with Beta Inc.', url: 'https://ex.com/acme' }];
   const gcloud = async () => JSON.stringify({ entity_type: 'organization', summary: 'Acme Corp.', related: [
-    { name: 'Beta Inc', type: 'organization', relation: 'partners_with', source: 'S1' },          // cited → promote
+    { name: 'Beta Inc', type: 'organization', relation: 'partners_with', source: 'S1', when: '2019' }, // cited + dated → promote
     { name: 'Gamma Guess', type: 'organization', relation: 'rumored_tie', source: 'inferred' }    // inferred → HELD
   ] });
   const gGrown = await G.growAround(
@@ -159,6 +159,14 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   ok(G.sourceLabel('') === '' && G.sourceLabel(null) === '', 'sourceLabel: empty → ""');
   ok(gcalls.some(c => c[0] === 'propose_relation' && c[1].target_name === 'Beta Inc'), 'growAround: the CITED edge is proposed');
   ok(!gcalls.some(c => c[0] === 'propose_relation' && c[1].target_name === 'Gamma Guess'), 'growAround: the INFERRED edge NEVER reaches Echo');
+  // C1/C2/C3 wiring: the promoted edge carries valid-time + source_set provenance and a CALIBRATED
+  // confidence from the independent-source count (1 here → grade-B prior), not the flat grade cap.
+  const gRel = gcalls.find(c => c[0] === 'propose_relation' && c[1].target_name === 'Beta Inc');
+  const gMd = gRel && JSON.parse(gRel[1].relation_metadata);
+  ok(gMd && gMd.valid_from === 2019, 'growAround: proposed edge carries valid_from parsed from the dossier "when"');
+  ok(gMd && Array.isArray(gMd.source_set) && gMd.source_set[0] === 'https://ex.com/acme', 'growAround: proposed edge carries a source_set (citation url)');
+  const CM = require('../lib/confidence_model');
+  ok(gRel && Math.abs(gRel[1].confidence - CM.calibratedConfidence({ grade: 'B', corroboration: 1 })) < 1e-9, 'growAround: edge confidence = calibrated(B, corr 1), not the flat cap');
   // Slice 1: BOTH the promoted fact AND the held (inferred) claim are observed — the held one queues
   // as an enrichment candidate (the durable trail records what we SAW, not just what promoted).
   const oProm = observed.find(o => o.target === 'Beta Inc');
