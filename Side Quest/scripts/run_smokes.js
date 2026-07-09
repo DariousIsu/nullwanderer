@@ -55,6 +55,7 @@ const smokes = [
   'smoke_identity_gate.js',
   'smoke_ingest_lane.js',
   'smoke_research_lane.js',
+  'smoke_research_exec.js',
   'smoke_email_prefilter.js',
   'smoke_decomp_lane.js',
   'smoke_contact_extract.js',
