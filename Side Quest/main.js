@@ -636,6 +636,43 @@ app.whenReady().then(() => {
     finally { auditRunning = false; }
   };
   setInterval(() => { maybeRunAudit().catch(() => {}); }, AUDIT_CHECK_MS).unref?.();
+  // F2 GATE-LESS GROUNDED AUTO-PROMOTE LANE — the landing gap closed. Staged proposals used to sit
+  // unpromoted (operator-gated); this drains the GROUNDED promote-band (calibrated conf >= floor + a real
+  // citation) into civic_graph autonomously, in bounded chunks until the queue empties. Every promotion is
+  // reversible + logged (Echo auto_promotion_log → revert_auto_promotion). SEPARATE master switch
+  // ZOE_INGEST_ENABLED (default OFF) so it's armed deliberately + monitored, like the auto-cleaner was.
+  const INGEST_CHECK_MS = (parseFloat(process.env.ZOE_INGEST_CHECK_MIN) || 10) * 60 * 1000;   // poll cadence
+  const INGEST_MIN_GAP_MS = (parseFloat(process.env.ZOE_INGEST_MIN_GAP_MIN) || 20) * 60 * 1000; // floor between drains
+  const INGEST_CHUNK = parseInt(process.env.ZOE_INGEST_CHUNK || '', 10) || 200;                // proposals per chunk
+  const INGEST_FLOOR = parseFloat(process.env.ZOE_INGEST_FLOOR) || 0.90;                        // the promote-band floor
+  let ingestRunning = false;
+  const maybeDrainIngest = async () => {
+    if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_INGEST_ENABLED || '').trim())) return;  // gate-less lane: OFF until armed
+    if (ingestRunning) return;
+    if (!echoSuit || !echoSuit.connected) return;
+    if (Date.now() - parseInt(db.getMeta('last_ingest_drain_at') || '0', 10) < INGEST_MIN_GAP_MS) return;  // floor
+    ingestRunning = true;
+    db.setMeta('last_ingest_drain_at', String(Date.now()));
+    try {
+      const ingestLane = require('./lib/ingest_lane');
+      const runChunk = async () => {
+        const dr = await echoSuit.dispatch({ kind: 'do', name: 'auto_promote_grounded', args: { min_confidence: INGEST_FLOOR, limit: INGEST_CHUNK } });
+        let rep = null; try { rep = JSON.parse(dr && dr.text); } catch {}
+        return { promoted: (rep && rep.promoted) || 0, remaining: (rep && rep.remaining != null) ? rep.remaining : 0 };
+      };
+      const res = await ingestLane.drainUntilEmpty(runChunk, { maxIters: 40 });
+      if (res.totalPromoted > 0 || res.stopped === 'error') {
+        console.log(`[ingest] gate-less drain: promoted=${res.totalPromoted} over ${res.iters} chunk(s) → ${res.stopped}`);
+        if (res.totalPromoted > 0) {
+          const text = `[Memory building] I auto-integrated ${res.totalPromoted} grounded fact${res.totalPromoted === 1 ? '' : 's'} into my long-term graph — verified + reversible, no gate.`;
+          const row = db.insertMonologue({ content: text, model: 'ingest', type: 'reading' });
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
+        }
+      }
+    } catch (e) { console.error('[ingest] drain failed:', e.message); }
+    finally { ingestRunning = false; }
+  };
+  setInterval(() => { maybeDrainIngest().catch(() => {}); }, INGEST_CHECK_MS).unref?.();
   // Episodic recall backfill: embed past turns lacking an embedding so "what did we say earlier
   // about X" works over EXISTING history too. The one-shot 300 left ~half of turns unembedded
   // (episodic recall was blind to old history); DRAIN it in bounded batches until caught up, paced
