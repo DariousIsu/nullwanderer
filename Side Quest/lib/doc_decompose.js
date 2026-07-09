@@ -19,6 +19,8 @@
 'use strict';
 
 const CG = require('./curation_gate');   // the shared two gates (existence + fact), doc = grade B
+const corroboration = require('./corroboration');     // C2 — independent-source counting (mirror-collapsed)
+const confModel = require('./confidence_model');      // C3 — calibrated, corroboration-sensitive confidence
 
 // Closed entity-type vocab, aligned with Echo's types. Anything unrecognized → 'other' (still a real
 // object, just untyped — the richness axis, not the reality axis). Normalizes common model synonyms.
@@ -398,9 +400,15 @@ async function decomposeDoc(doc = {}, deps = {}) {
       const meta = { source_set: [url], url, grade: fg.grade };
       if (r.valid_from != null) meta.valid_from = r.valid_from;
       if (r.valid_to != null) meta.valid_to = r.valid_to;
-      if (fg.promote && await _proposeRelation(dispatch, sName, tName, r.relation, fg.confidence, meta)) {
+      // C2+C3: calibrated confidence from the INDEPENDENT-source count (1 at
+      // propose time; the corroboration-enrichment pass raises it as the same
+      // fact is re-proposed from other sources), not the flat grade cap.
+      const corrN = corroboration.corroborationCount(meta.source_set);
+      const conf = confModel.calibratedConfidence({ grade: fg.grade, corroboration: corrN });
+      meta.corroboration = corrN;
+      if (fg.promote && await _proposeRelation(dispatch, sName, tName, r.relation, conf, meta)) {
         out.connections++; out.related.push(tName);
-        await _observe(observe, { sourceEntity: sName, relation: r.relation, target: tName, url, grade: fg.grade, confidence: fg.confidence, status: 'promoted', valid_from: r.valid_from, valid_to: r.valid_to });
+        await _observe(observe, { sourceEntity: sName, relation: r.relation, target: tName, url, grade: fg.grade, confidence: conf, status: 'promoted', valid_from: r.valid_from, valid_to: r.valid_to });
       }
     } else {
       out.held++;                                            // endpoint unresolved → upgrade-pass queue

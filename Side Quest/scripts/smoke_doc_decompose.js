@@ -263,6 +263,11 @@ function mockResolver(map) {
     const md = c1Rel && JSON.parse(c1Rel[1].relation_metadata);
     ok(md && md.valid_from === 2023, 'C1: proposed edge carries valid_from in relation_metadata');
     ok(md && Array.isArray(md.source_set) && md.source_set[0] === C1DOC.url, 'C1: proposed edge carries a source_set (the doc url)');
+    // C2+C3 integration: confidence is the CALIBRATED value from the independent-source
+    // count (1 here → the grade-B prior), not the flat grade cap; corroboration recorded.
+    const CM = require('../lib/confidence_model');
+    ok(md && md.corroboration === 1, 'C3: edge records corroboration count (1 = single source)');
+    ok(c1Rel && Math.abs(c1Rel[1].confidence - CM.calibratedConfidence({ grade: 'B', corroboration: 1 })) < 1e-9, 'C3: edge confidence = calibrated(B, corr 1), not the flat cap');
   }
 
   // -------------------------------------------------------------------------
