@@ -15,6 +15,13 @@ let hovered = null;
 let mode = 'overview', submitted = '', submittedQuery = '';
 // --- activity-pulse state: the far-field flares on each landed batch, magnitude set per tier (below) ---
 let focalId = null, pulseAt = 0, pulseMag = 1.4;
+
+// Persistent "world" for follow/ego mode: each ego walk MERGES into this store (keyed by id) instead of
+// replacing the graph, so shared nodes keep their positions and the panel feels like flying through ONE
+// galaxy rather than regrowing every move. Capped with an LRU trail — nodes you've moved away from fade
+// out at the periphery. Node objects are reused by reference so d3-force preserves x/y across updates.
+const world = { nodes: new Map(), links: new Map() };
+const WORLD_CAP = 320;
 const linkEnd = (x) => (x && typeof x === 'object') ? x.id : x;
 
 // color helpers for the lit-node / atmosphere rendering (entity colors are hex; fallbacks are hex too)
@@ -189,6 +196,8 @@ function ensureGraph() {
       // gradient does not — so skip this node for this frame. It draws normally once positioned.
       if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) return;
       const r = nodeRadius(n), col = n.color || '#7dd3fc';
+      const bornFade = n.bornAt ? Math.min(1, (performance.now() - n.bornAt) / 450) : 1;   // new nodes materialise in
+      if (bornFade < 1) ctx.globalAlpha = bornFade;
       // lit node: a soft same-hue glow (scales with radius → hubs shine brighter) makes the disk read as a
       // lit object, then a radial gradient (light core → saturated rim) gives it depth instead of a flat fill.
       ctx.save();
@@ -207,6 +216,7 @@ function ensureGraph() {
       if (n.overviewSource === 'recent' || n.overviewSource === 'both') { ctx.beginPath(); ctx.arc(n.x, n.y, r + 2, 0, 2 * Math.PI, false); ctx.setLineDash([2, 2]); ctx.lineWidth = 1.2 / scale; ctx.strokeStyle = '#FBBF24'; ctx.stroke(); ctx.setLineDash([]); }
       if (hovered && hovered.id === n.id) { ctx.beginPath(); ctx.arc(n.x, n.y, r * 1.8, 0, 2 * Math.PI, false); ctx.strokeStyle = 'rgba(125,211,252,0.85)'; ctx.lineWidth = 1.5 / scale; ctx.stroke(); }
       n.__r = r;   // stash for the label pass (onRenderFramePost draws labels so it can rank + de-collide)
+      ctx.globalAlpha = 1;
     })
     // Labels are drawn in ONE post pass (not per-node) so we control z-order: focal/hovered/neighbors
     // first, then by prominence, each skipped if its box would overlap an already-placed label. Kills the
@@ -224,6 +234,7 @@ function ensureGraph() {
   } catch (e) {}
   const fit = () => { const w = graphEl.clientWidth, h = graphEl.clientHeight; if (w > 0 && h > 0) { G.width(w).height(h); try { if (G.resumeAnimation) G.resumeAnimation(); } catch (e) {} } };
   fit(); new ResizeObserver(fit).observe(graphEl);
+  try { window.__kgGraph = G; } catch (e) {}   // read-only debug handle for live CDP inspection (dev only)
   return G;
 }
 
@@ -308,10 +319,20 @@ function drawLabels(ctx, scale) {
 // never corrupts the pristine `full`).
 function applyFilter() {
   const useFilter = selected.size > 0;
+  if (mode === 'ego') {
+    // source from the PERSISTENT world (reuse node objects → d3 keeps their positions). Camera stays put;
+    // setData flies it. Filtering just hides types; the objects survive so unfiltering restores positions.
+    const nodes = [...world.nodes.values()].filter(n => n.isFocal || !useFilter || selected.has(n.entityType));
+    const present = new Set(nodes.map(n => n.id));
+    const links = [...world.links.values()].filter(m => present.has(m.s) && present.has(m.t))
+      .map(m => ({ source: m.s, target: m.t, relType: m.relType, color: m.color, width: m.width, category: m.category }));
+    ensureGraph().graphData({ nodes, links });
+    return;
+  }
   const nodes = full.nodes.filter(n => n.isFocal || !useFilter || selected.has(n.entityType));
   const present = new Set(nodes.map(n => n.id));
   const links = full.links
-    .map(l => ({ source: typeof l.source === 'object' ? l.source.id : l.source, target: typeof l.target === 'object' ? l.target.id : l.target, relType: l.relType, color: l.color, width: l.width, category: l.category }))
+    .map(l => ({ source: linkEnd(l.source), target: linkEnd(l.target), relType: l.relType, color: l.color, width: l.width, category: l.category }))
     .filter(l => present.has(l.source) && present.has(l.target));
   ensureGraph().graphData({ nodes, links });
   if (nodes.length) setTimeout(() => { try { G.zoomToFit(400, 50); if (G.resumeAnimation) G.resumeAnimation(); } catch (e) {} }, 450);
@@ -345,22 +366,78 @@ function renderHover() {
   hoverEl.innerHTML = `<div class="hh"><span class="swatch" style="background:${hovered.color || '#7dd3fc'}"></span><span class="nm">${esc(hovered.id)}</span><span class="ty">${esc(hovered.entityType)}</span></div>${hovered.summary ? `<div class="sm">${esc(hovered.summary)}</div>` : ''}<div class="hint">${hovered.isFocal ? 'focal entity' : 'click to re-center'}</div>`;
 }
 
+// Merge an ego walk into the persistent world: reuse existing node objects (position preserved), seed new
+// ones next to the neighbour they connect to (so they grow outward, not fly from origin), accumulate links,
+// then LRU-prune beyond the cap. Returns the focal id.
+function mergeEgo(res) {
+  const now = performance.now();
+  const incoming = res.nodes || [], incLinks = res.links || [];
+  for (const n of world.nodes.values()) n.isFocal = false;
+  const focal = incoming.find(n => n.isFocal) || incoming[0] || null;
+  const fId = focal ? focal.id : null;
+  // seed origin for brand-new nodes: the current focal's spot if placed, else the world centroid
+  let seedX = 0, seedY = 0, cnt = 0;
+  for (const n of world.nodes.values()) if (Number.isFinite(n.x)) { seedX += n.x; seedY += n.y; cnt++; }
+  if (cnt) { seedX /= cnt; seedY /= cnt; }
+  const ef = fId && world.nodes.get(fId);
+  if (ef && Number.isFinite(ef.x)) { seedX = ef.x; seedY = ef.y; }
+  const connectedTo = new Map();   // incoming id → a connected incoming id (to seed near a real neighbour)
+  for (const l of incLinks) { const a = linkEnd(l.source), b = linkEnd(l.target); if (a != null && b != null) { if (!connectedTo.has(a)) connectedTo.set(a, b); if (!connectedTo.has(b)) connectedTo.set(b, a); } }
+  const jit = () => (Math.random() - 0.5) * 40;
+  for (const inc of incoming) {
+    let node = world.nodes.get(inc.id);
+    if (node) { node.touchedAt = now; node.entityType = inc.entityType; node.color = inc.color; if (inc.summary) node.summary = inc.summary; }
+    else {
+      let sx = seedX, sy = seedY;
+      const nbr = connectedTo.get(inc.id), nn = nbr && world.nodes.get(nbr);
+      if (nn && Number.isFinite(nn.x)) { sx = nn.x; sy = nn.y; }
+      node = { id: inc.id, entityType: inc.entityType, color: inc.color, summary: inc.summary || null, bornAt: now, touchedAt: now, x: sx + jit(), y: sy + jit() };
+      world.nodes.set(inc.id, node);
+    }
+    if (inc.id === fId) node.isFocal = true;
+  }
+  for (const l of incLinks) { const s = linkEnd(l.source), t = linkEnd(l.target); if (s == null || t == null) continue; const key = s + '→' + t + '::' + l.relType; if (!world.links.has(key)) world.links.set(key, { s, t, relType: l.relType, color: l.color, width: l.width, category: l.category }); }
+  if (world.nodes.size > WORLD_CAP) {   // LRU trail-prune (never the focal); drop dangling links
+    const arr = [...world.nodes.values()].filter(n => n.id !== fId).sort((a, b) => a.touchedAt - b.touchedAt);
+    const drop = world.nodes.size - WORLD_CAP, gone = new Set();
+    for (let i = 0; i < drop && i < arr.length; i++) { world.nodes.delete(arr[i].id); gone.add(arr[i].id); }
+    for (const [k, m] of world.links) if (gone.has(m.s) || gone.has(m.t)) world.links.delete(k);
+  }
+  return fId;
+}
+// Fly the camera to the focal node through the persistent space (a pan, not a zoomToFit reset).
+function flyToFocal() {
+  if (!G) return;
+  try { if (G.resumeAnimation) G.resumeAnimation(); } catch (e) {}
+  setTimeout(() => { try { const f = (G.graphData().nodes || []).find(n => n.isFocal); if (f && Number.isFinite(f.x)) G.centerAt(f.x, f.y, 900); } catch (e) {} }, 300);
+}
+
 function setData(res, m) {
   mode = m;
   backBtn.hidden = (m !== 'ego');
-  if (!res || !res.ok) { setOverlay((res && res.error) || 'failed to load', 'fail'); full = { nodes: [], links: [] }; renderPills([]); statsEl.hidden = true; return; }
-  if (res.error) { setOverlay(`${res.error}: ${submitted}`, 'warn'); full = { nodes: [], links: [] }; renderPills([]); applyFilter(); statsEl.hidden = true; return; }
-  full = { nodes: res.nodes || [], links: res.links || [] };
-  focalId = (full.nodes.find(n => n.isFocal) || {}).id || null;   // drives the edge-shimmer + pulse target
-  selected = new Set();
+  // error paths: never wipe the persistent world on a transient ego miss (keep flying); overview clears.
+  if (!res || !res.ok) { setOverlay((res && res.error) || 'failed to load', 'fail'); if (m !== 'ego') { full = { nodes: [], links: [] }; renderPills([]); statsEl.hidden = true; } return; }
+  if (res.error) { setOverlay(`${res.error}: ${submitted}`, 'warn'); if (m !== 'ego') { full = { nodes: [], links: [] }; renderPills([]); applyFilter(); statsEl.hidden = true; } return; }
   renderPills(res.availableTypes || []);
   renderLegend(res.legend || []);
-  setOverlay(full.nodes.length ? null : 'No graph data.');
+  selected = new Set();
   statsEl.hidden = false;
-  statsEl.textContent = m === 'ego'
-    ? `ego · ${res.stats ? res.stats.related : full.links.length} related · hops=${res.stats ? res.stats.hops : ''}`
-    : `overview · ${(res.stats && res.stats.totalEntities || 0).toLocaleString()} nodes · ${(res.stats && res.stats.totalRelations || 0).toLocaleString()} edges`;
-  applyFilter();
+  if (m === 'ego') {
+    const wasEmpty = world.nodes.size === 0;   // first neighbourhood → frame it; later moves → fly there
+    focalId = mergeEgo(res);
+    setOverlay(world.nodes.size ? null : 'No graph data.');
+    statsEl.textContent = `ego · ${res.stats ? res.stats.related : (res.links || []).length} related · hops=${res.stats ? res.stats.hops : ''} · world ${world.nodes.size}`;
+    applyFilter();
+    if (wasEmpty) setTimeout(() => { try { G.zoomToFit(400, 50); if (G.resumeAnimation) G.resumeAnimation(); } catch (e) {} }, 450);
+    else flyToFocal();
+  } else {
+    world.nodes.clear(); world.links.clear();   // leaving follow → drop the traversed map
+    full = { nodes: res.nodes || [], links: res.links || [] };
+    focalId = (full.nodes.find(n => n.isFocal) || {}).id || null;
+    setOverlay(full.nodes.length ? null : 'No graph data.');
+    statsEl.textContent = `overview · ${(res.stats && res.stats.totalEntities || 0).toLocaleString()} nodes · ${(res.stats && res.stats.totalRelations || 0).toLocaleString()} edges`;
+    applyFilter();
+  }
 }
 
 async function loadOverview() {
@@ -502,4 +579,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-09c: NaN-coord guard (loop no longer dies) · render-loop live · nebula · lit nodes/edges');
+console.info('[kg] surface build 2026-07-09d: persistent world (merge-not-regrow + camera fly + trail) · NaN-guard · nebula · lit');
