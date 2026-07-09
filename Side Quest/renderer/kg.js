@@ -61,9 +61,46 @@ function makeCollide(radiusFn, strength = 0.8) {
   return force;
 }
 
+const prefersReducedMotion = (() => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; } })();
+
+// Far-field: a faint SEEDED web of distant specks behind the focused graph, so the network reads as a
+// small bright island inside the vast interconnected corpus (110k+ nodes) rather than a few disembodied
+// systems in a void. Impressionistic scale, not specific entities. It's a MESH (specks + nearest-neighbour
+// links), because the corpus's whole point is interconnection. Geometry precomputed once (seeded → stable).
+let _farField = null;
+function farField() {
+  if (_farField) return _farField;
+  let s = 0x9e3779b9;                                   // seeded LCG → identical field every frame
+  const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  const TINT = ['148,163,184', '20,184,166', '34,197,94', '168,85,247', '245,158,11'];   // slate/teal/green/violet/amber
+  const N = 150, pts = [];
+  for (let i = 0; i < N; i++) pts.push({ x: rnd(), y: rnd(), r: 0.4 + rnd() * 1.3, b: 0.05 + rnd() * 0.14, t: TINT[(rnd() * TINT.length) | 0], px: 0.3 + rnd() * 0.7 });
+  const edges = [];
+  for (let i = 0; i < N; i++) {                          // connect each speck to its 1–2 nearest → a net, not stars
+    let n1 = -1, n2 = -1, d1 = 1e9, d2 = 1e9;
+    for (let j = 0; j < N; j++) { if (j === i) continue; const dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y, d = dx * dx + dy * dy; if (d < d1) { d2 = d1; n2 = n1; d1 = d; n1 = j; } else if (d < d2) { d2 = d; n2 = j; } }
+    if (n1 > i) edges.push([i, n1]); if (n2 > i) edges.push([i, n2]);
+  }
+  _farField = { pts, edges };
+  return _farField;
+}
+function drawFarField(ctx, w, h) {
+  const F = farField(), t = prefersReducedMotion ? 0 : performance.now() / 1000;
+  let zoom = 1; try { zoom = (G && G.zoom) ? G.zoom() : 1; } catch (e) {}
+  const spread = Math.min(1.6, 0.85 + zoom * 0.12);      // field expands with zoom → parallax depth
+  const dx = Math.sin(t * 0.05) * 14, dy = Math.cos(t * 0.04) * 10;   // slow drift
+  let boost = 1; if (pulseAt) { const el = performance.now() - pulseAt; if (el >= 0 && el < 1600) boost = 1 + (1 - el / 1600) * 1.4; }   // whole field brightens when a connection lands
+  const cx = w / 2, cy = h / 2;
+  const X = p => cx + (p.x - 0.5) * w * spread + dx * p.px, Y = p => cy + (p.y - 0.5) * h * spread + dy * p.px;
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.lineWidth = 0.6;
+  for (const [a, b] of F.edges) { const pa = F.pts[a], pb = F.pts[b]; ctx.strokeStyle = `rgba(${pa.t},${0.045 * boost})`; ctx.beginPath(); ctx.moveTo(X(pa), Y(pa)); ctx.lineTo(X(pb), Y(pb)); ctx.stroke(); }
+  for (const p of F.pts) { ctx.beginPath(); ctx.arc(X(p), Y(p), p.r, 0, 2 * Math.PI, false); ctx.fillStyle = `rgba(${p.t},${Math.min(0.42, p.b * boost)})`; ctx.fill(); }
+  ctx.restore();
+}
+
 // Atmosphere pass (onRenderFramePre → drawn under links/nodes): a screen-space vignette (subtle centre
-// lift, darker rim) turns the flat void into space, and a soft graph-space colour bloom behind the focal
-// node steers the eye to the active neighbourhood. Cheap — one gradient fill + one arc per frame.
+// lift, darker rim) turns the flat void into space, a far-field cosmos implies the corpus continuing beyond
+// the frame, and a soft graph-space colour bloom behind the focal node steers the eye to the active spot.
 function drawAtmosphere(ctx, scale) {
   const cv = ctx && ctx.canvas; if (!cv) return;
   ctx.save();
@@ -73,6 +110,7 @@ function drawAtmosphere(ctx, scale) {
   vg.addColorStop(0, 'rgba(26,28,38,0.45)'); vg.addColorStop(0.55, 'rgba(10,11,16,0)'); vg.addColorStop(1, 'rgba(3,4,6,0.6)');
   ctx.fillStyle = vg; ctx.fillRect(0, 0, w, h);
   ctx.restore();
+  drawFarField(ctx, w, h);   // the vast corpus behind the focused island
   if (!G) return;
   const nodes = (G.graphData().nodes) || [];
   let target = nodes.find(n => n.isFocal);
@@ -91,9 +129,10 @@ function ensureGraph() {
     .nodeId('id').backgroundColor('#0a0b0e')
     .cooldownTicks(120).d3VelocityDecay(0.3)
     .linkColor(l => l.color).linkWidth(l => l.width)
-    // Edges rendered ourselves so they read against the dark ground: a soft same-category glow + round caps.
-    // Category still drives COLOUR + WIDTH (the legend stays valid) — we add presence, not new meaning.
-    .linkCanvasObjectMode(() => 'replace')
+    // A same-category glow drawn OVER the default line ('after' → force-graph keeps native arrows + the
+    // directional/emitted particles that drive the connection-ripple). Category still owns COLOUR + WIDTH
+    // (legend stays valid) — we only add presence against the dark ground.
+    .linkCanvasObjectMode(() => 'after')
     .linkCanvasObject((l, ctx, scale) => {
       const s = l.source, t = l.target;
       if (!s || !t || s.x == null || t.x == null) return;
@@ -357,8 +396,22 @@ function pulseFocal() {
   pulseAt = performance.now();
   if (!G || !focalId) return;
   try {
-    const links = (G.graphData().links || []).filter(l => linkEnd(l.source) === focalId || linkEnd(l.target) === focalId);
-    links.slice(0, 8).forEach((l, i) => setTimeout(() => { try { G.emitParticle(l); } catch (e) {} }, (i % 4) * 130));
+    const links = G.graphData().links || [];
+    // BFS hop-distance from the new/updated node across the whole visible web…
+    const adj = new Map();
+    for (const l of links) { const a = linkEnd(l.source), b = linkEnd(l.target); if (a == null || b == null) continue; (adj.get(a) || adj.set(a, []).get(a)).push(b); (adj.get(b) || adj.set(b, []).get(b)).push(a); }
+    const dist = new Map([[focalId, 0]]), q = [focalId];
+    while (q.length) { const u = q.shift(); for (const v of (adj.get(u) || [])) if (!dist.has(v)) { dist.set(v, dist.get(u) + 1); q.push(v); } }
+    // …then emit a particle on every reachable link, staggered by hop level → a wave of light ripples
+    // OUTWARD from the connection through the network, not just down the one new edge. Caps keep it sane.
+    let emitted = 0;
+    for (const l of links) {
+      const lvl = Math.min(dist.has(linkEnd(l.source)) ? dist.get(linkEnd(l.source)) : 99, dist.has(linkEnd(l.target)) ? dist.get(linkEnd(l.target)) : 99);
+      if (lvl >= 99 || emitted > 120) continue;
+      emitted++;
+      const delay = prefersReducedMotion ? 0 : lvl * 150 + Math.random() * 70;
+      setTimeout(() => { try { G.emitParticle(l); } catch (e) {} }, delay);
+    }
   } catch (e) {}
 }
 function onFocusMove(p) {
