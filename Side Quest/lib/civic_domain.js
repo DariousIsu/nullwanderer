@@ -19,8 +19,10 @@ const DENY = [
   { re: /\((?:footballer|football player|soccer|cricketer|basketball|baseball|rugby|ice hockey|tennis|golfer|boxer|athlete|sportsperson|singer|actor|actress|musician|rapper|comedian|dj|band|film|album|novel|video game|tv series|racing driver|wrestler)\b[^)]*\)/i, tag: 'paren-role' },
   // Named leagues / competitions / trophies.
   { re: /\b(?:world cup|premier league|la liga|bundesliga|serie a|ligue 1|champions league|europa league|uefa|fifa|nba|nfl|nhl|mlb|ncaa|super bowl|world series|stanley cup|olympic games|olympics|wimbledon|grand slam|formula 1|grand prix|eurovision|the masters|ryder cup)\b/i, tag: 'league-event' },
-  // Sport-specific playing roles (whole word).
-  { re: /\b(?:midfielder|goalkeeper|striker|winger|centre-back|full-back|quarterback|linebacker|cornerback|running back|wide receiver|point guard|shortstop|batsman|bowler|scrum-half|fly-half)\b/i, tag: 'sport-role' },
+  // Sport-specific playing roles (whole word). ONLY unambiguous compounds — words
+  // that double as common surnames (striker, winger, bowler, batsman) are excluded
+  // so we never reject a person named e.g. "Daniel Striker".
+  { re: /\b(?:midfielder|goalkeeper|centre-back|full-back|quarterback|linebacker|cornerback|running back|wide receiver|point guard|shortstop|scrum-half|fly-half)\b/i, tag: 'sport-role' },
   // Football-club shapes: "… F.C.", "A.F.C. …", "… United/City/Rovers/Wanderers/Albion FC".
   { re: /\b(?:a\.?f\.?c\.?|f\.?c\.?)\b/i, tag: 'club-fc' },
   { re: /\b(?:united|city|rovers|wanderers|albion|hotspur|forest|athletic)\s+(?:f\.?c\.?|football club)\b/i, tag: 'club-name' },
