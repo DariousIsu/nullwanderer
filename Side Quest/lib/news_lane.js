@@ -759,16 +759,10 @@ async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdg
     log && log(`[news-daily] story ${story.id} NOT promoted (reconcile: ${decision.action}/${decision.reason})`);
     return res;
   }
-  // ANTI-DRIFT (audit fix): a clearly OFF-DOMAIN story (sports/entertainment) does
-  // not belong in the CIVIC graph. Skip it BEFORE landing its doc — so its entities
-  // are never extracted + its event/edges never form (kills the live sports drift:
-  // World Cup, footballers, clubs). High-precision denylist → civic stories pass.
-  const dom = civicDomain.isCivic({ name: story.title, context: story.summary || '' });
-  if (!dom.civic) {
-    log && log(`[news-daily] story ${story.id} SKIPPED (off-domain: ${dom.reason})`);
-    res.decision = 'off-domain';
-    return res;
-  }
+  // NO topic gate here — the graph absorbs EVERY story it's handed (a World-Cup match
+  // can be a major political story; a celebrity's connections matter). Domain is only a
+  // TAG (recorded on the edge metadata below), never a reason to drop. The news tuner
+  // (news_rank) already handles topical BALANCE at surfacing time by capping, not deleting.
   // The full-article body (story.article_text) is read by the HOURLY readArticlesPass (a read-tier op, done
   // promptly), not here — buildStoryDoc below simply INCLUDES it when present so the extraction learns from
   // the article. (A story reaches promotion hours after forming, so it's normally already been read.)
@@ -795,10 +789,10 @@ async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdg
   // confidence rises with independent outlets instead of the flat 0.8 default.
   const corr = Math.max(1, Number(story.report_count) || 1);
   const conf = confModel.calibratedConfidence({ grade: 'B', corroboration: corr });
-  const meta = JSON.stringify({ source_set: Array.isArray(story.outlet_set) ? story.outlet_set : [], corroboration: corr, category: story.category || null });
+  const dom = civicDomain.isCivic({ name: story.title, context: story.summary || '' });   // TAG only (not a filter)
+  const meta = JSON.stringify({ source_set: Array.isArray(story.outlet_set) ? story.outlet_set : [], corroboration: corr, category: story.category || null, domain: dom.civic ? 'civic' : 'off-domain' });
   const principals = extractProperNouns(`${story.title}. ${story.summary || ''}`)
-    .filter((p) => civicDomain.isCivicDomain(p, story.title))   // drop off-domain principals (sports names)
-    .slice(0, maxEdges);
+    .slice(0, maxEdges);   // keep EVERY principal — a name's topic never disqualifies it as an edge endpoint
   for (const p of principals) {
     try {
       // LINKED_TO is a whitelisted core (symmetric) relation type; 'involves' is NOT whitelisted → always

@@ -21,7 +21,6 @@
 const CG = require('./curation_gate');   // the shared two gates (existence + fact), doc = grade B
 const corroboration = require('./corroboration');     // C2 — independent-source counting (mirror-collapsed)
 const confModel = require('./confidence_model');      // C3 — calibrated, corroboration-sensitive confidence
-const civicDomain = require('./civic_domain');        // anti-drift: reject off-domain (sports/entertainment) entities
 
 // Closed entity-type vocab, aligned with Echo's types. Anything unrecognized → 'other' (still a real
 // object, just untyped — the richness axis, not the reality axis). Normalizes common model synonyms.
@@ -364,7 +363,8 @@ async function decomposeDoc(doc = {}, deps = {}) {
     if (d.action === 'reuse') { usable.set(key, d.canonical || d.name); out.reused++; continue; }
     if (d.action === 'mint') {
       if (out.minted >= maxEnt) continue;                    // volume cap on NEW objects
-      if (!civicDomain.isCivic({ name: d.name, type: d.type }).civic) { out.skipped++; continue; }  // anti-drift: don't mint off-domain
+      // NO topic gate — the graph absorbs every entity a cited doc yields; topic is not a
+      // reality/quality axis (the existence gate below is). Off-domain ≠ untrue.
       const eg = CG.gateExistence('S1', docSources);         // doc-cited → grade B ≥ C floor → mint
       if (eg.mint && await _proposeEntity(dispatch, d.name, d.type, '')) {
         usable.set(key, d.name); out.minted++;

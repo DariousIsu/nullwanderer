@@ -1,16 +1,19 @@
 'use strict';
 /**
- * lib/civic_domain.js — anti-drift domain filter for the civic knowledge graph.
+ * lib/civic_domain.js — civic-domain PRIORITY TAG for the knowledge graph.
  *
- * The graph exists for LEGISLATORS · BILLS · ORGS/PACs · GOVERNMENT · POLICY ·
- * ELECTIONS. The news + discovery feeds pull from general news, which drags in
- * OFF-DOMAIN entities — sports ("Dave Bowen (footballer)", "World Cup", clubs)
- * and entertainment — that dilute the graph's purpose (the audit's live drift).
+ * The graph's CORE is LEGISLATORS · BILLS · ORGS/PACs · GOVERNMENT · POLICY ·
+ * ELECTIONS. This classifier flags whether an entity/story sits in that core or
+ * is OFF-DOMAIN (sports, entertainment). It is a SIGNAL, not a filter: the graph
+ * is living and absorbs everything it's handed — a World-Cup match can be a major
+ * political story, a celebrity's connections matter — so nothing is ever dropped
+ * on topic. Consumers use this only to TAG proposals (so the operator can sort the
+ * civic core to the top) and to prioritize the subconscious walk toward Lucas's
+ * neighborhood. Quality lives on the CONFIDENCE axis (is it true/well-sourced),
+ * which is orthogonal to topic; the promotion gate + operator are the backstops.
  *
- * This is a DENYLIST, not an allowlist: civic is the default, we only reject
- * HIGH-PRECISION off-domain signals so we never drop a legitimate civic entity.
- * Pure + deterministic (no LLM) — a cheap classical guard at the propose gate.
- * A borderline case is KEPT (the operator promotion gate is the backstop).
+ * This is a DENYLIST: civic is the default, only HIGH-PRECISION off-domain signals
+ * flag off-domain. Pure + deterministic (no LLM). A borderline case tags civic.
  */
 
 // High-precision off-domain signals. Chosen to almost never fire on civic text.

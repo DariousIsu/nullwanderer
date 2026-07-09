@@ -281,14 +281,18 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   ok(kEdge && typeof kEdge.confidence === 'number' && kEdge.confidence !== 0.8, 'promoteStory: news edge carries a calibrated confidence (not the 0.8 default)');
   ok(kEdge && typeof kEdge.relation_metadata === 'string' && JSON.parse(kEdge.relation_metadata).corroboration >= 1, 'promoteStory: news edge carries relation_metadata (corroboration + source_set)');
 
-  // ANTI-DRIFT (audit fix): an OFF-DOMAIN sports story is skipped BEFORE landing —
-  // no doc lands, no event/edges form (kills the World-Cup/footballer drift at source).
+  // ABSORB EVERYTHING (philosophy fix): a sports story is NOT dropped on topic — it lands
+  // its doc + forges its event + principal edges like any other news. Domain is only a TAG
+  // on the edge metadata (a World-Cup match can be a major political story).
   clearStories();
   await lane.clusterItems([{ title: 'Lionel Messi leads Argentina past Egypt in World Cup thriller', summary: 'A World Cup match report from the tournament.', source: 'espn', url: 'https://espn.com/x', ts: NOW, id: 9001 }], { now: NOW });
   const DS = mkDispatchState();
   const sres = await lane.promoteStory(lane.allStories()[0], { dispatch: DS.dispatch, landDoc: DS.landDoc, now: NOW });
-  ok(sres.decision === 'off-domain' && sres.event === false && sres.edges === 0, 'anti-drift: off-domain sports story skipped (no event, no edges)');
-  ok(DS.calls.landDoc.length === 0 && DS.calls.propose_entity.length === 0, 'anti-drift: off-domain story lands NO doc + proposes NO entity (drift stopped at source)');
+  ok(['append', 'new', 'merge'].includes(sres.decision) && sres.event === true, 'absorb: off-domain sports story is promoted like any other (event created, not skipped)');
+  ok(DS.calls.landDoc.length === 1 && DS.calls.propose_entity.length >= 1, 'absorb: off-domain story lands its doc + proposes its event object');
+  ok(sres.edges >= 1 && DS.calls.propose_relation.some((a) => /Argentina|Messi|Egypt/.test(a.target_name)), 'absorb: off-domain principals (Argentina/Messi/Egypt) become edge endpoints — not filtered out');
+  const offEdge = DS.calls.propose_relation[0];
+  ok(offEdge && JSON.parse(offEdge.relation_metadata).domain === 'off-domain', 'absorb: the edge carries a domain=off-domain TAG (topical signal preserved without dropping)');
 
   // ===== CLUSTER ADJUDICATOR (ambiguous-band tiebreaker) =====
   ok(lane.adjValidate('{"same":true}').value.same === true && lane.adjValidate('prose {"same":false} x').value.same === false, 'adjValidate parses {same:bool} (even in prose)');
