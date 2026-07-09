@@ -526,7 +526,8 @@ app.whenReady().then(() => {
         if (echoSuit && echoSuit.connected) {
           const supersession = require('./lib/supersession');
           const curationStore = require('./lib/curation_store');
-          const sc = await supersession.runReplacementScan({ dispatch: (t) => echoSuit.dispatch(t) });
+          const dispatch = (t) => echoSuit.dispatch(t);
+          const sc = await supersession.runReplacementScan({ dispatch });
           let landed = 0;
           for (const c of sc.candidates) {
             try {
@@ -535,8 +536,48 @@ app.whenReady().then(() => {
             } catch { /* per-candidate fail-soft */ }
           }
           if (sc.candidates.length) console.log(`[supersession] ${sc.summary.assessed} functional edges → ${sc.candidates.length} replacement candidate(s), ${landed} new (operator review)`);
+          // TERMINATION (D2, valid_to passed): the catch-lane for predetermined expiries. DORMANT until C1
+          // lands world-time valid_to into the column (0 rows today → instant no-op); arms automatically.
+          const ts = await supersession.runTerminationScan({ dispatch });
+          let tLanded = 0;
+          for (const c of ts.candidates) {
+            try {
+              const r = curationStore.record(db, { feed: 'supersession', sourceEntity: String(c.source_id), relation: c.relation, target: String(c.target_id), value: 'terminated:valid_to_passed', status: 'supersede-candidate', confidence: 0.9 });
+              if (r.inserted) tLanded++;
+            } catch { /* per-candidate fail-soft */ }
+          }
+          if (ts.candidates.length) console.log(`[supersession] ${ts.summary.assessed} valid_to edges → ${ts.candidates.length} termination candidate(s), ${tLanded} new (operator review)`);
         }
       } catch (e) { console.error('[supersession] scan failed:', e.message); }
+      // DECAY SWEEP (C4 catch-lane): the graph-walk decays what it VISITS continuously; this nightly
+      // sweep catches stale FAST-decay edges (roles/office, relation_type-indexed) the walk never lands
+      // on → re-verify observations in the short-term buffer. READ-ONLY producer; the re-fetch consumer
+      // is the Puller lane (its own design session), so these are an operator-visible worklist for now.
+      try {
+        if (echoSuit && echoSuit.connected) {
+          const { runDecaySweep } = require('./lib/decay_pass');
+          const curationStore = require('./lib/curation_store');
+          const sweep = await runDecaySweep({ dispatch: (t) => echoSuit.dispatch(t) });
+          let rvLanded = 0;
+          for (const rv of sweep.reverify) {
+            try {
+              const r = curationStore.record(db, { feed: 'decay', sourceEntity: rv.source_name || String(rv.source_id), relation: rv.predicate, target: rv.target_name || String(rv.target_id), value: `reverify:decayed_to_${rv.decayed.toFixed(2)}`, status: 'reverify', confidence: rv.decayed });
+              if (r.inserted) rvLanded++;
+            } catch { /* per-fact fail-soft */ }
+          }
+          if (sweep.reverify.length) console.log(`[decay] ${sweep.summary.assessed} FAST edges → ${sweep.reverify.length} below floor, ${rvLanded} new re-verify (operator/puller)`);
+        }
+      } catch (e) { console.error('[decay] sweep failed:', e.message); }
+      // SEMANTIC DEDUP (D1, PROPOSAL-ONLY): scan civic_graph for duplicate entities (blocking + rapidfuzz)
+      // → pending resolution_proposals for operator review. Non-destructive; apply is a separate operator
+      // decision. Signature-deduped, so re-runs never pile. Bounded (top-degree) so it's a cheap nightly.
+      try {
+        if (echoSuit && echoSuit.connected) {
+          const dr = await echoSuit.dispatch({ kind: 'do', name: 'run_semantic_dedup', args: { limit: 50000 } });
+          let rep = null; try { rep = JSON.parse(dr && dr.text); } catch {}
+          if (rep) console.log(`[dedup] scanned=${rep.scanned || 0} clusters=${rep.clusters || 0} new-proposals=${rep.new != null ? rep.new : '?'} (operator review)`);
+        }
+      } catch (e) { console.error('[dedup] semantic scan failed:', e.message); }
       // (The RECURSIVE AUDITOR auto-cleaner used to run here on the 20h curation cadence — it is now
       // DECOUPLED onto its own fast, write-triggered tick: maybeRunAudit / AUDIT_CHECK_MS below.)
       // PROMOTION (short-term → long-term): consolidate the day's new short-term documents into Echo

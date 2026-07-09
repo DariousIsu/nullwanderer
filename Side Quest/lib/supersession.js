@@ -118,6 +118,25 @@ function worldYear(v) {
   return m ? Number(m[1]) : null;
 }
 
+// WORLD-TIME as epoch SECONDS — used for valid_to (termination), where a year is too coarse (an office
+// that ends mid-term should expire on its date, not roll to Jan 1). Handles a bare year (→ Jan 1),
+// an ISO-ish date string, and epoch s/ms. Kept distinct from worldYear, which valid_from uses (year
+// granularity is all the replacement ordering needs). terminationCandidates compares in epoch seconds,
+// so this is the matching normalizer for the real-data (edgesFromRows) path.
+function worldEpoch(v) {
+  if (v == null) return null;
+  if (typeof v === 'number') {
+    if (v >= 1600 && v <= 2200) return Math.floor(Date.UTC(v, 0, 1) / 1000);   // a bare year → Jan 1 epoch-s
+    if (v > 1e11) return Math.floor(v / 1000);                                  // epoch ms → s
+    if (v > 1e8) return Math.floor(v);                                          // already epoch s
+    return null;
+  }
+  const m = /\b(1[6-9]\d\d|2[0-1]\d\d)(?:-(\d{2})(?:-(\d{2}))?)?\b/.exec(String(v));
+  if (!m) return null;
+  const y = Number(m[1]), mo = m[2] ? Number(m[2]) - 1 : 0, d = m[3] ? Number(m[3]) : 1;
+  return Math.floor(Date.UTC(y, mo, d) / 1000);
+}
+
 // civic_graph relation rows (with joined names + metadata) → the edge shape the candidate generators use.
 // WORLD-TIME valid_from is parsed from relation_metadata (valid_from / tenure_start / start_date) — NOT the
 // valid_from COLUMN, which was A1-backfilled to created_at (ingest time; ordering on it would BE the anti-pattern).
@@ -126,11 +145,16 @@ function edgesFromRows(rows) {
     let md = {};
     try { md = typeof r.md === 'string' ? JSON.parse(r.md || '{}') : (r.md || {}); } catch { md = {}; }
     const vfRaw = md.valid_from != null ? md.valid_from : (md.tenure_start != null ? md.tenure_start : md.start_date);
-    const vtRaw = md.valid_to != null ? md.valid_to : (md.tenure_end != null ? md.tenure_end : md.end_date);
+    // valid_to world-time: prefer metadata (tenure_end/end_date), else the valid_to COLUMN (what C1 lands
+    // + the termination scan filters on). worldEpoch (seconds) — matches terminationCandidates' comparison.
+    const vtRaw = md.valid_to != null ? md.valid_to
+      : (md.tenure_end != null ? md.tenure_end
+        : (md.end_date != null ? md.end_date
+          : (r.valid_to != null ? r.valid_to : null)));
     return {
       id: r.id, source_id: r.source_id, target_id: r.target_id,
       relation: r.rt || r.relation_type, confidence: _num(r.confidence),
-      validFrom: worldYear(vfRaw), validTo: worldYear(vtRaw),
+      validFrom: worldYear(vfRaw), validTo: worldEpoch(vtRaw),
       sourceName: r.sn || null, targetName: r.tn || null,
     };
   });
@@ -159,8 +183,32 @@ async function runReplacementScan({ dispatch, functional = FUNCTIONAL_PREDICATES
   return { candidates, summary: { assessed: edges.length, candidates: candidates.length } };
 }
 
+/**
+ * The nightly TERMINATION scan (read-only, PROPOSAL-FIRST). Reads only live edges that carry a
+ * world-time valid_to (the valid_to COLUMN — index-friendly + cheap; a partial index
+ * `WHERE valid_to IS NOT NULL` keeps it instant), then flags the ones whose valid_to has already
+ * passed as termination candidates. Returns { candidates, summary }. Never writes to the graph.
+ *
+ * DORMANT until C1 lands world-time valid_to into the COLUMN — today 0 rows have it, so this is an
+ * instant no-op. That's intentional: it arms the catch-lane so the moment tenure_end / term-limit
+ * dates start landing in the column, expired edges surface for operator review automatically.
+ */
+async function runTerminationScan({ dispatch, now = Date.now() } = {}) {
+  if (typeof dispatch !== 'function') return { candidates: [], summary: { assessed: 0, candidates: 0 } };
+  const sql = 'SELECT r.id, r.source_id, r.target_id, r.relation_type rt, r.confidence, r.relation_metadata md,'
+    + ' r.valid_to, es.name sn, et.name tn'
+    + ' FROM relations r JOIN entities es ON es.id = r.source_id JOIN entities et ON et.id = r.target_id'
+    + ' WHERE r.valid_to IS NOT NULL AND r.tx_to IS NULL AND r.deleted = 0';
+  let rows = [];
+  try { const res = await dispatch({ kind: 'do', name: 'db_query', args: { sql } }); const j = JSON.parse(res.text); rows = (j && j.rows) || []; }
+  catch { return { candidates: [], summary: { assessed: 0, candidates: 0, error: true } }; }
+  const edges = edgesFromRows(rows);
+  const candidates = terminationCandidates(edges, { now });
+  return { candidates, summary: { assessed: edges.length, candidates: candidates.length } };
+}
+
 module.exports = {
   FUNCTIONAL_PREDICATES, DEFAULT_CONF_FLOOR,
   terminationCandidates, replacementCandidates, supersessionCandidates,
-  worldYear, edgesFromRows, runReplacementScan,
+  worldYear, worldEpoch, edgesFromRows, runReplacementScan, runTerminationScan,
 };

@@ -62,5 +62,29 @@ ok(DP.runDecayPass([{ predicate: 'WORKS_FOR', confidence: 0, ageDays: 9999 }], {
 // consistency with the underlying model
 ok(near(byId[1].decayed, CD.decayedConfidence(0.9, 'WORKS_FOR', 550)), 'pass decayed value matches confidence_decay.decayedConfidence exactly');
 
-console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+(async () => {
+  // --- runDecaySweep: reads FAST-predicate edges via dispatch → below-floor re-verify work-list (read-only) ---
+  const oldSec = Math.floor((NOW - 900 * DP.DAY_MS) / 1000);   // ~2.5yr old → a FAST edge decays well below 0.5
+  const freshSec = Math.floor((NOW - 10 * DP.DAY_MS) / 1000);  // ~fresh → above floor
+  let served = false;   // serve 2 rows for the first FAST predicate queried, empty for the rest
+  const dispatch = async ({ args }) => {
+    if (served) return { ok: true, text: JSON.stringify({ rows: [] }) };
+    served = true;
+    const pred = (args.sql.match(/relation_type = '([A-Z_]+)'/) || [])[1] || 'HELD_OFFICE';
+    return { ok: true, text: JSON.stringify({ rows: [
+      { id: 1, source_id: 10, target_id: 20, relation_type: pred, confidence: 0.9, created_at: oldSec, source_name: 'Sen A', target_name: 'Old Office' },
+      { id: 2, source_id: 11, target_id: 21, relation_type: pred, confidence: 0.9, created_at: freshSec, source_name: 'Sen B', target_name: 'Fresh Office' },
+    ] }) };
+  };
+  const sweep = await DP.runDecaySweep({ dispatch, now: NOW, floor: 0.5, limitPerPredicate: 500 });
+  ok(sweep.summary.assessed === 2, 'runDecaySweep: assesses the edges the dispatch returns');
+  ok(sweep.summary.reverify === 1 && sweep.reverify[0].id === 1, 'runDecaySweep: only the stale (old) FAST edge lands on the re-verify list');
+  ok(sweep.reverify[0].source_name === 'Sen A' && sweep.reverify[0].target_name === 'Old Office', 'runDecaySweep: work-list carries endpoints (actionable for the operator / puller consumer)');
+  ok(sweep.summary.predicates > 0, 'runDecaySweep: defaults to the FAST-decay predicate set (indexed, cheap)');
+  ok((await DP.runDecaySweep({})).summary.reverify === 0, 'runDecaySweep: no dispatch → empty (fail-soft)');
+  const swErr = await DP.runDecaySweep({ dispatch: async () => { throw new Error('db down'); }, now: NOW });
+  ok(swErr.reverify.length === 0, 'runDecaySweep: a db_query failure is per-predicate fail-soft (never throws)');
+
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();

@@ -89,6 +89,15 @@ ok(S.worldYear('2019-05-01') === 2019 && S.worldYear('became CEO in 2021') === 2
 ok(S.worldYear(T2023) === 2023 && S.worldYear(T2019) === 2019, 'worldYear: a unix-seconds epoch → its year (not misread digit-by-digit)');
 ok(S.worldYear(null) === null && S.worldYear(999) === null && S.worldYear('no year here') === null, 'worldYear: junk / no-year → null');
 
+// --- worldEpoch: valid_to world-time as epoch SECONDS (matches terminationCandidates' comparison) ---
+ok(S.worldEpoch(2020) === Math.floor(Date.UTC(2020, 0, 1) / 1000), 'worldEpoch: a bare year → Jan 1 epoch-seconds');
+ok(S.worldEpoch('2021-06-15') === Math.floor(Date.UTC(2021, 5, 15) / 1000), 'worldEpoch: an ISO date → its epoch-seconds');
+ok(S.worldEpoch(T2020) === T2020, 'worldEpoch: an epoch-seconds value passes through');
+ok(S.worldEpoch(null) === null && S.worldEpoch('nope') === null, 'worldEpoch: junk → null');
+// the unit-bug regression guard: a real-data edge (year in metadata) must NOT read as terminated in ~2023.
+const notExpired = S.edgesFromRows([{ id: 9, source_id: 1, target_id: 2, rt: 'HELD_OFFICE', md: JSON.stringify({ valid_to: 2099 }) }]);
+ok(S.terminationCandidates(notExpired, { now: NOW_MS }).length === 0, 'unit-bug guard: a future valid_to YEAR from metadata is NOT flagged terminated (worldEpoch keeps units consistent)');
+
 // --- edgesFromRows: world-time valid_from from METADATA (tenure_start/valid_from), not the column ---
 const rows = [
   { id: 1, source_id: 100, target_id: 200, rt: 'HAS_CEO', confidence: 0.9, md: JSON.stringify({ tenure_start: '2020-03-01' }), sn: 'Acme', tn: 'Old CEO' },
@@ -97,6 +106,13 @@ const rows = [
 const built = S.edgesFromRows(rows);
 ok(built[0].validFrom === 2020 && built[1].validFrom === 2023, 'edgesFromRows: valid_from parsed from metadata (tenure_start / valid_from), year-normalized');
 ok(built[0].sourceName === 'Acme' && built[0].targetName === 'Old CEO', 'edgesFromRows: carries joined subject + target names');
+// valid_to from metadata (tenure_end) OR the valid_to COLUMN fallback → epoch-seconds
+const vtRows = S.edgesFromRows([
+  { id: 5, source_id: 1, target_id: 2, rt: 'HELD_OFFICE', md: JSON.stringify({ tenure_end: '2020-01-01' }) },
+  { id: 6, source_id: 1, target_id: 3, rt: 'HELD_OFFICE', md: '{}', valid_to: T2023 },   // column fallback
+]);
+ok(vtRows[0].validTo === Math.floor(Date.UTC(2020, 0, 1) / 1000), 'edgesFromRows: valid_to from metadata tenure_end → epoch-seconds');
+ok(vtRows[1].validTo === T2023, 'edgesFromRows: valid_to falls back to the valid_to COLUMN when metadata lacks it (what C1 lands)');
 
 (async () => {
   // --- runReplacementScan: reads functional edges via dispatch → replacement candidates (proposal-only) ---
@@ -107,6 +123,16 @@ ok(built[0].sourceName === 'Acme' && built[0].targetName === 'Old CEO', 'edgesFr
   ok((await S.runReplacementScan({})).summary.candidates === 0, 'runReplacementScan: no dispatch → empty (fail-soft)');
   const scanErr = await S.runReplacementScan({ dispatch: async () => { throw new Error('db down'); } });
   ok(scanErr.candidates.length === 0 && scanErr.summary.error === true, 'runReplacementScan: a db_query failure → empty + error flag (never throws)');
+
+  // --- runTerminationScan: reads valid_to-bearing edges via dispatch → termination candidates (proposal-only) ---
+  const termRows = [
+    { id: 21, source_id: 1, target_id: 2, rt: 'HELD_OFFICE', confidence: 0.9, md: '{}', valid_to: T2020, sn: 'Rep A', tn: 'member of the Old Chamber' }, // expired
+    { id: 22, source_id: 1, target_id: 3, rt: 'HELD_OFFICE', confidence: 0.9, md: '{}', valid_to: FUTURE, sn: 'Rep A', tn: 'member of the Current Chamber' }, // still valid
+  ];
+  const tScan = await S.runTerminationScan({ dispatch: async () => ({ ok: true, text: JSON.stringify({ rows: termRows }) }), now: NOW_MS });
+  ok(tScan.summary.assessed === 2 && tScan.summary.candidates === 1, 'runTerminationScan: 2 valid_to edges assessed → 1 termination candidate (the expired one)');
+  ok(tScan.candidates[0].edgeId === 21 && tScan.candidates[0].reason === 'valid_to_passed', 'runTerminationScan: flags only the edge whose valid_to has passed');
+  ok((await S.runTerminationScan({})).summary.candidates === 0, 'runTerminationScan: no dispatch → empty (fail-soft)');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);

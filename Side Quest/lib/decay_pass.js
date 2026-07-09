@@ -17,7 +17,7 @@
  * Clock is passed in (`now`) so the pass stays offline-smoke-testable + Workflow-safe.
  */
 
-const { decayedConfidence, halfLifeDays } = require('./confidence_decay');
+const { decayedConfidence, halfLifeDays, PREDICATE_HALFLIFE, FAST } = require('./confidence_decay');
 
 const DAY_MS = 86400000;
 
@@ -76,4 +76,46 @@ function runDecayPass(facts, { now = null, floor = 0.5 } = {}) {
   return { rows, reverify, summary };
 }
 
-module.exports = { DAY_MS, ageDaysOf, factFromRow, runDecayPass };
+/**
+ * The periodic DECAY SWEEP (read-only PRODUCER). The graph-walk already decays the edges it visits
+ * each tick (continuous); this is the nightly CATCH for stale edges the walk never lands on. To stay
+ * cheap it sweeps the FAST-decay predicates only (roles / office — they go stale fastest AND are
+ * relation_type-INDEXED, so each read is index-backed), bounded per predicate. Facts whose confidence
+ * has decayed below `floor` come back as a worst-first re-verify WORK-LIST.
+ *
+ * Reads via the injected `dispatch` (db_query) — no writes here; the caller lands the worklist in the
+ * short-term buffer (curation_store, status 'reverify'). The CONSUMER (a fresh-citation re-fetch) is
+ * the Puller lane — reserved for its own design session, deliberately not wired here.
+ *
+ * NOTE: selection within a predicate is bounded-but-unordered (no created_at index yet), so a single
+ * night samples rather than exhausts; nights accrete coverage. An ordered/exhaustive sweep is a
+ * substrate follow-up (a created_at / last_verified index).
+ */
+async function runDecaySweep({ dispatch, predicates = null, now = Date.now(), floor = 0.5, limitPerPredicate = 2000 } = {}) {
+  if (typeof dispatch !== 'function') return { reverify: [], summary: { assessed: 0, reverify: 0, predicates: 0 } };
+  const preds = (Array.isArray(predicates) && predicates.length)
+    ? predicates
+    : Object.keys(PREDICATE_HALFLIFE).filter((p) => PREDICATE_HALFLIFE[p] === FAST);
+  const lim = Math.max(1, limitPerPredicate | 0);
+  let assessed = 0;
+  const reverify = [];
+  for (const pred of preds) {
+    const safe = String(pred).replace(/[^A-Z_]/g, '');
+    if (!safe) continue;
+    const sql = 'SELECT r.id, r.source_id, r.target_id, r.relation_type, r.confidence, r.created_at,'
+      + ' es.name source_name, et.name target_name'
+      + ' FROM relations r JOIN entities es ON es.id = r.source_id JOIN entities et ON et.id = r.target_id'
+      + ` WHERE r.relation_type = '${safe}' AND r.tx_to IS NULL AND r.deleted = 0 LIMIT ${lim}`;
+    let rows = [];
+    try { const res = await dispatch({ kind: 'do', name: 'db_query', args: { sql } }); const j = JSON.parse(res.text); rows = (j && j.rows) || []; }
+    catch { continue; }                          // per-predicate fail-soft
+    const facts = rows.map((row) => factFromRow(row, { now }));
+    const pass = runDecayPass(facts, { now, floor });
+    assessed += pass.summary.assessed;
+    for (const rv of pass.reverify) reverify.push(rv);
+  }
+  reverify.sort((a, b) => a.decayed - b.decayed);
+  return { reverify, summary: { assessed, reverify: reverify.length, predicates: preds.length } };
+}
+
+module.exports = { DAY_MS, ageDaysOf, factFromRow, runDecayPass, runDecaySweep };
