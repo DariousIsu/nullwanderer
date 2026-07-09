@@ -47,6 +47,7 @@ const smokes = [
   'smoke_doc_decompose.js',
   'smoke_corroboration.js',
   'smoke_confidence_model.js',
+  'smoke_confidence_decay.js',
   'smoke_decomp_lane.js',
   'smoke_contact_extract.js',
   'smoke_contact_card.js',
