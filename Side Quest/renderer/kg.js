@@ -151,6 +151,11 @@ function ensureGraph() {
   if (G) return G;
   G = ForceGraph()(graphEl)
     .nodeId('id').backgroundColor('#0a0b0e')
+    // Keep the render loop ALWAYS live. force-graph's autoPauseRedraw pauses the loop once the sim cools;
+    // if that happens while the webview is momentarily 0-size at init it never repaints → a dead black
+    // canvas (the post-reboot bug). We also NEED continuous frames for the ambient far-field/nebula drift +
+    // pulses. The scene is cheap (dozens of nodes + a seeded field), so a live loop is the right call here.
+    .autoPauseRedraw(false)
     .cooldownTicks(120).d3VelocityDecay(0.3)
     .linkColor(l => l.color).linkWidth(l => l.width)
     // A same-category glow drawn OVER the default line ('after' → force-graph keeps native arrows + the
@@ -201,8 +206,9 @@ function ensureGraph() {
     // Labels are drawn in ONE post pass (not per-node) so we control z-order: focal/hovered/neighbors
     // first, then by prominence, each skipped if its box would overlap an already-placed label. Kills the
     // pile-up seen at overview scale where every node stamped its text on top of the others.
-    .onRenderFramePre(drawAtmosphere)
-    .onRenderFramePost(drawLabels);
+    // hooks wrapped so a per-frame throw on odd data can never kill the (now always-live) render loop
+    .onRenderFramePre((ctx, s) => { try { drawAtmosphere(ctx, s); } catch (e) {} })
+    .onRenderFramePost((ctx, s) => { try { drawLabels(ctx, s); } catch (e) {} });
   // Force tuning: spread clusters and stop node disks stacking. Stronger bounded charge repels nodes
   // without yanking distant clusters into one thread (distanceMax caps the pull range); softer, longer
   // links give the graph room; the custom collide keeps disks off each other.
@@ -211,7 +217,7 @@ function ensureGraph() {
     const link = G.d3Force('link'); if (link && link.distance) link.distance(l => 36 + (l.category === 'generic' ? 12 : 0)).strength(0.32);
     G.d3Force('collide', makeCollide(n => nodeRadius(n) + 3));
   } catch (e) {}
-  const fit = () => { const w = graphEl.clientWidth, h = graphEl.clientHeight; G.width(w).height(h); };
+  const fit = () => { const w = graphEl.clientWidth, h = graphEl.clientHeight; if (w > 0 && h > 0) { G.width(w).height(h); try { if (G.resumeAnimation) G.resumeAnimation(); } catch (e) {} } };
   fit(); new ResizeObserver(fit).observe(graphEl);
   return G;
 }
@@ -303,7 +309,7 @@ function applyFilter() {
     .map(l => ({ source: typeof l.source === 'object' ? l.source.id : l.source, target: typeof l.target === 'object' ? l.target.id : l.target, relType: l.relType, color: l.color, width: l.width, category: l.category }))
     .filter(l => present.has(l.source) && present.has(l.target));
   ensureGraph().graphData({ nodes, links });
-  if (nodes.length) setTimeout(() => { try { G.zoomToFit(400, 50); } catch (e) {} }, 450);
+  if (nodes.length) setTimeout(() => { try { G.zoomToFit(400, 50); if (G.resumeAnimation) G.resumeAnimation(); } catch (e) {} }, 450);
 }
 
 function renderPills(types) {
@@ -491,4 +497,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-09: tiered-metabolism · nebula far-field · lit nodes/edges · glow links');
+console.info('[kg] surface build 2026-07-09b: render-loop LIVE (autoPauseRedraw off) · tiered-metabolism · nebula · lit nodes/edges');
