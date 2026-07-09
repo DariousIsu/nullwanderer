@@ -48,6 +48,7 @@ const smokes = [
   'smoke_corroboration.js',
   'smoke_confidence_model.js',
   'smoke_confidence_decay.js',
+  'smoke_decay_pass.js',
   'smoke_civic_domain.js',
   'smoke_promote_gate.js',
   'smoke_decomp_lane.js',
