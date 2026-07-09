@@ -21,6 +21,7 @@
 const CG = require('./curation_gate');   // the shared two gates (existence + fact), doc = grade B
 const corroboration = require('./corroboration');     // C2 — independent-source counting (mirror-collapsed)
 const confModel = require('./confidence_model');      // C3 — calibrated, corroboration-sensitive confidence
+const identityGate = require('./identity_gate');      // F1 — mint-reluctance + contextual bind + attractor guard
 
 // Closed entity-type vocab, aligned with Echo's types. Anything unrecognized → 'other' (still a real
 // object, just untyped — the richness axis, not the reality axis). Normalizes common model synonyms.
@@ -203,7 +204,16 @@ async function resolveExtracted(entity, { resolve, context = null } = {}) {
   try { r = await resolve(name, { preferType, context }); } catch { return { action: 'skip', name, type, reason: 'resolver-threw' }; }
   const status = r && r.status;
   if (status === 'resolved') return { action: 'reuse', name, type, object: r.object, canonical: (r.object && r.object.name) || name };
-  if (status === 'nil') return { action: 'mint', name, type };
+  if (status === 'nil') {
+    // F1 MINT-RELUCTANCE: the resolver found no existing node. A STRONG reference (full name / strong-id /
+    // non-person) may mint. A WEAK person reference (bare first name, or first-name + descriptor) must NOT
+    // mint a durable node — it binds to a full-name person already present in the doc's context, else HOLDS
+    // provisional. This is the "Tracy the finance lady" fix: no spurious node → no future-mention attractor.
+    const g = identityGate.mintDecision('nil', name, type, { context: context || [] });
+    if (g.action === 'bind-context') return { action: 'reuse', name, type, canonical: g.canonical, via: 'context' };
+    if (g.action === 'hold') return { action: 'hold', name, type, candidates: [], reason: g.reason, provisional: !!g.provisional };
+    return { action: 'mint', name, type };                 // strong reference → mint (existence-gated in 2c)
+  }
   if (status === 'ambiguous') return { action: 'hold', name, type, candidates: r.candidates || [], reason: r.reason || 'ambiguous' };
   return { action: 'skip', name, type, reason: (status || 'error') };
 }

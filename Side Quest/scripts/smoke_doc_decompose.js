@@ -99,6 +99,15 @@ function mockResolver(map) {
   // nil → MINT.
   ok((await D.resolveExtracted({ name: 'Obscure Staffer', type: 'person' }, { resolve: mockResolver({}) })).action === 'mint', '2b: nil → MINT a new object');
 
+  // F1 MINT-RELUCTANCE (the Tracy fix): nil + a WEAK person reference must NOT mint a durable node.
+  const nilR = mockResolver({});
+  ok((await D.resolveExtracted({ name: 'Tracy Bromley', type: 'person' }, { resolve: nilR })).action === 'mint', '2b/F1: nil + full name → MINT (strong reference)');
+  const dWeakHold = await D.resolveExtracted({ name: 'Tracy', type: 'person' }, { resolve: nilR, context: [] });
+  ok(dWeakHold.action === 'hold' && dWeakHold.provisional === true, '2b/F1: nil + bare first name + no context → HOLD provisional (never mint the attractor)');
+  const dWeakBind = await D.resolveExtracted({ name: 'Tracy the finance lady', type: 'person' }, { resolve: nilR, context: ['Tracy Bromley', 'Mark Chen'] });
+  ok(dWeakBind.action === 'reuse' && dWeakBind.canonical === 'Tracy Bromley' && dWeakBind.via === 'context', '2b/F1: nil + weak descriptor + full name in context → BIND to Tracy Bromley (reuse, not mint)');
+  ok((await D.resolveExtracted({ name: 'the finance lady', type: 'person' }, { resolve: nilR, context: ['Tracy Bromley'] })).action === 'hold', '2b/F1: nil + pure descriptor (no name) → HOLD (no first name to bind on)');
+
   // ambiguous → HOLD (bias-to-clarify), candidates carried.
   const dHold = await D.resolveExtracted({ name: 'John Curtis', type: 'person' }, { resolve: mockResolver({ 'John Curtis': { status: 'ambiguous', candidates: ['John Curtis (UT)', 'John Curtis Marion'] } }) });
   ok(dHold.action === 'hold' && dHold.candidates.length === 2, '2b: ambiguous → HOLD with candidates (never popularity-guess)');
