@@ -63,18 +63,19 @@ function makeCollide(radiusFn, strength = 0.8) {
 
 const prefersReducedMotion = (() => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; } })();
 
-// Far-field: a faint SEEDED web of distant specks behind the focused graph, so the network reads as a
-// small bright island inside the vast interconnected corpus (110k+ nodes) rather than a few disembodied
-// systems in a void. Impressionistic scale, not specific entities. It's a MESH (specks + nearest-neighbour
-// links), because the corpus's whole point is interconnection. Geometry precomputed once (seeded → stable).
+// Far-field: a faint SEEDED web of distant specks behind the focused graph, so the ~40-node view reads as a
+// small bright island inside the vast interconnected corpus (~1.7M entities / 8.5M relations) rather than a
+// few disembodied systems in a void. Impressionistic scale, not specific entities. It's a MESH (specks +
+// nearest-neighbour links) because the corpus's whole point is interconnection. Dense enough to feel like a
+// galaxy, faint enough to stay background. Geometry precomputed once (seeded → stable).
 let _farField = null;
 function farField() {
   if (_farField) return _farField;
   let s = 0x9e3779b9;                                   // seeded LCG → identical field every frame
   const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
   const TINT = ['148,163,184', '20,184,166', '34,197,94', '168,85,247', '245,158,11'];   // slate/teal/green/violet/amber
-  const N = 150, pts = [];
-  for (let i = 0; i < N; i++) pts.push({ x: rnd(), y: rnd(), r: 0.4 + rnd() * 1.3, b: 0.05 + rnd() * 0.14, t: TINT[(rnd() * TINT.length) | 0], px: 0.3 + rnd() * 0.7 });
+  const N = 340, pts = [];
+  for (let i = 0; i < N; i++) pts.push({ x: rnd(), y: rnd(), r: 0.3 + rnd() * 1.1, b: 0.04 + rnd() * 0.12, t: TINT[(rnd() * TINT.length) | 0], px: 0.3 + rnd() * 0.7 });
   const edges = [];
   for (let i = 0; i < N; i++) {                          // connect each speck to its 1–2 nearest → a net, not stars
     let n1 = -1, n2 = -1, d1 = 1e9, d2 = 1e9;
