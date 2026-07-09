@@ -655,12 +655,14 @@ app.whenReady().then(() => {
     db.setMeta('last_ingest_drain_at', String(Date.now()));
     try {
       const ingestLane = require('./lib/ingest_lane');
+      const runId = `ingest-${Date.now()}`;                    // ONE id for the whole drain → one-call revert
       const runChunk = async () => {
-        const dr = await echoSuit.dispatch({ kind: 'do', name: 'auto_promote_grounded', args: { min_confidence: INGEST_FLOOR, limit: INGEST_CHUNK } });
+        const dr = await echoSuit.dispatch({ kind: 'do', name: 'auto_promote_grounded', args: { min_confidence: INGEST_FLOOR, limit: INGEST_CHUNK, run_id: runId } });
         let rep = null; try { rep = JSON.parse(dr && dr.text); } catch {}
         return { promoted: (rep && rep.promoted) || 0, remaining: (rep && rep.remaining != null) ? rep.remaining : 0 };
       };
       const res = await ingestLane.drainUntilEmpty(runChunk, { maxIters: 40 });
+      if (res.totalPromoted > 0) db.setMeta('last_ingest_run_id', runId);   // remember for a quick revert if needed
       if (res.totalPromoted > 0 || res.stopped === 'error') {
         console.log(`[ingest] gate-less drain: promoted=${res.totalPromoted} over ${res.iters} chunk(s) → ${res.stopped}`);
         if (res.totalPromoted > 0) {
