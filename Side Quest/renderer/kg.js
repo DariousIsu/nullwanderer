@@ -22,6 +22,10 @@ let focalId = null, pulseAt = 0, pulseMag = 1.4;
 // out at the periphery. Node objects are reused by reference so d3-force preserves x/y across updates.
 const world = { nodes: new Map(), links: new Map() };
 const WORLD_CAP = 320;
+// degree bridge: ego nodes lack real degree until main's db_query enrichment reboots. Capture degrees from
+// ANY node that carries them (the overview hubs loaded at startup, or enriched ego) so the tendrils can show
+// on those hubs in Follow mode right now, not only after a reboot.
+const degreeHint = new Map();
 const linkEnd = (x) => (x && typeof x === 'object') ? x.id : x;
 
 // color helpers for the lit-node / atmosphere rendering (entity colors are hex; fallbacks are hex too)
@@ -83,8 +87,10 @@ function farField() {
   const TINT = ['148,163,184', '20,184,166', '34,197,94', '168,85,247', '245,158,11'];   // slate/teal/green/violet/amber
   // depth-banded specks: z in [0,1] (0 = deep/far, 1 = near) drives size, brightness, drift + zoom spread,
   // so the bands parallax at different rates → depth is *felt*, not just decorated.
-  const N = 340, pts = [];
-  for (let i = 0; i < N; i++) { const z = rnd(); pts.push({ x: rnd(), y: rnd(), z, r: 0.3 + z * 1.5, b: 0.035 + z * 0.12, t: TINT[(rnd() * TINT.length) | 0] }); }
+  const N = 460, pts = [];
+  // CENTER-WEIGHTED radial distribution: densest where the graph sits (centre) and thinning outward, so the
+  // near field, tendrils and far field read as ONE continuous galaxy with a falloff — not three layers + gaps.
+  for (let i = 0; i < N; i++) { const z = rnd(), ang = rnd() * 6.283, rad = Math.pow(rnd(), 1.7) * 0.72; pts.push({ x: 0.5 + Math.cos(ang) * rad, y: 0.5 + Math.sin(ang) * rad, z, r: 0.3 + z * 1.5, b: 0.04 + z * 0.13, t: TINT[(rnd() * TINT.length) | 0] }); }
   const edges = [];
   for (let i = 0; i < N; i++) {                          // connect each speck to its 1–2 nearest → a net, not stars
     let n1 = -1, n2 = -1, d1 = 1e9, d2 = 1e9;
@@ -104,15 +110,12 @@ function drawFarField(ctx, w, h) {
   let boost = 1; if (pulseAt) { const el = performance.now() - pulseAt; if (el >= 0 && el < 1600) boost = 1 + (1 - el / 1600) * pulseMag; }   // field flares when a batch lands (magnitude per tier)
   const cx = w / 2, cy = h / 2;
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
-  // 1) nebula clouds (deepest layer) — big soft colour, slow drift scaled by their depth
-  for (const c of F.clouds) {
-    const nx = cx + (c.x - 0.5) * w * 1.1 + Math.sin(t * 0.03 + c.ph) * 26 * c.depth;
-    const ny = cy + (c.y - 0.5) * h * 1.1 + Math.cos(t * 0.025 + c.ph) * 20 * c.depth;
-    const rad = c.r * Math.min(w, h);
-    const g = ctx.createRadialGradient(nx, ny, 0, nx, ny, rad);
-    g.addColorStop(0, `rgba(${c.t},${Math.min(0.085, c.a * boost)})`); g.addColorStop(1, `rgba(${c.t},0)`);
-    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(nx, ny, rad, 0, 2 * Math.PI, false); ctx.fill();
-  }
+  // 1) galactic-core glow (replaces discrete clouds): the graph sits in a luminous core that fades to dark
+  //    edges, bridging near field ↔ far field into one continuous space instead of a graph floating in a gap.
+  const coreR = Math.max(w, h) * 0.62;
+  const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+  core.addColorStop(0, `rgba(38,50,74,${0.13 * boost})`); core.addColorStop(0.45, `rgba(22,29,46,${0.055 * boost})`); core.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = core; ctx.fillRect(0, 0, w, h);
   // 2) mesh + specks, depth-parallaxed: near band (high z) drifts + spreads more than the far band
   const spread = (z) => 0.8 + zoom * (0.07 + z * 0.16);
   const dxOf = (z) => Math.sin(t * 0.05) * (5 + z * 22), dyOf = (z) => Math.cos(t * 0.04) * (4 + z * 16);
@@ -150,7 +153,7 @@ function drawTendrils(ctx, scale) {
   const avgLen = nLen ? sumLen / nLen : 46;   // the layout's own node-spacing → tendrils reach "a region over"
   ctx.lineCap = 'round';
   for (const n of nodes) {
-    const real = n.degree;
+    const real = (typeof n.degree === 'number') ? n.degree : degreeHint.get(n.id);
     if (!(real > 0) || !Number.isFinite(n.x) || !Number.isFinite(n.y)) continue;
     const hidden = real - (shown.get(n.id) || 0);
     if (hidden < 1) continue;
@@ -471,6 +474,7 @@ function setData(res, m) {
   if (m === 'ego') {
     const wasEmpty = world.nodes.size === 0;   // first neighbourhood → frame it; later moves → fly there
     focalId = mergeEgo(res);
+    for (const nn of world.nodes.values()) if (typeof nn.degree === 'number') degreeHint.set(nn.id, nn.degree);
     setOverlay(world.nodes.size ? null : 'No graph data.');
     statsEl.textContent = `ego · ${res.stats ? res.stats.related : (res.links || []).length} related · hops=${res.stats ? res.stats.hops : ''} · world ${world.nodes.size}`;
     applyFilter();
@@ -479,6 +483,7 @@ function setData(res, m) {
   } else {
     world.nodes.clear(); world.links.clear();   // leaving follow → drop the traversed map
     full = { nodes: res.nodes || [], links: res.links || [] };
+    for (const nn of full.nodes) if (typeof nn.degree === 'number') degreeHint.set(nn.id, nn.degree);   // overview hubs → degree bridge
     focalId = (full.nodes.find(n => n.isFocal) || {}).id || null;
     setOverlay(full.nodes.length ? null : 'No graph data.');
     statsEl.textContent = `overview · ${(res.stats && res.stats.totalEntities || 0).toLocaleString()} nodes · ${(res.stats && res.stats.totalRelations || 0).toLocaleString()} edges`;
@@ -625,4 +630,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-09f: tendrils tail to a further node + brighter/cleaner far-field');
+console.info('[kg] surface build 2026-07-09g: galactic-core far-field + center-weighted specks + Follow-mode tendril bridge');
