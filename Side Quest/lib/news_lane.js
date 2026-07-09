@@ -21,6 +21,9 @@ const { extractProperNouns } = require('./graph_walk');
 const newsTopics = require('./news_topics');   // pure — story category (news tuner)
 const newsRank = require('./news_rank');        // pure — the reserve/weight/cap balancer
 const reconcile = require('./reconcile');       // the shared belief-revision decision (spec §7: the news lane is its consumer)
+const civicDomain = require('./civic_domain');   // anti-drift: reject off-domain (sports/entertainment) stories+principals
+const corroboration = require('./corroboration'); // C2 — independent-source counting
+const confModel = require('./confidence_model');  // C3 — calibrated confidence
 
 // --- pure text helpers -------------------------------------------------------
 const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'as', 'by', 'from', 'that', 'this', 'these', 'those', 'is', 'are', 'was', 'were', 'be', 'been', 'has', 'have', 'had', 'will', 'new', 'over', 'after', 'says', 'said', 'most', 'least', 'into', 'about', 'more', 'than', 'amid', 'his', 'her', 'their', 'its']);
@@ -756,6 +759,16 @@ async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdg
     log && log(`[news-daily] story ${story.id} NOT promoted (reconcile: ${decision.action}/${decision.reason})`);
     return res;
   }
+  // ANTI-DRIFT (audit fix): a clearly OFF-DOMAIN story (sports/entertainment) does
+  // not belong in the CIVIC graph. Skip it BEFORE landing its doc — so its entities
+  // are never extracted + its event/edges never form (kills the live sports drift:
+  // World Cup, footballers, clubs). High-precision denylist → civic stories pass.
+  const dom = civicDomain.isCivic({ name: story.title, context: story.summary || '' });
+  if (!dom.civic) {
+    log && log(`[news-daily] story ${story.id} SKIPPED (off-domain: ${dom.reason})`);
+    res.decision = 'off-domain';
+    return res;
+  }
   // The full-article body (story.article_text) is read by the HOURLY readArticlesPass (a read-tier op, done
   // promptly), not here — buildStoryDoc below simply INCLUDES it when present so the extraction learns from
   // the article. (A story reaches promotion hours after forming, so it's normally already been read.)
@@ -777,12 +790,20 @@ async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdg
       if (publicId != null) { setEventRef(story.id, publicId); story.event_ref = String(publicId); res.event = true; }
     } else if (log) log(`[news-daily] event propose failed (story ${story.id}): ${ev.error || 'unknown'}`);
   } else { res.updated = true; }
-  const principals = extractProperNouns(`${story.title}. ${story.summary || ''}`).slice(0, maxEdges);
+  // C2/C3 provenance for the news edges: the story's report_count is the independent
+  // (syndication-collapsed) corroboration; outlet_set is the source set. Calibrated
+  // confidence rises with independent outlets instead of the flat 0.8 default.
+  const corr = Math.max(1, Number(story.report_count) || 1);
+  const conf = confModel.calibratedConfidence({ grade: 'B', corroboration: corr });
+  const meta = JSON.stringify({ source_set: Array.isArray(story.outlet_set) ? story.outlet_set : [], corroboration: corr, category: story.category || null });
+  const principals = extractProperNouns(`${story.title}. ${story.summary || ''}`)
+    .filter((p) => civicDomain.isCivicDomain(p, story.title))   // drop off-domain principals (sports names)
+    .slice(0, maxEdges);
   for (const p of principals) {
     try {
       // LINKED_TO is a whitelisted core (symmetric) relation type; 'involves' is NOT whitelisted → always
       // rejected. Both endpoints must already exist, so an edge to a not-yet-created principal fails soft.
-      const rr = await dispatch({ kind: 'do', name: 'propose_relation', args: { source_name: String(story.title).slice(0, 200), target_name: String(p).slice(0, 200), relation_type: 'LINKED_TO' } });
+      const rr = await dispatch({ kind: 'do', name: 'propose_relation', args: { source_name: String(story.title).slice(0, 200), target_name: String(p).slice(0, 200), relation_type: 'LINKED_TO', confidence: conf, relation_metadata: meta } });
       let action = null; try { action = JSON.parse(rr && rr.text).action; } catch {}
       // Count ONLY an accepted edge — a rejected proposal (missing endpoint / not-whitelisted) still returns
       // transport ok=true with action:'rejected', so ok alone would report phantom edges.

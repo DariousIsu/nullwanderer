@@ -276,6 +276,19 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   ok(rp.edges >= 1 && D2.calls.propose_relation.some(a => a.target_name === 'Kyiv' && a.relation_type === 'LINKED_TO'), 'promoteStory forges event→principal edges with a WHITELISTED type (LINKED_TO, not the rejected "involves")');
   ok(D2.calls.propose_relation.some(a => a.target_name !== 'Kyiv'), 'promoteStory also ATTEMPTS edges to not-yet-existing principals (they fail soft, form on a later pass)');
   ok(rp.edges === D2.calls.propose_relation.filter(a => a.target_name === 'Kyiv').length, 'only ACCEPTED edges count — a rejected proposal (transport-ok, action:rejected) is NOT miscounted as an edge');
+  // C2/C3: the news edge now carries a calibrated confidence + provenance (not the flat 0.8 default).
+  const kEdge = D2.calls.propose_relation.find(a => a.target_name === 'Kyiv');
+  ok(kEdge && typeof kEdge.confidence === 'number' && kEdge.confidence !== 0.8, 'promoteStory: news edge carries a calibrated confidence (not the 0.8 default)');
+  ok(kEdge && typeof kEdge.relation_metadata === 'string' && JSON.parse(kEdge.relation_metadata).corroboration >= 1, 'promoteStory: news edge carries relation_metadata (corroboration + source_set)');
+
+  // ANTI-DRIFT (audit fix): an OFF-DOMAIN sports story is skipped BEFORE landing —
+  // no doc lands, no event/edges form (kills the World-Cup/footballer drift at source).
+  clearStories();
+  await lane.clusterItems([{ title: 'Lionel Messi leads Argentina past Egypt in World Cup thriller', summary: 'A World Cup match report from the tournament.', source: 'espn', url: 'https://espn.com/x', ts: NOW, id: 9001 }], { now: NOW });
+  const DS = mkDispatchState();
+  const sres = await lane.promoteStory(lane.allStories()[0], { dispatch: DS.dispatch, landDoc: DS.landDoc, now: NOW });
+  ok(sres.decision === 'off-domain' && sres.event === false && sres.edges === 0, 'anti-drift: off-domain sports story skipped (no event, no edges)');
+  ok(DS.calls.landDoc.length === 0 && DS.calls.propose_entity.length === 0, 'anti-drift: off-domain story lands NO doc + proposes NO entity (drift stopped at source)');
 
   // ===== CLUSTER ADJUDICATOR (ambiguous-band tiebreaker) =====
   ok(lane.adjValidate('{"same":true}').value.same === true && lane.adjValidate('prose {"same":false} x').value.same === false, 'adjValidate parses {same:bool} (even in prose)');
