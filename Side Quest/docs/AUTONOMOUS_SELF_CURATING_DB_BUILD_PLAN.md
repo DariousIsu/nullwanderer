@@ -95,6 +95,31 @@
 
 ---
 
+## MILESTONE F — Autonomous fast-ingest + grounded builder + Puller integration (Step 4)
+**Premise (Lucas 2026-07-09):** the operator gate becomes **additive, not blocking** — multi-pass GROUNDED verification replaces per-item approval; the human supplies *labels* (bounce reports, verified test lists) and *watches*. Research-grounded (3 web threads 2026-07-09: bounce/DSN formats; Clay/Apollo/Hunter/MDM enrichment; Snorkel/OpenRefine/human-on-the-loop UX). **Anti-collapse invariant holds:** model-vs-model agreement is NOT verification — every auto-promote needs an EXTERNAL anchor (civic = QID/verified web citation; person = CRM match for *identity* — each attribute still needs its own citation).
+
+**Core engine (headless):** ONE queue (all feeds' short-term observations incl. Puller discoveries) → ONE **chunked drain worker** (drain-until-empty, bounded chunks — Lucas #2). Per item: verification stack **identity → grounding/citation → consistency → corroboration/confidence** → **three-way outcome** (= MDM three-way match): **PROMOTE** (clears bar; auto, reversible, logged) · **RESEARCH** (short→enrich→re-judge; Lucas #3) · **PARK** (held lower-certainty candidate + exception tray; never a block). **Belief = per-attribute** `{value, source, method(sourced|pattern|inferred), confidence, first_seen, last_verified, supporting_obs[], revisions[]}`; confidence = authority × verify-recency × corroboration, **age-decayed** (Hunter bands: >90 SMTP-verified <30d · 70–90 likely-unverified · <70 guess). **Survivorship** (recency×authority×completeness) picks the surfacing facet; **CRM pinned system-of-record, READ-ONLY** (discovered facet references `crm_id`, never overwrites).
+
+### F1 — Identity trust (the Tracy fix). FIRST — gates everything.
+- **Goal:** **mint-reluctance** (a first-name/descriptor-only mention never mints a durable entity → bind-or-hold-provisional); **contextual identity** (resolve a descriptor/partial against meeting-attendees + roles + co-occurrence, not string similarity); **attractor-guard** (a provisional entity can't be the canonical target for future ambiguous mentions until confirmed). Person path = Puller `targets`/CRM resolution + these guards (its `confidence` = identity confidence); civic path = QID. **Smoke:** the Tracy Bromley scenario — "Tracy the finance lady" binds to the CRM contact, does NOT mint a new object, and a later bare "Tracy" does NOT bind to a provisional attractor.
+
+### F2 — Grounded auto-promote lane + chunked drainer.
+- **Goal:** the 3-band decision (promote/research/park) with **no human gate**, on the chunked drain-until-empty worker; wire `ground.py` adjudicate + citation-verify to the real cloud + `web_fetch`; every promotion **reversible + logged** (`audit_fix_log` sibling). Convert Puller `revisions` gate → **3-band reversible** (high-conf flips auto-apply reversibly; uncertain → exception tray). **Smoke:** a high-conf verified item auto-promotes + reverts cleanly; an unverifiable one parks; no ungrounded apply slips through.
+
+### F3 — Research-to-close-the-gap (Lucas #3).
+- **Goal:** for the RESEARCH bucket, diagnose the gap (corroboration / identity / citation) → bounded targeted research → re-judge. **Fact/news arm** = web_search/research-track (independent EXTERNAL sources only — not model re-assertion). **Person/org arm = Puller ENRICH waterfall** (sourced-first → pattern-guess + SMTP-verify; **catch-all domains flagged unverifiable + confidence-capped**). Bounded retries + cooldown (no re-research thrash), token/API budgeted, async (`puller_walk` picks up flagged items under its sector/TTL guards). **Smoke:** a 1-source news item gains an independent corroboration → crosses the bar; a catch-all email guess is capped, not promoted.
+
+### F4 — Feedback normalizer + Puller window/drop-zone (the additive human).
+- **Goal (normalizer):** format-agnostic bounce/test-list ingest → normalized `{recipient, basic_code, enhanced_code, class∈{hard,soft,block,complaint,success,unknown}, ts, diagnostic, source}`. **Detection ladder:** MIME-sniff (RFC 3464 DSN / RFC 5965 ARF) → ESP JSON fingerprint (SES `bounceType`, SendGrid `sg_event_id`, Mailgun `severity`, Postmark `RecordType`) → fuzzy CSV header map → free-text regex. **Enhanced-status class digit = master arbiter** (5 hard / 4 soft / 2 success), ESP-vocab + keyword fallback. **Suppression list ≠ validity belief** (separate concerns). Beta update on the per-domain `pattern_beliefs`: hard-bounce `β+`, success `α+`, soft/block/complaint `~0`; **test-list weighted > opportunistic bounces** (controlled probe = ground truth).
+- **Goal (workspace):** **WINDOW** (read-only: pulse strip · confidence histogram + 7-day trend = the drift-tell · recent-decisions feed w/ citation-chain + one-click revert · exception tray [optional attention] · alert rail). **DROP-ZONE** (upload → auto-classify batch type `hard_negative | ground_truth_positive | correction+merge` → **diff preview → one Commit** → batch history w/ **Revert-batch**; OpenRefine-style reversible operation log). **Labels are evidence the engine reconciles, NOT overrides; batch-atomic + reversible; operator notified, never required** (human-on-the-loop). **Smoke:** each of the 4 bounce shapes normalizes to the right class; a bounce batch drops the domain-pattern posterior + suppresses the addresses; Revert-batch restores prior state.
+
+### F5 — Certainty unification.
+- **Goal:** ONE truth model — Puller `beliefs.confidence`/`supporting_obs` ↔ KG `confidence_model`/`corroboration` (unify the math: Hunter-style scoring + MDM survivorship); route Puller `revisions` through the shared **supersession** path (a belief flip = a D2 replacement). **Smoke:** a person-email belief and a civic-relation confidence compute via the same calibrated model; a Puller revision emits a supersession candidate.
+
+**Guards (cross-slice):** suppression ≠ validity; only hard-bounce + successful-send move the validity posterior (soft/block/complaint ~neutral); catch-all domains capped; **automation-bias/silent-drift → PUSH alerts** (confidence-distribution drift, reversal-rate spike, auditor auto-off), not dashboards-you-must-check; CRM read-only always; every promotion/merge/label-batch reversible. **Puller seam:** F1 person-identity + F3 person-arm + F4 workspace + F5 = the reserved Puller design session, specced here.
+
+---
+
 ## Cross-cutting (every relevant slice)
 - **Cycle-safety:** read = recursive CTE (SQLite/DuckDB) + visited-set + depth cap, never Python-stack recursion; write = cycle-prevention on autonomous merge/supersede (D1/D2). Echo already does this in `query_graph`/`resolve/canonical.py` — inherit it.
 - **Anti-drift (architecture §6):** external anchor (never let self-inferred displace verified), bounded per-predicate candidate budgets, periodic full refresh, per-predicate precision + diversity watch.
@@ -105,5 +130,13 @@
 - A0/B1: reconcile `promote_tenant_proposals` vs `promote_proposals_bulk`; backlog handling.
 - D1/D2: functional-predicate allowlist finalization (needs `CIVIC_TAXONOMY.md`); Cultivator vs Skuld ownership of the reconciliation passes.
 
+## Milestone F resolved decisions (Lucas 2026-07-09)
+- **Operator gate → additive, not blocking.** Reverses the "operator-gated by charter" stance: multi-pass grounded verification + external-citation anchor replaces per-item approval; human = label-supplier + watcher (human-on-the-loop).
+- **Backlog = new inflow.** One chunked drain worker, drain-until-empty; no special-casing the pile-up.
+- **Short-of-bar items get RESEARCHED before parking** (not left for the periodic cleans); bounded + external-anchored.
+- **Drainer reads only emitted observations**, not `puller.db` directly — Puller stays the person/org working-store; a belief that clears the bar emits a cited observation into the shared substrate. Single promotion path.
+- **CRM anchors identity, not every attribute**; CRM stays read-only (system-of-record); discovered data is a certainty-scored facet.
+- **Certainty unified** (F5), not mapped at a boundary — one calibrated model.
+
 ## Sequencing summary
-A0 (clean) → **A1 · A2 (inert substrate + hardening — the safe foundation)** → B1 · B2 (landing, operator-gated) → C1–C4 (provenance/corroboration/calibration/decay) → D1 · D2 · D3 (dedup, supersession candidates, then activate) → E1–E3 (objective loop, procedural memory, visualization). Growth-visible wins early (B1); the destructive/curation power lands last (D3), behind a flag, on a copy.
+A0 (clean) → **A1 · A2 (inert substrate + hardening — the safe foundation)** → B1 · B2 (landing, operator-gated) → C1–C4 (provenance/corroboration/calibration/decay) → D1 · D2 · D3 (dedup, supersession candidates, then activate) → E1–E3 (objective loop, procedural memory, visualization) → **F1 (identity trust — the Tracy fix, gates everything) → F2 (gate-less grounded auto-promote + chunked drainer) → F3 (research-to-close-the-gap) → F4 (bounce/test-list normalizer + Puller window/drop-zone) → F5 (certainty unification)**. Growth-visible wins early (B1); destructive/curation power lands mid (D3, flagged, on a copy); the gate-less fast-ingest + Puller integration lands last (F), on top of the D-lane pieces already built. F4's normalizer is standalone/low-risk (can land parallel-early).
