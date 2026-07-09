@@ -74,28 +74,50 @@ function farField() {
   let s = 0x9e3779b9;                                   // seeded LCG → identical field every frame
   const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
   const TINT = ['148,163,184', '20,184,166', '34,197,94', '168,85,247', '245,158,11'];   // slate/teal/green/violet/amber
+  // depth-banded specks: z in [0,1] (0 = deep/far, 1 = near) drives size, brightness, drift + zoom spread,
+  // so the bands parallax at different rates → depth is *felt*, not just decorated.
   const N = 340, pts = [];
-  for (let i = 0; i < N; i++) pts.push({ x: rnd(), y: rnd(), r: 0.3 + rnd() * 1.1, b: 0.04 + rnd() * 0.12, t: TINT[(rnd() * TINT.length) | 0], px: 0.3 + rnd() * 0.7 });
+  for (let i = 0; i < N; i++) { const z = rnd(); pts.push({ x: rnd(), y: rnd(), z, r: 0.3 + z * 1.5, b: 0.035 + z * 0.12, t: TINT[(rnd() * TINT.length) | 0] }); }
   const edges = [];
   for (let i = 0; i < N; i++) {                          // connect each speck to its 1–2 nearest → a net, not stars
     let n1 = -1, n2 = -1, d1 = 1e9, d2 = 1e9;
     for (let j = 0; j < N; j++) { if (j === i) continue; const dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y, d = dx * dx + dy * dy; if (d < d1) { d2 = d1; n2 = n1; d1 = d; n1 = j; } else if (d < d2) { d2 = d; n2 = j; } }
     if (n1 > i) edges.push([i, n1]); if (n2 > i) edges.push([i, n2]);
   }
-  _farField = { pts, edges };
+  // nebula: a few big soft colour clouds so the galaxy has structure + hue, not a uniform void. Deepest layer.
+  const CLOUD_HUE = ['20,184,166', '34,197,94', '168,85,247', '96,165,250', '148,163,184'];
+  const clouds = [];
+  for (let i = 0; i < 6; i++) clouds.push({ x: rnd(), y: rnd(), r: 0.4 + rnd() * 0.5, a: 0.028 + rnd() * 0.032, t: CLOUD_HUE[i % CLOUD_HUE.length], depth: 0.12 + rnd() * 0.3, ph: rnd() * 6.28 });
+  _farField = { pts, edges, clouds };
   return _farField;
 }
 function drawFarField(ctx, w, h) {
   const F = farField(), t = prefersReducedMotion ? 0 : performance.now() / 1000;
   let zoom = 1; try { zoom = (G && G.zoom) ? G.zoom() : 1; } catch (e) {}
-  const spread = Math.min(1.6, 0.85 + zoom * 0.12);      // field expands with zoom → parallax depth
-  const dx = Math.sin(t * 0.05) * 14, dy = Math.cos(t * 0.04) * 10;   // slow drift
-  let boost = 1; if (pulseAt) { const el = performance.now() - pulseAt; if (el >= 0 && el < 1600) boost = 1 + (1 - el / 1600) * 1.4; }   // whole field brightens when a connection lands
+  let boost = 1; if (pulseAt) { const el = performance.now() - pulseAt; if (el >= 0 && el < 1600) boost = 1 + (1 - el / 1600) * 1.4; }   // field flares when a connection lands
   const cx = w / 2, cy = h / 2;
-  const X = p => cx + (p.x - 0.5) * w * spread + dx * p.px, Y = p => cy + (p.y - 0.5) * h * spread + dy * p.px;
-  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.lineWidth = 0.6;
-  for (const [a, b] of F.edges) { const pa = F.pts[a], pb = F.pts[b]; ctx.strokeStyle = `rgba(${pa.t},${0.045 * boost})`; ctx.beginPath(); ctx.moveTo(X(pa), Y(pa)); ctx.lineTo(X(pb), Y(pb)); ctx.stroke(); }
-  for (const p of F.pts) { ctx.beginPath(); ctx.arc(X(p), Y(p), p.r, 0, 2 * Math.PI, false); ctx.fillStyle = `rgba(${p.t},${Math.min(0.42, p.b * boost)})`; ctx.fill(); }
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // 1) nebula clouds (deepest layer) — big soft colour, slow drift scaled by their depth
+  for (const c of F.clouds) {
+    const nx = cx + (c.x - 0.5) * w * 1.1 + Math.sin(t * 0.03 + c.ph) * 26 * c.depth;
+    const ny = cy + (c.y - 0.5) * h * 1.1 + Math.cos(t * 0.025 + c.ph) * 20 * c.depth;
+    const rad = c.r * Math.min(w, h);
+    const g = ctx.createRadialGradient(nx, ny, 0, nx, ny, rad);
+    g.addColorStop(0, `rgba(${c.t},${Math.min(0.11, c.a * boost)})`); g.addColorStop(1, `rgba(${c.t},0)`);
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(nx, ny, rad, 0, 2 * Math.PI, false); ctx.fill();
+  }
+  // 2) mesh + specks, depth-parallaxed: near band (high z) drifts + spreads more than the far band
+  const spread = (z) => 0.8 + zoom * (0.07 + z * 0.16);
+  const dxOf = (z) => Math.sin(t * 0.05) * (5 + z * 22), dyOf = (z) => Math.cos(t * 0.04) * (4 + z * 16);
+  const X = p => cx + (p.x - 0.5) * w * spread(p.z) + dxOf(p.z), Y = p => cy + (p.y - 0.5) * h * spread(p.z) + dyOf(p.z);
+  ctx.lineWidth = 0.6;
+  for (const [a, b] of F.edges) { const pa = F.pts[a], pb = F.pts[b]; ctx.strokeStyle = `rgba(${pa.t},${0.04 * boost})`; ctx.beginPath(); ctx.moveTo(X(pa), Y(pa)); ctx.lineTo(X(pb), Y(pb)); ctx.stroke(); }
+  for (const p of F.pts) { ctx.beginPath(); ctx.arc(X(p), Y(p), p.r, 0, 2 * Math.PI, false); ctx.fillStyle = `rgba(${p.t},${Math.min(0.4, p.b * boost)})`; ctx.fill(); }
+  // 3) connect shockwave — a faint ring expanding into the cosmos when a node lands (screen-centred, robust)
+  if (pulseAt && !prefersReducedMotion) {
+    const el = performance.now() - pulseAt;
+    if (el >= 0 && el < 1600) { const p = el / 1600, rad = 20 + p * Math.max(w, h) * 0.6; ctx.strokeStyle = `rgba(251,191,36,${(1 - p) * 0.26})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, rad, 0, 2 * Math.PI, false); ctx.stroke(); }
+  }
   ctx.restore();
 }
 
