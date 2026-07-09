@@ -164,7 +164,10 @@ contextBridge.exposeInMainWorld('sq', {
     ego: (entity, hops) => ipcRenderer.invoke('kg:ego', { entity, hops }),
     search: (query) => ipcRenderer.invoke('kg:search', { query }),
     // live-follow: main broadcasts kg:focus-move on each idle graph-walk move → the panel can re-center.
-    onFocusMove: (cb) => { const h = (_e, p) => { try { cb(p); } catch (e) {} }; ipcRenderer.on('kg:focus-move', h); return () => ipcRenderer.removeListener('kg:focus-move', h); }
+    onFocusMove: (cb) => { const h = (_e, p) => { try { cb(p); } catch (e) {} }; ipcRenderer.on('kg:focus-move', h); return () => ipcRenderer.removeListener('kg:focus-move', h); },
+    // curation metabolism: main broadcasts kg:curation-move when the self-curation engine lands a batch
+    // ({tier:'growth'|'curation'|'clean', kind, count, items?, anchor?}). Inert until the host emits it.
+    onCurationMove: (cb) => { const h = (_e, p) => { try { cb(p); } catch (e) {} }; ipcRenderer.on('kg:curation-move', h); return () => ipcRenderer.removeListener('kg:curation-move', h); }
   },
 
   // Reader / Library — read-only corpus reader on the document substrate.

@@ -13,8 +13,8 @@ let full = { nodes: [], links: [] };   // pristine current-mode graph (string-ke
 let selected = new Set(); // active entity-type filter
 let hovered = null;
 let mode = 'overview', submitted = '', submittedQuery = '';
-// --- demo animation state (cosmetic): shimmer the focal node's edges + pulse on each move ---
-let focalId = null, pulseAt = 0;
+// --- activity-pulse state: the far-field flares on each landed batch, magnitude set per tier (below) ---
+let focalId = null, pulseAt = 0, pulseMag = 1.4;
 const linkEnd = (x) => (x && typeof x === 'object') ? x.id : x;
 
 // color helpers for the lit-node / atmosphere rendering (entity colors are hex; fallbacks are hex too)
@@ -94,7 +94,7 @@ function farField() {
 function drawFarField(ctx, w, h) {
   const F = farField(), t = prefersReducedMotion ? 0 : performance.now() / 1000;
   let zoom = 1; try { zoom = (G && G.zoom) ? G.zoom() : 1; } catch (e) {}
-  let boost = 1; if (pulseAt) { const el = performance.now() - pulseAt; if (el >= 0 && el < 1600) boost = 1 + (1 - el / 1600) * 1.4; }   // field flares when a connection lands
+  let boost = 1; if (pulseAt) { const el = performance.now() - pulseAt; if (el >= 0 && el < 1600) boost = 1 + (1 - el / 1600) * pulseMag; }   // field flares when a batch lands (magnitude per tier)
   const cx = w / 2, cy = h / 2;
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
   // 1) nebula clouds (deepest layer) — big soft colour, slow drift scaled by their depth
@@ -113,10 +113,11 @@ function drawFarField(ctx, w, h) {
   ctx.lineWidth = 0.6;
   for (const [a, b] of F.edges) { const pa = F.pts[a], pb = F.pts[b]; ctx.strokeStyle = `rgba(${pa.t},${0.04 * boost})`; ctx.beginPath(); ctx.moveTo(X(pa), Y(pa)); ctx.lineTo(X(pb), Y(pb)); ctx.stroke(); }
   for (const p of F.pts) { ctx.beginPath(); ctx.arc(X(p), Y(p), p.r, 0, 2 * Math.PI, false); ctx.fillStyle = `rgba(${p.t},${Math.min(0.4, p.b * boost)})`; ctx.fill(); }
-  // 3) connect shockwave — a faint ring expanding into the cosmos when a node lands (screen-centred, robust)
-  if (pulseAt && !prefersReducedMotion) {
+  // 3) connect shockwave — a faint ring expanding into the cosmos. Gated to bigger events (growth/clean,
+  //    mag ≥ 1.2) so the frequent ambient curation tier never fires it.
+  if (pulseAt && pulseMag >= 1.2 && !prefersReducedMotion) {
     const el = performance.now() - pulseAt;
-    if (el >= 0 && el < 1600) { const p = el / 1600, rad = 20 + p * Math.max(w, h) * 0.6; ctx.strokeStyle = `rgba(251,191,36,${(1 - p) * 0.26})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, rad, 0, 2 * Math.PI, false); ctx.stroke(); }
+    if (el >= 0 && el < 1600) { const p = el / 1600, rad = 20 + p * Math.max(w, h) * 0.6; ctx.strokeStyle = `rgba(251,191,36,${(1 - p) * Math.min(0.34, 0.18 * pulseMag)})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, rad, 0, 2 * Math.PI, false); ctx.stroke(); }
   }
   ctx.restore();
 }
@@ -413,40 +414,77 @@ function setFollow(on) {
   // turning follow ON snaps straight to the last known anchor so there's no wait for the next move
   if (follow && lastMove && lastMove.anchor && lastMove.anchor !== submitted) focus(lastMove.anchor);
 }
-// COSMETIC (demo): fire the pulse ring + a staggered particle burst down the focal node's edges. Pure
-// eye-candy — no data changes; the particles just make "she just did something here" visible for ~1.5s.
-function pulseFocal() {
-  pulseAt = performance.now();
-  if (!G || !focalId) return;
+// --- tiered activity pulses (the "metabolism") ------------------------------
+// The graph self-curates on THREE tempos, and intensity is INVERSE to frequency so the panel stays a calm
+// ambient companion instead of a strobe: frequent programmatic curation (connect/merge/dedup) is a whisper,
+// hourly growth blasts are a noticeable swell, the daily cleaning sweep is the showpiece. Batches are
+// COALESCED — N events fold into ONE gesture scaled by log(N) — so a chatty programmatic pass never seizures.
+const TIER = {
+  growth:   { mag: 1.6, ring: 0.9, coalesceMs: 140 },   // hourly — a swell you'd catch at a glance
+  curation: { mag: 0.7, ring: 0.0, coalesceMs: 850 },   // frequent — ambient, never demands attention
+  clean:    { mag: 2.3, ring: 1.0, coalesceMs: 200 },   // daily — the cinematic sweep
+};
+let intensity = (() => { try { return localStorage.getItem('kg.intensity') || 'lively'; } catch (e) { return 'lively'; } })();
+const INTENSITY_MUL = { off: 0, calm: 0.5, lively: 1 };
+
+// coalescing: same-tier events inside the tier's window fold together; a different tier flushes first.
+let _coal = null, _coalTimer = 0;
+function ingestPulse(evt) {
+  if (!evt) return;
+  const tier = TIER[evt.tier] ? evt.tier : 'growth';
+  if (_coal && _coal.tier !== tier) flushPulse();
+  if (!_coal) _coal = { tier, count: 0, items: [], anchor: null };
+  _coal.count += (evt.count || 1);
+  if (evt.items && evt.items.length) _coal.items.push(...evt.items);
+  if (evt.anchor) _coal.anchor = evt.anchor;
+  clearTimeout(_coalTimer); _coalTimer = setTimeout(flushPulse, TIER[tier].coalesceMs);
+}
+function flushPulse() {
+  const c = _coal; _coal = null; clearTimeout(_coalTimer);
+  if (!c) return;
+  const mul = INTENSITY_MUL[intensity] != null ? INTENSITY_MUL[intensity] : 1;
+  if (mul <= 0) return;                                   // intensity: off
+  const t = TIER[c.tier], size = Math.min(2.4, 1 + Math.log10((c.count || 1) + 1) * 0.9);   // batch size → intensity
+  pulse({ mag: t.mag * size * mul, ring: t.ring * mul });
+  // c.items[] (in-view (source,target) pairs) will drive local light-threads in the next slice.
+}
+
+// Fire one pulse: flare the far-field (mag) and optionally ripple a light-wave outward across the visible
+// web (ring). Generalised from the old focal-only pulse so every tier routes through a single gesture.
+function pulse({ mag = 1.6, ring = 1 } = {}) {
+  pulseAt = performance.now(); pulseMag = mag;
+  if (ring <= 0 || prefersReducedMotion || !G || !focalId) return;
   try {
     const links = G.graphData().links || [];
-    // BFS hop-distance from the new/updated node across the whole visible web…
     const adj = new Map();
     for (const l of links) { const a = linkEnd(l.source), b = linkEnd(l.target); if (a == null || b == null) continue; (adj.get(a) || adj.set(a, []).get(a)).push(b); (adj.get(b) || adj.set(b, []).get(b)).push(a); }
     const dist = new Map([[focalId, 0]]), q = [focalId];
     while (q.length) { const u = q.shift(); for (const v of (adj.get(u) || [])) if (!dist.has(v)) { dist.set(v, dist.get(u) + 1); q.push(v); } }
-    // …then emit a particle on every reachable link, staggered by hop level → a wave of light ripples
-    // OUTWARD from the connection through the network, not just down the one new edge. Caps keep it sane.
-    let emitted = 0;
+    // emit a particle on every reachable link, staggered by hop level → a wave rippling OUTWARD; cap by ring.
+    let emitted = 0; const cap = Math.round(120 * ring);
     for (const l of links) {
       const lvl = Math.min(dist.has(linkEnd(l.source)) ? dist.get(linkEnd(l.source)) : 99, dist.has(linkEnd(l.target)) ? dist.get(linkEnd(l.target)) : 99);
-      if (lvl >= 99 || emitted > 120) continue;
+      if (lvl >= 99 || emitted > cap) continue;
       emitted++;
-      const delay = prefersReducedMotion ? 0 : lvl * 150 + Math.random() * 70;
-      setTimeout(() => { try { G.emitParticle(l); } catch (e) {} }, delay);
+      setTimeout(() => { try { G.emitParticle(l); } catch (e) {} }, lvl * 150 + Math.random() * 70);
     }
   } catch (e) {}
 }
 function onFocusMove(p) {
   if (!p || !p.anchor) return;
   lastMove = p; renderNow();
-  if (follow && p.anchor !== submitted) focus(p.anchor, { query: p.canonical || p.anchor, soft: true }).then(pulseFocal).catch(() => {});   // re-center on the exact node + animate
+  // growth tier: re-center on the exact node, then pulse (coalesced through the metabolism core)
+  if (follow && p.anchor !== submitted) focus(p.anchor, { query: p.canonical || p.anchor, soft: true }).then(() => ingestPulse({ tier: 'growth', anchor: p.anchor, count: 1 })).catch(() => {});
 }
+// curation metabolism: frequent programmatic curation + the daily clean sweep arrive here. Inert until the
+// host emits kg:curation-move — same graceful-degrade pattern as follow. Payload {tier, kind, count, items?}.
+function onCurationMove(p) { ingestPulse(p); }
 followBtn.addEventListener('click', () => setFollow(!follow));
 try {
   if (window.sq && window.sq.kg && typeof window.sq.kg.onFocusMove === 'function') window.sq.kg.onFocusMove(onFocusMove);
   else followBtn.disabled = true;   // older host without the live channel → toggle inert
 } catch (e) { followBtn.disabled = true; }
+try { if (window.sq && window.sq.kg && typeof window.sq.kg.onCurationMove === 'function') window.sq.kg.onCurationMove(onCurationMove); } catch (e) {}
 try { if (localStorage.getItem('kg.follow') === '1') setFollow(true); } catch (e) {}
 
 loadOverview();
