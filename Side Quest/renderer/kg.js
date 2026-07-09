@@ -139,7 +139,7 @@ function drawAtmosphere(ctx, scale) {
   const nodes = (G.graphData().nodes) || [];
   let target = nodes.find(n => n.isFocal);
   if (!target) { for (const n of nodes) if (!target || (n.degree || 0) > (target.degree || 0)) target = n; }   // richest hub in overview
-  if (target && target.x != null) {
+  if (target && Number.isFinite(target.x) && Number.isFinite(target.y)) {
     const col = target.color || '#FBBF24', rad = 72;
     const bg = ctx.createRadialGradient(target.x, target.y, 0, target.x, target.y, rad);
     bg.addColorStop(0, rgbaHex(col, 0.12)); bg.addColorStop(1, rgbaHex(col, 0));
@@ -164,7 +164,7 @@ function ensureGraph() {
     .linkCanvasObjectMode(() => 'after')
     .linkCanvasObject((l, ctx, scale) => {
       const s = l.source, t = l.target;
-      if (!s || !t || s.x == null || t.x == null) return;
+      if (!s || !t || !Number.isFinite(s.x) || !Number.isFinite(s.y) || !Number.isFinite(t.x) || !Number.isFinite(t.y)) return;   // NaN passes ==null → guard finite
       const base = l.color || 'rgba(148,163,184,0.5)', w = Math.max(0.7, (l.width || 0.6) * 1.4);
       ctx.save();
       ctx.shadowColor = base; ctx.shadowBlur = 3;
@@ -183,6 +183,11 @@ function ensureGraph() {
     .onNodeClick(n => { if (n && !n.isFocal) focus(n.id); })
     .nodePointerAreaPaint((n, color, ctx) => { ctx.beginPath(); ctx.arc(n.x, n.y, n.isFocal ? 10 : 8, 0, 2 * Math.PI, false); ctx.fillStyle = color; ctx.fill(); })
     .nodeCanvasObject((n, ctx, scale) => {
+      // Non-finite positions happen transiently under Follow's data churn (a fresh node before d3 places it).
+      // createRadialGradient (below) THROWS on NaN, and a throw here dies inside force-graph's rAF callback →
+      // the whole render loop stops for good (the dead-black-canvas bug). arc()/stroke() tolerate NaN; the
+      // gradient does not — so skip this node for this frame. It draws normally once positioned.
+      if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) return;
       const r = nodeRadius(n), col = n.color || '#7dd3fc';
       // lit node: a soft same-hue glow (scales with radius → hubs shine brighter) makes the disk read as a
       // lit object, then a radial gradient (light core → saturated rim) gives it depth instead of a flat fill.
@@ -497,4 +502,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-09b: render-loop LIVE (autoPauseRedraw off) · tiered-metabolism · nebula · lit nodes/edges');
+console.info('[kg] surface build 2026-07-09c: NaN-coord guard (loop no longer dies) · render-loop live · nebula · lit nodes/edges');
