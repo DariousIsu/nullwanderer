@@ -280,6 +280,10 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   const kEdge = D2.calls.propose_relation.find(a => a.target_name === 'Kyiv');
   ok(kEdge && typeof kEdge.confidence === 'number' && kEdge.confidence !== 0.8, 'promoteStory: news edge carries a calibrated confidence (not the 0.8 default)');
   ok(kEdge && typeof kEdge.relation_metadata === 'string' && JSON.parse(kEdge.relation_metadata).corroboration >= 1, 'promoteStory: news edge carries relation_metadata (corroboration + source_set)');
+  // F2 GROUNDING: source_set must be NON-EMPTY (the outlet_set Set was failing Array.isArray → empty →
+  // every news edge held ungrounded, unable to auto-promote). Now it spreads the outlets (+ article URL).
+  const kMeta = kEdge && JSON.parse(kEdge.relation_metadata);
+  ok(kMeta && Array.isArray(kMeta.source_set) && kMeta.source_set.length >= 1 && kMeta.source_set.includes('CNN'), 'promoteStory: news edge source_set is NON-EMPTY (outlets spread) → grounded → eligible for F2 auto-promote');
 
   // ABSORB EVERYTHING (philosophy fix): a sports story is NOT dropped on topic — it lands
   // its doc + forges its event + principal edges like any other news. Domain is only a TAG

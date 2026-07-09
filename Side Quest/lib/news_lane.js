@@ -790,7 +790,12 @@ async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdg
   const corr = Math.max(1, Number(story.report_count) || 1);
   const conf = confModel.calibratedConfidence({ grade: 'B', corroboration: corr });
   const dom = civicDomain.isCivic({ name: story.title, context: story.summary || '' });   // TAG only (not a filter)
-  const meta = JSON.stringify({ source_set: Array.isArray(story.outlet_set) ? story.outlet_set : [], corroboration: corr, category: story.category || null, domain: dom.civic ? 'civic' : 'off-domain' });
+  // GROUNDING (F2): the edge's provenance must carry a REAL external citation or it can never auto-promote.
+  // outlet_set is a Set (Array.isArray was always false → source_set landed EMPTY → every news edge held
+  // ungrounded). Spread it, and prefer the verifiable article URL as the lead source when we extracted one.
+  const outlets = [...(story.outlet_set || [])].filter(Boolean).map(String);
+  const srcUrls = (story.article_url && /^https?:/i.test(String(story.article_url))) ? [String(story.article_url)] : [];
+  const meta = JSON.stringify({ source_set: srcUrls.concat(outlets), corroboration: corr, category: story.category || null, domain: dom.civic ? 'civic' : 'off-domain' });
   const principals = extractProperNouns(`${story.title}. ${story.summary || ''}`)
     .slice(0, maxEdges);   // keep EVERY principal — a name's topic never disqualifies it as an edge endpoint
   for (const p of principals) {
