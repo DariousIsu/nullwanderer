@@ -51,6 +51,7 @@ const smokes = [
   'smoke_decay_pass.js',
   'smoke_civic_domain.js',
   'smoke_promote_gate.js',
+  'smoke_supersession.js',
   'smoke_decomp_lane.js',
   'smoke_contact_extract.js',
   'smoke_contact_card.js',
