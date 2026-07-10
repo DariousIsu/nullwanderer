@@ -549,6 +549,8 @@ function init() {
   for (const stmt of MIGRATIONS) {
     try { db.exec(stmt); } catch (e) { /* duplicate column — ignore */ }
   }
+  // Seed the owner-identity anchor (idempotent) so autonomous lanes recognize the operator across his facets.
+  try { seedOwnerIdentity(); } catch {}
 }
 
 function getDb() {
@@ -1465,6 +1467,73 @@ function setMeta(key, value) {
     .run(key, String(value));
 }
 
+// ---- OWNER IDENTITY (2026-07-10) --------------------------------------------------------------------
+// The canonical anchor for WHO the owner is, so autonomous lanes RECOGNIZE Lucas across his facets — his
+// personal meeting node, his public FEC candidate record (he ran for US House in FL), and doc mentions like
+// "L. Overby" / "LO" — instead of treating him as an UNKNOWN civic subject to cold-research. The bug this
+// closes: the graph-walk builder saw "L. Overby" in the operator's own doc, "didn't have anything on" him,
+// and went researching him via the Echo corpus. Consult isOwnerName() before treating a person-name as a
+// research target. Seeded idempotently from user_name + the personal person node; enrichable by the operator.
+const _ownerNorm = (s) => String(s == null ? '' : s).toLowerCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+
+function getOwnerIdentity() {
+  try { const raw = getMeta('owner_identity'); return raw ? JSON.parse(raw) : null; } catch { return null; }
+}
+
+function isOwnerName(name) {
+  const n = _ownerNorm(name);
+  if (!n || n.length < 2) return false;
+  const oid = getOwnerIdentity();
+  if (!oid) return false;
+  return (oid.aliases || []).some((a) => _ownerNorm(a) === n);
+}
+
+// Build the alias set from a full name: full, "First Last", "F. Last", "Last, First", initials, bare last.
+function _ownerAliases(full, userName, email) {
+  const set = new Set();
+  const add = (x) => { const s = String(x || '').trim(); if (s.length >= 2) set.add(s); };
+  add(full); add(userName);
+  const parts = String(full || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    const first = parts[0], last = parts[parts.length - 1];
+    add(`${first} ${last}`);
+    add(`${first[0]}. ${last}`);                    // L. Overby
+    add(`${last}, ${first}`);                       // Overby, Lucas
+    add(`${first[0]}${last[0]}`.toUpperCase());     // LO
+    add(last);                                      // Overby
+  }
+  if (email) add(String(email).split('@')[0]);      // lucastoverby
+  return [...set];
+}
+
+// Seed the owner identity ONCE (idempotent, non-destructive — never overwrites an operator-curated record).
+function seedOwnerIdentity({ email = null } = {}) {
+  try {
+    const existing = getOwnerIdentity();
+    if (existing) return existing;
+    const userName = getMeta('user_name');
+    if (!userName) return null;
+    let personal = null;
+    try {
+      personal = getDb().prepare(
+        "SELECT id, name FROM graph_entities WHERE entity_type='person' AND lower(name) LIKE ? ORDER BY id LIMIT 1"
+      ).get(userName.toLowerCase() + '%');
+    } catch {}
+    const full = (personal && personal.name) || userName;
+    const oid = {
+      canonical: full,
+      aliases: _ownerAliases(full, userName, email),
+      personal_entity_id: personal ? personal.id : null,
+      civic_ref: null,          // the public facet (e.g. FEC record) — linkable by the operator
+      email: email || null,
+      note: 'The owner. Recognize across facets; do NOT research as an unknown civic subject.',
+      updated_at: Date.now(),
+    };
+    setMeta('owner_identity', JSON.stringify(oid));
+    return oid;
+  } catch { return null; }
+}
+
 // List meta keys matching a SQL LIKE pattern (e.g. 'focus.%.covered') — used to enumerate all directed
 // research Tracks for the track index. Returns an array of key strings.
 function getMetaKeysLike(like) {
@@ -1793,6 +1862,9 @@ module.exports = {
   getAgentEventsSinceLastUser,
   getMeta,
   setMeta,
+  getOwnerIdentity,
+  isOwnerName,
+  seedOwnerIdentity,
   getMetaKeysLike,
   // graph memory (anti-glob relational store)
   graphInsertEntity,

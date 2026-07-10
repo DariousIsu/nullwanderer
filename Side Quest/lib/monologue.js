@@ -1489,7 +1489,10 @@ function pushSheep(payload) {
 // window); doc-decomp mentions fill in behind them. Order-preserving dedup.
 function activeSetNames() {
   const names = [];
-  const push = (n) => { const s = String(n == null ? '' : n).trim(); if (s.length >= 3) names.push(s); };
+  // OWNER GUARD (2026-07-10): never feed the OWNER's own name into the graph-walk research/grow set — he is
+  // recognized (db.isOwnerName), not an unknown civic subject to profile via the Echo corpus. This is the fix
+  // for the graph-walk "I didn't have anything on L. Overby → pulled it together (via Echo corpus)" incident.
+  const push = (n) => { const s = String(n == null ? '' : n).trim(); if (s.length >= 3 && !db.isOwnerName(s)) names.push(s); };
   try { for (const t of require('./puller_db').listTargets({ limit: 40 })) push(t && t.name); } catch {}
   try { for (const c of db.listRecentCards({ types: ['org', 'place', 'event'], limit: 20 })) push(c && c.name); } catch {}
   try { for (const o of db.listKgObservations({ feed: 'doc-decomp', limit: 40 })) { push(o && o.source_entity); push(o && o.target); } } catch {}

@@ -62,6 +62,7 @@ const smokes = [
   'smoke_puller_bounce_ingest.js',
   'smoke_puller_revise.js',
   'smoke_puller_migration.js',
+  'smoke_owner_identity.js',
   'smoke_identity_dedup.js',
   'smoke_puller_corrections.js',
   'smoke_certainty.js',
