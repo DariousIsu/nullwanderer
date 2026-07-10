@@ -463,10 +463,14 @@ function ensureGraph() {
       ctx.restore();
     })
     .linkDirectionalArrowLength(3).linkDirectionalArrowRelPos(1)
-    // COSMETIC (demo): animate ONLY the current focal node's edges — a light amber shimmer so the panel
-    // looks alive on whatever the subconscious is working. 0 particles elsewhere (overview stays static →
-    // perf-safe). Keeps the canvas render loop ticking in follow mode, which also drives the pulse ring.
-    .linkDirectionalParticles(l => (focalId && (linkEnd(l.source) === focalId || linkEnd(l.target) === focalId)) ? 2 : 0)
+    // PERF (video-buffering fix): NO perpetual directional particles. The old focalId-gated `2` emitted
+    // particles on the focal node's edges CONTINUOUSLY once locked on — force-graph then does extra per-frame
+    // GPU work forever, which (via Electron's single shared GPU process) starved video frame delivery. That
+    // cost appeared exactly "when follow locks on, even without the follow graphic" (focalId is set by ANY
+    // focus/walk, independent of the Follow toggle) while plain overview (0 particles) stayed fine. The on-move
+    // amber shimmer is preserved by pulse()'s one-shot G.emitParticle bursts, which FINISH and let the loop
+    // fall back to the cheap ambient level instead of animating particles indefinitely.
+    .linkDirectionalParticles(0)
     .linkDirectionalParticleSpeed(0.011).linkDirectionalParticleWidth(2).linkDirectionalParticleColor(() => 'rgba(251,191,36,0.9)')
     .linkLabel(l => `${l.relType} (${l.category})`)
     .onNodeHover(n => { hovered = n || null; renderHover(); if (G) G.nodeColor(G.nodeColor()); })
@@ -932,4 +936,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-10r: two-source structure — short-term layer (violet epistemic core + cross-store federation threads + core force) + focus-move activity bridge');
+console.info('[kg] surface build 2026-07-10s: PERF — drop perpetual focal directional particles (video-buffering fix; follow-lock cost) + two-source short-term layer');
