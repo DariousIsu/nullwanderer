@@ -25,6 +25,15 @@ function splitName(name) {
 }
 function beliefVal(beliefs, type) { const b = (beliefs || []).find(x => x.type === type); return b ? b.value : null; }
 
+// A contact is SUPPRESSED if the held email carries a suppression observation (a complaint / do-not-send).
+// Suppression ≠ invalidity, so it never shows as a bounce/conflict — but we must NEVER re-mail a complainer
+// (CAN-SPAM/GDPR). Detected from the dossier's observation trail (kind 'suppressed') on the held value.
+function isSuppressed(item) {
+  const held = String(beliefVal(item && item.beliefs, 'email') || '').trim().toLowerCase();
+  const obs = (item && item.observations) || [];
+  return obs.some(o => o && o.kind === 'suppressed' && (!held || String(o.value || '').trim().toLowerCase() === held));
+}
+
 // grade → Email_Deliverable__c: only an independently-verified grade asserts deliverability.
 function deliverableFlag(q) {
   if (!q || !q.grade) return null;
@@ -70,6 +79,8 @@ function toContactRows(items, opts = {}) {
     const q = it.qualification;
     const grade = q && q.grade;
     if (!grade) { excluded.push({ id: it.target && it.target.id, reason: 'no grade' }); continue; }
+    // SUPPRESSION gate — a complainer is NEVER re-mailed, regardless of grade (compliance). Not overridable.
+    if (isSuppressed(it)) { excluded.push({ id: it.target.id, reason: 'suppressed/complaint' }); continue; }
     if (q.conflicted && !includeConflicted) { excluded.push({ id: it.target.id, reason: 'conflicted/bounced' }); continue; }
     if (Q.ORDER.indexOf(grade) > floor) { excluded.push({ id: it.target.id, reason: `below minGrade ${minGrade}` }); continue; }
     rows.push(contactRow(it));
@@ -88,4 +99,4 @@ function toCSV(rows) {
   return body ? head + '\n' + body : head + '\n';
 }
 
-module.exports = { toContactRows, contactRow, toCSV, splitName, deliverableFlag, COLUMNS };
+module.exports = { toContactRows, contactRow, toCSV, splitName, deliverableFlag, isSuppressed, COLUMNS };

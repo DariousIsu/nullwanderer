@@ -46,14 +46,18 @@ function applyVerification(targetId, { value, result } = {}) {
   const email = norm(value);
   const r = norm(result);
   const domain = domainOf(email, t.domain);
-  const obsKind = KIND[r] || 'unknown';
+  let obsKind = KIND[r] || 'unknown';
   const out = { result: r, observationId: null, confidence: null, grade: null,
                 revisionId: null, retestId: null, patternFlip: null, catchAll: false, infraSuspect: false };
 
-  out.observationId = db.addObservation(targetId, { attr: 'email', value: email, kind: obsKind, source: 'verification', meta: { result: r } });
-
   // domain pattern belief — catch-all marks the domain untrustworthy; otherwise credit hit/miss
   let st = db.getPatternState(domain);
+  // FP8 (dirty-list guard): on a CATCH-ALL domain a "valid/delivered" proves nothing — the server accepts
+  // every address — so it must NOT grade the mailbox as independently-verified. Downgrade to an ungradeable
+  // observation (qualify() ignores 'catchall_accept') so a test-send to a catch-all can't fabricate a grade-B.
+  if (obsKind === 'verified' && B.isCatchAll(st)) { obsKind = 'catchall_accept'; out.catchAll = true; }
+
+  out.observationId = db.addObservation(targetId, { attr: 'email', value: email, kind: obsKind, source: 'verification', meta: { result: r } });
   if (obsKind === 'accept_all') {
     st = B.updateBelief(st, null, 'accept_all'); db.savePatternState(domain, st); out.catchAll = true;
   } else if (domain && (r === 'valid' || r === 'deliverable' || r === 'invalid' || r === 'undeliverable') && !B.isCatchAll(st)) {

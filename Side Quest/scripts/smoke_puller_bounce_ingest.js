@@ -80,6 +80,35 @@ ok(db.listRevisions({ status: 'pending', targetId: dt.id }).length === 1, 'exact
 ok(((db.getPatternState('dc.com').patterns['first.last'] || {}).misses || 0) === 1, 'the domain Beta recorded ONE miss from one mailbox, not three');
 ok(sd.infra === 0, 'a single mailbox no longer falsely trips the gateway-block detector');
 
+console.log('== FP8: a DELIVERED on a CATCH-ALL domain must NOT fabricate a verified grade ==');
+const cat = db.createTarget({ kind: 'person', name: 'Cat Person', company: 'CatchCo', domain: 'catchall.io' });
+db.addObservation(cat.id, { attr: 'email', value: 'cat@catchall.io', kind: 'guess', source: 'seed' });
+db.upsertBelief(cat.id, 'email', { value: 'cat@catchall.io', confidence: 0.5 });
+db.savePatternState('catchall.io', B.updateBelief(B.emptyState(), null, 'accept_all'));  // domain is catch-all
+ipc.applyBounceRows('cat@catchall.io,delivered', { format: 'csv' });
+const qc = Q.qualify(db.listObservations(cat.id, { attr: 'email' }), 'cat@catchall.io');
+ok(qc.grade !== 'B' && qc.confidence <= 0.5, 'a catch-all "delivered" stays a guess (grade D ~0.5), not a false grade-B verified');
+// sanity: a normal domain's delivered STILL grades verified
+const nrm = db.createTarget({ kind: 'person', name: 'Norm', company: 'N', domain: 'normal.com' });
+db.addObservation(nrm.id, { attr: 'email', value: 'norm@normal.com', kind: 'guess' });
+db.upsertBelief(nrm.id, 'email', { value: 'norm@normal.com', confidence: 0.5 });
+ipc.applyBounceRows('norm@normal.com,valid', { format: 'csv' });
+ok(Q.qualify(db.listObservations(nrm.id, { attr: 'email' }), 'norm@normal.com').grade === 'B', 'sanity: a non-catch-all delivered still grades B (verified)');
+
+console.log('== FP10: a COMPLAINED contact is excluded from export (never re-mailed) ==');
+const exporter = require('../studio/puller_export');
+const sue = db.createTarget({ kind: 'person', name: 'Sue Press', company: 'P', domain: 'press.com', status: 'promoted' });
+db.addObservation(sue.id, { attr: 'email', value: 'sue@press.com', kind: 'verified', source: 'card' });
+db.upsertBelief(sue.id, 'email', { value: 'sue@press.com', confidence: 0.95 });
+ipc.applyBounceRows('Feedback-Type: abuse\nOriginal-Rcpt-To: rfc822; sue@press.com\n');   // a complaint
+const exp = exporter.toContactRows([ipc.buildDossier(sue.id)], {});
+ok(exp.rows.length === 0 && (exp.excluded[0] || {}).reason === 'suppressed/complaint', 'a complainer (grade B) is EXCLUDED from export with reason suppressed/complaint');
+// sanity: a clean verified contact still exports
+const good = db.createTarget({ kind: 'person', name: 'Good One', company: 'G', domain: 'good.com', status: 'promoted' });
+db.addObservation(good.id, { attr: 'email', value: 'good@good.com', kind: 'verified', source: 'card' });
+db.upsertBelief(good.id, 'email', { value: 'good@good.com', confidence: 0.95 });
+ok(exporter.toContactRows([ipc.buildDossier(good.id)], {}).rows.length === 1, 'sanity: a clean verified contact still exports (no over-filtering)');
+
 db.close();
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);
