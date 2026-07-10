@@ -271,7 +271,13 @@ const bounceText = document.getElementById('bouncetext');
 bounceDz.addEventListener('drop', async (e) => {
   e.preventDefault(); bounceDz.classList.remove('drag');
   const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-  if (f) bounceText.value = await f.text();
+  if (!f) return;
+  const msg = document.getElementById('bouncemsg');
+  if (f.size > 8 * 1024 * 1024) { msg.className = 'fbmsg bad'; msg.textContent = `file is ${(f.size / 1048576).toFixed(1)}MB — too large to read here; split it or paste the relevant part`; return; }
+  // .xlsx/.zip are binary — reading them as text yields garbage; steer to CSV/JSON/text exports.
+  if (/\.(xlsx|xls|zip|gz|pdf|docx)$/i.test(f.name || '')) { msg.className = 'fbmsg bad'; msg.textContent = `“${f.name}” is a binary format — export it as CSV / JSON / plain text first`; return; }
+  msg.className = 'fbmsg'; msg.textContent = '';
+  bounceText.value = await f.text();
 });
 bounceDz.addEventListener('click', () => bounceText.focus());
 

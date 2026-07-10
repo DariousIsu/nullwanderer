@@ -63,6 +63,23 @@ console.log('== testList flag stamps the observation weight ==');
 const s5 = ipc.applyBounceRows('jane.doe@acme.com,valid\n', { format: 'csv', testList: true });
 ok(s5.applied === 1, 'a test-list valid result applies');
 
+console.log('== duplicate events for ONE mailbox collapse to a single signal (no dup revisions / miss-inflation) ==');
+const dt = db.createTarget({ kind: 'person', name: 'Dup Person', company: 'Dc', domain: 'dc.com' });
+db.addObservation(dt.id, { attr: 'email', value: 'dup.person@dc.com', kind: 'verified', source: 'seed' });
+db.upsertBelief(dt.id, 'email', { value: 'dup.person@dc.com', confidence: 0.8 });
+db.savePatternState('dc.com', B.seedPrior(B.seedPrior(B.emptyState(), 'first.last', 0.6), 'flast', 0.5));
+const dumpJson = JSON.stringify([
+  { email: 'dup.person@dc.com', event: 'bounce', type: 'bounce' },
+  { email: 'dup.person@dc.com', event: 'bounce', type: 'bounce' },
+  { email: 'dup.person@dc.com', event: 'bounce', type: 'bounce' },
+]);
+const sd = ipc.applyBounceRows(dumpJson);
+ok(sd.parsed === 3 && sd.unique === 1, 'three duplicate events parse but collapse to ONE unique mailbox');
+ok(sd.applied === 1 && sd.flips === 1, 'applied ONCE → exactly one flip revision (was 2 before the fix)');
+ok(db.listRevisions({ status: 'pending', targetId: dt.id }).length === 1, 'exactly one pending revision, not a pile of duplicates');
+ok(((db.getPatternState('dc.com').patterns['first.last'] || {}).misses || 0) === 1, 'the domain Beta recorded ONE miss from one mailbox, not three');
+ok(sd.infra === 0, 'a single mailbox no longer falsely trips the gateway-block detector');
+
 db.close();
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

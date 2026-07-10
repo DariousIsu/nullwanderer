@@ -109,5 +109,26 @@ ok(recon.every(r => r.weight === 'test'), 'reconciled rows all carry weight:test
 const conflict = N.reconcileTestList(['dup@t.com'], [{ email: 'dup@t.com', result: 'valid' }, { email: 'dup@t.com', result: 'invalid' }]);
 ok(find(conflict, 'dup@t.com').result === 'invalid', 'conflicting events → hard bounce is decisive');
 
+// --- SNS-wrapped SES (the standard AWS webhook envelope) ------------------------------------------
+console.log('== SNS envelope is unwrapped to the inner SES event (not dropped) ==');
+const sns = JSON.stringify({ Type: 'Notification', MessageId: 'm', TopicArn: 't',
+  Message: JSON.stringify({ notificationType: 'Bounce', bounce: { bounceType: 'Permanent', bouncedRecipients: [{ emailAddress: 'z@ses.com', status: '5.1.1' }] } }) });
+const rsns = N.parse(sns);
+ok(rsns.rows.length === 1 && find(rsns.rows, 'z@ses.com') && find(rsns.rows, 'z@ses.com').result === 'invalid', 'SNS-wrapped SES Permanent bounce → unwrapped → invalid');
+
+// --- collapse duplicate events per mailbox --------------------------------------------------------
+console.log('== collapseByEmail: N events for one mailbox → ONE decisive row ==');
+const dup = N.collapseByEmail([
+  { email: 'a@x.com', result: 'invalid' }, { email: 'a@x.com', result: 'invalid' }, { email: 'a@x.com', result: 'invalid' },
+]);
+ok(dup.length === 1 && dup[0].result === 'invalid', 'three identical hard bounces collapse to one');
+const mixed = N.collapseByEmail([
+  { email: 'b@x.com', result: 'valid' }, { email: 'b@x.com', result: 'invalid' },   // decisive wins
+  { email: 'c@x.com', result: 'unknown', suppression: true }, { email: 'c@x.com', result: 'invalid' },  // bounce + complaint
+]);
+ok(find(mixed, 'b@x.com').result === 'invalid', 'invalid beats valid when a mailbox has both');
+const c = find(mixed, 'c@x.com');
+ok(c.result === 'invalid' && c.suppression === true, 'a mailbox that both bounced AND complained keeps invalid + suppression');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

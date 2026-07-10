@@ -227,17 +227,24 @@ function register(ipcMain) {
   ipcMain.handle('puller:reconcile-testlist', async (_e, { sent = [], resultsText = '' } = {}) => {
     try {
       const { rows } = normalizer.parse(resultsText || '', { testList: true });
-      const reconciled = normalizer.reconcileTestList(sent, rows);
-      const summary = { sent: reconciled.length, bounced: 0, delivered: 0, silent: 0, matched: 0, unmatched: 0, applied: 0, flips: 0, culled: 0 };
+      const reconciled = normalizer.reconcileTestList(sent, rows);   // already deduped: best result per email
+      const summary = { sent: reconciled.length, bounced: 0, delivered: 0, silent: 0, matched: 0, unmatched: 0, applied: 0, flips: 0, culled: 0, prefilterSkipped: 0 };
+      // Pre-filter the SILENT addresses in BOUNDED PARALLEL (each is a real DNS MX lookup — a sequential
+      // loop over a large list would block the main process). Culling silences is cosmetic (silence never
+      // drives a belief change), so beyond the cap we simply don't cull. Fail-open on any DNS hiccup.
+      const MAX_PREFILTER = 200;
+      const silentEmails = reconciled.filter(r => r.silent).map(r => r.email);
+      summary.prefilterSkipped = Math.max(0, silentEmails.length - MAX_PREFILTER);
+      const rejected = new Set();
+      await Promise.all(silentEmails.slice(0, MAX_PREFILTER).map(async (email) => {
+        try { const pf = await prefilter.prefilter(email); if (pf.verdict === 'reject') rejected.add(email); } catch { /* fail-open */ }
+      }));
       for (const r of reconciled) {
         if (r.result === 'invalid') summary.bounced++;
         else if (r.result === 'valid') summary.delivered++;
         else summary.silent++;
-        // a silent address that fails the safe pre-filter (no MX / disposable) never had a chance — don't
-        // let its silence read as a soft signal; skip it. (A bounce/deliver already answered authoritatively.)
-        if (r.silent) {
-          try { const pf = await prefilter.prefilter(r.email); if (pf.verdict === 'reject') { summary.culled++; continue; } } catch {}
-        }
+        // a silent address that fails the safe pre-filter (no MX / disposable) never had a chance — skip it.
+        if (r.silent && rejected.has(r.email)) { summary.culled++; continue; }
         const t = db.findTargetByEmail(r.email);
         if (!t) { summary.unmatched++; continue; }
         summary.matched++;
@@ -256,9 +263,12 @@ function register(ipcMain) {
 // recorded as suppression markers (do-not-send) that never flip a validity belief.
 function applyBounceRows(text, { format = null, testList = false } = {}) {
   const { rows, dropped, meta, format: fmt } = normalizer.parse(text, { format, testList });
-  const summary = { format: fmt, vendor: meta && meta.vendor, parsed: rows.length, dropped,
-                    matched: 0, unmatched: 0, applied: 0, flips: 0, infra: 0, suppressed: 0, deferred: 0 };
-  for (const row of rows) {
+  // COLLAPSE duplicate events per mailbox FIRST — a report with N events for one address is ONE signal,
+  // not N (else: inflated Beta misses, duplicate flip revisions, false gateway-block from a single box).
+  const collapsed = normalizer.collapseByEmail(rows);
+  const summary = { format: fmt, vendor: meta && meta.vendor, parsed: rows.length, unique: collapsed.length,
+                    dropped, matched: 0, unmatched: 0, applied: 0, flips: 0, infra: 0, suppressed: 0, deferred: 0 };
+  for (const row of collapsed) {
     const t = db.findTargetByEmail(row.email);
     if (!t) { summary.unmatched++; continue; }
     summary.matched++;
@@ -268,13 +278,16 @@ function applyBounceRows(text, { format = null, testList = false } = {}) {
       db.addObservation(t.id, { attr: 'email', value: row.email, kind: 'suppressed', source: 'bounce-report',
                                 meta: { raw: row.raw, weight: row.weight, suppression: true } });
       summary.suppressed++;
-      continue;
     }
-    if (row.result === 'unknown') { summary.deferred++; continue; }   // soft/transient → defer, no flip
-    const o = revise.applyVerification(t.id, { value: row.email, result: row.result });
-    summary.applied++;
-    if (o.revisionId) summary.flips++;
-    if (o.infraSuspect) summary.infra++;
+    // a mailbox can both complain (suppression) AND hard-bounce — still apply the deliverability result.
+    if (row.result === 'invalid' || row.result === 'valid') {
+      const o = revise.applyVerification(t.id, { value: row.email, result: row.result });
+      summary.applied++;
+      if (o.revisionId) summary.flips++;
+      if (o.infraSuspect) summary.infra++;
+    } else if (!row.suppression) {
+      summary.deferred++;   // soft/transient with no suppression → defer, no flip
+    }
   }
   return summary;
 }

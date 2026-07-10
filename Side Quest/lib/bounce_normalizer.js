@@ -157,8 +157,14 @@ function parseJsonPayload(text) {
   const rows = [], dropped = { noEmail: 0, badStatus: 0 };
   let data; try { data = JSON.parse(text); } catch { return { rows, dropped }; }
   const events = Array.isArray(data) ? data : [data];
-  for (const ev of events) {
+  for (let ev of events) {
     if (!ev || typeof ev !== 'object') continue;
+    // SNS envelope: { Type:'Notification', Message:'<stringified SES notification>' } — unwrap to the
+    // inner SES event FIRST (the standard AWS deliverability webhook shape; otherwise it would fall through
+    // to a generic branch with no recipient and be dropped).
+    if (ev.Type === 'Notification' && typeof ev.Message === 'string') {
+      try { const inner = JSON.parse(ev.Message); if (inner && typeof inner === 'object') ev = inner; } catch { /* not JSON → leave as-is */ }
+    }
     // SES (SNS-wrapped or raw): notificationType Bounce/Complaint/Delivery
     if (ev.notificationType || ev.eventType) {
       const nt = ev.notificationType || ev.eventType;
@@ -184,8 +190,9 @@ function parseJsonPayload(text) {
       pushEvent(rows, dropped, ed.recipient, ed.event, ed.severity, `${ds.code || ''} ${ds.message || ''}`);
       continue;
     }
-    // Postmark { RecordType/Type: HardBounce/SoftBounce, Email }
-    if (ev.RecordType || ev.Type || ev.Email) {
+    // Postmark { RecordType/Type: HardBounce/SoftBounce, Email }. Require a recipient so a bare
+    // envelope (e.g. an unrecognized SNS control message with only Type) doesn't false-match here.
+    if ((ev.RecordType || ev.Type || ev.Email) && (ev.Email || ev.Recipient)) {
       const type = ev.Type || ev.RecordType || '';
       pushEvent(rows, dropped, ev.Email || ev.Recipient, /bounce/i.test(type) ? 'bounce' : type, type, ev.Details || '');
       continue;
@@ -247,6 +254,29 @@ function parse(text, opts = {}) {
   return { format, rows, dropped: res.dropped || { noEmail: 0, badStatus: 0 }, meta };
 }
 
+// ---- collapse duplicate events -------------------------------------------------------------------
+// A single bounce report legitimately contains MANY events for the SAME mailbox (it bounced across
+// several sends). For belief purposes that is ONE signal, not N — applying each would inflate the domain
+// Beta miss-count, spawn duplicate flip revisions, and can falsely trip the gateway-block detector from a
+// single address. Collapse to one row per email: keep the most DECISIVE deliverability result
+// (invalid > valid > unknown) and OR the suppression flag (a mailbox can both bounce AND complain).
+const _RESULT_RANK = { invalid: 3, valid: 2, unknown: 1 };
+function collapseByEmail(rows) {
+  const map = new Map();
+  for (const r of (Array.isArray(rows) ? rows : [])) {
+    const e = lc(r.email);
+    if (!e) continue;
+    const cur = map.get(e);
+    if (!cur) { map.set(e, { ...r, email: e, suppression: !!r.suppression }); continue; }
+    if ((_RESULT_RANK[r.result] || 0) > (_RESULT_RANK[cur.result] || 0)) {
+      map.set(e, { ...r, email: e, suppression: cur.suppression || !!r.suppression });
+    } else {
+      cur.suppression = cur.suppression || !!r.suppression;
+    }
+  }
+  return [...map.values()];
+}
+
 // ---- test-list reconciliation --------------------------------------------------------------------
 // Close the loop for a SENT test list: given the addresses we sent to and the bounce/event rows that
 // came back, classify EVERY sent address. bounced → invalid; explicit delivered → valid; SILENT → an
@@ -272,7 +302,7 @@ function reconcileTestList(sent, rows) {
 }
 
 module.exports = {
-  sniff, parse, reconcileTestList,
+  sniff, parse, reconcileTestList, collapseByEmail,
   parseDsn, parseArf, parseJsonPayload, parseFreeText,
   statusClassOf, classResult, ENH_STATUS_RE, EMAIL_RE,
 };
