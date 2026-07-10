@@ -935,7 +935,7 @@ app.whenReady().then(() => {
   // fast tick). Separate flag ZOE_KG_NIGHTLY_ENABLED (default OFF) — it writes the graph. Plug: =0 + reboot.
   const KGNIGHTLY_CHECK_MS = (parseFloat(process.env.ZOE_KG_NIGHTLY_CHECK_MIN) || 30) * 60 * 1000;
   const KGNIGHTLY_MAX_ITERS = parseInt(process.env.ZOE_KG_NIGHTLY_MAX_ITERS || '', 10) || 6;                 // fast-drain safety cap
-  const KGNIGHTLY_NAMESTRONG_BATCH = parseInt(process.env.ZOE_KG_NIGHTLY_NAMESTRONG_BATCH || '', 10) || 150; // slow-tier nightly bite
+  const KGNIGHTLY_NAMESTRONG_BATCH = parseInt(process.env.ZOE_KG_NIGHTLY_NAMESTRONG_BATCH || '', 10) || 50; // slow-tier nightly bite (web-corroborated → modest)
   const localDayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
   const emitAbsorb = (rep) => {   // one kg:curation-move per landed fold — same contract the apply tick uses
     try {
@@ -983,7 +983,11 @@ app.whenReady().then(() => {
       //    only, so the slow judge latency is fine. Deliberately NOT looped — a fixed nightly chip of the pile.
       let strongApplied = 0;
       try {
-        const sr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGNIGHTLY_NAMESTRONG_BATCH, tiers: 'name-strong' } });
+        // web_corroborate: for the name-strong pairs the structural check can't anchor, a web-verified
+        // confirmation of identity supplies the EXTERNAL anchor (Lucas: "add outside search for cross-validation")
+        // — fires web+cloud only on the otherwise-parking ones. Toggle ZOE_KG_NIGHTLY_WEB_CORROBORATE (default on).
+        const webCorr = /^(1|true|yes|on)$/i.test(String(process.env.ZOE_KG_NIGHTLY_WEB_CORROBORATE ?? '1').trim());
+        const sr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGNIGHTLY_NAMESTRONG_BATCH, tiers: 'name-strong', web_corroborate: webCorr } });
         let srep = null; try { srep = JSON.parse(sr && sr.text); } catch {}
         if (srep && srep.considered != null) { strongApplied = srep.applied || 0; emitAbsorb(srep); }
       } catch (e) { console.error('[kg-nightly] name-strong pass failed:', e.message); }
@@ -1003,8 +1007,21 @@ app.whenReady().then(() => {
           if (lrep && lrep.grounded != null) linkGrounded = lrep.grounded || 0;
         } catch (e) { console.error('[kg-nightly] link grounding failed:', e.message); }
       }
+      // 5) GC — prune CONTEXT-FREE aged-out nodes (degree 0 + no strong-id/summary/subtype/contact/fact, older
+      //    than ZOE_KG_PRUNE_DAYS, not in a pending proposal). Reversible (archived to pruned_entities). Finds
+      //    ~0 today (fresh empties are enrichment-pending); it's the net that keeps unresolvable noise from
+      //    accreting as stragglers age out. Env ZOE_KG_NIGHTLY_PRUNE (default on).
+      let pruned = 0;
+      if (/^(1|true|yes|on)$/i.test(String(process.env.ZOE_KG_NIGHTLY_PRUNE ?? '1').trim())) {
+        try {
+          const pdays = parseInt(process.env.ZOE_KG_PRUNE_DAYS || '', 10) || 30;
+          const pr = await echoSuit.dispatch({ kind: 'do', name: 'prune_empty_entities', args: { older_than_days: pdays, limit: 500, dry_run: false } });
+          let prep = null; try { prep = JSON.parse(pr && pr.text); } catch {}
+          if (prep && prep.pruned != null) pruned = prep.pruned || 0;
+        } catch (e) { console.error('[kg-nightly] prune failed:', e.message); }
+      }
       const total = anchoredApplied + strongApplied;
-      console.log(`[kg-nightly] full sweep: +${swept} proposals; drained ${anchoredApplied} anchored + ${strongApplied} name-strong = ${total} merges; +${linkGrounded} grounded links`);
+      console.log(`[kg-nightly] full sweep: +${swept} proposals; drained ${anchoredApplied} anchored + ${strongApplied} name-strong = ${total} merges; +${linkGrounded} grounded links; ${pruned} pruned`);
       if (total > 0 || swept > 0) {
         const text = `[Nightly upkeep] Full graph sweep: ${swept} new duplicate proposal${swept === 1 ? '' : 's'} found, and I reversibly merged ${total} confirmed duplicate${total === 1 ? '' : 's'} (${anchoredApplied} anchored + ${strongApplied} fuzzy name-match) — each LLM-verified and undoable.`;
         const row = db.insertMonologue({ content: text, model: 'kg-nightly', type: 'reading' });
