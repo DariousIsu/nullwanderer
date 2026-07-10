@@ -149,6 +149,19 @@ function drawFarField(ctx, w, h) {
     const el = performance.now() - pulseAt;
     if (el >= 0 && el < 1600) { const p = el / 1600, rad = 20 + p * Math.max(w, h) * 0.6; ctx.strokeStyle = `rgba(251,191,36,${(1 - p) * Math.min(0.34, 0.18 * pulseMag)})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, rad, 0, 2 * Math.PI, false); ctx.stroke(); }
   }
+  // 4) ACTIVITY WEATHER — off-screen data events flare in the far-field where they're happening, so the
+  //    whole galaxy shimmers with distant activity (densest = busiest). In Follow you fly toward the weather.
+  if (weather.length) {
+    const now = performance.now();
+    for (let i = weather.length - 1; i >= 0; i--) {
+      const W = weather[i], p = (now - W.startAt) / W.dur;
+      if (p >= 1) { weather.splice(i, 1); continue; }
+      const fade = Math.sin(Math.min(1, p) * Math.PI), rad = 3 + p * 11 * (W.mag || 1);
+      const g = ctx.createRadialGradient(W.x, W.y, 0, W.x, W.y, rad);
+      g.addColorStop(0, `rgba(${W.col},${0.5 * fade})`); g.addColorStop(1, `rgba(${W.col},0)`);
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(W.x, W.y, rad, 0, 2 * Math.PI, false); ctx.fill();
+    }
+  }
   ctx.restore();
 }
 
@@ -285,6 +298,89 @@ function drawAbsorbs(ctx) {
   }
 }
 
+// --- kg:activity bus — generic data-activity gestures ------------------------
+// One channel visualizes every DB interaction (see docs/KG_ACTIVITY_VISUALIZATION_DESIGN.md). Each event
+// {db,kind,anchor,anchor2,count,tier,epistemic} routes to a gesture: node/edge events play in GRAPH space
+// on the named node(s) when they're in view; anything off-screen (most of 1.74M) becomes far-field WEATHER
+// so the whole galaxy shimmers where work is happening. Stage A = P0 nodes/edges (+ merge→absorb); other
+// kinds gracefully register as weather until their Stage-B gestures land.
+const activities = [];   // in-view graph-space gestures {kind, startAt, dur, a, b, col, epistemic}
+const weather = [];      // off-screen flares {x, y, startAt, dur, mag, col} in device px (drawn by drawFarField)
+const ACT_CAP = 64;
+function kgFindNode(name) { if (!G || name == null) return null; return ((G.graphData().nodes) || []).find(n => n.id === name) || null; }
+// project a node to device-pixel screen coords + whether it's inside the viewport (graph2ScreenCoords → CSS px)
+function kgProject(n, cv) {
+  if (!n || !Number.isFinite(n.x) || !Number.isFinite(n.y) || !G.graph2ScreenCoords) return null;
+  const p = G.graph2ScreenCoords(n.x, n.y); if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+  const ratio = cv.clientWidth ? cv.width / cv.clientWidth : 1, x = p.x * ratio, y = p.y * ratio;
+  return { x, y, inView: x >= 0 && x <= cv.width && y >= 0 && y <= cv.height };
+}
+// SQ short-term = violet, Echo long-term = sky; a node's own colour wins when it has one.
+function kgActColor(evt, node) { return (node && node.color) || (evt.db === 'sidequest' ? '#a78bfa' : '#7dd3fc'); }
+function kgWeatherRGB(evt) { return evt.db === 'sidequest' ? '168,139,250' : '125,211,252'; }
+function fieldFlare(evt, proj) {
+  const cv = document.querySelector('#graph canvas'); if (!cv) return;
+  let x, y;
+  if (proj && Number.isFinite(proj.x)) { x = Math.max(8, Math.min(cv.width - 8, proj.x)); y = Math.max(8, Math.min(cv.height - 8, proj.y)); }
+  else { const h = hashSeed(String(evt.anchor || evt.kind || 'a')); x = cv.width * (0.1 + 0.8 * h); y = cv.height * (0.1 + 0.8 * ((h * 97.13) % 1)); }   // no position → consistent hashed spot
+  weather.push({ x, y, startAt: performance.now(), dur: 1200, mag: Math.min(2.2, 1 + Math.log10((evt.count || 1) + 0.5)), col: kgWeatherRGB(evt) });
+  if (weather.length > 90) weather.shift();
+}
+function spawnActivity(evt) {
+  if (!evt || prefersReducedMotion || !G) return;
+  const kind = evt.kind || '';
+  if (kind === 'node.merge') { if (evt.anchor && dedupAbsorb(evt.anchor, evt.count || 3)) return; return fieldFlare(evt); }
+  const cv = document.querySelector('#graph canvas');
+  const a = kgFindNode(evt.anchor), b = evt.anchor2 != null ? kgFindNode(evt.anchor2) : null;
+  const pa = a && cv ? kgProject(a, cv) : null, pb = b && cv ? kgProject(b, cv) : null;
+  const col = kgActColor(evt, a);
+  if (kind === 'edge.born' || kind === 'edge.promote') {
+    if (a && b && pa && pb && pa.inView && pb.inView) { activities.push({ kind, startAt: performance.now(), dur: 850, a, b, col, epistemic: evt.epistemic }); }
+    else fieldFlare(evt, pa || pb);
+  } else if (kind === 'node.born' || kind === 'node.enrich') {
+    if (a && pa && pa.inView) { activities.push({ kind, startAt: performance.now(), dur: kind === 'node.born' ? 750 : 640, a, col, epistemic: evt.epistemic }); }
+    else fieldFlare(evt, pa);
+  } else {
+    fieldFlare(evt, pa);   // P1/P2 kinds (promote/match/recall/doc/news/think…) register as weather until Stage B
+  }
+  if (activities.length > ACT_CAP) activities.shift();
+}
+// GRAPH-space gestures (drawn in drawAtmosphere, under the nodes). NaN-guarded (createLinearGradient throws).
+function drawActivities(ctx, scale) {
+  if (!activities.length || !G) return;
+  const now = performance.now();
+  for (let i = activities.length - 1; i >= 0; i--) {
+    const A = activities[i], p = (now - A.startAt) / A.dur, a = A.a;
+    if (p >= 1 || !a || !Number.isFinite(a.x) || !Number.isFinite(a.y)) { activities.splice(i, 1); continue; }
+    const col = A.col || '#7dd3fc', lit = lighten(col, 0.5), r = a.__r || 4;
+    if (A.kind === 'node.born') {                                  // spark: expanding ring + core flash
+      const rr = r + 2 + p * 16, fade = 1 - p;
+      ctx.strokeStyle = rgbaHex(lit, 0.7 * fade); ctx.lineWidth = Math.max(0.5, 1.6 / scale);
+      ctx.beginPath(); ctx.arc(a.x, a.y, rr, 0, 2 * Math.PI, false); ctx.stroke();
+      const g = ctx.createRadialGradient(a.x, a.y, 0, a.x, a.y, r + 7);
+      g.addColorStop(0, rgbaHex(lit, 0.6 * fade)); g.addColorStop(1, rgbaHex(col, 0));
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(a.x, a.y, r + 7, 0, 2 * Math.PI, false); ctx.fill();
+    } else if (A.kind === 'node.enrich') {                         // one bright breath — "learned more"
+      const q = Math.sin(p * Math.PI), rr = r + 1 + q * 7;
+      ctx.strokeStyle = rgbaHex(lit, 0.5 * q); ctx.lineWidth = Math.max(0.5, 1.2 / scale);
+      ctx.beginPath(); ctx.arc(a.x, a.y, rr, 0, 2 * Math.PI, false); ctx.stroke();
+    } else {                                                       // edge.born / edge.promote — a synapse forms
+      const b = A.b; if (!b || !Number.isFinite(b.x) || !Number.isFinite(b.y)) { activities.splice(i, 1); continue; }
+      const grow = Math.min(1, p / 0.7), ex = a.x + (b.x - a.x) * grow, ey = a.y + (b.y - a.y) * grow;
+      ctx.save();
+      if (A.kind === 'edge.promote' && p < 0.5) ctx.setLineDash([3 / scale, 3 / scale]);   // ghost → solid
+      const g = ctx.createLinearGradient(a.x, a.y, ex, ey);
+      g.addColorStop(0, rgbaHex(lit, 0.75)); g.addColorStop(1, rgbaHex(lit, 0.2));
+      ctx.strokeStyle = g; ctx.lineWidth = Math.max(0.6, 1.4 / scale); ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.restore();
+      if (grow >= 1) { const mp = (p - 0.7) / 0.3, mx = a.x + (b.x - a.x) * mp, my = a.y + (b.y - a.y) * mp;   // pulse fires along the new synapse
+        ctx.beginPath(); ctx.arc(mx, my, 1.8, 0, 2 * Math.PI, false); ctx.fillStyle = rgbaHex(lit, 0.9 * (1 - mp)); ctx.fill(); }
+    }
+  }
+}
+function onActivity(evt) { if (evt) try { spawnActivity(evt); } catch (e) { warnOnce('activity', e); } }
+
 // Atmosphere pass (onRenderFramePre → drawn under links/nodes): a screen-space vignette (subtle centre
 // lift, darker rim) turns the flat void into space, a far-field cosmos implies the corpus continuing beyond
 // the frame, and a soft graph-space colour bloom behind the focal node steers the eye to the active spot.
@@ -310,6 +406,7 @@ function drawAtmosphere(ctx, scale) {
   }
   drawTendrils(ctx, scale);   // threads from well-connected nodes reaching off into the universe
   drawAbsorbs(ctx);           // dedup: duplicate motes collapsing INTO a canonical node
+  drawActivities(ctx, scale); // kg:activity — node/edge gestures (born spark, growing synapse, enrich breath)
 }
 
 function ensureGraph() {
@@ -747,17 +844,20 @@ function onCurationMove(p) {
   }
   ingestPulse(p);
 }
-try { window.__kgDedup = (anchor, count) => dedupAbsorb(anchor, count || 5); window.__kgAbsorbN = () => absorbs.length; window.__kgCuration = (p) => onCurationMove(p); } catch (e) {}   // dev triggers + peek for live CDP verification
+try { window.__kgDedup = (anchor, count) => dedupAbsorb(anchor, count || 5); window.__kgAbsorbN = () => absorbs.length; window.__kgCuration = (p) => onCurationMove(p); window.__kgActivity = (evt) => onActivity(evt); window.__kgActN = () => activities.length + weather.length; } catch (e) {}   // dev triggers + peek for live CDP verification
 followBtn.addEventListener('click', () => setFollow(!follow));
 try {
   if (window.sq && window.sq.kg && typeof window.sq.kg.onFocusMove === 'function') window.sq.kg.onFocusMove(onFocusMove);
   else followBtn.disabled = true;   // older host without the live channel → toggle inert
 } catch (e) { followBtn.disabled = true; }
 try { if (window.sq && window.sq.kg && typeof window.sq.kg.onCurationMove === 'function') window.sq.kg.onCurationMove(onCurationMove); } catch (e) {}
+// kg:activity — the generalized data-activity bus (Stage A). Inert until preload exposes onActivity + the DB
+// contexts emit their feeds (reboot-gated); the renderer vocabulary is live NOW and testable via __kgActivity.
+try { if (window.sq && window.sq.kg && typeof window.sq.kg.onActivity === 'function') window.sq.kg.onActivity(onActivity); } catch (e) {}
 try { if (localStorage.getItem('kg.follow') === '1') setFollow(true); } catch (e) {}
 
 loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-10o: dedup receiver tier-normalized to host contract {kind,tier,count,anchor} + full-path verify');
+console.info('[kg] surface build 2026-07-10p: kg:activity bus Stage A — node.born/enrich + edge.born/promote gestures + off-screen far-field weather');
