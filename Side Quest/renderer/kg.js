@@ -32,6 +32,9 @@ const linkEnd = (x) => (x && typeof x === 'object') ? x.id : x;
 function hexToRgb(h) { h = String(h || '').replace('#', ''); if (h.length === 3) h = h.split('').map(c => c + c).join(''); const n = parseInt(h, 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
 function rgbaHex(h, a) { const [r, g, b] = hexToRgb(h); return `rgba(${r},${g},${b},${a})`; }
 function lighten(h, t) { const [r, g, b] = hexToRgb(h); const m = (v) => Math.round(v + (255 - v) * t); return `rgb(${m(r)},${m(g)},${m(b)})`; }
+// Stable per-identity seed in [0,1) (FNV-1a) — freezes a node's tendril arbor to WHO it is, not WHERE it is,
+// so the reach never shimmers with residual physics micro-motion the way a live-position seed does.
+function hashSeed(id) { let h = 2166136261; const s = String(id); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) / 4294967296; }
 
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function setOverlay(text, cls) { if (!text) { overlay.hidden = true; return; } overlay.hidden = false; overlay.className = 'overlay' + (cls ? ' ' + cls : ''); overlay.textContent = text; }
@@ -104,7 +107,23 @@ function drawFarField(ctx, w, h) {
   const F = farField(), t = prefersReducedMotion ? 0 : performance.now() / 1000;
   let zoom = 1; try { zoom = (G && G.zoom) ? G.zoom() : 1; } catch (e) {}
   let boost = 1; if (pulseAt) { const el = performance.now() - pulseAt; if (el >= 0 && el < 1600) boost = 1 + (1 - el / 1600) * pulseMag; }   // field flares when a batch lands (magnitude per tier)
-  const cx = w / 2, cy = h / 2;
+  // Anchor the far-field to the graph's OWN centre-of-mass (projected to screen), not the static screen
+  // middle — otherwise the cluster slides over a fixed backdrop and reads as "floating above" it. Projecting
+  // the centroid through the live pan/zoom makes the core glow + specks travel WITH the island, so panning
+  // and zooming feel like moving through the surrounding cosmos rather than across a painted curtain.
+  let cx = w / 2, cy = h / 2;
+  try {
+    if (G && G.graph2ScreenCoords) {
+      const nn = (G.graphData().nodes) || [];
+      let sx = 0, sy = 0, c = 0;
+      for (const n of nn) if (Number.isFinite(n.x) && Number.isFinite(n.y)) { sx += n.x; sy += n.y; c++; }
+      if (c) {
+        const p = G.graph2ScreenCoords(sx / c, sy / c);          // CSS px relative to canvas
+        const cv = ctx.canvas, ratio = cv.clientWidth ? cv.width / cv.clientWidth : 1;   // → device px
+        if (Number.isFinite(p.x) && Number.isFinite(p.y)) { cx = p.x * ratio; cy = p.y * ratio; }
+      }
+    }
+  } catch (e) {}
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
   // 1) galactic-core glow (replaces discrete clouds): the graph sits in a luminous core that fades to dark
   //    edges, bridging near field ↔ far field into one continuous space instead of a graph floating in a gap.
@@ -156,24 +175,33 @@ function drawTendrils(ctx, scale) {
     const hidden = real - (shown.get(n.id) || 0);
     if (hidden < 1) continue;
     const r = n.__r || 4;
-    const count = Math.min(9, Math.max(1, Math.round(Math.log2(hidden + 1))));
+    const count = Math.min(5, Math.max(1, Math.round(Math.log2(hidden + 1))));
     const len = Math.max(r + 8, avgLen * (0.85 + Math.log10(hidden + 1) * 0.5));   // scale to spacing → tail toward where a further node sits, not a fixed stub
     const d = dir.get(n.id), hasEdges = d && (d.x || d.y);
     const baseA = hasEdges ? Math.atan2(-d.y, -d.x) : (n.__tseed != null ? n.__tseed : (n.__tseed = (n.x * 12.9 + n.y * 78.2) % 6.283));   // fan away from existing edges
-    const arc = hasEdges ? 1.8 : 6.283;
+    // Never a full 360° burst — that reads as a dandelion, not a neuron. Even an in-view leaf (no shown
+    // edges) gets a narrow seeded spray in one direction, like dendrites reaching off one side of the soma.
+    const arc = hasEdges ? 1.6 : 2.3;
     const col = n.color || '#7dd3fc', lit = lighten(col, 0.4);
-    ctx.lineWidth = Math.max(0.6, 1.0 / scale);
+    // Stable per-node seed (hashed from identity, once) so the arbor is FROZEN to the soma — tips move only
+    // when the node moves, never a per-frame crawl. rr(k) = stable per-thread pseudo-randoms off that seed.
+    const sd = (n.__sd != null) ? n.__sd : (n.__sd = hashSeed(n.id));
+    const rr = (k) => { const v = Math.sin(sd * 127.1 + i * 12.9898 + k * 78.233) * 43758.5453; return v - Math.floor(v); };
     for (let i = 0; i < count; i++) {
-      const a = baseA + (count > 1 ? (i / (count - 1) - 0.5) : 0) * arc, ca = Math.cos(a), sa = Math.sin(a);
-      const bx = n.x + ca * r, by = n.y + sa * r, ex = n.x + ca * len, ey = n.y + sa * len;
-      const sign = (i % 2) ? 1 : -1, cvx = (bx + ex) / 2 - sa * len * 0.1 * sign, cvy = (by + ey) / 2 + ca * len * 0.1 * sign;   // gentle dendrite curve
+      const z = rr(1);                                  // depth: 0 = near, 1 = far — drives length/fade/width/terminal
+      const a = baseA + (count > 1 ? (i / (count - 1) - 0.5) : 0) * arc + (rr(2) - 0.5) * 0.5, ca = Math.cos(a), sa = Math.sin(a);
+      const tlen = len * (0.7 + z * 0.85);              // deeper threads reach FURTHER off toward their distant node
+      const bx = n.x + ca * r, by = n.y + sa * r, ex = n.x + ca * tlen, ey = n.y + sa * tlen;
+      const sign = (i % 2) ? 1 : -1, cvx = (bx + ex) / 2 - sa * tlen * 0.1 * sign, cvy = (by + ey) / 2 + ca * tlen * 0.1 * sign;   // gentle dendrite curve
       const bez = (p) => { const q = 1 - p; return [q * q * bx + 2 * q * p * cvx + p * p * ex, q * q * by + 2 * q * p * cvy + p * p * ey]; };
+      const dfade = 1 - z * 0.5;                        // far threads dimmer + thinner → they recede into space
+      ctx.lineWidth = Math.max(0.4, (1.0 - z * 0.5) / scale);
       const g = ctx.createLinearGradient(bx, by, ex, ey);
-      g.addColorStop(0, rgbaHex(col, 0.5)); g.addColorStop(0.75, rgbaHex(col, 0.1)); g.addColorStop(1, rgbaHex(col, 0.05));
+      g.addColorStop(0, rgbaHex(col, 0.5 * dfade)); g.addColorStop(0.75, rgbaHex(col, 0.1 * dfade)); g.addColorStop(1, rgbaHex(col, 0.04 * dfade));
       ctx.strokeStyle = g; ctx.beginPath(); ctx.moveTo(bx, by); ctx.quadraticCurveTo(cvx, cvy, ex, ey); ctx.stroke();
       // (2) dendritic branching — the bigger reaches fork near the tip into little dendrite trees
       if (hidden > 8 && i % 2 === 0) {
-        const f = bez(0.72), blen = len * 0.3;
+        const f = bez(0.72), blen = tlen * 0.3;
         for (let bs = -1; bs <= 1; bs += 2) {
           const ba = a + bs * 0.5, bex = f[0] + Math.cos(ba) * blen, bey = f[1] + Math.sin(ba) * blen;
           const bg = ctx.createLinearGradient(f[0], f[1], bex, bey); bg.addColorStop(0, rgbaHex(col, 0.22)); bg.addColorStop(1, rgbaHex(col, 0));
@@ -181,10 +209,12 @@ function drawTendrils(ctx, scale) {
           ctx.beginPath(); ctx.arc(bex, bey, 1.1, 0, 2 * Math.PI, false); ctx.fillStyle = rgbaHex(col, 0.16); ctx.fill();
         }
       }
-      const seed = n.x * 0.13 + n.y * 0.29 + i * 1.7;
-      // (4) synapse glint — the "further node" tip twinkles slowly, like a synaptic terminal
-      const glint = prefersReducedMotion ? 0.3 : 0.3 * (0.55 + 0.45 * Math.sin(tt * 1.6 + seed));
-      ctx.beginPath(); ctx.arc(ex, ey, 1.5, 0, 2 * Math.PI, false); ctx.fillStyle = rgbaHex(col, glint); ctx.fill();
+      const seed = sd * 6.283 + i * 1.7;   // stable phase → the terminal sits still and only twinkles
+      // (4) distant terminal node — the thread fades INTO a further, dimmer, smaller node (size + alpha scaled
+      // by depth z), twinkling like a synaptic terminal. This recede is what reads as 3D instead of a loose tip.
+      const tw = prefersReducedMotion ? 0.8 : (0.6 + 0.4 * Math.sin(tt * 1.4 + seed));
+      const trad = 1.9 - z * 1.0, ta = (0.42 - z * 0.24) * tw;
+      ctx.beginPath(); ctx.arc(ex, ey, Math.max(0.7, trad), 0, 2 * Math.PI, false); ctx.fillStyle = rgbaHex(lit, Math.max(0.05, ta)); ctx.fill();
       // (1) signal pulse — a mote fires outward along the dendrite, staggered per thread; brighter after a batch lands
       if (!prefersReducedMotion) {
         const cyc = (((tt * 0.2 + seed * 0.37) % 1) + 1) % 1;
@@ -229,7 +259,10 @@ function ensureGraph() {
     // canvas (the post-reboot bug). We also NEED continuous frames for the ambient far-field/nebula drift +
     // pulses. The scene is cheap (dozens of nodes + a seeded field), so a live loop is the right call here.
     .autoPauseRedraw(false)
-    .cooldownTicks(120).d3VelocityDecay(0.3)
+    // Higher friction (velocityDecay) + faster alpha cooldown so the cluster settles into a HELD lattice you
+    // fly through, instead of a perpetually-rearranging hairball. The "motion" should come from the camera and
+    // the ambient far-field/signals, not from the nodes jostling. Physics calm → tendril tips hold still.
+    .cooldownTicks(120).d3VelocityDecay(0.45).d3AlphaDecay(0.035)
     .linkColor(l => l.color).linkWidth(l => l.width)
     // A same-category glow drawn OVER the default line ('after' → force-graph keeps native arrows + the
     // directional/emitted particles that drive the connection-ripple). Category still owns COLOUR + WIDTH
@@ -650,4 +683,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-09j: cleanup (dead clouds removed)');
+console.info('[kg] surface build 2026-07-09l: calm physics + identity-frozen tendrils receding to distant nodes (3D)');
