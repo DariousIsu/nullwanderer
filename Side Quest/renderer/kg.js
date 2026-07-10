@@ -732,17 +732,22 @@ function onFocusMove(p) {
 }
 // curation metabolism: frequent programmatic curation + the daily clean sweep arrive here. Inert until the
 // host emits kg:curation-move — same graceful-degrade pattern as follow. Payload {tier, kind, count, items?}.
+// Host contract (main.js dedup apply tick): kg:curation-move {kind:'dedup', tier, count, anchor}, one event
+// per real fold. anchor = the survivor's name (matches a node.id when that canonical is in view).
 function onCurationMove(p) {
-  // dedup/merge events get the ABSORB gesture on the canonical (duplicates collapsing in). We STILL flare the
-  // field softly so the merge registers even when the anchor is off-screen (dedupAbsorb no-ops in that case).
-  if (p && (p.kind === 'dedup' || p.kind === 'merge') && p.anchor) {
-    dedupAbsorb(p.anchor, p.count || (p.items ? p.items.length : 3));
-    ingestPulse({ tier: p.tier || 'curation', anchor: p.anchor, count: p.count || 1 });
+  if (!p) return;
+  // dedup/merge → the ABSORB gesture on the canonical (duplicates collapsing in). We ALWAYS flare the field
+  // softly at the dedup (curation) tempo so an off-screen fold still registers; the absorb only fires when the
+  // survivor is actually in view (dedupAbsorb no-ops otherwise). Normalising the tier here also stops a
+  // null-tier dedup event from falling through to ingestPulse's 'growth' default (a too-big blast for a merge).
+  if (p.kind === 'dedup' || p.kind === 'merge') {
+    if (p.anchor) dedupAbsorb(p.anchor, p.count || (p.items ? p.items.length : 3));
+    ingestPulse({ tier: p.tier || 'curation', anchor: p.anchor || null, count: p.count || 1 });
     return;
   }
   ingestPulse(p);
 }
-try { window.__kgDedup = (anchor, count) => dedupAbsorb(anchor, count || 5); window.__kgAbsorbN = () => absorbs.length; } catch (e) {}   // dev trigger + peek for live CDP verification
+try { window.__kgDedup = (anchor, count) => dedupAbsorb(anchor, count || 5); window.__kgAbsorbN = () => absorbs.length; window.__kgCuration = (p) => onCurationMove(p); } catch (e) {}   // dev triggers + peek for live CDP verification
 followBtn.addEventListener('click', () => setFollow(!follow));
 try {
   if (window.sq && window.sq.kg && typeof window.sq.kg.onFocusMove === 'function') window.sq.kg.onFocusMove(onFocusMove);
@@ -755,4 +760,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-10n: FIX tendrils (rr/i scope) + dedup ABSORB gesture (duplicates collapse into canonical) + warnOnce');
+console.info('[kg] surface build 2026-07-10o: dedup receiver tier-normalized to host contract {kind,tier,count,anchor} + full-path verify');
