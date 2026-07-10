@@ -928,6 +928,76 @@ app.whenReady().then(() => {
     finally { kgApplyRunning = false; }
   };
   setInterval(() => { maybeRunAdjudicate().catch(() => {}); }, KGAPPLY_CHECK_MS).unref?.();
+  // NIGHTLY FULL DEDUP SWEEP (2026-07-10): the GUARANTEED once-a-day net. The write-triggered dedup + the fast
+  // apply tick catch the steady flow; this sweep guarantees the WHOLE graph is re-scanned and the anchored
+  // queue drained toward empty each calendar day regardless of activity — AND it is the home for the SLOW
+  // name-strong tier (a bounded idle-time bite through the reasoning model, never in the latency-sensitive
+  // fast tick). Separate flag ZOE_KG_NIGHTLY_ENABLED (default OFF) — it writes the graph. Plug: =0 + reboot.
+  const KGNIGHTLY_CHECK_MS = (parseFloat(process.env.ZOE_KG_NIGHTLY_CHECK_MIN) || 30) * 60 * 1000;
+  const KGNIGHTLY_MAX_ITERS = parseInt(process.env.ZOE_KG_NIGHTLY_MAX_ITERS || '', 10) || 6;                 // fast-drain safety cap
+  const KGNIGHTLY_NAMESTRONG_BATCH = parseInt(process.env.ZOE_KG_NIGHTLY_NAMESTRONG_BATCH || '', 10) || 150; // slow-tier nightly bite
+  const localDayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const emitAbsorb = (rep) => {   // one kg:curation-move per landed fold — same contract the apply tick uses
+    try {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        for (const s of (Array.isArray(rep && rep.applied_sample) ? rep.applied_sample : [])) {
+          mainWindow.webContents.send('kg:curation-move', { kind: 'dedup', tier: s.tier || null, count: s.count || 1, anchor: s.anchor || null });
+        }
+      }
+    } catch {}
+  };
+  let kgNightlyRunning = false;
+  const maybeRunNightlyDedupSweep = async () => {
+    if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_KG_NIGHTLY_ENABLED || '').trim())) return;  // arm deliberately
+    if (kgNightlyRunning) return;
+    if (!echoSuit || !echoSuit.connected) return;
+    if (Date.now() - lastUserTurnTs < KGAPPLY_IDLE_MS) return;         // heavy + writes the graph — never mid-conversation
+    if (db.getMeta('last_kg_nightly_day') === localDayStr()) return;   // once per calendar day
+    kgNightlyRunning = true;
+    db.setMeta('last_kg_nightly_day', localDayStr());                  // claim the slot BEFORE running (idempotent for the day)
+    try {
+      const tiers = (process.env.ZOE_KG_APPLY_TIERS || 'strong-id,name-exact').trim();
+      // 1) FULL blocking sweep (changed_since=null) — bank any stale same-block pairs the incremental cursor
+      //    never re-touched. Cheap to land (signature-dedup skips everything already proposed).
+      let swept = 0;
+      try {
+        const dr = await echoSuit.dispatch({ kind: 'do', name: 'run_blocking_dedup', args: {} });
+        let drep = null; try { drep = JSON.parse(dr && dr.text); } catch {}
+        swept = (drep && drep.new) || 0;
+        db.setMeta('last_kg_dedup_full_at', String(Date.now()));       // nightly owns the full net now — keeps the 7-day net quiet
+      } catch (e) { console.error('[kg-nightly] blocking sweep failed:', e.message); }
+      // 2) Drain the FAST-ANCHORED queue toward empty (bounded). Anchored rarely parks, so it converges; a
+      //    parked proposal STAYS pending (store.run_adjudication contract), so we break the moment a batch
+      //    lands nothing — never loop on considered>0 or it would re-judge the same parks forever.
+      let anchoredApplied = 0;
+      for (let i = 0; i < KGNIGHTLY_MAX_ITERS; i++) {
+        const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGAPPLY_BATCH, tiers } });
+        let rep = null; try { rep = JSON.parse(ar && ar.text); } catch {}
+        if (!rep || rep.considered == null) break;
+        anchoredApplied += rep.applied || 0;
+        emitAbsorb(rep);
+        if ((rep.applied || 0) === 0 || rep.considered < KGAPPLY_BATCH) break;   // nothing left to apply / queue thin
+      }
+      // 3) NAME-STRONG bite — ONE bounded pass through the reasoning model. The affirmative-confirm gate
+      //    (LLM same=true + conf>=0.70 + a corroborator) already protects it; anti-collapse holds. Idle-time
+      //    only, so the slow judge latency is fine. Deliberately NOT looped — a fixed nightly chip of the pile.
+      let strongApplied = 0;
+      try {
+        const sr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGNIGHTLY_NAMESTRONG_BATCH, tiers: 'name-strong' } });
+        let srep = null; try { srep = JSON.parse(sr && sr.text); } catch {}
+        if (srep && srep.considered != null) { strongApplied = srep.applied || 0; emitAbsorb(srep); }
+      } catch (e) { console.error('[kg-nightly] name-strong pass failed:', e.message); }
+      const total = anchoredApplied + strongApplied;
+      console.log(`[kg-nightly] full sweep: +${swept} proposals; drained ${anchoredApplied} anchored + ${strongApplied} name-strong = ${total} merges`);
+      if (total > 0 || swept > 0) {
+        const text = `[Nightly upkeep] Full graph sweep: ${swept} new duplicate proposal${swept === 1 ? '' : 's'} found, and I reversibly merged ${total} confirmed duplicate${total === 1 ? '' : 's'} (${anchoredApplied} anchored + ${strongApplied} fuzzy name-match) — each LLM-verified and undoable.`;
+        const row = db.insertMonologue({ content: text, model: 'kg-nightly', type: 'reading' });
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
+      }
+    } catch (e) { console.error('[kg-nightly] sweep failed:', e.message); }
+    finally { kgNightlyRunning = false; }
+  };
+  setInterval(() => { maybeRunNightlyDedupSweep().catch(() => {}); }, KGNIGHTLY_CHECK_MS).unref?.();
   // Episodic recall backfill: embed past turns lacking an embedding so "what did we say earlier
   // about X" works over EXISTING history too. The one-shot 300 left ~half of turns unembedded
   // (episodic recall was blind to old history); DRAIN it in bounded batches until caught up, paced
