@@ -1580,7 +1580,18 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
   // into junk "missing" anchors that rank first and waste moves on NULL dossiers. Idle ≠ conversation.
   const _lastUser = (recentTurns || []).filter(t => t.speaker === 'user').reduce((mx, t) => Math.max(mx, Number(t.ts) || 0), 0);
   const _convoFresh = _lastUser > 0 && (nowTs - _lastUser < 30 * 60 * 1000);
-  const convoNames = async () => { if (!_convoFresh) return []; try { return await graphWalk.extractCandidates(recentTurns, { cloud, log: (m) => console.log(m) }); } catch { return []; } };
+  const convoNames = async () => {
+    // FOCUS FIX (2026-07-10): his touched entities (doc-decomp / puller / recent cards, via activeSetNames)
+    // are ALWAYS active work — feed them UNGATED so the builder BUILDS the ones missing from the graph. The
+    // RELEVANT tier only ENRICHES existing-thin nodes, so his freshly-decomposed entities that aren't in
+    // civic_graph yet (audit: 29/37 missing) had no build path → the builder ground the global frontier
+    // (relevant=0). These are grounded names (not idle musings); missing-with-no-web-presence self-holds at
+    // the existence gate, so no junk is minted. Conversation extraction still runs ONLY on a fresh user turn.
+    const work = (activeSetNames() || []);
+    let convo = [];
+    if (_convoFresh) { try { convo = await graphWalk.extractCandidates(recentTurns, { cloud, log: (m) => console.log(m) }); } catch {} }
+    return [...work, ...convo];
+  };
 
   // FOCUS: the SHARED active set (module-level activeSetNames) steers BOTH lanes onto the operator's work.
   const relevantNodes = async () => {

@@ -859,7 +859,12 @@ app.whenReady().then(() => {
     kgApplyRunning = true;
     db.setMeta('last_kg_apply_at', String(Date.now()));
     try {
-      const dr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGAPPLY_BATCH } });
+      // TIER-SCOPED DRAIN (2026-07-10): target the ANCHORED tiers only. They route to the FAST model
+      // (gemma ~2s, not the fuzzy tiers' ~20s kimi) AND are high-yield (the anchor lets them apply), so a
+      // batch lands real merges in ~minutes instead of a slow blind pass that mostly parks. The fuzzy tiers
+      // (name-strong/weak/initial/semantic) stay pending for a later, deliberate pass. Env-overridable.
+      const KGAPPLY_TIERS = (process.env.ZOE_KG_APPLY_TIERS || 'strong-id,name-exact').trim();
+      const dr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGAPPLY_BATCH, tiers: KGAPPLY_TIERS } });
       let rep = null; try { rep = JSON.parse(dr && dr.text); } catch {}
       if (rep && rep.considered != null) {
         console.log(`[kg-apply] adjudicated ${rep.considered}: applied ${rep.applied || 0}, parked ${rep.parked || 0}${rep.halted ? ` HALTED(${rep.halted})` : ''}`);
