@@ -675,6 +675,74 @@ app.whenReady().then(() => {
     finally { ingestRunning = false; }
   };
   setInterval(() => { maybeDrainIngest().catch(() => {}); }, INGEST_CHECK_MS).unref?.();
+  // F3 RESEARCH-TO-CLOSE-THE-GAP — the third outcome, wired live. Pulls the RESEARCH band from tenant
+  // staging (mid-band 0.72–0.90, or promote-conf-but-ungrounded relations), runs research_lane.runResearchItem
+  // backed by the AUTHORITATIVE tool surface (FEC/LegiScan/MediaWiki/GDELT) + her LIVE browser
+  // (research_sources), and re-stamps a lifted proposal (restamp_relation_proposal) so the next F2 drain
+  // promotes it. Separate switch ZOE_RESEARCH_ENABLED (default OFF — it drives her live browser, so arm it
+  // deliberately). Idle-gated (never mid-conversation), bounded per tick, in-session cooldown per proposal.
+  const RESEARCH_CHECK_MS = (parseFloat(process.env.ZOE_RESEARCH_CHECK_MIN) || 15) * 60 * 1000;
+  const RESEARCH_MIN_GAP_MS = (parseFloat(process.env.ZOE_RESEARCH_MIN_GAP_MIN) || 20) * 60 * 1000;
+  const RESEARCH_BATCH = parseInt(process.env.ZOE_RESEARCH_BATCH || '', 10) || 3;
+  const RESEARCH_IDLE_MS = (parseFloat(process.env.ZOE_RESEARCH_IDLE_MIN) || 5) * 60 * 1000;
+  let researchRunning = false;
+  const researchTried = new Set();   // in-session cooldown: don't re-research the same proposal this boot
+  const maybeRunResearch = async () => {
+    if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_RESEARCH_ENABLED || '').trim())) return;  // arm deliberately (drives her browser)
+    if (researchRunning) return;
+    if (!echoSuit || !echoSuit.connected) return;
+    if (Date.now() - lastUserTurnTs < RESEARCH_IDLE_MS) return;                 // never drive her browser mid-conversation
+    if (Date.now() - parseInt(db.getMeta('last_research_at') || '0', 10) < RESEARCH_MIN_GAP_MS) return;
+    researchRunning = true;
+    db.setMeta('last_research_at', String(Date.now()));
+    try {
+      const researchLane = require('./lib/research_lane');
+      const researchExec = require('./lib/research_exec');
+      const researchSources = require('./lib/research_sources');
+      const promoteGate = require('./lib/promote_gate');
+      let browser = null; try { browser = require('./lib/browser'); } catch {}
+      const dispatch = (t) => echoSuit.dispatch(t);
+      const search = researchSources.makeSearch({ dispatch, browser });
+      const fetch = researchSources.makeFetch({ dispatch, browser });
+      // the RESEARCH band: mid-confidence, OR promote-confidence but ungrounded (no real source_set)
+      const sql = "SELECT rp.id, rp.confidence, rp.relation_type rt, rp.relation_metadata md, es.name sn, et.name tn"
+        + " FROM tenant_rainey.relation_proposals rp"
+        + " JOIN entities es ON es.id = rp.source_id JOIN entities et ON et.id = rp.target_id"
+        + " WHERE rp.deleted = 0 AND ((rp.confidence >= 0.72 AND rp.confidence < 0.90)"
+        + "   OR (rp.confidence >= 0.90 AND (rp.relation_metadata IS NULL OR rp.relation_metadata NOT LIKE '%\"source_set\": [\"%')))"
+        + ` ORDER BY rp.confidence DESC LIMIT ${RESEARCH_BATCH * 4}`;
+      let rows = [];
+      try { const res = await dispatch({ kind: 'do', name: 'db_query', args: { sql } }); rows = (JSON.parse(res && res.text) || {}).rows || []; } catch { rows = []; }
+      let lifted = 0, worked = 0;
+      for (const row of rows) {
+        if (worked >= RESEARCH_BATCH) break;
+        if (researchTried.has(row.id)) continue;
+        researchTried.add(row.id);
+        worked++;
+        let md = {}; try { md = JSON.parse(row.md || '{}'); } catch {}
+        const proposal = { source_name: row.sn, target_name: row.tn, relation: row.rt, confidence: row.confidence, metadata: md };
+        const corroborate = researchExec.makeCorroborate({ search, existing: Array.isArray(md.source_set) ? md.source_set : [] });
+        const verifyCitation = researchExec.makeVerifyCitation({ search, fetch });
+        let out = null;
+        try { out = await researchLane.runResearchItem(proposal, { search: corroborate, verifyCitation, maxAttempts: 1 }); } catch { out = null; }
+        if (out && out.outcome === 'promote') {
+          const conf = promoteGate.classify(out.proposal).confidence;
+          const sources = (out.proposal.metadata && out.proposal.metadata.source_set) || [];
+          try { await dispatch({ kind: 'do', name: 'restamp_relation_proposal', args: { relation_id: row.id, confidence: conf, sources } }); lifted++; } catch {}
+        }
+      }
+      if (worked) {
+        console.log(`[research] worked ${worked} gap proposal(s) → ${lifted} lifted over the bar (F2 will promote)`);
+        if (lifted) {
+          const text = `[Memory building] I researched ${worked} shaky fact${worked === 1 ? '' : 's'} and grounded ${lifted} of them over the promotion bar — real sources, no gate.`;
+          const r2 = db.insertMonologue({ content: text, model: 'research', type: 'reading' });
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: r2.id, ts: r2.ts, content: text, type: 'reading' });
+        }
+      }
+    } catch (e) { console.error('[research] pass failed:', e.message); }
+    finally { researchRunning = false; }
+  };
+  setInterval(() => { maybeRunResearch().catch(() => {}); }, RESEARCH_CHECK_MS).unref?.();
   // Episodic recall backfill: embed past turns lacking an embedding so "what did we say earlier
   // about X" works over EXISTING history too. The one-shot 300 left ~half of turns unembedded
   // (episodic recall was blind to old history); DRAIN it in bounded batches until caught up, paced
