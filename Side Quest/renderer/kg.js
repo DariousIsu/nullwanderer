@@ -97,11 +97,7 @@ function farField() {
     for (let j = 0; j < N; j++) { if (j === i) continue; const dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y, d = dx * dx + dy * dy; if (d < d1) { d2 = d1; n2 = n1; d1 = d; n1 = j; } else if (d < d2) { d2 = d; n2 = j; } }
     if (n1 > i) edges.push([i, n1]); if (n2 > i) edges.push([i, n2]);
   }
-  // nebula: a few big soft colour clouds so the galaxy has structure + hue, not a uniform void. Deepest layer.
-  const CLOUD_HUE = ['20,184,166', '34,197,94', '168,85,247', '96,165,250', '148,163,184'];
-  const clouds = [];
-  for (let i = 0; i < 6; i++) clouds.push({ x: rnd(), y: rnd(), r: 0.4 + rnd() * 0.5, a: 0.028 + rnd() * 0.032, t: CLOUD_HUE[i % CLOUD_HUE.length], depth: 0.12 + rnd() * 0.3, ph: rnd() * 6.28 });
-  _farField = { pts, edges, clouds };
+  _farField = { pts, edges };   // clouds removed — the galactic-core glow (drawFarField) replaced them
   return _farField;
 }
 function drawFarField(ctx, w, h) {
@@ -654,4 +650,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-09i: FIX world nodes carry degree (tendrils+motes in Follow) + deeper soma breathing');
+console.info('[kg] surface build 2026-07-09j: cleanup (dead clouds removed)');
