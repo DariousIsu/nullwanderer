@@ -295,7 +295,10 @@ class CaptureLane {
       const { actions } = processPoll(st, { captionText: typeof raw === 'string' ? raw : '', now }, { sampleMs: this.sampleMs });
       for (const a of actions) {
         if (a.type === 'segment') { try { this.store.insertItem(a.item, now); } catch (e) { this.log('[video-capture] insert failed: ' + e.message); } }
-        else if (a.type === 'screenshot') { await this._shoot(feed, w.win, a, now); }
+        // Screenshot → vision-read of on-screen charts. Skipped entirely when no consumer is wired (visionRead
+        // null), so the caption lane keeps running with ZERO screenshot/PNG/model cost. Caption segments (above)
+        // still flush on the cue — only the visual-read is off.
+        else if (a.type === 'screenshot') { if (this.visionRead || this.onScreenshot) await this._shoot(feed, w.win, a, now); }
       }
     }
   }
