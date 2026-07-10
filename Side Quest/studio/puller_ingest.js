@@ -92,6 +92,17 @@ function ingestRows(db, rows, opts = {}) {
     }
     if (kind === 'generic') stats.generic++;
 
+    // F4 cold-start: seed the domain's pattern-guess ORDER from company SIZE (the one real predictor of
+    // email format) when a size is present and the domain has no learned data yet. Only seeds — the first
+    // verified address makes the domain frequentist and the prior is discarded (seedSizePriors won't
+    // override any pattern with a real hit/miss).
+    const size = r.employeeCount != null ? r.employeeCount : (r.companySize != null ? r.companySize : r.size);
+    if (domain && size != null) {
+      let st = patternStates.get(domain) || db.getPatternState(domain);
+      const seeded = B.seedSizePriors(st, size);
+      if (seeded !== st) { patternStates.set(domain, seeded); stats.sizeSeeded = (stats.sizeSeeded || 0) + 1; }
+    }
+
     if (domain && email && creditsPattern(kind)) {
       const pat = B.detectPatternUsed(email, name, domain);
       if (pat) {

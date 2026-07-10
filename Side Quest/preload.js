@@ -203,7 +203,17 @@ contextBridge.exposeInMainWorld('sq', {
     exportContacts: (opts) => ipcRenderer.invoke('puller:export', opts || {}),
     seedPriors: () => ipcRenderer.invoke('puller:seed-priors'),
     cascade: (domain) => ipcRenderer.invoke('puller:cascade', { domain }),
-    ingestNegatives: (text) => ipcRenderer.invoke('puller:ingest-negatives', { text })
+    ingestNegatives: (text) => ipcRenderer.invoke('puller:ingest-negatives', { text }),
+    // F4 drop-zone: a bounce report of ANY format (DSN/ARF/ESP JSON/CSV/free text), auto-sniffed.
+    ingestBounces: (text, opts) => ipcRenderer.invoke('puller:ingest-bounces', { text, ...(opts || {}) }),
+    reconcileTestList: (sent, resultsText) => ipcRenderer.invoke('puller:reconcile-testlist', { sent, resultsText }),
+    // F4 correction loop: contextual identity-dedup sweep + operator merge/reassign/split.
+    dedupSweep: (apply) => ipcRenderer.invoke('puller:dedup-sweep', { apply: !!apply }),
+    applyMerge: (fromId, intoId, reason) => ipcRenderer.invoke('puller:apply-merge', { fromId, intoId, reason }),
+    unmerge: (correctionId) => ipcRenderer.invoke('puller:unmerge', { correctionId }),
+    reassignObservation: (obsId, toTargetId, reason) => ipcRenderer.invoke('puller:reassign-observation', { obsId, toTargetId, reason }),
+    splitTarget: (fromId, obsIds, name, opts) => ipcRenderer.invoke('puller:split-target', { fromId, obsIds, name, ...(opts || {}) }),
+    listCorrections: (opts) => ipcRenderer.invoke('puller:list-corrections', opts || {})
   },
 
   // Canvas — Zoe's freeform whiteboard over Echo's saga canvas (live /canvas snapshot). Content is

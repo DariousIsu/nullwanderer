@@ -18,6 +18,7 @@
 const db = require('../lib/puller_db');
 const B = require('./puller_beliefs');
 const Q = require('./puller_confidence');
+const SS = require('../lib/puller_supersession');   // F5.2: belief flips obey the D2 supersession law
 
 const norm = (s) => String(s == null ? '' : s).trim().toLowerCase();
 const domainOf = (email, fallback) => { const e = norm(email); const i = e.indexOf('@'); return i > 0 ? e.slice(i + 1) : (fallback || null); };
@@ -114,12 +115,25 @@ function cascadeForDomain(domain) {
 function decideRevision(revisionId, decision) {
   const rev = db.decideRevision(revisionId, decision);
   if (!rev) return null;
-  const out = { id: revisionId, decision, applied: false, confidence: null, grade: null };
+  const out = { id: revisionId, decision, applied: false, superseded: false, confidence: null, grade: null };
   if (decision === 'accepted' && rev.subject_kind === 'belief' && rev.attr === 'email' && rev.target_id && rev.to_value) {
     const newV = norm(rev.to_value);
-    db.addObservation(rev.target_id, { attr: 'email', value: newV, kind: 'derived', source: 'revision-accept' });
-    const q = requalifyEmail(rev.target_id, newV);
-    out.applied = true; out.confidence = q.confidence; out.grade = q.grade;
+    // F5.2: a belief flip is a REPLACEMENT of a functional attribute — adjudicate it with the SAME D2 law
+    // the KG uses (world-time newer + clears the confidence floor + anti-pattern guard). A stale/weak flip
+    // is refused, not silently applied. The next-pattern guess grades as a best-guess (D → cap 0.50).
+    const cur = db.getBelief(rev.target_id, 'email');
+    const from = cur ? { value: cur.value, validFrom: cur.updated_at || 1, confidence: cur.confidence } : null;
+    const to = { value: newV, validFrom: Date.now(), confidence: Q.cap('D') };
+    const adj = from ? SS.supersessionForFlip({ targetId: rev.target_id, attr: 'email', from, to })
+                     : { approved: true, reason: 'first-assert' };
+    if (adj.approved) {
+      db.addObservation(rev.target_id, { attr: 'email', value: newV, kind: 'derived', source: 'revision-accept',
+        meta: { supersedes: from && from.value, reason: adj.reason } });
+      const q = requalifyEmail(rev.target_id, newV);
+      out.applied = true; out.superseded = !!from; out.confidence = q.confidence; out.grade = q.grade; out.supersessionReason = adj.reason;
+    } else {
+      out.applied = false; out.rejectedReason = adj.reason;   // stale-would-regress / weak-new / same-value
+    }
   }
   return out;
 }

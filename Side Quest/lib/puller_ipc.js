@@ -26,6 +26,9 @@ const revise = require('../studio/puller_revise');
 const exporter = require('../studio/puller_export');
 const priors = require('../studio/puller_priors');
 const negatives = require('../studio/puller_negatives');
+const normalizer = require('../lib/bounce_normalizer');
+const prefilter = require('../lib/email_prefilter');
+const corrections = require('../lib/puller_corrections');
 
 // Seam for the eventual Echo contact write (Slice 5). Unset until a write path is confirmed on
 // reboot; promote() degrades to local status + export. Set via setEchoContactWrite(fn).
@@ -172,24 +175,108 @@ function register(ipcMain) {
     catch (e) { console.error('[puller] cascade failed:', e.message); return { ok: false, error: e.message }; }
   });
 
-  // Ingest a vendor bounce file (pasted text): parse → resolve each email to a target → applyVerification.
-  // The whole negatives-file path in one call. Unmatched emails are counted, not invented.
+  // ---- F4 correction loop: contextual identity-dedup sweep + operator merge/reassign/split ----------
+
+  // Run the retrospective identity-dedup sweep over live targets. Default = DRY (surface proposals + flags
+  // only). apply:true auto-folds the confident low-degree role matches (logged, reversible).
+  ipcMain.handle('puller:dedup-sweep', (_e, { apply = false } = {}) => {
+    try { return { ok: true, ...corrections.runSweep({ apply: !!apply }) }; }
+    catch (e) { console.error('[puller] dedup-sweep failed:', e.message); return { ok: false, error: e.message }; }
+  });
+  // Operator applies a proposed merge (or confirms a flagged one). Reversible via puller:unmerge.
+  ipcMain.handle('puller:apply-merge', (_e, { fromId, intoId, reason = null } = {}) => {
+    try { return { ok: true, ...db.mergeTarget(fromId, intoId, { actor: 'operator', reason }) }; }
+    catch (e) { console.error('[puller] apply-merge failed:', e.message); return { ok: false, error: e.message }; }
+  });
+  ipcMain.handle('puller:unmerge', (_e, { correctionId } = {}) => {
+    try { const r = db.unmergeTarget(correctionId); return r ? { ok: true, ...r } : { ok: false, error: 'correction not found or already reverted' }; }
+    catch (e) { console.error('[puller] unmerge failed:', e.message); return { ok: false, error: e.message }; }
+  });
+  ipcMain.handle('puller:reassign-observation', (_e, { obsId, toTargetId, reason = null } = {}) => {
+    try { return { ok: true, ...db.reassignObservation(obsId, toTargetId, { actor: 'operator', reason }) }; }
+    catch (e) { console.error('[puller] reassign failed:', e.message); return { ok: false, error: e.message }; }
+  });
+  ipcMain.handle('puller:split-target', (_e, { fromId, obsIds, name, company, domain, reason = null } = {}) => {
+    try { return { ok: true, ...db.splitTarget(fromId, { obsIds, name, company, domain, actor: 'operator', reason }) }; }
+    catch (e) { console.error('[puller] split failed:', e.message); return { ok: false, error: e.message }; }
+  });
+  ipcMain.handle('puller:list-corrections', (_e, opts = {}) => {
+    try { return { ok: true, corrections: db.listCorrections(opts || {}) }; }
+    catch (e) { console.error('[puller] list-corrections failed:', e.message); return { ok: false, error: e.message }; }
+  });
+
+  // Ingest a bounce report of ANY format (DSN / ARF / ESP JSON / CSV / free text) — the drop-zone door.
+  // Sniff → canonical rows → resolve each email to a target → drive the negative-signal loop. A COMPLAINT
+  // (suppression:true) is recorded as a do-not-send marker WITHOUT poisoning the address's validity belief
+  // (research: suppression ≠ invalidity). Unmatched emails are counted, never invented. opts.testList
+  // marks the batch as a controlled test-send (weighted above opportunistic; recorded on the observation).
+  ipcMain.handle('puller:ingest-bounces', (_e, { text, format = null, testList = false } = {}) => {
+    try { return { ok: true, summary: applyBounceRows(text || '', { format, testList }) }; }
+    catch (e) { console.error('[puller] ingest-bounces failed:', e.message); return { ok: false, error: e.message }; }
+  });
+  // Back-compat alias for the existing renderer (CSV/vendor path) — now routed through the agnostic sniffer.
   ipcMain.handle('puller:ingest-negatives', (_e, { text } = {}) => {
+    try { return { ok: true, summary: applyBounceRows(text || '', {}) }; }
+    catch (e) { console.error('[puller] ingest-negatives failed:', e.message); return { ok: false, error: e.message }; }
+  });
+
+  // Reconcile a SENT test list against the bounces it produced: classify EVERY sent address (bounced →
+  // invalid, delivered → valid, SILENT → unknown/unconfirmed) and drive the loop with weight:test.
+  // `sent` = [email | {email}]; `resultsText` = the bounce report (any format). Pre-filter culls the
+  // obviously-unsendable BEFORE we count a silence against a target (a no-MX address never had a chance).
+  ipcMain.handle('puller:reconcile-testlist', async (_e, { sent = [], resultsText = '' } = {}) => {
     try {
-      const { rows, dropped, vendor } = negatives.parseResults(text || '');
-      const summary = { vendor, parsed: rows.length, dropped, matched: 0, unmatched: 0, applied: 0, flips: 0, infra: 0 };
-      for (const row of rows) {
-        const t = db.findTargetByEmail(row.email);
+      const { rows } = normalizer.parse(resultsText || '', { testList: true });
+      const reconciled = normalizer.reconcileTestList(sent, rows);
+      const summary = { sent: reconciled.length, bounced: 0, delivered: 0, silent: 0, matched: 0, unmatched: 0, applied: 0, flips: 0, culled: 0 };
+      for (const r of reconciled) {
+        if (r.result === 'invalid') summary.bounced++;
+        else if (r.result === 'valid') summary.delivered++;
+        else summary.silent++;
+        // a silent address that fails the safe pre-filter (no MX / disposable) never had a chance — don't
+        // let its silence read as a soft signal; skip it. (A bounce/deliver already answered authoritatively.)
+        if (r.silent) {
+          try { const pf = await prefilter.prefilter(r.email); if (pf.verdict === 'reject') { summary.culled++; continue; } } catch {}
+        }
+        const t = db.findTargetByEmail(r.email);
         if (!t) { summary.unmatched++; continue; }
         summary.matched++;
-        const o = revise.applyVerification(t.id, { value: row.email, result: row.result });
+        if (r.result === 'unknown') continue;           // silence/soft → no belief change, just surfaced
+        const o = revise.applyVerification(t.id, { value: r.email, result: r.result });
         summary.applied++;
         if (o.revisionId) summary.flips++;
-        if (o.infraSuspect) summary.infra++;
       }
       return { ok: true, summary };
-    } catch (e) { console.error('[puller] ingest-negatives failed:', e.message); return { ok: false, error: e.message }; }
+    } catch (e) { console.error('[puller] reconcile-testlist failed:', e.message); return { ok: false, error: e.message }; }
   });
 }
 
-module.exports = { init, register, buildDossier, domainPatternView, listTargets, setEchoContactWrite };
+// Shared bounce-application path (used by ingest-bounces + the back-compat alias + the drop-zone tick).
+// Parses ANY format, resolves each email to a target, and applies the canonical result — with complaints
+// recorded as suppression markers (do-not-send) that never flip a validity belief.
+function applyBounceRows(text, { format = null, testList = false } = {}) {
+  const { rows, dropped, meta, format: fmt } = normalizer.parse(text, { format, testList });
+  const summary = { format: fmt, vendor: meta && meta.vendor, parsed: rows.length, dropped,
+                    matched: 0, unmatched: 0, applied: 0, flips: 0, infra: 0, suppressed: 0, deferred: 0 };
+  for (const row of rows) {
+    const t = db.findTargetByEmail(row.email);
+    if (!t) { summary.unmatched++; continue; }
+    summary.matched++;
+    if (row.suppression) {
+      // do-not-send marker — record it as an ungradeable observation so qualify() ignores it, and it's
+      // visible on the dossier timeline. NOT a validity negative (the mailbox demonstrably received mail).
+      db.addObservation(t.id, { attr: 'email', value: row.email, kind: 'suppressed', source: 'bounce-report',
+                                meta: { raw: row.raw, weight: row.weight, suppression: true } });
+      summary.suppressed++;
+      continue;
+    }
+    if (row.result === 'unknown') { summary.deferred++; continue; }   // soft/transient → defer, no flip
+    const o = revise.applyVerification(t.id, { value: row.email, result: row.result });
+    summary.applied++;
+    if (o.revisionId) summary.flips++;
+    if (o.infraSuspect) summary.infra++;
+  }
+  return summary;
+}
+
+module.exports = { init, register, buildDossier, domainPatternView, listTargets, setEchoContactWrite, applyBounceRows };

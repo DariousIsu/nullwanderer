@@ -248,6 +248,113 @@ dossierEl.addEventListener('click', async (ev) => {
   else { btn.disabled = false; console.error('[puller] action failed:', r && r.error); }
 });
 
+// ---- F4 feedback window / drop-zone ---------------------------------------------------------------
+const overlay = document.getElementById('fboverlay');
+function openFeedback() { overlay.hidden = false; }
+function closeFeedback() { overlay.hidden = true; }
+document.getElementById('feedback').addEventListener('click', openFeedback);
+document.getElementById('fbclose').addEventListener('click', closeFeedback);
+overlay.addEventListener('click', (e) => { if (e.target === overlay) closeFeedback(); });
+
+// tabs
+document.querySelectorAll('.fbtab').forEach(tab => tab.addEventListener('click', () => {
+  document.querySelectorAll('.fbtab').forEach(t => t.classList.toggle('on', t === tab));
+  const pane = tab.dataset.pane;
+  document.querySelectorAll('.fbpane').forEach(p => p.classList.toggle('on', p.id === 'pane-' + pane));
+}));
+
+// bounce drop-zone: drag-drop a file OR paste text; any format, auto-sniffed
+const bounceDz = document.getElementById('bouncedz');
+const bounceText = document.getElementById('bouncetext');
+['dragover', 'dragenter'].forEach(ev => bounceDz.addEventListener(ev, e => { e.preventDefault(); bounceDz.classList.add('drag'); }));
+['dragleave', 'dragend'].forEach(ev => bounceDz.addEventListener(ev, () => bounceDz.classList.remove('drag')));
+bounceDz.addEventListener('drop', async (e) => {
+  e.preventDefault(); bounceDz.classList.remove('drag');
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) bounceText.value = await f.text();
+});
+bounceDz.addEventListener('click', () => bounceText.focus());
+
+function fmtDropped(d) { if (!d) return ''; const bits = []; if (d.noEmail) bits.push(`${d.noEmail} no-email`); if (d.badStatus) bits.push(`${d.badStatus} unparsed`); return bits.length ? ` · ${bits.join(', ')}` : ''; }
+
+document.getElementById('bounceingest').addEventListener('click', async () => {
+  const msg = document.getElementById('bouncemsg');
+  const text = bounceText.value.trim();
+  if (!text) { msg.textContent = 'nothing to ingest'; msg.className = 'fbmsg'; return; }
+  msg.textContent = 'ingesting…'; msg.className = 'fbmsg';
+  const r = await window.sq.puller.ingestBounces(text, { testList: document.getElementById('bouncetest').checked });
+  if (r && r.ok) {
+    const s = r.summary;
+    msg.className = 'fbmsg good';
+    msg.textContent = `${s.format} · ${s.parsed} parsed${fmtDropped(s.dropped)} → ${s.matched} matched (${s.applied} applied, ${s.flips} flips, ${s.deferred} soft-deferred, ${s.suppressed} suppressed), ${s.unmatched} untracked`;
+    loadTargets(); if (activeId != null) selectTarget(activeId);
+  } else { msg.className = 'fbmsg bad'; msg.textContent = `failed: ${r && r.error || 'unknown'}`; }
+});
+
+document.getElementById('tlreconcile').addEventListener('click', async () => {
+  const msg = document.getElementById('tlmsg');
+  const sent = document.getElementById('tlsent').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  const results = document.getElementById('tlresults').value.trim();
+  if (!sent.length) { msg.textContent = 'no sent addresses'; msg.className = 'fbmsg'; return; }
+  msg.textContent = 'reconciling…'; msg.className = 'fbmsg';
+  const r = await window.sq.puller.reconcileTestList(sent, results);
+  if (r && r.ok) {
+    const s = r.summary;
+    msg.className = 'fbmsg good';
+    msg.textContent = `${s.sent} sent → ${s.bounced} bounced, ${s.delivered} delivered, ${s.silent} silent (${s.culled} unsendable-culled) · ${s.matched} matched, ${s.applied} applied, ${s.flips} flips`;
+    loadTargets(); if (activeId != null) selectTarget(activeId);
+  } else { msg.className = 'fbmsg bad'; msg.textContent = `failed: ${r && r.error || 'unknown'}`; }
+});
+
+// identity-dedup sweep
+async function runSweep(apply) {
+  const msg = document.getElementById('sweepmsg'), out = document.getElementById('sweepout');
+  msg.textContent = apply ? 'sweeping & folding…' : 'scanning…'; msg.className = 'fbmsg'; out.innerHTML = '';
+  const r = await window.sq.puller.dedupSweep(apply);
+  if (!r || !r.ok) { msg.className = 'fbmsg bad'; msg.textContent = `failed: ${r && r.error || 'unknown'}`; return; }
+  msg.className = 'fbmsg';
+  msg.textContent = `scanned ${r.scanned} · ${r.candidates} weak candidates · ${r.autoApplied.length} auto-folded · ${r.proposals.length} proposals · ${r.attractorFlags.length} flagged`;
+  let html = '';
+  if (r.autoApplied.length) {
+    html += `<div class="fbsub">Auto-folded (reversible)</div>` + r.autoApplied.map(m =>
+      `<div class="sweepitem"><span class="from">${esc(m.fromName)}</span><span class="arw">→</span><span class="into">${esc(m.intoName)}</span><span class="cf">${pct(m.confidence)}% · ${esc(m.via)}</span></div>`).join('');
+  }
+  if (r.proposals.length) {
+    html += `<div class="fbsub">Proposed merges</div>` + r.proposals.map(m =>
+      `<div class="sweepitem"><span class="from">${esc(m.fromName)}</span><span class="arw">→</span><span class="into">${esc(m.intoName)}</span><span class="cf">${pct(m.confidence)}%</span> <button class="btn accent sm" data-merge-from="${m.fromId}" data-merge-into="${m.intoId}">Merge</button></div>`).join('');
+  }
+  if (r.attractorFlags.length) {
+    html += `<div class="fbsub">Flagged for operator (attractor / ambiguous — needs a split or disambiguation)</div>` + r.attractorFlags.map(f =>
+      `<div class="sweepitem flag"><span class="from">${esc(f.name)}</span><span class="cf">deg ${f.degree || 0} · ${esc(f.kind)}${f.canonicalHint ? ' → ' + esc(f.canonicalHint) : ''}</span></div>`).join('');
+  }
+  out.innerHTML = html || `<div class="fbmsg">nothing to reconcile — the store is clean.</div>`;
+}
+document.getElementById('sweepdry').addEventListener('click', () => runSweep(false));
+document.getElementById('sweepapply').addEventListener('click', () => runSweep(true));
+document.getElementById('sweepout').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-merge-from]');
+  if (!b) return;
+  b.disabled = true;
+  const r = await window.sq.puller.applyMerge(Number(b.dataset.mergeFrom), Number(b.dataset.mergeInto), 'operator sweep merge');
+  if (r && r.ok) { b.closest('.sweepitem').style.opacity = 0.4; b.textContent = 'merged ✓'; loadTargets(); }
+  else { b.disabled = false; }
+});
+document.getElementById('corrload').addEventListener('click', async () => {
+  const out = document.getElementById('sweepout'), msg = document.getElementById('sweepmsg');
+  const r = await window.sq.puller.listCorrections({ limit: 40 });
+  if (!r || !r.ok) { msg.className = 'fbmsg bad'; msg.textContent = 'could not load corrections'; return; }
+  msg.className = 'fbmsg'; msg.textContent = `${r.corrections.length} correction(s)`;
+  out.innerHTML = `<div class="fbsub">Recent corrections</div>` + (r.corrections.length ? r.corrections.map(c =>
+    `<div class="sweepitem"><span class="from">${esc(c.op)}</span><span class="cf">${esc(c.actor)} · ${(c.moved_obs || []).length} obs · ${esc(c.status)}</span>${c.status === 'applied' && c.op === 'merge' ? ` <button class="btn sm" data-unmerge="${c.id}">Undo</button>` : ''}</div>`).join('')
+    : `<div class="fbmsg">no corrections yet</div>`);
+  out.querySelectorAll('[data-unmerge]').forEach(btn => btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    const rr = await window.sq.puller.unmerge(Number(btn.dataset.unmerge));
+    if (rr && rr.ok) { btn.textContent = 'undone ✓'; btn.closest('.sweepitem').style.opacity = 0.4; loadTargets(); }
+    else btn.disabled = false;
+  }));
+});
+
 if (window.sq && window.sq.puller) {
   // deep-link: a "Full briefing →" click from the People rail loads dossier.html#target=<id> → auto-select it
   loadTargets().then(() => {

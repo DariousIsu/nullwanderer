@@ -126,6 +126,34 @@ html,body{height:100%;background:var(--bg);color:var(--tx-soft);font-family:-app
 .placeholder{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--tx-dim);text-align:center;padding:40px;}
 .placeholder .big{font-size:15px;color:var(--tx-muted);}
 .placeholder .small{font-size:12px;color:var(--tx-fainter);max-width:420px;line-height:1.6;}
+
+/* ---- F4 feedback window / drop-zone (overlay) ---- */
+.overlay{position:fixed;inset:0;background:rgba(6,6,9,0.72);display:flex;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto;z-index:50;}
+.fbwin{width:100%;max-width:720px;background:var(--bg-panel);border:1px solid var(--line-strong);border-radius:var(--r);box-shadow:0 24px 64px rgba(0,0,0,0.5);}
+.fbwin-head{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);}
+.fbwin-head .t{font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:var(--tx-muted);}
+.fbwin-head .x{margin-left:auto;cursor:pointer;color:var(--tx-dim);font-size:18px;padding:0 4px;}
+.fbwin-head .x:hover{color:var(--tx-soft);}
+.fbwin-body{padding:14px 16px 18px;}
+.fbtabs{display:flex;gap:4px;margin-bottom:12px;}
+.fbtab{font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:var(--tx-dim);padding:6px 11px;border:1px solid var(--line);border-radius:var(--r-sm);cursor:pointer;background:transparent;}
+.fbtab.on{color:var(--tx-soft);border-color:var(--accent);}
+.fbpane{display:none;} .fbpane.on{display:block;}
+.dz{border:1.5px dashed var(--line-strong);border-radius:var(--r);padding:16px;text-align:center;color:var(--tx-dim);font-size:12px;transition:border-color 150ms,color 150ms;cursor:pointer;margin-bottom:10px;}
+.dz.drag{border-color:var(--accent);color:var(--tx-soft);}
+.fbwin textarea{width:100%;min-height:120px;background:var(--bg-deep);border:1px solid var(--line-strong);color:var(--tx-soft);font:inherit;font-size:12px;font-family:ui-monospace,Consolas,monospace;padding:9px;border-radius:var(--r-sm);outline:none;resize:vertical;}
+.fbwin textarea:focus{border-color:var(--accent);}
+.fbrow{display:flex;align-items:center;gap:10px;margin-top:9px;flex-wrap:wrap;}
+.fbrow label{font-size:11px;color:var(--tx-muted);display:flex;align-items:center;gap:5px;}
+.fbmsg{font-size:11px;color:var(--tx-fainter);margin-top:9px;line-height:1.6;white-space:pre-wrap;}
+.fbmsg.good{color:var(--ok-fg);} .fbmsg.bad{color:var(--bad-fg);}
+.sweepitem{display:flex;align-items:center;gap:9px;font-size:12px;padding:7px 0;border-bottom:1px solid var(--line-faint);}
+.sweepitem .arw{color:var(--tx-dim);} .sweepitem .from{color:var(--warn-fg);} .sweepitem .into{color:var(--ok-fg);}
+.sweepitem .cf{margin-left:auto;font-size:10px;color:var(--tx-fainter);}
+.sweepitem.flag{border-left:2px solid var(--warn-fg);padding-left:8px;} .sweepitem.flag .from{color:var(--bad-fg);}
+.fbsub{font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--tx-fainter);margin:14px 0 6px;}
+.btn.accent{border-color:var(--accent);color:var(--info-fg);}
+.btn.sm{font-size:11px;padding:4px 9px;}
 </style>
 </head>
 <body>
@@ -136,6 +164,7 @@ html,body{height:100%;background:var(--bg);color:var(--tx-soft);font-family:-app
       <span class="studio-sub">Person/org dossiers · evidence → beliefs → revisions</span>
       <span class="spacer"></span>
       <span class="studio-sub" id="exportmsg"></span>
+      <button class="btn" id="feedback">Feedback ▾</button>
       <button class="btn" id="seed">Seed priors</button>
       <button class="btn" id="export">Export promoted → Echo</button>
       <button class="btn" id="refresh">Refresh</button>
@@ -161,6 +190,58 @@ html,body{height:100%;background:var(--bg);color:var(--tx-soft);font-family:-app
       </section>
     </div>
   </div>
+
+  <!-- F4 feedback window / drop-zone: upload bounce reports + test lists, run the identity-dedup sweep -->
+  <div class="overlay" id="fboverlay" hidden>
+    <div class="fbwin">
+      <div class="fbwin-head">
+        <span class="t">Feedback &amp; observability</span>
+        <span class="x" id="fbclose">&times;</span>
+      </div>
+      <div class="fbwin-body">
+        <div class="fbtabs">
+          <button class="fbtab on" data-pane="bounce">Bounce report</button>
+          <button class="fbtab" data-pane="testlist">Test list</button>
+          <button class="fbtab" data-pane="sweep">Identity sweep</button>
+        </div>
+
+        <div class="fbpane on" id="pane-bounce">
+          <div class="dz" id="bouncedz">Drop a bounce file here, or paste below — any format (DSN · ARF · SES/SendGrid/Mailgun/Postmark/Resend JSON · CSV · plain text). Auto-detected.</div>
+          <textarea id="bouncetext" placeholder="paste a bounce report / verification export…"></textarea>
+          <div class="fbrow">
+            <label><input type="checkbox" id="bouncetest" /> from a controlled test-send (weight higher)</label>
+            <span class="spacer" style="flex:1"></span>
+            <button class="btn accent sm" id="bounceingest">Ingest</button>
+          </div>
+          <div class="fbmsg" id="bouncemsg"></div>
+        </div>
+
+        <div class="fbpane" id="pane-testlist">
+          <div class="fbsub">Sent test list — the addresses we mailed to probe the DB (one per line)</div>
+          <textarea id="tlsent" placeholder="jane.doe@acme.com&#10;john.roe@beta.org&#10;…"></textarea>
+          <div class="fbsub">Results that came back (any bounce format)</div>
+          <textarea id="tlresults" placeholder="paste the bounces / delivery events…"></textarea>
+          <div class="fbrow"><span class="spacer" style="flex:1"></span><button class="btn accent sm" id="tlreconcile">Reconcile</button></div>
+          <div class="fbmsg" id="tlmsg"></div>
+        </div>
+
+        <div class="fbpane" id="pane-sweep">
+          <div class="fbrow">
+            <span class="fbmsg" style="margin:0">Scan the store for pre-F1 identity fragments (the "Tracy" attractor). Dry run surfaces proposals; apply auto-folds only the confident low-degree role matches.</span>
+          </div>
+          <div class="fbrow">
+            <button class="btn sm" id="sweepdry">Dry sweep</button>
+            <button class="btn accent sm" id="sweepapply">Sweep &amp; auto-fold</button>
+            <span class="spacer" style="flex:1"></span>
+            <button class="btn sm" id="corrload">Recent corrections</button>
+          </div>
+          <div id="sweepout"></div>
+          <div class="fbmsg" id="sweepmsg"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="dossier.js"></script>
 </body>
 </html>

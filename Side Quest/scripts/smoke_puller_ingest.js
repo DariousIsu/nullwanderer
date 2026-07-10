@@ -69,6 +69,12 @@ ok('Mark has 2 observations (email+role)', DB.listObservations(mark.id).length =
 const s2 = I.ingestRows(DB, rows, { source: 'test' });
 ok('re-run creates 0 targets (idempotent)', s2.targets === 0 && s2.skippedDup === 6);
 
+// F4 size-seed: a COLD domain with a company size seeds its pattern-guess order (small co → {first}@)
+const s4 = I.ingestRows(DB, [{ confidence: '50%', name: 'Solo Founder', company: 'TinyCo', email: 'founder@tinyco.io', employeeCount: 12 }], { source: 'test' });
+ok('size-seed counted', (s4.sizeSeeded || 0) >= 1);
+const tiny = DB.getPatternState('tinyco.io');
+ok('tinyco.io seeded a "first" prior from the small-company size bucket', tiny.patterns['first'] && tiny.patterns['first'].prior >= 0.5);
+
 // puller_add bridge end-to-end: contactsToRows → ingestRows credits the pattern for a verified email
 const bridged = I.contactsToRows([{ name: 'Tina Fox', title: 'CEO', email: 'tina.fox@newco.io', verified: true }], 'NewCo');
 ok('contactsToRows → one verified NewCo row', bridged.length === 1 && bridged[0].confidence === '95%');

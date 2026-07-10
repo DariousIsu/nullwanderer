@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS targets (
   photo_url TEXT,                      -- official headshot URL grabbed at discovery (team/bio page)
   photo_path TEXT,                     -- local copy (data/faces/<id>.jpg) — the reference for face-matching
   face_embedding TEXT,                 -- json 512-d ArcFace embedding of the reference headshot (cached)
+  merged_into INTEGER,                 -- F4: survivor id once this target is merged away (NULL = live)
   created_at INTEGER NOT NULL,
   last_accessed_at INTEGER NOT NULL
 );
@@ -120,6 +121,24 @@ CREATE TABLE IF NOT EXISTS retest_queue (
   updated_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_retest_status ON retest_queue(status);
+
+-- F4 correction loop: an append-only, REVERSIBLE log of operator (or auto-sweep) identity corrections.
+-- Every merge/reassign/split records exactly what moved (moved_obs = json obs ids) so it can be undone.
+CREATE TABLE IF NOT EXISTS corrections (
+  id INTEGER PRIMARY KEY,
+  op TEXT NOT NULL CHECK(op IN ('merge','reassign','split')),
+  from_target INTEGER,                 -- source target (merge: absorbed; reassign/split: donor)
+  into_target INTEGER,                 -- destination target
+  moved_obs TEXT,                      -- json array of observation ids moved (for exact revert)
+  actor TEXT,                          -- 'operator' | 'auto-sweep' | tool name
+  confidence REAL,
+  reason TEXT,
+  status TEXT NOT NULL DEFAULT 'applied' CHECK(status IN ('applied','reverted')),
+  created_at INTEGER NOT NULL,
+  reverted_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_corr_status ON corrections(status);
+CREATE INDEX IF NOT EXISTS idx_corr_from ON corrections(from_target);
 `;
 
 function init(opts = {}) {
@@ -136,6 +155,8 @@ function init(opts = {}) {
     if (!cols.has('photo_url')) db.exec(`ALTER TABLE targets ADD COLUMN photo_url TEXT`);
     if (!cols.has('photo_path')) db.exec(`ALTER TABLE targets ADD COLUMN photo_path TEXT`);
     if (!cols.has('face_embedding')) db.exec(`ALTER TABLE targets ADD COLUMN face_embedding TEXT`);
+    // F4: merged_into points a tombstoned (merged-away) target at its survivor; NULL = live.
+    if (!cols.has('merged_into')) db.exec(`ALTER TABLE targets ADD COLUMN merged_into INTEGER`);
   } catch (e) { /* fresh DB already has them via SCHEMA */ }
   return db;
 }
@@ -158,10 +179,11 @@ function createTarget({ kind = 'person', name, company = null, domain = null, fu
   return getTarget(info.lastInsertRowid);
 }
 function getTarget(id) { return _db().prepare(`SELECT * FROM targets WHERE id = ?`).get(id) || null; }
-function listTargets({ status = null, domain = null, limit = 200, offset = 0 } = {}) {
+function listTargets({ status = null, domain = null, limit = 200, offset = 0, includeMerged = false } = {}) {
   const where = [], args = [];
   if (status) { where.push('status = ?'); args.push(status); }
   if (domain) { where.push('domain = ?'); args.push(domain); }
+  if (!includeMerged) where.push('merged_into IS NULL');   // F4: merged-away targets are hidden by default
   const sql = `SELECT * FROM targets ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
                ORDER BY last_accessed_at DESC LIMIT ? OFFSET ?`;
   return _db().prepare(sql).all(...args, limit, offset);
@@ -172,9 +194,16 @@ function findTargetByEmail(email) {
   const e = String(email == null ? '' : email).trim().toLowerCase();
   if (!e) return null;
   const b = _db().prepare(`SELECT target_id FROM beliefs WHERE type='email' AND lower(value) = ? ORDER BY id LIMIT 1`).get(e);
-  if (b) return getTarget(b.target_id);
+  if (b) return liveTarget(b.target_id);
   const o = _db().prepare(`SELECT target_id FROM observations WHERE attr='email' AND lower(value) = ? ORDER BY id LIMIT 1`).get(e);
-  return o ? getTarget(o.target_id) : null;
+  return o ? liveTarget(o.target_id) : null;
+}
+// Follow a target's merge chain to the surviving row (so a resolver never hands back a tombstone).
+function liveTarget(id, guard = 0) {
+  const t = getTarget(id);
+  if (!t) return null;
+  if (t.merged_into != null && guard < 20) return liveTarget(t.merged_into, guard + 1);
+  return t;
 }
 
 // Resolve a target by NAME — for meeting-mention → known-card resolution ("Russ" pops Russ Walker's card).
@@ -185,7 +214,7 @@ function findTargetByName(name) {
   const n = String(name == null ? '' : name).replace(/\s+/g, ' ').trim().toLowerCase()
     .replace(/^(sen|rep|dr|mr|mrs|ms|hon|gov|rev|prof|amb|congressman|congresswoman|senator|representative)\.?\s+/i, '').trim();
   if (n.length < 2) return null;
-  const rows = _db().prepare(`SELECT * FROM targets`).all();
+  const rows = _db().prepare(`SELECT * FROM targets WHERE merged_into IS NULL`).all();
   let hits = rows.filter((t) => String(t.name || '').toLowerCase() === n);
   if (hits.length) return hits.length === 1 ? hits[0] : null;
   hits = rows.filter((t) => {
@@ -339,12 +368,108 @@ function updateRetest(id, { status = null, patternsTried = null, nextPattern = n
   return _retestRow(_db().prepare(`SELECT * FROM retest_queue WHERE id = ?`).get(id));
 }
 
+// ---- corrections (F4: reversible identity fixes — merge / reassign / split) ----------------------
+
+function _logCorrection({ op, fromTarget = null, intoTarget = null, movedObs = [], actor = 'operator',
+                         confidence = null, reason = null }) {
+  const info = _db().prepare(
+    `INSERT INTO corrections (op, from_target, into_target, moved_obs, actor, confidence, reason, status, created_at)
+     VALUES (?,?,?,?,?,?,?, 'applied', ?)`
+  ).run(op, fromTarget, intoTarget, j(movedObs), actor, confidence, reason, now());
+  return info.lastInsertRowid;
+}
+function getCorrection(id) {
+  const r = _db().prepare(`SELECT * FROM corrections WHERE id = ?`).get(id);
+  return r ? { ...r, moved_obs: pj(r.moved_obs, []) } : null;
+}
+function listCorrections({ status = null, limit = 200 } = {}) {
+  const where = [], args = [];
+  if (status) { where.push('status = ?'); args.push(status); }
+  return _db().prepare(`SELECT * FROM corrections ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+                        ORDER BY created_at DESC LIMIT ?`).all(...args, limit)
+    .map(r => ({ ...r, moved_obs: pj(r.moved_obs, []) }));
+}
+
+// Merge `fromId` INTO `intoId`: move every observation, adopt any belief the survivor lacks (or that the
+// donor holds at higher confidence), then tombstone the donor (merged_into = survivor). Fully reversible
+// via unmergeTarget — the correction row records exactly which observations moved.
+function mergeTarget(fromId, intoId, { actor = 'operator', confidence = null, reason = null } = {}) {
+  if (fromId === intoId) throw new Error('mergeTarget: cannot merge a target into itself');
+  const from = getTarget(fromId), into = getTarget(intoId);
+  if (!from || !into) throw new Error('mergeTarget: both targets must exist');
+  if (from.merged_into != null) throw new Error('mergeTarget: source already merged');
+  const tx = _db().transaction(() => {
+    const obs = _db().prepare(`SELECT id FROM observations WHERE target_id = ?`).all(fromId).map(r => r.id);
+    for (const oid of obs) _db().prepare(`UPDATE observations SET target_id = ? WHERE id = ?`).run(intoId, oid);
+    // adopt donor beliefs the survivor is missing or holds weaker
+    for (const b of listBeliefs(fromId)) {
+      const cur = getBelief(intoId, b.type);
+      if (!cur || (Number(b.confidence) || 0) > (Number(cur.confidence) || 0)) {
+        upsertBelief(intoId, b.type, { value: b.value, confidence: b.confidence,
+          derivation: `merged-from:${fromId}`, supportingObs: b.supporting_obs, status: 'active' });
+      }
+    }
+    _db().prepare(`UPDATE targets SET merged_into = ?, last_accessed_at = ? WHERE id = ?`).run(intoId, now(), fromId);
+    return _logCorrection({ op: 'merge', fromTarget: fromId, intoTarget: intoId, movedObs: obs, actor, confidence, reason });
+  });
+  const correctionId = tx();
+  return { correctionId, movedObs: getCorrection(correctionId).moved_obs.length, into: getTarget(intoId) };
+}
+
+// Undo any correction: move its recorded observations back to the donor and un-tombstone (merge), or back
+// to the source (reassign/split). Belief edits are left as-is (append-only history); the identity linkage
+// — which is what corrupts recall — is what gets restored.
+function unmergeTarget(correctionId) {
+  const c = getCorrection(correctionId);
+  if (!c || c.status !== 'applied') return null;
+  const tx = _db().transaction(() => {
+    const back = c.op === 'split' ? c.from_target : c.from_target;   // observations always return to from_target
+    for (const oid of (c.moved_obs || [])) _db().prepare(`UPDATE observations SET target_id = ? WHERE id = ?`).run(back, oid);
+    if (c.op === 'merge') _db().prepare(`UPDATE targets SET merged_into = NULL, last_accessed_at = ? WHERE id = ?`).run(now(), c.from_target);
+    _db().prepare(`UPDATE corrections SET status = 'reverted', reverted_at = ? WHERE id = ?`).run(now(), correctionId);
+  });
+  tx();
+  return { reverted: correctionId, op: c.op, restored: (c.moved_obs || []).length };
+}
+
+// Reassign ONE observation to another target (operator: "this evidence belongs to a different person").
+function reassignObservation(obsId, toTargetId, { actor = 'operator', reason = null } = {}) {
+  const o = _db().prepare(`SELECT * FROM observations WHERE id = ?`).get(obsId);
+  if (!o) throw new Error('reassignObservation: no such observation');
+  if (!getTarget(toTargetId)) throw new Error('reassignObservation: destination target missing');
+  const fromId = o.target_id;
+  _db().prepare(`UPDATE observations SET target_id = ? WHERE id = ?`).run(toTargetId, obsId);
+  const correctionId = _logCorrection({ op: 'reassign', fromTarget: fromId, intoTarget: toTargetId, movedObs: [obsId], actor, reason });
+  return { correctionId, from: fromId, to: toTargetId };
+}
+
+// Split: pull a subset of observations off `fromId` into a NEW target (operator: "this attractor is really
+// two people"). Creates the new target and moves the given observations to it; reversible.
+function splitTarget(fromId, { obsIds = [], name, company = null, domain = null, actor = 'operator', reason = null } = {}) {
+  const from = getTarget(fromId);
+  if (!from) throw new Error('splitTarget: source missing');
+  if (!name) throw new Error('splitTarget: new target name required');
+  if (!Array.isArray(obsIds) || !obsIds.length) throw new Error('splitTarget: obsIds required');
+  const tx = _db().transaction(() => {
+    const t = createTarget({ kind: from.kind, name, company: company || from.company, domain: domain || from.domain });
+    const moved = [];
+    for (const oid of obsIds) {
+      const o = _db().prepare(`SELECT target_id FROM observations WHERE id = ?`).get(oid);
+      if (o && o.target_id === fromId) { _db().prepare(`UPDATE observations SET target_id = ? WHERE id = ?`).run(t.id, oid); moved.push(oid); }
+    }
+    const correctionId = _logCorrection({ op: 'split', fromTarget: fromId, intoTarget: t.id, movedObs: moved, actor, reason });
+    return { correctionId, newTargetId: t.id, moved: moved.length };
+  });
+  return tx();
+}
+
 module.exports = {
   init, close,
-  createTarget, getTarget, listTargets, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName,
+  createTarget, getTarget, liveTarget, listTargets, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName,
   addObservation, listObservations,
   upsertBelief, getBelief, listBeliefs,
   getPatternState, savePatternState,
   proposeRevision, decideRevision, listRevisions,
   enqueueRetest, listRetests, updateRetest,
+  mergeTarget, unmergeTarget, reassignObservation, splitTarget, getCorrection, listCorrections,
 };
