@@ -987,8 +987,24 @@ app.whenReady().then(() => {
         let srep = null; try { srep = JSON.parse(sr && sr.text); } catch {}
         if (srep && srep.considered != null) { strongApplied = srep.applied || 0; emitAbsorb(srep); }
       } catch (e) { console.error('[kg-nightly] name-strong pass failed:', e.message); }
+      // 4) LINK LANE — refresh the co-source candidate pool (run_link_candidates, idempotent signature-dedupe)
+      //    then GROUND a bounded batch through the citation-verify gate (run_link_grounding: web-search →
+      //    cloud-cite-a-REAL-url → fetch+verify → only a VERIFIED citation mints a grounded relation_proposal).
+      //    Network+cloud-bound, not CPU — a modest nightly bite (ZOE_KG_NIGHTLY_LINK_BATCH, 0 disables). The
+      //    one-time ~4k backlog drains over many nights; raise the knob to accelerate, drop it back after.
+      let linkGrounded = 0;
+      const _lb = parseInt(process.env.ZOE_KG_NIGHTLY_LINK_BATCH || '', 10);
+      const LINK_BATCH = Number.isFinite(_lb) ? _lb : 20;
+      if (LINK_BATCH > 0) {
+        try {
+          await echoSuit.dispatch({ kind: 'do', name: 'run_link_candidates', args: {} });   // land/refresh the pool
+          const lr = await echoSuit.dispatch({ kind: 'do', name: 'run_link_grounding', args: { limit: LINK_BATCH } });
+          let lrep = null; try { lrep = JSON.parse(lr && lr.text); } catch {}
+          if (lrep && lrep.grounded != null) linkGrounded = lrep.grounded || 0;
+        } catch (e) { console.error('[kg-nightly] link grounding failed:', e.message); }
+      }
       const total = anchoredApplied + strongApplied;
-      console.log(`[kg-nightly] full sweep: +${swept} proposals; drained ${anchoredApplied} anchored + ${strongApplied} name-strong = ${total} merges`);
+      console.log(`[kg-nightly] full sweep: +${swept} proposals; drained ${anchoredApplied} anchored + ${strongApplied} name-strong = ${total} merges; +${linkGrounded} grounded links`);
       if (total > 0 || swept > 0) {
         const text = `[Nightly upkeep] Full graph sweep: ${swept} new duplicate proposal${swept === 1 ? '' : 's'} found, and I reversibly merged ${total} confirmed duplicate${total === 1 ? '' : 's'} (${anchoredApplied} anchored + ${strongApplied} fuzzy name-match) — each LLM-verified and undoable.`;
         const row = db.insertMonologue({ content: text, model: 'kg-nightly', type: 'reading' });
@@ -1690,15 +1706,18 @@ app.whenReady().then(() => {
           // VISIBLE tiles stop buffering (captions are DOM text, unaffected). Env-tunable if the vision-read needs more detail.
           captureW: parseInt(process.env.NEWS_VIDEO_CAPTURE_W || '', 10) || 640,
           captureH: parseInt(process.env.NEWS_VIDEO_CAPTURE_H || '', 10) || 360,
-          // vision-read each captured frame → on-screen market data (tickers/indexes/charts) as text. Pinned to
-          // mistral-large-3:675b (it IS multimodal and reads frames more thoroughly than gemma4:31b — proven on
-          // real Yahoo frames); scoped to the screen-read only, NOT her general vision. Overridable via env/meta.
-          visionRead: async ({ base64 }) => {
-            const screenModel = process.env.NEWS_VIDEO_VISION_MODEL
-              || (() => { try { return db.getMeta('model.news_vision'); } catch { return null; } })()
-              || 'mistral-large-3:675b';
-            return require('./lib/vision').describe({ imageBase64: base64, prompt: videoCapture.SCREEN_READ_PROMPT, model: screenModel });
-          },
+          // SCREEN VISION-READ — OFF by default (Lucas 2026-07-07: the chart screen-read wasn't producing enough
+          // signal to justify running a 675b multimodal model on captured frames). With visionRead null the lane
+          // skips screenshots ENTIRELY (no capturePage / PNG / model call) — only the closed-CAPTION reading runs,
+          // which is where the value is. Re-enable with NEWS_VIDEO_VISION=1 (model via NEWS_VIDEO_VISION_MODEL).
+          visionRead: /^(1|true|yes|on)$/i.test(String(process.env.NEWS_VIDEO_VISION || '').trim())
+            ? async ({ base64 }) => {
+              const screenModel = process.env.NEWS_VIDEO_VISION_MODEL
+                || (() => { try { return db.getMeta('model.news_vision'); } catch { return null; } })()
+                || 'mistral-large-3:675b';
+              return require('./lib/vision').describe({ imageBase64: base64, prompt: videoCapture.SCREEN_READ_PROMPT, model: screenModel });
+            }
+            : null,
           log: (m) => console.log(m),
         });
         newsVideoLane.start();
