@@ -268,7 +268,7 @@ function ensureGraph() {
       const r = nodeRadius(n), col = n.color || '#7dd3fc';
       const bornFade = n.bornAt ? Math.min(1, (performance.now() - n.bornAt) / 450) : 1;   // new nodes materialise in
       // (3) soma breathing — a slow, subtle brightness pulse per node, like a living cell at rest
-      const breathe = prefersReducedMotion ? 1 : (0.9 + 0.1 * Math.sin(performance.now() / 1000 * 0.85 + (n.__ph != null ? n.__ph : (n.__ph = (n.x * 0.7 + n.y * 0.3) % 6.283))));
+      const breathe = prefersReducedMotion ? 1 : (0.8 + 0.2 * Math.sin(performance.now() / 1000 * 0.9 + (n.__ph != null ? n.__ph : (n.__ph = (n.x * 0.7 + n.y * 0.3) % 6.283))));
       const nodeAlpha = bornFade * breathe;
       if (nodeAlpha < 1) ctx.globalAlpha = nodeAlpha;
       // lit node: a soft same-hue glow (scales with radius → hubs shine brighter) makes the disk read as a
@@ -459,12 +459,12 @@ function mergeEgo(res) {
   const jit = () => (Math.random() - 0.5) * 40;
   for (const inc of incoming) {
     let node = world.nodes.get(inc.id);
-    if (node) { node.touchedAt = now; node.entityType = inc.entityType; node.color = inc.color; if (inc.summary) node.summary = inc.summary; }
+    if (node) { node.touchedAt = now; node.entityType = inc.entityType; node.color = inc.color; if (inc.summary) node.summary = inc.summary; if (typeof inc.degree === 'number') node.degree = inc.degree; }
     else {
       let sx = seedX, sy = seedY;
       const nbr = connectedTo.get(inc.id), nn = nbr && world.nodes.get(nbr);
       if (nn && Number.isFinite(nn.x)) { sx = nn.x; sy = nn.y; }
-      node = { id: inc.id, entityType: inc.entityType, color: inc.color, summary: inc.summary || null, bornAt: now, touchedAt: now, x: sx + jit(), y: sy + jit() };
+      node = { id: inc.id, entityType: inc.entityType, color: inc.color, summary: inc.summary || null, degree: inc.degree, bornAt: now, touchedAt: now, x: sx + jit(), y: sy + jit() };
       world.nodes.set(inc.id, node);
     }
     if (inc.id === fId) node.isFocal = true;
@@ -654,4 +654,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-09h: neuron lean-in (signal pulses + dendritic branching + soma breathing + synapse glints)');
+console.info('[kg] surface build 2026-07-09i: FIX world nodes carry degree (tendrils+motes in Follow) + deeper soma breathing');
