@@ -293,6 +293,14 @@ function listObservations(targetId, { attr = null } = {}) {
   return _db().prepare(`SELECT * FROM observations WHERE ${where.join(' AND ')} ORDER BY captured_at ASC, id ASC`)
     .all(...args).map(_obsRow);
 }
+// Per-node BLACKLIST: the set of email addresses that have BOUNCED for this target (lower-cased). The
+// next-guess logic must never re-offer any of these — this is the durable "don't retry a dead address"
+// record (the bounce observations already store it; this is the read the guard consults).
+function failedAddresses(targetId) {
+  return new Set(_db().prepare(
+    `SELECT DISTINCT LOWER(value) v FROM observations WHERE target_id = ? AND kind = 'bounce' AND value LIKE '%@%'`
+  ).all(targetId).map((r) => r.v));
+}
 
 // ---- beliefs (one active per (target, type)) -----------------------------------------------------
 
@@ -516,7 +524,7 @@ function splitTarget(fromId, { obsIds = [], name, company = null, domain = null,
 module.exports = {
   init, close,
   createTarget, getTarget, liveTarget, listTargets, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName,
-  addObservation, listObservations,
+  addObservation, listObservations, failedAddresses,
   upsertBelief, getBelief, listBeliefs, markSendState, listBeliefsBySendState,
   getPatternState, savePatternState,
   proposeRevision, decideRevision, listRevisions,

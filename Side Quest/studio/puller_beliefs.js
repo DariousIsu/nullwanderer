@@ -234,8 +234,12 @@ function bestPattern(state) { return bestUnusedPattern(state, []); }
 // The next email to actually try for a person: the highest-belief untried pattern that DERIVES a
 // non-empty address for this name (skips middle-name patterns when there's no middle token). Returns
 // { pattern, email } or null when nothing derivable remains.
-function nextCandidate(state, name, domain, alreadyTried) {
+function nextCandidate(state, name, domain, alreadyTried, { excludeEmails = null } = {}) {
   const tried = new Set((alreadyTried || []).map(String));
+  // BLACKLIST: a hard per-node dead-address guard — never return an email that already bounced for this
+  // person, even if its pattern still ranks (the pattern belief is domain-level; the bounce is personal).
+  const bad = excludeEmails instanceof Set ? excludeEmails
+    : new Set((excludeEmails || []).map((e) => String(e).toLowerCase()));
   const ranked = [];
   PATTERN_PRIORITY.forEach((p, i) => {
     if (tried.has(p)) return;
@@ -245,9 +249,9 @@ function nextCandidate(state, name, domain, alreadyTried) {
   ranked.sort((a, b) => (b.b - a.b) || (a.i - b.i));
   for (const { p } of ranked) {
     const email = deriveEmail(name, domain, p);
-    if (email) return { pattern: p, email };
+    if (email && !bad.has(String(email).toLowerCase())) return { pattern: p, email };
   }
-  return null;
+  return null;   // every derivable pattern is tried or blacklisted → caller marks the belief 'exhausted'
 }
 
 module.exports = {

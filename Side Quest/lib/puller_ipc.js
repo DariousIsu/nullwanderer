@@ -273,7 +273,7 @@ const _cap = (s) => { const x = String(s || '').replace(/[^a-z0-9'’-]+/gi, ' '
 // the person as a prospect (the email is a STRONG identity anchor, unlike a bare name, so no attractor risk)
 // and let the normal pipeline harvest the domain-pattern signal + propose the next pattern. Role addresses
 // (info@/support@) are NOT minted as a person (FP2). Returns {minted|roleSkipped|skipped, targetId?, flip?}.
-function harvestUnmatched(email, result, { testList = false, suppression = false } = {}) {
+function harvestUnmatched(email, result, { testList = false, suppression = false, sourceRef = null } = {}) {
   const p = prefilter.parts(email);
   if (!p.domain || !p.local) return { skipped: 'unparseable' };
   if (prefilter.isRole(p.local)) return { roleSkipped: true };            // a shared mailbox isn't a person
@@ -287,11 +287,11 @@ function harvestUnmatched(email, result, { testList = false, suppression = false
   // (drives the domain-pattern belief + qualification + next-pattern proposal). Idempotent so a re-upload
   // that later finds this now-existing target won't double-apply.
   db.upsertBelief(t.id, 'email', { value: email, confidence: 0.3, derivation: 'harvested' });
-  db.addObservation(t.id, { attr: 'email', value: email, kind: 'harvested', source: 'harvest', meta: { weight: testList ? 'test' : 'opportunistic' } });
-  if (suppression) db.addObservation(t.id, { attr: 'email', value: email, kind: 'suppressed', source: 'harvest', meta: { suppression: true } });
+  db.addObservation(t.id, { attr: 'email', value: email, kind: 'harvested', source: 'harvest', sourceUrl: sourceRef, meta: { weight: testList ? 'test' : 'opportunistic' } });
+  if (suppression) db.addObservation(t.id, { attr: 'email', value: email, kind: 'suppressed', source: 'harvest', sourceUrl: sourceRef, meta: { suppression: true } });
   let flip = false;
   if (result === 'invalid' || result === 'valid') {
-    const o = revise.applyVerification(t.id, { value: email, result, idempotent: true });
+    const o = revise.applyVerification(t.id, { value: email, result, idempotent: true, sourceUrl: sourceRef });
     flip = !!o.revisionId;
   }
   return { minted: true, targetId: t.id, name, flip };
@@ -300,8 +300,11 @@ function harvestUnmatched(email, result, { testList = false, suppression = false
 // Shared bounce-application path (used by ingest-bounces + the back-compat alias + the drop-zone tick).
 // Parses ANY format, resolves each email to a target, and applies the canonical result — with complaints
 // recorded as suppression markers (do-not-send) that never flip a validity belief.
-function applyBounceRows(text, { format = null, testList = false } = {}) {
+function applyBounceRows(text, { format = null, testList = false, sourceRef = null } = {}) {
   const { rows, dropped, meta, format: fmt } = normalizer.parse(text, { format, testList });
+  // CITATION for the validating source: prefer the caller's log ref (filename/upload id), else the detected
+  // vendor/format — so every verify/bounce observation records WHERE the deliverability signal came from.
+  const verifyRef = sourceRef || (meta && meta.vendor ? `verify:${meta.vendor}` : `verify:${fmt || 'log'}`);
   // COLLAPSE duplicate events per mailbox FIRST — a report with N events for one address is ONE signal,
   // not N (else: inflated Beta misses, duplicate flip revisions, false gateway-block from a single box).
   const collapsed = normalizer.collapseByEmail(rows);
@@ -313,7 +316,7 @@ function applyBounceRows(text, { format = null, testList = false } = {}) {
       // FP1: don't discard the drop — harvest it (mint the prospect + domain-pattern signal) unless it's a
       // weak result (soft/silent) or a role address, which never mints a person.
       if (row.result === 'invalid' || row.result === 'valid' || row.suppression) {
-        const h = harvestUnmatched(row.email, row.result, { testList, suppression: row.suppression });
+        const h = harvestUnmatched(row.email, row.result, { testList, suppression: row.suppression, sourceRef: verifyRef });
         if (h.roleSkipped) summary.roleSkipped++;
         else if (h.minted) { summary.minted++; if (h.flip) summary.flips++; if (row.suppression) summary.suppressed++; }
         else summary.unmatched++;
@@ -330,7 +333,7 @@ function applyBounceRows(text, { format = null, testList = false } = {}) {
     }
     // a mailbox can both complain (suppression) AND hard-bounce — still apply the deliverability result.
     if (row.result === 'invalid' || row.result === 'valid') {
-      const o = revise.applyVerification(t.id, { value: row.email, result: row.result, idempotent: true });
+      const o = revise.applyVerification(t.id, { value: row.email, result: row.result, idempotent: true, sourceUrl: verifyRef });
       if (o.skipped) { /* FP13: a re-uploaded duplicate — counted matched, not re-applied */ }
       else { summary.applied++; if (o.revisionId) summary.flips++; if (o.infraSuspect) summary.infra++; }
     } else if (!row.suppression) {

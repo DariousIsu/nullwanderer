@@ -79,6 +79,30 @@ const casc = R.cascadeForDomain('acme.com');
 ok('cascade re-derives stale next-pattern → f.last', casc.some(c => c.id === rid && c.to === 'f.last'));
 ok('cascade persisted the new next_pattern', (DB.listRetests({ status: 'queued' }).find(r => r.id === rid) || {}).next_pattern === 'f.last');
 
+// ---- 8. CITATION: verification carries its source_url + the belief carries a supporting_obs chain ----
+const tc = DB.createTarget({ name: 'Cite Test', company: 'Acme', domain: 'cite.com' });
+DB.addObservation(tc.id, { attr: 'email', value: 'cite.test@cite.com', kind: 'pattern', source: 'seed' });
+DB.upsertBelief(tc.id, 'email', { value: 'cite.test@cite.com', confidence: 0.80 });
+R.applyVerification(tc.id, { value: 'cite.test@cite.com', result: 'valid', sourceUrl: 'verify:resend#batch99' });
+const cobs = DB.listObservations(tc.id, { attr: 'email' }).find((o) => o.kind === 'verified');
+ok('CITATION: verified obs carries the delivery-log source_url', cobs && cobs.source_url === 'verify:resend#batch99');
+ok('CITATION: belief carries a supporting_obs evidence chain', (DB.getBelief(tc.id, 'email').supporting_obs || []).length > 0);
+
+// ---- 9. BLACKLIST: never re-offer a dead address; accumulate across bounces ----
+let bst = B.emptyState();
+['first.last', 'flast', 'firstlast'].forEach((p) => { bst = B.updateBelief(bst, p, 'valid'); });
+const guard = B.nextCandidate(bst, 'Ada Byte', 'blk.com', [], { excludeEmails: new Set(['ada.byte@blk.com']) });
+ok('BLACKLIST: nextCandidate skips a blacklisted address even if its pattern ranks', guard && guard.email !== 'ada.byte@blk.com');
+const tb = DB.createTarget({ name: 'Ada Byte', company: 'Blk', domain: 'blk.com' });
+DB.savePatternState('blk.com', bst);
+DB.upsertBelief(tb.id, 'email', { value: 'ada.byte@blk.com', confidence: 0.80 });
+const bl1 = R.applyVerification(tb.id, { value: 'ada.byte@blk.com', result: 'invalid' });
+R.decideRevision(bl1.revisionId, 'accepted');
+const held1 = DB.getBelief(tb.id, 'email').value;                    // flipped to flast (abyte@blk.com)
+const bl2 = R.applyVerification(tb.id, { value: held1, result: 'invalid' });
+ok('BLACKLIST: 2nd flip avoids BOTH prior dead addresses', bl2.patternFlip && bl2.patternFlip.to !== 'ada.byte@blk.com' && bl2.patternFlip.to !== held1);
+ok('BLACKLIST: failedAddresses records every bounce for the node', DB.failedAddresses(tb.id).size === 2);
+
 DB.close();
 console.log(`\nsmoke_puller_revise: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

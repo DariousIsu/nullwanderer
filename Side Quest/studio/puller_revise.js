@@ -36,15 +36,20 @@ const KIND = { valid: 'verified', deliverable: 'verified', invalid: 'bounce', un
 function requalifyEmail(targetId, heldValue) {
   const obs = db.listObservations(targetId, { attr: 'email' });
   const q = Q.qualify(obs, heldValue);
+  // CITATION CHAIN: link the belief to the observations that support its held value (its evidence trail),
+  // so the node's email carries provenance when it's pulled / promoted / exported (was 0/11k before).
+  const held = String(heldValue || '').toLowerCase();
+  const supportingObs = obs.filter((o) => String(o.value || '').toLowerCase() === held).map((o) => o.id);
   db.upsertBelief(targetId, 'email', {
     value: heldValue, confidence: q.confidence,
     derivation: `qualified:${q.grade || 'none'}${q.conflicted ? '/conflict' : ''}`,
+    supportingObs,
   });
   return q;
 }
 
 // Apply one verification result to a contact's email (the funnel for manual / file / API negatives).
-function applyVerification(targetId, { value, result, idempotent = false } = {}) {
+function applyVerification(targetId, { value, result, idempotent = false, sourceUrl = null, source = 'verification' } = {}) {
   const t = db.getTarget(targetId);
   if (!t) throw new Error(`applyVerification: no target ${targetId}`);
   const email = norm(value);
@@ -71,7 +76,7 @@ function applyVerification(targetId, { value, result, idempotent = false } = {})
   // observation (qualify() ignores 'catchall_accept') so a test-send to a catch-all can't fabricate a grade-B.
   if (obsKind === 'verified' && B.isCatchAll(st)) { obsKind = 'catchall_accept'; out.catchAll = true; }
 
-  out.observationId = db.addObservation(targetId, { attr: 'email', value: email, kind: obsKind, source: 'verification', meta: { result: r } });
+  out.observationId = db.addObservation(targetId, { attr: 'email', value: email, kind: obsKind, source, sourceUrl, meta: { result: r } });   // CITATION: the validating source (delivery log / vendor) is now attached
   if (obsKind === 'accept_all') {
     st = B.updateBelief(st, null, 'accept_all'); db.savePatternState(domain, st); out.catchAll = true;
   } else if (domain && (r === 'valid' || r === 'deliverable' || r === 'invalid' || r === 'undeliverable') && !B.isCatchAll(st)) {
@@ -96,9 +101,16 @@ function applyVerification(targetId, { value, result, idempotent = false } = {})
       // not a pattern miss — pausing beats burning retests + chasing the wrong fix. No flip, no retest.
       out.infraSuspect = true;
     } else {
+      // BLACKLIST: accumulate EVERY dead address for this node (all prior bounces incl. the one just
+      // recorded at line ~74) and every burned pattern, so the next guess never re-offers an address that
+      // already bounced. When all derivable patterns are tried/blacklisted, nextCandidate returns null → no
+      // flip → the belief marks send_state='exhausted' (clean convergence instead of a retry cycle).
+      const failed = db.failedAddresses(targetId);
       const usedPat = B.detectPatternUsed(heldValue, t.name, domain);
-      const tried = usedPat ? [usedPat] : [];
-      const nc = B.nextCandidate(st, t.name, domain, tried);   // skips non-derivable (e.g. middle-name) patterns
+      const triedPatterns = new Set(usedPat ? [usedPat] : []);
+      for (const dead of failed) { const dp = B.detectPatternUsed(dead, t.name, domain); if (dp) triedPatterns.add(dp); }
+      const tried = [...triedPatterns];
+      const nc = B.nextCandidate(st, t.name, domain, tried, { excludeEmails: failed });   // pattern + hard address guard
       if (nc) {
         out.patternFlip = { from: heldValue, fromPattern: usedPat, toPattern: nc.pattern, to: nc.email };
         out.revisionId = db.proposeRevision({
@@ -109,7 +121,7 @@ function applyVerification(targetId, { value, result, idempotent = false } = {})
         out.retestId = db.enqueueRetest({
           targetId, person: t.name, company: t.company, domain,
           patternsTried: tried, nextPattern: nc.pattern,
-          previousAttempts: [{ email: heldValue, result: r }],
+          previousAttempts: [...failed].map((e) => ({ email: e, result: 'invalid' })),
         });
       }
     }
