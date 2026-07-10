@@ -824,6 +824,11 @@ function pulse({ mag = 1.6, ring = 1 } = {}) {
 function onFocusMove(p) {
   if (!p || !p.anchor) return;
   lastMove = p; renderNow();
+  // BRIDGE the LIVE subconscious walk into the activity bus (renderer-only, no new channel/reboot): each
+  // walk step is real Echo enrichment work, so the worked node BREATHES if it's in view, else it flares as
+  // far-field weather. This makes the panel visibly react to what she's doing even before the full kg:activity
+  // feed lands. (In Follow mode the growth pulse below still fires too — complementary.)
+  try { onActivity({ db: 'echo', kind: 'node.enrich', anchor: p.anchor, count: 1 }); } catch (e) {}
   // growth tier: re-center on the exact node, then pulse (coalesced through the metabolism core)
   if (follow && p.anchor !== submitted) focus(p.anchor, { query: p.canonical || p.anchor, soft: true }).then(() => ingestPulse({ tier: 'growth', anchor: p.anchor, count: 1 })).catch(() => {});
 }
