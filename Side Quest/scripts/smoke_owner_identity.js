@@ -69,6 +69,8 @@ ok('GUARD: a stranger is not self', db.isSelfName('Zoe Logren') === false);
     ok('detectMention SUPPRESSES a self-name mention', (await M.detectMention('Zoe, what is my name?', { deps: { noCloud: true } })) === null);
     ner.topMention = async () => ({ mention: 'L. Overby', kgType: 'person', score: 0.9 });
     ok('detectMention SUPPRESSES an owner-name mention', (await M.detectMention('what office did L. Overby run for?', { deps: { noCloud: true } })) === null);
+    ner.topMention = async () => ({ mention: 'Z', kgType: 'person', score: 0.9 });
+    ok('detectMention SUPPRESSES a bare single-letter mention ("Z" from "Hey Zo")', (await M.detectMention('Hey Zo, what did I run for?', { deps: { noCloud: true } })) === null);
     ner.topMention = async () => ({ mention: 'Zoe Halfmann', kgType: 'person', score: 0.9 });
     const kept = await M.detectMention('tell me about Zoe Halfmann', { deps: { noCloud: true } });
     ok('detectMention KEEPS a real distinct same-first-name person (Zoe Halfmann)', kept && kept.mention === 'Zoe Halfmann');

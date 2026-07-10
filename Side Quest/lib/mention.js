@@ -102,7 +102,10 @@ async function detectMention(text, { context = '', deps = {} } = {}) {
   // match (isSelfName/isOwnerName are exact-alias), so a real "Zoe Halfmann" / "Lucas Smith" is untouched.
   try {
     const db = require('./db');
-    if (db.isSelfName(result.mention) || db.isOwnerName(result.mention)) return null;
+    const m = result.mention || '';
+    // a bare initial ("Z" from "Hey Zo") is never a civic entity — suppress it before it disambiguates junk
+    if (m.replace(/[^a-zA-Z0-9]/g, '').length <= 1) return null;
+    if (db.isSelfName(m) || db.isOwnerName(m)) return null;
   } catch { /* db not ready → leave mention as-is */ }
 
   return result;
