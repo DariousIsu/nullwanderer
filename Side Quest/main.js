@@ -825,10 +825,54 @@ app.whenReady().then(() => {
           }
         }
       }
+      // SEMANTIC (ANN) pass — the alias/abbreviation dups string blocking can't see ("Bob"~"Robert",
+      // "St"~"Saint"). ALWAYS incremental (query only changed nodes against the standing FAISS index; a full
+      // ANN query is the offline index rebuild, never a tick). A missing/among-building index just skips.
+      try {
+        const annSince = parseInt(db.getMeta('last_kg_dedup_ts') || '0', 10) || (nowSec - 7 * 86400);
+        const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_ann_dedup', args: { changed_since: annSince } });
+        let arep = null; try { arep = JSON.parse(ar && ar.text); } catch {}
+        if (arep && arep.new > 0 && arep.new <= KGDEDUP_SANITY_CAP) {
+          console.log(`[kg-dedup] ANN semantic pass: +${arep.new} alias/abbreviation merge proposals (tier semantic) — pending`);
+        }
+      } catch (e) { /* FAISS index not built yet / ANN unavailable → skip silently */ }
     } catch (e) { console.error('[kg-dedup] paced pass failed:', e.message); }
     finally { kgDedupRunning = false; }
   };
   setInterval(() => { maybeRunKgDedup().catch(() => {}); }, KGDEDUP_CHECK_MS).unref?.();
+  // KG DEDUP ADJUDICATION — the LLM evaluator + AUDITED AUTO-APPLY (Slice B, the merge-gate crosser). Judges
+  // a BOUNDED batch of pending proposals (max rigor, ~20s each) and auto-applies ONLY the anchored +
+  // LLM-confirmed ones through the reversible canonical_id+SAME_AS path, in audited batches (regression check
+  // + quick_check → reverse+halt on failure). Slow → small batch + long floor + idle-gated. SEPARATE flag
+  // ZOE_KG_APPLY_ENABLED (default OFF) — this WRITES the graph. Pull the plug: ZOE_KG_APPLY_ENABLED=0 + reboot.
+  const KGAPPLY_CHECK_MS = (parseFloat(process.env.ZOE_KG_APPLY_CHECK_MIN) || 60) * 60 * 1000;
+  const KGAPPLY_MIN_GAP_MS = (parseFloat(process.env.ZOE_KG_APPLY_MIN_GAP_MIN) || 240) * 60 * 1000;  // 4h floor
+  const KGAPPLY_BATCH = parseInt(process.env.ZOE_KG_APPLY_BATCH || '', 10) || 25;                     // proposals/run
+  const KGAPPLY_IDLE_MS = (parseFloat(process.env.ZOE_KG_APPLY_IDLE_MIN) || 5) * 60 * 1000;
+  let kgApplyRunning = false;
+  const maybeRunAdjudicate = async () => {
+    if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_KG_APPLY_ENABLED || '').trim())) return;  // crosses the merge-gate
+    if (kgApplyRunning) return;
+    if (!echoSuit || !echoSuit.connected) return;
+    if (Date.now() - lastUserTurnTs < KGAPPLY_IDLE_MS) return;   // heavy + writes the graph — never mid-conversation
+    if (Date.now() - parseInt(db.getMeta('last_kg_apply_at') || '0', 10) < KGAPPLY_MIN_GAP_MS) return;  // floor
+    kgApplyRunning = true;
+    db.setMeta('last_kg_apply_at', String(Date.now()));
+    try {
+      const dr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGAPPLY_BATCH } });
+      let rep = null; try { rep = JSON.parse(dr && dr.text); } catch {}
+      if (rep && rep.considered != null) {
+        console.log(`[kg-apply] adjudicated ${rep.considered}: applied ${rep.applied || 0}, parked ${rep.parked || 0}${rep.halted ? ` HALTED(${rep.halted})` : ''}`);
+        if (rep.applied > 0) {
+          const text = `[Memory upkeep] I reviewed and reversibly merged ${rep.applied} confirmed duplicate${rep.applied === 1 ? '' : 's'} — each LLM-verified + structurally anchored, all undoable.`;
+          const row = db.insertMonologue({ content: text, model: 'kg-apply', type: 'reading' });
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
+        }
+      }
+    } catch (e) { console.error('[kg-apply] adjudication failed:', e.message); }
+    finally { kgApplyRunning = false; }
+  };
+  setInterval(() => { maybeRunAdjudicate().catch(() => {}); }, KGAPPLY_CHECK_MS).unref?.();
   // Episodic recall backfill: embed past turns lacking an embedding so "what did we say earlier
   // about X" works over EXISTING history too. The one-shot 300 left ~half of turns unembedded
   // (episodic recall was blind to old history); DRAIN it in bounded batches until caught up, paced
