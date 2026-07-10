@@ -778,6 +778,50 @@ app.whenReady().then(() => {
     finally { dedupRunning = false; }
   };
   setInterval(() => { maybeRunDedup().catch(() => {}); }, DEDUP_CHECK_MS).unref?.();
+  // KG BLOCKING DEDUP — the PACED, event-driven "clean within range" lane (Lucas: faster not instant). Not a
+  // full-corpus firehose: INCREMENTAL — each pass works only the blocks TOUCHED by nodes changed since the
+  // last run (changed_since cursor), so it lands a steady trickle of resolution_proposals as the standard
+  // pipeline fills in nodes. PROPOSAL-ONLY (nothing merged — apply stays gated); an in-line SANITY gate holds
+  // the cursor back on an anomalous burst so nothing runs away. Floored + flagged; a long gap keeps it calm
+  // (dedup is housekeeping, not urgent). Switch ZOE_KG_DEDUP_ENABLED (default OFF — arm deliberately, writes
+  // the master graph's proposal queue). Pull the plug: ZOE_KG_DEDUP_ENABLED=0 + reboot.
+  const KGDEDUP_CHECK_MS = (parseFloat(process.env.ZOE_KG_DEDUP_CHECK_MIN) || 60) * 60 * 1000;   // poll cadence
+  const KGDEDUP_MIN_GAP_MS = (parseFloat(process.env.ZOE_KG_DEDUP_MIN_GAP_MIN) || 180) * 60 * 1000; // floor (3h)
+  const KGDEDUP_SANITY_CAP = parseInt(process.env.ZOE_KG_DEDUP_SANITY_CAP || '', 10) || 8000;      // per-run burst guard
+  let kgDedupRunning = false;
+  const maybeRunKgDedup = async () => {
+    if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_KG_DEDUP_ENABLED || '').trim())) return;  // arm deliberately
+    if (kgDedupRunning) return;
+    if (!echoSuit || !echoSuit.connected) return;
+    if (Date.now() - parseInt(db.getMeta('last_kg_dedup_at') || '0', 10) < KGDEDUP_MIN_GAP_MS) return;  // floor
+    kgDedupRunning = true;
+    db.setMeta('last_kg_dedup_at', String(Date.now()));
+    try {
+      // changed_since = the last CLEAN run's stamp (first run: look back 7d so we don't do a full firehose).
+      const nowSec = Math.floor(Date.now() / 1000);
+      const since = parseInt(db.getMeta('last_kg_dedup_ts') || '0', 10) || (nowSec - 7 * 86400);
+      const dr = await echoSuit.dispatch({ kind: 'do', name: 'run_blocking_dedup', args: { changed_since: since } });
+      let rep = null; try { rep = JSON.parse(dr && dr.text); } catch {}
+      if (rep && rep.new != null) {
+        // IN-LINE AUDIT: an anomalous burst (way past the steady trickle) → do NOT advance the cursor; leave
+        // it for the operator to eyeball (the proposals are harmless/pending, but a spike means something
+        // upstream changed en masse and we don't want to bank it silently).
+        if (rep.new > KGDEDUP_SANITY_CAP) {
+          console.warn(`[kg-dedup] anomalous burst: ${rep.new} new proposals (> ${KGDEDUP_SANITY_CAP}) — cursor held for review`);
+        } else {
+          db.setMeta('last_kg_dedup_ts', String(nowSec));   // advance the cursor only on a clean, in-range run
+          if (rep.new > 0) {
+            console.log(`[kg-dedup] paced pass: +${rep.new} merge proposals (touched ${rep.touched_blocks} blocks, ${rep.pairs} pairs) — pending, operator-gated`);
+            const text = `[Memory upkeep] I found ${rep.new} likely-duplicate object${rep.new === 1 ? '' : 's'} in the neighborhood of what we just learned — queued as reversible merge proposals for review.`;
+            const row = db.insertMonologue({ content: text, model: 'kg-dedup', type: 'reading' });
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
+          }
+        }
+      }
+    } catch (e) { console.error('[kg-dedup] paced pass failed:', e.message); }
+    finally { kgDedupRunning = false; }
+  };
+  setInterval(() => { maybeRunKgDedup().catch(() => {}); }, KGDEDUP_CHECK_MS).unref?.();
   // Episodic recall backfill: embed past turns lacking an embedding so "what did we say earlier
   // about X" works over EXISTING history too. The one-shot 300 left ~half of turns unembedded
   // (episodic recall was blind to old history); DRAIN it in bounded batches until caught up, paced
