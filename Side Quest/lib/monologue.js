@@ -1587,9 +1587,13 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
     try {
       const active = activeSetNames();
       if (!active.length) return [];   // no touched work → skip; global frontier fallback carries the move
+      // INVESTIGATION FRONTIER blast-radius (config knobs): walk `hops` out from his active set, but only
+      // THROUGH non-hub corridors (`hubCap`), and cap the candidate pool at `budget`. Depth-2 gives the
+      // extra reach; the corridor gate is what keeps it from exploding on a power-law graph (see config).
+      const _cfg = require('./config');
       return await idleAnchors.relevantFrontier(active, {
         query: async (sql) => { const r = await dispatch({ kind: 'do', name: 'db_query', args: { sql, params: [] } }); if (!r || !r.ok) return []; try { const j = JSON.parse(r.text); return (j && j.rows) || j || []; } catch { return []; } },
-        limit: FRONTIER_WINDOW, log: (m) => console.log(m)
+        limit: _cfg.investigateBudget(), hops: _cfg.investigateHops(), hubCap: _cfg.investigateHubCap(), log: (m) => console.log(m)
       });
     } catch { return []; }
   };

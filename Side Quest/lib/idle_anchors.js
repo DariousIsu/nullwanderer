@@ -119,7 +119,7 @@ const _RELEVANT_TYPES = ['person', 'organization', 'event', 'government_body'];
 // the raw string (the cleaned "Brad Overcash" hits the document twin, which the type gate then drops).
 // min=0: a freshly-minted doc entity sits at degree 0 until the relations index reindexes on a curation
 // pass — a degree-1 floor excluded Lucas's newest people the moment they landed (a cause of relevant=0).
-function buildRelevantFrontierSql(activeNames, { min = 0, max = 15, limit = 200, types = _RELEVANT_TYPES } = {}) {
+function buildRelevantFrontierSql(activeNames, { min = 0, max = 15, limit = 200, types = _RELEVANT_TYPES, hops = 1, hubCap = 150 } = {}) {
   const forms = new Set();
   let considered = 0;
   for (const nm of (Array.isArray(activeNames) ? activeNames : [])) {
@@ -135,24 +135,41 @@ function buildRelevantFrontierSql(activeNames, { min = 0, max = 15, limit = 200,
   const inList = [...forms].map(_sqlName).join(',');
   const typeList = (Array.isArray(types) && types.length ? types : _RELEVANT_TYPES).map(_sqlName).join(',');
   const mn = Math.max(0, parseInt(min, 10)); const mx = Math.max(mn, parseInt(max, 10) || 15), lim = Math.max(1, parseInt(limit, 10) || 200);
+  const nHops = Math.min(2, Math.max(1, parseInt(hops, 10) || 1));   // 1 or 2 only — depth ≥3 is meta-path work, not blind BFS
+  const cap = Math.max(1, parseInt(hubCap, 10) || 150);
   // UNION: (a) active entities that are themselves under-developed real entities — direct enrichment of
   // what he touched; and (b) their under-developed real-entity neighbors via the relations graph — his
   // rich hubs (Ted Alexander deg 79, the summit deg 29) are kept as e1 SEEDS (no degree cap on e1) so they
   // radiate to thin neighbors, but excluded as enrichment TARGETS (the e2/self degree band skips them).
-  return `SELECT id, name, degree FROM entities`
+  let sql = `SELECT id, name, degree FROM entities`
     + ` WHERE name IN (${inList}) AND entity_type IN (${typeList}) AND degree BETWEEN ${mn} AND ${mx}`
     + ` UNION `
     + `SELECT e2.id, e2.name, e2.degree FROM entities e1`
     + ` JOIN relations r ON (r.source_id = e1.id OR r.target_id = e1.id) AND r.deleted = 0 AND r.tx_to IS NULL`
     + ` JOIN entities e2 ON e2.id = (CASE WHEN r.source_id = e1.id THEN r.target_id ELSE r.source_id END)`
-    + ` WHERE e1.name IN (${inList}) AND e2.entity_type IN (${typeList}) AND e2.degree BETWEEN ${mn} AND ${mx}`
-    + ` ORDER BY degree DESC LIMIT ${lim}`;
+    + ` WHERE e1.name IN (${inList}) AND e2.entity_type IN (${typeList}) AND e2.degree BETWEEN ${mn} AND ${mx}`;
+  // (c) SECOND HOP — e1 → mid → e3, but only PASSING THROUGH a non-hub `mid` (degree ≤ hubCap). The
+  // corridor gate is the whole safety story: without it, one hop through the degree-12,107 node would pull
+  // 12k nodes; with it, `mid` fans ≤ hubCap so the 2-hop reach stays bounded. `mid` may be rich (it's just
+  // the corridor); only the e3 TARGET is held to the thin enrichment band, and it must not circle back to a
+  // seed. UNION (not UNION ALL) dedups a node reachable at both 1 and 2 hops.
+  if (nHops >= 2) {
+    sql += ` UNION `
+      + `SELECT e3.id, e3.name, e3.degree FROM entities e1`
+      + ` JOIN relations r1 ON (r1.source_id = e1.id OR r1.target_id = e1.id) AND r1.deleted = 0 AND r1.tx_to IS NULL`
+      + ` JOIN entities mid ON mid.id = (CASE WHEN r1.source_id = e1.id THEN r1.target_id ELSE r1.source_id END)`
+      + ` JOIN relations r2 ON (r2.source_id = mid.id OR r2.target_id = mid.id) AND r2.deleted = 0 AND r2.tx_to IS NULL`
+      + ` JOIN entities e3 ON e3.id = (CASE WHEN r2.source_id = mid.id THEN r2.target_id ELSE r2.source_id END)`
+      + ` WHERE e1.name IN (${inList}) AND mid.degree <= ${cap}`
+      + ` AND e3.entity_type IN (${typeList}) AND e3.degree BETWEEN ${mn} AND ${mx} AND e3.name NOT IN (${inList})`;
+  }
+  return sql + ` ORDER BY degree DESC LIMIT ${lim}`;
 }
 
 // Run the relevant-frontier query via an injected SQL runner. Returns {id,name,degree} rows (same shape as
 // the global frontier tier) so the assembler treats them identically downstream.
-async function relevantFrontier(activeNames, { query, min, max, limit = 200, log } = {}) {
-  const sql = buildRelevantFrontierSql(activeNames, { min, max, limit });   // undefined min/max → builder's focus defaults (1..15)
+async function relevantFrontier(activeNames, { query, min, max, limit = 200, hops, hubCap, log } = {}) {
+  const sql = buildRelevantFrontierSql(activeNames, { min, max, limit, hops, hubCap });   // undefined min/max → builder's focus defaults (1..15); undefined hops → 1
   if (!sql || typeof query !== 'function') return [];
   try {
     const r = await query(sql);

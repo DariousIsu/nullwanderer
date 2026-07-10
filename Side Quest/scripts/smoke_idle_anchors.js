@@ -91,6 +91,17 @@ const taggedSql = A.buildRelevantFrontierSql(['Brad Overcash [dfacde1f]'], { lim
 ok(taggedSql.includes("'Brad Overcash'") && taggedSql.includes("'Brad Overcash [dfacde1f]'"), 'buildRelevantFrontierSql: matches both cleaned + raw tagged form');
 ok(taggedSql.includes('LIMIT 50'), 'buildRelevantFrontierSql: honors custom limit');
 
+// --- RELEVANT frontier: 2-HOP corridor-gated walk (blast-radius knobs) ---
+const oneHop = A.buildRelevantFrontierSql(['Rainey Center'], { hops: 1 });
+ok((oneHop.match(/UNION/g) || []).length === 1 && !/mid\.degree/.test(oneHop), 'buildRelevantFrontierSql: hops=1 → single UNION, no 2nd-hop corridor');
+const twoHop = A.buildRelevantFrontierSql(['Rainey Center'], { hops: 2, hubCap: 150 });
+ok((twoHop.match(/UNION/g) || []).length === 2, 'buildRelevantFrontierSql: hops=2 → adds the 2nd-hop branch (two UNIONs)');
+ok(/mid\.degree <= 150/.test(twoHop), 'buildRelevantFrontierSql: 2nd hop CORRIDOR-GATED — only passes through non-hub mid nodes (degree ≤ hubCap)');
+ok(/e3\.degree BETWEEN 0 AND 15/.test(twoHop) && /e3\.name NOT IN/.test(twoHop), 'buildRelevantFrontierSql: 2-hop TARGET held to thin band + never circles back to a seed');
+ok(/ORDER BY degree DESC LIMIT/.test(twoHop.slice(twoHop.lastIndexOf('LIMIT') - 40)), 'buildRelevantFrontierSql: ORDER BY/LIMIT applies to the whole compound union');
+ok(/mid\.degree <= 90/.test(A.buildRelevantFrontierSql(['Rainey Center'], { hops: 2, hubCap: 90 })), 'buildRelevantFrontierSql: hubCap is honored');
+ok((A.buildRelevantFrontierSql(['Rainey Center'], { hops: 5 }).match(/UNION/g) || []).length === 2, 'buildRelevantFrontierSql: hops clamped to 2 (depth ≥3 is meta-path, not blind BFS)');
+
 // --- assembleAnchors: RELEVANT sits above the global frontier, dedups against it ---
 const blended = A.assembleAnchors({
   news: [{ principals: ['Fresh News Co'], corroboration: { independent: 3 } }],

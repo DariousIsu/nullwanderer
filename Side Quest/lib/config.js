@@ -147,6 +147,21 @@ function graphwalkBudgetTokensPerHour() { const n = parseInt(get('ZOE_GRAPHWALK_
 // free (no model), so this only bounds the web-discovery search+extract moves. Lower than graph-walk.
 function pullerBudgetTokensPerHour() { const n = parseInt(get('ZOE_PULLER_BUDGET_TOKPH', '').trim(), 10); return Number.isFinite(n) ? n : 150000; }
 
+// --- INVESTIGATION FRONTIER — blast-radius knobs (2026-07-10). When a node fills in, the RELEVANT
+// frontier (idle_anchors.buildRelevantFrontierSql) walks OUT from Lucas's active set to find thin
+// neighbours worth enriching. In a power-law graph raw hop-depth EXPLODES: real civic_graph has median
+// degree 2 but a max of 12,107, and the friendship paradox means an edge lands you on a hub — so ~5 hops
+// reaches the whole giant component (1M+ nodes). The walk is therefore bounded three ways:
+//   HOPS    — how far out to walk. 1 or 2 ONLY; depth ≥3 is meta-path territory (typed, hub-avoiding),
+//             never blind BFS. Default 2 (the extra reach, made safe by the corridor gate below).
+//   HUB_CAP — the CORRIDOR gate: never expand THROUGH a node above this degree. A hub is a hairball that
+//             connects unrelated things, not an identity-neighbour. p99 degree is 124, so 150 excludes the
+//             top ~1% connectors as pass-throughs (they can still be endpoints, just not corridors).
+//   BUDGET  — the candidate-pool cap per pass (the SQL LIMIT); the backstop on nodes impacted per event.
+function investigateHops() { const n = parseInt(get('ZOE_KG_INVESTIGATE_HOPS', '').trim(), 10); return Number.isFinite(n) && n >= 1 ? Math.min(2, n) : 2; }
+function investigateHubCap() { const n = parseInt(get('ZOE_KG_HUB_DEGREE_CAP', '').trim(), 10); return Number.isFinite(n) && n >= 1 ? n : 150; }
+function investigateBudget() { const n = parseInt(get('ZOE_KG_INVESTIGATE_BUDGET', '').trim(), 10); return Number.isFinite(n) && n >= 1 ? n : 300; }
+
 // --- DEEP CALL BUDGETS (cloud-leverage, 2026-07-06) — we were feeding frontier models a 1/16th window
 // (num_ctx 8192) and asking for a paragraph (num_predict 200-1000). These knobs, applied at the DEPTH
 // call sites (extraction, dossier-building, subconscious thinking, research-section synthesis), let the
@@ -234,4 +249,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, deepNumCtx, deepNumPredict, sectionNumPredict, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, pipelineOn, pipelineContactBacklogCap, ttsConfig, companionConfig, usageConfig, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, investigateHops, investigateHubCap, investigateBudget, deepNumCtx, deepNumPredict, sectionNumPredict, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, pipelineOn, pipelineContactBacklogCap, ttsConfig, companionConfig, usageConfig, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
