@@ -10,6 +10,7 @@
 process.env.PULLER_DB_PATH = ':memory:';
 const db = require('../lib/puller_db');
 const ipc = require('../lib/puller_ipc');
+const revise = require('../studio/puller_revise');
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++; console.log('  ✗', m); } };
@@ -55,9 +56,11 @@ const Q = require('../studio/puller_confidence');
 ok(Q.qualify(db.listObservations(t3.id, { attr: 'email' }), 'kai.lee@gamma.com').confidence >= 0.8,
    'the address keeps its qualification — suppression did NOT poison the validity belief');
 
-console.log('== unmatched address is counted, never invented ==');
-const s4 = ipc.applyBounceRows('nobody@nowhere.com,invalid\n', { format: 'csv' });
-ok(s4.unmatched === 1 && s4.matched === 0, 'an address we do not track → unmatched, no target created');
+console.log('== an unheld DECISIVE result is harvested (minted); a SOFT unheld result is not ==');
+const s4 = ipc.applyBounceRows('nobody.new@nowhere.com,invalid\n', { format: 'csv' });
+ok(s4.minted === 1 && s4.matched === 0, 'an unheld hard bounce → minted as a prospect (never waste a drop)');
+const s4b = ipc.applyBounceRows('Final-Recipient: rfc822; maybe.later@nowhere.com\nAction: failed\nStatus: 4.4.1\n');
+ok((s4b.minted || 0) === 0 && s4b.unmatched === 1, 'an unheld SOFT/transient result is NOT minted (silence isn\'t evidence a person exists)');
 
 console.log('== testList flag stamps the observation weight ==');
 const s5 = ipc.applyBounceRows('jane.doe@acme.com,valid\n', { format: 'csv', testList: true });
@@ -108,6 +111,42 @@ const good = db.createTarget({ kind: 'person', name: 'Good One', company: 'G', d
 db.addObservation(good.id, { attr: 'email', value: 'good@good.com', kind: 'verified', source: 'card' });
 db.upsertBelief(good.id, 'email', { value: 'good@good.com', confidence: 0.95 });
 ok(exporter.toContactRows([ipc.buildDossier(good.id)], {}).rows.length === 1, 'sanity: a clean verified contact still exports (no over-filtering)');
+
+console.log('== FP1: never waste a drop — a result for a person we DON\'T hold mints a prospect + harvests signal ==');
+db.savePatternState('harvest.com', B.seedPrior(B.seedPrior(B.emptyState(), 'first.last', 0.6), 'flast', 0.5));
+const missBefore = (db.getPatternState('harvest.com').patterns['first.last'] || {}).misses || 0;
+const h1 = ipc.applyBounceRows('nina.park@harvest.com,invalid\nowen.ray@harvest.com,delivered', { format: 'csv' });
+ok(h1.minted === 2 && h1.matched === 0, 'two unheld addresses → 2 minted prospects, 0 discarded');
+const nina = db.findTargetByEmail('nina.park@harvest.com');
+ok(nina && nina.status === 'adhoc' && nina.name === 'Nina Park' && nina.domain === 'harvest.com', 'the bounced prospect is minted (name inferred, adhoc, domain set)');
+ok(Q.qualify(db.listObservations(nina.id, { attr: 'email' }), 'nina.park@harvest.com').conflicted === true, 'the minted prospect\'s bounced address is marked conflicted');
+ok(db.listRevisions({ status: 'pending', targetId: nina.id }).length === 1, 'the harvested bounce proposes the next pattern to try (a real lead)');
+ok(Q.qualify(db.listObservations(db.findTargetByEmail('owen.ray@harvest.com').id, { attr: 'email' }), 'owen.ray@harvest.com').grade === 'B', 'a DELIVERED unheld address mints a verified (grade-B) prospect');
+ok(((db.getPatternState('harvest.com').patterns['first.last'] || {}).misses || 0) > missBefore, 'the domain email-pattern belief harvested the signal even with no prior contact');
+
+console.log('== FP2: a role address is NOT minted as a person, and a held role bounce does not flip ==');
+const hr = ipc.applyBounceRows('info@harvest.com,invalid', { format: 'csv' });
+ok(hr.roleSkipped === 1 && hr.minted === 0 && !db.findTargetByEmail('info@harvest.com'), 'a role address (info@) is skipped, never minted as a person');
+const roleT = db.createTarget({ kind: 'person', name: 'Front Desk', company: 'RoleCo', domain: 'roleco.com' });
+db.addObservation(roleT.id, { attr: 'email', value: 'support@roleco.com', kind: 'verified' });
+db.upsertBelief(roleT.id, 'email', { value: 'support@roleco.com', confidence: 0.8 });
+db.savePatternState('roleco.com', B.seedPrior(B.emptyState(), 'first.last', 0.6));
+const ro = revise.applyVerification(roleT.id, { value: 'support@roleco.com', result: 'invalid' });
+ok(ro.roleAddress === true && !ro.revisionId, 'a bounce on a HELD role mailbox does not propose a name-pattern flip');
+
+console.log('== FP13: re-uploading the same file is idempotent (no double-count) ==');
+const held = db.createTarget({ kind: 'person', name: 'Held One', company: 'H', domain: 'held.com' });
+db.addObservation(held.id, { attr: 'email', value: 'held.one@held.com', kind: 'verified' });
+db.upsertBelief(held.id, 'email', { value: 'held.one@held.com', confidence: 0.8 });
+db.savePatternState('held.com', B.seedPrior(B.seedPrior(B.emptyState(), 'first.last', 0.6), 'flast', 0.5));
+const file = 'held.one@held.com,invalid';
+const up1 = ipc.applyBounceRows(file, { format: 'csv' });
+const misses1 = (db.getPatternState('held.com').patterns['first.last'] || {}).misses || 0;
+const revs1 = db.listRevisions({ status: 'pending', targetId: held.id }).length;
+const up2 = ipc.applyBounceRows(file, { format: 'csv' });   // RE-UPLOAD the same file
+ok(up1.applied === 1 && up2.applied === 0, 're-upload of the same file applies 0 (idempotent)');
+ok(((db.getPatternState('held.com').patterns['first.last'] || {}).misses || 0) === misses1, 'the domain miss-count is unchanged by the re-upload');
+ok(db.listRevisions({ status: 'pending', targetId: held.id }).length === revs1, 'no duplicate revision from the re-upload');
 
 db.close();
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

@@ -292,7 +292,8 @@ document.getElementById('bounceingest').addEventListener('click', async () => {
   if (r && r.ok) {
     const s = r.summary;
     msg.className = 'fbmsg good';
-    msg.textContent = `${s.format} · ${s.parsed} parsed${fmtDropped(s.dropped)} → ${s.matched} matched (${s.applied} applied, ${s.flips} flips, ${s.deferred} soft-deferred, ${s.suppressed} suppressed), ${s.unmatched} untracked`;
+    msg.textContent = `${s.format} · ${s.parsed} parsed${fmtDropped(s.dropped)} → ${s.matched} matched (${s.applied} applied, ${s.flips} flips, ${s.deferred} soft-deferred, ${s.suppressed} suppressed)` +
+      `, ${s.minted || 0} new prospects harvested${s.roleSkipped ? `, ${s.roleSkipped} role-addr skipped` : ''}${s.unmatched ? `, ${s.unmatched} untracked` : ''}`;
     loadTargets(); if (activeId != null) selectTarget(activeId);
   } else { msg.className = 'fbmsg bad'; msg.textContent = `failed: ${r && r.error || 'unknown'}`; }
 });
@@ -307,7 +308,7 @@ document.getElementById('tlreconcile').addEventListener('click', async () => {
   if (r && r.ok) {
     const s = r.summary;
     msg.className = 'fbmsg good';
-    msg.textContent = `${s.sent} sent → ${s.bounced} bounced, ${s.delivered} delivered, ${s.silent} silent (${s.culled} unsendable-culled) · ${s.matched} matched, ${s.applied} applied, ${s.flips} flips`;
+    msg.textContent = `${s.sent} sent → ${s.bounced} bounced, ${s.delivered} delivered, ${s.silent} silent (${s.culled} unsendable-culled) · ${s.matched} matched, ${s.applied} applied, ${s.flips} flips, ${s.minted || 0} harvested`;
     loadTargets(); if (activeId != null) selectTarget(activeId);
   } else { msg.className = 'fbmsg bad'; msg.textContent = `failed: ${r && r.error || 'unknown'}`; }
 });

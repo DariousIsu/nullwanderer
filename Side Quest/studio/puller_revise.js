@@ -19,9 +19,13 @@ const db = require('../lib/puller_db');
 const B = require('./puller_beliefs');
 const Q = require('./puller_confidence');
 const SS = require('../lib/puller_supersession');   // F5.2: belief flips obey the D2 supersession law
+const PF = require('../lib/email_prefilter');        // FP2: role-address detection
+
+const IDEMPOTENCY_MS = 24 * 60 * 60 * 1000;          // FP13: a re-uploaded identical result within 24h = duplicate
 
 const norm = (s) => String(s == null ? '' : s).trim().toLowerCase();
 const domainOf = (email, fallback) => { const e = norm(email); const i = e.indexOf('@'); return i > 0 ? e.slice(i + 1) : (fallback || null); };
+const localOf = (email) => { const e = norm(email); const i = e.indexOf('@'); return i > 0 ? e.slice(0, i) : e; };
 
 // verify raw status → (observation kind, is-negative, is-catch-all)
 const KIND = { valid: 'verified', deliverable: 'verified', invalid: 'bounce', undeliverable: 'bounce',
@@ -40,7 +44,7 @@ function requalifyEmail(targetId, heldValue) {
 }
 
 // Apply one verification result to a contact's email (the funnel for manual / file / API negatives).
-function applyVerification(targetId, { value, result } = {}) {
+function applyVerification(targetId, { value, result, idempotent = false } = {}) {
   const t = db.getTarget(targetId);
   if (!t) throw new Error(`applyVerification: no target ${targetId}`);
   const email = norm(value);
@@ -49,6 +53,16 @@ function applyVerification(targetId, { value, result } = {}) {
   let obsKind = KIND[r] || 'unknown';
   const out = { result: r, observationId: null, confidence: null, grade: null,
                 revisionId: null, retestId: null, patternFlip: null, catchAll: false, infraSuspect: false };
+
+  // FP13 (re-upload idempotency): when applied from a BATCH upload, an identical verification result already
+  // recorded for this value in the last 24h is a duplicate (a re-uploaded file / repeated webhook) — skip so
+  // it doesn't re-count the miss, re-propose a flip, or re-enqueue a retest. Manual marks pass idempotent=false.
+  if (idempotent) {
+    const dup = db.listObservations(targetId, { attr: 'email' }).some((o) =>
+      o.source === 'verification' && String(o.value || '').toLowerCase() === email
+      && o.meta && o.meta.result === r && (Date.now() - (o.captured_at || 0)) < IDEMPOTENCY_MS);
+    if (dup) { out.skipped = 'duplicate'; return out; }
+  }
 
   // domain pattern belief — catch-all marks the domain untrustworthy; otherwise credit hit/miss
   let st = db.getPatternState(domain);
@@ -71,8 +85,12 @@ function applyVerification(targetId, { value, result } = {}) {
   const q = requalifyEmail(targetId, heldValue);
   out.confidence = q.confidence; out.grade = q.grade;
 
-  // negative on the HELD value → propose the next-pattern flip + enqueue a retest (unless catch-all)
-  if ((r === 'invalid' || r === 'undeliverable') && norm(heldValue) === email && domain && !B.isCatchAll(st)) {
+  // negative on the HELD value → propose the next-pattern flip + enqueue a retest (unless catch-all).
+  // FP2 (role-address guard): a bounce on a shared role mailbox (info@/support@) is NOT a name-pattern miss —
+  // there's no personal pattern to flip to — so don't derive a next pattern or enqueue a retest for it.
+  if ((r === 'invalid' || r === 'undeliverable') && norm(heldValue) === email && domain && !B.isCatchAll(st) && PF.isRole(localOf(heldValue))) {
+    out.roleAddress = true;
+  } else if ((r === 'invalid' || r === 'undeliverable') && norm(heldValue) === email && domain && !B.isCatchAll(st)) {
     if (B.looksInfraBlocked(st)) {
       // Gateway-block: a strong-prior domain that only bounces is a sender-reputation/infra problem,
       // not a pattern miss — pausing beats burning retests + chasing the wrong fix. No flip, no retest.

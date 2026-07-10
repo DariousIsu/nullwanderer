@@ -228,7 +228,7 @@ function register(ipcMain) {
     try {
       const { rows } = normalizer.parse(resultsText || '', { testList: true });
       const reconciled = normalizer.reconcileTestList(sent, rows);   // already deduped: best result per email
-      const summary = { sent: reconciled.length, bounced: 0, delivered: 0, silent: 0, matched: 0, unmatched: 0, applied: 0, flips: 0, culled: 0, prefilterSkipped: 0 };
+      const summary = { sent: reconciled.length, bounced: 0, delivered: 0, silent: 0, matched: 0, unmatched: 0, minted: 0, roleSkipped: 0, applied: 0, flips: 0, culled: 0, prefilterSkipped: 0 };
       // Pre-filter the SILENT addresses in BOUNDED PARALLEL (each is a real DNS MX lookup — a sequential
       // loop over a large list would block the main process). Culling silences is cosmetic (silence never
       // drives a belief change), so beyond the cap we simply don't cull. Fail-open on any DNS hiccup.
@@ -246,16 +246,55 @@ function register(ipcMain) {
         // a silent address that fails the safe pre-filter (no MX / disposable) never had a chance — skip it.
         if (r.silent && rejected.has(r.email)) { summary.culled++; continue; }
         const t = db.findTargetByEmail(r.email);
-        if (!t) { summary.unmatched++; continue; }
+        if (!t) {
+          // FP1: a DECISIVE test result for an address we don't hold → harvest the prospect. A silent/soft
+          // result stays unmatched (silence isn't evidence a person exists).
+          if (r.result === 'invalid' || r.result === 'valid') {
+            const h = harvestUnmatched(r.email, r.result, { testList: true });
+            if (h.roleSkipped) summary.roleSkipped++;
+            else if (h.minted) { summary.minted++; if (h.flip) summary.flips++; }
+            else summary.unmatched++;
+          } else summary.unmatched++;
+          continue;
+        }
         summary.matched++;
         if (r.result === 'unknown') continue;           // silence/soft → no belief change, just surfaced
-        const o = revise.applyVerification(t.id, { value: r.email, result: r.result });
-        summary.applied++;
-        if (o.revisionId) summary.flips++;
+        const o = revise.applyVerification(t.id, { value: r.email, result: r.result, idempotent: true });
+        if (!o.skipped) { summary.applied++; if (o.revisionId) summary.flips++; }
       }
       return { ok: true, summary };
     } catch (e) { console.error('[puller] reconcile-testlist failed:', e.message); return { ok: false, error: e.message }; }
   });
+}
+
+const _cap = (s) => { const x = String(s || '').replace(/[^a-z0-9'’-]+/gi, ' ').trim(); return x ? x[0].toUpperCase() + x.slice(1) : x; };
+
+// FP1 (never waste a drop): a decisive result for an address we DON'T hold still teaches us something — mint
+// the person as a prospect (the email is a STRONG identity anchor, unlike a bare name, so no attractor risk)
+// and let the normal pipeline harvest the domain-pattern signal + propose the next pattern. Role addresses
+// (info@/support@) are NOT minted as a person (FP2). Returns {minted|roleSkipped|skipped, targetId?, flip?}.
+function harvestUnmatched(email, result, { testList = false, suppression = false } = {}) {
+  const p = prefilter.parts(email);
+  if (!p.domain || !p.local) return { skipped: 'unparseable' };
+  if (prefilter.isRole(p.local)) return { roleSkipped: true };            // a shared mailbox isn't a person
+  // infer a name from the local-part (jane.doe → Jane Doe); concatenated forms fall back to the local token.
+  const nm = negatives.inferName(email);
+  const name = nm ? `${nm.first} ${nm.last}`.trim() : _cap(p.local);
+  if (!name) return { skipped: 'no-name' };
+  const t = db.createTarget({ kind: 'person', name, domain: p.domain, status: 'adhoc',
+                              notes: `harvested from a ${testList ? 'test list' : 'bounce report'}` });
+  // seed the held belief so the pipeline's flip-on-held logic engages, then run it through applyVerification
+  // (drives the domain-pattern belief + qualification + next-pattern proposal). Idempotent so a re-upload
+  // that later finds this now-existing target won't double-apply.
+  db.upsertBelief(t.id, 'email', { value: email, confidence: 0.3, derivation: 'harvested' });
+  db.addObservation(t.id, { attr: 'email', value: email, kind: 'harvested', source: 'harvest', meta: { weight: testList ? 'test' : 'opportunistic' } });
+  if (suppression) db.addObservation(t.id, { attr: 'email', value: email, kind: 'suppressed', source: 'harvest', meta: { suppression: true } });
+  let flip = false;
+  if (result === 'invalid' || result === 'valid') {
+    const o = revise.applyVerification(t.id, { value: email, result, idempotent: true });
+    flip = !!o.revisionId;
+  }
+  return { minted: true, targetId: t.id, name, flip };
 }
 
 // Shared bounce-application path (used by ingest-bounces + the back-compat alias + the drop-zone tick).
@@ -267,10 +306,20 @@ function applyBounceRows(text, { format = null, testList = false } = {}) {
   // not N (else: inflated Beta misses, duplicate flip revisions, false gateway-block from a single box).
   const collapsed = normalizer.collapseByEmail(rows);
   const summary = { format: fmt, vendor: meta && meta.vendor, parsed: rows.length, unique: collapsed.length,
-                    dropped, matched: 0, unmatched: 0, applied: 0, flips: 0, infra: 0, suppressed: 0, deferred: 0 };
+                    dropped, matched: 0, unmatched: 0, minted: 0, roleSkipped: 0, applied: 0, flips: 0, infra: 0, suppressed: 0, deferred: 0 };
   for (const row of collapsed) {
     const t = db.findTargetByEmail(row.email);
-    if (!t) { summary.unmatched++; continue; }
+    if (!t) {
+      // FP1: don't discard the drop — harvest it (mint the prospect + domain-pattern signal) unless it's a
+      // weak result (soft/silent) or a role address, which never mints a person.
+      if (row.result === 'invalid' || row.result === 'valid' || row.suppression) {
+        const h = harvestUnmatched(row.email, row.result, { testList, suppression: row.suppression });
+        if (h.roleSkipped) summary.roleSkipped++;
+        else if (h.minted) { summary.minted++; if (h.flip) summary.flips++; if (row.suppression) summary.suppressed++; }
+        else summary.unmatched++;
+      } else summary.unmatched++;      // soft/transient for an unheld address → nothing to learn yet
+      continue;
+    }
     summary.matched++;
     if (row.suppression) {
       // do-not-send marker — record it as an ungradeable observation so qualify() ignores it, and it's
@@ -281,10 +330,9 @@ function applyBounceRows(text, { format = null, testList = false } = {}) {
     }
     // a mailbox can both complain (suppression) AND hard-bounce — still apply the deliverability result.
     if (row.result === 'invalid' || row.result === 'valid') {
-      const o = revise.applyVerification(t.id, { value: row.email, result: row.result });
-      summary.applied++;
-      if (o.revisionId) summary.flips++;
-      if (o.infraSuspect) summary.infra++;
+      const o = revise.applyVerification(t.id, { value: row.email, result: row.result, idempotent: true });
+      if (o.skipped) { /* FP13: a re-uploaded duplicate — counted matched, not re-applied */ }
+      else { summary.applied++; if (o.revisionId) summary.flips++; if (o.infraSuspect) summary.infra++; }
     } else if (!row.suppression) {
       summary.deferred++;   // soft/transient with no suppression → defer, no flip
     }
