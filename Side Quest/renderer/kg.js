@@ -457,7 +457,7 @@ function ensureGraph() {
       const base = cross ? 'rgba(196,181,253,0.85)' : (l.color || 'rgba(148,163,184,0.5)');
       const w = cross ? Math.max(1.1, (l.width || 1) * 1.6) : Math.max(0.7, (l.width || 0.6) * 1.4);
       ctx.save();
-      ctx.shadowColor = base; ctx.shadowBlur = cross ? 6 : 3;
+      if (cross) { ctx.shadowColor = base; ctx.shadowBlur = 6; }   // PERF: blur only the few cross-store threads; the bulk of edges skip the per-shape blur pass
       ctx.strokeStyle = base; ctx.lineWidth = w; ctx.lineCap = 'round';
       ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(t.x, t.y); ctx.stroke();
       ctx.restore();
@@ -496,10 +496,17 @@ function ensureGraph() {
       if (nodeAlpha < 1) ctx.globalAlpha = nodeAlpha;
       // lit node: a soft same-hue glow (scales with radius → hubs shine brighter) makes the disk read as a
       // lit object, then a radial gradient (light core → saturated rim) gives it depth instead of a flat fill.
-      ctx.save();
-      ctx.shadowColor = rgbaHex(col, 0.85); ctx.shadowBlur = r * (isST ? 1.7 : 1);   // core glows hotter
-      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI, false); ctx.fillStyle = col; ctx.fill();
-      ctx.restore();
+      // PERF: shadowBlur is the canvas perf-killer (a per-shape offscreen blur), and it was applied to EVERY
+      // node every frame → in a dense ~320-node follow view that's the residual skip-lag. Gate the glow pass to
+      // the nodes that actually read as glowing — focal, hovered, sized hubs, and the short-term core — and let
+      // the many small leaf nodes draw with just their (cheap) lit gradient fill below. Overview stays identical.
+      const glow = n.isFocal || isST || r >= 6 || (hovered && hovered.id === n.id);
+      if (glow) {
+        ctx.save();
+        ctx.shadowColor = rgbaHex(col, 0.85); ctx.shadowBlur = r * (isST ? 1.7 : 1);   // core glows hotter
+        ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI, false); ctx.fillStyle = col; ctx.fill();
+        ctx.restore();
+      }
       const grad = ctx.createRadialGradient(n.x - r * 0.35, n.y - r * 0.4, r * 0.12, n.x, n.y, r);
       grad.addColorStop(0, lighten(col, 0.55)); grad.addColorStop(0.55, col); grad.addColorStop(1, rgbaHex(col, 0.92));
       ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI, false); ctx.fillStyle = grad; ctx.fill();
@@ -936,4 +943,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-10s: PERF — drop perpetual focal directional particles (video-buffering fix; follow-lock cost) + two-source short-term layer');
+console.info('[kg] surface build 2026-07-10t: PERF — gate shadowBlur to prominent nodes + cross-store edges only (dense-follow skip-lag fix)');
