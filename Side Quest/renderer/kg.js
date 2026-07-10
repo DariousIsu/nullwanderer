@@ -26,6 +26,11 @@ const WORLD_CAP = 320;
 // ANY node that carries them (the overview hubs loaded at startup, or enriched ego) so the tendrils can show
 // on those hubs in Follow mode right now, not only after a reboot.
 const degreeHint = new Map();
+// SHORT-TERM LAYER (the two-source galaxy): Side Quest's own store (graph_entities + recent docs) rendered
+// AS ITS OWN layer, merged into every render alongside the Echo corpus. Tagged store:'sidequest' + epistemic;
+// styled as a brighter, denser, epistemic-coloured CORE, pulled to centre by makeCoreForce. Cross-store links
+// (short-term ↔ Echo, via name_key↔name) draw as bright federation threads. Node objects reused → d3 keeps x/y.
+const shortTerm = { nodes: new Map(), links: new Map() };
 const linkEnd = (x) => (x && typeof x === 'object') ? x.id : x;
 
 // color helpers for the lit-node / atmosphere rendering (entity colors are hex; fallbacks are hex too)
@@ -75,6 +80,22 @@ function makeCollide(radiusFn, strength = 0.8) {
         }
       }
     }
+  }
+  force.initialize = (n) => { nodes = n; };
+  return force;
+}
+
+// Core force: gently pull short-term (store:'sidequest') nodes toward the graph's centre-of-mass so they
+// gather as the dense bright CORE, while the Echo corpus spreads around them via charge. d3-compatible
+// (fn + .initialize); alpha-scaled so it relaxes as the sim cools. Placement is tunable (strength) — this is
+// the "short-term in the middle, long-term around" spatial model, adjustable once we see both on screen.
+function makeCoreForce(strength = 0.06) {
+  let nodes = [];
+  function force(alpha) {
+    let cx = 0, cy = 0, c = 0;
+    for (const n of nodes) if (Number.isFinite(n.x)) { cx += n.x; cy += n.y; c++; }
+    if (!c) return; cx /= c; cy /= c;
+    for (const n of nodes) if (n.store === 'sidequest' && Number.isFinite(n.x)) { n.vx = (n.vx || 0) + (cx - n.x) * strength * alpha; n.vy = (n.vy || 0) + (cy - n.y) * strength * alpha; }
   }
   force.initialize = (n) => { nodes = n; };
   return force;
@@ -430,9 +451,13 @@ function ensureGraph() {
     .linkCanvasObject((l, ctx, scale) => {
       const s = l.source, t = l.target;
       if (!s || !t || !Number.isFinite(s.x) || !Number.isFinite(s.y) || !Number.isFinite(t.x) || !Number.isFinite(t.y)) return;   // NaN passes ==null → guard finite
-      const base = l.color || 'rgba(148,163,184,0.5)', w = Math.max(0.7, (l.width || 0.6) * 1.4);
+      // Cross-store (short-term ↔ Echo) federation threads read BRIGHTER — the visible bridge between the
+      // active core and the long-term corpus (this is where match/promotion live on the map).
+      const cross = l.cross || ((s.store === 'sidequest') !== (t.store === 'sidequest'));
+      const base = cross ? 'rgba(196,181,253,0.85)' : (l.color || 'rgba(148,163,184,0.5)');
+      const w = cross ? Math.max(1.1, (l.width || 1) * 1.6) : Math.max(0.7, (l.width || 0.6) * 1.4);
       ctx.save();
-      ctx.shadowColor = base; ctx.shadowBlur = 3;
+      ctx.shadowColor = base; ctx.shadowBlur = cross ? 6 : 3;
       ctx.strokeStyle = base; ctx.lineWidth = w; ctx.lineCap = 'round';
       ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(t.x, t.y); ctx.stroke();
       ctx.restore();
@@ -453,16 +478,22 @@ function ensureGraph() {
       // the whole render loop stops for good (the dead-black-canvas bug). arc()/stroke() tolerate NaN; the
       // gradient does not — so skip this node for this frame. It draws normally once positioned.
       if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) return;
-      const r = nodeRadius(n), col = n.color || '#7dd3fc';
+      // STORE LAYER: short-term (Side Quest) nodes = violet, brighter bloom, and SOLIDITY driven by epistemic
+      // status (speculated/anticipated render translucent → they firm up as they're confirmed/promoted). Echo
+      // corpus keeps its entity-type colour. This is what makes the active core read as a distinct layer.
+      const isST = n.store === 'sidequest';
+      const r = nodeRadius(n), col = n.color || (isST ? '#a78bfa' : '#7dd3fc');
+      const epi = n.epistemic;
+      const solidity = !isST ? 1 : ((epi === 'speculated' || epi === 'anticipated') ? 0.5 : (epi === 'told' || epi === 'read') ? 0.76 : 1);
       const bornFade = n.bornAt ? Math.min(1, (performance.now() - n.bornAt) / 450) : 1;   // new nodes materialise in
       // (3) soma breathing — a slow, subtle brightness pulse per node, like a living cell at rest
       const breathe = prefersReducedMotion ? 1 : (0.8 + 0.2 * Math.sin(performance.now() / 1000 * 0.9 + (n.__ph != null ? n.__ph : (n.__ph = (n.x * 0.7 + n.y * 0.3) % 6.283))));
-      const nodeAlpha = bornFade * breathe;
+      const nodeAlpha = bornFade * breathe * solidity;
       if (nodeAlpha < 1) ctx.globalAlpha = nodeAlpha;
       // lit node: a soft same-hue glow (scales with radius → hubs shine brighter) makes the disk read as a
       // lit object, then a radial gradient (light core → saturated rim) gives it depth instead of a flat fill.
       ctx.save();
-      ctx.shadowColor = rgbaHex(col, 0.85); ctx.shadowBlur = r;
+      ctx.shadowColor = rgbaHex(col, 0.85); ctx.shadowBlur = r * (isST ? 1.7 : 1);   // core glows hotter
       ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI, false); ctx.fillStyle = col; ctx.fill();
       ctx.restore();
       const grad = ctx.createRadialGradient(n.x - r * 0.35, n.y - r * 0.4, r * 0.12, n.x, n.y, r);
@@ -470,6 +501,7 @@ function ensureGraph() {
       ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI, false); ctx.fillStyle = grad; ctx.fill();
       // subtle rim for definition against the glow
       ctx.lineWidth = 1 / scale; ctx.strokeStyle = 'rgba(0,0,0,0.38)'; ctx.stroke();
+      if (isST) { ctx.beginPath(); ctx.arc(n.x, n.y, r + 1.5, 0, 2 * Math.PI, false); ctx.lineWidth = 1 / scale; ctx.strokeStyle = 'rgba(196,181,253,0.6)'; if (solidity < 1) ctx.setLineDash([2 / scale, 2 / scale]); ctx.stroke(); ctx.setLineDash([]); }   // violet layer-ring; dashed while speculative
       if (n.isFocal) { ctx.lineWidth = 2 / scale; ctx.strokeStyle = '#FBBF24'; ctx.stroke(); }
       // COSMETIC (demo): an expanding amber ring on the focal node for ~1.4s after each move — reads as
       // "new activity landed here". Time-based off pulseAt; the edge particles keep frames coming so it draws.
@@ -492,6 +524,7 @@ function ensureGraph() {
     const charge = G.d3Force('charge'); if (charge && charge.strength) charge.strength(-150).distanceMax(700);
     const link = G.d3Force('link'); if (link && link.distance) link.distance(l => 36 + (l.category === 'generic' ? 12 : 0)).strength(0.32);
     G.d3Force('collide', makeCollide(n => nodeRadius(n) + 3));
+    G.d3Force('core', makeCoreForce(0.06));   // gathers the short-term layer into the central bright core
   } catch (e) {}
   const fit = () => { const w = graphEl.clientWidth, h = graphEl.clientHeight; if (w > 0 && h > 0) { G.width(w).height(h); try { if (G.resumeAnimation) G.resumeAnimation(); } catch (e) {} } };
   fit(); new ResizeObserver(fit).observe(graphEl);
@@ -578,6 +611,16 @@ function drawLabels(ctx, scale) {
 
 // client-side type filter → fresh graphData (clone links so force-graph's source/target mutation
 // never corrupts the pristine `full`).
+// Append the persistent short-term layer to whatever Echo set the mode built. Short-term nodes always show
+// (they're a separate layer, not type-filtered); short-term links render when both endpoints are present, so
+// cross-store federation threads appear whenever their Echo match is in view. Node objects reused → d3 keeps x/y.
+function withShortTerm(nodes, links) {
+  if (!shortTerm.nodes.size) return { nodes, links };
+  const present = new Set(nodes.map(n => n.id));
+  for (const n of shortTerm.nodes.values()) if (!present.has(n.id)) { nodes.push(n); present.add(n.id); }
+  for (const m of shortTerm.links.values()) if (present.has(m.s) && present.has(m.t)) links.push({ source: m.s, target: m.t, relType: m.relType, color: m.color, width: m.width, category: m.category, cross: m.cross });
+  return { nodes, links };
+}
 function applyFilter() {
   const useFilter = selected.size > 0;
   if (mode === 'ego') {
@@ -587,7 +630,8 @@ function applyFilter() {
     const present = new Set(nodes.map(n => n.id));
     const links = [...world.links.values()].filter(m => present.has(m.s) && present.has(m.t))
       .map(m => ({ source: m.s, target: m.t, relType: m.relType, color: m.color, width: m.width, category: m.category }));
-    ensureGraph().graphData({ nodes, links });
+    const merged = withShortTerm(nodes, links);
+    ensureGraph().graphData({ nodes: merged.nodes, links: merged.links });
     return;
   }
   const nodes = full.nodes.filter(n => n.isFocal || !useFilter || selected.has(n.entityType));
@@ -595,9 +639,32 @@ function applyFilter() {
   const links = full.links
     .map(l => ({ source: linkEnd(l.source), target: linkEnd(l.target), relType: l.relType, color: l.color, width: l.width, category: l.category }))
     .filter(l => present.has(l.source) && present.has(l.target));
-  ensureGraph().graphData({ nodes, links });
-  if (nodes.length) setTimeout(() => { try { G.zoomToFit(400, 50); if (G.resumeAnimation) G.resumeAnimation(); } catch (e) {} }, 450);
+  const merged = withShortTerm(nodes, links);
+  ensureGraph().graphData({ nodes: merged.nodes, links: merged.links });
+  if (merged.nodes.length) setTimeout(() => { try { G.zoomToFit(400, 50); if (G.resumeAnimation) G.resumeAnimation(); } catch (e) {} }, 450);
 }
+
+// Seed synthetic short-term nodes to PROVE the two-source structure renders (dev only; the real read wires
+// main.js kg:shortterm over graph_entities + recent documents). Cross-links some to real in-view Echo nodes.
+function seedShortTerm(count = 14) {
+  if (!G) return { err: 'no graph' };
+  const echoNodes = (G.graphData().nodes || []).filter(n => Number.isFinite(n.x) && n.store !== 'sidequest');
+  const epis = ['witnessed', 'confirmed', 'told', 'read', 'speculated', 'anticipated'];
+  const now = performance.now();
+  let cx = 0, cy = 0, c = 0; for (const n of echoNodes) { cx += n.x; cy += n.y; c++; } if (c) { cx /= c; cy /= c; }
+  const made = [];
+  for (let i = 0; i < count; i++) {
+    const epi = epis[i % epis.length], id = `short-term ${epi} ${i + 1}`;
+    const n = { id, store: 'sidequest', entityType: 'shortterm', epistemic: epi, summary: `synthetic short-term memory (${epi})`, color: '#a78bfa', bornAt: now, x: cx + (Math.random() - 0.5) * 70, y: cy + (Math.random() - 0.5) * 70 };
+    shortTerm.nodes.set(id, n); made.push(n);
+  }
+  for (let i = 1; i < made.length; i++) if (Math.random() < 0.55) { const a = made[i].id, b = made[i - 1].id; shortTerm.links.set(a + '>' + b, { s: a, t: b, relType: 'related', color: 'rgba(168,139,250,0.5)', width: 0.8, category: 'generic' }); }
+  const picks = echoNodes.slice().sort(() => Math.random() - 0.5).slice(0, Math.min(6, made.length));
+  picks.forEach((e, i) => { const a = made[i % made.length].id; shortTerm.links.set('X:' + a + '>' + e.id, { s: a, t: e.id, relType: 'MATCHES', color: 'rgba(196,181,253,0.9)', width: 1.2, category: 'projected', cross: true }); });
+  applyFilter();
+  return { seeded_nodes: made.length, links: shortTerm.links.size, echo_in_view: echoNodes.length };
+}
+try { window.__kgSeedShortTerm = (n) => seedShortTerm(n || 14); window.__kgClearShortTerm = () => { shortTerm.nodes.clear(); shortTerm.links.clear(); applyFilter(); return 'cleared'; }; window.__kgShortTermN = () => shortTerm.nodes.size; } catch (e) {}
 
 function renderPills(types) {
   if (!types || !types.length) { pillsEl.innerHTML = ''; return; }
@@ -865,4 +932,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-10p: kg:activity bus Stage A — node.born/enrich + edge.born/promote gestures + off-screen far-field weather');
+console.info('[kg] surface build 2026-07-10r: two-source structure — short-term layer (violet epistemic core + cross-store federation threads + core force) + focus-move activity bridge');
