@@ -3,6 +3,38 @@
 How the autonomous dedup + link machinery built this session changes what the graph
 visualization (`renderer/kg.js`, fed by Echo `graph_overview`) actually renders.
 
+---
+
+## 🟢 LIVE as of 2026-07-10 — change set for the graphics context
+
+The lane described below is **no longer hypothetical — it is armed and running.** Zoe was
+rebooted 2026-07-10 (~09:13) with both flags on (`ZOE_KG_DEDUP_ENABLED=1`,
+`ZOE_KG_APPLY_ENABLED=1`), so real merges will start landing on the live graph within the hour.
+Five commits this session make up the change set:
+
+| commit | what | visual relevance |
+|---|---|---|
+| Echo `041c598` | dedup adjudicator recalibrated to **LLM-as-veto** on anchored tiers (+ non-answer safety) | this is *why* merges now actually land — the old gate parked everything, so the declutter below was theoretical; now it happens for real |
+| Echo `7081ad1` | **per-tier model split** — anchored tiers judged by fast gemma (~2s), fuzzy tiers by kimi | throughput lever; sets how *fast* the graph declutters (see timeline) |
+| Echo `10b5dd8` | `graph_overview` mount filters tombstones (`canonical_id`) + excludes `SAME_AS` | **the thing that protects your render** — see below; loaded in the running Echo as of this reboot |
+| Zoe `6f1be8d` | **2-hop corridor-gated investigation frontier** (`idle_anchors`) | the discovery walk now reaches one ring further out (hub-gated), so enrichment edges appear a hop deeper around Lucas's active nodes — denser local neighborhoods, more tendrils near his work |
+| Zoe `.env` | daily full-sweep detection + temporary drain pace (`APPLY_BATCH=150`, `1h` floor) | sets the **timeline**: the one-time ~24k dedup backlog clears over ~days, not instantly |
+
+**What you'll actually see, and when.** The apply tick fires hourly (batch 150). Over the next
+**several days** the ~24k historical duplicate backlog drains → the node population **shrinks
+toward the true entity count** and fragmented hubs **concentrate their degree onto one bright
+canonical** (the three effects below). After the stock clears, steady-state is a **trickle
+(~5–12 merges/day)** — the field goes stable, not churning. So: a visible multi-day declutter,
+then quiet.
+
+**What you need to change in `renderer/kg.js`: essentially nothing.** The ghost-node / stub-edge
+risk is handled **server-side** by `10b5dd8` (the mount already resolves to live canonicals and
+drops `SAME_AS`). Two things to simply *expect* rather than treat as bugs: (1) the node count
+will **trend down** over the coming days, and (2) some mid-degree nodes will **brighten / grow**
+as duplicate fragments fold into them. If you cache node/edge lists client-side, just don't
+assume a stable node population — a node present last frame may be a tombstone next frame
+(reads follow `canonical_id`; the mount already excludes it).
+
 ## What the lane does to the underlying data
 - **Merge (dedup apply)** = `echo.resolve.apply`: the non-canonical member gets
   `entities.canonical_id → canonical`, a `SAME_AS` edge (member → canonical) is recorded,
@@ -60,8 +92,9 @@ already uses). Optionally, when an edge endpoint is a tombstone, resolve it to i
 inbound edges re-point rather than vanish. Until this lands, arming `ZOE_KG_APPLY_ENABLED` would
 visibly corrupt the neuron field even though the data stays correct.
 
-## No change until armed
-Both flags are default OFF. Generation-only (`ZOE_KG_DEDUP_ENABLED`) writes **proposals**, which
-are not in the graph and do not affect the viz at all. The visual changes above begin only when
-the merge-apply flag (`ZOE_KG_APPLY_ENABLED`) is armed — and should not be, until the
-`graph_overview` canonical/`SAME_AS` filter above is in place.
+## ~~No change until armed~~ → ARMED 2026-07-10
+Superseded by the LIVE section at the top. Both flags are now **on**, the `graph_overview`
+filter (`10b5dd8`) is in the running Echo, and merges are landing on the hourly apply tick. The
+generation pass (`ZOE_KG_DEDUP_ENABLED`) still only writes **proposals** (invisible to the viz);
+the visible declutter/hub-sharpening comes from the apply flag (`ZOE_KG_APPLY_ENABLED`), which is
+now active. To pause the visual churn, set either flag to `0` and restart Zoe.
