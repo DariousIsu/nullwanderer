@@ -32,7 +32,19 @@ Net: the map becomes **cleaner and more legible** — communities and hubs read 
 duplicate-fragment noise is gone and true structure is concentrated. This is the visual face of
 the "pre-searched index" goal: a navigable field, not a fog.
 
-## ⚠ One gap to fix BEFORE arming auto-apply (b)
+## ✅ RESOLVED — the gap below is fixed (Echo `10b5dd8`)
+Fixed in `echo/mcp/external/graph.py`: hub query **and** the recent slice now filter
+`AND (canonical_id IS NULL OR canonical_id = id)` (the live-canonical predicate used across
+`echo.resolve` — the bare `canonical_id IS NULL` the note suggested would have wrongly dropped
+self-referencing canonicals), and the edge query excludes `relation_type = 'SAME_AS'`. Validated
+against `data/foundations/civic_graph.db`: **7,098** existing tombstones with `degree>0` (already
+present — merges have run) are now filtered out of the mount, **363** `SAME_AS` edges excluded,
+hub UNION executes with 0 tombstones surviving. **Requires an Echo MCP server restart to serve
+the new code.** Endpoint re-pointing (below, "Optionally") was intentionally NOT done — with
+tombstones filtered from the node union, member-owned edges surface as kg.js *tendrils* (hidden
+connections) rather than vanishing, which is on-aesthetic; drawn edges stay between live hubs.
+
+## ⚠ (Original gap — now resolved above)
 `graph_overview` (the viz mount, `echo/mcp/external/graph.py`) currently:
 - picks top hubs by `degree` **without** `WHERE canonical_id IS NULL`, and
 - returns **all** edges including `relation_type = 'SAME_AS'`.
