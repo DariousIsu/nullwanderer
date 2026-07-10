@@ -867,6 +867,17 @@ app.whenReady().then(() => {
           const text = `[Memory upkeep] I reviewed and reversibly merged ${rep.applied} confirmed duplicate${rep.applied === 1 ? '' : 's'} — each LLM-verified + structurally anchored, all undoable.`;
           const row = db.insertMonologue({ content: text, model: 'kg-apply', type: 'reading' });
           if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
+          // CURATION-MOVE → the KG-visuals 'absorb' gesture (renderer, other context). One event per real
+          // dedup fold that just landed, so the graph view animates the duplicates collapsing onto their
+          // survivor. Contract: kg:curation-move {kind:'dedup', tier, count, anchor}. Echo caps the sample at
+          // 25/tick so a big drain batch can't flood the renderer. Purely additive; safe if no receiver.
+          try {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              for (const s of (Array.isArray(rep.applied_sample) ? rep.applied_sample : [])) {
+                mainWindow.webContents.send('kg:curation-move', { kind: 'dedup', tier: s.tier || null, count: s.count || 1, anchor: s.anchor || null });
+              }
+            }
+          } catch {}
         }
       }
     } catch (e) { console.error('[kg-apply] adjudication failed:', e.message); }
