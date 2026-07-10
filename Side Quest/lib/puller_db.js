@@ -382,6 +382,15 @@ function getCorrection(id) {
   const r = _db().prepare(`SELECT * FROM corrections WHERE id = ?`).get(id);
   return r ? { ...r, moved_obs: pj(r.moved_obs, []) } : null;
 }
+
+// A cheap high-water fingerprint of the store: MAX(targets.id):MAX(observations.id). Advances on any new
+// target or observation, so a write-triggered dedup tick can skip the O(n²) sweep when nothing changed
+// (mirrors Echo's civic_fingerprint gate). Instant — two indexed MAX() reads.
+function storeFingerprint() {
+  const t = _db().prepare(`SELECT MAX(id) m FROM targets`).get();
+  const o = _db().prepare(`SELECT MAX(id) m FROM observations`).get();
+  return `${(t && t.m) || 0}:${(o && o.m) || 0}`;
+}
 function listCorrections({ status = null, limit = 200 } = {}) {
   const where = [], args = [];
   if (status) { where.push('status = ?'); args.push(status); }
@@ -471,5 +480,5 @@ module.exports = {
   getPatternState, savePatternState,
   proposeRevision, decideRevision, listRevisions,
   enqueueRetest, listRetests, updateRetest,
-  mergeTarget, unmergeTarget, reassignObservation, splitTarget, getCorrection, listCorrections,
+  mergeTarget, unmergeTarget, reassignObservation, splitTarget, getCorrection, listCorrections, storeFingerprint,
 };

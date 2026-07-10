@@ -743,6 +743,41 @@ app.whenReady().then(() => {
     finally { researchRunning = false; }
   };
   setInterval(() => { maybeRunResearch().catch(() => {}); }, RESEARCH_CHECK_MS).unref?.();
+  // F4 CONTEXTUAL IDENTITY-DEDUP SWEEP — its OWN write-triggered tick (mirrors the auto-cleaner). The
+  // retrospective Tracy fix: fold pre-F1 fragments into their canonical. A Puller-store FINGERPRINT gate
+  // keeps it cheap — the idle poll is two MAX() reads (~ms) and the O(n²) sweep only pays when a target/
+  // observation was actually written since the last run; a floor caps it under heavy writes. apply:true
+  // auto-folds ONLY the safe tier (role-narrowed, conf>=0.8, degree<=3, all reversible + logged);
+  // attractors + ambiguous + softer proposals are SURFACED (Puller window), never auto-resolved. Separate
+  // switch ZOE_DEDUP_ENABLED (default OFF — arm deliberately). Pull the plug: ZOE_DEDUP_ENABLED=0 + reboot.
+  const DEDUP_CHECK_MS = (parseFloat(process.env.ZOE_DEDUP_CHECK_MIN) || 10) * 60 * 1000;
+  const DEDUP_MIN_GAP_MS = (parseFloat(process.env.ZOE_DEDUP_MIN_GAP_MIN) || 30) * 60 * 1000;   // floor between sweeps
+  let dedupRunning = false;
+  const maybeRunDedup = async () => {
+    if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_DEDUP_ENABLED || '').trim())) return;   // arm deliberately
+    if (dedupRunning) return;
+    if (Date.now() - parseInt(db.getMeta('last_dedup_at') || '0', 10) < DEDUP_MIN_GAP_MS) return;   // floor
+    let pdb; try { pdb = require('./lib/puller_db'); pdb.init(); } catch { return; }
+    let fp = '0:0'; try { fp = pdb.storeFingerprint(); } catch {}
+    if (fp === db.getMeta('last_dedup_fingerprint')) return;    // FINGERPRINT GATE — no writes → nothing to sweep
+    dedupRunning = true;
+    db.setMeta('last_dedup_at', String(Date.now()));
+    try {
+      const corrections = require('./lib/puller_corrections');
+      const r = corrections.runSweep({ apply: true });         // auto-fold the safe tier; surface the rest
+      db.setMeta('last_dedup_fingerprint', fp);
+      if (r.autoApplied.length || r.attractorFlags.length || r.proposals.length) {
+        console.log(`[dedup] sweep (scanned ${r.scanned}, ${r.candidates} weak): auto-folded=${r.autoApplied.length} proposals=${r.proposals.length} flagged=${r.attractorFlags.length}`);
+        if (r.autoApplied.length) {
+          const text = `[Memory upkeep] I reversibly merged ${r.autoApplied.length} duplicate contact fragment${r.autoApplied.length === 1 ? '' : 's'} back into the right person — the "same name, split record" problem, cleaned.`;
+          const row = db.insertMonologue({ content: text, model: 'dedup', type: 'reading' });
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
+        }
+      }
+    } catch (e) { console.error('[dedup] sweep failed:', e.message); }
+    finally { dedupRunning = false; }
+  };
+  setInterval(() => { maybeRunDedup().catch(() => {}); }, DEDUP_CHECK_MS).unref?.();
   // Episodic recall backfill: embed past turns lacking an embedding so "what did we say earlier
   // about X" works over EXISTING history too. The one-shot 300 left ~half of turns unembedded
   // (episodic recall was blind to old history); DRAIN it in bounded batches until caught up, paced

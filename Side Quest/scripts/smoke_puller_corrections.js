@@ -81,6 +81,13 @@ const sp = db2.splitTarget(big.id, { obsIds: [o1], name: 'Alice Split', reason: 
 ok(sp.moved === 1 && db2.getTarget(sp.newTargetId).name === 'Alice Split', 'split created a new target with the peeled observation');
 ok(db2.listObservations(big.id).some(o => o.id === o2) && !db2.listObservations(big.id).some(o => o.id === o1), 'split moved only the selected observation');
 
+console.log('== storeFingerprint advances on a write (write-triggered gate) ==');
+const fpBefore = db2.storeFingerprint();
+db2.createTarget({ name: 'Fresh Target', kind: 'person' });
+ok(db2.storeFingerprint() !== fpBefore, 'a new target advances the store fingerprint');
+const fpMid = db2.storeFingerprint();
+ok(db2.storeFingerprint() === fpMid, 'no write → fingerprint stable (idle poll skips the sweep)');
+
 db2.close();
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);
