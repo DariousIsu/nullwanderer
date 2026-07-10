@@ -95,6 +95,16 @@ async function detectMention(text, { context = '', deps = {} } = {}) {
   const expanded = _expandFromContext(result.mention, context);
   if (expanded) { result.mention = expanded; result.source += '+ctx'; }
 
+  // SELF/OWNER GUARD (2026-07-10): the operator addressing Zoe by name ("Hey Zo", "Zoe, …") or referring to
+  // himself ("what is MY name / what office did I run for") is NOT a civic entity to look up. Suppress the
+  // mention so the turn answers from self/owner knowledge instead of disambiguating her own name — or his —
+  // among same-name civic records (the "which Zoe / which Z do you mean?" failure). Only bare self/owner names
+  // match (isSelfName/isOwnerName are exact-alias), so a real "Zoe Halfmann" / "Lucas Smith" is untouched.
+  try {
+    const db = require('./db');
+    if (db.isSelfName(result.mention) || db.isOwnerName(result.mention)) return null;
+  } catch { /* db not ready → leave mention as-is */ }
+
   return result;
 }
 

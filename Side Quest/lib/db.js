@@ -1488,6 +1488,19 @@ function isOwnerName(name) {
   return (oid.aliases || []).some((a) => _ownerNorm(a) === n);
 }
 
+// Zoe's OWN names (self). Consulted so the operator addressing her by name ("Hey Zo", "Zoe, …") is not
+// mistaken for a civic entity mention to look up + disambiguate ("which Zoe do you mean?"). Meta-overridable.
+function getAssistantAliases() {
+  try { const raw = getMeta('assistant_aliases'); if (raw) return JSON.parse(raw); } catch {}
+  return ['Zoe', 'Zo', 'Zoe Lane'];    // defaults from the self_narrative ("I'm Zoe Lane … Lucas calls me Zo")
+}
+
+function isSelfName(name) {
+  const n = _ownerNorm(name);
+  if (!n || n.length < 2) return false;
+  return getAssistantAliases().some((a) => _ownerNorm(a) === n);
+}
+
 // Build the alias set from a full name: full, "First Last", "F. Last", "Last, First", initials, bare last.
 function _ownerAliases(full, userName, email) {
   const set = new Set();
@@ -1864,6 +1877,8 @@ module.exports = {
   setMeta,
   getOwnerIdentity,
   isOwnerName,
+  isSelfName,
+  getAssistantAliases,
   seedOwnerIdentity,
   getMetaKeysLike,
   // graph memory (anti-glob relational store)

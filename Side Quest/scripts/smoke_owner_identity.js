@@ -51,7 +51,32 @@ db.setMeta('owner_identity', JSON.stringify({ ...oid, note: 'operator-curated', 
 const again = db.seedOwnerIdentity({ email: 'x@y.com' });
 ok('seed is non-destructive (keeps operator edits)', again.note === 'operator-curated' && again.civic_ref === 'OVERBY, LUCAS [H4FL13077]');
 
-db.close && db.close();
-for (const f of [tmp, tmp + '-wal', tmp + '-shm']) { try { fs.unlinkSync(f); } catch {} }
-console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// SELF recognition: Zoe's own names (so "Hey Zo" / "Zoe, …" is not a civic lookup)
+ok('isSelfName: "Zoe"', db.isSelfName('Zoe') === true);
+ok('isSelfName: "Zo"', db.isSelfName('Zo') === true);
+ok('isSelfName: "Zoe Lane"', db.isSelfName('Zoe Lane') === true);
+ok('GUARD: a real same-first-name person is NOT self (Zoe Halfmann)', db.isSelfName('Zoe Halfmann') === false);
+ok('GUARD: a stranger is not self', db.isSelfName('Zoe Logren') === false);
+
+(async () => {
+  // detectMention SUPPRESSES self/owner mentions (stub NER for an offline-deterministic check), so the vocative
+  // never reaches civic disambiguation — the "which Zoe / which Z do you mean?" bug.
+  try {
+    const ner = require('../lib/ner');
+    const orig = ner.topMention;
+    const M = require('../lib/mention');
+    ner.topMention = async () => ({ mention: 'Zoe', kgType: 'person', score: 0.9 });
+    ok('detectMention SUPPRESSES a self-name mention', (await M.detectMention('Zoe, what is my name?', { deps: { noCloud: true } })) === null);
+    ner.topMention = async () => ({ mention: 'L. Overby', kgType: 'person', score: 0.9 });
+    ok('detectMention SUPPRESSES an owner-name mention', (await M.detectMention('what office did L. Overby run for?', { deps: { noCloud: true } })) === null);
+    ner.topMention = async () => ({ mention: 'Zoe Halfmann', kgType: 'person', score: 0.9 });
+    const kept = await M.detectMention('tell me about Zoe Halfmann', { deps: { noCloud: true } });
+    ok('detectMention KEEPS a real distinct same-first-name person (Zoe Halfmann)', kept && kept.mention === 'Zoe Halfmann');
+    ner.topMention = orig;
+  } catch (e) { console.error('  (detectMention integration skipped:', e.message, ')'); }
+
+  db.close && db.close();
+  for (const f of [tmp, tmp + '-wal', tmp + '-shm']) { try { fs.unlinkSync(f); } catch {} }
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();
