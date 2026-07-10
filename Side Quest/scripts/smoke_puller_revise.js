@@ -104,5 +104,5 @@ ok('BLACKLIST: 2nd flip avoids BOTH prior dead addresses', bl2.patternFlip && bl
 ok('BLACKLIST: failedAddresses records every bounce for the node', DB.failedAddresses(tb.id).size === 2);
 
 DB.close();
-console.log(`\nsmoke_puller_revise: ${pass} passed, ${fail} failed`);
+console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

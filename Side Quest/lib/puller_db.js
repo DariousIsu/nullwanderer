@@ -84,7 +84,6 @@ CREATE TABLE IF NOT EXISTS beliefs (
   UNIQUE(target_id, type)
 );
 CREATE INDEX IF NOT EXISTS idx_belief_target ON beliefs(target_id);
-CREATE INDEX IF NOT EXISTS idx_belief_sendstate ON beliefs(type, send_state);
 
 CREATE TABLE IF NOT EXISTS pattern_beliefs (
   domain TEXT PRIMARY KEY,
@@ -166,7 +165,6 @@ function init(opts = {}) {
     const bcols = new Set(db.prepare(`PRAGMA table_info(beliefs)`).all().map((c) => c.name));
     if (!bcols.has('send_state')) {
       db.exec(`ALTER TABLE beliefs ADD COLUMN send_state TEXT`);
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_belief_sendstate ON beliefs(type, send_state)`);
       // one-time BACKFILL: seed the marker from each email belief's latest verification observation on its
       // HELD value, so the existing corpus (e.g. last night's delivery-log results) is immediately
       // list-pullable instead of blank until re-verified. Runs once — the guard above won't fire again.
@@ -178,6 +176,9 @@ function init(opts = {}) {
         ORDER BY o.captured_at DESC LIMIT 1)
         WHERE beliefs.type = 'email' AND send_state IS NULL`);
     }
+    // index the marker AFTER the column is guaranteed present (fresh DB has it via SCHEMA; existing via the
+    // ALTER above) — putting this in SCHEMA fails on an existing beliefs table that predates the column.
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_belief_sendstate ON beliefs(type, send_state)`);
   } catch (e) { /* fresh DB already has them via SCHEMA */ }
   return db;
 }
