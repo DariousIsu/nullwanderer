@@ -231,6 +231,60 @@ function drawTendrils(ctx, scale) {
   }
 }
 
+// --- dedup ABSORB gesture ---------------------------------------------------
+// When the self-curation engine folds duplicate fragments into a canonical entity (a merge landing on a
+// node), we show it as the visual OPPOSITE of growth: instead of signals firing OUT, ghost "duplicate" motes
+// converge INWARD along short comet-tails and collapse into the node, which then blooms brighter (it just
+// absorbed the duplicates' degree). Many → one, drawn in graph space so it tracks the camera. Fired from
+// onCurationMove for kind='dedup'|'merge'; a no-op (falls back to the field flare) if the anchor isn't in view.
+const absorbs = [];   // active absorb animations {id, startAt, ghosts:[{ang,r0,curve}]}
+const ABSORB_DUR = 1150;
+function dedupAbsorb(anchor, count) {
+  if (prefersReducedMotion || !G || !anchor) return false;
+  const node = ((G.graphData().nodes) || []).find(n => n.id === anchor);
+  if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.y)) return false;   // canonical off-screen → caller flares the field instead
+  const n = Math.min(9, Math.max(2, count || 3));
+  const ghosts = [];
+  for (let i = 0; i < n; i++) {
+    const seed = node.x * 0.13 + node.y * 0.29 + i * 2.3999;
+    ghosts.push({ ang: ((seed % 6.283) + 6.283) % 6.283, r0: 52 + Math.abs(Math.sin(seed)) * 62, curve: (i % 2 ? 1 : -1) });
+  }
+  absorbs.push({ id: anchor, startAt: performance.now(), ghosts });
+  if (absorbs.length > 12) absorbs.shift();   // cap concurrent gestures
+  return true;
+}
+function drawAbsorbs(ctx) {
+  if (!absorbs.length || !G) return;
+  const now = performance.now(), nodes = (G.graphData().nodes) || [];
+  for (let ai = absorbs.length - 1; ai >= 0; ai--) {
+    const A = absorbs[ai], p = (now - A.startAt) / ABSORB_DUR;
+    if (p >= 1) { absorbs.splice(ai, 1); continue; }
+    const node = nodes.find(nn => nn.id === A.id);
+    if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.y)) { if (p > 0.25) absorbs.splice(ai, 1); continue; }
+    const nx = node.x, ny = node.y, nr = node.__r || 4, col = node.color || '#7dd3fc', lit = lighten(col, 0.5);
+    const ease = p * p * (3 - 2 * p);                        // smoothstep: accelerate inward
+    for (const g of A.ghosts) {
+      const rad = g.r0 * (1 - ease) + (nr + 1) * ease;       // converge from r0 → the soma
+      const ang = g.ang + g.curve * (1 - p) * 0.6;           // slight inward spiral that straightens on arrival
+      const ca = Math.cos(ang), sa = Math.sin(ang);
+      const gx = nx + ca * rad, gy = ny + sa * rad;
+      const tailR = rad + Math.min(20, g.r0 * 0.28) * (1 - p);
+      const tx = nx + ca * tailR, ty = ny + sa * tailR;
+      const fade = Math.sin(Math.min(1, p / 0.92) * Math.PI);   // fade in, peak, fade as it lands
+      const tg = ctx.createLinearGradient(tx, ty, gx, gy);
+      tg.addColorStop(0, rgbaHex(col, 0)); tg.addColorStop(1, rgbaHex(lit, 0.5 * fade));
+      ctx.strokeStyle = tg; ctx.lineWidth = 1.2; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(gx, gy); ctx.stroke();
+      ctx.beginPath(); ctx.arc(gx, gy, 1.9, 0, 2 * Math.PI, false); ctx.fillStyle = rgbaHex(lit, 0.85 * fade); ctx.fill();
+    }
+    if (p > 0.45) {                                          // consolidation bloom as they collapse in
+      const q = (p - 0.45) / 0.55, br = nr + 6 + q * 18;
+      const bloom = ctx.createRadialGradient(nx, ny, 0, nx, ny, br);
+      bloom.addColorStop(0, rgbaHex(lit, 0.5 * (1 - q))); bloom.addColorStop(1, rgbaHex(col, 0));
+      ctx.fillStyle = bloom; ctx.beginPath(); ctx.arc(nx, ny, br, 0, 2 * Math.PI, false); ctx.fill();
+    }
+  }
+}
+
 // Atmosphere pass (onRenderFramePre → drawn under links/nodes): a screen-space vignette (subtle centre
 // lift, darker rim) turns the flat void into space, a far-field cosmos implies the corpus continuing beyond
 // the frame, and a soft graph-space colour bloom behind the focal node steers the eye to the active spot.
@@ -255,6 +309,7 @@ function drawAtmosphere(ctx, scale) {
     ctx.fillStyle = bg; ctx.beginPath(); ctx.arc(target.x, target.y, rad, 0, 2 * Math.PI, false); ctx.fill();
   }
   drawTendrils(ctx, scale);   // threads from well-connected nodes reaching off into the universe
+  drawAbsorbs(ctx);           // dedup: duplicate motes collapsing INTO a canonical node
 }
 
 function ensureGraph() {
@@ -677,7 +732,17 @@ function onFocusMove(p) {
 }
 // curation metabolism: frequent programmatic curation + the daily clean sweep arrive here. Inert until the
 // host emits kg:curation-move — same graceful-degrade pattern as follow. Payload {tier, kind, count, items?}.
-function onCurationMove(p) { ingestPulse(p); }
+function onCurationMove(p) {
+  // dedup/merge events get the ABSORB gesture on the canonical (duplicates collapsing in). We STILL flare the
+  // field softly so the merge registers even when the anchor is off-screen (dedupAbsorb no-ops in that case).
+  if (p && (p.kind === 'dedup' || p.kind === 'merge') && p.anchor) {
+    dedupAbsorb(p.anchor, p.count || (p.items ? p.items.length : 3));
+    ingestPulse({ tier: p.tier || 'curation', anchor: p.anchor, count: p.count || 1 });
+    return;
+  }
+  ingestPulse(p);
+}
+try { window.__kgDedup = (anchor, count) => dedupAbsorb(anchor, count || 5); window.__kgAbsorbN = () => absorbs.length; } catch (e) {}   // dev trigger + peek for live CDP verification
 followBtn.addEventListener('click', () => setFollow(!follow));
 try {
   if (window.sq && window.sq.kg && typeof window.sq.kg.onFocusMove === 'function') window.sq.kg.onFocusMove(onFocusMove);
@@ -690,4 +755,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-10m: FIX tendrils (rr/i scope ReferenceError killed the whole pass) + warnOnce on swallowed render throws');
+console.info('[kg] surface build 2026-07-10n: FIX tendrils (rr/i scope) + dedup ABSORB gesture (duplicates collapse into canonical) + warnOnce');
