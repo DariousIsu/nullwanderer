@@ -114,6 +114,14 @@ function applyVerification(targetId, { value, result, idempotent = false } = {})
       }
     }
   }
+  // MARKER (send_state): persist the held value's deliverability so every list-pull + the rerun batch read
+  // ONE field. verified = send-ready; bounced = dead (a flip is queued, the loop will swap it); exhausted =
+  // no reachable address (role/infra/no next pattern); catchall = untrustworthy domain.
+  let sendState = null;
+  if (out.catchAll || B.isCatchAll(st)) sendState = 'catchall';
+  else if ((r === 'valid' || r === 'deliverable') && norm(heldValue) === email) sendState = 'verified';
+  else if ((r === 'invalid' || r === 'undeliverable') && norm(heldValue) === email) sendState = out.patternFlip ? 'bounced' : 'exhausted';
+  if (sendState) { db.markSendState(targetId, 'email', sendState); out.sendState = sendState; }
   return out;
 }
 
@@ -152,7 +160,8 @@ function decideRevision(revisionId, decision) {
       db.addObservation(rev.target_id, { attr: 'email', value: newV, kind: 'derived', source: 'revision-accept',
         meta: { supersedes: from && from.value, reason: adj.reason } });
       const q = requalifyEmail(rev.target_id, newV);
-      out.applied = true; out.superseded = !!from; out.confidence = q.confidence; out.grade = q.grade; out.supersessionReason = adj.reason;
+      db.markSendState(rev.target_id, 'email', 'rerun_pending');   // best-guess flip applied → awaits the next verification upload (this is the "ready for a rerun" marker lists filter on)
+      out.applied = true; out.superseded = !!from; out.confidence = q.confidence; out.grade = q.grade; out.supersessionReason = adj.reason; out.sendState = 'rerun_pending';
     } else {
       out.applied = false; out.rejectedReason = adj.reason;   // stale-would-regress / weak-new / same-value
     }

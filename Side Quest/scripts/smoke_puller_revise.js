@@ -27,6 +27,7 @@ ok('next pattern is flast', neg.patternFlip.toPattern === 'flast' && neg.pattern
 ok('retest enqueued', neg.retestId > 0 && DB.listRetests({ status: 'queued' }).some(q => q.next_pattern === 'flast'));
 ok('first.last took a miss', DB.getPatternState('acme.com').patterns['first.last'].misses === 1);
 ok('belief now marked conflict', /conflict/.test(DB.getBelief(t.id, 'email').derivation));
+ok('MARKER: bounce-with-flip → send_state=bounced', DB.getBelief(t.id, 'email').send_state === 'bounced');
 
 // ---- 2. accept the flip → new held value, re-qualified as a fresh derived guess (D = 50%) ----
 const dec = R.decideRevision(neg.revisionId, 'accepted');
@@ -34,12 +35,16 @@ ok('revision applied', dec.applied === true);
 ok('held value flipped to flast candidate', DB.getBelief(t.id, 'email').value === 'bhuseman@acme.com');
 ok('new value qualifies at D (50%)', dec.confidence === 0.50 && dec.grade === 'D');
 ok('no longer pending', DB.listRevisions({ status: 'pending' }).length === 0);
+ok('MARKER: accepted flip → send_state=rerun_pending', DB.getBelief(t.id, 'email').send_state === 'rerun_pending');
+ok('rerun batch surfaces it (listBeliefsBySendState)', DB.listBeliefsBySendState({ sendState: 'rerun_pending' }).some(b => b.target_id === t.id));
 
 // ---- 3. verify the new candidate VALID → climbs to B (95%) + credits flast ----
 const pos = R.applyVerification(t.id, { value: 'bhuseman@acme.com', result: 'valid' });
 ok('valid lifts to 95% (grade B)', pos.confidence === 0.95 && pos.grade === 'B');
 ok('flast credited a hit', DB.getPatternState('acme.com').patterns.flast.hits === 1);
 ok('no flip proposed on a positive', pos.revisionId === null);
+ok('MARKER: verified send → send_state=verified', DB.getBelief(t.id, 'email').send_state === 'verified');
+ok('verified list surfaces it', DB.listBeliefsBySendState({ sendState: 'verified' }).some(b => b.target_id === t.id));
 
 // ---- 4. dedicated source (business card) → 100% (only A reaches full) ----
 const ded = R.markDedicatedSource(t.id, { value: 'b.huseman@acme.com', note: 'business card, conf 2026' });
@@ -54,6 +59,7 @@ const ca = R.applyVerification(t2.id, { value: 'jane.roe@catchco.com', result: '
 ok('accept_all flags catch-all', ca.catchAll === true && B.isCatchAll(DB.getPatternState('catchco.com')));
 const caNeg = R.applyVerification(t2.id, { value: 'jane.roe@catchco.com', result: 'invalid' });
 ok('no flip proposed on catch-all domain', caNeg.revisionId === null);
+ok('MARKER: catch-all domain → send_state=catchall', DB.getBelief(t2.id, 'email').send_state === 'catchall');
 
 // ---- 6. gateway-block: a strong-prior domain that only bounces → infra-suspect, no flip ----
 const ti = DB.createTarget({ name: 'Block Person', company: 'MSFT', domain: 'msft.com' });
@@ -64,6 +70,7 @@ let infraRes;
 for (let i = 0; i < 3; i++) infraRes = R.applyVerification(ti.id, { value: 'block.person@msft.com', result: 'invalid' });
 ok('3rd bounce on strong-prior domain → infraSuspect', infraRes.infraSuspect === true);
 ok('infra-suspect proposes NO flip', infraRes.revisionId === null && infraRes.patternFlip === null);
+ok('MARKER: exhausted (bounce, no reachable flip) → send_state=exhausted', DB.getBelief(ti.id, 'email').send_state === 'exhausted');
 
 // ---- 7. cascade: a domain belief shift re-derives queued retests' next pattern ----
 DB.savePatternState('acme.com', B.seedPrior(B.emptyState(), 'f.last', 0.9));        // f.last now dominant

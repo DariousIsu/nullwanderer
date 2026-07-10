@@ -778,6 +778,45 @@ app.whenReady().then(() => {
     finally { dedupRunning = false; }
   };
   setInterval(() => { maybeRunDedup().catch(() => {}); }, DEDUP_CHECK_MS).unref?.();
+  // PULLER CLOSE-THE-LOOP — after an email bounces, the Puller proposes a next-pattern flip (a pending
+  // revision) + enqueues a retest, but NOTHING accepted them autonomously → new guesses sat frozen 'pending'
+  // (485 of them) while the dead address stayed the active belief. This tick APPLIES pending EMAIL flips
+  // (each supersession-guarded inside decideRevision — a stale/weak flip is refused), swapping the dead
+  // address for its best next-guess and marking send_state='rerun_pending' so it lands in the next
+  // verification upload AND surfaces (marked) in pulled lists. PROPOSE→APPLY only: no sending, no probing.
+  // Flag ZOE_PULLER_LOOP_ENABLED (default OFF). Pull the plug: =0 + reboot.
+  const PLOOP_CHECK_MS = (parseFloat(process.env.ZOE_PULLER_LOOP_CHECK_MIN) || 30) * 60 * 1000;
+  const PLOOP_MIN_GAP_MS = (parseFloat(process.env.ZOE_PULLER_LOOP_MIN_GAP_MIN) || 60) * 60 * 1000;
+  const PLOOP_BATCH = parseInt(process.env.ZOE_PULLER_LOOP_BATCH || '', 10) || 200;
+  let pLoopRunning = false;
+  const maybeRunPullerLoop = async () => {
+    if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_PULLER_LOOP_ENABLED || '').trim())) return;   // arm deliberately
+    if (pLoopRunning) return;
+    if (Date.now() - parseInt(db.getMeta('last_puller_loop_at') || '0', 10) < PLOOP_MIN_GAP_MS) return;   // floor
+    let pdb, revise;
+    try { pdb = require('./lib/puller_db'); pdb.init(); revise = require('./studio/puller_revise'); } catch { return; }
+    pLoopRunning = true;
+    db.setMeta('last_puller_loop_at', String(Date.now()));
+    try {
+      const pending = pdb.listRevisions({ status: 'pending' })
+        .filter(r => (r.attr === 'email' || !r.attr) && r.to_value && String(r.to_value).includes('@'))
+        .slice(0, PLOOP_BATCH);
+      let applied = 0, refused = 0;
+      for (const rev of pending) {
+        try { const r = revise.decideRevision(rev.id, 'accepted'); if (r && r.applied) applied++; else refused++; } catch { refused++; }
+      }
+      if (pending.length) {
+        console.log(`[puller-loop] accepted ${applied}/${pending.length} pending email flips → rerun_pending (${refused} refused by supersession guard)`);
+        if (applied > 0) {
+          const text = `[Memory upkeep] Closed the loop on ${applied} bounced contact${applied === 1 ? '' : 's'} — swapped each dead address for its best next-guess, queued for the next verification run.`;
+          const row = db.insertMonologue({ content: text, model: 'puller-loop', type: 'reading' });
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
+        }
+      }
+    } catch (e) { console.error('[puller-loop] failed:', e.message); }
+    finally { pLoopRunning = false; }
+  };
+  setInterval(() => { maybeRunPullerLoop().catch(() => {}); }, PLOOP_CHECK_MS).unref?.();
   // KG BLOCKING DEDUP — the PACED, event-driven "clean within range" lane (Lucas: faster not instant). Not a
   // full-corpus firehose: INCREMENTAL — each pass works only the blocks TOUCHED by nodes changed since the
   // last run (changed_since cursor), so it lands a steady trickle of resolution_proposals as the standard

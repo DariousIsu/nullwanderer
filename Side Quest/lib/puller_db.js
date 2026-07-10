@@ -76,10 +76,15 @@ CREATE TABLE IF NOT EXISTS beliefs (
   derivation TEXT,                     -- how this was derived (rule name / note)
   supporting_obs TEXT,                 -- json array of observation ids
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','superseded','rejected')),
+  send_state TEXT,                     -- delivery/verify MARKER (email): verified / bounced / rerun_pending /
+                                       -- exhausted / catchall / untested. The single key list-pulls + the
+                                       -- rerun batch filter on (rerun_pending = flipped to a new best-guess,
+                                       -- awaiting the next verification upload).
   updated_at INTEGER NOT NULL,
   UNIQUE(target_id, type)
 );
 CREATE INDEX IF NOT EXISTS idx_belief_target ON beliefs(target_id);
+CREATE INDEX IF NOT EXISTS idx_belief_sendstate ON beliefs(type, send_state);
 
 CREATE TABLE IF NOT EXISTS pattern_beliefs (
   domain TEXT PRIMARY KEY,
@@ -157,6 +162,22 @@ function init(opts = {}) {
     if (!cols.has('face_embedding')) db.exec(`ALTER TABLE targets ADD COLUMN face_embedding TEXT`);
     // F4: merged_into points a tombstoned (merged-away) target at its survivor; NULL = live.
     if (!cols.has('merged_into')) db.exec(`ALTER TABLE targets ADD COLUMN merged_into INTEGER`);
+    // send_state MARKER: add to a pre-existing beliefs table (delivery/verify state for list-pulls + rerun).
+    const bcols = new Set(db.prepare(`PRAGMA table_info(beliefs)`).all().map((c) => c.name));
+    if (!bcols.has('send_state')) {
+      db.exec(`ALTER TABLE beliefs ADD COLUMN send_state TEXT`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_belief_sendstate ON beliefs(type, send_state)`);
+      // one-time BACKFILL: seed the marker from each email belief's latest verification observation on its
+      // HELD value, so the existing corpus (e.g. last night's delivery-log results) is immediately
+      // list-pullable instead of blank until re-verified. Runs once — the guard above won't fire again.
+      db.exec(`UPDATE beliefs SET send_state = (
+        SELECT CASE o.kind WHEN 'verified' THEN 'verified' WHEN 'bounce' THEN 'bounced' WHEN 'accept_all' THEN 'catchall' END
+        FROM observations o
+        WHERE o.target_id = beliefs.target_id AND o.attr = 'email'
+          AND LOWER(o.value) = LOWER(beliefs.value) AND o.kind IN ('verified','bounce','accept_all')
+        ORDER BY o.captured_at DESC LIMIT 1)
+        WHERE beliefs.type = 'email' AND send_state IS NULL`);
+    }
   } catch (e) { /* fresh DB already has them via SCHEMA */ }
   return db;
 }
@@ -276,19 +297,39 @@ function listObservations(targetId, { attr = null } = {}) {
 // ---- beliefs (one active per (target, type)) -----------------------------------------------------
 
 function upsertBelief(targetId, type, { value = null, confidence = null, derivation = null,
-                                        supportingObs = null, status = 'active' } = {}) {
+                                        supportingObs = null, status = 'active', sendState = null } = {}) {
   _db().prepare(
-    `INSERT INTO beliefs (target_id, type, value, confidence, derivation, supporting_obs, status, updated_at)
-     VALUES (?,?,?,?,?,?,?,?)
+    `INSERT INTO beliefs (target_id, type, value, confidence, derivation, supporting_obs, status, send_state, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?)
      ON CONFLICT(target_id, type) DO UPDATE SET
        value = excluded.value, confidence = excluded.confidence, derivation = excluded.derivation,
-       supporting_obs = excluded.supporting_obs, status = excluded.status, updated_at = excluded.updated_at`
-  ).run(targetId, type, value, confidence, derivation, j(supportingObs), status, now());
+       supporting_obs = excluded.supporting_obs, status = excluded.status,
+       send_state = COALESCE(excluded.send_state, beliefs.send_state),   -- preserve the marker unless explicitly set
+       updated_at = excluded.updated_at`
+  ).run(targetId, type, value, confidence, derivation, j(supportingObs), status, sendState, now());
   return getBelief(targetId, type);
 }
 function _beliefRow(r) { return r ? { ...r, supporting_obs: pj(r.supporting_obs, []) } : null; }
 function getBelief(targetId, type) {
   return _beliefRow(_db().prepare(`SELECT * FROM beliefs WHERE target_id = ? AND type = ?`).get(targetId, type));
+}
+// Set ONLY the delivery/verify marker (leaves value/confidence untouched) — the single write path for
+// send_state transitions (verified / bounced / rerun_pending / exhausted / catchall).
+function markSendState(targetId, type, sendState) {
+  _db().prepare(`UPDATE beliefs SET send_state = ?, updated_at = ? WHERE target_id = ? AND type = ?`)
+    .run(sendState, now(), targetId, type);
+  return getBelief(targetId, type);
+}
+// List-pull / rerun-batch query: live beliefs at a given send_state ('rerun_pending' = ready for the next
+// verification upload; 'verified' = send-ready). sendState=null → the untagged (never-tested) tail.
+function listBeliefsBySendState({ sendState = 'verified', type = 'email', limit = 5000 } = {}) {
+  const pred = sendState == null ? 'b.send_state IS NULL' : 'b.send_state = ?';
+  const args = sendState == null ? [type, limit] : [type, sendState, limit];
+  return _db().prepare(
+    `SELECT b.*, t.name AS target_name, t.company, t.domain AS target_domain, t.function
+     FROM beliefs b JOIN targets t ON t.id = b.target_id
+     WHERE b.type = ? AND ${pred} AND b.status = 'active' AND t.merged_into IS NULL
+     ORDER BY b.confidence DESC LIMIT ?`).all(...args).map(_beliefRow);
 }
 function listBeliefs(targetId) {
   return _db().prepare(`SELECT * FROM beliefs WHERE target_id = ? ORDER BY type ASC`).all(targetId).map(_beliefRow);
@@ -476,7 +517,7 @@ module.exports = {
   init, close,
   createTarget, getTarget, liveTarget, listTargets, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName,
   addObservation, listObservations,
-  upsertBelief, getBelief, listBeliefs,
+  upsertBelief, getBelief, listBeliefs, markSendState, listBeliefsBySendState,
   getPatternState, savePatternState,
   proposeRevision, decideRevision, listRevisions,
   enqueueRetest, listRetests, updateRetest,
