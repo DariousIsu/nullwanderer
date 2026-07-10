@@ -36,6 +36,11 @@ function lighten(h, t) { const [r, g, b] = hexToRgb(h); const m = (v) => Math.ro
 // so the reach never shimmers with residual physics micro-motion the way a live-position seed does.
 function hashSeed(id) { let h = 2166136261; const s = String(id); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) / 4294967296; }
 
+// The render-hook try/catch must keep swallowing (a per-frame throw must never kill the always-live loop —
+// that's the black-canvas guard). But a SILENT swallow once hid a tendril-killing ReferenceError for a whole
+// build. warnOnce surfaces the FIRST throw per site to the console without spamming — silent-failure, ended.
+const _warned = new Set();
+function warnOnce(where, e) { if (_warned.has(where)) return; _warned.add(where); try { console.warn(`[kg] render throw in ${where} (loop kept alive):`, e && e.message || e); } catch (_) {} }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function setOverlay(text, cls) { if (!text) { overlay.hidden = true; return; } overlay.hidden = false; overlay.className = 'overlay' + (cls ? ' ' + cls : ''); overlay.textContent = text; }
 
@@ -184,12 +189,14 @@ function drawTendrils(ctx, scale) {
     const arc = hasEdges ? 1.6 : 2.3;
     const col = n.color || '#7dd3fc', lit = lighten(col, 0.4);
     // Stable per-node seed (hashed from identity, once) so the arbor is FROZEN to the soma — tips move only
-    // when the node moves, never a per-frame crawl. rr(k) = stable per-thread pseudo-randoms off that seed.
+    // when the node moves, never a per-frame crawl. rr(i,k) = stable per-thread pseudo-randoms off that seed.
+    // NOTE: i is passed IN (the arrow can't close over the loop's block-scoped i — doing so threw a swallowed
+    // ReferenceError that silently killed the whole tendril pass; build 09l regression, fixed here).
     const sd = (n.__sd != null) ? n.__sd : (n.__sd = hashSeed(n.id));
-    const rr = (k) => { const v = Math.sin(sd * 127.1 + i * 12.9898 + k * 78.233) * 43758.5453; return v - Math.floor(v); };
+    const rr = (ii, k) => { const v = Math.sin(sd * 127.1 + ii * 12.9898 + k * 78.233) * 43758.5453; return v - Math.floor(v); };
     for (let i = 0; i < count; i++) {
-      const z = rr(1);                                  // depth: 0 = near, 1 = far — drives length/fade/width/terminal
-      const a = baseA + (count > 1 ? (i / (count - 1) - 0.5) : 0) * arc + (rr(2) - 0.5) * 0.5, ca = Math.cos(a), sa = Math.sin(a);
+      const z = rr(i, 1);                               // depth: 0 = near, 1 = far — drives length/fade/width/terminal
+      const a = baseA + (count > 1 ? (i / (count - 1) - 0.5) : 0) * arc + (rr(i, 2) - 0.5) * 0.5, ca = Math.cos(a), sa = Math.sin(a);
       const tlen = len * (0.7 + z * 0.85);              // deeper threads reach FURTHER off toward their distant node
       const bx = n.x + ca * r, by = n.y + sa * r, ex = n.x + ca * tlen, ey = n.y + sa * tlen;
       const sign = (i % 2) ? 1 : -1, cvx = (bx + ex) / 2 - sa * tlen * 0.1 * sign, cvy = (by + ey) / 2 + ca * tlen * 0.1 * sign;   // gentle dendrite curve
@@ -324,8 +331,8 @@ function ensureGraph() {
     // first, then by prominence, each skipped if its box would overlap an already-placed label. Kills the
     // pile-up seen at overview scale where every node stamped its text on top of the others.
     // hooks wrapped so a per-frame throw on odd data can never kill the (now always-live) render loop
-    .onRenderFramePre((ctx, s) => { try { drawAtmosphere(ctx, s); } catch (e) {} })
-    .onRenderFramePost((ctx, s) => { try { drawLabels(ctx, s); } catch (e) {} });
+    .onRenderFramePre((ctx, s) => { try { drawAtmosphere(ctx, s); } catch (e) { warnOnce('atmosphere', e); } })
+    .onRenderFramePost((ctx, s) => { try { drawLabels(ctx, s); } catch (e) { warnOnce('labels', e); } });
   // Force tuning: spread clusters and stop node disks stacking. Stronger bounded charge repels nodes
   // without yanking distant clusters into one thread (distanceMax caps the pull range); softer, longer
   // links give the graph room; the custom collide keeps disks off each other.
@@ -683,4 +690,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-09l: calm physics + identity-frozen tendrils receding to distant nodes (3D)');
+console.info('[kg] surface build 2026-07-10m: FIX tendrils (rr/i scope ReferenceError killed the whole pass) + warnOnce on swallowed render throws');
