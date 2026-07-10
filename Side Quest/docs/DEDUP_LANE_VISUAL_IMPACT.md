@@ -27,13 +27,34 @@ canonical** (the three effects below). After the stock clears, steady-state is a
 (~5–12 merges/day)** — the field goes stable, not churning. So: a visible multi-day declutter,
 then quiet.
 
-**What you need to change in `renderer/kg.js`: essentially nothing.** The ghost-node / stub-edge
+**What you need to change in `renderer/kg.js` for CORRECTNESS: nothing.** The ghost-node / stub-edge
 risk is handled **server-side** by `10b5dd8` (the mount already resolves to live canonicals and
 drops `SAME_AS`). Two things to simply *expect* rather than treat as bugs: (1) the node count
 will **trend down** over the coming days, and (2) some mid-degree nodes will **brighten / grow**
 as duplicate fragments fold into them. If you cache node/edge lists client-side, just don't
 assume a stable node population — a node present last frame may be a tombstone next frame
 (reads follow `canonical_id`; the mount already excludes it).
+
+**Renderer response — LIVE, actively visualized (graphics context, `renderer/kg.js`).** The declutter
+is no longer just something to *expect passively* — the panel now *animates each fold as it lands*:
+- **Emitter → gesture wiring is closed.** `main.js` (dedup apply tick) emits `kg:curation-move
+  {kind:'dedup', tier, count, anchor}`, one event per real fold, capped 25/tick (Echo `applied_sample`);
+  `anchor` = the survivor's name. `kg.js` `onCurationMove` routes `kind='dedup'` to the **ABSORB
+  gesture** (`dedupAbsorb`): ghost duplicate motes converge INWARD along comet-tails and collapse into
+  the canonical, which then blooms (it just absorbed their degree) — the visual inverse of the outward
+  growth pulse. Verified end-to-end live with the exact host payload (build `10o`).
+- **Graceful when off-screen.** The survivor is usually NOT in the ~40-node overview, so most folds
+  just **soft-flare the far-field** at the curation (whisper) tempo; the full absorb fires when the
+  survivor is in view — i.e. mainly in **Follow mode** around the node Lucas is walking. Both paths are
+  additive and safe.
+- **One watch-item (string identity).** `dedupAbsorb` matches the event's `anchor` against `node.id`,
+  which is `entities.name` from `graph_overview`. If Echo's `applied_sample.anchor` ever carries a
+  `display_name` (elected-survivor name) that differs from `name`, the in-view absorb silently no-ops
+  and degrades to the field-flare. Not a corruption risk; just why an in-view merge might not animate.
+- **Tendrils note:** independent build-`09l` regression (an `rr`/`i` scope `ReferenceError` swallowed
+  by the render guard) had killed the whole tendril pass; fixed in `10m` (+`warnOnce` so a swallowed
+  render throw can't hide again). Mentioned here only so the two 2026-07-10 renderer changes aren't
+  conflated with the dedup lane.
 
 ## What the lane does to the underlying data
 - **Merge (dedup apply)** = `echo.resolve.apply`: the non-canonical member gets
