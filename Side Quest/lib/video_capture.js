@@ -233,10 +233,16 @@ function videoId(u) {
 // One hidden always-on BrowserWindow per feed, muted autoplay + CC on, polled on a cadence. Screenshots
 // on the cue edge; segments into the reservoir. Crash-isolated per stream (a dead renderer is reopened).
 class CaptureLane {
-  constructor({ store, feeds = [], capturesDir, intervalMs = 3000, settleMs = 9000, sampleMs = 30000, maxWindows = 4, log = () => {}, onScreenshot = null, visionRead = null, visionCapPerHour = 60 } = {}) {
+  constructor({ store, feeds = [], capturesDir, intervalMs = 3000, settleMs = 9000, sampleMs = 30000, maxWindows = 4, captureW = 640, captureH = 360, log = () => {}, onScreenshot = null, visionRead = null, visionCapPerHour = 60 } = {}) {
     this.store = store; this.feeds = feeds.slice(0, maxWindows); this.log = log; this.onScreenshot = onScreenshot;
     this.capturesDir = capturesDir || path.join(os.tmpdir(), 'news_captures');
     this.intervalMs = intervalMs; this.settleMs = settleMs; this.sampleMs = sampleMs;
+    // BUFFERING FIX: the hidden capture window size drives the resolution YouTube's ABR serves (bigger player
+    // → higher bitrate). These windows only need CAPTIONS (DOM text — resolution-independent) + periodic
+    // screenshots, so a small window (default 640×360 → ~360p, was 960×600 → ~720p) cuts decode+bandwidth ~4×
+    // per stream, freeing the machine so the VISIBLE tiles the operator watches stop buffering. Captions are
+    // unaffected; only the vision-read of on-screen charts loses some fine detail (best-effort anyway).
+    this.captureW = Math.max(240, captureW | 0); this.captureH = Math.max(160, captureH | 0);
     this.visionRead = visionRead; this.visionCapPerHour = visionCapPerHour; this._visHr = -1; this._visN = 0;
     this.wins = new Map(); this.states = new Map(); this.timer = null; this.stopped = false;
   }
@@ -258,7 +264,9 @@ class CaptureLane {
     const { BrowserWindow } = require('electron');
     const id = videoId(feed.url);
     if (!id) { this.log(`[video-capture] skip (not a YouTube stream): ${feed.url}`); return; }
-    const win = new BrowserWindow({ show: false, width: 960, height: 600,
+    // Small window → YouTube serves low-res (the decode/bandwidth lever; see the constructor). backgroundThrottling
+    // stays FALSE on purpose: a hidden window must keep PLAYING to advance captions — throttling would pause it.
+    const win = new BrowserWindow({ show: false, width: this.captureW, height: this.captureH,
       webPreferences: { autoplayPolicy: 'no-user-gesture-required', partition: 'persist:news-capture', backgroundThrottling: false, offscreen: false } });
     // AUDIO LEAK FIX: mute at the webContents level (authoritative + element-independent), applied at CREATION
     // so the window is never audible. The in-page `v.muted` alone leaked: it only caught the first <video>

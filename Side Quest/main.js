@@ -1686,6 +1686,10 @@ app.whenReady().then(() => {
           capturesDir: path.join(__dirname, 'data', 'news_captures'),
           intervalMs: parseInt(process.env.NEWS_VIDEO_POLL_MS || '', 10) || 3000,
           sampleMs: parseInt(process.env.NEWS_VIDEO_SAMPLE_MS || '', 10) || 30000,   // re-read the screen every ~30s during a music/chart stretch
+          // small capture windows → YouTube serves low-res → far less decode/bandwidth for the hidden half, so the
+          // VISIBLE tiles stop buffering (captions are DOM text, unaffected). Env-tunable if the vision-read needs more detail.
+          captureW: parseInt(process.env.NEWS_VIDEO_CAPTURE_W || '', 10) || 640,
+          captureH: parseInt(process.env.NEWS_VIDEO_CAPTURE_H || '', 10) || 360,
           // vision-read each captured frame → on-screen market data (tickers/indexes/charts) as text. Pinned to
           // mistral-large-3:675b (it IS multimodal and reads frames more thoroughly than gemma4:31b — proven on
           // real Yahoo frames); scoped to the screen-read only, NOT her general vision. Overridable via env/meta.
