@@ -477,6 +477,7 @@ app.whenReady().then(() => {
     if (stages.selfEvo && stages.selfEvo.collapsed) parts.push(`consolidated ${stages.selfEvo.collapsed} repeated self-notes`);
     if (stages.quarantine && stages.quarantine.removed) parts.push(`cleared ${stages.quarantine.removed} stale markers`);
     if (stages.graph && stages.graph.rejected) parts.push(`retired ${stages.graph.rejected} stale proposals`);
+    if (stages.graphPromote && stages.graphPromote.promoted) parts.push(`carried ${stages.graphPromote.promoted} matured connection${stages.graphPromote.promoted === 1 ? '' : 's'} up to long-term memory`);
     const text = parts.length
       ? `[Memory consolidation] I took a moment to tidy my memory — ${parts.join(', ')}. It feels a little clearer.`
       : `[Memory consolidation] I looked over my memory for clutter; nothing needed tidying this time.`;
@@ -495,7 +496,16 @@ app.whenReady().then(() => {
     db.setMeta('last_curation_pass_at', String(Date.now()));       // claim the slot before running
     console.log('[curation] starting daily pass…');
     try {
-      const r = await cloudCurator.runDailyPass({ apply: true, onLog: (m) => console.log('[curation]', m) });
+      // PROMOTE-UP wiring (option 2, Slice 3): cross matured local short-term edges UP to Echo. Only when Echo
+      // is connected; reuses the walker's own propose_relation dispatch (open-vocab), and Echo itself is the
+      // accept/reject gate — a young endpoint is simply refused and retried a later night.
+      const proposeEchoRelationFn = (echoSuit && echoSuit.connected)
+        ? (edge) => require('./lib/graph_walk').proposeRelation({
+            dispatch: (t) => echoSuit.dispatch(t), source: edge.source, target: edge.target,
+            relation_type: edge.relation_type, confidence: edge.confidence, metadata: edge.metadata, allowOpen: true
+          })
+        : null;
+      const r = await cloudCurator.runDailyPass({ apply: true, proposeEchoRelationFn, onLog: (m) => console.log('[curation]', m) });
       console.log('[curation] pass complete:', JSON.stringify(r.stages));
       curationBeat(r.stages);
       // NEWS daily pass (Data-Stream lane): worthy rolling stories → Echo `event` objects + edges, plus an

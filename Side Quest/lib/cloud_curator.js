@@ -227,23 +227,86 @@ const PROPOSAL_STALE_MS_DEFAULT = 7 * 24 * 60 * 60 * 1000;
 function adjudicateGraphProposals({ apply = false, staleDays = 7, now = Date.now() } = {}) {
   const gm = require('./graph_memory');
   const cutoff = now - (staleDays * 24 * 60 * 60 * 1000);
-  const pending = db.graphListPendingEntityProposals(1000);
-  const superseded = [], stale = [];
-  for (const p of pending) {
+
+  // --- ENTITY proposals ---
+  const pendingE = db.graphListPendingEntityProposals(1000);
+  const supersededE = [], staleE = [];
+  for (const p of pendingE) {
     const canonical = db.graphGetEntityByKey(gm.normalizeName(p.name));
-    if (canonical) superseded.push(p.id);
-    else if ((p.created_at || 0) < cutoff) stale.push(p.id);
+    if (canonical) supersededE.push(p.id);
+    else if ((p.created_at || 0) < cutoff) staleE.push(p.id);
   }
+
+  // --- RELATION proposals (Slice 2 — the gap: this queue had NO adjudication) ---
+  // Superseded — a grounded canonical edge with the same normalized endpoints + type now exists (it got
+  //   grounded by other means: the walker landed it short-term as 'read' and it matured, or a read/meeting
+  //   lane wrote it), so the proposal is redundant → reject.
+  // Stale — still no grounding after staleDays → reject as abandoned inference ("if the edge fails and falls
+  //   away, no big deal" — the lowest inferred rung, cleaned reversibly).
+  const pendingR = db.graphListPendingRelationProposals(1000);
+  const supersededR = [], staleR = [];
+  for (const p of pendingR) {
+    const se = db.graphGetEntityByKey(gm.normalizeName(p.source_name));
+    const te = db.graphGetEntityByKey(gm.normalizeName(p.target_name));
+    const relType = String(p.relation_type || '').trim().toUpperCase();
+    let grounded = false;
+    if (se && te) {
+      // directed live edge se→te of this type among the source's live canonical neighbours
+      grounded = db.graphNeighbors(se.id).some(r =>
+        r.source_id === se.id && r.target_id === te.id && String(r.relation_type || '').toUpperCase() === relType);
+    }
+    if (grounded) supersededR.push(p.id);
+    else if ((p.created_at || 0) < cutoff) staleR.push(p.id);
+  }
+
   if (apply) {
-    for (const id of superseded) db.graphSetEntityProposalStatus(id, 'rejected');
-    for (const id of stale) db.graphSetEntityProposalStatus(id, 'rejected');
+    for (const id of supersededE) db.graphSetEntityProposalStatus(id, 'rejected');
+    for (const id of staleE) db.graphSetEntityProposalStatus(id, 'rejected');
+    for (const id of supersededR) db.graphSetRelationProposalStatus(id, 'rejected');
+    for (const id of staleR) db.graphSetRelationProposalStatus(id, 'rejected');
   }
+
+  const rejectedE = supersededE.length + staleE.length;
+  const rejectedR = supersededR.length + staleR.length;
+  const pending = pendingE.length + pendingR.length;
   return {
-    apply, pending: pending.length,
-    superseded: superseded.length, stale: stale.length,
-    kept: pending.length - superseded.length - stale.length,
-    rejected: apply ? superseded.length + stale.length : 0
+    apply, pending,
+    entity: { pending: pendingE.length, superseded: supersededE.length, stale: staleE.length },
+    relation: { pending: pendingR.length, superseded: supersededR.length, stale: staleR.length },
+    superseded: supersededE.length + supersededR.length,
+    stale: staleE.length + staleR.length,
+    kept: pending - rejectedE - rejectedR,
+    rejected: apply ? rejectedE + rejectedR : 0
   };
+}
+
+// ---- Cross-DB PROMOTE-UP (option 2, Slice 3) ------------------------------
+// The short-term catch (graph_walk) lands a young-endpoint edge in the LOCAL graph so it doesn't evaporate.
+// This arm crosses a matured local edge UP to Echo's canonical graph — but ONLY when Echo will actually accept
+// it (i.e. both endpoints have independently grounded in the public corpus). We don't pre-check existence with
+// a second call: we simply attempt the propose and let Echo be the gate — a 'proposed' action means it crossed
+// (mark promoted_up so we never re-send), a 'rejected' (endpoint still young) leaves promoted_up=0 to retry a
+// later night. Self-healing, idempotent (Echo dedups), bounded per pass. proposeFn is injected (echoSuit in
+// main.js) so this stays cloud-free + offline-provable; no proposeFn / dry run → a pure no-op report.
+async function promoteLocalEdgesUp({ apply = false, proposeFn = null, maxEdges = 50 } = {}) {
+  const candidates = db.graphListPromotableUp(maxEdges);
+  const out = { apply, candidates: candidates.length, promoted: 0, skipped: 0, results: [] };
+  if (!apply || typeof proposeFn !== 'function') {
+    out.results = candidates.map(c => ({ id: c.id, source: c.source_name, target: c.target_name, type: c.relation_type, action: 'would-attempt' }));
+    return out;
+  }
+  for (const c of candidates) {
+    let action = 'error';
+    try {
+      const meta = c.cite_url ? { source_set: [c.cite_url], url: c.cite_url } : undefined;
+      const r = await proposeFn({ source: c.source_name, target: c.target_name, relation_type: c.relation_type, confidence: c.confidence, metadata: meta });
+      action = (r && r.action) || (r && r.ok ? 'proposed' : 'skipped');
+      if (r && r.ok) { db.graphMarkPromotedUp(c.id); out.promoted++; }
+      else out.skipped++;   // e.g. 'rejected' — endpoint still young; leave promoted_up=0 to retry
+    } catch (e) { action = 'threw'; out.skipped++; }
+    out.results.push({ id: c.id, source: c.source_name, target: c.target_name, type: c.relation_type, action });
+  }
+  return out;
 }
 
 // ---- Near-duplicate KNOWLEDGE merge (cloud-assisted) ----------------------
@@ -458,7 +521,7 @@ async function reconcileVerifiedFacts({ apply = false, sim = VERIFIED_RECONCILE_
 // isolated in try/catch so one failure can't abort the pass; cloud stages fail-safe to no-ops
 // when the cloud tier is unreachable. relateFn/mergeFn/embedFn injectable for offline tests
 // (omit in production → each stage uses its own cloud default). Returns a per-stage summary.
-async function runDailyPass({ apply = false, relateFn = null, mergeFn = null, embedFn = null, onLog = () => {} } = {}) {
+async function runDailyPass({ apply = false, relateFn = null, mergeFn = null, embedFn = null, proposeEchoRelationFn = null, onLog = () => {} } = {}) {
   const inj = {};
   if (relateFn) inj.relateFn = relateFn;
   if (mergeFn) inj.mergeFn = mergeFn;
@@ -514,15 +577,23 @@ async function runDailyPass({ apply = false, relateFn = null, mergeFn = null, em
 
   try {
     const r = adjudicateGraphProposals({ apply });
-    out.stages.graph = { rejected: r.rejected, pending: r.pending };
-    onLog(`graph: ${apply ? r.rejected + ' rejected' : '0 actionable'} of ${r.pending} pending`);
+    out.stages.graph = { rejected: r.rejected, pending: r.pending, entity: r.entity, relation: r.relation };
+    onLog(`graph: ${apply ? r.rejected + ' rejected' : (r.superseded + r.stale) + ' actionable'} of ${r.pending} pending (ent ${r.entity.pending}/rel ${r.relation.pending})`);
   } catch (e) { out.stages.graph = { error: e.message }; onLog(`graph FAILED: ${e.message}`); }
+
+  // PROMOTE-UP (Slice 3): cross matured local short-term edges to Echo. No-op unless proposeEchoRelationFn is
+  // wired (main.js) — offline / unwired runs report candidates but cross nothing.
+  try {
+    const r = await promoteLocalEdgesUp({ apply, proposeFn: proposeEchoRelationFn, maxEdges: 50 });
+    out.stages.graphPromote = { candidates: r.candidates, promoted: r.promoted, skipped: r.skipped };
+    onLog(`graph-promote: ${apply && proposeEchoRelationFn ? r.promoted + ' crossed to Echo' : r.candidates + ' promotable'}${r.skipped ? ` (${r.skipped} skipped)` : ''}`);
+  } catch (e) { out.stages.graphPromote = { error: e.message }; onLog(`graph-promote FAILED: ${e.message}`); }
 
   return out;
 }
 
 module.exports = {
   preClean, planQuarantinePrune, planSelfEvolutionMerge, selfEvolutionMerge,
-  adjudicateGraphProposals, mergeNearDupKnowledge, reconcileVerifiedFacts, runDailyPass,
+  adjudicateGraphProposals, promoteLocalEdgesUp, mergeNearDupKnowledge, reconcileVerifiedFacts, runDailyPass,
   _deleteKnowledge, _cloudComplete, TOMBSTONE_SAFE_MS, TOMBSTONE_KEEP_MAX, THRASH_SIM, PROPOSAL_STALE_MS_DEFAULT, NEARDUP_SIM, VERIFIED_RECONCILE_SIM
 };

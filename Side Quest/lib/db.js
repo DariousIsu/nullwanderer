@@ -535,7 +535,12 @@ const MIGRATIONS = [
     ts INTEGER NOT NULL,
     UNIQUE(type, card_key)
   )`,
-  `CREATE INDEX IF NOT EXISTS idx_recent_cards_ts ON recent_cards(ts)`
+  `CREATE INDEX IF NOT EXISTS idx_recent_cards_ts ON recent_cards(ts)`,
+  // CROSS-DB PROMOTE-UP (option 2, Slice 3): mark a local short-term edge that has crossed to Echo's canonical
+  // graph, so the nightly promote-up arm never re-sends it (mirrors documents.promoted). Column add first, then
+  // the partial index the promote-up candidate scan reads.
+  `ALTER TABLE graph_relations ADD COLUMN promoted_up INTEGER DEFAULT 0`,
+  `CREATE INDEX IF NOT EXISTS idx_graph_relations_promote ON graph_relations(promoted_up, epistemic) WHERE deleted = 0 AND valid_to IS NULL`
 ];
 
 function init() {
@@ -1668,6 +1673,27 @@ function graphSupersedeRelation(id, { confirmed = null, validTo = null } = {}) {
   getDb().prepare('UPDATE graph_relations SET valid_to = ?, confirmed = COALESCE(?, confirmed) WHERE id = ?')
     .run(validTo == null ? Date.now() : validTo, confirmed, id);
 }
+// CROSS-DB promote-up candidates (Slice 3): live, GROUNDED, not-yet-crossed local edges, with endpoint NAMES
+// resolved and one backing citation url (if any) so the promote-up arm can carry provenance to Echo. Highest
+// confidence first. Speculated edges never appear here — they live in the proposal queue, not the graph.
+function graphListPromotableUp(limit = 200) {
+  return getDb().prepare(
+    `SELECT r.id, r.relation_type, r.confidence, r.epistemic,
+            se.name AS source_name, te.name AS target_name,
+            (SELECT s.ref FROM graph_citations c JOIN graph_sources s ON s.id = c.source_id
+              WHERE c.fact_kind = 'relation' AND c.fact_id = r.id AND s.ref IS NOT NULL LIMIT 1) AS cite_url
+       FROM graph_relations r
+       JOIN graph_entities se ON se.id = r.source_id
+       JOIN graph_entities te ON te.id = r.target_id
+      WHERE r.deleted = 0 AND r.valid_to IS NULL AND r.promoted_up = 0
+        AND r.epistemic IN ('witnessed','told','read','anticipated')
+      ORDER BY r.confidence DESC, r.id
+      LIMIT ?`
+  ).all(limit);
+}
+function graphMarkPromotedUp(id) {
+  getDb().prepare('UPDATE graph_relations SET promoted_up = 1 WHERE id = ?').run(id);
+}
 function graphSetEntityConfirmed(id, confirmed) {
   getDb().prepare('UPDATE graph_entities SET confirmed = ?, updated_at = ? WHERE id = ?').run(confirmed, Date.now(), id);
 }
@@ -1901,6 +1927,8 @@ module.exports = {
   graphGetRelation,
   graphNeighbors,
   graphRelationsAmong,
+  graphListPromotableUp,
+  graphMarkPromotedUp,
   graphSupersedeRelation,
   graphSetEntityConfirmed,
   graphSetRelationConfirmed,

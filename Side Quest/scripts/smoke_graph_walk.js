@@ -126,6 +126,23 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   const grownRej = await G.growAround({ mention: 'Nuclear Innovation Alliance', kind: 'missing', object: null }, { web, cloud: dossierCloud, dispatch: rejDispatch, log: (m) => logs.push(m) });
   ok(grownRej.connections === 0 && grownRej.rejected >= 1, 'growAround(truthful): rejected edges → 0 connections, counted as rejected (surfaced, not silently over-counted)');
   ok(logs.some(m => /rejected|not found/i.test(m)), 'growAround(truthful): the rejection REASON is logged (so we can see WHY the endpoint failed)');
+  ok((grownRej.landedLocal || 0) === 0, 'growAround(no landLocalEdge): a rejected edge is simply lost (landedLocal=0) — the pre-Slice-1 behaviour when the catch is disarmed');
+
+  // --- CROSS-DB short-term catch (option 2, Slice 1): a CITED edge Echo REJECTS (young endpoint not yet in
+  //     the public corpus) is NOT dropped — it lands in the LOCAL short-term graph via landLocalEdge at
+  //     epistemic 'read' (which mints the missing endpoint), counts as landedLocal, and stays truthful (it
+  //     did NOT enter Echo). This is the wall the whole option-2 design targets. ---
+  const landed = [];
+  const landLocalEdge = (a) => { landed.push(a); return { ok: true, relationId: landed.length }; };
+  const grownCatch = await G.growAround(
+    { mention: 'Nuclear Innovation Alliance', kind: 'missing', object: null },
+    { web, cloud: dossierCloud, dispatch: rejDispatch, landLocalEdge, log: () => {} }
+  );
+  ok(grownCatch.landedLocal >= 1, 'growAround(catch): a rejected CITED edge lands in the short-term graph (landedLocal>=1) instead of evaporating');
+  ok(grownCatch.rejected >= 1, 'growAround(catch): STILL counted as Echo-rejected (truthful — it did not enter Echo; it went short-term)');
+  ok(landed.length >= 1 && landed.every(e => e.epistemic === 'read'), 'growAround(catch): the local landing uses epistemic "read" (mints the young endpoint on the grounded rung)');
+  ok(landed.some(e => e.source === 'Nuclear Innovation Alliance' && e.type && e.target), 'growAround(catch): the local edge carries the anchor as source + a real target + a type');
+  ok(landed.every(e => e.sourceObj && e.sourceObj.kind === 'reading' && 'ref' in e.sourceObj), 'growAround(catch): the local edge carries its reading citation (sourceObj.kind=reading + ref)');
 
   // --- OPEN-VOCABULARY relation types: keep the LLM's accurate label as the type (UPPER_SNAKE), preserve
   //     the exact phrase in meta.title, pass allow_open_type so the whitelist doesn't reject it ("let it in") ---
@@ -185,6 +202,21 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
     cloud: iterCloud, web, recall: async () => null, dispatch, getMeta: gM, setMeta: sM, now: () => 5000
   });
   ok(moveInj.acted === true && moveInj.anchor === 'Buildable Co', 'runMove: injected candidates drive it; iterates PAST the dud to the buildable anchor');
+
+  // --- runMove threads landLocalEdge (Slice 1): a THIN anchor whose only edge Echo rejects (young endpoint)
+  //     still counts as a PRODUCTIVE move (acted), because the edge landed short-term — it is NOT mis-marked a
+  //     dud. And it does so WITHOUT a false build. ---
+  const landed2 = [];
+  const rmLand = (a) => { landed2.push(a); return { ok: true }; };
+  const metaRM = {};
+  const thinRejCloud = async () => JSON.stringify({ entity_type: 'organization', summary: 'x', related: [{ name: 'Young Node', type: 'organization', relation: 'partners_with', sources: ['S1'] }] });
+  const moveCatch = await G.runMove({
+    recentTurns: [], candidates: [{ mention: 'Thin Org', source: 'frontier', kind: 'thin', object: { id: 7, degree: 2, neighbors: [] } }],
+    cloud: thinRejCloud, web, recall: async () => null, dispatch: rejDispatch,
+    landLocalEdge: rmLand, getMeta: (k) => metaRM[k], setMeta: (k, v) => { metaRM[k] = v; }, now: () => 7000
+  });
+  ok(moveCatch.landedLocal >= 1 && landed2.length >= 1, 'runMove: threads landLocalEdge → the young-endpoint edge lands short-term');
+  ok(moveCatch.acted === true && !moveCatch.built, 'runMove: a move that ONLY landed short-term edges still counts as productive (acted), with no false build');
   ok(moveInj.source === 'news', 'runMove: carries the winning anchor source tag (news)');
   ok(G.visitedKeySet(gM, 5000).has(G.visitKey('Dud Co')), 'runMove: the tried-but-dud anchor is still recorded visited (no re-grind next tick)');
 

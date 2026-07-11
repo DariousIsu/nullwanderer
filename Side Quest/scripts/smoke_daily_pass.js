@@ -44,7 +44,7 @@ const embedFn = async () => [9, 9, 9, 9];
     ok(r.stages.verified && r.stages.verified.superseded === 0, 'verified stage ran (no facts → 0 superseded)');
     ok(r.stages.interests && !r.stages.interests.error, 'interests reweight stage ran (no interests → no-op, no error)');
     ok(r.stages.meta && !r.stages.meta.error, 'meta pass stage ran (no interests → no-op, no error)');
-    ok(logs.length === 7, 'every stage emitted a log line (quarantine, verified, near-dup, self-evo, graph, interests, meta)');
+    ok(logs.length === 8, 'every stage emitted a log line (quarantine, verified, near-dup, self-evo, graph, graph-promote, interests, meta)');
 
     const k = db.getDb().prepare('SELECT COUNT(*) n FROM knowledge').get().n;
     const ftc = db.getDb().prepare('SELECT COUNT(*) n FROM knowledge_fts').get().n;
@@ -58,6 +58,39 @@ const embedFn = async () => [9, 9, 9, 9];
     const r2 = await curator.runDailyPass({ apply: true, relateFn: boom, mergeFn, embedFn, onLog: () => {} });
     ok(r2.stages.nearDup && !r2.stages.nearDup.error, 'near-dup survived (relate threw per-cluster → skip, not abort)');
     ok(!!r2.stages.graph && r2.stages.graph.error === undefined, 'graph stage still ran after the cloud-dependent ones');
+
+    console.log('graph stage — RELATION-proposal arm (Slice 2, the previously-unadjudicated queue):');
+    // A grounded canonical edge (recordRelation mints BOTH endpoints) → a proposal for the SAME edge is redundant.
+    gm.recordRelation({ source: 'Acme LLC', target: 'Beta Fund', type: 'DONATED_TO', epistemic: 'read' });
+    db.graphInsertRelationProposal({ sourceName: 'Acme LLC', targetName: 'Beta Fund', relationType: 'DONATED_TO', epistemic: 'speculated' });  // → superseded
+    db.graphInsertRelationProposal({ sourceName: 'Gamma PAC', targetName: 'Delta Org', relationType: 'FUNDS', epistemic: 'speculated' });       // → ungrounded → kept now, stale later
+    const adjNow = curator.adjudicateGraphProposals({ apply: false });
+    ok(adjNow.relation.pending === 2, 'relation arm: sees both pending relation proposals (queue is now adjudicated)');
+    ok(adjNow.relation.superseded === 1, 'relation arm: a proposal matching a grounded canonical edge → superseded');
+    ok(adjNow.relation.stale === 0, 'relation arm: the fresh ungrounded proposal is NOT stale yet');
+    const future = Date.now() + 8 * 24 * 3600 * 1000;
+    const adjFuture = curator.adjudicateGraphProposals({ apply: false, now: future });
+    ok(adjFuture.relation.stale === 1, 'relation arm: an ungrounded proposal past staleDays → stale (falls away, reversibly)');
+    const adjApply = curator.adjudicateGraphProposals({ apply: true, now: future });
+    ok(adjApply.rejected >= 2, 'relation arm(apply): rejects both the superseded and the stale relation proposal');
+    ok(db.graphListPendingRelationProposals(10).length === 0, 'relation arm(apply): no pending relation proposals remain');
+
+    console.log('graph promote-up arm (Slice 3 — cross matured local edges UP to Echo, Echo is the gate):');
+    gm.recordRelation({ source: 'Local Source Co', target: 'Local Target Co', type: 'PARTNERS_WITH', epistemic: 'read', sourceObj: { kind: 'reading', ref: 'https://ex.com/lsc' } });
+    const dryUp = await curator.promoteLocalEdgesUp({ apply: false });
+    ok(dryUp.candidates >= 1, 'promote-up(dry): a grounded, not-yet-crossed local edge is a candidate');
+    ok(dryUp.promoted === 0, 'promote-up(dry): nothing crosses on a dry run');
+    // Echo REJECTS (endpoint still young) → not marked, stays retryable next pass
+    const upReject = await curator.promoteLocalEdgesUp({ apply: true, proposeFn: async () => ({ ok: false, action: 'rejected' }) });
+    ok(upReject.promoted === 0 && upReject.skipped >= 1, 'promote-up(reject): a young-endpoint edge does NOT cross; counted skipped');
+    ok((await curator.promoteLocalEdgesUp({ apply: false })).candidates >= 1, 'promote-up(reject): the un-crossed edge is STILL a candidate (promoted_up unchanged → self-healing retry)');
+    // Echo ACCEPTS → edge crosses + is marked promoted_up (carrying its citation), never re-sent
+    const seen = [];
+    const upOk = await curator.promoteLocalEdgesUp({ apply: true, proposeFn: async (e) => { seen.push(e); return { ok: true, action: 'proposed' }; } });
+    ok(upOk.promoted >= 1, 'promote-up(accept): the edge crosses to Echo (action=proposed)');
+    ok(seen.some(e => e.source === 'Local Source Co' && e.target === 'Local Target Co' && e.relation_type === 'PARTNERS_WITH'), 'promote-up(accept): proposeFn receives the edge endpoints + relation_type');
+    ok(seen.some(e => e.metadata && Array.isArray(e.metadata.source_set) && e.metadata.source_set[0] === 'https://ex.com/lsc'), 'promote-up(accept): the crossing carries the local citation url (provenance preserved)');
+    ok((await curator.promoteLocalEdgesUp({ apply: false })).candidates === 0, 'promote-up(accept): a crossed edge is marked promoted_up → NOT re-sent next pass');
   } catch (e) {
     fail++; console.error('  ✗ threw:', e.stack || e.message);
   } finally {

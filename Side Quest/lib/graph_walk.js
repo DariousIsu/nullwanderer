@@ -233,7 +233,7 @@ async function proposeRelation({ dispatch, source, target, relation_type, confid
 // GROW the graph around one anchor gap: fill from web+tools into a dossier, propose the object (if
 // missing) + its related objects + the connecting edges — all under the node/connection budget.
 // Returns { built, entities, connections, related:[names], summary }.
-async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, promoteOne, log } = {}) {
+async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, promoteOne, landLocalEdge, log } = {}) {
   const mention = gap.mention;
   // CANONICAL name for propose_* — the exact stored graph name (with its "[Q…]" tag) so the edge targets
   // the precise node we selected, not a clean-named twin (a wikiquote doc, a lower-degree dup). Web search
@@ -261,7 +261,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
   if (!dossier || typeof dossier !== 'object') { log && log(`[grow] "${mention}" sources=${sources.length} dossier=NULL (rawLen=${_rawLen}) → no enrich`); return { built: false, entities: 0, connections: 0, related: [], summary: '', held: 0 }; }
 
   const nbrKeys = new Set(neighbors.map(visitKey));
-  let entities = 0, connections = 0, held = 0, rejected = 0, sourceUrl = null; const related = [];
+  let entities = 0, connections = 0, held = 0, rejected = 0, landedLocal = 0, sourceUrl = null; const related = [];
   const _relRaw = Array.isArray(dossier.related) ? dossier.related.length : 0;
 
   // 1) the anchor object itself — only if MISSING. EXISTENCE gate: mint only if the web pull cites it as
@@ -334,11 +334,27 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
       // record the CITATION for the promoted fact (the observation trail; grade + backing url).
       if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: fg.url, grade: fg.grade, confidence: conf, status: 'promoted', valid_from: vt.valid_from, valid_to: vt.valid_to }); } catch {} }
     } else {
-      rejected++;   // truthful: endpoint-not-found etc. — logged in proposeRelation; counted for the [grow] summary
+      rejected++;   // truthful: Echo refused (endpoint-not-found etc.) — logged in proposeRelation
+      // CROSS-DB (short-term catch, option 2): the edge is CITED (uncited claims already `continue`d out
+      // above at the fact gate) — its ONLY problem is a YOUNG ENDPOINT not yet in Echo's public corpus. Don't
+      // drop it: land it in the LOCAL short-term graph (lib/graph_memory), which MINTS the missing endpoint as
+      // an epistemic-'read' node so the edge survives and takes churn touches. It crosses UP to Echo later
+      // (the daily graph stage's promote-up arm) once the endpoint independently grounds. Fail-soft: a bad
+      // local write can never break the move.
+      if (typeof landLocalEdge === 'function') {
+        try {
+          const lr = await landLocalEdge({
+            source: canonical, target: rname, type: relType, epistemic: 'read', confidence: conf,
+            sourceObj: { kind: 'reading', ref: fg.url || null, excerpt: String(dossier.summary || '').slice(0, 160) },
+            validFrom: vt.valid_from
+          });
+          if (lr && lr.ok) { landedLocal++; related.push(rname); }
+        } catch { /* fail-soft */ }
+      }
     }
   }
-  log && log(`[grow] "${mention}" [${gap.kind}] sources=${sources.length} neighbors=${neighbors.length} related=${_relRaw} → +${entities} ent +${connections} conn (${held} held: uncited${rejected ? `, ${rejected} rejected (see edge logs)` : ''})`);
-  return { built: gap.kind === 'missing' && entities > 0, entities, connections, related, summary: String(dossier.summary || '').trim(), held, rejected, sourceUrl };
+  log && log(`[grow] "${mention}" [${gap.kind}] sources=${sources.length} neighbors=${neighbors.length} related=${_relRaw} → +${entities} ent +${connections} conn (${held} held: uncited${rejected ? `, ${rejected} rejected${landedLocal ? ` → ${landedLocal} landed short-term` : ''} (see edge logs)` : ''})`);
+  return { built: gap.kind === 'missing' && entities > 0, entities, connections, related, summary: String(dossier.summary || '').trim(), held, rejected, landedLocal, sourceUrl };
 }
 
 // A compact, human-friendly label for a citation url — for the voiced "via …" tag. Pure.
@@ -429,6 +445,9 @@ async function decayVisitedEdges(objId, { kgEdges, observe, now, floor = DECAY_F
 // caller uses to (optionally) voice one line and log. Never throws (fail-soft everywhere).
 async function runMove(deps = {}) {
   const { recentTurns = [], candidates: injected, cloud, web, recall, dispatch, kgNeighbors, kgEdges, observe, promoteOne, getMeta, setMeta, now = () => Date.now(), log } = deps;
+  // LOCAL short-term edge landing (option 2): defaults to graph_memory.recordRelation (mints young endpoints
+  // locally). Injectable so the offline smoke can observe it. Lazy-require avoids a load-order cycle.
+  const landLocalEdge = deps.landLocalEdge || ((a) => require('./graph_memory').recordRelation(a));
   const nowTs = now();
   try {
     // ANCHOR SOURCE: prefer an injected, already-sourced candidate list (idle_anchors: news → thin
@@ -462,12 +481,15 @@ async function runMove(deps = {}) {
     let anchor = queue[0], grown = null;
     for (const cand of queue.slice(0, WALK_MAX_TRIES)) {
       anchor = cand;
-      grown = await growAround(cand, { web, cloud, dispatch, kgNeighbors, observe, promoteOne, log });
+      grown = await growAround(cand, { web, cloud, dispatch, kgNeighbors, observe, promoteOne, landLocalEdge, log });
       tried.push(cand.mention);
-      if (grown && (grown.built || grown.connections > 0)) break;   // productive → stop
+      if (grown && (grown.built || grown.connections > 0 || (grown.landedLocal || 0) > 0)) break;   // productive → stop
     }
-    grown = grown || { built: false, entities: 0, connections: 0, related: [], summary: '', held: 0 };
-    const notable = grown.built || grown.connections > 0;
+    grown = grown || { built: false, entities: 0, connections: 0, related: [], summary: '', held: 0, landedLocal: 0 };
+    // A local short-term landing IS productive growth (the edge exists + will churn / cross up later), so an
+    // anchor that only produced short-term edges is not wastefully marked saturated. It stays VOICE-silent
+    // though (weakest rung — a young-endpoint buffer write, not a claim worth announcing).
+    const notable = grown.built || grown.connections > 0 || (grown.landedLocal || 0) > 0;
     // Diminishing-returns steer: the productive anchor + the new neighbours get the
     // normal window; every anchor we TRIED that yielded nothing is "saturated" and
     // lingers 4× longer so the walk stops re-grinding covered nodes each 6h.
@@ -506,6 +528,7 @@ async function runMove(deps = {}) {
       canonical: (anchor.object && anchor.object.canonical) || anchor.mention,
       built: grown.built, entities: grown.entities, connections: grown.connections,
       related: grown.related, summary: grown.summary, voiceLine, held: grown.held || 0,
+      landedLocal: grown.landedLocal || 0,
       reverify: reverified,
       reason: notable ? 'grew' : 'no-growth'
     };
