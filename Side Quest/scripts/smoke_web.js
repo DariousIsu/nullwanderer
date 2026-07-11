@@ -46,6 +46,8 @@ ok('web-get selector+attr', (() => { const t = web.parseTags('<web-get selector=
 ok('web-tab-switch index body', web.parseTags('<web-tab-switch>2</web-tab-switch>')[0]?.body === '2');
 ok('web-wait ms body', web.parseTags('<web-wait>2000</web-wait>')[0]?.body === '2000');
 ok('web-dialog action body', web.parseTags('<web-dialog>accept</web-dialog>')[0]?.body === 'accept');
+ok('web-grab-pdfs self-closing', web.parseTags('<web-grab-pdfs/>')[0]?.tag === 'web-grab-pdfs');
+ok('isPdfUrl detects .pdf (+query)', web.isPdfUrl('https://x.org/a/b.pdf?y=1') === true && web.isPdfUrl('https://x.org/page') === false);
 
 console.log('\nstripTags + dispatch routing:');
 ok('stripTags removes tags + collapses ws', web.stripTags('a <web-read/> b') === 'a b');
@@ -60,7 +62,7 @@ ok('stripTags removes tags + collapses ws', web.stripTags('a <web-read/> b') ===
   // "unknown web tag" default — that's the regression guard for the full suite's wiring.
   const suite = ['web-press','web-clear','web-hover','web-select','web-check','web-uncheck','web-upload',
     'web-submit','web-click-text','web-click-xy','web-forward','web-reload','web-tab-new','web-tab-list',
-    'web-tab-switch','web-tab-close','web-wait','web-dialog','web-get','web-eval','web-drag'];
+    'web-tab-switch','web-tab-close','web-wait','web-dialog','web-get','web-eval','web-drag','web-grab-pdfs'];
   let routed = 0, unknown = [];
   for (const tag of suite) {
     const rr = await web.dispatch({ tag, attrs: {}, body: '' });

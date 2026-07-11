@@ -1126,6 +1126,9 @@ app.whenReady().then(() => {
   webLib.ensure()
     .then(() => console.log('[main] dedicated browser ready'))
     .catch(err => console.error('[main] dedicated browser warm FAILED:', err.message));
+  // AUTO-INGEST: watch her browser's downloads folder so any PDF she grabs (auto-harvested off a
+  // page, navigated onto, or click-downloaded) is extracted → landed → decomposed into memory.
+  try { startDownloadsIngestWatcher(); } catch (e) { console.error('[dl-ingest] start failed:', e && e.message); }
   currentSessionId = db.startSession();
   currentSessionStartedAt = Date.now();
   // Downtime marker (her request): record how long she was offline, then start the
@@ -2207,6 +2210,62 @@ async function importEditorDoc(filePath) {
   });
   editorRegistry.saveWorkingCopy(doc.id, 1, wc);
   return { ok: true, document: editorRegistry.getDocument(doc.id) };
+}
+
+// AUTO-INGEST watcher — every file that lands in her browser's DOWNLOADS_DIR (a PDF auto-harvested
+// off a page, one she navigated onto, or a click/recipe download) is extracted → landed in the
+// short-term doc store → decomposed + surfaced, the SAME rail as a canvas drop. Decoupled from
+// web.js on purpose: whatever puts a file there, it gets ingested. Debounced + size-stable (a
+// download is still being written when the first fs event fires) + deduped (land is idempotent on ref).
+let _dlWatcherArmed = false;
+function startDownloadsIngestWatcher() {
+  if (_dlWatcherArmed) return; _dlWatcherArmed = true;
+  const fsm = require('fs'); const pathm = require('path');
+  const dir = webLib.DOWNLOADS_DIR;
+  const INGEST_EXT = new Set(['pdf', 'docx', 'txt', 'md', 'markdown', 'xlsx', 'xlsm', 'csv', 'tsv']);
+  const ingested = new Set();     // paths already handled this session
+  const pending = new Map();      // path → debounce timer
+  try { if (!fsm.existsSync(dir)) fsm.mkdirSync(dir, { recursive: true }); } catch {}
+
+  async function ingestFile(fp) {
+    if (ingested.has(fp)) return;
+    try { if (!fsm.existsSync(fp)) return; } catch { return; }
+    ingested.add(fp);
+    try {
+      const { text, via } = await extractFileMarkdown(fp);
+      const title = pathm.basename(fp);
+      if (!text || text.length < 40) { console.log(`[dl-ingest] skipped ${title} (thin/${via})`); return; }
+      const landed = require('./lib/doc_store').land({ title, body: text, source: 'browser_download', ref: 'download:' + fp });
+      if (landed && landed.landed) {
+        console.log(`[dl-ingest] ${title} → doc ${landed.id} (${text.length}ch via ${via})`);
+        try { decomposeLandedDoc({ id: landed.id, title, body: text, source: 'browser_download' }).catch(() => {}); } catch {}
+        try { surfaceDocCards({ id: landed.id, title, body: text }).catch(() => {}); } catch {}
+        try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(downloaded) ${title}`, type: 'reading', query: title }); } catch {}
+      }
+    } catch (e) { console.error('[dl-ingest] failed:', e && e.message); }
+  }
+  // Wait until the file stops growing (2 stable size reads) before ingesting — the download may
+  // still be writing when the first event fires.
+  function schedule(fp) {
+    if (pending.has(fp)) return;   // already waiting on this path
+    let last = -1, stable = 0;
+    const tick = () => {
+      let sz = -1; try { sz = fsm.statSync(fp).size; } catch { pending.delete(fp); return; }
+      if (sz === last) stable++; else { stable = 0; last = sz; }
+      if (stable >= 2 && sz > 0) { pending.delete(fp); ingestFile(fp); }
+      else pending.set(fp, setTimeout(tick, 700));
+    };
+    pending.set(fp, setTimeout(tick, 700));
+  }
+  try {
+    fsm.watch(dir, (_evt, fname) => {
+      if (!fname) return;
+      const ext = pathm.extname(fname).replace(/^\./, '').toLowerCase();
+      if (!INGEST_EXT.has(ext)) return;
+      schedule(pathm.join(dir, fname));
+    });
+    console.log('[dl-ingest] watching', dir);
+  } catch (e) { console.error('[dl-ingest] watch failed:', e && e.message); }
 }
 
 // Extract a file's readable text as markdown (.md/.txt read directly; binary docs via file_ingest —

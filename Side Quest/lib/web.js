@@ -62,6 +62,12 @@ const SEARCH_URL = (q) => `https://www.google.com/search?q=${encodeURIComponent(
 const MAX_TEXT = Math.max(2000, Number(process.env.ZOE_WEB_READ_CHARS) || 16000);
 const MAX_INTERACTIVES = 35;
 const NAV_TIMEOUT = 20000;
+// Auto-PDF capture: PDFs she navigates to / finds on a page are fetched to DOWNLOADS_DIR (with her
+// session cookies) and picked up by main.js's downloads-ingest watcher. Bounded + deduped so a
+// fully-automatic harvest can't flood. Turn the on-read harvest off with ZOE_AUTO_GRAB_PDFS=0.
+const PDF_MAX_BYTES = 25 * 1024 * 1024;   // never auto-grab a file larger than this
+const AUTO_GRAB_PER_READ = 5;             // cap PDFs auto-harvested per page read
+const grabbedUrls = new Set();            // dedup — a URL fetched this session is never re-fetched
 
 let context = null;   // a Playwright-managed persistent context (her Chrome)
 let page = null;
@@ -301,6 +307,17 @@ async function open(target) {
     registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
     try { rotatePassive(p.url()); } catch {}   // passive recipe capture on uncovered sites
     const result = { ok: true, url: p.url(), title: await p.title().catch(() => '') };
+    // NAV AUTO-CAPTURE — she navigated onto a PDF (Chrome renders it inline with no readable HTML,
+    // so <web-read/> would come back empty). Fetch the bytes to DOWNLOADS_DIR → the watcher ingests
+    // it, and tell the caller so it surfaces the ingested content instead of a blank read.
+    try {
+      const ct = String((resp && typeof resp.headers === 'function' ? (resp.headers() || {})['content-type'] : '') || '').toLowerCase();
+      if (/pdf/.test(ct) || isPdfUrl(p.url())) {
+        const g = await downloadPdf(p.url());
+        result.pdf = g && g.ok ? { savedAs: g.savedAs, bytes: g.bytes } : { error: (g && g.reason) || 'grab failed' };
+        if (g && g.ok) console.log(`[web] navigated onto a PDF — captured for ingest: ${g.savedAs}`);
+      }
+    } catch {}
     // BLOCKER CHECK — did this land on a sign-in wall / CAPTCHA / Cloudflare / paywall?
     // If so, flag it so the caller asks Lucas for help instead of her flailing. She has
     // a persistent profile, so once he logs in the cookie sticks and she won't re-ask.
@@ -392,6 +409,9 @@ async function read() {
       }
     }
     const handleList = lines.length ? `\nInteractive elements:\n${lines.join('\n')}` : '\n(no interactive elements found)';
+    // FULLY-AUTO PDF harvest: grab any PDF links found on this page (deduped, capped) → the
+    // DOWNLOADS_DIR watcher ingests them into her memory. Fire-and-forget so read() stays fast.
+    if (process.env.ZOE_AUTO_GRAB_PDFS !== '0') { grabPdfs().catch(() => {}); }
     return { ok: true, url: page.url(), title: await page.title().catch(() => ''), text: text + handleList };
   } catch (err) { return { ok: false, reason: err.message }; }
 }
@@ -834,8 +854,66 @@ async function drag(from, to) {
   } catch (err) { return { ok: false, reason: `drag ${from}→${to} failed: ${err.message}` }; }
 }
 
+// --- auto-PDF capture ---
+function isPdfUrl(u) { return /\.pdf(?:[?#]|$)/i.test(String(u || '')); }
+
+// Fetch a PDF to DOWNLOADS_DIR using HER session (context.request shares the persistent profile's
+// cookies, so authed/session-gated PDFs work) and let main.js's watcher ingest it. Guards: PDF
+// content-type OR .pdf URL, a real %PDF header, a size ceiling, and per-session dedup. Fail-soft.
+async function downloadPdf(url) {
+  const u = String(url || '').trim();
+  if (!/^https?:\/\//i.test(u)) return { ok: false, reason: 'not http(s)' };
+  if (grabbedUrls.has(u)) return { ok: false, reason: 'already grabbed', dedup: true };
+  try {
+    await ensure();
+    const resp = await context.request.get(u, { timeout: 20000, failOnStatusCode: false });
+    if (!resp.ok()) return { ok: false, reason: `HTTP ${resp.status()}` };
+    const ct = String((resp.headers() || {})['content-type'] || '').toLowerCase();
+    if (!/pdf/.test(ct) && !isPdfUrl(u)) return { ok: false, reason: `not a pdf (${ct || 'no content-type'})` };
+    const buf = await resp.body();
+    if (!buf || !buf.length) return { ok: false, reason: 'empty body' };
+    if (buf.length > PDF_MAX_BYTES) return { ok: false, reason: `too large (${Math.round(buf.length / 1e6)}MB > ${Math.round(PDF_MAX_BYTES / 1e6)}MB)` };
+    if (buf.slice(0, 5).toString('latin1') !== '%PDF-') return { ok: false, reason: 'not a PDF (no %PDF header)' };
+    grabbedUrls.add(u);
+    let name = '';
+    try { name = decodeURIComponent((u.split('#')[0].split('?')[0].split('/').pop()) || ''); } catch { name = ''; }
+    if (!name) name = 'download';
+    if (!/\.pdf$/i.test(name)) name += '.pdf';
+    const dest = downloadDest(DOWNLOADS_DIR, name);
+    fs.writeFileSync(dest, buf);
+    console.log(`[web] pdf grabbed → ${dest} (${Math.round(buf.length / 1024)}KB) from ${u}`);
+    return { ok: true, savedAs: dest, bytes: buf.length, url: u };
+  } catch (err) { return { ok: false, reason: err.message }; }
+}
+
+// Collect PDF links on the current page (href ends in .pdf).
+async function pdfLinksOnPage() {
+  if (!page) return [];
+  try {
+    const links = await withTimeout(page.evaluate(() => {
+      const out = [];
+      for (const a of document.querySelectorAll('a[href]')) {
+        const h = a.href || '';
+        if (/\.pdf(?:[?#]|$)/i.test(h)) out.push(h);
+      }
+      return Array.from(new Set(out));
+    }), 3000, []);
+    return Array.isArray(links) ? links : [];
+  } catch { return []; }
+}
+
+// Grab (download+queue-for-ingest) the PDF links on the current page — deduped, capped. Called
+// on demand via <web-grab-pdfs/> and automatically (fire-and-forget) at the end of read().
+async function grabPdfs({ max = AUTO_GRAB_PER_READ } = {}) {
+  if (!page) return { ok: false, reason: 'no page open' };
+  const links = (await pdfLinksOnPage()).filter(u => !grabbedUrls.has(u)).slice(0, Math.max(0, max));
+  const grabbed = [];
+  for (const u of links) { const r = await downloadPdf(u); if (r && r.ok) grabbed.push(r.savedAs); }
+  return { ok: true, found: links.length, grabbed };
+}
+
 // --- tags ---
-const WEB_TAG_RE = /<(web-open|web-read|web-see|web-deepen|web-scroll|web-click-text|web-click-xy|web-click|web-type|web-press|web-clear|web-hover|web-select|web-check|web-uncheck|web-upload|web-submit|web-forward|web-reload|web-tab-new|web-tab-list|web-tab-switch|web-tab-close|web-wait|web-dialog|web-get|web-eval|web-drag|web-back|web-close|web-chat|web-watch|web-unwatch)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
+const WEB_TAG_RE = /<(web-open|web-read|web-see|web-deepen|web-scroll|web-click-text|web-click-xy|web-click|web-type|web-press|web-clear|web-hover|web-select|web-check|web-uncheck|web-upload|web-submit|web-forward|web-reload|web-tab-new|web-tab-list|web-tab-switch|web-tab-close|web-wait|web-dialog|web-get|web-eval|web-drag|web-grab-pdfs|web-back|web-close|web-chat|web-watch|web-unwatch)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
 const ATTR_RE = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
 
 function parseAttrs(s) { const o = {}; if (!s) return o; let m; ATTR_RE.lastIndex = 0; while ((m = ATTR_RE.exec(s)) !== null) o[m[1]] = m[2] ?? m[3] ?? m[4]; return o; }
@@ -885,6 +963,7 @@ async function dispatch({ tag, attrs = {}, body = '' }) {
     case 'web-get': return getEl(attrs.selector || attrs.sel || body, attrs.attr || attrs.attribute);
     case 'web-eval': return evalJs(body || attrs.js || attrs.expr);
     case 'web-drag': return drag(attrs.from || attrs.source, attrs.to || attrs.target);
+    case 'web-grab-pdfs': return grabPdfs({ max: Number(attrs.max || attrs.limit) || AUTO_GRAB_PER_READ });
     case 'web-back': return back();
     case 'web-close': return close();
     case 'web-chat': return chatSend(body, attrs.speaker || attrs.to || attrs.name);
@@ -927,6 +1006,7 @@ PRECISE EXTRACTION & INSPECTION (when <web-read/>'s text isn't enough):
   <web-get selector="a.headline" attr="href"/>   — read ONE element's attribute (omit attr= for its text)
   <web-eval>document.querySelectorAll('.price').length</web-eval>   — run a JS expression on the page and get the result back
   <web-drag from="L1" to="L5"/>                   — drag one handle onto another (reorder, sliders, drop targets)
+  <web-grab-pdfs/>                                 — download every PDF linked on this page into your memory (happens automatically on read too; this is the manual nudge)
 Always <web-read/> after opening, deepening, scrolling, clicking, hovering, waiting, or switching tabs before you act again — handles are only valid from the most recent read.
 Go DEEP, not wide: after a search, <web-deepen/> into the best result and actually read it; <web-scroll/> through long pages instead of skimming the top. Take notes as you go with <file-write>/<file-append>.
 
@@ -949,6 +1029,7 @@ module.exports = {
   chatSend, chatWatch, chatUnwatch,
   press, clearField, hover, selectOption, setChecked, uploadFile, submit, clickAt,
   forward, reload, listTabs, newTab, switchTab, closeTab, waitFor, dialog, getEl, evalJs, drag,
+  downloadPdf, grabPdfs, pdfLinksOnPage, isPdfUrl,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR,
   DOWNLOADS_DIR, downloadDest
 };
