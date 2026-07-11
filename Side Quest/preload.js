@@ -163,6 +163,7 @@ contextBridge.exposeInMainWorld('sq', {
     overview: () => ipcRenderer.invoke('kg:overview'),
     ego: (entity, hops) => ipcRenderer.invoke('kg:ego', { entity, hops }),
     search: (query) => ipcRenderer.invoke('kg:search', { query }),
+    shortterm: () => ipcRenderer.invoke('kg:shortterm'),   // two-source: Side Quest short-term layer (local graph + recent docs)
     // live-follow: main broadcasts kg:focus-move on each idle graph-walk move → the panel can re-center.
     onFocusMove: (cb) => { const h = (_e, p) => { try { cb(p); } catch (e) {} }; ipcRenderer.on('kg:focus-move', h); return () => ipcRenderer.removeListener('kg:focus-move', h); },
     // curation metabolism: main broadcasts kg:curation-move when the self-curation engine lands a batch

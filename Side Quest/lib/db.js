@@ -1654,6 +1654,16 @@ function graphNeighbors(entityId, { includeSuperseded = false } = {}) {
     : 'SELECT * FROM graph_relations WHERE (source_id = ? OR target_id = ?) AND deleted = 0 AND valid_to IS NULL ORDER BY id';
   return getDb().prepare(q).all(entityId, entityId);
 }
+// Live relations whose BOTH endpoints are in the given id set — for the KG panel's short-term layer read
+// (bounded to the visible short-term nodes so it never scans the whole relation table).
+function graphRelationsAmong(ids) {
+  if (!Array.isArray(ids) || !ids.length) return [];
+  const ph = ids.map(() => '?').join(',');
+  return getDb().prepare(
+    `SELECT id, source_id, target_id, relation_type, epistemic, confirmed FROM graph_relations
+     WHERE deleted = 0 AND valid_to IS NULL AND source_id IN (${ph}) AND target_id IN (${ph})`
+  ).all(...ids, ...ids);
+}
 function graphSupersedeRelation(id, { confirmed = null, validTo = null } = {}) {
   getDb().prepare('UPDATE graph_relations SET valid_to = ?, confirmed = COALESCE(?, confirmed) WHERE id = ?')
     .run(validTo == null ? Date.now() : validTo, confirmed, id);
@@ -1890,6 +1900,7 @@ module.exports = {
   graphInsertRelation,
   graphGetRelation,
   graphNeighbors,
+  graphRelationsAmong,
   graphSupersedeRelation,
   graphSetEntityConfirmed,
   graphSetRelationConfirmed,

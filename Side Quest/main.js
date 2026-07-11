@@ -3450,6 +3450,35 @@ ipcMain.handle('kg:search', async (_e, { query } = {}) => {
   } catch (e) { console.error('[kg] search failed:', e.message); return { ok: false, error: e.message }; }
 });
 
+// SHORT-TERM LAYER (two-source galaxy): the panel ALSO reads Side Quest's OWN short-term store — Zoe's local
+// graph_entities/relations + recent unpromoted documents (the "new data coming in") — which the renderer draws
+// as the bright active CORE alongside the Echo corpus. Bounded to the most-recent N so it never blows the
+// render. Local DB only (no Echo dependency); tagged store:'sidequest' + epistemic for the layer styling.
+ipcMain.handle('kg:shortterm', async () => {
+  try {
+    const ents = db.graphListEntities({ limit: 90 });               // most-recent local entities (id DESC)
+    const byId = new Map(ents.map(e => [e.id, e]));
+    const rels = db.graphRelationsAmong([...byId.keys()]);
+    const docs = db.recentDocuments(18, { unpromotedOnly: true });  // fresh material still in the short-term buffer
+    const nodes = [], seen = new Set();
+    for (const e of ents) {
+      if (!e.name || seen.has(e.name)) continue; seen.add(e.name);
+      nodes.push({ id: e.name, store: 'sidequest', entityType: e.entity_type || 'concept', epistemic: e.epistemic || 'told', summary: e.summary || null });
+    }
+    for (const d of docs) {
+      const label = `doc: ${String(d.title || d.ref || ('#' + d.id)).slice(0, 42)}`;
+      if (seen.has(label)) continue; seen.add(label);
+      nodes.push({ id: label, store: 'sidequest', entityType: 'document', epistemic: 'read', summary: String(d.understanding || d.body || '').slice(0, 160) });
+    }
+    const links = [];
+    for (const r of rels) {
+      const s = byId.get(r.source_id), t = byId.get(r.target_id);
+      if (s && t && s.name && t.name && s.name !== t.name) links.push({ source: s.name, target: t.name, relType: r.relation_type || 'related', category: 'derived' });
+    }
+    return { ok: true, nodes, links, counts: { entities: nodes.length, relations: links.length, documents: docs.length } };
+  } catch (e) { console.error('[kg] shortterm failed:', e.message); return { ok: false, error: e.message }; }
+});
+
 // ============================ READER / LIBRARY (studio — writing suite Phase 2) ===============
 // Read-only corpus reader on the document substrate. Lists projects + recent docs, and renders a
 // document's body markdown through the shared block model (editor_import via doc_view). No model.

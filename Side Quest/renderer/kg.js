@@ -510,7 +510,7 @@ function ensureGraph() {
       // node every frame → in a dense ~320-node follow view that's the residual skip-lag. Gate the glow pass to
       // the nodes that actually read as glowing — focal, hovered, sized hubs, and the short-term core — and let
       // the many small leaf nodes draw with just their (cheap) lit gradient fill below. Overview stays identical.
-      const glow = n.isFocal || isST || r >= 6 || (hovered && hovered.id === n.id);
+      const glow = n.isFocal || r >= 6 || (hovered && hovered.id === n.id);   // NOT every short-term node — the violet fill+ring distinguishes the core cheaply (perf: avoid ~90 shadowBlurs/frame)
       if (glow) {
         ctx.save();
         ctx.shadowColor = rgbaHex(col, 0.85); ctx.shadowBlur = r * (isST ? 1.7 : 1);   // core glows hotter
@@ -794,6 +794,31 @@ function setData(res, m) {
 async function loadOverview() {
   mode = 'overview'; submitted = ''; backBtn.hidden = true; setOverlay('Loading corpus overview…');
   try { setData(await window.sq.kg.overview(), 'overview'); } catch (e) { setOverlay(String(e.message || e), 'fail'); }
+  loadShortTerm();   // fold in the Side Quest short-term layer (the bright active core) — independent of Echo
+}
+// TWO-SOURCE: fetch Side Quest's short-term store (local graph + recent docs) and merge it into the persistent
+// `shortTerm` layer (reuse node objects by id → d3 keeps positions). It renders in EVERY view via withShortTerm
+// as the violet epistemic core, gathered centrally by makeCoreForce. Bounded server-side so it stays cheap.
+async function loadShortTerm() {
+  try {
+    if (!(window.sq && window.sq.kg && window.sq.kg.shortterm)) return;
+    const res = await window.sq.kg.shortterm();
+    if (!res || !res.ok) return;
+    let cx = 0, cy = 0, c = 0;
+    if (G) for (const n of (G.graphData().nodes || [])) if (Number.isFinite(n.x) && n.store !== 'sidequest') { cx += n.x; cy += n.y; c++; }
+    if (!c) { cx = 0; cy = 0; }
+    const now = performance.now(), seen = new Set();
+    for (const inc of (res.nodes || [])) {
+      seen.add(inc.id);
+      let node = shortTerm.nodes.get(inc.id);
+      if (node) { node.entityType = inc.entityType; node.epistemic = inc.epistemic; if (inc.summary) node.summary = inc.summary; }
+      else { shortTerm.nodes.set(inc.id, { id: inc.id, store: 'sidequest', entityType: inc.entityType, epistemic: inc.epistemic, summary: inc.summary || null, bornAt: now, x: cx + (Math.random() - 0.5) * 90, y: cy + (Math.random() - 0.5) * 90 }); }
+    }
+    for (const id of [...shortTerm.nodes.keys()]) if (!seen.has(id)) shortTerm.nodes.delete(id);   // drop entries no longer in the buffer
+    shortTerm.links.clear();
+    for (const l of (res.links || [])) shortTerm.links.set(l.source + '>' + l.target + '::' + l.relType, { s: l.source, t: l.target, relType: l.relType, color: 'rgba(168,139,250,0.45)', width: 0.8, category: l.category || 'derived' });
+    if (G) applyFilter();
+  } catch (e) {}
 }
 // focus(displayName, opt): query_graph is name-based and needs the EXACT stored name (with its "[…]" tag),
 // but we show the clean name. opt.query = the exact name to walk (defaults to displayName). opt.soft = a
@@ -953,4 +978,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-10u: PERF — cap tendrils to top-40 hubs by hidden-degree (kills ~2.4k gradients/frame; dense-follow glitch)');
+console.info('[kg] surface build 2026-07-10v: two-source REAL READ — Side Quest short-term layer (local graph + recent docs) via kg:shortterm');
