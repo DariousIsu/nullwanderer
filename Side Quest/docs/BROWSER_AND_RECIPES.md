@@ -26,6 +26,12 @@ feel; DDG was dropped after it null-routed this IP — see §1a). `read()` retur
 (cap **`MAX_TEXT` = 16 000 chars**, tunable via env **`ZOE_WEB_READ_CHARS`**, floor 2 000)
 plus an interactive-element map (`MAX_INTERACTIVES` = 35 handles).
 
+On a **Google SERP**, `read()` composes **`AI Overview:` + `Search results:`** — the AI
+Overview box (the synthesized answer: names/emails/phones/structured facts + citations) was
+being dropped when only the organic links were scraped. `aiOverview()` anchors on the durable
+visible "AI Overview" label (Google's classes rotate) and climbs to its content block;
+`waitForAiOverview()` gives it a bounded ≤3 s to stream in (it renders after the results).
+
 **Perceive / navigate**
 - `<web-open>url OR search terms</web-open>` — open a page (plain words = a Google search)
 - `<web-read/>` — page text + interactive els as `[L#]/[B#]/[I#]/[C#]` handles (the "button map")
