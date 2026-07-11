@@ -125,8 +125,12 @@ with a **size-stable debounce** (a download is still being written when the firs
 each landed file through the SAME rail as a canvas drop — `extractFileMarkdown` (→ `file_ingest` →
 `doc_extract` text layer) → `doc_store.land` (idempotent on `ref = download:<path>`) →
 `decomposeLandedDoc` + `surfaceDocCards`. Decoupled on purpose: **whatever** puts a file there
-(harvest, nav, a click-download, a recipe) gets ingested. Scanned/image-only PDFs extract thin
-(no text layer) — the known `file_ingest` limit.
+(harvest, nav, a click-download, a recipe) gets ingested.
+
+**Scanned / image-only PDFs** (no text layer) are handled too: `file_ingest` falls back to
+`doc_extract.rasterizePdf` (pdfjs + `@napi-rs/canvas` → per-page PNGs, bounded `maxPages`) →
+`lib/vision.describe` — the same vision path an image drop uses (`via: 'vision:pdf'`). Text-layer
+PDFs skip this (no wasted vision calls).
 
 ---
 
