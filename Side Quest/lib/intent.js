@@ -6,7 +6,9 @@
  * Conservative on bare conversation, but a pasted URL with a viewing verb ("take a
  * look at this <url>") is treated as "open it in her browser" — the clearest case.
  */
-const SEARCH_HOME = 'https://duckduckgo.com';
+// Where a bare "open a browser" (no URL/query) lands. Google, matching her visible deep-browse
+// lane's engine (DDG was dropped — it null-routed this IP; see docs/BROWSER_AND_RECIPES.md §1a).
+const SEARCH_HOME = 'https://www.google.com';
 
 function detectWebIntent(text) {
   if (!text) return null;

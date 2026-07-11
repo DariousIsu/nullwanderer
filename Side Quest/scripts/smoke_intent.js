@@ -10,9 +10,9 @@ const fires = (msg, frag) => { const r = detectWebIntent(msg); return r && (!fra
 console.log('Backtest — detectWebIntent\n');
 console.log('FIRES (should open her browser):');
 ok('take a look at this <url>', fires('take a look at this https://www.raineycenter.org/national-summit', 'raineycenter.org'));
-ok('try opening a new browser', fires('try opening a new browser', 'duckduckgo'));
+ok('try opening a new browser', fires('try opening a new browser', 'google'));
 ok('use <web-open> its a new tool', fires('use <web-open> its a new tool'));
-ok('open a new browser', fires('open a new browser', 'duckduckgo'));
+ok('open a new browser', fires('open a new browser', 'google'));
 ok('check out this link <url>', fires('check out this link https://example.com/x', 'example.com'));
 ok('look up the summit online', fires('look up the rainey center summit online', 'rainey'));
 ok('can you search something from here', fires('can you search something from here?', 'something'));

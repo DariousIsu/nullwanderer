@@ -19,16 +19,86 @@ Chrome) is a misfire — she means her own browser. `monologue.splitIdleBrowserT
 redirects a research-time `<browse>` open to `<web-open>` (her browser). The other
 shared-browser tags (`browse-read`/`click`/`scroll` on his active tab) pass through.
 
-### Her browser tags (`lib/web.js`)
-- `<web-open>url OR search terms</web-open>` — open a page (plain words = a search)
-- `<web-read/>` — read the page; interactive els come back as `[L#]/[B#]/[I#]/[C#]` handles
-- `<web-deepen/>` — on a search-results page, open the **top result** (don't stall at the SERP)
-- `<web-scroll/>` — scroll down to load/read **more** of a long page, then `<web-read/>` again
-- `<web-click>L3</web-click>` / `<web-type selector="I0">text</web-type>` — act by handle
-- `<web-back/>` / `<web-close/>` / `<web-chat speaker="X">line</web-chat>`
+### Her browser tags (`lib/web.js`) — the full manipulation suite
 
-Handles are valid only from the most recent `<web-read/>`. Guidance in the prompt:
-**go deep, not wide — deepen + scroll + take notes.**
+Her visible browser defaults to **Google** for a plain-word `<web-open>` (a normal-browser
+feel; DDG was dropped after it null-routed this IP — see §1a). `read()` returns page text
+(cap **`MAX_TEXT` = 16 000 chars**, tunable via env **`ZOE_WEB_READ_CHARS`**, floor 2 000)
+plus an interactive-element map (`MAX_INTERACTIVES` = 35 handles).
+
+**Perceive / navigate**
+- `<web-open>url OR search terms</web-open>` — open a page (plain words = a Google search)
+- `<web-read/>` — page text + interactive els as `[L#]/[B#]/[I#]/[C#]` handles (the "button map")
+- `<web-see>question</web-see>` — screenshot → vision (viewport; `scroll="down"` first, or `full`/`whole` for the whole page)
+- `<web-deepen/>` — on a SERP, open the **top result** (don't stall at the results list)
+- `<web-scroll/>` — scroll down (or `up`/`top`) to load/read more, then `<web-read/>` again
+- `<web-back/>` `<web-forward/>` `<web-reload/>` `<web-close/>`
+
+**Click / keyboard**
+- `<web-click>L3</web-click>` — click a handle (`button="right"` or `dbl="1"` for right/double-click)
+- `<web-click-text>Sign in</web-click-text>` — click by visible text when there's no handle
+- `<web-type selector="I0">text</web-type>` — type into an input handle
+- `<web-press selector="I0">Enter</web-press>` — press a key/combo (Enter/Tab/Escape/ArrowDown/"Control+A"; selector optional → focused element)
+- `<web-clear selector="I0"/>` — empty a field
+
+**Forms**
+- `<web-select selector="I0">Option label</web-select>` — pick a dropdown option (by label → value)
+- `<web-check>I2</web-check>` / `<web-uncheck>I2</web-uncheck>` — tick/untick checkbox or radio
+- `<web-upload selector="I3">C:\path\file.pdf</web-upload>` — attach a local file to a file input
+- `<web-submit selector="I0"/>` — submit the form (Enter)
+
+**Tactile / vision-guided**
+- `<web-hover>L3</web-hover>` — hover a handle/text to reveal a menu or tooltip, then `<web-read/>`
+- `<web-click-xy x="120" y="340"/>` — click at **viewport** pixels read off a `<web-see>` screenshot (don't pair with a full-page `<web-see>`; `button`/`dbl` too)
+- `<web-drag from="L1" to="L5"/>` — drag one handle onto another (reorder, sliders, drop targets)
+
+**Tabs / timing / dialogs**
+- `<web-tab-new>url</web-tab-new>` `<web-tab-list/>` `<web-tab-switch>2</web-tab-switch>` `<web-tab-close>2</web-tab-close>`
+- `<web-wait>2000</web-wait>` or `<web-wait selector=".results"/>` — pause N ms, or wait for an element
+- `<web-dialog>accept</web-dialog>` / `<web-dialog>dismiss</web-dialog>` — answer a native alert/confirm (`text="…"` for a prompt). A page `dialog` listener holds it open with a **30 s safety auto-dismiss** so an unanswered popup can't hang the page.
+
+**Precise extraction / inspection**
+- `<web-get selector="a.headline" attr="href"/>` — read one element's attribute (omit `attr` for its text)
+- `<web-eval>document.querySelectorAll('.price').length</web-eval>` — run a JS expression, get the (bounded) result; in-page errors return `ERR: …`
+
+**Chat sites** (`<web-chat speaker="X">line</web-chat>` — type+send+wait for a bot's reply; `<web-watch>`/`<web-unwatch>`).
+
+Each tag is a thin Playwright wrapper on the CURRENT page and **resets the handle registry**
+when the DOM may change — handles are valid only from the most recent `<web-read/>`, so read
+again after opening / clicking / scrolling / hovering / waiting / switching tabs. Prompt guidance:
+**go deep, not wide — deepen + scroll + take notes.** Dispatch caps at **8 web tags per turn**
+(`main.js`), enough for a full fill→select→check→submit→read flow.
+
+---
+
+## 1a. Search — two lanes (`lib/search_lane.js` + `lib/web.js`)
+
+DuckDuckGo **null-routed this IP** at the connection level (`ERR_CONNECTION_TIMED_OUT` on every
+DDG host) after the old shared search lane over-pinged its HTML endpoint. Search was split into
+two independent lanes, on Lucas's design — *"dedicated stealth lanes for rapid searching, normal
+browsers for deeper web browsing."*
+
+| | Rapid stealth lane | Deep-browse lane |
+|---|---|---|
+| Module | `lib/search_lane.js` | `lib/web.js` (her visible browser) |
+| Engine | **Bing** | **Google** |
+| Window | **hidden** (headful but parked off-screen) | visible, co-watched |
+| Used by | `lib/web_search.search()` → cognition, monologue, meetings, media, research_exec, super_search | her interactive `<web-*>` work |
+
+- **`lib/web_search.search()`** calls the stealth lane first; a raw Bing GET (`parseBingResults`)
+  is the fallback when the lane can't launch, or when `ZOE_SEARCH_VIA_BROWSER=0`. An empty lane
+  result is trusted (no raw re-query).
+- **Stealth lane = its own patchright context** on a separate profile (`data/search_profile`),
+  serialized, lazy + reused. Bing anchors carry real destination URLs (some wrap in
+  `bing.com/ck/a?…&u=a1<b64url>` — decoded).
+- **⚠ Patchright ignores `headless:true`** — its stealth patches need a headed browser, so it
+  spawns a real (blank/black) window on Windows. Fix: launch **headful but off-screen**
+  (`--window-position=-32000,-32000`) — renders SERPs normally, never visible. A
+  `killStaleProfileChrome()` (matches `*search_profile*`, disjoint from web.js's `*web_profile*`)
+  clears an orphaned lane Chrome on fresh launch so it can't linger as a stray window / hold the lock.
+- **Google SERP parsing** (her visible lane's `readSerpResults`/`openTopResult`): `#search h3`,
+  `div.g`/`.MjjYud`, `.VwiC3b` snippet. Headless Google trips its `/sorry` bot wall — it only
+  parses **headful** (which is how her lane runs).
 
 ---
 
