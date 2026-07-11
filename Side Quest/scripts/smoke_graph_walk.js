@@ -55,7 +55,7 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
 
   // --- growAround a MISSING anchor: proposes the entity + related + edges, under budget ---
   const calls = [];
-  const dispatch = async (tag) => { calls.push([tag.name, tag.args]); return { ok: true, text: '{"status":"pending_verification"}' }; };
+  const dispatch = async (tag) => { calls.push([tag.name, tag.args]); return { ok: true, text: JSON.stringify({ action: tag.name === 'propose_relation' ? 'proposed' : 'created' }) }; };
   const web = async () => [{ text: 'The Nuclear Innovation Alliance is a nuclear policy nonprofit that works with Congress.', url: 'https://ex.com/nia' }];
   const dossierCloud = async () => JSON.stringify({
     entity_type: 'organization',
@@ -111,6 +111,22 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   ok(oneCite && oneCite[1].confidence > 0.80 && oneCite[1].confidence < 0.90, 'growAround(single-cite): a one-source edge stays below floor (0.88, parked for corroboration)');
   ok(twoCite && JSON.parse(twoCite[1].relation_metadata).source_set.length === 2, 'growAround(multi-cite): the edge carries BOTH independent urls in source_set');
 
+  // --- TRUTHFUL accounting: parse the tool ACTION, not the always-true transport ok (the bug that made
+  //     +conn a fiction). A 'rejected' edge (endpoint not found) is NOT a connection; it's surfaced instead. ---
+  const prP = await G.proposeRelation({ dispatch: async () => ({ ok: true, text: '{"action":"proposed"}' }), source: 'A', target: 'B', relation_type: 'x' });
+  ok(prP.ok === true && prP.action === 'proposed', 'proposeRelation: action=proposed → ok');
+  const prR = await G.proposeRelation({ dispatch: async () => ({ ok: true, text: '{"action":"rejected","error":"target not in public corpus"}' }), source: 'A', target: 'B', relation_type: 'x' });
+  ok(prR.ok === false && prR.action === 'rejected', 'proposeRelation: action=rejected → NOT ok (was a false +conn under the old r.ok count)');
+  const peN = await G.proposeEntity({ dispatch: async () => ({ ok: true, text: '{"action":"proposed"}' }), name: 'N' });
+  ok(peN.isNew === true && peN.ok === true, 'proposeEntity: action=proposed → isNew');
+  const peX = await G.proposeEntity({ dispatch: async () => ({ ok: true, text: '{"action":"already_exists"}' }), name: 'N' });
+  ok(peX.ok === true && peX.isNew === false, 'proposeEntity: already_exists → present but NOT new (no overcount)');
+  const logs = [];
+  const rejDispatch = async (tag) => { const a = tag.name === 'propose_relation' ? 'rejected' : 'created'; return { ok: true, text: JSON.stringify({ action: a, error: 'target entity not found in public corpus' }) }; };
+  const grownRej = await G.growAround({ mention: 'Nuclear Innovation Alliance', kind: 'missing', object: null }, { web, cloud: dossierCloud, dispatch: rejDispatch, log: (m) => logs.push(m) });
+  ok(grownRej.connections === 0 && grownRej.rejected >= 1, 'growAround(truthful): rejected edges → 0 connections, counted as rejected (surfaced, not silently over-counted)');
+  ok(logs.some(m => /rejected|not found/i.test(m)), 'growAround(truthful): the rejection REASON is logged (so we can see WHY the endpoint failed)');
+
   // --- growAround a THIN anchor: does NOT re-propose an existing neighbour edge ---
   calls.length = 0;
   const thinCloud = async () => JSON.stringify({ entity_type: 'organization', summary: 'x', related: [{ name: 'Existing Ally', type: 'organization', relation: 'allied_with', source: 'S1' }, { name: 'New Partner', type: 'organization', relation: 'partners_with', source: 'S1' }] });
@@ -165,7 +181,7 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   const thinCloud2 = async () => JSON.stringify({ entity_type: 'organization', summary: 'A small local org.', related: [{ name: 'New Ally Org', type: 'organization', relation: 'allied_with', source: 'S1' }] });
   const kgNbr = async () => [];   // the real thin node has no existing neighbours
   const preCalls = [];
-  const dispatchPre = async (tag) => { preCalls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created"}' }; };
+  const dispatchPre = async (tag) => { preCalls.push([tag.name, tag.args]); return { ok: true, text: JSON.stringify({ action: tag.name === 'propose_relation' ? 'proposed' : 'created' }) }; };
   const movePre = await G.runMove({
     recentTurns: [],
     candidates: [{ mention: 'Thin Local Org', source: 'frontier', kind: 'thin', object: { id: 555, degree: 2, canonical: 'Thin Local Org [Q999]' } }],
@@ -177,7 +193,7 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
 
   // --- CITATION GATE (Slice 0): cited claim promotes + is observed; inferred claim is HELD ---
   const gcalls = []; const observed = [];
-  const gdisp = async (tag) => { gcalls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created"}' }; };
+  const gdisp = async (tag) => { gcalls.push([tag.name, tag.args]); return { ok: true, text: JSON.stringify({ action: tag.name === 'propose_relation' ? 'proposed' : 'created' }) }; };
   const gweb = async () => [{ text: 'Acme Corp partners with Beta Inc.', url: 'https://ex.com/acme' }];
   const gcloud = async () => JSON.stringify({ entity_type: 'organization', summary: 'Acme Corp.', related: [
     { name: 'Beta Inc', type: 'organization', relation: 'partners_with', source: 'S1', when: '2019' }, // cited + dated → promote
@@ -212,7 +228,7 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
 
   // --- EXISTENCE gate: a MISSING anchor with no citable source is HELD, not minted ---
   const ecalls = [];
-  const edisp = async (tag) => { ecalls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created"}' }; };
+  const edisp = async (tag) => { ecalls.push([tag.name, tag.args]); return { ok: true, text: JSON.stringify({ action: tag.name === 'propose_relation' ? 'proposed' : 'created' }) }; };
   const eweb = async () => [{ text: 'a snippet with no url' }];   // no url → existence ungradeable
   const ecloud = async () => JSON.stringify({ entity_type: 'organization', summary: 'x', related: [{ name: 'Whatever', type: 'organization', relation: 'related_to', source: 'S1' }] });
   const eGrown = await G.growAround({ mention: 'Ghost Org', kind: 'missing', object: null }, { web: eweb, cloud: ecloud, dispatch: edisp });

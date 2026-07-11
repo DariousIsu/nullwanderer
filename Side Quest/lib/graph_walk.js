@@ -177,12 +177,13 @@ async function assessGaps(candidates, { recall, log } = {}) {
   return out;
 }
 
-// Add one entity to the graph — additive + auto-disambiguated (Levenshtein 0.85 → 'created' /
-// 'already_exists' / 'merge_suggested', never a blind dup). Echo's propose_entity schema is
-// {name, entity_type, summary?, entity_subtype?, confidence?} with additionalProperties:false — do
-// NOT pass extra keys (they're rejected). Fail-soft; true iff Echo accepted.
-async function proposeEntity({ dispatch, name, entity_type, summary, confidence }) {
-  if (typeof dispatch !== 'function' || !name) return false;
+// Add one entity — additive + auto-disambiguated (→ 'created'/'proposed'/'already_exists'/
+// 'already_proposed'/'merge_suggested'/'rejected'). TRUTHFUL accounting: the transport `ok` is ALWAYS true
+// on a successful call, so we parse the tool ACTION, not r.ok (the old bug that made +ent a fiction).
+// Returns { ok, isNew, action, error }: `ok` = the name is now PRESENT (created/proposed/already_*), a valid
+// basis to edge/promote it; `isNew` = a FRESH write we should count. Non-present actions are LOGGED. Fail-soft.
+async function proposeEntity({ dispatch, name, entity_type, summary, confidence, log }) {
+  if (typeof dispatch !== 'function' || !name) return { ok: false, isNew: false, action: 'skipped' };
   try {
     const args = { name, entity_type: entity_type || 'concept' };
     if (summary) args.summary = String(summary).slice(0, 1200);
@@ -190,21 +191,33 @@ async function proposeEntity({ dispatch, name, entity_type, summary, confidence 
     // promotion gate can auto-promote well-cited (A/B) proposals and queue weaker (C/D) ones for review.
     if (typeof confidence === 'number') args.confidence = confidence;
     const r = await dispatch({ kind: 'do', name: 'propose_entity', args });
-    return !!(r && r.ok);
-  } catch { return false; }
+    if (!r || !r.ok) return { ok: false, isNew: false, action: 'dispatch_failed' };
+    let rep = null; try { rep = JSON.parse(r.text); } catch {}
+    const action = (rep && rep.action) || 'unknown';
+    const isNew = action === 'created' || action === 'proposed';
+    const present = isNew || action === 'already_exists' || action === 'already_proposed';
+    if (!present && action !== 'unknown') log && log(`[grow] entity "${name}": ${action}${rep && rep.error ? ' — ' + rep.error : ''}`);
+    return { ok: present, isNew, action, error: rep && rep.error };
+  } catch { return { ok: false, isNew: false, action: 'threw' }; }
 }
 
-// Add one edge — BOTH endpoints must already exist (we propose the entities first). Schema is
-// {source_name, target_name, relation_type, confidence?}, additionalProperties:false. Fail-soft.
-async function proposeRelation({ dispatch, source, target, relation_type, confidence, metadata }) {
-  if (typeof dispatch !== 'function' || !source || !target || source === target) return false;
+// Add one edge — BOTH endpoints must resolve in the PUBLIC corpus (propose_relation_tenant rejects otherwise).
+// TRUTHFUL: an edge only WROTE if action==='proposed'; a 'rejected' (endpoint-not-found) wrote NOTHING, so we
+// must NOT count it (the old r.ok bug counted every rejection as a connection). LOG the reason so a refused
+// edge can be routed (→ short-term) instead of silently dropped. Returns { ok, action, error }. Fail-soft.
+async function proposeRelation({ dispatch, source, target, relation_type, confidence, metadata, log }) {
+  if (typeof dispatch !== 'function' || !source || !target || source === target) return { ok: false, action: 'skipped' };
   try {
     const args = { source_name: source, target_name: target, relation_type: relation_type || 'related_to' };
     if (typeof confidence === 'number') args.confidence = confidence;   // calibrated → Echo promotion gate
     if (metadata) args.relation_metadata = JSON.stringify(metadata);    // C1 provenance (source_set/valid-time)
     const r = await dispatch({ kind: 'do', name: 'propose_relation', args });
-    return !!(r && r.ok);
-  } catch { return false; }
+    if (!r || !r.ok) return { ok: false, action: 'dispatch_failed' };
+    let rep = null; try { rep = JSON.parse(r.text); } catch {}
+    const action = (rep && rep.action) || 'unknown';
+    if (action !== 'proposed') log && log(`[grow] edge "${source}" -[${relation_type || 'related_to'}]→ "${target}": ${action}${rep && rep.error ? ' — ' + rep.error : ''}`);
+    return { ok: action === 'proposed', action, error: rep && rep.error };
+  } catch { return { ok: false, action: 'threw' }; }
 }
 
 // GROW the graph around one anchor gap: fill from web+tools into a dossier, propose the object (if
@@ -238,7 +251,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
   if (!dossier || typeof dossier !== 'object') { log && log(`[grow] "${mention}" sources=${sources.length} dossier=NULL (rawLen=${_rawLen}) → no enrich`); return { built: false, entities: 0, connections: 0, related: [], summary: '', held: 0 }; }
 
   const nbrKeys = new Set(neighbors.map(visitKey));
-  let entities = 0, connections = 0, held = 0, sourceUrl = null; const related = [];
+  let entities = 0, connections = 0, held = 0, rejected = 0, sourceUrl = null; const related = [];
   const _relRaw = Array.isArray(dossier.related) ? dossier.related.length : 0;
 
   // 1) the anchor object itself — only if MISSING. EXISTENCE gate: mint only if the web pull cites it as
@@ -250,7 +263,8 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
       log && log(`[grow] "${mention}" existence uncited (grade ${eg.grade}) → HELD, not minted`);
       return { built: false, entities: 0, connections: 0, related: [], summary: String(dossier.summary || '').trim(), held: 1 };
     }
-    if (await proposeEntity({ dispatch, name: canonical, entity_type: dossier.entity_type, summary: dossier.summary, confidence: eg.confidence })) {
+    const ea = await proposeEntity({ dispatch, name: canonical, entity_type: dossier.entity_type, summary: dossier.summary, confidence: eg.confidence, log });
+    if (ea.isNew) {
       entities++;
       if (!sourceUrl) sourceUrl = eg.url || null;
       if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: 'exists', target: null, url: eg.url, grade: eg.grade, confidence: eg.confidence, status: 'promoted' }); } catch {} }
@@ -278,11 +292,14 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
       continue;
     }
     // propose the related entity (harmless if it already exists — Echo dedups on promotion)
-    if (entities < WALK_MAX_NODES && await proposeEntity({ dispatch, name: rname, entity_type: r.type, summary: '', confidence: fg.confidence })) {
-      entities++;
-      // inline-promote the neighbour too, so the edge below has BOTH endpoints live (record pipeline).
-      // No-op/skip if it already exists or is below the grounded floor — same gate as the batch drain.
-      if (typeof promoteOne === 'function') { try { await promoteOne({ kind: 'entity', name: rname }); } catch {} }
+    if (entities < WALK_MAX_NODES) {
+      const re = await proposeEntity({ dispatch, name: rname, entity_type: r.type, summary: '', confidence: fg.confidence, log });
+      if (re.isNew) {
+        entities++;
+        // inline-promote the neighbour too, so the edge below has BOTH endpoints live (record pipeline).
+        // No-op/skip if it already exists or is below the grounded floor — same gate as the batch drain.
+        if (typeof promoteOne === 'function') { try { await promoteOne({ kind: 'entity', name: rname }); } catch {} }
+      }
     }
     // C1/C2/C3 provenance + calibrated confidence (mirrors doc_decompose): per-edge
     // source_set + valid-time from prose; confidence from the independent-source count.
@@ -295,15 +312,18 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
     const corrN = corroboration.corroborationCount(meta.source_set);
     meta.corroboration = corrN;
     const conf = confModel.calibratedConfidence({ grade: fg.grade, corroboration: corrN });
-    if (await proposeRelation({ dispatch, source: canonical, target: rname, relation_type: (r && r.relation) || 'related_to', confidence: conf, metadata: meta })) {
+    const rr = await proposeRelation({ dispatch, source: canonical, target: rname, relation_type: (r && r.relation) || 'related_to', confidence: conf, metadata: meta, log });
+    if (rr.ok) {                                    // action==='proposed' — the edge ACTUALLY landed as a proposal
       connections++; related.push(rname);
       if (!sourceUrl) sourceUrl = fg.url || null;
       // record the CITATION for the promoted fact (the observation trail; grade + backing url).
       if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: fg.url, grade: fg.grade, confidence: conf, status: 'promoted', valid_from: vt.valid_from, valid_to: vt.valid_to }); } catch {} }
+    } else {
+      rejected++;   // truthful: endpoint-not-found etc. — logged in proposeRelation; counted for the [grow] summary
     }
   }
-  log && log(`[grow] "${mention}" [${gap.kind}] sources=${sources.length} neighbors=${neighbors.length} related=${_relRaw} → +${entities} ent +${connections} conn (${held} held: uncited)`);
-  return { built: gap.kind === 'missing' && entities > 0, entities, connections, related, summary: String(dossier.summary || '').trim(), held, sourceUrl };
+  log && log(`[grow] "${mention}" [${gap.kind}] sources=${sources.length} neighbors=${neighbors.length} related=${_relRaw} → +${entities} ent +${connections} conn (${held} held: uncited${rejected ? `, ${rejected} rejected: endpoint-not-found` : ''})`);
+  return { built: gap.kind === 'missing' && entities > 0, entities, connections, related, summary: String(dossier.summary || '').trim(), held, rejected, sourceUrl };
 }
 
 // A compact, human-friendly label for a citation url — for the voiced "via …" tag. Pure.
