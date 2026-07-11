@@ -52,7 +52,10 @@ const CHROME_PATHS = [
   'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
 ].filter(Boolean);
-const SEARCH_URL = (q) => `https://duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
+// Google for her VISIBLE deep-browse lane — a normal-browser feel for the tab she + Lucas
+// co-watch. (DDG was dropped: it null-routed this IP after the search lane over-pinged it.
+// Rapid programmatic search lives in the SEPARATE hidden stealth lane, lib/search_lane.js.)
+const SEARCH_URL = (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}`;
 const MAX_TEXT = 4000;
 const MAX_INTERACTIVES = 35;
 const NAV_TIMEOUT = 20000;
@@ -61,18 +64,6 @@ let context = null;   // a Playwright-managed persistent context (her Chrome)
 let page = null;
 let registry = {};    // handle → locator
 let counter = { L: 0, B: 0, I: 0, C: 0 };
-
-// BACKGROUND SEARCH TAB — a SEPARATE, always-hidden page in the same persistent context,
-// used by lib/web_search.searchHeadless to run the app's headless searches through her
-// stealth browser (patchright + persistent cf_clearance) instead of a raw fetch to DDG's
-// HTML endpoint, which was getting bot-checked when over-pinged. It is deliberately kept
-// distinct from her foreground `page` so a background lookup never disturbs the tab she or
-// Lucas is looking at. `openingBg` suppresses the context 'page' handler while we spawn it
-// (so it isn't mistaken for a click-opened tab to follow); `bgLock` serializes concurrent
-// background searches through the single tab.
-let bgPage = null;
-let openingBg = false;
-let bgLock = Promise.resolve();
 
 // RECIPE RECORDING (lib/recorder.js). `demo` = an explicit record-by-demonstration
 // session Lucas drives (in-page listeners). `passive` = her own successful flow on an
@@ -184,7 +175,7 @@ async function ensure() {
     // audio, or a Meet tab playing the call on the same machine echoes against Lucas's.
     args: ['--no-first-run', '--no-default-browser-check', '--test-type', '--mute-audio']
   });
-  context.on('close', () => { context = null; page = null; bgPage = null; registry = {}; });
+  context.on('close', () => { context = null; page = null; registry = {}; });
   // Persist downloads to DOWNLOADS_DIR with their real filename (collision-safe) instead of letting
   // Playwright discard them on context close. saveAs moves the temp artifact to the friendly path.
   context.on('download', async (download) => {
@@ -198,7 +189,6 @@ async function ensure() {
   // current page so she isn't stranded on the old one. Single-tab model preserved —
   // "current tab" just tracks the freshest one.
   context.on('page', (p) => {
-    if (openingBg) return;   // the background search tab — don't adopt it as her foreground page
     page = p; registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
     try { p.setDefaultTimeout(8000); } catch {}
   });
@@ -214,9 +204,7 @@ async function ensure() {
 async function syncActivePage() {
   if (!context) return;
   let pages = [];
-  // Exclude the hidden background search tab — it must never become her foreground page, not even
-  // as the newest-page fallback below (that would make <web-read/> suddenly read a DDG SERP).
-  try { pages = context.pages().filter(p => { try { return p !== bgPage && !p.isClosed(); } catch { return false; } }); } catch {}
+  try { pages = context.pages().filter(p => { try { return !p.isClosed(); } catch { return false; } }); } catch {}
   if (!pages.length) return;
   let picked = null;
   for (const p of pages) {
@@ -309,20 +297,28 @@ async function open(target) {
   } catch (err) { return { ok: false, reason: err.message }; }
 }
 
-// On a DuckDuckGo HTML SERP, page.innerText('body') leads with the locale/region picker
-// ("All Regions Argentina Australia Austria …") and buries the actual results — which then
-// got stored as a junk "reading" that fed her rumination. Pull the real result list instead.
-const DDG_SERP_RE = /(?:^|\/\/)(?:html\.)?duckduckgo\.com\/html/i;
+// On a Google SERP, page.innerText('body') leads with the search box, tabs, and tools chrome
+// and buries the actual results — which then got stored as a junk "reading" that fed her
+// rumination. Pull the real result list (title + snippet) instead. Selectors track Google's
+// current result markup (h3 title inside the result anchor; .VwiC3b snippet) and skip
+// Google-internal links (maps/images/"People also ask").
+const SERP_RE = /(?:^|\/\/)(?:www\.)?google\.[a-z.]+\/search/i;
 async function readSerpResults() {
   try {
     const results = await withTimeout(page.evaluate(() => {
       const out = [];
-      for (const b of document.querySelectorAll('.result, .web-result, .results_links')) {
-        const a = b.querySelector('a.result__a, .result__title a, a[href]');
+      const seen = new Set();
+      for (const h of document.querySelectorAll('#search h3, #rso h3')) {
+        const a = h.closest('a[href]');
         if (!a) continue;
-        const title = (a.innerText || a.textContent || '').replace(/\s+/g, ' ').trim();
-        if (!title) continue;
-        const sn = b.querySelector('.result__snippet, .result__body');
+        let href = a.getAttribute('href') || '';
+        if (!/^https?:/i.test(href)) continue;
+        try { if (/(?:^|\.)google\./i.test(new URL(href, location.href).hostname)) continue; } catch {}
+        const title = (h.innerText || h.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!title || seen.has(title)) continue;
+        seen.add(title);
+        const block = a.closest('div.g, div.MjjYud, div.tF2Cxc') || a.parentElement;
+        const sn = block && block.querySelector('.VwiC3b, div[data-sncf], .Uroaid, .lyLwlc');
         const snippet = sn ? (sn.innerText || sn.textContent || '').replace(/\s+/g, ' ').trim() : '';
         out.push({ title, snippet });
         if (out.length >= 8) break;
@@ -333,75 +329,6 @@ async function readSerpResults() {
   } catch { return []; }
 }
 
-// --- headless background search (lib/web_search.searchHeadless entry) ---------------------
-// Ensure the hidden background tab exists in her persistent context. Reuses `ensure()` to
-// guarantee the context is live (that also sets her FOREGROUND page — untouched here), then
-// spawns a dedicated bgPage with the 'page' handler suppressed so it isn't followed as a tab.
-async function ensureBg() {
-  await ensure();                                    // guarantees `context` (and her foreground page) is live
-  let closed = true;
-  try { closed = !bgPage || bgPage.isClosed(); } catch { closed = true; }
-  if (closed) {
-    openingBg = true;
-    try { bgPage = await context.newPage(); }
-    finally { openingBg = false; }
-    try { bgPage.setDefaultTimeout(8000); } catch {}
-  }
-  return bgPage;
-}
-
-// Extract SERP results (title + REAL url + snippet) from a given DDG HTML results page. Unlike
-// readSerpResults (title/snippet only, for her rumination feed), this returns the unwrapped
-// destination URL — the web_search contract needs it for deepening/dedup. DDG wraps hrefs in
-// /l/?uddg=<encoded>; we decode that back to the original and drop DDG-internal links.
-async function readSerpResultsFrom(p, max = 8) {
-  return await withTimeout(p.evaluate((maxN) => {
-    const unwrap = (href) => {
-      if (!href) return '';
-      try { const m = href.match(/[?&]uddg=([^&]+)/); if (m) return decodeURIComponent(m[1]); } catch {}
-      if (/^https?:/i.test(href)) return href;
-      return '';
-    };
-    const out = [];
-    for (const b of document.querySelectorAll('.result, .web-result, .results_links')) {
-      const a = b.querySelector('a.result__a, .result__title a, a[href]');
-      if (!a) continue;
-      const title = (a.innerText || a.textContent || '').replace(/\s+/g, ' ').trim();
-      const url = unwrap(a.getAttribute('href') || a.href || '');
-      if (!title || !url) continue;
-      if (/(?:^|\/\/)(?:[a-z0-9-]+\.)*duckduckgo\.com\//i.test(url)) continue;   // skip DDG-internal
-      const sn = b.querySelector('.result__snippet, .result__body');
-      const snippet = sn ? (sn.innerText || sn.textContent || '').replace(/\s+/g, ' ').trim() : '';
-      out.push({ title, url, snippet });
-      if (out.length >= maxN) break;
-    }
-    return out;
-  }, max), 4000, []);
-}
-
-// Serialize background searches through the single bgPage (concurrent goto()s on one tab race).
-function withBgLock(fn) {
-  const run = bgLock.then(fn, fn);
-  bgLock = run.then(() => {}, () => {});   // never let a rejection poison the chain
-  return run;
-}
-
-// Run a headless search through the stealth browser's background tab and return the same
-// shape lib/web_search.search produces: { query, results:[{title,url,snippet}] }. THROWS if
-// the browser is unavailable (no Chrome, launch failure) so the caller can fall back to a raw
-// fetch. An empty results array is a valid answer (real no-hits), NOT a fall-back trigger.
-async function searchHeadless(query, { signal } = {}) {
-  const q = cleanQuery(String(query || '').trim()).slice(0, 240);
-  if (!q) return { query: '', results: [] };
-  if (signal && signal.aborted) return { query: q, results: [] };
-  return withBgLock(async () => {
-    const p = await ensureBg();
-    await p.goto(SEARCH_URL(q), { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-    const results = await readSerpResultsFrom(p, 8);
-    return { query: q, results: Array.isArray(results) ? results : [] };
-  });
-}
-
 // Read the current page: capped body text + a handle list of interactive elements.
 // Syncs to the front tab first, so <web-read/> shows whatever is actually open in
 // her window right now (including a chat Lucas just opened), not a stale page.
@@ -410,7 +337,7 @@ async function read() {
   if (!page) return { ok: false, reason: 'no page open — use <web-open> first' };
   try {
     let text = null;
-    if (DDG_SERP_RE.test(page.url())) {
+    if (SERP_RE.test(page.url())) {
       const results = await readSerpResults();
       if (results.length) {
         text = ('Search results:\n' + results.map((r, i) => `${i + 1}. ${r.title}${r.snippet ? ' — ' + r.snippet : ''}`).join('\n')).slice(0, MAX_TEXT);
@@ -534,12 +461,12 @@ async function back() {
 
 // Follow the first organic result on a search-results page and land on the actual
 // page — the AUTO-DEEPEN step. Without it an autonomous search stops at the SERP
-// and never sees real content. DuckDuckGo's HTML SERP marks result titles with
-// a.result__a; fall back to other layouts, and skip duckduckgo-internal links.
+// and never sees real content. Google marks each organic result with an <h3> title
+// inside the result anchor; pick the first such link, skipping Google-internal chrome.
 async function openTopResult() {
   if (!page) return { ok: false, reason: 'no page open' };
   try {
-    const selectors = ['a.result__a', '.result__title a', 'a[data-testid="result-title-a"]', '.results .result a[href]'];
+    const selectors = ['#rso a:has(h3)', '#search a:has(h3)', 'a:has(h3)'];
     let link = null;
     for (const sel of selectors) {
       const loc = page.locator(sel).first();
@@ -722,7 +649,7 @@ async function cookies(urls) {
 }
 
 module.exports = {
-  isConnected, ensure, open, read, pageImages, screenshot, click, clickText, type, back, close, openTopResult, scroll, runRecipe, searchHeadless,
+  isConnected, ensure, open, read, pageImages, screenshot, click, clickText, type, back, close, openTopResult, scroll, runRecipe,
   startRecording, stopRecording, isRecording, cookies,
   chatSend, chatWatch, chatUnwatch,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR,

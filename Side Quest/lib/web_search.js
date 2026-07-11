@@ -1,10 +1,12 @@
 /**
- * Lightweight DuckDuckGo HTML search wrapper.
- * No API key, no auth. Fragile to DDG HTML changes — works as of mid-2026.
+ * Search + page-fetch wrapper. `search()` PRIMARY path is the dedicated hidden stealth lane
+ * (lib/search_lane — headless Bing), with this file's raw Bing fetch as the fallback for when
+ * that browser can't launch (no Chrome / launch failure / offline test). Engine is Bing:
+ * DuckDuckGo null-routed this IP after the lane over-pinged its HTML endpoint.
  */
 
-const DDG_HTML_ENDPOINT = 'https://html.duckduckgo.com/html/';
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ZoeLane/0.1';
+const BING_ENDPOINT = 'https://www.bing.com/search';
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 const MAX_RESULTS = 5;
 const TIMEOUT_MS = 8000;
 
@@ -26,54 +28,46 @@ function stripTags(html) {
   return decodeHtmlEntities(html.replace(/<[^>]+>/g, ''));
 }
 
-function unwrapDdgUrl(href) {
-  // DDG wraps result URLs in /l/?uddg=<encoded>&...; extract original
+function unwrapBingUrl(href) {
+  // Most Bing result anchors carry the real URL; some are wrapped in bing.com/ck/a?…&u=a1<b64url>.
   if (!href) return '';
-  const m = href.match(/uddg=([^&]+)/);
-  if (m) {
-    try { return decodeURIComponent(m[1]); } catch { return href; }
+  if (/bing\.com\/ck\/a/i.test(href)) {
+    const m = href.match(/[?&]u=a1([^&]+)/);
+    if (m) {
+      try { let s = decodeURIComponent(m[1]).replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; return Buffer.from(s, 'base64').toString('utf8'); }
+      catch { return ''; }
+    }
+    return '';
   }
-  // Sometimes the href is already absolute
   if (href.startsWith('http')) return href;
   return '';
 }
 
-function parseResults(html) {
+function parseBingResults(html) {
   const results = [];
-  const blockRe = /<div[^>]*class="[^"]*result\b[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/g;
+  const blockRe = /<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>([\s\S]*?)<\/li>/g;
   let blockMatch;
   while ((blockMatch = blockRe.exec(html)) !== null && results.length < MAX_RESULTS) {
     const block = blockMatch[1];
-    const titleMatch = block.match(/<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
-    if (!titleMatch) continue;
-    const title = stripTags(titleMatch[2]).trim();
-    const url = unwrapDdgUrl(titleMatch[1]);
+    // Title + link live inside the result's <h2><a href="…">…</a></h2>
+    const linkMatch = block.match(/<h2[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!linkMatch) continue;
+    const url = unwrapBingUrl(decodeHtmlEntities(linkMatch[1]));
+    const title = stripTags(linkMatch[2]).trim();
     if (!title || !url) continue;
 
     let snippet = '';
     const snippetPatterns = [
-      /<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/,
-      /<(?:div|span|p)[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/(?:div|span|p)>/,
-      /<(?:div|span|p)[^>]*class="[^"]*snippet[^"]*"[^>]*>([\s\S]*?)<\/(?:div|span|p)>/,
-      /<(?:div|span|p)[^>]*class="[^"]*result__body[^"]*"[^>]*>([\s\S]*?)<\/(?:div|span|p)>/
+      /<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/i,
+      /<div[^>]*class="[^"]*b_caption[^"]*"[^>]*>[\s\S]*?<p[^>]*>([\s\S]*?)<\/p>/i,
+      /<div[^>]*class="[^"]*b_algoSlug[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+      /<p[^>]*>([\s\S]*?)<\/p>/i
     ];
     for (const re of snippetPatterns) {
       const m = block.match(re);
       if (m) {
         const s = stripTags(m[1]).trim();
-        if (s) { snippet = s; break; }
-      }
-    }
-
-    // Fallback: strip the whole block, remove the title, take remaining prose
-    if (!snippet) {
-      const blockText = stripTags(block).replace(/\s+/g, ' ').trim();
-      const idx = blockText.indexOf(title);
-      const after = idx >= 0 ? blockText.slice(idx + title.length).trim() : blockText;
-      // skip leading URL-ish text
-      const cleaned = after.replace(/^[^a-zA-Z]*(?:https?:\/\/\S+\s*)?/, '').trim();
-      if (cleaned.length > 30) {
-        snippet = cleaned.length > 280 ? cleaned.slice(0, 280) + '…' : cleaned;
+        if (s) { snippet = s.length > 280 ? s.slice(0, 280) + '…' : s; break; }
       }
     }
 
@@ -152,14 +146,12 @@ async function fetchPage(url, { maxChars = 4000, timeoutMs = 8000, signal } = {}
 }
 
 /**
- * Public search. PRIMARY path routes the query through Zoe's stealth browser
- * (lib/web.searchHeadless — patchright + her persistent profile / cf_clearance), which is
- * far less bot-checked than a raw fetch to DDG's HTML endpoint. It uses a dedicated hidden
- * BACKGROUND tab, so it never disturbs her foreground page. Falls back to the raw fetch below
- * only when the browser is unavailable (no Chrome, launch failure, offline test env), or when
- * forced off with ZOE_SEARCH_VIA_BROWSER=0. An empty result from the browser is trusted as a
- * real no-hits answer and is NOT re-queried against DDG (that would defeat the point of moving
- * off the raw endpoint). Same return shape either way: { query, results:[{title,url,snippet}] }.
+ * Public search. PRIMARY path is the dedicated hidden stealth lane (lib/search_lane — a
+ * separate headless patchright Chrome running Bing, kept OUT of her visible browsing window).
+ * Falls back to the raw Bing fetch below only when that browser can't launch (no Chrome,
+ * launch failure, offline test env), or when forced off with ZOE_SEARCH_VIA_BROWSER=0. An
+ * empty result from the lane is trusted as a real no-hits answer and is NOT re-queried (that
+ * would defeat the point). Same return shape either way: { query, results:[{title,url,snippet}] }.
  */
 async function search(query, opts = {}) {
   if (!query || !query.trim()) return { query, results: [] };
@@ -167,19 +159,19 @@ async function search(query, opts = {}) {
 
   if (process.env.ZOE_SEARCH_VIA_BROWSER !== '0') {
     try {
-      const r = await require('./web').searchHeadless(trimmed, { signal: opts.signal });
+      const r = await require('./search_lane').search(trimmed, { signal: opts.signal });
       if (r && Array.isArray(r.results)) {
         return { query: trimmed, results: r.results.slice(0, MAX_RESULTS) };
       }
     } catch {
-      // browser unavailable → fall through to the raw DDG fetch
+      // stealth lane unavailable → fall through to the raw Bing fetch
     }
   }
   return searchRaw(query, opts);
 }
 
-// Raw HTML-scrape of DDG's html endpoint. Retained as the fallback for when the stealth
-// browser can't run (e.g. a headless smoke). This is the path that gets bot-checked under load.
+// Raw HTML-scrape of Bing. Retained as the fallback for when the stealth lane can't run (e.g.
+// no Chrome, or a headless smoke). Bing answers a plain GET from this IP; DDG does not.
 async function searchRaw(query, { signal } = {}) {
   if (!query || !query.trim()) return { query, results: [] };
   const trimmed = query.trim().slice(0, 240);
@@ -190,20 +182,19 @@ async function searchRaw(query, { signal } = {}) {
   if (signal) signal.addEventListener('abort', () => ctrl.abort());
 
   try {
-    const body = `q=${encodeURIComponent(trimmed)}&kl=us-en`;
-    const res = await fetch(DDG_HTML_ENDPOINT, {
-      method: 'POST',
+    const url = `${BING_ENDPOINT}?q=${encodeURIComponent(trimmed)}&setlang=en-us`;
+    const res = await fetch(url, {
+      method: 'GET',
       headers: {
         'User-Agent': USER_AGENT,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'text/html'
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-US,en;q=0.9'
       },
-      body,
       signal: ctrl.signal
     });
-    if (!res.ok) throw new Error(`DDG HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`Bing HTTP ${res.status}`);
     const html = await res.text();
-    const results = parseResults(html);
+    const results = parseBingResults(html);
     return { query: trimmed, results };
   } finally {
     clearTimeout(t);
