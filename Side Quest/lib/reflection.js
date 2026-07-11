@@ -5,6 +5,7 @@ const blackboard = require('./blackboard');
 const memoryLib = require('./memory');
 const selfModelLib = require('./self_model');
 const graphMem = require('./graph_memory');
+const { isProtocolMetaEcho } = require('./protocols');   // guard: never distill a heartbeat-rule confirmation into a durable self-note
 
 // Generative-Agents significance trigger: reflection fires when enough IMPORTANT
 // thinking has accumulated (sum of thought/reading importance ≥ threshold), not
@@ -208,6 +209,15 @@ async function maybeSignificanceReflect() {
 
     const now = Date.now();
     const joined = kept.map(s => `• ${s}`).join('\n');
+    // LOOP GUARD: if the synthesized note is just a restatement of the silence/heartbeat protocol, DROP it —
+    // it's meta about the rules, not a learning, and re-injecting it each heartbeat is what seeded the runaway
+    // "I understand perfectly, the logic gate..." loop. Advance the cursors so we don't re-synthesize it.
+    if (isProtocolMetaEcho(joined)) {
+      db.setMeta('reflection_importance_accum', '0');
+      db.setMeta('last_significance_monologue_id', String(recent[recent.length - 1].id));
+      console.log('[reflection] dropped protocol-meta echo (not a durable learning)');
+      return false;
+    }
     const reflRow = db.insertReflection({ promptUsed: 'router-v1', content: joined, sourceTurnStart: null, sourceTurnEnd: null, model: MODEL });
     try { blackboard.append({ source: 'reflection', kind: 'insight', refTable: 'reflections', refId: reflRow && reflRow.id, content: joined }); } catch {}
 
@@ -260,6 +270,15 @@ async function reflectIfDue({ force = false } = {}) {
 
     const startId = newTurns[0].id;
     const endId = newTurns[newTurns.length - 1].id;
+
+    // LOOP GUARD (see maybeSignificanceReflect): don't turn a heartbeat-rule confirmation into a durable
+    // self-note. Advance the cursor past this span so it isn't re-reflected, and stay silent.
+    if (isProtocolMetaEcho(trimmed)) {
+      db.setMeta('last_reflected_turn_id', String(endId));
+      db.setMeta('last_reflection_at', String(now));
+      console.log('[reflection] dropped protocol-meta echo (not a durable learning)');
+      return false;
+    }
 
     const reflRow = db.insertReflection({
       promptUsed: 'v0',

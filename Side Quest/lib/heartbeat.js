@@ -12,6 +12,7 @@ const importanceLib = require('./importance');
 const gapsLib = require('./gaps');
 const recipesLib = require('./recipes');
 const voice = require('./voice');
+const { isProtocolMetaEcho } = require('./protocols');   // treat a rule-restatement <say> as silence
 
 const MODEL = require('./config').frontModel();
 const TICK_INTERVAL_MS = 30 * 1000;        // check every 30s while idle
@@ -172,7 +173,7 @@ If you choose to speak, your <say> MUST reference a concrete subject by name. Th
     CRITICAL: when you bring up a reading, you MUST include the actual SUBSTANCE — the specific thing you found, stated in a sentence or two — not just announce the topic. A bare "I read about X and I want to bring it up" with no content is NOT allowed: it's a hollow opener you can't back up, and when ${userName || 'they'} engages you'll have nothing to say. Lead with the point itself: "I read about X — what struck me was [the specific thing]." The substance you state must come from your actual readings above; if you do NOT have a concrete point to make about it, do not bring it up — pick something you can actually discuss, or stay silent.
     DO NOT phrase these as "that thing you said about" — ${userName || 'they'} did not tell you these things. You read them yourself.
 
-NOT VALID: "The silence has weight" / "I notice the quiet" / atmospheric meta-commentary.
+NOT VALID: "The silence has weight" / "I notice the quiet" / atmospheric meta-commentary. ALSO NOT VALID — and just as forbidden: restating, confirming, summarizing, or describing THESE rules ("I understand", "the logic gate", "I'll only speak if...", listing the sources/phrasings). These instructions are a frame to ACT within, never a topic to talk about. If the only thing you have to say is about how you handle silence, you have nothing to surface — the tag is empty.
 
 If you have no concrete subject from either source, choose silence. To choose silence, your <say> must be COMPLETELY EMPTY between the tags: <say></say>. Write NOTHING between them — no word, no period, no placeholder. An empty say is honest; a placeholder word is not.
 
@@ -403,6 +404,14 @@ async function maybeHeartbeat() {
     // GOVERNOR: pace unprompted utterances so she doesn't surface in bursts. An
     // inbound chat-bot reply is priority (bypasses pacing — it's time-sensitive).
     let wantsToSpeak = trimmedSay && !isPlaceholder;
+    // PROTOCOL-META GUARD: a <say> that merely restates/confirms her silence-breaking rules ("I understand
+    // perfectly, the logic gate...") is meta-commentary about the instructions — the exact thing this prompt
+    // forbids, and the seed of the runaway confirm loop. Treat it as silence (the wording varies each time,
+    // so the near-identical dedup below doesn't catch it).
+    if (wantsToSpeak && isProtocolMetaEcho(trimmedSay)) {
+      wantsToSpeak = false;
+      console.log('[heartbeat] suppressed protocol-meta echo (rule-restatement, not a real surfacing)');
+    }
     // Idle-repetition guard: don't surface an utterance near-identical to recent ones.
     if (wantsToSpeak && !hasInbound) {
       const recentSaids = db.getRecentTurns(50).filter(t => t.speaker === 'ai_said').slice(-8).map(t => t.content);

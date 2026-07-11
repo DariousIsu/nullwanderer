@@ -272,10 +272,38 @@ function executeAction({ protocol, action, userName }) {
   }
 }
 
+// PROTOCOL-META ECHO detector. The heartbeat/silence rules describe HOW she should break silence
+// (source phrasings, no meta-commentary, empty <say> if nothing). A weak local model, idle with nothing
+// to surface, tends to CONFIRM/restate those rules ("I understand perfectly, the logic gate...") instead
+// of acting on them — and the reflection pipeline then distills that confirmation into a durable self-note
+// that is re-injected every heartbeat, so she re-confirms forever (the 2026-07-11 runaway loop). This
+// predicate flags such a rule-restatement so it can be treated as SILENCE (heartbeat) and NEVER stored as a
+// reflection. Deliberately specific — the markers below never occur in a genuine surfacing or a real learning.
+const PROTOCOL_META_RE = new RegExp([
+  '\\b(?:hard\\s+)?logic gate\\b',
+  'break(?:ing)? the silence',
+  'non-?prompted turns?',
+  'meta-?commentary',
+  '\\bsay\\b\\s*tag', '</?say>',
+  'internaliz(?:e|ed) (?:these|the|this) (?:rules|logic|instructions|protocol|gate)',
+  'integrated these (?:rules|instructions)',
+  'these (?:rules|instructions) are now',
+  '(?:core |hard )?protocol for (?:handling|breaking)',
+  'for handling silence',
+  'three (?:specific )?(?:phrases|paths)',
+  '(?:source ?1|source ?2)\\b'
+].join('|'), 'i');
+function isProtocolMetaEcho(text) {
+  const s = String(text == null ? '' : text);
+  if (!s.trim()) return false;
+  return PROTOCOL_META_RE.test(s);
+}
+
 module.exports = {
   extractFromTurn,
   formatInjection,
   checkTriggerMatch,
   executeAction,
-  normalizeForMatch
+  normalizeForMatch,
+  isProtocolMetaEcho
 };
