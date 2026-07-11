@@ -143,6 +143,7 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   ok(landed.length >= 1 && landed.every(e => e.epistemic === 'read'), 'growAround(catch): the local landing uses epistemic "read" (mints the young endpoint on the grounded rung)');
   ok(landed.some(e => e.source === 'Nuclear Innovation Alliance' && e.type && e.target), 'growAround(catch): the local edge carries the anchor as source + a real target + a type');
   ok(landed.every(e => e.sourceObj && e.sourceObj.kind === 'reading' && 'ref' in e.sourceObj), 'growAround(catch): the local edge carries its reading citation (sourceObj.kind=reading + ref)');
+  ok(landed.every(e => e.proposedBy === 'graph-walk-shortterm'), 'growAround(catch): the local edge is provenance-tagged graph-walk-shortterm (this lane is separately auditable)');
 
   // --- OPEN-VOCABULARY relation types: keep the LLM's accurate label as the type (UPPER_SNAKE), preserve
   //     the exact phrase in meta.title, pass allow_open_type so the whitelist doesn't reject it ("let it in") ---

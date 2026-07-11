@@ -345,6 +345,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
         try {
           const lr = await landLocalEdge({
             source: canonical, target: rname, type: relType, epistemic: 'read', confidence: conf,
+            proposedBy: 'graph-walk-shortterm',   // provenance: THIS lane (the young-endpoint catch) so its yield is separately countable/auditable
             sourceObj: { kind: 'reading', ref: fg.url || null, excerpt: String(dossier.summary || '').slice(0, 160) },
             validFrom: vt.valid_from
           });
