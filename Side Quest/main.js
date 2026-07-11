@@ -5899,7 +5899,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const webVerify = require('./lib/web_verify');
     let webVisionVerifies = 0;   // cap vision calls per turn (latency)
     (async () => {
-      for (const t of webTagsToRun.slice(0, 4)) {
+      for (const t of webTagsToRun.slice(0, 8)) {   // raised 4→8: a full form/tactile flow (fill→select→check→submit→read) needs the headroom
         try {
           const r = await webLib.dispatch(t);
           if (r && r.blocker && r.blocker.needsHuman) {

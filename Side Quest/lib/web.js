@@ -65,6 +65,15 @@ let page = null;
 let registry = {};    // handle → locator
 let counter = { L: 0, B: 0, I: 0, C: 0 };
 
+// Native JS dialog (alert/confirm/prompt) waiting for a response. Registering a 'dialog'
+// listener disables Playwright's default auto-dismiss, so the dialog stays open until she
+// accepts/dismisses it (<web-dialog>) — with a safety timeout so it can never hang the page.
+let pendingDialog = null;
+function onDialog(d) {
+  pendingDialog = d;
+  setTimeout(() => { if (pendingDialog === d) { pendingDialog = null; d.dismiss().catch(() => {}); } }, 30000);
+}
+
 // RECIPE RECORDING (lib/recorder.js). `demo` = an explicit record-by-demonstration
 // session Lucas drives (in-page listeners). `passive` = her own successful flow on an
 // uncovered site, captured silently. Only ONE feeds at a time — demonstration wins.
@@ -146,6 +155,7 @@ async function ensure() {
       page = live || await context.newPage();
       registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
       page.setDefaultTimeout(8000);
+      try { page.on('dialog', onDialog); } catch {}
       return page;
     } catch { context = null; page = null; }   // context truly dead → fall through to relaunch
   }
@@ -191,8 +201,10 @@ async function ensure() {
   context.on('page', (p) => {
     page = p; registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
     try { p.setDefaultTimeout(8000); } catch {}
+    try { p.on('dialog', onDialog); } catch {}   // let her accept/dismiss native dialogs
   });
   page = context.pages()[0] || await context.newPage();
+  try { page.on('dialog', onDialog); } catch {}
   page.setDefaultTimeout(8000);
   return page;
 }
@@ -383,7 +395,7 @@ async function read() {
 
 function resolve(h) { return registry[(h || '').trim().toUpperCase()]; }
 
-async function click(handle) {
+async function click(handle, { button, dbl } = {}) {
   if (!page) return { ok: false, reason: 'no page open' };
   const loc = resolve(handle);
   if (!loc) return { ok: false, reason: `no element ${handle}. Emit <web-read/> first for the handle list.` };
@@ -391,10 +403,11 @@ async function click(handle) {
     // Snapshot the descriptor BEFORE the click — a navigating click detaches its element.
     const info = passive && !demo ? await recorder.captureLocator(loc) : null;
     await loc.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
-    await loc.click({ timeout: 5000 });
+    if (dbl) await loc.dblclick({ timeout: 5000 });
+    else await loc.click({ timeout: 5000, button: /right/i.test(button || '') ? 'right' : 'left' });
     if (info) { try { recorder.pushElement(passive, info, 'click', undefined, Date.now()); } catch {} }
     registry = {};
-    return { ok: true, target: handle.toUpperCase(), url: page.url() };
+    return { ok: true, target: handle.toUpperCase(), kind: dbl ? 'double' : (/right/i.test(button || '') ? 'right' : 'left'), url: page.url() };
   } catch (err) { return { ok: false, reason: `click ${handle} failed: ${err.message}` }; }
 }
 
@@ -583,8 +596,195 @@ async function screenshot({ fullPage = false } = {}) {
   } catch (e) { return { ok: false, reason: e.message }; }
 }
 
+// ============================================================================
+// FULL MANIPULATION SUITE — keyboard, forms, tactile mouse, tabs, nav, waits,
+// dialogs. Each is a thin wrapper over Playwright on the CURRENT page; all reset
+// the handle registry when the DOM may have changed (she must <web-read/> again).
+// ============================================================================
+
+// --- keyboard ---
+// Press a key or combo on the focused element (or a given input handle). Enter to submit,
+// Tab to move, Escape to close, "Control+A"/"Control+F" for shortcuts, arrows to navigate.
+async function press(keys, handle) {
+  if (!page) return { ok: false, reason: 'no page open' };
+  const k = String(keys || '').trim();
+  if (!k) return { ok: false, reason: 'no key(s) — e.g. Enter, Tab, Escape, ArrowDown, "Control+A"' };
+  try {
+    if (handle) { const loc = resolve(handle); if (!loc) return { ok: false, reason: `no element ${handle}. <web-read/> first.` }; await loc.press(k, { timeout: 5000 }); }
+    else await page.keyboard.press(k);
+    registry = {};   // a submit / shortcut can navigate or repaint
+    return { ok: true, pressed: k, url: page.url() };
+  } catch (err) { return { ok: false, reason: `press ${k} failed: ${err.message}` }; }
+}
+
+// Clear an input/textarea handle (fill with empty string).
+async function clearField(handle) {
+  if (!page) return { ok: false, reason: 'no page open' };
+  const loc = resolve(handle);
+  if (!loc) return { ok: false, reason: `no input ${handle}. <web-read/> first.` };
+  try { await loc.fill('', { timeout: 5000 }); return { ok: true, cleared: handle.toUpperCase() }; }
+  catch (err) { return { ok: false, reason: `clear ${handle} failed: ${err.message}` }; }
+}
+
+// Hover a handle OR visible text — reveals dropdown menus / tooltips that only appear on hover.
+async function hover(target) {
+  if (!page) return { ok: false, reason: 'no page open' };
+  const t = (target || '').trim();
+  if (!t) return { ok: false, reason: 'no target' };
+  try {
+    let loc = resolve(t);
+    if (!loc) {
+      loc = page.getByText(t, { exact: false }).first();
+      if (!(await withTimeout(loc.count(), 1500, 0))) return { ok: false, reason: `no element "${t}". <web-read/> for handles.` };
+    }
+    await loc.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+    await loc.hover({ timeout: 5000 });
+    registry = {};   // a hover-revealed menu is new DOM
+    return { ok: true, hovered: t, url: page.url() };
+  } catch (err) { return { ok: false, reason: `hover "${t}" failed: ${err.message}` }; }
+}
+
+// --- forms ---
+// Pick a <select> option by visible label first, then by value/text.
+async function selectOption(handle, value) {
+  if (!page) return { ok: false, reason: 'no page open' };
+  const loc = resolve(handle);
+  if (!loc) return { ok: false, reason: `no dropdown ${handle}. <web-read/> first.` };
+  const v = String(value || '').trim();
+  if (!v) return { ok: false, reason: 'no option given' };
+  try {
+    let picked;
+    try { picked = await loc.selectOption({ label: v }, { timeout: 4000 }); }
+    catch { picked = await loc.selectOption(v, { timeout: 4000 }); }
+    return { ok: true, selected: v, values: picked };
+  } catch (err) { return { ok: false, reason: `select "${v}" failed: ${err.message}` }; }
+}
+
+// Check / uncheck a checkbox or radio handle.
+async function setChecked(handle, checked) {
+  if (!page) return { ok: false, reason: 'no page open' };
+  const loc = resolve(handle);
+  if (!loc) return { ok: false, reason: `no checkbox ${handle}. <web-read/> first.` };
+  try {
+    if (checked) await loc.check({ timeout: 4000 }); else await loc.uncheck({ timeout: 4000 });
+    return { ok: true, handle: handle.toUpperCase(), checked: !!checked };
+  } catch (err) { return { ok: false, reason: `${checked ? 'check' : 'uncheck'} ${handle} failed: ${err.message}` }; }
+}
+
+// Attach a LOCAL file to a file-input handle. Path must exist on disk.
+async function uploadFile(handle, filePath) {
+  if (!page) return { ok: false, reason: 'no page open' };
+  const loc = resolve(handle);
+  if (!loc) return { ok: false, reason: `no file input ${handle}. <web-read/> first.` };
+  const f = String(filePath || '').trim();
+  if (!f) return { ok: false, reason: 'no file path' };
+  if (!fs.existsSync(f)) return { ok: false, reason: `file not found: ${f}` };
+  try { await loc.setInputFiles(f, { timeout: 5000 }); return { ok: true, uploaded: f }; }
+  catch (err) { return { ok: false, reason: `upload failed: ${err.message}` }; }
+}
+
+// Submit a form — press Enter on the input handle (or the focused element).
+async function submit(handle) {
+  if (!page) return { ok: false, reason: 'no page open' };
+  try {
+    const loc = handle ? resolve(handle) : null;
+    if (loc) await loc.press('Enter', { timeout: 5000 }); else await page.keyboard.press('Enter');
+    registry = {};
+    return { ok: true, submitted: handle ? handle.toUpperCase() : 'focused', url: page.url() };
+  } catch (err) { return { ok: false, reason: `submit failed: ${err.message}` }; }
+}
+
+// --- tactile: vision-guided coordinate click ---
+// Click at VIEWPORT pixel (x,y) — the coordinates she reads off a <web-see> screenshot when
+// the target isn't a mapped handle (canvas, custom widget, image map). Viewport-relative, so
+// don't pair with a full-page <web-see>. button="right" or dbl for context-menu / double-click.
+async function clickAt(x, y, { button, dbl } = {}) {
+  if (!page) return { ok: false, reason: 'no page open' };
+  const nx = Number(x), ny = Number(y);
+  if (!Number.isFinite(nx) || !Number.isFinite(ny)) return { ok: false, reason: 'x and y must be numbers (viewport pixels from <web-see>)' };
+  try {
+    if (dbl) await page.mouse.dblclick(nx, ny);
+    else await page.mouse.click(nx, ny, { button: /right/i.test(button || '') ? 'right' : 'left' });
+    registry = {};
+    return { ok: true, x: nx, y: ny, kind: dbl ? 'double' : (/right/i.test(button || '') ? 'right' : 'left'), url: page.url() };
+  } catch (err) { return { ok: false, reason: `click-xy failed: ${err.message}` }; }
+}
+
+// --- navigation ---
+async function forward() {
+  if (!page) return { ok: false, reason: 'no page open' };
+  try { await page.goForward({ timeout: 8000, waitUntil: 'commit' }).catch(() => {}); registry = {}; return { ok: true, url: page.url() }; }
+  catch (err) { return { ok: false, reason: err.message }; }
+}
+async function reload() {
+  if (!page) return { ok: false, reason: 'no page open' };
+  try { await page.reload({ timeout: NAV_TIMEOUT, waitUntil: 'domcontentloaded' }).catch(() => {}); registry = {}; return { ok: true, url: page.url() }; }
+  catch (err) { return { ok: false, reason: err.message }; }
+}
+
+// --- tabs ---
+function livePages() { try { return context ? context.pages().filter(p => { try { return !p.isClosed(); } catch { return false; } }) : []; } catch { return []; } }
+async function listTabs() {
+  const pages = livePages();
+  const tabs = [];
+  for (let i = 0; i < pages.length; i++) {
+    let url = '', title = '';
+    try { url = pages[i].url(); } catch {}
+    try { title = await withTimeout(pages[i].title(), 1500, ''); } catch {}
+    tabs.push({ index: i, url, title, active: pages[i] === page });
+  }
+  return { ok: true, tabs };
+}
+async function newTab(target) {
+  try {
+    await ensure();
+    const p = await context.newPage();   // context 'page' handler makes it current + attaches dialog
+    page = p; registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
+    try { p.setDefaultTimeout(8000); } catch {}
+    if (target) { const url = toUrl(target); if (url) await p.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }); }
+    return { ok: true, index: livePages().indexOf(p), url: p.url(), title: await p.title().catch(() => '') };
+  } catch (err) { return { ok: false, reason: err.message }; }
+}
+async function switchTab(index) {
+  const pages = livePages(); const i = Number(index);
+  if (!Number.isInteger(i) || i < 0 || i >= pages.length) return { ok: false, reason: `no tab ${index}. <web-tab-list/> to see tabs.` };
+  page = pages[i]; registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
+  try { page.setDefaultTimeout(8000); await page.bringToFront(); } catch {}
+  return { ok: true, index: i, url: page.url(), title: await page.title().catch(() => '') };
+}
+async function closeTab(index) {
+  const pages = livePages(); const i = Number(index);
+  if (!Number.isInteger(i) || i < 0 || i >= pages.length) return { ok: false, reason: `no tab ${index}` };
+  const target = pages[i];
+  try { await target.close(); } catch {}
+  if (target === page) { const live = livePages(); page = live[live.length - 1] || null; registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 }; }
+  return { ok: true, closed: i, url: (() => { try { return page ? page.url() : ''; } catch { return ''; } })() };
+}
+
+// --- waits ---
+// A bare number = wait that many ms; anything else = wait for a CSS selector to become visible.
+async function waitFor(arg) {
+  if (!page) return { ok: false, reason: 'no page open' };
+  const a = String(arg || '').trim();
+  if (/^\d+$/.test(a)) { const ms = Math.min(parseInt(a, 10), 15000); await page.waitForTimeout(ms); return { ok: true, waited: ms }; }
+  if (!a) return { ok: false, reason: 'give ms (e.g. 2000) or a CSS selector' };
+  try { await page.waitForSelector(a, { timeout: 15000, state: 'visible' }); registry = {}; return { ok: true, appeared: a }; }
+  catch (err) { return { ok: false, reason: `"${a}" didn't appear: ${err.message}` }; }
+}
+
+// --- dialogs (native alert/confirm/prompt) ---
+async function dialog(action, promptText) {
+  if (!pendingDialog) return { ok: false, reason: 'no dialog is open' };
+  const d = pendingDialog; pendingDialog = null;
+  try {
+    if (/accept|ok|yes|confirm/i.test(action || '')) { await d.accept(promptText || undefined); return { ok: true, action: 'accept' }; }
+    await d.dismiss();
+    return { ok: true, action: 'dismiss' };
+  } catch (err) { return { ok: false, reason: err.message }; }
+}
+
 // --- tags ---
-const WEB_TAG_RE = /<(web-open|web-read|web-see|web-deepen|web-scroll|web-click|web-type|web-back|web-close|web-chat|web-watch|web-unwatch)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
+const WEB_TAG_RE = /<(web-open|web-read|web-see|web-deepen|web-scroll|web-click-text|web-click-xy|web-click|web-type|web-press|web-clear|web-hover|web-select|web-check|web-uncheck|web-upload|web-submit|web-forward|web-reload|web-tab-new|web-tab-list|web-tab-switch|web-tab-close|web-wait|web-dialog|web-back|web-close|web-chat|web-watch|web-unwatch)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
 const ATTR_RE = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
 
 function parseAttrs(s) { const o = {}; if (!s) return o; let m; ATTR_RE.lastIndex = 0; while ((m = ATTR_RE.exec(s)) !== null) o[m[1]] = m[2] ?? m[3] ?? m[4]; return o; }
@@ -611,8 +811,26 @@ async function dispatch({ tag, attrs = {}, body = '' }) {
     }
     case 'web-deepen': return openTopResult();
     case 'web-scroll': return scroll(body || attrs.dir);
-    case 'web-click': return click(body || attrs.handle);
+    case 'web-click': return click(body || attrs.handle, { button: attrs.button, dbl: /^(1|true|yes|dbl|double)$/i.test(attrs.dbl || attrs.double || '') });
+    case 'web-click-text': return clickText(body || attrs.text);
+    case 'web-click-xy': return clickAt(attrs.x, attrs.y, { button: attrs.button, dbl: /^(1|true|yes|dbl|double)$/i.test(attrs.dbl || attrs.double || '') });
     case 'web-type': return type(attrs.selector || attrs.handle || attrs.target, body);
+    case 'web-press': return press(body || attrs.key || attrs.keys, attrs.selector || attrs.handle || attrs.target);
+    case 'web-clear': return clearField(attrs.selector || attrs.handle || attrs.target || body);
+    case 'web-hover': return hover(body || attrs.handle || attrs.text);
+    case 'web-select': return selectOption(attrs.selector || attrs.handle || attrs.target, body || attrs.value || attrs.option);
+    case 'web-check': return setChecked(body || attrs.handle || attrs.selector, true);
+    case 'web-uncheck': return setChecked(body || attrs.handle || attrs.selector, false);
+    case 'web-upload': return uploadFile(attrs.selector || attrs.handle || attrs.target, body || attrs.path || attrs.file);
+    case 'web-submit': return submit(attrs.selector || attrs.handle || attrs.target || body);
+    case 'web-forward': return forward();
+    case 'web-reload': return reload();
+    case 'web-tab-new': return newTab(body || attrs.url);
+    case 'web-tab-list': return listTabs();
+    case 'web-tab-switch': return switchTab(body || attrs.index || attrs.i);
+    case 'web-tab-close': return closeTab(body || attrs.index || attrs.i);
+    case 'web-wait': return waitFor(body || attrs.selector || attrs.ms || attrs.for);
+    case 'web-dialog': return dialog(body || attrs.action, attrs.text || attrs.value);
     case 'web-back': return back();
     case 'web-close': return close();
     case 'web-chat': return chatSend(body, attrs.speaker || attrs.to || attrs.name);
@@ -629,10 +847,28 @@ function buildPromptBlock() {
   <web-see>optional question</web-see>          — actually SEE the current page (a screenshot through your vision): images, charts, photos, layout — what the text alone can't tell you. Add a question to focus it. <web-see scroll="down">…</web-see> scrolls first to capture below the fold; say "full"/"whole" (in the question or scroll=) to grab the ENTIRE page in one shot.
   <web-deepen/>                                  — on a search-results page, open the TOP result and land on the real article (don't stop at the results list)
   <web-scroll/>                                  — scroll down to load/read MORE of a long page or feed, then <web-read/> again
-  <web-click>L3</web-click>                     — click a handle from the last read
+  <web-click>L3</web-click>                     — click a handle from the last read (<web-click handle="B2" button="right"/> or dbl="1" for right/double-click)
+  <web-click-text>Sign in</web-click-text>      — click by the VISIBLE text when you can't see a handle for it
   <web-type selector="I0">text</web-type>       — type into an input handle
-  <web-back/>  <web-close/>
-Always <web-read/> after opening, deepening, scrolling, or clicking before you click/type again — handles are only valid from the most recent read.
+  <web-press selector="I0">Enter</web-press>    — press a key/combo: Enter (submit), Tab, Escape, ArrowDown, "Control+A" (selector optional — omit to press on whatever's focused)
+  <web-back/>  <web-forward/>  <web-reload/>  <web-close/>
+
+FILLING FORMS (each needs a handle from the last <web-read/>):
+  <web-clear selector="I0"/>                     — empty a field
+  <web-select selector="I0">Option label</web-select>   — pick a dropdown option
+  <web-check>I2</web-check>  <web-uncheck>I2</web-uncheck>   — tick / untick a checkbox or radio
+  <web-upload selector="I3">C:\\path\\file.pdf</web-upload>  — attach a local file to a file input
+  <web-submit selector="I0"/>                     — submit the form (Enter)
+
+TACTILE / VISION-GUIDED (when there's no handle — a canvas, custom widget, image):
+  <web-hover>L3</web-hover>                       — hover a handle or visible text to reveal a menu/tooltip, then <web-read/>
+  <web-click-xy x="120" y="340"/>                — click at PIXEL x,y you read off a <web-see> screenshot (viewport coords — don't use with a full-page <web-see>; button="right"/dbl="1" too)
+
+TABS & TIMING:
+  <web-tab-new>url</web-tab-new>  <web-tab-list/>  <web-tab-switch>2</web-tab-switch>  <web-tab-close>2</web-tab-close>
+  <web-wait>2000</web-wait>  or  <web-wait selector=".results"/>   — pause N ms, or wait for something to appear
+  <web-dialog>accept</web-dialog>  /  <web-dialog>dismiss</web-dialog>   — answer a popup alert/confirm (add text="…" for a prompt)
+Always <web-read/> after opening, deepening, scrolling, clicking, hovering, waiting, or switching tabs before you act again — handles are only valid from the most recent read.
 Go DEEP, not wide: after a search, <web-deepen/> into the best result and actually read it; <web-scroll/> through long pages instead of skimming the top. Take notes as you go with <file-write>/<file-append>.
 
 TALKING TO A CHARACTER / CHAT BOT (CrushOn, character.ai, etc. — when one is open in your browser):
@@ -652,6 +888,8 @@ module.exports = {
   isConnected, ensure, open, read, pageImages, screenshot, click, clickText, type, back, close, openTopResult, scroll, runRecipe,
   startRecording, stopRecording, isRecording, cookies,
   chatSend, chatWatch, chatUnwatch,
+  press, clearField, hover, selectOption, setChecked, uploadFile, submit, clickAt,
+  forward, reload, listTabs, newTab, switchTab, closeTab, waitFor, dialog,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR,
   DOWNLOADS_DIR, downloadDest
 };
