@@ -151,7 +151,36 @@ async function fetchPage(url, { maxChars = 4000, timeoutMs = 8000, signal } = {}
   }
 }
 
-async function search(query, { signal } = {}) {
+/**
+ * Public search. PRIMARY path routes the query through Zoe's stealth browser
+ * (lib/web.searchHeadless — patchright + her persistent profile / cf_clearance), which is
+ * far less bot-checked than a raw fetch to DDG's HTML endpoint. It uses a dedicated hidden
+ * BACKGROUND tab, so it never disturbs her foreground page. Falls back to the raw fetch below
+ * only when the browser is unavailable (no Chrome, launch failure, offline test env), or when
+ * forced off with ZOE_SEARCH_VIA_BROWSER=0. An empty result from the browser is trusted as a
+ * real no-hits answer and is NOT re-queried against DDG (that would defeat the point of moving
+ * off the raw endpoint). Same return shape either way: { query, results:[{title,url,snippet}] }.
+ */
+async function search(query, opts = {}) {
+  if (!query || !query.trim()) return { query, results: [] };
+  const trimmed = query.trim().slice(0, 240);
+
+  if (process.env.ZOE_SEARCH_VIA_BROWSER !== '0') {
+    try {
+      const r = await require('./web').searchHeadless(trimmed, { signal: opts.signal });
+      if (r && Array.isArray(r.results)) {
+        return { query: trimmed, results: r.results.slice(0, MAX_RESULTS) };
+      }
+    } catch {
+      // browser unavailable → fall through to the raw DDG fetch
+    }
+  }
+  return searchRaw(query, opts);
+}
+
+// Raw HTML-scrape of DDG's html endpoint. Retained as the fallback for when the stealth
+// browser can't run (e.g. a headless smoke). This is the path that gets bot-checked under load.
+async function searchRaw(query, { signal } = {}) {
   if (!query || !query.trim()) return { query, results: [] };
   const trimmed = query.trim().slice(0, 240);
 
