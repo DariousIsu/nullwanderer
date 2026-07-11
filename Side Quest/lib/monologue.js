@@ -2359,7 +2359,9 @@ async function runSearch(query, source, focusId = null) {
       return runSearchLegacy(query, source, focusId);
     }
     const r = await webLib.read();
-    let body = (r.ok && r.text ? r.text : '').replace(/\n{3,}/g, '\n\n').slice(0, 900);
+    const serpText = (r.ok && r.text ? r.text : '').replace(/\n{3,}/g, '\n\n');
+    let body = serpText.slice(0, 900);   // bounded — feeds the DISPLAYED/stored reading (thought stream)
+    let pageFull = '';                    // FULL top-result text — feeds capture + citation (whole page)
 
     // AUTO-DEEPEN: don't stop at the results page — follow the top result and read
     // the actual page, so she explores past the SERP (the headless path always did
@@ -2372,7 +2374,9 @@ async function runSearch(query, source, focusId = null) {
         urls.push(top.url);
         const pageRead = await webLib.read();
         if (pageRead.ok && pageRead.text) {
-          body += `\n\nI opened the top result (${top.title || top.url}) and read:\n` + pageRead.text.replace(/\n{3,}/g, '\n\n').slice(0, 1800);
+          const deepText = pageRead.text.replace(/\n{3,}/g, '\n\n');
+          pageFull = deepText;   // keep the WHOLE article for claim-extraction + graph ingestion
+          body += `\n\nI opened the top result (${top.title || top.url}) and read:\n` + deepText.slice(0, 1800);
         }
         console.log(`[monologue] auto-deepen → ${top.url}`);
       } else {
@@ -2384,6 +2388,10 @@ async function runSearch(query, source, focusId = null) {
       ? `I looked up "${query}" in my own browser. What I found:\n`
       : `I wondered about "${query}" and searched it in my own browser. What I found:\n`;
     const content = prefix + (body || `(opened ${opened.url} — ${opened.title || 'no readable text'})`);
+    // WHOLE-PAGE capture: claim-extraction + graph ingestion read the FULL article (up to ~15k),
+    // so what she learns + cites covers the ENTIRE page — not just the first 1800 chars shown in
+    // the thought stream. Display stays bounded (content); capture gets the full text (captureText).
+    const captureText = (prefix + (pageFull || serpText)).slice(0, 15000);
 
     const readingImportance = await importanceLib.score(content, { kind: 'reading' });
     bumpReflectionAccum(readingImportance);
@@ -2401,11 +2409,12 @@ async function runSearch(query, source, focusId = null) {
     // STRUCTURED EXTRACTION (anti-glob #3): pull grounded entity/relation triples from this
     // REAL reading into her graph as 'read' facts (throttled, best-effort, non-blocking) — so
     // she accumulates real-world structure to think from, not just transient reading text.
-    try { require('./graph_extract').maybeIngestReading({ text: content, ref: (urls && urls[0]) || query }); } catch {}
+    try { require('./graph_extract').maybeIngestReading({ text: captureText, ref: (urls && urls[0]) || query }); } catch {}
     // VERIFIED-FACT CAPTURE (Accrete/B): this is the "I wondered about X and searched it" path —
     // a real question + a real answer + a source URL. The pre-gate keeps it to fact-seeking
     // queries; the gate keeps it to clean, sourced claims. This is the president-lookup scenario.
-    try { require('./learning').maybeCaptureLearnings({ query, content, urls }); } catch {}
+    // Uses captureText (the WHOLE page) so claims + citations aren't capped to the first 1800 chars.
+    try { require('./learning').maybeCaptureLearnings({ query, content: captureText, urls }); } catch {}
     // write-bottom: a reading is an "observation" on the timeline — it breaks a
     // run of pure thoughts, which is exactly what the StuckDetector keys on. When
     // the search was fired to advance a focus, tag it so it joins that focus's
