@@ -1628,8 +1628,21 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
   // kgEdges: the anchor's live edges WITH confidence + age, so the walk can decay-check what it's already
   // visiting (build + decay in one move). Reuses the A2-hardened relatedEntities read (tx_to IS NULL).
   const kgEdges = (id) => echoSuit.relatedEntities(id, { dispatch, limit: 50 });
+  // STREAMING inline-promote (record pipeline): land each grounded new node the instant it's built so its
+  // edges become proposable in the SAME move. ARMED under ZOE_INGEST_ENABLED — the same deliberate switch as
+  // the F2 batch drain — so this doesn't silently move promotion into the autonomous loop. Uses a NON-autonomous
+  // dispatch (like the ingest lane) so the promote clears the tier gate; the grounded gate + dedup-guard +
+  // revert-log all live Echo-side. null when disarmed → growAround stays pure propose-only. Fail-soft.
+  const _ingestArmed = /^(1|true|yes|on)$/i.test(String(process.env.ZOE_INGEST_ENABLED || '').trim());
+  const promoteOne = _ingestArmed ? async ({ kind, name, proposal_id }) => {
+    try {
+      const args = { kind }; if (name) args.name = name; if (proposal_id != null) args.proposal_id = proposal_id;
+      const r = await echoSuit.dispatch({ kind: 'do', name: 'promote_grounded_one', args });
+      return !!(r && r.ok);
+    } catch { return false; }
+  } : null;
   const move = await graphWalk.runMove({
-    recentTurns, candidates: anchors, cloud, web, recall, dispatch, kgNeighbors, kgEdges, observe,
+    recentTurns, candidates: anchors, cloud, web, recall, dispatch, kgNeighbors, kgEdges, observe, promoteOne,
     getMeta: _gm, setMeta: _sm, now: () => Date.now(), log: (m) => console.log(m)
   });
   try { db.setMeta(GRAPHWALK_LAST_KEY, String(Date.now())); } catch {}

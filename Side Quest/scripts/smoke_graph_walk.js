@@ -75,6 +75,23 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   ok(grown.connections >= 1 && grown.connections <= G.WALK_MAX_CONNECTIONS, 'growAround: connections within budget');
   ok(grown.summary.length > 10, 'growAround: carries the grounded summary');
 
+  // --- STREAMING inline-promote (record pipeline): when promoteOne is armed, the new node + neighbours are
+  //     promoted INLINE so the edge below has live endpoints in the same move; disarmed → pure propose-only ---
+  calls.length = 0;
+  const promoted = [];
+  const promoteOne = async ({ kind, name }) => { promoted.push([kind, name]); return true; };
+  const grownInline = await G.growAround(
+    { mention: 'Nuclear Innovation Alliance', kind: 'missing', object: null },
+    { web, cloud: dossierCloud, dispatch, promoteOne }
+  );
+  ok(grownInline.built === true, 'growAround(inline): still builds the anchor');
+  ok(promoted.some(p => p[0] === 'entity' && p[1] === 'Nuclear Innovation Alliance'), 'growAround(inline): promotes the NEW anchor node inline (record pipeline)');
+  ok(promoted.some(p => p[0] === 'entity' && (p[1] === 'John Curtis' || p[1] === 'Advanced Reactor Demonstration Program')), 'growAround(inline): promotes a NEW neighbour inline so the edge has live endpoints');
+  // disarmed (no promoteOne) → NEVER promotes (stays propose-only on the autonomous loop)
+  calls.length = 0;
+  const grownNoArm = await G.growAround({ mention: 'Nuclear Innovation Alliance', kind: 'missing', object: null }, { web, cloud: dossierCloud, dispatch });
+  ok(grownNoArm.built === true && !calls.some(c => c[0] === 'promote_grounded_one'), 'growAround(disarmed): no promoteOne → pure propose-only, never promotes');
+
   // --- growAround a THIN anchor: does NOT re-propose an existing neighbour edge ---
   calls.length = 0;
   const thinCloud = async () => JSON.stringify({ entity_type: 'organization', summary: 'x', related: [{ name: 'Existing Ally', type: 'organization', relation: 'allied_with', source: 'S1' }, { name: 'New Partner', type: 'organization', relation: 'partners_with', source: 'S1' }] });

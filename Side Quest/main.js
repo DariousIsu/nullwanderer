@@ -641,8 +641,12 @@ app.whenReady().then(() => {
   // citation) into civic_graph autonomously, in bounded chunks until the queue empties. Every promotion is
   // reversible + logged (Echo auto_promotion_log → revert_auto_promotion). SEPARATE master switch
   // ZOE_INGEST_ENABLED (default OFF) so it's armed deliberately + monitored, like the auto-cleaner was.
-  const INGEST_CHECK_MS = (parseFloat(process.env.ZOE_INGEST_CHECK_MIN) || 10) * 60 * 1000;   // poll cadence
-  const INGEST_MIN_GAP_MS = (parseFloat(process.env.ZOE_INGEST_MIN_GAP_MIN) || 20) * 60 * 1000; // floor between drains
+  // STREAMING cadence (Lucas 2026-07-10 — "don't hold the promote for batches"): drain near-continuously so
+  // grounded proposals — and especially EDGES, which land here rather than inline — promote within ~1 min of
+  // being built, not on a 20-min batch. Builder inline-promote lands new NODES immediately; this keeps their
+  // edges + any non-inline records flowing right behind. Env-overridable if it needs throttling.
+  const INGEST_CHECK_MS = (parseFloat(process.env.ZOE_INGEST_CHECK_MIN) || 1) * 60 * 1000;    // poll cadence
+  const INGEST_MIN_GAP_MS = (parseFloat(process.env.ZOE_INGEST_MIN_GAP_MIN) || 1) * 60 * 1000; // floor between drains
   const INGEST_CHUNK = parseInt(process.env.ZOE_INGEST_CHUNK || '', 10) || 200;                // proposals per chunk
   const INGEST_FLOOR = parseFloat(process.env.ZOE_INGEST_FLOOR) || 0.90;                        // the promote-band floor
   let ingestRunning = false;

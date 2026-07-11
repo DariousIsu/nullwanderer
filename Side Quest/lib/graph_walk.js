@@ -204,7 +204,7 @@ async function proposeRelation({ dispatch, source, target, relation_type, confid
 // GROW the graph around one anchor gap: fill from web+tools into a dossier, propose the object (if
 // missing) + its related objects + the connecting edges — all under the node/connection budget.
 // Returns { built, entities, connections, related:[names], summary }.
-async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, log } = {}) {
+async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, promoteOne, log } = {}) {
   const mention = gap.mention;
   // CANONICAL name for propose_* — the exact stored graph name (with its "[Q…]" tag) so the edge targets
   // the precise node we selected, not a clean-named twin (a wikiquote doc, a lower-degree dup). Web search
@@ -248,6 +248,10 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, log
       entities++;
       if (!sourceUrl) sourceUrl = eg.url || null;
       if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: 'exists', target: null, url: eg.url, grade: eg.grade, confidence: eg.confidence, status: 'promoted' }); } catch {} }
+      // STREAMING (record pipeline): land the new node INLINE the instant it's grounded, so its edges
+      // become proposable in THIS same move (propose_relation needs live endpoints) instead of waiting for
+      // the batch drain. Armed via promoteOne (present only when the ingest lane is enabled). Fail-soft.
+      if (typeof promoteOne === 'function') { try { await promoteOne({ kind: 'entity', name: canonical }); } catch {} }
     }
   }
 
@@ -268,7 +272,12 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, log
       continue;
     }
     // propose the related entity (harmless if it already exists — Echo dedups on promotion)
-    if (entities < WALK_MAX_NODES && await proposeEntity({ dispatch, name: rname, entity_type: r.type, summary: '', confidence: fg.confidence })) entities++;
+    if (entities < WALK_MAX_NODES && await proposeEntity({ dispatch, name: rname, entity_type: r.type, summary: '', confidence: fg.confidence })) {
+      entities++;
+      // inline-promote the neighbour too, so the edge below has BOTH endpoints live (record pipeline).
+      // No-op/skip if it already exists or is below the grounded floor — same gate as the batch drain.
+      if (typeof promoteOne === 'function') { try { await promoteOne({ kind: 'entity', name: rname }); } catch {} }
+    }
     // C1/C2/C3 provenance + calibrated confidence (mirrors doc_decompose): per-edge
     // source_set + valid-time from prose; confidence from the independent-source count.
     const vt = parseValidTime(r && r.when);
@@ -362,7 +371,7 @@ async function decayVisitedEdges(objId, { kgEdges, observe, now, floor = DECAY_F
 
 // caller uses to (optionally) voice one line and log. Never throws (fail-soft everywhere).
 async function runMove(deps = {}) {
-  const { recentTurns = [], candidates: injected, cloud, web, recall, dispatch, kgNeighbors, kgEdges, observe, getMeta, setMeta, now = () => Date.now(), log } = deps;
+  const { recentTurns = [], candidates: injected, cloud, web, recall, dispatch, kgNeighbors, kgEdges, observe, promoteOne, getMeta, setMeta, now = () => Date.now(), log } = deps;
   const nowTs = now();
   try {
     // ANCHOR SOURCE: prefer an injected, already-sourced candidate list (idle_anchors: news → thin
@@ -396,7 +405,7 @@ async function runMove(deps = {}) {
     let anchor = queue[0], grown = null;
     for (const cand of queue.slice(0, WALK_MAX_TRIES)) {
       anchor = cand;
-      grown = await growAround(cand, { web, cloud, dispatch, kgNeighbors, observe, log });
+      grown = await growAround(cand, { web, cloud, dispatch, kgNeighbors, observe, promoteOne, log });
       tried.push(cand.mention);
       if (grown && (grown.built || grown.connections > 0)) break;   // productive → stop
     }
