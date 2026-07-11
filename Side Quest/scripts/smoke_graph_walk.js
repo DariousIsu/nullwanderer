@@ -144,6 +144,7 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   ok(landed.some(e => e.source === 'Nuclear Innovation Alliance' && e.type && e.target), 'growAround(catch): the local edge carries the anchor as source + a real target + a type');
   ok(landed.every(e => e.sourceObj && e.sourceObj.kind === 'reading' && 'ref' in e.sourceObj), 'growAround(catch): the local edge carries its reading citation (sourceObj.kind=reading + ref)');
   ok(landed.every(e => e.proposedBy === 'graph-walk-shortterm'), 'growAround(catch): the local edge is provenance-tagged graph-walk-shortterm (this lane is separately auditable)');
+  ok(grownCatch.related.length === 0, 'growAround(catch): short-term landings are NOT added to `related` → they cannot leak into her voiced "flagged" line');
 
   // --- OPEN-VOCABULARY relation types: keep the LLM's accurate label as the type (UPPER_SNAKE), preserve
   //     the exact phrase in meta.title, pass allow_open_type so the whitelist doesn't reject it ("let it in") ---
@@ -218,6 +219,7 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   });
   ok(moveCatch.landedLocal >= 1 && landed2.length >= 1, 'runMove: threads landLocalEdge → the young-endpoint edge lands short-term');
   ok(moveCatch.acted === true && !moveCatch.built, 'runMove: a move that ONLY landed short-term edges still counts as productive (acted), with no false build');
+  ok(moveCatch.voiceLine === '', 'runMove: a short-term-only move is VOICE-SILENT (no filler — "Spent a little time on X" is retired)');
   ok(moveInj.source === 'news', 'runMove: carries the winning anchor source tag (news)');
   ok(G.visitedKeySet(gM, 5000).has(G.visitKey('Dud Co')), 'runMove: the tried-but-dud anchor is still recorded visited (no re-grind next tick)');
 

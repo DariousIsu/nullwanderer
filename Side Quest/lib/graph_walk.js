@@ -349,7 +349,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
             sourceObj: { kind: 'reading', ref: fg.url || null, excerpt: String(dossier.summary || '').slice(0, 160) },
             validFrom: vt.valid_from
           });
-          if (lr && lr.ok) { landedLocal++; related.push(rname); }
+          if (lr && lr.ok) landedLocal++;   // NOT pushed to `related`: a short-term landing stays OUT of the voiced + visited set (weakest rung — silent, never named as a "flagged" link)
         } catch { /* fail-soft */ }
       }
     }
@@ -510,17 +510,18 @@ async function runMove(deps = {}) {
     // thought must report what she ACTUALLY did — began a record / proposed a link still to confirm — and
     // must NOT assert a completed graph write ("linked it to X"), which confabulates an edge the live graph
     // doesn't hold (the "L. Overby → Oregonian/Forbes: 0 edges" finding). Honest, tentative register.
-    const _rel = grown.related.slice(0, 2).join(' and ');
+    const _rel = grown.related.slice(0, 2).join(' and ');   // Echo-PROPOSED targets only (short-term landings excluded above → no voice leak)
     // Register matches the MEASURED landing rate of each channel (2026-07-10): object proposals DO promote
     // (~20-min ingest batches) → "queued for promotion"; her LINK proposals pool in tenant_rainey and rarely
     // land → "flagged" (a weaker claim, honest until the landing lane is fixed). Never assert a live edge.
-    const voiceLine = notable
-      ? (grown.built
-        ? `Started a record for ${anchor.mention} — queued for promotion${grown.connections ? `; also flagged a possible link to ${_rel}` : ''}.${_tag}`
-        : (grown.connections
-          ? `Spent a little time on ${anchor.mention} — flagged a possible link to ${_rel} for review.${_tag}`
-          : `Spent a little time on ${anchor.mention}.${_tag}`))
-      : '';
+    // VOICE ONLY SUBSTANTIVE MOVES: a new record, or a real Echo link. A move whose only product is a
+    // short-term catch (or a thin touch that reached Echo with nothing) stays SILENT — no filler. (Retired
+    // "Spent a little time on X": low-signal, it dominated her monologue and read as all she could think.)
+    const voiceLine = grown.built
+      ? `Started a record for ${anchor.mention} — queued for promotion${grown.connections ? `; also flagged a possible link to ${_rel}` : ''}.${_tag}`
+      : (grown.connections
+        ? `Flagged a possible link from ${anchor.mention} to ${_rel} for review.${_tag}`
+        : '');
     return {
       acted: notable, anchor: anchor.mention, kind: anchor.kind, source: anchor.source,
       // canonical = the EXACT Echo node name (with its "[M000057]"/"[wd:Q…]" tag). The clean `anchor` is
