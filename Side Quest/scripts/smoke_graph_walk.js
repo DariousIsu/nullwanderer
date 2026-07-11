@@ -127,6 +127,21 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   ok(grownRej.connections === 0 && grownRej.rejected >= 1, 'growAround(truthful): rejected edges → 0 connections, counted as rejected (surfaced, not silently over-counted)');
   ok(logs.some(m => /rejected|not found/i.test(m)), 'growAround(truthful): the rejection REASON is logged (so we can see WHY the endpoint failed)');
 
+  // --- OPEN-VOCABULARY relation types: keep the LLM's accurate label as the type (UPPER_SNAKE), preserve
+  //     the exact phrase in meta.title, pass allow_open_type so the whitelist doesn't reject it ("let it in") ---
+  ok(G.normalizeRelType('interim provost') === 'INTERIM_PROVOST', 'normalizeRelType: "interim provost" → INTERIM_PROVOST');
+  ok(G.normalizeRelType('former name') === 'FORMER_NAME', 'normalizeRelType: "former name" → FORMER_NAME');
+  ok(G.normalizeRelType('  accreditor!! ') === 'ACCREDITOR', 'normalizeRelType: trims + strips punctuation');
+  ok(G.normalizeRelType('') === 'RELATED_TO', 'normalizeRelType: empty → RELATED_TO fallback');
+  const ovCalls = [];
+  const ovDispatch = async (tag) => { ovCalls.push([tag.name, tag.args]); return { ok: true, text: JSON.stringify({ action: tag.name === 'propose_relation' ? 'proposed' : 'created' }) }; };
+  const ovCloud = async () => JSON.stringify({ entity_type: 'organization', summary: 'A college.', related: [{ name: 'Nancy Cantor', type: 'person', relation: 'interim provost', sources: ['S1'] }] });
+  await G.growAround({ mention: 'Hunter College', kind: 'missing', object: null }, { web: async () => [{ text: 'Nancy Cantor is interim provost of Hunter College.', url: 'https://en.wikipedia.org/wiki/Hunter_College' }], cloud: ovCloud, dispatch: ovDispatch });
+  const ovEdge = ovCalls.find(c => c[0] === 'propose_relation' && c[1].target_name === 'Nancy Cantor');
+  ok(ovEdge && ovEdge[1].relation_type === 'INTERIM_PROVOST', 'growAround(open-vocab): edge carries the LLM label as an UPPER_SNAKE type (not flattened, not "related_to")');
+  ok(ovEdge && ovEdge[1].allow_open_type === true, 'growAround(open-vocab): passes allow_open_type so the whitelist admits it');
+  ok(ovEdge && JSON.parse(ovEdge[1].relation_metadata).title === 'interim provost', 'growAround(open-vocab): the EXACT LLM phrase is preserved verbatim in meta.title (nothing lost)');
+
   // --- growAround a THIN anchor: does NOT re-propose an existing neighbour edge ---
   calls.length = 0;
   const thinCloud = async () => JSON.stringify({ entity_type: 'organization', summary: 'x', related: [{ name: 'Existing Ally', type: 'organization', relation: 'allied_with', source: 'S1' }, { name: 'New Partner', type: 'organization', relation: 'partners_with', source: 'S1' }] });

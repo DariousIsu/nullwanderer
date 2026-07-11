@@ -94,6 +94,15 @@ function visitKey(name) {
   return String(name || '').toLowerCase().replace(/\([^)]*\)/g, ' ').replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean).sort().join(' ');
 }
 
+// Normalize an LLM relation label → an OPEN-VOCABULARY relation type: UPPER_SNAKE_CASE so it's consistent
+// with the core types, queryable, and churn-mergeable ("interim provost" → INTERIM_PROVOST). The EXACT
+// original phrase is preserved separately on the edge metadata (title) — nothing the LLM produced is lost;
+// this is the "let it in, mark, churn" contract (Lucas 2026-07-10) applied to relation types.
+function normalizeRelType(label) {
+  const s = String(label || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);
+  return s || 'RELATED_TO';
+}
+
 // visited state (recently-worked anchors), TTL-pruned. getMeta/setMeta injected.
 function loadVisited(getMeta, now) {
   let arr = [];
@@ -205,12 +214,13 @@ async function proposeEntity({ dispatch, name, entity_type, summary, confidence,
 // TRUTHFUL: an edge only WROTE if action==='proposed'; a 'rejected' (endpoint-not-found) wrote NOTHING, so we
 // must NOT count it (the old r.ok bug counted every rejection as a connection). LOG the reason so a refused
 // edge can be routed (→ short-term) instead of silently dropped. Returns { ok, action, error }. Fail-soft.
-async function proposeRelation({ dispatch, source, target, relation_type, confidence, metadata, log }) {
+async function proposeRelation({ dispatch, source, target, relation_type, confidence, metadata, allowOpen, log }) {
   if (typeof dispatch !== 'function' || !source || !target || source === target) return { ok: false, action: 'skipped' };
   try {
     const args = { source_name: source, target_name: target, relation_type: relation_type || 'related_to' };
     if (typeof confidence === 'number') args.confidence = confidence;   // calibrated → Echo promotion gate
     if (metadata) args.relation_metadata = JSON.stringify(metadata);    // C1 provenance (source_set/valid-time)
+    if (allowOpen) args.allow_open_type = true;                         // OPEN-VOCAB: keep the LLM's accurate label as the type
     const r = await dispatch({ kind: 'do', name: 'propose_relation', args });
     if (!r || !r.ok) return { ok: false, action: 'dispatch_failed' };
     let rep = null; try { rep = JSON.parse(r.text); } catch {}
@@ -304,15 +314,20 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
     // C1/C2/C3 provenance + calibrated confidence (mirrors doc_decompose): per-edge
     // source_set + valid-time from prose; confidence from the independent-source count.
     const vt = parseValidTime(r && r.when);
+    // OPEN-VOCABULARY relation (Lucas 2026-07-10): keep the LLM's ACCURATE label — that's the point of the
+    // LLM being here — as the relation type (UPPER_SNAKE), and preserve the exact phrase in meta.title for the
+    // churn passes to verify against. No longer flattened to a core type or rejected by the whitelist.
+    const relLabel = String((r && r.relation) || 'related to').trim();
+    const relType = normalizeRelType(relLabel);
     // source_set = ALL independently-cited urls (C2): corroboration counts distinct families across them,
     // so a two-independent-source edge calibrates to 0.94 (lands) vs a single source's 0.88 (parked).
-    const meta = { source_set: (fg.urls && fg.urls.length) ? fg.urls.slice() : (fg.url ? [fg.url] : []), url: fg.url || null, grade: fg.grade };
+    const meta = { source_set: (fg.urls && fg.urls.length) ? fg.urls.slice() : (fg.url ? [fg.url] : []), url: fg.url || null, grade: fg.grade, title: relLabel };
     if (vt.valid_from != null) meta.valid_from = vt.valid_from;
     if (vt.valid_to != null) meta.valid_to = vt.valid_to;
     const corrN = corroboration.corroborationCount(meta.source_set);
     meta.corroboration = corrN;
     const conf = confModel.calibratedConfidence({ grade: fg.grade, corroboration: corrN });
-    const rr = await proposeRelation({ dispatch, source: canonical, target: rname, relation_type: (r && r.relation) || 'related_to', confidence: conf, metadata: meta, log });
+    const rr = await proposeRelation({ dispatch, source: canonical, target: rname, relation_type: relType, confidence: conf, metadata: meta, allowOpen: true, log });
     if (rr.ok) {                                    // action==='proposed' — the edge ACTUALLY landed as a proposal
       connections++; related.push(rname);
       if (!sourceUrl) sourceUrl = fg.url || null;
@@ -322,7 +337,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
       rejected++;   // truthful: endpoint-not-found etc. — logged in proposeRelation; counted for the [grow] summary
     }
   }
-  log && log(`[grow] "${mention}" [${gap.kind}] sources=${sources.length} neighbors=${neighbors.length} related=${_relRaw} → +${entities} ent +${connections} conn (${held} held: uncited${rejected ? `, ${rejected} rejected: endpoint-not-found` : ''})`);
+  log && log(`[grow] "${mention}" [${gap.kind}] sources=${sources.length} neighbors=${neighbors.length} related=${_relRaw} → +${entities} ent +${connections} conn (${held} held: uncited${rejected ? `, ${rejected} rejected (see edge logs)` : ''})`);
   return { built: gap.kind === 'missing' && entities > 0, entities, connections, related, summary: String(dossier.summary || '').trim(), held, rejected, sourceUrl };
 }
 
@@ -499,7 +514,7 @@ async function runMove(deps = {}) {
 
 module.exports = {
   runMove, decayVisitedEdges, extractCandidates, assessGaps, growAround, fetchLayeredSources, sourceLabel, proposeEntity, proposeRelation,
-  parseJsonLoose, extractProperNouns, classifyObject, rankGaps, visitKey,
+  parseJsonLoose, extractProperNouns, classifyObject, rankGaps, visitKey, normalizeRelType,
   loadVisited, visitedKeySet, recordVisited, buildCandidatePrompt, buildDossierPrompt,
   THIN_DEGREE, THIN_FACTS, WALK_MAX_NODES, WALK_MAX_CONNECTIONS, MAX_CANDIDATES, VISITED_TTL_MS, SATURATED_TTL_MS, VISITED_KEY
 };
