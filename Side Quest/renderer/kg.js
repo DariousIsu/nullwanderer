@@ -799,6 +799,7 @@ async function loadOverview() {
 // TWO-SOURCE: fetch Side Quest's short-term store (local graph + recent docs) and merge it into the persistent
 // `shortTerm` layer (reuse node objects by id → d3 keeps positions). It renders in EVERY view via withShortTerm
 // as the violet epistemic core, gathered centrally by makeCoreForce. Bounded server-side so it stays cheap.
+let __stInit = false;   // first load done? (so we don't spark all ~105 nodes on startup)
 async function loadShortTerm() {
   try {
     if (!(window.sq && window.sq.kg && window.sq.kg.shortterm)) return;
@@ -807,17 +808,25 @@ async function loadShortTerm() {
     let cx = 0, cy = 0, c = 0;
     if (G) for (const n of (G.graphData().nodes || [])) if (Number.isFinite(n.x) && n.store !== 'sidequest') { cx += n.x; cy += n.y; c++; }
     if (!c) { cx = 0; cy = 0; }
-    const now = performance.now(), seen = new Set();
+    const now = performance.now(), seen = new Set(), fresh = [];
     for (const inc of (res.nodes || [])) {
       seen.add(inc.id);
       let node = shortTerm.nodes.get(inc.id);
       if (node) { node.entityType = inc.entityType; node.epistemic = inc.epistemic; if (inc.summary) node.summary = inc.summary; }
-      else { shortTerm.nodes.set(inc.id, { id: inc.id, store: 'sidequest', entityType: inc.entityType, epistemic: inc.epistemic, summary: inc.summary || null, bornAt: now, x: cx + (Math.random() - 0.5) * 90, y: cy + (Math.random() - 0.5) * 90 }); }
+      else { shortTerm.nodes.set(inc.id, { id: inc.id, store: 'sidequest', entityType: inc.entityType, epistemic: inc.epistemic, summary: inc.summary || null, bornAt: now, x: cx + (Math.random() - 0.5) * 90, y: cy + (Math.random() - 0.5) * 90 }); if (__stInit) fresh.push(inc.id); }
     }
-    for (const id of [...shortTerm.nodes.keys()]) if (!seen.has(id)) shortTerm.nodes.delete(id);   // drop entries no longer in the buffer
+    let removed = 0;
+    for (const id of [...shortTerm.nodes.keys()]) if (!seen.has(id)) { shortTerm.nodes.delete(id); removed++; }   // drop entries no longer in the buffer
+    const oldLinkKeys = new Set(shortTerm.links.keys());
     shortTerm.links.clear();
     for (const l of (res.links || [])) shortTerm.links.set(l.source + '>' + l.target + '::' + l.relType, { s: l.source, t: l.target, relType: l.relType, color: 'rgba(168,139,250,0.45)', width: 0.8, category: l.category || 'derived' });
-    if (G) applyFilter();
+    // CHANGE-GATED: only re-render (which reheats the sim) when the layer actually changed — idle polls are free.
+    const linksChanged = shortTerm.links.size !== oldLinkKeys.size || [...shortTerm.links.keys()].some(k => !oldLinkKeys.has(k));
+    if (G && (fresh.length || removed || linksChanged || !__stInit)) applyFilter();
+    // "exploding with activity": spark each freshly-arrived short-term node (capped) so live research POPS into
+    // the core. Only after the first load (else all ~105 startup nodes would flare at once).
+    if (__stInit && fresh.length) { let k = 0; for (const id of fresh) { if (k++ >= 14) break; try { onActivity({ db: 'sidequest', kind: 'node.born', anchor: id }); } catch (e) {} } }
+    __stInit = true;
   } catch (e) {}
 }
 // focus(displayName, opt): query_graph is name-based and needs the EXACT stored name (with its "[…]" tag),
@@ -975,7 +984,11 @@ try { if (window.sq && window.sq.kg && typeof window.sq.kg.onActivity === 'funct
 try { if (localStorage.getItem('kg.follow') === '1') setFollow(true); } catch (e) {}
 
 loadOverview();
+// LIVE short-term core: re-poll every 12s so new short-term memory (a running research project) flows into the
+// core as it lands — change-gated (no re-render on idle polls) + fresh nodes spark. The webview only runs while
+// the KG surface is active, so this doesn't tick in the background. window.__kgRefreshST for on-demand verify.
+try { setInterval(() => { loadShortTerm(); }, 12000); window.__kgRefreshST = () => loadShortTerm(); } catch (e) {}
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-10v: two-source REAL READ — Side Quest short-term layer (local graph + recent docs) via kg:shortterm');
+console.info('[kg] surface build 2026-07-10w: LIVE short-term core — 12s change-gated poll + fresh-node sparks (research explodes into the core)');
