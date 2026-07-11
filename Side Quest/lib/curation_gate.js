@@ -23,6 +23,22 @@ const PC = require('../studio/puller_confidence');   // ORDER/CAP + rank()/cap()
 const EXISTENCE_FLOOR = 'C';   // a NEW object needs ≥ C to mint (named in a real source); pure-D never mints
 const FACT_FLOOR = 'B';        // an edge auto-promotes only if directly stated in a source (≥ B); ≤ D holds
 
+// Source HOST reputation: fan wikis + user-generated content NEVER qualify a civic entity's existence
+// or back a fact. The gate only checked "has a url" (host-agnostic), so a bulbapedia (Pokémon wiki) URL
+// minted a person. A junk-hosted source is treated as NO valid source → grade D → held (not silently
+// dropped). Exact-host or subdomain-suffix match; add hosts here, not in a prompt.
+const JUNK_SOURCE_HOSTS = [
+  'fandom.com', 'wikia.com', 'wikia.org', 'bulbagarden.net', 'tvtropes.org',
+  'reddit.com', 'quora.com', 'pinterest.com', 'answers.com', 'genius.com', 'ask.fm',
+];
+function _sourceHost(url) {
+  try { return new URL(String(url)).hostname.toLowerCase().replace(/^www\./, ''); } catch { return ''; }
+}
+function isJunkSource(url) {
+  const h = _sourceHost(url);
+  return !!h && JUNK_SOURCE_HOSTS.some(j => h === j || h.endsWith('.' + j));
+}
+
 // Map a dossier per-claim source ref → an evidence grade + the backing URL.
 //   "S2"  → the claim is DIRECTLY STATED in sources[1] (a named source)   → grade B, url = that source
 //   "inferred" / null / out-of-range / a ref with no url → grade D (model inference, unbacked), url null
@@ -32,9 +48,9 @@ function gradeForClaim(sourceRef, sources) {
     const idx = parseInt(m[1], 10) - 1;
     const s = (Array.isArray(sources) && idx >= 0) ? sources[idx] : null;
     const url = (s && (s.url || s.link)) || null;
-    if (url) return { grade: 'B', url, kind: 'source' };   // directly stated in a named source
+    if (url && !isJunkSource(url)) return { grade: 'B', url, kind: 'source' };   // directly stated in a named (non-junk) source
   }
-  return { grade: 'D', url: null, kind: 'derived' };        // inference — no backing source
+  return { grade: 'D', url: null, kind: 'derived' };        // inference / junk-only source — unbacked
 }
 
 // LIST-AWARE grading (C2 enabler): a connection the dossier cites to ONE-OR-MANY [S#] refs → the set of
@@ -52,7 +68,7 @@ function gradeForClaims(sourceRefs, sources) {
     const idx = parseInt(m[1], 10) - 1;
     const s = (Array.isArray(sources) && idx >= 0) ? sources[idx] : null;
     const url = (s && (s.url || s.link)) || null;
-    if (url && !urls.includes(url)) urls.push(url);
+    if (url && !isJunkSource(url) && !urls.includes(url)) urls.push(url);
   }
   if (urls.length) return { grade: 'B', urls, url: urls[0], kind: 'source' };
   return { grade: 'D', urls: [], url: null, kind: 'derived' };
@@ -83,7 +99,8 @@ function gateExistence(sourceRef, sources) {
 // is cited by the web pull that produced its dossier. Real sources present → grade C (named in the web),
 // mint; nothing found → grade D, hold (a potential hallucination we won't create).
 function gateAnchorExistence(sources) {
-  const cited = Array.isArray(sources) ? sources.find(s => (s && (s.url || s.link))) : null;
+  const cited = Array.isArray(sources)
+    ? sources.find(s => s && (s.url || s.link) && !isJunkSource(s.url || s.link)) : null;
   const grade = cited ? 'C' : 'D';
   const url = cited ? (cited.url || cited.link) : null;
   return { grade, confidence: PC.cap(grade), url, mint: meets(grade, EXISTENCE_FLOOR) };
@@ -91,5 +108,5 @@ function gateAnchorExistence(sources) {
 
 module.exports = {
   gradeForClaim, gradeForClaims, meets, gateFact, gateExistence, gateAnchorExistence,
-  EXISTENCE_FLOOR, FACT_FLOOR
+  isJunkSource, EXISTENCE_FLOOR, FACT_FLOOR
 };

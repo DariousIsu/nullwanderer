@@ -12,7 +12,7 @@
 'use strict';
 
 const MAX_PASSES_PER_TARGET = 6;   // depth cap per org in a MULTI-org run — "a decent percentage", not infinite
-const MAX_PASSES_DEEP_TARGET = 18; // a SINGLE bounded deep target may work each facet (6-facet brief needs >6)
+const MAX_PASSES_DEEP_TARGET = 12; // a SINGLE bounded deep target may work each facet (6-facet brief needs >6); throttled 18→12 so one target can't grind endlessly
 const MIN_NEW_CHARS = 220;         // a deepen pass adding less than this = diminishing returns → advance
 
 // Parse one research pass. The prompts make the operator end with a control line:

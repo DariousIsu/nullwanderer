@@ -6716,15 +6716,22 @@ async function liveLookupAndAnswer({ io, channel, sessionId, userName, query }) 
   let captureText = '';   // WHOLE page for claim-extraction + citation (content stays bounded for chat)
   const urls = [];
   try {
-    // Run the lookup in its OWN ephemeral tab — it never touches the tab the idle lanes are driving,
-    // so a chat question can't clobber (or be clobbered by) her background browsing (the pile-up fix).
-    const r = await webLib.researchInTab(query).catch(() => ({ ok: false }));
-    if (r && r.ok && r.text) {
-      if (Array.isArray(r.urls)) urls.push(...r.urls);
-      content = `I looked up "${query}" just now in my own browser. What I found:\n${r.text.slice(0, 3200)}`;
-      captureText = r.text;   // whole page → claim-extraction + citation (chat display stays bounded)
+    // Use the ISOLATED headless Bing lane (web_search → search_lane, its OWN separate Chrome profile),
+    // NOT her visible Google browser. A live user lookup must never be skewed by the autonomous research
+    // monopolizing/personalizing the shared Google session — the contamination bug where a "Norway vs
+    // England" score query came back full of Louisiana-Bar results because the idle lanes had been
+    // hammering that same session. This lane can't be polluted by her background browsing.
+    const web_search = require('./lib/web_search');
+    const sr = await web_search.search(query).catch(() => ({ results: [] }));
+    const results = (sr && Array.isArray(sr.results)) ? sr.results : [];
+    if (results.length) {
+      const top = results.slice(0, 6);
+      for (const r of top) if (r && r.url) urls.push(r.url);
+      const body = 'Search results:\n' + top.map((r, i) => `${i + 1}. ${r.title}${r.snippet ? ' — ' + r.snippet : ''}`).join('\n');
+      content = `I looked up "${query}" just now. What I found:\n${body}`;
+      captureText = body;   // the SERP → claim-extraction + citation (chat display stays bounded)
     }
-    // Fallback: Echo's web_search if her browser couldn't read anything.
+    // Fallback: Echo's web_search if the stealth lane returned nothing.
     if (!content && echoSuit && echoSuit.connected) {
       try {
         const er = await echoSuit.dispatch({ kind: 'do', name: 'web_search', args: { query } });
