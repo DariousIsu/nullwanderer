@@ -12,7 +12,7 @@ const importanceLib = require('./importance');
 const gapsLib = require('./gaps');
 const recipesLib = require('./recipes');
 const voice = require('./voice');
-const { isProtocolMetaEcho } = require('./protocols');   // treat a rule-restatement <say> as silence
+const selfRep = require('./self_repetition');   // meaning-level self-repeat guard (semantic, not string-match)
 
 const MODEL = require('./config').frontModel();
 const TICK_INTERVAL_MS = 30 * 1000;        // check every 30s while idle
@@ -404,20 +404,22 @@ async function maybeHeartbeat() {
     // GOVERNOR: pace unprompted utterances so she doesn't surface in bursts. An
     // inbound chat-bot reply is priority (bypasses pacing — it's time-sensitive).
     let wantsToSpeak = trimmedSay && !isPlaceholder;
-    // PROTOCOL-META GUARD: a <say> that merely restates/confirms her silence-breaking rules ("I understand
-    // perfectly, the logic gate...") is meta-commentary about the instructions — the exact thing this prompt
-    // forbids, and the seed of the runaway confirm loop. Treat it as silence (the wording varies each time,
-    // so the near-identical dedup below doesn't catch it).
-    if (wantsToSpeak && isProtocolMetaEcho(trimmedSay)) {
-      wantsToSpeak = false;
-      console.log('[heartbeat] suppressed protocol-meta echo (rule-restatement, not a real surfacing)');
-    }
-    // Idle-repetition guard: don't surface an utterance near-identical to recent ones.
+    // Self-repetition guard — TWO passes. (1) lexical (word-Jaccard): a cheap catch for near-verbatim repeats.
+    // (2) SEMANTIC (embedding cosine): the same point reworded, which word-overlap misses — this is what let
+    // the silence-rule confirm loop (each restatement worded differently) run 100×. Meaning-level, so it needs
+    // no per-phrase patterns and catches ANY paraphrased-repeat loop, not just that one content.
     if (wantsToSpeak && !hasInbound) {
       const recentSaids = db.getRecentTurns(50).filter(t => t.speaker === 'ai_said').slice(-8).map(t => t.content);
       if (tooSimilarToRecent(trimmedSay, recentSaids)) {
         wantsToSpeak = false;
-        console.log('[heartbeat] suppressed repetitive utterance');
+        console.log('[heartbeat] suppressed repetitive utterance (lexical)');
+      } else {
+        let semRepeat = false;
+        try { semRepeat = await selfRep.isSemanticRepeat(trimmedSay, recentSaids); } catch (e) { console.error('[heartbeat] semantic-repeat check failed:', e.message); }
+        if (semRepeat) {
+          wantsToSpeak = false;
+          console.log('[heartbeat] suppressed semantic self-repeat (same point reworded)');
+        }
       }
     }
     // IMPORTANCE SURFACING GATE (Generative Agents): don't interrupt Lucas with
