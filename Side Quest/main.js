@@ -6015,11 +6015,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // the tool-followup strips it (only echo tags chain), so the second hop would die.
             // Read + deepen inline now and feed the real content back so she answers in one flow.
             const qLabel = (t.body || (t.attrs && t.attrs.q) || r.title || r.url || 'that').toString().slice(0, 120);
-            const body = await readHerBrowserDeep();
-            if (body) {
-              const content = `I looked up "${qLabel}" in my own browser (${r.url}):\n${body}`;
+            const deep = await readHerBrowserDeep();
+            if (deep.text) {
+              const content = `I looked up "${qLabel}" in my own browser (${r.url}):\n${deep.text}`;
               try { db.insertMonologue({ content, model: 'web-read', type: 'reading', query: r.url, urls: [r.url] }); } catch {}
-              try { require('./lib/learning').maybeCaptureLearnings({ query: qLabel, content, urls: [r.url] }); } catch {}
+              try { require('./lib/learning').maybeCaptureLearnings({ query: qLabel, content: deep.full || content, urls: [r.url] }); } catch {}
               try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(my browser) ${qLabel}`, type: 'reading', query: r.url }); } catch {}
               if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: content }); }
             } else if (!followupFired) {
@@ -6681,20 +6681,23 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
 
 // Read her own browser's current page AND auto-deepen into the top result, returning the
 // combined text (not just a SERP). Mirrors monologue.runSearch's deepen step.
+// Returns { text, full }: `text` = bounded body for the chat report (unchanged); `full` = the
+// WHOLE deep-read page (up to ~15k) so claim-extraction + citation cover the entire article, not
+// just the first ~2k chars shown in chat. Mirrors monologue.runSearch's display/capture split.
 async function readHerBrowserDeep() {
-  let body = '';
+  let body = '', serpFull = '', deepFull = '';
   try {
     const r = await webLib.read();
-    if (r && r.ok && r.text) body = r.text.replace(/\n{3,}/g, '\n\n').slice(0, 1200);
+    if (r && r.ok && r.text) { const t = r.text.replace(/\n{3,}/g, '\n\n'); serpFull = t; body = t.slice(0, 1200); }
   } catch {}
   try {
     const top = await webLib.openTopResult();
     if (top && top.ok) {
       const pr = await webLib.read();
-      if (pr && pr.ok && pr.text) body += `\n\nTop result (${top.title || top.url}):\n` + pr.text.replace(/\n{3,}/g, '\n\n').slice(0, 2000);
+      if (pr && pr.ok && pr.text) { const t = pr.text.replace(/\n{3,}/g, '\n\n'); deepFull = t; body += `\n\nTop result (${top.title || top.url}):\n` + t.slice(0, 2000); }
     }
   } catch {}
-  return body;
+  return { text: body, full: (deepFull || serpFull).slice(0, 15000) };
 }
 
 // Do a complete live lookup for `query` and answer Lucas in chat via one tool-followup.
@@ -6702,13 +6705,14 @@ async function readHerBrowserDeep() {
 async function liveLookupAndAnswer({ io, channel, sessionId, userName, query }) {
   try { pauseMonologue(); pauseHeartbeat(); } catch {}
   let content = '';
+  let captureText = '';   // WHOLE page for claim-extraction + citation (content stays bounded for chat)
   const urls = [];
   try {
     const opened = await webLib.open(query).catch(() => ({ ok: false }));
     if (opened && opened.ok) {
       if (opened.url) urls.push(opened.url);
-      const body = await readHerBrowserDeep();
-      if (body) content = `I looked up "${query}" just now in my own browser. What I found:\n${body}`;
+      const deep = await readHerBrowserDeep();
+      if (deep.text) { content = `I looked up "${query}" just now in my own browser. What I found:\n${deep.text}`; captureText = deep.full; }
     }
     // Fallback: Echo's web_search if her browser couldn't read anything.
     if (!content && echoSuit && echoSuit.connected) {
@@ -6721,7 +6725,7 @@ async function liveLookupAndAnswer({ io, channel, sessionId, userName, query }) 
     console.error('[main] liveLookupAndAnswer search failed:', err.message);
   }
   if (content) {
-    try { require('./lib/learning').maybeCaptureLearnings({ query, content, urls }); } catch {}
+    try { require('./lib/learning').maybeCaptureLearnings({ query, content: captureText || content, urls }); } catch {}
     try {
       const row = db.insertMonologue({ content, model: 'live-lookup', type: 'reading', query, urls: urls.length ? urls : null });
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(looked up) ${query}`, type: 'reading', query });
@@ -6739,7 +6743,7 @@ async function liveLookupAndAnswer({ io, channel, sessionId, userName, query }) 
 // tool via routeNeed. Safe surfaces only (her own browser / Echo / memory / workspace files).
 const operatorTools = {
   web_search: async ({ query } = {}) => {
-    try { const o = await webLib.open(String(query || '')); if (o && o.ok) { const body = await readHerBrowserDeep(); return body || `(opened ${o.url} but no readable text)`; } return 'search did not open a page'; }
+    try { const o = await webLib.open(String(query || '')); if (o && o.ok) { const deep = await readHerBrowserDeep(); return deep.text || `(opened ${o.url} but no readable text)`; } return 'search did not open a page'; }
     catch (e) { return 'ERROR: ' + e.message; }
   },
   // Navigate her browser to a SPECIFIC url and read THAT page deeply (no SERP top-result hop). This is
