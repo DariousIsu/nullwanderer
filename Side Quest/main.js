@@ -515,9 +515,17 @@ app.whenReady().then(() => {
         if (echoSuit && echoSuit.connected) {
           const news_lane = require('./lib/news_lane');
           const docStore = require('./lib/doc_store');
+          // Phase C: a cloud typed-extractor so the news pass can surface topical CONCEPTS from each
+          // promoted story, routed to resolve_or_mint_concept (lazy buffer→corroborate→promote+attach).
+          // Null when no cloud model is available → the news concept hook simply skips.
+          const _cx = (() => { try { return (require('./lib/models').sources() || []).find(s => s.tier === 'cloud' && s.token); } catch { return null; } })();
+          const _newsExtract = _cx
+            ? require('./lib/decomp_lane').makeCloudExtractor({ completeFn: require('./lib/ollama').completeDetailed, model: config.extractionModel() || config.subconsciousModel(), base: _cx.base, token: _cx.token })
+            : null;
           const nr = await news_lane.runDailyPass({
             dispatch: (t) => echoSuit.dispatch(t),
             landDoc: (d) => docStore.land(d),
+            extract: _newsExtract,
             log: (m) => console.log('[news-daily]', m),
           });
           if (nr && (nr.promoted || nr.updated)) {

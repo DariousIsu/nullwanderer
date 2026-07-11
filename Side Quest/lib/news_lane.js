@@ -751,7 +751,7 @@ function storyToClaim(story, { now = Date.now() } = {}) {
 // endpoints must already exist) — we do NOT guess principal types (extract_entities_from_doc creates
 // them with correct types on the nightly ingest); an edge to a not-yet-existing principal fails soft and
 // forms on a later pass (eventually consistent, never a mistyped dup). Returns a per-story result.
-async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdges = 5, log } = {}) {
+async function promoteStory(story, { dispatch, landDoc, extract, now = Date.now(), maxEdges = 5, log } = {}) {
   ensureSchema();
   const res = { storyId: story.id, doc: false, event: false, updated: false, edges: 0, decision: null };
   // RECONCILIATION GATE (spec §4): route the story through the shared belief-revision decision as a Claim.
@@ -824,6 +824,25 @@ async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdg
       if (rr && rr.ok && (action === 'created' || action === 'already_exists')) res.edges++;
     } catch { /* endpoint not present yet — forms on a later pass */ }
   }
+  // Phase C — lazy concept mint from the story's topical subjects. source = story id, so two DIFFERENT
+  // stories corroborate a concept (the same story re-processed is idempotent → already_seen). A concept
+  // buffers on first mention, then promotes to civic + attaches to its nearest focal well on a 2nd
+  // independent story. Fail-soft: never blocks or breaks the promotion.
+  if (typeof extract === 'function') {
+    try {
+      const ex = await extract(`${story.title}. ${story.summary || ''}`, { title: story.title });
+      const cs = ((ex && ex.entities) || []).filter((e) => String((e && e.type) || '').toLowerCase() === 'concept');
+      const seenC = new Set(); let cm = 0;
+      for (const c of cs) {
+        if (cm >= 8) break;
+        const nm = String((c && c.name) || '').trim(); const ck = nm.toLowerCase();
+        if (!nm || seenC.has(ck)) continue; seenC.add(ck);
+        await dispatch({ kind: 'do', name: 'resolve_or_mint_concept', args: { name: nm, source: `news:story:${story.id}`, summary: story.summary || '' } });
+        cm++;
+      }
+      res.concepts = cm;
+    } catch (e) { log && log('[news-daily] concept mint failed (story ' + story.id + '): ' + (e && e.message)); }
+  }
   return res;
 }
 
@@ -851,12 +870,12 @@ async function readArticlesPass({ dispatch, now = Date.now(), minCorroboration =
 }
 
 // The nightly news-organization pass. Returns { promoted, updated, docs, edges, stories }.
-async function runDailyPass({ dispatch, landDoc, now = Date.now(), limit = 100, minCorroboration = 2, log } = {}) {
+async function runDailyPass({ dispatch, landDoc, extract, now = Date.now(), limit = 100, minCorroboration = 2, log } = {}) {
   ensureSchema();
   const stories = storiesForDaily({ now, limit, minCorroboration });
   let promoted = 0, updated = 0, docs = 0, edges = 0, rejected = 0;
   for (const s of stories) {
-    const r = await promoteStory(s, { dispatch, landDoc, now, log });
+    const r = await promoteStory(s, { dispatch, landDoc, extract, now, log });
     if (r.event) promoted++; if (r.updated) updated++; if (r.doc) docs++; edges += r.edges;
     if (r.decision && r.decision !== 'append' && r.decision !== 'new' && r.decision !== 'merge') rejected++;
   }

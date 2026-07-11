@@ -27,7 +27,7 @@ const identityGate = require('./identity_gate');      // F1 — mint-reluctance 
 // object, just untyped — the richness axis, not the reality axis). Normalizes common model synonyms.
 // Aligned with Echo's entity vocab (list_entity_types). Includes the CIVIC reference types the resolver
 // must be able to target so a body-membership edge resolves to the OFFICE/COMMITTEE, not a same-token PAC.
-const ENTITY_TYPES = ['person', 'organization', 'location', 'event', 'work', 'bill', 'document', 'office_held', 'committee', 'government_body', 'other'];
+const ENTITY_TYPES = ['person', 'organization', 'location', 'event', 'work', 'concept', 'bill', 'document', 'office_held', 'committee', 'government_body', 'other'];
 const TYPE_SYNONYM = {
   people: 'person', per: 'person', human: 'person', individual: 'person',
   org: 'organization', organisation: 'organization', company: 'organization', agency: 'organization', institution: 'organization', group: 'organization',
@@ -38,6 +38,8 @@ const TYPE_SYNONYM = {
   office: 'office_held', officeheld: 'office_held', position: 'office_held', seat: 'office_held', post: 'office_held',
   legislature: 'government_body', chamber: 'government_body', governmentbody: 'government_body', govbody: 'government_body',
   subcommittee: 'committee',
+  // Phase C: topical concepts/subjects/ideas → the lazy concept lane (buffer→corroborate→promote+attach)
+  topic: 'concept', subject: 'concept', theme: 'concept', idea: 'concept', field: 'concept', policy: 'concept', issue: 'concept', movement: 'concept',
 };
 function canonType(t) {
   const raw = String(t == null ? '' : t).toLowerCase().trim();
@@ -83,6 +85,7 @@ ENTITY: <name> :: <type>
 REL: <source> | <RELATION> | <target> | <when>
 
 <type> is one of: ${ENTITY_TYPES.join(', ')} (use "other" if unsure).
+Use "concept" for an abstract topic, policy area, field, or named idea/movement (e.g. "artificial intelligence", "permitting reform", "monetary policy", "election security") — NEVER for a person, organization, or place.
 <RELATION> is UPPER_SNAKE from: ${REL_VOCAB.join(', ')} (use RELATED_TO if none fit).
 <when> is the year or year-range the text says this became/was true (e.g. "2023", "2015–2019", "since 2020"). Leave it EMPTY if the text gives no date — never guess a date.
 Names must be CONCRETE NAMED ENTITIES (a person, org, place, event, bill) — never a pronoun, never a whole sentence.
@@ -297,6 +300,17 @@ function normalizeStateAliases(entities, relations) {
   return { entities: [...byName.values()], relations: newRels };
 }
 
+// Phase C: lazy concept mint via the Echo resolve_or_mint_concept tool. Returns the status string
+// (minted|already_seen|corroborating|promoted|existing_live) or null on failure. Fail-soft.
+async function _mintConcept(dispatch, name, source) {
+  try {
+    const r = await dispatch({ kind: 'do', name: 'resolve_or_mint_concept', args: { name, source: source || 'doc', summary: '' } });
+    if (!r || !r.ok) return null;
+    const obj = JSON.parse(r.text || '{}');
+    return (obj && obj.status) || null;
+  } catch { return null; }
+}
+
 async function _proposeEntity(dispatch, name, entity_type, summary) {
   try { const r = await dispatch({ kind: 'do', name: 'propose_entity', args: { name, entity_type: entity_type || 'other', summary: summary || '' } }); return !!(r && r.ok); } catch { return false; }
 }
@@ -411,10 +425,16 @@ async function decomposeDoc(doc = {}, deps = {}) {
     }
   }
 
+  // 2a) CONCEPTS split off — topical concepts skip the person-centric resolve/mint/existence gates and go
+  // to the LAZY concept lane (resolve_or_mint_concept): buffer on first mention, promote to civic + attach
+  // to a focal well only after a SECOND independent doc corroborates (Phase C).
+  const conceptCands = merged.filter(e => canonType(e && e.type) === 'concept');
+  const resolvable = merged.filter(e => canonType(e && e.type) !== 'concept');
+
   // 2) disambiguate every entity — the doc's full entity set is the CONTEXT that resolves an ambiguous
   // candidate (e.g. "Rainey Center" among a roster of policy people → the policy org, not the lobbying twin).
-  const context = merged.map(e => e.name);
-  const plan = await planEntities(merged, { resolve, context });
+  const context = resolvable.map(e => e.name);
+  const plan = await planEntities(resolvable, { resolve, context });
 
   // 3) entities: mint (existence-gated by the doc) / reuse / hold (fall-through) / skip
   const usable = new Map();   // coreKey → the canonical name to use in an edge
@@ -443,6 +463,22 @@ async function decomposeDoc(doc = {}, deps = {}) {
       continue;
     }
     out.skipped++;                                           // bad-name / resolver error
+  }
+
+  // 3b) CONCEPTS — lazy mint-on-mention. source = doc url, so two DIFFERENT docs count as independent
+  // corroboration; the 2nd promotes the concept to civic + attaches it to its nearest focal well.
+  out.concepts_minted = 0; out.concepts_promoted = 0; out.concepts_seen = 0;
+  {
+    const seenC = new Set(); const maxConcepts = cap.concepts || 12;
+    for (const c of conceptCands) {
+      if (out.concepts_minted + out.concepts_promoted >= maxConcepts) break;
+      const nm = String((c && c.name) || '').trim(); const ck = nm.toLowerCase();
+      if (!nm || seenC.has(ck)) continue; seenC.add(ck);
+      const st = await _mintConcept(dispatch, nm, url);
+      if (st === 'minted') out.concepts_minted++;
+      else if (st === 'promoted') out.concepts_promoted++;
+      else if (st) out.concepts_seen++;
+    }
   }
 
   // 4) relations: propose only when BOTH endpoints resolved (reuse/mint); else a HELD fall-through
