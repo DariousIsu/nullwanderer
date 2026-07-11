@@ -414,12 +414,20 @@ async function runMove(deps = {}) {
     if (typeof kgEdges === 'function' && anchor.object && anchor.object.id) {
       try { reverified = await decayVisitedEdges(anchor.object.id, { kgEdges, observe, now: nowTs, anchorName: (anchor.object && anchor.object.canonical) || anchor.mention }); } catch { /* fail-soft */ }
     }
-    const via = sourceLabel(grown.sourceUrl);   // the citation source that verified the connections
+    const via = sourceLabel(grown.sourceUrl);   // the citation source she read while proposing
     const _tag = via ? ` (via ${via})` : '';
+    // VOICE — a MOVE writes PROPOSALS, not live edges: an accepted propose_* only QUEUES in
+    // tenant_rainey.*_proposals (pending Echo's promotion gate) and may never land in civic_graph. So the
+    // thought must report what she ACTUALLY did — began a record / proposed a link still to confirm — and
+    // must NOT assert a completed graph write ("linked it to X"), which confabulates an edge the live graph
+    // doesn't hold (the "L. Overby → Oregonian/Forbes: 0 edges" finding). Honest, tentative register.
+    const _rel = grown.related.slice(0, 2).join(' and ');
     const voiceLine = notable
       ? (grown.built
-        ? `I didn't have anything on ${anchor.mention} — pulled it together${grown.connections ? ` and linked it to ${grown.related.slice(0, 2).join(' and ')}` : ''}.${_tag}`
-        : `Filled in ${anchor.mention} — connected it to ${grown.related.slice(0, 2).join(' and ')}.${_tag}`)
+        ? `I didn't have much on ${anchor.mention} yet — started a record${grown.connections ? `, with a possible link to ${_rel} to confirm` : ' to firm up later'}.${_tag}`
+        : (grown.connections
+          ? `Spent a little time on ${anchor.mention} — flagged a possible link to ${_rel}, still to confirm.${_tag}`
+          : `Spent a little time on ${anchor.mention}.${_tag}`))
       : '';
     return {
       acted: notable, anchor: anchor.mention, kind: anchor.kind, source: anchor.source,
