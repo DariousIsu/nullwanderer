@@ -369,31 +369,56 @@ async function readSerpResults() {
 // most directly-useful content: names/emails/phones/structured facts + citations). It's dropped
 // if we only scrape the organic blue links. Google's class names rotate, so we anchor on the
 // DURABLE visible "AI Overview" LABEL and climb to its content block (with a couple of attribute
-// selectors tried first as a fast path). Returns cleaned text, or '' if there's no AI Overview.
+// selectors tried first as a fast path). Returns { text, sources } — the cleaned answer text PLUS
+// the citation source-links inside the overview (the grounding for each claim, otherwise lost when
+// we keep only innerText). sources: [{ title, url }]. Empty { text:'', sources:[] } if no overview.
 async function aiOverview() {
-  if (!page) return '';
+  const EMPTY = { text: '', sources: [] };
+  if (!page) return EMPTY;
   try {
     return await withTimeout(page.evaluate(() => {
       const clean = (s) => String(s || '').replace(/\s+/g, ' ').replace(/^\s*AI Overview\s*/i, '').replace(/\bShow more\b\s*$/i, '').trim();
-      // fast path — stable-ish attributes when present
+      // Locate the AI Overview container: fast-path attributes first, else the visible "AI Overview"
+      // LABEL climbed up to its nearest substantial ancestor.
+      let container = null;
       for (const sel of ['[data-subtree="aio"]', '[aria-label*="AI Overview" i]', 'div[data-attrid*="Overview" i]']) {
         const el = document.querySelector(sel);
-        if (el && (el.innerText || '').trim().length > 100) return clean(el.innerText);
+        if (el && (el.innerText || '').trim().length > 100) { container = el; break; }
       }
-      // durable fallback — the visible "AI Overview" label → its nearest substantial container
-      const labels = Array.from(document.querySelectorAll('h1,h2,h3,div,span,strong,a'))
-        .filter(el => (el.textContent || '').trim() === 'AI Overview');
-      for (const lab of labels) {
-        let node = lab;
-        for (let i = 0; i < 7 && node.parentElement; i++) {
-          node = node.parentElement;
-          const t = (node.innerText || '').trim();
-          if (t.length > 150) return clean(t);
+      if (!container) {
+        const labels = Array.from(document.querySelectorAll('h1,h2,h3,div,span,strong,a'))
+          .filter(el => (el.textContent || '').trim() === 'AI Overview');
+        for (const lab of labels) {
+          let node = lab;
+          for (let i = 0; i < 7 && node.parentElement; i++) {
+            node = node.parentElement;
+            if ((node.innerText || '').trim().length > 150) { container = node; break; }
+          }
+          if (container) break;
         }
       }
-      return '';
-    }), 3000, '');
-  } catch { return ''; }
+      if (!container) return { text: '', sources: [] };
+      // Citation source-links inside the overview: unwrap Google's /url?q= redirect, keep only
+      // external http(s) hosts (drop google/gstatic/self chrome), dedupe, cap at 12.
+      const unwrap = (h) => {
+        try { const u = new URL(h, location.origin); return (/\/url$/.test(u.pathname) && u.searchParams.get('q')) ? u.searchParams.get('q') : u.href; }
+        catch { return h; }
+      };
+      const skipHost = /(^|\.)(google|gstatic|googleusercontent|youtube)\.com$/i;
+      const seen = new Set(); const sources = [];
+      for (const a of Array.from(container.querySelectorAll('a[href]'))) {
+        const url = unwrap(a.getAttribute('href') || a.href || '');
+        if (!/^https?:\/\//i.test(url)) continue;
+        let host = ''; try { host = new URL(url).hostname.replace(/^www\./, ''); } catch { continue; }
+        if (skipHost.test(host) || seen.has(url)) continue;
+        seen.add(url);
+        const title = (a.innerText || a.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80) || host;
+        sources.push({ title, url });
+        if (sources.length >= 12) break;
+      }
+      return { text: clean(container.innerText), sources };
+    }), 3000, { text: '', sources: [] });
+  } catch { return EMPTY; }
 }
 
 // The AI Overview streams in a beat AFTER the results, so a read() right after navigation would
@@ -417,7 +442,11 @@ async function read() {
       await waitForAiOverview();   // it streams in after the results — give it a bounded beat
       const [aio, results] = await Promise.all([aiOverview(), readSerpResults()]);
       const parts = [];
-      if (aio) parts.push('AI Overview:\n' + (aio.length > 6000 ? aio.slice(0, 6000) + '…' : aio));
+      if (aio.text) {
+        let block = 'AI Overview:\n' + (aio.text.length > 6000 ? aio.text.slice(0, 6000) + '…' : aio.text);
+        if (aio.sources.length) block += '\nAI Overview sources:\n' + aio.sources.map((s, i) => `  ${i + 1}. ${s.title} — ${s.url}`).join('\n');
+        parts.push(block);
+      }
       if (results.length) parts.push('Search results:\n' + results.map((r, i) => `${i + 1}. ${r.title}${r.snippet ? ' — ' + r.snippet : ''}`).join('\n'));
       if (parts.length) text = parts.join('\n\n').slice(0, MAX_TEXT);
     }

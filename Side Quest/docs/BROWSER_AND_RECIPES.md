@@ -29,11 +29,16 @@ plus an interactive-element map (**`MAX_INTERACTIVES` = 70 handles**, tunable vi
 budget before the real content links on dense pages; the 7 s collection deadline is the backstop).
 Handles are typed: `[L#]` links, `[B#]` buttons, `[I#]` inputs, `[C#]` clickable SPA cards/tiles.
 
-On a **Google SERP**, `read()` composes **`AI Overview:` + `Search results:`** — the AI
-Overview box (the synthesized answer: names/emails/phones/structured facts + citations) was
-being dropped when only the organic links were scraped. `aiOverview()` anchors on the durable
-visible "AI Overview" label (Google's classes rotate) and climbs to its content block;
-`waitForAiOverview()` gives it a bounded ≤3 s to stream in (it renders after the results).
+On a **Google SERP**, `read()` composes **`AI Overview:` (+ `AI Overview sources:`) + `Search
+results:`** — the AI Overview box (the synthesized answer: names/emails/phones/structured facts
++ citations) was being dropped when only the organic links were scraped. `aiOverview()` anchors
+on the durable visible "AI Overview" label (Google's classes rotate) and climbs to its content
+block, returning **`{ text, sources }`** — the answer text PLUS the **citation source-links**
+inside the overview (Google `/url?q=` redirects unwrapped, external hosts only — google/gstatic/
+youtube dropped — deduped, capped 12). Those grounding URLs are otherwise lost when only
+`innerText` is kept. `waitForAiOverview()` gives it a bounded ≤3 s to stream in (it renders
+after the results). Verified live: photosynthesis→4 sources (Wikipedia/NatGeo/Monash/Nature),
+intermittent-fasting→9 (Hopkins/Harvard/Mayo/PubMed…), mayor-of-chicago→4 (chicago.gov/Wiki).
 
 **Perceive / navigate**
 - `<web-open>url OR search terms</web-open>` — open a page (plain words = a Google search)
