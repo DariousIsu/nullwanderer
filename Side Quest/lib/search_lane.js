@@ -37,6 +37,22 @@ let lock = Promise.resolve();
 
 function findChrome() { for (const p of CHROME_PATHS) { try { if (fs.existsSync(p)) return p; } catch {} } return null; }
 
+// Kill any orphaned Chrome still running THIS lane's profile before launching fresh. A hard-
+// killed app never runs close(), so the persistent-context Chrome it spawned is orphaned — it
+// holds the search_profile lock (blocking relaunch) AND, being off-screen-only after this fix,
+// an OLD on-screen one would otherwise linger as a stray window. Matches '*search_profile*'
+// only (disjoint from web.js's '*web_profile*'), and runs solely on a fresh launch
+// (context === null) so it can't kill the current session's own browser.
+function killStaleProfileChrome() {
+  if (process.platform !== 'win32') return;
+  try {
+    require('child_process').execSync(
+      "powershell -NoProfile -Command \"Get-CimInstance Win32_Process -Filter \\\"Name='chrome.exe'\\\" | Where-Object { $_.CommandLine -like '*search_profile*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\"",
+      { timeout: 8000, stdio: 'ignore' }
+    );
+  } catch {}
+}
+
 // Hard wall-clock cap for any browser promise that could hang (page.evaluate has no built-in
 // timeout). Resolves to `fallback` if the promise doesn't settle in `ms`.
 function withTimeout(promise, ms, fallback) {
@@ -68,13 +84,21 @@ async function ensure() {
   const executablePath = findChrome();
   if (!executablePath) throw new Error('chrome.exe/msedge.exe not found in standard paths');
   try { if (!fs.existsSync(PROFILE_DIR)) fs.mkdirSync(PROFILE_DIR, { recursive: true }); } catch {}
+  killStaleProfileChrome();   // clear an orphaned lane Chrome (stale lock + stray window) first
   context = await pw.chromium.launchPersistentContext(PROFILE_DIR, {
-    headless: true,                                // hidden lane — never a window on her screen
+    // HEADFUL, but the window is parked far OFF-SCREEN. Patchright's stealth patches are built
+    // for a headed browser and don't honor headless:true — it still spawns a real (blank/black)
+    // window on Windows. So instead we let it be headful and move it off every monitor via
+    // --window-position: it renders SERPs normally for scraping but is never visible to Lucas.
+    // (Minimizing would throttle background rendering/timers and slow searches — off-screen
+    // keeps it fully live.)
+    headless: false,
     executablePath,
     viewport: { width: 1280, height: 900 },
     chromiumSandbox: true,
     ignoreDefaultArgs: ['--enable-automation'],
-    args: ['--no-first-run', '--no-default-browser-check', '--test-type', '--mute-audio']
+    args: ['--no-first-run', '--no-default-browser-check', '--test-type', '--mute-audio',
+           '--window-position=-32000,-32000', '--window-size=1280,900']
   });
   context.on('close', () => { context = null; page = null; });
   page = context.pages()[0] || await context.newPage();
