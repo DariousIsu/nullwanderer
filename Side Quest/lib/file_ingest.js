@@ -54,11 +54,29 @@ async function extractDroppedFile(src, { deps = {} } = {}) {
       const r = await deps.extractToMarkdown(filePath);
       const md = String((r && r.markdown) || '').trim();
       if (md.length >= MIN_TEXT) return { text: md, via: 'doc_extract:' + ext, filePath };
-      deps.log && deps.log(`[file-ingest] text layer thin (${md.length}ch) for .${ext} — ${IMAGE_EXT.has(ext) ? 'vision fallback' : 'no image fallback for this type'}`);
+      deps.log && deps.log(`[file-ingest] text layer thin (${md.length}ch) for .${ext} — ${ext === 'pdf' ? 'rasterize→vision fallback' : IMAGE_EXT.has(ext) ? 'vision fallback' : 'no image fallback for this type'}`);
     } catch (e) { deps.log && deps.log('[file-ingest] doc_extract failed: ' + (e && e.message)); }
   }
 
-  // 2) VISION — an image file (a true graphic drop, or a screenshot). Rasterized-PDF vision is a follow-up.
+  // 1b) VISION FALLBACK FOR A SCANNED / IMAGE-ONLY PDF — the text layer was thin, so rasterize each
+  //     page to a PNG (deps.rasterizePdf → lib/doc_extract) and OCR/transcribe it through the SAME
+  //     vision path an image drop uses (deps.describe). This is the follow-up the header promised.
+  if (ext === 'pdf' && typeof deps.rasterizePdf === 'function' && typeof deps.describe === 'function') {
+    try {
+      const { pages = [] } = await deps.rasterizePdf(filePath, { maxPages: 10, scale: 2 });
+      const chunks = [];
+      for (let i = 0; i < pages.length; i++) {
+        const v = await deps.describe({ imageBase64: pages[i], prompt: VISION_PROMPT });
+        const t = String((v && v.ok && v.text) || '').trim();
+        if (t) chunks.push(`## Page ${i + 1}\n\n${t}`);
+      }
+      const text = chunks.join('\n\n').trim();
+      if (text.length >= MIN_TEXT) return { text, via: 'vision:pdf', filePath, pages: pages.length };
+      deps.log && deps.log(`[file-ingest] pdf vision returned ${text.length}ch across ${pages.length} page(s)`);
+    } catch (e) { deps.log && deps.log('[file-ingest] pdf rasterize/vision failed: ' + (e && e.message)); }
+  }
+
+  // 2) VISION — an image file (a true graphic drop, or a screenshot).
   if (IMAGE_EXT.has(ext) && typeof deps.describe === 'function' && typeof deps.readFileBase64 === 'function') {
     try {
       const b64 = deps.readFileBase64(filePath);

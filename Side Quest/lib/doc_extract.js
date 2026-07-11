@@ -105,6 +105,31 @@ async function extractPdf(filePath) {
   return { markdown: parts.join('\n\n'), pages: doc.numPages };
 }
 
+// .pdf → per-page PNG images (base64), for the VISION fallback when a PDF has no text layer (a
+// scan / image-only doc). Renders through @napi-rs/canvas (already a dep) — the missing rasterize
+// step that lets file_ingest OCR a scanned PDF via lib/vision, exactly as it does an image drop.
+// Bounded by maxPages; scale=2 is ~150dpi, enough for the vision model to read small type.
+async function rasterizePdf(filePath, { maxPages = 10, scale = 2.0 } = {}) {
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const { createCanvas } = require('@napi-rs/canvas');
+  const data = new Uint8Array(fs.readFileSync(filePath));
+  const doc = await pdfjs.getDocument({ data, useSystemFonts: true, isEvalSupported: false }).promise;
+  const pages = [];
+  const n = Math.min(doc.numPages, Math.max(1, maxPages));
+  for (let p = 1; p <= n; p++) {
+    const page = await doc.getPage(p);
+    const viewport = page.getViewport({ scale });
+    const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+    const ctx = canvas.getContext('2d');
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    pages.push(canvas.toBuffer('image/png').toString('base64'));
+    try { page.cleanup(); } catch (e) {}
+  }
+  const total = doc.numPages;
+  try { await doc.destroy(); } catch (e) {}
+  return { pages, total, rendered: pages.length };
+}
+
 const TEXT_EXT = new Set(['md', 'markdown', 'txt', 'text']);
 const SHEET_EXT = new Set(['xlsx', 'xlsm', 'csv', 'tsv']);   // .xls (legacy BIFF) is NOT read by exceljs — unsupported
 
@@ -167,4 +192,4 @@ async function extractToMarkdown(filePath) {
   throw new Error(`extractToMarkdown: unsupported extension .${ext}`);
 }
 
-module.exports = { decodeEntities, inlineMd, htmlToMarkdown, sanitizeHtml, extractDocx, extractDocxHtml, extractPdf, extractToMarkdown, parseCsv, rowsToMarkdownTable, extractSpreadsheet, TEXT_EXT, SHEET_EXT };
+module.exports = { decodeEntities, inlineMd, htmlToMarkdown, sanitizeHtml, extractDocx, extractDocxHtml, extractPdf, rasterizePdf, extractToMarkdown, parseCsv, rowsToMarkdownTable, extractSpreadsheet, TEXT_EXT, SHEET_EXT };

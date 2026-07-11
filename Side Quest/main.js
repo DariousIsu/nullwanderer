@@ -2194,6 +2194,7 @@ async function importEditorDoc(filePath) {
     const vis = require('./lib/vision');
     const r = await fi.extractDroppedFile(filePath, { deps: {
       extractToMarkdown: (p) => de.extractToMarkdown(p),
+      rasterizePdf: (p, opts) => de.rasterizePdf(p, opts),
       describe: (o) => vis.describe(o),
       readFileBase64: (p) => fsm.readFileSync(p).toString('base64'),
       fileExists: (p) => fsm.existsSync(p),
@@ -2283,6 +2284,7 @@ async function extractFileMarkdown(filePath) {
   const vis = require('./lib/vision');
   const r = await fi.extractDroppedFile(filePath, { deps: {
     extractToMarkdown: (p) => de.extractToMarkdown(p),
+    rasterizePdf: (p, opts) => de.rasterizePdf(p, opts),
     describe: (o) => vis.describe(o),
     readFileBase64: (p) => fsm.readFileSync(p).toString('base64'),
     fileExists: (p) => fsm.existsSync(p),
