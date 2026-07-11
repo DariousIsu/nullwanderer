@@ -196,7 +196,7 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
 
   // ===== DAILY PASS (worthy stories → PUBLIC Echo event objects via propose→promote; mocked dispatch) =====
   function mkDispatchState({ knownTargets = null } = {}) {
-    const calls = { propose_entity: [], promote_proposal: [], propose_relation: [], landDoc: [], web_extract: [] };
+    const calls = { propose_entity: [], promote_proposal: [], propose_relation: [], landDoc: [], web_extract: [], set_entity_temporal: [] };
     let pid = 100;
     const dispatch = async (tag) => {
       // web_extract (trafilatura) — clean body under `text_preview` (the REAL shape, guards the parse key).
@@ -208,6 +208,8 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
       // REALISTIC Echo behavior: a rejected proposal (missing endpoint / not-whitelisted) still returns
       // transport ok=true, with action:'rejected' in the body — only the body distinguishes accept vs reject.
       if (tag.name === 'propose_relation') { calls.propose_relation.push(tag.args); const good = knownTargets ? knownTargets.includes(tag.args.target_name) : true; return { ok: true, text: JSON.stringify({ action: good ? 'created' : 'rejected' }) }; }
+      // PHASE A1 — the event world-time set (un-drop). Records + echoes the temporal fields.
+      if (tag.name === 'set_entity_temporal') { calls.set_entity_temporal.push(tag.args); return { ok: true, text: JSON.stringify({ id: tag.args.entity_id, occurred_at: tag.args.occurred_at, event_state: tag.args.state, time_tz: tag.args.tz }) }; }
       return { ok: false };
     };
     const landDoc = async (d) => { calls.landDoc.push(d); return { landed: true }; };
@@ -273,6 +275,12 @@ const antitrust = { source: 'US Top News', title: 'Google loses fight over recor
   const D2 = mkDispatchState({ knownTargets: ['Kyiv'] });
   const rp = await lane.promoteStory(lane.allStories()[0], { dispatch: D2.dispatch, landDoc: D2.landDoc, now: NOW });
   ok(rp.event === true && D2.calls.promote_proposal.length === 1, 'promoteStory: propose→promote makes the event public before edging');
+  // PHASE A1 — the event now carries its WORLD-time instead of dropping it (was: proposeEventObject sent none).
+  ok(rp.temporal === true && D2.calls.set_entity_temporal.length === 1, 'promoteStory(A1): sets the event world-time after promotion (un-drop first_ts)');
+  const tcall = D2.calls.set_entity_temporal[0];
+  ok(tcall && tcall.entity_id === Number(D2.calls.promote_proposal[0].proposal_id) + 4900, 'A1: temporal set targets the PUBLIC event id (post-promote), not the tenant proposal id');
+  ok(tcall && tcall.state === 'occurred' && tcall.tz === 'America/New_York', 'A1: state=occurred (news reports things that happened) + tz normalized to Eastern');
+  ok(tcall && typeof tcall.occurred_at === 'number' && tcall.occurred_at > 1e9 && tcall.occurred_at < NOW, 'A1: occurred_at is epoch SECONDS (first_ts ms → s), a real second clock');
   ok(rp.edges >= 1 && D2.calls.propose_relation.some(a => a.target_name === 'Kyiv' && a.relation_type === 'LINKED_TO'), 'promoteStory forges event→principal edges with a WHITELISTED type (LINKED_TO, not the rejected "involves")');
   ok(D2.calls.propose_relation.some(a => a.target_name !== 'Kyiv'), 'promoteStory also ATTEMPTS edges to not-yet-existing principals (they fail soft, form on a later pass)');
   ok(rp.edges === D2.calls.propose_relation.filter(a => a.target_name === 'Kyiv').length, 'only ACCEPTED edges count — a rejected proposal (transport-ok, action:rejected) is NOT miscounted as an edge');

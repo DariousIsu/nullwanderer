@@ -781,7 +781,17 @@ async function promoteStory(story, { dispatch, landDoc, now = Date.now(), maxEdg
         publicId = (pr.ok && pr.entityId != null) ? pr.entityId : null;
         if (publicId == null && log) log(`[news-daily] event proposed (id ${ev.entityId}) but promote failed/unavailable (story ${story.id}) — retry next pass`);
       }
-      if (publicId != null) { setEventRef(story.id, publicId); story.event_ref = String(publicId); res.event = true; }
+      if (publicId != null) {
+        setEventRef(story.id, publicId); story.event_ref = String(publicId); res.event = true;
+        // PHASE A1 — un-drop the event's world-time (was thrown away here: proposeEventObject sent no time).
+        // story.first_ts is our best world-time anchor at this layer (when it broke); state 'occurred' (news
+        // reports things that happened). Epoch SECONDS = Echo's clock (first_ts is ms). Fail-soft: a
+        // temporal-set failure never blocks the promotion. Real event-date extraction is a later (NER) refinement.
+        try {
+          const occ = story.first_ts ? Math.floor(Number(story.first_ts) / 1000) : null;
+          if (occ) { await dispatch({ kind: 'do', name: 'set_entity_temporal', args: { entity_id: publicId, occurred_at: occ, state: 'occurred', tz: 'America/New_York' } }); res.temporal = true; }
+        } catch (e) { log && log('[news-daily] set_entity_temporal failed (story ' + story.id + '): ' + (e && e.message)); }
+      }
     } else if (log) log(`[news-daily] event propose failed (story ${story.id}): ${ev.error || 'unknown'}`);
   } else { res.updated = true; }
   // C2/C3 provenance for the news edges: the story's report_count is the independent
