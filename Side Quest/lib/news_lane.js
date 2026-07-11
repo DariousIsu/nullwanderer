@@ -24,6 +24,7 @@ const reconcile = require('./reconcile');       // the shared belief-revision de
 const civicDomain = require('./civic_domain');   // anti-drift: reject off-domain (sports/entertainment) stories+principals
 const corroboration = require('./corroboration'); // C2 — independent-source counting
 const confModel = require('./confidence_model');  // C3 — calibrated confidence
+const staleness = require('./staleness');         // A4 — continuous freshness (time-decay for the brief)
 
 // --- pure text helpers -------------------------------------------------------
 const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'as', 'by', 'from', 'that', 'this', 'these', 'those', 'is', 'are', 'was', 'were', 'be', 'been', 'has', 'have', 'had', 'will', 'new', 'over', 'after', 'says', 'said', 'most', 'least', 'into', 'about', 'more', 'than', 'amid', 'his', 'her', 'their', 'its']);
@@ -433,14 +434,18 @@ async function adjudicateSameEvent(story, item, { ask } = {}) {
 // by independent corroboration. Shared by the deterministic briefing AND the prose brief (news_brief) so both
 // surfaces balance identically. No tuner → corroboration-first order (unchanged). Ensures each story carries a
 // category (legacy rows → deterministic guess).
-function balanceStories(stories, tuner = null, { top = 12 } = {}) {
+function balanceStories(stories, tuner = null, { top = 12, now = Date.now() } = {}) {
   const rc = (s) => Number(s.report_count) || (s.report_set instanceof Set ? s.report_set.size : 0);
   const oc = (s) => Number(s.outlet_count) || 0;
   const corr = (s) => Math.min(oc(s), rc(s));
   const withCat = (stories || []).map((s) => s.category ? s : Object.assign({}, s, { category: newsTopics.categorizeFast({ title: s.title, summary: s.summary }).category }));
   if (!tuner) return withCat.slice().sort((a, b) => (corr(b) - corr(a)) || (oc(b) - oc(a)) || (b.last_ts - a.last_ts)).slice(0, top);
   const reserved = (tuner.reservedSlots && tuner.reservedSlots.brief) || 0;
-  return newsRank.arrange(withCat, tuner, { slots: top, reserved, scoreOf: corr }).items;
+  // A4 — the brief scores by CORROBORATION (no time-decay), so a heavily-covered multi-day-old story could
+  // outrank today's news. Multiply by freshness (news half-life ~2.5d) so a "today" digest favors recent
+  // without ever dropping the old (floored). occurred_at when the story carries it, else last_ts (report time).
+  const freshnessOf = (s) => staleness.freshness((s.occurred_at != null ? s.occurred_at : s.last_ts), now, { halfLifeDays: 2.5 });
+  return newsRank.arrange(withCat, tuner, { slots: top, reserved, scoreOf: corr, freshnessOf }).items;
 }
 
 function buildBriefing(stories, { top = 8, tuner = null } = {}) {

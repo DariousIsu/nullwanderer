@@ -67,19 +67,23 @@
   //   slots     — how many to return (feed ~20, brief ~8)
   //   reserved  — top slots held for PROTECTED categories (caller reads cfg.reservedSlots[surface])
   //   scoreOf   — (item) => base numeric score (recency for feed, corroboration for brief)
+  //   freshnessOf — OPTIONAL (item) => freshness weight in (0,1]; multiplies the score so a stale item
+  //                 decays in rank without being dropped (Phase A4). Default 1 → no behavior change. Used by
+  //                 the BRIEF (corroboration base has no time-decay), NOT the feed (already recency-scored).
   // Returns { items, reservedFilled, total }. Order: reserved (protected, best-first) then fill (best-first).
-  function arrange(items, cfg, { slots = 20, reserved = 0, scoreOf } = {}) {
+  function arrange(items, cfg, { slots = 20, reserved = 0, scoreOf, freshnessOf } = {}) {
     const t = normalizeTuner(cfg);
     const score = typeof scoreOf === 'function' ? scoreOf : (it) => (it && Number(it.baseScore)) || 0;
+    const fresh = typeof freshnessOf === 'function' ? freshnessOf : () => 1;
     const R = Math.max(0, Math.min(slots, reserved | 0));
 
-    // weighted, non-muted
+    // weighted, non-muted; freshness multiplies (stale sinks in rank, never dropped)
     const live = [];
     for (const it of (items || [])) {
       const c = catOf(t, it);
       const w = t.categories[c].weight;
       if (!(w > 0)) continue;                      // muted (weight 0) → dropped
-      live.push({ it, c, s: (Number(score(it)) || 0) * w });
+      live.push({ it, c, s: (Number(score(it)) || 0) * w * (Number(fresh(it)) || 1) });
     }
     live.sort((a, b) => b.s - a.s);
 

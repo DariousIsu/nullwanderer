@@ -56,5 +56,14 @@ ok(few.total === 2 && few.items.filter((i) => i.category === 'sports').length ==
 const unk = R.arrange([{ id: 'x', category: 'not-a-real-cat', baseScore: 100 }], d, { slots: 5, reserved: 0, scoreOf: score });
 ok(unk.items.length === 1, 'unknown category treated as fallback (culture), still ranked');
 
+// ===== A4: freshnessOf multiplies the score — stale sinks in rank, never dropped =====
+// Same category (world), FRESH story has LOWER base than a STALE one; freshness should flip their order.
+const twoWorld = [{ id: 'stale', category: 'world', baseScore: 100, fresh: 0.1 }, { id: 'fresh', category: 'world', baseScore: 60, fresh: 1.0 }];
+const noFresh = R.arrange(twoWorld, d, { slots: 5, reserved: 0, scoreOf: (i) => i.baseScore });
+ok(noFresh.items[0].id === 'stale', 'without freshnessOf: the higher base (stale, 100) ranks first (unchanged default behavior)');
+const withFresh = R.arrange(twoWorld, d, { slots: 5, reserved: 0, scoreOf: (i) => i.baseScore, freshnessOf: (i) => i.fresh });
+ok(withFresh.items[0].id === 'fresh', 'with freshnessOf: fresh (60×1.0=60) outranks stale (100×0.1=10) — recency wins');
+ok(withFresh.items.length === 2, 'freshnessOf demotes but never DROPS the stale item (floored, still present)');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
