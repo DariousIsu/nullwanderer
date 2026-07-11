@@ -78,6 +78,15 @@ let page = null;
 let registry = {};    // handle → locator
 let counter = { L: 0, B: 0, I: 0, C: 0 };
 
+// EPHEMERAL RESEARCH TABS (the "pile-up" fix) — a chat-triggered lookup runs in its OWN page so it
+// never clobbers the tab the idle lanes are driving. Pages in _scopedPages are owned by a research
+// session; the context 'page' auto-follow ignores them, so the ACTIVE `page` (the idle holder)
+// stays put and regains focus when the research tab closes. _scoping>0 marks the brief window while
+// a scoped page is being created (the 'page' event fires synchronously during context.newPage()).
+const _scopedPages = new Set();
+let _scoping = 0;
+let _researchLock = Promise.resolve();   // serialize research tabs among themselves (NOT vs idle)
+
 // Native JS dialog (alert/confirm/prompt) waiting for a response. Registering a 'dialog'
 // listener disables Playwright's default auto-dismiss, so the dialog stays open until she
 // accepts/dismisses it (<web-dialog>) — with a safety timeout so it can never hang the page.
@@ -212,6 +221,14 @@ async function ensure() {
   // current page so she isn't stranded on the old one. Single-tab model preserved —
   // "current tab" just tracks the freshest one.
   context.on('page', (p) => {
+    // A research tab (or a tab opened during a research session) must NOT become the active page —
+    // that's the whole point of the isolation. Tag it scoped and leave `page` (the idle tab) alone.
+    if (_scoping > 0 || _scopedPages.has(p)) {
+      _scopedPages.add(p);
+      try { p.setDefaultTimeout(8000); } catch {}
+      try { p.on('dialog', onDialog); } catch {}
+      return;
+    }
     page = p; registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
     try { p.setDefaultTimeout(8000); } catch {}
     try { p.on('dialog', onDialog); } catch {}   // let her accept/dismiss native dialogs
@@ -339,9 +356,9 @@ async function open(target) {
 // current result markup (h3 title inside the result anchor; .VwiC3b snippet) and skip
 // Google-internal links (maps/images/"People also ask").
 const SERP_RE = /(?:^|\/\/)(?:www\.)?google\.[a-z.]+\/search/i;
-async function readSerpResults() {
+async function readSerpResults(p = page) {
   try {
-    const results = await withTimeout(page.evaluate(() => {
+    const results = await withTimeout(p.evaluate(() => {
       const out = [];
       const seen = new Set();
       for (const h of document.querySelectorAll('#search h3, #rso h3')) {
@@ -372,11 +389,11 @@ async function readSerpResults() {
 // selectors tried first as a fast path). Returns { text, sources } — the cleaned answer text PLUS
 // the citation source-links inside the overview (the grounding for each claim, otherwise lost when
 // we keep only innerText). sources: [{ title, url }]. Empty { text:'', sources:[] } if no overview.
-async function aiOverview() {
+async function aiOverview(p = page) {
   const EMPTY = { text: '', sources: [] };
-  if (!page) return EMPTY;
+  if (!p) return EMPTY;
   try {
-    return await withTimeout(page.evaluate(() => {
+    return await withTimeout(p.evaluate(() => {
       const clean = (s) => String(s || '').replace(/\s+/g, ' ').replace(/^\s*AI Overview\s*/i, '').replace(/\bShow more\b\s*$/i, '').trim();
       // Locate the AI Overview container: fast-path attributes first, else the visible "AI Overview"
       // LABEL climbed up to its nearest substantial ancestor.
@@ -423,11 +440,32 @@ async function aiOverview() {
 
 // The AI Overview streams in a beat AFTER the results, so a read() right after navigation would
 // miss it. Wait (bounded) for the "AI Overview" label to appear — resolves the instant it does.
-async function waitForAiOverview(ms = 3000) {
-  if (!page) return;
+async function waitForAiOverview(p = page, ms = 3000) {
+  if (!p) return;
   try {
-    await withTimeout(page.waitForFunction(() => /(^|\W)AI Overview(\W|$)/.test(document.body ? document.body.innerText : ''), { timeout: ms, polling: 250 }), ms + 200, null);
+    await withTimeout(p.waitForFunction(() => /(^|\W)AI Overview(\W|$)/.test(document.body ? document.body.innerText : ''), { timeout: ms, polling: 250 }), ms + 200, null);
   } catch {}
+}
+
+// Page-scoped TEXT extraction (SERP-aware: AI Overview + sources + results, else body) for ANY page
+// object — the shared active tab OR an isolated research tab. Returns the capped text string. This is
+// the single source of truth for read()'s text and researchInTab()'s text.
+async function _readText(p) {
+  let text = null;
+  if (SERP_RE.test(p.url())) {
+    await waitForAiOverview(p);   // it streams in after the results — give it a bounded beat
+    const [aio, results] = await Promise.all([aiOverview(p), readSerpResults(p)]);
+    const parts = [];
+    if (aio.text) {
+      let block = 'AI Overview:\n' + (aio.text.length > 6000 ? aio.text.slice(0, 6000) + '…' : aio.text);
+      if (aio.sources.length) block += '\nAI Overview sources:\n' + aio.sources.map((s, i) => `  ${i + 1}. ${s.title} — ${s.url}`).join('\n');
+      parts.push(block);
+    }
+    if (results.length) parts.push('Search results:\n' + results.map((r, i) => `${i + 1}. ${r.title}${r.snippet ? ' — ' + r.snippet : ''}`).join('\n'));
+    if (parts.length) text = parts.join('\n\n').slice(0, MAX_TEXT);
+  }
+  if (text == null) text = (await p.innerText('body', { timeout: 5000 }).catch(() => '')).replace(/\n{3,}/g, '\n\n').slice(0, MAX_TEXT);
+  return text;
 }
 
 // Read the current page: capped body text + a handle list of interactive elements.
@@ -437,20 +475,7 @@ async function read() {
   try { if (context) await syncActivePage(); } catch {}
   if (!page) return { ok: false, reason: 'no page open — use <web-open> first' };
   try {
-    let text = null;
-    if (SERP_RE.test(page.url())) {
-      await waitForAiOverview();   // it streams in after the results — give it a bounded beat
-      const [aio, results] = await Promise.all([aiOverview(), readSerpResults()]);
-      const parts = [];
-      if (aio.text) {
-        let block = 'AI Overview:\n' + (aio.text.length > 6000 ? aio.text.slice(0, 6000) + '…' : aio.text);
-        if (aio.sources.length) block += '\nAI Overview sources:\n' + aio.sources.map((s, i) => `  ${i + 1}. ${s.title} — ${s.url}`).join('\n');
-        parts.push(block);
-      }
-      if (results.length) parts.push('Search results:\n' + results.map((r, i) => `${i + 1}. ${r.title}${r.snippet ? ' — ' + r.snippet : ''}`).join('\n'));
-      if (parts.length) text = parts.join('\n\n').slice(0, MAX_TEXT);
-    }
-    if (text == null) text = (await page.innerText('body', { timeout: 5000 }).catch(() => '')).replace(/\n{3,}/g, '\n\n').slice(0, MAX_TEXT);
+    const text = await _readText(page);
     registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
     const lines = [];
     const seen = new Set();   // dedupe by label across passes (SPA cards often double up)
@@ -574,22 +599,61 @@ async function back() {
 // page — the AUTO-DEEPEN step. Without it an autonomous search stops at the SERP
 // and never sees real content. Google marks each organic result with an <h3> title
 // inside the result anchor; pick the first such link, skipping Google-internal chrome.
-async function openTopResult() {
-  if (!page) return { ok: false, reason: 'no page open' };
+async function openTopResult(p = page) {
+  if (!p) return { ok: false, reason: 'no page open' };
   try {
     const selectors = ['#rso a:has(h3)', '#search a:has(h3)', 'a:has(h3)'];
     let link = null;
     for (const sel of selectors) {
-      const loc = page.locator(sel).first();
+      const loc = p.locator(sel).first();
       if (await loc.count().catch(() => 0)) { link = loc; break; }
     }
     if (!link) return { ok: false, reason: 'no result links on page' };
     await link.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
     await link.click({ timeout: 8000 });
-    await page.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT }).catch(() => {});
-    registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
-    return { ok: true, url: page.url(), title: await page.title().catch(() => '') };
+    await p.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT }).catch(() => {});
+    if (p === page) { registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 }; }   // only the ACTIVE tab owns the handle registry
+    return { ok: true, url: p.url(), title: await p.title().catch(() => '') };
   } catch (err) { return { ok: false, reason: err.message }; }
+}
+
+// ISOLATED RESEARCH TAB — run a lookup for `query` in its OWN ephemeral tab, then close it. The
+// active tab (the one the idle lanes are driving) is never touched, so a chat question can't clobber
+// idle browsing and vice-versa (the "pile-up" fix). Opens a scoped page (the auto-follow ignores it),
+// searches → reads (AI Overview + results) → optionally deepens into the top result → reads again →
+// closes the tab (focus returns to the idle-held tab automatically). Research sessions serialize
+// among themselves via _researchLock, but never block idle. Returns { ok, text, urls, title }.
+async function researchInTab(query, { deepen = true } = {}) {
+  await ensure();
+  const url = toUrl(query);
+  if (!url) return { ok: false, reason: 'empty query' };
+  const run = _researchLock.then(async () => {
+    let rp = null;
+    const urls = [];
+    try {
+      _scoping++;
+      try { rp = await context.newPage(); _scopedPages.add(rp); } finally { _scoping--; }
+      try { rp.setDefaultTimeout(8000); rp.on('dialog', onDialog); } catch {}
+      await rp.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+      urls.push(rp.url());
+      let text = await _readText(rp);
+      if (deepen) {
+        const top = await openTopResult(rp);
+        if (top.ok) {
+          urls.push(top.url);
+          const more = await _readText(rp);
+          if (more) text += `\n\nTop result (${top.title || top.url}):\n` + more;
+        }
+      }
+      return { ok: true, text: (text || '').slice(0, MAX_TEXT), urls, title: await rp.title().catch(() => '') };
+    } catch (err) {
+      return { ok: false, reason: err.message, urls };
+    } finally {
+      if (rp) { _scopedPages.delete(rp); try { await rp.close(); } catch {} }
+    }
+  });
+  _researchLock = run.catch(() => {});   // keep the serialization chain alive even if this one throws
+  return run;
 }
 
 async function close() {
@@ -1099,7 +1163,7 @@ async function cookies(urls) {
 }
 
 module.exports = {
-  isConnected, ensure, open, read, pageImages, screenshot, click, clickText, type, back, close, openTopResult, scroll, runRecipe,
+  isConnected, ensure, open, read, researchInTab, pageImages, screenshot, click, clickText, type, back, close, openTopResult, scroll, runRecipe,
   startRecording, stopRecording, isRecording, cookies,
   chatSend, chatWatch, chatUnwatch,
   press, clearField, hover, selectOption, setChecked, uploadFile, submit, clickAt,

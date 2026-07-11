@@ -6716,11 +6716,13 @@ async function liveLookupAndAnswer({ io, channel, sessionId, userName, query }) 
   let captureText = '';   // WHOLE page for claim-extraction + citation (content stays bounded for chat)
   const urls = [];
   try {
-    const opened = await webLib.open(query).catch(() => ({ ok: false }));
-    if (opened && opened.ok) {
-      if (opened.url) urls.push(opened.url);
-      const deep = await readHerBrowserDeep();
-      if (deep.text) { content = `I looked up "${query}" just now in my own browser. What I found:\n${deep.text}`; captureText = deep.full; }
+    // Run the lookup in its OWN ephemeral tab — it never touches the tab the idle lanes are driving,
+    // so a chat question can't clobber (or be clobbered by) her background browsing (the pile-up fix).
+    const r = await webLib.researchInTab(query).catch(() => ({ ok: false }));
+    if (r && r.ok && r.text) {
+      if (Array.isArray(r.urls)) urls.push(...r.urls);
+      content = `I looked up "${query}" just now in my own browser. What I found:\n${r.text.slice(0, 3200)}`;
+      captureText = r.text;   // whole page → claim-extraction + citation (chat display stays bounded)
     }
     // Fallback: Echo's web_search if her browser couldn't read anything.
     if (!content && echoSuit && echoSuit.connected) {
@@ -6751,7 +6753,9 @@ async function liveLookupAndAnswer({ io, channel, sessionId, userName, query }) 
 // tool via routeNeed. Safe surfaces only (her own browser / Echo / memory / workspace files).
 const operatorTools = {
   web_search: async ({ query } = {}) => {
-    try { const o = await webLib.open(String(query || '')); if (o && o.ok) { const deep = await readHerBrowserDeep(); return deep.text || `(opened ${o.url} but no readable text)`; } return 'search did not open a page'; }
+    // Isolated ephemeral tab (see researchInTab) — the operator's one-shot lookup doesn't disturb the
+    // tab the idle lanes hold, and closes itself when done.
+    try { const r = await webLib.researchInTab(String(query || '')); return (r && r.ok && r.text) ? r.text : `(searched "${query}" but got no readable text)`; }
     catch (e) { return 'ERROR: ' + e.message; }
   },
   // Navigate her browser to a SPECIFIC url and read THAT page deeply (no SERP top-result hop). This is
