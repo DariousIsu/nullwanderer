@@ -61,6 +61,8 @@ plus an interactive-element map (`MAX_INTERACTIVES` = 35 handles).
 - `<web-get selector="a.headline" attr="href"/>` — read one element's attribute (omit `attr` for its text)
 - `<web-eval>document.querySelectorAll('.price').length</web-eval>` — run a JS expression, get the (bounded) result; in-page errors return `ERR: …`
 
+**Auto-capture PDFs** (`<web-grab-pdfs/>` — manual nudge; also fully automatic — see §1b).
+
 **Chat sites** (`<web-chat speaker="X">line</web-chat>` — type+send+wait for a bot's reply; `<web-watch>`/`<web-unwatch>`).
 
 Each tag is a thin Playwright wrapper on the CURRENT page and **resets the handle registry**
@@ -99,6 +101,32 @@ browsers for deeper web browsing."*
 - **Google SERP parsing** (her visible lane's `readSerpResults`/`openTopResult`): `#search h3`,
   `div.g`/`.MjjYud`, `.VwiC3b` snippet. Headless Google trips its `/sorry` bot wall — it only
   parses **headful** (which is how her lane runs).
+
+---
+
+## 1b. Auto-download + auto-ingest PDFs (`lib/web.js` + `main.js` watcher)
+
+PDFs she encounters are captured and folded into memory automatically. Three acquisition paths,
+one ingest rail.
+
+**Acquire → `DOWNLOADS_DIR` (`lib/web.js`):**
+- **Fully-auto harvest** — `read()` grabs every `.pdf` link on the page (fire-and-forget), deduped
+  per session, capped `AUTO_GRAB_PER_READ` (5) per read, `≤ PDF_MAX_BYTES` (25 MB). Off with
+  `ZOE_AUTO_GRAB_PDFS=0`.
+- **Nav capture** — `open()` onto a PDF (Chrome's inline viewer has no readable HTML) fetches the
+  bytes instead of returning a blank read; result carries `pdf: { savedAs }`.
+- **Manual** — `<web-grab-pdfs/>` (`max=` optional).
+- **`downloadPdf(url)`** does the fetch via **`context.request`** (shares the persistent profile's
+  cookies → session-gated PDFs work). Guards: PDF content-type **or** `.pdf` URL, a real `%PDF`
+  header, size ceiling, per-session `grabbedUrls` dedup.
+
+**Ingest ← `DOWNLOADS_DIR` (`main.js` `startDownloadsIngestWatcher`):** an `fs.watch` on the folder,
+with a **size-stable debounce** (a download is still being written when the first event fires), runs
+each landed file through the SAME rail as a canvas drop — `extractFileMarkdown` (→ `file_ingest` →
+`doc_extract` text layer) → `doc_store.land` (idempotent on `ref = download:<path>`) →
+`decomposeLandedDoc` + `surfaceDocCards`. Decoupled on purpose: **whatever** puts a file there
+(harvest, nav, a click-download, a recipe) gets ingested. Scanned/image-only PDFs extract thin
+(no text layer) — the known `file_ingest` limit.
 
 ---
 
