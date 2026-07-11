@@ -118,10 +118,11 @@ function meetingModel() {
 // The MEETING-SCRIBE model — a SEPARATE, dedicated channel that records/documents/analyzes the
 // meeting (running minutes + end-of-meeting recap/action-items) from the transcript she captures.
 // Distinct from her ACTOR (participation) model and from extraction — its own cloud model so it
-// doesn't contend. Default gemini-3-flash-preview:cloud (fast, frontier, multimodal — a path to
-// ingesting meeting AUDIO directly later). Override via ZOE_MEETING_SCRIBE_MODEL (any Ollama model).
+// doesn't contend. Default minimax-m3:cloud (fast, frontier, multimodal, 524k ctx — a path to
+// ingesting meeting AUDIO directly later). Replaced gemini-3-flash-preview:cloud (retired 2026-07).
+// Override via ZOE_MEETING_SCRIBE_MODEL (any Ollama model).
 function scribeModel() {
-  return get('ZOE_MEETING_SCRIBE_MODEL').trim() || 'gemini-3-flash-preview:cloud';
+  return get('ZOE_MEETING_SCRIBE_MODEL').trim() || 'minimax-m3:cloud';
 }
 
 // MEETING AUDIO → Echo transcription fusion (the authoritative diarized companion transcript). OFF by

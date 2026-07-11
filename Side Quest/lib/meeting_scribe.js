@@ -1,6 +1,6 @@
 /**
  * lib/meeting_scribe.js — the MEETING SCRIBE: a SEPARATE recorder that documents + analyzes the
- * meeting on its own dedicated cloud model (config.scribeModel — gemini-3-flash by default).
+ * meeting on its own dedicated cloud model (config.scribeModel — minimax-m3:cloud by default).
  *
  * This is NOT her actor. Her participation (listening / researching / answering) stays entirely in
  * lib/gmeet, untouched. The scribe runs in parallel: it reads the transcript she's ALREADY capturing

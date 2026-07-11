@@ -18,7 +18,7 @@ ok(pickText({ content: '', thinking: '' }) === '' && pickText(null) === '', 'pic
 // isReasoningModel: flags reasoners, not the utility/voice models
 for (const m of ['gpt-oss:120b', 'qwen3:32b', 'deepseek-r1:70b', 'kimi-k2', 'qwq:32b'])
   ok(isReasoningModel(m), `isReasoningModel: ${m} → true`);
-for (const m of ['gemma4:31b', 'gemma4:31b-cloud', 'mistral-small3.2:24b', 'gemini-3-flash-preview:cloud', 'mistral-large-3:675b'])
+for (const m of ['gemma4:31b', 'gemma4:31b-cloud', 'mistral-small3.2:24b', 'minimax-m3:cloud', 'mistral-large-3:675b'])
   ok(!isReasoningModel(m), `isReasoningModel: ${m} → false (utility/voice, not a reasoner)`);
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
