@@ -357,6 +357,32 @@ function fieldFlare(evt, proj) {
   weather.push({ x, y, startAt: performance.now(), dur: 1200, mag: Math.min(2.2, 1 + Math.log10((evt.count || 1) + 0.5)), col: kgWeatherRGB(evt) });
   if (weather.length > 90) weather.shift();
 }
+// SUPERNOVA — a massive batch of new short-term data (a bulk document/research pull) bursts as ONE dramatic
+// explosion at the point it landed, instead of dozens of tiny sparks. In-view → a graph-space burst; off-screen
+// (e.g. you're following the subconscious elsewhere) → a big far-field weather flare so it still registers.
+function superNova(gx, gy, count) {
+  if (prefersReducedMotion || !G) return;
+  const cv = document.querySelector('#graph canvas');
+  const proj = cv ? kgProject({ x: gx, y: gy }, cv) : null;
+  const mag = Math.min(3.2, 1.2 + Math.log2((count || 2)));
+  if (proj && proj.inView) { activities.push({ kind: 'supernova', startAt: performance.now(), dur: 1500, gx, gy, mag }); if (activities.length > ACT_CAP) activities.shift(); }
+  else fieldFlare({ db: 'sidequest', anchor: 'supernova', count: (count || 2) * 4 }, proj);
+}
+function drawSupernova(ctx, A, p) {
+  const gx = A.gx, gy = A.gy; if (!Number.isFinite(gx) || !Number.isFinite(gy)) return;
+  const mag = A.mag || 1.5, ease = 1 - Math.pow(1 - p, 2), fade = 1 - p, R = Math.max(1, (26 + 80 * mag) * ease);
+  const cg = ctx.createRadialGradient(gx, gy, 0, gx, gy, R * 0.6);   // core flash
+  cg.addColorStop(0, `rgba(221,214,254,${0.6 * fade})`); cg.addColorStop(0.4, `rgba(168,139,250,${0.32 * fade})`); cg.addColorStop(1, 'rgba(168,139,250,0)');
+  ctx.fillStyle = cg; ctx.beginPath(); ctx.arc(gx, gy, R * 0.6, 0, 2 * Math.PI, false); ctx.fill();
+  ctx.strokeStyle = `rgba(196,181,253,${fade * 0.7})`; ctx.lineWidth = 2 * mag * fade + 0.5;   // shockwave ring
+  ctx.beginPath(); ctx.arc(gx, gy, R, 0, 2 * Math.PI, false); ctx.stroke();
+  const spokes = Math.min(16, Math.round(6 * mag)); ctx.lineWidth = 1;   // radiating spokes
+  for (let s = 0; s < spokes; s++) {
+    const ang = (s / spokes) * 6.283 + gx * 0.01, r0 = R * 0.5, r1 = R * (0.85 + 0.25 * ((s * 7) % 3));
+    ctx.strokeStyle = `rgba(196,181,253,${fade * 0.45})`;
+    ctx.beginPath(); ctx.moveTo(gx + Math.cos(ang) * r0, gy + Math.sin(ang) * r0); ctx.lineTo(gx + Math.cos(ang) * r1, gy + Math.sin(ang) * r1); ctx.stroke();
+  }
+}
 function spawnActivity(evt) {
   if (!evt || prefersReducedMotion || !G) return;
   const kind = evt.kind || '';
@@ -381,8 +407,10 @@ function drawActivities(ctx, scale) {
   if (!activities.length || !G) return;
   const now = performance.now();
   for (let i = activities.length - 1; i >= 0; i--) {
-    const A = activities[i], p = (now - A.startAt) / A.dur, a = A.a;
-    if (p >= 1 || !a || !Number.isFinite(a.x) || !Number.isFinite(a.y)) { activities.splice(i, 1); continue; }
+    const A = activities[i], p = (now - A.startAt) / A.dur;
+    if (p >= 1) { activities.splice(i, 1); continue; }
+    if (A.kind === 'supernova') { drawSupernova(ctx, A, p); continue; }   // no node anchor — draws at fixed graph coords
+    const a = A.a; if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.y)) { activities.splice(i, 1); continue; }
     const col = A.col || '#7dd3fc', lit = lighten(col, 0.5), r = a.__r || 4;
     if (A.kind === 'node.born') {                                  // spark: expanding ring + core flash
       const rr = r + 2 + p * 16, fade = 1 - p;
@@ -823,9 +851,17 @@ async function loadShortTerm() {
     // CHANGE-GATED: only re-render (which reheats the sim) when the layer actually changed — idle polls are free.
     const linksChanged = shortTerm.links.size !== oldLinkKeys.size || [...shortTerm.links.keys()].some(k => !oldLinkKeys.has(k));
     if (G && (fresh.length || removed || linksChanged || !__stInit)) applyFilter();
-    // "exploding with activity": spark each freshly-arrived short-term node (capped) so live research POPS into
-    // the core. Only after the first load (else all ~105 startup nodes would flare at once).
-    if (__stInit && fresh.length) { let k = 0; for (const id of fresh) { if (k++ >= 14) break; try { onActivity({ db: 'sidequest', kind: 'node.born', anchor: id }); } catch (e) {} } }
+    // "exploding with activity": a BIG batch (bulk document/research pull) bursts as ONE SUPERNOVA at where it
+    // landed; a small trickle sparks per-node. Only after the first load (else all ~105 startup nodes flare).
+    if (__stInit && fresh.length) {
+      if (fresh.length >= 8) {   // supernova: many nodes at once = a super-nova of new data
+        let fx = 0, fy = 0, fc = 0;
+        for (const id of fresh) { const n = shortTerm.nodes.get(id); if (n && Number.isFinite(n.x)) { fx += n.x; fy += n.y; fc++; } }
+        if (fc) superNova(fx / fc, fy / fc, fresh.length);
+      } else {
+        let k = 0; for (const id of fresh) { if (k++ >= 14) break; try { onActivity({ db: 'sidequest', kind: 'node.born', anchor: id }); } catch (e) {} }
+      }
+    }
     __stInit = true;
   } catch (e) {}
 }
@@ -971,7 +1007,7 @@ function onCurationMove(p) {
   }
   ingestPulse(p);
 }
-try { window.__kgDedup = (anchor, count) => dedupAbsorb(anchor, count || 5); window.__kgAbsorbN = () => absorbs.length; window.__kgCuration = (p) => onCurationMove(p); window.__kgActivity = (evt) => onActivity(evt); window.__kgActN = () => activities.length + weather.length; } catch (e) {}   // dev triggers + peek for live CDP verification
+try { window.__kgDedup = (anchor, count) => dedupAbsorb(anchor, count || 5); window.__kgAbsorbN = () => absorbs.length; window.__kgCuration = (p) => onCurationMove(p); window.__kgActivity = (evt) => onActivity(evt); window.__kgActN = () => activities.length + weather.length; window.__kgNova = (gx, gy, count) => superNova(gx, gy, count || 20); } catch (e) {}   // dev triggers + peek for live CDP verification
 followBtn.addEventListener('click', () => setFollow(!follow));
 try {
   if (window.sq && window.sq.kg && typeof window.sq.kg.onFocusMove === 'function') window.sq.kg.onFocusMove(onFocusMove);
@@ -987,8 +1023,8 @@ loadOverview();
 // LIVE short-term core: re-poll every 12s so new short-term memory (a running research project) flows into the
 // core as it lands — change-gated (no re-render on idle polls) + fresh nodes spark. The webview only runs while
 // the KG surface is active, so this doesn't tick in the background. window.__kgRefreshST for on-demand verify.
-try { setInterval(() => { loadShortTerm(); }, 12000); window.__kgRefreshST = () => loadShortTerm(); } catch (e) {}
+try { setInterval(() => { loadShortTerm(); }, 5000); window.__kgRefreshST = () => loadShortTerm(); } catch (e) {}
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-10w: LIVE short-term core — 12s change-gated poll + fresh-node sparks (research explodes into the core)');
+console.info('[kg] surface build 2026-07-10x: faster 5s poll + SUPERNOVA on bulk pulls (trickle=sparks, big batch=one explosion; routes in-view or far-field weather)');
