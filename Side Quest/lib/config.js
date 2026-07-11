@@ -95,6 +95,17 @@ function extractionModel() {
   return get('ZOE_EXTRACT_MODEL').trim() || 'gemma4:31b-cloud';
 }
 
+// Per-STAGE extraction models — mix-and-match along the browse→knowledge path (claim extraction,
+// graph-triple extraction, importance scoring). Each defaults to extractionModel() so an UNSET var
+// = today's single-model behavior (no surprise). All resolve to CLOUD models, so per-stage num_ctx
+// no longer thrashes the local GPU: the old "every extraction call site must share num_ctx 8192"
+// rule was a LOCAL-model artifact (extraction ran on the 20GB card); on cloud each stage is served
+// independently, so each can size its own context/output to its job. Claim = precision (cited
+// facts). Graph = structured triples. Importance = a cheap 1-token score → smallest/fastest model.
+function claimModel() { return get('ZOE_CLAIM_MODEL').trim() || extractionModel(); }
+function graphModel() { return get('ZOE_GRAPH_MODEL').trim() || extractionModel(); }
+function importanceModel() { return get('ZOE_IMPORTANCE_MODEL').trim() || extractionModel(); }
+
 // The MEETING-CORTEX model — a DEDICATED channel for real-time meeting processing (live
 // understanding, addressed-detection answers, recap) when she's in a Meet hosted in the Canvas.
 // Separate role so it doesn't contend with extraction; point it at ANY Ollama model via
@@ -249,4 +260,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, investigateHops, investigateHubCap, investigateBudget, deepNumCtx, deepNumPredict, sectionNumPredict, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, pipelineOn, pipelineContactBacklogCap, ttsConfig, companionConfig, usageConfig, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, claimModel, graphModel, importanceModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, investigateHops, investigateHubCap, investigateBudget, deepNumCtx, deepNumPredict, sectionNumPredict, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, pipelineOn, pipelineContactBacklogCap, ttsConfig, companionConfig, usageConfig, emailConfig, discordConfig, APP_ROOT, ENV_PATH };

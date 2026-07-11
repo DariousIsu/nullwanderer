@@ -17,7 +17,7 @@ const { streamChat } = require('./ollama');
 const blackboard = require('./blackboard');
 const config = require('./config');
 
-const MODEL = config.extractionModel();
+const MODEL = config.importanceModel();
 const DEFAULT_SCORE = 5;
 const CACHE_MAX = 500;
 const _cache = new Map(); // signature → score
@@ -82,9 +82,13 @@ async function score(text, { userName = 'them', kind = 'thought' } = {}) {
     await streamChat({
       model: MODEL,
       messages,
-      // num_ctx MUST match every other call site (8192). A different ctx forces
-      // Ollama to reload the 17GB model on the 20GB card → reload thrash/hang.
+      // Cheapest call on the path — a single 1–10 score over short text, so num_ctx stays small.
+      // (The old "must match 8192 or the local model reloads on the 20GB card" rule is moot now that
+      // this is its own CLOUD model, gpt-oss:20b — nothing to reload locally.) think:false is
+      // REQUIRED: gpt-oss is a reasoning model and num_predict is 4 — without it the whole budget
+      // goes to hidden CoT and the score comes back empty.
       options: { temperature: 0, top_p: 1, num_ctx: 8192, num_predict: 4 },
+      think: false,
       onToken: (tk) => { raw += tk; }
     });
   } catch (e) {

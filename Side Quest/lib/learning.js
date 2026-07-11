@@ -29,7 +29,7 @@
 const db = require('./db');
 const memory = require('./memory');
 const { streamChat } = require('./ollama');
-const MODEL = require('./config').extractionModel();
+const MODEL = require('./config').claimModel();
 
 const CAPTURE_MIN_GAP_MS = 60 * 1000;   // ≥60s between captures — bounds cost while still banking most reads
 const MIN_CONTENT_LEN = 200;            // a real reading, not a stub
@@ -69,7 +69,7 @@ function buildPrompt({ query, content }) {
 TOPIC / what it was looking at: ${String(query || '').slice(0, 200)}
 
 TEXT:
-${String(content || '').slice(0, 2000)}
+${String(content || '').slice(0, 14000)}
 
 Output ONLY lines of the form:
 CLAIM | SUBJECT | AS_OF
@@ -120,7 +120,11 @@ async function extractClaims({ query, content, deps = {} }) {
     await streamChat({
       model: deps.MODEL || MODEL,
       messages: msgs,
-      options: { temperature: 0.1, top_p: 0.9, num_ctx: 8192, num_predict: 260 },
+      // BIGGER BITE (2026-07-11): read up to ~14k chars of the page (was 2k in buildPrompt) and give
+      // the model room to hold it (num_ctx) + emit MORE claims (num_predict). think:false so a
+      // reasoning-capable model (gpt-oss/qwen) emits the claims directly, not buried in hidden CoT.
+      options: { temperature: 0.1, top_p: 0.9, num_ctx: 32768, num_predict: 1200 },
+      think: false,
       onToken: (tok) => { raw += tok; }
     });
     return raw;

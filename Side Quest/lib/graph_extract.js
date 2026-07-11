@@ -12,7 +12,7 @@
 const db = require('./db');
 const gm = require('./graph_memory');
 const { streamChat } = require('./ollama');
-const MODEL = require('./config').extractionModel();
+const MODEL = require('./config').graphModel();
 
 const EXTRACT_MIN_GAP_MS = 5 * 60 * 1000;   // at most one extraction per 5 min (bounded cost)
 const MIN_TEXT_LEN = 200;
@@ -27,7 +27,7 @@ const VOCAB = [
 function buildPrompt(text) {
   return [{
     role: 'user',
-    content: `Extract factual relationships the text BELOW actually asserts, as triples. Output ONLY lines of the form:\nSource | RELATION | Target\n\nRELATION must be UPPER_SNAKE from this list (use RELATED_TO if none fit): ${VOCAB.join(', ')}.\nSource and Target must be CONCRETE NAMED ENTITIES (a person, org, place, bill, program) — never a pronoun, never a whole sentence.\nOnly relationships the text states; do NOT infer, generalize, or invent. Max 6 lines. If there are none, output exactly: NONE\n\nTEXT:\n${String(text || '').slice(0, 2000)}`
+    content: `Extract factual relationships the text BELOW actually asserts, as triples. Output ONLY lines of the form:\nSource | RELATION | Target\n\nRELATION must be UPPER_SNAKE from this list (use RELATED_TO if none fit): ${VOCAB.join(', ')}.\nSource and Target must be CONCRETE NAMED ENTITIES (a person, org, place, bill, program) — never a pronoun, never a whole sentence.\nOnly relationships the text states; do NOT infer, generalize, or invent. Max 20 lines. If there are none, output exactly: NONE\n\nTEXT:\n${String(text || '').slice(0, 14000)}`
   }];
 }
 
@@ -59,7 +59,10 @@ async function extractTriples(text, deps = {}) {
     await streamChat({
       model: deps.MODEL || MODEL,
       messages: buildPrompt(txt),
-      options: { temperature: 0.2, top_p: 0.9, num_ctx: 8192, num_predict: 200 },
+      // BIGGER BITE: read up to ~14k chars (was 2k) and allow up to 20 triples (was 6) with room to
+      // emit them. think:false → the reasoning-capable graph model outputs triples directly.
+      options: { temperature: 0.2, top_p: 0.9, num_ctx: 32768, num_predict: 900 },
+      think: false,
       onToken: (tok) => { raw += tok; }
     });
     return raw;

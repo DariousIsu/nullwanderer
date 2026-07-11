@@ -56,10 +56,19 @@ const EXTRACTION = ['memory', 'personal_facts', 'preferences', 'importance', 'co
   'convo_state', 'reflection', 'rumination', 'gmeet', 'media_cc'];
 const VOICE = ['voice', 'byline', 'self_narrative', 'self_dialogue', 'play_session', 'heartbeat'];
 const readSrc = (n) => fs.readFileSync(path.join(libDir, n + '.js'), 'utf8');
-const missingExtract = EXTRACTION.filter(n => !/extractionModel\(\)/.test(readSrc(n)));
+// Extraction modules route through a CLOUD extraction slot — either the shared extractionModel() or
+// one of the per-stage mix-and-match slots (claim/graph/importance), which themselves default to
+// extractionModel(). The point is "off-GPU cloud", not one specific function name.
+const missingExtract = EXTRACTION.filter(n => !/(?:extraction|claim|graph|importance)Model\(\)/.test(readSrc(n)));
 const missingVoice = VOICE.filter(n => !/frontModel\(\)/.test(readSrc(n)));
-ok(missingExtract.length === 0, `all extraction modules route to extractionModel (missing: ${missingExtract.join(', ') || 'none'})`);
+ok(missingExtract.length === 0, `all extraction modules route to a cloud extraction slot (missing: ${missingExtract.join(', ') || 'none'})`);
 ok(missingVoice.length === 0, `all voice modules route to frontModel (missing: ${missingVoice.join(', ') || 'none'})`);
+
+// The per-stage slots must STILL resolve to cloud (off-GPU) — splitting extraction can't silently
+// pin a stage back on the local card. (Each falls back to extractionModel() when its env is unset.)
+const cloudy = (m) => /(?:-cloud|:cloud)$/.test(m);
+ok(cloudy(config.claimModel()) && cloudy(config.graphModel()) && cloudy(config.importanceModel()),
+  `per-stage extraction models all resolve cloud (claim=${config.claimModel()}, graph=${config.graphModel()}, importance=${config.importanceModel()})`);
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
