@@ -361,6 +361,46 @@ async function readSerpResults() {
   } catch { return []; }
 }
 
+// Google's "AI Overview" — the synthesized answer box at the top of a SERP (often the richest,
+// most directly-useful content: names/emails/phones/structured facts + citations). It's dropped
+// if we only scrape the organic blue links. Google's class names rotate, so we anchor on the
+// DURABLE visible "AI Overview" LABEL and climb to its content block (with a couple of attribute
+// selectors tried first as a fast path). Returns cleaned text, or '' if there's no AI Overview.
+async function aiOverview() {
+  if (!page) return '';
+  try {
+    return await withTimeout(page.evaluate(() => {
+      const clean = (s) => String(s || '').replace(/\s+/g, ' ').replace(/^\s*AI Overview\s*/i, '').replace(/\bShow more\b\s*$/i, '').trim();
+      // fast path — stable-ish attributes when present
+      for (const sel of ['[data-subtree="aio"]', '[aria-label*="AI Overview" i]', 'div[data-attrid*="Overview" i]']) {
+        const el = document.querySelector(sel);
+        if (el && (el.innerText || '').trim().length > 100) return clean(el.innerText);
+      }
+      // durable fallback — the visible "AI Overview" label → its nearest substantial container
+      const labels = Array.from(document.querySelectorAll('h1,h2,h3,div,span,strong,a'))
+        .filter(el => (el.textContent || '').trim() === 'AI Overview');
+      for (const lab of labels) {
+        let node = lab;
+        for (let i = 0; i < 7 && node.parentElement; i++) {
+          node = node.parentElement;
+          const t = (node.innerText || '').trim();
+          if (t.length > 150) return clean(t);
+        }
+      }
+      return '';
+    }), 3000, '');
+  } catch { return ''; }
+}
+
+// The AI Overview streams in a beat AFTER the results, so a read() right after navigation would
+// miss it. Wait (bounded) for the "AI Overview" label to appear — resolves the instant it does.
+async function waitForAiOverview(ms = 3000) {
+  if (!page) return;
+  try {
+    await withTimeout(page.waitForFunction(() => /(^|\W)AI Overview(\W|$)/.test(document.body ? document.body.innerText : ''), { timeout: ms, polling: 250 }), ms + 200, null);
+  } catch {}
+}
+
 // Read the current page: capped body text + a handle list of interactive elements.
 // Syncs to the front tab first, so <web-read/> shows whatever is actually open in
 // her window right now (including a chat Lucas just opened), not a stale page.
@@ -370,10 +410,12 @@ async function read() {
   try {
     let text = null;
     if (SERP_RE.test(page.url())) {
-      const results = await readSerpResults();
-      if (results.length) {
-        text = ('Search results:\n' + results.map((r, i) => `${i + 1}. ${r.title}${r.snippet ? ' — ' + r.snippet : ''}`).join('\n')).slice(0, MAX_TEXT);
-      }
+      await waitForAiOverview();   // it streams in after the results — give it a bounded beat
+      const [aio, results] = await Promise.all([aiOverview(), readSerpResults()]);
+      const parts = [];
+      if (aio) parts.push('AI Overview:\n' + (aio.length > 6000 ? aio.slice(0, 6000) + '…' : aio));
+      if (results.length) parts.push('Search results:\n' + results.map((r, i) => `${i + 1}. ${r.title}${r.snippet ? ' — ' + r.snippet : ''}`).join('\n'));
+      if (parts.length) text = parts.join('\n\n').slice(0, MAX_TEXT);
     }
     if (text == null) text = (await page.innerText('body', { timeout: 5000 }).catch(() => '')).replace(/\n{3,}/g, '\n\n').slice(0, MAX_TEXT);
     registry = {}; counter = { L: 0, B: 0, I: 0, C: 0 };
