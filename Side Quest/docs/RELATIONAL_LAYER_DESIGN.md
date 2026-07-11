@@ -87,6 +87,7 @@ subjective.db  (separate SQLite, like the forecast stores)
 - The **Owner core-memory block** (the paused identity fix) should be built as **person-model v0** — the first brick, forward-compatible with this layer, *not* a throwaway card.
 - Then: subjective.db schema → observation capture (from chat/meetings) → reflection loop → calibration loop.
 - **Pilot scope:** Zoe's model of Lucas + Zoe's model of herself (the self-model is already a person-model of herself — unify under the same shape).
+- **First testbed — the EMOTIONAL MATRIX** (`docs/EMOTIONAL_MATRIX_DESIGN.md`, Lucas 2026-07-10): before forecasting how *Lucas* reacts, build the smaller instrument for how *she* reacts — the same reaction-mapping machinery (appraisal → fast calibrated predictors → VAD/PAD affect state → falsifiable calibration loop) pointed inward, sitting beneath `lib/mood.js` (which becomes its voice). Prove the algorithms on one subject with fast feedback, then lift into the multi-subject relational layer.
 
 ---
 
