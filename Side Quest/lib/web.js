@@ -56,7 +56,10 @@ const CHROME_PATHS = [
 // co-watch. (DDG was dropped: it null-routed this IP after the search lane over-pinged it.
 // Rapid programmatic search lives in the SEPARATE hidden stealth lane, lib/search_lane.js.)
 const SEARCH_URL = (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}`;
-const MAX_TEXT = 4000;
+// How much page text a <web-read/> hands back. This is her PRIMARY window into a page, so it's
+// generous by default and tunable up via ZOE_WEB_READ_CHARS without a code change. (Cost: the
+// read is fed to cognition as a tool follow-up, so bigger = more tokens/turn — cloud handles it.)
+const MAX_TEXT = Math.max(2000, Number(process.env.ZOE_WEB_READ_CHARS) || 16000);
 const MAX_INTERACTIVES = 35;
 const NAV_TIMEOUT = 20000;
 
@@ -783,8 +786,56 @@ async function dialog(action, promptText) {
   } catch (err) { return { ok: false, reason: err.message }; }
 }
 
+// --- precise extraction ---
+// Read one element by CSS selector: its ATTRIBUTE (attr=…) or, by default, its text. For
+// pulling an exact value the capped page text / handle list doesn't surface (a link's href,
+// a data-* value, a specific cell). Returns the first match.
+async function getEl(selector, attr) {
+  if (!page) return { ok: false, reason: 'no page open' };
+  const sel = String(selector || '').trim();
+  if (!sel) return { ok: false, reason: 'no selector' };
+  try {
+    const loc = page.locator(sel).first();
+    if (!(await withTimeout(loc.count(), 1500, 0))) return { ok: false, reason: `no element matches ${sel}` };
+    let value;
+    if (attr) value = await loc.getAttribute(attr, { timeout: 3000 });
+    else value = (await loc.innerText({ timeout: 3000 }).catch(() => '')) || (await loc.textContent().catch(() => '')) || '';
+    value = (value == null ? '' : String(value)).replace(/\s+/g, ' ').trim();
+    return { ok: true, selector: sel, attr: attr || null, value: value.length > 2000 ? value.slice(0, 2000) + '…' : value };
+  } catch (err) { return { ok: false, reason: `get ${sel} failed: ${err.message}` }; }
+}
+
+// --- run JS on the page (inspection / structured extraction / debugging) ---
+// Evaluates the given EXPRESSION in the page and returns the result (objects JSON-stringified,
+// else coerced to string), bounded. In-page errors come back as "ERR: …" instead of throwing.
+async function evalJs(expr) {
+  if (!page) return { ok: false, reason: 'no page open' };
+  const code = String(expr || '').trim();
+  if (!code) return { ok: false, reason: 'no expression' };
+  try {
+    const wrapped = `(() => { try { const __v = (${code}); return (__v !== null && typeof __v === 'object') ? JSON.stringify(__v) : String(__v); } catch (e) { return 'ERR: ' + e.message; } })()`;
+    const val = await withTimeout(page.evaluate(wrapped), 6000, null);
+    const s = val == null ? '' : String(val);
+    return { ok: true, value: s.length > 2000 ? s.slice(0, 2000) + '…' : s };
+  } catch (err) { return { ok: false, reason: `eval failed: ${err.message}` }; }
+}
+
+// --- drag and drop ---
+// Drag one handle onto another (reorder, sliders, file-less DnD widgets).
+async function drag(from, to) {
+  if (!page) return { ok: false, reason: 'no page open' };
+  const a = resolve(from), b = resolve(to);
+  if (!a) return { ok: false, reason: `no source ${from}. <web-read/> first.` };
+  if (!b) return { ok: false, reason: `no target ${to}. <web-read/> first.` };
+  try {
+    await a.dragTo(b, { timeout: 8000 });
+    registry = {};
+    return { ok: true, from: (from || '').toUpperCase(), to: (to || '').toUpperCase(), url: page.url() };
+  } catch (err) { return { ok: false, reason: `drag ${from}→${to} failed: ${err.message}` }; }
+}
+
 // --- tags ---
-const WEB_TAG_RE = /<(web-open|web-read|web-see|web-deepen|web-scroll|web-click-text|web-click-xy|web-click|web-type|web-press|web-clear|web-hover|web-select|web-check|web-uncheck|web-upload|web-submit|web-forward|web-reload|web-tab-new|web-tab-list|web-tab-switch|web-tab-close|web-wait|web-dialog|web-back|web-close|web-chat|web-watch|web-unwatch)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
+const WEB_TAG_RE = /<(web-open|web-read|web-see|web-deepen|web-scroll|web-click-text|web-click-xy|web-click|web-type|web-press|web-clear|web-hover|web-select|web-check|web-uncheck|web-upload|web-submit|web-forward|web-reload|web-tab-new|web-tab-list|web-tab-switch|web-tab-close|web-wait|web-dialog|web-get|web-eval|web-drag|web-back|web-close|web-chat|web-watch|web-unwatch)\s*([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/gi;
 const ATTR_RE = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
 
 function parseAttrs(s) { const o = {}; if (!s) return o; let m; ATTR_RE.lastIndex = 0; while ((m = ATTR_RE.exec(s)) !== null) o[m[1]] = m[2] ?? m[3] ?? m[4]; return o; }
@@ -831,6 +882,9 @@ async function dispatch({ tag, attrs = {}, body = '' }) {
     case 'web-tab-close': return closeTab(body || attrs.index || attrs.i);
     case 'web-wait': return waitFor(body || attrs.selector || attrs.ms || attrs.for);
     case 'web-dialog': return dialog(body || attrs.action, attrs.text || attrs.value);
+    case 'web-get': return getEl(attrs.selector || attrs.sel || body, attrs.attr || attrs.attribute);
+    case 'web-eval': return evalJs(body || attrs.js || attrs.expr);
+    case 'web-drag': return drag(attrs.from || attrs.source, attrs.to || attrs.target);
     case 'web-back': return back();
     case 'web-close': return close();
     case 'web-chat': return chatSend(body, attrs.speaker || attrs.to || attrs.name);
@@ -868,6 +922,11 @@ TABS & TIMING:
   <web-tab-new>url</web-tab-new>  <web-tab-list/>  <web-tab-switch>2</web-tab-switch>  <web-tab-close>2</web-tab-close>
   <web-wait>2000</web-wait>  or  <web-wait selector=".results"/>   — pause N ms, or wait for something to appear
   <web-dialog>accept</web-dialog>  /  <web-dialog>dismiss</web-dialog>   — answer a popup alert/confirm (add text="…" for a prompt)
+
+PRECISE EXTRACTION & INSPECTION (when <web-read/>'s text isn't enough):
+  <web-get selector="a.headline" attr="href"/>   — read ONE element's attribute (omit attr= for its text)
+  <web-eval>document.querySelectorAll('.price').length</web-eval>   — run a JS expression on the page and get the result back
+  <web-drag from="L1" to="L5"/>                   — drag one handle onto another (reorder, sliders, drop targets)
 Always <web-read/> after opening, deepening, scrolling, clicking, hovering, waiting, or switching tabs before you act again — handles are only valid from the most recent read.
 Go DEEP, not wide: after a search, <web-deepen/> into the best result and actually read it; <web-scroll/> through long pages instead of skimming the top. Take notes as you go with <file-write>/<file-append>.
 
@@ -889,7 +948,7 @@ module.exports = {
   startRecording, stopRecording, isRecording, cookies,
   chatSend, chatWatch, chatUnwatch,
   press, clearField, hover, selectOption, setChecked, uploadFile, submit, clickAt,
-  forward, reload, listTabs, newTab, switchTab, closeTab, waitFor, dialog,
+  forward, reload, listTabs, newTab, switchTab, closeTab, waitFor, dialog, getEl, evalJs, drag,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR,
   DOWNLOADS_DIR, downloadDest
 };
