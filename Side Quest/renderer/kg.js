@@ -338,6 +338,7 @@ function drawAbsorbs(ctx) {
 const activities = [];   // in-view graph-space gestures {kind, startAt, dur, a, b, col, epistemic}
 const weather = [];      // off-screen flares {x, y, startAt, dur, mag, col} in device px (drawn by drawFarField)
 const ACT_CAP = 64;
+let superNovaHoldUntil = 0;   // brief window after a supernova fly during which follow won't re-center (holds on the explosion)
 function kgFindNode(name) { if (!G || name == null) return null; return ((G.graphData().nodes) || []).find(n => n.id === name) || null; }
 // project a node to device-pixel screen coords + whether it's inside the viewport (graph2ScreenCoords → CSS px)
 function kgProject(n, cv) {
@@ -362,10 +363,20 @@ function fieldFlare(evt, proj) {
 // (e.g. you're following the subconscious elsewhere) → a big far-field weather flare so it still registers.
 function superNova(gx, gy, count) {
   if (prefersReducedMotion || !G) return;
+  const mag = Math.min(3.2, 1.2 + Math.log2((count || 2)));
+  const push = () => { activities.push({ kind: 'supernova', startAt: performance.now(), dur: 1500, gx, gy, mag }); if (activities.length > ACT_CAP) activities.shift(); };
+  // COUPLE with the subconscious: in Follow mode a big pull FLIES the camera to the explosion (following her
+  // = being taken to where data is erupting), and holds there ~1.4s so the next walk-step doesn't yank away.
+  if (follow) {
+    try { G.centerAt(gx, gy, 1100); if (G.resumeAnimation) G.resumeAnimation(); } catch (e) {}
+    superNovaHoldUntil = performance.now() + 1400;
+    push();
+    return;
+  }
+  // Not following: full burst if the core is in view, else a big far-field weather flare where it landed.
   const cv = document.querySelector('#graph canvas');
   const proj = cv ? kgProject({ x: gx, y: gy }, cv) : null;
-  const mag = Math.min(3.2, 1.2 + Math.log2((count || 2)));
-  if (proj && proj.inView) { activities.push({ kind: 'supernova', startAt: performance.now(), dur: 1500, gx, gy, mag }); if (activities.length > ACT_CAP) activities.shift(); }
+  if (proj && proj.inView) push();
   else fieldFlare({ db: 'sidequest', anchor: 'supernova', count: (count || 2) * 4 }, proj);
 }
 function drawSupernova(ctx, A, p) {
@@ -987,8 +998,9 @@ function onFocusMove(p) {
   // far-field weather. This makes the panel visibly react to what she's doing even before the full kg:activity
   // feed lands. (In Follow mode the growth pulse below still fires too — complementary.)
   try { onActivity({ db: 'echo', kind: 'node.enrich', anchor: p.anchor, count: 1 }); } catch (e) {}
-  // growth tier: re-center on the exact node, then pulse (coalesced through the metabolism core)
-  if (follow && p.anchor !== submitted) focus(p.anchor, { query: p.canonical || p.anchor, soft: true }).then(() => ingestPulse({ tier: 'growth', anchor: p.anchor, count: 1 })).catch(() => {});
+  // growth tier: re-center on the exact node, then pulse (coalesced through the metabolism core). SKIP the
+  // re-center briefly after a supernova so the camera holds on the explosion it just flew to.
+  if (follow && p.anchor !== submitted && performance.now() >= superNovaHoldUntil) focus(p.anchor, { query: p.canonical || p.anchor, soft: true }).then(() => ingestPulse({ tier: 'growth', anchor: p.anchor, count: 1 })).catch(() => {});
 }
 // curation metabolism: frequent programmatic curation + the daily clean sweep arrive here. Inert until the
 // host emits kg:curation-move — same graceful-degrade pattern as follow. Payload {tier, kind, count, items?}.
@@ -1027,4 +1039,4 @@ try { setInterval(() => { loadShortTerm(); }, 5000); window.__kgRefreshST = () =
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-10x: faster 5s poll + SUPERNOVA on bulk pulls (trickle=sparks, big batch=one explosion; routes in-view or far-field weather)');
+console.info('[kg] surface build 2026-07-10y: supernova FLIES the follow camera to big pulls (holds ~1.4s) + 5s poll');
