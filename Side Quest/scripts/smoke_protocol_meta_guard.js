@@ -26,7 +26,10 @@ for (const s of loop) ok(isProtocolMetaEcho(s), `FLAGS loop utterance: "${s.slic
 // --- MUST FLAG: the contaminated reflections (self-notes that seeded re-injection) ---
 const reflections = [
   'LEARNED: The "logic gate" for breaking silence. Three strict paths: specific conversation phrases, a precise reading format, or absolute silence. No meta-commentary.',
-  'Remember: Logic gate for non-prompted turns: 1. History: Use specific phrases. 2. Research: substance format.'
+  'Remember: Logic gate for non-prompted turns: 1. History: Use specific phrases. 2. Research: substance format.',
+  'The "breaking silence" protocol is a hard constraint on phrasing and structure.',                              // "the"-less variant
+  'A rigid set of syntactic constraints for breaking silence, distinguishing between history and research.',
+  'A rigid protocol for breaking silence via specific phrasings ("I keep thinking...").'
 ];
 for (const s of reflections) ok(isProtocolMetaEcho(s), `FLAGS contaminated reflection: "${s.slice(0, 40)}…"`);
 

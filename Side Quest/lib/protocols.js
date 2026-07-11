@@ -280,17 +280,19 @@ function executeAction({ protocol, action, userName }) {
 // predicate flags such a rule-restatement so it can be treated as SILENCE (heartbeat) and NEVER stored as a
 // reflection. Deliberately specific — the markers below never occur in a genuine surfacing or a real learning.
 const PROTOCOL_META_RE = new RegExp([
-  '\\b(?:hard\\s+)?logic gate\\b',
-  'break(?:ing)? the silence',
-  'non-?prompted turns?',
+  '\\blogic gate\\b',
   'meta-?commentary',
+  'non-?prompted turns?',
   '\\bsay\\b\\s*tag', '</?say>',
-  'internaliz(?:e|ed) (?:these|the|this) (?:rules|logic|instructions|protocol|gate)',
+  'break(?:ing|s)?\\s+(?:the\\s+)?silence',        // break / breaking / breaks (the) silence
+  'silence\\s+(?:protocol|gate|rule)',
+  '(?:protocol|gate|rules?|constraints?|format)\\s+for\\s+break(?:ing)?\\s+silence',
+  'specific phrasing',
+  '(?:three|specific)\\s+(?:phrases|phrasings|paths)',
+  'internaliz(?:e|ed) (?:these|the|this|a) (?:rigid |strict )?(?:rules|logic|instructions|protocol|gate|set|constraints?)',
   'integrated these (?:rules|instructions)',
   'these (?:rules|instructions) are now',
-  '(?:core |hard )?protocol for (?:handling|breaking)',
   'for handling silence',
-  'three (?:specific )?(?:phrases|paths)',
   '(?:source ?1|source ?2)\\b'
 ].join('|'), 'i');
 function isProtocolMetaEcho(text) {
