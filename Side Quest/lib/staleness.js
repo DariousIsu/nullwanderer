@@ -52,4 +52,37 @@ function partition(facts, now) {
   return { fresh, stale };
 }
 
-module.exports = { ttlDays, ageDays, isStale, partition, TTL_DAYS, _VOLATILE_RE, _PERMANENT_RE };
+// --- CONTINUOUS FRESHNESS (Phase A4) -----------------------------------------
+// Unlike isStale (a BINARY re-verify trigger), freshness is a RANKING WEIGHT in (0,1]: 1 = brand-new,
+// decaying by half-life toward a FLOOR — "stale becomes HISTORICAL", never deleted, never 0. It's a
+// READ-TIME function (compute when surfacing/ranking; no sweep, always current). Volatile things
+// (news/events) decay fast; permanent facts never. `at` accepts an epoch (SECONDS or ms — heuristic) or
+// an ISO/parseable date string; `now` = ms epoch (injected, so tests are stable).
+const HALF_LIFE_DAYS = { volatile: 10, stable: 365, permanent: null };   // null → no decay (always ~1)
+
+function _toMs(at) {
+  if (at == null) return NaN;
+  if (typeof at === 'number') return at < 1e12 ? at * 1000 : at;   // <1e12 → epoch seconds; else ms
+  const p = Date.parse(at);
+  return Number.isFinite(p) ? p : NaN;
+}
+
+function freshness(at, now, { halfLifeDays = HALF_LIFE_DAYS.volatile, floor = 0.05 } = {}) {
+  if (halfLifeDays == null) return 1;                 // permanent → always fresh
+  const ms = _toMs(at);
+  if (!Number.isFinite(ms)) return floor;             // undatable → historical floor (not dropped)
+  const ageD = (now - ms) / 86400000;
+  if (ageD <= 0) return 1;                            // future / just-now → fully fresh
+  const f = Math.pow(0.5, ageD / Math.max(0.01, Number(halfLifeDays)));
+  return Math.max(floor, Math.min(1, f));
+}
+
+// Half-life (days) for a fact/event from its text class — reuses ttlDays' classifier so freshness and the
+// binary TTL agree on what's volatile vs permanent. Returns null (no decay) for permanent facts.
+function halfLifeFor(text) {
+  const ttl = ttlDays(text);
+  if (ttl == null) return HALF_LIFE_DAYS.permanent;
+  return ttl === TTL_DAYS.volatile ? HALF_LIFE_DAYS.volatile : HALF_LIFE_DAYS.stable;
+}
+
+module.exports = { ttlDays, ageDays, isStale, partition, freshness, halfLifeFor, TTL_DAYS, HALF_LIFE_DAYS, _VOLATILE_RE, _PERMANENT_RE };

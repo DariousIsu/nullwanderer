@@ -646,6 +646,29 @@ app.whenReady().then(() => {
     finally { auditRunning = false; }
   };
   setInterval(() => { maybeRunAudit().catch(() => {}); }, AUDIT_CHECK_MS).unref?.();
+  // PHASE A3 — EVENT AGING SWEEP (the state-flip, tied to the pulse). A 'scheduled' event whose WORLD-time
+  // (occurred_at) has passed flips to 'unconfirmed_past' — a QUESTION to verify ("should have happened"),
+  // NEVER an assertion it occurred; a source (news/reconcile) later closes it to occurred|rescheduled|
+  // cancelled. CATCH-UP SAFE: Echo flips on occurred_at<now regardless of when it last ran, so an offline
+  // gap self-heals on the next tick. Same master switch as curation; cheap (partial index on the flip).
+  const AGING_CHECK_MS = (parseFloat(process.env.ZOE_AGING_CHECK_MIN) || 60) * 60 * 1000;
+  let agingRunning = false;
+  const maybeRunEventAging = async () => {
+    if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_CURATION_ENABLED || '').trim())) return;
+    if (agingRunning) return;
+    if (!echoSuit || !echoSuit.connected) return;
+    if (Date.now() - parseInt(db.getMeta('last_event_aging_at') || '0', 10) < AGING_CHECK_MS) return;
+    agingRunning = true;
+    db.setMeta('last_event_aging_at', String(Date.now()));
+    try {
+      const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_event_aging', args: {} });
+      let rep = null; try { rep = JSON.parse(ar && ar.text); } catch {}
+      if (rep && rep.flipped > 0) console.log(`[aging] ${rep.flipped} scheduled event(s) past their time → unconfirmed_past (queued to verify)`);
+    } catch (e) { console.error('[aging] event-aging sweep failed:', e.message); }
+    finally { agingRunning = false; }
+  };
+  setInterval(() => { maybeRunEventAging().catch(() => {}); }, AGING_CHECK_MS).unref?.();
+  setTimeout(() => { maybeRunEventAging().catch(() => {}); }, 120000).unref?.();   // catch-up kick ~2min after boot
   // F2 GATE-LESS GROUNDED AUTO-PROMOTE LANE — the landing gap closed. Staged proposals used to sit
   // unpromoted (operator-gated); this drains the GROUNDED promote-band (calibrated conf >= floor + a real
   // citation) into civic_graph autonomously, in bounded chunks until the queue empties. Every promotion is

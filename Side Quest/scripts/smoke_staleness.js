@@ -34,5 +34,20 @@ const part = s.partition([
 ], NOW);
 ok(part.stale.length === 1 && part.fresh.length === 2, 'partition splits stale (1) vs fresh/permanent (2)');
 
+// ── CONTINUOUS FRESHNESS (Phase A4): a decaying ranking weight, never 0, never deleted ──
+ok(s.freshness(NOW, NOW, { halfLifeDays: 10 }) === 1, 'brand-new → freshness 1');
+ok(s.freshness(NOW + 86400000, NOW, { halfLifeDays: 10 }) === 1, 'future → 1 (fully fresh)');
+ok(Math.abs(s.freshness(NOW - 10 * 86400000, NOW, { halfLifeDays: 10 }) - 0.5) < 1e-9, 'one half-life old → 0.5');
+ok(Math.abs(s.freshness(NOW - 20 * 86400000, NOW, { halfLifeDays: 10 }) - 0.25) < 1e-9, 'two half-lives → 0.25');
+const old = s.freshness(NOW - 3650 * 86400000, NOW, { halfLifeDays: 10 });
+ok(old > 0 && old <= 0.05, 'ancient → decays to the FLOOR (0.05), never 0 — stale becomes historical, not deleted');
+ok(s.freshness(NOW - 9999 * 86400000, NOW, { halfLifeDays: null }) === 1, 'permanent (null half-life) → always fresh, no decay');
+ok(s.freshness(null, NOW) === 0.05, 'undatable → historical floor (still surfaces, weighted low)');
+// accepts epoch seconds (Echo occurred_at) as well as ms
+ok(Math.abs(s.freshness(Math.floor((NOW - 10 * 86400000) / 1000), NOW, { halfLifeDays: 10 }) - 0.5) < 1e-3, 'accepts epoch SECONDS (Echo occurred_at) → same 0.5 at one half-life');
+// half-life agrees with the binary classifier
+ok(s.halfLifeFor('the current CEO is X') === s.HALF_LIFE_DAYS.volatile, 'halfLifeFor: volatile text → short half-life');
+ok(s.halfLifeFor('founded in 1973') === null, 'halfLifeFor: permanent text → no decay');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
