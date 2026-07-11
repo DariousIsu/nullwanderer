@@ -24,7 +24,10 @@ shared-browser tags (`browse-read`/`click`/`scroll` on his active tab) pass thro
 Her visible browser defaults to **Google** for a plain-word `<web-open>` (a normal-browser
 feel; DDG was dropped after it null-routed this IP — see §1a). `read()` returns page text
 (cap **`MAX_TEXT` = 16 000 chars**, tunable via env **`ZOE_WEB_READ_CHARS`**, floor 2 000)
-plus an interactive-element map (`MAX_INTERACTIVES` = 35 handles).
+plus an interactive-element map (**`MAX_INTERACTIVES` = 70 handles**, tunable via env
+**`ZOE_WEB_MAX_HANDLES`**, floor 20 — raised from 35 so nav/footer chrome no longer eats the
+budget before the real content links on dense pages; the 7 s collection deadline is the backstop).
+Handles are typed: `[L#]` links, `[B#]` buttons, `[I#]` inputs, `[C#]` clickable SPA cards/tiles.
 
 On a **Google SERP**, `read()` composes **`AI Overview:` + `Search results:`** — the AI
 Overview box (the synthesized answer: names/emails/phones/structured facts + citations) was

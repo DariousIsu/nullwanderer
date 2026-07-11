@@ -60,7 +60,11 @@ const SEARCH_URL = (q) => `https://www.google.com/search?q=${encodeURIComponent(
 // generous by default and tunable up via ZOE_WEB_READ_CHARS without a code change. (Cost: the
 // read is fed to cognition as a tool follow-up, so bigger = more tokens/turn — cloud handles it.)
 const MAX_TEXT = Math.max(2000, Number(process.env.ZOE_WEB_READ_CHARS) || 16000);
-const MAX_INTERACTIVES = 35;
+// How many interactive handles a <web-read/> can surface. 35 was too tight on dense pages — nav
+// and footer chrome ate the budget before the real content links, so she'd silently "not see" a
+// button past #35. Raised + made tunable (like MAX_TEXT). The 7s collection deadline below is the
+// real backstop against a runaway page, so a higher ceiling is safe.
+const MAX_INTERACTIVES = Math.max(20, Number(process.env.ZOE_WEB_MAX_HANDLES) || 70);
 const NAV_TIMEOUT = 20000;
 // Auto-PDF capture: PDFs she navigates to / finds on a page are fetched to DOWNLOADS_DIR (with her
 // session cookies) and picked up by main.js's downloads-ingest watcher. Bounded + deduped so a
@@ -1018,7 +1022,7 @@ async function dispatch({ tag, attrs = {}, body = '' }) {
 function buildPromptBlock() {
   return `YOUR OWN BROWSER — a separate browser window you fully control (not Lucas's). Use it for your own web work: research, reading, looking things up, multi-step tasks. It does NOT touch his tabs.
   <web-open>a URL or search terms</web-open>   — open a page (plain words = a web search)
-  <web-read/>                                   — read the current page's TEXT; interactive elements come back as [L#]/[B#]/[I#] handles
+  <web-read/>                                   — read the current page's TEXT; interactive elements come back as handles: [L#] links, [B#] buttons, [I#] inputs, [C#] clickable cards/tiles (SPA widgets with no <a>/<button> — click them like any handle)
   <web-see>optional question</web-see>          — actually SEE the current page (a screenshot through your vision): images, charts, photos, layout — what the text alone can't tell you. Add a question to focus it. <web-see scroll="down">…</web-see> scrolls first to capture below the fold; say "full"/"whole" (in the question or scroll=) to grab the ENTIRE page in one shot.
   <web-deepen/>                                  — on a search-results page, open the TOP result and land on the real article (don't stop at the results list)
   <web-scroll/>                                  — scroll down to load/read MORE of a long page or feed, then <web-read/> again
