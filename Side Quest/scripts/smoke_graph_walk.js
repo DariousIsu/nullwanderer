@@ -92,6 +92,25 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   const grownNoArm = await G.growAround({ mention: 'Nuclear Innovation Alliance', kind: 'missing', object: null }, { web, cloud: dossierCloud, dispatch });
   ok(grownNoArm.built === true && !calls.some(c => c[0] === 'promote_grounded_one'), 'growAround(disarmed): no promoteOne → pure propose-only, never promotes');
 
+  // --- MULTI-CITE grounding quality: an edge cited to TWO INDEPENDENT sources calibrates ABOVE the 0.90
+  //     floor (0.94, lands); a one-source edge stays at 0.88 (parked for corroboration). This is the C2 lift. ---
+  calls.length = 0;
+  const twoSources = [
+    { text: 'The Nuclear Innovation Alliance works with Congress on advanced reactors.', url: 'https://en.wikipedia.org/wiki/NIA' },
+    { text: 'NIA advocates for the Advanced Reactor Demonstration Program.', url: 'https://ballotpedia.org/NIA' }
+  ];
+  const multiCiteCloud = async () => JSON.stringify({ entity_type: 'organization', summary: 'A nuclear policy nonprofit working with Congress.', related: [
+    { name: 'Advanced Reactor Demonstration Program', type: 'concept', relation: 'advocates_for', sources: ['S1', 'S2'] },   // 2 independent families → 0.94
+    { name: 'Lone Cite Co', type: 'organization', relation: 'linked_to', sources: ['S1'] }                                    // 1 source → 0.88
+  ] });
+  await G.growAround({ mention: 'Nuclear Innovation Alliance', kind: 'missing', object: null }, { web: async () => twoSources, cloud: multiCiteCloud, dispatch });
+  const relCalls = calls.filter(c => c[0] === 'propose_relation');
+  const twoCite = relCalls.find(c => c[1].target_name === 'Advanced Reactor Demonstration Program');
+  const oneCite = relCalls.find(c => c[1].target_name === 'Lone Cite Co');
+  ok(twoCite && twoCite[1].confidence >= 0.90, 'growAround(multi-cite): a TWO-independent-source edge calibrates >= 0.90 floor (0.94, lands)');
+  ok(oneCite && oneCite[1].confidence > 0.80 && oneCite[1].confidence < 0.90, 'growAround(single-cite): a one-source edge stays below floor (0.88, parked for corroboration)');
+  ok(twoCite && JSON.parse(twoCite[1].relation_metadata).source_set.length === 2, 'growAround(multi-cite): the edge carries BOTH independent urls in source_set');
+
   // --- growAround a THIN anchor: does NOT re-propose an existing neighbour edge ---
   calls.length = 0;
   const thinCloud = async () => JSON.stringify({ entity_type: 'organization', summary: 'x', related: [{ name: 'Existing Ally', type: 'organization', relation: 'allied_with', source: 'S1' }, { name: 'New Partner', type: 'organization', relation: 'partners_with', source: 'S1' }] });
@@ -200,25 +219,28 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   ok(eGrown.built === false && eGrown.held === 1, 'growAround: a missing anchor with no citable existence is HELD, not minted');
   ok(!ecalls.some(c => c[0] === 'propose_entity'), 'growAround: no propose_entity for an uncitable object (no hallucinated node)');
 
-  // --- fetchLayeredSources (Slice 0.5): WEB-first → local corpus → search, every source cited (url) ---
+  // --- fetchLayeredSources: Wikipedia PRIMARY + INDEPENDENT web corroborators (dedupe mirrors); corpus last ---
   const okPage = async (url) => ({ ok: true, url, title: 'T', text: 'x'.repeat(500) });
   const badPage = async (url) => ({ ok: false, url, error: 'HTTP 429' });          // throttled/blocked live fetch
   const wiki = (n) => 'https://en.wikipedia.org/wiki/' + String(n).replace(/\s+/g, '_');
   const kb = async () => [{ source: 'echo:wikipedia', content: 'a corpus passage about the entity' }];
-  const search = async () => ({ results: [{ title: 'r', snippet: 'a web snippet', url: 'https://ex.com/r' }] });
+  const searchIndep = async () => ({ results: [{ title: 'r', snippet: 'an independent web snippet', url: 'https://ballotpedia.org/r' }] });
+  const searchWikiMirror = async () => ({ results: [{ title: 'w', snippet: 'a wiki mirror', url: 'https://en.wikipedia.org/wiki/Mirror' }] });
 
-  const s1 = await G.fetchLayeredSources('James Inhofe', { fetchPage: okPage, recallKnowledge: kb, webSearch: search, wikiUrl: wiki });
-  ok(s1.length === 1 && s1[0].source === 'web:wikipedia' && /wikipedia\.org\/wiki\/James_Inhofe/.test(s1[0].url), 'fetchLayeredSources: LIVE page FIRST (web:wikipedia + real url)');
-  const s2 = await G.fetchLayeredSources('James Inhofe', { fetchPage: badPage, recallKnowledge: kb, webSearch: search, wikiUrl: wiki });
-  ok(s2.length === 1 && s2[0].source === 'echo:wikipedia' && !!s2[0].url && !!s2[0].text, 'fetchLayeredSources: live miss → LOCAL corpus (cited, url synthesized)');
-  const s3 = await G.fetchLayeredSources('X', { fetchPage: badPage, recallKnowledge: async () => [], webSearch: search, wikiUrl: wiki });
-  ok(s3.length === 1 && s3[0].source === 'web:search' && s3[0].url === 'https://ex.com/r', 'fetchLayeredSources: live+corpus miss → web search (last resort)');
+  const s1 = await G.fetchLayeredSources('James Inhofe', { fetchPage: okPage, recallKnowledge: kb, webSearch: searchIndep, wikiUrl: wiki });
+  ok(s1.length === 2 && s1[0].source === 'web:wikipedia' && s1.some(x => x.source === 'web:search' && /ballotpedia/.test(x.url)), 'fetchLayeredSources: wiki PRIMARY + an INDEPENDENT web corroborator (2 sources → corroboration possible)');
+  const s1b = await G.fetchLayeredSources('James Inhofe', { fetchPage: okPage, recallKnowledge: kb, webSearch: searchWikiMirror, wikiUrl: wiki });
+  ok(s1b.length === 1 && s1b[0].source === 'web:wikipedia', 'fetchLayeredSources: a Wikipedia-MIRROR web result is DEDUPED (not counted as independent — anti-echo-chamber)');
+  const s2 = await G.fetchLayeredSources('X', { fetchPage: badPage, recallKnowledge: kb, webSearch: searchIndep, wikiUrl: wiki });
+  ok(s2.length === 1 && s2[0].source === 'web:search', 'fetchLayeredSources: wiki miss → independent web source (layer 2, before corpus)');
+  const s3 = await G.fetchLayeredSources('X', { fetchPage: badPage, recallKnowledge: kb, webSearch: async () => ({ results: [] }), wikiUrl: wiki });
+  ok(s3.length === 1 && /echo/.test(s3[0].source) && !!s3[0].url, 'fetchLayeredSources: wiki + web dry → LOCAL corpus (last-resort text fallback, url synthesized)');
   const s4 = await G.fetchLayeredSources('X', { fetchPage: badPage, recallKnowledge: async () => [], webSearch: async () => ({ results: [] }), wikiUrl: wiki });
   ok(s4.length === 0, 'fetchLayeredSources: all sources dry → [] (nothing to cite)');
   ok((await G.fetchLayeredSources('', { fetchPage: okPage, wikiUrl: wiki })).length === 0, 'fetchLayeredSources: empty name → []');
-  const shortPage = async (url) => ({ ok: true, url, text: 'tiny' });   // <200 chars → not enough, fall through
-  const s5 = await G.fetchLayeredSources('Y', { fetchPage: shortPage, recallKnowledge: kb, webSearch: search, wikiUrl: wiki });
-  ok(s5[0].source === 'echo:wikipedia', 'fetchLayeredSources: a too-short live page falls through to the corpus');
+  const manyIndep = async () => ({ results: [{ snippet: 'a', url: 'https://a.org/1' }, { snippet: 'b', url: 'https://b.org/2' }, { snippet: 'c', url: 'https://c.org/3' }] });
+  const sCap = await G.fetchLayeredSources('Z', { fetchPage: okPage, webSearch: manyIndep, wikiUrl: wiki, maxSources: 3 });
+  ok(sCap.length === 3, 'fetchLayeredSources: caps at maxSources (wiki + 2 independents, not all)');
 
   // ===== #3 SATURATION STEER: a 0-yield anchor lingers 4× longer (stop re-grinding covered nodes) =====
   {

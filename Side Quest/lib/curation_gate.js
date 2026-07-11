@@ -37,16 +37,39 @@ function gradeForClaim(sourceRef, sources) {
   return { grade: 'D', url: null, kind: 'derived' };        // inference — no backing source
 }
 
+// LIST-AWARE grading (C2 enabler): a connection the dossier cites to ONE-OR-MANY [S#] refs → the set of
+// DISTINCT backing URLs. Any ≥1 named source → grade B; the FULL url set flows to corroboration downstream,
+// where independent domains/families raise confidence (grade-B single source = 0.88 < floor; two INDEPENDENT
+// sources = 0.94, lands). No valid cited source → grade D (inference), held. Accepts a list, a single ref, or
+// a comma/space-joined string ("S1, S2"). This is what lets a well-corroborated edge actually clear the bar.
+function gradeForClaims(sourceRefs, sources) {
+  let refs = Array.isArray(sourceRefs) ? sourceRefs
+    : (sourceRefs == null ? [] : String(sourceRefs).split(/[,\s]+/));
+  const urls = [];
+  for (const ref of refs) {
+    const m = /^\s*s\s*(\d+)\s*$/i.exec(String(ref == null ? '' : ref));
+    if (!m) continue;
+    const idx = parseInt(m[1], 10) - 1;
+    const s = (Array.isArray(sources) && idx >= 0) ? sources[idx] : null;
+    const url = (s && (s.url || s.link)) || null;
+    if (url && !urls.includes(url)) urls.push(url);
+  }
+  if (urls.length) return { grade: 'B', urls, url: urls[0], kind: 'source' };
+  return { grade: 'D', urls: [], url: null, kind: 'derived' };
+}
+
 // Is `grade` at least as strong as `floor`? (rank: A=0 strongest → higher rank = weaker.)
 function meets(grade, floor) {
   const rg = PC.rank(grade), rf = PC.rank(floor);
   return Number.isFinite(rg) && rg <= rf;
 }
 
-// Gate one proposed RELATION/fact. Returns {grade, confidence, url, kind, promote}.
-function gateFact(sourceRef, sources) {
-  const { grade, url, kind } = gradeForClaim(sourceRef, sources);
-  return { grade, confidence: PC.cap(grade), url, kind, promote: meets(grade, FACT_FLOOR) };
+// Gate one proposed RELATION/fact. Accepts one-or-many source refs (see gradeForClaims). Returns
+// {grade, confidence, urls, url, kind, promote} — `urls` is the FULL cited set (for corroboration),
+// `url` the first (back-compat).
+function gateFact(sourceRefs, sources) {
+  const { grade, urls, url, kind } = gradeForClaims(sourceRefs, sources);
+  return { grade, confidence: PC.cap(grade), urls, url, kind, promote: meets(grade, FACT_FLOOR) };
 }
 
 // Gate the EXISTENCE of a NEW object we'd mint (a related entity, or a missing anchor). Same source
@@ -67,6 +90,6 @@ function gateAnchorExistence(sources) {
 }
 
 module.exports = {
-  gradeForClaim, meets, gateFact, gateExistence, gateAnchorExistence,
+  gradeForClaim, gradeForClaims, meets, gateFact, gateExistence, gateAnchorExistence,
   EXISTENCE_FLOOR, FACT_FLOOR
 };

@@ -129,11 +129,17 @@ function buildCandidatePrompt(recentTurns) {
 }
 
 function buildDossierPrompt(mention, sources, { existing = null, neighbors = [] } = {}) {
-  const src = (sources || []).slice(0, 6).map((s, i) => `[S${i + 1}] ${String((s && (s.text || s.content || s.snippet)) || s || '').replace(/\s+/g, ' ').slice(0, 320)}`).join('\n');
+  // Give the model ENOUGH of each source to actually FIND + cite a connection (a 320-char snippet starved
+  // citations → most edges came back "inferred" and were held). ~1400 chars/source lets it cite deeper facts.
+  const src = (sources || []).slice(0, 6).map((s, i) => `[S${i + 1}] ${String((s && (s.text || s.content || s.snippet)) || s || '').replace(/\s+/g, ' ').slice(0, 1400)}`).join('\n');
   const have = existing ? `\nWHAT THE GRAPH ALREADY HOLDS on "${mention}" (build PAST this, do not repeat): ${String(existing.role || '')} ${(existing.facts || []).slice(0, 4).join('; ')}`.slice(0, 400) : '';
   const nbr = neighbors && neighbors.length ? `\nAlready-linked neighbours (do not re-propose these edges): ${neighbors.slice(0, 10).join(', ')}` : '';
   return [
-    { role: 'system', content: 'You turn sources into a knowledge-graph object. Ground every claim in the sources; invent nothing. Output ONLY JSON of the shape {"entity_type":"person|organization|place|work|event|concept","summary":"2-4 dense factual sentences","related":[{"name":"Other Entity","type":"person|organization|...","relation":"short_relation_label","source":"S#","when":"year or year-range the sources state this connection became/was true, e.g. 2023 or 2015-2019; empty if undated"}]}. `related` = up to 6 OTHER entities this one is genuinely connected to. For EACH related entity you MUST set "source" to the [S#] label of the source that STATES this connection. Set "when" ONLY from an explicit date in the sources — never guess. If a connection is your own INFERENCE beyond what the sources say, set "source":"inferred" — be honest: an inferred connection is HELD OUT, not added to the graph. No prose outside the JSON.' },
+    // MULTI-CITE (C2 grounding-quality): each connection lists EVERY source that independently states it.
+    // A connection carried by two INDEPENDENT sources clears the promotion floor (0.94); a single source
+    // (0.88) is proposed but parked for corroboration. So citing all supporting sources is what makes an
+    // edge LAND, not just enter the queue — hence "list every [S#] that states it", not just one.
+    { role: 'system', content: 'You turn sources into a knowledge-graph object. Ground every claim in the sources; invent nothing. Output ONLY JSON of the shape {"entity_type":"person|organization|place|work|event|concept","summary":"2-4 dense factual sentences","related":[{"name":"Other Entity","type":"person|organization|...","relation":"short_relation_label","sources":["S#", ...],"when":"year or year-range the sources state this connection became/was true, e.g. 2023 or 2015-2019; empty if undated"}]}. `related` = up to 6 OTHER entities this one is genuinely connected to. For EACH related entity, set "sources" to the list of ALL [S#] labels whose text STATES this connection — cite EVERY source that independently supports it, not just one (independent corroboration is what confirms a fact). Set "when" ONLY from an explicit date in the sources — never guess. If a connection is your own INFERENCE beyond what the sources say, set "sources":[] (empty) — be honest: an inferred, uncited connection is HELD OUT, not added to the graph. No prose outside the JSON.' },
     { role: 'user', content: `Entity: "${mention}"${have}${nbr}\n\nSources:\n${src || '(none)'}\n\nJSON:` }
   ];
 }
@@ -264,7 +270,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
     const rname = String((r && r.name) || '').trim();
     if (!rname || visitKey(rname) === visitKey(mention)) continue;
     if (nbrKeys.has(visitKey(rname))) continue;   // edge already in the graph — skip
-    const fg = CG.gateFact(r && r.source, sources);
+    const fg = CG.gateFact(r && (r.sources != null ? r.sources : r.source), sources);   // list-aware (multi-cite) w/ legacy single fallback
     if (!fg.promote) {                            // uncited / inferred → does NOT enter the graph
       held++;
       // still record the HELD claim — the enrichment queue (what to chase a real citation for next).
@@ -281,7 +287,9 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
     // C1/C2/C3 provenance + calibrated confidence (mirrors doc_decompose): per-edge
     // source_set + valid-time from prose; confidence from the independent-source count.
     const vt = parseValidTime(r && r.when);
-    const meta = { source_set: fg.url ? [fg.url] : [], url: fg.url || null, grade: fg.grade };
+    // source_set = ALL independently-cited urls (C2): corroboration counts distinct families across them,
+    // so a two-independent-source edge calibrates to 0.94 (lands) vs a single source's 0.88 (parked).
+    const meta = { source_set: (fg.urls && fg.urls.length) ? fg.urls.slice() : (fg.url ? [fg.url] : []), url: fg.url || null, grade: fg.grade };
     if (vt.valid_from != null) meta.valid_from = vt.valid_from;
     if (vt.valid_to != null) meta.valid_to = vt.valid_to;
     const corrN = corroboration.corroborationCount(meta.source_set);
@@ -313,33 +321,47 @@ function sourceLabel(url) {
 // resolve name variants like James→Jim Inhofe) → LOCAL Echo corpus (offline, robust FTS name-match) →
 // web search (last resort). Returns normalized CITED sources [{text, url, source}] — every source carries
 // a url so the citation gate can grade it. Pure; every fetcher injected → offline-testable.
-async function fetchLayeredSources(name, { fetchPage, recallKnowledge, webSearch, wikiUrl, log } = {}) {
+async function fetchLayeredSources(name, { fetchPage, recallKnowledge, webSearch, wikiUrl, log, maxSources = 3 } = {}) {
   const clean = String(name || '').trim();
   if (!clean) return [];
-  // 1) LIVE page first — fresher than the local ZIM snapshot; a real url → archivable to a grade-A source.
+  const out = [];
+  const seenFam = new Set();   // independence keys already held (corroboration.sourceFamily) — dedupe mirrors
+  // add a source ONLY if it's from a NEW independent family (so we don't stack Wikipedia mirrors as if they
+  // were independent confirmations — the anti-echo-chamber rule that corroboration enforces downstream).
+  const take = (row) => {
+    if (!row || !row.url || !row.text || out.length >= maxSources) return;
+    const fam = corroboration.sourceFamily(row.url);
+    if (fam && seenFam.has(fam)) return;
+    if (fam) seenFam.add(fam);
+    out.push(row);
+  };
+  // 1) PRIMARY: live Wikipedia page — richest text, redirect-resolves name variants (James→Jim Inhofe).
   if (typeof fetchPage === 'function' && typeof wikiUrl === 'function') {
     try {
       const url = wikiUrl(clean);
       const p = await fetchPage(url);
-      if (p && p.ok && p.text && p.text.length > 200) {
-        return [{ text: String(p.text).slice(0, 4000), url: p.url || url, source: 'web:wikipedia', title: p.title || '' }];
-      }
+      if (p && p.ok && p.text && p.text.length > 200) take({ text: String(p.text).slice(0, 4000), url: p.url || url, source: 'web:wikipedia', title: p.title || '' });
     } catch (e) { log && log('[graph-walk] live fetch failed: ' + (e && e.message)); }
   }
-  // 2) LOCAL corpus — Echo's Wikipedia/general FTS (no network, resolves name variants by search).
-  if (typeof recallKnowledge === 'function') {
+  // 2) INDEPENDENT corroborators: web search, keeping only DIFFERENT-family results. A connection cited to
+  //    two independent families calibrates to 0.94 (clears the promotion floor) vs a lone source's 0.88
+  //    (parked for later corroboration). One Wikipedia page can't corroborate itself — this is the C2
+  //    grounding-quality lift that lets a walk-built edge actually LAND, not just queue. Bounded + fail-soft.
+  if (typeof webSearch === 'function' && out.length < maxSources) {
+    try {
+      const { results } = await webSearch(clean);
+      for (const r of (results || [])) { if (out.length >= maxSources) break; if (r && r.url && r.snippet) take({ text: r.snippet, url: r.url, source: 'web:search' }); }
+    } catch (e) { log && log('[graph-walk] web search failed: ' + (e && e.message)); }
+  }
+  // 3) LOCAL corpus — only if we STILL have nothing (offline / everything dry). Echo's Wikipedia FTS is the
+  //    same family as (1), so it's a text fallback, not an independent corroborator.
+  if (!out.length && typeof recallKnowledge === 'function') {
     try {
       const kb = (await recallKnowledge(clean, { topK: 5 })) || [];
-      const rows = kb.map((h, i) => ({ text: h.content, url: h.url || (h.source ? `${h.source}#${i + 1}` : null), source: h.source || 'echo:kb' })).filter(h => h.text && h.url);
-      if (rows.length) return rows;
+      kb.forEach((h, i) => take({ text: h.content, url: h.url || (h.source ? `${h.source}#${i + 1}` : null), source: h.source || 'echo:kb' }));
     } catch (e) { log && log('[graph-walk] corpus recall failed: ' + (e && e.message)); }
   }
-  // 3) WEB SEARCH — last resort (snippet-only, throttle-prone).
-  if (typeof webSearch === 'function') {
-    try { const { results } = await webSearch(clean); return (results || []).map(r => ({ text: r.snippet, url: r.url, source: 'web:search' })).filter(h => h.text && h.url); }
-    catch (e) { log && log('[graph-walk] web search failed: ' + (e && e.message)); }
-  }
-  return [];
+  return out;
 }
 
 // One full graph-building MOVE. Orchestrates anchor → grow → record → voice. Returns a result the
