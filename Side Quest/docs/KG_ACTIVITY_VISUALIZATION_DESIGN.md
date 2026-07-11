@@ -13,6 +13,37 @@ Two stores (see [DEDUP_LANE_VISUAL_IMPACT](DEDUP_LANE_VISUAL_IMPACT.md) for the 
 
 ---
 
+## ✅ AS-BUILT STATUS (2026-07-11, all in `renderer/kg.js` unless noted)
+
+What actually shipped this arc (all live-verified via CDP; builds 10p→10y):
+
+- **Activity bus (Stage A)** — `onActivity({db,kind,anchor,anchor2,count,tier,epistemic})` dispatcher +
+  gestures: `node.born` (spark), `node.enrich` (breath), `edge.born`/`edge.promote` (synapse thread),
+  `node.merge`→absorb. In-view = graph-space gesture; **off-screen = far-field "weather"** so the whole
+  galaxy shimmers where work happens. `kg:focus-move` (subconscious walk) bridged in as `node.enrich`.
+- **Two-source galaxy (structure + REAL read)** — the Side Quest short-term store renders as the violet
+  **active core** merged into every view (`shortTerm` layer + `withShortTerm` + `makeCoreForce`), styled by
+  `store`/`epistemic` (speculated=translucent+dashed → confirmed=solid). Real read: `db.graphRelationsAmong`
+  + `main.js kg:shortterm` (top-90 recent local entities + relations + 18 recent unpromoted docs) + preload
+  `shortterm()` + `loadShortTerm()`. Verified live: 105 real nodes, 306 total, 59fps.
+- **LIVE core** — `loadShortTerm` re-polls every **5s, change-gated** (idle polls don't reheat); fresh nodes
+  spark; a **bulk pull (≥8 new nodes) fires a SUPERNOVA** (flash+shockwave+spokes); in Follow the camera
+  **flies to the supernova** (`centerAt` + `superNovaHoldUntil`).
+- **PERF (3 fixes — the 2D-canvas ceiling)** — perpetual focal `linkDirectionalParticles`→0; `shadowBlur`
+  gated to focal/hovered/hub/cross-store only; **tendrils capped to top-40 by hidden-degree**. Took a dense
+  follow view 28fps→59fps, 71/90→0/90 dropped frames. LESSON: these are 2D-canvas costs that vanish in WebGL.
+
+**Still design-only / NOT built** (the rest of this doc): the generalized **`kg:activity` IPC channel**
+(preload `onActivity` + a `main.js emitActivity` broadcaster) and the **DB-side feeds** (Echo
+`graph_change_feed` trigger; SQ `graph_memory.js` tap) — §4. The live core uses **polling**, not the
+push feed. Cross-store **federation threads** (short↔long by name-match) = v2, currently 0. Dev hooks:
+`__kgActivity/__kgActN/__kgDedup/__kgCuration/__kgNova/__kgRefreshST/__kgSeedShortTerm`.
+
+**NEXT: the full 3D jump** (three.js/`3d-force-graph`, both in-stack) — bloom=shader pass, gradients=GPU,
+instanced nodes → the capped 2D richness returns cheaper. The two-source structure + perf discipline port.
+
+---
+
 ## 1. The unlock — one tap per store captures ~everything
 
 Neither store needs its call-sites instrumented one by one:
