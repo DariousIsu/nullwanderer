@@ -23,7 +23,7 @@
  */
 'use strict';
 
-const { visitKey } = require('./graph_walk');   // shared dedup key (no cycle: graph_walk never requires this)
+const { visitKey, extractProperNouns } = require('./graph_walk');   // shared dedup key + proper-noun NER (no cycle: graph_walk never requires this)
 
 const MAX_PER_TIER = 6;
 const MAX_TOTAL = 10;
@@ -65,7 +65,14 @@ function newsCandidates(newsObjects, { max = MAX_PER_TIER } = {}) {
   for (const o of (Array.isArray(newsObjects) ? newsObjects : [])) {
     if (!o) continue;
     const weight = Math.max(1, Number(o.corroboration && o.corroboration.independent) || 1);
-    for (const p of (Array.isArray(o.principals) ? o.principals : [])) {
+    // Anchor on CLEAN multi-word proper nouns from the story TITLE — NOT the tokenized entity_set, which
+    // fragments "Thomas Hicks" → ["thomas","hicks"] and is full of days/adjectives ("thursday","democratic")
+    // that the existence gate then correctly HOLDS, so a news anchor never became buildable (the cause of the
+    // monotone "flagged"-only monologue). extractProperNouns yields "Benjamin Hovland" / "Election Assistance
+    // Commission" as whole, buildable units. Fall back to the raw entity_set ONLY if the title yields nothing.
+    let names = extractProperNouns(String(o.name || ''));
+    if (!names.length) names = (Array.isArray(o.principals) ? o.principals : []);
+    for (const p of names) {
       const name = _clean(p);
       if (!_usable(name)) continue;
       const k = visitKey(name);

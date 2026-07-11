@@ -11,16 +11,21 @@ const { visitKey } = require('../lib/graph_walk');
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++; console.log('  ✗', m); } };
 
-// --- tier 1: news principals, corroboration-weighted, junk-filtered ---
+// --- tier 1: news anchors from the TITLE's proper nouns (not the tokenized entity_set), corr-weighted ---
+// The entity_set fragments "Benjamin Hovland"→["benjamin","hovland"] and carries days/adjectives the
+// existence gate holds; anchoring on the title's proper nouns yields whole, buildable civic entities.
 const news = [
-  { name: 'Story A', principals: ['Emergence Water', 'Tyler Breton', 'zoe'], corroboration: { independent: 5 } },
-  { name: 'Story B', principals: ['Emergence Water', 'the'], corroboration: { independent: 3 } },
-  { name: 'Story C', principals: ['Watergen'], corroboration: { independent: 1 } }
+  { name: 'Benjamin Hovland ousted from the Election Assistance Commission', principals: ['benjamin', 'hovland', 'thursday'], corroboration: { independent: 5 } },
+  { name: 'Election Assistance Commission names a new chair', principals: ['election', 'commission'], corroboration: { independent: 3 } },
+  { name: 'Watergen unveils a device', principals: ['watergen'], corroboration: { independent: 1 } }
 ];
 const nc = A.newsCandidates(news);
-ok(nc[0] === 'Emergence Water', 'newsCandidates: most-corroborated principal (5+3) ranks first');
-ok(nc.includes('Tyler Breton') && nc.includes('Watergen'), 'newsCandidates: keeps other real principals');
-ok(!nc.some(n => /^(zoe|the)$/i.test(n)), 'newsCandidates: drops stopword/self principals');
+ok(nc[0] === 'Election Assistance Commission', 'newsCandidates: proper noun from the TITLE, most-corroborated (5+3) ranks first');
+ok(nc.includes('Benjamin Hovland'), 'newsCandidates: multi-word person extracted WHOLE from the title (not fragmented into tokens)');
+ok(!nc.some(n => /^(benjamin|hovland|election|commission|thursday)$/.test(n)), 'newsCandidates: does NOT emit the lowercase entity_set fragments / day-tokens (the junk the gate used to hold)');
+// fallback: no title proper-nouns → use the raw entity_set (back-compat)
+const ncFb = A.newsCandidates([{ principals: ['Alpha Corp'], corroboration: { independent: 2 } }]);
+ok(ncFb.includes('Alpha Corp'), 'newsCandidates: falls back to the entity_set when the title yields no proper nouns');
 
 // --- tier 2: frontier thin nodes, thinnest first, deduped, id preserved ---
 const thin = [
