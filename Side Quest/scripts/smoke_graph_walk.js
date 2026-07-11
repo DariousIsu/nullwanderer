@@ -74,6 +74,7 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   ok(calls.some(c => c[0] === 'propose_relation'), 'growAround: proposes connecting edges');
   ok(grown.connections >= 1 && grown.connections <= G.WALK_MAX_CONNECTIONS, 'growAround: connections within budget');
   ok(grown.summary.length > 10, 'growAround: carries the grounded summary');
+  ok(grown.links.length >= 1 && grown.links.every(l => l.name && l.rel), 'growAround: returns per-edge links {name, rel} (the relation label, for voice variety)');
 
   // --- STREAMING inline-promote (record pipeline): when promoteOne is armed, the new node + neighbours are
   //     promoted INLINE so the edge below has live endpoints in the same move; disarmed → pure propose-only ---
@@ -179,6 +180,7 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
   const move = await G.runMove({ recentTurns: turns, cloud: async (msgs) => (String(msgs[0].content).includes('extract') || String(msgs[1] && msgs[1].content).includes('array')) ? '["Nuclear Innovation Alliance"]' : dossierCloud(), web, recall: recall2, dispatch, getMeta, setMeta, now: () => 1000 });
   ok(move.acted === true && move.anchor === 'Nuclear Innovation Alliance', 'runMove: anchors on the conversation gap and acts');
   ok(typeof move.voiceLine === 'string' && move.voiceLine.length > 0, 'runMove: returns a voice line for a notable move');
+  ok(/→/.test(move.voiceLine), 'runMove: the voice names each link as "relation → target" (varied by the LLM label, not a flat "link to X" template)');
   ok(G.visitedKeySet(getMeta, 1000).has(G.visitKey('Nuclear Innovation Alliance')), 'runMove: records the anchor as visited');
   const move2 = await G.runMove({ recentTurns: turns, cloud: async () => '["Nuclear Innovation Alliance"]', web, recall: recall2, dispatch, getMeta, setMeta, now: () => 2000 });
   ok(move2.acted === false && move2.reason === 'no-gap', 'runMove: a just-visited anchor is skipped → quiet (no re-anchor)');

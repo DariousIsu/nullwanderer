@@ -261,7 +261,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
   if (!dossier || typeof dossier !== 'object') { log && log(`[grow] "${mention}" sources=${sources.length} dossier=NULL (rawLen=${_rawLen}) → no enrich`); return { built: false, entities: 0, connections: 0, related: [], summary: '', held: 0 }; }
 
   const nbrKeys = new Set(neighbors.map(visitKey));
-  let entities = 0, connections = 0, held = 0, rejected = 0, landedLocal = 0, sourceUrl = null; const related = [];
+  let entities = 0, connections = 0, held = 0, rejected = 0, landedLocal = 0, sourceUrl = null; const related = []; const links = [];
   const _relRaw = Array.isArray(dossier.related) ? dossier.related.length : 0;
 
   // 1) the anchor object itself — only if MISSING. EXISTENCE gate: mint only if the web pull cites it as
@@ -329,7 +329,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
     const conf = confModel.calibratedConfidence({ grade: fg.grade, corroboration: corrN });
     const rr = await proposeRelation({ dispatch, source: canonical, target: rname, relation_type: relType, confidence: conf, metadata: meta, allowOpen: true, log });
     if (rr.ok) {                                    // action==='proposed' — the edge ACTUALLY landed as a proposal
-      connections++; related.push(rname);
+      connections++; related.push(rname); links.push({ name: rname, rel: relLabel });   // relLabel = the LLM's exact phrase → voice variety
       if (!sourceUrl) sourceUrl = fg.url || null;
       // record the CITATION for the promoted fact (the observation trail; grade + backing url).
       if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: fg.url, grade: fg.grade, confidence: conf, status: 'promoted', valid_from: vt.valid_from, valid_to: vt.valid_to }); } catch {} }
@@ -355,7 +355,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
     }
   }
   log && log(`[grow] "${mention}" [${gap.kind}] sources=${sources.length} neighbors=${neighbors.length} related=${_relRaw} → +${entities} ent +${connections} conn (${held} held: uncited${rejected ? `, ${rejected} rejected${landedLocal ? ` → ${landedLocal} landed short-term` : ''} (see edge logs)` : ''})`);
-  return { built: gap.kind === 'missing' && entities > 0, entities, connections, related, summary: String(dossier.summary || '').trim(), held, rejected, landedLocal, sourceUrl };
+  return { built: gap.kind === 'missing' && entities > 0, entities, connections, related, links, summary: String(dossier.summary || '').trim(), held, rejected, landedLocal, sourceUrl };
 }
 
 // A compact, human-friendly label for a citation url — for the voiced "via …" tag. Pure.
@@ -510,7 +510,13 @@ async function runMove(deps = {}) {
     // thought must report what she ACTUALLY did — began a record / proposed a link still to confirm — and
     // must NOT assert a completed graph write ("linked it to X"), which confabulates an edge the live graph
     // doesn't hold (the "L. Overby → Oregonian/Forbes: 0 edges" finding). Honest, tentative register.
-    const _rel = grown.related.slice(0, 2).join(' and ');   // Echo-PROPOSED targets only (short-term landings excluded above → no voice leak)
+    // Name each link WITH the LLM's relation phrase (variety: "secretary of the interior → Barack Obama"),
+    // not a flat "link to X". Echo-PROPOSED links only (short-term catches excluded above → no voice leak).
+    const _rp = (s) => String(s || 'related to').replace(/_/g, ' ').slice(0, 42);
+    const _links = (grown.links || []).slice(0, 2);
+    const _rel = _links.length
+      ? _links.map((l) => `${_rp(l.rel)} → ${l.name}`).join('; ')
+      : grown.related.slice(0, 2).join(' and ');
     // Register matches the MEASURED landing rate of each channel (2026-07-10): object proposals DO promote
     // (~20-min ingest batches) → "queued for promotion"; her LINK proposals pool in tenant_rainey and rarely
     // land → "flagged" (a weaker claim, honest until the landing lane is fixed). Never assert a live edge.
@@ -518,9 +524,9 @@ async function runMove(deps = {}) {
     // short-term catch (or a thin touch that reached Echo with nothing) stays SILENT — no filler. (Retired
     // "Spent a little time on X": low-signal, it dominated her monologue and read as all she could think.)
     const voiceLine = grown.built
-      ? `Started a record for ${anchor.mention} — queued for promotion${grown.connections ? `; also flagged a possible link to ${_rel}` : ''}.${_tag}`
+      ? `Started a record for ${anchor.mention} — queued for promotion${_links.length ? `; first links: ${_rel}` : ''}.${_tag}`
       : (grown.connections
-        ? `Flagged a possible link from ${anchor.mention} to ${_rel} for review.${_tag}`
+        ? `Flagged for ${anchor.mention}: ${_rel} — for review.${_tag}`
         : '');
     return {
       acted: notable, anchor: anchor.mention, kind: anchor.kind, source: anchor.source,
@@ -529,7 +535,7 @@ async function runMove(deps = {}) {
       // need this exact form — the stripped name won't resolve ("entity not found").
       canonical: (anchor.object && anchor.object.canonical) || anchor.mention,
       built: grown.built, entities: grown.entities, connections: grown.connections,
-      related: grown.related, summary: grown.summary, voiceLine, held: grown.held || 0,
+      related: grown.related, links: grown.links || [], summary: grown.summary, voiceLine, held: grown.held || 0,
       landedLocal: grown.landedLocal || 0,
       reverify: reverified,
       reason: notable ? 'grew' : 'no-growth'
