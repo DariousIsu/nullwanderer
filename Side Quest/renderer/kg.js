@@ -208,11 +208,21 @@ function drawTendrils(ctx, scale) {
   const now = performance.now(), tt = now / 1000;
   let fireBoost = 1; if (pulseAt) { const el = now - pulseAt; if (el >= 0 && el < 1600) fireBoost = 1 + (1 - el / 1600) * 1.4; }   // dendrites fire brighter just after a batch lands
   ctx.lineCap = 'round';
+  // PERF: tendrils were the dominant per-frame cost (~2.4k createLinearGradient/frame in a 320-node follow
+  // view → the skip-lag). Cap to the top-N nodes by HIDDEN degree — tendrils read as "hidden connections off
+  // into the universe", which lands best on the biggest hubs; leaves don't need them. ~87% fewer gradients +
+  // a cleaner look. (Focal always included so the followed node keeps its reach.)
+  const TENDRIL_CAP = 40;
+  const eligible = [];
   for (const n of nodes) {
     const real = (typeof n.degree === 'number') ? n.degree : degreeHint.get(n.id);
     if (!(real > 0) || !Number.isFinite(n.x) || !Number.isFinite(n.y)) continue;
     const hidden = real - (shown.get(n.id) || 0);
     if (hidden < 1) continue;
+    eligible.push({ n, hidden, focal: !!n.isFocal });
+  }
+  if (eligible.length > TENDRIL_CAP) { eligible.sort((a, b) => (b.focal - a.focal) || (b.hidden - a.hidden)); eligible.length = TENDRIL_CAP; }
+  for (const { n, hidden } of eligible) {
     const r = n.__r || 4;
     const count = Math.min(5, Math.max(1, Math.round(Math.log2(hidden + 1))));
     const len = Math.max(r + 8, avgLen * (0.85 + Math.log10(hidden + 1) * 0.5));   // scale to spacing → tail toward where a further node sits, not a fixed stub
@@ -943,4 +953,4 @@ loadOverview();
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-10t: PERF — gate shadowBlur to prominent nodes + cross-store edges only (dense-follow skip-lag fix)');
+console.info('[kg] surface build 2026-07-10u: PERF — cap tendrils to top-40 hubs by hidden-degree (kills ~2.4k gradients/frame; dense-follow glitch)');
