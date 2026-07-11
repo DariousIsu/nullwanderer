@@ -422,11 +422,14 @@ async function runMove(deps = {}) {
     // must NOT assert a completed graph write ("linked it to X"), which confabulates an edge the live graph
     // doesn't hold (the "L. Overby → Oregonian/Forbes: 0 edges" finding). Honest, tentative register.
     const _rel = grown.related.slice(0, 2).join(' and ');
+    // Register matches the MEASURED landing rate of each channel (2026-07-10): object proposals DO promote
+    // (~20-min ingest batches) → "queued for promotion"; her LINK proposals pool in tenant_rainey and rarely
+    // land → "flagged" (a weaker claim, honest until the landing lane is fixed). Never assert a live edge.
     const voiceLine = notable
       ? (grown.built
-        ? `I didn't have much on ${anchor.mention} yet — started a record${grown.connections ? `, with a possible link to ${_rel} to confirm` : ' to firm up later'}.${_tag}`
+        ? `Started a record for ${anchor.mention} — queued for promotion${grown.connections ? `; also flagged a possible link to ${_rel}` : ''}.${_tag}`
         : (grown.connections
-          ? `Spent a little time on ${anchor.mention} — flagged a possible link to ${_rel}, still to confirm.${_tag}`
+          ? `Spent a little time on ${anchor.mention} — flagged a possible link to ${_rel} for review.${_tag}`
           : `Spent a little time on ${anchor.mention}.${_tag}`))
       : '';
     return {
