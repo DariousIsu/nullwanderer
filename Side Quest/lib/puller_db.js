@@ -201,9 +201,13 @@ function createTarget({ kind = 'person', name, company = null, domain = null, fu
   return getTarget(info.lastInsertRowid);
 }
 function getTarget(id) { return _db().prepare(`SELECT * FROM targets WHERE id = ?`).get(id) || null; }
-function listTargets({ status = null, domain = null, limit = 200, offset = 0, includeMerged = false } = {}) {
+function listTargets({ status = null, domain = null, limit = 200, offset = 0, includeMerged = false, includeSuppressed = false } = {}) {
   const where = [], args = [];
   if (status) { where.push('status = ?'); args.push(status); }
+  // SUPPRESSED = a reversibly-parked target (e.g. an off-domain flood mint) — hidden from every listing
+  // consumer (contact/discovery/pipeline) by default so it stops producing noise, but retained and
+  // trivially un-parked (flip status back to 'adhoc'). An explicit status query still finds them.
+  else if (!includeSuppressed) where.push("status != 'suppressed'");
   if (domain) { where.push('domain = ?'); args.push(domain); }
   if (!includeMerged) where.push('merged_into IS NULL');   // F4: merged-away targets are hidden by default
   const sql = `SELECT * FROM targets ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
