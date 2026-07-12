@@ -1529,6 +1529,24 @@ function _directedFocusActive() {
   try { const fl = require('./focus'); const f = fl.getCurrent(); return !!(f && fl.isDirected(f)); }
   catch { return false; }
 }
+// Distinctive lowercased tokens of the ACTIVE DIRECTED focus (goal + facet + covered orgs), for leashing
+// the CONTACT stage off the off-domain backlog (Miami-Dade schools, Fresenius medical) that pre-existing
+// mints left in puller.db. Null when no directed focus → contact runs unleashed. Generic civic words are
+// dropped so it keys on distinctive terms (louisiana, parish, orleans, tangipahoa, jury, police…).
+const _LEASH_STOP = new Set(['council', 'district', 'city', 'board', 'members', 'member', 'office', 'department', 'state', 'county', 'elected', 'official', 'officials', 'public', 'general', 'every', 'from', 'with', 'list', 'their', 'gather', 'profile', 'profiles', 'leadership', 'research', 'inc', 'llc', 'corp', 'company', 'group']);
+function _focusDomainTokens() {
+  try {
+    const fl = require('./focus'); const f = fl.getCurrent();
+    if (!f || !fl.isDirected(f)) return null;
+    let blob = String(f.content || '');
+    try { blob += ' ' + (db.getMeta(`focus.${f.id}.enrich_facet`) || ''); } catch {}
+    try { const cov = JSON.parse(db.getMeta(`focus.${f.id}.covered`) || '[]'); if (Array.isArray(cov)) blob += ' ' + cov.join(' '); } catch {}
+    const toks = new Set();
+    for (const w of (blob.toLowerCase().match(/[a-z]{4,}/g) || [])) if (!_LEASH_STOP.has(w)) toks.add(w);
+    return toks.size ? toks : null;
+  } catch { return null; }
+}
+function _tokenHit(text, toks) { const h = String(text || '').toLowerCase(); for (const t of toks) if (h.includes(t)) return true; return false; }
 
 async function runGraphWalkMove(recentTurns, { force = false } = {}) {
   const nowTs = Date.now();
@@ -1730,10 +1748,16 @@ async function runPullerMove(_recentTurns, { mode = 'both', candidatesOverride =
   const activeKeys = new Set((activeSetNames() || []).map(n => pullerWalk.norm(n)));
 
   // candidates: local Puller targets, each flagged whether it already has an email belief (the gap we fill)
+  // DOMAIN LEASH (D1 ext): while a directed focus is active, skip CONTACT enrichment over targets whose
+  // org/domain is clearly OFF the focus domain — the pre-existing off-domain backlog (Miami-Dade schools,
+  // Fresenius medical) that would otherwise keep surfacing "found a contact for Dr. X". Bare targets (no
+  // company AND no domain to judge) still pass, so on-domain person rows aren't starved.
+  const _contactLeash = _focusDomainTokens();
   const candidates = () => {
     const out = [];
     try {
       for (const t of pdb.listTargets({ limit: 120 })) {
+        if (_contactLeash && (t.company || t.domain) && !_tokenHit(`${t.company || ''} ${t.domain || ''}`, _contactLeash)) continue;
         const has = !!pdb.getBelief(t.id, 'email');
         // GROUNDED = the target has a REAL provenance (an http page her browser read, a docstore drop, or
         // a CRM link) — not a wiki/web fallback. Only computed for pattern-fill-eligible targets (cost).
