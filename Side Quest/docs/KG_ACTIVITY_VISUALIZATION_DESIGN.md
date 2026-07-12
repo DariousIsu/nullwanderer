@@ -52,8 +52,11 @@ What actually shipped this arc (all live-verified via CDP; builds 10p→10y):
 NX-ECHO Python repo + MCP restart, gated on Echo up). The live core still uses **polling**; **Slice 4** retires
 its gesture role, then adds `doc.land`/`news` (they overlap the poll today) + cross-store **federation threads**
 (short↔long by name-match, currently 0) — held because they change existing behavior and need live eyeballing.
-**Renderer Stage-B gesture polish** (recognition ARC / inward recall WAVE / graduation ARC in place of weather)
-is renderer-only → CDP-iterable without a reboot. Dev hooks:
+- **Stage-B gesture polish** (commit `c52148e`, renderer-only, verified live): `match.hit` → recognition ARC,
+  `recall` → inward WAVE (to `coreCentroid()`), `promote` → graduation ARC — drawn graph-space when the node(s)
+  are in view, weather fallback off-screen. So the P1 currents are now legible gestures, not just shimmer.
+
+Dev hooks:
 `__kgActivity/__kgActN/__kgDedup/__kgCuration/__kgNova/__kgRefreshST/__kgSeedShortTerm` + `sq.kg.devActivity`.
 
 **NEXT: the full 3D jump** (three.js/`3d-force-graph`, both in-stack) — bloom=shader pass, gradients=GPU,
