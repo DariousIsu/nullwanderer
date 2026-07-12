@@ -1059,27 +1059,12 @@ async function pdfLinksOnPage() {
   } catch { return []; }
 }
 
-// DOMAIN LEASH (D1 ext): distinctive lowercased tokens from the ACTIVE DIRECTED focus (goal + facet +
-// covered orgs). Null when no directed focus is being served → the auto-grab stays lenient (free browsing).
-// Generic civic words are dropped so the leash keys on DISTINCTIVE terms (louisiana, parish, orleans,
-// tangipahoa, jury, police…). This closes the residual off-domain flood the lenient not-foreign-gov gate
-// let through: the autonomous browse vacuumed a Florida school district's PDFs (cafeteria-health, food-
-// inspections) + a Fresenius medical privacy notice while the focus was Louisiana, and doc-decompose then
-// minted those as off-domain contacts (the "medical noise"). A user-driven <web-grab-pdfs/> is exempt.
-const _LEASH_STOP = new Set(['council', 'district', 'city', 'board', 'members', 'member', 'office', 'department', 'state', 'county', 'elected', 'official', 'officials', 'public', 'general', 'every', 'from', 'with', 'list', 'their', 'gather', 'profile', 'profiles', 'leadership', 'research']);
-function _focusLeashTokens() {
-  try {
-    const fl = require('./focus');
-    const f = fl.getCurrent();
-    if (!f || !fl.isDirected(f)) return null;
-    let blob = String(f.content || '');
-    try { blob += ' ' + (db.getMeta(`focus.${f.id}.enrich_facet`) || ''); } catch {}
-    try { const cov = JSON.parse(db.getMeta(`focus.${f.id}.covered`) || '[]'); if (Array.isArray(cov)) blob += ' ' + cov.join(' '); } catch {}
-    const toks = new Set();
-    for (const w of (blob.toLowerCase().match(/[a-z]{4,}/g) || [])) if (!_LEASH_STOP.has(w)) toks.add(w);
-    return toks.size ? toks : null;
-  } catch { return null; }
-}
+// DOMAIN-LEASH tokens for the auto-grab: the operator's domain (active directed focus, ELSE their standing
+// civic threads) — see lib/focus.domainLeashTokens. Delegated so this leash stays ON even after a directed
+// focus STALLS (else the idle browse wanders to a University of Arkansas Medical Sciences page and grabs
+// its faculty PDFs, which doc-decompose mints as medical contacts — the recurring "medical spinning").
+// Null only when the operator has no civic work at all → free browsing. A user-driven <web-grab-pdfs/> is exempt.
+function _focusLeashTokens() { try { return require('./focus').domainLeashTokens(); } catch { return null; } }
 // Does a PDF link overlap the leash at all? No leash (null/empty) → always true (unleashed).
 function _pdfMatchesLeash({ href = '', text = '', pageTitle = '', pageUrl = '' } = {}, leashTokens) {
   if (!leashTokens || !leashTokens.size) return true;

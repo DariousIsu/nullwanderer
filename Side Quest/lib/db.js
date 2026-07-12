@@ -756,6 +756,17 @@ function getActiveOpenThreads(limit = 10, { includeStalled = true } = {}) {
     .all(limit);
 }
 
+// The operator's MOST RECENT live focus threads (newest first) — their standing current work. Used by the
+// domain leash (lib/focus.domainLeashTokens) so idle autonomous lanes stay on the CURRENT domain (recent
+// Louisiana/parish work), not the oldest stale threads. Returns bare goal strings.
+function recentThreadGoals(limit = 15) {
+  return getDb()
+    .prepare(`SELECT content FROM open_threads
+      WHERE status IN ('pending','active','stalled')
+      ORDER BY last_touched_ts DESC LIMIT ?`)
+    .all(limit).map(r => r.content || '');
+}
+
 // Threads that originated from a USER turn — i.e. things Lucas actually ASSIGNED her
 // (vs. self-generated goals). The deterministic ground truth for the YOURS/OURS lanes:
 // these define "his work." Newest-touched first. (Self-generated threads have no
@@ -1856,6 +1867,7 @@ module.exports = {
   confirmCommitment,
   insertOpenThread,
   getActiveOpenThreads,
+  recentThreadGoals,
   getAllOpenThreads,
   getOpenThread,
   markOpenThreadStatus,

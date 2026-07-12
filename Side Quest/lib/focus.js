@@ -295,10 +295,39 @@ function _close(focus, status, reason) {
   return { action: status, reason };
 }
 
+// PERSISTENT DOMAIN LEASH (shared by the browse-download + contact leashes). Distinctive lowercased tokens
+// of the operator's domain: the ACTIVE directed focus if one is being served, ELSE their STANDING civic
+// work (recent open focus threads: "Louisiana parish leadership", "county commissioners"…). This is what
+// keeps the autonomous lanes on-domain even after a directed focus STALLS — without it every leash turns
+// off and the idle browse wanders (e.g. to a University of Arkansas Medical Sciences faculty page, whose
+// PDFs doc-decompose then mints as medical contacts — the recurring "medical spinning"). Returns null only
+// when the operator has NO civic work at all → genuinely free exploration. Generic civic words are dropped
+// so it keys on distinctive terms (louisiana, parish, orleans, commissioner, jury…).
+const _LEASH_STOP = new Set(['council', 'district', 'city', 'board', 'members', 'member', 'office', 'department', 'state', 'elected', 'official', 'officials', 'public', 'general', 'every', 'from', 'with', 'list', 'their', 'gather', 'profile', 'profiles', 'leadership', 'research', 'information', 'contact', 'compile', 'find', 'work', 'complete', 'inc', 'llc', 'corp', 'company', 'group']);
+function domainLeashTokens() {
+  try {
+    let blob = '';
+    const f = getCurrent();
+    if (f && isDirected(f)) {
+      blob = String(f.content || '');
+      try { blob += ' ' + (db.getMeta(`focus.${f.id}.enrich_facet`) || ''); } catch {}
+      try { const cov = JSON.parse(db.getMeta(`focus.${f.id}.covered`) || '[]'); if (Array.isArray(cov)) blob += ' ' + cov.join(' '); } catch {}
+    } else {
+      // No directed focus → fall back to the operator's MOST RECENT civic threads (newest first — their
+      // current work) so leashes stay on and keyed to the right domain, not the oldest stale threads.
+      try { blob = (db.recentThreadGoals(15) || []).join(' '); } catch {}
+    }
+    if (!blob.trim()) return null;
+    const toks = new Set();
+    for (const w of (blob.toLowerCase().match(/[a-z]{4,}/g) || [])) if (!_LEASH_STOP.has(w)) toks.add(w);
+    return toks.size ? toks : null;
+  } catch { return null; }
+}
+
 module.exports = {
   getCurrent, isActive, setCurrent, isDirected, setFromDirective, clear,
   setFromText, recentlyTombstoned, stripControlTags, parseControlTags,
-  isNovel, recordOutcome,
+  isNovel, recordOutcome, domainLeashTokens,
   MAX_TICKS, MAX_STRIKES, MAX_WALLCLOCK_MS,
   MAX_TICKS_DIRECTED, MAX_STRIKES_DIRECTED, MAX_WALLCLOCK_MS_DIRECTED,
   REFRACTORY_MS, SIM_THRESHOLD
