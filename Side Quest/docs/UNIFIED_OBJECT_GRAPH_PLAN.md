@@ -27,7 +27,15 @@ A1 event `occurred_at` (world-time) + EST normalization at capture; stop droppin
 **Phase B — Ingest resolution (highest value).**
 B1 resolver into news compression (conservative; hit → link + neighborhood, miss → held). B2 resolver into the meeting loop (real-time; latency-budgeted). B3 `concept` in `doc_decompose` + `INVOKES` edges so articles/people/institutions connect *through* shared subjects. Wire + some New. Risk: MED (false-links; meeting latency). Depends: Slice 0, resolver index freshness.
 
-**Phase C — Concept taxonomy (growth).**
+**Phase C — Concept mapping. ✅ DONE + LIVE 2026-07-12 — REFRAMED (Lucas killed the taxonomy).**
+The original C1–C3 below (seed `NARROWER` children + `BROADER`/`NARROWER` + a same/broader/narrower subsumption judge) was **DROPPED as over-engineering**: "grow without overwhelming" is a **dedup problem** the existing machinery already solves, NOT a hierarchy problem. As-built = coarse focal-area **wells** + embedding **attachment** + **lazy mint-on-mention** + the existing **dedup** lane (made concept-scopable). No BROADER/NARROWER, no subsumption judge. Full log in [[concept-mapping-focal-wells]]. Commits: Echo `d668584`/`edf13d2`/`298f815`/`b9717ff`/`e2da06d`, Zoe `1ed367a`.
+- **S1** — 15 focal wells (12 `focal_area` + 3 adopted Energy/Education/Immigration) live in civic_graph.
+- **S2** — `pass79_concept_to_focal_area`: arctic-embed cosine (well = curated keyword-bag, concept = bare name), 787 `LINKED_TO` backfill; `echo/concept_focal.py` = single-source well registry + `nearest_wells()`.
+- **S3a** — `resolve_or_mint_concept` (Graph method + MCP tool): 1st mention → buffer proposal (`source_set`); 2nd INDEPENDENT source → promote to civic + attach to nearest well. `entity_proposals` gained `source_set` for entity-level corroboration.
+- **S3b** — wired into LIVE ingest: Zoe `doc_decompose` (the browse-download / canvas / meeting flood, via `decomposeLandedDoc`) + the news lane (`promoteStory`), routing concept-typed spans to the mint tool. Echo-side `defer_labels` + decompose Layer E for the secondary ingest_file path. PROVEN LIVE: 52 concepts minted + promoted+attached.
+- **S4** — dedup: concepts ALREADY ride blocking/ANN/semantic/adjudication (no candidate-gen filter — only a same-type merge guard). Blind tier-apply is UNSAFE (name-exact queue = 14.7k person/org; concept queue mixes real dups with false pairs), so added an `entity_type` scope to `run_dedup_adjudication` (`e2da06d`). Ran the LLM+anchor-vetted adjudication scoped to concept: 39 → 20 merged / 19 parked / no halt; false pairs (Judiciary A/B) correctly parked, ~42 concept dups aliased (reversible).
+
+**Original C1–C3 (SUPERSEDED, kept for the record):**
 C1 seed your tracked subjects (AI Arms Race, Permitting Reform, Bioengineering, Weather Modification) as `NARROWER` children under Echo's existing 648 broad concepts. C2 `BROADER`/`NARROWER` + a concept-reconciliation pass = `run_dedup_adjudication` with a same/broader/narrower judge (consolidate emergent → parents). C3 cadence the concept passes (pass_runner). Wire + some New. Risk: LOW-MED (judge quality). Depends: B3.
 
 **Phase D — Derived-node emission (integration).**
