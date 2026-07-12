@@ -948,7 +948,9 @@ app.whenReady().then(() => {
       // batch lands real merges in ~minutes instead of a slow blind pass that mostly parks. The fuzzy tiers
       // (name-strong/weak/initial/semantic) stay pending for a later, deliberate pass. Env-overridable.
       const KGAPPLY_TIERS = (process.env.ZOE_KG_APPLY_TIERS || 'strong-id,name-exact').trim();
-      const dr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGAPPLY_BATCH, tiers: KGAPPLY_TIERS } });
+      // CONCEPTS ARE MANUAL-ONLY (2026-07-12, Lucas): the person/org-tuned judge + the deliberate concept queue
+      // (wells/formatting silt) mean concepts get a hand-run scoped pass, never this aggressive global drain.
+      const dr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGAPPLY_BATCH, tiers: KGAPPLY_TIERS, exclude_entity_type: 'concept' } });
       let rep = null; try { rep = JSON.parse(dr && dr.text); } catch {}
       if (rep && rep.considered != null) {
         console.log(`[kg-apply] adjudicated ${rep.considered}: applied ${rep.applied || 0}, parked ${rep.parked || 0}${rep.halted ? ` HALTED(${rep.halted})` : ''}`);
@@ -1016,7 +1018,7 @@ app.whenReady().then(() => {
       //    lands nothing — never loop on considered>0 or it would re-judge the same parks forever.
       let anchoredApplied = 0;
       for (let i = 0; i < KGNIGHTLY_MAX_ITERS; i++) {
-        const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGAPPLY_BATCH, tiers } });
+        const ar = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGAPPLY_BATCH, tiers, exclude_entity_type: 'concept' } });   // concepts manual-only
         let rep = null; try { rep = JSON.parse(ar && ar.text); } catch {}
         if (!rep || rep.considered == null) break;
         anchoredApplied += rep.applied || 0;
@@ -1032,7 +1034,7 @@ app.whenReady().then(() => {
         // confirmation of identity supplies the EXTERNAL anchor (Lucas: "add outside search for cross-validation")
         // — fires web+cloud only on the otherwise-parking ones. Toggle ZOE_KG_NIGHTLY_WEB_CORROBORATE (default on).
         const webCorr = /^(1|true|yes|on)$/i.test(String(process.env.ZOE_KG_NIGHTLY_WEB_CORROBORATE ?? '1').trim());
-        const sr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGNIGHTLY_NAMESTRONG_BATCH, tiers: 'name-strong', web_corroborate: webCorr } });
+        const sr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGNIGHTLY_NAMESTRONG_BATCH, tiers: 'name-strong', web_corroborate: webCorr, exclude_entity_type: 'concept' } });   // concepts manual-only
         let srep = null; try { srep = JSON.parse(sr && sr.text); } catch {}
         if (srep && srep.considered != null) { strongApplied = srep.applied || 0; emitAbsorb(srep); }
       } catch (e) { console.error('[kg-nightly] name-strong pass failed:', e.message); }
