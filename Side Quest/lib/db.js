@@ -1765,6 +1765,25 @@ function listKgObservations({ sourceEntity = null, feed = null, status = null, l
   const sql = `SELECT * FROM kg_observations${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ?`;
   return getDb().prepare(sql).all(...args, limit);
 }
+// Entities decomposed from docs the OPERATOR dropped (canvas/upload/meeting/editor) — his ACTIVE materials,
+// distinct from autonomous browser_download / news / legislation docs. Two-step for speed: recent operator-drop
+// doc ids (few), then their doc-decomp observations. Feeds the idle-walk anchor so the walk follows HIS attention.
+function listOperatorDropEntities({ limit = 60, docLimit = 20,
+  sources = ['canvas_drop', 'upload', 'meeting', 'editor', 'editor_reference'] } = {}) {
+  try {
+    const sIn = sources.map(() => '?').join(',');
+    const docs = getDb().prepare(
+      `SELECT id FROM documents WHERE source IN (${sIn}) ORDER BY created_ts DESC LIMIT ?`
+    ).all(...sources, docLimit);
+    if (!docs.length) return [];
+    const urls = docs.map(d => 'docstore:' + d.id);
+    const uIn = urls.map(() => '?').join(',');
+    return getDb().prepare(
+      `SELECT source_entity AS s, target AS t FROM kg_observations
+       WHERE feed = 'doc-decomp' AND url IN (${uIn}) ORDER BY id DESC LIMIT ?`
+    ).all(...urls, limit);
+  } catch { return []; }
+}
 function kgObservationStats() {
   const rows = getDb().prepare('SELECT feed, status, grade, COUNT(*) AS n FROM kg_observations GROUP BY feed, status, grade').all();
   const total = getDb().prepare('SELECT COUNT(*) AS n FROM kg_observations').get().n;
@@ -1957,6 +1976,7 @@ module.exports = {
   graphCounts,
   recordKgObservation,
   listKgObservations,
+  listOperatorDropEntities,
   kgObservationStats,
   recordRecentCard,
   listRecentCards,

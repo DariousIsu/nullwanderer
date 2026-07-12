@@ -1493,20 +1493,22 @@ function activeSetNames() {
   // recognized (db.isOwnerName), not an unknown civic subject to profile via the Echo corpus. This is the fix
   // for the graph-walk "I didn't have anything on L. Overby → pulled it together (via Echo corpus)" incident.
   const push = (n) => { const s = String(n == null ? '' : n).trim(); if (s.length >= 3 && !db.isOwnerName(s)) names.push(s); };
-  // PRIORITY ANCHOR (2026-07-12, Lucas chose #3): his DECLARED research priorities LEAD the active set, so the
-  // relevant-frontier window (idle_anchors._RELEVANT_MAX_NAMES) is built around HIS work FIRST — the reactive
-  // sources below fill in behind. Grounded + operator-editable (lib/priorities). Positive-anchor fix for the
-  // idle-research drift (beats blocking off-domain sources one region at a time).
+  // DYNAMIC ENGAGEMENT ANCHOR (2026-07-12, Lucas: "the walk follows my recent attention, autonomous
+  // discovery demoted to fallback"). No hardcoded topic/region list (that goes stale + can't pivot to a new
+  // region next week). Three tiers, HIS-signal first:
+  //   1. OPTIONAL DATED override (lib/priorities) — empty unless he pins something for a week ("dig into X").
+  //   2. OPERATOR ENGAGEMENT — entities from docs HE dropped (canvas/upload/meeting/editor): his ACTIVE
+  //      materials (LAMP mapping, Utah water, policy). Primary anchor; shifts as his work shifts, so nothing
+  //      is hardcoded or blocked (Africa next week just follows his drops/talk there). The autonomous
+  //      browser_download FLOOD is EXCLUDED from steering (it only reaches the walk via the fallback).
+  //   3. BOUNDED FALLBACK — capped autonomous puller, so the walk stays fed on genuine downtime without a
+  //      discovery burst hijacking it.
+  // DROPPED from the anchor: recent_cards (held the Brazilian-prosecutor flood) + the raw doc-decomp firehose
+  // (100% browser_download flood). Conversation entities still enter via convoNames (extractCandidates) upstream.
   try { for (const p of require('./priorities').getActive(db)) push(p); } catch {}
-  // PULLER WEIGHT CAP (2026-07-12, Lucas: "cap weight and age out"): the autonomous puller is the least-
-  // grounded active-set source, and the SA/Tanzania flood packed it with 40 off-domain targets that
-  // MONOPOLIZED the relevant-frontier's 40-name window (idle_anchors._RELEVANT_MAX_NAMES) — so idle
-  // enrichment only ever saw Tanzanian names and never his real work. Capped hard, his doc-decomp + cards
-  // now get INTO the window; the flood targets age out of the recency window as new work accrues. Env-tunable.
-  const _pullerCap = parseInt(process.env.ZOE_ACTIVE_PULLER_CAP || '', 10) || 8;
+  try { for (const o of db.listOperatorDropEntities({ limit: 60 })) { push(o && o.s); push(o && o.t); } } catch {}
+  const _pullerCap = parseInt(process.env.ZOE_ACTIVE_PULLER_CAP || '', 10) || 6;
   try { for (const t of require('./puller_db').listTargets({ limit: _pullerCap })) push(t && t.name); } catch {}
-  try { for (const c of db.listRecentCards({ types: ['org', 'place', 'event'], limit: 20 })) push(c && c.name); } catch {}
-  try { for (const o of db.listKgObservations({ feed: 'doc-decomp', limit: 40 })) { push(o && o.source_entity); push(o && o.target); } } catch {}
   const seen = new Set(); const out = [];
   for (const n of names) { const k = n.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(n); } }
   return out;
