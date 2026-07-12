@@ -33,11 +33,21 @@ What actually shipped this arc (all live-verified via CDP; builds 10p→10y):
   gated to focal/hovered/hub/cross-store only; **tendrils capped to top-40 by hidden-degree**. Took a dense
   follow view 28fps→59fps, 71/90→0/90 dropped frames. LESSON: these are 2D-canvas costs that vanish in WebGL.
 
-**Still design-only / NOT built** (the rest of this doc): the generalized **`kg:activity` IPC channel**
-(preload `onActivity` + a `main.js emitActivity` broadcaster) and the **DB-side feeds** (Echo
-`graph_change_feed` trigger; SQ `graph_memory.js` tap) — §4. The live core uses **polling**, not the
-push feed. Cross-store **federation threads** (short↔long by name-match) = v2, currently 0. Dev hooks:
-`__kgActivity/__kgActN/__kgDedup/__kgCuration/__kgNova/__kgRefreshST/__kgSeedShortTerm`.
+**Real-emitter track — SHIPPING (reboot-gated, held):**
+- **Slice 1 — the `kg:activity` IPC channel** (commit `8f36bcb`): preload `sq.kg.onActivity` + a `main.js
+  emitKgActivity(payload)` broadcaster (exposed as `global.__emitKgActivity`) + a `kg:dev-activity` CDP
+  round-trip trigger. The renderer's `onActivity` dispatcher (already built) is now actually served.
+- **Slice 2 — real SQ emitters** (commit `bbd5622`): one tap on `lib/graph_memory.js` pushes `node.born`
+  (new canonical) / `node.enrich` (trust upgrade) / `edge.born` (grounded edge, both endpoints) via a new
+  `lib/kg_activity.js` safe surface. Speculated proposals stay silent. Renderer debounces `node.born` vs the
+  5s poll so they don't double-spark. Proven: `smoke_graph_memory.js` +5 payload assertions (26/26).
+
+**Still design-only / NOT built:** the **Echo `graph_change_feed` trigger** feed (§4, Slice 3, gated on
+Echo up); **Slice 2b currents** — `match.hit` (echo_suit `resolveMention`), `recall` (active_recall),
+`promote` (`promoteDocumentsPass`), `doc.land`, `think` (monologue → ambient rate). The live core still uses
+**polling**; Slice 4 retires it + adds cross-store **federation threads** (short↔long by name-match, currently
+0). Dev hooks: `__kgActivity/__kgActN/__kgDedup/__kgCuration/__kgNova/__kgRefreshST/__kgSeedShortTerm` +
+`sq.kg.devActivity(payload)`.
 
 **NEXT: the full 3D jump** (three.js/`3d-force-graph`, both in-stack) — bloom=shader pass, gradients=GPU,
 instanced nodes → the capped 2D richness returns cheaper. The two-source structure + perf discipline port.
