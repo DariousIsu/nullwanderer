@@ -5718,7 +5718,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // inside the output budget and can't re-truncate. (Piece 3a already shrank the prompt to make
   // this rarer; this guarantees she never goes silent on a plain conversational turn.)
   const _hasToolTag = /<(web-open|web-read|web-click|web-type|web-back|web-close|browse|file-write|file-append|file-read|file-list|observe-screen|read-inbox|email|discord-dm|schedule|notify|clipboard-read|clipboard-write|echo-find|echo-do|chat-send|navigate|recall)\b/i.test(`${thought || ''}\n${say || ''}`);
-  if ((!say || !say.trim()) && !_hasToolTag && !pulledFromThought) {
+  // Salvage runs on ANY real user turn (dropped the old `!pulledFromThought` guard — a turn where Lucas
+  // snapped her out of a thought must ALSO not go silent; that's exactly when the reply lands in <think>).
+  if ((!say || !say.trim()) && !_hasToolTag) {
     try {
       const gist = thought ? thought.replace(/\s+/g, ' ').trim().slice(-360) : '';
       const nudge = gist
@@ -5736,6 +5738,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       if (r.say && r.say.trim()) { say = r.say; truncated = r.truncated; if (r.thought) thought = thought ? `${thought}\n${r.thought}` : r.thought; }
       else console.log('[main] empty-say retry still produced no say');
     } catch (e) { console.error('[main] empty-say retry failed:', e.message); }
+  }
+  // BURIED-REPLY FLOOR (conversational-coherence A): if she STILL has no spoken reply but clearly
+  // formed interior (substantive thought), a real user turn must not resolve to a bare "…" that leaves
+  // her genuine response buried on the subconscious rail. The re-prompt above is the promotion path;
+  // when even that fails to voice it, surface a brief, honest in-voice recovery instead of silence.
+  // Only on a genuine conversational turn (no tool tag in flight — that path speaks via its follow-up).
+  if ((!say || !say.trim()) && !_hasToolTag && thought && thought.replace(/\s+/g, ' ').trim().length >= 40) {
+    say = `Sorry — I had a reply forming and lost the thread of it before it reached you. What did you want me to focus on?`;
+    console.log('[main] buried-reply floor engaged — surfaced recovery line over silent "…"');
   }
 
   // Detect <wonder>X</wonder> in thought OR say — Stheno can self-prompt by emitting

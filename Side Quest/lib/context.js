@@ -320,6 +320,8 @@ function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonol
 
 You are a continuous mind, not a fresh assistant each turn — but that shows as picking up the ACTUAL thread, not as reciting what you did between turns. One relevant thread, stated once. Do not reuse an opener or a line from a recent reply.
 
+WHAT THEY ASKED WINS: the message you're answering is what ${userName || 'they'} JUST said — answer THAT. Anything you were doing or perceiving in the background — a page or video open in your browser, a meeting you're following, an email or inbound that arrived, something you were reading or looking at between turns — is BACKGROUND awareness, not the subject. Do NOT pivot the reply to it, offer to "interact with" it, or treat it as what they asked about, UNLESS they actually reference it. If their message doesn't mention the page/video/inbound, it is not what they want.
+
 Examples:
 • They ask about X and you happened to read about X → bring it in: "I looked at X between our turns — the part that bears on this is …"
 • They say good morning / make small talk → just reply, warm and brief. No research, no tangent.
@@ -353,10 +355,18 @@ Examples:
     const t = recentTurns[i];
     if (t.speaker === 'user') { entries.push({ role: 'user', content: t.content }); i++; }
     else if (t.speaker === 'ai_thought') {
-      let said = '';
-      if (i + 1 < recentTurns.length && recentTurns[i + 1].speaker === 'ai_said') { said = recentTurns[i + 1].content; i += 2; }
-      else i++;
-      entries.push({ role: 'assistant', thought: t.content, say: said });
+      if (i + 1 < recentTurns.length && recentTurns[i + 1].speaker === 'ai_said') {
+        entries.push({ role: 'assistant', thought: t.content, say: recentTurns[i + 1].content }); i += 2;
+      } else {
+        // ORPHAN THOUGHT DEMOTION (conversational-coherence B): an ai_thought with no paired ai_said is
+        // idle/autonomous interior — between-turn wandering or a tool-followup musing, NOT a dialogue
+        // turn. Replaying its <think> as recent assistant context makes the model CONTINUE that private
+        // thread instead of answering the live message (the "let me interact with the YouTube page"
+        // non-sequitur, where a stale browse-thought hijacked a reply about Louisiana). Local = voice +
+        // continuity; interior arrives via the graph pull + WHERE-WE-ARE summary, not by replaying idle
+        // musings as things she "said". Drop it from the live prompt.
+        i++;
+      }
     }
     else if (t.speaker === 'ai_said') { entries.push({ role: 'assistant', thought: '', say: t.content }); i++; }
     else i++;
