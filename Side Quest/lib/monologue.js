@@ -1493,7 +1493,13 @@ function activeSetNames() {
   // recognized (db.isOwnerName), not an unknown civic subject to profile via the Echo corpus. This is the fix
   // for the graph-walk "I didn't have anything on L. Overby → pulled it together (via Echo corpus)" incident.
   const push = (n) => { const s = String(n == null ? '' : n).trim(); if (s.length >= 3 && !db.isOwnerName(s)) names.push(s); };
-  try { for (const t of require('./puller_db').listTargets({ limit: 40 })) push(t && t.name); } catch {}
+  // PULLER WEIGHT CAP (2026-07-12, Lucas: "cap weight and age out"): the autonomous puller is the least-
+  // grounded active-set source, and the SA/Tanzania flood packed it with 40 off-domain targets that
+  // MONOPOLIZED the relevant-frontier's 40-name window (idle_anchors._RELEVANT_MAX_NAMES) — so idle
+  // enrichment only ever saw Tanzanian names and never his real work. Capped hard, his doc-decomp + cards
+  // now get INTO the window; the flood targets age out of the recency window as new work accrues. Env-tunable.
+  const _pullerCap = parseInt(process.env.ZOE_ACTIVE_PULLER_CAP || '', 10) || 8;
+  try { for (const t of require('./puller_db').listTargets({ limit: _pullerCap })) push(t && t.name); } catch {}
   try { for (const c of db.listRecentCards({ types: ['org', 'place', 'event'], limit: 20 })) push(c && c.name); } catch {}
   try { for (const o of db.listKgObservations({ feed: 'doc-decomp', limit: 40 })) { push(o && o.source_entity); push(o && o.target); } } catch {}
   const seen = new Set(); const out = [];
