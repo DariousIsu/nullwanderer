@@ -532,12 +532,45 @@ function onActivity(evt) {
   try {
     if (evt.kind === 'node.born' && evt.anchor != null) {
       const now = performance.now(), prev = _bornAt.get(evt.anchor);
-      if (prev != null && now - prev < 7000) return;   // already sparked this node within the poll window
+      if (prev != null && now - prev < 7000) return;   // de-dupe rapid repeats of the same write
       _bornAt.set(evt.anchor, now);
       if (_bornAt.size > 400) { for (const [k, t] of _bornAt) if (now - t > 12000) _bornAt.delete(k); }
+      queueBorn(evt); return;   // Slice 4: coalesce + optimistically mint → pushed births are instant, bulk bursts supernova
     }
     spawnActivity(evt);
   } catch (e) { warnOnce('activity', e); }
+}
+// Slice 4 — PUSH-DRIVEN births. A real graph write (Slice 2 node.born) arrives BEFORE the 5s poll would add the
+// node, so optimistically MINT it into the short-term layer NOW: it appears instantly and sparks at its own
+// position (not a far-field shimmer), and a burst COALESCES into one supernova (a bulk research pull) the way the
+// poll used to. The poll stays reconciler + safety-net: a pushed node is already present so it won't re-gesture
+// it, while docs / non-graph_memory writes the poll still mints + sparks itself. Bounded 320ms coalescing window.
+let _bornBuf = [], _bornTimer = null;
+function queueBorn(evt) { _bornBuf.push(evt); if (!_bornTimer) _bornTimer = setTimeout(flushBorn, 320); }
+function flushBorn() {
+  _bornTimer = null;
+  const batch = _bornBuf.splice(0);
+  mintBorn(batch);                              // structural: make the new nodes exist + render (always, even reduced-motion)
+  if (!G || prefersReducedMotion) return;
+  const uniq = [...new Set(batch.map(e => e.anchor).filter(a => a != null))];
+  if (uniq.length >= 8) {                       // bulk pull → one supernova at the batch centroid
+    let fx = 0, fy = 0, fc = 0;
+    for (const id of uniq) { const n = kgFindNode(id); if (n && Number.isFinite(n.x)) { fx += n.x; fy += n.y; fc++; } }
+    if (fc) superNova(fx / fc, fy / fc, uniq.length); else fieldFlare({ db: 'sidequest', kind: 'node.born', count: uniq.length });
+  } else {
+    for (const id of uniq) spawnActivity({ db: 'sidequest', kind: 'node.born', anchor: id });
+  }
+}
+function mintBorn(batch) {
+  let minted = 0; const c = coreCentroid();
+  for (const e of batch) {
+    const id = e.anchor; if (id == null) continue;
+    if (shortTerm.nodes.has(id) || kgFindNode(id)) continue;   // already loaded (poll or Echo) → don't duplicate
+    shortTerm.nodes.set(id, { id, store: 'sidequest', entityType: 'concept', epistemic: e.epistemic || 'told', summary: null, bornAt: performance.now(), x: c.x + (Math.random() - 0.5) * 90, y: c.y + (Math.random() - 0.5) * 90 });
+    minted++;
+  }
+  if (minted && G) applyFilter();   // render the freshly minted nodes so their gestures have a real position
+  return minted;
 }
 
 // Atmosphere pass (onRenderFramePre → drawn under links/nodes): a screen-space vignette (subtle centre
@@ -1128,4 +1161,4 @@ try { setInterval(() => { loadShortTerm(); }, 5000); window.__kgRefreshST = () =
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-11z3: Stage-B currents — match.hit recognition arc / recall inward wave / promote graduation arc (in-view; weather fallback)');
+console.info('[kg] surface build 2026-07-12z4: Slice 4 — push node.born optimistically MINTS + coalesces (instant births, bulk supernova); poll = reconciler/safety-net');
