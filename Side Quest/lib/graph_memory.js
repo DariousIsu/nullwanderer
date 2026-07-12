@@ -20,6 +20,7 @@
  * once a real source arrives.
  */
 const db = require('./db');
+const kga = require('./kg_activity');   // kg:activity push bus — the active core sparks as she writes (Slice 2)
 
 // Epistemic trust order. anticipated is "grounded as an expectation" (someone
 // actually said it would happen) so it's canonical-but-unconfirmed; speculated
@@ -76,7 +77,10 @@ function recordEntity({ name, type = 'concept', subtype = null, summary = null, 
     if (summary && !existing.summary) fields.summary = summary;
     if (type && type !== 'concept' && existing.entity_type === 'concept') fields.entity_type = type;
     if (conf > (existing.confidence || 0)) fields.confidence = conf;
-    if (Object.keys(fields).length) db.graphUpdateEntity(existing.id, fields);
+    if (Object.keys(fields).length) {
+      db.graphUpdateEntity(existing.id, fields);
+      kga.emit({ db: 'sidequest', kind: 'node.enrich', anchor: name, epistemic, count: 1 });   // learned more about a known node
+    }
     entityId = existing.id;
   } else {
     const r = db.graphInsertEntity({
@@ -84,6 +88,7 @@ function recordEntity({ name, type = 'concept', subtype = null, summary = null, 
       epistemic, confirmed: null, proposedBy
     });
     entityId = r.id;
+    kga.emit({ db: 'sidequest', kind: 'node.born', anchor: name, epistemic, count: 1 });   // a new node lands in the active core
   }
   if (source) attachSource('entity', entityId, source);
   return { ok: true, entityId, proposed: false };
@@ -118,6 +123,7 @@ function recordRelation({ source, target, type, epistemic = 'told', confidence =
     sourceId: se.entityId, targetId: te.entityId, relationType: relType,
     confidence: conf, epistemic, confirmed: null, proposedBy, validFrom
   });
+  kga.emit({ db: 'sidequest', kind: 'edge.born', anchor: sName, anchor2: tName, epistemic, count: 1 });   // a synapse forms between two core nodes
   if (sourceObj) attachSource('relation', rel.id, sourceObj);
   return { ok: true, relationId: rel.id, sourceId: se.entityId, targetId: te.entityId, proposed: false };
 }

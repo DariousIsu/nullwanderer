@@ -11,6 +11,7 @@ const os = require('os'); const path = require('path');
 process.env.SQ_DB_PATH = path.join(os.tmpdir(), `sq_graphmem_${Date.now()}`, 'sq.db');
 const db = require('../lib/db'); db.init();
 const gm = require('../lib/graph_memory');
+const kgActs = []; global.__emitKgActivity = (p) => kgActs.push(p);   // capture the kg:activity push bus (Slice 2)
 
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}`); } };
@@ -69,6 +70,21 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
   const top = gm.topFacts({ limit: 10 });
   ok('topFacts returns only canonical entities', top.length > 0 && top.every(e => gm.trust(e.epistemic) >= 0));
   ok('no speculated entity leaked into facts', !top.some(e => e.epistemic === 'speculated'));
+
+  console.log('\nKG:ACTIVITY BUS — real writes push node.born/enrich/edge.born into the active core (Slice 2):');
+  kgActs.length = 0;
+  const born = gm.recordEntity({ name: 'Zephyr Testnode', type: 'concept', epistemic: 'read' });   // brand-new canonical
+  ok('new canonical entity → node.born (db=sidequest, anchor=name, epistemic)', !!born.entityId && kgActs.some(a => a.kind === 'node.born' && a.db === 'sidequest' && a.anchor === 'Zephyr Testnode' && a.epistemic === 'read'));
+  kgActs.length = 0;
+  gm.recordEntity({ name: 'Zephyr Testnode', type: 'concept', epistemic: 'witnessed' });   // trust upgrade read→witnessed
+  ok('trust upgrade on a KNOWN node → node.enrich (not a second born)', kgActs.some(a => a.kind === 'node.enrich' && a.anchor === 'Zephyr Testnode') && !kgActs.some(a => a.kind === 'node.born'));
+  kgActs.length = 0;
+  const e2 = gm.recordRelation({ source: 'Zephyr Testnode', target: 'Nimbus Concept', type: 'relates to', epistemic: 'read' });
+  ok('grounded relation → edge.born (both endpoints as anchors)', !!e2.relationId && kgActs.some(a => a.kind === 'edge.born' && a.anchor === 'Zephyr Testnode' && a.anchor2 === 'Nimbus Concept'));
+  ok('a NEW endpoint born alongside the edge (Nimbus Concept)', kgActs.some(a => a.kind === 'node.born' && a.anchor === 'Nimbus Concept'));
+  kgActs.length = 0;
+  gm.recordEntity({ name: 'Ghost Idea', type: 'concept', epistemic: 'speculated' });   // proposal — never enters the graph
+  ok('speculated proposal emits NO node activity (stays out of the canonical graph)', !kgActs.some(a => a.kind === 'node.born' || a.kind === 'node.enrich'));
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { require('fs').rmSync(path.dirname(process.env.SQ_DB_PATH), { recursive: true, force: true }); } catch {}

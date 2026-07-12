@@ -449,7 +449,23 @@ function drawActivities(ctx, scale) {
     }
   }
 }
-function onActivity(evt) { if (evt) try { spawnActivity(evt); } catch (e) { warnOnce('activity', e); } }
+// node.born DEDUPE: a real graph write pushes node.born immediately (Slice 2), and the 5s short-term poll
+// ALSO sparks node.born when it next sees that node — so the same node would double-spark. Suppress a repeat
+// node.born for the same anchor within the poll window (7s > the 5s poll), so push + poll coexist cleanly
+// (and it stays correct once Slice 4 retires the poll — a lone born just sparks once). Bounded map.
+const _bornAt = new Map();
+function onActivity(evt) {
+  if (!evt) return;
+  try {
+    if (evt.kind === 'node.born' && evt.anchor != null) {
+      const now = performance.now(), prev = _bornAt.get(evt.anchor);
+      if (prev != null && now - prev < 7000) return;   // already sparked this node within the poll window
+      _bornAt.set(evt.anchor, now);
+      if (_bornAt.size > 400) { for (const [k, t] of _bornAt) if (now - t > 12000) _bornAt.delete(k); }
+    }
+    spawnActivity(evt);
+  } catch (e) { warnOnce('activity', e); }
+}
 
 // Atmosphere pass (onRenderFramePre → drawn under links/nodes): a screen-space vignette (subtle centre
 // lift, darker rim) turns the flat void into space, a far-field cosmos implies the corpus continuing beyond
@@ -1039,4 +1055,4 @@ try { setInterval(() => { loadShortTerm(); }, 5000); window.__kgRefreshST = () =
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-11z: kg:activity push bus LIVE (Slice 1) — onActivity wired to the real IPC channel');
+console.info('[kg] surface build 2026-07-11z2: Slice 2 — real SQ emitters (node.born/enrich/edge.born) push into the active core; node.born deduped vs the poll');
