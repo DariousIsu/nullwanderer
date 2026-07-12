@@ -5726,7 +5726,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const _hasToolTag = /<(web-open|web-read|web-click|web-type|web-back|web-close|browse|file-write|file-append|file-read|file-list|observe-screen|read-inbox|email|discord-dm|schedule|notify|clipboard-read|clipboard-write|echo-find|echo-do|chat-send|navigate|recall)\b/i.test(`${thought || ''}\n${say || ''}`);
   // Salvage runs on ANY real user turn (dropped the old `!pulledFromThought` guard — a turn where Lucas
   // snapped her out of a thought must ALSO not go silent; that's exactly when the reply lands in <think>).
-  if ((!say || !say.trim()) && !_hasToolTag) {
+  // `|| truncated`: a TRUNCATED thought that merely ECHOES a `<browse…>`/tool fragment (cut off mid-tag,
+  // so it never actually parses or runs) used to trip _hasToolTag and silence the whole turn → "…". On a
+  // truncation the tag is unreliable, so still salvage a real reply.
+  if ((!say || !say.trim()) && (!_hasToolTag || truncated)) {
     try {
       const gist = thought ? thought.replace(/\s+/g, ' ').trim().slice(-360) : '';
       const nudge = gist
@@ -5750,7 +5753,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // her genuine response buried on the subconscious rail. The re-prompt above is the promotion path;
   // when even that fails to voice it, surface a brief, honest in-voice recovery instead of silence.
   // Only on a genuine conversational turn (no tool tag in flight — that path speaks via its follow-up).
-  if ((!say || !say.trim()) && !_hasToolTag && thought && thought.replace(/\s+/g, ' ').trim().length >= 40) {
+  if ((!say || !say.trim()) && (!_hasToolTag || truncated) && thought && thought.replace(/\s+/g, ' ').trim().length >= 40) {
     say = `Sorry — I had a reply forming and lost the thread of it before it reached you. What did you want me to focus on?`;
     console.log('[main] buried-reply floor engaged — surfaced recovery line over silent "…"');
   }

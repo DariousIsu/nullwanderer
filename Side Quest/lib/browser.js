@@ -935,15 +935,29 @@ async function chatUnwatchTag(tabAttr) {
 // Keyword → likely intended verb mapping. Different user requests need different
 // tag emissions. "Pick one" / "select" → click. "Type X" / "send X" → type.
 // "Scroll" → scroll. Anything else page-related → read first.
-const BROWSER_ACTION_KEYWORDS = /\b(look at|take a look|check|explore|interact|see what|read|read the|on the page|the open tab|active tab|the tab|click|scroll|navigate|open|browse|the page|this page|that page|the site|this site|what.s on|examine|pick|select|choose|tap|press|type|send|enter|fill|message|reply|launch|start)\b/i;
+// GATE (mis-send fix): fire ONLY when the message explicitly points at the browser — an unambiguous
+// browser verb (browse/navigate/scroll/click/tap) OR a browser SURFACE reference (the page/tab/site/link/
+// button/browser/website). The old list triggered on common words (read/check/open/look/start/message/
+// reply/send/type), so a plain research message while the shared browser merely happened to be connected
+// ("For Louisiana make sure you look under different titles…") got hijacked into a phantom
+// [ACTION REQUIRED — EMIT THE CLICK NOW] directive, spiralled her <think> onto a nonexistent click target,
+// and truncated the reply to "…". A false-negative (nudge stays quiet, she narrates) is cheap; a
+// false-positive hijacks the whole turn — so this errs strict, requiring an explicit browser reference.
+const BROWSER_ACTION_KEYWORDS = /\b(browse|navigate to|scroll(?:\s+(?:up|down))?|click|tap on|the page|this page|that page|the open tab|active tab|the tab|the site|this site|that site|the link|the button|the browser|on the page|on screen|the website)\b/i;
 const CLICK_HINTS = /\b(pick|select|choose|click|tap|press|hit|open|launch|start|go to|navigate to)\b/i;
 const TYPE_HINTS = /\b(type|send|enter|fill|message|reply|write|tell\s+(him|her|them|it))\b/i;
 const SCROLL_HINTS = /\b(scroll|page down|page up|scroll down|scroll up|further down|further up)\b/i;
 
+// Testable gate: is this user message actually a browser-action request (an explicit browser verb or a
+// page/tab/site reference), vs a plain message that merely contains a common verb? Exported for smokes.
+function isBrowserActionMessage(userMessage) {
+  return !!userMessage && BROWSER_ACTION_KEYWORDS.test(userMessage);
+}
+
 function buildActionNudge(userMessage) {
   if (!browserInstance) return null;
   if (!userMessage) return null;
-  if (!BROWSER_ACTION_KEYWORDS.test(userMessage)) return null;
+  if (!isBrowserActionMessage(userMessage)) return null;
 
   const activeTitle = (tabContext.activeTabTitle || '(no active tab)').slice(0, 80);
 
@@ -1003,6 +1017,7 @@ module.exports = {
   statusSnapshot,
   buildPromptBlock,
   buildActionNudge,
+  isBrowserActionMessage,
   parseTags,
   stripTags,
   splitBrowseOpens,
