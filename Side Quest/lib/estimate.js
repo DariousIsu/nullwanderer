@@ -42,7 +42,16 @@ function readbackLine({ facet = '', orgCount = 0, deep = false, priority = null,
   const est = estimateRun({ orgCount, deep, perOrgMin });
   const tag = priority ? ` [${priority}]` : '';
   const depthWord = deep ? 'deep (two-lane)' : 'standard';
-  return `Understood as${tag}: ${depthWord} research to gather "${String(facet || '(unspecified)').slice(0, 120)}" across ${orgCount} organization${orgCount === 1 ? '' : 's'}. Estimated ${est.human} (${est.perOrgMin} min/org).`;
+  const facetStr = String(facet || '(unspecified)').slice(0, 120);
+  // orgCount 0 = a DISCOVERY run (no org work-list yet) OR a fully-covered run. Either way an
+  // "across 0 organizations. Estimated (nothing to do)" line is a meaningless aggregate over an empty
+  // set — it reads as a robotic no-op in her voice ("focusing … across 0 organizations (estimated:
+  // nothing to do)"). Speak the honest SHAPE instead: the goal, and that the first step is finding
+  // who to look at. No fabricated count, no "nothing to do".
+  if (orgCount <= 0) {
+    return `Understood as${tag}: ${depthWord} research to gather "${facetStr}" — I don't have a target list for that yet, so I'll start by finding who to look at.`;
+  }
+  return `Understood as${tag}: ${depthWord} research to gather "${facetStr}" across ${orgCount} organization${orgCount === 1 ? '' : 's'}. Estimated ${est.human} (${est.perOrgMin} min/org).`;
 }
 
 module.exports = { estimateRun, readbackLine, humanizeMin, DEFAULT_SINGLE_MIN, DEFAULT_DEEP_MIN };

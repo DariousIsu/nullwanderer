@@ -42,9 +42,14 @@ async function draft({ userMessage, grounding, kind = 'general', deps = {} } = {
   if (!userMessage || !grounding || !String(grounding).trim()) return null;
   const askFn = deps.ask || cloud.ask;
   const want = 'Output ONLY the substance of the correct answer, in 1-3 plain sentences, grounded '
-    + 'STRICTLY in the GROUNDING below. No first-person voice, no preamble, no quotes, no labels. If '
-    + 'the grounding does not actually answer the question, state exactly what IS known from it and that '
-    + 'the rest is unclear. NEVER add facts, names, or specifics beyond the grounding.';
+    + 'STRICTLY in the GROUNDING below. No first-person voice, no preamble, no quotes, no labels. '
+    + 'USE ONLY grounding that is actually ABOUT the question\'s subject: if a piece of grounding is '
+    + 'about a DIFFERENT entity, place, jurisdiction, or organization than the question asks about, '
+    + 'DISREGARD it entirely — do not mention it, name it, or recite it (e.g. for a question about '
+    + 'Louisiana parishes, ignore any grounding about a federal agency or a different state\'s city). '
+    + 'If, after disregarding off-topic grounding, nothing in it answers the question, say plainly that '
+    + 'you don\'t have records on that specific thing yet — do NOT pad the answer with unrelated facts. '
+    + 'NEVER add facts, names, or specifics beyond the grounding.';
   let out = null;
   try {
     out = await askFn({

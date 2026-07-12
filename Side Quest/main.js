@@ -5131,6 +5131,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         })();
         composedUserMessage += `\n\n[${userName} CORRECTED the active research run — you've applied it LIVE (the run continues on the corrected scope, nothing restarts): ${plan.summary}. Confirm back in ONE short line, RESTATING the corrected goal/scope so he sees you understood, with the updated estimate. ${rb}]`;
         correctionHandled = true;
+        // NARRATE-VS-DO (C3): a correction reshapes the run's scope but used to dispatch NO fresh work —
+        // the driver only re-read the meta on its next ~45s tick, so "I've updated the search / I'm on
+        // it" was a claim ahead of any action. Kick a tick NOW on the corrected scope so the words are
+        // true. Idempotent: startDirectedFocusDriver no-ops if already running; the tick no-ops if a
+        // step is already in flight.
+        try { kickDirectedFocusDriver(); } catch (e) { console.error('[correction] kick failed:', e.message); }
         console.log(`[correction] applied to #${fid}: ${plan.summary}`);
       }
     }
