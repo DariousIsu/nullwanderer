@@ -408,10 +408,42 @@ function spawnActivity(evt) {
   } else if (kind === 'node.born' || kind === 'node.enrich') {
     if (a && pa && pa.inView) { activities.push({ kind, startAt: performance.now(), dur: kind === 'node.born' ? 750 : 640, a, col, epistemic: evt.epistemic }); }
     else fieldFlare(evt, pa);
+  } else if (kind === 'match.hit') {
+    // recognition arc: the active-core node shoots a bright thread to the matched corpus node ("I know this").
+    // Needs BOTH endpoints on screen to be legible; otherwise it shimmers as weather where the work happened.
+    if (a && b && pa && pb && pa.inView && pb.inView) activities.push({ kind, startAt: performance.now(), dur: 1000, a, b, col });
+    else fieldFlare(evt, pa || pb);
+  } else if (kind === 'recall') {
+    // inward wave: a corpus node lights and a pulse travels toward the active core (reference-not-copy, no mint).
+    if (a && pa && pa.inView) { const c = coreCentroid(); activities.push({ kind, startAt: performance.now(), dur: 950, a, tx: c.x, ty: c.y, col }); }
+    else fieldFlare(evt, pa);
+  } else if (kind === 'promote') {
+    // graduation arc: the node travels from the core OUTWARD to the corpus and locks in.
+    if (a && pa && pa.inView) {
+      const c = coreCentroid(); let dx = a.x - c.x, dy = a.y - c.y; let d = Math.hypot(dx, dy);
+      if (d < 0.001) { dx = 0; dy = -1; d = 1; }                       // node sitting at the centroid → send it straight out
+      const OUT = 70, tx = a.x + (dx / d) * OUT, ty = a.y + (dy / d) * OUT;
+      activities.push({ kind, startAt: performance.now(), dur: 1050, a, tx, ty, col });
+    } else fieldFlare(evt, pa);
   } else {
-    fieldFlare(evt, pa);   // P1/P2 kinds (promote/match/recall/doc/news/think…) register as weather until Stage B
+    fieldFlare(evt, pa);   // doc.land / news / think and any other kind → far-field weather
   }
   if (activities.length > ACT_CAP) activities.shift();
+}
+// The active core's centre of mass in GRAPH space (the violet short-term cluster makeCoreForce pulls together):
+// recall waves travel INWARD to it, promote arcs travel OUTWARD from it. Falls back to the whole-graph centroid
+// (then origin) when no short-term nodes are loaded. Cheap — one pass over the current node set.
+function coreCentroid() {
+  const nodes = (G && G.graphData().nodes) || [];
+  let cx = 0, cy = 0, c = 0, ax = 0, ay = 0, ac = 0;
+  for (const n of nodes) {
+    if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) continue;
+    ax += n.x; ay += n.y; ac++;
+    if (n.store === 'sidequest') { cx += n.x; cy += n.y; c++; }
+  }
+  if (c) return { x: cx / c, y: cy / c };
+  if (ac) return { x: ax / ac, y: ay / ac };
+  return { x: 0, y: 0 };
 }
 // GRAPH-space gestures (drawn in drawAtmosphere, under the nodes). NaN-guarded (createLinearGradient throws).
 function drawActivities(ctx, scale) {
@@ -423,6 +455,7 @@ function drawActivities(ctx, scale) {
     if (A.kind === 'supernova') { drawSupernova(ctx, A, p); continue; }   // no node anchor — draws at fixed graph coords
     const a = A.a; if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.y)) { activities.splice(i, 1); continue; }
     const col = A.col || '#7dd3fc', lit = lighten(col, 0.5), r = a.__r || 4;
+    if (A.kind === 'match.hit' || A.kind === 'recall' || A.kind === 'promote') { drawCurrent(ctx, scale, A, a, p); continue; }
     if (A.kind === 'node.born') {                                  // spark: expanding ring + core flash
       const rr = r + 2 + p * 16, fade = 1 - p;
       ctx.strokeStyle = rgbaHex(lit, 0.7 * fade); ctx.lineWidth = Math.max(0.5, 1.6 / scale);
@@ -447,6 +480,46 @@ function drawActivities(ctx, scale) {
       if (grow >= 1) { const mp = (p - 0.7) / 0.3, mx = a.x + (b.x - a.x) * mp, my = a.y + (b.y - a.y) * mp;   // pulse fires along the new synapse
         ctx.beginPath(); ctx.arc(mx, my, 1.8, 0, 2 * Math.PI, false); ctx.fillStyle = rgbaHex(lit, 0.9 * (1 - mp)); ctx.fill(); }
     }
+  }
+}
+// P1 CROSS-STORE CURRENTS (Stage B) — the "two-store life becomes legible" gestures. All graph-space, drawn
+// under the nodes; NaN-guarded via the caller. Palette: SQ core = violet #a78bfa, Echo corpus = sky #7dd3fc.
+const SQ_VIOLET = '#a78bfa', ECHO_SKY = '#7dd3fc';
+function drawCurrent(ctx, scale, A, a, p) {
+  const lw = (base, min) => Math.max(min, base / scale);
+  if (A.kind === 'match.hit') {                                    // recognition arc: core → matched corpus node
+    const b = A.b; if (!b || !Number.isFinite(b.x) || !Number.isFinite(b.y)) return;
+    const grow = Math.min(1, p / 0.45), ex = a.x + (b.x - a.x) * grow, ey = a.y + (b.y - a.y) * grow;
+    const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+    g.addColorStop(0, rgbaHex(lighten(SQ_VIOLET, 0.4), 0.85 * (1 - p * 0.4)));
+    g.addColorStop(1, rgbaHex(lighten(ECHO_SKY, 0.4), 0.5 * (1 - p * 0.4)));
+    ctx.strokeStyle = g; ctx.lineWidth = lw(2.0, 0.8); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(ex, ey); ctx.stroke();
+    const mp = Math.min(1, p / 0.5), mx = a.x + (b.x - a.x) * mp, my = a.y + (b.y - a.y) * mp;   // recognition pulse jumps across
+    ctx.beginPath(); ctx.arc(mx, my, 2.4, 0, 2 * Math.PI, false); ctx.fillStyle = rgbaHex('#e9d5ff', 0.95 * (1 - p * 0.5)); ctx.fill();
+    if (p >= 0.5) { const q = Math.sin((p - 0.5) / 0.5 * Math.PI), rr = (b.__r || 4) + 2 + q * 10;   // "I know this" flash at the corpus node
+      ctx.strokeStyle = rgbaHex(lighten(ECHO_SKY, 0.5), 0.7 * q); ctx.lineWidth = lw(1.4, 0.5);
+      ctx.beginPath(); ctx.arc(b.x, b.y, rr, 0, 2 * Math.PI, false); ctx.stroke(); }
+  } else if (A.kind === 'recall') {                                // inward wave: corpus node → active core
+    const q0 = Math.sin(Math.min(1, p / 0.4) * Math.PI / 2);
+    ctx.strokeStyle = rgbaHex(lighten(ECHO_SKY, 0.5), 0.6 * (1 - p)); ctx.lineWidth = lw(1.3, 0.5);
+    ctx.beginPath(); ctx.arc(a.x, a.y, (a.__r || 4) + 2 + q0 * 6, 0, 2 * Math.PI, false); ctx.stroke();
+    const mx = a.x + (A.tx - a.x) * p, my = a.y + (A.ty - a.y) * p;
+    const g = ctx.createLinearGradient(a.x, a.y, A.tx, A.ty);
+    g.addColorStop(0, rgbaHex(lighten(ECHO_SKY, 0.4), 0.5 * (1 - p))); g.addColorStop(1, rgbaHex(SQ_VIOLET, 0));
+    ctx.strokeStyle = g; ctx.lineWidth = lw(1.3, 0.6); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(mx, my); ctx.stroke();
+    ctx.beginPath(); ctx.arc(mx, my, 2.0, 0, 2 * Math.PI, false); ctx.fillStyle = rgbaHex(lighten(ECHO_SKY, 0.5), 0.85 * (1 - p)); ctx.fill();
+  } else if (A.kind === 'promote') {                               // graduation arc: core node → corpus, locks in
+    const mp = Math.min(1, p / 0.8), mx = a.x + (A.tx - a.x) * mp, my = a.y + (A.ty - a.y) * mp;
+    const g = ctx.createLinearGradient(a.x, a.y, A.tx, A.ty);
+    g.addColorStop(0, rgbaHex(SQ_VIOLET, 0)); g.addColorStop(1, rgbaHex(lighten(ECHO_SKY, 0.4), 0.6 * (1 - p * 0.3)));
+    ctx.strokeStyle = g; ctx.lineWidth = lw(1.4, 0.6); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(mx, my); ctx.stroke();
+    ctx.beginPath(); ctx.arc(mx, my, 2.2, 0, 2 * Math.PI, false); ctx.fillStyle = rgbaHex(lighten(ECHO_SKY, 0.5), 0.9 * (1 - mp * 0.5)); ctx.fill();
+    if (p >= 0.8) { const q = Math.sin((p - 0.8) / 0.2 * Math.PI);   // lock-in ring when it reaches the corpus
+      ctx.strokeStyle = rgbaHex(lighten(ECHO_SKY, 0.5), 0.8 * q); ctx.lineWidth = lw(1.6, 0.6);
+      ctx.beginPath(); ctx.arc(A.tx, A.ty, 3 + q * 9, 0, 2 * Math.PI, false); ctx.stroke(); }
   }
 }
 // node.born DEDUPE: a real graph write pushes node.born immediately (Slice 2), and the 5s short-term poll
@@ -1035,7 +1108,7 @@ function onCurationMove(p) {
   }
   ingestPulse(p);
 }
-try { window.__kgDedup = (anchor, count) => dedupAbsorb(anchor, count || 5); window.__kgAbsorbN = () => absorbs.length; window.__kgCuration = (p) => onCurationMove(p); window.__kgActivity = (evt) => onActivity(evt); window.__kgActN = () => activities.length + weather.length; window.__kgNova = (gx, gy, count) => superNova(gx, gy, count || 20); } catch (e) {}   // dev triggers + peek for live CDP verification
+try { window.__kgDedup = (anchor, count) => dedupAbsorb(anchor, count || 5); window.__kgAbsorbN = () => absorbs.length; window.__kgCuration = (p) => onCurationMove(p); window.__kgActivity = (evt) => onActivity(evt); window.__kgActN = () => activities.length + weather.length; window.__kgActKinds = () => activities.map(a => a.kind); window.__kgWeatherN = () => weather.length; window.__kgNova = (gx, gy, count) => superNova(gx, gy, count || 20); } catch (e) {}   // dev triggers + peek for live CDP verification
 followBtn.addEventListener('click', () => setFollow(!follow));
 try {
   if (window.sq && window.sq.kg && typeof window.sq.kg.onFocusMove === 'function') window.sq.kg.onFocusMove(onFocusMove);
@@ -1055,4 +1128,4 @@ try { setInterval(() => { loadShortTerm(); }, 5000); window.__kgRefreshST = () =
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-11z2: Slice 2 — real SQ emitters (node.born/enrich/edge.born) push into the active core; node.born deduped vs the poll');
+console.info('[kg] surface build 2026-07-11z3: Stage-B currents — match.hit recognition arc / recall inward wave / promote graduation arc (in-view; weather fallback)');
