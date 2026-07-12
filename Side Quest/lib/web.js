@@ -33,6 +33,7 @@ const PROFILE_DIR = path.join(path.dirname(db.DB_PATH), 'web_profile');
 // Downloads from her research browser are Playwright-controlled — without a downloadsPath they land
 // in a temp artifacts dir and get DELETED on context close. Give them a real, predictable home.
 const DOWNLOADS_DIR = path.join(path.dirname(db.DB_PATH), 'downloads');
+const relevance = require('./relevance');   // domain-relevance gate for the auto-PDF harvest
 
 // Resolve a non-clobbering destination path for a download (pure; `exists` injectable for the smoke).
 // Sanitizes the suggested filename and appends " (n)" before the extension on collision.
@@ -72,6 +73,23 @@ const NAV_TIMEOUT = 20000;
 const PDF_MAX_BYTES = 25 * 1024 * 1024;   // never auto-grab a file larger than this
 const AUTO_GRAB_PER_READ = 5;             // cap PDFs auto-harvested per page read
 const grabbedUrls = new Set();            // dedup — a URL fetched this session is never re-fetched
+// per-host flood-breaker — even relevance-passed PDFs: cap how many we auto-grab from ONE host in a
+// rolling window so a single archive index can't be vacuumed. Env-tunable (ZOE_GRAB_HOST_MAX / _WINDOW_MIN).
+const HOST_GRAB_WINDOW_MS = (parseFloat(process.env.ZOE_GRAB_HOST_WINDOW_MIN) || 20) * 60 * 1000;
+const HOST_GRAB_MAX = parseInt(process.env.ZOE_GRAB_HOST_MAX || '', 10) || 12;
+const _hostGrabs = new Map();             // host -> { n, windowStart }
+function _hostBudgetOk(host) {
+  if (!host) return true;
+  const now = Date.now();
+  let e = _hostGrabs.get(host);
+  if (!e || now - e.windowStart > HOST_GRAB_WINDOW_MS) { e = { n: 0, windowStart: now }; _hostGrabs.set(host, e); }
+  return e.n < HOST_GRAB_MAX;
+}
+function _hostGrabInc(host) {
+  if (!host) return;
+  const e = _hostGrabs.get(host) || { n: 0, windowStart: Date.now() };
+  e.n++; _hostGrabs.set(host, e);
+}
 
 let context = null;   // a Playwright-managed persistent context (her Chrome)
 let page = null;
@@ -1030,12 +1048,12 @@ async function pdfLinksOnPage() {
   if (!page) return [];
   try {
     const links = await withTimeout(page.evaluate(() => {
-      const out = [];
+      const out = []; const seen = new Set();
       for (const a of document.querySelectorAll('a[href]')) {
         const h = a.href || '';
-        if (/\.pdf(?:[?#]|$)/i.test(h)) out.push(h);
+        if (/\.pdf(?:[?#]|$)/i.test(h) && !seen.has(h)) { seen.add(h); out.push({ href: h, text: (a.textContent || '').trim().slice(0, 120) }); }
       }
-      return Array.from(new Set(out));
+      return out;
     }), 3000, []);
     return Array.isArray(links) ? links : [];
   } catch { return []; }
@@ -1045,10 +1063,25 @@ async function pdfLinksOnPage() {
 // on demand via <web-grab-pdfs/> and automatically (fire-and-forget) at the end of read().
 async function grabPdfs({ max = AUTO_GRAB_PER_READ } = {}) {
   if (!page) return { ok: false, reason: 'no page open' };
-  const links = (await pdfLinksOnPage()).filter(u => !grabbedUrls.has(u)).slice(0, Math.max(0, max));
+  const pageUrl = page.url();
+  const pageTitle = await page.title().catch(() => '');
+  const profile = relevance.getProfile(db);
+  const raw = (await pdfLinksOnPage()).filter(l => l && l.href && !grabbedUrls.has(l.href));
+  // GATE: skip clearly off-domain PDFs (foreign-gov archives etc.) and cap grabs per host so a single
+  // archive index can't be vacuumed. Lenient — only a foreign-gov source with zero domain overlap is dropped.
+  const kept = []; let skipRel = 0, skipHost = 0;
+  for (const l of raw) {
+    if (kept.length >= Math.max(0, max)) break;
+    const host = relevance.normHost(l.href) || relevance.normHost(pageUrl);
+    const a = relevance.assess({ url: l.href, pageUrl, filename: (l.href.split('#')[0].split('?')[0].split('/').pop() || ''), text: `${l.text || ''} ${pageTitle}` }, profile);
+    if (!a.relevant) { skipRel++; continue; }
+    if (!_hostBudgetOk(host)) { skipHost++; continue; }
+    kept.push({ href: l.href, host });
+  }
+  if (skipRel || skipHost) console.log(`[web] auto-grab gate on ${relevance.normHost(pageUrl) || 'page'}: kept ${kept.length}, skipped ${skipRel} off-domain + ${skipHost} host-flood`);
   const grabbed = [];
-  for (const u of links) { const r = await downloadPdf(u); if (r && r.ok) grabbed.push(r.savedAs); }
-  return { ok: true, found: links.length, grabbed };
+  for (const k of kept) { const r = await downloadPdf(k.href); if (r && r.ok) { grabbed.push(r.savedAs); _hostGrabInc(k.host); } }
+  return { ok: true, found: raw.length, grabbed, skipped: skipRel + skipHost };
 }
 
 // --- tags ---

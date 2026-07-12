@@ -2296,8 +2296,18 @@ function startDownloadsIngestWatcher() {
       const { text, via } = await extractFileMarkdown(fp);
       const title = pathm.basename(fp);
       if (!text || text.length < 40) { console.log(`[dl-ingest] skipped ${title} (thin/${via})`); return; }
+      // RELEVANCE QUARANTINE: catch-all for whatever bypassed the harvest gate (manual drops, pre-gate
+      // downloads). Off-domain docs still LAND (searchable in the doc store, marked) but are NOT decomposed
+      // into the entity graph — keeping the flood of foreign-registry names out of the KG. Lenient: only a
+      // clear foreign-gov source with zero domain overlap is held back.
+      const _rel = require('./lib/relevance');
+      const _verdict = _rel.assess({ filename: title, text: String(text).slice(0, 6000) }, _rel.getProfile(db));
       const landed = require('./lib/doc_store').land({ title, body: text, source: 'browser_download', ref: 'download:' + fp });
       if (landed && landed.landed) {
+        if (!_verdict.relevant) {
+          console.log(`[dl-ingest] QUARANTINED ${title} → doc ${landed.id} (${_verdict.reason}) — landed searchable, NOT decomposed`);
+          return;
+        }
         console.log(`[dl-ingest] ${title} → doc ${landed.id} (${text.length}ch via ${via})`);
         try { decomposeLandedDoc({ id: landed.id, title, body: text, source: 'browser_download' }).catch(() => {}); } catch {}
         try { surfaceDocCards({ id: landed.id, title, body: text }).catch(() => {}); } catch {}
