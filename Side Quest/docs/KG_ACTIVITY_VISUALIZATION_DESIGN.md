@@ -48,10 +48,16 @@ What actually shipped this arc (all live-verified via CDP; builds 10p→10y):
   renderer already routes these as far-field "weather". Smoke-covered (positive + negative each); `promote` is
   live-verify only (main.js fn). Full gate 180/180.
 
+- **Slice 4 — push-driven births** (commit `35169a3`, verified live): push `node.born` optimistically MINTS its
+  node into the short-term layer immediately (instant appear + spark, no ≤5s wait) and coalesces a burst ≥8 into
+  one supernova. The poll (`loadShortTerm`, unchanged) is now the **reconciler/safety-net** — it won't re-gesture
+  pushed nodes, still mints/sparks docs + non-`graph_memory` writes, and prunes anything no longer in the DB.
+
 **Still design-only / NOT built:** the **Echo `graph_change_feed` trigger** feed (§4, Slice 3 — separate
-NX-ECHO Python repo + MCP restart, gated on Echo up). The live core still uses **polling**; **Slice 4** retires
-its gesture role, then adds `doc.land`/`news` (they overlap the poll today) + cross-store **federation threads**
-(short↔long by name-match, currently 0) — held because they change existing behavior and need live eyeballing.
+NX-ECHO Python repo + MCP restart, gated on Echo up); `doc.land`/`news` inflow (the poll already sparks doc
+nodes, so a separate one would double — wire only for a distinct "packet from outside" gesture); cross-store
+**federation threads** (short↔long by name-match — match *quality* needs live eyeballing; draw-only, not
+sim-links, to avoid perturbing `coreForce`).
 - **Stage-B gesture polish** (commit `c52148e`, renderer-only, verified live): `match.hit` → recognition ARC,
   `recall` → inward WAVE (to `coreCentroid()`), `promote` → graduation ARC — drawn graph-space when the node(s)
   are in view, weather fallback off-screen. So the P1 currents are now legible gestures, not just shimmer.
