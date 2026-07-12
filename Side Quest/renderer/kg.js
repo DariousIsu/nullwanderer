@@ -1039,4 +1039,4 @@ try { setInterval(() => { loadShortTerm(); }, 5000); window.__kgRefreshST = () =
 // Load beacon (diagnostic): confirms THIS surface build actually loaded in the webview. After a reboot,
 // open the KG webview console — if this line is present the new renderer is live; if it's absent, an older
 // kg.js is being served (stale checkout / wrong branch), which is why the visuals wouldn't appear.
-console.info('[kg] surface build 2026-07-10y: supernova FLIES the follow camera to big pulls (holds ~1.4s) + 5s poll');
+console.info('[kg] surface build 2026-07-11z: kg:activity push bus LIVE (Slice 1) — onActivity wired to the real IPC channel');

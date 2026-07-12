@@ -168,7 +168,14 @@ contextBridge.exposeInMainWorld('sq', {
     onFocusMove: (cb) => { const h = (_e, p) => { try { cb(p); } catch (e) {} }; ipcRenderer.on('kg:focus-move', h); return () => ipcRenderer.removeListener('kg:focus-move', h); },
     // curation metabolism: main broadcasts kg:curation-move when the self-curation engine lands a batch
     // ({tier:'growth'|'curation'|'clean', kind, count, items?, anchor?}). Inert until the host emits it.
-    onCurationMove: (cb) => { const h = (_e, p) => { try { cb(p); } catch (e) {} }; ipcRenderer.on('kg:curation-move', h); return () => ipcRenderer.removeListener('kg:curation-move', h); }
+    onCurationMove: (cb) => { const h = (_e, p) => { try { cb(p); } catch (e) {} }; ipcRenderer.on('kg:curation-move', h); return () => ipcRenderer.removeListener('kg:curation-move', h); },
+    // kg:activity — the generalized data-activity bus (Stage A). main broadcasts kg:activity
+    // {db,kind,anchor,anchor2,count,tier,epistemic,meta} from real DB writes on both stores; the renderer's
+    // onActivity dispatcher routes on `kind`. Inert until the host emits it. (kg:curation-move stays as its
+    // own live dedup path — this bus carries the born/enrich/edge/match/recall/promote/doc/news/think feeds.)
+    onActivity: (cb) => { const h = (_e, p) => { try { cb(p); } catch (e) {} }; ipcRenderer.on('kg:activity', h); return () => ipcRenderer.removeListener('kg:activity', h); },
+    // dev-only: fire a real main→preload→renderer kg:activity round-trip (proves Slice 1 transport over CDP).
+    devActivity: (payload) => ipcRenderer.invoke('kg:dev-activity', payload)
   },
 
   // Reader / Library — read-only corpus reader on the document substrate.

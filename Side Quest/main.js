@@ -3585,6 +3585,25 @@ ipcMain.handle('kg:shortterm', async () => {
   } catch (e) { console.error('[kg] shortterm failed:', e.message); return { ok: false, error: e.message }; }
 });
 
+// kg:activity BUS (Stage A transport) — the single broadcaster the DB-side emitters (Slices 2/3) call to push a
+// real data-interaction event to the KG panel. Broadcasts to ALL webContents because the panel is a <webview>
+// (only it registers kg:activity), mirroring emitFocusMove. Payload is tiny + additive + safe-with-no-receiver.
+// Keep it defensive: a bad/absent payload must never throw into a caller on a hot DB path.
+function emitKgActivity(payload) {
+  try {
+    if (!payload || typeof payload !== 'object' || !payload.kind) return;
+    for (const wc of require('electron').webContents.getAllWebContents()) {
+      try { if (!wc.isDestroyed()) wc.send('kg:activity', payload); } catch (e) {}
+    }
+  } catch (e) {}
+}
+// Expose for the SQ-side emitters wired in later slices (graph_memory tap, resolveMention match.hit, recall,
+// promoteDocumentsPass, doc.land/news). They import main lazily or receive this via their init options.
+global.__emitKgActivity = emitKgActivity;
+// Dev round-trip trigger (CDP-verifiable): fire a REAL main→preload→renderer kg:activity so Slice 1 transport
+// can be proven end-to-end without a real emitter yet. Guarded like the other __kg dev hooks.
+ipcMain.handle('kg:dev-activity', async (_e, payload) => { try { emitKgActivity(payload || { db: 'sidequest', kind: 'node.born', anchor: 'DEV probe' }); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; } });
+
 // ============================ READER / LIBRARY (studio — writing suite Phase 2) ===============
 // Read-only corpus reader on the document substrate. Lists projects + recent docs, and renders a
 // document's body markdown through the shared block model (editor_import via doc_view). No model.
