@@ -614,11 +614,22 @@ function getRecentDisplayTurns(n) {
   return rows.reverse();
 }
 
+let _lastThinkEmit = 0;   // kg:activity think throttle — the monologue firehose becomes an ambient pulse, not a strobe
 function insertMonologue({ content, model = null, feedContext = null, type = 'thought', query = null, urls = null, importance = null }) {
   const ts = Date.now();
   const info = getDb()
     .prepare('INSERT INTO monologue (ts, model, content, feed_context, type, query, urls, importance) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .run(ts, model, content, feedContext ? JSON.stringify(feedContext) : null, type, query, urls ? JSON.stringify(urls) : null, importance);
+  // kg:activity — an ambient 'think' heartbeat (she's alive and working). THROTTLED (≥3.5s apart) so the
+  // monologue firehose reads as a background pulse, never a per-tick strobe; a varying anchor lets it roam the
+  // far-field. Safe-with-no-receiver (global.__emitKgActivity is only set in the Electron main process).
+  try {
+    if (ts - _lastThinkEmit >= 3500) {
+      _lastThinkEmit = ts;
+      const f = global.__emitKgActivity;
+      if (typeof f === 'function') f({ db: 'sidequest', kind: 'think', anchor: String(info.lastInsertRowid || ts), count: 1 });
+    }
+  } catch (e) { /* never disturb the write */ }
   return { id: info.lastInsertRowid, ts };
 }
 

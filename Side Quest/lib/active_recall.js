@@ -14,6 +14,7 @@
  * (Named active_recall — lib/recall.js is the unrelated <recall> marker-expander.)
  */
 const memory = require('./memory');
+const kga = require('./kg_activity');   // kg:activity push bus — recall pulls a corpus record inward (Slice 2b)
 
 const RICH_NOTES = 3;   // ≥ this many on-topic notes (or any verified_fact, or graph facts) = "rich"
 
@@ -99,6 +100,9 @@ async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retriev
   // PRECEDENCE — a fresh, deliberate verified_fact about this object leads over its (stale) KG dossier.
   let precedenceFact = null;
   if (obj) { try { precedenceFact = _precedenceFact(obj, notes, mentionUsed); } catch {} }
+  // recall — a corpus record we already hold gets pulled inward (reference-not-copy): the Echo node lights and
+  // a wave travels toward the active core. Only when a real object resolved (a thin/nil miss stays quiet).
+  if (obj && obj.name) { try { kga.emit({ db: 'echo', kind: 'recall', anchor: obj.name, count: 1 }); } catch (e) {} }
   return { topic: t, notes, facts, object: obj, coverage: rich ? 'rich' : 'thin', echo: echoHits.length, mention: mentionUsed, identityNote, precedenceFact, streamHits, ambiguous };
 }
 // Entity-shaped = a name/short phrase we can hand to quick_lookup (single-name → dossier), not a

@@ -249,6 +249,15 @@ const noGraph = () => [];
     ok((await ar.knowledgeBlock('nothing', { retrieveFn: async () => [], graphFn: noGraph, echoFn: async () => [], objectFn: async () => null, docFn: async () => [], newsFn: async () => [] })) === null, 'knowledgeBlock: no streams + nothing else → null (no empty section)');
     // existing tests (no docFn/newsFn, objectFn provided) get empty streamHits → unchanged behavior
     ok(Array.isArray(rBondi.streamHits) && rBondi.streamHits.length === 0, 'recall: no injected stream fns + objectFn present → streamHits empty (offline-safe, no regression)');
+
+    // ── recall EMITTER (Slice 2b): resolving an Echo object pushes a kg:activity recall (corpus → active core) ──
+    const rActs = []; global.__emitKgActivity = (p) => rActs.push(p);
+    const rObjHit = await ar.recall('John Curtis', { retrieveFn: async () => [], graphFn: noGraph, prominenceFn: async () => ({ status: 'ok' }), resolveFn: async () => ({ status: 'resolved', object: { id: 1, name: 'John Curtis (US)', entity_type: 'person', degree: 320, facts: ['a', 'b', 'c', 'd'], committees: [] } }) });
+    ok(!!rObjHit.object && rActs.some(a => a.kind === 'recall' && a.db === 'echo' && a.anchor === 'John Curtis (US)'), 'recall resolving an Echo object → kg:activity recall (anchor=canonical, db=echo)');
+    rActs.length = 0;
+    const rMiss = await ar.recall('Zzz Nothing', { retrieveFn: async () => [], graphFn: noGraph, objectFn: async () => null });
+    ok(!rMiss.object && !rActs.some(a => a.kind === 'recall'), 'a thin/nil recall (no object resolved) emits NO recall');
+    global.__emitKgActivity = undefined;   // don't leak the capture into later assertions
   } catch (e) {
     fail++; console.error('  ✗ threw:', e.stack || e.message);
   }

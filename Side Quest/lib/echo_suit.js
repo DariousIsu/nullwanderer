@@ -17,6 +17,7 @@
  * Design + decisions: Side Quest/docs/ECHO_INTEGRATION_MAP.md (locked 2026-06-22).
  */
 const echo = require('./echo');
+const kga = require('./kg_activity');   // kg:activity push bus — match.hit recognition arc (Slice 2b)
 
 const cap = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s || ''));
 // A tool call that failed on ARGS (not data) — worth one corrected retry in routeNeed.
@@ -844,7 +845,7 @@ async function _fuzzyCandidates(d, name, preferType) {
   return rows.filter(e => e && e.name && _fuzzyNameMatch(name, e.name)).map(e => ({ id: e.id, name: String(e.name), entity_type: e.entity_type }));
 }
 
-async function resolveMention(name, { preferType = null, dispatch = null, context = null } = {}) {
+async function _resolveMentionCore(name, { preferType = null, dispatch = null, context = null } = {}) {
   const d = dispatch || (liveReady() ? (tag) => _live.dispatch(tag) : null);
   const n = String(name || '').trim();
   if (!d) return { status: 'error', mention: n };
@@ -905,6 +906,18 @@ async function resolveMention(name, { preferType = null, dispatch = null, contex
   const dominant = obj.degree >= 8 || (obj.facts || []).length >= 4 || (obj.committees || []).length >= 1;
   if (!dominant) return { status: 'ambiguous', mention: n, reason: 'low-confidence', candidates: distinct.map(c => c.name), candidateObjs: distinct.slice(0, 4).map(c => ({ name: c.name, type: c.type || null })) };
   return { status: 'resolved', mention: n, object: obj };
+}
+// match.hit — when a local mention RESOLVES to an existing Echo entity, the active core shoots a recognition
+// thread to the matched corpus node ("I know this"). One tap over every resolved return of the core; the
+// emit is fail-safe and never alters the resolution result. anchor = the local mention, anchor2 = canonical.
+async function resolveMention(name, opts = {}) {
+  const r = await _resolveMentionCore(name, opts);
+  try {
+    if (r && r.status === 'resolved' && r.object && r.object.name) {
+      kga.emit({ db: 'sidequest', kind: 'match.hit', anchor: String(name || '').trim(), anchor2: r.object.name, count: 1 });
+    }
+  } catch (e) { /* never disturb resolution */ }
+  return r;
 }
 async function _searchEntities(d, name, preferType) {
   const args = { query: name, top_k: 10 };

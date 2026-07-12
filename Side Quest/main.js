@@ -7394,6 +7394,9 @@ async function promoteDocumentsPass({ limit = 20 } = {}) {
         }
         try { db.markDocumentPromoted(doc.id, `echo:${echoDocId}`); } catch {}
         promoted++;
+        // kg:activity — the graduation arc: this doc travels from the active core out to the Echo corpus and
+        // locks in. anchor = the doc that graduated. Fail-safe (never blocks the promotion loop).
+        try { emitKgActivity({ db: 'sidequest', kind: 'promote', anchor: String(doc.title || ('doc #' + doc.id)), count: 1 }); } catch (e) {}
         console.log(`[promote] doc #${doc.id} "${String(doc.title || '').slice(0, 40)}" → Echo doc ${echoDocId}${recipe.extractEntities ? ' (+entities)' : ''}`);
       } else { failed++; console.error(`[promote] doc #${doc.id} ingest returned no doc_id:`, String((res && res.text) || (res && res.error) || '').slice(0, 160)); }
     } catch (e) { failed++; console.error(`[promote] doc #${doc.id} failed:`, e.message); }

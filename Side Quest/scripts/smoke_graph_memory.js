@@ -86,6 +86,14 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
   gm.recordEntity({ name: 'Ghost Idea', type: 'concept', epistemic: 'speculated' });   // proposal — never enters the graph
   ok('speculated proposal emits NO node activity (stays out of the canonical graph)', !kgActs.some(a => a.kind === 'node.born' || a.kind === 'node.enrich'));
 
+  console.log('\nKG:ACTIVITY — monologue writes drive a THROTTLED ambient think heartbeat (Slice 2b):');
+  kgActs.length = 0;
+  db.insertMonologue({ content: 'thinking about the graph', type: 'thought' });
+  ok('first monologue write → exactly one think (db=sidequest)', kgActs.filter(a => a.kind === 'think' && a.db === 'sidequest').length === 1);
+  kgActs.length = 0;
+  db.insertMonologue({ content: 'another immediate thought', type: 'thought' });
+  ok('immediate second write → throttled (no think within 3.5s)', !kgActs.some(a => a.kind === 'think'));
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   try { require('fs').rmSync(path.dirname(process.env.SQ_DB_PATH), { recursive: true, force: true }); } catch {}
   process.exit(fail === 0 ? 0 : 1);

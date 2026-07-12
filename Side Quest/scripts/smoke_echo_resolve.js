@@ -365,6 +365,22 @@ function dispatch({ sibling = true } = {}) {
 
   ok(echo._nameCompatible('Donald Trump', 'Donald J. Trump') && !echo._nameCompatible('John Adam Smith', 'John Robert Smith'), '_nameCompatible: subset-chain same person; incompatible extras different people');
 
+  // ── match.hit EMITTER (Slice 2b): a mention that RESOLVES to an Echo entity pushes a recognition arc ──────
+  const acts = []; global.__emitKgActivity = (p) => acts.push(p);
+  const resolveD = async (tag) => {
+    if (tag.name === 'search_entities') return { ok: true, text: JSON.stringify({ result: [{ id: 1528616, name: 'Donald Trump (US)', entity_type: 'person', rank: 1 }] }) };
+    if (tag.name === 'quick_lookup') return { ok: true, text: JSON.stringify(PRES) };   // rich degree-13 → dominant → resolved
+    if (tag.name === 'db_query') return { ok: true, text: JSON.stringify({ ok: true, rows: [] }) };
+    if (tag.name === 'kg_neighborhood') return { ok: true, text: JSON.stringify({ neighbors: [] }) };
+    return { ok: false };
+  };
+  const rHit = await echo.resolveMention('Donald Trump', { dispatch: resolveD });
+  ok(rHit.status === 'resolved', 'resolveMention resolves the rich record');
+  ok(acts.some(a => a.kind === 'match.hit' && a.db === 'sidequest' && a.anchor === 'Donald Trump' && a.anchor2 === 'Donald Trump (US)'), 'resolved mention → match.hit (anchor=mention, anchor2=canonical)');
+  acts.length = 0;
+  const rNil = await echo.resolveMention('Zzz Nobody', { dispatch: async () => ({ ok: false }) });
+  ok(rNil.status !== 'resolved' && !acts.some(a => a.kind === 'match.hit'), 'a nil/miss resolution emits NO match.hit');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
