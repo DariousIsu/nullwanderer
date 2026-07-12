@@ -153,7 +153,32 @@ async function setFromText(text, sourceTurnId = null) {
 // Is `goal` too similar to a focus that was tombstoned within the refractory
 // window? Cheap text-containment check first (deterministic, offline), then a
 // semantic check via bge-small only if any tombstone carries an embedding.
+// CHRONIC-STALL suppression (D2): a goal tombstoned this many times within this window is demonstrably
+// uncompletable/thrashing — e.g. "promote these four records to active status", where KG promotion is
+// Echo's async gate with NO tool her focus loop can invoke, so it re-derives after each 24h refractory
+// expires and re-stalls forever (the loop Lucas saw her "fighting herself" in). Suppress it indefinitely.
+// A user DIRECTIVE (setFromDirective) still bypasses this gate, so Lucas can always deliberately re-assign.
+const CHRONIC_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;   // look back a month for repeat offenders
+const CHRONIC_STALLS = 2;                              // stalled >= this many times → treat as uncompletable
+
 async function recentlyTombstoned(goal) {
+  // Chronic pre-check: count same-goal tombstones over the wide window (cheap text-signature match only —
+  // no embedding cost); if it's a repeat offender, suppress indefinitely regardless of the 24h refractory.
+  try {
+    const wide = db.getKnowledgeBySourceSince('focus_tombstone%', Date.now() - CHRONIC_WINDOW_MS);
+    const gsig = blackboard.signature(goal);
+    if (wide && wide.length && gsig) {
+      let n = 0, first = null;
+      for (const r of wide) {
+        const rsig = blackboard.signature(r.content || '');
+        if (rsig && (rsig.includes(gsig) || gsig.includes(rsig))) { n += 1; first = first || r; }
+      }
+      if (n >= CHRONIC_STALLS) {
+        console.log(`[focus] suppressed CHRONIC re-spawn — "${goal.slice(0, 60)}" has stalled ${n}x within 30d; treating as uncompletable (re-assign via a directive to override)`);
+        return first;
+      }
+    }
+  } catch (e) { console.error('[focus] chronic-stall check failed:', e.message); }
   const rows = db.getKnowledgeBySourceSince('focus_tombstone%', Date.now() - REFRACTORY_MS);
   if (!rows || rows.length === 0) return null;
   const gsig = blackboard.signature(goal);

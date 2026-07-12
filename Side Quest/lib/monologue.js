@@ -1520,6 +1520,16 @@ function activeSetNames() {
 // branches forging connections. The CLOUD interprets + writes (propose_*, gated); a notable move
 // surfaces one line. Cadence- and budget-gated; goes quiet when there's no gap. Returns true if a
 // move ran (so the tick doesn't also free-associate). Fail-soft — any error → false (quiet).
+// DOMAIN LEASH (D1): true when a DIRECTED focus is actively being served — the switch that stops the
+// autonomous lanes wandering off-domain while a red-tag task runs (the "fighting herself" drift: the walk
+// grazing random historical figures, the puller minting medical-directory doctors). Re-queries focus
+// directly because the idle tick nulls its OWN activeFocus for directed foci (~L837), so that local is not
+// the signal. Reverts to full free exploration the moment no directed task is live (honours let-it-in/churn).
+function _directedFocusActive() {
+  try { const fl = require('./focus'); const f = fl.getCurrent(); return !!(f && fl.isDirected(f)); }
+  catch { return false; }
+}
+
 async function runGraphWalkMove(recentTurns, { force = false } = {}) {
   const nowTs = Date.now();
   // cadence: slow, deliberate — not every 10s tick. `force` skips it for a same-tick BURST (Slice 4); the
@@ -1626,7 +1636,12 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
   };
 
   const visitedKeys = graphWalk.visitedKeySet(_gm, nowTs);
-  const _news = await recentNews(); const _relevant = await relevantNodes(); const _thin = await thinNodes();
+  const _news = await recentNews(); const _relevant = await relevantNodes(); let _thin = await thinNodes();
+  // DOMAIN LEASH (D1): while a directed focus is active, drop the GLOBAL-FRONTIER tier — the untethered
+  // "any thin QID node" pool that surfaces off-domain nodes (random historical congressmen, medical-
+  // directory people) far from the task. The walk then stays on the focus neighbourhood (relevant) + news +
+  // convo. The frontier returns the moment no directed task is running.
+  if (_thin.length && _directedFocusActive()) { console.log(`[graph-walk] directed focus active → leashed off the global frontier (${_thin.length} thin nodes suppressed)`); _thin = []; }
   console.log(`[idle-anchors] raw tiers: news=${_news.length} relevant=${_relevant.length} thin=${_thin.length} visited=${visitedKeys.size}`);
   const anchors = await idleAnchors.provideAnchors({ recentNews: _news, relevantNodes: _relevant, thinNodes: _thin, convoNames, visitedKeys, log: (m) => console.log(m) });
 
@@ -1694,7 +1709,11 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
 async function runPullerMove(_recentTurns, { mode = 'both', candidatesOverride = null } = {}) {
   const nowTs = Date.now();
   const wantContact = mode === 'both' || mode === 'contact';
-  const wantDiscover = mode === 'both' || mode === 'discover';
+  // DOMAIN LEASH (D1): suppress net-new DISCOVERY while a directed focus is active — discovery is the stage
+  // that mints off-domain prospects (the medical-directory "Dr. X" records that then jam the promotion
+  // queue). Contact-enrichment of already-held (on-domain) targets still runs. Single choke: covers the
+  // 'both' idle call and the pipeline 'discover' stage. Reverts the moment no directed task is live.
+  const wantDiscover = (mode === 'both' || mode === 'discover') && !_directedFocusActive();
   // cadence: contact/both on PULLER_LAST_KEY, a discover-only stage on its own key (so the concurrent
   // pipeline stages don't share — and starve — one cooldown).
   const _cadKey = (mode === 'discover') ? DISCOVER_LAST_KEY : PULLER_LAST_KEY;
