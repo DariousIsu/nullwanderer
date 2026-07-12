@@ -42,12 +42,19 @@ What actually shipped this arc (all live-verified via CDP; builds 10p→10y):
   `lib/kg_activity.js` safe surface. Speculated proposals stay silent. Renderer debounces `node.born` vs the
   5s poll so they don't double-spark. Proven: `smoke_graph_memory.js` +5 payload assertions (26/26).
 
-**Still design-only / NOT built:** the **Echo `graph_change_feed` trigger** feed (§4, Slice 3, gated on
-Echo up); **Slice 2b currents** — `match.hit` (echo_suit `resolveMention`), `recall` (active_recall),
-`promote` (`promoteDocumentsPass`), `doc.land`, `think` (monologue → ambient rate). The live core still uses
-**polling**; Slice 4 retires it + adds cross-store **federation threads** (short↔long by name-match, currently
-0). Dev hooks: `__kgActivity/__kgActN/__kgDedup/__kgCuration/__kgNova/__kgRefreshST/__kgSeedShortTerm` +
-`sq.kg.devActivity(payload)`.
+- **Slice 2b — cross-store currents** (commit `0eaf30d`): `match.hit` (echo_suit `resolveMention` wrapper —
+  recognition arc), `recall` (active_recall — corpus record pulled inward), `promote` (`promoteDocumentsPass`
+  — graduation arc), `think` (`db.insertMonologue`, throttled ≥3.5s ambient heartbeat). Emitter-only: the
+  renderer already routes these as far-field "weather". Smoke-covered (positive + negative each); `promote` is
+  live-verify only (main.js fn). Full gate 180/180.
+
+**Still design-only / NOT built:** the **Echo `graph_change_feed` trigger** feed (§4, Slice 3 — separate
+NX-ECHO Python repo + MCP restart, gated on Echo up). The live core still uses **polling**; **Slice 4** retires
+its gesture role, then adds `doc.land`/`news` (they overlap the poll today) + cross-store **federation threads**
+(short↔long by name-match, currently 0) — held because they change existing behavior and need live eyeballing.
+**Renderer Stage-B gesture polish** (recognition ARC / inward recall WAVE / graduation ARC in place of weather)
+is renderer-only → CDP-iterable without a reboot. Dev hooks:
+`__kgActivity/__kgActN/__kgDedup/__kgCuration/__kgNova/__kgRefreshST/__kgSeedShortTerm` + `sq.kg.devActivity`.
 
 **NEXT: the full 3D jump** (three.js/`3d-force-graph`, both in-stack) — bloom=shader pass, gradients=GPU,
 instanced nodes → the capped 2D richness returns cheaper. The two-source structure + perf discipline port.
