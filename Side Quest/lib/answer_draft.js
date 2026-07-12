@@ -18,8 +18,8 @@ const models = require('./models');
 const { complete } = require('./ollama');
 
 function draftModel() {
-  try { return require('./db').getMeta('model.drafter') || models.getModelFor('editor', null) || models.getModelFor('search', null) || 'gemma4:31b'; }
-  catch { return 'gemma4:31b'; }
+  try { return require('./db').getMeta('model.drafter') || models.getModelFor('editor', null) || models.getModelFor('search', null) || 'gemma4:31b-cloud'; }
+  catch { return 'gemma4:31b-cloud'; }
 }
 
 // A cloud complete bound to the drafter (utility) model — passed to cloud_logic.ask as deps.complete

@@ -14,7 +14,7 @@
  */
 'use strict';
 
-const MODEL = 'gpt-oss:120b';
+const MODEL = 'gpt-oss:120b-cloud';
 const NUM_PREDICT = 1500;   // gpt-oss reliability floor (proven) — never the default 400.
 
 const ASSESS_WANT = `You judge how ONE news event affects ONE race between PARTY A and PARTY B.

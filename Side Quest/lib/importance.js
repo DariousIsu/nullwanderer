@@ -82,11 +82,11 @@ async function score(text, { userName = 'them', kind = 'thought' } = {}) {
     await streamChat({
       model: MODEL,
       messages,
-      // Cheapest call on the path — a single 1–10 score over short text, so num_ctx stays small.
-      // (The old "must match 8192 or the local model reloads on the 20GB card" rule is moot now that
-      // this is its own CLOUD model, gpt-oss:20b — nothing to reload locally.) think:false is
-      // REQUIRED: gpt-oss is a reasoning model and num_predict is 4 — without it the whole budget
-      // goes to hidden CoT and the score comes back empty.
+      // A single 1–10 score over short text — its own CLOUD model (gemma4:31b-cloud), so num_ctx
+      // stays small and nothing reloads locally. NB: gpt-oss:20b-cloud was tried here and returned
+      // EMPTY at num_predict 4/16/64 even with think:false (its output never reaches the content
+      // channel via streamChat) → score silently defaulted to 5 every time. gemma4:31b-cloud emits
+      // the integer directly ("9" in 336ms). think:false kept (harmless; direct output either way).
       options: { temperature: 0, top_p: 1, num_ctx: 8192, num_predict: 4 },
       think: false,
       onToken: (tk) => { raw += tk; }

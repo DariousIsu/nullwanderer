@@ -29,8 +29,8 @@ function minContextChars() { try { return parseInt(db.getMeta('distill.minContex
 
 // The distiller cloud model (utility tier — fast). Configurable; defaults to the proven gemma4:31b.
 function distillerModel() {
-  try { return db.getMeta('model.distiller') || models.getModelFor('distiller', null) || models.getModelFor('search', null) || 'gemma4:31b'; }
-  catch { return 'gemma4:31b'; }
+  try { return db.getMeta('model.distiller') || models.getModelFor('distiller', null) || models.getModelFor('search', null) || 'gemma4:31b-cloud'; }
+  catch { return 'gemma4:31b-cloud'; }
 }
 
 // A cloud complete bound to the distiller model (passed to cloud_logic.ask as deps.complete so the

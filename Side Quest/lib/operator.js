@@ -23,8 +23,8 @@ const DEFAULT_MAX_MS = 45000;      // hard wall-clock budget so a turn can NEVER
 // reasoning — so default to the fast utility model, not the 120B reasoner (which made turns take
 // ~2 min). Override with db meta model.operator (e.g. gpt-oss:120b) for deeper-but-slower.
 function operatorModel() {
-  try { return require('./db').getMeta('model.operator') || models.getModelFor('editor', null) || 'gemma4:31b'; }
-  catch { return 'gemma4:31b'; }
+  try { return require('./db').getMeta('model.operator') || models.getModelFor('editor', null) || 'gemma4:31b-cloud'; }
+  catch { return 'gemma4:31b-cloud'; }
 }
 
 // Real cloud call bound to the operator model. opts.model overrides (lets a caller run a specific lane

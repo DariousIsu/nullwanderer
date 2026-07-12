@@ -71,8 +71,8 @@ function _validate(raw) {
 // Resolve the fast utility cloud model (gemma4:31b per the live cloud-model assignments); never the slow
 // curator. Falls back to the literal if meta isn't set.
 function _fastModel() {
-  try { const m = require('./models'); return m.getModelFor('search', null) || m.getModelFor('editor', null) || 'gemma4:31b'; }
-  catch { return 'gemma4:31b'; }
+  try { const m = require('./models'); return m.getModelFor('search', null) || m.getModelFor('editor', null) || 'gemma4:31b-cloud'; }
+  catch { return 'gemma4:31b-cloud'; }
 }
 
 // ---- the regex fallback (only when the model call is unavailable) ----

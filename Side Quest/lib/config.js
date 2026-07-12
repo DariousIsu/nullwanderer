@@ -193,7 +193,7 @@ function subcConcurrentLanes() { return !/^(0|false|no|off)$/i.test(get('ZOE_SUB
 // --- DEEP REASONER (cloud-leverage Slice 5) — the big model to use on LOW-VOLUME, HIGH-VALUE blueprint/
 // synthesis calls (the research plan that shapes a whole project). The fast/deep split is intentional, so
 // this is NOT for high-volume tool-calling or utility extraction — only the calls where depth clearly wins.
-function deepReasonerModel() { return get('ZOE_DEEP_REASONER_MODEL').trim() || subconsciousModel() || 'gpt-oss:120b'; }
+function deepReasonerModel() { return get('ZOE_DEEP_REASONER_MODEL').trim() || subconsciousModel() || 'gpt-oss:120b-cloud'; }
 
 // --- PULLER PIPELINE (cloud-leverage Slice 3) — the DISCOVER→CONTACT→ENRICH producer/consumer pipeline
 // (lib/pipeline.js). ON by default; ZOE_PIPELINE=0 reverts the idle tick to the legacy coupled lanes
