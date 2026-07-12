@@ -1038,6 +1038,32 @@ app.whenReady().then(() => {
         let srep = null; try { srep = JSON.parse(sr && sr.text); } catch {}
         if (srep && srep.considered != null) { strongApplied = srep.applied || 0; emitAbsorb(srep); }
       } catch (e) { console.error('[kg-nightly] name-strong pass failed:', e.message); }
+      // 3b) CONCEPTS — their OWN dedicated bounded pass. Concepts are EXCLUDED from the global drains above
+      //     (person/org-tuned queue), so without this their queue would never be adjudicated. entity_type=
+      //     'concept' scope + neighbor_hub_cap so a shared WELL (a hub — every law topic shares "Law &
+      //     Justice") can't vacuously anchor a merge; the corroborator must be a SPECIFIC shared neighbor,
+      //     restoring the two-signal gate for concepts. Same reversible path. Toggle ZOE_KG_NIGHTLY_CONCEPTS.
+      let conceptApplied = 0, conceptNormalized = 0;
+      if (/^(1|true|yes|on)$/i.test(String(process.env.ZOE_KG_NIGHTLY_CONCEPTS ?? '1').trim())) {
+        // 3b-i) DETERMINISTIC cosmetic normalize FIRST — collapse the case/edge-punct/plural concept dups the
+        //       LLM judge parks (Criminal Offense/Offenses, Transportation)/Transportation, Cancer/cancer).
+        //       Reversible + audited (quick_check → reverse-run on regression). Clears the silt so the LLM
+        //       pass below only faces genuine SEMANTIC calls.
+        try {
+          const nr = await echoSuit.dispatch({ kind: 'do', name: 'run_concept_normalize', args: { dry_run: false } });
+          let nrep = null; try { nrep = JSON.parse(nr && nr.text); } catch {}
+          if (nrep && nrep.applied != null) conceptNormalized = nrep.applied || 0;
+        } catch (e) { console.error('[kg-nightly] concept normalize failed:', e.message); }
+        // 3b-ii) LLM SEMANTIC pass on the residue — entity_type='concept' + neighbor_hub_cap so a shared WELL
+        //        (a hub) can't vacuously anchor a merge. Catches confident non-cosmetic dups; parks the rest.
+        try {
+          const CONCEPT_HUB_CAP = parseInt(process.env.ZOE_KG_CONCEPT_HUB_CAP || '', 10) || 50;
+          const CONCEPT_TIERS = (process.env.ZOE_KG_CONCEPT_TIERS || 'name-exact,name-strong').trim();
+          const cr = await echoSuit.dispatch({ kind: 'do', name: 'run_dedup_adjudication', args: { batch: KGNIGHTLY_NAMESTRONG_BATCH, tiers: CONCEPT_TIERS, entity_type: 'concept', neighbor_hub_cap: CONCEPT_HUB_CAP } });
+          let crep = null; try { crep = JSON.parse(cr && cr.text); } catch {}
+          if (crep && crep.considered != null) { conceptApplied = crep.applied || 0; emitAbsorb(crep); }
+        } catch (e) { console.error('[kg-nightly] concept pass failed:', e.message); }
+      }
       // 4) LINK LANE — refresh the co-source candidate pool (run_link_candidates, idempotent signature-dedupe)
       //    then GROUND a bounded batch through the citation-verify gate (run_link_grounding: web-search →
       //    cloud-cite-a-REAL-url → fetch+verify → only a VERIFIED citation mints a grounded relation_proposal).
@@ -1067,10 +1093,11 @@ app.whenReady().then(() => {
           if (prep && prep.pruned != null) pruned = prep.pruned || 0;
         } catch (e) { console.error('[kg-nightly] prune failed:', e.message); }
       }
-      const total = anchoredApplied + strongApplied;
-      console.log(`[kg-nightly] full sweep: +${swept} proposals; drained ${anchoredApplied} anchored + ${strongApplied} name-strong = ${total} merges; +${linkGrounded} grounded links; ${pruned} pruned`);
+      const conceptTotal = conceptNormalized + conceptApplied;
+      const total = anchoredApplied + strongApplied + conceptTotal;
+      console.log(`[kg-nightly] full sweep: +${swept} proposals; drained ${anchoredApplied} anchored + ${strongApplied} name-strong + ${conceptNormalized} concept-normalize + ${conceptApplied} concept-llm = ${total} merges; +${linkGrounded} grounded links; ${pruned} pruned`);
       if (total > 0 || swept > 0) {
-        const text = `[Nightly upkeep] Full graph sweep: ${swept} new duplicate proposal${swept === 1 ? '' : 's'} found, and I reversibly merged ${total} confirmed duplicate${total === 1 ? '' : 's'} (${anchoredApplied} anchored + ${strongApplied} fuzzy name-match) — each LLM-verified and undoable.`;
+        const text = `[Nightly upkeep] Full graph sweep: ${swept} new duplicate proposal${swept === 1 ? '' : 's'} found, and I reversibly merged ${total} confirmed duplicate${total === 1 ? '' : 's'} (${anchoredApplied} anchored + ${strongApplied} fuzzy name-match + ${conceptTotal} concept) — each verified and undoable.`;
         const row = db.insertMonologue({ content: text, model: 'kg-nightly', type: 'reading' });
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
       }
