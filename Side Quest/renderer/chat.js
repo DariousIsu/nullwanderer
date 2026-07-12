@@ -1,4 +1,15 @@
 const transcript = document.getElementById('transcript');
+// MEMORY: cap the dialogue transcript DOM so a multi-hour session doesn't grow the chat renderer
+// unbounded (the leak behind the freeze — the sheep rail was already capped at 200, but the transcript
+// grew forever). A MutationObserver on childList covers EVERY append path in one place; it only ever
+// removes the OLDEST turns (firstChild), never the newest streaming turn (last child), so an in-flight
+// reply and its currentAiTurnDiv reference are untouched. 400 turns is far more than anyone scrolls back.
+const TRANSCRIPT_CAP = 400;
+try {
+  new MutationObserver(() => {
+    while (transcript.children.length > TRANSCRIPT_CAP) transcript.removeChild(transcript.firstChild);
+  }).observe(transcript, { childList: true });
+} catch (e) { /* observer unsupported → transcript simply isn't capped */ }
 const input = document.getElementById('input');
 const sheepStream = document.getElementById('sheep-stream');
 const dashboardToggle = document.getElementById('dashboard-toggle');
