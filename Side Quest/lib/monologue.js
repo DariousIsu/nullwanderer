@@ -1493,6 +1493,11 @@ function activeSetNames() {
   // recognized (db.isOwnerName), not an unknown civic subject to profile via the Echo corpus. This is the fix
   // for the graph-walk "I didn't have anything on L. Overby → pulled it together (via Echo corpus)" incident.
   const push = (n) => { const s = String(n == null ? '' : n).trim(); if (s.length >= 3 && !db.isOwnerName(s)) names.push(s); };
+  // PRIORITY ANCHOR (2026-07-12, Lucas chose #3): his DECLARED research priorities LEAD the active set, so the
+  // relevant-frontier window (idle_anchors._RELEVANT_MAX_NAMES) is built around HIS work FIRST — the reactive
+  // sources below fill in behind. Grounded + operator-editable (lib/priorities). Positive-anchor fix for the
+  // idle-research drift (beats blocking off-domain sources one region at a time).
+  try { for (const p of require('./priorities').getActive(db)) push(p); } catch {}
   // PULLER WEIGHT CAP (2026-07-12, Lucas: "cap weight and age out"): the autonomous puller is the least-
   // grounded active-set source, and the SA/Tanzania flood packed it with 40 off-domain targets that
   // MONOPOLIZED the relevant-frontier's 40-name window (idle_anchors._RELEVANT_MAX_NAMES) — so idle
