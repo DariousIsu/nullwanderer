@@ -1059,13 +1059,44 @@ async function pdfLinksOnPage() {
   } catch { return []; }
 }
 
+// DOMAIN LEASH (D1 ext): distinctive lowercased tokens from the ACTIVE DIRECTED focus (goal + facet +
+// covered orgs). Null when no directed focus is being served → the auto-grab stays lenient (free browsing).
+// Generic civic words are dropped so the leash keys on DISTINCTIVE terms (louisiana, parish, orleans,
+// tangipahoa, jury, police…). This closes the residual off-domain flood the lenient not-foreign-gov gate
+// let through: the autonomous browse vacuumed a Florida school district's PDFs (cafeteria-health, food-
+// inspections) + a Fresenius medical privacy notice while the focus was Louisiana, and doc-decompose then
+// minted those as off-domain contacts (the "medical noise"). A user-driven <web-grab-pdfs/> is exempt.
+const _LEASH_STOP = new Set(['council', 'district', 'city', 'board', 'members', 'member', 'office', 'department', 'state', 'county', 'elected', 'official', 'officials', 'public', 'general', 'every', 'from', 'with', 'list', 'their', 'gather', 'profile', 'profiles', 'leadership', 'research']);
+function _focusLeashTokens() {
+  try {
+    const fl = require('./focus');
+    const f = fl.getCurrent();
+    if (!f || !fl.isDirected(f)) return null;
+    let blob = String(f.content || '');
+    try { blob += ' ' + (db.getMeta(`focus.${f.id}.enrich_facet`) || ''); } catch {}
+    try { const cov = JSON.parse(db.getMeta(`focus.${f.id}.covered`) || '[]'); if (Array.isArray(cov)) blob += ' ' + cov.join(' '); } catch {}
+    const toks = new Set();
+    for (const w of (blob.toLowerCase().match(/[a-z]{4,}/g) || [])) if (!_LEASH_STOP.has(w)) toks.add(w);
+    return toks.size ? toks : null;
+  } catch { return null; }
+}
+// Does a PDF link overlap the leash at all? No leash (null/empty) → always true (unleashed).
+function _pdfMatchesLeash({ href = '', text = '', pageTitle = '', pageUrl = '' } = {}, leashTokens) {
+  if (!leashTokens || !leashTokens.size) return true;
+  const hay = `${href} ${text} ${pageTitle} ${pageUrl}`.toLowerCase();
+  for (const t of leashTokens) if (hay.includes(t)) return true;
+  return false;
+}
+
 // Grab (download+queue-for-ingest) the PDF links on the current page — deduped, capped. Called
 // on demand via <web-grab-pdfs/> and automatically (fire-and-forget) at the end of read().
-async function grabPdfs({ max = AUTO_GRAB_PER_READ } = {}) {
+async function grabPdfs({ max = AUTO_GRAB_PER_READ, userDriven = false } = {}) {
   if (!page) return { ok: false, reason: 'no page open' };
   const pageUrl = page.url();
   const pageTitle = await page.title().catch(() => '');
   const profile = relevance.getProfile(db);
+  // Focus leash only gates the AUTOMATIC (fire-and-forget) grab; a deliberate <web-grab-pdfs/> is exempt.
+  const leashTokens = userDriven ? null : _focusLeashTokens();
   const raw = (await pdfLinksOnPage()).filter(l => l && l.href && !grabbedUrls.has(l.href));
   // GATE: skip clearly off-domain PDFs (foreign-gov archives etc.) and cap grabs per host so a single
   // archive index can't be vacuumed. Lenient — only a foreign-gov source with zero domain overlap is dropped.
@@ -1075,6 +1106,10 @@ async function grabPdfs({ max = AUTO_GRAB_PER_READ } = {}) {
     const host = relevance.normHost(l.href) || relevance.normHost(pageUrl);
     const a = relevance.assess({ url: l.href, pageUrl, filename: (l.href.split('#')[0].split('?')[0].split('/').pop() || ''), text: `${l.text || ''} ${pageTitle}` }, profile);
     if (!a.relevant) { skipRel++; continue; }
+    // DIRECTED-FOCUS LEASH: while a directed task runs, the auto-grab must also overlap the focus domain,
+    // not just clear the lenient foreign-gov check — else off-domain site PDFs (Miami-Dade schools,
+    // Fresenius medical) flood in and mint off-domain contacts.
+    if (!_pdfMatchesLeash({ href: l.href, text: l.text || '', pageTitle, pageUrl }, leashTokens)) { skipRel++; continue; }
     if (!_hostBudgetOk(host)) { skipHost++; continue; }
     kept.push({ href: l.href, host });
   }
@@ -1135,7 +1170,7 @@ async function dispatch({ tag, attrs = {}, body = '' }) {
     case 'web-get': return getEl(attrs.selector || attrs.sel || body, attrs.attr || attrs.attribute);
     case 'web-eval': return evalJs(body || attrs.js || attrs.expr);
     case 'web-drag': return drag(attrs.from || attrs.source, attrs.to || attrs.target);
-    case 'web-grab-pdfs': return grabPdfs({ max: Number(attrs.max || attrs.limit) || AUTO_GRAB_PER_READ });
+    case 'web-grab-pdfs': return grabPdfs({ max: Number(attrs.max || attrs.limit) || AUTO_GRAB_PER_READ, userDriven: true });
     case 'web-back': return back();
     case 'web-close': return close();
     case 'web-chat': return chatSend(body, attrs.speaker || attrs.to || attrs.name);
@@ -1201,7 +1236,7 @@ module.exports = {
   chatSend, chatWatch, chatUnwatch,
   press, clearField, hover, selectOption, setChecked, uploadFile, submit, clickAt,
   forward, reload, listTabs, newTab, switchTab, closeTab, waitFor, dialog, getEl, evalJs, drag,
-  downloadPdf, grabPdfs, pdfLinksOnPage, isPdfUrl,
+  downloadPdf, grabPdfs, pdfLinksOnPage, isPdfUrl, _focusLeashTokens, _pdfMatchesLeash,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR,
   DOWNLOADS_DIR, downloadDest
 };
