@@ -13,7 +13,9 @@
 // "targets"/"names"/"orgs" are contact-list nouns too — the Puller calls its held contacts "targets",
 // and "a list of 100 high-confidence targets" is a list-what-we-hold ask, not a research assignment.
 const CONTACT_NOUN = /\b(contacts?|people|persons?|e-?mails?|roster|leads?|directory|rolodex|targets?|names|orgs?|organi[sz]ations?)\b/i;
-const LIST_INTENT = /\b(list|give|show|pull|get|compile|export|send|grab|fetch|need|want|hand|build|assemble|put together|spreadsheet|(?:make|put|build|generate) (?:me )?(?:a |together )?(?:list|sheet|spreadsheet)|(?:a |the )?sheet (?:of|with|for)|who (?:do we have|are|'?s))\b/i;
+// list-INTENT = a verb that asks for our held contacts OR a container noun (a sheet/spreadsheet/table/roster
+// of contacts is a list request whatever the verb — "create a sheet", "draw up a roster", "export a csv").
+const LIST_INTENT = /\b(list(?:ing)?|give|show|pull|get|compile|export|send|grab|fetch|need|want|hand|build|assemble|create|produce|generate|prepare|draw up|put together|whip up|throw together|write up|spreadsheet|sheet|table|roster|directory|rolodex|csv|who (?:do we have|are|'?s))\b/i;
 // A phrasing that is clearly RESEARCH ("find NEW", "go discover", "research"), not a list-what-we-have.
 const RESEARCH_INTENT = /\b(research|find (?:new|more)|discover|dig up|go get new|source new|build a (?:new )?list from scratch)\b/i;
 
@@ -106,16 +108,27 @@ function detect(message) {
 // most common list filter and it IS on every row (the `confidence` field), it just was never used as a
 // FILTER (only for sorting). C = 0.80, so "C or higher" = confidence >= 0.80.
 const GRADE_CAP = { A: 1.00, B: 0.95, C: 0.80, D: 0.50, E: 0.30 };
-const _GRADE_RE = /\bgrade\s+([a-e])\b|\b([a-e])[\s-]?(?:rating|rated|graded?)\b/i;
+const _GRADE_ORDER = ['A', 'B', 'C', 'D', 'E'];   // best → worst
 const _DIR_LOWER = /\b(?:or\s+)?(?:lower|below|worse|under)\b/i;
 function gradeFrom(message) {
   const m = String(message || '');
-  const g = _GRADE_RE.exec(m);
-  const grade = g ? (g[1] || g[2] || '').toUpperCase() : null;
-  if (!grade || !GRADE_CAP[grade]) return null;
-  // default a bare "grade X" / "X rating" to ">= X" (the "at least this quality" intent, e.g. "C and up");
-  // an explicit "or lower/below" flips it.
-  return { grade, dir: _DIR_LOWER.test(m) ? 'lte' : 'gte' };
+  const letters = new Set();
+  // single: "grade X", or "X rating/rated/graded/level/tier" ("C level", "B rated").
+  let mm; const single = /\bgrade\s+([a-e])\b|\b([a-e])[\s-]?(?:rating|rated|graded?|level|tier)\b/gi;
+  while ((mm = single.exec(m)) !== null) letters.add((mm[1] || mm[2]).toUpperCase());
+  // RANGE/LIST of tiers ("A, B, and C level", "A/B/C", "A-C", "grades A and B") — only when a grade word is
+  // present (so a stray "a and b" isn't read as grades). All listed letters count; the floor decides the
+  // threshold: "A, B, and C" → C-and-up (gte C); "C or lower" → C-and-down (lte C).
+  if (/\b(grade|graded|level|rating|rated|tier)\b/i.test(m)) {
+    const listM = m.match(/\b[a-e](?:\s*(?:,|and|or|&|\/|-|through|thru|to)\s*[a-e]\b){1,4}/i);
+    if (listM) for (const ch of (listM[0].match(/\b[a-e]\b/gi) || [])) letters.add(ch.toUpperCase());   // STANDALONE letters only (not the a/d inside "and")
+  }
+  const valid = [...letters].filter((g) => GRADE_CAP[g]).sort((a, b) => _GRADE_ORDER.indexOf(a) - _GRADE_ORDER.indexOf(b));
+  if (!valid.length) return null;
+  const dir = _DIR_LOWER.test(m) ? 'lte' : 'gte';
+  // gte → the floor is the WORST tier listed (A,B,C → C, "at least C"); lte → the ceiling is the BEST listed.
+  const grade = dir === 'lte' ? valid[0] : valid[valid.length - 1];
+  return { grade, dir };
 }
 
 // TYPE — corporate (private-sector) vs elected/government. The right signal is the COMPANY NAME, NOT the

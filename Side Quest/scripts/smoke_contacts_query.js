@@ -23,6 +23,12 @@ ok(CQ.typeFrom('government and private alike') === null && CQ.typeFrom('public a
 ok(CQ.typeFrom('just the corporate contacts') === 'corporate' && CQ.typeFrom('elected officials in Ohio') === 'elected', 'typeFrom: one side named → that type');
 ok(!CQ.detect('research and build a new list of energy contacts from scratch').isQuery, 'detect: research-from-scratch (no held signal) is NOT a list-query even though it says "build a list"');
 ok(CQ.detect('build a sheet of the contacts we already hold').isQuery, 'detect: "build a sheet of the contacts we already hold" → query (HELD signal beats the build-verb)');
+// verb/container coverage (the #7124 miss: "create a sheet listing …" wasn't recognized) + grade RANGE
+ok(CQ.detect('create a sheet of our energy contacts').isQuery && CQ.detect('draw up a roster of tech companies').isQuery && CQ.detect('export a csv of our contacts').isQuery, 'detect: create/draw up/export + sheet/roster/csv container nouns → query');
+const _7124 = CQ.detect('Can you create a sheet listing all our A, B, and C level corporate contacts');
+ok(_7124.isQuery && _7124.type === 'corporate' && _7124.grade === 'C' && _7124.gradeDir === 'gte', 'detect: the #7124 phrasing → corporate + grade C+ (A/B/C level range → floor C)');
+ok(CQ.gradeFrom('A, B, and C level').grade === 'C' && CQ.gradeFrom('grade A/B/C').grade === 'C' && CQ.gradeFrom('A and B rated').grade === 'B', 'gradeFrom: a RANGE of tiers → the floor (A,B,C→C; A,B→B), not the "a"/"d" inside "and"');
+ok(CQ.gradeFrom('companies a and b testing') === null, 'gradeFrom: bare "a and b" with NO grade word → null (no false positive)');
 
 // --- sector + company extraction ---
 ok(CQ.detect('list our energy and datacenter contacts').sectors.join(',') === 'energy,datacenter', 'detect: pulls the sector filters');
