@@ -20,10 +20,15 @@ const RESEARCH_INTENT = /\b(research|find (?:new|more)|discover|dig up|go get ne
 // Sector filters — reuse the operator's prospecting sectors. Each maps a request keyword → a company-name
 // matcher, so "energy contacts" filters to energy-industry companies we hold.
 const SECTORS = {
-  energy: /\b(energy|power|electric(?:al|ity)?|utilit|grid|nuclear|renewabl|solar|wind|hydro|geothermal|gas|turbine|transmission|pipeline)\b/i,
-  // include known AI/cloud/datacenter company names — their names don't carry the sector keyword.
-  ai: /\b(a\.?i\.?|artificial intelligence|machine learning|\bml\b|openai|anthropic|deepmind|cohere|mistral|hugging ?face)\b/i,
-  datacenter: /\b(data ?cent(?:er|re)|cloud|hyperscal|semiconductor|chip|gpu|compute|equinix|digital realty|coreweave|crusoe|nvidia|google|amazon|aws|microsoft|azure|meta|apple|oracle|ibm|intel)\b/i,
+  energy: /\b(energy|power|electric(?:al|ity)?|utilit|grid|nuclear|renewabl|solar|wind|hydro|geothermal|\bgas\b|turbine|transmission|pipeline|nextera|duke energy|exelon|constellation|vistra|dominion|southern co|\baep\b|\bfpl\b|exxon|chevron|conocophillips|\bbp\b|shell|halliburton|schlumberger)\b/i,
+  // known AI/cloud/datacenter company NAMES too — the names don't carry the sector keyword.
+  ai: /\b(a\.?i\.?|artificial intelligence|machine (?:learning|intelligence)|\bml\b|openai|anthropic|deepmind|cohere|mistral|hugging ?face|scale ai|databricks|\bmiri\b|inflection|stability ai|character\.?ai|xai\b)\b/i,
+  datacenter: /\b(data ?cent(?:er|re)|cloud|hyperscal|equinix|digital realty|coreweave|crusoe|switch inc|vantage|\bqts\b|cyrusone|\baws\b|\bgcp\b|azure)\b/i,
+  tech: /\b(tech(?:nolog(?:y|ies))?|software|hardware|semiconductor|\bchip(?:s|maker)?\b|\bgpu\b|electronics|computing|\bsaas\b|\bit\b services|meta\b|facebook|apple\b|microsoft|google|alphabet|oracle|salesforce|adobe|cisco|\bdell\b|\bhp\b|nvidia|intel\b|\bibm\b|red hat|\bsap\b|vmware|qualcomm|broadcom|\bamd\b|palantir|snowflake|workday|servicenow)\b/i,
+  manufacturing: /\b(manufactur\w*|industrial|factory|machinery|automotive|steel|chemical|materials|foundry|fabricat\w*|dupont|\b3m\b|honeywell|caterpillar|deere|\bge\b|general electric|siemens|emerson|rockwell|parker hannifin|illinois tool)\b/i,
+  defense: /\b(defense|defence|aerospace|lockheed|raytheon|\brtx\b|northrop|grumman|boeing|general dynamics|\bbae\b|l3\s?harris|leidos|palantir|anduril|military|munitions|missile|armament|sikorsky|\bsaic\b|booz allen|\bcaci\b)\b/i,
+  infrastructure: /\b(infrastructure|construction|\bengineering\b|utilit(?:y|ies)|transport\w*|railway|railroad|highway|\bport\b|pipeline|logistics|bechtel|fluor|aecom|jacobs|kiewit|vinci|\bcsx\b|union pacific)\b/i,
+  internet: /\b(internet service|broadband|\bisp\b|fiber optic|telecom\w*|verizon|comcast|at\s?&\s?t|at&t|t-?mobile|charter communications|spectrum|\blumen\b|cox communications|frontier communications|\bviasat\b|starlink|\bcenturylink\b)\b/i,
   transition: /\b(transition|decarbon|clean energy|net.?zero|emission|climate tech)\b/i,
   weather: /\b(weather|climate|meteorolog|forecast)\b/i,
   // think tanks / policy shops / private (non-government) orgs. One regex serves both roles: it matches
@@ -108,18 +113,55 @@ function gradeFrom(message) {
   return { grade, dir: _DIR_LOWER.test(m) ? 'lte' : 'gte' };
 }
 
-// TYPE — corporate (private-sector, Puller-discovered) vs elected/official/government (the civic CRM). The
-// held population splits cleanly by SOURCE: CRM = electoral.contact (candidates/PACs/elected/staff), Puller
-// = discovered private-sector contacts. So type maps to the row's `src` (+ an elected marker when known).
-const _TYPE_CORP = /\b(corporate|commercial|for-?profit|private[\s-]?sector)\b/i;
+// TYPE — corporate (private-sector) vs elected/government. The right signal is the COMPANY NAME, NOT the
+// source: the Puller has DISCOVERED tens of thousands of GOVERNMENT contacts (DC Public Schools, Metro
+// Police, State House, "Department of …") right alongside real corporations (Meta, OpenAI, Duke Energy,
+// NVIDIA). And most corporate leads are grade-C/D with NO verified email yet (they aren't promoted to the
+// CRM), so email/source can't be the key. So: corporate = has a company AND that company is not government.
+const _TYPE_CORP = /\b(corporate|corporation|companies|company|commercial|for-?profit|private[\s-]?sector|firms?|industry|industries|business(?:es)?)\b/i;
 const _TYPE_ELECTED = /\b(elected|officials?|legislators?|lawmakers?|congress(?:ional|m[ae]n|wom[ae]n|member)?|senators?|representatives?|governors?|mayors?|council\s?members?|commissioners?|office\s?holders?)\b/i;
-const _TYPE_GOV = /\b(government|govt|agenc(?:y|ies)|federal|municipal|public[\s-]?sector)\b/i;
+const _TYPE_GOV = /\b(government|govt|agenc(?:y|ies)|federal agenc|municipal|public[\s-]?sector)\b/i;
 function typeFrom(message) {
   const m = String(message || '');
-  if (_TYPE_CORP.test(m)) return 'corporate';
-  if (_TYPE_ELECTED.test(m)) return 'elected';
+  if (_TYPE_ELECTED.test(m)) return 'elected';   // "elected officials" before generic corp/gov words
   if (_TYPE_GOV.test(m)) return 'gov';
+  if (_TYPE_CORP.test(m)) return 'corporate';
   return null;
+}
+
+// GOVERNMENT-company detector (the corporate/gov split). Matches the government patterns that dominate the
+// held company names (verified against the Puller's 87k government contacts): departments, public schools,
+// police/fire/EMS, bureaus/agencies/offices, state house/senate, city/county/parish/municipal, courts,
+// universities, libraries, corrections, public works, etc. Deliberately NOT bare "general"/"national"/
+// "federal" (those hit real companies — General Dynamics, National Grid, FedEx). Corporate = a company that
+// this does NOT match.
+const _GOV_COMPANY = /\b(departments?|dept\.?|public schools?|\bpolice\b|\bfire\b|emergency medical|\bems\b|bureaus?|agenc(?:y|ies)|\bagcy\b|office of|\bofc\.?\b|state (?:house|senate|department|of|police)|city of|count(?:y|ies)|\bparish(?:es)?\b|municipal|\blibrary\b|superintendent|attorney general|public works|human services|corrections|parks (?:and|&) rec|commissions?|authorit(?:y|ies)|board of|sheriff|\bcourts?\b|universit(?:y|ies)|\bschools?\b|division of|\bdiv\.?\b|administration|patrol|substitute teacher|comptroller|\btreasurer\b|assessor|clerk of|town of|village of|borough of|national guard|city council|county council|housing authority|transit authority|water district|school district|\bva\b|veterans affairs|\busda\b|\bepa\b|\bfbi\b|legislature|governor'?s office|mayor'?s office)\b/i;
+function isGovernmentCompany(company) {
+  const c = String(company || '').trim();
+  return !!c && _GOV_COMPANY.test(c);
+}
+
+// DOMAIN classification — the CLEAN corporate/gov signal (verified against the real Puller). A discovered
+// corporate contact carries a resolved company `domain` (openai.com / meta.com / duke-energy.com); the DC-
+// government scrape that dominates the store (Substitute Teachers, "SHS" schools) has a NULL domain, and
+// government orgs that do have one carry a gov TLD (dc.gov / *.gov / legislature.*.gov / .mil / .us). So:
+// corporate = a real COMPANY domain; gov = a government domain. domainKind reads the target `domain` first,
+// else falls back to the email domain. A null-domain contact is unclassifiable (→ not corporate) — which is
+// exactly right, since the null-domain bulk is the government scrape.
+const _PERSONAL_MX = new Set(['gmail.com', 'googlemail.com', 'yahoo.com', 'ymail.com', 'rocketmail.com', 'aol.com', 'hotmail.com', 'outlook.com', 'live.com', 'msn.com', 'icloud.com', 'me.com', 'mac.com', 'comcast.net', 'verizon.net', 'att.net', 'sbcglobal.net', 'bellsouth.net', 'cox.net', 'charter.net', 'earthlink.net', 'protonmail.com', 'proton.me', 'gmx.com', 'mail.com']);
+function _domainOf(emailOrDomain) {
+  const s = String(emailOrDomain || '').toLowerCase().trim();
+  if (!s) return null;
+  const at = s.indexOf('@');
+  return (at >= 0 ? s.slice(at + 1) : s).replace(/\s+$/, '') || null;
+}
+function domainKind(domain) {
+  const d = _domainOf(domain);
+  if (!d) return null;
+  if (/(?:^|\.)gov(?:\.|$)|\.mil(?:\.|$)|gov[a-z]*\.|\.[a-z]{2}\.us$|\.us$/.test(d)) return 'gov';
+  if (/\.edu(?:\.|$)/.test(d)) return 'edu';
+  if (_PERSONAL_MX.has(d)) return 'personal';
+  return 'corporate';
 }
 
 function stateFrom(message) {
@@ -165,12 +207,16 @@ function select(rows, { sectors = [], company = null, limit = 200, grade = null,
       const c = typeof (r && r.confidence) === 'number' ? r.confidence : 0;
       if (gradeDir === 'lte' ? (c > minC + 1e-9) : (c < minC - 1e-9)) continue;
     }
-    // TYPE — corporate = Puller-discovered private-sector; elected/gov = the civic CRM. Uses the row `src`;
-    // 'elected' further narrows to rows carrying an elected marker (when the source provides one).
+    // TYPE — by COMPANY, not source (both Puller and CRM hold gov AND private orgs). corporate = a real
+    // company that is NOT government; gov = a government company OR the electoral CRM; elected = a CRM row
+    // carrying an elected marker. No email is required — most corporate leads are unenriched (grade filter,
+    // if asked, is what narrows to send-ready ones).
     const src = r && r.src;
-    if (type === 'corporate' && src !== 'puller') continue;
-    if ((type === 'elected' || type === 'gov') && src !== 'crm') continue;
-    if (type === 'elected' && ('elected' in (r || {})) && r.elected === false) continue;
+    const dk = domainKind((r && r.domain) || (r && r.email));   // target company domain preferred, else email domain
+    const govCo = isGovernmentCompany(rc);
+    if (type === 'corporate' && !(dk === 'corporate' && !govCo)) continue;   // a real COMPANY domain, name not gov
+    if (type === 'gov' && !(dk === 'gov' || govCo || src === 'crm')) continue;
+    if (type === 'elected' && (src !== 'crm' || (('elected' in (r || {})) && r.elected === false))) continue;
     // STATE — match the row's represented/mailing state (civic CRM rows carry it; Puller rows usually don't).
     if (st && String((r && r.state) || '').toUpperCase() !== st) continue;
     filtered.push({
@@ -226,4 +272,4 @@ function label({ sectors = [], company = null, grade = null, gradeDir = 'gte', t
   return parts.length ? `${parts.join(' ')} ${noun}`.replace(/\s+/g, ' ').trim() : 'Contacts';
 }
 
-module.exports = { detect, select, toTable, label, unmetFilters, gradeFrom, typeFrom, stateFrom, sectorsFrom, companyFrom, matchesSectors, GRADE_CAP, SECTORS };
+module.exports = { detect, select, toTable, label, unmetFilters, gradeFrom, typeFrom, stateFrom, isGovernmentCompany, domainKind, sectorsFrom, companyFrom, matchesSectors, GRADE_CAP, SECTORS };

@@ -7411,7 +7411,7 @@ async function gatherHeldContacts() {
   // 1) PULLER — discovered targets + their beliefs (email/phone/role), carrying real per-attr confidence.
   try {
     const pdb = require('./lib/puller_db'); pdb.init();
-    for (const t of pdb.listTargets({ limit: 100000 })) {
+    for (const t of pdb.listTargets({ limit: 100000 })) {   // NOTE: N+1 listBeliefs per target — full 162k coverage needs bulk-loading (follow-up), not a bigger cap
       if (t.crm_id != null) heldCrmIds.add(Number(t.crm_id));
       const bl = pdb.listBeliefs(t.id) || [];
       const b = (type) => bl.find((x) => x.type === type) || null;
@@ -7420,7 +7420,7 @@ async function gatherHeldContacts() {
       // carry a state, so state stays null (they won't match a state filter — honest).
       out.push({ name: t.name, email: email && email.value, phone: (b('phone') || {}).value || null, company: t.company, title: (b('role') || {}).value || null,
                  confidence: email && typeof email.confidence === 'number' ? email.confidence : ((b('phone') || {}).confidence || 0),
-                 src: 'puller', state: null, elected: false });
+                 src: 'puller', state: null, elected: false, domain: t.domain || null });   // domain = the corporate/gov signal (contacts_query.domainKind)
     }
   } catch (e) { console.error('[contacts-query] puller gather failed:', e.message); }
   // 2) CRM — every emailed contact + its org (account) name, most-complete first. Bounded safety cap. The

@@ -33,17 +33,25 @@ gq = CQ.detect('give me grade B elected officials in Louisiana');
 ok(gq.isQuery && gq.grade === 'B' && gq.type === 'elected' && gq.state === 'LA' && gq.company === null, 'detect: "grade B elected officials in Louisiana" → B / elected / LA (no phantom company)');
 ok(CQ.detect('list our grade c and up energy contacts').grade === 'C', 'detect: "grade c and up" → C');
 ok(CQ.detect('give me contacts at Duke Energy in Texas').company === 'Duke Energy' && CQ.detect('give me contacts at Duke Energy in Texas').state === 'TX', 'detect: company + trailing state disambiguate');
-// select applies them against the row `src` / `confidence` / `state`
+// --- TYPE is classified by COMPANY DOMAIN, not source (the Puller holds gov AND corporate side-by-side;
+// most corporate leads are grade-C/D with a resolved company DOMAIN but no email). corporate = a real
+// company domain that isn't government; gov = a gov domain / gov company name / the electoral CRM. ---
+ok(CQ.domainKind('openai.com') === 'corporate' && CQ.domainKind('meta.com') === 'corporate', 'domainKind: company domains → corporate');
+ok(CQ.domainKind('dc.gov') === 'gov' && CQ.domainKind('k12.dc.gov') === 'gov' && CQ.domainKind('legislature.maine.gov') === 'gov' && CQ.domainKind('leg.state.vt.us') === 'gov', 'domainKind: gov domains → gov');
+ok(CQ.domainKind('gmail.com') === 'personal' && CQ.domainKind('harvard.edu') === 'edu' && CQ.domainKind(null) === null, 'domainKind: personal / edu / null');
+ok(CQ.isGovernmentCompany('DC Public Schools') && CQ.isGovernmentCompany('Metropolitan Police Department') && !CQ.isGovernmentCompany('Duke Energy'), 'isGovernmentCompany: schools/police gov, a real company not');
 const _pop = [
-  { name: 'Corp B', company: 'Acme', confidence: 0.95, src: 'puller', state: null, elected: false },
-  { name: 'Corp C', company: 'Beta', confidence: 0.80, src: 'puller', state: null, elected: false },
-  { name: 'Corp D', company: 'Gamma', confidence: 0.50, src: 'puller', state: null, elected: false },
-  { name: 'Rep LA', company: 'LA House', confidence: 0.95, src: 'crm', state: 'LA', elected: true },
-  { name: 'Rep TX', company: 'TX House', confidence: 0.95, src: 'crm', state: 'TX', elected: true },
+  { name: 'Corp Meta', company: 'Meta', domain: 'meta.com', confidence: 0.95, src: 'puller', state: null, elected: false },
+  { name: 'Corp Duke', company: 'Duke Energy', domain: 'duke-energy.com', confidence: 0.80, src: 'puller', state: null, elected: false },
+  { name: 'Corp Low', company: 'Acme Co', domain: 'acme.com', confidence: 0.50, src: 'puller', state: null, elected: false },
+  { name: 'Gov School', company: 'McKinley Technology SHS', domain: null, email: 'x@k12.dc.gov', confidence: 0.9, src: 'puller', state: null, elected: false },
+  { name: 'Gov NoDomain', company: 'DC Public Schools', domain: null, confidence: 0.9, src: 'puller', state: null, elected: false },
+  { name: 'Rep LA', company: 'LA House', domain: null, email: 'r@house.la.gov', confidence: 0.95, src: 'crm', state: 'LA', elected: true },
 ];
-ok(CQ.select(_pop, { grade: 'C', gradeDir: 'gte', type: 'corporate' }).total === 2, 'select: corporate grade C+ → 2 (drops the D and all CRM rows)');
-ok(CQ.select(_pop, { grade: 'B', type: 'elected', state: 'LA' }).rows.map((r) => r.name).join() === 'Rep LA', 'select: grade B elected in LA → just Rep LA');
-ok(CQ.select(_pop, { type: 'corporate', state: 'LA' }).total === 0, 'select: corporate + state → 0 (Puller rows carry no state — honest empty, not a fake match)');
+ok(CQ.select(_pop, { type: 'corporate' }).rows.map((r) => r.name).sort().join() === 'Corp Duke,Corp Low,Corp Meta', 'select: corporate = the company-domain rows only (gov school by email, gov by name, and the CRM row all excluded)');
+ok(CQ.select(_pop, { type: 'corporate', grade: 'C', gradeDir: 'gte' }).total === 2, 'select: grade C+ corporate → Meta(0.95)+Duke(0.80), drops the 0.50 lead');
+ok(CQ.select(_pop, { type: 'corporate', sectors: ['energy'] }).rows.map((r) => r.name).join() === 'Corp Duke', 'select: corporate + energy sector → Duke Energy');
+ok(CQ.select(_pop, { grade: 'B', type: 'elected', state: 'LA' }).rows.map((r) => r.name).join() === 'Rep LA', 'select: grade B elected in LA → the CRM elected row');
 ok(CQ.label(CQ.detect('give me corporate contacts grade c or higher')) === 'grade C+ corporate contacts', 'label: "grade C+ corporate contacts"');
 // unmetFilters is now narrow: only county has no field to filter on
 ok(CQ.unmetFilters('list contacts in Orange county').includes('county'), 'unmet: county (no field) is flagged');
