@@ -160,10 +160,27 @@ function typeFrom(message) {
 // universities, libraries, corrections, public works, etc. Deliberately NOT bare "general"/"national"/
 // "federal" (those hit real companies — General Dynamics, National Grid, FedEx). Corporate = a company that
 // this does NOT match.
-const _GOV_COMPANY = /\b(departments?|dept\.?|public schools?|\bpolice\b|\bfire\b|emergency medical|\bems\b|bureaus?|agenc(?:y|ies)|\bagcy\b|office of|\bofc\.?\b|state (?:house|senate|department|of|police)|city of|count(?:y|ies)|\bparish(?:es)?\b|municipal|\blibrary\b|superintendent|attorney general|public works|human services|corrections|parks (?:and|&) rec|commissions?|authorit(?:y|ies)|board of|sheriff|\bcourts?\b|universit(?:y|ies)|\bschools?\b|division of|\bdiv\.?\b|administration|patrol|substitute teacher|comptroller|\btreasurer\b|assessor|clerk of|town of|village of|borough of|national guard|city council|county council|housing authority|transit authority|water district|school district|\bva\b|veterans affairs|\busda\b|\bepa\b|\bfbi\b|legislature|governor'?s office|mayor'?s office)\b/i;
+// Plurals matter: the Puller's "Louisiana Assessors' Association" (tax assessors — elected officials)
+// leaked into corporate because `assessor` singular didn't match "Assessors". Same for treasurers,
+// comptrollers, superintendents, sheriffs. Also added "association of tax/gov" patterns since these are
+// professional bodies of elected officials.
+const _GOV_COMPANY = /\b(departments?|dept\.?|public schools?|\bpolice\b|\bfire\b|emergency medical|\bems\b|bureaus?|agenc(?:y|ies)|\bagcy\b|office of|\bofc\.?\b|state (?:house|senate|department|of|police|capitol)|state capitol|city of|count(?:y|ies)|\bparish(?:es)?\b|municipal|\blibrary\b|superintendents?|attorney general|public works|human services|corrections|parks (?:and|&) rec|commissions?|authorit(?:y|ies)|board of|sheriffs?|\bcourts?\b|universit(?:y|ies)|\bschools?\b|division of|\bdiv\.?\b|administration|patrol|substitute teacher|comptrollers?|\btreasurers?\b|assessors?|clerk of|town of|village of|borough of|national guard|city council|county council|housing authority|transit authority|water district|school district|\bva\b|veterans affairs|\busda\b|\bepa\b|\bfbi\b|legislature|governor'?s office|mayor'?s office|house of representatives?|senate of|association of (?:tax|counties|schools?|municipalit\w+|clerks?|assessors?|sheriffs?|superintendents?|police|fire chiefs?|prosecut\w+|district attorney|elected|towns?|cities|parishes)|(?:tax|assessor|police|fire|sheriff|clerk)s?['’]?\s+association|minist[eé]rio (?:p[uú]blico|da|do)|procurador\w+|advocacia[\s-]?geral|regi[aã]o|governo (?:federal|do estado|de)|c[aâ]mara (?:dos deputados|municipal)|senado federal|prefeitura|departamento (?:de|federal))\b/i;
 function isGovernmentCompany(company) {
   const c = String(company || '').trim();
   return !!c && _GOV_COMPANY.test(c);
+}
+
+// NONPROFIT / ADVOCACY / THINK-TANK detector. Rainey Center (Lucas's org — 501c3 think tank), "Citizens
+// for X" (political advocacy), community civic orgs, foundations — all showed up as "corporate" because
+// they have a .org domain and no gov keyword. They're not for-profit companies; they belong in a separate
+// "nonprofit/advocacy" bucket, not the corporate list. Deliberately avoids "coalition" alone (Data Center
+// Coalition = valid tech industry lobby), and requires "for" after "citizens/coalition" only when
+// political ("Citizens for a New Louisiana"). Foundation is allowed to survive when a real corp name
+// precedes it (e.g. "Gates Foundation" — but for now, keep it strict: foundation = nonprofit).
+const _NONPROFIT_COMPANY = /\b(citizens for|advocacy|\baction fund\b|action network|501\s?\(?\s?c\s?\)?\s?\(?\s?[0-9]\)?|community (?:action|services|development corp)|leadership \w+|\bthink[\s-]?tank|policy institute|policy center|policy shop|non[\s-]?profits?|charitab\w+|philanthrop\w+|humanitarian|goodwill|salvation army|\byMCA\b|\bYWCA\b|united way|habitat for humanity|red cross|catholic charities|jewish federation|rainey ?center|raineycenter\.org|american enterprise institute|\baei\b|heritage foundation|brookings|cato institute|urban institute|niskanen|r street institute|hoover institution|new america|third way|hudson institute|manhattan institute|foundation(?:s)?|law center|children'?s (?:law|advocacy|welfare|services|home|hospital|defense fund))\b/i;
+function isNonprofitCompany(company) {
+  const c = String(company || '').trim();
+  return !!c && _NONPROFIT_COMPANY.test(c);
 }
 
 // DOMAIN classification — the CLEAN corporate/gov signal (verified against the real Puller). A discovered
@@ -233,14 +250,17 @@ function select(rows, { sectors = [], company = null, limit = 200, grade = null,
       const c = typeof (r && r.confidence) === 'number' ? r.confidence : 0;
       if (gradeDir === 'lte' ? (c > minC + 1e-9) : (c < minC - 1e-9)) continue;
     }
-    // TYPE — by COMPANY, not source (both Puller and CRM hold gov AND private orgs). corporate = a real
-    // company that is NOT government; gov = a government company OR the electoral CRM; elected = a CRM row
-    // carrying an elected marker. No email is required — most corporate leads are unenriched (grade filter,
-    // if asked, is what narrows to send-ready ones).
+    // TYPE — corporate is now STRICT (Lucas: the list had elected officials, municipal contacts, and all of
+    // Rainey leaking in). To be corporate a row must: (1) have a company-shaped domain (dk==='corporate');
+    // (2) have a company name that isn't government (assessors/dept/dept-of/schools/etc.); (3) NOT be a
+    // nonprofit/advocacy/think-tank (Rainey/Citizens-for/foundation/policy institute); (4) NOT come from the
+    // electoral CRM (src!=='crm' — those are inherently civic/political even when a staffer uses a firm .com
+    // email). gov = a gov domain / gov company / the electoral CRM; elected = CRM + elected marker.
     const src = r && r.src;
     const dk = domainKind((r && r.domain) || (r && r.email));   // target company domain preferred, else email domain
     const govCo = isGovernmentCompany(rc);
-    if (type === 'corporate' && !(dk === 'corporate' && !govCo)) continue;   // a real COMPANY domain, name not gov
+    const nonprofit = isNonprofitCompany(rc);
+    if (type === 'corporate' && !(dk === 'corporate' && !govCo && !nonprofit && src !== 'crm')) continue;
     if (type === 'gov' && !(dk === 'gov' || govCo || src === 'crm')) continue;
     if (type === 'elected' && (src !== 'crm' || (('elected' in (r || {})) && r.elected === false))) continue;
     // STATE — match the row's represented/mailing state (civic CRM rows carry it; Puller/corporate rows
@@ -305,4 +325,4 @@ function label({ sectors = [], company = null, grade = null, gradeDir = 'gte', t
   return parts.length ? `${parts.join(' ')} ${noun}`.replace(/\s+/g, ' ').trim() : 'Contacts';
 }
 
-module.exports = { detect, select, toTable, label, unmetFilters, gradeFrom, typeFrom, stateFrom, isGovernmentCompany, domainKind, sectorsFrom, companyFrom, matchesSectors, GRADE_CAP, SECTORS };
+module.exports = { detect, select, toTable, label, unmetFilters, gradeFrom, typeFrom, stateFrom, isGovernmentCompany, isNonprofitCompany, domainKind, sectorsFrom, companyFrom, matchesSectors, GRADE_CAP, SECTORS };

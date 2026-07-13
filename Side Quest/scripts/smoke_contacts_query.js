@@ -55,6 +55,22 @@ ok(CQ.domainKind('openai.com') === 'corporate' && CQ.domainKind('meta.com') === 
 ok(CQ.domainKind('dc.gov') === 'gov' && CQ.domainKind('k12.dc.gov') === 'gov' && CQ.domainKind('legislature.maine.gov') === 'gov' && CQ.domainKind('leg.state.vt.us') === 'gov', 'domainKind: gov domains → gov');
 ok(CQ.domainKind('gmail.com') === 'personal' && CQ.domainKind('harvard.edu') === 'edu' && CQ.domainKind(null) === null, 'domainKind: personal / edu / null');
 ok(CQ.isGovernmentCompany('DC Public Schools') && CQ.isGovernmentCompany('Metropolitan Police Department') && !CQ.isGovernmentCompany('Duke Energy'), 'isGovernmentCompany: schools/police gov, a real company not');
+// gov detector — plurals + associations + capitol + house of reps + Brazilian gov (all leaked in the 2026-07-13 audit)
+ok(CQ.isGovernmentCompany("Louisiana Assessors' Association") && CQ.isGovernmentCompany('Association of Tax Collectors') && CQ.isGovernmentCompany('Sheriffs Association'), 'isGovernmentCompany: PLURAL gov titles + "Association of [gov role]"');
+ok(CQ.isGovernmentCompany('New Jersey State Capitol') && CQ.isGovernmentCompany('HOUSE OF REPRESENTATIVES') && CQ.isGovernmentCompany('State Capitol'), 'isGovernmentCompany: State Capitol / House of Representatives');
+ok(CQ.isGovernmentCompany('Ministério Público Federal') && CQ.isGovernmentCompany('PRR1ª REGIÃO') && CQ.isGovernmentCompany('Advocacia-Geral da União'), 'isGovernmentCompany: Brazilian federal prosecutors + regional offices');
+// nonprofit detector — Rainey Center + Law Center + Children's + "Citizens for X"
+ok(CQ.isNonprofitCompany('Rainey Center') && CQ.isNonprofitCompany('raineycenter.org') && CQ.isNonprofitCompany("Children's Law Center") && CQ.isNonprofitCompany('Citizens for a New Louisiana') && CQ.isNonprofitCompany('Heritage Foundation'), 'isNonprofitCompany: Rainey / Children\'s Law / Citizens for / think tanks');
+ok(!CQ.isNonprofitCompany('Meta') && !CQ.isNonprofitCompany('Duke Energy') && !CQ.isNonprofitCompany('Data Center Coalition'), 'isNonprofitCompany: real corps + industry coalition NOT flagged');
+// corporate filter now excludes gov/nonprofit/CRM
+const _leaks = [
+  { name: 'Meta P', company: 'Meta', domain: 'meta.com', confidence: 0.9, src: 'puller' },
+  { name: 'Rainey P', company: 'Rainey Center', domain: 'raineycenter.org', confidence: 0.95, src: 'puller' },
+  { name: 'Assess P', company: "Louisiana Assessors' Association", domain: 'louisianaassessors.org', confidence: 0.95, src: 'puller' },
+  { name: 'Capitol P', company: 'New Jersey State Capitol', domain: 'njleg.org', confidence: 0.95, src: 'puller' },
+  { name: 'CRM Lobby', company: 'Some Firm LLC', domain: 'somefirm.com', email: 'x@somefirm.com', confidence: 0.95, src: 'crm', state: 'DC' },
+];
+ok(CQ.select(_leaks, { type: 'corporate' }).rows.map((r) => r.name).join() === 'Meta P', 'select corporate: only Meta P survives — Rainey (nonprofit), Assessors (gov), Capitol (gov), CRM row (src=crm) all excluded');
 const _pop = [
   { name: 'Corp Meta', company: 'Meta', domain: 'meta.com', confidence: 0.95, src: 'puller', state: null, elected: false },
   { name: 'Corp Duke', company: 'Duke Energy', domain: 'duke-energy.com', confidence: 0.80, src: 'puller', state: null, elected: false },
