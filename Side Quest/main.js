@@ -2278,6 +2278,10 @@ function startDownloadsIngestWatcher() {
   try { if (!fsm.existsSync(dir)) fsm.mkdirSync(dir, { recursive: true }); } catch {}
 
   async function ingestFile(fp) {
+    // KILL SWITCH (2026-07-13): ZOE_AUTO_INGEST=0 disables the auto-ingest lane entirely — no download
+    // watcher processing, no doc-decomp/surfaceDocCards spawn. Lucas can drop docs on the canvas manually
+    // and use the app while the medical-directory flood is investigated. Flip back to 1 to restore.
+    if (String(process.env.ZOE_AUTO_INGEST || '1').trim() === '0') { console.log('[dl-ingest] SKIP (kill switch ZOE_AUTO_INGEST=0)'); return; }
     if (ingested.has(fp)) return;
     try { if (!fsm.existsSync(fp)) return; } catch { return; }
     ingested.add(fp);
@@ -7133,6 +7137,7 @@ function _docLeashOk(doc) {
 
 async function decomposeLandedDoc(doc) {
   try {
+    if (String(process.env.ZOE_AUTO_INGEST || '1').trim() === '0') { return; }   // KILL SWITCH — see ingestFile
     if (!echoSuit || !echoSuit.connected) return;
     if (!doc || doc.id == null || !String(doc.body || '').trim()) return;
     if (!_docLeashOk(doc)) { console.log(`[doc-decomp] SKIP off-domain doc #${doc.id} "${(doc.title || '').slice(0, 60)}" — no leash-token overlap`); return; }
@@ -7172,6 +7177,7 @@ async function decomposeLandedDoc(doc) {
 // landing; runs alongside the entity decomposition, not instead of it.
 async function surfaceDocCards(doc) {
   try {
+    if (String(process.env.ZOE_AUTO_INGEST || '1').trim() === '0') { return; }   // KILL SWITCH — see ingestFile
     if (!doc || !String(doc.body || '').trim()) return;
     if (!_docLeashOk(doc)) { console.log(`[doc-cards] SKIP off-domain doc #${doc.id || '?'} "${(doc.title || '').slice(0, 60)}" — no leash-token overlap`); return; }
     const src = (() => { try { return (require('./lib/models').sources() || []).find(s => s.tier === 'cloud' && s.token); } catch { return null; } })();
