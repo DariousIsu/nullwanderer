@@ -294,6 +294,16 @@ function listObservations(targetId, { attr = null } = {}) {
   return _db().prepare(`SELECT * FROM observations WHERE ${where.join(' AND ')} ORDER BY captured_at ASC, id ASC`)
     .all(...args).map(_obsRow);
 }
+// BULK degree map: observation count per target, in ONE grouped query. buildPopulation (the F4 dedup
+// sweep) previously called listObservations(id).length PER target — ~67k queries that each LOADED every
+// observation row just to count it — which pegged the main thread for seconds every sweep. This returns a
+// Map<target_id, count> in a single pass so the whole population's degrees cost one query, not 67k.
+function observationCounts() {
+  const m = new Map();
+  for (const r of _db().prepare(`SELECT target_id, COUNT(*) c FROM observations GROUP BY target_id`).all()) m.set(r.target_id, r.c);
+  return m;
+}
+
 // Per-node BLACKLIST: the set of email addresses that have BOUNCED for this target (lower-cased). The
 // next-guess logic must never re-offer any of these — this is the durable "don't retry a dead address"
 // record (the bounce observations already store it; this is the read the guard consults).
@@ -321,6 +331,17 @@ function upsertBelief(targetId, type, { value = null, confidence = null, derivat
 function _beliefRow(r) { return r ? { ...r, supporting_obs: pj(r.supporting_obs, []) } : null; }
 function getBelief(targetId, type) {
   return _beliefRow(_db().prepare(`SELECT * FROM beliefs WHERE target_id = ? AND type = ?`).get(targetId, type));
+}
+// BULK belief-value map: the active value of ONE belief type across the whole population, in a single
+// query (Map<target_id, value>). Same purpose as observationCounts — buildPopulation needed the 'role'
+// belief per target and was doing 67k getBelief() calls. One active belief per (target,type) by schema, so
+// no ambiguity. Used by the F4 dedup sweep to avoid the per-target query storm.
+function beliefValuesByType(type) {
+  const m = new Map();
+  for (const r of _db().prepare(`SELECT target_id, value FROM beliefs WHERE type = ? AND status = 'active'`).all(type)) {
+    if (!m.has(r.target_id)) m.set(r.target_id, r.value);
+  }
+  return m;
 }
 // Set ONLY the delivery/verify marker (leaves value/confidence untouched) — the single write path for
 // send_state transitions (verified / bounced / rerun_pending / exhausted / catchall).
@@ -525,8 +546,8 @@ function splitTarget(fromId, { obsIds = [], name, company = null, domain = null,
 module.exports = {
   init, close,
   createTarget, getTarget, liveTarget, listTargets, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName,
-  addObservation, listObservations, failedAddresses,
-  upsertBelief, getBelief, listBeliefs, markSendState, listBeliefsBySendState,
+  addObservation, listObservations, observationCounts, failedAddresses,
+  upsertBelief, getBelief, beliefValuesByType, listBeliefs, markSendState, listBeliefsBySendState,
   getPatternState, savePatternState,
   proposeRevision, decideRevision, listRevisions,
   enqueueRetest, listRetests, updateRetest,

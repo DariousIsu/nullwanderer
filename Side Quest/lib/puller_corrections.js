@@ -23,13 +23,20 @@ const AUTO_CONFIDENCE = 0.8;
 const AUTO_MAX_DEGREE = 3;
 
 // Build the dedup population from live targets: id, name, person/org type, role→title, degree=obs count.
+// The degree (obs count) and role belief come from ONE bulk query each (observationCounts / beliefValuesByType)
+// instead of a per-target getBelief + listObservations — the old shape was ~2 queries × 67k targets = ~135k
+// synchronous queries that each loaded whole rows, pegging the main thread for seconds every sweep (the F4
+// freeze, alongside the O(n²) in the sweep itself). Falls back to per-target reads when the store doesn't
+// expose the bulk helpers (e.g. a mock db in a unit test), so callers/tests keep working unchanged.
 function buildPopulation(db = pdb, { limit = 100000 } = {}) {
   const targets = db.listTargets({ limit });
+  const degrees = typeof db.observationCounts === 'function' ? db.observationCounts() : null;
+  const roles = typeof db.beliefValuesByType === 'function' ? db.beliefValuesByType('role') : null;
   return targets.map((t) => {
-    const role = db.getBelief(t.id, 'role');
-    const degree = db.listObservations(t.id).length;
+    const roleVal = roles ? roles.get(t.id) : ((db.getBelief(t.id, 'role') || {}).value);
+    const degree = degrees ? (degrees.get(t.id) || 0) : db.listObservations(t.id).length;
     return { id: t.id, name: t.name, type: t.kind === 'org' ? 'organization' : 'person',
-             title: role && role.value ? role.value : (t.function || t.notes || null), degree };
+             title: roleVal != null && roleVal !== '' ? roleVal : (t.function || t.notes || null), degree };
   });
 }
 
