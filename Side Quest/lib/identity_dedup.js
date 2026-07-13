@@ -65,18 +65,41 @@ function sweep(entities, opts = {}) {
   const merges = [], attractorFlags = [];
   let candidates = 0;
 
+  // BLOCK BY FIRST NAME (the O(n²) fix). contextualMatch can ONLY ever bind/flag a weak node against a
+  // canonical that shares its first name (identity_gate.contextualMatch filters its context to
+  // firstNameOf === fn). Passing the ENTIRE population as context for EVERY candidate made this
+  // O(candidates × n) AND allocated a fresh 67k-row array per candidate — at the live ~67k-target Puller
+  // population that pegged the main thread for minutes on each sweep (the "working great, then a freeze"
+  // report). Pre-group once by first name so each candidate only sees its own (tiny) same-first-name block.
+  // The OUTPUT is IDENTICAL — cross-first-name rows never matched anyway — the work is just sum(block²)
+  // instead of n². Rows with no name token (fn === null, e.g. a pure "the finance lady" descriptor) can
+  // never be a same-first-name canonical, so they belong to no block and are correctly ignored as context.
+  const byFirst = new Map();
+  for (const e of list) {
+    const fn = gate.firstNameOf(e.name);
+    if (!fn) continue;
+    let arr = byFirst.get(fn);
+    if (!arr) { arr = []; byFirst.set(fn, arr); }
+    arr.push(e);
+  }
+
   for (const w of list) {
     if (!isCandidate(w)) continue;
     candidates++;
     const degree = Number(w.degree) || 0;
-    // context = the rest of the population (contextualMatch's own attractor-guard drops weak/provisional
-    // context rows, so a weak node can only bind to a CONFIRMED strong canonical — never another fragment).
-    const context = list.filter((e) => e.id !== w.id).map(_ctx);
+    // context = ONLY the same-first-name block (minus self). contextualMatch's own attractor-guard still
+    // drops weak/provisional context rows, so a weak node can only bind to a CONFIRMED strong canonical.
+    const fn = gate.firstNameOf(w.name);
+    const block = fn ? (byFirst.get(fn) || []) : [];
+    const context = block.filter((e) => e.id !== w.id).map(_ctx);
     const cm = gate.contextualMatch(w.name, context);
 
     if (cm.match) {
-      // resolve the matched canonical row (unique by construction) and honor the degree floor
-      const canonical = list.find((e) => e.id !== w.id && norm(e.name) === norm(cm.match));
+      // resolve the matched canonical row (unique by construction) and honor the degree floor. Search the
+      // same-first-name BLOCK, not the whole population: cm.match is by construction a same-first-name row,
+      // so it's in `block` — a `list.find` here would re-scan all ~67k rows on every match (~2B ops with 30k
+      // merges), the second half of the O(n²) freeze that the first-name blocking above otherwise fixed.
+      const canonical = block.find((e) => e.id !== w.id && norm(e.name) === norm(cm.match));
       if (!canonical || (Number(canonical.degree) || 0) < minCanonicalDegree) continue;
       const via = cm.via || 'first-name';
       if (degree > maxMergeDegree) {

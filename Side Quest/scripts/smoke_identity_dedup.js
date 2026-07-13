@@ -62,5 +62,33 @@ console.log('== planMerge emits reversible ops ==');
 const plan = D.planMerge(r.merges[0]);
 ok(plan && plan.reversible === true && plan.ops.includes('tombstone-source'), 'planMerge → reversible edge-rewire + tombstone plan');
 
+console.log('== PERFORMANCE: first-name blocking keeps a big population sub-second (the freeze fix) ==');
+// Before blocking, sweep() built a fresh copy of the ENTIRE population as context for EVERY candidate —
+// O(candidates × n). At the live ~67k-target Puller size that pegged the main thread for minutes (the
+// freeze). Synthesize a realistic 40k population (many distinct first names + a few bare-first-name
+// fragments per name) and assert the sweep completes fast — proof the O(n²) is gone. A regression to the
+// per-candidate full-population scan would blow this budget by orders of magnitude.
+// letter-only names — _isNameToken rejects any token with a digit, so synthetic names must be pure letters
+const toName = (n) => { let s = ''; n++; while (n > 0) { s = String.fromCharCode(97 + ((n - 1) % 26)) + s; n = Math.floor((n - 1) / 26); } return s.charAt(0).toUpperCase() + s.slice(1); };
+const BIG = [];
+let nid = 1;
+for (let i = 0; i < 8000; i++) {
+  const fn = toName(i);                                                       // 8000 distinct letter-only first names
+  BIG.push({ id: nid++, name: `${fn} ${fn}son`, type: 'person', title: 'Director', degree: 6 });   // strong full-name canonical
+  BIG.push({ id: nid++, name: fn, type: 'person', degree: 1 });                                     // a weak first-name fragment
+  if (i % 50 === 0) { BIG.push({ id: nid++, name: fn, type: 'person', degree: 1 }); }               // a few dup fragments
+}
+// plus one moderately-large same-first-name block (a "John" cluster) to exercise a real block
+for (let i = 0; i < 300; i++) BIG.push({ id: nid++, name: `John ${toName(i)} worth`, type: 'person', title: 'Analyst', degree: 4 });
+BIG.push({ id: nid++, name: 'John', type: 'person', degree: 2 });
+const t0 = Date.now();
+const big = D.sweep(BIG);
+const ms = Date.now() - t0;
+console.log(`  swept ${BIG.length} rows (${big.candidates} candidates, ${big.merges.length} merges) in ${ms}ms`);
+ok(ms < 2000, `sweep of ${BIG.length} rows completes in <2s (was minutes / a main-thread freeze) — actual ${ms}ms`);
+ok(big.merges.length >= 8000, 'the weak fragments still merge into their canonicals at scale (correctness holds under blocking)');
+// a bare "John" among 300 same-first-name canonicals is ambiguous → flagged, never blind-merged
+ok(big.attractorFlags.some(f => f.kind === 'ambiguous'), 'a crowded first-name block still flags ambiguity, not a wrong merge');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);
