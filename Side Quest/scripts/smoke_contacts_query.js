@@ -25,6 +25,15 @@ ok(CQ.detect('pull our 100 highest confidence energy contacts').limit === 100, '
 ok(CQ.detect('list the top 25 energy contacts').limit === 25, 'detect: "top 25" → 25');
 ok(CQ.detect('list our energy contacts').limit === null, 'detect: no number → null limit');
 
+// --- unmetFilters: the honesty guard — a request to narrow by a dimension the civic CRM does NOT carry
+// (an A/B/C rating, a "corporate" category) must be REPORTED, not silently dropped + returned as a match. ---
+ok(CQ.unmetFilters('pull me a spreadsheet of all our corporate contacts with a c rating or higher').length === 2, 'unmet: "corporate contacts with a c rating" → BOTH rating + category flagged');
+ok(CQ.unmetFilters('list our A rated contacts').includes('an A/B/C rating'), 'unmet: "A rated" → rating flagged');
+ok(CQ.unmetFilters('give me the corporate contacts').includes('a "corporate" category'), 'unmet: "corporate" → category flagged');
+ok(CQ.unmetFilters('list our energy contacts').length === 0, 'unmet: a real sector ask flags NOTHING (no false positive)');
+ok(CQ.unmetFilters('who do we have at Brookings').length === 0, 'unmet: a company ask flags nothing');
+ok(CQ.unmetFilters('give me the top 100 contacts').length === 0, 'unmet: a plain count ask flags nothing');
+
 // --- "targets" / "orgs" are contact-list nouns; think-tank sector (regression: this went to a "project") ---
 const tt = CQ.detect('do another list of 100 high confidence targets but only from think tanks and private organizations');
 ok(tt.isQuery && tt.limit === 100 && tt.sectors.includes('thinktank'), 'detect: "list of 100 high-confidence targets from think tanks" → query, thinktank, 100 (was routed to a project)');

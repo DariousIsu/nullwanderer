@@ -74,6 +74,23 @@ function detect(message) {
   return { isQuery: true, sectors: sectorsFrom(m), company: companyFrom(m), limit: countFrom(m) };
 }
 
+// UNMET-FILTER honesty: the request often asks to narrow by a dimension this held CRM does NOT carry —
+// an A/B/C "rating" or a "corporate" category. The held contacts are civic/political records (candidates,
+// PACs, elected officials): Tier is 1/2/3 and 99.6% null, there is no corporate/business type, no letter
+// rating. select() can only filter by sector/company, so those asks were SILENTLY dropped and a generic
+// list was returned + labelled as if it matched (Lucas: "producing lists but not the lists requested").
+// Return the human-readable dimensions the request asked for that we canNOT apply, so the caller's voice
+// line discloses it instead of faking fulfillment.
+const RATING_ASK = /\b(?:[a-d][\s-]?(?:rating|rated|grade|graded|rank|ranked|tier)|(?:rating|rated|graded?|ranked?)\s+(?:of\s+)?[a-d]\b|(?:rating|grade|rank|tier)\s+(?:or\s+)?(?:higher|above|better|lower|below))\b/i;
+const CORP_ASK = /\b(corporate|commercial|for-?profit|private[\s-]?sector)\b/i;
+function unmetFilters(message) {
+  const m = String(message == null ? '' : message);
+  const unmet = [];
+  if (RATING_ASK.test(m)) unmet.push('an A/B/C rating');
+  if (CORP_ASK.test(m)) unmet.push('a "corporate" category');
+  return unmet;
+}
+
 // A company matches the requested sectors if ANY requested sector's matcher hits its name. No sectors → all.
 function matchesSectors(company, sectors) {
   if (!sectors || !sectors.length) return true;
@@ -140,4 +157,4 @@ function label({ sectors = [], company = null } = {}) {
   return 'Contacts';
 }
 
-module.exports = { detect, select, toTable, label, sectorsFrom, companyFrom, matchesSectors, SECTORS };
+module.exports = { detect, select, toTable, label, unmetFilters, sectorsFrom, companyFrom, matchesSectors, SECTORS };

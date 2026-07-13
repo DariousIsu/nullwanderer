@@ -4738,14 +4738,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const rows = await gatherHeldContacts();
       const sel = cq.select(rows, { sectors: ask.sectors, company: ask.company, limit: ask.limit || 200 });
       const lbl = cq.label(ask);
+      // HONESTY: the held CRM is civic/political and can't be filtered by a "rating" or a "corporate" category.
+      // If the request asked for one, disclose it instead of returning a generic list dressed up as a match.
+      const unmet = cq.unmetFilters(userMessage);
       if (sel.total > 0) {
         const tbl = cq.toTable(sel);
         const tabKey = `contacts-${lbl.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 32)}-${Date.now().toString(36)}`;
         try { const callTool = pollCallTool(); await callTool('saga_canvas_open_tab', { mode: 'DOC', tab_key: tabKey, title: lbl }); await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'table', data: { headers: tbl.headers, rows: tbl.rows, caption: tbl.caption } }); }
         catch (e) { console.error('[contacts-query] canvas emit failed:', e.message); }
-        console.log(`[contacts-query] "${lbl}" → ${sel.shown}/${sel.total} on canvas (${sel.withEmail} w/ email)`);
+        console.log(`[contacts-query] "${lbl}" → ${sel.shown}/${sel.total} on canvas (${sel.withEmail} w/ email)${unmet.length ? ` [unmet: ${unmet.join(', ')}]` : ''}`);
         followupFired = true; contactsHandled = true;
-        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You just pulled ${sel.total} ${lbl} you ALREADY HAVE onto ${userName}'s canvas${sel.total > sel.shown ? ` (showing the top ${sel.shown})` : ''} — ${sel.withEmail} with emails. Tell him briefly you put the list on his canvas; make clear these are contacts you already hold, NOT a new research run. Offer to research more or narrow it if he wants. Your own voice, one or two sentences.]` }); }
+        const honesty = unmet.length
+          ? ` BE HONEST — do NOT imply the list is filtered: he asked to narrow by ${unmet.join(' and ')}, but the contacts you hold are civic/political records (candidates, PACs, elected officials) that do NOT carry ${unmet.join(' or ')}. So what's on the canvas is the GENERAL list, not filtered that way. Say that plainly, and offer what you CAN narrow by: state, party, committee/PAC type, or active-elected status.`
+          : ' Offer to research more or narrow it if he wants.';
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You just pulled ${sel.total} contacts you ALREADY HAVE onto ${userName}'s canvas${sel.total > sel.shown ? ` (showing the top ${sel.shown})` : ''} — ${sel.withEmail} with emails. Tell him briefly you put the list on his canvas; make clear these are contacts you already hold, NOT a new research run.${honesty} Your own voice, one or two sentences.]` }); }
         catch (e) { console.error('[contacts-query] voice line failed (list already on canvas):', e.message); }
       } else {
         followupFired = true; contactsHandled = true;
