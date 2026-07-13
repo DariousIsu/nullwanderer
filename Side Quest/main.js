@@ -4742,6 +4742,24 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // HONESTY (now narrow): grade/type/sector/state/company ARE applied. Only county has no field to filter
       // on — disclose that if asked, instead of silently ignoring it.
       const unmet = cq.unmetFilters(userMessage);
+      // CAPABILITY GAP — "if we're missing data, we find it." A state was asked but `geoGap` contacts matched
+      // every OTHER filter and simply have no location on file (they can't be placed). Instead of silently
+      // dropping them, SURFACE that missing data-point and FLOAT an enrichment offer, so a plain "yes/begin"
+      // commits a research run (via the brainstorm offer-commit path) that goes and fills the location in.
+      const geoGap = (sel && sel.geoGap) || 0;
+      let gapNote = '';
+      if (ask.state && geoGap > 0) {
+        gapNote = ` DATA GAP to state plainly AND offer to fix: ${geoGap} of the matching contacts (the private/corporate ones) have NO location on file, so you could not place them in ${ask.state}. Ask if he wants you to research their locations to fill that gap — if he says yes, you'll start a run.`;
+        try {
+          db.setMeta('brainstorm.open_offer', JSON.stringify({
+            shape: 'discover', kind: 'entity',
+            target: `location for our held ${ask.type === 'corporate' ? 'corporate ' : ''}contacts`,
+            facet: `find the state/region (HQ or office) for the ~${geoGap} held contacts that carry no location, so they can be filtered to ${ask.state} and other states`,
+            deep: false, ts: Date.now(),
+          }));
+          console.log(`[contacts-query] GEO GAP ${geoGap} (${ask.state}) → floated an enrichment offer`);
+        } catch (e) { console.error('[contacts-query] gap offer set failed:', e.message); }
+      }
       if (sel.total > 0) {
         const tbl = cq.toTable(sel);
         const tabKey = `contacts-${lbl.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 32)}-${Date.now().toString(36)}`;
@@ -4750,13 +4768,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         console.log(`[contacts-query] "${lbl}" → ${sel.shown}/${sel.total} on canvas (${sel.withEmail} w/ email)${unmet.length ? ` [unmet: ${unmet.join(', ')}]` : ''}`);
         followupFired = true; contactsHandled = true;
         const honesty = unmet.length
-          ? ` ONE caveat to state plainly: he also asked to narrow by ${unmet.join(' and ')}, but you have no ${unmet.join(' or ')}-level tag on these contacts, so the list is NOT filtered by that — offer to narrow by state instead if that helps.`
-          : ' Offer to research more or narrow it further if he wants.';
-        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You put ${sel.total} ${lbl} you ALREADY HAVE onto ${userName}'s canvas${sel.total > sel.shown ? ` (showing the top ${sel.shown})` : ''} — ${sel.withEmail} with emails. This list IS filtered to what he asked (${lbl}). Tell him briefly you put it on his canvas; these are contacts you already hold, NOT a new research run.${honesty} Your own voice, one or two sentences.]` }); }
+          ? ` ONE caveat to state plainly: he also asked to narrow by ${unmet.join(' and ')}, but you have no ${unmet.join(' or ')}-level tag on these contacts, so the list is NOT filtered by that.`
+          : (gapNote ? '' : ' Offer to research more or narrow it further if he wants.');
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You put ${sel.total} ${lbl} you ALREADY HAVE onto ${userName}'s canvas${sel.total > sel.shown ? ` (showing the top ${sel.shown})` : ''} — ${sel.withEmail} with emails. This list IS filtered to what he asked (${lbl}). Tell him briefly you put it on his canvas; these are contacts you already hold, NOT a new research run.${honesty}${gapNote} Your own voice, one or two sentences.]` }); }
         catch (e) { console.error('[contacts-query] voice line failed (list already on canvas):', e.message); }
       } else {
         followupFired = true; contactsHandled = true;
-        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked for ${lbl}, but you don't hold any matching contacts yet. Tell him plainly you don't have those on hand, and ASK whether you should research them (that would kick off a run) — don't start researching without his go. One or two sentences.]` }); }
+        const noneMsg = gapNote
+          ? `[${userName} asked for ${lbl}. You hold none that you can place in ${ask.state} — but that's a DATA GAP, not an absence:${gapNote} Tell him plainly and make the offer. One or two sentences.]`
+          : `[${userName} asked for ${lbl}, but you don't hold any matching contacts yet. Tell him plainly you don't have those on hand, and ASK whether you should research them (that would kick off a run) — don't start researching without his go. One or two sentences.]`;
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: noneMsg }); }
         catch (e) { console.error('[contacts-query] voice line failed:', e.message); }
       }
     } catch (e) { console.error('[contacts-query] handler failed:', e.message); }

@@ -208,6 +208,7 @@ function select(rows, { sectors = [], company = null, limit = 200, grade = null,
   const minC = grade && GRADE_CAP[grade] != null ? GRADE_CAP[grade] : null;
   const st = state ? String(state).toUpperCase() : null;
   const filtered = [];
+  let geoGap = 0;   // rows that match EVERY non-state filter but carry no location → can't be placed in `st`
   for (const r of (Array.isArray(rows) ? rows : [])) {
     const name = String((r && r.name) || '').trim();
     if (name.length < 2 || isInitialsOnly(name)) continue;   // drop malformed initials-only junk
@@ -229,8 +230,15 @@ function select(rows, { sectors = [], company = null, limit = 200, grade = null,
     if (type === 'corporate' && !(dk === 'corporate' && !govCo)) continue;   // a real COMPANY domain, name not gov
     if (type === 'gov' && !(dk === 'gov' || govCo || src === 'crm')) continue;
     if (type === 'elected' && (src !== 'crm' || (('elected' in (r || {})) && r.elected === false))) continue;
-    // STATE — match the row's represented/mailing state (civic CRM rows carry it; Puller rows usually don't).
-    if (st && String((r && r.state) || '').toUpperCase() !== st) continue;
+    // STATE — match the row's represented/mailing state (civic CRM rows carry it; Puller/corporate rows
+    // usually don't). A row that passed EVERY other filter but has NO state is a GEO GAP: it can't be placed
+    // in `st`, and that missing-data-point is exactly what should trigger a "want me to find their location?"
+    // offer (the "if we're missing data, we find it" loop) rather than being silently dropped.
+    if (st) {
+      const rowState = String((r && r.state) || '').toUpperCase();
+      if (!rowState) { geoGap++; continue; }   // matches everything except it has no location
+      if (rowState !== st) continue;            // in a different state — correctly excluded
+    }
     filtered.push({
       name,
       email: String((r && r.email) || '').trim() || null,
@@ -259,7 +267,7 @@ function select(rows, { sectors = [], company = null, limit = 200, grade = null,
   }
   const total = deduped.length;
   const shown = deduped.slice(0, Math.max(1, limit || 200));
-  return { rows: shown, total, shown: shown.length, withEmail: deduped.filter(r => r.email).length, headers: ['Name', 'Email', 'Company', 'Title', 'Confidence'] };
+  return { rows: shown, total, shown: shown.length, withEmail: deduped.filter(r => r.email).length, geoGap, headers: ['Name', 'Email', 'Company', 'Title', 'Confidence'] };
 }
 
 // The canvas TABLE payload (headers + rows) for saga_canvas_add_block block_type='table'. Pure.

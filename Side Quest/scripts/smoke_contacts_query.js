@@ -62,6 +62,17 @@ ok(CQ.select(_pop, { type: 'corporate', grade: 'C', gradeDir: 'gte' }).total ===
 ok(CQ.select(_pop, { type: 'corporate', sectors: ['energy'] }).rows.map((r) => r.name).join() === 'Corp Duke', 'select: corporate + energy sector → Duke Energy');
 ok(CQ.select(_pop, { grade: 'B', type: 'elected', state: 'LA' }).rows.map((r) => r.name).join() === 'Rep LA', 'select: grade B elected in LA → the CRM elected row');
 ok(CQ.label(CQ.detect('give me corporate contacts grade c or higher')) === 'grade C+ corporate contacts', 'label: "grade C+ corporate contacts"');
+// GEO GAP ("if we're missing data, we find it") — a state was asked, but rows that match every OTHER filter
+// yet carry no location are counted as sel.geoGap so the handler can surface it + offer to research it,
+// instead of silently dropping them.
+const _geo = [
+  { name: 'Meta A', company: 'Meta', domain: 'meta.com', confidence: 0.9, src: 'puller', state: null },
+  { name: 'Duke B', company: 'Duke Energy', domain: 'duke-energy.com', confidence: 0.9, src: 'puller', state: null },
+  { name: 'Rep LA', company: 'LA House', email: 'r@house.la.gov', confidence: 0.95, src: 'crm', state: 'LA', elected: true },
+];
+ok(CQ.select(_geo, { state: 'LA' }).geoGap === 2 && CQ.select(_geo, { state: 'LA' }).total === 1, 'select: LA + both-types → 1 placeable (Rep LA) + geoGap 2 (the corporate rows have no location)');
+ok(CQ.select(_geo, {}).geoGap === 0, 'select: no state asked → geoGap 0 (nothing to place)');
+ok(CQ.select(_geo, { type: 'corporate', state: 'LA' }).total === 0 && CQ.select(_geo, { type: 'corporate', state: 'LA' }).geoGap === 2, 'select: corporate + LA → 0 placeable, geoGap 2 (all corporate lack location → surfaces the gap, not a fake empty)');
 // unmetFilters is now narrow: only county has no field to filter on
 ok(CQ.unmetFilters('list contacts in Orange county').includes('county'), 'unmet: county (no field) is flagged');
 ok(CQ.unmetFilters('give me corporate contacts grade c').length === 0, 'unmet: grade + corporate are REAL filters now → not flagged');
