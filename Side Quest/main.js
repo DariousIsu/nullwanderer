@@ -5168,12 +5168,42 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
     }
   } catch (e) { console.error('[brainstorm] commit failed:', e.message); }
+
+  // PENDING-THREAD GREENLIGHT — a bare "Begin." / "yes do it" / "yes please, I need that list" that
+  // greenlights a task Lucas ALREADY red-tagged (a pending open_thread from one of his turns) but that
+  // was never spun into a directed focus. The brainstorm arc above only commits an offer the brainstorm
+  // LANE floated; an offer she made in normal chat (or a "red tag this" thread) leaves a PENDING thread
+  // with NO run — so the request just sits, the graph-walk roams off-domain, and (worse) the heartbeat
+  // ends up "answering" the greenlight as an unprompted musing. Resolve it to the freshest such thread
+  // and synthesize the assignment so the standing-focus block below actually STARTS the work. Grounded
+  // to a real on-the-table thread → low blast radius (fires only when one exists, recently touched).
+  let threadCommitted = false;
+  try {
+    const brain = require('./lib/brainstorm');
+    const _greenlight = brain.isAffirmation(userMessage) || brain.isStartCommand(userMessage)
+      || (/^\s*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|please|absolutely|definitely|go|do)\b/i.test(userMessage)
+          && /\b(list|roster|everyone|every ?one|all (?:of )?(?:them|the)|contacts?|directory|names?)\b/i.test(userMessage));
+    if (_greenlight && !offerCommitted && !socialTurn && !directedStopHandled && !expandHandled && !correctionHandled && !followupFired) {
+      const already = (() => { try { const f = require('./lib/focus').getCurrent(); return !!(f && require('./lib/focus').isDirected(f)); } catch { return false; } })();
+      const th = already ? null : (() => { try { return db.pendingUserAssignedThread(45 * 60 * 1000); } catch { return null; } })();
+      if (th && th.content) {
+        const goal = String(th.content).replace(/\s+/g, ' ').replace(/\s+for\s+\w+\s*$/i, '').trim().slice(0, 800);
+        intakeRoute = { action: 'discover', kind: brain.reconcileKind(null, goal), shape: null, anchor: null, target: goal, facet: '', deep: false, priority: null, subset: null, budget: null, clarify: [] };
+        isAssignment = true;
+        turnRoute = { route: 'task', confidence: 0.9, reason: 'pending-thread-greenlight' };
+        threadCommitted = true;
+        try { db.touchOpenThread(th.id, 'greenlit → directed focus'); } catch {}
+        console.log(`[greenlight] committing pending thread #${th.id}: "${goal.slice(0, 60)}"`);
+      }
+    }
+  } catch (e) { console.error('[greenlight] commit failed:', e.message); }
+
   try {
     // Consume the CONCURRENT intake classification kicked right after the router. The LLM decision — not the
     // narrow regex — decides whether this is a project. Guarded by the same control/correction flags so a
     // stop/wrap/correct turn is never re-read as a new assignment. When the cloud was unavailable the promise
     // resolves to null and the isDirectedTask regex is the fallback (unchanged behavior on cloud-down).
-    if (intakeClassifyPromise && !offerCommitted && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled) {
+    if (intakeClassifyPromise && !offerCommitted && !threadCommitted && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled) {
       const intake = require('./lib/intake');
       const brain = require('./lib/brainstorm');
       const decision = await intakeClassifyPromise;

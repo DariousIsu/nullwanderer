@@ -780,6 +780,20 @@ function getUserAssignedThreads(limit = 60) {
     .all(limit);
 }
 
+// The freshest PENDING thread Lucas actually assigned (from a user turn) within maxAgeMs — the anchor
+// for a bare greenlight ("Begin." / "yes do it") that commits an on-the-table task he red-tagged but
+// that was never spun up into a directed focus. Newest-touched first; null if none in-window. This is
+// what lets "Begin." actually begin the parish research instead of the heartbeat answering it.
+function pendingUserAssignedThread(maxAgeMs = 45 * 60 * 1000) {
+  const cutoff = Date.now() - Math.max(0, Number(maxAgeMs) || 0);
+  return getDb()
+    .prepare(`SELECT ot.* FROM open_threads ot
+      JOIN turns t ON t.id = ot.source_turn_id
+      WHERE t.speaker = 'user' AND ot.status = 'pending' AND ot.last_touched_ts >= ?
+      ORDER BY ot.last_touched_ts DESC LIMIT 1`)
+    .get(cutoff) || null;
+}
+
 function getAllOpenThreads(limit = 200) {
   return getDb()
     .prepare(`SELECT * FROM open_threads ORDER BY id DESC LIMIT ?`)
@@ -1868,6 +1882,7 @@ module.exports = {
   insertOpenThread,
   getActiveOpenThreads,
   recentThreadGoals,
+  pendingUserAssignedThread,
   getAllOpenThreads,
   getOpenThread,
   markOpenThreadStatus,

@@ -35,6 +35,30 @@ try {
   const inSheep = rows.filter(r => r.speaker === 'ai_thought' || (r.speaker === 'ai_said' && r.unprompted));
   ok(inSheep.some(r => r.id === thought.id) && inSheep.some(r => r.id === unprompted.id) && !inSheep.some(r => r.id === prompted.id),
      'sheep gets the thought + unprompted utterance, never the prompted reply');
+
+  // LIVE onComplete GUARD (renderer/chat.js) — mirrors the exact predicate that decides whether a
+  // completion is diverted to the sheep panel (returning early WITHOUT touching promptedReplyPending)
+  // vs. falls through to finish the user's reply. The bug: a racing idle completion (even a SILENT one)
+  // arriving while a reply was pending fell through and reset the reply state, so the real reply then
+  // streamed as "unprompted" into the sheep rail. The fix gates on !currentAiTurnDiv, NOT !promptedReplyPending.
+  console.log('onComplete routing guard (the shunt fix):');
+  const divertsToSheep = (currentAiTurnDiv, unpromptedActive, info) =>
+    !currentAiTurnDiv && (unpromptedActive || (info && (info.unprompted || info.silent)));
+  // The shunt scenario: reply pending (promptedReplyPending would be true), reply not yet streaming
+  // (currentAiTurnDiv null), a racing idle SILENT completion arrives.
+  ok(divertsToSheep(null, false, { unprompted: true, silent: true }) === true,
+     'racing idle SILENT complete → diverted to sheep (early return), does NOT reset the pending reply');
+  ok(divertsToSheep(null, false, { unprompted: true, say: 'a musing' }) === true,
+     'racing idle SPEAKING complete → diverted to sheep, pending reply preserved');
+  // The tool-result followup IS the reply — by completion it has streamed into the transcript turn.
+  ok(divertsToSheep({}, false, { unprompted: true, say: 'the answer' }) === false,
+     'tool-result followup (currentAiTurnDiv set) → falls through to finish, NOT shunted');
+  // A normal prompted reply completing.
+  ok(divertsToSheep({}, false, { truncated: 0 }) === false,
+     'normal prompted reply → falls through to finish');
+  // A genuine autonomous utterance while nothing is pending still reaches the sheep panel.
+  ok(divertsToSheep(null, true, { unprompted: true }) === true,
+     'idle utterance with no reply in flight → sheep, as before');
 } catch (e) {
   fail++; console.error('  ✗ threw:', e.message);
 } finally {

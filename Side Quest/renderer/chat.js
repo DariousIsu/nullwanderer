@@ -291,11 +291,17 @@ window.sq.onSayToken((token) => {
 window.sq.onComplete((info) => {
   // Autonomous utterance → sheep panel, never the dialogue transcript. Leave the user's
   // input state untouched (an unprompted completion isn't a reply to anything they sent).
-  // GUARD: only when NO prompted reply is in flight. A tool-result followup is flagged
-  // unprompted but IS the reply to the user's message — routing it to the panel here would
-  // abandon the half-streamed transcript turn AND never re-enable the input (the stuck-textbox
-  // hang). If a prompted reply is pending or already streaming, fall through and finish it.
-  if (!promptedReplyPending && !currentAiTurnDiv && (unpromptedActive || (info && info.unprompted))) {
+  // GATE on !currentAiTurnDiv, NOT on !promptedReplyPending. A racing idle completion (heartbeat/
+  // continuity) — even one that chose SILENCE — used to arrive between the user's send() and the
+  // real reply's first token, i.e. while promptedReplyPending was still true. The old `!promptedReplyPending`
+  // clause made this branch false, so it FELL THROUGH and reset promptedReplyPending/sending/input;
+  // the real reply then streamed as "unprompted" straight into the sheep rail (the shunt Lucas saw —
+  // his "38 Parishes" answer landed under UNPROMPTED). The one unprompted completion that IS the reply
+  // is a tool-result followup, and by the time it completes it ALWAYS has currentAiTurnDiv set (its
+  // answer streamed into the transcript turn) — so `!currentAiTurnDiv` distinguishes it cleanly and it
+  // still falls through to finish. A racing idle completion has currentAiTurnDiv === null → handled here,
+  // and promptedReplyPending is preserved for the real reply.
+  if (!currentAiTurnDiv && (unpromptedActive || (info && (info.unprompted || info.silent)))) {
     const text = (info && typeof info.say === 'string' && info.say.trim())
       ? info.say.trim() : cleanLiveSay(unpromptedBuffer).trim();
     if (text) appendSheep({ ts: Date.now(), content: text, type: 'utterance' });

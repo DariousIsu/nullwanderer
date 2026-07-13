@@ -49,6 +49,18 @@ function isAffirmation(message) {
   const s = String(message || '').trim();
   return s.length > 0 && s.length <= 40 && _AFFIRM_RE.test(s);
 }
+// ─── START COMMAND ───────────────────────────────────────────────────────────
+// A bare "begin / go ahead / do it / proceed" that greenlights something ALREADY on the table (a
+// project she offered in chat, or a research thread Lucas red-tagged) but that carries no subject of
+// its own. Distinct from isAffirmation (which the offer arc uses) because "begin"/"proceed"/"kick it
+// off" aren't affirmation tokens — the live gap where "Begin." fired NOTHING and the heartbeat answered
+// it. Like isAffirmation it only makes sense against an on-the-table task, which main.js supplies.
+const _START_RE = /^\s*(?:(?:ok(?:ay)?|yes|yep|yeah|sure|please|alright|right|cool|now|then)[\s,.!]+)*(?:go ahead(?: and (?:do it|start|begin))?|get (?:going|started)|kick (?:it |things )?off|begin(?: (?:it|now|please))?|start(?: (?:it|now|on (?:it|that)|please))?|proceed|do it|make it (?:so|happen)|let'?s (?:go|do (?:it|this)|begin|start|get (?:going|started))|run with it|spin (?:it|that) up|fire (?:it|away)|go for it)[\s.!]*$/i;
+function isStartCommand(message) {
+  const s = String(message || '').trim();
+  return s.length > 0 && s.length <= 48 && _START_RE.test(s);
+}
+
 // A floated offer is only committable while fresh — a bare "yes" three turns later isn't about the offer.
 const OFFER_TTL_MS = 8 * 60 * 1000;   // 8 minutes
 function offerFresh(ts, now) {
@@ -119,8 +131,8 @@ function pullTopic(message) {
 
 module.exports = {
   isImperativeAssignment,
-  isAffirmation, offerFresh, OFFER_TTL_MS,
+  isAffirmation, isStartCommand, offerFresh, OFFER_TTL_MS,
   classifyKind, reconcileKind,
   looksTopical, shouldLightPull, pullTopic,
-  _IMPERATIVE_RE, _MUSE_RE, _AFFIRM_RE, _FORECAST_RE, _TOPICAL_RE, _ENTITY_RE,
+  _IMPERATIVE_RE, _MUSE_RE, _AFFIRM_RE, _START_RE, _FORECAST_RE, _TOPICAL_RE, _ENTITY_RE,
 };

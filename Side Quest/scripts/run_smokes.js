@@ -20,6 +20,7 @@ const dir = __dirname;
 // smoke here only once it's confirmed to pass offline with no external dependency.
 const smokes = [
   'smoke_unprompted.js',
+  'smoke_greenlight.js',
   'smoke_relevance_floor.js',
   'smoke_stream_watchdog.js',
   'smoke_email_killswitch.js',
