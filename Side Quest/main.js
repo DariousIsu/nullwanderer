@@ -1785,41 +1785,27 @@ app.whenReady().then(() => {
   // any source), and a bare "[Music]" caption grabs a SCREENSHOT of the frame — show start/stop stings and
   // full-screen charts/graphs (e.g. Yahoo Finance) that captions can't convey. HEAVY (N hidden windows) →
   // gated by NEWS_VIDEO_CAPTURE. DEFAULT OFF (2026-07-12): even ad-blocked + forced 144p, 4 hidden live-
-  // video windows still pegged the main thread AND a renderer over hours and froze the app repeatedly on
-  // this machine. Opt back in with NEWS_VIDEO_CAPTURE=1 once the zero-decode caption fetch lands (fetch
-  // YouTube's live timedtext directly — no browser windows, no video decode). Reuses feedsStore.videoList().
-  if (/^(1|true|on|yes)$/i.test(String(process.env.NEWS_VIDEO_CAPTURE || 'off').trim())) {
+  // NOW ZERO-DECODE (lib/caption_stream, 2026-07-12): yt-dlp resolves each live feed's auto-caption HLS
+  // manifest, then we poll it for new WEBVTT segments over plain HTTP — NO browser windows, NO video decode.
+  // This REPLACES the old hidden-YouTube-window CaptureLane, whose 4 live-video windows + ad-iframe swarm
+  // pegged the main thread and froze the app repeatedly (see memory/video-capture-freeze). Cheap enough to
+  // default ON again; kill-switch NEWS_VIDEO_CAPTURE=0. Reuses feedsStore.videoList() + the news_store pipe.
+  if (!/^(0|false|off|no)$/i.test(String(process.env.NEWS_VIDEO_CAPTURE || 'on').trim())) {
     try {
-      const videoCapture = require('./lib/video_capture');
+      const captionStream = require('./lib/caption_stream');
       const newsStore = require('./lib/news_store');
       const videos = (feedsStore.videoList() || []).filter((v) => v && v.url);
       if (videos.length) {
-        newsVideoLane = new videoCapture.CaptureLane({
+        newsVideoLane = new captionStream.CaptionStreamLane({
           store: newsStore, feeds: videos,
-          capturesDir: path.join(__dirname, 'data', 'news_captures'),
-          intervalMs: parseInt(process.env.NEWS_VIDEO_POLL_MS || '', 10) || 3000,
-          sampleMs: parseInt(process.env.NEWS_VIDEO_SAMPLE_MS || '', 10) || 30000,   // re-read the screen every ~30s during a music/chart stretch
-          // small capture windows → YouTube serves low-res → far less decode/bandwidth for the hidden half, so the
-          // VISIBLE tiles stop buffering (captions are DOM text, unaffected). Env-tunable if the vision-read needs more detail.
-          captureW: parseInt(process.env.NEWS_VIDEO_CAPTURE_W || '', 10) || 640,
-          captureH: parseInt(process.env.NEWS_VIDEO_CAPTURE_H || '', 10) || 360,
-          // SCREEN VISION-READ — OFF by default (Lucas 2026-07-07: the chart screen-read wasn't producing enough
-          // signal to justify running a 675b multimodal model on captured frames). With visionRead null the lane
-          // skips screenshots ENTIRELY (no capturePage / PNG / model call) — only the closed-CAPTION reading runs,
-          // which is where the value is. Re-enable with NEWS_VIDEO_VISION=1 (model via NEWS_VIDEO_VISION_MODEL).
-          visionRead: /^(1|true|yes|on)$/i.test(String(process.env.NEWS_VIDEO_VISION || '').trim())
-            ? async ({ base64 }) => {
-              const screenModel = process.env.NEWS_VIDEO_VISION_MODEL
-                || (() => { try { return db.getMeta('model.news_vision'); } catch { return null; } })()
-                || 'mistral-large-3:675b';
-              return require('./lib/vision').describe({ imageBase64: base64, prompt: videoCapture.SCREEN_READ_PROMPT, model: screenModel });
-            }
-            : null,
+          intervalMs: parseInt(process.env.NEWS_VIDEO_POLL_MS || '', 10) || 5000,
+          sampleMs: parseInt(process.env.NEWS_VIDEO_SAMPLE_MS || '', 10) || 30000,
+          ytdlp: process.env.YTDLP_PATH || 'yt-dlp',
           log: (m) => console.log(m),
         });
         newsVideoLane.start();
-      } else { console.log('[main] news video capture: no video streams configured'); }
-    } catch (e) { console.error('[main] news video capture failed to start:', e.message); }
+      } else { console.log('[main] news video captions: no video streams configured'); }
+    } catch (e) { console.error('[main] news caption stream failed to start:', e.message); }
   }
 
   // SCRIBE BOOT-RESUME: if the app restarted mid-meeting (canvas-hosted + gmeet still active, or a scribe
