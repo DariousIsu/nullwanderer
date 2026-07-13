@@ -50,10 +50,23 @@ function sectorsFrom(message) {
   for (const [name, re] of Object.entries(SECTORS)) if (re.test(m)) out.push(name);
   return out;
 }
-// "contacts at <Company>" / "from <Company>" / "for <Company>" → the company filter, else null.
+// US state names → 2-letter (abbrevs are skipped: IN/OR/OK/ME etc. false-positive on prose). Used by both
+// stateFrom (the state filter) and companyFrom (so "in Louisiana" isn't mistaken for a company).
+const _STATES = { alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA', colorado: 'CO', connecticut: 'CT', delaware: 'DE', florida: 'FL', georgia: 'GA', hawaii: 'HI', idaho: 'ID', illinois: 'IL', indiana: 'IN', iowa: 'IA', kansas: 'KS', kentucky: 'KY', louisiana: 'LA', maine: 'ME', maryland: 'MD', massachusetts: 'MA', michigan: 'MI', minnesota: 'MN', mississippi: 'MS', missouri: 'MO', montana: 'MT', nebraska: 'NE', nevada: 'NV', 'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC', 'north dakota': 'ND', ohio: 'OH', oklahoma: 'OK', oregon: 'OR', pennsylvania: 'PA', 'rhode island': 'RI', 'south carolina': 'SC', 'south dakota': 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT', virginia: 'VA', washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI', wyoming: 'WY' };
+
+// "contacts at <Company>" / "from <Company>" / "for <Company>" → the company filter, else null. Skips a
+// captured token that is actually a US STATE ("in Louisiana" is a state filter, not a company) — otherwise
+// "grade B elected officials in Louisiana" would set company="Louisiana" AND state=LA (the double-match bug).
 function companyFrom(message) {
-  const m = /\b(?:at|from|for|with|in)\s+([A-Z][A-Za-z0-9&.\- ]{2,40})/.exec(String(message || ''));
-  return m ? m[1].replace(/\b(the|contacts?|people|list|our|their)\b/gi, '').replace(/\s+/g, ' ').trim() || null : null;
+  const re = /\b(?:at|from|for|with|in)\s+([A-Z][A-Za-z0-9&.\- ]{2,40})/g;
+  let m;
+  while ((m = re.exec(String(message || ''))) !== null) {
+    let cand = m[1].replace(/\b(the|contacts?|people|list|our|their)\b/gi, '').replace(/\s+/g, ' ').trim();
+    // the greedy capture can swallow a trailing "… in Texas" / "… from X" — cut at the next connective.
+    cand = cand.replace(/\s+(?:in|at|from|for|with)\s+.*$/i, '').trim();
+    if (cand && !_STATES[cand.toLowerCase()]) return cand;
+  }
+  return null;
 }
 
 // "who do we have / who are our [people] at <X>" — a contact ask with no explicit noun.
@@ -67,27 +80,62 @@ function countFrom(message) {
 // Detect a list-the-contacts-we-hold request. Returns { isQuery, sectors, company, limit }.
 function detect(message) {
   const m = String(message == null ? '' : message);
-  const nounish = CONTACT_NOUN.test(m) || (WHO_HAVE.test(m) && /\bat\b/i.test(m));
+  // a TYPE word ("elected officials", "corporate", "legislators") is itself a contact-list noun in this
+  // domain — "give me grade B elected officials in LA" has no bare "contacts"/"people" noun but is clearly
+  // a list ask. Still gated by LIST_INTENT below, so a non-list mention ("the government shut down") is out.
+  const nounish = CONTACT_NOUN.test(m) || (WHO_HAVE.test(m) && /\bat\b/i.test(m)) || !!typeFrom(m);
   if (!nounish) return { isQuery: false };
   if (RESEARCH_INTENT.test(m) && !LIST_INTENT.test(m)) return { isQuery: false };   // an explicit "research NEW" → not a list
   if (!LIST_INTENT.test(m) && !WHO_HAVE.test(m)) return { isQuery: false };
-  return { isQuery: true, sectors: sectorsFrom(m), company: companyFrom(m), limit: countFrom(m) };
+  const g = gradeFrom(m);
+  return { isQuery: true, sectors: sectorsFrom(m), company: companyFrom(m), limit: countFrom(m),
+           grade: g ? g.grade : null, gradeDir: g ? g.dir : 'gte', type: typeFrom(m), state: stateFrom(m) };
 }
 
-// UNMET-FILTER honesty: the request often asks to narrow by a dimension this held CRM does NOT carry —
-// an A/B/C "rating" or a "corporate" category. The held contacts are civic/political records (candidates,
-// PACs, elected officials): Tier is 1/2/3 and 99.6% null, there is no corporate/business type, no letter
-// rating. select() can only filter by sector/company, so those asks were SILENTLY dropped and a generic
-// list was returned + labelled as if it matched (Lucas: "producing lists but not the lists requested").
-// Return the human-readable dimensions the request asked for that we canNOT apply, so the caller's voice
-// line discloses it instead of faking fulfillment.
-const RATING_ASK = /\b(?:[a-d][\s-]?(?:rating|rated|grade|graded|rank|ranked|tier)|(?:rating|rated|graded?|ranked?)\s+(?:of\s+)?[a-d]\b|(?:rating|grade|rank|tier)\s+(?:or\s+)?(?:higher|above|better|lower|below))\b/i;
-const CORP_ASK = /\b(corporate|commercial|for-?profit|private[\s-]?sector)\b/i;
+// GRADE — the A–E confidence ladder (mirrors studio/puller_confidence CAP). "c rating or higher" is the
+// most common list filter and it IS on every row (the `confidence` field), it just was never used as a
+// FILTER (only for sorting). C = 0.80, so "C or higher" = confidence >= 0.80.
+const GRADE_CAP = { A: 1.00, B: 0.95, C: 0.80, D: 0.50, E: 0.30 };
+const _GRADE_RE = /\bgrade\s+([a-e])\b|\b([a-e])[\s-]?(?:rating|rated|graded?)\b/i;
+const _DIR_LOWER = /\b(?:or\s+)?(?:lower|below|worse|under)\b/i;
+function gradeFrom(message) {
+  const m = String(message || '');
+  const g = _GRADE_RE.exec(m);
+  const grade = g ? (g[1] || g[2] || '').toUpperCase() : null;
+  if (!grade || !GRADE_CAP[grade]) return null;
+  // default a bare "grade X" / "X rating" to ">= X" (the "at least this quality" intent, e.g. "C and up");
+  // an explicit "or lower/below" flips it.
+  return { grade, dir: _DIR_LOWER.test(m) ? 'lte' : 'gte' };
+}
+
+// TYPE — corporate (private-sector, Puller-discovered) vs elected/official/government (the civic CRM). The
+// held population splits cleanly by SOURCE: CRM = electoral.contact (candidates/PACs/elected/staff), Puller
+// = discovered private-sector contacts. So type maps to the row's `src` (+ an elected marker when known).
+const _TYPE_CORP = /\b(corporate|commercial|for-?profit|private[\s-]?sector)\b/i;
+const _TYPE_ELECTED = /\b(elected|officials?|legislators?|lawmakers?|congress(?:ional|m[ae]n|wom[ae]n|member)?|senators?|representatives?|governors?|mayors?|council\s?members?|commissioners?|office\s?holders?)\b/i;
+const _TYPE_GOV = /\b(government|govt|agenc(?:y|ies)|federal|municipal|public[\s-]?sector)\b/i;
+function typeFrom(message) {
+  const m = String(message || '');
+  if (_TYPE_CORP.test(m)) return 'corporate';
+  if (_TYPE_ELECTED.test(m)) return 'elected';
+  if (_TYPE_GOV.test(m)) return 'gov';
+  return null;
+}
+
+function stateFrom(message) {
+  const m = String(message || '').toLowerCase();
+  for (const [name, ab] of Object.entries(_STATES)) if (new RegExp(`\\b${name}\\b`).test(m)) return ab;
+  return null;
+}
+
+// UNMET-FILTER honesty (now narrow): grade/type/state ARE applied. The one dimension the held data can't
+// resolve is COUNTY — there is no county field on the contact rows (state yes, county no). If the request
+// asks to narrow by county, the caller discloses it instead of silently ignoring it.
+const _COUNTY_RE = /\b([A-Z][a-z]+)\s+count(?:y|ies)\b/;
 function unmetFilters(message) {
   const m = String(message == null ? '' : message);
   const unmet = [];
-  if (RATING_ASK.test(m)) unmet.push('an A/B/C rating');
-  if (CORP_ASK.test(m)) unmet.push('a "corporate" category');
+  if (_COUNTY_RE.test(m)) unmet.push('county');
   return unmet;
 }
 
@@ -101,8 +149,10 @@ function matchesSectors(company, sectors) {
 // Select + rank the held contacts for the request. `rows` = [{name, email, phone, company, title}] pulled
 // from the Puller/CRM. Filter by sector + company; PREFER rows with an email; dedup by name+company; cap.
 // Returns { rows, total, shown, headers }. Pure.
-function select(rows, { sectors = [], company = null, limit = 200 } = {}) {
+function select(rows, { sectors = [], company = null, limit = 200, grade = null, gradeDir = 'gte', type = null, state = null } = {}) {
   const comp = company ? _norm(company) : null;
+  const minC = grade && GRADE_CAP[grade] != null ? GRADE_CAP[grade] : null;
+  const st = state ? String(state).toUpperCase() : null;
   const filtered = [];
   for (const r of (Array.isArray(rows) ? rows : [])) {
     const name = String((r && r.name) || '').trim();
@@ -110,6 +160,19 @@ function select(rows, { sectors = [], company = null, limit = 200 } = {}) {
     const rc = String((r && r.company) || '');
     if (!matchesSectors(rc, sectors)) continue;
     if (comp && !_norm(rc).includes(comp)) continue;
+    // GRADE — confidence threshold. "C or higher" (gte) → conf >= 0.80; "or lower" (lte) → conf <= cap.
+    if (minC != null) {
+      const c = typeof (r && r.confidence) === 'number' ? r.confidence : 0;
+      if (gradeDir === 'lte' ? (c > minC + 1e-9) : (c < minC - 1e-9)) continue;
+    }
+    // TYPE — corporate = Puller-discovered private-sector; elected/gov = the civic CRM. Uses the row `src`;
+    // 'elected' further narrows to rows carrying an elected marker (when the source provides one).
+    const src = r && r.src;
+    if (type === 'corporate' && src !== 'puller') continue;
+    if ((type === 'elected' || type === 'gov') && src !== 'crm') continue;
+    if (type === 'elected' && ('elected' in (r || {})) && r.elected === false) continue;
+    // STATE — match the row's represented/mailing state (civic CRM rows carry it; Puller rows usually don't).
+    if (st && String((r && r.state) || '').toUpperCase() !== st) continue;
     filtered.push({
       name,
       email: String((r && r.email) || '').trim() || null,
@@ -151,10 +214,16 @@ function toTable(sel) {
 }
 
 // A short human title for the canvas tab + the chat line, from the request's sectors/company.
-function label({ sectors = [], company = null } = {}) {
-  if (company) return `${company} contacts`;
-  if (sectors.length) return `${sectors.map((s) => SECTOR_LABELS[s] || s).join(' / ')} contacts`;
-  return 'Contacts';
+const TYPE_LABELS = { corporate: 'corporate', elected: 'elected-official', gov: 'government' };
+function label({ sectors = [], company = null, grade = null, gradeDir = 'gte', type = null, state = null } = {}) {
+  const parts = [];
+  if (grade) parts.push(`grade ${grade}${gradeDir === 'lte' ? ' or lower' : '+'}`);
+  if (type) parts.push(TYPE_LABELS[type] || type);
+  if (sectors.length) parts.push(sectors.map((s) => SECTOR_LABELS[s] || s).join(' / '));
+  if (company) parts.push(company);
+  if (state) parts.push(`in ${state}`);
+  const noun = 'contacts';
+  return parts.length ? `${parts.join(' ')} ${noun}`.replace(/\s+/g, ' ').trim() : 'Contacts';
 }
 
-module.exports = { detect, select, toTable, label, unmetFilters, sectorsFrom, companyFrom, matchesSectors, SECTORS };
+module.exports = { detect, select, toTable, label, unmetFilters, gradeFrom, typeFrom, stateFrom, sectorsFrom, companyFrom, matchesSectors, GRADE_CAP, SECTORS };

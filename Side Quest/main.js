@@ -4736,10 +4736,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const cq = require('./lib/contacts_query');
       const ask = _contactsQ && _contactsQ.isQuery ? _contactsQ : cq.detect(userMessage);
       const rows = await gatherHeldContacts();
-      const sel = cq.select(rows, { sectors: ask.sectors, company: ask.company, limit: ask.limit || 200 });
+      const sel = cq.select(rows, { sectors: ask.sectors, company: ask.company, limit: ask.limit || 200,
+        grade: ask.grade, gradeDir: ask.gradeDir, type: ask.type, state: ask.state });
       const lbl = cq.label(ask);
-      // HONESTY: the held CRM is civic/political and can't be filtered by a "rating" or a "corporate" category.
-      // If the request asked for one, disclose it instead of returning a generic list dressed up as a match.
+      // HONESTY (now narrow): grade/type/sector/state/company ARE applied. Only county has no field to filter
+      // on — disclose that if asked, instead of silently ignoring it.
       const unmet = cq.unmetFilters(userMessage);
       if (sel.total > 0) {
         const tbl = cq.toTable(sel);
@@ -4749,9 +4750,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         console.log(`[contacts-query] "${lbl}" → ${sel.shown}/${sel.total} on canvas (${sel.withEmail} w/ email)${unmet.length ? ` [unmet: ${unmet.join(', ')}]` : ''}`);
         followupFired = true; contactsHandled = true;
         const honesty = unmet.length
-          ? ` BE HONEST — do NOT imply the list is filtered: he asked to narrow by ${unmet.join(' and ')}, but the contacts you hold are civic/political records (candidates, PACs, elected officials) that do NOT carry ${unmet.join(' or ')}. So what's on the canvas is the GENERAL list, not filtered that way. Say that plainly, and offer what you CAN narrow by: state, party, committee/PAC type, or active-elected status.`
-          : ' Offer to research more or narrow it if he wants.';
-        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You just pulled ${sel.total} contacts you ALREADY HAVE onto ${userName}'s canvas${sel.total > sel.shown ? ` (showing the top ${sel.shown})` : ''} — ${sel.withEmail} with emails. Tell him briefly you put the list on his canvas; make clear these are contacts you already hold, NOT a new research run.${honesty} Your own voice, one or two sentences.]` }); }
+          ? ` ONE caveat to state plainly: he also asked to narrow by ${unmet.join(' and ')}, but you have no ${unmet.join(' or ')}-level tag on these contacts, so the list is NOT filtered by that — offer to narrow by state instead if that helps.`
+          : ' Offer to research more or narrow it further if he wants.';
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[You put ${sel.total} ${lbl} you ALREADY HAVE onto ${userName}'s canvas${sel.total > sel.shown ? ` (showing the top ${sel.shown})` : ''} — ${sel.withEmail} with emails. This list IS filtered to what he asked (${lbl}). Tell him briefly you put it on his canvas; these are contacts you already hold, NOT a new research run.${honesty} Your own voice, one or two sentences.]` }); }
         catch (e) { console.error('[contacts-query] voice line failed (list already on canvas):', e.message); }
       } else {
         followupFired = true; contactsHandled = true;
@@ -7415,8 +7416,11 @@ async function gatherHeldContacts() {
       const bl = pdb.listBeliefs(t.id) || [];
       const b = (type) => bl.find((x) => x.type === type) || null;
       const email = b('email');
+      // src:'puller' = a DISCOVERED private-sector contact (the "corporate" type); Puller targets rarely
+      // carry a state, so state stays null (they won't match a state filter — honest).
       out.push({ name: t.name, email: email && email.value, phone: (b('phone') || {}).value || null, company: t.company, title: (b('role') || {}).value || null,
-                 confidence: email && typeof email.confidence === 'number' ? email.confidence : ((b('phone') || {}).confidence || 0) });
+                 confidence: email && typeof email.confidence === 'number' ? email.confidence : ((b('phone') || {}).confidence || 0),
+                 src: 'puller', state: null, elected: false });
     }
   } catch (e) { console.error('[contacts-query] puller gather failed:', e.message); }
   // 2) CRM — every emailed contact + its org (account) name, most-complete first. Bounded safety cap. The
@@ -7427,7 +7431,8 @@ async function gatherHeldContacts() {
   try {
     if (echoSuit && echoSuit.connected) {
       const sql = `SELECT c.id, c.FirstName, c.LastName, c.Title, c.Email, c.Phone, c.MobilePhone,
-            c.Email_Deliverable__c AS deliverable, c.Active_Elected__c AS active, c.Enrichment_Stage__c AS enrichment, a.Name AS account_name
+            c.Email_Deliverable__c AS deliverable, c.Active_Elected__c AS active, c.Enrichment_Stage__c AS enrichment,
+            c.State_Represented AS state_rep, c.MailingState AS mail_state, c.Contact_Kind__c AS ckind, a.Name AS account_name
           FROM electoral.contact c
           LEFT JOIN electoral.account a ON a.id = c.AccountId
           WHERE c.deleted=0 AND c.Email IS NOT NULL AND TRIM(c.Email) <> ''
@@ -7450,8 +7455,13 @@ async function gatherHeldContacts() {
           const enriched = String(row.enrichment || '').toLowerCase() === 'complete';
           confidence = 0.88 + (active ? 0.04 : 0) + (enriched ? 0.03 : 0);
         }
+        // src:'crm' = the civic/electoral CRM (the "elected/government" type); carry the represented/mailing
+        // state (for a state filter) and an elected marker (Active_Elected or Contact_Kind='elected').
+        const st = String(row.state_rep || row.mail_state || '').trim().toUpperCase() || null;
+        const elected = row.active === 1 || row.active === '1' || String(row.ckind || '').toLowerCase() === 'elected';
         out.push({ name, email: String(row.Email || '').trim() || null, phone: String(row.Phone || row.MobilePhone || '').trim() || null,
-                   company: String(row.account_name || '').trim() || null, title: String(row.Title || '').trim() || null, confidence });
+                   company: String(row.account_name || '').trim() || null, title: String(row.Title || '').trim() || null, confidence,
+                   src: 'crm', state: st, elected });
       }
       console.log(`[contacts-query] gathered ${out.length} held contacts (Puller + CRM, ${heldCrmIds.size} CRM dupes skipped)`);
     }

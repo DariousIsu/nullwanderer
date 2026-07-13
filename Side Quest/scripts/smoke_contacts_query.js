@@ -25,14 +25,30 @@ ok(CQ.detect('pull our 100 highest confidence energy contacts').limit === 100, '
 ok(CQ.detect('list the top 25 energy contacts').limit === 25, 'detect: "top 25" → 25');
 ok(CQ.detect('list our energy contacts').limit === null, 'detect: no number → null limit');
 
-// --- unmetFilters: the honesty guard — a request to narrow by a dimension the civic CRM does NOT carry
-// (an A/B/C rating, a "corporate" category) must be REPORTED, not silently dropped + returned as a match. ---
-ok(CQ.unmetFilters('pull me a spreadsheet of all our corporate contacts with a c rating or higher').length === 2, 'unmet: "corporate contacts with a c rating" → BOTH rating + category flagged');
-ok(CQ.unmetFilters('list our A rated contacts').includes('an A/B/C rating'), 'unmet: "A rated" → rating flagged');
-ok(CQ.unmetFilters('give me the corporate contacts').includes('a "corporate" category'), 'unmet: "corporate" → category flagged');
-ok(CQ.unmetFilters('list our energy contacts').length === 0, 'unmet: a real sector ask flags NOTHING (no false positive)');
-ok(CQ.unmetFilters('who do we have at Brookings').length === 0, 'unmet: a company ask flags nothing');
-ok(CQ.unmetFilters('give me the top 100 contacts').length === 0, 'unmet: a plain count ask flags nothing');
+// --- GRADE / TYPE / STATE: the compositional filters (Lucas: "grade c and up corporate", "grade b elected
+// officials in X state"). "c rating" = the A–E confidence GRADE (C=0.80), corporate/elected = the row src. ---
+let gq = CQ.detect('pull me a spreadsheet of all our corporate contacts with a c rating or higher');
+ok(gq.grade === 'C' && gq.gradeDir === 'gte' && gq.type === 'corporate', 'detect: "corporate contacts with a c rating or higher" → grade C+ / corporate');
+gq = CQ.detect('give me grade B elected officials in Louisiana');
+ok(gq.isQuery && gq.grade === 'B' && gq.type === 'elected' && gq.state === 'LA' && gq.company === null, 'detect: "grade B elected officials in Louisiana" → B / elected / LA (no phantom company)');
+ok(CQ.detect('list our grade c and up energy contacts').grade === 'C', 'detect: "grade c and up" → C');
+ok(CQ.detect('give me contacts at Duke Energy in Texas').company === 'Duke Energy' && CQ.detect('give me contacts at Duke Energy in Texas').state === 'TX', 'detect: company + trailing state disambiguate');
+// select applies them against the row `src` / `confidence` / `state`
+const _pop = [
+  { name: 'Corp B', company: 'Acme', confidence: 0.95, src: 'puller', state: null, elected: false },
+  { name: 'Corp C', company: 'Beta', confidence: 0.80, src: 'puller', state: null, elected: false },
+  { name: 'Corp D', company: 'Gamma', confidence: 0.50, src: 'puller', state: null, elected: false },
+  { name: 'Rep LA', company: 'LA House', confidence: 0.95, src: 'crm', state: 'LA', elected: true },
+  { name: 'Rep TX', company: 'TX House', confidence: 0.95, src: 'crm', state: 'TX', elected: true },
+];
+ok(CQ.select(_pop, { grade: 'C', gradeDir: 'gte', type: 'corporate' }).total === 2, 'select: corporate grade C+ → 2 (drops the D and all CRM rows)');
+ok(CQ.select(_pop, { grade: 'B', type: 'elected', state: 'LA' }).rows.map((r) => r.name).join() === 'Rep LA', 'select: grade B elected in LA → just Rep LA');
+ok(CQ.select(_pop, { type: 'corporate', state: 'LA' }).total === 0, 'select: corporate + state → 0 (Puller rows carry no state — honest empty, not a fake match)');
+ok(CQ.label(CQ.detect('give me corporate contacts grade c or higher')) === 'grade C+ corporate contacts', 'label: "grade C+ corporate contacts"');
+// unmetFilters is now narrow: only county has no field to filter on
+ok(CQ.unmetFilters('list contacts in Orange county').includes('county'), 'unmet: county (no field) is flagged');
+ok(CQ.unmetFilters('give me corporate contacts grade c').length === 0, 'unmet: grade + corporate are REAL filters now → not flagged');
+ok(CQ.unmetFilters('list our energy contacts').length === 0, 'unmet: a plain sector ask flags nothing');
 
 // --- "targets" / "orgs" are contact-list nouns; think-tank sector (regression: this went to a "project") ---
 const tt = CQ.detect('do another list of 100 high confidence targets but only from think tanks and private organizations');
