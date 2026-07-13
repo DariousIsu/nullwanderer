@@ -6684,7 +6684,7 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
 // new message (like a heartbeat). Discord: DMs the reply back. No tool tags are dispatched
 // in the follow-up (stripped) — no recursion.
 const MAX_ECHO_HOPS = 4;   // bounded in-turn Echo chain (find → pick tool → do → answer)
-async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 0 }) {
+async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 0, prompted = true }) {
   // TURN ISOLATION — if a newer chat turn has started since this follow-up's turn, discard it: a prior
   // turn's fire-and-forget tool result must never render into the current turn (the cross-turn bleed).
   if (io && io._gen != null && io._gen !== _chatTurnGen) { console.log(`[main] stale tool-followup discarded (gen ${io._gen} vs ${_chatTurnGen})`); return; }
@@ -6744,7 +6744,14 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       if (sayOut) {
         const thoughtClean = (thought || '').replace(/<\/?(think|say)>/gi, '').trim();
         if (thoughtClean) db.insertTurn({ sessionId, speaker: 'ai_thought', content: thoughtClean, model: MODEL });
-        const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: sayOut, model: MODEL, unprompted: 1 });
+        // A tool-followup voices the answer to what the user ASKED — it is a PROMPTED reply, not an
+        // autonomous musing. Storing it unprompted:1 meant the renderer's history reload (chat.js: an
+        // ai_said with unprompted routes to the sheep rail, not the transcript) buried EVERY tool-assisted
+        // answer in the subconscious rail after any reboot — the "real responses in the UNPROMPTED rail"
+        // Lucas kept seeing (e.g. the "I put the contacts on your canvas" answer). Flag by ACTUAL context:
+        // a synchronous chat-turn followup is prompted (0); only a background action-completion (runActionStep,
+        // no user waiting) stays unprompted (1). Live routing already handles both (currentAiTurnDiv gate).
+        const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: sayOut, model: MODEL, unprompted: prompted ? 0 : 1 });
         db.setMeta('last_ai_utterance_at', String(Date.now()));
         if (channel === 'discord') {
           try { await discordLib.sendDM(sayOut); } catch (e) { console.error('[main] followup discord DM failed:', e.message); }
@@ -6765,7 +6772,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
         try { db.insertMonologue({ content, model: 'echo-suit', type: 'reading', query: label }); } catch {}
         try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(${label}${r.isError ? ' ⚠' : ''})`, type: 'reading', query: label }); } catch {}
         console.log(`[main] echo chain hop ${echoHop + 1}: ${label} → ${r.ok ? 'ok' : 'ERR'}`);
-        await fireToolFollowup({ io, channel, sessionId, resultText: content + (r.isError ? '\n[That call errored — fix the args or pick another tool with <echo-find>.]' : ''), echoHop: echoHop + 1 });
+        await fireToolFollowup({ io, channel, sessionId, resultText: content + (r.isError ? '\n[That call errored — fix the args or pick another tool with <echo-find>.]' : ''), echoHop: echoHop + 1, prompted });
       } catch (e) { console.error('[main] echo chain hop failed:', e.message); }
     }
   } catch (err) {
@@ -8339,9 +8346,9 @@ async function runActionStep(io, depth = 0) {
           provenance: experience.marker('email', { to, subject: db.getMeta('last_inbound_subject') || '', label: `email reply to ${to}` })
         }).catch((e) => console.error('[experience] capture failed:', e.message));
       }
-      fireToolFollowup({ io, channel, sessionId: currentSessionId, resultText: `[You just finished the action "${res.name}" — it completed successfully. Tell ${userName} briefly what you did, in your own voice.]` });
+      fireToolFollowup({ io, channel, sessionId: currentSessionId, resultText: `[You just finished the action "${res.name}" — it completed successfully. Tell ${userName} briefly what you did, in your own voice.]`, prompted: false });
     } else if (res.status === 'aborted') {
-      fireToolFollowup({ io, channel, sessionId: currentSessionId, resultText: `[The action "${res.name}" got stuck and was stopped after several tries. Tell ${userName} plainly that you couldn't finish it — do not pretend it worked.]` });
+      fireToolFollowup({ io, channel, sessionId: currentSessionId, resultText: `[The action "${res.name}" got stuck and was stopped after several tries. Tell ${userName} plainly that you couldn't finish it — do not pretend it worked.]`, prompted: false });
     }
   } catch (err) {
     console.error('[action] runActionStep failed:', err.message);

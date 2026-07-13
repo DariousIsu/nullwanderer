@@ -37,9 +37,14 @@ function ensureWorkspace() {
 // Relative → workspace; absolute → as-is. No confinement (full access by design).
 function resolvePath(p) {
   if (!p || typeof p !== 'string') return null;
-  const trimmed = p.trim();
+  let trimmed = p.trim();
   if (!trimmed) return null;
   if (path.isAbsolute(trimmed)) return path.normalize(trimmed);
+  // GUARD: the model sometimes over-specifies the workspace ROOT as a relative dir ("data/zoe_workspace/notes"),
+  // which then joins onto WORKSPACE (…/data/zoe_workspace) and DOUBLES to …/data/zoe_workspace/data/zoe_workspace
+  // — a path that doesn't exist, so file-search/file-list silently find nothing (the doubled-path Lucas saw in
+  // the activity rail). Collapse a redundant leading "data/zoe_workspace" (either slash style) → workspace root.
+  trimmed = trimmed.replace(/^[\\/]*data[\\/]+zoe_workspace(?:[\\/]+|$)/i, '');
   return path.normalize(path.join(WORKSPACE, trimmed));
 }
 
