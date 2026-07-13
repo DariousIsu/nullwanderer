@@ -1798,7 +1798,7 @@ app.whenReady().then(() => {
       if (videos.length) {
         newsVideoLane = new captionStream.CaptionStreamLane({
           store: newsStore, feeds: videos,
-          intervalMs: parseInt(process.env.NEWS_VIDEO_POLL_MS || '', 10) || 5000,
+          intervalMs: parseInt(process.env.NEWS_VIDEO_POLL_MS || '', 10) || 15000,
           sampleMs: parseInt(process.env.NEWS_VIDEO_SAMPLE_MS || '', 10) || 30000,
           ytdlp: process.env.YTDLP_PATH || 'yt-dlp',
           log: (m) => console.log(m),

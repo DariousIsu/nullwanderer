@@ -29,19 +29,18 @@ function captionUrlFromInfo(info, { lang = 'en' } = {}) {
   return pick && pick.url ? pick.url : null;
 }
 
-// --- pure: parse an HLS media playlist → { mediaSequence, segments:[{seq,url}] } ---
-// Segment URLs are the non-# lines; the Nth listed segment has sequence mediaSequence+N.
-function parseManifest(m3u8) {
-  const lines = String(m3u8 || '').split('\n').map(s => s.trim()).filter(Boolean);
-  let mediaSequence = 0;
-  for (const l of lines) { const m = l.match(/^#EXT-X-MEDIA-SEQUENCE:(\d+)/); if (m) { mediaSequence = parseInt(m[1], 10); break; } }
-  const segs = [];
-  let i = 0;
-  for (const l of lines) {
-    if (l.startsWith('#')) continue;
-    if (/^https?:\/\//i.test(l)) { segs.push({ seq: mediaSequence + i, url: l }); i++; }
+// --- pure: extract segment URLs from an HLS playlist (or just its TAIL). The live caption manifest is a
+// full-DVR playlist (megabytes, thousands of segments, GROWING) — parsing it whole every poll is the cost
+// that would re-freeze the app. The newest segments are at the END, and we dedup by URL (no sequence math
+// needed), so the follower fetches only the manifest TAIL and passes it here. Returns URLs in order.
+function parseSegmentUrls(m3u8OrTail) {
+  const out = [];
+  for (const raw of String(m3u8OrTail || '').split('\n')) {
+    const l = raw.trim();
+    if (!l || l.startsWith('#')) continue;
+    if (/^https?:\/\//i.test(l)) out.push(l);
   }
-  return { mediaSequence, segments: segs };
+  return out;
 }
 
 // --- pure: WEBVTT segment → clean caption lines (cues only, markup + timings stripped) ---
@@ -94,37 +93,50 @@ function resolveCaptionManifest(videoUrl, { ytdlp = 'yt-dlp', lang = 'en', timeo
 
 // --- follower: per feed, poll the manifest for new segments → fresh caption lines. Zero decode. ---
 // deps.fetch injectable for tests. onLines(feed, freshLines[]) surfaces new caption text.
+const _UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36';
+const _TAIL_BYTES = 65536;   // only the last 64KB of the (multi-MB, growing) caption manifest — newest segments
+
 class CaptionFollower {
   constructor(feed, { ytdlp = 'yt-dlp', fetchImpl = null, log = () => {} } = {}) {
     this.feed = feed; this.ytdlp = ytdlp; this.log = log;
     this.fetch = fetchImpl || ((...a) => fetch(...a));
-    this.manifestUrl = null; this.expiresAt = 0; this.lastSeq = -1;
-    this.seen = new Set(); this.resolving = false; this.fails = 0;
+    this.manifestUrl = null; this.expiresAt = 0;
+    this.segSeen = new Set();   // segment URLs already fetched (dedup — no sequence math)
+    this.textSeen = new Set();  // caption LINES already surfaced (dedup rolling live overlap)
+    this.resolving = false; this.fails = 0; this.lastResolveAt = 0;
   }
-  async _resolve() {
-    if (this.resolving) return false;
-    this.resolving = true;
+  async _resolve(now) {
+    // Backoff so a persistently-failing feed can't spawn a yt-dlp resolve every tick (a CPU storm).
+    if (this.resolving || (now - this.lastResolveAt) < 60000) return false;
+    this.resolving = true; this.lastResolveAt = now;
     const r = await resolveCaptionManifest(this.feed.url, { ytdlp: this.ytdlp }).catch(() => ({ ok: false }));
     this.resolving = false;
-    if (r.ok) { this.manifestUrl = r.url; this.expiresAt = r.expiresAt || (Date.now() + 5 * 3600e3); this.fails = 0; this.log(`[caption] resolved ${this.feed.title || this.feed.url}`); return true; }
+    if (r.ok) { this.manifestUrl = r.url; this.expiresAt = r.expiresAt || (now + 5 * 3600e3); this.fails = 0; this.log(`[caption] resolved ${this.feed.title || this.feed.url}`); return true; }
     this.log(`[caption] resolve failed ${this.feed.title || this.feed.url}: ${r.reason}`); return false;
   }
-  // one poll: (re)resolve if needed, fetch manifest, fetch NEW segments, return fresh caption lines.
+  // one poll: (re)resolve if needed, fetch only the manifest TAIL, fetch NEW segments (by URL), return
+  // fresh caption lines. O(newest-few) work regardless of manifest size — the whole point of the rewrite.
   async poll({ now = Date.now(), maxSegs = 6 } = {}) {
-    if (!this.manifestUrl || now > this.expiresAt - 60000) { if (!await this._resolve()) return []; }
+    if (!this.manifestUrl || now > this.expiresAt - 60000) { if (!await this._resolve(now)) return []; }
     let m3u8;
-    try { const r = await this.fetch(this.manifestUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } }); if (!r.ok) throw new Error('HTTP ' + r.status); m3u8 = await r.text(); }
-    catch (e) { this.fails++; if (this.fails >= 2) { this.manifestUrl = null; } return []; }   // force re-resolve on repeated failure
+    try {
+      const r = await this.fetch(this.manifestUrl, { headers: { 'User-Agent': _UA, Range: `bytes=-${_TAIL_BYTES}` } });
+      if (!(r.ok || r.status === 206)) throw new Error('HTTP ' + r.status);
+      const body = await r.text();
+      m3u8 = r.status === 206 ? body : body.slice(-_TAIL_BYTES);   // if Range ignored (200), slice the tail ourselves
+    } catch (e) { this.fails++; if (this.fails >= 2) { this.manifestUrl = null; } return []; }
     this.fails = 0;
-    const { segments } = parseManifest(m3u8);
-    const newSegs = segments.filter(s => s.seq > this.lastSeq).slice(-maxSegs);   // only newer, bounded
-    if (!newSegs.length) return [];
+    const urls = parseSegmentUrls(m3u8);
+    const newUrls = urls.filter(u => !this.segSeen.has(u)).slice(-maxSegs);   // only unseen, bounded
+    if (!newUrls.length) return [];
     const fresh = [];
-    for (const s of newSegs) {
-      try { const r = await this.fetch(s.url, { headers: { 'User-Agent': 'Mozilla/5.0' } }); if (!r.ok) continue; const vtt = await r.text(); fresh.push(...freshLines(this.seen, parseVtt(vtt))); this.lastSeq = Math.max(this.lastSeq, s.seq); }
+    for (const u of newUrls) {
+      this.segSeen.add(u);
+      try { const r = await this.fetch(u, { headers: { 'User-Agent': _UA } }); if (!r.ok) continue; fresh.push(...freshLines(this.textSeen, parseVtt(await r.text()))); }
       catch { /* skip this segment */ }
     }
-    if (this.seen.size > 400) this.seen = new Set([...this.seen].slice(-200));   // bound the dedup set
+    if (this.segSeen.size > 300) this.segSeen = new Set([...this.segSeen].slice(-150));
+    if (this.textSeen.size > 400) this.textSeen = new Set([...this.textSeen].slice(-200));
     return fresh;
   }
 }
@@ -133,7 +145,7 @@ class CaptionFollower {
 // and land items in news_store. Drop-in replacement for video_capture.CaptureLane — same {store, feeds}
 // shape — but zero browser windows / zero video decode. Fail-soft per feed.
 class CaptionStreamLane {
-  constructor({ store, feeds = [], ytdlp = 'yt-dlp', intervalMs = 5000, sampleMs = 30000, log = () => {} } = {}) {
+  constructor({ store, feeds = [], ytdlp = 'yt-dlp', intervalMs = 15000, sampleMs = 30000, log = () => {} } = {}) {
     const vc = require('./video_capture');
     this.store = store; this.log = log; this.intervalMs = intervalMs; this.sampleMs = sampleMs; this._vc = vc;
     this.followers = (feeds || []).map(f => new CaptionFollower(f, { ytdlp, log }));
@@ -161,4 +173,4 @@ class CaptionStreamLane {
   stop() { this.stopped = true; if (this.timer) { clearInterval(this.timer); this.timer = null; } this.log('[caption-stream] lane stopped'); }
 }
 
-module.exports = { captionUrlFromInfo, parseManifest, parseVtt, freshLines, resolveCaptionManifest, CaptionFollower, CaptionStreamLane };
+module.exports = { captionUrlFromInfo, parseSegmentUrls, parseVtt, freshLines, resolveCaptionManifest, CaptionFollower, CaptionStreamLane };
