@@ -213,6 +213,12 @@ function pruneCapturesOlderThan(cutoffMs) {
 // --- in-page scripts (from the proven probe) ---------------------------------
 const JS_ENABLE_CC = `(() => { try {
   const v = document.querySelector('video'); if (v) { v.muted = true; try { v.play && v.play().catch(()=>{}); } catch {} }
+  // MINIMAL-DECODE: captions are a text track — we don't need video pixels, only enough playback to advance
+  // the caption timeline. Force the player to 'tiny' (144p) so the frame DECODE cost drops ~4-9x vs the
+  // ~360p the window size otherwise pulls. Captions are unaffected. Re-asserted each poll until CC is on.
+  try { const p = document.getElementById('movie_player');
+    if (p && p.setPlaybackQualityRange) p.setPlaybackQualityRange('tiny', 'tiny');
+    if (p && p.setPlaybackQuality) p.setPlaybackQuality('tiny'); } catch {}
   const b = document.querySelector('.ytp-subtitles-button');
   if (b) { if (b.getAttribute('aria-pressed') === 'true') return 'already-on'; b.click(); return 'clicked'; }
   return 'no-button';
