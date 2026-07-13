@@ -74,6 +74,7 @@ const smokes = [
   'smoke_contact_card.js',
   'smoke_puller_walk.js',
   'smoke_contacts_query.js',
+  'smoke_contacts_intent.js',
   'smoke_prospect_fetch.js',
   'smoke_enrich_maigret.js',
   'smoke_sheet_extract.js',

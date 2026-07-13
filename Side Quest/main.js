@@ -4712,7 +4712,23 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const _hasDirectedFocusR = (() => { try { const fl = require('./lib/focus'); const f = fl.getCurrent(); return !!(f && fl.isDirected(f)); } catch { return false; } })();
   const _isStatusReqR = _hasDirectedFocusR && (() => { try { return require('./lib/research').isStatusRequest(userMessage); } catch { return false; } })();
   const _isDirectedTaskR = (() => { try { return require('./lib/operator').isDirectedTask(userMessage); } catch { return false; } })();
-  const _contactsQ = (() => { try { return require('./lib/contacts_query').detect(userMessage); } catch { return { isQuery: false }; } })();
+  // CONTACTS INTENT — LLM-PRIMARY (lib/contacts_intent), with the regex (contacts_query.detect) DEMOTED to
+  // the fail-safe fallback. A cheap high-recall pre-signal gates the cloud call to plausibly-contact turns
+  // (so "good morning" never pays for it). Precedence: cloud-down/error → regex fallback (list still works
+  // locally); LLM says list → trust its filters (primary); LLM says NOT-list → honor it, but the strict regex
+  // is a recall safety net for the rare LLM false-negative. Execution stays local regardless.
+  const _contactish = /\b(contacts?|people|persons?|leads?|roster|rolodex|directory|targets?|orgs?|organi[sz]ations?|compan(?:y|ies)|corporat|firms?|officials?|legislators?|senators?|representatives?|governors?|mayors?|electeds?|sheet|spreadsheet|\blists?\b|listing|\bcsv\b|\btable\b|who (?:do we|are we|'?s our|are our)|private sector|\belected\b)\b/i.test(userMessage);
+  let _contactsQ = { isQuery: false };
+  if (_contactish) {
+    const _rx = () => { try { return require('./lib/contacts_query').detect(userMessage); } catch { return { isQuery: false }; } };
+    let _llmC = null;
+    try { _llmC = await require('./lib/contacts_intent').classify(userMessage, { recent: '' }); }
+    catch (e) { console.error('[contacts-intent] call failed:', e.message); _llmC = null; }
+    if (_llmC == null) _contactsQ = _rx();                                   // cloud down → regex fallback
+    else if (_llmC.isQuery) _contactsQ = _llmC;                              // LLM says list → its filters (PRIMARY)
+    else { const _r = _rx(); _contactsQ = _r.isQuery ? _r : { isQuery: false }; }   // LLM says no → honor, regex catches a miss
+    if (routerOn && _contactsQ.isQuery) console.log(`[contacts-intent] ${_llmC && _llmC.isQuery ? 'LLM' : 'regex'} → list (type=${_contactsQ.type || '-'} grade=${_contactsQ.grade || '-'} state=${_contactsQ.state || '-'} sectors=${(_contactsQ.sectors || []).join('/') || '-'})`);
+  }
   let turnRoute = require('./lib/turn_router').computeTurnRoute({
     socialTurn, activityQ, deliverableAggQ,
     factual: _factualR, personalFactQ, devQ, stateQ,
