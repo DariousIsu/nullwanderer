@@ -21,6 +21,7 @@ const dir = __dirname;
 const smokes = [
   'smoke_unprompted.js',
   'smoke_greenlight.js',
+  'smoke_soft_leash.js',
   'smoke_relevance_floor.js',
   'smoke_stream_watchdog.js',
   'smoke_email_killswitch.js',

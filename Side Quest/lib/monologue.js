@@ -1647,6 +1647,21 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
   // directory people) far from the task. The walk then stays on the focus neighbourhood (relevant) + news +
   // convo. The frontier returns the moment no directed task is running.
   if (_thin.length && _directedFocusActive()) { console.log(`[graph-walk] directed focus active → leashed off the global frontier (${_thin.length} thin nodes suppressed)`); _thin = []; }
+  // SOFT LEASH (2026-07-13, drift audit): even WITHOUT a directed focus, keep the walker on active project
+  // work. Filter the global frontier to candidates whose name overlaps a token from the leash set — which
+  // falls back to recentThreadGoals(15) when focus is empty. Historical Wikipedia bios (Frank Guarini,
+  // Miroslav Tyrš, Society of the Cincinnati) share zero tokens with Lucas's actual current work
+  // (Louisiana parishes, county commissioners) → filtered out. If the leash set is empty (fresh install /
+  // no thread history), fall through to the unleashed frontier so the walk never fully starves. relevant +
+  // news + convo still fire regardless, so a 0-frontier tick still moves.
+  else if (_thin.length) {
+    const _lt = _focusDomainTokens();
+    if (_lt && _lt.size) {
+      const before = _thin.length;
+      _thin = _thin.filter((r) => _tokenHit(String(r && r.name || ''), _lt));
+      if (_thin.length !== before) console.log(`[graph-walk] soft-leash on frontier: ${_thin.length}/${before} candidates match active project tokens`);
+    }
+  }
   console.log(`[idle-anchors] raw tiers: news=${_news.length} relevant=${_relevant.length} thin=${_thin.length} visited=${visitedKeys.size}`);
   const anchors = await idleAnchors.provideAnchors({ recentNews: _news, relevantNodes: _relevant, thinNodes: _thin, convoNames, visitedKeys, log: (m) => console.log(m) });
 

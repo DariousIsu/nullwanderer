@@ -1,0 +1,70 @@
+/* Smoke: the SOFT leash on the idle graph-walk's global-frontier tier (lib/monologue.js). Even when NO
+ * directed focus is active, the leash's fallback tokens (from db.recentThreadGoals, via
+ * focus.domainLeashTokens) should filter the frontier to on-domain candidates. Historical Wikipedia bios
+ * (Frank Guarini, Society of the Cincinnati, Miroslav Tyrš) share zero tokens with real project work
+ * (Louisiana parishes, county commissioners) → dropped. On-domain candidates match → kept.
+ *
+ * Fully offline: builds the same token set + filter predicate the runtime uses. Isolated temp DB via
+ * SQ_DB_PATH so it doesn't touch the live sq.db. Run: ELECTRON_RUN_AS_NODE=1 electron scripts/smoke_soft_leash.js
+ */
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const tmp = path.join(os.tmpdir(), `sq_smoke_softleash_${process.pid}.db`);
+process.env.SQ_DB_PATH = tmp;
+
+const db = require('C:/Users/azrae/Desktop/Side Quest/lib/db');
+const focus = require('C:/Users/azrae/Desktop/Side Quest/lib/focus');
+
+let pass = 0, fail = 0;
+const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++; console.log('  ✗', m); } };
+
+// same predicate the runtime uses (lib/monologue.js _tokenHit)
+function tokenHit(text, toks) {
+  const h = String(text || '').toLowerCase();
+  for (const t of toks) if (h.includes(t)) return true;
+  return false;
+}
+
+try {
+  db.init();
+  const s = db.startSession();
+
+  // seed recent civic threads via USER turns (recentThreadGoals reads from open_threads)
+  const insertUserThread = (goal) => {
+    const uTurn = db.insertTurn({ sessionId: s, speaker: 'user', content: goal });
+    return db.insertOpenThread({ content: goal, sourceTurnId: uTurn.id });
+  };
+  insertUserThread('research parish level government contacts in Louisiana for Lucas');
+  insertUserThread('compile contact information for county commissioners for Lucas');
+  insertUserThread('elected officials in Louisiana — gather: spreadsheet of all elected officials');
+  insertUserThread('find county commissioners contact information for all US states');
+
+  const toks = focus.domainLeashTokens();
+  ok(toks && toks.size >= 4, `domainLeashTokens picks up the recent thread words (got ${toks ? toks.size : 0} tokens)`);
+  ok(toks.has('louisiana') && toks.has('parish') && toks.has('commissioners'), 'tokens include louisiana / parish / commissioners');
+
+  // the REAL 37 drift names captured from the live 2026-07-13 audit — every one MUST drop
+  const DRIFT = ['Frank Guarini', 'Ellis Berry', 'Allen Treadway', 'Matthew Quay', 'Alonzo Ransier', 'Charles Hodges', 'Peter Newhard', 'Jared Williams', 'Kenneth Pitzer', 'American Record Corporation', 'Society of the Cincinnati', 'Beverly Byron', 'Josh Shapiro', 'Gilman Marston', 'Hugh Haralson', 'George Upham', 'Peggy Lehner', 'Phil Gingrey', 'Dante Fascell', 'Marlow Cook', 'Foster Stearns', 'Burton Sweet', 'Joseph Millard', 'Eben Stone', 'Aaron Harlan', 'Anderson Mitchell', 'William Plumer', 'James Watson', 'Miroslav Tyrš', 'Western Oregon University', 'Albert Bustamante', 'Earl Ruth', 'Augustine Kelley', 'Strait of Hormuz', 'Richmond Pearson', 'John Patman', 'Jared Polis'];
+  const drifted = DRIFT.filter((n) => tokenHit(n, toks));
+  ok(drifted.length === 0, `all 37 real drift names DROP (leaked: ${drifted.length ? drifted.join(', ') : 'none'})`);
+
+  // on-domain sanity: names related to project work MUST be kept
+  const ONDOM = ['Louisiana House of Representatives', 'Ouachita Parish Council', 'East Baton Rouge Parish Government', 'Jefferson County Commissioner', 'Contact for Louisiana Elected Officials'];
+  const dropped = ONDOM.filter((n) => !tokenHit(n, toks));
+  ok(dropped.length === 0, `all on-domain sanity names KEPT (false-drops: ${dropped.length ? dropped.join(', ') : 'none'})`);
+
+  // FALLBACK: no threads → tokens null → leash inert → frontier UNCHANGED (walker doesn't starve on fresh install)
+  db.markOpenThreadStatus(1, 'resolved');
+  db.markOpenThreadStatus(2, 'resolved');
+  db.markOpenThreadStatus(3, 'resolved');
+  db.markOpenThreadStatus(4, 'resolved');
+  ok(focus.domainLeashTokens() === null, 'no active/pending threads → domainLeashTokens null → leash inert (fresh-install safety)');
+} catch (e) {
+  fail++; console.error('  ✗ threw:', e.message);
+} finally {
+  try { db.getDb().close(); } catch {}
+  for (const f of [tmp, tmp + '-wal', tmp + '-shm']) { try { fs.existsSync(f) && fs.unlinkSync(f); } catch {} }
+}
+console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
+process.exit(fail === 0 ? 0 : 1);
