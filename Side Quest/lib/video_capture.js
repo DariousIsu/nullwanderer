@@ -233,8 +233,12 @@ function videoId(u) {
 // One hidden always-on BrowserWindow per feed, muted autoplay + CC on, polled on a cadence. Screenshots
 // on the cue edge; segments into the reservoir. Crash-isolated per stream (a dead renderer is reopened).
 class CaptureLane {
-  constructor({ store, feeds = [], capturesDir, intervalMs = 3000, settleMs = 9000, sampleMs = 30000, maxWindows = 4, captureW = 640, captureH = 360, log = () => {}, onScreenshot = null, visionRead = null, visionCapPerHour = 60 } = {}) {
-    this.store = store; this.feeds = feeds.slice(0, maxWindows); this.log = log; this.onScreenshot = onScreenshot;
+  constructor({ store, feeds = [], capturesDir, intervalMs = 3000, settleMs = 9000, sampleMs = 30000, maxWindows = (parseInt(process.env.NEWS_VIDEO_MAX_WINDOWS, 10) || 2), captureW = 640, captureH = 360, log = () => {}, onScreenshot = null, visionRead = null, visionCapPerHour = 60 } = {}) {
+    // CONCURRENCY CAP: each feed is a hidden always-on YouTube window (live video decode + a main-process
+    // event stream). Four concurrent live decodes + their ad swarm pegged the main thread and froze the app,
+    // so the default is now 2 (was 4) — tunable via NEWS_VIDEO_MAX_WINDOWS. Paired with the ad-block in
+    // _installAdBlock(), 2 caption-only streams stay light. Raise it only if the machine has headroom.
+    this.store = store; this.feeds = feeds.slice(0, Math.max(1, maxWindows)); this.log = log; this.onScreenshot = onScreenshot;
     this.capturesDir = capturesDir || path.join(os.tmpdir(), 'news_captures');
     this.intervalMs = intervalMs; this.settleMs = settleMs; this.sampleMs = sampleMs;
     // BUFFERING FIX: the hidden capture window size drives the resolution YouTube's ABR serves (bigger player
@@ -255,10 +259,34 @@ class CaptureLane {
   start() {
     ensureSchema();
     try { fs.mkdirSync(this.capturesDir, { recursive: true }); } catch {}
+    this._installAdBlock();
     for (const feed of this.feeds) this._open(feed);
     this.timer = setInterval(() => { this._tick().catch(() => {}); }, this.intervalMs);
     this.timer.unref && this.timer.unref();
     this.log(`[video-capture] lane started — ${this.feeds.length} stream(s) → captions+screenshots`);
+  }
+  // AD/TRACKER BLOCK for the capture session (persist:news-capture only). These hidden YouTube watch pages
+  // need the video + caption track ONLY, but a full watch page also loads a SWARM of ad/tracking iframes
+  // (googlesyndication/sodar, doubleclick, analytics — dozens per stream, seen in CDP) that run JS
+  // continuously and flooded the MAIN process with their event/IPC traffic until the app froze (Not
+  // Responding at ~115% main-thread CPU). Blocking those hosts at the network layer for THIS partition
+  // eliminates the swarm — video playback + captions are served from youtube.com/googlevideo.com and are
+  // unaffected. Installed once per session (idempotent). Deliberately does NOT block imasdk/googlevideo, so
+  // YouTube's anti-adblock isn't tripped and playback (hence captions) keeps flowing.
+  _installAdBlock() {
+    try {
+      const { session } = require('electron');
+      const ses = session.fromPartition('persist:news-capture');
+      if (ses._newsAdBlock) return;
+      ses._newsAdBlock = true;
+      const BLOCK = /(^|\.)(doubleclick\.net|googlesyndication\.com|googleadservices\.com|google-analytics\.com|analytics\.google\.com|scorecardresearch\.com|moatads\.com|doubleverify\.com|adnxs\.com)$/i;
+      ses.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (details, cb) => {
+        let host = ''; try { host = new URL(details.url).hostname; } catch {}
+        if (host && BLOCK.test(host)) return cb({ cancel: true });
+        cb({});
+      });
+      this.log('[video-capture] ad/tracker block installed on persist:news-capture');
+    } catch (e) { this.log('[video-capture] ad-block install failed: ' + e.message); }
   }
   _open(feed) {
     const { BrowserWindow } = require('electron');
