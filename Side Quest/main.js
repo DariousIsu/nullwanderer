@@ -1784,8 +1784,11 @@ app.whenReady().then(() => {
   // streams' closed captions into the SAME isolated bucket as source_kind='video' SEGMENTS (clustered like
   // any source), and a bare "[Music]" caption grabs a SCREENSHOT of the frame — show start/stop stings and
   // full-screen charts/graphs (e.g. Yahoo Finance) that captions can't convey. HEAVY (N hidden windows) →
-  // gated by NEWS_VIDEO_CAPTURE (default on; set 0/off to disable). Reuses feedsStore.videoList().
-  if (!/^(0|false|off|no)$/i.test(String(process.env.NEWS_VIDEO_CAPTURE || 'on').trim())) {
+  // gated by NEWS_VIDEO_CAPTURE. DEFAULT OFF (2026-07-12): even ad-blocked + forced 144p, 4 hidden live-
+  // video windows still pegged the main thread AND a renderer over hours and froze the app repeatedly on
+  // this machine. Opt back in with NEWS_VIDEO_CAPTURE=1 once the zero-decode caption fetch lands (fetch
+  // YouTube's live timedtext directly — no browser windows, no video decode). Reuses feedsStore.videoList().
+  if (/^(1|true|on|yes)$/i.test(String(process.env.NEWS_VIDEO_CAPTURE || 'off').trim())) {
     try {
       const videoCapture = require('./lib/video_capture');
       const newsStore = require('./lib/news_store');
