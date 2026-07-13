@@ -239,11 +239,11 @@ function videoId(u) {
 // One hidden always-on BrowserWindow per feed, muted autoplay + CC on, polled on a cadence. Screenshots
 // on the cue edge; segments into the reservoir. Crash-isolated per stream (a dead renderer is reopened).
 class CaptureLane {
-  constructor({ store, feeds = [], capturesDir, intervalMs = 3000, settleMs = 9000, sampleMs = 30000, maxWindows = (parseInt(process.env.NEWS_VIDEO_MAX_WINDOWS, 10) || 2), captureW = 640, captureH = 360, log = () => {}, onScreenshot = null, visionRead = null, visionCapPerHour = 60 } = {}) {
-    // CONCURRENCY CAP: each feed is a hidden always-on YouTube window (live video decode + a main-process
-    // event stream). Four concurrent live decodes + their ad swarm pegged the main thread and froze the app,
-    // so the default is now 2 (was 4) — tunable via NEWS_VIDEO_MAX_WINDOWS. Paired with the ad-block in
-    // _installAdBlock(), 2 caption-only streams stay light. Raise it only if the machine has headroom.
+  constructor({ store, feeds = [], capturesDir, intervalMs = 3000, settleMs = 9000, sampleMs = 30000, maxWindows = (parseInt(process.env.NEWS_VIDEO_MAX_WINDOWS, 10) || 4), captureW = 640, captureH = 360, log = () => {}, onScreenshot = null, visionRead = null, visionCapPerHour = 60 } = {}) {
+    // CONCURRENCY CAP (tunable via NEWS_VIDEO_MAX_WINDOWS): each feed is a hidden always-on YouTube window.
+    // What FROZE the app was NOT the count per se — it was the ad-iframe swarm (dozens per stream) flooding
+    // the main thread + full-res decode. With _installAdBlock() (swarm → 0) + forced 144p (decode ~4-9x
+    // lower), all 4 streams run caption-only and light. Lower this only if a weaker machine still struggles.
     this.store = store; this.feeds = feeds.slice(0, Math.max(1, maxWindows)); this.log = log; this.onScreenshot = onScreenshot;
     this.capturesDir = capturesDir || path.join(os.tmpdir(), 'news_captures');
     this.intervalMs = intervalMs; this.settleMs = settleMs; this.sampleMs = sampleMs;
