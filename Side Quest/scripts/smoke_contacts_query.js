@@ -14,6 +14,15 @@ ok(CQ.detect("who do we have at Duke Energy").isQuery, 'detect: "who do we have 
 ok(!CQ.detect('research new energy contacts for me').isQuery, 'detect: an explicit "research new" is NOT a list-query');
 ok(!CQ.detect('what is the weather today').isQuery, 'detect: no contact noun → not a query');
 ok(!CQ.detect('how is the project going').isQuery, 'detect: unrelated → not a query');
+// "build a sheet / make a spreadsheet" are list-what-we-hold intents (the #7103 failure: "Build a sheet with
+// all the Louisiana Contacts…" wasn't recognized → fell to chat → returned 2 contacts). "gov and private
+// alike" means BOTH types (no type filter). Research-from-scratch (no HELD signal) is still NOT a list.
+ok(CQ.detect('Build a sheet with all the Louisiana Contacts we have generated, government and private alike, organized by email confidence').isQuery, 'detect: "build a sheet with all the … Contacts we have" → query (was a routing miss → only 2 contacts)');
+ok(CQ.detect('make me a spreadsheet of our tech contacts').isQuery && CQ.detect('put together a list of energy companies').isQuery, 'detect: "make me a spreadsheet" / "put together a list" → query');
+ok(CQ.typeFrom('government and private alike') === null && CQ.typeFrom('public and private') === null, 'typeFrom: both sides named → null (no type filter, include everyone)');
+ok(CQ.typeFrom('just the corporate contacts') === 'corporate' && CQ.typeFrom('elected officials in Ohio') === 'elected', 'typeFrom: one side named → that type');
+ok(!CQ.detect('research and build a new list of energy contacts from scratch').isQuery, 'detect: research-from-scratch (no held signal) is NOT a list-query even though it says "build a list"');
+ok(CQ.detect('build a sheet of the contacts we already hold').isQuery, 'detect: "build a sheet of the contacts we already hold" → query (HELD signal beats the build-verb)');
 
 // --- sector + company extraction ---
 ok(CQ.detect('list our energy and datacenter contacts').sectors.join(',') === 'energy,datacenter', 'detect: pulls the sector filters');

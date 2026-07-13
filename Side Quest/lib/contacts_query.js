@@ -13,7 +13,7 @@
 // "targets"/"names"/"orgs" are contact-list nouns too — the Puller calls its held contacts "targets",
 // and "a list of 100 high-confidence targets" is a list-what-we-hold ask, not a research assignment.
 const CONTACT_NOUN = /\b(contacts?|people|persons?|e-?mails?|roster|leads?|directory|rolodex|targets?|names|orgs?|organi[sz]ations?)\b/i;
-const LIST_INTENT = /\b(list|give|show|pull|get|compile|export|send|grab|fetch|need|want|hand|make (?:me )?a list|who (?:do we have|are|'?s))\b/i;
+const LIST_INTENT = /\b(list|give|show|pull|get|compile|export|send|grab|fetch|need|want|hand|build|assemble|put together|spreadsheet|(?:make|put|build|generate) (?:me )?(?:a |together )?(?:list|sheet|spreadsheet)|(?:a |the )?sheet (?:of|with|for)|who (?:do we have|are|'?s))\b/i;
 // A phrasing that is clearly RESEARCH ("find NEW", "go discover", "research"), not a list-what-we-have.
 const RESEARCH_INTENT = /\b(research|find (?:new|more)|discover|dig up|go get new|source new|build a (?:new )?list from scratch)\b/i;
 
@@ -90,7 +90,12 @@ function detect(message) {
   // a list ask. Still gated by LIST_INTENT below, so a non-list mention ("the government shut down") is out.
   const nounish = CONTACT_NOUN.test(m) || (WHO_HAVE.test(m) && /\bat\b/i.test(m)) || !!typeFrom(m);
   if (!nounish) return { isQuery: false };
-  if (RESEARCH_INTENT.test(m) && !LIST_INTENT.test(m)) return { isQuery: false };   // an explicit "research NEW" → not a list
+  // RESEARCH vs LIST-WHAT-WE-HAVE: a research phrasing ("research / from scratch / find new") is a research
+  // run UNLESS the turn also carries a HELD signal ("the contacts we have / already hold / in our records").
+  // Keys on HELD, not on list-words, because "build a NEW list from scratch" contains the word "list" yet is
+  // research — while "build a sheet with all the Contacts we HAVE generated" is a list of what we hold.
+  const HELD = /\b(we (?:have|hold|already have|generated|got|pulled|already got)|we'?ve (?:got|generated|pulled)|(?:our|the) (?:existing|current|held)|on hand|in (?:our|the) (?:records|database|crm|files)|that we (?:have|hold))\b/i;
+  if (RESEARCH_INTENT.test(m) && !HELD.test(m)) return { isQuery: false };   // research NEW (not about what we hold) → not a list
   if (!LIST_INTENT.test(m) && !WHO_HAVE.test(m)) return { isQuery: false };
   const g = gradeFrom(m);
   return { isQuery: true, sectors: sectorsFrom(m), company: companyFrom(m), limit: countFrom(m),
@@ -118,14 +123,21 @@ function gradeFrom(message) {
 // Police, State House, "Department of …") right alongside real corporations (Meta, OpenAI, Duke Energy,
 // NVIDIA). And most corporate leads are grade-C/D with NO verified email yet (they aren't promoted to the
 // CRM), so email/source can't be the key. So: corporate = has a company AND that company is not government.
-const _TYPE_CORP = /\b(corporate|corporation|companies|company|commercial|for-?profit|private[\s-]?sector|firms?|industry|industries|business(?:es)?)\b/i;
+const _TYPE_CORP = /\b(corporate|corporation|companies|company|commercial|for-?profit|private(?:[\s-]?sector)?|firms?|industry|industries|business(?:es)?)\b/i;
 const _TYPE_ELECTED = /\b(elected|officials?|legislators?|lawmakers?|congress(?:ional|m[ae]n|wom[ae]n|member)?|senators?|representatives?|governors?|mayors?|council\s?members?|commissioners?|office\s?holders?)\b/i;
 const _TYPE_GOV = /\b(government|govt|agenc(?:y|ies)|federal agenc|municipal|public[\s-]?sector)\b/i;
 function typeFrom(message) {
   const m = String(message || '');
-  if (_TYPE_ELECTED.test(m)) return 'elected';   // "elected officials" before generic corp/gov words
-  if (_TYPE_GOV.test(m)) return 'gov';
-  if (_TYPE_CORP.test(m)) return 'corporate';
+  const hasCorp = _TYPE_CORP.test(m);
+  const hasElected = _TYPE_ELECTED.test(m);
+  const hasGov = _TYPE_GOV.test(m);
+  // BOTH sides named ("government and private alike", "public and private", "elected + corporate", "all
+  // types") → return null = NO type filter = include EVERYONE. A single side named narrows to it.
+  if (/\bpublic and private\b|\bprivate and public\b|\ball (?:types|categories|kinds|sectors)\b/i.test(m)) return null;
+  if (hasCorp && (hasElected || hasGov)) return null;
+  if (hasElected) return 'elected';   // "elected officials" beats the generic gov/corp words
+  if (hasGov) return 'gov';
+  if (hasCorp) return 'corporate';
   return null;
 }
 
