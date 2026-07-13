@@ -38,7 +38,7 @@ t(cs.captionUrlFromInfo({ automatic_captions: {} }) === null, 'null when none');
   fol.manifestUrl = 'http://m'; fol.expiresAt = Date.now() + 1e9;   // skip yt-dlp resolve
   const p1 = await fol.poll({ now: 1000 });
   t(p1.join(',') === 'LINE 5,LINE 6', 'poll1 fetches segs 5+6');
-  t(lastRange === 'bytes=-65536', 'poll requests only the manifest TAIL (Range header)');
+  t(lastRange === undefined, 'poll does NOT send a Range header (googlevideo 400s on it) — slices tail in memory');
   const p2 = await fol.poll({ now: 2000 });
   t(p2.join(',') === 'LINE 7', 'poll2 fetches ONLY the new URL (seg 7), skips already-seen seg 6');
 

@@ -118,15 +118,18 @@ class CaptionFollower {
   // fresh caption lines. O(newest-few) work regardless of manifest size — the whole point of the rewrite.
   async poll({ now = Date.now(), maxSegs = 6 } = {}) {
     if (!this.manifestUrl || now > this.expiresAt - 60000) { if (!await this._resolve(now)) return []; }
-    let m3u8;
+    let tail;
     try {
-      const r = await this.fetch(this.manifestUrl, { headers: { 'User-Agent': _UA, Range: `bytes=-${_TAIL_BYTES}` } });
-      if (!(r.ok || r.status === 206)) throw new Error('HTTP ' + r.status);
+      // NOTE: googlevideo REJECTS a suffix Range header (HTTP 400), so we fetch the full manifest and slice
+      // the tail IN MEMORY. The 4MB download is I/O; the expensive part was parsing ~2900 segment objects —
+      // parsing only the tail (newest segments) keeps that cheap. (Poll interval is 15s to bound bandwidth.)
+      const r = await this.fetch(this.manifestUrl, { headers: { 'User-Agent': _UA } });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
       const body = await r.text();
-      m3u8 = r.status === 206 ? body : body.slice(-_TAIL_BYTES);   // if Range ignored (200), slice the tail ourselves
+      tail = body.length > _TAIL_BYTES ? body.slice(-_TAIL_BYTES) : body;
     } catch (e) { this.fails++; if (this.fails >= 2) { this.manifestUrl = null; } return []; }
     this.fails = 0;
-    const urls = parseSegmentUrls(m3u8);
+    const urls = parseSegmentUrls(tail);
     const newUrls = urls.filter(u => !this.segSeen.has(u)).slice(-maxSegs);   // only unseen, bounded
     if (!newUrls.length) return [];
     const fresh = [];
