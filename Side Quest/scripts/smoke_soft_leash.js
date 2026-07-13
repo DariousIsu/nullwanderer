@@ -54,6 +54,31 @@ try {
   const dropped = ONDOM.filter((n) => !tokenHit(n, toks));
   ok(dropped.length === 0, `all on-domain sanity names KEPT (false-drops: ${dropped.length ? dropped.join(', ') : 'none'})`);
 
+  // WORD-BOUNDARY match (2026-07-13 audit): "direct" (a distinctive project word if it appears) must not
+  // match "directory" via substring. The same 4+ char tokenizer used to build the leash set is used at match
+  // time, so intersect at word level. This is the recipe both grabPdfs and the dl-ingest quarantine use.
+  const wordMatch = (hay, ts) => {
+    const w = new Set((String(hay || '').toLowerCase().match(/[a-z]{4,}/g) || []));
+    for (const t of ts) if (w.has(t)) return true;
+    return false;
+  };
+  // Drift docs seeded the 2026-07-13 flood → EVERY one must block. The earlier substring-match leash let
+  // 3 of 4 slip through because "direct" matched "directory", "organization" and "social" were in bodies.
+  const DRIFT_DOCS = [
+    { t: 'COVID19_Emergency_Dental_Providers.csv', b: 'Dental Provider Name City State ZIP Emergency Contact' },
+    { t: 'ca-dppo-south-b-dental-directory.pdf', b: 'California Delta Dental Preferred Provider Organization dentist network' },
+    { t: 'internetbasedsociallending.pdf', b: 'peer-to-peer lending crowdfunding social lending investors' },
+    { t: 'faculty-directory-070325.pdf', b: 'Faculty directory university professors department heads' },
+  ];
+  const docLeaks = DRIFT_DOCS.filter((d) => wordMatch(`${d.t} ${d.b}`, toks));
+  ok(docLeaks.length === 0, `off-domain doc quarantine: all 4 drift docs BLOCK (leaked: ${docLeaks.length ? docLeaks.map((d) => d.t).join(', ') : 'none'})`);
+  const ON_DOCS = [
+    { t: 'louisiana-parish-council-directory.pdf', b: 'parish council members roster' },
+    { t: 'jefferson-county-police-jury.pdf', b: 'police jury members Jefferson' },
+  ];
+  const onFalseDrops = ON_DOCS.filter((d) => !wordMatch(`${d.t} ${d.b}`, toks));
+  ok(onFalseDrops.length === 0, `on-domain docs PASS (false-drops: ${onFalseDrops.length ? onFalseDrops.map((d) => d.t).join(', ') : 'none'})`);
+
   // FALLBACK: no threads → tokens null → leash inert → frontier UNCHANGED (walker doesn't starve on fresh install)
   db.markOpenThreadStatus(1, 'resolved');
   db.markOpenThreadStatus(2, 'resolved');

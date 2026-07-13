@@ -2291,10 +2291,30 @@ function startDownloadsIngestWatcher() {
       // clear foreign-gov source with zero domain overlap is held back.
       const _rel = require('./lib/relevance');
       const _verdict = _rel.assess({ filename: title, text: String(text).slice(0, 6000) }, _rel.getProfile(db));
+      // DOMAIN-LEASH QUARANTINE (2026-07-13, drift audit): the Bayes relevance classifier misses obviously
+      // off-domain docs whose language patterns look civic-adjacent — a "COVID19 Emergency Dental Providers"
+      // CSV passed the Bayes gate and seeded 30+ dentists in the Puller while Lucas's active work is
+      // Louisiana parishes. This is the same token-overlap leash grabPdfs uses (focus.domainLeashTokens: the
+      // active directed focus ELSE recent civic threads). Titles/bodies with ZERO token overlap → quarantine
+      // (doc still lands searchable in doc_store, just not decomposed into contacts). Empty leash (fresh
+      // install, no civic work) → passes through (unleashed) so it never blocks a genuinely fresh start.
+      let _leashPasses = true;
+      try {
+        const _lt = require('./lib/focus').domainLeashTokens();
+        if (_lt && _lt.size) {
+          // WORD-BOUNDARY match, not substring: `direct` (a project word) must not silently match
+          // "directory" (a doc-listing word). Extract words 4+ chars from title+body, then set-intersect
+          // with leash tokens. Same recipe as the tokenizer that BUILT the leash set — symmetric.
+          const words = new Set((`${title} ${String(text).slice(0, 6000)}`.toLowerCase().match(/[a-z]{4,}/g) || []));
+          _leashPasses = false;
+          for (const t of _lt) if (words.has(t)) { _leashPasses = true; break; }
+        }
+      } catch {}
       const landed = require('./lib/doc_store').land({ title, body: text, source: 'browser_download', ref: 'download:' + fp });
       if (landed && landed.landed) {
-        if (!_verdict.relevant) {
-          console.log(`[dl-ingest] QUARANTINED ${title} → doc ${landed.id} (${_verdict.reason}) — landed searchable, NOT decomposed`);
+        if (!_verdict.relevant || !_leashPasses) {
+          const _reason = !_verdict.relevant ? _verdict.reason : 'off-domain (no leash-token overlap)';
+          console.log(`[dl-ingest] QUARANTINED ${title} → doc ${landed.id} (${_reason}) — landed searchable, NOT decomposed`);
           return;
         }
         console.log(`[dl-ingest] ${title} → doc ${landed.id} (${text.length}ch via ${via})`);

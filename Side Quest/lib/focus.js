@@ -303,7 +303,24 @@ function _close(focus, status, reason) {
 // PDFs doc-decompose then mints as medical contacts — the recurring "medical spinning"). Returns null only
 // when the operator has NO civic work at all → genuinely free exploration. Generic civic words are dropped
 // so it keys on distinctive terms (louisiana, parish, orleans, commissioner, jury…).
-const _LEASH_STOP = new Set(['council', 'district', 'city', 'board', 'members', 'member', 'office', 'department', 'state', 'elected', 'official', 'officials', 'public', 'general', 'every', 'from', 'with', 'list', 'their', 'gather', 'profile', 'profiles', 'leadership', 'research', 'information', 'contact', 'compile', 'find', 'work', 'complete', 'inc', 'llc', 'corp', 'company', 'group']);
+// Words removed from the leash-token set because they appear in almost every english/project doc and turn
+// the leash from a domain filter into a rubber stamp. Two classes: (A) generic project-adjacent vocabulary
+// (a medical directory can trivially mention "organization" or "social" or "director" — those aren't useful
+// signals); (B) English filler that leaked through the 4+ char length gate (into/that/they/them/etc.).
+// Kept: project-DISTINCTIVE terms (louisiana, parish, county, commissioners, roster, jury, parishes) — the
+// words that ACTUALLY differentiate on-domain from off-domain. Audit trigger (2026-07-13): a "COVID
+// Emergency Dental Providers" CSV and a "ca-dppo dental directory" PDF flowed through the leash unblocked
+// because `direct` matched "directory" and `organization`/`social` matched the doc bodies.
+const _LEASH_STOP = new Set([
+  // A. generic project vocabulary — too common to differentiate
+  'council', 'district', 'city', 'board', 'members', 'member', 'office', 'department', 'state', 'elected', 'official', 'officials', 'public', 'general', 'gather', 'profile', 'profiles', 'leadership', 'research', 'information', 'contact', 'contacts', 'compile', 'find', 'work', 'complete', 'inc', 'llc', 'corp', 'company', 'group', 'groups', 'organization', 'organizations', 'staff', 'roles', 'numbers', 'people', 'emails', 'phone',
+  // A2. project verbs/adjectives that add no domain signal
+  'direct', 'social', 'relevant', 'level', 'priority', 'project', 'monitor', 'match', 'summary', 'task', 'include', 'included', 'identified', 'named', 'higher', 'highest', 'lower', 'lowest', 'across', 'earlier', 'further', 'future', 'full', 'days', 'hour', 'hours', 'depth', 'digging', 'details', 'detail', 'findings', 'restate', 'restated', 'align', 'alignment', 'conduct', 'expand', 'deepen', 'deepens', 'focus', 'focusing', 'build', 'safety', 'prior', 'over', 'several', 'made', 'make', 'keep', 'next', 'just', 'life', 'world',
+  // B. English filler (leaked past the 4+ char gate)
+  'from', 'with', 'their', 'list', 'that', 'this', 'they', 'them', 'these', 'those', 'than', 'into', 'each', 'your', 'every',
+  // proper-noun leaks: people/named entities that show up in every thread but don't gate the domain
+  'lucas', 'anthropic', 'linkedin',
+]);
 function domainLeashTokens() {
   try {
     let blob = '';

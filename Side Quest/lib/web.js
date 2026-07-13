@@ -1068,8 +1068,11 @@ function _focusLeashTokens() { try { return require('./focus').domainLeashTokens
 // Does a PDF link overlap the leash at all? No leash (null/empty) → always true (unleashed).
 function _pdfMatchesLeash({ href = '', text = '', pageTitle = '', pageUrl = '' } = {}, leashTokens) {
   if (!leashTokens || !leashTokens.size) return true;
-  const hay = `${href} ${text} ${pageTitle} ${pageUrl}`.toLowerCase();
-  for (const t of leashTokens) if (hay.includes(t)) return true;
+  // WORD-BOUNDARY match, not substring — `direct` (a project word) must not silently match "directory"
+  // (a doc-listing word) or "director" (in any faculty PDF). Extract 4+ char words, set-intersect with
+  // the leash tokens. Same recipe used to BUILD the leash set, kept symmetric.
+  const words = new Set((`${href} ${text} ${pageTitle} ${pageUrl}`.toLowerCase().match(/[a-z]{4,}/g) || []));
+  for (const t of leashTokens) if (words.has(t)) return true;
   return false;
 }
 
