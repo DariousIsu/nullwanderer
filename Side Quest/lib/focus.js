@@ -321,8 +321,28 @@ const _LEASH_STOP = new Set([
   // proper-noun leaks: people/named entities that show up in every thread but don't gate the domain
   'lucas', 'anthropic', 'linkedin',
 ]);
+// Add a word to the token set, plus a naive plural-stem so "Parishes" (in the focus text) also matches
+// "parish" (in a doc) at word-boundary check time — the failure I was working around. Deliberately naive
+// (not a full stemmer): -ies→-y, -es→-, -s→-. Never expands, only contracts. Cross-project bleed is
+// avoided at the SELECTION step, not here — recent threads and active focus are handled separately.
+function _addToken(toks, w) {
+  if (_LEASH_STOP.has(w)) return;
+  toks.add(w);
+  if (w.length > 5) {
+    if (w.endsWith('ies')) { const s = w.slice(0, -3) + 'y'; if (!_LEASH_STOP.has(s)) toks.add(s); }
+    else if (w.endsWith('es')) { const s = w.slice(0, -2); if (!_LEASH_STOP.has(s)) toks.add(s); }
+    else if (w.endsWith('s')) { const s = w.slice(0, -1); if (!_LEASH_STOP.has(s)) toks.add(s); }
+  }
+}
+
 function domainLeashTokens() {
   try {
+    // ISOLATION between projects: when a DIRECTED FOCUS is active, use ONLY that focus's content — recent
+    // threads from other projects (Rainey Center, MIRI, Anthropic) would cross-contaminate the vocabulary
+    // and let their tokens ("center", "machine", "intelligence") match unrelated off-domain docs. When
+    // there's no directed focus, fall back to recent civic threads (the standing project vocab). Plurals
+    // are stem-expanded so "Parishes" also matches "parish" — this was the failure that made me try the
+    // union in the first place, and the naive stem fixes it without needing the union.
     let blob = '';
     const f = getCurrent();
     if (f && isDirected(f)) {
@@ -330,13 +350,11 @@ function domainLeashTokens() {
       try { blob += ' ' + (db.getMeta(`focus.${f.id}.enrich_facet`) || ''); } catch {}
       try { const cov = JSON.parse(db.getMeta(`focus.${f.id}.covered`) || '[]'); if (Array.isArray(cov)) blob += ' ' + cov.join(' '); } catch {}
     } else {
-      // No directed focus → fall back to the operator's MOST RECENT civic threads (newest first — their
-      // current work) so leashes stay on and keyed to the right domain, not the oldest stale threads.
       try { blob = (db.recentThreadGoals(15) || []).join(' '); } catch {}
     }
     if (!blob.trim()) return null;
     const toks = new Set();
-    for (const w of (blob.toLowerCase().match(/[a-z]{4,}/g) || [])) if (!_LEASH_STOP.has(w)) toks.add(w);
+    for (const w of (blob.toLowerCase().match(/[a-z]{4,}/g) || [])) _addToken(toks, w);
     return toks.size ? toks : null;
   } catch { return null; }
 }

@@ -7116,10 +7116,26 @@ async function directedFocusTick() {
 // mint / hold) → two gates → propose to Echo → observe (feed=doc-decomp). The document is the citation
 // (grade B). Fall-throughs (ambiguous / unresolved) land as `held` observations for the nightly upgrade
 // pass. Async + fail-soft — never blocks or breaks a landing; runs AFTER the stream's existing hooks.
+// DOMAIN-LEASH gate for doc decomposition — checked at function ENTRY (before any chunk work) so it fires
+// for every caller (canvas-drop, download-watcher, workspace ingest, etc.) AND aborts a pre-fix backlog
+// mid-flight if the process restarts. Off-domain doc still LANDED in doc_store searchable; we just don't
+// decompose it into contacts + entities. Empty leash (no civic work) → pass through (unleashed).
+function _docLeashOk(doc) {
+  try {
+    const _lt = require('./lib/focus').domainLeashTokens();
+    if (!_lt || !_lt.size) return true;
+    const hay = `${doc && doc.title || ''} ${String(doc && doc.body || '').slice(0, 6000)}`.toLowerCase();
+    const words = new Set(hay.match(/[a-z]{4,}/g) || []);
+    for (const t of _lt) if (words.has(t)) return true;
+    return false;
+  } catch { return true; }
+}
+
 async function decomposeLandedDoc(doc) {
   try {
     if (!echoSuit || !echoSuit.connected) return;
     if (!doc || doc.id == null || !String(doc.body || '').trim()) return;
+    if (!_docLeashOk(doc)) { console.log(`[doc-decomp] SKIP off-domain doc #${doc.id} "${(doc.title || '').slice(0, 60)}" — no leash-token overlap`); return; }
     const src = (() => { try { return (require('./lib/models').sources() || []).find(s => s.tier === 'cloud' && s.token); } catch { return null; } })();
     if (!src) return;   // no cloud extractor available → skip (the nightly promote still consolidates it)
     const decompLane = require('./lib/decomp_lane');
@@ -7157,6 +7173,7 @@ async function decomposeLandedDoc(doc) {
 async function surfaceDocCards(doc) {
   try {
     if (!doc || !String(doc.body || '').trim()) return;
+    if (!_docLeashOk(doc)) { console.log(`[doc-cards] SKIP off-domain doc #${doc.id || '?'} "${(doc.title || '').slice(0, 60)}" — no leash-token overlap`); return; }
     const src = (() => { try { return (require('./lib/models').sources() || []).find(s => s.tier === 'cloud' && s.token); } catch { return null; } })();
     if (!src) return;   // no cloud extractor available → skip
     const decompLane = require('./lib/decomp_lane');

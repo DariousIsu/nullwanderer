@@ -43,6 +43,13 @@ try {
   const toks = focus.domainLeashTokens();
   ok(toks && toks.size >= 4, `domainLeashTokens picks up the recent thread words (got ${toks ? toks.size : 0} tokens)`);
   ok(toks.has('louisiana') && toks.has('parish') && toks.has('commissioners'), 'tokens include louisiana / parish / commissioners');
+  // Plural stemming: a thread that says "Parishes" or "commissioners" should ALSO produce the singular so
+  // a doc mentioning "parish" or "commissioner" matches at word-boundary. This is what unblocked the
+  // Lafayette Parish (singular) doc when the focus was "Louisiana Parishes" (plural).
+  ok(toks.has('commissioners') && toks.has('commissioner'), 'plural stem: "commissioners" (in thread) ALSO produces "commissioner" (singular)');
+  insertUserThread('deepen Louisiana Parishes coverage and county elections');
+  const t2 = focus.domainLeashTokens();
+  ok(t2.has('parishes') && t2.has('parish') && t2.has('elections') && t2.has('election'), 'plural stem: "Parishes"→"parish" and "elections"→"election" both produced');
 
   // the REAL 37 drift names captured from the live 2026-07-13 audit — every one MUST drop
   const DRIFT = ['Frank Guarini', 'Ellis Berry', 'Allen Treadway', 'Matthew Quay', 'Alonzo Ransier', 'Charles Hodges', 'Peter Newhard', 'Jared Williams', 'Kenneth Pitzer', 'American Record Corporation', 'Society of the Cincinnati', 'Beverly Byron', 'Josh Shapiro', 'Gilman Marston', 'Hugh Haralson', 'George Upham', 'Peggy Lehner', 'Phil Gingrey', 'Dante Fascell', 'Marlow Cook', 'Foster Stearns', 'Burton Sweet', 'Joseph Millard', 'Eben Stone', 'Aaron Harlan', 'Anderson Mitchell', 'William Plumer', 'James Watson', 'Miroslav Tyrš', 'Western Oregon University', 'Albert Bustamante', 'Earl Ruth', 'Augustine Kelley', 'Strait of Hormuz', 'Richmond Pearson', 'John Patman', 'Jared Polis'];
@@ -84,6 +91,7 @@ try {
   db.markOpenThreadStatus(2, 'resolved');
   db.markOpenThreadStatus(3, 'resolved');
   db.markOpenThreadStatus(4, 'resolved');
+  db.markOpenThreadStatus(5, 'resolved');   // the plural-stem test thread
   ok(focus.domainLeashTokens() === null, 'no active/pending threads → domainLeashTokens null → leash inert (fresh-install safety)');
 } catch (e) {
   fail++; console.error('  ✗ threw:', e.message);
