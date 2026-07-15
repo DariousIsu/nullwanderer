@@ -3129,9 +3129,22 @@ async function canvasSnapshot() {
   if (!echoHttp || !echoHttp.base) return null;
   const headers = { Accept: 'application/json' };
   if (echoHttp.token) headers.Authorization = `Bearer ${echoHttp.token}`;
-  const res = await fetch(`${echoHttp.base}/canvas`, { headers });
-  if (!res || !res.ok) throw new Error(`canvas snapshot ${res ? res.status : 'no response'}`);
-  return await res.json();
+  // Degrade QUIETLY instead of throwing: the renderer's 5s canvas poll (canvas.js:877) would otherwise log a
+  // '[canvas] get-all failed' every tick during any TRANSIENT engine window (restart, MCP reconnect/backoff,
+  // a brief non-2xx). Timeout so a hung socket can't wedge the poll; return null on any not-ok/unreachable so
+  // callers surface "Waiting for the engine…" and retry on the next poll. (2026-07-15: the recurring "canvas
+  // fetch error" — endpoint verified healthy; the noise was throw-on-any-non-ok + no timeout + no backoff.)
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 4000);
+  try {
+    const res = await fetch(`${echoHttp.base}/canvas`, { headers, signal: ctrl.signal });
+    if (!res || !res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 ipcMain.handle('canvas:list-tabs', async (_e, opts = {}) => {
