@@ -1017,18 +1017,22 @@ async function runOneTick() {
       const first = await runGraphWalkMove(recentTurns);
       if (first) { const n = _cfg.subcMovesPerTick(); for (let i = 1; i < n; i++) { const more = await runGraphWalkMove(recentTurns, { force: true }); if (!more) break; } }
     })();
+    // SYNTHESIS lane (restored 2026-07-15): the cross-thought cloud pass (maybeSynthesize, defined below) was
+    // orphaned by the 2026-07-01 graph-builder refactor's early return. It self-gates (interval ~10min +
+    // hourly token budget) so running it every idle tick self-limits and leaves the graph-walk cadence untouched.
+    const synthLane = maybeSynthesize().catch((e) => console.error('[subc] synthesis lane error:', e && e.message));
     if (_cfg.pipelineOn()) {
       // SLICE 3 — the Puller lanes become ONE staged pipeline (DISCOVER→CONTACT→ENRICH, concurrent stages
       // with backpressure). Runs alongside the graph-walk lane. ZOE_PIPELINE=0 reverts to the legacy lanes.
       const pipeLane = runPipelineTick(recentTurns).catch((e) => console.error('[pipeline] tick error:', e && e.message));
-      if (_cfg.subcConcurrentLanes()) { await Promise.allSettled([graphLane, pipeLane]); }
-      else { try { await graphLane; } catch {} await pipeLane; }
+      if (_cfg.subcConcurrentLanes()) { await Promise.allSettled([graphLane, synthLane, pipeLane]); }
+      else { try { await graphLane; } catch {} try { await synthLane; } catch {} await pipeLane; }
     } else {
       // Legacy coupled lanes: runPullerMove (enrich-then-discover) + independent runSocialEnrichMove.
       const pullerLane = runPullerMove(recentTurns).catch((e) => console.error('[puller-walk] tick error:', e.message));
       const socialLane = runSocialEnrichMove().catch((e) => console.error('[social-enrich] tick error:', e.message));
-      if (_cfg.subcConcurrentLanes()) { await Promise.allSettled([graphLane, pullerLane, socialLane]); }
-      else { try { await graphLane; } catch {} await pullerLane; await socialLane; }
+      if (_cfg.subcConcurrentLanes()) { await Promise.allSettled([graphLane, synthLane, pullerLane, socialLane]); }
+      else { try { await graphLane; } catch {} try { await synthLane; } catch {} await pullerLane; await socialLane; }
     }
     return;
   }
@@ -1104,7 +1108,12 @@ async function runOneTick() {
   // across the recent local stream to surface the thread worth pursuing — the cross-thought depth
   // per-tick deepening misses. Free-association only; interval- and budget-gated; GROUNDED in memory;
   // fail-safe (any error → skip). Stored as type='synthesis' so it doesn't seed the anti-loop window.
-  if (!activeFocus && !modeIsThreadReview && !personalMode) {
+  // RESTORED 2026-07-15: invoked as an idle lane (see idle branch above). The 2026-07-01 graph-builder
+  // refactor put an early `return` in the idle branch that orphaned this block (it sits past the return),
+  // silently killing synthesis for ~2 weeks. Now a hoisted local fn; self-gates (interval + budget) so it
+  // fires ~every 10min as one idle lane and never changes graph-walk cadence.
+  async function maybeSynthesize() {
+    if (activeFocus || modeIsThreadReview || personalMode) return;
     try {
       const subc2 = require('./subconscious');
       const cfg2 = require('./config');

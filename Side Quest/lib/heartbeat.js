@@ -373,15 +373,32 @@ async function maybeHeartbeat() {
     thoughtStripped = autoTools.stripAll(thoughtStripped);
     thoughtStripped = gapsLib.stripTags(thoughtStripped);
 
-    // Always store the thought (research signal: what did she consider saying?)
+    // Store the thought (research signal: what did she consider saying?) — but NOT if it's a semantic
+    // near-repeat of recent thoughts. WHY (2026-07-15 regression): the July fix guards only the spoken <say>
+    // path (below), while this ai_thought write was UNCONDITIONAL. The idle prompt is dominated by the
+    // silence rules, so a bored idle model re-derives the same meta-rumination every ~4min tick; persisting
+    // it colonized the ai_thought stream, the heartbeat replay (which re-feeds it), AND reflection Path-B
+    // (reflectIfDue distills from `turns`, ai_thought included) — restating an INSTRUCTION into a "learning".
+    // Guarding the WRITE cleans that upstream in one place. threshold 0.82 (looser than the 0.88 say-guard)
+    // because these paraphrased ruminations land just under 0.88; a suppressed thought is only an internal
+    // signal (never spoken), so over-suppression is cheap and a genuinely new thought (< 0.82 sim) still lands.
     if (thoughtStripped) {
-      db.insertTurn({
-        sessionId,
-        speaker: 'ai_thought',
-        content: thoughtStripped,
-        model: MODEL,
-        truncated
-      });
+      let thoughtRepeat = false;
+      try {
+        const recentThoughts = db.getRecentTurns(60).filter(t => t.speaker === 'ai_thought').slice(-8).map(t => t.content);
+        thoughtRepeat = await selfRep.isSemanticRepeat(thoughtStripped, recentThoughts, { threshold: 0.82 });
+      } catch (e) { console.error('[heartbeat] thought-repeat check failed:', e.message); }
+      if (thoughtRepeat) {
+        console.log('[heartbeat] suppressed semantic self-repeat THOUGHT (idle rumination loop guard)');
+      } else {
+        db.insertTurn({
+          sessionId,
+          speaker: 'ai_thought',
+          content: thoughtStripped,
+          model: MODEL,
+          truncated
+        });
+      }
     }
 
     // Treat literal placeholder text as silence, not as utterance
