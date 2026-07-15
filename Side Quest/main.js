@@ -2313,7 +2313,7 @@ function startDownloadsIngestWatcher() {
           _leashPasses = false;
           for (const t of _lt) if (words.has(t)) { _leashPasses = true; break; }
         }
-      } catch {}
+      } catch { _leashPasses = false; }   // FAIL CLOSED (2026-07-15): a leash-construction error must quarantine (doc still lands searchable), never fall through unleashed.
       const landed = require('./lib/doc_store').land({ title, body: text, source: 'browser_download', ref: 'download:' + fp });
       if (landed && landed.landed) {
         if (!_verdict.relevant || !_leashPasses) {
@@ -7145,7 +7145,7 @@ function _docLeashOk(doc) {
     const words = new Set(hay.match(/[a-z]{4,}/g) || []);
     for (const t of _lt) if (words.has(t)) return true;
     return false;
-  } catch { return true; }
+  } catch { return false; }   // FAIL CLOSED (2026-07-15): on a leash error, quarantine (doc lands searchable, not decomposed) rather than decompose everything.
 }
 
 async function decomposeLandedDoc(doc) {

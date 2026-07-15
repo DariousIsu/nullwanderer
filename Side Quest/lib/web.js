@@ -1158,7 +1158,11 @@ async function dispatch({ tag, attrs = {}, body = '' }) {
     case 'web-get': return getEl(attrs.selector || attrs.sel || body, attrs.attr || attrs.attribute);
     case 'web-eval': return evalJs(body || attrs.js || attrs.expr);
     case 'web-drag': return drag(attrs.from || attrs.source, attrs.to || attrs.target);
-    case 'web-grab-pdfs': return grabPdfs({ max: Number(attrs.max || attrs.limit) || AUTO_GRAB_PER_READ, userDriven: true });
+    // LEASH the explicit grab too (2026-07-15): web tags come from the MODEL, not a literal user keystroke, so
+    // "userDriven" was a misnomer — her AUTONOMOUS <web-grab-pdfs> (emitted mid-idle via monologue.js) firehosed
+    // off-domain PDFs into the ingest watcher with the leash OFF (the flood amplifier). Leash all grab tags to the
+    // focus domain; an off-domain PDF still LANDS searchable in doc_store, it just isn't auto-decomposed into contacts.
+    case 'web-grab-pdfs': return grabPdfs({ max: Number(attrs.max || attrs.limit) || AUTO_GRAB_PER_READ, userDriven: false });
     case 'web-back': return back();
     case 'web-close': return close();
     case 'web-chat': return chatSend(body, attrs.speaker || attrs.to || attrs.name);

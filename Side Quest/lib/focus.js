@@ -350,7 +350,22 @@ function domainLeashTokens() {
       try { blob += ' ' + (db.getMeta(`focus.${f.id}.enrich_facet`) || ''); } catch {}
       try { const cov = JSON.parse(db.getMeta(`focus.${f.id}.covered`) || '[]'); if (Array.isArray(cov)) blob += ' ' + cov.join(' '); } catch {}
     } else {
-      try { blob = (db.recentThreadGoals(15) || []).join(' '); } catch {}
+      // USER-ASSIGNED threads only — NOT recentThreadGoals, which also pulled SELF-GENERATED threads. The
+      // 2026-07-13 medical flood (979 dentist targets/15min) was a feedback loop: Zoe wanders onto a medical
+      // page → it becomes a self-thread → its vocab enters the leash HERE → dental dirs word-match a lone token
+      // → decompose → that read spawns another self-thread → the leash drifts further medical. Keying the leash
+      // to what LUCAS actually assigned breaks the loop: her own wandering can never seed the domain it filters.
+      // (Verified 2026-07-15: getUserAssignedThreads returns the parish/institute/datacenter vocab, no self-gen.)
+      // Filter to still-open (pending/active/stalled) so a resolved assignment drops out of the leash — matches
+      // recentThreadGoals' recency filter (getUserAssignedThreads itself has no status filter), and keeps the
+      // "no open work → null leash → fresh-install inert" fallback intact.
+      try {
+        blob = (db.getUserAssignedThreads(40) || [])
+          .filter(t => t && ['pending', 'active', 'stalled'].includes(t.status))
+          .slice(0, 15)
+          .map(t => t.content || '')
+          .join(' ');
+      } catch {}
     }
     if (!blob.trim()) return null;
     const toks = new Set();
