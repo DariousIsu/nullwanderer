@@ -89,7 +89,7 @@ try { Graph.d3Force('charge').strength(-40); } catch (e) {}   // a touch more sp
 
 // ---- UnrealBloom: the glow the 2D shadowBlur faked, one GPU pass ----
 try {
-  const bloom = new window.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.25, 0.7, 0.02);
+  const bloom = new window.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.35, 0.2);   // strength/radius down + threshold up → only bright cores bloom, background stays dark space
   Graph.postProcessingComposer().addPass(bloom);
 } catch (e) { console.warn('[kg3d] bloom failed:', e && e.message); }
 
