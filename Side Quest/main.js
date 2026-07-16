@@ -7224,7 +7224,13 @@ async function decomposeLandedDoc(doc) {
     const { completeDetailed } = require('./lib/ollama');
     const model = config.extractionModel() || config.subconsciousModel();
     const extract = decompLane.makeCloudExtractor({ completeFn: completeDetailed, model, base: src.base, token: src.token });
-    const resolve = (name, opts) => echoSuitLib.resolveMention(name, opts);
+    // WRITE-PATH NODE-RESOLUTION GATE (design §7, step 5b): resolve each extracted entity through the precision
+    // gate FIRST — a strong-id / canonical-form MERGE catches a variant-form duplicate ("City of Sacramento" →
+    // "CITY OF SACRAMENTO") BEFORE doc_decompose mints one. Anything the gate isn't confident about falls
+    // through to resolveMention's existing type-constrained / mis-resolution / identity-gate logic, so gate-
+    // first can only ADD a precision-safe merge — it never regresses the existing resolver.
+    const _gateDeps = require('./lib/resolution_live').makeLiveDeps((t) => echoSuit.dispatch(t));
+    const resolve = (name, opts) => require('./lib/resolution_gate').preResolve(name, opts || {}, { deps: _gateDeps, fallback: (n, o) => echoSuitLib.resolveMention(n, o) });
     const dispatch = (tag) => echoSuit.dispatch(tag);
     const observe = (o) => { try { curationStore.record(db, { ...o, feed: 'doc-decomp' }); } catch {} };
     // CITATION: cite the decompose to the doc's REAL source URL when we have one (a grabbed .gov/official

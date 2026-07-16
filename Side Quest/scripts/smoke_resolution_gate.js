@@ -81,6 +81,25 @@ const blockOf = (list) => ({ byBlock: async () => list, byNameKey: async () => l
   const e4 = await G.resolveEdgeEndpoints({ source: 'Totally New Source', target: 'CITY OF SACRAMENTO [lda_client:5]' }, {});
   ok(!e4.ok && e4.reason === 'source-mint', 'edge: source itself unresolvable → HOLD (source-mint) — no half-formed edge');
 
+  // --- preResolve: the write-path pre-resolver (gate-first, else fallback) --------------------------
+  console.log('== preResolve (write path) ==');
+  let fbCalls = 0;
+  const fallback = async () => { fbCalls++; return { status: 'nil', mention: 'fb' }; };
+  // gate MERGES (strong id) → resolved, fallback NOT called
+  fbCalls = 0;
+  const p1 = await G.preResolve('Kevin McCarty [wd:Q6396892]', {}, { deps: { byStrongId: async () => [{ id: 7, name: 'Kevin McCarty [wd:Q6396892]' }] }, fallback });
+  ok(p1.status === 'resolved' && p1.object.id === 7 && p1.via.startsWith('gate:') && fbCalls === 0, 'preResolve: a precision-safe gate MERGE returns the existing entity; fallback NOT called');
+  // gate MINTS (no candidates) → fallback runs (existing resolver preserved)
+  fbCalls = 0;
+  const p2 = await G.preResolve('Nobody Here', {}, { deps: {}, fallback });
+  ok(p2.status === 'nil' && p2.mention === 'fb' && fbCalls === 1, 'preResolve: gate mint → falls through to the existing resolver');
+  // gate REVIEW (ambiguous org) → fallback runs (never overrides on ambiguity)
+  fbCalls = 0;
+  await G.preResolve('City of Sacramento', {}, { deps: { byNameKey: async () => [{ id: 1, name: 'CITY OF SACRAMENTO [lda_client:1]' }, { id: 2, name: 'CITY OF SACRAMENTO [lda_client:2]' }] }, fallback });
+  ok(fbCalls === 1, 'preResolve: gate REVIEW (ambiguous) → falls through (gate only ever ADDS a confident merge)');
+  // no fallback + non-merge → nil (never throws)
+  ok((await G.preResolve('X', {}, { deps: {} })).status === 'nil', 'preResolve: no fallback + non-merge → nil');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

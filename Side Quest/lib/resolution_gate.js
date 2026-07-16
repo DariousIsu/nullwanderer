@@ -70,4 +70,23 @@ async function resolveEdgeEndpoints(edge = {}, deps = {}) {
   return { ok: true, sourceName: s.canonicalName, targetName: t.canonicalName, source: s, target: t };
 }
 
-module.exports = { resolveNode, resolveEdgeEndpoints };
+// preResolve(name, opts, { deps, fallback }) — the WRITE-PATH pre-resolver (design §7, step 5b). Runs the
+// gate FIRST; if it produces a PRECISION-SAFE merge (strong-id or matched canonical form) it returns the
+// existing entity in resolveMention's {status:'resolved', object} shape — catching a variant-form duplicate
+// BEFORE doc_decompose mints one. On any non-merge (mint/review/error) it falls through to the injected
+// `fallback` (echo_suit.resolveMention) so doc_decompose's type-constraint / mis-resolution / identity-gate
+// logic is fully preserved. So the gate only ever ADDS a confident merge — it can never regress the existing
+// resolver. `opts.preferType` flows to both; collective context is skipped here (doc context isn't resolved
+// to ids yet — the gate uses block+match precision, which is the bulk of the anti-dup win).
+async function preResolve(name, opts = {}, { deps = {}, fallback } = {}) {
+  try {
+    const res = await resolveNode({ name, type: opts.preferType }, deps);
+    if (res.action === 'merge' && res.target && res.target.id != null) {
+      return { status: 'resolved', object: { id: res.target.id, name: res.canonicalName || res.target.name }, via: 'gate:' + res.tier };
+    }
+  } catch { /* fall through to the existing resolver */ }
+  if (typeof fallback === 'function') return fallback(name, opts);
+  return { status: 'nil', mention: name };
+}
+
+module.exports = { resolveNode, resolveEdgeEndpoints, preResolve };
