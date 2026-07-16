@@ -496,14 +496,24 @@ app.whenReady().then(() => {
     db.setMeta('last_curation_pass_at', String(Date.now()));       // claim the slot before running
     console.log('[curation] starting daily pass…');
     try {
-      // PROMOTE-UP wiring (option 2, Slice 3): cross matured local short-term edges UP to Echo. Only when Echo
-      // is connected; reuses the walker's own propose_relation dispatch (open-vocab), and Echo itself is the
-      // accept/reject gate — a young endpoint is simply refused and retried a later night.
+      // PROMOTE-UP wiring (Slice 3) + NODE-RESOLUTION GATE (design §7, live wiring 5b/6): cross matured local
+      // short-term edges UP to Echo, but FIRST resolve BOTH endpoints to their canonical EXISTING Echo entity
+      // via the gate (block → match → collective). So an edge crosses to the real node instead of rejecting on
+      // a surface-form mismatch ("City of Sacramento" → "CITY OF SACRAMENTO"), and it PRECISION-SAFELY HOLDS
+      // when an endpoint is new/ambiguous — no minting from the bridge, so no dup/noise into the canonical
+      // graph. This is the backlog sweep + go-forward prevention in one (order-independent, Swoosh ICAR).
       const proposeEchoRelationFn = (echoSuit && echoSuit.connected)
-        ? (edge) => require('./lib/graph_walk').proposeRelation({
-            dispatch: (t) => echoSuit.dispatch(t), source: edge.source, target: edge.target,
-            relation_type: edge.relation_type, confidence: edge.confidence, metadata: edge.metadata, allowOpen: true
-          })
+        ? async (edge) => {
+            try {
+              const deps = require('./lib/resolution_live').makeLiveDeps((t) => echoSuit.dispatch(t));
+              const rr = await require('./lib/resolution_gate').resolveEdgeEndpoints(
+                { source: edge.source, target: edge.target, relation_type: edge.relation_type }, deps);
+              if (!rr.ok) return { ok: false, action: 'held:' + rr.reason };   // endpoint didn't resolve → hold (retried a later night / review)
+              return require('./lib/graph_walk').proposeRelation({
+                dispatch: (t) => echoSuit.dispatch(t), source: rr.sourceName, target: rr.targetName,
+                relation_type: edge.relation_type, confidence: edge.confidence, metadata: edge.metadata, allowOpen: true });
+            } catch (e) { return { ok: false, action: 'gate-error' }; }
+          }
         : null;
       const r = await cloudCurator.runDailyPass({ apply: true, proposeEchoRelationFn, onLog: (m) => console.log('[curation]', m) });
       console.log('[curation] pass complete:', JSON.stringify(r.stages));

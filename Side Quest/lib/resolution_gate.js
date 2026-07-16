@@ -53,4 +53,21 @@ async function resolveNode(incoming, deps = {}) {
   return { action: 'review', tier: m.tier, reason: m.reason, candidates, ranked: m.ranked };
 }
 
-module.exports = { resolveNode };
+// resolveEdgeEndpoints(edge, deps) → { ok, sourceName?, targetName?, reason? }. The precision-safe policy for
+// the PROMOTE-UP bridge / backlog sweep: an edge LANDS only when BOTH endpoints resolve to an EXISTING Echo
+// entity (action:'merge'); a new/ambiguous endpoint HOLDS the edge (no minting from the bridge → no noise into
+// the canonical graph). The resolved SOURCE + its neighbors become the target's collective context, so an
+// ambiguous target ("City of Sacramento") can be disambiguated by the source it's edged from.
+async function resolveEdgeEndpoints(edge = {}, deps = {}) {
+  const s = await resolveNode({ name: edge.source, type: edge.sourceType }, deps);
+  if (s.action !== 'merge' || !s.canonicalName) return { ok: false, reason: 'source-' + s.action, source: s };
+  let context = [];
+  const sid = s.target && s.target.id;
+  if (sid != null) context.push(sid);
+  if (typeof deps.neighborsOf === 'function') { try { context = context.concat(await deps.neighborsOf(s.target)); } catch { /* thin context ok */ } }
+  const t = await resolveNode({ name: edge.target, type: edge.targetType }, { ...deps, context });
+  if (t.action !== 'merge' || !t.canonicalName) return { ok: false, reason: 'target-' + t.action, source: s, target: t };
+  return { ok: true, sourceName: s.canonicalName, targetName: t.canonicalName, source: s, target: t };
+}
+
+module.exports = { resolveNode, resolveEdgeEndpoints };

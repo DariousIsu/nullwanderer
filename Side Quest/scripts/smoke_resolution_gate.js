@@ -61,6 +61,26 @@ const blockOf = (list) => ({ byBlock: async () => list, byNameKey: async () => l
     blockOf([{ id: 20, name: 'Patrick T. McHenry (US)', degree: 50 }, { id: 21, name: 'Nancy Pelosi (US)' }]));
   ok(r8.action === 'merge' && r8.target.id === 20, 'gate: a single clean probabilistic match → MERGE');
 
+  // --- resolveEdgeEndpoints: the promote-up bridge policy (BOTH endpoints must resolve to EXISTING) ---
+  console.log('== resolveEdgeEndpoints (bridge policy) ==');
+  const e1 = await G.resolveEdgeEndpoints({ source: 'Kevin McCarty [wd:Q6396892]', target: 'CITY OF SACRAMENTO [lda_client:5]' },
+    { byStrongId: async (_s, id) => (id === 'Q6396892' ? [{ id: 1, name: 'Kevin McCarty [wd:Q6396892]' }] : id === '5' ? [{ id: 2, name: 'CITY OF SACRAMENTO [lda_client:5]' }] : []) });
+  ok(e1.ok && e1.sourceName === 'Kevin McCarty [wd:Q6396892]' && e1.targetName === 'CITY OF SACRAMENTO [lda_client:5]', 'edge: both endpoints strong-id resolve → LANDS with canonical names');
+
+  const e2deps = {
+    byStrongId: async (_s, id) => (id === 'Q6396892' ? [{ id: 1, name: 'Kevin McCarty [wd:Q6396892]' }] : []),
+    byNameKey: async (nk) => (nk === 'city of sacramento' ? [{ id: 10, name: 'CITY OF SACRAMENTO [lda_client:1]' }, { id: 11, name: 'CITY OF SACRAMENTO [lda_client:2]' }] : []),
+  };
+  const e2 = await G.resolveEdgeEndpoints({ source: 'Kevin McCarty [wd:Q6396892]', target: 'City of Sacramento' }, e2deps);
+  ok(!e2.ok && e2.reason === 'target-review', 'edge: source resolves but target ambiguous (no context) → HOLD, never guess');
+
+  const e3 = await G.resolveEdgeEndpoints({ source: 'Kevin McCarty [wd:Q6396892]', target: 'City of Sacramento' },
+    { ...e2deps, neighborsOf: async (c) => (c.id === 1 ? ['ca_gov'] : c.id === 10 ? ['ca_gov'] : []) });
+  ok(e3.ok && e3.targetName === 'CITY OF SACRAMENTO [lda_client:1]', 'edge: collective context (source neighbors) disambiguates the target → LANDS to the right dup');
+
+  const e4 = await G.resolveEdgeEndpoints({ source: 'Totally New Source', target: 'CITY OF SACRAMENTO [lda_client:5]' }, {});
+  ok(!e4.ok && e4.reason === 'source-mint', 'edge: source itself unresolvable → HOLD (source-mint) — no half-formed edge');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
