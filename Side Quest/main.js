@@ -3581,7 +3581,7 @@ ipcMain.handle('kg:overview', async () => {
   try {
     if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
     const callTool = pollCallTool();
-    const payload = await callTool('graph_overview', { per_type_k: 8, recent_k: 20, recent_window_days: 30 });
+    const payload = await callTool('graph_overview', { per_type_k: 40, recent_k: 200, recent_window_days: 30 });   // way more of the corpus → a dense enveloping cloud (3D handles it)
     const g = kgView.buildOverview(payload);
     return { ok: true, nodes: g.nodes, links: g.links, availableTypes: kgView.availableTypes('overview', payload), legend: kgView.legend(),
       stats: { totalEntities: (payload && payload.total_entities) || g.nodes.length, totalRelations: (payload && payload.total_relations) || g.links.length } };
@@ -3628,10 +3628,10 @@ ipcMain.handle('kg:search', async (_e, { query } = {}) => {
 // render. Local DB only (no Echo dependency); tagged store:'sidequest' + epistemic for the layer styling.
 ipcMain.handle('kg:shortterm', async () => {
   try {
-    const ents = db.graphListEntities({ limit: 90 });               // most-recent local entities (id DESC)
+    const ents = db.graphListEntities({ limit: 250 });              // most-recent local entities (id DESC) — denser core
     const byId = new Map(ents.map(e => [e.id, e]));
     const rels = db.graphRelationsAmong([...byId.keys()]);
-    const docs = db.recentDocuments(18, { unpromotedOnly: true });  // fresh material still in the short-term buffer
+    const docs = db.recentDocuments(40, { unpromotedOnly: true });  // fresh material still in the short-term buffer
     const nodes = [], seen = new Set();
     for (const e of ents) {
       if (!e.name || seen.has(e.name)) continue; seen.add(e.name);
