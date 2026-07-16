@@ -123,6 +123,28 @@ function nonNameCorroboration(a, b) {
   return null;
 }
 
+// --- TYPE reconciliation (YAGO-style compatibility lattice) -----------------------------------------
+// Source types are NOISY (a legislature appears as government_body / organization / office_held / even a
+// mistyped person). So type is never trusted as hard identity — but it IS used: types in the same civic-body
+// CLUSTER may co-refer (compatible); a person is DISJOINT from non-persons, a bill from non-bills, etc. The
+// merge rule (in matchPair) NEVER auto-merges across a disjoint boundary without a shared strong id.
+const TYPE_CLUSTERS = [
+  new Set(['government_body', 'organization', 'committee', 'office_held', 'government', 'agency']),
+];
+const DISJOINT_KIND = new Set(['person', 'bill', 'place', 'event', 'document', 'concept', 'legal_instrument', 'poll', 'decision']);
+function _clusterOf(t) { for (const c of TYPE_CLUSTERS) if (c.has(t)) return c; return null; }
+// typeRelation(a,b) → 'same' | 'compatible' | 'disjoint' | 'unknown'. Missing type on either side → 'unknown'
+// (never blocks — we don't punish absent metadata).
+function typeRelation(a, b) {
+  const ta = String(a.type || '').toLowerCase(), tb = String(b.type || '').toLowerCase();
+  if (!ta || !tb) return 'unknown';
+  if (ta === tb) return 'same';
+  const ca = _clusterOf(ta), cb = _clusterOf(tb);
+  if (ca && ca === cb) return 'compatible';
+  if (DISJOINT_KIND.has(ta) || DISJOINT_KIND.has(tb)) return 'disjoint';
+  return 'unknown';
+}
+
 // --- Fellegi-Sunter auxiliary confidence (bits of evidence; NOT the decision) -----------------------
 // Per-field m = P(agree | same), u = P(agree | different). Agreement weight = log2(m/u). Conservative civic
 // priors; carried as `confidence` for downstream ranking — the rule engine below owns the decision.
@@ -150,7 +172,12 @@ function matchPair(recA, recB) {
   const confidence = _fsBits(a, b);
 
   const sid = sharedStrongId(a, b);
-  if (sid) return { decision: 'match', tier: 'strong-id', reason: `shared ${sid}`, confidence };
+  if (sid) {
+    // a shared strong id is authoritative even across a type boundary (same QID = same real entity); a crossed
+    // DISJOINT boundary is a type ERROR to reconcile — flagged (typeConflict), never silently kept apart.
+    if (typeRelation(a, b) === 'disjoint') return { decision: 'match', tier: 'strong-id', reason: `shared ${sid}/type-conflict(${a.type}≠${b.type})`, confidence, typeConflict: true };
+    return { decision: 'match', tier: 'strong-id', reason: `shared ${sid}`, confidence };
+  }
 
   // Two different ids in the SAME system → provably distinct; never merge (may still be a name coincidence).
   const conflict = conflictingStrongId(a, b);
@@ -182,7 +209,12 @@ function matchPair(recA, recB) {
   // auto-merge (precision unchanged; the merge comes from a strong id or the collective tie-break).
   if ((a.nameKey && a.nameKey === b.nameKey) || (a.normKey && a.normKey === b.normKey)) {
     if (conflict) return { decision: 'review', tier: 'probabilistic', reason: `name-agree/${conflict}-id-conflict`, confidence };
-    return { decision: 'review', tier: 'probabilistic', reason: a.nameKey === b.nameKey ? 'name-agree/no-shared-id' : 'normkey-agree/no-shared-id', confidence };
+    // still only REVIEW (never auto-merge on name), but TAG the type relation so a downstream sweep/collective
+    // step can target compatible-type same-name variants (safe-ish dups) vs disjoint-type ones (hold — likely
+    // different, or a mistype needing a human).
+    const base = (a.nameKey && a.nameKey === b.nameKey) ? 'name-agree' : 'normkey-agree';
+    const tr = typeRelation(a, b);
+    return { decision: 'review', tier: 'probabilistic', reason: `${base}/${tr}-type/no-shared-id`, confidence, typeRel: tr };
   }
   return { decision: 'no-match', tier: 'gate', reason: 'name-differs', confidence };
 }
@@ -212,5 +244,5 @@ function resolveAgainst(incoming, candidates = []) {
 
 module.exports = {
   parseEntity, sharedStrongId, conflictingStrongId, jurisdictionCompatible, givenSignal, surnameAgree,
-  nonNameCorroboration, matchPair, resolveAgainst,
+  nonNameCorroboration, typeRelation, matchPair, resolveAgainst,
 };
