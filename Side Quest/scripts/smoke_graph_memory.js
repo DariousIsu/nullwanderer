@@ -43,6 +43,15 @@ const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail
   gm.recordEntity({ name: 'Madeline Keeter', type: 'person', epistemic: 'read' });          // must NOT downgrade
   ok('later read does NOT downgrade witnessed', (gm.getEntity('Madeline Keeter') || {}).epistemic === 'witnessed');
 
+  console.log('\nS3 NORMALIZATION — abbreviation variants dedup to ONE short-term entity; jurisdiction preserved:');
+  const _usa = gm.recordEntity({ name: 'U.S. Senate', type: 'organization', epistemic: 'read' });
+  const _usb = gm.recordEntity({ name: 'United States Senate', type: 'organization', epistemic: 'read' });
+  ok('"U.S. Senate" ≡ "United States Senate" → SAME short-term entity (abbrev fold)', !!_usa.entityId && _usa.entityId === _usb.entityId);
+  const _hv = gm.recordEntity({ name: 'Pat Howell (VA)', type: 'person', epistemic: 'read' });
+  const _hc = gm.recordEntity({ name: 'Pat Howell (CA)', type: 'person', epistemic: 'read' });
+  ok('"Pat Howell (VA)" ≠ "Pat Howell (CA)" → DISTINCT (jurisdiction token preserved, no over-merge)', !!_hv.entityId && !!_hc.entityId && _hv.entityId !== _hc.entityId);
+  ok('normalizeName folds "U.S."→"united states" yet keeps the juris token', gm.normalizeName('U.S. Senate') === 'united states senate' && gm.normalizeName('Pat Howell (VA)') === 'pat howell va');
+
   console.log('\nRELATIONS — grounded edge auto-creates endpoints + carries provenance:');
   const rel = gm.recordRelation({ source: 'Joshua Fredrickson', target: 'LAMP contact list', type: 'will email', epistemic: 'told', sourceObj: { kind: 'meeting', ref: 'meeting:pcv-sren-zzu', excerpt: 'I can probably make that happen.' } });
   ok('grounded relation created (relationId)', rel.ok && !!rel.relationId && !rel.proposed);

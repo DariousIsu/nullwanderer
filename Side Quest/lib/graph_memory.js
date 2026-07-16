@@ -35,7 +35,21 @@ const defaultConf = (e) => DEFAULT_CONF[e] ?? 0.5;
 
 // Normalize a surface name to a dedup key: lowercase, drop punctuation, collapse ws.
 function normalizeName(name) {
-  return String(name || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const base = String(name || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  // Fold civic abbreviations so surface-form variants share ONE dedup key ("u s senate" ≡ "united states
+  // senate") — universal-normalization S3: the short-term store now normalizes like the gate. Jurisdiction /
+  // disambiguator tokens are KEPT (this is a KEY, not a block key), so "Howell va" never merges with "Howell ca".
+  if (!base) return base;
+  const toks = base.split(' ');
+  const out = [];
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (t === 'u' && toks[i + 1] === 's' && toks[i + 2] === 'a') { out.push('united', 'states'); i += 2; continue; }
+    if (t === 'u' && toks[i + 1] === 's') { out.push('united', 'states'); i += 1; continue; }
+    if (t === 'usa' || t === 'us') { out.push('united', 'states'); continue; }
+    out.push(t);
+  }
+  return out.join(' ');
 }
 
 // Attach a grounding source + citation to a fact. source: {kind, ref?, excerpt?}
@@ -226,7 +240,7 @@ function factsForPrompt({ limit = 10 } = {}) {
 
 module.exports = {
   TRUST, GROUNDED, normalizeName, isEpistemic, trust,
-  recordEntity, recordRelation,
+  normalizeName, recordEntity, recordRelation,
   promoteEntityProposal, promoteRelationProposal, rejectEntityProposal, rejectRelationProposal,
   reconcileRelation, reconcileEntity, reconcileAttendance,
   getEntity, neighbors, counts, topFacts, attachSource, factsForPrompt,
