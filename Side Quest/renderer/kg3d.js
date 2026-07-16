@@ -40,7 +40,7 @@ const KIND_META = {
   'edge.born': ['link', '#60a5fa'], 'edge.promote': ['link+', '#818cf8'], 'edge.prune': ['unlink', '#94a3b8'],
   'match.hit': ['match', '#c4b5fd'], 'recall': ['recall', '#22d3ee'], 'promote': ['promote', '#fbbf24'],
   'think': ['think', '#64748b'], 'doc.land': ['doc', '#a3e635'], 'news': ['news', '#f472b6'], 'observe': ['observe', '#a8a29e'],
-  'audit.clean': ['clean', '#facc15'],
+  'audit.clean': ['clean', '#facc15'], 'note': ['note', '#cbd5e1'], 'reflect': ['reflect', '#f0abfc'], 'self': ['self', '#fda4af'],
 };
 const pad2 = (n) => (n < 10 ? '0' + n : '' + n);
 function logActivity(evt) {

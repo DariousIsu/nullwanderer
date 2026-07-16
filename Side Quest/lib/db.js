@@ -623,6 +623,12 @@ function getRecentDisplayTurns(n) {
   return rows.reverse();
 }
 
+// kg:activity tap — surface a short-term (sq.db) memory write onto the KG activity bus (→ the live log dock).
+// Safe-with-no-receiver (global.__emitKgActivity only exists in the Electron main process) + never throws into
+// the DB write path. Broadens the log toward "everything that happens in short-term memory".
+function _kgTap(kind, anchor, extra) {
+  try { const f = global.__emitKgActivity; if (typeof f === 'function') f(Object.assign({ db: 'sidequest', kind, anchor: anchor == null ? '' : String(anchor).slice(0, 120), count: 1 }, extra || {})); } catch (e) {}
+}
 let _lastThinkEmit = 0;   // kg:activity think throttle — the monologue firehose becomes an ambient pulse, not a strobe
 function insertMonologue({ content, model = null, feedContext = null, type = 'thought', query = null, urls = null, importance = null }) {
   const ts = Date.now();
@@ -948,6 +954,7 @@ function insertReflection({ promptUsed, content, sourceTurnStart, sourceTurnEnd,
   const info = getDb()
     .prepare('INSERT INTO reflections (ts, prompt_used, content, source_turn_start, source_turn_end, model) VALUES (?, ?, ?, ?, ?, ?)')
     .run(ts, promptUsed, content, sourceTurnStart, sourceTurnEnd, model);
+  _kgTap('reflect', content);
   return { id: info.lastInsertRowid, ts };
 }
 
@@ -1197,6 +1204,7 @@ function insertKnowledge({ kind = 'note', content, embedding = null, source = nu
     .run(kind, content, embedding, source, importance, ts, links ? JSON.stringify(links) : null, provenance ? JSON.stringify(provenance) : null, level, parentId);
   const id = info.lastInsertRowid;
   try { getDb().prepare('INSERT INTO knowledge_fts(rowid, content) VALUES (?, ?)').run(id, content); } catch {}
+  _kgTap('note', '[' + kind + '] ' + String(content || ''));
   return { id, ts };
 }
 
@@ -1211,6 +1219,7 @@ function insertDocument({ title = null, body, source = null, ref = null, underst
     .prepare(`INSERT INTO documents (title, body, source, ref, understanding, parent_id, version, promoted, created_ts, updated_ts)
       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`)
     .run(title, String(body), source, ref, understanding, parentId, version, ts, ts);
+  _kgTap('doc.land', title || ref || ('#' + info.lastInsertRowid));
   return { id: info.lastInsertRowid, ts };
 }
 
@@ -1380,6 +1389,7 @@ function insertSelfModel({ category = 'insight', content, embedding = null, impo
     .prepare(`INSERT INTO self_model (category, content, embedding, importance, mentions, created_ts, updated_ts, epistemic)
       VALUES (?, ?, ?, ?, 1, ?, ?, ?)`)
     .run(category, content, embedding, importance, ts, ts, epistemic);
+  _kgTap('self', content);
   return { id: info.lastInsertRowid, ts };
 }
 
@@ -1789,6 +1799,7 @@ function recordKgObservation({ feed, sourceEntity, relation = null, target = nul
        (feed, source_entity, relation, target, value, url, grade, confidence, kind, status, substantiation_state, frame, obs_key, captured_at)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(feed, sourceEntity, relation, target, value, url, grade, confidence, kind, status, substantiationState, frame, obsKey, ts);
+  if (info.changes > 0) _kgTap('observe', sourceEntity + (relation ? ' ' + relation + (target ? ' ' + target : '') : ''));
   return { id: info.lastInsertRowid, inserted: info.changes > 0 };
 }
 function listKgObservations({ sourceEntity = null, feed = null, status = null, limit = 200 } = {}) {
