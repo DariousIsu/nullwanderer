@@ -77,7 +77,7 @@ const Graph = window.ForceGraph3D()(graphEl)
   .nodeColor(nodeColor)
   .nodeVal(nodeVal)
   .nodeOpacity(0.92)
-  .nodeResolution(8)
+  .nodeResolution(6)
   .nodeRelSize(3)
   .nodeLabel((n) => `${n.id}${n.entityType ? ' · ' + n.entityType : ''}${(n.store === 'sidequest' && n.epistemic) ? ' · ' + n.epistemic : ''}`)
   .linkColor(linkColor)
@@ -89,7 +89,7 @@ try { Graph.d3Force('charge').strength(-40); } catch (e) {}   // a touch more sp
 
 // ---- UnrealBloom: the glow the 2D shadowBlur faked, one GPU pass ----
 try {
-  const bloom = new window.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.35, 0.2);   // strength/radius down + threshold up → only bright cores bloom, background stays dark space
+  const bloom = new window.UnrealBloomPass(new THREE.Vector2(Math.round(window.innerWidth / 2), Math.round(window.innerHeight / 2)), 0.55, 0.35, 0.2);   // HALF-RES bloom (GPU-memory saver on the shared process) + only bright cores bloom, background stays dark
   Graph.postProcessingComposer().addPass(bloom);
 } catch (e) { console.warn('[kg3d] bloom failed:', e && e.message); }
 
@@ -131,16 +131,24 @@ function ensureObj(n, seed) {
   return o;
 }
 
+const NODE_CAP = 800;   // hard bound on rendered nodes — the SHARED GPU process also drives video + the VRM avatar,
+                        // so an unbounded corpus pull can exhaust it and crash. Keep core + focal + top-degree corpus.
 function render() {
   const ids = new Set();
   for (const id of (mode === 'overview' ? full : world.nodes)) ids.add(id);
   for (const id of shortTerm.nodes) ids.add(id);
-  const nodes = [];
-  for (const id of ids) { const o = objs.get(id); if (o) { o.isFocal = (id === focalId); nodes.push(o); } }
+  let list = []; for (const id of ids) { const o = objs.get(id); if (o) list.push(o); }
+  if (list.length > NODE_CAP) {
+    const rank = (o) => (o.store === 'sidequest' || o.id === focalId) ? 1e9 : (o.degree || 0);   // never drop the core/focal
+    list.sort((a, b) => rank(b) - rank(a));
+    list = list.slice(0, NODE_CAP);
+  }
+  const keep = new Set(list.map((o) => o.id));
+  const nodes = []; for (const o of list) { o.isFocal = (o.id === focalId); nodes.push(o); }
   const links = [];
   const linkSrc = mode === 'overview' ? overviewLinks : [...world.links.values()];
-  for (const l of linkSrc) if (ids.has(l.source) && ids.has(l.target)) links.push({ source: l.source, target: l.target, category: l.category, color: l.color, relType: l.relType });
-  for (const m of shortTerm.links.values()) if (ids.has(m.s) && ids.has(m.t)) links.push({ source: m.s, target: m.t, category: m.category, relType: m.relType });
+  for (const l of linkSrc) if (keep.has(l.source) && keep.has(l.target)) links.push({ source: l.source, target: l.target, category: l.category, color: l.color, relType: l.relType });
+  for (const m of shortTerm.links.values()) if (keep.has(m.s) && keep.has(m.t)) links.push({ source: m.s, target: m.t, category: m.category, relType: m.relType });
   Graph.graphData({ nodes, links });
   try { buildTendrils(); } catch (e) {}   // refresh hidden-connection tendrils for the new node set (throttled)
 }

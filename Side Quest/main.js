@@ -3581,7 +3581,7 @@ ipcMain.handle('kg:overview', async () => {
   try {
     if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
     const callTool = pollCallTool();
-    const payload = await callTool('graph_overview', { per_type_k: 40, recent_k: 200, recent_window_days: 30 });   // way more of the corpus → a dense enveloping cloud (3D handles it)
+    const payload = await callTool('graph_overview', { per_type_k: 14, recent_k: 80, recent_window_days: 30 });   // denser cloud, but bounded — the shared GPU process also drives video + the VRM avatar
     const g = kgView.buildOverview(payload);
     return { ok: true, nodes: g.nodes, links: g.links, availableTypes: kgView.availableTypes('overview', payload), legend: kgView.legend(),
       stats: { totalEntities: (payload && payload.total_entities) || g.nodes.length, totalRelations: (payload && payload.total_relations) || g.links.length } };
@@ -3628,7 +3628,7 @@ ipcMain.handle('kg:search', async (_e, { query } = {}) => {
 // render. Local DB only (no Echo dependency); tagged store:'sidequest' + epistemic for the layer styling.
 ipcMain.handle('kg:shortterm', async () => {
   try {
-    const ents = db.graphListEntities({ limit: 250 });              // most-recent local entities (id DESC) — denser core
+    const ents = db.graphListEntities({ limit: 160 });              // most-recent local entities (id DESC) — denser core, bounded
     const byId = new Map(ents.map(e => [e.id, e]));
     const rels = db.graphRelationsAmong([...byId.keys()]);
     const docs = db.recentDocuments(40, { unpromotedOnly: true });  // fresh material still in the short-term buffer
