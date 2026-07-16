@@ -100,6 +100,28 @@ const blockOf = (list) => ({ byBlock: async () => list, byNameKey: async () => l
   // no fallback + non-merge → nil (never throws)
   ok((await G.preResolve('X', {}, { deps: {} })).status === 'nil', 'preResolve: no fallback + non-merge → nil');
 
+  // --- CANON REGISTRY (civic_canon): the surface-form hub fix ---------------------------------------
+  console.log('== preResolve + civic_canon (hub bodies) ==');
+  // "United States Senate" carries NO id in its surface form, and BM25 buries the canonical node. The registry
+  // stamps Q66096 → the gate's strong-id block finds "United States Senate [wd:Q66096]" → Tier-1 MERGE (reuse),
+  // NOT a re-mint. Only byStrongId(Q66096) returns the node (name/block blockers return nothing) — proving the
+  // merge came from the canon-stamped id, not a name match.
+  const senDeps = { byStrongId: async (_s, id) => (id === 'Q66096' ? [{ id: 1631718, name: 'United States Senate [wd:Q66096]' }] : []) };
+  fbCalls = 0;
+  const pc1 = await G.preResolve('United States Senate', {}, { deps: senDeps, fallback });
+  ok(pc1.status === 'resolved' && pc1.object.id === 1631718 && pc1.via === 'gate:canon' && fbCalls === 0,
+    'canon: "United States Senate" strong-id-merges into the QID node (via gate:canon); fallback NOT called');
+  const pc2 = await G.preResolve('U.S. Senate', {}, { deps: senDeps, fallback });
+  ok(pc2.status === 'resolved' && pc2.object.id === 1631718, 'canon: the abbreviated "U.S. Senate" resolves to the SAME canonical node (dedup)');
+  // off-registry name → registry returns null → unchanged behavior (no candidates → falls through to fallback)
+  fbCalls = 0;
+  const pc3 = await G.preResolve('Sacramento Metropolitan Utility District', {}, { deps: senDeps, fallback });
+  ok(pc3.mention === 'fb' && fbCalls === 1, 'canon: an off-registry org is untouched → falls through to the existing resolver');
+  // a person-typed mention never canon-routes (guard) → falls through
+  fbCalls = 0;
+  await G.preResolve('United States Senate', { preferType: 'person' }, { deps: senDeps, fallback });
+  ok(fbCalls === 1, 'canon: person-typed mention does NOT canon-route (falls through)');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

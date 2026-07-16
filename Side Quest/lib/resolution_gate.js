@@ -80,9 +80,18 @@ async function resolveEdgeEndpoints(edge = {}, deps = {}) {
 // to ids yet — the gate uses block+match precision, which is the bulk of the anti-dup win).
 async function preResolve(name, opts = {}, { deps = {}, fallback } = {}) {
   try {
-    const res = await resolveNode({ name, type: opts.preferType }, deps);
+    const incoming = { name, type: opts.preferType };
+    // CANONICAL HUB REGISTRY (civic_canon): a curated, closed set of top-level civic bodies whose surface-form
+    // variants the general resolver misses on ("United States Senate" never surfaces the canonical
+    // "United States Senate [wd:Q66096]" via BM25), so a re-ingest RE-MINTS a duplicate. A registry hit stamps
+    // the AUTHORITATIVE Wikidata id onto the record → the gate's Tier-1 strong-id block+match merges into the
+    // ONE canonical node. Off-registry names → null → NO change (the conservative default is fully preserved);
+    // this can only ever ADD a hand-verified strong-id merge.
+    const canon = require('./civic_canon').resolveCanon(name, opts.preferType);
+    if (canon) { incoming.wikidata = canon.wikidata; if (!incoming.type) incoming.type = canon.type; }
+    const res = await resolveNode(incoming, deps);
     if (res.action === 'merge' && res.target && res.target.id != null) {
-      return { status: 'resolved', object: { id: res.target.id, name: res.canonicalName || res.target.name }, via: 'gate:' + res.tier };
+      return { status: 'resolved', object: { id: res.target.id, name: res.canonicalName || res.target.name }, via: canon ? 'gate:canon' : 'gate:' + res.tier };
     }
   } catch { /* fall through to the existing resolver */ }
   if (typeof fallback === 'function') return fallback(name, opts);
