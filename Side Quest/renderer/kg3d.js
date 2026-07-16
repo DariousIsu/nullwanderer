@@ -87,11 +87,24 @@ const Graph = window.ForceGraph3D()(graphEl)
 Graph.d3Force('core', makeCore3D(0.05));
 try { Graph.d3Force('charge').strength(-40); } catch (e) {}   // a touch more spread at corpus scale
 
-// ---- UnrealBloom: the glow the 2D shadowBlur faked, one GPU pass ----
+// ---- UnrealBloom is OFF BY DEFAULT. It's a heavy per-frame multi-target postprocess, and the KG surface
+// shares ONE Electron GPU process with live video + the VRM avatar — a full bloom pass CRASHED that shared
+// process (2026-07-12). Opt in only after proving headroom (localStorage kg3d.bloom='1'); even then half-res +
+// high threshold. Without it the scene still has additive gesture/tendril glow, just no postprocessing bloom. ----
+let bloomOn = false; try { bloomOn = localStorage.getItem('kg3d.bloom') === '1'; } catch (e) {}
+if (bloomOn) {
+  try {
+    const bloom = new window.UnrealBloomPass(new THREE.Vector2(Math.round(window.innerWidth / 2), Math.round(window.innerHeight / 2)), 0.55, 0.35, 0.2);
+    Graph.postProcessingComposer().addPass(bloom);
+  } catch (e) { console.warn('[kg3d] bloom failed:', e && e.message); }
+}
+// WebGL context-loss guard: a GPU hiccup on the shared process must NOT hard-crash the surface. Swallow the
+// default (which would kill the context permanently) so it can restore, and re-render on recovery.
 try {
-  const bloom = new window.UnrealBloomPass(new THREE.Vector2(Math.round(window.innerWidth / 2), Math.round(window.innerHeight / 2)), 0.55, 0.35, 0.2);   // HALF-RES bloom (GPU-memory saver on the shared process) + only bright cores bloom, background stays dark
-  Graph.postProcessingComposer().addPass(bloom);
-} catch (e) { console.warn('[kg3d] bloom failed:', e && e.message); }
+  const cvEl = Graph.renderer().domElement;
+  cvEl.addEventListener('webglcontextlost', (e) => { e.preventDefault(); console.warn('[kg3d] WebGL context lost — preventing hard-crash, awaiting restore'); }, false);
+  cvEl.addEventListener('webglcontextrestored', () => { console.info('[kg3d] WebGL context restored'); try { render(); } catch (e) {} }, false);
+} catch (e) {}
 
 // ---- Follow: camera flies to big pulls + subconscious focus-moves (being "taken to where data erupts") ----
 let follow = false;
