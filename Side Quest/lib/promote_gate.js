@@ -2,29 +2,36 @@
 /**
  * lib/promote_gate.js — the confidence + domain gate that closes the landing loop.
  *
- * The audit's core failure: proposals accrue in tenant staging but nothing lands
- * in civic_graph (operator-gated by design — good — but the loop never closes).
- * With the confidence engine (C1–C4) live, we tell the OPERATOR which queued
- * proposals are safe to bulk-promote — ranked purely on CONFIDENCE (is it true /
- * well-sourced), which is what "safe to promote" means:
+ * SUBSTANTIATION INVERSION (Lucas 2026-07-15, decision #1; docs/SUBSTANTIATION_GRADING_DESIGN.md §4):
+ * grade is a PRIORITY tag, NOT a gate. Anything SUBSTANTIATED (source-vouched or identity-confirmed) is safe
+ * to promote at ANY confidence — the calibrated confidence rides along as an EXPLORE-PRIORITY score (a LOW
+ * grade means "dig here first", never "reject"). Only the UNSUBSTANTIATED stay short-term (prove-or-fade;
+ * Slice 4 proves them, Slice 6 fades them). A thin BOTTOM FLOOR remains: a junk/spoofed source can't vouch,
+ * so it never counts as substantiated. This REPLACES the old 0.90 calibrated-confidence floor — which parked
+ * a lone authoritative source forever ("local official on their one .gov page").
  *
- *   promote  — trustworthy: calibrated confidence in the A-band
- *   review   — mid-band: worth an operator glance
- *   hold     — below floor: chase corroboration / a better source first
+ *   promote  — SUBSTANTIATED (a real non-junk source, or resolved to a known node) → promotes at ANY
+ *              confidence; OR an ungrounded-but-confident claim (kept from the old floor) that ingest_lane
+ *              then routes to RESEARCH to find its citation before it can auto-promote (the grounding anchor).
+ *   review   — mid-band unsubstantiated → an operator glance / research to corroborate
+ *   hold     — thin / uncited / junk-only → stays short-term, prove-or-fade
  *
- * TOPIC IS NOT A GATE. This is a living graph — it absorbs and expands ANYTHING
- * it's handed (a World-Cup match can be a major political story; a celebrity's
- * connections matter the moment they're across a table from you). Domain and
- * quality are ORTHOGONAL: confidence answers "is it true?", topic answers "how
- * central is it?" — the latter never discards an edge, it only helps the operator
- * prioritize the civic core. So `classify` attaches a `domain` TAG ('civic' |
- * 'off-domain') but NEVER rejects on it. Promotion itself stays the operator's
- * action (Skuld charter: no silent auto-promote). Pure + deterministic.
+ * The INVERSION removes the 0.90 floor for SUBSTANTIATED proposals ONLY (the fix: a lone authoritative source
+ * promotes without the 2nd source it can never get). UNSUBSTANTIATED proposals KEEP the confidence-band
+ * routing so the prove-or-fade path still runs (research_lane citation-finding now; Slice-4 async lane later).
+ * The grounding anchor is preserved downstream: ingest_lane auto-promotes the `promote` band only when the
+ * proposal ALSO carries a real citation — so nothing ungrounded slips through to the live graph.
+ *
+ * TOPIC IS NOT A GATE. This is a living graph — it absorbs and expands ANYTHING it's handed. Domain and
+ * substantiation are ORTHOGONAL: substantiation answers "is it real/backed?", topic answers "how central?"
+ * — the latter never discards an edge, only helps prioritize the civic core. So `classify` attaches a
+ * `domain` TAG ('civic' | 'off-domain') but NEVER rejects on it. Pure + deterministic.
  */
 
 const { isCivic } = require('./civic_domain');
 const { calibratedConfidence } = require('./confidence_model');
 const { corroborationCount } = require('./corroboration');
+const substantiation = require('./substantiation');   // Slice 3 — the state classifier the inversion gates on
 
 // Decision bands over calibrated P(true).
 const PROMOTE_FLOOR = 0.90;   // A-band: multi-source-corroborated or A-grade single source
@@ -59,22 +66,54 @@ function _names(p) {
   return [p && p.name, p && p.source_name, p && p.target_name].filter(Boolean);
 }
 
+// The proposal's provenance, shaped for the substantiation classifier: the cited source_set (as {url}
+// records for the junk-host check), a single url, and the producing feed. Reads either the parsed metadata
+// or the raw fields, mirroring effectiveConfidence/isGrounded.
+function _provenance(p) {
+  const meta = _meta(p) || {};
+  const ss = Array.isArray(meta.source_set) ? meta.source_set
+    : (Array.isArray(p && p.source_set) ? p.source_set : null);
+  const sources = ss ? ss.map((u) => ({ url: u })) : null;
+  const url = (p && p.url) || meta.url || null;
+  const feed = (p && (p.feed || p.source)) || meta.feed || null;
+  return { url, sources, feed };
+}
+
+// The substantiation STATE of a promotion proposal (Slice 3). source-vouched when a real non-junk citation
+// backs it; identity-confirmed when it resolved to a known node; else unsubstantiated. This is what the
+// inversion gates on — grade/confidence is priority, not the gate.
+function substantiationState(p) {
+  const { url, sources, feed } = _provenance(p);
+  return substantiation.classifySubstantiation({ resolved: !!(p && p.resolved === true), url, sources, feed });
+}
+
 function classify(p, { promoteFloor = PROMOTE_FLOOR, reviewFloor = REVIEW_FLOOR } = {}) {
-  // Domain is a TAG, never a veto — a sports/celebrity edge can carry real civic
-  // weight, and its truthfulness (confidence) is independent of its topic. We record
-  // the domain so the operator can prioritize the civic core, but the DECISION is
-  // confidence-only. An off-domain endpoint tags the whole proposal off-domain.
+  // Domain is a TAG, never a veto — a sports/celebrity edge can carry real civic weight, and its reality
+  // (substantiation) is independent of its topic. We record the domain so the operator can prioritize the
+  // civic core, but the DECISION is substantiation-first. An off-domain endpoint tags the proposal off-domain.
   let domain = 'civic', domainReason = null;
   for (const nm of _names(p)) {
     const d = isCivic({ name: nm });
     if (!d.civic) { domain = 'off-domain'; domainReason = d.reason; break; }
   }
   const tag = { domain, domainReason };
-  const conf = effectiveConfidence(p);
-  if (!(conf >= 0)) return { decision: 'hold', reason: 'no-confidence', confidence: null, ...tag };
-  if (conf >= promoteFloor) return { decision: 'promote', reason: 'trustworthy', confidence: conf, ...tag };
-  if (conf >= reviewFloor) return { decision: 'review', reason: 'mid-band', confidence: conf, ...tag };
-  return { decision: 'hold', reason: 'below-floor', confidence: conf, ...tag };
+  const conf = effectiveConfidence(p);                 // now the EXPLORE-PRIORITY score, not a hard gate
+  const state = substantiationState(p);
+  // DECISION #1 INVERSION (the core change): a SUBSTANTIATED proposal (real non-junk source, or resolved to a
+  // known node) promotes at ANY confidence — the calibrated confidence becomes an explore-priority score, not
+  // a floor. This lifts a lone authoritative/cited source over the old 0.90 bar (which parked "the official's
+  // one .gov page" forever). A junk-only source never substantiates (classifySubstantiation = the bottom floor).
+  if (substantiation.isSubstantiated(state)) {
+    return { decision: 'promote', reason: 'substantiated', state, confidence: (conf >= 0 ? conf : null), ...tag };
+  }
+  // UNSUBSTANTIATED (uncited / inferred / junk-only): KEEP the confidence-band routing so the prove-or-fade
+  // path still runs — an ungrounded-but-confident claim is routed to RESEARCH to find a real citation
+  // (ingest_lane's grounding gate) before it can auto-promote; a thin one holds. Slice-4's async lane also
+  // proves these from the observation ledger. Grade/confidence still rides as the priority score.
+  if (!(conf >= 0)) return { decision: 'hold', reason: 'no-confidence', state, confidence: null, ...tag };
+  if (conf >= promoteFloor) return { decision: 'promote', reason: 'confident-ungrounded', state, confidence: conf, ...tag };
+  if (conf >= reviewFloor) return { decision: 'review', reason: 'mid-band', state, confidence: conf, ...tag };
+  return { decision: 'hold', reason: 'below-floor', state, confidence: conf, ...tag };
 }
 
 // Partition a queue into buckets + counts. The operator promotes the `promote`
@@ -95,4 +134,4 @@ function gate(proposals, opts = {}) {
   return out;
 }
 
-module.exports = { PROMOTE_FLOOR, REVIEW_FLOOR, effectiveConfidence, classify, gate };
+module.exports = { PROMOTE_FLOOR, REVIEW_FLOOR, effectiveConfidence, substantiationState, classify, gate };

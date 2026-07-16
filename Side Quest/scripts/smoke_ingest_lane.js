@@ -26,18 +26,22 @@ ok(L.isGrounded({ metadata: { source_set: [''] } }) === false, 'an empty source 
 // --- threeBand -------------------------------------------------------------------------------------
 console.log('== threeBand ==');
 ok(L.threeBand(grounded(0.96)) === 'promote', 'high confidence + grounded → PROMOTE');
-ok(L.threeBand(ungrounded(0.96)) === 'research', 'high confidence but UNGROUNDED → RESEARCH (never auto-promote on no source)');
-ok(L.threeBand(grounded(0.80)) === 'research', 'mid-band (0.72–0.90) → RESEARCH (close the gap)');
-ok(L.threeBand(grounded(0.50)) === 'park', 'below floor → PARK');
-ok(L.threeBand({ name: 'X', metadata: {} }) === 'park', 'no confidence at all → PARK');
+ok(L.threeBand(ungrounded(0.96)) === 'research', 'high confidence but UNGROUNDED → RESEARCH (never auto-promote on no source — grounding anchor)');
+// INVERSION (decision #1): a GROUNDED (real-source = substantiated) proposal promotes at ANY confidence —
+// the 0.90 floor no longer parks a single-source fact; its confidence is now just an explore-priority score.
+ok(L.threeBand(grounded(0.80)) === 'promote', 'inversion: grounded mid-band (0.80) now PROMOTES (single source substantiates — no corroboration floor)');
+ok(L.threeBand(grounded(0.50)) === 'promote', 'inversion: grounded low-confidence (0.50) still PROMOTES (grade = priority, not gate)');
+ok(L.threeBand({ name: 'X', metadata: {} }) === 'park', 'no source AND no confidence → PARK');
 
 // --- planBands (partition) -------------------------------------------------------------------------
 console.log('== planBands ==');
 const queue = [grounded(0.97, 'A'), grounded(0.95, 'B'), ungrounded(0.95, 'C'), grounded(0.80, 'D'), grounded(0.40, 'E')];
 const plan = L.planBands(queue);
-ok(plan.counts.promote === 2 && plan.counts.research === 2 && plan.counts.park === 1, 'planBands partitions the queue: 2 promote / 2 research / 1 park');
+// post-inversion: all 4 GROUNDED items promote (substantiated, any confidence); the 1 ungrounded-but-confident
+// item routes to research (grounding gate). Nothing parks here — a thin+unsourced item would.
+ok(plan.counts.promote === 4 && plan.counts.research === 1 && plan.counts.park === 0, 'planBands partitions the queue: 4 promote (grounded) / 1 research (ungrounded) / 0 park');
 ok(plan.promote.every((p) => L.isGrounded(p)) , 'planBands: every promote-band item is grounded (the invariant holds)');
-ok(plan.promote.length === 2 && plan.promote[0].name === 'A', 'planBands: the promote bucket carries the actual proposals');
+ok(plan.promote.length === 4 && plan.promote[0].name === 'A', 'planBands: the promote bucket carries the actual proposals');
 
 // --- drainUntilEmpty (chunked drain-until-empty) ---------------------------------------------------
 (async () => {

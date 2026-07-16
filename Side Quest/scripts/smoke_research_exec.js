@@ -51,11 +51,16 @@ ok(X.tokenJudge('Acme funds Senator Doe', 'An unrelated article about weather in
   ok((await X.makeVerifyCitation({ search: searchC, fetch: fetchNo })({ claim: 'Widget links to Gadget' })).verified === false, 'verify-citation: a fetched page that does NOT support → not verified (page must corroborate)');
 
   console.log('== END-TO-END: executors driving research_lane.runResearchItem ==');
-  // a mid-band fact (grade B, 1 source) → corroborate finds 2 independent → crosses the bar → PROMOTE
+  // INVERSION: a single-source grade-B fact is SUBSTANTIATED → promotes directly, no research needed.
   const midband = { name: 'Acme PAC', source_name: 'Acme PAC', target_name: 'Sen. Doe', relation: 'FUNDS', metadata: { grade: 'B', source_set: ['https://a.com/x'] } };
+  const e0 = await R.runResearchItem(midband, { search: X.makeCorroborate({ search: async () => [], existing: midband.metadata.source_set }) });
+  ok(e0.outcome === 'promote' && e0.attempts === 0, 'END-TO-END: a substantiated single-source fact promotes directly — no research needed (the inversion)');
+
+  // an UNGROUNDED mid-band fact IS researched: corroborate finds independent sources → grounded → PROMOTE
+  const ungMid = { name: 'Faint Claim', source_name: 'Faint Claim', target_name: 'Some Body', relation: 'RELATED_TO', confidence: 0.8, metadata: {} };
   const search3ind = async () => [{ url: 'https://reuters.com/a' }, { url: 'https://apnews.com/b' }, { url: 'https://bbc.co.uk/c' }];
-  const e1 = await R.runResearchItem(midband, { search: X.makeCorroborate({ search: search3ind, existing: midband.metadata.source_set }) });
-  ok(e1.outcome === 'promote' && ingest.threeBand(e1.proposal) === 'promote', 'END-TO-END corroboration: mid-band fact + 3 independent web sources → PROMOTE');
+  const e1 = await R.runResearchItem(ungMid, { search: X.makeCorroborate({ search: search3ind }) });
+  ok(e1.outcome === 'promote' && ingest.threeBand(e1.proposal) === 'promote', 'END-TO-END corroboration: an ungrounded mid-band fact + independent web sources → grounded → PROMOTE');
 
   const ungrounded = { name: 'Widget', source_name: 'Widget', target_name: 'Gadget', relation: 'LINKED_TO', confidence: 0.95, metadata: {} };
   // the page must support the claim AS THE LOOP GENERATES IT ("Widget linked to Gadget" from LINKED_TO)
@@ -63,8 +68,8 @@ ok(X.tokenJudge('Acme funds Senator Doe', 'An unrelated article about weather in
   const e2 = await R.runResearchItem(ungrounded, { verifyCitation: X.makeVerifyCitation({ search: searchC, fetch: fetchE2E }) });
   ok(e2.outcome === 'promote' && ingest.isGrounded(e2.proposal), 'END-TO-END citation: ungrounded promote-band + a confirmed fetched citation → grounded → PROMOTE');
 
-  const e3 = await R.runResearchItem(midband, { search: X.makeCorroborate({ search: async () => [], existing: midband.metadata.source_set }) });
-  ok(e3.outcome === 'park' && e3.reason === 'no-external-found', 'END-TO-END: search finds nothing → PARK (never invents corroboration)');
+  const e3 = await R.runResearchItem(ungMid, { search: X.makeCorroborate({ search: async () => [] }) });
+  ok(e3.outcome === 'park' && e3.reason === 'no-external-found', 'END-TO-END: an ungrounded fact whose research finds nothing → PARK (never invents a source)');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
