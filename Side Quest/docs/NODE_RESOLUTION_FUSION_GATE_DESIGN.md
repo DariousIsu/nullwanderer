@@ -12,6 +12,17 @@
 > steps. 6 claims are fully cross-verified (3-vote); the rest are quoted from primary sources but not
 > machine-verified. Cross-check the ⚠ items against the papers before relying on exact numbers.
 
+## STATUS (2026-07-16): BUILT + WIRED, reboot-pending
+
+All stages implemented as pure, smoke-tested libs and wired into both paths (commits `3610ca8`→`67d0947`;
+full offline gate 192/192; validated read-only on live Echo with **zero false merges**):
+`entity_match` (1) · `entity_block` (2) · `entity_collective` (3) · `entity_fuse` (4) · `resolution_gate`
+(5a, composed + `resolveEdgeEndpoints` + `preResolve`) · `resolution_live` (live Echo deps). Wired live in
+`main.js`: the promote-up bridge (`proposeEchoRelationFn` → `resolveEdgeEndpoints`) and the doc-decompose
+write path (`resolve` dep → `preResolve`, gate-first with `resolveMention` fallback). Reboot activates it.
+Follow-ons: write-path collective context (joint doc resolution), Echo entity search recall (the backlog
+auto-drain limiter). See [[node-resolution-fusion-gate]] + [[session-handoff-2026-07-16]].
+
 ## 0. Where it sits — extends the substantiation pipeline, doesn't replace it
 
 Slices 1-6 (substantiation) already do **resolve-or-mint + prove/fade**, but they MINT on a resolver miss with
