@@ -16,7 +16,15 @@ const SQ_VIOLET = '#a78bfa', ECHO_SKY = '#7dd3fc';
 const graphEl = document.getElementById('graph3d');
 const overlayEl = document.getElementById('overlay');
 const hudEl = document.getElementById('hud');
-function setOverlay(msg) { if (!overlayEl) return; overlayEl.style.display = msg ? 'flex' : 'none'; if (msg) overlayEl.textContent = msg; }
+const qEl = document.getElementById('q'), ddEl = document.getElementById('dd'), hopsEl = document.getElementById('hops');
+const backBtn = document.getElementById('backBtn'), followBtn = document.getElementById('followBtn');
+function setBack(on) { if (backBtn) backBtn.hidden = !on; }
+let _overlayMsg = null;
+function setOverlay(msg, ms) {
+  if (!overlayEl) return; _overlayMsg = msg;
+  overlayEl.style.display = msg ? 'flex' : 'none'; if (msg) overlayEl.textContent = msg;
+  if (msg && ms) setTimeout(() => { if (_overlayMsg === msg) { overlayEl.style.display = 'none'; _overlayMsg = null; } }, ms);
+}
 
 const linkEnd = (e) => (e && typeof e === 'object') ? e.id : e;
 
@@ -80,30 +88,117 @@ try { follow = localStorage.getItem('kg3d.follow') === '1'; } catch (e) {}
 function setFollow(on) { follow = !!on; try { localStorage.setItem('kg3d.follow', on ? '1' : '0'); } catch (e) {} return follow; }
 function flyTo(pos, ms) { try { Graph.cameraPosition({ x: pos.x, y: pos.y, z: pos.z + 190 }, pos, ms || 1100); } catch (e) {} }
 
-// ---- data load: overview (Echo corpus) + shortterm (Side Quest core), merged into one two-source set ----
-async function loadGraph() {
-  setOverlay('Loading corpus…');
-  const nodes = [], links = [], byId = new Map();
-  const add = (nd) => { if (!byId.has(nd.id)) { byId.set(nd.id, nd); nodes.push(nd); } return byId.get(nd.id); };
+// ============================================================================================================
+// DATA MODEL (Phase 4/5) — one object store keyed by id (positions persist across walks + mode switches), an
+// overview set, a persistent ego WORLD (accumulates walked neighbourhoods, LRU-capped), and the short-term
+// layer (always merged as the core). render() assembles graphData for the active mode + short-term. Mirrors the
+// 2D full/world/withShortTerm design so ego-walk, Follow, and the reconciler behave the same.
+// ============================================================================================================
+const objs = new Map();                        // id → node object (single source of truth for position)
+let mode = 'overview', focalId = null, submitted = '';
+const full = new Set();                         // overview node ids
+const overviewLinks = [];                       // overview links
+const world = { nodes: new Set(), links: new Map() };   // ego-walked ids + accumulated links
+const shortTerm = { nodes: new Set(), links: new Map() };
+const WORLD_CAP = 320;
+
+function ensureObj(n, seed) {
+  let o = objs.get(n.id);
+  if (o) {
+    if (n.entityType) o.entityType = n.entityType;
+    if (n.color) o.color = n.color;
+    if (n.summary) o.summary = n.summary;
+    if (typeof n.degree === 'number') o.degree = n.degree;
+    if (n.store) o.store = n.store;
+    if (n.epistemic) o.epistemic = n.epistemic;
+    o.touchedAt = performance.now();
+    return o;
+  }
+  o = { id: n.id, store: n.store || 'echo', entityType: n.entityType, color: n.color, summary: n.summary, degree: n.degree, epistemic: n.epistemic, touchedAt: performance.now() };
+  if (seed) { o.x = seed.x + (Math.random() - 0.5) * 40; o.y = seed.y + (Math.random() - 0.5) * 40; o.z = (seed.z || 0) + (Math.random() - 0.5) * 40; }
+  objs.set(n.id, o);
+  return o;
+}
+
+function render() {
+  const ids = new Set();
+  for (const id of (mode === 'overview' ? full : world.nodes)) ids.add(id);
+  for (const id of shortTerm.nodes) ids.add(id);
+  const nodes = [];
+  for (const id of ids) { const o = objs.get(id); if (o) { o.isFocal = (id === focalId); nodes.push(o); } }
+  const links = [];
+  const linkSrc = mode === 'overview' ? overviewLinks : [...world.links.values()];
+  for (const l of linkSrc) if (ids.has(l.source) && ids.has(l.target)) links.push({ source: l.source, target: l.target, category: l.category, color: l.color, relType: l.relType });
+  for (const m of shortTerm.links.values()) if (ids.has(m.s) && ids.has(m.t)) links.push({ source: m.s, target: m.t, category: m.category, relType: m.relType });
+  Graph.graphData({ nodes, links });
+}
+
+async function loadOverview() {
+  mode = 'overview'; submitted = ''; focalId = null; setBack(false); setOverlay('Loading corpus…');
   try {
     const ov = await window.sq.kg.overview();
+    full.clear(); overviewLinks.length = 0;
     if (ov && ov.ok) {
-      for (const n of (ov.nodes || [])) add({ id: n.id, store: 'echo', entityType: n.entityType, degree: n.degree, color: n.color, summary: n.summary });
-      for (const l of (ov.links || [])) { const s = linkEnd(l.source), t = linkEnd(l.target); if (s != null && t != null) links.push({ source: s, target: t, category: l.category, color: l.color }); }
+      for (const n of (ov.nodes || [])) { ensureObj({ id: n.id, store: 'echo', entityType: n.entityType, degree: n.degree, color: n.color, summary: n.summary }); full.add(n.id); }
+      for (const l of (ov.links || [])) { const s = linkEnd(l.source), t = linkEnd(l.target); if (s != null && t != null) overviewLinks.push({ source: s, target: t, category: l.category, color: l.color }); }
     }
   } catch (e) { console.warn('[kg3d] overview failed:', e && e.message); }
+  await pollShortTerm(true);                     // fold in the short-term core (render below paints both)
+  setOverlay((full.size || shortTerm.nodes.size) ? null : 'No graph data (Echo engine not connected?)');
+  render();
+  try { Graph.zoomToFit(600, 60); } catch (e) {}
+}
+
+function mergeEgo(res) {
+  const incoming = res.nodes || [], incLinks = res.links || [];
+  const focal = incoming.find((n) => n.isFocal) || incoming[0] || null;
+  if (focal) focalId = focal.id;
+  let seed = coreCentroid3D(); const ef = focalId && objs.get(focalId);
+  if (ef && Number.isFinite(ef.x)) seed = { x: ef.x, y: ef.y, z: ef.z || 0 };
+  const connectedTo = new Map();
+  for (const l of incLinks) { const a = linkEnd(l.source), b = linkEnd(l.target); if (a != null && b != null) { if (!connectedTo.has(a)) connectedTo.set(a, b); if (!connectedTo.has(b)) connectedTo.set(b, a); } }
+  for (const n of incoming) {
+    let s = seed; const nbr = connectedTo.get(n.id), no = nbr && objs.get(nbr);
+    if (no && Number.isFinite(no.x)) s = { x: no.x, y: no.y, z: no.z || 0 };
+    ensureObj({ id: n.id, store: n.store || 'echo', entityType: n.entityType, color: n.color, summary: n.summary, degree: n.degree }, objs.has(n.id) ? null : s);
+    world.nodes.add(n.id);
+  }
+  for (const l of incLinks) { const s = linkEnd(l.source), t = linkEnd(l.target); if (s == null || t == null) continue; const key = s + '→' + t + '::' + (l.relType || ''); if (!world.links.has(key)) world.links.set(key, { source: s, target: t, relType: l.relType, color: l.color, category: l.category }); }
+  if (world.nodes.size > WORLD_CAP) {
+    const arr = [...world.nodes].filter((id) => id !== focalId).map((id) => objs.get(id)).filter(Boolean).sort((a, b) => a.touchedAt - b.touchedAt);
+    let drop = world.nodes.size - WORLD_CAP;
+    for (const o of arr) { if (drop-- <= 0) break; world.nodes.delete(o.id); }
+  }
+}
+
+async function focus(name, opt = {}) {
+  const q = opt.query || name; submitted = name;
+  if (qEl) qEl.value = name; if (ddEl) ddEl.hidden = true; setOverlay('Walking the graph…');
   try {
-    if (window.sq.kg.shortterm) {
-      const st = await window.sq.kg.shortterm();
-      if (st && st.ok) {
-        for (const n of (st.nodes || [])) { const ex = byId.get(n.id); if (ex) { ex.store = 'sidequest'; ex.epistemic = n.epistemic; } else add({ id: n.id, store: 'sidequest', entityType: n.entityType, epistemic: n.epistemic, summary: n.summary }); }
-        for (const l of (st.links || [])) { const s = l.source, t = l.target; if (byId.has(s) && byId.has(t)) links.push({ source: s, target: t, category: l.category, relType: l.relType, cross: (byId.get(s).store === 'sidequest') !== (byId.get(t).store === 'sidequest') }); }
-      }
-    }
-  } catch (e) { console.warn('[kg3d] shortterm failed:', e && e.message); }
-  Graph.graphData({ nodes, links });
-  setOverlay(nodes.length ? null : 'No graph data (Echo engine not connected?)');
-  return { nodes, links };
+    const res = await window.sq.kg.ego(q, Number(hopsEl ? hopsEl.value : 2));
+    if (!res || !res.ok || res.error) { setOverlay((res && res.error) || 'not found', 2000); return; }
+    mergeEgo(res); mode = 'ego'; setBack(true); setOverlay(null); render();
+    const f = objs.get(focalId); if (f && Number.isFinite(f.x)) flyTo(V3(f), 900);
+  } catch (e) { setOverlay(String(e.message || e), 2000); }
+}
+
+// short-term RECONCILER (Phase 5): re-fetch the store, add new / prune gone, refresh links. The Slice-4 mint
+// gives instant new-write liveness; this backfills non-pushed writes + prunes removed ones. A pruned id keeps
+// its object only if the overview or a walked world node still references it.
+let _stInit = false;
+async function pollShortTerm(initial) {
+  try {
+    if (!(window.sq && window.sq.kg && window.sq.kg.shortterm)) return false;
+    const st = await window.sq.kg.shortterm(); if (!st || !st.ok) return false;
+    const seen = new Set(); const c = coreCentroid3D(); let changed = false;
+    for (const n of (st.nodes || [])) { seen.add(n.id); const had = shortTerm.nodes.has(n.id); ensureObj({ id: n.id, store: 'sidequest', entityType: n.entityType, epistemic: n.epistemic, summary: n.summary }, objs.has(n.id) ? null : c); shortTerm.nodes.add(n.id); if (!had) changed = true; }
+    for (const id of [...shortTerm.nodes]) if (!seen.has(id)) { shortTerm.nodes.delete(id); changed = true; if (!world.nodes.has(id) && !full.has(id)) objs.delete(id); }
+    shortTerm.links.clear();
+    for (const l of (st.links || [])) shortTerm.links.set(l.source + '>' + l.target, { s: l.source, t: l.target, relType: l.relType, category: l.category });
+    _stInit = true;
+    if (changed && !initial) render();
+    return changed;
+  } catch (e) { return false; }
 }
 
 // ============================================================================================================
@@ -194,9 +289,9 @@ function flushBorn() {
   else { for (const id of uniq) { const n = findNode(id); if (n) gBorn(V3(n), VHEX); } }
 }
 function mintBorn(batch) {
-  const data = Graph.graphData(), present = new Set(data.nodes.map((n) => n.id)), c = coreCentroid3D(); let minted = 0;
-  for (const e of batch) { const id = e.anchor; if (id == null || present.has(id)) continue; present.add(id); data.nodes.push({ id, store: 'sidequest', entityType: 'concept', epistemic: e.epistemic || 'told', x: c.x + (Math.random() - 0.5) * 40, y: c.y + (Math.random() - 0.5) * 40, z: c.z + (Math.random() - 0.5) * 40 }); minted++; }
-  if (minted) Graph.graphData(data);
+  const c = coreCentroid3D(); let minted = 0;
+  for (const e of batch) { const id = e.anchor; if (id == null || objs.has(id)) continue; ensureObj({ id, store: 'sidequest', entityType: 'concept', epistemic: e.epistemic || 'told' }, c); shortTerm.nodes.add(id); minted++; }
+  if (minted) render();
   return minted;
 }
 
@@ -246,8 +341,43 @@ function onFocusMove(p) {
 try { if (window.sq && window.sq.kg && typeof window.sq.kg.onActivity === 'function') window.sq.kg.onActivity(onActivity); } catch (e) {}
 try { if (window.sq && window.sq.kg && typeof window.sq.kg.onFocusMove === 'function') window.sq.kg.onFocusMove(onFocusMove); } catch (e) {}
 
-// ---- dev handle for CDP verification ----
-window.__kg3d = { Graph, reload: loadGraph, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, setFollow, camZ: () => Graph.cameraPosition().z };
+// ---- search dropdown + navigation wiring ----
+const esc = (s) => String(s == null ? '' : s).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+let hits = [], activeIdx = 0, _searchT = null;
+function renderDropdown() {
+  if (!ddEl) return;
+  if (!hits.length) { ddEl.hidden = true; return; }
+  ddEl.hidden = false;
+  ddEl.innerHTML = hits.map((h, i) => `<div class="hit${i === activeIdx ? ' on' : ''}" data-i="${i}"><span class="swatch" style="background:${h.color || '#7dd3fc'}"></span><span class="nm">${esc(h.name)}</span><span class="ty">${esc(h.entity_type)}</span></div>`).join('');
+  ddEl.querySelectorAll('.hit').forEach((el) => el.addEventListener('mousedown', (e) => { e.preventDefault(); focus(hits[Number(el.dataset.i)].name); }));
+}
+if (qEl) {
+  qEl.addEventListener('input', () => {
+    const v = qEl.value.trim();
+    if (v.length < 2) { hits = []; if (ddEl) ddEl.hidden = true; return; }
+    clearTimeout(_searchT); _searchT = setTimeout(async () => { try { const r = await window.sq.kg.search(v); hits = (r && r.hits) || []; activeIdx = 0; renderDropdown(); } catch (e) { hits = []; if (ddEl) ddEl.hidden = true; } }, 160);
+  });
+  qEl.addEventListener('keydown', (e) => {
+    if (!ddEl || ddEl.hidden || !hits.length) { if (e.key === 'Enter' && qEl.value.trim()) focus(qEl.value.trim()); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); activeIdx = (activeIdx + 1) % hits.length; renderDropdown(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); activeIdx = (activeIdx - 1 + hits.length) % hits.length; renderDropdown(); }
+    else if (e.key === 'Enter') { e.preventDefault(); hits[activeIdx] ? focus(hits[activeIdx].name) : focus(qEl.value.trim()); }
+    else if (e.key === 'Escape') ddEl.hidden = true;
+  });
+  document.addEventListener('mousedown', (e) => { if (ddEl && qEl.parentElement && !qEl.parentElement.contains(e.target)) ddEl.hidden = true; });
+}
+if (hopsEl) hopsEl.addEventListener('change', () => { if (mode === 'ego' && submitted) focus(submitted); });
+if (backBtn) backBtn.addEventListener('click', () => { if (qEl) qEl.value = ''; loadOverview(); });
+if (followBtn) {
+  const paint = () => { followBtn.classList.toggle('on', follow); followBtn.innerHTML = follow ? 'Following &#9209;' : 'Follow &#9654;'; };
+  paint();
+  followBtn.addEventListener('click', () => { setFollow(!follow); paint(); });
+}
+Graph.onNodeClick((n) => { if (n && n.id != null) focus(n.id); });
+setInterval(() => pollShortTerm(false), 5000);   // short-term reconciler (liveness + prune)
 
-loadGraph();
-console.info('[kg3d] surface build phase-3: hover labels + Follow (camera flies to supernovae + focus-moves)');
+// ---- dev handle for CDP verification ----
+window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z };
+
+loadOverview();
+console.info('[kg3d] surface build phase-4: ego-walk + search + click-to-walk + short-term reconciler');

@@ -7,15 +7,40 @@
     html, body { margin: 0; height: 100%; background: #06070b; overflow: hidden; color: #cbd5e1;
                  font: 13px system-ui, -apple-system, Segoe UI, sans-serif; }
     #graph3d { position: absolute; inset: 0; }
-    #overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
-               z-index: 20; color: #9fb2c8; font-size: 13px; pointer-events: none;
-               text-shadow: 0 1px 3px #000; }
-    #hud { position: fixed; top: 10px; left: 12px; z-index: 10; font: 11px ui-monospace, monospace;
-           color: #8fb; background: rgba(0,0,0,.4); padding: 4px 8px; border-radius: 5px; opacity: .8; }
+    .head { position: fixed; top: 0; left: 0; right: 0; z-index: 12; display: flex; align-items: center; gap: 10px;
+            padding: 8px 12px; background: linear-gradient(#06070bcc, #06070b00); pointer-events: none; }
+    .head > * { pointer-events: auto; }
+    .mark { color: #a78bfa; font-size: 15px; } .title { font-weight: 600; color: #e2e8f0; letter-spacing: .2px; }
+    .qwrap { position: relative; }
+    #q { width: 260px; background: #0d1017; border: 1px solid #232a36; color: #dbe4f0; border-radius: 7px;
+         padding: 6px 10px; font-size: 12.5px; outline: none; }
+    #q:focus { border-color: #3b4658; }
+    .dd { position: absolute; top: 34px; left: 0; width: 300px; max-height: 320px; overflow-y: auto; z-index: 20;
+          background: #0d1017; border: 1px solid #232a36; border-radius: 8px; box-shadow: 0 12px 30px #000a; }
+    .dd .hit { display: flex; align-items: center; gap: 7px; padding: 6px 10px; cursor: pointer; font-size: 12.5px; }
+    .dd .hit.on, .dd .hit:hover { background: #161b25; }
+    .dd .swatch { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+    .dd .nm { color: #dbe4f0; } .dd .ty { color: #64748b; font-size: 11px; margin-left: auto; }
+    .btn { background: #0d1017; border: 1px solid #232a36; color: #9fb0c4; border-radius: 7px; padding: 6px 11px;
+           font-size: 12px; cursor: pointer; }
+    .btn:hover { border-color: #3b4658; color: #dbe4f0; }
+    .btn.on { border-color: #a78bfa; color: #c4b5fd; background: #a78bfa1a; }
+    .lbl { color: #64748b; font-size: 11.5px; } .lbl select { background: #0d1017; border: 1px solid #232a36; color: #9fb0c4; border-radius: 5px; padding: 2px 4px; }
+    #overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 20;
+               color: #9fb2c8; pointer-events: none; text-shadow: 0 1px 3px #000; }
+    #hud { position: fixed; bottom: 8px; left: 12px; z-index: 10; font: 11px ui-monospace, monospace;
+           color: #8fb; background: rgba(0,0,0,.4); padding: 3px 8px; border-radius: 5px; opacity: .75; }
   </style>
 </head>
 <body>
   <div id="graph3d"></div>
+  <div class="head">
+    <span class="mark">&#9737;</span><span class="title">Knowledge Graph</span>
+    <div class="qwrap"><input id="q" type="text" placeholder="Focus an entity… (fuzzy search)" autocomplete="off" spellcheck="false"><div class="dd" id="dd" hidden></div></div>
+    <label class="lbl">hops <select id="hops"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option></select></label>
+    <button class="btn" id="backBtn" hidden>&larr; overview</button>
+    <button class="btn" id="followBtn" title="Follow — fly to eruptions + the idle graph-walk">Follow &#9654;</button>
+  </div>
   <div id="overlay">Loading corpus…</div>
   <div id="hud"></div>
   <script src="vendor/kg3d.bundle.js"></script>
