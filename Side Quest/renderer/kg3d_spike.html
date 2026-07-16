@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>KG 3D spike</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #06070b; overflow: hidden; }
+    #graph3d { width: 100vw; height: 100vh; }
+    #hud { position: fixed; top: 8px; left: 8px; z-index: 10; font: 12px ui-monospace, monospace;
+           color: #9fe6c8; background: rgba(0,0,0,.45); padding: 5px 9px; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <div id="hud">3D spike loading…</div>
+  <div id="graph3d"></div>
+  <script src="vendor/kg3d.bundle.js"></script>
+  <script src="kg3d_spike.js"></script>
+</body>
+</html>

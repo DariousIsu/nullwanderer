@@ -9,7 +9,8 @@
     "build:editor": "node scripts/build_editor.js",
     "build:avatar": "node scripts/build_avatar.js",
     "test": "node scripts/run_smokes.js",
-    "lint": "eslint lib main.js preload.js studio scripts renderer"
+    "lint": "eslint lib main.js preload.js studio scripts renderer",
+    "build:kg3d": "node scripts/build_kg3d.js"
   },
   "keywords": [],
   "author": "",
@@ -21,6 +22,7 @@
     "@tiptap/pm": "^3.27.1",
     "@tiptap/starter-kit": "^3.27.1",
     "@xenova/transformers": "^2.17.2",
+    "3d-force-graph": "^1.80.0",
     "better-sqlite3": "^12.11.1",
     "discord.js": "^14.16.3",
     "docx": "^9.7.1",
