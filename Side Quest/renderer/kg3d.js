@@ -28,18 +28,29 @@ function setOverlay(msg, ms) {
 
 const linkEnd = (e) => (e && typeof e === 'object') ? e.id : e;
 
-// ---- 3D core force: short-term cohesion in x/y + a z target that splits the two stores into real depth
-// (violet core to the FRONT, sky corpus receding to the BACK). The 3D descendant of makeCoreForce. ----
+// ---- 3D core force: the short-term store is a dense inner ORB pulled tight to the centre; the long-term
+// corpus is pushed radially OUTWARD toward a shell so it ENVELOPS the core as a diffuse 3D cloud (not a plane
+// behind it). Charge repulsion + links give the cloud its thickness/structure. SHELL is tunable. ----
+const CLOUD_SHELL = 320;
 function makeCore3D(strength = 0.05) {
   let ns = [];
   function force(alpha) {
-    let cx = 0, cy = 0, c = 0;
-    for (const n of ns) if (n.store === 'sidequest' && Number.isFinite(n.x)) { cx += n.x; cy += n.y; c++; }
-    if (c) { cx /= c; cy /= c; }
+    let cx = 0, cy = 0, cz = 0, c = 0;
+    for (const n of ns) if (n.store === 'sidequest' && Number.isFinite(n.x)) { cx += n.x; cy += n.y; cz += (n.z || 0); c++; }
+    if (c) { cx /= c; cy /= c; cz /= c; }
     for (const n of ns) {
-      const tz = n.store === 'sidequest' ? 140 : -80;
-      n.vz = (n.vz || 0) + (tz - (n.z || 0)) * strength * alpha;
-      if (n.store === 'sidequest' && c) { n.vx = (n.vx || 0) + (cx - n.x) * strength * alpha; n.vy = (n.vy || 0) + (cy - n.y) * strength * alpha; }
+      if (!Number.isFinite(n.x)) continue;
+      const dx = n.x - cx, dy = n.y - cy, dz = (n.z || 0) - cz, d = Math.hypot(dx, dy, dz) || 1;
+      if (n.store === 'sidequest') {                       // inner orb: pull hard to centre
+        n.vx = (n.vx || 0) + (cx - n.x) * strength * 1.6 * alpha;
+        n.vy = (n.vy || 0) + (cy - n.y) * strength * 1.6 * alpha;
+        n.vz = (n.vz || 0) + (cz - (n.z || 0)) * strength * 1.6 * alpha;
+      } else {                                             // outer cloud: ease toward the shell radius, all directions
+        const f = (CLOUD_SHELL - d) * strength * 0.35 * alpha;
+        n.vx = (n.vx || 0) + (dx / d) * f;
+        n.vy = (n.vy || 0) + (dy / d) * f;
+        n.vz = (n.vz || 0) + (dz / d) * f;
+      }
     }
   }
   force.initialize = (n) => { ns = n; };
@@ -336,7 +347,7 @@ function updateTendrils() {
   const N = 1400, pos = new Float32Array(N * 3);
   for (let i = 0; i < N; i++) { const r = 700 + Math.random() * 1500, th = Math.random() * Math.PI * 2, ph = Math.acos(2 * Math.random() - 1); pos[i * 3] = r * Math.sin(ph) * Math.cos(th); pos[i * 3 + 1] = r * Math.sin(ph) * Math.sin(th); pos[i * 3 + 2] = r * Math.cos(ph); }
   const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0x8496b8, size: 1.5, sizeAttenuation: false, transparent: true, opacity: 0.5, depthWrite: false })));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0x5a6a85, size: 1.1, sizeAttenuation: false, transparent: true, opacity: 0.22, depthWrite: false })));
 })();
 
 // --- Slice 4 optimistic mint + coalesce, ported to 3D: a pushed birth MINTS its node into graphData near the
