@@ -20,6 +20,9 @@ ok(M.parseEntity({ name: 'Kevin McCarty [wd:Q6396892]' }).ids.wikidata === 'Q639
 ok(M.parseEntity({ name: 'MR FOR OHIO STATE SENATE [FEC:C00890582]' }).ids.fec === 'C00890582', 'parse: [FEC:C…] → fec id');
 ok(M.parseEntity({ name: 'CITY OF SACRAMENTO [lda_client:119039]', type: 'organization' }).ids.lda === '119039', 'parse: [lda_client:…] → lda id');
 ok(M.parseEntity({ name: 'Elizabeth Mathis [M000244]' }).ids.bioguide === 'M000244', 'parse: [M######] → bioguide id');
+ok(M.parseEntity({ name: 'Melissa Hurtado [FEC:H4CA22120]' }).ids.fec === 'H4CA22120', 'parse: FEC CANDIDATE id [FEC:H…] → fec (not just committee C-ids)');
+ok(M.parseEntity({ name: 'Donald Rumsfeld [R000508]' }).ids.bioguide === 'R000508', 'parse: bioguide with a non-M letter [R######] → bioguide');
+ok(dec(P('Melissa Hurtado [FEC:H4CA22120]'), P('M. Hurtado [FEC:H4CA22120]')) === 'match', 'strong-id: same FEC candidate id → MATCH despite surface diff');
 ok(M.parseEntity(P('Chang (HI)')).given === null && M.parseEntity(P('Chang (HI)')).surname === 'Chang', 'parse: single-token person = surname only (no fabricated given)');
 
 // --- Tier 1: DETERMINISTIC strong-id ----------------------------------------------------------------

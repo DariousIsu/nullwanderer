@@ -39,12 +39,13 @@ function parseEntity(rec = {}) {
   // pull bracket tags → strong ids
   let s = raw.replace(/\[([^\]]+)\]/g, (_m, inner) => {
     const t = String(inner).trim(); let m;
-    if ((m = /^wd:(Q\d+)$/i.exec(t))) ids.wikidata = m[1].toUpperCase();
-    else if ((m = /^(Q\d+)$/i.exec(t))) ids.wikidata = m[1].toUpperCase();
-    else if ((m = /^(?:FEC:)?(C\d{7,})$/i.exec(t))) ids.fec = m[1].toUpperCase();
-    else if ((m = /^(M\d{6})$/i.exec(t))) ids.bioguide = m[1].toUpperCase();
+    if ((m = /^wd:(Q\d+)$/i.exec(t)) || (m = /^(Q\d+)$/i.exec(t))) ids.wikidata = m[1].toUpperCase();
+    else if ((m = /^(?:FEC:)?(C\d{7,})$/i.exec(t))) ids.fec = m[1].toUpperCase();                 // FEC committee (C0…)
+    else if ((m = /^(?:FEC:)?([HSP]\d[A-Z]{2}\d{3,})$/i.exec(t))) ids.fec = m[1].toUpperCase();     // FEC candidate (H4CA22120)
+    else if ((m = /^([A-Z]\d{6})$/.exec(t))) ids.bioguide = m[1].toUpperCase();                     // bioguide (R000508, any letter)
+    else if (/^ocd-[a-z]+\//i.test(t)) ids.ocd = t.toLowerCase();                                   // ocd-person/…
     else if ((m = /^lda_client:(\d+)$/i.exec(t))) ids.lda = m[1];
-    else if ((m = /^([0-9a-f]{8})$/i.exec(t))) ids.openstates = m[1].toLowerCase();
+    else if (/^[0-9a-f]{8}$/i.test(t)) ids.openstates = t.toLowerCase();                             // openstates uuid frag
     return ' ';
   });
   // explicit ids passed on the record (from anchored evidence, not the surface name)

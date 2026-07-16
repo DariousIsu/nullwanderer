@@ -16,15 +16,6 @@ function _parseEntities(text) {
     return arr.filter(Boolean).map((e) => ({ id: e.id, name: e.name, type: e.entity_type || e.type, degree: e.degree }));
   } catch { return []; }
 }
-// defensively collect entity ids from ANY kg_neighborhood response shape (neighbors[]/nodes[]/edges[]).
-function _collectIds(obj, out, depth) {
-  if (obj == null || depth > 4) return;
-  if (Array.isArray(obj)) { for (const x of obj) _collectIds(x, out, depth + 1); return; }
-  if (typeof obj === 'object') {
-    for (const k of ['id', 'target_id', 'source_id', 'entity_id', 'neighbor_id']) if (obj[k] != null && (typeof obj[k] === 'number' || /^\d+$/.test(String(obj[k])))) out.add(Number(obj[k]));
-    for (const v of Object.values(obj)) if (v && typeof v === 'object') _collectIds(v, out, depth + 1);
-  }
-}
 
 // makeLiveDeps(dispatch, opts) → { byStrongId, byNameKey, byBlock, byAnn, neighborsOf }.
 function makeLiveDeps(dispatch, { annK = 12, cap = 30 } = {}) {
@@ -44,13 +35,17 @@ function makeLiveDeps(dispatch, { annK = 12, cap = 30 } = {}) {
     byAnn: async (query, k) => search(query, k),
     // block key → a searchable string: "sn:howell|va" → "howell va", "tok:a b" → "a b", "sn:x|g:j" → "x j"
     byBlock: async (blockKey) => search(String(blockKey).replace(/^(sn:|tok:)/, '').replace(/\|g:/g, ' ').replace(/\|/g, ' '), annK),
+    // CIVIC neighbors as resolved entity IDS (the collective precision guard needs ids, not names). get_entity
+    // returns the entity card + its outgoing relations with target_id — the correct civic-graph neighbor set.
+    // (kg_neighborhood is the WRONG source — it returns Wikipedia-sidecar node ids, a different id space.)
     neighborsOf: async (cand) => {
-      if (typeof dispatch !== 'function' || !cand || cand.id == null) return [];
+      if (typeof dispatch !== 'function' || !cand || !cand.name) return [];
       try {
-        const r = await dispatch({ kind: 'do', name: 'kg_neighborhood', args: { entity_id: cand.id, limit: 40 } });
+        const r = await dispatch({ kind: 'do', name: 'get_entity', args: { name: cand.name } });
         if (!r || !r.ok || r.isError) return [];
-        const ids = new Set(); _collectIds(JSON.parse(r.text), ids, 0); ids.delete(Number(cand.id));
-        return [...ids];
+        const obj = JSON.parse(r.text);
+        const rels = (obj && Array.isArray(obj.relations)) ? obj.relations : [];
+        return rels.map((x) => x.target_id).filter((v) => v != null);
       } catch { return []; }
     },
   };

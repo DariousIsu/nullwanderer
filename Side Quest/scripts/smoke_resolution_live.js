@@ -25,7 +25,7 @@ ok(L._parseEntities('not json').length === 0, 'parse: bad json → [] (fail-soft
       if (q === 'Q6396892') return { ok: true, text: '[{"id":1,"name":"Kevin McCarty [wd:Q6396892]","entity_type":"person"}]' };
       return { ok: true, text: '[]' };
     }
-    if (n === 'kg_neighborhood') return { ok: true, text: '{"neighbors":[{"id":100},{"target_id":101}],"self":{"id":42}}' };
+    if (n === 'get_entity') return { ok: true, text: '{"id":42,"name":"Some Entity","relations":[{"target_id":100,"target_name":"X"},{"target_id":101,"target_name":"Y"}]}' };
     return { ok: false, isError: true, text: 'unknown' };
   };
   const deps = L.makeLiveDeps(dispatch);
@@ -43,10 +43,10 @@ ok(L._parseEntities('not json').length === 0, 'parse: bad json → [] (fail-soft
   await deps.byBlock('tok:sacramento treasury');
   ok(calls[2].args.query === 'sacramento treasury', 'byBlock: "tok:…" → the raw tokens');
 
-  // neighborsOf: extract ids from any shape, exclude self
-  const nb = await deps.neighborsOf({ id: 42 });
-  ok(nb.includes(100) && nb.includes(101) && !nb.includes(42), 'neighborsOf: extracts neighbor ids from kg_neighborhood, excludes self');
-  ok((await deps.neighborsOf({})).length === 0, 'neighborsOf: no id → [] (never dispatches)');
+  // neighborsOf: civic relation target_ids from get_entity (the correct id space for the collective guard)
+  const nb = await deps.neighborsOf({ id: 42, name: 'Some Entity' });
+  ok(nb.includes(100) && nb.includes(101), 'neighborsOf: civic relation target_ids from get_entity');
+  ok((await deps.neighborsOf({ id: 1 })).length === 0, 'neighborsOf: no name → [] (get_entity is keyed on name)');
 
   // fail-soft
   const soft = L.makeLiveDeps(async () => { throw new Error('echo down'); });
