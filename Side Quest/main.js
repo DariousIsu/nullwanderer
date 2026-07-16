@@ -2340,6 +2340,19 @@ function startDownloadsIngestWatcher() {
           for (const t of _lt) if (words.has(t)) { _leashPasses = true; break; }
         }
       } catch { _leashPasses = false; }   // FAIL CLOSED (2026-07-15): a leash-construction error must quarantine (doc still lands searchable), never fall through unleashed.
+      // SLICE 5 HARD WALL (decision #5 hybrid): a NAMED-FLOOD frame (medical/legal directory dump) that is ALSO
+      // off-domain (leash fail) is HARD-VETOED on this AUTONOMOUS download path — not even landed searchable —
+      // so a repeat of the 2026-07-13 medical-directory flood can't happen even transiently. On-domain flood
+      // content (operator IS working that domain → leash passes) is NOT vetoed; operator canvas/workspace drops
+      // never reach this path. Everything else keeps the soft quarantine below.
+      try {
+        const _subLib = require('./lib/substantiation');
+        const _frame = _subLib.classifyFrame({ title, text: String(text).slice(0, 6000) });
+        if (_subLib.isNamedFloodFrame(_frame) && !_leashPasses) {
+          console.log(`[dl-ingest] HARD-VETO ${title} (${_frame}, off-domain) — NOT landed (named-flood wall)`);
+          return;
+        }
+      } catch { /* frame-check fail-soft: fall through to the existing soft quarantine */ }
       const landed = require('./lib/doc_store').land({ title, body: text, source: 'browser_download', ref: 'download:' + fp });
       if (landed && landed.landed) {
         if (!_verdict.relevant || !_leashPasses) {

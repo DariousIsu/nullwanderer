@@ -39,6 +39,14 @@ const FRAME_REAL = 'real';
 // prioritized. Add a domain here only when it has demonstrably flooded; the default is "let it in + mark".
 const NAMED_FLOOD_FRAMES = ['domain:medical', 'domain:legal-directory'];
 
+// NAMED-FLOOD detectors (Slice 5): the directory-dump shapes that flooded the KG. CONSERVATIVE by design — a
+// frame is assigned only on a DENSITY of markers (the roster/directory shape), not a single civic mention of
+// "hospital" or "attorney" — so a civic health-policy bill or a court filing stays `real` and is never walled.
+const _MEDICAL_MARKERS = ['medical', 'dental', 'dentist', 'dentistry', 'orthodont', 'physician', 'clinic', 'hospital', 'patient', 'medicaid', 'medicare', 'nursing', 'pharmacy', 'pharmacist', 'healthcare', 'dermatolog', 'pediatric', 'radiolog', 'oncolog', 'cardiolog', 'practitioner', 'npi', 'dds'];
+const _LEGAL_DIR_MARKERS = ['attorney', 'lawyer', 'law firm', 'law office', 'paralegal', 'bar association', 'esquire', 'litigation', 'barrister', 'solicitor'];
+const _DIRECTORY_SIGNAL = ['directory', 'provider', 'roster', 'listing', 'faculty', 'find a doctor', 'find a provider'];
+function _countMarkers(hay, markers) { let n = 0; for (const m of markers) if (hay.includes(m)) n++; return n; }
+
 // A REAL external citation: an http(s) URL from a non-junk host. `docstore:`/`download:` pointers are NOT
 // external citations — they're handled via the self-vouching-feed path (the document itself is the source).
 function isRealSourceUrl(u) {
@@ -93,10 +101,18 @@ function isSubstantiated(state) {
  * a `fiction:<work>` frame. The `domain:<x>` detection + the flood wall it drives are Slice 5 (this keeps
  * the surface stable so Slice 5 only has to fill the detector, not thread a new field everywhere). PURE.
  */
-function classifyFrame({ url = null, feed = null, text = null, fiction = null } = {}) {
+function classifyFrame({ url = null, feed = null, text = null, title = null, fiction = null } = {}) {
   if (fiction) {
     const work = String(fiction).toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
     return work ? `fiction:${work}` : FRAME_REAL;
+  }
+  const hay = `${String(title == null ? '' : title)} ${String(text == null ? '' : text)}`.toLowerCase();
+  if (hay.trim()) {
+    const dir = _countMarkers(hay, _DIRECTORY_SIGNAL);
+    const med = _countMarkers(hay, _MEDICAL_MARKERS);
+    if (med >= 3 || (med >= 2 && dir >= 1)) return 'domain:medical';               // a medical directory dump
+    const leg = _countMarkers(hay, _LEGAL_DIR_MARKERS);
+    if (leg >= 3 || (leg >= 2 && dir >= 1)) return 'domain:legal-directory';       // a legal directory dump
   }
   return FRAME_REAL;
 }

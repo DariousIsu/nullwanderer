@@ -60,6 +60,13 @@ ok(S.isNamedFloodFrame('domain:medical') === true, 'flood: domain:medical is a n
 ok(S.isNamedFloodFrame('real') === false, 'flood: real is not a flood frame');
 ok(S.isFictionFrame('fiction:dune') === true && S.isFictionFrame('real') === false, 'frame: isFictionFrame detects the fiction: prefix');
 
+// Slice 5 — named-flood frame DETECTION (conservative: a DENSITY of markers, not a single civic mention).
+ok(S.classifyFrame({ title: 'COVID Emergency Dental Providers', text: 'Dentist and dentistry clinic directory listing for providers.' }) === 'domain:medical', 'frame: a dental/medical directory dump → domain:medical (the 07-13 flood shape)');
+ok(S.classifyFrame({ title: 'Medical Sciences Faculty', text: 'Faculty roster of physicians, clinic staff, and patient-care practitioners.' }) === 'domain:medical', 'frame: a medical faculty roster → domain:medical');
+ok(S.classifyFrame({ title: 'Attorney Directory', text: 'A directory of attorney, lawyer, and law firm listings with paralegal staff.' }) === 'domain:legal-directory', 'frame: a legal directory dump → domain:legal-directory');
+ok(S.classifyFrame({ title: 'Parish Public Health Funding Act', text: 'A bill on Medicaid expansion and hospital funding policy for the parish.' }) === S.FRAME_REAL, 'frame: a CIVIC health-policy bill (2 medical words, no directory shape) stays real — never walled (false-positive guard)');
+ok(S.classifyFrame({ title: 'St. Tammany Parish Council', text: 'Council members, the sheriff, clerk of court, and assessor for the parish.' }) === S.FRAME_REAL, 'frame: a civic parish roster → real (no medical/legal markers)');
+
 // isRealSourceUrl / hasRealHttpSource.
 ok(S.isRealSourceUrl('https://ok.gov/p') === true && S.isRealSourceUrl('docstore:5') === false && S.isRealSourceUrl('https://reddit.com/x') === false,
   'url: real http non-junk → true; docstore pointer → false; junk host → false');
