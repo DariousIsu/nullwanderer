@@ -1017,6 +1017,23 @@ function isPdfUrl(u) { return /\.pdf(?:[?#]|$)/i.test(String(u || '')); }
 // Fetch a PDF to DOWNLOADS_DIR using HER session (context.request shares the persistent profile's
 // cookies, so authed/session-gated PDFs work) and let main.js's watcher ingest it. Guards: PDF
 // content-type OR .pdf URL, a real %PDF header, a size ceiling, and per-session dedup. Fail-soft.
+// Download PROVENANCE (2026-07-15, official-document weight): remember the SOURCE URL a grabbed PDF came
+// from, keyed by its saved filename, so the download-watcher (main.js ingestFile) can cite the decompose to
+// the real origin (e.g. a .gov roster) instead of the opaque `docstore:<id>`. That real URL is what lets
+// curation_gate grade an authoritative single source as A → it promotes without a 2nd source a lone local
+// official can never get. Keyed by basename (both sides share DOWNLOADS_DIR; downloadDest dedups names) so a
+// Windows path-format/slash difference between writer and watcher can't miss. Bounded (LRU-ish) map.
+const _dlProvenance = new Map();
+function _rememberProvenance(fp, url) {
+  try {
+    const key = require('path').basename(String(fp || ''));
+    if (!key || !url) return;
+    _dlProvenance.set(key, url);
+    if (_dlProvenance.size > 3000) { const oldest = _dlProvenance.keys().next().value; _dlProvenance.delete(oldest); }
+  } catch (e) { /* provenance is best-effort — never break a download */ }
+}
+function sourceUrlForFile(fp) { try { return _dlProvenance.get(require('path').basename(String(fp || ''))) || null; } catch (e) { return null; } }
+
 async function downloadPdf(url) {
   const u = String(url || '').trim();
   if (!/^https?:\/\//i.test(u)) return { ok: false, reason: 'not http(s)' };
@@ -1038,6 +1055,7 @@ async function downloadPdf(url) {
     if (!/\.pdf$/i.test(name)) name += '.pdf';
     const dest = downloadDest(DOWNLOADS_DIR, name);
     fs.writeFileSync(dest, buf);
+    _rememberProvenance(dest, u);   // remember origin so the watcher can cite the decompose to it (authority grading)
     console.log(`[web] pdf grabbed → ${dest} (${Math.round(buf.length / 1024)}KB) from ${u}`);
     return { ok: true, savedAs: dest, bytes: buf.length, url: u };
   } catch (err) { return { ok: false, reason: err.message }; }
@@ -1228,7 +1246,7 @@ module.exports = {
   chatSend, chatWatch, chatUnwatch,
   press, clearField, hover, selectOption, setChecked, uploadFile, submit, clickAt,
   forward, reload, listTabs, newTab, switchTab, closeTab, waitFor, dialog, getEl, evalJs, drag,
-  downloadPdf, grabPdfs, pdfLinksOnPage, isPdfUrl, _focusLeashTokens, _pdfMatchesLeash,
+  downloadPdf, grabPdfs, pdfLinksOnPage, isPdfUrl, sourceUrlForFile, _focusLeashTokens, _pdfMatchesLeash,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR,
   DOWNLOADS_DIR, downloadDest
 };

@@ -2322,7 +2322,8 @@ function startDownloadsIngestWatcher() {
           return;
         }
         console.log(`[dl-ingest] ${title} → doc ${landed.id} (${text.length}ch via ${via})`);
-        try { decomposeLandedDoc({ id: landed.id, title, body: text, source: 'browser_download' }).catch(() => {}); } catch {}
+        const _srcUrl = (() => { try { return require('./lib/web').sourceUrlForFile(fp); } catch { return null; } })();   // real origin of a grabbed PDF → cite the decompose to it (official-document weight)
+        try { decomposeLandedDoc({ id: landed.id, title, body: text, source: 'browser_download', sourceUrl: _srcUrl }).catch(() => {}); } catch {}
         try { surfaceDocCards({ id: landed.id, title, body: text }).catch(() => {}); } catch {}
         try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(downloaded) ${title}`, type: 'reading', query: title }); } catch {}
       }
@@ -7165,7 +7166,11 @@ async function decomposeLandedDoc(doc) {
     const resolve = (name, opts) => echoSuitLib.resolveMention(name, opts);
     const dispatch = (tag) => echoSuit.dispatch(tag);
     const observe = (o) => { try { curationStore.record(db, { ...o, feed: 'doc-decomp' }); } catch {} };
-    // NOTE: no `ref` passed → the citation is the stable `docstore:<id>` pointer, not the ephemeral tab key.
+    // CITATION: cite the decompose to the doc's REAL source URL when we have one (a grabbed .gov/official
+    // roster → official-document weight, so curation_gate grades it A and promotes single-source); else the
+    // stable `docstore:<id>` pointer (decomp_lane fallback). Guarded to a real http(s) URL so an ephemeral
+    // canvas tab key can never leak in as a citation.
+    const _cite = (doc.sourceUrl && /^https?:\/\/[^\s]+$/i.test(String(doc.sourceUrl).trim())) ? String(doc.sourceUrl).trim() : undefined;
     // cap sized for a real document (a roster/dossier easily names 20-40 constituents); the ~6000-char
     // decomposition slice is the outer bound. 12 was too tight — a live 18-person roster lost 6 to the cap.
     // FULL-doc entity decomposition: chunk the whole body on line boundaries and decompose each pass (the
@@ -7174,7 +7179,7 @@ async function decomposeLandedDoc(doc) {
     let minted = 0, reused = 0, connections = 0, held = 0;
     for (const chunk of chunks) {
       try {
-        const r = await decompLane.decomposeLanding({ id: doc.id, title: doc.title, body: chunk }, { extract, resolve, dispatch, observe, cap: { entities: 40, relations: 40 }, log: (m) => console.log(m) });
+        const r = await decompLane.decomposeLanding({ id: doc.id, title: doc.title, body: chunk, ref: _cite }, { extract, resolve, dispatch, observe, cap: { entities: 40, relations: 40 }, log: (m) => console.log(m) });
         if (r && !r.skipped) { minted += r.minted || 0; reused += r.reused || 0; connections += r.connections || 0; held += r.held || 0; }
       } catch (e) { console.error('[doc-decomp] chunk failed:', e.message); }
     }

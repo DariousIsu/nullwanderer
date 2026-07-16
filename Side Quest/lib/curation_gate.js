@@ -39,6 +39,21 @@ function isJunkSource(url) {
   return !!h && JUNK_SOURCE_HOSTS.some(j => h === j || h.endsWith('.' + j));
 }
 
+// Source HOST AUTHORITY (2026-07-15, Lucas "official-document weight"): a SINGLE citation from a
+// registration-restricted US-government TLD is trustworthy on its own — a local official often appears in
+// exactly ONE place, their official page — so it grades A instead of B, which lifts it over the promote
+// floor (confidence_model A=0.97 ≥ 0.90) WITHOUT the 2nd independent source a lone official can never get.
+// STRICT by design: .gov/.mil are restricted to US government and can't be spoofed the way a bare .org/.us
+// or "govtech.com" could — those must NOT auto-promote single-source. Add hand-verified official domains
+// (e.g. a parish site on .org/.net) to AUTHORITATIVE_SOURCE_HOSTS; do NOT loosen the TLD test.
+const AUTHORITATIVE_SOURCE_HOSTS = [];   // extensible allowlist of specific hand-verified official domains
+function isAuthoritativeSource(url) {
+  const h = _sourceHost(url);
+  if (!h) return false;
+  if (h === 'gov' || h.endsWith('.gov') || h === 'mil' || h.endsWith('.mil')) return true;
+  return AUTHORITATIVE_SOURCE_HOSTS.some(a => h === a || h.endsWith('.' + a));
+}
+
 // Map a dossier per-claim source ref → an evidence grade + the backing URL.
 //   "S2"  → the claim is DIRECTLY STATED in sources[1] (a named source)   → grade B, url = that source
 //   "inferred" / null / out-of-range / a ref with no url → grade D (model inference, unbacked), url null
@@ -48,7 +63,7 @@ function gradeForClaim(sourceRef, sources) {
     const idx = parseInt(m[1], 10) - 1;
     const s = (Array.isArray(sources) && idx >= 0) ? sources[idx] : null;
     const url = (s && (s.url || s.link)) || null;
-    if (url && !isJunkSource(url)) return { grade: 'B', url, kind: 'source' };   // directly stated in a named (non-junk) source
+    if (url && !isJunkSource(url)) return { grade: isAuthoritativeSource(url) ? 'A' : 'B', url, kind: 'source' };   // named non-junk source → B; registration-restricted gov (.gov/.mil) → A (auto-promotes single-source)
   }
   return { grade: 'D', url: null, kind: 'derived' };        // inference / junk-only source — unbacked
 }
@@ -70,7 +85,7 @@ function gradeForClaims(sourceRefs, sources) {
     const url = (s && (s.url || s.link)) || null;
     if (url && !isJunkSource(url) && !urls.includes(url)) urls.push(url);
   }
-  if (urls.length) return { grade: 'B', urls, url: urls[0], kind: 'source' };
+  if (urls.length) return { grade: urls.some(isAuthoritativeSource) ? 'A' : 'B', urls, url: urls[0], kind: 'source' };   // any authoritative (.gov/.mil) backing url → A
   return { grade: 'D', urls: [], url: null, kind: 'derived' };
 }
 
@@ -108,5 +123,5 @@ function gateAnchorExistence(sources) {
 
 module.exports = {
   gradeForClaim, gradeForClaims, meets, gateFact, gateExistence, gateAnchorExistence,
-  isJunkSource, EXISTENCE_FLOOR, FACT_FLOOR
+  isJunkSource, isAuthoritativeSource, EXISTENCE_FLOOR, FACT_FLOOR
 };

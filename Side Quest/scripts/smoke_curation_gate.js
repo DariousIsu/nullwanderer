@@ -38,6 +38,19 @@ ok(fCited.promote === true && fCited.grade === 'B' && fCited.url === 'https://ex
 ok(G.gateFact('inferred', SRC).promote === false, 'gateFact: an inferred edge is HELD (not promoted)');
 ok(G.gateFact('S4', SRC).promote === false, 'gateFact: a ref with no backing url is HELD');
 
+// --- AUTHORITY tier (2026-07-15, official-document weight): a registration-restricted gov TLD grades A so
+// a single authoritative source (a lone official's own .gov page) auto-promotes, without a 2nd source. ---
+const GOV = [{ title: 'g', text: 'Sheriff roster', url: 'https://sos.la.gov/officials' }];
+ok(G.gradeForClaim('S1', GOV).grade === 'A', 'authority: a .gov single source → grade A (gradeForClaim)');
+ok(G.gradeForClaims('S1', GOV).grade === 'A', 'authority: a .gov single source → grade A (gradeForClaims)');
+ok(G.gateFact('S1', GOV).promote === true && G.gateFact('S1', GOV).grade === 'A', 'authority: a .gov-cited edge PROMOTES at grade A (single-source)');
+ok(G.isAuthoritativeSource('https://x.mil') === true, 'authority: .mil is authoritative');
+// SPOOF GUARDS — these must STAY B (never A), or auto-promote becomes spoofable via open registrations:
+ok(G.gradeForClaim('S1', [{ url: 'https://govtech.com/x' }]).grade === 'B', 'spoof: govtech.com → B (not A)');
+ok(G.gradeForClaim('S1', [{ url: 'https://randomco.us/x' }]).grade === 'B', 'spoof: bare .us → B (not A)');
+ok(G.isAuthoritativeSource('https://x.gov.evil.com') === false, 'spoof: x.gov.evil.com (masquerade) is NOT authoritative');
+ok(G.isAuthoritativeSource('https://notgov.com') === false, 'spoof: notgov.com is NOT authoritative');
+
 // --- EXISTENCE gate (floor C): cited mints, inference does not ---
 ok(G.gateExistence('S1', SRC).mint === true, 'gateExistence: a source-cited entity MINTS (B ≥ C)');
 ok(G.gateExistence('inferred', SRC).mint === false, 'gateExistence: a pure inference NEVER mints (D < C)');

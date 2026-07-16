@@ -51,6 +51,17 @@ function mockResolver(map) { return async (name) => map[name] || { status: 'nil'
   await L.decomposeLanding({ id: 5, ref: 'canvas:tab-9', body: 'Grace Hopper created COBOL.' }, { extract, resolve, dispatch, observe: (o) => obs2.push(o) });
   ok(obs2.length > 0 && obs2.every(o => o.url === 'canvas:tab-9'), 'landing: an explicit ref is used as the citation over docstore:<id>');
 
+  // OFFICIAL-DOCUMENT WEIGHT (2026-07-15): when the citation is an authoritative gov source, doc-stated
+  // claims grade A (not B) → single-source clears the promote floor. Proves curation_gate's authority tier
+  // flows end-to-end through the decompose lane (this is what un-traps a lone official's own .gov page).
+  const obs3 = [];
+  await L.decomposeLanding({ id: 8, ref: 'https://sos.la.gov/officials', body: 'Grace Hopper created COBOL.' }, { extract, resolve, dispatch, observe: (o) => obs3.push(o) });
+  ok(obs3.some(o => o.status === 'promoted') && obs3.filter(o => o.status === 'promoted').every(o => o.grade === 'A'), 'authority: a .gov-cited doc yields grade-A promoted claims (official-document weight)');
+  // a non-authoritative real URL must STAY grade B (no over-grant)
+  const obs4 = [];
+  await L.decomposeLanding({ id: 6, ref: 'https://ex.com/roster', body: 'Grace Hopper created COBOL.' }, { extract, resolve, dispatch, observe: (o) => obs4.push(o) });
+  ok(obs4.filter(o => o.status === 'promoted').every(o => o.grade === 'B'), 'authority: a non-gov real URL stays grade B (no over-grant)');
+
   // thin / uncited → skipped, machine not run
   ok((await L.decomposeLanding({ id: 1, body: '   ' }, { extract, resolve, dispatch, observe })).reason === 'thin', 'landing: empty body → skipped (thin)');
   ok((await L.decomposeLanding({ body: 'has text but no id/ref' }, { extract, resolve, dispatch, observe })).reason === 'uncited', 'landing: no id AND no ref → skipped (uncited)');
