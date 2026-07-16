@@ -175,15 +175,52 @@ function mockResolver(map) {
   const heldEdge = sigCalls.find((c) => c[0] === 'propose_relation');
   ok(heldEdge && heldEdge[1].relation_type === 'HELD_OFFICE' && heldEdge[1].target_name === 'member of the Arkansas Senate [wd:Q21361754]', 'sig e2e: proposes HELD_OFFICE → the canonical office entity (official connected to the body they serve)');
 
-  // e2e: an UNRESOLVED office is HELD, never minted as a bare QID-less dup (reference-data guard)
-  const refCalls = [];
-  await D.decomposeDoc({ title: 't', url: 'u', text: 'x'.repeat(50) }, {
+  // e2e (Slice 2): an UNRESOLVED office is now MINTED UNSUBSTANTIATED so the membership edge LANDS, instead
+  // of holding forever (the dominant slice of the 72.8k unresolved-endpoint pile). The office node is tagged
+  // unsubstantiated — prove-or-fade: the async lane resolves it to the canonical office or it fades. The
+  // anti-QID-dup intent is preserved by the state tag + churn, not by a permanent hold.
+  const refCalls = []; const refObs = [];
+  const refRes = await D.decomposeDoc({ title: 't', url: 'u', text: 'x'.repeat(50) }, {
     extract: async () => ({ entities: [{ name: 'Obscure Rep', type: 'person' }], relations: [{ source: 'Obscure Rep', relation: 'MEMBER_OF', target: 'Nowhere Senate' }] }),
     resolve: async (name) => (name === 'Nowhere Senate' ? { status: 'nil' } : { status: 'resolved', object: { id: 2, name } }),
-    dispatch: async (tag) => { refCalls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created"}' }; }, observe: () => {},
+    dispatch: async (tag) => { refCalls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created"}' }; }, observe: (o) => refObs.push(o),
   });
-  ok(!refCalls.some((c) => c[0] === 'propose_entity' && c[1].name === 'Nowhere Senate'), 'sig: an unresolved office is NOT minted (no bare QID-less office dup)');
-  ok(!refCalls.some((c) => c[0] === 'propose_relation' && c[1].target_name === 'Nowhere Senate'), 'sig: the edge to an unresolved office is held, not forged onto the wrong node');
+  ok(refCalls.some((c) => c[0] === 'propose_entity' && c[1].name === 'Nowhere Senate'), 'Slice2: an unresolved office is now MINTED (unsubstantiated) so its edge can land');
+  ok(refCalls.some((c) => c[0] === 'propose_relation' && c[1].target_name === 'Nowhere Senate'), 'Slice2: the membership edge to the now-minted office LANDS (was held forever)');
+  ok(refRes.minted_unsub === 1 && refRes.held === 0, 'Slice2: the office is one unsubstantiated mint; nothing is stranded');
+  const refOfficeObs = refObs.find((o) => o.sourceEntity === 'Nowhere Senate' && o.relation === 'exists');
+  ok(refOfficeObs && refOfficeObs.substantiationState === 'unsubstantiated' && refOfficeObs.frame === 'real', 'Slice2: the minted office observation is tagged unsubstantiated / frame real');
+
+  // Slice 2 — a KNOWN non-person unresolved endpoint mints unsub + lands; a PERSON and an untyped 'other'
+  // endpoint stay HELD (never attractor-mint a bare person — the identity-gate contract; endpoint-recovery
+  // types a bare edge endpoint as 'other', so 'other' is treated conservatively as possibly-a-person).
+  {
+    const s2Calls = []; const s2Obs = [];
+    const s2Res = await D.decomposeDoc({ title: 'roster', url: 'https://ex.com/roster', text: 'x'.repeat(50) }, {
+      extract: async () => ({
+        entities: [{ name: 'Deputy Jane', type: 'person' }, { name: 'Chief Bob', type: 'person' }],
+        relations: [
+          { source: 'Deputy Jane', relation: 'WORKS_FOR', target: "Pinellas Sheriff's Office" }, // WORKS_FOR target → typed organization → mint unsub + land
+          { source: 'Chief Bob', relation: 'MET_WITH', target: 'Tracy' },                         // MET_WITH target → typed 'other' (bare person) → stays held
+        ],
+      }),
+      resolve: mockResolver({
+        'Deputy Jane': { status: 'resolved', object: { id: 1, name: 'Deputy Jane' } },
+        'Chief Bob': { status: 'resolved', object: { id: 2, name: 'Chief Bob' } },
+        "Pinellas Sheriff's Office": { status: 'ambiguous', candidates: ['a', 'b'] },
+        'Tracy': { status: 'ambiguous', candidates: ['Tracy A', 'Tracy B'] },
+      }),
+      dispatch: async (tag) => { s2Calls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created"}' }; },
+      observe: (o) => s2Obs.push(o),
+    });
+    ok(s2Calls.some((c) => c[0] === 'propose_entity' && c[1].name === "Pinellas Sheriff's Office"), 'Slice2: an ambiguous ORG endpoint is minted unsubstantiated');
+    ok(s2Calls.some((c) => c[0] === 'propose_relation' && c[1].target_name === "Pinellas Sheriff's Office"), 'Slice2: the edge to the minted org endpoint lands');
+    ok(!s2Calls.some((c) => c[0] === 'propose_entity' && c[1].name === 'Tracy'), 'Slice2: a bare-name person endpoint (typed other) is NOT minted (attractor guard preserved)');
+    ok(!s2Calls.some((c) => c[0] === 'propose_relation' && c[1].target_name === 'Tracy'), 'Slice2: the edge to the bare person stays held (not forged)');
+    const orgObs = s2Obs.find((o) => o.sourceEntity === "Pinellas Sheriff's Office" && o.relation === 'exists');
+    ok(orgObs && orgObs.substantiationState === 'unsubstantiated', 'Slice2: the minted org endpoint observation is unsubstantiated');
+    ok(s2Res.minted_unsub === 1 && s2Res.held >= 1, 'Slice2: exactly one unsub mint; the bare-person edge remains held');
+  }
 
   // -------------------------------------------------------------------------
   // 2c — the DRIVER (decomposeDoc): extract → hybrid → disambiguate → gate → propose → observe.

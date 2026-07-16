@@ -22,6 +22,7 @@ const CG = require('./curation_gate');   // the shared two gates (existence + fa
 const corroboration = require('./corroboration');     // C2 — independent-source counting (mirror-collapsed)
 const confModel = require('./confidence_model');      // C3 — calibrated, corroboration-sensitive confidence
 const identityGate = require('./identity_gate');      // F1 — mint-reluctance + contextual bind + attractor guard
+const SUB = require('./substantiation');              // Slice 2 — substantiation_state/frame tags on minted endpoints
 
 // Closed entity-type vocab, aligned with Echo's types. Anything unrecognized → 'other' (still a real
 // object, just untyped — the richness axis, not the reality axis). Normalizes common model synonyms.
@@ -347,6 +348,13 @@ const BODY_MEMBERSHIP_REL = /^(MEMBER_OF|MEMBER_OF_ORG|WORKS_FOR|EMPLOYED_BY)$/;
 // QID-less dup that fragments the graph). Keyed by the resolver's expected target types.
 const REFERENCE_TYPES = new Set(['office_held', 'committee', 'government_body']);
 
+// SLICE 2: which unresolved (ambiguous/nil) endpoints may be MINTED UNSUBSTANTIATED so their edge lands.
+// KNOWN CONCRETE NON-PERSON types only — deliberately EXCLUDES 'person' (attractor guard) AND 'other' (the
+// type endpoint-recovery assigns a bare edge endpoint, which could be a bare-name person like "Tracy"). So
+// an org/place/office/committee/body/event/work/bill/document endpoint mints; a person or an untyped 'other'
+// stays HELD (bias-to-clarify — never guess a node into being for something we can't even type).
+const UNSUB_MINTABLE_TYPES = new Set(['organization', 'location', 'event', 'office_held', 'committee', 'government_body', 'work', 'bill', 'document']);
+
 // RELATION SIGNATURE (domain/range typing — the anti-mis-resolution lever). Given a relation type and its
 // target's surface name, return the expected TARGET entity_type so resolution is TYPE-CONSTRAINED:
 //   • a body-membership edge to a legislative chamber → 'office_held' (the person HELD_OFFICE that seat),
@@ -379,12 +387,25 @@ function normalizedRelation(relType, targetName) {
 }
 async function _observe(observe, o) { if (typeof observe === 'function') { try { await observe(o); } catch {} } }
 
+// SLICE 2 (endpoint-minting, docs/SUBSTANTIATION_IMPL_PLAN.md). Mint an unresolved edge endpoint as an
+// UNSUBSTANTIATED node so its edge can LAND instead of holding forever (the 72.8k unresolved-endpoint pile).
+// It's proposed to Echo like any mint (a staged proposal, not canonical), but recorded with
+// substantiation_state='unsubstantiated' — it stays prove-or-fade: the async lane (Slice 4) resolves it
+// against wiki/web (→ identity-confirmed, promotes) or it fades (Slice 6, TTL→archive). This is what lets a
+// "…WORKS_FOR Sheriff's Office" edge form now, with the office marked not-yet-substantiated, rather than
+// dropping the whole relation. Returns true when the node was proposed (caller adds it to `usable`).
+async function _mintUnsubstantiated(dispatch, observe, name, type, url) {
+  if (!await _proposeEntity(dispatch, name, type, '')) return false;
+  await _observe(observe, { sourceEntity: name, relation: 'exists', target: null, url, grade: 'D', confidence: 0, status: 'promoted', substantiationState: SUB.UNSUBSTANTIATED, frame: SUB.FRAME_REAL });
+  return true;
+}
+
 async function decomposeDoc(doc = {}, deps = {}) {
   const { extract, echoExtract, resolve, dispatch, observe, cap = {}, log } = deps;
   const text = String(doc.text || '');
   const url = doc.url || null;
   const maxEnt = cap.entities || 20, maxRel = cap.relations || 20;
-  const out = { minted: 0, reused: 0, connections: 0, held: 0, ambiguous: 0, skipped: 0, related: [] };
+  const out = { minted: 0, reused: 0, connections: 0, held: 0, ambiguous: 0, skipped: 0, minted_unsub: 0, related: [] };
   if (!url) return { ...out, reason: 'no-citation' };       // requires-citation: no doc url → nothing lands
   if (!text.trim()) return { ...out, reason: 'empty-text' };
   const docSources = [{ url }];                              // the doc IS the citation (grade B)
@@ -443,11 +464,16 @@ async function decomposeDoc(doc = {}, deps = {}) {
     if (d.action === 'reuse') { usable.set(key, d.canonical || d.name); out.reused++; continue; }
     if (d.action === 'mint') {
       if (out.minted >= maxEnt) continue;                    // volume cap on NEW objects
-      // REFERENCE-DATA guard: never MINT a civic office/committee/body from a prose mention. These are
-      // canonical reference entities (offices carry Wikidata QIDs) — a bare "Ohio Senate" office minted
-      // here would be a QID-less dup that fragments membership. Resolve to an existing one or HOLD (the
-      // edge to it holds too, and re-forms once the real entity exists). Keeps the body→office link clean.
-      if (REFERENCE_TYPES.has(d.type)) { out.held++; await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: 'D', confidence: 0, status: 'held' }); continue; }
+      // REFERENCE DATA (office/committee/body): used to HOLD to avoid QID-less dups — but that permanent
+      // dead-end stranded the membership edge (the dominant slice of the 72.8k unresolved-endpoint pile).
+      // Slice 2: MINT it UNSUBSTANTIATED so the edge lands; the async lane resolves it to the canonical
+      // office (→ identity-confirmed) or it fades. The anti-dup intent is preserved by the state tag + churn,
+      // not a permanent hold. (Reference types are never persons → no attractor risk.)
+      if (REFERENCE_TYPES.has(d.type)) {
+        if (await _mintUnsubstantiated(dispatch, observe, d.name, d.type, url)) { usable.set(key, d.name); out.minted++; out.minted_unsub++; }
+        else { out.held++; await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: 'D', confidence: 0, status: 'held' }); }
+        continue;
+      }
       // NO topic gate — the graph absorbs every entity a cited doc yields; topic is not a
       // reality/quality axis (the existence gate below is). Off-domain ≠ untrue.
       const eg = CG.gateExistence('S1', docSources);         // doc-cited → grade B ≥ C floor → mint
@@ -457,9 +483,19 @@ async function decomposeDoc(doc = {}, deps = {}) {
       }
       continue;
     }
-    if (d.action === 'hold') {                               // ambiguous → fall-through
-      out.ambiguous++; out.held++;
-      await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: 'D', confidence: 0, status: 'held' });
+    if (d.action === 'hold') {                               // ambiguous / weak-person fall-through
+      out.ambiguous++;
+      // Slice 2: a KNOWN-CONCRETE-NON-PERSON unresolved endpoint (an org/place/office/event the resolver
+      // couldn't pin) mints UNSUBSTANTIATED so its edge lands + the async lane proves-or-fades it. A PERSON
+      // or an untyped 'other' endpoint stays HELD — minting a bare/ambiguous person is the "Tracy the finance
+      // lady" attractor the identity gate exists to prevent, and 'other' is the type a bare edge-endpoint
+      // gets, so it too could be a person. Bias-to-clarify: never guess a node for something we can't type.
+      if (UNSUB_MINTABLE_TYPES.has(d.type) && out.minted < maxEnt && await _mintUnsubstantiated(dispatch, observe, d.name, d.type, url)) {
+        usable.set(key, d.name); out.minted++; out.minted_unsub++;
+      } else {
+        out.held++;
+        await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: 'D', confidence: 0, status: 'held' });
+      }
       continue;
     }
     out.skipped++;                                           // bad-name / resolver error
