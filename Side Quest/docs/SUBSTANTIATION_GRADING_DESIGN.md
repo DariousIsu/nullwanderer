@@ -48,22 +48,27 @@ Relevant components: `lib/curation_gate.js` (grade), `lib/promote_gate.js` (0.90
   authoritative source promote without corroboration. Reboot-gated. NOTE: it does NOT touch the resolution-holds
   (§4.3) — those are hardcoded D, a separate gate.
 
-## 4. OPEN CLARIFICATIONS (resolve before build/research)
+## 4. RESOLVED DECISIONS (Lucas, 2026-07-15 — locked before build)
 
-1. **Core inversion:** promote *everything substantiated* to long-term at any confidence (grade = priority/quality
-   tag); only *unsubstantiated* stays short-term. Replaces the 0.90-floor-as-gate. — CONFIRM.
-2. **Define "substantiated":** source-vouched (news/doc/fiction self-vouch) OR identity-confirmed (wiki/web);
-   a bare mention we can neither source-vouch nor identify = unsubstantiated. — CONFIRM.
-3. **Endpoints — mint, don't hold:** an unresolved edge target becomes an unsubstantiated node (prove/fade) so the
-   edge always lands. Directly kills the 72.8k held pile. — CONFIRM.
-4. **Cascade = async, priority-ordered lane:** mint cheap→unsubstantiated instantly; a background lane runs
-   wiki→web and upgrades (promotes) or fades; low grade explored first. — CONFIRM (sync per-node won't scale).
-5. **Contamination boundary (the hard one):** "let everything in" collided with the medical flood, and fiction
-   must not pollute a civic query. Proposal: everything intakes with a FRAME tag (`real`/`fiction:<work>`/domain)
-   + a relevance/leash PRIORITY setting fade-rate + exploration order — off-domain & fiction fade fast or stay
-   quarantined-to-frame, never *vetoed* but never *bleeding* into a civic answer. — CONFIRM, or want a harder wall?
-6. **Fade policy:** what makes an unsubstantiated node fade — TTL, decay when never re-referenced, N failed
-   substantiation attempts? And fade = deleted or archived? — CONFIRM.
+1. **Core inversion — CONFIRMED, with a bottom floor.** Grade becomes a PRIORITY tag; anything *substantiated*
+   promotes short→long at any confidence, replacing the 0.90 promote-floor gate. **BUT a thin junk-tier veto
+   stays at the very bottom** — spoofed/blocklisted/junk sources still cannot cross (spam insurance). So: not
+   "no gate," but "gate shrinks to a narrow anti-junk floor; everything above it is priority-driven, not
+   confidence-gated." Low grade = higher explore-priority, never a rejection.
+2. **Define "substantiated" — CONFIRMED as written.** Source-vouched (news / doc / fiction self-vouch) OR
+   identity-confirmed (wiki / web). A bare mention we can neither source-vouch nor identify = unsubstantiated
+   (short-term, prove-or-fade).
+3. **Endpoints — mint, don't hold — CONFIRMED.** An unresolved edge target mints as an unsubstantiated node so
+   the edge always lands. Directly drains the 72.8k held pile.
+4. **Cascade = async, priority-ordered lane — CONFIRMED.** Mint cheap→unsubstantiated instantly; a background
+   lane runs wiki→web and upgrades (promotes) or fades; low grade explored first.
+5. **Contamination boundary — HYBRID (soft frame + hard wall for named flood domains).** Everything intakes with
+   a FRAME tag (`real` / `fiction:<work>` / domain) + a leash that sets fade-rate & explore-order (priority, not
+   a veto) — off-domain & fiction never bleed into a civic answer because they stay quarantined-to-frame and fade
+   fast. **PLUS a hard veto retained for a small NAMED set of flood domains** (medical/legal directory dumps) so a
+   repeat of the 07-13 flood can't happen even transiently. Everything else is soft-framed, never door-rejected.
+6. **Fade policy — TTL → ARCHIVE.** Unsubstantiated nodes archive after a fixed TTL window unless proven.
+   Fade = **archive** (retained, hidden from active recall, restorable), NOT hard-delete. Audit-safe and reversible.
 
 ## 5. Downstream fits (once §4 settled)
 - News auto-substantiation + wiring (fixes the 86% isolated events).

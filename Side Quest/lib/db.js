@@ -540,7 +540,16 @@ const MIGRATIONS = [
   // graph, so the nightly promote-up arm never re-sends it (mirrors documents.promoted). Column add first, then
   // the partial index the promote-up candidate scan reads.
   `ALTER TABLE graph_relations ADD COLUMN promoted_up INTEGER DEFAULT 0`,
-  `CREATE INDEX IF NOT EXISTS idx_graph_relations_promote ON graph_relations(promoted_up, epistemic) WHERE deleted = 0 AND valid_to IS NULL`
+  `CREATE INDEX IF NOT EXISTS idx_graph_relations_promote ON graph_relations(promoted_up, epistemic) WHERE deleted = 0 AND valid_to IS NULL`,
+  // SUBSTANTIATION SUBSTRATE (docs/SUBSTANTIATION_IMPL_PLAN.md Slice 1, 2026-07-15). Two orthogonal axes
+  // every node/observation carries: substantiation_state ∈ {source-vouched,identity-confirmed,unsubstantiated}
+  // (decides WHERE it lives — long-term vs short-term prove-or-fade; grade rides as explore-priority) and
+  // frame ∈ real|fiction:<work>|domain:<x> (drives the Slice-5 intake wall + Slice-6 fade rate). Nullable +
+  // record-only in Slice 1 — nothing gates on them yet. Assigned by lib/substantiation via curation_store.
+  `ALTER TABLE kg_observations ADD COLUMN substantiation_state TEXT`,
+  `ALTER TABLE kg_observations ADD COLUMN frame TEXT`,
+  `ALTER TABLE graph_entities ADD COLUMN substantiation_state TEXT`,
+  `ALTER TABLE graph_entities ADD COLUMN frame TEXT`
 ];
 
 function init() {
@@ -1773,13 +1782,13 @@ function graphSetRelationProposalStatus(id, status) { getDb().prepare('UPDATE gr
 // --- curation observation store (curation substrate Slice 1) ---
 // Append a graded observation. Idempotent on obs_key (INSERT OR IGNORE) so a feed re-seeing the same
 // cited claim doesn't double-count. Returns { id, inserted }. obs_key is the caller's natural key.
-function recordKgObservation({ feed, sourceEntity, relation = null, target = null, value = null, url = null, grade = null, confidence = null, kind = null, status = 'promoted', obsKey, capturedAt = null }) {
+function recordKgObservation({ feed, sourceEntity, relation = null, target = null, value = null, url = null, grade = null, confidence = null, kind = null, status = 'promoted', substantiationState = null, frame = null, obsKey, capturedAt = null }) {
   const ts = capturedAt == null ? Date.now() : capturedAt;
   const info = getDb().prepare(
     `INSERT OR IGNORE INTO kg_observations
-       (feed, source_entity, relation, target, value, url, grade, confidence, kind, status, obs_key, captured_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).run(feed, sourceEntity, relation, target, value, url, grade, confidence, kind, status, obsKey, ts);
+       (feed, source_entity, relation, target, value, url, grade, confidence, kind, status, substantiation_state, frame, obs_key, captured_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).run(feed, sourceEntity, relation, target, value, url, grade, confidence, kind, status, substantiationState, frame, obsKey, ts);
   return { id: info.lastInsertRowid, inserted: info.changes > 0 };
 }
 function listKgObservations({ sourceEntity = null, feed = null, status = null, limit = 200 } = {}) {

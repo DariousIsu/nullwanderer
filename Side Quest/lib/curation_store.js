@@ -19,6 +19,7 @@
 'use strict';
 
 const PC = require('../studio/puller_confidence');   // shared grade → send-confidence ladder
+const substantiation = require('./substantiation');   // Slice 1: the substantiation_state + frame classifier
 
 const s = (v) => String(v == null ? '' : v).trim();
 const lc = (v) => s(v).toLowerCase();
@@ -51,6 +52,14 @@ function normalizeObservation(o = {}) {
     status: s(o.status) || 'promoted',
     capturedAt: o.capturedAt == null ? null : o.capturedAt,
   };
+  // Slice 1 substrate (record-only): assign substantiation_state + frame from what the observation carries.
+  // A caller may pass them explicitly (or `resolved`/`fiction` hints for a sharper call); otherwise derive.
+  // NOT part of obs_key — they're derived metadata, so a re-seen claim still dedups regardless of them.
+  norm.substantiationState = o.substantiationState || substantiation.classifySubstantiation({
+    resolved: o.resolved === true, status: norm.status, feed: norm.feed, url: norm.url,
+    sources: o.sources || null, selfVouching: o.selfVouching === true,
+  });
+  norm.frame = o.frame || substantiation.classifyFrame({ url: norm.url, feed: norm.feed, fiction: o.fiction || null });
   norm.obsKey = obsKey(norm);
   return norm;
 }

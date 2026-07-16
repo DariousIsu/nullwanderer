@@ -47,6 +47,7 @@ const smokes = [
   'smoke_self_repetition.js',
   'smoke_curation_gate.js',
   'smoke_curation_store.js',
+  'smoke_substantiation.js',
   'smoke_doc_decompose.js',
   'smoke_corroboration.js',
   'smoke_confidence_model.js',
