@@ -1,8 +1,15 @@
-# Substantiation & Grading — Implementation Plan (per-file, 5 slices)
+# Substantiation & Grading — Implementation Plan (per-file, 6 slices)
 
 > Companion to `docs/SUBSTANTIATION_GRADING_DESIGN.md` (the north-star + the 6 LOCKED decisions in §4).
 > This is the concrete build map, grounded in a full code trace of the live paths (2026-07-15).
 > Read the "Reframes" first — the trace changed what several fixes actually mean.
+>
+> **STATUS 2026-07-16: ALL 6 SLICES BUILT + COMMITTED, gate 186/186 green.** Slice 1 `f9d7ae6`,
+> Slice 2 `9c355ed`, Slice 3 `143538f`, Slice 4 `66d8dec`, Slice 5 `8200d28`, Slice 6 `a609cea`.
+> Slice 3 was implemented SURGICAL/ADDITIVE (see its section). Everything is REBOOT-GATED and
+> auto-ingest is still OFF (`fc1c773`) — one reboot lights all six + `fa8e8a6` + `9cf57dd`. Slices
+> 2/4/5/6 have live `main.js` wiring verified only post-reboot. The existing 72.8k held rows need a
+> separate backfill (Slice 2 is forward-facing).
 
 ## 0. Reframes from the code trace (READ FIRST)
 
