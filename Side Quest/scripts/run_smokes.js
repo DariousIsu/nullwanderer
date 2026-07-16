@@ -58,6 +58,7 @@ const smokes = [
   'smoke_supersession.js',
   'smoke_identity_gate.js',
   'smoke_ingest_lane.js',
+  'smoke_substantiate_lane.js',
   'smoke_research_lane.js',
   'smoke_research_exec.js',
   'smoke_research_sources.js',

@@ -1799,6 +1799,25 @@ function listKgObservations({ sourceEntity = null, feed = null, status = null, l
   const sql = `SELECT * FROM kg_observations${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ?`;
   return getDb().prepare(sql).all(...args, limit);
 }
+// --- Slice 4: the async substantiation lane's queue + persist (substantiation-grading) ---
+// The unsubstantiated queue: distinct entities recorded unsubstantiated (Slice-2 endpoint mints etc.),
+// OLDEST first (waiting longest to prove = explore priority). Returns [{ name, grade, captured_at }].
+function listUnsubstantiatedObservations({ limit = 12 } = {}) {
+  return getDb().prepare(
+    `SELECT source_entity AS name, MIN(grade) AS grade, MIN(captured_at) AS captured_at
+       FROM kg_observations WHERE substantiation_state = 'unsubstantiated'
+      GROUP BY source_entity ORDER BY captured_at ASC LIMIT ?`
+  ).all(limit);
+}
+// Flip an entity's unsubstantiated observations to a proven state (identity-confirmed / source-vouched) once
+// the async lane substantiates it. Returns the row count changed.
+function setSubstantiationForEntity(sourceEntity, state) {
+  const info = getDb().prepare(
+    `UPDATE kg_observations SET substantiation_state = ?
+      WHERE source_entity = ? AND substantiation_state = 'unsubstantiated'`
+  ).run(state, sourceEntity);
+  return info.changes;
+}
 // Entities decomposed from docs the OPERATOR dropped (canvas/upload/meeting/editor) — his ACTIVE materials,
 // distinct from autonomous browser_download / news / legislation docs. Two-step for speed: recent operator-drop
 // doc ids (few), then their doc-decomp observations. Feeds the idle-walk anchor so the walk follows HIS attention.
@@ -2012,6 +2031,8 @@ module.exports = {
   graphCounts,
   recordKgObservation,
   listKgObservations,
+  listUnsubstantiatedObservations,
+  setSubstantiationForEntity,
   listOperatorDropEntities,
   kgObservationStats,
   recordRecentCard,

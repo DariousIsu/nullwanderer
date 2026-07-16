@@ -609,6 +609,32 @@ app.whenReady().then(() => {
           if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: text, type: 'reading' });
         }
       } catch (e) { console.error('[promote] pass failed:', e.message); }
+      // SUBSTANTIATION LANE (Slice 4, substantiation-grading): the "prove" arm of prove-or-fade. Walk the
+      // UNSUBSTANTIATED nodes (Slice-2 endpoint mints etc.) through INTERNAL corpora FIRST (search_entities /
+      // search_knowledge — the attached wiki/general-knowledge tier that was going unused), else a bounded WEB
+      // search. A hit flips the node's state so the Slice-3 inverted promote gate carries it long-term; a miss
+      // leaves it for the TTL→archive fade (Slice 6). Bounded (cap 12) → trivial volume on the 20h cadence.
+      try {
+        if (echoSuit && echoSuit.connected) {
+          const substantiateLane = require('./lib/substantiate_lane');
+          const _hit = (r) => !!(r && r.ok && r.text && r.text.trim() && !/^\s*(no |0 |not?\b|none\b)/i.test(r.text.trim()));
+          const validateInternal = async (name) => {
+            try {
+              if (_hit(await echoSuit.dispatch({ kind: 'do', name: 'search_entities', args: { query: name, top_k: 3 } }))) return { title: name };
+              if (_hit(await echoSuit.dispatch({ kind: 'do', name: 'search_knowledge', args: { query: name, top_k: 3 } }))) return { title: name };
+            } catch { /* probe fail-soft = miss */ }
+            return null;
+          };
+          const searchWebProbe = async (name) => { try { const r = await webSearch(name); return (r && r.results) || []; } catch { return []; } };
+          const st = await substantiateLane.runTick({
+            listUnsubstantiated: (cap) => db.listUnsubstantiatedObservations({ limit: cap }),
+            validateInternal, searchWeb: searchWebProbe,
+            markProved: (nm, state) => { try { db.setSubstantiationForEntity(nm, state); } catch {} },
+            cap: 12, log: (m) => console.log(m),
+          });
+          if (st.scanned) console.log(`[substantiate] scanned ${st.scanned} → ${st.proved} proved (${st.internal} internal, ${st.web} web), ${st.stillUnsub} still unsubstantiated`);
+        }
+      } catch (e) { console.error('[substantiate] lane failed:', e.message); }
       // RETENTION (Slice 3): tidy the short-term store — trim long-promoted docs to a pointer (full text
       // lives in Echo now) + drop skip-marked stragglers, so short-term stays a fast working set.
       try { retentionPass({}); } catch (e) { console.error('[retention] pass failed:', e.message); }
