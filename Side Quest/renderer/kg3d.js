@@ -60,6 +60,7 @@ const Graph = window.ForceGraph3D()(graphEl)
   .nodeOpacity(0.92)
   .nodeResolution(8)
   .nodeRelSize(3)
+  .nodeLabel((n) => `${n.id}${n.entityType ? ' · ' + n.entityType : ''}${(n.store === 'sidequest' && n.epistemic) ? ' · ' + n.epistemic : ''}`)
   .linkColor(linkColor)
   .linkOpacity(0.5)
   .warmupTicks(20)
@@ -72,6 +73,12 @@ try {
   const bloom = new window.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.25, 0.7, 0.02);
   Graph.postProcessingComposer().addPass(bloom);
 } catch (e) { console.warn('[kg3d] bloom failed:', e && e.message); }
+
+// ---- Follow: camera flies to big pulls + subconscious focus-moves (being "taken to where data erupts") ----
+let follow = false;
+try { follow = localStorage.getItem('kg3d.follow') === '1'; } catch (e) {}
+function setFollow(on) { follow = !!on; try { localStorage.setItem('kg3d.follow', on ? '1' : '0'); } catch (e) {} return follow; }
+function flyTo(pos, ms) { try { Graph.cameraPosition({ x: pos.x, y: pos.y, z: pos.z + 190 }, pos, ms || 1100); } catch (e) {} }
 
 // ---- data load: overview (Echo corpus) + shortterm (Side Quest core), merged into one two-source set ----
 async function loadGraph() {
@@ -171,6 +178,7 @@ function gPromote(a) {     // graduation arc: node → outward from core, locks 
   addEffect([ln, pulse, ring], 1050, (p) => { const mp = Math.min(1, p / 0.8); ln.geometry.setFromPoints([a, a.clone().lerp(tgt, mp)]); pulse.position.copy(a.clone().lerp(tgt, mp)); pulse.material.opacity = 0.9 * (1 - mp * 0.5); if (p >= 0.8) { const q = Math.sin((p - 0.8) / 0.2 * Math.PI); ring.scale.setScalar(3 + q * 10); ring.material.opacity = 0.8 * q; } });
 }
 function gSupernova(pos, count) {
+  if (follow) flyTo(pos, 1100);   // camera is taken to the eruption (the "flies to big pulls" behavior)
   const mag = Math.min(3.2, 1.2 + Math.log2((count || 2))), flash = mkSprite(0xbfe0ff, 0.95), ring = mkSprite(VHEX, 0); flash.position.copy(pos); flash.scale.setScalar(4); ring.position.copy(pos);
   addEffect([flash, ring], 1500, (p) => { flash.scale.setScalar(4 + p * 42 * mag); flash.material.opacity = 0.95 * (1 - p); const q = Math.sin(Math.min(1, p / 0.5) * Math.PI); ring.scale.setScalar(6 + p * 64 * mag); ring.material.opacity = 0.5 * q; });
 }
@@ -227,11 +235,19 @@ tick();
 window.addEventListener('resize', () => { Graph.width(window.innerWidth).height(window.innerHeight); });
 Graph.width(window.innerWidth).height(window.innerHeight);
 
-// ---- subscribe the live activity bus (same channel main.js broadcasts to every webContents) ----
+// subconscious focus-move: she's walking the graph; brighten the touched node, and (Follow) fly the camera to it.
+function onFocusMove(p) {
+  if (!p || !p.anchor) return;
+  const n = findNode(p.anchor);
+  if (n) { gEnrich(V3(n), new THREE.Color(nodeColor(n)).getHex()); if (follow) flyTo(V3(n)); }
+}
+
+// ---- subscribe the live channels (same broadcasts main.js sends to every webContents) ----
 try { if (window.sq && window.sq.kg && typeof window.sq.kg.onActivity === 'function') window.sq.kg.onActivity(onActivity); } catch (e) {}
+try { if (window.sq && window.sq.kg && typeof window.sq.kg.onFocusMove === 'function') window.sq.kg.onFocusMove(onFocusMove); } catch (e) {}
 
 // ---- dev handle for CDP verification ----
-window.__kg3d = { Graph, reload: loadGraph, fps: () => fps, data: () => Graph.graphData(), onActivity, effectsN: () => effects.length };
+window.__kg3d = { Graph, reload: loadGraph, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, setFollow, camZ: () => Graph.cameraPosition().z };
 
 loadGraph();
-console.info('[kg3d] surface build phase-2: activity-bus gestures (scene objects) + Slice 4 mint/coalesce');
+console.info('[kg3d] surface build phase-3: hover labels + Follow (camera flies to supernovae + focus-moves)');
