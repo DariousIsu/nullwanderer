@@ -638,6 +638,18 @@ app.whenReady().then(() => {
       // RETENTION (Slice 3): tidy the short-term store — trim long-promoted docs to a pointer (full text
       // lives in Echo now) + drop skip-marked stragglers, so short-term stays a fast working set.
       try { retentionPass({}); } catch (e) { console.error('[retention] pass failed:', e.message); }
+      // SUBSTANTIATION FADE (Slice 6, prove-or-fade): an UNSUBSTANTIATED node the prove lane never
+      // substantiated is ARCHIVED past a TTL (default 14d, SUBSTANTIATION_FADE_TTL_DAYS) — retained +
+      // restorable (status='archived'), but dropped from the prove queue + active recall. The contamination
+      // valve: short-term buffer + fade, never door-rejection.
+      try {
+        const fade = require('./lib/fade');
+        const ttlDays = parseInt(process.env.SUBSTANTIATION_FADE_TTL_DAYS || '', 10) || 14;
+        const p = fade.plan(db.listFadeCandidates({ limit: 500 }), { ttlMs: ttlDays * fade.DAY, now: Date.now() });
+        let archived = 0;
+        for (const id of p.archive) { try { archived += db.setKgObservationStatus(id, 'archived'); } catch {} }
+        if (archived) console.log(`[fade] archived ${archived} unsubstantiated nodes past ${ttlDays}d TTL (${p.kept} still within window)`);
+      } catch (e) { console.error('[fade] pass failed:', e.message); }
       // NEWS CAPTURES retention: drop broadcast screenshot PNGs (derived/regenerable) + rows past the window
       // so data/news_captures stays bounded. Window via NEWS_CAPTURES_RETAIN_DAYS (default 7). Raw RSS items
       // are NOT pruned here — that reservoir's retention policy is intentionally left to an explicit decision.

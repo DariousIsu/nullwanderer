@@ -1805,7 +1805,7 @@ function listKgObservations({ sourceEntity = null, feed = null, status = null, l
 function listUnsubstantiatedObservations({ limit = 12 } = {}) {
   return getDb().prepare(
     `SELECT source_entity AS name, MIN(grade) AS grade, MIN(captured_at) AS captured_at
-       FROM kg_observations WHERE substantiation_state = 'unsubstantiated'
+       FROM kg_observations WHERE substantiation_state = 'unsubstantiated' AND status <> 'archived'
       GROUP BY source_entity ORDER BY captured_at ASC LIMIT ?`
   ).all(limit);
 }
@@ -1816,6 +1816,22 @@ function setSubstantiationForEntity(sourceEntity, state) {
     `UPDATE kg_observations SET substantiation_state = ?
       WHERE source_entity = ? AND substantiation_state = 'unsubstantiated'`
   ).run(state, sourceEntity);
+  return info.changes;
+}
+// --- Slice 6: TTL→archive fade (substantiation-grading) ---
+// Fade candidates: individual UNSUBSTANTIATED, not-yet-archived observation rows (id + captured_at) so
+// lib/fade can decide which have aged past the TTL. Oldest first. Returns [{ id, source_entity, captured_at }].
+function listFadeCandidates({ limit = 500 } = {}) {
+  return getDb().prepare(
+    `SELECT id, source_entity, captured_at FROM kg_observations
+      WHERE substantiation_state = 'unsubstantiated' AND status <> 'archived'
+      ORDER BY captured_at ASC LIMIT ?`
+  ).all(limit);
+}
+// Set an observation's lifecycle status (e.g. 'archived' on fade). kg_observations was insert-only; this is
+// the general status writer. Returns the row count changed. Retains the row (archive, never hard-delete).
+function setKgObservationStatus(id, status) {
+  const info = getDb().prepare('UPDATE kg_observations SET status = ? WHERE id = ?').run(status, id);
   return info.changes;
 }
 // Entities decomposed from docs the OPERATOR dropped (canvas/upload/meeting/editor) — his ACTIVE materials,
@@ -2033,6 +2049,8 @@ module.exports = {
   listKgObservations,
   listUnsubstantiatedObservations,
   setSubstantiationForEntity,
+  listFadeCandidates,
+  setKgObservationStatus,
   listOperatorDropEntities,
   kgObservationStats,
   recordRecentCard,
