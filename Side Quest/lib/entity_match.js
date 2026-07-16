@@ -19,6 +19,8 @@
 // --- name / id parsing ------------------------------------------------------------------------------
 // Bracket tags carry strong ids in our graph: [wd:Q123], [FEC:C0001234] / [C0001234], [M000244] (bioguide),
 // [lda_client:119039], [8-hex] (openstates uuid frag), bare [Q123]. Jurisdiction is a trailing (VA)/(US-VA)/(US-US).
+const { normalizeCivic } = require('./civic_canon');
+
 const NICK = {
   bill: 'william', will: 'william', billy: 'william', bob: 'robert', rob: 'robert', bobby: 'robert',
   dick: 'richard', rich: 'richard', rick: 'richard', jim: 'james', jimmy: 'james', joe: 'joseph', joey: 'joseph',
@@ -63,7 +65,7 @@ function parseEntity(rec = {}) {
   const isPerson = type === 'person' || (!type && toks.length >= 2 && toks.length <= 4);
   return {
     __parsed: true,
-    display: raw, nameKey: clean.toLowerCase(), tokens: toks, type, isPerson,
+    display: raw, nameKey: clean.toLowerCase(), normKey: normalizeCivic(raw), tokens: toks, type, isPerson,
     given: isPerson && toks.length >= 2 ? toks[0] : null,   // a single-token person name is a SURNAME, not a given
     surname: isPerson && toks.length ? toks[toks.length - 1] : null,
     jurisdiction: jurisdiction ? String(jurisdiction).toUpperCase() : null,
@@ -175,9 +177,12 @@ function matchPair(recA, recB) {
   // Non-person (org / place / event / concept): no given-name axis. Require an exact normalized-name match,
   // and without a shared strong id it is at most REVIEW (identical names ≠ identical entity — CITY OF
   // SACRAMENTO vs CITY OF WEST SACRAMENTO differ; two "CITY OF SACRAMENTO" with distinct lda ids need a human).
-  if (a.nameKey && a.nameKey === b.nameKey) {
+  // name-agree on the EXACT nameKey OR the abbreviation-folded normKey ("U.S. Senate" ≡ "United States Senate").
+  // Still only REVIEW without a shared strong id — surfacing a variant-form dup for adjudication, never an
+  // auto-merge (precision unchanged; the merge comes from a strong id or the collective tie-break).
+  if ((a.nameKey && a.nameKey === b.nameKey) || (a.normKey && a.normKey === b.normKey)) {
     if (conflict) return { decision: 'review', tier: 'probabilistic', reason: `name-agree/${conflict}-id-conflict`, confidence };
-    return { decision: 'review', tier: 'probabilistic', reason: 'name-agree/no-shared-id', confidence };
+    return { decision: 'review', tier: 'probabilistic', reason: a.nameKey === b.nameKey ? 'name-agree/no-shared-id' : 'normkey-agree/no-shared-id', confidence };
   }
   return { decision: 'no-match', tier: 'gate', reason: 'name-differs', confidence };
 }

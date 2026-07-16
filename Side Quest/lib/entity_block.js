@@ -35,6 +35,10 @@ function blockingKeys(rec = {}) {
     const toks = nameKey.split(' ').filter((t) => t.length >= 3 && !STOP.has(t)).sort();
     if (toks.length) blockKeys.push('tok:' + toks.slice(0, 4).join(' '));        // sorted significant tokens
   }
+  // normalization-aware block key: abbreviation-folded name so surface-form variants ("U.S. Senate" AND
+  // "United States Senate") both emit the SAME nm: key and co-block → the matcher can adjudicate them.
+  // Always emitted (even when == nameKey) so the canonical form ALSO carries the shared key; the dup is harmless.
+  if (p.normKey) blockKeys.push('nm:' + p.normKey.split(' ').slice(0, 8).join(' '));
   return { ids, nameKey, blockKeys, annQuery: p.display };
 }
 

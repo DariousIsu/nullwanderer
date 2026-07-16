@@ -26,6 +26,14 @@ ok(ko.ids.length === 1 && ko.ids[0].system === 'lda', 'keys: org strong id (lda)
 ok(ko.blockKeys.some((k) => k.startsWith('tok:') && k.includes('sacramento')), 'keys: org → sorted-significant-token block key (common words dropped)');
 ok(B.blockingKeys({ name: 'Rainey Center', type: 'organization' }).blockKeys[0] === B.blockingKeys({ name: 'Center Rainey', type: 'organization' }).blockKeys[0], 'keys: sorted-token key is order-independent ("Rainey Center" == "Center Rainey")');
 
+// --- S1: normalization-aware block key (abbreviation variants co-block; matcher name-agrees as REVIEW) ---
+const M = require('../lib/entity_match');
+ok(B.blockingKeys({ name: 'U.S. Senate', type: 'organization' }).blockKeys.includes('nm:united states senate'), 'keys: "U.S. Senate" → nm:united states senate block key');
+ok(B.blockingKeys({ name: 'United States Senate [wd:Q66096]', type: 'government_body' }).blockKeys.includes('nm:united states senate'), 'keys: "United States Senate" folds to the SAME nm: key → the variant co-blocks');
+ok(B.blockingKeys({ name: 'U.S. Senate', type: 'organization' }).blockKeys.filter((k) => k.startsWith('nm:'))[0] === B.blockingKeys({ name: 'United States Senate', type: 'government_body' }).blockKeys.filter((k) => k.startsWith('nm:'))[0], 'keys: "U.S. Senate" and "United States Senate" share the SAME nm: key → they co-block');
+const _vm = M.matchPair({ name: 'U.S. Senate', type: 'organization' }, { name: 'United States Senate', type: 'government_body' });
+ok(_vm.decision === 'review' && /normkey/.test(_vm.reason), 'match: variant forms name-agree via normKey → REVIEW (surfaced for adjudication, NOT auto-merged)');
+
 // --- generateCandidates: union / dedup / cap / provenance / fail-soft -------------------------------
 (async () => {
   const deps = {

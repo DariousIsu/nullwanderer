@@ -34,7 +34,7 @@ function makeLiveDeps(dispatch, { annK = 12, cap = 30 } = {}) {
     byNameKey: async (nameKey) => search(nameKey, annK),
     byAnn: async (query, k) => search(query, k),
     // block key → a searchable string: "sn:howell|va" → "howell va", "tok:a b" → "a b", "sn:x|g:j" → "x j"
-    byBlock: async (blockKey) => search(String(blockKey).replace(/^(sn:|tok:)/, '').replace(/\|g:/g, ' ').replace(/\|/g, ' '), annK),
+    byBlock: async (blockKey) => search(String(blockKey).replace(/^(sn:|tok:|nm:)/, '').replace(/\|g:/g, ' ').replace(/\|/g, ' '), annK),
     // CIVIC neighbors as resolved entity IDS (the collective precision guard needs ids, not names). get_entity
     // returns the entity card + its outgoing relations with target_id — the correct civic-graph neighbor set.
     // (kg_neighborhood is the WRONG source — it returns Wikipedia-sidecar node ids, a different id space.)
