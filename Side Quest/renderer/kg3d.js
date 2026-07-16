@@ -77,9 +77,7 @@ const Graph = window.ForceGraph3D()(graphEl)
   .nodeColor(nodeColor)
   .nodeVal(nodeVal)
   .nodeOpacity(0.92)
-  .nodeResolution(6)
-  .nodeRelSize(3)
-  .nodeLabel((n) => `${n.id}${n.entityType ? ' · ' + n.entityType : ''}${(n.store === 'sidequest' && n.epistemic) ? ' · ' + n.epistemic : ''}`)
+  .nodeThreeObject(() => new THREE.Object3D())   // no per-node geometry at all — nodes render as ONE Points cloud (lean)
   .linkColor(linkColor)
   .linkOpacity(0.5)
   .warmupTicks(20)
@@ -144,8 +142,8 @@ function ensureObj(n, seed) {
   return o;
 }
 
-const NODE_CAP = 800;   // hard bound on rendered nodes — the SHARED GPU process also drives video + the VRM avatar,
-                        // so an unbounded corpus pull can exhaust it and crash. Keep core + focal + top-degree corpus.
+const NODE_CAP = 2000;  // instanced Points render cheaply (tens of thousands feasible); the real limiter is the
+                        // CPU force sim, so keep a sane bound. Keep core + focal + top-degree corpus, drop the tail.
 function render() {
   const ids = new Set();
   for (const id of (mode === 'overview' ? full : world.nodes)) ids.add(id);
@@ -163,7 +161,8 @@ function render() {
   for (const l of linkSrc) if (keep.has(l.source) && keep.has(l.target)) links.push({ source: l.source, target: l.target, category: l.category, color: l.color, relType: l.relType });
   for (const m of shortTerm.links.values()) if (keep.has(m.s) && keep.has(m.t)) links.push({ source: m.s, target: m.t, category: m.category, relType: m.relType });
   Graph.graphData({ nodes, links });
-  try { buildTendrils(); } catch (e) {}   // refresh hidden-connection tendrils for the new node set (throttled)
+  try { buildNodeCloud(); } catch (e) {}   // rebuild the instanced Points cloud for the new node set
+  try { buildTendrils(); } catch (e) {}    // refresh hidden-connection tendrils (throttled)
 }
 
 async function loadOverview() {
@@ -242,6 +241,61 @@ async function pollShortTerm(initial) {
 // ============================================================================================================
 const scene = Graph.scene();
 const VHEX = new THREE.Color(SQ_VIOLET).getHex(), SHEX = new THREE.Color(ECHO_SKY).getHex();
+
+// ============================================================================================================
+// NODE CLOUD (lean rendering) — every node is a glow point-sprite in ONE THREE.Points object: a single draw
+// call that scales to tens of thousands, far cheaper than per-node sphere meshes AND no full-screen bloom (the
+// thing that crashed the shared GPU). Per-point size (hubs bigger) via a tiny ShaderMaterial; soft glow texture
+// gives the neuron look with NormalBlending (no additive wash). Positions sync from the force sim each frame.
+// ============================================================================================================
+const NODE_TEX = (function () {
+  const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d');
+  const g = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.28, 'rgba(255,255,255,0.92)'); g.addColorStop(0.55, 'rgba(255,255,255,0.32)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  x.fillStyle = g; x.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c);
+})();
+const nodeMat = new THREE.ShaderMaterial({
+  uniforms: { map: { value: NODE_TEX }, uOpacity: { value: 0.96 } },
+  vertexShader: 'attribute float size; attribute vec3 aColor; varying vec3 vColor; void main(){ vColor=aColor; vec4 mv=modelViewMatrix*vec4(position,1.0); gl_PointSize=size*(330.0/max(1.0,-mv.z)); gl_Position=projectionMatrix*mv; }',
+  fragmentShader: 'uniform sampler2D map; uniform float uOpacity; varying vec3 vColor; void main(){ vec4 t=texture2D(map, gl_PointCoord); if(t.a<0.02) discard; gl_FragColor=vec4(vColor, t.a*uOpacity); }',
+  transparent: true, depthWrite: false, depthTest: true, blending: THREE.NormalBlending,
+});
+let nodeCloud = null, nodeGeo = null, nodeIndex = [];
+function nodePointSize(n) { if (n.store === 'sidequest') return 7; const d = n.degree || 0; return Math.max(5, Math.min(26, 6 + Math.log10(d + 1) * 8)); }
+function buildNodeCloud() {
+  const ns = Graph.graphData().nodes; nodeIndex = ns; const N = ns.length;
+  if (nodeCloud) { scene.remove(nodeCloud); nodeGeo.dispose(); nodeCloud = null; nodeGeo = null; }
+  if (!N) return;
+  const pos = new Float32Array(N * 3), col = new Float32Array(N * 3), size = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const n = ns[i], c = new THREE.Color(nodeColor(n));
+    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; size[i] = nodePointSize(n);
+    if (Number.isFinite(n.x)) { pos[i * 3] = n.x; pos[i * 3 + 1] = n.y; pos[i * 3 + 2] = n.z || 0; }
+  }
+  nodeGeo = new THREE.BufferGeometry();
+  nodeGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  nodeGeo.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
+  nodeGeo.setAttribute('size', new THREE.BufferAttribute(size, 1));
+  nodeCloud = new THREE.Points(nodeGeo, nodeMat); nodeCloud.frustumCulled = false; scene.add(nodeCloud);
+}
+function updateNodeCloud() {
+  if (!nodeCloud) return; const pos = nodeGeo.attributes.position.array;
+  for (let i = 0; i < nodeIndex.length; i++) { const n = nodeIndex[i]; if (!Number.isFinite(n.x)) continue; pos[i * 3] = n.x; pos[i * 3 + 1] = n.y; pos[i * 3 + 2] = n.z || 0; }
+  nodeGeo.attributes.position.needsUpdate = true;
+}
+// click-to-walk via raycast against the Points cloud (default node meshes are hidden, so onNodeClick is dead).
+// A drag = orbit, a click (little movement) = pick. threshold is in world units ~ a node's screen footprint.
+const _ray = new THREE.Raycaster(); _ray.params.Points.threshold = 6;
+let _downXY = null;
+graphEl.addEventListener('pointerdown', (e) => { _downXY = [e.clientX, e.clientY]; });
+graphEl.addEventListener('pointerup', (e) => {
+  const d = _downXY; _downXY = null;
+  if (!d || !nodeCloud) return;
+  if (Math.hypot(e.clientX - d[0], e.clientY - d[1]) > 5) return;   // moved → it was an orbit drag
+  const cv = graphEl.querySelector('canvas'); if (!cv) return; const rect = cv.getBoundingClientRect();
+  const m = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+  try { _ray.setFromCamera(m, Graph.camera()); const hits = _ray.intersectObject(nodeCloud); if (hits.length) { const n = nodeIndex[hits[0].index]; if (n && n.id != null) focus(n.id); } } catch (err) {}
+});
 
 const SPARK_TEX = (function () {
   const c = document.createElement('canvas'); c.width = c.height = 64;
@@ -412,6 +466,7 @@ function tick() {
   requestAnimationFrame(tick);
   const now = performance.now(); frames++;
   updateEffects(now);
+  updateNodeCloud();
   updateTendrils();
   if (now - lastT >= 750) {
     fps = Math.round(frames * 1000 / (now - lastT)); frames = 0; lastT = now;
@@ -468,11 +523,11 @@ if (followBtn) {
   paint();
   followBtn.addEventListener('click', () => { setFollow(!follow); paint(); });
 }
-Graph.onNodeClick((n) => { if (n && n.id != null) focus(n.id); });
+// (click-to-walk is handled by the raycast picker on the Points cloud above — default node meshes are hidden)
 setInterval(() => pollShortTerm(false), 5000);   // short-term reconciler (liveness + prune)
 
 // ---- dev handle for CDP verification ----
 window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, tendrilN: () => tendrilSpecs.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z };
 
 loadOverview();
-console.info('[kg3d] surface build phase-6: tendrils + starfield + full absorb + think ambient (baseline complete)');
+console.info('[kg3d] surface build lean-1: instanced Points nodes (no bloom, one draw call) + raycast picking — GPU-crash rebuild');
