@@ -131,6 +131,7 @@ function render() {
   for (const l of linkSrc) if (ids.has(l.source) && ids.has(l.target)) links.push({ source: l.source, target: l.target, category: l.category, color: l.color, relType: l.relType });
   for (const m of shortTerm.links.values()) if (ids.has(m.s) && ids.has(m.t)) links.push({ source: m.s, target: m.t, category: m.category, relType: m.relType });
   Graph.graphData({ nodes, links });
+  try { buildTendrils(); } catch (e) {}   // refresh hidden-connection tendrils for the new node set (throttled)
 }
 
 async function loadOverview() {
@@ -277,6 +278,66 @@ function gSupernova(pos, count) {
   const mag = Math.min(3.2, 1.2 + Math.log2((count || 2))), flash = mkSprite(0xbfe0ff, 0.95), ring = mkSprite(VHEX, 0); flash.position.copy(pos); flash.scale.setScalar(4); ring.position.copy(pos);
   addEffect([flash, ring], 1500, (p) => { flash.scale.setScalar(4 + p * 42 * mag); flash.material.opacity = 0.95 * (1 - p); const q = Math.sin(Math.min(1, p / 0.5) * Math.PI); ring.scale.setScalar(6 + p * 64 * mag); ring.material.opacity = 0.5 * q; });
 }
+function gAbsorb(pos, count) {                 // dedup merge: duplicate motes converge inward, canonical blooms
+  const k = Math.min(6, 2 + (count || 2));
+  for (let i = 0; i < k; i++) {
+    const off = new THREE.Vector3(hashSeed('ax' + i + pos.x) * 2 - 1, hashSeed('ay' + i + pos.y) * 2 - 1, hashSeed('az' + i + pos.z) * 2 - 1).multiplyScalar(26 + 22 * hashSeed('r' + i));
+    const start = pos.clone().add(off), s = mkSprite(VHEX, 0.85); s.scale.setScalar(2.5);
+    addEffect([s], 1000, (p) => { const e = p * p; s.position.copy(start.clone().lerp(pos, e)); s.material.opacity = 0.85 * (1 - p * 0.6); s.scale.setScalar(2.5 * (1 - p * 0.4)); });
+  }
+  const bloom = mkSprite(VHEX, 0); bloom.position.copy(pos);
+  addEffect([bloom], 1000, (p) => { const q = Math.sin(p * Math.PI); bloom.scale.setScalar(4 + q * 10); bloom.material.opacity = 0.7 * q; });
+}
+function gThink() {                            // ambient heartbeat — a faint mote drifting near the core (throttled upstream)
+  const c = coreCentroid3D(), s = mkSprite(VHEX, 0.3);
+  s.position.set(c.x + (Math.random() - 0.5) * 80, c.y + (Math.random() - 0.5) * 80, c.z + (Math.random() - 0.5) * 80); s.scale.setScalar(2);
+  addEffect([s], 1200, (p) => { const q = Math.sin(p * Math.PI); s.material.opacity = 0.3 * q; s.scale.setScalar(2 + q * 3); });
+}
+
+// --- neuron aesthetic (Phase 6): hidden-connection TENDRILS from hubs + a distant STARFIELD. GPU-cheap in 3D
+// (uncapped vs the 2D top-40 cap): one LineSegments buffer, positions refreshed each frame from node motion. ---
+function hashSeed(str) { let h = 2166136261; const s = String(str); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) / 4294967295; }
+let tendrilSpecs = [], tendrilGeo = null, tendrilLines = null, _tendrilAt = 0;
+function buildTendrils(force) {
+  const now = performance.now(); if (!force && now - _tendrilAt < 700) return; _tendrilAt = now;
+  const ns = Graph.graphData().nodes;
+  const hubs = ns.filter((n) => (n.degree || 0) > 6).sort((a, b) => (b.degree || 0) - (a.degree || 0)).slice(0, 60);
+  tendrilSpecs = [];
+  for (const n of hubs) {
+    const K = Math.max(2, Math.min(7, Math.floor(Math.log2((n.degree || 2)))));
+    const baseLen = 8 + Math.log10((n.degree || 1) + 1) * 22;
+    for (let i = 0; i < K; i++) {
+      const h1 = hashSeed(n.id + '#' + i), h2 = hashSeed(n.id + '@' + i), h3 = hashSeed(n.id + '$' + i);
+      const dir = new THREE.Vector3(h1 * 2 - 1, h2 * 2 - 1, h3 * 2 - 1); if (dir.lengthSq() < 1e-3) dir.set(0, 1, 0); dir.normalize();
+      tendrilSpecs.push({ node: n, dir, len: baseLen * (0.6 + 0.6 * h1), color: new THREE.Color(nodeColor(n)) });
+    }
+  }
+  if (tendrilLines) { scene.remove(tendrilLines); tendrilGeo.dispose(); tendrilLines.material.dispose(); tendrilLines = null; tendrilGeo = null; }
+  const N = tendrilSpecs.length; if (!N) return;
+  const pos = new Float32Array(N * 6), col = new Float32Array(N * 6);
+  for (let i = 0; i < N; i++) { const c = tendrilSpecs[i].color; col[i * 6] = c.r; col[i * 6 + 1] = c.g; col[i * 6 + 2] = c.b; col[i * 6 + 3] = 0; col[i * 6 + 4] = 0; col[i * 6 + 5] = 0; }   // bright at hub → dark (invisible) at tip
+  tendrilGeo = new THREE.BufferGeometry();
+  tendrilGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  tendrilGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  tendrilLines = new THREE.LineSegments(tendrilGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false }));
+  scene.add(tendrilLines);
+}
+function updateTendrils() {
+  if (!tendrilLines || !tendrilSpecs.length) return;
+  const pos = tendrilGeo.attributes.position.array;
+  for (let i = 0; i < tendrilSpecs.length; i++) {
+    const s = tendrilSpecs[i], n = s.node; if (!Number.isFinite(n.x)) continue; const bz = n.z || 0;
+    pos[i * 6] = n.x; pos[i * 6 + 1] = n.y; pos[i * 6 + 2] = bz;
+    pos[i * 6 + 3] = n.x + s.dir.x * s.len; pos[i * 6 + 4] = n.y + s.dir.y * s.len; pos[i * 6 + 5] = bz + s.dir.z * s.len;
+  }
+  tendrilGeo.attributes.position.needsUpdate = true;
+}
+(function addStarfield() {
+  const N = 1400, pos = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) { const r = 700 + Math.random() * 1500, th = Math.random() * Math.PI * 2, ph = Math.acos(2 * Math.random() - 1); pos[i * 3] = r * Math.sin(ph) * Math.cos(th); pos[i * 3 + 1] = r * Math.sin(ph) * Math.sin(th); pos[i * 3 + 2] = r * Math.cos(ph); }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0x8496b8, size: 1.5, sizeAttenuation: false, transparent: true, opacity: 0.5, depthWrite: false })));
+})();
 
 // --- Slice 4 optimistic mint + coalesce, ported to 3D: a pushed birth MINTS its node into graphData near the
 // core (front) so it appears + sparks instantly, and a burst >=8 coalesces into one supernova. ---
@@ -307,8 +368,9 @@ function onActivity(evt) {
     else if (k === 'match.hit') { if (a && b) gMatch(V3(a), V3(b)); }
     else if (k === 'recall') { if (a) gRecall(V3(a)); }
     else if (k === 'promote') { if (a) gPromote(V3(a)); }
-    else if (k === 'node.merge') { if (a) gEnrich(V3(a), VHEX); }   // absorb → a bright pull for now (full absorb: later phase)
-    // think / doc.land / news → ambient, deferred to a later phase
+    else if (k === 'node.merge') { if (a) gAbsorb(V3(a), evt.count); }   // dedup absorb: duplicates collapse inward
+    else if (k === 'think') { gThink(); }                                // ambient heartbeat (throttled upstream)
+    // doc.land / news → ambient inflow, deferred (no emitter fires them yet)
   } catch (e) { console.warn('[kg3d] activity', e && e.message); }
 }
 
@@ -318,6 +380,7 @@ function tick() {
   requestAnimationFrame(tick);
   const now = performance.now(); frames++;
   updateEffects(now);
+  updateTendrils();
   if (now - lastT >= 750) {
     fps = Math.round(frames * 1000 / (now - lastT)); frames = 0; lastT = now;
     const d = Graph.graphData();
@@ -377,7 +440,7 @@ Graph.onNodeClick((n) => { if (n && n.id != null) focus(n.id); });
 setInterval(() => pollShortTerm(false), 5000);   // short-term reconciler (liveness + prune)
 
 // ---- dev handle for CDP verification ----
-window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z };
+window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, tendrilN: () => tendrilSpecs.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z };
 
 loadOverview();
-console.info('[kg3d] surface build phase-4: ego-walk + search + click-to-walk + short-term reconciler');
+console.info('[kg3d] surface build phase-6: tendrils + starfield + full absorb + think ambient (baseline complete)');
