@@ -30,6 +30,26 @@
                color: #9fb2c8; pointer-events: none; text-shadow: 0 1px 3px #000; }
     #hud { position: fixed; bottom: 8px; left: 12px; z-index: 10; font: 11px ui-monospace, monospace;
            color: #8fb; background: rgba(0,0,0,.4); padding: 3px 8px; border-radius: 5px; opacity: .75; }
+    /* right-side dock: a live, color-coded running log of every memory (short + long term) DB action */
+    #logdock { position: fixed; top: 0; right: 0; width: 340px; height: 100vh; z-index: 14; display: flex; flex-direction: column;
+               background: linear-gradient(#0a0c12f7, #0a0c12ee); border-left: 1px solid #1c2330; box-shadow: -14px 0 34px #0007; }
+    #logdock.hidden { display: none; }
+    #logdock .lh { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #1c2330;
+                   font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: #8395ad; }
+    #logdock .lh .dot { width: 7px; height: 7px; border-radius: 50%; background: #34d399; box-shadow: 0 0 7px #34d399; animation: lpulse 2s ease-in-out infinite; }
+    @keyframes lpulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+    #logdock .lh .sp { margin-left: auto; color: #4a5568; font-size: 10px; text-transform: none; letter-spacing: 0; }
+    #logdock .lh .lg { display: flex; gap: 9px; font-size: 9px; text-transform: none; letter-spacing: 0; }
+    #logdock .lh .lg b { font-weight: 700; } #logdock .lh .lg .v { color: #c4b5fd; } #logdock .lh .lg .s { color: #7dd3fc; }
+    #logfeed { flex: 1; overflow-y: auto; padding: 3px 0; font: 11.5px ui-monospace, SFMono-Regular, monospace; }
+    #logfeed::-webkit-scrollbar { width: 8px; } #logfeed::-webkit-scrollbar-thumb { background: #232a36; border-radius: 4px; }
+    .logrow { display: flex; align-items: baseline; gap: 7px; padding: 2px 12px 2px 10px; border-left: 2px solid transparent; }
+    .logrow:hover { background: #ffffff08; }
+    .logrow .t { color: #47526a; font-size: 10px; flex: none; }
+    .logrow .db { flex: none; font-size: 9px; font-weight: 700; padding: 0 4px; border-radius: 3px; letter-spacing: .04em; }
+    .logrow .db.st { color: #c4b5fd; background: #a78bfa26; } .logrow .db.lt { color: #7dd3fc; background: #38bdf826; }
+    .logrow .k { flex: none; font-weight: 600; }
+    .logrow .a { color: #8b98ad; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   </style>
 </head>
 <body>
@@ -40,9 +60,14 @@
     <label class="lbl">hops <select id="hops"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option></select></label>
     <button class="btn" id="backBtn" hidden>&larr; overview</button>
     <button class="btn" id="followBtn" title="Follow — fly to eruptions + the idle graph-walk">Follow &#9654;</button>
+    <button class="btn on" id="logBtn" title="Toggle the live memory-activity log">Log</button>
   </div>
   <div id="overlay">Loading corpus…</div>
   <div id="hud"></div>
+  <div id="logdock">
+    <div class="lh"><span class="dot"></span>Memory activity<span class="lg"><span class="v"><b>ST</b> short</span><span class="s"><b>LT</b> long</span></span><span class="sp" id="logcount">0</span></div>
+    <div id="logfeed"></div>
+  </div>
   <script src="vendor/kg3d.bundle.js"></script>
   <script src="kg3d.js"></script>
 </body>

@@ -28,6 +28,41 @@ function setOverlay(msg, ms) {
 
 const linkEnd = (e) => (e && typeof e === 'object') ? e.id : e;
 
+// ---- MEMORY-ACTIVITY LOG (right dock): a live, color-coded running feed of every DB action on the kg:activity
+// bus — short-term (ST, violet) + long-term (LT, sky). Fed from onActivity, so it mirrors exactly what drives
+// the gestures. XSS-safe (textContent, no innerHTML); capped ring. ----
+const logFeed = document.getElementById('logfeed'), logCount = document.getElementById('logcount');
+const LOG_CAP = 250;
+let _logN = 0;
+const KIND_META = {
+  'node.born': ['born', '#34d399'], 'node.enrich': ['enrich', '#2dd4bf'], 'node.merge': ['merge', '#fb923c'],
+  'node.promote': ['promote', '#fbbf24'], 'node.degrade': ['degrade', '#f87171'],
+  'edge.born': ['link', '#60a5fa'], 'edge.promote': ['link+', '#818cf8'], 'edge.prune': ['unlink', '#94a3b8'],
+  'match.hit': ['match', '#c4b5fd'], 'recall': ['recall', '#22d3ee'], 'promote': ['promote', '#fbbf24'],
+  'think': ['think', '#64748b'], 'doc.land': ['doc', '#a3e635'], 'news': ['news', '#f472b6'], 'observe': ['observe', '#a8a29e'],
+  'audit.clean': ['clean', '#facc15'],
+};
+const pad2 = (n) => (n < 10 ? '0' + n : '' + n);
+function logActivity(evt) {
+  if (!logFeed || !evt || !evt.kind) return;
+  const meta = KIND_META[evt.kind] || [evt.kind, '#94a3b8'];
+  const st = evt.db === 'sidequest';
+  const d = new Date();
+  const row = document.createElement('div');
+  row.className = 'logrow'; row.style.borderLeftColor = st ? '#a78bfa' : '#38bdf8';
+  const mk = (cls, text, color) => { const s = document.createElement('span'); s.className = cls; s.textContent = text; if (color) s.style.color = color; return s; };
+  row.appendChild(mk('t', pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds())));
+  row.appendChild(mk('db ' + (st ? 'st' : 'lt'), st ? 'ST' : 'LT'));
+  row.appendChild(mk('k', meta[0], meta[1]));
+  let txt = evt.anchor != null ? String(evt.anchor) : '';
+  if (evt.anchor2 != null) txt += ' → ' + String(evt.anchor2);
+  if (evt.count && evt.count > 1) txt += ' ×' + evt.count;
+  row.appendChild(mk('a', txt));
+  logFeed.insertBefore(row, logFeed.firstChild);
+  _logN++; if (logCount) logCount.textContent = _logN;
+  while (logFeed.childElementCount > LOG_CAP) logFeed.removeChild(logFeed.lastChild);
+}
+
 // ---- 3D core force: the short-term store is a dense inner ORB pulled tight to the centre; the long-term
 // corpus is pushed radially OUTWARD toward a shell so it ENVELOPS the core as a diffuse 3D cloud (not a plane
 // behind it). Charge repulsion + links give the cloud its thickness/structure. SHELL is tunable. ----
@@ -445,6 +480,7 @@ function mintBorn(batch) {
 // --- dispatcher: route a kg:activity event to its gesture (find the node's world position) ---
 function onActivity(evt) {
   if (!evt) return;
+  try { logActivity(evt); } catch (e) {}   // every event → the right-dock running log (independent of gesture routing)
   try {
     const k = evt.kind;
     if (k === 'node.born') { queueBorn(evt); return; }
@@ -490,6 +526,17 @@ function onFocusMove(p) {
 // ---- subscribe the live channels (same broadcasts main.js sends to every webContents) ----
 try { if (window.sq && window.sq.kg && typeof window.sq.kg.onActivity === 'function') window.sq.kg.onActivity(onActivity); } catch (e) {}
 try { if (window.sq && window.sq.kg && typeof window.sq.kg.onFocusMove === 'function') window.sq.kg.onFocusMove(onFocusMove); } catch (e) {}
+// dedup/curation runs on the legacy kg:curation-move channel — fold it into the same stream (absorb gesture + log).
+try { if (window.sq && window.sq.kg && typeof window.sq.kg.onCurationMove === 'function') window.sq.kg.onCurationMove((p) => { if (p) onActivity({ db: 'echo', kind: 'node.merge', anchor: p.anchor, count: p.count || 1, tier: p.tier }); }); } catch (e) {}
+
+// ---- log dock toggle ----
+const logDock = document.getElementById('logdock'), logBtn = document.getElementById('logBtn');
+if (logBtn && logDock) {
+  let logOpen = true; try { logOpen = localStorage.getItem('kg3d.log') !== '0'; } catch (e) {}
+  const paintLog = () => { logDock.classList.toggle('hidden', !logOpen); logBtn.classList.toggle('on', logOpen); };
+  paintLog();
+  logBtn.addEventListener('click', () => { logOpen = !logOpen; try { localStorage.setItem('kg3d.log', logOpen ? '1' : '0'); } catch (e) {} paintLog(); });
+}
 
 // ---- search dropdown + navigation wiring ----
 const esc = (s) => String(s == null ? '' : s).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
@@ -530,4 +577,5 @@ setInterval(() => pollShortTerm(false), 5000);   // short-term reconciler (liven
 window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, tendrilN: () => tendrilSpecs.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z };
 
 loadOverview();
-console.info('[kg3d] surface build lean-1: instanced Points nodes (no bloom, one draw call) + raycast picking — GPU-crash rebuild');
+try { window.__kg3d.logN = () => _logN; window.__kg3d.logRows = () => (logFeed ? logFeed.childElementCount : 0); } catch (e) {}
+console.info('[kg3d] surface build lean-2: + right-dock live memory-activity log (color-coded ST/LT, kg:activity feed)');
