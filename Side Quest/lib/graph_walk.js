@@ -238,7 +238,19 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
   // CANONICAL name for propose_* — the exact stored graph name (with its "[Q…]" tag) so the edge targets
   // the precise node we selected, not a clean-named twin (a wikiquote doc, a lower-degree dup). Web search
   // + the dossier + the voice line all use the clean `mention`; only the writes use `canonical`.
-  const canonical = (gap.object && gap.object.canonical) || mention;
+  let canonical = (gap.object && gap.object.canonical) || mention;
+  // S3b — route [grow]'s endpoint NAMES through the SAME resolution gate before proposing, so a hub/variant
+  // ("United States Senate") resolves to its canonical Echo node instead of rejecting → re-minting. Fail-soft +
+  // additive: only ever swaps in a precision-safe canonical name; on any miss/error it keeps the original.
+  const _gateDeps = (typeof dispatch === 'function') ? require('./resolution_live').makeLiveDeps(dispatch) : null;
+  const canonResolve = async (nm) => {
+    if (!_gateDeps || !nm) return nm;
+    try {
+      const _rr = await require('./resolution_gate').preResolve(nm, {}, { deps: _gateDeps, fallback: null });
+      return (_rr && _rr.status === 'resolved' && _rr.object && _rr.object.name) ? _rr.object.name : nm;
+    } catch { return nm; }
+  };
+  canonical = await canonResolve(canonical);
   let sources = [];
   if (typeof web === 'function') { try { sources = (await web(mention, 5)) || []; } catch (e) { log && log('[graph-walk] web fill failed: ' + e.message); } }
 
@@ -293,6 +305,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
     if (connections >= WALK_MAX_CONNECTIONS) break;
     const rname = String((r && r.name) || '').trim();
     if (!rname || visitKey(rname) === visitKey(mention)) continue;
+    const rcanon = await canonResolve(rname);   // S3b: canonicalize the related endpoint before proposing (fail-soft → rname)
     if (nbrKeys.has(visitKey(rname))) continue;   // edge already in the graph — skip
     const fg = CG.gateFact(r && (r.sources != null ? r.sources : r.source), sources);   // list-aware (multi-cite) w/ legacy single fallback
     if (!fg.promote) {                            // uncited / inferred → does NOT enter the graph
@@ -303,7 +316,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
     }
     // propose the related entity (harmless if it already exists — Echo dedups on promotion)
     if (entities < WALK_MAX_NODES) {
-      const re = await proposeEntity({ dispatch, name: rname, entity_type: r.type, summary: '', confidence: fg.confidence, log });
+      const re = await proposeEntity({ dispatch, name: rcanon, entity_type: r.type, summary: '', confidence: fg.confidence, log });
       if (re.isNew) {
         entities++;
         // inline-promote the neighbour too, so the edge below has BOTH endpoints live (record pipeline).
@@ -327,7 +340,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
     const corrN = corroboration.corroborationCount(meta.source_set);
     meta.corroboration = corrN;
     const conf = confModel.calibratedConfidence({ grade: fg.grade, corroboration: corrN });
-    const rr = await proposeRelation({ dispatch, source: canonical, target: rname, relation_type: relType, confidence: conf, metadata: meta, allowOpen: true, log });
+    const rr = await proposeRelation({ dispatch, source: canonical, target: rcanon, relation_type: relType, confidence: conf, metadata: meta, allowOpen: true, log });
     if (rr.ok) {                                    // action==='proposed' — the edge ACTUALLY landed as a proposal
       connections++; related.push(rname); links.push({ name: rname, rel: relLabel });   // relLabel = the LLM's exact phrase → voice variety
       if (!sourceUrl) sourceUrl = fg.url || null;
