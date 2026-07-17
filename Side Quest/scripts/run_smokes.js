@@ -54,6 +54,7 @@ const smokes = [
   'smoke_entity_fuse.js',
   'smoke_resolution_gate.js',
   'smoke_resolution_live.js',
+  'smoke_strongid_backfill.js',
   'smoke_civic_canon.js',
   'smoke_doc_decompose.js',
   'smoke_corroboration.js',
