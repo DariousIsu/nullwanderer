@@ -811,13 +811,28 @@ async function promoteStory(story, { dispatch, landDoc, extract, now = Date.now(
   const outlets = [...(story.outlet_set || [])].filter(Boolean).map(String);
   const srcUrls = (story.article_url && /^https?:/i.test(String(story.article_url))) ? [String(story.article_url)] : [];
   const meta = JSON.stringify({ source_set: srcUrls.concat(outlets), corroboration: corr, category: story.category || null, domain: dom.civic ? 'civic' : 'off-domain' });
+  // S3b-remainder (news lane) — route the edge TARGET (a principal) through the SAME resolution gate the
+  // [grow] lane uses (block→match→canonical) before proposing, so a principal ("Scott Bessent") resolves to
+  // its existing canonical Echo node instead of rejecting on a surface-form miss → re-mint. Fail-soft +
+  // additive: swaps in a precision-safe canonical name only; any miss/error keeps the raw name (current
+  // behavior preserved). The SOURCE (story.title) is the event node just created above by exact name, so it's
+  // left raw — gating an exact-known name buys nothing and risks mis-resolving a headline onto an unrelated node.
+  const _gateDeps = (typeof dispatch === 'function') ? require('./resolution_live').makeLiveDeps(dispatch) : null;
+  const canonResolve = async (nm) => {
+    if (!_gateDeps || !nm) return nm;
+    try {
+      const _rr = await require('./resolution_gate').preResolve(nm, {}, { deps: _gateDeps, fallback: null });
+      return (_rr && _rr.status === 'resolved' && _rr.object && _rr.object.name) ? _rr.object.name : nm;
+    } catch { return nm; }
+  };
   const principals = extractProperNouns(`${story.title}. ${story.summary || ''}`)
     .slice(0, maxEdges);   // keep EVERY principal — a name's topic never disqualifies it as an edge endpoint
   for (const p of principals) {
     try {
       // LINKED_TO is a whitelisted core (symmetric) relation type; 'involves' is NOT whitelisted → always
       // rejected. Both endpoints must already exist, so an edge to a not-yet-created principal fails soft.
-      const rr = await dispatch({ kind: 'do', name: 'propose_relation', args: { source_name: String(story.title).slice(0, 200), target_name: String(p).slice(0, 200), relation_type: 'LINKED_TO', confidence: conf, relation_metadata: meta } });
+      const _tgt = await canonResolve(String(p).slice(0, 200));   // S3b: canonicalize the principal before proposing
+      const rr = await dispatch({ kind: 'do', name: 'propose_relation', args: { source_name: String(story.title).slice(0, 200), target_name: _tgt, relation_type: 'LINKED_TO', confidence: conf, relation_metadata: meta } });
       let action = null; try { action = JSON.parse(rr && rr.text).action; } catch {}
       // Count ONLY an accepted edge — a rejected proposal (missing endpoint / not-whitelisted) still returns
       // transport ok=true with action:'rejected', so ok alone would report phantom edges.
