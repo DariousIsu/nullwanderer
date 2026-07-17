@@ -86,6 +86,23 @@ try {
   const onFalseDrops = ON_DOCS.filter((d) => !wordMatch(`${d.t} ${d.b}`, toks));
   ok(onFalseDrops.length === 0, `on-domain docs PASS (false-drops: ${onFalseDrops.length ? onFalseDrops.map((d) => d.t).join(', ') : 'none'})`);
 
+  // AUTHORITATIVE CIVIC-SOURCE bypass (2026-07-17): a gov origin ALWAYS passes the grab leash even with ZERO
+  // domain-token overlap (fixes "local officials dropped"), while a .com page with the same off-token words
+  // stays blocked (no medical/dental flood). Exercises the REAL exported _pdfMatchesLeash + curation_gate.
+  const { isAuthoritativeSource } = require('C:/Users/azrae/Desktop/Side Quest/lib/curation_gate');
+  const web = require('C:/Users/azrae/Desktop/Side Quest/lib/web');
+  ok(isAuthoritativeSource('https://cdc.gov/x/report12345.pdf') && !isAuthoritativeSource('https://smilesdental.com/x/report12345.pdf'),
+    'isAuthoritativeSource: .gov true, .com false');
+  // an off-token gov PDF: its words do NOT hit the leash, yet it PASSES via the gov bypass
+  const govPdf = { href: 'https://cdc.gov/roster/report12345.pdf', text: '', pageTitle: '', pageUrl: 'https://cdc.gov' };
+  ok(!wordMatch(`${govPdf.href} ${govPdf.text}`, toks), 'sanity: the gov PDF shares NO token with the leash (so only the bypass can pass it)');
+  ok(web._pdfMatchesLeash(govPdf, toks) === true, 'gov-source PDF PASSES the grab leash even off-token (local-officials fix)');
+  // an off-token .com PDF with the SAME non-civic words stays BLOCKED
+  const comPdf = { href: 'https://smilesdental.com/roster/report12345.pdf', text: 'dentist network provider', pageTitle: '', pageUrl: 'https://smilesdental.com' };
+  ok(web._pdfMatchesLeash(comPdf, toks) === false, 'off-token .com PDF stays BLOCKED (no flood re-open)');
+  // a gov PDF reached via a gov PAGE (href on a CDN) also passes via pageUrl
+  ok(web._pdfMatchesLeash({ href: 'https://cdn.example.com/f.pdf', pageUrl: 'https://legislature.mi.gov/docs' }, toks) === true, 'gov PAGE origin (pageUrl) also bypasses');
+
   // FALLBACK: no threads → tokens null → leash inert → frontier UNCHANGED (walker doesn't starve on fresh install)
   db.markOpenThreadStatus(1, 'resolved');
   db.markOpenThreadStatus(2, 'resolved');

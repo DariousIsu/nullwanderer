@@ -1086,6 +1086,12 @@ function _focusLeashTokens() { try { return require('./focus').domainLeashTokens
 // Does a PDF link overlap the leash at all? No leash (null/empty) → always true (unleashed).
 function _pdfMatchesLeash({ href = '', text = '', pageTitle = '', pageUrl = '' } = {}, leashTokens) {
   if (!leashTokens || !leashTokens.size) return true;
+  // AUTHORITATIVE CIVIC-SOURCE bypass (2026-07-17): a .gov/.mil (or known authoritative) origin is ALWAYS
+  // on-mission for this civic-research system — local officials live on government domains, while the medical/
+  // dental flood came from .com clinic + faculty pages. So a gov-sourced PDF passes the token leash; a
+  // commercial page still needs domain-vocab overlap. This fixes the leash "consistently dropping local
+  // officials" WITHOUT reopening the flood (clinic .com pages carry no gov domain). Host-flood cap still applies.
+  try { const { isAuthoritativeSource } = require('./curation_gate'); if (isAuthoritativeSource(href) || isAuthoritativeSource(pageUrl)) return true; } catch { /* fail through to token match */ }
   // WORD-BOUNDARY match, not substring — `direct` (a project word) must not silently match "directory"
   // (a doc-listing word) or "director" (in any faculty PDF). Extract 4+ char words, set-intersect with
   // the leash tokens. Same recipe used to BUILD the leash set, kept symmetric.

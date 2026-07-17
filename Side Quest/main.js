@@ -7203,6 +7203,11 @@ function _docLeashOk(doc) {
   try {
     const _lt = require('./lib/focus').domainLeashTokens();
     if (!_lt || !_lt.size) return true;
+    // AUTHORITATIVE CIVIC-SOURCE bypass (2026-07-17): a gov-origin doc (real source URL on .gov/.mil/known
+    // authoritative host, carried as doc.sourceUrl from the grab provenance) is ALWAYS on-mission — decompose
+    // it into entities regardless of current-focus token overlap. This is the fix for the leash "consistently
+    // dropping LOCAL OFFICIALS" (they land from gov rosters) without reopening the .com medical/dental flood.
+    try { const { isAuthoritativeSource } = require('./lib/curation_gate'); if (isAuthoritativeSource(doc && doc.sourceUrl)) return true; } catch { /* fall through to token match */ }
     const hay = `${doc && doc.title || ''} ${String(doc && doc.body || '').slice(0, 6000)}`.toLowerCase();
     const words = new Set(hay.match(/[a-z]{4,}/g) || []);
     for (const t of _lt) if (words.has(t)) return true;
