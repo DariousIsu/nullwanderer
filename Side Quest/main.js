@@ -1718,6 +1718,12 @@ app.whenReady().then(() => {
             const ra = await news_lane.readArticlesPass({ dispatch: (t) => echoSuit.dispatch(t), now, log: (m) => console.log(m) });
             if (ra.attempted) console.log(`[news] hourly article read: ${ra.read}/${ra.attempted} worthy stories`);
           } catch (e) { console.error('[news] hourly article read failed:', e.message); }
+          // TRANSCRIPT CAPTURE (read-tier): for worthy SPEECH/address stories, hunt + store the actual
+          // delivered words, so "what did X say" answers from a grounded transcript instead of confabulating.
+          try {
+            const tc = await news_lane.captureTranscriptsPass({ dispatch: (t) => echoSuit.dispatch(t), search: (q) => webSearch(q), now, log: (m) => console.log(m) });
+            if (tc.attempted) console.log(`[news] hourly transcript capture: ${tc.captured}/${tc.attempted} speech stories`);
+          } catch (e) { console.error('[news] hourly transcript capture failed:', e.message); }
         }
       } catch (e) { console.error('[news] hourly compression failed:', e.message); }
     };
@@ -5737,6 +5743,42 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   } catch (e) { console.error('[main] directed-focus setup failed:', e.message); }
 
+  // SPEECH / TRANSCRIPT lane — "what did X say", "X's speech/address", transcript asks. The VALUE is the
+  // ACTUAL delivered words, so answer from a real TRANSCRIPT (grounded + cited), never a confabulated recap
+  // around a random web snippet (the 2026-07-17 Trump-speech failure). Prefer a transcript already captured
+  // from the news feed (fast); else pull one synchronously; else ABSTAIN honestly. Skips the light-pull below.
+  let speechHandled = false;
+  try {
+    const _speechGate = !followupFired && !directedStopHandled && !expandHandled && !correctionHandled && !docQaHandled && !statusHandled && !socialTurn && !isAssignment;
+    const sq = _speechGate ? require('./lib/intent').detectSpeechQuery(userMessage) : null;
+    if (sq) {
+      const news_lane = require('./lib/news_lane');
+      const now = Date.now();
+      const dispatch = (t) => echoSuit.dispatch(t);
+      // 1) FAST PATH — a transcript already captured from the feed (Part A pre-grounds these).
+      let hit = news_lane.findRecentSpeech({ speaker: sq.speaker, now });
+      let transcript = hit && hit.transcript_text, srcUrl = hit && hit.transcript_url;
+      // 2) a matching speech story with no transcript yet, or (no story) a direct hunt → pull it now.
+      if (!(transcript && String(transcript).trim().length >= 400) && echoSuit && echoSuit.connected) {
+        const story = news_lane.findRecentSpeech({ speaker: sq.speaker, now, requireTranscript: false })
+          || (sq.speaker ? { title: `${sq.speaker} speech` } : null);
+        if (story) {
+          const tr = await news_lane.fetchTranscript({ dispatch, search: (q) => webSearch(q), story });
+          if (tr && tr.text) { transcript = tr.text; srcUrl = tr.url; if (story.id) { try { news_lane.setTranscript(story.id, tr.url, tr.text); } catch {} } }
+        }
+      }
+      if (transcript && String(transcript).trim().length >= 400) {
+        const slice = String(transcript).trim().slice(0, 6000);
+        composedUserMessage += `\n\n[SPEECH TRANSCRIPT${srcUrl ? ` — source: ${srcUrl}` : ''}. Answer his question ONLY from this transcript: quote or closely paraphrase the specific lines that bear on what he asked and attribute them to the speech. If the transcript does not cover what he asked, say so plainly — do NOT add anything that isn't in it.\n\n"""${slice}"""]`;
+        console.log(`[speech] answered from transcript (${slice.length} chars)${srcUrl ? ' — ' + srcUrl : ''}`);
+      } else {
+        composedUserMessage += `\n\n[NO TRANSCRIPT AVAILABLE for the speech he asked about. Do NOT invent, recap, or guess what was said — you don't have the words. Tell him honestly you don't have the transcript yet and offer to pull it or watch the feed for it. One or two sentences, no fabricated content.]`;
+        console.log('[speech] no transcript found → abstain-and-offer');
+      }
+      speechHandled = true;
+    }
+  } catch (e) { console.error('[speech] lane failed:', e.message); }
+
   // BRAINSTORM LANE (active collaborator) — the middle gear. On a topical/`explore` turn, pull ONE grounded
   // bit into the reply as fuel for the riff, and (on `explore`) float a low-key project OFFER she can commit
   // later. NO run, NO focus, NO canvas — just substance so a good groove has something real to build on,
@@ -5744,7 +5786,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     if (db.getMeta('brainstorm.disabled') !== '1' && !offerCommitted) {
       const brain = require('./lib/brainstorm');
-      const gateOk = !followupFired && !directedStopHandled && !expandHandled && !correctionHandled && !docQaHandled && !statusHandled && !socialTurn && !isAssignment;
+      const gateOk = !speechHandled && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled && !docQaHandled && !statusHandled && !socialTurn && !isAssignment;
       if (gateOk && brain.shouldLightPull({ route: turnRoute.route, socialTurn, personalFactQ, devQ, stateQ, activityQ, isStatusReq: _isStatusReqR, msgLen: userMessage.trim().length, message: userMessage })) {
         const topic = (projectOffer && projectOffer.target) || brain.pullTopic(userMessage);
         if (topic && topic.length >= 3) {

@@ -248,6 +248,10 @@ function ensureSchema() {
     if (!cols.includes('category')) newsdb.get().exec('ALTER TABLE news_stories ADD COLUMN category TEXT');   // news-tuner topic key
     if (!cols.includes('article_text')) newsdb.get().exec('ALTER TABLE news_stories ADD COLUMN article_text TEXT');   // full-article body (web_extract), fetched once for worthy stories
     if (!cols.includes('article_url')) newsdb.get().exec('ALTER TABLE news_stories ADD COLUMN article_url TEXT');
+    // TRANSCRIPT capture — a speech/address story gets the ACTUAL delivered words fetched + stored (fetch-once),
+    // so "what did X say" answers from the transcript (grounded) instead of confabulating around a snippet.
+    if (!cols.includes('transcript_text')) newsdb.get().exec('ALTER TABLE news_stories ADD COLUMN transcript_text TEXT');
+    if (!cols.includes('transcript_url')) newsdb.get().exec('ALTER TABLE news_stories ADD COLUMN transcript_url TEXT');
   } catch { /* fresh table already has the columns */ }
   _schemaReady = true;
 }
@@ -674,6 +678,97 @@ function setArticle(storyId, url, text) {
     .run(url || null, text == null ? '' : String(text), storyId).changes;
 }
 
+// ─── TRANSCRIPT capture ──────────────────────────────────────────────────────
+// Is this story ABOUT a delivered speech (so its VALUE is the actual words → we want a transcript)?
+// Pure: a speech noun plus a delivered/said cue, OR an unmistakable phrase ("addressed the nation",
+// "delivered remarks", "in his speech"). Kept tight so ordinary political news ("Trump signed a bill")
+// does NOT trigger a transcript hunt.
+const _STORY_SPEECH_NOUN_RE = /\b(speech|address|remarks|keynote|testimony|press conference|presser|monologue|sermon|eulogy|state of the union|inaugural|commencement)\b/i;
+const _STORY_SPEECH_VERB_RE = /\b(deliver(?:ed|s|ing)?|gave|gives|giving|said|says|spoke|speaks|address(?:ed|es|ing)?|told|announce[ds]?|declare[ds]?)\b/i;
+const _STORY_SPEECH_PHRASE_RE = /\b(addressed the (?:nation|congress|crowd|public|joint session)|delivered (?:a|his|her|their|remarks|the)|in (?:his|her|their|a|the) (?:speech|address|remarks|keynote)|full (?:speech|transcript|remarks)|read the (?:full )?(?:speech|transcript|remarks)|state of the union|prime[- ]?time (?:speech|address))\b/i;
+function isSpeechStory(story) {
+  if (!story) return false;
+  const t = `${story.title || ''}. ${story.summary || ''}`;
+  if (_STORY_SPEECH_PHRASE_RE.test(t)) return true;
+  return _STORY_SPEECH_NOUN_RE.test(t) && _STORY_SPEECH_VERB_RE.test(t);
+}
+
+// Persist a fetched transcript on the story (fetch-once, mirrors setArticle). '' = attempted-but-empty.
+function setTranscript(storyId, url, text) {
+  ensureSchema();
+  return newsdb.get().prepare('UPDATE news_stories SET transcript_url = ?, transcript_text = ? WHERE id = ?')
+    .run(url || null, text == null ? '' : String(text), storyId).changes;
+}
+
+// Hunt + fetch the actual transcript for a speech story. `search` (injected web-search) finds a transcript
+// URL (prefers ones whose URL/title screams "transcript" or an authoritative .gov/rev.com host); `dispatch`
+// (web_extract) pulls the clean body. Transcripts are long → a generous maxChars. Returns { url, text } | null.
+async function fetchTranscript({ dispatch, search, story, maxChars = 24000 } = {}) {
+  if (typeof search !== 'function' || typeof dispatch !== 'function' || !story) return null;
+  const subject = String(story.title || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  if (!subject) return null;
+  let results = [];
+  try {
+    const r = await Promise.race([search(`${subject} full transcript`), new Promise((res) => setTimeout(() => res(null), 8000))]);
+    results = (r && Array.isArray(r.results)) ? r.results : [];
+  } catch { return null; }
+  if (!results.length) return null;
+  // Rank: URL/title mentions "transcript" (+3), authoritative host (+2), else keep order.
+  const score = (h) => {
+    const u = String((h && h.url) || '').toLowerCase(), ti = String((h && h.title) || '').toLowerCase();
+    let s = 0;
+    if (/transcript/.test(u) || /transcript|full (?:speech|remarks)/.test(ti)) s += 3;
+    if (/\.gov\b|whitehouse\.gov|rev\.com|c-?span\.org|congress\.gov/.test(u)) s += 2;
+    return s;
+  };
+  const ranked = results.map((h, i) => ({ h, i, s: score(h) })).sort((a, b) => b.s - a.s || a.i - b.i);
+  for (const { h } of ranked.slice(0, 4)) {
+    const url = h && h.url;
+    if (!url || !/^https?:/i.test(url)) continue;
+    const text = await fetchArticle({ dispatch, url, maxChars });
+    if (text && text.length >= 400) return { url, text };   // a real transcript body, not a stub/paywall
+  }
+  return null;
+}
+
+// QUERY-TIME lookup: the freshest speech story matching `speaker` (a proper-noun subject, or null for
+// "what did they say"), within a recency window, that ALREADY has a stored transcript. Returns the story
+// (hydrated) or null. Cheap: bounded by recency + a small scan, filtered in JS.
+function findRecentSpeech({ speaker = null, now = Date.now(), withinMs = 3 * 24 * 3600 * 1000, requireTranscript = true } = {}) {
+  ensureSchema();
+  const rows = newsdb.get().prepare(
+    `SELECT * FROM news_stories WHERE last_ts >= ? ORDER BY last_ts DESC LIMIT 200`
+  ).all(now - withinMs).map(hydrateStory);
+  const spk = speaker ? String(speaker).toLowerCase().trim() : null;
+  let best = null;
+  for (const s of rows) {
+    if (!isSpeechStory(s)) continue;
+    if (requireTranscript && !(s.transcript_text && String(s.transcript_text).trim().length >= 400)) continue;
+    if (spk) { const hay = `${s.title || ''} ${s.summary || ''}`.toLowerCase(); if (!hay.includes(spk)) continue; }
+    if (!best || s.last_ts > best.last_ts) best = s;
+  }
+  return best;
+}
+
+// HOURLY transcript-capture pass — for worthy SPEECH stories with no transcript yet, hunt + store one, so
+// "what did X say" is already grounded when asked. Mirrors readArticlesPass (idempotent, bounded, fail-soft).
+async function captureTranscriptsPass({ dispatch, search, now = Date.now(), minCorroboration = 2, limit = 8, log } = {}) {
+  ensureSchema();
+  if (typeof dispatch !== 'function' || typeof search !== 'function') return { captured: 0, attempted: 0, speeches: 0 };
+  const speeches = storiesForDaily({ now, limit: Math.max(limit * 8, 100), minCorroboration })
+    .filter((s) => isSpeechStory(s) && s.transcript_text == null);
+  let captured = 0, attempted = 0;
+  for (const s of speeches) {
+    if (attempted >= limit) break;
+    attempted++;
+    const tr = await fetchTranscript({ dispatch, search, story: s });
+    if (tr && tr.text) { setTranscript(s.id, tr.url, tr.text); captured++; if (log) log(`[news-transcript] captured transcript for story ${s.id} (${tr.text.length} chars) — ${tr.url}`); }
+    else { setTranscript(s.id, null, ''); }   // mark attempted-but-empty so a dead hunt isn't retried every pass
+  }
+  if (log) log(`[news-transcript] captured ${captured}/${attempted} attempted (${speeches.length} speech stories unread)`);
+  return { captured, attempted, speeches: speeches.length };
+}
+
 // Worthy stories to promote: open OR closed within the grace window, source-corroborated enough. Newest+
 // most-corroborated first. (Idempotent on event_ref, so re-promoting an open story just updates it.)
 // ANTI-GLOB worthiness gate: only stories past an independent-corroboration bar (min(outlets, reports) >=
@@ -925,6 +1020,8 @@ module.exports = {
   setEventRef, buildStoryDoc, storiesForDaily, storiesForTopic, storiesAsNotes, proposeEventObject, promoteProposal, promoteStory, runDailyPass,
   // full-article ingestion (web_extract → richer evidence doc → object extraction) — HOURLY read pass
   representativeArticleUrl, fetchArticle, isJunkBody, setArticle, readArticlesPass,
+  // transcript capture (speech/address stories → actual delivered words) — HOURLY capture pass + query-time lookup
+  isSpeechStory, setTranscript, fetchTranscript, findRecentSpeech, captureTranscriptsPass,
   // reconciliation adapter (spec §7: story → Claim, consumed by lib/reconcile)
   storyToClaim,
 };

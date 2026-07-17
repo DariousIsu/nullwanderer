@@ -1,0 +1,77 @@
+/* Smoke: news_lane transcript capture — isSpeechStory classifier, fetchTranscript (search+rank+extract),
+ * findRecentSpeech (query-time lookup), and captureTranscriptsPass (hourly ingest capture). Isolated news DB.
+ * Run: ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_news_transcript.js
+ */
+'use strict';
+const os = require('os'), path = require('path'), fs = require('fs');
+const tmp = path.join(os.tmpdir(), `sq_newstranscript_${process.pid}.db`);
+for (const f of [tmp, tmp + '-wal', tmp + '-shm']) { try { fs.unlinkSync(f); } catch {} }
+process.env.NEWS_DB_PATH = tmp;
+
+const news = require('../lib/news_lane');
+const newsdb = require('../lib/news_db');
+news.ensureSchema();
+
+let pass = 0, fail = 0;
+const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++; console.log('  ✗', m); } };
+
+const NOW = 1_700_000_000_000;
+const insertStory = (title, summary, { outlets = 3, reports = 3, ts = NOW } = {}) =>
+  newsdb.get().prepare(
+    `INSERT INTO news_stories (title, summary, outlet_count, report_count, source_count, first_ts, last_ts, status, created_at)
+     VALUES (?,?,?,?,?,?,?, 'open', ?)`
+  ).run(title, summary, outlets, reports, outlets, ts, ts, ts).lastInsertRowid;
+
+(async () => {
+// ---- 1) isSpeechStory (pure) ----
+ok(news.isSpeechStory({ title: 'President Trump delivers primetime address to the nation', summary: '' }), 'speech: "delivers … address" → true');
+ok(news.isSpeechStory({ title: 'Read the full transcript of Trump\'s speech', summary: '' }), 'speech: "full transcript … speech" → true');
+ok(news.isSpeechStory({ title: 'Zelensky addressed the nation on the war', summary: '' }), 'speech: "addressed the nation" → true');
+ok(!news.isSpeechStory({ title: 'Trump signs infrastructure bill into law', summary: 'The president signed …' }), 'non-speech: "signs bill" → false');
+ok(!news.isSpeechStory({ title: 'Markets rally on jobs report', summary: '' }), 'non-speech: markets → false');
+
+// ---- 2) fetchTranscript: ranks a transcript URL first, extracts the body ----
+const BODY = 'My fellow Americans, tonight I address you on the state of our union. '.repeat(12);
+const mkDispatch = (byUrl) => async ({ name, args }) => {
+  if (name === 'web_extract') { const b = byUrl[args.url]; return b ? { ok: true, text: JSON.stringify({ text_preview: b }) } : { ok: false }; }
+  return { ok: false };
+};
+{
+  const search = async () => ({ results: [
+    { url: 'https://randomblog.com/opinion/trump', title: 'Opinion: what Trump got wrong' },
+    { url: 'https://www.whitehouse.gov/briefing-room/2026/07/16/remarks-transcript', title: 'Remarks by the President — full transcript' },
+  ] });
+  const dispatch = mkDispatch({ 'https://www.whitehouse.gov/briefing-room/2026/07/16/remarks-transcript': BODY });
+  const tr = await news.fetchTranscript({ dispatch, search, story: { title: 'Trump primetime address' } });
+  ok(tr && /whitehouse\.gov/.test(tr.url), 'fetchTranscript: authoritative transcript URL ranked + fetched first');
+  ok(tr && tr.text.length >= 400, 'fetchTranscript: real transcript body returned');
+}
+
+// ---- 3) findRecentSpeech: needs a stored transcript + speaker/recency match ----
+const sid = insertStory('President Trump delivers primetime address to the nation', 'Trump spoke on election integrity.');
+insertStory('Trump signs infrastructure bill into law', 'Signed today.');   // non-speech decoy
+ok(!news.findRecentSpeech({ speaker: 'Trump', now: NOW }), 'findRecentSpeech: no transcript stored yet → null');
+news.setTranscript(sid, 'https://whitehouse.gov/x', BODY);
+ok(news.findRecentSpeech({ speaker: 'Trump', now: NOW }) && news.findRecentSpeech({ speaker: 'Trump', now: NOW }).id === sid, 'findRecentSpeech: stored transcript for Trump → returns that story');
+ok(!news.findRecentSpeech({ speaker: 'Biden', now: NOW }), 'findRecentSpeech: wrong speaker → null (no false match)');
+ok(!news.findRecentSpeech({ speaker: 'Trump', now: NOW + 10 * 24 * 3600 * 1000 }), 'findRecentSpeech: outside recency window → null');
+ok(news.findRecentSpeech({ speaker: null, now: NOW }) && news.findRecentSpeech({ speaker: null, now: NOW }).id === sid, 'findRecentSpeech: unspecified speaker ("they") → freshest speech w/ transcript');
+
+// ---- 4) captureTranscriptsPass: fetch+store for a speech story lacking a transcript; skip the decoy ----
+{
+  const sid2 = insertStory('Governor delivers keynote address at convention', 'She delivered the keynote.', { ts: NOW });
+  const url = 'https://cspan.org/transcript/keynote';
+  const search = async () => ({ results: [{ url, title: 'Full transcript of the keynote' }] });
+  const dispatch = mkDispatch({ [url]: BODY });
+  const r = await news.captureTranscriptsPass({ dispatch, search, now: NOW, limit: 5 });
+  ok(r.captured >= 1, `captureTranscriptsPass captured ≥1 (got ${r.captured})`);
+  const got = newsdb.get().prepare('SELECT transcript_text, transcript_url FROM news_stories WHERE id = ?').get(sid2);
+  ok(got && got.transcript_text && got.transcript_text.length >= 400, 'captured transcript persisted on the speech story');
+  const decoy = newsdb.get().prepare("SELECT transcript_text FROM news_stories WHERE title LIKE 'Trump signs%'").get();
+  ok(decoy && decoy.transcript_text == null, 'non-speech decoy was NOT given a transcript');
+}
+
+for (const f of [tmp, tmp + '-wal', tmp + '-shm']) { try { fs.unlinkSync(f); } catch {} }
+console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
+process.exit(fail ? 1 : 0);
+})();

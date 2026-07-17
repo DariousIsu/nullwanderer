@@ -180,6 +180,8 @@ const smokes = [
   'smoke_news_watch.js',
   'smoke_news_lane.js',
   'smoke_news_gate.js',
+  'smoke_news_transcript.js',
+  'smoke_speech_intent.js',
   'smoke_news_claim.js',
   'smoke_news_objects.js',
   'smoke_news_brief.js',

@@ -190,4 +190,51 @@ function isSocialTurn(text) {
   return endear && words <= 16;                        // an address term in a short personal line
 }
 
-module.exports = { detectWebIntent, detectActOnOpenPage, detectPickCharacter, detectRecordCommand, classifyQuery, isRecallQuery, isActionable, isSocialTurn, SEARCH_HOME };
+// SPEECH / TRANSCRIPT query — "what did X say (in the speech)", "X's speech/address/remarks",
+// "transcript of …", "what did they say". These want the actual WORDS of a delivered speech, so the
+// answer must come from a TRANSCRIPT (grounded), not a confabulated recap around a random web snippet
+// (the 2026-07-17 Trump-speech failure). Returns { speaker, cue } | null. speaker is best-effort (a
+// proper-noun subject if named; null for "they"/unspecified → caller resolves by recency/context).
+// Excludes fixed phrases ("freedom of speech") and recall-of-self ("what did YOU say" → isRecallQuery).
+const _SPEECH_NOUN_RE = /\b(speech|address|remarks|keynote|testimony|press conference|presser|statement|monologue|sermon|eulogy|briefing|op-?ed)\b/i;
+const _SPEECH_EXCLUDE_RE = /\b(freedom of speech|free speech|hate speech|speech therap|parts? of speech|figure of speech|speech(?:\s|-)?writer)\b/i;
+// A said/delivered verb — the thing that makes "speech" about ITS CONTENT, not the abstract noun.
+const _SAID_VERB_RE = /\b(say|said|saying|tell|told|state[d]?|deliver(?:ed|ing)?|gave|give|giving|announce[d]?|talk(?:ed)? about|cover(?:ed)?|mention(?:ed)?|address(?:ed)?)\b/i;
+// "X's speech/address/remarks" — a possessive proper-noun subject on a speech noun.
+const _POSS_SPEECH_RE = /\b([A-Z][\w.'’-]+(?:\s+[A-Z][\w.'’-]+){0,3})['’]s\s+(?:speech|address|remarks|keynote|testimony|statement|press\s+conference|presser|monologue|sermon|eulogy)\b/;
+// "what did X say" — a named (non-pronoun) subject. Pronoun subjects (you/i/we) are RECALL, handled elsewhere.
+const _WHAT_DID_SAY_RE = /\bwhat\s+did\s+((?!you\b|i\b|we\b)[A-Za-z][\w.'’-]*(?:\s+[A-Z][\w.'’-]+){0,3})\s+(?:say|said|state|announce|cover|talk\s+about|tell\s+us)\b/i;
+
+function detectSpeechQuery(text) {
+  const t = String(text || '').trim();
+  if (!t || _SPEECH_EXCLUDE_RE.test(t)) return null;
+
+  const hasTranscript = /\btranscript\b/i.test(t);
+  const hasSpeechNoun = _SPEECH_NOUN_RE.test(t);
+  let speaker = null;
+  let m;
+
+  // 1) "transcript" always qualifies (that IS the ask). Pull the speaker from a possessive if present.
+  // 2) "X's speech/address" — possessive proper noun on a speech noun.
+  // 3) "what did X say …" (named subject) — a quote/content ask; qualifies on its own or with a speech noun.
+  // 4) "what did they say" / "what was said in the speech" — unspecified subject + a speech noun/context.
+  if ((m = _POSS_SPEECH_RE.exec(t))) { speaker = m[1].trim(); }
+  else if ((m = _WHAT_DID_SAY_RE.exec(t))) {
+    const s = m[1].trim();
+    speaker = /^(they|he|she|it|the)$/i.test(s) ? null : s;
+  }
+
+  const whatSaidGeneric = /\bwhat\s+(?:did\s+(?:they|he|she)\s+say|was\s+said|(?:were|are)\s+(?:the|his|her|their)\s+remarks)\b/i.test(t);
+
+  const qualifies =
+    hasTranscript                                                   // explicit transcript ask
+    || _POSS_SPEECH_RE.test(t)                                       // "Trump's speech"
+    || (_WHAT_DID_SAY_RE.test(t) && (hasSpeechNoun || _SAID_VERB_RE.test(t)))  // "what did Trump say (in the speech)"
+    || (whatSaidGeneric && hasSpeechNoun)                            // "what did they say in the address"
+    || (hasSpeechNoun && _SAID_VERB_RE.test(t) && /\b(he|she|they|trump|president|senator|governor|mayor|congress|potus)\b/i.test(t)); // "what did he say in his speech"
+
+  if (!qualifies) return null;
+  return { speaker: speaker || null, cue: hasTranscript ? 'transcript' : 'speech' };
+}
+
+module.exports = { detectWebIntent, detectActOnOpenPage, detectPickCharacter, detectRecordCommand, classifyQuery, isRecallQuery, isActionable, isSocialTurn, detectSpeechQuery, SEARCH_HOME };
