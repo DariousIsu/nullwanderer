@@ -4712,7 +4712,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // AMBIGUOUS ENTITY → ASK, don't guess (bias-to-clarify). When the object pull found 2+ genuinely-different
   // same-name entities we hold (distinct QIDs — e.g. two real people named "John Kennedy"), she can't tell
   // which he means, so she asks rather than silently picking one. Fires ONCE and suppresses the answer draft.
-  if (recallResult && recallResult.ambiguous && recallResult.ambiguous.candidates && recallResult.ambiguous.candidates.length >= 2 && !followupFired && !socialTurn) {
+  // EXCEPTION — a SPEECH/TRANSCRIPT query ("transcript of last night's President Trump speech") is about the
+  // SPEECH, not a person-identity lookup: the transcript lane below resolves the speaker by recency/salience and
+  // serves the actual words. Don't derail it into "which Trump?" (that pre-empted the transcript feature live,
+  // 2026-07-17 — Lucas asked for the transcript and got a family-tree disambiguation instead).
+  const _isSpeechQ = (() => { try { return !!require('./lib/intent').detectSpeechQuery(userMessage); } catch { return false; } })();
+  if (recallResult && recallResult.ambiguous && recallResult.ambiguous.candidates && recallResult.ambiguous.candidates.length >= 2 && !followupFired && !socialTurn && !_isSpeechQ) {
     const amb = recallResult.ambiguous;
     const cg = require('./lib/concept_ground');
     // ASK only when it's a genuine collision of 2+ distinct PEOPLE (a lookup can't tell which he means).

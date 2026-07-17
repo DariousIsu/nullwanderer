@@ -75,6 +75,11 @@ ok(news.findRecentSpeech({ speaker: 'Trump', now: NOW }) && news.findRecentSpeec
 ok(!news.findRecentSpeech({ speaker: 'Biden', now: NOW }), 'findRecentSpeech: wrong speaker → null (no false match)');
 ok(!news.findRecentSpeech({ speaker: 'Trump', now: NOW + 10 * 24 * 3600 * 1000 }), 'findRecentSpeech: outside recency window → null');
 ok(news.findRecentSpeech({ speaker: null, now: NOW }) && news.findRecentSpeech({ speaker: null, now: NOW }).id === sid, 'findRecentSpeech: unspecified speaker ("they") → freshest speech w/ transcript');
+// LIMIT-BUG regression (2026-07-17 live): a busy feed with 200+ stories touched MORE RECENTLY than the
+// speech-with-transcript story must NOT hide it — the SQL pre-filter on transcript_text keeps it findable.
+for (let i = 0; i < 210; i++) insertStory(`Unrelated headline ${i}`, 'news', { outlets: 1, reports: 1, ts: NOW + 1000 + i * 1000 });
+ok(news.findRecentSpeech({ speaker: 'Trump', now: NOW + 300000 }) && news.findRecentSpeech({ speaker: 'Trump', now: NOW + 300000 }).id === sid,
+  'findRecentSpeech: 210 newer non-transcript stories do NOT bury the captured transcript (LIMIT-bug fixed)');
 
 // ---- 4) captureTranscriptsPass: fetch+store for a speech story lacking a transcript; skip the decoy ----
 {

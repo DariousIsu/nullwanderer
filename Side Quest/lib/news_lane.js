@@ -746,8 +746,12 @@ async function fetchTranscript({ dispatch, search, story, maxChars = 24000 } = {
 // (hydrated) or null. Cheap: bounded by recency + a small scan, filtered in JS.
 function findRecentSpeech({ speaker = null, now = Date.now(), withinMs = 3 * 24 * 3600 * 1000, requireTranscript = true } = {}) {
   ensureSchema();
+  // When we need a STORED transcript, pre-filter to transcript-bearing rows IN SQL. Otherwise a busy feed with
+  // 200+ stories touched more recently pushes the (rarer) speech-with-transcript story past the LIMIT and it's
+  // never seen — the live bug 2026-07-17 where a captured Trump transcript existed but was never surfaced.
+  const trClause = requireTranscript ? " AND transcript_text IS NOT NULL AND transcript_text != ''" : '';
   const rows = newsdb.get().prepare(
-    `SELECT * FROM news_stories WHERE last_ts >= ? ORDER BY last_ts DESC LIMIT 200`
+    `SELECT * FROM news_stories WHERE last_ts >= ?${trClause} ORDER BY last_ts DESC LIMIT 200`
   ).all(now - withinMs).map(hydrateStory);
   const spk = speaker ? String(speaker).toLowerCase().trim() : null;
   let best = null;
