@@ -95,6 +95,19 @@ ok(news.findRecentSpeech({ speaker: 'Trump', now: NOW + 300000 }) && news.findRe
   ok(decoy && decoy.transcript_text == null, 'non-speech decoy was NOT given a transcript');
 }
 
+// ---- 5) findSpeechVideo: picks a real video-host URL, prefers authoritative (C-SPAN/.gov) ----
+{
+  const search = async () => ({ results: [
+    { url: 'https://cnn.com/2026/07/politics/analysis', title: 'Analysis' },      // not a video host
+    { url: 'https://www.youtube.com/watch?v=abc123', title: 'Trump speech full' }, // video (score 1)
+    { url: 'https://www.c-span.org/video/?12345/trump-address', title: 'Address' },// video + authoritative (score 2)
+  ] });
+  const v = await news.findSpeechVideo({ search, subject: 'Trump address' });
+  ok(/c-span\.org\/video/.test(v), `findSpeechVideo: picks the authoritative C-SPAN video (got ${v})`);
+  const only = await news.findSpeechVideo({ search: async () => ({ results: [{ url: 'https://nytimes.com/x', title: 'article' }] }), subject: 'x' });
+  ok(only === null, 'findSpeechVideo: no video-host hit → null (no false video)');
+}
+
 for (const f of [tmp, tmp + '-wal', tmp + '-shm']) { try { fs.unlinkSync(f); } catch {} }
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -5777,8 +5777,27 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         composedUserMessage += `\n\n[SPEECH TRANSCRIPT${srcUrl ? ` — source: ${srcUrl}` : ''}. Answer his question ONLY from this transcript: quote or closely paraphrase the specific lines that bear on what he asked and attribute them to the speech. If the transcript does not cover what he asked, say so plainly — do NOT add anything that isn't in it.\n\n"""${slice}"""]`;
         console.log(`[speech] answered from transcript (${slice.length} chars)${srcUrl ? ' — ' + srcUrl : ''}`);
       } else {
-        composedUserMessage += `\n\n[NO TRANSCRIPT AVAILABLE for the speech he asked about. Do NOT invent, recap, or guess what was said — you don't have the words. Tell him honestly you don't have the transcript yet and offer to pull it or watch the feed for it. One or two sentences, no fabricated content.]`;
-        console.log('[speech] no transcript found → abstain-and-offer');
+        // No published-text transcript → START a DEDICATED background transcript: find the speech VIDEO and
+        // fire the unbounded engine job (enqueue_transcript → av download + whisper + diarize + analysis →
+        // transcription-session archive). Fire-and-forget; per-subject dedup so repeated asks don't pile jobs.
+        let enqueued = false;
+        try {
+          const subj = (sq.speaker ? `${sq.speaker} speech` : (require('./lib/intent').detectSpeechQuery(userMessage) && userMessage)) || 'the speech';
+          const dedupKey = 'speech.enq.' + String(subj).toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 60);
+          const last = parseInt(db.getMeta(dedupKey) || '0', 10);
+          if (echoSuit && echoSuit.connected && (now - last > 30 * 60 * 1000)) {
+            const vid = await news_lane.findSpeechVideo({ search: (q) => webSearch(q), subject: subj });
+            if (vid) {
+              const r = await echoSuit.dispatch({ kind: 'do', name: 'enqueue_transcript', args: { url: vid, name: String(subj).slice(0, 120) } });
+              let rr = null; try { rr = JSON.parse(r && r.text); } catch { rr = r; }
+              if (rr && rr.ok) { enqueued = true; try { db.setMeta(dedupKey, String(now)); } catch {} console.log(`[speech] enqueued background transcript (session ${rr.session_id}) — ${vid}`); }
+            }
+          }
+        } catch (e) { console.error('[speech] background enqueue failed:', e.message); }
+        composedUserMessage += enqueued
+          ? `\n\n[NO TRANSCRIPT YET — but you've just STARTED pulling and transcribing the speech video in the background (it'll land in the archive shortly). Tell him honestly you don't have the exact words yet but you've kicked off a real transcript and will have it soon — offer to bring it when it's ready. One or two sentences, no fabricated content.]`
+          : `\n\n[NO TRANSCRIPT AVAILABLE for the speech he asked about. Do NOT invent, recap, or guess what was said — you don't have the words. Tell him honestly you don't have the transcript yet and offer to pull it or watch the feed for it. One or two sentences, no fabricated content.]`;
+        console.log(`[speech] no transcript found → ${enqueued ? 'enqueued background transcript' : 'abstain-and-offer'}`);
       }
       speechHandled = true;
     }

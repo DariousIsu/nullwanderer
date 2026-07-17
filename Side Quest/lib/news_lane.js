@@ -741,6 +741,22 @@ async function fetchTranscript({ dispatch, search, story, maxChars = 24000 } = {
   return null;
 }
 
+// Find a VIDEO URL for a speech (for the background av_transcribe job) — a search hit on a real video host
+// (YouTube / C-SPAN / Rev / a direct mp4). Prefers an authoritative/official host. Returns a URL | null.
+async function findSpeechVideo({ search, subject } = {}) {
+  if (typeof search !== 'function' || !subject) return null;
+  let results = [];
+  try {
+    const r = await Promise.race([search(`${subject} full speech video`), new Promise((res) => setTimeout(() => res(null), 8000))]);
+    results = (r && Array.isArray(r.results)) ? r.results : [];
+  } catch { return null; }
+  const VIDEO = /(?:youtube\.com\/watch|youtu\.be\/|c-?span\.org\/video|rev\.com\/|\.mp4(?:\?|$)|facebook\.com\/[^/]+\/videos|rumble\.com\/|\.gov\/[^ ]*(?:video|watch|live))/i;
+  const score = (u) => (/c-?span\.org|\.gov\b|whitehouse\.gov/.test(u) ? 2 : 1);
+  const vids = results.map((h) => h && h.url).filter((u) => u && VIDEO.test(u));
+  vids.sort((a, b) => score(b) - score(a));
+  return vids[0] || null;
+}
+
 // QUERY-TIME lookup: the freshest speech story matching `speaker` (a proper-noun subject, or null for
 // "what did they say"), within a recency window, that ALREADY has a stored transcript. Returns the story
 // (hydrated) or null. Cheap: bounded by recency + a small scan, filtered in JS.
@@ -1035,7 +1051,7 @@ module.exports = {
   // full-article ingestion (web_extract → richer evidence doc → object extraction) — HOURLY read pass
   representativeArticleUrl, fetchArticle, isJunkBody, setArticle, readArticlesPass,
   // transcript capture (speech/address stories → actual delivered words) — HOURLY capture pass + query-time lookup
-  isSpeechStory, setTranscript, fetchTranscript, findRecentSpeech, captureTranscriptsPass,
+  isSpeechStory, setTranscript, fetchTranscript, findRecentSpeech, captureTranscriptsPass, findSpeechVideo,
   // reconciliation adapter (spec §7: story → Claim, consumed by lib/reconcile)
   storyToClaim,
 };
