@@ -46,6 +46,25 @@ const mkDispatch = (byUrl) => async ({ name, args }) => {
   ok(tr && /whitehouse\.gov/.test(tr.url), 'fetchTranscript: authoritative transcript URL ranked + fetched first');
   ok(tr && tr.text.length >= 400, 'fetchTranscript: real transcript body returned');
 }
+// PRECISION GATE (2026-07-17 live fix): a search that returns only a Wikipedia BIO + a DICTIONARY page must
+// yield NO transcript (→ abstain), never store those as "the words". These were being stored live on reboot.
+{
+  const junk = { 'https://en.m.wikipedia.org/wiki/Donald_Trump': 'Donald John Trump is an American politician…'.repeat(20),
+                 'https://dictionary.cambridge.org/dictionary/english/some': 'some — determiner — an amount…'.repeat(20) };
+  const search = async () => ({ results: [
+    { url: 'https://en.m.wikipedia.org/wiki/Donald_Trump', title: 'Donald Trump - Wikipedia' },
+    { url: 'https://dictionary.cambridge.org/dictionary/english/some', title: 'SOME | meaning' },
+  ] });
+  const tr = await news.fetchTranscript({ dispatch: mkDispatch(junk), search, story: { title: 'Trump primetime speech' } });
+  ok(tr === null, 'fetchTranscript: deny-host (wikipedia/dictionary) results → null (abstain, no garbage stored)');
+}
+// A score-0 news RECAP (real news host, but not a transcript) is also rejected — better to abstain than pass a recap off as the words.
+{
+  const recap = { 'https://cnn.com/2026/07/16/politics/trump-speech-takeaways': 'Here are the takeaways from the speech…'.repeat(20) };
+  const search = async () => ({ results: [{ url: 'https://cnn.com/2026/07/16/politics/trump-speech-takeaways', title: 'Takeaways from Trump\'s speech' }] });
+  const tr = await news.fetchTranscript({ dispatch: mkDispatch(recap), search, story: { title: 'Trump speech' } });
+  ok(tr === null, 'fetchTranscript: a score-0 news recap (no transcript signal) → null (abstain)');
+}
 
 // ---- 3) findRecentSpeech: needs a stored transcript + speaker/recency match ----
 const sid = insertStory('President Trump delivers primetime address to the nation', 'Trump spoke on election integrity.');

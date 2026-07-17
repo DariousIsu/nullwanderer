@@ -713,16 +713,26 @@ async function fetchTranscript({ dispatch, search, story, maxChars = 24000 } = {
     results = (r && Array.isArray(r.results)) ? r.results : [];
   } catch { return null; }
   if (!results.length) return null;
-  // Rank: URL/title mentions "transcript" (+3), authoritative host (+2), else keep order.
+  // HARD-REJECT hosts that are never a speech transcript (a search for "<title> transcript" happily returns a
+  // Wikipedia BIO or a DICTIONARY page — storing those as "the transcript" is worse than having none). Caught
+  // live on the 2026-07-17 reboot: en.wikipedia/Donald_Trump + cambridge/merriam-webster pages were being stored.
+  const DENY_HOST = /(?:^|\.)(?:wikipedia\.org|wiktionary\.org|dictionary\.com|merriam-webster\.com|cambridge\.org|britannica\.com|thesaurus\.com|vocabulary\.com|imdb\.com|fandom\.com|quora\.com|reddit\.com|pinterest\.|amazon\.|ebay\.)/i;
+  // Rank: URL/title actually signals a transcript (+3) or an authoritative speech host (+2). A deny-host is -1.
   const score = (h) => {
     const u = String((h && h.url) || '').toLowerCase(), ti = String((h && h.title) || '').toLowerCase();
+    let host = ''; try { host = new URL(u).hostname; } catch {}
+    if (DENY_HOST.test(host)) return -1;
     let s = 0;
-    if (/transcript/.test(u) || /transcript|full (?:speech|remarks)/.test(ti)) s += 3;
-    if (/\.gov\b|whitehouse\.gov|rev\.com|c-?span\.org|congress\.gov/.test(u)) s += 2;
+    if (/transcript|\/remarks\b|full-(?:speech|remarks)/.test(u) || /\btranscript\b|full (?:speech|remarks)|read the full|remarks by|as (?:delivered|prepared)/.test(ti)) s += 3;
+    if (/\.gov\b|whitehouse\.gov|rev\.com|c-?span\.org|congress\.gov|state\.gov|defense\.gov/.test(u)) s += 2;
     return s;
   };
   const ranked = results.map((h, i) => ({ h, i, s: score(h) })).sort((a, b) => b.s - a.s || a.i - b.i);
-  for (const { h } of ranked.slice(0, 4)) {
+  // ONLY accept a candidate that positively looks like a transcript (score >= 1). A score-0 first-hit (a news
+  // recap, a blog) or a deny-host is NOT a transcript → return null so the caller stores '' and ABSTAINS
+  // ("I don't have the transcript, want me to pull it") rather than passing off a non-transcript as the words.
+  for (const { h, s } of ranked.slice(0, 4)) {
+    if (s < 1) break;   // ranked desc → once we hit a non-qualifying candidate, the rest are no better
     const url = h && h.url;
     if (!url || !/^https?:/i.test(url)) continue;
     const text = await fetchArticle({ dispatch, url, maxChars });
