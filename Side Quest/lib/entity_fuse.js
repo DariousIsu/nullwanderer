@@ -24,12 +24,26 @@ const { isAuthoritativeSource, isJunkSource } = require('./curation_gate');
 function _hasStrongIdTag(name) {
   return /\[(?:wd:Q\d+|Q\d+|(?:FEC:)?C\d{7,}|M\d{6}|lda_client:\d+|ocd-)/i.test(String(name || ''));
 }
+// _noiseScore(name) → penalty for surface forms that are POOR canonical display names even when they are the
+// "fuller" string: legislative sponsor-mechanism annotations ("(By Request …)", "(Introduced by request …)")
+// are NOT part of a person's name and must never survive as the canonical; an ALL-CAPS shout loses to a
+// proper-case sibling. Penalty sits BELOW the strong-id anchor (1e12) so an authoritative tag still wins.
+function _noiseScore(name) {
+  const s = String(name || '');
+  let p = 0;
+  if (/\((?:by request|introduced by request|by request of|at the request)[^)]*\)/i.test(s)) p += 1e9;
+  const letters = s.replace(/[^A-Za-z]/g, '');
+  if (letters.length >= 4 && letters === letters.toUpperCase()) p += 100;   // prefer a mixed-case sibling
+  return p;
+}
 // canonicalForm(records) → { canonical, canonicalName, aliases }. Priority: a strong-id tag (authoritative
-// anchor) ≫ higher degree (more established) ≫ longer/fuller surface name. Deterministic.
+// anchor) ≫ higher degree (more established) ≫ longer/fuller surface name, minus a noise penalty that keeps
+// sponsor-junk / ALL-CAPS forms from surviving over a clean sibling. Deterministic.
 function canonicalForm(records = []) {
   const recs = (Array.isArray(records) ? records : []).filter((r) => r && r.name);
   if (!recs.length) return { canonical: null, canonicalName: null, aliases: [] };
-  const score = (r) => (_hasStrongIdTag(r.name) ? 1e12 : 0) + (Number(r.degree) || 0) * 1000 + String(r.name).length;
+  const score = (r) => (_hasStrongIdTag(r.name) ? 1e12 : 0) + (Number(r.degree) || 0) * 1000
+    + String(r.name).length - _noiseScore(r.name);
   const sorted = recs.slice().sort((a, b) => score(b) - score(a));
   return { canonical: sorted[0], canonicalName: sorted[0].name, aliases: sorted.slice(1) };
 }

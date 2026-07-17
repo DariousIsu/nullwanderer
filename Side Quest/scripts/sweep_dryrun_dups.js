@@ -10,13 +10,17 @@ const FUSE = require('C:/Users/azrae/Desktop/Side Quest/lib/entity_fuse');
 const fs = require('fs');
 const db = new Database('C:/Users/azrae/Desktop/NX ECHO/nx-echo/data/foundations/civic_graph.db', { readonly: true, fileMustExist: true });
 
-const blocks = new Map();   // normKey|jur → [{id,name,type}]
-for (const row of db.prepare('SELECT id, name, entity_type AS et FROM entities').iterate()) {
+// canonical_id-aware: ONLY terminal entities (canonical_id IS NULL) are merge candidates. This structurally
+// excludes the ~10.8k already-aliased nodes (the prior manifest's staleness bug — it re-listed nodes already
+// folded into other canonicals, so merge_entities rejected/mis-survivor'd them) and guarantees every survivor
+// is a real terminal node, not a non-terminal alias.
+const blocks = new Map();   // normKey|jur → [{id,name,type,degree}]
+for (const row of db.prepare('SELECT id, name, entity_type AS et, degree FROM entities WHERE canonical_id IS NULL').iterate()) {
   const p = EM.parseEntity({ name: row.name, type: row.et });
   if (!p.normKey) continue;
   const bk = `${p.normKey}|${p.jurisdiction || ''}`;
   let a = blocks.get(bk); if (!a) { a = []; blocks.set(bk, a); }
-  if (a.length < 200) a.push({ id: row.id, name: row.name, type: row.et });
+  if (a.length < 200) a.push({ id: row.id, name: row.name, type: row.et, degree: row.degree });
 }
 db.close();
 
@@ -38,8 +42,12 @@ for (const [, arr] of blocks) {
   for (let i = 0; i < arr.length; i++) { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(arr[i]); }
   for (const members of groups.values()) {
     if (members.length < 2) continue;
-    const canon = FUSE.canonicalForm(members.map((m) => ({ name: m.name })));
-    manifest.push({ canonical: canon.canonicalName, mergeCount: members.length - 1, members: members.map((m) => ({ id: m.id, name: m.name, type: m.type })) });
+    // survivor via the SAME degree+noise scoring the live gate uses (entity_fuse.canonicalForm) — record the
+    // survivor's real id so the apply targets the exact terminal node, not a fragile name-match.
+    const canon = FUSE.canonicalForm(members.map((m) => ({ name: m.name, degree: m.degree })));
+    const survivor = members.find((m) => m.name === canon.canonicalName) || members[0];
+    manifest.push({ canonical: canon.canonicalName, canonicalId: survivor.id, mergeCount: members.length - 1,
+      members: members.map((m) => ({ id: m.id, name: m.name, type: m.type, degree: m.degree })) });
   }
 }
 manifest.sort((a, b) => b.mergeCount - a.mergeCount);
