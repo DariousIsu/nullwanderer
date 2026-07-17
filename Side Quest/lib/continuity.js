@@ -4,6 +4,7 @@ const { BOOTSTRAP } = require('./context');
 const voice = require('./voice');
 const importanceLib = require('./importance');
 
+const unpromptedGate = require('./unprompted_gate');   // structural backstops: pending-user-turn + unprompted-streak
 const MODEL = require('./config').extractionModel();
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;       // poll every 5 min
 const MIN_INTERVAL_MS = 45 * 60 * 1000;        // at most one continuity check per 45 min
@@ -58,6 +59,14 @@ async function maybeFireContinuityCheck() {
 
   const lastCheck = parseInt(db.getMeta('last_continuity_check_at') || '0', 10);
   if (now - lastCheck < MIN_INTERVAL_MS) return;
+
+  // STRUCTURAL BACKSTOP (2026-07-17 implosion fix): never surface a commitment check-in while a
+  // user turn is pending/unanswered, or once she's monologued past the streak cap. Same gate as
+  // the heartbeat — a commitment re-examination is autonomous surfacing and must not bury a live turn.
+  {
+    const g = unpromptedGate.evaluate({ isInbound: false });
+    if (!g.allow) { unpromptedGate.logDecision('continuity', g); return; }
+  }
 
   // Pick the oldest "held" commitment that hasn't been confirmed in a while
   const held = db.getHeldCommitments(30);
@@ -147,7 +156,11 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
       } catch (e) { console.error('[continuity] importance gate failed:', e.message); }
     }
 
-    if (trimmedSay && !isPlaceholder && !repetitive) {
+    const willSurface = trimmedSay && !isPlaceholder && !repetitive;
+    unpromptedGate.logDecision('continuity',
+      willSurface ? { allow: true, outcome: 'surfaced', reason: 'ok' }
+      : { allow: false, reason: isPlaceholder || !trimmedSay ? 'empty' : 'guarded' });
+    if (willSurface) {
       const saidRow = db.insertTurn({
         sessionId, speaker: 'ai_said', content: trimmedSay, model: MODEL, truncated, unprompted: 1
       });

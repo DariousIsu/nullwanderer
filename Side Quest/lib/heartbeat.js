@@ -13,6 +13,7 @@ const gapsLib = require('./gaps');
 const recipesLib = require('./recipes');
 const voice = require('./voice');
 const selfRep = require('./self_repetition');   // meaning-level self-repeat guard (semantic, not string-match)
+const unpromptedGate = require('./unprompted_gate');   // structural backstops: pending-user-turn + unprompted-streak
 
 const MODEL = require('./config').frontModel();
 const TICK_INTERVAL_MS = 30 * 1000;        // check every 30s while idle
@@ -209,6 +210,16 @@ async function maybeHeartbeat() {
     // For inbounds, only enforce a 15s minimum gap so we don't spam
     const lastUtteranceTs = parseInt(db.getMeta('last_ai_utterance_at') || '0', 10);
     if (now - lastUtteranceTs < 15_000) return;
+  }
+
+  // STRUCTURAL BACKSTOP (2026-07-17 implosion fix): before spending any tokens, refuse to
+  // surface autonomously if a user turn is pending/unanswered (rule A — never bury a live
+  // question) or if she's already monologued past the streak cap into an empty room (rule B).
+  // Rule A applies even to inbounds (an "you got mail" ping still buries a waiting question);
+  // rule B exempts inbounds (a real external event, not her own musing).
+  {
+    const g = unpromptedGate.evaluate({ isInbound: hasInbound });
+    if (!g.allow) { unpromptedGate.logDecision('heartbeat', g); return; }
   }
 
   const recentMonologue = db.getRecentMonologue(RECENT_MONOLOGUE_LIMIT);
@@ -426,13 +437,18 @@ async function maybeHeartbeat() {
     // the silence-rule confirm loop (each restatement worded differently) run 100×. Meaning-level, so it needs
     // no per-phrase patterns and catches ANY paraphrased-repeat loop, not just that one content.
     if (wantsToSpeak && !hasInbound) {
-      const recentSaids = db.getRecentTurns(50).filter(t => t.speaker === 'ai_said').slice(-8).map(t => t.content);
+      // Window widened 8→16 (topic rotation was diluting a last-8 window so a clone fell out of range)
+      // and pulled from a deeper tape (80) to keep 16 ai_said in-window even in a busy feed.
+      const recentSaids = db.getRecentTurns(80).filter(t => t.speaker === 'ai_said').slice(-16).map(t => t.content);
       if (tooSimilarToRecent(trimmedSay, recentSaids)) {
         wantsToSpeak = false;
         console.log('[heartbeat] suppressed repetitive utterance (lexical)');
       } else {
+        // threshold 0.80 (was 0.88): the measured flood's paraphrase clones sat at cosine ~0.73–0.84,
+        // slipping 0.88. 0.80 catches the reworded-same-point loop; the structural streak cap (rule B)
+        // is the hard backstop for anything that still slips.
         let semRepeat = false;
-        try { semRepeat = await selfRep.isSemanticRepeat(trimmedSay, recentSaids); } catch (e) { console.error('[heartbeat] semantic-repeat check failed:', e.message); }
+        try { semRepeat = await selfRep.isSemanticRepeat(trimmedSay, recentSaids, { threshold: 0.80, maxPriors: 16 }); } catch (e) { console.error('[heartbeat] semantic-repeat check failed:', e.message); }
         if (semRepeat) {
           wantsToSpeak = false;
           console.log('[heartbeat] suppressed semantic self-repeat (same point reworded)');
@@ -461,6 +477,12 @@ async function maybeHeartbeat() {
       }
     }
     const uGate = wantsToSpeak ? governor.requestAction('utterance', { priority: hasInbound }) : { allow: false };
+    // ALWAYS-ON say-decision log (2026-07-17 blind-spot fix): every tick that reached the say-path
+    // records its final outcome + reason (surfaced / suppressed-by-guard / governor-paced / empty),
+    // to console AND meta — so a future flood is never invisible again.
+    unpromptedGate.logDecision('heartbeat',
+      (wantsToSpeak && uGate.allow) ? { allow: true, outcome: 'surfaced', reason: 'ok' }
+      : { allow: false, reason: !wantsToSpeak ? 'guarded-or-empty' : `governor-${uGate.reason}` });
     if (wantsToSpeak && uGate.allow) {
       governor.record('utterance');
       const saidRow = db.insertTurn({
