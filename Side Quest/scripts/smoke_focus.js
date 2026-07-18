@@ -173,6 +173,22 @@ async function run() {
   const dup = await focus.setFromDirective('catalog every right-of-center energy think tank');
   ok('a near-identical follow-up does NOT spawn a duplicate (idempotent)', dup.focus.id === disp.focus.id);
 
+  // --- BACKGROUND research workers (parallelism): must NEVER touch the primary pointer ---
+  console.log('\nbackground workers (parallelism) — isolation from the primary focus:');
+  reset();
+  const primary = fresh('PRIMARY: the focus chat + leash see');
+  ok('primary focus is current', focus.getCurrent() && focus.getCurrent().id === primary.id);
+  const wRow = db.insertOpenThread({ content: 'WORKER: a concurrent background beat' });
+  const w = focus.setBackground(wRow.id);
+  ok('setBackground activates the worker thread', w && db.getOpenThread(wRow.id).status === 'active');
+  ok('setBackground does NOT change the current pointer (chat still sees the primary)', focus.getCurrent() && focus.getCurrent().id === primary.id);
+  const o1 = focus.recordOutcomeBackground(db.getOpenThread(wRow.id), { progressed: true });
+  ok('recordOutcomeBackground continues on its own bgstate', o1.action === 'continue');
+  ok('worker outcome did NOT disturb the primary pointer', focus.getCurrent() && focus.getCurrent().id === primary.id);
+  const o2 = focus.recordOutcomeBackground(db.getOpenThread(wRow.id), { control: { type: 'done', note: 'converged' } });
+  ok('recordOutcomeBackground closes the worker thread (resolved)', o2.action === 'resolved' && db.getOpenThread(wRow.id).status === 'resolved');
+  ok('closing a worker leaves the PRIMARY focus intact (never yanked from chat)', focus.getCurrent() && focus.getCurrent().id === primary.id);
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   try { db.getDb().close(); } catch {}
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(tmp + ext); } catch {} }

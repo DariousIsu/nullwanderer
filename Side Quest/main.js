@@ -7248,19 +7248,32 @@ function kickDirectedFocusDriver() {
 // is the recipe the chat-assignment path uses (main.js ~5662), applied to a hardwired beat instead of a user
 // message. `beat` = { id, goal, kind, enumerate() } from lib/beats. Displaces any self-spawned musing focus;
 // yields to an already-active DIRECTED (user-assigned) focus so a beat never preempts Lucas's own work.
-async function seedBeatRun(beat) {
+async function seedBeatRun(beat, { background = false } = {}) {
   try {
     const focusLib = require('./lib/focus');
-    const active = focusLib.getCurrent();
-    if (active && focusLib.isDirected(active)) {
-      console.log(`[beat] ${beat && beat.id}: yielding — a user-assigned focus (#${active.id}) is running`);
-      return { ok: false, reason: 'user-focus-active' };
+    if (!background) {
+      const active = focusLib.getCurrent();
+      if (active && focusLib.isDirected(active)) {
+        console.log(`[beat] ${beat && beat.id}: yielding — a user-assigned focus (#${active.id}) is running`);
+        return { ok: false, reason: 'user-focus-active' };
+      }
     }
     const targets = (beat && typeof beat.enumerate === 'function') ? beat.enumerate() : [];
     if (!targets.length) return { ok: false, reason: 'empty worklist' };
-    const r = await focusLib.setFromDirective(beat.goal);
-    if (!r || !r.focus) return { ok: false, reason: 'focus not set' };
-    const fid = r.focus.id;
+    // PRIMARY focus goes through setFromDirective (owns CURRENT_KEY, drives chat/leash). A BACKGROUND worker
+    // gets its own open_thread via setBackground — it never touches CURRENT_KEY, so it runs concurrently
+    // without disturbing the primary focus or the conversational plumbing.
+    let fid, focusRow;
+    if (background) {
+      const row = db.insertOpenThread({ content: beat.goal });
+      focusRow = focusLib.setBackground(row.id) || row;
+      fid = row.id;
+      try { db.setMeta(`focus.${fid}.background`, '1'); } catch {}
+    } else {
+      const r = await focusLib.setFromDirective(beat.goal);
+      if (!r || !r.focus) return { ok: false, reason: 'focus not set' };
+      fid = r.focus.id; focusRow = r.focus;
+    }
     try { db.setMeta(`focus.${fid}.scope`, 'bounded'); } catch {}
     try { db.setMeta(`focus.${fid}.intended_targets`, JSON.stringify(targets)); } catch {}
     try { db.setMeta(`focus.${fid}.kind`, beat.kind || 'entity'); } catch {}
@@ -7273,10 +7286,10 @@ async function seedBeatRun(beat) {
     if (Array.isArray(beat.facets) && beat.facets.length) {
       try { db.setMeta(`focus.${fid}.plan`, JSON.stringify({ facets: beat.facets, targets: [] })); } catch {}
     } else {
-      try { await generateResearchPlan(r.focus, { goal: beat.goal, targets: targets.slice(0, 12), facet: '', deep: false, kind: beat.kind || 'entity' }); } catch (e) { console.error('[beat] plan gen failed:', e.message); }
+      try { await generateResearchPlan(focusRow, { goal: beat.goal, targets: targets.slice(0, 12), facet: '', deep: false, kind: beat.kind || 'entity' }); } catch (e) { console.error('[beat] plan gen failed:', e.message); }
     }
-    kickDirectedFocusDriver();
-    console.log(`[beat] seeded ${beat.id} → focus #${fid}, BOUNDED to ${targets.length} targets (0/${targets.length} covered)`);
+    if (background) kickBackgroundWorkers(); else kickDirectedFocusDriver();
+    console.log(`[beat] seeded ${background ? 'worker' : 'primary'}:${beat.id} → focus #${fid}, BOUNDED to ${targets.length} targets`);
     return { ok: true, focusId: fid, targets: targets.length };
   } catch (e) { console.error('[beat] seed failed:', e.message); return { ok: false, reason: e.message }; }
 }
@@ -7377,6 +7390,7 @@ async function autonomicSchedulerTick() {
   if (!beats.length) return;
   const state = _loadSchedState();
   _maintenanceSweep(state, beats);   // hourly-throttled; re-activates stale/news-touched beats before we choose
+  const electedPool = _electedBeats(), topicPool = _topicBeats();
 
   const focus = (() => { try { return focusLib.getCurrent(); } catch { return null; } })();
   if (focus && focusLib.isDirected(focus)) {
@@ -7390,7 +7404,7 @@ async function autonomicSchedulerTick() {
     const sliceCovered = _coveredCount(focus.id) - bs.sliceStartCovered;
     bs.lastRun = Date.now();
     state.beats[beatId] = bs;
-    if (!sched.shouldRotate({ sliceCovered })) { _saveSchedState(state); return; }   // under budget → keep this beat deep
+    if (!sched.shouldRotate({ sliceCovered })) { _fillBackgroundWorkers(state, electedPool, topicPool, beatId); _saveSchedState(state); return; }   // under budget → keep this beat deep (but keep workers busy)
     _saveSchedState(state);
     try { focusLib.clear('autonomic-rotate'); } catch {}                            // PAUSE — thread + progress survive
     console.log(`[autonomic] rotated off ${beatId} (covered ${sliceCovered} this slice) → picking next`);
@@ -7398,7 +7412,6 @@ async function autonomicSchedulerTick() {
   }
 
   // Idle (or just paused) → pick the next beat by LANE (elected officials vs topic/concept) and run a slice.
-  const electedPool = _electedBeats(), topicPool = _topicBeats();
   const lane = sched.pickLane({
     sliceIndex: state.sliceIndex || 0,
     topicEvery: parseInt(process.env.ZOE_TOPIC_EVERY, 10) || undefined,
@@ -7415,12 +7428,14 @@ async function autonomicSchedulerTick() {
   if (bs.thread) {
     let t = null; try { t = db.getOpenThread(bs.thread); } catch {}
     if (t && ['pending', 'active'].includes(t.status)) {
+      try { db.setMeta(`focus.${bs.thread}.background`, ''); } catch {}   // primary owns it now (clear any worker flag)
       try { focusLib.setCurrent(bs.thread, { directed: true }); } catch {}
       bs.sliceStartCovered = _coveredCount(bs.thread);
       bs.lastRun = Date.now();
       state.sliceIndex = (state.sliceIndex || 0) + 1;   // a new slice started → advance the lane counter
       state.beats[nextId] = bs; _saveSchedState(state);
       kickDirectedFocusDriver();
+      _fillBackgroundWorkers(state, electedPool, topicPool, nextId);   // keep the parallel workers busy too
       console.log(`[autonomic] resumed ${lane}:${nextId} → focus #${bs.thread} (${bs.sliceStartCovered}/${beat.universeSize()} covered)`);
       return;
     }
@@ -7430,7 +7445,94 @@ async function autonomicSchedulerTick() {
   const r = await seedBeatRun(beat);
   if (r && r.ok) { bs.thread = r.focusId; bs.sliceStartCovered = 0; bs.lastRun = Date.now(); state.sliceIndex = (state.sliceIndex || 0) + 1; state.beats[nextId] = bs; _saveSchedState(state); console.log(`[autonomic] seeded ${lane}:${nextId}`); }
   else if (r && r.reason === 'user-focus-active') { /* a user task appeared — yield, try next tick */ }
+  _fillBackgroundWorkers(state, electedPool, topicPool, nextId);       // fill/advance the parallel research workers
 }
+
+// PARALLELISM — keep up to (ZOE_RESEARCH_WORKERS-1) BACKGROUND research workers running concurrently with the
+// primary focus. Each worker holds a DISTINCT beat (never the primary's or another worker's), CONVERGES it,
+// then the slot frees and picks the next never-run beat. Workers never touch CURRENT_KEY, so chat/leash/
+// surfacing only ever see the primary. Shared beat registry (state.beats[id].thread) + the per-focus
+// `background` flag route each pass's outcome to the right run-state. Kill switch: ZOE_RESEARCH_WORKERS=1.
+function _fillBackgroundWorkers(state, electedPool, topicPool, primaryBeatId) {
+  try {
+    const sched = require('./lib/beat_scheduler');
+    const slots = _bgSlots();
+    if (!state.workers) state.workers = {};
+    const allPool = electedPool.concat(topicPool);
+    for (let slot = 1; slot <= slots; slot++) {
+      let w = state.workers[slot] || {};
+      // Drop a finished/dead worker beat.
+      if (w.beatId) {
+        const wbs = state.beats[w.beatId];
+        let t = null; try { t = wbs && wbs.thread ? db.getOpenThread(wbs.thread) : null; } catch {}
+        if (!t || !['pending', 'active'].includes(t.status)) {
+          if (wbs && t && t.status === 'resolved') { wbs.status = 'done'; wbs.doneAt = Date.now(); state.beats[w.beatId] = wbs; }
+          w = {};
+        }
+      }
+      if (w.beatId) { state.workers[slot] = w; continue; }   // still working its beat → leave it
+      // Pick a NEW beat this slot: distinct from the primary + all other workers.
+      const held = new Set([primaryBeatId, ...Object.values(state.workers).map((x) => x && x.beatId).filter(Boolean)]);
+      const excluded = { beats: Object.fromEntries(Object.entries(state.beats).map(([id, v]) => [id, held.has(id) ? { ...v, status: 'done' } : v])) };
+      const pickId = sched.chooseNext({ beats: allPool, state: excluded });
+      if (!pickId || held.has(pickId)) { state.workers[slot] = {}; continue; }
+      const beat = allPool.find((b) => b.id === pickId);
+      const bs = state.beats[pickId] || {};
+      let t = null; try { t = bs.thread ? db.getOpenThread(bs.thread) : null; } catch {}
+      if (t && ['pending', 'active'].includes(t.status)) {
+        try { db.setMeta(`focus.${bs.thread}.background`, '1'); } catch {}
+        try { require('./lib/focus').setBackground(bs.thread); } catch {}
+        bs.lastRun = Date.now(); state.beats[pickId] = bs; state.workers[slot] = { beatId: pickId };
+        console.log(`[worker#${slot}] resumed ${pickId} → focus #${bs.thread}`);
+      } else {
+        // seed fresh in the background (returns a promise; fire-and-forget, record the beat now to avoid re-pick)
+        state.workers[slot] = { beatId: pickId, seeding: true };
+        seedBeatRun(beat, { background: true }).then((r) => {
+          const st = _loadSchedState();
+          if (r && r.ok) { const b2 = st.beats[pickId] || {}; b2.thread = r.focusId; b2.lastRun = Date.now(); st.beats[pickId] = b2; if (st.workers && st.workers[slot]) st.workers[slot] = { beatId: pickId }; }
+          else if (st.workers && st.workers[slot]) st.workers[slot] = {};
+          _saveSchedState(st);
+        }).catch(() => {});
+        console.log(`[worker#${slot}] seeding ${pickId}`);
+      }
+    }
+    _saveSchedState(state);
+    startBackgroundWorkers();
+  } catch (e) { console.error('[worker] fill failed:', e.message); }
+}
+
+// Total concurrent research streams (primary + workers). Runtime-tunable via the `research.workers` meta so it
+// can be enabled/reverted LIVE without a reboot; env ZOE_RESEARCH_WORKERS is the boot default. DEFAULTS TO 1
+// (no background workers — identical to the pre-parallelism behavior) so enabling concurrency is a deliberate,
+// observable step. Safety-capped at 8.
+function _workerCount() { let n; try { n = parseInt(db.getMeta('research.workers') || process.env.ZOE_RESEARCH_WORKERS || '1', 10); } catch { n = 1; } return Math.max(1, Math.min(8, isNaN(n) ? 1 : n)); }
+function _bgSlots() { return Math.max(0, _workerCount() - 1); }   // primary + this many background workers
+
+let _bgInFlight = new Set();
+let _bgTimer = null;
+async function backgroundWorkerPass(focusId) {
+  if (_bgInFlight.has(focusId)) return;
+  let t = null; try { t = db.getOpenThread(focusId); } catch {}
+  if (!t || !['pending', 'active'].includes(t.status)) return;
+  try { if ((db.getMeta('operator.mode') || 'full').trim() === 'off') return; } catch {}
+  _bgInFlight.add(focusId);
+  try {
+    const outcome = await runDirectedResearchPass(t);           // routes its outcome to recordOutcomeBackground (bg flag set)
+    if (outcome && outcome.action && outcome.action !== 'continue') {
+      try { await condenseRun(t, { reason: outcome.action }); } catch {}   // fold into the dossier; NO chat announce (not the primary/user focus)
+    }
+  } catch (e) { console.error('[worker] pass failed:', e.message); }
+  finally { _bgInFlight.delete(focusId); }
+}
+function startBackgroundWorkers() {
+  if (_bgTimer) return;
+  if (_bgSlots() < 1) return;
+  _bgTimer = setInterval(() => {
+    try { const st = _loadSchedState(); for (const w of Object.values(st.workers || {})) { const bid = w && w.beatId; const th = bid && st.beats[bid] && st.beats[bid].thread; if (th) backgroundWorkerPass(th).catch(() => {}); } } catch {}
+  }, DIRECTED_CADENCE_MS);
+  console.log(`[worker] ${_bgSlots()} background research worker(s) started`);
+}
+function kickBackgroundWorkers() { startBackgroundWorkers(); }
 
 function startAutonomicScheduler() {
   if (autonomicTimer) return;
@@ -8532,10 +8634,13 @@ async function runDirectedResearchPass(focus) {
     } catch {}
     try { blackboard.append({ source: 'monologue', kind: 'reading', focusId: focus.id, content: note, signature: sig }); } catch {}
   }
+  // A BACKGROUND worker focus records on its own per-id bgstate (never the primary's shared state / pointer).
+  const _isBg = (() => { try { return db.getMeta(`focus.${focus.id}.background`) === '1'; } catch { return false; } })();
+  const _rec = _isBg ? focusLib.recordOutcomeBackground : focusLib.recordOutcome;
   const outcome = done
-    ? focusLib.recordOutcome(focus, { control: { type: 'done', note } })
-    : focusLib.recordOutcome(focus, { progressed });
-  console.log(`[directed] #${focus.id} → ${done ? 'ALL-COVERED' : note} → ${outcome.action}`);
+    ? _rec(focus, { control: { type: 'done', note } })
+    : _rec(focus, { progressed });
+  console.log(`[${_isBg ? 'worker' : 'directed'}] #${focus.id} → ${done ? 'ALL-COVERED' : note} → ${outcome.action}`);
   return outcome;
 }
 

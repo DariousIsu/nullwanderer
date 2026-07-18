@@ -304,6 +304,54 @@ function _close(focus, status, reason) {
   return { action: status, reason };
 }
 
+// --- BACKGROUND RESEARCH WORKERS (parallelism) --------------------------------
+// A background worker is a SECOND (third, …) directed research focus that runs CONCURRENTLY with the primary
+// one. Crucially it never touches CURRENT_KEY or FOCUS_STATE_KEY — chat / the domain leash / surfacing keep
+// seeing ONLY the primary focus (getCurrent), so the conversational plumbing is completely unaffected. Each
+// worker's per-run caps live in its OWN per-id `bgstate`, so N workers can never corrupt each other's counters.
+const _bgKey = (id) => `focus.${id}.bgstate`;
+function _loadBg(id) { try { const r = db.getMeta(_bgKey(id)); return r ? JSON.parse(r) : null; } catch { return null; } }
+function _saveBg(id, s) { try { db.setMeta(_bgKey(id), JSON.stringify(s)); } catch {} }
+
+// Promote an open_thread to a background worker (pending→active), init its bgstate. Returns the thread.
+function setBackground(threadId) {
+  const t = db.getOpenThread(threadId);
+  if (!t) return null;
+  _saveBg(threadId, { id: threadId, ticks: 0, strikes: 0, startedTs: Date.now(), directed: true, background: true });
+  db.touchOpenThread(threadId);
+  try { blackboard.append({ source: 'monologue', kind: 'focus_set', focusId: threadId, content: t.content }); } catch {}
+  return db.getOpenThread(threadId);
+}
+
+// recordOutcome for a background worker — mirrors recordOutcome (same overnight-directed caps + stuck/strike
+// teeth) but on its own bgstate, and on close it tombstones + marks the thread WITHOUT clearing the primary
+// CURRENT_KEY pointer (a bg close must never yank the focus out from under chat).
+function recordOutcomeBackground(focus, { progressed = false, control = null } = {}) {
+  const cur = db.getOpenThread(focus.id);
+  if (!cur || !['pending', 'active'].includes(cur.status)) return { action: cur ? cur.status : 'gone', reason: 'already closed' };
+  const state = _loadBg(focus.id) || { id: focus.id, ticks: 0, strikes: 0, startedTs: Date.now(), directed: true, background: true };
+  state.ticks += 1;
+  state.strikes = progressed ? 0 : state.strikes + 1;
+  db.touchOpenThread(focus.id);
+  const closeBg = (status, reason) => {
+    try { db.markOpenThreadStatus(focus.id, status, { reason }); } catch {}
+    try { db.setMeta(_bgKey(focus.id), ''); } catch {}
+    try { blackboard.append({ source: 'monologue', kind: 'focus_resolve', focusId: focus.id, content: `${status}: ${reason}` }); } catch {}
+    try { memoryLib.store({ kind: 'note', content: `Focus "${focus.content}" → ${status}: ${reason}`, source: 'focus_tombstone', importance: status === 'resolved' ? 0.8 : 0.5, embedText: focus.content }).catch(() => {}); } catch {}
+    console.log(`[focus:bg] #${focus.id} ${status} — ${reason}`);
+    return { action: status, reason };
+  };
+  if (control && control.type === 'done') return closeBg('resolved', control.note || 'completed');
+  if (control && control.type === 'stalled') { try { require('./gaps').recordOne(focus.content, control.reason || null, 'focus-stalled'); } catch {} return closeBg('stalled', control.reason || 'model stalled'); }
+  const st = stuck.check({ focusId: focus.id });
+  if (st.stuck) return closeBg('stalled', `stuck:${st.scenario}`);
+  if (Date.now() - state.startedTs > MAX_WALLCLOCK_MS_DIRECTED) return closeBg('stalled', 'wall-clock cap');
+  if (state.ticks >= MAX_TICKS_DIRECTED) return closeBg('stalled', 'tick cap');
+  if (state.strikes >= MAX_STRIKES_DIRECTED) return closeBg('stalled', 'no-progress strikes');
+  _saveBg(focus.id, state);
+  return { action: 'continue', reason: progressed ? 'progressed' : `strike ${state.strikes}/${MAX_STRIKES_DIRECTED}` };
+}
+
 // PERSISTENT DOMAIN LEASH (shared by the browse-download + contact leashes). Distinctive lowercased tokens
 // of the operator's domain: the ACTIVE directed focus if one is being served, ELSE their STANDING civic
 // work (recent open focus threads: "Louisiana parish leadership", "county commissioners"…). This is what
@@ -387,6 +435,7 @@ module.exports = {
   getCurrent, isActive, setCurrent, isDirected, setFromDirective, clear,
   setFromText, recentlyTombstoned, stripControlTags, parseControlTags,
   isNovel, recordOutcome, domainLeashTokens,
+  setBackground, recordOutcomeBackground,
   MAX_TICKS, MAX_STRIKES, MAX_WALLCLOCK_MS,
   MAX_TICKS_DIRECTED, MAX_STRIKES_DIRECTED, MAX_WALLCLOCK_MS_DIRECTED,
   REFRACTORY_MS, SIM_THRESHOLD

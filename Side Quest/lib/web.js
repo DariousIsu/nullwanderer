@@ -103,7 +103,21 @@ let counter = { L: 0, B: 0, I: 0, C: 0 };
 // a scoped page is being created (the 'page' event fires synchronously during context.newPage()).
 const _scopedPages = new Set();
 let _scoping = 0;
-let _researchLock = Promise.resolve();   // serialize research tabs among themselves (NOT vs idle)
+// RESEARCH-TAB CONCURRENCY (parallelism): research tabs used to be STRICTLY serial (one Promise chain) so a
+// single stealth profile never fired concurrent requests. To let N background research workers run at once we
+// raise this to a small SEMAPHORE — up to ZOE_BROWSER_CONCURRENCY scoped tabs at a time (default 3; set 1 to
+// restore the old strict-serial behavior). Idle browsing is still never blocked (scoped tabs are separate).
+const _RESEARCH_MAX = Math.max(1, parseInt(process.env.ZOE_BROWSER_CONCURRENCY || '3', 10) || 3);
+let _researchActive = 0;
+const _researchWaiters = [];
+function _acquireResearch() {
+  if (_researchActive < _RESEARCH_MAX) { _researchActive++; return Promise.resolve(); }
+  return new Promise((resolve) => _researchWaiters.push(resolve));
+}
+function _releaseResearch() {
+  if (_researchWaiters.length) { const next = _researchWaiters.shift(); next(); }   // hand the slot straight to a waiter
+  else _researchActive = Math.max(0, _researchActive - 1);
+}
 
 // Native JS dialog (alert/confirm/prompt) waiting for a response. Registering a 'dialog'
 // listener disables Playwright's default auto-dismiss, so the dialog stays open until she
@@ -645,33 +659,31 @@ async function researchInTab(query, { deepen = true } = {}) {
   await ensure();
   const url = toUrl(query);
   if (!url) return { ok: false, reason: 'empty query' };
-  const run = _researchLock.then(async () => {
-    let rp = null;
-    const urls = [];
-    try {
-      _scoping++;
-      try { rp = await context.newPage(); _scopedPages.add(rp); } finally { _scoping--; }
-      try { rp.setDefaultTimeout(8000); rp.on('dialog', onDialog); } catch {}
-      await rp.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-      urls.push(rp.url());
-      let text = await _readText(rp);
-      if (deepen) {
-        const top = await openTopResult(rp);
-        if (top.ok) {
-          urls.push(top.url);
-          const more = await _readText(rp);
-          if (more) text += `\n\nTop result (${top.title || top.url}):\n` + more;
-        }
+  await _acquireResearch();              // take a research-tab slot (up to _RESEARCH_MAX concurrent)
+  let rp = null;
+  const urls = [];
+  try {
+    _scoping++;
+    try { rp = await context.newPage(); _scopedPages.add(rp); } finally { _scoping--; }
+    try { rp.setDefaultTimeout(8000); rp.on('dialog', onDialog); } catch {}
+    await rp.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+    urls.push(rp.url());
+    let text = await _readText(rp);
+    if (deepen) {
+      const top = await openTopResult(rp);
+      if (top.ok) {
+        urls.push(top.url);
+        const more = await _readText(rp);
+        if (more) text += `\n\nTop result (${top.title || top.url}):\n` + more;
       }
-      return { ok: true, text: (text || '').slice(0, MAX_TEXT), urls, title: await rp.title().catch(() => '') };
-    } catch (err) {
-      return { ok: false, reason: err.message, urls };
-    } finally {
-      if (rp) { _scopedPages.delete(rp); try { await rp.close(); } catch {} }
     }
-  });
-  _researchLock = run.catch(() => {});   // keep the serialization chain alive even if this one throws
-  return run;
+    return { ok: true, text: (text || '').slice(0, MAX_TEXT), urls, title: await rp.title().catch(() => '') };
+  } catch (err) {
+    return { ok: false, reason: err.message, urls };
+  } finally {
+    if (rp) { _scopedPages.delete(rp); try { await rp.close(); } catch {} }
+    _releaseResearch();
+  }
 }
 
 async function close() {
