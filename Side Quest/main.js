@@ -7304,6 +7304,62 @@ function _saveSchedState(s) { try { db.setMeta(SCHED_STATE_KEY, JSON.stringify(s
 function _autonomicBeats() { try { return require('./lib/beats').countyCommissionSubBeats(); } catch { return []; } }
 function _coveredCount(focusId) { try { return (JSON.parse(db.getMeta(`focus.${focusId}.covered`) || '[]') || []).length; } catch { return 0; } }
 
+// MAINTENANCE SWEEP (Slice 2d) — a completeness beat is never "done forever": rosters change. Two re-verify
+// triggers, applied to beats that have actually run (skip the never-touched states — nothing to maintain yet):
+//   TIME  — a converged beat older than the freshness interval is re-activated for a full grounded re-verify.
+//   NEWS  — recent headlines reporting a governance change in a covered county un-cover JUST that county on a
+//           live beat (targeted, cheap) or re-activate a converged one. News is instant; official sites lag.
+// Throttled (hourly) via state.lastMaintenance. Government/news claims are LEADS — this only SCHEDULES a
+// corroborated re-check; nothing here writes the graph. Mutates `state` in place; caller persists.
+const MAINTENANCE_THROTTLE_MS = 60 * 60 * 1000;
+function _maintenanceSweep(state, beats) {
+  try {
+    const now = Date.now();
+    if (state.lastMaintenance && (now - state.lastMaintenance) < MAINTENANCE_THROTTLE_MS) return;
+    state.lastMaintenance = now;
+    const sched = require('./lib/beat_scheduler');
+    const beatsLib = require('./lib/beats');
+    // Only beats that have run (have a thread or a doneAt) carry state worth maintaining.
+    const touched = beats.filter((b) => { const bs = state.beats[b.id]; return bs && (bs.thread || bs.doneAt); });
+    if (!touched.length) return;
+    // TIME-BASED re-activation.
+    for (const b of touched) {
+      const bs = state.beats[b.id];
+      if (sched.dueForMaintenance({ status: bs.status, doneAt: bs.doneAt, now })) {
+        bs.status = undefined; bs.thread = undefined; bs.doneAt = undefined; bs.sliceStartCovered = undefined;
+        console.log(`[autonomic] maintenance: ${b.id} converged >30d ago → re-activated for a freshness sweep`);
+      }
+    }
+    // NEWS-ANCHORED re-verify. Pull one recent batch; match per state.
+    let stories = [];
+    try { stories = require('./lib/news_lane').storiesActiveInWindow(now - 48 * 3600 * 1000, { limit: 200 }) || []; } catch {}
+    if (stories.length) {
+      const headlines = stories.map((s) => ({ title: s && (s.title || s.headline) || '', summary: s && (s.summary || s.gist) || '' }));
+      for (const b of touched) {
+        if (!b.stateCode) continue;
+        let flagged = [];
+        try { flagged = beatsLib.matchNewsToTargets(b.stateCode, headlines); } catch {}
+        if (!flagged.length) continue;
+        const bs = state.beats[b.id];
+        if (bs.status === 'done') {
+          bs.status = undefined; bs.thread = undefined; bs.doneAt = undefined; bs.sliceStartCovered = undefined;
+          console.log(`[autonomic] maintenance(news): ${b.id} — ${flagged.length} county change(s) reported → re-activated`);
+        } else if (bs.thread) {
+          // Un-cover the flagged counties on the live thread so the directed pass re-opens just those.
+          try {
+            const key = `focus.${bs.thread}.covered`;
+            let cov = JSON.parse(db.getMeta(key) || '[]');
+            const flagKeys = flagged.map((t) => beatsLib.targetPlaceKey(t)).filter((k) => k.length >= 4);
+            const before = cov.length;
+            cov = cov.filter((c) => !flagKeys.some((fk) => String(c).toLowerCase().includes(fk)));
+            if (cov.length !== before) { db.setMeta(key, JSON.stringify(cov)); console.log(`[autonomic] maintenance(news): ${b.id} — un-covered ${before - cov.length} county(ies) for re-verify (${flagged.length} flagged)`); }
+          } catch {}
+        }
+      }
+    }
+  } catch (e) { console.error('[autonomic] maintenance sweep failed:', e.message); }
+}
+
 async function autonomicSchedulerTick() {
   if (String(process.env.ZOE_AUTONOMIC || '1').trim() === '0') return;              // kill switch
   try { if ((db.getMeta('operator.mode') || 'full').trim() === 'off') return; } catch {}
@@ -7312,6 +7368,7 @@ async function autonomicSchedulerTick() {
   const beats = _autonomicBeats();
   if (!beats.length) return;
   const state = _loadSchedState();
+  _maintenanceSweep(state, beats);   // hourly-throttled; re-activates stale/news-touched beats before we choose
 
   const focus = (() => { try { return focusLib.getCurrent(); } catch { return null; } })();
   if (focus && focusLib.isDirected(focus)) {
@@ -7350,7 +7407,7 @@ async function autonomicSchedulerTick() {
       console.log(`[autonomic] resumed ${nextId} → focus #${bs.thread} (${bs.sliceStartCovered}/${beat.universeSize()} covered)`);
       return;
     }
-    if (t && t.status === 'resolved') { bs.status = 'done'; state.beats[nextId] = bs; _saveSchedState(state); return; }
+    if (t && t.status === 'resolved') { bs.status = 'done'; bs.doneAt = Date.now(); state.beats[nextId] = bs; _saveSchedState(state); return; }
   }
   // SEED a fresh run.
   const r = await seedBeatRun(beat);

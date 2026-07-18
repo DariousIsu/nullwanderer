@@ -43,10 +43,21 @@ function shouldRotate({ sliceCovered = 0, sliceBudget = DEFAULT_SLICE_BUDGET, do
 }
 
 // Are all beats converged (nothing left for the scheduler to run)? Used to quiet the loop when the whole
-// worklist is exhausted — maintenance (Slice 2d) re-activates beats when news says something changed.
+// worklist is exhausted — maintenance re-activates beats when they go stale or news says something changed.
 function allDone({ beats = [], state = {} } = {}) {
   const stOf = (id) => (state.beats && state.beats[id]) || {};
   return (beats || []).length > 0 && (beats || []).every((b) => stOf(b.id).status === 'done');
 }
 
-module.exports = { DEFAULT_SLICE_BUDGET, chooseNext, shouldRotate, allDone };
+// MAINTENANCE (Slice 2d) — a completeness beat is never "done forever": rosters change (elections,
+// resignations, appointments). A converged beat becomes due for a freshness re-verify once it has been done
+// longer than `intervalMs` (official sites update slowly, so a slow clock; news anchors the fast path
+// separately). `doneAt` is when it converged. Returns true → re-activate for a re-verification sweep.
+const DEFAULT_MAINTENANCE_MS = 30 * 24 * 60 * 60 * 1000;   // ~monthly freshness sweep of a converged roster
+function dueForMaintenance({ status = '', doneAt = null, now = 0, intervalMs = DEFAULT_MAINTENANCE_MS } = {}) {
+  if (status !== 'done') return false;
+  if (doneAt == null) return false;
+  return (now - doneAt) >= Math.max(0, intervalMs);
+}
+
+module.exports = { DEFAULT_SLICE_BUDGET, DEFAULT_MAINTENANCE_MS, chooseNext, shouldRotate, allDone, dueForMaintenance };

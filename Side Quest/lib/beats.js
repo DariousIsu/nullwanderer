@@ -139,8 +139,35 @@ function coverageOf(targets, covered) {
   return { done, total: (targets || []).length, remaining, pct: (targets && targets.length) ? Math.round((done / targets.length) * 100) : 0 };
 }
 
+// NEWS-ANCHORED MAINTENANCE (Slice 2d) — "news is instant, official sites update slowly, so news is a great
+// anchor for new materials." Given a state's news headlines, return the county targets a governance CHANGE is
+// reported for, so the scheduler can re-verify JUST those counties instead of waiting for the slow freshness
+// sweep. A hit requires all three: the county's distinctive token, the county-equivalent noun (so "Orange
+// County commissioner" matches but "orange juice" doesn't), and a change cue. Pure; the caller supplies the
+// headlines (from the news lane) and applies the re-verify. Government claims are LEADS — a news match just
+// schedules a corroborated re-check, it doesn't itself change the graph.
+const CHANGE_CUE_RE = /\b(elect\w*|re-?elect\w*|appoint\w*|resign\w*|sworn|swear|inaugurat\w*|recall\w*|vacan\w*|oust\w*|removed?|unseat\w*|step(?:s|ped)?\s+down|took\s+office|new\s+commissioner|special\s+election|died|passed\s+away|indicted|arrested)\b/i;
+function matchNewsToTargets(stateCode, headlines) {
+  const code = String(stateCode || '').toUpperCase();
+  const st = US_COUNTIES[code];
+  if (!st) return [];
+  const targets = countyCommissionTargets(code);
+  const noun = st.noun || 'county';
+  const items = (Array.isArray(headlines) ? headlines : [])
+    .map((h) => `${(h && h.title) || ''} ${(h && h.summary) || ''}`.toLowerCase().trim())
+    .filter(Boolean);
+  if (!items.length) return [];
+  const hits = [];
+  for (const t of targets) {
+    const key = targetPlaceKey(t);
+    if (key.length < 4) continue;   // too-short tokens (Bay, Lee, Clay) are noise-prone in free news text
+    if (items.some((x) => x.includes(key) && x.includes(noun) && CHANGE_CUE_RE.test(x))) hits.push(t);
+  }
+  return hits;
+}
+
 module.exports = {
-  US_COUNTIES, STATE_COUNTIES, STATE_NAMES, PARENT_BEATS,
+  US_COUNTIES, STATE_COUNTIES, STATE_NAMES, PARENT_BEATS, CHANGE_CUE_RE,
   listCountyStates, placeKey, bodyLabel, targetPlaceKey,
-  countyCommissionTargets, countyCommissionBeat, countyCommissionSubBeats, coverageOf,
+  countyCommissionTargets, countyCommissionBeat, countyCommissionSubBeats, coverageOf, matchNewsToTargets,
 };

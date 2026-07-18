@@ -68,5 +68,20 @@ ok(beats.PARENT_BEATS.filter(b => b.kind === 'topic').map(b => b.id).sort().join
 const tx = beats.countyCommissionTargets('TX');
 ok(beats.coverageOf(tx, tx).pct === 100, 'TX full coverage → 100%');
 
+// --- Slice 2d: news-anchored maintenance matcher ---
+const news = [
+  { title: 'Orange County commissioner resigns amid probe', summary: 'The board will hold a special election.' },
+  { title: 'Miami-Dade County commissioner sworn in after appointment', summary: '' },
+  { title: 'Fresh orange juice prices climb in Florida groceries', summary: 'citrus growers report a strong season' },
+  { title: 'Leon County libraries extend weekend hours', summary: 'no personnel changes' },
+];
+const matched = beats.matchNewsToTargets('FL', news);
+ok(matched.some(t => /Orange County/.test(t)), 'news: Orange County commissioner resignation → flagged');
+ok(matched.some(t => /Miami-Dade County/.test(t)), 'news: Miami-Dade appointment → flagged');
+ok(!matched.some(t => /Leon County/.test(t)), 'news: Leon libraries (no change cue) → NOT flagged');
+ok(!matched.some(t => /Citrus County/.test(t)), 'news: "orange juice / citrus growers" (no noun+cue) → NOT flagged (no false positive)');
+ok(beats.matchNewsToTargets('FL', []).length === 0, 'no headlines → no matches');
+ok(beats.matchNewsToTargets('ZZ', news).length === 0, 'unknown state → no matches');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

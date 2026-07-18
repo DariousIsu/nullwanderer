@@ -31,6 +31,13 @@ ok(s.allDone({ beats, state: { beats: { a: { status: 'done' }, b: { status: 'don
 ok(s.allDone({ beats, state: { beats: { a: { status: 'done' } } } }) === false, 'one converged → not allDone');
 ok(s.allDone({ beats: [], state: {} }) === false, 'no beats → not allDone (nothing to converge)');
 
+// --- dueForMaintenance: a converged beat goes stale after the interval ---
+ok(s.dueForMaintenance({ status: 'done', doneAt: 0, now: s.DEFAULT_MAINTENANCE_MS + 1 }) === true, 'converged longer than the interval → due for re-verify');
+ok(s.dueForMaintenance({ status: 'done', doneAt: 100, now: 200, intervalMs: 1000 }) === false, 'converged recently → not yet due');
+ok(s.dueForMaintenance({ status: 'active', doneAt: 0, now: 1e15 }) === false, 'an active beat is never "due for maintenance" (only converged ones)');
+ok(s.dueForMaintenance({ status: 'done', doneAt: null, now: 1e15 }) === false, 'no doneAt recorded → not due (needs a convergence timestamp)');
+ok(s.dueForMaintenance({ status: 'done', doneAt: 100, now: 100, intervalMs: 0 }) === true, 'zero interval → immediately due');
+
 // --- round-robin end-to-end: 3 beats, budget 2, simulate slices → each runs before any repeats ---
 {
   let state = { beats: {} };
