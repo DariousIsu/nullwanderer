@@ -1336,6 +1336,10 @@ app.whenReady().then(() => {
     if (f && focusLib.isDirected(f)) { startDirectedFocusDriver(); console.log(`[directed] resumed standing focus #${f.id} after restart`); }
   } catch (e) { console.error('[main] directed-focus resume failed:', e.message); }
 
+  // AUTONOMIC BEAT SCHEDULER (Slice 2c) — the self-driving worklist loop: rotate the focus across beats so
+  // autonomic research is diverse across beats yet deep within each. Yields to any user-assigned focus.
+  try { startAutonomicScheduler(); } catch (e) { console.error('[main] autonomic scheduler start failed:', e.message); }
+
   // Email: surface a credential problem early rather than at first send.
   if (emailLib.isConfigured()) {
     emailLib.verify().then(r => {
@@ -7275,8 +7279,93 @@ async function seedBeatRun(beat) {
     return { ok: true, focusId: fid, targets: targets.length };
   } catch (e) { console.error('[beat] seed failed:', e.message); return { ok: false, reason: e.message }; }
 }
-// Exposed for validation via the inspector (--inspect=9229) until the Slice-2 scheduler drives beats itself.
+// Exposed for validation via the inspector (--inspect=9229).
 try { global.__autonomicSeedBeat = (stateCode = 'FL') => seedBeatRun(require('./lib/beats').countyCommissionBeat(stateCode)); } catch {}
+
+// === AUTONOMIC BEAT SCHEDULER (autonomic-architecture Slice 2c) ==================================
+// The supervisor that turns the beat registry into a self-driving, DIVERSE-yet-DEEP autonomic loop. It
+// rotates the focus across beats at the SLICE level (a beat covers ~SLICE_BUDGET new targets, then yields
+// to the least-recently-run unfinished beat), so no single state monopolizes for a week AND each beat still
+// runs deep. The pure rotation decisions live in lib/beat_scheduler; this half does the focus I/O:
+//   - PAUSE  = focus.clear() — unsets the pointer, the open_thread + its covered/plan/depth meta survive.
+//   - RESUME = focus.setCurrent(sameThread, {directed}) — the directed pass picks up from its covered set.
+//   - SEED   = seedBeatRun(beat) — a fresh bounded run for a beat that has no thread yet.
+// Always yields entirely to a USER-assigned focus (a directed focus with no `.beat` tag) — Lucas's own work
+// is never preempted. Kill switch: ZOE_AUTONOMIC=0.
+let autonomicTimer = null;
+const AUTONOMIC_CADENCE_MS = 90 * 1000;   // check rotation every ~90s; the directed driver does the 45s work
+const SCHED_STATE_KEY = 'sched.autonomic';   // meta JSON: { beats: { <beatId>: { thread, status, lastRun, sliceStartCovered } } }
+
+function _loadSchedState() { try { const s = JSON.parse(db.getMeta(SCHED_STATE_KEY) || '{}'); if (!s.beats) s.beats = {}; return s; } catch { return { beats: {} }; } }
+function _saveSchedState(s) { try { db.setMeta(SCHED_STATE_KEY, JSON.stringify(s)); } catch {} }
+
+// The roster the scheduler rotates over. Slice 2c = the completeness tier (every state's county-commission
+// sub-beat). Topic beats (AI/power/datacenters) + maintenance re-activation arrive in Slice 2d.
+function _autonomicBeats() { try { return require('./lib/beats').countyCommissionSubBeats(); } catch { return []; } }
+function _coveredCount(focusId) { try { return (JSON.parse(db.getMeta(`focus.${focusId}.covered`) || '[]') || []).length; } catch { return 0; } }
+
+async function autonomicSchedulerTick() {
+  if (String(process.env.ZOE_AUTONOMIC || '1').trim() === '0') return;              // kill switch
+  try { if ((db.getMeta('operator.mode') || 'full').trim() === 'off') return; } catch {}
+  const focusLib = require('./lib/focus');
+  const sched = require('./lib/beat_scheduler');
+  const beats = _autonomicBeats();
+  if (!beats.length) return;
+  const state = _loadSchedState();
+
+  const focus = (() => { try { return focusLib.getCurrent(); } catch { return null; } })();
+  if (focus && focusLib.isDirected(focus)) {
+    const beatId = (() => { try { return (db.getMeta(`focus.${focus.id}.beat`) || '').trim(); } catch { return ''; } })();
+    if (!beatId) return;                                                            // Lucas's own task → never preempt
+    // A BEAT focus is running — adopt it into scheduler state (survives a restart of a live beat) and decide
+    // whether to rotate. `lastRun` is bumped every tick so the running beat stays "newest" and isn't re-picked.
+    const bs = state.beats[beatId] || {};
+    bs.thread = focus.id;
+    if (bs.sliceStartCovered == null) bs.sliceStartCovered = _coveredCount(focus.id);   // adopt an already-running slice
+    const sliceCovered = _coveredCount(focus.id) - bs.sliceStartCovered;
+    bs.lastRun = Date.now();
+    state.beats[beatId] = bs;
+    if (!sched.shouldRotate({ sliceCovered })) { _saveSchedState(state); return; }   // under budget → keep this beat deep
+    _saveSchedState(state);
+    try { focusLib.clear('autonomic-rotate'); } catch {}                            // PAUSE — thread + progress survive
+    console.log(`[autonomic] rotated off ${beatId} (covered ${sliceCovered} this slice) → picking next`);
+    // fall through to pick the next beat this same tick
+  }
+
+  // Idle (or just paused) → pick the next beat and run a slice.
+  const nextId = sched.chooseNext({ beats, state });
+  if (!nextId) { if (sched.allDone({ beats, state })) { /* worklist exhausted; maintenance re-activates in 2d */ } return; }
+  const beat = beats.find((b) => b.id === nextId);
+  const bs = state.beats[nextId] || {};
+
+  // Resume a paused thread if it's still open; if it resolved while we were away, mark done; else seed fresh.
+  if (bs.thread) {
+    let t = null; try { t = db.getOpenThread(bs.thread); } catch {}
+    if (t && ['pending', 'active'].includes(t.status)) {
+      try { focusLib.setCurrent(bs.thread, { directed: true }); } catch {}
+      bs.sliceStartCovered = _coveredCount(bs.thread);
+      bs.lastRun = Date.now();
+      state.beats[nextId] = bs; _saveSchedState(state);
+      kickDirectedFocusDriver();
+      console.log(`[autonomic] resumed ${nextId} → focus #${bs.thread} (${bs.sliceStartCovered}/${beat.universeSize()} covered)`);
+      return;
+    }
+    if (t && t.status === 'resolved') { bs.status = 'done'; state.beats[nextId] = bs; _saveSchedState(state); return; }
+  }
+  // SEED a fresh run.
+  const r = await seedBeatRun(beat);
+  if (r && r.ok) { bs.thread = r.focusId; bs.sliceStartCovered = 0; bs.lastRun = Date.now(); state.beats[nextId] = bs; _saveSchedState(state); }
+  else if (r && r.reason === 'user-focus-active') { /* a user task appeared — yield, try next tick */ }
+}
+
+function startAutonomicScheduler() {
+  if (autonomicTimer) return;
+  if (String(process.env.ZOE_AUTONOMIC || '1').trim() === '0') { console.log('[autonomic] scheduler disabled (ZOE_AUTONOMIC=0)'); return; }
+  autonomicTimer = setInterval(() => { autonomicSchedulerTick().catch((e) => console.error('[autonomic] tick failed:', e.message)); }, AUTONOMIC_CADENCE_MS);
+  setTimeout(() => { autonomicSchedulerTick().catch(() => {}); }, 8000);            // first pass shortly after boot
+  console.log('[autonomic] beat scheduler started');
+}
+try { global.__autonomicTick = () => autonomicSchedulerTick(); } catch {}           // inspector-driven validation
 
 // One driver tick: advance the active directed focus by a single research slice, record the outcome.
 async function directedFocusTick() {
