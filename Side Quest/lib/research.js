@@ -13,7 +13,7 @@
 
 const MAX_PASSES_PER_TARGET = 6;   // depth cap per org in a MULTI-org run — "a decent percentage", not infinite
 const MAX_PASSES_DEEP_TARGET = 12; // a SINGLE bounded deep target may work each facet (6-facet brief needs >6); throttled 18→12 so one target can't grind endlessly
-const MAX_PASSES_REFUSAL = 40;     // REFUSAL mode (dossier beats) has NO facet/depth cap — it deep-dives to exhaustion; this is only a runaway guard so a pathological target can't loop forever (focus-level tick/wall-clock caps are the outer backstop)
+const MAX_PASSES_REFUSAL = 16;     // REFUSAL mode (dossier beats) deep-dives to exhaustion, but a SOFT per-target cap (throughput tune) so one never-drying office can't monopolize the serial single-focus engine — 16 passes is still a deep dossier (~16k+ chars); the 2-dry-pass "well is dry" signal advances most finite rosters far sooner, and news-maintenance re-visits later
 const MIN_NEW_CHARS = 220;         // a deepen pass adding less than this = diminishing returns (one "dry" pass)
 
 // Parse one research pass. The prompts make the operator end with a control line:
@@ -64,7 +64,7 @@ function decideAdvance({ passes = 1, newChars = 0, saturated = false, uncovered 
   // or the model declares it saturated. A high runaway guard is the only ceiling.
   if (refusal) {
     if (dryStreak >= 2) return { advance: true, reason: 'exhausted (dry well)' };
-    if (passes >= MAX_PASSES_REFUSAL) return { advance: true, reason: 'runaway guard' };
+    if (passes >= MAX_PASSES_REFUSAL) return { advance: true, reason: 'soft depth cap' };
     return { advance: false, reason: 'keep deepening' };
   }
   if (passes >= 2 && newChars < minNew) return { advance: true, reason: 'diminishing returns' };

@@ -159,11 +159,12 @@ ok(r.decideAdvance({ passes: 8, newChars: 900, uncovered: 0, deep: true }).advan
 ok(r.decideAdvance({ passes: 3, newChars: 10, uncovered: 4, deep: true }).advance === true, 'decideAdvance: a genuinely dry facet still self-limits (diminishing returns) even in dossier depth');
 // REFUSAL mode (Lucas 2026-07-18): deep-dive to EXHAUSTION — advance only on a 2-pass dry streak or saturation,
 // never on facet-touched or an arbitrary ceiling, with a high runaway guard.
-ok(r.decideAdvance({ refusal: true, passes: 20, newChars: 900, dryStreak: 0 }).advance === false, 'refusal: still pulling material at pass 20 → keep going (no facet/pass ceiling)');
+ok(r.decideAdvance({ refusal: true, passes: 10, newChars: 900, dryStreak: 0 }).advance === false, 'refusal: still pulling material below the soft cap → keep deep-diving');
 ok(r.decideAdvance({ refusal: true, passes: 5, dryStreak: 1 }).advance === false, 'refusal: ONE thin pass does not give up (could be a bad search)');
 ok(r.decideAdvance({ refusal: true, passes: 5, dryStreak: 2 }).advance === true && r.decideAdvance({ refusal: true, passes: 5, dryStreak: 2 }).reason === 'exhausted (dry well)', 'refusal: TWO consecutive dry passes → exhausted, advance');
 ok(r.decideAdvance({ refusal: true, passes: 8, dryStreak: 0, saturated: true }).advance === true, 'refusal: model SATURATED still advances immediately');
-ok(r.decideAdvance({ refusal: true, passes: r.MAX_PASSES_REFUSAL, newChars: 900, dryStreak: 0 }).advance === true && r.decideAdvance({ refusal: true, passes: r.MAX_PASSES_REFUSAL, dryStreak: 0 }).reason === 'runaway guard', `refusal: runaway guard at ${r.MAX_PASSES_REFUSAL} passes (outer backstop only)`);
+ok(r.decideAdvance({ refusal: true, passes: r.MAX_PASSES_REFUSAL, newChars: 900, dryStreak: 0 }).advance === true && r.decideAdvance({ refusal: true, passes: r.MAX_PASSES_REFUSAL, dryStreak: 0 }).reason === 'soft depth cap', `refusal: soft depth cap at ${r.MAX_PASSES_REFUSAL} passes (throughput tune — one office can't monopolize)`);
+ok(r.MAX_PASSES_REFUSAL <= 20, `refusal soft cap is bounded for throughput (${r.MAX_PASSES_REFUSAL})`);
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
