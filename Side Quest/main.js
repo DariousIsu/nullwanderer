@@ -8459,14 +8459,15 @@ async function runDirectedResearchPass(focus) {
     // ceiling) while facets are still uncovered + passes stay productive — so a 6-facet brief actually finishes
     // its checklist instead of being force-finalized half-covered (the #3364 thin-doc bug).
     // DOSSIER depth (autonomic elected-officials beats) — DON'T waste a single search: deep-dive EVERY
-    // target across its full facet set (members + A-grade contacts, meetings, minutes, agendas, bios, the
-    // governing charter, history, committees), not a shallow 2-pass roster. Take the facet-aware deep path
-    // per target REGARDLESS of how many targets the run has, so each county/board gets a complete dossier.
-    // Diminishing-returns + the deep-pass ceiling still self-limit each facet; diversity comes from the
-    // scheduler rotating to the next state, not from cutting depth here.
+    // target to genuine EXHAUSTION (REFUSAL mode), not a shallow roster and not an arbitrary pass ceiling.
+    // Advance only when the well is dry (two consecutive sub-threshold passes) or the model says saturated,
+    // so nothing rich is left on the table. Track the per-target dry streak here (persists on the target).
+    // Diversity comes from the scheduler rotating states, not from cutting depth.
     const depthMode = (() => { try { return (db.getMeta(`focus.${focus.id}.depth`) || '').trim(); } catch { return ''; } })();
-    const deepTarget = depthMode === 'dossier' || (scope === 'bounded' && Array.isArray(intended) && intended.length <= 1);
-    const adv = rs.decideAdvance({ passes: target.passes, newChars, saturated: p.saturated, uncovered: uncovered.length, deep: deepTarget });
+    const refusal = depthMode === 'dossier';
+    if (refusal) target.dryPasses = (newChars < rs.MIN_NEW_CHARS) ? ((target.dryPasses || 0) + 1) : 0;
+    const deepTarget = refusal || (scope === 'bounded' && Array.isArray(intended) && intended.length <= 1);
+    const adv = rs.decideAdvance({ passes: target.passes, newChars, saturated: p.saturated, uncovered: uncovered.length, deep: deepTarget, refusal, dryStreak: target.dryPasses || 0 });
     if (adv.advance) {
       // CLOUD ORGANIZE this target → one clean section (the usable DRAFT), appended to the deliverable NOW.
       let section = '';

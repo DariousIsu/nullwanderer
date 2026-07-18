@@ -157,6 +157,13 @@ ok(r.decideAdvance({ passes: 2, newChars: 900, saturated: true }).advance === tr
 ok(r.decideAdvance({ passes: 8, newChars: 900, uncovered: 4, deep: true }).advance === false, 'decideAdvance: dossier target with uncovered facets + material → keep deep-diving past the base cap');
 ok(r.decideAdvance({ passes: 8, newChars: 900, uncovered: 0, deep: true }).advance === true, 'decideAdvance: dossier target with ALL facets covered → advance (do not over-work)');
 ok(r.decideAdvance({ passes: 3, newChars: 10, uncovered: 4, deep: true }).advance === true, 'decideAdvance: a genuinely dry facet still self-limits (diminishing returns) even in dossier depth');
+// REFUSAL mode (Lucas 2026-07-18): deep-dive to EXHAUSTION — advance only on a 2-pass dry streak or saturation,
+// never on facet-touched or an arbitrary ceiling, with a high runaway guard.
+ok(r.decideAdvance({ refusal: true, passes: 20, newChars: 900, dryStreak: 0 }).advance === false, 'refusal: still pulling material at pass 20 → keep going (no facet/pass ceiling)');
+ok(r.decideAdvance({ refusal: true, passes: 5, dryStreak: 1 }).advance === false, 'refusal: ONE thin pass does not give up (could be a bad search)');
+ok(r.decideAdvance({ refusal: true, passes: 5, dryStreak: 2 }).advance === true && r.decideAdvance({ refusal: true, passes: 5, dryStreak: 2 }).reason === 'exhausted (dry well)', 'refusal: TWO consecutive dry passes → exhausted, advance');
+ok(r.decideAdvance({ refusal: true, passes: 8, dryStreak: 0, saturated: true }).advance === true, 'refusal: model SATURATED still advances immediately');
+ok(r.decideAdvance({ refusal: true, passes: r.MAX_PASSES_REFUSAL, newChars: 900, dryStreak: 0 }).advance === true && r.decideAdvance({ refusal: true, passes: r.MAX_PASSES_REFUSAL, dryStreak: 0 }).reason === 'runaway guard', `refusal: runaway guard at ${r.MAX_PASSES_REFUSAL} passes (outer backstop only)`);
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
