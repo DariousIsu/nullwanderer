@@ -30,6 +30,25 @@ Fixation = **depth without a worklist.** Slowness = **the wrong engine.** They a
 Today all three are conflated into the "should she muse?" loop, and surfacing rides on top of whatever
 the idle work fixated on. That is the bug. Separate them.
 
+## Research principles (Lucas 2026-07-18 — hard constraints)
+
+These shape every beat's per-item action and the maintenance cycle:
+
+1. **Browser-first.** Research runs through the BROWSER lane (Side Quest's stealth/visible browser), not
+   keyed search APIs — the machine has no web-search provider keys, and sub-state work has no large DBs to
+   pull from anyway ("web searched as normal"). The QID/Wikidata worker-job (a structured API hit, no search
+   key) is the EXCEPTION for structured-source tiers, not the template. So the roster/officials engine lives
+   in Side Quest, driving the directed-research machinery, NOT an nx-echo web job.
+2. **News is the freshness anchor.** Official websites LAG (slow to update); news is INSTANT. So maintenance
+   is NOT "re-scrape the .gov roster on a timer" — it is: watch the news feed (the existing 189-feed data
+   lane) for a development on a beat → that is the "something changed" trigger → then verify it. News detects
+   change; targeted research confirms it against sources.
+3. **Distrust official sources.** Government statements, releases, and databases CANNOT be trusted at face
+   value — they are LEADS, not facts. Every item needs heavy outside corroboration, fact-checking, and
+   scrutiny (independent sources, cross-reference) before it is graded trustworthy. This is the
+   substantiation/grading discipline ([[substantiation-grading-vision]]) applied to the whole beat: a
+   .gov roster entry is a starting claim to verify, not an answer to ingest.
+
 ## The autonomic engine
 
 A **beat** is a broad, hardwired, user-set mandate. It is decomposed by the system into an enumerable
@@ -86,12 +105,20 @@ The engine is method-agnostic: a beat declares (universe source, per-item action
 per-item action reuses existing machinery — the directed-research pass for web-discovery items, a roster
 ingest for API items.
 
-### Maintain — coverage is a cycle, not a finish line
+### Maintain — coverage is a cycle, NEWS-anchored
 
-Once a worklist hits coverage, the beat shifts to homeostasis: re-verify stale entries on a cadence
-(an official's term ends, a company moves) and ingest new developments. This is the QID job's
-"miss retry monthly + new-item auto-pickup", generalized: every covered item carries a freshness stamp;
-the maintenance pass re-opens the stalest slice each cycle.
+Once a worklist hits coverage, the beat shifts to homeostasis. Two triggers re-open an item:
+
+- **News-anchored (primary).** The news lane is the "something changed" detector — official sites lag, news
+  is instant. A news item mentioning a beat entity (a new official elected, a company move, a datacenter
+  announced) re-opens that item for targeted verification. This is how a beat stays CURRENT without
+  brute-force re-scraping — you only re-research what the world says changed.
+- **Staleness fallback (secondary).** Every covered item carries a freshness stamp; a slow background pass
+  re-opens the stalest slice on a long cadence, to catch changes news missed (the QID job's
+  "retry monthly" generalized). Bounded, low-rate — the safety net, not the main loop.
+
+Both feed the same verify step, which — per principle 3 — corroborates against independent sources before
+re-grading, never trusting the official source alone.
 
 ## Reuse (this is mostly wiring proven parts)
 
@@ -106,10 +133,14 @@ the maintenance pass re-opens the stalest slice each cycle.
 
 ## Slice plan
 
-- **S1 — the engine, proven end-to-end on ONE enumerable sub-universe.** A state's county commissioners
-  (sits under "elected officials", no granular config): enumerate the counties → worklist → exhaust via the
-  research machinery on the worker → coverage 0→N → maintenance cadence. Proves worklist + exhaust + coverage
-  + maintain. This is the foundation everything else reuses.
+- **S1 — the convergent worklist, proven on ONE enumerable sub-universe (browser-based, Side Quest).** A
+  state's county commissioners (under "elected officials", no granular config): enumerate the counties (static
+  FIPS roster → Census later) → seed the EXISTING directed-research machinery with that BOUNDED, enumerated
+  target list instead of model-picked targets → its per-target deepen/`covered` loop exhausts them → track
+  beat coverage 0→N, resumable across reboots. This directly fixes the loop-and-wander: a bounded checklist
+  can't loop (it knows what's done) and can't wander (targets are enumerated, not model-invented). Corroborate
+  per principle 3. The fast-vs-slow is the browser lane's throughput — the WIN here is *convergence*, not raw
+  speed. Foundation everything else reuses.
 - **S2 — beats registry + scheduler.** Generalize S1: a `beats` table (broad, user-editable) + the
   decompose adapters (authoritative-API + discovery tiers) + the interleaving scheduler.
 - **S3 — demote the heartbeat to surfacing-only.** The idle loop stops doing research; it becomes a gated
