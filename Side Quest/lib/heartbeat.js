@@ -16,6 +16,10 @@ const selfRep = require('./self_repetition');   // meaning-level self-repeat gua
 const unpromptedGate = require('./unprompted_gate');   // structural backstops: pending-user-turn + unprompted-streak
 
 const MODEL = require('./config').frontModel();
+// TOPIC-COOLDOWN bar (2026-07-17 drift fix): a "same-territory" cosine, LOWER than the 0.80 near-repeat
+// bar, so a surfacing about the same CLUSTER as a recent one (she was circling one research topic) is held
+// back to force diversity. Silence > monotony. Tunable via HEARTBEAT_TOPIC_COOLDOWN_SIM (unset → 0.72).
+const TOPIC_COOLDOWN_SIM = (() => { const v = parseFloat(require('./config').get('HEARTBEAT_TOPIC_COOLDOWN_SIM', '')); return Number.isFinite(v) ? v : 0.72; })();
 const TICK_INTERVAL_MS = 30 * 1000;        // check every 30s while idle
 const IDLE_THRESHOLD_MS = 60 * 1000;       // user must be quiet ≥ 60s
 const MIN_GAP_BETWEEN_HEARTBEATS_MS = 15 * 60 * 1000;  // ≥ 15min between unsolicited utterances (near-silent)
@@ -164,15 +168,16 @@ function buildHeartbeatPrompt({ userName, recentReflections, recentTurns, recent
   // Frame it as the substrate itself (no role injection of [user]).
   const heartbeatPrompt = `[${userName || 'They'} has not spoken for a while. You may stay quiet, OR you may break the silence by surfacing something specific.
 
-If you choose to speak, your <say> MUST reference a concrete subject by name. There are TWO valid sources to draw from, and you must phrase them differently depending on source:
+If you choose to speak, your <say> MUST reference a concrete subject by name. There are TWO sources to draw from — and they are NOT equal. Strongly PREFER (1), the actual conversation; reach for (2), a reading, only when it is genuinely new and you have not already been circling it.
 
 (1) FROM YOUR CONVERSATION with ${userName || 'them'} — things they said, things you said, things almost said.
-    Valid phrasings: "I keep thinking about what you said about X" / "I've been turning over my own answer about Y" / "I never asked you whether Z"
-    These reference REAL statements from the dialogue history above.
+    These reference REAL statements from the dialogue history above — e.g. picking up a thread they raised, or a question you never asked. Vary how you say it; do not lean on one stock opener.
 
-(2) FROM YOUR OWN READINGS — things you looked up between turns when you were curious or bored.
-    CRITICAL: when you bring up a reading, you MUST include the actual SUBSTANCE — the specific thing you found, stated in a sentence or two — not just announce the topic. A bare "I read about X and I want to bring it up" with no content is NOT allowed: it's a hollow opener you can't back up, and when ${userName || 'they'} engages you'll have nothing to say. Lead with the point itself: "I read about X — what struck me was [the specific thing]." The substance you state must come from your actual readings above; if you do NOT have a concrete point to make about it, do not bring it up — pick something you can actually discuss, or stay silent.
+(2) FROM YOUR OWN READINGS — things you looked up between turns. Use this SPARINGLY.
+    When you do, you MUST state the actual SUBSTANCE — the specific thing you found, in a sentence or two — not just announce the topic; a bare "I read about X" with no content is a hollow opener you can't back up. But say it PLAINLY, in your own words, and VARY how you open. Do NOT use a stock template like "I read about X — what struck me was…" — you have been leaning on that exact phrasing every time and it reads as a tic. If you have no concrete point, don't bring it up.
     DO NOT phrase these as "that thing you said about" — ${userName || 'they'} did not tell you these things. You read them yourself.
+
+ANTI-FIXATION: notice if your recent surfacings keep returning to the SAME subject or cluster of ideas. If your mind keeps landing in one territory, that is a signal to turn ELSEWHERE — a different thread from the conversation, a different reading — or to stay silent. Do not surface the same territory twice running; monotony is worse than silence.
 
 NOT VALID: "The silence has weight" / "I notice the quiet" / atmospheric meta-commentary. ALSO NOT VALID — and just as forbidden: restating, confirming, summarizing, or describing THESE rules ("I understand", "the logic gate", "I'll only speak if...", listing the sources/phrasings). These instructions are a frame to ACT within, never a topic to talk about. If the only thing you have to say is about how you handle silence, you have nothing to surface — the tag is empty.
 
@@ -452,6 +457,15 @@ async function maybeHeartbeat() {
         if (semRepeat) {
           wantsToSpeak = false;
           console.log('[heartbeat] suppressed semantic self-repeat (same point reworded)');
+        } else {
+          // TOPIC COOLDOWN: not a near-repeat, but the SAME cluster of ideas as a recent surfacing (she
+          // was circling one research topic). The lower same-territory bar forces her voice off the fixation.
+          let topicRepeat = false;
+          try { topicRepeat = await selfRep.isSemanticRepeat(trimmedSay, recentSaids, { threshold: TOPIC_COOLDOWN_SIM, maxPriors: 16 }); } catch (e) { console.error('[heartbeat] topic-cooldown check failed:', e.message); }
+          if (topicRepeat) {
+            wantsToSpeak = false;
+            console.log('[heartbeat] suppressed topic-cooldown (same cluster as a recent surfacing)');
+          }
         }
       }
     }

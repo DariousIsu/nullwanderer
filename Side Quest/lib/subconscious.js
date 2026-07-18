@@ -116,8 +116,11 @@ function buildSynthesisPrompt({ recentThoughts = [], threads = [], focus = null,
     + (focus ? '\n\nActive focus: ' + String((focus && focus.content) || focus).slice(0, 160) : '')
     + (grounding ? '\n\n' + grounding : '')
     + '\n\nStep back. Across these, what is the ONE real thread, tension, or question worth pursuing? '
-    + 'Think it through in depth (do not just summarize), grounded in your sources. End with a single '
-    + '<wonder>...</wonder> if a genuine question pulls at you, or one concrete next step.';
+    + 'Think it through in depth (do not just summarize), grounded in your sources. BUT if these thoughts '
+    + 'keep circling the SAME topic you have synthesized before, do not just restate that convergence again '
+    + '— either find a genuinely DIFFERENT thread among them, or name plainly that you are fixating and turn '
+    + 'your attention elsewhere. End with a single <wonder>...</wonder> if a genuine question pulls at you, '
+    + 'or one concrete next step.';
 }
 
 module.exports = {
