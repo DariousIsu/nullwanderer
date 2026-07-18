@@ -7300,9 +7300,11 @@ const SCHED_STATE_KEY = 'sched.autonomic';   // meta JSON: { beats: { <beatId>: 
 function _loadSchedState() { try { const s = JSON.parse(db.getMeta(SCHED_STATE_KEY) || '{}'); if (!s.beats) s.beats = {}; return s; } catch { return { beats: {} }; } }
 function _saveSchedState(s) { try { db.setMeta(SCHED_STATE_KEY, JSON.stringify(s)); } catch {} }
 
-// The roster the scheduler rotates over. Slice 2c = the completeness tier (every state's county-commission
-// sub-beat). Topic beats (AI/power/datacenters) + maintenance re-activation arrive in Slice 2d.
-function _autonomicBeats() { try { return require('./lib/beats').countyCommissionSubBeats(); } catch { return []; } }
+// The roster the scheduler rotates over — the elected-officials completeness tiers, "as granular as possible"
+// (Lucas): every state's county-commission sub-beat + every state's municipal (city/town/village) sub-beat.
+// (Federal, state-legislature, school-board, and special-district tiers extend this list next.) The scheduler
+// slices + rotates all of them; the news-maintenance sweep only touches the ones that have actually run.
+function _autonomicBeats() { try { return require('./lib/beats').electedOfficialsSubBeats(); } catch { return []; } }
 function _coveredCount(focusId) { try { return (JSON.parse(db.getMeta(`focus.${focusId}.covered`) || '[]') || []).length; } catch { return 0; } }
 
 // MAINTENANCE SWEEP (Slice 2d) — a completeness beat is never "done forever": rosters change. Two re-verify

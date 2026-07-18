@@ -76,6 +76,28 @@ ok(beats.PARENT_BEATS.filter(b => b.kind === 'topic').map(b => b.id).sort().join
 const tx = beats.countyCommissionTargets('TX');
 ok(beats.coverageOf(tx, tx).pct === 100, 'TX full coverage → 100%');
 
+// --- MUNICIPAL tier (elected-officials granularity) ---
+const mStates = beats.listPlaceStates();
+ok(mStates.length >= 50, `municipal tier enumerates 50 states (got ${mStates.length})`);
+const flCities = beats.municipalTargets('FL');
+ok(flCities.length > 100, `FL enumerates its incorporated municipalities (got ${flCities.length})`);
+ok(flCities.every(x => / of .+, Florida$/.test(x)), 'every municipal target is "<body> of <place>, Florida"');
+ok(flCities.some(x => /City Council of Miami,/.test(x)), 'FL includes City Council of Miami');
+ok(flCities.some(x => /Town Council of .+, Florida/.test(x)), 'FL uses Town Council phrasing for towns');
+const mBeat = beats.municipalBeat('TX');
+ok(mBeat.id === 'municipalities-tx' && mBeat.parentBeat === 'elected-officials' && mBeat.depth === 'dossier', 'TX municipal beat descriptor (dossier depth, elected-officials parent)');
+ok(mBeat.universeSize() > 1000, `TX has >1000 municipalities (got ${mBeat.universeSize()})`);
+ok(mBeat.facets.some(f => /mayor/i.test(f)) && mBeat.facets.some(f => /charter|ordinance/i.test(f)) && mBeat.facets.some(f => /A-grade/i.test(f)), 'municipal dossier covers mayor/council + charter + A-grade contacts');
+// display name strips the Census type word; coverage still matches
+ok(beats.placeDisplayName('Birmingham city') === 'Birmingham' && beats.placeDisplayName('Autaugaville town') === 'Autaugaville', 'placeDisplayName strips the Census type suffix');
+ok(beats.coverageOf(flCities.slice(0, 10), flCities.slice(0, 10)).pct === 100, 'municipal coverage matches (first 10 → 100%)');
+// the combined elected-officials decomposition = county tier + municipal tier
+const all = beats.electedOfficialsSubBeats();
+ok(all.length === beats.countyCommissionSubBeats().length + beats.municipalSubBeats().length, 'electedOfficialsSubBeats = county + municipal tiers');
+ok(all.some(b => b.id.startsWith('county-commissions-')) && all.some(b => b.id.startsWith('municipalities-')), 'combined roster carries both tiers');
+// county dossier now also pursues the OTHER county-elected offices (sheriff, clerk, assessor, DA, judges)
+ok(beats.countyCommissionBeat('FL').facets.some(f => /sheriff/i.test(f) && /clerk/i.test(f)), 'county dossier now pursues sheriff/clerk/assessor/DA/judges (all county-elected offices)');
+
 // --- Slice 2d: news-anchored maintenance matcher ---
 const news = [
   { title: 'Orange County commissioner resigns amid probe', summary: 'The board will hold a special election.' },
