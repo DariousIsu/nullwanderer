@@ -95,12 +95,21 @@ function countyCommissionBeat(stateCode) {
     parentBeat: 'elected-officials',
     kind: 'entity',                          // roster of governing bodies + their members
     stateCode: code,
-    // ROSTER depth: a county board is a 5-7-member lookup, not a deep multi-facet dossier. This flag caps
-    // per-target passes (main.js runDirectedResearchPass) and supplies a fixed membership facet plan
-    // (seedBeatRun), so each county converges in ~1-2 passes instead of grinding six — the throughput fix
-    // for "why does it take a week to find all the county commissioners in a state?".
-    depth: 'roster',
-    facets: ['current members and their seats', 'how each is elected + term of office', 'official source + one independent corroboration'],
+    // DOSSIER depth (Lucas 2026-07-18): don't waste a single search — every board gets a COMPLETE dossier,
+    // not a shallow roster. The fixed facet plan below drives the deepen pass through members+A-grade contacts,
+    // meetings/minutes, biographies, the governing charter, history, and committees; main.js takes the facet-
+    // aware DEEP path per target (keeps deepening while facets are uncovered, up to the deep ceiling), and the
+    // scheduler supplies diversity by rotating states — depth is never cut for speed.
+    depth: 'dossier',
+    facets: [
+      'current members and their seats, each with FULL contact info — direct email, phone, office address, term dates — taken from the official .gov roster AND corroborated by a second independent source so each contact reaches an A-grade citation',
+      'how each member is elected + term length + district vs at-large + the district map/boundaries',
+      'meeting schedule + agendas + minutes (recent and archived) + how the public accesses the records',
+      'member biographies — background, prior offices held, occupation, notable positions and votes',
+      'the governing charter / enabling statute / bylaws and the board\'s formal powers and duties',
+      'committees, subcommittees, and the board\'s appointments to other bodies',
+      'jurisdiction history + notable recent actions, controversies, and decisions',
+    ],
     goal: `Compile and keep current the county-level governing board for every ${noun} in ${stateName} — `
       + `all ${targets.length} ${nounPlural}, with each board's current members. Corroborate against independent `
       + `sources; official rosters are leads, not facts.`,

@@ -152,10 +152,11 @@ ok(r.decideAdvance({ passes: 18, newChars: 800, uncovered: 3, deep: true }).adva
 ok(r.decideAdvance({ passes: 6, newChars: 800, uncovered: 0, deep: true }).advance === true, 'decideAdvance: deep target with ALL facets covered → base cap (do not over-work)');
 ok(r.decideAdvance({ passes: 3, newChars: 100, uncovered: 5, deep: true }).advance === true && r.decideAdvance({ passes: 3, newChars: 100, uncovered: 5, deep: true }).reason === 'diminishing returns', 'decideAdvance: diminishing returns still self-limits a deep run (sparse 1-person company bows out)');
 ok(r.decideAdvance({ passes: 2, newChars: 900, saturated: true }).advance === true, 'decideAdvance: SATURATED always advances');
-// ROSTER-shallow depth (autonomic Slice 2b) — a county board is a 5-7-member lookup, capped at 2 passes.
-ok(r.decideAdvance({ passes: 2, newChars: 900, uncovered: 3, maxPasses: 2 }).advance === true, 'decideAdvance: roster cap (maxPasses:2) advances at pass 2 even with material + uncovered facets');
-ok(r.decideAdvance({ passes: 1, newChars: 900, uncovered: 3, maxPasses: 2 }).advance === false, 'decideAdvance: roster still gives the first pass a chance (pass 1 keeps deepening)');
-ok(r.decideAdvance({ passes: 2, newChars: 900, uncovered: 3 }).advance === false, 'decideAdvance: default (non-roster) still keeps deepening at pass 2 — roster cap is opt-in');
+// DOSSIER depth (autonomic elected-officials) — deep=true keeps every board deepening across its full facet
+// set (members+contacts, meetings, minutes, bios, charter, history) past the base cap, until facets run out.
+ok(r.decideAdvance({ passes: 8, newChars: 900, uncovered: 4, deep: true }).advance === false, 'decideAdvance: dossier target with uncovered facets + material → keep deep-diving past the base cap');
+ok(r.decideAdvance({ passes: 8, newChars: 900, uncovered: 0, deep: true }).advance === true, 'decideAdvance: dossier target with ALL facets covered → advance (do not over-work)');
+ok(r.decideAdvance({ passes: 3, newChars: 10, uncovered: 4, deep: true }).advance === true, 'decideAdvance: a genuinely dry facet still self-limits (diminishing returns) even in dossier depth');
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

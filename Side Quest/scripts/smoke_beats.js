@@ -25,6 +25,14 @@ ok(b.universeSize() === 67, 'universe size 67');
 ok(/67 counties/.test(b.goal) && /corroborate/i.test(b.goal), 'goal states the universe + corroboration discipline');
 ok(b.enumerate().length === 67, 'enumerate() returns the worklist');
 
+// --- deep-DOSSIER depth: every board gets a complete dossier, not a shallow roster ---
+ok(b.depth === 'dossier', 'beat is dossier-depth (deep-dive every board, do not waste a search)');
+ok(Array.isArray(b.facets) && b.facets.length >= 6, `dossier facet plan is comprehensive (${(b.facets || []).length} facets)`);
+ok(b.facets.some(f => /contact/i.test(f) && /A-grade/i.test(f)), 'dossier pursues A-grade contact info');
+ok(b.facets.some(f => /minutes|agenda|meeting/i.test(f)), 'dossier pursues meetings / minutes / agendas');
+ok(b.facets.some(f => /biograph/i.test(f)), 'dossier pursues member biographies');
+ok(b.facets.some(f => /charter|statute|bylaw/i.test(f)), 'dossier pursues the governing charter / statute');
+
 // --- coverage: fuzzy-match covered names to worklist targets ---
 const c0 = beats.coverageOf(t, []);
 ok(c0.done === 0 && c0.total === 67 && c0.pct === 0, 'empty covered → 0/67 (0%)');

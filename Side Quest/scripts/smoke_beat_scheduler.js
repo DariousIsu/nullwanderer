@@ -23,7 +23,8 @@ ok(s.chooseNext({ beats: [], state: {} }) === null, 'no beats → null');
 ok(s.shouldRotate({ sliceCovered: 0, done: true }) === true, 'done → rotate');
 ok(s.shouldRotate({ sliceCovered: 6, sliceBudget: 6 }) === true, 'hit slice budget → rotate');
 ok(s.shouldRotate({ sliceCovered: 5, sliceBudget: 6 }) === false, 'under budget → keep working (depth)');
-ok(s.shouldRotate({ sliceCovered: 3 }) === false, `default budget ${s.DEFAULT_SLICE_BUDGET}: 3 covered → keep working`);
+ok(s.shouldRotate({ sliceCovered: s.DEFAULT_SLICE_BUDGET - 1 }) === false, `default budget ${s.DEFAULT_SLICE_BUDGET}: under budget → keep the deep-dive going`);
+ok(s.shouldRotate({ sliceCovered: s.DEFAULT_SLICE_BUDGET }) === true, `default budget ${s.DEFAULT_SLICE_BUDGET}: budget of deep dossiers done → rotate for diversity`);
 ok(s.shouldRotate({ sliceCovered: 1, sliceBudget: 0 }) === true, 'budget floored at 1 (never a zero-budget spin)');
 
 // --- allDone ---

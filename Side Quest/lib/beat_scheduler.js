@@ -15,7 +15,9 @@
  */
 'use strict';
 
-const DEFAULT_SLICE_BUDGET = 6;   // new targets one beat covers before yielding the focus to the rotation
+const DEFAULT_SLICE_BUDGET = 3;   // deep dossiers one beat completes before yielding the focus to the rotation
+                                  // (each target is a full multi-facet deep-dive now, so a smaller slice keeps
+                                  // diversity without cutting depth — depth per target, diversity across states)
 
 // Choose the next beat to run: the not-done beat that was run LEAST RECENTLY (never-run sorts first, so a
 // brand-new beat is picked up before an already-cycled one), tie-broken by registry order so the ordering is
