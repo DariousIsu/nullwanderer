@@ -7238,6 +7238,38 @@ function kickDirectedFocusDriver() {
   directedFocusTick().catch(e => console.error('[directed] kick failed:', e.message));   // start NOW, don't wait a cadence
 }
 
+// AUTONOMIC BEAT RUN (autonomic-architecture Slice 1) — seed the EXISTING directed-research machinery with a
+// beat's enumerated worklist as a BOUNDED target list, then kick the driver. The driver exhausts each target
+// (browser-researched, corroborated) and STOPS when all are covered — convergent, can't loop or wander. This
+// is the recipe the chat-assignment path uses (main.js ~5662), applied to a hardwired beat instead of a user
+// message. `beat` = { id, goal, kind, enumerate() } from lib/beats. Displaces any self-spawned musing focus;
+// yields to an already-active DIRECTED (user-assigned) focus so a beat never preempts Lucas's own work.
+async function seedBeatRun(beat) {
+  try {
+    const focusLib = require('./lib/focus');
+    const active = focusLib.getCurrent();
+    if (active && focusLib.isDirected(active)) {
+      console.log(`[beat] ${beat && beat.id}: yielding — a user-assigned focus (#${active.id}) is running`);
+      return { ok: false, reason: 'user-focus-active' };
+    }
+    const targets = (beat && typeof beat.enumerate === 'function') ? beat.enumerate() : [];
+    if (!targets.length) return { ok: false, reason: 'empty worklist' };
+    const r = await focusLib.setFromDirective(beat.goal);
+    if (!r || !r.focus) return { ok: false, reason: 'focus not set' };
+    const fid = r.focus.id;
+    try { db.setMeta(`focus.${fid}.scope`, 'bounded'); } catch {}
+    try { db.setMeta(`focus.${fid}.intended_targets`, JSON.stringify(targets)); } catch {}
+    try { db.setMeta(`focus.${fid}.kind`, beat.kind || 'entity'); } catch {}
+    try { db.setMeta(`focus.${fid}.beat`, beat.id); } catch {}          // tag the run so coverage rolls up to the beat
+    try { await generateResearchPlan(r.focus, { goal: beat.goal, targets: targets.slice(0, 12), facet: '', deep: false, kind: beat.kind || 'entity' }); } catch (e) { console.error('[beat] plan gen failed:', e.message); }
+    kickDirectedFocusDriver();
+    console.log(`[beat] seeded ${beat.id} → focus #${fid}, BOUNDED to ${targets.length} targets (0/${targets.length} covered)`);
+    return { ok: true, focusId: fid, targets: targets.length };
+  } catch (e) { console.error('[beat] seed failed:', e.message); return { ok: false, reason: e.message }; }
+}
+// Exposed for validation via the inspector (--inspect=9229) until the Slice-2 scheduler drives beats itself.
+try { global.__autonomicSeedBeat = (stateCode = 'FL') => seedBeatRun(require('./lib/beats').countyCommissionBeat(stateCode)); } catch {}
+
 // One driver tick: advance the active directed focus by a single research slice, record the outcome.
 async function directedFocusTick() {
   if (directedStepInFlight) return;
