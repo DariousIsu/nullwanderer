@@ -194,10 +194,122 @@ function municipalSubBeats() {
   return listPlaceStates().map((code) => municipalBeat(code));
 }
 
-// The full elected-officials decomposition the scheduler rotates over: the county tier + the municipal tier.
-// (Federal, state-legislature, school-board, and special-district tiers are future additions to this list.)
+// --- FEDERAL tier (President/VP + the full Congress) ---------------------------------------------
+
+// 2020-apportionment US House seats per state (effective for the 2023-2033 congresses), total = 435. Used to
+// enumerate every congressional district as its own dossier target.
+const HOUSE_SEATS = {
+  AL: 7, AK: 1, AZ: 9, AR: 4, CA: 52, CO: 8, CT: 5, DE: 1, FL: 28, GA: 14, HI: 2, ID: 2, IL: 17, IN: 9,
+  IA: 4, KS: 4, KY: 6, LA: 6, ME: 2, MD: 8, MA: 9, MI: 13, MN: 8, MS: 4, MO: 8, MT: 2, NE: 3, NV: 4,
+  NH: 2, NJ: 12, NM: 3, NY: 26, NC: 14, ND: 1, OH: 15, OK: 5, OR: 6, PA: 17, RI: 2, SC: 7, SD: 1, TN: 9,
+  TX: 38, UT: 4, VT: 1, VA: 11, WA: 10, WV: 2, WI: 8, WY: 1,
+};
+// Non-voting House members for DC + the territories (their one elected federal legislator).
+const HOUSE_DELEGATES = { DC: 'Delegate', PR: 'Resident Commissioner', AS: 'Delegate', GU: 'Delegate', MP: 'Delegate', VI: 'Delegate' };
+
+// Enumerate every elected FEDERAL office as a dossier target: the executive, all 100 senators (senior/junior
+// per state), and all 435 representatives (by district; single-district states are "At-Large") + delegates.
+function federalTargets() {
+  const targets = ['President of the United States', 'Vice President of the United States'];
+  for (const code of Object.keys(HOUSE_SEATS).sort()) {
+    const stateName = STATE_NAMES[code] || code;
+    targets.push(`Senior United States Senator from ${stateName}`);
+    targets.push(`Junior United States Senator from ${stateName}`);
+    const seats = HOUSE_SEATS[code];
+    if (seats === 1) targets.push(`United States Representative for ${stateName}'s At-Large Congressional District`);
+    else for (let d = 1; d <= seats; d++) targets.push(`United States Representative for ${stateName}'s ${d}${_ord(d)} Congressional District`);
+  }
+  for (const code of Object.keys(HOUSE_DELEGATES).sort()) {
+    const stateName = STATE_NAMES[code] || code;
+    targets.push(`${HOUSE_DELEGATES[code]} to the United States House of Representatives from ${stateName}`);
+  }
+  return targets;
+}
+function _ord(n) { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return s[(v - 20) % 10] || s[v] || s[0]; }
+
+function federalBeat() {
+  const targets = federalTargets();
+  return {
+    id: 'federal-officials',
+    parentBeat: 'elected-officials',
+    kind: 'entity',
+    depth: 'dossier',
+    facets: [
+      'the current officeholder with FULL contact info — Washington DC office (address, phone), every district/state office, official webform and social — to an A-grade cited standard from the official .gov (senate.gov / house.gov / whitehouse.gov) AND corroborated by a second independent source',
+      'committee and subcommittee assignments + any leadership, caucus, or party roles',
+      'biography — background, prior offices, profession, education, military service',
+      'term dates, seat class / next election, and electoral history + margins',
+      'signature legislation, key votes, and stated policy positions',
+      'senior staff (chief of staff, district director) and how constituents reach the office',
+    ],
+    goal: 'Compile and keep current every elected FEDERAL official — the President and Vice President, all 100 '
+      + 'US Senators, all 435 Representatives, and the territorial delegates — each with current officeholder, '
+      + 'A-grade contacts, committees, and record. Corroborate against independent sources; official pages are leads.',
+    enumerate: () => targets,
+    universeSize: () => targets.length,
+  };
+}
+
+// --- STATE LEGISLATURE tier (every chamber's full membership) -------------------------------------
+
+// Lower-chamber name by state (default "House of Representatives"). Nebraska is UNICAMERAL (one nonpartisan
+// chamber, "the Legislature"), so it has a single target.
+const STATE_LOWER_CHAMBER = {
+  CA: 'State Assembly', NV: 'State Assembly', NY: 'State Assembly', WI: 'State Assembly',
+  NJ: 'General Assembly',
+  VA: 'House of Delegates', WV: 'House of Delegates', MD: 'House of Delegates',
+};
+const UNICAMERAL = { NE: 'Nebraska Legislature (unicameral)' };
+
+// Enumerate a state's legislative chambers as dossier targets — each chamber's target deep-dives its COMPLETE
+// current membership (every seat), so this is granular in content without assuming a district-numbering scheme.
+function stateLegTargets(stateCode) {
+  const code = String(stateCode || '').toUpperCase();
+  const stateName = STATE_NAMES[code];
+  if (!stateName) return [];
+  if (UNICAMERAL[code]) return [UNICAMERAL[code]];
+  const lower = STATE_LOWER_CHAMBER[code] || 'House of Representatives';
+  return [`${stateName} State Senate`, `${stateName} ${lower}`];
+}
+
+function stateLegBeat(stateCode) {
+  const code = String(stateCode || '').toUpperCase();
+  const stateName = STATE_NAMES[code] || code;
+  const targets = stateLegTargets(code);
+  return {
+    id: `state-legislature-${code.toLowerCase()}`,
+    parentBeat: 'elected-officials',
+    kind: 'entity',
+    stateCode: code,
+    depth: 'dossier',
+    facets: [
+      'the COMPLETE current membership roster — every member with district number, party, and FULL contact info (capitol office, district office, phone, email) to an A-grade cited standard from the official legislature .gov AND corroborated',
+      'chamber leadership — presiding officer, majority and minority leaders, whips',
+      'standing committees + their chairs and membership',
+      'how members are elected, term length, chamber size, and the district map',
+      'the current session — key bills, calendar, and how the public accesses proceedings and records',
+      'member biographies and notable positions and votes',
+    ],
+    goal: `Compile and keep current every member of the ${stateName} state legislature — both chambers' complete `
+      + `rosters with district, party, and A-grade contacts, plus leadership and committees. Corroborate against `
+      + `independent sources; official rosters are leads, not facts.`,
+    enumerate: () => targets,
+    universeSize: () => targets.length,
+  };
+}
+
+// States with a legislature to enumerate (all 50; DC/territories have their own councils, handled elsewhere).
+function listLegislatureStates() { return Object.keys(HOUSE_SEATS).sort(); }
+function stateLegSubBeats() { return listLegislatureStates().map((code) => stateLegBeat(code)); }
+
+// The full elected-officials decomposition the scheduler rotates over, top down: FEDERAL → STATE LEGISLATURE →
+// COUNTY (commission + row offices) → MUNICIPAL. (School-board, special-district, and New-England-town tiers
+// are future additions to this list.) Registry order = rotation priority for never-run beats.
 function electedOfficialsSubBeats() {
-  return countyCommissionSubBeats().concat(municipalSubBeats());
+  return [federalBeat()]
+    .concat(stateLegSubBeats())
+    .concat(countyCommissionSubBeats())
+    .concat(municipalSubBeats());
 }
 
 // The place key embedded in a target string ("Board of County Commissioners of Lee County, Florida" → "lee").
@@ -256,6 +368,9 @@ module.exports = {
   listCountyStates, listPlaceStates, placeKey, bodyLabel, targetPlaceKey,
   placeBodyLabel, placeDisplayName,
   countyCommissionTargets, countyCommissionBeat, countyCommissionSubBeats,
-  municipalTargets, municipalBeat, municipalSubBeats, electedOfficialsSubBeats,
+  municipalTargets, municipalBeat, municipalSubBeats,
+  HOUSE_SEATS, federalTargets, federalBeat,
+  stateLegTargets, stateLegBeat, stateLegSubBeats, listLegislatureStates,
+  electedOfficialsSubBeats,
   coverageOf, matchNewsToTargets,
 };

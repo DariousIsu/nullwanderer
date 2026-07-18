@@ -93,10 +93,37 @@ ok(beats.placeDisplayName('Birmingham city') === 'Birmingham' && beats.placeDisp
 ok(beats.coverageOf(flCities.slice(0, 10), flCities.slice(0, 10)).pct === 100, 'municipal coverage matches (first 10 → 100%)');
 // the combined elected-officials decomposition = county tier + municipal tier
 const all = beats.electedOfficialsSubBeats();
-ok(all.length === beats.countyCommissionSubBeats().length + beats.municipalSubBeats().length, 'electedOfficialsSubBeats = county + municipal tiers');
-ok(all.some(b => b.id.startsWith('county-commissions-')) && all.some(b => b.id.startsWith('municipalities-')), 'combined roster carries both tiers');
+ok(all.some(b => b.id.startsWith('county-commissions-')) && all.some(b => b.id.startsWith('municipalities-')), 'combined roster carries county + municipal tiers');
 // county dossier now also pursues the OTHER county-elected offices (sheriff, clerk, assessor, DA, judges)
 ok(beats.countyCommissionBeat('FL').facets.some(f => /sheriff/i.test(f) && /clerk/i.test(f)), 'county dossier now pursues sheriff/clerk/assessor/DA/judges (all county-elected offices)');
+
+// --- FEDERAL tier (President/VP + full Congress) ---
+const fed = beats.federalTargets();
+ok(fed.includes('President of the United States') && fed.includes('Vice President of the United States'), 'federal includes President + VP');
+ok(fed.filter(t => /United States Senator/.test(t)).length === 100, `100 US Senators (got ${fed.filter(t => /United States Senator/.test(t)).length})`);
+ok(fed.filter(t => /Representative for .+Congressional District$/.test(t)).length === 435, `435 US Representatives (got ${fed.filter(t => /Representative for .+Congressional District$/.test(t)).length})`);
+ok(fed.some(t => /At-Large Congressional District/.test(t)), 'single-district states use At-Large phrasing');
+ok(fed.some(t => /California's 52nd Congressional District/.test(t)), 'ordinal district phrasing (California 52nd)');
+ok(fed.some(t => /Delegate to the United States House.*District of Columbia|Resident Commissioner.*Puerto Rico/.test(t)), 'territorial delegates included');
+const fb = beats.federalBeat();
+ok(fb.id === 'federal-officials' && fb.parentBeat === 'elected-officials' && fb.depth === 'dossier', 'federal beat descriptor');
+ok(fb.universeSize() === 2 + 100 + 435 + 6, `federal universe = 543 (got ${fb.universeSize()})`);
+
+// --- STATE LEGISLATURE tier ---
+const legStates = beats.listLegislatureStates();
+ok(legStates.length === 50, `50 states have a legislature beat (got ${legStates.length})`);
+ok(beats.stateLegTargets('TX').join('|') === 'Texas State Senate|Texas House of Representatives', 'TX = Senate + House of Representatives');
+ok(beats.stateLegTargets('CA').some(t => /California State Assembly/.test(t)), 'CA lower chamber = State Assembly');
+ok(beats.stateLegTargets('VA').some(t => /House of Delegates/.test(t)), 'VA lower chamber = House of Delegates');
+ok(beats.stateLegTargets('NE').length === 1 && /unicameral/i.test(beats.stateLegTargets('NE')[0]), 'NE is unicameral (single chamber target)');
+const slb = beats.stateLegBeat('NY');
+ok(slb.id === 'state-legislature-ny' && slb.depth === 'dossier' && slb.facets.some(f => /COMPLETE current membership/i.test(f)), 'state-leg beat pursues the complete roster');
+
+// --- combined elected-officials roster now spans four tiers, federal first ---
+const roster = beats.electedOfficialsSubBeats();
+ok(roster[0].id === 'federal-officials', 'federal beat is first (rotation priority)');
+ok(roster.some(b => b.id.startsWith('state-legislature-')) && roster.some(b => b.id.startsWith('county-commissions-')) && roster.some(b => b.id.startsWith('municipalities-')), 'roster spans federal + state-leg + county + municipal');
+ok(roster.length === 1 + beats.stateLegSubBeats().length + beats.countyCommissionSubBeats().length + beats.municipalSubBeats().length, 'roster = federal(1) + state-leg + county + municipal tiers');
 
 // --- Slice 2d: news-anchored maintenance matcher ---
 const news = [
