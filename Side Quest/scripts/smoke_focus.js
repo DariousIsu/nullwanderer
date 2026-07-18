@@ -50,13 +50,21 @@ async function run() {
   db.markOpenThreadStatus(f.id, 'resolved', { reason: 'test' });
   ok('resolved thread → getCurrent clears pointer + returns null', focus.getCurrent() === null);
 
-  // --- self-set from a thought ---
-  console.log('\nself-set from <focus> tag:');
+  // --- S3: self-set research focus is DEMOTED while the autonomic scheduler owns research ---
+  console.log('\nS3 demotion (autonomic on → heartbeat surfacing-only):');
   reset();
+  const prevAuto = process.env.ZOE_AUTONOMIC; delete process.env.ZOE_AUTONOMIC;   // default = autonomic ON
+  ok('setFromText is suppressed when the scheduler owns research', (await focus.setFromText('<focus>learn to structure a cold pitch email</focus>')) === null && !focus.isActive());
+
+  // --- self-set from a thought (legacy path, kill switch ZOE_AUTONOMIC=0) ---
+  console.log('\nself-set from <focus> tag (ZOE_AUTONOMIC=0 restores it):');
+  reset();
+  process.env.ZOE_AUTONOMIC = '0';
   const set = await focus.setFromText('I keep botching these — <focus>learn to structure a cold pitch email</focus> maybe.');
-  ok('setFromText creates + activates focus', !!set && focus.isActive());
+  ok('setFromText creates + activates focus (kill switch)', !!set && focus.isActive());
   ok('goal extracted from tag', set.goal === 'learn to structure a cold pitch email');
   ok('second setFromText no-ops while one is active', (await focus.setFromText('<focus>another goal entirely</focus>')) === null);
+  if (prevAuto === undefined) delete process.env.ZOE_AUTONOMIC; else process.env.ZOE_AUTONOMIC = prevAuto;
   ok('stripControlTags removes the tag', focus.stripControlTags('a <focus>x y z</focus> b').trim() === 'a  b'.trim());
 
   // --- novelty ---

@@ -135,6 +135,15 @@ async function setFromText(text, sourceTurnId = null) {
   if (!m) return null;
   const goal = m[1].trim();
   if (goal.length < 6) return null;
+  // S3 (autonomic-architecture): the SCHEDULER owns the research agenda now, so the heartbeat/monologue is
+  // DEMOTED to surfacing-only — it no longer self-spawns a musing research focus. That ad-hoc self-set focus
+  // was the old fixation driver (it looped one cluster); her standing curiosity is the BEATS instead. Chat
+  // (setFromDirective) and the scheduler remain the only focus drivers. Gap-proof (doesn't depend on a beat
+  // being active). Kill switch: ZOE_AUTONOMIC=0 restores the pre-autonomic self-directed behavior.
+  if (String(process.env.ZOE_AUTONOMIC || '1').trim() !== '0') {
+    if (!setFromText._demoteLogged) { console.log('[focus] self-set research focus suppressed — autonomic scheduler owns research (heartbeat = surfacing-only)'); setFromText._demoteLogged = true; }
+    return null;
+  }
   if (isActive()) return null;            // one focus at a time
   // SPAWN GATE: refuse to re-open a focus too similar to one that closed in the
   // last 24h. This is the anti-thrash guard — without it an expired focus would be
