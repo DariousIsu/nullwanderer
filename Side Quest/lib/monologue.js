@@ -555,6 +555,52 @@ function diversifySeeds(recentMonologue, { max = 3, window = 6, domFrac = 0.6 } 
   return { seeds, monoFixated: false, anchor: null };
 }
 
+// pickDistinctByTopic(rows, opts) → a TOPIC-DIVERSE subset (chronological), deduped by
+// significant-word overlap. WHY (2026-07-17 deeper drift fix): the synthesis pass asks for "the ONE
+// thread" — feed it a monoculture (a sprawled open-thread list that is 7× "Louisiana parishes" + a
+// thought window all on one cluster) and it fixates on that cluster every pass. Collapsing near-dup
+// rows to distinct clusters FIRST gives synthesis genuine BREADTH to choose from. Takes monologue
+// rows / thread rows / commitments / strings (reads .content || .claim). Pure + exported for tests.
+// Light-stemmed topic tokens: lexical jaccard alone misses paraphrased near-dups (the real thread
+// sprawl is "the Louisiana parishes" vs "parish leadership" vs "researching the Parishes" — parish≠
+// parishes, research≠researching under raw tokenizing). Strip plural/gerund/past endings + len>=4 so
+// morphological variants of the distinctive topic noun collapse. NOT a full stemmer; just enough to
+// merge the sprawl without embeddings (this runs sync on the idle path).
+function _topicTokens(text) {
+  const out = new Set();
+  for (let w of String(text || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)) {
+    if (w.length < 4) continue;
+    w = w.replace(/ies$/, 'y').replace(/(?:es|s)$/, '').replace(/(?:ing|ed)$/, '');
+    if (w.length < 3 || STOPWORDS.has(w)) continue;
+    out.add(w);
+  }
+  return out;
+}
+
+// Overlap COEFFICIENT (|A∩B| / min(|A|,|B|)), not jaccard: a sprawled to-do list restates the same
+// project with different VERBS ("organize the parish database" / "research parish leadership" /
+// "document the parishes") — jaccard penalizes the differing verbs and fails to collapse them, but
+// the coefficient keys on the shared distinctive nouns (parish/louisiana) regardless of verbosity.
+function _overlapCoef(a, b) {
+  if (!a.size || !b.size) return 0;
+  let inter = 0; for (const w of a) if (b.has(w)) inter++;
+  return inter / Math.min(a.size, b.size);
+}
+
+function pickDistinctByTopic(rows, { max = 8, simThr = 0.4, window = 24 } = {}) {
+  const src = (rows || []).slice(-window);
+  const out = [], sets = [];
+  for (let i = src.length - 1; i >= 0 && out.length < max; i--) {
+    const r = src[i];
+    const content = (typeof r === 'string') ? r : ((r && (r.content || r.claim)) || '');
+    const set = _topicTokens(content);
+    if (set.size < 2) continue;
+    if (sets.some(s => _overlapCoef(s, set) >= simThr)) continue;   // inclusive: ≥40% shared distinctive tokens = same cluster
+    out.push(r); sets.push(set);
+  }
+  return out.reverse();   // chronological (newest-last) for prompt readability
+}
+
 function jaccard(a, b) {
   if (a.size === 0 || b.size === 0) return 0;
   let inter = 0;
@@ -1123,11 +1169,18 @@ async function runOneTick() {
       if (synthMode !== 'local' && synthMode !== 'off'
         && subc2.shouldSynthesize({ getMeta: _gm, now: Date.now(), intervalMin: cfg2.subcSynthIntervalMin() })
         && subc2.budgetOk(_gm, Date.now(), cfg2.subcBudgetTokensPerHour())) {
-        const seed = (recentThoughts.map(t => (t && t.content) || '').join(' ').slice(0, 300)) || userName;
+        // DIVERSE INPUT (2026-07-17 deeper drift fix): don't feed synthesis a monoculture. (1) WIDEN the
+        // thought window 6→16 (prompt slices to 12) so it sees breadth, not the same 6; thoughts already
+        // carry distinct entities so they're NOT deduped (their shared "Flagged…for review" scaffold would
+        // false-merge). (2) COLLAPSE the sprawled thread list to distinct clusters (7× "Louisiana parishes"
+        // → one) so "the ONE thread" isn't chosen by a mono-vote. Ground from the widened set.
+        const synthThoughts = db.getRecentMonologueByType('thought', 16);
+        const synthThreads = pickDistinctByTopic(openThreads, { max: 4, simThr: 0.4, window: (openThreads || []).length });
+        const seed = ((synthThoughts.length ? synthThoughts : recentThoughts).map(t => (t && t.content) || '').join(' ').slice(0, 300)) || userName;
         const sources = await subc2.retrieveSources(seed, { search: (q, k) => memoryLib.retrieve(q, { k }), k: 4 });
         const synthMessages = [
           { role: 'system', content: BASE_PERSONA },
-          { role: 'user', content: subc2.buildSynthesisPrompt({ recentThoughts, threads: openThreads, focus: null, sources }) }
+          { role: 'user', content: subc2.buildSynthesisPrompt({ recentThoughts: synthThoughts, threads: synthThreads, focus: null, sources }) }
         ];
         const synth = await generateThought({
           messages: synthMessages,
@@ -2552,6 +2605,7 @@ module.exports = {
   nextNovelGap,            // exported for smoke test (R7 swirl→iterate: novel agenda gap)
   splitIdleBrowserTags,    // exported for smoke test
   diversifySeeds,          // exported for smoke test (recency-fixation guard)
+  pickDistinctByTopic,     // exported for smoke test (synthesis input topic-diversity)
   looksLikeOwnFragment,    // exported for smoke test (self-fragment search guard)
   shouldSuppressSearch,    // exported for smoke test (universal guard wiring)
   generateThought,         // exported for smoke test (cloud subconscious routing)

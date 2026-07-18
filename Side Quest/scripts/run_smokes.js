@@ -46,6 +46,7 @@ const smokes = [
   'smoke_idle_anchors.js',
   'smoke_self_repetition.js',
   'smoke_unprompted_gate.js',
+  'smoke_recency_fixation.js',
   'smoke_curation_gate.js',
   'smoke_curation_store.js',
   'smoke_substantiation.js',
