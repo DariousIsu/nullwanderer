@@ -119,11 +119,35 @@ ok(beats.stateLegTargets('NE').length === 1 && /unicameral/i.test(beats.stateLeg
 const slb = beats.stateLegBeat('NY');
 ok(slb.id === 'state-legislature-ny' && slb.depth === 'dossier' && slb.facets.some(f => /COMPLETE current membership/i.test(f)), 'state-leg beat pursues the complete roster');
 
-// --- combined elected-officials roster now spans four tiers, federal first ---
+// --- TOWN / TOWNSHIP tier (New England towns + Midwest townships) ---
+const subStates = beats.listSubdivisionStates();
+ok(subStates.length === 20, `20 MCD-government states (got ${subStates.length})`);
+ok(['CT', 'RI', 'MA', 'ME', 'NH', 'VT'].every(s => subStates.includes(s)), 'all six New England states present (the place-tier gap)');
+const ctTowns = beats.subdivisionTargets('CT');
+ok(ctTowns.length > 100, `CT enumerates its towns (got ${ctTowns.length}) — filled the place-tier gap`);
+ok(ctTowns.every(t => / of .+, Connecticut$/.test(t)), 'every CT town target is "<body> of <town>, Connecticut"');
+ok(beats.subdivisionTargets('MI').some(t => /Charter Township Board of Trustees of .+, Michigan/.test(t)), 'MI charter townships get the right body label');
+ok(beats.subdivisionDisplayName('Bloomfield charter township') === 'Bloomfield' && beats.subdivisionDisplayName('Hartford town') === 'Hartford', 'subdivisionDisplayName strips town/charter-township suffixes');
+const tb = beats.subdivisionBeat('MA');
+ok(tb.id === 'townships-ma' && tb.depth === 'dossier' && tb.facets.some(f => /selectmen|trustees|town board/i.test(f)), 'MA township beat descriptor (dossier, selectmen/trustees)');
+ok(!subStates.includes('CA') && !subStates.includes('TX'), 'non-MCD states (CA/TX) have no township tier');
+
+// --- SCHOOL-BOARD tier ---
+const schStates = beats.listSchoolStates();
+ok(schStates.length >= 50, `school-board tier spans 50+ states (got ${schStates.length})`);
+const caSchools = beats.schoolBoardTargets('CA');
+ok(caSchools.length > 500, `CA enumerates its school districts (got ${caSchools.length})`);
+ok(caSchools.every(t => /^Board of Education of .+, California$/.test(t)), 'school target = "Board of Education of <district>, California"');
+// coverage key lands on the DISTRICT (after the last " of "), not "Education"
+ok(beats.targetPlaceKey('Board of Education of Los Angeles Unified School District, California').includes('los angeles'), 'school coverage key lands on the district name, not "education"');
+const sbb = beats.schoolBoardBeat('TX');
+ok(sbb.id === 'school-boards-tx' && sbb.depth === 'dossier' && sbb.facets.some(f => /superintendent/i.test(f)) && sbb.facets.some(f => /ELECTED.*appointed/i.test(f)), 'school-board beat pursues members + elected-vs-appointed + superintendent');
+
+// --- combined elected-officials roster now spans six tiers, federal first ---
 const roster = beats.electedOfficialsSubBeats();
 ok(roster[0].id === 'federal-officials', 'federal beat is first (rotation priority)');
-ok(roster.some(b => b.id.startsWith('state-legislature-')) && roster.some(b => b.id.startsWith('county-commissions-')) && roster.some(b => b.id.startsWith('municipalities-')), 'roster spans federal + state-leg + county + municipal');
-ok(roster.length === 1 + beats.stateLegSubBeats().length + beats.countyCommissionSubBeats().length + beats.municipalSubBeats().length, 'roster = federal(1) + state-leg + county + municipal tiers');
+ok(['state-legislature-', 'county-commissions-', 'municipalities-', 'townships-', 'school-boards-'].every(p => roster.some(b => b.id.startsWith(p))), 'roster spans all six tiers (federal, state-leg, county, municipal, township, school)');
+ok(roster.length === 1 + beats.stateLegSubBeats().length + beats.countyCommissionSubBeats().length + beats.municipalSubBeats().length + beats.subdivisionSubBeats().length + beats.schoolBoardSubBeats().length, 'roster = federal(1) + state-leg + county + municipal + township + school tiers');
 
 // --- Slice 2d: news-anchored maintenance matcher ---
 const news = [
