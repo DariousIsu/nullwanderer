@@ -7260,7 +7260,7 @@ async function directedFocusTick() {
       // A finished deliverable he asked for is a real result, not idle musing: surface it in the conversation.
       // Only on the AUTONOMOUS path (the user-triggered "wrap up" path already replies in chat, so it's not
       // double-announced). Deterministic so it fires even with the model/cloud down.
-      if (done) { announceResearchComplete(focus, done); }
+      if (done) { await announceResearchComplete(focus, done); }
       else { try { require('./lib/presence').notify('Zoe — task', `${outcome.action}: ${String(focus.content).slice(0, 60)}`); } catch {} }
     }
   } catch (e) { console.error('[directed] tick error:', e.message); }
@@ -7939,10 +7939,12 @@ async function condenseRun(focus, { reason = 'done' } = {}) {
 }
 
 // Surface an AUTONOMOUS research completion in the CHAT thread (not just the Canvas + a toast + the
-// subconscious 'reading'). Fires once per self-completed directed run. Deterministic (no model call) so
-// it ALWAYS reaches Lucas even offline — the failure it fixes is her finishing work SILENTLY. unprompted
-// so it reads as her proactively reporting in. Fully fail-soft: never throws into the driver tick.
-function announceResearchComplete(focus, done) {
+// subconscious 'reading') — AND engage Lucas on the SUBSTANCE. Fires once per self-completed directed run.
+// She reads the dossier she just produced and (via the cloud reasoner, grounded in it — no fabrication)
+// surfaces the key finding + one concrete follow-up, so she doesn't just report "done" but actually opens
+// a conversation about what she found. Falls back to a DETERMINISTIC notice if the cloud is down — the
+// failure being fixed is her finishing work SILENTLY, so it must ALWAYS announce. Fully fail-soft.
+async function announceResearchComplete(focus, done) {
   try {
     const sid = currentSessionId;
     if (!sid || !done) return;
@@ -7956,16 +7958,39 @@ function announceResearchComplete(focus, done) {
     if (!title) title = 'the directed research';
     const n = done.count || 0;
     const parts = `${n} ${n === 1 ? 'section' : 'sections'}`;
-    // "wrapped up … what I found" is accurate whether the run fully completed or stalled with partial results —
-    // it announces the deliverable is ready without over-claiming exhaustiveness.
-    const msg = `I've wrapped up the research you had me on: ${title}. I pulled together what I found into a `
+    const uname = (() => { try { return db.getMeta('user_name') || 'them'; } catch { return 'them'; } })();
+
+    // BASE notice — accurate for a full OR stalled run, and the guaranteed fallback.
+    let msg = `I've wrapped up the research you had me on: ${title}. I pulled together what I found into a `
       + `dossier (${parts})${done.path ? `, saved at ${done.path}` : ''}, and it's on your Canvas. Want me to `
       + `walk you through it, or leave it there until you need it?`;
+
+    // CONTENT-AWARE engagement (cloud, grounded in the dossier she produced → no fabrication). Cloud model,
+    // so it doesn't contend with the local front model if Lucas is mid-chat. Empty/failed → keep the notice.
+    try {
+      let dossier = '';
+      if (done.path) { const r = filesLib.fileReadFull(done.path); dossier = (r && r.text) || ''; }
+      if (dossier.trim().length > 200) {
+        let persona = ''; try { persona = String(require('./lib/context').BASE_PERSONA || '').replaceAll('[user]', uname); } catch {}
+        const sys = `${persona}\n\nYou just finished a research run for ${uname} and assembled it into a dossier `
+          + `(on ${uname}'s Canvas${done.path ? `, saved at ${done.path}` : ''}). Speak to ${uname} now, IN YOUR OWN `
+          + `VOICE: (1) say briefly that it's done and where it is; (2) then ENGAGE on the SUBSTANCE — surface the `
+          + `single most important or striking thing you actually found, in a sentence or two; (3) end with ONE `
+          + `specific, concrete follow-up that flows from the findings — a question worth his take, or an offer to `
+          + `go deeper on a particular thread. Ground EVERYTHING in the dossier below; do not invent anything not `
+          + `in it. 3-5 sentences, warm and direct, no headings or bullet lists. Start directly with what you'd say.`;
+        const user = `RESEARCH: ${title}\n\nTHE DOSSIER YOU PRODUCED:\n${dossier.slice(0, 6000)}`;
+        const out = await condenseComplete([{ role: 'system', content: sys }, { role: 'user', content: user }], { numPredict: 500 });
+        const cleaned = String(out || '').replace(/^\s*(okay|alright|sure|so)[,:]?\s*/i, '').replace(/<\/?[a-z_]+>/gi, '').trim();
+        if (cleaned.length > 60) msg = cleaned;
+      }
+    } catch (e) { console.error('[directed] engagement gen failed:', e.message); }
+
     const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'research', unprompted: 1 });
     try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
     try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
     try { require('./lib/blackboard').append({ source: 'research', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
-    console.log(`[directed] announced research completion to chat (#${focus && focus.id}, ${n} sections)`);
+    console.log(`[directed] announced research completion to chat (#${focus && focus.id}, ${n} sections, ${msg.length}c)`);
   } catch (e) { console.error('[directed] announce failed:', e.message); }
 }
 
