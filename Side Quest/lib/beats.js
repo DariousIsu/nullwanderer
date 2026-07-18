@@ -95,6 +95,12 @@ function countyCommissionBeat(stateCode) {
     parentBeat: 'elected-officials',
     kind: 'entity',                          // roster of governing bodies + their members
     stateCode: code,
+    // ROSTER depth: a county board is a 5-7-member lookup, not a deep multi-facet dossier. This flag caps
+    // per-target passes (main.js runDirectedResearchPass) and supplies a fixed membership facet plan
+    // (seedBeatRun), so each county converges in ~1-2 passes instead of grinding six — the throughput fix
+    // for "why does it take a week to find all the county commissioners in a state?".
+    depth: 'roster',
+    facets: ['current members and their seats', 'how each is elected + term of office', 'official source + one independent corroboration'],
     goal: `Compile and keep current the county-level governing board for every ${noun} in ${stateName} — `
       + `all ${targets.length} ${nounPlural}, with each board's current members. Corroborate against independent `
       + `sources; official rosters are leads, not facts.`,

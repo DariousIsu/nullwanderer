@@ -7261,7 +7261,15 @@ async function seedBeatRun(beat) {
     try { db.setMeta(`focus.${fid}.intended_targets`, JSON.stringify(targets)); } catch {}
     try { db.setMeta(`focus.${fid}.kind`, beat.kind || 'entity'); } catch {}
     try { db.setMeta(`focus.${fid}.beat`, beat.id); } catch {}          // tag the run so coverage rolls up to the beat
-    try { await generateResearchPlan(r.focus, { goal: beat.goal, targets: targets.slice(0, 12), facet: '', deep: false, kind: beat.kind || 'entity' }); } catch (e) { console.error('[beat] plan gen failed:', e.message); }
+    if (beat.depth) { try { db.setMeta(`focus.${fid}.depth`, beat.depth); } catch {} }   // roster-shallow per-item depth
+    // ROSTER beats carry a fixed membership facet plan — a county board's facets are known, so skip the
+    // per-beat cloud plan call (faster + deterministic) and hand the deepen pass a tight, members-only
+    // checklist. Non-roster beats still author a plan on the deep reasoner.
+    if (beat.depth === 'roster' && Array.isArray(beat.facets) && beat.facets.length) {
+      try { db.setMeta(`focus.${fid}.plan`, JSON.stringify({ facets: beat.facets, targets: [] })); } catch {}
+    } else {
+      try { await generateResearchPlan(r.focus, { goal: beat.goal, targets: targets.slice(0, 12), facet: '', deep: false, kind: beat.kind || 'entity' }); } catch (e) { console.error('[beat] plan gen failed:', e.message); }
+    }
     kickDirectedFocusDriver();
     console.log(`[beat] seeded ${beat.id} → focus #${fid}, BOUNDED to ${targets.length} targets (0/${targets.length} covered)`);
     return { ok: true, focusId: fid, targets: targets.length };
@@ -8303,8 +8311,11 @@ async function runDirectedResearchPass(focus) {
     // FACET-AWARE cap: a SINGLE bounded deep target keeps deepening past the base 6-pass cap (up to the deep
     // ceiling) while facets are still uncovered + passes stay productive — so a 6-facet brief actually finishes
     // its checklist instead of being force-finalized half-covered (the #3364 thin-doc bug).
-    const deepTarget = scope === 'bounded' && Array.isArray(intended) && intended.length <= 1;
-    const adv = rs.decideAdvance({ passes: target.passes, newChars, saturated: p.saturated, uncovered: uncovered.length, deep: deepTarget });
+    // ROSTER depth (autonomic beats) — a county board is a 5-7-member lookup, so cap at 2 passes and never
+    // take the single-deep-target branch. This is what lets a 67-county beat converge in hours, not a week.
+    const rosterShallow = (() => { try { return (db.getMeta(`focus.${focus.id}.depth`) || '').trim() === 'roster'; } catch { return false; } })();
+    const deepTarget = !rosterShallow && scope === 'bounded' && Array.isArray(intended) && intended.length <= 1;
+    const adv = rs.decideAdvance({ passes: target.passes, newChars, saturated: p.saturated, uncovered: uncovered.length, deep: deepTarget, maxPasses: rosterShallow ? 2 : undefined });
     if (adv.advance) {
       // CLOUD ORGANIZE this target → one clean section (the usable DRAFT), appended to the deliverable NOW.
       let section = '';

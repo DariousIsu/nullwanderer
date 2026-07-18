@@ -152,6 +152,10 @@ ok(r.decideAdvance({ passes: 18, newChars: 800, uncovered: 3, deep: true }).adva
 ok(r.decideAdvance({ passes: 6, newChars: 800, uncovered: 0, deep: true }).advance === true, 'decideAdvance: deep target with ALL facets covered → base cap (do not over-work)');
 ok(r.decideAdvance({ passes: 3, newChars: 100, uncovered: 5, deep: true }).advance === true && r.decideAdvance({ passes: 3, newChars: 100, uncovered: 5, deep: true }).reason === 'diminishing returns', 'decideAdvance: diminishing returns still self-limits a deep run (sparse 1-person company bows out)');
 ok(r.decideAdvance({ passes: 2, newChars: 900, saturated: true }).advance === true, 'decideAdvance: SATURATED always advances');
+// ROSTER-shallow depth (autonomic Slice 2b) — a county board is a 5-7-member lookup, capped at 2 passes.
+ok(r.decideAdvance({ passes: 2, newChars: 900, uncovered: 3, maxPasses: 2 }).advance === true, 'decideAdvance: roster cap (maxPasses:2) advances at pass 2 even with material + uncovered facets');
+ok(r.decideAdvance({ passes: 1, newChars: 900, uncovered: 3, maxPasses: 2 }).advance === false, 'decideAdvance: roster still gives the first pass a chance (pass 1 keeps deepening)');
+ok(r.decideAdvance({ passes: 2, newChars: 900, uncovered: 3 }).advance === false, 'decideAdvance: default (non-roster) still keeps deepening at pass 2 — roster cap is opt-in');
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
