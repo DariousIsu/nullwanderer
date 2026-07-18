@@ -51,6 +51,24 @@ const NOW = 1_760_000_000_000;
   ok(NO.recentNewsObjects({ sinceMs: 0, minCorroboration: 1 }).length === 2, 'lowering the gate widens the view to both');
   ok(recent[0].event_ref === null, 'a not-yet-promoted story object reports event_ref=null (short-term only; set once the overnight pass promotes it)');
 
+  // ===== proposeEventObject: Echo response handling (audit fix — the news→Echo event-promotion path) =====
+  const mock = (resp) => async () => ({ ok: true, text: JSON.stringify(resp) });
+  const pe = (resp, name = 'Some event') => lane.proposeEventObject({ dispatch: mock(resp), name });
+  // merge_suggested = event already exists as a PUBLIC entity → adopt that id, NOT a failure (was 5/7 errors)
+  const merged = await pe({ action: 'merge_suggested', similar_to: { id: 4242, name: 'Existing event' }, similarity: 0.94 });
+  ok(merged.ok && merged.entityId === 4242 && merged.proposed === false, 'merge_suggested adopts similar_to.id as an already-public event (no promote)');
+  // a merge_suggested with no usable target id is still a miss (nothing to adopt)
+  const mergedNoId = await pe({ action: 'merge_suggested', similarity: 0.9 });
+  ok(!mergedNoId.ok && mergedNoId.action === 'merge_suggested', 'merge_suggested WITHOUT a target id → still unusable');
+  // already_proposed = a pending tenant proposal → usable, needs promotion (was wrongly rejected)
+  const alreadyProp = await pe({ action: 'already_proposed', entity_id: 77 });
+  ok(alreadyProp.ok && alreadyProp.entityId === 77 && alreadyProp.proposed === true, 'already_proposed is usable + flagged for promotion');
+  // the happy paths still hold
+  ok((await pe({ action: 'proposed', entity_id: 5 })).proposed === true, 'proposed → needs promotion');
+  ok((await pe({ action: 'created', entity_id: 6 })).proposed === false, 'created → already public');
+  ok((await pe({ action: 'already_exists', entity_id: 7 })).proposed === false, 'already_exists → already public');
+  ok(!(await pe({ action: 'rejected', error: 'x' })).ok, 'rejected → not ok (fail-soft, logged)');
+
   try { fs.unlinkSync(tmp); } catch {}
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

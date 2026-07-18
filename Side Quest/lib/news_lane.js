@@ -824,11 +824,22 @@ async function proposeEventObject({ dispatch, name, summary }) {
     if (summary) args.summary = String(summary).slice(0, 1200);
     const r = await dispatch({ kind: 'do', name: 'propose_entity', args });
     if (!r || !r.ok) return { ok: false, error: (r && (r.error || r.text)) || 'dispatch failed' };
-    let entityId = null, action = null;
-    try { const p = JSON.parse(r.text); entityId = p.entity_id != null ? p.entity_id : (p.result && p.result.entity_id); action = p.action; } catch {}
-    const usable = entityId != null && (action === 'proposed' || action === 'created' || action === 'already_exists');
+    let entityId = null, action = null, similarId = null;
+    try {
+      const p = JSON.parse(r.text);
+      action = p.action;
+      entityId = p.entity_id != null ? p.entity_id : (p.result && p.result.entity_id);
+      similarId = p.similar_to && p.similar_to.id != null ? p.similar_to.id : null;   // merge_suggested → the existing PUBLIC entity
+    } catch {}
+    // MERGE_SUGGESTED is NOT a failure: Echo found this event already exists as a public entity — adopt that
+    // id (it's already public, so no promotion needed). This is what was mis-logged as "no usable entity_id"
+    // (5 of 7 news-daily errors in the audit): a story matching an existing event just links to it.
+    if (action === 'merge_suggested' && similarId != null) return { ok: true, entityId: similarId, action, proposed: false };
+    // 'proposed'/'already_proposed' = a tenant proposal awaiting promotion; 'created'/'already_exists' = public.
+    const needsPromotion = action === 'proposed' || action === 'already_proposed';
+    const usable = entityId != null && (needsPromotion || action === 'created' || action === 'already_exists');
     if (!usable) return { ok: false, action, error: 'no usable entity_id (action=' + (action || 'unparsed') + ')' };
-    return { ok: true, entityId, action, proposed: action === 'proposed' };
+    return { ok: true, entityId, action, proposed: needsPromotion };
   } catch (e) { return { ok: false, error: e && e.message }; }
 }
 
