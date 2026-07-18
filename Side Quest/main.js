@@ -7252,9 +7252,16 @@ async function directedFocusTick() {
     if (outcome && outcome.action && outcome.action !== 'continue') {
       stopDirectedFocusDriver();
       // CONSOLIDATE — the run is closing; fold the per-target sections into one clean dossier (+ recall
-      // node) before we let go. This is what Lucas opens in the morning; it notifies him itself.
+      // node) before we let go. This is what Lucas opens in the morning.
       const done = await condenseRun(focus, { reason: outcome.action });
-      if (!done) { try { require('./lib/presence').notify('Zoe — task', `${outcome.action}: ${String(focus.content).slice(0, 60)}`); } catch {} }
+      // ANNOUNCE to CHAT (2026-07-18 fix): an AUTONOMOUS research completion used to land only as a Canvas
+      // block + a desktop toast + a subconscious 'reading' — so she'd finish a deep-dive Lucas asked for and
+      // never SAY so ("registered a completed task but didn't announce it, it's just in her subconscious").
+      // A finished deliverable he asked for is a real result, not idle musing: surface it in the conversation.
+      // Only on the AUTONOMOUS path (the user-triggered "wrap up" path already replies in chat, so it's not
+      // double-announced). Deterministic so it fires even with the model/cloud down.
+      if (done) { announceResearchComplete(focus, done); }
+      else { try { require('./lib/presence').notify('Zoe — task', `${outcome.action}: ${String(focus.content).slice(0, 60)}`); } catch {} }
     }
   } catch (e) { console.error('[directed] tick error:', e.message); }
   finally { directedStepInFlight = false; }
@@ -7929,6 +7936,37 @@ async function condenseRun(focus, { reason = 'done' } = {}) {
     console.log(`[condense] LOSSLESS dossier → ${dossierPath} (${sections.length} sections stitched, ${rec.indexedMissing.length} indexed-missing)`);
     return { path: dossierPath, count: sections.length };
   } catch (e) { console.error('[condense] run failed:', e.message); return null; }
+}
+
+// Surface an AUTONOMOUS research completion in the CHAT thread (not just the Canvas + a toast + the
+// subconscious 'reading'). Fires once per self-completed directed run. Deterministic (no model call) so
+// it ALWAYS reaches Lucas even offline — the failure it fixes is her finishing work SILENTLY. unprompted
+// so it reads as her proactively reporting in. Fully fail-soft: never throws into the driver tick.
+function announceResearchComplete(focus, done) {
+  try {
+    const sid = currentSessionId;
+    if (!sid || !done) return;
+    // Clean the internal goal to a human phrase: an enrich goal reads "Enrich … this facet: <X>" (take X);
+    // a gather goal reads "<X> — gather: <how>" (drop the how). tabTitleForGoal only truncates, so do it here.
+    let title = String((focus && focus.content) || '');
+    const facet = title.match(/this facet:\s*(.+)$/i);
+    if (facet) title = facet[1];
+    title = title.replace(/\s*—\s*gather:.*$/i, '').replace(/\s+/g, ' ').trim();
+    if (title.length > 100) title = title.slice(0, 100).trim() + '…';
+    if (!title) title = 'the directed research';
+    const n = done.count || 0;
+    const parts = `${n} ${n === 1 ? 'section' : 'sections'}`;
+    // "wrapped up … what I found" is accurate whether the run fully completed or stalled with partial results —
+    // it announces the deliverable is ready without over-claiming exhaustiveness.
+    const msg = `I've wrapped up the research you had me on: ${title}. I pulled together what I found into a `
+      + `dossier (${parts})${done.path ? `, saved at ${done.path}` : ''}, and it's on your Canvas. Want me to `
+      + `walk you through it, or leave it there until you need it?`;
+    const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'research', unprompted: 1 });
+    try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+    try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: msg }); } catch {}
+    try { require('./lib/blackboard').append({ source: 'research', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
+    console.log(`[directed] announced research completion to chat (#${focus && focus.id}, ${n} sections)`);
+  } catch (e) { console.error('[directed] announce failed:', e.message); }
 }
 
 // Build the CURRENT-or-last research Track for the deliverable-query path (Slice 1): the active directed
