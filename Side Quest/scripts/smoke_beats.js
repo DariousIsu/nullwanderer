@@ -153,7 +153,7 @@ ok(roster.length === 1 + beats.stateLegSubBeats().length + beats.countyCommissio
 const topics = beats.topicBeats();
 ok(topics.length === 3 && topics.map(t => t.id).sort().join(',') === 'topic-ai,topic-datacenters,topic-power-infrastructure', 'three topic beats: ai, power, datacenters');
 const ai = beats.topicBeat('ai');
-ok(ai.lane === 'topic' && ai.kind === 'entity' && ai.depth === 'dossier', 'topic beat: topic lane, deep-dossier research path');
+ok(ai.lane === 'topic' && ai.kind === 'entity' && ai.depth === 'concept', 'topic beat: topic lane, deep-CONCEPT research path (facet-capped, not refusal — so it progresses through all sub-topics)');
 ok(ai.enumerate().length >= 10 && ai.enumerate().some(t => /frontier AI labs/i.test(t)) && ai.enumerate().some(t => /compute and chips/i.test(t)), 'AI beat worklist covers labs + compute (concept development)');
 ok(ai.facets.some(f => /debates/i.test(f)) && ai.facets.some(f => /ON THE HORIZON/i.test(f)), 'topic facets include debates + on-the-horizon (Lucas: ideas, debates, horizon)');
 ok(ai.maintenanceMs === beats.TOPIC_MAINTENANCE_MS && ai.maintenanceMs < 7 * 86400000, 'topic beat carries the short (<7d) news-fast maintenance interval');

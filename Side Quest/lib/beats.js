@@ -387,8 +387,12 @@ function topicBeat(topicId) {
     id: `topic-${id}`,
     parentBeat: id,
     lane: 'topic',                    // scheduler weights the topic lane so concepts get fair time vs the elected tiers
-    kind: 'entity',                   // deep-dossier research path (NOT the one-pass-per-aspect topical path)
-    depth: 'dossier',
+    kind: 'entity',                   // deep research path (NOT the one-pass-per-aspect topical path)
+    // CONCEPT depth (not 'dossier'/refusal): a topic sub-topic ("frontier AI labs") is inherently broad and
+    // NEVER runs dry, so pure-refusal would grind one sub-topic forever and starve the other 11 + the rotation
+    // (the 20-min audit caught exactly this). 'concept' = deep but facet-capped (~12 passes/sub-topic, still
+    // ~30k chars) so the beat PROGRESSES through its whole worklist; news-maintenance re-visits each later.
+    depth: 'concept',
     maintenanceMs: TOPIC_MAINTENANCE_MS,
     facets: TOPIC_FACETS.slice(),
     goal: `Continuously develop and keep current a deep, corroborated concept map of ${def.title}. Work the `

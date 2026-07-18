@@ -8479,10 +8479,13 @@ async function runDirectedResearchPass(focus) {
     // Advance only when the well is dry (two consecutive sub-threshold passes) or the model says saturated,
     // so nothing rich is left on the table. Track the per-target dry streak here (persists on the target).
     // Diversity comes from the scheduler rotating states, not from cutting depth.
+    // DEPTH modes: 'dossier' (finite elected rosters) = REFUSAL, deep-dive to genuine exhaustion; 'concept'
+    // (topic/concept sub-topics, inherently broad + inexhaustible) = deep but FACET-CAPPED so the beat
+    // progresses through its whole worklist instead of grinding one sub-topic forever (20-min audit finding).
     const depthMode = (() => { try { return (db.getMeta(`focus.${focus.id}.depth`) || '').trim(); } catch { return ''; } })();
     const refusal = depthMode === 'dossier';
     if (refusal) target.dryPasses = (newChars < rs.MIN_NEW_CHARS) ? ((target.dryPasses || 0) + 1) : 0;
-    const deepTarget = refusal || (scope === 'bounded' && Array.isArray(intended) && intended.length <= 1);
+    const deepTarget = refusal || depthMode === 'concept' || (scope === 'bounded' && Array.isArray(intended) && intended.length <= 1);
     const adv = rs.decideAdvance({ passes: target.passes, newChars, saturated: p.saturated, uncovered: uncovered.length, deep: deepTarget, refusal, dryStreak: target.dryPasses || 0 });
     if (adv.advance) {
       // CLOUD ORGANIZE this target → one clean section (the usable DRAFT), appended to the deliverable NOW.
