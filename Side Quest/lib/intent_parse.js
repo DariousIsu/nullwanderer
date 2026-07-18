@@ -26,10 +26,12 @@ const KINDS = ['office_holder', 'current_fact', 'entity', 'personal', 'task', 'l
 const _WANT = 'Classify the user\'s message. Output ONLY a compact JSON object, no prose, no code fence.\n'
   + 'Fields:\n'
   + '- "kind": exactly one of: office_holder | current_fact | entity | personal | task | lookup | chitchat | other.\n'
-  + '    office_holder = asking who CURRENTLY holds a public or corporate office/role (president, vice president, '
-  + 'governor, senator, mayor, secretary, attorney general, prime minister, chancellor, chair, CEO/CFO/CTO, '
-  + 'director, administrator, pope, ambassador, chief justice, ...). Phrased any way ("who runs the country", '
-  + '"current potus", "who\'s in charge of the EPA").\n'
+  + '    office_holder = asking who CURRENTLY holds — or WON / WAS JUST ELECTED / APPOINTED to — a public or '
+  + 'corporate office/role (president, vice president, governor, senator, mayor, secretary, attorney general, '
+  + 'prime minister, chancellor, chair, CEO/CFO/CTO, director, administrator, pope, ambassador, chief justice, '
+  + '...). Phrased any way ("who runs the country", "current potus", "who\'s in charge of the EPA", "who did they '
+  + 'just elect", "who\'s the new PM", "who replaced X", "did someone just resign/step down"). An election or '
+  + 'appointment result IS a current office-holder fact.\n'
   + '    current_fact = other time-sensitive fact (price, stock, score, weather, news, "latest"/"current" of anything).\n'
   + '    entity = a timeless "who/what is X" about a specific named person, org, place, work, or event.\n'
   + '    personal = about the user or shared history ("what\'s my dog\'s name", "what did we discuss").\n'
@@ -47,6 +49,8 @@ const _WANT = 'Classify the user\'s message. Output ONLY a compact JSON object, 
   + 'office ("the president", "the governor") is the US one. If another place is named, use it ("president of France").\n'
   + 'Examples:\n'
   + '"who\'s the president now?" -> {"kind":"office_holder","topic":"President of the United States","needs_fresh":true}\n'
+  + '"who did the UK just elect PM?" -> {"kind":"office_holder","topic":"Prime Minister of the United Kingdom","needs_fresh":true}\n'
+  + '"who\'s the new pope?" -> {"kind":"office_holder","topic":"Pope","needs_fresh":true}\n'
   + '"who runs the country?" -> {"kind":"office_holder","topic":"President of the United States","needs_fresh":true}\n'
   + '"who\'s in charge of the country?" -> {"kind":"office_holder","topic":"President of the United States","needs_fresh":true}\n'
   + '"who runs Nvidia?" -> {"kind":"office_holder","topic":"CEO of Nvidia","needs_fresh":true}\n'
@@ -80,10 +84,13 @@ function _fastModel() {
 const _CURRENCY_RE = /\b(current(ly)?|now(adays)?|today|tonight|latest|recently|these days|right now|as of|this (?:week|month|year)|who is the|price|stock|score|weather|news|headlines?)\b/i;
 const _OFFICE_HOLDER_RE = /\bwho(?:'s|\s+is|\s+are|\s+se)\b[^?.!]*\b(president|potus|vice[-\s]?president|governor|senators?|congress(?:man|woman|person)|representatives?|mayor|secretary|attorney\s+general|prime\s+minister|premier|chancellor|chair(?:man|woman|person)?|ceo|cfo|cto|coo|administrator|pope|king|queen|monarch|ambassador|speaker|chief\s+justice|justices?|commissioner|treasurer|comptroller|sheriff)\b/i;
 const _SOCIAL_RE = /^(hi|hey|hello|yo|sup|good (?:morning|afternoon|evening|night)|how are you|how'?s it going|what'?s up|thanks|thank you|cheers|lol|haha)\b/i;
+// Shared with metacognition so both "needs-fresh" gates agree on election/appointment recency (the
+// "who did the UK JUST ELECT PM?" class the fallback missed → stale confabulation when cloud was down).
+const _ELECTION_RECENCY_RE = (() => { try { return require('./metacognition').ELECTION_RECENCY_RE; } catch { return /\bjust\s+(?:elected|appointed|sworn)\b/i; } })();
 function _regexIntent(msg) {
   const s = String(msg || '').trim();
   if (!s) return { kind: 'other', topic: '', needs_fresh: false };
-  if (_OFFICE_HOLDER_RE.test(s)) return { kind: 'office_holder', topic: '', needs_fresh: true };
+  if (_OFFICE_HOLDER_RE.test(s) || _ELECTION_RECENCY_RE.test(s)) return { kind: 'office_holder', topic: '', needs_fresh: true };
   if (_SOCIAL_RE.test(s)) return { kind: 'chitchat', topic: '', needs_fresh: false };
   if (_CURRENCY_RE.test(s)) return { kind: 'current_fact', topic: '', needs_fresh: true };
   return { kind: 'other', topic: '', needs_fresh: false };

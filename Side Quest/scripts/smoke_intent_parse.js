@@ -27,6 +27,12 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(ip._regexIntent('what is the latest news on X?').kind === 'current_fact', 'fallback: "latest news" → current_fact');
   ok(ip._regexIntent('good morning!').kind === 'chitchat', 'fallback: greeting → chitchat');
   ok(ip._regexIntent('who is Marie Curie?').kind === 'other' && ip._regexIntent('who is Marie Curie?').needs_fresh === false, 'fallback: timeless "who is Marie Curie?" → other, not fresh');
+  // ELECTION / OFFICE-TRANSITION recency — the class the fallback missed → stale "Keir Starmer" confabulation
+  // when the cloud model was momentarily down (post-reboot). Must degrade to office_holder + needs_fresh.
+  ok(ip._regexIntent('who did the UK just elect to prime minister?').needs_fresh === true, 'fallback: "who did X just elect PM" → needs_fresh (was missed)');
+  ok(ip._regexIntent('Starmer is gone, they just elected a new one like 12 hours ago?').needs_fresh === true, 'fallback: "they just elected a new one" → needs_fresh');
+  ok(ip._regexIntent("who's the new pope?").needs_fresh === true, 'fallback: "new pope" → needs_fresh');
+  ok(ip._regexIntent('I just wanted to name my new project').needs_fresh === false, 'fallback FP guard: ordinary "just...new project" → NOT fresh');
 
   // ── parseIntent — model PRIMARY, regex FALLBACK ──
   const askModel = async ({ input }) => { ok(/country/i.test(String(input.question)), 'parseIntent: passes the question to the model'); return { kind: 'office_holder', topic: 'President of the United States', needs_fresh: true }; };

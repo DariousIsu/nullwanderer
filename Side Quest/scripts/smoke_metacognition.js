@@ -76,6 +76,18 @@ ok(m.groundingDirective({ userMessage: 'what time is it right now', knowledgeRow
 ok(m.groundingScope("what's the weather today") === 'current', 'weather today → STILL current (needs a tool, not the carve-out)');
 ok(m.groundingScope("what's today's news") === 'current', "today's news → STILL current");
 ok(m.groundingScope('what is the price of oil today') === 'current', 'price today → STILL current (carve-out did not swallow it)');
+// ELECTION / OFFICE-TRANSITION RECENCY (the "who did the UK JUST ELECT PM?" → stale "Keir Starmer" fix):
+// these are LIVE facts CURRENT_RE missed and answered from the model's training cutoff. Must be 'current'.
+ok(m.groundingScope('who did the UK just elect to prime minister?') === 'current', 'election recency: "who did X just elect PM" → current (was general)');
+ok(m.groundingScope('Starmer is gone, they just elected a new one like 12 hours ago?') === 'current', 'correction w/ recency: "they just elected a new one" → current');
+ok(m.groundingScope("who's the new pope?") === 'current', 'new office-holder: "who\'s the new pope" → current');
+ok(m.groundingScope('did the governor just resign?') === 'current', 'transition: "did the governor just resign" → current');
+ok(m.groundingScope('who did the UK elect PM?') === 'current', 'election (no "just"): "who did X elect PM" → current');
+// FP guards: ordinary "just"/"new" must NOT be dragged into 'current'.
+ok(m.groundingScope('who painted the Mona Lisa') === 'general', 'FP guard: timeless art → still general');
+// The property that matters: ordinary "just"/"new" must NOT be dragged into CURRENT (a live-fact confabulation).
+ok(m.groundingScope('I just wanted to name my new project') !== 'current', 'FP guard: "just...name...new project" → NOT current');
+ok(m.groundingScope('what should I name my new puppy') !== 'current', 'FP guard: "name my new puppy" → NOT current');
 
 // --- ACTION HONESTY (the "I watched the clips" confabulation guard) ---
 ok(m.detectActionRequest('pull up clips of Zoe Barnes from house of cards on youtube, turn CC on') === 'media',

@@ -70,10 +70,17 @@ const PERSONAL_HIST_RE = /\b(did (?:you|i|we)|do you remember|you (?:told|said|m
 // gives her. Note: this is the date/time ITSELF, not "today's news / weather / price" — those stay
 // CURRENT (genuinely need a tool), because none of the date|time|day words follow there.
 const DATETIME_SELF_RE = /\b(what(?:'?s|s| is| was)?\s+(?:the\s+|today'?s\s+)?(?:date|time|day|month|year|weekday)\b|what (?:date|time|day|month|year) is it|today'?s date|day of (?:the )?week)/i;
+// RECENCY / OFFICE-TRANSITION — the class CURRENT_RE missed and that made her confabulate a live fact from
+// the model's training cutoff (the "who did the UK JUST ELECT PM?" → stale "Keir Starmer" + double-down).
+// CURRENT_RE only caught "who IS the current PM"; an election/appointment ("who did X just elect", "just
+// elected", "who's the NEW <office>", "just sworn in / resigned") is equally a live fact that MUST be looked
+// up, never answered from memory. Kept tight (recency adverb + transition verb, or an office role) to avoid
+// firing on ordinary "just"/"new". Shared with intent_parse's fallback so both gates agree.
+const ELECTION_RECENCY_RE = /\b(?:just|newly|recently)\b[^?.!]{0,40}\b(?:elected?|appointed?|nominat\w+|sworn|inaugurat\w+|took\s+office|resign\w*|stepp?ed\s+down)\b|\b(?:who|whom)\b[^?.!]{0,40}\b(?:did|has|have|just)\b[^?.!]{0,40}\b(?:elect|appoint|nominate|choose|replace)\b|\bnew\s+(?:president|vice[-\s]?president|prime[-\s]?minister|pm|potus|governor|senator|mayor|chancellor|premier|ceo|cfo|cto|pope|king|queen|leader|speaker)\b|\b(?:elected|appointed|sworn[-\s]?in|inaugurated|resigned|stepped\s+down)\b[^?.!]{0,40}\b(?:president|prime\s+minister|pm|governor|senator|mayor|ceo|pope|chancellor|leader|minister|office|position|party)\b/i;
 function groundingScope(text) {
   const s = String(text || '');
   if (DATETIME_SELF_RE.test(s)) return 'general';   // she always holds date/time via the awareness block
-  if (CURRENT_RE.test(s)) return 'current';
+  if (CURRENT_RE.test(s) || ELECTION_RECENCY_RE.test(s)) return 'current';
   if (PERSONAL_HIST_RE.test(s)) return 'personal';
   return 'general';
 }
@@ -121,4 +128,4 @@ function actionHonestyDirective({ userMessage, userName = 'Lucas' } = {}) {
   return `[ACTION HONESTY — ${userName} asked you to ${what}. Emitting the actual tool tag is the ONLY way to do it; words alone do nothing and you will NOT have results in THIS reply. Do NOT describe scenes, clips, captions, search results, or findings as if you watched or found them — inventing first-hand experience is fabrication, the worst thing you can do. If you have a tool for it, emit the tag and just say you're on it. If you do NOT (e.g. you cannot search YouTube and watch on your own), say that plainly and offer what you genuinely CAN do — follow a link ${userName} pastes (with CC on), or speak from what you actually know — without pretending you did more.]`;
 }
 
-module.exports = { classifyClaimType, groundingScope, assessGrounding, buildDirective, groundingDirective, detectActionRequest, actionHonestyDirective, DATETIME_SELF_RE };
+module.exports = { classifyClaimType, groundingScope, assessGrounding, buildDirective, groundingDirective, detectActionRequest, actionHonestyDirective, DATETIME_SELF_RE, ELECTION_RECENCY_RE };
