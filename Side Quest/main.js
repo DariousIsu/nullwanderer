@@ -7300,11 +7300,15 @@ const SCHED_STATE_KEY = 'sched.autonomic';   // meta JSON: { beats: { <beatId>: 
 function _loadSchedState() { try { const s = JSON.parse(db.getMeta(SCHED_STATE_KEY) || '{}'); if (!s.beats) s.beats = {}; return s; } catch { return { beats: {} }; } }
 function _saveSchedState(s) { try { db.setMeta(SCHED_STATE_KEY, JSON.stringify(s)); } catch {} }
 
-// The roster the scheduler rotates over — the elected-officials completeness tiers, "as granular as possible"
-// (Lucas): every state's county-commission sub-beat + every state's municipal (city/town/village) sub-beat.
-// (Federal, state-legislature, school-board, and special-district tiers extend this list next.) The scheduler
-// slices + rotates all of them; the news-maintenance sweep only touches the ones that have actually run.
-function _autonomicBeats() { try { return require('./lib/beats').electedOfficialsSubBeats(); } catch { return []; } }
+// The rosters the scheduler rotates over, in two LANES:
+//   ELECTED — the elected-officials completeness tiers "as granular as possible" (Lucas): federal → state
+//             legislature → county (commission + row offices) → municipal → township → school board.
+//   TOPIC   — the concept-development beats (AI, power infrastructure, datacenters) — continuous, news-fast.
+// The scheduler draws most slices from ELECTED and every Nth from TOPIC (beat_scheduler.pickLane), so concept
+// work gets fair footing against the 200+ elected beats. The maintenance sweep spans both.
+function _electedBeats() { try { return require('./lib/beats').electedOfficialsSubBeats(); } catch { return []; } }
+function _topicBeats() { try { return require('./lib/beats').topicBeats(); } catch { return []; } }
+function _autonomicBeats() { return _electedBeats().concat(_topicBeats()); }
 function _coveredCount(focusId) { try { return (JSON.parse(db.getMeta(`focus.${focusId}.covered`) || '[]') || []).length; } catch { return 0; } }
 
 // MAINTENANCE SWEEP (Slice 2d) — a completeness beat is never "done forever": rosters change. Two re-verify
@@ -7325,12 +7329,13 @@ function _maintenanceSweep(state, beats) {
     // Only beats that have run (have a thread or a doneAt) carry state worth maintaining.
     const touched = beats.filter((b) => { const bs = state.beats[b.id]; return bs && (bs.thread || bs.doneAt); });
     if (!touched.length) return;
-    // TIME-BASED re-activation.
+    // TIME-BASED re-activation. Topic/concept beats carry a short maintenanceMs (news moves fast); completeness
+    // beats use the default ~30d roster-freshness interval.
     for (const b of touched) {
       const bs = state.beats[b.id];
-      if (sched.dueForMaintenance({ status: bs.status, doneAt: bs.doneAt, now })) {
+      if (sched.dueForMaintenance({ status: bs.status, doneAt: bs.doneAt, now, intervalMs: b.maintenanceMs })) {
         bs.status = undefined; bs.thread = undefined; bs.doneAt = undefined; bs.sliceStartCovered = undefined;
-        console.log(`[autonomic] maintenance: ${b.id} converged >30d ago → re-activated for a freshness sweep`);
+        console.log(`[autonomic] maintenance: ${b.id} stale (converged >${Math.round((b.maintenanceMs || sched.DEFAULT_MAINTENANCE_MS) / 86400000)}d ago) → re-activated`);
       }
     }
     // NEWS-ANCHORED re-verify. Pull one recent batch; match per state.
@@ -7392,9 +7397,17 @@ async function autonomicSchedulerTick() {
     // fall through to pick the next beat this same tick
   }
 
-  // Idle (or just paused) → pick the next beat and run a slice.
-  const nextId = sched.chooseNext({ beats, state });
-  if (!nextId) { if (sched.allDone({ beats, state })) { /* worklist exhausted; maintenance re-activates in 2d */ } return; }
+  // Idle (or just paused) → pick the next beat by LANE (elected officials vs topic/concept) and run a slice.
+  const electedPool = _electedBeats(), topicPool = _topicBeats();
+  const lane = sched.pickLane({
+    sliceIndex: state.sliceIndex || 0,
+    topicEvery: parseInt(process.env.ZOE_TOPIC_EVERY, 10) || undefined,
+    hasTopic: topicPool.length > 0, hasElected: electedPool.length > 0,
+  });
+  let pool = lane === 'topic' ? topicPool : electedPool;
+  let nextId = sched.chooseNext({ beats: pool, state });
+  if (!nextId) { pool = lane === 'topic' ? electedPool : topicPool; nextId = sched.chooseNext({ beats: pool, state }); }   // this lane all-done → fall back to the other
+  if (!nextId) return;                                                              // everything converged; maintenance re-activates later
   const beat = beats.find((b) => b.id === nextId);
   const bs = state.beats[nextId] || {};
 
@@ -7405,16 +7418,17 @@ async function autonomicSchedulerTick() {
       try { focusLib.setCurrent(bs.thread, { directed: true }); } catch {}
       bs.sliceStartCovered = _coveredCount(bs.thread);
       bs.lastRun = Date.now();
+      state.sliceIndex = (state.sliceIndex || 0) + 1;   // a new slice started → advance the lane counter
       state.beats[nextId] = bs; _saveSchedState(state);
       kickDirectedFocusDriver();
-      console.log(`[autonomic] resumed ${nextId} → focus #${bs.thread} (${bs.sliceStartCovered}/${beat.universeSize()} covered)`);
+      console.log(`[autonomic] resumed ${lane}:${nextId} → focus #${bs.thread} (${bs.sliceStartCovered}/${beat.universeSize()} covered)`);
       return;
     }
     if (t && t.status === 'resolved') { bs.status = 'done'; bs.doneAt = Date.now(); state.beats[nextId] = bs; _saveSchedState(state); return; }
   }
   // SEED a fresh run.
   const r = await seedBeatRun(beat);
-  if (r && r.ok) { bs.thread = r.focusId; bs.sliceStartCovered = 0; bs.lastRun = Date.now(); state.beats[nextId] = bs; _saveSchedState(state); }
+  if (r && r.ok) { bs.thread = r.focusId; bs.sliceStartCovered = 0; bs.lastRun = Date.now(); state.sliceIndex = (state.sliceIndex || 0) + 1; state.beats[nextId] = bs; _saveSchedState(state); console.log(`[autonomic] seeded ${lane}:${nextId}`); }
   else if (r && r.reason === 'user-focus-active') { /* a user task appeared — yield, try next tick */ }
 }
 

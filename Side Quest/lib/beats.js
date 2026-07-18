@@ -303,6 +303,104 @@ function schoolBoardSubBeats() {
   return listSchoolStates().map((code) => schoolBoardBeat(code));
 }
 
+// --- TOPIC / CONCEPT beats (AI, power infrastructure, datacenters) --------------------------------
+//
+// The OTHER beat kind. Completeness beats converge on a finite roster and stay done until a slow freshness
+// sweep; TOPIC beats cover a curated worklist of SUB-TOPICS, then re-activate FAST (news moves) to keep the
+// concept map current. They reuse the deep DOSSIER + REFUSAL research path (each sub-topic is deep-dived to
+// exhaustion and decomposed into concept + entity nodes), so "topic" is expressed by the worklist + a short
+// maintenance interval + a scheduler lane, not a different research engine. Lucas's standing frontiers:
+// "AI (development, on the horizon, companies, countries, people, ideas, debates, everything), power
+// infrastructure, datacenters." Browser-first, corroborated — official/company claims are leads, not facts.
+
+const TOPIC_FACETS = [
+  'the CURRENT STATE — what it is, the key organizations, people, and countries involved, and the very latest developments (news-anchored)',
+  'the technology / mechanics / economics — how it actually works and what drives it',
+  'the major DEBATES, open questions, controversies, and competing viewpoints',
+  'key numbers — capabilities, capacity, scale, funding, metrics — and their trajectory',
+  'policy, regulation, and geopolitics across the major jurisdictions (US, EU, China)',
+  'ON THE HORIZON — near-term roadmap, likely next moves, and what to watch',
+  'primary sources and evidence (papers, filings, official data, credible reporting)',
+];
+
+const TOPIC_BEAT_DEFS = {
+  ai: {
+    title: 'AI — development, horizon, companies, countries, people, ideas, debates',
+    subtopics: [
+      'frontier AI labs and their flagship models (OpenAI, Anthropic, Google DeepMind, Meta, xAI, Mistral, DeepSeek)',
+      'the latest AI model releases, benchmarks, and capabilities',
+      'AI compute and chips — Nvidia, TPUs, custom silicon, and supply constraints',
+      'AI safety, alignment, interpretability, and evaluations',
+      'AI policy and regulation — US executive actions, the EU AI Act, China, and state laws',
+      'open-source and open-weight AI models and their ecosystem',
+      'AI agents, tooling, and applications by sector',
+      'AI funding, company formation, and market structure',
+      'leading AI researchers, founders, and organizations',
+      'AGI timelines, scaling debates, and research frontiers on the horizon',
+      'AI\'s impact on jobs, the economy, and society',
+      'AI risks, incidents, misuse, and security',
+    ],
+  },
+  'power-infrastructure': {
+    title: 'Power infrastructure — grid, generation, transmission, siting',
+    subtopics: [
+      'the US electric grid, the ISOs/RTOs, and how it is operated',
+      'the generation mix — natural gas, nuclear, wind, solar, hydro, coal',
+      'transmission projects, interconnection queues, and bottlenecks',
+      'grid reliability, outages, and extreme-weather stress',
+      'energy policy, FERC, and the state public-utility commissions',
+      'the major utilities and grid operators',
+      'battery and grid-scale energy storage',
+      'nuclear power — SMRs, new builds, restarts, and uprates',
+      'electricity demand growth from electrification and datacenters',
+      'permitting, siting, and community opposition to energy infrastructure',
+      'grid technology — HVDC, grid-enhancing technologies, and interconnection reform',
+    ],
+  },
+  datacenters: {
+    title: 'Datacenters — buildout, operators, siting, power draw',
+    subtopics: [
+      'the hyperscale operators (AWS, Azure, Google, Meta, Oracle) and their footprints',
+      'datacenter buildout, capex, and the construction pipeline',
+      'datacenter power demand and the strain on the grid',
+      'cooling, water use, and efficiency (PUE)',
+      'AI datacenter design and large GPU clusters',
+      'colocation, wholesale, and datacenter REITs',
+      'regional datacenter hubs — Northern Virginia, Texas, Phoenix, Ohio, Georgia',
+      'datacenter siting, permitting, and community opposition',
+      'datacenter power sourcing — nuclear deals, PPAs, and on-site generation',
+      'submarine cables, connectivity, and the network backbone',
+    ],
+  },
+};
+
+const TOPIC_MAINTENANCE_MS = 3 * 24 * 60 * 60 * 1000;   // news moves fast — re-verify a converged topic every ~3 days
+
+function listTopics() { return Object.keys(TOPIC_BEAT_DEFS); }
+
+function topicBeat(topicId) {
+  const id = String(topicId || '').toLowerCase();
+  const def = TOPIC_BEAT_DEFS[id];
+  if (!def) return null;
+  const targets = def.subtopics.slice();
+  return {
+    id: `topic-${id}`,
+    parentBeat: id,
+    lane: 'topic',                    // scheduler weights the topic lane so concepts get fair time vs the elected tiers
+    kind: 'entity',                   // deep-dossier research path (NOT the one-pass-per-aspect topical path)
+    depth: 'dossier',
+    maintenanceMs: TOPIC_MAINTENANCE_MS,
+    facets: TOPIC_FACETS.slice(),
+    goal: `Continuously develop and keep current a deep, corroborated concept map of ${def.title}. Work the `
+      + `sub-topics one at a time, deep-diving each to exhaustion across its state, mechanics, debates, numbers, `
+      + `policy, and horizon. Browser-first; corroborate everything — company and official claims are leads, not facts.`,
+    enumerate: () => targets,
+    universeSize: () => targets.length,
+  };
+}
+
+function topicBeats() { return listTopics().map((id) => topicBeat(id)); }
+
 // --- FEDERAL tier (President/VP + the full Congress) ---------------------------------------------
 
 // 2020-apportionment US House seats per state (effective for the 2023-2033 congresses), total = 435. Used to
@@ -482,6 +580,7 @@ module.exports = {
   municipalTargets, municipalBeat, municipalSubBeats,
   listSubdivisionStates, subdivisionBodyLabel, subdivisionDisplayName, subdivisionTargets, subdivisionBeat, subdivisionSubBeats,
   listSchoolStates, schoolBoardTargets, schoolBoardBeat, schoolBoardSubBeats,
+  TOPIC_BEAT_DEFS, TOPIC_MAINTENANCE_MS, listTopics, topicBeat, topicBeats,
   HOUSE_SEATS, federalTargets, federalBeat,
   stateLegTargets, stateLegBeat, stateLegSubBeats, listLegislatureStates,
   electedOfficialsSubBeats,

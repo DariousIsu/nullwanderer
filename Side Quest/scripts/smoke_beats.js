@@ -149,6 +149,17 @@ ok(roster[0].id === 'federal-officials', 'federal beat is first (rotation priori
 ok(['state-legislature-', 'county-commissions-', 'municipalities-', 'townships-', 'school-boards-'].every(p => roster.some(b => b.id.startsWith(p))), 'roster spans all six tiers (federal, state-leg, county, municipal, township, school)');
 ok(roster.length === 1 + beats.stateLegSubBeats().length + beats.countyCommissionSubBeats().length + beats.municipalSubBeats().length + beats.subdivisionSubBeats().length + beats.schoolBoardSubBeats().length, 'roster = federal(1) + state-leg + county + municipal + township + school tiers');
 
+// --- TOPIC / CONCEPT beats (AI, power, datacenters) ---
+const topics = beats.topicBeats();
+ok(topics.length === 3 && topics.map(t => t.id).sort().join(',') === 'topic-ai,topic-datacenters,topic-power-infrastructure', 'three topic beats: ai, power, datacenters');
+const ai = beats.topicBeat('ai');
+ok(ai.lane === 'topic' && ai.kind === 'entity' && ai.depth === 'dossier', 'topic beat: topic lane, deep-dossier research path');
+ok(ai.enumerate().length >= 10 && ai.enumerate().some(t => /frontier AI labs/i.test(t)) && ai.enumerate().some(t => /compute and chips/i.test(t)), 'AI beat worklist covers labs + compute (concept development)');
+ok(ai.facets.some(f => /debates/i.test(f)) && ai.facets.some(f => /ON THE HORIZON/i.test(f)), 'topic facets include debates + on-the-horizon (Lucas: ideas, debates, horizon)');
+ok(ai.maintenanceMs === beats.TOPIC_MAINTENANCE_MS && ai.maintenanceMs < 7 * 86400000, 'topic beat carries the short (<7d) news-fast maintenance interval');
+ok(beats.topicBeat('power-infrastructure').enumerate().some(t => /grid/i.test(t)) && beats.topicBeat('datacenters').enumerate().some(t => /hyperscale/i.test(t)), 'power beat covers the grid; datacenter beat covers hyperscalers');
+ok(beats.topicBeat('nope') === null, 'unknown topic → null');
+
 // --- Slice 2d: news-anchored maintenance matcher ---
 const news = [
   { title: 'Orange County commissioner resigns amid probe', summary: 'The board will hold a special election.' },

@@ -39,6 +39,18 @@ ok(s.dueForMaintenance({ status: 'active', doneAt: 0, now: 1e15 }) === false, 'a
 ok(s.dueForMaintenance({ status: 'done', doneAt: null, now: 1e15 }) === false, 'no doneAt recorded → not due (needs a convergence timestamp)');
 ok(s.dueForMaintenance({ status: 'done', doneAt: 100, now: 100, intervalMs: 0 }) === true, 'zero interval → immediately due');
 
+// --- pickLane: topic/concept lane gets fair footing vs the huge elected roster ---
+ok(s.pickLane({ sliceIndex: 0, topicEvery: 3 }) === 'topic', 'slice 0 → topic');
+ok(s.pickLane({ sliceIndex: 1, topicEvery: 3 }) === 'elected' && s.pickLane({ sliceIndex: 2, topicEvery: 3 }) === 'elected', 'slices 1,2 → elected');
+ok(s.pickLane({ sliceIndex: 3, topicEvery: 3 }) === 'topic', 'slice 3 → topic (every 3rd)');
+{ // over 30 slices, ~1/3 are topic
+  let topic = 0; for (let i = 0; i < 30; i++) if (s.pickLane({ sliceIndex: i, topicEvery: 3 }) === 'topic') topic++;
+  ok(topic === 10, `~1/3 of slices are topic (got ${topic}/30)`);
+}
+ok(s.pickLane({ sliceIndex: 0, hasTopic: false }) === 'elected', 'no topic beats → always elected');
+ok(s.pickLane({ sliceIndex: 1, hasElected: false }) === 'topic', 'no elected beats → always topic');
+ok(s.pickLane({ sliceIndex: 0, topicEvery: 1 }) === 'topic' && s.pickLane({ sliceIndex: 1, topicEvery: 1 }) === 'elected', 'topicEvery floored at 2 — topics never take EVERY slice');
+
 // --- round-robin end-to-end: 3 beats, budget 2, simulate slices → each runs before any repeats ---
 {
   let state = { beats: {} };

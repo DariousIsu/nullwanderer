@@ -62,4 +62,16 @@ function dueForMaintenance({ status = '', doneAt = null, now = 0, intervalMs = D
   return (now - doneAt) >= Math.max(0, intervalMs);
 }
 
-module.exports = { DEFAULT_SLICE_BUDGET, DEFAULT_MAINTENANCE_MS, chooseNext, shouldRotate, allDone, dueForMaintenance };
+// LANES (topic/concept beats vs the elected-officials tiers). The elected roster is huge (200+ beats), so in
+// a flat least-recently-run rotation the 3 topic beats would each run only ~1/226 of the time. Lanes give the
+// topic/concept work fair footing: every `topicEvery`-th slice is drawn from the topic lane, the rest from
+// elected. Pure — the caller supplies the running slice index and which lanes are non-empty.
+const DEFAULT_TOPIC_EVERY = 3;   // 1 in 3 autonomic slices → topic/concept; 2 in 3 → elected officials
+function pickLane({ sliceIndex = 0, topicEvery = DEFAULT_TOPIC_EVERY, hasTopic = true, hasElected = true } = {}) {
+  if (!hasTopic) return 'elected';
+  if (!hasElected) return 'topic';
+  const every = Math.max(2, topicEvery);   // never let topics take EVERY slice
+  return (sliceIndex % every === 0) ? 'topic' : 'elected';
+}
+
+module.exports = { DEFAULT_SLICE_BUDGET, DEFAULT_MAINTENANCE_MS, DEFAULT_TOPIC_EVERY, chooseNext, shouldRotate, allDone, dueForMaintenance, pickLane };
