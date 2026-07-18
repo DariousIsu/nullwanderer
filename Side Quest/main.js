@@ -5810,7 +5810,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     if (db.getMeta('brainstorm.disabled') !== '1' && !offerCommitted) {
       const brain = require('./lib/brainstorm');
-      const gateOk = !speechHandled && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled && !docQaHandled && !statusHandled && !socialTurn && !isAssignment;
+      // NOT on a factual/cloud-owned turn (2026-07-17 confab fix, general case): those are owned by the
+      // grounded cloud draft (cognition.answerGrounded — grounds, or searches, or abstains honestly). The
+      // light-pull injects a single UNVERIFIED first-hit snippet as conversational "fuel"; on a factual
+      // lookup the small voice model elaborates BEYOND it → the exact confabulation vector (root cause #1,
+      // the "Trump speech" recap). Fuel belongs to genuine riffs, never to a question with a real answer.
+      const gateOk = !speechHandled && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled && !docQaHandled && !statusHandled && !socialTurn && !isAssignment && !cloudOwnsAnswer;
       if (gateOk && brain.shouldLightPull({ route: turnRoute.route, socialTurn, personalFactQ, devQ, stateQ, activityQ, isStatusReq: _isStatusReqR, msgLen: userMessage.trim().length, message: userMessage })) {
         const topic = (projectOffer && projectOffer.target) || brain.pullTopic(userMessage);
         if (topic && topic.length >= 3) {
