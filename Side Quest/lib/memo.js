@@ -139,6 +139,15 @@ function writeFingerprint(args) {
   return out;
 }
 
+// Which object on a tag actually carries its arguments. A `do` tag uses .args; an <echo-propose>
+// tag uses .payload. Reading only .args meant every proposal made through the tag syntax
+// invalidated nothing — the guard was wired but inert, which is worse than absent because the
+// stats read zero and look like "nothing needed dropping". Exported so that stays regression-tested.
+function writeArgsOf(tag) {
+  if (!tag || typeof tag !== 'object') return {};
+  return tag.args || tag.payload || {};
+}
+
 function createMemo({ hashFn, ttlMs = DEFAULT_TTL_MS, max = DEFAULT_MAX, now = () => Date.now() } = {}) {
   // Map preserves insertion order, so the first key is the oldest → O(1) eviction without an LRU
   // list. Re-inserting on hit would make it a true LRU; we deliberately do NOT, because an entry
@@ -207,4 +216,4 @@ function createMemo({ hashFn, ttlMs = DEFAULT_TTL_MS, max = DEFAULT_MAX, now = (
   };
 }
 
-module.exports = { isMemoizable, isInvalidatingWrite, fingerprint, writeFingerprint, createMemo, DEFAULT_TTL_MS, DEFAULT_MAX };
+module.exports = { isMemoizable, isInvalidatingWrite, fingerprint, writeFingerprint, writeArgsOf, createMemo, DEFAULT_TTL_MS, DEFAULT_MAX };

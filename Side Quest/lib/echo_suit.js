@@ -280,7 +280,10 @@ class EchoSuit {
       : tag.kind === 'propose' ? 'propose_' + tag.proposeKind : null;
     if (writeName && mem.isInvalidatingWrite(writeName)) {
       const res = await this._maybeCoalesced(tag, opts);
-      try { if (res && !res.isError && res.ok !== false) memo.invalidate(tag.args || {}); } catch {}
+      // a `do` tag carries its arguments on .args, but an <echo-propose> tag carries them on
+      // .payload — reading only .args silently invalidated nothing for every proposal she makes
+      // through the tag syntax, which is the exact path the staleness guard exists to cover.
+      try { if (res && !res.isError && res.ok !== false) memo.invalidate(mem.writeArgsOf(tag)); } catch {}
       return res;
     }
 

@@ -49,6 +49,23 @@ const R = (text) => ({ ok: true, text });
     ok(!m.writeFingerprint({ top_k: 8 }).has('#8'), 'writeFingerprint: non-id numbers ignored');
   }
 
+  // ── which field on a tag carries its arguments ───────────────────────────────────────────────
+  // Regression: <echo-propose> puts its payload on .payload, not .args. Reading only .args made
+  // invalidation a silent no-op for every proposal made through the tag syntax — wired but inert,
+  // which reads as "nothing needed dropping" in the stats.
+  {
+    ok(m.writeArgsOf({ kind: 'do', name: 'propose_entity', args: { name: 'A' } }).name === 'A', 'do tag → .args');
+    ok(m.writeArgsOf({ kind: 'propose', proposeKind: 'entity', payload: { name: 'B' } }).name === 'B',
+      'SAFETY: propose tag → .payload (not silently empty)');
+    ok(Object.keys(m.writeArgsOf({ kind: 'propose', proposeKind: 'entity' })).length === 0, 'no payload → {}');
+    ok(Object.keys(m.writeArgsOf(null)).length === 0, 'writeArgsOf(null) → {}, no throw');
+    // and end-to-end: a propose TAG must actually drop the matching cached read
+    const memo = m.createMemo({ hashFn, ttlMs: 60000 });
+    memo.put('search_entities', { q: 'Zzyzx Holloway' }, R('MISS'), 10);
+    const tag = { kind: 'propose', proposeKind: 'entity', payload: { entity_type: 'person', name: 'Zzyzx Holloway' } };
+    ok(memo.invalidate(m.writeArgsOf(tag)) === 1, 'SAFETY: propose TAG invalidates the stale read');
+  }
+
   // ── core behaviour ───────────────────────────────────────────────────────────────────────────
   {
     let t = 1000;
