@@ -4062,6 +4062,36 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (awayReason) { availability.setAway(awayReason); console.log(`[main] Lucas marked away ("${awayReason}") — unprompted utterances will stay silent`); }
   } catch (e) { console.error('[main] availability update failed:', e.message); }
 
+  // === DEEP-DIVE VERB (premium lane, explicit-command only) ===
+  // "deep dive on <X>" / "deep dive <X>" → run ONE subject to exhaustion on the heavy model.
+  // "stop deep dive" ends it; "deep dive status" reports. Deterministic + pre-LLM, so it works with the
+  // model down — and verb-gated so the expensive tier NEVER fires on its own.
+  {
+    const isDeepStat = /^\s*deep\s*-?\s*dive\s+status\s*\??$/i.test(userMessage);
+    const isDeepOff = /^\s*(?:stop|end|cancel|release)\s+(?:the\s+)?deep\s*-?\s*dive\s*$/i.test(userMessage);
+    const mDeep = (!isDeepStat && !isDeepOff) ? userMessage.match(/^\s*deep\s*-?\s*dive(?:\s+on)?\s+(.+?)\s*$/i) : null;
+    if (mDeep || isDeepOff || isDeepStat) {
+      let say;
+      if (isDeepStat) {
+        const st = deepDiveStatus();
+        say = st
+          ? `Deep-diving ${st.subject} on ${st.model} — ${st.covered} section(s) folded in so far.`
+          : `No deep dive running right now.`;
+      } else if (isDeepOff) {
+        const r = stopDeepDive('chat');
+        say = r.ok ? `Stopped the deep dive — back to normal rotation.` : `There's no deep dive running to stop.`;
+      } else {
+        const r = await startDeepDive({ subject: mDeep[1], requestedBy: 'chat' });
+        say = r.ok
+          ? `On it — deep-diving ${r.subject} on ${r.model}. I'll dig until the well runs dry and fold it into one dossier. Beat rotation holds off; background research keeps ticking quietly underneath.`
+          : `I couldn't start that deep dive — ${r.reason}.`;
+      }
+      const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: say, model: 'deep-verb' });
+      try { for (const ch of say) emit(ch); sendComplete({ saidId: saidRow.id, truncated: 0, deepVerb: true }); } catch {}
+      return { ok: true, say };
+    }
+  }
+
   // === SWARM-ON-COMMAND VERB (research-allocation S5) ===
   // Deterministic operator commands, handled BEFORE the LLM turn so they work even with the model/cloud down:
   //   "swarm on <X>"        → surge background workers onto one roster (parallel target partitions)
@@ -7302,9 +7332,24 @@ const USAGE_KEY = 'research.usage';
 function _intMeta(key, dflt) { let n; try { n = parseInt(db.getMeta(key) || String(dflt), 10); } catch { n = dflt; } return isNaN(n) ? dflt : n; }
 function _researchCadenceMs() { return Math.max(5000, _intMeta('research.cadence_ms', RESEARCH_CADENCE_DEFAULT_MS)); }
 
-// Which model a given focus's passes run on (swarm threads get the premium lane) — used for usage attribution.
+// LANE MODEL — which model a focus's passes run on. Returns an explicit OVERRIDE or null (null = use the
+// default `model.operator`). Ollama bills GPU time and the heavy tier is ~15-30x the light one, so the premium
+// model is reserved for work Lucas EXPLICITLY commands:
+//   focus.<id>.deep=1   → model.operator_deep   (a `deep dive on <X>` — one subject, exhaustive)
+//   focus.<id>.swarm=1  → model.operator_swarm  (normally UNSET: a swarm is FOCUS, not depth, so it rides
+//                          the default volume model — set it only to deliberately buy premium swarms)
+// Everything else — autonomic breadth, topic beats, chat — runs the default.
+function _laneModelOverride(focusId) {
+  try {
+    if (db.getMeta(`focus.${focusId}.deep`) === '1') { const m = (db.getMeta('model.operator_deep') || '').trim(); if (m) return m; }
+    if (db.getMeta(`focus.${focusId}.swarm`) === '1') { const m = (db.getMeta('model.operator_swarm') || '').trim(); if (m) return m; }
+  } catch {}
+  return null;
+}
+// Same resolution, but always concrete — used to attribute usage by model.
 function _laneModelFor(focusId) {
-  try { if (db.getMeta(`focus.${focusId}.swarm`) === '1') { const m = (db.getMeta('model.operator_swarm') || '').trim(); if (m) return m; } } catch {}
+  const o = _laneModelOverride(focusId);
+  if (o) return o;
   try { return require('./lib/operator').operatorModel(); } catch { return 'default'; }
 }
 // Persisted hourly buckets: { "<hourEpoch>": { n, m: { "<model>": count } } }, pruned to the weekly window.
@@ -7843,6 +7888,61 @@ function releaseSwarm(reason = 'manual') {
 try { global.__swarmOn = (target, opts = {}) => startSwarm({ target, ...opts, requestedBy: 'inspector' }); } catch {}
 try { global.__swarmRelease = () => releaseSwarm('inspector'); } catch {}
 try { global.__swarmStatus = () => { const s = _loadSchedState(); return s.swarm || null; }; } catch {}
+
+// ═══ DEEP DIVE — the PREMIUM lane, explicit-command only (2026-07-19) ═════════════════════════════
+// `deep dive on <X>` runs ONE subject to exhaustion on the heavy model. Deliberately verb-gated: the heavy
+// tier costs ~15-30x per call on ollama's GPU-time billing, so it never fires on its own — only when Lucas
+// asks. Mechanics: a BOUNDED single-target directed focus at 'dossier' depth (REFUSAL mode — keep digging
+// until the well runs dry), tagged `.deep` so its passes route to model.operator_deep. Because the focus
+// carries NO `.beat` tag, the autonomic scheduler treats it as Lucas's own task and won't preempt it —
+// breadth rotation stands down for the duration, which is exactly what a deep dive wants.
+async function startDeepDive({ subject, requestedBy = 'chat' } = {}) {
+  const focusLib = require('./lib/focus');
+  const s = String(subject || '').trim();
+  if (!s) return { ok: false, reason: 'no subject given' };
+  const goal = `Deep-dive research on ${s} — exhaust every angle: what it is, the key people and their roles with FULL contact details, history, structure, finances, decisions, controversies, and current status. Corroborate against independent sources; official pages are leads, not facts.`;
+  let r = null;
+  try { r = await focusLib.setFromDirective(goal); } catch (e) { return { ok: false, reason: e.message }; }
+  if (!r || !r.focus) return { ok: false, reason: 'focus not set' };
+  const fid = r.focus.id;
+  try { db.setMeta(`focus.${fid}.scope`, 'bounded'); } catch {}
+  try { db.setMeta(`focus.${fid}.intended_targets`, JSON.stringify([s])); } catch {}
+  try { db.setMeta(`focus.${fid}.kind`, 'entity'); } catch {}
+  try { db.setMeta(`focus.${fid}.depth`, 'dossier'); } catch {}   // REFUSAL depth — dig to genuine exhaustion
+  try { db.setMeta(`focus.${fid}.deep`, '1'); } catch {}          // routes this focus's passes to the premium lane
+  kickDirectedFocusDriver();
+  const model = _laneModelFor(fid);
+  console.log(`[deep] START "${s}" → focus #${fid} on ${model} (by ${requestedBy})`);
+  return { ok: true, focusId: fid, subject: s, model };
+}
+
+// End the deep dive: clear the focus pointer (the thread + its dossier survive) so autonomic breadth resumes.
+function stopDeepDive(reason = 'manual') {
+  const focusLib = require('./lib/focus');
+  let f = null; try { f = focusLib.getCurrent(); } catch {}
+  if (!f) return { ok: false, reason: 'nothing running' };
+  let isDeep = false; try { isDeep = db.getMeta(`focus.${f.id}.deep`) === '1'; } catch {}
+  if (!isDeep) return { ok: false, reason: 'the active focus is not a deep dive' };
+  try { focusLib.clear(`deep-stop:${reason}`); } catch {}
+  console.log(`[deep] STOP focus #${f.id} (${reason}) — autonomic breadth resumes`);
+  return { ok: true, focusId: f.id };
+}
+
+function deepDiveStatus() {
+  const focusLib = require('./lib/focus');
+  let f = null; try { f = focusLib.getCurrent(); } catch {}
+  if (!f) return null;
+  let isDeep = false; try { isDeep = db.getMeta(`focus.${f.id}.deep`) === '1'; } catch {}
+  if (!isDeep) return null;
+  let covered = 0, targets = [];
+  try { covered = (JSON.parse(db.getMeta(`focus.${f.id}.covered`) || '[]') || []).length; } catch {}
+  try { targets = JSON.parse(db.getMeta(`focus.${f.id}.intended_targets`) || '[]') || []; } catch {}
+  return { focusId: f.id, subject: targets[0] || '(unknown)', covered, model: _laneModelFor(f.id) };
+}
+
+try { global.__deepDive = (subject) => startDeepDive({ subject, requestedBy: 'inspector' }); } catch {}
+try { global.__deepStop = () => stopDeepDive('inspector'); } catch {}
+try { global.__deepStatus = () => deepDiveStatus(); } catch {}
 
 function startAutonomicScheduler() {
   if (autonomicTimer) return;
@@ -8793,14 +8893,8 @@ async function runDirectedResearchPass(focus) {
     } catch {}
   };
 
-  // LANE MODEL (2026-07-19) — ollama bills GPU TIME, and a heavy model costs ~15-30x a light one per call, so
-  // the VOLUME lane (autonomous breadth, ~95% of calls) runs on the cheap/fast default while a USER-COMMANDED
-  // SWARM gets the premium model — that's the work Lucas asked for and is watching. Both runtime meta:
-  //   model.operator        — default: autonomous breadth + chat
-  //   model.operator_swarm  — swarm partitions only (falls back to the default when unset)
-  const _laneModel = (() => {
-    try { return db.getMeta(`focus.${focus.id}.swarm`) === '1' ? ((db.getMeta('model.operator_swarm') || '').trim() || null) : null; } catch { return null; }
-  })();
+  // LANE MODEL — premium only for work Lucas explicitly commands (see _laneModelOverride); null = default.
+  const _laneModel = _laneModelOverride(focus.id);
   const runPass = async (prompt) => {
     try {
       const r = await runCloudOperator({ userMessage: prompt, context: '', task: true, autonomous: true, model: _laneModel });
