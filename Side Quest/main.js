@@ -1694,7 +1694,7 @@ app.whenReady().then(() => {
     const NEWS_COMPRESS_MS = parseInt(process.env.NEWS_COMPRESS_MS || '', 10) || 60 * 60 * 1000;
     const news_lane = require('./lib/news_lane');
     const newsStore = require('./lib/news_store');
-    const runHourlyCompression = async () => {
+    const _runHourlyCompression = async () => {
       try {
         const engineUp = await ensureEngine();       // adjudicator (ambiguous band) needs the cloud; the deterministic gate runs regardless
         const cloud = engineUp ? require('./lib/cloud_logic') : null;
@@ -1731,6 +1731,10 @@ app.whenReady().then(() => {
         }
       } catch (e) { console.error('[news] hourly compression failed:', e.message); }
     };
+    // Lane root — a timer-driven pass, unattended by definition. Its resolution gate
+    // (promoteStory → canonResolve → entity_block.generateCandidates) is a heavy search_entities
+    // caller that reaches Echo straight off the suit, so it inherits no lane from anywhere else.
+    const runHourlyCompression = async () => require('./lib/lane').run({ autonomous: true }, _runHourlyCompression);
     const newsCompressTimer = setInterval(() => { runHourlyCompression().catch(() => {}); }, NEWS_COMPRESS_MS);
     newsCompressTimer.unref?.();
     setTimeout(() => { runHourlyCompression().catch(() => {}); }, 90 * 1000);   // one pass shortly after boot so a briefing exists without waiting an hour
