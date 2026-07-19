@@ -7728,7 +7728,15 @@ function _maintenanceSweep(state, beats) {
   } catch (e) { console.error('[autonomic] maintenance sweep failed:', e.message); }
 }
 
+// Top-level UNATTENDED tick → establishes the ambient autonomous lane (lib/lane.js) for everything
+// it spawns. Wrapping the tick rather than the operator alone is what covers the background work
+// that never goes through runCloudOperator — recallObject/quick_lookup/relatedEntities called
+// straight off the suit, which is most of the beat machinery's traffic.
 async function autonomicSchedulerTick() {
+  return require('./lib/lane').run({ autonomous: true }, () => _autonomicSchedulerTick());
+}
+
+async function _autonomicSchedulerTick() {
   if (String(process.env.ZOE_AUTONOMIC || '1').trim() === '0') return;              // kill switch
   try { if ((db.getMeta('operator.mode') || 'full').trim() === 'off') return; } catch {}
   const focusLib = require('./lib/focus');
@@ -8071,7 +8079,12 @@ function startAutonomicScheduler() {
 try { global.__autonomicTick = () => autonomicSchedulerTick(); } catch {}           // inspector-driven validation
 
 // One driver tick: advance the active directed focus by a single research slice, record the outcome.
+// Top-level UNATTENDED tick — see autonomicSchedulerTick above for why the wrap lives at the tick.
 async function directedFocusTick() {
+  return require('./lib/lane').run({ autonomous: true }, () => _directedFocusTick());
+}
+
+async function _directedFocusTick() {
   if (directedStepInFlight) return;
   const focusLib = require('./lib/focus');
   let focus = null;
