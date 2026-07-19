@@ -1659,8 +1659,16 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
       // and the tier goes permanently no-gap (hit at visited=392 > 200); advancing the offset each cycle
       // walks the WHOLE thin set so fresh nodes always flow. Cursor is a validated int → safe to inline.
       const cursor = Math.max(0, parseInt(_gm('graphwalk.frontier_cursor') || '0', 10) || 0);
-      const r = await dispatch({ kind: 'do', name: 'db_query', args: { sql: `SELECT id, name, degree FROM entities WHERE degree BETWEEN 2 AND 7 AND wikidata_qid IS NOT NULL ORDER BY degree DESC, id DESC LIMIT ${FRONTIER_WINDOW} OFFSET ${cursor}`, params: [] } });
-      if (!r || !r.ok) return [];
+      // timeout_seconds: this scans ~1.76M entities (no index covers degree + wikidata_qid + the
+      // degree/id sort) and measured ~4.0-4.3s — about 85% of db_query's 5s default, so it
+      // intermittently blows the budget and, with the swallow below, silently empties the thin tier.
+      // Raising the ceiling is a caller-side stopgap, NOT the real fix: the right fix is an index on
+      // the engine side, which is an Echo schema change and needs the owner's sign-off. As the graph
+      // grows this query keeps getting slower, so revisit rather than raising the number again.
+      const r = await dispatch({ kind: 'do', name: 'db_query', args: { sql: `SELECT id, name, degree FROM entities WHERE degree BETWEEN 2 AND 7 AND wikidata_qid IS NOT NULL ORDER BY degree DESC, id DESC LIMIT ${FRONTIER_WINDOW} OFFSET ${cursor}`, params: [], timeout_seconds: 20 } });
+      // Log the failure instead of returning a bare [] — an empty thin tier and a BROKEN thin tier
+      // looked identical before, which is how this hid.
+      if (!r || !r.ok) { console.error('[graph-walk] thin-frontier query FAILED →', String((r && r.text) || 'no response').slice(0, 160)); return []; }
       let j; try { j = JSON.parse(r.text); } catch { return []; }
       const rows = (j && j.rows) || j;
       const arr = Array.isArray(rows) ? rows : [];
@@ -1952,8 +1960,14 @@ async function runPullerMove(_recentTurns, { mode = 'both', candidatesOverride =
       const clean = [...new Set((names || []).map(n => String(n == null ? '' : n).trim()).filter(n => n.length >= 2))].slice(0, 40);
       if (!clean.length) return set;
       const inList = clean.map(n => `'${n.replace(/'/g, "''")}'`).join(',');
-      const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql: `SELECT DISTINCT TRIM(COALESCE(FirstName,'')||' '||COALESCE(LastName,'')) nm FROM electoral.contact WHERE deleted=0 AND TRIM(COALESCE(FirstName,'')||' '||COALESCE(LastName,'')) IN (${inList})`, params: [] } });
+      // NON-SARGABLE by construction: the WHERE compares a TRIM(COALESCE(..)||' '||COALESCE(..))
+      // expression, so no index on FirstName/LastName can be used and every call full-scans
+      // electoral.contact — measured over the 5s default. timeout_seconds is the caller-side
+      // stopgap; the real fix is a computed/indexed full-name column on the engine side (Echo
+      // schema change → owner sign-off).
+      const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql: `SELECT DISTINCT TRIM(COALESCE(FirstName,'')||' '||COALESCE(LastName,'')) nm FROM electoral.contact WHERE deleted=0 AND TRIM(COALESCE(FirstName,'')||' '||COALESCE(LastName,'')) IN (${inList})`, params: [], timeout_seconds: 20 } });
       if (r && r.ok) { let j; try { j = JSON.parse(r.text); } catch {} for (const row of ((j && j.rows) || [])) if (row.nm) set.add(String(row.nm).toLowerCase()); }
+      else console.error('[known-contacts] electoral lookup FAILED →', String((r && r.text) || 'no response').slice(0, 160));
     } catch {}
     return set;
   };
