@@ -336,6 +336,35 @@ P2 is the go/no-go gate. If measured utility is negative there, the honest outco
 literature says a low-hit-rate route library makes the system slower, and we should believe our own
 numbers over the thesis.
 
+### P2 VERDICT (2026-07-19): NO-GO on route replay as designed. The memo supersedes it.
+
+Measured over 49,401 linked+hashed observations:
+
+| | calls | engine time |
+|---|---|---|
+| exact repeats (a **memo** can serve) | 27,010 (54.7%) | 56,847s |
+| novel args (a memo **cannot** serve) | 22,391 (45.3%) | 34,568s |
+| chain edges where the **path** repeats but args are new | 10,085 | 12,780s |
+
+**The reasoning that kills replay-as-designed:** for an exact repeat, `lib/memo.js` (shipped, live,
+31.6% hit rate, 132 invalidations firing) already serves the answer — and it serves each call in a
+chain independently, so a repeated chain is served call-by-call *without any route machinery*. For
+novel args, the answer is not cached by anything, so **the engine call must execute regardless** —
+replay cannot save that time; it can only tell you *which* call to make next.
+
+So the 12,780s in the third row is **not replay's savings — it is merely the size of its territory**.
+Replay's actual remaining value is skipping the operator's tool-CHOICE reasoning, which is a *cloud
+model* cost, not engine time.
+
+**This means the §10 savings-ceiling framing measured the wrong quantity for replay.** Engine-ms was
+the right unit for the memo and the wrong unit for routes. Anyone reviving route replay must justify
+it in **cloud reasoning steps avoided**, and must beat Minton's match cost in that currency.
+
+What stands from this arc: the observation log (P0), the linkage (P0.5), the derivation (P1) — which
+earned its keep by surfacing the **futile-route kill list** (`kg_neighborhood` family, since
+eliminated: 3,140 calls/2,844 misses → 0) — and the memo. Route *replay* is parked with a reason,
+not abandoned by neglect.
+
 ---
 
 ## 11. Open questions
