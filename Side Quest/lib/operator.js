@@ -44,21 +44,27 @@ async function _operatorComplete(messages, opts = {}) {
 // Core tool menu. The curated Echo READ tools (echo_tier.operatorReadSpec) are appended below so the
 // operator reaches for the right structured source deliberately; the generic `echo` tool still covers
 // the long tail of the 500+ surface.
-const TOOL_SPEC_CORE = `TOOLS (call exactly ONE per step):
-- web_search {"query":"…"}      search the open web + read the top result (current facts, news, prices, finding a page/video)
-- open_page {"url":"…"}         open a SPECIFIC page in her browser and read it in full — use this to go DEEPER into a good source instead of bouncing to a new search: follow a promising link you saw, or go straight to an org's own /team, /leadership, /about, or /contact page
+const TOOL_SPEC_CORE = `ORDER OF OPERATIONS — check what WE ALREADY KNOW before you reach for the open web.
+You have two first-class databases of your own: echo (OUR research databases — the knowledge graph, vault,
+CRM, gov/legal/financial records) and localdb (her own accumulated memory). We have spent a long time
+building them; most civic/entity questions are already answered in there, and going straight to a web
+search both wastes the work and risks contradicting what we already hold. So: look inward FIRST, then go
+outward to fill what's genuinely missing. Say plainly when our own data came up empty — that's a useful
+finding, not a failure.
+
+TOOLS (call exactly ONE per step):
 - echo {"need":"…"}             OUR private data + 500+ research tools (legislative/gov/CRM/knowledge-graph) — say the need in plain words (use this for anything the named ECHO DATA TOOLS below don't cover)
-- browser_read {}               read the page currently open in her browser
 - recall {"query":"…"}          semantic search of her OWN memory (past conversations, facts, notes she's kept)
 - localdb {"sql":"SELECT …"}    query her OWN local memory store DIRECTLY — read-only SELECT over her tables (knowledge, notes, open_threads, monologue, self_model…). Use this to look across ALL of her stored memory, not just the top semantic hits. Run localdb_map first if you don't know the tables.
 - localdb_map {}                list her local store's tables + row counts
+- web_search {"query":"…"}      search the open web + read the top result — for what our own data does NOT already cover (breaking news, prices, a page/video, anything genuinely new)
+- open_page {"url":"…"}         open a SPECIFIC page in her browser and read it in full — use this to go DEEPER into a good source instead of bouncing to a new search: follow a promising link you saw, or go straight to an org's own /team, /leadership, /about, or /contact page
+- browser_read {}               read the page currently open in her browser
 - file {"op":"read|write|append|list","path":"notes/x.md","content":"…"}   her workspace files
-- puller_add {"company":"…","contacts":[{"name":"…","title":"…","email":"…","phone":"…","verified":true}]}   BANK the real people you found into Puller (our contact store) — it learns the company's email pattern + grades confidence. On a CONTACTS task, call this as you find each executive: name + title always; email/phone when found; verified:true ONLY if the email came from an official/public source (else it's treated as a pattern candidate)
-
-YOU HAVE TWO FIRST-CLASS DATABASES — use BOTH as needed: localdb (her own accumulated memory) and echo (OUR research databases: the knowledge graph, vault, CRM, gov/legal/financial records, plus db_query for raw SELECTs across them). Before answering "do we have / what do we know" from guesswork, check them.`;
+- puller_add {"company":"…","contacts":[{"name":"…","title":"…","email":"…","phone":"…","verified":true}]}   BANK the real people you found into Puller (our contact store) — it learns the company's email pattern + grades confidence. On a CONTACTS task, call this as you find each executive: name + title always; email/phone when found; verified:true ONLY if the email came from an official/public source (else it's treated as a pattern candidate)`;
 
 const TOOL_SPEC_TAIL = `To use a tool, reply with ONE JSON object and nothing else:
-  {"thought":"why","action":{"tool":"web_search","args":{"query":"…"}}}
+  {"thought":"why","action":{"tool":"echo","args":{"need":"…"}}}
 When you're ready to answer, do NOT use JSON — just write the COMPLETE answer as plain text (this is what lets a long list or write-up come through whole and untruncated; never cut it short).
 Ground every claim in what the tools returned. If a tool errors or finds nothing, say so honestly — never invent. Prefer answering once you have enough; don't over-search.`;
 
