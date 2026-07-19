@@ -834,7 +834,18 @@ function bumpReflectionAccum(n) {
   } catch {}
 }
 
+// THE SUBCONSCIOUS TICK IS A LANE ROOT. Only ever called from the timer-driven tick() above, so
+// everything beneath it is unattended by definition. Wrapped HERE rather than on the individual
+// lanes because it took two wrong guesses to find this: the untagged quick_lookup traffic was
+// eventually traced by live stack capture to runGraphWalkMove → assessGaps → recall → recallObject,
+// which reaches Echo straight off the suit and inherits nothing from the operator. Wrapping one
+// lane would have left synthesis, the Puller lanes and the pipeline still untagged. Wrap the ROOT,
+// not the branches — a branch you forget is invisible, and reads as "that lane isn't autonomous".
 async function runOneTick() {
+  return require('./lane').run({ autonomous: true }, () => _runOneTick());
+}
+
+async function _runOneTick() {
   const userName = db.getMeta('user_name') || 'them';
 
   // CAPABILITY SELF-CHECK — a cheap, model-free Tier-1 sweep of her own pathways, at most
