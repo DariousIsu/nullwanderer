@@ -6060,10 +6060,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // `|| truncated`: a TRUNCATED thought that merely ECHOES a `<browse…>`/tool fragment (cut off mid-tag,
   // so it never actually parses or runs) used to trip _hasToolTag and silence the whole turn → "…". On a
   // truncation the tag is unreliable, so still salvage a real reply.
-  if ((!say || !say.trim()) && (!_hasToolTag || truncated)) {
+  // A reply is worth regenerating when it's EMPTY, or when it's CUT OFF mid-stream (non-empty but
+  // truncated + short/unterminated — the "Lucas." / "…will get that" failures). The latter used to
+  // slip through because the say wasn't blank. Same clean retry path handles both.
+  const _sayCutOff = (() => { try { return require('./lib/ollama').sayLooksCutOff(say, truncated); } catch { return false; } })();
+  if (((!say || !say.trim()) || _sayCutOff) && (!_hasToolTag || truncated)) {
     try {
       const gist = thought ? thought.replace(/\s+/g, ' ').trim().slice(-360) : '';
-      const nudge = gist
+      const cutTail = _sayCutOff && say ? say.replace(/\s+/g, ' ').trim().slice(-120) : '';
+      const nudge = cutTail
+        ? `[Your reply got CUT OFF before it finished — all that reached ${userName || 'Lucas'} was "${cutTail}". Say the whole thing now, briefly (1–4 sentences), in your own voice, complete this time. Don't think first; go straight to a <say>…</say>.]`
+        : gist
         ? `[Your reply came out blank — you thought it through but never actually spoke. You were thinking: "${gist}". Now say it to ${userName || 'Lucas'} out loud — briefly, 1–4 sentences, in your own voice. Don't think first; go straight to a <say>…</say>.]`
         : `[Your reply came out blank — you didn't actually say anything. Respond to ${userName || 'Lucas'} now, briefly (1–4 sentences), in your own voice. Don't think first; go straight to a <say>…</say>.]`;
       const retryParser = new TagStreamParser({ onSayToken: (t) => { try { emit(t); } catch {} } });

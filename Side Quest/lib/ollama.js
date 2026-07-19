@@ -306,6 +306,19 @@ class TagStreamParser {
   }
 }
 
+// PURE: does a reply look CUT OFF mid-stream? finalize() sets truncated=1 whenever the stream ended
+// without a closing </say> (mode !== 'post'). That alone isn't enough to regenerate — a long, fully
+// formed reply that merely dropped its closing tag is fine. A reply is BROKEN only if it's truncated
+// AND either very short (e.g. "Lucas.") or doesn't end on sentence-final punctuation (cut mid-clause,
+// e.g. "…and will get that"). This is the signal the empty-say recovery was missing: our live
+// failures were non-empty but truncated, so the (!say) test skipped them.
+function sayLooksCutOff(say, truncated) {
+  const s = String(say || '').trim();
+  if (!truncated || !s) return false;                 // complete, or empty (handled elsewhere)
+  if (s.length < 16) return true;                      // "Lucas." / "On it" — too short to be a real reply
+  return !/[.!?]["'’”)\]]?$/.test(s);                  // longer, but ends mid-sentence → cut off
+}
+
 // --- Resident-model housekeeping --------------------------------------------
 // A stale model pinned by keep_alive (e.g. one loaded before a model swap/reboot) squats VRAM and
 // collides with the front model — the "call goes nowhere" hang. At boot we sweep any big resident
@@ -351,4 +364,4 @@ async function sweepLoaded({ keep = [], minVramBytes = 2e9, base = OLLAMA_BASE }
   } catch { return []; }
 }
 
-module.exports = { streamChat, complete, completeDetailed, pickText, isReasoningModel, TagStreamParser, OLLAMA_BASE, selectStale, listLoaded, unload, sweepLoaded };
+module.exports = { streamChat, complete, completeDetailed, pickText, isReasoningModel, TagStreamParser, OLLAMA_BASE, selectStale, listLoaded, unload, sweepLoaded, sayLooksCutOff };

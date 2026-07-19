@@ -82,5 +82,24 @@ console.log('\nTHE "<think" LEAK — generation truncated mid-open-tag (front 12
   ok('trailing "<think" scrubbed, real prose kept', /here is my point\./i.test(r.said) && !/think/i.test(r.said));
 }
 
+console.log('\nsayLooksCutOff — the CUT-OFF reply detector (regenerate a truncated non-empty say):');
+{
+  const cut = require('../lib/ollama').sayLooksCutOff;
+  // the live failures
+  ok('"Lucas." (short, truncated) → cut off', cut('Lucas.', 1) === true);
+  ok('"…will get that" (unterminated, truncated) → cut off', cut('I\'m diving in now and will get that', 1) === true);
+  ok('"On it" (very short, truncated) → cut off', cut('On it', 1) === true);
+  ok('mid-clause truncation → cut off', cut('First I will gather the rosters, then', 1) === true);
+  // must NOT regenerate these
+  ok('complete sentence that merely lost its </say> → NOT cut off',
+    cut('I am on it now, pulling the full roster together for you.', 1) === false);
+  ok('a complete reply (truncated=0) → never cut off',
+    cut('Lucas.', 0) === false);
+  ok('empty say → not "cut off" (empty-recovery handles it)', cut('', 1) === false);
+  ok('question ending, long, truncated → complete enough', cut('So which of the two chambers do you want me to start with?', 1) === false);
+  ok('ends with quote+period → complete', cut('He told me plainly, "we have all sixty-four."', 1) === false);
+  ok('null/undefined → false', cut(null, 1) === false && cut(undefined, 1) === false);
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
