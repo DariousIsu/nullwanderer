@@ -7373,6 +7373,18 @@ function _usageBump(model) {
     u[h] = b; db.setMeta(USAGE_KEY, JSON.stringify(u));
   } catch {}
 }
+// TOOL-USE INSTRUMENTATION (2026-07-19) — we could see WHICH MODEL ran, but had zero visibility into WHICH
+// TOOLS a pass reached for, so "do we check our own databases before going to the web?" was unanswerable.
+// The `visited` meta only ever recorded web searches + pages opened; echo/recall/localdb calls were invisible.
+// Tally every tool name the operator actually used, so the DB-first ratio becomes measurable rather than assumed.
+function _toolUseBump(tools) {
+  try {
+    if (!Array.isArray(tools) || !tools.length) return;
+    let t = {}; try { t = JSON.parse(db.getMeta('research.tooluse') || '{}') || {}; } catch { t = {}; }
+    for (const name of tools) { const k = String(name || '?'); t[k] = (t[k] || 0) + 1; }
+    db.setMeta('research.tooluse', JSON.stringify(t));
+  } catch {}
+}
 function _autonomousInFlight() { try { return _bgInFlight.size + (directedStepInFlight ? 1 : 0); } catch { return 0; } }
 let _capLoggedAt = 0;
 function _capLog(which, cap) {
@@ -7409,7 +7421,17 @@ try {
     return {
       passes_session_5h: _usageSum(u, SESSION_WINDOW_MS),
       passes_weekly_7d: _usageSum(u, WEEKLY_WINDOW_MS),
-      byModel, inFlight: _autonomousInFlight(),
+      byModel,
+      tools: (() => { try { return JSON.parse(db.getMeta('research.tooluse') || '{}') || {}; } catch { return {}; } })(),
+      dbFirstRatio: (() => {                      // ourDB (echo/recall/localdb) vs outward (web_search/open_page)
+        try {
+          const t = JSON.parse(db.getMeta('research.tooluse') || '{}') || {};
+          const ours = ['echo', 'recall', 'localdb', 'localdb_map'].reduce((n, k) => n + (t[k] || 0), 0);
+          const out = ['web_search', 'open_page', 'browser_read'].reduce((n, k) => n + (t[k] || 0), 0);
+          return (ours + out) ? `${ours} ourDB / ${out} web (${Math.round(100 * ours / (ours + out))}% ours)` : 'no data yet';
+        } catch { return 'n/a'; }
+      })(),
+      inFlight: _autonomousInFlight(),
       maxConcurrent: _intMeta('research.max_concurrent', RESEARCH_MAX_CONCURRENT_DEFAULT),
       cadence_ms: _researchCadenceMs(),
       session_cap: _intMeta('research.session_cap', 0), weekly_cap: _intMeta('research.weekly_cap', 0),
@@ -8923,6 +8945,7 @@ async function runDirectedResearchPass(focus) {
           }
         }
       } catch {}
+      _toolUseBump(r && r.toolsUsed);   // measure DB-first vs web-first (echo/recall/localdb vs web_search/open_page)
       return { ans: (r && r.answer ? String(r.answer).trim() : ''), usedTool: !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.some(t => ['web_search', 'browser_read', 'echo'].includes(t))), repeats };
     } catch (e) { return { ans: '', usedTool: false, repeats: 0 }; }
   };
