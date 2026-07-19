@@ -3378,10 +3378,22 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
 // reasoner); Dans NEVER writes a block. Tab key is deterministic per focus so re-opens are idempotent
 // and the tab re-attaches after a restart. Fully fail-safe: a canvas error never breaks the research
 // loop (the deliverable FILES remain the durable artifact; the canvas is the live render).
+// SWARM QUIETING (research-allocation S5): while a swarm is OUT, only the swarm's own threads surface to the
+// canvas/chat — the operator asked to focus on the swarm, so the background rotation keeps RESEARCHING (its
+// work still lands in the graph) but stops SURFACING, instead of flooding the view with unrelated states.
+function _surfaceAllowed(focusId) {
+  try {
+    const sw = JSON.parse(db.getMeta('sched.autonomic') || '{}').swarm;
+    if (!sw) return true;                                   // no swarm → everything surfaces normally
+    return db.getMeta(`focus.${focusId}.swarm`) === '1';    // swarm out → only swarm threads surface
+  } catch { return true; }
+}
+
 const _canvasTabsOpened = new Set();
 async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
   try {
     if (!blockType) return false;
+    if (focusId != null && !_surfaceAllowed(focusId)) return false;   // quiet non-swarm breadth while a swarm is out
     if (!(await ensureEngine())) return false;
     const ce = require('./studio/canvas_emit');
     const callTool = pollCallTool();
@@ -3401,6 +3413,7 @@ async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
 const _canvasBlocks = new Set();
 async function canvasUpsertBlock({ focusId, blockId, title, tabMode = 'DOC', blockType = 'paragraph', data }) {
   try {
+    if (focusId != null && !_surfaceAllowed(focusId)) return false;   // quiet non-swarm breadth while a swarm is out
     if (!blockId || !(await ensureEngine())) return false;
     const ce = require('./studio/canvas_emit');
     const callTool = pollCallTool();
@@ -7535,9 +7548,18 @@ function _fillBackgroundWorkers(state, electedPool, topicPool, primaryBeatId) {
     if (!state.workers) state.workers = {};
     const swarmK = _maintainSwarm(state);                     // advance/release a live swarm; it consumes swarmK bg workers
     const swarmBeatId = state.swarm && state.swarm.beatId;    // keep the swarm's beat out of normal rotation while surging
-    const slots = Math.max(0, _bgSlots() - swarmK);           // normal workers get whatever the swarm isn't using
+    const normalBudget = Math.max(0, _bgSlots() - swarmK);    // normal workers get whatever the swarm isn't using
     const allPool = electedPool.concat(topicPool);
-    for (let slot = 1; slot <= slots; slot++) {
+    for (let slot = 1; slot <= _bgSlots(); slot++) {
+      // Slot reserved for the swarm → PAUSE any normal worker parked here, so a swarm DISPLACES breadth into the
+      // budget instead of running on top of it (the double-run that flooded the view). The thread stays open +
+      // resumable; it just stops being driven until the swarm releases.
+      if (slot > normalBudget) {
+        const pw = state.workers[slot];
+        if (pw && pw.beatId) { const pbs = state.beats[pw.beatId]; if (pbs && pbs.thread) { try { db.setMeta(`focus.${pbs.thread}.background`, ''); } catch {} } console.log(`[worker#${slot}] paused ${pw.beatId} — slot reserved for swarm`); }
+        state.workers[slot] = {};
+        continue;
+      }
       let w = state.workers[slot] || {};
       // Drop a finished/dead worker beat.
       if (w.beatId) {
@@ -7660,7 +7682,7 @@ async function startSwarm({ target, requestedK = null, requestedBy = 'chat' } = 
   state.swarm = { beatId: beat.id, mode: 'roster', startedAt: Date.now(), requestedBy, parts: {} };
   for (let i = 0; i < parts.length; i++) {
     const r = await seedBeatRun(beat, { background: true, targetsOverride: parts[i] });
-    if (r && r.ok) state.swarm.parts[i + 1] = { thread: r.focusId, n: parts[i].length, done: false };
+    if (r && r.ok) { state.swarm.parts[i + 1] = { thread: r.focusId, n: parts[i].length, done: false }; try { db.setMeta(`focus.${r.focusId}.swarm`, '1'); } catch {} }   // tag so it surfaces while breadth is quieted
   }
   const seeded = Object.keys(state.swarm.parts).length;
   if (!seeded) { delete state.swarm; return { ok: false, reason: 'failed to seed any swarm worker' }; }
@@ -7672,6 +7694,23 @@ async function startSwarm({ target, requestedK = null, requestedBy = 'chat' } = 
 
 // Advance a live roster swarm (mark converged partitions done; release when all done). Returns the number of
 // background workers the swarm is currently consuming, so _fillBackgroundWorkers can reserve them.
+// Close out a swarm's partitions: clear each thread's `swarm` surfacing tag, and (on a MANUAL release) ABANDON
+// any still-in-flight partition thread so it stops running — otherwise each release orphaned its threads, which
+// piled up and kept surfacing unrelated content. Auto-release (convergence) leaves abandon off: those threads
+// already resolved naturally. The partial dossiers persist in the graph either way (coverage rolled up by tag).
+function _closeSwarmParts(parts, { abandon = false, reason = 'swarm-release' } = {}) {
+  let closed = 0;
+  for (const p of Object.values(parts || {})) {
+    if (!p || !p.thread) continue;
+    try { db.setMeta(`focus.${p.thread}.swarm`, ''); } catch {}
+    if (abandon) {
+      let t = null; try { t = db.getOpenThread(p.thread); } catch {}
+      if (t && ['pending', 'active'].includes(t.status)) { try { db.markOpenThreadStatus(p.thread, 'abandoned', { reason }); closed++; } catch {} }
+    }
+  }
+  return closed;
+}
+
 function _maintainSwarm(state) {
   try {
     if (!state.swarm || !state.swarm.parts) return 0;
@@ -7683,6 +7722,7 @@ function _maintainSwarm(state) {
     }
     if (swarmLib.shouldReleaseRoster({ parts: state.swarm.parts })) {
       const b = state.swarm.beatId, n = Object.keys(state.swarm.parts).length;
+      _closeSwarmParts(state.swarm.parts, { abandon: false });   // threads already resolved on convergence; just clear the surfacing tags
       console.log(`[swarm] RELEASE ${b} — all ${n} partition(s) converged → workers back to normal rotation`);
       delete state.swarm;
       return 0;
@@ -7695,9 +7735,11 @@ function _maintainSwarm(state) {
 function releaseSwarm(reason = 'manual') {
   const state = _loadSchedState();
   if (!state.swarm) return { ok: false, reason: 'no active swarm' };
-  const b = state.swarm.beatId; delete state.swarm; _saveSchedState(state);
-  console.log(`[swarm] RELEASE ${b} (${reason})`);
-  return { ok: true, beatId: b };
+  const b = state.swarm.beatId, parts = state.swarm.parts || {};
+  const closed = _closeSwarmParts(parts, { abandon: true, reason: `swarm-release:${reason}` });   // STOP in-flight partitions — no orphan pileup
+  delete state.swarm; _saveSchedState(state);
+  console.log(`[swarm] RELEASE ${b} (${reason}) — stopped ${closed} in-flight partition(s)`);
+  return { ok: true, beatId: b, stopped: closed };
 }
 
 // Inspector triggers (validation): global.__swarmOn('florida counties'), global.__swarmRelease().
@@ -8424,6 +8466,7 @@ async function announceResearchComplete(focus, done) {
   try {
     const sid = currentSessionId;
     if (!sid || !done) return;
+    if (focus && focus.id != null && !_surfaceAllowed(focus.id)) return;   // during a swarm, don't announce breadth completions to chat
     // Clean the internal goal to a human phrase: an enrich goal reads "Enrich … this facet: <X>" (take X);
     // a gather goal reads "<X> — gather: <how>" (drop the how). tabTitleForGoal only truncates, so do it here.
     let title = String((focus && focus.content) || '');
