@@ -232,7 +232,7 @@ class EchoSuit {
     const _t0 = Date.now();
     let _res = null;
     try {
-      _res = await this._maybeCoalesced(tag, opts);
+      _res = await this._maybeMemoized(tag, opts);
       return _res;
     } catch (e) {
       _res = { ok: false, isError: true, text: String((e && e.message) || e) };
@@ -246,6 +246,53 @@ class EchoSuit {
         });
       } catch { /* never let observation break dispatch */ }
     }
+  }
+
+  // SHORT-TTL RESULT MEMO (flag `route.memo`, default OFF). Sits ABOVE coalescing because a memo
+  // hit costs no call at all, where coalescing still waits on one in flight. The observation log
+  // measured 56% of hashed calls as exact repeats — 2,892 min/day — WITH coalescing already on,
+  // because those duplicates are sequential rather than concurrent. See lib/memo.js for the
+  // safety rules (reads only, errors never stored, name-scoped invalidation, not persisted).
+  //
+  // A memo hit still records a route observation, with its true near-zero latency. That is
+  // deliberate: the duplicate COUNT stays visible while its COST collapses, which is exactly the
+  // shape the P2 utility gate needs to read.
+  async _maybeMemoized(tag, opts) {
+    let on = false;
+    try { on = require('./db').getMeta('route.memo') === '1'; } catch { on = false; }
+    if (!on || !tag) return this._maybeCoalesced(tag, opts);
+    let mem, memo;
+    try {
+      mem = require('./memo');
+      if (!this._memo) {
+        const ro = require('./route_obs');
+        // same hashing as the observation log and the coalescer, so measured duplicate rate and
+        // achieved memo rate describe the same notion of "same question" and compare directly
+        let ttl; try { ttl = Number(require('./db').getMeta('route.memo.ttl_ms')) || undefined; } catch {}
+        this._memo = mem.createMemo({ hashFn: (a) => ro.argHash(a), ttlMs: ttl });
+      }
+      memo = this._memo;
+    } catch { return this._maybeCoalesced(tag, opts); }
+
+    // WRITES — run first, then drop whatever the write touched. Ordering matters: invalidating
+    // before the call would leave a window where a concurrent read re-caches the pre-write answer.
+    const writeName = tag.kind === 'do' ? tag.name
+      : tag.kind === 'propose' ? 'propose_' + tag.proposeKind : null;
+    if (writeName && mem.isInvalidatingWrite(writeName)) {
+      const res = await this._maybeCoalesced(tag, opts);
+      try { if (res && !res.isError && res.ok !== false) memo.invalidate(tag.args || {}); } catch {}
+      return res;
+    }
+
+    if (tag.kind !== 'do' || !mem.isMemoizable(tag.name)) return this._maybeCoalesced(tag, opts);
+    const args = tag.args || {};
+    const hit = memo.get(tag.name, args);
+    // shallow copy so a caller that annotates the result can never write back into the cache
+    if (hit) return { ...hit };
+    const t0 = Date.now();
+    const res = await this._maybeCoalesced(tag, opts);
+    try { memo.put(tag.name, args, res, Date.now() - t0); } catch { /* caching must never break a call */ }
+    return res;
   }
 
   // IN-FLIGHT COALESCING (flag `route.coalesce`, default OFF). The observation log measured 578
@@ -475,8 +522,8 @@ async function recallKnowledge(query, { topK = 6 } = {}) {
 // what we already hold. quick_lookup is the resolver: it returns the RICH record's full dossier
 // (facts + bio + committees + role + degree), not a naive name match — the Curtis proof: get_entity
 // exact-matched a degree-1 stub, quick_lookup resolved the degree-320 Senator with his whole bio.
-// kg_neighborhood adds bounded background concepts (fail-soft — the Wikipedia sidecar is often
-// unanchored → empty). Fully defensive; any miss → null. `dispatch` injectable for offline tests.
+// Neighbors come from OUR OWN relations table (see the maxNeighbors block below for why kg_neighborhood
+// no longer feeds this). Fully defensive; any miss → null. `dispatch` injectable for offline tests.
 const OBJ_RICH_DEGREE = 8;   // a base resolution below this is "thin" → sweep types for a richer record
 async function recallObject(name, { maxNeighbors = 8, preferType = null, dispatch = null } = {}) {
   const d = dispatch || (liveReady() ? (tag) => _live.dispatch(tag) : null);
@@ -514,10 +561,25 @@ async function recallObject(name, { maxNeighbors = 8, preferType = null, dispatc
     try { const richer = await _richestByQid(d, best.wikidata_qid, best); if (richer) best = richer; } catch {}
   }
   // bounded neighborhood — degree-capped background (open decision #2: can't pull all 320 edges).
+  //
+  // SOURCE CHANGED (2026-07-19) from kg_neighborhood to our own `relations` table. kg_neighborhood
+  // reads the Wikipedia/CourtListener SIDECAR, which is a different id space from civic_graph and is
+  // unanchored for essentially everything we hold: the route observation log measured 2,982 calls in
+  // 24h returning EMPTY 91% of the time, and the P1 derivation found it as the tail of 7 of the 10
+  // most futile chains in the system. It is not "often unanchored", it is structurally absent —
+  // Michael J. Madigan, the highest-degree person in the entire graph (12,107 edges), returns
+  // `{anchors:[],neighbors:[]}`. Three other call sites had already discovered this and routed around
+  // it (cognition.js, resolution_live.js, and relatedEntities' own header); this closes the last one.
+  //
+  // relatedEntities walks the REAL edges for the same cost, so this is latency-neutral and turns an
+  // empty field into a populated one — every consumer of `.neighbors` (active_recall's "related:"
+  // line, cognition's neighbourNames, graph_walk) has been reading [] for these nodes.
   if (maxNeighbors > 0 && best.id) {
     try {
-      const kr = await d({ kind: 'do', name: 'kg_neighborhood', args: { entity_id: best.id, top_k: maxNeighbors } });
-      if (kr && kr.ok) { let kd; try { kd = JSON.parse(kr.text); } catch {} if (kd) best.neighbors = normalizeNeighbors(kd); }
+      const rel = await relatedEntities(best.id, { dispatch: d, limit: maxNeighbors });
+      const names = [];
+      for (const r of rel) { const n = String((r && r.name) || '').trim(); if (n && !names.includes(n)) names.push(n); }
+      if (names.length) best.neighbors = names;
     } catch {}
   }
   return best;
@@ -1213,7 +1275,18 @@ async function wikiLookup(query, { dispatch = null, pages = 3, sentences = 4 } =
   return out;
 }
 
+// Utility readout for the P2 go/no-go gate — what the memo and the coalescer actually saved on the
+// LIVE suit. Null members mean the layer never engaged (flag off, or nothing memoizable yet).
+function routeCacheStats() {
+  const s = _live || null;
+  return {
+    memo: (s && s._memo && s._memo.stats()) || null,
+    coalesce: (s && s._coalescer && s._coalescer.stats()) || null,
+  };
+}
+
 module.exports = {
+  routeCacheStats,
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
   setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _distinctEntities, _nameCompatible, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates
 };

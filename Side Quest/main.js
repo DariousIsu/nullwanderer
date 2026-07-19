@@ -7437,6 +7437,11 @@ function _researchGateOk(streamKey, focusId) {
   } catch { return true; }
 }
 
+// Route-cache readout (inspector): global.__routeCache() — what the memo + coalescer saved this
+// session. This is the P2 utility gate's numbers; if the memo's hit rate is not clearly positive
+// the honest outcome is to turn `route.memo` back off.
+try { global.__routeCache = () => { try { return require('./lib/echo_suit').routeCacheStats(); } catch (e) { return { error: String(e.message || e) }; } }; } catch {}
+
 // Live usage readout (inspector): global.__researchUsage() — our own rolling counts, split by model.
 try {
   global.__researchUsage = () => {

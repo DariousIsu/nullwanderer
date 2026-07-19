@@ -1640,8 +1640,15 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
   const web = async (q) => graphWalk.fetchLayeredSources(q, { fetchPage, recallKnowledge: (nm, o) => echoSuit.recallKnowledge(nm, o), webSearch, wikiUrl, log: (m) => console.log(m) });
   const recall = async (name) => { try { return await echoSuit.recallObject(name); } catch { return null; } };
   const dispatch = async (tag) => { try { return await echoSuit.dispatch(tag, { autonomous: true }); } catch { return null; } };
+  // Neighbors from OUR relations table, not kg_neighborhood — the Wikipedia sidecar it reads is a
+  // different id space and returned EMPTY on 91% of 2,982 measured calls (see echo_suit.recallObject).
   const kgNeighbors = async (id) => {
-    try { const r = await echoSuit.dispatch({ kind: 'do', name: 'kg_neighborhood', args: { entity_id: id, top_k: 12 } }, { autonomous: true }); if (!r || !r.ok) return []; let kd; try { kd = JSON.parse(r.text); } catch { return []; } return echoSuit.normalizeNeighbors(kd); } catch { return []; }
+    try {
+      const rel = await echoSuit.relatedEntities(id, { limit: 12 });
+      const out = [];
+      for (const r of rel) { const n = String((r && r.name) || '').trim(); if (n && !out.includes(n)) out.push(n); }
+      return out;
+    } catch { return []; }
   };
 
   // ANCHOR CASCADE (idle_anchors): the move is no longer conversation-only. Gather GROUNDED anchors —
