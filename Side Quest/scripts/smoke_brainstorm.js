@@ -45,6 +45,19 @@ ok(b.isAffirmation('do it') === true, '"do it" → affirmation');
 ok(b.isAffirmation("yeah, let's go") === true, '"yeah, let\'s go" → affirmation');
 ok(b.isAffirmation('sure, go for it') === true, '"sure, go for it" → affirmation');
 ok(b.isAffirmation('no thanks') === false, '"no thanks" → not an affirmation');
+
+// LIVE REGRESSION (2026-07-19): "yea go ahead" matched NEITHER gate, so it bound to no offer and the
+// general path invented an unrelated task + a deadline. Every spelling Lucas actually uses must hit
+// both gates — a miss here does not error, it fabricates work.
+for (const s of ['yea go ahead', 'yeah go ahead', 'yes go ahead', 'ya go ahead', 'yah go ahead',
+  'yep go ahead', 'sure go ahead', 'go ahead', 'yea do it', 'yea, go ahead']) {
+  ok(b.isAffirmation(s) === true, `affirmation: "${s}"`);
+  ok(b.isStartCommand(s) === true, `start-command: "${s}"`);
+}
+ok(b.isAffirmation('yea') === true && b.isAffirmation('yah') === true, 'bare "yea"/"yah" → affirmation');
+// and the negative side must still hold — these carry a topic, so they are NOT bare commits
+ok(b.isAffirmation('yea the arms race is wild') === false, '"yea ..." carrying new topic → NOT a bare affirmation');
+ok(b.isStartCommand('go ahead and research the parishes') === false, 'start-command with its own subject → not bare');
 ok(b.isAffirmation('yes but only the funding angle and also look at the timeline please carefully') === false, 'a long qualified reply is NOT a bare affirmation (carries new scope)');
 const now = 1000000;
 ok(b.offerFresh(now - 60 * 1000, now) === true, 'offer 1 min old → fresh');

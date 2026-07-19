@@ -44,7 +44,13 @@ function isImperativeAssignment(message) {
 // target of its own — it only makes sense against an open offer, which main.js supplies. Matches only when
 // the WHOLE short reply is made of affirmation/connector tokens, so "yes the arms race is wild" (which
 // carries new topic) does NOT count as a bare commit.
-const _AFFIRM_RE = /^\s*(?:(?:yes|yep|yeah|yup|ya|yus|sure|ok|okay|absolutely|definitely|totally|perfect|great|cool|nice|awesome|please|do|it|go|for|ahead|deep|let'?s|spin|up|make|so|happen|dig|dive|in|run|with|sounds|good|of|course|for sure|works|that)\b[\s,.!]*)+$/i;
+// "yea"/"yah"/"yeh"/"aye" are here because of a LIVE MISS (2026-07-19): Lucas typed "yea go ahead"
+// to greenlight a research brief. "yea" was in neither this list nor _START_RE, so BOTH gates
+// returned false, the message bound to no on-the-table offer, and the general path confabulated an
+// entirely different task ("AI safety organizations") plus a deadline nobody set. Every neighbouring
+// spelling — yeah, yes, yep, ya, sure — matched fine. The lesson is that these gates fail SILENTLY
+// and expensively: a missed token doesn't error, it invents work.
+const _AFFIRM_RE = /^\s*(?:(?:yes|yep|yeah|yea|yah|yeh|yup|ya|yus|aye|sure|ok|okay|absolutely|definitely|totally|perfect|great|cool|nice|awesome|please|do|it|go|for|ahead|deep|let'?s|spin|up|make|so|happen|dig|dive|in|run|with|sounds|good|of|course|for sure|works|that)\b[\s,.!]*)+$/i;
 function isAffirmation(message) {
   const s = String(message || '').trim();
   return s.length > 0 && s.length <= 40 && _AFFIRM_RE.test(s);
@@ -55,7 +61,9 @@ function isAffirmation(message) {
 // its own. Distinct from isAffirmation (which the offer arc uses) because "begin"/"proceed"/"kick it
 // off" aren't affirmation tokens — the live gap where "Begin." fired NOTHING and the heartbeat answered
 // it. Like isAffirmation it only makes sense against an on-the-table task, which main.js supplies.
-const _START_RE = /^\s*(?:(?:ok(?:ay)?|yes|yep|yeah|sure|please|alright|right|cool|now|then)[\s,.!]+)*(?:go ahead(?: and (?:do it|start|begin))?|get (?:going|started)|kick (?:it |things )?off|begin(?: (?:it|now|please))?|start(?: (?:it|now|on (?:it|that)|please))?|proceed|do it|make it (?:so|happen)|let'?s (?:go|do (?:it|this)|begin|start|get (?:going|started))|run with it|spin (?:it|that) up|fire (?:it|away)|go for it)[\s.!]*$/i;
+// Prefix list kept in sync with _AFFIRM_RE's tokens — they drifted apart before ("ya go ahead"
+// affirmed but did not start-command), which is the same silent-miss failure in miniature.
+const _START_RE = /^\s*(?:(?:ok(?:ay)?|yes|yep|yeah|yea|yah|yeh|ya|yup|aye|sure|please|alright|right|cool|now|then)[\s,.!]+)*(?:go ahead(?: and (?:do it|start|begin))?|get (?:going|started)|kick (?:it |things )?off|begin(?: (?:it|now|please))?|start(?: (?:it|now|on (?:it|that)|please))?|proceed|do it|make it (?:so|happen)|let'?s (?:go|do (?:it|this)|begin|start|get (?:going|started))|run with it|spin (?:it|that) up|fire (?:it|away)|go for it)[\s.!]*$/i;
 function isStartCommand(message) {
   const s = String(message || '').trim();
   return s.length > 0 && s.length <= 48 && _START_RE.test(s);
