@@ -160,6 +160,32 @@ function currentFocusId() {
   } catch { return null; }
 }
 
+// ── ERROR SURFACING ────────────────────────────────────────────────────────────────────────────
+// The root cause of the resolvePlaces bug wasn't the wrong arg — it was that NOBODY EVER SAW the
+// error. dispatch already puts Echo's validation message in r.text, and then ~40 call sites do
+// `if (!r || !r.ok) return` and throw that diagnostic away. 628 consecutive failures produced zero
+// output.
+//
+// Rather than patch every call site (large diff, easy to miss one, easy to regress), surface it
+// HERE — the one place all of them funnel through. De-duplicated per (tool, arg_shape) per process
+// so a persistently-broken caller prints once, not 628 times: the point is to make a NEW breakage
+// visible, not to flood the log with a known one.
+//
+// Console only — never the DB. Echo's validation text can echo input values back ("input_value=…"),
+// and the route_obs table's shapes-never-values invariant must hold absolutely. Truncated hard.
+const _loggedErrors = new Set();
+const ERR_TEXT_CAP = 240;
+function surfaceError(row, res) {
+  try {
+    if (!row || row.outcome !== 'error') return;
+    const key = `${row.tool}|${row.arg_shape}`;
+    if (_loggedErrors.has(key)) return;
+    _loggedErrors.add(key);
+    const txt = String((res && res.text) || '').replace(/\s+/g, ' ').slice(0, ERR_TEXT_CAP);
+    console.error(`[route-obs] FIRST ERROR for ${row.tool}(${row.arg_shape}) → ${txt || '(no message)'}`);
+  } catch { /* surfacing must never break anything either */ }
+}
+
 // Fail-soft by design: observation must NEVER break a research call. Any throw here is swallowed —
 // a lost log row is nothing, a broken dispatch is everything.
 function record(tag, res, meta = {}) {
@@ -172,6 +198,7 @@ function record(tag, res, meta = {}) {
       `INSERT INTO route_obs (ts, focus_id, tool, arg_shape, result_shape, outcome, latency_ms, autonomous)
        VALUES (?,?,?,?,?,?,?,?)`
     ).run(row.ts, row.focus_id, row.tool, row.arg_shape, row.result_shape, row.outcome, row.latency_ms, row.autonomous);
+    surfaceError(row, res);
     return row;
   } catch { return null; }
 }
@@ -203,5 +230,5 @@ function prune({ keepDays = 30 } = {}) {
 
 module.exports = {
   FLAG, sqlTables, argShape, resultShape, classify, tagTool, tagArgs, buildObs,
-  enabled, record, summary, prune, currentFocusId,
+  enabled, record, summary, prune, currentFocusId, surfaceError, _loggedErrors,
 };

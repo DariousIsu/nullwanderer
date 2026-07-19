@@ -104,5 +104,33 @@ ok(typeof ro.enabled === 'function' && typeof ro.record === 'function', 'impure 
 ok(ro.record({ kind: 'do', name: 'x' }, { text: '{}' }) === null,
   'record: no db initialised → fail-soft null, never throws');
 
+// ── error surfacing: the fix for the ROOT cause (a diagnostic that existed but nobody printed) ──
+{
+  const seen = [];
+  const realErr = console.error;
+  console.error = (...a) => seen.push(a.join(' '));
+  try {
+    const row = { tool: 'search_entities', arg_shape: 'limit:int,query:str', outcome: 'error' };
+    ro.surfaceError(row, { text: '1 validation error\nlimit\n  Unexpected keyword argument' });
+    ro.surfaceError(row, { text: 'same again' });
+    ro.surfaceError(row, { text: 'and again' });
+    ro.surfaceError({ tool: 'search_entities', arg_shape: 'query:str,top_k:int', outcome: 'error' }, { text: 'different shape' });
+    ro.surfaceError({ tool: 'x', arg_shape: 'a:int', outcome: 'hit' }, { text: 'should not print' });
+    ro.surfaceError({ tool: 'y', arg_shape: 'a:int', outcome: 'miss' }, { text: 'should not print' });
+  } finally { console.error = realErr; }
+
+  ok(seen.length === 2, `surfaceError: de-duped per (tool,arg_shape) — got ${seen.length}, want 2`);
+  ok(/Unexpected keyword argument/.test(seen[0]), 'surfaceError: prints the real diagnostic');
+  ok(/search_entities\(limit:int,query:str\)/.test(seen[0]), 'surfaceError: names tool + arg shape');
+  ok(!seen.join(' ').includes('should not print'), 'surfaceError: only errors surface, never hit/miss');
+  ok(!/\n/.test(seen[0]), 'surfaceError: newlines collapsed (one line per error)');
+
+  const longSeen = [];
+  const r2 = console.error; console.error = (...a) => longSeen.push(a.join(' '));
+  try { ro.surfaceError({ tool: 'z', arg_shape: 'q:str', outcome: 'error' }, { text: 'x'.repeat(5000) }); }
+  finally { console.error = r2; }
+  ok(longSeen[0].length < 400, 'surfaceError: text hard-capped (cannot flood the log)');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);
