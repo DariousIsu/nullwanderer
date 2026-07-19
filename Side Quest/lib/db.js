@@ -462,6 +462,29 @@ const MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_cloud_traces_hash ON cloud_traces(input_hash)`,
   `CREATE INDEX IF NOT EXISTS idx_cloud_traces_task ON cloud_traces(task)`,
 
+  // ROUTE OBSERVATION LOG (memory path mapping, slice P0) — one row per Echo dispatch: what we
+  // asked for and whether it landed. Written at EchoLive.dispatch, the one place all five traversal
+  // mechanisms funnel through. Deliberately dumb: it OBSERVES, it does not interpret — routes are
+  // DERIVED from this offline (P1), so a wrong derivation is re-runnable rather than corrupting.
+  //
+  // SHAPES ONLY, NEVER VALUES: arg_shape is "entity_id:int,top_k:int" or "tables(entities|relations)";
+  // a name, a query string or a SQL literal must never reach this table. It is a derivation input and
+  // a disposable one — droppable and rebuildable, never a source of truth. See lib/route_obs.js and
+  // docs/MEMORY_PATH_MAPPING_DESIGN.md.
+  `CREATE TABLE IF NOT EXISTS route_obs (
+    id INTEGER PRIMARY KEY,
+    ts INTEGER NOT NULL,
+    focus_id TEXT,
+    tool TEXT NOT NULL,
+    arg_shape TEXT,
+    result_shape TEXT,
+    outcome TEXT NOT NULL,
+    latency_ms INTEGER,
+    autonomous INTEGER DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_route_obs_ts ON route_obs(ts)`,
+  `CREATE INDEX IF NOT EXISTS idx_route_obs_tool ON route_obs(tool, outcome)`,
+
   // INTEREST MODEL (autonomy roadmap, Slice 1) — Zoe's self-directed agenda. A persistent,
   // weighted set of intellectual pursuits the idle loop SAMPLES from, instead of echoing the last
   // conversation. Seeded with a floor of deep domains (source='seed'); 'emergent' interests form

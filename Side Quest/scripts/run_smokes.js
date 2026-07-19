@@ -50,6 +50,7 @@ const smokes = [
   'smoke_beats.js',
   'smoke_beat_scheduler.js',
   'smoke_swarm.js',
+  'smoke_route_obs.js',
   'smoke_curation_gate.js',
   'smoke_curation_store.js',
   'smoke_substantiation.js',

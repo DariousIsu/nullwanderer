@@ -2993,9 +2993,27 @@ ipcMain.handle('search:revert', async (_e, { id } = {}) => {
 // ============================ POLLING (studio — data browser) ================================
 // Read-only surface over the engine's polling tools. main unwraps the MCP envelope and maps each
 // payload to the standardized view shape (studio/poll_view.js); the renderer just draws. No model.
+// Direct-to-client tool caller used by the IPC read handlers (poll lists, KG overview/ego, …).
+// This BYPASSES EchoLive.dispatch, so the route-observation wrapper there never sees it — and the
+// KG ego handler is real graph traversal (query_graph, hops:2) we want in the log. Record here too,
+// synthesizing the same 'do' tag shape dispatch would have produced. focus_id stays null, which is
+// how the derivation pass tells UI-driven reads from research-driven ones.
 function pollCallTool() {
-  const toolJson = require('./lib/echo').toolJson;
-  return async (n, a) => toolJson(await echoSuit.client().callTool(n, a));
+  const echo = require('./lib/echo');
+  const toolJson = echo.toolJson;
+  return async (n, a) => {
+    const t0 = Date.now();
+    let raw = null;
+    try {
+      raw = await echoSuit.client().callTool(n, a);
+      return toolJson(raw);
+    } finally {
+      try {
+        const norm = raw ? require('./lib/echo_suit').normalizeToolResult(raw) : { isError: true, text: '' };
+        require('./lib/route_obs').record({ kind: 'do', name: n, args: a || {} }, norm, { latencyMs: Date.now() - t0 });
+      } catch { /* observation never breaks the call */ }
+    }
+  };
 }
 async function ensureEngine() {
   if (!echoSuit || !echoSuit.connected) { try { await echoSuit.connect(); } catch {} }

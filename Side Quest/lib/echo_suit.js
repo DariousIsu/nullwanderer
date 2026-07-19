@@ -220,7 +220,35 @@ class EchoSuit {
   // opts.autonomous=true → the unattended research loop: only READ tools/recipes run; WRITE/HEAVY/
   // LOCKED are blocked with a message (she can READ from Echo unattended, but not mutate it or spawn
   // agents). Interactive turns (default) allow read+write+heavy; LOCKED (email-send/image-gen) never.
+  // ROUTE OBSERVATION (memory path mapping, P0) — a thin recording wrapper around the real
+  // dispatch. This is the ONE place every Echo call funnels through, which is why the log lives
+  // here: an audit found five separate traversal mechanisms (relatedEntities, idle_anchors' own raw
+  // 1+2-hop JOINs, kg_neighborhood, get_entity.relations, query_graph), and instrumenting any single
+  // one of them would have captured about a third of the traffic. Wrapping (rather than editing the
+  // body) also means the throw path gets recorded too — a transport failure is data.
+  // Fail-soft and flag-gated (`route.obs` meta, default OFF): observation must never be able to
+  // break a research call, so record() swallows everything.
   async dispatch(tag, opts = {}) {
+    const _t0 = Date.now();
+    let _res = null;
+    try {
+      _res = await this._dispatchRaw(tag, opts);
+      return _res;
+    } catch (e) {
+      _res = { ok: false, isError: true, text: String((e && e.message) || e) };
+      throw e;
+    } finally {
+      try {
+        require('./route_obs').record(tag, _res, {
+          latencyMs: Date.now() - _t0,
+          focusId: opts.focusId || null,
+          autonomous: !!opts.autonomous,
+        });
+      } catch { /* never let observation break dispatch */ }
+    }
+  }
+
+  async _dispatchRaw(tag, opts = {}) {
     if (!tag || !tag.kind) return { ok: false, text: 'no tag' };
     // TIER GATE — block a mutating/heavy/locked call before it reaches Echo.
     try {
