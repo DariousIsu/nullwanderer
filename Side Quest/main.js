@@ -7273,7 +7273,104 @@ async function runCloudOperator({ userMessage, context, task = false, autonomous
 // chatting. Reuses focus.js for all loop safety; the monologue think-loop skips directed focuses.
 let directedDriverTimer = null;
 let directedStepInFlight = false;
-const DIRECTED_CADENCE_MS = 45 * 1000;   // a slice every ~45s while a directed task is active
+const DIRECTED_CADENCE_MS = 45 * 1000;   // driver TICK period; the effective per-stream pace is the throttle below
+
+// ─── OPERATOR THROTTLE — rolling-window + concurrency-aware ──────────────────────────────────────
+// Ollama bills GPU TIME on TWO ROLLING clocks (a ~5h session window and a 7d weekly cycle), and Pro runs at
+// most 3 concurrent cloud models. An autonomous research pass is an agent loop of up to DEFAULT_MAX_STEPS (4)
+// model calls, so unthrottled parallel streams do two kinds of damage: they blow the session window, AND they
+// occupy every concurrency slot so Lucas's chat queues behind research (2026-07-19 incident).
+//
+// Brakes, all runtime meta (no reboot to change):
+//   research.cadence_ms     — min gap between passes PER STREAM (spreads load instead of bursting)
+//   research.max_concurrent — max SIMULTANEOUS autonomous passes; keeps a cloud slot free for chat (default 2 of 3)
+//   research.session_cap    — max autonomous passes per ROLLING 5h window (0 = uncapped)
+//   research.weekly_cap     — max autonomous passes per ROLLING 7d window (0 = uncapped)
+//
+// Usage is tracked in OUR OWN persisted hourly buckets (research.usage), pruned to 7d and split BY MODEL —
+// ollama's own counters reset on reboot, so they can't be used to pace, and we had no local visibility at all.
+// Gated at the DRIVER level, not inside the operator: a throttled cycle SKIPS the pass entirely rather than
+// running it to an empty result, which counts as a DRY pass and could falsely retire a target as "exhausted".
+// Chat never routes through these drivers, so interactive turns are NEVER throttled.
+let _bgInFlight = new Set();                               // background passes in flight (declared here: the concurrency gate below reads it)
+const RESEARCH_CADENCE_DEFAULT_MS = 90 * 1000;
+const RESEARCH_MAX_CONCURRENT_DEFAULT = 2;                 // of ollama Pro's 3 slots; the 3rd stays free for Lucas
+const SESSION_WINDOW_MS = 5 * 60 * 60 * 1000;              // ollama's short rolling window
+const WEEKLY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const USAGE_KEY = 'research.usage';
+
+function _intMeta(key, dflt) { let n; try { n = parseInt(db.getMeta(key) || String(dflt), 10); } catch { n = dflt; } return isNaN(n) ? dflt : n; }
+function _researchCadenceMs() { return Math.max(5000, _intMeta('research.cadence_ms', RESEARCH_CADENCE_DEFAULT_MS)); }
+
+// Which model a given focus's passes run on (swarm threads get the premium lane) — used for usage attribution.
+function _laneModelFor(focusId) {
+  try { if (db.getMeta(`focus.${focusId}.swarm`) === '1') { const m = (db.getMeta('model.operator_swarm') || '').trim(); if (m) return m; } } catch {}
+  try { return require('./lib/operator').operatorModel(); } catch { return 'default'; }
+}
+// Persisted hourly buckets: { "<hourEpoch>": { n, m: { "<model>": count } } }, pruned to the weekly window.
+function _usageRead() {
+  let u = {}; try { u = JSON.parse(db.getMeta(USAGE_KEY) || '{}') || {}; } catch { u = {}; }
+  const cutoff = Math.floor((Date.now() - WEEKLY_WINDOW_MS) / 3600000);
+  for (const k of Object.keys(u)) if (!(parseInt(k, 10) >= cutoff)) delete u[k];
+  return u;
+}
+function _usageSum(u, windowMs) {
+  const cutoff = Math.floor((Date.now() - windowMs) / 3600000);
+  let n = 0; for (const [k, v] of Object.entries(u || {})) if (parseInt(k, 10) >= cutoff) n += (v && v.n) || 0;
+  return n;
+}
+function _usageBump(model) {
+  try {
+    const u = _usageRead();
+    const h = String(Math.floor(Date.now() / 3600000));
+    const b = u[h] || { n: 0, m: {} };
+    b.n += 1; const k = String(model || 'default'); b.m[k] = (b.m[k] || 0) + 1;
+    u[h] = b; db.setMeta(USAGE_KEY, JSON.stringify(u));
+  } catch {}
+}
+function _autonomousInFlight() { try { return _bgInFlight.size + (directedStepInFlight ? 1 : 0); } catch { return 0; } }
+let _capLoggedAt = 0;
+function _capLog(which, cap) {
+  if (Date.now() - _capLoggedAt > 15 * 60 * 1000) {
+    _capLoggedAt = Date.now();
+    console.log(`[research] rolling ${which} budget reached (${cap} passes) — autonomous research paused until the window rolls (chat unaffected)`);
+  }
+  return false;
+}
+
+function _researchGateOk(streamKey, focusId) {
+  try {
+    const now = Date.now();
+    const gapKey = `research.last_pass.${streamKey}`;
+    if (now - (parseInt(db.getMeta(gapKey) || '0', 10) || 0) < _researchCadenceMs()) return false;   // per-stream pacing
+    const maxCc = Math.max(1, _intMeta('research.max_concurrent', RESEARCH_MAX_CONCURRENT_DEFAULT));
+    if (_autonomousInFlight() >= maxCc) return false;                       // leave a cloud slot free for chat
+    const u = _usageRead();
+    const sCap = _intMeta('research.session_cap', 0), wCap = _intMeta('research.weekly_cap', 0);
+    if (sCap > 0 && _usageSum(u, SESSION_WINDOW_MS) >= sCap) return _capLog('session (5h)', sCap);
+    if (wCap > 0 && _usageSum(u, WEEKLY_WINDOW_MS) >= wCap) return _capLog('weekly (7d)', wCap);
+    try { db.setMeta(gapKey, String(now)); } catch {}
+    _usageBump(_laneModelFor(focusId));
+    return true;
+  } catch { return true; }
+}
+
+// Live usage readout (inspector): global.__researchUsage() — our own rolling counts, split by model.
+try {
+  global.__researchUsage = () => {
+    const u = _usageRead(); const byModel = {};
+    const cutoff = Math.floor((Date.now() - WEEKLY_WINDOW_MS) / 3600000);
+    for (const [k, v] of Object.entries(u)) if (parseInt(k, 10) >= cutoff) for (const [mk, mv] of Object.entries((v && v.m) || {})) byModel[mk] = (byModel[mk] || 0) + mv;
+    return {
+      passes_session_5h: _usageSum(u, SESSION_WINDOW_MS),
+      passes_weekly_7d: _usageSum(u, WEEKLY_WINDOW_MS),
+      byModel, inFlight: _autonomousInFlight(),
+      maxConcurrent: _intMeta('research.max_concurrent', RESEARCH_MAX_CONCURRENT_DEFAULT),
+      cadence_ms: _researchCadenceMs(),
+      session_cap: _intMeta('research.session_cap', 0), weekly_cap: _intMeta('research.weekly_cap', 0),
+    };
+  };
+} catch {}
 
 function startDirectedFocusDriver() {
   if (directedDriverTimer) return;
@@ -7609,13 +7706,13 @@ function _fillBackgroundWorkers(state, electedPool, topicPool, primaryBeatId) {
 function _workerCount() { let n; try { n = parseInt(db.getMeta('research.workers') || process.env.ZOE_RESEARCH_WORKERS || '1', 10); } catch { n = 1; } return Math.max(1, Math.min(8, isNaN(n) ? 1 : n)); }
 function _bgSlots() { return Math.max(0, _workerCount() - 1); }   // primary + this many background workers
 
-let _bgInFlight = new Set();
 let _bgTimer = null;
 async function backgroundWorkerPass(focusId) {
   if (_bgInFlight.has(focusId)) return;
   let t = null; try { t = db.getOpenThread(focusId); } catch {}
   if (!t || !['pending', 'active'].includes(t.status)) return;
   try { if ((db.getMeta('operator.mode') || 'full').trim() === 'off') return; } catch {}
+  if (!_researchGateOk(`bg:${focusId}`, focusId)) return;                             // operator throttle — skip this cycle entirely
   _bgInFlight.add(focusId);
   try {
     const outcome = await runDirectedResearchPass(t);           // routes its outcome to recordOutcomeBackground (bg flag set)
@@ -7764,6 +7861,7 @@ async function directedFocusTick() {
   try { focus = focusLib.getCurrent(); } catch {}
   if (!focus || !focusLib.isDirected(focus)) { stopDirectedFocusDriver(); return; }   // nothing assigned → idle off
   if ((db.getMeta('operator.mode') || 'full').trim() === 'off') return;
+  if (!_researchGateOk('primary', focus.id)) return;                                  // operator throttle — skip this cycle entirely
   directedStepInFlight = true;
   try {
     const outcome = await runDirectedResearchPass(focus);   // depth-first state machine; records the focus outcome
@@ -8695,9 +8793,17 @@ async function runDirectedResearchPass(focus) {
     } catch {}
   };
 
+  // LANE MODEL (2026-07-19) — ollama bills GPU TIME, and a heavy model costs ~15-30x a light one per call, so
+  // the VOLUME lane (autonomous breadth, ~95% of calls) runs on the cheap/fast default while a USER-COMMANDED
+  // SWARM gets the premium model — that's the work Lucas asked for and is watching. Both runtime meta:
+  //   model.operator        — default: autonomous breadth + chat
+  //   model.operator_swarm  — swarm partitions only (falls back to the default when unset)
+  const _laneModel = (() => {
+    try { return db.getMeta(`focus.${focus.id}.swarm`) === '1' ? ((db.getMeta('model.operator_swarm') || '').trim() || null) : null; } catch { return null; }
+  })();
   const runPass = async (prompt) => {
     try {
-      const r = await runCloudOperator({ userMessage: prompt, context: '', task: true, autonomous: true });
+      const r = await runCloudOperator({ userMessage: prompt, context: '', task: true, autonomous: true, model: _laneModel });
       // VISITED MEMORY — record the URLs opened + searches run this step, so the NEXT pass is told not to
       // repeat them (the "same websites over and over" fix). Steps carry the tool + args.
       let repeats = 0;
