@@ -7274,7 +7274,20 @@ try {
 
 // Run the cloud operator for a turn: the frontier model drives the tools; returns { answer, toolsUsed }
 // or null (→ caller falls back to the normal local reply). Fail-safe.
-async function runCloudOperator({ userMessage, context, task = false, autonomous = false, toolNames = null, model = null, toolSpec = null }) {
+// Establish the AMBIENT LANE for the whole run (lib/lane.js), then delegate. The operator's tools
+// are invoked from a module-level map as `operatorTools[k](args)`, so a handler that reaches Echo
+// cannot otherwise tell whether it belongs to a background research pass or a foreground chat turn
+// — which left `autonomous` set on 2% of 130,797 observations. Wrapping here sets it once for every
+// call the run makes, however deeply nested, without threading a parameter through every handler.
+// AsyncLocalStorage (not a module flag) because up to 3 runs are in flight concurrently.
+// async (not a bare passthrough) so this keeps the original contract: every failure — including a
+// synchronous one from the require below — surfaces as a REJECTION, which several call sites
+// handle with a bare .catch(() => null).
+async function runCloudOperator(opts) {
+  return require('./lib/lane').run({ autonomous: !!(opts && opts.autonomous) }, () => _runCloudOperator(opts || {}));
+}
+
+async function _runCloudOperator({ userMessage, context, task = false, autonomous = false, toolNames = null, model = null, toolSpec = null }) {
   try {
     const operator = require('./lib/operator');
     // Per-tool timeout: a slow/hung capability (Echo down, a stalled page) can't block the turn —

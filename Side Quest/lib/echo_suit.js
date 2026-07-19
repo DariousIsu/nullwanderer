@@ -239,10 +239,19 @@ class EchoSuit {
       throw e;
     } finally {
       try {
+        // `autonomous` falls back to the AMBIENT LANE (lib/lane.js) when the caller didn't pass one.
+        // The operator's tools are invoked from a module-level map with no knowledge of their run,
+        // so opts.autonomous was unset on ~98% of calls and the flag was very nearly a constant.
+        //
+        // ⚠️ LABELLING ONLY — deliberately NOT applied to the tier gate in _dispatchRaw, which reads
+        // opts.autonomous to BLOCK writes on the unattended loop. Because the flag never propagated,
+        // background research has in fact been writing freely (~5,900 proposals/day). Making the gate
+        // ambient would start enforcing a rule that has never actually been in force and would stop
+        // the autonomic ingest pipeline dead. That is a policy decision for Lucas, not a gap fix.
         require('./route_obs').record(tag, _res, {
           latencyMs: Date.now() - _t0,
           focusId: opts.focusId || null,
-          autonomous: !!opts.autonomous,
+          autonomous: require('./lane').isAutonomous(opts.autonomous === undefined ? undefined : !!opts.autonomous),
         });
       } catch { /* never let observation break dispatch */ }
     }
