@@ -4055,9 +4055,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   //   "release/stop swarm"  → end the surge; workers return to normal rotation
   //   "swarm status"        → report the active swarm
   {
-    const mOn = userMessage.match(/^\s*swarm\s+on\s+(.+?)\s*$/i);
-    const isOff = /^\s*(release|stop|end|cancel)\s+(the\s+)?swarm\s*$/i.test(userMessage);
+    // "on" is OPTIONAL — accept both "swarm on <X>" and the more natural "swarm <X>" (what Lucas actually
+    // typed). Check status/release FIRST so "swarm status" / "release swarm" route to those, not to a target.
     const isStat = /^\s*swarm\s+status\s*\??$/i.test(userMessage);
+    const isOff = /^\s*(?:release|stop|end|cancel)\s+(?:the\s+)?swarm\s*$/i.test(userMessage);
+    const mOn = (!isStat && !isOff) ? userMessage.match(/^\s*swarm\s+(?:on\s+)?(.+?)\s*$/i) : null;
     if (mOn || isOff || isStat) {
       let say;
       if (isStat) {
