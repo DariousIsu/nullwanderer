@@ -232,7 +232,7 @@ class EchoSuit {
     const _t0 = Date.now();
     let _res = null;
     try {
-      _res = await this._dispatchRaw(tag, opts);
+      _res = await this._maybeCoalesced(tag, opts);
       return _res;
     } catch (e) {
       _res = { ok: false, isError: true, text: String((e && e.message) || e) };
@@ -246,6 +246,28 @@ class EchoSuit {
         });
       } catch { /* never let observation break dispatch */ }
     }
+  }
+
+  // IN-FLIGHT COALESCING (flag `route.coalesce`, default OFF). The observation log measured 578
+  // identical questions asked within 2s of each other costing 1,986s of engine time — 496 of them
+  // interleaved with other calls and 259 within 100ms, which is research.workers=2 racing rather
+  // than any retry loop. When two identical READS are in flight, they share one call. Reads only;
+  // see lib/coalesce.js for why writes must never be collapsed.
+  _maybeCoalesced(tag, opts) {
+    let on = false;
+    try { on = require('./db').getMeta('route.coalesce') === '1'; } catch { on = false; }
+    if (!on || !tag || tag.kind !== 'do') return this._dispatchRaw(tag, opts);
+    try {
+      const coalesce = require('./coalesce');
+      if (!coalesce.isCoalescable(tag.name)) return this._dispatchRaw(tag, opts);
+      if (!this._coalescer) {
+        const ro = require('./route_obs');
+        // same hashing as the observation log, so the measured duplicate rate and the achieved
+        // coalesce rate describe the same notion of "same question" and can be compared directly
+        this._coalescer = coalesce.createCoalescer({ hashFn: (a) => ro.argHash(a) });
+      }
+      return this._coalescer.run(tag.name, tag.args || {}, () => this._dispatchRaw(tag, opts));
+    } catch { return this._dispatchRaw(tag, opts); }   // any failure here → plain dispatch
   }
 
   async _dispatchRaw(tag, opts = {}) {
