@@ -484,6 +484,12 @@ const MIGRATIONS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_route_obs_ts ON route_obs(ts)`,
   `CREATE INDEX IF NOT EXISTS idx_route_obs_tool ON route_obs(tool, outcome)`,
+  // arg_hash: a SALTED one-way digest of the args, added after an audit of 8,145 observations
+  // proved the shapes-only log could not answer "was this asked before" — the one question route
+  // memoization depends on. Same args ⇒ same hash, with no readable content stored. NOT anonymity
+  // (a holder of this DB holds the salt too); see lib/route_obs.js argHash for the honest limits.
+  `ALTER TABLE route_obs ADD COLUMN arg_hash TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_route_obs_hash ON route_obs(tool, arg_hash)`,
 
   // INTEREST MODEL (autonomy roadmap, Slice 1) — Zoe's self-directed agenda. A persistent,
   // weighted set of intellectual pursuits the idle loop SAMPLES from, instead of echoing the last

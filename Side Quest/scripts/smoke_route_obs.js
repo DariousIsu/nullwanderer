@@ -104,6 +104,29 @@ ok(typeof ro.enabled === 'function' && typeof ro.record === 'function', 'impure 
 ok(ro.record({ kind: 'do', name: 'x' }, { text: '{}' }) === null,
   'record: no db initialised → fail-soft null, never throws');
 
+// ── arg_hash: equality WITHOUT values. The whole point of P2's utility gate. ────────────────────
+ok(ro.canonicalize({ b: 1, a: 2 }) === ro.canonicalize({ a: 2, b: 1 }),
+  'canonicalize: key ORDER does not change the result (else one call logs as two questions)');
+ok(ro.canonicalize({ a: [1, { z: 1, y: 2 }] }) === '{"a":[1,{"y":2,"z":1}]}', 'canonicalize: nested + sorted');
+ok(ro.canonicalize(null) === 'null' && ro.canonicalize(5) === '5', 'canonicalize: scalars');
+
+const S = 'test-salt';
+ok(ro.argHash({ name: 'Jane' }, S) === ro.argHash({ name: 'Jane' }, S), 'argHash: same args → same hash');
+ok(ro.argHash({ name: 'Jane' }, S) !== ro.argHash({ name: 'John' }, S), 'argHash: different args → different hash');
+ok(ro.argHash({ a: 1, b: 2 }, S) === ro.argHash({ b: 2, a: 1 }, S), 'argHash: key order irrelevant');
+ok(ro.argHash({ name: 'Jane' }, S) !== ro.argHash({ name: 'Jane' }, 'other-salt'), 'argHash: salt changes the digest');
+ok(!/Jane/.test(String(ro.argHash({ name: 'Jane' }, S))), 'argHash: PRIVACY — value not present in digest');
+ok(/^[0-9a-f]{16}$/.test(ro.argHash({ x: 1 }, S)), 'argHash: 16 hex chars');
+ok(ro.argHash(null, S) === null, 'argHash: null args → null');
+
+const hObs = ro.buildObs({ kind: 'do', name: 'get_entity', args: { name: 'Jane Doe' } },
+  { text: '{"rows":[1]}' }, { ts: 1, salt: S });
+ok(hObs.arg_hash && hObs.arg_hash.length === 16, 'buildObs: carries arg_hash');
+ok(!/Jane|Doe/.test(JSON.stringify(hObs)), 'buildObs: PRIVACY holds WITH the hash present');
+ok(hObs.arg_hash === ro.buildObs({ kind: 'do', name: 'get_entity', args: { name: 'Jane Doe' } },
+  { text: '{"rows":[]}' }, { ts: 999, salt: S }).arg_hash,
+  'buildObs: same question at a different time / different RESULT → same hash (repeat detectable)');
+
 // ── error surfacing: the fix for the ROOT cause (a diagnostic that existed but nobody printed) ──
 {
   const seen = [];

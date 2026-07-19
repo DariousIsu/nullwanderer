@@ -61,6 +61,45 @@ function argShape(args) {
   return parts.join(',').slice(0, MAX_SHAPE);
 }
 
+// ── ARG HASH — equality detection WITHOUT storing values.
+//
+// The shapes-only rule (above) is right for privacy but it makes the log unable to answer the one
+// question route memoization exists to answer: WAS THIS ASKED BEFORE? An audit of 8,145 real
+// observations proved it — get_entity(name:str) appeared 1,587 times and nothing in the log could
+// say how many were the same name. Without that, P2's utility gate is unmeasurable.
+//
+// A salted one-way digest restores equality (same args ⇒ same hash) while keeping the log free of
+// readable content. The salt is generated once and kept in meta.
+//
+// HONEST LIMIT — this is not anonymity. Anyone holding this DB already holds the salt, and could
+// confirm a GUESSED value by hashing it (the candidate space for names is small). It defeats
+// casual reading and stops the log becoming a queryable corpus of personal data; it is not a
+// defence against someone with the file and a wordlist. Since sq.db is local and already holds far
+// more sensitive content in plain text, that trade is sound here — but do not export this column
+// anywhere the raw DB wouldn't go, and do not describe it as anonymized.
+function _salt() {
+  try {
+    let s = db().getMeta('route.obs.salt');
+    if (!s) { s = require('crypto').randomBytes(16).toString('hex'); db().setMeta('route.obs.salt', s); }
+    return s;
+  } catch { return ''; }
+}
+
+// Canonical JSON: key order must not change the hash, or the same call logs as two questions.
+function canonicalize(v) {
+  if (v == null || typeof v !== 'object') return JSON.stringify(v == null ? null : v);
+  if (Array.isArray(v)) return `[${v.map(canonicalize).join(',')}]`;
+  return `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${canonicalize(v[k])}`).join(',')}}`;
+}
+
+function argHash(args, salt) {
+  try {
+    if (args == null) return null;
+    const s = salt == null ? _salt() : salt;
+    return require('crypto').createHash('sha256').update(`${s}|${canonicalize(args)}`).digest('hex').slice(0, 16);
+  } catch { return null; }
+}
+
 // ── result → a shape. Row-bearing payloads report their COUNT, because "came back empty" vs
 // "came back with 12" is the whole hit/miss signal we're here to capture.
 function resultShape(res) {
@@ -125,14 +164,16 @@ function tagArgs(tag) {
 }
 
 // ── pure: assemble the row. Callers pass ts/latency so this stays deterministic under test.
-function buildObs(tag, res, { ts, latencyMs = null, focusId = null, autonomous = false } = {}) {
+function buildObs(tag, res, { ts, latencyMs = null, focusId = null, autonomous = false, salt = null } = {}) {
   const tool = tagTool(tag);
   if (!tool) return null;
+  const args = tagArgs(tag);
   return {
     ts,
     focus_id: focusId || null,
     tool,
-    arg_shape: argShape(tagArgs(tag)),
+    arg_shape: argShape(args),
+    arg_hash: argHash(args, salt),
     result_shape: resultShape(res),
     outcome: classify(res),
     latency_ms: latencyMs == null ? null : Math.max(0, Math.round(latencyMs)),
@@ -195,9 +236,9 @@ function record(tag, res, meta = {}) {
     const row = buildObs(tag, res, { ts: Date.now(), ...meta, focusId });
     if (!row) return null;
     db().getDb().prepare(
-      `INSERT INTO route_obs (ts, focus_id, tool, arg_shape, result_shape, outcome, latency_ms, autonomous)
-       VALUES (?,?,?,?,?,?,?,?)`
-    ).run(row.ts, row.focus_id, row.tool, row.arg_shape, row.result_shape, row.outcome, row.latency_ms, row.autonomous);
+      `INSERT INTO route_obs (ts, focus_id, tool, arg_shape, arg_hash, result_shape, outcome, latency_ms, autonomous)
+       VALUES (?,?,?,?,?,?,?,?,?)`
+    ).run(row.ts, row.focus_id, row.tool, row.arg_shape, row.arg_hash, row.result_shape, row.outcome, row.latency_ms, row.autonomous);
     surfaceError(row, res);
     return row;
   } catch { return null; }
@@ -231,4 +272,5 @@ function prune({ keepDays = 30 } = {}) {
 module.exports = {
   FLAG, sqlTables, argShape, resultShape, classify, tagTool, tagArgs, buildObs,
   enabled, record, summary, prune, currentFocusId, surfaceError, _loggedErrors,
+  canonicalize, argHash,
 };
