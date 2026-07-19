@@ -10,6 +10,10 @@ const CHECK_INTERVAL_MS = 5 * 60 * 1000;       // poll every 5 min
 const MIN_INTERVAL_MS = 45 * 60 * 1000;        // at most one continuity check per 45 min
 const IDLE_THRESHOLD_MS = 3 * 60 * 1000;       // user must be quiet ≥ 3 min
 const MIN_COMMITMENT_AGE_MS = 30 * 60 * 1000;  // commitment must be ≥ 30 min old to surface
+// Don't re-examine the SAME commitment inside this window, however stale it looks. With the 45-min
+// check interval this lets the loop work through ~16 other commitments before circling back, instead
+// of re-reviewing one dormant item every cycle (see the selection comment below).
+const REVIEW_COOLDOWN_MS = 12 * 60 * 60 * 1000;
 
 let timer = null;
 let opts = { getSessionId: () => null, getWindow: () => null };
@@ -72,11 +76,37 @@ async function maybeFireContinuityCheck() {
   const held = db.getHeldCommitments(30);
   if (held.length === 0) return;
   // Sort by last_confirmed_at ASC (stalest first)
-  const candidates = held
+  // REVIEW COOLDOWN (2026-07-19). Sorting by last_confirmed_at alone made this loop ruminate: a
+  // review that does NOT confirm leaves last_confirmed_at untouched, so the stalest commitment stays
+  // the stalest and gets re-picked every single cycle. Live evidence — the Tangipahoa Parish /
+  // Rapides Police Jury cleanup was "re-examined" 16 times, 7 of them in one five-hour stretch,
+  // each time in slightly different words with no action taken. She even narrated it: "the urgency
+  // has faded, but the commitment remains."
+  //
+  // Track when each commitment was last LOOKED AT, regardless of outcome, and skip it for a while.
+  // This is deliberately NOT text-similarity: the repeats were paraphrases (measured avg similarity
+  // 0.30), so no textual gate could catch them — the fix has to be structural, at selection time.
+  let reviewed = {};
+  try { reviewed = JSON.parse(db.getMeta('continuity.reviewed_at') || '{}') || {}; } catch { reviewed = {}; }
+  const eligible = held
     .filter(c => (now - c.first_held_at) >= MIN_COMMITMENT_AGE_MS)
+    .filter(c => (now - (Number(reviewed[c.id]) || 0)) >= REVIEW_COOLDOWN_MS);
+  // If EVERY commitment is in cooldown, stay quiet rather than forcing the stalest one through —
+  // nothing here is urgent, and re-reviewing early is exactly the behaviour being removed.
+  if (eligible.length === 0) return;
+  const candidates = eligible
     .sort((a, b) => (a.last_confirmed_at || a.first_held_at) - (b.last_confirmed_at || b.first_held_at));
-  if (candidates.length === 0) return;
   const commitment = candidates[0];
+  // Stamp BEFORE the model call: if the pass produces nothing (empty say, suppressed thought), it
+  // still counts as looked-at. Otherwise a silent pass would leave it instantly re-pickable, which
+  // is the loop we are closing.
+  try {
+    reviewed[commitment.id] = now;
+    // prune ids no longer held so the blob cannot grow without bound
+    const liveIds = new Set(held.map(c => String(c.id)));
+    for (const k of Object.keys(reviewed)) if (!liveIds.has(String(k))) delete reviewed[k];
+    db.setMeta('continuity.reviewed_at', JSON.stringify(reviewed));
+  } catch {}
 
   const win = opts.getWindow ? opts.getWindow() : null;
   if (!win || win.isDestroyed()) return;
@@ -125,8 +155,21 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
     if (continuityDisclaimed) { try { trimmedSay = (await voice.deDisclaim(trimmedSay)) || ''; } catch (e) { console.error('[continuity] voice guard failed:', e.message); } }
     const isPlaceholder = /^[\s.()]*(empty|silence|nothing|none|n\/a|null|undefined)[\s.()]*$/i.test(trimmedSay);
 
+    // THOUGHT GATE (2026-07-19): don't PERSIST a thought that is just prompt-echo or a near-verbatim
+    // repeat. 926 of 5,169 stored thoughts (17.9%) were the model narrating its own silence rules
+    // back to itself. Suppressing the record doesn't change what she says or stop the loop running —
+    // it means this pass produced nothing worth keeping, which is the honest outcome.
     if (thought) {
-      db.insertTurn({ sessionId, speaker: 'ai_thought', content: thought, model: MODEL, truncated });
+      let keep = { keep: true, text: thought };
+      try {
+        const gate = require('./thought_gate');
+        const recent = db.getRecentTurns(120)
+          .filter(t => t.speaker === 'ai_thought' && (Date.now() - t.ts) <= 6 * 3600 * 1000)
+          .map(t => t.content);
+        keep = gate.shouldKeep(thought, recent);
+      } catch (e) { console.error('[continuity] thought gate failed (keeping):', e.message); }
+      if (keep.keep) db.insertTurn({ sessionId, speaker: 'ai_thought', content: keep.text || thought, model: MODEL, truncated });
+      else console.log(`[continuity] thought suppressed (${keep.reason})`);
     }
 
     // REPETITION GUARD (mirrors the heartbeat's): don't surface an utterance near-identical

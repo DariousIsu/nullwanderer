@@ -404,7 +404,15 @@ async function maybeHeartbeat() {
         const recentThoughts = db.getRecentTurns(60).filter(t => t.speaker === 'ai_thought').slice(-8).map(t => t.content);
         thoughtRepeat = await selfRep.isSemanticRepeat(thoughtStripped, recentThoughts, { threshold: 0.82 });
       } catch (e) { console.error('[heartbeat] thought-repeat check failed:', e.message); }
-      if (thoughtRepeat) {
+      // PROMPT-ECHO (2026-07-19): the repeat guard above catches her saying the same thing twice,
+      // but not the other idle-loop failure — narrating her own silence rules back to herself
+      // ("The user has provided a very detailed set of rules regarding how I should handle
+      // silence…"). 926 of 5,169 stored thoughts were that. It is not a repeat, so nothing caught it.
+      let promptEcho = false;
+      try { promptEcho = require('./thought_gate').isPromptEcho(thoughtStripped); } catch {}
+      if (promptEcho) {
+        console.log('[heartbeat] suppressed prompt-echo THOUGHT (rules narrated back, not reflection)');
+      } else if (thoughtRepeat) {
         console.log('[heartbeat] suppressed semantic self-repeat THOUGHT (idle rumination loop guard)');
       } else {
         db.insertTurn({

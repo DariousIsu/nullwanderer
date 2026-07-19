@@ -52,6 +52,7 @@ const smokes = [
   'smoke_swarm.js',
   'smoke_route_obs.js',
   'smoke_coalesce.js',
+  'smoke_thought_gate.js',
   'smoke_curation_gate.js',
   'smoke_curation_store.js',
   'smoke_substantiation.js',
