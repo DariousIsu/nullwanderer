@@ -4049,6 +4049,37 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (awayReason) { availability.setAway(awayReason); console.log(`[main] Lucas marked away ("${awayReason}") — unprompted utterances will stay silent`); }
   } catch (e) { console.error('[main] availability update failed:', e.message); }
 
+  // === SWARM-ON-COMMAND VERB (research-allocation S5) ===
+  // Deterministic operator commands, handled BEFORE the LLM turn so they work even with the model/cloud down:
+  //   "swarm on <X>"        → surge background workers onto one roster (parallel target partitions)
+  //   "release/stop swarm"  → end the surge; workers return to normal rotation
+  //   "swarm status"        → report the active swarm
+  {
+    const mOn = userMessage.match(/^\s*swarm\s+on\s+(.+?)\s*$/i);
+    const isOff = /^\s*(release|stop|end|cancel)\s+(the\s+)?swarm\s*$/i.test(userMessage);
+    const isStat = /^\s*swarm\s+status\s*\??$/i.test(userMessage);
+    if (mOn || isOff || isStat) {
+      let say;
+      if (isStat) {
+        const st = _loadSchedState().swarm;
+        say = st
+          ? `Swarming ${st.beatId} across ${Object.keys(st.parts || {}).length} worker(s) — ${Object.values(st.parts || {}).filter((p) => p.done).length} partition(s) converged so far.`
+          : `No swarm running right now.`;
+      } else if (isOff) {
+        const r = releaseSwarm('chat');
+        say = r.ok ? `Released the swarm on ${r.beatId} — the workers are back on normal rotation.` : `There's no swarm running to release.`;
+      } else {
+        const r = await startSwarm({ target: mOn[1], requestedBy: 'chat' });
+        say = r.ok
+          ? `On it — swarming ${r.beatId}: ${r.workers} worker(s) splitting ${r.targets} targets in parallel. I'll fold each dossier in as it lands.`
+          : `I couldn't start that swarm — ${r.reason}.`;
+      }
+      const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: say, model: 'swarm-verb' });
+      try { for (const ch of say) emit(ch); sendComplete({ saidId: saidRow.id, truncated: 0, swarmVerb: true }); } catch {}
+      return { ok: true, say };
+    }
+  }
+
   // === RECIPE RECORDER INTERCEPTOR ===
   // "record how to X on <url>" → open the site + start in-page demonstration capture;
   // "stop recording" / "save the recipe" → finalize + save. Deterministic (the 24B won't
@@ -7248,7 +7279,7 @@ function kickDirectedFocusDriver() {
 // is the recipe the chat-assignment path uses (main.js ~5662), applied to a hardwired beat instead of a user
 // message. `beat` = { id, goal, kind, enumerate() } from lib/beats. Displaces any self-spawned musing focus;
 // yields to an already-active DIRECTED (user-assigned) focus so a beat never preempts Lucas's own work.
-async function seedBeatRun(beat, { background = false } = {}) {
+async function seedBeatRun(beat, { background = false, targetsOverride = null } = {}) {
   try {
     const focusLib = require('./lib/focus');
     if (!background) {
@@ -7258,7 +7289,9 @@ async function seedBeatRun(beat, { background = false } = {}) {
         return { ok: false, reason: 'user-focus-active' };
       }
     }
-    const targets = (beat && typeof beat.enumerate === 'function') ? beat.enumerate() : [];
+    // targetsOverride = seed a run over a SUBSET of the beat's worklist (a swarm PARTITION) rather than the
+    // whole roster — used by swarm-on-command to split a roster across K parallel workers.
+    const targets = Array.isArray(targetsOverride) ? targetsOverride : ((beat && typeof beat.enumerate === 'function') ? beat.enumerate() : []);
     if (!targets.length) return { ok: false, reason: 'empty worklist' };
     // PRIMARY focus goes through setFromDirective (owns CURRENT_KEY, drives chat/leash). A BACKGROUND worker
     // gets its own open_thread via setBackground — it never touches CURRENT_KEY, so it runs concurrently
@@ -7497,8 +7530,10 @@ async function autonomicSchedulerTick() {
 // `background` flag route each pass's outcome to the right run-state. Kill switch: ZOE_RESEARCH_WORKERS=1.
 function _fillBackgroundWorkers(state, electedPool, topicPool, primaryBeatId) {
   try {
-    const slots = _bgSlots();
     if (!state.workers) state.workers = {};
+    const swarmK = _maintainSwarm(state);                     // advance/release a live swarm; it consumes swarmK bg workers
+    const swarmBeatId = state.swarm && state.swarm.beatId;    // keep the swarm's beat out of normal rotation while surging
+    const slots = Math.max(0, _bgSlots() - swarmK);           // normal workers get whatever the swarm isn't using
     const allPool = electedPool.concat(topicPool);
     for (let slot = 1; slot <= slots; slot++) {
       let w = state.workers[slot] || {};
@@ -7514,7 +7549,7 @@ function _fillBackgroundWorkers(state, electedPool, topicPool, primaryBeatId) {
       if (w.beatId) { state.workers[slot] = w; continue; }   // still working its beat → leave it
       // Pick a NEW beat this slot: distinct from the primary + all other workers. Held beats are masked
       // 'done' so BOTH allocators skip them; _chooseBeat then applies the active mode (round-robin or priority).
-      const held = new Set([primaryBeatId, ...Object.values(state.workers).map((x) => x && x.beatId).filter(Boolean)]);
+      const held = new Set([primaryBeatId, swarmBeatId, ...Object.values(state.workers).map((x) => x && x.beatId).filter(Boolean)].filter(Boolean));
       const excluded = { beats: Object.fromEntries(Object.entries(state.beats).map(([id, v]) => [id, held.has(id) ? { ...v, status: 'done' } : v])), workers: state.workers };
       const pickId = _chooseBeat(allPool, excluded, Date.now(), held);
       if (!pickId || held.has(pickId)) { state.workers[slot] = {}; continue; }
@@ -7570,11 +7605,103 @@ function startBackgroundWorkers() {
   if (_bgTimer) return;
   if (_bgSlots() < 1) return;
   _bgTimer = setInterval(() => {
-    try { const st = _loadSchedState(); for (const w of Object.values(st.workers || {})) { const bid = w && w.beatId; const th = bid && st.beats[bid] && st.beats[bid].thread; if (th) backgroundWorkerPass(th).catch(() => {}); } } catch {}
+    try {
+      const st = _loadSchedState();
+      for (const w of Object.values(st.workers || {})) { const bid = w && w.beatId; const th = bid && st.beats[bid] && st.beats[bid].thread; if (th) backgroundWorkerPass(th).catch(() => {}); }
+      if (st.swarm && st.swarm.parts) for (const p of Object.values(st.swarm.parts)) { if (p && p.thread && !p.done) backgroundWorkerPass(p.thread).catch(() => {}); }   // drive the swarm partitions too
+    } catch {}
   }, DIRECTED_CADENCE_MS);
   console.log(`[worker] ${_bgSlots()} background research worker(s) started`);
 }
 function kickBackgroundWorkers() { startBackgroundWorkers(); }
+
+// ═══ SWARM-ON-COMMAND (research-allocation Slice S5) ══════════════════════════════════════════════
+// A SURGE mode on top of the steady allocator: `swarm on <X>` reallocates BACKGROUND workers onto ONE thing
+// for a bounded burst, then RELEASES them. The primary always stays on normal breadth (the reserve floor), so
+// depth-on-command never goes blind. ROSTER mode (this slice): K workers converge one beat's roster in
+// parallel, each seeded on a distinct TARGET partition (lib/swarm.partitionRoster). DEEP mode (Slice D):
+// K workers each take a distinct facet of one target + cross-verify. Pure decisions live in lib/swarm.
+// State lives in sched.autonomic under `swarm`: { beatId, mode, startedAt, requestedBy, parts:{<slot>:{thread,n,done}} }.
+
+// Resolve a free-text phrase ("florida counties", "georgia school boards") to a schedulable ROSTER beat by
+// token overlap against each beat's id + goal (exact id match wins outright). Null if nothing matches.
+function _resolveSwarmBeat(text) {
+  const q = String(text || '').toLowerCase().trim();
+  if (!q) return null;
+  const beats = _autonomicBeats();
+  const toks = q.split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+  if (!toks.length) return null;
+  let best = null, bestScore = 0;
+  for (const b of beats) {
+    const hay = `${b.id} ${b.goal || ''}`.toLowerCase();
+    let sc = 0; for (const t of toks) if (hay.includes(t)) sc++;
+    if (b.id.toLowerCase() === q) sc += 100;
+    if (sc > bestScore) { bestScore = sc; best = b; }
+  }
+  return bestScore > 0 ? best : null;
+}
+
+// Start a ROSTER swarm: partition the beat's targets across the available swarm workers and seed a background
+// run per partition. Returns { ok, beatId, targets, workers } or { ok:false, reason }.
+async function startSwarm({ target, requestedK = null, requestedBy = 'chat' } = {}) {
+  const swarmLib = require('./lib/swarm');
+  const state = _loadSchedState();
+  if (state.swarm) return { ok: false, reason: `already swarming ${state.swarm.beatId} — release it first` };
+  const beat = _resolveSwarmBeat(target);
+  if (!beat) return { ok: false, reason: `couldn't resolve "${target}" to a roster (try e.g. "florida counties")` };
+  const targets = (typeof beat.enumerate === 'function') ? beat.enumerate() : [];
+  if (!targets.length) return { ok: false, reason: `${beat.id} has no targets` };
+  const total = _workerCount();
+  const { swarmWorkers } = swarmLib.planSwarmSlots({ totalWorkers: total, requestedK, floor: swarmLib.DEFAULT_SWARM_FLOOR });
+  if (swarmWorkers < 1) return { ok: false, reason: `no background workers free to swarm (research.workers=${total}); raise research.workers first` };
+  const parts = swarmLib.partitionRoster(targets, swarmWorkers);
+  state.swarm = { beatId: beat.id, mode: 'roster', startedAt: Date.now(), requestedBy, parts: {} };
+  for (let i = 0; i < parts.length; i++) {
+    const r = await seedBeatRun(beat, { background: true, targetsOverride: parts[i] });
+    if (r && r.ok) state.swarm.parts[i + 1] = { thread: r.focusId, n: parts[i].length, done: false };
+  }
+  const seeded = Object.keys(state.swarm.parts).length;
+  if (!seeded) { delete state.swarm; return { ok: false, reason: 'failed to seed any swarm worker' }; }
+  _saveSchedState(state);
+  startBackgroundWorkers();
+  console.log(`[swarm] START roster ${beat.id}: ${targets.length} targets across ${seeded} worker(s) (by ${requestedBy})`);
+  return { ok: true, beatId: beat.id, targets: targets.length, workers: seeded };
+}
+
+// Advance a live roster swarm (mark converged partitions done; release when all done). Returns the number of
+// background workers the swarm is currently consuming, so _fillBackgroundWorkers can reserve them.
+function _maintainSwarm(state) {
+  try {
+    if (!state.swarm || !state.swarm.parts) return 0;
+    const swarmLib = require('./lib/swarm');
+    for (const p of Object.values(state.swarm.parts)) {
+      if (!p || p.done) continue;
+      let t = null; try { t = db.getOpenThread(p.thread); } catch {}
+      if (!t || !['pending', 'active'].includes(t.status)) p.done = true;   // resolved/gone → this partition converged
+    }
+    if (swarmLib.shouldReleaseRoster({ parts: state.swarm.parts })) {
+      const b = state.swarm.beatId, n = Object.keys(state.swarm.parts).length;
+      console.log(`[swarm] RELEASE ${b} — all ${n} partition(s) converged → workers back to normal rotation`);
+      delete state.swarm;
+      return 0;
+    }
+    return Object.keys(state.swarm.parts).filter((k) => !state.swarm.parts[k].done).length;
+  } catch (e) { console.error('[swarm] maintain failed:', e.message); return 0; }
+}
+
+// Manually release the active swarm (chat "release swarm" / stop). Workers return to normal rotation next tick.
+function releaseSwarm(reason = 'manual') {
+  const state = _loadSchedState();
+  if (!state.swarm) return { ok: false, reason: 'no active swarm' };
+  const b = state.swarm.beatId; delete state.swarm; _saveSchedState(state);
+  console.log(`[swarm] RELEASE ${b} (${reason})`);
+  return { ok: true, beatId: b };
+}
+
+// Inspector triggers (validation): global.__swarmOn('florida counties'), global.__swarmRelease().
+try { global.__swarmOn = (target, opts = {}) => startSwarm({ target, ...opts, requestedBy: 'inspector' }); } catch {}
+try { global.__swarmRelease = () => releaseSwarm('inspector'); } catch {}
+try { global.__swarmStatus = () => { const s = _loadSchedState(); return s.swarm || null; }; } catch {}
 
 function startAutonomicScheduler() {
   if (autonomicTimer) return;
