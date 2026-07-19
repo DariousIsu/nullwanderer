@@ -499,6 +499,27 @@ const MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_route_obs_parent ON route_obs(parent_id)`,
   `CREATE INDEX IF NOT EXISTS idx_route_obs_focus_seq ON route_obs(focus_id, seq)`,
 
+  // ABSENCE MODEL (memory path mapping, P3) — three-valued, after Wikidata snaks. A failed lookup
+  // lands here as `somevalue` (a GAP: a value exists, we haven't found it) and feeds research.
+  // `novalue` (no value exists in the world) is a CLAIM and requires evidence_kind/evidence_ref —
+  // a timeout, or a hundred failed searches, never earns it. first_observed_ts is FROZEN on the
+  // first sighting and never refreshed by re-reading (RFC 2308): otherwise autonomous workers
+  // re-observing each other would keep a "not found" perpetually fresh and it would harden into a
+  // false fact. Expiry runs off last_attempt_ts. See lib/absence.js.
+  `CREATE TABLE IF NOT EXISTS absence (
+    subject TEXT NOT NULL,
+    predicate TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'somevalue',
+    first_observed_ts INTEGER NOT NULL,
+    last_attempt_ts INTEGER NOT NULL,
+    attempts INTEGER DEFAULT 1,
+    ttl_s INTEGER,
+    evidence_kind TEXT,
+    evidence_ref TEXT,
+    PRIMARY KEY (subject, predicate)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_absence_kind ON absence(kind, last_attempt_ts)`,
+
   // INTEREST MODEL (autonomy roadmap, Slice 1) — Zoe's self-directed agenda. A persistent,
   // weighted set of intellectual pursuits the idle loop SAMPLES from, instead of echoing the last
   // conversation. Seeded with a floor of deep domains (source='seed'); 'emergent' interests form
