@@ -7319,8 +7319,20 @@ function _saveSchedState(s) { try { db.setMeta(SCHED_STATE_KEY, JSON.stringify(s
 //   TOPIC   — the concept-development beats (AI, power infrastructure, datacenters) — continuous, news-fast.
 // The scheduler draws most slices from ELECTED and every Nth from TOPIC (beat_scheduler.pickLane), so concept
 // work gets fair footing against the 200+ elected beats. The maintenance sweep spans both.
-function _electedBeats() { try { return require('./lib/beats').electedOfficialsSubBeats(); } catch { return []; } }
-function _topicBeats() { try { return require('./lib/beats').topicBeats(); } catch { return []; } }
+// A beat with a ZERO-length worklist (universeSize 0 — e.g. a state whose lower-chamber targets aren't in the
+// data yet) can never seed (seedBeatRun bails 'empty worklist'), so it never gets a thread, stays never-run,
+// and is re-picked at the TOP of the queue forever — trapping a worker in a re-seed loop. Drop empties from the
+// schedulable pools so neither the primary nor a background worker can fixate on one. Logged ONCE so the data
+// gap (which states) stays visible rather than silently swallowed.
+let _loggedEmptyBeats = false;
+function _schedulable(list) {
+  const dropped = [];
+  const keep = (list || []).filter((b) => { let n = 0; try { n = b.universeSize ? b.universeSize() : (b.enumerate() || []).length; } catch { n = 0; } if (n > 0) return true; if (b && b.id) dropped.push(b.id); return false; });
+  if (dropped.length && !_loggedEmptyBeats) { _loggedEmptyBeats = true; console.log(`[autonomic] dropped ${dropped.length} empty-worklist beat(s) from rotation (data gap): ${dropped.join(', ')}`); }
+  return keep;
+}
+function _electedBeats() { try { return _schedulable(require('./lib/beats').electedOfficialsSubBeats()); } catch { return []; } }
+function _topicBeats() { try { return _schedulable(require('./lib/beats').topicBeats()); } catch { return []; } }
 function _autonomicBeats() { return _electedBeats().concat(_topicBeats()); }
 function _coveredCount(focusId) { try { return (JSON.parse(db.getMeta(`focus.${focusId}.covered`) || '[]') || []).length; } catch { return 0; } }
 
