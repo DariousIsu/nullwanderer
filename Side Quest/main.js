@@ -8318,7 +8318,10 @@ async function resolvePlaces(names) {
     const clean = [...new Set((names || []).map(n => String(n == null ? '' : n).trim()).filter(n => n.length >= 2))].slice(0, 40);
     for (const nm of clean) {
       try {
-        const r = await echoSuit.dispatch({ kind: 'do', name: 'search_entities', args: { query: nm, limit: 5 } });
+        // top_k, NOT limit — search_entities rejects `limit` outright ("unexpected keyword argument"),
+        // and the fail-soft `continue` below swallowed it, so EVERY place resolution silently failed
+        // (628 errors in one 30-min run, 0 successes). Found by the route observation log, 2026-07-19.
+        const r = await echoSuit.dispatch({ kind: 'do', name: 'search_entities', args: { query: nm, top_k: 5 } });
         if (!r || !r.ok) continue;
         let j; try { j = JSON.parse(r.text); } catch { continue; }
         const rows = (j && (j.result || j.rows || j.entities)) || (Array.isArray(j) ? j : []);

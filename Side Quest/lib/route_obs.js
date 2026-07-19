@@ -148,12 +148,25 @@ function enabled() {
   try { return db().getMeta(FLAG) === '1'; } catch { return false; }
 }
 
+// AMBIENT focus, rather than plumbed. The first live run recorded 1,097 observations with
+// focus_id null on every one — nothing in the codebase passes opts.focusId to dispatch, and
+// threading it through dozens of call sites would be a large diff for a field only the derivation
+// pass reads. Reading the active focus here gets the same signal for free and cannot drift out of
+// sync with callers. Fail-soft: no focus (or no db) is a legitimate null, meaning UI/ambient work.
+function currentFocusId() {
+  try {
+    const t = require('./focus').getCurrent();
+    return t && t.id != null ? String(t.id) : null;
+  } catch { return null; }
+}
+
 // Fail-soft by design: observation must NEVER break a research call. Any throw here is swallowed —
 // a lost log row is nothing, a broken dispatch is everything.
 function record(tag, res, meta = {}) {
   try {
     if (!enabled()) return null;
-    const row = buildObs(tag, res, { ts: Date.now(), ...meta });
+    const focusId = meta.focusId || currentFocusId();
+    const row = buildObs(tag, res, { ts: Date.now(), ...meta, focusId });
     if (!row) return null;
     db().getDb().prepare(
       `INSERT INTO route_obs (ts, focus_id, tool, arg_shape, result_shape, outcome, latency_ms, autonomous)
@@ -190,5 +203,5 @@ function prune({ keepDays = 30 } = {}) {
 
 module.exports = {
   FLAG, sqlTables, argShape, resultShape, classify, tagTool, tagArgs, buildObs,
-  enabled, record, summary, prune,
+  enabled, record, summary, prune, currentFocusId,
 };
