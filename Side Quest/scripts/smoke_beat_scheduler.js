@@ -66,5 +66,53 @@ ok(s.pickLane({ sliceIndex: 0, topicEvery: 1 }) === 'topic' && s.pickLane({ slic
   ok(order.slice(3, 6).sort().join('') === 'abc', `second cycle repeats all three (got ${order.slice(3, 6).join(',')})`);
 }
 
+// ─── PRIORITY ALLOCATION (Slice S1) ──────────────────────────────────────────────────────────
+// --- stalenessTerm: cadence-normalized age, never-run = max, clamped ---
+ok(s.stalenessTerm({ lastRun: null, now: 5 }) === 1, 'staleness: never-run → 1 (max urgency)');
+ok(s.stalenessTerm({ lastRun: 100, now: 100, cadenceMs: 1000 }) === 0, 'staleness: just-run → 0');
+ok(s.stalenessTerm({ lastRun: 0, now: 500, cadenceMs: 1000 }) === 0.5, 'staleness: half a cadence → 0.5');
+ok(s.stalenessTerm({ lastRun: 0, now: 5000, cadenceMs: 1000 }) === 1, 'staleness: past cadence → clamped to 1');
+
+// --- yieldTerm: unknown neutral, ref → 1, clamped ---
+ok(s.yieldTerm({}) === 0.5, 'yield: unknown → neutral 0.5 (inert until cached)');
+ok(s.yieldTerm({ yieldAvg: s.YIELD_REF_CHARS }) === 1, 'yield: reference chars → 1');
+ok(s.yieldTerm({ yieldAvg: 0 }) === 0, 'yield: zero new chars → 0');
+ok(s.yieldTerm({ yieldAvg: 1e9 }) === 1, 'yield: huge → clamped to 1');
+
+// --- scoreBeat: news outranks staleness outranks yield; in-flight is a strong penalty ---
+const sc = (o) => s.scoreBeat({ now: 5000, ...o });
+ok(sc({ beat: { maintenanceMs: 1000 }, beatState: { lastRun: 5000 } }) < sc({ beat: { maintenanceMs: 1000 }, beatState: {} }), 'score: just-run < never-run (staleness drives)');
+ok(sc({ beat: { maintenanceMs: 1000 }, beatState: {}, newsScore: 1 }) > sc({ beat: { maintenanceMs: 1000 }, beatState: {} }), 'score: a news spike raises priority');
+ok(sc({ beat: { maintenanceMs: 1000 }, beatState: { lastRun: 5000 }, newsScore: 1 }) > sc({ beat: { maintenanceMs: 1000 }, beatState: {} }), 'score: news on a just-run beat outranks a never-run beat (surge)');
+ok(sc({ beat: {}, beatState: {}, inFlight: true }) < 0, 'score: in-flight penalty pushes a held beat below zero');
+
+// --- chooseNextByPriority: parity + signal behavior ---
+const bp = [{ id: 'a', maintenanceMs: 1000 }, { id: 'b', maintenanceMs: 1000 }, { id: 'c', maintenanceMs: 1000 }];
+ok(s.chooseNextByPriority({ beats: bp, state: {}, now: 5000 }) === 'a', 'priority: all never-run → first registry beat (tie → order)');
+ok(s.chooseNextByPriority({ beats: bp, state: { beats: { a: { lastRun: 5000 } } }, now: 5000 }) === 'b', 'priority: a just-run → next never-run (b)');
+ok(s.chooseNextByPriority({ beats: bp, state: { beats: { a: { lastRun: 5000 } } }, now: 5000, signals: (b) => b.id === 'a' ? { newsScore: 1 } : {} }) === 'a', 'priority: news spike on a jumps it back ahead of never-run b');
+ok(s.chooseNextByPriority({ beats: bp, state: {}, now: 5000, signals: (b) => b.id === 'a' ? { inFlight: true } : {} }) === 'b', 'priority: a held by a worker → skip to b');
+ok(s.chooseNextByPriority({ beats: bp, state: { beats: { a: { status: 'done' } } }, now: 5000 }) === 'b', 'priority: done beat excluded');
+ok(s.chooseNextByPriority({ beats: bp, state: { beats: { a: { status: 'done' }, b: { status: 'done' }, c: { status: 'done' } } }, now: 5000 }) === null, 'priority: all done → null');
+ok(s.chooseNextByPriority({ beats: [], state: {}, now: 5000 }) === null, 'priority: no beats → null');
+
+// --- STARVATION-FREE: a maxed-yield just-run beat never starves an ignored one (staleness weight ≥ yield) ---
+ok(s.chooseNextByPriority({ beats: bp, state: { beats: { a: { lastRun: 5000, yieldAvg: 1e9 } } }, now: 5000 }) === 'b', 'starvation-free: ignored never-run b outranks a just-run max-yield a');
+// weights are tunable: zero out staleness and the high-yield just-run beat CAN win (proves weights bite)
+ok(s.chooseNextByPriority({ beats: bp, state: { beats: { a: { lastRun: 5000, yieldAvg: 1e9 } } }, now: 5000, weights: { stale: 0 } }) === 'a', 'weights: stale=0 lets max-yield a win (weights are live-tunable)');
+
+// --- priority rotation end-to-end: each beat runs before any repeats (diversity preserved) ---
+{
+  let state = { beats: {} }, clock = 1000; const order = [];
+  for (let slice = 0; slice < 6; slice++) {
+    const id = s.chooseNextByPriority({ beats: bp, state, now: clock });
+    order.push(id);
+    state.beats[id] = { ...(state.beats[id] || {}), lastRun: clock };
+    clock += 400;   // advance < cadence so staleness differentiates the three
+  }
+  ok(order.slice(0, 3).sort().join('') === 'abc', `priority: first cycle covers all three before repeating (got ${order.slice(0, 3).join(',')})`);
+  ok(order.slice(3, 6).sort().join('') === 'abc', `priority: second cycle repeats all three (got ${order.slice(3, 6).join(',')})`);
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

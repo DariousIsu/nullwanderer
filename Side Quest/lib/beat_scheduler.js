@@ -74,4 +74,67 @@ function pickLane({ sliceIndex = 0, topicEvery = DEFAULT_TOPIC_EVERY, hasTopic =
   return (sliceIndex % every === 0) ? 'topic' : 'elected';
 }
 
-module.exports = { DEFAULT_SLICE_BUDGET, DEFAULT_MAINTENANCE_MS, DEFAULT_TOPIC_EVERY, chooseNext, shouldRotate, allDone, dueForMaintenance, pickLane };
+// ─── PRIORITY ALLOCATION (Slice S1) ───────────────────────────────────────────────────────────
+// The evolution of chooseNext: instead of a blind least-recently-run sort, score each not-done beat
+// from signals we ALREADY compute and pull the highest. Allocation becomes EMERGENT from the scores
+// (grade/staleness/news/yield/fairness) rather than round-robin order — see docs/RESEARCH_ALLOCATION_DESIGN.md.
+// This slice ships the HAVE-IT signals only: staleness (cadence-normalized age), news (decaying spike),
+// yield (recent new-chars/pass — inert until a cache populates it), and an in-flight penalty (don't pile
+// workers on one beat). Grade-gap, user-pin, and object-type fairness are later slices; adding them is a
+// new term, not a rewrite. Deliberately DETERMINISTIC — no LLM in the allocation loop (the survey's
+// road-less-taken: Swarms' HierarchicalSwarm/MultiAgentRouter assign by LLM; we do not).
+//
+// PURE: main.js gathers the per-beat signals (news recency, in-flight set) and passes them in; this
+// module only scores and ranks, so it stays offline-testable.
+
+const DEFAULT_ALLOC_WEIGHTS = { stale: 1.0, news: 1.5, yield: 0.5, inflight: 2.0 };
+const YIELD_REF_CHARS = 4000;   // new-chars/pass that maps to yield≈1 (a very productive pass)
+
+function _clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
+
+// STALENESS — cadence-normalized age since the beat last ran. Each beat is judged against ITS OWN clock
+// (a topic beat's ~3d maintenance vs a roster's ~30d), so "overdue" means overdue for that beat's cadence.
+// Never-run (lastRun == null) ⇒ 1 (max urgency), preserving chooseNext's "never-run sorts first". Clamped
+// to 1, which is what makes the allocator STARVATION-FREE: any ignored beat climbs to 1 and, with the
+// stale weight ≥ the yield weight, eventually outranks any just-run beat regardless of its other signals.
+function stalenessTerm({ lastRun = null, now = 0, cadenceMs = DEFAULT_MAINTENANCE_MS } = {}) {
+  if (lastRun == null) return 1;
+  return _clamp01(Math.max(0, now - lastRun) / Math.max(1, cadenceMs));
+}
+
+// YIELD — recent new-chars/pass, normalized. Productive beats float up; exhausted ones sink. Borrowed
+// from Swarms' AuctionSwarm bid (the SIGNAL, not the per-item LLM bid). Unknown ⇒ neutral 0.5, which is
+// constant across beats so the term is INERT until a rolling cache populates state.beats[id].yieldAvg.
+function yieldTerm({ yieldAvg = null } = {}) {
+  if (yieldAvg == null) return 0.5;
+  return _clamp01(yieldAvg / YIELD_REF_CHARS);
+}
+
+// Score one beat. `beatState` = state.beats[id] ({ lastRun, yieldAvg, ... }); `newsScore`/`inFlight` are
+// the caller-supplied live signals. Higher = pull sooner. cadence comes from the beat's own maintenanceMs.
+function scoreBeat({ beat = {}, beatState = {}, now = 0, newsScore = 0, inFlight = false, weights = {} } = {}) {
+  const w = { ...DEFAULT_ALLOC_WEIGHTS, ...weights };
+  const cadenceMs = beat.maintenanceMs || DEFAULT_MAINTENANCE_MS;
+  const stale = stalenessTerm({ lastRun: beatState.lastRun, now, cadenceMs });
+  const yld = yieldTerm({ yieldAvg: beatState.yieldAvg });
+  const news = _clamp01(newsScore);
+  return w.stale * stale + w.news * news + w.yield * yld - w.inflight * (inFlight ? 1 : 0);
+}
+
+// Priority twin of chooseNext: pick the highest-scoring not-done beat. `signals(beat) → { newsScore,
+// inFlight }` supplies live per-beat signals (default: none). Ties break by registry order, exactly like
+// chooseNext, so ordering stays deterministic. Returns the beat id, or null if every beat is done.
+function chooseNextByPriority({ beats = [], state = {}, now = 0, signals = () => ({}), weights = {} } = {}) {
+  const stOf = (id) => (state.beats && state.beats[id]) || {};
+  const candidates = (beats || []).filter((b) => b && b.id && stOf(b.id).status !== 'done');
+  if (!candidates.length) return null;
+  let bestId = null, bestScore = -Infinity, bestIdx = -1;
+  candidates.forEach((b, i) => {
+    const sig = signals(b) || {};
+    const s = scoreBeat({ beat: b, beatState: stOf(b.id), now, newsScore: sig.newsScore || 0, inFlight: !!sig.inFlight, weights });
+    if (bestId == null || s > bestScore || (s === bestScore && i < bestIdx)) { bestId = b.id; bestScore = s; bestIdx = i; }
+  });
+  return bestId;
+}
+
+module.exports = { DEFAULT_SLICE_BUDGET, DEFAULT_MAINTENANCE_MS, DEFAULT_TOPIC_EVERY, DEFAULT_ALLOC_WEIGHTS, YIELD_REF_CHARS, chooseNext, shouldRotate, allDone, dueForMaintenance, pickLane, stalenessTerm, yieldTerm, scoreBeat, chooseNextByPriority };

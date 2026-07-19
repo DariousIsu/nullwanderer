@@ -7324,6 +7324,33 @@ function _topicBeats() { try { return require('./lib/beats').topicBeats(); } cat
 function _autonomicBeats() { return _electedBeats().concat(_topicBeats()); }
 function _coveredCount(focusId) { try { return (JSON.parse(db.getMeta(`focus.${focusId}.covered`) || '[]') || []).length; } catch { return 0; } }
 
+// ALLOCATION MODE (Slice S1) — `research.alloc` meta selects the beat allocator: 'roundrobin' (the original
+// least-recently-run chooseNext) or 'priority' (the scored priority-queue, docs/RESEARCH_ALLOCATION_DESIGN.md).
+// DEFAULTS TO 'roundrobin' so this slice is a NO-OP until deliberately flipped — enabling the priority queue is
+// an observable step, revertible live with no reboot. Weights are runtime meta too (research.weight.<term>).
+const NEWS_DECAY_MS = 48 * 60 * 60 * 1000;   // a news spike decays over ~48h (matches the news-match window)
+function _allocMode() { try { return (db.getMeta('research.alloc') || 'roundrobin').trim() === 'priority' ? 'priority' : 'roundrobin'; } catch { return 'roundrobin'; } }
+function _allocWeights() {
+  const sched = require('./lib/beat_scheduler');
+  const w = { ...sched.DEFAULT_ALLOC_WEIGHTS };
+  for (const k of Object.keys(w)) { try { const v = parseFloat(db.getMeta(`research.weight.${k}`)); if (!isNaN(v)) w[k] = v; } catch {} }
+  return w;
+}
+// Decaying news score for a beat from its last-flagged stamp (0 = no recent news, →1 = just flagged).
+function _newsScoreFor(bs, now) { const t = bs && bs.newsAt; if (!t) return 0; const age = now - t; if (age < 0 || age >= NEWS_DECAY_MS) return 0; return 1 - age / NEWS_DECAY_MS; }
+// Choose the next beat from a pool under the active allocator. `held` = beat ids currently worked (primary +
+// workers) so the priority path can penalize piling on. Round-robin ignores signals (parity with before).
+function _chooseBeat(pool, state, now, held) {
+  const sched = require('./lib/beat_scheduler');
+  if (_allocMode() !== 'priority') return sched.chooseNext({ beats: pool, state });
+  const heldSet = held instanceof Set ? held : new Set(held || []);
+  const weights = _allocWeights();
+  return sched.chooseNextByPriority({
+    beats: pool, state, now, weights,
+    signals: (b) => ({ newsScore: _newsScoreFor(state.beats[b.id], now), inFlight: heldSet.has(b.id) }),
+  });
+}
+
 // MAINTENANCE SWEEP (Slice 2d) — a completeness beat is never "done forever": rosters change. Two re-verify
 // triggers, applied to beats that have actually run (skip the never-touched states — nothing to maintain yet):
 //   TIME  — a converged beat older than the freshness interval is re-activated for a full grounded re-verify.
@@ -7362,6 +7389,7 @@ function _maintenanceSweep(state, beats) {
         try { flagged = beatsLib.matchNewsToTargets(b.stateCode, headlines); } catch {}
         if (!flagged.length) continue;
         const bs = state.beats[b.id];
+        bs.newsAt = now;   // stamp the news spike so the priority allocator can read a decaying newsScore at choose-time
         if (bs.status === 'done') {
           bs.status = undefined; bs.thread = undefined; bs.doneAt = undefined; bs.sliceStartCovered = undefined;
           console.log(`[autonomic] maintenance(news): ${b.id} — ${flagged.length} county change(s) reported → re-activated`);
@@ -7417,9 +7445,11 @@ async function autonomicSchedulerTick() {
     topicEvery: parseInt(process.env.ZOE_TOPIC_EVERY, 10) || undefined,
     hasTopic: topicPool.length > 0, hasElected: electedPool.length > 0,
   });
+  const now = Date.now();
+  const heldByWorkers = new Set(Object.values(state.workers || {}).map((x) => x && x.beatId).filter(Boolean));   // don't hand the primary a beat a worker already holds (priority mode)
   let pool = lane === 'topic' ? topicPool : electedPool;
-  let nextId = sched.chooseNext({ beats: pool, state });
-  if (!nextId) { pool = lane === 'topic' ? electedPool : topicPool; nextId = sched.chooseNext({ beats: pool, state }); }   // this lane all-done → fall back to the other
+  let nextId = _chooseBeat(pool, state, now, heldByWorkers);
+  if (!nextId) { pool = lane === 'topic' ? electedPool : topicPool; nextId = _chooseBeat(pool, state, now, heldByWorkers); }   // this lane all-done → fall back to the other
   if (!nextId) return;                                                              // everything converged; maintenance re-activates later
   const beat = beats.find((b) => b.id === nextId);
   const bs = state.beats[nextId] || {};
@@ -7455,7 +7485,6 @@ async function autonomicSchedulerTick() {
 // `background` flag route each pass's outcome to the right run-state. Kill switch: ZOE_RESEARCH_WORKERS=1.
 function _fillBackgroundWorkers(state, electedPool, topicPool, primaryBeatId) {
   try {
-    const sched = require('./lib/beat_scheduler');
     const slots = _bgSlots();
     if (!state.workers) state.workers = {};
     const allPool = electedPool.concat(topicPool);
@@ -7471,10 +7500,11 @@ function _fillBackgroundWorkers(state, electedPool, topicPool, primaryBeatId) {
         }
       }
       if (w.beatId) { state.workers[slot] = w; continue; }   // still working its beat → leave it
-      // Pick a NEW beat this slot: distinct from the primary + all other workers.
+      // Pick a NEW beat this slot: distinct from the primary + all other workers. Held beats are masked
+      // 'done' so BOTH allocators skip them; _chooseBeat then applies the active mode (round-robin or priority).
       const held = new Set([primaryBeatId, ...Object.values(state.workers).map((x) => x && x.beatId).filter(Boolean)]);
-      const excluded = { beats: Object.fromEntries(Object.entries(state.beats).map(([id, v]) => [id, held.has(id) ? { ...v, status: 'done' } : v])) };
-      const pickId = sched.chooseNext({ beats: allPool, state: excluded });
+      const excluded = { beats: Object.fromEntries(Object.entries(state.beats).map(([id, v]) => [id, held.has(id) ? { ...v, status: 'done' } : v])), workers: state.workers };
+      const pickId = _chooseBeat(allPool, excluded, Date.now(), held);
       if (!pickId || held.has(pickId)) { state.workers[slot] = {}; continue; }
       const beat = allPool.find((b) => b.id === pickId);
       const bs = state.beats[pickId] || {};
