@@ -5259,9 +5259,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         try { db.markOpenThreadStatus(f.id, 'resolved', { reason: 'user wrap-up' }); } catch {}
         try { focusLib.clear('user-wrapup'); } catch {}
       })();
-      composedUserMessage += `\n\n[${userName} told you to WRAP UP the research. You're finalizing it now — assembling the complete ${cov.length}-organization dossier onto his Canvas (tab "${tabTitle}"). Tell him briefly that you're wrapping it up and the full dossier is going to the Canvas. Give ONLY the count headline (${cov.length} organizations); do NOT recite the list, and do NOT say you're "starting" or "continuing" — you are CONCLUDING it.]`;
+      // COVERAGE-HONEST WRAP-UP. This line used to read "the complete ${cov.length}-organization
+      // dossier" — but cov.length is what we HELD, not the size of the universe, so wrapping up a
+      // 9-of-64 run announced "the complete 9-organization dossier". Say X of N, and only call it
+      // complete when it actually is.
+      const _cvg = _coverageLine(f.id, cov.length);
+      composedUserMessage += _cvg.total && !_cvg.complete
+        ? `\n\n[${userName} told you to WRAP UP the research. You are finalizing what you HAVE — assembling ${_cvg.have} of ${_cvg.total} onto his Canvas (tab "${tabTitle}"). This is PARTIAL: ${_cvg.total - _cvg.have} of the ${_cvg.total} are still missing. Tell him briefly you're wrapping up what you have, say the ${_cvg.have}-of-${_cvg.total} count plainly, and name that the rest are outstanding. Do NOT call it complete and do NOT recite the list.]`
+        : `\n\n[${userName} told you to WRAP UP the research. You're finalizing it now — assembling the ${_cvg.text} dossier onto his Canvas (tab "${tabTitle}"). Tell him briefly that you're wrapping it up and the dossier is going to the Canvas. Give ONLY the count headline (${_cvg.text}); do NOT recite the list, and do NOT say you're "starting" or "continuing" — you are CONCLUDING it.]`;
       directedStopHandled = true;   // reuse the gate: this turn is fully handled, skip the blocks below
-      console.log(`[focus] directed task #${f.id} WRAP-UP → condense + canvas (${cov.length} orgs)`);
+      console.log(`[focus] directed task #${f.id} WRAP-UP → condense + canvas (${_cvg.text})`);
     }
   } catch (e) { console.error('[main] wrap-up check failed:', e.message); }
 
@@ -7531,6 +7538,14 @@ async function seedBeatRun(beat, { background = false, targetsOverride = null } 
     }
     try { db.setMeta(`focus.${fid}.scope`, 'bounded'); } catch {}
     try { db.setMeta(`focus.${fid}.intended_targets`, JSON.stringify(targets)); } catch {}
+    // EXPECTED COUNT — the coverage DENOMINATOR, persisted so every ack/prompt can say "X of N"
+    // without re-deriving it. universeSize() was already being computed here for scheduling and then
+    // thrown away, which is why the chat side had no idea Louisiana has 64 parishes and reported the
+    // 9 it happened to hold as if that were the whole set.
+    try {
+      const universe = (beat && typeof beat.universeSize === 'function') ? beat.universeSize() : targets.length;
+      if (universe > 0) db.setMeta(`focus.${fid}.universe`, String(universe));
+    } catch {}
     try { db.setMeta(`focus.${fid}.kind`, beat.kind || 'entity'); } catch {}
     try { db.setMeta(`focus.${fid}.beat`, beat.id); } catch {}          // tag the run so coverage rolls up to the beat
     if (beat.depth) { try { db.setMeta(`focus.${fid}.depth`, beat.depth); } catch {} }   // per-item depth mode (e.g. 'dossier')
@@ -7590,6 +7605,43 @@ function _electedBeats() { try { return _schedulable(require('./lib/beats').elec
 function _topicBeats() { try { return _schedulable(require('./lib/beats').topicBeats()); } catch { return []; } }
 function _autonomicBeats() { return _electedBeats().concat(_topicBeats()); }
 function _coveredCount(focusId) { try { return (JSON.parse(db.getMeta(`focus.${focusId}.covered`) || '[]') || []).length; } catch { return 0; } }
+
+// EXPECTED COUNT (the coverage DENOMINATOR) for a focus, or 0 when the universe genuinely isn't known.
+// Live failure this exists to fix: asked to finish the Louisiana parish research she answered "the
+// complete 9-organization dossier" — 9 was what we HELD, the universe is 64. Without a denominator
+// every ack reports our partial set as if it were the whole answer.
+// Fallback chain, most-authoritative first. Returns 0 rather than guessing — an honest "unknown" is
+// required, because a WRONG denominator is worse than none (it would make a complete run look partial).
+function _expectedCount(focusId) {
+  if (!focusId) return 0;
+  try {
+    const u = parseInt(db.getMeta(`focus.${focusId}.universe`) || '0', 10);
+    if (u > 0) return u;
+  } catch {}
+  try {   // bounded chat runs persist their target list even when no beat is attached
+    const t = JSON.parse(db.getMeta(`focus.${focusId}.intended_targets`) || '[]');
+    if (Array.isArray(t) && t.length) return t.length;
+  } catch {}
+  try {   // beat-seeded focus that predates the .universe meta above
+    const beatId = (db.getMeta(`focus.${focusId}.beat`) || '').trim();
+    if (beatId) {
+      const b = _autonomicBeats().find((x) => x && x.id === beatId);
+      if (b && typeof b.universeSize === 'function') { const n = b.universeSize(); if (n > 0) return n; }
+    }
+  } catch {}
+  return 0;
+}
+
+// Render "X of N" honestly, degrading to a bare count when the universe is unknown. Centralised so
+// every ack phrases coverage the same way and none of them can imply completeness we haven't earned.
+function _coverageLine(focusId, covered) {
+  const have = covered == null ? _coveredCount(focusId) : covered;
+  const total = _expectedCount(focusId);
+  if (!total) return { have, total: 0, text: `${have} so far`, complete: false };
+  const complete = have >= total;
+  return { have, total, complete,
+    text: complete ? `all ${total}` : `${have} of ${total} (${total - have} still missing)` };
+}
 
 // ALLOCATION MODE (Slice S1) — `research.alloc` meta selects the beat allocator: 'roundrobin' (the original
 // least-recently-run chooseNext) or 'priority' (the scored priority-queue, docs/RESEARCH_ALLOCATION_DESIGN.md).
