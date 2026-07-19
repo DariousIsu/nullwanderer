@@ -127,6 +127,59 @@ ok(hObs.arg_hash === ro.buildObs({ kind: 'do', name: 'get_entity', args: { name:
   { text: '{"rows":[]}' }, { ts: 999, salt: S }).arg_hash,
   'buildObs: same question at a different time / different RESULT → same hash (repeat detectable)');
 
+// ── LINKAGE: which prior call FED this one (the causal chain P1 derives routes from) ────────────
+// extractInputs — the identifying VALUES a call was given
+ok(ro.extractInputs({ entity_id: 500 }).has('500'), 'extractInputs: numeric id → token');
+ok(ro.extractInputs({ name: 'Orange County' }).has('orange county'), 'extractInputs: string → lowercased');
+ok(!ro.extractInputs({ sql: 'SELECT 1' }).has('select 1'), 'extractInputs: SQL skipped (noisy literals)');
+ok(ro.extractInputs({ x: 1 }).size === 0, 'extractInputs: sub-3-char token ignored (coincidence guard)');
+ok(ro.extractInputs(null).size === 0, 'extractInputs: null → empty');
+
+// extractOutputs — the identifying values a result CARRIED
+ok(ro.extractOutputs({ text: '{"rows":[{"id":500,"name":"Orange County"}]}' }).has('500'), 'extractOutputs: row id');
+ok(ro.extractOutputs({ text: '{"rows":[{"id":500,"name":"Orange County"}]}' }).has('orange county'), 'extractOutputs: row name');
+ok(ro.extractOutputs({ text: '{"neighbors":[{"name":"Board of Commissioners"}]}' }).has('board of commissioners'), 'extractOutputs: neighbors');
+ok(ro.extractOutputs({ text: '{"result":{"id":74210,"name":"X Board"}}' }).has('74210'), 'extractOutputs: single result object');
+ok(ro.extractOutputs({ text: '{"result":{"id":7}}' }).size === 0, 'extractOutputs: sub-3-char id ignored (top_k:7-style coincidence guard)');
+ok(ro.extractOutputs({ text: '{"rows":[]}' }).size === 0, 'extractOutputs: empty result → no tokens');
+{
+  const many = { rows: Array.from({ length: 200 }, (_, i) => ({ id: 1000 + i })) };
+  ok(ro.extractOutputs({ text: JSON.stringify(many) }).size <= 48, 'extractOutputs: capped (a big payload cannot blow up)');
+}
+
+// linkParent — the actual causal-chain detection
+{
+  // search_entities returned id 500 + name "Orange County"; a later kg_neighborhood on 500 links back
+  const buf = [
+    { obsId: 10, outs: ro.extractOutputs({ text: '{"rows":[{"id":500,"name":"Orange County"}]}' }) },
+    { obsId: 11, outs: ro.extractOutputs({ text: '{"rows":[{"id":999,"name":"Somewhere Else"}]}' }) },
+  ];
+  ok(ro.linkParent(ro.extractInputs({ entity_id: 500 }), buf) === 10, 'linkParent: id input → the result that produced it');
+  ok(ro.linkParent(ro.extractInputs({ name: 'Orange County' }), buf) === 10, 'linkParent: name input → its source row');
+  ok(ro.linkParent(ro.extractInputs({ entity_id: 12345 }), buf) === null, 'linkParent: no matching output → null (fresh input)');
+  // containment: a query "orange county" feeds a result named "Orange County [wd:Q…]"
+  const buf2 = [{ obsId: 20, outs: ro.extractOutputs({ text: '{"rows":[{"name":"Orange County [wd:Q485258]"}]}' }) }];
+  ok(ro.linkParent(ro.extractInputs({ query: 'Orange County' }), buf2) === 20, 'linkParent: containment match on tagged name');
+  // MOST RECENT match wins when two results carried the same token
+  const buf3 = [
+    { obsId: 30, outs: new Set(['500']) },
+    { obsId: 31, outs: new Set(['500']) },
+  ];
+  ok(ro.linkParent(new Set(['500']), buf3) === 31, 'linkParent: most-recent producer wins');
+  ok(ro.linkParent(new Set(), buf3) === null, 'linkParent: no inputs → null');
+  ok(ro.linkParent(new Set(['500']), []) === null, 'linkParent: empty buffer → null');
+}
+
+// buffer discipline: bounded, and result tokens never escape it
+{
+  ro._resetBuf();
+  for (let i = 0; i < 40; i++) ro._pushBuf('focusA', { obsId: i, seq: i, outs: new Set([String(1000 + i)]) });
+  ok(ro._bufFor('focusA').length <= 24, 'buffer: depth-capped per focus');
+  ok(ro._bufFor('focusA')[ro._bufFor('focusA').length - 1].obsId === 39, 'buffer: keeps the most recent');
+  ro._resetBuf();
+  ok(ro._bufFor('focusA').length === 0, 'buffer: reset clears it');
+}
+
 // ── error surfacing: the fix for the ROOT cause (a diagnostic that existed but nobody printed) ──
 {
   const seen = [];

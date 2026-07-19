@@ -181,9 +181,110 @@ function buildObs(tag, res, { ts, latencyMs = null, focusId = null, autonomous =
   };
 }
 
+// ── LINKAGE: which prior call FED this one ───────────────────────────────────────────────────────
+//
+// A route is not "which questions repeat" (arg_hash answers that) — it is the ORDERED CHAIN where
+// one call's OUTPUT becomes the next call's INPUT (search_entities → take an id → kg_neighborhood
+// on that id). The log could not see that linkage, so P1 could only derive co-occurrence, not
+// causal chaining. This closes that gap.
+//
+// The signal is detectable at record time WITHOUT storing any value: extract the identifying tokens
+// from a call's args (its inputs) and from recent results (their outputs), and if an input matches a
+// recent output, THAT result's row is this call's parent. We persist only the parent row id and a
+// per-focus sequence number — never a token. The token Sets live in a bounded in-memory buffer and
+// are never written anywhere.
+
+const _MIN_TOK = 3;          // shorter tokens ("the", ids < 100) link by coincidence — ignore them
+const _MAX_OUT_TOK = 48;     // cap tokens pulled from one result so a 150-row payload can't blow up
+
+// INPUT tokens = the identifying scalar VALUES a call was given. Numbers → their string form; strings
+// → lowercased. SQL is skipped (its literals are noisy and already reduced to table names elsewhere).
+function extractInputs(args) {
+  const out = new Set();
+  if (!args || typeof args !== 'object') return out;
+  for (const [k, v] of Object.entries(args)) {
+    if (/^sql$/i.test(k)) continue;
+    if (typeof v === 'number' && Number.isFinite(v)) { const s = String(v); if (s.length >= _MIN_TOK) out.add(s); }
+    else if (typeof v === 'string') { const s = v.trim().toLowerCase(); if (s.length >= _MIN_TOK) out.add(s); }
+  }
+  return out;
+}
+
+// OUTPUT tokens = the identifying values a result CARRIED: row ids and names, from the common Echo
+// payload shapes. Bounded. These are what a later call's inputs get matched against.
+function extractOutputs(res) {
+  const out = new Set();
+  const text = res && typeof res.text === 'string' ? res.text : '';
+  if (!text) return out;
+  let j = null; try { j = JSON.parse(text); } catch { return out; }
+  const rows = !j ? [] : (Array.isArray(j) ? j
+    : j.rows || j.results || j.neighbors || j.entities || j.items || j.matches
+    || (j.result ? [j.result] : []));
+  if (!Array.isArray(rows)) return out;
+  for (const r of rows) {
+    if (out.size >= _MAX_OUT_TOK) break;
+    if (r == null) continue;
+    if (typeof r === 'object') {
+      for (const key of ['id', 'entity_id', 'name', 'title', 'label']) {
+        const v = r[key];
+        if (v == null) continue;
+        const s = String(v).trim().toLowerCase();
+        if (s.length >= _MIN_TOK) out.add(s);
+      }
+    } else {
+      const s = String(r).trim().toLowerCase();
+      if (s.length >= _MIN_TOK) out.add(s);
+    }
+  }
+  return out;
+}
+
+// Does an INPUT token trace to an OUTPUT token? Exact for ids; for names, allow containment either
+// way (a query "orange county" feeds a result named "orange county [wd:Q…]", and vice versa) but
+// only on tokens long enough that the overlap is not coincidence.
+function _tokenLinks(inp, outs) {
+  if (outs.has(inp)) return true;
+  if (inp.length < 4) return false;                    // ids already matched exactly above
+  for (const o of outs) {
+    if (o.length < 4) continue;
+    if (o.includes(inp) || inp.includes(o)) return true;
+  }
+  return false;
+}
+
+// Given this call's inputs and a buffer of recent { obsId, outs } (most-recent LAST), return the id
+// of the most recent buffered call whose outputs fed these inputs, or null. Pure.
+function linkParent(inputs, buffer) {
+  if (!inputs || !inputs.size || !Array.isArray(buffer)) return null;
+  for (let i = buffer.length - 1; i >= 0; i--) {
+    const b = buffer[i];
+    if (!b || !b.outs || !b.outs.size) continue;
+    for (const inp of inputs) if (_tokenLinks(inp, b.outs)) return b.obsId;
+  }
+  return null;
+}
+
 // ── impure edge ────────────────────────────────────────────────────────────────────────────────
 let _db = null;
 function db() { if (!_db) _db = require('./db'); return _db; }
+
+// Per-focus ring of recent { obsId, seq, outs } — the ONLY place result tokens live, in memory,
+// bounded, never persisted. Two caps: BUF_DEPTH recent calls per focus, FOCUS_CAP live focuses.
+const _focusBuf = new Map();
+const _BUF_DEPTH = 24;
+const _FOCUS_CAP = 12;
+function _pushBuf(focusId, entry) {
+  const key = focusId || '_none';
+  let arr = _focusBuf.get(key);
+  if (!arr) {
+    if (_focusBuf.size >= _FOCUS_CAP) { const first = _focusBuf.keys().next().value; _focusBuf.delete(first); }
+    arr = []; _focusBuf.set(key, arr);
+  }
+  arr.push(entry);
+  while (arr.length > _BUF_DEPTH) arr.shift();
+}
+function _bufFor(focusId) { return _focusBuf.get(focusId || '_none') || []; }
+function _resetBuf() { _focusBuf.clear(); }
 
 function enabled() {
   try { return db().getMeta(FLAG) === '1'; } catch { return false; }
@@ -235,10 +336,25 @@ function record(tag, res, meta = {}) {
     const focusId = meta.focusId || currentFocusId();
     const row = buildObs(tag, res, { ts: Date.now(), ...meta, focusId });
     if (!row) return null;
-    db().getDb().prepare(
-      `INSERT INTO route_obs (ts, focus_id, tool, arg_shape, arg_hash, result_shape, outcome, latency_ms, autonomous)
-       VALUES (?,?,?,?,?,?,?,?,?)`
-    ).run(row.ts, row.focus_id, row.tool, row.arg_shape, row.arg_hash, row.result_shape, row.outcome, row.latency_ms, row.autonomous);
+
+    // LINKAGE — sequence within the focus, and the id of the prior call whose RESULT fed this call's
+    // ARGS. Computed here from in-memory buffers; only the two integers are persisted, never a token.
+    const args = tagArgs(tag);
+    const buf = _bufFor(focusId);
+    const seq = buf.length ? (buf[buf.length - 1].seq + 1) : 0;
+    const parentId = linkParent(extractInputs(args), buf);
+    row.seq = seq;
+    row.parent_id = parentId;
+
+    const info = db().getDb().prepare(
+      `INSERT INTO route_obs (ts, focus_id, tool, arg_shape, arg_hash, result_shape, outcome, latency_ms, autonomous, seq, parent_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+    ).run(row.ts, row.focus_id, row.tool, row.arg_shape, row.arg_hash, row.result_shape, row.outcome, row.latency_ms, row.autonomous, seq, parentId);
+
+    // buffer THIS call's outputs so later calls in the focus can link to it. Result tokens live only
+    // here, in memory, bounded — they are never written to the DB.
+    _pushBuf(focusId, { obsId: Number(info.lastInsertRowid) || null, seq, outs: extractOutputs(res) });
+
     surfaceError(row, res);
     return row;
   } catch { return null; }
@@ -272,5 +388,5 @@ function prune({ keepDays = 30 } = {}) {
 module.exports = {
   FLAG, sqlTables, argShape, resultShape, classify, tagTool, tagArgs, buildObs,
   enabled, record, summary, prune, currentFocusId, surfaceError, _loggedErrors,
-  canonicalize, argHash,
+  canonicalize, argHash, extractInputs, extractOutputs, linkParent, _resetBuf, _pushBuf, _bufFor,
 };

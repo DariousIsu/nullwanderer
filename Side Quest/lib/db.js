@@ -490,6 +490,14 @@ const MIGRATIONS = [
   // (a holder of this DB holds the salt too); see lib/route_obs.js argHash for the honest limits.
   `ALTER TABLE route_obs ADD COLUMN arg_hash TEXT`,
   `CREATE INDEX IF NOT EXISTS idx_route_obs_hash ON route_obs(tool, arg_hash)`,
+  // LINKAGE (route derivation, P0.5): seq = ordinal within a focus; parent_id = the id of the prior
+  // observation whose RESULT fed this call's ARGS. Together they turn the log from a bag of calls
+  // into the ORDERED, CHAINED traces P1 derives routes from. Computed in memory from result tokens
+  // that are never themselves persisted — only these two integers are. See lib/route_obs.js.
+  `ALTER TABLE route_obs ADD COLUMN seq INTEGER`,
+  `ALTER TABLE route_obs ADD COLUMN parent_id INTEGER`,
+  `CREATE INDEX IF NOT EXISTS idx_route_obs_parent ON route_obs(parent_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_route_obs_focus_seq ON route_obs(focus_id, seq)`,
 
   // INTEREST MODEL (autonomy roadmap, Slice 1) — Zoe's self-directed agenda. A persistent,
   // weighted set of intellectual pursuits the idle loop SAMPLES from, instead of echoing the last
