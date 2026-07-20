@@ -8353,19 +8353,32 @@ function _closeSwarmParts(parts, { abandon = false, reason = 'swarm-release' } =
   return closed;
 }
 
+// A partition that hasn't been touched in this long is STALLED, not working. Release on it rather than
+// letting one cold thread hold the swarm — and everything the swarm suppresses — open forever. (2026-07-20:
+// `county-changes-la`'s single partition went cold and the swarm stayed "out" for 27h, because release
+// required every thread to leave pending/active and a stalled thread never does.) The thread itself is left
+// ALIVE — it's real open work that the normal rotation will pick up again; only the swarm bookkeeping ends.
+const SWARM_STALE_MS = 6 * 60 * 60 * 1000;
 function _maintainSwarm(state) {
   try {
     if (!state.swarm || !state.swarm.parts) return 0;
     const swarmLib = require('./lib/swarm');
+    const now = Date.now();
     for (const p of Object.values(state.swarm.parts)) {
       if (!p || p.done) continue;
       let t = null; try { t = db.getOpenThread(p.thread); } catch {}
-      if (!t || !['pending', 'active'].includes(t.status)) p.done = true;   // resolved/gone → this partition converged
+      if (!t || !['pending', 'active'].includes(t.status)) { p.done = true; continue; }   // resolved/gone → this partition converged
+      const touched = t.last_touched_ts || t.created_ts || 0;
+      if (touched && (now - touched) > SWARM_STALE_MS) {
+        p.done = true; p.stalled = true;
+        console.warn(`[swarm] partition thread ${p.thread} stalled ${Math.round((now - touched) / 3600000)}h — expiring it so the swarm can release (thread left open for the normal rotation)`);
+      }
     }
     if (swarmLib.shouldReleaseRoster({ parts: state.swarm.parts })) {
       const b = state.swarm.beatId, n = Object.keys(state.swarm.parts).length;
+      const stalled = Object.values(state.swarm.parts).filter((p) => p && p.stalled).length;
       _closeSwarmParts(state.swarm.parts, { abandon: false });   // threads already resolved on convergence; just clear the surfacing tags
-      console.log(`[swarm] RELEASE ${b} — all ${n} partition(s) converged → workers back to normal rotation`);
+      console.log(`[swarm] RELEASE ${b} — ${n} partition(s)${stalled ? `, ${stalled} expired as stalled` : ' converged'} → workers back to normal rotation`);
       delete state.swarm;
       return 0;
     }
