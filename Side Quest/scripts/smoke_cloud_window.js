@@ -101,8 +101,12 @@ const ctxOf = (n) => ({ modelContext: async () => n });
     // Comments quote the old value deliberately, so check CODE lines only.
     const code = src.split(/\r?\n/).filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
     ok(!/num_ctx: 8192/.test(code), 'REGRESSION: NO cloud path in cloud_logic still hardcodes 8192');
-    ok((src.match(/require\('\.\/cloud_window'\)\.resolve\(/g) || []).length === 2,
+    // _complete + streamCloud + the exported resolveWindow (which callers use to BUDGET a package
+    // against the same window the call will get). At least the first two must be there.
+    ok((src.match(/require\('\.\/cloud_window'\)\.resolve\(/g) || []).length >= 2,
       'both cloud paths resolve the window — _complete carries the grounded answer draft');
+    ok(/async function resolveWindow/.test(src),
+      'callers can ask what window the NEXT call gets, instead of guessing and mis-budgeting');
     ok(/num_ctx: win\.num_ctx/.test(src), 'the resolved window reaches the request');
     ok(/num_predict = null/.test(src), 'num_predict defaults to unset so the window sizes it');
     const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');

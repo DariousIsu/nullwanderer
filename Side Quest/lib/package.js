@@ -43,6 +43,20 @@ const WEIGHTS = { manifest: 0.08, tools: 0.14, memory: 0.18, grounding: 0.40 };
 const UNTRIMMABLE = new Set(['identity', 'request', 'plan']);
 const ORDER = ['identity', 'request', 'plan', 'manifest', 'tools', 'memory', 'grounding'];
 
+// FLOORS — a section that exists is never cut below something USABLE.
+//
+// Live failure the first time this ran: an oversized untrimmable `identity` consumed the entire
+// budget, every weighted section got a budget of 0, and _trim returned just its own trim-marker —
+// `manifest:37↓ tools:37↓`. The cloud was handed 37 characters where the tool menu should have been
+// and answered with no tools at all. Nothing errored.
+//
+// The manifest and the tool menu are the CHEAPEST and highest-leverage bytes in the package (a
+// manifest is tens of tokens and is the only way the cloud can ask for anything), so they are the
+// last things that should ever be squeezed. Below its floor a section is dropped ENTIRELY rather
+// than delivered as a stub: a truncated tool menu invites calls to tools that aren't listed, which
+// is worse than none.
+const FLOORS = { manifest: 400, tools: 1200, memory: 300, grounding: 300 };
+
 /** Usable INPUT chars: the window, less the reply budget, less a safety margin. */
 function inputBudgetChars({ num_ctx = 8192, num_predict = 2048, margin = 0.9 } = {}) {
   return Math.max(2000, Math.floor((num_ctx - num_predict) * CHARS_PER_TOKEN * margin));
@@ -120,18 +134,32 @@ function build({ sections = {}, window: win = {}, budgetChars = null } = {}) {
     .reduce((sum, n) => sum + String(sections[n] || '').length, 0);
   const forWeighted = Math.max(0, total - fixed);
 
-  const report = { sections: [], total: 0, budget: total, fit: 0, trimmedAny: false };
+  const report = { sections: [], total: 0, budget: total, fit: 0, trimmedAny: false, droppedAny: false };
   const parts = [];
 
   for (const name of ORDER) {
     const raw = String(sections[name] || '').trim();
     if (!raw) continue;
     let budget = Infinity;
-    if (!UNTRIMMABLE.has(name)) budget = Math.floor(forWeighted * (WEIGHTS[name] || 0));
-    const text = budget === Infinity ? raw : _trim(raw, budget);
+    if (!UNTRIMMABLE.has(name)) {
+      // The weighted share, but never below the section's floor — an oversized untrimmable section
+      // must not be able to silently delete the tool menu (see FLOORS).
+      budget = Math.max(Math.floor(forWeighted * (WEIGHTS[name] || 0)), FLOORS[name] || 0);
+      // If even the floor can't be honoured by the raw content, keep whatever is there; if the
+      // content is LONGER than the floor but the floor is all we can give, that's the trim.
+    }
+    let text = budget === Infinity ? raw : _trim(raw, budget);
+    // A stub is worse than an absence: a truncated tool menu invites calls to tools it no longer
+    // lists. Below the floor, drop the section and SAY SO in the report.
+    let dropped = false;
+    if (budget !== Infinity && text.length < (FLOORS[name] || 0) && raw.length >= (FLOORS[name] || 0)) {
+      text = ''; dropped = true;
+    }
     const trimmed = text.length < raw.length;
     if (trimmed) report.trimmedAny = true;
-    report.sections.push({ name, chars: text.length, raw: raw.length, budget: budget === Infinity ? null : budget, trimmed });
+    if (dropped) report.droppedAny = true;
+    report.sections.push({ name, chars: text.length, raw: raw.length, budget: budget === Infinity ? null : budget, trimmed, dropped });
+    if (!text) continue;
     report.total += text.length;
     parts.push(text);
   }
@@ -143,7 +171,7 @@ function build({ sections = {}, window: win = {}, budgetChars = null } = {}) {
 /** One-line summary for the log — so package size is observable per turn, not inferred. */
 function describe(report) {
   if (!report) return '(no report)';
-  const secs = report.sections.map((s) => `${s.name}:${s.chars}${s.trimmed ? '↓' : ''}`).join(' ');
+  const secs = report.sections.map((s) => `${s.name}:${s.dropped ? 'DROPPED' : s.chars + (s.trimmed ? '↓' : '')}`).join(' ');
   return `${report.total}/${report.budget}c (fit ${Math.round(report.fit * 100)}%) — ${secs}`;
 }
 

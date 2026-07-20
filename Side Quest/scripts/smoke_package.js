@@ -44,12 +44,43 @@ const rep = (r, name) => r.report.sections.find((s) => s.name === name);
   for (const n of ['identity', 'request', 'plan']) ok(!rep(r, n).trimmed, `${n} is never trimmed`);
 }
 
-// ── an untrimmable section that is ITSELF huge must not silently starve the rest ─────────────────
+// ── ⭐ an oversized UNTRIMMABLE section must not silently delete the tool menu ────────────────────
+// The live first run: identity 30,635c against a 22,118c budget → every weighted budget went to 0 →
+// _trim returned only its own marker → "manifest:37↓ tools:37↓". The cloud got 37 characters where
+// the tool menu belonged and answered with no tools. Nothing errored.
 {
-  const r = P.build({ budgetChars: 3000, sections: { identity: 'i'.repeat(9000), grounding: 'g'.repeat(9000) } });
-  ok(rep(r, 'identity').chars === 9000, 'a huge identity is still delivered whole');
-  ok(rep(r, 'grounding').chars === 0 || rep(r, 'grounding').trimmed, 'the weighted sections absorb the overrun');
+  const r = P.build({
+    budgetChars: 22118,
+    sections: {
+      identity: 'i'.repeat(30635),
+      manifest: 'm'.repeat(900), tools: 't'.repeat(5000), grounding: 'g'.repeat(9000),
+    },
+  });
+  ok(rep(r, 'identity').chars === 30635, 'a huge identity is still delivered whole');
+  ok(rep(r, 'manifest').chars >= 400, 'REGRESSION: the manifest survives at its floor, never a 37-char stub');
+  ok(rep(r, 'tools').chars >= 1200, 'REGRESSION: the tool menu survives at its floor');
   ok(r.report.fit > 1, 'REPORTED as over budget rather than hidden — the operator can see it');
+}
+
+// ── a stub is worse than an absence ──────────────────────────────────────────────────────────────
+// A truncated tool menu invites calls to tools it no longer lists. Below the floor: drop and say so.
+{
+  const r = P.build({ budgetChars: 100, sections: { identity: 'i'.repeat(100000), tools: 't'.repeat(5000) } });
+  const t = rep(r, 'tools');
+  ok(t.chars >= 1200 || t.dropped === true, 'tools is either usable or explicitly DROPPED — never a stub');
+  if (t.dropped) {
+    ok(!r.messages[0].content.includes('t'.repeat(50)), 'a dropped section is genuinely absent from the package');
+    ok(r.report.droppedAny === true, 'the drop is flagged in the report');
+    ok(/DROPPED/.test(P.describe(r.report)), 'and named in the one-line log');
+  }
+  ok(t.raw === 5000, 'the original size is still reported so the loss is quantifiable');
+}
+
+// ── content SHORTER than its floor is untouched (the floor is a floor, not a pad) ─────────────────
+{
+  const r = P.build({ budgetChars: 50000, sections: { identity: 'i', manifest: 'short manifest' } });
+  ok(rep(r, 'manifest').chars === 14 && !rep(r, 'manifest').trimmed, 'a small manifest passes through as-is');
+  ok(!rep(r, 'manifest').dropped, 'and is NOT dropped for being under the floor');
 }
 
 // ── ⭐ THE MANIFEST CARRIES COUNTS AND KEYS, NEVER ROWS ──────────────────────────────────────────
@@ -122,8 +153,14 @@ const rep = (r, name) => r.report.sections.find((s) => s.name === name);
   ok(/pkg\.buildPlan\(\{/.test(src), 'the plan/roadmap is built');
   ok(/sections: \{ identity: messages\.map/.test(src),
     "today's tuned prompt rides the UNTRIMMABLE slot — the packager can only ADD, never silently drop it");
-  ok(/window: await require\('\.\/lib\/cloud_window'\)\.resolve/.test(src),
-    'the package is budgeted against the REAL model window, not a guess');
+  // Budgeting against a DIFFERENT window than the call gets is silently catastrophic — it was, live.
+  ok(/resolveWindow\(db\.getMeta\('model\.replier'\) \|\| null\)/.test(src),
+    'the package is budgeted via cloud_logic.resolveWindow — the same model the call will use');
+  ok(!/window: await require\('\.\/lib\/cloud_window'\)\.resolve\(\{ model: db\.getMeta/.test(src),
+    'REGRESSION: no longer budgets on a possibly-null model.replier (that returned the 8192 floor)');
+  const cl = fs.readFileSync(path.join(__dirname, '..', 'lib', 'cloud_logic.js'), 'utf8');
+  ok(/async function resolveWindow/.test(cl) && /streamCloud, resolveWindow/.test(cl),
+    'resolveWindow is exported and shares streamCloud\'s model resolution');
   ok(/\[package\] \$\{pkg\.describe/.test(src), 'package size is logged per turn — observable, not inferred');
   ok(/cloudMessages = built\.messages/.test(src), 'the built package is what actually gets sent');
 }

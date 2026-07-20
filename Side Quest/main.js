@@ -6549,8 +6549,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // `messages` (persona + mood + memory + grounding, already assembled and tuned) rides in the
         // UNTRIMMABLE identity slot, so today's content is delivered byte-for-byte and this can only
         // ADD. Decomposing buildChatPrompt into real per-section budgets is the follow-on.
+        // Budget against the window the call will ACTUALLY get. Resolving on `model.replier` alone
+        // was wrong: that meta is unset, a null model returns the 8192 floor, and the package was
+        // cut to 22,118 chars while the real call ran at 131,072 — the manifest and tool menu were
+        // trimmed to their own trim-markers and the cloud answered with no tools.
+        const _win = await require('./lib/cloud_logic').resolveWindow(db.getMeta('model.replier') || null);
         const built = pkg.build({
-          window: await require('./lib/cloud_window').resolve({ model: db.getMeta('model.replier') || null }),
+          window: _win || {},
           sections: { identity: messages.map((m) => m.content).join('\n\n'), plan, manifest, tools: suit || '' },
         });
         cloudMessages = built.messages;

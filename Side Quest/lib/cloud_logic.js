@@ -132,6 +132,29 @@ async function streamCloud(messages, { temperature = 0.6, num_predict = null, mo
   }
 }
 
+/**
+ * The window the NEXT cloud call will actually get — same model/base/token resolution streamCloud
+ * uses, so a caller budgeting a package sizes it against reality.
+ *
+ * Exists because guessing here is silently catastrophic: main.js budgeted the package with
+ * `resolve({model: db.getMeta('model.replier')})`, that meta is unset, a null model returns the 8192
+ * FLOOR — and the package was cut to 22,118 chars while the real call ran at 131,072. The oversized
+ * untrimmable section then ate the whole budget and the manifest and tool menu were trimmed to their
+ * own trim-markers. Nothing errored; the cloud just answered with no tools.
+ *
+ * Returns null when no cloud tier is configured — the caller keeps its own default.
+ */
+async function resolveWindow(modelOverride = null) {
+  try {
+    const models = require('./models');
+    const cloud = (models.sources() || []).find((s) => s.tier === 'cloud' && s.token);
+    if (!cloud) return null;
+    const model = modelOverride || await _resolveModel(models, cloud);
+    if (!model) return null;
+    return await require('./cloud_window').resolve({ model, base: cloud.base, token: cloud.token });
+  } catch (e) { console.error('[cloud_logic] window resolve failed:', e.message); return null; }
+}
+
 // ---- packaging helpers ----
 function _hash(obj) { return crypto.createHash('sha1').update(JSON.stringify(obj)).digest('hex'); }
 
@@ -267,7 +290,7 @@ function budgetStatus(now = Date.now(), cap = dailyCap()) {
 }
 
 module.exports = {
-  ask, budgetStatus, _complete, streamCloud,
+  ask, budgetStatus, _complete, streamCloud, resolveWindow,
   // exported for the offline smoke
   _hash, _packInput, _buildMessages, _runValidate, _budgetState,
   DEFAULT_DAILY_CAP, DEFAULT_MAX_INPUT_CHARS
