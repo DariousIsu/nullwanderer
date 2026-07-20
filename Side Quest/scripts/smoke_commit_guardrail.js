@@ -112,5 +112,39 @@ expect("is uncomfortable with ambiguity in instructions", false);
   ok3('something that fits no pattern at all', 'stance', 'unknown shape defaults to the gentler question');
 }
 
+// ── OUTCOME RECORDING: the loop asked "(a) it is done ... (d) no longer needed" and discarded the ──
+// answer — surfacing called confirmCommitment (REFRESHING it), silence rewrote the same status. So
+// nothing ever left 'held' (1,249 held, none retired). Retiring wrongly is worse than carrying a stale
+// one, so ambiguity and every hedge must stay held.
+{
+  const { classifyOutcome } = require('../lib/continuity');
+  const ok4 = (say, kind, want, msg) => {
+    const got = classifyOutcome(say, kind);
+    if (got === want) { pass++; console.log(`  ✓ [${String(want).padEnd(7)}] ${msg}`); }
+    else { fail++; console.error(`  ✗ FAIL: expected ${want}, got ${got} — ${msg}`); }
+  };
+
+  console.log('\nTERMINAL outcomes (retire the commitment):');
+  ok4("That's done — I sent the parish contact sheet over this morning.", 'task', 'done', 'plain completion');
+  ok4("I finished the Louisiana roster and filed it.", 'task', 'done', 'finished + what came of it');
+  ok4("It's complete.", 'task', 'done', 'terse completion');
+  ok4("That's no longer relevant — the session ended, so the bill tracker is moot now.", 'task', 'dropped', 'overtaken by events');
+  ok4("I'm dropping that one; it isn't worth pursuing.", 'task', 'dropped', 'explicitly abandoned');
+  ok4("I no longer feel anything about the Burnham read.", 'stance', 'faded', 'a stance can fade');
+
+  console.log('\nMust STAY HELD (the dangerous direction — a dropped promise is unrecoverable):');
+  ok4("I'm almost done with the parish sheet.", 'task', null, 'CRITICAL: "almost done" is NOT done');
+  ok4("Nearly finished — one more parish to go.", 'task', null, 'CRITICAL: "nearly finished" is NOT done');
+  ok4("I still need to finish the roster.", 'task', null, 'CRITICAL: "still need to finish" is unfinished');
+  ok4("I haven't quite completed it yet.", 'task', null, 'CRITICAL: negated completion stays held');
+  ok4("It's in progress and going well.", 'task', null, 'in-progress stays held');
+  ok4("I'll have that wrapped up soon.", 'task', null, 'CRITICAL: a future promise is not a completion');
+  ok4("I've been thinking about the parish work again.", 'task', null, 'mere reflection changes nothing');
+  ok4('', 'task', null, 'empty say → no change, never throws');
+  ok4(null, 'task', null, 'null say → no change');
+  ok4("I no longer feel strongly about finishing it.", 'task', null,
+    'CRITICAL: a TASK cannot "fade" — feelings about work do not retire the work');
+}
+
 console.log(`\n${fail === 0 ? 'COMMIT GUARDRAIL OK' : 'SOME FAILURES'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

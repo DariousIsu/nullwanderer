@@ -64,6 +64,32 @@ async function tick() {
 const STANCE_CLAIM = /\b(?:believ\w*|think\w*|prefer\w*|want\w*|wish\w*|like[sd]?|enjoy\w*|love[sd]?|hate[sd]?|dislike\w*|feel\w*|favou?rite|valu\w*|trust\w*|doubt\w*|admir\w*|curious|hopes?|drawn to|interested in|convinced|cares? about|is uncomfortable)\b/i;
 const TASK_CLAIM = /\b(?:is|will|has|aims? to|commits? to|plans? to|ready to|going to)\b[^.]*\b(?:research\w*|focus\w*|compil\w*|gather\w*|pull\w*|collect\w*|assembl\w*|deliver\w*|complet\w*|finish\w*|map\w*|synthesi[sz]\w*|analy[sz]\w*|examin\w*|identif\w*|provid\w*|put together|work\w*|updat\w*|track\w*|build\w*|writ\w*|draft\w*|includ\w*|mov\w*|pivot\w*|wrap\w*)\b/i;
 
+// WHAT DID SHE ACTUALLY SAY ABOUT IT? The loop asks "(a) it is done ... (d) it no longer needs doing"
+// and then threw the answer away: surfacing called confirmCommitment (REFRESHING it), silence re-wrote
+// the same status back. So nothing could ever leave 'held' and the table grew without bound — 1,249
+// held commitments, none retired, including work finished long ago that she kept being asked to
+// re-examine. Record the outcome instead.
+//
+// CONSERVATIVE BY CONSTRUCTION. Retiring a live commitment wrongly is worse than carrying a stale one:
+// a stale commitment is noise, a wrongly-retired one is a dropped promise she will never be reminded
+// of again. Anything ambiguous stays held, and hedges ("almost done", "nearly finished", "still need
+// to") are explicitly NOT terminal — they are the most common way of describing unfinished work.
+const HEDGE_RE = /\b(?:almost|nearly|about to|close to|still (?:need|have|working|going)|not (?:quite|yet)|haven'?t (?:quite|finished)|soon|shortly|in progress|halfway|partway|getting there)\b/i;
+const DONE_RE = /\b(?:that'?s (?:done|finished|complete)|(?:i(?:'ve| have)?\s+)?(?:finished|completed|delivered|wrapped (?:it )?up|sent it|handed (?:it )?(?:over|off))|it(?:'s| is) (?:done|finished|complete|delivered)|已|all done)\b/i;
+const DROPPED_RE = /\b(?:no longer (?:need|relevant|worth|matters|applies)|not worth (?:doing|pursuing|finishing)|doesn'?t need (?:doing|to happen)|overtaken by|moot now|abandoned|dropping (?:it|that)|scrapped|superseded)\b/i;
+const FADED_RE = /\b(?:no longer (?:feel|hold|believe)|don'?t (?:really )?feel anything|stopped (?:caring|believing)|that view has (?:faded|gone))\b/i;
+
+// Returns 'done' | 'dropped' | 'faded' | null. null means "leave it held" and is the default.
+function classifyOutcome(sayText, kind) {
+  const s = String(sayText || '');
+  if (!s.trim()) return null;
+  if (HEDGE_RE.test(s)) return null;            // hedged progress is not completion
+  if (FADED_RE.test(s)) return kind === 'task' ? null : 'faded';   // a task cannot "fade" — it is done or not
+  if (DROPPED_RE.test(s)) return 'dropped';
+  if (DONE_RE.test(s)) return 'done';
+  return null;
+}
+
 function commitmentKind(claim) {
   const c = String(claim || '');
   if (STANCE_CLAIM.test(c)) return 'stance';
@@ -248,8 +274,20 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
       const saidRow = db.insertTurn({
         sessionId, speaker: 'ai_said', content: trimmedSay, model: MODEL, truncated, unprompted: 1
       });
-      // Refresh confirmation timestamp — she engaged with this commitment
-      db.confirmCommitment(commitment.id, saidRow.id);
+      // RECORD THE OUTCOME she just gave, rather than blindly refreshing. confirmCommitment alone was
+      // why nothing ever left 'held': engaging with a commitment renewed it even when what she said was
+      // "that's finished". Only a clear, unhedged terminal statement retires it; everything else still
+      // just confirms, so an ambiguous answer keeps the commitment alive.
+      const outcome = classifyOutcome(trimmedSay, isTask ? 'task' : 'stance');
+      if (outcome) {
+        db.markCommitmentStatus(commitment.id, outcome, {
+          reason: `continuity check: she reported it ${outcome}`,
+          triggeredByTurnId: saidRow.id,
+        });
+        console.log(`[continuity] #${commitment.id} → ${outcome}: "${String(commitment.claim).slice(0, 60)}"`);
+      } else {
+        db.confirmCommitment(commitment.id, saidRow.id);
+      }
       db.setMeta('last_ai_utterance_at', String(Date.now()));
       try {
         win.webContents.send('chat:complete', continuityDisclaimed
@@ -281,5 +319,6 @@ module.exports = {
   resume,
   markUserActivity,
   maybeFireContinuityCheck,
-  commitmentKind
+  commitmentKind,
+  classifyOutcome
 };

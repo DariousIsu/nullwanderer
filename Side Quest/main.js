@@ -7680,6 +7680,23 @@ async function seedBeatRun(beat, { background = false, targetsOverride = null } 
     } catch {}
     try { db.setMeta(`focus.${fid}.kind`, beat.kind || 'entity'); } catch {}
     try { db.setMeta(`focus.${fid}.beat`, beat.id); } catch {}          // tag the run so coverage rolls up to the beat
+    // CARRY FORWARD WHAT THE BEAT HAS ALREADY COVERED. A beat re-seeds whenever its previous thread is
+    // gone or in a status the scheduler can't resume, and a fresh run started with an EMPTY covered set —
+    // so it re-researched targets the beat had already finished. Measured: Louisiana parishes had been
+    // worked up to four times each across five threads (tangipahoa x4, east baton rouge x4, caddo x4).
+    // ff337eb made the ACCOUNTING see that work; this stops us paying for it twice.
+    // Only ever seeds coverage for the SAME beat, and only when this thread has none of its own — an
+    // adopted or resumed thread keeps exactly what it had.
+    try {
+      const own = JSON.parse(db.getMeta(`focus.${fid}.covered`) || '[]') || [];
+      if (!own.length) {
+        const prior = db.coveredForBeat(beat.id);
+        if (prior.length) {
+          db.setMeta(`focus.${fid}.covered`, JSON.stringify(prior.slice(-300)));
+          console.log(`[beat] ${beat.id}: carried forward ${prior.length} already-covered target(s) into focus #${fid} — not re-researching them`);
+        }
+      }
+    } catch (e) { console.error('[beat] carry-forward failed:', e.message); }
     if (beat.depth) { try { db.setMeta(`focus.${fid}.depth`, beat.depth); } catch {} }   // per-item depth mode (e.g. 'dossier')
     // A beat that declares its own facet plan (the elected-officials DOSSIER: members+contacts, meetings,
     // minutes, bios, charter, history, committees) installs it directly — skip the per-beat cloud plan call
