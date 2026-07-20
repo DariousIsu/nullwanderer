@@ -420,6 +420,22 @@ const MIGRATIONS = [
   // self-repetition no longer buys influence (the mechanism that entrenched the obsession).
   `ALTER TABLE self_model ADD COLUMN epistemic TEXT DEFAULT 'speculated'`,
 
+  // DOCUMENT ORIGIN + CONTENT IDENTITY (docs/ENCOUNTER_OBJECT_MODEL_DESIGN.md blockers #1 and #2).
+  // `source` records the LANE a document arrived on (browser_download / news / research); it has never
+  // recorded WHERE the content came from, so origin-independence was uncomputable and every ingested
+  // fact was permanently ungradeable — origin cannot be reconstructed after the fact.
+  //   origin       the canonical source URL, normalised. NULL is honest and expected for SYNTHESISED
+  //                documents (a research dossier is derived from many pages, not fetched from one).
+  //   origin_host  the independence key — same host means same origin, so a claim repeated across five
+  //                pages of one site counts once.
+  //   content_hash text identity. The corpus measured 11.6% byte-identical duplicates, already
+  //                inflating corroboration counts; this collapses them.
+  `ALTER TABLE documents ADD COLUMN origin TEXT`,
+  `ALTER TABLE documents ADD COLUMN origin_host TEXT`,
+  `ALTER TABLE documents ADD COLUMN content_hash TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_documents_origin_host ON documents(origin_host)`,
+  `CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash)`,
+
   // MEETING TRANSCRIPT (M1): durable, timestamped record of every caption line, so a meeting
   // chunk can purge from her active context yet remain a queryable, time-anchored transcript.
   // At meeting end this is the "fully processed transcript" artifact; turns are a view over it
@@ -1346,13 +1362,23 @@ function insertKnowledge({ kind = 'note', content, embedding = null, source = nu
 // Whole new material lands here durably the moment it arrives; the nightly pass promotes it to Echo
 // long-term. parentId/version carry the iteration model (an update = a new iteration of the original).
 
-function insertDocument({ title = null, body, source = null, ref = null, understanding = null, parentId = null, version = 1 }) {
+function insertDocument({ title = null, body, source = null, ref = null, understanding = null, parentId = null, version = 1, origin = null }) {
   if (!body || !String(body).trim()) return null;
   const ts = Date.now();
+  // ORIGIN + CONTENT IDENTITY. The hash is computed HERE, never accepted from a caller — it is a fact
+  // about the bytes and must not be forgeable or forgettable at a call site. `origin` is normalised so
+  // two links to the same page with different campaign tags collapse to one origin rather than two.
+  let _origin = null, _host = null, _hash = null;
+  try {
+    const og = require('./origin');
+    _origin = origin ? og.normalizeUrl(origin) : null;
+    _host = _origin ? og.hostOf(_origin) : null;
+    _hash = og.contentHash(body);
+  } catch (e) { console.error('[db] origin capture failed:', e.message); }
   const info = getDb()
-    .prepare(`INSERT INTO documents (title, body, source, ref, understanding, parent_id, version, promoted, created_ts, updated_ts)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`)
-    .run(title, String(body), source, ref, understanding, parentId, version, ts, ts);
+    .prepare(`INSERT INTO documents (title, body, source, ref, understanding, parent_id, version, promoted, created_ts, updated_ts, origin, origin_host, content_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`)
+    .run(title, String(body), source, ref, understanding, parentId, version, ts, ts, _origin, _host, _hash);
   _kgTap('doc.land', title || ref || ('#' + info.lastInsertRowid));
   return { id: info.lastInsertRowid, ts };
 }

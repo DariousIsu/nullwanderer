@@ -908,7 +908,13 @@ async function promoteStory(story, { dispatch, landDoc, extract, now = Date.now(
   // promptly), not here — buildStoryDoc below simply INCLUDES it when present so the extraction learns from
   // the article. (A story reaches promotion hours after forming, so it's normally already been read.)
   if (typeof landDoc === 'function') {
-    try { await landDoc({ title: `News — ${story.title}`.slice(0, 120), body: buildStoryDoc(story), source: 'news', ref: `news:story:${story.id}`, understanding: story.summary || '' }); res.doc = true; }
+    // ORIGIN: the representative article URL — where this story can be verified. NOTE it is one
+    // outlet of several: a story is a CLUSTER, and the authoritative independence signal for it is
+    // the story's own outlet/report corroboration (buildStoryDoc header + news_brief), not this
+    // single link. Recorded so the document can be traced, not so it can be counted.
+    let _origin = null;
+    try { _origin = representativeArticleUrl(story.id); } catch { _origin = null; }
+    try { await landDoc({ title: `News — ${story.title}`.slice(0, 120), body: buildStoryDoc(story), source: 'news', ref: `news:story:${story.id}`, understanding: story.summary || '', origin: _origin }); res.doc = true; }
     catch (e) { log && log('[news-daily] doc land failed: ' + (e && e.message)); }
   }
   if (!story.event_ref) {

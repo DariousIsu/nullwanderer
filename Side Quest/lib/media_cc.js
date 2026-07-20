@@ -415,7 +415,7 @@ async function synthesizeWatch(d, ctx) {
     require('./doc_store').land({
       title: `Video — ${topic || hostOf(u) || 'watched'}`.slice(0, 120),
       body: `# Watched: ${topic || u}\n\n**Source:** ${u}\n\n## Recap\n${recap}${captionsTail ? `\n\n## Captions (tail)\n${captionsTail}` : ''}`,
-      source: 'media_watch', ref: `media:${id}`, understanding: recap,
+      source: 'media_watch', ref: `media:${id}`, understanding: recap, origin: u,
     });
   } catch (e) { console.error('[media_cc] doc land failed:', e.message); }
   return recap;

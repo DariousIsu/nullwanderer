@@ -2337,8 +2337,57 @@ async function importEditorDoc(filePath) {
 // web.js on purpose: whatever puts a file there, it gets ingested. Debounced + size-stable (a
 // download is still being written when the first fs event fires) + deduped (land is idempotent on ref).
 let _dlWatcherArmed = false;
+// DOWNLOAD ORIGIN MAP — path → the URL it was downloaded FROM.
+//
+// The ingest watcher polls the downloads FOLDER, so by the time a file is ingested the URL that
+// produced it is gone. browser_download is the single largest lane (2,514 documents) and every one of
+// them had an unrecoverable origin, which is half of blocker #2 in
+// docs/ENCOUNTER_OBJECT_MODEL_DESIGN.md. Electron surfaces the URL at download time; this captures it
+// there and hands it to the watcher when the file lands.
+//
+// Bounded and non-persistent on purpose: it only has to survive the seconds between a download
+// finishing and the watcher debouncing it. A restart loses nothing that isn't already lost.
+const _dlOrigins = new Map();   // absolute path → source URL
+const _DL_ORIGIN_MAX = 500;
+function _rememberDownloadOrigin(fp, url) {
+  if (!fp || !url) return;
+  try {
+    _dlOrigins.set(String(fp), String(url));
+    while (_dlOrigins.size > _DL_ORIGIN_MAX) _dlOrigins.delete(_dlOrigins.keys().next().value);
+  } catch {}
+}
+function _takeDownloadOrigin(fp) {
+  const k = String(fp || '');
+  const v = _dlOrigins.get(k) || null;
+  if (v) _dlOrigins.delete(k);
+  return v;
+}
+let _dlOriginHookArmed = false;
+function armDownloadOriginHook() {
+  if (_dlOriginHookArmed) return; _dlOriginHookArmed = true;
+  // Every session that can download: the default one and her own browsing partition.
+  const targets = [];
+  try { targets.push(session.defaultSession); } catch {}
+  try { targets.push(session.fromPartition('persist:zoe-google')); } catch {}
+  for (const sess of targets) {
+    if (!sess || typeof sess.on !== 'function') continue;
+    try {
+      sess.on('will-download', (_e, item) => {
+        try {
+          const url = item.getURL();
+          item.once('done', (__e, state) => {
+            try { if (state === 'completed') _rememberDownloadOrigin(item.getSavePath(), url); } catch {}
+          });
+        } catch {}
+      });
+    } catch (e) { console.error('[dl-origin] hook failed:', e.message); }
+  }
+  console.log(`[dl-origin] armed on ${targets.length} session(s) — download URLs now captured for ingest`);
+}
+
 function startDownloadsIngestWatcher() {
   if (_dlWatcherArmed) return; _dlWatcherArmed = true;
+  try { armDownloadOriginHook(); } catch (e) { console.error('[dl-origin] arm failed:', e.message); }
   const fsm = require('fs'); const pathm = require('path');
   const dir = webLib.DOWNLOADS_DIR;
   const INGEST_EXT = new Set(['pdf', 'docx', 'txt', 'md', 'markdown', 'xlsx', 'xlsm', 'csv', 'tsv']);
@@ -2396,7 +2445,11 @@ function startDownloadsIngestWatcher() {
           return;
         }
       } catch { /* frame-check fail-soft: fall through to the existing soft quarantine */ }
-      const landed = require('./lib/doc_store').land({ title, body: text, source: 'browser_download', ref: 'download:' + fp });
+      // ORIGIN: the URL this file was downloaded FROM, captured at download time by the
+      // will-download hook (the watcher only sees a path). NULL when the file arrived some other
+      // way — dropped into the folder by hand, or downloaded before the hook was armed.
+      const _dlOrigin = _takeDownloadOrigin(fp);
+      const landed = require('./lib/doc_store').land({ title, body: text, source: 'browser_download', ref: 'download:' + fp, origin: _dlOrigin });
       if (landed && landed.landed) {
         if (!_verdict.relevant || !_leashPasses) {
           const _reason = !_verdict.relevant ? _verdict.reason : 'off-domain (no leash-token overlap)';
@@ -3357,8 +3410,19 @@ ipcMain.handle('calendar:delete-event', async (_e, { calendarId, eventId } = {})
 // tenant_rainey.canvas_blocks SQLite table is ONLY written by TENANT processes — Saga's MAIN engine
 // (what we run) keeps canvas state in-memory, so db_query would never see live blocks. We read the
 // snapshot over HTTP (same engine canvasEmit writes to → consistent) and map via canvas_view. No model.
+// WHY the last snapshot failed — quiet degrade must not mean UNDIAGNOSABLE. The 2026-07-15 hardening
+// (b85e9c7) silenced the per-tick log, which also silenced the cause: the canvas has been showing a bare
+// "canvas snapshot unavailable" with nothing anywhere saying whether it's a 401, a timeout, or an
+// unreachable socket. Record the reason, log it at most once a minute, and hand it to the renderer.
+let _canvasSnapReason = null, _canvasSnapLoggedAt = 0;
+function _canvasSnapFail(reason) {
+  _canvasSnapReason = reason;
+  const now = Date.now();
+  if (now - _canvasSnapLoggedAt > 60000) { _canvasSnapLoggedAt = now; console.error(`[canvas] snapshot unavailable: ${reason}`); }
+  return null;
+}
 async function canvasSnapshot() {
-  if (!echoHttp || !echoHttp.base) return null;
+  if (!echoHttp || !echoHttp.base) return _canvasSnapFail('engine HTTP base not configured');
   const headers = { Accept: 'application/json' };
   if (echoHttp.token) headers.Authorization = `Bearer ${echoHttp.token}`;
   // Degrade QUIETLY instead of throwing: the renderer's 5s canvas poll (canvas.js:877) would otherwise log a
@@ -3366,17 +3430,44 @@ async function canvasSnapshot() {
   // a brief non-2xx). Timeout so a hung socket can't wedge the poll; return null on any not-ok/unreachable so
   // callers surface "Waiting for the engine…" and retry on the next poll. (2026-07-15: the recurring "canvas
   // fetch error" — endpoint verified healthy; the noise was throw-on-any-non-ok + no timeout + no backoff.)
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 4000);
-  try {
-    const res = await fetch(`${echoHttp.base}/canvas`, { headers, signal: ctrl.signal });
-    if (!res || !res.ok) return null;
-    return await res.json();
-  } catch (e) {
-    return null;
-  } finally {
-    clearTimeout(timer);
+  // TWO STACKS, because one of them resets. Node's global fetch (undici) gets ECONNRESET on this GET from
+  // inside the app — reproducibly in-app, never reproducible from an external Node process at the same
+  // cadence with the same headers/abort shape, and the MCP client POSTs to the SAME origin through the SAME
+  // global fetch without trouble. Whatever pooled-socket state causes it lives in the app's undici pool, so
+  // on a SOCKET-level failure we re-issue once through Electron's own (Chromium) stack, which has an
+  // independent connection pool. Idempotent GET → a retry is always safe. The winning stack is recorded so
+  // the failure stays visible instead of being papered over.
+  const SOCKET_ERRS = new Set(['ECONNRESET', 'EPIPE', 'ECONNABORTED', 'UND_ERR_SOCKET']);
+  const get = async (fetchImpl) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 4000);
+    try {
+      const res = await fetchImpl(`${echoHttp.base}/canvas`, { headers, signal: ctrl.signal });
+      if (!res) return { err: `no response from ${echoHttp.base}/canvas` };
+      if (!res.ok) return { err: `HTTP ${res.status}${res.status === 401 ? ' — engine rejected the admin token' : ''}` };
+      return { snap: await res.json() };
+    } catch (e) {
+      const code = (e.cause && e.cause.code) || e.code || '';
+      if (e.name === 'AbortError') return { err: 'timed out after 4s' };
+      return { err: `${e.name}: ${e.message}${code ? ` (${code})` : ''}`, code };
+    } finally { clearTimeout(timer); }
+  };
+
+  let r = await get(fetch);
+  if (r.snap) { _canvasSnapReason = null; return r.snap; }
+  if (SOCKET_ERRS.has(r.code)) {
+    let netFetch = null; try { netFetch = require('electron').net.fetch; } catch (e) {}
+    if (netFetch) {
+      const r2 = await get(netFetch);
+      if (r2.snap) {
+        if (_canvasSnapReason !== `node fetch ${r.code} → served via Electron net`) console.warn(`[canvas] node fetch ${r.code} on /canvas — served via Electron net instead`);
+        _canvasSnapReason = null;
+        return r2.snap;
+      }
+      return _canvasSnapFail(`${r.err}; Electron net also failed: ${r2.err}`);
+    }
   }
+  return _canvasSnapFail(r.err);
 }
 
 ipcMain.handle('canvas:list-tabs', async (_e, opts = {}) => {
@@ -3411,7 +3502,7 @@ ipcMain.handle('canvas:get-all', async () => {
   try {
     if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
     const snap = await canvasSnapshot();
-    if (!snap) return { ok: false, error: 'canvas snapshot unavailable' };
+    if (!snap) return { ok: false, error: `canvas snapshot unavailable — ${_canvasSnapReason || 'reason unknown'}` };
     const tabs = (Array.isArray(snap.tabs) ? snap.tabs : []).map(canvasView.normalizeTab);
     let state = {}; try { state = canvasLayoutStore.getPositions(); } catch {}
     const placed = canvasLayout.autoPlace(tabs.map(t => t.key), state);
@@ -3538,9 +3629,17 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
 // reasoner); Dans NEVER writes a block. Tab key is deterministic per focus so re-opens are idempotent
 // and the tab re-attaches after a restart. Fully fail-safe: a canvas error never breaks the research
 // loop (the deliverable FILES remain the durable artifact; the canvas is the live render).
-// SWARM QUIETING (research-allocation S5): while a swarm is OUT, only the swarm's own threads surface to the
-// canvas/chat — the operator asked to focus on the swarm, so the background rotation keeps RESEARCHING (its
-// work still lands in the graph) but stops SURFACING, instead of flooding the view with unrelated states.
+// SWARM QUIETING (research-allocation S5): while a swarm is OUT, only the swarm's own threads ANNOUNCE
+// themselves in CHAT — the operator asked to focus on the swarm, so the background rotation keeps
+// RESEARCHING (its work still lands in the graph) but stops INTERRUPTING.
+//
+// CHAT ONLY — never the canvas (Lucas 2026-07-20). This gate used to sit in front of canvasEmit /
+// canvasUpsertBlock too, and that was a category error: chat is an interruption the operator can be spared,
+// but the canvas is the WORKSPACE he goes looking at. Muting it doesn't quiet anything — it silently throws
+// her finished work away, including the boot rehydrate, so the canvas comes back blank and stays blank for
+// as long as the swarm is out. A stuck `county-commissions-la` partition kept the canvas empty for 27 hours
+// exactly this way; the only document that survived was one the operator dropped by hand (drop-doc never
+// consulted this gate). Quiet the announcements, never the workspace.
 function _surfaceAllowed(focusId) {
   try {
     const sw = JSON.parse(db.getMeta('sched.autonomic') || '{}').swarm;
@@ -3553,7 +3652,6 @@ const _canvasTabsOpened = new Set();
 async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
   try {
     if (!blockType) return false;
-    if (focusId != null && !_surfaceAllowed(focusId)) return false;   // quiet non-swarm breadth while a swarm is out
     if (!(await ensureEngine())) return false;
     const ce = require('./studio/canvas_emit');
     const callTool = pollCallTool();
@@ -3573,7 +3671,6 @@ async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
 const _canvasBlocks = new Set();
 async function canvasUpsertBlock({ focusId, blockId, title, tabMode = 'DOC', blockType = 'paragraph', data }) {
   try {
-    if (focusId != null && !_surfaceAllowed(focusId)) return false;   // quiet non-swarm breadth while a swarm is out
     if (!blockId || !(await ensureEngine())) return false;
     const ce = require('./studio/canvas_emit');
     const callTool = pollCallTool();
