@@ -108,10 +108,44 @@ const rep = (r, name) => r.report.sections.find((s) => s.name === name);
   ok(/Cite the source/.test(p), 'mustCite adds the citation command');
   ok(/which fab process/.test(p), 'known gaps are handed over rather than rediscovered');
   ok(/Answer the question that was asked/.test(p), 'answering the actual question is a hard command');
+  // ⭐ ACTION honesty is separate from FACT honesty and failed on its own. Live: "I've added the
+  // 28,721 leadership contacts to your canvas" — no canvas write ever happened, no contacts-query
+  // ran all day. A wrong fact can be corrected; a described-but-untaken action is unverifiable.
+  ok(/DO the thing — do not narrate it/.test(p), 'commands the tag be EMITTED, not described');
+  ok(/Emitting the tag IS the action/.test(p), 'names the distinction explicitly');
+  ok(/NEVER say you did something unless you emitted its tag this turn/.test(p),
+    'forbids claiming completed work that never happened');
+  ok(/I've added|I've put it on your canvas/.test(p), 'quotes the exact false phrasings that occurred');
+  ok(/say what you would need/.test(p), 'an honest "I can\'t" is offered as the alternative');
+}
+
+// ── the manifest also lists what she can PRODUCE ────────────────────────────────────────────────
+// A capability with no key is a capability that gets narrated: she knew a canvas existed but had no
+// way to reach it, so she described the outcome instead.
+{
+  const m = P.buildManifest(
+    [{ key: 'doc_contacts', label: 'rows', count: 100, how: 'db_query' }],
+    { actions: [{ key: 'canvas sheet', label: 'a real tab', how: '<echo-do name="saga_canvas_open_tab">…' }] },
+  );
+  ok(/WHAT YOU CAN PRODUCE/.test(m), 'actions are listed separately from stores');
+  ok(/emit the tag and it happens/.test(m), 'and framed as real, not aspirational');
+  ok(/canvas sheet/.test(m) && /saga_canvas_open_tab/.test(m), 'the action carries its actual tag');
+  ok(/WHAT YOU CAN REACH/.test(m), 'stores still listed alongside');
+  const noActs = P.buildManifest([{ key: 'x', count: 1 }]);
+  ok(!/WHAT YOU CAN PRODUCE/.test(noActs), 'no actions → no empty section');
+  const onlyActs = P.buildManifest([], { actions: [{ key: 'canvas sheet', how: 'tag' }] });
+  ok(/WHAT YOU CAN PRODUCE/.test(onlyActs) && !/WHAT YOU CAN REACH/.test(onlyActs),
+    'actions alone still render');
+}
+
+// ── plan defaults + the DB-before-web ordering ──────────────────────────────────────────────────
+{
+  const p = P.buildPlan({ intent: 'factual', depth: { maxHops: 3 }, mustCite: true });
   ok(/database first/i.test(p), 'our own DB is ordered before the open web — the token-spend lever');
   const bare = P.buildPlan({});
   ok(/up to 3 tool call/.test(bare), 'a sane default depth with no args');
   ok(!/Cite the source/.test(bare), 'citation command only when asked for');
+  ok(/DO the thing — do not narrate it/.test(bare), 'action honesty is unconditional, not opt-in');
 }
 
 // ── the report makes BOTH failure modes visible ──────────────────────────────────────────────────
@@ -149,7 +183,10 @@ const rep = (r, name) => r.report.sections.find((s) => s.name === name);
   const fs = require('fs'), path = require('path');
   const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   ok(/const pkg = require\('\.\/lib\/package'\)/.test(src), 'main.js builds the package for the cloud turn');
-  ok(/pkg\.buildManifest\(inv\)/.test(src), 'the manifest is built from the live DB inventory');
+  ok(/pkg\.buildManifest\(inv, \{ actions:/.test(src),
+    'the manifest is built from the live DB inventory AND the real action keys');
+  ok(/saga_canvas_open_tab/.test(src) && /echo-delegate/.test(src),
+    'canvas and delegation carry their actual tags — a capability with no key gets narrated instead');
   ok(/pkg\.buildPlan\(\{/.test(src), 'the plan/roadmap is built');
   ok(/sections: \{ identity: messages\.map/.test(src),
     "today's tuned prompt rides the UNTRIMMABLE slot — the packager can only ADD, never silently drop it");

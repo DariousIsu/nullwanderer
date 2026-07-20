@@ -80,18 +80,31 @@ function _trim(text, max) {
  * some" is actionable, and omitting it means the cloud can never ask. A store with count 0 is
  * omitted — offering an empty shelf invites a wasted hop.
  */
-function buildManifest(stores = []) {
+function buildManifest(stores = [], { actions = [] } = {}) {
   const rows = (stores || [])
     .filter((s) => s && s.key && s.count !== 0)
     .map((s) => {
       const n = Number.isFinite(s.count) ? s.count.toLocaleString() : 'some';
       return `• ${s.key} — ${n}${s.label ? ' ' + s.label : ''}${s.how ? ` → ${s.how}` : ''}`;
     });
-  if (!rows.length) return '';
-  return 'WHAT YOU CAN REACH THIS TURN (counts, not contents — pull what you actually need):\n'
-    + rows.join('\n')
-    + '\nThese live in OUR database. Reaching for them costs one call and is always cheaper, fresher '
-    + 'and more citable than reasoning from memory or searching the open web.';
+  const acts = (actions || [])
+    .filter((a) => a && a.key)
+    .map((a) => `• ${a.key}${a.label ? ' — ' + a.label : ''}${a.how ? ` → ${a.how}` : ''}`);
+  if (!rows.length && !acts.length) return '';
+  const parts = [];
+  if (rows.length) {
+    parts.push('WHAT YOU CAN REACH THIS TURN (counts, not contents — pull what you actually need):\n'
+      + rows.join('\n')
+      + '\nThese live in OUR database. Reaching for them costs one call and is always cheaper, fresher '
+      + 'and more citable than reasoning from memory or searching the open web.');
+  }
+  // What she can PRODUCE. Listed separately because a store answers a question while an action
+  // changes the world, and the honesty rules differ: an unread store costs nothing, an unperformed
+  // action that gets DESCRIBED as done is a false claim.
+  if (acts.length) {
+    parts.push('WHAT YOU CAN PRODUCE (these are real — emit the tag and it happens):\n' + acts.join('\n'));
+  }
+  return parts.join('\n\n');
 }
 
 /**
@@ -115,6 +128,19 @@ function buildPlan({ intent = null, depth = {}, mustCite = false, unresolved = [
     + 'neither, either go get it or say you don\'t have it.');
   lines.push('• "I don\'t have that" and "I didn\'t look" are DIFFERENT sentences. Never say you '
     + 'checked, searched, or looked something up unless you actually called a tool this turn.');
+  // ⭐ ACTION honesty is a SEPARATE rule from fact honesty, and it failed on its own. Live
+  // 2026-07-20: asked for a sheet of parish contacts, she answered "I've added the 28,721 leadership
+  // contacts to your canvas" and later "I've added those to a new sheet" — no canvas write ever
+  // happened, no [contacts-query] ran all day. A fact you get wrong can be corrected; an ACTION you
+  // describe but never took is invisible, because there is nothing to check.
+  lines.push('• DO the thing — do not narrate it. To put something on the canvas, run a query, open '
+    + 'a page or produce a document, EMIT THE TAG. The result comes back to you and you report it '
+    + 'THEN. Emitting the tag IS the action; describing it is not.');
+  lines.push('• NEVER say you did something unless you emitted its tag this turn AND saw the result. '
+    + 'No "I\'ve added…", "I\'ve put it on your canvas", "I\'ve started compiling" for work that has '
+    + 'not actually happened. If you are about to do it, say what you are doing — not that it is done.');
+  lines.push('• If you cannot do something, say so and say what you would need. That is always '
+    + 'better than a claim that cannot be checked.');
   if (mustCite) lines.push('• Cite the source for factual claims — the recipe, document, or URL it came from.');
   lines.push('• Answer the question that was asked. If you also need to raise something else, answer first.');
   return lines.join('\n');

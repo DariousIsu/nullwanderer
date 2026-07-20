@@ -180,13 +180,17 @@ async function logAction(text, { source = 'action' } = {}) {
  * so an unrelated question injects nothing. Pass a precomputed `qv` to skip re-embedding.
  */
 const _isQuestionTurn = (c) => /\?\s*$/.test((c || '').trim()) || /^\s*(what|who|when|which|where|why|how|do|did|are|is|was|were|can|could|would|should)\b/i.test((c || '').trim());
-async function retrieveTurns(query, { k = 3, excludeIds = [], minSim = 0.45, qv = null, userOnly = false, dropQuestions = false } = {}) {
+// `scan` = how far back through embedded turns to look. The 400 default is right for "what were we
+// just saying"; it is far too shallow for "what did you say about X" when X was three weeks ago.
+// Live 2026-07-20: she was asked what she'd said about having a body, held the answer in a June
+// turn, and reported she couldn't find it — the row was ~2,000 turns outside the scan.
+async function retrieveTurns(query, { k = 3, excludeIds = [], minSim = 0.45, qv = null, userOnly = false, dropQuestions = false, scan = 400 } = {}) {
   if (!query || !String(query).trim()) return [];
   if (!qv) { try { qv = await embed(query); } catch { return []; } }
   if (!qv) return [];
   const exclude = new Set((excludeIds || []).map(Number));
   const scored = [];
-  for (const r of db.getEmbeddedTurns(400)) {
+  for (const r of db.getEmbeddedTurns(scan)) {
     if (exclude.has(r.id)) continue;
     // RECALL MODE: "what did I say about X" is answered by what the USER actually stated —
     // not by her own past replies/deflections or by other QUESTIONS (which embed closest to

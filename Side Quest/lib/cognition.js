@@ -128,6 +128,29 @@ async function _enrichGraph(need, object, deps = {}) {
 // ("current EPA administrator" → "Lee Zeldin, 17th administrator since Jan 2025"). It exists because the
 // audit found DDG dead (0 results) and Echo web_search keyless — the loop's prior tiers reached nothing
 // while a working tool held the answer. Returns text (or ''). Fail-safe.
+// ENRICH tier — OUR OWN CONVERSATION. The ladder had no way to search what we have actually said to
+// each other: every tier was civic or external. Live 2026-07-20, asked what she'd said about having a
+// body, she ran graph→wiki→routed→web→excavate — the knowledge graph, Wikipedia and the open web —
+// and answered "I couldn't pin down previous statements by the AI regarding its physical appearance",
+// while her own June turn described exactly that. The answer was never anywhere those tiers look.
+//
+// Cheapest tier by far: a local embedding and a cosine sweep, no network, no cloud. It leads the
+// default ladder for that reason — and because a thing WE said is more relevant to us than anything
+// Wikipedia holds. Deliberately NOT first on a needs_fresh/office-holder question: a three-week-old
+// remark must never outrank a current-fact lookup (that is the stale-Biden failure in a new costume).
+async function _enrichConvo(need, deps = {}) {
+  const retrieve = deps.retrieveTurns || ((q, o) => { try { return require('./memory').retrieveTurns(q, o); } catch { return Promise.resolve([]); } });
+  let hits = [];
+  // scan deep — the whole point is reaching past the recency window the default 400 covers.
+  try { hits = (await retrieve(need, { k: 4, minSim: 0.42, scan: 4000 })) || []; } catch {}
+  if (!hits.length) return { text: '', url: null };
+  const lines = hits.map((h) => {
+    const who = h.speaker === 'user' ? 'Lucas said' : 'You said';
+    return `• ${who}: ${String(h.content || '').replace(/\s+/g, ' ').slice(0, 400)}`;
+  });
+  return { text: 'From our own past conversation (this is what was actually said):\n' + lines.join('\n'), url: null };
+}
+
 async function _enrichWiki(need, deps = {}) {
   const wiki = deps.wikiLookup || ((q) => { try { return require('./echo_suit').wikiLookup(q); } catch { return Promise.resolve([]); } });
   let pages = [];
@@ -285,9 +308,12 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   // (Echo records Biden as president, Austin as SecDef), and it sits before the forensic tiers, so it would
   // intercept with a confidently-stale name. Exclude it. A general CURRENT fact (counts, "latest bill") keeps
   // our data but leads with wiki. Everything else leads with the graph (multi-hop/relational).
+  // 'convo' (our own past turns) leads the default ladder: cheapest tier, no network, and the most
+  // relevant source for anything WE said. It stays OUT of the office-holder ladder and comes late on
+  // a fresh-fact question — an old remark of ours must never outrank a current-fact lookup.
   const _modes = it.kind === 'office_holder' ? ['wiki', 'web', 'excavate']
-    : it.needs_fresh ? ['wiki', 'graph', 'routed', 'web', 'excavate']
-    : ['graph', 'wiki', 'routed', 'web', 'excavate'];
+    : it.needs_fresh ? ['wiki', 'graph', 'routed', 'convo', 'web', 'excavate']
+    : ['convo', 'graph', 'wiki', 'routed', 'web', 'excavate'];
   const _tried = [];   // what we ACTUALLY reached — the miss line must not overstate it
   for (const mode of _modes) {
     if (!step || !step.need) break;
@@ -296,7 +322,8 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
     // far cleaner lookup than the draft's raw NEED ("who runs the country" → the wiki "Country" article). Use
     // it.topic when the intent flagged fresh + gave one; otherwise the draft's need (entity Qs, no topic).
     const q = (it.needs_fresh && it.topic) ? it.topic : step.need;
-    const res = mode === 'graph' ? await _enrichGraph(q, object, deps)
+    const res = mode === 'convo' ? await _enrichConvo(q, deps)
+              : mode === 'graph' ? await _enrichGraph(q, object, deps)
               : mode === 'wiki' ? await _enrichWiki(q, deps)
               : mode === 'routed' ? await _enrichRouted(q, deps)
               : mode === 'web' ? await _enrichWeb(q, deps)
@@ -346,4 +373,4 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   return { say: `${where}, but I couldn't pin down ${need0}.`, enriched: true, missed: true, need: need0, tried: _tried };
 }
 
-module.exports = { answerGrounded, _draftOrNeed, _enrichGraph, _enrichWiki, _enrichRouted, _enrichWeb, _enrichExcavate, _kickWriteBack, _worthExcavating, _hasStaleGrounding, _entLine, NEED_RE };
+module.exports = { answerGrounded, _draftOrNeed, _enrichConvo, _enrichGraph, _enrichWiki, _enrichRouted, _enrichWeb, _enrichExcavate, _kickWriteBack, _worthExcavating, _hasStaleGrounding, _entLine, NEED_RE };

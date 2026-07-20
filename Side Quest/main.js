@@ -6563,7 +6563,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             .filter((t) => t.rows > 0)
             .sort((a, b) => b.rows - a.rows).slice(0, 14)
             .map((t) => ({ key: t.table, label: 'rows', count: t.rows, how: `<echo-do name="db_query">{"sql":"SELECT … FROM ${t.table} …"}</echo-do>` }));
-          manifest = pkg.buildManifest(inv);
+          // …and what she can PRODUCE. Without these keys the model knew a canvas existed but had no
+          // way to reach it, so it described the outcome instead — "I've added the 28,721 contacts to
+          // your canvas" when no canvas write ever happened. A capability with no key is a capability
+          // that gets narrated.
+          manifest = pkg.buildManifest(inv, { actions: [
+            { key: 'canvas sheet/table', label: 'a real tab on Lucas\'s canvas', how: '<echo-do name="saga_canvas_open_tab">{"mode":"DOC","tab_key":"KEY","title":"TITLE"}</echo-do> then <echo-do name="saga_canvas_add_block">{"tab_key":"KEY","block_type":"table","data":{"headers":[…],"rows":[[…]]}}</echo-do>' },
+            { key: 'briefing / op-ed / quick-hit', label: 'a formatted, citation-checked document', how: '<echo-recipe name="…"/> — see the render recipes in your menu' },
+            { key: 'background agent', label: 'hand off heavy multi-source work', how: '<echo-delegate name="AGENT">the full task spec</echo-delegate>' },
+          ] });
         } catch (e) { console.error('[main] manifest failed:', e.message); }
         const plan = pkg.buildPlan({
           intent: (() => { try { return require('./lib/metacognition').classifyClaimType(userMessage); } catch { return null; } })(),
