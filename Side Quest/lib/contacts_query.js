@@ -18,6 +18,23 @@ const CONTACT_NOUN = /\b(contacts?|people|persons?|e-?mails?|roster|leads?|direc
 const LIST_INTENT = /\b(list(?:ing)?|give|show|pull|get|compile|export|send|grab|fetch|need|want|hand|build|assemble|create|produce|generate|prepare|draw up|put together|whip up|throw together|write up|spreadsheet|sheet|table|roster|directory|rolodex|csv|who (?:do we have|are|'?s))\b/i;
 // A phrasing that is clearly RESEARCH ("find NEW", "go discover", "research"), not a list-what-we-have.
 const RESEARCH_INTENT = /\b(research|find (?:new|more)|discover|dig up|go get new|source new|build a (?:new )?list from scratch)\b/i;
+// POSSESSION / COUNT — "how many … do we have", "do we have emails for …", "what contacts do we have".
+//
+// LIST_INTENT is a bank of ACTION VERBS (list/give/show/pull/export…), so it recognises "fetch me the
+// contacts" and misses "do we have any". Those are the same question about the same data, and the
+// miss is not silent: on 2026-07-20 Lucas asked "how many email contacts do we have for Louisiana
+// Perish leadership?" four times and got
+//
+//   "I checked our records and searched, but I haven't been able to pin down the specific email
+//    contacts for the Louisiana Parish leadership just yet."
+//
+// while holding 42 of them (doc_contacts, state='LA'). The contacts route never fired, so nothing
+// ever looked — and the fallback claimed it had. A false negative wearing a verification claim is
+// worse than no answer, because it closes the question.
+//
+// Same shape as the coverage-question gap: the detector covered being TOLD TO DO something and
+// missed being ASKED WHAT SHE HAS.
+const COUNT_INTENT = /\b(how many|how much|number of|count of|do we (?:have|hold|got)|have we got|d'?you have|do you have|what .{0,30}(?:do|have) we (?:have|hold|got)|any\s+(?:contacts?|e-?mails?|people|names))\b/i;
 
 // Sector filters — reuse the operator's prospecting sectors. Each maps a request keyword → a company-name
 // matcher, so "energy contacts" filters to energy-industry companies we hold.
@@ -98,10 +115,14 @@ function detect(message) {
   // research — while "build a sheet with all the Contacts we HAVE generated" is a list of what we hold.
   const HELD = /\b(we (?:have|hold|already have|generated|got|pulled|already got)|we'?ve (?:got|generated|pulled)|(?:our|the) (?:existing|current|held)|on hand|in (?:our|the) (?:records|database|crm|files)|that we (?:have|hold))\b/i;
   if (RESEARCH_INTENT.test(m) && !HELD.test(m)) return { isQuery: false };   // research NEW (not about what we hold) → not a list
-  if (!LIST_INTENT.test(m) && !WHO_HAVE.test(m)) return { isQuery: false };
+  const counting = COUNT_INTENT.test(m);
+  if (!LIST_INTENT.test(m) && !WHO_HAVE.test(m) && !counting) return { isQuery: false };
   const g = gradeFrom(m);
   return { isQuery: true, sectors: sectorsFrom(m), company: companyFrom(m), limit: countFrom(m),
-           grade: g ? g.grade : null, gradeDir: g ? g.dir : 'gte', type: typeFrom(m), state: stateFrom(m) };
+           grade: g ? g.grade : null, gradeDir: g ? g.dir : 'gte', type: typeFrom(m), state: stateFrom(m),
+           // "How many do we have?" wants a NUMBER, not 200 rows. Only when there is no retrieval verb
+           // alongside it — "list how many we have" is still a list ask.
+           countOnly: counting && !LIST_INTENT.test(m) };
 }
 
 // GRADE — the A–E confidence ladder (mirrors studio/puller_confidence CAP). "c rating or higher" is the

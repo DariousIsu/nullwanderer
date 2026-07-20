@@ -154,5 +154,27 @@ ok(tbl.rows[0][4] === '96%', 'toTable: confidence rendered as a %');
 ok(CQ.label({ sectors: ['energy'] }) === 'energy contacts' && CQ.label({ company: 'Duke Energy' }) === 'Duke Energy contacts', 'label: sector / company titles');
 ok(CQ.label({ sectors: ['thinktank'] }) === 'think tank contacts', 'label: thinktank → "think tank contacts"');
 
+// --- POSSESSION / COUNT PHRASING (live failure, 2026-07-20) ------------------------------------
+// LIST_INTENT is a bank of ACTION VERBS, so "fetch me the contacts" matched and "do we have any"
+// did not — the same question about the same data. Lucas asked "how many email contacts do we have
+// for Louisiana Perish leadership?" four times and was told "I checked our records and searched,
+// but I haven't been able to pin down the specific email contacts" while holding 42 of them. The
+// contacts route never fired, so nothing ever looked, and the fallback claimed it had.
+ok(CQ.detect('how many email contacts do we have for Louisiana Perish leadership?').isQuery,
+  'REGRESSION: "how many … do we have" is a contacts query (misspelling and all)');
+ok(CQ.detect('how many email contacts do we have for Louisiana Parish leadership?').state === 'LA',
+  'still extracts the state from a count question');
+ok(CQ.detect('do we have emails for the parish presidents?').isQuery, '"do we have emails for …" matches');
+ok(CQ.detect('what contacts do we have in Louisiana').isQuery, '"what contacts do we have" matches');
+// countOnly distinguishes "how many?" from "give me the list"
+ok(CQ.detect('how many contacts do we have in Louisiana').countOnly === true, 'a count question is flagged countOnly');
+ok(CQ.detect('give me the contacts for Louisiana').countOnly === false, 'a retrieval request is NOT countOnly');
+ok(CQ.detect('list how many contacts we have in Louisiana').countOnly === false,
+  'a retrieval verb alongside the count wins — still a list ask');
+// and it must not over-match
+ok(!CQ.detect('how many parishes are in Louisiana?').isQuery, 'SAFETY: a count with no contact noun is not a contacts query');
+ok(!CQ.detect('research new contacts for Louisiana parishes').isQuery, 'SAFETY: research phrasing still excluded');
+ok(!CQ.detect('how are you doing?').isQuery, 'SAFETY: ordinary chat is not a contacts query');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);
