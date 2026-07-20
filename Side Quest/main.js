@@ -7782,15 +7782,10 @@ function _researchStanding(now = Date.now()) {
   let val = null;
   try {
     const cg = require('./lib/coverage_gaps');
-    const sched = (() => { try { return JSON.parse(db.getMeta('sched.autonomic') || '{}') || {}; } catch { return {}; } })();
-    const coveredFor = (beatId) => {
-      try {
-        const bs = (sched.beats || {})[beatId];
-        if (!bs || !bs.thread) return [];
-        return JSON.parse(db.getMeta(`focus.${bs.thread}.covered`) || '[]') || [];
-      } catch { return []; }
-    };
-    const s = cg.summarize(cg.coverageGaps(_autonomicBeats(), coveredFor));
+    // Union across EVERY thread that ever ran the beat — the scheduler points at one, but a re-seeded
+    // beat leaves its finished work on the previous thread. Reading only the current one was hiding 81
+    // completed parishes and under-reporting the portfolio by a third. See db.coveredForBeat.
+    const s = cg.summarize(cg.coverageGaps(_autonomicBeats(), (beatId) => db.coveredForBeat(beatId)));
     if (s && s.total > 0) val = s;
   } catch (e) { console.error('[standing] coverage summarize failed:', e.message); }
   _standingCache = { at: now, val };

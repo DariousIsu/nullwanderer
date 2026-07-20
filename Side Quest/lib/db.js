@@ -1704,6 +1704,37 @@ function getMetaKeysLike(like) {
   return getDb().prepare('SELECT key FROM meta WHERE key LIKE ?').all(String(like)).map((r) => r.key);
 }
 
+// EVERYTHING WE HAVE COVERED FOR A BEAT — across every focus thread that ever ran it, not just the one
+// the scheduler currently points at.
+//
+// The bug this fixes (measured 2026-07-20). `sched.autonomic` maps a beat to ONE thread, and coverage
+// read only that thread's `covered` list. But a beat gets re-seeded — a new thread each time — and the
+// completed work stays on the OLD thread. county-commissions-la had five threads holding 3, 22, 21, 21
+// and 17 parishes; the scheduler pointed at the one with 3, so 81 finished parishes were invisible and
+// the portfolio number was reading 63% of the work actually done.
+//
+// It also produced the user-facing miss: asked how many parishes were done, she answered "24 of 64" —
+// one thread's slice reported as the whole, because that is genuinely all the reader could see.
+//
+// Union, not sum: the same jurisdiction researched under two threads must count once. Callers still
+// fuzzy-match these against enumerated targets (beats.coverageOf), which is what collapses naming
+// variants — this only has to stop dropping whole threads on the floor.
+function coveredForBeat(beatId) {
+  const id = String(beatId || '');
+  if (!id) return [];
+  const out = new Set();
+  try {
+    for (const key of getMetaKeysLike('focus.%.covered')) {
+      const focusId = key.split('.')[1];
+      if (getMeta(`focus.${focusId}.beat`) !== id) continue;
+      let list = [];
+      try { list = JSON.parse(getMeta(key) || '[]') || []; } catch { list = []; }
+      for (const c of list) if (c) out.add(String(c));
+    }
+  } catch { return []; }
+  return [...out];
+}
+
 // --- cloud reasoning traces (lib/cloud_logic) — cache + budget audit + training corpus ---
 function insertCloudTrace(t) {
   const info = getDb()
@@ -2121,6 +2152,7 @@ module.exports = {
   getAssistantAliases,
   seedOwnerIdentity,
   getMetaKeysLike,
+  coveredForBeat,
   // graph memory (anti-glob relational store)
   graphInsertEntity,
   graphGetEntityByKey,

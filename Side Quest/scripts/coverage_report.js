@@ -15,16 +15,11 @@ const cg = require('../lib/coverage_gaps');
 db.init();
 const SHOW_WORK = process.argv.includes('--work');
 
-// A beat's covered set lives on whichever focus thread ran it. The scheduler's state maps beatId →
-// thread, and coverage is stored per-focus, so resolve through that.
-const sched = (() => { try { return JSON.parse(db.getMeta('sched.autonomic') || '{}') || {}; } catch { return {}; } })();
-function coveredFor(beatId) {
-  try {
-    const bs = (sched.beats || {})[beatId];
-    if (!bs || !bs.thread) return [];
-    return JSON.parse(db.getMeta(`focus.${bs.thread}.covered`) || '[]') || [];
-  } catch { return []; }
-}
+// A beat's covered set lives on whichever focus threads ran it — plural, because a re-seeded beat gets
+// a new thread and leaves its finished work on the old one.
+// Union across every thread that ever ran the beat, not just the one the scheduler currently points at
+// — a re-seeded beat leaves its finished work behind on the old thread. See db.coveredForBeat.
+function coveredFor(beatId) { return db.coveredForBeat(beatId); }
 
 const all = (() => { try { return beats.electedOfficialsSubBeats() || []; } catch { return []; } })();
 const gaps = cg.coverageGaps(all, coveredFor);
