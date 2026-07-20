@@ -1,7 +1,10 @@
 # Encounter → Object Model
 
-**Status:** DESIGN. Nothing here is built. Authored 2026-07-20 from a working session with Lucas.
+**Status:** PARTLY BUILT. Authored 2026-07-20 from a working session with Lucas.
 **Supersedes nothing.** Absorbs and unifies several things already built (see §12).
+
+**Built so far:** §11 blockers #1/#2 (`lib/origin.js`, commits `f0a1af6` `03c6084`) and **§2 + §5–§7,
+the encounter log itself** (`lib/encounters.js`, commit `4cedba0`). Everything else is still design.
 
 ---
 
@@ -33,6 +36,30 @@ Two consequences that are easy to miss:
 ---
 
 ## 2. The primitive is the ENCOUNTER, not the object
+
+> **STATUS 2026-07-20: BUILT** — `lib/encounters.js` + the `encounters` table (commit `4cedba0`).
+> `record()` / `recordMany()` write; `gradeClaim()` / `profile()` judge at read time; grading is per
+> claim class per §5. First writer wired: `lib/doc_contacts.js`. 1,129 existing contact rows replayed
+> into 4,767 encounters across 1,107 people via `scripts/backfill_encounters.js`.
+>
+> **Grading is deliberately NOT stored.** A grade is a function of everything encountered so far, and
+> "so far" keeps changing — the whole model is that the fifth source raises certainty on a claim first
+> seen years earlier. Writing it down freezes an answer the next encounter would have changed.
+>
+> **MULTI-TRUTH, learned from live data and not present in this design as written.** §5b says biography
+> accumulates, but the first implementation still ranked accumulated values as *rivals*. Bobby Wilson
+> read as contested — `WARD 1` vs `CATAHOULA PARISH POLICE JURY` — and both are true; he is a ward
+> member of the jury. Only **contact and existence** are single-truth and can conflict; biographical,
+> structural and interpretive claims accumulate and every value is held. Contested claims went 5 → 0 on
+> the real corpus. This is the truth-discovery literature's single-truth/multi-truth split (§10),
+> arrived at the expensive way.
+>
+> **The cleaning trigger also needs a floor.** Two C-grade claims disputing each other is not a dispute
+> worth a verification pass; it is an object nobody has researched, which the low grade already says.
+>
+> Honest current state: every replayed claim reads **C / unproven**, because pre-hook documents carry no
+> origin, so `min(origins, texts)` floors at 1. Not a bug — it is the measurement, and it is what the
+> origin capture in `f0a1af6` fixes going forward rather than retroactively.
 
 Every lane — news, research, doc drop, conversation, meeting, API — writes encounters. Objects and
 edges are *derived* from the encounter log; the log is the ground truth and is **append-only**.
