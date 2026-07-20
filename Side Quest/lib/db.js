@@ -441,6 +441,14 @@ const MIGRATIONS = [
   // the same hosting vendor read as one source. Both facts are kept — the publisher grades the claim,
   // the fetch URL is how it is re-fetched or audited.
   `ALTER TABLE documents ADD COLUMN fetch_url TEXT`,
+  // Duplicate rows are SUPERSEDED, never deleted. 806 documents (12% of the corpus) are byte-identical
+  // copies of another, and they carry 35% of all `docstore:` citations because the most-duplicated
+  // documents are also the most-decomposed. Merging them repoints those citations at the canonical row;
+  // keeping the superseded row means the merge stays invertible, which is the whole reason a wrong merge
+  // is survivable here. Canonical = the OLDEST id per content hash: the first encounter keeps the id
+  // everything already cites.
+  `ALTER TABLE documents ADD COLUMN superseded_by INTEGER`,
+  `CREATE INDEX IF NOT EXISTS idx_documents_superseded ON documents(superseded_by)`,
 
   // ENCOUNTER LOG (docs/ENCOUNTER_OBJECT_MODEL_DESIGN.md §2) — the primitive beneath everything else.
   //
@@ -1463,7 +1471,8 @@ function insertDocument({ title = null, body, source = null, ref = null, underst
 // Latest document row for an external ref (idempotent landing + iteration parent lookup). Newest first.
 function getDocumentByRef(ref) {
   if (!ref) return null;
-  return getDb().prepare('SELECT * FROM documents WHERE ref = ? ORDER BY id DESC LIMIT 1').get(ref) || null;
+  // A live row wins over a superseded one: landing must never hand a caller an id that has been merged away.
+  return getDb().prepare('SELECT * FROM documents WHERE ref = ? ORDER BY (superseded_by IS NULL) DESC, id DESC LIMIT 1').get(ref) || null;
 }
 
 // The SAME TEXT already landed, under any ref or lane. The hash is computed here from the body rather
@@ -1474,7 +1483,7 @@ function getDocumentByHash(body) {
   try {
     const h = require('./origin').contentHash(body);
     if (!h) return null;
-    return getDb().prepare('SELECT * FROM documents WHERE content_hash = ? ORDER BY id ASC LIMIT 1').get(h) || null;
+    return getDb().prepare('SELECT * FROM documents WHERE content_hash = ? AND superseded_by IS NULL ORDER BY id ASC LIMIT 1').get(h) || null;
   } catch (e) { return null; }
 }
 
@@ -1483,21 +1492,28 @@ function getDocument(id) {
   return getDb().prepare('SELECT * FROM documents WHERE id = ?').get(id) || null;
 }
 
+// SUPERSEDED ROWS ARE INVISIBLE TO READS. 806 documents are byte-identical copies merged onto a
+// canonical row; they are kept so the merge stays invertible, not so they can come back through recall.
+// Without this filter the merge would only half-work — citations resolve correctly, but doc-QA and
+// search would still hand back the same text several times, which is the duplication the merge removed.
+// getDocument(id) deliberately does NOT filter: an old id must still resolve, or existing links break.
+const LIVE = 'superseded_by IS NULL';
+
 // Recent documents, newest first. opts.unpromotedOnly limits to short-term (not yet consolidated).
 function recentDocuments(n = 20, { unpromotedOnly = false } = {}) {
-  const where = unpromotedOnly ? 'WHERE promoted = 0' : '';
+  const where = unpromotedOnly ? `WHERE promoted = 0 AND ${LIVE}` : `WHERE ${LIVE}`;
   return getDb().prepare(`SELECT * FROM documents ${where} ORDER BY id DESC LIMIT ?`).all(Math.max(1, n | 0));
 }
 
 // Un-promoted documents for the nightly promotion pass (Slice 2), oldest first (FIFO consolidation).
 function listUnpromotedDocuments(limit = 100) {
-  return getDb().prepare('SELECT * FROM documents WHERE promoted = 0 ORDER BY id ASC LIMIT ?').all(Math.max(1, limit | 0));
+  return getDb().prepare(`SELECT * FROM documents WHERE promoted = 0 AND ${LIVE} ORDER BY id ASC LIMIT ?`).all(Math.max(1, limit | 0));
 }
 
 // Keyword search over title+body (simple LIKE; embedding search can layer on later). Newest first.
 function searchDocuments(queryLike, n = 10) {
   const q = `%${String(queryLike || '').trim()}%`;
-  return getDb().prepare('SELECT * FROM documents WHERE title LIKE ? OR body LIKE ? ORDER BY id DESC LIMIT ?').all(q, q, Math.max(1, n | 0));
+  return getDb().prepare(`SELECT * FROM documents WHERE (title LIKE ? OR body LIKE ?) AND ${LIVE} ORDER BY id DESC LIMIT ?`).all(q, q, Math.max(1, n | 0));
 }
 
 // Mark a document consolidated into Echo long-term (promotedRef = where it landed, e.g. an Echo doc_id).
@@ -2133,7 +2149,7 @@ function listOperatorDropEntities({ limit = 60, docLimit = 20,
   try {
     const sIn = sources.map(() => '?').join(',');
     const docs = getDb().prepare(
-      `SELECT id FROM documents WHERE source IN (${sIn}) ORDER BY created_ts DESC LIMIT ?`
+      `SELECT id FROM documents WHERE source IN (${sIn}) AND superseded_by IS NULL ORDER BY created_ts DESC LIMIT ?`
     ).all(...sources, docLimit);
     if (!docs.length) return [];
     const urls = docs.map(d => 'docstore:' + d.id);
