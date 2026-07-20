@@ -548,6 +548,73 @@ function targetPlaceKey(target) {
   return placeKey(name);
 }
 
+// WHICH BEATS IS THIS QUESTION ABOUT? "How much have we covered on Louisiana Parishes?" is asking about
+// ONE beat, and answering it with a portfolio total is not an answer.
+//
+// The live failure (2026-07-20). The coverage question was detected correctly and the standing block was
+// injected correctly — and it said "203 of 52,890 bodies/offices" when the true answer was "64 of 64".
+// Being unresponsive, it lost the turn to CRM material that DID mention those parishes, and she replied
+// that St. Charles and Jefferson are lobby clients. A number that doesn't answer the question is worse
+// than no number: it competes with the real answer and loses.
+//
+// Requires BOTH a state and a tier word, deliberately. "Louisiana" alone appears in far too much
+// material to be a reliable signal, and a false match would answer confidently about the wrong tier —
+// the exact failure mode as the bare portfolio number. No match → callers fall back to the portfolio.
+const TIER_WORDS = [
+  { re: /\b(?:count(?:y|ies)|parish(?:es)?|borough|boroughs|municipio|municipios)\b/i, prefix: 'county-commissions-' },
+  { re: /\b(?:legislature|legislative|senate|house|chamber|assembly|delegates|lawmakers?|legislators?)\b/i, prefix: 'state-legislature-' },
+  { re: /\b(?:school|schools|district|districts|board of education)\b/i, prefix: 'school-boards-' },
+  { re: /\b(?:township|townships|town|towns)\b/i, prefix: 'townships-' },
+  { re: /\b(?:municipal|municipalit(?:y|ies)|cit(?:y|ies)|village|villages)\b/i, prefix: 'municipalities-' },
+];
+
+// A human phrase for a beat — "Louisiana parishes", not "county-commissions-la". These labels get read
+// aloud, so an internal id in her mouth is both jarring and uninformative. Uses the state's OWN
+// county-equivalent noun (parish/borough/municipio), which the gazetteer holds authoritatively.
+function beatLabel(beat) {
+  if (!beat || !beat.id) return '';
+  const code = String(beat.stateCode || '').toUpperCase();
+  const st = US_COUNTIES[code];
+  const stateName = (st && st.name) || code;
+  const noun = (st && st.noun) || 'county';
+  const plural = noun === 'parish' ? 'parishes' : noun === 'municipio' ? 'municipios'
+    : noun === 'borough' ? 'boroughs' : 'counties';
+  if (beat.id.startsWith('county-commissions-')) return `${stateName} ${plural}`;
+  if (beat.id.startsWith('state-legislature-')) return `${stateName} state legislature`;
+  if (beat.id.startsWith('municipalities-')) return `${stateName} municipalities`;
+  if (beat.id.startsWith('townships-')) return `${stateName} towns and townships`;
+  if (beat.id.startsWith('school-boards-')) return `${stateName} school boards`;
+  if (beat.id === 'federal-officials') return 'federal officials';
+  return beat.id;
+}
+
+function findBeatsInText(text, beatList) {
+  const t = String(text || '');
+  if (!t.trim()) return [];
+  const list = Array.isArray(beatList) ? beatList : electedOfficialsSubBeats();
+  // Which states are named? Longest first, MASKING each match out of the text as it is found — "West
+  // Virginia" contains a word-boundary "Virginia", so simply testing each name independently matches
+  // both and would answer about the wrong state. Masking also keeps the genuine both-states case
+  // working ("Virginia and West Virginia counties"), because only the consumed span disappears.
+  let scan = t;
+  const states = [];
+  for (const s of Object.entries(US_COUNTIES)
+    .map(([code, st]) => ({ code, name: st.name }))
+    .sort((a, b) => b.name.length - a.name.length)) {
+    const re = new RegExp(`\\b${s.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'ig');
+    if (re.test(scan)) {
+      states.push(s);
+      scan = scan.replace(new RegExp(re.source, 'ig'), ' ');
+    }
+  }
+  if (!states.length) return [];
+  const tiers = TIER_WORDS.filter((w) => w.re.test(t));
+  if (!tiers.length) return [];
+  const want = new Set();
+  for (const s of states) for (const tier of tiers) want.add(`${tier.prefix}${s.code.toLowerCase()}`);
+  return list.filter((b) => b && want.has(b.id));
+}
+
 // Coverage of a beat given the directed focus's `covered` list (fuzzy-matched to worklist targets so
 // "Alachua County Commission" counts against "the governing body of Alachua County, Florida" — and so do
 // the legacy "Board of County Commissioners of …" / "Parish Council of …" entries written before the
@@ -624,5 +691,5 @@ module.exports = {
   HOUSE_SEATS, federalTargets, federalBeat,
   stateLegTargets, stateLegBeat, stateLegSubBeats, listLegislatureStates,
   electedOfficialsSubBeats,
-  coverageOf, matchNewsToTargets,
+  coverageOf, matchNewsToTargets, findBeatsInText, beatLabel, TIER_WORDS,
 };

@@ -56,6 +56,9 @@ function snapshot(deps = {}) {
     // enumerates every beat's universe (tens of thousands of targets), which is main's cached job —
     // a lazy require here would put that cost on every status question.
     research: deps.research || null,
+    // Per-jurisdiction coverage for the beats this question names. Deps-only, same reason as `research`:
+    // resolving it needs the beat registry, which main owns.
+    focusedCoverage: deps.focusedCoverage || null,
   };
 }
 
@@ -75,6 +78,19 @@ function buildBlock(snap, userName = 'Lucas', now = Date.now()) {
   // from arithmetic instead of impression. The wording is load-bearing: this counts BODIES/OFFICES
   // researched, NEVER people captured. A chamber being "researched" says nothing about whether its
   // roster is complete, and conflating the two is exactly how a partial run got reported as finished.
+  // THE JURISDICTION ASKED ABOUT, FIRST. "How much have we covered on Louisiana Parishes?" is a question
+  // about one beat; the portfolio total does not answer it. Live failure (2026-07-20): the block was
+  // injected correctly and said "203 of 52,890 bodies/offices" when the answer was "64 of 64". Being
+  // unresponsive it lost the turn to CRM material that did mention those parishes, and she replied that
+  // St. Charles and Jefferson are lobby clients. An unresponsive number is worse than none — it competes
+  // with the real answer and loses.
+  if (Array.isArray(snap.focusedCoverage) && snap.focusedCoverage.length) {
+    lines.push(`${userName} is asking about specific jurisdictions — ANSWER WITH THESE, they are the direct answer:`);
+    for (const f of snap.focusedCoverage.slice(0, 4)) {
+      lines.push(`  • ${f.label}: ${f.done} of ${f.total} researched (${f.pct}%)${f.complete ? ' — every one on the list has been worked' : ` — ${f.total - f.done} still to do`}.`);
+    }
+    lines.push(`  ↳ still BODIES worked, not people on file: a jurisdiction counted here may have an incomplete roster, and "all worked" never means the research is finished.`);
+  }
   if (snap.research && snap.research.total > 0) {
     const r = snap.research;
     lines.push(`Elected-body research standing: ${r.done} of ${r.total} bodies/offices researched (${r.pct}%) — ${r.remaining} still outstanding, across ${r.beats} beats.`);

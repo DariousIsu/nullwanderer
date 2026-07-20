@@ -207,5 +207,38 @@ ok(!matched.some(t => /Citrus County/.test(t)), 'news: "orange juice / citrus gr
 ok(beats.matchNewsToTargets('FL', []).length === 0, 'no headlines → no matches');
 ok(beats.matchNewsToTargets('ZZ', news).length === 0, 'unknown state → no matches');
 
+// --- findBeatsInText: which beat is a coverage question actually about? ---
+// Live failure (2026-07-20): "How much have we covered on Louisiana Parishes?" was answered with the
+// PORTFOLIO total (203 of 52,890) when the answer was 64 of 64. Being unresponsive, it lost the turn to
+// CRM material that DID mention those parishes, and she replied about lobby clients instead.
+{
+  const all = beats.electedOfficialsSubBeats();
+  const ids = (q) => beats.findBeatsInText(q, all).map((b) => b.id).sort();
+  const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+  ok(eq(ids('How much have we covered on Louisiana Parishes?'), ['county-commissions-la']),
+    'THE LIVE CASE: "Louisiana Parishes" resolves to the LA county-equivalent beat');
+  ok(eq(ids('how far along is the Michigan school board research'), ['school-boards-mi']), 'Michigan school boards');
+  ok(eq(ids('what about Virginia legislature coverage'), ['state-legislature-va']), 'Virginia legislature');
+  ok(ids('how much of Alaska boroughs have we done').includes('county-commissions-ak'), "Alaska's own noun (boroughs) works");
+
+  // BOTH a state and a tier are required — either alone is too weak to answer confidently from.
+  ok(ids('how much have we covered').length === 0, 'no jurisdiction named -> no match, caller falls back to portfolio');
+  ok(ids('tell me about Louisiana').length === 0, 'CRITICAL: a state with no tier word must NOT match');
+  ok(ids('how many parishes are there').length === 0, 'CRITICAL: a tier word with no state must NOT match');
+  ok(ids('').length === 0 && beats.findBeatsInText(null, all).length === 0, 'empty/null -> no match, never throws');
+
+  // Longest-name-first: "West Virginia" must not be read as "Virginia".
+  const wv = ids('how much have we covered on West Virginia counties');
+  ok(wv.includes('county-commissions-wv') && !wv.includes('county-commissions-va'),
+    'CRITICAL: "West Virginia" does not match Virginia');
+
+  // Labels are spoken aloud — an internal beat id in her mouth is jarring and uninformative.
+  ok(beats.beatLabel(all.find((b) => b.id === 'county-commissions-la')) === 'Louisiana parishes', "label uses the state's own noun");
+  ok(beats.beatLabel(all.find((b) => b.id === 'county-commissions-ak')) === 'Alaska boroughs', 'Alaska -> boroughs');
+  ok(beats.beatLabel(all.find((b) => b.id === 'county-commissions-fl')) === 'Florida counties', 'Florida -> counties');
+  ok(beats.beatLabel(null) === '', 'null beat -> empty label, never throws');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

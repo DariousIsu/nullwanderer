@@ -4962,6 +4962,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         sharedBrowser: browserLib.isConnected(),
         ownBrowser: webLib.isConnected(),
         research: _researchStanding(),
+        focusedCoverage: coverageQ ? _focusedCoverage(userMessage) : null,
       }), userName);
       if (block) { retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${block}\n\n${retrievedKnowledgeBlock}` : block; console.log('[main] self-state snapshot surfaced'); }
     } catch (e) { console.error('[main] self-state block failed:', e.message); }
@@ -7807,6 +7808,26 @@ function _researchStanding(now = Date.now()) {
   } catch (e) { console.error('[standing] coverage summarize failed:', e.message); }
   _standingCache = { at: now, val };
   return val;
+}
+
+// PER-JURISDICTION COVERAGE for the beats a question actually names. The portfolio total does not
+// answer "how much have we covered on Louisiana Parishes?" — and an unresponsive number is worse than
+// none, because it competes with whatever else in the prompt does mention those parishes and loses.
+// Not cached: it is a cheap filter over the already-built beat list, and it varies per question.
+function _focusedCoverage(question) {
+  try {
+    const beats = require('./lib/beats');
+    const matched = beats.findBeatsInText(question, _autonomicBeats());
+    if (!matched.length) return null;
+    const cg = require('./lib/coverage_gaps');
+    const out = [];
+    for (const b of matched.slice(0, 4)) {
+      const g = cg.coverageGap(b, db.coveredForBeat(b.id));
+      if (!g || g.emptyUniverse) continue;   // no worklist → a data gap, not a coverage answer
+      out.push({ label: beats.beatLabel(b) || b.id, done: g.done, total: g.total, pct: g.pct, complete: g.complete });
+    }
+    return out.length ? out : null;
+  } catch (e) { console.error('[standing] focused coverage failed:', e.message); return null; }
 }
 
 // Render "X of N" honestly, degrading to a bare count when the universe is unknown. Centralised so
