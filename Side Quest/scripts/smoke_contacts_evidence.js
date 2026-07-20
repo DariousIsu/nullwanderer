@@ -85,5 +85,37 @@ ok(cell({ grade: 'C', sources: 1, unproven: false }) === 'C · 1 source',
     'a multi-source row counts; a single-source one does not, whatever its grade');
 }
 
+// ── the one line handed to whoever WRITES the answer ─────────────────────────────────────────────
+//
+// The live failure this closes: the canvas table said `C · 1 source` on every row and "0 rest on more
+// than one independent source" in its caption, while the spoken sentence above it read "I've added the
+// 28,721 leadership contacts". The table was honest; the sentence was written from counts that say how
+// MUCH was found and nothing about whether any of it is supported.
+{
+  const mk = (lookup, n) => ({ rows: cq.withEvidence(Array.from({ length: n }, (_, i) => ({ name: `P${i}` })), lookup) });
+
+  const none = cq.evidenceSummary(mk(() => null, 3));
+  ok(/0 of 3 shown rest on more than one independent source/.test(none)
+    && /3 not in the evidence log at all/.test(none),
+    'CRITICAL: a wholly unsupported list says so in words the answer-writer can use verbatim');
+
+  const mixed = cq.evidenceSummary(mk((nm) => (nm === 'P0' ? { grade: 'A-', sources: 6 } : nm === 'P1' ? { grade: 'C', sources: 1 } : null), 3));
+  ok(/1 of 3 shown rest on more than one independent source/.test(mixed), 'corroborated rows are counted');
+  ok(/1 on a single source/.test(mixed) && /1 not in the evidence log at all/.test(mixed),
+    'CRITICAL: single-sourced and never-seen are REPORTED SEPARATELY — collapsing them hides which is which');
+
+  // Silence has to be distinguishable from "nothing supports this".
+  ok(cq.evidenceSummary({ rows: [{ name: 'A' }] }) === null,
+    'CRITICAL: rows with no evidence attached → null, so a caller can tell "nothing to say" from "nothing supports it"');
+  ok(cq.evidenceSummary({ rows: [] }) === null && cq.evidenceSummary(null) === null && cq.evidenceSummary({}) === null,
+    'empty/missing → null, never throws');
+
+  // A fully corroborated list must not carry the caveats it has not earned.
+  const good = cq.evidenceSummary(mk(() => ({ grade: 'A-', sources: 4 }), 2));
+  ok(/2 of 2 shown rest on more than one independent source/.test(good)
+    && !/single source/.test(good) && !/not in the evidence log/.test(good),
+    'a well-supported list reads clean — the caveats appear only when they are true');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

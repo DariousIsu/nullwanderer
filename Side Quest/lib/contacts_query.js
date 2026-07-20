@@ -344,6 +344,39 @@ function evidenceCell(ev) {
   return ev.unproven ? `${ev.grade} · ${src} (unproven)` : `${ev.grade} · ${src}`;
 }
 
+// ONE HONEST LINE ABOUT THE WHOLE LIST, for whoever writes the spoken answer.
+//
+// The evidence reached the canvas and stopped there. A live turn on 2026-07-20:
+//
+//   Lucas:  "print me a sheet with all the leadership contacts we have emails for in those Parishes"
+//   Zoe:    "I've added the 28,721 leadership contacts that include email addresses to your canvas"
+//
+// The canvas table beneath that sentence said `C · 1 source` on every row and "0 rest on more than one
+// independent source" in its caption. The table was honest and the sentence was not, because the voice
+// line was written from `total` and `withEmail` — two counts that say how MUCH was found and nothing
+// about whether any of it is supported.
+//
+// So this exists to be handed to the answer-writer, which lives in another context's lane
+// (lib/package.js). Returns a string, not a verdict: what to do with it belongs to whoever composes the
+// reply. Null when there is no evidence data attached at all, so a caller can tell "nothing to say"
+// from "nothing supports this".
+function evidenceSummary(sel) {
+  const rows = (sel && Array.isArray(sel.rows)) ? sel.rows : [];
+  if (!rows.length) return null;
+  if (!rows.some((r) => r && Object.prototype.hasOwnProperty.call(r, 'evidence'))) return null;
+
+  let corroborated = 0, single = 0, unknown = 0;
+  for (const r of rows) {
+    const ev = r && r.evidence;
+    if (!ev) { unknown += 1; continue; }
+    if ((Number(ev.sources) || 0) > 1) corroborated += 1; else single += 1;
+  }
+  const parts = [`${corroborated} of ${rows.length} shown rest on more than one independent source`];
+  if (single) parts.push(`${single} on a single source`);
+  if (unknown) parts.push(`${unknown} not in the evidence log at all`);
+  return parts.join('; ');
+}
+
 // Attach the log's verdict to each row. Pure — `lookup` does the I/O.
 function withEvidence(rows, lookup) {
   const fn = typeof lookup === 'function' ? lookup : () => null;
@@ -395,4 +428,4 @@ function label({ sectors = [], company = null, grade = null, gradeDir = 'gte', t
   return parts.length ? `${parts.join(' ')} ${noun}`.replace(/\s+/g, ' ').trim() : 'Contacts';
 }
 
-module.exports = { detect, select, toTable, withEvidence, evidenceCell, label, unmetFilters, gradeFrom, typeFrom, stateFrom, isGovernmentCompany, isNonprofitCompany, domainKind, sectorsFrom, companyFrom, matchesSectors, GRADE_CAP, SECTORS };
+module.exports = { detect, select, toTable, withEvidence, evidenceCell, evidenceSummary, label, unmetFilters, gradeFrom, typeFrom, stateFrom, isGovernmentCompany, isNonprofitCompany, domainKind, sectorsFrom, companyFrom, matchesSectors, GRADE_CAP, SECTORS };
