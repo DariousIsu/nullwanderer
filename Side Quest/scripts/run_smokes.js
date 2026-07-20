@@ -127,6 +127,7 @@ const smokes = [
   'smoke_research_plan.js',
   'smoke_compose.js',
   'smoke_canvas_ingest.js',
+  'smoke_canvas_docs.js',
   'smoke_sources.js',
   'smoke_doc_qa.js',
   'smoke_doc_store.js',

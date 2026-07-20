@@ -1211,7 +1211,13 @@ app.whenReady().then(() => {
     // came online by another route — the heartbeat keeps retrying regardless.
     engineSupervisor.ensure({ spawnIfDown: true })
       .then(r => { console.log(`[main] engine ${r.state}${r.pid ? ' (pid ' + r.pid + ')' : ''}`); return tryEchoAttach(); })
-      .then((attached) => { if (attached) rehydrateRecentCanvasDeliverables().catch(() => {}); })   // restore completed deliverables to the canvas after a restart
+      // Restore the board after a restart: the durable mirror FIRST (rebuilds everything, including what the
+      // operator dropped), then the file sweep as a backstop for deliverables the mirror never saw.
+      .then(async (attached) => {
+        if (!attached) return;
+        try { await replayCanvasFromStore(); } catch (e) {}
+        rehydrateRecentCanvasDeliverables().catch(() => {});
+      })
       .catch(e => { console.error('[main] engine ensure failed:', e.message); return tryEchoAttach(); })
       // STAGGER the Canvas behind the engine: only spawn it once the engine ensure+attach attempt has
       // completed, so its first load finds Echo connected (no "Echo engine not connected" flash). The
@@ -1545,21 +1551,9 @@ app.whenReady().then(() => {
       // CHUNKED (2026-07-07): all ~244 subscribed feeds in ONE fetch_feeds_batch overwhelmed the Echo MCP
       // transport — ~half the polls came back "empty response to tools/call" (the "⚠ fetch failed" panel).
       // MEASURED: a 39-feed batch at item_limit 30 = ~1MB of JSON; the full 244-feed call is multi-MB and the
-      // transport silently returns empty above its response ceiling. TWO levers: (1) small FEED-count chunks,
-      // (2) a low ITEM_LIMIT — 30/feed was overkill (the view dedups to ~120 total and only ~0-8 are ever new
-      // per 3-min poll). Sequential (not Promise.all) so we don't recreate the overload with concurrent big
-      // calls. Both env-tunable. Merge the per-chunk reports into one view; a failed chunk is skipped, not fatal.
-      const CHUNK = parseInt(process.env.FEED_BATCH_SIZE || '', 10) || 12;
-      const ITEM_LIMIT = parseInt(process.env.FEED_ITEM_LIMIT || '', 10) || 15;
-      const allFeeds = [];
-      for (let i = 0; i < urls.length; i += CHUNK) {
-        const slice = urls.slice(i, i + CHUNK);
-        try {
-          const payload = await pollCallTool()('fetch_feeds_batch', { feed_urls: slice, item_limit: ITEM_LIMIT });
-          const feeds = Array.isArray(payload) ? payload : (payload && Array.isArray(payload.feeds) ? payload.feeds : []);
-          for (const f of feeds) allFeeds.push(f);
-        } catch (e) { console.warn(`[news-poll] chunk (${slice.length} feeds) failed: ${e.message}`); }
-      }
+      // transport silently returns empty above its response ceiling. Chunking now lives in the shared
+      // fetchFeedsChunked() so the Monitors widget can't regress back onto the one-shot call.
+      const allFeeds = await fetchFeedsChunked(urls, null);
       return { items: feedsView.mergeReports({ feeds: allFeeds }).items };
     };
     // NEWS TUNER topic classification (cloud-on-everything, classify-once, cached): after each poll, label the
@@ -2166,13 +2160,36 @@ ipcMain.handle('video:ingest', (_e, { url, title } = {}) => {
     return { ok: true };
   } catch (e) { console.error('[video] ingest failed:', e.message); return { ok: false, error: e.message }; }
 });
+// CHUNKED feed fetch — the ONE path both the Monitors widget and the background news collector use.
+// Asking Echo for all ~244 subscribed feeds in a single fetch_feeds_batch produces a multi-MB JSON
+// response that the MCP transport silently truncates to nothing, surfacing as "echo: empty response
+// to tools/call" (lib/echo.js:139) — the widget's "⚠ fetch failed" panel. Two levers, both env-tunable:
+// small FEED-count chunks (FEED_BATCH_SIZE) and a low per-feed ITEM_LIMIT (FEED_ITEM_LIMIT); a 12-feed
+// chunk at 15 items is well under the ceiling. Sequential, not Promise.all, so concurrent big calls
+// don't recreate the same overload. A failed chunk is skipped, not fatal — the rest still render.
+async function fetchFeedsChunked(urls, itemLimit) {
+  const CHUNK = parseInt(process.env.FEED_BATCH_SIZE || '', 10) || 12;
+  const CEILING = parseInt(process.env.FEED_ITEM_LIMIT || '', 10) || 15;
+  const limit = Math.min(parseInt(itemLimit, 10) || CEILING, CEILING);
+  const allFeeds = [];
+  for (let i = 0; i < urls.length; i += CHUNK) {
+    const slice = urls.slice(i, i + CHUNK);
+    try {
+      const payload = await pollCallTool()('fetch_feeds_batch', { feed_urls: slice, item_limit: limit });
+      const feeds = Array.isArray(payload) ? payload : (payload && Array.isArray(payload.feeds) ? payload.feeds : []);
+      for (const f of feeds) allFeeds.push(f);
+    } catch (e) { console.warn(`[feeds] chunk (${slice.length} feeds) failed: ${e.message}`); }
+  }
+  return allFeeds;
+}
 ipcMain.handle('feeds:fetch', async (_e, { itemLimit = 30 } = {}) => {
   try {
     const urls = feedsStore.list().map(f => f.url);
     if (!urls.length) return { ok: true, items: [], sources: [] };
     if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
-    const payload = await pollCallTool()('fetch_feeds_batch', { feed_urls: urls, item_limit: itemLimit });
-    const merged = feedsView.mergeReports(payload);
+    const feeds = await fetchFeedsChunked(urls, itemLimit);
+    if (!feeds.length) return { ok: false, error: 'no feed chunk returned (engine transport)' };
+    const merged = feedsView.mergeReports({ feeds });
     // Enrich each item with its cached topic category (feed tuner). Uncategorized (not yet cloud-classified)
     // → the deterministic provisional label, so the widget can balance immediately. Also ship the tuner
     // config so the renderer arranges in one round-trip.
@@ -3607,16 +3624,22 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       // preview), then stream the rest as blocks — the tab builds up as each finishes. Ingest is decoupled:
       // the poller re-reads the whole file via `src`, so background extraction stays full regardless.
       const parts = require('./lib/contact_extract').chunkForExtraction(data.markdown, { size: PREVIEW_CHUNK }).chunks;
-      await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'paragraph', data: { markdown: parts[0], src: data.src } });
+      const first = { markdown: parts[0], src: data.src };
+      const r0 = await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'paragraph', data: first });
+      canvasMirror(tabKey, mode, title, (r0 && r0.block_id) || null, 'paragraph', first);
       (async () => {
         for (let i = 1; i < parts.length; i++) {
-          try { await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'paragraph', data: { markdown: parts[i] } }); } catch (e) {}
+          try {
+            const ri = await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'paragraph', data: { markdown: parts[i] } });
+            canvasMirror(tabKey, mode, title, (ri && ri.block_id) || null, 'paragraph', { markdown: parts[i] });
+          } catch (e) {}
           await new Promise(res => setTimeout(res, 80));   // yield so each chunk paints before the next
         }
         console.log(`[canvas] "${title}" built in ${parts.length} progressive chunks`);
       })().catch(() => {});
     } else {
-      await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: blockType, data });
+      const r = await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: blockType, data });
+      canvasMirror(tabKey, mode, title, (r && r.block_id) || null, blockType, data);
     }
     try { canvasLayoutStore.setPosition(tabKey, x, y); } catch {}
     return { ok: true, tabKey, title };
@@ -3648,6 +3671,17 @@ function _surfaceAllowed(focusId) {
   } catch { return true; }
 }
 
+// Write-through mirror of everything we put on the canvas → lib/canvas_docs, so boot can rebuild the board.
+// Never throws and never blocks the write it follows: a mirror failure must not cost her the live block.
+function canvasMirror(tabKey, mode, title, blockId, blockType, data) {
+  if (!tabKey || !blockId) return;
+  try {
+    const store = require('./lib/canvas_docs');
+    store.recordTab({ tabKey, mode, title });
+    store.recordBlock({ tabKey, blockId, blockType, data: data || {} });
+  } catch (e) { console.error('[canvas] mirror failed:', e.message); }
+}
+
 const _canvasTabsOpened = new Set();
 async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
   try {
@@ -3660,7 +3694,8 @@ async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
       await callTool('saga_canvas_open_tab', { mode: ce.mode(tabMode || 'RESEARCH'), tab_key: tabKey, title: ce.tabTitleForGoal(title) });
       _canvasTabsOpened.add(tabKey);
     }
-    await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: blockType, data: data || {} });
+    const r = await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: blockType, data: data || {} });
+    canvasMirror(tabKey, ce.mode(tabMode || 'RESEARCH'), ce.tabTitleForGoal(title), (r && r.block_id) || null, blockType, data);
     return true;
   } catch (e) { console.error('[canvas] emit failed:', e.message); return false; }
 }
@@ -3685,6 +3720,7 @@ async function canvasUpsertBlock({ focusId, blockId, title, tabMode = 'DOC', blo
       await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: blockType, data: data || {}, block_id: blockId });
       _canvasBlocks.add(blockId);
     }
+    canvasMirror(tabKey, ce.mode(tabMode), ce.tabTitleForGoal(title), blockId, blockType, data);
     return true;
   } catch (e) { console.error('[canvas] upsert failed:', e.message); return false; }
 }
@@ -3720,6 +3756,41 @@ async function rehydrateCanvasFromDeliverable(focus, file, target) {
     if (n) console.log(`[directed] #${focus.id} canvas rehydrated after restart (${n} block(s))`);
   } catch (e) { console.error('[directed] canvas rehydrate failed:', e.message); }
 }
+// BOOT REPLAY — rebuild the WHOLE board from the durable mirror (lib/canvas_docs). This is the general
+// restore: the file-based rehydrate below can only reconstruct her research runs from directed-*.md, so
+// anything the OPERATOR dropped — a PDF, a spreadsheet, an op-ed — died with the engine's memory every
+// restart. Replays with the SAME tab keys and block ids, then seeds the session sets so subsequent live-grow
+// PATCHES those blocks in place instead of appending duplicates, and marks the replayed focuses as already
+// rehydrated so the file sweep doesn't emit the same sections a second time.
+async function replayCanvasFromStore() {
+  try {
+    if (!(await ensureEngine())) return 0;
+    const store = require('./lib/canvas_docs');
+    let docs = []; try { docs = store.all(); } catch (e) { console.error('[canvas] replay read failed:', e.message); return 0; }
+    if (!docs.length) return 0;
+    const callTool = pollCallTool();
+    let tabs = 0, blocks = 0;
+    for (const d of docs) {
+      if (!d.blocks.length) continue;                 // an empty shell isn't worth a tab
+      try {
+        await callTool('saga_canvas_open_tab', { mode: d.mode || 'DOC', tab_key: d.tabKey, title: d.title || '' });
+        _canvasTabsOpened.add(d.tabKey);
+        tabs++;
+        for (const b of d.blocks) {
+          await callTool('saga_canvas_add_block', { tab_key: d.tabKey, block_type: b.blockType, data: b.data || {}, block_id: b.blockId });
+          _canvasBlocks.add(b.blockId);
+          blocks++;
+        }
+        const focusId = Number((String(d.tabKey).match(/^directed-(\d+)$/) || [])[1]);
+        if (focusId) _canvasRehydrated.add(focusId);   // the store already restored it — don't re-emit from file
+      } catch (e) { console.error(`[canvas] replay of "${d.tabKey}" failed:`, e.message); }
+    }
+    try { store.prune(); } catch (e) {}
+    if (tabs) console.log(`[canvas] replayed ${tabs} document(s) / ${blocks} block(s) from the durable store`);
+    return tabs;
+  } catch (e) { console.error('[canvas] replay failed:', e.message); return 0; }
+}
+
 // BOOT durability — re-emit recent COMPLETED deliverables to the canvas after a restart (an active run
 // self-rehydrates on its next tick, but a finished run has no tick, so its blocks would stay wiped).
 async function rehydrateRecentCanvasDeliverables(limit = 6) {
@@ -4968,7 +5039,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   const awareness = buildAwarenessBlock({
     chosenName,
     sessionStartedAt: currentSessionStartedAt,
-    cumulativeMs: db.getCumulativeSessionTime()
+    cumulativeMs: db.getCumulativeSessionTime(),
+    standing: _researchStanding(),
+    working: _workingNow(),
   });
 
   // SCOPED RETRIEVAL (Phase 1) — classify the question, then retrieve to fit it:
@@ -7302,7 +7375,9 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     const awareness = buildAwarenessBlock({
       chosenName: db.getMeta('chosen_name'),
       sessionStartedAt: currentSessionStartedAt,
-      cumulativeMs: db.getCumulativeSessionTime()
+      cumulativeMs: db.getCumulativeSessionTime(),
+      standing: _researchStanding(),
+      working: _workingNow(),
     });
     const protocols = db.getActiveProtocols();
     // Echo chaining: while hops remain and the suit is connected, let her emit ONE more echo tag
@@ -7931,6 +8006,24 @@ function _schedulable(list) {
 function _electedBeats() { try { return _schedulable(require('./lib/beats').electedOfficialsSubBeats()); } catch { return []; } }
 function _topicBeats() { try { return _schedulable(require('./lib/beats').topicBeats()); } catch { return []; } }
 function _autonomicBeats() { return _electedBeats().concat(_topicBeats()); }
+
+// WHAT SHE IS WORKING ON THIS MOMENT — for the always-on awareness block (context.buildAwarenessBlock).
+// Reuses the denominator + covered counters the acks already use, so the ambient line and a coverage
+// ack can never quote different numbers for the same run. Null when nothing is running, so the line
+// simply doesn't render rather than asserting idle work.
+function _workingNow() {
+  try {
+    const f = require('./lib/focus').getCurrent();
+    if (!f || !f.content) return null;
+    const universe = _expectedCount(f.id);
+    return {
+      goal: String(f.content).replace(/\s+/g, ' ').slice(0, 140),
+      universe: universe > 0 ? universe : null,
+      done: universe > 0 ? _coveredCount(f.id) : null,
+      workers: _autonomousInFlight(),
+    };
+  } catch { return null; }
+}
 function _coveredCount(focusId) { try { return (JSON.parse(db.getMeta(`focus.${focusId}.covered`) || '[]') || []).length; } catch { return 0; } }
 
 // EXPECTED COUNT (the coverage DENOMINATOR) for a focus, or 0 when the universe genuinely isn't known.
