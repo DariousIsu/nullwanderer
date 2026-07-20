@@ -59,11 +59,14 @@ async function _complete(messages, { temperature = 0.2, num_predict = 400, model
   if (!cloud) return null;
   const model = modelOverride || await _resolveModel(models, cloud);
   if (!model) return null;
+  // Same window argument as streamCloud — this path carries the GROUNDED ANSWER DRAFT (cognition →
+  // ask → here), so an 8192 input window is where retrieved grounding was quietly losing its tail.
+  const win = await require('./cloud_window').resolve({ model, base: cloud.base, token: cloud.token });
   try {
     const text = await ollama.complete({
       model, messages, base: cloud.base,
       headers: cloud.token ? { Authorization: `Bearer ${cloud.token}` } : {},
-      options: { temperature, top_p: 0.9, num_ctx: 8192, num_predict }
+      options: { temperature, top_p: 0.9, num_ctx: win.num_ctx, num_predict }
     });
     return { text: text || '', model };
   } catch (e) { console.error('[cloud_logic] cloud call failed:', e.message); return null; }
@@ -85,7 +88,10 @@ async function _complete(messages, { temperature = 0.2, num_predict = 400, model
 // native reasoning model otherwise silos its reasoning into message.thinking (which the stream reader
 // drops) and answers in bare content with NO <think>/<say> tags. The reply path is bound to that tag
 // contract, so whoever writes the reply must obey it, cloud or local.
-async function streamCloud(messages, { temperature = 0.6, num_predict = 900, model: modelOverride = null,
+// num_predict defaults to NULL, not a number: the old 900-token default silently capped every cloud
+// answer at ~3,600 chars regardless of the model. Unset → lib/cloud_window decides; pass a number
+// only when the caller genuinely wants a SHORT answer.
+async function streamCloud(messages, { temperature = 0.6, num_predict = null, model: modelOverride = null,
   onToken = null, signal = null, inactivityMs = 90000, think = undefined, deps = {} } = {}) {
   let models, ollama;
   try { models = require('./models'); ollama = require('./ollama'); } catch { return null; }
@@ -96,6 +102,12 @@ async function streamCloud(messages, { temperature = 0.6, num_predict = 900, mod
   if (!cloud) return null;
   const model = modelOverride || await _resolveModel(models, cloud);
   if (!model) return null;
+  // The window is the model's, not the local model's. `num_ctx: 8192` was hardcoded here and meant a
+  // frontier model ran in ~1.6% of its context (deepseek-v4-pro is 524,288). See lib/cloud_window.
+  // Fail-safe: discovery failure returns exactly the old 8192, so this can only ever widen.
+  const win = await require('./cloud_window').resolve({
+    model, base: cloud.base, token: cloud.token, deps,
+  });
   let text = '';
   let tokens = 0;
   const startedAt = Date.now();
@@ -103,7 +115,8 @@ async function streamCloud(messages, { temperature = 0.6, num_predict = 900, mod
     await stream({
       model, messages, base: cloud.base,
       headers: cloud.token ? { Authorization: `Bearer ${cloud.token}` } : {},
-      options: { temperature, top_p: 0.9, num_ctx: 8192, num_predict },
+      // An explicit caller num_predict still wins — some callers deliberately want a short answer.
+      options: { temperature, top_p: 0.9, num_ctx: win.num_ctx, num_predict: num_predict || win.num_predict },
       signal, inactivityMs, think,
       onToken: (t) => {
         text += t; tokens += 1;

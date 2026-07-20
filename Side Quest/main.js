@@ -6530,7 +6530,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         onToken: (chunk) => parser.feed(chunk),
         inactivityMs: 180000,
         think: false,       // same tag-contract reason as the local call below
-        num_predict: 900,
+        // num_predict deliberately unset — lib/cloud_window sizes it to the model, so a complete
+        // thought isn't clipped at the local model's old 900-token budget.
         temperature: 0.7,   // her voice, not a classifier
       });
       if (r && r.text && r.text.trim()) {
