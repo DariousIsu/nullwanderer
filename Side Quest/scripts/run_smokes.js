@@ -78,6 +78,7 @@ const smokes = [
   'smoke_contacts_evidence.js',
   'smoke_coverage_evidence.js',
   'smoke_pdf_wasm.js',
+  'smoke_known_incorrect.js',
   'smoke_curation_gate.js',
   'smoke_curation_store.js',
   'smoke_substantiation.js',

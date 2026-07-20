@@ -450,6 +450,32 @@ const MIGRATIONS = [
   `ALTER TABLE documents ADD COLUMN superseded_by INTEGER`,
   `CREATE INDEX IF NOT EXISTS idx_documents_superseded ON documents(superseded_by)`,
 
+  // KNOWN-INCORRECT (§7) — the inoculation record. A claim that has been DISPROVEN is kept, forever,
+  // marked. Two reasons, and the second is the one that pays:
+  //   - "X was reported to have done Y, later retracted" is itself valuable in civic research, often
+  //     more than the claim would have been if true.
+  //   - storing the disproven value means the same bad datum cannot silently re-enter and re-open a
+  //     settled question. Without it, the next sweep re-learns the same wrong email and the cycle
+  //     repeats with no memory that it was already tested and failed.
+  //
+  // REFUTED IS NOT STALE, and conflating them would be wrong in both directions. §5a says contact
+  // DECAYS: an old address superseded by a newer one is history, not an error. This table is only for
+  // values shown to be FALSE — a bounced email, a corrected record — which is why every row demands a
+  // reason and a source rather than just a timestamp.
+  `CREATE TABLE IF NOT EXISTS known_incorrect (
+    id INTEGER PRIMARY KEY,
+    object_key TEXT NOT NULL,
+    claim_class TEXT NOT NULL,
+    claim_key TEXT,
+    claim_value TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    refuted_by TEXT,
+    refuted_at INTEGER NOT NULL
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_known_incorrect_uniq
+     ON known_incorrect(object_key, claim_class, COALESCE(claim_key,''), claim_value)`,
+  `CREATE INDEX IF NOT EXISTS idx_known_incorrect_object ON known_incorrect(object_key)`,
+
   // ENCOUNTER LOG (docs/ENCOUNTER_OBJECT_MODEL_DESIGN.md §2) — the primitive beneath everything else.
   //
   // Lucas: an object is real because it has been ENCOUNTERED. Objects and edges are DERIVED from this

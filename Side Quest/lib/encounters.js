@@ -265,6 +265,26 @@ function gradeClaim(key, { claimClass = 'biographical', claimKey = null } = {}) 
     || (decays ? b.latest - a.latest : 0)
     || (b.sources - a.sources) || (b.encounters - a.encounters));
 
+  // KNOWN-INCORRECT (§7) — a value proven FALSE can never win, however well attested. Ten documents
+  // repeating an address that bounced do not make it deliverable; they make it a widely-published
+  // mistake. The value stays in `values` with its sources and a `refuted` mark, because deleting it is
+  // what would let the same datum quietly walk back in on the next sweep.
+  try {
+    const ki = require('./known_incorrect');
+    const bad = ki.refutedSet(key, { claimClass, claimKey });
+    if (bad.size) {
+      for (const v of values) {
+        if (v.value != null && bad.has(ki.norm(v.value))) {
+          v.refuted = true;
+          const why = ki.reasonFor(key, v.value, { claimClass, claimKey });
+          if (why) v.refutedReason = why.reason;
+        }
+      }
+      // Sink refuted values below everything live, without dropping them.
+      values.sort((a, b) => (a.refuted ? 1 : 0) - (b.refuted ? 1 : 0));
+    }
+  } catch { /* the store is advisory — grading must survive without it */ }
+
   const single = SINGLE_TRUTH.has(claimClass);
   const top = values[0];
   // A rival only exists where the claim can only have ONE answer. For multi-truth classes every value
@@ -291,6 +311,10 @@ function gradeClaim(key, { claimClass = 'biographical', claimKey = null } = {}) 
     // The floor matters as much: two C claims disputing each other is not a dispute, it is an object
     // nobody has researched yet — which low grade already says, without spending a verification pass.
     cleaning: !!rival && rankOf(top.grade) >= RANK.B && rankOf(rival.grade) >= rankOf(top.grade) - 1,
+    // The leading value is itself disproven — meaning EVERY value for this claim is refuted, since
+    // refuted ones sort last. Not "we are unsure": we know this is wrong and hold no replacement.
+    refuted: !!top.refuted,
+    refutedReason: top.refutedReason || null,
     values,
   };
 }
