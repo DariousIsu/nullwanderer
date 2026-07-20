@@ -137,9 +137,86 @@ ok('includeBareClaims surfaces the narration sentence as claim',
   withClaims.units.some(u => /ordinary narration/.test(u.text) && u.kind === 'claim'));
 ok('includeBareClaims is a superset', withClaims.units.length > units.length);
 
+// ---- reference/endnote section: a source table, NOT claim material --------------------------
+// Shapes taken from real studio documents: bullet endnotes with positional ordinals (markdown
+// path), and "**1 **"-prefixed paragraphs trailed by an author bio (the docx-conversion path).
+
+const bulletDoc = importText([
+  '# Nevada Should Vote Yes on Question 7',
+  '',
+  'Question 7 first passed with about 73% support in 2024.[1]',
+  '',
+  'Florida strengthened its photo ID law in 2005.[2] Turnout did not decline.',
+  '',
+  '- The Nevada Independent, "Tracking 2026 ballot measures" (https://thenevadaindependent.com/article/tracking)',
+  '- Florida Division of Elections, "Voter ID at the Polls" (https://soe.dos.state.fl.us/pdf/voter-id.pdf)',
+  '- Ballotpedia, "Voter turnout in Florida" (https://ballotpedia.org/Voter_turnout_in_Florida)',
+].join('\n'), { format: 'md' });
+
+const bulletRes = extractUnits(bulletDoc);
+const bulletRefs = VE.findReferenceSection(bulletDoc.blocks);
+ok('bullet endnote list detected as reference section', !!bulletRefs && bulletRefs.entries[1] && bulletRefs.entries[3]);
+ok('reference entries are NOT mined as units',
+  !bulletRes.units.some(u => /thenevadaindependent|ballotpedia\.org/i.test(u.text)),
+  JSON.stringify(bulletRes.units.map(u => u.text.slice(0, 40))));
+ok('body claims survive the reference cut', bulletRes.units.length === 2, JSON.stringify(bulletRes.units.map(u => u.uid)));
+// The whole point: "[2]" must dereference to endnote 2, not endnote 1 or 3.
+const u2 = bulletRes.units.find(u => u.marker === '[2]');
+ok('marker [2] dereferenced to the SECOND endnote url',
+  u2 && u2.url === 'https://soe.dos.state.fl.us/pdf/voter-id.pdf' && u2.refOrdinal === 2, u2 && u2.url);
+const u1 = bulletRes.units.find(u => u.marker === '[1]');
+ok('marker [1] dereferenced to the FIRST endnote url',
+  u1 && /thenevadaindependent/.test(u1.url) && u1.refOrdinal === 1, u1 && u1.url);
+ok('summary reports dereference count', bulletRes.summary.markersDereferenced === 2 && bulletRes.summary.referenceEntries === 3,
+  JSON.stringify(bulletRes.summary));
+
+// docx shape: numbered "**1 **" paragraphs, with a trailing author bio that is NOT a reference.
+const docxDoc = importText([
+  'Beijing built a blueprint over two decades.',
+  '',
+  'China emitted approximately 3.7 billion tons in the 1990s.',
+  '',
+  '**1 **State Armor, \'ELI and Communist China\' https://statearmor.org/eli-report',
+  '',
+  '**2 **ELI website on CIBDEG. https://www.eli.org/cibdeg',
+  '',
+  '**3 **China emissions per EDGAR 2025. https://www.worldometers.info/co2-emissions/',
+  '',
+  '_Russ Walker is Executive Director of the Rainey Freedom Project._',
+].join('\n'), { format: 'md' });
+
+const docxRefs = VE.findReferenceSection(docxDoc.blocks);
+ok('"**1 **"-numbered paragraph endnotes detected', !!docxRefs && Object.keys(docxRefs.entries).length === 3,
+  JSON.stringify(docxRefs && docxRefs.entries));
+ok('explicit printed ordinals win over position', docxRefs && /statearmor/.test(docxRefs.entries[1].url) && /worldometers/.test(docxRefs.entries[3].url));
+const docxUnits = extractUnits(docxDoc).units;
+ok('trailing author bio is NOT swallowed by the reference run',
+  docxRefs.endIndex === docxDoc.blocks.length - 2, `endIndex=${docxRefs && docxRefs.endIndex} of ${docxDoc.blocks.length}`);
+ok('endnote paragraphs not mined as claims', !docxUnits.some(u => /statearmor|worldometers/i.test(u.text)));
+
+// --- no false positives: a document with no reference list keeps every unit ---
+const proseDoc = importText([
+  'The agency reported a 12% increase this year.',
+  '',
+  'Officials cited https://gao.gov/report.pdf as the basis for the finding.',
+  '',
+  'The committee will meet again in March.',
+].join('\n'), { format: 'md' });
+ok('single trailing linked paragraph is NOT a reference section', VE.findReferenceSection(proseDoc.blocks) === null);
+ok('prose doc keeps its linked unit', extractUnits(proseDoc).units.some(u => /gao\.gov/.test(u.url || '')));
+
+// --- opt-out restores the old behaviour ---
+ok('mineReferences:true re-mines the endnote list',
+  extractUnits(bulletDoc, { mineReferences: true }).units.length > bulletRes.units.length);
+
+// --- author-year markers have no ordinal and must not mis-dereference ---
+ok('author-year marker yields no ordinal', VE.markerOrdinal('[Smith, 2019]') === null && VE.markerOrdinal('(GAO, 2021)') === null);
+ok('numeric marker ordinal parsed', VE.markerOrdinal('[7]') === 7 && VE.markerOrdinal('[3-5]') === 3);
+
 // --- empty / garbage inputs ---
 ok('empty working copy → no units', extractUnits({ blocks: [] }).units.length === 0);
 ok('null working copy → no units, no throw', extractUnits(null).units.length === 0);
+ok('findReferenceSection tolerates junk', VE.findReferenceSection(null) === null && VE.findReferenceSection([]) === null);
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -90,6 +90,11 @@ html,body{height:100%;background:var(--bg);color:var(--tx-soft);font-family:-app
 .topbar-id .t{font-size:13px;color:var(--tx-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .topbar-id .s{font-size:11px;color:var(--tx-dim);}
 .topbar-actions{display:flex;align-items:center;gap:8px;}
+.export-doc-wrap{position:relative;display:inline-flex;}
+.export-doc-menu{position:absolute;top:calc(100% + 5px);right:0;z-index:40;display:flex;flex-direction:column;min-width:132px;padding:4px;border:1px solid var(--line-strong);border-radius:var(--r-sm);background:var(--bg-raised,#16181c);box-shadow:0 6px 20px rgba(0,0,0,0.45);}
+.export-doc-menu[hidden]{display:none;}
+.export-doc-menu button{background:transparent;border:0;color:var(--tx-muted);font-family:inherit;font-size:11px;text-align:left;padding:6px 10px;border-radius:3px;cursor:pointer;white-space:nowrap;}
+.export-doc-menu button:hover{background:var(--line-strong);color:var(--tx-soft);}
 .progress{display:inline-flex;align-items:center;gap:7px;font-size:11px;color:var(--tx-dim);}
 .progress .bar{display:inline-block;width:48px;height:5px;border-radius:3px;background:var(--line-strong);position:relative;overflow:hidden;}
 .progress .bar i{position:absolute;left:0;top:0;bottom:0;background:var(--ok-line);transition:width 200ms;}
@@ -204,6 +209,14 @@ body.drop-hover::after{content:"Drop to import — PDF, Word, Markdown, spreadsh
       <span class="progress"><span class="bar"><i id="prog-bar" style="width:0%"></i></span><span id="prog-text">0 of 0 resolved</span></span>
       <button class="btn accent sm" id="run-checks-btn"><span class="ic">&#10003;</span>Run checks</button>
       <button class="btn sm" id="report-btn" disabled title="export the findings as a report for the author">&#8615; Report</button>
+      <span class="export-doc-wrap">
+        <button class="btn sm" id="export-doc-btn" title="export the document itself">&#8615; Document</button>
+        <span class="export-doc-menu" id="export-doc-menu" hidden>
+          <button data-fmt="pdf">PDF</button>
+          <button data-fmt="docx">Word (.docx)</button>
+          <button data-fmt="md">Markdown</button>
+        </span>
+      </span>
       <button class="btn sm" id="certify-btn" disabled>Certify</button>
       <button class="btn sm" id="publish-btn" disabled>Publish</button>
       <button class="toprail-btn" id="rail-toggle" title="toggle findings">&#9776;</button>

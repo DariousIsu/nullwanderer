@@ -172,8 +172,15 @@
     if (typeof opts.complete !== 'function') return stubJudge(unit, primary);
     let text = '';
     try {
+      // num_predict/num_ctx belong INSIDE options — the transport reads options.*, so a top-level
+      // num_predict was silently dropped and the judge inherited the 8192 default context. Two
+      // MAX_PASSAGE passages plus the rubric plus a reasoning model's hidden chain-of-thought
+      // overruns that, and an overrun judge returns truncated JSON that parses as NK.
       text = await opts.complete({
-        model: opts.model, base: opts.base, headers: opts.headers, num_predict: opts.numPredict || 1200,
+        model: opts.model, base: opts.base, headers: opts.headers,
+        // 4000, not 1200: a frontier reasoner spends most of its budget on hidden reasoning before
+        // it emits the verdict object, and a cap that clips mid-JSON degrades silently to NK.
+        options: { num_predict: opts.numPredict || 4000, num_ctx: opts.numCtx || 32768 },
         messages: [{ role: 'system', content: RUBRIC_SYS }, { role: 'user', content: buildJudgePrompt(unit, primary, independent) }],
       });
     } catch { text = ''; }

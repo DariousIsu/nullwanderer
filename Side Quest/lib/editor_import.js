@@ -84,12 +84,25 @@ function parseBlocks(src) {
   return blocks.map((b, i) => ({ anchor: anchorFor(i), hash: blockHash(b.text), ...b }));
 }
 
+// Strip leading/trailing markdown emphasis from a title-ish line. docx→markdown conversion emits
+// a document's title as an emphasized paragraph ("**Title**"), and without this the asterisks ride
+// into the registry, View A, the findings report, and the certificate.
+function stripEmphasis(text) {
+  let t = String(text || '').trim();
+  for (let i = 0; i < 3; i++) {
+    const m = t.match(/^(\*\*\*|\*\*|__|\*|_)([\s\S]+?)\1$/);
+    if (!m) break;
+    t = m[2].trim();
+  }
+  return t;
+}
+
 // Guess a title: first heading, else first non-empty paragraph (capped), else 'Untitled'.
 function guessTitle(blocks) {
   const h = blocks.find(b => b.type === 'heading');
-  if (h && h.text) return h.text.slice(0, 200);
+  if (h && h.text) return stripEmphasis(h.text).slice(0, 200);
   const p = blocks.find(b => b.text && b.text.trim());
-  return p ? p.text.slice(0, 80) : 'Untitled';
+  return p ? stripEmphasis(p.text).slice(0, 80) : 'Untitled';
 }
 
 // Normalize a markdown/plaintext string into a working copy.
@@ -139,6 +152,59 @@ function importFile(filePath, opts = {}) {
   throw new Error(`importFile: unsupported extension .${ext}`);
 }
 
+// Render the BLOCK MODEL to document HTML (for PDF export). The blocks are richer and more reliable
+// than re-parsing markdown — headings, list runs and tables are already resolved here — so an export
+// mirrors exactly what the studio verified. Pure + string-only: no DOM, no Electron.
+function blocksToHtml(blocks) {
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  // Inline markdown the importer deliberately leaves inside block text.
+  const inline = (s) => esc(s)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[\s(])_([^_]+)_(?=[\s.,;:)!?]|$)/g, '$1<em>$2</em>')
+    .replace(/(^|[^*\w])\*([^*]+)\*(?!\*)/g, '$1<em>$2</em>')
+    // Bare urls -> real links. Endnote lists cite sources as plain "(https://…)", which would
+    // otherwise export as dead text. The leading-delimiter capture keeps this off urls already
+    // inside an href="…" emitted just above.
+    .replace(/(^|[\s(])(https?:\/\/[^\s<>()]+)/g, '$1<a href="$2">$2</a>');
+
+  const out = [];
+  let list = null;                                    // batch contiguous list_items into one <ul>/<ol>
+  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+
+  for (const b of (blocks || [])) {
+    if (!b) continue;
+    if (b.type === 'list_item') {
+      const want = /^\d/.test(String(b.marker || '')) ? 'ol' : 'ul';
+      if (list !== want) { closeList(); list = want; out.push(`<${want}>`); }
+      out.push(`<li>${inline(b.text)}</li>`);
+      continue;
+    }
+    closeList();
+    if (b.type === 'heading') {
+      const lv = Math.min(6, Math.max(1, b.level || 1));
+      out.push(`<h${lv}${lv === 1 ? ' class="ex-title"' : ''}>${inline(b.text)}</h${lv}>`);
+    } else if (b.type === 'code') {
+      out.push(`<pre><code>${esc(b.text)}</code></pre>`);
+    } else if (b.type === 'table') {
+      const rows = String(b.text || '').split('\n').map(r => r.trim()).filter(Boolean)
+        .filter(r => !/^[|\s:-]+$/.test(r))
+        .map(r => r.replace(/^\||\|$/g, '').split('|').map(c => c.trim()));
+      if (rows.length) {
+        const [head, ...body] = rows;
+        out.push('<table><thead><tr>' + head.map(c => `<th>${inline(c)}</th>`).join('') + '</tr></thead><tbody>');
+        for (const r of body) out.push('<tr>' + r.map(c => `<td>${inline(c)}</td>`).join('') + '</tr>');
+        out.push('</tbody></table>');
+      }
+    } else {
+      out.push(`<p>${inline(b.text)}</p>`);
+    }
+  }
+  closeList();
+  return out.join('\n');
+}
+
 // Plain text of the working copy (for re-check / diff / display fallbacks).
 function workingCopyText(wc) {
   return (wc && wc.blocks || []).map(b => b.type === 'heading' ? `${'#'.repeat(b.level || 1)} ${b.text}` : b.text).join('\n\n');
@@ -146,6 +212,6 @@ function workingCopyText(wc) {
 
 module.exports = {
   normalizeMarkdown, importText, importFile, parseBlocks, workingCopyText,
-  guessTitle, blockHash, anchorFor,
+  guessTitle, stripEmphasis, blocksToHtml, blockHash, anchorFor,
   TEXT_FORMATS, ECHO_FORMATS,
 };

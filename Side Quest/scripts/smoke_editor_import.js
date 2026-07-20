@@ -114,5 +114,59 @@ try {
   for (const f of [TMP_DB, TMP_DB + '-wal', TMP_DB + '-shm']) { try { fs.unlinkSync(f); } catch {} }
 }
 
+// ---- title emphasis (docx→markdown emits the title as "**Title**") --------------------------
+{
+  const EI = require('../lib/editor_import');
+  ok('bold-wrapped title loses its asterisks',
+    EI.importText('**The Climate Lawyers Who Handed Beijing a Blueprint**\n\nBody.', { format: 'md' }).title
+      === 'The Climate Lawyers Who Handed Beijing a Blueprint');
+  ok('italic byline unwrapped', EI.stripEmphasis('_By Russ Walker_') === 'By Russ Walker');
+  ok('bold-italic unwrapped', EI.stripEmphasis('***Deep***') === 'Deep');
+  ok('mid-sentence emphasis is NOT stripped', EI.stripEmphasis('A **bold** word inside') === 'A **bold** word inside');
+  ok('a real heading still wins over a bold paragraph',
+    EI.importText('# Real Heading\n\n**Not the title**', { format: 'md' }).title === 'Real Heading');
+
+  // ---- block model → export HTML ------------------------------------------------------------
+  const wc = EI.importText([
+    '# Report Title',
+    '',
+    'A paragraph with **bold**, _italic_, and a [link](https://example.org/x).',
+    '',
+    '- first bullet',
+    '- second bullet',
+    '',
+    '1. ordered one',
+    '2. ordered two',
+    '',
+    '| Basin | Gain |',
+    '| --- | --- |',
+    '| North | 18% |',
+    '',
+    '```',
+    'const x = 1 < 2 && 3 > 2;',
+    '```',
+  ].join('\n'), { format: 'md' });
+  const html = EI.blocksToHtml(wc.blocks);
+  ok('h1 rendered with title class', /<h1 class="ex-title">Report Title<\/h1>/.test(html));
+  ok('markdown link not double-wrapped', (html.match(/<a href/g) || []).length === 1, html);
+  // Endnote lists cite bare urls; an export must turn them into real links, exactly once.
+  const bareHtml = EI.blocksToHtml([{ type: 'list_item', marker: '-', text: 'Ballotpedia, "Voter turnout" (https://ballotpedia.org/Voter_turnout)' }]);
+  ok('bare url autolinked', /<a href="https:\/\/ballotpedia\.org\/Voter_turnout">https:\/\/ballotpedia\.org\/Voter_turnout<\/a>/.test(bareHtml), bareHtml);
+  ok('bare url linked exactly once', (bareHtml.match(/<a href/g) || []).length === 1, bareHtml);
+  ok('inline bold/italic/link rendered',
+    /<strong>bold<\/strong>/.test(html) && /<em>italic<\/em>/.test(html) && /<a href="https:\/\/example\.org\/x">link<\/a>/.test(html), html);
+  ok('contiguous bullets share ONE <ul>', (html.match(/<ul>/g) || []).length === 1 && (html.match(/<li>/g) || []).length === 4);
+  ok('numbered list becomes <ol>', /<ol>/.test(html));
+  ok('table renders thead + tbody, separator row dropped',
+    /<th>Basin<\/th>/.test(html) && /<td>North<\/td>/.test(html) && !/---/.test(html), html);
+  ok('code block is escaped, not interpreted', /<pre><code>const x = 1 &lt; 2 &amp;&amp; 3 &gt; 2;<\/code><\/pre>/.test(html), html);
+  ok('every list is closed', (html.match(/<ul>/g) || []).length === (html.match(/<\/ul>/g) || []).length &&
+    (html.match(/<ol>/g) || []).length === (html.match(/<\/ol>/g) || []).length);
+  ok('blocksToHtml tolerates junk', EI.blocksToHtml(null) === '' && EI.blocksToHtml([null]) === '');
+  // Injection safety: the export is fed to an offscreen renderer, so raw markup must never survive.
+  ok('html in source text is escaped',
+    !/<script>/.test(EI.blocksToHtml([{ type: 'paragraph', text: '<script>alert(1)</script>' }])));
+}
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

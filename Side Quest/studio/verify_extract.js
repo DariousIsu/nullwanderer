@@ -110,6 +110,89 @@
   // First element or undefined — keeps optional fields absent (not null) when nothing detected.
   const first = (a) => (a && a.length ? a[0] : undefined);
 
+  // ---- reference/endnote section -----------------------------------------------------------
+  // A document's own endnote list is NOT a set of claims — it is the SOURCE TABLE for the claims
+  // above it. Mining it produces junk units (a source title in quotation marks reads as a "quote"
+  // to verify verbatim) and, worse, leaves body claims carrying a bare "[7]" with no url at all —
+  // so the resolver blind-searches the web for a source the document already named. Detecting the
+  // section once fixes both: skip it as claim material, and use it to dereference markers.
+
+  const NOTES_HEADING_RE = /^\s*(notes?|endnotes?|footnotes?|references?|sources?|citations?|works\s+cited|bibliography)\s*:?\s*$/i;
+  // Leading ordinal on an endnote line: "1." / "1)" / "[1]" / "**1 **" / "1 " (docx converters emit
+  // the bolded variant, so the emphasis marks are part of the pattern, not noise to strip first).
+  const LEADING_ORDINAL_RE = /^\s*(?:\*\*\s*)?\[?(\d{1,3})\]?[\s.):\]]*(?:\*\*)?\s*/;
+  const REF_BLOCKS = new Set(['list_item', 'paragraph']);
+
+  /**
+   * Locate the trailing reference/endnote section of a working copy.
+   *
+   * Two signals, in order: an explicit "Notes"/"References"/… heading, else the longest TRAILING
+   * run of list-item/paragraph blocks that mostly carry urls. Requires >= 2 entries so a single
+   * closing link never swallows the conclusion paragraph.
+   *
+   * @returns {{ startIndex:number, entries:Object }|null}  entries maps ordinal -> {anchor,url,text}
+   */
+  function findReferenceSection(blocks, opts = {}) {
+    const list = Array.isArray(blocks) ? blocks : [];
+    if (list.length < 2) return null;
+    const minEntries = opts.minRefEntries != null ? opts.minRefEntries : 2;
+    const hasUrl = (b) => detectUrls(String((b && b.text) || '')).length > 0;
+
+    // How many non-reference blocks may follow the list (an author bio / dateline commonly trails it).
+    const maxTail = opts.maxRefTail != null ? opts.maxRefTail : 3;
+
+    let startIndex = -1, endIndex = list.length - 1;
+    // Signal 1 — an explicit heading. Everything after the LAST such heading is the section.
+    for (let i = list.length - 1; i >= 0; i--) {
+      const b = list[i];
+      if (b && b.type === 'heading' && NOTES_HEADING_RE.test(String(b.text || ''))) { startIndex = i + 1; break; }
+    }
+    // Signal 2 — no heading (docx converters routinely drop it). Take the LONGEST consecutive run of
+    // ref-shaped blocks that EACH carry a url. Requiring the url per block is what keeps the run from
+    // swallowing body prose: an endnote list is uniformly linked, an argument is not.
+    if (startIndex < 0) {
+      let best = null, runStart = -1;
+      for (let i = 0; i <= list.length; i++) {
+        const ok = i < list.length && list[i] && REF_BLOCKS.has(list[i].type) && hasUrl(list[i]);
+        if (ok) { if (runStart < 0) runStart = i; continue; }
+        if (runStart >= 0) {
+          const len = i - runStart;
+          if (!best || len > best.len) best = { start: runStart, end: i - 1, len };
+          runStart = -1;
+        }
+      }
+      // References TRAIL the argument — a linked run buried mid-document is evidence, not a source list.
+      if (!best || best.len < minEntries || best.end < list.length - 1 - maxTail) return null;
+      startIndex = best.start;
+      endIndex = best.end;
+    }
+    if (startIndex < 0 || startIndex >= list.length) return null;
+
+    const section = list.slice(startIndex, endIndex + 1);
+    if (section.length < minEntries) return null;
+
+    // Ordinals: prefer the number the document itself prints, else fall back to position. A list
+    // that numbers nothing is still dereferenceable — endnote lists are written in citation order.
+    const entries = {};
+    section.forEach((b, i) => {
+      const text = String((b && b.text) || '');
+      const m = text.match(LEADING_ORDINAL_RE);
+      const ordinal = m ? parseInt(m[1], 10) : i + 1;
+      if (!(ordinal > 0) || entries[ordinal]) return;      // never let a later entry clobber an earlier one
+      const url = first(detectUrls(text)) || null;
+      entries[ordinal] = { anchor: b.anchor, url, text: m ? text.slice(m[0].length) : text };
+    });
+    return Object.keys(entries).length ? { startIndex, endIndex, entries } : null;
+  }
+
+  // "[7]" / "[7,8]" / "[3-5]" -> 7. Author-year markers ("[Smith, 2019]", "(GAO, 2021)") carry no
+  // endnote ordinal: the marker must be PURELY numeric, or a year's leading digits would be read as
+  // an endnote number and silently point the claim at an unrelated source.
+  function markerOrdinal(marker) {
+    const m = String(marker || '').match(/^\[\s*(\d{1,3})\s*(?:[-,]\s*\d{1,3}\s*)*\]$/);
+    return m ? parseInt(m[1], 10) : null;
+  }
+
   // Resolve a unit's kind from its detected signals (fixed precedence). null ⇒ not a unit.
   function kindOf(sig, includeBareClaims) {
     if (sig.quote) return 'quote';
@@ -152,9 +235,15 @@
     const units = [];
     let candidateCount = 0;
 
-    for (const block of blocks) {
-      if (!TEXT_BLOCKS.has(block.type)) continue;
+    // The endnote list is the document's SOURCE TABLE, not claim material: skip it when mining, and
+    // keep it to dereference "[n]" markers below. opts.mineReferences re-enables the old behaviour.
+    const refs = opts.mineReferences ? null : findReferenceSection(blocks, opts);
+
+    for (let bi = 0; bi < blocks.length; bi++) {
+      const block = blocks[bi];
+      if (!block || !TEXT_BLOCKS.has(block.type)) continue;
       if (block.type === 'heading' && !includeHeadings) continue;
+      if (refs && bi >= refs.startIndex && bi <= refs.endIndex) continue;   // a source, not a claim
 
       const candidates = splitCandidates(block);
       candidates.forEach((text, si) => {
@@ -174,6 +263,18 @@
         if (sig.doi) unit.doi = sig.doi;
         if (sig.marker) unit.marker = sig.marker;
         if (numbers.length) unit.numbers = numbers;
+
+        // Dereference "[n]" against the endnote list so the resolver can fetch the source the
+        // document actually cited (ladder rung 1) instead of blind-searching the web (rung 4).
+        if (refs && sig.marker && !unit.url) {
+          const ord = markerOrdinal(sig.marker);
+          const ref = ord != null ? refs.entries[ord] : null;
+          if (ref && ref.url) {
+            unit.url = ref.url;
+            unit.refOrdinal = ord;
+            unit.refAnchor = ref.anchor;
+          }
+        }
         units.push(unit);
       });
     }
@@ -184,12 +285,17 @@
 
     return {
       units,
-      summary: { blockCount: blocks.length, candidateCount, unitCount: units.length, byKind },
+      summary: {
+        blockCount: blocks.length, candidateCount, unitCount: units.length, byKind,
+        referenceStart: refs ? refs.startIndex : null,
+        referenceEntries: refs ? Object.keys(refs.entries).length : 0,
+        markersDereferenced: units.filter(u => u.refOrdinal != null).length,
+      },
     };
   }
 
   return {
-    extractUnits, kindOf, splitCandidates,
+    extractUnits, kindOf, splitCandidates, findReferenceSection, markerOrdinal,
     splitSentences, detectQuotes, detectUrls, detectDois, detectMarkers, detectNumbers,
     KINDS, TEXT_BLOCKS,
   };

@@ -88,6 +88,7 @@ contextBridge.exposeInMainWorld('sq', {
     detachSource: (docId, uid) => ipcRenderer.invoke('editor:detach-source', { docId, uid }),
     runChecks: (docId) => ipcRenderer.invoke('editor:run-checks', docId),
     exportReport: (docId, mapped) => ipcRenderer.invoke('editor:export-report', { docId, mapped }),  // findings report for the author (not a cert)
+    exportDoc: (docId, format) => ipcRenderer.invoke('editor:export-doc', { docId, format }),        // the reviewed DOCUMENT itself (pdf|docx|md)
     certify: (docId, mapped) => ipcRenderer.invoke('editor:certify', { docId, mapped }),
     publish: (docId, publicCopyRef) => ipcRenderer.invoke('editor:publish', { docId, publicCopyRef })
   },

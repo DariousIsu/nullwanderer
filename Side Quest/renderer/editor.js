@@ -279,6 +279,30 @@ document.getElementById('report-btn').addEventListener('click', async () => {
   finally { btn.innerHTML = orig; btn.disabled = false; }
 });
 
+// Document export (pdf | docx | md). Unlike Report/Certify this needs no verification result —
+// the document can be exported at any point in the pipeline.
+(function wireDocExport(){
+  const btn = document.getElementById('export-doc-btn');
+  const menu = document.getElementById('export-doc-menu');
+  if(!btn || !menu) return;
+  btn.addEventListener('click', (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; });
+  document.addEventListener('click', () => { menu.hidden = true; });
+  menu.addEventListener('click', (e) => e.stopPropagation());
+  menu.querySelectorAll('button[data-fmt]').forEach(item => {
+    item.addEventListener('click', async () => {
+      if(!E || !currentDoc) return;
+      menu.hidden = true;
+      const orig = btn.innerHTML;
+      btn.disabled = true; btn.innerHTML = 'Exporting…';
+      try {
+        const r = await E.exportDoc(currentDoc.id, item.dataset.fmt);
+        if(!(r && r.ok)) alert('Export failed: ' + (r && r.error || 'unknown error'));
+      } catch (err) { alert('Export errored: ' + err.message); }
+      finally { btn.innerHTML = orig; btn.disabled = false; }
+    });
+  });
+})();
+
 document.getElementById('certify-btn').addEventListener('click', async () => {
   if(!E || !currentDoc || !LAST_MAPPED) return;
   const btn = document.getElementById('certify-btn');

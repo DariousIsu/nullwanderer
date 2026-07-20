@@ -302,6 +302,12 @@ function attachCertificate(docId, { certNumber, parentCertId = null, verificatio
 function listCertificates(docId) {
   return _db().prepare(`SELECT * FROM certificates WHERE doc_id = ? ORDER BY issued_at ASC`).all(docId);
 }
+// Repoint a certificate at its delivered artifact. Issuance renders HTML (pure + testable, no
+// Electron); the operator's certificate is the PDF built from it, so the logged ref must follow.
+function setCertDocRef(certId, certDocRef) {
+  _db().prepare(`UPDATE certificates SET cert_doc_ref = ? WHERE id = ?`).run(String(certDocRef || ''), certId);
+  return certDocRef;
+}
 
 // Working-copy persistence (the normalized model from lib/editor_import lives here; an
 // iteration's content_ref points at (doc_id, version)). Upsert per (doc, version).
@@ -371,7 +377,7 @@ module.exports = {
   registerDocument, getDocument, getByEchoDocId, listDocuments, touchAccessed,
   addIteration, listIterations,
   recordCheckRun, updateCheckRun, latestCheckRun,
-  setStatus, attachCertificate, listCertificates, closeOut,
+  setStatus, attachCertificate, listCertificates, setCertDocRef, closeOut,
   saveWorkingCopy, getWorkingCopy, updateEchoRef,
   saveAttachment, getAttachment, listAttachments, getAttachmentMap, deleteAttachment,
   // pure helpers
