@@ -89,6 +89,37 @@ const recentRows = [
       'control: a real stored mood still reads back');
   }
 
+  // --- JSON IS THE PRIMARY FORM (2026-07-20) -----------------------------------------------------
+  // The prose form broke twice in two days in two different ways, both times storing a mood that then
+  // LED HER VOICE. JSON removes the class: field boundaries come from the parser, not a label regex.
+  {
+    const J = '{"feeling":"attentive, a little restless","day":"a long steady grind","onMind":"whether the rosters are complete","withUser":"in step"}';
+    const p = mood.parseMoodJson(J);
+    ok(p && p.feeling === 'attentive, a little restless' && p.withUser === 'in step', 'JSON mood parses into fields');
+    ok(!mood.isTemplateEcho(p), 'a real JSON mood is accepted');
+    // models wrap JSON in prose/fences despite instructions — house convention takes the first {...}
+    ok(mood.parseMoodJson('Sure!\n```json\n' + J + '\n```\nHope that helps').feeling === 'attentive, a little restless',
+      'JSON is extracted from surrounding prose and fences');
+    ok(mood.parseMoodJson('no json here') === null, 'no JSON → null (falls through to the prose parser)');
+    ok(mood.parseMoodJson('{"day":"x"}') === null, 'JSON without a feeling → null (not a usable mood)');
+    ok(mood.parseMoodJson('[1,2]') === null, 'a JSON array is not a mood');
+
+    // compose prefers JSON, and the prose parser still catches a model that ignored the instruction
+    let stored = null;
+    const r1 = await mood.compose({ genFn: async () => J, recentRows: [], setFn: (k, v) => { if (k === 'mood_state') stored = v; }, getFn: () => null, nowTs: 9000 });
+    ok(r1 && r1.feeling === 'attentive, a little restless' && stored, 'compose stores the JSON mood');
+    stored = null;
+    const r2 = await mood.compose({ genFn: async () => 'FEELING: warm\nDAY: quiet', recentRows: [], setFn: (k, v) => { if (k === 'mood_state') stored = v; }, getFn: () => null, nowTs: 9100 });
+    ok(r2 && r2.feeling === 'warm', 'FALLBACK: a prose reply still parses when the model ignores JSON');
+
+    // SAFETY: the JSON template's example values have no angle brackets — an echo of them must still be caught
+    const echoed = '{"feeling":"a few words for the core feeling","day":"one phrase for the texture of her day so far","onMind":"","withUser":""}';
+    ok(mood.isTemplateEcho(mood.parseMoodJson(echoed)), 'SAFETY: echoing the JSON template values is detected');
+    let leaked = null;
+    await mood.compose({ genFn: async () => echoed, recentRows: [], setFn: (k, v) => { if (k === 'mood_state') leaked = v; }, getFn: () => null, nowTs: 9200 });
+    ok(leaked === null, 'SAFETY: a JSON template echo is refused, previous mood stands');
+  }
+
   // --- MARKDOWN LABELS (found live 2026-07-20, after the template-echo fix) -----------------------
   // The prompt asks for bare `FEELING: …`, but the cloud returned `**FEELING:** …`. The `**` broke
   // the label terminator, so every field bled into the next and the stored mood was a run-on of

@@ -66,6 +66,15 @@ function isStale({ ttlMs = DEFAULT_TTL_MS, nowTs = null, getFn = null } = {}) {
 // Rejecting is strictly better than storing: compose returns null, the PREVIOUS mood stands, and a
 // slightly stale real feeling beats a fresh fake one.
 const PLACEHOLDER_RE = /<[^>]{3,}>/;                       // "<a few words for the core feeling>"
+// The JSON prompt's example values carry NO angle brackets, so PLACEHOLDER_RE cannot catch an echo of
+// them. These are the literal descriptions from that template — if one comes back as a value, the
+// model copied the shape instead of answering it.
+const TEMPLATE_PHRASE_RE = new RegExp([
+  'a few words for the core feeling',
+  'one phrase for the texture of her day',
+  "what's quietly pulling at her",
+  'where she sits with',
+].join('|'), 'i');
 const INSTRUCTION_LEAK_RE = new RegExp([
   'we need to', 'her mood right now', 'mood based on prior', 'present tense',
   'grounded only in', 'never invent', 'a mood drifts', 'four short lines',
@@ -84,7 +93,28 @@ function isTemplateEcho(mood) {
   if (!mood) return true;
   const fields = [mood.feeling, mood.day, mood.onMind, mood.withUser].map(v => String(v || ''));
   if (fields.every(f => !f.trim())) return true;
-  return fields.some(f => PLACEHOLDER_RE.test(f) || INSTRUCTION_LEAK_RE.test(f) || BLED_RE.test(f));
+  return fields.some(f => PLACEHOLDER_RE.test(f) || TEMPLATE_PHRASE_RE.test(f) || INSTRUCTION_LEAK_RE.test(f) || BLED_RE.test(f));
+}
+
+// JSON FIRST. The prose form ("FEELING: …") is regex-parsed free-form model output, and it broke
+// twice in two days in two different ways — the template echoed back verbatim, then markdown-bold
+// labels that shattered the field splitting. Both stored a mood that then LED HER VOICE. Asking for
+// JSON removes the class: field boundaries come from the parser, not from a label regex that has to
+// anticipate every decoration a model might add.
+//
+// The prose parser stays as a fallback, with all its guards, because a local model that ignores the
+// JSON instruction should degrade to the old behaviour rather than to no mood at all.
+// House convention (open_threads.parseGoalsJson): take the first {...} block, since models emit
+// prose around it despite instructions.
+function parseMoodJson(raw) {
+  const s = String(raw || '');
+  const m = s.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  let obj; try { obj = JSON.parse(m[0]); } catch { return null; }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  const f = (k) => _clean(obj[k] == null ? '' : String(obj[k]));
+  const mood = { feeling: f('feeling').slice(0, 160), day: f('day').slice(0, 200), onMind: f('onMind').slice(0, 200), withUser: f('withUser').slice(0, 200) };
+  return mood.feeling ? mood : null;      // no feeling → not a usable mood, fall through to prose
 }
 
 // Parse the cloud's structured mood into fields. Fail-safe: an unstructured reply becomes the `feeling`.
@@ -132,11 +162,12 @@ ${prevLine}
 RECENT LIVED EXPERIENCE (real — conversations and her own thoughts):
 ${experience}
 
-Write her mood RIGHT NOW as four short lines, present tense, warm and specific, grounded only in the above (no clinical words, no numbers, no "as an AI"):
-FEELING: <a few words for the core feeling>
-DAY: <one phrase for the texture of her day so far>
-ON MY MIND: <what's quietly pulling at her>
-WITH ${userName.toUpperCase()}: <where she sits with ${userName} right now>`;
+Write her mood RIGHT NOW, present tense, warm and specific, grounded only in the above (no clinical words, no numbers, no "as an AI").
+
+Reply with ONE JSON object and NOTHING else — no markdown fences, no commentary, no labels:
+{"feeling":"a few words for the core feeling","day":"one phrase for the texture of her day so far","onMind":"what's quietly pulling at her","withUser":"where she sits with ${userName} right now"}
+
+Every value must be her ACTUAL mood in your own words. Do not echo the descriptions above.`;
 
   let raw = '';
   try {
@@ -144,7 +175,8 @@ WITH ${userName.toUpperCase()}: <where she sits with ${userName} right now>`;
     raw = await genFn(prompt);
   } catch (e) { console.error('[mood] compose failed:', e.message); return null; }
 
-  const mood = parseMood(raw);
+  // JSON first; the prose parser is the fallback for a model that ignored the instruction.
+  const mood = parseMoodJson(raw) || parseMood(raw);
   if (!mood || !mood.feeling) return null;
   // The model echoed the template back rather than answering it — keep the mood she already had.
   if (isTemplateEcho(mood)) {
@@ -164,4 +196,4 @@ async function maybeRefresh({ ttlMs = DEFAULT_TTL_MS, nowTs = null, getFn = null
   return doCompose({ nowTs, ...composeOpts });
 }
 
-module.exports = { compose, maybeRefresh, current, composedAt, isStale, parseMood, isTemplateEcho, buildBlock, DEFAULT_TTL_MS, MOOD_KEY, MOOD_AT_KEY };
+module.exports = { compose, maybeRefresh, current, composedAt, isStale, parseMood, parseMoodJson, isTemplateEcho, buildBlock, DEFAULT_TTL_MS, MOOD_KEY, MOOD_AT_KEY };
