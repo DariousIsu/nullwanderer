@@ -69,25 +69,34 @@ function placeKey(name) {
     .trim();
 }
 
-// The governing body's name for a county-equivalent. Official titles vary wildly (TX "Commissioners Court",
-// IL "County Board", LA "Police Jury/Parish Council", AK "Borough Assembly", VA independent cities "City
-// Council") — the target string just has to anchor a browser search and carry the place token; the research
-// pass corroborates the ACTUAL body + its members. Derive from the name's suffix (most specific), not the
-// state noun, so independent cities inside a county state get "City Council", not "Board of Commissioners".
+// A FUNCTIONAL DESCRIPTION of the county-equivalent's governing body — deliberately NOT a guess at its
+// proper name.
+//
+// This used to synthesise a title from the place's suffix: every "X Parish" became "Parish Council of X
+// Parish, Louisiana". The reasoning was sound as far as it went — the string only had to anchor a browser
+// search, and the research pass would corroborate the real body. The flaw was that it did not STAY an
+// internal search anchor. Target strings are written into `covered`, read back by the coverage report, and
+// read aloud to Lucas — so a naming convention silently became a factual claim about how a jurisdiction is
+// governed. It was frequently wrong: most Louisiana parishes are run by a POLICE JURY, not a parish
+// council (her own research surfaced Acadia/Calcasieu/Bossier Police Juries and the Caddo Parish
+// Commission while the worklist insisted all 64 were "Parish Councils"), and titles vary just as wildly
+// elsewhere (TX "Commissioners Court", IL "County Board", AK "Borough Assembly").
+//
+// So describe the body by its FUNCTION, which is true of every jurisdiction, and let research discover the
+// name. We deliberately do NOT hard-code per-state titles instead: Louisiana alone is mixed parish-by-
+// parish, so any table would re-introduce the same fabrication with more confidence behind it.
+//
+// The place token still rides along, so the browse leash and the coverage key are unchanged.
 function bodyLabel(name) {
   const n = String(name || '');
-  if (/\bParish$/i.test(n)) return 'Parish Council';
-  if (/\bBorough$/i.test(n)) return 'Borough Assembly';
-  if (/\bCensus Area$/i.test(n)) return 'Borough and Census Area government';
-  if (/\bMunicipality$/i.test(n)) return 'Municipality Assembly';
-  if (/\bmunicipio$/i.test(n)) return 'Municipal Government';
-  if (/\bcity$/i.test(n)) return 'City Council';
-  return 'Board of County Commissioners';
+  if (/\b(?:Municipality|municipio|city|town|village)$/i.test(n)) return 'the municipal governing body';
+  return 'the governing body';
 }
 
-// Enumerate the county-commission worklist for a state → researchable target strings. Each names the concrete
-// governing body ("Board of County Commissioners of Alachua County, Florida") so the directed pass researches
-// THAT (its current members), and the county + state tokens keep the browse leash on-domain.
+// Enumerate the county-commission worklist for a state → researchable target strings. Each names the
+// JURISDICTION and describes its governing body functionally ("the governing body of Alachua County,
+// Florida") rather than asserting a title we have not verified; the pass researches that body and reports
+// its real name. The county + state tokens keep the browse leash on-domain.
 function countyCommissionTargets(stateCode) {
   const code = String(stateCode || '').toUpperCase();
   const st = US_COUNTIES[code];
@@ -143,16 +152,14 @@ function countyCommissionSubBeats() {
 
 function listPlaceStates() { return Object.keys(US_PLACES).sort(); }
 
-// The governing body for an incorporated place, from its Census type suffix (town/village/borough/city).
-// Like bodyLabel, the target string just anchors a browser search; the pass corroborates the actual body.
+// The TIER of an incorporated place's governing body — see bodyLabel for why this describes rather than
+// names. Census gives us the place TYPE authoritatively, so "municipal" is a fact we hold; the body's
+// actual title is not ("City Council" vs "Board of Aldermen" vs "Common Council" vs "City Commission",
+// and New England towns run on Select Boards, not Town Councils). Research reports the real one.
 function placeBodyLabel(name) {
   const n = String(name || '');
-  if (/\btown$/i.test(n)) return 'Town Council';
-  if (/\bvillage$/i.test(n)) return 'Village Board';
-  if (/\bborough$/i.test(n)) return 'Borough Council';
-  if (/\btownship$/i.test(n)) return 'Township Board';
-  if (/\b(municipality|pueblo)$/i.test(n)) return 'Municipal Council';
-  return 'City Council';
+  if (/\btownship$/i.test(n)) return 'the township governing body';
+  return 'the municipal governing body';
 }
 // Strip the trailing Census type word from a place name for display ("Birmingham city" → "Birmingham").
 function placeDisplayName(name) {
@@ -210,12 +217,14 @@ function listSubdivisionStates() { return Object.keys(US_SUBDIVISIONS).sort(); }
 // The governing body for an MCD, from its Census type suffix. New England towns run by a Board of Selectmen /
 // Select Board (some by Town Council); NY/WI towns by a Town Board; Midwest townships by a Township Board of
 // Trustees. The target string just anchors the search; the pass corroborates the actual body.
+// Tier only — see bodyLabel. The old labels guessed hardest here and were least reliable: a New England
+// town runs on a Select Board, a NY town on a Town Board, a Michigan charter township on a Board of
+// Trustees, and the previous default hedged with a slash ("Town Board / Select Board") — which is a
+// worklist admitting it does not know, then writing the guess into `covered` anyway.
 function subdivisionBodyLabel(name) {
   const n = String(name || '');
-  if (/charter township$/i.test(n)) return 'Charter Township Board of Trustees';
-  if (/township$/i.test(n)) return 'Township Board of Trustees';
-  if (/plantation$/i.test(n)) return 'Plantation Board of Assessors';
-  return 'Town Board / Select Board';   // towns (New England / NY / WI)
+  if (/township$/i.test(n)) return 'the township governing body';
+  return 'the town governing body';
 }
 function subdivisionDisplayName(name) {
   return String(name || '').replace(/\s+(charter township|township|town|plantation|village|city|borough)$/i, '').trim();
@@ -263,13 +272,15 @@ function subdivisionSubBeats() {
 
 function listSchoolStates() { return Object.keys(US_SCHOOL_DISTRICTS).sort(); }
 
-// Enumerate a state's school districts as dossier targets. "Board of Education of <district>" puts the
-// distinctive district name after the last " of " so the coverage key lands on the district, not "Education".
+// Enumerate a state's school districts as dossier targets. "the school board of <district>" keeps the
+// distinctive district name after the last " of " so the coverage key lands on the district, and stays
+// generic about the body — districts variously have a Board of Education, a Board of Trustees, a Board of
+// Directors (PA), or a Board of School Directors. See bodyLabel: name the jurisdiction, describe the body.
 function schoolBoardTargets(stateCode) {
   const code = String(stateCode || '').toUpperCase();
   const st = US_SCHOOL_DISTRICTS[code];
   if (!st || !st.districts || !st.districts.length) return [];
-  return st.districts.map((name) => `Board of Education of ${name}, ${st.name}`);
+  return st.districts.map((name) => `the school board of ${name}, ${st.name}`);
 }
 
 function schoolBoardBeat(stateCode) {
@@ -525,8 +536,10 @@ function electedOfficialsSubBeats() {
     .concat(schoolBoardSubBeats());
 }
 
-// The place key embedded in a target string ("Board of County Commissioners of Lee County, Florida" → "lee").
+// The place key embedded in a target string ("the governing body of Lee County, Florida" → "lee").
 // Drop the trailing ", StateName", then take the segment after the LAST " of " and strip its noun suffix.
+// Keying on the PLACE rather than the body title is what let the target strings be corrected without
+// orphaning a single `covered` entry — the label was never load-bearing here, only the jurisdiction is.
 function targetPlaceKey(target) {
   const t = String(target || '');
   const beforeState = t.replace(/,\s*[^,]+$/, '');
@@ -536,7 +549,9 @@ function targetPlaceKey(target) {
 }
 
 // Coverage of a beat given the directed focus's `covered` list (fuzzy-matched to worklist targets so
-// "Alachua County Commission" counts against "Board of County Commissioners of Alachua County, Florida").
+// "Alachua County Commission" counts against "the governing body of Alachua County, Florida" — and so do
+// the legacy "Board of County Commissioners of …" / "Parish Council of …" entries written before the
+// target strings stopped asserting a title).
 function coverageOf(targets, covered) {
   const cov = (Array.isArray(covered) ? covered : []).map((c) => String(c || '').toLowerCase());
   let done = 0;

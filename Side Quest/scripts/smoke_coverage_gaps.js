@@ -26,9 +26,13 @@ const fakeBeat = (id, targets, kind = 'entity') => ({ id, kind, enumerate: () =>
 
 // ── fuzzy matching must agree with the scheduler's notion of covered ───────────────────────────
 {
-  const b = fakeBeat('t', ['Parish Council of Acadia Parish, Louisiana']);
-  const g = cg.coverageGap(b, ['Acadia Parish Council']);
+  const b = fakeBeat('t', ['the governing body of Acadia Parish, Louisiana']);
+  const g = cg.coverageGap(b, ['Acadia Parish Police Jury']);
   ok(g.done === 1, 'fuzzy place-key match counts as covered (same rule the scheduler uses)');
+  // The body's real title differs from anything we could have guessed — which is the point of keying on
+  // the PLACE. Legacy entries written under the old synthesised title must still match too.
+  const gLegacy = cg.coverageGap(b, ['Parish Council of Acadia Parish, Louisiana']);
+  ok(gLegacy.done === 1, 'legacy title-asserting covered entries still count — no research is orphaned');
 }
 
 // ── THE LOAD-BEARING CASE: an empty universe is a DATA gap, never "complete" ───────────────────

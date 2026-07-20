@@ -10,9 +10,9 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
 const t = beats.countyCommissionTargets('FL');
 ok(t.length === 67, `FL enumerates 67 county targets (got ${t.length})`);
 ok(new Set(t).size === 67, 'no duplicate targets');
-ok(t.every(x => /^Board of County Commissioners of .+ County, Florida$/.test(x)), 'every target is a well-formed governing-body name');
-ok(t.includes('Board of County Commissioners of Miami-Dade County, Florida'), 'includes Miami-Dade (hyphenated)');
-ok(t.includes('Board of County Commissioners of St. Johns County, Florida'), 'includes St. Johns (period)');
+ok(t.every(x => /^the governing body of .+ County, Florida$/.test(x)), 'every target names the JURISDICTION and describes its body functionally');
+ok(t.includes('the governing body of Miami-Dade County, Florida'), 'includes Miami-Dade (hyphenated)');
+ok(t.includes('the governing body of St. Johns County, Florida'), 'includes St. Johns (period)');
 ok(beats.countyCommissionTargets('fl').length === 67, 'case-insensitive state code');
 ok(beats.countyCommissionTargets('ZZ').length === 0, 'unknown state → empty worklist');
 
@@ -39,6 +39,16 @@ ok(c0.done === 0 && c0.total === 67 && c0.pct === 0, 'empty covered → 0/67 (0%
 const c1 = beats.coverageOf(t, ['Alachua County Commission', 'Board of County Commissioners of Lee County, Florida', 'Miami-Dade County']);
 ok(c1.done === 3, `fuzzy coverage counts 3 (Alachua/Lee/Miami-Dade), got ${c1.done}`);
 ok(c1.remaining.length === 64, 'remaining = 64');
+// MIGRATION GUARD: `covered` holds thousands of entries written under the OLD title-asserting scheme.
+// Coverage keys on the PLACE, so those must still count — otherwise correcting the target strings would
+// silently discard real completed research and re-run it.
+const cLegacy = beats.coverageOf(beats.countyCommissionTargets('LA'), [
+  'Parish Council of Acadia Parish, Louisiana',   // the old synthesised form
+  'Acadia Parish Police Jury',                    // the real body, as research found it
+  'Caddo Parish Commission',
+  'East Baton Rouge Parish Metropolitan Council',
+]);
+ok(cLegacy.done === 3, `CRITICAL: legacy + real-name covered entries still match (Acadia counted once), got ${cLegacy.done}`);
 const cAll = beats.coverageOf(t, t);
 ok(cAll.done === 67 && cAll.pct === 100, 'all covered → 67/67 (100%)');
 ok(!beats.coverageOf(t, ['Broward']).remaining.some(r => /Broward/.test(r)), 'a covered county drops out of remaining');
@@ -51,11 +61,22 @@ ok(beats.countyCommissionTargets('TX').length === 254, `TX = 254 counties (got $
 ok(beats.countyCommissionTargets('NY').length === 62, `NY = 62 counties incl. NYC boroughs (got ${beats.countyCommissionTargets('NY').length})`);
 ok(beats.countyCommissionTargets('CA').length === 58, `CA = 58 counties incl. San Francisco (got ${beats.countyCommissionTargets('CA').length})`);
 
-// per-state governing-body phrasing: Louisiana parishes, Alaska boroughs
+// THE REGRESSION GUARD. Target strings end up in `covered`, in the coverage report, and in what she says
+// to Lucas — so a synthesised title is not an internal convention, it is a factual claim about how a
+// jurisdiction is governed. It was wrong at scale: all 64 Louisiana parishes were enumerated as "Parish
+// Council of X", when most are run by a POLICE JURY. Never assert a body's title we have not researched.
 const la = beats.countyCommissionTargets('LA');
-ok(la.length === 64 && la.every(x => /Parish Council of .+ Parish, Louisiana$/.test(x)), `LA = 64 Parish Councils (got ${la.length})`);
+ok(la.length === 64, `LA enumerates 64 parishes (got ${la.length})`);
+ok(la.every(x => /^the governing body of .+ Parish, Louisiana$/.test(x)), 'LA targets name the parish, not an assumed body title');
+for (const banned of [/Parish Council of/i, /Police Jury/i, /Board of County Commissioners/i, /Commissioners Court/i, /County Board/i, /Borough Assembly/i]) {
+  ok(!la.some(x => banned.test(x)), `CRITICAL: no LA target asserts the title ${banned} — that is for research to discover`);
+}
 const ak = beats.countyCommissionTargets('AK');
-ok(ak.some(x => /Borough Assembly of .+ Borough, Alaska$/.test(x)), 'AK uses Borough Assembly phrasing');
+ok(ak.some(x => /^the governing body of .+ Borough, Alaska$/.test(x)), 'AK boroughs described functionally too');
+// Incorporated municipalities keep a municipal qualifier — that distinguishes the TIER (city vs county
+// government), which we do know from the gazetteer, without naming the body.
+ok(beats.bodyLabel('Anchorage municipality') === 'the municipal governing body', 'municipal tier is still distinguished');
+ok(beats.bodyLabel('Acadia Parish') === 'the governing body', 'county-equivalent tier asserts nothing further');
 
 // per-state beat descriptor generalizes off FL
 const btx = beats.countyCommissionBeat('TX');
@@ -82,8 +103,11 @@ ok(mStates.length >= 50, `municipal tier enumerates 50 states (got ${mStates.len
 const flCities = beats.municipalTargets('FL');
 ok(flCities.length > 100, `FL enumerates its incorporated municipalities (got ${flCities.length})`);
 ok(flCities.every(x => / of .+, Florida$/.test(x)), 'every municipal target is "<body> of <place>, Florida"');
-ok(flCities.some(x => /City Council of Miami,/.test(x)), 'FL includes City Council of Miami');
-ok(flCities.some(x => /Town Council of .+, Florida/.test(x)), 'FL uses Town Council phrasing for towns');
+ok(flCities.some(x => /^the municipal governing body of Miami, Florida$/.test(x)), 'FL includes Miami, named as the jurisdiction');
+// Municipal titles vary as much as county ones (City Council / Board of Aldermen / Common Council /
+// City Commission, and New England towns run Select Boards) — describe the tier, never the title.
+ok(!flCities.some(x => /City Council|Town Council|Board of Aldermen|Village Board/i.test(x)),
+  'CRITICAL: no municipal target asserts a body title');
 const mBeat = beats.municipalBeat('TX');
 ok(mBeat.id === 'municipalities-tx' && mBeat.parentBeat === 'elected-officials' && mBeat.depth === 'dossier', 'TX municipal beat descriptor (dossier depth, elected-officials parent)');
 ok(mBeat.universeSize() > 1000, `TX has >1000 municipalities (got ${mBeat.universeSize()})`);
@@ -126,7 +150,11 @@ ok(['CT', 'RI', 'MA', 'ME', 'NH', 'VT'].every(s => subStates.includes(s)), 'all 
 const ctTowns = beats.subdivisionTargets('CT');
 ok(ctTowns.length > 100, `CT enumerates its towns (got ${ctTowns.length}) — filled the place-tier gap`);
 ok(ctTowns.every(t => / of .+, Connecticut$/.test(t)), 'every CT town target is "<body> of <town>, Connecticut"');
-ok(beats.subdivisionTargets('MI').some(t => /Charter Township Board of Trustees of .+, Michigan/.test(t)), 'MI charter townships get the right body label');
+ok(beats.subdivisionTargets('MI').some(t => /^the township governing body of .+, Michigan$/.test(t)), 'MI townships named as jurisdictions');
+// The old default here hedged with a slash — "Town Board / Select Board" — a worklist admitting it did
+// not know the title and writing the guess into `covered` regardless.
+ok(!beats.subdivisionTargets('CT').some(t => /Select Board|Board of Trustees|Town Board/i.test(t)),
+  'CRITICAL: no township/town target asserts a body title, and none hedges with a slash');
 ok(beats.subdivisionDisplayName('Bloomfield charter township') === 'Bloomfield' && beats.subdivisionDisplayName('Hartford town') === 'Hartford', 'subdivisionDisplayName strips town/charter-township suffixes');
 const tb = beats.subdivisionBeat('MA');
 ok(tb.id === 'townships-ma' && tb.depth === 'dossier' && tb.facets.some(f => /selectmen|trustees|town board/i.test(f)), 'MA township beat descriptor (dossier, selectmen/trustees)');
@@ -137,7 +165,11 @@ const schStates = beats.listSchoolStates();
 ok(schStates.length >= 50, `school-board tier spans 50+ states (got ${schStates.length})`);
 const caSchools = beats.schoolBoardTargets('CA');
 ok(caSchools.length > 500, `CA enumerates its school districts (got ${caSchools.length})`);
-ok(caSchools.every(t => /^Board of Education of .+, California$/.test(t)), 'school target = "Board of Education of <district>, California"');
+ok(caSchools.every(t => /^the school board of .+, California$/.test(t)), 'school target = "the school board of <district>, California"');
+// Districts variously have a Board of Education, Board of Trustees, or Board of Directors (PA) — "school
+// board" is the generic function, not a claimed title.
+ok(!caSchools.some(t => /Board of Education|Board of Trustees|Board of Directors/i.test(t)),
+  'CRITICAL: no school target asserts a specific board title');
 // coverage key lands on the DISTRICT (after the last " of "), not "Education"
 ok(beats.targetPlaceKey('Board of Education of Los Angeles Unified School District, California').includes('los angeles'), 'school coverage key lands on the district name, not "education"');
 const sbb = beats.schoolBoardBeat('TX');

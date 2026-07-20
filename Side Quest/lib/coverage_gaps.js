@@ -34,9 +34,13 @@
 const beats = require('./beats');
 
 // One beat's coverage. Reuses beats.coverageOf so "covered" means exactly what the scheduler already
-// means — fuzzy place-key matching, so "Acadia Parish Council" counts against the enumerated
-// "Parish Council of Acadia Parish, Louisiana". A second notion of coverage here would silently
+// means — fuzzy PLACE-key matching, so "Acadia Parish Police Jury" counts against the enumerated
+// "the governing body of Acadia Parish, Louisiana". A second notion of coverage here would silently
 // disagree with the scheduler's, and then neither number could be trusted.
+//
+// Matching on the place rather than the body's title also means this number counts JURISDICTIONS, which
+// is the only thing the worklist can honestly enumerate — we know every parish exists, we do not know
+// what its governing body is called until we research it.
 function coverageGap(beat, covered) {
   if (!beat || typeof beat.enumerate !== 'function') return null;
   let targets = [];
