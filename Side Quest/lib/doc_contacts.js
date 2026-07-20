@@ -161,6 +161,17 @@ function upsert(row, { docId, docTitle = null, state = null, now = Date.now() } 
 // Every encounter carries the DOCUMENT'S origin and content hash, not the contact's. That is what makes
 // independence computable later: the same official in three copies of one PDF is one text and one
 // origin, and origin.independence() can only see that if the hash travels with the claim.
+// The document's own date, or null. Shared by every doc-derived encounter so one document cannot end up
+// with two different observed_at values depending on which claim was being written.
+function docObservedAt(doc) {
+  try {
+    if (!doc || !doc.body) return null;
+    const fn = String(doc.ref || '').split(/[\\/]/).pop();
+    const d = require('./observed_at').extractObservedAt({ text: doc.body, title: doc.title, filename: fn });
+    return d ? d.ts : null;
+  } catch { return null; }
+}
+
 function logEncounters(row, { docId, state }) {
   try {
     const enc = require('./encounters');
@@ -177,9 +188,10 @@ function logEncounters(row, { docId, state }) {
       origin_host: doc.origin_host || null,
       content_hash: doc.content_hash || null,
       authority: gov ? 'official' : 'unknown',
-      // observed_at stays NULL: created_ts is when WE ingested the document, not the date the source
-      // itself carries. Filling it in would let a 2021 roster read as current evidence.
-      observed_at: null,
+      // observed_at is the SOURCE's own date, extracted from the document (W1) — NEVER created_ts,
+      // which is when WE ingested it. A 2021 roster ingested today must not read as current evidence.
+      // Null whenever the document does not state a date it is willing to stand behind.
+      observed_at: docObservedAt(doc),
     };
     const list = [{ ...base, claim_class: 'existence' }];
     if (row.email) list.push({ ...base, claim_class: 'contact', claim_key: 'email', claim_value: String(row.email).toLowerCase() });

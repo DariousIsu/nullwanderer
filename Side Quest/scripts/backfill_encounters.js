@@ -48,7 +48,7 @@ for (const r of rows) {
     object_type: 'person', object_key: key, object_label: r.name,
     source_kind: 'document', source_ref: `doc:${r.doc_id}`,
     origin: r.origin || null, origin_host: r.origin_host || null, content_hash: r.content_hash || null,
-    authority: gov ? 'official' : 'unknown', observed_at: null,
+    authority: gov ? 'official' : 'unknown', observed_at: r.observed_at || null,
   };
   build.push({ ...base, claim_class: 'existence' });
   if (r.email) build.push({ ...base, claim_class: 'contact', claim_key: 'email', claim_value: String(r.email).toLowerCase() });

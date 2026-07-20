@@ -66,6 +66,7 @@ const smokes = [
   'smoke_body_key.js',
   'smoke_doc_contacts.js',
   'smoke_origin.js',
+  'smoke_observed_at.js',
   'smoke_curation_gate.js',
   'smoke_curation_store.js',
   'smoke_substantiation.js',
