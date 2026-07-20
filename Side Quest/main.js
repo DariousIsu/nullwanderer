@@ -4928,6 +4928,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let openThreads = socialTurn ? [] : db.getActiveOpenThreads(3, { includeStalled: false });  // don't pull parked/stalled threads into chat replies (gated for relevance below, alongside recentMonologue/recentReadings)
   // WHERE-WE-ARE (conversation harness, Piece 3): the running summary of this conversation,
   // so she stays on-thread even after raw turns scroll out of the recency window.
+  // CATCH-UP FOLD. Every chat turn passes through here, whereas the post-reply fold at the bottom
+  // is reachable only on the main say path — ~30 early returns (protocol intercept, preference
+  // answer, contacts route, tool followups, deep/swarm verbs) reply and return before it. Everything
+  // they said was never folded: live, session 589 had 247 turns and turn_count 15. This is
+  // watermark-driven and in-flight-guarded, so it is a no-op when nothing is outstanding.
+  try { require('./lib/convo_state').update(sessionId, null, null).catch(() => {}); } catch {}
   const convoStateBlock = require('./lib/convo_state').buildBlock(sessionId, userName);
   const protocols = db.getActiveProtocols();
   const pendingInbounds = db.getPendingInbounds(6);

@@ -737,7 +737,14 @@ const MIGRATIONS = [
   `ALTER TABLE kg_observations ADD COLUMN substantiation_state TEXT`,
   `ALTER TABLE kg_observations ADD COLUMN frame TEXT`,
   `ALTER TABLE graph_entities ADD COLUMN substantiation_state TEXT`,
-  `ALTER TABLE graph_entities ADD COLUMN frame TEXT`
+  `ALTER TABLE graph_entities ADD COLUMN frame TEXT`,
+  // conversation_state watermark — the last turn folded into the running summary. The summary was
+  // updated only from the main say path, but the chat handler has ~30 early returns (protocol
+  // intercept, preference answer, contacts route, tool followups) that reply and return before
+  // reaching it. Measured 2026-07-20: session 589 had 247 real turns and turn_count=15, and
+  // sessions of 116/88/81 turns had no summary at all. A watermark makes the fold catch up over
+  // whatever it missed instead of needing a call at all ~30 sites.
+  `ALTER TABLE conversation_state ADD COLUMN last_turn_id INTEGER`
 ];
 
 function init() {
@@ -1099,16 +1106,30 @@ function getConversationState(sessionId) {
   return getDb().prepare('SELECT * FROM conversation_state WHERE session_id = ?').get(sessionId);
 }
 // Upsert the running summary. turnCount null → auto-increment on update, 0 on first insert.
-function upsertConversationState(sessionId, summary, turnCount = null) {
+// lastTurnId is the WATERMARK — the highest turn id folded in — so the next fold knows where to
+// resume rather than assuming it saw every exchange (it did not; see the migration note).
+function upsertConversationState(sessionId, summary, turnCount = null, lastTurnId = null) {
   const now = Date.now();
-  getDb().prepare(`INSERT INTO conversation_state (session_id, summary, turn_count, updated_ts)
-      VALUES (?, ?, COALESCE(?, 0), ?)
+  getDb().prepare(`INSERT INTO conversation_state (session_id, summary, turn_count, updated_ts, last_turn_id)
+      VALUES (?, ?, COALESCE(?, 0), ?, ?)
       ON CONFLICT(session_id) DO UPDATE SET
         summary = excluded.summary,
         turn_count = COALESCE(?, conversation_state.turn_count + 1),
-        updated_ts = excluded.updated_ts`)
-    .run(sessionId, summary, turnCount, now, turnCount);
+        updated_ts = excluded.updated_ts,
+        last_turn_id = COALESCE(excluded.last_turn_id, conversation_state.last_turn_id)`)
+    .run(sessionId, summary, turnCount, now, lastTurnId, turnCount);
   return { sessionId, ts: now };
+}
+
+// Turns in this session NEWER than the watermark — the exchanges the summary has not folded yet.
+// Bounded: a long unfolded stretch is summarised from its most recent slice rather than replaying
+// the whole session into a model call.
+function unfoldedTurns(sessionId, afterTurnId = 0, limit = 40) {
+  return getDb().prepare(
+    `SELECT id, speaker, content FROM turns
+      WHERE session_id = ? AND id > ? AND speaker IN ('user','ai_said')
+      ORDER BY id ASC LIMIT ?`)
+    .all(sessionId, afterTurnId || 0, limit);
 }
 
 // Merge a child thread INTO a parent (umbrella) — the consolidation primitive.
@@ -2210,6 +2231,7 @@ module.exports = {
   resolveOpenQuestions,
   getConversationState,
   upsertConversationState,
+  unfoldedTurns,
   insertProtocol,
   getActiveProtocols,
   getProtocolByTrigger,
