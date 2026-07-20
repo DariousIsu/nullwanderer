@@ -51,6 +51,11 @@ function normalizeObservation(o = {}) {
     kind: o.kind == null ? null : s(o.kind) || null,
     status: s(o.status) || 'promoted',
     capturedAt: o.capturedAt == null ? null : o.capturedAt,
+    // O1: the extractor's entity type, persisted rather than dropped at this boundary. It is part of
+    // the encounter log's IDENTITY KEY, so losing it here means the object can never be keyed without
+    // re-running the model over the source. Deliberately NOT part of obs_key — a re-seen claim must
+    // still dedup even if the extractor types it differently on a later pass.
+    entityType: o.type == null ? null : s(o.type) || null,
   };
   // Slice 1 substrate (record-only): assign substantiation_state + frame from what the observation carries.
   // A caller may pass them explicitly (or `resolved`/`fiction` hints for a sharper call); otherwise derive.

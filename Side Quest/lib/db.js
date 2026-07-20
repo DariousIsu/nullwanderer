@@ -721,6 +721,17 @@ const MIGRATIONS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_kg_obs_entity ON kg_observations(source_entity, status)`,
   `CREATE INDEX IF NOT EXISTS idx_kg_obs_feed ON kg_observations(feed, captured_at)`,
+  // ENTITY TYPE ON OBSERVATIONS (O1). The doc-decompose extractor emits `ENTITY: <name> :: <type>` and
+  // the type was thrown away at the store boundary — it existed only in flight, between the extractor
+  // and whoever happened to be listening. Two consequences, both measured:
+  //   - the TYPE IS PART OF THE IDENTITY KEY in the encounter log, so an observation that fails to
+  //     become an encounter loses the only copy of it. It cannot be recovered without re-running the
+  //     model over the document.
+  //   - nothing downstream could be diagnosed. 736 encounters came out of ~2,947 recent observations
+  //     and there was no way to ask which types were being refused, because no type was stored.
+  `ALTER TABLE kg_observations ADD COLUMN entity_type TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_kg_observations_entity_type ON kg_observations(entity_type)`,
+
   // recent_cards — PLACE / EVENT cards surfaced to the canvas People rail (people persist in the Puller;
   // places/events have no other home). Upsert on (type, card_key) so re-seeing one refreshes its recency.
   `CREATE TABLE IF NOT EXISTS recent_cards (
@@ -2088,13 +2099,13 @@ function graphSetRelationProposalStatus(id, status) { getDb().prepare('UPDATE gr
 // --- curation observation store (curation substrate Slice 1) ---
 // Append a graded observation. Idempotent on obs_key (INSERT OR IGNORE) so a feed re-seeing the same
 // cited claim doesn't double-count. Returns { id, inserted }. obs_key is the caller's natural key.
-function recordKgObservation({ feed, sourceEntity, relation = null, target = null, value = null, url = null, grade = null, confidence = null, kind = null, status = 'promoted', substantiationState = null, frame = null, obsKey, capturedAt = null }) {
+function recordKgObservation({ feed, sourceEntity, relation = null, target = null, value = null, url = null, grade = null, confidence = null, kind = null, status = 'promoted', substantiationState = null, frame = null, entityType = null, obsKey, capturedAt = null }) {
   const ts = capturedAt == null ? Date.now() : capturedAt;
   const info = getDb().prepare(
     `INSERT OR IGNORE INTO kg_observations
-       (feed, source_entity, relation, target, value, url, grade, confidence, kind, status, substantiation_state, frame, obs_key, captured_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).run(feed, sourceEntity, relation, target, value, url, grade, confidence, kind, status, substantiationState, frame, obsKey, ts);
+       (feed, source_entity, relation, target, value, url, grade, confidence, kind, status, substantiation_state, frame, entity_type, obs_key, captured_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).run(feed, sourceEntity, relation, target, value, url, grade, confidence, kind, status, substantiationState, frame, entityType, obsKey, ts);
   if (info.changes > 0) _kgTap('observe', sourceEntity + (relation ? ' ' + relation + (target ? ' ' + target : '') : ''));
   return { id: info.lastInsertRowid, inserted: info.changes > 0 };
 }
