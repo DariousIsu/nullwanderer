@@ -36,13 +36,18 @@ function stubEmbed(text) {
   const n = Math.sqrt(v.reduce((s, x) => s + x * x, 0)) || 1;
   return v.map(x => x / n);
 }
+// Every claim that should actually be JUDGED now carries the source it cites. That is the citation
+// lane's whole contract: it reads the cited source and nothing else, so an uncited claim has nothing
+// to check against and a dead link resolves to `inaccessible` — never to a substitute found by search.
 const DOC = [
   '# Field Brief', '',
-  'The 2021 review found the effect "limited to a single demonstration site" overall.',
-  'Snowpack rose 15% across treated basins according to officials.',
-  'The program cost $5 billion overall, the report says.',
+  'The 2021 review found the effect "limited to a single demonstration site" overall (https://corpus.example/doc).',
+  'Snowpack rose 15% across treated basins according to officials (https://corpus.example/doc).',
+  'The program cost $5 billion overall, the report says (https://corpus.example/doc).',
+  // partial overlap with the corpus → lands in the GRAY band, i.e. the residue the judge exists for
+  'The water office described modest seasonal improvement in several treated areas (https://corpus.example/doc).',
   'See https://void.example/x for the phlogiston index figures.',
-  'The signal phrase "alpha beta gamma" appears in the official record.',
+  'The phrase "alpha the of beta the of gamma" appears in the official record.',
 ].join('\n');
 
 (async () => {
@@ -57,8 +62,8 @@ const DOC = [
       onStage: (n) => stages.push(n),
     });
     ok('runHarness returns the standardized contract shape', r.findings && r.suggestions && r.summary && r.gate && r.stages);
-    ok('every unit → one finding (5)', r.findings.length === 5, `${r.findings.length}`);
-    ok('stages fired in fixed order', stages.join('>') === 'extract>resolve>match>preflight>classify', stages.join('>'));
+    ok('every unit → one finding (6)', r.findings.length === 6, `${r.findings.length}`);
+    ok('stages fired in fixed order, citation first then fact check', stages.join('>') === 'extract>resolve>match>preflight>classify>factcheck', stages.join('>'));
     ok('gate proceeded', r.gate.proceed === true);
     ok('contract strict: zero schema violations', r.summary.invalid === 0, JSON.stringify(r.summary));
     ok('verified auto-resolves (≥2) + a contradiction surfaced bad', r.summary.resolved >= 2 && r.findings.some(f => f.verdict === 'bad'));
@@ -74,7 +79,7 @@ const DOC = [
     });
     ok('gate aborted', r.gate.proceed === false && /login page/.test(r.gate.reason));
     ok('nothing classified when gate aborts', r.stages.classified.length === 0);
-    ok('held residue still surfaced as findings (5 total, none lost)', r.findings.length === 5);
+    ok('held residue still surfaced as findings (6 total, none lost)', r.findings.length === 6);
     ok('held items flagged not-checked', r.findings.some(f => /preflight held/.test(f.ev)));
   }
 
@@ -102,6 +107,40 @@ const DOC = [
     ok('injected deepVerify replaces the classify leaf (called once with residue)', used === 1 && r.stages.classified.length >= 1);
     ok('deep verdict flows through contract (VC · caveat)', r.findings.some(f => f.vlabel === 'Verified · caveat' && f.caveat === 'timeframe imprecise'));
     ok('sources_consulted carried onto findings', r.findings.some(f => Array.isArray(f.sources_consulted) && f.sources_consulted.some(s => /indep\.example/.test(s.url))));
+  }
+
+  // --- THE TWO LANES: citation decides the verdict, fact check only informs -------------------
+  {
+    let fcCalls = 0, fcSeen = [];
+    const factCheck = async (claims) => {
+      fcCalls++; fcSeen = claims;
+      return claims.map((c, i) => ({
+        uid: c.uid, claim: c.claim,
+        stance: i === 0 ? 'contested' : (i === 1 ? 'corroborated' : 'no-independent-source'),
+        supporting: i === 1 ? [{ url: 'https://indep.example/s', title: 'Supporting', stance: 'supports', quote: 'affirms it' }] : [],
+        countering: i === 0 ? [{ url: 'https://indep.example/c', title: 'Countering', stance: 'counters', quote: 'disputes it' }] : [],
+        consulted: [], searched: true, note: 'n',
+      }));
+    };
+    const base = { callTool, embed: async (t) => stubEmbed(t), homeworkCheck: async (s) => s.map(x => ({ uid: x.uid, ok: true })) };
+    const withFc = await runHarness(wc, Object.assign({}, base, { factCheck }));
+    const noFc = await runHarness(wc, base);
+
+    ok('fact check runs once, over every candidate claim', fcCalls === 1 && fcSeen.length === withFc.stages.candidates.length);
+    ok('fact check items ride alongside the citation findings', withFc.factcheck.items.length === fcSeen.length && withFc.factcheck.summary.ran === true);
+    ok('fact-check summary tallies stances', withFc.factcheck.summary.contested === 1 && withFc.factcheck.summary.corroborated === 1 && withFc.factcheck.summary.countering === 1,
+      JSON.stringify(withFc.factcheck.summary));
+    ok('citation lane is exposed separately', withFc.citation && withFc.citation.findings.length === withFc.findings.length);
+    // The load-bearing guarantee: a COUNTERING source is information for the author, never a defect.
+    // Citation findings and the grade inputs must be byte-identical with and without the lane.
+    ok('fact check does NOT change any citation finding',
+      JSON.stringify(withFc.findings) === JSON.stringify(noFc.findings));
+    ok('fact check does NOT change the citation summary (the grade input)',
+      JSON.stringify(withFc.summary) === JSON.stringify(noFc.summary));
+    ok('no countering source leaked into citation findings',
+      !JSON.stringify(withFc.findings).includes('indep.example/c'));
+    ok('lane absent → empty, ran:false (never silently "clean")',
+      noFc.factcheck.items.length === 0 && noFc.factcheck.summary.ran === false);
   }
 
   // --- guard: callTool required ---

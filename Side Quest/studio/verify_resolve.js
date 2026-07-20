@@ -243,9 +243,20 @@
       }
     }
 
-    // Rung 4 — search by source-kind, fetch top-N until one is readable. An injected opts.search
-    // (e.g. Zoe's own DuckDuckGo provider) is preferred when present — Echo's web_search needs a
-    // provider key the operator may not have set, so this keeps no-URL claims resolvable.
+    // Rung 4 — SOURCE SUBSTITUTION BY SEARCH. Off by default, and it must stay off for citation
+    // verification: that lane asks one question — "is this claim correctly sourced to the source the
+    // document CITES?" — and a page found by search is, by definition, not that source. Judging
+    // against a substitute is how "Camaro Dragon" was checked against Wikipedia's CHEVROLET CAMARO,
+    // and how two Cambridge Dictionary entries were reported as consulted sources
+    // (cert CFC-2026-07-20-01). When the cited source cannot be reached the honest answer is rung 5
+    // `inaccessible`, which already renders as "couldn't reach — operator finds another source".
+    // Finding OTHER sources is the FACT-CHECK lane's job (studio/verify_factcheck), where a
+    // corroborating or countering source is offered for consideration rather than used to rule on
+    // the author's citation.
+    if (!opts.allowSearch) {
+      trail.push({ step: 'search', ok: false, reason: 'search-disabled (citation lane: cited source only)' });
+      return { uid, resolved: false, tier: 'inaccessible', source_text: '', source_url: unit && unit.url || null, archive_url: null, reason: 'inaccessible', trail };
+    }
     const kind = sourceKind(unit);
     const stool = tools[searchToolKey(kind)];
     const query = searchQueryFor(unit);

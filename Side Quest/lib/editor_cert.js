@@ -54,6 +54,7 @@ function issueCertificate(a = {}) {
 
   const html = certTemplate.renderCertificate({
     doc, findings: mapped.findings, suggestions: mapped.suggestions, summary: mapped.summary,
+    factcheck: mapped.factcheck,          // lane 2 — rendered last, advisory, never part of the ruling
     certNumber, issuedAt, reaudit,
   });
 

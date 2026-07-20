@@ -103,7 +103,39 @@
     }
 
     const rendered = contract.mapCheckResult({ claims: items }, { strict: true });
+
+    // 7) FACT CHECK — the second lane. Everything above answered ONE question: is the claim correctly
+    //    sourced to the source the document CITED? This asks a different one: what does the rest of
+    //    the record say? It searches for INDEPENDENT sources and reports corroboration and
+    //    counter-evidence for the author to weigh. Advisory by construction — it never rules on the
+    //    author's sourcing and never contributes to a hold, so it runs after the citation verdicts
+    //    are already fixed and cannot influence them.
+    let factcheck = { items: [], summary: { checked: 0, corroborated: 0, contested: 0, mixed: 0, none: 0, ran: false } };
+    if (typeof opts.factCheck === 'function' && candidates.length) {
+      const fcItems = await opts.factCheck(candidates.map(c => ({
+        uid: c.uid, claim: c.claim, text: c.claim, kind: c.kind || null, sourceUrl: c.source_url || null,
+      })));
+      const list = Array.isArray(fcItems) ? fcItems.filter(Boolean) : [];
+      factcheck = {
+        items: list,
+        summary: {
+          checked: list.length,
+          corroborated: list.filter(f => f.stance === 'corroborated').length,
+          contested: list.filter(f => f.stance === 'contested').length,
+          mixed: list.filter(f => f.stance === 'mixed').length,
+          none: list.filter(f => f.stance === 'no-independent-source').length,
+          countering: list.reduce((n, f) => n + ((f.countering || []).length), 0),
+          ran: true,
+        },
+      };
+    }
+    tick('factcheck', factcheck.summary);
+
     return Object.assign({}, rendered, {
+      // `findings/suggestions/summary` stay the CITATION lane's, so the grade and every existing
+      // consumer keep meaning exactly what they meant. Fact check rides alongside, never inside.
+      citation: { findings: rendered.findings, suggestions: rendered.suggestions, summary: rendered.summary },
+      factcheck,
       gate: { proceed: gate.proceed, reason: gate.reason, sample: gate.sample, layer0: gate.layer0 },
       stages: { units: units.length, resolved, matched, classified, candidates },
     });

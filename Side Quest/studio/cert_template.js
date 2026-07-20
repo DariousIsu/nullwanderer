@@ -119,6 +119,45 @@
     return `<h2><span class="num">${num}</span>Sources consulted</h2><ol class="fixes">${rows}</ol>`;
   }
 
+  // FACT CHECK — the second lane, and the last section of the report. Everything above answers one
+  // question: is the claim correctly sourced to the source the document CITED? This answers a
+  // different one: what does the rest of the record say? It is ADVISORY — it never rules on the
+  // author's sourcing and never moves the grade — so it is rendered plainly, after the verdicts,
+  // and labelled as material to weigh rather than defects to fix.
+  const STANCE_PILL = { corroborated: 'ok', contested: 'warn', mixed: 'warn', 'no-independent-source': 'info' };
+  const STANCE_LABEL = { corroborated: 'Corroborated', contested: 'Countered', mixed: 'Mixed record', 'no-independent-source': 'No independent source' };
+
+  function factCheckSection(factcheck, num) {
+    const fc = factcheck || {};
+    const items = Array.isArray(fc.items) ? fc.items : [];
+    if (!fc.summary || !fc.summary.ran) return '';
+    const head = `<h2><span class="num">${num}</span>Fact check — independent sources</h2>
+      <p class="small">Separate from the citation audit above. These are OTHER sources on the same claims, gathered independently of what the document cites: corroboration where the record agrees, counter-evidence to weigh where it does not. <strong>Nothing here is a defect in the document's sourcing</strong>, and none of it affects the ruling above.</p>`;
+    if (!items.length) return `${head}<p class="small">No claims were fact-checked in this pass.</p>`;
+
+    // Lead with the claims where the record is split or against — that is what an author needs first.
+    const order = { contested: 0, mixed: 1, corroborated: 2, 'no-independent-source': 3 };
+    const sorted = items.slice().sort((a, b) => (order[a.stance] ?? 9) - (order[b.stance] ?? 9));
+    const srcList = (list, kind) => (list || []).map(s =>
+      `<li><span class="pill ${kind === 'counters' ? 'warn' : 'ok'}">${kind === 'counters' ? 'Counters' : 'Supports'}</span> ${esc(s.title || s.url)}${s.quote ? ` — <em>${esc(s.quote)}</em>` : ''} <span class="src">${esc(s.url)}</span></li>`).join('');
+
+    const rows = sorted.map((f, i) => {
+      const sources = srcList(f.countering, 'counters') + srcList(f.supporting, 'supports');
+      return `<tr><td class="num">${i + 1}</td>
+        <td>${esc(f.claim)}${f.uid ? ` <span class="src">${esc(f.uid)}</span>` : ''}</td>
+        <td><span class="pill ${STANCE_PILL[f.stance] || 'info'}">${esc(STANCE_LABEL[f.stance] || f.stance)}</span></td>
+        <td>${sources ? `<ol class="fixes">${sources}</ol>` : `<span class="small">${esc(f.note || '')}</span>`}</td></tr>`;
+    }).join('');
+
+    const s = fc.summary;
+    const tally = `<p class="small">${s.checked} claim${s.checked === 1 ? '' : 's'} checked · ${s.corroborated} corroborated · ${s.contested} countered · ${s.mixed} mixed · ${s.none} with no independent source found.</p>`;
+    return `${head}${tally}
+      <table class="cite-table"><colgroup><col class="c-num"><col class="c-claim"><col class="c-status"><col class="c-finding"></colgroup>
+        <thead><tr><th class="num">#</th><th>Claim</th><th>Independent record</th><th>Sources for consideration</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
   function fixItems(suggestions) {
     if (!suggestions || !suggestions.length) return '<p class="small">No suggested replacements were generated for this audit.</p>';
     return `<ol class="fixes">${suggestions.map(s => `
@@ -195,6 +234,8 @@
 
   ${sourcesConsultedSection(findings, 3)}
 
+  ${factCheckSection(a.factcheck, sourcesConsultedSection(findings, 3) ? 4 : 3)}
+
   <div class="signoff">
     <div class="auditor-note"><p><strong>Auditor's note.</strong> This certification was produced by the Editor Studio's deterministic verification harness: each claim's source was resolved and matched (lexical + local embeddings) with model judgment applied only to the residual gray-band claims. Verdicts and counts above are derived programmatically from that pass. This certification does not replace legal review or libel-risk assessment.</p></div>
     <div class="seal"><div class="lbl">Certification Seal</div>
@@ -267,6 +308,8 @@
   ${fixItems(a.suggestions)}
 
   ${sourcesConsultedSection(findings, 3)}
+
+  ${factCheckSection(a.factcheck, sourcesConsultedSection(findings, 3) ? 4 : 3)}
 
   <div class="signoff">
     <div class="auditor-note"><p><strong>About this report.</strong> These are the findings from the Editor Studio's verification pass, provided to the author for revision. Each claim's source was resolved and matched (lexical + local embeddings) with model judgment applied only to residual gray-band claims. <strong>This is a findings report, not a certification</strong> — a formal certificate is issued separately once outstanding issues are resolved.</p></div>

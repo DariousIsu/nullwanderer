@@ -127,7 +127,21 @@ function mock(table) {
     ok('rung3 source_url is the OA url', r.source_url === 'https://oa.example/10.1/xyz');
   }
 
-  // ---- RUNG 4: no url, just a quote → search by kind, fetch top-N ----------------------------
+  // ---- CITATION LANE (default): a source found by SEARCH is not the source the document CITED --
+  // The lane asks one question — is this claim correctly sourced to the source it names? — so source
+  // substitution is off unless a caller explicitly opts in (the fact-check lane does).
+  {
+    const ct = mock({
+      web_search: () => ({ results: [{ url: 'https://b.example/2', title: 'good' }] }),
+      web_fetch: ({ url }) => ({ status: 200, body: 'plausible but unrelated text ' + body(80), final_url: url }),
+    });
+    const r = await run(resolveUnit({ uid: 'a3.s0', kind: 'quote', quote: 'committee rejected the amendment', text: 'the committee rejected the amendment' }, ct));
+    ok('citation lane: unreachable cited source → inaccessible, NOT a substitute', r.resolved === false && r.tier === 'inaccessible', JSON.stringify(r.trail.map(t => t.step)));
+    ok('citation lane: no search tool was even called', !ct.calls.some(c => c.name === 'web_search'), JSON.stringify(ct.calls.map(c => c.name)));
+    ok('citation lane: trail records why', (r.trail.find(t => t.step === 'search') || {}).reason === 'search-disabled (citation lane: cited source only)');
+  }
+
+  // ---- RUNG 4 (fact-check lane only, allowSearch): search by kind, fetch top-N ----------------
   {
     const ct = mock({
       web_search: ({ query }) => ({ results: [
@@ -138,7 +152,7 @@ function mock(table) {
         ? { status: 403, body: '' }
         : { status: 200, body: 'the committee rejected the amendment ' + body(80), final_url: url },
     });
-    const r = await run(resolveUnit({ uid: 'a3.s0', kind: 'quote', quote: 'committee rejected the amendment', text: 'the committee rejected the amendment' }, ct));
+    const r = await run(resolveUnit({ uid: 'a3.s0', kind: 'quote', quote: 'committee rejected the amendment', text: 'the committee rejected the amendment' }, ct, { allowSearch: true }));
     ok('rung4 search → resolved tier=search', r.resolved && r.tier === 'search', JSON.stringify(r.trail.map(t => t.step)));
     ok('rung4 picked the 2nd (readable) result', r.source_url === 'https://b.example/2');
     ok('rung4 search query came from the quote', ct.calls.find(c => c.name === 'web_search').args.query === 'committee rejected the amendment');
@@ -147,13 +161,13 @@ function mock(table) {
   // ---- RUNG 4 routing: academic unit hits academic_search, court unit hits courtlistener ------
   {
     const ct = mock({ academic_search: () => ({ results: [] }), web_resolve_oa: () => ({}) });
-    const r = await run(resolveUnit({ uid: 'a4.s0', doi: '10.2/none', text: 'a finding (Smith et al., 2020)' }, ct));
+    const r = await run(resolveUnit({ uid: 'a4.s0', doi: '10.2/none', text: 'a finding (Smith et al., 2020)' }, ct, { allowSearch: true }));
     ok('academic unit routed to academic_search', ct.calls.some(c => c.name === 'academic_search'));
     ok('academic unit w/ dead oa + empty search → inaccessible', r.tier === 'inaccessible' && r.resolved === false);
   }
   {
     const ct = mock({ courtlistener_opinion_search: () => ({ results: [] }) });
-    await run(resolveUnit({ uid: 'a5.s0', text: 'see Brown v. Board, the Court ruled' }, ct));
+    await run(resolveUnit({ uid: 'a5.s0', text: 'see Brown v. Board, the Court ruled' }, ct, { allowSearch: true }));
     ok('court unit routed to courtlistener', ct.calls.some(c => c.name === 'courtlistener_opinion_search'));
   }
 
@@ -178,7 +192,7 @@ function mock(table) {
       web_fetch: ({ url }) => ({ status: 200, body: 'the committee rejected the amendment ' + body(80), final_url: url }),
     });
     const injectedSearch = async (q) => ({ results: [{ url: 'https://found.example/a', title: 'hit' }] });
-    const r = await run(resolveUnit({ uid: 'a9.s0', kind: 'quote', quote: 'committee rejected the amendment', text: 'committee rejected the amendment' }, ct, { search: injectedSearch }));
+    const r = await run(resolveUnit({ uid: 'a9.s0', kind: 'quote', quote: 'committee rejected the amendment', text: 'committee rejected the amendment' }, ct, { search: injectedSearch, allowSearch: true }));
     ok('injected search resolves a no-URL claim (tier=search)', r.resolved && r.tier === 'search' && r.source_url === 'https://found.example/a');
     ok('injected search bypasses engine web_search', echoSearchCalled === false);
     ok('trail labels the injected search', r.trail.some(t => t.step === 'search' && t.tool === 'search(injected)'));

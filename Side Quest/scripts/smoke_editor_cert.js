@@ -92,6 +92,55 @@ const reportDeep = CT.renderReport({ doc: registry.getDocument(docId), findings:
 ok('report renders the deep-verify caveat', /1990s.*framing/.test(reportDeep));
 ok('report renders a "Sources consulted" section', /Sources consulted/.test(reportDeep) && /worldometers\.info\/china/.test(reportDeep) && /scienceinsights/.test(reportDeep));
 
+// ---- LANE 2: the fact-check section renders LAST and cannot touch the ruling -----------------
+{
+  const T = require('../studio/cert_template');
+  const doc2 = { title: 'Two Lane Doc', author: 'A. Author', current_version: 1 };
+  // A perfectly clean citation audit, plus independent sources that COUNTER two claims. The ruling
+  // must stay "clear": a counter-source is material for the author to weigh, not a sourcing defect.
+  const clean = {
+    findings: [{ label: 'A correctly cited claim', verdict: 'ok', vlabel: 'Verified', status: 'verified', ev: 'the cited source supports it', locator: 'a1.s0' }],
+    suggestions: [],
+    summary: { total: 1, resolved: 1, invalid: 0, byVerdict: { ok: 1 } },
+  };
+  const factcheck = {
+    summary: { ran: true, checked: 3, corroborated: 1, contested: 1, mixed: 1, none: 0, countering: 2 },
+    items: [
+      { uid: 'a4.s0', claim: 'A corroborated claim.', stance: 'corroborated', supporting: [{ url: 'https://sup2.example/e', title: 'Confirmer', stance: 'supports', quote: 'confirmed' }], countering: [], consulted: [], searched: true, note: '' },
+      { uid: 'a2.s0', claim: 'The increase was 14.6 percent.', stance: 'mixed', supporting: [{ url: 'https://sup.example/a', title: 'Supporter', stance: 'supports', quote: 'was 14.6 percent' }], countering: [{ url: 'https://opp.example/c', title: 'Opponent', stance: 'counters', quote: 'closer to 9 percent' }], consulted: [], searched: true, note: '' },
+      { uid: 'a3.s0', claim: 'A contested claim.', stance: 'contested', supporting: [], countering: [{ url: 'https://opp2.example/d', title: 'Rebuttal', stance: 'counters', quote: 'the opposite happened' }], consulted: [], searched: true, note: '' },
+    ],
+  };
+
+  ok('grade is a pure function of the CITATION lane (counters do not move it)', T.gradeFor(clean.summary).key === 'clear');
+
+  for (const [name, html] of [
+    ['cert', T.renderCertificate(Object.assign({ doc: doc2, factcheck, certNumber: 'CFC-TEST-01', issuedAt: Date.now() }, clean))],
+    ['report', T.renderReport(Object.assign({ doc: doc2, factcheck, generatedAt: Date.now() }, clean))],
+  ]) {
+    ok(`${name}: renders the fact-check section`, /Fact check — independent sources/.test(html));
+    ok(`${name}: fact check comes LAST (after citation findings)`, html.indexOf('Per-claim findings') < html.indexOf('Fact check'));
+    ok(`${name}: says plainly it is not a sourcing defect`, /Nothing here is a defect/.test(html));
+    ok(`${name}: countering source + its quote are shown`, /opp\.example\/c/.test(html) && /closer to 9 percent/.test(html));
+    ok(`${name}: supporting source shown too`, /sup\.example\/a/.test(html));
+    // Split/against first — that is what an author needs to see before publishing.
+    ok(`${name}: contested and mixed sort above corroborated`,
+      html.indexOf('A contested claim') < html.indexOf('A corroborated claim') &&
+      html.indexOf('The increase was 14.6 percent') < html.indexOf('A corroborated claim'));
+    // Neither artifact may be pushed to "hold" by counter-evidence — that verdict belongs to the
+    // citation lane alone. (Only the certificate states a ruling; a findings report carries none.)
+    ok(`${name}: 2 countering sources do NOT trigger a hold`, !/Hold — corrections required/.test(html) && !/must be corrected before publication/.test(html));
+  }
+  ok('certificate still reads CLEARED with counters present',
+    /Cleared for publication/.test(T.renderCertificate(Object.assign({ doc: doc2, factcheck, certNumber: 'CFC-TEST-02', issuedAt: Date.now() }, clean))));
+
+  // The lane is honest about not having run — silence must never read as "nothing found".
+  const noLane = T.renderReport(Object.assign({ doc: doc2, generatedAt: Date.now() }, clean));
+  ok('no fact-check section when the lane did not run', !/Fact check/.test(noLane));
+  const ranEmpty = T.renderReport(Object.assign({ doc: doc2, generatedAt: Date.now(), factcheck: { summary: { ran: true, checked: 0, corroborated: 0, contested: 0, mixed: 0, none: 0 }, items: [] } }, clean));
+  ok('lane ran but checked nothing → section says so', /Fact check/.test(ranEmpty) && /No claims were fact-checked/.test(ranEmpty));
+}
+
 registry.close();
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);

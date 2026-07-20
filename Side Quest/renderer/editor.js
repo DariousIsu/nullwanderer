@@ -196,11 +196,41 @@ function findingCardHTML(f){
     <div class="fcard-ev">${esc(f.ev)}</div>
     <div class="fcard-actions"><span></span>${resolve}</div></div>`;
 }
+/* Fact check — the SECOND lane, rendered after the citation findings and visibly apart from them.
+   Citation findings are defects to resolve and they drive the ruling; these are independent sources
+   offered for the author to weigh. Deliberately NOT resolve-able cards and NOT counted in the rail
+   total or the progress bar — a countering source is not a task, and treating it like one is exactly
+   the conflation that failed an author for pages the verifier itself went and found. */
+const FC_PILL = { corroborated:'ok', contested:'warn', mixed:'warn', 'no-independent-source':'mute' };
+const FC_LABEL = { corroborated:'Corroborated', contested:'Countered', mixed:'Mixed record', 'no-independent-source':'No independent source' };
+function factCheckHTML(fc){
+  if(!fc || !fc.summary || !fc.summary.ran) return '';
+  const items = (fc.items || []).filter(f => (f.countering||[]).length || (f.supporting||[]).length);
+  const s = fc.summary;
+  const head = `<div class="fc-head"><b>Fact check</b> <span class="fc-sub">independent sources · advisory, not part of the ruling</span>
+    <div class="fc-sub">${s.checked} checked · ${s.corroborated} corroborated · ${s.contested} countered · ${s.mixed} mixed · ${s.none} none found</div></div>`;
+  if(!items.length) return `${head}<div class="rail-empty">No independent sources were found for these claims.</div>`;
+  const order = { contested:0, mixed:1, corroborated:2, 'no-independent-source':3 };
+  const rows = items.slice().sort((a,b)=>(order[a.stance]??9)-(order[b.stance]??9)).map(f => {
+    const src = (list, kind) => (list||[]).map(x =>
+      `<li><span class="pill ${kind==='counters'?'warn':'ok'} xs">${kind==='counters'?'counters':'supports'}</span>
+        <a href="${esc(x.url)}" target="_blank" rel="noreferrer">${esc(x.title || x.url)}</a>${x.quote?` <em>${esc(x.quote)}</em>`:''}</li>`).join('');
+    return `<div class="fc-card">
+      <div class="fc-claim">${esc(f.claim)}</div>
+      <div class="fc-meta"><span class="pill ${FC_PILL[f.stance]||'mute'}">${esc(FC_LABEL[f.stance]||f.stance)}</span>
+        <span class="src">${esc(f.uid||'')}</span></div>
+      <ul class="fc-srcs">${src(f.countering,'counters')}${src(f.supporting,'supports')}</ul>
+    </div>`;
+  }).join('');
+  return `${head}${rows}`;
+}
+
 function renderFindings(){
   const el = document.getElementById('findings');
-  if(!FINDINGS.length){ resetFindings(); return; }
-  el.innerHTML = FINDINGS.map(findingCardHTML).join('');
-  document.getElementById('rail-count').textContent = FINDINGS.length;
+  const fcHTML = factCheckHTML(LAST_MAPPED && LAST_MAPPED.factcheck);
+  if(!FINDINGS.length && !fcHTML){ resetFindings(); return; }
+  el.innerHTML = FINDINGS.map(findingCardHTML).join('') + (fcHTML ? `<div class="fc-block">${fcHTML}</div>` : '');
+  document.getElementById('rail-count').textContent = FINDINGS.length;   // citation findings only
   updateProgress();
 }
 function updateProgress(){

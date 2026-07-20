@@ -63,21 +63,25 @@ const homeworkCheck = async (samples) => samples.map(s => ({ uid: s.uid, ok: tru
 // band (decided) → contract status word
 const BAND_STATUS = { verified: 'verified', unsupported: 'unverified', contradicted: 'contradicted', inaccessible: 'inaccessible', gray: 'unverified', weak: 'unverified' };
 
+// Claims that should be JUDGED carry the source they cite. The citation lane reads the CITED source
+// and nothing else — it never substitutes one found by search — so an uncited claim resolves to
+// `inaccessible` by design rather than being checked against whatever a search engine returned.
 const DOC = [
   '# Field Brief',
   '',
-  'The 2021 review found the effect "limited to a single demonstration site" overall.',
-  'Snowpack rose 15% across treated basins according to officials.',
-  'The program cost $5 billion overall, the report says.',
+  'The 2021 review found the effect "limited to a single demonstration site" overall (https://corpus.example/doc).',
+  'Snowpack rose 15% across treated basins according to officials (https://corpus.example/doc).',
+  'The program cost $5 billion overall, the report says (https://corpus.example/doc).',
+  'The water office described modest seasonal improvement in several treated areas (https://corpus.example/doc).',
   'See https://void.example/x for the phlogiston index figures.',
-  'The signal phrase "alpha beta gamma" appears in the official record.',
+  'The phrase "alpha the of beta the of gamma" appears in the official record.',
 ].join('\n');
 
 (async () => {
   // 1) intake + extract
   const wc = importText(DOC, { format: 'md' });
   const units = extractUnits(wc).units;
-  ok('extract → 5 units (heading dropped)', units.length === 5, `${units.length}: ${units.map(u => u.kind).join(',')}`);
+  ok('extract → 6 units (heading dropped)', units.length === 6, `${units.length}: ${units.map(u => u.kind).join(',')}`);
 
   // 2) resolve (mock callTool)
   const resolved = await resolveUnits(units, callTool);
@@ -90,14 +94,16 @@ const DOC = [
   const bands = matched.map(m => m.band);
   ok('match: ≥2 verified (verbatim quote + numeric)', bands.filter(b => b === 'verified').length >= 2, bands.join(','));
   ok('match: exactly 1 contradicted ($5B vs $3B)', bands.filter(b => b === 'contradicted').length === 1, bands.join(','));
-  ok('match: exactly 1 inaccessible', bands.filter(b => b === 'inaccessible').length === 1);
+  // TWO now, and both are correct: the dead link, and the claim that cites no source at all. Neither
+  // gets a substitute found by search — that is the citation lane's contract.
+  ok('match: 2 inaccessible (dead link + uncited claim)', bands.filter(b => b === 'inaccessible').length === 2, bands.join(','));
   ok('match: ≥1 escalatable residue (gray|weak, needs_model)', matched.filter(m => m.needs_model).length >= 1, bands.join(','));
 
   // 4) preflight gate
   const candidates = buildCandidates(units, matched);
   const gate = await preflight(candidates, { homeworkCheck });
   ok('preflight proceeds (coherent residue)', gate.proceed === true, gate.reason);
-  ok('preflight split decided vs residue', gate.decided.length === 4 && gate.residue.length === 1, `decided=${gate.decided.length} residue=${gate.residue.length}`);
+  ok('preflight split decided vs residue', gate.decided.length === 5 && gate.residue.length === 1, `decided=${gate.decided.length} residue=${gate.residue.length}`);
 
   // 5) classify the released residue (STUB — no cloud)
   const classified = await classifyAll(gate.residue);
@@ -111,7 +117,7 @@ const DOC = [
   ];
   const rendered = contract.mapCheckResult({ claims: items }, { strict: true });
 
-  ok('contract: every unit → exactly one finding (5)', rendered.findings.length === 5, `${rendered.findings.length}`);
+  ok('contract: every unit → exactly one finding (6)', rendered.findings.length === 6, `${rendered.findings.length}`);
   ok('contract STRICT: zero schema violations (all conform)', rendered.summary.invalid === 0, JSON.stringify(rendered.summary));
   ok('contract: byVerdict present + verified auto-resolves', rendered.summary.byVerdict && rendered.summary.resolved >= 2, JSON.stringify(rendered.summary.byVerdict));
   ok('contract: contradiction surfaced as bad', rendered.findings.some(f => f.verdict === 'bad'));

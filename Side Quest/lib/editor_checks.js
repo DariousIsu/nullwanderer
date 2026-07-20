@@ -29,6 +29,7 @@ const { runHarness } = require('../studio/verify_harness');
 const { makeHomeworkCheck, makeClassifier } = require('../studio/verify_model_io');
 const { readFetch } = require('../studio/verify_resolve');
 const deepcheck = require('../studio/verify_deepcheck');
+const factcheck = require('../studio/verify_factcheck');
 
 const TERMINAL = new Set(['report_ready', 'accepted', 'revised', 'expired']);
 
@@ -154,6 +155,8 @@ async function runHarnessChecks({
   cheapModel = null, cheapBase = null, cheapHeaders = null,
   frontierModel = null, frontierBase = null, frontierHeaders = null,
   deep = false, deepModelName = null, deepBase = null, deepHeaders = null, deepNumPredict = 1200,
+  // FACT CHECK lane (always on): defaults to the same model/endpoint as the deep citation judge.
+  factCheckEnabled = true, factCheckModelName = null, factCheckBase = null, factCheckHeaders = null, factCheckSources = 3,
   embed = null, cosine = null, tier = 'harness', onStage = null,
   // Echo's fetch rung → web_extract (trafilatura clean text + status), not web_fetch (raw-HTML
   // preview). The ladder reads the body from `text_preview` (see verify_resolve.readFetch).
@@ -180,20 +183,38 @@ async function runHarnessChecks({
   // checks an independent source, and judges precision. Web tools are the SAME ones the resolver uses
   // (fetch via the injected fetch tool → readFetch's tolerant body reader; search via resolveOpts.search
   // or web_search). Fail-soft: no deep model → the classify leaf still runs.
+  const fetchTool = (resolveOpts.tools && resolveOpts.tools.fetch) || 'web_extract';
+  const fetchUrl = async (url) => { try { return readFetch(await callTool(fetchTool, { url })).body || ''; } catch { return ''; } };
+  const searchFn = typeof resolveOpts.search === 'function'
+    ? (q, o) => resolveOpts.search(q, o)
+    : async (q) => { try { return await callTool((resolveOpts.tools && resolveOpts.tools.webSearch) || 'web_search', { query: q, q }); } catch { return []; } };
+
   let deepVerify = null;
   if (deep && deepModelName) {
-    const fetchTool = (resolveOpts.tools && resolveOpts.tools.fetch) || 'web_extract';
-    const fetchUrl = async (url) => { try { return readFetch(await callTool(fetchTool, { url })).body || ''; } catch { return ''; } };
-    const searchFn = typeof resolveOpts.search === 'function'
-      ? (q, o) => resolveOpts.search(q, o)
-      : async (q) => { try { return await callTool((resolveOpts.tools && resolveOpts.tools.webSearch) || 'web_search', { query: q, q }); } catch { return []; } };
     deepVerify = (residue) => deepcheck.deepVerifyAll(
       (residue || []).map(c => ({ uid: c.uid, claim: c.claim, text: c.claim, quote: c.quote || null, kind: c.kind || null, url: c.source_url || null, sourceText: c.passage || '' })),
-      { complete, model: deepModelName, base: deepBase, headers: deepHeaders, numPredict: deepNumPredict, fetch: fetchUrl, search: searchFn, embed, cosine, concurrency: 3 }
+      // crossCheck FALSE: this is the CITATION lane, and it judges the claim against the source the
+      // document CITED — nothing else. Pulling in an independent source here is fact-checking, which
+      // is now its own lane below, where a second source is offered to the author rather than used to
+      // rule on their citation. No `search` is injected for the same reason.
+      { complete, model: deepModelName, base: deepBase, headers: deepHeaders, numPredict: deepNumPredict, fetch: fetchUrl, crossCheck: false, embed, cosine, concurrency: 3 }
     );
   }
 
-  const result = await runHarness(workingCopy, { callTool, embed, cosine, homeworkCheck, classifyModel, classifyFrontier, deepVerify, resolveOpts, onStage });
+  // FACT CHECK lane — always runs alongside, never inside. It searches for INDEPENDENT sources and
+  // reports corroboration/counter-evidence for the author to weigh; it cannot touch a citation
+  // verdict or the grade (verify_harness runs it after the verdicts are fixed).
+  let factCheck = null;
+  if (factCheckEnabled && (deepModelName || classifyModelName)) {
+    factCheck = (claims) => factcheck.factCheckAll(claims, {
+      complete, model: factCheckModelName || deepModelName || classifyModelName,
+      base: factCheckBase || deepBase || classifyBase, headers: factCheckHeaders || deepHeaders || classifyHeaders,
+      fetch: fetchUrl, search: searchFn, embed, cosine,
+      sources: factCheckSources, concurrency: 3,
+    });
+  }
+
+  const result = await runHarness(workingCopy, { callTool, embed, cosine, homeworkCheck, classifyModel, classifyFrontier, deepVerify, factCheck, resolveOpts, onStage });
 
   if (checkRunId != null) {
     registry.updateCheckRun(checkRunId, {
@@ -201,7 +222,13 @@ async function runHarnessChecks({
       findingsCount: result.summary.total, resolvedCount: result.summary.resolved, finished: true,
     });
   }
-  return { checkRunId, mapped: { findings: result.findings, suggestions: result.suggestions, summary: result.summary }, gate: result.gate, stages: result.stages };
+  // `mapped` stays the CITATION lane so the grade, the registry counts and every existing consumer
+  // keep meaning what they meant; the fact-check lane rides alongside as its own section.
+  return {
+    checkRunId,
+    mapped: { findings: result.findings, suggestions: result.suggestions, summary: result.summary, factcheck: result.factcheck },
+    gate: result.gate, stages: result.stages,
+  };
 }
 
 module.exports = { runChecks, runHarnessChecks, buildEventPrompt, parseFindings, TERMINAL };

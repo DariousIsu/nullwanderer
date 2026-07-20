@@ -165,6 +165,28 @@ const smokes = [
   'smoke_model_sweep.js',
   'smoke_media_search_watch.js',
   'smoke_web_verify.js',
+
+  // EDITOR STUDIO — the whole verification spine. These were absent from the gate entirely, so the
+  // subsystem could be refactored end-to-end without a single gated test running. All offline and
+  // deterministic (temp DBs, mock callTool, stub embedder, no model / network / Echo).
+  'smoke_doc_extract.js',
+  'smoke_file_ingest.js',
+  'smoke_editor_import.js',
+  'smoke_editor_registry.js',
+  'smoke_editor_roundtrip.js',
+  'smoke_editor_attach.js',
+  'smoke_editor_checks.js',
+  'smoke_editor_cert.js',
+  'smoke_verify_extract.js',
+  'smoke_verify_resolve.js',
+  'smoke_verify_match.js',
+  'smoke_verify_preflight.js',
+  'smoke_verify_modelio.js',
+  'smoke_verify_classify.js',
+  'smoke_verify_deepcheck.js',
+  'smoke_verify_factcheck.js',
+  'smoke_verify_pipeline.js',
+  'smoke_verify_harness.js',
   'smoke_listen.js',
   'smoke_answer_draft.js',
   'smoke_turn_router.js',
@@ -252,8 +274,12 @@ for (const s of smokes) {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 300000,
     });
   } catch (e) { out = (e.stdout || '') + (e.stderr || ''); }
-  const m = out.match(/(PASS|FAIL) — (\d+) ok, (\d+) failed/);
-  if (m && m[1] === 'PASS') { passed++; console.log(`PASS  ${s.padEnd(30)} (${m[2]} ok)`); }
+  // Two result-line dialects are in use: "PASS — n ok, m failed" (memory/curation smokes) and
+  // "ALL PASS — n passed, m failed" (the editor/verify suites). Accept both — the editor suites were
+  // silently outside the gate for want of a matching regex, so the whole verification spine could be
+  // refactored without one gated test running.
+  const m = out.match(/(ALL PASS|FAILURES|PASS|FAIL) — (\d+) (?:ok|passed), (\d+) failed/);
+  if (m && /^(ALL )?PASS$/.test(m[1])) { passed++; console.log(`PASS  ${s.padEnd(30)} (${m[2]} ok)`); }
   else { failed++; failures.push(s); console.log(`FAIL  ${s.padEnd(30)} ${m ? `(${m[3]} failed)` : '(no result line — crashed?)'}`); }
 }
 

@@ -2714,7 +2714,9 @@ ipcMain.handle('editor:export-report', async (_e, { docId, mapped } = {}) => {
     if (!doc) return { ok: false, error: 'no such document' };
     if (!mapped || !Array.isArray(mapped.findings)) return { ok: false, error: 'no findings to report — run checks first' };
     const html = require('./studio/cert_template').renderReport({
-      doc, findings: mapped.findings, suggestions: mapped.suggestions, summary: mapped.summary, generatedAt: Date.now(),
+      doc, findings: mapped.findings, suggestions: mapped.suggestions, summary: mapped.summary,
+      factcheck: mapped.factcheck,        // lane 2 — rendered last, advisory, never part of the ruling
+      generatedAt: Date.now(),
     });
     const reportsDir = path.join(__dirname, 'data', 'reports');
     try { fs.mkdirSync(reportsDir, { recursive: true }); } catch (e) { /* may already exist */ }
