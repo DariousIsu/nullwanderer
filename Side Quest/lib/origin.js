@@ -164,4 +164,34 @@ function independence(items) {
   };
 }
 
-module.exports = { hostOf, normalizeUrl, contentHash, independence, isCommodityHost, pickOrigin, JUNK_PARAMS, COMMODITY_HOST };
+// SYNCHRONY IS A FLAG, NOT CORROBORATION (Lucas: "if all outlets say the same thing at the same time
+// that should be a major flag"). §6 rule 1, and until now it was the one part of independence nothing
+// computed.
+//
+// independence() catches identical TEXT. It cannot catch ten outlets each re-wording one press release
+// within the hour — those score min(10,10)=10 and read as overwhelming corroboration. Measured on the
+// live news corpus: of 599 events reaching 3+ independent sources, 78 published inside ONE HOUR and 380
+// inside six. Those are wire pickups and network republication (States Newsroom, Advance Local), not
+// ten newsrooms independently confirming a fact.
+//
+// This REPORTS rather than reduces. A simultaneous burst is sometimes exactly right — a scheduled
+// announcement really is reported by everyone at once — so the count stays honest and the caller is
+// told the sources were not temporally independent. Deciding what that is worth is a grading policy
+// question, not an arithmetic one.
+//
+// `items` = [{ observed_at }]. Undated items are ignored rather than treated as simultaneous.
+const SYNCHRONY_WINDOW_MS = 60 * 60 * 1000;
+function synchrony(items, { windowMs = SYNCHRONY_WINDOW_MS } = {}) {
+  const ts = (Array.isArray(items) ? items : []).filter(Boolean)
+    .map((i) => i.observed_at).filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+  if (ts.length < 2) return { dated: ts.length, spanMs: null, simultaneous: false };
+  const spanMs = ts[ts.length - 1] - ts[0];
+  return {
+    dated: ts.length,
+    spanMs,
+    // Three or more is where a burst starts meaning something; two things landing together is ordinary.
+    simultaneous: ts.length >= 3 && spanMs < windowMs,
+  };
+}
+
+module.exports = { hostOf, normalizeUrl, contentHash, independence, isCommodityHost, pickOrigin, synchrony, JUNK_PARAMS, COMMODITY_HOST, SYNCHRONY_WINDOW_MS };

@@ -69,6 +69,7 @@ const smokes = [
   'smoke_origin.js',
   'smoke_observed_at.js',
   'smoke_decomp_encounters.js',
+  'smoke_news_encounters.js',
   'smoke_curation_gate.js',
   'smoke_curation_store.js',
   'smoke_substantiation.js',

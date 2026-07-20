@@ -288,9 +288,23 @@ function createStory(item, sig, nowMs) {
     redaction ? 1 : 0, redaction ? `${redaction.kind}: "${redaction.phrase}"` : null,
     item.ts || nowMs, item.ts || nowMs, displayClean(item.summary).slice(0, 500) || null, category, nowMs);
   if (item.id != null) newsdb.get().prepare('UPDATE news_items SET story_id = ? WHERE id = ?').run(info.lastInsertRowid, item.id);
+  _logEncounter(info.lastInsertRowid, item);
   recordUpdate(info.lastInsertRowid, 'born', item, nowMs, { outlets, signal: redaction && redaction.kind });
   return info.lastInsertRowid;
 }
+// ENCOUNTER LOG (W3). Each item that lands in a story is one outlet attesting the event happened —
+// exactly one encounter, attributed to the host we actually fetched. This is the only lane where the
+// publisher and the publication date both arrive natively, so it is the first that can honestly reach
+// grade A. Fail-soft and cross-database: a problem writing to sq.db must never break news ingestion.
+function _logEncounter(storyId, item) {
+  try {
+    const st = newsdb.get().prepare('SELECT id, cluster_key, title FROM news_stories WHERE id = ?').get(storyId);
+    if (!st) return;
+    const e = require('./news_encounters').toEncounter(item, st);
+    if (e) require('./encounters').record(e);
+  } catch (err) { /* never break the news lane over the encounter log */ }
+}
+
 function attachItem(story, item, sig, nowMs) {
   ensureSchema();
   const entities = new Set(story.entity_set); for (const e of sig.entities) entities.add(e);
@@ -305,6 +319,7 @@ function attachItem(story, item, sig, nowMs) {
   newsdb.get().prepare('UPDATE news_stories SET entity_set = ?, source_set = ?, source_count = ?, outlet_set = ?, outlet_count = ?, report_set = ?, report_count = ?, redaction = ?, redaction_note = ?, update_count = update_count + 1, last_ts = ? WHERE id = ?')
     .run(JSON.stringify([...entities]), JSON.stringify([...sources]), sources.size, JSON.stringify([...outlets]), outlets.size, JSON.stringify([...reports]), reports.size, nowRedacted, note, lastTs, story.id);
   if (item.id != null) newsdb.get().prepare('UPDATE news_items SET story_id = ? WHERE id = ?').run(story.id, item.id);
+  _logEncounter(story.id, item);
   recordUpdate(story.id, 'update', item, nowMs, { outlets: itemOutlets, signal: redaction && redaction.kind });
   // keep the in-memory story consistent for subsequent items in the same batch
   story.entity_set = entities; story.source_set = sources; story.source_count = sources.size;

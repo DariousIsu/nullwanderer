@@ -116,5 +116,35 @@ ok(og.contentHash('') === null && og.contentHash(null) === null, 'empty → null
   ok(og.independence([{ origin: 'https://www.x.gov/a' }]).origins === 1, 'raw origin URL is resolved to a host');
 }
 
+// ── SYNCHRONY IS A FLAG, NOT CORROBORATION (§6.1) ──────────────────────────────────────────────
+// independence() catches identical text; it cannot catch ten outlets re-wording one press release
+// within the hour. Measured live: of 599 news events reaching 3+ independent sources, 78 published
+// inside ONE hour — wire pickups and network republication, not independent confirmation.
+{
+  const H = 3600 * 1000;
+  const burst = [0, 10 * 60 * 1000, 25 * 60 * 1000].map((d) => ({ observed_at: 1700000000000 + d }));
+  const s1 = og.synchrony(burst);
+  ok(s1.simultaneous === true, 'CRITICAL: 3 sources inside an hour is flagged simultaneous');
+  ok(s1.spanMs === 25 * 60 * 1000 && s1.dated === 3, 'it reports the actual span, not just a verdict');
+
+  const spread = [0, 5 * H, 30 * H].map((d) => ({ observed_at: 1700000000000 + d }));
+  ok(og.synchrony(spread).simultaneous === false, 'sources spread over days are NOT flagged');
+
+  // Two things landing together is ordinary; a burst needs three.
+  ok(og.synchrony([{ observed_at: 1 }, { observed_at: 2 }]).simultaneous === false, 'two is not a burst');
+
+  // It must REPORT, never reduce — a scheduled announcement really is reported by everyone at once,
+  // so the independence count stays honest and the caller decides what the flag is worth.
+  const h = og.contentHash;
+  const real = [['a.com', 't1'], ['b.org', 't2'], ['c.net', 't3']]
+    .map(([o, t], i) => ({ origin_host: o, content_hash: h(t), observed_at: 1700000000000 + i * 60000 }));
+  ok(og.independence(real).count === 3 && og.synchrony(real).simultaneous === true,
+    'CRITICAL: the count stays 3 AND the flag is raised — synchrony informs, it does not silently deduct');
+
+  ok(og.synchrony([]).simultaneous === false && og.synchrony(null).dated === 0, 'empty/null → no flag, never throws');
+  ok(og.synchrony([{ origin_host: 'x' }, { origin_host: 'y' }, { origin_host: 'z' }]).dated === 0,
+    'undated items are ignored, never treated as simultaneous');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);
