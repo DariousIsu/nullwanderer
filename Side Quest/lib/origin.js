@@ -164,6 +164,52 @@ function independence(items) {
   };
 }
 
+// PLATFORM HOSTS — the publisher is the CHANNEL, not the site (Lucas, 2026-07-20).
+//
+// Measured after W3 landed: 1,703 news encounters carried origin_host `youtube.com`. Those are closed
+// captions read off live news channels plus channel RSS — MeidasTouch, Farron Balanced, David Pakman,
+// Brian Tyler Cohen, ABC News, CNN, Yahoo Finance. Every one is an independent publisher, and all of
+// them collapsed into a single origin, so eight channels reporting a story counted as ONE source.
+//
+// This is the mirror of the CDN case (§ pickOrigin) and needs the opposite treatment. A CDN is not a
+// publisher at all, so origin walks PAST it to whoever linked the file. A platform IS where the content
+// genuinely lives — the fix is not to look elsewhere but to look FINER: origin becomes
+// `youtube.com/meidastouch`, which keeps the platform honest while letting channels count separately.
+//
+// Note the direction of the error either way: a CDN as origin INFLATES (independent publishers merge
+// into one key and can never be told apart); a platform as origin DEFLATES (real independence is lost).
+const PLATFORM_HOST = /(^|\.)(youtube\.com|youtu\.be|rumble\.com|vimeo\.com|substack\.com|medium\.com|x\.com|twitter\.com|facebook\.com|tiktok\.com|spotify\.com|soundcloud\.com|patreon\.com)$/i;
+
+function isPlatformHost(hostOrUrl) {
+  const h = hostOf(hostOrUrl) || String(hostOrUrl || '').toLowerCase().replace(/^www\./, '');
+  return !!h && PLATFORM_HOST.test(h);
+}
+
+// A publisher name → a stable slug. A URL is NOT a publisher name: the live feed list carries
+// `{ url: '…watch?v=gCNeDWCI0vo', title: '' }`, and the empty title fell through to the URL, so 14,422
+// caption items recorded a watch link as their publisher. Refused here rather than slugified into
+// nonsense — an unnamed channel is still a distinct channel, just not a named one.
+function publisherSlug(name) {
+  const s = String(name == null ? '' : name).trim();
+  if (!s || /^https?:\/\//i.test(s)) return null;
+  const slug = s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug || null;
+}
+
+// The origin key for a piece of content, given where it was fetched and who published it.
+//
+// On an ordinary site the host IS the publisher and `publisher` is ignored — nytimes.com is nytimes.com
+// whoever wrote the piece. Only platform hosts get the finer key, and only when the publisher is known;
+// an unnamed channel stays at the bare platform host, which under-counts rather than inventing an
+// identity that might collide with a real one.
+function platformOrigin(url, publisher) {
+  const host = hostOf(url);
+  if (!host) return null;
+  if (!isPlatformHost(host)) return host;
+  const slug = publisherSlug(publisher);
+  return slug ? `${host}/${slug}` : host;
+}
+
 // SYNCHRONY IS A FLAG, NOT CORROBORATION (Lucas: "if all outlets say the same thing at the same time
 // that should be a major flag"). §6 rule 1, and until now it was the one part of independence nothing
 // computed.
@@ -194,4 +240,6 @@ function synchrony(items, { windowMs = SYNCHRONY_WINDOW_MS } = {}) {
   };
 }
 
-module.exports = { hostOf, normalizeUrl, contentHash, independence, isCommodityHost, pickOrigin, synchrony, JUNK_PARAMS, COMMODITY_HOST, SYNCHRONY_WINDOW_MS };
+module.exports = { hostOf, normalizeUrl, contentHash, independence, isCommodityHost, pickOrigin, synchrony,
+  isPlatformHost, publisherSlug, platformOrigin,
+  JUNK_PARAMS, COMMODITY_HOST, PLATFORM_HOST, SYNCHRONY_WINDOW_MS };

@@ -116,6 +116,44 @@ ok(og.contentHash('') === null && og.contentHash(null) === null, 'empty → null
   ok(og.independence([{ origin: 'https://www.x.gov/a' }]).origins === 1, 'raw origin URL is resolved to a host');
 }
 
+// ── PLATFORM HOSTS: THE PUBLISHER IS THE CHANNEL ───────────────────────────────────────────────
+// Measured after W3: 1,703 news encounters carried origin_host `youtube.com` — closed captions off
+// live news channels plus channel RSS. Every channel is an independent publisher and all of them
+// collapsed into one origin, so eight channels reporting a story counted as ONE source.
+{
+  ok(og.isPlatformHost('https://www.youtube.com/watch?v=x') && og.isPlatformHost('substack.com')
+    && og.isPlatformHost('rumble.com'), 'platforms are recognised');
+  ok(!og.isPlatformHost('nytimes.com') && !og.isPlatformHost('legis.la.gov'), 'ordinary publishers are not platforms');
+
+  // On an ordinary host the publisher name is IGNORED — nytimes.com is nytimes.com whoever wrote it.
+  ok(og.platformOrigin('https://www.nytimes.com/2026/x', 'Some Byline') === 'nytimes.com',
+    'CRITICAL: a normal host is not split by author — that would fragment one publisher into many');
+
+  // On a platform it is what keeps channels apart.
+  const a = og.platformOrigin('https://www.youtube.com/watch?v=1', 'MeidasTouch');
+  const b = og.platformOrigin('https://www.youtube.com/watch?v=2', 'David Pakman Show');
+  ok(a === 'youtube.com/meidastouch' && b === 'youtube.com/david-pakman-show', 'channel becomes part of the origin');
+  ok(a !== b, 'CRITICAL: two channels are two origins');
+
+  // The payoff, with the real measured channels: three channels reporting = three sources, not one.
+  const h = og.contentHash;
+  const chans = ['ABC News', 'CNN', 'Yahoo Finance'].map((c, i) => ({
+    origin_host: og.platformOrigin('https://www.youtube.com/watch?v=' + i, c), content_hash: h(`report ${i}`),
+  }));
+  ok(og.independence(chans).count === 3,
+    `THE PAYOFF: 3 channels = 3 independent sources (was 1 when all read youtube.com) — got ${og.independence(chans).count}`);
+
+  // A URL is not a publisher name. The live feed list carries { url: '…watch?v=gCNeDWCI0vo', title: '' },
+  // and that empty title fell through to the URL for 14,422 caption items.
+  ok(og.publisherSlug('https://www.youtube.com/watch?v=gCNeDWCI0vo') === null,
+    'CRITICAL: a URL is refused as a publisher name, never slugified into nonsense');
+  ok(og.platformOrigin('https://www.youtube.com/watch?v=g', 'https://www.youtube.com/watch?v=g') === 'youtube.com',
+    '…and falls back to the bare platform, which under-counts rather than inventing an identity');
+  ok(og.platformOrigin('https://www.youtube.com/watch?v=g', '') === 'youtube.com', 'an unnamed channel stays at the platform host');
+  ok(og.publisherSlug('ABC News') === 'abc-news' && og.publisherSlug('  ') === null, 'slugs normalise; blanks refuse');
+  ok(og.platformOrigin('not a url', 'X') === null, 'garbage url → null, never throws');
+}
+
 // ── SYNCHRONY IS A FLAG, NOT CORROBORATION (§6.1) ──────────────────────────────────────────────
 // independence() catches identical text; it cannot catch ten outlets re-wording one press release
 // within the hour. Measured live: of 599 news events reaching 3+ independent sources, 78 published

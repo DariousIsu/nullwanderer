@@ -79,7 +79,10 @@ function toEncounter(item, story) {
   const key = eventKey(story);
   if (!key) return null;
 
-  const host = og.hostOf(item.source_url);
+  // PLATFORM CONTENT IS KEYED BY CHANNEL. `item.source` is the publisher the feed itself named — a
+  // channel for YouTube/Substack, the outlet for an ordinary site. On a normal host it is ignored (the
+  // host IS the publisher); on a platform it is what stops eight independent channels counting as one.
+  const host = og.platformOrigin(item.source_url, item.source);
   // Text identity from what the item actually said. Syndication — eight Advance Local papers running
   // one wire story under eight hostnames — collapses here, on the text, exactly as it should.
   const hash = og.contentHash(`${item.title || ''} ${item.summary || ''}`);

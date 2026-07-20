@@ -77,6 +77,23 @@ function deriveTitle(text) {
 }
 
 const slug = (s) => String(s || 'feed').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'feed';
+// The PUBLISHER of a caption stream is the CHANNEL. The old fallback was `feed.title || feed.url`, and
+// one configured stream carries an empty title — so 14,422 caption items recorded
+// `https://www.youtube.com/watch?v=gCNeDWCI0vo` as their publisher name. A URL is not a publisher: it
+// reads as one in every downstream display, and it cannot be told apart from a real channel.
+//
+// An unnamed stream now gets a stable label derived from its video id instead. That keeps each stream
+// DISTINCT from every other (which is the point — channels must count independently) without inventing
+// a name for a channel nobody has told us the name of.
+function channelLabel(feed) {
+  const title = String((feed && feed.title) || '').trim();
+  if (title && !/^https?:\/\//i.test(title)) return title;
+  const url = String((feed && feed.url) || '');
+  const m = url.match(/[?&]v=([A-Za-z0-9_-]{6,})/) || url.match(/youtu\.be\/([A-Za-z0-9_-]{6,})/);
+  if (m) return `youtube:${m[1]}`;
+  return 'broadcast';
+}
+
 function feedKey(feed) { return slug((feed && (feed.title || feed.url)) || 'feed'); }
 function captureFileName(feed, ts) { return `${feedKey(feed)}-${ts}.png`; }
 
@@ -87,7 +104,7 @@ function buildSegmentItem(feed, lines, { firstTs, now }) {
   if (!text) return null;
   if (adHeuristic(text) === 'ad') return null;                       // drop OBVIOUS ads at capture (pharma/CTA/price) — free; soft ads go to the compression classifier
   return {
-    source: (feed && feed.title) || (feed && feed.url) || 'broadcast',
+    source: channelLabel(feed),
     sourceKind: 'video',
     sourceUrl: (feed && feed.url) || null,
     title: deriveTitle(text),
@@ -115,7 +132,7 @@ function buildVisionItem(feed, visionText, now) {
   const text = clean(visionText);
   if (!text || text.length < 8) return null;
   return {
-    source: (feed && feed.title) || (feed && feed.url) || 'broadcast',
+    source: channelLabel(feed),
     sourceKind: 'video',
     sourceUrl: (feed && feed.url) || null,
     title: deriveTitle(text),
