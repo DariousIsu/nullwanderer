@@ -459,9 +459,13 @@ async function decomposeDoc(doc = {}, deps = {}) {
 
   // 3) entities: mint (existence-gated by the doc) / reuse / hold (fall-through) / skip
   const usable = new Map();   // coreKey → the canonical name to use in an edge
+  // …and its TYPE. An edge observation that omits the type makes the encounter log key the same
+  // object twice — `place:apache county` from its existence claim and `thing:apache county` from
+  // its LOCATED_IN edge — which is a split identity, the one failure the merge model cannot survive.
+  const usableType = new Map();   // coreKey → the extracted entity type
   for (const d of plan.decisions) {
     const key = coreKey(d.name) || d.name.toLowerCase();
-    if (d.action === 'reuse') { usable.set(key, d.canonical || d.name); out.reused++; continue; }
+    if (d.action === 'reuse') { usable.set(key, d.canonical || d.name); usableType.set(key, d.type); out.reused++; continue; }
     if (d.action === 'mint') {
       if (out.minted >= maxEnt) continue;                    // volume cap on NEW objects
       // REFERENCE DATA (office/committee/body): used to HOLD to avoid QID-less dups — but that permanent
@@ -470,16 +474,16 @@ async function decomposeDoc(doc = {}, deps = {}) {
       // office (→ identity-confirmed) or it fades. The anti-dup intent is preserved by the state tag + churn,
       // not a permanent hold. (Reference types are never persons → no attractor risk.)
       if (REFERENCE_TYPES.has(d.type)) {
-        if (await _mintUnsubstantiated(dispatch, observe, d.name, d.type, url)) { usable.set(key, d.name); out.minted++; out.minted_unsub++; }
-        else { out.held++; await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: 'D', confidence: 0, status: 'held' }); }
+        if (await _mintUnsubstantiated(dispatch, observe, d.name, d.type, url)) { usable.set(key, d.name); usableType.set(key, d.type); out.minted++; out.minted_unsub++; }
+        else { out.held++; await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: 'D', confidence: 0, status: 'held', type: d.type }); }
         continue;
       }
       // NO topic gate — the graph absorbs every entity a cited doc yields; topic is not a
       // reality/quality axis (the existence gate below is). Off-domain ≠ untrue.
       const eg = CG.gateExistence('S1', docSources);         // doc-cited → grade B ≥ C floor → mint
       if (eg.mint && await _proposeEntity(dispatch, d.name, d.type, '')) {
-        usable.set(key, d.name); out.minted++;
-        await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: eg.grade, confidence: eg.confidence, status: 'promoted' });
+        usable.set(key, d.name); usableType.set(key, d.type); out.minted++;
+        await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: eg.grade, confidence: eg.confidence, status: 'promoted', type: d.type });
       }
       continue;
     }
@@ -491,10 +495,10 @@ async function decomposeDoc(doc = {}, deps = {}) {
       // lady" attractor the identity gate exists to prevent, and 'other' is the type a bare edge-endpoint
       // gets, so it too could be a person. Bias-to-clarify: never guess a node for something we can't type.
       if (UNSUB_MINTABLE_TYPES.has(d.type) && out.minted < maxEnt && await _mintUnsubstantiated(dispatch, observe, d.name, d.type, url)) {
-        usable.set(key, d.name); out.minted++; out.minted_unsub++;
+        usable.set(key, d.name); usableType.set(key, d.type); out.minted++; out.minted_unsub++;
       } else {
         out.held++;
-        await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: 'D', confidence: 0, status: 'held' });
+        await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: 'D', confidence: 0, status: 'held', type: d.type });
       }
       continue;
     }
@@ -550,7 +554,7 @@ async function decomposeDoc(doc = {}, deps = {}) {
       meta.corroboration = corrN;
       if (fg.promote && await _proposeRelation(dispatch, sName, tName, relOut, conf, meta)) {
         out.connections++; out.related.push(tName);
-        await _observe(observe, { sourceEntity: sName, relation: relOut, target: tName, url, grade: fg.grade, confidence: conf, status: 'promoted', valid_from: r.valid_from, valid_to: r.valid_to });
+        await _observe(observe, { sourceEntity: sName, relation: relOut, target: tName, url, grade: fg.grade, confidence: conf, status: 'promoted', valid_from: r.valid_from, valid_to: r.valid_to, type: usableType.get(coreKey(r.source) || r.source.toLowerCase()), targetType: usableType.get(coreKey(r.target) || r.target.toLowerCase()) });
       }
     } else {
       out.held++;                                            // endpoint unresolved → upgrade-pass queue

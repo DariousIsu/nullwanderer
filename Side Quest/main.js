@@ -8765,7 +8765,24 @@ async function decomposeLandedDoc(doc) {
     const _gateDeps = require('./lib/resolution_live').makeLiveDeps((t) => echoSuit.dispatch(t));
     const resolve = (name, opts) => require('./lib/resolution_gate').preResolve(name, opts || {}, { deps: _gateDeps, fallback: (n, o) => echoSuitLib.resolveMention(n, o) });
     const dispatch = (tag) => echoSuit.dispatch(tag);
-    const observe = (o) => { try { curationStore.record(db, { ...o, feed: 'doc-decomp' }); } catch {} };
+    // ENCOUNTER LOG (W2): the same observation, written to the graded substrate. Every landed document
+    // already yields typed objects and relations here; without this they live only in kg_observations,
+    // where nothing carries a claim class, a source authority or the source's own date — so nothing can
+    // be graded. lib/decomp_encounters decides what may be recorded and refuses the rest (interpretive
+    // edges are never graded as fact; leaked entity-name relations are not edges at all).
+    const _docProv = (() => {
+      try {
+        const row = db.getDocument(doc.id) || {};
+        const d = require('./lib/observed_at').extractObservedAt({ text: doc.body, title: doc.title, filename: String(row.ref || '').split(/[\\/]/).pop() });
+        return { id: doc.id, origin: row.origin || null, origin_host: row.origin_host || null, content_hash: row.content_hash || null, observed_at: d ? d.ts : null };
+      } catch { return { id: doc.id }; }
+    })();
+    const _encLib = require('./lib/decomp_encounters');
+    const _encounters = require('./lib/encounters');
+    const observe = (o) => {
+      try { curationStore.record(db, { ...o, feed: 'doc-decomp' }); } catch {}
+      try { const e = _encLib.toEncounter(o, _docProv); if (e) _encounters.record(e); } catch {}
+    };
     // CITATION: cite the decompose to the doc's REAL source URL when we have one (a grabbed .gov/official
     // roster → official-document weight, so curation_gate grades it A and promotes single-source); else the
     // stable `docstore:<id>` pointer (decomp_lane fallback). Guarded to a real http(s) URL so an ephemeral
