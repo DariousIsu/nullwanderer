@@ -59,6 +59,57 @@ function normalizeUrl(url) {
   } catch { return null; }
 }
 
+// ── ORIGIN IS THE FIRST HIGH-QUALITY SOURCE (Lucas, 2026-07-20) ───────────────────────────────────
+//
+// Measured the moment origin capture started working: three Apache County official documents — a notary
+// list, a public-records form, a road-work notice — recorded their origin as
+// `ecs-cluster-bucket-wsos-prod-two.s3.us-west-2.amazonaws.com`. That is where the BYTES lived. It is
+// not who published them.
+//
+// Storing the bucket breaks grading in both directions at once:
+//   - authority: a genuinely official record grades `unknown` instead of official, so it never earns
+//     the +1 that a lone local government document can never get any other way.
+//   - independence: that bucket serves many client sites (the path was `/uploads/sites/107/`), so two
+//     DIFFERENT counties would share one origin_host and count as ONE source. `min(origins, texts)`
+//     exists to stop inflation; here the same key would deflate genuinely independent publishers.
+//
+// So origin walks the chain and takes the first source that is a PUBLISHER. A CDN, an object store or a
+// site-builder's asset domain is infrastructure — it carries no authority and asserts nothing.
+const COMMODITY_HOST = new RegExp([
+  '(^|\\.)s3[.-][a-z0-9-]*\\.amazonaws\\.com$', '(^|\\.)s3\\.amazonaws\\.com$',
+  '(^|\\.)amazonaws\\.com$', '(^|\\.)cloudfront\\.net$', '(^|\\.)blob\\.core\\.windows\\.net$',
+  '(^|\\.)storage\\.googleapis\\.com$', '(^|\\.)googleusercontent\\.com$',
+  '(^|\\.)digitaloceanspaces\\.com$', '(^|\\.)r2\\.dev$', '(^|\\.)backblazeb2\\.com$',
+  '(^|\\.)akamaized\\.net$', '(^|\\.)fastly\\.net$', '(^|\\.)cdn\\.[a-z0-9-]+\\.[a-z]{2,}$',
+  '(^|\\.)wixstatic\\.com$', '(^|\\.)squarespace-cdn\\.com$', '(^|\\.)shopifycdn\\.com$',
+  '(^|\\.)files\\.wordpress\\.com$', '(^|\\.)dropboxusercontent\\.com$',
+  '(^|\\.)sharepoint\\.com$', '(^|\\.)docs\\.google\\.com$', '(^|\\.)drive\\.google\\.com$',
+].join('|'), 'i');
+
+// Infrastructure, not a publisher. Nothing about a claim's authority follows from living here.
+function isCommodityHost(host) {
+  const h = String(host || '').toLowerCase().replace(/^www\./, '');
+  if (!h) return false;
+  return COMMODITY_HOST.test(h);
+}
+
+// Pick the origin from a provenance chain, ordered nearest-the-bytes first: [fetchUrl, referringPage, …].
+//
+// Returns the first entry published by a real host. When EVERY link is commodity infrastructure there is
+// no publisher to name, so the fetch URL stands — better a weak origin honestly labelled than none.
+// Returns { origin, host, commodity } so a caller can tell "this is the publisher" from "this is only
+// where the bytes were", which is the difference between an official grade and an unknown one.
+function pickOrigin(chain) {
+  const list = (Array.isArray(chain) ? chain : [chain]).map((u) => normalizeUrl(u)).filter(Boolean);
+  if (!list.length) return { origin: null, host: null, commodity: false };
+  for (const u of list) {
+    const h = hostOf(u);
+    if (h && !isCommodityHost(h)) return { origin: u, host: h, commodity: false };
+  }
+  const u = list[0];
+  return { origin: u, host: hostOf(u), commodity: true };
+}
+
 // Content identity. Whitespace-normalised and case-folded so trivial reformatting doesn't read as a
 // second independent text — the duplicates measured in the corpus are byte-identical, but a re-save
 // with different line endings must not defeat this.
@@ -113,4 +164,4 @@ function independence(items) {
   };
 }
 
-module.exports = { hostOf, normalizeUrl, contentHash, independence, JUNK_PARAMS };
+module.exports = { hostOf, normalizeUrl, contentHash, independence, isCommodityHost, pickOrigin, JUNK_PARAMS, COMMODITY_HOST };

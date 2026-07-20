@@ -250,7 +250,9 @@ async function ensure() {
       // ingest time the URL is gone and cannot be reconstructed — origin is a write-once fact. The
       // grabPdfs path already remembered its provenance; a browser-initiated download did not, and that
       // is the larger of the two lanes.
-      try { _rememberProvenance(dest, download.url()); } catch {}
+      // The page that initiated the download is the publisher when the file itself sits on a CDN.
+      let _via = null; try { _via = download.page() ? download.page().url() : null; } catch {}
+      try { _rememberProvenance(dest, download.url(), _via); } catch {}
       console.log('[web] download saved →', dest);
     } catch (e) { console.error('[web] download save failed:', e.message); }
   });
@@ -1040,18 +1042,35 @@ function isPdfUrl(u) { return /\.pdf(?:[?#]|$)/i.test(String(u || '')); }
 // curation_gate grade an authoritative single source as A → it promotes without a 2nd source a lone local
 // official can never get. Keyed by basename (both sides share DOWNLOADS_DIR; downloadDest dedups names) so a
 // Windows path-format/slash difference between writer and watcher can't miss. Bounded (LRU-ish) map.
+//
+// THE CHAIN, not a single URL (Lucas: "origin is the first high quality source"). A PDF's bytes often
+// live on a CDN or object store while the PUBLISHER is the page that linked to it — three Apache County
+// records came from an S3 bucket whose host says nothing about who stands behind them. Both facts are
+// kept: `via` is where we encountered it, `fetch` is where the bytes were, and origin.pickOrigin walks
+// nearest-first to the first real publisher.
 const _dlProvenance = new Map();
-function _rememberProvenance(fp, url) {
+function _rememberProvenance(fp, url, via = null) {
   try {
     const key = require('path').basename(String(fp || ''));
     if (!key || !url) return;
-    _dlProvenance.set(key, url);
+    _dlProvenance.set(key, { fetch: String(url), via: via ? String(via) : null });
     if (_dlProvenance.size > 3000) { const oldest = _dlProvenance.keys().next().value; _dlProvenance.delete(oldest); }
   } catch (e) { /* provenance is best-effort — never break a download */ }
 }
-function sourceUrlForFile(fp) { try { return _dlProvenance.get(require('path').basename(String(fp || ''))) || null; } catch (e) { return null; } }
+// Full provenance: { origin, fetchUrl, commodity }. `commodity` means no publisher could be named — the
+// origin is only where the bytes were, and must not be read as authority.
+function provenanceForFile(fp) {
+  try {
+    const rec = _dlProvenance.get(require('path').basename(String(fp || '')));
+    if (!rec) return { origin: null, fetchUrl: null, commodity: false };
+    const picked = require('./origin').pickOrigin([rec.fetch, rec.via]);
+    return { origin: picked.origin, fetchUrl: rec.fetch, commodity: picked.commodity };
+  } catch (e) { return { origin: null, fetchUrl: null, commodity: false }; }
+}
+// Back-compat: the decompose-citation caller wants one URL, and it wants the publisher.
+function sourceUrlForFile(fp) { try { return provenanceForFile(fp).origin; } catch (e) { return null; } }
 
-async function downloadPdf(url) {
+async function downloadPdf(url, via = null) {
   const u = String(url || '').trim();
   if (!/^https?:\/\//i.test(u)) return { ok: false, reason: 'not http(s)' };
   if (grabbedUrls.has(u)) return { ok: false, reason: 'already grabbed', dedup: true };
@@ -1072,7 +1091,9 @@ async function downloadPdf(url) {
     if (!/\.pdf$/i.test(name)) name += '.pdf';
     const dest = downloadDest(DOWNLOADS_DIR, name);
     fs.writeFileSync(dest, buf);
-    _rememberProvenance(dest, u);   // remember origin so the watcher can cite the decompose to it (authority grading)
+    // `via` is the page that LINKED to this PDF — usually the actual publisher — while `u` is wherever
+    // the bytes happen to be hosted. Both are kept; pickOrigin decides which one is the origin.
+    _rememberProvenance(dest, u, via);
     console.log(`[web] pdf grabbed → ${dest} (${Math.round(buf.length / 1024)}KB) from ${u}`);
     return { ok: true, savedAs: dest, bytes: buf.length, url: u };
   } catch (err) { return { ok: false, reason: err.message }; }
@@ -1144,7 +1165,7 @@ async function grabPdfs({ max = AUTO_GRAB_PER_READ, userDriven = false } = {}) {
   }
   if (skipRel || skipHost) console.log(`[web] auto-grab gate on ${relevance.normHost(pageUrl) || 'page'}: kept ${kept.length}, skipped ${skipRel} off-domain + ${skipHost} host-flood`);
   const grabbed = [];
-  for (const k of kept) { const r = await downloadPdf(k.href); if (r && r.ok) { grabbed.push(r.savedAs); _hostGrabInc(k.host); } }
+  for (const k of kept) { const r = await downloadPdf(k.href, pageUrl); if (r && r.ok) { grabbed.push(r.savedAs); _hostGrabInc(k.host); } }
   return { ok: true, found: raw.length, grabbed, skipped: skipRel + skipHost };
 }
 
@@ -1269,7 +1290,7 @@ module.exports = {
   chatSend, chatWatch, chatUnwatch,
   press, clearField, hover, selectOption, setChecked, uploadFile, submit, clickAt,
   forward, reload, listTabs, newTab, switchTab, closeTab, waitFor, dialog, getEl, evalJs, drag,
-  downloadPdf, grabPdfs, pdfLinksOnPage, isPdfUrl, sourceUrlForFile, _focusLeashTokens, _pdfMatchesLeash,
+  downloadPdf, grabPdfs, pdfLinksOnPage, isPdfUrl, sourceUrlForFile, provenanceForFile, _focusLeashTokens, _pdfMatchesLeash,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR,
   DOWNLOADS_DIR, downloadDest
 };

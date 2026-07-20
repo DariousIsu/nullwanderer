@@ -20,7 +20,7 @@ const str = (v) => (v == null ? '' : String(v));
 // Pass it whenever the lane genuinely has one. NULL is the honest value for SYNTHESISED documents — a
 // research dossier is derived from many pages, not fetched from one — and must never be faked to fill
 // the column, because a wrong origin corrupts independence counting worse than a missing one.
-function land({ title = null, body = '', source = null, ref = null, understanding = null, origin = null, deps = {} } = {}) {
+function land({ title = null, body = '', source = null, ref = null, understanding = null, origin = null, fetchUrl = null, deps = {} } = {}) {
   const db = deps.db || require('./db');
   if (!str(body).trim()) return { id: null, landed: false };
   try {
@@ -28,7 +28,7 @@ function land({ title = null, body = '', source = null, ref = null, understandin
       const existing = db.getDocumentByRef(ref);
       if (existing && str(existing.body) === str(body)) return { id: existing.id, landed: false };
     }
-    const r = db.insertDocument({ title, body, source, ref, understanding, origin });
+    const r = db.insertDocument({ title, body, source, ref, understanding, origin, fetchUrl });
     return { id: r ? r.id : null, landed: !!r };
   } catch (e) { console.error('[doc_store] land failed:', e.message); return { id: null, landed: false }; }
 }

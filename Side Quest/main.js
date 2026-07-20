@@ -2472,9 +2472,11 @@ function startDownloadsIngestWatcher() {
       // Measured after the first fix shipped: 0 of 6,712 documents had an origin, because the hook was
       // armed only on the Electron sessions and this lane never touches them.
       // NULL remains correct and expected for a file dropped into the folder by hand.
-      const _dlOrigin = _takeDownloadOrigin(fp)
-        || (() => { try { return require('./lib/web').sourceUrlForFile(fp); } catch { return null; } })();
-      const landed = require('./lib/doc_store').land({ title, body: text, source: 'browser_download', ref: 'download:' + fp, origin: _dlOrigin });
+      // ORIGIN IS THE FIRST HIGH-QUALITY SOURCE, so this is the PUBLISHER — the page that linked the
+      // file — not the CDN or bucket the bytes sat on. Both are carried; see lib/origin.js pickOrigin.
+      const _prov = (() => { try { return require('./lib/web').provenanceForFile(fp); } catch { return { origin: null, fetchUrl: null }; } })();
+      const _dlOrigin = _takeDownloadOrigin(fp) || _prov.origin;
+      const landed = require('./lib/doc_store').land({ title, body: text, source: 'browser_download', ref: 'download:' + fp, origin: _dlOrigin, fetchUrl: _prov.fetchUrl });
       if (landed && landed.landed) {
         if (!_verdict.relevant || !_leashPasses) {
           const _reason = !_verdict.relevant ? _verdict.reason : 'off-domain (no leash-token overlap)';

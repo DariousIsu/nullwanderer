@@ -435,6 +435,12 @@ const MIGRATIONS = [
   `ALTER TABLE documents ADD COLUMN content_hash TEXT`,
   `CREATE INDEX IF NOT EXISTS idx_documents_origin_host ON documents(origin_host)`,
   `CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash)`,
+  // ORIGIN IS THE FIRST HIGH-QUALITY SOURCE (Lucas, 2026-07-20), so `origin` holds the PUBLISHER while
+  // this holds where the bytes actually were. Three Apache County records arrived from an S3 bucket:
+  // storing that as origin would grade official documents `unknown` AND make two different counties on
+  // the same hosting vendor read as one source. Both facts are kept — the publisher grades the claim,
+  // the fetch URL is how it is re-fetched or audited.
+  `ALTER TABLE documents ADD COLUMN fetch_url TEXT`,
 
   // ENCOUNTER LOG (docs/ENCOUNTER_OBJECT_MODEL_DESIGN.md §2) — the primitive beneath everything else.
   //
@@ -1408,23 +1414,27 @@ function insertKnowledge({ kind = 'note', content, embedding = null, source = nu
 // Whole new material lands here durably the moment it arrives; the nightly pass promotes it to Echo
 // long-term. parentId/version carry the iteration model (an update = a new iteration of the original).
 
-function insertDocument({ title = null, body, source = null, ref = null, understanding = null, parentId = null, version = 1, origin = null }) {
+function insertDocument({ title = null, body, source = null, ref = null, understanding = null, parentId = null, version = 1, origin = null, fetchUrl = null }) {
   if (!body || !String(body).trim()) return null;
   const ts = Date.now();
   // ORIGIN + CONTENT IDENTITY. The hash is computed HERE, never accepted from a caller — it is a fact
   // about the bytes and must not be forgeable or forgettable at a call site. `origin` is normalised so
   // two links to the same page with different campaign tags collapse to one origin rather than two.
-  let _origin = null, _host = null, _hash = null;
+  let _origin = null, _host = null, _hash = null, _fetch = null;
   try {
     const og = require('./origin');
     _origin = origin ? og.normalizeUrl(origin) : null;
     _host = _origin ? og.hostOf(_origin) : null;
+    _fetch = fetchUrl ? og.normalizeUrl(fetchUrl) : null;
+    // A single-URL caller still gets the rule applied: if the only URL it has is a CDN, that is where
+    // the bytes were, not who published — record it as such rather than letting it pose as the origin.
+    if (_origin && !fetchUrl && og.isCommodityHost(_host)) { _fetch = _origin; }
     _hash = og.contentHash(body);
   } catch (e) { console.error('[db] origin capture failed:', e.message); }
   const info = getDb()
-    .prepare(`INSERT INTO documents (title, body, source, ref, understanding, parent_id, version, promoted, created_ts, updated_ts, origin, origin_host, content_hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`)
-    .run(title, String(body), source, ref, understanding, parentId, version, ts, ts, _origin, _host, _hash);
+    .prepare(`INSERT INTO documents (title, body, source, ref, understanding, parent_id, version, promoted, created_ts, updated_ts, origin, origin_host, content_hash, fetch_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`)
+    .run(title, String(body), source, ref, understanding, parentId, version, ts, ts, _origin, _host, _hash, _fetch);
   _kgTap('doc.land', title || ref || ('#' + info.lastInsertRowid));
   return { id: info.lastInsertRowid, ts };
 }

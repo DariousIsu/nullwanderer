@@ -27,6 +27,44 @@ ok(og.normalizeUrl('https://x.gov/a?b=2&a=1') === og.normalizeUrl('https://x.gov
 ok(og.normalizeUrl('https://x.gov/') === 'https://x.gov/', 'root path keeps its slash');
 ok(og.normalizeUrl('') === null && og.normalizeUrl(null) === null, 'empty/null → null');
 
+// ── ORIGIN IS THE FIRST HIGH-QUALITY SOURCE ────────────────────────────────────────────────────
+// Measured live: three Apache County official records recorded their origin as an S3 bucket. That host
+// is where the BYTES were, not who published them — and storing it breaks grading in both directions.
+ok(og.isCommodityHost('ecs-cluster-bucket-wsos-prod-two.s3.us-west-2.amazonaws.com'),
+  'CRITICAL: the real measured bucket is recognised as infrastructure');
+ok(og.isCommodityHost('d1234.cloudfront.net') && og.isCommodityHost('x.blob.core.windows.net')
+  && og.isCommodityHost('static.wixstatic.com') && og.isCommodityHost('storage.googleapis.com'),
+  'CDNs, object stores and site-builder asset hosts are all infrastructure');
+ok(!og.isCommodityHost('apachecountyaz.gov') && !og.isCommodityHost('legis.la.gov')
+  && !og.isCommodityHost('nytimes.com'), 'real publishers are NOT infrastructure');
+ok(og.isCommodityHost('') === false && og.isCommodityHost(null) === false, 'empty → false, never throws');
+{
+  // The live case, end to end: bytes on S3, linked from the county's own site.
+  const p = og.pickOrigin([
+    'https://ecs-cluster-bucket-wsos-prod-two.s3.us-west-2.amazonaws.com/uploads/sites/107/Notary-List.pdf',
+    'https://www.apachecountyaz.gov/district-iii',
+  ]);
+  ok(p.host === 'apachecountyaz.gov',
+    `CRITICAL: the PUBLISHER is the origin, not the bucket (got ${p.host})`);
+  ok(p.commodity === false, 'a publisher was found, so the origin can carry authority');
+
+  // Why it matters twice over: two DIFFERENT counties on one hosting vendor must not read as one source.
+  const a = og.pickOrigin(['https://x.s3.amazonaws.com/sites/107/a.pdf', 'https://apachecountyaz.gov/a']);
+  const b = og.pickOrigin(['https://x.s3.amazonaws.com/sites/108/b.pdf', 'https://coconino.az.gov/b']);
+  ok(a.host !== b.host && og.independence([
+    { origin_host: a.host, content_hash: og.contentHash('one') },
+    { origin_host: b.host, content_hash: og.contentHash('two') },
+  ]).count === 2, 'CRITICAL: two publishers sharing a hosting vendor still count as TWO sources');
+
+  // No publisher anywhere in the chain: keep the fetch URL, but say so rather than implying authority.
+  const only = og.pickOrigin(['https://x.s3.amazonaws.com/a.pdf']);
+  ok(only.host === 'x.s3.amazonaws.com' && only.commodity === true,
+    'a bare CDN url is retained AND flagged commodity — a weak origin honestly labelled beats none');
+  ok(og.pickOrigin([]).origin === null && og.pickOrigin(null).origin === null, 'empty chain → null');
+  ok(og.pickOrigin(['not a url', 'https://apachecountyaz.gov/x']).host === 'apachecountyaz.gov',
+    'garbage links are skipped, not fatal');
+}
+
 // ── content hash: text identity ────────────────────────────────────────────────────────────────
 ok(og.contentHash('Hello  World') === og.contentHash('hello world'),
   'whitespace + case normalised — a re-save must not read as a second independent text');

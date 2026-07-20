@@ -55,7 +55,23 @@ console.log(`\nduplication the hash exposes: ${dupGroups.length} group(s), ${red
   `(${((redundant / Math.max(1, rows.length)) * 100).toFixed(1)}% of corpus)`);
 console.log(`  → these now collapse to ONE origin in origin.independence() instead of counting separately`);
 
+// ORIGIN IS THE FIRST HIGH-QUALITY SOURCE (Lucas, 2026-07-20). Rows already written may hold a CDN or
+// object-store host as their origin — that is where the bytes were, not who published. Demote those to
+// fetch_url and blank the origin, because the publisher is genuinely unknown for them and claiming a
+// bucket as the source would both deny official documents their authority and collapse independent
+// publishers who share a hosting vendor. Nothing is lost: the URL moves, it is not deleted.
+const commodity = d.prepare('SELECT id, origin, origin_host FROM documents WHERE origin_host IS NOT NULL').all()
+  .filter((r) => og.isCommodityHost(r.origin_host));
+console.log(`\norigins that are infrastructure, not a publisher: ${commodity.length}`);
+for (const r of commodity.slice(0, 5)) console.log(`  #${r.id}  ${r.origin_host}`);
+if (commodity.length) console.log(`  → demoted to fetch_url; origin blanked (the publisher is unknown, and saying so is the honest state)`);
+
 if (!APPLY) { console.log(`\nDry run — nothing written. Re-run with --apply.`); process.exit(0); }
+
+if (commodity.length) {
+  const dem = d.prepare('UPDATE documents SET fetch_url = COALESCE(fetch_url, origin), origin = NULL, origin_host = NULL WHERE id = ?');
+  d.transaction(() => { for (const r of commodity) dem.run(r.id); })();
+}
 
 const stmt = d.prepare('UPDATE documents SET content_hash = COALESCE(content_hash, ?), origin = COALESCE(origin, ?), origin_host = COALESCE(origin_host, ?) WHERE id = ?');
 const tx = d.transaction(() => { for (const u of updates) stmt.run(u.hash, u.origin, u.host, u.id); });
