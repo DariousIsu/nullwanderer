@@ -6850,7 +6850,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     .replace(/<wonder>[\s\S]*?<\/wonder>/gi, '')
     .replace(/<\|[a-z_]+\|>/gi, '')
     .replace(/<\|[a-z_]+/gi, '')
-    .replace(/\*[^*\n]{1,200}\*/g, '')
+    .replace(/(?<![*\w])\*(?!\*)[^*\n]{1,200}\*(?!\*)/g, '')   // single-* stage direction only; **bold** survives
     .replace(/[ \t]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -7696,7 +7696,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     // Strip ALL tags from the follow-up output for DISPLAY — tags don't render.
     let sayOut = (say || '')
       .replace(/<\/?(think|say)>/gi, '')
-      .replace(/\*[^*\n]{1,200}\*/g, '')
+      .replace(/(?<![*\w])\*(?!\*)[^*\n]{1,200}\*(?!\*)/g, '')   // single-* stage direction only; **bold** survives
       .replace(/[ \t]+/g, ' ')
       .trim();
     sayOut = screenLib.stripTags(filesLib.stripTags(browserLib.stripTags(sayOut)));

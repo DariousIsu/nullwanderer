@@ -51,12 +51,23 @@ async function _draftOrNeed(userMessage, grounding, deps = {}) {
     + 'general knowledge. If the grounding contains RELEVANT material — even partial — synthesize the best '
     + 'accurate answer from it and briefly note any uncertainty (e.g. "among them" / "based on our records"). '
     + 'Output EXACTLY one line `NEED: <the single most specific thing to look up>` ONLY when the grounding is '
-    + 'essentially empty or clearly about something else, so you genuinely cannot answer accurately.';
+    + 'essentially empty or clearly about something else, so you genuinely cannot answer accurately. '
+    // DATE-ANCHOR. Retrieved text carries no timestamp, so an encyclopedia lead describing the LAST
+    // occurrence of a recurring event reads as current. Live 2026-07-20: "When are elections this
+    // year in the US?" pulled the Wikipedia elections article and answered "November 5, 2024" — the
+    // tier worked, the text was simply never checked against what today is.
+    + 'TODAY is given below. A relative question ("this year", "now", "current", "upcoming") is about '
+    + 'TODAY, not about whatever the retrieved text happens to describe. If the grounding covers a '
+    + 'DIFFERENT period than the question asks about — a past occurrence of a recurring event, a '
+    + 'former office-holder — do NOT answer from it: emit a NEED for the current one instead.';
+  const today = (deps.today || new Date().toISOString().slice(0, 10));
   let out = null;
   try {
     out = await askFn({
-      task: 'answer_or_need', v: 1,
-      input: { question: String(userMessage).slice(0, 800), grounding: String(grounding || '').slice(0, 4200) },
+      // v2 — the prompt changed, and cloud_logic.ask caches on {task,v,input,want}; without the bump
+      // the old verdict would be re-served from cache without ever reaching the model.
+      task: 'answer_or_need', v: 2,
+      input: { today, question: String(userMessage).slice(0, 800), grounding: String(grounding || '').slice(0, 4200) },
       want,
       validate: (raw) => { const t = String(raw || '').replace(/^```[a-z]*\s*|\s*```$/gi, '').trim(); return t.length > 3 ? { valid: true, value: t } : { valid: false, error: 'empty' }; },
       deps: { complete: deps.complete || ad._draftComplete, skipBudget: true }

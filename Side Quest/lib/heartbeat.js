@@ -431,7 +431,7 @@ async function maybeHeartbeat() {
       .replace(/<\/?say>/gi, '')
       .replace(/<navigate>[^<]*<\/navigate>/gi, '')
       .replace(/<wonder>[\s\S]*?<\/wonder>/gi, '')
-      .replace(/\*[^*\n]{1,200}\*/g, '')
+      .replace(/(?<![*\w])\*(?!\*)[^*\n]{1,200}\*(?!\*)/g, '')   // single-* stage direction only; **bold** survives
       .replace(/[ \t]+/g, ' ')
       .replace(/\n{3,}/g, '\n\n')
       .trim()))));

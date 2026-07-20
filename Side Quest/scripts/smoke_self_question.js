@@ -112,6 +112,22 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
     ok(r3 && r3.missed === true, 'general scope but a REAL object → still an honest miss, not silence');
   }
 
+  // ── ⭐ DATE-ANCHOR: retrieved text carries no timestamp ────────────────────────────────────────
+  // Live 2026-07-20: "When are elections this year in the US?" → cognition → enriched:wiki →
+  // "…were held on November 5, 2024." The tier worked; the Wikipedia lead describes the LAST
+  // occurrence of a recurring event, and nothing checked it against what today is.
+  {
+    const fs2 = require('fs'), path2 = require('path');
+    const src2 = fs2.readFileSync(path2.join(__dirname, '..', 'lib', 'cognition.js'), 'utf8');
+    ok(/TODAY is given below/.test(src2), 'the drafter is told what today is');
+    ok(/this year.*now.*current.*upcoming/is.test(src2), 'relative time words are named as anchoring to TODAY');
+    ok(/emit a NEED for the current one/.test(src2),
+      'grounding from the WRONG PERIOD becomes a NEED rather than an answer');
+    ok(/input: \{ today,/.test(src2), 'today is passed in the cached input, so the key rolls daily');
+    ok(/task: 'answer_or_need', v: 2/.test(src2),
+      'REGRESSION: prompt version bumped — ask() caches on {task,v,input,want} and would re-serve the old verdict');
+  }
+
   // the wiring itself
   const fs = require('fs'), path = require('path');
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'cognition.js'), 'utf8');
