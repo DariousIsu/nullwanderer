@@ -1548,11 +1548,9 @@ app.whenReady().then(() => {
       const urls = feedsStore.list().map(f => f.url);
       if (!urls.length) return { items: [] };
       if (!(await ensureEngine())) return { items: [] };
-      // CHUNKED (2026-07-07): all ~244 subscribed feeds in ONE fetch_feeds_batch overwhelmed the Echo MCP
-      // transport — ~half the polls came back "empty response to tools/call" (the "⚠ fetch failed" panel).
-      // MEASURED: a 39-feed batch at item_limit 30 = ~1MB of JSON; the full 244-feed call is multi-MB and the
-      // transport silently returns empty above its response ceiling. Chunking now lives in the shared
-      // fetchFeedsChunked() so the Monitors widget can't regress back onto the one-shot call.
+      // CHUNKED (2026-07-07), now via the shared fetchFeedsChunked() so the Monitors widget uses the
+      // same path. NOTE: the original "response size ceiling" diagnosis recorded here was WRONG — see
+      // fetchFeedsChunked() and lib/echo.js parseStreamableBody. Chunking only ever masked it.
       const allFeeds = await fetchFeedsChunked(urls, null);
       return { items: feedsView.mergeReports({ feeds: allFeeds }).items };
     };
@@ -2161,12 +2159,16 @@ ipcMain.handle('video:ingest', (_e, { url, title } = {}) => {
   } catch (e) { console.error('[video] ingest failed:', e.message); return { ok: false, error: e.message }; }
 });
 // CHUNKED feed fetch — the ONE path both the Monitors widget and the background news collector use.
-// Asking Echo for all ~244 subscribed feeds in a single fetch_feeds_batch produces a multi-MB JSON
-// response that the MCP transport silently truncates to nothing, surfacing as "echo: empty response
-// to tools/call" (lib/echo.js:139) — the widget's "⚠ fetch failed" panel. Two levers, both env-tunable:
-// small FEED-count chunks (FEED_BATCH_SIZE) and a low per-feed ITEM_LIMIT (FEED_ITEM_LIMIT); a 12-feed
-// chunk at 15 items is well under the ceiling. Sequential, not Promise.all, so concurrent big calls
-// don't recreate the same overload. A failed chunk is skipped, not fatal — the rest still render.
+//
+// HISTORY, so nobody re-derives the wrong lesson: the "⚠ fetch failed / echo: empty response to
+// tools/call" panel was blamed (2026-07-07) on a transport RESPONSE-SIZE ceiling, and chunking was
+// added here to dodge it. That diagnosis was wrong. The real bug was a regex in lib/echo.js's SSE
+// parser that choked on a raw U+2029 in ONE feed's text — killing whatever batch that feed was in,
+// at any size. Fixed 2026-07-20; MEASURED after the fix, the full one-shot 244-feed call succeeds.
+//
+// Chunking is KEPT anyway, on its own merits: a bad chunk is skipped rather than losing the whole
+// poll, and it's faster in practice (~138s vs ~176s for all 244). FEED_BATCH_SIZE / FEED_ITEM_LIMIT
+// tune it. Sequential, not Promise.all — 244 concurrent feed fetches would hammer the engine.
 async function fetchFeedsChunked(urls, itemLimit) {
   const CHUNK = parseInt(process.env.FEED_BATCH_SIZE || '', 10) || 12;
   const CEILING = parseInt(process.env.FEED_ITEM_LIMIT || '', 10) || 15;

@@ -76,6 +76,23 @@ function mockTransport() {
   ok('bare JSON body', echo.parseStreamableBody('application/json', '{"jsonrpc":"2.0","id":2,"result":{"x":1}}').result.x === 1);
   ok('SSE body (last data line)', echo.parseStreamableBody('text/event-stream', 'data: {"result":{"x":1}}\ndata: {"result":{"x":2}}\n').result.x === 2);
 
+  // REGRESSION (2026-07-20): U+2028/U+2029 are line terminators to a JS regex `.` but NOT to
+  // String.split(/\r?\n/), so `^data:\s?(.*)$` silently failed to match any line containing one —
+  // parse → null → "echo: empty response to tools/call" on an HTTP 200. One RSS item carrying a raw
+  // PARAGRAPH SEPARATOR killed a whole fetch_feeds_batch (the Monitors "⚠ fetch failed" panel).
+  for (const [label, ch] of [['U+2028 (line separator)', '\u2028'], ['U+2029 (paragraph separator)', '\u2029']]) {
+    const payload = JSON.stringify({ jsonrpc: '2.0', id: 3, result: { text: `before${ch}after` } });
+    const parsed = echo.parseStreamableBody('text/event-stream', `event: message\ndata: ${payload}\n\n`);
+    ok(`SSE body survives a raw ${label}`, !!parsed && parsed.result && parsed.result.text === `before${ch}after`);
+  }
+  {
+    // …and it must still work when the terminator sits inside a large single-line payload (the live shape).
+    const big = 'x'.repeat(50000) + '\u2029' + 'y'.repeat(50000);
+    const payload = JSON.stringify({ jsonrpc: '2.0', id: 4, result: { text: big } });
+    const parsed = echo.parseStreamableBody('text/event-stream', `event: message\ndata: ${payload}\n\n`);
+    ok('SSE body survives U+2029 inside a 100KB single line', !!parsed && parsed.result && parsed.result.text === big);
+  }
+
   console.log('\nstdio transport (Zoe spawns Echo) — fake child process, no real Echo:');
   const { EventEmitter } = require('events');
   function makeFakeProc() {

@@ -19,11 +19,18 @@ const PROTOCOL_VERSION = '2025-06-18';   // MCP protocol revision this client ne
 
 // Pull the JSON-RPC payload out of a Streamable-HTTP response body, which may be a bare JSON
 // object or an SSE stream ("event: message\ndata: {…}"). Returns the last data object seen.
+//
+// ⚠ `[\s\S]*`, NOT `.*` (2026-07-20). In JS regex `.` excludes U+2028/U+2029 — they count as line
+// terminators — but String.split(/\r?\n/) does NOT split on them. So ONE raw U+2029 anywhere in a
+// tool's payload (e.g. an RSS body reprinting a PARAGRAPH SEPARATOR) made `^data:\s?(.*)$` fail to
+// match the whole line, this return null, and the caller throw "echo: empty response to tools/call"
+// — on a perfectly good HTTP 200. That was the Monitors "⚠ fetch failed" panel: one poisoned feed
+// killed its entire fetch_feeds_batch. MEASURED on chicago.suntimes.com: 526KB body, 2× U+2029.
 function parseStreamableBody(contentType, text) {
   if (/text\/event-stream/i.test(contentType || '')) {
     let last = null;
     for (const line of String(text || '').split(/\r?\n/)) {
-      const m = line.match(/^data:\s?(.*)$/);
+      const m = line.match(/^data:\s?([\s\S]*)$/);
       if (m && m[1]) { try { last = JSON.parse(m[1]); } catch { /* partial/non-JSON data line */ } }
     }
     return last;
