@@ -520,6 +520,25 @@ const MIGRATIONS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_absence_kind ON absence(kind, last_attempt_ts)`,
 
+  // CARDINALITY (memory path mapping, P5) — a body's SEAT COUNT, which is what turns "probably
+  // incomplete" into a countable gap: 70 seats, 41 held, 29 missing. Coverage counts BODIES
+  // researched and can say nothing about the roster inside one; this closes that.
+  // A seat count is a CLAIM ABOUT THE WORLD (unlike `covered`, which is a fact about us), so it is
+  // refused without a source — official / corroborated / secondary only, never "inferred". Conflicts
+  // between sources are RECORDED (conflict_* columns) rather than silently last-write-wins, because
+  // a disagreement usually means a chamber was resized or a source is wrong. See lib/cardinality.js.
+  `CREATE TABLE IF NOT EXISTS cardinality (
+    body TEXT PRIMARY KEY,
+    seats INTEGER NOT NULL,
+    source_kind TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    observed_ts INTEGER NOT NULL,
+    conflict_seats INTEGER,
+    conflict_source TEXT,
+    conflict_ts INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_cardinality_conflict ON cardinality(conflict_ts)`,
+
   // INTEREST MODEL (autonomy roadmap, Slice 1) — Zoe's self-directed agenda. A persistent,
   // weighted set of intellectual pursuits the idle loop SAMPLES from, instead of echoing the last
   // conversation. Seeded with a floor of deep domains (source='seed'); 'emergent' interests form
@@ -820,11 +839,14 @@ function insertOpenThread({ content, parentId = null, sourceTurnId = null }) {
 // park it", so re-feeding it as "what you're working on" is exactly the fixation loop (it gets
 // re-picked stalest-first and re-ground forever — the cheer-team / Salesforce obsession). Parked
 // threads stay in the DB (resurfaceable by an explicit user mention), just not auto-pursued.
+// Excludes MERGED CHILDREN (parent_id IS NOT NULL) — a thread linked under another is a duplicate
+// phrasing of the same commitment, not a second thing she is carrying. Without this filter one
+// request from Lucas showed up in her prompt as 7 separate standing threads.
 function getActiveOpenThreads(limit = 10, { includeStalled = true } = {}) {
   const statuses = includeStalled ? `('pending','active','stalled')` : `('pending','active')`;
   return getDb()
     .prepare(`SELECT * FROM open_threads
-      WHERE status IN ${statuses}
+      WHERE status IN ${statuses} AND parent_id IS NULL
       ORDER BY last_touched_ts ASC LIMIT ?`)
     .all(limit);
 }
@@ -875,6 +897,17 @@ function getAllOpenThreads(limit = 200) {
 
 function getOpenThread(id) {
   return getDb().prepare('SELECT * FROM open_threads WHERE id = ?').get(id);
+}
+
+// Link a thread under another as a duplicate PHRASING of the same commitment (thread adoption —
+// see open_threads.matchCarriedThread). Deliberately does NOT change status: marking a duplicate
+// 'resolved' would claim work that never happened. The child keeps its own lifecycle; it simply
+// stops standing as a separate commitment in the prompt (getActiveOpenThreads filters children).
+// Guards against self-parenting and against re-parenting something that already has a parent.
+function setOpenThreadParent(id, parentId) {
+  if (!id || !parentId || Number(id) === Number(parentId)) return null;
+  getDb().prepare('UPDATE open_threads SET parent_id = ? WHERE id = ? AND parent_id IS NULL').run(parentId, id);
+  return { id, parentId };
 }
 
 function markOpenThreadStatus(id, status, { reason = null } = {}) {
@@ -1998,6 +2031,7 @@ module.exports = {
   pendingUserAssignedThread,
   getAllOpenThreads,
   getOpenThread,
+  setOpenThreadParent,
   markOpenThreadStatus,
   touchOpenThread,
   incrementThreadMention,

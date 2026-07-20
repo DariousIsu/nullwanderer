@@ -54,6 +54,7 @@ const smokes = [
   'smoke_coalesce.js',
   'smoke_memo.js',
   'smoke_lane.js',
+  'smoke_thread_adopt.js',
   'smoke_thought_gate.js',
   'smoke_route_derive.js',
   'smoke_absence.js',

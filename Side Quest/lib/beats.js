@@ -576,7 +576,28 @@ function matchNewsToTargets(stateCode, headlines) {
   return hits;
 }
 
+// The beat's declared SCOPE, for thread adoption (open_threads.matchCarriedThread). Every
+// state-tier beat already carries `stateCode`; this turns it into the anchor terms a standing
+// request from Lucas would use ("…for all Louisiana parishes"). Derived here rather than added to
+// each of the six beat factories, so there is one definition and no drift.
+//
+// Returns null for beats with no jurisdictional scope (topics, federal) — adoption then declines,
+// which is the safe default: a topic beat has no state anchor, and matching one without an anchor
+// would be guesswork.
+function beatScope(beat) {
+  const code = String((beat && beat.stateCode) || '').toUpperCase();
+  if (!code) return null;
+  const st = US_COUNTIES[code];
+  const stateName = (st && st.name) || null;
+  if (!stateName) return null;
+  const noun = (st && st.noun) || 'county';
+  const plural = noun === 'parish' ? 'parishes' : noun === 'municipio' ? 'municipios'
+    : noun === 'borough' ? 'boroughs' : 'counties';
+  return { stateCode: code, stateName, nouns: [noun, plural] };
+}
+
 module.exports = {
+  beatScope,
   US_COUNTIES, US_PLACES, STATE_COUNTIES, STATE_NAMES, PARENT_BEATS, CHANGE_CUE_RE,
   listCountyStates, listPlaceStates, placeKey, bodyLabel, targetPlaceKey,
   placeBodyLabel, placeDisplayName,

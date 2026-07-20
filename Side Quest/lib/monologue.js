@@ -240,7 +240,10 @@ function buildPrompt({ userName, recentMonologue, recentReadings, recentReflecti
     const { seeds, monoFixated } = diversifySeeds(recentMonologue);
     if (monoFixated) {
       const topic = seeds[0];
-      const goal = (openThreads && openThreads[0] && openThreads[0].content) ? openThreads[0].content.replace(/\s+/g, ' ').slice(0, 100) : null;
+      // FRESHEST, not [0] — the supplying query sorts least-touched first, so openThreads[0] is the
+      // STALEST thread. Redirecting a fixation onto a dead thread only relocates the loop.
+      const _g = openThreadsLib.freshest(openThreads);
+      const goal = (_g && _g.content) ? _g.content.replace(/\s+/g, ' ').slice(0, 100) : null;
       context += `You've been circling "${topic}" for several thoughts in a row now — that's enough on it, and it does NOT all connect to everything. Deliberately set it down and think about something genuinely different${goal ? ` (for instance your actual goal: ${goal})` : ', or just let your mind rest'}. Do not tie "${topic}" into your next thought.\n\n`;
     } else if (seeds.length > 0) {
       context += `Your last few thoughts touched on (try a different angle, but don't be rigid about it):\n`;

@@ -7532,17 +7532,50 @@ async function seedBeatRun(beat, { background = false, targetsOverride = null } 
     // PRIMARY focus goes through setFromDirective (owns CURRENT_KEY, drives chat/leash). A BACKGROUND worker
     // gets its own open_thread via setBackground — it never touches CURRENT_KEY, so it runs concurrently
     // without disturbing the primary focus or the conversational plumbing.
+    // THREAD ADOPTION — run this beat AS the standing request that asked for it, when one exists.
+    // Previously every seed minted a brand-new thread, so Lucas's "compile leadership and historical
+    // data for all Louisiana parishes" sat 8 days untouched with action_count 0 (pinned at the top of
+    // her prompt) while an identical machine-minted thread did the work. One commitment, two rows,
+    // and the row he can see is the one nothing touches — which is why finished work never got
+    // reported back and why one request became 7+ near-duplicate threads.
+    // Declines unless the beat declares a jurisdictional scope AND a thread of his names it; see
+    // open_threads.matchCarriedThread for why the match is structural rather than fuzzy.
+    let adopted = null, mergedIds = [];
+    try {
+      const scope = require('./lib/beats').beatScope(beat);
+      if (scope) {
+        const otLib = require('./lib/open_threads');
+        const m = otLib.matchCarriedThread(scope, db.getActiveOpenThreads(200, { includeStalled: true }));
+        if (m.adopt) {
+          adopted = m.adopt;
+          // Link the other phrasings of the same request under the adopted one. They keep their
+          // status (nothing is falsely marked done) but stop standing as separate commitments.
+          for (const d of m.duplicates) {
+            try { db.setOpenThreadParent(d.id, adopted.id); mergedIds.push(d.id); } catch {}
+          }
+          console.log(`[beat] ${beat.id}: adopted standing thread #${adopted.id} "${String(adopted.content).slice(0, 60)}"`
+            + (mergedIds.length ? ` (merged ${mergedIds.length} duplicate phrasing(s): ${mergedIds.join(', ')})` : ''));
+        }
+      }
+    } catch (e) { console.error('[beat] thread adoption failed (minting a new thread):', e.message); }
+
     let fid, focusRow;
     if (background) {
-      const row = db.insertOpenThread({ content: beat.goal });
+      const row = adopted || db.insertOpenThread({ content: beat.goal });
       focusRow = focusLib.setBackground(row.id) || row;
       fid = row.id;
       try { db.setMeta(`focus.${fid}.background`, '1'); } catch {}
+    } else if (adopted) {
+      focusRow = focusLib.setCurrent(adopted.id, { directed: true }) || adopted;
+      fid = adopted.id;
     } else {
       const r = await focusLib.setFromDirective(beat.goal);
       if (!r || !r.focus) return { ok: false, reason: 'focus not set' };
       fid = r.focus.id; focusRow = r.focus;
     }
+    // Keep the beat's fuller goal (with its coverage denominator) visible on the adopted thread
+    // without overwriting Lucas's own words — his phrasing is what he recognises in the prompt.
+    if (adopted) { try { db.touchOpenThread(fid, `beat ${beat.id}: working ${targets.length} target(s) this run`); } catch {} }
     try { db.setMeta(`focus.${fid}.scope`, 'bounded'); } catch {}
     try { db.setMeta(`focus.${fid}.intended_targets`, JSON.stringify(targets)); } catch {}
     // EXPECTED COUNT — the coverage DENOMINATOR, persisted so every ack/prompt can say "X of N"

@@ -157,13 +157,38 @@ function parseGoalsJson(raw) {
  * Goes immediately after the literal first lines of the system prompt.
  * Short and authoritative — this is the "what you're trying to do" anchor.
  */
-function formatTopBlock(activeThreads) {
+// AGE IS PART OF THE TRUTH. The supplying query (db.getActiveOpenThreads) orders by
+// last_touched_ts ASC — deliberately, so the most-neglected thread cannot be forgotten. But
+// combined with a header that asserts "WHAT YOU ARE WORKING ON", that ordering guarantees this
+// block shows the threads she is LEAST working on, stated as current work.
+//
+// Measured 2026-07-19: all five threads in this block were 8 days untouched with action_count 0,
+// and one of them was "monitor the Norway vs England world cup match for Lucas" — a match long
+// finished, asserted at the top of every prompt as live work. Nothing was wrong with the data;
+// the block was simply describing it dishonestly.
+//
+// So: label the age, and stop calling a long-untouched thread "active". Keeping the row (rather
+// than hiding it) preserves the anti-forgetting property the ordering exists for — she can still
+// pick it up, she just isn't told she's already on it. Threads DO age out on their own via
+// curator.curateThreads (active/pending → stalled at 10d → abandoned at 24d); this is about what
+// the prompt claims in the meantime.
+const STALE_ASSERT_DAYS = 3;   // untouched longer than this → shown as carried, not as in-progress
+
+function formatTopBlock(activeThreads, { now = Date.now() } = {}) {
   if (!activeThreads || activeThreads.length === 0) return '';
+  const ageMs = (t) => {
+    const v = Number(t && t.last_touched_ts);
+    if (!Number.isFinite(v) || v <= 0) return 0;
+    return Math.max(0, now - (v > 1e12 ? v : v * 1000));   // table stores seconds in places, ms in others
+  };
   const lines = activeThreads.slice(0, 5).map(t => {
-    const tag = t.status === 'stalled' ? ' [STALLED]' : '';
+    const ms = ageMs(t);
+    const stale = ms >= STALE_ASSERT_DAYS * 86400000;
+    const tag = t.status === 'stalled' ? ' [STALLED]'
+      : stale ? ` [NOT TOUCHED IN ${humanAge(ms)} — carried, not in progress]` : '';
     return `  [thread:${t.id}] ${t.content}${tag}`;
   });
-  return `\n\nWHAT YOU ARE WORKING ON (active threads from earlier requests, persist across turns until resolved):\n${lines.join('\n')}\n`;
+  return `\n\nTHREADS YOU ARE CARRYING (standing requests, persist across turns until resolved — a thread marked "not touched" is one you have NOT been working on, so do not claim progress on it):\n${lines.join('\n')}\n`;
 }
 
 /**
@@ -179,8 +204,99 @@ function formatDepth2Block(activeThreads) {
   const top = activeThreads.slice(0, 3).map(t => `  · ${t.content}`);
   return {
     role: 'user',
-    content: `(Reminder of standing work: ${top.length} active thread${top.length === 1 ? '' : 's'} — pursue if relevant to what Lucas says next, otherwise just answer him.)\n${top.join('\n')}`
+    content: `(Reminder of standing work: ${top.length} thread${top.length === 1 ? '' : 's'} you are CARRYING — not necessarily worked recently. Pursue if relevant to what Lucas says next, otherwise just answer him.)\n${top.join('\n')}`
   };
+}
+
+// The MOST RECENTLY TOUCHED open thread — the one most plausibly her live work.
+//
+// Needed because the supplying query sorts least-touched FIRST, so `threads[0]` is the STALEST.
+// Anywhere that wants "her actual current goal" (e.g. the anti-fixation redirect, which tells her
+// to set a circled topic down and go work her real objective) was therefore pointing at the most
+// neglected thread in the list — at one point "monitor the Norway vs England world cup match",
+// eight days after the match. Redirecting a fixation onto a dead thread just relocates the loop.
+function freshest(threads) {
+  if (!Array.isArray(threads) || !threads.length) return null;
+  let best = null, bestTs = -1;
+  for (const t of threads) {
+    if (!t || !t.content) continue;
+    const v = Number(t.last_touched_ts);
+    const ts = Number.isFinite(v) ? (v > 1e12 ? v : v * 1000) : 0;
+    if (ts > bestTs) { bestTs = ts; best = t; }
+  }
+  return best;
+}
+
+// ── THREAD ADOPTION ──────────────────────────────────────────────────────────────────────────
+//
+// A focus IS an open_threads row (lib/focus.js), so when a research beat seeds a run it creates a
+// thread. It was creating a BRAND NEW one every time, with no sourceTurnId and no reference to the
+// request that actually asked for the work. Measured 2026-07-19:
+//
+//   Lucas   #3390 "compile leadership and historical data for all Louisiana parishes"
+//                 -> 8 days untouched, action_count 0, pinned at the top of every prompt
+//   machine       "Compile and keep current the county-level governing board for every parish in
+//                 Louisiana — all 64 parishes …"  -> worked today
+//
+// One commitment, two rows, and the row Lucas can see is the one nothing touches. That is the
+// structural cause of "silent research completion" — she does the work he asked for and her
+// commitment memory never records it, so she never reports it. It is also why one request became
+// 7+ near-duplicate threads: nothing recognised the commitment as already held.
+//
+// MATCHING IS STRUCTURAL, NOT FUZZY. A wrong adoption attaches a beat's work to an unrelated
+// promise, which is worse than a duplicate — so this matches on the beat's OWN declared scope
+// (stateCode -> state name, jurisdiction noun) rather than on string similarity. The state name is
+// the hard anchor: no state mention, no adoption. contentKeywords' >=2-overlap rule is deliberately
+// NOT reused here; it is tuned for mention COUNTING, where a false positive costs a metric, not a
+// commitment.
+//
+// Returns { adopt, duplicates }. `adopt` is the thread the beat should run as (null = mint a new
+// one, the old behaviour). `duplicates` are the other threads describing the same commitment, which
+// the caller links under it so they stop occupying the prompt independently.
+// STRONG terms only — each names a governing BODY. Weak words that merely co-occur with civic work
+// ('contact', 'contacts', 'roster', 'leadership', 'official', 'officials', 'government') are
+// deliberately EXCLUDED: a dry run over the live table showed 'contacts' pulling
+// "conservative think tanks or activist groups in Louisiana — gather: organizations and contacts"
+// into the parish-leadership commitment. State anchor + a weak word is not evidence of the same
+// commitment, and a wrong merge is the one outcome worse than a duplicate.
+const GOVERNANCE_TERMS = ['commission', 'commissioner', 'commissioners', 'board', 'boards', 'council',
+  'jury', 'governing', 'legislature', 'legislator', 'legislators', 'supervisor', 'supervisors'];
+
+function _mentions(hay, term) {
+  if (!term) return false;
+  return new RegExp(`\\b${String(term).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
+    .test(hay);
+}
+
+function matchCarriedThread(scope, threads) {
+  const out = { adopt: null, duplicates: [] };
+  const stateName = String((scope && scope.stateName) || '').trim().toLowerCase();
+  if (!stateName || !Array.isArray(threads) || !threads.length) return out;   // no anchor → never adopt
+  const nouns = ((scope && scope.nouns) || []).map(n => String(n || '').toLowerCase()).filter(Boolean);
+  const terms = nouns.concat(GOVERNANCE_TERMS);
+
+  const qualified = [];
+  for (const t of threads) {
+    if (!t || !t.content) continue;
+    if (t.source_turn_id == null) continue;                       // machine-minted → not Lucas's commitment
+    if (!['pending', 'active', 'stalled'].includes(t.status)) continue;
+    if (t.parent_id != null) continue;                            // already merged under another thread
+    const hay = String(t.content).toLowerCase();
+    if (!_mentions(hay, stateName)) continue;                     // HARD ANCHOR
+    if (!terms.some(term => _mentions(hay, term))) continue;      // and it must be about governing bodies
+    qualified.push(t);
+  }
+  if (!qualified.length) return out;
+
+  // Prefer the thread she has actually engaged with (mentions), then the most recently touched —
+  // that is the one most likely to be the live phrasing of the request in Lucas's head.
+  qualified.sort((a, b) =>
+    (Number(b.mention_count) || 0) - (Number(a.mention_count) || 0) ||
+    (Number(b.last_touched_ts) || 0) - (Number(a.last_touched_ts) || 0) ||
+    (Number(a.id) || 0) - (Number(b.id) || 0));
+  out.adopt = qualified[0];
+  out.duplicates = qualified.slice(1);
+  return out;
 }
 
 function humanAge(ms) {
@@ -282,6 +398,10 @@ function detectAndCountMentions(text, activeThreads) {
 module.exports = {
   extractFromUserTurn,
   isUnboundedGoal,
+  matchCarriedThread,
+  freshest,
+  humanAge,
+  STALE_ASSERT_DAYS,
   formatTopBlock,
   formatDepth2Block,
   parseAndApplyStatusUpdates,
