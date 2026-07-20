@@ -59,6 +59,7 @@ const smokes = [
   'smoke_route_derive.js',
   'smoke_absence.js',
   'smoke_coverage_gaps.js',
+  'smoke_cardinality.js',
   'smoke_curation_gate.js',
   'smoke_curation_store.js',
   'smoke_substantiation.js',
