@@ -63,6 +63,7 @@ const smokes = [
   'smoke_cardinality_capture.js',
   'smoke_referent.js',
   'smoke_covered_union.js',
+  'smoke_body_key.js',
   'smoke_curation_gate.js',
   'smoke_curation_store.js',
   'smoke_substantiation.js',

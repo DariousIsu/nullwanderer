@@ -98,10 +98,23 @@ function applyAttempt(prev, now = Date.now()) {
 let _db = null;
 function db() { if (!_db) _db = require('./db'); return _db; }
 
+// SUBJECT KEY. Rows are keyed by a STABLE body identity, not by the target string we happened to
+// research under — otherwise renaming a worklist target (commit 0ce3945 dropped invented body titles)
+// files every prior fact under a key nothing will look up again: unreachable, never refreshable, and
+// permanently "due for re-attempt". See lib/body_key.js, which strips only the prefixes this codebase
+// itself generates and leaves an unrecognised name alone.
+let _bk = null;
+function subjectKey(subject) {
+  try {
+    if (!_bk) _bk = require('./body_key');
+    return _bk.normalizeBody(subject) || String(subject || '');
+  } catch { return String(subject || ''); }
+}
+
 function get(subject, predicate) {
   try {
     return db().getDb().prepare(
-      `SELECT * FROM absence WHERE subject = ? AND predicate = ?`).get(String(subject), String(predicate)) || null;
+      `SELECT * FROM absence WHERE subject = ? AND predicate = ?`).get(subjectKey(subject), String(predicate)) || null;
   } catch { return null; }
 }
 
@@ -120,7 +133,7 @@ function recordMiss(subject, predicate, { errored = false, now = Date.now() } = 
          last_attempt_ts = excluded.last_attempt_ts,
          attempts        = excluded.attempts,
          ttl_s           = excluded.ttl_s`
-    ).run(String(subject), String(predicate), next.kind, next.first_observed_ts, next.last_attempt_ts, next.attempts, next.ttl_s);
+    ).run(subjectKey(subject), String(predicate), next.kind, next.first_observed_ts, next.last_attempt_ts, next.attempts, next.ttl_s);
     return next;
   } catch { return null; }
 }
@@ -128,7 +141,7 @@ function recordMiss(subject, predicate, { errored = false, now = Date.now() } = 
 // The gap closed — we found it. Drop the record.
 function recordFound(subject, predicate) {
   try {
-    db().getDb().prepare(`DELETE FROM absence WHERE subject = ? AND predicate = ?`).run(String(subject), String(predicate));
+    db().getDb().prepare(`DELETE FROM absence WHERE subject = ? AND predicate = ?`).run(subjectKey(subject), String(predicate));
     return true;
   } catch { return false; }
 }
@@ -141,7 +154,7 @@ function promote(subject, predicate, { evidenceKind, evidenceRef } = {}) {
     db().getDb().prepare(
       `UPDATE absence SET kind = ?, evidence_kind = ?, evidence_ref = ?
        WHERE subject = ? AND predicate = ?`
-    ).run(KIND.NO, String(evidenceKind), String(evidenceRef), String(subject), String(predicate));
+    ).run(KIND.NO, String(evidenceKind), String(evidenceRef), subjectKey(subject), String(predicate));
     return { ok: true };
   } catch (e) { return { ok: false, reason: e.message }; }
 }

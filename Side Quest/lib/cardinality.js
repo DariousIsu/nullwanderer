@@ -100,9 +100,20 @@ function reconcile({ seats = null, held = 0 } = {}) {
 let _db = null;
 function db() { if (!_db) _db = require('./db'); return _db; }
 
+// BODY KEY — same reasoning as absence.js: a seat count must stay attached to the body across changes
+// in how the worklist names it, or a rename silently orphans it and the body reads "size unknown"
+// again. lib/body_key.js strips only prefixes we generate; an unrecognised name is left alone.
+let _bk = null;
+function bodyKey(body) {
+  try {
+    if (!_bk) _bk = require('./body_key');
+    return _bk.normalizeBody(body) || String(body || '');
+  } catch { return String(body || ''); }
+}
+
 function get(body) {
   try {
-    return db().getDb().prepare(`SELECT * FROM cardinality WHERE body = ?`).get(String(body)) || null;
+    return db().getDb().prepare(`SELECT * FROM cardinality WHERE body = ?`).get(bodyKey(body)) || null;
   } catch { return null; }
 }
 
@@ -118,7 +129,7 @@ function record(body, { seats, sourceKind, sourceRef, now = Date.now() } = {}) {
       try {
         db().getDb().prepare(
           `UPDATE cardinality SET conflict_seats = ?, conflict_source = ?, conflict_ts = ? WHERE body = ?`
-        ).run(Number(seats), String(sourceRef).slice(0, 300), now, String(body));
+        ).run(Number(seats), String(sourceRef).slice(0, 300), now, bodyKey(body));
       } catch {}
     }
     if (!d.replace) return { ok: true, stored: false, conflict: !!d.conflict, agrees: !!d.agrees, reason: d.reason || 'unchanged' };
@@ -128,7 +139,7 @@ function record(body, { seats, sourceKind, sourceRef, now = Date.now() } = {}) {
        ON CONFLICT(body) DO UPDATE SET
          seats = excluded.seats, source_kind = excluded.source_kind,
          source_ref = excluded.source_ref, observed_ts = excluded.observed_ts`
-    ).run(String(body), Number(seats), String(sourceKind), String(sourceRef).slice(0, 300), now);
+    ).run(bodyKey(body), Number(seats), String(sourceKind), String(sourceRef).slice(0, 300), now);
     return { ok: true, stored: true, conflict: !!d.conflict, reason: d.reason || 'stored' };
   } catch (e) { return { ok: false, stored: false, conflict: false, reason: e.message }; }
 }
