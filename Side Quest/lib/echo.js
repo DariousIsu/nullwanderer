@@ -99,7 +99,9 @@ function stdioTransport({
     if (started) return;
     const _spawn = spawnFn || require('child_process').spawn;
     proc = _spawn(python, ['-m', moduleName, ...extraArgs], {
-      cwd: cwd || undefined, env: env || process.env, stdio: ['pipe', 'pipe', 'pipe'],
+      // Zoe's model pins are stripped here — Echo reads the same variable names for its own agent
+      // fleet, and forwarding them collapses its three slots onto one model (lib/child_env.js).
+      cwd: cwd || undefined, env: require('./child_env').forEcho(env || process.env), stdio: ['pipe', 'pipe', 'pipe'],
     });
     started = true;
     proc.stdout.on('data', (d) => {

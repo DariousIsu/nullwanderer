@@ -117,7 +117,9 @@ class EngineSupervisor {
   async _spawn(bootTimeoutMs) {
     if (!this.cwd) { this.onLog('engine: ECHO_CWD unset — cannot spawn'); return { state: 'failed', error: 'ECHO_CWD unset' }; }
     this.onLog(`engine: spawning ${this.python} ${serveArgs(this.host, this.port).join(' ')} (cwd ${this.cwd})`);
-    this.child = this.spawnFn(this.python, serveArgs(this.host, this.port), { cwd: this.cwd, stdio: 'ignore', windowsHide: true });
+    // Explicit env (it defaulted to inheriting process.env) so the engine itself gets the same
+    // model-pin stripping as its sidecars — Saga's own slot is resolved in this process.
+    this.child = this.spawnFn(this.python, serveArgs(this.host, this.port), { cwd: this.cwd, env: require('./child_env').forEcho(process.env), stdio: 'ignore', windowsHide: true });
     this.owned = true; this.adopted = false;
     this.child.on('exit', (code) => this._onExit(code));
     const ok = await waitHealthy({ timeoutMs: bootTimeoutMs });
@@ -131,7 +133,9 @@ class EngineSupervisor {
   // owned/spawn path — an adopted external Echo already runs these via its own saga-server, so we
   // never start competing queue consumers. We supervise/kill only what we spawn.
   _startSidecars() {
-    const env = { ...process.env, PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8' };
+    // The sidecars ARE the agent fleet, so this is where Zoe's model pins did the most damage —
+    // every spawned agent ran on Zoe's single model instead of its slot's (lib/child_env.js).
+    const env = { ...require('./child_env').forEcho(process.env), PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8' };
     for (const def of this.sidecars) {
       if (process.env[def.disableEnv] === '1') { this.onLog(`sidecar ${def.name}: disabled via ${def.disableEnv}`); continue; }
       if (this.sidecarProcs[def.name]) continue;

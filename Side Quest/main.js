@@ -6513,7 +6513,19 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
                                       // truncation rate is measurable per writer against the 18% baseline
   if (cloudOwnsAnswer && process.env.ZOE_CLOUD_WRITES_REPLY !== '0') {
     try {
-      const r = await require('./lib/cloud_logic').streamCloud(messages, {
+      // GIVE THE CLOUD THE TOOL SURFACE. The suit is stripped from `messages` above on cloud-owned
+      // turns — correct while the local 12b wrote, because it fumbled tool JSON and the hard-coded
+      // cognition ladder (graph→wiki→routed→web→excavate) did the retrieval instead. V1 inverted that
+      // premise: a frontier model is the one writer that CAN drive 500+ tools, recipes and
+      // <echo-delegate> reliably, and a fixed ladder can only find what it was built to look for.
+      // Appended ONLY to the cloud's copy — if the cloud is unavailable, `messages` is untouched and
+      // the local model still gets no tool menu, exactly as before.
+      let cloudMessages = messages;
+      try {
+        const suit = echoSuit && echoSuit.connected ? echoSuit.suitContextBlock() : null;
+        if (suit) cloudMessages = messages.concat([{ role: 'system', content: suit }]);
+      } catch (e) { console.error('[main] suit block for cloud failed:', e.message); }
+      const r = await require('./lib/cloud_logic').streamCloud(cloudMessages, {
         model: (() => { try { return db.getMeta('model.replier') || null; } catch { return null; } })(),
         onToken: (chunk) => parser.feed(chunk),
         inactivityMs: 180000,
@@ -7586,7 +7598,25 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     const emit = io && io.emit ? io.emit : (() => {});
     const _ff = require('./lib/leakguard').makeStreamFilter(emit);   // same live directive filter as the main path
     const parser = new TagStreamParser({ onSayToken: (t) => { try { _ff.feed(t); } catch {} } });
-    await streamChat({ model: MODEL, messages, onToken: (c) => parser.feed(c) });
+    // CLOUD WRITES THE FOLLOW-UP TOO (V1). This is the same job as the main reply — read a tool
+    // result, decide whether one more lookup is needed, then answer in her voice — so handing it back
+    // to the local 12b reintroduced exactly the truncation V1 removed, and on the harder half of the
+    // work: this is where the next <echo-do>/<echo-find> is authored. Same package, same parser, same
+    // filter. Fail-safe: no cloud → writer stays local and this runs as before.
+    let followupWriter = MODEL;
+    if (process.env.ZOE_CLOUD_WRITES_REPLY !== '0') {
+      try {
+        const r = await require('./lib/cloud_logic').streamCloud(messages, {
+          model: (() => { try { return db.getMeta('model.replier') || null; } catch { return null; } })(),
+          onToken: (c) => parser.feed(c), inactivityMs: 180000, think: false, temperature: 0.7,
+        });
+        if (r && r.text && r.text.trim()) {
+          followupWriter = r.model;
+          console.log(`[main] CLOUD wrote the tool-followup (hop ${echoHop}) — ${r.model}, ${r.tokens} tok`);
+        }
+      } catch (e) { console.error('[main] cloud followup failed:', e.message); }
+    }
+    if (followupWriter === MODEL) await streamChat({ model: MODEL, messages, onToken: (c) => parser.feed(c) });
     try { _ff.flush(); } catch {}
     const { thought, say } = parser.finalize();
     // Capture any follow-on Echo tag BEFORE stripping (the strip below removes all tags).
@@ -7611,7 +7641,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       if (followupDisclaimed) { try { sayOut = (await voice.deDisclaim(sayOut)) || ''; } catch (e) { console.error('[main] followup voice guard failed:', e.message); } }
       if (sayOut) {
         const thoughtClean = (thought || '').replace(/<\/?(think|say)>/gi, '').trim();
-        if (thoughtClean) db.insertTurn({ sessionId, speaker: 'ai_thought', content: thoughtClean, model: MODEL });
+        if (thoughtClean) db.insertTurn({ sessionId, speaker: 'ai_thought', content: thoughtClean, model: followupWriter });
         // A tool-followup voices the answer to what the user ASKED — it is a PROMPTED reply, not an
         // autonomous musing. Storing it unprompted:1 meant the renderer's history reload (chat.js: an
         // ai_said with unprompted routes to the sheep rail, not the transcript) buried EVERY tool-assisted
@@ -7619,7 +7649,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
         // Lucas kept seeing (e.g. the "I put the contacts on your canvas" answer). Flag by ACTUAL context:
         // a synchronous chat-turn followup is prompted (0); only a background action-completion (runActionStep,
         // no user waiting) stays unprompted (1). Live routing already handles both (currentAiTurnDiv gate).
-        const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: sayOut, model: MODEL, unprompted: prompted ? 0 : 1 });
+        const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: sayOut, model: followupWriter, unprompted: prompted ? 0 : 1 });
         db.setMeta('last_ai_utterance_at', String(Date.now()));
         if (channel === 'discord') {
           try { await discordLib.sendDM(sayOut); } catch (e) { console.error('[main] followup discord DM failed:', e.message); }

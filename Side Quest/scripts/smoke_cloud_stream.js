@@ -96,6 +96,22 @@ function fakeStream(tokens, { throwAfter = -1 } = {}) {
     ok((src.match(/model: replyWriter,/g) || []).length === 2,
       'both turn rows record WHO wrote the reply — the only way truncation is measurable per writer');
     ok(!/model: MODEL,\r?\n\s*truncated/.test(src), 'REGRESSION: no reply row is still hardcoded to the local model');
+
+    // The cloud writer gets the tool surface the local model was denied. Appended to the CLOUD's
+    // copy only — a cloud outage must not hand the local 12b a tool menu it fumbles.
+    ok(/cloudMessages = messages\.concat\(\[\{ role: 'system', content: suit \}\]\)/.test(src),
+      'the Echo suit is appended for the cloud writer');
+    ok(/streamCloud\(cloudMessages,/.test(src), 'the cloud is called with the suit-bearing copy');
+    ok(/echoSuitBlock: \(echoSuit && !cloudOwnsAnswer\)/.test(src),
+      'REGRESSION: the LOCAL package still has no tool menu on cloud-owned turns');
+
+    // The follow-up is the harder half — it authors the NEXT tool call — so it must not fall back
+    // to the local model while the first hop runs on the cloud.
+    ok(/CLOUD wrote the tool-followup/.test(src), 'the tool-followup routes to the cloud too');
+    ok(/if \(followupWriter === MODEL\) await streamChat/.test(src),
+      'the local follow-up runs ONLY when the cloud did not write it');
+    ok((src.match(/model: followupWriter/g) || []).length === 2,
+      'follow-up turn rows record their writer as well');
   }
 
   // ── SAFETY: a stalled stream keeps the partial answer ────────────────────────────────────────
