@@ -273,6 +273,76 @@ decision; and a full cube over N dimensions is exponential, so index *selected* 
 what "variable by neighbourhood" means — index densely where traffic and density justify it, leave
 sparse civic regions as plain graph.
 
+### 9a. Facet maps are built ON DEMAND and kept as navigation templates
+
+Lucas's mechanism, which resolves the dimension-choice problem by **deferring it to usage**:
+
+> Creating the new facet maps on demand of search and then storing them as navigation templates, saving
+> search compute over time. "Print out all of the Louisiana Parish leadership contact information"
+> should light up that entire neighbourhood to provide the answer. If the next request is for the voting
+> habits of three key parishes, part of the first map is reused and branched off for the deep dive, and
+> the new neighbours open.
+
+This is the answer to "which dimensions?" — **the ones real queries asked for.** Nothing is designed up
+front, so the cube never becomes both huge and wrong, and density-by-neighbourhood falls out for free
+rather than needing a threshold rule.
+
+It also supplies navigational stability *without* a hardwired taxonomy (§8): the routes actually
+travelled are **pinned by use**. Stability comes from usage, not from a maintained tree.
+
+**Branching is itself a salience signal.** When a follow-up sub-selects "three key parishes" from a
+prior map, that selection says which parishes matter — feeding mechanism 3 above for free.
+
+### 9b. Store the TRAVERSAL, not the ANSWER
+
+A stored *result* rots. New encounters land constantly, and a cached sheet goes stale silently while
+continuing to look authoritative — the failure mode this whole design exists to prevent.
+
+A template is therefore:
+
+```
+template {
+  spec        which objects, which edge types, which facets, which grade floor
+  node_set    the resolved neighbourhood
+  watermark   last encounter id folded in
+  version     interpretations get corrected (see below)
+}
+```
+
+Re-use means **re-running a known-good traversal cheaply**, not serving cached rows: the expensive part
+is the *interpretation* (deciding what "parish leadership" means as a traversal), and that is what gets
+saved. The watermark makes refresh incremental — fold in only what arrived since. Compute saving is
+kept; staleness is not.
+
+### 9c. Two flavours, one machinery
+
+On-demand templates are **query-driven** — facets exist where someone looked. But gap detection
+(mechanism 1) must run over the whole declared universe *whether or not anyone asked*: nobody will ever
+type "which of the 52,890 bodies are missing a president", and that is precisely the autonomous loop's
+steering signal.
+
+| | trigger | purpose | lifetime |
+|---|---|---|---|
+| **Navigation template** | a user query | amortise search, stable paths | pinned, refreshed by watermark |
+| **Standing lattice** | declared structure (§4) | gap detection → research allocation | maintained continuously |
+
+The standing lattice stays bounded because it spans only dimensions the objects **declare** (offices ×
+jurisdictions × time), so it cannot blow up combinatorially. Mechanically a standing lattice is just a
+template nobody typed — same code, different trigger.
+
+### 9d. Two requirements that must be designed in, not retrofitted
+
+**Merges must leave forwarding pointers.** A template pins node identities. When two duplicate people
+are later correctly fused, a template pointing at the merged-away identity breaks — the "mapped moved"
+problem returning through the back door, *caused by the system improving itself*. A merged identity must
+survive as a redirect, which is consistent with §7's "nothing is ever deleted". Cheap now, an audit of
+every template later.
+
+**Templates need versioning and a correction path.** The query→neighbourhood interpretation is a
+judgment, and a template freezes it. An early reading of "parish leadership" that misses clerks of court
+becomes the permanent path — and gets *more* entrenched with every reuse. Interpretations must be
+correctable, and corrections must propagate to templates derived from them.
+
 ---
 
 ## 10. Prior art worth integrating (spot-checked, not deep-researched)
@@ -323,13 +393,28 @@ Puller layer once the universal substrate exists.
 
 ---
 
-## 13. Open questions
+## 13. Question status
 
-1. **Volatility classes** for attributes (§5) — the exact set, and how recency weighting scales.
-2. **Refutation bar** (§7) — should demoting a claim require an A-grade source, so a weak claim can
-   never dethrone a well-sourced one?
-3. **New substrate vs. absorption into Echo's KG.** Lucas: *"It might need to be both."* Some of this is
-   ordinary graph object creation and linking; the facet layer may want a different structure per
-   concept or neighbourhood. This is the migration-vs-addition decision and it sets the timeline.
-4. **Which facet dimensions**, and the density threshold at which a neighbourhood earns an index.
-5. **Concept edge-gate stability** — how to keep the same pair typed the same way over time.
+**SETTLED (Lucas, 2026-07-20):**
+
+1. **Volatility classes** (§5) — agreed: immutable · slow · volatile · volatile+verifiable, with recency
+   weighting scaling by class. *Exact boundaries still to be written down.*
+2. **Refutation bar** (§7) — **yes**: demoting a claim requires an A-grade source. A weak claim can never
+   dethrone a well-sourced one; it can only make the attribute contested and trigger the cleaning pass.
+3. **Substrate vs. KG** — **both, resolved by §9a**: the KG is the substrate; facet maps are a derived,
+   persisted layer built on demand from search and kept as navigation templates. Not a migration.
+4. **Which facet dimensions** — **deferred to usage** (§9a). Real queries decide; nothing is designed up
+   front. *Partially settled* — this covers user-driven navigation but NOT proactive gap detection,
+   which is why §9c splits standing lattices out. Their dimensions come from §4's declared structure.
+
+**STILL OPEN:**
+
+5. **Concept edge-gate stability** — how to keep the same concept pair typed the same way over time, so
+   navigation does not shift underfoot as the gate is re-run. Lucas: *"great question."* Unanswered.
+
+**Raised by this revision, not yet discussed:**
+
+6. Template **correction propagation** (§9d) — when an interpretation is fixed, how do derived templates
+   learn about it?
+7. Standing-lattice **maintenance cost** at 52,890 declared bodies — full recompute, or incremental on
+   the same watermark mechanism as templates?
