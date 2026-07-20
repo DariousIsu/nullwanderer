@@ -49,6 +49,28 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
   });
   ok(r.type === 'elected' && r.grade === 'D' && r.gradeDir === 'lte' && r.state === 'TX', 'positive: elected + grade D lte + state tx→TX');
 
+  // --- THE PROMPT ITSELF (live failure, 2026-07-20) ---------------------------------------------
+  // The stubs above prove SHAPING; the bug was in the INSTRUCTION. v1 transcribed the regex's
+  // imperative bias and told the model "a plain question" was not a list ask, so it rejected
+  // "how many email contacts do we have for Louisiana Perish leadership?" — while its own trace
+  // showed it had understood the turn completely (state:'LA', company:'Louisiana Perish'). The model
+  // was not wrong; it followed a prompt with the regex's blind spot written into it. These guard the
+  // instruction, which is the part that actually decided.
+  {
+    let seen = null;
+    await ci.classify('how many email contacts do we have for Louisiana parish leadership?', {
+      deps: { ask: async (a) => { seen = a; return { isList: true }; } },
+    });
+    ok(!!seen, 'the classifier reaches the model at all');
+    ok(!/a plain question/i.test(seen.want),
+      'REGRESSION: the prompt no longer says a plain question is NOT a list ask');
+    ok(/how many contacts do we have/i.test(seen.want) && /do we have emails/i.test(seen.want),
+      'the prompt teaches POSSESSION phrasing');
+    ok(/asks FOR . or ABOUT . the contacts/i.test(seen.want),
+      'the prompt frames asking ABOUT our records as a request to look at them');
+    ok(seen.v >= 2, 'prompt version bumped, so cached v1 verdicts are retired');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })().catch((e) => { console.error('threw:', e.message); process.exit(1); });
