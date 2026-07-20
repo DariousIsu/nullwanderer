@@ -5469,6 +5469,19 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         } catch (e) { console.error('[contacts-query] gap offer set failed:', e.message); }
       }
       if (sel.total > 0) {
+        // EVIDENCE (R1) — what the encounter log can actually support for each name. The Puller's own
+        // confidence answers "how sure is the extractor"; this answers "how many independent sources
+        // say so", which is a different question and frequently a much less flattering one.
+        try {
+          const _enc = require('./lib/encounters');
+          sel.rows = cq.withEvidence(sel.rows, (name) => {
+            const key = _enc.objectKey('person', name);
+            if (!key) return null;
+            const g = _enc.gradeClaim(key, { claimClass: 'existence' });
+            if (!g || !g.count) return null;   // never encountered → say so, do not imply a clean bill
+            return { grade: g.grade, sources: g.sources, unproven: g.unproven, stated: !g.grade && g.count > 0 };
+          });
+        } catch (e) { console.error('[contacts-query] evidence lookup failed:', e.message); }
         const tbl = cq.toTable(sel);
         const tabKey = `contacts-${lbl.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 32)}-${Date.now().toString(36)}`;
         try { const callTool = pollCallTool(); await callTool('saga_canvas_open_tab', { mode: 'DOC', tab_key: tabKey, title: lbl }); await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'table', data: { headers: tbl.headers, rows: tbl.rows, caption: tbl.caption } }); }

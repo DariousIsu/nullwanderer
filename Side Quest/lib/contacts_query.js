@@ -324,12 +324,61 @@ function select(rows, { sectors = [], company = null, limit = 200, grade = null,
   return { rows: shown, total, shown: shown.length, withEmail: deduped.filter(r => r.email).length, geoGap, headers: ['Name', 'Email', 'Company', 'Title', 'Confidence'] };
 }
 
+// ── EVIDENCE (R1) ────────────────────────────────────────────────────────────────────────────────
+//
+// Everything built so far made the substrate correct without changing a single answer. This is where
+// the encounter log becomes visible: what does the evidence actually say about this contact?
+//
+// The rule that shapes the format: AN UNGRADED CLAIM MUST READ AS UNGRADED, NEVER AS FACT. A blank
+// cell reads as "fine"; an absent row reads as "nothing to say". Both are wrong, and both are worse
+// than the truth, which is usually "one document said so and we cannot even prove that document was
+// independent". Every state gets words.
+//
+// `lookup(name)` is injected — the encounter log lives behind db and this module is pure. It returns
+// { grade, sources, unproven } or null.
+function evidenceCell(ev) {
+  if (!ev) return 'not in evidence log';
+  if (!ev.grade) return ev.stated ? 'said, not verified' : 'unverified';
+  const n = Number(ev.sources) || 0;
+  const src = `${n} source${n === 1 ? '' : 's'}`;
+  return ev.unproven ? `${ev.grade} · ${src} (unproven)` : `${ev.grade} · ${src}`;
+}
+
+// Attach the log's verdict to each row. Pure — `lookup` does the I/O.
+function withEvidence(rows, lookup) {
+  const fn = typeof lookup === 'function' ? lookup : () => null;
+  return (Array.isArray(rows) ? rows : []).map((r) => {
+    let ev = null;
+    try { ev = fn(r && r.name) || null; } catch { ev = null; }
+    return { ...r, evidence: ev, evidenceLabel: evidenceCell(ev) };
+  });
+}
+
 // The canvas TABLE payload (headers + rows) for saga_canvas_add_block block_type='table'. Pure.
 function toTable(sel) {
-  const headers = sel.headers || ['Name', 'Email', 'Company', 'Title', 'Confidence'];
+  // Two different measurements sit side by side and must not be mistaken for each other: the Puller's
+  // own per-attribute confidence, and what the encounter log can actually support. A contact can read
+  // 80% and still be a single unproven document — that gap is the point, so both are named explicitly
+  // rather than one being labelled the generic "Confidence".
+  const headers = sel.headers || ['Name', 'Email', 'Company', 'Title', 'Puller conf.', 'Evidence'];
   const pct = (c) => (typeof c === 'number' && c > 0) ? `${Math.round(c * 100)}%` : '';
-  const rows = (sel.rows || []).map(r => [r.name || '', r.email || '', r.company || '', r.title || '', pct(r.confidence)]);
-  const caption = sel.total > sel.shown ? `${sel.shown} of ${sel.total} contacts (${sel.withEmail} with email)` : `${sel.total} contacts (${sel.withEmail} with email)`;
+  const rows = (sel.rows || []).map(r => [
+    r.name || '', r.email || '', r.company || '', r.title || '', pct(r.confidence),
+    r.evidenceLabel || evidenceCell(r.evidence || null),
+  ]);
+  const shownRows = sel.rows || [];
+  // WHICH NUMBER TO PUT IN THE CAPTION, and why not the obvious one.
+  //
+  // "carries graded evidence" was the first attempt and it reads as reassurance. Checked against the
+  // live Louisiana list: every one of the twelve rows had a grade, so the caption said "12 of 12 carry
+  // graded evidence" — while every single row was `C · 1 source`. Technically true, and it implies the
+  // opposite of what the data says.
+  //
+  // The number that means something is CORROBORATION: how many rest on more than one independent
+  // source. For most of this corpus the honest answer is zero, and the caption should say zero.
+  const corroborated = shownRows.filter((r) => r.evidence && (Number(r.evidence.sources) || 0) > 1).length;
+  const head = sel.total > sel.shown ? `${sel.shown} of ${sel.total} contacts` : `${sel.total} contacts`;
+  const caption = `${head} (${sel.withEmail} with email) — ${corroborated} of ${shownRows.length} shown rest on more than one independent source`;
   return { headers, rows, caption };
 }
 
@@ -346,4 +395,4 @@ function label({ sectors = [], company = null, grade = null, gradeDir = 'gte', t
   return parts.length ? `${parts.join(' ')} ${noun}`.replace(/\s+/g, ' ').trim() : 'Contacts';
 }
 
-module.exports = { detect, select, toTable, label, unmetFilters, gradeFrom, typeFrom, stateFrom, isGovernmentCompany, isNonprofitCompany, domainKind, sectorsFrom, companyFrom, matchesSectors, GRADE_CAP, SECTORS };
+module.exports = { detect, select, toTable, withEvidence, evidenceCell, label, unmetFilters, gradeFrom, typeFrom, stateFrom, isGovernmentCompany, isNonprofitCompany, domainKind, sectorsFrom, companyFrom, matchesSectors, GRADE_CAP, SECTORS };
