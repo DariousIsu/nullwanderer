@@ -90,12 +90,24 @@ const SINGLE_TRUTH = new Set(['contact', 'existence']);
 // Identity key. Normalised so "Melissa Bosch", "melissa  bosch" and "Bosch, Melissa." converge, without
 // being so aggressive that distinct people collapse — a false merge is unrecoverable, a missed one is not.
 function objectKey(type, label) {
+  const t = String(type || 'thing').toLowerCase();
+  // PLACES have their own canonicalisation (O2, lib/place_key.js). Measured in the live log: `AL` and
+  // `Alabama` were two objects, as were `AZ`/`ARIZONA` and `AR`/`Arkansas` — a state code does not fold
+  // into its name under the generic rule below. That module performs exactly ONE merge, the closed-set
+  // state-code case, and deliberately refuses the traps that look identical to it (`Adams` is not
+  // `Adams County`; `Orange` is not `Orange County`; `Kansas City` is not `Kansas`).
+  if (t === 'place') {
+    try {
+      const k = require('./place_key').placeKey(label);
+      return k ? `place:${k}` : null;
+    } catch { /* fall through to the generic key rather than dropping the object */ }
+  }
   const s = String(label == null ? '' : label).toLowerCase().trim()
     .replace(/[.,]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   if (!s) return null;
-  return `${String(type || 'thing').toLowerCase()}:${s}`;
+  return `${t}:${s}`;
 }
 
 // ── WRITE ────────────────────────────────────────────────────────────────────────────────────────
