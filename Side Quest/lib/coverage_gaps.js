@@ -105,4 +105,60 @@ function openWork(gapList, { perBeat = 25, limit = 500 } = {}) {
   return out;
 }
 
-module.exports = { coverageGap, coverageGaps, summarize, openWork };
+// ── EVIDENCE COVERAGE (R2) — a THIRD measurement, and the one that was missing ──────────────────
+//
+// The two above answer "did we go there". Neither answers "do we hold anything", and the difference is
+// not academic — it is the exact failure Lucas hit:
+//
+//   "How much have we covered on Louisiana Parishes?"  → "all 64 of the Louisiana parishes (100%)"
+//   "Can we get those parish rosters completed now?"   → "I couldn't pin down specific leadership
+//                                                        contact information"
+//
+// Both statements were true. Coverage counts BEATS VISITED; it says nothing about what came back.
+// Measured against the encounter log today: 64 parishes visited, 40 with any evidence held, 24 with
+// none at all.
+//
+// So this is deliberately a SEPARATE number that must be reported ALONGSIDE the visited count, never
+// instead of it and never averaged with it. Visited-but-empty is real information — it means a place
+// was researched and yielded nothing, which is a different state from never having looked, and the
+// module header's whole thesis is that those two must not be conflated.
+//
+// `holds(target)` is injected: it returns falsy for nothing held, or { sources } for evidence found.
+// The caller owns the db; this stays pure.
+function evidenceCoverage(targets, holds) {
+  const list = (Array.isArray(targets) ? targets : []).filter(Boolean);
+  const fn = typeof holds === 'function' ? holds : () => null;
+  const held = [], empty = [], corroborated = [];
+  for (const t of list) {
+    let ev = null;
+    try { ev = fn(t) || null; } catch { ev = null; }
+    if (!ev) { empty.push(t); continue; }
+    held.push(t);
+    if ((Number(ev.sources) || 0) > 1) corroborated.push(t);
+  }
+  return {
+    total: list.length,
+    held: held.length,
+    empty: empty.length,
+    // The work list: visited or not, these are the targets we hold nothing about.
+    missing: empty,
+    corroborated: corroborated.length,
+    pct: list.length ? Math.round((held.length / list.length) * 100) : 0,
+  };
+}
+
+// One line that reports BOTH numbers, because either alone misleads in a different direction.
+//
+// "64 of 64 covered" invites the reading that the work is done. "40 of 64 hold evidence" alone hides
+// that the other 24 were actually looked at and came back empty — which is a finding, not a to-do.
+function describeCoverage({ visited = null, evidence = null } = {}) {
+  const parts = [];
+  if (visited && visited.total) parts.push(`${visited.done} of ${visited.total} researched`);
+  if (evidence && evidence.total) {
+    parts.push(`${evidence.held} of ${evidence.total} hold evidence`);
+    if (evidence.total) parts.push(`${evidence.corroborated} on more than one independent source`);
+  }
+  return parts.join(' · ') || 'no coverage data';
+}
+
+module.exports = { coverageGap, coverageGaps, summarize, openWork, evidenceCoverage, describeCoverage };

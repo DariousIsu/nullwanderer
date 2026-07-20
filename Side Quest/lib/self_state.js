@@ -87,9 +87,17 @@ function buildBlock(snap, userName = 'Lucas', now = Date.now()) {
   if (Array.isArray(snap.focusedCoverage) && snap.focusedCoverage.length) {
     lines.push(`${userName} is asking about specific jurisdictions — ANSWER WITH THESE, they are the direct answer:`);
     for (const f of snap.focusedCoverage.slice(0, 4)) {
-      lines.push(`  • ${f.label}: ${f.done} of ${f.total} researched (${f.pct}%)${f.complete ? ' — every one on the list has been worked' : ` — ${f.total - f.done} still to do`}.`);
+      // TWO NUMBERS, ALWAYS BOTH (R2). `done/total` counts jurisdictions VISITED and says nothing about
+      // what came back — which is how "all 64 Louisiana parishes (100%)" and "I couldn't pin down
+      // leadership contacts" were both true in one conversation. `held` is what the encounter log
+      // actually has. Reporting either alone misleads in opposite directions: visited-only implies the
+      // work is done, held-only hides that the rest were genuinely looked at and came back empty.
+      const evidence = Number.isFinite(f.held)
+        ? ` — evidence held for ${f.held} of ${f.total}${f.corroborated ? `, ${f.corroborated} on more than one independent source` : ', none on more than one independent source'}`
+        : '';
+      lines.push(`  • ${f.label}: ${f.done} of ${f.total} researched (${f.pct}%)${f.complete ? ' — every one on the list has been worked' : ` — ${f.total - f.done} still to do`}${evidence}.`);
     }
-    lines.push(`  ↳ still BODIES worked, not people on file: a jurisdiction counted here may have an incomplete roster, and "all worked" never means the research is finished.`);
+    lines.push(`  ↳ "researched" counts BODIES WORKED; "evidence held" counts what is actually on file. They are different numbers and a jurisdiction can be in the first and not the second — say both, and never let the first imply the research is finished.`);
   }
   if (snap.research && snap.research.total > 0) {
     const r = snap.research;

@@ -8304,6 +8304,31 @@ function _researchStanding(now = Date.now()) {
 // answer "how much have we covered on Louisiana Parishes?" — and an unresponsive number is worse than
 // none, because it competes with whatever else in the prompt does mention those parishes and loses.
 // Not cached: it is a cheap filter over the already-built beat list, and it varies per question.
+// Do we HOLD anything about this target? A beat target reads "the governing body of Acadia Parish,
+// Louisiana"; the encounter log holds people affiliated with "Acadia Parish Police Jury". Matching is
+// on the PLACE inside the target, because the body's own name is what we are usually missing — that is
+// the whole point of asking.
+//
+// Deliberately a containment match rather than a resolution: a false negative here reports honest
+// ignorance, while a false positive would claim evidence we do not hold. Cached per sweep — this runs
+// once per target across a 64-item beat.
+let _heldCache = null, _heldCacheTs = 0;
+function _heldForTarget(target) {
+  try {
+    const now = Date.now();
+    if (!_heldCache || now - _heldCacheTs > 5 * 60 * 1000) {
+      _heldCache = db.getDb().prepare(
+        "SELECT LOWER(COALESCE(object_label,'') || ' ' || COALESCE(claim_value,'')) t FROM encounters WHERE object_type = 'person' OR claim_key = 'affiliated_with'"
+      ).all().map((r) => r.t);
+      _heldCacheTs = now;
+    }
+    const place = String(target || '').replace(/^the governing body of\s+/i, '').split(',')[0].trim().toLowerCase();
+    if (place.length < 4) return null;
+    const n = _heldCache.reduce((a, t) => a + (t.includes(place) ? 1 : 0), 0);
+    return n ? { sources: n } : null;
+  } catch { return null; }
+}
+
 function _focusedCoverage(question) {
   try {
     const beats = require('./lib/beats');
@@ -8314,7 +8339,15 @@ function _focusedCoverage(question) {
     for (const b of matched.slice(0, 4)) {
       const g = cg.coverageGap(b, db.coveredForBeat(b.id));
       if (!g || g.emptyUniverse) continue;   // no worklist → a data gap, not a coverage answer
-      out.push({ label: beats.beatLabel(b) || b.id, done: g.done, total: g.total, pct: g.pct, complete: g.complete });
+      // EVIDENCE HELD (R2) — the number `done/total` does not answer. Coverage counts beats VISITED,
+      // which is how "all 64 Louisiana parishes (100%)" and "I couldn't pin down leadership contacts"
+      // were both true in the same conversation. Measured: 64 visited, 40 holding evidence, 24 empty.
+      let ev = null;
+      try { ev = cg.evidenceCoverage(b.enumerate() || [], (t) => _heldForTarget(t)); } catch { ev = null; }
+      out.push({
+        label: beats.beatLabel(b) || b.id, done: g.done, total: g.total, pct: g.pct, complete: g.complete,
+        held: ev ? ev.held : null, corroborated: ev ? ev.corroborated : null, empty: ev ? ev.empty : null,
+      });
     }
     return out.length ? out : null;
   } catch (e) { console.error('[standing] focused coverage failed:', e.message); return null; }
