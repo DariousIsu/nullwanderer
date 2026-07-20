@@ -129,6 +129,47 @@ function findPageFurniture(pageLines, { edge = 3, minPages = 3 } = {}) {
   return new Set([...counts].filter(([, n]) => n >= threshold).map(([k]) => k));
 }
 
+// WHERE PDF.JS KEEPS ITS IMAGE DECODERS — blocker #3 from docs/ENCOUNTER_OBJECT_MODEL_DESIGN.md.
+//
+// pdfjs v6 decodes JPEG 2000 (and JBIG2) in WebAssembly and will not guess where the .wasm files live.
+// Without `wasmUrl` it builds the fallback path from an unset base and fails with, literally:
+//
+//   Cannot find package 'nullopenjpeg_nowasm_fallback.js'
+//   Unable to decode image "img_p0_1": "JpxError: OpenJPEG failed to initialize"   (×100 in one boot)
+//
+// This was NOT cosmetic and not a missing capability. Measured on a real ingested file, Arapahoe
+// County's "All Districts Map.pdf", rendering page 1 at the same scale:
+//
+//   without wasmUrl        94,240 bytes   ← the map never drew
+//   with    wasmUrl    11,931,080 bytes   ← the map drew
+//
+// A scanned roster was therefore indistinguishable from a body with no roster: the text layer is
+// empty, the rasterize→vision fallback fires, and vision is handed a page with the content missing.
+// That is the "silent class of never-encountered objects" the design flagged — objects absent from the
+// graph with no error anywhere to say so.
+//
+// Resolved from the package itself rather than assumed relative to cwd, and it MUST be a file:// URL
+// with a trailing slash — a bare path is rejected ("must include trailing slash") and a path without
+// the scheme is not a valid factory url.
+let _wasmUrl;
+function pdfWasmUrl() {
+  if (_wasmUrl !== undefined) return _wasmUrl;
+  try {
+    const pkg = require.resolve('pdfjs-dist/package.json');
+    _wasmUrl = require('url').pathToFileURL(path.join(path.dirname(pkg), 'wasm')).href + '/';
+  } catch { _wasmUrl = null; }   // decoders unavailable → pdfjs degrades as before, never throws here
+  return _wasmUrl;
+}
+
+// The shared getDocument config. Kept in one place so a call site cannot be added that silently loses
+// image decoding again — which is exactly how this went unnoticed.
+function pdfDocOptions(data) {
+  const opts = { data, useSystemFonts: true, isEvalSupported: false };
+  const w = pdfWasmUrl();
+  if (w) opts.wasmUrl = w;
+  return opts;
+}
+
 // .pdf → markdown via pdfjs-dist (ESM, dynamic import).
 //
 // pdfjs yields positioned LINE FRAGMENTS, not paragraphs. Blank items and hasEOL are the only
@@ -142,7 +183,7 @@ function findPageFurniture(pageLines, { edge = 3, minPages = 3 } = {}) {
 async function extractPdf(filePath) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const data = new Uint8Array(fs.readFileSync(filePath));
-  const doc = await pdfjs.getDocument({ data, useSystemFonts: true, isEvalSupported: false }).promise;
+  const doc = await pdfjs.getDocument(pdfDocOptions(data)).promise;
 
   // Pass 1 — per-page lines (fragments joined until a blank item / EOL ends the line).
   const pageLines = [];
@@ -198,7 +239,7 @@ async function rasterizePdf(filePath, { maxPages = 10, scale = 2.0, only = null 
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const { createCanvas } = require('@napi-rs/canvas');
   const data = new Uint8Array(fs.readFileSync(filePath));
-  const doc = await pdfjs.getDocument({ data, useSystemFonts: true, isEvalSupported: false }).promise;
+  const doc = await pdfjs.getDocument(pdfDocOptions(data)).promise;
   const pages = [];
   const wanted = Array.isArray(only) && only.length
     ? [...new Set(only.map(Number).filter(n => n >= 1 && n <= doc.numPages))].sort((a, b) => a - b).slice(0, Math.max(1, maxPages))
@@ -283,4 +324,4 @@ async function extractToMarkdown(filePath) {
   throw new Error(`extractToMarkdown: unsupported extension .${ext}`);
 }
 
-module.exports = { decodeEntities, inlineMd, htmlToMarkdown, sanitizeHtml, extractDocx, extractDocxHtml, extractPdf, findPageFurniture, furnitureKey, rasterizePdf, extractToMarkdown, parseCsv, rowsToMarkdownTable, extractSpreadsheet, TEXT_EXT, SHEET_EXT };
+module.exports = { pdfDocOptions, pdfWasmUrl, decodeEntities, inlineMd, htmlToMarkdown, sanitizeHtml, extractDocx, extractDocxHtml, extractPdf, findPageFurniture, furnitureKey, rasterizePdf, extractToMarkdown, parseCsv, rowsToMarkdownTable, extractSpreadsheet, TEXT_EXT, SHEET_EXT };
