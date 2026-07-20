@@ -61,8 +61,19 @@ ok(og.contentHash('') === null && og.contentHash(null) === null, 'empty → null
   const mixed = real.concat(dup);
   ok(og.independence(mixed).count === 4, `duplicates cannot inflate a genuine count (got ${og.independence(mixed).count}, expected 4)`);
 
-  // Unattributable items count as one origin EACH — conservative, can only lower a grade.
-  ok(og.independence([{}, {}, {}]).count === 3, 'items with neither origin nor hash each count once (cannot prove independence either way)');
+  // UNKNOWN PROVENANCE — the case that broke this on real data. Most of the legacy corpus has a
+  // content hash but NO origin. Reporting 0 would grade three genuinely distinct documents as no
+  // evidence at all; reporting 3 would invent independence they might not have.
+  const legacy = ['t1', 't2', 't3'].map((t) => ({ origin_host: null, content_hash: h(t) }));
+  const rl = og.independence(legacy);
+  ok(rl.count === 1, `CRITICAL: 3 distinct texts, unknown origins = 1 (floor, not zero) — got ${rl.count}`);
+  ok(rl.unproven === true, 'flagged unproven: held down by missing provenance, not by real duplication');
+  ok(og.independence([{}, {}, {}]).count === 1,
+    'CRITICAL: items with neither origin nor hash collapse to ONE — they could all be the same source');
+  // Capturing real origins can only RAISE the count from that floor.
+  const upgraded = [['a.gov', 't1'], ['b.org', 't2'], ['c.com', 't3']].map(([o, t]) => ({ origin_host: o, content_hash: h(t) }));
+  ok(og.independence(upgraded).count === 3 && og.independence(upgraded).unproven === false,
+    'the same three documents WITH origins captured = 3, no longer unproven');
   ok(og.independence([]).count === 0 && og.independence(null).count === 0, 'empty/null → 0, never throws');
   ok(og.independence([{ origin: 'https://www.x.gov/a' }]).origins === 1, 'raw origin URL is resolved to a host');
 }

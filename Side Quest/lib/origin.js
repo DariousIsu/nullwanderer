@@ -74,23 +74,32 @@ function contentHash(text) {
 // caller usually needs to know WHY it was bounded — `syndicated` (many origins, one text) and
 // `repeated` (one origin, many texts) are different problems with different fixes.
 //
-// Items missing BOTH keys are counted as one unattributable origin each: we cannot show they are
-// independent, and we cannot show they are not. That is the conservative direction — it can only
-// lower a grade, never inflate one.
+// UNKNOWNS COLLAPSE TO ONE, they do not vanish and they do not multiply.
+//
+// Most of the existing corpus has a content hash but no origin (origin was never captured before this
+// module; it is unrecoverable for those documents). Two wrong ways to handle that, both of which this
+// got wrong before being run on real data:
+//   - counting them as ZERO origins makes min() zero, so three genuinely distinct documents report as
+//     NO evidence at all. That is not conservative, it is false: it grades a well-attested legacy fact
+//     as unsupported rather than unproven.
+//   - counting them as one origin EACH inflates — three documents of unknown provenance could all be
+//     copies from the same site.
+// The truth is "at least one, possibly more, unprovable": all unknown-origin items collapse into a
+// single unattributable origin. Same for missing hashes. So evidence is never erased and never
+// invented, and capturing real origins can only ever RAISE a count from that floor.
 function independence(items) {
   const list = Array.isArray(items) ? items.filter(Boolean) : [];
-  if (!list.length) return { count: 0, origins: 0, texts: 0, syndicated: false, repeated: false };
+  if (!list.length) return { count: 0, origins: 0, texts: 0, syndicated: false, repeated: false, unproven: false };
   const origins = new Set(), texts = new Set();
-  let unattributed = 0;
+  let anyOriginMissing = false, anyHashMissing = false;
   for (const it of list) {
     const o = it.origin_host || hostOf(it.origin) || null;
     const h = it.content_hash || it.hash || null;
-    if (o) origins.add(o);
-    if (h) texts.add(h);
-    if (!o && !h) unattributed += 1;
+    if (o) origins.add(o); else anyOriginMissing = true;
+    if (h) texts.add(h); else anyHashMissing = true;
   }
-  const o = origins.size + unattributed;
-  const t = texts.size + unattributed;
+  const o = origins.size + (anyOriginMissing ? 1 : 0);
+  const t = texts.size + (anyHashMissing ? 1 : 0);
   const count = Math.min(o, t);
   return {
     count,
@@ -98,6 +107,9 @@ function independence(items) {
     texts: t,
     syndicated: o > count && count > 0,   // many origins, one text — a wire story
     repeated: t > count && count > 0,     // one origin, many texts — a site repeating itself
+    // The count is held down by missing provenance rather than by real duplication — capturing origin
+    // for these would raise it. Distinguishes "we checked and it is one source" from "we cannot tell".
+    unproven: anyOriginMissing && t > o,
   };
 }
 
