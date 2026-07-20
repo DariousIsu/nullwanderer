@@ -246,6 +246,11 @@ async function ensure() {
     try {
       const dest = downloadDest(DOWNLOADS_DIR, download.suggestedFilename());
       await download.saveAs(dest);
+      // ORIGIN (docs/ENCOUNTER_OBJECT_MODEL_DESIGN.md blocker #2). The watcher polls a FOLDER, so by
+      // ingest time the URL is gone and cannot be reconstructed — origin is a write-once fact. The
+      // grabPdfs path already remembered its provenance; a browser-initiated download did not, and that
+      // is the larger of the two lanes.
+      try { _rememberProvenance(dest, download.url()); } catch {}
       console.log('[web] download saved →', dest);
     } catch (e) { console.error('[web] download save failed:', e.message); }
   });

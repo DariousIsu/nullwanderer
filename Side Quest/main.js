@@ -2464,10 +2464,16 @@ function startDownloadsIngestWatcher() {
           return;
         }
       } catch { /* frame-check fail-soft: fall through to the existing soft quarantine */ }
-      // ORIGIN: the URL this file was downloaded FROM, captured at download time by the
-      // will-download hook (the watcher only sees a path). NULL when the file arrived some other
-      // way — dropped into the folder by hand, or downloaded before the hook was armed.
-      const _dlOrigin = _takeDownloadOrigin(fp);
+      // ORIGIN: the URL this file was downloaded FROM, captured at download time (the watcher only
+      // ever sees a path). TWO capture points, because there are two browsers:
+      //   - lib/web.js is Patchright-driven REAL Chrome, and it is the lane that actually runs — her
+      //     research downloads and grabbed PDFs both land through it.
+      //   - Electron's own will-download covers anything downloaded by the app's visible windows.
+      // Measured after the first fix shipped: 0 of 6,712 documents had an origin, because the hook was
+      // armed only on the Electron sessions and this lane never touches them.
+      // NULL remains correct and expected for a file dropped into the folder by hand.
+      const _dlOrigin = _takeDownloadOrigin(fp)
+        || (() => { try { return require('./lib/web').sourceUrlForFile(fp); } catch { return null; } })();
       const landed = require('./lib/doc_store').land({ title, body: text, source: 'browser_download', ref: 'download:' + fp, origin: _dlOrigin });
       if (landed && landed.landed) {
         if (!_verdict.relevant || !_leashPasses) {
