@@ -17,7 +17,20 @@ const DEFAULT_TTL_MS = 90 * 60 * 1000;   // a gentle drift — re-cultivate at m
 const MOOD_KEY = 'mood_state';
 const MOOD_AT_KEY = 'mood_state_at';
 
-function _clean(s) { return String(s || '').replace(/<\/?(think|say)>/gi, '').replace(/\s+/g, ' ').trim(); }
+// Markdown emphasis is stripped BEFORE label parsing. The prompt asks for bare `FEELING: …` lines,
+// but the cloud returns `**FEELING:** …` often enough that it has to be handled: the `**` breaks the
+// label terminator, so every field bleeds into the next and the rendered mood becomes a run-on of
+// duplicated text with stray asterisks. Only paired emphasis and leading bullets/headers go —
+// single `*` is left alone so ordinary prose is untouched.
+function _clean(s) {
+  return String(s || '')
+    .replace(/<\/?(think|say)>/gi, '')
+    .replace(/\*\*|__/g, '')                 // **bold** / __bold__
+    .replace(/^\s*#{1,6}\s*/gm, '')          // markdown headers
+    .replace(/^\s*[-*•]\s+/gm, '')           // bullet leaders
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 // The current mood object { feeling, day, onMind, withUser } or null. getFn injectable for tests.
 function current({ getFn = null } = {}) {
@@ -59,12 +72,19 @@ const INSTRUCTION_LEAK_RE = new RegExp([
   'as an ai', 'deeper, reflective self',
 ].join('|'), 'i');
 
-// Does this parse look like the template rather than an answer?
+// A field that still contains ANOTHER field's label means the split failed and the fields bled into
+// one another. This is the general guard: markdown labels (`**DAY:**`) are handled in _clean, but
+// this catches any future decoration the terminator does not anticipate, rather than requiring a new
+// special case each time. Live example that motivated it — `feeling` came back as
+// "attentive… DAY: a steady flow… ON MY MIND: whether the parish roster" (truncated mid-word).
+const BLED_RE = /\b(?:FEELING|DAY|ON MY MIND|WITH\s+[A-Za-z]+)\s*:/i;
+
+// Does this parse look like the template — or like a failed split — rather than an answer?
 function isTemplateEcho(mood) {
   if (!mood) return true;
   const fields = [mood.feeling, mood.day, mood.onMind, mood.withUser].map(v => String(v || ''));
   if (fields.every(f => !f.trim())) return true;
-  return fields.some(f => PLACEHOLDER_RE.test(f) || INSTRUCTION_LEAK_RE.test(f));
+  return fields.some(f => PLACEHOLDER_RE.test(f) || INSTRUCTION_LEAK_RE.test(f) || BLED_RE.test(f));
 }
 
 // Parse the cloud's structured mood into fields. Fail-safe: an unstructured reply becomes the `feeling`.

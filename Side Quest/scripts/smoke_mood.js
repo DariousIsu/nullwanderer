@@ -89,6 +89,42 @@ const recentRows = [
       'control: a real stored mood still reads back');
   }
 
+  // --- MARKDOWN LABELS (found live 2026-07-20, after the template-echo fix) -----------------------
+  // The prompt asks for bare `FEELING: …`, but the cloud returned `**FEELING:** …`. The `**` broke
+  // the label terminator, so every field bled into the next and the stored mood was a run-on of
+  // duplicated text with stray asterisks — genuine content, unusable shape. isTemplateEcho did NOT
+  // catch it (correctly: nothing was fabricated), so the parse itself had to handle it.
+  {
+    const MD = '**FEELING:** attentive, with a quiet thread of uncertainty\n'
+      + '**DAY:** a steady flow of checking, noting gaps, and tidying up tasks\n'
+      + '**ON MY MIND:** whether the parish rosters are really complete\n'
+      + '**WITH LUCAS:** in step, working through it together';
+    const p = mood.parseMood(MD);
+    ok(p.feeling === 'attentive, with a quiet thread of uncertainty', 'markdown-bold labels parse cleanly');
+    ok(p.day === 'a steady flow of checking, noting gaps, and tidying up tasks', 'DAY does not absorb the rest');
+    ok(p.onMind === 'whether the parish rosters are really complete', 'ON MY MIND is isolated');
+    ok(p.withUser === 'in step, working through it together', 'WITH <NAME> is isolated');
+    ok(!/\*/.test(JSON.stringify(p)), 'no stray asterisks survive into the stored mood');
+    ok(!mood.isTemplateEcho(p), 'a correctly-parsed markdown mood is accepted (it is real content)');
+    // other decorations the model reaches for
+    ok(mood.parseMood('# FEELING: steady\n- DAY: quiet').feeling === 'steady', 'headers/bullets stripped too');
+  }
+
+  // --- THE GENERAL GUARD: a field carrying another field's label means the split failed -----------
+  // Markdown is handled above, but this catches any future decoration the terminator misses, rather
+  // than needing a new special case each time.
+  {
+    ok(mood.isTemplateEcho({ feeling: 'attentive DAY: a steady flow', day: '', onMind: '', withUser: '' }),
+      'SAFETY: a bled field (carries another label) is rejected');
+    ok(mood.isTemplateEcho({ feeling: 'ok', day: 'quiet WITH LUCAS: in step', onMind: '', withUser: '' }),
+      'SAFETY: bleed detected on any field, not just feeling');
+    ok(!mood.isTemplateEcho({ feeling: 'attentive', day: 'a steady day', onMind: 'the rosters', withUser: 'in step' }),
+      'control: clean fields pass');
+    // a colon in ordinary prose must NOT trip the guard
+    ok(!mood.isTemplateEcho({ feeling: 'torn: two things at once', day: '', onMind: '', withUser: '' }),
+      'control: an ordinary colon is not a label');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
