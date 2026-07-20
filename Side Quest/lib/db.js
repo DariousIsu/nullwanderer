@@ -539,6 +539,49 @@ const MIGRATIONS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_cardinality_conflict ON cardinality(conflict_ts)`,
 
+  // DOC CONTACTS — people extracted from SHORT-TERM research documents, so the contacts query can see
+  // what her own research already found.
+  //
+  // The gap this closes (measured 2026-07-20): asked to finish the Louisiana parish rosters she replied
+  // "I couldn't pin down specific organization and leadership contact information ... I can go ahead and
+  // pull that data together for you now" — offering to research what she already held. gatherHeldContacts
+  // read exactly two sources, Puller and CRM, and never the `documents` table, where 390 parish-context
+  // docs carried 1,468 individual gov/parish-domain addresses. Structurally invisible, not missing.
+  //
+  // Every row CITES the document it came from. A contact with no traceable source is worse than none —
+  // the whole point is that these are extracted, not verified, and must rank and read that way.
+  `CREATE TABLE IF NOT EXISTS doc_contacts (
+    id INTEGER PRIMARY KEY,
+    email_key TEXT,
+    name TEXT NOT NULL,
+    email TEXT,
+    phone TEXT,
+    title TEXT,
+    company TEXT,
+    state TEXT,
+    doc_id INTEGER NOT NULL,
+    doc_title TEXT,
+    confidence REAL NOT NULL DEFAULT 0.8,
+    created_ts INTEGER NOT NULL,
+    updated_ts INTEGER NOT NULL
+  )`,
+  // One row per person-per-document: the same official appearing in three documents is three citations of
+  // the same fact, and collapsing them at write time would throw away corroboration. The query layer folds
+  // them; the store keeps the provenance.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_contacts_uniq ON doc_contacts(doc_id, name, COALESCE(email_key,''))`,
+  `CREATE INDEX IF NOT EXISTS idx_doc_contacts_email ON doc_contacts(email_key)`,
+  `CREATE INDEX IF NOT EXISTS idx_doc_contacts_state ON doc_contacts(state)`,
+  // Scan ledger — which documents have been through extraction, and at what version. Keyed on the
+  // document's own updated_ts so an EDITED document is re-extracted while an unchanged one never is
+  // (extraction is a model call per chunk; re-running the corpus blindly would be the expensive mistake).
+  `CREATE TABLE IF NOT EXISTS doc_contacts_scanned (
+    doc_id INTEGER PRIMARY KEY,
+    doc_updated_ts INTEGER,
+    scanned_ts INTEGER NOT NULL,
+    found INTEGER NOT NULL DEFAULT 0,
+    chunks INTEGER NOT NULL DEFAULT 0
+  )`,
+
   // INTEREST MODEL (autonomy roadmap, Slice 1) — Zoe's self-directed agenda. A persistent,
   // weighted set of intellectual pursuits the idle loop SAMPLES from, instead of echoing the last
   // conversation. Seeded with a floor of deep domains (source='seed'); 'emergent' interests form

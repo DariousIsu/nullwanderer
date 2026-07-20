@@ -8839,6 +8839,28 @@ async function gatherHeldContacts() {
       console.log(`[contacts-query] gathered ${out.length} held contacts (Puller + CRM, ${heldCrmIds.size} CRM dupes skipped)`);
     }
   } catch (e) { console.error('[contacts-query] crm gather failed:', e.message); }
+  // 3) HER OWN RESEARCH — people extracted from short-term documents (lib/doc_contacts).
+  //
+  // Without this the contacts query could not see anything her research produced. Measured live
+  // (2026-07-20): asked to finish the Louisiana parish rosters she said "I couldn't pin down specific
+  // organization and leadership contact information ... I can go ahead and pull that data together for
+  // you now" — offering to research 390 parish documents she already held, carrying 1,468 individual
+  // gov/parish-domain addresses. The data was never missing, only unreachable from here.
+  //
+  // Ranked BELOW Puller and CRM on purpose. These are EXTRACTED from a document, not verified against a
+  // mail server or confirmed by a human, and every row cites the document it came from so the claim can
+  // be checked. Corroboration across independent documents nudges confidence up a little, but never to
+  // where an unverified extraction outranks a confirmed record.
+  try {
+    const docContacts = require('./lib/doc_contacts');
+    for (const r of docContacts.search({ limit: 20000 })) {
+      if (!r.name) continue;
+      const conf = Math.min(0.86, (typeof r.confidence === 'number' ? r.confidence : 0.8) + Math.min(0.04, (Math.max(1, r.doc_count) - 1) * 0.02));
+      out.push({ name: r.name, email: r.email || null, phone: r.phone || null, company: r.company || null,
+        title: r.title || null, confidence: conf, src: 'document', state: r.state || null,
+        elected: false, domain: null, docId: r.doc_id, docCount: r.doc_count });
+    }
+  } catch (e) { console.error('[contacts-query] doc-contact gather failed:', e.message); }
   return out;
 }
 
