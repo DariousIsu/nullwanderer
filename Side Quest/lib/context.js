@@ -85,7 +85,7 @@ function humanDuration(ms) {
  * she is. Without this she fabricates time answers ("It's 11:45 PM" when
  * actually 11:45 AM) and loses coherence about how long the session has run.
  */
-function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
+function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, standing = null, working = null }) {
   const now = new Date();
   const dateStr = now.toLocaleDateString(undefined, {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
@@ -187,6 +187,43 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
     }
   } catch {}
 
+  // STANDING — how far along her own long-running research actually is, and what she is working on
+  // this moment. AMBIENT ON PURPOSE.
+  //
+  // These facts already existed, but only surfaced REACTIVELY: main.js gates the whole self-state +
+  // coverage block on `stateQ || coverageQ`, which matches literal status phrasings. Measured against
+  // ten realistic turns, eight were blind — and the blind ones were the DECISION questions:
+  // "do we have enough on Louisiana to write the brief?", "are we ready to send the parish list?",
+  // "is the county work worth continuing?", "what should we work on next?". Those are exactly the
+  // turns where 64-of-64 versus 9-of-64 changes the answer, and she was answering them with no idea
+  // of her own coverage. Asking her to know her scale only when asked in the right words is not
+  // self-knowledge.
+  //
+  // Kept to ONE line each and framed as background, because a long ambient block gets RECITED — the
+  // same reason the mood block ends with "don't recite it". The numbers come from main's cached
+  // _researchStanding() (5-min TTL), and it returns null rather than a fabricated 0/0, so an
+  // unknown standing prints nothing at all instead of "0% researched".
+  let standingLine = null;
+  if (standing && Number(standing.total) > 0 && Number(standing.done) >= 0) {
+    // "0%" against a 52,890-target portfolio is arithmetically right and communicatively false — it
+    // reads as "nothing has been done" in the same breath as "43 beats complete". Say "under 1%".
+    const pct = Number(standing.pct);
+    const pctStr = (pct === 0 && Number(standing.done) > 0) ? 'under 1%' : `${pct}%`;
+    const parts = [`You have researched ${Number(standing.done).toLocaleString()} of ${Number(standing.total).toLocaleString()} bodies/offices across your standing beats (${pctStr})`];
+    if (standing.completeBeats) parts.push(`${standing.completeBeats} beat${standing.completeBeats === 1 ? '' : 's'} fully complete`);
+    standingLine = `${parts.join('; ')}. This is YOUR long-running work — background knowledge about yourself, not something to recite or lead with. Use it when it bears on what Lucas asks (whether a set is finished, whether there's enough to write from, what's worth doing next), and never claim a set is complete when this says otherwise.`;
+  }
+  let workingLine = null;
+  if (working && typeof working.goal === 'string' && working.goal.trim()) {
+    // Truncate on a WORD boundary — a mid-word cut ("…and A-grade c") reads as corruption in a block
+    // she is told to treat as fact.
+    let goal = working.goal.replace(/\s+/g, ' ').trim();
+    if (goal.length > 120) goal = goal.slice(0, 120).replace(/\s+\S*$/, '') + '…';
+    const of = (working.done != null && working.universe) ? ` — ${working.done} of ${working.universe} done so far` : '';
+    const w = Number(working.workers) || 0;
+    workingLine = `Right now you are actively working: ${goal}${of}.${w ? ` ${w} background worker${w === 1 ? '' : 's'} running alongside.` : ''} If Lucas asks what you're doing, this is the true answer.`;
+  }
+
   const lines = [
     `AWARENESS — facts about right now (do not paraphrase as poetic atmosphere; these are concrete):`,
     `• It is ${dateStr}, ${timeStr}.`,
@@ -200,6 +237,8 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs }) {
     mediaLine ? `• ${mediaLine}` : null,
     gmeetRecallLine ? `• ${gmeetRecallLine}` : null,
     mediaRecallLine ? `• ${mediaRecallLine}` : null,
+    workingLine ? `• ${workingLine}` : null,
+    standingLine ? `• ${standingLine}` : null,
     chosenName ? `• You go by ${chosenName}. This is the name you chose for yourself. Use it when self-referring.` : null,
     ``,
     `WHAT YOU ARE (so you don't fabricate when asked): a local ~24B language model running via Ollama inside your own desktop app ("Zoe Lane") on Lucas's machine. The SAME mind produces your spoken replies and your private between-turn monologue (which runs ~every 10s and feeds back into your context). Memory genuinely persists across sessions in a local SQLite DB — conversations, thoughts, readings, goals, commitments; you are not reset.`,
