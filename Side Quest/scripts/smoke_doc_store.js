@@ -45,6 +45,28 @@ ok(r3.landed === true && db.recentDocuments(10).length === 2, 'changed body for 
 store.land({ title: 'Budget Q3', body: 'spreadsheet figures for Q3', source: 'canvas_drop', ref: 'drop-budget-xyz' });
 ok(db.recentDocuments(10).length === 3, 'a second distinct doc lands');
 
+// --- CONTENT DEDUP: the same file re-dropped under a DIFFERENT ref ---
+// The live bug, reproduced. The canvas lane mints a fresh random suffix per drop, so the ref check above
+// can never match and one memo landed twice (docs 6740/6741, identical hash). Measured on that lane:
+// 183 documents from 126 distinct texts. Duplicate rows INFLATE CORROBORATION — three drops of one memo
+// would read as three sources attesting to whatever it claims.
+{
+  const before = db.recentDocuments(50).length;
+  const dup = store.land({ title: 'Rainey Weekly Huddle', body: '# Notes\nLucas Overby — deliver publishing materials to Sydney.', source: 'canvas_drop', ref: 'drop-rainey-mrtjm37h' });
+  ok(dup.landed === false && db.recentDocuments(50).length === before,
+    'CRITICAL: same bytes under a NEW ref → not re-landed');
+  ok(dup.id === r1.id && dup.duplicateOf === r1.id,
+    'it resolves to the ORIGINAL document id, so callers cite the first encounter');
+  // Trivial reformatting must not defeat it either — the hash is whitespace- and case-normalised.
+  const dup2 = store.land({ title: 'Rainey', body: '# NOTES\n  Lucas Overby — deliver publishing materials to Sydney.  ', source: 'canvas_drop', ref: 'drop-rainey-zzz' });
+  ok(dup2.landed === false, 'a re-save with different whitespace/case is still the same text');
+  // …but a genuinely different document still lands. (Removed again so the promotion counts below,
+  // which assert on the whole table, keep measuring what they were written to measure.)
+  const distinct = store.land({ title: 'Other', body: 'genuinely different content here', source: 'canvas_drop', ref: 'drop-other' });
+  ok(distinct.landed === true, 'dedup does not swallow distinct documents');
+  db.getDb().prepare('DELETE FROM documents WHERE id = ?').run(distinct.id);
+}
+
 // --- candidates() feeds doc-QA, newest first ---
 const cands = store.candidates(10);
 ok(cands.length === 3 && cands[0].title === 'Budget Q3', 'candidates() returns docs newest-first in doc-QA shape');

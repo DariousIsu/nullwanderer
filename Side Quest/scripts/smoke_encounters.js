@@ -96,6 +96,23 @@ ok(enc.record({ claim_class: 'existence' }) === null, 'no object → refused');
     'CRITICAL: 3 ordinary sources = A for contact but only B+ for biography — different ladders, same evidence');
 }
 
+// ── the OPERATOR is a source class (Lucas handing her a document) ────────────────────────────────
+{
+  // A drop has no URL and never will. Its provenance is still KNOWN, and better than most of the web,
+  // so it must not fall through to `unknown` — the highest-authority material in the system would
+  // otherwise grade lowest.
+  const opRow = [{ authority: 'operator', content_hash: 'h1' }];
+  ok(enc.gradeValue('biographical', opRow).grade === 'A-',
+    'CRITICAL: an operator-dropped document grades like an official record, not like an unknown one');
+  ok(enc.gradeValue('biographical', [{ authority: 'unknown', content_hash: 'h1' }]).grade === 'C',
+    '…which an unattributed document does not');
+  ok(enc.record({ object_type: 'document', object_label: 'Memo A', claim_class: 'existence',
+    source_kind: 'canvas_drop', source_ref: 'drop:tab1', authority: 'operator' }) > 0,
+    'a dropped document is recorded as an encountered OBJECT (§3: both object and source)');
+  ok(enc.gradeClaim(enc.objectKey('document', 'Memo A'), { claimClass: 'existence' }).official === true,
+    'and reads as an authoritative source');
+}
+
 // ── INTERPRETIVE claims are never graded as truth (§5e) ──────────────────────────────────────────
 {
   const key = enc.objectKey('event', 'Speech 1');

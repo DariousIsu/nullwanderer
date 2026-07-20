@@ -1445,6 +1445,18 @@ function getDocumentByRef(ref) {
   return getDb().prepare('SELECT * FROM documents WHERE ref = ? ORDER BY id DESC LIMIT 1').get(ref) || null;
 }
 
+// The SAME TEXT already landed, under any ref or lane. The hash is computed here from the body rather
+// than taken from a caller, exactly as insertDocument does, so the two can never disagree about what
+// counts as identical. Oldest wins — the first encounter is the one that keeps the id everything else
+// already cites.
+function getDocumentByHash(body) {
+  try {
+    const h = require('./origin').contentHash(body);
+    if (!h) return null;
+    return getDb().prepare('SELECT * FROM documents WHERE content_hash = ? ORDER BY id ASC LIMIT 1').get(h) || null;
+  } catch (e) { return null; }
+}
+
 function getDocument(id) {
   if (!id) return null;
   return getDb().prepare('SELECT * FROM documents WHERE id = ?').get(id) || null;
@@ -2224,6 +2236,7 @@ module.exports = {
   insertKnowledge,
   insertDocument,
   getDocumentByRef,
+  getDocumentByHash,
   getDocument,
   recentDocuments,
   listUnpromotedDocuments,

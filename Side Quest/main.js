@@ -1525,7 +1525,27 @@ app.whenReady().then(() => {
             // breaks ingest; fall-throughs queue as `held` for the nightly upgrade pass.
             try { if (landed && landed.landed) decomposeLandedDoc({ id: landed.id, title: label, body: markdown, source: 'canvas_drop' }).catch(() => {}); } catch {}
             try { if (landed && landed.landed) surfaceDocCards({ id: landed.id, title: label, body: markdown }).catch(() => {}); } catch {}
-            console.log(`[canvas-ingest] ingested drop "${label}" (${markdown.length} chars)${understanding ? ' + understanding' : ''}`);
+            // ENCOUNTER LOG — a document Lucas hands her is the highest-authority material in the
+            // system and was landing entirely outside the graded substrate. §3: a document is both an
+            // OBJECT and a SOURCE, so the document itself is recorded as encountered; the claims inside
+            // it are the decompose lane's job, above.
+            //
+            // authority='operator' because the provenance is KNOWN even though there is no URL to walk
+            // to. A null origin here is correct and must not read as a weak source. A re-drop of the
+            // same file is a second ENCOUNTER of one document, which is why it cites the deduped id.
+            try {
+              const _docId = landed && landed.id;
+              if (_docId) {
+                require('./lib/encounters').record({
+                  object_type: 'document', object_label: label, claim_class: 'existence',
+                  source_kind: 'canvas_drop', source_ref: `drop:${t.tabKey}`,
+                  content_hash: require('./lib/origin').contentHash(markdown),
+                  authority: 'operator', observed_at: null,
+                });
+              }
+            } catch (e) { console.error('[canvas-ingest] encounter log failed:', e.message); }
+            const _dupNote = landed && landed.duplicateOf ? ` (duplicate of doc ${landed.duplicateOf} — not re-landed)` : '';
+            console.log(`[canvas-ingest] ingested drop "${label}" (${markdown.length} chars)${understanding ? ' + understanding' : ''}${_dupNote}`);
           }
           seen.push(t.tabKey);
         }

@@ -49,7 +49,15 @@ const rankOf = (g) => RANK[g] || 0;
 
 // Source authority. An official record substitutes for roughly one ordinary source (§6.3) — the
 // truth-discovery literature is consistent that source reliability, not vote count, decides conflicts.
-const AUTHORITIES = ['verified', 'official', 'ordinary', 'unknown'];
+//
+// `operator` is Lucas handing her a document. It has no URL and never will, but its provenance is
+// KNOWN and better than most of the web — so it grades alongside an official record rather than falling
+// through to `unknown`. Origin being null is correct for these and must not be read as weakness: a
+// hand-delivered memo has no publisher to walk to, which is a different fact from having no source.
+const AUTHORITIES = ['verified', 'operator', 'official', 'ordinary', 'unknown'];
+
+// Sources whose authority substitutes for roughly one ordinary source (§6.3).
+const isAuthoritative = (r) => r && (r.authority === 'official' || r.authority === 'operator');
 
 // SINGLE-TRUTH vs MULTI-TRUTH — the distinction the truth-discovery literature insists on (§10): a
 // person has one birth date but may hold several roles. Only single-truth claims can CONFLICT; for the
@@ -134,7 +142,7 @@ function forObject(key, { claimClass = null, claimKey = null, limit = 2000 } = {
 function gradeValue(claimClass, rows) {
   const ind = og.independence(rows);
   const n = ind.count;
-  const official = rows.some((r) => r.authority === 'official');
+  const official = rows.some(isAuthoritative);
   const verified = rows.some((r) => r.authority === 'verified');
 
   switch (claimClass) {
@@ -204,7 +212,7 @@ function gradeClaim(key, { claimClass = 'biographical', claimKey = null } = {}) 
     const latest = rs.reduce((m, r) => Math.max(m, r.observed_at || 0), 0);
     return {
       value: value || null, grade: g.grade, sources: g.ind.count, encounters: rs.length,
-      unproven: g.ind.unproven, syndicated: g.ind.syndicated, official: rs.some((r) => r.authority === 'official'),
+      unproven: g.ind.unproven, syndicated: g.ind.syndicated, official: rs.some(isAuthoritative),
       latest, characterizations: g.characterizations,
     };
   });
@@ -276,4 +284,4 @@ function stats() {
   } catch { return { encounters: 0, objects: 0, withOrigin: 0, byClass: [] }; }
 }
 
-module.exports = { CLASSES, AUTHORITIES, SINGLE_TRUTH, RANK, rankOf, objectKey, record, recordMany, forObject, gradeValue, gradeClaim, profile, stats };
+module.exports = { CLASSES, AUTHORITIES, SINGLE_TRUTH, isAuthoritative, RANK, rankOf, objectKey, record, recordMany, forObject, gradeValue, gradeClaim, profile, stats };

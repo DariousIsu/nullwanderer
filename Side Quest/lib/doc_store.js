@@ -28,6 +28,17 @@ function land({ title = null, body = '', source = null, ref = null, understandin
       const existing = db.getDocumentByRef(ref);
       if (existing && str(existing.body) === str(body)) return { id: existing.id, landed: false };
     }
+    // CONTENT DEDUP — the ref check above only catches a repeat under the SAME ref, and the canvas lane
+    // mints a fresh random suffix per drop (`drop-…-mrtjf0zv` vs `drop-…-mrtjm37h`), so re-dropping one
+    // file always landed a new row. Measured on that lane: 183 documents, 126 distinct texts — 31%
+    // redundant, against 11.9% corpus-wide.
+    //
+    // This is not housekeeping. Duplicate rows INFLATE CORROBORATION: three drops of one memo would read
+    // as three sources attesting to whatever it claims, which is precisely what min(origins, texts) is
+    // built to prevent. Re-encountering a document is real and worth recording — but it is a second
+    // ENCOUNTER of one document, never a second document.
+    const dup = db.getDocumentByHash ? db.getDocumentByHash(body) : null;
+    if (dup) return { id: dup.id, landed: false, duplicateOf: dup.id };
     const r = db.insertDocument({ title, body, source, ref, understanding, origin, fetchUrl });
     return { id: r ? r.id : null, landed: !!r };
   } catch (e) { console.error('[doc_store] land failed:', e.message); return { id: null, landed: false }; }
