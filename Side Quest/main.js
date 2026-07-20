@@ -3989,6 +3989,20 @@ async function scribeHeartbeatTick() {
         decomposeLandedDoc({ id: mid, title: `Meeting — ${mtitle}`, body, source: 'meeting' }).catch((e) => console.error('[meeting] decompose failed:', e && e.message));
       }
     } catch (e) { console.error('[meeting] decompose wiring failed:', e && e.message); }
+    // ATTENDANCE → the encounter log (W4). Who was in the room is something Zoe OBSERVED — she captured
+    // the captions live and the name is Meet's own speaker badge. That is evidence, and it is a
+    // different kind of thing from what anyone SAID, which reaches the graph through the decompose above
+    // marked `stated`. Fail-soft: never delays or breaks finalize.
+    try {
+      const _code = db.getMeta('gmeet_code') || (db.getMeta('gmeet_url') || '').split('/').pop() || null;
+      if (_code) {
+        const _lines = db.getTranscriptForMeeting(_code);
+        const _me = require('./lib/meeting_encounters');
+        const _st = _me.attendanceStats(_lines);
+        const _res = require('./lib/encounters').recordMany(_me.attendanceEncounters(_lines));
+        console.log(`[meeting] attendance → ${_res.added} encounter(s) for ${_st.people} person(s); ${_st.unnamed} of ${_st.lines} line(s) had no speaker`);
+      }
+    } catch (e) { console.error('[meeting] attendance log failed:', e && e.message); }
     // FINAL VIEW = the full notes (recap header + the rich running minutes), matching the landed doc. Emitting
     // the recap ALONE dropped the detailed Topics/Decisions the operator watched accrue ("notes ate themselves").
     const finalBody = [recap, (minutes && minutes.trim()) ? `## Running minutes\n${minutes}` : ''].filter(Boolean).join('\n\n') || recap || minutes;
@@ -8814,8 +8828,11 @@ async function decomposeLandedDoc(doc) {
       try {
         const row = db.getDocument(doc.id) || {};
         const d = require('./lib/observed_at').extractObservedAt({ text: doc.body, title: doc.title, filename: String(row.ref || '').split(/[\\/]/).pop() });
-        return { id: doc.id, origin: row.origin || null, origin_host: row.origin_host || null, content_hash: row.content_hash || null, observed_at: d ? d.ts : null };
-      } catch { return { id: doc.id }; }
+        // `source` decides whether this is a document or somebody TALKING (W4). A meeting transcript
+        // decomposes down this same path, and without the lane carried through, hearsay would land
+        // graded like a .gov roster.
+        return { id: doc.id, source: doc.source || row.source || null, origin: row.origin || null, origin_host: row.origin_host || null, content_hash: row.content_hash || null, observed_at: d ? d.ts : null };
+      } catch { return { id: doc.id, source: doc.source || null }; }
     })();
     const _encLib = require('./lib/decomp_encounters');
     const _encounters = require('./lib/encounters');

@@ -2191,6 +2191,13 @@ function insertTranscriptLine({ meeting = null, speaker = null, text, ts = null 
   const info = getDb().prepare('INSERT INTO meeting_transcript (meeting, speaker, text, ts) VALUES (?,?,?,?)').run(meeting, speaker, String(text), t);
   return { id: info.lastInsertRowid, ts: t };
 }
+// Every line of one meeting — the attendance record (W4). Keyed on the meeting code rather than a time
+// window so a meeting can be replayed into the encounter log long after it ended.
+function getTranscriptForMeeting(meeting, limit = 20000) {
+  if (!meeting) return [];
+  return getDb().prepare('SELECT id, meeting, speaker, text, ts FROM meeting_transcript WHERE meeting = ? ORDER BY ts ASC, id ASC LIMIT ?').all(String(meeting), limit);
+}
+
 function getTranscriptSince(ts, limit = 2000) {
   return getDb().prepare('SELECT id, meeting, speaker, text, ts FROM meeting_transcript WHERE ts >= ? ORDER BY ts ASC, id ASC LIMIT ?').all(ts || 0, limit);
 }
@@ -2369,6 +2376,7 @@ module.exports = {
   getRecentCard,
   insertTranscriptLine,
   getTranscriptSince,
+  getTranscriptForMeeting,
   countTranscriptSince,
   DB_PATH
 };

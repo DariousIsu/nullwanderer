@@ -61,6 +61,11 @@ function claimClassFor(relation) {
   return null;   // unrecognised → refused, see header
 }
 
+// Document lanes whose content is somebody TALKING. A transcript is a faithful record of speech, which
+// makes it strong evidence about what was said and none about whether it is so.
+const SPEECH_SOURCES = new Set(['meeting', 'transcript', 'media', 'video', 'conversation']);
+const isSpeech = (source) => SPEECH_SOURCES.has(String(source || '').trim().toLowerCase());
+
 function objectTypeFor(t) {
   const k = String(t || '').trim().toLowerCase();
   return Object.prototype.hasOwnProperty.call(TYPE_MAP, k) ? TYPE_MAP[k] : null;
@@ -104,9 +109,16 @@ function toEncounter(obs, doc = {}) {
     content_hash: doc.content_hash || null,
     // An official publisher substitutes for roughly one ordinary source (§6.3) — but only where the
     // origin is actually known. Most of the legacy corpus has none, and guessing invents authority.
-    authority: doc.origin_host && /(^|\.)(gov|mil)$|\.us$/i.test(doc.origin_host) ? 'official' : 'unknown',
+    //
+    // SPEECH IS NON-VALIDATING (W4). A meeting record is excellent evidence that someone SAID a thing
+    // and no evidence at all that it is true. Without this, a meeting document decomposes down the same
+    // path as a .gov roster and its claims land graded B and promoted — hearsay wearing a document's
+    // authority. `stated` creates the object and carries zero evidentiary weight, exactly as Lucas
+    // specified for conversation; the same reasoning applies wherever the source is a person talking.
+    authority: isSpeech(doc.source) ? 'stated'
+      : (doc.origin_host && /(^|\.)(gov|mil)$|\.us$/i.test(doc.origin_host) ? 'official' : 'unknown'),
     observed_at: Number.isFinite(doc.observed_at) ? doc.observed_at : null,
   };
 }
 
-module.exports = { toEncounter, claimClassFor, objectTypeFor, STRUCTURAL, BIOGRAPHICAL, INTERPRETIVE, TYPE_MAP };
+module.exports = { toEncounter, claimClassFor, objectTypeFor, isSpeech, STRUCTURAL, BIOGRAPHICAL, INTERPRETIVE, SPEECH_SOURCES, TYPE_MAP };
