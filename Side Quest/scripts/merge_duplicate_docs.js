@@ -207,4 +207,57 @@ for (const f of [SQ, PULLER]) {
   console.log(left + leftP + leftE === 0 ? '  ✓ none — every citation now resolves to a canonical document' : '  ✗ SOME REMAIN — investigate before trusting this');
   v.close(); p.close();
 }
+
+// ── COLLAPSE (--collapse) ───────────────────────────────────────────────────────────────────────
+//
+// Once repointed, thousands of observations are the same claim, from the same document, recorded twice
+// — the duplicate votes the merge exists to remove. Collapsing them is a DELETE, which is why it is a
+// separate flag run only after the repoint has been inspected.
+//
+// KEEP THE BEST ROW, NOT THE FIRST. The rows are not fully identical: 2,558 groups differ in grade,
+// 2,595 in confidence and 2,720 in status. Deleting blindly by id would throw away a promoted, B-graded
+// observation in favour of a held, D-graded twin. Ranking is explicit: promoted beats held, B beats D,
+// higher confidence wins, oldest breaks the tie.
+if (process.argv.includes('--collapse')) {
+  const stamp2 = String(process.hrtime.bigint()).slice(0, 13);
+  for (const f of [SQ, PULLER]) {
+    const bak = f.replace(/\.db$/, `.precollapse-${stamp2}.db`);
+    fs.copyFileSync(f, bak);
+    console.log(`\nbacked up ${f} → ${bak}`);
+  }
+  {
+    const w = new Database(SQ);
+    const res = w.transaction(() => w.prepare(`
+      DELETE FROM kg_observations WHERE id IN (
+        SELECT id FROM (
+          SELECT id, ROW_NUMBER() OVER (
+            PARTITION BY feed, source_entity, COALESCE(relation,''), COALESCE(target,''), COALESCE(value,''), url
+            ORDER BY (status = 'promoted') DESC, (grade = 'B') DESC, COALESCE(confidence, -1) DESC, id ASC
+          ) rn FROM kg_observations WHERE url LIKE 'docstore:%'
+        ) WHERE rn > 1)`).run())();
+    console.log(`\nsq.db kg_observations collapsed: ${res.changes} duplicate vote(s) removed`);
+    w.close();
+  }
+  {
+    const w = new Database(PULLER);
+    const res = w.transaction(() => w.prepare(`
+      DELETE FROM observations WHERE id IN (
+        SELECT id FROM (
+          SELECT id, ROW_NUMBER() OVER (
+            PARTITION BY target_id, attr, COALESCE(value,''), COALESCE(kind,''), source_url
+            ORDER BY COALESCE(confidence, -1) DESC, id ASC
+          ) rn FROM observations WHERE source_url LIKE 'docstore:%'
+        ) WHERE rn > 1)`).run())();
+    console.log(`puller.db observations collapsed: ${res.changes} duplicate vote(s) removed`);
+    w.close();
+  }
+  const v2 = new Database(SQ, { readonly: true });
+  const dupLeft = v2.prepare(`SELECT COUNT(*) c FROM (SELECT 1 FROM kg_observations WHERE url LIKE 'docstore:%'
+    GROUP BY feed, source_entity, COALESCE(relation,''), COALESCE(target,''), COALESCE(value,''), url HAVING COUNT(*)>1)`).get().c;
+  const kept = v2.prepare("SELECT COUNT(*) c FROM kg_observations WHERE url LIKE 'docstore:%'").get().c;
+  const prom = v2.prepare("SELECT COUNT(*) c FROM kg_observations WHERE url LIKE 'docstore:%' AND status='promoted'").get().c;
+  console.log(`\nVERIFY — duplicate groups remaining: ${dupLeft}   observations kept: ${kept} (${prom} promoted)`);
+  console.log(dupLeft === 0 ? '  ✓ every claim from a document is now counted ONCE' : '  ✗ groups remain — investigate');
+  v2.close();
+}
 process.exit(0);
