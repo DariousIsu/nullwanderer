@@ -3455,17 +3455,22 @@ async function canvasSnapshot() {
   // a brief non-2xx). Timeout so a hung socket can't wedge the poll; return null on any not-ok/unreachable so
   // callers surface "Waiting for the engine…" and retry on the next poll. (2026-07-15: the recurring "canvas
   // fetch error" — endpoint verified healthy; the noise was throw-on-any-non-ok + no timeout + no backoff.)
-  // TWO STACKS, because one of them resets. Node's global fetch (undici) gets ECONNRESET on this GET from
-  // inside the app — reproducibly in-app, never reproducible from an external Node process at the same
-  // cadence with the same headers/abort shape, and the MCP client POSTs to the SAME origin through the SAME
-  // global fetch without trouble. Whatever pooled-socket state causes it lives in the app's undici pool, so
-  // on a SOCKET-level failure we re-issue once through Electron's own (Chromium) stack, which has an
-  // independent connection pool. Idempotent GET → a retry is always safe. The winning stack is recorded so
-  // the failure stays visible instead of being papered over.
-  const SOCKET_ERRS = new Set(['ECONNRESET', 'EPIPE', 'ECONNABORTED', 'UND_ERR_SOCKET']);
+  // TWO STACKS, and Chromium's goes FIRST. Node's global fetch (undici) fails this GET from inside the app
+  // in two shapes — ECONNRESET, and a hang that trips the abort — while the very same request from an
+  // external Node process, same headers, same cadence, same abort shape, succeeds every time, and the engine
+  // answers /canvas in ~2ms with ~30KB. So the fault is in the app's undici connection pool, not the route.
+  // Electron's net.fetch runs on Chromium's stack with an independent pool, so it leads and Node's fetch is
+  // the fallback. A GET is idempotent — trying both is always safe.
+  //
+  // ELAPSED is reported on failure because a timeout has two very different causes: the request really hung,
+  // or the MAIN THREAD was blocked past the deadline and the abort fired the moment it came back. If a "timed
+  // out after 8s" ever carries an elapsed far larger than 8s, this is main-thread stall — a canvas symptom of
+  // a bigger problem — not a network fault. Don't chase the socket in that case.
+  const TIMEOUT_MS = 8000;
   const get = async (fetchImpl) => {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 4000);
+    const timer = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, TIMEOUT_MS);
+    const t0 = Date.now();
     try {
       const res = await fetchImpl(`${echoHttp.base}/canvas`, { headers, signal: ctrl.signal });
       if (!res) return { err: `no response from ${echoHttp.base}/canvas` };
@@ -3473,26 +3478,22 @@ async function canvasSnapshot() {
       return { snap: await res.json() };
     } catch (e) {
       const code = (e.cause && e.cause.code) || e.code || '';
-      if (e.name === 'AbortError') return { err: 'timed out after 4s' };
-      return { err: `${e.name}: ${e.message}${code ? ` (${code})` : ''}`, code };
+      const ms = Date.now() - t0;
+      if (e.name === 'AbortError') return { err: `timed out after ${TIMEOUT_MS / 1000}s (elapsed ${ms}ms)`, code: 'TIMEOUT' };
+      return { err: `${e.name}: ${e.message}${code ? ` (${code})` : ''} after ${ms}ms`, code };
     } finally { clearTimeout(timer); }
   };
 
-  let r = await get(fetch);
-  if (r.snap) { _canvasSnapReason = null; return r.snap; }
-  if (SOCKET_ERRS.has(r.code)) {
-    let netFetch = null; try { netFetch = require('electron').net.fetch; } catch (e) {}
-    if (netFetch) {
-      const r2 = await get(netFetch);
-      if (r2.snap) {
-        if (_canvasSnapReason !== `node fetch ${r.code} → served via Electron net`) console.warn(`[canvas] node fetch ${r.code} on /canvas — served via Electron net instead`);
-        _canvasSnapReason = null;
-        return r2.snap;
-      }
-      return _canvasSnapFail(`${r.err}; Electron net also failed: ${r2.err}`);
-    }
+  let netFetch = null; try { netFetch = require('electron').net.fetch; } catch (e) {}
+  const first = netFetch ? await get(netFetch) : null;
+  if (first && first.snap) { _canvasSnapReason = null; return first.snap; }
+  const second = await get(fetch);
+  if (second.snap) {
+    if (first) console.warn(`[canvas] Electron net failed (${first.err}) — served via node fetch instead`);
+    _canvasSnapReason = null;
+    return second.snap;
   }
-  return _canvasSnapFail(r.err);
+  return _canvasSnapFail(first ? `${first.err} [electron net]; ${second.err} [node fetch]` : second.err);
 }
 
 ipcMain.handle('canvas:list-tabs', async (_e, opts = {}) => {
