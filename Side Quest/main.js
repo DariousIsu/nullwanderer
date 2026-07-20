@@ -6467,8 +6467,45 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   });
 
+  // ── THE CLOUD WRITES THE REPLY (V1) ───────────────────────────────────────────────────────────
+  // On a factual turn the cloud has ALREADY produced the complete grounded answer (the cognition
+  // ladder above), and the local 12b was then asked to re-type it in her voice. It is forbidden from
+  // adding anything, so it can only subtract — and it does: 130 of 716 replies (18%) over 14 days
+  // ended truncated. That truncation is architectural, not a context-window problem.
+  //
+  // So on the turns the cloud already owns, the cloud WRITES the reply. `messages` is the package the
+  // local side just assembled — persona, mood, memory blocks, the grounded answer — and it carries the
+  // same <think>/<say> contract, so nothing downstream changes: the tokens go through the same parser,
+  // the same leak filter, the same emit. The local model is simply out of the output path.
+  //
+  // Fail-safe, in order: no cloud tier / no model → null → local stream runs exactly as before. Cloud
+  // reached but emitted nothing → same. Cloud emitted text but no <say> → parser.finalize() salvages it
+  // as prose (its 'pre' branch), which is the pre-existing behaviour for an untagged reply.
+  // Kill-switch: ZOE_CLOUD_WRITES_REPLY=0.
+  let replyWriter = MODEL;            // who actually wrote what Lucas reads — stored on the turn so the
+                                      // truncation rate is measurable per writer against the 18% baseline
+  if (cloudOwnsAnswer && process.env.ZOE_CLOUD_WRITES_REPLY !== '0') {
+    try {
+      const r = await require('./lib/cloud_logic').streamCloud(messages, {
+        model: (() => { try { return db.getMeta('model.replier') || null; } catch { return null; } })(),
+        onToken: (chunk) => parser.feed(chunk),
+        inactivityMs: 180000,
+        think: false,       // same tag-contract reason as the local call below
+        num_predict: 900,
+        temperature: 0.7,   // her voice, not a classifier
+      });
+      if (r && r.text && r.text.trim()) {
+        replyWriter = r.model;
+        console.log(`[main] CLOUD wrote the reply — ${r.model}, ${r.tokens} tok in ${r.elapsedMs}ms${r.partial ? ' (PARTIAL — stream stalled)' : ''}`);
+      } else {
+        console.warn('[main] cloud reply unavailable — falling back to the local voice');
+      }
+    } catch (e) { console.error('[main] cloud reply failed:', e.message); }
+  }
+
   try {
-    await streamChat({
+    if (replyWriter !== MODEL) { /* the cloud already wrote it — skip the local generation entirely */ }
+    else await streamChat({
       model: MODEL,
       messages,
       onToken: (chunk) => parser.feed(chunk),
@@ -6562,7 +6599,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         onToken: (c) => retryParser.feed(c)
       });
       const r = retryParser.finalize();
-      if (r.say && r.say.trim()) { say = r.say; truncated = r.truncated; if (r.thought) thought = thought ? `${thought}\n${r.thought}` : r.thought; }
+      // The salvage runs on the LOCAL model, so if it supplied the final words, the local model is the
+      // writer of record — otherwise a cloud-written turn that needed rescuing would be filed under the
+      // cloud and quietly flatter its truncation rate.
+      if (r.say && r.say.trim()) { say = r.say; truncated = r.truncated; replyWriter = MODEL; if (r.thought) thought = thought ? `${thought}\n${r.thought}` : r.thought; }
       else console.log('[main] empty-say retry still produced no say');
     } catch (e) { console.error('[main] empty-say retry failed:', e.message); }
   }
@@ -6689,7 +6729,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       sessionId,
       speaker: 'ai_thought',
       content: thoughtStripped,
-      model: MODEL,
+      model: replyWriter,
       truncated
     });
   }
@@ -6750,7 +6790,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     sessionId,
     speaker: 'ai_said',
     content: finalSaid,
-    model: MODEL,
+    model: replyWriter,
     truncated
   });
   // Embed her reply too (async) so it's recallable later via episodic retrieval.

@@ -66,6 +66,38 @@ function fakeStream(tokens, { throwAfter = -1 } = {}) {
     }
   }
 
+  // ── `think` reaches streamChat — a reasoning model must obey the <think>/<say> contract ──────────
+  // Without this the cloud model silos its reasoning into message.thinking (which the stream reader
+  // drops) and answers in bare content with no tags, so the reply parser sees a truncated, tagless
+  // stream. The local reply call has set think:false for exactly this reason; the cloud writer needs it.
+  {
+    const stream = fakeStream(['x']);
+    await cloud.streamCloud([{ role: 'user', content: 'hi' }], {
+      model: 'm', think: false, deps: { streamChat: stream, cloudSource: SRC },
+    });
+    ok(stream.calls[0].think === false, 'think is forwarded to streamChat');
+    const s2 = fakeStream(['x']);
+    await cloud.streamCloud([{ role: 'user', content: 'hi' }], { model: 'm', deps: { streamChat: s2, cloudSource: SRC } });
+    ok(s2.calls[0].think === undefined, 'omitted by default — existing callers are unchanged');
+  }
+
+  // ── WIRING: the reply path actually hands cloud-owned turns to the cloud ─────────────────────────
+  // The enabler is useless if nothing calls it. These assert the V1 wiring in main.js survives, since
+  // the failure mode is silent: the local model just keeps writing and truncating, and every metric
+  // still reports success.
+  {
+    const fs = require('fs');
+    const src = fs.readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
+    ok(/cloudOwnsAnswer && process\.env\.ZOE_CLOUD_WRITES_REPLY !== '0'/.test(src),
+      'cloud-owned turns route to the cloud writer, behind a kill-switch');
+    ok(/streamCloud\(messages,/.test(src), 'the cloud is handed the SAME package the local side assembled');
+    ok(/onToken: \(chunk\) => parser\.feed\(chunk\)/.test(src), 'cloud tokens go through the same parser/leak-filter/emit');
+    ok(/replyWriter !== MODEL[^\n]*\r?\n\s*else await streamChat/.test(src), 'the local generation is SKIPPED when the cloud wrote it');
+    ok((src.match(/model: replyWriter,/g) || []).length === 2,
+      'both turn rows record WHO wrote the reply — the only way truncation is measurable per writer');
+    ok(!/model: MODEL,\r?\n\s*truncated/.test(src), 'REGRESSION: no reply row is still hardcoded to the local model');
+  }
+
   // ── SAFETY: a stalled stream keeps the partial answer ────────────────────────────────────────
   {
     const stream = fakeStream(['The answer ', 'is forty', 'CUT'], { throwAfter: 2 });

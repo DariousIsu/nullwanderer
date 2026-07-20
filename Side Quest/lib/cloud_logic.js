@@ -81,8 +81,12 @@ async function _complete(messages, { temperature = 0.2, num_predict = 400, model
 // right for structured classification and wrong for a user-facing answer (a cached reply would
 // re-serve stale words, and there is no JSON to validate). Returns { text, model } or null so callers
 // keep the same fail-safe shape as _complete — cloud down → null → caller's local path.
+// `think` is forwarded to streamChat for the same reason the local reply call sets think:false — a
+// native reasoning model otherwise silos its reasoning into message.thinking (which the stream reader
+// drops) and answers in bare content with NO <think>/<say> tags. The reply path is bound to that tag
+// contract, so whoever writes the reply must obey it, cloud or local.
 async function streamCloud(messages, { temperature = 0.6, num_predict = 900, model: modelOverride = null,
-  onToken = null, signal = null, inactivityMs = 90000, deps = {} } = {}) {
+  onToken = null, signal = null, inactivityMs = 90000, think = undefined, deps = {} } = {}) {
   let models, ollama;
   try { models = require('./models'); ollama = require('./ollama'); } catch { return null; }
   const stream = deps.streamChat || ollama.streamChat;
@@ -100,7 +104,7 @@ async function streamCloud(messages, { temperature = 0.6, num_predict = 900, mod
       model, messages, base: cloud.base,
       headers: cloud.token ? { Authorization: `Bearer ${cloud.token}` } : {},
       options: { temperature, top_p: 0.9, num_ctx: 8192, num_predict },
-      signal, inactivityMs,
+      signal, inactivityMs, think,
       onToken: (t) => {
         text += t; tokens += 1;
         if (onToken) { try { onToken(t, { tokens, elapsedMs: Date.now() - startedAt }); } catch { /* a UI hiccup must not kill the stream */ } }
