@@ -39,6 +39,43 @@ function mock(table) {
   ok('login redirect → blocked', isBlocked({ status: 200, body: body(200), finalUrl: 'https://x.com/account/login' }).reason === 'login-redirect');
   ok('no status but body → not blocked (assume ok)', isBlocked({ body: body(200) }).blocked === false);
 
+  // BOT/WAF INTERSTITIALS — these return HTTP 200 with a long body, so status and length both pass.
+  // Letting one through is the worst failure in this pipeline: the judge reads a real page, finds the
+  // claim absent, and issues a confident "not supported" against the author. Both strings below are
+  // verbatim from cert CFC-2026-07-20-01, where they were printed AS the cited source passage.
+  ok('cloudflare-style interstitial → blocked bot-block',
+    isBlocked({ status: 200, body: 'This website is using a security service to protect itself from online attacks. ' + body(120) }).reason === 'bot-block');
+  ok('WAF "actions that could trigger this block" page → blocked',
+    isBlocked({ status: 200, body: 'You have been blocked. There are several actions that could trigger this block including submitting a certain word or phrase, a SQL command or malformed data. ' + body(60) }).reason === 'bot-block');
+  ok('"Attention Required! | Cloudflare" → blocked',
+    isBlocked({ status: 200, body: 'Attention Required! | Cloudflare ' + body(120) }).reason === 'bot-block');
+  ok('"Checking your browser before accessing" → blocked',
+    isBlocked({ status: 200, body: 'Checking your browser before accessing example.com ' + body(120) }).reason === 'bot-block');
+  ok('"Verify you are human" → blocked',
+    isBlocked({ status: 200, body: 'Verify you are human by completing the action below. ' + body(120) }).reason === 'bot-block');
+  // Must NOT fire on real prose that merely discusses security services or blocking.
+  ok('article ABOUT security services is not a block page',
+    isBlocked({ status: 200, body: 'The committee reviewed whether a security service should be procured, and voted to block the amendment. ' + body(120) }).blocked === false);
+
+  // ---- search-query selection -----------------------------------------------------------------
+  // A two-word proper noun as the WHOLE query is how "Camaro Dragon" (a Chinese APT group) resolved
+  // to Wikipedia's Chevrolet Camaro on cert CFC-2026-07-20-01.
+  ok('short name-quote → falls back to the surrounding sentence',
+    VR.searchQueryFor({ quote: 'Camaro Dragon', text: 'A group dubbed "Camaro Dragon" deployed a custom firmware implant.' })
+      === 'A group dubbed "Camaro Dragon" deployed a custom firmware implant.');
+  ok('one-word name-quote → sentence',
+    VR.searchQueryFor({ quote: 'Brickstorm', text: 'Researchers named the implant "Brickstorm" in a 2026 report.' })
+      === 'Researchers named the implant "Brickstorm" in a 2026 report.');
+  ok('substantial quote is STILL the query (4+ words)',
+    VR.searchQueryFor({ quote: 'committee rejected the amendment', text: 'the committee rejected the amendment' })
+      === 'committee rejected the amendment');
+  ok('long quote under 4 words still qualifies on length',
+    VR.searchQueryFor({ quote: 'antidisestablishmentarianism reconsidered', text: 'ignored' })
+      === 'antidisestablishmentarianism reconsidered');
+  ok('no quote → text', VR.searchQueryFor({ text: 'just a claim sentence' }) === 'just a claim sentence');
+  ok('query capped at 300 chars', VR.searchQueryFor({ text: 'y'.repeat(500) }).length === 300);
+  ok('empty unit → empty query, no throw', VR.searchQueryFor({}) === '' && VR.searchQueryFor(null) === '');
+
   // readFetch tolerates JSON shape + plain-text shape
   ok('readFetch parses JSON {status,body}', readFetch({ text: JSON.stringify({ status: 200, body: 'hello world' }) }).body === 'hello world');
   ok('readFetch falls back to raw text', readFetch('just text here').body === 'just text here');

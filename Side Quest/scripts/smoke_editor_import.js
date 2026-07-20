@@ -126,6 +126,26 @@ try {
   ok('a real heading still wins over a bold paragraph',
     EI.importText('# Real Heading\n\n**Not the title**', { format: 'md' }).title === 'Real Heading');
 
+  // ---- title trimming: a cover page has no blank line between title, byline and date -----------
+  // The PDF cover arrived as one block and was hard-sliced at 80 chars, so a certification seal was
+  // printed with "…Spying on Your Family By R. Russell Walk" (cert CFC-2026-07-20-01).
+  ok('byline is cut from a cover-page title',
+    EI.trimTitle('Your Chinese-made Children’s Monitor Is Spying on Your Family By R. Russell Walker June 2026', 120)
+      === 'Your Chinese-made Children’s Monitor Is Spying on Your Family');
+  ok('byline without an initial is cut too',
+    EI.trimTitle('The Climate Lawyers Who Handed Beijing a Blueprint By Russ Walker', 120)
+      === 'The Climate Lawyers Who Handed Beijing a Blueprint');
+  // "By" is a normal English word — a title containing it must survive intact.
+  ok('"By The Numbers" title is NOT beheaded', EI.trimTitle('Standby Power By The Numbers', 120) === 'Standby Power By The Numbers');
+  ok('"By Region" title is NOT beheaded', EI.trimTitle('Revenue By Region And Category', 120) === 'Revenue By Region And Category');
+  ok('title stops at the first sentence end', EI.trimTitle('Short Title. Then a second sentence follows.', 120) === 'Short Title.');
+  ok('colon titles survive', EI.trimTitle("Voters Have Spoken: Don't Let States Off the Hook for SNAP Fraud", 120)
+    === "Voters Have Spoken: Don't Let States Off the Hook for SNAP Fraud");
+  ok('over-long title cuts on a WORD boundary, never mid-word',
+    EI.trimTitle('Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India', 30) === 'Alpha Bravo Charlie Delta…');
+  ok('unbroken over-long string still capped', EI.trimTitle('x'.repeat(200), 120) === 'x'.repeat(120) + '…');
+  ok('trimTitle tolerates junk', EI.trimTitle('', 80) === '' && EI.trimTitle(null, 80) === '');
+
   // ---- block model → export HTML ------------------------------------------------------------
   const wc = EI.importText([
     '# Report Title',

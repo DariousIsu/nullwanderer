@@ -46,6 +46,13 @@
 
   const MIN_BODY = 40;                       // shorter than this ⇒ treat as empty (blocked)
   const PAYWALL = /(subscribe to (?:continue|read)|metered paywall|this article is for subscribers|subscribers only|create a free account to|sign in to (?:read|continue)|to continue reading)/i;
+  // BOT/WAF INTERSTITIALS. These return HTTP 200 with a full body, so the status and length checks
+  // both pass and the block page is handed to the judge AS THE SOURCE. That is the worst outcome in
+  // this pipeline: the judge reads a real page, finds the claim absent (of course), and issues a
+  // confident "not supported" — a fabricated indictment of the author's sourcing. Observed live on
+  // cert CFC-2026-07-20-01, which quoted "This website is using a security service to protect itself
+  // from online attacks" and "…a SQL command or malformed data" back as source passages.
+  const BOT_BLOCK = /(using a security service to protect itself|attention required!?\s*\|?\s*cloudflare|cloudflare ray id|please enable (?:cookies|javascript) (?:and reload|to continue)|checking your browser before accessing|verify(?:ing)? you are (?:a )?human|access denied[\s\S]{0,80}(?:reference|error) ?#?\d|you have been blocked|why have i been blocked|enable javascript and cookies to continue|request unsuccessful\.? incapsula|ddos protection by|are you a robot\?)/i;
   const LOGIN_PATH = /\/(login|log-in|signin|sign-in|auth|sso|account\/login)(\b|\/|\?|$)/i;
 
   // ---- tolerant result readers (accept raw MCP result, {text}, parsed object, or string) -------
@@ -89,8 +96,26 @@
     const body = (fr.body || '').trim();
     if (body.length < MIN_BODY) return { blocked: true, reason: 'empty-body' };
     if (PAYWALL.test(body)) return { blocked: true, reason: 'paywall' };
+    if (BOT_BLOCK.test(body)) return { blocked: true, reason: 'bot-block' };
     if (fr.finalUrl && LOGIN_PATH.test(fr.finalUrl)) return { blocked: true, reason: 'login-redirect' };
     return { blocked: false, reason: null };
+  }
+
+  // A SUBSTANTIAL quotation is the best possible search key — a distinctive verbatim string usually
+  // lands the exact source. A SHORT one is the worst: it drops all context and searches a bare name.
+  // Live example from cert CFC-2026-07-20-01 — the quote "Camaro Dragon" (a Chinese APT group) became
+  // the entire query and returned Wikipedia's CHEVROLET CAMARO, which the judge then dutifully ruled
+  // did not support the claim. Below the bar, search the surrounding sentence instead, which carries
+  // the subject matter ("…dubbed 'Camaro Dragon' deployed a custom firmware implant…").
+  // Same bar verify_extract uses for "is this a real quotation": 4+ words OR 30+ chars. A 4-word
+  // verbatim string is a fine search key; a two-word proper noun is not.
+  const MIN_QUERY_WORDS = 4, MIN_QUERY_CHARS = 30;
+  function searchQueryFor(unit) {
+    const u = unit || {};
+    const quote = String(u.quote || '').trim();
+    const text = String(u.text || '').trim();
+    const substantial = quote && (quote.split(/\s+/).length >= MIN_QUERY_WORDS || quote.length >= MIN_QUERY_CHARS);
+    return (substantial ? quote : (text || quote)).slice(0, 300);
   }
 
   // ---- source-kind routing (deterministic, drives which search tool the ladder uses) -----------
@@ -223,7 +248,7 @@
     // provider key the operator may not have set, so this keeps no-URL claims resolvable.
     const kind = sourceKind(unit);
     const stool = tools[searchToolKey(kind)];
-    const query = (unit && (unit.quote || unit.text) || '').slice(0, 300);
+    const query = searchQueryFor(unit);
     let results = [];
     try {
       const raw = typeof opts.search === 'function' ? await opts.search(query, { kind }) : await callTool(stool, { query, q: query });
@@ -261,7 +286,7 @@
   return {
     resolveUnit, resolveUnits,
     isBlocked, readFetch, readResult, readSearchResults, readArchiveUrl, readOaUrl,
-    sourceKind, searchToolKey, hostOf,
-    DEFAULT_TOOLS, MIN_BODY, PAYWALL, LOGIN_PATH,
+    sourceKind, searchToolKey, hostOf, searchQueryFor,
+    DEFAULT_TOOLS, MIN_BODY, PAYWALL, LOGIN_PATH, BOT_BLOCK,
   };
 });

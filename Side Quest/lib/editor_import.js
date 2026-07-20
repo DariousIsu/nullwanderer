@@ -97,12 +97,33 @@ function stripEmphasis(text) {
   return t;
 }
 
+// Trim a title-ish line down to the TITLE. A cover page has no blank line between the title, the
+// byline and the date, so a PDF's first block arrives as "…Spying on Your Family By R. Russell Walker
+// June 2026" — which then got hard-sliced at 80 chars to "…By R. Russell Walk" and printed on a
+// certification seal. Cut at the byline, then at a sentence end, then on a WORD boundary.
+function trimTitle(text, max) {
+  let t = String(text || '').trim();
+  // A BYLINE, not any "by": the next token must look like a person's name — an initial ("R.") or a
+  // capitalized word that is not a determiner. Otherwise a real title gets beheaded ("Standby Power
+  // By The Numbers" → "Standby Power"). The second name token is what separates "By Russ Walker"
+  // from "By Region".
+  const by = t.match(/\s+[Bb]y\s+(?:[A-Z]\.\s*[A-Z]|(?!The\b|A\b|An\b|These\b|Those\b|This\b|That\b|All\b|Any\b|Our\b|Their\b|Its\b|Design\b|Default\b|Contrast\b|Region\b|Category\b|Popular\b|Number)[A-Z][a-z]+\s+[A-Z])/);
+  if (by && by.index > 0) t = t.slice(0, by.index).trim();
+  const stop = t.match(/[.?!](?:\s|$)/);                            // a title rarely runs past a full stop
+  if (stop && stop.index > 0) t = t.slice(0, stop.index + 1).trim();
+  t = t.replace(/[\s—–-]+$/, '');
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > max * 0.5 ? cut.slice(0, sp) : cut).replace(/[\s,;:—–-]+$/, '') + '…';
+}
+
 // Guess a title: first heading, else first non-empty paragraph (capped), else 'Untitled'.
 function guessTitle(blocks) {
   const h = blocks.find(b => b.type === 'heading');
-  if (h && h.text) return stripEmphasis(h.text).slice(0, 200);
+  if (h && h.text) return trimTitle(stripEmphasis(h.text), 200);
   const p = blocks.find(b => b.text && b.text.trim());
-  return p ? stripEmphasis(p.text).slice(0, 80) : 'Untitled';
+  return p ? trimTitle(stripEmphasis(p.text), 120) : 'Untitled';
 }
 
 // Normalize a markdown/plaintext string into a working copy.
@@ -212,6 +233,6 @@ function workingCopyText(wc) {
 
 module.exports = {
   normalizeMarkdown, importText, importFile, parseBlocks, workingCopyText,
-  guessTitle, stripEmphasis, blocksToHtml, blockHash, anchorFor,
+  guessTitle, stripEmphasis, trimTitle, blocksToHtml, blockHash, anchorFor,
   TEXT_FORMATS, ECHO_FORMATS,
 };

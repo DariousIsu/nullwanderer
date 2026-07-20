@@ -134,6 +134,19 @@
   // First element or undefined — keeps optional fields absent (not null) when nothing detected.
   const first = (a) => (a && a.length ? a[0] : undefined);
 
+  // Is a quoted span a QUOTATION worth verifying verbatim, or just a name in quotes? Writers quote
+  // proper nouns constantly ("Camaro Dragon", "Brickstorm") and those are not assertions — but they
+  // were becoming kind:'quote' units, so the harness went looking for a source that "supports" a
+  // malware name. On cert CFC-2026-07-20-01 that produced three of seven findings, all meaningless.
+  // A real checkable quotation has sentence-like substance: several words, or a decent span.
+  // NOTE this gates UNIT KIND only — detectQuotes still reports every quoted span, because other
+  // stages (and the operator's citation list) legitimately want them all.
+  function isVerifiableQuote(q, { minWords = 4, minChars = 30 } = {}) {
+    const t = String(q || '').trim();
+    if (!t) return false;
+    return t.split(/\s+/).length >= minWords || t.length >= minChars;
+  }
+
   // ---- reference/endnote section -----------------------------------------------------------
   // A document's own endnote list is NOT a set of claims — it is the SOURCE TABLE for the claims
   // above it. Mining it produces junk units (a source title in quotation marks reads as a "quote"
@@ -294,7 +307,11 @@
         const markers = detectMarkers(text);
         const numbers = detectNumbers(text);
         const domains = urls.length ? [] : detectDomains(text);   // a full url already carries the host
-        const sig = { quote: first(quotes), url: first(urls), doi: first(dois), marker: first(markers), domain: first(domains), numbers };
+        const qOpts = { minWords: opts.minQuoteWords, minChars: opts.minQuoteChars };
+        const sig = {
+          quote: first(quotes.filter(q => isVerifiableQuote(q, qOpts))),   // a NAME in quotes is not a claim
+          url: first(urls), doi: first(dois), marker: first(markers), domain: first(domains), numbers,
+        };
         const kind = kindOf(sig, includeBareClaims);
         if (!kind) return;
 
@@ -342,7 +359,7 @@
   }
 
   return {
-    extractUnits, kindOf, splitCandidates, findReferenceSection, markerOrdinal, detectDomains,
+    extractUnits, kindOf, splitCandidates, findReferenceSection, markerOrdinal, detectDomains, isVerifiableQuote,
     splitSentences, detectQuotes, detectUrls, detectDois, detectMarkers, detectNumbers,
     KINDS, TEXT_BLOCKS,
   };

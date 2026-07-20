@@ -54,6 +54,26 @@ ok('abbreviation is NOT a domain', dd('Per e.g. the usual sources.').length === 
 ok('version string is NOT a domain', dd('Version 2.10 shipped.').length === 0);
 ok('decimal is NOT a domain', dd('Costs rose 4.2 percent.').length === 0);
 ok('domain makes the sentence a citation unit', kindOf({ domain: 'dhs.gov' }) === 'citation');
+
+// A NAME in quotes is not a quotation. Writers quote proper nouns constantly, and treating those as
+// claims sent the harness looking for a source that "supports" a malware name — three of the seven
+// findings on cert CFC-2026-07-20-01 were exactly that.
+ok('two-word proper noun is not a verifiable quote', !VE.isVerifiableQuote('Camaro Dragon'));
+ok('one-word name is not a verifiable quote', !VE.isVerifiableQuote('Brickstorm'));
+ok('4-word quotation qualifies', VE.isVerifiableQuote('the deal is final'));
+ok('long 2-word quote qualifies on length', VE.isVerifiableQuote('antidisestablishmentarianism reconsidered'));
+ok('empty/garbage is not a quote', !VE.isVerifiableQuote('') && !VE.isVerifiableQuote(null));
+{
+  const nameDoc = importText('Researchers named the implant "Brickstorm" after a 2026 report.', { format: 'md' });
+  const nu = extractUnits(nameDoc).units;
+  ok('name-in-quotes does NOT become a quote unit', !nu.some(u => u.kind === 'quote'), JSON.stringify(nu));
+  const realDoc = importText('The report said the policy was "a complete and total success" last year.', { format: 'md' });
+  ok('a real quotation still becomes a quote unit',
+    extractUnits(realDoc).units.some(u => u.kind === 'quote' && /complete and total/.test(u.quote)));
+  // detectQuotes itself is unchanged — the operator's citation list still sees every quoted span.
+  ok('detectQuotes still reports the short span (detector unchanged)',
+    detectQuotes('Researchers named it "Brickstorm" that year.', 4)[0] === 'Brickstorm');
+}
 {
   // The important guarantee: a bare host must NOT become a fetchable url. Promoting "ago.mo.gov" to
   // "https://ago.mo.gov" would point the resolver at a HOMEPAGE and let the judge rule on whatever is
