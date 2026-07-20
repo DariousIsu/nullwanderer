@@ -41,6 +41,7 @@ const smokes = [
   'smoke_cloud_logic.js',
   'smoke_cloud_stream.js',
   'smoke_cloud_window.js',
+  'smoke_package.js',
   'smoke_child_env.js',
   'smoke_interests.js',
   'smoke_meta.js',

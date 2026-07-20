@@ -6520,11 +6520,42 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // <echo-delegate> reliably, and a fixed ladder can only find what it was built to look for.
       // Appended ONLY to the cloud's copy — if the cloud is unavailable, `messages` is untouched and
       // the local model still gets no tool menu, exactly as before.
+      //
+      // THE PACKAGE (lib/package): the local model's real job is not to re-voice the answer, it is to
+      // hand the cloud a ROADMAP — what was asked, what exists and how to reach it, how deep to go,
+      // and how to check its own work. Fresh context every call means anything absent here does not
+      // exist for this turn.
       let cloudMessages = messages;
       try {
+        const pkg = require('./lib/package');
         const suit = echoSuit && echoSuit.connected ? echoSuit.suitContextBlock() : null;
-        if (suit) cloudMessages = messages.concat([{ role: 'system', content: suit }]);
-      } catch (e) { console.error('[main] suit block for cloud failed:', e.message); }
+        // MANIFEST — counts and KEYS, never rows. Tens of tokens where the data is thousands, and the
+        // only way the cloud can ask for something: it cannot request what it doesn't know exists.
+        // This is also the token-spend lever — work runs inside our own mapped DB instead of being
+        // pre-dumped into the prompt on the chance it turns out to be relevant.
+        let manifest = '';
+        try {
+          const inv = require('./lib/localdb').inventory()
+            .filter((t) => t.rows > 0)
+            .sort((a, b) => b.rows - a.rows).slice(0, 14)
+            .map((t) => ({ key: t.table, label: 'rows', count: t.rows, how: `<echo-do name="db_query">{"sql":"SELECT … FROM ${t.table} …"}</echo-do>` }));
+          manifest = pkg.buildManifest(inv);
+        } catch (e) { console.error('[main] manifest failed:', e.message); }
+        const plan = pkg.buildPlan({
+          intent: (() => { try { return require('./lib/metacognition').classifyClaimType(userMessage); } catch { return null; } })(),
+          depth: { maxHops: MAX_ECHO_HOPS },
+          mustCite: cloudOwnsAnswer,
+        });
+        // `messages` (persona + mood + memory + grounding, already assembled and tuned) rides in the
+        // UNTRIMMABLE identity slot, so today's content is delivered byte-for-byte and this can only
+        // ADD. Decomposing buildChatPrompt into real per-section budgets is the follow-on.
+        const built = pkg.build({
+          window: await require('./lib/cloud_window').resolve({ model: db.getMeta('model.replier') || null }),
+          sections: { identity: messages.map((m) => m.content).join('\n\n'), plan, manifest, tools: suit || '' },
+        });
+        cloudMessages = built.messages;
+        console.log(`[package] ${pkg.describe(built.report)}`);
+      } catch (e) { console.error('[main] package build failed — sending the plain prompt:', e.message); }
       const r = await require('./lib/cloud_logic').streamCloud(cloudMessages, {
         model: (() => { try { return db.getMeta('model.replier') || null; } catch { return null; } })(),
         onToken: (chunk) => parser.feed(chunk),

@@ -97,11 +97,11 @@ function fakeStream(tokens, { throwAfter = -1 } = {}) {
       'both turn rows record WHO wrote the reply — the only way truncation is measurable per writer');
     ok(!/model: MODEL,\r?\n\s*truncated/.test(src), 'REGRESSION: no reply row is still hardcoded to the local model');
 
-    // The cloud writer gets the tool surface the local model was denied. Appended to the CLOUD's
-    // copy only — a cloud outage must not hand the local 12b a tool menu it fumbles.
-    ok(/cloudMessages = messages\.concat\(\[\{ role: 'system', content: suit \}\]\)/.test(src),
-      'the Echo suit is appended for the cloud writer');
-    ok(/streamCloud\(cloudMessages,/.test(src), 'the cloud is called with the suit-bearing copy');
+    // The cloud writer gets the tool surface the local model was denied — now carried in the
+    // package's `tools` section (lib/package). Built for the CLOUD's copy only: a cloud outage must
+    // not hand the local 12b a tool menu it fumbles.
+    ok(/tools: suit \|\| ''/.test(src), 'the Echo suit rides the package tools section');
+    ok(/streamCloud\(cloudMessages,/.test(src), 'the cloud is called with the built package');
     ok(/echoSuitBlock: \(echoSuit && !cloudOwnsAnswer\)/.test(src),
       'REGRESSION: the LOCAL package still has no tool menu on cloud-owned turns');
 
