@@ -2560,7 +2560,14 @@ ipcMain.handle('editor:run-checks', async (_e, docId) => {
     // Deep verify is the ONLY verification path — there is no "quick" mode; the operator always wants
     // frontier quality. On whenever the cloud is reachable; without cloud it auto-degrades to the local
     // classify leaf (a can't-reach-cloud fallback, not an operator choice).
-    const deepModel = process.env.DEEP_VERIFY_MODEL || 'gpt-oss:120b-cloud';
+    // The deep judge is the model that actually decides every verdict, so it runs on the tier that
+    // MEASURED best, not the biggest one available. Benchmarked 2026-07-20 against a 16-case gold
+    // set (3 reps, scripts/bench_verify_judge.js): kimi-k2.7-code 94%, kimi-k2.5 90-92%,
+    // glm-5.1/minimax mid-80s, gpt-oss:120b 67%, deepseek-v4-pro 58% (biggest ≠ best — it over-fires
+    // "mismatch"). Only kimi-k2.7-code never missed a precision case; its residual errors are
+    // over-caution (V graded VC), which is the safe direction for a pre-publication audit.
+    // Resolution order mirrors the classify leaf: operator pref → env → benchmarked default.
+    const deepModel = modelsLib.getModelFor('editor-verify', null) || process.env.DEEP_VERIFY_MODEL || 'kimi-k2.7-code';
     const useDeep = useCloud;
     if (useDeep) console.log(`[editor] deep verify — ${deepModel}`);
     else console.warn('[editor] deep verify unavailable (no cloud) — degrading to local classify');
@@ -2605,8 +2612,19 @@ ipcMain.handle('editor:certify', async (_e, { docId, mapped } = {}) => {
       docId, mapped, checkRunId: latest ? latest.id : null,
       certsDir: path.join(__dirname, 'data', 'certs'),
     });
-    try { await shell.openPath(res.certDocRef); } catch (e) { console.error('[editor] open cert failed:', e.message); }
-    return { ok: true, certNumber: res.certNumber, grade: res.grade, gradeLabel: res.gradeLabel, scoreline: res.scoreline, certDocRef: res.certDocRef };
+    // A certification is a formal artifact, so the operator's copy is a PDF, not a raw .html file.
+    // Issuance stays pure HTML (no Electron in the lib, smokes unchanged); the PDF is rendered from
+    // that exact markup here and becomes the logged cert_doc_ref. The .html is kept as the source
+    // render. If PDF conversion fails the HTML still stands as a valid, already-logged certificate.
+    let certDocRef = res.certDocRef;
+    try {
+      const pdfPath = certDocRef.replace(/\.html$/i, '.pdf');
+      await htmlToPdfFile(res.html, pdfPath);
+      editorRegistry.setCertDocRef(res.certId, pdfPath);
+      certDocRef = pdfPath;
+    } catch (e) { console.error('[editor] cert PDF render failed, keeping HTML:', e.message); }
+    try { await shell.openPath(certDocRef); } catch (e) { console.error('[editor] open cert failed:', e.message); }
+    return { ok: true, certNumber: res.certNumber, grade: res.grade, gradeLabel: res.gradeLabel, scoreline: res.scoreline, certDocRef };
   } catch (e) {
     console.error('[editor] certify failed:', e.message);
     return { ok: false, error: e.message };
@@ -2702,6 +2720,46 @@ ipcMain.handle('editor:export-report', async (_e, { docId, mapped } = {}) => {
     return { ok: true, reportRef };
   } catch (e) {
     console.error('[editor] export-report failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+// Export the REVIEWED DOCUMENT itself (not the findings, not the certificate) to PDF or Word. The
+// studio could previously only emit artifacts ABOUT the document; this hands back the document.
+ipcMain.handle('editor:export-doc', async (_e, { docId, format = 'pdf' } = {}) => {
+  try {
+    const fs = require('fs');
+    const doc = editorRegistry.getDocument(docId);
+    if (!doc) return { ok: false, error: 'no such document' };
+    const wc = editorRegistry.getWorkingCopy(docId, doc.current_version);
+    if (!wc || !Array.isArray(wc.blocks)) return { ok: false, error: 'no working copy for this version' };
+
+    const title = wc.title || doc.title || 'document';
+    const exportsDir = path.join(__dirname, 'data', 'exports');
+    try { fs.mkdirSync(exportsDir, { recursive: true }); } catch (e) { /* may exist */ }
+    const safe = String(title).replace(/[^\w.-]+/g, '_').slice(0, 60) || 'document';
+    const d = new Date();
+    const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
+    const base = `${safe}-v${doc.current_version}-${stamp}`;
+
+    let outPath;
+    if (format === 'pdf') {
+      outPath = path.join(exportsDir, `${base}.pdf`);
+      await htmlToPdfFile(buildExportDocHtml(title, require('./lib/editor_import').blocksToHtml(wc.blocks)), outPath);
+    } else if (format === 'docx') {
+      const markdown = require('./lib/editor_import').workingCopyText(wc);
+      outPath = path.join(exportsDir, `${base}.docx`);
+      fs.writeFileSync(outPath, await require('./lib/md_to_docx').buildDocxBuffer({ title, markdown }));
+    } else if (format === 'md') {
+      outPath = path.join(exportsDir, `${base}.md`);
+      fs.writeFileSync(outPath, require('./lib/editor_import').workingCopyText(wc), 'utf8');
+    } else return { ok: false, error: `unsupported format: ${format}` };
+
+    try { await shell.openPath(outPath); } catch (e) { console.error('[editor] open export failed:', e.message); }
+    console.log(`[editor] exported "${title}" (${format}) → ${outPath}`);
+    return { ok: true, path: outPath };
+  } catch (e) {
+    console.error('[editor] export-doc failed:', e.message);
     return { ok: false, error: e.message };
   }
 });
@@ -4803,6 +4861,30 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       retrievedKnowledgeBlock = memoryLib.formatForPrompt(rk, userName);
     }
   } catch (err) { console.error('[main] knowledge retrieve failed:', err.message); }
+
+  // ELLIPTICAL FOLLOW-UP: "Full research brief please" names a FORMAT, not a subject — so semantic
+  // retrieval matches those format words against every stored brief and hands back the most salient
+  // one, which is how a request about China's World AI announcement was answered with a brief on White
+  // House election-integrity claims. The emptier the message, the more freely ambient context fills it
+  // in. Suppress retrieval (on a subject-less turn it can only mislead) and state the real referent,
+  // inherited from the last user turn that had one. See lib/referent.js.
+  try {
+    const ref = require('./lib/referent');
+    if (ref.isElliptical(userMessage)) {
+      const prior = ref.resolveReferent(db.getRecentTurns(30) || []);
+      const block = prior ? ref.buildBlock(prior.text, userName) : null;
+      if (block) {
+        retrievedKnowledgeBlock = block;   // REPLACES retrieval — the whole point is that it was wrong
+        rkRows = [];
+        console.log(`[referent] elliptical follow-up → resolved to: ${prior.text.slice(0, 70)}`);
+      } else {
+        // Nothing to inherit. Still drop retrieval rather than let it invent a subject; with no
+        // referent the honest move is to ask, and the prompt's own rails cover that.
+        retrievedKnowledgeBlock = null; rkRows = [];
+        console.log('[referent] elliptical follow-up with no resolvable referent → retrieval suppressed');
+      }
+    }
+  } catch (e) { console.error('[main] referent resolve failed:', e.message); }
 
   // POLL OWNS THE TURN: when the activity poll or an aggregate deliverable poll (count/list/facet/
   // status) will answer from the live Track, suppress the generic semantic retrieval — it pulls
