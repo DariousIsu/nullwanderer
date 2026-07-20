@@ -3461,6 +3461,28 @@ ipcMain.handle('calendar:delete-event', async (_e, { calendarId, eventId } = {})
 // (b85e9c7) silenced the per-tick log, which also silenced the cause: the canvas has been showing a bare
 // "canvas snapshot unavailable" with nothing anywhere saying whether it's a 401, a timeout, or an
 // unreachable socket. Record the reason, log it at most once a minute, and hand it to the renderer.
+// MAIN-THREAD LAG, sampled continuously at negligible cost (perf_hooks histogram). A canvas fetch failure
+// has two candidate causes that look identical from the outside — the request really failed, or the main
+// thread was BLOCKED past the deadline and the abort/socket died while nothing could service it. Attaching
+// the loop lag to the failure decides it on the spot instead of costing another reboot to find out. Both
+// observed symptoms (ECONNRESET, then a timeout against a route that answers in 2ms) are consistent with a
+// stall: while the loop is wedged the engine closes its idle keep-alive socket (uvicorn default 5s), and
+// the app then writes to a dead socket or misses its own deadline the instant it comes back.
+let _loopLag = null;
+try {
+  const { monitorEventLoopDelay } = require('perf_hooks');
+  _loopLag = monitorEventLoopDelay({ resolution: 20 });
+  _loopLag.enable();
+} catch (e) { _loopLag = null; }
+function _lagNote() {
+  if (!_loopLag) return '';
+  const maxMs = Math.round(_loopLag.max / 1e6);
+  const meanMs = Math.round(_loopLag.mean / 1e6);
+  _loopLag.reset();                                  // per-window, so the number describes THIS failure
+  if (!Number.isFinite(maxMs) || maxMs < 1000) return ` [main thread ok: lag max ${maxMs}ms]`;
+  return ` [MAIN THREAD STALLED: lag max ${maxMs}ms, mean ${meanMs}ms — the network is not the problem]`;
+}
+
 let _canvasSnapReason = null, _canvasSnapLoggedAt = 0;
 function _canvasSnapFail(reason) {
   _canvasSnapReason = reason;
@@ -3479,10 +3501,13 @@ async function canvasSnapshot() {
   // fetch error" — endpoint verified healthy; the noise was throw-on-any-non-ok + no timeout + no backoff.)
   // TWO STACKS, and Chromium's goes FIRST. Node's global fetch (undici) fails this GET from inside the app
   // in two shapes — ECONNRESET, and a hang that trips the abort — while the very same request from an
-  // external Node process, same headers, same cadence, same abort shape, succeeds every time, and the engine
-  // answers /canvas in ~2ms with ~30KB. So the fault is in the app's undici connection pool, not the route.
-  // Electron's net.fetch runs on Chromium's stack with an independent pool, so it leads and Node's fetch is
-  // the fallback. A GET is idempotent — trying both is always safe.
+  // external process succeeds every time and the engine answers /canvas in ~2ms with ~30KB. Ruled out by
+  // experiment: the route, the token, a proxy, payload size, the keep-alive boundary (polling at the app's
+  // exact fixed 5000ms cadence against uvicorn's 5s idle timeout is clean externally), and the runtime
+  // (Electron ships Node 24.16, the box runs 24.15). What is left is in-process state — a poisoned undici
+  // pool, a blocked main thread, or both, since a stall poisons the pool. Electron's net.fetch runs on
+  // Chromium's stack with an independent pool AND issues the request off the JS thread, so it leads; node
+  // fetch is the fallback. A GET is idempotent — trying both is always safe.
   //
   // ELAPSED is reported on failure because a timeout has two very different causes: the request really hung,
   // or the MAIN THREAD was blocked past the deadline and the abort fired the moment it came back. If a "timed
@@ -3515,7 +3540,7 @@ async function canvasSnapshot() {
     _canvasSnapReason = null;
     return second.snap;
   }
-  return _canvasSnapFail(first ? `${first.err} [electron net]; ${second.err} [node fetch]` : second.err);
+  return _canvasSnapFail((first ? `${first.err} [electron net]; ${second.err} [node fetch]` : second.err) + _lagNote());
 }
 
 ipcMain.handle('canvas:list-tabs', async (_e, opts = {}) => {
@@ -3594,6 +3619,10 @@ ipcMain.handle('canvas:reset-layout', async (_e, { tabKey } = {}) => {
 // (lib/doc_extract: .docx via mammoth, .pdf via pdfjs, .md/.txt direct) with a utf8 fallback for
 // other text types, then opens a DOC tab with the content and positions it at the drop point. These
 // dropped docs live in the engine's in-memory canvas (ephemeral) — ideal for quick test population.
+// Tabs this process has already opened on the engine — shared by the drop handler and the emit/upsert
+// writers below (a re-drop clears its entry so the refreshed document re-opens). Declared here, above its
+// first use, rather than beside the writers.
+const _canvasTabsOpened = new Set();
 const IMG_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml' };
 // A dropped file's path → a REAL file:// URL (lib/file_ingest.pathToSrc, the exact inverse of the srcToPath
 // the re-ingest poller uses). This used to be string concatenation, which silently produced a BROKEN url for
@@ -3651,8 +3680,29 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       data = { markdown, src: fileUrl(filePath) };   // full; rendered in progressive chunks below
     }
 
-    const tabKey = `drop-${path.basename(filePath).replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 40)}-${Date.now().toString(36)}`;
+    // Tab key is derived from the FILE, not the clock. It used to end in Date.now(), so dropping the same
+    // file twice made two separate documents — which is exactly what an operator does when a document didn't
+    // render the first time, so the failure mode produced its own clutter. Keyed on the path, a re-drop
+    // REFRESHES the document in place: close the old tab (dropping its blocks), forget the mirrored copy,
+    // and rebuild from the file as it is now.
+    const pathHash = require('crypto').createHash('sha1').update(path.resolve(filePath).toLowerCase()).digest('hex').slice(0, 8);
+    const tabKey = `drop-${path.basename(filePath).replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 40)}-${pathHash}`;
     const callTool = pollCallTool();
+    const docStore = require('./lib/canvas_docs');
+    let redrop = false;
+    try { redrop = docStore.all().some((d) => d.tabKey === tabKey); } catch (e) {}
+    if (redrop) {
+      try { await callTool('saga_canvas_close_tab', { tab_key: tabKey }); } catch (e) {}
+      try { docStore.forget(tabKey); } catch (e) {}
+      _canvasTabsOpened.delete(tabKey);
+      // Let the ingest poller read it again — the file may have CHANGED since the last drop, and the
+      // seen-set is keyed on the tab, which is now stable across drops.
+      try {
+        const seen = JSON.parse(db.getMeta('canvas.ingested_tabs') || '[]').filter((k) => k !== tabKey);
+        db.setMeta('canvas.ingested_tabs', JSON.stringify(seen));
+      } catch (e) {}
+      console.log(`[canvas] re-drop of "${title}" — refreshing the existing document in place`);
+    }
     await callTool('saga_canvas_open_tab', { mode, tab_key: tabKey, title });
     const PREVIEW_CHUNK = 40000;   // a large text doc renders one chunk at a time from the top so it never hangs
     if (blockType === 'paragraph' && data && typeof data.markdown === 'string' && data.markdown.length > PREVIEW_CHUNK) {
@@ -3718,7 +3768,6 @@ function canvasMirror(tabKey, mode, title, blockId, blockType, data) {
   } catch (e) { console.error('[canvas] mirror failed:', e.message); }
 }
 
-const _canvasTabsOpened = new Set();
 async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
   try {
     if (!blockType) return false;
@@ -3838,6 +3887,16 @@ async function replayCanvasFromStore() {
       } catch (e) { console.error(`[canvas] replay of "${d.tabKey}" failed:`, e.message); }
     }
     try { store.prune(); } catch (e) {}
+    // Sweep layout rows for documents that no longer exist. The board is now fully restored, so the set of
+    // real documents is exactly (mirror ∪ whatever else the engine is holding) — anything else in the layout
+    // table is a ghost of a document lost to an old restart.
+    try {
+      const live = new Set(docs.map((d) => d.tabKey));
+      const snap = await canvasSnapshot();
+      for (const t of ((snap && Array.isArray(snap.tabs)) ? snap.tabs : [])) { const k = t.tab_key || t.key; if (k) live.add(k); }
+      const swept = canvasLayoutStore.clearMissing([...live]);
+      if (swept) console.log(`[canvas] swept ${swept} layout row(s) for documents that no longer exist`);
+    } catch (e) { console.error('[canvas] layout sweep failed:', e.message); }
     if (tabs) console.log(`[canvas] replayed ${tabs} document(s) / ${blocks} block(s) from the durable store`);
     return tabs;
   } catch (e) { console.error('[canvas] replay failed:', e.message); return 0; }

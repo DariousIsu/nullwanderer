@@ -34,6 +34,21 @@ ok('missing docKey throws', threw);
 ok('clear one', S.clear('doc-a') === 1 && !S.get('doc-a') && S.get('doc-b'));
 ok('clear all', S.clear() === 1 && Object.keys(S.getPositions()).length === 0);
 
+// --- clearMissing: sweep ghost rows for documents that no longer exist ---
+// Every document ever placed left a row here forever, including ephemeral ones the engine lost on each
+// restart, so the table accumulated hundreds of entries for tabs nothing can show again.
+S.setPosition('live-1', 10, 10);
+S.setPosition('live-2', 20, 20);
+S.setPosition('ghost-1', 30, 30);
+S.setPosition('ghost-2', 40, 40);
+ok('clearMissing sweeps only the ghosts', S.clearMissing(['live-1', 'live-2']) === 2);
+ok('clearMissing kept the live rows intact', S.get('live-1').x === 10 && S.get('live-2').x === 20 && !S.get('ghost-1') && !S.get('ghost-2'));
+ok('clearMissing is idempotent', S.clearMissing(['live-1', 'live-2']) === 0);
+// A caller that FAILED to enumerate documents must not be able to wipe the operator's arrangement.
+ok('empty live-set is refused (no wipe on a failed lookup)', S.clearMissing([]) === 0 && Object.keys(S.getPositions()).length === 2);
+ok('non-array is refused', S.clearMissing(null) === 0 && Object.keys(S.getPositions()).length === 2);
+S.clear();
+
 S.close();
-console.log(`\nsmoke_canvas_layout_db: ${pass} passed, ${fail} failed`);
+console.log(`\n${fail ? 'FAILURES' : 'ALL PASS'} — ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

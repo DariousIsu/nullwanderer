@@ -96,4 +96,20 @@ function clear(docKey) {
   return _db().prepare(`DELETE FROM doc_positions`).run().changes;
 }
 
-module.exports = { init, _db, close, get, getPositions, update, setPosition, clear, MIN_W, MIN_H };
+// Drop saved state for documents that no longer exist — GHOST rows. Every document ever placed left a row
+// here forever, including the ephemeral ones the engine lost on each restart, so this table accumulated
+// hundreds of entries for tabs nothing can ever show again (205 of them by 2026-07-20). `liveKeys` is the
+// set of documents that still exist; anything else is swept. Refuses to run on an EMPTY live set — that
+// means the caller couldn't enumerate documents, and deleting everything on a failed lookup would throw
+// away the operator's whole arrangement.
+function clearMissing(liveKeys) {
+  const keys = Array.isArray(liveKeys) ? liveKeys.map(String).filter(Boolean) : [];
+  if (!keys.length) return 0;
+  const live = new Set(keys);
+  const doomed = _db().prepare(`SELECT doc_key FROM doc_positions`).all().map(r => r.doc_key).filter(k => !live.has(k));
+  const del = _db().prepare(`DELETE FROM doc_positions WHERE doc_key = ?`);
+  for (const k of doomed) del.run(k);
+  return doomed.length;
+}
+
+module.exports = { init, _db, close, get, getPositions, update, setPosition, clear, clearMissing, MIN_W, MIN_H };
