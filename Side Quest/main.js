@@ -9203,6 +9203,31 @@ async function runDirectedResearchPass(focus) {
           console.log(`[gap] ${target.name}: ${uncovered.length} facet(s) not found → somevalue (${adv.reason})`);
         }
       } catch (e) { console.error('[gap] absence record failed:', e.message); }
+      // CARDINALITY CAPTURE (P5b). Coverage can say we WORKED this body; only its seat count can say
+      // whether the roster inside it is finished. We ask for that number once per body, as its own
+      // narrow cited question — never scraped out of `target.raw`, which is many passes of synthesis
+      // blended with page text and cannot tell us where a number came from. See lib/cardinality_capture.js.
+      // Dossier depth only (finite elected bodies); a concept beat has no seat count to hold it to.
+      // Once per body: an answer we already have is not re-litigated on every future visit.
+      if (refusal) {
+        try {
+          const cardinality = require('./lib/cardinality');
+          const cap = require('./lib/cardinality_capture');
+          if (!cardinality.get(target.name)) {
+            const { ans: cAns } = await runPass(cap.buildPrompt(target.name));
+            let vis = []; try { vis = JSON.parse(db.getMeta(`focus.${focus.id}.visited`) || '[]'); } catch {}
+            const got = cap.parseCapture(cAns, { visited: vis });
+            if (got.ok) {
+              const rec = cardinality.record(target.name, { seats: got.seats, sourceKind: got.sourceKind, sourceRef: got.sourceRef });
+              console.log(`[cardinality] ${target.name}: ${got.seats} seats (${got.sourceKind}) → ${rec.stored ? 'stored' : rec.reason}${rec.conflict ? ' [CONFLICT flagged]' : ''}`);
+            } else {
+              // Log the reason. A silent skip is indistinguishable from "this body has no seat count",
+              // which is exactly the ambiguity P5 exists to remove.
+              console.log(`[cardinality] ${target.name}: no count recorded — ${got.reason}`);
+            }
+          }
+        } catch (e) { console.error('[cardinality] capture failed:', e.message); }
+      }
       note = `completed ${target.name} (${target.passes} passes, ${adv.reason}) + organized → canvas`; sig = target.name.toLowerCase(); progressed = true;
       target = null; try { db.setMeta(targetKey, ''); } catch {}
     } else {

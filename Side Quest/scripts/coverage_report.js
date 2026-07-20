@@ -72,9 +72,17 @@ if (SHOW_WORK) {
 try {
   const absence = require('../lib/absence');
   const open = absence.openGaps({ limit: 400 });
-  console.log(`\n${'-'.repeat(74)}\nFACT GAPS — bodies we DID research where a facet never appeared (${open.length})`);
+  // openGaps returns gaps DUE for another attempt — ones inside their TTL are deliberately withheld
+  // so we don't re-research the same miss every tick. Report both, because printing only the due
+  // count reads as "no fact gaps exist" when the real state is "recorded, not yet due".
+  let total = 0;
+  try { total = require('../lib/db').getDb().prepare(`SELECT COUNT(*) c FROM absence WHERE kind='somevalue'`).get().c; } catch {}
+  console.log(`\n${'-'.repeat(74)}\nFACT GAPS — bodies we DID research where a facet never appeared`);
+  console.log(`  ${total} recorded, ${open.length} due for another attempt (${total - open.length} still inside their re-try TTL)`);
   if (!open.length) {
-    console.log(`  (none recorded yet — these accrue as targets complete with facets outstanding)`);
+    console.log(total
+      ? `  (nothing due right now — recorded gaps wait out their TTL before we spend another pass on them)`
+      : `  (none recorded yet — these accrue as targets complete with facets outstanding)`);
   } else {
     const byPred = new Map();
     for (const r of open) byPred.set(r.predicate, (byPred.get(r.predicate) || 0) + 1);
@@ -83,6 +91,30 @@ try {
   }
   console.log(`  ↳ all 'somevalue' — a value exists and we have not found it. NEVER 'novalue'.`);
 } catch (e) { console.log(`\n(fact gaps unavailable: ${e.message})`); }
+
+// ROSTER SIZE — the seat counts captured so far. This is what turns "probably incomplete" into a
+// countable gap, so it is worth seeing how MANY bodies actually yielded one: the capture refuses
+// anything it cannot trace to a page the run opened, and a low count here means the refusals are
+// firing, not that the wiring is dead.
+try {
+  const cardinality = require('../lib/cardinality');
+  const db = require('../lib/db').getDb();
+  const all = db.prepare(`SELECT * FROM cardinality ORDER BY observed_ts DESC`).all();
+  console.log(`\n${'-'.repeat(74)}\nROSTER SIZE — bodies with a CITED seat count (${all.length})`);
+  if (!all.length) {
+    console.log(`  (none yet — captured once per dossier body as it completes, and only from a URL`);
+    console.log(`   the run actually opened; an uncited number is refused rather than guessed)`);
+  } else {
+    for (const r of all.slice(0, 20))
+      console.log(`  ${String(r.seats).padStart(4)}  ${String(r.body).slice(0, 46).padEnd(46)} ${r.source_kind}`);
+    const conf = cardinality.conflicts({ limit: 20 });
+    if (conf.length) {
+      console.log(`\n  CONFLICTS (${conf.length}) — sources disagree; surfaced for a human, never auto-resolved:`);
+      for (const c of conf) console.log(`    ${c.body}: holding ${c.seats}, also seen ${c.conflict_seats}`);
+    }
+  }
+  console.log(`  ↳ seats + how many members we hold = a countable roster gap (cardinality.gapFor).`);
+} catch (e) { console.log(`\n(roster sizes unavailable: ${e.message})`); }
 
 console.log(`\n${'='.repeat(74)}`);
 console.log(`WHAT "COVERED" MEANS HERE — read this before quoting the number.`);
@@ -96,6 +128,7 @@ console.log(`  COVERAGE gaps — bodies never visited          → PENDING WORK,
 console.log(`  FACT gaps     — bodies visited, facet missing  → an OBSERVATION, in the absence model`);
 console.log(``);
 console.log(`Member-level completeness ("do we have all 236?") needs a per-body cardinality — the seat`);
-console.log(`count captured as a fact. That is P5 and it is NOT built; the beats ask for "chamber size"`);
-console.log(`as a facet, which is where it would come from.`);
+console.log(`count captured as a fact. That is the ROSTER SIZE section: captured once per dossier body,`);
+console.log(`only from a page the run actually opened. A body with no seat count makes NO completeness`);
+console.log(`claim at all — that is the honest answer, not a defect.`);
 process.exit(0);
