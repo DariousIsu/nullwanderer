@@ -53,7 +53,19 @@ async function extractDroppedFile(src, { deps = {} } = {}) {
     try {
       const r = await deps.extractToMarkdown(filePath);
       const md = String((r && r.markdown) || '').trim();
-      if (md.length >= MIN_TEXT) return { text: md, via: 'doc_extract:' + ext, filePath };
+      // A PDF can have a GOOD text layer and still hide pages: a designed document mixes typeset
+      // pages with image-only spreads. The whole-document thinness check below never fires for those,
+      // so without carrying emptyPages up they are dropped in silence and the operator reviews a
+      // document that is quietly missing pages. Surfaced, not auto-OCR'd — vision costs a call each.
+      if (md.length >= MIN_TEXT) {
+        const out = { text: md, via: 'doc_extract:' + ext, filePath };
+        if (r && Array.isArray(r.emptyPages) && r.emptyPages.length) {
+          out.emptyPages = r.emptyPages;
+          out.pages = r.pages;
+          deps.log && deps.log(`[file-ingest] ${ext} has ${r.emptyPages.length} page(s) with no text layer: ${r.emptyPages.join(', ')}`);
+        }
+        return out;
+      }
       deps.log && deps.log(`[file-ingest] text layer thin (${md.length}ch) for .${ext} — ${ext === 'pdf' ? 'rasterize→vision fallback' : IMAGE_EXT.has(ext) ? 'vision fallback' : 'no image fallback for this type'}`);
     } catch (e) { deps.log && deps.log('[file-ingest] doc_extract failed: ' + (e && e.message)); }
   }
@@ -91,4 +103,15 @@ async function extractDroppedFile(src, { deps = {} } = {}) {
   return { text: '', via: 'thin', filePath, ext };
 }
 
-module.exports = { extractDroppedFile, srcToPath, extOf, IMAGE_EXT, TEXT_DOC_EXT, MIN_TEXT, VISION_PROMPT };
+// A page with nothing on it makes a vision model ANSWER rather than stay silent — observed replies
+// on a decorative PDF spread were "No text found." and "empty". Treating that as transcribed content
+// is the dangerous case: spliced into a document under verification it becomes model-authored prose,
+// and the author gets findings about a sentence they never wrote. Too short to be a page of prose,
+// or shaped like a no-text reply, means blank.
+const NO_TEXT_REPLY_RE = /^(no( readable| visible)? text[\s\S]{0,40}|empty|none|n\/a|\(?blank\)?|there is no text[\s\S]{0,40})\.?$/i;
+function isBlankOcrReply(text, { minChars = MIN_TEXT } = {}) {
+  const t = String(text == null ? '' : text).trim();
+  return !t || t.length < minChars || NO_TEXT_REPLY_RE.test(t);
+}
+
+module.exports = { extractDroppedFile, srcToPath, extOf, isBlankOcrReply, IMAGE_EXT, TEXT_DOC_EXT, MIN_TEXT, VISION_PROMPT };

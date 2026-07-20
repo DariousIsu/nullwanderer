@@ -67,6 +67,43 @@ const baseDeps = (over) => Object.assign({ path, fileExists: () => true, log: ()
   ok(CI.fileSrcOf(imgBlock) === 'file:///C:/Users/x/invite.png', 'fileSrcOf: image block → the file:// path, NOT the data: URI');
   ok(CI.fileSrcOf([{ type: 'image', data: { src: 'data:image/png;base64,AAAA', alt: 'x' } }]) === '', 'fileSrcOf: a data:-URI-only image (no file path) → "" (nothing to re-read)');
 
+  // --- image-only pages in a GOOD-text-layer PDF are reported, not swallowed ------------------
+  // A designed document mixes typeset pages with image-only spreads. The whole-document thinness
+  // check never fires for it, so without this the hidden pages vanish and the operator reviews (and
+  // certifies) a document quietly missing content.
+  {
+    const r = await FI.extractDroppedFile('C:/x/designed.pdf', { deps: baseDeps({
+      extractToMarkdown: async () => ({ markdown: 'A real text layer with plenty of readable content in it.', pages: 16, emptyPages: [2, 15] }),
+    }) });
+    ok(r.via === 'doc_extract:pdf', 'designed pdf: still resolves via the text layer');
+    ok(Array.isArray(r.emptyPages) && r.emptyPages.join(',') === '2,15', 'designed pdf: image-only pages reported up');
+    ok(r.pages === 16, 'designed pdf: total page count carried up');
+  }
+  {
+    const r = await FI.extractDroppedFile('C:/x/clean.pdf', { deps: baseDeps({
+      extractToMarkdown: async () => ({ markdown: 'Every page of this one has a text layer, so nothing is hidden.', pages: 4, emptyPages: [] }),
+    }) });
+    ok(r.emptyPages === undefined, 'clean pdf: no notice when every page has text');
+  }
+
+  // --- OCR blank-reply guard ------------------------------------------------------------------
+  // The dangerous case is not a failed read, it is a CONFIDENT one: an empty page makes the model
+  // answer ("No text found."), and splicing that into a document under verification would hand the
+  // author findings about a sentence they never wrote. These two strings are the real replies the
+  // vision model returned for the decorative spreads of the Rainey op-ed.
+  ok(FI.isBlankOcrReply('No text found.'), 'blank guard: "No text found." is blank');
+  ok(FI.isBlankOcrReply('empty'), 'blank guard: "empty" is blank');
+  ok(FI.isBlankOcrReply('There is no text on this page.'), 'blank guard: full-sentence refusal is blank');
+  ok(FI.isBlankOcrReply('No visible text.'), 'blank guard: "No visible text." is blank');
+  ok(FI.isBlankOcrReply('(blank)') && FI.isBlankOcrReply('N/A') && FI.isBlankOcrReply('none'), 'blank guard: other null answers');
+  ok(FI.isBlankOcrReply(''), 'blank guard: empty string is blank');
+  ok(FI.isBlankOcrReply(null) && FI.isBlankOcrReply(undefined), 'blank guard: null/undefined tolerated');
+  ok(FI.isBlankOcrReply('a short caption'), 'blank guard: too short to be a page of prose');
+  ok(!FI.isBlankOcrReply('Right now, in nurseries and bedrooms across America, a camera is watching your child sleep.'),
+    'blank guard: real transcribed prose is NOT blank');
+  ok(!FI.isBlankOcrReply('No text message was sent, according to the committee report filed in March of that year.'),
+    'blank guard: prose merely STARTING with "No text" is not blank');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

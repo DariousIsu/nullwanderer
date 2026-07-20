@@ -2314,6 +2314,13 @@ async function importEditorDoc(filePath) {
     const md = (r && r.text) || '';
     if (md.length < 40) return { ok: false, error: `couldn't extract readable text from .${ext} (${r ? r.via : 'no result'})` };
     wc = editorImport.importFile(filePath, { markdown: md });
+    // Pages with no text layer are carried onto the working copy as a NOTICE rather than OCR'd on
+    // import: vision costs a call per page, and the operator should decide. The renderer surfaces it
+    // with a "read them" action (editor:ocr-pages). Persisted on the working copy so it survives a
+    // reopen — a silently short document is exactly the failure this is meant to prevent.
+    if (r && Array.isArray(r.emptyPages) && r.emptyPages.length) {
+      wc.notices = [{ type: 'image-only-pages', pages: r.emptyPages, totalPages: r.pages || null }];
+    }
     console.log(`[editor] imported "${wc.title}" from .${ext} via ${r.via} (${md.length}ch)`);
   }
   const doc = editorRegistry.registerDocument({
@@ -2720,6 +2727,77 @@ ipcMain.handle('editor:export-report', async (_e, { docId, mapped } = {}) => {
     return { ok: true, reportRef };
   } catch (e) {
     console.error('[editor] export-report failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+// TRANSCRIPTION ONLY — deliberately not lib/file_ingest's VISION_PROMPT, which also asks the model to
+// list every person/org/date it sees. That extra summary is useful for graph ingest and actively
+// harmful here: appended into a document under verification it becomes model-authored prose that the
+// verifier then treats as the author's own claims, and the author gets findings about sentences they
+// never wrote. Transcribe what is on the page, nothing else.
+const OCR_PAGE_PROMPT = 'This image is one page of a document. Transcribe ALL text visible on it, exactly and completely, preserving reading order and paragraph breaks. Do not summarize, do not add headings, do not list entities, and never write anything that is not literally printed on the page. If the page contains no text, reply with nothing.';
+
+// OCR the image-only pages flagged at import (the `image-only-pages` notice). Operator-invoked, not
+// automatic — each page is a vision call. Rasterizes ONLY those pages, transcribes them, and splices
+// the text in at its real position by re-normalizing page-ordered text, so a read page lands where
+// it belongs in the argument rather than appended to the end. Findings are anchored to the working
+// copy, so this re-anchors it: it is an import-time repair, refused once checks have run.
+ipcMain.handle('editor:ocr-pages', async (_e, { docId, pages = null } = {}) => {
+  try {
+    const doc = editorRegistry.getDocument(docId);
+    if (!doc) return { ok: false, error: 'no such document' };
+    const filePath = doc.echo_doc_path;
+    if (!filePath || !require('fs').existsSync(filePath)) return { ok: false, error: 'original file no longer on disk' };
+    if (require('path').extname(filePath).toLowerCase() !== '.pdf') return { ok: false, error: 'only PDFs have image-only pages' };
+
+    const wc = editorRegistry.getWorkingCopy(docId, doc.current_version);
+    if (!wc) return { ok: false, error: 'no working copy for this version' };
+    const notice = (wc.notices || []).find(n => n && n.type === 'image-only-pages');
+    const want = (Array.isArray(pages) && pages.length) ? pages : (notice ? notice.pages : []);
+    if (!want || !want.length) return { ok: false, error: 'no image-only pages recorded for this document' };
+
+    const de = require('./lib/doc_extract');
+    const vis = require('./lib/vision');
+    const base = await de.extractPdf(filePath);                 // page-ordered text we already have
+    const { pages: images = [], pageNumbers = [] } = await de.rasterizePdf(filePath, { only: want, scale: 2 });
+    if (!images.length) return { ok: false, error: 'could not render those pages' };
+
+    const pageTexts = Array.isArray(base.pageTexts) ? base.pageTexts.slice() : [];
+    const read = [], blank = [];
+    for (let i = 0; i < images.length; i++) {
+      const p = pageNumbers[i];
+      const v = await vis.describe({ imageBase64: images[i], prompt: OCR_PAGE_PROMPT });
+      const t = String((v && v.ok && v.text) || '').trim();
+      // A page with nothing on it makes the model ANSWER rather than stay silent — the real replies
+      // here were "No text found." and "empty". Splicing that in would insert model-authored prose
+      // into a document under verification and hand the author findings about a sentence they never
+      // wrote. Anything too short to be a page of prose, or shaped like a no-text reply, is blank.
+      if (require('./lib/file_ingest').isBlankOcrReply(t)) { blank.push(p); continue; }
+      pageTexts[p - 1] = t;                                     // splice AT the page's own position
+      read.push(p);
+    }
+
+    // Every requested page was checked, so nothing stays "unread" — otherwise the notice would sit
+    // there inviting the operator to re-run vision on pages that genuinely have nothing on them.
+    const remaining = want.filter(p => !read.includes(p) && !blank.includes(p));
+    if (!read.length) {
+      const cleared = { ...wc, notices: remaining.length ? [{ type: 'image-only-pages', pages: remaining, totalPages: base.pages }] : [] };
+      cleared.blankPages = [...new Set([...(wc.blankPages || []), ...blank])];
+      editorRegistry.saveWorkingCopy(docId, doc.current_version, cleared);
+      console.log(`[editor] OCR: page(s) ${blank.join(', ')} of "${wc.title}" contain no text (confirmed)`);
+      return { ok: true, read: [], blank, remaining, blocks: (wc.blocks || []).length, message: 'those pages contain no readable text' };
+    }
+
+    const merged = editorImport.importFile(filePath, { markdown: pageTexts.filter(Boolean).join('\n\n'), title: wc.title });
+    merged.notices = remaining.length ? [{ type: 'image-only-pages', pages: remaining, totalPages: base.pages }] : [];
+    merged.ocrPages = [...new Set([...(wc.ocrPages || []), ...read])];
+    merged.blankPages = [...new Set([...(wc.blankPages || []), ...blank])];
+    editorRegistry.saveWorkingCopy(docId, doc.current_version, merged);
+    console.log(`[editor] OCR'd page(s) ${read.join(', ')} of "${wc.title}" — blocks ${wc.blocks.length} → ${merged.blocks.length}${blank.length ? ` (page(s) ${blank.join(', ')} blank)` : ''}`);
+    return { ok: true, read, blank, remaining, blocks: merged.blocks.length };
+  } catch (e) {
+    console.error('[editor] ocr-pages failed:', e.message);
     return { ok: false, error: e.message };
   }
 });

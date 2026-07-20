@@ -39,6 +39,31 @@ ok('short scare-quote ignored at minLen 6', detectQuotes('a so-called "fix" appe
 ok('url detected + trailing period stripped', detectUrls('See https://gao.gov/report.pdf. Next.')[0] === 'https://gao.gov/report.pdf');
 ok('markdown-link url found', detectUrls('Per the [report](https://x.org/a) it rose.')[0] === 'https://x.org/a');
 ok('doi detected', detectDois('Published at 10.1126/science.abc1234 last year.')[0] === '10.1126/science.abc1234');
+
+// Bare cited domains — a designed document prints "…June 15, 2026. ago.mo.gov" with no scheme, so
+// without this the whole sentence carries no citation signal and is never even a unit.
+const dd = VE.detectDomains;
+ok('bare domain detected', dd('Missouri AG press release, June 15, 2026. ago.mo.gov')[0] === 'ago.mo.gov');
+ok('bare domain at sentence end (trailing period stripped)', dd('Read it at dhs.gov.')[0] === 'dhs.gov');
+ok('multiple bare domains', dd('texasattorneygeneral.gov and chinalawtranslate.com both cited').length === 2);
+ok('mixed case host normalized', dd('ClassAction.org reported it.')[0] === 'classaction.org');
+ok('host inside a full url NOT double-reported', dd('See https://ago.mo.gov/news/x for detail.').length === 0);
+ok('email address is NOT a citation', dd('Contact info@raineycenter.org for more.').length === 0);
+ok('filename is NOT a domain (tld allowlist)', dd('The file report.pdf was attached.').length === 0);
+ok('abbreviation is NOT a domain', dd('Per e.g. the usual sources.').length === 0);
+ok('version string is NOT a domain', dd('Version 2.10 shipped.').length === 0);
+ok('decimal is NOT a domain', dd('Costs rose 4.2 percent.').length === 0);
+ok('domain makes the sentence a citation unit', kindOf({ domain: 'dhs.gov' }) === 'citation');
+{
+  // The important guarantee: a bare host must NOT become a fetchable url. Promoting "ago.mo.gov" to
+  // "https://ago.mo.gov" would point the resolver at a HOMEPAGE and let the judge rule on whatever is
+  // there today — a confident verdict from the wrong page.
+  const dwc = importText('Missouri AG sued the manufacturer, June 15, 2026. ago.mo.gov', { format: 'md' });
+  const du = extractUnits(dwc).units[0];
+  ok('domain unit carries `domain`, never `url`', du && du.domain === 'ago.mo.gov' && du.url === undefined,
+    JSON.stringify(du));
+  ok('domain unit is kind citation', du && du.kind === 'citation');
+}
 ok('numeric ref marker [1]', detectMarkers('This is established [1].')[0] === '[1]');
 ok('author-year paren marker', detectMarkers('Growth slowed (Smith, 2020).')[0] === '(Smith, 2020)');
 ok('percentage stat', detectNumbers('Unemployment fell 4.2% in March.')[0].replace(/\s/g, '') === '4.2%');

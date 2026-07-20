@@ -12,6 +12,7 @@ let sortKey = 'accessed', sortDir = 'desc';
 let currentDoc = null;     // { id, current_version, ... } of the open doc in View B
 let FINDINGS = [];         // mapped findings for the open doc (from Run checks)
 let LAST_MAPPED = null;    // full {findings, suggestions, summary} from the last run → fed to Certify
+let CITATIONS = [];        // citations found in the open doc (pre-run) — declared here so openDoc/notice can reset it
 
 function relTime(ms){
   if(!ms) return '—';
@@ -125,12 +126,59 @@ async function openDoc(id){
   pubBtn.disabled = (doc.status !== 'certified');
   pubBtn.innerHTML = (doc.status === 'published') ? 'Published' : 'Publish';
   renderDocBody(wcR && wcR.workingCopy);
+  renderDocNotice(wcR && wcR.workingCopy);
   CITATIONS = [];
   loadCitations(id);                 // list the doc's citations in the rail (pre-run) so sources can be attached
   document.getElementById('view-index').hidden = true;
   document.getElementById('view-doc').hidden = false;
 }
 function showIndex(){ document.getElementById('view-doc').hidden = true; document.getElementById('view-index').hidden = false; }
+
+/* ---------- import notices ----------
+   A PDF can carry a good text layer and STILL hide pages (a designed document mixes typeset pages
+   with image-only spreads). Those pages read as empty and were previously dropped in silence, so the
+   operator would review — and certify — a document quietly missing content. Surface it, and offer to
+   read them with vision. Not automatic: each page is a model call, and it is the operator's call. */
+function renderDocNotice(wc){
+  const box = document.getElementById('doc-notice');
+  if(!box) return;
+  const n = ((wc && wc.notices) || []).find(x => x && x.type === 'image-only-pages');
+  if(!n || !(n.pages || []).length){ box.hidden = true; box.innerHTML = ''; return; }
+  const many = n.pages.length > 1;
+  box.className = 'doc-notice';
+  box.innerHTML = `<span class="nx"><b>${n.pages.length} page${many?'s':''} could not be read as text</b>
+      <span class="sub">Page${many?'s':''} ${n.pages.map(esc).join(', ')}${n.totalPages?` of ${esc(n.totalPages)}`:''} have no text layer — they are images.
+      Their content is <b>not</b> in this document and will not be checked.</span></span>
+    <button class="btn sm" id="ocr-btn">Read ${many?'them':'it'}</button>`;
+  box.hidden = false;
+  const btn = document.getElementById('ocr-btn');
+  btn.addEventListener('click', async () => {
+    if(!E || !currentDoc) return;
+    const orig = btn.innerHTML;
+    btn.disabled = true; btn.innerHTML = 'Reading…';
+    try {
+      const r = await E.ocrPages(currentDoc.id, n.pages);
+      if(r && r.ok){
+        const wcR = await E.getWorkingCopy(currentDoc.id, currentDoc.current_version);
+        const nwc = wcR && wcR.workingCopy;
+        renderDocBody(nwc);
+        renderDocNotice(nwc);                       // clears itself, or re-renders what still failed
+        CITATIONS = []; loadCitations(currentDoc.id);
+        // A checked-and-genuinely-blank page is a RESULT, not a failure — say so, or the operator is
+        // left wondering whether the read silently did nothing.
+        if(!(r.read || []).length && (r.blank || []).length && box.hidden){
+          box.className = 'doc-notice';
+          box.innerHTML = `<span class="nx"><b>Nothing to read on ${(r.blank.length>1?'those pages':'that page')}</b>
+            <span class="sub">Page${r.blank.length>1?'s':''} ${r.blank.join(', ')} checked — decorative or blank, no text to add.</span></span>`;
+          box.hidden = false;
+        }
+      } else {
+        btn.disabled = false; btn.innerHTML = orig;
+        alert('Could not read those pages: ' + (r && r.error || 'unknown error'));
+      }
+    } catch (err) { btn.disabled = false; btn.innerHTML = orig; alert('OCR errored: ' + err.message); }
+  });
+}
 
 /* ---------- findings (Run checks) ---------- */
 function resetFindings(){
@@ -169,7 +217,6 @@ document.getElementById('findings').addEventListener('click', e => {
 });
 
 /* ---------- citations (pre-run list + attach an in-hand source to a citation) ---------- */
-let CITATIONS = [];
 let attachPendingUid = null;
 
 async function loadCitations(docId){

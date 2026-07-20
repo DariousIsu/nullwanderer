@@ -13,8 +13,10 @@
  * first token-economy gate: we never escalate prose that has nothing to verify.
  *
  * Output contract (per spec stage-2 row): [{ uid, anchor, blockType, kind, text, quote?, url?,
- * doi?, marker?, numbers? }]. `kind` ∈ {quote, citation, numeric, claim} (precedence in that
- * order). `quote/url/doi/marker` are the PRIMARY (first) detection; `numbers` lists every stat.
+ * doi?, marker?, domain?, numbers? }]. `kind` ∈ {quote, citation, numeric, claim} (precedence in
+ * that order). `quote/url/doi/marker/domain` are the PRIMARY (first) detection; `numbers` lists
+ * every stat. `domain` is a BARE cited host ("ago.mo.gov") from a designed document that prints its
+ * sources without a scheme — a citation signal only, never promoted to a fetchable url (see below).
  *
  * Runs in Node (offline smoke) and the browser (harness): CommonJS + window fallback, like
  * studio/checks_contract.js.
@@ -70,6 +72,28 @@
     const rx = /\bhttps?:\/\/[^\s<>()\[\]"'“”]+/gi;
     let m;
     while ((m = rx.exec(text))) out.push(m[0].replace(/[.,;:]+$/, '')); // strip trailing sentence punctuation
+    return out;
+  }
+
+  // Bare cited domains. A DESIGNED document prints its sources as "…June 15, 2026. ago.mo.gov"
+  // rather than as a full http url, so detectUrls sees nothing and the sentence is not even a unit —
+  // a whole class of citation goes unverified. The TLD allowlist is what keeps this off filenames
+  // ("report.pdf"), abbreviations ("e.g.") and version strings; emails and anything already inside a
+  // url are excluded by the lookbehind.
+  const CITE_TLDS = new Set([
+    'gov', 'org', 'com', 'net', 'edu', 'mil', 'int', 'info', 'news', 'press', 'law',
+    'us', 'uk', 'ca', 'eu', 'io', 'co',
+  ]);
+  function detectDomains(text) {
+    const out = [];
+    const rx = /(?<![\w@:/.-])((?:[a-z0-9][a-z0-9-]*\.)+([a-z]{2,}))(?![\w-])/gi;
+    let m;
+    while ((m = rx.exec(text))) {
+      const host = m[1].toLowerCase().replace(/\.$/, '');
+      if (!CITE_TLDS.has(m[2].toLowerCase())) continue;
+      if (host.split('.').length < 2) continue;
+      out.push(host);
+    }
     return out;
   }
 
@@ -212,7 +236,7 @@
   // Resolve a unit's kind from its detected signals (fixed precedence). null ⇒ not a unit.
   function kindOf(sig, includeBareClaims) {
     if (sig.quote) return 'quote';
-    if (sig.url || sig.doi || sig.marker) return 'citation';
+    if (sig.url || sig.doi || sig.marker || sig.domain) return 'citation';
     if (sig.numbers && sig.numbers.length) return 'numeric';
     return includeBareClaims ? 'claim' : null;
   }
@@ -269,7 +293,8 @@
         const dois = detectDois(text);
         const markers = detectMarkers(text);
         const numbers = detectNumbers(text);
-        const sig = { quote: first(quotes), url: first(urls), doi: first(dois), marker: first(markers), numbers };
+        const domains = urls.length ? [] : detectDomains(text);   // a full url already carries the host
+        const sig = { quote: first(quotes), url: first(urls), doi: first(dois), marker: first(markers), domain: first(domains), numbers };
         const kind = kindOf(sig, includeBareClaims);
         if (!kind) return;
 
@@ -278,6 +303,12 @@
         if (sig.url) unit.url = sig.url;
         if (sig.doi) unit.doi = sig.doi;
         if (sig.marker) unit.marker = sig.marker;
+        // DELIBERATELY `domain`, not `url`: promoting "ago.mo.gov" to "https://ago.mo.gov" would send
+        // the resolver's rung 1 at a HOMEPAGE and then judge the claim against whatever is on it
+        // today — a confident verdict from the wrong page. As a domain it stays a citation SIGNAL, so
+        // the unit is verified via search on its own citation text (publisher + title + date), which
+        // is the strong query here, and the host is kept for scoping/display.
+        if (sig.domain) unit.domain = sig.domain;
         if (numbers.length) unit.numbers = numbers;
 
         // Dereference "[n]" against the endnote list so the resolver can fetch the source the
@@ -311,7 +342,7 @@
   }
 
   return {
-    extractUnits, kindOf, splitCandidates, findReferenceSection, markerOrdinal,
+    extractUnits, kindOf, splitCandidates, findReferenceSection, markerOrdinal, detectDomains,
     splitSentences, detectQuotes, detectUrls, detectDois, detectMarkers, detectNumbers,
     KINDS, TEXT_BLOCKS,
   };

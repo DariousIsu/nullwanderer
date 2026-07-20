@@ -90,6 +90,10 @@ html,body{height:100%;background:var(--bg);color:var(--tx-soft);font-family:-app
 .topbar-id .t{font-size:13px;color:var(--tx-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .topbar-id .s{font-size:11px;color:var(--tx-dim);}
 .topbar-actions{display:flex;align-items:center;gap:8px;}
+.doc-notice{display:flex;align-items:center;gap:12px;margin:0 0 18px;padding:10px 14px;border:1px solid var(--warn-line,#5a4a1e);border-radius:var(--r-sm);background:var(--warn-bg,rgba(180,140,40,0.09));color:var(--tx-soft);font-size:12px;line-height:1.5;}
+.doc-notice .nx{flex:1;}
+.doc-notice .nx b{color:var(--warn-fg,#d9b45e);font-weight:600;}
+.doc-notice .nx .sub{display:block;color:var(--tx-dim);font-size:11px;margin-top:2px;}
 .export-doc-wrap{position:relative;display:inline-flex;}
 .export-doc-menu{position:absolute;top:calc(100% + 5px);right:0;z-index:40;display:flex;flex-direction:column;min-width:132px;padding:4px;border:1px solid var(--line-strong);border-radius:var(--r-sm);background:var(--bg-raised,#16181c);box-shadow:0 6px 20px rgba(0,0,0,0.45);}
 .export-doc-menu[hidden]{display:none;}
@@ -223,7 +227,7 @@ body.drop-hover::after{content:"Drop to import — PDF, Word, Markdown, spreadsh
     </div>
   </header>
   <div class="docwrap">
-    <div class="docmain"><div class="measure doc" id="doc-body"></div></div>
+    <div class="docmain"><div class="measure doc"><div id="doc-notice" hidden></div><div id="doc-body"></div></div></div>
     <aside class="rail" id="rail">
       <div class="rail-head">
         <span class="lbl">Findings <span class="n" id="rail-count">0</span></span>

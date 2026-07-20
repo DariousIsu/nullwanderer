@@ -167,21 +167,22 @@ async function extractPdf(filePath) {
   }
 
   // Pass 2 — drop furniture, then emit paragraphs. Needs every page first, so it cannot fold into 1.
+  // Kept PER PAGE (not one flat list) so a caller that OCRs an image-only page can splice the result
+  // back at its real position instead of appending it out of order.
   const furniture = findPageFurniture(pageLines);
-  const parts = [];
-  pageLines.forEach((lines, i) => {
+  const pageTexts = pageLines.map((lines, i) => {
     const pageNo = String(i + 1);
-    for (const l of lines) {
-      const t = l.trim();
-      if (!t || t === pageNo || furniture.has(furnitureKey(t))) continue;  // page number / running header
-      parts.push(t);
-    }
+    return lines
+      .map(l => l.trim())
+      .filter(t => t && t !== pageNo && !furniture.has(furnitureKey(t)))   // page number / running header
+      .join('\n\n');
   });
 
   try { await doc.destroy(); } catch (e) { /* older builds expose no destroy */ }
   return {
-    markdown: parts.join('\n\n'),
+    markdown: pageTexts.filter(Boolean).join('\n\n'),
     pages: doc.numPages,
+    pageTexts,                                         // index i = page i+1, '' when image-only
     emptyPages,                                        // caller may offer OCR for these
     textPages: doc.numPages - emptyPages.length,
   };
@@ -191,25 +192,33 @@ async function extractPdf(filePath) {
 // scan / image-only doc). Renders through @napi-rs/canvas (already a dep) — the missing rasterize
 // step that lets file_ingest OCR a scanned PDF via lib/vision, exactly as it does an image drop.
 // Bounded by maxPages; scale=2 is ~150dpi, enough for the vision model to read small type.
-async function rasterizePdf(filePath, { maxPages = 10, scale = 2.0 } = {}) {
+// `only` (1-based page numbers) renders JUST those pages — a mixed document usually needs a handful
+// of image-only spreads read, not the whole file re-rendered and re-billed through vision.
+async function rasterizePdf(filePath, { maxPages = 10, scale = 2.0, only = null } = {}) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const { createCanvas } = require('@napi-rs/canvas');
   const data = new Uint8Array(fs.readFileSync(filePath));
   const doc = await pdfjs.getDocument({ data, useSystemFonts: true, isEvalSupported: false }).promise;
   const pages = [];
-  const n = Math.min(doc.numPages, Math.max(1, maxPages));
-  for (let p = 1; p <= n; p++) {
+  const wanted = Array.isArray(only) && only.length
+    ? [...new Set(only.map(Number).filter(n => n >= 1 && n <= doc.numPages))].sort((a, b) => a - b).slice(0, Math.max(1, maxPages))
+    : Array.from({ length: Math.min(doc.numPages, Math.max(1, maxPages)) }, (_, i) => i + 1);
+  const rendered = [];
+  for (const p of wanted) {
     const page = await doc.getPage(p);
     const viewport = page.getViewport({ scale });
     const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
     const ctx = canvas.getContext('2d');
     await page.render({ canvasContext: ctx, viewport }).promise;
     pages.push(canvas.toBuffer('image/png').toString('base64'));
+    rendered.push(p);
     try { page.cleanup(); } catch (e) {}
   }
   const total = doc.numPages;
   try { await doc.destroy(); } catch (e) {}
-  return { pages, total, rendered: pages.length };
+  // `pageNumbers[i]` is the source page of `pages[i]` — the caller needs it to splice OCR text back
+  // at the right position when only a subset was rendered.
+  return { pages, total, rendered: pages.length, pageNumbers: rendered };
 }
 
 const TEXT_EXT = new Set(['md', 'markdown', 'txt', 'text']);
