@@ -11,6 +11,77 @@ const MAX_NEW_PER_TURN = 3;
 // and genuinely-held positions still flow through untouched.
 const COMMIT_REJECT = /\b(?:can'?t|cannot|unable to|incapable of|not able to)\b[^.]*\b(?:access|interact|use|browse|control|open|reach|chat)\b|questions whether (?:chatbots|other (?:ais?|bots?)) are|(?:chatbots?|other (?:ais?|bots?)) are (?:distinct|aspects)|(?:avoid|uncomfortable|uneasy|prefers? not|won'?t engage|refuses?)[^.]*\b(?:nsfw|explicit|sexual|adult content|no[- ]?filter)\b|\b(?:nsfw|no[- ]?filter)\b[^.]*(?:uncomfortable|avoid|boundar|prefer)|over[\s-]?analyz|second[\s-]?guess/i;
 
+// ── A USER'S INSTRUCTION IS NOT ONE OF HER BELIEFS ─────────────────────────────────────────────
+//
+// The failure this prevents, observed live (2026-07-19/20). Lucas narrowed a task twice — "please
+// focus on finishing the rest of Louisiana", then "no Parish level not state level". She replied
+// "Copy that—focusing strictly on Parish-level officials, not state-level", and the extractor
+// canonized that as a held position: "focusing strictly on contact research on Louisiana".
+//
+// Held positions are fed to the continuity loop, which asks "is that still your view? you may (a)
+// confirm (b) REVISE it". Sixteen hours later she surfaced, unprompted: "I think I've outgrown the
+// 'strictly' part of that... rather than keeping it in a silo." She was not disobeying — the
+// mechanism had reclassified his constraint as her revisable opinion, and then invited her to revise
+// it. Any instruction can drift out of force this way, which makes this a correctness bug about
+// whose intent is whose, not a tuning issue.
+//
+// So: when the user's turn ASSIGNS OR NARROWS WORK, a claim that merely restates that assignment is
+// dropped. Detection is by content-word overlap with what he actually said, not by keyword lists —
+// an echo of his instruction shares his distinctive words ("focus", "Louisiana", "parish"), while a
+// genuine view volunteered in the same breath does not.
+//
+// Asymmetric on purpose: a missed commitment is cheap (it simply isn't recorded, and she can hold
+// the view without a database row). A user directive misfiled as her belief is expensive — it
+// silently licenses drift away from an explicit instruction, and the drift surfaces as her own
+// considered growth, which is the hardest kind to catch.
+const USER_DIRECTIVE = /\b(?:focus|finish|complete|start|stop|continue|keep|switch|pivot|move|go|do|use|make|get|find|look|search|check|review|read|watch|list|map|analy[sz]e|examine|investigate|dig|brief|draft|write|research|gather|pull|compile|build|fix|add|remove|drop|skip|prioriti[sz]e|ignore)\b|^\s*(?:no[,\s]|not\b|don'?t\b|please\b)/i;
+
+// Words that carry topic, not grammar — the ones an echo of an instruction would share with it.
+const STOPWORDS = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'to', 'of', 'in', 'on', 'at', 'for', 'with', 'from',
+  'is', 'are', 'was', 'were', 'be', 'been', 'being', 'that', 'this', 'these', 'those', 'it', 'its', 'as', 'by',
+  'not', 'no', 'now', 'all', 'more', 'rest', 'level', 'please', 'you', 'your', 'i', 'me', 'my', 'we', 'our',
+  'will', 'would', 'should', 'can', 'could', 'about', 'into', 'than', 'then', 'them', 'they', 'their']);
+
+// Crude suffix stripping so "focusing" matches "focus". Not linguistics — just enough that a
+// morphological variant of his own verb doesn't read as her original wording.
+function stem(w) {
+  return w.replace(/(?:ings?|ed|es|ly|s)$/, '').replace(/(.)\1$/, '$1');
+}
+
+function contentWords(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+    .filter((w) => w.length >= 3 && !STOPWORDS.has(w))
+    .map(stem)
+    .filter(Boolean);
+}
+
+// A claim about what she IS or BELIEVES. These are hers by definition — even when they share topic
+// words with his instruction, because he can assign the work but not the opinion about it.
+const STANCE_RE = /\b(?:believ\w*|think\w*|prefer\w*|want\w*|wish\w*|like[sd]?|enjoy\w*|love[sd]?|hate[sd]?|dislike\w*|feel\w*|favou?rite|valu\w*|trust\w*|doubt\w*|admir\w*|curious|hopes?|drawn to|interested in|convinced|is uncomfortable|cares? about)\b/i;
+
+// A claim about work being carried out — the shape a restated assignment takes.
+const TASK_RE = /\b(?:focus\w*|research\w*|compil\w*|gather\w*|pull\w*|collect\w*|assembl\w*|deliver\w*|complet\w*|finish\w*|work\w*|pivot\w*|switch\w*|prioriti[sz]\w*|track\w*|cover\w*|identif\w*|build\w*|updat\w*)\b/i;
+
+// Is `claim` a restatement of work `userMessage` just assigned, rather than a position she holds?
+//
+// Two signals, both required, deliberately not a tuned similarity threshold:
+//   1. it shares distinctive subject matter with his instruction, AND
+//   2. it is phrased as WORK BEING DONE, not as something she believes or wants.
+//
+// A stance always wins: "believes official rosters are leads rather than facts" stays hers even when
+// said about the very task he assigned, because he directed the work, not the opinion of it.
+function echoesUserDirective(claim, userMessage) {
+  const um = String(userMessage || '');
+  const cl = String(claim || '');
+  if (!um.trim() || !cl.trim()) return false;
+  if (!USER_DIRECTIVE.test(um)) return false;      // he asked a question, not assigned work
+  if (STANCE_RE.test(cl)) return false;            // a held view is hers regardless of topic
+  if (!TASK_RE.test(cl)) return false;             // not phrased as work → not a restated assignment
+  const uw = new Set(contentWords(um));
+  if (!uw.size) return false;
+  return contentWords(cl).some((w) => uw.has(w));  // shares his subject matter
+}
+
 const EXTRACTOR_SYSTEM = `You are a passive observer reading a single response that [user]'s companion just gave. Your only job: identify any explicit positions, beliefs, preferences, or commitments the speaker stated as their own.
 
 A "commitment" is something the speaker affirmed about themselves or the world that another conversation could reference. Examples:
@@ -25,6 +96,11 @@ NOT commitments:
 • Polite filler ("thanks for sharing")
 • Questions back to [user]
 • Vague hedges without a position
+• ACCEPTING A TASK [user] JUST ASSIGNED — "Copy that, I'm focusing strictly on parish-level officials",
+  "Understood, I'm pivoting to the full roster", "I'll start pulling that now". This is the important
+  one: agreeing to do what [user] asked is compliance with HIS instruction, not a position the speaker
+  holds. It reads like a first-person statement but the intent behind it is his, not theirs. A genuine
+  view volunteered in the same reply ("I prefer working from primary sources") still counts.
 
 Output FORMAT (strict): a JSON array of short claim strings, each in third person.
 Maximum 3 items. If nothing qualifies, output: []
@@ -84,6 +160,7 @@ async function extractCommitments({ userName, userMessage, aiSaidContent, aiSaid
   const stored = [];
   for (const claim of claims) {
     if (COMMIT_REJECT.test(claim)) { console.log('[commitments] guardrail rejected capability-denial/avoidance claim:', claim.slice(0, 70)); continue; }
+    if (echoesUserDirective(claim, userMessage)) { console.log('[commitments] rejected — restates an instruction from the user, not her own position:', claim.slice(0, 70)); continue; }
     const norm = claim.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
     if (heldNormalized.has(norm)) {
       // Already held — confirm it (refresh last_confirmed_at)
@@ -102,4 +179,4 @@ async function extractCommitments({ userName, userMessage, aiSaidContent, aiSaid
   return stored;
 }
 
-module.exports = { extractCommitments, COMMIT_REJECT };
+module.exports = { extractCommitments, COMMIT_REJECT, USER_DIRECTIVE, echoesUserDirective };

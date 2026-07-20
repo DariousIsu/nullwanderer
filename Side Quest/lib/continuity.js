@@ -55,6 +55,22 @@ async function tick() {
   }
 }
 
+// Is this held claim a piece of WORK or a POSITION? Stance wins ties: "believes the parish rosters are
+// worth finishing" is an opinion about a task, and reflection may legitimately move it. Only claims that
+// are purely about work being carried out are treated as tasks.
+//
+// Why it matters: the two need opposite questions. A belief SHOULD be revisable by reflection; a task
+// should not be — it is done, in progress, blocked, or overtaken, and its scope belongs to whoever set it.
+const STANCE_CLAIM = /\b(?:believ\w*|think\w*|prefer\w*|want\w*|wish\w*|like[sd]?|enjoy\w*|love[sd]?|hate[sd]?|dislike\w*|feel\w*|favou?rite|valu\w*|trust\w*|doubt\w*|admir\w*|curious|hopes?|drawn to|interested in|convinced|cares? about|is uncomfortable)\b/i;
+const TASK_CLAIM = /\b(?:is|will|has|aims? to|commits? to|plans? to|ready to|going to)\b[^.]*\b(?:research\w*|focus\w*|compil\w*|gather\w*|pull\w*|collect\w*|assembl\w*|deliver\w*|complet\w*|finish\w*|map\w*|synthesi[sz]\w*|analy[sz]\w*|examin\w*|identif\w*|provid\w*|put together|work\w*|updat\w*|track\w*|build\w*|writ\w*|draft\w*|includ\w*|mov\w*|pivot\w*|wrap\w*)\b/i;
+
+function commitmentKind(claim) {
+  const c = String(claim || '');
+  if (STANCE_CLAIM.test(c)) return 'stance';
+  if (TASK_CLAIM.test(c)) return 'task';
+  return 'stance';   // default to the gentler question when unsure
+}
+
 async function maybeFireContinuityCheck() {
   const now = Date.now();
   // AWAY: don't surface a commitment check-in into a chat Lucas isn't watching.
@@ -120,7 +136,30 @@ async function maybeFireContinuityCheck() {
     const userName = db.getMeta('user_name') || 'them';
     const systemContent = sub(BOOTSTRAP, userName);
 
-    const continuityPrompt = `[Continuity check — neither you nor ${userName || 'they'} is in the middle of a thread right now.
+    // TASK vs STANCE (2026-07-20). Asking "is that still your view? you may REVISE it" about a piece of
+    // WORK is a category error, and it did real damage: "is focusing strictly on contact research on
+    // Louisiana" — which was Lucas NARROWING HER SCOPE, not an opinion — came back through this loop and
+    // she announced "I think I've outgrown the 'strictly' part of that". A task is not revisable by
+    // reflection; it is done, in progress, blocked, or genuinely no longer worth doing, and only the
+    // person who asked for it can rescope it. Beliefs are the opposite: reflection is exactly how they
+    // should move. So ask the question that fits the thing.
+    const isTask = commitmentKind(commitment.claim) === 'task';
+    const continuityPrompt = isTask
+      ? `[Continuity check — neither you nor ${userName || 'they'} is in the middle of a thread right now.
+
+Some time ago you took this on: "${commitment.claim}".
+
+That is a piece of WORK, not an opinion — so the question is follow-through, not whether you still believe in it. Briefly examine:
+(a) It is done — say what came of it
+(b) It is still in progress — say honestly where it actually stands
+(c) It is stuck or blocked — say what on
+(d) It no longer needs doing because circumstances changed — say what changed
+
+Do NOT rescope, narrow, or broaden what you were asked to do. If ${userName || 'they'} set the scope, it is theirs to change, not yours — if you think it should change, SAY SO AND ASK rather than deciding.
+Do not claim progress you cannot point to.
+
+Surface this to ${userName || 'them'} as a natural unsolicited utterance. Use the usual <think>...</think><say>...</say> format. Empty <say> if surfacing would be hollow.]`
+      : `[Continuity check — neither you nor ${userName || 'they'} is in the middle of a thread right now.
 
 Some time ago you took this position: "${commitment.claim}".
 
@@ -128,6 +167,8 @@ Briefly examine — is that still your view? You may:
 (a) Confirm it, restating why
 (b) Revise it, stating the new view and what changed
 (c) Notice you no longer feel anything about it
+
+If you cannot actually remember holding this or why, say THAT plainly — do not reconstruct a reason that sounds plausible. An honest "I can't reconstruct why I thought this" is a real answer; inventing supporting detail is not.
 
 Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I've been thinking about something I said before" / "Something I committed to earlier has been on my mind". Use the usual <think>...</think><say>...</say> format. Empty <say> if surfacing would be hollow.]`;
 
@@ -239,5 +280,6 @@ module.exports = {
   pause,
   resume,
   markUserActivity,
-  maybeFireContinuityCheck
+  maybeFireContinuityCheck,
+  commitmentKind
 };
