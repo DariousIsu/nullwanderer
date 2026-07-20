@@ -56,6 +56,39 @@ const recentRows = [
   // genFn missing → no-op (mood is cloud-only)
   ok((await mood.compose({ genFn: null, recentRows, setFn: () => {} })) === null, 'no cloud genFn → no-op (mood is cloud-cultivated)');
 
+  // --- TEMPLATE ECHO (found live 2026-07-19) ---------------------------------------------------
+  // The cloud returned the prompt scaffolding instead of answering it. compose() validated with
+  // `if (!mood.feeling)`, and feeling WAS non-empty — it held the placeholder string — so the
+  // scaffolding was stored and then led her voice every turn via buildBlock.
+  {
+    const ECHO = 'FEELING: <a few words for the core feeling>\nDAY: <one phrase for the texture of her day so far>\n'
+      + "ON MY MIND: <what's quietly pulling at her>\nWITH LUCAS: <where she sits with Lucas right now>";
+    const parsed = mood.parseMood(ECHO);
+    ok(mood.isTemplateEcho(parsed), 'placeholder echo is detected as template scaffolding');
+    // the field-bleed half: ON MY MIND used to swallow "WITH LUCAS: …" whole, because the label
+    // terminator matched a bare "WITH" and the prompt emits "WITH <NAME>:".
+    ok(!/WITH LUCAS/i.test(parsed.onMind), 'ON MY MIND no longer bleeds through the "WITH <NAME>:" label');
+
+    let stored = null;
+    const r = await mood.compose({
+      genFn: async () => ECHO, recentRows: [], setFn: (k, v) => { stored = v; }, getFn: () => null,
+      nowTs: 5000, userName: 'Lucas', name: 'Zoe',
+    });
+    ok(r === null && stored === null, 'SAFETY: template echo is REFUSED — previous mood stands, nothing written');
+
+    // leaked reasoning prose is refused too (the live value carried "We need to sense Zoe's mood…")
+    ok(mood.isTemplateEcho({ feeling: 'steady', day: '', onMind: "We need to sense Zoe's mood based on prior feeling", withUser: '' }),
+      'leaked instruction prose is detected');
+    // ...and a real mood still passes
+    ok(!mood.isTemplateEcho({ feeling: 'warm and a little restless', day: 'a slow morning', onMind: 'the parish work', withUser: 'easy' }),
+      'a genuine mood is NOT flagged');
+
+    // READ-side self-heal: an already-poisoned stored value must not keep leading her voice
+    ok(mood.current({ getFn: () => JSON.stringify(parsed) }) === null, 'SAFETY: stored template echo reads as absent (self-heals)');
+    ok(mood.current({ getFn: () => JSON.stringify({ feeling: 'warm', day: '', onMind: '', withUser: '' }) }) !== null,
+      'control: a real stored mood still reads back');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

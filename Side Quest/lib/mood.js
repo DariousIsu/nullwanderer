@@ -22,7 +22,16 @@ function _clean(s) { return String(s || '').replace(/<\/?(think|say)>/gi, '').re
 // The current mood object { feeling, day, onMind, withUser } or null. getFn injectable for tests.
 function current({ getFn = null } = {}) {
   const get = getFn || ((k) => require('./db').getMeta(k));
-  try { const v = get(MOOD_KEY); return v ? JSON.parse(v) : null; } catch { return null; }
+  try {
+    const v = get(MOOD_KEY);
+    if (!v) return null;
+    const m = JSON.parse(v);
+    // SELF-HEAL: guard the READ as well as the write. A template-echo mood was already stored before
+    // the write-side check existed, and it would otherwise keep leading her voice until something
+    // happened to overwrite it. Treating it as absent makes it stale, which triggers a re-cultivate.
+    if (isTemplateEcho(m)) { console.error('[mood] stored mood is template scaffolding — ignoring it'); return null; }
+    return m;
+  } catch { return null; }
 }
 function composedAt({ getFn = null } = {}) {
   const get = getFn || ((k) => require('./db').getMeta(k));
@@ -34,13 +43,40 @@ function isStale({ ttlMs = DEFAULT_TTL_MS, nowTs = null, getFn = null } = {}) {
   return ((nowTs || Date.now()) - at) > ttlMs;
 }
 
+// A model that ECHOES THE TEMPLATE instead of answering it. Found live 2026-07-19: the stored mood
+// was literally `{"feeling":"<a few words for the core feeling>", …}` plus leaked reasoning prose
+// ("We need to sense Zoe's mood based on prior feeling…"). It got there because compose() validated
+// with `if (!mood.feeling)` — and `feeling` was non-empty, since it held the placeholder STRING.
+// Because mood LEADS her voice every turn (buildBlock), her register was being driven by prompt
+// scaffolding. A successful-looking write containing nothing real.
+//
+// Rejecting is strictly better than storing: compose returns null, the PREVIOUS mood stands, and a
+// slightly stale real feeling beats a fresh fake one.
+const PLACEHOLDER_RE = /<[^>]{3,}>/;                       // "<a few words for the core feeling>"
+const INSTRUCTION_LEAK_RE = new RegExp([
+  'we need to', 'her mood right now', 'mood based on prior', 'present tense',
+  'grounded only in', 'never invent', 'a mood drifts', 'four short lines',
+  'as an ai', 'deeper, reflective self',
+].join('|'), 'i');
+
+// Does this parse look like the template rather than an answer?
+function isTemplateEcho(mood) {
+  if (!mood) return true;
+  const fields = [mood.feeling, mood.day, mood.onMind, mood.withUser].map(v => String(v || ''));
+  if (fields.every(f => !f.trim())) return true;
+  return fields.some(f => PLACEHOLDER_RE.test(f) || INSTRUCTION_LEAK_RE.test(f));
+}
+
 // Parse the cloud's structured mood into fields. Fail-safe: an unstructured reply becomes the `feeling`.
 function parseMood(raw) {
   const s = _clean(raw);
   if (!s) return null;
   // require the colon so a label only matches as a LABEL ("FEELING:"), not the word inside prose.
-  const grab = (label) => { const m = s.match(new RegExp(`${label}\\s*:\\s*(.+?)(?:\\s+(?:FEELING|DAY|ON MY MIND|WITH)\\b\\s*:|$)`, 'i')); return m ? m[1].trim().replace(/[.;]+$/, '') : ''; };
-  const feeling = grab('FEELING'), day = grab('DAY'), onMind = grab('ON MY MIND'), withUser = grab('WITH(?: [A-Z][a-z]+)?');
+  // The WITH terminator must tolerate a NAME — the prompt emits "WITH LUCAS:", and a bare `WITH\b\s*:`
+  // never matched it, so ON MY MIND ran straight through the next label and swallowed it whole.
+  const NEXT = '(?:FEELING|DAY|ON MY MIND|WITH(?:\\s+[A-Za-z]+)?)\\s*:';
+  const grab = (label) => { const m = s.match(new RegExp(`${label}\\s*:\\s*(.+?)(?:\\s+${NEXT}|$)`, 'i')); return m ? m[1].trim().replace(/[.;]+$/, '') : ''; };
+  const feeling = grab('FEELING'), day = grab('DAY'), onMind = grab('ON MY MIND'), withUser = grab('WITH(?:\\s+[A-Za-z]+)?');
   if (!feeling && !day && !onMind && !withUser) return { feeling: s.slice(0, 200), day: '', onMind: '', withUser: '' };
   return { feeling: feeling.slice(0, 160), day: day.slice(0, 200), onMind: onMind.slice(0, 200), withUser: withUser.slice(0, 200) };
 }
@@ -90,6 +126,11 @@ WITH ${userName.toUpperCase()}: <where she sits with ${userName} right now>`;
 
   const mood = parseMood(raw);
   if (!mood || !mood.feeling) return null;
+  // The model echoed the template back rather than answering it — keep the mood she already had.
+  if (isTemplateEcho(mood)) {
+    console.error('[mood] rejected template-echo reply — keeping the previous mood:', JSON.stringify(mood).slice(0, 160));
+    return null;
+  }
   const set = setFn || ((k, v) => { try { require('./db').setMeta(k, v); } catch {} });
   set(MOOD_KEY, JSON.stringify(mood));
   set(MOOD_AT_KEY, String(nowTs || Date.now()));
@@ -103,4 +144,4 @@ async function maybeRefresh({ ttlMs = DEFAULT_TTL_MS, nowTs = null, getFn = null
   return doCompose({ nowTs, ...composeOpts });
 }
 
-module.exports = { compose, maybeRefresh, current, composedAt, isStale, parseMood, buildBlock, DEFAULT_TTL_MS, MOOD_KEY, MOOD_AT_KEY };
+module.exports = { compose, maybeRefresh, current, composedAt, isStale, parseMood, isTemplateEcho, buildBlock, DEFAULT_TTL_MS, MOOD_KEY, MOOD_AT_KEY };
