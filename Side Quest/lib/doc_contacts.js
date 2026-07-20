@@ -148,8 +148,47 @@ function upsert(row, { docId, docTitle = null, state = null, now = Date.now() } 
     ).run(emailKey(row.email), String(row.name).slice(0, 200), row.email || null, row.phone || null,
       row.title || null, row.company || null, state, Number(docId), docTitle ? String(docTitle).slice(0, 200) : null,
       typeof row.confidence === 'number' ? row.confidence : 0.8, now, now);
+    logEncounters(row, { docId, state });
     return true;
   } catch { return false; }
+}
+
+// The same extraction, written to the universal log (docs/ENCOUNTER_OBJECT_MODEL_DESIGN.md §2). This
+// table is a people-contact store, which is the Puller's job and is scheduled to collapse into it (§12);
+// the encounter log is where the fact belongs permanently, so it is written to BOTH rather than migrated
+// under a live system. The doc_contacts row stays the query surface; this is the graded substrate.
+//
+// Every encounter carries the DOCUMENT'S origin and content hash, not the contact's. That is what makes
+// independence computable later: the same official in three copies of one PDF is one text and one
+// origin, and origin.independence() can only see that if the hash travels with the claim.
+function logEncounters(row, { docId, state }) {
+  try {
+    const enc = require('./encounters');
+    const doc = db().getDocument(Number(docId)) || {};
+    // An official record substitutes for roughly one ordinary source (§6.3) — but only where we actually
+    // KNOW the origin. Most of the legacy corpus has none, and guessing would invent authority.
+    const gov = doc.origin_host && /(^|\.)(gov|mil)$|\.us$/i.test(doc.origin_host);
+    const base = {
+      object_type: 'person',
+      object_label: row.name,
+      source_kind: 'document',
+      source_ref: `doc:${docId}`,
+      origin: doc.origin || null,
+      origin_host: doc.origin_host || null,
+      content_hash: doc.content_hash || null,
+      authority: gov ? 'official' : 'unknown',
+      // observed_at stays NULL: created_ts is when WE ingested the document, not the date the source
+      // itself carries. Filling it in would let a 2021 roster read as current evidence.
+      observed_at: null,
+    };
+    const list = [{ ...base, claim_class: 'existence' }];
+    if (row.email) list.push({ ...base, claim_class: 'contact', claim_key: 'email', claim_value: String(row.email).toLowerCase() });
+    if (row.phone) list.push({ ...base, claim_class: 'contact', claim_key: 'phone', claim_value: row.phone });
+    if (row.title) list.push({ ...base, claim_class: 'biographical', claim_key: 'title', claim_value: row.title });
+    if (row.company) list.push({ ...base, claim_class: 'structural', claim_key: 'affiliated_with', claim_value: row.company });
+    if (state) list.push({ ...base, claim_class: 'structural', claim_key: 'state', claim_value: state });
+    enc.recordMany(list);
+  } catch (e) { console.error('[doc_contacts] encounter log failed:', e.message); }
 }
 
 // Folded view for the contacts query: one entry per person, carrying how many DOCUMENTS attest to them.

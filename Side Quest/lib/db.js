@@ -436,6 +436,52 @@ const MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_documents_origin_host ON documents(origin_host)`,
   `CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash)`,
 
+  // ENCOUNTER LOG (docs/ENCOUNTER_OBJECT_MODEL_DESIGN.md §2) — the primitive beneath everything else.
+  //
+  // Lucas: an object is real because it has been ENCOUNTERED. Objects and edges are DERIVED from this
+  // log; the log is the ground truth. Every lane writes here — news, research, doc drop, conversation,
+  // meeting, API — and grading reads here.
+  //
+  // APPEND-ONLY, and that is load-bearing rather than tidy: a wrong merge is the one unrecoverable
+  // failure. While each encounter keeps its own identity, un-merging stays possible. Fold them into one
+  // record at write time and it never is. Nothing in lib/encounters.js updates or deletes a row.
+  //
+  //   object_key   identity, normalised — what merges. object_label keeps what the SOURCE called it,
+  //                which is evidence and must survive resolution.
+  //   claim_class  existence | contact | biographical | structural | interpretive. Grading ladders
+  //                differ per class (§5): contact DECAYS and overwrites, biography ACCUMULATES and
+  //                appends, existence never decays. One universal grade would be wrong for all of them.
+  //   observed_at  THE SOURCE'S OWN DATE, not when we read it. Ingesting a 2021 PDF today must not let
+  //                it outrank current data — the distinction is the whole point of carrying both.
+  //   authority    official | ordinary | unknown. An official record substitutes for roughly one
+  //                ordinary source (§6.3); source reliability, not vote count, is what the
+  //                truth-discovery literature says decides conflicts.
+  `CREATE TABLE IF NOT EXISTS encounters (
+    id INTEGER PRIMARY KEY,
+    object_type TEXT NOT NULL,
+    object_key TEXT NOT NULL,
+    object_label TEXT,
+    claim_class TEXT NOT NULL,
+    claim_key TEXT,
+    claim_value TEXT,
+    source_kind TEXT,
+    source_ref TEXT,
+    origin TEXT,
+    origin_host TEXT,
+    content_hash TEXT,
+    authority TEXT DEFAULT 'unknown',
+    observed_at INTEGER,
+    ingested_at INTEGER NOT NULL
+  )`,
+  // ONE ENCOUNTER PER SOURCE PER CLAIM. Re-scanning a document must not cast a second vote — §3's rule
+  // that a document may never corroborate a claim it is itself the origin of, enforced at write time
+  // where it cannot be forgotten. Re-recording is therefore idempotent, never inflationary.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_encounters_uniq
+     ON encounters(object_key, claim_class, COALESCE(claim_key,''), COALESCE(claim_value,''), COALESCE(source_ref,''))`,
+  `CREATE INDEX IF NOT EXISTS idx_encounters_object ON encounters(object_key, claim_class)`,
+  `CREATE INDEX IF NOT EXISTS idx_encounters_type ON encounters(object_type)`,
+  `CREATE INDEX IF NOT EXISTS idx_encounters_source ON encounters(source_ref)`,
+
   // MEETING TRANSCRIPT (M1): durable, timestamped record of every caption line, so a meeting
   // chunk can purge from her active context yet remain a queryable, time-anchored transcript.
   // At meeting end this is the "fully processed transcript" artifact; turns are a view over it
