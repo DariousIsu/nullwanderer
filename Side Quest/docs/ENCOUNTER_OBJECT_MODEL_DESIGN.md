@@ -363,6 +363,20 @@ before finalising §7's resolution rule.
 
 ## 11. Measured blockers (real, in the current data)
 
+> **STATUS 2026-07-20: #1 and #2 are FIXED** (commits `f0a1af6`, `03c6084`). `lib/origin.js` provides
+> `hostOf` / `normalizeUrl` / `contentHash` / `independence`; `documents` gained `origin`, `origin_host`
+> and `content_hash`; origin is captured at the media, news and browser-download lanes, the last via a
+> new `will-download` hook (that lane is ~38% of the corpus and previously had NO recoverable origin).
+> All 6,683 existing documents are back-filled with content hashes, which collapses the 11.7%
+> duplication. Origin remains permanently NULL for pre-hook documents — unrecoverable, and recorded as
+> such rather than guessed. **#3 (image-only PDFs) is still open.**
+>
+> One correction worth carrying forward: `independence()` initially returned **0** for unknown
+> provenance, which would have graded the entire legacy corpus as *unsupported* rather than *unproven*.
+> Unknowns now collapse to ONE unattributable origin — never erased, never invented — with an
+> `unproven` flag distinguishing "we checked, it is one source" from "we cannot tell".
+
+
 1. **The corpus is 11.6% duplicate.** 461 groups of byte-identical bodies, 771 redundant copies, one
    PDF stored ×18. This *already* inflates corroboration: `Melissa Bosch` shows `doc_count = 5` from
    only **3 distinct texts**. → **Content-hash origin is mandatory, not a refinement.** It is also the
