@@ -131,6 +131,9 @@ const _ENT_TITLES = new Set([
   // Greetings — third layer on the vocative bug. Capitalized and sentence-initial, they otherwise glue
   // straight onto the name that follows ("Hey Zoe" → a four-way person collision).
   'hey', 'hi', 'hello', 'yo', 'hiya', 'heya', 'ok', 'okay', 'thanks', 'please',
+  // Self-introduction lead-ins — the same failure a few hours later: "I'm Zoe Lane" was resolved as
+  // an entity and she was asked whether she meant a US Representative.
+  "i'm", 'im', 'i', 'my', 'this', "it's", 'its', "that's", "you're", 'well',
 ]);
 function extractEntity(text) {
   // strip surrounding punctuation per token so a sentence-final entity ("Trump?") isn't split off

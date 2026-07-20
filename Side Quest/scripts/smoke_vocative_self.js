@@ -36,6 +36,25 @@ const DB = {
   ok(mention.isVocativeSelf('Hey Zoe', { db: DB }), '"Hey Zoe" is recognised as her being addressed');
 }
 
+// ── ⭐ SELF-INTRODUCTION — the same bug, hours after the vocative fix shipped ────────────────────
+// Live: [main] ambiguous entity "I'm Zoe Lane" → ASK (4 distinct people). She introduced herself and
+// was asked whether she meant a US Representative. The vocative fix stripped greetings only, so a
+// first-person lead-in walked straight past it. Any lead-in that is not part of a NAME must come off
+// before the alias check, or every new phrasing is a new bug.
+{
+  const q = "I'm Zoe Lane, and I've been working on the Louisiana parishes";
+  ok(ar.extractEntity(q) !== "I'm Zoe Lane", 'REGRESSION: the regex no longer extracts "I\'m Zoe Lane"');
+  for (const m of ["I'm Zoe Lane", "I'm Zoe", 'I am Zoe Lane', 'im zoe', 'This is Zoe',
+                   'My name is Zoe Lane', "It's Zoe", 'call me Zoe', "Hey, I'm Zoe Lane"]) {
+    ok(mention.isVocativeSelf(m, { db: DB }), `"${m}" → her introducing herself, not a lookup`);
+  }
+  ok(mention.isVocativeSelf("I'm Lucas", { db: DB }), 'the owner introducing himself too');
+  // …and the superstring protection must survive the wider stripping.
+  for (const m of ["I'm Zoe Lofgren", 'This is Zoe Lofgren', 'My name is Lucas Kunce']) {
+    ok(!mention.isVocativeSelf(m, { db: DB }), `"${m}" is a DIFFERENT person — still looked up`);
+  }
+}
+
 // ── vocative forms people actually type ─────────────────────────────────────────────────────────
 {
   for (const m of ['Zoe', 'zoe', 'Hey Zoe', 'hey zoe', 'Hi Zoe', 'Hello Zoe', 'Yo Zoe', 'Zoe,', 'ok zoe',

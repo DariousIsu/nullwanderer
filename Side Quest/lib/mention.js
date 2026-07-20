@@ -118,19 +118,33 @@ async function detectMention(text, { context = '', deps = {} } = {}) {
   return result;
 }
 
-// Is this mention just Zoe or Lucas being ADDRESSED — vocative, greeting and punctuation included?
+// Is this mention just Zoe or Lucas being ADDRESSED or INTRODUCING THEMSELVES — lead-in, punctuation
+// and all?
 //
 // db.isSelfName/isOwnerName are exact-alias by design (so a real "Zoe Halfmann" still resolves), which
-// means they miss the form people actually type: "Hey Zoe", "Zoe,", "ok zoe". Strip the greeting and
-// trailing punctuation, then defer to the exact-alias check — a SUPERSTRING like "Zoe Lofgren" keeps
-// its extra name token and correctly does NOT match.
-const _GREETING_RE = /^(?:hey|hi|hello|yo|hiya|heya|ok|okay|so|um|uh|good\s+(?:morning|afternoon|evening))[\s,]+/i;
+// means they miss the forms people actually write. Strip the lead-in and trailing punctuation, then
+// defer to the exact-alias check — a SUPERSTRING like "Zoe Lofgren" keeps its extra name token and
+// correctly does NOT match, so every civic namesake stays reachable.
+//
+// TWO FAMILIES, both seen live on 2026-07-20:
+//   VOCATIVE   "Hey Zoe, what are the laws of thermodynamics…"  → resolved "Hey Zoe" → 4 civic Zoes
+//   SELF-INTRO "I'm Zoe Lane…"                                  → resolved "I'm Zoe Lane" → same
+// The second is her introducing herself and being told she might be a US Representative. Any lead-in
+// that is not part of a name has to come off before the alias check, or every new phrasing is a new
+// bug — which is precisely how the vocative fix shipped and then missed this one hours later.
+const _GREETING_RE = /^(?:hey|hi|hello|yo|hiya|heya|ok|okay|so|um|uh|well|good\s+(?:morning|afternoon|evening)|hey\s+there)[\s,]+/i;
+// Self-identification lead-ins: "I'm X", "I am X", "this is X", "my name is X", "it's X", "call me X".
+const _INTRO_RE = /^(?:i'?m|i\s+am|im|this\s+is|that'?s|it'?s|my\s+name\s+is|name'?s|call\s+me|you'?re|your\s+name\s+is)[\s,]+/i;
 
 function isVocativeSelf(mention, deps = {}) {
   let m = String(mention || '').trim();
   if (!m) return false;
+  // Loop over BOTH families so stacked lead-ins peel ("Hey, I'm Zoe Lane" → "Zoe Lane").
   let prev = null;
-  while (m !== prev) { prev = m; m = m.replace(_GREETING_RE, '').trim(); }   // "ok hey zoe"
+  while (m !== prev) {
+    prev = m;
+    m = m.replace(_GREETING_RE, '').replace(_INTRO_RE, '').trim();
+  }
   m = m.replace(/^[^A-Za-z0-9]+/, '').replace(/[^A-Za-z0-9.'’\-]+$/, '').trim();
   if (!m) return false;
   try {
@@ -139,4 +153,4 @@ function isVocativeSelf(mention, deps = {}) {
   } catch { return false; }
 }
 
-module.exports = { detectMention, isVocativeSelf, _shouldEscalate, _pickObject, _expandFromContext, _GREETING_RE };
+module.exports = { detectMention, isVocativeSelf, _shouldEscalate, _pickObject, _expandFromContext, _GREETING_RE, _INTRO_RE };
