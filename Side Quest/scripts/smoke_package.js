@@ -142,6 +142,16 @@ const rep = (r, name) => r.report.sections.find((s) => s.name === name);
 {
   const p = P.buildPlan({ intent: 'factual', depth: { maxHops: 3 }, mustCite: true });
   ok(/database first/i.test(p), 'our own DB is ordered before the open web — the token-spend lever');
+  // ⭐ "recipe" is Echo's word for a saved DATA query and collides with the everyday meaning. Live:
+  // asked for a burger recipe, she emitted <echo-find>classic beef burger 80/20 chuck</echo-find>
+  // and Echo replied "unknown recipe 'Classic Beef Burger 80/20 Chuck'". The old wording here
+  // ("prefer ONE well-chosen recipe") pushed her into it.
+  ok(/NOT a recipe in any everyday sense/.test(p), 'the recipe/recipe collision is called out explicitly');
+  ok(/cooking/.test(p), 'names the exact case that failed');
+  ok(/do NOT reach for a tool at all; just answer/.test(p),
+    'off-domain questions are told to skip tools entirely, not to search harder');
+  ok(!/Prefer ONE well-chosen recipe over several broad searches/.test(p),
+    'REGRESSION: the wording that caused it is gone');
   const bare = P.buildPlan({});
   ok(/up to 3 tool call/.test(bare), 'a sane default depth with no args');
   ok(!/Cite the source/.test(bare), 'citation command only when asked for');

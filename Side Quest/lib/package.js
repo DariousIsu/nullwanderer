@@ -118,8 +118,18 @@ function buildPlan({ intent = null, depth = {}, mustCite = false, unresolved = [
   const lines = [];
   lines.push('HOW TO WORK THIS TURN:');
   if (intent) lines.push(`• What is actually being asked: ${intent}`);
+  // ⚠️ "recipe" is Echo's word for a pre-validated DATA procedure (bill-detail, committee-roster,
+  // lamp-count) and it collides badly with the ordinary meaning. Live 2026-07-20, asked for a burger
+  // recipe, she emitted <echo-find>classic beef burger 80/20 chuck</echo-find> and Echo answered
+  // "unknown recipe 'Classic Beef Burger 80/20 Chuck'" — the earlier wording here ("prefer ONE
+  // well-chosen recipe") actively pushed her into it. Name what the tools are FOR, not just what
+  // they are called.
   lines.push(`• You may make up to ${maxHops} tool call${maxHops === 1 ? '' : 's'} before answering. `
-    + 'Prefer ONE well-chosen recipe over several broad searches. Our own database first, the open web last.');
+    + 'The tools below reach OUR OWN civic/political data — people, orgs, bills, votes, contacts, our '
+    + 'documents. An "Echo recipe" is a saved query over that data, NOT a recipe in any everyday '
+    + 'sense. For anything outside that world — cooking, general knowledge, how something works — do '
+    + 'NOT reach for a tool at all; just answer. Our own database first, the open web last, no tool '
+    + 'when the question is not about our data.');
   if (unresolved && unresolved.length) {
     lines.push(`• Known gaps going in — resolve these if you can, say so plainly if you can't: ${unresolved.slice(0, 5).join('; ')}.`);
   }
