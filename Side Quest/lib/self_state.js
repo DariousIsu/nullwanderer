@@ -13,9 +13,21 @@
  */
 
 // "What are you doing / what can you see / what's your status" — current operational state.
-const STATE_RE = /\b(what are you (?:doing|up to)(?: right now)?|what'?s (?:going on|happening) with you|what'?s your (?:status|state|situation)|what can you (?:see|access|do)(?: right now)?|are you (?:searching|online|connected|busy|working)(?: right now)?|what'?s (?:running|active|connected)|status (?:report|check)|are you (?:there|with me)|what tools do you have)\b/i;
+const STATE_RE = /\b(what are you (?:doing|up to)(?: right now)?|what(?:'?s| is) (?:going on|happening) with you|what(?:'?s| is) your (?:status|state|situation)|what can you (?:see|access|do)(?: right now)?|are you (?:searching|online|connected|busy|working)(?: right now)?|what(?:'?s| is) (?:running|active|connected)|status (?:report|check)|are you (?:there|with me)|what tools do you have)\b/i;
+
+// COVERAGE questions — "how's the research going", "how much have we covered". Separate from
+// STATE_RE because they are a different question with a different answer: state is what's running
+// this second, coverage is how far the whole programme has got.
+//
+// Wiring the standing into the snapshot without this would have been INERT for the questions it
+// exists to answer — none of the natural phrasings match STATE_RE (verified against it before adding).
+//
+// Deliberately NARROW: every branch requires a research/coverage noun, so a social "how's it going"
+// or "how are you" never drags a progress ledger into a conversational turn.
+const COVERAGE_RE = /\b(?:how (?:much|many|far)\b[^?.!]{0,40}\b(?:covered?|researched?|through|along|done)|how(?:'?s| is| are)\b[^?.!]{0,25}\b(?:research|coverage|rosters?)\b|(?:research|coverage)\s+(?:progress|standing|status)|what(?:'?s| is)\s+(?:our|the)\s+coverage|how many (?:bodies|offices|states|beats|chambers)\b)/i;
 
 function detectStateQuestion(text) { return STATE_RE.test(String(text || '')); }
+function detectCoverageQuestion(text) { return COVERAGE_RE.test(String(text || '')); }
 
 function humanAge(ms) {
   const sec = Math.max(0, Math.floor(ms / 1000));
@@ -39,7 +51,11 @@ function snapshot(deps = {}) {
     sharedBrowser: pick(deps.sharedBrowser, () => require('./browser').isConnected(), false),
     ownBrowser: pick(deps.ownBrowser, () => require('./web').isConnected(), false),
     lastSearchAt: pick(deps.lastSearchAt, () => parseInt(require('./db').getMeta('last_search_at') || '0', 10), 0),
-    threads: pick(deps.threads, () => require('./db').getActiveOpenThreads(3) || [], [])
+    threads: pick(deps.threads, () => require('./db').getActiveOpenThreads(3) || [], []),
+    // Portfolio research standing (coverage_gaps.summarize). Deps-ONLY, deliberately: computing it
+    // enumerates every beat's universe (tens of thousands of targets), which is main's cached job —
+    // a lazy require here would put that cost on every status question.
+    research: deps.research || null,
   };
 }
 
@@ -55,6 +71,18 @@ function buildBlock(snap, userName = 'Lucas', now = Date.now()) {
   if (snap.sharedBrowser) browsers.push("Lucas's shared browser");
   lines.push(`Browser: ${browsers.length ? browsers.join(' + ') + ' open' : 'not currently open (you can open one any time)'}.`);
   if (snap.lastSearchAt) lines.push(`Last web lookup you ran: ${humanAge(now - snap.lastSearchAt)} ago.`);
+  // RESEARCH STANDING — measured against real denominators, so "how's the research going" is answered
+  // from arithmetic instead of impression. The wording is load-bearing: this counts BODIES/OFFICES
+  // researched, NEVER people captured. A chamber being "researched" says nothing about whether its
+  // roster is complete, and conflating the two is exactly how a partial run got reported as finished.
+  if (snap.research && snap.research.total > 0) {
+    const r = snap.research;
+    lines.push(`Elected-body research standing: ${r.done} of ${r.total} bodies/offices researched (${r.pct}%) — ${r.remaining} still outstanding, across ${r.beats} beats.`);
+    lines.push(`  ↳ that is BODIES worked, NOT people on file; a chamber counted here may still have an incomplete roster. Never state or imply the research is finished from this number.`);
+    if (r.emptyUniverseBeats) {
+      lines.push(`  ↳ ${r.emptyUniverseBeats} beat(s) have NO worklist at all — a data gap on our side, not something researched or complete.`);
+    }
+  }
   if (snap.threads && snap.threads.length) {
     const t = snap.threads.slice(0, 3).map(x => (x && x.content) ? x.content : String(x));
     lines.push(`Active threads you're carrying: ${t.join('; ')}.`);
@@ -62,4 +90,4 @@ function buildBlock(snap, userName = 'Lucas', now = Date.now()) {
   return `RIGHT NOW, OPERATIONALLY — your actual live state this moment. Speak from this if ${userName} asks what you're doing, what's running, or what you can see; do NOT guess or invent state:\n${lines.map(l => '  • ' + l).join('\n')}`;
 }
 
-module.exports = { detectStateQuestion, snapshot, buildBlock, humanAge, STATE_RE };
+module.exports = { detectStateQuestion, detectCoverageQuestion, snapshot, buildBlock, humanAge, STATE_RE, COVERAGE_RE };

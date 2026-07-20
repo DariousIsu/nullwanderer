@@ -4703,8 +4703,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // SELF-STATE (self-awareness Layer 1) — is Lucas asking what she's doing / what's running / what
   // she can see? If so, her real live operational snapshot gets surfaced below so she reads her
   // state instead of inferring it. Detected here so the metacognition gate can defer.
-  let stateQ = false;
-  try { stateQ = require('./lib/self_state').detectStateQuestion(userMessage); } catch (e) { console.error('[main] self-state detect failed:', e.message); }
+  let stateQ = false, coverageQ = false;
+  try {
+    const _ss = require('./lib/self_state');
+    stateQ = _ss.detectStateQuestion(userMessage);
+    // COVERAGE ("how's the research going") is a DIFFERENT question from state ("what's running"),
+    // and none of its phrasings match STATE_RE — so without this the portfolio standing would never
+    // reach the turn that asks for it.
+    coverageQ = _ss.detectCoverageQuestion(userMessage);
+  } catch (e) { console.error('[main] self-state detect failed:', e.message); }
 
   // ACTIVITY (Slice I) — is Lucas asking what she's DOING right now? The cross-lane activity poll owns
   // that turn and answers from live lane state, so the competing generic grounding (RAG semantic noise,
@@ -4863,13 +4870,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // SELF-STATE LEDGER — on a "what can you see / what's running / status" question, prepend her real
   // live operational snapshot. Skipped when it's an ACTIVITY question (the activity poll owns those,
   // and the "Mode: working" line seeds the confab) — self-state still serves pure can-you-see turns.
-  if (stateQ && !activityQ) {
+  // A COVERAGE question surfaces it even when the activity poll is running: activity answers "what am
+  // I doing this second", which cannot answer "how far have we got" — that needs the denominator.
+  if ((stateQ || coverageQ) && !(activityQ && !coverageQ)) {
     try {
       const ss = require('./lib/self_state');
       const block = ss.buildBlock(ss.snapshot({
         echoConnected: !!(echoSuit && echoSuit.connected),
         sharedBrowser: browserLib.isConnected(),
-        ownBrowser: webLib.isConnected()
+        ownBrowser: webLib.isConnected(),
+        research: _researchStanding(),
       }), userName);
       if (block) { retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${block}\n\n${retrievedKnowledgeBlock}` : block; console.log('[main] self-state snapshot surfaced'); }
     } catch (e) { console.error('[main] self-state block failed:', e.message); }
@@ -7670,6 +7680,39 @@ function _expectedCount(focusId) {
     }
   } catch {}
   return 0;
+}
+
+// PORTFOLIO RESEARCH STANDING (P4 coverage_gaps.summarize, wired live). `_coverageLine` answers
+// "how far is THIS run"; this answers "how far are we overall" — the number she needs to speak
+// honestly about progress instead of from impression.
+//
+// Cached on a short TTL. NOT because it is slow — measured at ~27ms over 226 beats / 52,890 targets,
+// which is negligible on a conversational turn. The cache is here because coverage moves on the order
+// of minutes at best, so recomputing per question buys nothing, and it keeps the cost flat if the beat
+// count grows by an order of magnitude. If that measurement ever stops holding, this is why it exists.
+//
+// Returns null rather than a zeroed object when it cannot be computed — a fabricated 0/0 would render
+// as "0% researched" and read as "nothing has been done", which is a false statement, not a safe one.
+let _standingCache = { at: 0, val: null };
+const _STANDING_TTL_MS = 5 * 60 * 1000;
+function _researchStanding(now = Date.now()) {
+  if (_standingCache.val && (now - _standingCache.at) < _STANDING_TTL_MS) return _standingCache.val;
+  let val = null;
+  try {
+    const cg = require('./lib/coverage_gaps');
+    const sched = (() => { try { return JSON.parse(db.getMeta('sched.autonomic') || '{}') || {}; } catch { return {}; } })();
+    const coveredFor = (beatId) => {
+      try {
+        const bs = (sched.beats || {})[beatId];
+        if (!bs || !bs.thread) return [];
+        return JSON.parse(db.getMeta(`focus.${bs.thread}.covered`) || '[]') || [];
+      } catch { return []; }
+    };
+    const s = cg.summarize(cg.coverageGaps(_autonomicBeats(), coveredFor));
+    if (s && s.total > 0) val = s;
+  } catch (e) { console.error('[standing] coverage summarize failed:', e.message); }
+  _standingCache = { at: now, val };
+  return val;
 }
 
 // Render "X of N" honestly, degrading to a bare count when the universe is unknown. Centralised so
