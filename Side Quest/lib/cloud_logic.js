@@ -69,6 +69,52 @@ async function _complete(messages, { temperature = 0.2, num_predict = 400, model
   } catch (e) { console.error('[cloud_logic] cloud call failed:', e.message); return null; }
 }
 
+// STREAMING counterpart to _complete — same endpoint/token resolution, tokens delivered as they
+// arrive instead of one blocking block.
+//
+// Why this exists: once the cloud writes the user-facing reply rather than handing content to the
+// local model to re-voice, a long generation with NO token flow is indistinguishable from a hang.
+// `onToken` also makes progress measurable (elapsed + token count), and it is what resets
+// streamChat's stall watchdog — a blocking call can only time out, it cannot tell "slow" from "dead".
+//
+// Deliberately NOT routed through ask(): that path is cache + budget + validate + repair, which is
+// right for structured classification and wrong for a user-facing answer (a cached reply would
+// re-serve stale words, and there is no JSON to validate). Returns { text, model } or null so callers
+// keep the same fail-safe shape as _complete — cloud down → null → caller's local path.
+async function streamCloud(messages, { temperature = 0.6, num_predict = 900, model: modelOverride = null,
+  onToken = null, signal = null, inactivityMs = 90000, deps = {} } = {}) {
+  let models, ollama;
+  try { models = require('./models'); ollama = require('./ollama'); } catch { return null; }
+  const stream = deps.streamChat || ollama.streamChat;
+  // deps.cloudSource lets the smoke run with no keychain/token — the module contract is that every
+  // external edge is injectable, and resolving the live cloud tier is one of them.
+  const cloud = deps.cloudSource || (models.sources() || []).find(s => s.tier === 'cloud' && s.token);
+  if (!cloud) return null;
+  const model = modelOverride || await _resolveModel(models, cloud);
+  if (!model) return null;
+  let text = '';
+  let tokens = 0;
+  const startedAt = Date.now();
+  try {
+    await stream({
+      model, messages, base: cloud.base,
+      headers: cloud.token ? { Authorization: `Bearer ${cloud.token}` } : {},
+      options: { temperature, top_p: 0.9, num_ctx: 8192, num_predict },
+      signal, inactivityMs,
+      onToken: (t) => {
+        text += t; tokens += 1;
+        if (onToken) { try { onToken(t, { tokens, elapsedMs: Date.now() - startedAt }); } catch { /* a UI hiccup must not kill the stream */ } }
+      },
+    });
+    return { text, model, tokens, elapsedMs: Date.now() - startedAt };
+  } catch (e) {
+    console.error('[cloud_logic] cloud stream failed:', e.message);
+    // Partial text is still worth returning — an answer cut off at 400 tokens beats discarding it
+    // and falling back to nothing. The caller decides whether a partial is usable.
+    return text ? { text, model, tokens, elapsedMs: Date.now() - startedAt, partial: true } : null;
+  }
+}
+
 // ---- packaging helpers ----
 function _hash(obj) { return crypto.createHash('sha1').update(JSON.stringify(obj)).digest('hex'); }
 
@@ -204,7 +250,7 @@ function budgetStatus(now = Date.now(), cap = dailyCap()) {
 }
 
 module.exports = {
-  ask, budgetStatus, _complete,
+  ask, budgetStatus, _complete, streamCloud,
   // exported for the offline smoke
   _hash, _packInput, _buildMessages, _runValidate, _budgetState,
   DEFAULT_DAILY_CAP, DEFAULT_MAX_INPUT_CHARS

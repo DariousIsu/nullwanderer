@@ -39,6 +39,7 @@ const smokes = [
   'smoke_belief_correction.js',
   'smoke_iterate_block.js',
   'smoke_cloud_logic.js',
+  'smoke_cloud_stream.js',
   'smoke_interests.js',
   'smoke_meta.js',
   'smoke_active_recall.js',

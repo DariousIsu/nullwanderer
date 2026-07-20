@@ -1,6 +1,12 @@
 const OLLAMA_BASE = process.env.OLLAMA_BASE || 'http://localhost:11434';
 
-async function streamChat({ model, messages, options = {}, onToken, signal, inactivityMs = 90000, think }) {
+// `base` + `headers` mirror completeDetailed, so this can stream from the CLOUD tier and not just
+// localhost. It was hardcoded to OLLAMA_BASE, which is the only reason cloud answers had to be
+// fetched as one blocking block: the endpoint speaks the same /api/chat streaming protocol, we
+// simply had no way to point this at it or to attach the bearer token. That mattered once the cloud
+// started writing the user-facing reply — a long generation with no token flow is indistinguishable
+// from a hang, and the stall watchdog below only works if tokens are actually arriving to reset it.
+async function streamChat({ model, messages, options = {}, onToken, signal, inactivityMs = 90000, think, base = OLLAMA_BASE, headers = {} }) {
   const body = {
     model,
     messages,
@@ -32,9 +38,11 @@ async function streamChat({ model, messages, options = {}, onToken, signal, inac
 
   try {
     kick();
-    const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
+    // coalesce explicit null the same way completeDetailed does (default params only fill undefined)
+    const _base = base || OLLAMA_BASE;
+    const res = await fetch(`${_base}/api/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(headers || {}) },
       body: JSON.stringify(body),
       signal: ctrl.signal
     });
