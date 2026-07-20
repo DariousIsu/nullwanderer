@@ -5703,7 +5703,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         const _runEnrich = cloudOwnsAnswer || personalFactQ || !!(recallResult && recallResult.object) || !!(grounding && grounding.length) || _scope !== 'general';
         if (_runEnrich) {
           try {
-            const res = await require('./lib/cognition').answerGrounded({ userMessage, grounding, object: recallResult && recallResult.object, userName });
+            // `_scope` is computed just above. Passing it lets the ladder distinguish "we should
+            // hold this and don't" from "this is general knowledge the writer can simply answer" —
+            // without it, a timeless question that resolves to no ENTITY came back as a refusal.
+            const res = await require('./lib/cognition').answerGrounded({ userMessage, grounding, object: recallResult && recallResult.object, userName, scope: _scope });
             if (res && res.say) {
               composedUserMessage = `${composedUserMessage}\n\n${ad.buildVoiceBlock(res.say, userName)}`;
               openThreads = [];   // grounded answer owns the turn — no standing-work primacy bleed

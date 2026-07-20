@@ -225,7 +225,7 @@ function _hasStaleGrounding(grounding, now) {
 // The turn's grounded answer with the enrich/recovery reflex. Returns:
 //   { say, enriched, enrichSource, missed?, need? }  — the substance for the voice block, or
 //   null  → cloud unavailable → caller uses the normal local flow.
-async function answerGrounded({ userMessage, grounding = '', object = null, userName = 'Lucas', deps = {} } = {}) {
+async function answerGrounded({ userMessage, grounding = '', object = null, userName = 'Lucas', scope = null, deps = {} } = {}) {
   if (!userMessage) return null;
   let g = String(grounding || '').trim();
   // INTENT PARSE (model-primary, regex fallback) runs CONCURRENTLY with the first draft — a fast cloud model
@@ -323,6 +323,20 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   // 2026-07-20 it surfaced on "how do you aspire to be more like her?" as "I checked our records
   // and searched, but I couldn't pin down the AI's aspirations… regarding Zoe Lane" — a records
   // claim about a question that was never about records.
+  // ⭐ GENERAL KNOWLEDGE IS NOT A RECORDS MISS. metacognition already holds this rule — buildDirective
+  // returns null for scope 'general' ("the model is the source; never suppress it") — but the ladder
+  // didn't know about scope and overrode it. Live 2026-07-20: "what are the laws of thermodynamics
+  // and how are new China made chips being designed to go around them" ran graph→wiki→routed→web→
+  // excavate, found no ENTITY, and answered "I checked our records and searched, but I couldn't pin
+  // down China comp…" — refusing a question the model can simply answer.
+  //
+  // Returning null hands the turn back to the normal flow, where the writer answers from its own
+  // knowledge with the full package. The refusal is reserved for questions that were actually about
+  // something we should hold and don't.
+  if (scope === 'general' && !object) {
+    console.log(`[cognition] general-knowledge miss on "${String(need0).slice(0, 60)}" → answering from the model, not refusing`);
+    return null;
+  }
   const _ours = _tried.includes('graph') || _tried.includes('routed');
   const _out = _tried.includes('wiki') || _tried.includes('web') || _tried.includes('excavate');
   const where = _ours && _out ? 'I checked our records and searched'

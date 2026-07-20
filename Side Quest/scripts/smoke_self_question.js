@@ -86,6 +86,32 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
     ok(/couldn't pin down/.test(r.say), 'still an honest, specific miss rather than a dead end');
   }
 
+  // ── ⭐ GENERAL KNOWLEDGE IS NOT A RECORDS MISS ─────────────────────────────────────────────────
+  // Live 2026-07-20: "what are the laws of thermodynamics and how are new China made chips being
+  // designed to go around them" walked the whole ladder, found no ENTITY, and answered "I checked
+  // our records and searched, but I couldn't pin down China comp…". metacognition already held this
+  // rule (buildDirective returns null for scope 'general' — "the model is the source; never suppress
+  // it"); the ladder didn't know about scope and overrode it.
+  {
+    const r = await cognition.answerGrounded({
+      userMessage: 'what are the laws of thermodynamics', grounding: '', scope: 'general', deps: mkDeps(),
+    });
+    ok(r === null, 'a general-knowledge miss returns null so the writer answers, instead of refusing');
+
+    // …but a question about something we SHOULD hold still gets the honest miss.
+    const r2 = await cognition.answerGrounded({
+      userMessage: 'how many parish contacts do we have', grounding: '', scope: 'personal', deps: mkDeps(),
+    });
+    ok(r2 && r2.missed === true, 'a records-scope miss still reports the miss honestly');
+
+    // an object in hand means it IS about something we hold — never silently drop that.
+    const r3 = await cognition.answerGrounded({
+      userMessage: 'tell me about it', grounding: '', scope: 'general',
+      object: { name: 'Appling County' }, deps: mkDeps(),
+    });
+    ok(r3 && r3.missed === true, 'general scope but a REAL object → still an honest miss, not silence');
+  }
+
   // the wiring itself
   const fs = require('fs'), path = require('path');
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'cognition.js'), 'utf8');
