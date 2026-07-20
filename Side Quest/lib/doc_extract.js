@@ -12,7 +12,7 @@
  *
  *   htmlToMarkdown  — pure: mammoth's flat HTML (h1-6/p/li/strong/em, tables flattened) → markdown
  *   extractDocx     — async: mammoth.convertToHtml → htmlToMarkdown
- *   extractPdf      — async: pdfjs text content, paginated → markdown (PDF structure is lossy)
+ *   extractPdf      — async: pdfjs text content → markdown, running headers/folios dropped (lossy)
  *   extractToMarkdown — async dispatch by extension (.docx/.pdf/.md/.txt)
  *
  * Node-only (main process) — mammoth is CommonJS; pdfjs-dist v6 is ESM (loaded via dynamic import).
@@ -96,21 +96,95 @@ async function extractDocxHtml(filePath) {
   return { html: sanitizeHtml(r.value), messages: (r.messages || []).map(x => x.message || String(x)) };
 }
 
-// .pdf → markdown via pdfjs-dist (ESM, dynamic import). One "## Page N" section per page; the page
-// text is a single run-on block (PDF positioned-text has no paragraph semantics — lossy by nature).
+// Running headers/footers repeat on nearly every page of a designed PDF ("The Joseph Rainey Center
+// for Public Policy"). Pasted into every block they bury the argument, and in a design-set PDF they
+// are ALSO the only corrupted text — the layout tool bakes letter-spacing into the text layer, so
+// the header extracts as "The J oseph Rainey Center f or P ublic P olicy" while body copy stays
+// clean. Dropping them removes the boilerplate and the corruption in one move, with no risky
+// de-kerning heuristic over real prose.
+// A line counts as furniture when the same text appears near the top/bottom of enough text pages
+// (see the threshold below; min 3 — under that, "repeated" is not evidence of anything).
+// The folio is usually glued to the header in the same text run ("3 The J oseph Rainey Center…"),
+// so the raw string differs on every page and would never look repeated. Compare on a key with the
+// leading/trailing page number stripped.
+function furnitureKey(line) {
+  return String(line || '').replace(/^\s*\d{1,4}\s+/, '').replace(/\s+\d{1,4}\s*$/, '').trim();
+}
+
+function findPageFurniture(pageLines, { edge = 3, minPages = 3 } = {}) {
+  const pages = pageLines.filter(l => l.length);
+  if (pages.length < minPages) return new Set();
+  const counts = new Map();
+  for (const lines of pages) {
+    const edges = new Set([...lines.slice(0, edge), ...lines.slice(-edge)].map(furnitureKey));
+    for (const k of edges) {
+      if (k.length < 4) continue;                      // bare page numbers handled separately
+      counts.set(k, (counts.get(k) || 0) + 1);
+    }
+  }
+  // A THIRD, not a half: print design alternates recto/verso headers (publication name on one side,
+  // article title on the other), so each covers only about half the BODY pages — and less once a
+  // cover and back page that carry no header are counted. A half-threshold misses both.
+  const threshold = Math.max(minPages, Math.ceil(pages.length / 3));
+  return new Set([...counts].filter(([, n]) => n >= threshold).map(([k]) => k));
+}
+
+// .pdf → markdown via pdfjs-dist (ESM, dynamic import).
+//
+// pdfjs yields positioned LINE FRAGMENTS, not paragraphs. Blank items and hasEOL are the only
+// paragraph signal available, so they drive the block breaks — without them an entire page collapses
+// into one run-on paragraph, which costs the Editor its block structure (and with it any chance of
+// spotting a reference section or attaching a finding to a real anchor).
+//
+// NO "## Page N" headings are injected: they are not in the document, they became the first heading
+// so every designed PDF imported with the title "Page 1", and they polluted the block model with one
+// junk heading per page. Page boundaries are not document structure.
 async function extractPdf(filePath) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const data = new Uint8Array(fs.readFileSync(filePath));
   const doc = await pdfjs.getDocument({ data, useSystemFonts: true, isEvalSupported: false }).promise;
-  const parts = [];
+
+  // Pass 1 — per-page lines (fragments joined until a blank item / EOL ends the line).
+  const pageLines = [];
+  const emptyPages = [];
   for (let p = 1; p <= doc.numPages; p++) {
-    const page = await doc.getPage(p);
-    const tc = await page.getTextContent();
-    const txt = tc.items.map(i => (i && i.str) || '').join(' ').replace(/\s+/g, ' ').trim();
-    if (txt) parts.push(`## Page ${p}\n\n${txt}`);
+    const tc = await (await doc.getPage(p)).getTextContent();
+    // pdfjs items are WRAPPED LINE fragments, not paragraphs: "Right now, in nurseries and bedrooms"
+    // / "across America, a camera is watching" / "your child sleep." are three items of ONE sentence.
+    // They must be joined — emitting each as its own block shatters every sentence and leaves the
+    // verifier nothing splittable. A BLANK item is the only paragraph signal the format offers.
+    const lines = [];
+    let cur = '';
+    const flush = () => { if (cur.trim()) lines.push(cur.replace(/\s+/g, ' ').trim()); cur = ''; };
+    for (const it of tc.items) {
+      const s = (it && it.str) || '';
+      if (!s.trim()) { flush(); continue; }
+      cur += (cur ? ' ' : '') + s;
+    }
+    flush();                                            // a page boundary always ends a paragraph
+    if (!lines.length) emptyPages.push(p);             // image-only page: no text layer to read
+    pageLines.push(lines);
   }
-  try { await doc.destroy(); } catch (e) {}
-  return { markdown: parts.join('\n\n'), pages: doc.numPages };
+
+  // Pass 2 — drop furniture, then emit paragraphs. Needs every page first, so it cannot fold into 1.
+  const furniture = findPageFurniture(pageLines);
+  const parts = [];
+  pageLines.forEach((lines, i) => {
+    const pageNo = String(i + 1);
+    for (const l of lines) {
+      const t = l.trim();
+      if (!t || t === pageNo || furniture.has(furnitureKey(t))) continue;  // page number / running header
+      parts.push(t);
+    }
+  });
+
+  try { await doc.destroy(); } catch (e) { /* older builds expose no destroy */ }
+  return {
+    markdown: parts.join('\n\n'),
+    pages: doc.numPages,
+    emptyPages,                                        // caller may offer OCR for these
+    textPages: doc.numPages - emptyPages.length,
+  };
 }
 
 // .pdf → per-page PNG images (base64), for the VISION fallback when a PDF has no text layer (a
@@ -200,4 +274,4 @@ async function extractToMarkdown(filePath) {
   throw new Error(`extractToMarkdown: unsupported extension .${ext}`);
 }
 
-module.exports = { decodeEntities, inlineMd, htmlToMarkdown, sanitizeHtml, extractDocx, extractDocxHtml, extractPdf, rasterizePdf, extractToMarkdown, parseCsv, rowsToMarkdownTable, extractSpreadsheet, TEXT_EXT, SHEET_EXT };
+module.exports = { decodeEntities, inlineMd, htmlToMarkdown, sanitizeHtml, extractDocx, extractDocxHtml, extractPdf, findPageFurniture, furnitureKey, rasterizePdf, extractToMarkdown, parseCsv, rowsToMarkdownTable, extractSpreadsheet, TEXT_EXT, SHEET_EXT };

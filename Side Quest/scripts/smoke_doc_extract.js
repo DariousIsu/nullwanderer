@@ -76,11 +76,50 @@ ok('inline: ↩ footnote-return glyph dropped', DX.inlineMd('Stateline, "Red sta
   ok('title guessed from leading content', /What We Do/.test(wc.title));
 }
 
-// --- pdf-style markdown (## Page N + run-on text) normalizes too ---
+// --- legacy "## Page N" markdown still normalizes (older working copies / other producers) ---
+// extractPdf NO LONGER emits these: page boundaries are not document structure, the marker became
+// the doc's first heading so every designed PDF imported titled "Page 1", and it added one junk
+// heading block per page. Kept only so previously-extracted markdown still parses.
 {
   const md = `## Page 1\n\nRESEARCH BRIEF energy policy and AI infrastructure.\n\n## Page 2\n\nMore text here.`;
   const wc = EI.normalizeMarkdown(md, { format: 'pdf' });
-  ok('pdf markdown → page headings + paragraphs', wc.blocks.filter(b => b.type === 'heading').length === 2 && wc.blocks.some(b => /RESEARCH BRIEF/.test(b.text)));
+  ok('legacy pdf markdown → page headings + paragraphs', wc.blocks.filter(b => b.type === 'heading').length === 2 && wc.blocks.some(b => /RESEARCH BRIEF/.test(b.text)));
+}
+
+// --- PDF page furniture: running headers/folios are boilerplate, not content ------------------
+// Shape taken from the real Rainey op-ed PDF: a cover with no header, then ALTERNATING recto/verso
+// headers with the folio glued into the same text run, then a back page. Each header therefore
+// covers only ~6 of 14 text pages — a half-threshold misses both, which is why this is a third.
+{
+  const mk = (n, header) => [`${n} ${header}`, `Body paragraph on page ${n}.`, `A second distinct paragraph, number ${n}.`];
+  const pages = [
+    ['Your Chinese-made Children’s Monitor Is Spying on Your Family', 'By R. Russell Walker'],  // cover
+    mk(3, 'The J oseph Rainey Center f or P ublic P olicy'),
+    mk(4, 'Your Chinese-made Children’s M onitor Is Spying on Y our F amily'),
+    mk(5, 'The J oseph Rainey Center f or P ublic P olicy'),
+    mk(6, 'Your Chinese-made Children’s M onitor Is Spying on Y our F amily'),
+    mk(7, 'The J oseph Rainey Center f or P ublic P olicy'),
+    mk(8, 'Your Chinese-made Children’s M onitor Is Spying on Y our F amily'),
+    ['info@raineycenter.org raineycenter.org'],                                                     // back
+  ];
+  const f = DX.findPageFurniture(pages);
+  ok('alternating recto/verso headers BOTH detected', f.size === 2, JSON.stringify([...f]));
+  ok('folio glued to header does not defeat matching (page-number-stripped key)',
+    f.has('The J oseph Rainey Center f or P ublic P olicy'), JSON.stringify([...f]));
+  ok('body copy is NOT furniture', ![...f].some(k => /Body paragraph|More body copy/.test(k)));
+  ok('cover/back-page one-offs are NOT furniture', ![...f].some(k => /raineycenter\.org|Russell Walker/.test(k)));
+  ok('furnitureKey strips a leading folio', DX.furnitureKey('3 The Rainey Center') === 'The Rainey Center');
+  ok('furnitureKey strips a trailing folio', DX.furnitureKey('The Rainey Center 3') === 'The Rainey Center');
+  // Too few pages to conclude anything — repetition across 2 pages is not evidence.
+  ok('under minPages → no furniture claimed', DX.findPageFurniture([mk(1, 'Hdr'), mk(2, 'Hdr')]).size === 0);
+  ok('empty input tolerated', DX.findPageFurniture([]).size === 0 && DX.findPageFurniture([[], []]).size === 0);
+  // KNOWN LIMITATION, asserted so it stays visible: detection is repetition-at-page-edges, with no
+  // notion of "content". A line genuinely repeated near the edge of a third of the pages IS dropped.
+  // Acceptable — verbatim repetition at a page edge is boilerplate in practice (standing disclaimer,
+  // section rubric) — but it is a heuristic, not a guarantee, and it fires on real text too.
+  const repeated = [1, 2, 3, 4, 5, 6].map(n => [`${n} Hdr`, `Unique body ${n}.`, 'Paid for by the committee.']);
+  ok('a genuinely repeated edge line is treated as furniture (documented tradeoff)',
+    DX.findPageFurniture(repeated).has('Paid for by the committee.'));
 }
 
 // --- dispatch guard ---
