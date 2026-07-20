@@ -6494,6 +6494,27 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   });
 
+  // ── THE TURN IS ALREADY ANSWERED ──────────────────────────────────────────────────────────────
+  // A handler above (ambiguity ASK, contacts route, doc-QA, status, expand…) can deliver a complete
+  // user-facing reply through fireToolFollowup. `followupFired` gates fifteen downstream blocks but
+  // never reached the reply generation below, so those turns produced TWO replies. Live: the wrong
+  // answer arrived first and the RIGHT one landed seconds later in the UNPROMPTED rail, because the
+  // renderer routes by whether a turn is still open and the first reply had already closed it. A
+  // real answer filed as an unprompted musing is the worst version of this — it reads as her talking
+  // to herself and leaves the visibly-wrong reply as the answer of record.
+  //
+  // Gated on `io._spoke` (the follow-up actually DELIVERED text), not on `followupFired` (a handler
+  // merely ran). If a follow-up fired but said nothing, we fall through and answer normally — a
+  // silent turn would be a worse bug than the duplicate.
+  if (followupFired && io && io._spoke) {
+    console.log('[main] turn already answered by a follow-up — skipping the second reply');
+    // runChatTurn pauses the idle loops at its start (pauseMonologue, ~4469) and EVERY early return
+    // in this function resumes them. Without this, the monologue/heartbeat/continuity/reflection
+    // rails would stay paused until restart — silently, since a paused loop just never ticks.
+    try { resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume(); } catch {}
+    return { ok: true, say: null, answeredByFollowup: true };
+  }
+
   // ── THE CLOUD WRITES THE REPLY (V1) ───────────────────────────────────────────────────────────
   // On a factual turn the cloud has ALREADY produced the complete grounded answer (the cognition
   // ladder above), and the local 12b was then asked to re-type it in her voice. It is forbidden from
@@ -7677,6 +7698,13 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       const followupDisclaimed = voice.isSelfDisclaimer(sayOut);
       if (followupDisclaimed) { try { sayOut = (await voice.deDisclaim(sayOut)) || ''; } catch (e) { console.error('[main] followup voice guard failed:', e.message); } }
       if (sayOut) {
+        // MARK THE TURN AS ANSWERED. A follow-up delivers a complete, user-facing reply, but the
+        // main turn does not know that: `followupFired` gates fifteen downstream blocks and never
+        // the reply generation itself, so the turn went on to generate a SECOND reply. Live, that
+        // showed as the wrong answer arriving first and the RIGHT one landing seconds later in the
+        // unprompted rail (the renderer had already closed the turn). Flagging on `io` — not a
+        // module global — keeps it scoped to this turn's channel.
+        try { if (io) io._spoke = true; } catch {}
         const thoughtClean = (thought || '').replace(/<\/?(think|say)>/gi, '').trim();
         if (thoughtClean) db.insertTurn({ sessionId, speaker: 'ai_thought', content: thoughtClean, model: followupWriter });
         // A tool-followup voices the answer to what the user ASKED — it is a PROMPTED reply, not an
