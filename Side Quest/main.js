@@ -9157,6 +9157,19 @@ async function runDirectedResearchPass(focus) {
       // FINALIZE the live block in place with the organized draft (same block_id → replaces the raw draft).
       try { await canvasUpsertBlock({ focusId: focus.id, blockId: secBlockId, title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: section } }); } catch {}
       covered.push(target.name); try { db.setMeta(coveredKey, JSON.stringify(covered.slice(-300))); } catch {}
+      // FACT GAPS (P3 absence model, wired here). We researched this target and are moving on, but
+      // some facets never materialised. That is a real observation — we LOOKED and did not find —
+      // so it lands as `somevalue`: a gap that feeds research, NEVER `novalue`. This holds whether
+      // we stopped from exhaustion or from the pass cap; both mean "not found yet", and neither is
+      // evidence the fact does not exist. Distinct from a COVERAGE gap (a target never visited),
+      // which is pending work and lives in lib/coverage_gaps.js. Fail-soft.
+      try {
+        if (Array.isArray(uncovered) && uncovered.length) {
+          const abs = require('./lib/absence');
+          for (const facet of uncovered.slice(0, 12)) abs.recordMiss(target.name, String(facet));
+          console.log(`[gap] ${target.name}: ${uncovered.length} facet(s) not found → somevalue (${adv.reason})`);
+        }
+      } catch (e) { console.error('[gap] absence record failed:', e.message); }
       note = `completed ${target.name} (${target.passes} passes, ${adv.reason}) + organized → canvas`; sig = target.name.toLowerCase(); progressed = true;
       target = null; try { db.setMeta(targetKey, ''); } catch {}
     } else {
