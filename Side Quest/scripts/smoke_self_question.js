@@ -1,0 +1,101 @@
+/* smoke_self_question.js — a question about HER INNER LIFE is hers to answer, not a lookup.
+ *
+ * Live failure 2026-07-20:
+ *   Lucas: "That's really interesting how do you aspire to be more like her?"
+ *   Zoe:   "I checked our records and searched, but I couldn't pin down the AI's aspirations
+ *           or goals regarding Zoe Lane."
+ *   (her own thought: "According to the instruction, I must answer that I couldn't pin down…")
+ *
+ * It carried a '?', so classifyClaimType said FACTUAL, the turn went cloud-owned, and the cognition
+ * ladder tried to resolve her own aspirations as an entity lookup on "Zoe Lane". Five tiers missed
+ * and it returned its canned miss line, which the cloud then voiced verbatim.
+ *
+ * OPINION_RE already covered taste and opinion — aspiration, admiration and self-image just weren't
+ * in it. Adding those three phrasings is the enumerate-and-miss trap that produced both this bug and
+ * the "Hey Zoe" one, so the guard states the DISTINCTION instead: second person + an inner-life
+ * predicate. The records half is asserted just as hard, because over-correcting here would blind her
+ * to real questions about our data.
+ */
+'use strict';
+const meta = require('../lib/metacognition');
+const cognition = require('../lib/cognition');
+
+let pass = 0, fail = 0;
+function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  FAIL:', msg); } }
+
+// ── HER INNER LIFE → not a factual lookup ───────────────────────────────────────────────────────
+{
+  const inner = [
+    "That's really interesting how do you aspire to be more like her?",   // the live failure
+    'What are your goals?', 'What are your aspirations?', 'Who do you admire?',
+    'What is your purpose?', 'Tell me about your dreams', 'What do you fear?',
+    'What do you value most?', 'How do you see your own identity?',
+    'What are you curious about?', 'What are your principles?',
+    'Who do you look up to?', 'What do you care about?',
+  ];
+  for (const q of inner) ok(meta.classifyClaimType(q) === 'other', `inner life, not a lookup: "${q}"`);
+}
+
+// ── ⭐ REAL questions about OUR DATA must stay factual ───────────────────────────────────────────
+// The over-correction risk: swallow "do you have…" and she goes blind to her own records, which is
+// the *other* failure this codebase keeps hitting. Records verbs are deliberately absent from the
+// inner-life pattern.
+{
+  const factual = [
+    'How many parishes are in Louisiana?',
+    'Do you have contact info for the parish leadership?',
+    'What do you know about Appling County?',
+    'How many contacts do we have for Louisiana parish leadership?',
+    'Who is Zoe Lofgren?',
+    'Did you find the roster?',
+    'What did you pull for Kent County?',
+    'Do we hold emails for those 64 parishes?',
+  ];
+  for (const q of factual) ok(meta.classifyClaimType(q) === 'factual', `still a records/fact question: "${q}"`);
+}
+
+// ── taste/opinion still classified as before (no regression) ────────────────────────────────────
+{
+  for (const q of ["Who's your favorite historical figure?", 'What do you think about that?', 'How do you feel today?'])
+    ok(meta.classifyClaimType(q) === 'other', `unchanged: "${q}"`);
+}
+
+// ── ⭐ the miss line must not claim a check it did not make ──────────────────────────────────────
+// A false verification claim CLOSES the question — Lucas has no reason to ask again. This is the
+// single sentence this codebase keeps getting wrong.
+(async () => {
+  const mkDeps = (allowMode) => ({
+    ask: async () => 'NEED: something',                       // always a NEED → never answers
+    now: () => Date.now(),
+    intent: { kind: 'other', topic: '', needs_fresh: false },
+    // every enrich tier returns nothing, so the ladder walks to the end
+    echo: async () => null, search: async () => null, fetch: async () => null,
+    _allow: allowMode,
+  });
+  const r = await cognition.answerGrounded({ userMessage: 'what is the thing', grounding: '', deps: mkDeps() });
+  if (!r || !r.missed) { ok(false, 'expected the ladder to end in a miss'); }
+  else {
+    ok(Array.isArray(r.tried), 'the miss reports which tiers actually ran');
+    const claimsRecords = /checked our records/.test(r.say);
+    const ranOurs = (r.tried || []).some((t) => t === 'graph' || t === 'routed');
+    ok(claimsRecords === ranOurs,
+      'REGRESSION: "I checked our records" is claimed if and ONLY if a records tier actually ran');
+    const claimsSearch = /\bsearched\b/.test(r.say);
+    const ranOut = (r.tried || []).some((t) => ['wiki', 'web', 'excavate'].includes(t));
+    ok(claimsSearch === ranOut, '"searched" is claimed if and only if an external tier actually ran');
+    ok(/couldn't pin down/.test(r.say), 'still an honest, specific miss rather than a dead end');
+  }
+
+  // the wiring itself
+  const fs = require('fs'), path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'cognition.js'), 'utf8');
+  ok(!/say: `I checked our records and searched, but/.test(src),
+    'REGRESSION: the unconditional records claim is gone');
+  ok(/_tried\.push\(mode\)/.test(src), 'the ladder records what it reached');
+  const m = fs.readFileSync(path.join(__dirname, '..', 'lib', 'metacognition.js'), 'utf8');
+  ok(/SELF_INNER_RE\.test\(s\)/.test(m), 'the inner-life guard is wired into classifyClaimType');
+  ok(!/принципы/.test(m), 'no stray non-English token in the pattern');
+
+  console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();

@@ -20,6 +20,33 @@
 // Excluded: opinion/taste (her own to decide), social/small-talk, and creative/explain commands
 // (concept explanation is what the core model is FOR — hedging it would be noise, not calibration).
 const OPINION_RE = /\b(favou?rite|would you rather|do you (?:like|prefer|enjoy)|what do you think|your (?:take|opinion|view|thoughts?)|how do you feel|do you believe|should i\b)/i;
+
+// A question about HER INNER LIFE is hers to answer, not a lookup. Live failure 2026-07-20:
+//   Lucas: "That's really interesting how do you aspire to be more like her?"
+//   Zoe:   "I checked our records and searched, but I couldn't pin down the AI's aspirations
+//           or goals regarding Zoe Lane."
+// It carried a '?', so it classified FACTUAL, went cloud-owned, and the cognition ladder tried to
+// resolve her own aspirations as an entity lookup on "Zoe Lane". Five tiers missed and it returned
+// its canned miss line, which the cloud faithfully voiced — her own thought that turn reads
+// "According to the instruction, I must answer that I couldn't pin down…".
+//
+// OPINION_RE already covered taste and opinion; aspiration, admiration and self-image were simply
+// not in it. Rather than adding those three phrasings — the enumerate-and-miss trap that produced
+// this bug and the "Hey Zoe" one — this states the DISTINCTION: second person + an inner-life
+// predicate. Records verbs (have/hold/know/find/list/count/pull) are deliberately absent, so
+// "do you have contact info for X" and "what do you know about the parishes" stay factual.
+const SELF_INNER_RE = new RegExp(
+  '\\byou(?:r|\'re)?\\b[^?]{0,60}\\b(?:' +
+    // inner-life VERBS
+    'aspire|admire|dream|hope|wish|yearn|long for|imagine|envision|relate to|identify with|' +
+    'look up to|care about|fear|worry about|struggle with|value|cherish|regret|' +
+    // …and the NOUNS of an inner life
+    'aspirations?|ambitions?|goals?|dreams?|hopes?|fears?|values?|beliefs?|principles?|' +
+    'personality|identity|sense of self|inner life|character|temperament|curiosity|' +
+    'motivations?|purpose|passions?|' +
+    // …and the ADJECTIVES, which is how the question is usually put ("what are you curious about?")
+    'curious|passionate|proud|afraid|scared|excited|drawn to|fascinated' +
+  ')\\b', 'i');
 const SOCIAL_RE = /\b(how are you|how'?s it going|how was your|good morning|good night|goodnight|thanks?|thank you|hello\b|hey\b|^hi\b|love you|miss you|you ok|you okay|you there)/i;
 const CREATIVE_CMD_RE = /\b(write|draft|compose|summari[sz]e|rewrite|edit|translate|generate|make me|create|brainstorm|outline|explain|describe how|walk me through|help me|give me a)\b/i;
 const FACTUAL_Q_RE = /\b(who|what|what'?s|when|when'?s|where|where'?s|which|whose|how many|how much|how old|how long|did|does|do|is|are|was|were|has|have|had|tell me about|remind me|look up)\b/i;
@@ -33,7 +60,7 @@ function classifyClaimType(text) {
   if (s0.length < 4) return 'other';
   const stripped = s0.replace(_GREETING_PREFIX_RE, '').trim();
   const s = stripped.length >= 4 ? stripped : s0;
-  if (OPINION_RE.test(s) || SOCIAL_RE.test(s) || CREATIVE_CMD_RE.test(s)) return 'other';
+  if (OPINION_RE.test(s) || SELF_INNER_RE.test(s) || SOCIAL_RE.test(s) || CREATIVE_CMD_RE.test(s)) return 'other';
   const looksFactual = s.includes('?') || FACTUAL_Q_RE.test(s);
   return looksFactual ? 'factual' : 'other';
 }

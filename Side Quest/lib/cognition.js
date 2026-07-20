@@ -288,8 +288,10 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   const _modes = it.kind === 'office_holder' ? ['wiki', 'web', 'excavate']
     : it.needs_fresh ? ['wiki', 'graph', 'routed', 'web', 'excavate']
     : ['graph', 'wiki', 'routed', 'web', 'excavate'];
+  const _tried = [];   // what we ACTUALLY reached — the miss line must not overstate it
   for (const mode of _modes) {
     if (!step || !step.need) break;
+    _tried.push(mode);
     // Search key: for a fresh question the model's normalized topic ("President of the United States") is a
     // far cleaner lookup than the draft's raw NEED ("who runs the country" → the wiki "Country" article). Use
     // it.topic when the intent flagged fresh + gave one; otherwise the draft's need (entity Qs, no topic).
@@ -314,8 +316,20 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
       return { say: step.answer, enriched: true, enrichSource: mode };
     }
   }
-  // couldn't confirm it anywhere — honest, never a bare dead-end, never a confabulation.
-  return { say: `I checked our records and searched, but I couldn't pin down ${need0}.`, enriched: true, missed: true, need: need0 };
+  // Couldn't confirm it anywhere. Honest, never a bare dead-end, never a confabulation — and the
+  // claim about WHAT WAS CHECKED must itself be true. The old line asserted "I checked our records
+  // and searched" unconditionally, which is the single sentence this codebase keeps getting wrong:
+  // a false verification claim CLOSES the question, because Lucas has no reason to ask again. Live
+  // 2026-07-20 it surfaced on "how do you aspire to be more like her?" as "I checked our records
+  // and searched, but I couldn't pin down the AI's aspirations… regarding Zoe Lane" — a records
+  // claim about a question that was never about records.
+  const _ours = _tried.includes('graph') || _tried.includes('routed');
+  const _out = _tried.includes('wiki') || _tried.includes('web') || _tried.includes('excavate');
+  const where = _ours && _out ? 'I checked our records and searched'
+    : _ours ? 'I checked our records'
+    : _out ? 'I searched'
+    : 'I looked at what I have';
+  return { say: `${where}, but I couldn't pin down ${need0}.`, enriched: true, missed: true, need: need0, tried: _tried };
 }
 
 module.exports = { answerGrounded, _draftOrNeed, _enrichGraph, _enrichWiki, _enrichRouted, _enrichWeb, _enrichExcavate, _kickWriteBack, _worthExcavating, _hasStaleGrounding, _entLine, NEED_RE };
