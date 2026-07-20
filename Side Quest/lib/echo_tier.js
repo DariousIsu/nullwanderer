@@ -44,6 +44,50 @@ const WRITE_RE = /^(propose_|ingest_|save_|update_|merge_|delete_|set_|add_|link
 // multi-statement) — a first-class READ surface over the whole Echo DB, safe on the auto loop.
 const READ_RE = /^(search|get_|list_|find_|describe_|quick_lookup|lookup|kg_|query_|db_query|graph_overview|stats\b|summarize_|audit_|cite_|score_|verify_|wayback|web_search|web_fetch|web_extract|web_resolve|academic_search|arxiv_search|recent_|fetch_feed|sql_cache_recall|knowledge_neighborhood|bill_lookup|bill_facets|contact_facets|represent_|civic_coverage|get_sources_for|propublica_nonprofit_(search|get)|fec_|usaspending_|edgar_|courtlistener_|legiscan_|fr_(search|get|agency)|ecfr_|gdelt_|openfda_|clinicaltrials_|ncbi_|mediawiki_|loc_(gov|names|subjects|authority)|gov_(search|get|list|recent|portals)|socrata_|ckan_|odata_|sdmx_|wb_|un_population|census_|geonames_|nws_|noaa_|usgs_|opensanctions_|ofac_|nvd_|cert_)/i;
 
+// READ, part 2 — EXTERNAL PUBLIC-DATA APIs, by family.
+//
+// READ_RE above is prefix-anchored on generic verbs (search/get_/list_/…) plus a hand-picked set of
+// source families. Whole families were never added, so they fell to the safe default and were treated
+// as mutating. Measured on a representative 119-tool slice: 116 classified 'write', 1 'read'. Live
+// 2026-07-20: `routeNeed tier-gate BLOCKED legistar_list_persons (write, autonomous=true)` — a
+// list-only call against a public legislative portal, blocked from the research lane.
+//
+// Every family here is an external READ-ONLY source: Echo exposes lookups against someone else's
+// public API and has no write endpoint for any of them, so there is no system-of-record to mutate.
+// That is why widening here does NOT weaken the gate — the safe default still catches anything
+// unknown, and every Echo-internal mutation (propose_/merge_/delete_/save_/ingest_/spawn_) is
+// matched earlier by WRITE_RE and HEAVY_RE, which run first.
+//
+// Deliberately a family ALLOWLIST rather than a "looks read-only" heuristic: a name-shape guess is
+// exactly how an unknown mutating tool would slip through.
+//
+// …and the family match alone is NOT sufficient, which the first version of this got wrong. WRITE_RE
+// is prefix-anchored, so a hypothetical `uk_delete_thing` or `epa_save_record` matches the family,
+// misses WRITE_RE, and would have been admitted as a read. A family prefix says "this source is
+// external", not "this call cannot mutate". So a family hit must ALSO carry no mutating verb
+// anywhere in the name — Echo gains tools over time and a future `uk_submit_*` must not walk in.
+// A mutating verb ANYWHERE in the name (not just as a prefix) disqualifies a family match.
+const MUTATING_VERB_RE = /(?:^|_)(?:create|update|delete|remove|save|set|add|merge|import|export|upload|submit|post|put|patch|write|send|apply|approve|reject|archive|restore|purge|revoke|start|stop|spawn|run|execute|register|enroll|subscribe|unsubscribe|edit|modify|rename|move|assign|certify|sign)(?:_|$)/i;
+
+const READ_FAMILY_RE = new RegExp('^(?:' + [
+  // legislative / government portals
+  'legistar_', 'openparliament_', 'abgeordnetenwatch_', 'br_camara_', 'uk_', 'represent_ca_',
+  'ks_legislature_', 'ma_legislature_', 'md_legislature_', 'mi_legislature_', 'sd_legislature_',
+  'ut_legislature_', 'doj_news_', 'chronicling_america_',
+  // regulators / agencies
+  'epa_', 'fema_', 'nhtsa_', 'uspto_', 'usda_', 'treasury_', 'college_scorecard_', 'nppes_',
+  // science / health / environment
+  'rxnorm_', 'pubchem_', 'gbif_', 'openaq_', 'erddap_', 'disease_sh_', 'cov_spectrum_',
+  'medlineplus_', 'awc_', 'opencharge_', 'openmeteo_', 'sunrise_sunset',
+  // reference / open data
+  'openlibrary_', 'openfigi_', 'datamuse_', 'free_dictionary_', 'nager_date_', 'hebcal_',
+  'country_is', 'geojs_', 'bdapis_', 'brasilapi_', 'geodata_gr_', 'nhs_scotland_', 'arcgis_',
+  'pxwebapi_', 'econdb_', 'spaceflight_news_', 'hackernews_',
+  // threat intel (lookup-only)
+  'shodan_', 'greynoise_', 'abuseipdb_', 'phishstats_', 'urlhaus_', 'interpol_', 'fbi_wanted',
+  'mozilla_observatory',
+].join('|') + ')', 'i');
+
 // What kind of tool is this? Pure. Order: LOCKED → HEAVY → WRITE → READ → (unknown ⇒ write).
 function classifyTool(name) {
   const n = String(name || '').trim();
@@ -51,8 +95,10 @@ function classifyTool(name) {
   if (LOCKED_RE.test(n)) return 'locked';
   if (HEAVY_RE.test(n)) return 'heavy';
   if (PROPOSE_RE.test(n)) return 'propose';   // before WRITE: propose_* also matches WRITE_RE
-  if (WRITE_RE.test(n)) return 'write';
+  if (WRITE_RE.test(n)) return 'write';   // stays FIRST — an Echo-internal mutation always wins
   if (READ_RE.test(n)) return 'read';
+  // external public-data source AND no mutating verb anywhere in the name
+  if (READ_FAMILY_RE.test(n) && !MUTATING_VERB_RE.test(n)) return 'read';
   return 'write';   // SAFE DEFAULT: unknown ⇒ treat as mutating ⇒ blocked on the auto loop
 }
 
