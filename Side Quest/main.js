@@ -5816,7 +5816,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               }
             } catch (e) { console.error('[contract] canvas emit failed:', e.message); }
             kickDirectedFocusDriver();
-            created = { id: r.focus.id, kind: `${intakeRoute && intakeRoute.deep ? 'deep ' : ''}research run`, orgCount: 0, plan };
+            // orgCount was hardcoded 0, so the readback degraded to a facet-only line and the ack
+            // never stated the run's size. The denominator is resolvable now (universe meta →
+            // intended_targets → beat), and 0 still degrades honestly when it genuinely isn't known.
+            created = { id: r.focus.id, kind: `${intakeRoute && intakeRoute.deep ? 'deep ' : ''}research run`, orgCount: _expectedCount(r.focus.id), plan };
           }
         }
 
@@ -9099,7 +9102,9 @@ async function runDirectedResearchPass(focus) {
       done = true; note = `deliverable complete (bounded) — covered ${covered.slice(0, 8).join(', ') || 'none yet'}`;
     } else {
       // OPEN A NEW TARGET — discovery overview pass (open scope only). Ground the pick in Echo too.
-      const { ans, usedTool } = await runPass(rs.buildNewTargetPrompt({ goal, covered, guidance }));
+      // `expected` gives the pass its DENOMINATOR — without it a run has no idea whether it is
+      // 9-of-64 or finished, which is how a partial run got reported as complete.
+      const { ans, usedTool } = await runPass(rs.buildNewTargetPrompt({ goal, covered, guidance, expected: _expectedCount(focus.id) }));
       const p = rs.parsePass(ans);
       if (p.allCovered && covered.length) { done = true; note = `all organizations covered (${covered.length})`; }
       else if (p.target && !covered.some(c => lc(c) === p.target.toLowerCase())) {
@@ -9116,7 +9121,7 @@ async function runDirectedResearchPass(focus) {
     // re-searching one it has (paired with the fuzzy repeat-detection in runPass).
     const _cov = (() => { try { return require('./studio/canvas_emit').coveredFacets(target.raw || '', planFacets); } catch { return []; } })();
     const uncovered = planFacets.filter(f => !_cov.includes(f));
-    const { ans, usedTool, repeats } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance, known: target.known || '', visited, coveragePlan, uncovered }));
+    const { ans, usedTool, repeats } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance, known: target.known || '', visited, coveragePlan, uncovered, covered, expected: _expectedCount(focus.id) }));
     const p = rs.parsePass(ans);
     const newChars = rs.newContentChars(target.raw, p.body);
     target.passes = (target.passes || 1) + 1;

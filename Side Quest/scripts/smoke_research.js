@@ -166,5 +166,27 @@ ok(r.decideAdvance({ refusal: true, passes: 8, dryStreak: 0, saturated: true }).
 ok(r.decideAdvance({ refusal: true, passes: r.MAX_PASSES_REFUSAL, newChars: 900, dryStreak: 0 }).advance === true && r.decideAdvance({ refusal: true, passes: r.MAX_PASSES_REFUSAL, dryStreak: 0 }).reason === 'soft depth cap', `refusal: soft depth cap at ${r.MAX_PASSES_REFUSAL} passes (throughput tune — one office can't monopolize)`);
 ok(r.MAX_PASSES_REFUSAL <= 20, `refusal soft cap is bounded for throughput (${r.MAX_PASSES_REFUSAL})`);
 
+// ── coverageLine — the run DENOMINATOR in the research prompts ─────────────────────────────────
+// A partial run reported as "the complete 9-organization dossier" is the failure this prevents.
+ok(/9 of 64/.test(r.coverageLine(new Array(9), 64)), 'coverageLine: states X of N');
+ok(/55 STILL MISSING/.test(r.coverageLine(new Array(9), 64)), 'coverageLine: names the remainder');
+ok(/NOT complete/.test(r.coverageLine(new Array(9), 64)), 'coverageLine: forbids calling a partial run complete');
+ok(/all 64 documented/.test(r.coverageLine(new Array(64), 64)), 'coverageLine: a finished run says so');
+ok(r.coverageLine(new Array(70), 64).includes('70 of 64') === false, 'coverageLine: over-coverage reads as complete, not 70/64');
+ok(r.coverageLine(new Array(9), 0) === '', 'coverageLine: unknown universe → OMITTED (honest, never guessed)');
+ok(r.coverageLine([], 0) === '' && r.coverageLine(null, null) === '', 'coverageLine: empty/null inputs → empty');
+ok(r.coverageLine(9, 64).includes('9 of 64'), 'coverageLine: accepts a raw count as well as an array');
+
+{
+  const p = r.buildDeepenPrompt({ goal: 'LA parishes', target: 'Acadia', covered: new Array(9), expected: 64 });
+  ok(/9 of 64/.test(p), 'buildDeepenPrompt: carries the denominator into the pass');
+  const p0 = r.buildDeepenPrompt({ goal: 'x', target: 'y', covered: new Array(9) });
+  ok(!/COVERAGE/.test(p0), 'buildDeepenPrompt: no expected → no coverage claim at all');
+  const n = r.buildNewTargetPrompt({ goal: 'LA', covered: new Array(9), expected: 64 });
+  ok(/9 of 64/.test(n), 'buildNewTargetPrompt: carries the denominator');
+  const n0 = r.buildNewTargetPrompt({ goal: 'LA', covered: new Array(9) });
+  ok(!/COVERAGE/.test(n0), 'buildNewTargetPrompt: no expected → omitted');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

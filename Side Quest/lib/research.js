@@ -127,12 +127,26 @@ function buildTopicalPrompt({ goal = '', facet = '', covered = [], guidance = ''
 }
 
 // New-target pass: pick ONE not-yet-done org and establish an overview (deepened over later passes).
-function buildNewTargetPrompt({ goal = '', covered = [], guidance = '' } = {}) {
+// COVERAGE LINE — the run's denominator, when it is known. Without it the pass has no idea whether
+// it is 9-of-64 or done, which is how a partial run came to be reported as "the complete dossier".
+// Omitted entirely when `expected` is falsy: an absent denominator is honest, a guessed one is not.
+function coverageLine(covered, expected) {
+  const have = Array.isArray(covered) ? covered.length : (Number(covered) || 0);
+  const n = Number(expected) || 0;
+  if (!n) return '';
+  // Clamp when complete: fuzzy coverage matching can push `have` past `n`, and "70 of 64" reads as
+  // a bug rather than as done.
+  if (have >= n) return `\nCOVERAGE: all ${n} documented — the full set is covered.\n`;
+  return `\nCOVERAGE: ${have} of ${n} documented; ${n - have} STILL MISSING. This run is NOT complete until all ${n} are covered — keep going, and never describe what you have as the complete set.\n`;
+}
+
+function buildNewTargetPrompt({ goal = '', covered = [], guidance = '', expected = 0 } = {}) {
   const done = (covered && covered.length)
     ? `ORGANIZATIONS ALREADY FULLY DOCUMENTED (do NOT pick any of these again):\n${covered.map(c => `- ${c}`).join('\n')}`
     : 'None documented yet.';
   const g = guidance ? `\n\n${guidance}` : '';
-  return `You are researching a standing task for Lucas, ONE organization at a time, in DEPTH.\n\nTASK: ${goal}${g}\n\n${done}\n\nTHIS PASS: pick ONE specific organization that fits the task and is NOT already documented, and write an OVERVIEW — full name, what it is, its main focus areas — grounded ONLY in what web_search / browser_read / echo / recall actually return (never invent). You will deepen it (staff, contacts, positions) over the next passes, so just establish it now.\nIf EVERY relevant organization is already documented, reply with exactly ALL-COVERED.\nEnd with a final line: TARGET: <the organization name>`;
+  const cov = coverageLine(covered, expected);
+  return `You are researching a standing task for Lucas, ONE organization at a time, in DEPTH.\n\nTASK: ${goal}${g}\n${cov}\n${done}\n\nTHIS PASS: pick ONE specific organization that fits the task and is NOT already documented, and write an OVERVIEW — full name, what it is, its main focus areas — grounded ONLY in what web_search / browser_read / echo / recall actually return (never invent). You will deepen it (staff, contacts, positions) over the next passes, so just establish it now.\nIf EVERY relevant organization is already documented, reply with exactly ALL-COVERED.\nEnd with a final line: TARGET: <the organization name>`;
 }
 
 // Object-first open (Slice 2c): the next SEED object to OPEN as a target — one we were handed (resolved
@@ -210,8 +224,9 @@ function searchSignature(query) {
 // `coveragePlan` (Slice 3) = the facet→toolset directive so each facet drives its full tool array.
 // `uncovered` = the plan facets NOT yet in the deliverable — pushes her to a NEW facet instead of re-searching
 // one she has (the anti-loop steer).
-function buildDeepenPrompt({ goal = '', target = '', facets = [], guidance = '', known = '', visited = [], coveragePlan = '', uncovered = [] } = {}) {
+function buildDeepenPrompt({ goal = '', target = '', facets = [], guidance = '', known = '', visited = [], coveragePlan = '', uncovered = [], covered = [], expected = 0 } = {}) {
   const g = guidance ? `\n${guidance}\n` : '';
+  const runCov = coverageLine(covered, expected);
   const cp = coveragePlan ? `\n${coveragePlan}\n` : '';
   const uc = (Array.isArray(uncovered) && uncovered.length)
     ? `\nFACETS STILL MISSING from the deliverable — pursue ONE of THESE this pass, do NOT keep re-searching a facet you already have:\n${uncovered.map((f) => `- ${f}`).join('\n')}\n` : '';
@@ -220,7 +235,7 @@ function buildDeepenPrompt({ goal = '', target = '', facets = [], guidance = '',
   // used this run and push toward DEPTH (a new page on a site, a followed link) or a NEW source.
   const v = (Array.isArray(visited) && visited.length)
     ? `\nALREADY VISITED THIS RUN — do NOT open these again or re-run these searches; a RE-WORDED version of a listed search counts as the SAME search — do not run it again in any phrasing. Instead go DEEPER (open a NEW page/section on a site you've seen, or follow a link from it), OPEN the org's own /contact or /team page directly, or switch to a facet you have NOT covered:\n${visited.slice(-18).map(u => `- ${u}`).join('\n')}\n` : '';
-  return `You are DEEP-researching ONE organization for Lucas's task, staying on it until it is well covered.\n\nTASK: ${goal}\nCURRENT ORGANIZATION: ${target}\nFacets already gathered on it: ${facetsSummary(facets)}\n${k}${v}${uc}${cp}${g}\nTHIS PASS: pursue the NEXT most valuable facet you do NOT yet have on ${target}, in priority order: (1) named leadership & key staff with their roles, (2) direct contact details (work emails, phone numbers, mailing address, key social/LinkedIn) — check the org's own /contact or /about page, (3) detailed policy positions / notable work, (4) funding & affiliations, (5) recent activity / publications. EXHAUST a good source before moving on: when you land on the organization's OWN site, use open_page to go straight into its /team, /leadership, /about and /contact pages (and follow promising links) — do NOT bounce to a fresh web_search until you've actually used the site you're on. Ground EVERY detail in what the tools return — never invent a name, email, or number. If you cannot verify a real, FULL name, write "not found" — NEVER use initials, abbreviations, or any placeholder (e.g. "R. Z." or "VP") in place of a real name.\nIf you have already gathered a solid, well-rounded picture of ${target} (what it is, its people, how to reach it, its positions), reply with exactly SATURATED and nothing else.\nEnd with a final line: FACET: <the facet you added this pass>`;
+  return `You are DEEP-researching ONE organization for Lucas's task, staying on it until it is well covered.\n\nTASK: ${goal}${runCov}\nCURRENT ORGANIZATION: ${target}\nFacets already gathered on it: ${facetsSummary(facets)}\n${k}${v}${uc}${cp}${g}\nTHIS PASS: pursue the NEXT most valuable facet you do NOT yet have on ${target}, in priority order: (1) named leadership & key staff with their roles, (2) direct contact details (work emails, phone numbers, mailing address, key social/LinkedIn) — check the org's own /contact or /about page, (3) detailed policy positions / notable work, (4) funding & affiliations, (5) recent activity / publications. EXHAUST a good source before moving on: when you land on the organization's OWN site, use open_page to go straight into its /team, /leadership, /about and /contact pages (and follow promising links) — do NOT bounce to a fresh web_search until you've actually used the site you're on. Ground EVERY detail in what the tools return — never invent a name, email, or number. If you cannot verify a real, FULL name, write "not found" — NEVER use initials, abbreviations, or any placeholder (e.g. "R. Z." or "VP") in place of a real name.\nIf you have already gathered a solid, well-rounded picture of ${target} (what it is, its people, how to reach it, its positions), reply with exactly SATURATED and nothing else.\nEnd with a final line: FACET: <the facet you added this pass>`;
 }
 
 // --- ENRICH / FACET-FILL mode -----------------------------------------------
@@ -312,7 +327,7 @@ function buildOrganizeTargetPrompt({ target = '', raw = '' } = {}) {
 module.exports = {
   parsePass, newContentChars, decideAdvance, facetsSummary,
   isClarification, buildGuidanceBlock, isStatusRequest,
-  buildNewTargetPrompt, buildTopicalPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt, pickSeedTarget, allTargetsCovered, isConcreteTarget,
+  buildNewTargetPrompt, buildTopicalPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt, pickSeedTarget, allTargetsCovered, isConcreteTarget, coverageLine,
   facetToolset, buildCoveragePlan, searchSignature,
   pickEnrichTarget, facetLabel, buildEnrichPrompt, buildOrganizeEnrichPrompt,
   buildWebLanePrompt, buildDeepLanePrompt, buildMergeLanesPrompt,
