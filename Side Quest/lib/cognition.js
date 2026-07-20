@@ -162,7 +162,21 @@ async function _enrichConvo(need, deps = {}) {
   return { text: 'From our own past conversation (this is what was actually said):\n' + lines.join('\n'), url: null };
 }
 
-async function _enrichWiki(need, deps = {}) {
+// WIKI IS A LINKING STEP, NOT A GENERAL ANSWER SOURCE (Lucas, 2026-07-20):
+//   "The wiki search should only be for a newly minted object or an object that has no wiki link."
+//
+// An object carrying a `wikidata_qid` has already been linked to its global identity — Echo's own
+// code treats that as "the KG record is trustworthy" — so re-fetching the article adds no linkage and
+// re-answers from an encyclopedia something we already hold. Firing wiki only at UNLINKED or
+// newly-encountered objects is what makes the lookup an enrichment that PAYS: each hit either mints
+// an object or attaches an identity that stops the next lookup going out at all.
+//
+// No object at all → this is newly encountered → fetch. That is the mint case.
+async function _enrichWiki(need, deps = {}, { object = null } = {}) {
+  if (object && object.wikidata_qid) {
+    console.log(`[cognition] wiki skipped — "${String(object.name || need).slice(0, 50)}" is already linked (${object.wikidata_qid})`);
+    return { text: '', url: null, skipped: 'already-linked' };
+  }
   const wiki = deps.wikiLookup || ((q) => { try { return require('./echo_suit').wikiLookup(q); } catch { return Promise.resolve([]); } });
   let pages = [];
   try { pages = (await wiki(need)) || []; } catch {}
@@ -234,10 +248,16 @@ async function _enrichRouted(need, deps = {}) {
 // the verified_fact rail so browsing FEEDS our DB (gold for research/database-building) and she's never on
 // the same page twice. Non-blocking (kick, don't await): answer now, bank in the background. Only fires for
 // tiers with a real source URL (graph/routed are our own data → nothing to bank). Fail-safe.
-function _kickWriteBack({ query, answer, url, source, deps = {} }) {
+function _kickWriteBack({ query, answer, url, source, text = null, deps = {} }) {
   if (!url || !answer || !query) return;
   const wb = deps.writeBack || ((a) => { try { return require('./learning').captureRecovered(a); } catch { return Promise.resolve(); } });
   Promise.resolve().then(() => wb({ query, answer, url, source: source || 'browsing' })).catch(() => {});
+  // …and MINT THE OBJECTS. captureRecovered banks a flat verified_fact keyed by subject slot; this is
+  // the object half, in the same encounter vocabulary every other input lane uses. It is also what
+  // makes the wiki gate pay: a fetch that happens leaves the link behind, so the next question about
+  // that object is answered from what we hold instead of going back out.
+  const rec = deps.recordRecovery || ((a) => { try { return require('./recovery_encounters').fromRecovery(a); } catch { return Promise.resolve(0); } });
+  Promise.resolve().then(() => rec({ text: text || answer, url, source: source || 'browsing' })).catch(() => {});
 }
 
 // STALENESS — active_recall tags banked facts "[VERIFIED as of YYYY-MM-DD]". A banked answer would be
@@ -287,13 +307,18 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
     // back (supersedes the stale one) and wins.
     for (const tier of ['wiki', 'excavate']) {
       let fresh = { text: '', url: null };
+      // NOTE: `object` is deliberately NOT passed here. This is the CURRENCY-VERIFY path — "who is
+      // president now?" — where wiki is checking whether a fact TURNED OVER, not linking an object.
+      // The already-linked skip belongs to the enrichment ladder below; applying it here would mean a
+      // linked object could never be re-verified, which is precisely the confidently-stale answer
+      // (Echo still records Biden as president) this path exists to catch.
       try { fresh = (tier === 'wiki' ? await _enrichWiki(topic, deps) : await _enrichExcavate(topic, deps)) || fresh; } catch {}
       if (!fresh.text) continue;
       const gv = [`Fresh check for the current fact (${topic}):\n${fresh.text}`, g].filter(Boolean).join('\n\n');   // fresh check LEADS so the draft cap keeps the verified value, not the stale grounding it's meant to override
       const v = await _draftOrNeed(userMessage, gv, deps);
       if (v && v.answer) {
         const src = tier === 'wiki' ? 'wiki-verify' : 'excavate-verify';
-        _kickWriteBack({ query: userMessage, answer: v.answer, url: fresh.url, source: src, deps });
+        _kickWriteBack({ query: userMessage, answer: v.answer, url: fresh.url, source: src, text: fresh.text, deps });
         return { say: v.answer, enriched: true, enrichSource: src };
       }
     }
@@ -335,7 +360,7 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
     const q = (it.needs_fresh && it.topic) ? it.topic : step.need;
     const res = mode === 'convo' ? await _enrichConvo(q, deps)
               : mode === 'graph' ? await _enrichGraph(q, object, deps)
-              : mode === 'wiki' ? await _enrichWiki(q, deps)
+              : mode === 'wiki' ? await _enrichWiki(q, deps, { object })
               : mode === 'routed' ? await _enrichRouted(q, deps)
               : mode === 'web' ? await _enrichWeb(q, deps)
               : await _enrichExcavate(q, deps);
@@ -350,7 +375,7 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
     if (step && step.answer) {
       // SELF-HEAL — any tier that recovered from an external SOURCE (wiki/web/excavation) feeds the answer
       // back to the DB so browsing builds our knowledge and she's never on the same page twice.
-      _kickWriteBack({ query: userMessage, answer: step.answer, url: res.url, source: mode, deps });
+      _kickWriteBack({ query: userMessage, answer: step.answer, url: res.url, source: mode, text: res.text, deps });
       return { say: step.answer, enriched: true, enrichSource: mode };
     }
   }

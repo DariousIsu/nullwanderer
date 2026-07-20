@@ -157,6 +157,7 @@ const smokes = [
   'smoke_localdb.js',
   'smoke_convo_state.js',
   'smoke_convo_tier.js',
+  'smoke_recovery_encounters.js',
   'smoke_convo_encounters.js',
   'smoke_encounters.js',
   'smoke_localdb_attach.js',
