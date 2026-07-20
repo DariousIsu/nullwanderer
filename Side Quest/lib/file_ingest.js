@@ -29,6 +29,16 @@ function srcToPath(src) {
   try { p = decodeURIComponent(p); } catch {}
   return p;
 }
+
+// The INVERSE: an OS path → a real file:// URL, safe to hand a renderer. Lives here so the two halves stay
+// together and are tested as a pair. Concatenating 'file:///' + path (what the canvas drop used to do) is
+// wrong for any filename holding a URL-significant character: "July Poll #3.pdf" made everything after '#'
+// a fragment, so the PDF iframe fetched a path that doesn't exist and rendered blank while the file sat
+// happily on disk. pathToFileURL percent-encodes # ? % and spaces; srcToPath decodes them straight back.
+function pathToSrc(p) {
+  try { return require('url').pathToFileURL(String(p)).href; }
+  catch { return 'file:///' + String(p == null ? '' : p).replace(/\\/g, '/').replace(/^\/+/, ''); }
+}
 function extOf(filePath, pathMod) {
   return (pathMod.extname(filePath).replace(/^\./, '') || '').toLowerCase();
 }
@@ -114,4 +124,4 @@ function isBlankOcrReply(text, { minChars = MIN_TEXT } = {}) {
   return !t || t.length < minChars || NO_TEXT_REPLY_RE.test(t);
 }
 
-module.exports = { extractDroppedFile, srcToPath, extOf, isBlankOcrReply, IMAGE_EXT, TEXT_DOC_EXT, MIN_TEXT, VISION_PROMPT };
+module.exports = { extractDroppedFile, srcToPath, pathToSrc, extOf, isBlankOcrReply, IMAGE_EXT, TEXT_DOC_EXT, MIN_TEXT, VISION_PROMPT };

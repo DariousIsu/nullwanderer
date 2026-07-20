@@ -3595,6 +3595,11 @@ ipcMain.handle('canvas:reset-layout', async (_e, { tabKey } = {}) => {
 // other text types, then opens a DOC tab with the content and positions it at the drop point. These
 // dropped docs live in the engine's in-memory canvas (ephemeral) — ideal for quick test population.
 const IMG_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml' };
+// A dropped file's path → a REAL file:// URL (lib/file_ingest.pathToSrc, the exact inverse of the srcToPath
+// the re-ingest poller uses). This used to be string concatenation, which silently produced a BROKEN url for
+// any filename holding a URL-significant character — "July Poll #3 - Crosstab Report.pdf" rendered as a blank
+// document because everything after '#' is a fragment.
+const fileUrl = (p) => require('./lib/file_ingest').pathToSrc(p);
 ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
   try {
     if (!filePath) return { ok: false, error: 'no file path' };
@@ -3608,16 +3613,16 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       const b64 = fs.readFileSync(filePath).toString('base64');
       // `src` = inline data URI (the picture renders); `file` = the real path so the ingest poller
       // re-reads it via file_ingest → VISION OCR → surfaceDocCards → cards (a data URI can't be re-read).
-      data = { src: `data:${IMG_MIME[ext]};base64,${b64}`, alt: baseName, file: 'file:///' + filePath.replace(/\\/g, '/').replace(/^\/+/, '') };
+      data = { src: `data:${IMG_MIME[ext]};base64,${b64}`, alt: baseName, file: fileUrl(filePath) };
       blockType = 'image'; mode = 'ILLUSTRATIVE';
     } else if (ext === 'pdf') {                            // PDF → embed the REAL document (Chromium PDF viewer)
-      data = { src: 'file:///' + filePath.replace(/\\/g, '/').replace(/^\/+/, ''), alt: baseName };
+      data = { src: fileUrl(filePath), alt: baseName };
       blockType = 'document_file';                          // 'pdf' is not a valid engine block type
     } else if (ext === 'csv' || ext === 'tsv') {           // SPREADSHEET (delimited) → table
       const tbl = require('./studio/sheet_view').csvToTable(fs.readFileSync(filePath, 'utf8'), ext === 'tsv' ? '\t' : ',');
       // src = the on-disk file → the ingest poller re-reads the FULL sheet (not the truncated display rows)
       // via file_ingest → doc_extract.extractSpreadsheet → markdown table → surfaceDocCards → cards.
-      data = { headers: tbl.headers, rows: tbl.rows, caption: tbl.truncated ? `+${tbl.truncated} more rows` : null, src: 'file:///' + filePath.replace(/\\/g, '/').replace(/^\/+/, '') };
+      data = { headers: tbl.headers, rows: tbl.rows, caption: tbl.truncated ? `+${tbl.truncated} more rows` : null, src: fileUrl(filePath) };
       blockType = 'table';
     } else if (ext === 'xlsx' || ext === 'xlsm' || ext === 'xls') {   // EXCEL → table (first sheet)
       const ExcelJS = require('exceljs');
@@ -3627,14 +3632,14 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       const rows = [];
       if (ws) ws.eachRow((r) => rows.push((r.values || []).slice(1).map(v => (v == null ? '' : (typeof v === 'object' ? (v.text || v.result || v.hyperlink || JSON.stringify(v)) : v)))));
       const tbl = require('./studio/sheet_view').toTable(rows);
-      data = { headers: tbl.headers, rows: tbl.rows, caption: ws ? `${ws.name}${tbl.truncated ? ` · +${tbl.truncated} more rows` : ''}` : null, src: 'file:///' + filePath.replace(/\\/g, '/').replace(/^\/+/, '') };
+      data = { headers: tbl.headers, rows: tbl.rows, caption: ws ? `${ws.name}${tbl.truncated ? ` · +${tbl.truncated} more rows` : ''}` : null, src: fileUrl(filePath) };
       blockType = 'table';
     } else if (ext === 'docx') {                           // WORD → rich HTML (tables, emphasis, inline images)
       try { const r = await require('./lib/doc_extract').extractDocxHtml(filePath); if (r && r.html && r.html.trim()) { data = { html: r.html }; blockType = 'document_file'; } } catch {}
       if (!data) {                                         // fallback: flattened markdown as a paragraph
         let markdown = ''; try { markdown = (await require('./lib/doc_extract').extractDocx(filePath)).markdown || ''; } catch {}
         if (!markdown.trim()) return { ok: false, error: 'empty / unreadable .docx' };
-        data = { markdown, src: 'file:///' + filePath.replace(/\\/g, '/').replace(/^\/+/, '') };   // full; rendered in progressive chunks below
+        data = { markdown, src: fileUrl(filePath) };   // full; rendered in progressive chunks below
       }
     } else {                                               // DOCUMENT (md/txt/code/pdf-text-fallback/…) → markdown
       let markdown = '';
@@ -3643,7 +3648,7 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       if (!markdown.trim()) return { ok: false, error: 'empty / unreadable document' };
       const firstH = markdown.split(/\r?\n/).map(l => l.trim()).find(l => /^#{1,6}\s+\S/.test(l));
       if (firstH) title = firstH.replace(/^#{1,6}\s+/, '').slice(0, 120);
-      data = { markdown, src: 'file:///' + filePath.replace(/\\/g, '/').replace(/^\/+/, '') };   // full; rendered in progressive chunks below
+      data = { markdown, src: fileUrl(filePath) };   // full; rendered in progressive chunks below
     }
 
     const tabKey = `drop-${path.basename(filePath).replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 40)}-${Date.now().toString(36)}`;
@@ -3793,6 +3798,22 @@ async function rehydrateCanvasFromDeliverable(focus, file, target) {
 // restart. Replays with the SAME tab keys and block ids, then seeds the session sets so subsequent live-grow
 // PATCHES those blocks in place instead of appending duplicates, and marks the replayed focuses as already
 // rehydrated so the file sweep doesn't emit the same sections a second time.
+// Legacy rows were mirrored while the drop path still built file:// URLs by concatenation, so a filename
+// with a '#' (or '%', or '?') is stored broken and would replay as a blank document forever. Normalize any
+// file: URL through the decode→encode pair on the way back out — a no-op for a URL that was already correct.
+function repairFileUrls(data) {
+  if (!data || typeof data !== 'object') return data;
+  const fi = require('./lib/file_ingest');
+  let out = data;
+  for (const k of ['src', 'file', 'url', 'href']) {
+    const v = out[k];
+    if (typeof v !== 'string' || !/^file:/i.test(v)) continue;
+    const fixed = fi.pathToSrc(fi.srcToPath(v));
+    if (fixed !== v) { if (out === data) out = { ...data }; out[k] = fixed; }
+  }
+  return out;
+}
+
 async function replayCanvasFromStore() {
   try {
     if (!(await ensureEngine())) return 0;
@@ -3808,7 +3829,7 @@ async function replayCanvasFromStore() {
         _canvasTabsOpened.add(d.tabKey);
         tabs++;
         for (const b of d.blocks) {
-          await callTool('saga_canvas_add_block', { tab_key: d.tabKey, block_type: b.blockType, data: b.data || {}, block_id: b.blockId });
+          await callTool('saga_canvas_add_block', { tab_key: d.tabKey, block_type: b.blockType, data: repairFileUrls(b.data) || {}, block_id: b.blockId });
           _canvasBlocks.add(b.blockId);
           blocks++;
         }

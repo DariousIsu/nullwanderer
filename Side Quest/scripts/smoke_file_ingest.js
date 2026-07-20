@@ -14,6 +14,18 @@ ok(FI.srcToPath('file:///C:/Users/x/a.pdf') === 'C:/Users/x/a.pdf', 'srcToPath: 
 ok(FI.srcToPath('file:///C:/Users/x/a%20b.pdf') === 'C:/Users/x/a b.pdf', 'srcToPath: url-decodes (%20 → space)');
 ok(FI.srcToPath('C:/plain/path.png') === 'C:/plain/path.png', 'srcToPath: passes a bare path through');
 
+// --- pathToSrc: OS path → file:// URL, and the round-trip back. A dropped document renders through this
+// URL, so a filename with a URL-significant character must not silently truncate it. "July Poll #3 …pdf"
+// is the real case: naive concatenation made "#3 - Crosstab Report.pdf" a FRAGMENT and the canvas showed
+// an empty document while the file was on disk the whole time.
+const rt = (p) => FI.srcToPath(FI.pathToSrc(p)).replace(/\\/g, '/') === p.replace(/\\/g, '/');
+ok(FI.pathToSrc(String.raw`C:\d\July Poll #3 - Crosstab Report.pdf`).indexOf('%233') > 0, 'pathToSrc: # is percent-encoded, not left as a fragment');
+ok(rt(String.raw`C:\d\July Poll #3 - Crosstab Report.pdf`), 'pathToSrc → srcToPath round-trips a # filename');
+ok(rt(String.raw`C:\d\Memo_8.5x11_r1_press (1).pdf`), 'pathToSrc → srcToPath round-trips spaces + parentheses');
+ok(rt(String.raw`C:\d\100% done & final.pdf`), 'pathToSrc → srcToPath round-trips % and &');
+ok(rt(String.raw`C:\d\plain.pdf`), 'pathToSrc → srcToPath round-trips a plain name');
+ok(FI.pathToSrc(String.raw`C:\d\plain.pdf`) === 'file:///C:/d/plain.pdf', 'pathToSrc: plain name is left readable');
+
 const path = require('path');
 const baseDeps = (over) => Object.assign({ path, fileExists: () => true, log: () => {} }, over);
 
