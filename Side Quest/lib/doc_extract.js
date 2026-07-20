@@ -37,13 +37,21 @@ function inlineMd(html) {
     .replace(/<\s*(strong|b)\s*>/gi, '**').replace(/<\/\s*(strong|b)\s*>/gi, '**')
     .replace(/<\s*(em|i)\s*>/gi, '_').replace(/<\/\s*(em|i)\s*>/gi, '_')
     .replace(/<br\s*\/?>/gi, ' ')
+    // SUPERSCRIPT ENDNOTE REFS → an explicit "[n]" marker. Without this the generic tag-strip below
+    // flattens <sup>3</sup> to a bare digit welded onto the sentence ("…zero binding commitments.3"),
+    // which no citation-marker detector recognizes — so the claim loses the source the document
+    // itself named and falls through to a blind web search. Both real shapes land here: Word
+    // footnotes (mammoth emits an <ol> + fnref backlinks) and hand-typed superscripts (no anchor at
+    // all). Adjacent refs stay separable ("[4][5]") instead of fusing into "45".
+    // Digits only, ≤3 — this deliberately does not touch <sup>st</sup>/<sup>nd</sup> ordinals.
+    .replace(/<sup>\s*(\d{1,3})\s*<\/sup>/gi, '[$1]')
     .replace(/<a\b[^>]*\bhref\s*=\s*["'](https?:\/\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_m, url, txt) => {
       const t = String(txt).replace(/<[^>]+>/g, '').trim();
       return (t && t !== url && !t.includes(url)) ? `${t} (${url})` : (t || url);
     })
     .replace(/<a\b[^>]*>/gi, '').replace(/<\/a>/gi, '')   // fragment/anchor links → text only
     .replace(/<[^>]+>/g, '')
-  ).replace(/[ \t]+/g, ' ').replace(/\s*[↑^]\s*$/, '').trim();   // drop trailing footnote-return glyph
+  ).replace(/[ \t]+/g, ' ').replace(/\s*[↑↩^]\s*$/, '').trim();   // drop trailing footnote-return glyph (↩ = mammoth's)
 }
 
 // mammoth's flat block HTML → markdown. Tables are flattened (their structural tags dropped, inner

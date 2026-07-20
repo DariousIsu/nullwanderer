@@ -22,6 +22,29 @@ ok('inline: fragment/anchor link → text only', DX.inlineMd('note<a href="#fn1"
 ok('inline: trailing footnote backlink glyph dropped', DX.inlineMd('source text <a href="#ref1">↑</a>') === 'source text');
 ok('inline: stray tags stripped + ws collapsed', DX.inlineMd('<span class="x">a</span>   b') === 'a b');
 
+// SUPERSCRIPT ENDNOTE REFS. Without the <sup>→[n] rule the generic tag-strip welds the digit onto
+// the sentence ("…commitments.3"), no marker detector sees it, and the claim loses the source the
+// document itself named. Both real docx shapes are covered: hand-typed superscripts (no anchor) and
+// mammoth's Word-footnote refs (anchored, with a ↩ backlink in the list).
+ok('inline: superscript endnote ref → [n]',
+  DX.inlineMd('zero binding commitments.<sup>3</sup>') === 'zero binding commitments.[3]',
+  DX.inlineMd('zero binding commitments.<sup>3</sup>'));
+ok('inline: adjacent refs stay separable (not "45")',
+  DX.inlineMd('the bill<sup>4</sup><sup>5</sup>') === 'the bill[4][5]',
+  DX.inlineMd('the bill<sup>4</sup><sup>5</sup>'));
+ok('inline: anchored footnote ref → [n]',
+  DX.inlineMd('a claim<a href="#user-content-fn-2"><sup>2</sup></a>') === 'a claim[2]',
+  DX.inlineMd('a claim<a href="#user-content-fn-2"><sup>2</sup></a>'));
+ok('inline: ordinal suffix is NOT a marker (digits-only rule)',
+  DX.inlineMd('the 21<sup>st</sup> century') === 'the 21st century', DX.inlineMd('the 21<sup>st</sup> century'));
+// KNOWN LIMITATION, asserted so it is visible rather than surprising: a numeric superscript UNIT
+// (km², m³) is indistinguishable from an endnote ref at this layer and does become "[2]". Harmless
+// in practice — it only matters if that ordinal also exists in a reference section, and these are
+// policy documents, not physics papers. Revisit if a doc with real units ever mis-cites.
+ok('inline: numeric unit superscript is a known false positive', DX.inlineMd('12 km<sup>2</sup>') === '12 km[2]');
+ok('inline: ↩ footnote-return glyph dropped', DX.inlineMd('Stateline, "Red states" <a href="#fnref-8">↩</a>') === 'Stateline, "Red states"',
+  DX.inlineMd('Stateline, "Red states" <a href="#fnref-8">↩</a>'));
+
 // footnote citations with hyperlinks: the URLs must survive extraction (the ELI-op-ed failure mode)
 {
   const fn = '<ol><li id="fn3"><p>See the <a href="https://worldometers.info/china">EDGAR table</a>; report at <a href="https://statearmor.org/r.pdf">State Armor</a>. <a href="#ref3">↑</a></p></li></ol>';

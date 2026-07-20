@@ -165,6 +165,22 @@
       if (!best || best.len < minEntries || best.end < list.length - 1 - maxTail) return null;
       startIndex = best.start;
       endIndex = best.end;
+
+      // Requiring a url PER BLOCK finds the run, but a reference list may OPEN with an unlinked
+      // entry (a poll provided directly, an interview, a book). Dropping it shifts every positional
+      // ordinal by one and silently cites each claim one source off — observed live: the SNAP op-ed's
+      // note 1 is an unlinked Rainey Center poll, so a polling claim resolved to a USDA fraud page.
+      // Extend backwards only over blocks that are unmistakably part of the SAME list: a contiguous
+      // list_item run, or a paragraph that prints its own leading ordinal.
+      const runIsList = list[startIndex] && list[startIndex].type === 'list_item';
+      while (startIndex > 0) {
+        const prev = list[startIndex - 1];
+        if (!prev || !REF_BLOCKS.has(prev.type)) break;
+        const sameList = runIsList && prev.type === 'list_item';
+        const numbered = LEADING_ORDINAL_RE.test(String(prev.text || ''));
+        if (!sameList && !numbered) break;
+        startIndex--;
+      }
     }
     if (startIndex < 0 || startIndex >= list.length) return null;
 

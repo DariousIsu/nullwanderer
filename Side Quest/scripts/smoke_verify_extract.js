@@ -194,6 +194,32 @@ ok('trailing author bio is NOT swallowed by the reference run',
   docxRefs.endIndex === docxDoc.blocks.length - 2, `endIndex=${docxRefs && docxRefs.endIndex} of ${docxDoc.blocks.length}`);
 ok('endnote paragraphs not mined as claims', !docxUnits.some(u => /statearmor|worldometers/i.test(u.text)));
 
+// --- an UNLINKED leading endnote must still be counted (off-by-one guard) ------------------
+// Observed live in the SNAP op-ed: note 1 was an unlinked poll ("as provided"), so a url-per-block
+// run started at note 2 and every positional ordinal shifted by one — a polling claim resolved to a
+// USDA fraud page. A wrong source is worse than none: the judge reads a real passage and returns a
+// confident verdict about an unrelated one.
+const unlinkedFirst = importText([
+  'The survey of 1,002 registered voters finds the policy is popular.[1]',
+  '',
+  'The program costs taxpayers roughly $100 billion a year.[2]',
+  '',
+  '- Rainey Center national poll of 1,002 registered voters (as provided; no public release).',
+  '- Food and Nutrition Administration (USDA), "SNAP Fraud Prevention" (https://www.fna.usda.gov/snap/fraud)',
+  '- Fox News, "Food-stamp fraud numbers" (https://www.foxnews.com/politics/food-stamp-fraud)',
+].join('\n'), { format: 'md' });
+const ufRefs = VE.findReferenceSection(unlinkedFirst.blocks);
+ok('unlinked FIRST endnote is part of the reference section', ufRefs && Object.keys(ufRefs.entries).length === 3,
+  JSON.stringify(ufRefs && ufRefs.entries));
+ok('ordinal 1 is the UNLINKED entry, not the first linked one',
+  ufRefs && /Rainey Center/.test(ufRefs.entries[1].text) && ufRefs.entries[1].url === null,
+  JSON.stringify(ufRefs && ufRefs.entries[1]));
+const ufUnits = extractUnits(unlinkedFirst).units;
+const uf2 = ufUnits.find(u => u.marker === '[2]');
+ok('[2] resolves to USDA (no off-by-one shift)', uf2 && /fna\.usda\.gov/.test(uf2.url || ''), uf2 && uf2.url);
+const uf1 = ufUnits.find(u => u.marker === '[1]');
+ok('[1] stays UNRESOLVED rather than citing the wrong source', uf1 && !uf1.url, uf1 && uf1.url);
+
 // --- no false positives: a document with no reference list keeps every unit ---
 const proseDoc = importText([
   'The agency reported a 12% increase this year.',
