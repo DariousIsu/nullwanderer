@@ -84,7 +84,7 @@ Five tiers, strongest first:
 - **All 43 sq.db tables** via the `localdb` operator tool — *verified: no allowlist, arbitrary read-only SELECT.* This covers `route_obs`, `absence`, `cardinality`, `encounters`, `agent_events`, `cloud_traces`, `recent_cards`, `agenda`, `scheduled_tasks`, `email_log`, `sessions`, `interests`, `meeting_transcript`.
 - All 8 Echo databases via the `echo` need-router / `db_query`.
 
-### 2.5 BLIND — **verified by execution**
+### 2.5 BLIND — **verified by execution** *(§2.5 and §3.1/§3.5 FIXED 2026-07-20 — see §6)*
 
 `localdb` binds to `dbLib.getDb()`, which is **sq.db only**. Probed live:
 
@@ -155,3 +155,40 @@ Her awareness is **inverted relative to volume**. Ranked by rows:
 5. **Self-history introspection** — a bounded read over `route_obs`/`agent_events` so "what have I been failing at?" is answerable.
 
 Items 1 and 4 are the same fix. Item 3 is the natural extension of the ambient standing work.
+
+---
+
+## 6. ✅ Item 1 (and 4) — DONE, 2026-07-20
+
+`lib/localdb.js` now opens a dedicated **read-only** connection and ATTACHes the other four
+databases under aliases. Verified live:
+
+```
+attached: news, puller, api, editor
+REACHABLE  puller.targets               → 238475
+REACHABLE  puller.beliefs               → 350802
+REACHABLE  news.news_items              → 97998
+REACHABLE  api.api_usage                → 3250
+REACHABLE  editor.pipeline_documents    → 12
+```
+
+The question that previously had **no path at all** now answers:
+`SELECT COUNT(*) FROM puller.targets t WHERE EXISTS (SELECT 1 FROM puller.beliefs b WHERE b.target_id=t.id AND b.type='email')`
+→ **40,944 of 238,475 targets carry an email belief.**
+
+`inventory()` went 43 → 67 tables and reports attached tables **qualified** (`puller.targets`), so
+the map doubles as the syntax hint. The operator's tool spec now documents the aliases — without
+that it would never have used them.
+
+**Why a separate connection rather than ATTACH onto the app's handle:** those files have their own
+live writers (news_store, puller_db, api_store, editor_registry). All five databases are in WAL
+(verified), so a dedicated reader never blocks a writer. It is also defence in depth — the existing
+`stmt.readonly` check stays, but the connection itself now cannot write. If the read-only connection
+cannot be opened, `query()` falls back to the app handle, so this is never *worse* than sq.db-only.
+
+Write safety is regression-tested across every attached database (`scripts/smoke_localdb_attach.js`,
+28 assertions): DELETE/UPDATE/INSERT/DROP/CREATE/ATTACH/PRAGMA all refused, multi-statement
+smuggling rejected, and the data verified intact afterwards.
+
+**Still open:** items 2, 3, 5. Note §3.1's N+1 in `gatherHeldContacts` is unchanged — but that path
+now has a SQL alternative, which is the cheaper way to answer aggregate contact questions.

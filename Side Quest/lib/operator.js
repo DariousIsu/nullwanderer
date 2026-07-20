@@ -69,8 +69,14 @@ well-meant.
 TOOLS (call exactly ONE per step):
 - echo {"need":"…"}             OUR private data + 500+ research tools (legislative/gov/CRM/knowledge-graph) — say the need in plain words (use this for anything the named ECHO DATA TOOLS below don't cover)
 - recall {"query":"…"}          semantic search of her OWN memory (past conversations, facts, notes she's kept)
-- localdb {"sql":"SELECT …"}    query her OWN local memory store DIRECTLY — read-only SELECT over her tables (knowledge, notes, open_threads, monologue, self_model…). Use this to look across ALL of her stored memory, not just the top semantic hits. Run localdb_map first if you don't know the tables.
-- localdb_map {}                list her local store's tables + row counts
+- localdb {"sql":"SELECT …"}    query her OWN local memory stores DIRECTLY — read-only SELECT over her tables (knowledge, notes, open_threads, monologue, self_model…). Use this to look across ALL of her stored memory, not just the top semantic hits. FIVE databases are queryable, and the four beyond her main store are addressed by an ALIAS PREFIX — you can join across them freely:
+    · (no prefix)  her main store — knowledge, turns, monologue, open_threads, self_model, absence, route_obs…
+    · puller.*     her OWN contact research — puller.targets, puller.beliefs, puller.observations (the biggest store she has; e.g. SELECT COUNT(*) FROM puller.targets)
+    · news.*       the news bucket — news.news_items, news.news_stories (what she has actually been reading)
+    · api.*        API usage/cache — api.api_usage, api.bulk_records
+    · editor.*     the document pipeline — editor.pipeline_documents, editor.check_runs
+  Run localdb_map first if you don't know the tables; it lists every table QUALIFIED exactly as you must query it.
+- localdb_map {}                list her local stores' tables + row counts (all five databases)
 - web_search {"query":"…"}      search the open web + read the top result — for what our own data does NOT already cover (breaking news, prices, a page/video, anything genuinely new)
 - open_page {"url":"…"}         open a SPECIFIC page in her browser and read it in full — use this to go DEEPER into a good source instead of bouncing to a new search: follow a promising link you saw, or go straight to an org's own /team, /leadership, /about, or /contact page
 - browser_read {}               read the page currently open in her browser

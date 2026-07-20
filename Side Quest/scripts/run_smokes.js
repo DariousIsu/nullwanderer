@@ -137,6 +137,7 @@ const smokes = [
   'smoke_meeting_lane.js',
   'smoke_meeting_audio.js',
   'smoke_localdb.js',
+  'smoke_localdb_attach.js',
   'smoke_intake.js',
   'smoke_estimate_correction.js',
   'smoke_poll.js',
