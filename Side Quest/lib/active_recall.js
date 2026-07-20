@@ -44,7 +44,16 @@ async function recall(topic, { k = 6, minRelevance = 0.33, context = '', retriev
     // stays on the deterministic regex path so the offline gate needs no model/cloud.
     let det = null;
     if (!objectFn) { try { det = await require('./mention').detectMention(t, { context }); } catch {} }
-    const entTopic = (det && det.mention) || extractEntity(t) || (_looksLikeEntity(t) ? t : null);
+    // `det.self` = the mention layer DELIBERATELY suppressed a self/owner name. Falling through to the
+    // regex here is what produced the "which Zoe do you mean?" failure: the fallback re-grabbed the
+    // vocative as "Hey Zoe" and resolved it against four civic Zoes. A deliberate suppression must end
+    // the search, not restart it on a dumber tier.
+    let entTopic = (det && det.mention) || ((det && det.self) ? null : (extractEntity(t) || (_looksLikeEntity(t) ? t : null)));
+    // Belt-and-braces: the same guard on the FINAL mention whatever produced it (regex fallback, a NER
+    // miss, or `t` used whole). Vocative-aware, so the greeting can't smuggle her own name past it.
+    if (entTopic) {
+      try { if (require('./mention').isVocativeSelf(entTopic)) { console.log(`[recall] "${entTopic}" is Zoe/Lucas being addressed — not an entity to look up`); entTopic = null; } } catch {}
+    }
     const preferType = (det && det.kgType) || null;
     mentionUsed = entTopic;
     if (entTopic) {
@@ -119,6 +128,9 @@ const _ENT_TITLES = new Set([
   'senator', 'sen', 'rep', 'representative', 'dr', 'mr', 'mrs', 'ms', 'gov', 'governor', 'president', 'pres', 'the', 'a', 'an',
   'who', 'what', 'which', 'when', 'where', 'why', 'how', 'whose', 'whom',   // interrogatives
   'is', 'are', 'was', 'were', 'do', 'does', 'did', 'tell', 'me', 'about', 'of',  // question glue
+  // Greetings — third layer on the vocative bug. Capitalized and sentence-initial, they otherwise glue
+  // straight onto the name that follows ("Hey Zoe" → a four-way person collision).
+  'hey', 'hi', 'hello', 'yo', 'hiya', 'heya', 'ok', 'okay', 'thanks', 'please',
 ]);
 function extractEntity(text) {
   // strip surrounding punctuation per token so a sentence-final entity ("Trump?") isn't split off

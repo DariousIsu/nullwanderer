@@ -61,16 +61,26 @@ ok('GUARD: a stranger is not self', db.isSelfName('Zoe Logren') === false);
 (async () => {
   // detectMention SUPPRESSES self/owner mentions (stub NER for an offline-deterministic check), so the vocative
   // never reaches civic disambiguation — the "which Zoe / which Z do you mean?" bug.
+  //
+  // CONTRACT CHANGED 2026-07-20: suppression returns { mention: null, self: true }, not a bare null.
+  // These assertions previously pinned `=== null`, and that exact contract is what let the bug through
+  // live: the caller reads null as "no mention found" and falls back to its regex, which grabbed the
+  // whole vocative "Hey Zoe" and disambiguated it against four civic Zoes. Still suppressed — but now
+  // distinguishable from a miss, so the caller can stop instead of retrying on a dumber tier.
+  const suppressed = (r, label) => {
+    ok(`detectMention SUPPRESSES ${label}`, !!r && !r.mention);
+    ok(`  …and FLAGS it as self/owner (not a miss) — ${label}`, !!r && r.self === true);
+  };
   try {
     const ner = require('../lib/ner');
     const orig = ner.topMention;
     const M = require('../lib/mention');
     ner.topMention = async () => ({ mention: 'Zoe', kgType: 'person', score: 0.9 });
-    ok('detectMention SUPPRESSES a self-name mention', (await M.detectMention('Zoe, what is my name?', { deps: { noCloud: true } })) === null);
+    suppressed(await M.detectMention('Zoe, what is my name?', { deps: { noCloud: true } }), 'a self-name mention');
     ner.topMention = async () => ({ mention: 'L. Overby', kgType: 'person', score: 0.9 });
-    ok('detectMention SUPPRESSES an owner-name mention', (await M.detectMention('what office did L. Overby run for?', { deps: { noCloud: true } })) === null);
+    suppressed(await M.detectMention('what office did L. Overby run for?', { deps: { noCloud: true } }), 'an owner-name mention');
     ner.topMention = async () => ({ mention: 'Z', kgType: 'person', score: 0.9 });
-    ok('detectMention SUPPRESSES a bare single-letter mention ("Z" from "Hey Zo")', (await M.detectMention('Hey Zo, what did I run for?', { deps: { noCloud: true } })) === null);
+    suppressed(await M.detectMention('Hey Zo, what did I run for?', { deps: { noCloud: true } }), 'a bare single-letter mention ("Z" from "Hey Zo")');
     ner.topMention = async () => ({ mention: 'Zoe Halfmann', kgType: 'person', score: 0.9 });
     const kept = await M.detectMention('tell me about Zoe Halfmann', { deps: { noCloud: true } });
     ok('detectMention KEEPS a real distinct same-first-name person (Zoe Halfmann)', kept && kept.mention === 'Zoe Halfmann');

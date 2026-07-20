@@ -100,15 +100,43 @@ async function detectMention(text, { context = '', deps = {} } = {}) {
   // mention so the turn answers from self/owner knowledge instead of disambiguating her own name — or his —
   // among same-name civic records (the "which Zoe / which Z do you mean?" failure). Only bare self/owner names
   // match (isSelfName/isOwnerName are exact-alias), so a real "Zoe Halfmann" / "Lucas Smith" is untouched.
+  //
+  // ⚠️ Suppression returns { mention: null, self: true } — NOT a bare null. Returning null made this
+  // guard CAUSE the failure it was written to prevent: the caller reads null as "no mention found" and
+  // falls through to its regex fallback, which grabs the leading capitalized run — so "Hey Zoe, what are
+  // the laws of thermodynamics…" suppressed "Zoe" here and then resolved "HEY ZOE" instead, hit four
+  // civic Zoes, and asked Lucas which one he meant instead of answering (live, 2026-07-20). The flag
+  // lets the caller tell "nothing to look up" apart from "deliberately not looking this up".
   try {
     const db = require('./db');
     const m = result.mention || '';
     // a bare initial ("Z" from "Hey Zo") is never a civic entity — suppress it before it disambiguates junk
-    if (m.replace(/[^a-zA-Z0-9]/g, '').length <= 1) return null;
-    if (db.isSelfName(m) || db.isOwnerName(m)) return null;
+    if (m.replace(/[^a-zA-Z0-9]/g, '').length <= 1) return { mention: null, self: true, source: 'self-guard' };
+    if (db.isSelfName(m) || db.isOwnerName(m)) return { mention: null, self: true, source: 'self-guard' };
   } catch { /* db not ready → leave mention as-is */ }
 
   return result;
 }
 
-module.exports = { detectMention, _shouldEscalate, _pickObject, _expandFromContext };
+// Is this mention just Zoe or Lucas being ADDRESSED — vocative, greeting and punctuation included?
+//
+// db.isSelfName/isOwnerName are exact-alias by design (so a real "Zoe Halfmann" still resolves), which
+// means they miss the form people actually type: "Hey Zoe", "Zoe,", "ok zoe". Strip the greeting and
+// trailing punctuation, then defer to the exact-alias check — a SUPERSTRING like "Zoe Lofgren" keeps
+// its extra name token and correctly does NOT match.
+const _GREETING_RE = /^(?:hey|hi|hello|yo|hiya|heya|ok|okay|so|um|uh|good\s+(?:morning|afternoon|evening))[\s,]+/i;
+
+function isVocativeSelf(mention, deps = {}) {
+  let m = String(mention || '').trim();
+  if (!m) return false;
+  let prev = null;
+  while (m !== prev) { prev = m; m = m.replace(_GREETING_RE, '').trim(); }   // "ok hey zoe"
+  m = m.replace(/^[^A-Za-z0-9]+/, '').replace(/[^A-Za-z0-9.'’\-]+$/, '').trim();
+  if (!m) return false;
+  try {
+    const db = deps.db || require('./db');
+    return !!(db.isSelfName(m) || db.isOwnerName(m));
+  } catch { return false; }
+}
+
+module.exports = { detectMention, isVocativeSelf, _shouldEscalate, _pickObject, _expandFromContext, _GREETING_RE };
