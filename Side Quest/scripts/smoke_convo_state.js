@@ -104,6 +104,8 @@ const ok = (n, c) => { (c ? pass++ : fail++); console.log(`  ${c ? '✓' : '✗'
 
   db.getDb().close();
   try { for (const e of ['', '-wal', '-shm']) fs.existsSync(process.env.SQ_DB_PATH + e) && fs.unlinkSync(process.env.SQ_DB_PATH + e); } catch {}
-  console.log(`\n${fail === 0 ? 'CONVO-STATE OK' : 'SOME FAILURES'} — ${pass} passed, ${fail} failed`);
+  // Standard runner format ("PASS — N ok, M failed") — the previous wording did not match
+  // run_smokes' parser, which is why this suite was never in the gate despite being deterministic.
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

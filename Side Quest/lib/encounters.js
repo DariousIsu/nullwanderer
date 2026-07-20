@@ -54,10 +54,26 @@ const rankOf = (g) => RANK[g] || 0;
 // KNOWN and better than most of the web — so it grades alongside an official record rather than falling
 // through to `unknown`. Origin being null is correct for these and must not be read as weakness: a
 // hand-delivered memo has no publisher to walk to, which is a different fact from having no source.
-const AUTHORITIES = ['verified', 'operator', 'official', 'ordinary', 'unknown'];
+//
+// `stated` is Lucas SAYING something in conversation, with no document behind it. Deliberately NOT
+// the same as `operator` (Lucas handing her a document, which has an artifact and known provenance).
+//
+// Lucas, 2026-07-20: *"we can consider user input non-validating without documentation. so it would
+// still create the object as an unverified and then seek to validate with a real source."*
+//
+// So a stated encounter CREATES the object and carries ZERO evidentiary weight. It is a pointer to go
+// look, never a source. This matters more than it sounds: conversation is the one stream where a
+// mis-extracted claim would otherwise wear the principal's own authority as its evidence, and a
+// wrong fact sourced to Lucas is worse than a missing one. It is excluded from the independent-source
+// count in gradeValue rather than merely ranked low, because "two sources" must never mean "he
+// mentioned it twice".
+const AUTHORITIES = ['verified', 'operator', 'official', 'ordinary', 'unknown', 'stated'];
 
-// Sources whose authority substitutes for roughly one ordinary source (§6.3).
+// Sources whose authority substitutes for roughly one ordinary source (§6.3). `stated` is not one.
 const isAuthoritative = (r) => r && (r.authority === 'official' || r.authority === 'operator');
+
+// Non-evidentiary: creates the object, never grades it.
+const isStated = (r) => !!r && r.authority === 'stated';
 
 // SINGLE-TRUTH vs MULTI-TRUTH — the distinction the truth-discovery literature insists on (§10): a
 // person has one birth date but may hold several roles. Only single-truth claims can CONFLICT; for the
@@ -140,10 +156,22 @@ function forObject(key, { claimClass = null, claimKey = null, limit = 2000 } = {
 // Per claim class, applied to the encounters supporting ONE value. `ind` is origin.independence() —
 // min(distinct origins, distinct texts) — so neither syndication nor a site repeating itself inflates.
 function gradeValue(claimClass, rows) {
-  const ind = og.independence(rows);
+  // Stated-in-conversation claims are stripped BEFORE independence is computed, so they can never
+  // contribute to the source count. Everything below then grades only real evidence.
+  const all = Array.isArray(rows) ? rows : [];
+  const stated = all.filter(isStated).length;
+  const evidence = all.filter((r) => !isStated(r));
+  // Known ONLY because Lucas said so → the object exists, the claim is unverified, and it is work to
+  // do. Null grade (not 'C') on purpose: a C means one real source looked and found this. This means
+  // nobody has looked yet, which is a different state and drives a different action.
+  if (!evidence.length) {
+    return { grade: null, unverified: true, stated, ind: og.independence([]) };
+  }
+  const rows_ = evidence;
+  const ind = og.independence(rows_);
   const n = ind.count;
-  const official = rows.some(isAuthoritative);
-  const verified = rows.some((r) => r.authority === 'verified');
+  const official = rows_.some(isAuthoritative);
+  const verified = rows_.some((r) => r.authority === 'verified');
 
   switch (claimClass) {
     // §5a — DECAYS, newer supersedes. Verification (a bounce test, a reply, a connect) is the only A+;
@@ -214,6 +242,9 @@ function gradeClaim(key, { claimClass = 'biographical', claimKey = null } = {}) 
       value: value || null, grade: g.grade, sources: g.ind.count, encounters: rs.length,
       unproven: g.ind.unproven, syndicated: g.ind.syndicated, official: rs.some(isAuthoritative),
       latest, characterizations: g.characterizations,
+      // Known only because it was SAID — no evidence has been found yet. This is what turns a
+      // conversational mention into work to do rather than a fact she holds.
+      unverified: !!g.unverified, stated: g.stated || rs.filter(isStated).length,
     };
   });
 
@@ -235,6 +266,11 @@ function gradeClaim(key, { claimClass = 'biographical', claimKey = null } = {}) 
     unproven: !!top.unproven,
     official: !!top.official,
     characterizations: top.characterizations,
+    // UNVERIFIED = the object exists because someone said so, and nothing has corroborated it. Lucas's
+    // rule: user input is non-validating without documentation — it creates the object, then we go
+    // looking. This flag is the "go looking" signal.
+    unverified: !!top.unverified,
+    stated: top.stated || 0,
     multi: !single && values.length > 1,
     // A competing value exists at all. Retained and visible either way — §7, nothing is ever deleted.
     contested: !!rival,
@@ -284,4 +320,4 @@ function stats() {
   } catch { return { encounters: 0, objects: 0, withOrigin: 0, byClass: [] }; }
 }
 
-module.exports = { CLASSES, AUTHORITIES, SINGLE_TRUTH, isAuthoritative, RANK, rankOf, objectKey, record, recordMany, forObject, gradeValue, gradeClaim, profile, stats };
+module.exports = { CLASSES, AUTHORITIES, SINGLE_TRUTH, isAuthoritative, isStated, RANK, rankOf, objectKey, record, recordMany, forObject, gradeValue, gradeClaim, profile, stats };

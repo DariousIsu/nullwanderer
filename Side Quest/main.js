@@ -4426,6 +4426,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
 
   const sessionId = currentSessionId;
   const userTurnRow = db.insertTurn({ sessionId, speaker: 'user', content: userMessage });
+  // CONVERSATION AS AN ENCOUNTER STREAM (C1) — the objects Lucas names become encounters, so the one
+  // input stream that never decomposed into objects finally does. Written with authority 'stated',
+  // which carries ZERO evidentiary weight: it creates the object and then we go looking for a real
+  // source. Only HIS turns (hers would let her corroborate herself). Fire-and-forget, flag-gated
+  // (`convo.encounters`, default off), and it can never break the turn.
+  try { require('./lib/convo_encounters').fromUserTurn(userTurnRow && userTurnRow.id, userMessage).catch(() => {}); } catch {}
   // Blackboard: a user message is the StuckDetector's reset boundary — events
   // after it start a fresh "interactive slice" so a new instruction is never read
   // as part of a prior spiral.
