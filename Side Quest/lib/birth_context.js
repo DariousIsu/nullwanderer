@@ -87,10 +87,18 @@ const host = (h) => String(h || '').trim().toLowerCase().replace(/^www\./, '');
  * a national publisher (foxnews.com) genuinely has no jurisdiction, and inventing one would create a
  * prior that refuses correct readings.
  */
+// SPEAKS FOR vs WRITES ABOUT — the distinction that decides whether a prior may refuse anything.
+//
+// A county website is authoritative about its own county: a name on applingcountyga.gov is Georgia
+// business. A newspaper is not confined to its state — the Star Tribune covers the South Pacific, and
+// the live data has exactly that: "South Pacific" born on startribune.com, which would make a Minnesota
+// prior refuse every correct reading of it. Under a refuse-only rule a wrong prior costs resolutions,
+// so only `authoritative` jurisdictions are allowed to contradict. `topical` is retained because it is
+// still useful for ranking and for explaining where something came from — it just may not veto.
 function hostJurisdiction(h) {
   const s = host(h);
   if (!s) return null;
-  if (NEWS_JURISDICTION[s]) return { state: NEWS_JURISDICTION[s], why: 'local masthead' };
+  if (NEWS_JURISDICTION[s]) return { state: NEWS_JURISDICTION[s], why: 'local masthead', strength: 'topical' };
 
   if (FEDERAL_COLLISIONS.has(s)) return null;
 
@@ -100,15 +108,15 @@ function hostJurisdiction(h) {
   // `co.travis.tx.us`, `ci.austin.tx.us` — the state is its own label.
   if (tld === 'us' && parts.length >= 3) {
     const st = parts[parts.length - 2];
-    if (STATES.has(st)) return { state: st, why: 'us domain label' };
+    if (STATES.has(st)) return { state: st, why: 'us domain label', strength: 'authoritative' };
   }
   if (tld !== 'gov') return null;
 
   // ANY label may carry the state, not just the second-to-last: legis.IOWA.gov, lrb.HAWAII.gov,
   // archive.sos.IDAHO.gov, team.GEORGIA.gov. Whole-word state names first, and they win outright.
   for (const p of parts) {
-    if (STATE_NAMES[p]) return { state: STATE_NAMES[p], why: 'gov state name' };
-    if (STATES.has(p)) return { state: p, why: 'gov state code label' };
+    if (STATE_NAMES[p]) return { state: STATE_NAMES[p], why: 'gov state name', strength: 'authoritative' };
+    if (STATES.has(p)) return { state: p, why: 'gov state code label', strength: 'authoritative' };
   }
 
   // Only now the concatenated form — `apachecountyAZ`, `kentcountyDE`, `bondcountyIL`, `highlandsFL`.
@@ -116,11 +124,11 @@ function hostJurisdiction(h) {
   // it must be long enough to be a place+code compound, and it must not merely end in those letters by
   // accident of English — so a `county`/`city`/`parish` stem, or a label ending in a code after one.
   const name = parts[parts.length - 2] || '';
-  if (STATE_NAMES[name]) return { state: STATE_NAMES[name], why: 'gov state name' };
+  if (STATE_NAMES[name]) return { state: STATE_NAMES[name], why: 'gov state name', strength: 'authoritative' };
   const m = /^(.*?)([a-z]{2})$/.exec(name);
   if (m && STATES.has(m[2]) && m[1].length >= 4 && !STATE_NAMES[name]) {
     // `-county-`, `-city-`, `-parish-`, `-borough-` before the code is strong evidence of a compound.
-    if (/(county|city|parish|borough|township|town|village|co)$/.test(m[1])) return { state: m[2], why: 'gov place+state compound' };
+    if (/(county|city|parish|borough|township|town|village|co)$/.test(m[1])) return { state: m[2], why: 'gov place+state compound', strength: 'authoritative' };
     // Otherwise require that the stem is not itself an English word ending in those two letters. We
     // cannot know that here, so this stays conservative: refuse rather than risk another Georgia→Iowa.
     return null;
@@ -139,6 +147,8 @@ function contradicts(birth, candidate) {
   const b = birth && birth.state;
   const c = candidate && candidate.state;
   if (!b || !c) return false;
+  // Only a publisher that SPEAKS FOR a jurisdiction may veto. A masthead merely covers one.
+  if (birth.strength !== 'authoritative') return false;
   return String(b).toLowerCase() !== String(c).toLowerCase();
 }
 
@@ -184,4 +194,45 @@ function birthContextByLabel(label, { db = null } = {}) {
   return row ? birthContext(row.object_key, { db }) : null;
 }
 
-module.exports = { birthContext, birthContextByLabel, hostJurisdiction, contradicts, NEWS_JURISDICTION, STATES, STATE_NAMES };
+/**
+ * Birth context for a graph_entities row, read from its EARLIEST entity citation.
+ *
+ * The graph-walk population lives almost entirely outside the encounter log — measured: of 10,361
+ * untyped entities, ~1% appear in the log and ZERO carried an entity citation, because recordRelation
+ * minted its endpoints without passing a source. That is now fixed at the source, so newly born
+ * entities have this; the pre-existing ones can only be reached by the relation-citation fallback,
+ * which is deliberately second: a relation's source is where the EDGE was found, which is usually but
+ * not always where the endpoint was first seen.
+ */
+function birthContextForEntity(entityId, { db = null } = {}) {
+  if (entityId == null) return null;
+  let row = null;
+  try {
+    const d = (db || require('./db')).getDb();
+    row = d.prepare(`SELECT s.kind, s.ref, s.fetched_at FROM graph_citations c
+                       JOIN graph_sources s ON s.id = c.source_id
+                      WHERE c.fact_kind = 'entity' AND c.fact_id = ?
+                      ORDER BY s.id ASC LIMIT 1`).get(entityId);
+    if (!row) {
+      row = d.prepare(`SELECT s.kind, s.ref, s.fetched_at FROM graph_relations r
+                         JOIN graph_citations c ON c.fact_kind = 'relation' AND c.fact_id = r.id
+                         JOIN graph_sources s ON s.id = c.source_id
+                        WHERE r.source_id = ? OR r.target_id = ?
+                        ORDER BY s.id ASC LIMIT 1`).get(entityId, entityId);
+      if (row) row.viaRelation = true;
+    }
+  } catch { return null; }
+  if (!row || !row.ref) return null;
+  let h = null;
+  try { h = require('./origin').hostOf(row.ref); } catch { h = null; }
+  return {
+    host: h,
+    origin: row.ref,
+    lane: row.kind || null,
+    bornAt: row.fetched_at || null,
+    viaRelation: !!row.viaRelation,
+    jurisdiction: hostJurisdiction(h),
+  };
+}
+
+module.exports = { birthContext, birthContextByLabel, birthContextForEntity, hostJurisdiction, contradicts, NEWS_JURISDICTION, STATES, STATE_NAMES };

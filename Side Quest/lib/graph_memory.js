@@ -70,7 +70,7 @@ function attachSource(factKind, factId, source) {
 // and that is the entire reason 13,033 entities are typed `concept`: nobody decided, a default fired.
 // The distinction between "the caller said concept" and "the caller said nothing" has to survive to
 // mint_type.decideType, so the parameter defaults to null and the decision is made explicitly.
-function recordEntity({ name, type = null, subtype = null, summary = null, epistemic = 'told', confidence = null, proposedBy = null, source = null } = {}) {
+function recordEntity({ name, type = null, subtype = null, summary = null, epistemic = 'told', confidence = null, proposedBy = null, source = null, sourceOnCreate = false } = {}) {
   name = String(name || '').trim();
   if (!name) return { ok: false, reason: 'empty name' };
   if (!isEpistemic(epistemic)) epistemic = 'speculated';
@@ -94,6 +94,7 @@ function recordEntity({ name, type = null, subtype = null, summary = null, epist
   const conf = confidence == null ? defaultConf(epistemic) : confidence;
   const existing = db.graphGetEntityByKey(nameKey);
   let entityId;
+  let created = false;
   if (existing) {
     const fields = {};
     if (trust(epistemic) > trust(existing.epistemic)) fields.epistemic = epistemic;   // upgrade only
@@ -114,9 +115,14 @@ function recordEntity({ name, type = null, subtype = null, summary = null, epist
       epistemic, confirmed: null, proposedBy
     });
     entityId = r.id;
+    created = true;
     kga.emit({ db: 'sidequest', kind: 'node.born', anchor: name, epistemic, count: 1 });   // a new node lands in the active core
   }
-  if (source) attachSource('entity', entityId, source);
+  // `sourceOnCreate` records the BIRTH and only the birth. graphInsertSource inserts unconditionally
+  // (28,436 rows for 4,646 distinct refs already), so attaching on every re-encounter of a known entity
+  // would compound that for no gain — where an object was FIRST found does not change when it is found
+  // again, and later sightings are what the encounter log is for.
+  if (source && (!sourceOnCreate || created)) attachSource('entity', entityId, source);
   return { ok: true, entityId, proposed: false };
 }
 
@@ -141,8 +147,16 @@ function recordRelation({ source, target, type, epistemic = 'told', confidence =
     return { ok: true, proposed: true, proposalId: p.id };
   }
 
-  const se = recordEntity({ name: sName, epistemic, proposedBy });
-  const te = recordEntity({ name: tName, epistemic, proposedBy });
+  // BIRTH CONTEXT (Lucas, 2026-07-21: "include rough edges in the new object creation from the context
+  // of where the object was born"). These two calls MINT the endpoints, and until now they passed no
+  // source — so 10,361 entities exist with no record of where they came from: 0 of them carry an entity
+  // citation, and only ~1% appear in the encounter log. Nothing can constrain what they are, because
+  // nothing knows where they were found.
+  //
+  // Same shape as the `type = 'concept'` default: an optional parameter that the hot path omits. The
+  // relation already knows its source; the endpoints it creates inherit it.
+  const se = recordEntity({ name: sName, epistemic, proposedBy, source: sourceObj, sourceOnCreate: true });
+  const te = recordEntity({ name: tName, epistemic, proposedBy, source: sourceObj, sourceOnCreate: true });
   if (!se.entityId || !te.entityId) return { ok: false, reason: 'could not resolve endpoints' };
   const conf = confidence == null ? defaultConf(epistemic) : confidence;
   const rel = db.graphInsertRelation({

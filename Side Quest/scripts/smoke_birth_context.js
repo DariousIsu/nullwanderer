@@ -50,10 +50,23 @@ for (const h of ['foxnews.com', 'nasa.gov', 'irs.gov', 'gao.gov', '2009-2017.sta
 }
 ok(bc.hostJurisdiction(null) === null && bc.hostJurisdiction(undefined) === null, 'garbage in → null, never throws');
 
+// ── SPEAKS FOR vs WRITES ABOUT ───────────────────────────────────────────────────────────────────
+// A county website is authoritative about its county. A newspaper is not confined to its state — the
+// live data has "South Pacific" born on startribune.com, and a Minnesota prior would refuse every
+// correct reading of it. Under refuse-only, a wrong prior COSTS resolutions, so only a publisher that
+// speaks FOR a jurisdiction may veto.
+ok(bc.hostJurisdiction('applingcountyga.gov').strength === 'authoritative', 'a .gov speaks for its jurisdiction');
+ok(bc.hostJurisdiction('startribune.com').strength === 'topical', 'a masthead only writes about one');
+ok(bc.contradicts(bc.hostJurisdiction('startribune.com'), { state: 'wi' }) === false,
+  'CRITICAL: a masthead may NOT veto — "South Pacific" from the Star Tribune is not a Minnesota claim');
+ok(bc.contradicts(bc.hostJurisdiction('applingcountyga.gov'), { state: 'wi' }) === true,
+  'a county .gov may veto a candidate in another state');
+
 // ── THE REFUSE-ONLY RULE ─────────────────────────────────────────────────────────────────────────
-ok(bc.contradicts({ state: 'ga' }, { state: 'wi' }) === true, 'a candidate in another state is contradicted');
-ok(bc.contradicts({ state: 'ga' }, { state: 'ga' }) === false, 'agreement is not a contradiction');
-ok(bc.contradicts({ state: 'ga' }, null) === false && bc.contradicts(null, { state: 'wi' }) === false,
+const AUTH = (state) => ({ state, strength: 'authoritative' });
+ok(bc.contradicts(AUTH('ga'), { state: 'wi' }) === true, 'a candidate in another state is contradicted');
+ok(bc.contradicts(AUTH('ga'), { state: 'ga' }) === false, 'agreement is not a contradiction');
+ok(bc.contradicts(AUTH('ga'), null) === false && bc.contradicts(null, { state: 'wi' }) === false,
   'CRITICAL: an unknown on either side is NOT a conflict — punishing absent metadata refuses most of the corpus');
 ok(bc.contradicts({}, {}) === false, 'two unknowns are not a conflict either');
 
@@ -79,6 +92,31 @@ ok(bc.contradicts({}, {}) === false, 'two unknowns are not a conflict either');
 }
 ok(bc.birthContext('nope:nothing', { db }) === null && bc.birthContext(null, { db }) === null,
   'an object with no encounters has no birth context');
+
+// ── THE GRAPH-WALK POPULATION — recorded at CREATION, which is what was missing ──────────────────
+// Measured before the fix: of 10,361 untyped entities, ZERO carried an entity citation, because
+// recordRelation minted its endpoints without passing a source. Nothing could constrain what they were,
+// because nothing knew where they were found. Same shape as the `type = 'concept'` default: an optional
+// parameter the hot path omitted.
+{
+  const gm = require('../lib/graph_memory');
+  const src = { kind: 'reading', ref: 'https://applingcountyga.gov/minutes/2026-03' };
+  gm.recordRelation({ source: 'Rough Edge Co', target: 'Appling County Board', type: 'PART_OF', epistemic: 'read', sourceObj: src });
+  const row = db.getDb().prepare('SELECT id FROM graph_entities WHERE name = ?').get('Rough Edge Co');
+  ok(!!row, 'the endpoint was minted');
+  const ctx = bc.birthContextForEntity(row.id, { db });
+  ok(ctx && ctx.host === 'applingcountyga.gov',
+    'CRITICAL: an entity minted as a relation ENDPOINT now records where it was born');
+  ok(ctx.jurisdiction && ctx.jurisdiction.state === 'ga' && ctx.jurisdiction.strength === 'authoritative',
+    'and that birth yields a jurisdiction the gate may actually use');
+
+  // Birth is recorded ONCE. graphInsertSource inserts unconditionally, so re-attaching on every
+  // re-encounter would compound an already 6:1 source-to-ref ratio for no gain.
+  const before = db.getDb().prepare(`SELECT COUNT(*) c FROM graph_citations WHERE fact_kind='entity' AND fact_id=?`).get(row.id).c;
+  gm.recordRelation({ source: 'Rough Edge Co', target: 'Appling County Board', type: 'PART_OF', epistemic: 'read', sourceObj: src });
+  const after = db.getDb().prepare(`SELECT COUNT(*) c FROM graph_citations WHERE fact_kind='entity' AND fact_id=?`).get(row.id).c;
+  ok(before === after, 'CRITICAL: seeing it again does not re-record its birth — where it was FIRST found cannot change');
+}
 
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);
