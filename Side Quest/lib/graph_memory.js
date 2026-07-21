@@ -66,12 +66,21 @@ function attachSource(factKind, factId, source) {
  * ever upgrades, never downgrades a known fact). Speculated → proposal queue.
  * Returns { ok, entityId } | { ok, proposed:true, proposalId } | { ok:false, reason }.
  */
-function recordEntity({ name, type = 'concept', subtype = null, summary = null, epistemic = 'told', confidence = null, proposedBy = null, source = null } = {}) {
+// T5 — `type` no longer DEFAULTS to 'concept'. It defaulted here, recordRelation below never passed one,
+// and that is the entire reason 13,033 entities are typed `concept`: nobody decided, a default fired.
+// The distinction between "the caller said concept" and "the caller said nothing" has to survive to
+// mint_type.decideType, so the parameter defaults to null and the decision is made explicitly.
+function recordEntity({ name, type = null, subtype = null, summary = null, epistemic = 'told', confidence = null, proposedBy = null, source = null } = {}) {
   name = String(name || '').trim();
   if (!name) return { ok: false, reason: 'empty name' };
   if (!isEpistemic(epistemic)) epistemic = 'speculated';
   const nameKey = normalizeName(name);
   if (!nameKey) return { ok: false, reason: 'empty name_key' };
+
+  // Ask the evidence before inventing anything. A settled type claim (T3) wins; a strong id at least
+  // proves this is not a concept; otherwise it is honestly `unknown`, which is visible and correctable.
+  const _mt = require('./mint_type');
+  type = _mt.decideType(name, type, { lookup: (n) => require('./object_type').typeOf(n) }).type;
 
   if (epistemic === 'speculated') {
     const p = db.graphInsertEntityProposal({
@@ -89,7 +98,10 @@ function recordEntity({ name, type = 'concept', subtype = null, summary = null, 
     const fields = {};
     if (trust(epistemic) > trust(existing.epistemic)) fields.epistemic = epistemic;   // upgrade only
     if (summary && !existing.summary) fields.summary = summary;
-    if (type && type !== 'concept' && existing.entity_type === 'concept') fields.entity_type = type;
+    // A real type UPGRADES a placeholder, and a placeholder never overwrites a real type. `unknown` is
+    // now a placeholder alongside `concept` — otherwise T5's honest default would be stickier than the
+    // dishonest one it replaced, which would be a strictly worse outcome.
+    if (type && !_mt.isPlaceholder(type) && _mt.isPlaceholder(existing.entity_type)) fields.entity_type = type;
     if (conf > (existing.confidence || 0)) fields.confidence = conf;
     if (Object.keys(fields).length) {
       db.graphUpdateEntity(existing.id, fields);

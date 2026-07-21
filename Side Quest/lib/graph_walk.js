@@ -194,7 +194,10 @@ async function assessGaps(candidates, { recall, log } = {}) {
 async function proposeEntity({ dispatch, name, entity_type, summary, confidence, log }) {
   if (typeof dispatch !== 'function' || !name) return { ok: false, isNew: false, action: 'skipped' };
   try {
-    const args = { name, entity_type: entity_type || 'concept' };
+    // T5 — do not mint `concept` for something nobody typed. The graph-walk is the lane that produced
+    // 11,732 of them, and `|| 'concept'` was the whole mechanism. Ask the evidence, then be honest.
+    const _decided = require('./mint_type').decideType(name, entity_type, { lookup: (n) => require('./object_type').typeOf(n) });
+    const args = { name, entity_type: _decided.type };
     if (summary) args.summary = String(summary).slice(0, 1200);
     // Carry the GRADE confidence (curation_gate cap: A=1.0 / B=0.95 / C=0.80 …) so Echo's hybrid
     // promotion gate can auto-promote well-cited (A/B) proposals and queue weaker (C/D) ones for review.
