@@ -113,8 +113,18 @@ const rep = (r, name) => r.report.sections.find((s) => s.name === name);
   // ran all day. A wrong fact can be corrected; a described-but-untaken action is unverifiable.
   ok(/DO the thing — do not narrate it/.test(p), 'commands the tag be EMITTED, not described');
   ok(/Emitting the tag IS the action/.test(p), 'names the distinction explicitly');
-  ok(/NEVER say you did something unless you emitted its tag this turn/.test(p),
-    'forbids claiming completed work that never happened');
+  // 2026-07-21 — REWRITTEN, because the old rule was unsatisfiable. It asked her to wait until she
+  // "saw the result", but the reply is composed at main.js:6700 and the tags dispatch at :7350,
+  // afterwards: seeing the result in the same message is architecturally impossible. Three false
+  // completion claims in one day, each with a different cause. The rule now states the mechanical
+  // fact — the tag has not run yet — instead of asking for something that cannot be done.
+  ok(/A TAG YOU EMIT HAS NOT RUN YET/.test(p), 'states the mechanical fact, not an exhortation');
+  ok(/finished and sent before any tool in it is dispatched/.test(p),
+    'explains WHY the past tense is always wrong here');
+  ok(/THAT is the moment to confirm what actually landed, including if it failed/.test(p),
+    'and points to where confirmation legitimately belongs — the follow-up');
+  ok(!/unless you emitted its tag this turn AND saw the result/.test(p),
+    'REGRESSION: the unsatisfiable "saw the result" wording is gone');
   ok(/I've added|I've put it on your canvas/.test(p), 'quotes the exact false phrasings that occurred');
   ok(/say what you would need/.test(p), 'an honest "I can\'t" is offered as the alternative');
 }

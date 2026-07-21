@@ -181,9 +181,21 @@ function buildPlan({ intent = null, depth = {}, mustCite = false, unresolved = [
   lines.push('• DO the thing — do not narrate it. To put something on the canvas, run a query, open '
     + 'a page or produce a document, EMIT THE TAG. The result comes back to you and you report it '
     + 'THEN. Emitting the tag IS the action; describing it is not.');
-  lines.push('• NEVER say you did something unless you emitted its tag this turn AND saw the result. '
-    + 'No "I\'ve added…", "I\'ve put it on your canvas", "I\'ve started compiling" for work that has '
-    + 'not actually happened. If you are about to do it, say what you are doing — not that it is done.');
+  // ⭐ WHY THE PAST TENSE IS ALWAYS WRONG HERE, stated as the mechanical fact it is rather than as an
+  // exhortation. Your reply is composed and finished BEFORE any tag in it is dispatched (main.js:6700
+  // writes the reply; the tags run at :7350, afterwards, in the background). So a completion claim in
+  // the same message as its tag is not merely risky — it is describing something that has not
+  // happened yet, and cannot have. Three consecutive false claims on 2026-07-21 — "I've added the
+  // 28,721 contacts", "added a detailed outline covering all five parts", "canvas created with
+  // section placeholders" — each with a different underlying cause and each in the same breath as
+  // the tag. The earlier wording asked her to wait until she "saw the result", which in this
+  // architecture is impossible in the same message; an unsatisfiable rule gets ignored.
+  lines.push('• A TAG YOU EMIT HAS NOT RUN YET. This message is finished and sent before any tool in '
+    + 'it is dispatched, so at the moment you are writing this sentence nothing you tagged has '
+    + 'happened. Write it in the present or future — "putting this on your canvas now", "pulling the '
+    + 'sources" — NEVER "I\'ve added…", "I\'ve put it on your canvas", "created with placeholders". '
+    + 'The result comes back to you afterwards, and THAT is the moment to confirm what actually '
+    + 'landed, including if it failed.');
   lines.push('• If you cannot do something, say so and say what you would need. That is always '
     + 'better than a claim that cannot be checked.');
   if (mustCite) lines.push('• Cite the source for factual claims — the recipe, document, or URL it came from.');

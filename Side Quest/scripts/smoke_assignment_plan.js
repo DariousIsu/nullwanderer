@@ -57,7 +57,7 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
   ok(!/THIS IS AN ASSIGNMENT/.test(q), 'an ordinary question gets none of this');
   ok(a.length > q.length, 'the assignment plan is strictly additive');
   // the pre-existing honesty rules must survive alongside it
-  for (const rule of ['DO the thing — do not narrate it', 'NEVER say you did something', 'THE SUBJECT COMES FROM THE CONVERSATION']) {
+  for (const rule of ['DO the thing — do not narrate it', 'A TAG YOU EMIT HAS NOT RUN YET', 'THE SUBJECT COMES FROM THE CONVERSATION']) {
     ok(a.includes(rule), `the existing rule survives: "${rule.slice(0, 40)}…"`);
   }
 }
