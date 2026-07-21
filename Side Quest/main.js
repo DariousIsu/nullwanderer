@@ -4005,7 +4005,18 @@ async function scribeHeartbeatTick() {
     } catch (e) { console.error('[meeting] attendance log failed:', e && e.message); }
     // FINAL VIEW = the full notes (recap header + the rich running minutes), matching the landed doc. Emitting
     // the recap ALONE dropped the detailed Topics/Decisions the operator watched accrue ("notes ate themselves").
-    const finalBody = [recap, (minutes && minutes.trim()) ? `## Running minutes\n${minutes}` : ''].filter(Boolean).join('\n\n') || recap || minutes;
+    // HER ACTION LEDGER — what she looked up, what she connected, and what she wanted to say in the
+    // room but held back. This is the review surface: until the meeting chat is opened
+    // (ZOE_MEET_CHAT=on) her proposed contributions exist ONLY here, and they are the thing to read
+    // before trusting her to post them live.
+    let _ledger = '';
+    try { _ledger = require('./lib/gmeet').renderLedger(require('./lib/gmeet').ledgerRows()); } catch (e) { console.error('[meeting] ledger render failed:', e && e.message); }
+    if (_ledger) console.log(`[meeting] action ledger → ${require('./lib/gmeet').ledgerRows().length} entr(ies), ${require('./lib/gmeet').ledgerRows().filter((r) => r.withheld).length} withheld`);
+    const finalBody = [
+      recap,
+      (minutes && minutes.trim()) ? `## Running minutes\n${minutes}` : '',
+      _ledger ? `## What I did in this meeting\n${_ledger}` : '',
+    ].filter(Boolean).join('\n\n') || recap || minutes;
     try { await emitMeetingNotes(finalBody, { final: true }); } catch {}
   }
   stopScribeHeartbeat();

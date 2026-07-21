@@ -183,6 +183,7 @@ const smokes = [
   'smoke_background_bleed.js',
   'smoke_not_a_question.js',
   'smoke_references.js',
+  'smoke_meeting_chat_gate.js',
   'smoke_self_narrative.js',
   'smoke_mood.js',
   'smoke_voice.js',

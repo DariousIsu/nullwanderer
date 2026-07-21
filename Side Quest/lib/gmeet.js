@@ -32,6 +32,77 @@ const FOLLOW_MAX_WAIT_MS = 25000;   // ...or after this long with ANY pending li
 const LEAVE_SILENCE_MS = 300000;   // after a clear sign-off AND she's effectively alone, if captions stay quiet THIS long she hangs up (5 min; 90s was far too eager — a quiet stretch mid-meeting ≠ over)
 const MEETING_RESEARCH_GAP_MS = 30000;   // M2: governed cadence for in-meeting background research (steady, not spammy)
 
+// ── WHO SHE TALKS TO IN A MEETING ───────────────────────────────────────────────────────────────
+//
+// Lucas, 2026-07-21: "get her firing correctly to me, either through the canvas or chat. I want to
+// make sure she is pulling the right things and making the right actions BEFORE she starts trying
+// to send stuff in chat."
+//
+// The audit that prompted this found the wiring pointing the wrong way. Two paths could post into a
+// room of his colleagues — a model-chosen CONTRIBUTE and an auto-reply when someone says her name —
+// and the only thing restraining either was a sentence in a prompt ("staying QUIET is strongly
+// preferred") evaluated by the local 12b at num_ctx 8192. Meanwhile everything she *learned* went to
+// `onReading`, i.e. the ambient sheep panel: the same low-attention rail that swallowed a real answer
+// on 2026-07-20. Outward actions were ungated; inward reporting was invisible.
+//
+// So: the room's chat is CLOSED by default. A would-be contribution or reply is not discarded — it
+// is drafted and delivered to Lucas through the surface he actually watches, tagged with what
+// triggered it, so he can judge whether she picked the right moment and said the right thing. When
+// the drafts read correctly, `ZOE_MEET_CHAT=on` opens the door.
+//
+// The INTRO is deliberately exempt and stays on. It is disclosure, not contribution — an
+// undisclosed AI silently transcribing a room is the one thing worse than a clumsy message, and it
+// is what sets the expectation that she is there taking notes. `ZOE_MEET_INTRO=0` disables it.
+function meetChatOpen() { return String(process.env.ZOE_MEET_CHAT || 'off').toLowerCase() === 'on'; }
+function meetIntroOn() { return process.env.ZOE_MEET_INTRO !== '0'; }
+
+// THE LEDGER — every decision she takes in a meeting, in one place, so "is she pulling the right
+// things and making the right actions" is a question with an answer instead of an impression.
+// Bounded and stored per-meeting; rendered into the notes at finalize.
+function ledgerAdd(entry) {
+  try {
+    const raw = db.getMeta('gmeet_ledger') || '[]';
+    const rows = JSON.parse(raw);
+    rows.push({ at: Date.now(), ...entry });
+    db.setMeta('gmeet_ledger', JSON.stringify(rows.slice(-60)));
+  } catch { /* the ledger is an observability aid — it must never break the meeting */ }
+}
+function ledgerRows() { try { return JSON.parse(db.getMeta('gmeet_ledger') || '[]'); } catch { return []; } }
+
+/**
+ * Render the ledger as markdown for the meeting notes on canvas.
+ *
+ * This is the answer to "did she pull the right things and take the right actions". WITHHELD entries
+ * lead: an action she wanted to take in the room is the one that most needs reviewing, and burying it
+ * under the research log is how it would go unread.
+ */
+function renderLedger(rows = []) {
+  if (!rows || !rows.length) return '';
+  const t = (r) => { try { return new Date(r.at).toISOString().slice(11, 16); } catch { return '--:--'; } };
+  const held = rows.filter((r) => r.withheld);
+  const out = [];
+  if (held.length) {
+    out.push(`### Held back from the meeting chat (${held.length})`);
+    out.push('She judged these worth saying and did not send them. Read them as her proposed actions:');
+    for (const r of held) {
+      if (r.kind === 'reply') out.push(`- **${t(r)} — asked by ${String(r.trigger || '').split(':')[0]}**: _"${r.trigger}"_\n  - would have replied: "${r.draft}"`);
+      else if (r.kind === 'intro') out.push(`- **${t(r)} — no introduction**: ${r.why}`);
+      else out.push(`- **${t(r)} — would have said**: "${r.draft}"${r.understanding ? `\n  - context she read: ${r.understanding}` : ''}`);
+    }
+  }
+  const did = rows.filter((r) => !r.withheld);
+  if (did.length) {
+    out.push(`### What she did (${did.length})`);
+    for (const r of did) {
+      if (r.kind === 'research') out.push(`- ${t(r)} — looked up **${r.topic}**${r.ran ? '' : ' _(skipped: rate-limited or already known)_'}`);
+      else if (r.kind === 'connect') out.push(`- ${t(r)} — connected: ${r.note}`);
+      else if (r.kind === 'contribute') out.push(`- ${t(r)} — posted to the meeting chat: "${r.draft}"${r.posted ? '' : ' _(post failed)_'}`);
+      else if (r.kind === 'reply') out.push(`- ${t(r)} — replied to ${String(r.trigger || '').split(':')[0]} in chat: "${r.draft}"`);
+    }
+  }
+  return out.join('\n');
+}
+
 // Captions she's already surfaced this meeting (exact speaker|text), so scrolling/repeat
 // caption rows aren't re-reported each ~10s observe tick. Reset on start(). In-memory:
 // captions are ephemeral, no need to persist.
@@ -230,6 +301,7 @@ function start(meetUrl) {
   db.setMeta('gmeet_started_at', String(Date.now()));   // M1: transcript scope anchor
   db.setMeta('gmeet_ended_at', '0');   // post-meeting recall freshness stamp (set when the call ends)
   db.setMeta('gmeet_last_research_at', '0'); db.setMeta('gmeet_researched', '[]');   // M2: research governance
+  db.setMeta('gmeet_ledger', '[]');   // the action ledger is PER MEETING — last week's drafts are not this call's
   _seenCaps = new Set();
   _answered = new Set();
   set('joining');
@@ -631,6 +703,18 @@ async function runTick(ctx = {}) {
   }
 
   if (stage === 'intro') {
+    // DISCLOSURE, not contribution — see meetIntroOn(). If it is switched off she still advances to
+    // observing rather than stalling in `intro` forever, but the room is then unaware of her, which
+    // is a deliberate choice someone has to make and not a default.
+    if (!meetIntroOn()) {
+      _clear();
+      try { const cc = await d.enableCaptions(d.web); if (!(cc && cc.ok)) console.log('[gmeet] enable-captions unconfirmed:', cc && (cc.reason || cc.via)); } catch (e) { console.log('[gmeet] enable-captions threw:', e.message); }
+      set('observing');
+      db.setMeta('gmeet_last_caption_at', String(d.now ? d.now() : Date.now()));
+      ledgerAdd({ kind: 'intro', withheld: true, why: 'ZOE_MEET_INTRO=0 — the room has NOT been told she is here' });
+      surface('I joined without introducing myself — the room does not know I\'m here.', '(gmeet) intro suppressed');
+      return { stage, ok: true, note: 'intro suppressed → observing' };
+    }
     let attendees = [];
     try { attendees = parseAttendees(await d.scrapeAttendees(d.web)); } catch {}
     const intro = await generateIntro(d, ctx, attendees);
@@ -777,7 +861,18 @@ async function runTick(ctx = {}) {
         const transcript = db.getMeta('gmeet_pending') || db.getMeta('gmeet_understanding') || `${ask.speaker}: ${ask.text}`;
         const reply = await modelAnswerForChat(d, ctx, ask, transcript, knowledge);
         if (reply) {
+          // Being addressed by name is the MOST likely path into the room's chat, so it is gated the
+          // same as CONTRIBUTE. Withheld, this costs a real thing — someone speaks to her and hears
+          // nothing back — so it goes to Lucas loudly (onSurface, not the ambient rail) and names who
+          // asked, which is exactly the judgement call he wants to make before opening the door.
+          if (!meetChatOpen()) {
+            ledgerAdd({ kind: 'reply', withheld: true, trigger: `${ask.speaker}: ${String(ask.text).slice(0, 120)}`, draft: reply });
+            try { ctx.onSurface && ctx.onSurface(`${ask.speaker} addressed me in the meeting: "${ask.text}"\n\nI did NOT reply — the meeting chat is closed. What I would have said:\n"${reply}"`); } catch {}
+            surface(`${ask.speaker} addressed me — "${ask.text}". Withheld draft: "${reply}"`, '(gmeet) reply withheld');
+            return { stage, ok: true, note: `addressed by ${ask.speaker} → reply WITHHELD (chat closed) → sent to ${ctx.userName || 'Lucas'}` };
+          }
           const post = await d.postChat(d.web, reply);
+          ledgerAdd({ kind: 'reply', withheld: false, trigger: `${ask.speaker}: ${String(ask.text).slice(0, 120)}`, draft: reply, posted: !!(post && post.ok) });
           surface(`${ask.speaker} addressed me — "${ask.text}". I replied in the meeting chat: "${reply}"`, '(gmeet) replied in chat');
           return { stage, ok: !!(post && post.ok), note: `addressed by ${ask.speaker} → replied in chat${post && post.ok ? '' : ` (post failed: ${post && post.reason})`}` };
         }
@@ -811,12 +906,26 @@ async function runTick(ctx = {}) {
       try {
         if (action.kind === 'research') {
           const did = await doMeetingResearch(d, ctx, action.payload, surface);
+          // Log the topic in FULL. The console truncates at 40 chars, which made a perfectly good
+          // topic ("Tennessee Chamber of Commerce promoting reform initiatives") read as a parse bug
+          // during the audit — and whether she is "pulling the right things" is unanswerable from a
+          // truncated string. `skipped` is recorded too: a governed no-op is still a decision.
+          ledgerAdd({ kind: 'research', withheld: false, topic: action.payload, ran: did });
           actNote = did ? `researched "${action.payload.slice(0, 40)}"` : 'research(skipped)';
         } else if (action.kind === 'contribute' && action.payload) {
-          const post = await d.postChat(d.web, action.payload);
-          surface(`I spoke up in the meeting: "${action.payload}"`, '(gmeet) contributed');
-          actNote = `contributed${post && post.ok ? '' : '(post failed)'}`;
+          if (!meetChatOpen()) {
+            ledgerAdd({ kind: 'contribute', withheld: true, understanding, draft: action.payload });
+            try { ctx.onSurface && ctx.onSurface(`I wanted to say this in the meeting:\n"${action.payload}"\n\nI did NOT post it — the meeting chat is closed. Context: ${understanding || 'n/a'}`); } catch {}
+            surface(`Withheld from the meeting chat: "${action.payload}"`, '(gmeet) contribution withheld');
+            actNote = 'contribute(withheld → sent to Lucas)';
+          } else {
+            const post = await d.postChat(d.web, action.payload);
+            ledgerAdd({ kind: 'contribute', withheld: false, understanding, draft: action.payload, posted: !!(post && post.ok) });
+            surface(`I spoke up in the meeting: "${action.payload}"`, '(gmeet) contributed');
+            actNote = `contributed${post && post.ok ? '' : '(post failed)'}`;
+          }
         } else if (action.kind === 'connect' && action.payload) {
+          ledgerAdd({ kind: 'connect', withheld: false, note: action.payload });
           surface(`Connecting the meeting to what I know — ${action.payload}`, '(gmeet) association');
           actNote = 'connected';
         }
@@ -837,5 +946,6 @@ module.exports = {
   // pure helpers (tested)
   detectMeetUrl, meetLinkFromEvent, introPrompt, validateIntro, ensureIntro, parseCaptions, parseAttendees,
   addressesSelf, isSelfSpeaker, selfNames, looksLikeSignOff, extractDirective, segmentTurns, parseMeetingAction,
+  ledgerAdd, ledgerRows, renderLedger, meetChatOpen, meetIntroOn,
   MEET_URL_RE
 };
