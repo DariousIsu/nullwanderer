@@ -92,6 +92,45 @@ const GRAPH = async (mention) => {
     ok(!/RECURRING MEETINGS/.test(q.text), 'no meeting talk → no series block, no wasted tokens');
   }
 
+  // ── the calendar supplies the NAME the transcripts never had ─────────────────────────────────
+  // Live join, verified against the real calendar 2026-07-21:
+  //   mav-myni-mkw → "Rainey Weekly Huddle"               (recurring, 28 invited)
+  //   vud-sptv-wbh → "Energize America|State Policy Labs" (recurring, 11 invited)
+  {
+    const series = () => [{ code: 'mav-myni-mkw', sessions: 4, last: Date.parse('2026-07-14'), weekdays: [2], roster: ['Bill Dunne', 'Sarah Hunt'] }];
+    const labels = async () => new Map([['mav-myni-mkw', { title: 'Rainey Weekly Huddle', invited: ['Clark Powers', 'Sarah Hunt', 'Tracy Bromley'], recurring: true }]]);
+    const r = await R.build(MSG, { objects: [], deps: { getMeta: () => '{}', resolve: GRAPH, series, labels }, now: Date.parse('2026-07-21') });
+    ok(/Rainey Weekly Huddle \(mav-myni-mkw\)/.test(r.text), 'the calendar title leads; the Meet code trails as our internal key');
+    ok(/regulars \(who actually speaks/.test(r.text) && /Bill Dunne/.test(r.text), 'the spoken roster is still ours, from sitting in the room');
+    ok(/invited \(from the calendar, 3\)/.test(r.text) && /Clark Powers/.test(r.text), 'and the calendar says who was SUPPOSED to be there');
+    ok(!/never state which meeting he means/i.test(r.text),
+      'a NAMED series drops the do-not-assert caveat — we can now name it, so the warning would be false');
+
+    // …but an UNLABELLED series must keep the caveat, and a labelled one alongside it must not
+    // launder the unlabelled one into being named.
+    const mixed = () => [
+      { code: 'mav-myni-mkw', sessions: 4, last: Date.parse('2026-07-14'), weekdays: [2], roster: ['Bill Dunne'] },
+      { code: 'zzz-nolabel-q', sessions: 3, last: Date.parse('2026-07-10'), weekdays: [4], roster: ['Someone Else'] },
+    ];
+    const rm = await R.build(MSG, { objects: [], deps: { getMeta: () => '{}', resolve: GRAPH, series: mixed, labels }, now: Date.parse('2026-07-21') });
+    ok(/never state which meeting he means/i.test(rm.text), 'SAFETY: an unlabelled series keeps the do-not-assert caveat');
+    ok(/zzz-nolabel-q/.test(rm.text.split('Nothing links')[1] || ''), 'and the caveat names exactly which codes it applies to');
+    ok(!/Rainey Weekly Huddle/.test(rm.text.split('Nothing links')[1] || ''), 'the named one is not swept into the caveat');
+
+    // a dead calendar costs the NAMES, never the block
+    const dead = await R.build(MSG, { objects: [], deps: { getMeta: () => '{}', resolve: GRAPH, series, labels: async () => { throw new Error('google down'); } }, now: Date.parse('2026-07-21') });
+    ok(/mav-myni-mkw/.test(dead.text) && /Bill Dunne/.test(dead.text), 'Google down → the roster and cadence still ship');
+    ok(/never state which meeting he means/i.test(dead.text), 'SAFETY: and it correctly falls back to not naming it');
+  }
+
+  // ── attendee names ────────────────────────────────────────────────────────────────────────────
+  {
+    ok(R._person({ email: 'bill.dunne@raineycenter.org' }) === 'Bill Dunne', 'an email local-part becomes a readable name');
+    ok(R._person({ displayName: 'Madeline Keeter', email: 'x@y.z' }) === 'Madeline Keeter', 'a real display name wins');
+    ok(R._person({ email: 'sydney@septembergroupllc.com' }) === 'sydney', 'a single-token local-part is left alone, not mangled');
+    ok(R._person({}) === '' && R._person(null) === '', 'junk in → empty, never a throw');
+  }
+
   // ── vocabulary matching ───────────────────────────────────────────────────────────────────────
   {
     const v = { rainey: { name: 'Rainey Center' }, 'rainey all hands': { name: 'Rainey Center All-Hands' } };

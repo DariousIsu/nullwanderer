@@ -6616,7 +6616,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             const intake = require('./lib/intake');
             const raw = await intake.decompose(userMessage, { recent: (recentTurns || []).slice(-4).map((t) => `${t.speaker || '?'}: ${String(t.content || '').replace(/\s+/g, ' ').slice(0, 160)}`).join('\n') });
             const objects = (raw && Array.isArray(raw.objects)) ? raw.objects.filter((o) => o && o.op === 'resolve') : [];
-            const rb = await require('./lib/references').build(userMessage, { objects });
+            // gcalOpts carries Echo's venv bridge — it is how a Meet code becomes "Rainey Weekly
+            // Huddle". Passed in rather than reached for, so references stays offline-testable and a
+            // disconnected Google costs the meeting NAMES and nothing else.
+            const rb = await require('./lib/references').build(userMessage, { objects, deps: { gcalOpts: gcalOpts() } });
             references = rb.text || '';
             if (references) console.log(`[references] ${rb.refs.filter((r) => r.status === 'resolved').length} resolved / ${rb.refs.filter((r) => r.status !== 'resolved').length} open${rb.series.length ? ` · ${rb.series.length} recurring series` : ''}`);
           }

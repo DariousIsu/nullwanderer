@@ -127,6 +127,69 @@ function meetingSeries(deps = {}) {
   } catch { return []; }
 }
 
+// ── THE LABEL, from the calendar ────────────────────────────────────────────────────────────────
+//
+// The transcripts know WHO and WHEN; only the calendar knows WHAT IT IS CALLED. A Google Meet link
+// on an event is the join key, and it closes the gap this module shipped with:
+//
+//   mav-myni-mkw → "Rainey Weekly Huddle"                (recurring, 28 invited)
+//   vud-sptv-wbh → "Energize America|State Policy Labs"  (recurring, 11 invited)
+//
+// Two different rosters, and both are worth having: INVITED is who is supposed to be there (the
+// calendar's answer), REGULARS is who actually speaks (ours, from having sat in the room). When they
+// disagree that is a real signal, not an error, so neither is discarded.
+//
+// Cached for CACHE_MS: this costs a Google round-trip, and it only runs on a turn that mentions a
+// meeting at all. Any failure returns an empty map — the series block then degrades to exactly the
+// unlabelled behaviour it had before, which is honest rather than broken.
+const CACHE_MS = 15 * 60 * 1000;
+let _labels = { at: 0, map: new Map() };
+
+/** Turn "bill.dunne@raineycenter.org" into "Bill Dunne"; leave a real display name alone. */
+function _person(a) {
+  const name = String((a && a.displayName) || '').trim();
+  if (name) return name;
+  const email = String((a && a.email) || '').trim();
+  if (!email) return '';
+  const local = email.split('@')[0];
+  if (!/[._]/.test(local)) return local;
+  return local.split(/[._]+/).filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+/** code → { title, invited[], recurring } for every Meet-linked event in the recent window. */
+async function meetingLabels(deps = {}, { now = Date.now() } = {}) {
+  if (deps.labels) { try { return await deps.labels(); } catch { return new Map(); } }
+  if (_labels.map.size && (now - _labels.at) < CACHE_MS) return _labels.map;
+  const opts = deps.gcalOpts;
+  if (!opts || !opts.python) return new Map();
+  const map = new Map();
+  try {
+    const gcal = deps.gcal || require('./gcal');
+    const cals = await gcal.listCalendars(opts);
+    const timeMin = new Date(now - 28 * 86400000).toISOString();
+    const timeMax = new Date(now + 7 * 86400000).toISOString();
+    for (const c of ((cals && cals.items) || [])) {
+      // Owner calendars only. A subscribed holiday/payroll feed carries no meetings of his and its
+      // events would just cost a round-trip.
+      if (c.accessRole !== 'owner' && c.accessRole !== 'writer') continue;
+      let ev; try { ev = await gcal.listEvents({ calendarId: c.id, timeMin, timeMax }, opts); } catch { continue; }
+      for (const e of ((ev && ev.items) || [])) {
+        const m = String(e.hangoutLink || '').match(/meet\.google\.com\/([a-z-]+)/i);
+        if (!m) continue;
+        const code = m[1];
+        const invited = (e.attendees || []).map(_person).filter(Boolean);
+        const prev = map.get(code);
+        // Keep the richest sighting of a recurring series rather than the last one seen.
+        if (!prev || invited.length > prev.invited.length) {
+          map.set(code, { title: String(e.summary || '').trim(), invited, recurring: !!e.recurringEventId });
+        }
+      }
+    }
+  } catch { return new Map(); }
+  _labels = { at: now, map };
+  return map;
+}
+
 const _DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 /** Does the message talk about a meeting at all? Only then is the series list worth its tokens. */
 const MEETING_RE = /\b(meeting|meet|all[\s-]?hands|standup|stand[\s-]?up|sync|call|session|huddle|briefing|1:1|one[\s-]on[\s-]one|agenda|attendees?|calendar)\b/i;
@@ -199,16 +262,29 @@ function render(refs = [], series = [], { includeSeries = false, now = Date.now(
     }
   }
   if (includeSeries && series && series.length) {
-    lines.push((lines.length ? '\n' : '') + 'RECURRING MEETINGS YOU HAVE SAT IN — you already know who is in these:');
+    lines.push((lines.length ? '\n' : '') + 'RECURRING MEETINGS YOU HAVE SAT IN — you already know these and who is in them:');
     for (const s of series) {
       const when = s.weekdays && s.weekdays.length ? s.weekdays.map((d) => _DOW[d]).join('/') : 'no fixed day';
       const ago = s.last ? `${Math.max(0, Math.round((now - s.last) / 86400000))}d ago` : 'unknown';
-      lines.push(`• ${s.code} — ${s.sessions} sessions, ${when}, last ${ago} · regulars: ${s.roster.join(', ')}`);
+      // The calendar's title is the NAME he actually speaks; the Meet code is our internal key and
+      // is worth nothing to him, so it trails in parentheses.
+      const head = s.title ? `${s.title} (${s.code})` : s.code;
+      lines.push(`• ${head} — ${s.sessions} sessions, ${when}, last ${ago}`);
+      lines.push(`    regulars (who actually speaks, from sitting in): ${s.roster.join(', ')}`);
+      // INVITED and REGULARS answer different questions. Kept apart on purpose: "who is supposed to
+      // be there" is the calendar's claim, "who talks" is ours, and a gap between them is real
+      // information — not something to average away.
+      if (s.invited && s.invited.length) {
+        lines.push(`    invited (from the calendar, ${s.invited.length}): ${s.invited.slice(0, MAX_ROSTER).join(', ')}${s.invited.length > MAX_ROSTER ? ', …' : ''}`);
+      }
     }
-    // The honest caveat. We hold the roster and the cadence; we do NOT hold the NAME.
-    lines.push('These are the raw meeting codes — nothing in our data links a code to a spoken name like '
-      + '"the weekly all hands". If the day and time he mentions match one, you may say so as a question; '
-      + 'never state which meeting he means as though we recorded it.');
+    const unlabelled = series.filter((s) => !s.title);
+    if (unlabelled.length) {
+      // The pre-calendar caveat, now scoped to the ones we genuinely cannot name.
+      lines.push(`Nothing links ${unlabelled.map((s) => s.code).join(', ')} to a spoken name. If the day and time `
+        + 'he mentions match one, you may say so as a question; never state which meeting he means as though '
+        + 'we recorded it.');
+    }
   }
   return lines.join('\n');
 }
@@ -225,9 +301,19 @@ async function build(userMessage, { objects = [], deps = {}, now = Date.now() } 
   // meetingSeries swallows its own failures, but an injected reader (or a DB mid-move) can still
   // throw — and a dead transcript table must cost us the meeting block, never the whole turn.
   let series = [];
-  if (wantsMeetings) { try { series = (deps.series ? deps.series() : meetingSeries(deps)) || []; } catch { series = []; } }
+  if (wantsMeetings) {
+    try { series = (deps.series ? deps.series() : meetingSeries(deps)) || []; } catch { series = []; }
+    // Label them from the calendar. A failure here costs the NAMES, never the block.
+    try {
+      const labels = await meetingLabels(deps, { now });
+      series = series.map((s) => {
+        const l = labels.get(s.code);
+        return l ? { ...s, title: l.title || null, invited: l.invited || [] } : s;
+      });
+    } catch { /* unlabelled is the honest fallback */ }
+  }
   const text = render(refs, series, { includeSeries: wantsMeetings, now });
   return { text, refs, series };
 }
 
-module.exports = { build, render, resolveAll, meetingSeries, _fromVocab, _vocab, _key, MEETING_RE, MAX_REFS };
+module.exports = { build, render, resolveAll, meetingSeries, meetingLabels, _person, _fromVocab, _vocab, _key, MEETING_RE, MAX_REFS };
