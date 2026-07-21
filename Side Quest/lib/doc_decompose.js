@@ -22,6 +22,7 @@ const CG = require('./curation_gate');   // the shared two gates (existence + fa
 const corroboration = require('./corroboration');     // C2 — independent-source counting (mirror-collapsed)
 const confModel = require('./confidence_model');      // C3 — calibrated, corroboration-sensitive confidence
 const identityGate = require('./identity_gate');      // F1 — mint-reluctance + contextual bind + attractor guard
+const entityMatch = require('./entity_match');        // the precision matcher — a resolver answer is a PROPOSAL
 const SUB = require('./substantiation');              // Slice 2 — substantiation_state/frame tags on minted endpoints
 
 // Closed entity-type vocab, aligned with Echo's types. Anything unrecognized → 'other' (still a real
@@ -207,17 +208,58 @@ async function resolveExtracted(entity, { resolve, context = null } = {}) {
   // context = the doc's OTHER entities, so an ambiguous candidate can be disambiguated by co-occurrence.
   try { r = await resolve(name, { preferType, context }); } catch { return { action: 'skip', name, type, reason: 'resolver-threw' }; }
   const status = r && r.status;
-  if (status === 'resolved') return { action: 'reuse', name, type, object: r.object, canonical: (r.object && r.object.name) || name };
-  if (status === 'nil') {
-    // F1 MINT-RELUCTANCE: the resolver found no existing node. A STRONG reference (full name / strong-id /
-    // non-person) may mint. A WEAK person reference (bare first name, or first-name + descriptor) must NOT
-    // mint a durable node — it binds to a full-name person already present in the doc's context, else HOLDS
-    // provisional. This is the "Tracy the finance lady" fix: no spurious node → no future-mention attractor.
+
+  // F1 MINT-RELUCTANCE: no existing node to bind to. A STRONG reference (full name / strong-id /
+  // non-person) may mint. A WEAK person reference (bare first name, or first-name + descriptor) must NOT
+  // mint a durable node — it binds to a full-name person already present in the doc's context, else HOLDS
+  // provisional. This is the "Tracy the finance lady" fix: no spurious node → no future-mention attractor.
+  const noMatch = (why) => {
     const g = identityGate.mintDecision('nil', name, type, { context: context || [] });
     if (g.action === 'bind-context') return { action: 'reuse', name, type, canonical: g.canonical, via: 'context' };
-    if (g.action === 'hold') return { action: 'hold', name, type, candidates: [], reason: g.reason, provisional: !!g.provisional };
-    return { action: 'mint', name, type };                 // strong reference → mint (existence-gated in 2c)
+    if (g.action === 'hold') return { action: 'hold', name, type, candidates: [], reason: why || g.reason, provisional: !!g.provisional };
+    return { action: 'mint', name, type, reason: why || null };   // strong reference → mint (existence-gated in 2c)
+  };
+
+  if (status === 'resolved') {
+    // ── A RESOLVER ANSWER IS A PROPOSAL, NOT A VERDICT ──────────────────────────────────────────
+    //
+    // Measured on live data 2026-07-21: Alcona County MI minutes name "Carolyn Brummund" and
+    // "Adam Brege"; this line bound them to BOURDEAUX, CAROLYN [H8GA07201] (a Georgia congressional
+    // candidate) and Adam Frisch [FEC:H2CO03351] (Colorado). Neither surname occurs anywhere in the
+    // document — the match was made on FIRST NAME. 104 people carried 122 such false structural
+    // claims (docs/RESOLVER_FALSE_IDENTIFICATION_HANDOFF.md).
+    //
+    // `lib/entity_match` already refuses both — given-name-conflict and surname-differs. It was
+    // simply never asked. `resolution_gate.preResolve` runs the gate FIRST but is add-only by
+    // construction ("can never regress the existing resolver"), so on a non-merge it falls through
+    // to the loose resolver and the refusal is discarded. The gate could approve a binding and had
+    // no power to veto one. This is that power.
+    //
+    // A rejected binding is treated exactly as `nil` — because that is what it means: there is no
+    // node here we may bind to. Routing it through the SAME F1 reluctance gate matters, or the fix
+    // would trade a false merge for a fresh attractor by minting every bare first name it rejects.
+    // ── PERSONS ONLY, AND THAT IS NOT A HEDGE ───────────────────────────────────────────────────
+    //
+    // For a person, entity_match reasons about given name vs surname vs initial vs nickname, and its
+    // `no-match` means "these are different people" — real evidence. For a non-person it says so
+    // itself: matching is "at most REVIEW" without a shared strong id, and `name-differs` means only
+    // that the strings differ. That is exactly what a resolver EXISTS to reconcile — "Arkansas
+    // Senate" → "member of the Arkansas Senate [wd:Q21361754]", "U.S. Senate" → "United States
+    // Senate". Vetoing on it broke both in the suite on the first cut of this change.
+    //
+    // The measured harm is a person harm: all 122 false claims bind a named human to the wrong
+    // named human. Narrow the veto to where the evidence is, and where the damage is.
+    const cand = r.object && r.object.name;
+    if (preferType === 'person' && cand && String(cand).trim().toLowerCase() !== String(name).trim().toLowerCase()) {
+      let verdict = null;
+      try { verdict = entityMatch.matchPair({ name, type: preferType }, { name: cand, type: preferType }); } catch { verdict = null; }
+      if (verdict && verdict.decision === 'no-match') {
+        return noMatch(`resolver-rejected:${verdict.reason}`);
+      }
+    }
+    return { action: 'reuse', name, type, object: r.object, canonical: cand || name };
   }
+  if (status === 'nil') return noMatch(null);
   if (status === 'ambiguous') return { action: 'hold', name, type, candidates: r.candidates || [], reason: r.reason || 'ambiguous' };
   return { action: 'skip', name, type, reason: (status || 'error') };
 }

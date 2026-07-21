@@ -99,6 +99,53 @@ function mockResolver(map) {
   // nil → MINT.
   ok((await D.resolveExtracted({ name: 'Obscure Staffer', type: 'person' }, { resolve: mockResolver({}) })).action === 'mint', '2b: nil → MINT a new object');
 
+  // ── V1: A RESOLVER ANSWER IS A PROPOSAL, NOT A VERDICT ─────────────────────────────────────────
+  //
+  // The live case, 2026-07-21. Alcona County MI minutes name "Carolyn Brummund" and "Adam Brege";
+  // the resolver answered with a GEORGIA congressional candidate and a COLORADO one. Neither
+  // surname occurs anywhere in the document — matched on FIRST NAME. 104 people ended up carrying
+  // 122 false structural claims. entity_match already refused both; nobody asked it.
+  {
+    const rGA = mockResolver({ 'Carolyn Brummund': { status: 'resolved', object: { id: 9, name: 'BOURDEAUX, CAROLYN [H8GA07201]' } } });
+    const d = await D.resolveExtracted({ name: 'Carolyn Brummund', type: 'person' }, { resolve: rGA });
+    ok(d.action !== 'reuse', 'V1 CRITICAL: a resolver answer the precision matcher REFUSES is not adopted');
+    ok(d.action === 'mint' && /resolver-rejected:given-name-conflict/.test(d.reason || ''),
+      'V1: Carolyn Brummund is NOT Carolyn Bourdeaux — she mints as herself, and the record says why');
+    const rCO = mockResolver({ 'Adam Brege': { status: 'resolved', object: { id: 8, name: 'Adam Frisch [FEC:H2CO03351]' } } });
+    const d2 = await D.resolveExtracted({ name: 'Adam Brege', type: 'person' }, { resolve: rCO });
+    ok(d2.action === 'mint' && /surname-differs/.test(d2.reason || ''), 'V1: Adam Brege is NOT Adam Frisch');
+  }
+  {
+    // The veto must not break a GENUINE match, or it trades a false merge for a duplicate flood.
+    const rOk = mockResolver({ 'Carolyn Brummund': { status: 'resolved', object: { id: 7, name: 'Carolyn Brummund' } } });
+    ok((await D.resolveExtracted({ name: 'Carolyn Brummund', type: 'person' }, { resolve: rOk })).action === 'reuse',
+      'V1: an honest match still REUSES');
+    // …including the abbreviation-folded form the canonical registry depends on.
+    const rSen = mockResolver({ 'U.S. Senate': { status: 'resolved', object: { id: 3, name: 'United States Senate' } } });
+    const dSen = await D.resolveExtracted({ name: 'U.S. Senate', type: 'organization' }, { resolve: rSen });
+    ok(dSen.action === 'reuse' && dSen.canonical === 'United States Senate',
+      'V1 CRITICAL: "U.S. Senate" still folds into "United States Senate" — the veto must not undo normKey');
+    // THE VETO IS PERSONS-ONLY, and the first cut proved why. For a non-person, entity_match's
+    // `name-differs` means only that the strings differ — which is precisely what a resolver exists
+    // to reconcile. Vetoing on it broke the office canonicalisation this suite already asserts.
+    const rOffice = mockResolver({ 'Arkansas Senate': { status: 'resolved', object: { id: 9, name: 'member of the Arkansas Senate [wd:Q21361754]' } } });
+    const dOffice = await D.resolveExtracted({ name: 'Arkansas Senate', type: 'office_held' }, { resolve: rOffice });
+    ok(dOffice.action === 'reuse' && /Arkansas Senate \[wd:Q21361754\]/.test(dOffice.canonical),
+      'V1 CRITICAL: a BODY still canonicalises to its office — the name is SUPPOSED to change there');
+  }
+  {
+    // THE COUNTER-RISK. Rejecting a binding must not mint an attractor: a bare first name whose
+    // resolver answer is refused has to fall through the SAME F1 reluctance gate as `nil`, or the
+    // fix trades a false merge for the Tracy bug.
+    const rChris = mockResolver({ Chris: { status: 'resolved', object: { id: 5, name: 'Christopher Nolan' } } });
+    const d = await D.resolveExtracted({ name: 'Chris', type: 'person' }, { resolve: rChris, context: [] });
+    ok(d.action === 'hold' && d.provisional === true,
+      'V1 CRITICAL: a REJECTED bare first name HOLDS provisional — it must not mint a fresh attractor');
+    const dBind = await D.resolveExtracted({ name: 'Tracy', type: 'person' }, { resolve: mockResolver({ Tracy: { status: 'resolved', object: { name: 'Tracy Delaney' } } }), context: ['Tracy Bromley'] });
+    ok(dBind.action === 'reuse' && dBind.via === 'context',
+      'V1: a rejected weak reference still binds to a full name present in the document');
+  }
+
   // F1 MINT-RELUCTANCE (the Tracy fix): nil + a WEAK person reference must NOT mint a durable node.
   const nilR = mockResolver({});
   ok((await D.resolveExtracted({ name: 'Tracy Bromley', type: 'person' }, { resolve: nilR })).action === 'mint', '2b/F1: nil + full name → MINT (strong reference)');
