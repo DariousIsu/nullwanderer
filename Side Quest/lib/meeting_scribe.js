@@ -59,19 +59,157 @@ function buildSegmentPrompt(newText, { at = '' } = {}) {
     + `Invent nothing. Output ONLY the bullets, no preamble.`;
 }
 
+// The headings, shared by the one-pass digest, the per-part pass and the merge, so parts compose.
+const SECTIONS = '**Topics** — every distinct subject discussed, in the order it came up, with who raised it.\n'
+  + '**Decisions** — what was actually settled, and by whom.\n'
+  + '**Action items** — each concrete follow-up with its owner and any date given.\n'
+  + '**Open questions** — anything raised and left unresolved.';
+const FIDELITY = 'Be specific: real names, numbers and dates as spoken. Attribute to the person who said it. '
+  + 'Invent nothing and infer nothing the transcript does not support; if a stretch is garbled or the captions dropped, '
+  + 'say so rather than smoothing it over.';
+
+// WHO WAS IN THE ROOM. `roster` = who actually spoke (ours, from the captions). `invited` = the
+// calendar's list. Both matter and they differ: "Sibley" appears ZERO times in our captions, which is
+// exactly why Google's notes can write "[Megan Sibley]" and ours could only write "Megan". The
+// calendar is where a surname comes from — and a name list is also the cheapest guard against the
+// model inventing an attributor.
+function peopleBlock({ roster = '', invited = '' } = {}) {
+  const out = [];
+  if (roster) out.push(`People heard speaking: ${roster}`);
+  if (invited) out.push(`Everyone invited (use these spellings and full names when attributing): ${invited}`);
+  return out.length ? out.join('\n') + '\n' : '';
+}
+
 // The one-pass authoritative digest, from the RAW transcript. This is the record.
-function buildDigestPrompt(rawTranscript, { title = '', roster = '' } = {}) {
+function buildDigestPrompt(rawTranscript, opts = {}) {
+  const { title = '' } = opts;
   return `You are writing the OFFICIAL MINUTES of a meeting from its complete verbatim transcript.\n\n`
-    + `${title ? `Meeting: ${title}\n` : ''}${roster ? `People present: ${roster}\n` : ''}\n`
-    + `Full transcript:\n${String(rawTranscript || '').slice(-400000)}\n\n`
+    + `${title ? `Meeting: ${title}\n` : ''}${peopleBlock(opts)}\n`
+    // NO .slice() — a transcript too large for the window is CHUNKED by planChunks and built whole,
+    // never trimmed. Truncating here would have re-created the exact bug this file exists to fix,
+    // one layer up: a tail slice silently deletes the start of the meeting.
+    + `Full transcript:\n${String(rawTranscript || '')}\n\n`
     + `Write the complete minutes, covering the WHOLE meeting from its opening to its close — not just the end. Use:\n`
-    + `**Topics** — every distinct subject discussed, in the order it came up, with who raised it.\n`
-    + `**Decisions** — what was actually settled, and by whom.\n`
-    + `**Action items** — each concrete follow-up with its owner and any date given.\n`
-    + `**Open questions** — anything raised and left unresolved.\n\n`
-    + `Be specific: real names, numbers and dates as spoken. Attribute to the person who said it. `
-    + `Invent nothing and infer nothing the transcript does not support; if a stretch is garbled or the captions dropped, say so rather than smoothing it over. `
-    + `Output ONLY the minutes.`;
+    + `${SECTIONS}\n\n${FIDELITY} Output ONLY the minutes.`;
+}
+
+/**
+ * ONE PART of an oversized meeting. Same headings as the whole, so parts merge cleanly.
+ *
+ * A part is told its position, because "the meeting opened with…" is only true of part 1 and a model
+ * given a middle slice will otherwise narrate it as though it were the beginning.
+ */
+function buildPartPrompt(chunk, { i = 1, n = 1, title = '', ...rest } = {}) {
+  return `You are minuting ONE SECTION of a long meeting — section ${i} of ${n}.\n\n`
+    + `${title ? `Meeting: ${title}\n` : ''}${peopleBlock(rest)}\n`
+    + `Transcript of section ${i} of ${n}${i > 1 ? ' (the meeting was already under way — do NOT describe this as the opening)' : ''}:\n${String(chunk || '')}\n\n`
+    + `Minute THIS SECTION completely, under:\n${SECTIONS}\n\n`
+    + `Cover everything in this section — it is the only pass anyone will make over these lines, so anything you leave out is lost for good. `
+    + `${FIDELITY} Output ONLY the minutes for this section.`;
+}
+
+/**
+ * MERGE the parts into one document.
+ *
+ * The merge is explicitly a RE-ORGANISATION, not a summarization: every item must survive. This is
+ * the one step that could re-introduce the original disease (a model handed a long document and
+ * asked to "combine" will happily compress it), so the instruction says so in as many words, and
+ * `digestWhole` refuses to use a merge that came back suspiciously short.
+ */
+function buildMergePrompt(parts = [], { title = '' } = {}) {
+  const body = parts.map((p, i) => `--- Section ${i + 1} of ${parts.length} ---\n${p}`).join('\n\n');
+  return `These are the minutes of ONE meeting, taken section by section${title ? ` (${title})` : ''}.\n\n${body}\n\n`
+    + `Combine them into a single set of minutes under:\n${SECTIONS}\n\n`
+    + `This is a MERGE, not a summary. EVERY topic, decision, action item and open question above must appear in your output — `
+    + `carry each one across, keeping its owner, dates and numbers exactly as written. `
+    + `You may only: put them under the right heading, restore chronological order, and collapse entries that are literally the same item recorded twice. `
+    + `Do NOT shorten, generalise, rank, or drop anything for being minor, and never write a placeholder like "as previously noted". `
+    + `If two sections conflict, keep BOTH and note the disagreement. Output ONLY the merged minutes.`;
+}
+
+/**
+ * Split a transcript into ordered chunks that each fit the budget, on LINE boundaries.
+ *
+ * Pure and tested. A single line longer than the budget is emitted whole rather than cut — losing a
+ * caption to fit an arithmetic bound is the failure mode this whole file is about, and one oversized
+ * line is a cheaper problem than a silently truncated one.
+ */
+function planChunks(text, budgetChars) {
+  const s = String(text || '');
+  const budget = Math.max(1000, Number(budgetChars) || 0);
+  if (!s) return [];
+  if (s.length <= budget) return [s];
+  const out = [];
+  let cur = '';
+  for (const line of s.split('\n')) {
+    if (cur && (cur.length + 1 + line.length) > budget) { out.push(cur); cur = line; }
+    else cur = cur ? `${cur}\n${line}` : line;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/** Usable INPUT chars for one call: the real window, less the reply budget, less a safety margin. */
+function inputBudgetChars(numCtx, numPredict) {
+  const ctx = Number(numCtx) || 8192;
+  const pred = Number(numPredict) || 2048;
+  return Math.max(4000, Math.floor((ctx - pred) * 4 * 0.85));   // 4 chars/token, conservative
+}
+
+/**
+ * BUILD THE WHOLE MEETING DOCUMENT — never a truncated one.
+ *
+ * Lucas, 2026-07-21: *"instead of eating an existing meeting if full it should build the meeting
+ * document as a whole."*
+ *
+ * Fits in the window → one pass, as before. Doesn't fit → minute each ordered section, then merge.
+ * The transcript is never sliced. The window comes from the MODEL (lib/cloud_window) rather than the
+ * hard-coded 32,768 this used to assume: today's meeting was 18,190 prompt tokens against that
+ * assumption, so a two-hour meeting would have overflowed and ollama drops from the FRONT — the
+ * "eats the beginning" failure returning through a different door.
+ */
+async function digestWhole(d, raw, opts = {}) {
+  const cfg = require('./config');
+  const numPredict = cfg.sectionNumPredict();
+  const model = opts.model || cfg.deepReasonerModel();
+  let numCtx = cfg.deepNumCtx();
+  try {
+    const w = await require('./cloud_window').resolve({ model });
+    // Trust the resolver only when it beats the configured floor — it fails safe to 8192, and
+    // accepting that would CAUSE the chunking it is meant to let us avoid.
+    if (w && w.num_ctx && w.num_ctx > numCtx) numCtx = w.num_ctx;
+  } catch { /* keep the configured window */ }
+
+  const budget = inputBudgetChars(numCtx, numPredict);
+  const overhead = buildDigestPrompt('', opts).length;
+  const chunks = planChunks(raw, Math.max(4000, budget - overhead));
+  const run = (p) => runModel(d, p, numPredict, model);
+
+  if (chunks.length <= 1) {
+    console.log(`[scribe] digest: 1 pass, ${raw.length} chars, num_ctx ${numCtx} (${model})`);
+    return run(buildDigestPrompt(raw, opts));
+  }
+
+  console.log(`[scribe] digest: ${raw.length} chars exceeds the window → ${chunks.length} sections, building whole (num_ctx ${numCtx})`);
+  const parts = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const p = await run(buildPartPrompt(chunks[i], { ...opts, i: i + 1, n: chunks.length }));
+    if (p) parts.push(p);
+    else console.error(`[scribe] section ${i + 1}/${chunks.length} produced nothing — it will be reported as a gap`);
+  }
+  if (!parts.length) return '';
+  if (parts.length === 1) return parts[0];
+
+  const joined = parts.map((p, i) => `## Section ${i + 1}\n${p}`).join('\n\n');
+  const merged = await run(buildMergePrompt(parts, opts));
+  // THE GUARD. A merge is the one step that can silently re-compress the whole meeting, so a result
+  // materially shorter than its own inputs is treated as a failed merge, and the SECTIONS ship
+  // instead. Verbose and correct beats tidy and lossy — that trade is the entire point of this file.
+  if (!merged || merged.length < joined.length * 0.5) {
+    console.error(`[scribe] merge came back short (${merged ? merged.length : 0} vs ${joined.length} chars) — shipping the sections whole instead`);
+    return `_These minutes were assembled from ${parts.length} sections; the combining pass was rejected for dropping detail, so each section is given in full._\n\n${joined}`;
+  }
+  return merged;
 }
 
 // Kept for the finalize fallback path when no raw transcript is reachable.
@@ -189,12 +327,12 @@ async function finalize(ctx = {}) {
   // affordable, and every layer of summarization we skip is a layer that cannot lose anything.
   let digest = '';
   try {
-    const raw = d.rawTranscript ? d.rawTranscript() : rawTranscriptForMeeting();
+    const raw = d.rawTranscript ? await d.rawTranscript() : await rawTranscriptForMeeting();
     if (raw && raw.text && raw.text.trim().length >= 200) {
-      const reasoner = (cfg.get('ZOE_DEEP_REASONER_MODEL') || '').trim() || cfg.deepReasonerModel();
-      digest = await runModel(d, buildDigestPrompt(raw.text, { title: raw.title, roster: raw.roster }), cfg.sectionNumPredict(), reasoner || undefined);
-      // A dead override must not cost the record — fall back to the proven scribe model.
-      if (!digest) digest = await runModel(d, buildDigestPrompt(raw.text, { title: raw.title, roster: raw.roster }), cfg.sectionNumPredict());
+      const opts = { title: raw.title, roster: raw.roster, invited: raw.invited };
+      digest = await digestWhole(d, raw.text, opts);
+      // A dead reasoner must not cost the record — retry on the proven scribe model.
+      if (!digest) digest = await digestWhole(d, raw.text, { ...opts, model: d.MODEL });
       if (digest) console.log(`[scribe] digest: ${raw.lines} raw line(s) / ${raw.text.length} chars → ${digest.length} chars of minutes`);
     }
   } catch (e) { console.error('[scribe] digest failed:', e.message); }
@@ -222,7 +360,7 @@ async function finalize(ctx = {}) {
 }
 
 /** The verbatim record of the meeting she is in, straight from meeting_transcript. */
-function rawTranscriptForMeeting() {
+async function rawTranscriptForMeeting() {
   try {
     const code = db.getMeta('gmeet_code') || (db.getMeta('gmeet_url') || '').split('/').pop() || null;
     if (!code) return null;
@@ -233,11 +371,24 @@ function rawTranscriptForMeeting() {
     // silently fold last week's meeting into this week's minutes.
     const mine = started ? rows.filter((r) => r.ts >= started) : rows;
     const use = mine.length ? mine : rows;
+    // THE CALENDAR'S NAMES. Google's notes could attribute an action to "[Megan Sibley]"; ours could
+    // only ever have said "Megan", because "Sibley" occurs ZERO times in the captions. A surname is
+    // not in the transcript — it is on the invite. Same source lib/references uses for the meeting's
+    // room context, so there is one roster, not two.
+    let invited = '', title = '';
+    try {
+      const R = require('./references');
+      const labels = await R.meetingLabels({}, { now: Date.now() });
+      const l = labels.get(String(code).toLowerCase());
+      if (l) { invited = (l.invited || []).join(', '); title = l.title || ''; }
+    } catch { /* no calendar → speakers alone still carry the record */ }
+    if (!title) { try { title = require('./meeting_lane').meetingTitle({ url: db.getMeta('gmeet_url') || '' }); } catch { title = ''; } }
     return {
       text: use.map((r) => `${r.speaker ? r.speaker + ': ' : ''}${r.text}`).join('\n'),
       lines: use.length,
-      title: (() => { try { return require('./meeting_lane').meetingTitle({ url: db.getMeta('gmeet_url') || '' }); } catch { return ''; } })(),
+      title,
       roster: [...new Set(use.map((r) => String(r.speaker || '').trim()).filter(Boolean))].join(', '),
+      invited,
     };
   } catch { return null; }
 }
@@ -250,6 +401,7 @@ function reset() {
 
 module.exports = {
   tick, finalize, hasPending, lastRecap, lastMinutes, minutes, segments, reset, defaultDeps,
-  cleanModelText, buildMinutesPrompt, buildSegmentPrompt, buildDigestPrompt, appendSegment, rawTranscriptForMeeting,
+  cleanModelText, buildMinutesPrompt, buildSegmentPrompt, buildDigestPrompt, buildPartPrompt, buildMergePrompt,
+  planChunks, inputBudgetChars, digestWhole, peopleBlock, appendSegment, rawTranscriptForMeeting,
   UPDATE_EVERY_LINES, buildRecapPrompt,
 };
