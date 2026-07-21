@@ -83,6 +83,15 @@ function parseEchoTags(text) {
     if (arg == null && body) arg = body;
     return { kind: 'recipe', name: name.trim(), arg: arg != null ? String(arg).trim() : null, limit: limit ? Number(limit) : null };
   });
+  // ⭐ A TAG CUT OFF MID-WRITE MATCHES NOTHING. Live 2026-07-21 the generation stopped inside an
+  // <echo-do> — `[{"tab_key":"china_ai_hw","block_type":"` — so the regex above found no closing
+  // tag, returned nothing, and the document silently never happened. The turn row was even stored
+  // with truncated=0. Report it: an unclosed tag is a real failure and should never look like a turn
+  // in which she simply chose not to act.
+  const lastOpen = text.lastIndexOf('<echo-do');
+  if (lastOpen >= 0 && text.indexOf('</echo-do>', lastOpen) < 0) {
+    console.error(`[echo-suit] UNCLOSED <echo-do> — generation stopped mid-tag, that action was LOST: ${text.slice(lastOpen, lastOpen + 120)}`);
+  }
   return found.sort((a, b) => a.index - b.index).map(x => x.tag);
 }
 function parseArgs(body) {

@@ -84,6 +84,37 @@ const doTag = (body, name = 'saga_canvas_add_block') => `<echo-do name="${name}"
     'document order is preserved across the expansion');
 }
 
+// ── ⭐ a tag CUT OFF mid-write is reported, not silently lost ────────────────────────────────────
+// Live 2026-07-21: generation stopped INSIDE an <echo-do> — [{"tab_key":"china_ai_hw","block_type":"
+// — so the regex matched nothing, the document never happened, and the turn row was stored with
+// truncated=0. The tag genuinely cannot be recovered; what matters is that it must not look like a
+// turn in which she simply chose not to act.
+{
+  const errs = [];
+  const orig = console.error;
+  console.error = (...a) => errs.push(a.join(' '));
+  try {
+    const cut = es.parseEchoTags('Plan.\n<echo-do name="saga_canvas_add_block">[{"tab_key":"K","block_type":"');
+    ok(cut.length === 0, 'an unclosed tag yields no action — it is genuinely unrecoverable');
+    ok(errs.some((e) => /UNCLOSED <echo-do>/.test(e)), 'SAFETY: but it is REPORTED, loudly');
+    ok(errs.some((e) => /that action was LOST/.test(e)), 'and named as a loss, not a no-op');
+    errs.length = 0;
+    es.parseEchoTags(doTag('{"tab_key":"K","block_type":"paragraph","data":{"markdown":"hi"}}'));
+    ok(errs.length === 0, 'a well-formed tag reports nothing');
+  } finally { console.error = orig; }
+}
+
+// ── the manifest asks for ONE SHORT TAG PER BLOCK ───────────────────────────────────────────────
+// The array form still parses (above) and stays supported, but a long tag makes the whole document
+// one fragile unit — the live truncation lost every block because no single object had closed.
+// Short tags fail independently. Affordable only because the caps came off: the array form existed
+// to fit a whole document into 4 tags.
+{
+  const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/Emit ONE tag per block/.test(m), 'the manifest asks for one tag per block');
+  ok(/never put the whole document in a single tag/.test(m), 'and says why: a cut-off long tag loses that block');
+}
+
 // ── the dispatch cap gives canvas writes room ───────────────────────────────────────────────────
 {
   const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');

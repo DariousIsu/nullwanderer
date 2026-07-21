@@ -6672,7 +6672,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // yet." on Lucas's canvas while she reported "added a detailed outline covering all five
             // parts". The manifest documented ONLY the table shape, so for prose there was nothing to
             // copy. A capability documented for one shape gets used in one shape or guessed at.
-            { key: 'canvas document (prose)', label: 'a real tab on Lucas\'s canvas — THIS is how you deliver a paper, brief or memo. Write the WHOLE document in ONE add_block tag by listing every block as a JSON array; you do not get a separate turn per section', how: '<echo-do name="saga_canvas_open_tab">{"mode":"DOC","tab_key":"KEY","title":"TITLE"}</echo-do> then ONE tag containing every block: <echo-do name="saga_canvas_add_block">[{"tab_key":"KEY","block_type":"heading","data":{"level":2,"text":"Section title"}},{"tab_key":"KEY","block_type":"paragraph","data":{"markdown":"The prose, in markdown."}},{"tab_key":"KEY","block_type":"heading","data":{"level":2,"text":"Next section"}}]</echo-do>' },
+            // ⭐ ONE SHORT TAG PER BLOCK. The batched-array form still works and stays supported, but it is no
+// longer what she is told to do: live 2026-07-21 her generation stopped mid-array —
+// `[{"tab_key":"china_ai_hw","block_type":"` — and because no single object had closed, the ENTIRE
+// document was lost and the tab rendered empty. A long tag makes the whole document one fragile
+// unit. Short tags fail independently: a truncation costs one block, not the paper. This is only
+// affordable because the caps came off (12 hops, 60 canvas writes) — the array form existed to fit
+// a document into 4 tags.
+{ key: 'canvas document (prose)', label: 'a real tab on Lucas\'s canvas — THIS is how you deliver a paper, brief or memo. Emit ONE tag per block, several in the same message. Keep each tag SHORT: if a long one is cut off mid-write you lose that block, so never put the whole document in a single tag', how: '<echo-do name="saga_canvas_open_tab">{"mode":"DOC","tab_key":"KEY","title":"TITLE"}</echo-do> then one tag each, in order: <echo-do name="saga_canvas_add_block">{"tab_key":"KEY","block_type":"heading","data":{"level":2,"text":"Section title"}}</echo-do> <echo-do name="saga_canvas_add_block">{"tab_key":"KEY","block_type":"paragraph","data":{"markdown":"The prose, in markdown."}}</echo-do>' },
             { key: 'canvas table', label: 'rows and columns on that same tab', how: '<echo-do name="saga_canvas_add_block">{"tab_key":"KEY","block_type":"table","data":{"headers":["A","B"],"rows":[["1","2"]],"caption":"optional"}}</echo-do>' },
             { key: 'valid block_type values', label: 'ONLY these — anything else is rejected; heading/paragraph/table/chart are the ones that actually render', how: 'heading · paragraph · list · code · table · chart · metric_card · callout · image · diagram · knowledge_graph · document_file · browser_snapshot · map · three · draft_review · citation · source_card' },
             // PACKAGING IS NOT HERS TO INVOKE. Lucas, 2026-07-21: she builds in plain markdown; when
