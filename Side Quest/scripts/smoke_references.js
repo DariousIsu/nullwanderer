@@ -80,7 +80,10 @@ const GRAPH = async (mention) => {
   // ── meetings: cadence and roster are ours; the NAME is not ────────────────────────────────────
   {
     const series = () => [{ code: 'mav-myni-mkw', sessions: 4, last: Date.parse('2026-07-14'), weekdays: [1], roster: ['Alice', 'Bob', 'Cara'] }];
-    const r = await R.build(MSG, { objects: [], deps: { getMeta: () => '{}', resolve: GRAPH, series }, now: Date.parse('2026-07-21') });
+    // `labels` MUST be injected: without it meetingLabels falls back to Echo's venv bridge and this
+    // suite would reach Lucas's real calendar — a smoke that passes or fails on network state.
+    const noLabels = async () => new Map();
+    const r = await R.build(MSG, { objects: [], deps: { getMeta: () => '{}', resolve: GRAPH, series, labels: noLabels }, now: Date.parse('2026-07-21') });
     ok(/RECURRING MEETINGS YOU HAVE SAT IN/.test(r.text), 'a message about meetings gets the series she has attended');
     ok(/Alice, Bob, Cara/.test(r.text), 'with the roster — she was there, so she knows who is in it');
     ok(/Monday/.test(r.text) && /4 sessions/.test(r.text), 'and the cadence, which is the only binding signal we hold');
@@ -88,7 +91,7 @@ const GRAPH = async (mention) => {
       'SAFETY: nothing links a Meet code to a spoken name — asserting the binding is forbidden');
     ok(/as a question/.test(r.text), 'the permitted move is to ASK, not to assert');
     // a message with no meeting in it pays nothing for this
-    const q = await R.build('What is the capital of Peru?', { objects: [], deps: { getMeta: () => '{}', resolve: GRAPH, series } });
+    const q = await R.build('What is the capital of Peru?', { objects: [], deps: { getMeta: () => '{}', resolve: GRAPH, series, labels: noLabels } });
     ok(!/RECURRING MEETINGS/.test(q.text), 'no meeting talk → no series block, no wasted tokens');
   }
 
@@ -150,6 +153,47 @@ const GRAPH = async (mention) => {
     });
     ok(dup.refs.filter((x) => /rainey weekly huddle/i.test(x.name || '')).length === 1,
       'the same meeting is not listed twice when both paths find it');
+  }
+
+  // ── the room comes before the world ──────────────────────────────────────────────────────────
+  // Lucas 2026-07-21: "she's not properly identifying people places and events by starting with the
+  // context of the meeting and who is there before going broad." The turn model was handed captions,
+  // a generic recall, and a GLOBAL top-facts list — the attendee panel was scraped once at intro and
+  // discarded, so a first name had nothing local to bind to.
+  {
+    const labels = async () => new Map([['mav-myni-mkw', { title: 'Rainey Weekly Huddle', invited: ['Clark Powers', 'Sarah Hunt', 'Tracy Bromley'], recurring: true }]]);
+    const series = () => [{ code: 'mav-myni-mkw', sessions: 3, last: Date.parse('2026-07-14'), weekdays: [2], roster: ['Sarah Hunt', 'Amelia Gardner'] }];
+    const deps = { getMeta: () => VOCAB, labels, series };
+    const b = await R.meetingContext({ code: 'mav-myni-mkw', present: ['Lucas Overby', 'Sarah Hunt'], deps, now: Date.parse('2026-07-21') });
+
+    ok(/THIS MEETING: Rainey Weekly Huddle/.test(b), 'the meeting names itself');
+    ok(/sat in 3 session\(s\)/.test(b), 'and how well she knows it');
+    ok(/WHOSE WORLD THIS IS: .*Rainey Center/.test(b), 'his organisation frames the room');
+    ok(/resolve every name you hear against THESE PEOPLE FIRST/.test(b), 'the room is stated as the first place to look');
+    ok(/in the call right now \(you can see them\): Lucas Overby, Sarah Hunt/.test(b),
+      'the live panel leads — she can SEE these people, so they outrank every other source');
+    ok(/invited on the calendar: Clark Powers, Tracy Bromley/.test(b), 'then the calendar invite list');
+    ok(/regulars from past sessions.*Amelia Gardner/.test(b), 'then who has actually spoken in past sessions');
+    // authority order matters: a name present in the call must NOT be repeated as a mere "regular"
+    ok((b.match(/Sarah Hunt/g) || []).length === 1,
+      'SAFETY: a name appears ONCE, at its highest authority — not demoted into a weaker tier as well');
+    ok(b.indexOf('in the call right now') < b.indexOf('invited on the calendar')
+      && b.indexOf('invited on the calendar') < b.indexOf('regulars from past'), 'tiers are in authority order');
+    ok(/narrowest first/.test(b) && /the WRONG answer/.test(b),
+      'the resolution order is spelled out, including that a national namesake is wrong');
+    ok(/I don't know who that is/.test(b),
+      'SAFETY: an honest miss is named as the preferred outcome over a confident stranger');
+
+    // nothing known → say so, never fabricate a roster
+    const empty = await R.meetingContext({ code: 'zzz-zzzz-zzz', present: [], deps: { getMeta: () => '{}', labels: async () => new Map(), series: () => [] } });
+    ok(/nobody identified yet/.test(empty), 'SAFETY: an unknown room admits it has no roster');
+    ok(!/in the call right now/.test(empty), 'and invents no tiers it has no data for');
+    ok(/an unnamed call \(zzz-zzzz-zzz\)/.test(empty), 'an unlabelled meeting is described honestly');
+
+    // total failure degrades to a string, never a throw
+    const dead = await R.meetingContext({ code: 'x', present: ['Someone Here'], deps: { getMeta: () => { throw new Error('db'); }, labels: async () => { throw new Error('google'); }, series: () => { throw new Error('db'); } } });
+    ok(typeof dead === 'string' && /Someone Here/.test(dead),
+      'calendar, transcripts and vocabulary all dead → the live panel still carries the room');
   }
 
   // ── attendee names ────────────────────────────────────────────────────────────────────────────

@@ -302,6 +302,7 @@ function start(meetUrl) {
   db.setMeta('gmeet_ended_at', '0');   // post-meeting recall freshness stamp (set when the call ends)
   db.setMeta('gmeet_last_research_at', '0'); db.setMeta('gmeet_researched', '[]');   // M2: research governance
   db.setMeta('gmeet_ledger', '[]');   // the action ledger is PER MEETING — last week's drafts are not this call's
+  db.setMeta('gmeet_present', '[]'); db.setMeta('gmeet_context', '');   // ...and so is the room: yesterday's attendees must never resolve today's names
   _seenCaps = new Set();
   _answered = new Set();
   set('joining');
@@ -499,6 +500,32 @@ async function generateIntro(d, ctx, attendees) {
 // Parse the per-turn model output into { understanding, action }. The model ends with ONE
 // line: ACTION: QUIET | RESEARCH: <topic> | CONTRIBUTE: <msg> | CONNECT: <link>. Defaults to
 // quiet (the preferred state) on anything unparseable or an empty payload. Pure; tested.
+/**
+ * The room's context, built once per meeting and cached in meta.
+ *
+ * Assembled by lib/references (the same module that resolves names in chat) rather than a second
+ * meeting-only identity path — one resolver, one set of rules. Fail-soft: no calendar, no
+ * transcripts, no vocabulary and it still returns the live attendee panel, which is the highest
+ * authority anyway because she can see those people.
+ */
+async function meetingContextBlock(d, ctx) {
+  const cached = db.getMeta('gmeet_context');
+  if (cached) return cached;
+  try {
+    const code = db.getMeta('gmeet_code') || (db.getMeta('gmeet_url') || '').split('/').pop() || null;
+    let present = [];
+    try { present = JSON.parse(db.getMeta('gmeet_present') || '[]'); } catch {}
+    // Re-read the live panel when we can — people join late, and who is actually here outranks who
+    // was here at intro.
+    try { const live = parseAttendees(await d.scrapeAttendees(d.web)); if (live && live.length) present = live; } catch {}
+    const block = await require('./references').meetingContext({
+      code, present, deps: { gcalOpts: (ctx && ctx.gcalOpts) || null }, now: d.now ? d.now() : Date.now(),
+    });
+    if (block) db.setMeta('gmeet_context', block);
+    return block || '';
+  } catch (e) { console.error('[gmeet] meeting context failed:', e.message); return ''; }
+}
+
 function parseMeetingAction(raw) {
   const text = String(raw || '').replace(/<[^>]+>/g, '').trim();
   const m = text.match(/ACTION:\s*(QUIET|RESEARCH|CONTRIBUTE|CONNECT)\b\s*:?\s*([\s\S]*)$/i);
@@ -518,16 +545,42 @@ async function modelMeetingTurn(d, ctx, transcript) {
   const t = String(transcript || '').trim();
   if (!t) return { understanding: '', action: { kind: 'quiet', payload: '' } };
   const u = ctx.userName || 'Lucas';
+  // THE ROOM COMES FIRST. Without this the turn model saw only captions + a generic recall + a
+  // GLOBAL top-facts list, so a first name in a caption had nothing local to bind to and the only
+  // move left was to reach outward. Cached per meeting: the roster does not change turn to turn, and
+  // rebuilding it every ~10s tick would put a calendar round-trip in the hot path.
+  const room = await meetingContextBlock(d, ctx);
   let known = '';
   try { const rows = d.retrieve ? await d.retrieve(t.slice(-1200)) : []; known = (rows || []).map(r => `- ${(r.content || '').slice(0, 180)}`).join('\n'); } catch {}
   let facts = '';
   try { facts = require('./graph_memory').factsForPrompt({ limit: 6 }) || ''; } catch {}
-  const ground = (known || facts) ? `\n\nWhat YOU already know that may connect:\n${known}${facts ? '\n' + facts : ''}` : '';
+  // The generic recall is explicitly demoted. It is a keyword match over everything she has ever
+  // stored, so against a meeting it is the LEAST specific input in the prompt — and it was previously
+  // the only "what you know" she had, which is how a national namesake beat a colleague in the call.
+  const ground = (known || facts)
+    ? `\n\nWider background (LOWEST priority — only after the room above rules it out):\n${known}${facts ? '\n' + facts : ''}`
+    : '';
   let out = '';
   try {
     await d.streamChat({
       model: d.MODEL,
-      messages: [{ role: 'user', content: `You're following a live meeting on ${u}'s behalf via the captions below — not a transcriber but a sharp aide who THINKS and keeps working.\n\nRecent captions:\n${t.slice(-2500)}${ground}\n\nFirst, in 1–2 sentences: what's being discussed and HOW it connects to what you or ${u} already know. Then output ONE final line, exactly one of:\nACTION: QUIET\nACTION: RESEARCH: <a concrete external thing worth looking up — a person, org, bill, term>\nACTION: CONTRIBUTE: <a short message to post in the meeting chat>\nACTION: CONNECT: <a real link between this and something you/${u} know>\nRules: staying QUIET in the meeting chat is strongly preferred — only CONTRIBUTE if you were addressed or can fill a clear gap. RESEARCH a real external thing you'd benefit from knowing. CONNECT when you notice a genuine link but there's nothing to look up. No preamble.` }],
+      messages: [{ role: 'user', content: `You're following a live meeting on ${u}'s behalf via the captions below — not a transcriber but a sharp aide who THINKS and keeps working.\n\n`
+        + `${room ? room + '\n\n' : ''}`
+        + `Recent captions:\n${t.slice(-2500)}${ground}\n\n`
+        + `First, in 1–2 sentences: what's being discussed, and name WHO is discussing it using the room above. `
+        + `If a name, place or event in the captions is one you can place, say which one it is; if you cannot place it, say so plainly rather than reaching for a famous match.\n\n`
+        + `Then output ONE final line, exactly one of:\n`
+        + `ACTION: QUIET\n`
+        + `ACTION: RESEARCH: <a concrete thing worth looking up — a person, org, bill, term>\n`
+        + `ACTION: CONTRIBUTE: <a short message to post in the meeting chat>\n`
+        + `ACTION: CONNECT: <a real link between this and something you/${u} know>\n`
+        + `Rules: staying QUIET in the meeting chat is strongly preferred — only CONTRIBUTE if you were addressed or can fill a clear gap. `
+        // RESEARCH was pulling generic national topics out of a conversation between colleagues.
+        // Anchoring it to the room is the same narrowest-first rule applied to the lookup.
+        + `RESEARCH something THIS ROOM would care about — a person, org or bill named in the captions, framed by whose meeting this is; `
+        + `do not look up a general topic she could already reason about, and never research a person who is sitting in the call. `
+        + `CONNECT when you notice a genuine link but there's nothing to look up — a real link to this organisation's own work or an earlier session of this meeting, not a loose thematic association. `
+        + `No preamble.` }],
       options: { temperature: 0.5, top_p: 0.9, num_ctx: 8192, num_predict: 200 },
       onToken: (tok) => { out += tok; }
     });
@@ -543,6 +596,17 @@ async function doMeetingResearch(d, ctx, topic, surface) {
   const t = String(topic || '').trim();
   if (t.length < 4) return false;
   if (/\b(i|my|myself|we|our)\b/i.test(t) && /\b(think|feel|want|wonder|idea|perspective)\b/i.test(t)) return false;   // self-fragment-ish
+  // NEVER research someone who is sitting in the call. She can just listen to them — and looking a
+  // colleague up mid-conversation reaches the open web for a person the room already knows, which is
+  // both the wrong answer and the wrong instinct. The prompt says so too; this makes it true.
+  try {
+    const present = JSON.parse(db.getMeta('gmeet_present') || '[]');
+    const tl = t.toLowerCase();
+    if (present.some((p) => { const n = String(p || '').toLowerCase().trim(); return n.length >= 4 && (tl === n || tl.includes(n)); })) {
+      console.log(`[gmeet] research skipped — "${t}" is someone in the call`);
+      return false;
+    }
+  } catch { /* no roster → fall through, the other guards still apply */ }
   const tNow = d.now ? d.now() : Date.now();
   if (tNow - parseInt(db.getMeta('gmeet_last_research_at') || '0', 10) < MEETING_RESEARCH_GAP_MS) return false;
   const done = (() => { try { return JSON.parse(db.getMeta('gmeet_researched') || '[]'); } catch { return []; } })();
@@ -717,6 +781,9 @@ async function runTick(ctx = {}) {
     }
     let attendees = [];
     try { attendees = parseAttendees(await d.scrapeAttendees(d.web)); } catch {}
+    // KEEP THEM. This list was scraped here and thrown away, which is why every later turn had to
+    // guess who "Sarah" was against a 1.7M-entity graph instead of the six people in the call.
+    try { db.setMeta('gmeet_present', JSON.stringify(attendees.slice(0, 40))); } catch {}
     const intro = await generateIntro(d, ctx, attendees);
     const v = validateIntro(intro);   // guaranteed ok after ensureDisclosure, but log if not
     if (!v.ok) console.warn('[gmeet] intro still failed validation:', v.reasons.join(', '));

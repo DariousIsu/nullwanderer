@@ -160,7 +160,15 @@ function _person(a) {
 async function meetingLabels(deps = {}, { now = Date.now() } = {}) {
   if (deps.labels) { try { return await deps.labels(); } catch { return new Map(); } }
   if (_labels.map.size && (now - _labels.at) < CACHE_MS) return _labels.map;
-  const opts = deps.gcalOpts;
+  // Resolve Echo's venv bridge the same way main.js does, rather than threading {python,cwd} down
+  // through every caller. A caller that HAS it (the chat turn) still passes it and wins.
+  const opts = deps.gcalOpts || (() => {
+    try {
+      const path = require('path');
+      const cwd = process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo';
+      return { python: process.env.ECHO_PYTHON || path.join(cwd, '.venv', 'Scripts', 'python.exe'), cwd };
+    } catch { return null; }
+  })();
   if (!opts || !opts.python) return new Map();
   const map = new Map();
   try {
@@ -293,6 +301,75 @@ function render(refs = [], series = [], { includeSeries = false, now = Date.now(
 }
 
 /**
+ * THE MEETING'S OWN CONTEXT — who is in this room, what this meeting is, whose it is.
+ *
+ * Lucas, 2026-07-21: "she's not properly identifying people places and events by starting with the
+ * context of the meeting and who is there before going broad."
+ *
+ * He is describing a missing input, not a bad model. `modelMeetingTurn` was handed recent captions,
+ * a generic semantic recall over those captions, and a GLOBAL top-facts list — and nothing else. The
+ * attendee list was scraped once at intro and thrown away. So when a caption said "Sarah", nothing in
+ * the prompt connected it to Sarah Hunt sitting in the call; the model's only option was to reach
+ * outward into a graph holding 1.7M entities and hope.
+ *
+ * A meeting is the strongest disambiguation context this system ever gets: a closed set of named
+ * people, a titled recurring series, and one organisation. Everything here is already ours — the live
+ * attendee panel, the calendar's invite list, the regulars from having sat in previous sessions, and
+ * his own vocabulary. It just was never assembled and handed over.
+ *
+ * `present` is the live attendee panel (highest authority — she can see them).
+ */
+async function meetingContext({ code = null, present = [], deps = {}, now = Date.now() } = {}) {
+  const lines = [];
+  let labels = new Map();
+  try { labels = await meetingLabels(deps, { now }); } catch { /* no calendar → the rest still stands */ }
+  const label = code ? labels.get(String(code).toLowerCase()) : null;
+
+  let series = null;
+  try {
+    const all = (deps.series ? deps.series() : meetingSeries(deps)) || [];
+    series = all.find((s) => s.code === code) || null;
+  } catch { /* no transcripts → no regulars */ }
+
+  const title = (label && label.title) || null;
+  lines.push(`THIS MEETING: ${title || (code ? `an unnamed call (${code})` : 'a call')}`
+    + (series ? ` — you have sat in ${series.sessions} session(s) of it` : ''));
+
+  // The owner's organisation, from his own vocabulary. It is why "Rainey" in a caption is his
+  // employer and not a Milwaukee alderman.
+  try {
+    const v = _vocab(deps);
+    const orgs = [...new Set(Object.values(v).map((e) => e && e.name).filter(Boolean))];
+    if (orgs.length) lines.push(`WHOSE WORLD THIS IS: ${orgs.join(', ')} — names in this call almost always belong to that world before any other.`);
+  } catch { /* vocabulary is optional */ }
+
+  const seen = new Set();
+  const add = (arr, how) => {
+    const names = (arr || []).map((n) => String(n || '').trim()).filter(Boolean).filter((n) => {
+      const k = _key(n); if (!k || seen.has(k)) return false; seen.add(k); return true;
+    });
+    if (names.length) lines.push(`  ${how}: ${names.slice(0, 24).join(', ')}`);
+    return names.length;
+  };
+  lines.push('WHO IS IN THIS ROOM — resolve every name you hear against THESE PEOPLE FIRST:');
+  // Order is authority order: seen > invited > previously heard.
+  let n = 0;
+  n += add(present, 'in the call right now (you can see them)');
+  n += add(label && label.invited, 'invited on the calendar');
+  n += add(series && series.roster, 'regulars from past sessions of this meeting');
+  if (!n) lines.push('  (nobody identified yet — say so rather than guessing at who is speaking)');
+
+  lines.push('HOW TO IDENTIFY WHAT YOU HEAR — narrowest first, and STOP as soon as it fits:');
+  lines.push('  1. A first name, nickname or initials almost always means someone in this room. Bind it there.');
+  lines.push('  2. Then this organisation\'s own work — its people, projects, bills and past meetings.');
+  lines.push('  3. Only then the wider world. A national figure who happens to share a first name with '
+    + 'someone in this call is the WRONG answer.');
+  lines.push('  4. If a name, place or event does not fit any of these, say it is unfamiliar. An honest '
+    + '"I don\'t know who that is" is worth more here than a confident stranger.');
+  return lines.join('\n');
+}
+
+/**
  * THE ENTRY POINT — message in, REFERENCES section out.
  *
  * `objects` comes from the caller (lib/intake.decompose's plan), so this module stays offline-testable
@@ -329,4 +406,4 @@ async function build(userMessage, { objects = [], deps = {}, now = Date.now() } 
   return { text, refs, series };
 }
 
-module.exports = { build, render, resolveAll, meetingSeries, meetingLabels, _person, _fromVocab, _vocab, _key, MEETING_RE, MAX_REFS };
+module.exports = { build, render, resolveAll, meetingSeries, meetingLabels, meetingContext, _person, _fromVocab, _vocab, _key, MEETING_RE, MAX_REFS };
