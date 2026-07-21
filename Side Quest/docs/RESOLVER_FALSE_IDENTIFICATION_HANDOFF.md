@@ -125,9 +125,26 @@ retaining the surface form as part of the fix, not a nicety.
 
 ---
 
-## 5. Blast radius (measured, 2026-07-21)
+## 5. Blast radius
 
-**104 distinct federal-ID-tagged people carrying 122 false local structural claims.**
+> **CORRECTED 2026-07-21 (later same day).** The figures first published here — "104 people, 122
+> claims" — were **wrong and overstated**. The query used `object_label LIKE '%[H_%'`, and in SQL
+> `LIKE` the underscore is a **single-character wildcard**, so it matched far more than bioguide ids.
+> It also described distinct `(label, value)` pairs as "people". Corrected by GLOB on the real id
+> shapes:
+>
+> | | |
+> |---|---|
+> | encounter rows | **56** |
+> | distinct people | **36** |
+> | distinct claim pairs | 49 |
+> | **provably unsupported** (surname absent from its own source document) | **14** |
+>
+> The defect itself is unchanged and verified by hand against the document text. Only my
+> quantification was wrong. Left visible rather than silently edited — a corrected number is worth
+> more than a clean-looking one.
+
+**Federal-ID-tagged people carrying false local structural claims:**
 
 ```
 AMASH, JUSTIN [H0MI03126]      → Lupin Limited        (fuzzy hit on the word "Amish")
