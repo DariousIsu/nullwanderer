@@ -69,7 +69,9 @@ for (const sub of ['county', 'state_government', 'lobby_client']) {
 if (!APPLY) { d.close(); console.log(`\nDry run — nothing written. Re-run with --apply.`); process.exit(0); }
 
 // A backup before touching the owner's graph. Cheap insurance against a bad WHERE clause.
-const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
+// slice(0,14) — YYYYMMDDHHMMSS. An earlier 15 kept the dot before the milliseconds and produced
+// `civic_graph.pre-placetype.20260721134248..db`.
+const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
 const backup = path.join(path.dirname(DB), `civic_graph.pre-placetype.${stamp}.db`);
 d.exec(`VACUUM INTO '${backup.replace(/\\/g, '/')}'`);
 console.log(`\nbackup written: ${backup}`);
