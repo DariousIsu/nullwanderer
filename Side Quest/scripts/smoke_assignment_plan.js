@@ -75,6 +75,17 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
     'the router\'s existing assignment signal now reaches the plan');
   ok(/does NOT report back, so never use it for something Lucas is waiting on/.test(m),
     'SAFETY: the manifest labels the background agent honestly as fire-and-forget');
+
+  // ⭐ THE BLOCK CONTRACT. Live 2026-07-21: given the tools and an assignment plan she DID open a
+  // canvas tab — then guessed the block. `block_type:"text"` → "invalid block_type: text", the retry
+  // returned ok, and the tab rendered "No content yet." on Lucas's screen while she reported having
+  // "added a detailed outline covering all five parts". The manifest documented ONLY the table shape.
+  ok(/block_type":"paragraph","data":\{"markdown"/.test(m),
+    'the manifest gives the PROSE block shape — a paper is paragraphs, not a table');
+  ok(/block_type":"heading","data":\{"level"/.test(m), 'and the heading shape, so a document can have sections');
+  ok(/heading · paragraph · list · code · table · chart/.test(m),
+    'and the exact valid block_type values, so there is nothing left to guess');
+  ok(/block_type":"table","data":\{"headers"/.test(m), 'the table shape survives alongside it');
 }
 
 // ── the tools section actually survives the budget ──────────────────────────────────────────────

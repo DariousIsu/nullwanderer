@@ -6616,7 +6616,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           // your canvas" when no canvas write ever happened. A capability with no key is a capability
           // that gets narrated.
           manifest = pkg.buildManifest(inv, { actions: [
-            { key: 'canvas sheet/table', label: 'a real tab on Lucas\'s canvas', how: '<echo-do name="saga_canvas_open_tab">{"mode":"DOC","tab_key":"KEY","title":"TITLE"}</echo-do> then <echo-do name="saga_canvas_add_block">{"tab_key":"KEY","block_type":"table","data":{"headers":[…],"rows":[[…]]}}</echo-do>' },
+            // ⭐ THE EXACT BLOCK CONTRACT. Live 2026-07-21: told to produce a document, she opened
+            // the tab correctly and then guessed at the block — `block_type:"text"` came back
+            // "invalid block_type: text", her retry returned ok, and the tab rendered "No content
+            // yet." on Lucas's canvas while she reported "added a detailed outline covering all five
+            // parts". The manifest documented ONLY the table shape, so for prose there was nothing to
+            // copy. A capability documented for one shape gets used in one shape or guessed at.
+            { key: 'canvas document (prose)', label: 'a real tab on Lucas\'s canvas — THIS is how you deliver a paper, brief or memo', how: '<echo-do name="saga_canvas_open_tab">{"mode":"DOC","tab_key":"KEY","title":"TITLE"}</echo-do> then one call per block: <echo-do name="saga_canvas_add_block">{"tab_key":"KEY","block_type":"heading","data":{"level":2,"text":"Section title"}}</echo-do> and <echo-do name="saga_canvas_add_block">{"tab_key":"KEY","block_type":"paragraph","data":{"markdown":"The prose, in markdown."}}</echo-do>' },
+            { key: 'canvas table', label: 'rows and columns on that same tab', how: '<echo-do name="saga_canvas_add_block">{"tab_key":"KEY","block_type":"table","data":{"headers":["A","B"],"rows":[["1","2"]],"caption":"optional"}}</echo-do>' },
+            { key: 'valid block_type values', label: 'ONLY these — anything else is rejected; heading/paragraph/table/chart are the ones that actually render', how: 'heading · paragraph · list · code · table · chart · metric_card · callout · image · diagram · knowledge_graph · document_file · browser_snapshot · map · three · draft_review · citation · source_card' },
             { key: 'briefing / op-ed / quick-hit', label: 'a formatted, citation-checked document', how: '<echo-recipe name="…"/> — see the render recipes in your menu' },
             // Listed honestly: nothing polls agent_inbox, so a delegated run never reports back.
             // Offering it as an equal option to the canvas is how an assignment gets "handed off"
