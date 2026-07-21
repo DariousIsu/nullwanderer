@@ -266,6 +266,24 @@ function cleanLiveSay(s) {
 }
 
 window.sq.onSayToken((token) => {
+  // ⭐ A REPLY LUCAS IS WAITING FOR ALWAYS WINS.
+  //
+  // `unpromptedActive` is a LATCH: set on the first token of an autonomous stream and cleared only by
+  // that stream's `complete`. If a completion never arrives — a suppressed heartbeat say, a silenced
+  // monologue, an idle tick that dies mid-stream — the latch stays set FOREVER, and from then on every
+  // prompted reply falls into the buffer below and is filed in the sheep panel while the chat sits on
+  // "…". Live 2026-07-20: Lucas asked about burger sides, the answer was generated and stored
+  // correctly (unprompted=0 in the DB) and rendered into the unprompted rail. Nothing self-heals it
+  // short of a reload.
+  //
+  // So a pending prompted reply CLEARS the latch rather than yielding to it. The worst case if the
+  // latch was legitimately set is that one autonomous utterance loses its buffer; the worst case the
+  // other way is that Lucas never sees an answer again this session.
+  if (promptedReplyPending && !currentAiTurnDiv && unpromptedActive) {
+    console.warn('[chat] stale unpromptedActive latch cleared — this stream is a prompted reply');
+    unpromptedActive = false;
+    unpromptedBuffer = '';
+  }
   // Decide destination on the first token of a stream. A user-prompted reply streams into
   // the dialogue transcript; an autonomous (unprompted) utterance is buffered for the sheep
   // panel and never touches the transcript.

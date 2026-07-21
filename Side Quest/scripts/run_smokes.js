@@ -219,6 +219,7 @@ const smokes = [
   'smoke_answer_draft.js',
   'smoke_turn_router.js',
   'smoke_tag_parser.js',
+  'smoke_tag_contract.js',
   'smoke_operator.js',
   'smoke_ner.js',
   'smoke_mention.js',

@@ -6535,6 +6535,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // Kill-switch: ZOE_CLOUD_WRITES_REPLY=0.
   let replyWriter = MODEL;            // who actually wrote what Lucas reads — stored on the turn so the
                                       // truncation rate is measurable per writer against the 18% baseline
+  let cloudComplete = false;          // the cloud stream ended normally (not stalled) — see below
   if (cloudOwnsAnswer && process.env.ZOE_CLOUD_WRITES_REPLY !== '0') {
     try {
       // GIVE THE CLOUD THE TOOL SURFACE. The suit is stripped from `messages` above on cloud-owned
@@ -6604,6 +6605,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       });
       if (r && r.text && r.text.trim()) {
         replyWriter = r.model;
+        // Did the GENERATION finish? That is what `truncated` is meant to mean, and for the cloud we
+        // know it directly: the stream ended normally unless streamCloud flagged it partial.
+        cloudComplete = !r.partial;
         console.log(`[main] CLOUD wrote the reply — ${r.model}, ${r.tokens} tok in ${r.elapsedMs}ms${r.partial ? ' (PARTIAL — stream stalled)' : ''}`);
       } else {
         console.warn('[main] cloud reply unavailable — falling back to the local voice');
@@ -6671,6 +6675,26 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   }
 
   let { thought, say, truncated } = parser.finalize();
+
+  // ⭐ THE TAG CONTRACT IS A PROXY — AND FOR THE CLOUD WE HAVE THE REAL SIGNAL.
+  //
+  // finalize() sets truncated=1 whenever the stream ended without a closing </say>. That is a sound
+  // proxy for the LOCAL model, whose generation is cut off mid-tag when it runs out of budget. The
+  // cloud writer is different: it obeys the tag contract on most turns and simply omits the closing
+  // tag on others, having said everything it meant to say.
+  //
+  // Measured 2026-07-20: 3 of 18 cloud replies were flagged truncated, and ZERO of those were
+  // actually cut mid-sentence (ollama.sayLooksCutOff). All three were complete answers wearing a
+  // false flag — which (a) poisons the per-writer truncation metric this work is judged on, and
+  // (b) risks the empty-say/cut-off recovery below REGENERATING a complete cloud answer on the local
+  // 12b, which would be the exact quality regression V1 exists to remove.
+  //
+  // So when the cloud wrote the reply and its stream ended normally, the generation IS complete.
+  // A stalled stream (streamCloud's partial flag) still reports truncated — that one is real.
+  if (cloudComplete && say && say.trim() && truncated) {
+    console.log('[main] cloud reply complete but tags unclosed — not a truncation');
+    truncated = 0;
+  }
 
   // EMPTY-SAY RECOVERY (the "…" bug): every blank reply traces to the generation being
   // truncated mid-<think> (against num_ctx 8192) before she ever reaches <say> — she thinks
