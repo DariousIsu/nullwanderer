@@ -49,9 +49,39 @@ ok(de.toEncounter({ sourceEntity: 'Jane Roe', relation: 'exists', type: 'person'
 ok(de.toEncounter(obs({ sourceEntity: 'Jane Roe', relation: 'exists', type: 'person' }), DOC) !== null, 'a promoted one does');
 
 // ── object typing — the type is part of IDENTITY, so a guess is a wrong merge ─────────────────────
-ok(de.objectTypeFor('organization') === 'org' && de.objectTypeFor('location') === 'place'
-  && de.objectTypeFor('government_body') === 'org' && de.objectTypeFor('committee') === 'org',
+ok(de.objectTypeFor('organization') === 'org' && de.objectTypeFor('location') === 'place',
   'extractor types map onto the log’s object types');
+
+// ── T1: A GOVERNMENT IS NOT A COMPANY ────────────────────────────────────────────────────────────
+// These three used to collapse into `org`, which is how Fulton County became an "Organization" and how
+// a county board and a restaurant became the same kind of thing.
+ok(de.objectTypeFor('government_body') === 'gov' && de.objectTypeFor('committee') === 'body',
+  'CRITICAL: government_body and committee keep their own type — the extractor already knew, the map was discarding it');
+ok(de.objectTypeFor('government_body') !== de.objectTypeFor('organization'),
+  'CRITICAL: a county commission and a restaurant are no longer the same kind of thing');
+{
+  const gov = de.toEncounter(obs({ sourceEntity: 'Appling County Commissioners', relation: 'exists', type: 'government_body' }), DOC);
+  const org = de.toEncounter(obs({ sourceEntity: 'Appling County Commissioners', relation: 'exists', type: 'organization' }), DOC);
+  ok(gov.object_type === 'gov' && org.object_type === 'org',
+    'the same label under two extractor types produces two DIFFERENT objects — which is why T4 is a migration, not an update');
+}
+// ONE VOCABULARY. Translating a value the log already speaks must be a no-op, or a lane that speaks
+// canonically gets refused and its encounters are silently dropped.
+for (const t of ['person', 'place', 'event', 'concept', 'document', 'org', 'gov', 'body', 'thing']) {
+  ok(de.objectTypeFor(t) === t, `canonical type "${t}" survives translation unchanged (idempotent)`);
+}
+ok(de.objectTypeFor('place') === de.objectTypeFor('location'),
+  'CRITICAL: NER says "place", the extractor says "location" — one object, not two');
+{
+  // The latent split T1 closes: lib/ner.js emits `organization`, decompose emits `org`. Left raw, the
+  // conversation lane would file a mention of an org under a key nothing else uses.
+  const ce = require('../lib/convo_encounters');
+  const rows = ce.toEncounters([{ text: 'Heritage Foundation', kgType: 'organization' }], 7);
+  ok(rows.length === 1 && rows[0].object_type === 'org',
+    'CRITICAL: NER’s "organization" is translated to "org" before it reaches the log');
+  ok(ce.toEncounters([{ text: 'Some Vague Thing', kgType: 'nonsense' }], 7).length === 0,
+    'an untranslatable span is refused, not filed under a made-up type');
+}
 ok(de.objectTypeFor('other') === null && de.objectTypeFor('nonsense') === null && de.objectTypeFor(null) === null,
   'an untyped entity stays untyped — never guessed');
 ok(de.toEncounter(obs({ sourceEntity: 'Tracy the finance lady', relation: 'exists', type: 'other' }), DOC) === null,

@@ -58,7 +58,9 @@ function toEncounters(spans, { url, source = 'recovery', now = Date.now() } = {}
   const seen = new Set();
   for (const s of (Array.isArray(spans) ? spans : [])) {
     const label = String((s && (s.text || s.mention)) || '').trim();
-    const type = (s && (s.kgType || s.type)) || null;
+    // ONE TYPE VOCABULARY (T1) — see lib/decomp_encounters.js TYPE_MAP. NER's `organization` and the
+    // log's `org` must not become two objects for one thing.
+    const type = require('./decomp_encounters').objectTypeFor((s && (s.kgType || s.type)) || null);
     if (!label || label.length < MIN_LEN || !type) continue;
     let k = null;
     try { k = require('./encounters').objectKey(type, label); } catch { k = `${type}:${label.toLowerCase()}`; }

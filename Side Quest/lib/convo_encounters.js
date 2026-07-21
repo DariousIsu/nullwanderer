@@ -61,7 +61,11 @@ function toEncounters(spans, turnId, { now = Date.now() } = {}) {
   const seen = new Set();
   for (const s of (Array.isArray(spans) ? spans : [])) {
     const label = String((s && (s.text || s.mention)) || '').trim();
-    const type = (s && (s.kgType || s.type)) || null;
+    // ONE TYPE VOCABULARY (T1). NER speaks `organization`; the log speaks `org`. Passing the raw kgType
+    // through would file NER's mention and decompose's extraction of the SAME organization under two
+    // identity keys, which nothing downstream can merge. Translate, and refuse what does not translate
+    // rather than inventing a type — an unmapped span is recoverable, a split identity is not.
+    const type = require('./decomp_encounters').objectTypeFor((s && (s.kgType || s.type)) || null);
     if (!label || label.length < MIN_LEN || !type) continue;
     if (SELF_RE.test(label)) continue;
     // Dedup on the REAL object identity, not a local lowercase of the string — "Marcy Delaney" and

@@ -45,10 +45,29 @@ const INTERPRETIVE = new Set(['RELATED_TO', 'FOCUSES_ON', 'AFFECTS', 'SUPPORTS',
 
 // The extractor's type vocabulary → the encounter log's object types. `other` stays unknown rather than
 // being guessed into `thing`: the type is part of the identity key, so a wrong guess is a wrong merge.
+//
+// ── T1: A GOVERNMENT IS NOT A COMPANY ───────────────────────────────────────────────────────────
+//
+// This map used to fold `government_body` and `committee` into `org`, which is how a county board and a
+// restaurant ended up the same kind of thing — Kent County Sheriff's office next to TWO GUYS FROM ITALY.
+// The extractor ALREADY distinguishes them (live: organization 306 · government_body 51 · committee 25);
+// only this map was throwing the distinction away.
+//
+// It matters beyond tidiness because a governing body DECLARES SEATS (§4) — that is what cardinality and
+// coverage-gap detection key on. Filed under `org`, a county commission declares nothing and is
+// invisible to gap detection. This is zero inference: it forwards the extractor's own call and guesses
+// nothing.
+//
+// ONE VOCABULARY. `lib/ner.js` independently emits `organization`/`place`/`person`, so the conversation
+// and recovery lanes must translate through here too — otherwise NER's `organization` and decompose's
+// `org` become two objects for one thing, split exactly the way `place:`/`thing:apache county` was.
 const TYPE_MAP = {
-  person: 'person', organization: 'org', location: 'place', event: 'event', concept: 'concept',
-  work: 'thing', bill: 'thing', document: 'document', office_held: 'thing', committee: 'org',
-  government_body: 'org', other: null,
+  person: 'person', organization: 'org', location: 'place', place: 'place', event: 'event',
+  concept: 'concept', work: 'thing', bill: 'thing', document: 'document', office_held: 'thing',
+  committee: 'body', government_body: 'gov', other: null,
+  // Canonical values map to themselves so translating twice is a no-op — a lane that already speaks the
+  // log's vocabulary must not be refused for it.
+  org: 'org', gov: 'gov', body: 'body', thing: 'thing',
 };
 
 function claimClassFor(relation) {

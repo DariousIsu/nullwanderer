@@ -51,6 +51,56 @@ Commissioners of Boundary County
 Source of the flood: `proposed_by = graph-walk-shortterm` (11,732) and `reading-extract` (1,277). The
 graph-walk mints whatever it encounters into the concept store regardless of what it is.
 
+### 2a-i. Nobody decided these were concepts
+
+Lucas asked the right question: *did a model decide what they should be labelled, or a blind
+programmatic run — and why weren't they compared to existing nodes or to wiki data?*
+
+The answer is a third thing, and it is worse than either. `lib/graph_memory.js:69`:
+
+```js
+function recordEntity({ name, type = 'concept', … })
+```
+
+and the relation writer, line 132-133, which is what the graph-walk actually calls:
+
+```js
+const se = recordEntity({ name: sName, epistemic, proposedBy });   // no type argument
+const te = recordEntity({ name: tName, epistemic, proposedBy });   // no type argument
+```
+
+**No classification ran.** `concept` is a JavaScript default parameter that this call site never
+overrides. `GENERAL MOTORS COMPANY` was not judged to be a concept — it was never judged at all.
+
+Existing nodes *are* consulted (`db.graphGetEntityByKey(nameKey)`, line 86), and the merge rule is
+already defensive in the right direction:
+
+```js
+if (type && type !== 'concept' && existing.entity_type === 'concept') fields.entity_type = type;
+```
+
+A real type **upgrades** a stored `concept`; a `concept` never overwrites a real type. So the damage is
+inertia, not corruption — nothing correctly typed has been clobbered, and T4 is correspondingly safer.
+But because this path always passes `type === undefined`, the guard can never fire to upgrade anything
+either. **No Wikidata or wiki-text validation occurs on this path at all.**
+
+### 2a-ii. Validation order for the backfill
+
+When something is finally asked to decide, ask in this order — cheapest and most authoritative first:
+
+1. **The strong ID already in the name.** 511 of these carry `wd:Q…`, `lda_client:…`, `FEC:C…`. A QID
+   resolves to an authoritative type with **no model call** — the same machinery as the existing
+   reversible `wikidata_org_resolve` background job, pointed at type.
+2. **A typed sibling.** `graphGetEntityByKey` already runs on every write; it simply has nothing to
+   inherit from yet. Once any copy of a name is correctly typed, the rest follow.
+3. **A cloud call for the remainder** — no strong ID, no typed sibling. Batch to the extraction model
+   that already emits `ENTITY: <name> :: <type>` and gets it right (`government_body` 37,
+   `organization` 149 in the O1 sample).
+
+**A cloud call PROPOSES a type; it never sets one.** Under §5 the type is a claim, so the model's answer
+competes with Wikidata's and with a `.gov` roster's, and the better-sourced one wins. A wrong model
+answer is then recoverable rather than baked in — which is the entire reason type stops being a column.
+
 ### 2b. The encounter log collapses three types into one
 
 `lib/decomp_encounters.js` TYPE_MAP, written in W2:
@@ -221,7 +271,7 @@ restart.*
   congressionally chartered. Neither is cleanly public or private.
 - Should a name-based classifier ever set type, or only ever *propose* one for the grader? The existing
   `isGovernmentCompany` gets 52 of 137 and misses `United States Postal Service` — evidence for
-  propose-only.
+  propose-only. **Settled in §2a-ii: propose-only, for every classifier including the cloud.**
 - What re-types the pre-O1 backlog, where no type was ever captured? Re-running extraction is a real
   model spend and is Lucas's call.
 
