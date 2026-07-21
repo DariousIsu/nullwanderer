@@ -317,5 +317,9 @@
 </body></html>`;
   }
 
-  return { renderCertificate, renderReport, gradeFor, scorelineOf, fmtDate, esc, PILL };
+  // STYLE is exported so the document packager (studio/doc_shapes) uses the SAME hardcoded brand
+  // rather than a copy of the palette. Lucas, 2026-07-21: "make the branding hardcoded universal…
+  // I dont want the hard code base to be wrong." Two copies of a brand is exactly that kind of
+  // wrong: they drift, and nothing tells you which one is the house style.
+  return { renderCertificate, renderReport, gradeFor, scorelineOf, fmtDate, esc, PILL, STYLE, ORG_NAME: 'Joseph Rainey Center for Public Policy' };
 });
