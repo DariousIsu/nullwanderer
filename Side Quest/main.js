@@ -1557,6 +1557,44 @@ app.whenReady().then(() => {
     console.log('[main] canvas drop→ingest poller started (every 45s)');
   }
 
+  // BACKLOG READER — the documents that landed and were never read.
+  //
+  // decomposeLandedDoc fires from the INGEST paths, so decomposition is coupled to how a document
+  // ARRIVED rather than to the document itself; anything landing another way is invisible to the graph
+  // forever. Measured 2026-07-21: 3,211 such documents, 405 million characters. This drains them a few
+  // at a time, cheapest-first and under a daily chunk budget the lane enforces itself
+  // (lib/decompose_sweep) — a backlog reader that can spend the whole corpus in one tick is a bug
+  // however correct its selection is.
+  //
+  // It calls decomposeLandedDoc, the SAME function the ingest paths use, so a swept document is read
+  // exactly as a landed one and the two can never drift apart.
+  {
+    const SWEEP_MS = 5 * 60 * 1000;
+    const runDecomposeSweep = async () => {
+      try {
+        if (String(process.env.ZOE_AUTO_INGEST || '1').trim() === '0') return;
+        if (!echoSuit || !echoSuit.connected) return;              // no resolver → every entity would skip
+        const sweepLib = require('./lib/decompose_sweep');
+        const batch = sweepLib.nextBatch(db, { limit: 2 });
+        if (!batch.picks.length) return;                           // budget spent, or nothing unread — both quiet
+        const done = [];
+        for (const p of batch.picks) {
+          const row = db.getDocument(p.id);
+          if (!row || !String(row.body || '').trim()) { done.push(p.id); continue; }
+          await decomposeLandedDoc({ id: row.id, title: row.title, body: row.body, source: row.source, sourceUrl: row.origin || undefined });
+          done.push(p.id);
+        }
+        sweepLib.markAttempted(db, done);                          // an honest nothing must not be re-read forever
+        sweepLib.spendBudget(db, batch.estChunks);
+        const b = sweepLib.budgetState(db);
+        console.log(`[decomp-sweep] read ${done.length} backlog doc(s) — budget ${b.spent}/${b.limit} chunks today`);
+      } catch (e) { console.error('[decomp-sweep]', e.message); }
+    };
+    setTimeout(() => { runDecomposeSweep().catch(() => {}); }, 90000);   // after boot settles
+    setInterval(() => { runDecomposeSweep().catch(() => {}); }, SWEEP_MS).unref?.();
+    console.log('[main] decompose backlog sweep started (2 docs / 5min, budgeted)');
+  }
+
   // NEWS DATA-STREAM COLLECTOR — fills the ISOLATED news bucket (data/news_bucket.db) from the RSS
   // subscriptions on a backend timer, independent of the Monitors widget. Model-free; raw items NEVER
   // reach memory (sq.db) — only compressed news objects promote (nightly). Reuses the feeds:fetch path.
@@ -9160,7 +9198,12 @@ async function decomposeLandedDoc(doc) {
     // decomposition slice is the outer bound. 12 was too tight — a live 18-person roster lost 6 to the cap.
     // FULL-doc entity decomposition: chunk the whole body on line boundaries and decompose each pass (the
     // ~6000-char slice was losing everything past page 1). Echo's resolveMention dedups entities across passes.
-    const { chunks } = require('./lib/contact_extract').chunkForExtraction(String(doc.body));
+    // CHUNK TO THE MODEL'S WINDOW, not to a 6,000-char default set for a smaller model.
+    // gemma4:31b-cloud reports context_length = 262144, and the extractor now sizes its prompt from
+    // num_ctx (lib/decomp_lane). Leaving the chunker at 6k made a 425k-char PDF into 71 separate passes,
+    // each blind to the other 70 — so a name defined on page 1 was unknown on page 40. The extractor
+    // clamps the prompt to its own window, so this can over-supply safely but must not under-supply.
+    const { chunks } = require('./lib/contact_extract').chunkForExtraction(String(doc.body), { size: 100000 });
     let minted = 0, reused = 0, connections = 0, held = 0;
     for (const chunk of chunks) {
       try {
