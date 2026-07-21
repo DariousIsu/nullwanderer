@@ -535,6 +535,27 @@ const MIGRATIONS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_meeting_transcript_ts ON meeting_transcript(ts)`,
 
+  // STANDING INSTRUCTIONS from Lucas — runtime feedback that outlives the turn (lib/directives).
+  //
+  // Deliberately NOT a self_model category. That store is a personality pool: MMR-sampled for
+  // diversity, ranked to favour tastes, and designed to let unreinforced entries fade. All three are
+  // wrong for an instruction, and this system has already turned one of his scope orders into "her
+  // belief" and then outgrown it (fixed 92035fa). An instruction is a fact about what HE asked for,
+  // it is rendered in FULL every turn, and it ends only when he retires it.
+  //
+  // `rule` keeps HIS words. source_turn_id is the receipt — which message it came from — so a
+  // wrongly-captured rule can be traced back and removed rather than argued with.
+  `CREATE TABLE IF NOT EXISTS directives (
+    id INTEGER PRIMARY KEY,
+    rule TEXT NOT NULL,
+    source_turn_id INTEGER,
+    created_ts INTEGER NOT NULL,
+    updated_ts INTEGER NOT NULL,
+    mentions INTEGER NOT NULL DEFAULT 1,
+    retired_ts INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_directives_active ON directives(retired_ts, created_ts)`,
+
   // UI ROUTING: distinguish her UNPROMPTED utterances (heartbeat / continuity / tool-result
   // follow-ups) from replies to a user message. The main chat renders prompted dialogue only;
   // unprompted=1 said-turns are diverted to the sheep panel — live AND on history reload (they
@@ -2251,6 +2272,30 @@ function getMeetingRosterRows(limit = 50000) {
   ).all(limit);
 }
 
+// --- Standing instructions (lib/directives) ---
+function insertDirective({ rule, sourceTurnId = null, ts = null } = {}) {
+  const t = ts == null ? Date.now() : ts;
+  const info = getDb()
+    .prepare('INSERT INTO directives (rule, source_turn_id, created_ts, updated_ts, mentions) VALUES (?,?,?,?,1)')
+    .run(String(rule), sourceTurnId, t, t);
+  return { id: info.lastInsertRowid, ts: t };
+}
+// Repeating an instruction is Lucas emphasising it, not a second rule — bump rather than duplicate.
+function touchDirective(id, ts = null) {
+  const t = ts == null ? Date.now() : ts;
+  return getDb().prepare('UPDATE directives SET mentions = mentions + 1, updated_ts = ? WHERE id = ?').run(t, id).changes > 0;
+}
+function getDirectives({ activeOnly = true, limit = 100 } = {}) {
+  const sql = activeOnly
+    ? 'SELECT * FROM directives WHERE retired_ts IS NULL ORDER BY created_ts ASC LIMIT ?'
+    : 'SELECT * FROM directives ORDER BY created_ts ASC LIMIT ?';
+  return getDb().prepare(sql).all(limit);
+}
+// Retire, never DELETE: a rule he cancelled is part of the record of what he has asked for.
+function retireDirective(id, ts = null) {
+  return getDb().prepare('UPDATE directives SET retired_ts = ? WHERE id = ? AND retired_ts IS NULL').run(ts == null ? Date.now() : ts, id).changes > 0;
+}
+
 function graphCounts() {
   const one = (t) => getDb().prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n;
   return {
@@ -2425,5 +2470,9 @@ module.exports = {
   getTranscriptForMeeting,
   countTranscriptSince,
   getMeetingRosterRows,
+  insertDirective,
+  touchDirective,
+  getDirectives,
+  retireDirective,
   DB_PATH
 };

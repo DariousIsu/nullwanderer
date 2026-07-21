@@ -307,6 +307,15 @@ function buildChatPrompt({ userName, recentReflections, recentTurns, recentMonol
     if (block) systemContent = block + '\n' + systemContent;
   }
 
+  // STANDING INSTRUCTIONS — corrections Lucas gave at runtime (lib/directives). Injected at the same
+  // primacy as protocols and rendered in FULL, never sampled: until 2026-07-21 runtime feedback had
+  // nowhere to land at all (the only durable self-store was 60 rows of speculated personality
+  // trivia), so "stop doing X" evaporated with the turn it was said in.
+  try {
+    const dblock = require('./directives').buildBlock({ userName });
+    if (dblock) systemContent = dblock + '\n' + systemContent;
+  } catch (e) { console.error('[context] directive block failed:', e.message); }
+
   // SELF-MODEL — "who you are" (the identity track), always injected so it shapes
   // her voice and reasoning. Prefer the QUERY-RELEVANT block built upstream (main.js
   // passes selfModelBlock, so a question about a specific taste surfaces that taste);

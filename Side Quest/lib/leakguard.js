@@ -38,6 +38,56 @@ function stripLeakedDirectives(text) {
   return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 
+// ── PLANNING LEAK: the model's own scaffolding, with no bracket and no tag ──────────────────────
+//
+// Everything above catches leaked '[directives]' and '<tags>'. Neither fires on BARE PROSE, so this
+// reached Lucas verbatim, as her entire reply, three times on 2026-07-21:
+//
+//   "We need to emit a web search."
+//   "We need to fetch Iowa state flower. Use echo-find."
+//   "We need to emit an Echo tag to get db map."
+//
+// That is the model narrating its next move instead of making it. The signature is narrow on
+// purpose: a planning imperative ("we need to", "let me", "I should") whose OBJECT is internal
+// machinery (emit, a tag, a tool name, echo-*). "I need to check the calendar" is not a leak — it is
+// a person talking — so the mechanics vocabulary is required, not just the planning verb.
+const _PLAN_LEAD = /^\s*(?:we|i)\s+(?:need to|should|must|will|have to|can)\s+|^\s*(?:let(?:'|’)?s|let me)\s+|^\s*(?:next|first|now),?\s+(?:we|i)\s+/i;
+const _MECHANICS = /\b(?:emit|emitting)\b|<[a-z-]+>|\becho-\w+|\becho tag\b|\btool tag\b|\bdb[ _-]?map\b|\b(?:call|invoke|run)\s+(?:the\s+)?(?:tool|recipe|echo)\b/i;
+
+/**
+ * Remove leading planning sentences that describe emitting/calling machinery.
+ *
+ * Sentence-scoped and front-anchored: it strips the scaffolding she opens with and keeps whatever
+ * real reply follows. A message that is ONLY scaffolding returns '' — the caller then treats it as
+ * an empty say, which is the honest outcome, and the tool follow-up speaks instead.
+ */
+const _MAX_SCAFFOLD = 100;   // the three real leaks were 29, 34 and 42 chars; real prose runs longer
+function stripPlanningLeak(text) {
+  const s = String(text || '');
+  if (!s.trim()) return s;
+  const parts = s.split(/(?<=[.!?])\s+/);
+  // The leading RUN of short, plan-shaped sentences. Mechanics may appear in ANY of them — live, the
+  // plan and the tool name were split across two ("We need to fetch Iowa state flower. Use
+  // echo-find."), so requiring them in the same sentence missed a real leak.
+  let run = 0;
+  for (const p of parts) {
+    const t = p.trim();
+    // ⚠️ LENGTH IS THE FALSE-POSITIVE GUARD, and it earned its place: "I should emit a note here
+    // about how the county boards are structured, because…" is a person thinking out loud and an
+    // earlier draft of this function deleted it whole. Scaffolding is terse; prose is not.
+    if (!t || t.length > _MAX_SCAFFOLD) break;
+    const planShaped = _PLAN_LEAD.test(t) || (run > 0 && /^(?:use|then|and then|also)\b/i.test(t));
+    if (!planShaped) break;
+    run++;
+  }
+  if (!run) return s;
+  const lead = parts.slice(0, run);
+  // Only a run that actually names internal machinery is scaffolding. "Let's go through the parishes
+  // one at a time." is plan-shaped and terse and is perfectly good speech.
+  if (!lead.some((p) => _MECHANICS.test(p))) return s;
+  return parts.slice(run).join(' ').trim();
+}
+
 // An angle-bracket run is an INTERNAL tag (her private cognition or a tool tag) if its name is in this set.
 // The TagStreamParser keeps well-formed <think> out of the stream already, but a stray/truncated think
 // fragment or a tool tag emitted INSIDE <say> used to flash in the live bubble and only vanish on reload
@@ -99,4 +149,4 @@ function makeStreamFilter(emit) {
   };
 }
 
-module.exports = { isLeakyDirective, stripLeakedDirectives, makeStreamFilter, _DIRSIG, _METASIG, _INTERNAL_TAG_RE };
+module.exports = { isLeakyDirective, stripLeakedDirectives, stripPlanningLeak, makeStreamFilter, _DIRSIG, _METASIG, _INTERNAL_TAG_RE, _PLAN_LEAD, _MECHANICS };

@@ -5079,6 +5079,18 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try { require('./lib/convo_state').update(sessionId, null, null).catch(() => {}); } catch {}
   const convoStateBlock = require('./lib/convo_state').buildBlock(sessionId, userName);
   const protocols = db.getActiveProtocols();
+  // STANDING INSTRUCTION CAPTURE. Lucas: "putting in run time feed back like this never landed" —
+  // and it could not: the only correction path in this file requires an ACTIVE RESEARCH RUN
+  // (focus.getCurrent) and only reshapes that run's meta. Told anything outside a live dossier, the
+  // system wrote nothing anywhere. Detection is deliberately narrow (a persistence marker AND a
+  // behavioural verb aimed at her) because over-capture would bury the real rules in noise.
+  try {
+    const _rule = require('./lib/directives').detect(userMessage);
+    if (_rule) {
+      const _r = require('./lib/directives').record(_rule, { turnId: null });
+      if (_r) console.log(`[directive] ${_r.duplicate ? 'reinforced' : 'RECORDED'}: "${_rule.slice(0, 90)}"`);
+    }
+  } catch (e) { console.error('[directive] capture failed:', e.message); }
   const pendingInbounds = db.getPendingInbounds(6);
 
   // If the user mentioned a URL or known tab title, update the tab-mention state
@@ -7033,6 +7045,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // STREAM filter above already suppresses them live; this is the final-text backstop (closed, trailing,
   // and stacked/unterminated brackets). Both share lib/leakguard (one tested source of truth).
   sayStripped = require('./lib/leakguard').stripLeakedDirectives(sayStripped);
+  // …and the scaffolding that carries no bracket or tag at all ("We need to emit a web search.").
+  sayStripped = require('./lib/leakguard').stripPlanningLeak(sayStripped);
   // LEAKED-PLANNING GUARD: a reply that is ONLY a bracketed fragment (e.g. "[No need for an
   // argument since we want the total count…]") is internal tool/arg reasoning that leaked instead
   // of a tag — never her actual answer. Drop it so the tool-followup's real result is what shows.
@@ -7896,6 +7910,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     sayOut = echoSuitLib.stripEchoTags(sayOut);
     sayOut = sayOut.replace(/<[^>]+>/g, '').trim();
     sayOut = require('./lib/leakguard').stripLeakedDirectives(sayOut);   // final-text backstop (this path bypassed the main strip)
+    sayOut = require('./lib/leakguard').stripPlanningLeak(sayOut);
     // Deliver her words (the visible step — "I'll run db_query…" or the final answer). May be
     // empty when she emitted only a tag — that's fine; the Echo chain below still runs.
     if (sayOut) {
