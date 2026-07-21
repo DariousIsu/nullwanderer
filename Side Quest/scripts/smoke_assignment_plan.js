@@ -51,10 +51,17 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
   // document (that last part I dont think is wired)". He was right: saga_render_* appears NOWHERE in
   // this codebase and Echo reports zero successful calls to it, ever.
   ok(/BUILD THE DOCUMENT IN THREE STAGES, starting THIS TURN/.test(a), 'the document is built in stages, beginning now');
-  ok(/OPEN IT WITH THE CONTRACT/.test(a) && /what he asked for, in his words/.test(a),
+  ok(/OPEN IT AND WRITE THE CONTRACT/.test(a) && /what he asked for, in his words/.test(a),
     'stage 1 affixes the ask AND the plan — same shape as the research runs\' contract block');
-  ok(/correct your plan before you have spent an hour on the wrong thing/.test(a),
+  ok(/correct the plan before you have spent an hour on the wrong thing/.test(a),
     'and the reason it goes first: it is his chance to redirect');
+  // ⭐ Live 2026-07-21: she emitted saga_canvas_open_tab and STOPPED. The tab appeared on Lucas's
+  // canvas with nothing in it, because "then write the contract" reads as a later step — and there
+  // is no later, the turn ends.
+  ok(/OPEN IT AND WRITE THE CONTRACT IN THE SAME MESSAGE/.test(a),
+    'the tab and its first block go out together — a later step never comes');
+  ok(/An opened tab with nothing in it is worse than no tab/.test(a),
+    'and an empty tab is named as worse than none: it looks like work that happened');
   ok(/FILL IT IN as the material arrives/.test(a), 'stage 2 grows the same tab');
   ok(/An empty section with an honest "not researched yet" is information/.test(a),
     'a gap is declared rather than omitted');

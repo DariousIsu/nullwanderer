@@ -87,10 +87,15 @@ const doTag = (body, name = 'saga_canvas_add_block') => `<echo-do name="${name}"
 // ── the dispatch cap gives canvas writes room ───────────────────────────────────────────────────
 {
   const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  ok(/_canvasWrites\.slice\(0, 24\)/.test(m),
-    'canvas writes get their own allowance — clipping a 14-block document at 4 is what leaves an empty tab');
-  ok(/_otherTags\.slice\(0, 4\)/.test(m),
-    'SAFETY: the cap on EXPENSIVE tags (searches, agents) is unchanged at 4');
+  // 2026-07-21, Lucas: "no spend concern… just make sure there are not artificial caps truncating
+  // requests." Both allowances were raised and the expensive-tag one is now the SAME bound as the
+  // in-turn hop chain, so there is one number to reason about rather than two that can disagree.
+  ok(/_canvasWrites\.slice\(0, 60\)/.test(m),
+    'canvas writes get their own allowance — clipping a 14-block document is what leaves an empty tab');
+  ok(/_otherTags\.slice\(0, MAX_ECHO_HOPS\)/.test(m),
+    'expensive tags are bounded by the hop budget, not a separate hardcoded number');
+  ok(/const MAX_ECHO_HOPS = require\('\.\/lib\/config'\)\.maxEchoHops\(\)/.test(m),
+    'and that budget is CONFIGURATION, not a literal buried in the file');
   ok(/block_type":"heading"[^\n]*block_type":"paragraph"/.test(m),
     'the manifest shows the batched array form, so there is nothing left to guess');
 }

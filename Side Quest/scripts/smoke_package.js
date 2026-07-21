@@ -127,6 +127,15 @@ const rep = (r, name) => r.report.sections.find((s) => s.name === name);
     'REGRESSION: the unsatisfiable "saw the result" wording is gone');
   ok(/I've added|I've put it on your canvas/.test(p), 'quotes the exact false phrasings that occurred');
   ok(/say what you would need/.test(p), 'an honest "I can\'t" is offered as the alternative');
+  // ⭐ <echo-find> searches the TOOL CATALOGUE, not the world. Live 2026-07-21: asked for a paper on
+  // Chinese semiconductor announcements she fired four <echo-find> calls and got back, four times,
+  // "I looked for an Echo tool for … but nothing fit … this may be an open-web question." Our data is
+  // US civic records — "our database first" walked her into an empty catalogue and she never reached
+  // the web.
+  ok(/<echo-find> looks for a TOOL in our catalogue — it does not search the world/.test(p),
+    'the scope of echo-find is stated plainly');
+  ok(/go straight to the open web/.test(p), 'an off-domain subject skips Echo entirely');
+  ok(/Two <echo-find> misses in a row/.test(p), 'and repeated misses are a signal to change tool, not to retry');
 }
 
 // ── the manifest also lists what she can PRODUCE ────────────────────────────────────────────────

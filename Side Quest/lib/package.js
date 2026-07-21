@@ -153,9 +153,14 @@ function buildPlan({ intent = null, depth = {}, mustCite = false, unresolved = [
     // lands). An assignment from Lucas gets the same treatment — with the third stage, the finished
     // branded render, which had never been wired to anything.
     lines.push('• BUILD THE DOCUMENT IN THREE STAGES, starting THIS TURN:');
-    lines.push('   1. OPEN IT WITH THE CONTRACT. The first block is what he asked for, in his words, '
-      + 'and your plan for it — the sections you will cover and how you will get each. He should be '
-      + 'able to correct your plan before you have spent an hour on the wrong thing.');
+    // ⭐ SAME MESSAGE, BOTH TAGS. Live 2026-07-21: she emitted saga_canvas_open_tab and stopped —
+    // the tab appeared on Lucas's canvas with nothing in it, because "then write the contract" read
+    // as a later step and there is no later. The turn ends.
+    lines.push('   1. OPEN IT AND WRITE THE CONTRACT IN THE SAME MESSAGE — open_tab AND add_block '
+      + 'together, right now. An opened tab with nothing in it is worse than no tab: it looks like '
+      + 'work that happened. The first block is what he asked for, in his words, and your plan for '
+      + 'it — the sections you will cover and how you will get each — so he can correct the plan '
+      + 'before you have spent an hour on the wrong thing.');
     lines.push('   2. FILL IT IN as the material arrives — one heading + paragraph per section, added '
       + 'to the SAME tab. An empty section with an honest "not researched yet" is information; a '
       + 'missing section is not. Partial and cited beats complete and promised.');
@@ -182,6 +187,16 @@ function buildPlan({ intent = null, depth = {}, mustCite = false, unresolved = [
     + 'sense. For anything outside that world — cooking, general knowledge, how something works — do '
     + 'NOT reach for a tool at all; just answer. Our own database first, the open web last, no tool '
     + 'when the question is not about our data.');
+  // ⭐ <echo-find> SEARCHES THE TOOL CATALOGUE, NOT THE WORLD. Live 2026-07-21, asked for a paper on
+  // Chinese semiconductor announcements, she fired four <echo-find> calls and got back, four times,
+  // "I looked for an Echo tool for … but nothing fit … this may be an open-web question." Our data is
+  // US civic records; it holds nothing about Chinese chip fabrication, so "our database first" sent
+  // her into an empty catalogue and she never got to the web at all.
+  lines.push('• <echo-find> looks for a TOOL in our catalogue — it does not search the world. Our '
+    + 'data is US civic and political records: people, orgs, bills, votes, contacts, our own '
+    + 'documents. If the subject is outside that (foreign industry, technology, science, world '
+    + 'events), do not go through Echo at all — go straight to the open web. Two <echo-find> misses '
+    + 'in a row means the answer is not in our catalogue: stop asking it and change tool.');
   if (unresolved && unresolved.length) {
     lines.push(`• Known gaps going in — resolve these if you can, say so plainly if you can't: ${unresolved.slice(0, 5).join('; ')}.`);
   }

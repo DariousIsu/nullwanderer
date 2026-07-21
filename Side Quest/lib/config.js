@@ -184,6 +184,26 @@ function deepNumPredict() { const n = parseInt(get('ZOE_DEEP_NUM_PREDICT', '').t
 // Research SECTION synthesis (organize/merge a whole org's passes into prose) — the biggest single outputs.
 function sectionNumPredict() { const n = parseInt(get('ZOE_SECTION_NUM_PREDICT', '').trim(), 10); return Number.isFinite(n) ? n : 6000; }
 
+// ── ⭐ WHAT SHE ACTUALLY SEES BACK FROM A TOOL ──────────────────────────────────────────────────
+//
+// Lucas, 2026-07-21: "we don't have any spend concern with this process on that model, it's infinite
+// spend — we just need to make sure there are not artificial caps on token send truncating requests."
+//
+// These were hard-coded at 1,800 and 4,000 CHARS. A db_query returning rows, a fetched page, a
+// document — all cut there, silently, with no error: the model simply saw a shorter result and
+// answered as though that were all of it. Against the reply window (131,072 tokens ≈ 500k chars) a
+// 1,800-char result is a third of one percent.
+//
+// Sized to the WINDOW, not to a guess, and still deliberately well beneath it — the package's own
+// budgeter trims if a turn ever gets close, so these are a ceiling on one result rather than on the
+// prompt as a whole.
+function toolResultChars() { const n = parseInt(get('ZOE_TOOL_RESULT_CHARS', '').trim(), 10); return Number.isFinite(n) ? n : 24000; }
+function followupResultChars() { const n = parseInt(get('ZOE_FOLLOWUP_RESULT_CHARS', '').trim(), 10); return Number.isFinite(n) ? n : 60000; }
+// The in-turn tool chain. This is a LOOP bound, not a truncation — a runaway chain is a real
+// failure — but 4 was set when a turn meant "look one thing up", and a document is open a tab, write
+// the contract, then go and read. Raised, still bounded.
+function maxEchoHops() { const n = parseInt(get('ZOE_MAX_ECHO_HOPS', '').trim(), 10); return Number.isFinite(n) ? n : 12; }
+
 // --- DENSER SUBCONSCIOUS (cloud-leverage Slice 4) — the idle lanes ran ONE move each, SEQUENTIALLY, per
 // tick, so between-turn cognition barely touched the (now 2M/hr) budget. Run the lanes CONCURRENTLY and let
 // the knowledge-building graph-walk BURST several moves per tick (each still budget-gated, so it self-limits).
@@ -261,4 +281,4 @@ function discordConfig() {
   return { token, ownerId, configured: !!(token && ownerId) };
 }
 
-module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, claimModel, graphModel, importanceModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, investigateHops, investigateHubCap, investigateBudget, deepNumCtx, deepNumPredict, sectionNumPredict, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, pipelineOn, pipelineContactBacklogCap, ttsConfig, companionConfig, usageConfig, emailConfig, discordConfig, APP_ROOT, ENV_PATH };
+module.exports = { loadEnv, get, getInt, model, frontModel, subconsciousModel, extractionModel, claimModel, graphModel, importanceModel, meetingModel, scribeModel, meetingAudioConfig, subcTierMode, subcMeritThreshold, subcSynthIntervalMin, subcBudgetTokensPerHour, graphwalkBudgetTokensPerHour, pullerBudgetTokensPerHour, investigateHops, investigateHubCap, investigateBudget, deepNumCtx, deepNumPredict, sectionNumPredict, toolResultChars, followupResultChars, maxEchoHops, subcMovesPerTick, subcConcurrentLanes, deepReasonerModel, pipelineOn, pipelineContactBacklogCap, ttsConfig, companionConfig, usageConfig, emailConfig, discordConfig, APP_ROOT, ENV_PATH };

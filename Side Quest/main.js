@@ -7413,14 +7413,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const _isCanvasWrite = (t) => t && t.kind === 'do' && /^saga_canvas_/.test(t.name || '');
       const _canvasWrites = echoTagsToRun.filter(_isCanvasWrite);
       const _otherTags = echoTagsToRun.filter((t) => !_isCanvasWrite(t));
-      const _toRun = [..._otherTags.slice(0, 4), ..._canvasWrites.slice(0, 24)]
+      const _toRun = [..._otherTags.slice(0, MAX_ECHO_HOPS), ..._canvasWrites.slice(0, 60)]
         .sort((a, b) => echoTagsToRun.indexOf(a) - echoTagsToRun.indexOf(b));
       if (_canvasWrites.length > 4) console.log(`[canvas] ${_canvasWrites.length} block writes this turn — building a document`);
       for (const t of _toRun) {
         try {
           const r = await echoSuit.dispatch(t);
           const label = t.kind === 'do' ? `echo ${t.name}` : `echo ${t.kind}`;
-          const content = `I used the Echo suit (${label}):\n${(r.text || '').slice(0, 1800)}`;
+          const content = `I used the Echo suit (${label}):\n${(r.text || '').slice(0, require('./lib/config').toolResultChars())}`;
           const row = db.insertMonologue({ content, model: 'echo-suit', type: 'reading', query: label });
           try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(${label}${r.isError ? ' ⚠' : ''})`, type: 'reading', query: label }); } catch {}
           if (!followupFired) {
@@ -7468,7 +7468,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       for (const ref of recallTagsToRun.slice(0, 3)) {
         try {
           const r = recallLib.resolveRecall(db, ref);
-          const content = `Recalled ${ref.ref}:\n${(r.text || '').slice(0, 1800)}`;
+          const content = `Recalled ${ref.ref}:\n${(r.text || '').slice(0, require('./lib/config').toolResultChars())}`;
           try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(recalled ${ref.ref})${r.ok ? '' : ' ⚠'}`, type: 'reading', query: ref.ref }); } catch {}
           if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: content }); }
           console.log(`[main] recall ${ref.ref}: ${r.ok ? 'ok' : 'miss'}`);
@@ -7559,7 +7559,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           (async () => {
             try {
               const r = await echoSuit.routeNeed(plan.arg);
-              await fireToolFollowup({ io, channel, sessionId, resultText: `I checked our Echo data for "${plan.arg}":\n${(r.text || '').slice(0, 1800)}` });
+              await fireToolFollowup({ io, channel, sessionId, resultText: `I checked our Echo data for "${plan.arg}":\n${(r.text || '').slice(0, require('./lib/config').toolResultChars())}` });
             } catch (e) { console.error('[main] tool-router echo dispatch failed:', e.message); }
           })();
         } else if (plan && plan.surface !== 'none') {
@@ -7587,7 +7587,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           } else if (plan && plan.surface === 'echo' && plan.arg && echoSuit) {
             followupFired = true;
             console.log(`[main] intent→cloud → echo "${plan.arg}"`);
-            (async () => { try { const r = await echoSuit.routeNeed(plan.arg); await fireToolFollowup({ io, channel, sessionId, resultText: `I checked our Echo data for "${plan.arg}":\n${(r.text || '').slice(0, 1800)}` }); } catch (e) { console.error('[main] intent→echo failed:', e.message); } })();
+            (async () => { try { const r = await echoSuit.routeNeed(plan.arg); await fireToolFollowup({ io, channel, sessionId, resultText: `I checked our Echo data for "${plan.arg}":\n${(r.text || '').slice(0, require('./lib/config').toolResultChars())}` }); } catch (e) { console.error('[main] intent→echo failed:', e.message); } })();
           }
         }
       } catch (e) { console.error('[main] intent→cloud route failed:', e.message); }
@@ -7837,7 +7837,10 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
 // generation with the result in hand so she answers naturally. Renderer: streams as a
 // new message (like a heartbeat). Discord: DMs the reply back. No tool tags are dispatched
 // in the follow-up (stripped) — no recursion.
-const MAX_ECHO_HOPS = 4;   // bounded in-turn Echo chain (find → pick tool → do → answer)
+// Bounded in-turn Echo chain (find → pick tool → do → answer). A LOOP bound, not a truncation — a
+// runaway chain is a real failure — but 4 was set when a turn meant "look one thing up". Building a
+// document is open the tab, write the contract, then go and read; four hops cannot hold that.
+const MAX_ECHO_HOPS = require('./lib/config').maxEchoHops();
 async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 0, prompted = true }) {
   // TURN ISOLATION — if a newer chat turn has started since this follow-up's turn, discard it: a prior
   // turn's fire-and-forget tool result must never render into the current turn (the cross-turn bleed).
@@ -7863,8 +7866,8 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     // strip her <echo-do> and dispatch nothing). Other tool tags are still forbidden here.
     const canChain = echoHop < MAX_ECHO_HOPS && !!(echoSuit && echoSuit.connected);
     const note = canChain
-      ? `[An Echo tool you just used returned the result below. Use it to answer ${userName}. If you found a tool and now need to RUN it (or need one more lookup to get the answer — e.g. <echo-do name="db_query">…</echo-do>, <echo-do name="get_db_map">…</echo-do>, <echo-find>…</echo-find>), emit that ONE Echo tag now and nothing else. If you already have the answer, just give it in your own voice. Don't emit non-Echo tool tags.]\n\n${String(resultText || '').slice(0, 4000)}`
-      : `[A tool you just used returned the result below. Respond to ${userName} NOW, in your own voice, using it directly to answer what they asked. Do NOT emit any more tool tags — just talk to them.]\n\n${String(resultText || '').slice(0, 4000)}`;
+      ? `[An Echo tool you just used returned the result below. Use it to answer ${userName}. If you found a tool and now need to RUN it (or need one more lookup to get the answer — e.g. <echo-do name="db_query">…</echo-do>, <echo-do name="get_db_map">…</echo-do>, <echo-find>…</echo-find>), emit that ONE Echo tag now and nothing else. If you already have the answer, just give it in your own voice. Don't emit non-Echo tool tags.]\n\n${String(resultText || '').slice(0, require('./lib/config').followupResultChars())}`
+      : `[A tool you just used returned the result below. Respond to ${userName} NOW, in your own voice, using it directly to answer what they asked. Do NOT emit any more tool tags — just talk to them.]\n\n${String(resultText || '').slice(0, require('./lib/config').followupResultChars())}`;
     const messages = buildChatPrompt({
       userName, recentReflections: [], recentTurns, recentMonologue: [], recentReadings: [],
       heldCommitments: [], openThreads: [], awareness, protocols, browserBlock: null,
@@ -7950,7 +7953,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       try {
         const r = await echoSuit.dispatch(t);
         const label = t.kind === 'do' ? `echo ${t.name}` : `echo ${t.kind}`;
-        const content = `I used the Echo suit (${label}):\n${(r.text || '').slice(0, 1800)}`;
+        const content = `I used the Echo suit (${label}):\n${(r.text || '').slice(0, require('./lib/config').toolResultChars())}`;
         try { db.insertMonologue({ content, model: 'echo-suit', type: 'reading', query: label }); } catch {}
         try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(${label}${r.isError ? ' ⚠' : ''})`, type: 'reading', query: label }); } catch {}
         console.log(`[main] echo chain hop ${echoHop + 1}: ${label} → ${r.ok ? 'ok' : 'ERR'}`);
