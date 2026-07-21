@@ -221,7 +221,19 @@ function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, stand
     if (goal.length > 120) goal = goal.slice(0, 120).replace(/\s+\S*$/, '') + '…';
     const of = (working.done != null && working.universe) ? ` — ${working.done} of ${working.universe} done so far` : '';
     const w = Number(working.workers) || 0;
-    workingLine = `Right now you are actively working: ${goal}${of}.${w ? ` ${w} background worker${w === 1 ? '' : 's'} running alongside.` : ''} If Lucas asks what you're doing, this is the true answer.`;
+    // ⚠️ SCOPE THE CLAIM. "If Lucas asks what you're doing, this is the true answer" sat near the TOP
+    // of the prompt as a concrete fact, and the beat's subject rotates every few minutes — so it
+    // became the most salient entity in her context and started answering OTHER questions. Live
+    // 2026-07-20, mid-conversation about the Turing test and then Hawaii:
+    //   "Have there been confirmed passes?"  → "16 confirmed passes for the governing body of Kauai
+    //                                          County, Hawaii" (the beat's RESEARCH passes)
+    //   "what are STATE flower and motto?"   → "Fetching the Iowa state motto…" (the beat had moved
+    //                                          on to Adair County, IOWA)
+    // Both the local model and the cloud fell for it, so this is the prompt, not the writer. The line
+    // answers exactly one question and must say so.
+    workingLine = `Right now you are actively working: ${goal}${of}.${w ? ` ${w} background worker${w === 1 ? '' : 's'} running alongside.` : ''} `
+      + `This answers ONE question — "what are you doing?" — and nothing else. It is background work, NOT the subject of this conversation: `
+      + `never answer another question from it, and never let its place, body, or numbers stand in for what Lucas is actually asking about.`;
   }
 
   const lines = [

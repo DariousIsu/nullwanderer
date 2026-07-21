@@ -153,6 +153,18 @@ function buildPlan({ intent = null, depth = {}, mustCite = false, unresolved = [
     + 'better than a claim that cannot be checked.');
   if (mustCite) lines.push('• Cite the source for factual claims — the recipe, document, or URL it came from.');
   lines.push('• Answer the question that was asked. If you also need to raise something else, answer first.');
+  // ⭐ REFERENT. The awareness block near the top of this package names whatever background research
+  // is running, and that subject rotates every few minutes. Live 2026-07-20, mid-conversation about
+  // the Turing test: "have there been confirmed passes?" → "16 confirmed passes for the governing
+  // body of Kauai County, Hawaii". Then, talking about Hawaii: "what are the state flower and
+  // motto?" → "Fetching the Iowa state motto…", because the beat had moved to Adair County, Iowa.
+  // The awareness line is fixed at the source too; this repeats it where recency helps, right next
+  // to the question.
+  lines.push('• THE SUBJECT COMES FROM THE CONVERSATION. A pronoun, a follow-up, or a bare noun '
+    + '("passes", "the state flower", "there") refers to what you and Lucas were just discussing — '
+    + 'NEVER to whatever background research you happen to be running. If your answer names a place, '
+    + 'body or number that he has not mentioned and the conversation has not been about, you have '
+    + 'resolved the wrong thing: stop and re-read what he actually asked.');
   return lines.join('\n');
 }
 

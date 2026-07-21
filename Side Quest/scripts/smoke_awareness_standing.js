@@ -86,7 +86,14 @@ const base = { chosenName: 'Zoe', sessionStartedAt: Date.now() - 60000, cumulati
     // an unknown universe must not invent one
     const nb = ctx.buildAwarenessBlock({ ...base, working: { goal: 'something open-ended', universe: null, done: null, workers: 0 } });
     ok(/actively working: something open-ended/.test(nb), 'goal renders without a denominator');
-    ok(!/ of /.test(nb.split('actively working')[1].split('\n')[0]), 'SAFETY: no denominator invented when the universe is unknown');
+    // Assert the DENOMINATOR shape ("9 of 64 done"), not the bare word "of" — the line also carries
+    // prose that legitimately contains "of" ("NOT the subject of this conversation", added when the
+    // beat's subject started answering unrelated questions). The safety property is that no count is
+    // invented, so test for a count.
+    ok(!/\d+\s+of\s+\d+/.test(nb.split('actively working')[1].split('\n')[0]),
+      'SAFETY: no denominator invented when the universe is unknown');
+    ok(!/done so far/.test(nb.split('actively working')[1].split('\n')[0]),
+      'SAFETY: no progress claim at all without a real universe');
   }
 
   // ── junk in → no throw, no line ──────────────────────────────────────────────────────────────
