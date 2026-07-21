@@ -5117,6 +5117,18 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // it was emitting <echo-find> and its async follow-up bled into the next turn). Non-factual turns
   // (curation / delegate / a deliverable) still carry the echo path until those move to the cloud too.
   const cloudOwnsAnswer = !socialTurn && ((() => { try { return require('./lib/metacognition').classifyClaimType(userMessage) === 'factual'; } catch { return false; } })() || ECHO_INVOKE_RE.test(userMessage));
+  // WHO WRITES vs WHETHER WE RETRIEVE — two different questions that `cloudOwnsAnswer` used to answer
+  // with one flag. It gates (a) the grounding ladder + tool surface and (b) the reply writer, so the
+  // cloud only ever wrote FACTUAL turns: 454 of 474 replies (96%) came from the local 12b, which is
+  // the architecture exactly inverted — local is meant to be the VOICE-less packager, cloud the writer.
+  //
+  // Splitting them finishes the flip. The ladder stays gated on `cloudOwnsAnswer` (running five
+  // retrieval tiers against "good morning" is pure cost, and on 2026-07-21 it produced "I couldn't pin
+  // down the user's question or request" against a message that asked nothing). The WRITER becomes
+  // unconditional: every reply Lucas reads is written by the cloud with the full package.
+  // Same kill-switch, same fail-safe — no cloud tier, no model, or an empty stream all fall through to
+  // the local voice below exactly as before.
+  const cloudWritesReply = process.env.ZOE_CLOUD_WRITES_REPLY !== '0';
   // ECHO NUDGE (F1) — when Lucas explicitly invokes the suit / our data ("use the db", "the power
   // suit", "our records/KB/graph", "echo"), bind that to the echo tags right at the message tail
   // (highest recency) so she reaches for Echo instead of defaulting to her web browser (the LAMP →
@@ -6536,7 +6548,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let replyWriter = MODEL;            // who actually wrote what Lucas reads — stored on the turn so the
                                       // truncation rate is measurable per writer against the 18% baseline
   let cloudComplete = false;          // the cloud stream ended normally (not stalled) — see below
-  if (cloudOwnsAnswer && process.env.ZOE_CLOUD_WRITES_REPLY !== '0') {
+  if (cloudWritesReply) {
     try {
       // GIVE THE CLOUD THE TOOL SURFACE. The suit is stripped from `messages` above on cloud-owned
       // turns — correct while the local 12b wrote, because it fumbled tool JSON and the hard-coded
@@ -6553,7 +6565,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       let cloudMessages = messages;
       try {
         const pkg = require('./lib/package');
-        const suit = echoSuit && echoSuit.connected ? echoSuit.suitContextBlock() : null;
+        // Only on cloud-OWNED turns is the suit stripped from `messages` (see echoSuitBlock above), so
+        // only there does it need re-adding here. On every other turn it already rides inside identity,
+        // and adding it again would spend the tools budget printing the same 500-tool menu twice.
+        const suit = (echoSuit && echoSuit.connected && cloudOwnsAnswer) ? echoSuit.suitContextBlock() : null;
         // MANIFEST — counts and KEYS, never rows. Tens of tokens where the data is thousands, and the
         // only way the cloud can ask for something: it cannot request what it doesn't know exists.
         // This is also the token-spend lever — work runs inside our own mapped DB instead of being

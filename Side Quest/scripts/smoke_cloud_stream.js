@@ -88,8 +88,16 @@ function fakeStream(tokens, { throwAfter = -1 } = {}) {
   {
     const fs = require('fs');
     const src = fs.readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
-    ok(/cloudOwnsAnswer && process\.env\.ZOE_CLOUD_WRITES_REPLY !== '0'/.test(src),
-      'cloud-owned turns route to the cloud writer, behind a kill-switch');
+    // 2026-07-21 — this used to assert `cloudOwnsAnswer && ZOE_CLOUD_WRITES_REPLY !== '0'`, i.e. the
+    // cloud wrote only FACTUAL turns. That conjunction was the reason 454 of 474 replies (96%) came
+    // from the local 12b. The writer is now its own unconditional flag; the retrieval ladder is what
+    // stays gated on cloudOwnsAnswer.
+    ok(/const cloudWritesReply = process\.env\.ZOE_CLOUD_WRITES_REPLY !== '0';/.test(src),
+      'the writer gate is its own flag, defaulting ON and still kill-switchable');
+    ok(/[^\n]*if \(cloudWritesReply\) \{/.test(src),
+      'EVERY reply routes to the cloud writer, not just the factual ones');
+    ok(/if \(cloudOwnsAnswer \|\| personalFactQ\) \{/.test(src),
+      'the retrieval ladder stays gated — five tiers against "good morning" is what broke 2026-07-21');
     ok(/streamCloud\(messages,/.test(src), 'the cloud is handed the SAME package the local side assembled');
     ok(/onToken: \(chunk\) => parser\.feed\(chunk\)/.test(src), 'cloud tokens go through the same parser/leak-filter/emit');
     ok(/replyWriter !== MODEL[^\n]*\r?\n\s*else await streamChat/.test(src), 'the local generation is SKIPPED when the cloud wrote it');

@@ -23,6 +23,17 @@ const echo = require('./echo_suit');
 const ad = require('./answer_draft');
 
 const NEED_RE = /^\s*NEED:\s*(.+)$/is;
+// A NEED must name a SUBJECT we could go and look up. These name the ASKING instead — "the user's
+// question", "a clear request", "what he wants", "clarification" — which is what a model emits when
+// the message was never a question in the first place. Also catches the literal `NEED: NONE` the
+// prompt now asks for. Anchored on the WHOLE need so a real lookup that merely contains one of these
+// words ("the question on the Louisiana ballot") is untouched.
+const DEGENERATE_NEED_RE = new RegExp(
+  '^(none|n/?a|nothing|null)$'
+  + '|^(the|a|an|his|her|their|lucas\'?s?|the user\'?s?|any)?\\s*(specific|clear|actual|exact|underlying|intended)?\\s*'
+  + '(question|request|ask|query|intent|topic|subject|meaning|point|clarification|context)(\\s+or\\s+\\w+)?$'
+  + '|^what\\s+(he|she|they|lucas|the user)\\s+(is\\s+asking|wants?|means?|needs?)',
+  'i');
 // Whether a turn asks for something that TURNS OVER (office holder, current fact) — and the clean topic to
 // look it up by — is decided by lib/intent_parse (a fast model reads the phrasing; regex is only its
 // fallback). answerGrounded consumes that structured intent instead of matching phrase patterns here, which
@@ -52,6 +63,14 @@ async function _draftOrNeed(userMessage, grounding, deps = {}) {
     + 'accurate answer from it and briefly note any uncertainty (e.g. "among them" / "based on our records"). '
     + 'Output EXACTLY one line `NEED: <the single most specific thing to look up>` ONLY when the grounding is '
     + 'essentially empty or clearly about something else, so you genuinely cannot answer accurately. '
+    // NOT EVERY MESSAGE IS A QUESTION. Live 2026-07-21: Lucas described his day ("coffee, the Rainey
+    // all-hands at 1045, then publications, then Electrify America at 1630") and this pass emitted
+    // `NEED: the user's question or request` — so the ladder ran five tiers against the ABSENCE of a
+    // question and closed with "I checked our records and searched, but I couldn't pin down the user's
+    // question or request." A NEED must name a SUBJECT to look up, never the asking itself.
+    + 'If the message is not a question at all — a greeting, a remark, news about his day, thinking out '
+    + 'loud — there is nothing to look up. Output exactly `NEED: NONE`. Never emit a NEED that names the '
+    + 'question, the request, or the user\'s intent: those are not things to look up. '
     // DATE-ANCHOR. Retrieved text carries no timestamp, so an encyclopedia lead describing the LAST
     // occurrence of a recurring event reads as current. Live 2026-07-20: "When are elections this
     // year in the US?" pulled the Wikipedia elections article and answered "November 5, 2024" — the
@@ -76,7 +95,18 @@ async function _draftOrNeed(userMessage, grounding, deps = {}) {
   if (typeof out !== 'string' || !out.trim()) return null;
   const t = out.trim();
   const m = t.match(NEED_RE);
-  if (m) return { need: m[1].trim().replace(/\s+/g, ' ').slice(0, 160) };
+  if (m) {
+    const need = m[1].trim().replace(/\s+/g, ' ').slice(0, 160);
+    // BELT AND BRACES — the prompt above asks for `NEED: NONE` on a non-question, but a prompt rule is
+    // not a guarantee and this particular failure is expensive: five retrieval tiers, then a refusal
+    // sentence aimed at a question that was never asked. A need that names the ASKING rather than a
+    // SUBJECT is definitionally unlookupable, so treat it exactly like no need at all.
+    if (DEGENERATE_NEED_RE.test(need)) {
+      console.log(`[cognition] degenerate NEED "${need}" → nothing to look up (not a question)`);
+      return null;
+    }
+    return { need };
+  }
   return { answer: t };
 }
 
