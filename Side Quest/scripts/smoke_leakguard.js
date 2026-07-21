@@ -63,5 +63,37 @@ const mixStream = streamThrough('mix [YOUR REPLY] and <say>hello there</say>');
 ok(!/YOUR REPLY|<\/?say>/.test(mixStream) && /hello there/.test(mixStream) && /mix/.test(mixStream), 'directives AND internal tags both stripped, say-interior kept');
 ok(lg._INTERNAL_TAG_RE.test('<think>') && lg._INTERNAL_TAG_RE.test('</web-open>') && !lg._INTERNAL_TAG_RE.test('<div>'), '_INTERNAL_TAG_RE: internal/tool tags match, <div> does not');
 
+// --- ⭐ THE FILTER AND THE REAL TAG VOCABULARY MUST NOT DRIFT ---
+// Live 2026-07-20, Lucas saw this in his chat window:
+//     "<read-inbox/> Got it—I'll keep the Hawaii county board update in mind…"
+// The patterns match a tag's FIRST word, so `inbox[\w-]*` never matched `read-inbox` — the tag
+// begins with "read". Six of main.js's thirty-four tags were leaking, all compounds whose first word
+// is the VERB (observe-screen, read-inbox, notify, clipboard-read/write, chat-send) while the
+// patterns were written around the nouns.
+//
+// The list is read from main.js's own _hasToolTag regex rather than restated here, so adding a tag
+// there without teaching the filter fails HERE instead of on Lucas's screen.
+{
+  const fs = require('fs'), path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const m = src.match(/const _hasToolTag = \/<\(([^)]+)\)/);
+  ok(!!m, 'found main.js _hasToolTag — the authoritative tag vocabulary');
+  if (m) {
+    const tags = m[1].split('|').map((s) => s.trim()).filter(Boolean);
+    ok(tags.length >= 20, `read ${tags.length} tags from main.js (sanity: the list is real)`);
+    const leaking = tags.filter((t) => !lg._INTERNAL_TAG_RE.test(`<${t}/>`));
+    ok(leaking.length === 0, `NO tag leaks to the screen — leaking: ${leaking.join(', ') || 'none'}`);
+    for (const t of ['read-inbox', 'observe-screen', 'notify', 'clipboard-read', 'clipboard-write', 'chat-send']) {
+      ok(lg._INTERNAL_TAG_RE.test(`<${t}/>`), `REGRESSION: <${t}/> is held back (it leaked live)`);
+    }
+  }
+  // …and widening must not start eating genuine content.
+  for (const c of ['<div>', '<p class="x">', '<span>', '<code>', '<b>', '<Table>']) {
+    ok(!lg._INTERNAL_TAG_RE.test(c), `genuine markup ${c} still passes through`);
+  }
+  ok(streamThrough('read the docs at <div>x</div>') === 'read the docs at <div>x</div>',
+    'a word starting with "read" outside a tag is untouched');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

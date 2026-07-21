@@ -43,7 +43,17 @@ function stripLeakedDirectives(text) {
 // fragment or a tool tag emitted INSIDE <say> used to flash in the live bubble and only vanish on reload
 // (the stored copy strips them). This lets the stream match the stored copy for those tags. A NON-internal
 // tag (<div>, a real "<") is emitted verbatim so genuine content and code are never eaten.
-const _INTERNAL_TAG_RE = /^<\/?(?:think|thinking|thought|thoughts|say|navigate|wonder|web[\w-]*|echo[\w-]*|browser[\w-]*|browse[\w-]*|files?[\w-]*|screen[\w-]*|inbox[\w-]*|sched[\w-]*|scheduler[\w-]*|presence[\w-]*|email[\w-]*|discord[\w-]*|recall[\w-]*|image-gen|open-?thread[\w-]*|status[\w-]*|tool[\w-]*|act[\w-]*|wait)\b/i;
+// ⚠️ THIS LIST DRIFTED FROM THE REAL TAG VOCABULARY. The patterns match a tag's FIRST word, so any
+// tag whose first word isn't listed streams straight to the screen. Live 2026-07-20, Lucas saw
+// "<read-inbox/> Got it—I'll keep the Hawaii county board update in mind…" rendered in his chat:
+// `inbox[\w-]*` never matches `read-inbox`, because the tag begins with "read".
+//
+// Six of the thirty-four tags main.js actually parses were leaking: observe-screen, read-inbox,
+// notify, clipboard-read, clipboard-write, chat-send. Each is a compound whose first word is the
+// verb, so the noun-based patterns above miss all of them. Verb forms are now listed explicitly, and
+// smoke_leakguard asserts the filter against main.js's own tag vocabulary so the two cannot drift
+// apart again silently.
+const _INTERNAL_TAG_RE = /^<\/?(?:think|thinking|thought|thoughts|say|navigate|wonder|web[\w-]*|echo[\w-]*|browser[\w-]*|browse[\w-]*|files?[\w-]*|screen[\w-]*|inbox[\w-]*|sched[\w-]*|scheduler[\w-]*|presence[\w-]*|email[\w-]*|discord[\w-]*|recall[\w-]*|image-gen|open-?thread[\w-]*|status[\w-]*|tool[\w-]*|act[\w-]*|wait|read-[\w-]*|observe-[\w-]*|clipboard[\w-]*|notify|chat-[\w-]*|remember[\w-]*|forget[\w-]*)\b/i;
 
 // STREAM filter: wrap an emit(chunk) sink so leaked control DIRECTIVES ('[…]') and internal/tool TAGS
 // ('<think>…', '<web-open>…') never reach the UI live. Holds an open '[' or a tag-shaped '<' (buffering,
