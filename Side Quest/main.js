@@ -3968,8 +3968,12 @@ async function scribeHeartbeatTick() {
   }
   // meeting ended — finalize + land + final canvas emit (once), then stop the lane
   if (scribe.hasPending()) {
-    const minutes = (() => { try { return scribe.minutes(); } catch { return ''; } })();
+    // Read the minutes AFTER finalize: that is where the authoritative digest is written (one pass
+    // over the whole raw transcript on the big model). Reading them first — as this did — captured
+    // only the live running view, which is precisely the degraded artefact being replaced.
+    const _liveMinutes = (() => { try { return scribe.minutes(); } catch { return ''; } })();
     let recap = ''; try { recap = await scribe.finalize(); } catch (e) { console.error('[scribe] finalize failed:', e.message); }
+    const minutes = (() => { try { return scribe.lastMinutes() || _liveMinutes; } catch { return _liveMinutes; } })();
     if (recap) { try { const rr = db.insertMonologue({ content: `Meeting record (scribe):\n${recap}`, model: 'scribe', type: 'reading' }); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: rr.id, ts: rr.ts, content: '(scribe) meeting record', type: 'reading' }); } catch {} }
     // Stop the Echo meeting-audio capture (if it was running) → its diarized transcript becomes the
     // authoritative companion (else the caption transcript stands in). Fail-safe.
