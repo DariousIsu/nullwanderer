@@ -9015,6 +9015,10 @@ async function decomposeLandedDoc(doc) {
     const observe = (o) => {
       try { curationStore.record(db, { ...o, feed: 'doc-decomp' }); } catch {}
       try { const e = _encLib.toEncounter(o, _docProv); if (e) _encounters.record(e); } catch {}
+      // T3: the same observation read as a claim about WHAT KIND OF THING this is. The extractor's
+      // `government_body` competes with the LDA feed's `organization` on evidence instead of whichever
+      // wrote first winning forever. Without this the type claim store only grows by backfill.
+      try { const c = _encLib.toTypeClaim(o, _docProv); if (c) require('./lib/object_type').recordType(c); } catch {}
     };
     // CITATION: cite the decompose to the doc's REAL source URL when we have one (a grabbed .gov/official
     // roster → official-document weight, so curation_gate grades it A and promotes single-source); else the
