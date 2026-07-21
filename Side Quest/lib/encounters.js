@@ -41,7 +41,7 @@ let _db = null;
 const db = () => (_db || (_db = require('./db')));
 
 // ── claim classes ────────────────────────────────────────────────────────────────────────────────
-const CLASSES = ['existence', 'contact', 'biographical', 'structural', 'interpretive'];
+const CLASSES = ['existence', 'contact', 'biographical', 'structural', 'interpretive', 'type'];
 
 // Grade ladder, ordered. Comparison is by RANK so "grade gates replacement" (§7) is a numeric test.
 const RANK = { 'A+': 6, A: 5, 'A-': 4, 'B+': 3, B: 2, C: 1 };
@@ -85,7 +85,10 @@ const isStated = (r) => !!r && r.authority === 'stated';
 // plainly plural: Bobby Wilson is `WARD 1` and `CATAHOULA PARISH POLICE JURY`, which read as a contested
 // claim under the first version of this module and are simply both true. Flagging accumulation as
 // conflict would spend cleaning-research passes on facts that were never in dispute.
-const SINGLE_TRUTH = new Set(['contact', 'existence']);
+// `type` joins them (T3): a thing is ONE kind of thing. Fulton County is a government AND acts as a
+// lobbying client — but the first is its type and the second is an edge. Competing types genuinely
+// conflict, so `contested`/`cleaning` apply and the better-sourced one wins.
+const SINGLE_TRUTH = new Set(['contact', 'existence', 'type']);
 
 // Identity key. Normalised so "Melissa Bosch", "melissa  bosch" and "Bosch, Melissa." converge, without
 // being so aggressive that distinct people collapse — a false merge is unrecoverable, a missed one is not.
@@ -208,6 +211,17 @@ function gradeValue(claimClass, rows) {
     case 'existence':
       if (official && n >= 2) return { grade: 'A', ind };
       if (official || n >= 3) return { grade: 'A-', ind };
+      return { grade: n >= 2 ? 'B' : 'C', ind };
+
+    // T3 — WHAT KIND OF THING THIS IS. Never decays: a county does not become a company. Graded like
+    // existence with one deliberate difference — AUTHORITY DOMINATES VOLUME here, harder than anywhere
+    // else. The LDA feed will assert `organization` about Fulton County from a hundred filings, because
+    // in that schema every client is an organization; a single county roster saying `government_body` is
+    // still the better answer. Volume is a property of how loud a feed is, not of what a thing is.
+    case 'type':
+      if (official && n >= 2) return { grade: 'A+', ind };
+      if (official) return { grade: 'A', ind };          // one official record outranks any pile below
+      if (n >= 3) return { grade: 'B+', ind };
       return { grade: n >= 2 ? 'B' : 'C', ind };
 
     // §5d — observable and checkable; ordinary corroboration applies.

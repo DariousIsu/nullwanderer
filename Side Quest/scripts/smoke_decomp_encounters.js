@@ -100,6 +100,27 @@ ok(de.toEncounter(obs({ sourceEntity: 'Tracy the finance lady', relation: 'exist
     'CRITICAL: existence and edge claims for one object must produce one identity');
 }
 
+// ── T3: the same observation, read as a claim about WHAT KIND OF THING this is ───────────────────
+{
+  const c = de.toTypeClaim(obs({ sourceEntity: 'Appling County Commissioners', relation: 'exists', type: 'government_body' }), DOC);
+  ok(c && c.type === 'government_body',
+    'CRITICAL: the EXTRACTOR’s vocabulary is claimed, not the log’s — folding it to `gov` here would discard what T1 just saved');
+  ok(c.authority === 'official' && c.originHost === 'apachecountyaz.gov' && c.contentHash === 'h1',
+    'authority comes from the PUBLISHER, so a source cannot vouch for itself by claiming something official-sounding');
+  ok(c.label === 'Appling County Commissioners' && c.sourceRef === 'doc:42', 'it names its subject and cites its document');
+}
+ok(de.toTypeClaim(obs({ sourceEntity: 'X', relation: 'exists', type: 'other' }), DOC) === null
+  && de.toTypeClaim(obs({ sourceEntity: 'X', relation: 'exists', type: 'nonsense' }), DOC) === null,
+  'an untyped or unrecognised observation asserts NOTHING about kind — refused, never guessed');
+ok(de.toTypeClaim({ sourceEntity: 'X', type: 'person', status: 'held' }, DOC) === null,
+  'a held observation does not get a vote on type either');
+{
+  const spoken = de.toTypeClaim(obs({ sourceEntity: 'Some Body', relation: 'exists', type: 'organization' }), { id: 5, source: 'meeting' });
+  ok(spoken.authority === 'stated',
+    'CRITICAL: speech is non-validating for type too — a transcript proves what was SAID, not what is so');
+}
+ok(de.toTypeClaim(null, DOC) === null && de.toTypeClaim({}, DOC) === null, 'garbage in → null, never throws');
+
 // ── provenance must travel with the claim ────────────────────────────────────────────────────────
 {
   const e = de.toEncounter(obs({ sourceEntity: 'Jane Roe', relation: 'WORKS_FOR', target: 'Apache County', type: 'person' }), DOC);

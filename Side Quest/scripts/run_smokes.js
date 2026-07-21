@@ -82,6 +82,8 @@ const smokes = [
   'smoke_coverage_evidence.js',
   'smoke_pdf_wasm.js',
   'smoke_known_incorrect.js',
+  'smoke_strong_id.js',
+  'smoke_object_type.js',
   'smoke_curation_gate.js',
   'smoke_curation_store.js',
   'smoke_substantiation.js',

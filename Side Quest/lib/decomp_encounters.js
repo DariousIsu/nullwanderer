@@ -140,4 +140,39 @@ function toEncounter(obs, doc = {}) {
   };
 }
 
-module.exports = { toEncounter, claimClassFor, objectTypeFor, isSpeech, STRUCTURAL, BIOGRAPHICAL, INTERPRETIVE, SPEECH_SOURCES, TYPE_MAP };
+// T3 — the same observation, read as a claim about WHAT KIND OF THING this is.
+//
+// The extractor's `entity_type` is an assertion by a source that can be graded like any other, and
+// keeping it as a claim is what lets a county roster's `government_body` beat the LDA feed's
+// `organization` later without a migration. The EXTRACTOR'S OWN VOCABULARY is recorded, not the log's
+// coarser one: `government_body` and `committee` are the distinction being preserved, and folding them
+// to `gov`/`body` here would discard exactly what T1 just stopped discarding.
+//
+// Authority comes from the PUBLISHER, never from the type asserted — a source must not be able to vouch
+// for itself by claiming something official-sounding. Speech is non-validating for the same reason it is
+// everywhere else (W4): a transcript proves what was said, not what is so.
+//
+// NOT YET WIRED INTO THE LIVE DECOMPOSE. Its only write site is main.js, which belongs to the interface
+// context this session is not editing. lib/object_type.recordType(toTypeClaim(obs, doc)) is the one line.
+// Until then T3 is fed by scripts/backfill_type_claims.js.
+function toTypeClaim(obs, doc = {}) {
+  if (!obs || !obs.sourceEntity) return null;
+  const t = String(obs.type || '').trim().toLowerCase();
+  if (!t || t === 'other') return null;                    // an untyped observation asserts nothing
+  if (obs.status && obs.status !== 'promoted') return null;
+  if (!objectTypeFor(t)) return null;                      // outside the known vocabulary → refused, not guessed
+  return {
+    label: String(obs.sourceEntity),
+    type: t,
+    sourceKind: 'document',
+    sourceRef: doc.id != null ? `doc:${doc.id}` : null,
+    origin: doc.origin || null,
+    originHost: doc.origin_host || null,
+    contentHash: doc.content_hash || null,
+    authority: isSpeech(doc.source) ? 'stated'
+      : (doc.origin_host && /(^|\.)(gov|mil)$|\.us$/i.test(doc.origin_host) ? 'official' : 'unknown'),
+    observedAt: Number.isFinite(doc.observed_at) ? doc.observed_at : null,
+  };
+}
+
+module.exports = { toEncounter, toTypeClaim, claimClassFor, objectTypeFor, isSpeech, STRUCTURAL, BIOGRAPHICAL, INTERPRETIVE, SPEECH_SOURCES, TYPE_MAP };
