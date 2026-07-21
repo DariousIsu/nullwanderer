@@ -194,6 +194,7 @@ const smokes = [
   'smoke_doc_shapes.js',
   'smoke_tz.js',
   'smoke_directives.js',
+  'smoke_thinking_channel.js',
   'smoke_planning_leak.js',
   'smoke_self_narrative.js',
   'smoke_mood.js',

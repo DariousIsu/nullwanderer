@@ -55,6 +55,7 @@ async function streamChat({ model, messages, options = {}, onToken, signal, inac
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
+    let _inThinking = false;   // are we mid-way through a reasoning run? (see the thinking block below)
 
     while (true) {
       const { done, value } = await reader.read();
@@ -69,9 +70,37 @@ async function streamChat({ model, messages, options = {}, onToken, signal, inac
         if (!line.trim()) continue;
         try {
           const obj = JSON.parse(line);
-          if (obj.message && obj.message.content) {
-            onToken(obj.message.content);
+          const _think = obj.message && obj.message.thinking;
+          const _content = obj.message && obj.message.content;
+          // Order matters: close the interior BEFORE any content of this chunk is emitted, or the
+          // first spoken token lands inside <think> and vanishes from the reply.
+          if (_think) {
+            if (!_inThinking) { _inThinking = true; onToken('<think>'); }
+            onToken(_think);
+          } else if (_inThinking) {
+            _inThinking = false; onToken('</think>');
           }
+          if (_content) onToken(_content);
+          // ⭐ A REASONING MODEL PUTS ITS OUTPUT IN `thinking`, AND WE WERE THROWING IT AWAY.
+          //
+          // The non-streaming path already knows this — pickText() falls back to message.thinking
+          // "so a reasoner never returns empty", and the response object carries `thinking` as "a
+          // safety net for callers". The STREAMING path forwarded only .content, silently.
+          //
+          // Live 2026-07-21, five runs of the same request: gpt-oss:120b-cloud generated 633 tokens
+          // and roughly 180 tokens' worth reached us. The missing ~450 were in `thinking` — and so
+          // were her tool tags. Every symptom traces here: "she planned it and never acted" four
+          // times, a tag severed mid-attribute (the fragment that happened to land in content), and
+          // a 209-token "stop" that was never a stop.
+          //
+          // ⚠️ WRAPPED IN <think>, NOT FORWARDED RAW. The parser salvages untagged leading text as
+          // PROSE, so piping reasoning straight into the same sink would publish her private
+          // reasoning as speech — the exact failure ("We need to emit a web search.") fixed earlier
+          // today. Wrapping routes it to her interior, where it belongs, while parseEchoTags still
+          // scans the full text and finds any tag inside it.
+          // A generation that ends while still reasoning must close its own tag, or the parser sits
+          // in `think` mode forever and the whole turn is reported truncated.
+          if (obj.done && _inThinking) { _inThinking = false; onToken('</think>'); }
           if (obj.done) {
             try { const um = require('./usage_meter'); um.record(obj.model || (body && body.model), um.tokensOf({ prompt_eval_count: obj.prompt_eval_count, eval_count: obj.eval_count })); } catch {}   // meter real spend
             return;
