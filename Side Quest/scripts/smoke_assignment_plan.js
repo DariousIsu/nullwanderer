@@ -111,6 +111,17 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
   // "added a detailed outline covering all five parts". The manifest documented ONLY the table shape.
   ok(/block_type":"paragraph","data":\{"markdown"/.test(m),
     'the manifest gives the PROSE block shape — a paper is paragraphs, not a table');
+  // ⭐ Live 2026-07-21: she copied the placeholders VERBATIM — a canvas tab literally titled "TITLE"
+  // with tab_key "KEY" landed in the durable store — then alternated `content`/`data` and dropped
+  // `block_type`, burning four hops on validation errors. Placeholders invite substitution errors;
+  // a worked example shows the shape and is obviously not meant to be copied.
+  ok(!/"tab_key":"KEY"/.test(m) && !/"title":"TITLE"/.test(m),
+    'REGRESSION: no KEY/TITLE placeholders — she copies them literally');
+  ok(/"tab_key":"china_ai_brief"/.test(m), 'the example uses real values so the SHAPE is what transfers');
+  ok(/not literals to copy/.test(m), 'and says outright that it is an example');
+  ok(/ALWAYS needs exactly three keys: tab_key, block_type, and data/.test(m),
+    'the three required keys are named — the arg shape wobbled across every retry');
+  ok(/never "content", never a bare string/.test(m), 'and the two wrong shapes she actually tried are ruled out');
   ok(/block_type":"heading","data":\{"level"/.test(m), 'and the heading shape, so a document can have sections');
   ok(/heading · paragraph · list · code · table · chart/.test(m),
     'and the exact valid block_type values, so there is nothing left to guess');
