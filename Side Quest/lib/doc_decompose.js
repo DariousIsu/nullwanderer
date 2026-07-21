@@ -596,7 +596,13 @@ async function decomposeDoc(doc = {}, deps = {}) {
       meta.corroboration = corrN;
       if (fg.promote && await _proposeRelation(dispatch, sName, tName, relOut, conf, meta)) {
         out.connections++; out.related.push(tName);
-        await _observe(observe, { sourceEntity: sName, relation: relOut, target: tName, url, grade: fg.grade, confidence: conf, status: 'promoted', valid_from: r.valid_from, valid_to: r.valid_to, type: usableType.get(coreKey(r.source) || r.source.toLowerCase()), targetType: usableType.get(coreKey(r.target) || r.target.toLowerCase()) });
+        // V2 — THE SOURCE'S OWN WORDING TRAVELS WITH THE CLAIM. `lib/db.js:489` requires that
+        // object_label "keeps what the SOURCE called it, which is evidence and must survive
+        // resolution", and this call was the exact point it stopped surviving: sName/tName are
+        // canonical, while r.source/r.target — the document's actual words — were already being
+        // dereferenced ON THIS LINE to fetch the type, and then thrown away. Additive: identity
+        // still keys on the canonical name, the label keeps the evidence.
+        await _observe(observe, { sourceEntity: sName, relation: relOut, target: tName, url, grade: fg.grade, confidence: conf, status: 'promoted', valid_from: r.valid_from, valid_to: r.valid_to, type: usableType.get(coreKey(r.source) || r.source.toLowerCase()), targetType: usableType.get(coreKey(r.target) || r.target.toLowerCase()), surfaceSource: r.source, surfaceTarget: r.target });
       }
     } else {
       out.held++;                                            // endpoint unresolved → upgrade-pass queue

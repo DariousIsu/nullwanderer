@@ -121,6 +121,31 @@ ok(de.toTypeClaim({ sourceEntity: 'X', type: 'person', status: 'held' }, DOC) ==
 }
 ok(de.toTypeClaim(null, DOC) === null && de.toTypeClaim({}, DOC) === null, 'garbage in → null, never throws');
 
+// ── V2: THE SOURCE'S OWN WORDING SURVIVES RESOLUTION ─────────────────────────────────────────────
+// lib/db.js:489 requires object_label to keep "what the SOURCE called it, which is evidence and must
+// survive resolution". It did not: the resolver rewrote the surface name upstream, so Alcona County's
+// minutes recorded `BOURDEAUX, CAROLYN [H8GA07201]` where the page said "Carolyn Brummund" — and the
+// document's own wording was stored NOWHERE, which is why the error class was undetectable.
+{
+  const e = de.toEncounter(obs({ sourceEntity: 'United States Senate', surfaceSource: 'U.S. Senate', relation: 'MEMBER_OF', target: 'X', type: 'organization' }), DOC);
+  ok(e.object_label === 'U.S. Senate', 'CRITICAL: object_label keeps what the PAGE said');
+  ok(e.object_key === 'org:united states senate',
+    'CRITICAL: object_key still merges on the CANONICAL name — keying on the surface form would fragment one object into one row per variant');
+}
+{
+  // No surface form supplied (every other lane) → unchanged behaviour.
+  const e = de.toEncounter(obs({ sourceEntity: 'Apache County', relation: 'exists', type: 'location' }), DOC);
+  ok(e.object_label === 'Apache County' && e.object_key === require('../lib/encounters').objectKey('place', 'Apache County'),
+    'with no surface form the label and key are both the canonical name — the change is additive');
+}
+{
+  // An empty or blank surface form must not blank the label.
+  for (const s of ['', '   ', null, undefined]) {
+    const e = de.toEncounter(obs({ sourceEntity: 'Real Name', surfaceSource: s, relation: 'exists', type: 'person' }), DOC);
+    ok(e.object_label === 'Real Name', `a ${JSON.stringify(s)} surface form falls back to the canonical label`);
+  }
+}
+
 // ── provenance must travel with the claim ────────────────────────────────────────────────────────
 {
   const e = de.toEncounter(obs({ sourceEntity: 'Jane Roe', relation: 'WORKS_FOR', target: 'Apache County', type: 'person' }), DOC);

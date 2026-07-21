@@ -85,6 +85,13 @@ function claimClassFor(relation) {
 const SPEECH_SOURCES = new Set(['meeting', 'transcript', 'media', 'video', 'conversation']);
 const isSpeech = (source) => SPEECH_SOURCES.has(String(source || '').trim().toLowerCase());
 
+// Identity is keyed on the CANONICAL name via the log's own key function, so this module and
+// lib/encounters cannot disagree about what merges. Falls back to letting encounters derive the key
+// if that module is unavailable — a missing key is recoverable, a WRONG key is a split object.
+function objectKeyFor(type, label) {
+  try { return require('./encounters').objectKey(type, label) || null; } catch { return null; }
+}
+
 function objectTypeFor(t) {
   const k = String(t || '').trim().toLowerCase();
   return Object.prototype.hasOwnProperty.call(TYPE_MAP, k) ? TYPE_MAP[k] : null;
@@ -115,9 +122,27 @@ function toEncounter(obs, doc = {}) {
   const type = objectTypeFor(obs.type);
   if (!type) return null;
 
+  // V2 — IDENTITY IS CANONICAL, THE LABEL IS EVIDENCE. `lib/db.js:489`: object_key is "identity,
+  // normalised — what merges", while object_label "keeps what the SOURCE called it, which is evidence
+  // and must survive resolution".
+  //
+  // It did not survive. The resolver rewrote the surface name to the canonical one upstream, so a
+  // Michigan county's minutes recorded `BOURDEAUX, CAROLYN [H8GA07201]` where the page said "Carolyn
+  // Brummund" — and because the substitution happened before the log, the document's own wording was
+  // stored NOWHERE. That is why the false-identification class was undetectable until someone read the
+  // PDF by hand.
+  //
+  // Both are now set explicitly. The key must keep using the CANONICAL name or the fix would fragment
+  // every legitimately-resolved object into one row per surface variant — trading a silent corruption
+  // for a silent duplication.
+  const canonicalLabel = String(obs.sourceEntity);
+  const surfaceLabel = obs.surfaceSource != null && String(obs.surfaceSource).trim()
+    ? String(obs.surfaceSource).trim() : canonicalLabel;
+
   return {
     object_type: type,
-    object_label: String(obs.sourceEntity),
+    object_key: objectKeyFor(type, canonicalLabel),
+    object_label: surfaceLabel,
     claim_class: claimClass,
     claim_key: claimClass === 'existence' ? null : String(obs.relation).toLowerCase(),
     claim_value: claimClass === 'existence' ? null : (obs.target || obs.value || null),
