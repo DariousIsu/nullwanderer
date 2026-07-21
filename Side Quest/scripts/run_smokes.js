@@ -89,6 +89,7 @@ const smokes = [
   'smoke_birth_context.js',
   'smoke_org_site.js',
   'smoke_decompose_sweep.js',
+  'smoke_type_adjudicator.js',
   'smoke_wikidata_type.js',
   'smoke_curation_gate.js',
   'smoke_curation_store.js',

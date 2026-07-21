@@ -151,6 +151,39 @@ function parseTypedExtraction(raw, { maxEntities = 25, maxRelations = 25 } = {})
   return { entities, relations };
 }
 
+/**
+ * A RELATION ENDPOINT IS AN ENTITY. Backfill the ones the model forgot to declare.
+ *
+ * `parseTypedExtraction` collects ENTITY lines and REL lines independently, so an endpoint named only
+ * in a REL line is never an entity — and 2c can only propose a relation when BOTH endpoints resolve or
+ * mint. Measured on raineyfreedom.org: the extractor returned "Mia Heck WORKS_FOR Rainey Center Freedom
+ * Project", "Rainey Center RELATED_TO Joseph Rainey Center for Public Policy" and 24 more, declared no
+ * ENTITY lines, and every single relation was HELD. The whole page read correctly and landed nothing.
+ *
+ * The prompt already asks for it — "Every REL's source and target should also appear as an ENTITY line"
+ * — so this is repairing a model that did not comply, not inventing entities. If the document states a
+ * relation about a thing, the document names that thing.
+ *
+ * Backfilled entities carry `via: 'endpoint'` and type 'other': the REL line says nothing about what
+ * kind of thing an endpoint is, and guessing would be the "role became the type" bug all over again.
+ * Typing them is a separate, deliberate judgement — see decomp_lane.makeTypeAdjudicator.
+ */
+function backfillEndpointEntities(entities = [], relations = []) {
+  const out = Array.isArray(entities) ? entities.slice() : [];
+  const seen = new Set(out.map((e) => coreKey(e && e.name) || String((e && e.name) || '').toLowerCase()));
+  for (const r of (Array.isArray(relations) ? relations : [])) {
+    for (const side of [r && r.source, r && r.target]) {
+      const name = stripLead(side);
+      if (!name || badField(name)) continue;
+      const k = coreKey(name) || name.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ name, type: 'other', via: 'endpoint' });
+    }
+  }
+  return out;
+}
+
 // Light core-name key for the HYBRID merge dedup (strip brackets/paren-qualifiers/ids/punct, drop
 // middle initials). Deliberately simpler than echo_suit._coreNameKey — the AUTHORITATIVE resolution is
 // resolveMention in 2b; this only collapses obvious dups when unioning two extraction sources.
@@ -616,6 +649,7 @@ async function decomposeDoc(doc = {}, deps = {}) {
 module.exports = {
   ENTITY_TYPES, REL_VOCAB, canonType, badField, coreKey,
   buildTypedPrompt, parseTypedExtraction, parseValidTime: _parseValidTime, mergeCandidates,
+  backfillEndpointEntities,
   resolveExtracted, planEntities, decomposeDoc, stateFull, normalizeStateAliases, US_STATES,
   targetTypeFor, normalizedRelation,
 };

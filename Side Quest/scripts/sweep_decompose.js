@@ -68,7 +68,13 @@ const SOURCES = (arg('--sources', null) || '').split(',').map((s) => s.trim()).f
   const suit = echoSuitLib.createSuit({ client: require('../lib/echo').fromEnv({ url: echoCfg.url, token: echoCfg.token }) });
   await suit.connect();
   if (!suit.connected) { console.error(`Echo is not connected (${suit.lastError || 'unknown'}) — nothing read.`); process.exit(2); }
-  console.log(`\nEcho: connected (${suit.status().tools} tools)`);
+  // REGISTER THE SUIT AS THE LIVE ONE. `echo_suit.resolveMention` is a MODULE-level function that
+  // dispatches through `_live`, set by setLiveSuit — main.js does this at boot. Without it the
+  // resolver's dispatch is null, every entity resolves to {status:'error'}, resolveExtracted returns
+  // `skip`, and the whole document holds: 30 observations, 0 mints, 0 encounters. The symptom looks
+  // like a bad extraction and is actually an unbound resolver.
+  echoSuitLib.setLiveSuit(suit);
+  console.log(`\nEcho: connected (${suit.status().tools} tools), registered as the live suit`);
 
   // THE CLOUD KEY IS NOT IN .env — it lives in ECHO'S keychain, and main.js:1197 hydrates it at boot
   // via keystore.hydrateFromEcho. A standalone script that skips this sees no cloud tier and reports
