@@ -36,11 +36,49 @@ CREATE TABLE IF NOT EXISTS doc_positions (
 
 // Add columns missing from an older (x,y-only) doc_positions so upgrades don't lose saved positions.
 function migrate(d) {
-  let cols = [];
-  try { cols = d.prepare(`PRAGMA table_info(doc_positions)`).all().map(c => c.name); } catch { return; }
+  let info = [];
+  try { info = d.prepare(`PRAGMA table_info(doc_positions)`).all(); } catch { return; }
+  const cols = info.map(c => c.name);
   const add = (name, decl) => { if (!cols.includes(name)) { try { d.exec(`ALTER TABLE doc_positions ADD COLUMN ${name} ${decl}`); } catch {} } };
   add('w', 'INTEGER'); add('h', 'INTEGER');
   add('hidden', 'INTEGER NOT NULL DEFAULT 0'); add('minimized', 'INTEGER NOT NULL DEFAULT 0');
+
+  // RELAX x/y TO NULLABLE. The first version of this table was x,y-only and declared both NOT NULL;
+  // migrate() only ever ADDED columns, so live databases kept that constraint while SCHEMA above has
+  // long declared them nullable. update() legitimately writes x=NULL — a doc that has never been
+  // dragged but is being resized, hidden or minimized carries no position — so every such patch died:
+  //
+  //   [canvas] update-doc failed: NOT NULL constraint failed: doc_positions.x
+  //
+  // firing repeatedly on 2026-07-21. SQLite cannot drop a NOT NULL in place, so rebuild the table and
+  // copy the rows. Guarded on the constraint actually being present, wrapped in a transaction, and
+  // fail-soft: a failed migration leaves the old table exactly as it was.
+  const xCol = info.find(c => c.name === 'x');
+  if (xCol && xCol.notnull) {
+    try {
+      d.exec('BEGIN');
+      d.exec(`CREATE TABLE doc_positions_new (
+        doc_key    TEXT PRIMARY KEY,
+        x          INTEGER,
+        y          INTEGER,
+        w          INTEGER,
+        h          INTEGER,
+        hidden     INTEGER NOT NULL DEFAULT 0,
+        minimized  INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      )`);
+      d.exec(`INSERT INTO doc_positions_new (doc_key, x, y, w, h, hidden, minimized, updated_at)
+              SELECT doc_key, x, y, w, h, hidden, minimized, updated_at FROM doc_positions`);
+      d.exec('DROP TABLE doc_positions');
+      d.exec('ALTER TABLE doc_positions_new RENAME TO doc_positions');
+      d.exec('COMMIT');
+      console.log('[canvas-layout] migrated doc_positions: x/y are nullable — a doc can be resized or hidden before it is ever placed');
+    } catch (e) {
+      try { d.exec('ROLLBACK'); } catch {}
+      try { d.exec('DROP TABLE IF EXISTS doc_positions_new'); } catch {}
+      console.error('[canvas-layout] x/y migration failed, leaving the table as-is:', e.message);
+    }
+  }
 }
 
 function init(opts = {}) {
