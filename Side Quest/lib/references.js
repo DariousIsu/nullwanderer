@@ -192,7 +192,10 @@ async function meetingLabels(deps = {}, { now = Date.now() } = {}) {
 
 const _DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 /** Does the message talk about a meeting at all? Only then is the series list worth its tokens. */
-const MEETING_RE = /\b(meeting|meet|all[\s-]?hands|standup|stand[\s-]?up|sync|call|session|huddle|briefing|1:1|one[\s-]on[\s-]one|agenda|attendees?|calendar)\b/i;
+const MEETING_RE = /\b(meeting|meet|all[\s-]?hands|standup|stand[\s-]?up|sync|call|session|huddle|briefing|1:1|one[\s-]on[\s-]one|agenda|attendees?|calendar)\b|meet\.google\.com/i;
+// A Meet code pasted straight into the message — "join the morning meeting meet.google.com/mav-myni-mkw".
+// This IS a reference, and the most precisely resolvable kind we get: an exact key, no disambiguation.
+const MEET_CODE_RE = /meet\.google\.com\/([a-z]{3,}-[a-z]{3,}-[a-z]{3,})/gi;
 
 /**
  * Resolve every salient mention in the message.
@@ -304,13 +307,23 @@ async function build(userMessage, { objects = [], deps = {}, now = Date.now() } 
   if (wantsMeetings) {
     try { series = (deps.series ? deps.series() : meetingSeries(deps)) || []; } catch { series = []; }
     // Label them from the calendar. A failure here costs the NAMES, never the block.
-    try {
-      const labels = await meetingLabels(deps, { now });
-      series = series.map((s) => {
-        const l = labels.get(s.code);
-        return l ? { ...s, title: l.title || null, invited: l.invited || [] } : s;
-      });
-    } catch { /* unlabelled is the honest fallback */ }
+    let labels = new Map();
+    try { labels = await meetingLabels(deps, { now }); } catch { /* unlabelled is the honest fallback */ }
+    series = series.map((s) => {
+      const l = labels.get(s.code);
+      return l ? { ...s, title: l.title || null, invited: l.invited || [] } : s;
+    });
+    // A PASTED MEET LINK IS A REFERENCE. Live 2026-07-21: "join the morning meeting
+    // meet.google.com/mav-myni-mkw" — she joined it correctly but called it "the morning meeting",
+    // while the block below already knew that code is the Rainey Weekly Huddle. An exact key needs
+    // no disambiguation, so it resolves outright; front of the list, since he just named it.
+    const codes = [...String(userMessage || '').matchAll(MEET_CODE_RE)].map((m) => m[1].toLowerCase());
+    for (const code of [...new Set(codes)].reverse()) {
+      const l = labels.get(code);
+      if (!l || !l.title) continue;
+      if (refs.some((r) => _key(r.mention) === _key(code) || _key(r.name || '') === _key(l.title))) continue;
+      refs.unshift({ mention: code, status: 'resolved', name: l.title, type: 'meeting', note: 'the meeting he just linked', verified: true, via: 'calendar' });
+    }
   }
   const text = render(refs, series, { includeSeries: wantsMeetings, now });
   return { text, refs, series };

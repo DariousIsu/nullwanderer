@@ -123,6 +123,35 @@ const GRAPH = async (mention) => {
     ok(/never state which meeting he means/i.test(dead.text), 'SAFETY: and it correctly falls back to not naming it');
   }
 
+  // ── a pasted Meet link resolves to the meeting's NAME ────────────────────────────────────────
+  // Live 2026-07-21: "join the morning meeting meet.google.com/mav-myni-mkw" → she joined it
+  // correctly ([gmeet] joined, confirmed in-call) but called it "the morning meeting", while the
+  // series block in the same prompt already knew that code is the Rainey Weekly Huddle.
+  {
+    const labels = async () => new Map([['mav-myni-mkw', { title: 'Rainey Weekly Huddle', invited: ['Sarah Hunt'], recurring: true }]]);
+    const series = () => [{ code: 'mav-myni-mkw', sessions: 4, last: Date.parse('2026-07-14'), weekdays: [2], roster: ['Bill Dunne'] }];
+    const d = { getMeta: () => '{}', resolve: GRAPH, series, labels };
+    const r = await R.build('join the morning meeting meet.google.com/mav-myni-mkw', { objects: [], deps: d, now: Date.parse('2026-07-21') });
+    ok(r.refs[0] && r.refs[0].status === 'resolved' && r.refs[0].name === 'Rainey Weekly Huddle',
+      'a pasted Meet code resolves to the meeting NAME — an exact key needs no disambiguation');
+    ok(r.refs[0].via === 'calendar' && r.refs[0].verified === true, 'sourced from the calendar, and verified');
+    ok(/"mav-myni-mkw" → Rainey Weekly Huddle/.test(r.text), 'and it renders as a resolved reference');
+    // a bare link with no meeting word still counts
+    const bare = await R.build('meet.google.com/mav-myni-mkw', { objects: [], deps: d, now: Date.parse('2026-07-21') });
+    ok(/Rainey Weekly Huddle/.test(bare.text), 'a bare Meet URL is enough — MEETING_RE matches the domain itself');
+    // an UNKNOWN code must not be invented into a name
+    const unknown = await R.build('meet.google.com/zzz-zzzz-zzz', { objects: [], deps: d, now: Date.parse('2026-07-21') });
+    ok(!/→ Rainey Weekly Huddle/.test(unknown.text), 'SAFETY: an unknown code borrows nobody else\'s name');
+    // no duplicate when the decomposition ALSO produced it
+    const dup = await R.build('join meet.google.com/mav-myni-mkw', {
+      objects: [{ mention: 'Rainey Weekly Huddle', type: 'event', op: 'resolve' }],
+      deps: { ...d, resolve: async () => ({ status: 'resolved', object: { name: 'Rainey Weekly Huddle', entity_type: 'event' } }) },
+      now: Date.parse('2026-07-21'),
+    });
+    ok(dup.refs.filter((x) => /rainey weekly huddle/i.test(x.name || '')).length === 1,
+      'the same meeting is not listed twice when both paths find it');
+  }
+
   // ── attendee names ────────────────────────────────────────────────────────────────────────────
   {
     ok(R._person({ email: 'bill.dunne@raineycenter.org' }) === 'Bill Dunne', 'an email local-part becomes a readable name');
