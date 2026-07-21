@@ -92,6 +92,13 @@ const P31_TYPE = {
   Q28575: 'location',                 // county
 };
 
+// A Wikimedia disambiguation page is not a thing in the world — it is a list of things that share a
+// name. Typing off one would assert that "Mercury" is a disambiguation page, which is nonsense, and
+// worse, it means the name we looked up is ambiguous.
+const DISAMBIGUATION = 'Q4167410';
+const isDisambiguation = (p31 = []) => (Array.isArray(p31) ? p31 : [p31])
+  .some((q) => String(q || '').toUpperCase() === DISAMBIGUATION);
+
 /**
  * p31 → { type, why } or null when nothing is known.
  *
@@ -101,6 +108,7 @@ const P31_TYPE = {
 function typeFromP31(p31 = []) {
   const ids = (Array.isArray(p31) ? p31 : [p31]).map((x) => String(x || '').trim().toUpperCase()).filter(Boolean);
   if (!ids.length) return null;
+  if (isDisambiguation(ids)) return { type: null, why: 'Wikimedia disambiguation page — the NAME is ambiguous, not a thing', classes: [DISAMBIGUATION] };
   const hits = [];
   for (const q of ids) if (P31_TYPE[q]) hits.push({ q, type: P31_TYPE[q] });
   if (!hits.length) return null;                                   // unmapped → hold, never guess
@@ -111,4 +119,4 @@ function typeFromP31(p31 = []) {
   return { type: hits[0].type, why: `P31 ${hits.map((h) => h.q).join(',')} → ${hits[0].type}`, classes: hits.map((h) => h.q) };
 }
 
-module.exports = { typeFromP31, P31_TYPE };
+module.exports = { typeFromP31, isDisambiguation, P31_TYPE, DISAMBIGUATION };

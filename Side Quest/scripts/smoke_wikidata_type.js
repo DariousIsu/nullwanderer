@@ -36,6 +36,17 @@ ok(wt.typeFromP31(['Q99999999', 'Q5']).type === 'person', 'an unmapped class alo
   ok(Array.isArray(r.classes) && r.classes.length === 2, 'and it reports which classes conflicted');
 }
 
+// ── DISAMBIGUATION PAGES — the guard on name lookup ──────────────────────────────────────────────
+// "Mercury" resolves to Q48397, whose P31 is Q4167410: a Wikimedia disambiguation page. That is not a
+// thing in the world, it is a list of things sharing a name — and it means the name we looked up is
+// ambiguous, which is the real finding.
+ok(wt.isDisambiguation(['Q4167410']) && !wt.isDisambiguation(['Q5']), 'a disambiguation page is recognised');
+{
+  const r = wt.typeFromP31(['Q4167410']);
+  ok(r && r.type === null && /ambiguous/.test(r.why),
+    'CRITICAL: a disambiguation page yields NO type — asserting one would say "Mercury is a disambiguation page"');
+}
+
 // ── shape and garbage ────────────────────────────────────────────────────────────────────────────
 ok(wt.typeFromP31(['q5']).type === 'person', 'case-insensitive');
 ok(wt.typeFromP31('Q5').type === 'person', 'a bare string is accepted as a single class');
