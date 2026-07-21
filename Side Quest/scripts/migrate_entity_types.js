@@ -108,6 +108,12 @@ console.log(`\nWORK LIST AFTER THIS MIGRATION`);
 console.log(`  rows still on a placeholder type          ${stillPlaceholder}`);
 console.log(`  …of which carry a STRONG ID               ${withStrongId}  ← a QID/lda id types these with NO model call`);
 console.log(`  These are what a Wikidata resolution pass (design §2a-ii step 1) would settle next.`);
+if (VERBOSE) {
+  const unresolved = ents.filter((e) => mt.isPlaceholder(e.entity_type) && mt.hasStrongId(e.name));
+  console.log(`\n  strong-id rows a Wikidata pass could type (${unresolved.length}):`);
+  for (const e of unresolved.slice(0, 60)) console.log(`     #${String(e.id).padStart(6)} ${String(e.name).slice(0, 60)}`);
+  if (unresolved.length > 60) console.log(`     …and ${unresolved.length - 60} more`);
+}
 
 if (!APPLY) { console.log(`\nDry run — nothing written. Re-run with --apply.`); process.exit(0); }
 
