@@ -471,7 +471,13 @@ async function _observe(observe, o) { if (typeof observe === 'function') { try {
 // dropping the whole relation. Returns true when the node was proposed (caller adds it to `usable`).
 async function _mintUnsubstantiated(dispatch, observe, name, type, url) {
   if (!await _proposeEntity(dispatch, name, type, '')) return false;
-  await _observe(observe, { sourceEntity: name, relation: 'exists', target: null, url, grade: 'D', confidence: 0, status: 'promoted', substantiationState: SUB.UNSUBSTANTIATED, frame: SUB.FRAME_REAL });
+  // THE TYPE MUST TRAVEL. This function takes `type`, proposes the entity WITH it, and then observed
+  // without it — so every unsubstantiated mint produced a type-less observation, and decomp_encounters
+  // refuses an untyped one by design (the type is part of the identity key; guessing it is a wrong
+  // merge). Measured live on a justice.gov injunction: 81 observations PROMOTED, 0 encounters, because
+  // "American Tax Planning Company" and "United States District Court" arrived with type=null. The
+  // `held` branch three lines below always passed it; only the success path dropped it.
+  await _observe(observe, { sourceEntity: name, relation: 'exists', target: null, url, grade: 'D', confidence: 0, status: 'promoted', type, substantiationState: SUB.UNSUBSTANTIATED, frame: SUB.FRAME_REAL });
   return true;
 }
 

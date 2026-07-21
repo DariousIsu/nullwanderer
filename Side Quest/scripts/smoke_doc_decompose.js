@@ -99,6 +99,27 @@ function mockResolver(map) {
   // nil → MINT.
   ok((await D.resolveExtracted({ name: 'Obscure Staffer', type: 'person' }, { resolve: mockResolver({}) })).action === 'mint', '2b: nil → MINT a new object');
 
+  // ── THE TYPE MUST TRAVEL ON AN UNSUBSTANTIATED MINT ────────────────────────────────────────────
+  // _mintUnsubstantiated took `type`, proposed the entity WITH it, and observed WITHOUT it. Since
+  // decomp_encounters refuses an untyped observation by design (the type is part of the identity key),
+  // every unsubstantiated mint produced a promoted observation that could never become an encounter.
+  // Measured live on a justice.gov injunction: 81 promoted observations, 0 encounters.
+  {
+    const seen = [];
+    await D.decomposeDoc(
+      { title: 'Order', url: 'https://justice.gov/x', text: 'The United States District Court entered judgment.' },
+      {
+        extract: async () => ({ entities: [{ name: 'United States District Court', type: 'government_body' }], relations: [] }),
+        resolve: mockResolver({}),                     // nil → REFERENCE_TYPE → unsubstantiated mint
+        dispatch: async () => ({ ok: true, text: '{"action":"proposed","entity_id":1}' }),
+        observe: (o) => { seen.push(o); },
+      });
+    const exists = seen.find((o) => o.relation === 'exists' && /District Court/.test(o.sourceEntity));
+    ok(exists && exists.status === 'promoted', 'a reference-type entity mints unsubstantiated so its edge can land');
+    ok(exists && exists.type === 'government_body',
+      'CRITICAL: the observation carries its TYPE — without it decomp_encounters refuses the row and the mint yields no encounter');
+  }
+
   // ── V1: A RESOLVER ANSWER IS A PROPOSAL, NOT A VERDICT ─────────────────────────────────────────
   //
   // The live case, 2026-07-21. Alcona County MI minutes name "Carolyn Brummund" and "Adam Brege";
