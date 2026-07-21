@@ -87,10 +87,13 @@ function humanDuration(ms) {
  */
 function buildAwarenessBlock({ chosenName, sessionStartedAt, cumulativeMs, standing = null, working = null }) {
   const now = new Date();
-  const dateStr = now.toLocaleDateString(undefined, {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
-  });
-  const timeStr = now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  // EASTERN, explicitly. This used the HOST's zone (`undefined`), which is right only by luck —
+  // correct on Lucas's desktop, silently wrong headless or on a moved machine. Everything downstream
+  // reasons on these two strings: what time it is, whether a meeting has started, what "today" means.
+  // The zone label rides along so an hour is never ambiguous to her or to him (lib/tz).
+  const _tz = (() => { try { return require('./tz'); } catch { return null; } })();
+  const dateStr = _tz ? _tz.date(now) : now.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const timeStr = _tz ? _tz.timeWithZone(now) : now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   const sessionAge = sessionStartedAt ? humanDuration(Date.now() - sessionStartedAt) : 'unknown';
   const totalAge = cumulativeMs != null ? humanDuration(cumulativeMs) : 'unknown';
   // Downtime line — surfaced only for the first stretch after a restart, so she knows

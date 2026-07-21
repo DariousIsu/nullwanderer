@@ -32,7 +32,11 @@
 
   const cert = (typeof require === 'function') ? require('./cert_template') : (typeof window !== 'undefined' ? window.CertTemplate : null);
   const esc = (cert && cert.esc) || ((s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])));
-  const fmtDate = (cert && cert.fmtDate) || ((ms) => new Date(ms).toISOString().slice(0, 10));
+  // Dates are EASTERN (lib/tz). cert_template's fmtDate reads the HOST zone off a raw timestamp,
+  // which rendered a UTC-midnight date as the PREVIOUS day — a document dated the day before it was
+  // written. Browser builds have no `require`, so the cert formatter remains the fallback there.
+  const _tz = (typeof require === 'function') ? (() => { try { return require('../lib/tz'); } catch { return null; } })() : null;
+  const fmtDate = (_tz && _tz.dateShort) || (cert && cert.fmtDate) || ((ms) => new Date(ms).toISOString().slice(0, 10));
 
   /**
    * THE FOUR SHAPES. `key` is the section id the builder fills; `required` marks what the type is

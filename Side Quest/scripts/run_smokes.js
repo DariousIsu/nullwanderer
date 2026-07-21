@@ -192,6 +192,7 @@ const smokes = [
   'smoke_canvas_layout_migrate.js',
   'smoke_echo_batch_args.js',
   'smoke_doc_shapes.js',
+  'smoke_tz.js',
   'smoke_self_narrative.js',
   'smoke_mood.js',
   'smoke_voice.js',

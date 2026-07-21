@@ -106,8 +106,10 @@ function meetingSeries(deps = {}) {
       if (!m) continue;
       if (!by.has(m)) by.set(m, { code: m, days: new Set(), speakers: new Map(), last: 0 });
       const s = by.get(m);
-      const d = new Date(r.ts);
-      if (Number.isFinite(r.ts)) { s.days.add(d.toISOString().slice(0, 10)); s.last = Math.max(s.last, r.ts); }
+      // EASTERN day boundary, not UTC. `toISOString().slice(0,10)` rolls over at 8pm Eastern, so an
+      // evening meeting was filed on the NEXT day — which both split one session into two and made a
+      // weekly series look like it met on two different weekdays.
+      if (Number.isFinite(r.ts)) { s.days.add(require('./tz').dayKey(r.ts)); s.last = Math.max(s.last, r.ts); }
       const sp = String(r.speaker || '').trim();
       if (sp) s.speakers.set(sp, (s.speakers.get(sp) || 0) + 1);
     }
@@ -117,8 +119,9 @@ function meetingSeries(deps = {}) {
         code: s.code,
         sessions: s.days.size,
         last: s.last,
-        // weekday of the sessions — the only binding signal we have for "the weekly all hands"
-        weekdays: [...new Set([...s.days].map((d) => new Date(d + 'T12:00:00Z').getUTCDay()))].sort(),
+        // weekday of the sessions — the only binding signal we have for "the weekly all hands".
+        // Noon Eastern (not noon UTC) so the day never slips across the boundary either way.
+        weekdays: [...new Set([...s.days].map((d) => require('./tz').weekday(Date.parse(`${d}T16:00:00Z`))))].filter((d) => d != null).sort(),
         // most-talkative first: the regulars, not everyone who ever said "morning"
         roster: [...s.speakers.entries()].sort((a, b) => b[1] - a[1]).slice(0, MAX_ROSTER).map(([n]) => n),
       }))
