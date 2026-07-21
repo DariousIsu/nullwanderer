@@ -49,10 +49,27 @@ function normalizeToolResult(raw) {
 function parseEchoTags(text) {
   if (!text) return [];
   const found = [];
-  const scan = (re, make) => { let m; while ((m = re.exec(text)) !== null) found.push({ index: m.index, tag: make(m) }); };
+  // `make` may return ONE tag or an array of them (a batched <echo-do> expands to one tag per
+  // argument object). Order within a batch is preserved by nudging the sort index.
+  const scan = (re, make) => {
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const made = make(m);
+      if (Array.isArray(made)) made.forEach((tag, i) => found.push({ index: m.index + i / 1000, tag }));
+      else found.push({ index: m.index, tag: made });
+    }
+  };
   scan(/<echo-guide\s*\/>|<echo-guide>\s*<\/echo-guide>/g, () => ({ kind: 'guide' }));
   scan(/<echo-find>([\s\S]*?)<\/echo-find>/g, m => ({ kind: 'find', query: m[1].trim() }));
-  scan(/<echo-do\s+name="([^"]+)"\s*>([\s\S]*?)<\/echo-do>/g, m => { const a = parseArgs(m[2]); return { kind: 'do', name: m[1].trim(), args: a.args, parseError: a.parseError }; });
+  // One <echo-do> may carry SEVERAL argument objects — see parseArgsList. Each becomes its own tag
+  // here, in document order, so every downstream consumer (dispatch, the canvas mirror, the tier
+  // gate) sees a normal single-argument call and needs no knowledge of batching.
+  scan(/<echo-do\s+name="([^"]+)"\s*>([\s\S]*?)<\/echo-do>/g, (m) => {
+    const name = m[1].trim();
+    const a = parseArgsList(m[2]);
+    if (a.list.length > 1) return a.list.map((args) => ({ kind: 'do', name, args, parseError: null }));
+    return { kind: 'do', name, args: a.list[0] || {}, parseError: a.parseError };
+  });
   scan(/<echo-delegate(?:\s+name="([^"]*)")?\s*>([\s\S]*?)<\/echo-delegate>/g, m => ({ kind: 'delegate', agent: (m[1] || '').trim() || null, task: m[2].trim() }));
   scan(/<echo-propose\s+kind="([^"]+)"\s*>([\s\S]*?)<\/echo-propose>/g, m => { const a = parseArgs(m[2]); return { kind: 'propose', proposeKind: m[1].trim(), payload: a.args, parseError: a.parseError }; });
   // <echo-recipe name="X" arg="Y"/> — the PREFERRED path: a named, pre-validated procedure.
@@ -72,6 +89,59 @@ function parseArgs(body) {
   const t = (body || '').trim();
   if (!t) return { args: {} };
   try { return { args: JSON.parse(t) }; } catch (e) { return { args: {}, parseError: e.message }; }
+}
+
+/**
+ * Split a tag body into a LIST of argument objects.
+ *
+ * ⭐ WHY A LIST. A canvas document is many blocks — a heading and a paragraph per section — but one
+ * <echo-do> carried exactly one JSON object, and the in-turn hop cap is 4. Writing a seven-section
+ * paper one tag at a time is arithmetically impossible, so she batched, and the single JSON.parse
+ * rejected the whole thing:
+ *
+ *   [route-obs] FIRST ERROR saga_canvas_add_block() → args weren't valid JSON
+ *               (Unexpected non-whitespace character after JSON at position 372)
+ *
+ * — live 2026-07-21, on the second attempt at the China brief. The tab was created and then had
+ * nothing in it, while she reported "canvas created with section placeholders".
+ *
+ * Accepts, in order: one object (unchanged), a JSON array of objects, or several objects written
+ * back-to-back. The splitter tracks brace depth OUTSIDE string literals and honours escapes, so a
+ * markdown paragraph containing braces or quotes — which is most prose — cannot break it.
+ */
+function parseArgsList(body) {
+  const t = (body || '').trim();
+  if (!t) return { list: [], parseError: null };
+  // 1. plain object or array
+  try {
+    const v = JSON.parse(t);
+    if (Array.isArray(v)) return { list: v.filter((x) => x && typeof x === 'object'), parseError: null };
+    if (v && typeof v === 'object') return { list: [v], parseError: null };
+    return { list: [], parseError: 'args were not an object' };
+  } catch { /* fall through to the concatenated case */ }
+  // 2. several top-level objects, back to back (optionally comma-separated)
+  const out = [];
+  let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === '{') { if (depth === 0) start = i; depth++; continue; }
+    if (c === '}') {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        try { const v = JSON.parse(t.slice(start, i + 1)); if (v && typeof v === 'object') out.push(v); } catch { /* skip the bad one, keep the rest */ }
+        start = -1;
+      }
+    }
+  }
+  if (out.length) return { list: out, parseError: null };
+  return { list: [], parseError: (() => { try { JSON.parse(t); return null; } catch (e) { return e.message; } })() };
 }
 
 // Remove all echo-suit tags from a block of her output, so they don't persist in stored turns

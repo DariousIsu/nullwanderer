@@ -6622,7 +6622,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // yet." on Lucas's canvas while she reported "added a detailed outline covering all five
             // parts". The manifest documented ONLY the table shape, so for prose there was nothing to
             // copy. A capability documented for one shape gets used in one shape or guessed at.
-            { key: 'canvas document (prose)', label: 'a real tab on Lucas\'s canvas — THIS is how you deliver a paper, brief or memo', how: '<echo-do name="saga_canvas_open_tab">{"mode":"DOC","tab_key":"KEY","title":"TITLE"}</echo-do> then one call per block: <echo-do name="saga_canvas_add_block">{"tab_key":"KEY","block_type":"heading","data":{"level":2,"text":"Section title"}}</echo-do> and <echo-do name="saga_canvas_add_block">{"tab_key":"KEY","block_type":"paragraph","data":{"markdown":"The prose, in markdown."}}</echo-do>' },
+            { key: 'canvas document (prose)', label: 'a real tab on Lucas\'s canvas — THIS is how you deliver a paper, brief or memo. Write the WHOLE document in ONE add_block tag by listing every block as a JSON array; you do not get a separate turn per section', how: '<echo-do name="saga_canvas_open_tab">{"mode":"DOC","tab_key":"KEY","title":"TITLE"}</echo-do> then ONE tag containing every block: <echo-do name="saga_canvas_add_block">[{"tab_key":"KEY","block_type":"heading","data":{"level":2,"text":"Section title"}},{"tab_key":"KEY","block_type":"paragraph","data":{"markdown":"The prose, in markdown."}},{"tab_key":"KEY","block_type":"heading","data":{"level":2,"text":"Next section"}}]</echo-do>' },
             { key: 'canvas table', label: 'rows and columns on that same tab', how: '<echo-do name="saga_canvas_add_block">{"tab_key":"KEY","block_type":"table","data":{"headers":["A","B"],"rows":[["1","2"]],"caption":"optional"}}</echo-do>' },
             { key: 'valid block_type values', label: 'ONLY these — anything else is rejected; heading/paragraph/table/chart are the ones that actually render', how: 'heading · paragraph · list · code · table · chart · metric_card · callout · image · diagram · knowledge_graph · document_file · browser_snapshot · map · three · draft_review · citation · source_card' },
             { key: 'briefing / op-ed / quick-hit', label: 'a formatted, citation-checked document', how: '<echo-recipe name="…"/> — see the render recipes in your menu' },
@@ -7349,7 +7349,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // nudge to fix the args / pick another tool — never silently swallowed.
   if (echoTagsToRun.length > 0 && echoSuit) {
     (async () => {
-      for (const t of echoTagsToRun.slice(0, 4)) {
+      // The cap protects against a runaway chain of EXPENSIVE calls (searches, agent spawns). Canvas
+      // writes are none of those — they are local, cheap and idempotent-ish, and a document is many
+      // of them: a seven-section brief is ~14 heading+paragraph blocks. Clipping those at 4 is what
+      // leaves a titled tab with nothing in it, so they get their own allowance.
+      const _isCanvasWrite = (t) => t && t.kind === 'do' && /^saga_canvas_/.test(t.name || '');
+      const _canvasWrites = echoTagsToRun.filter(_isCanvasWrite);
+      const _otherTags = echoTagsToRun.filter((t) => !_isCanvasWrite(t));
+      const _toRun = [..._otherTags.slice(0, 4), ..._canvasWrites.slice(0, 24)]
+        .sort((a, b) => echoTagsToRun.indexOf(a) - echoTagsToRun.indexOf(b));
+      if (_canvasWrites.length > 4) console.log(`[canvas] ${_canvasWrites.length} block writes this turn — building a document`);
+      for (const t of _toRun) {
         try {
           const r = await echoSuit.dispatch(t);
           const label = t.kind === 'do' ? `echo ${t.name}` : `echo ${t.kind}`;
