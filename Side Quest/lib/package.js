@@ -148,10 +148,21 @@ function buildPlan({ intent = null, depth = {}, mustCite = false, unresolved = [
     // Deliberately does NOT recommend <echo-delegate>: nothing in this codebase polls agent_inbox, so
     // a delegated run is a one-way door — the work leaves and no result ever returns. Sending an
     // assignment there would manufacture exactly the invisible-work failure this block exists to fix.
-    lines.push('• PRODUCE THE ARTIFACT THIS TURN. Open a canvas tab and write what you have into it, '
-      + 'or emit a render recipe. Partial and cited beats complete and promised — a half-finished '
-      + 'document he can read and correct is worth more than a whole one he never sees. If you truly '
-      + 'cannot start it now, say exactly what is blocking you.');
+    // ⭐ THE DOCUMENT IS BUILT IN THREE STAGES, which is how the autonomous research runs already
+    // work (a `contract` block stating the task and plan, then section blocks that fill in as work
+    // lands). An assignment from Lucas gets the same treatment — with the third stage, the finished
+    // branded render, which had never been wired to anything.
+    lines.push('• BUILD THE DOCUMENT IN THREE STAGES, starting THIS TURN:');
+    lines.push('   1. OPEN IT WITH THE CONTRACT. The first block is what he asked for, in his words, '
+      + 'and your plan for it — the sections you will cover and how you will get each. He should be '
+      + 'able to correct your plan before you have spent an hour on the wrong thing.');
+    lines.push('   2. FILL IT IN as the material arrives — one heading + paragraph per section, added '
+      + 'to the SAME tab. An empty section with an honest "not researched yet" is information; a '
+      + 'missing section is not. Partial and cited beats complete and promised.');
+    lines.push('   3. FINISH IT when the substance is actually there — render the formatted, '
+      + 'citation-checked version (see "FINISHED branded document" below). Do NOT render an empty or '
+      + 'half-empty document: that step is for turning real work into something he can send.');
+    lines.push('• If you truly cannot start it now, say exactly what is blocking you.');
   }
   // ⚠️ "recipe" is Echo's word for a pre-validated DATA procedure (bill-detail, committee-roster,
   // lamp-count) and it collides badly with the ordinary meaning. Live 2026-07-20, asked for a burger

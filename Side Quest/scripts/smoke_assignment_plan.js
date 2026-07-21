@@ -46,7 +46,21 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
     'a set (29 countries) is recognised as a countable universe, not a single lookup');
   ok(/GO DEEP, NOT WIDE/.test(a) && /a link you did not read is not research/.test(a),
     'names the exact failure: deep-browsed 0 layers of the one good source');
-  ok(/PRODUCE THE ARTIFACT THIS TURN/.test(a), 'the document must be started now, not promised');
+  // ⭐ THREE STAGES — Lucas 2026-07-21: "it should create the document with the prompt and the plan
+  // affixed and then build the document with a final completion to a fully formatted and branded
+  // document (that last part I dont think is wired)". He was right: saga_render_* appears NOWHERE in
+  // this codebase and Echo reports zero successful calls to it, ever.
+  ok(/BUILD THE DOCUMENT IN THREE STAGES, starting THIS TURN/.test(a), 'the document is built in stages, beginning now');
+  ok(/OPEN IT WITH THE CONTRACT/.test(a) && /what he asked for, in his words/.test(a),
+    'stage 1 affixes the ask AND the plan — same shape as the research runs\' contract block');
+  ok(/correct your plan before you have spent an hour on the wrong thing/.test(a),
+    'and the reason it goes first: it is his chance to redirect');
+  ok(/FILL IT IN as the material arrives/.test(a), 'stage 2 grows the same tab');
+  ok(/An empty section with an honest "not researched yet" is information/.test(a),
+    'a gap is declared rather than omitted');
+  ok(/FINISH IT when the substance is actually there/.test(a), 'stage 3 is the branded render');
+  ok(/Do NOT render an empty or half-empty document/.test(a),
+    'SAFETY: the finish step is gated on real content — rendering an empty brief would be the tidiest lie yet');
   ok(/Partial and cited beats complete and promised/.test(a), 'partial-and-real beats whole-and-imaginary');
 
   // SAFETY: delegation is a one-way door — nothing polls agent_inbox, so a delegated assignment
@@ -86,6 +100,12 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
   ok(/heading · paragraph · list · code · table · chart/.test(m),
     'and the exact valid block_type values, so there is nothing left to guess');
   ok(/block_type":"table","data":\{"headers"/.test(m), 'the table shape survives alongside it');
+
+  // The finished-document step: present in Echo the whole time, referenced nowhere, never once called.
+  ok(/FINISHED branded document/.test(m), 'the branded render is offered as a real capability');
+  ok(/saga_render_executive_briefing/.test(m) && /"executive_summary"/.test(m) && /"methodology"/.test(m),
+    'with its ACTUAL required fields — a capability with no key gets narrated instead of used');
+  ok(/saga_render_quick_hit · saga_render_op_ed/.test(m), 'and the shorter formats are named too');
 }
 
 // ── HER canvas writes are mirrored to the durable store ─────────────────────────────────────────
