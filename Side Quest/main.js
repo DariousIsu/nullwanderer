@@ -4455,6 +4455,17 @@ const voice = require('./lib/voice');
 // headless callers (Discord) these default to no-ops and the final say is
 // returned in { ok, say } so the caller can deliver it however it likes.
 let _chatTurnGen = 0;   // monotonic per chat turn — used to discard a prior turn's stale tool follow-ups
+// The package's `identity` slot = everything the local side assembled, MINUS the Echo tool menu when
+// it is in there. The menu is delivered separately in the budgeted `tools` slot; leaving it in both
+// would print ~4,200 chars of tool listing twice, and leaving it ONLY in identity buries it at the
+// top of a 34k blob where the model demonstrably did not reach for it.
+function _identityWithoutSuit(messages, suit) {
+  const text = (messages || []).map((m) => m.content).join('\n\n');
+  if (!suit) return text;
+  const i = text.indexOf(suit);
+  return i < 0 ? text : (text.slice(0, i) + text.slice(i + suit.length)).replace(/\n{3,}/g, '\n\n');
+}
+
 async function runChatTurn(userMessage, attachments = [], io = {}) {
   if (!userMessage || !userMessage.trim()) return { ok: false, error: 'empty', say: null };
   const emit = io.emit || (() => {});
@@ -6580,10 +6591,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       let cloudMessages = messages;
       try {
         const pkg = require('./lib/package');
-        // Only on cloud-OWNED turns is the suit stripped from `messages` (see echoSuitBlock above), so
-        // only there does it need re-adding here. On every other turn it already rides inside identity,
-        // and adding it again would spend the tools budget printing the same 500-tool menu twice.
-        const suit = (echoSuit && echoSuit.connected && cloudOwnsAnswer) ? echoSuit.suitContextBlock() : null;
+        // THE TOOL MENU GOES IN EVERY PACKAGE. Gating this on `cloudOwnsAnswer` was a regression I
+        // introduced trying to avoid printing the menu twice: classifyClaimType returns 'other' for a
+        // real request ("I need a research paper on…"), so cloudOwnsAnswer was false and the package
+        // shipped with NO tools section at all —
+        //   before: identity:31492 plan:1740 manifest:2378 tools:4181
+        //   after:  identity:34260 plan:2082 references:366            ← gone
+        // The cloud now writes EVERY reply, so it needs the tools on every reply. Duplication is
+        // handled properly below by removing the copy that rides inside identity, rather than by
+        // withholding the menu.
+        const suit = (echoSuit && echoSuit.connected) ? echoSuit.suitContextBlock() : null;
         // MANIFEST — counts and KEYS, never rows. Tens of tokens where the data is thousands, and the
         // only way the cloud can ask for something: it cannot request what it doesn't know exists.
         // This is also the token-spend lever — work runs inside our own mapped DB instead of being
@@ -6601,13 +6618,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           manifest = pkg.buildManifest(inv, { actions: [
             { key: 'canvas sheet/table', label: 'a real tab on Lucas\'s canvas', how: '<echo-do name="saga_canvas_open_tab">{"mode":"DOC","tab_key":"KEY","title":"TITLE"}</echo-do> then <echo-do name="saga_canvas_add_block">{"tab_key":"KEY","block_type":"table","data":{"headers":[…],"rows":[[…]]}}</echo-do>' },
             { key: 'briefing / op-ed / quick-hit', label: 'a formatted, citation-checked document', how: '<echo-recipe name="…"/> — see the render recipes in your menu' },
-            { key: 'background agent', label: 'hand off heavy multi-source work', how: '<echo-delegate name="AGENT">the full task spec</echo-delegate>' },
+            // Listed honestly: nothing polls agent_inbox, so a delegated run never reports back.
+            // Offering it as an equal option to the canvas is how an assignment gets "handed off"
+            // into silence and then described as underway.
+            { key: 'background agent', label: 'fire-and-forget only — it does NOT report back, so never use it for something Lucas is waiting on', how: '<echo-delegate name="AGENT">the full task spec</echo-delegate>' },
           ] });
         } catch (e) { console.error('[main] manifest failed:', e.message); }
         const plan = pkg.buildPlan({
           intent: (() => { try { return require('./lib/metacognition').classifyClaimType(userMessage); } catch { return null; } })(),
           depth: { maxHops: MAX_ECHO_HOPS },
           mustCite: cloudOwnsAnswer,
+          // The router ALREADY knew: "[turn-router] route=task (assignment, conf 0.8)" on the China
+          // paper request. That signal just never reached the plan, so the cloud worked a deliverable
+          // request as a chat question — two searches, nothing read, nothing produced.
+          assignment: turnRoute && (turnRoute.route === 'task' || isAssignment),
         });
         // `messages` (persona + mood + memory + grounding, already assembled and tuned) rides in the
         // UNTRIMMABLE identity slot, so today's content is delivered byte-for-byte and this can only
@@ -6642,7 +6666,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         const _win = await require('./lib/cloud_logic').resolveWindow(db.getMeta('model.replier') || null);
         const built = pkg.build({
           window: _win || {},
-          sections: { identity: messages.map((m) => m.content).join('\n\n'), plan, references, manifest, tools: suit || '' },
+          // The suit rides inside `messages` on non-cloud-owned turns (see echoSuitBlock above), so
+          // lift it out of identity here — it belongs in the `tools` slot, which is budgeted, floored
+          // at 1200 chars, and sits near the END of the package where recency helps a model reach for
+          // a tool. Buried at the top of a 34k identity blob it was present but not used.
+          sections: { identity: _identityWithoutSuit(messages, suit), plan, references, manifest, tools: suit || '' },
         });
         cloudMessages = built.messages;
         console.log(`[package] ${pkg.describe(built.report)}`);

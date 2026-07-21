@@ -85,8 +85,12 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
       'the grounding ladder is still gated on cloudOwnsAnswer, not on the writer');
     ok(/mustCite: cloudOwnsAnswer/.test(m),
       'citation duty still tracks the FACTUAL turn, not the writer');
-    ok(/echoSuit\.connected && cloudOwnsAnswer\) \? echoSuit\.suitContextBlock\(\)/.test(m),
-      'the tool menu is added to the package only when it was stripped from messages — never twice');
+    // 2026-07-21 — REVERSED, and this assertion was pinning my own regression. Gating the menu on
+    // cloudOwnsAnswer meant a real request ("I need a research paper on…", classified 'other') got a
+    // package with NO tools section at all, which is why she never used the tool base. The menu now
+    // ships on every turn; duplication is handled by lifting it out of identity instead.
+    ok(/const suit = \(echoSuit && echoSuit\.connected\) \? echoSuit\.suitContextBlock\(\) : null;/.test(m),
+      'the tool menu is in EVERY package — the cloud writes every reply, so it needs tools every time');
   }
 
   console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);

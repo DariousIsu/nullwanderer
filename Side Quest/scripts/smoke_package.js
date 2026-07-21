@@ -200,8 +200,19 @@ const rep = (r, name) => r.report.sections.find((s) => s.name === name);
   ok(/saga_canvas_open_tab/.test(src) && /echo-delegate/.test(src),
     'canvas and delegation carry their actual tags — a capability with no key gets narrated instead');
   ok(/pkg\.buildPlan\(\{/.test(src), 'the plan/roadmap is built');
-  ok(/sections: \{ identity: messages\.map/.test(src),
+  // 2026-07-21: identity is now `_identityWithoutSuit(messages, suit)` rather than the raw join.
+  // Everything the local side assembled still rides the UNTRIMMABLE slot with ONE deliberate
+  // exception — the Echo tool menu is lifted out and delivered in the budgeted `tools` slot instead.
+  //
+  // This IS a weakening and it is worth naming: the menu moves from untrimmable to trimmable (weight
+  // 0.14, floor 1200, dropped WHOLE below that rather than stubbed). Accepted because it was
+  // previously buried at the top of a 34k identity blob and demonstrably not used, and because at
+  // 39k/464k the budget is nowhere near starvation. If packages ever approach the window, this is the
+  // first thing to re-check.
+  ok(/sections: \{ identity: _identityWithoutSuit\(messages, suit\)/.test(src),
     "today's tuned prompt rides the UNTRIMMABLE slot — the packager can only ADD, never silently drop it");
+  ok(/function _identityWithoutSuit/.test(src) && /if \(!suit\) return text;/.test(src),
+    'and the ONLY thing lifted out is the tool menu, which is re-delivered in its own budgeted slot');
   // Budgeting against a DIFFERENT window than the call gets is silently catastrophic — it was, live.
   ok(/resolveWindow\(db\.getMeta\('model\.replier'\) \|\| null\)/.test(src),
     'the package is budgeted via cloud_logic.resolveWindow — the same model the call will use');

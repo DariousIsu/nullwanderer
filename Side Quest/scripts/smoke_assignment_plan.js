@@ -1,0 +1,104 @@
+/* smoke_assignment_plan.js — a request for a DELIVERABLE must be worked as one, with tools.
+ *
+ * Live 2026-07-21. Lucas: "I need a research paper on the last nine months of China announcements in
+ * AI… the World AI conference open-sourcing to the global south, their new stacked microchip and the
+ * different elements needed to build it, pyrex memory systems, and how each nation of the global
+ * south that China wants in their 29-country group provides a needed rare earth material."
+ *
+ * Five distinct parts, one of them a 29-nation matrix. What happened: two web searches,
+ * `deep-browsed 0 layer(s)` of the single excellent source she found, no document, no commitment
+ * row — then "I'll compile a research brief once the sources load", which nothing in the system was
+ * ever going to make true. Lucas: "that paper never populated anywhere she never used the whole
+ * tool base, nothing."
+ *
+ * TWO causes, and the first was mine:
+ *
+ * 1. THE TOOL MENU WAS GONE FROM THE PACKAGE. I had gated it on `cloudOwnsAnswer` to avoid printing
+ *    it twice. classifyClaimType returns 'other' for a real request, so the flag was false and the
+ *    package shipped with no tools section at all:
+ *        before: identity:31492 plan:1740 manifest:2378 tools:4181
+ *        after:  identity:34260 plan:2082 references:366            ← gone
+ *    The cloud writes EVERY reply now, so it needs the tools on EVERY reply.
+ *
+ * 2. THE PLAN TREATED IT AS A QUESTION. The router already knew — "route=task (assignment, conf
+ *    0.8)" — but that signal never reached buildPlan, so a deliverable request was worked like
+ *    something answerable in a chat message. A chat message cannot hold a research paper.
+ */
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const P = require('../lib/package');
+
+let pass = 0, fail = 0;
+function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  FAIL:', msg); } }
+
+// ── the assignment plan ─────────────────────────────────────────────────────────────────────────
+{
+  const a = P.buildPlan({ intent: 'other', depth: { maxHops: 4 }, assignment: true });
+  const q = P.buildPlan({ intent: 'other', depth: { maxHops: 4 } });
+
+  ok(/THIS IS AN ASSIGNMENT, NOT A QUESTION/.test(a), 'an assignment is named as one');
+  ok(/the deliverable is the work and your reply is only the receipt/.test(a),
+    'the artifact — not the chat reply — is declared to be the work');
+  ok(/BREAK IT DOWN FIRST/.test(a) && /five parts needs five lines of coverage/.test(a),
+    'a multi-part request must be decomposed before searching — two searches for five parts is the bug');
+  ok(/that set is the shape of the work — say how many there are/.test(a),
+    'a set (29 countries) is recognised as a countable universe, not a single lookup');
+  ok(/GO DEEP, NOT WIDE/.test(a) && /a link you did not read is not research/.test(a),
+    'names the exact failure: deep-browsed 0 layers of the one good source');
+  ok(/PRODUCE THE ARTIFACT THIS TURN/.test(a), 'the document must be started now, not promised');
+  ok(/Partial and cited beats complete and promised/.test(a), 'partial-and-real beats whole-and-imaginary');
+
+  // SAFETY: delegation is a one-way door — nothing polls agent_inbox, so a delegated assignment
+  // leaves and never returns. Recommending it would manufacture the very failure this fixes.
+  ok(!/echo-delegate/.test(a),
+    'SAFETY: the assignment plan does NOT send work to <echo-delegate> — nothing collects its results');
+
+  ok(!/THIS IS AN ASSIGNMENT/.test(q), 'an ordinary question gets none of this');
+  ok(a.length > q.length, 'the assignment plan is strictly additive');
+  // the pre-existing honesty rules must survive alongside it
+  for (const rule of ['DO the thing — do not narrate it', 'NEVER say you did something', 'THE SUBJECT COMES FROM THE CONVERSATION']) {
+    ok(a.includes(rule), `the existing rule survives: "${rule.slice(0, 40)}…"`);
+  }
+}
+
+// ── the tool menu is in EVERY package ───────────────────────────────────────────────────────────
+{
+  const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/const suit = \(echoSuit && echoSuit\.connected\) \? echoSuit\.suitContextBlock\(\) : null;/.test(m),
+    'REGRESSION: the tool menu is no longer gated on cloudOwnsAnswer');
+  ok(!/echoSuit\.connected && cloudOwnsAnswer\) \? echoSuit\.suitContextBlock/.test(m),
+    'REGRESSION: the gate that deleted tools from every non-factual turn is gone');
+  ok(/identity: _identityWithoutSuit\(messages, suit\)/.test(m),
+    'and duplication is solved by lifting it OUT of identity, not by withholding it');
+  ok(/assignment: turnRoute && \(turnRoute\.route === 'task' \|\| isAssignment\)/.test(m),
+    'the router\'s existing assignment signal now reaches the plan');
+  ok(/does NOT report back, so never use it for something Lucas is waiting on/.test(m),
+    'SAFETY: the manifest labels the background agent honestly as fire-and-forget');
+}
+
+// ── the tools section actually survives the budget ──────────────────────────────────────────────
+{
+  const built = P.build({
+    window: { num_ctx: 131072, num_predict: 2048 },
+    sections: { identity: 'x'.repeat(34000), plan: P.buildPlan({ assignment: true }), references: 'r', manifest: 'm'.repeat(2400), tools: 'TOOLMENU ' + 't'.repeat(4200) },
+  });
+  const text = built.messages.map((s) => s.content).join('\n');
+  ok(/TOOLMENU/.test(text), 'the tool menu reaches the built package');
+  ok(text.indexOf('TOOLMENU') > text.indexOf('THIS IS AN ASSIGNMENT'),
+    'and sits AFTER the plan — near the end, where recency helps a model reach for a tool');
+  ok(P.ORDER.indexOf('tools') > P.ORDER.indexOf('plan'), 'the section order backs that up');
+}
+
+// ── identity de-duplication ─────────────────────────────────────────────────────────────────────
+{
+  // _identityWithoutSuit is defined in main.js; replicate its contract here against the real source.
+  const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const fn = m.slice(m.indexOf('function _identityWithoutSuit'), m.indexOf('async function runChatTurn'));
+  ok(/const i = text\.indexOf\(suit\);/.test(fn), 'it finds the suit inside the assembled identity');
+  ok(/i < 0 \? text :/.test(fn), 'SAFETY: a suit that is not present leaves identity untouched');
+  ok(/if \(!suit\) return text;/.test(fn), 'SAFETY: no suit at all → identity untouched');
+}
+
+console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
+process.exit(fail ? 1 : 0);

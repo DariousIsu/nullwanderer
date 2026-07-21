@@ -187,6 +187,7 @@ const smokes = [
   'smoke_references.js',
   'smoke_meeting_chat_gate.js',
   'smoke_scribe_append.js',
+  'smoke_assignment_plan.js',
   'smoke_self_narrative.js',
   'smoke_mood.js',
   'smoke_voice.js',

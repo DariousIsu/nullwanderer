@@ -121,11 +121,38 @@ function buildManifest(stores = [], { actions = [] } = {}) {
  * `depth` is a real budget the cloud is told about rather than left to guess: an unbounded agent
  * wanders and a silently-bounded one looks lazy.
  */
-function buildPlan({ intent = null, depth = {}, mustCite = false, unresolved = [] } = {}) {
+function buildPlan({ intent = null, depth = {}, mustCite = false, unresolved = [], assignment = false } = {}) {
   const maxHops = Number.isFinite(depth.maxHops) ? depth.maxHops : 3;
   const lines = [];
   lines.push('HOW TO WORK THIS TURN:');
   if (intent) lines.push(`• What is actually being asked: ${intent}`);
+  // ⭐ AN ASSIGNMENT IS NOT A QUESTION. Live 2026-07-21: "I need a research paper on the last nine
+  // months of China AI announcements…" — five distinct sub-questions, one of them a 29-nation
+  // rare-earth matrix. She ran TWO web searches, deep-browsed 0 layers of the one excellent source
+  // she found, wrote no document, and opened no commitment. Then said "I'll compile a research brief
+  // once the sources load", which nothing in the system was going to make true.
+  //
+  // The failure is that a request for a DELIVERABLE was worked like a question to be answered in
+  // chat. A chat reply cannot hold a research paper, so the reply is not the work — the artifact is.
+  if (assignment) {
+    lines.push('• ⭐ THIS IS AN ASSIGNMENT, NOT A QUESTION. Lucas asked for something to be MADE — a '
+      + 'paper, brief, sheet, list or memo. A chat message cannot hold it, so the deliverable is the '
+      + 'work and your reply is only the receipt.');
+    lines.push('• BREAK IT DOWN FIRST. Name every distinct part of what he asked for before you '
+      + 'search anything. A request with five parts needs five lines of coverage, not one search. If '
+      + 'part of it is a set (every country, every county, each element), that set is the shape of '
+      + 'the work — say how many there are.');
+    lines.push('• GO DEEP, NOT WIDE. One search that you actually READ beats five you only opened. '
+      + 'When a source is on-point, open it and pull the substance out; a link you did not read is '
+      + 'not research.');
+    // Deliberately does NOT recommend <echo-delegate>: nothing in this codebase polls agent_inbox, so
+    // a delegated run is a one-way door — the work leaves and no result ever returns. Sending an
+    // assignment there would manufacture exactly the invisible-work failure this block exists to fix.
+    lines.push('• PRODUCE THE ARTIFACT THIS TURN. Open a canvas tab and write what you have into it, '
+      + 'or emit a render recipe. Partial and cited beats complete and promised — a half-finished '
+      + 'document he can read and correct is worth more than a whole one he never sees. If you truly '
+      + 'cannot start it now, say exactly what is blocking you.');
+  }
   // ⚠️ "recipe" is Echo's word for a pre-validated DATA procedure (bill-detail, committee-roster,
   // lamp-count) and it collides badly with the ordinary meaning. Live 2026-07-20, asked for a burger
   // recipe, she emitted <echo-find>classic beef burger 80/20 chuck</echo-find> and Echo answered
