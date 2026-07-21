@@ -58,9 +58,17 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
   ok(/FILL IT IN as the material arrives/.test(a), 'stage 2 grows the same tab');
   ok(/An empty section with an honest "not researched yet" is information/.test(a),
     'a gap is declared rather than omitted');
-  ok(/FINISH IT when the substance is actually there/.test(a), 'stage 3 is the branded render');
-  ok(/Do NOT render an empty or half-empty document/.test(a),
-    'SAFETY: the finish step is gated on real content — rendering an empty brief would be the tidiest lie yet');
+  // ⭐ 2026-07-21, Lucas's correction to my design: "she only builds in her standard markdown in
+  // order to make it easier and then when the document is completed the user can request that it be
+  // packaged". Polishing is OPERATOR-TRIGGERED and applies the editor's house style; letting her
+  // format inside the build is how a half-finished document gets dressed up as a finished one.
+  ok(/STOP THERE/.test(a) && /Plain markdown is the finished form of YOUR job/.test(a),
+    'stage 3 is to STOP — plain markdown is her deliverable');
+  ok(/do not reach for a render\/briefing tool/.test(a), 'SAFETY: she does not invoke the packaging tools');
+  ok(/Lucas asks for it to be packaged and the house style is applied then/.test(a),
+    'packaging is named as HIS command, not hers');
+  ok(/Tell him it is ready for packaging; do not package it yourself/.test(a),
+    'and she is told what to say instead');
   ok(/Partial and cited beats complete and promised/.test(a), 'partial-and-real beats whole-and-imaginary');
 
   // SAFETY: delegation is a one-way door — nothing polls agent_inbox, so a delegated assignment
@@ -101,11 +109,12 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
     'and the exact valid block_type values, so there is nothing left to guess');
   ok(/block_type":"table","data":\{"headers"/.test(m), 'the table shape survives alongside it');
 
-  // The finished-document step: present in Echo the whole time, referenced nowhere, never once called.
-  ok(/FINISHED branded document/.test(m), 'the branded render is offered as a real capability');
-  ok(/saga_render_executive_briefing/.test(m) && /"executive_summary"/.test(m) && /"methodology"/.test(m),
-    'with its ACTUAL required fields — a capability with no key gets narrated instead of used');
-  ok(/saga_render_quick_hit · saga_render_op_ed/.test(m), 'and the shorter formats are named too');
+  // Packaging is listed in the manifest to be REFUSED, not offered.
+  ok(/NOT YOURS TO DO — write plain markdown and stop/.test(m),
+    'the manifest tells her packaging is not hers to invoke');
+  ok(/operator-triggered — no tag/.test(m), 'and gives her no tag for it');
+  ok(!/saga_render_executive_briefing/.test(m),
+    'SAFETY: the render tools are NOT dangled in the manifest — an available polish button gets pressed on an empty document');
 }
 
 // ── HER canvas writes are mirrored to the durable store ─────────────────────────────────────────

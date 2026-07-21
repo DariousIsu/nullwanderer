@@ -6625,12 +6625,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             { key: 'canvas document (prose)', label: 'a real tab on Lucas\'s canvas — THIS is how you deliver a paper, brief or memo. Write the WHOLE document in ONE add_block tag by listing every block as a JSON array; you do not get a separate turn per section', how: '<echo-do name="saga_canvas_open_tab">{"mode":"DOC","tab_key":"KEY","title":"TITLE"}</echo-do> then ONE tag containing every block: <echo-do name="saga_canvas_add_block">[{"tab_key":"KEY","block_type":"heading","data":{"level":2,"text":"Section title"}},{"tab_key":"KEY","block_type":"paragraph","data":{"markdown":"The prose, in markdown."}},{"tab_key":"KEY","block_type":"heading","data":{"level":2,"text":"Next section"}}]</echo-do>' },
             { key: 'canvas table', label: 'rows and columns on that same tab', how: '<echo-do name="saga_canvas_add_block">{"tab_key":"KEY","block_type":"table","data":{"headers":["A","B"],"rows":[["1","2"]],"caption":"optional"}}</echo-do>' },
             { key: 'valid block_type values', label: 'ONLY these — anything else is rejected; heading/paragraph/table/chart are the ones that actually render', how: 'heading · paragraph · list · code · table · chart · metric_card · callout · image · diagram · knowledge_graph · document_file · browser_snapshot · map · three · draft_review · citation · source_card' },
-            // ⭐ THE FINISHED, BRANDED DOCUMENT — the third stage Lucas described, and the one that was
-            // never wired: saga_render_* is referenced NOWHERE in this codebase and Echo reports zero
-            // successful calls, ever. The capability has existed the whole time with no key attached
-            // to it, which is the same reason the canvas got narrated instead of written.
-            { key: 'FINISHED branded document', label: 'the last step of an assignment — turns your working canvas doc into a formatted, citation-checked briefing (800-1500 words, needs 4+ citations)', how: '<echo-do name="saga_render_executive_briefing">{"title":"…","executive_summary":["3 bullets"],"background":"…","analysis":"…","implications":"…","recommendations":["3-5 items"],"methodology":"how you got this","citations":[{"title":"…","url":"…"}]}</echo-do>' },
-            { key: 'shorter finished formats', label: 'same idea, smaller — pick by what he asked for', how: 'saga_render_quick_hit · saga_render_op_ed · saga_render_verification · saga_render_citation_pack (call describe_tool for a schema)' },
+            // PACKAGING IS NOT HERS TO INVOKE. Lucas, 2026-07-21: she builds in plain markdown; when
+            // the content is right HE asks for it to be packaged, and the house style is applied then
+            // from the editor's certification path. Listing the render tools here as an option is how
+            // a half-finished document gets dressed up as a finished one — so the entry exists to say
+            // "not yours", not to offer it.
+            { key: 'packaging / branding', label: 'NOT YOURS TO DO — write plain markdown and stop. Lucas asks for packaging when the content is right, and the house style is applied then. Say it is ready for packaging; never format or brand it yourself', how: '(operator-triggered — no tag)' },
             // Listed honestly: nothing polls agent_inbox, so a delegated run never reports back.
             // Offering it as an equal option to the canvas is how an assignment gets "handed off"
             // into silence and then described as underway.

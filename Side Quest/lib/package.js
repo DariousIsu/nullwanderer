@@ -159,9 +159,15 @@ function buildPlan({ intent = null, depth = {}, mustCite = false, unresolved = [
     lines.push('   2. FILL IT IN as the material arrives — one heading + paragraph per section, added '
       + 'to the SAME tab. An empty section with an honest "not researched yet" is information; a '
       + 'missing section is not. Partial and cited beats complete and promised.');
-    lines.push('   3. FINISH IT when the substance is actually there — render the formatted, '
-      + 'citation-checked version (see "FINISHED branded document" below). Do NOT render an empty or '
-      + 'half-empty document: that step is for turning real work into something he can send.');
+    // ⭐ NO POLISHING. Lucas, 2026-07-21: "she only builds in her standard markdown in order to make
+    // it easier and then when the document is completed the user can request that it be packaged".
+    // Packaging is a SEPARATE, OPERATOR-TRIGGERED step that applies the Rainey style guide from the
+    // editor's certification path — it is not hers to invoke, and trying to format inside the build
+    // is how a half-finished document gets dressed up as a finished one.
+    lines.push('   3. STOP THERE. Plain markdown is the finished form of YOUR job — headings, '
+      + 'paragraphs, lists, tables. Do NOT try to brand, style or "polish" it, and do not reach for a '
+      + 'render/briefing tool. When the content is right, Lucas asks for it to be packaged and the '
+      + 'house style is applied then. Tell him it is ready for packaging; do not package it yourself.');
     lines.push('• If you truly cannot start it now, say exactly what is blocking you.');
   }
   // ⚠️ "recipe" is Echo's word for a pre-validated DATA procedure (bill-detail, committee-roster,
