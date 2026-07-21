@@ -12,8 +12,12 @@
  *   SELF-EDGES     after rewiring, an edge between the two merged rows points at itself. Dropped.
  *   COLLISIONS     graph_relations is UNIQUE(source,target,type), so a rewire onto an edge that already
  *                  exists must be dropped rather than left to throw mid-transaction.
- *   CITATIONS      graph_citations.fact_id points at entity rows. Left behind, the evidence for a fact
- *                  stops resolving — and an uncited fact is exactly what this system refuses to keep.
+ *   CITATIONS      graph_citations keys on RELATION ids, not entity ids (measured: 27,286 rows, all
+ *                  fact_kind='relation'). So the citation hazard is not the absorbed entity — it is the
+ *                  duplicate RELATIONS dropped on the UNIQUE collision above. The first apply left 2
+ *                  citations pointing at relations it had just deleted. Evidence that resolves to
+ *                  nothing is precisely what this system refuses to keep, so a collided relation now
+ *                  hands its citations to the surviving twin BEFORE it is dropped.
  *
  * NOTHING IS GUESSED HERE. Every merge comes from a shared strong identifier or a bare name binding to
  * its single id-bearing twin, past all three of the planner's gates. Everything else prints under REVIEW
@@ -69,19 +73,41 @@ const stmts = {
   dropSrc: d.prepare('DELETE FROM graph_relations WHERE source_id = ?'),
   dropTgt: d.prepare('DELETE FROM graph_relations WHERE target_id = ?'),
   dropSelf: d.prepare('DELETE FROM graph_relations WHERE source_id = target_id'),
-  cite: d.prepare(`UPDATE OR IGNORE graph_citations SET fact_id = ? WHERE fact_kind = 'entity' AND fact_id = ?`),
-  dropCite: d.prepare(`DELETE FROM graph_citations WHERE fact_kind = 'entity' AND fact_id = ?`),
+  // A relation about to be dropped (self-edge or UNIQUE collision) hands its citations to the relation
+  // that survives in its place — matched on the endpoints, so the evidence still points at the same fact.
+  survivor: d.prepare(`SELECT id FROM graph_relations
+                        WHERE source_id = ? AND target_id = ? AND relation_type = ? AND id <> ? LIMIT 1`),
+  doomed: d.prepare(`SELECT id, source_id, target_id, relation_type FROM graph_relations
+                      WHERE source_id = ? OR target_id = ? OR source_id = target_id`),
+  moveCite: d.prepare(`UPDATE OR IGNORE graph_citations SET fact_id = ? WHERE fact_kind = 'relation' AND fact_id = ?`),
+  dropCite: d.prepare(`DELETE FROM graph_citations WHERE fact_kind = 'relation' AND fact_id = ?`),
   del: d.prepare('DELETE FROM graph_entities WHERE id = ?'),
 };
+
+// Hand a doomed relation's citations to its surviving twin, then drop whatever could not be rehomed —
+// a citation to a row that no longer exists is worse than no citation, because it reads as evidence.
+function rescueCitations(relId, src, tgt, type) {
+  const surv = stmts.survivor.get(src, tgt, type, relId);
+  let moved = 0;
+  if (surv) moved = stmts.moveCite.run(surv.id, relId).changes;
+  stmts.dropCite.run(relId);
+  return moved;
+}
 
 let rewired = 0, citesMoved = 0, dropped = 0;
 d.transaction(() => {
   for (const m of plan.merges) {
-    citesMoved += stmts.cite.run(m.into, m.from).changes;
-    stmts.dropCite.run(m.from);                       // UPDATE OR IGNORE left the collisions behind
     rewired += stmts.relSrc.run(m.into, m.from).changes + stmts.relTgt.run(m.into, m.from).changes;
-    stmts.dropSrc.run(m.from); stmts.dropTgt.run(m.from);   // whatever collided on the UNIQUE index
+    // Everything still touching the absorbed row collided on the UNIQUE index and is about to go.
+    for (const r of stmts.doomed.all(m.from, m.from)) {
+      citesMoved += rescueCitations(r.id, r.source_id === m.from ? m.into : r.source_id,
+        r.target_id === m.from ? m.into : r.target_id, r.relation_type);
+    }
+    stmts.dropSrc.run(m.from); stmts.dropTgt.run(m.from);
     dropped += stmts.del.run(m.from).changes;
+  }
+  for (const r of d.prepare('SELECT id, source_id, target_id, relation_type FROM graph_relations WHERE source_id = target_id').all()) {
+    stmts.dropCite.run(r.id);                        // a self-edge has no surviving twin to inherit it
   }
   stmts.dropSelf.run();
 })();
@@ -93,4 +119,7 @@ const dang = d.prepare(`SELECT COUNT(*) c FROM graph_relations r
                             OR NOT EXISTS (SELECT 1 FROM graph_entities e WHERE e.id = r.target_id)`).get();
 console.log(`dangling relation endpoints after the merge: ${dang.c}  ${dang.c ? '← INVESTIGATE' : '(clean)'}`);
 console.log(`self-edges: ${d.prepare('SELECT COUNT(*) c FROM graph_relations WHERE source_id = target_id').get().c}`);
+const orphanCites = d.prepare(`SELECT COUNT(*) c FROM graph_citations gc WHERE gc.fact_kind = 'relation'
+                                AND NOT EXISTS (SELECT 1 FROM graph_relations r WHERE r.id = gc.fact_id)`).get();
+console.log(`citations pointing at a relation that no longer exists: ${orphanCites.c}  ${orphanCites.c ? '← INVESTIGATE' : '(clean)'}`);
 process.exit(0);
