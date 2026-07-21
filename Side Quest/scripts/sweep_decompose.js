@@ -135,7 +135,8 @@ const SOURCES = (arg('--sources', null) || '').split(',').map((s) => s.trim()).f
       try { const e = _encLib.toEncounter(o, prov); if (e && _encounters.record(e)) enc += 1; } catch {}
       try { const t = _encLib.toTypeClaim(o, prov); if (t) objectType.recordType(t); } catch {}
     };
-    const { chunks } = require('../lib/contact_extract').chunkForExtraction(String(row.body));
+    // The chunk must fit the prompt window, not a legacy 6k default — see decomp_lane EXTRACT_NUM_CTX.
+    const { chunks } = require("../lib/contact_extract").chunkForExtraction(String(row.body), { size: 100000 });
     let minted = 0, reused = 0, held = 0;
     for (const chunk of chunks) {
       try {

@@ -18,15 +18,40 @@ const doc_decompose = require('./doc_decompose');
 // Build a cloud-model TYPED extractor (mirrors monologue's cloud()). `completeFn` = ollama.completeDetailed
 // (injected). `buildPrompt` is the per-stream guidelines seam — default is the generic typed prompt; a
 // stream that wants tailored rules passes its own. Returns extract(text,{title}) → { entities, relations }.
-function makeCloudExtractor({ completeFn, model, base = undefined, token = null, buildPrompt = doc_decompose.buildTypedPrompt, parse = doc_decompose.parseTypedExtraction, numPredict = 400, timeoutMs = 120000, adjudicateTypes = undefined } = {}) {
+/**
+ * ── ARTIFICIAL CAPS TRUNCATE EXTRACTIONS. MEASURED, NOT ASSUMED. ────────────────────────────────
+ *
+ * Lucas: *"we just need to make sure there are not artificial caps on token send truncating requests."*
+ * `gemma4:31b-cloud` reports `context_length = 262144`. Every cap in this path sat far beneath it, and
+ * the output cap was actively cutting extractions mid-sentence. Run on the same document:
+ *
+ *   num_predict=400   → 1,637 chars, ends `"REL: Sarah Hunt | WORKS"`   13 relations parsed
+ *   num_predict=3000  → 1,825 chars, complete final line               16 relations parsed
+ *
+ * Three relations silently lost per document, on a cap set for a model generation ago. The default now
+ * follows config.deepNumPredict (3,000), and num_ctx follows the model rather than a fixed 32,768.
+ */
+function makeCloudExtractor({ completeFn, model, base = undefined, token = null, buildPrompt = doc_decompose.buildTypedPrompt, parse = doc_decompose.parseTypedExtraction, numPredict = null, timeoutMs = 120000, adjudicateTypes = undefined, numCtx = null } = {}) {
+  if (numPredict == null) { try { numPredict = require('./config').deepNumPredict(); } catch { numPredict = 3000; } }
   // Default the adjudicator to the same model/endpoint, so the live lane gets it without a call-site
   // change. Pass `adjudicateTypes: null` to switch it off.
   if (adjudicateTypes === undefined) adjudicateTypes = makeTypeAdjudicator({ completeFn, model, base, token });
-  const _ctx = (() => { try { return require('./config').deepNumCtx(); } catch { return 8192; } })();   // ingest BIG doc chunks, not a 1/16th window
+  // THE PROMPT IS SIZED TO THE WINDOW — not the window forced up to fit the prompt.
+  //
+  // Chunk characters must fit inside num_ctx tokens or the server silently truncates the front of the
+  // prompt, which is the very bug being fixed and the hardest place to notice it. The first cut raised
+  // num_ctx with Math.max and broke smoke_deep_budgets — correctly, because ZOE_DEEP_NUM_CTX is a
+  // configured value and code that overrides configuration is not honouring it.
+  //
+  // So the window is whatever the caller or config says, and the DOCUMENT SLICE is derived from it at a
+  // deliberately conservative 3 chars/token (English prose runs ~4; dense legal text with citations and
+  // numbers runs worse), leaving a fifth of the window for the instructions and the reply.
+  const _ctx = numCtx || (() => { try { return require('./config').deepNumCtx(); } catch { return 32768; } })();
+  const _promptChars = Math.max(6000, Math.floor(_ctx * 3 * 0.8));
   return async (text, { title } = {}) => {
     if (typeof completeFn !== 'function' || !model) return { entities: [], relations: [] };
     const out = await completeFn({
-      model, messages: buildPrompt(text, { title }), base,
+      model, messages: buildPrompt(text, { title, maxChars: _promptChars }), base,
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       options: { temperature: 0.2, top_p: 0.9, num_ctx: _ctx, num_predict: numPredict },
       think: false, timeoutMs,

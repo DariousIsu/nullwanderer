@@ -76,7 +76,17 @@ const stripLead = (s) => String(s == null ? '' : s).trim().replace(/^[-*\d.)\s]+
 // Build the typed-extraction prompt. Emits two line kinds so a small model has a rigid target:
 //   ENTITY: <name> :: <type>
 //   REL: <source> | <RELATION> | <target>
-function buildTypedPrompt(text, { title = null } = {}) {
+// ── NO ARTIFICIAL CAPS. The model reports context_length = 262144. ──────────────────────────────
+//
+// This prompt carried three limiters that had nothing to do with the model's real capability: it sliced
+// the document to 6,000 characters and asked for at most 20 entities and 20 relations. A county budget
+// or a federal injunction states far more than 20 facts, so the rest were never even requested — a
+// ceiling on how much could be learned from a document already paid for and fetched.
+//
+// `maxLines` and `maxChars` are parameters now, with generous defaults. Still BOUNDED: an unbounded ask
+// invites padding, and parseTypedExtraction must agree with whatever is requested here or the surplus is
+// silently discarded at the parser instead of at the model.
+function buildTypedPrompt(text, { title = null, maxLines = 120, maxChars = 120000 } = {}) {
   const head = title ? `Document title: ${title}\n\n` : '';
   return [{
     role: 'user',
@@ -92,10 +102,10 @@ Use "concept" for an abstract topic, policy area, field, or named idea/movement 
 <when> is the year or year-range the text says this became/was true (e.g. "2023", "2015–2019", "since 2020"). Leave it EMPTY if the text gives no date — never guess a date.
 Names must be CONCRETE NAMED ENTITIES (a person, org, place, event, bill) — never a pronoun, never a whole sentence.
 Only what the text STATES — do NOT infer, generalize, or invent. Every REL's source and target should also appear as an ENTITY line.
-Max 20 ENTITY lines and 20 REL lines. If there are none, output exactly: NONE
+Max ${maxLines} ENTITY lines and ${maxLines} REL lines. If there are none, output exactly: NONE
 
 ${head}DOCUMENT:
-${String(text || '').slice(0, 6000)}`
+${String(text || '').slice(0, maxChars)}`
   }];
 }
 
@@ -119,7 +129,9 @@ function _parseValidTime(s) {
 // Parse the model output into { entities:[{name,type}], relations:[{source,relation,target,valid_from,valid_to}] }.
 // Rejects slop (pronouns, sentences, malformed relations). Dedups entities by lowercased name. Caps volume.
 // REL lines carry an OPTIONAL 4th pipe field — the valid-time the text states — parsed to years.
-function parseTypedExtraction(raw, { maxEntities = 25, maxRelations = 25 } = {}) {
+// The parser's ceiling must not sit BELOW what the prompt asked for, or the model's extra work is
+// discarded here after being generated. Kept in step with buildTypedPrompt's maxLines.
+function parseTypedExtraction(raw, { maxEntities = 120, maxRelations = 120 } = {}) {
   const entities = [], relations = [];
   const seenE = new Set(), seenR = new Set();
   for (const line of String(raw == null ? '' : raw).split('\n')) {
