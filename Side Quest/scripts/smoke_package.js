@@ -181,7 +181,9 @@ const rep = (r, name) => r.report.sections.find((s) => s.name === name);
 
 // ── section order is stable and complete ─────────────────────────────────────────────────────────
 {
-  ok(P.ORDER.join(',') === 'identity,request,plan,manifest,tools,memory,grounding', 'survival order is pinned');
+  // `references` added 2026-07-21 — what the NAMES mean has to arrive before any section that talks
+  // about them, so it sits straight after the plan and ahead of manifest/tools/memory/grounding.
+  ok(P.ORDER.join(',') === 'identity,request,plan,references,manifest,tools,memory,grounding', 'survival order is pinned');
   ok([...P.UNTRIMMABLE].every((n) => P.ORDER.includes(n)), 'every untrimmable section is in the order');
   const wsum = Object.values(P.WEIGHTS).reduce((a, b) => a + b, 0);
   ok(wsum < 1, 'weights leave headroom for the tool results the cloud will pull');

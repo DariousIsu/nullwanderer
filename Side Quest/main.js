@@ -6601,10 +6601,30 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // was wrong: that meta is unset, a null model returns the 8192 floor, and the package was
         // cut to 22,118 chars while the real call ran at 131,072 — the manifest and tool menu were
         // trimmed to their own trim-markers and the cloud answered with no tools.
+        // REFERENCES — what the NAMES in his message point at. intake.decompose already returns the
+        // full {objects, relations, constraints} plan; the chat path used to collapse it to a single
+        // mention (mention._pickObject) and drop the rest, so "the Rainey all-hands, then Electrify
+        // America at 1630" resolved at most one of four references and the prompt had nowhere to put
+        // a second one. Owner vocabulary leads the resolver because the graph is measurably WRONG on
+        // his own shorthand — "Rainey" best-ranks to a summit event.
+        //
+        // Cost control: decomposition is a cloud call, so it runs only when the message plausibly
+        // NAMES something (a capitalized run or a meeting word). "ok thanks" pays nothing.
+        let references = '';
+        try {
+          if (/(?:^|\s)[A-Z][A-Za-z'&.-]+(?:\s+[A-Z][A-Za-z'&.-]+)*/.test(userMessage) || require('./lib/references').MEETING_RE.test(userMessage)) {
+            const intake = require('./lib/intake');
+            const raw = await intake.decompose(userMessage, { recent: (recentTurns || []).slice(-4).map((t) => `${t.speaker || '?'}: ${String(t.content || '').replace(/\s+/g, ' ').slice(0, 160)}`).join('\n') });
+            const objects = (raw && Array.isArray(raw.objects)) ? raw.objects.filter((o) => o && o.op === 'resolve') : [];
+            const rb = await require('./lib/references').build(userMessage, { objects });
+            references = rb.text || '';
+            if (references) console.log(`[references] ${rb.refs.filter((r) => r.status === 'resolved').length} resolved / ${rb.refs.filter((r) => r.status !== 'resolved').length} open${rb.series.length ? ` · ${rb.series.length} recurring series` : ''}`);
+          }
+        } catch (e) { console.error('[main] references failed:', e.message); }
         const _win = await require('./lib/cloud_logic').resolveWindow(db.getMeta('model.replier') || null);
         const built = pkg.build({
           window: _win || {},
-          sections: { identity: messages.map((m) => m.content).join('\n\n'), plan, manifest, tools: suit || '' },
+          sections: { identity: messages.map((m) => m.content).join('\n\n'), plan, references, manifest, tools: suit || '' },
         });
         cloudMessages = built.messages;
         console.log(`[package] ${pkg.describe(built.report)}`);

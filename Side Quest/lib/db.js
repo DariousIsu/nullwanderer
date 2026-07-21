@@ -2241,6 +2241,15 @@ function getTranscriptSince(ts, limit = 2000) {
 function countTranscriptSince(ts) {
   return getDb().prepare('SELECT COUNT(*) AS n FROM meeting_transcript WHERE ts >= ?').get(ts || 0).n;
 }
+// Speaker+timestamp only, across every real meeting — the raw material for "which meetings recur, and
+// who is actually in them" (lib/references). Text is deliberately NOT selected: the roster and the
+// cadence are all the reference block needs, and 4,398 transcript bodies is not something to load to
+// answer "who's in the weekly all hands". 'media:%' rows are video captures, not meetings.
+function getMeetingRosterRows(limit = 50000) {
+  return getDb().prepare(
+    "SELECT meeting, speaker, ts FROM meeting_transcript WHERE meeting IS NOT NULL AND meeting NOT LIKE 'media:%' ORDER BY ts DESC LIMIT ?"
+  ).all(limit);
+}
 
 function graphCounts() {
   const one = (t) => getDb().prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n;
@@ -2415,5 +2424,6 @@ module.exports = {
   getTranscriptSince,
   getTranscriptForMeeting,
   countTranscriptSince,
+  getMeetingRosterRows,
   DB_PATH
 };

@@ -39,9 +39,14 @@ const CHARS_PER_TOKEN = 4;          // rough, deliberately conservative
 // Share of the INPUT budget each section may claim. Untrimmable sections are small and bounded by
 // what they are; the weights govern the rest. They intentionally sum to less than 1 — headroom for
 // the tool results the cloud will pull, which is the whole reason it has a window.
-const WEIGHTS = { manifest: 0.08, tools: 0.14, memory: 0.18, grounding: 0.40 };
+const WEIGHTS = { references: 0.06, manifest: 0.08, tools: 0.14, memory: 0.16, grounding: 0.36 };
 const UNTRIMMABLE = new Set(['identity', 'request', 'plan']);
-const ORDER = ['identity', 'request', 'plan', 'manifest', 'tools', 'memory', 'grounding'];
+// `references` sits directly after the plan and before everything retrieved: it says WHAT THE NAMES
+// MEAN, so it has to arrive before any section that talks about them. It is the cheapest section in
+// the package — a handful of lines — and the one that decides whether the rest is about the right
+// subject at all. Its budget comes off memory and grounding, which are the two that degrade
+// gracefully; a wrong subject does not degrade gracefully.
+const ORDER = ['identity', 'request', 'plan', 'references', 'manifest', 'tools', 'memory', 'grounding'];
 
 // FLOORS — a section that exists is never cut below something USABLE.
 //
@@ -55,7 +60,10 @@ const ORDER = ['identity', 'request', 'plan', 'manifest', 'tools', 'memory', 'gr
 // last things that should ever be squeezed. Below its floor a section is dropped ENTIRELY rather
 // than delivered as a stub: a truncated tool menu invites calls to tools that aren't listed, which
 // is worse than none.
-const FLOORS = { manifest: 400, tools: 1200, memory: 300, grounding: 300 };
+// `references` floors high relative to its size: a HALF-delivered reference list is actively
+// dangerous — the trimmed-off entries are the ones she then guesses at, which is the exact failure
+// ("Rainey" → a summit event) the section exists to prevent. Below its floor it is dropped whole.
+const FLOORS = { references: 500, manifest: 400, tools: 1200, memory: 300, grounding: 300 };
 
 /** Usable INPUT chars: the window, less the reply budget, less a safety margin. */
 function inputBudgetChars({ num_ctx = 8192, num_predict = 2048, margin = 0.9 } = {}) {
