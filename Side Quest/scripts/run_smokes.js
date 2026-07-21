@@ -86,6 +86,7 @@ const smokes = [
   'smoke_object_type.js',
   'smoke_mint_type.js',
   'smoke_id_scheme_type.js',
+  'smoke_birth_context.js',
   'smoke_wikidata_type.js',
   'smoke_curation_gate.js',
   'smoke_curation_store.js',

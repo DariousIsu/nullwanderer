@@ -38,6 +38,29 @@ const db = require('../lib/db');
 const ot = require('../lib/object_type');
 const wt = require('../lib/wikidata_type');
 const mt = require('../lib/mint_type');
+const bc = require('../lib/birth_context');
+
+// P131 "located in the administrative territorial entity" → the US state QIDs. A candidate PLACE whose
+// state contradicts where the object was born is thrown out: that is Lucas's rough edge doing its one
+// job. Enumerated because a bounded, checkable table beats another lookup round-trip.
+const STATE_QID = {
+  Q173: 'al', Q797: 'ak', Q816: 'az', Q1612: 'ar', Q99: 'ca', Q1261: 'co', Q779: 'ct', Q1393: 'de',
+  Q812: 'fl', Q1428: 'ga', Q782: 'hi', Q1221: 'id', Q1204: 'il', Q1415: 'in', Q1546: 'ia', Q1558: 'ks',
+  Q1603: 'ky', Q1588: 'la', Q724: 'me', Q1391: 'md', Q771: 'ma', Q1166: 'mi', Q1527: 'mn', Q1494: 'ms',
+  Q1581: 'mo', Q1212: 'mt', Q1553: 'ne', Q1227: 'nv', Q759: 'nh', Q1408: 'nj', Q1522: 'nm', Q1384: 'ny',
+  Q1454: 'nc', Q1207: 'nd', Q1397: 'oh', Q1649: 'ok', Q824: 'or', Q1400: 'pa', Q1387: 'ri', Q1456: 'sc',
+  Q1211: 'sd', Q1509: 'tn', Q1439: 'tx', Q829: 'ut', Q16551: 'vt', Q1370: 'va', Q1223: 'wa',
+  Q1371: 'wv', Q1537: 'wi', Q1214: 'wy', Q61: 'dc',
+};
+const candidateState = (claims) => {
+  for (const p of ['P131', 'P276']) {
+    for (const c of (claims && claims[p]) || []) {
+      const id = c.mainsnak && c.mainsnak.datavalue && c.mainsnak.datavalue.value && c.mainsnak.datavalue.value.id;
+      if (id && STATE_QID[id]) return { state: STATE_QID[id], via: `${p}=${id}` };
+    }
+  }
+  return null;
+};
 
 db.init();
 const APPLY = process.argv.includes('--apply');
@@ -86,7 +109,7 @@ const titlesUrl = (titles, props) => 'https://www.wikidata.org/w/api.php?action=
   for (const e of rows) { const n = String(e.name).trim(); if (!byName.has(n)) byName.set(n, []); byName.get(n).push(e); }
   const names = [...byName.keys()];
 
-  const build = []; const refused = {}; const accepted = [];
+  const build = []; const refused = {}; const accepted = []; const heldByContext = [];
   const bump = (k) => { refused[k] = (refused[k] || 0) + 1; };
 
   for (let i = 0; i < names.length; i += 50) {
@@ -123,6 +146,18 @@ const titlesUrl = (titles, props) => 'https://www.wikidata.org/w/api.php?action=
       const r = wt.typeFromP31(p31);
       if (!r) { bump(p31.length ? 'P31 class not in the map — held' : 'no P31 on the entity'); continue; }
       if (!r.type) { bump(r.why); continue; }
+
+      // THE ROUGH EDGE. Where this object was BORN constrains what it can plausibly be. A candidate
+      // located in another state contradicts the birth jurisdiction, and a contradicted reading is
+      // refused outright — the prior may cost us a resolution, it may never manufacture one.
+      const cand = candidateState(e.claims);
+      const ctx = bc.birthContextByLabel(owners[0].name, { db });
+      const birthJ = ctx && ctx.jurisdiction;
+      if (bc.contradicts(birthJ, cand)) {
+        heldByContext.push({ name: owners[0].name, born: birthJ.state, candidate: cand.state, via: cand.via, qid: e.id });
+        bump(`candidate is in a different state than where the object was born — held (rough edge)`);
+        continue;
+      }
 
       accepted.push({ name: title, type: r.type, qid: e.id });
       for (const o of owners) {
