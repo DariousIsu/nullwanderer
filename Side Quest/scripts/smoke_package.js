@@ -113,6 +113,26 @@ const rep = (r, name) => r.report.sections.find((s) => s.name === name);
   // ran all day. A wrong fact can be corrected; a described-but-untaken action is unverifiable.
   ok(/DO the thing — do not narrate it/.test(p), 'commands the tag be EMITTED, not described');
   ok(/Emitting the tag IS the action/.test(p), 'names the distinction explicitly');
+  // ⭐ WHERE the tags go was never stated, and that is why "do the thing" kept failing on turns where
+  // she plainly intended to act. Live 2026-07-21 her interior read "- Create a Canvas document… -
+  // Add an introductory paragraph block… Executing actions now." and she emitted ZERO tags: the
+  // <think>/<say> contract she was given had no slot for one.
+  ok(/WHERE THE TAGS GO: AFTER the closing <\/say>/.test(p), 'the tag position is stated');
+  ok(/Not inside <think> — thinking about a tag does not run it/.test(p),
+    'and thinking about an action is distinguished from taking it');
+  ok(/emitted no tag after <\/say> did nothing at all/.test(p),
+    'a described-but-untagged action is named as nothing at all');
+  // the position must actually work: say stays clean, the turn is NOT flagged truncated, tags parse
+  {
+    const { TagStreamParser } = require('../lib/ollama');
+    const es = require('../lib/echo_suit');
+    const out = '<think>t</think><say>Starting now.</say>\n<echo-do name="saga_canvas_open_tab">{"tab_key":"k"}</echo-do>';
+    const parser = new TagStreamParser({});
+    parser.feed(out);
+    ok(parser.say.trim() === 'Starting now.', 'a tag after </say> does not pollute what Lucas reads');
+    ok(parser.mode === 'post', 'SAFETY: and the turn is NOT flagged truncated for ending in tags');
+    ok(es.parseEchoTags(out).length === 1, 'and the tag is still dispatched');
+  }
   // 2026-07-21 — REWRITTEN, because the old rule was unsatisfiable. It asked her to wait until she
   // "saw the result", but the reply is composed at main.js:6700 and the tags dispatch at :7350,
   // afterwards: seeing the result in the same message is architecturally impossible. Three false

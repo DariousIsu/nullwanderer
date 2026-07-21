@@ -213,6 +213,16 @@ function buildPlan({ intent = null, depth = {}, mustCite = false, unresolved = [
   lines.push('• DO the thing — do not narrate it. To put something on the canvas, run a query, open '
     + 'a page or produce a document, EMIT THE TAG. The result comes back to you and you report it '
     + 'THEN. Emitting the tag IS the action; describing it is not.');
+  // ⭐ WHERE THE TAGS GO. This was never stated, and it is why "do the thing" kept failing on turns
+  // where she plainly intended to act. Live 2026-07-21: her interior read "- Create a Canvas
+  // document… - Add an introductory paragraph block… Executing actions now." and then emitted ZERO
+  // tags. She was given a strict <think>/<say> output contract and a tool vocabulary, but no slot in
+  // that contract for a tool tag — so the plan went in <think>, the reply went in <say>, and there
+  // was nowhere left for the action. Naming the position is the whole fix.
+  lines.push('• WHERE THE TAGS GO: AFTER the closing </say>, each on its own line, at the very end '
+    + 'of your output. Not inside <think> — thinking about a tag does not run it. Not inside <say> — '
+    + 'that is what Lucas reads. A turn where you decided to act and emitted no tag after </say> did '
+    + 'nothing at all, however clearly you described it.');
   // ⭐ WHY THE PAST TENSE IS ALWAYS WRONG HERE, stated as the mechanical fact it is rather than as an
   // exhortation. Your reply is composed and finished BEFORE any tag in it is dispatched (main.js:6700
   // writes the reply; the tags run at :7350, afterwards, in the background). So a completion claim in
