@@ -22,6 +22,15 @@ ok(M.parseEntity({ name: 'CITY OF SACRAMENTO [lda_client:119039]', type: 'organi
 ok(M.parseEntity({ name: 'Elizabeth Mathis [M000244]' }).ids.bioguide === 'M000244', 'parse: [M######] → bioguide id');
 ok(M.parseEntity({ name: 'Melissa Hurtado [FEC:H4CA22120]' }).ids.fec === 'H4CA22120', 'parse: FEC CANDIDATE id [FEC:H…] → fec (not just committee C-ids)');
 ok(M.parseEntity({ name: 'Donald Rumsfeld [R000508]' }).ids.bioguide === 'R000508', 'parse: bioguide with a non-M letter [R######] → bioguide');
+// THE Q COLLISION. A bioguide code for a surname starting with Q looks exactly like a bare QID, and the
+// bare-Q rule ran first — so Quackenbush [Q000001], Quayle [Q000024], Quezon, Quigg, Quie, Quarles and
+// Quay were all parsed as Wikidata entities. Caught when Wikidata rejected an entire 50-id batch as
+// no-such-entity. A real QID never has a leading zero.
+ok(M.parseEntity({ name: 'Ben Quayle [Q000024]' }).ids.bioguide === 'Q000024',
+  'CRITICAL: a Q-surname bioguide code is a BIOGUIDE, not a QID');
+ok(M.parseEntity({ name: 'Ben Quayle [Q000024]' }).ids.wikidata === undefined, '…and is not also claimed as wikidata');
+ok(M.parseEntity({ name: 'Duke Energy [Q1264404]' }).ids.wikidata === 'Q1264404', 'a real QID still parses');
+ok(M.parseEntity({ name: 'X [wd:Q2283]' }).ids.wikidata === 'Q2283', 'the wd: prefix stays authoritative');
 ok(dec(P('Melissa Hurtado [FEC:H4CA22120]'), P('M. Hurtado [FEC:H4CA22120]')) === 'match', 'strong-id: same FEC candidate id → MATCH despite surface diff');
 ok(M.parseEntity(P('Chang (HI)')).given === null && M.parseEntity(P('Chang (HI)')).surname === 'Chang', 'parse: single-token person = surname only (no fabricated given)');
 

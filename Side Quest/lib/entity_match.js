@@ -41,7 +41,12 @@ function parseEntity(rec = {}) {
   // pull bracket tags → strong ids
   let s = raw.replace(/\[([^\]]+)\]/g, (_m, inner) => {
     const t = String(inner).trim(); let m;
-    if ((m = /^wd:(Q\d+)$/i.exec(t)) || (m = /^(Q\d+)$/i.exec(t))) ids.wikidata = m[1].toUpperCase();
+    // A BARE `Q…` IS AMBIGUOUS. A Wikidata QID never has a leading zero; a bioguide code is a letter
+    // plus six digits, so every member of Congress whose surname starts with Q — Quackenbush [Q000001],
+    // Quayle [Q000024], Quezon, Quigg, Quie, Quarles, Quay — was being parsed as a Wikidata entity
+    // because this rule ran first. Found when Wikidata rejected the whole 50-id batch as no-such-entity.
+    // `wd:` stays authoritative; a bare Q requires a non-zero first digit so bioguide codes fall through.
+    if ((m = /^wd:(Q\d+)$/i.exec(t)) || (m = /^(Q[1-9]\d*)$/i.exec(t))) ids.wikidata = m[1].toUpperCase();
     else if ((m = /^(?:FEC:)?(C\d{7,})$/i.exec(t))) ids.fec = m[1].toUpperCase();                 // FEC committee (C0…)
     else if ((m = /^(?:FEC:)?([HSP]\d[A-Z]{2}\d{3,})$/i.exec(t))) ids.fec = m[1].toUpperCase();     // FEC candidate (H4CA22120)
     else if ((m = /^([A-Z]\d{6})$/.exec(t))) ids.bioguide = m[1].toUpperCase();                     // bioguide (R000508, any letter)

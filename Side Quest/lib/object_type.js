@@ -83,13 +83,19 @@ function recordType({ label, type, sourceKind = 'document', sourceRef = null, or
   });
 }
 
+// ALREADY-KNOWN IS NOT REFUSED. `encounters.record` returns 0 for a claim already on file and null for
+// one it would not accept; collapsing both into "refused" made a re-run of the id-scheme backfill report
+// "7 recorded, 2,123 refused", which reads as mass rejection when 2,123 were simply already there. The
+// log is append-only and idempotent by design, so re-recording is the NORMAL case, not a failure.
 function recordMany(rows = []) {
-  let added = 0, refused = 0;
+  let added = 0, alreadyKnown = 0, refused = 0;
   for (const r of (Array.isArray(rows) ? rows : [])) {
     const id = recordType(r);
-    if (id) added += 1; else refused += 1;
+    if (id) added += 1;
+    else if (id === 0) alreadyKnown += 1;
+    else refused += 1;
   }
-  return { added, refused, total: Array.isArray(rows) ? rows.length : 0 };
+  return { added, alreadyKnown, refused, total: Array.isArray(rows) ? rows.length : 0 };
 }
 
 // What kind of thing is this, on the evidence? Returns the graded winner plus every rival, retained.

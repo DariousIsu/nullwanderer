@@ -69,7 +69,7 @@ if (!APPLY) { console.log(`\nDry run — nothing written. Re-run with --apply.`)
 
 const res = ot.recordMany(build);
 console.log(`\n${'='.repeat(78)}`);
-console.log(`APPLIED — ${res.added} claim(s) recorded, ${res.refused} refused.`);
+console.log(`APPLIED — ${res.added} new, ${res.alreadyKnown} already on file (idempotent), ${res.refused} refused.`);
 console.log(`\nSpot-check (the register competes, it does not overwrite):`);
 for (const b of build.slice(0, 5)) {
   const t = ot.typeOf(b.label);
