@@ -7361,6 +7361,33 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             const tail = r.isError ? '\n[That call errored — read the message, fix the args or run <echo-find> to pick a better tool, then try again.]' : '';
             fireToolFollowup({ io, channel, sessionId, resultText: content + tail });
           }
+          // ⭐ MIRROR HER OWN CANVAS WRITES. There are two paths onto the canvas and only one of
+          // them persisted. The app's internal writes (canvasEmit/canvasUpsertBlock) call the saga
+          // tools AND THEN canvasMirror() → lib/canvas_docs, which is the durable store boot replays
+          // from. A tag SHE emits dispatched straight to the same tools with no mirror, so it
+          // rendered live and was never written down.
+          //
+          // Live 2026-07-21: asked for a research paper, she opened "China AI Announcements Brief
+          // (Last 9 months)" — Lucas could see the tab — while `docs` stayed at 42 and the brief
+          // existed nowhere but the running renderer. That is the same class as the reply that was
+          // correct in the DB and never reached him: right action, wrong side of the door.
+          if (r.ok && t.kind === 'do' && /^saga_canvas_(open_tab|add_block)$/.test(t.name || '')) {
+            try {
+              const a = t.args || {};
+              const key = a.tab_key || a.tabKey;
+              if (key && t.name === 'saga_canvas_open_tab') {
+                require('./lib/canvas_docs').recordTab({ tabKey: key, mode: a.mode || 'DOC', title: a.title || key });
+                console.log(`[canvas] mirrored her tab "${a.title || key}" → durable store`);
+              } else if (key && t.name === 'saga_canvas_add_block') {
+                // dispatch() returns {ok,isError,text} — there is NO structured result to read a
+                // block_id back from, so use the one she pre-assigned or mint a unique one. The id
+                // only has to be stable enough for recordBlock's position/upsert logic.
+                const bid = a.block_id || `her-${Date.now().toString(36)}-${Math.floor(performance.now() % 1000)}`;
+                require('./lib/canvas_docs').recordBlock({ tabKey: key, blockId: bid, blockType: a.block_type, data: a.data || {} });
+                console.log(`[canvas] mirrored her ${a.block_type} block → durable store`);
+              }
+            } catch (e) { console.error('[canvas] mirror of her write failed:', e.message); }
+          }
           console.log(`[main] ${label}: ${r.ok ? 'ok' : 'ERR'}`);
         } catch (err) { console.error('[main] echo dispatch error:', err.message); }
       }

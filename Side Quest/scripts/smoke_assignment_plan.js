@@ -88,6 +88,35 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
   ok(/block_type":"table","data":\{"headers"/.test(m), 'the table shape survives alongside it');
 }
 
+// ── HER canvas writes are mirrored to the durable store ─────────────────────────────────────────
+// Live 2026-07-21: "China AI Announcements Brief (Last 9 months)" appeared on Lucas's canvas and
+// `docs` stayed at 42 — the brief existed only in the running renderer and would have vanished on
+// the next reboot. Two write paths: the app's own (canvasEmit → saga tool → canvasMirror → durable)
+// and hers (<echo-do> → saga tool → nothing). Right action, wrong side of the door — the same class
+// as a reply that is correct in the DB and never reaches him.
+{
+  const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/\^saga_canvas_\(open_tab\|add_block\)\$/.test(m),
+    'her canvas tags are recognised at the dispatch site');
+  ok(/require\('\.\/lib\/canvas_docs'\)\.recordTab\(\{ tabKey: key/.test(m), 'a tab she opens is written down');
+  ok(/require\('\.\/lib\/canvas_docs'\)\.recordBlock\(\{ tabKey: key/.test(m), 'and so is every block she adds');
+  ok(/if \(r\.ok && t\.kind === 'do'/.test(m),
+    'SAFETY: only a SUCCESSFUL write is mirrored — a rejected block must not appear in the durable store');
+  ok(/catch \(e\) \{ console\.error\('\[canvas\] mirror of her write failed:'/.test(m),
+    'SAFETY: a mirror failure is logged and never costs her the live block');
+
+  // the store really does round-trip what the mirror puts in (proven against the real module)
+  const cd = require('../lib/canvas_docs');
+  cd.init({ path: ':memory:' });
+  cd.recordTab({ tabKey: 'china-brief', mode: 'DOC', title: 'China AI Announcements Brief' });
+  cd.recordBlock({ tabKey: 'china-brief', blockId: 'h1', blockType: 'heading', data: { level: 2, text: 'World AI Conference' } });
+  cd.recordBlock({ tabKey: 'china-brief', blockId: 'p1', blockType: 'paragraph', data: { markdown: 'Open-sourcing to the Global South.' } });
+  const doc = (cd.all() || []).find((d) => d.tabKey === 'china-brief');
+  ok(!!doc && doc.title === 'China AI Announcements Brief', 'the mirrored tab reads back');
+  ok(doc.blocks.length === 2 && doc.blocks[0].blockType === 'heading' && doc.blocks[1].data.markdown,
+    'with its heading and prose intact — this is what boot replays');
+}
+
 // ── the tools section actually survives the budget ──────────────────────────────────────────────
 {
   const built = P.build({
