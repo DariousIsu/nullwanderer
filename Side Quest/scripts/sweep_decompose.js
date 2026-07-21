@@ -37,7 +37,18 @@ const SOURCES = (arg('--sources', null) || '').split(',').map((s) => s.trim()).f
 (async () => {
   console.log(`\nDECOMPOSE SWEEP — ${APPLY ? 'APPLYING' : 'DRY RUN (pass --apply to write)'}\n${'='.repeat(78)}`);
 
-  const candidates = sweep.findUndecomposed(db, { limit: LIMIT, sources: SOURCES.length ? SOURCES : null });
+  // BUDGETED AND CHEAPEST-FIRST by default. The backlog is 3,211 documents / 405M chars ≈ 69,000
+  // chunks, so an unbounded run is a major spend rather than a housekeeping pass. `--all` opts out of
+  // the budget for a deliberate, supervised batch.
+  const budgeted = !argv.includes('--all');
+  const batch = budgeted ? sweep.nextBatch(db, { limit: LIMIT }) : null;
+  const candidates = budgeted
+    ? batch.picks
+    : sweep.findUndecomposed(db, { limit: LIMIT, sources: SOURCES.length ? SOURCES : null });
+  if (budgeted) {
+    console.log(`budget today: ${batch.budget.spent}/${batch.budget.limit} chunks spent, ${batch.budget.remaining} left`);
+    console.log(`this batch: ~${batch.estChunks} chunk(s)`);
+  }
   console.log(`documents that landed and were never read: ${candidates.length}${SOURCES.length ? `  (sources: ${SOURCES.join(', ')})` : ''}`);
   for (const c of candidates) {
     console.log(`  doc:${String(c.id).padEnd(6)} ${String(c.origin_host || '—').slice(0, 24).padEnd(26)} ${String(c.chars).padStart(6)}ch  ${String(c.title || '').slice(0, 40)}`);
@@ -141,6 +152,7 @@ const SOURCES = (arg('--sources', null) || '').split(',').map((s) => s.trim()).f
   }
 
   sweep.markAttempted(db, attempted);
+  if (budgeted) sweep.spendBudget(db, batch.estChunks);
   console.log(`\n${'='.repeat(78)}`);
   console.log(`READ ${attempted.length} document(s) → ${totalEnc} encounter(s), ${totalObs} observation(s).`);
   console.log(`attempts recorded, so a document that honestly yields nothing is not re-read forever.`);

@@ -77,5 +77,44 @@ enc.record({ object_type: 'gov', object_label: 'Alcona County Board', claim_clas
 }
 ok(Array.isArray(sweep.findUndecomposed(db, { limit: 0 })), 'garbage bounds → an array, never a throw');
 
+// ── THE BUDGET — because the backlog is 405 MILLION characters ───────────────────────────────────
+// Measured live: 3,211 unread documents, ~69,000 chunks, ~138,000 model calls with the adjudicator.
+// A backlog reader that can spend that accidentally is a bug however correct its selection is.
+{
+  const big = db.insertDocument({ title: 'Huge', body: 'x'.repeat(120000), source: 'browser_download' }).id;
+  const mid = db.insertDocument({ title: 'Mid', body: 'y'.repeat(12000), source: 'browser_download' }).id;
+  const small = db.insertDocument({ title: 'Small', body: 'z'.repeat(1200), source: 'browser_download' }).id;
+  const empty = db.insertDocument({ title: 'Image-only PDF', body: 'scan', source: 'browser_download' }).id;
+
+  const b = sweep.nextBatch(db, { limit: 5 });
+  const ids = b.picks.map((p) => p.id);
+  ok(ids[0] === small && ids.indexOf(mid) > ids.indexOf(small),
+    'CRITICAL: CHEAPEST FIRST — 62% of the corpus is under 20k chars, and reading a 425k judicial PDF first buys the least for the most');
+  ok(!ids.includes(big), 'a document over maxChars is left for a deliberate decision');
+  ok(!ids.includes(empty),
+    'CRITICAL: a FLOOR as well as a ceiling — ordering purely by cost picked 43-, 56- and 105-char image-only PDFs on the first live run, spending calls to learn nothing');
+}
+{
+  const st = sweep.budgetState(db);
+  ok(st.remaining === st.limit && st.spent === 0, 'a fresh day starts with the full budget');
+  sweep.spendBudget(db, 5);
+  ok(sweep.budgetState(db).spent === 5 && sweep.budgetState(db).remaining === st.limit - 5, 'spending is tracked');
+  ok(sweep.budgetState(db, { now: Date.now() + 2 * 86400000 }).spent === 0, 'the budget resets on the calendar day');
+}
+{
+  // The ceiling must be enforced BEFORE the work, or a stuck loop outspends it.
+  sweep.spendBudget(db, 10000);
+  const b = sweep.nextBatch(db, { limit: 5 });
+  ok(b.picks.length === 0 && b.budget.remaining === 0,
+    'CRITICAL: at the ceiling the lane picks NOTHING — a quiet state, not an error');
+  ok(sweep.nextBatch(db, { limit: 5, dailyChunks: 99999 }).picks.length > 0, 'raising the ceiling releases work again');
+}
+{
+  // A smaller document must still fit after a large one is skipped — skip, do not stop.
+  const b = sweep.nextBatch(db, { limit: 3, dailyChunks: 99999, maxChars: 200000 });
+  ok(b.estChunks > 0 && b.picks.length > 0, 'the batch reports what it will cost before spending it');
+  ok(sweep.estChunks(6000) === 1 && sweep.estChunks(12001) === 3, 'chunk estimation mirrors the extractor’s slicing');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);
