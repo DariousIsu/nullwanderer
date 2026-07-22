@@ -15,6 +15,10 @@ auto-memory (`program-not-context`, `engine-starvation-audit`, `subconscious-aut
 | 5fcbb39 | HIS WEEK: lib/week_context.js — calendar (−7d…+8d, people, venues) rides chat awareness + autonomy manifest. ⚠️all-day gcal dates render UTC or they shift a day |
 | 530c51b | autonomy build artifacts land in doc_store → promote to Echo long-term |
 | 895c2fc | expect-vs-actual (verifyExpect verdicts ride history; [UNSATISFIED] marker on empty/failed results, operator + echo chain) + delegation return path (_drainAgentInbox → readings + manifest FINISHED DELEGATED WORK) |
+| 39c62d6 | SLICE 1A — conversation OBJECTS: 45-min-gap windows → doc_store 'conversation' → nightly promote via Echo save_conversation (first caller ever); full-history backfill, watermark-lossless |
+| 2bd4947 | SLICE 1B — story-follow: discussed/interest follows on news_stories; manifest DEVELOPING STORIES + [story #N] engage carve-out; markRaised = one development raised once |
+| 8a2964c | SLICE 1 #6 — readings citable: monologue.doc_ref; `<recall ref="dN"/>` pulls the stored DOCUMENT; package grounding teaches the pull; doc_qa declarative reading trigger. Revived+registered rotten smoke_recall (was outside the gate asserting the retired local-marker contract) |
+| 0250fc5 | graph-lane boundary §3A/§3B delivered: node.born on conversation birth; first 'news' emitter at markRaised; §4c reply w/ read-side schema |
 
 ## 2. Reboot verification checklist (first hour of the next boot log)
 
@@ -24,10 +28,13 @@ auto-memory (`program-not-context`, `engine-starvation-audit`, `subconscious-aut
 - `[autonomy] inbox drained` (only if delegated work exists)
 - Bloomberg-brief re-send + a real `package that` on its result = the papers-thread end-to-end proof
 - A casual "how's your day" — her reply should know the real week
+- `[conversation] pass — N window(s) filed as objects` within ~17 min of boot (the history backfill starting); next night `[promote] conversation #N … → Echo`
+- After a chat that touched a tracked news story: the story follows (news bucket `news_story_follow`), and a later development shows in the manifest as DEVELOPING STORIES YOU FOLLOW
+- "what was that paper you read about X?" → answered FROM the stored doc (doc-qa reading path), not a web search
 
 ## 3. Agreed next slices (designs locked in memory `program-not-context`)
 
-1. **Memory/conversation cluster**: conversation OBJECTS + promotion (turns never reach Echo; `save_conversation` has 0 callers — same severed-wire class agent_inbox was) · developing-story engage lane (calendar pattern on news_stories `following` state, engage carve-out for discussed stories, raise the DELTA only) · reading-citation wires (monologue readings carry docRef; grounding rides title+docRef+gist; doc_qa trigger widened to declarative mentions).
+1. ~~**Memory/conversation cluster**~~ ✅**SHIPPED 2026-07-22 evening** (39c62d6 / 2bd4947 / 8a2964c / 0250fc5, gate 294/294): conversation objects + promotion · developing-story engage lane · reading-citation wires. All pending reboot.
 2. **The conductor**: self-registry as the workstream BOARD + lock table; portfolio allocation (one decider, many streams; cloud slot 1 reserved for chat; store locks; ≤1 maintenance/DB) · ⭐relax the 3-min chat yield to "don't START mid-turn + never take the reserved slot" — his presence stops pausing her inner life · python-loop `maintain` move on a curated allowlist (autonomous tier gate currently BLOCKS all heavy Echo loops — why they're underused) · recipe-proposal growth path.
 3. **Self-knowledge**: read-only source access + run-the-smoke-gate self-test → grounded "how am I coded / am I healthy"; then rehearsal sandbox (approved) → vetted program adoption (staged design owed to Lucas as a doc).
 
