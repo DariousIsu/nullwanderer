@@ -244,7 +244,7 @@ async function runOnce(opts = {}) {
   // 5. RECOMPUTE — react → sim → payload.
   const res = recompute(races, signals, { now, config, assessLookup: pa.lookup, reactorCfg: opts.reactorCfg });
   const polled = races.filter((r) => r.margin_source === 'polls').length;
-  res.as_of = new Date(now).toISOString().slice(0, 10);
+  res.as_of = require('./tz').dayKey(now);   // Eastern day — an evening run is stamped with TODAY's date
   res.illustrative = polled === 0;                 // no real signed margin anywhere → the run is illustrative
   res.work.margins = { total: races.length, polled, prior: races.length - polled };
   res.work.assess = { pairs: pa.n_pairs, assessed: pa.assessed };

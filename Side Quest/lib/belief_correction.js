@@ -37,7 +37,7 @@ function detectCorrection(msg, { priorAnswer = '' } = {}) {
 // today (a correction is asserted NOW) so it can out-date a stale undated incumbent.
 function buildCorrectionClaim(cand, { now = Date.now() } = {}) {
   if (!cand || !cand.claim) return null;
-  const asOf = _normAsOf(cand.asOf) || new Date(now).toISOString().slice(0, 10);
+  const asOf = _normAsOf(cand.asOf) || require('./tz').dayKey(now);   // "asserted NOW" = the Eastern day, not UTC's
   return {
     kind: cand.kind || 'entity',
     subject: { name: String(cand.subject || '').trim() || String(cand.claim).slice(0, 60), type: cand.type || null },

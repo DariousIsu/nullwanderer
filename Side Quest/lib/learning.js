@@ -179,7 +179,7 @@ async function maybeCaptureLearnings({ query, content, urls, deps = {} } = {}) {
     if (!candidates.length) return { captured: 0, skipped: 'none-extracted' };
     const live = _liveLearnings();
     const storeFn = deps.storeFn || ((rec) => memory.store(rec));
-    const captureDate = deps.captureDate || new Date(now).toISOString().slice(0, 10);
+    const captureDate = deps.captureDate || require('./tz').dayKey(now);   // Eastern day — a 9pm capture is TODAY's
     let verified = 0, learned = 0;
     for (const c of candidates) {
       const isVerified = !!c.asOf;                                            // source gave a real date → time-sensitive
@@ -230,7 +230,7 @@ function retireVerifiedFact(id, { by = null, now = Date.now() } = {}) {
     const row = db.getDb().prepare('SELECT provenance FROM knowledge WHERE id=?').get(rid);
     if (!row) return false;
     let p = {}; try { p = JSON.parse(row.provenance || '{}'); } catch {}
-    p.superseded = true; p.superseded_at = new Date(now).toISOString().slice(0, 10); if (by != null) p.superseded_by = String(by);
+    p.superseded = true; p.superseded_at = require('./tz').dayKey(now); if (by != null) p.superseded_by = String(by);
     db.getDb().prepare('UPDATE knowledge SET importance = MIN(importance, 0.2), provenance = ? WHERE id = ?').run(JSON.stringify(p), rid);
     return true;
   } catch { return false; }
@@ -249,7 +249,7 @@ async function captureRecovered({ query, answer, url, source = 'excavation', now
     const revise = require('./revise').reviseBelief;
     const claim = {
       kind: 'entity', subject: { name: q.slice(0, 120), key },
-      value: a, as_of: new Date(ts).toISOString().slice(0, 10),
+      value: a, as_of: require('./tz').dayKey(ts),   // Eastern day, matching the rest of the belief pipeline
       citations: [{ url, title: q.slice(0, 80), authority_tier: source === 'realtime' ? 2 : 3 }],
       provenance: 'read', lane: 'research',
     };

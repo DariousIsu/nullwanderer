@@ -7,7 +7,7 @@ const S = require('../lib/forecast_service');
 let pass = 0, fail = 0;
 function ok(name, cond, detail = '') { if (cond) { pass++; console.log(`  PASS ${name}`); } else { fail++; console.log(`  FAIL ${name}${detail ? ' — ' + detail : ''}`); } }
 
-const NOW = Date.parse('2026-07-03');
+const NOW = Date.parse('2026-07-03T12:00:00-04:00');   // noon Eastern — a bare date is UTC midnight, i.e. 8pm the PREVIOUS Eastern day
 const poll = (o) => ({ source_kind: 'test', poll_type: 'approval', subject: 'Donald Trump', is_aggregate: false, answers: [], ...o });
 const polls = [
   poll({ pollster: 'A', end_date: '2026-07-01', sample_size: 1500, answers: [{ choice: 'Approve', pct: 42 }, { choice: 'Disapprove', pct: 54 }] }),

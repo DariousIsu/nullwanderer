@@ -550,7 +550,7 @@ function storiesForTopic(topic, { k = 4, maxAgeMs = 14 * 24 * 3600 * 1000, now =
 function storiesAsNotes(stories, { max = 4 } = {}) {
   return (Array.isArray(stories) ? stories : []).slice(0, max).map((s) => {
     const corrob = Math.min(Number(s.outlet_count) || 0, Number(s.report_count) || 0);
-    const when = s.last_ts ? new Date(s.last_ts).toISOString().slice(0, 10) : '';
+    const when = s.last_ts ? require('./tz').dayKey(s.last_ts) : '';   // "as of" reads in Eastern, like every displayed time
     const body = `${displayClean(s.title)}${s.summary ? ' — ' + displayClean(s.summary).slice(0, 240) : ''}`;
     const tag = [when ? `as of ${when}` : '', corrob >= 2 ? `${corrob}-source` : ''].filter(Boolean).join(', ');
     return { content: `${body}${tag ? ` (${tag})` : ''}`, source: 'news', ts: s.last_ts || 0 };

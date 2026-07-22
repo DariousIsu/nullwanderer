@@ -161,7 +161,7 @@ function trend(polls, opts = {}) {
     const anchor = now - i * stepDays * dayMs;
     const upTo = (Array.isArray(polls) ? polls : []).filter((p) => { const e = pollEndMs(p); return e == null || e <= anchor; });
     const a = average(upTo, { ...opts, now: anchor });
-    if (a.n_polls) out.push({ date: new Date(anchor).toISOString().slice(0, 10), leader: a.leader, margin: a.margin, choices: a.choices.map((c) => ({ choice: c.choice, pct: Number(c.pct.toFixed(2)) })) });
+    if (a.n_polls) out.push({ date: require('./tz').dayKey(anchor), leader: a.leader, margin: a.margin, choices: a.choices.map((c) => ({ choice: c.choice, pct: Number(c.pct.toFixed(2)) })) });
   }
   return out;
 }

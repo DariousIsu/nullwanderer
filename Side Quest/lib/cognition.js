@@ -79,7 +79,9 @@ async function _draftOrNeed(userMessage, grounding, deps = {}) {
     + 'TODAY, not about whatever the retrieved text happens to describe. If the grounding covers a '
     + 'DIFFERENT period than the question asks about — a past occurrence of a recurring event, a '
     + 'former office-holder — do NOT answer from it: emit a NEED for the current one instead.';
-  const today = (deps.today || new Date().toISOString().slice(0, 10));
+  // EASTERN day, not UTC — this is the "TODAY" the model reasons with; toISOString had her believing
+  // it was tomorrow for the four hours after 8pm Eastern.
+  const today = (deps.today || require('./tz').dayKey());
   let out = null;
   try {
     out = await askFn({

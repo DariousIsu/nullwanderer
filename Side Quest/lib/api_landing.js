@@ -15,7 +15,7 @@
 const store = require('./api_store');
 
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n.toLocaleString('en-US') : String(v); };
-const ymd = (ms) => { try { return new Date(ms).toISOString().slice(0, 10); } catch { return ''; } };
+const ymd = (ms) => { try { return require('./tz').dayKey(ms); } catch { return ''; } };   // "Pulled <day>" in Eastern
 
 // FRED series → latest value + prior + % change. Returns { title, body, understanding } | null if no data.
 function fredSummary(ds, snap) {

@@ -83,7 +83,7 @@ const LONG = 'The page states durable facts about the topic in detail. '.repeat(
     // SELF-HEAL write-back — an externally RECOVERED answer (forensic excavation) → banked as a dated
     // verified_fact so she's never on the same page twice. Direct store (no claim-extraction).
     const rec = [];
-    const wb = await learning.captureRecovered({ query: 'who is the current US Secretary of Defense', answer: 'Pete Hegseth is the current U.S. Secretary of Defense.', url: 'https://en.wikipedia.org/wiki/United_States_Secretary_of_Defense', source: 'excavation', now: Date.parse('2026-07-02'), storeFn: async (r) => { rec.push(r); return { id: 1 }; } });
+    const wb = await learning.captureRecovered({ query: 'who is the current US Secretary of Defense', answer: 'Pete Hegseth is the current U.S. Secretary of Defense.', url: 'https://en.wikipedia.org/wiki/United_States_Secretary_of_Defense', source: 'excavation', now: Date.parse('2026-07-02T12:00:00-04:00'), storeFn: async (r) => { rec.push(r); return { id: 1 }; } });   // noon Eastern — a bare date is UTC midnight = the previous Eastern day
     ok(wb.captured === 1 && rec.length === 1, 'captureRecovered banks the recovered answer');
     ok(rec[0].source === 'verified_fact' && rec[0].provenance.dated === true && rec[0].provenance.as_of === '2026-07-02', 'banked as a DATED verified_fact (as_of=today) → reconcile can supersede stale');
     ok(rec[0].provenance.url === 'https://en.wikipedia.org/wiki/United_States_Secretary_of_Defense' && rec[0].provenance.capturedBy === 'excavation' && /Hegseth/.test(rec[0].content), 'carries source URL + capturedBy=excavation + the answer');

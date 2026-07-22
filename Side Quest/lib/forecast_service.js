@@ -41,7 +41,7 @@ function buildPollAveragePayload(polls, ratings, opts = {}) {
   return {
     ok: true,
     model: 'poll_average',
-    as_of: new Date(now).toISOString().slice(0, 10),
+    as_of: require('./tz').dayKey(now),   // Eastern day, matching forecast_loop
     subject, poll_type,
     choices: cur.choices.map((c) => ({ choice: c.choice, pct: Number(c.pct.toFixed(1)) })),
     leader: cur.leader, runner_up: cur.runner_up, margin: cur.margin,
