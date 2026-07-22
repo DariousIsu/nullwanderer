@@ -274,6 +274,15 @@ try {
     if (_fitOnCool) { _fitOnCool = false; fitView(1000, true); }
   });
 } catch (e) {}
+// TONE MAPPING = the bloom I was never allowed to have. ACES is NOT a postprocess pass — it compiles into
+// each fragment shader (no render targets, ~15 ALU ops), so it cannot repeat the UnrealBloom crash that took
+// down the shared GPU process. It lets node cores exceed 1.0 and roll off to warm white instead of clipping,
+// which is the perceptual signature of an actual light source and most of what bloom was buying.
+try {
+  const r = Graph.renderer();
+  r.toneMapping = THREE.ACESFilmicToneMapping;
+  r.toneMappingExposure = 1.15;
+} catch (e) { console.warn('[kg3d] tone mapping unavailable:', e && e.message); }
 Graph.d3Force('core', makeCore3D(0.05));
 try { Graph.d3Force('charge').strength(-40); } catch (e) {}   // a touch more spread at corpus scale
 
@@ -499,25 +508,160 @@ const NODE_TEX = (function () {
   g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.28, 'rgba(255,255,255,0.92)'); g.addColorStop(0.55, 'rgba(255,255,255,0.32)'); g.addColorStop(1, 'rgba(255,255,255,0)');
   x.fillStyle = g; x.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c);
 })();
-const nodeMat = new THREE.ShaderMaterial({
-  uniforms: { map: { value: NODE_TEX }, uOpacity: { value: 0.96 } },
-  vertexShader: 'attribute float size; attribute vec3 aColor; attribute float aAlpha; varying vec3 vColor; varying float vAlpha; void main(){ vColor=aColor; vAlpha=aAlpha; vec4 mv=modelViewMatrix*vec4(position,1.0); gl_PointSize=size*(560.0/max(1.0,-mv.z)); gl_Position=projectionMatrix*mv; }',
-  fragmentShader: 'uniform sampler2D map; uniform float uOpacity; varying vec3 vColor; varying float vAlpha; void main(){ vec4 t=texture2D(map, gl_PointCoord); if(t.a<0.02) discard; gl_FragColor=vec4(vColor, t.a*uOpacity*vAlpha); }',
-  transparent: true, depthWrite: false, depthTest: true, blending: THREE.NormalBlending,
-});
-let nodeCloud = null, nodeGeo = null, nodeIndex = [];
+// DEPTH CUEING — the single biggest reason 1,000 nodes read as flat scatter instead of a volume: there was
+// none. Every node rendered at identical brightness whether it sat at the front of the cloud or the back, so
+// the eye got no parallax-independent depth signal at all and the whole thing collapsed into a sheet of
+// specks. Distance now fades a node toward the background (on a black ground, fading alpha IS fog) and cools
+// it slightly blue, which is ordinary atmospheric perspective. The near/far band is recomputed each frame
+// from the live camera distance so it holds through zooming.
+// ============================================================================================================
+// THE POINT SHADER. Rebuilt on research (2026-07-22) after Lucas rejected the surface twice; the root cause
+// turned out not to be aesthetic at all.
+//
+// ⭐ COLOUR-SPACE BUG — this is what actually made it look the way it did. three.js ColorManagement has been
+// on by default since r152, so `new THREE.Color('#a78bfa')` converts to LINEAR working space. Three appends
+// `linearToOutputTexel()` only inside its OWN ShaderLib fragments — a hand-written ShaderMaterial gets
+// nothing. So the node cloud was shipping linear values straight to an sRGB display: violet #a78bfa lost
+// ~58% of its red and ~70% of its green. Every node rendered dark and over-saturated. The link buffer had
+// the exact OPPOSITE error — parseLinkRGB divided sRGB bytes by 255 and wrote them into a `color` attribute,
+// which LineBasicMaterial (which DOES include colorspace_fragment) then encoded a second time, pushing the
+// cross-store edges to ~0.9 luminance on a 0.027 background. Dim dots, blinding white sticks: two opposite
+// bugs. `#include <colorspace_fragment>` here, and an sRGB→linear conversion in buildLinkCloud.
+//
+// ⭐ TONE MAPPING IS THE BLOOM REPLACEMENT. ACES is not a postprocess pass — it compiles into each fragment
+// shader (~15 ALU ops, no render targets), so it cannot repeat the UnrealBloom GPU-process crash. Letting
+// core brightness exceed 1.0 then rolls off to warm white instead of clipping, which is the actual
+// perceptual signature of a light source and most of what bloom was buying.
+//
+// ⭐ TWO-LOBE GLOW, procedurally. A single radial gradient always reads as a fuzzy dot; a real point-spread
+// function is a tight spike PLUS a broad base (the classic real-time-glow kernel). Done in-shader, so no
+// texture sampling and no 64px filtering mush. The core desaturates toward white as it brightens — that is
+// what makes a point read as luminous rather than merely coloured.
+//
+// ⭐ FOG, attenuating rather than mixing. The stock chunk does mix(colour, fogColor, f), which is right for
+// NormalBlending and wrong under Additive — mixing toward the fog colour still ADDS its luminance, so far
+// points never actually recede and dense far regions accumulate a grey wash. Scaling rgb AND alpha is the
+// additive-safe form. Plus a blue-shift, the chromatic half of aerial perspective.
+const FOG_STRENGTH = 0.86;
+const NODE_VERT = `
+  attribute float size; attribute vec3 aColor; attribute float aAlpha;
+  uniform float uFitDist; uniform float uSizeK;
+  varying vec3 vColor; varying float vAlpha; varying float vDepth;
+  void main(){
+    vColor = aColor; vAlpha = aAlpha;
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    vDepth = -mvPosition.z;
+    // size is a DIAMETER IN DEVICE PIXELS at the fitted distance — resolution- and DPR-independent, and it
+    // stops nodes silently shrinking as the corpus grows. The floor matters: sub-pixel points alias and
+    // shimmer as the camera moves, which is precisely what read as "scattered debris".
+    gl_PointSize = clamp(size * uSizeK * (uFitDist / max(1.0, -mvPosition.z)), 1.6, 96.0);
+    gl_Position = projectionMatrix * mvPosition;
+  }`;
+const NODE_FRAG = `
+  uniform float uOpacity; uniform float uNear; uniform float uFar; uniform float uFogK;
+  uniform float uIntensity; uniform float uCoreW; uniform float uHaloW;
+  varying vec3 vColor; varying float vAlpha; varying float vDepth;
+  void main(){
+    float r = length(gl_PointCoord - vec2(0.5)) * 2.0;
+    if (r > 1.0) discard;
+    float k = max(0.0, 1.0 - r);
+    float core = pow(k, 14.0);              // the spike
+    float halo = pow(k, 2.2);               // the broad base
+    float a = core * uCoreW + halo * uHaloW;
+    if (a < 0.004) discard;
+    vec3 rgb = mix(vColor, vec3(1.0), core * 0.72);          // hot cores blow to white, halo keeps the hue
+    float f = clamp((vDepth - uNear) / max(1.0, uFar - uNear), 0.0, 1.0);
+    float lum = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    rgb = mix(rgb, vec3(lum) * vec3(0.55, 0.72, 1.0), f * 0.5);   // aerial perspective: distance cools + desaturates
+    gl_FragColor = vec4(rgb * uIntensity * (1.0 + core * 2.0), a * uOpacity * vAlpha);
+    gl_FragColor.rgb *= (1.0 - f * uFogK);                    // additive-safe fog
+    gl_FragColor.a   *= (1.0 - f * uFogK);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }`;
+function pointMaterial(o) {
+  return new THREE.ShaderMaterial({
+    uniforms: { uOpacity: { value: o.opacity }, uFitDist: { value: 900.0 }, uSizeK: { value: o.sizeK },
+      uNear: { value: 100.0 }, uFar: { value: 2000.0 }, uFogK: { value: FOG_STRENGTH },
+      uIntensity: { value: o.intensity }, uCoreW: { value: o.coreW }, uHaloW: { value: o.haloW } },
+    vertexShader: NODE_VERT, fragmentShader: NODE_FRAG,
+    transparent: true, depthWrite: false, depthTest: o.depthTest !== false, blending: o.blending,
+  });
+}
+// Additive for the cloud: THREE.Points does not sort points within one object, so NormalBlending would blend
+// in arbitrary buffer order. Additive is commutative, therefore order-independent, therefore correct here —
+// and with tone mapping handling the accumulation there is no white wash to fear.
+const nodeMat = pointMaterial({ opacity: 1.0, sizeK: 1.0, intensity: 1.35, coreW: 1.0, haloW: 0.22, blending: THREE.AdditiveBlending });
+// GLOW: a second pass over the SAME geometry, much larger and very faint. Overlapping halos accumulate into
+// a soft haze exactly where nodes are dense — which is what makes a point cloud read as a continuous
+// luminous VOLUME instead of a scatter of dots. One extra draw call, zero extra memory, no render targets.
+const haloMat = pointMaterial({ opacity: 0.11, sizeK: 4.0, intensity: 1.0, coreW: 0.0, haloW: 1.0, blending: THREE.AdditiveBlending, depthTest: false });
+// DUST — the biggest single lever for the cloud read, and nearly free. Several faint non-semantic points are
+// scattered around every real node, sampled from the same spatial density. They give the space BETWEEN nodes
+// substance; without them no amount of glow on a thousand points fills a volume — you just get a thousand
+// glowing points. This is what Wikiverse/WikiGalaxy are actually doing: the stars you notice are a small
+// fraction of the points on screen. One draw call, tiny sizes, alpha so low it never competes with data.
+const dustMat = pointMaterial({ opacity: 0.085, sizeK: 1.0, intensity: 0.85, coreW: 0.25, haloW: 0.55, blending: THREE.AdditiveBlending, depthTest: false });
+const DUST_PER_NODE = 5, DUST_CAP = 14000;
+let dustCloud = null, dustGeo = null;
+function buildDust(ns) {
+  if (dustCloud) { scene.remove(dustCloud); dustGeo.dispose(); dustCloud = null; dustGeo = null; }
+  if (!ns || !ns.length) return;
+  const per = Math.max(1, Math.min(DUST_PER_NODE, Math.floor(DUST_CAP / ns.length)));
+  const N = ns.length * per;
+  const pos = new Float32Array(N * 3), col = new Float32Array(N * 3), size = new Float32Array(N), alpha = new Float32Array(N);
+  const c = new THREE.Color(); let i = 0;
+  for (const n of ns) {
+    if (!Number.isFinite(n.x) || n.zoe) continue;
+    c.set(nodeColor(n)); const sp = CLOUD_R * 0.085;
+    for (let d = 0; d < per; d++) {
+      const h1 = hashSeed(n.id + '#d' + d), h2 = hashSeed(n.id + '#e' + d), h3 = hashSeed(n.id + '#f' + d);
+      pos[i * 3] = n.x + (h1 - 0.5) * 2 * sp; pos[i * 3 + 1] = n.y + (h2 - 0.5) * 2 * sp; pos[i * 3 + 2] = (n.z || 0) + (h3 - 0.5) * 2 * sp;
+      col[i * 3] = c.r * 0.55; col[i * 3 + 1] = c.g * 0.55; col[i * 3 + 2] = c.b * 0.55;   // pushed toward the background
+      size[i] = 1.8 + h1 * 2.0; alpha[i] = 0.30 + h2 * 0.45;
+      i++;
+    }
+  }
+  if (!i) return;
+  dustGeo = new THREE.BufferGeometry();
+  dustGeo.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0, i * 3), 3));
+  dustGeo.setAttribute('aColor', new THREE.BufferAttribute(col.subarray(0, i * 3), 3));
+  dustGeo.setAttribute('size', new THREE.BufferAttribute(size.subarray(0, i), 1));
+  dustGeo.setAttribute('aAlpha', new THREE.BufferAttribute(alpha.subarray(0, i), 1));
+  dustCloud = new THREE.Points(dustGeo, dustMat); dustCloud.frustumCulled = false; dustCloud.renderOrder = -2; scene.add(dustCloud);
+}
+let nodeCloud = null, haloCloud = null, nodeGeo = null, nodeIndex = [];
+// The fog band tracks the camera, so it stays correct while zooming. Half-depth of the cloud sets the spread.
+// Fog band + point scale both track the live camera, so depth reads correctly through zooming and a node's
+// size means the same thing at any distance. Band derived from measurement: the cloud spans [D−R, D+R], and
+// far ≈ D + 2.2R puts the back edge at ~70% faded — enough to read as volume, not so much that the back half
+// disappears. (PyMOL's depth_cue and VMD's linear cue defaults land on the same ratio.)
+function updateFogBand() {
+  try {
+    const cam = Graph.cameraPosition(), c = _midCen;
+    const dist = Math.hypot(cam.x - c.x, cam.y - c.y, cam.z - c.z) || 900;
+    const near = Math.max(1, dist - CLOUD_R * 1.10), far = dist + CLOUD_R * 2.20;
+    for (const m of [nodeMat, haloMat, dustMat]) {
+      if (!m) continue;
+      m.uniforms.uNear.value = near; m.uniforms.uFar.value = far; m.uniforms.uFitDist.value = dist;
+    }
+  } catch (e) {}
+}
 // Base weight is structural (how connected), the bonus is evidential (how corroborated). They are genuinely
 // different facts about a node and both belong on screen: a hub everyone links to but nobody sourced should
 // not look like a modest object forty documents independently agree on.
+// Measured on the live surface: median node was 2.7px on screen and the 10th percentile 1.8px. At that size a
+// soft glow sprite is a barely-there speck, which is why the links looked like the subject and the nodes like
+// dust. Everything scaled up so the cloud is made of visible bodies.
 function nodePointSize(n) {
-  if (n.zoe) return 4.5 + (n.importance || 0.6) * 4;      // personality motes: small, weighted by importance
-  const base = n.store === 'sidequest' ? 7 : Math.max(5, Math.min(26, 6 + Math.log10((n.degree || 0) + 1) * 8));
+  if (n.zoe) return 7 + (n.importance || 0.6) * 6;        // personality motes, weighted by importance
+  const base = n.store === 'sidequest' ? 11 : Math.max(9, Math.min(30, 10 + Math.log10((n.degree || 0) + 1) * 8));
   const enc = (n.prov && n.prov.encounters) || 0;
-  return Math.min(34, base + (enc ? Math.log2(1 + enc) * 1.7 : 0));
+  return Math.min(40, base + (enc ? Math.log2(1 + enc) * 1.9 : 0));
 }
 function buildNodeCloud() {
   const ns = Graph.graphData().nodes; nodeIndex = ns; const N = ns.length;
-  if (nodeCloud) { scene.remove(nodeCloud); nodeGeo.dispose(); nodeCloud = null; nodeGeo = null; }
+  if (nodeCloud) { scene.remove(nodeCloud); if (haloCloud) scene.remove(haloCloud); nodeGeo.dispose(); nodeCloud = null; haloCloud = null; nodeGeo = null; }
   if (!N) return;
   const pos = new Float32Array(N * 3), col = new Float32Array(N * 3), size = new Float32Array(N), alpha = new Float32Array(N);
   for (let i = 0; i < N; i++) {
@@ -531,7 +675,11 @@ function buildNodeCloud() {
   nodeGeo.setAttribute('size', new THREE.BufferAttribute(size, 1));
   nodeGeo.setAttribute('aAlpha', new THREE.BufferAttribute(alpha, 1));
   nodeCloud = new THREE.Points(nodeGeo, nodeMat); nodeCloud.frustumCulled = false; scene.add(nodeCloud);
+  // Shares the SAME geometry object, so the halo can never drift out of sync with the nodes and costs no
+  // extra position updates — only a second draw.
+  haloCloud = new THREE.Points(nodeGeo, haloMat); haloCloud.frustumCulled = false; haloCloud.renderOrder = -1; scene.add(haloCloud);
   buildMarkers();
+  try { buildDust(nodeIndex); } catch (e) {}
 }
 // Provenance arrives on a later poll than the node itself, and evidence accrues while the node just sits
 // there — so colour/size/alpha have to be able to change WITHOUT rebuilding the geometry (the old build was
@@ -563,8 +711,17 @@ function buildLinkCloud() {
   const N = linkIndex.length; if (!N) return;
   const pos = new Float32Array(N * 6), col = new Float32Array(N * 6);
   for (let i = 0; i < N; i++) {
-    const c = parseLinkRGB(linkColor(linkIndex[i])), k = Math.min(1, c.a * 1.15);   // alpha folded into brightness (additive)
-    for (let v = 0; v < 2; v++) { const o = i * 6 + v * 3; col[o] = c.r * k; col[o + 1] = c.g * k; col[o + 2] = c.b * k; }
+    // TWO fixes here, and together they are why the frame was a mess of white sticks.
+    // (1) COLOUR SPACE: parseLinkRGB divides sRGB bytes by 255, but a `color` BufferAttribute is read as
+    //     LINEAR working space, and LineBasicMaterial then encodes it to sRGB again — a double encode that
+    //     pushed the cross-store edges to ~0.9 luminance on a 0.027 background. Convert properly.
+    // (2) WEIGHT: the network-viz literature puts bulk edges at 5–10% alpha and lets OVERLAP density draw the
+    //     structure — that is what makes a hairball read as a cobweb instead of a smudge. These were ~0.5.
+    const c = parseLinkRGB(linkColor(linkIndex[i]));
+    _lc.setRGB(c.r, c.g, c.b, THREE.SRGBColorSpace);
+    const cross = c.a > 0.5;                                    // federation threads keep a little more presence
+    const k = cross ? 0.30 : 0.085;
+    for (let v = 0; v < 2; v++) { const o = i * 6 + v * 3; col[o] = _lc.r * k; col[o + 1] = _lc.g * k; col[o + 2] = _lc.b * k; }
   }
   linkGeo = new THREE.BufferGeometry();
   linkGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -1031,7 +1188,15 @@ function gCross(inward, colorHex) {            // one communication: a pulse cro
 // (uncapped vs the 2D top-40 cap): one LineSegments buffer, positions refreshed each frame from node motion. ---
 function hashSeed(str) { let h = 2166136261; const s = String(str); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) / 4294967295; }
 let tendrilSpecs = [], tendrilGeo = null, tendrilLines = null, _tendrilAt = 0;
+// TENDRILS ARE OFF. They were my invention for a "neuron" look — 420 short whiskers fired off hub nodes in
+// deterministic random directions — and on screen they are simply scratches. They encode nothing a viewer can
+// read (the direction is a hash, not data), they were among the brightest things in the frame, and with the
+// nodes at 2.7px they were most of what the eye actually saw. Kept behind a flag rather than deleted only
+// because the hidden-connection idea may come back as something honest (a real edge to an off-screen node).
+let TENDRILS_ON = false;
+try { TENDRILS_ON = localStorage.getItem('kg3d.tendrils') === '1'; } catch (e) {}
 function buildTendrils(force) {
+  if (!TENDRILS_ON) { if (tendrilLines) { scene.remove(tendrilLines); tendrilGeo.dispose(); tendrilLines.material.dispose(); tendrilLines = null; tendrilGeo = null; } tendrilSpecs = []; return; }
   const now = performance.now(); if (!force && now - _tendrilAt < 700) return; _tendrilAt = now;
   const ns = Graph.graphData().nodes;
   const hubs = ns.filter((n) => (n.degree || 0) > 6).sort((a, b) => (b.degree || 0) - (a.degree || 0)).slice(0, 60);
@@ -1130,6 +1295,7 @@ function tick() {
   requestAnimationFrame(tick);
   const now = performance.now(); frames++;
   updateEffects(now);
+  updateFogBand();              // depth band + point scale follow the camera, so this holds through zooming
   // Position syncing only while the layout is actually moving. `_stillFrames` keeps a couple of frames of
   // sync after it stops so the last motion lands, and any reheat (new data, a mint) restarts it.
   if (engineRunning) { _stillFrames = 2; } else if (_stillFrames > 0) { _stillFrames--; }
