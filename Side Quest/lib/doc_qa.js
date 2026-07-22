@@ -35,6 +35,29 @@ function isDocQuery(message) {
   return EXTRACT_VERB_RE.test(s) || /\?\s*$/.test(s);  // an extraction verb, or a question
 }
 
+// Her READINGS referenced DECLARATIVELY — "you read something about X", "that paper you read",
+// "what have you been reading" (memory slice 1 #6). These point at what SHE read (a stored doc from
+// any lane: canvas drops, research dossiers, autonomy artifacts, API landings), not a doc Lucas
+// handed her — DOC_REF_RE never matches them, so the detector-matches-the-imperative miss class
+// applied here too. Bare "you read X" is NOT enough ("you read my mind"): the forms require an
+// about-phrase, a reading-noun, or the interrogative.
+const READING_REF_RE = /\b(?:you read (?:something|about)|you (?:were|just) reading|what (?:did|have) you (?:been )?read(?:ing)?|(?:that|the) (?:article|paper|piece|story|report|study|memo|doc(?:ument)?) you (?:read|found|mentioned|were reading|looked at|came across)|something you (?:read|were reading))\b/i;
+
+function isReadingQuery(message) {
+  const s = str(message).trim();
+  if (s.length < 6) return false;
+  if (PROVIDE_NEG_RE.test(s)) return false;
+  return READING_REF_RE.test(s);
+}
+
+// Content terms worth searching the stored docs for on a reading query — the message minus the
+// reading-reference scaffolding, longest (most specific) first.
+function readingSearchTerms(message, { max = 3 } = {}) {
+  return _terms(message)
+    .filter((w) => !/^(?:read|reading|article|paper|piece|story|report|study|memo)$/.test(w))
+    .sort((a, b) => b.length - a.length).slice(0, max);
+}
+
 // --- pick which held document the question is about -------------------------------------------------
 
 const STOP = new Set('the a an of for from out my your his her our their about in on to and or with this that these those what who which how many me you give show tell list pull extract summarize summarise find get grab notes note document doc file meeting transcript canvas responsibilities tasks please can could'.split(/\s+/));
@@ -71,6 +94,6 @@ function buildExtractPrompt({ question = '', docTitle = '', docText = '' } = {})
 }
 
 module.exports = {
-  DOC_REF_RE, EXTRACT_VERB_RE, PROVIDE_NEG_RE,
-  isDocQuery, pickRelevantDoc, buildExtractPrompt,
+  DOC_REF_RE, EXTRACT_VERB_RE, PROVIDE_NEG_RE, READING_REF_RE,
+  isDocQuery, isReadingQuery, readingSearchTerms, pickRelevantDoc, buildExtractPrompt,
 };

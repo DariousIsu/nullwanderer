@@ -66,6 +66,10 @@ const MIGRATIONS = [
   `ALTER TABLE monologue ADD COLUMN type TEXT DEFAULT 'thought'`,
   `ALTER TABLE monologue ADD COLUMN query TEXT`,
   `ALTER TABLE monologue ADD COLUMN urls TEXT`,
+  // doc_ref → documents.id: a READING that came from a STORED document carries the pointer, so any
+  // consumer (package grounding, recall markers) can cite it as [dN] and pull the full text on demand
+  // instead of quoting the reading's own 240-char gist. NULL = the reading has no stored doc behind it.
+  `ALTER TABLE monologue ADD COLUMN doc_ref INTEGER`,
   `CREATE INDEX IF NOT EXISTS idx_monologue_type_ts ON monologue(type, ts)`,
   `CREATE TABLE IF NOT EXISTS commitments (
     id INTEGER PRIMARY KEY,
@@ -905,11 +909,11 @@ function _kgTap(kind, anchor, extra) {
   try { const f = global.__emitKgActivity; if (typeof f === 'function') f(Object.assign({ db: 'sidequest', kind, anchor: anchor == null ? '' : String(anchor).slice(0, 120), count: 1 }, extra || {})); } catch (e) {}
 }
 let _lastThinkEmit = 0;   // kg:activity think throttle — the monologue firehose becomes an ambient pulse, not a strobe
-function insertMonologue({ content, model = null, feedContext = null, type = 'thought', query = null, urls = null, importance = null }) {
+function insertMonologue({ content, model = null, feedContext = null, type = 'thought', query = null, urls = null, importance = null, docRef = null }) {
   const ts = Date.now();
   const info = getDb()
-    .prepare('INSERT INTO monologue (ts, model, content, feed_context, type, query, urls, importance) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(ts, model, content, feedContext ? JSON.stringify(feedContext) : null, type, query, urls ? JSON.stringify(urls) : null, importance);
+    .prepare('INSERT INTO monologue (ts, model, content, feed_context, type, query, urls, importance, doc_ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(ts, model, content, feedContext ? JSON.stringify(feedContext) : null, type, query, urls ? JSON.stringify(urls) : null, importance, docRef || null);
   // kg:activity — an ambient 'think' heartbeat (she's alive and working). THROTTLED (≥3.5s apart) so the
   // monologue firehose reads as a background pulse, never a per-tick strobe; a varying anchor lets it roam the
   // far-field. Safe-with-no-receiver (global.__emitKgActivity is only set in the Electron main process).
@@ -1572,6 +1576,11 @@ function getDocument(id) {
 const LIVE = 'superseded_by IS NULL';
 
 // Recent documents, newest first. opts.unpromotedOnly limits to short-term (not yet consolidated).
+// One stored document by id — the [dN] recall-marker resolver (lib/recall) and any doc_ref consumer.
+function getDocumentById(id) {
+  return getDb().prepare('SELECT * FROM documents WHERE id = ?').get(Number(id) || 0) || null;
+}
+
 function recentDocuments(n = 20, { unpromotedOnly = false } = {}) {
   const where = unpromotedOnly ? `WHERE promoted = 0 AND ${LIVE}` : `WHERE ${LIVE}`;
   return getDb().prepare(`SELECT * FROM documents ${where} ORDER BY id DESC LIMIT ?`).all(Math.max(1, n | 0));
@@ -2390,6 +2399,7 @@ module.exports = {
   getDocumentByHash,
   getDocument,
   recentDocuments,
+  getDocumentById,
   listUnpromotedDocuments,
   searchDocuments,
   markDocumentPromoted,

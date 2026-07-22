@@ -26,6 +26,18 @@ ok(dq.isDocQuery('research the top 5 think tanks for their VPs') === false, 'a r
 ok(dq.isDocQuery('how are you today?') === false, 'chit-chat → NOT a doc query');
 ok(dq.isDocQuery('what time is it') === false, 'no doc reference → NOT a doc query');
 
+// --- isReadingQuery: HER readings referenced declaratively (memory slice 1 #6) ---
+ok(dq.isReadingQuery('you read something about neuromorphic chips, right?') === true, '"you read something about X" → reading query');
+ok(dq.isReadingQuery('what was that paper you read on state AI task forces?') === true, '"that paper you read" → reading query');
+ok(dq.isReadingQuery('what have you been reading lately?') === true, '"what have you been reading" → reading query');
+ok(dq.isReadingQuery('you were reading about the Fed pause earlier') === true, '"you were reading about" → reading query');
+ok(dq.isReadingQuery('the article you mentioned about hurricanes — what did it say?') === true, '"the article you mentioned" → reading query');
+ok(dq.isReadingQuery('you read my mind') === false, 'bare "you read X" without an about/noun form → NOT a reading query');
+ok(dq.isReadingQuery('I read something about otters today') === false, 'LUCAS reading is not HER reading → NOT a reading query');
+ok(dq.isReadingQuery('pull my responsibilities out of the meeting notes') === false, 'a handed-doc query is NOT a reading query (isDocQuery owns it)');
+ok(dq.readingSearchTerms('what was that paper you read on neuromorphic computing?').includes('neuromorphic'), 'search terms keep the content words');
+ok(!dq.readingSearchTerms('that article you read').includes('article'), 'search terms drop the reading-reference scaffolding');
+
 // --- pickRelevantDoc ---
 const docs = [
   { title: 'Rainey Weekly Huddle', markdown: 'Lucas Overby — deliver publishing materials to Sydney.', openedAt: 100 },

@@ -1535,7 +1535,7 @@ app.whenReady().then(() => {
             try { landed = require('./lib/doc_store').land({ title: label, body: markdown, source: 'canvas_drop', ref: t.tabKey, understanding }); } catch (e) { console.error('[canvas-ingest] doc land failed:', e.message); }
             // ACCRETE — a reading in her stream + a durable memory + captured learnings/entities.
             try {
-              const row = db.insertMonologue({ content: `I read the document Lucas dropped on my canvas — "${label}":\n${understanding || markdown.slice(0, 400)}`, model: 'canvas_ingest', type: 'reading', query: label });
+              const row = db.insertMonologue({ content: `I read the document Lucas dropped on my canvas — "${label}":\n${understanding || markdown.slice(0, 400)}`, model: 'canvas_ingest', type: 'reading', query: label, docRef: (landed && landed.id) || null });
               if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(read drop) ${label}`, type: 'reading', query: label });
             } catch {}
             try { await memoryLib.store({ kind: 'reference', content: note, source: 'canvas_drop', importance: 0.6, embedText: `${label}\n${markdown.slice(0, 800)}` }); } catch (e) { console.error('[canvas-ingest] memory store failed:', e.message); }
@@ -6284,13 +6284,25 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let docQaHandled = false;
   try {
     const docQa = require('./lib/doc_qa');
-    if (!socialTurn && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled && docQa.isDocQuery(userMessage)) {
+    const readingQuery = !socialTurn && docQa.isReadingQuery(userMessage);
+    if (!socialTurn && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled && (docQa.isDocQuery(userMessage) || readingQuery)) {
       // Candidates come from the DURABLE short-term store (reboot-proof) FIRST, then any FRESH canvas drop
       // not yet landed (just dropped, before the 45s ingest tick) — so the held doc is findable whether or
       // not the volatile engine canvas still has it. Conversation objects are excluded — "the notes" means
       // a document Lucas HANDED her, and they're filtered BEFORE the cap so a chatty day (many conversation
       // windows landing) can't push his real drops out of the candidate window.
       const candidates = require('./lib/doc_store').candidates(60).filter(c => c.source !== 'conversation').slice(0, 20);
+      // A reading query ("you read something about X") reaches past recency: keyword recall over ALL
+      // stored docs joins the candidate set — she read it days ago; it should still answer.
+      if (readingQuery) {
+        try {
+          const ds = require('./lib/doc_store');
+          const seen = new Set(candidates.map(c => c.id).filter(Boolean));
+          for (const t of docQa.readingSearchTerms(userMessage)) {
+            for (const c of ds.recall(t, 5)) if (c.source !== 'conversation' && c.id && !seen.has(c.id)) { candidates.push(c); seen.add(c.id); }
+          }
+        } catch {}
+      }
       try {
         const snap = await canvasSnapshot();
         if (snap && Array.isArray(snap.tabs)) {
@@ -6308,8 +6320,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         const answer = await condenseComplete(docQa.buildExtractPrompt({ question: userMessage, docTitle: doc.title, docText: doc.markdown }), { numPredict: 1200 });
         if (answer && answer.trim()) {
           docQaHandled = true;
-          composedUserMessage += `\n\n[DELIVER TO ${userName} — he asked you to extract this FROM a document he gave you ("${doc.title}"), and you READ it and pulled the answer grounded in it. Present it in your own voice: keep every item, do not summarize away detail or pad. A one-line lead-in is fine, then the answer:\n${answer}]`;
-          try { db.insertMonologue({ content: `Answered Lucas from the document "${doc.title}": ${answer.slice(0, 200)}`, model: 'doc_qa', type: 'reading', query: doc.title }); } catch {}
+          composedUserMessage += `\n\n[DELIVER TO ${userName} — ${readingQuery ? `he asked about something you READ; you found it in "${doc.title}" (a document you hold) and pulled the answer grounded in it` : `he asked you to extract this FROM a document he gave you ("${doc.title}"), and you READ it and pulled the answer grounded in it`}. Present it in your own voice: keep every item, do not summarize away detail or pad. A one-line lead-in is fine, then the answer:\n${answer}]`;
+          try { db.insertMonologue({ content: `Answered Lucas from the document "${doc.title}": ${answer.slice(0, 200)}`, model: 'doc_qa', type: 'reading', query: doc.title, docRef: doc.id || null }); } catch {}
           console.log(`[doc-qa] answered "${String(userMessage).slice(0, 50)}" from "${doc.title}" (${doc.markdown.length} chars)`);
         }
       }
@@ -6938,8 +6950,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             g.push('EARLIER IN THIS CONVERSATION (relevant to what he just said):\n'
               + relevantPastTurns.map((t) => `• ${t.speaker === 'user' ? (userName || 'They') : 'You'}: ${String(t.content || '').replace(/\s+/g, ' ')}`).join('\n'));
           }
-          const readings = _fmtRows(recentReadings, 6);
-          if (readings) g.push('THINGS SHE READ BETWEEN TURNS:\n' + readings);
+          // Readings with a stored doc behind them carry the [dN] handle — title+ref+gist, so the
+          // writer QUOTES the document (one <recall ref="dN"/> pulls it whole) instead of parroting
+          // a 240-char gist. The dereference IS the design: full-inference memory, not full-context cost.
+          const readings = (recentReadings || []).slice(-6)
+            .map((x) => {
+              const gist = String((x && x.content) || '').replace(/\s+/g, ' ').trim();
+              if (!gist || gist.length <= 2) return '';
+              return x && x.doc_ref ? `• [d${x.doc_ref}] ${gist}` : `• ${gist}`;
+            })
+            .filter(Boolean).join('\n');
+          if (readings) g.push('THINGS SHE READ BETWEEN TURNS (a [dN] handle = the full stored document — pull it with <recall ref="dN"/> when you need to quote or verify it):\n' + readings);
           groundingSec = g.join('\n\n');
           const m = [];
           const threads = _fmtRows(openThreads, 8); if (threads) m.push('OPEN THREADS:\n' + threads);
