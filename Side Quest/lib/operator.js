@@ -96,7 +96,11 @@ TOOLS (call exactly ONE per step):
 - open_page {"url":"…"}         open a SPECIFIC page in her browser and read it in full — use this to go DEEPER into a good source instead of bouncing to a new search: follow a promising link you saw, or go straight to an org's own /team, /leadership, /about, or /contact page
 - browser_read {}               read the page currently open in her browser
 - file {"op":"read|write|append|list","path":"notes/x.md","content":"…"}   her workspace files
-- puller_add {"company":"…","contacts":[{"name":"…","title":"…","email":"…","phone":"…","verified":true}]}   BANK the real people you found into Puller (our contact store) — it learns the company's email pattern + grades confidence. On a CONTACTS task, call this as you find each executive: name + title always; email/phone when found; verified:true ONLY if the email came from an official/public source (else it's treated as a pattern candidate)`;
+- puller_add {"company":"…","contacts":[{"name":"…","title":"…","email":"…","phone":"…","verified":true}]}   BANK the real people you found into Puller (our contact store) — it learns the company's email pattern + grades confidence. On a CONTACTS task, call this as you find each executive: name + title always; email/phone when found; verified:true ONLY if the email came from an official/public source (else it's treated as a pattern candidate)
+- source_map {}                 HER OWN SOURCE CODE — the file map of the program she runs on, each module with its own description. Use for "how am I coded / where does X live"
+- source_read {"path":"lib/board.js"}   read one of her own source files (read-only; code + docs only — data, logs, and secrets are unreachable)
+- source_search {"pattern":"…"}         search her source for a string/regex ("where is X implemented", "who calls Y")
+- self_test {"suite":"smoke_board.js"}  run her own offline verification gate — ONE named suite in seconds, or omit suite for the FULL gate (minutes; use sparingly). The honest answer to "am I healthy?"`;
 
 const TOOL_SPEC_TAIL = `To use a tool, reply with ONE JSON object and nothing else:
   {"thought":"why","action":{"tool":"echo","args":{"need":"…"}}}

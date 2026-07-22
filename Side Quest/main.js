@@ -8413,6 +8413,12 @@ const operatorTools = {
     try { const inv = require('./lib/localdb').inventory(); return inv.length ? inv.map(t => `${t.table} (${t.rows})`).join(', ') : '(empty)'; }
     catch (e) { return 'ERROR: ' + e.message; }
   },
+  // SELF-KNOWLEDGE (slice 3a) — read-only access to her OWN source + the offline verification gate
+  // (lib/self_source: allowlist-jailed; data/, .env*, logs, node_modules are unreachable by name).
+  source_map: async () => { try { return require('./lib/self_source').sourceMap(); } catch (e) { return 'ERROR: ' + e.message; } },
+  source_read: async ({ path: p } = {}) => { try { return require('./lib/self_source').readSource(String(p || '')); } catch (e) { return 'ERROR: ' + e.message; } },
+  source_search: async ({ pattern } = {}) => { try { return require('./lib/self_source').searchSource(String(pattern || '')); } catch (e) { return 'ERROR: ' + e.message; } },
+  self_test: async ({ suite } = {}) => { try { return await require('./lib/self_source').selfTest({ suite: suite || null }); } catch (e) { return 'ERROR: ' + e.message; } },
 };
 // CURATED ECHO READ TOOLS (first-class) — promote high-value structured reads (nonprofit 990s, our KG,
 // federal funding, FEC, bills) so the operator reaches for the right source deliberately instead of a
@@ -8455,7 +8461,9 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
     const tools = {};
     // toolNames (when given) restricts this run to ONE lane's tools (web vs deep). Default = all.
     const keys = (Array.isArray(toolNames) && toolNames.length) ? toolNames.filter(k => operatorTools[k]) : Object.keys(operatorTools);
-    for (const k of keys) tools[k] = (a) => TO(operatorTools[k](a));
+    // self_test runs the offline gate (a full run takes minutes) — it gets its own budget instead of
+    // the 20s per-tool default that every quick lookup keeps.
+    for (const k of keys) tools[k] = (a) => TO(operatorTools[k](a), k === 'self_test' ? 360000 : undefined);
     // TIER GATE on the generic `echo` need-router: on the AUTONOMOUS loop the cloud may pick ANY of the
     // 500+ tools, so pass `autonomous` so routeNeed blocks a write/heavy/locked pick (reads stay open).
     // The curated read tools above are READ-only and need no flag. Interactive turns (autonomous=false)
