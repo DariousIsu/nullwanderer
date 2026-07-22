@@ -183,7 +183,10 @@ async function digestWhole(d, raw, opts = {}) {
   const budget = inputBudgetChars(numCtx, numPredict);
   const overhead = buildDigestPrompt('', opts).length;
   const chunks = planChunks(raw, Math.max(4000, budget - overhead));
-  const run = (p) => runModel(d, p, numPredict, model);
+  // The resolved window is PASSED to the call (audit 2026-07-22): this planned chunks against the
+  // real window, logged it — and then runModel transmitted at deepNumCtx (32768), so a single-pass
+  // digest planned for 131k+ was front-truncated anyway. Plan and transmission now use one number.
+  const run = (p) => runModel(d, p, numPredict, model, numCtx);
 
   if (chunks.length <= 1) {
     console.log(`[scribe] digest: 1 pass, ${raw.length} chars, num_ctx ${numCtx} (${model})`);
@@ -233,16 +236,17 @@ function defaultDeps() {
 }
 
 // modelOverride lets finalize route the one-time RECAP to the deep reasoner (gpt-oss:120b) while the
-// running minutes stay on the fast scribe model for cadence (cloud-leverage). num_ctx uses the deep window
-// so the scribe can read a fat transcript slice; think:false keeps the record, not chain-of-thought.
-async function runModel(d, prompt, numPredict, modelOverride) {
+// running minutes stay on the fast scribe model for cadence (cloud-leverage). num_ctx defaults to the
+// deep window; digestWhole passes the model's RESOLVED window so what was planned is what is sent.
+// think:false keeps the record, not chain-of-thought.
+async function runModel(d, prompt, numPredict, modelOverride, numCtx = null) {
   const cfg = require('./config');
   let out = '';
   try {
     await d.streamChat({
       model: modelOverride || d.MODEL,
       messages: [{ role: 'user', content: prompt }],
-      options: { temperature: 0.3, top_p: 0.9, num_ctx: cfg.deepNumCtx(), num_predict: numPredict },
+      options: { temperature: 0.3, top_p: 0.9, num_ctx: numCtx || cfg.deepNumCtx(), num_predict: numPredict },
       think: false,   // scribe wants the record, not chain-of-thought — full budget to the output
       onToken: (t) => { out += t; },
     });

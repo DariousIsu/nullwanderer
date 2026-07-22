@@ -4254,6 +4254,32 @@ ipcMain.handle('kg:shortterm', async () => {
   } catch (e) { console.error('[kg] shortterm failed:', e.message); return { ok: false, error: e.message }; }
 });
 
+// SELF LAYER — Zoe's own personality, which LIVES in the short-term region (Lucas, 2026-07-22: "that region
+// is also where Zoe personality lives"). Zoe IS the memory substrate; the model is a swappable voice — so the
+// identity that persists is exactly these rows: the self_model (who she says she is), her held commitments,
+// her reflections. The renderer draws them as the innermost ring of the short-term orb, around a Zoe anchor.
+// Read-only; bounded; personality changes slowly so the renderer polls this rarely.
+ipcMain.handle('kg:self', async () => {
+  try {
+    const d = db.getDb();
+    const rows = d.prepare(
+      `SELECT id, category, content, importance FROM self_model ORDER BY importance DESC, COALESCE(updated_ts, created_ts) DESC LIMIT 96`
+    ).all().map(r => ({ id: r.id, category: r.category || 'insight', content: String(r.content || '').slice(0, 220), importance: r.importance }));
+    const counts = {
+      commitments: (d.prepare(`SELECT COUNT(*) n FROM commitments WHERE status = 'held'`).get() || {}).n || 0,
+      reflections: (d.prepare('SELECT COUNT(*) n FROM reflections').get() || {}).n || 0,
+    };
+    // Mood is display colour, not a fact claim — best-effort through the doubly-encoded meta value.
+    let feeling = null;
+    try {
+      let m = JSON.parse(db.getMeta('mood_state') || 'null');
+      if (m && typeof m.feeling === 'string') { try { const inner = JSON.parse(m.feeling); if (inner && typeof inner === 'object') m = inner; } catch (e) {} }
+      if (m && typeof m.feeling === 'string') feeling = m.feeling.slice(0, 80);
+    } catch (e) {}
+    return { ok: true, rows, counts, feeling };
+  } catch (e) { console.error('[kg] self failed:', e.message); return { ok: false, error: e.message }; }
+});
+
 // kg:activity BUS (Stage A transport) — the single broadcaster the DB-side emitters (Slices 2/3) call to push a
 // real data-interaction event to the KG panel. Broadcasts to ALL webContents because the panel is a <webview>
 // (only it registers kg:activity), mirroring emitFocusMove. Payload is tiny + additive + safe-with-no-receiver.
@@ -6785,6 +6811,38 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             if (references) console.log(`[references] ${rb.refs.filter((r) => r.status === 'resolved').length} resolved / ${rb.refs.filter((r) => r.status !== 'resolved').length} open${rb.series.length ? ` · ${rb.series.length} recurring series` : ''}`);
           }
         } catch (e) { console.error('[main] references failed:', e.message); }
+        // GROUNDING + MEMORY SECTIONS (audit 2026-07-22) — the RAW material, sized by the package's
+        // own budgeter, not by the distiller. The distilled brief exists to protect the 8k LOCAL
+        // voice, but it also replaced what the CLOUD writer saw: the 131k window measured 9-10% fit
+        // while the grounding (36% weight) and memory (16%) slots sat EMPTY — a frontier model was
+        // reading a 600-token summary of what we actually hold. The local fallback keeps the
+        // distilled `messages`; only the package widens. Sections are budgeted + floored, so this
+        // cannot overflow the window. The distilledBrief guards prevent duplication: undistilled
+        // turns already carry KB/past-turns inside identity. Threads/commitments/reflections/
+        // monologue ride ALWAYS — buildChatPrompt intentionally stopped reading those params
+        // (voice-renderer strip), so until now they reached NO writer at all.
+        const _fmtRows = (arr, n) => (arr || []).slice(-n)
+          .map((x) => '• ' + String((x && x.content) || x || '').replace(/\s+/g, ' ').trim())
+          .filter((s) => s.length > 2).join('\n');
+        let groundingSec = '';
+        let memorySec = '';
+        try {
+          const g = [];
+          if (distilledBrief && retrievedKnowledgeBlock) g.push(retrievedKnowledgeBlock);
+          if (distilledBrief && relevantPastTurns && relevantPastTurns.length) {
+            g.push('EARLIER IN THIS CONVERSATION (relevant to what he just said):\n'
+              + relevantPastTurns.map((t) => `• ${t.speaker === 'user' ? (userName || 'They') : 'You'}: ${String(t.content || '').replace(/\s+/g, ' ')}`).join('\n'));
+          }
+          const readings = _fmtRows(recentReadings, 6);
+          if (readings) g.push('THINGS SHE READ BETWEEN TURNS:\n' + readings);
+          groundingSec = g.join('\n\n');
+          const m = [];
+          const threads = _fmtRows(openThreads, 8); if (threads) m.push('OPEN THREADS:\n' + threads);
+          const commits = _fmtRows(heldCommitments, 8); if (commits) m.push('POSITIONS SHE HOLDS:\n' + commits);
+          const refl = _fmtRows(recentReflections, 6); if (refl) m.push('NOTES TO SELF:\n' + refl);
+          const mono = _fmtRows(recentMonologue, 6); if (mono) m.push('RECENT PRIVATE THOUGHTS:\n' + mono);
+          memorySec = m.join('\n\n');
+        } catch (e) { console.error('[main] package grounding/memory assembly failed:', e.message); }
         const _win = await require('./lib/cloud_logic').resolveWindow(db.getMeta('model.replier') || null);
         const built = pkg.build({
           window: _win || {},
@@ -6792,7 +6850,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           // lift it out of identity here — it belongs in the `tools` slot, which is budgeted, floored
           // at 1200 chars, and sits near the END of the package where recency helps a model reach for
           // a tool. Buried at the top of a 34k identity blob it was present but not used.
-          sections: { identity: _identityWithoutSuit(messages, suit), plan, references, manifest, tools: suit || '' },
+          sections: { identity: _identityWithoutSuit(messages, suit), plan, references, manifest, tools: suit || '', memory: memorySec, grounding: groundingSec },
         });
         cloudMessages = built.messages;
         console.log(`[package] ${pkg.describe(built.report)}`);
@@ -6911,7 +6969,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // retry to actually say something: brief, think-skipping, num_predict-capped so it stays well
   // inside the output budget and can't re-truncate. (Piece 3a already shrank the prompt to make
   // this rarer; this guarantees she never goes silent on a plain conversational turn.)
-  const _hasToolTag = /<(web-open|web-read|web-click|web-type|web-back|web-close|browse|file-write|file-append|file-read|file-list|observe-screen|read-inbox|email|discord-dm|schedule|notify|clipboard-read|clipboard-write|echo-find|echo-do|chat-send|navigate|recall)\b/i.test(`${thought || ''}\n${say || ''}`);
+  // Tag list extended (audit 2026-07-22): echo-delegate/echo-recipe/image-gen/draw/imagine are all
+  // real dispatched tags that were missing here — a turn emitting only one of them with an empty
+  // <say> tripped the blank-reply recovery below and generated a SECOND reply over the acting one.
+  // Third drift of this hand-copied list; the leakguard smoke reads the vocabulary from this regex,
+  // so extending here extends the gate too.
+  const _hasToolTag = /<(web-open|web-read|web-click|web-type|web-back|web-close|browse|file-write|file-append|file-read|file-list|observe-screen|read-inbox|email|discord-dm|schedule|notify|clipboard-read|clipboard-write|echo-find|echo-do|echo-delegate|echo-recipe|image-gen|draw|imagine|chat-send|navigate|recall)\b/i.test(`${thought || ''}\n${say || ''}`);
   // Salvage runs on ANY real user turn (dropped the old `!pulledFromThought` guard — a turn where Lucas
   // snapped her out of a thought must ALSO not go silent; that's exactly when the reply lands in <think>).
   // `|| truncated`: a TRUNCATED thought that merely ECHOES a `<browse…>`/tool fragment (cut off mid-tag,
@@ -8003,31 +8066,51 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
         if (channel === 'discord') {
           try { await discordLib.sendDM(sayOut); } catch (e) { console.error('[main] followup discord DM failed:', e.message); }
         } else {
-          try { if (io && io.onComplete) io.onComplete(followupDisclaimed ? { saidId: saidRow.id, truncated: 0, unprompted: true, say: sayOut } : { saidId: saidRow.id, truncated: 0, unprompted: true }); } catch {}
+          // `unprompted` follows the SAME `prompted` flag the DB row above uses — this was hardcoded
+          // `true`, so every find→do→answer reply was live-labeled autonomous and reached the
+          // transcript only by winning the renderer's currentAiTurnDiv race (chat.js:322 files the
+          // losers in the sheep rail). The stored row was always right; the live event now agrees.
+          try { if (io && io.onComplete) io.onComplete(followupDisclaimed ? { saidId: saidRow.id, truncated: 0, unprompted: !prompted, say: sayOut } : { saidId: saidRow.id, truncated: 0, unprompted: !prompted }); } catch {}
         }
         console.log('[main] tool follow-up delivered via', channel);
       }
     }
-    // ECHO CHAIN: she emitted a follow-on Echo tag → dispatch the first and recurse with its
-    // result (echoHop+1), so find→do→answer completes in one flow. Bounded by MAX_ECHO_HOPS.
+    // ECHO CHAIN: she emitted follow-on Echo tag(s) → dispatch them and recurse with the results
+    // (echoHop+1), so find→do→answer completes in one flow. Bounded by MAX_ECHO_HOPS.
+    //
+    // ⭐ ALL the tags from this hop run, not just chainTags[0] (audit 2026-07-22). The model authors
+    // related calls together — open_tab + add_block in one breath — and silently dropping tags 2..n
+    // was action-bandwidth starvation: a multi-step plan executed as a chain of single steps, each
+    // costing a full cloud round-trip, and a document chain could stall with an empty tab. Bounded
+    // per hop; overflow is DEFERRED with an explicit note (a cap may defer, never disappear).
     if (chainTags.length > 0 && echoSuit) {
-      const t = chainTags[0];
-      try {
-        const r = await echoSuit.dispatch(t);
-        const label = t.kind === 'do' ? `echo ${t.name}` : `echo ${t.kind}`;
-        const content = `I used the Echo suit (${label}):\n${(r.text || '').slice(0, require('./lib/config').toolResultChars())}`;
-        try { db.insertMonologue({ content, model: 'echo-suit', type: 'reading', query: label }); } catch {}
-        try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(${label}${r.isError ? ' ⚠' : ''})`, type: 'reading', query: label }); } catch {}
-        // ⭐ MIRROR HERE TOO. The canvas mirror was added to the FIRST dispatch site only, and a
-        // document is written from the FOLLOW-UP hops — she opens the tab in the reply, then adds
-        // blocks as the chain continues. Live 2026-07-21: `echo chain hop 2: saga_canvas_add_block →
-        // ok` while the durable store still held 0 blocks, because this path never mirrored. The tab
-        // rendered on Lucas's canvas and would have vanished at the next reboot — the same
-        // right-action-wrong-side-of-the-door failure the mirror exists to prevent.
-        _mirrorCanvasWrite(t, r);
-        console.log(`[main] echo chain hop ${echoHop + 1}: ${label} → ${r.ok ? 'ok' : 'ERR'}`);
-        await fireToolFollowup({ io, channel, sessionId, resultText: content + (r.isError ? '\n[That call errored — fix the args or pick another tool with <echo-find>.]' : ''), echoHop: echoHop + 1, prompted });
-      } catch (e) { console.error('[main] echo chain hop failed:', e.message); }
+      const MAX_TAGS_PER_HOP = 8;
+      const runTags = chainTags.slice(0, MAX_TAGS_PER_HOP);
+      const deferredTags = chainTags.length - runTags.length;
+      const hopParts = [];
+      for (const t of runTags) {
+        try {
+          const r = await echoSuit.dispatch(t);
+          const label = t.kind === 'do' ? `echo ${t.name}` : `echo ${t.kind}`;
+          const content = `I used the Echo suit (${label}):\n${(r.text || '').slice(0, require('./lib/config').toolResultChars())}`;
+          try { db.insertMonologue({ content, model: 'echo-suit', type: 'reading', query: label }); } catch {}
+          try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(${label}${r.isError ? ' ⚠' : ''})`, type: 'reading', query: label }); } catch {}
+          // ⭐ MIRROR HERE TOO. The canvas mirror was added to the FIRST dispatch site only, and a
+          // document is written from the FOLLOW-UP hops — she opens the tab in the reply, then adds
+          // blocks as the chain continues. Live 2026-07-21: `echo chain hop 2: saga_canvas_add_block →
+          // ok` while the durable store still held 0 blocks, because this path never mirrored. The tab
+          // rendered on Lucas's canvas and would have vanished at the next reboot — the same
+          // right-action-wrong-side-of-the-door failure the mirror exists to prevent.
+          _mirrorCanvasWrite(t, r);
+          console.log(`[main] echo chain hop ${echoHop + 1}: ${label} → ${r.ok ? 'ok' : 'ERR'}`);
+          hopParts.push(content + (r.isError ? '\n[That call errored — fix the args or pick another tool with <echo-find>.]' : ''));
+        } catch (e) { console.error('[main] echo chain hop failed:', e.message); }
+      }
+      if (deferredTags > 0) hopParts.push(`[${deferredTags} more tag${deferredTags === 1 ? '' : 's'} you emitted this turn were DEFERRED (per-hop bound) — re-emit any that still matter.]`);
+      if (hopParts.length) {
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: hopParts.join('\n\n'), echoHop: echoHop + 1, prompted }); }
+        catch (e) { console.error('[main] echo chain follow-up failed:', e.message); }
+      }
     }
   } catch (err) {
     console.error('[main] fireToolFollowup failed:', err.message);
@@ -8248,7 +8331,10 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
     const res = await operator.runOperator({
       userMessage, context: (context || '') + taskNote,
       deps: { complete: operator._operatorComplete, tools },
-      maxSteps: task ? 8 : undefined, maxMs: task ? 90000 : undefined,
+      // 12/180s (was 8/90s): parity with the chat lane's MAX_ECHO_HOPS=12, and each step now carries
+      // full-size tool results (operator.js reads them at toolResultChars, not a 1,200-char keyhole),
+      // so later steps are worth their wall-clock. Chat turns keep the snappy 4/45s defaults.
+      maxSteps: task ? 12 : undefined, maxMs: task ? 180000 : undefined,
       numPredict: task ? config.sectionNumPredict() : undefined,   // a list/write-up can be long — don't truncate it at generation (cloud-leverage: deeper write-ups)
       model, toolSpec                         // per-lane model + tool menu (null = single-lane defaults)
     });
@@ -9768,10 +9854,17 @@ async function condenseComplete(messages, { numPredict = 2500 } = {}) {
     const src = (models.sources() || []).find(s => s.tier === 'cloud' && s.token);
     if (!src) return '';
     const model = (() => { try { return require('./lib/config').subconsciousModel() || 'gpt-oss:120b'; } catch { return 'gpt-oss:120b'; } })();
+    // Window sized to the MODEL (audit 2026-07-22): this one door fans out to ~20 condense/research
+    // call sites and ran the 131k reasoner at a hardcoded 32768. think:false is the critical half —
+    // without it gpt-oss burns numPredict (some callers pass 320–600, well under its ~1500 reasoning
+    // floor) on hidden message.thinking, and pickText salvages CHAIN-OF-THOUGHT as the answer.
+    let numCtx = 32768;
+    try { numCtx = (await require('./lib/cloud_window').resolve({ model, base: src.base, token: src.token })).num_ctx; } catch {}
     const r = await require('./lib/ollama').completeDetailed({
       model, messages, base: src.base,
       headers: src.token ? { Authorization: `Bearer ${src.token}` } : {},
-      options: { temperature: 0.3, num_ctx: 32768, num_predict: numPredict }
+      think: false,
+      options: { temperature: 0.3, num_ctx: numCtx, num_predict: numPredict }
     });
     return (r && (r.text || '')) || '';
   } catch (e) { console.error('[condense] cloud failed:', e.message); return ''; }

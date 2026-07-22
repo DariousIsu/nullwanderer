@@ -43,13 +43,17 @@ function dailyCap() {
 
 // ---- the cloud primitive (resolve cloud tier + curator model → ollama.complete) ----
 // Returns { text, model } or null when no cloud tier/model is configured (fail-safe).
-let _modelCache = null;
+// TTL, not a permanent latch: this cache was set once and never invalidated, so a model swap via
+// db meta (models.setModelFor) was ignored until reboot — and since model.replier is unset, the
+// REPLY writer and its resolveWindow budget rode the stale value too. 10 min matches models._ctxCache.
+let _modelCache = null, _modelCacheAt = 0;
+const MODEL_CACHE_TTL_MS = 10 * 60 * 1000;
 async function _resolveModel(models, cloud) {
-  if (_modelCache) return _modelCache;
+  if (_modelCache && (Date.now() - _modelCacheAt) < MODEL_CACHE_TTL_MS) return _modelCache;
   let m = models.getModelFor('curator', null) || models.getModelFor('editor', null)
     || (process.env.AGENT_MODEL_ON_DEMAND_BACKGROUND || '').trim() || null;
   if (!m && cloud) { try { const list = await models.listFromSource(cloud); if (list && list.length) m = list[0].name; } catch {} }
-  if (m) _modelCache = m;
+  if (m) { _modelCache = m; _modelCacheAt = Date.now(); }
   return m;
 }
 async function _complete(messages, { temperature = 0.2, num_predict = 400, model: modelOverride = null } = {}) {
@@ -251,7 +255,9 @@ async function ask({ task, v = 1, input = {}, want = '', validate = null, model 
 
   const messages = _buildMessages({ task, v, want, inputStr });
   let res = await complete(messages, cOpts);
-  if (!deps.skipBudget) _budgetInc();
+  // Count only calls that actually reached a model: a cloud outage returned null AND burned the
+  // daily counter, so a long outage could exhaust the cap and keep skipping tasks after recovery.
+  if (res && !deps.skipBudget) _budgetInc();
   let raw = (res && res.text) || '';
   const usedModel = (res && res.model) || model || 'cloud';
 
@@ -265,7 +271,7 @@ async function ask({ task, v = 1, input = {}, want = '', validate = null, model 
       { role: 'user', content: `That response was INVALID: ${v1.error}. Re-emit ONLY the correct format — nothing else.` }
     ]);
     const res2 = await complete(repairMsgs, cOpts);
-    if (!deps.skipBudget) _budgetInc();
+    if (res2 && !deps.skipBudget) _budgetInc();   // same rule as above — no charge for an unreachable cloud
     repaired = 1;
     const raw2 = (res2 && res2.text) || '';
     const v2 = _runValidate(validate, raw2);

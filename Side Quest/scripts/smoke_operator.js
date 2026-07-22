@@ -14,6 +14,22 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(op.parseAction('{"thought":"x","final":"done"}').final === 'done', 'parses a final step');
   ok(op.parseAction('sure, here you go {"thought":"a","final":"hi"} ok') !== null, 'tolerates surrounding prose');
   ok(op.parseAction('no json here') === null, 'no JSON → null (caller treats prose as the answer)');
+  // The greedy-span regression: prose braces BEFORE the real step used to poison first-{…last-} and
+  // the garbled step was voiced as the answer. Balanced scan skips them.
+  ok(op.parseAction('Let me weigh {the options} first. {"thought":"ok","action":{"tool":"recall","args":{"query":"x"}}}').action.tool === 'recall', 'prose braces before the step no longer poison the parse');
+  ok(op.parseAction('{"rows":[1,2]} then {"final":"the answer"}').final === 'the answer', 'a parseable NON-step blob is skipped whole, the real step is found');
+  ok(op.parseAction('{"final":"truncated mid-strin') === null, 'unbalanced/truncated JSON → null (repair path, not a voiced fragment)');
+  ok(op.looksLikeJsonStep('{"action":{"tool":"x"}}') && !op.looksLikeJsonStep('Just a friendly hello.'), 'looksLikeJsonStep separates attempted steps from genuine prose');
+
+  // --- ONE repair reprompt on a malformed ATTEMPTED step (genuine prose still passes straight through) ---
+  let rs = 0;
+  const repairScript = [
+    'I will search now: {"thought":"go","action":{"tool":"web_search","args":{"query":"oil"',   // truncated → unparseable, but clearly an attempted step
+    '{"thought":"go","action":{"tool":"web_search","args":{"query":"oil"}}}',                    // the repaired re-emit
+    '{"final":"repaired and finished"}',
+  ];
+  const rr = await op.runOperator({ userMessage: 'x', deps: { complete: async () => ({ text: repairScript[rs++] }), tools: { web_search: async () => 'ok' } }, maxSteps: 4 });
+  ok(rr && rr.answer === 'repaired and finished' && rr.steps.length === 1 && rr.steps[0].tool === 'web_search', 'malformed attempted step → ONE repair reprompt → tool still runs (not voiced as the answer)');
 
   // --- multi-step loop: web_search → echo → final, executing real (mock) tools ---
   const calls = [];

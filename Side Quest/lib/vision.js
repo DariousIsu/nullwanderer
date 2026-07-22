@@ -59,7 +59,11 @@ async function describe({ imageBase64, prompt = null, model = null, tier = null,
   const messages = [{ role: 'user', content: prompt || DEFAULT_VISION_PROMPT, images: [img] }];
   const call = completeFn || complete;
   try {
-    const text = await call({ model: m, messages, base: src.base, headers: src.token ? { Authorization: `Bearer ${src.token}` } : {}, options: { temperature: 0.2, num_ctx: 8192 }, timeoutMs: 120000 });
+    // CLOUD tier: window sized to the model — an image alone can be thousands of tokens, so 8192
+    // could truncate prompt+image silently. LOCAL keeps 8192 (the warm-load rule). Fail-safe: 8192.
+    let numCtx = 8192;
+    if (src.tier === 'cloud') { try { numCtx = (await require('./cloud_window').resolve({ model: m, base: src.base, token: src.token })).num_ctx; } catch {} }
+    const text = await call({ model: m, messages, base: src.base, headers: src.token ? { Authorization: `Bearer ${src.token}` } : {}, options: { temperature: 0.2, num_ctx: numCtx }, timeoutMs: 120000 });
     const out = (text || '').trim();
     if (!out) return { ok: false, reason: `vision model '${m}' returned nothing (is it available on the ${src.tier} tier?)`, model: m, tier: src.tier };
     return { ok: true, text: out, model: m, tier: src.tier };

@@ -14,7 +14,7 @@
  */
 'use strict';
 const models = require('./models');
-const { completeDetailed } = require('./ollama');
+const { completeDetailed, isReasoningModel } = require('./ollama');
 
 const DEFAULT_MAX_STEPS = 4;       // keep the loop snappy for chat latency
 const DEFAULT_MAX_MS = 45000;      // hard wall-clock budget so a turn can NEVER block for minutes
@@ -34,10 +34,25 @@ async function _operatorComplete(messages, opts = {}) {
   const src = (models.sources() || []).find(s => s.tier === 'cloud' && s.token);
   if (!src) return null;
   const model = opts.model || operatorModel();
+  // The window is the MODEL's, not a guess. `num_ctx: 16384` was hardcoded here, which ran the one
+  // lane built to let a frontier model DRIVE (decide→tool→see→decide) inside ~6-12% of its real
+  // window — the audit's single most starved surface. cloud_window fails safe to 8192, so this can
+  // only widen. An explicit opts.num_ctx still wins (a caller deliberately running small).
+  let num_ctx = opts.num_ctx || null;
+  if (!num_ctx) {
+    try { num_ctx = (await require('./cloud_window').resolve({ model, base: src.base, token: src.token })).num_ctx; }
+    catch { num_ctx = 16384; }
+  }
   return completeDetailed({
     model, messages, base: src.base,
     headers: src.token ? { Authorization: `Bearer ${src.token}` } : {},
-    options: { temperature: 0.4, top_p: 0.9, repeat_penalty: 1.3, num_ctx: opts.num_ctx || 16384, num_predict: opts.num_predict || 700 }
+    // think:false on a reasoning model — the step contract is ONE clean JSON object (or plain prose
+    // for the final answer); without it the model buries the step in message.thinking and the
+    // parsed .text is chain-of-thought (the condenseComplete disease, same door).
+    ...(isReasoningModel(model) ? { think: false } : {}),
+    // repeat_penalty dropped to the transport default (1.1): 1.3 on a JSON-emitting agent penalizes
+    // the very braces/quotes the contract requires and was degrading step parses.
+    options: { temperature: 0.4, top_p: 0.9, repeat_penalty: 1.1, num_ctx, num_predict: opts.num_predict || 700 }
   });
 }
 
@@ -94,13 +109,18 @@ const TOOL_SPEC = (() => {
   return [TOOL_SPEC_CORE, readSpec, TOOL_SPEC_TAIL].filter(Boolean).join('\n\n');
 })();
 
+// Caps here are LOOP-hygiene bounds sized from config, not the old 8192-era guesses: the user
+// message is the assignment — cutting it at 1,500 chars amputated multi-part briefs — and context/
+// tool results now follow the same knobs the chat-tag lane got in the cap purge (toolResultChars).
+function _contextCap() { try { return require('./config').toolResultChars(); } catch { return 24000; } }
 function _buildPrompt({ userMessage, context, history, stepsLeft, toolSpec = null }) {
+  const cap = _contextCap();
   return [{
     role: 'user',
     content: `You are the cognition/agent for Zoe (a local AI). DECIDE and ACT to fully handle this turn for her; she will voice your answer in her own words.
 
-${context ? 'CONTEXT (her memory/state relevant to this turn):\n' + String(context).slice(0, 3000) + '\n\n' : ''}USER MESSAGE:
-${String(userMessage).slice(0, 1500)}
+${context ? 'CONTEXT (her memory/state relevant to this turn):\n' + String(context).slice(0, cap) + '\n\n' : ''}USER MESSAGE:
+${String(userMessage).slice(0, cap)}
 
 ${toolSpec || TOOL_SPEC}
 
@@ -108,16 +128,41 @@ ${history ? 'WORK SO FAR:' + history + '\n' : ''}Steps remaining: ${stepsLeft}. 
   }];
 }
 
-// Parse the model's JSON step. Tolerant: grabs the first {...} block. Returns {thought?, action?, final?}
-// or null if no JSON object is present.
+// Parse the model's JSON step: the first parseable, BALANCED {...} that carries action/final.
+// The old greedy /\{[\s\S]*\}/ spanned first-{ to LAST-} — any brace in surrounding prose
+// ("weigh {the options}") poisoned the span, JSON.parse failed, and the garbled tool call was
+// silently treated as the FINAL ANSWER and voiced. Balanced scan, string/escape-aware; an
+// unparseable candidate advances to the next '{', a parseable non-step is skipped whole.
+// Returns {thought?, action?, final?} or null if no step object is present.
 function parseAction(text) {
-  const m = String(text || '').match(/\{[\s\S]*\}/);
-  if (!m) return null;
-  try {
-    const o = JSON.parse(m[0]);
-    if (o && (o.action || o.final !== undefined)) return o;
-    return null;
-  } catch { return null; }
+  const s = String(text || '');
+  let i = s.indexOf('{');
+  while (i !== -1) {
+    let depth = 0, inStr = false, esc = false, end = -1;
+    for (let j = i; j < s.length; j++) {
+      const c = s[j];
+      if (esc) { esc = false; continue; }
+      if (inStr) { if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
+      if (c === '"') inStr = true;
+      else if (c === '{') depth++;
+      else if (c === '}') { depth--; if (depth === 0) { end = j; break; } }
+    }
+    if (end === -1) return null;                       // no balanced close ahead → nothing left to try
+    try {
+      const o = JSON.parse(s.slice(i, end + 1));
+      if (o && (o.action || o.final !== undefined)) return o;
+      i = s.indexOf('{', end + 1);                     // parsed but not a step → skip it whole
+    } catch {
+      i = s.indexOf('{', i + 1);                       // unparseable candidate → next '{'
+    }
+  }
+  return null;
+}
+
+// Did this text ATTEMPT a JSON step (vs. being a deliberate plain-prose final answer)? Prose-as-answer
+// is the contract; a malformed attempted step is not — it earns one repair reprompt before we give up.
+function looksLikeJsonStep(text) {
+  return /"action"\s*:|"final"\s*:/.test(String(text || ''));
 }
 
 function _finalize(steps, answer) {
@@ -180,14 +225,33 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
   // for directed tasks so a long list/write-up isn't truncated at generation. model = optional cloud
   // model override (per-lane); toolSpec = optional lane-scoped tool menu.
   const cOpts = { num_predict: numPredict, ...(model ? { model } : {}) };
+  const capChars = _contextCap();
+  let repaired = false;
   for (let i = 0; i < maxSteps; i++) {
     if (nowFn() - t0 > maxMs) break;   // over the wall-clock budget → stop looping, force a final below
     let res;
     try { res = await complete(_buildPrompt({ userMessage, context, history, stepsLeft: maxSteps - i, toolSpec }), cOpts); }
     catch (e) { return steps.length ? _finalize(steps, null) : null; }
     if (res == null) return steps.length ? _finalize(steps, null) : null;   // no cloud configured
-    const text = (typeof res === 'string') ? res : (res.text || '');
-    const parsed = parseAction(text);
+    let text = (typeof res === 'string') ? res : (res.text || '');
+    let parsed = parseAction(text);
+    // ONE repair reprompt when the text ATTEMPTED a step but didn't parse. Without this, a garbled
+    // tool call fell straight through the prose-as-answer contract below and was VOICED to Lucas as
+    // the reply (the greedy-parse failure's second half). Genuine prose never matches
+    // looksLikeJsonStep, so real answers still pass through untouched.
+    if (!parsed && looksLikeJsonStep(text) && !repaired) {
+      repaired = true;
+      try {
+        const r2 = await complete([
+          ..._buildPrompt({ userMessage, context, history, stepsLeft: maxSteps - i, toolSpec }),
+          { role: 'assistant', content: text },
+          { role: 'user', content: 'That was not a parseable step. Re-emit it as EXACTLY ONE valid JSON object — {"thought":"…","action":{"tool":"…","args":{…}}} or {"thought":"…","final":"…"} — and nothing else.' }
+        ], cOpts);
+        const t2 = (typeof r2 === 'string') ? r2 : ((r2 && r2.text) || '');
+        const p2 = parseAction(t2);
+        if (p2) { parsed = p2; text = t2; }
+      } catch { /* repair is best-effort — fall through to the prose contract */ }
+    }
     if (!parsed) return _finalize(steps, text.trim() || null);              // plain prose → treat as the answer
     if (parsed.final !== undefined) return _finalize(steps, parsed.final);
     const tool = parsed.action && parsed.action.tool;
@@ -196,16 +260,19 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
     let result;
     if (typeof fn !== 'function') result = `ERROR: no tool named "${tool}".`;
     else { try { result = await fn(args); } catch (e) { result = 'ERROR: ' + (e && e.message || e); } }
-    result = String(result == null ? '' : result).slice(0, 3000);
+    // Sized to the same knob the chat-tag lane got in the cap purge (was 3000, then re-sliced to
+    // 1200 in history — the agent "read" every tool result through a 1,200-char keyhole while the
+    // chat lane read 24k). One cap, applied once; history carries the same text the step stored.
+    result = String(result == null ? '' : result).slice(0, capChars);
     steps.push({ tool, args, result });
-    history += `\n• step ${i + 1}: ${tool}(${JSON.stringify(args).slice(0, 300)}) → ${result.slice(0, 1200)}`;
+    history += `\n• step ${i + 1}: ${tool}(${JSON.stringify(args).slice(0, 300)}) → ${result}`;
   }
   // out of steps → force a final answer from what we gathered
   try {
-    const res = await complete([{ role: 'user', content: `You are out of tool steps. Using ONLY the work below, give Zoe the complete grounded answer to: "${String(userMessage).slice(0, 800)}".${history}\n\nReply with the answer text only.` }], cOpts);
+    const res = await complete([{ role: 'user', content: `You are out of tool steps. Using ONLY the work below, give Zoe the complete grounded answer to: "${String(userMessage).slice(0, capChars)}".${history}\n\nReply with the answer text only.` }], cOpts);
     const text = (typeof res === 'string') ? res : ((res && res.text) || '');
     return _finalize(steps, text.trim() || null);
   } catch { return _finalize(steps, null); }
 }
 
-module.exports = { runOperator, parseAction, isDirectedTask, parseSliceResult, operatorModel, _operatorComplete, TOOL_SPEC, TOOL_SPEC_CORE, TOOL_SPEC_TAIL, DEFAULT_MAX_STEPS };
+module.exports = { runOperator, parseAction, looksLikeJsonStep, isDirectedTask, parseSliceResult, operatorModel, _operatorComplete, TOOL_SPEC, TOOL_SPEC_CORE, TOOL_SPEC_TAIL, DEFAULT_MAX_STEPS };

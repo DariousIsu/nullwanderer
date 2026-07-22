@@ -103,7 +103,7 @@ function stripPlanningLeak(text) {
 // verb, so the noun-based patterns above miss all of them. Verb forms are now listed explicitly, and
 // smoke_leakguard asserts the filter against main.js's own tag vocabulary so the two cannot drift
 // apart again silently.
-const _INTERNAL_TAG_RE = /^<\/?(?:think|thinking|thought|thoughts|say|navigate|wonder|web[\w-]*|echo[\w-]*|browser[\w-]*|browse[\w-]*|files?[\w-]*|screen[\w-]*|inbox[\w-]*|sched[\w-]*|scheduler[\w-]*|presence[\w-]*|email[\w-]*|discord[\w-]*|recall[\w-]*|image-gen|open-?thread[\w-]*|status[\w-]*|tool[\w-]*|act[\w-]*|wait|read-[\w-]*|observe-[\w-]*|clipboard[\w-]*|notify|chat-[\w-]*|remember[\w-]*|forget[\w-]*)\b/i;
+const _INTERNAL_TAG_RE = /^<\/?(?:think|thinking|thought|thoughts|say|navigate|wonder|web[\w-]*|echo[\w-]*|browser[\w-]*|browse[\w-]*|files?[\w-]*|screen[\w-]*|inbox[\w-]*|sched[\w-]*|scheduler[\w-]*|presence[\w-]*|email[\w-]*|discord[\w-]*|recall[\w-]*|image-gen|draw|imagine|open-?thread[\w-]*|status[\w-]*|tool[\w-]*|act[\w-]*|wait|read-[\w-]*|observe-[\w-]*|clipboard[\w-]*|notify|chat-[\w-]*|remember[\w-]*|forget[\w-]*)\b/i;
 
 // STREAM filter: wrap an emit(chunk) sink so leaked control DIRECTIVES ('[…]') and internal/tool TAGS
 // ('<think>…', '<web-open>…') never reach the UI live. Holds an open '[' or a tag-shaped '<' (buffering,

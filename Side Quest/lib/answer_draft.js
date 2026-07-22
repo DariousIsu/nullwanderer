@@ -28,10 +28,15 @@ async function _draftComplete(messages, opts = {}) {
   const src = (models.sources() || []).find(s => s.tier === 'cloud' && s.token);
   if (!src) return null;
   const model = draftModel();
+  // Window sized to the model (audit 2026-07-22): the injected `complete` sidestepped cloud_window,
+  // so the GROUNDING-CRITICAL draft — the turns where more grounding matters most — read through
+  // 8192. Output stays small (a 1-3 sentence draft); the input window follows the model.
+  let numCtx = 8192;
+  try { numCtx = (await require('./cloud_window').resolve({ model, base: src.base, token: src.token })).num_ctx; } catch {}
   const text = await complete({
     model, messages, base: src.base,
     headers: src.token ? { Authorization: `Bearer ${src.token}` } : {},
-    options: { temperature: 0.2, top_p: 0.9, num_ctx: 8192, num_predict: opts.num_predict || 400 }
+    options: { temperature: 0.2, top_p: 0.9, num_ctx: numCtx, num_predict: opts.num_predict || 400 }
   });
   return { text: text || '', model };
 }
@@ -54,7 +59,9 @@ async function draft({ userMessage, grounding, kind = 'general', deps = {} } = {
   try {
     out = await askFn({
       task: 'answer_draft_' + kind, v: 1,
-      input: { question: String(userMessage).slice(0, 800), grounding: String(grounding).slice(0, 4000) },
+      // 20k/2k (was 4k/800): 8192-era caps on the one path whose whole job is grounding fidelity.
+      // ask()'s own input pack caps at 24k, so these fit inside it with headroom.
+      input: { question: String(userMessage).slice(0, 2000), grounding: String(grounding).slice(0, 20000) },
       want,
       validate: (raw) => {
         const t = String(raw || '').replace(/^```[a-z]*\s*|\s*```$/gi, '').trim();

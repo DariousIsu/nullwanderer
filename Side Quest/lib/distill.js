@@ -39,10 +39,15 @@ async function _distillComplete(messages, opts = {}) {
   const src = (models.sources() || []).find(s => s.tier === 'cloud' && s.token);
   if (!src) return null;
   const model = distillerModel();
+  // Window sized to the model (audit 2026-07-22): this injected `complete` sidestepped the windowed
+  // path inside cloud_logic.ask, so the distiller read through the local model's old 8192. The
+  // OUTPUT stays deliberately tight (600) — a brief is the point — but the input must not truncate.
+  let numCtx = 8192;
+  try { numCtx = (await require('./cloud_window').resolve({ model, base: src.base, token: src.token })).num_ctx; } catch {}
   const text = await complete({
     model, messages, base: src.base,
     headers: src.token ? { Authorization: `Bearer ${src.token}` } : {},
-    options: { temperature: 0.2, top_p: 0.9, num_ctx: 8192, num_predict: opts.num_predict || 600 }
+    options: { temperature: 0.2, top_p: 0.9, num_ctx: numCtx, num_predict: opts.num_predict || 600 }
   });
   return { text: text || '', model };   // cloud_logic.ask reads result.text — must return {text, model}
 }
