@@ -89,11 +89,25 @@ function facetsSummary(facets = []) {
 const REFINE_RE = /\b(also|as well|in addition|additionally|make sure|focus on|prioriti[sz]e|priority|include|exclude|only|don'?t|do not|instead|actually|i want|i'?d like|i need|should|besides|on top of|skip|ignore|add|plus|but also|prefer|narrow|broaden|limit (?:it )?to|make it|as well as|consider|note that|keep in mind|for example|e\.?g\.?|counts?|is (?:a|an|one)\b|are (?:also|one)\b|too\b)\b/i;
 // Social / gratitude / greeting / pure-ack — NEVER a research clarification (optional trailing name).
 const SOCIAL_CLOSER_RE = /^(?:thanks?|thank you|ty|cheers|much appreciated|appreciate it|great|nice|cool|awesome|perfect|ok(?:ay)?|sounds good|got it|gotcha|sure|will do|hi|hey|hello|good (?:morning|night|evening|afternoon)|love you|you'?re the best)\b(?:\s+(?:zoe|so much|a lot|man|dude|babe|then))?[\s!.,]*$/i;
-function isClarification({ message = '', assistantAskedQuestion = false } = {}) {
+// HER question was SOCIAL (how was your day / how are you / what have you been up to) — an answer to
+// it is conversation, not task guidance. The 2026-07-22 live mis-capture: Zoe asked how his day was,
+// Lucas answered "Pretty ok, lots of work today…", and the answer-branch below filed it as a research
+// clarification for the Aiken County focus (the recurring detector class: the OR-branch fired on ANY
+// "?" in her turn, blind to what kind of question it was).
+const SOCIAL_QUESTION_RE = /\b(?:how (?:was|is|'s|are) (?:your|the|you)\b|how (?:have|'ve) you been|how(?:'s| is) it going|what (?:did|have) you (?:been )?(?:do(?:ne|ing)?|get up to|been up to)|did you (?:sleep|eat|rest)|how (?:do you|are you) feel)/i;
+// An experiential SELF-REPORT reply ("Pretty ok…", "busy day", "tired") — his state, never task scope.
+// Checked AFTER REFINE_RE, so "good — but only include the federal ones" still captures.
+const SELF_REPORT_RE = /^(?:pretty\b|not (?:bad|great|too bad)|good\b|fine\b|ok(?:ay)?\b|great\b|busy\b|tired\b|exhausted\b|long day|lots of work|rough\b|hectic\b|slow day|same old)/i;
+function isClarification({ message = '', assistantAskedQuestion = false, assistantQuestion = '' } = {}) {
   const s = String(message).trim();
   if (s.length < 6) return false;
   if (SOCIAL_CLOSER_RE.test(s)) return false;                 // gratitude/greeting/ack ≠ task guidance
-  return REFINE_RE.test(s) || !!assistantAskedQuestion;        // substantive refinement, or an answer to her question
+  if (REFINE_RE.test(s)) return true;                          // explicit refinement language stands alone
+  if (!assistantAskedQuestion) return false;
+  // The answer-branch: an answer inherits its KIND from her question.
+  if (SOCIAL_QUESTION_RE.test(String(assistantQuestion || ''))) return false;
+  if (SELF_REPORT_RE.test(s)) return false;
+  return true;
 }
 
 // Is the user asking for a STATUS/progress update on the running task? (Concern 1: these were falling

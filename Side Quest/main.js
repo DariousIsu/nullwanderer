@@ -6429,7 +6429,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (f && focusLib.isDirected(f) && !directedStopHandled && !expandHandled && !statusHandled && !socialTurn && !followupFired) {
       const lastAssistant = [...recentTurns].reverse().find(t => t.speaker !== 'user');
       const askedQ = !!(lastAssistant && /\?/.test(String(lastAssistant.content || '')));
-      if (require('./lib/research').isClarification({ message: userMessage, assistantAskedQuestion: askedQ })) {
+      // Her question TEXT rides along so the classifier can tell a social question's answer ("how was
+      // your day?" → "Pretty ok, lots of work…") from a task question's answer — the former is
+      // conversation, never guidance for the running focus.
+      if (require('./lib/research').isClarification({ message: userMessage, assistantAskedQuestion: askedQ, assistantQuestion: lastAssistant ? String(lastAssistant.content || '') : '' })) {
         const key = `focus.${f.id}.clarifications`;
         let list = []; try { list = JSON.parse(db.getMeta(key) || '[]'); } catch {}
         list.push(userMessage.replace(/\s+/g, ' ').trim().slice(0, 300));

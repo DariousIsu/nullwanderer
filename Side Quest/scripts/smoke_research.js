@@ -83,6 +83,15 @@ ok(r.isClarification({ message: 'thanks so much!', assistantAskedQuestion: true 
 ok(r.isClarification({ message: 'good morning Zoe', assistantAskedQuestion: true }) === false, 'a greeting → NOT a clarification');
 ok(r.isClarification({ message: 'Rainey Center is a right of center think tank for example' }) === true, '"X is a … think tank for example" → clarification (scope steer, was wrongly MISSED)');
 ok(r.isClarification({ message: "But if it helps, expand to 'moderate' as well" }) === true, '"expand to moderate as well" → clarification (scope broadening)');
+// 2026-07-22 live mis-capture: her SOCIAL question made any answer a "clarification" for the focus.
+ok(r.isClarification({ message: 'Pretty ok, lots of work today, a lot of it was on your program', assistantAskedQuestion: true, assistantQuestion: 'How was your day going?' }) === false,
+  'an answer to her SOCIAL question ("how was your day?") → NOT a clarification (the Aiken County mis-capture)');
+ok(r.isClarification({ message: 'busy day, mostly meetings and travel', assistantAskedQuestion: true, assistantQuestion: 'how are you holding up?' }) === false,
+  'a self-report answer to a social question → NOT a clarification');
+ok(r.isClarification({ message: 'good — but only include the federal ones', assistantAskedQuestion: true, assistantQuestion: 'How was your evening?' }) === true,
+  'a directive INSIDE small talk still captures (refinement language stands alone)');
+ok(r.isClarification({ message: 'the state ones matter most to me', assistantAskedQuestion: true, assistantQuestion: 'Should I include state-level orgs or stay federal?' }) === true,
+  'an answer to her TASK question still captures (the designed case survives)');
 ok(r.buildGuidanceBlock([]) === '', 'no clarifications → empty guidance block');
 const gb = r.buildGuidanceBlock(['include state-level ones', 'skip any already in our CRM']);
 ok(/ADDITIONAL GUIDANCE/i.test(gb) && /include state-level ones/.test(gb) && /skip any already/.test(gb), 'guidance block lists all clarifications');
