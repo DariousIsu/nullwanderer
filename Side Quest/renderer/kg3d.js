@@ -163,6 +163,65 @@ function targetBinary(n) {
   const u = (s.u * 2 - 1) * 0.98, perp = r * Math.sqrt(Math.max(0, 1 - u * u));
   return _tp.set(cx + r * u * 0.55, _midCen.y + Math.cos(s.ang) * perp, _midCen.z + Math.sin(s.ang) * perp);
 }
+// BRAIN (Lucas's anatomy, 2026-07-22): "the short term memory would sit more like a cerebral cortex and the
+// different memory types can be chopped up amongst the rest of the brain parts by size."
+//
+// This is the first arrangement with actual MEANING in it rather than an arbitrary geometry, and the anatomy
+// is apt: the cortex is where live processing happens, and consolidated memory lives in the structures
+// beneath it. So short-term becomes the outer mantle — a thin folded shell wrapping everything — and the
+// corpus fills the interior, partitioned into lobes by entity TYPE, each lobe's volume proportional to how
+// many objects of that type she actually holds. The map is then readable as anatomy: a big `person` lobe
+// beside a small `committee` nucleus tells you the true shape of what she knows.
+//
+// Lobe centroids are placed on a Fibonacci sphere (even spacing, no clumping), largest types nearest the
+// middle. Radius goes as the CUBE ROOT of the count, so it is VOLUME that encodes quantity, not radius —
+// otherwise a type with 10× the nodes would look 1000× bigger.
+const brainLobes = new Map();
+let _lobeSig = '';
+function buildBrainLobes(nodes) {
+  const counts = new Map();
+  for (const n of nodes) {
+    if (n.zoe || n.store === 'sidequest') continue;
+    const t = n.entityType || 'unknown';
+    counts.set(t, (counts.get(t) || 0) + 1);
+  }
+  const types = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const sig = types.map(([t, c]) => t + ':' + c).join('|');
+  if (sig === _lobeSig) return; _lobeSig = sig;          // only rebuild when the type mix actually changes
+  brainLobes.clear();
+  const total = types.reduce((s, [, c]) => s + c, 0) || 1, K = types.length || 1;
+  const GA = Math.PI * (3 - Math.sqrt(5));
+  types.forEach(([t, c], i) => {
+    const y = K === 1 ? 0 : 1 - ((i + 0.5) / K) * 2;      // −1..1 down the sphere
+    const ring = Math.sqrt(Math.max(0, 1 - y * y)), th = GA * i;
+    // Bigger types sit deeper toward the middle; the long tail of small types rings the outside.
+    // Held well inside the mantle. First cut let a big lobe reach r≈0.96 against a cortex at 0.92, so the two
+    // blended and the shell stopped reading as a separate layer — the whole point of the anatomy. Deepest
+    // structure + biggest lobe now tops out around 0.63, leaving a clear band of tissue above everything.
+    const depth = CLOUD_R * (0.14 + 0.30 * (i / Math.max(1, K - 1)));
+    brainLobes.set(t, {
+      x: Math.cos(th) * ring * depth, y: y * depth, z: Math.sin(th) * ring * depth,
+      r: Math.max(CLOUD_R * 0.05, CLOUD_R * 0.29 * Math.cbrt(c / total)),
+    });
+  });
+}
+const CORTEX_R = 0.92, CORTEX_T = 0.085;                  // mantle radius and its thickness, as fractions of R
+function targetBrain(n) {
+  const s = nodeSeed(n);
+  if (n.store === 'sidequest') {
+    // The cortex: a thin shell, gently folded so it reads as tissue rather than a bald sphere. The fold is a
+    // low-frequency ripple on the two angles, which is cheap and looks like gyri at this scale.
+    const u = (s.u * 2 - 1) * 0.985, th = s.ang;
+    const fold = Math.sin(th * 5.0 + u * 7.0) * 0.5 + Math.sin(th * 2.0 - u * 4.0) * 0.5;
+    const r = CLOUD_R * (CORTEX_R + fold * CORTEX_T * 0.55 + (s.rf - 0.75) * CORTEX_T);
+    const perp = r * Math.sqrt(Math.max(0, 1 - u * u));
+    return _tp.set(_midCen.x + r * u, _midCen.y + Math.cos(th) * perp, _midCen.z + Math.sin(th) * perp);
+  }
+  const lobe = brainLobes.get(n.entityType || 'unknown');
+  if (!lobe) return targetCorona(n);
+  const u = (s.u * 2 - 1) * 0.98, perp = lobe.r * s.rf * Math.sqrt(Math.max(0, 1 - u * u));
+  return _tp.set(_midCen.x + lobe.x + lobe.r * s.rf * u, _midCen.y + lobe.y + Math.cos(s.ang) * perp, _midCen.z + lobe.z + Math.sin(s.ang) * perp);
+}
 function targetPoint(n) {
   if (!n._tp) {
     const h1 = hashSeed(String(n.id) + '#r'), h2 = hashSeed(String(n.id) + '#a'), h3 = hashSeed(String(n.id) + '#u');
@@ -206,7 +265,7 @@ function makeCore3D(strength = 0.05) {
       // One soft spring toward the node's home point. Deliberately gentle — charge and links have to be able
       // to pull clusters off it, or the cloud freezes into the lattice the target points describe. The shape
       // comes from the targets; the LIFE comes from the forces fighting them. `free` skips this entirely.
-      const p = SHAPE === 'corona' ? targetCorona(n) : SHAPE === 'binary' ? targetBinary(n) : SHAPE === 'free' ? null : targetPoint(n);
+      const p = SHAPE === 'brain' ? targetBrain(n) : SHAPE === 'corona' ? targetCorona(n) : SHAPE === 'binary' ? targetBinary(n) : SHAPE === 'free' ? null : targetPoint(n);
       if (!p) continue;
       const k = strength * 1.15 * alpha;
       n.vx = (n.vx || 0) + (p.x - n.x) * k;
@@ -274,6 +333,10 @@ const ZOE_ROSE = '#fda4af';
 const ZOE_COLOR = { identity: '#fda4af', value: '#fbbf24', opinion: '#22d3ee', preference: '#c4b5fd', taste: '#f472b6', trait: '#2dd4bf', insight: '#94a3b8' };
 function nodeColor(n) {
   if (n.zoe) return ZOE_COLOR[n.entityType] || ZOE_ROSE;
+  // In the brain arrangement the colour split carries the anatomy, and it has to be read at a glance: the
+  // cortex is ONE tissue (uniform violet, however its nodes happen to be typed) and the interior is a map of
+  // types. Letting untyped short-term nodes fall through to grey mottled the mantle and destroyed that read.
+  if (SHAPE === 'brain' && n.store === 'sidequest') return SQ_VIOLET;
   if (n.color) return n.color;
   if (isUnknownType(n.entityType)) return UNKNOWN_GREY;
   return n.store === 'sidequest' ? SQ_VIOLET : ECHO_SKY;
@@ -463,6 +526,7 @@ function render() {
     // shape builds its bridge out of exactly these, so the isthmus is data rather than decoration.
     if (s && t && (s.store === 'sidequest') !== (t.store === 'sidequest')) { s.crossDeg++; t.crossDeg++; }
   }
+  try { buildBrainLobes(nodes); } catch (e) {}   // anatomy follows the live type mix
   Graph.graphData({ nodes, links });
   engineRunning = true;                    // new data reheats the layout; resume position syncing
   try { Graph.d3Force('charge').strength(chargeFor(nodes.length)); } catch (e) {}   // spread must not grow with density
