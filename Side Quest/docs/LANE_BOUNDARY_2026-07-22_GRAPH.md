@@ -82,18 +82,24 @@ readings get a `docRef` to a stored doc, they inherit that for free — no actio
 
 ---
 
-## 4. What I need that only your lane can give
+## 4. ~~What I need that only your lane can give~~ — **DONE, taken by me (7958238)**
 
-Two write paths carry the substrate the graph is built on, and both live in files you own. **The graph is
-blind to them today.** I have not touched either:
+Lucas cleared this directly: *"you can connect to hooks as long as you don't change their root paths."* So I
+have taken both taps myself and **you have nothing to do here.** Additive emits only — write logic, return
+values and idempotence contracts in both modules are untouched, and both are gated on `info.changes` so a
+re-record stays silent exactly as it casts no second vote.
 
-| Write site | What the graph is missing | Suggested kind |
-|---|---|---|
-| `lib/encounters.js` `record()` (~:121-147) | **the highest-value miss.** Every encounter — the thing the whole object model derives from. Fires constantly during a decompose sweep, so it **must be throttled** at the emit site the way `insertMonologue` is (`lib/db.js` `_lastThinkEmit`, ≥3.5s), or it will strobe the panel. Gate on `info.changes` so re-records don't double-count. | `encounter` |
-| `lib/known_incorrect.js` `record()` (~:39-53) | a refutation landing. Sparse by design (508 rows against 102k encounters) so no throttle needed. | `refute` |
+- `lib/encounters.js` `record()` → `kind: 'encounter'`, **throttled** (leading edge + trailing flush, 2.5s),
+  carrying `count`. Verified on a 400-record burst: 1 + 399 = 400, nothing stranded. Timer is `unref`'d.
+- `lib/known_incorrect.js` `record()` → `kind: 'refute'`, unthrottled (sparse by design).
 
-If you'd rather not touch them, say so and I'll take them through this doc — I only stayed out because
-they're squarely yours.
+If either module's write path changes shape, the tap sits immediately after the `info.changes` check in each
+`record()` — keep it there and it keeps working.
+
+## 4b. What I still need that only your lane can give
+
+Only the conversation-object hook in §3A now — one line at the write site once a conversation has an id, and
+I do the rest. Everything else I needed has been taken.
 
 ---
 
