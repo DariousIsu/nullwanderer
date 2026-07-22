@@ -90,7 +90,10 @@ ok(Array.isArray(sweep.findUndecomposed(db, { limit: 0 })), 'garbage bounds → 
   const ids = b.picks.map((p) => p.id);
   ok(ids[0] === small && ids.indexOf(mid) > ids.indexOf(small),
     'CRITICAL: CHEAPEST FIRST — 62% of the corpus is under 20k chars, and reading a 425k judicial PDF first buys the least for the most');
-  ok(!ids.includes(big), 'a document over maxChars is left for a deliberate decision');
+  ok(ids.includes(big) && ids.indexOf(big) > ids.indexOf(mid),
+    'NO DEFAULT SIZE CEILING — a giant is read too, LAST; the old maxChars=60000 put every backlogged multi-million-char PDF permanently outside the sweep');
+  ok(!sweep.nextBatch(db, { limit: 5, maxChars: 50000 }).picks.map((p) => p.id).includes(big),
+    '…but an explicit maxChars still bounds a deliberate run');
   ok(!ids.includes(empty),
     'CRITICAL: a FLOOR as well as a ceiling — ordering purely by cost picked 43-, 56- and 105-char image-only PDFs on the first live run, spending calls to learn nothing');
 }
@@ -113,7 +116,9 @@ ok(Array.isArray(sweep.findUndecomposed(db, { limit: 0 })), 'garbage bounds → 
   // A smaller document must still fit after a large one is skipped — skip, do not stop.
   const b = sweep.nextBatch(db, { limit: 3, dailyChunks: 99999, maxChars: 200000 });
   ok(b.estChunks > 0 && b.picks.length > 0, 'the batch reports what it will cost before spending it');
-  ok(sweep.estChunks(6000) === 1 && sweep.estChunks(12001) === 3, 'chunk estimation mirrors the extractor’s slicing');
+  // One budget unit = one MODEL CALL at the 100k decompose slice main.js passes. The old 6k estimator
+  // made a 5M-char PDF "cost" 848 units — silently re-imposing the ceiling the chunking change removed.
+  ok(sweep.estChunks(100000) === 1 && sweep.estChunks(250000) === 3, 'chunk estimation mirrors the extractor’s real slicing (100k)');
 }
 
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);

@@ -560,7 +560,14 @@ async function decomposeDoc(doc = {}, deps = {}) {
     const key = coreKey(d.name) || d.name.toLowerCase();
     if (d.action === 'reuse') { usable.set(key, d.canonical || d.name); usableType.set(key, d.type); out.reused++; continue; }
     if (d.action === 'mint') {
-      if (out.minted >= maxEnt) continue;                    // volume cap on NEW objects
+      // OVER THE CALLER'S VOLUME CAP → HELD, never vanished. The old `continue` silently discarded
+      // entity 41+ of a dense 100k chunk — no observation, no held row, no trace. A cap may DEFER
+      // work to the hourly upgrade pass; it must never make a document's contents disappear.
+      if (out.minted >= maxEnt) {
+        out.held++; out.cap_deferred = (out.cap_deferred || 0) + 1;
+        await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: 'D', confidence: 0, status: 'held', type: d.type });
+        continue;
+      }
       // REFERENCE DATA (office/committee/body): used to HOLD to avoid QID-less dups — but that permanent
       // dead-end stranded the membership edge (the dominant slice of the 72.8k unresolved-endpoint pile).
       // Slice 2: MINT it UNSUBSTANTIATED so the edge lands; the async lane resolves it to the canonical
@@ -604,7 +611,9 @@ async function decomposeDoc(doc = {}, deps = {}) {
   {
     const seenC = new Set(); const maxConcepts = cap.concepts || 12;
     for (const c of conceptCands) {
-      if (out.concepts_minted + out.concepts_promoted >= maxConcepts) break;
+      // NO SILENT CAPS: count what the cap drops so the log shows it (the lazy concept lane will see
+      // these names again on the next doc that mentions them — deferral is cheap here, invisibility isn't).
+      if (out.concepts_minted + out.concepts_promoted >= maxConcepts) { out.concepts_dropped = (out.concepts_dropped || 0) + 1; continue; }
       const nm = String((c && c.name) || '').trim(); const ck = nm.toLowerCase();
       if (!nm || seenC.has(ck)) continue; seenC.add(ck);
       const st = await _mintConcept(dispatch, nm, url);
@@ -616,7 +625,13 @@ async function decomposeDoc(doc = {}, deps = {}) {
 
   // 4) relations: propose only when BOTH endpoints resolved (reuse/mint); else a HELD fall-through
   for (const r of relations) {
-    if (out.connections >= maxRel) break;
+    // Over the cap → HELD, not `break`. The old break dropped every remaining relation of the chunk
+    // with no trace; held rows keep them visible to the upgrade pass.
+    if (out.connections >= maxRel) {
+      out.held++; out.cap_deferred = (out.cap_deferred || 0) + 1;
+      await _observe(observe, { sourceEntity: r.source, relation: r.relation, target: r.target, url, grade: 'D', confidence: 0, status: 'held' });
+      continue;
+    }
     const sName = usable.get(coreKey(r.source) || r.source.toLowerCase());
     const tName = usable.get(coreKey(r.target) || r.target.toLowerCase());
     const relTypeU = String((r && r.relation) || '').toUpperCase();
@@ -660,7 +675,7 @@ async function decomposeDoc(doc = {}, deps = {}) {
       await _observe(observe, { sourceEntity: r.source, relation: r.relation, target: r.target, url, grade: 'D', confidence: 0, status: 'held' });
     }
   }
-  log && log(`[doc-decomp] "${doc.title || url}" → +${out.minted} mint / ${out.reused} reuse / +${out.connections} conn (${out.held} held: ${out.ambiguous} ambiguous, ${out.skipped} skipped)`);
+  log && log(`[doc-decomp] "${doc.title || url}" → +${out.minted} mint / ${out.reused} reuse / +${out.connections} conn (${out.held} held: ${out.ambiguous} ambiguous, ${out.skipped} skipped${out.cap_deferred ? `, ${out.cap_deferred} cap-deferred` : ''}${out.concepts_dropped ? `, ${out.concepts_dropped} concepts dropped` : ''})`);
   return out;
 }
 

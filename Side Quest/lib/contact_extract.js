@@ -17,7 +17,16 @@
  */
 'use strict';
 
-const MAX_CHARS = 6000;   // same decomposition slice bound as doc_decompose (outer edge of one pass)
+// THE CHUNK IS SIZED TO THE CONFIGURED OUTPUT BUDGET, not to a frozen number. (The old fixed 6,000
+// claimed parity with doc_decompose, which has since moved to 100k slices — the comment outlived the
+// fact.) For CONTACT extraction the OUTPUT is the binding constraint, not the input window: a
+// worst-case dense roster yields one ~35-token PERSON line per ~110 input chars, so a chunk of
+// numPredict × 3 chars can never overflow the reply even when every line of it is a contact record.
+// At the default deepNumPredict (3,000) that is 9,000 chars. Raising ZOE_DEEP_NUM_PREDICT scales the
+// chunks automatically — size the prompt to the window, never a constant to a guess.
+const MAX_CHARS = (() => {
+  try { return Math.max(6000, require('./config').deepNumPredict() * 3); } catch { return 9000; }
+})();
 const NULLISH = new Set(['', '-', '--', 'n/a', 'na', 'none', 'null', 'unknown', 'tbd', '?']);
 // doc-stated contact = a real value read from a source, but not mail-server / deliverability verified. 0.8
 // lands in the Puller's 'pattern' tier ("format confirmed") — stronger than a 50% format-guess (we have the
@@ -26,8 +35,11 @@ const DOC_CONFIDENCE = 0.8;
 
 // The extraction prompt. Fixed pipe-delimited line formats keep parsing deterministic and let a small
 // extraction model stay on-rails. One line per object; a hyphen for any absent field.
-function buildCardsPrompt(text, { title } = {}) {
-  const body = String(text == null ? '' : text).slice(0, MAX_CHARS);
+function buildCardsPrompt(text, { title, maxChars = MAX_CHARS } = {}) {
+  // Honor the caller's maxChars (makeCloudExtractor passes a window-derived one). The old signature
+  // silently dropped it and hard-sliced at 6,000 — a caller feeding a bigger slice lost the tail
+  // with no error, the front-loss disease in its quietest form.
+  const body = String(text == null ? '' : text).slice(0, maxChars);
   const head = title ? `Document title: ${title}\n\n` : '';
   return [
     {

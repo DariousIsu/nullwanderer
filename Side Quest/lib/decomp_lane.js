@@ -89,14 +89,21 @@ function makeCloudExtractor({ completeFn, model, base = undefined, token = null,
  *
  * Cost: one small call per document, and only when the first pass left endpoints untyped.
  */
-function makeTypeAdjudicator({ completeFn, model, base = undefined, token = null, numPredict = 300, timeoutMs = 60000 } = {}) {
+function makeTypeAdjudicator({ completeFn, model, base = undefined, token = null, numPredict = null, timeoutMs = 60000 } = {}) {
   return async (names = [], { title = null, relations = [] } = {}) => {
-    const want = [...new Set((Array.isArray(names) ? names : []).map((n) => String(n || '').trim()).filter(Boolean))].slice(0, 25);
+    // NO ARBITRARY LIST CAPS. The first cut sliced names and context at 25 — but the parser now yields
+    // up to 120 relations, so endpoint 26+ would never be typed and its claims never filed, silently.
+    // The caller's lists are already bounded by the parse caps; the 262k window holds them trivially.
+    const want = [...new Set((Array.isArray(names) ? names : []).map((n) => String(n || '').trim()).filter(Boolean))];
     if (!want.length || typeof completeFn !== 'function' || !model) return {};
     // The relations an endpoint appeared in are the strongest context available for typing it —
     // "X WORKS_FOR Y" makes X a person or an org and Y an org, without us asserting which.
-    const ctx = (Array.isArray(relations) ? relations : []).slice(0, 25)
+    const ctx = (Array.isArray(relations) ? relations : [])
       .map((r) => `${r.source} | ${r.relation} | ${r.target}`).join('\n');
+    // Output sized TO THE ASK: one "NAME :: type" line per name (~24 tokens generous), never a fixed
+    // number — a fixed 300 covered ~12 names and truncated the rest mid-list, the num_predict=400
+    // disease in miniature.
+    const _np = numPredict || Math.max(500, want.length * 24);
     const prompt = [{
       role: 'user',
       content:
@@ -117,7 +124,7 @@ ${want.join('\n')}`,
       const out = await completeFn({
         model, messages: prompt, base,
         headers: token ? { Authorization: `Bearer ${token}` } : {},
-        options: { temperature: 0, top_p: 0.9, num_predict: numPredict },
+        options: { temperature: 0, top_p: 0.9, num_predict: _np },
         think: false, timeoutMs,
       });
       raw = typeof out === 'string' ? out : ((out && out.text) || (out && out.thinking) || '');

@@ -115,11 +115,23 @@ function findUndecomposed(db, { limit = 50, sinceId = 0, sources = null } = {}) 
  *                    than the same cheap documents being re-read forever.
  */
 const BUDGET_KEY = 'decompose_sweep:budget';
-const DEFAULT_DAILY_CHUNKS = 400;          // ~1 cheap document a minute if it ran continuously
-const CHUNK_CHARS = 6000;                  // mirrors contact_extract.chunkForExtraction
+// The DAILY CEILING is a RUNAWAY-LOOP BACKSTOP, not a cost throttle (Lucas: "no spend concern — just no
+// artificial caps"). In real-call units, 400 calls × 100k chars ≈ 40M chars/day — the whole 414M-char
+// backlog drains in ~10 days. Override via ZOE_SWEEP_DAILY_CHUNKS if that ever needs tuning.
+const DEFAULT_DAILY_CHUNKS = (() => {
+  const v = parseInt(String(process.env.ZOE_SWEEP_DAILY_CHUNKS || '').trim(), 10);
+  return (Number.isFinite(v) && v > 0) ? v : 400;
+})();
+// One budget unit = one MODEL CALL. Mirrors the 100k decompose slice main.js passes to
+// chunkForExtraction. The first cut kept the old 6,000 here after the chunking grew, which made a
+// 5M-char PDF "cost" 848 units — more than two whole days of budget — so the estimator itself was
+// silently re-imposing the ceiling the chunking change had just removed.
+const CHUNK_CHARS = 100000;
 
 const estChunks = (chars) => Math.max(1, Math.ceil((Number(chars) || 0) / CHUNK_CHARS));
-const _today = (now) => new Date(now || Date.now()).toISOString().slice(0, 10);
+// The budget day is the EASTERN calendar day. toISOString is UTC, which rolled the budget at 8pm
+// Eastern — the same day-key trap that filed evening meetings under tomorrow.
+const _today = (now) => require('./tz').dayKey(now == null ? Date.now() : now);
 
 /** Chunks already spent today, and what remains. Resets on the calendar day. */
 function budgetState(db, { now = Date.now(), dailyChunks = DEFAULT_DAILY_CHUNKS } = {}) {
@@ -144,7 +156,12 @@ function spendBudget(db, chunks, { now = Date.now(), dailyChunks = DEFAULT_DAILY
  * Returns { picks, estChunks, budget } — `picks` is empty when the ceiling is reached, which is a
  * normal quiet state rather than an error.
  */
-function nextBatch(db, { limit = 3, dailyChunks = DEFAULT_DAILY_CHUNKS, maxChars = 60000, minChars = 400, now = Date.now() } = {}) {
+// NO DEFAULT SIZE CEILING. maxChars=60000 quietly put every backlogged giant — the multi-million-char
+// judicial and canvass PDFs — permanently outside the sweep's reach: cheapest-first already reads them
+// LAST, and the daily budget already bounds what a day can spend, so a ceiling on top was an artificial
+// cap that excluded documents forever rather than deferring them. Pass maxChars explicitly to bound a
+// deliberate run. The FLOOR stays: image-only PDFs proved cheap is only good when there's something to read.
+function nextBatch(db, { limit = 3, dailyChunks = DEFAULT_DAILY_CHUNKS, maxChars = Infinity, minChars = 400, now = Date.now() } = {}) {
   const budget = budgetState(db, { now, dailyChunks });
   if (budget.remaining <= 0) return { picks: [], estChunks: 0, budget };
 
