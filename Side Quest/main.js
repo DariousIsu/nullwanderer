@@ -8187,7 +8187,11 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
           // right-action-wrong-side-of-the-door failure the mirror exists to prevent.
           _mirrorCanvasWrite(t, r);
           console.log(`[main] echo chain hop ${echoHop + 1}: ${label} → ${r.ok ? 'ok' : 'ERR'}`);
-          hopParts.push(content + (r.isError ? '\n[That call errored — fix the args or pick another tool with <echo-find>.]' : ''));
+          // Expect-vs-actual on the chain too: an empty result is a signal, not an answer.
+          const _hopEmpty = !r.isError && !(r.text || '').trim();
+          hopParts.push(content
+            + (r.isError ? '\n[That call errored — fix the args or pick another tool with <echo-find>.]' : '')
+            + (_hopEmpty ? '\n[Empty result — it did not answer the need. Adjust the args, try another tool, or say plainly it was not found.]' : ''));
         } catch (e) { console.error('[main] echo chain hop failed:', e.message); }
       }
       if (deferredTags > 0) hopParts.push(`[${deferredTags} more tag${deferredTags === 1 ? '' : 's'} you emitted this turn were DEFERRED (per-hop bound) — re-emit any that still matter.]`);
@@ -8619,10 +8623,52 @@ function _autonomyEnabled() {
   try { return db.getMeta('autonomy.enabled') !== '0'; } catch { return true; }               // runtime kill-switch, no reboot
 }
 
+// THE DELEGATION RETURN PATH — drain Echo's agent_inbox of finished agent work. Before this,
+// spawned agents completed into a queue nothing on Zoe's side ever read ("it does NOT report
+// back"). Fresh results land as monologue readings + a toast, and are banked in meta
+// autonomy.inbox_recent, which the tick manifest surfaces so the decision layer absorbs them.
+// Own pace (autonomy.inbox_check_min, default 5m) — runs even when the decide cadence is out.
+async function _drainAgentInbox(now) {
+  if (!echoSuit || !echoSuit.connected) return;
+  const gapMin = Math.max(1, _intMeta('autonomy.inbox_check_min', 5));
+  if (now - (parseInt(db.getMeta('autonomy.inbox_last_at') || '0', 10) || 0) < gapMin * 60 * 1000) return;
+  try { db.setMeta('autonomy.inbox_last_at', String(now)); } catch {}
+  const autonomy = require('./lib/autonomy');
+  let r;
+  try { r = await echoSuit.dispatch({ kind: 'do', name: 'agent_inbox', args: { include_surfaced: false, limit: 5 } }); }
+  catch (e) { console.error('[autonomy] inbox fetch failed:', e.message); return; }
+  if (!r || r.isError) return;
+  const items = autonomy.parseAgentInbox(r.text);
+  if (!items.length) return;
+  let seen = [];
+  try { seen = JSON.parse(db.getMeta('autonomy.inbox_seen') || '[]') || []; } catch {}
+  const seenSet = new Set(seen);
+  const fresh = items.filter((it) => !seenSet.has(autonomy.inboxSeenKey(it)));
+  if (!fresh.length) return;
+  let recent = [];
+  try { recent = JSON.parse(db.getMeta('autonomy.inbox_recent') || '[]') || []; } catch {}
+  for (const it of fresh) {
+    seen.push(autonomy.inboxSeenKey(it));
+    recent.push(it);
+    try {
+      const mono = db.insertMonologue({ content: `Delegated work finished — ${it.agent || 'an agent'}: ${it.title}${it.summary ? `. ${it.summary}` : ''}`, model: 'agent-inbox', type: 'reading', query: it.title });
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: mono.id, ts: mono.ts, content: `(delegated work returned: ${it.title.slice(0, 60)})`, type: 'reading', query: it.title });
+    } catch {}
+    try { require('./lib/presence').notify('Zoe — delegated work returned', it.title.slice(0, 60)); } catch {}
+  }
+  while (seen.length > 50) seen.shift();
+  while (recent.length > 8) recent.shift();
+  try { db.setMeta('autonomy.inbox_seen', JSON.stringify(seen)); db.setMeta('autonomy.inbox_recent', JSON.stringify(recent)); } catch {}
+  console.log(`[autonomy] inbox drained — ${fresh.length} finished run(s) returned to her stream`);
+}
+
 async function autonomyTick() {
   if (autonomyInFlight || !_autonomyEnabled()) return;
   const now = Date.now();
   try {
+    // The inbox drains on its OWN pace, before the decide gates — finished delegated work must
+    // return even on ticks that decide nothing.
+    try { await _drainAgentInbox(now); } catch (e) { console.error('[autonomy] inbox drain failed:', e.message); }
     // PACE — one decision per cadence window, however often the timer fires.
     if (now - (parseInt(db.getMeta('autonomy.last_decide_at') || '0', 10) || 0) < _autonomyCadenceMs()) return;
     // YIELD to live conversation: a turn in the last 3 minutes means Lucas is here — the idle lane
@@ -8683,7 +8729,12 @@ async function autonomyTick() {
     // autonomous:true keeps Echo writes tier-gated; build gets the task budget (it produces a file).
     const brief = autonomy.buildOperatorBrief(decision, { now });
     const res = await runCloudOperator({ userMessage: brief, context: manifest.text, task: decision.move === 'build', autonomous: true });
-    const sum = autonomy.summarizeOutcome(decision, res, { now });
+    // S3 VERIFY — the run is judged against the plan's own `expect` before it is recorded. An
+    // unmet expectation is written into history, where the next decision reads it as "this
+    // approach is not working" instead of repeating a move that only looks like progress.
+    let expectVerdict = null;
+    try { expectVerdict = await autonomy.verifyExpect({ decision, opRes: res }); } catch {}
+    const sum = autonomy.summarizeOutcome(decision, res, { now, verify: expectVerdict });
     if (sum.ok) {
       // The finding enters her stream as a reading (visible in the rail, recallable later). Web
       // learnings already accreted inside runCloudOperator; this is the narrative record.

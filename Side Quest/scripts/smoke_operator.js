@@ -61,6 +61,15 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   const script3 = ['{"action":{"tool":"web_search","args":{"query":"q"}}}', '{"final":"done despite error"}'];
   const r3 = await op.runOperator({ userMessage: 'x', deps: { complete: async () => ({ text: script3[s3++] }), tools: { web_search: async () => { throw new Error('net down'); } } }, maxSteps: 4 });
   ok(/ERROR: net down/.test(r3.steps[0].result) && r3.answer === 'done despite error', 'tool exception captured + loop continues');
+  ok(/UNSATISFIED/.test(r3.steps[0].result), 'a failed result carries the mechanical change-approach signal');
+
+  // --- empty result → UNSATISFIED marker (absence is a signal, not an answer) ---
+  let s3b = 0;
+  const script3b = ['{"action":{"tool":"localdb","args":{"sql":"SELECT 1"}}}', '{"final":"adjusted"}'];
+  const r3b = await op.runOperator({ userMessage: 'x', deps: { complete: async () => ({ text: script3b[s3b++] }), tools: { localdb: async () => 'no rows' } }, maxSteps: 4 });
+  ok(/UNSATISFIED/.test(r3b.steps[0].result), '"no rows" carries the marker — the next step must confront it');
+  const rOk = await op.runOperator({ userMessage: 'x', deps: { complete: async () => ({ text: '{"final":"fine"}' }), tools }, maxSteps: 2 });
+  ok(rOk.answer === 'fine', 'a substantive result carries NO marker (sanity)');
 
   // --- plain prose (no JSON) → treated as the answer ---
   const r4 = await op.runOperator({ userMessage: 'hi', deps: { complete: async () => ({ text: 'Just a friendly hello.' }), tools }, maxSteps: 3 });

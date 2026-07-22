@@ -109,6 +109,16 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
       + stale.map((r) => `   - "${String(r.content || '').replace(/\s+/g, ' ').slice(0, 140)}" (untouched ${_ago(now, r.last_touched_ts)})`).join('\n');
   });
 
+  grab('inbox', () => {
+    // Finished delegated work the drain banked (meta autonomy.inbox_recent) — unabsorbed results
+    // are prime material: open them, build from them, or tell Lucas about them.
+    let items = [];
+    try { items = JSON.parse(dbm.getMeta('autonomy.inbox_recent') || '[]') || []; } catch {}
+    if (!Array.isArray(items) || !items.length) return '';
+    return `• FINISHED DELEGATED WORK (returned to you, not yet absorbed):\n`
+      + items.slice(-5).map((it) => `   - [${it.agent || 'agent'}] ${it.title}${it.kind ? ` (${it.kind})` : ''}${it.summary ? ` — ${it.summary.slice(0, 160)}` : ''}`).join('\n');
+  });
+
   grab('week', () => {
     // Lucas's calendar (lib/week_context, cached by the driver's refresh) — the people he is about
     // to meet are PRIME material: research who they are before the meeting, or engage with a timely,
@@ -159,7 +169,7 @@ The moves:
 - engage: say something to Lucas NOW — a genuine finding or a direction question. Use RARELY, only when you have something real; "say" must carry the exact message, grounded in the state above, no invented facts.
 - nothing: a first-class answer. If no move is clearly worth its cost, decline honestly.
 
-Rules: at most 4 steps. Never plan work you cannot check. Do not choose a target your recent ticks show as just-run or repeatedly dry. Variety matters across ticks — contacts are ALREADY covered by another lane, so prefer ideas, gaps, corroboration, and building over anything contact-shaped. The one exception: PEOPLE ON HIS CALENDAR. If the state shows an upcoming meeting whose attendees we hold little on, researching them before he walks in is among the highest-value moves available — and a past meeting is a natural, grounded engage ("how did X go?").`;
+Rules: at most 4 steps. Never plan work you cannot check. State "expect" as something CHECKABLE — the run is verified against it afterward, and a history line saying "expect NOT met" means that approach is not working: change it, don't repeat it. FINISHED DELEGATED WORK in the state is high-priority: absorb it (build from it, or engage Lucas about it) before starting new work of the same kind. Do not choose a target your recent ticks show as just-run or repeatedly dry. Variety matters across ticks — contacts are ALREADY covered by another lane, so prefer ideas, gaps, corroboration, and building over anything contact-shaped. The one exception: PEOPLE ON HIS CALENDAR. If the state shows an upcoming meeting whose attendees we hold little on, researching them before he walks in is among the highest-value moves available — and a past meeting is a natural, grounded engage ("how did X go?").`;
 
 function validateDecision(raw) {
   try {
@@ -230,8 +240,41 @@ function buildOperatorBrief(decision, { now = Date.now() } = {}) {
   }
 }
 
+// ---- S3: EXPECT vs ACTUAL — the verify the design specified ----------------
+// The plan carries `expect` ("what success looks like"); this is the stage that CHECKS it. One
+// cheap structured call: did the run's actual answer meet the stated expectation? The verdict
+// rides the history entry, so the NEXT decision sees "expect NOT met" and stops repeating a move
+// that only looks like it works. Fail-soft: no expect / no answer / cloud down → null (unverified).
+function _validateExpectVerdict(raw) {
+  try {
+    const m = String(raw || '').match(/\{[\s\S]*\}/);
+    if (!m) return { valid: false, error: 'no JSON object' };
+    const o = JSON.parse(m[0]);
+    if (typeof o.met !== 'boolean') return { valid: false, error: 'missing boolean "met"' };
+    return { valid: true, value: { met: o.met, why: String(o.why || '').replace(/\s+/g, ' ').slice(0, 200) } };
+  } catch (e) { return { valid: false, error: e.message }; }
+}
+async function verifyExpect({ decision, opRes, deps = {} } = {}) {
+  const d = decision || {};
+  if (!d.expect || !opRes || !opRes.answer || !String(opRes.answer).trim()) return null;
+  const ask = deps.ask || require('./cloud_logic').ask;
+  try {
+    return await ask({
+      task: 'autonomy_verify', v: 1,
+      input: {
+        expected: d.expect,
+        actual: String(opRes.answer).slice(0, 4000),
+        artifacts: (opRes.steps || []).filter((s) => s.tool === 'file').map((s) => s.args && s.args.path).filter(Boolean),
+      },
+      want: `Did the ACTUAL result genuinely meet the EXPECTED outcome? Judge strictly — a partial or hedged result that dodges the expectation is NOT met. Reply ONLY strict JSON: {"met": true|false, "why": "<one honest line>"}.`,
+      validate: _validateExpectVerdict,
+      numPredict: 200, think: false,
+    });
+  } catch (e) { console.error('[autonomy] expect verify failed:', e.message); return null; }
+}
+
 // ---- outcome: record what HAPPENED, not what was planned -------------------
-function summarizeOutcome(decision, opRes, { now = Date.now() } = {}) {
+function summarizeOutcome(decision, opRes, { now = Date.now(), verify = null } = {}) {
   const d = decision || {};
   const artifacts = [];
   let toolsUsed = [];
@@ -244,14 +287,41 @@ function summarizeOutcome(decision, opRes, { now = Date.now() } = {}) {
     }
   }
   const ok = !!(opRes && opRes.answer && String(opRes.answer).trim());
-  const outcome = !opRes ? 'no-run (cloud unavailable)' : ok
+  let outcome = !opRes ? 'no-run (cloud unavailable)' : ok
     ? `ok — ${toolsUsed.length} tool step${toolsUsed.length === 1 ? '' : 's'}${artifacts.length ? `, artifact: ${artifacts.join(', ')}` : ''}`
     : 'ran but produced no answer';
+  if (verify && typeof verify.met === 'boolean') {
+    outcome += `; expect ${verify.met ? 'MET' : 'NOT met'}${verify.why ? ` — ${verify.why}` : ''}`;
+  }
   return {
-    entry: { ts: now, move: d.move, target: d.target, outcome },
-    report: `[autonomy] chose=${d.move} target="${String(d.target || '').slice(0, 60)}" steps=${toolsUsed.length} ok=${ok ? 1 : 0} artifacts=${artifacts.length}`,
+    entry: { ts: now, move: d.move, target: d.target, outcome, ...(verify ? { expectMet: verify.met } : {}) },
+    report: `[autonomy] chose=${d.move} target="${String(d.target || '').slice(0, 60)}" steps=${toolsUsed.length} ok=${ok ? 1 : 0} artifacts=${artifacts.length}${verify ? ` expect=${verify.met ? 'met' : 'NOT-met'}` : ''}`,
     artifacts, ok, toolsUsed,
   };
+}
+
+// ---- the delegation RETURN PATH (pure parts) -------------------------------
+// Echo's agent_inbox holds finished agent work "the operator hasn't yet opened" — and nothing on
+// Zoe's side ever read it, so a delegated run left and its result died in the queue (the handoff's
+// own manifest warned "it does NOT report back"). The driver drains it; these helpers parse and
+// dedupe so the drain is smokeable.
+function parseAgentInbox(text) {
+  try {
+    const m = String(text || '').match(/\[[\s\S]*\]/);
+    if (!m) return [];
+    const arr = JSON.parse(m[0]);
+    return (Array.isArray(arr) ? arr : []).map((it) => ({
+      title: String((it && it.title) || '').slice(0, 160),
+      summary: String((it && it.summary) || '').replace(/\s+/g, ' ').slice(0, 400),
+      agent: String((it && (it.agent_name || it.agent)) || '').slice(0, 60),
+      kind: String((it && it.deliverable_kind) || '').slice(0, 40),
+      canvasTab: String((it && it.canvas_tab) || '').slice(0, 80),
+      createdAt: String((it && it.created_at) || '').slice(0, 40),
+    })).filter((it) => it.title || it.summary);
+  } catch { return []; }
+}
+function inboxSeenKey(item) {
+  return `${(item && item.title) || ''}::${(item && item.createdAt) || ''}`.slice(0, 200);
 }
 
 module.exports = {
@@ -259,4 +329,5 @@ module.exports = {
   buildManifest, historyRead, historyPush, historyBlock,
   decide, validateDecision, DECISION_WANT,
   buildOperatorBrief, summarizeOutcome, slugify,
+  verifyExpect, _validateExpectVerdict, parseAgentInbox, inboxSeenKey,
 };

@@ -87,6 +87,28 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   const sumNull = auto.summarizeOutcome({ move: 'research', target: 't' }, null, { now: NOW });
   ok(/no-run/.test(sumNull.entry.outcome) && !sumNull.ok, 'a run that never happened is recorded as no-run, not success');
 
+  // --- S3 expect-vs-actual: the verdict rides the record ---
+  ok(auto._validateExpectVerdict('{"met": false, "why": "found 9 of 64"}').valid, 'expect verdict validates');
+  ok(!auto._validateExpectVerdict('{"why": "no met field"}').valid, 'a verdict without met:boolean is invalid');
+  const vNo = await auto.verifyExpect({ decision: { expect: 'all 64 parishes listed' }, opRes: { answer: 'Found 9 parishes.', steps: [] }, deps: { ask: async (o) => o.validate('{"met": false, "why": "9 of 64"}').value } });
+  ok(vNo && vNo.met === false, 'verifyExpect returns the judged verdict');
+  ok((await auto.verifyExpect({ decision: { expect: '' }, opRes: { answer: 'x' }, deps: { ask: async () => { throw new Error('must not be called'); } } })) === null, 'no expect → no verify call');
+  const sumV = auto.summarizeOutcome({ move: 'fill-gap', target: 'parishes' }, opRes, { now: NOW, verify: { met: false, why: '9 of 64' } });
+  ok(/expect NOT met — 9 of 64/.test(sumV.entry.outcome) && sumV.entry.expectMet === false, 'an unmet expectation is written into history where the next decision reads it');
+  ok(/expect=NOT-met/.test(sumV.report), 'the tick report line carries the verdict');
+
+  // --- delegation return path: inbox parsing + dedupe ---
+  const inboxText = 'Inbox: [{"title":"LAMP roster brief","summary":"42 members compiled","agent_name":"opposition_researcher","deliverable_kind":"briefing","created_at":"2026-07-22T19:00:00Z"},{"title":"","summary":""}]';
+  const items = auto.parseAgentInbox(inboxText);
+  ok(items.length === 1 && items[0].agent === 'opposition_researcher' && items[0].kind === 'briefing', 'inbox JSON parses inside surrounding prose, empty rows dropped');
+  ok(auto.parseAgentInbox('no json at all').length === 0, 'garbage inbox text → empty, never a throw');
+  ok(auto.inboxSeenKey(items[0]) === 'LAMP roster brief::2026-07-22T19:00:00Z', 'seen-key is stable title+created_at');
+
+  // --- the manifest surfaces returned work ---
+  const memDb3 = { getDb: () => mem2, getMeta: (k) => (k === 'autonomy.inbox_recent' ? JSON.stringify(items) : null) };
+  const man3 = auto.buildManifest({ db: memDb3, now: NOW });
+  ok(/FINISHED DELEGATED WORK/.test(man3.text) && /LAMP roster brief/.test(man3.text), 'returned delegated work rides the tick manifest');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

@@ -264,6 +264,14 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
     // 1200 in history — the agent "read" every tool result through a 1,200-char keyhole while the
     // chat lane read 24k). One cap, applied once; history carries the same text the step stored.
     result = String(result == null ? '' : result).slice(0, capChars);
+    // EXPECT-VS-ACTUAL, mechanically: an empty or failed result is a SIGNAL, not an answer. Without
+    // this the loop treated "no rows" as information gathered and moved on — absence read as the
+    // answer. The marker makes the next step confront it: adjust, switch tools, or say plainly it
+    // was not found (which is itself an honest finding — never a silent shrug).
+    const _flat = result.trim();
+    if (!_flat || /^ERROR/i.test(_flat) || /^(no rows|no result|none|not found|nothing|\[\]|\{\}|null)\.?$/i.test(_flat) || /returned nothing|no result from/i.test(_flat.slice(0, 80))) {
+      result += `\n[UNSATISFIED: this result did not answer the need. Change approach — different args, a different tool — or state plainly that it was not found. Do not treat absence as the answer.]`;
+    }
     steps.push({ tool, args, result });
     history += `\n• step ${i + 1}: ${tool}(${JSON.stringify(args).slice(0, 300)}) → ${result}`;
   }
