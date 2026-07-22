@@ -865,6 +865,14 @@ function getRecentTurns(n) {
   return rows.reverse();
 }
 
+// SPOKEN turns past a watermark, oldest first — the conversation-objects scan (lib/conversation_objects).
+// Thoughts are excluded at the query: window gaps are measured on what was actually SAID in the chat.
+function turnsAfter(afterId = 0, limit = 4000) {
+  return getDb()
+    .prepare(`SELECT id, session_id, ts, speaker, content FROM turns WHERE id > ? AND speaker IN ('user','ai_said') ORDER BY id ASC LIMIT ?`)
+    .all(Number(afterId) || 0, Math.max(1, limit | 0));
+}
+
 // --- episodic recall: turn embeddings (for "what did we say earlier about X") ---
 function setTurnEmbedding(id, embedding) {
   getDb().prepare('UPDATE turns SET embedding = ? WHERE id = ?').run(embedding, id);
@@ -2317,6 +2325,7 @@ module.exports = {
   endSession,
   insertTurn,
   getRecentTurns,
+  turnsAfter,
   setTurnEmbedding,
   getEmbeddedTurns,
   getTurnsMissingEmbedding,

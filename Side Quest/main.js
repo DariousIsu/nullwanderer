@@ -1352,6 +1352,20 @@ app.whenReady().then(() => {
   // instead of code round-robins choosing for it. Yields to chat, directed focuses, and meetings.
   try { startAutonomyDriver(); } catch (e) { console.error('[main] autonomy driver start failed:', e.message); }
 
+  // CONVERSATION OBJECTS (memory slice 1A) — closed chat windows become addressable documents
+  // (lib/conversation_objects): landed in the short-term store now (same-day recall), promoted into Echo
+  // nightly via save_conversation. First run 2 min after boot so windows closed before the reboot land
+  // without waiting a tick; then every 15 min (one cheap indexed scan when there's nothing new). No
+  // reading beat on landing — the history backfill would flood the monologue; promotion is the memory event.
+  const runConversationPass = () => {
+    try {
+      const r = require('./lib/conversation_objects').pass({});
+      if (r.landed || r.halted) console.log(`[conversation] pass — ${r.landed} window(s) filed as objects${r.duplicates ? `, ${r.duplicates} already filed` : ''}${r.halted ? ' (halted on a landing failure — will retry next tick)' : ''}`);
+    } catch (e) { console.error('[conversation] pass failed:', e.message); }
+  };
+  setTimeout(runConversationPass, 2 * 60 * 1000);
+  setInterval(runConversationPass, 15 * 60 * 1000);
+
   // Email: surface a credential problem early rather than at first send.
   if (emailLib.isConfigured()) {
     emailLib.verify().then(r => {
@@ -6266,8 +6280,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     if (!socialTurn && !followupFired && !directedStopHandled && !expandHandled && !correctionHandled && docQa.isDocQuery(userMessage)) {
       // Candidates come from the DURABLE short-term store (reboot-proof) FIRST, then any FRESH canvas drop
       // not yet landed (just dropped, before the 45s ingest tick) — so the held doc is findable whether or
-      // not the volatile engine canvas still has it.
-      const candidates = require('./lib/doc_store').candidates(20);
+      // not the volatile engine canvas still has it. Conversation objects are excluded — "the notes" means
+      // a document Lucas HANDED her, and they're filtered BEFORE the cap so a chatty day (many conversation
+      // windows landing) can't push his real drops out of the candidate window.
+      const candidates = require('./lib/doc_store').candidates(60).filter(c => c.source !== 'conversation').slice(0, 20);
       try {
         const snap = await canvasSnapshot();
         if (snap && Array.isArray(snap.tabs)) {
@@ -10070,6 +10086,30 @@ async function promoteDocumentsPass({ limit = 20 } = {}) {
   for (const doc of docs) {
     if (!promote.shouldPromote(doc)) { try { db.markDocumentPromoted(doc.id, 'skipped:thin'); } catch {} continue; }
     const recipe = promote.recipeFor(doc);
+    // CONVERSATION OBJECTS ride Echo's purpose-built save_conversation (transcript inline, files under
+    // Vault/Archive/conversations/) instead of the temp-file ingest path. One asymmetric rule: ok-but-no-
+    // doc_id still marks PROMOTED — the archive landed, and marking it failed would re-archive the same
+    // conversation every night; only a real dispatch failure retries.
+    if (recipe.kind === 'conversation') {
+      try {
+        const res = await echoSuit.dispatch({ kind: 'do', name: 'save_conversation', args: {
+          transcript: `# ${doc.title || 'Conversation'}\n\n${doc.body}`,
+          metadata: { title: doc.title || null, source: 'side-quest-chat', ref: doc.ref || null, landed_at: new Date(doc.created_ts || Date.now()).toISOString() },
+        } });
+        if (res && res.ok && !res.isError) {
+          const echoDocId = promote.parseEchoDocId(res.text);
+          if (echoDocId && recipe.extractEntities) {
+            try { await echoSuit.dispatch({ kind: 'do', name: 'extract_entities_from_doc', args: { doc_id: echoDocId } }); }
+            catch (e) { console.error('[promote] entity extract failed (non-fatal):', e.message); }
+          }
+          try { db.markDocumentPromoted(doc.id, echoDocId ? `echo:${echoDocId}` : 'echo:conversation'); } catch {}
+          promoted++;
+          try { emitKgActivity({ db: 'sidequest', kind: 'promote', anchor: String(doc.title || ('doc #' + doc.id)), count: 1 }); } catch (e) {}
+          console.log(`[promote] conversation #${doc.id} "${String(doc.title || '').slice(0, 40)}" → Echo${echoDocId ? ` doc ${echoDocId}` : ' archive'}`);
+        } else { failed++; console.error(`[promote] conversation #${doc.id} save_conversation failed:`, String((res && (res.text || res.error)) || '').slice(0, 160)); }
+      } catch (e) { failed++; console.error(`[promote] conversation #${doc.id} failed:`, e.message); }
+      continue;
+    }
     const tmp = path.join(os.tmpdir(), `zoe-promote-${doc.id}-${promote.tempFileName(doc)}`);
     try {
       fs.writeFileSync(tmp, `# ${doc.title || 'Document'}\n\n${doc.body}`, 'utf8');

@@ -26,6 +26,9 @@ function shouldPromote(doc) {
 function recipeFor(doc) {
   const source = str(doc && doc.source).toLowerCase();
   if (source === 'research' || source === 'deliverable') return { kind: 'deliverable', projectName: '_Inbox', extractEntities: true };
+  // Conversation objects (lib/conversation_objects) go through Echo's purpose-built save_conversation —
+  // they file under Vault/Archive/conversations/ with metadata, not as _Inbox documents.
+  if (source === 'conversation') return { kind: 'conversation', projectName: '_Inbox', extractEntities: true };
   return { kind: 'document', projectName: '_Inbox', extractEntities: true };   // canvas_drop / notes / default
 }
 
