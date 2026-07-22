@@ -5411,13 +5411,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try { const dq = require('./lib/track').classifyQuery(userMessage); deliverableAggQ = dq.is && ['count', 'list', 'facet', 'status', 'rank'].includes(dq.kind); } catch {}
 
   const chosenName = db.getMeta('chosen_name');
-  const awareness = buildAwarenessBlock({
+  let awareness = buildAwarenessBlock({
     chosenName,
     sessionStartedAt: currentSessionStartedAt,
     cumulativeMs: db.getCumulativeSessionTime(),
     standing: _researchStanding(),
     working: _workingNow(),
   });
+  // HIS WEEK (lib/week_context) — his calendar as ambient context, so a casual "how's your day"
+  // turn already knows about last week's DC meeting and Thursday's Teams call and who's in them.
+  // Cached read, zero latency: a stale cache refreshes in the background for the NEXT turn.
+  try { const wk = require('./lib/week_context').blockFor({ gcalOpts: gcalOpts() }); if (wk) awareness += '\n\n' + wk; } catch (e) { console.error('[main] week block failed:', e.message); }
 
   // SCOPED RETRIEVAL (Phase 1) — classify the question, then retrieve to fit it:
   //  • narrow/factual (a specific bill, a who/what question) → hybrid semantic+FTS (exact
@@ -8051,13 +8055,15 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
   try {
     const userName = db.getMeta('user_name') || 'them';
     const recentTurns = db.getRecentTurns(8);
-    const awareness = buildAwarenessBlock({
+    let awareness = buildAwarenessBlock({
       chosenName: db.getMeta('chosen_name'),
       sessionStartedAt: currentSessionStartedAt,
       cumulativeMs: db.getCumulativeSessionTime(),
       standing: _researchStanding(),
       working: _workingNow(),
     });
+    // Same HIS-WEEK calendar context as the main turn — a tool follow-up is still conversation.
+    try { const wk = require('./lib/week_context').blockFor({ gcalOpts: gcalOpts() }); if (wk) awareness += '\n\n' + wk; } catch {}
     const protocols = db.getActiveProtocols();
     // Echo chaining: while hops remain and the suit is connected, let her emit ONE more echo tag
     // to continue a find→do flow (this is the fix for the find→do stall — the followup used to
@@ -8636,6 +8642,8 @@ async function autonomyTick() {
     try { db.setMeta('autonomy.last_decide_at', String(now)); } catch {}
     const autonomy = require('./lib/autonomy');
     const H = { getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v) };
+    // Warm the calendar context so the manifest sees his week (TTL-guarded — usually a no-op).
+    try { await require('./lib/week_context').refresh({ gcalOpts: gcalOpts(), now }); } catch {}
     const manifest = autonomy.buildManifest({ db, now });
     if (!manifest.text) { console.log('[autonomy] empty manifest — nothing to choose from'); return; }
     const decision = await autonomy.decide({ manifestText: manifest.text, history: autonomy.historyRead(H.getMeta), now });

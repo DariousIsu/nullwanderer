@@ -43,7 +43,7 @@ function _ago(now, ts) {
   return Math.round(d / 86400e3) + 'd ago';
 }
 
-function buildManifest({ db = null, now = Date.now() } = {}) {
+function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
   const dbm = db || require('./db');
   let d = null;
   try { d = dbm.getDb(); } catch { /* no db → empty manifest, decide() will decline */ }
@@ -109,6 +109,15 @@ function buildManifest({ db = null, now = Date.now() } = {}) {
       + stale.map((r) => `   - "${String(r.content || '').replace(/\s+/g, ' ').slice(0, 140)}" (untouched ${_ago(now, r.last_touched_ts)})`).join('\n');
   });
 
+  grab('week', () => {
+    // Lucas's calendar (lib/week_context, cached by the driver's refresh) — the people he is about
+    // to meet are PRIME material: research who they are before the meeting, or engage with a timely,
+    // conversational question about it. Facts only here (`lines`), no chat-voice guidance.
+    const wc = (deps.weekContext || require('./week_context')).cached();
+    if (!wc || !wc.lines) return '';
+    return `• HIS CALENDAR THIS WEEK (who he just met and is about to meet — knowing THESE people beats generic exploration):\n${wc.lines}`;
+  });
+
   return { text: sections.join('\n'), counts };
 }
 
@@ -150,7 +159,7 @@ The moves:
 - engage: say something to Lucas NOW — a genuine finding or a direction question. Use RARELY, only when you have something real; "say" must carry the exact message, grounded in the state above, no invented facts.
 - nothing: a first-class answer. If no move is clearly worth its cost, decline honestly.
 
-Rules: at most 4 steps. Never plan work you cannot check. Do not choose a target your recent ticks show as just-run or repeatedly dry. Variety matters across ticks — contacts are ALREADY covered by another lane, so prefer ideas, gaps, corroboration, and building over anything contact-shaped.`;
+Rules: at most 4 steps. Never plan work you cannot check. Do not choose a target your recent ticks show as just-run or repeatedly dry. Variety matters across ticks — contacts are ALREADY covered by another lane, so prefer ideas, gaps, corroboration, and building over anything contact-shaped. The one exception: PEOPLE ON HIS CALENDAR. If the state shows an upcoming meeting whose attendees we hold little on, researching them before he walks in is among the highest-value moves available — and a past meeting is a natural, grounded engage ("how did X go?").`;
 
 function validateDecision(raw) {
   try {
