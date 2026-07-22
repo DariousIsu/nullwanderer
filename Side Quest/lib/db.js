@@ -70,6 +70,30 @@ const MIGRATIONS = [
   // consumer (package grounding, recall markers) can cite it as [dN] and pull the full text on demand
   // instead of quoting the reading's own 240-char gist. NULL = the reading has no stored doc behind it.
   `ALTER TABLE monologue ADD COLUMN doc_ref INTEGER`,
+  // THE WORKSTREAM BOARD (conductor slice 2a — lib/board.js). One queryable "what is running in me
+  // now": every discrete lane run registers a row; locks bound concurrency by RESOURCE CLASS instead
+  // of politeness (cloud_slot_1 is permanently the chat's; ≤1 maintenance pass per store). Heartbeats
+  // make crashes self-healing: a running row/lock whose heartbeat goes stale is swept/expired on read.
+  `CREATE TABLE IF NOT EXISTS workstreams (
+    id INTEGER PRIMARY KEY,
+    lane TEXT NOT NULL,
+    kind TEXT,
+    target TEXT,
+    status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','done','failed')),
+    resource TEXT,
+    note TEXT,
+    started_ts INTEGER NOT NULL,
+    heartbeat_ts INTEGER NOT NULL,
+    finished_ts INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_workstreams_status_hb ON workstreams(status, heartbeat_ts)`,
+  `CREATE TABLE IF NOT EXISTS resource_locks (
+    resource TEXT PRIMARY KEY,
+    holder_stream INTEGER,
+    holder_lane TEXT,
+    since_ts INTEGER NOT NULL,
+    heartbeat_ts INTEGER NOT NULL
+  )`,
   `CREATE INDEX IF NOT EXISTS idx_monologue_type_ts ON monologue(type, ts)`,
   `CREATE TABLE IF NOT EXISTS commitments (
     id INTEGER PRIMARY KEY,

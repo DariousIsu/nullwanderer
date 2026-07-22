@@ -251,6 +251,7 @@ const smokes = [
   'smoke_conversation_objects.js',
   'smoke_story_follow.js',
   'smoke_recall.js',
+  'smoke_board.js',
   'smoke_ner.js',
   'smoke_mention.js',
   'smoke_cognition.js',

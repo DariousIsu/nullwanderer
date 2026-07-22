@@ -1358,10 +1358,16 @@ app.whenReady().then(() => {
   // without waiting a tick; then every 15 min (one cheap indexed scan when there's nothing new). No
   // reading beat on landing — the history backfill would flood the monologue; promotion is the memory event.
   const runConversationPass = () => {
+    let bId = null;
+    try { bId = require('./lib/board').start({ lane: 'memory', kind: 'conversation-pass', target: 'closed chat windows → objects' }).id; } catch {}
     try {
       const r = require('./lib/conversation_objects').pass({});
       if (r.landed || r.halted) console.log(`[conversation] pass — ${r.landed} window(s) filed as objects${r.duplicates ? `, ${r.duplicates} already filed` : ''}${r.halted ? ' (halted on a landing failure — will retry next tick)' : ''}`);
-    } catch (e) { console.error('[conversation] pass failed:', e.message); }
+      try { require('./lib/board').finish(bId, { status: r.halted ? 'failed' : 'done', note: `landed ${r.landed}, dupes ${r.duplicates}, skipped ${r.skipped}` }); } catch {}
+    } catch (e) {
+      console.error('[conversation] pass failed:', e.message);
+      try { require('./lib/board').finish(bId, { status: 'failed', note: e.message }); } catch {}
+    }
   };
   setTimeout(runConversationPass, 2 * 60 * 1000);
   setInterval(runConversationPass, 15 * 60 * 1000);
@@ -8787,13 +8793,19 @@ async function autonomyTick() {
     // WORK MOVES (research / fill-gap / corroborate / clean / build) → one bounded operator run.
     // autonomous:true keeps Echo writes tier-gated; build gets the task budget (it produces a file).
     const brief = autonomy.buildOperatorBrief(decision, { now });
+    // Register on the workstream board (conductor 2a) — the run is visible to chat's "what are you
+    // doing?", to the next tick's manifest, and (2b) to slot allocation. Board failure never blocks work.
+    let boardId = null;
+    try { boardId = require('./lib/board').start({ lane: 'autonomy', kind: decision.move, target: decision.target }).id; } catch {}
     const res = await runCloudOperator({ userMessage: brief, context: manifest.text, task: decision.move === 'build', autonomous: true });
+    try { require('./lib/board').beat(boardId); } catch {}
     // S3 VERIFY — the run is judged against the plan's own `expect` before it is recorded. An
     // unmet expectation is written into history, where the next decision reads it as "this
     // approach is not working" instead of repeating a move that only looks like progress.
     let expectVerdict = null;
     try { expectVerdict = await autonomy.verifyExpect({ decision, opRes: res }); } catch {}
     const sum = autonomy.summarizeOutcome(decision, res, { now, verify: expectVerdict });
+    try { require('./lib/board').finish(boardId, { status: sum.ok ? 'done' : 'failed', note: String(sum.entry && sum.entry.outcome || '').slice(0, 160) }); } catch {}
     if (sum.ok) {
       // The finding enters her stream as a reading (visible in the rail, recallable later). Web
       // learnings already accreted inside runCloudOperator; this is the narrative record.
@@ -10122,10 +10134,12 @@ async function gatherHeldContacts() {
 // Echo down → skip; a single doc's failure doesn't block the rest. Returns { promoted, failed, skipped }.
 async function promoteDocumentsPass({ limit = 20 } = {}) {
   if (!echoSuit || !echoSuit.connected) { console.log('[promote] Echo not connected — skipping promotion'); return { promoted: 0, failed: 0, skipped: true }; }
+  let _boardId = null;
+  try { _boardId = require('./lib/board').start({ lane: 'memory', kind: 'promote-pass', target: 'short-term documents → Echo long-term' }).id; } catch {}
   const promote = require('./lib/promote');
   const fs = require('fs'); const os = require('os'); const path = require('path');
   let promoted = 0, failed = 0;
-  let docs = []; try { docs = db.listUnpromotedDocuments(limit); } catch (e) { console.error('[promote] list failed:', e.message); return { promoted, failed }; }
+  let docs = []; try { docs = db.listUnpromotedDocuments(limit); } catch (e) { console.error('[promote] list failed:', e.message); try { require('./lib/board').finish(_boardId, { status: 'failed', note: 'list failed' }); } catch {} return { promoted, failed }; }
   for (const doc of docs) {
     if (!promote.shouldPromote(doc)) { try { db.markDocumentPromoted(doc.id, 'skipped:thin'); } catch {} continue; }
     const recipe = promote.recipeFor(doc);
@@ -10174,6 +10188,7 @@ async function promoteDocumentsPass({ limit = 20 } = {}) {
     finally { try { fs.unlinkSync(tmp); } catch {} }
   }
   if (promoted || failed) console.log(`[promote] pass done — ${promoted} promoted, ${failed} failed`);
+  try { require('./lib/board').finish(_boardId, { status: 'done', note: `promoted ${promoted}, failed ${failed}` }); } catch {}
   return { promoted, failed };
 }
 
@@ -10513,6 +10528,14 @@ async function laneSnapshot() {
       snap.meeting = { url: db.getMeta('gmeet_url') || '', stage, awaitingAdmit: stage === 'awaiting_admit' };
     }
   } catch {}
+  // THE BOARD (conductor slice 2a) — every registered background stream joins the snapshot, so "what
+  // are you doing?" is answered from the one queryable surface instead of three lanes' private state.
+  try {
+    const now = Date.now();
+    snap.streams = require('./lib/board').running({ nowMs: now })
+      .filter((r) => r.lane !== 'chat')
+      .map((r) => ({ lane: r.lane, kind: r.kind || 'run', target: r.target || '', agoMin: Math.max(0, Math.round((now - r.started_ts) / 60000)) }));
+  } catch { snap.streams = []; }
   return snap;
 }
 

@@ -138,6 +138,15 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
     return `• DEVELOPING STORIES YOU FOLLOW (what moved since you last saw it):\n${lines.join('\n')}`;
   });
 
+  grab('board', () => {
+    // The workstream board (lib/board, conductor 2a) — what is ALREADY running, so the decision never
+    // starts a second run of a kind in flight and can see which resources are held.
+    const lines = (deps.board || require('./board')).manifestLines({ nowMs: now });
+    if (!lines || !lines.length) return '';
+    counts.boardLines = lines.length;
+    return `• WHAT IS RUNNING IN YOU NOW (the workstream board — never start a duplicate of a running kind):\n${lines.join('\n')}`;
+  });
+
   return { text: sections.join('\n'), counts };
 }
 

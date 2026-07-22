@@ -15,7 +15,8 @@
  *     research: { goal, covered:[…], target:{name} } | null,
  *     media:    { title, url, stage, understanding }  | null,   // stage: watching | done | …
  *     meeting:  { url, stage, awaitingAdmit }          | null,   // stage: joining | awaiting_admit | in | observing
- *   }
+ *     streams:  [{ lane, kind, target, agoMin }]       | [],     // the WORKSTREAM BOARD (lib/board) —
+ *   }                                                            // background runs registered by any lane
  */
 'use strict';
 
@@ -42,6 +43,9 @@ function pointers(snapshot = {}) {
     const what = s.meeting.awaitingAdmit || s.meeting.stage === 'awaiting_admit' ? ' — awaiting admit' : '';
     out.push(`Now: in meeting ${_short(s.meeting.url || '', 50)}${what} → meeting lane`);
   }
+  for (const st of (Array.isArray(s.streams) ? s.streams : []).slice(0, 5)) {
+    out.push(`Now: ${_short(st.kind, 30)}${st.target ? ` "${_short(st.target, 50)}"` : ''} → ${_short(st.lane, 30)} lane`);
+  }
   return out;
 }
 
@@ -62,10 +66,16 @@ function summarize(snapshot = {}) {
     const what = s.meeting.awaitingAdmit || s.meeting.stage === 'awaiting_admit' ? ', waiting to be let in' : '';
     parts.push(`in a meeting (${_short(s.meeting.url || '', 60)})${what}`);
   }
+  // Board streams (lib/board) — her background work, named honestly and NEVER invented beyond the list.
+  const streams = (Array.isArray(s.streams) ? s.streams : []).slice(0, 5);
+  for (const st of streams) {
+    const ago = Number(st.agoMin) > 0 ? ` (${st.agoMin}m in)` : '';
+    parts.push(`running ${_short(st.kind, 40)}${st.target ? ` on "${_short(st.target, 70)}"` : ''}${ago}`);
+  }
   const active = parts.length;
   const block = active
     ? `Right now you're ${parts.join('; and ')}.`
-    : `Right now you're not in the middle of any active task — no research run, video, or meeting going.`;
+    : `Right now you're not in the middle of any active task — no research run, video, meeting, or background stream going.`;
   return { active, block, pointers: pointers(snapshot) };
 }
 
