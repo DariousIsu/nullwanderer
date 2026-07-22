@@ -848,6 +848,12 @@ function insertTurn({ sessionId, speaker, content, model = null, truncated = 0, 
   const info = getDb()
     .prepare('INSERT INTO turns (session_id, ts, speaker, content, model, truncated, unprompted) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(sessionId, ts, speaker, content, model, truncated, unprompted ? 1 : 0);
+  // Conversation is boundary traffic (Lucas, 2026-07-22: "graphically show her thinking and communicating").
+  // The KG surface draws the short-term store as a bounded region — her mind — so being spoken to and
+  // speaking are its two crossings: 'hear' travels in, 'say' travels out. ai_thought turns are NOT tapped
+  // here; the inner voice already reaches the surface as 'think' via insertMonologue's throttled tap.
+  if (speaker === 'user') _kgTap('hear', String(content || '').slice(0, 110));
+  else if (speaker === 'ai_said') _kgTap('say', String(content || '').slice(0, 110));
   return { id: info.lastInsertRowid, ts };
 }
 

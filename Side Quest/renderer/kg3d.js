@@ -41,6 +41,7 @@ const KIND_META = {
   'match.hit': ['match', '#c4b5fd'], 'recall': ['recall', '#22d3ee'], 'promote': ['promote', '#fbbf24'],
   'think': ['think', '#64748b'], 'doc.land': ['doc', '#a3e635'], 'news': ['news', '#f472b6'], 'observe': ['observe', '#a8a29e'],
   'audit.clean': ['clean', '#facc15'], 'note': ['note', '#cbd5e1'], 'reflect': ['reflect', '#f0abfc'], 'self': ['self', '#fda4af'],
+  'hear': ['hear', '#a5b4fc'], 'say': ['say', '#fda4af'],
 };
 const pad2 = (n) => (n < 10 ? '0' + n : '' + n);
 function logActivity(evt) {
@@ -664,10 +665,38 @@ function gAbsorb(pos, count) {                 // dedup merge: duplicate motes c
   const bloom = mkSprite(VHEX, 0); bloom.position.copy(pos);
   addEffect([bloom], 1000, (p) => { const q = Math.sin(p * Math.PI); bloom.scale.setScalar(4 + q * 10); bloom.material.opacity = 0.7 * q; });
 }
-function gThink() {                            // ambient heartbeat — a faint mote drifting near the core (throttled upstream)
-  const c = coreCentroid3D(), s = mkSprite(VHEX, 0.3);
-  s.position.set(c.x + (Math.random() - 0.5) * 80, c.y + (Math.random() - 0.5) * 80, c.z + (Math.random() - 0.5) * 80); s.scale.setScalar(2);
-  addEffect([s], 1200, (p) => { const q = Math.sin(p * Math.PI); s.material.opacity = 0.3 * q; s.scale.setScalar(2 + q * 3); });
+// ---- thinking + communicating (Lucas, 2026-07-22: "graphically show her thinking and communicating") ----
+// The membrane gives these a grammar. THINKING is churn INSIDE the boundary: each throttled 'think' event is
+// a mote condensing somewhere in the orb and drifting in toward her. COMMUNICATING is a crossing OF the
+// boundary: 'hear' (Lucas's turn) arcs in from outside to the anchor, 'say' (her reply) arcs out from the
+// anchor into the space between the stores — and the membrane itself shimmers at every crossing.
+function gThink() {                            // a thought: condenses in the orb, drifts toward her
+  const c = new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z);
+  const h = Math.random() * Math.PI * 2, v = Math.acos(2 * Math.random() - 1), r = ORB_R * (0.45 + 0.5 * Math.random());
+  const start = c.clone().add(new THREE.Vector3(r * Math.sin(v) * Math.cos(h), r * Math.sin(v) * Math.sin(h), r * Math.cos(v)));
+  const s = mkSprite(VHEX, 0.34); s.scale.setScalar(2); s.position.copy(start);
+  addEffect([s], 1700, (p) => { const e = 1 - (1 - p) * (1 - p); s.position.copy(start.clone().lerp(c, e * 0.82)); const q = Math.sin(p * Math.PI); s.material.opacity = 0.34 * q; s.scale.setScalar(2 + q * 2.5); });
+}
+function membraneShimmer() {                   // the boundary notices a crossing
+  if (!membrane) return; const m = membrane.material, base = 0.045;
+  addEffect([], 750, (p) => { m.opacity = base + Math.sin(p * Math.PI) * 0.05; });
+}
+const HEAR_HEX = new THREE.Color('#a5b4fc').getHex(), SAY_HEX = new THREE.Color(ZOE_ROSE).getHex();
+function gCross(inward, colorHex) {            // one communication: a pulse crossing the membrane, trailed
+  const c = new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z);
+  const dir = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
+  if (dir.lengthSq() < 1e-3) dir.set(0, 1, 0); dir.normalize();
+  const far = c.clone().add(dir.multiplyScalar(ORB_R * 2.5));
+  const from = inward ? far : c, to = inward ? c : far;
+  const pulse = mkSprite(colorHex, 0.95), trail = mkLine(colorHex, 0.55); pulse.scale.setScalar(4); pulse.position.copy(from);
+  addEffect([pulse, trail], 1150, (p) => {
+    const e = inward ? 1 - (1 - p) * (1 - p) : p * p;     // hears decelerate arriving; says accelerate leaving
+    const pos = from.clone().lerp(to, e);
+    pulse.position.copy(pos); pulse.material.opacity = 0.95 * (1 - p * 0.55);
+    trail.geometry.setFromPoints([from.clone().lerp(to, Math.max(0, e - 0.16)), pos]); trail.material.opacity = 0.55 * (1 - p);
+    if (inward && p > 0.86 && zoeHalo) zoeHalo.material.opacity = 0.3 + Math.sin((p - 0.86) / 0.14 * Math.PI) * 0.3;
+  });
+  membraneShimmer();
 }
 
 // --- neuron aesthetic (Phase 6): hidden-connection TENDRILS from hubs + a distant STARFIELD. GPU-cheap in 3D
@@ -754,6 +783,8 @@ function onActivity(evt) {
       gEnrich(c, new THREE.Color(ZOE_ROSE).getHex());
       if (k === 'self') loadSelf();
     }
+    else if (k === 'hear') { gCross(true, HEAR_HEX); }                   // Lucas's words crossing IN to her
+    else if (k === 'say') { gCross(false, SAY_HEX); }                    // her reply crossing OUT of the region
     // doc.land / news → ambient inflow, deferred (no emitter fires them yet)
   } catch (e) { console.warn('[kg3d] activity', e && e.message); }
 }
