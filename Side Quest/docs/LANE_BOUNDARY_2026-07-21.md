@@ -136,6 +136,11 @@ tuple-index error surfacing under the same churn — both Echo-side, so yours to
 and rejected killing the 13:21-era python processes: they are our two sessions' live MCP servers,
 not orphans.
 
+Escalation, same day: it is no longer only reads. A `saga_canvas_update_block` from the directed
+lane died the same way (`[canvas] upsert failed: fetch failed`) — a background canvas WRITE lost,
+not retried. Conversation-lane turns are still unaffected, but a write-losing failure mode moves
+this up my worry list; flagging so it moves up yours.
+
 ---
 
 ## 4. Two operational rules, because we collided today
