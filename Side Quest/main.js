@@ -4181,7 +4181,11 @@ ipcMain.handle('kg:overview', async () => {
     // full-screen bloom pass — the thing that crashed the shared GPU process. That renderer is gone: nodes
     // are now ONE instanced Points cloud, and the measured limiter is the CPU force sim, not the draw. The
     // panel was starving at the REQUEST while its own cap sat at 2000, so ask for the corpus properly.
-    const payload = await callTool('graph_overview', { per_type_k: 40, recent_k: 250, recent_window_days: 30 });
+    // Raised again once the renderer stopped being the constraint. Links were the real ceiling — 3d-force-graph
+    // built one THREE.Line per edge, which cost 42fps at only 800 links; edges now render as a single buffer,
+    // and 2,398 links measured flat at 60fps. Nodes hold 60fps to ~2,200. This asks for a corpus that fills
+    // that budget instead of the ~525 the panel was drawing.
+    const payload = await callTool('graph_overview', { per_type_k: 85, recent_k: 550, recent_window_days: 30 });
     const g = kgView.buildOverview(payload);
     kgProv.attach(g.nodes);            // evidence per node: how many encounters, how independent, born where
     return { ok: true, nodes: g.nodes, links: g.links, availableTypes: kgView.availableTypes('overview', payload), legend: kgView.legend(),

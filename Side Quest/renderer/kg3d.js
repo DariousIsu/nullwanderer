@@ -79,7 +79,27 @@ function logActivity(evt) {
 // ORB_R rather than merely pulled centreward, because a soft pull leaves stragglers at r≈318 while the corpus
 // starts at 377 — statistically separate, visually one continuous field. A hard-edged orb inside an empty
 // moat is what makes the region READ as a region; the membrane sphere draws that edge.
-const CLOUD_SHELL = 420, ORB_R = 175, ZOE_RING = 60;
+// CONNECTIVITY GRADIENT (Lucas's structure, 2026-07-22): "the most connected long term set closest to the
+// short term and the most dense short term sat closest to the long term… movement between them look like
+// neurons passing through a membrane." Both stores now grade by how connected each object is, facing each
+// other across the boundary: her richest, most-linked short-term material presses OUT to the membrane, the
+// corpus's biggest hubs press IN to meet it, and the thin tails of both fall away from the interface. A
+// recognition therefore fires between two dense surfaces rather than across a uniform gap — and it fills out
+// both bodies, since a uniform shell wasted its whole surface on nodes of every weight at one radius.
+const ZOE_RING = 60;
+const ORB_IN = 72, ORB_R = 178;                  // short-term: sparse deep inside → dense at the membrane
+const SHELL_IN = 300, SHELL_OUT = 640;           // long-term: hubs at the inner face → thin tail far out
+const CLOUD_SHELL = SHELL_IN;                    // recognition mints land on the inner face
+const DEG_ECHO_MAX = 3.25, DEG_SQ_MAX = Math.log10(21);   // log-degree normalisers (echo degrees reach ~1600)
+function bandRadius(n) {
+  if (n.store === 'sidequest') {
+    const t = Math.max(0, Math.min(1, Math.log10(1 + (n.localDeg || 0)) / DEG_SQ_MAX));
+    return ORB_IN + (ORB_R - ORB_IN) * t;        // more connected → nearer the membrane
+  }
+  const d = (typeof n.degree === 'number' && n.degree > 0) ? n.degree : (n.localDeg || 0);
+  const t = Math.max(0, Math.min(1, Math.log10(1 + d) / DEG_ECHO_MAX));
+  return SHELL_OUT - (SHELL_OUT - SHELL_IN) * t; // more connected → nearer the membrane, from the other side
+}
 // The live centroid of the orb, written by the core force each tick — the membrane, the Zoe anchor and the
 // personality orbits all follow it, so the whole region drifts as one body when the sim breathes.
 const _coreCen = { x: 0, y: 0, z: 0, set(x, y, z) { this.x = x; this.y = y; this.z = z; } };
@@ -98,16 +118,24 @@ function makeCore3D(strength = 0.05) {
         n.vx = (n.vx || 0) + (tx - n.x) * k;
         n.vy = (n.vy || 0) + (ty - n.y) * k;
         n.vz = (n.vz || 0) + (tz - (n.z || 0)) * k;
-      } else if (n.store === 'sidequest') {                // inner orb: pull to centre, HARD-capped at the membrane
-        n.vx = (n.vx || 0) + (cx - n.x) * strength * 1.6 * alpha;
-        n.vy = (n.vy || 0) + (cy - n.y) * strength * 1.6 * alpha;
-        n.vz = (n.vz || 0) + (cz - (n.z || 0)) * strength * 1.6 * alpha;
-        if (d > ORB_R) { const f = (ORB_R - d) * strength * 3.2 * alpha; n.vx += (dx / d) * f; n.vy += (dy / d) * f; n.vz += (dz / d) * f; }
-      } else {                                             // outer cloud: ease toward the shell radius, all directions
-        const f = (CLOUD_SHELL - d) * strength * 1.1 * alpha;
+      } else {
+        // Every non-personality node springs to ITS OWN radius, set by how connected it is (bandRadius).
+        // Short-term is held firmly so the orb keeps a hard edge; the corpus eases, so links can still pull
+        // clusters into shape around their band instead of freezing onto a perfect sphere.
+        const sq = n.store === 'sidequest';
+        const target = bandRadius(n);
+        // The corpus spring was 1.25 and lost to charge: its hub face settled at r≈473 against a 300 target,
+        // leaving a dead band twice the width of the orb between the two dense surfaces. Firm enough to hold
+        // its face near the membrane, still soft enough for link clusters to shape it.
+        const f = (target - d) * strength * (sq ? 3.0 : 2.6) * alpha;
         n.vx = (n.vx || 0) + (dx / d) * f;
         n.vy = (n.vy || 0) + (dy / d) * f;
         n.vz = (n.vz || 0) + (dz / d) * f;
+        if (sq) {                                          // plus a gentle centre-pull so the orb stays a body
+          n.vx += (cx - n.x) * strength * 0.35 * alpha;
+          n.vy += (cy - n.y) * strength * 0.35 * alpha;
+          n.vz += (cz - (n.z || 0)) * strength * 0.35 * alpha;
+        }
       }
     }
   }
@@ -194,10 +222,33 @@ const Graph = window.ForceGraph3D()(graphEl)
   .nodeVal(nodeVal)
   .nodeOpacity(0.92)
   .nodeThreeObject(() => new THREE.Object3D())   // no per-node geometry at all — nodes render as ONE Points cloud (lean)
+  // …and no per-LINK geometry either. 3d-force-graph builds one THREE.Line per link, which measured live is
+  // the surface's real ceiling: at 2,200 nodes, merely 800 links cost 42fps and 5,000 links collapsed it to
+  // 15 — while 2,200 nodes with no links sat flat at 60. Links now render as ONE LineSegments buffer (below),
+  // exactly like the node cloud. The link FORCE still runs; only the drawing is taken over.
+  .linkVisibility(false)
   .linkColor(linkColor)
   .linkOpacity(0.5)
   .warmupTicks(20)
   .cooldownTime(15000);
+// COMPUTE BUDGET (Lucas approved trading refresh for detail). A hard 30fps cap isn't available — this bundled
+// 3d-force-graph exposes pauseAnimation but no tickFrame, so there's no way to drive the loop by hand without
+// reimplementing its layout stepping. The bigger saving doesn't need one: once the layout COOLS, every node
+// position is static, yet the node/link/marker buffers were still being rewritten 60 times a second — tens of
+// thousands of pointless writes per second at this density. Syncing only while the engine is actually moving
+// frees that entirely, and it scales with the density rather than against it.
+let engineRunning = true, _stillFrames = 0, _fitOnCool = true;
+try {
+  Graph.onEngineStop(() => {
+    engineRunning = false;
+    // Frame it ONCE when the layout has actually finished. The timed fit at load runs while the connectivity
+    // gradient is still sorting itself out, so it frames a shape that no longer exists. After this the camera
+    // is the operator's — a surface that re-aims itself while you are reading it is worse than a loose fit.
+    // (no mode test here on purpose — `mode` is declared below and this is the third temporal-dead-zone trap
+    // this file has sprung on me. The one-shot flag is consumed by the initial overview cooldown anyway.)
+    if (_fitOnCool) { _fitOnCool = false; fitView(1000); }
+  });
+} catch (e) {}
 Graph.d3Force('core', makeCore3D(0.05));
 try { Graph.d3Force('charge').strength(-40); } catch (e) {}   // a touch more spread at corpus scale
 
@@ -261,7 +312,16 @@ const overviewLinks = [];                       // overview links
 const world = { nodes: new Set(), links: new Map() };   // ego-walked ids + accumulated links
 const shortTerm = { nodes: new Set(), links: new Map() };
 const zoeSet = new Set();                       // her self_model ring — outside shortTerm so the reconciler can't prune identity
-const WORLD_CAP = 320;
+const hotSet = new Set();                       // corpus nodes minted into view because she just RECOGNISED them
+// Declared here, above the marker cloud that reads them: markerOf() consults hotLinks and buildMarkers() runs
+// on the very first render, so leaving these next to the recognition code put them in the temporal dead zone
+// and killed the surface at load. Same class of failure as the Zoe anchor's SPARK_TEX.
+const hotLinks = new Map();                     // recognised id → { born } — cooling recognition halos
+// 45s was far too quick — recognitions vanished before the picture they built could be read. A halo now
+// lasts five minutes and fades on a curve that stays legible for most of it, so the corpus accumulates a
+// visible map of what she has been recognising instead of blinking it away.
+const HOT_TTL = 300000;
+const WORLD_CAP = 320, HOT_CAP = 80;
 
 function ensureObj(n, seed) {
   let o = objs.get(n.id);
@@ -283,13 +343,16 @@ function ensureObj(n, seed) {
   return o;
 }
 
-const NODE_CAP = 2000;  // instanced Points render cheaply (tens of thousands feasible); the real limiter is the
-                        // CPU force sim, so keep a sane bound. Keep core + focal + top-degree corpus, drop the tail.
+// Instanced Points render cheaply (tens of thousands feasible); the limiter is the CPU force sim. Measured
+// live 2026-07-22: 1,804 nodes held a flat 60fps with no dip, and the only thing stopping more was this
+// constant — the cap, not the machine. Raised so the corpus request can actually fill the sky.
+const NODE_CAP = 5000;
 function render() {
   const ids = new Set();
   for (const id of (mode === 'overview' ? full : world.nodes)) ids.add(id);
   for (const id of shortTerm.nodes) ids.add(id);
   for (const id of zoeSet) ids.add(id);          // the personality ring is in every view — identity doesn't scope out
+  for (const id of hotSet) ids.add(id);          // recognised corpus nodes stay visible while their thread cools
   let list = []; for (const id of ids) { const o = objs.get(id); if (o) list.push(o); }
   if (list.length > NODE_CAP) {
     const rank = (o) => (o.store === 'sidequest' || o.id === focalId) ? 1e9 : (o.degree || 0);   // never drop the core/focal
@@ -302,9 +365,16 @@ function render() {
   const linkSrc = mode === 'overview' ? overviewLinks : [...world.links.values()];
   for (const l of linkSrc) if (keep.has(l.source) && keep.has(l.target)) links.push({ source: l.source, target: l.target, category: l.category, color: l.color, relType: l.relType });
   for (const m of shortTerm.links.values()) if (keep.has(m.s) && keep.has(m.t)) links.push({ source: m.s, target: m.t, category: m.category, relType: m.relType });
+  // Local degree drives the short-term half of the gradient — those nodes carry no global `degree`, so how
+  // connected a thing is HERE is the honest measure of how central it currently is to what she's working on.
+  for (const o of nodes) o.localDeg = 0;
+  const byId = new Map(nodes.map((o) => [o.id, o]));
+  for (const l of links) { const s = byId.get(l.source), t = byId.get(l.target); if (s) s.localDeg++; if (t) t.localDeg++; }
   Graph.graphData({ nodes, links });
+  engineRunning = true;                    // new data reheats the layout; resume position syncing
   try { Graph.d3Force('charge').strength(chargeFor(nodes.length)); } catch (e) {}   // spread must not grow with density
   try { buildNodeCloud(); } catch (e) {}   // rebuild the instanced Points cloud for the new node set
+  try { buildLinkCloud(); } catch (e) {}   // …and the single-buffer edge cloud
   try { buildTendrils(); } catch (e) {}    // refresh hidden-connection tendrils (throttled)
 }
 
@@ -448,6 +518,47 @@ function repaintNodeCloud() {
   buildMarkers();
 }
 
+// ---- LINK CLOUD: every edge in ONE LineSegments buffer (one draw call for the whole graph) ----
+// Colour is baked per-vertex at build time from the same linkColor() rules — a cross-store federation thread
+// stays bright violet, everything else its category colour. Positions re-sync each frame from the sim.
+let linkGeo = null, linkLines = null, linkIndex = [];
+const _lc = new THREE.Color();
+function parseLinkRGB(css) {
+  const m = /rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s]+([\d.]+))?/i.exec(css || '');
+  if (m) return { r: +m[1] / 255, g: +m[2] / 255, b: +m[3] / 255, a: m[4] == null ? 1 : +m[4] };
+  try { _lc.set(css || '#7890be'); return { r: _lc.r, g: _lc.g, b: _lc.b, a: 1 }; } catch (e) { return { r: .47, g: .59, b: .75, a: 1 }; }
+}
+function buildLinkCloud() {
+  if (linkLines) { scene.remove(linkLines); linkGeo.dispose(); linkLines.material.dispose(); linkLines = null; linkGeo = null; }
+  linkIndex = Graph.graphData().links || [];
+  const N = linkIndex.length; if (!N) return;
+  const pos = new Float32Array(N * 6), col = new Float32Array(N * 6);
+  for (let i = 0; i < N; i++) {
+    const c = parseLinkRGB(linkColor(linkIndex[i])), k = Math.min(1, c.a * 1.15);   // alpha folded into brightness (additive)
+    for (let v = 0; v < 2; v++) { const o = i * 6 + v * 3; col[o] = c.r * k; col[o + 1] = c.g * k; col[o + 2] = c.b * k; }
+  }
+  linkGeo = new THREE.BufferGeometry();
+  linkGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  linkGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  // NormalBlending, not additive: at this density thousands of overlapping edges would stack into a white
+  // haze over the core. Per-link alpha is folded into brightness instead, which on a near-black ground reads
+  // the same as transparency without ever accumulating.
+  linkLines = new THREE.LineSegments(linkGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.62, blending: THREE.NormalBlending, depthWrite: false }));
+  linkLines.frustumCulled = false; scene.add(linkLines);
+}
+function updateLinkCloud() {
+  if (!linkLines || !linkIndex.length) return;
+  const pos = linkGeo.attributes.position.array;
+  for (let i = 0; i < linkIndex.length; i++) {
+    const l = linkIndex[i], s = l.source, t = l.target;
+    if (!s || !t || typeof s !== 'object' || typeof t !== 'object' || !Number.isFinite(s.x) || !Number.isFinite(t.x)) continue;
+    const o = i * 6;
+    pos[o] = s.x; pos[o + 1] = s.y; pos[o + 2] = s.z || 0;
+    pos[o + 3] = t.x; pos[o + 4] = t.y; pos[o + 5] = t.z || 0;
+  }
+  linkGeo.attributes.position.needsUpdate = true;
+}
+
 // ---- MARKER RING (one extra draw call for both badges) ----
 // Two things are worth calling out on the node itself rather than behind a click. A REFUTATION is the §7
 // inoculation record: something we tested and disproved, and it must never quietly read as ordinary again —
@@ -464,9 +575,10 @@ const markerMat = new THREE.ShaderMaterial({
   fragmentShader: 'uniform sampler2D map; uniform float uOpacity; varying vec3 vColor; varying float vAlpha; void main(){ vec4 t=texture2D(map, gl_PointCoord); if(t.a<0.02) discard; gl_FragColor=vec4(vColor, t.a*uOpacity*vAlpha); }',
   transparent: true, depthWrite: false, depthTest: true, blending: THREE.NormalBlending,
 });
-const REFUTED_RGB = new THREE.Color('#f87171'), STRONGID_RGB = new THREE.Color('#fcd34d');
-let markerCloud = null, markerGeo = null, markerIndex = [];
+const REFUTED_RGB = new THREE.Color('#f87171'), STRONGID_RGB = new THREE.Color('#fcd34d'), RECOG_RGB = new THREE.Color('#c4b5fd');
+let markerCloud = null, markerGeo = null, markerIndex = [], markerLive = [];
 function markerOf(n) {                       // a scar outranks a badge — being wrong is the louder fact
+  if (n && hotLinks.has(n.id)) return { c: RECOG_RGB, a: 0.9, k: 2.1, live: true };   // …and a live recognition outranks both
   const p = n && n.prov; if (!p) return null;
   if (p.refuted) return { c: REFUTED_RGB, a: 0.95, k: 1.55 };
   if (p.strongId) return { c: STRONGID_RGB, a: 0.34, k: 1.35 };
@@ -474,14 +586,15 @@ function markerOf(n) {                       // a scar outranks a badge — bein
 }
 function buildMarkers() {
   if (markerCloud) { scene.remove(markerCloud); markerGeo.dispose(); markerCloud = null; markerGeo = null; }
-  markerIndex = [];
-  const src = [];
-  for (const n of nodeIndex) { const m = markerOf(n); if (m) { src.push(n); markerIndex.push(m); } }
+  markerIndex = []; markerLive = [];
+  const src = [], mets = [];
+  for (const n of nodeIndex) { const m = markerOf(n); if (m) { src.push(n); mets.push(m); } }
   const N = src.length; if (!N) return;
   const pos = new Float32Array(N * 3), col = new Float32Array(N * 3), size = new Float32Array(N), alpha = new Float32Array(N);
   for (let i = 0; i < N; i++) {
-    const n = src[i], m = markerIndex[i];
+    const n = src[i], m = mets[i];
     col[i * 3] = m.c.r; col[i * 3 + 1] = m.c.g; col[i * 3 + 2] = m.c.b; size[i] = nodePointSize(n) * m.k; alpha[i] = m.a;
+    markerLive.push(m.live ? { base: nodePointSize(n) * m.k, a: m.a } : null);
     if (Number.isFinite(n.x)) { pos[i * 3] = n.x; pos[i * 3 + 1] = n.y; pos[i * 3 + 2] = n.z || 0; }
   }
   markerGeo = new THREE.BufferGeometry();
@@ -492,10 +605,25 @@ function buildMarkers() {
   markerCloud = new THREE.Points(markerGeo, markerMat); markerCloud.frustumCulled = false; markerCloud.renderOrder = 2; scene.add(markerCloud);
   markerIndex = src;                          // positions sync from the nodes each frame
 }
-function updateMarkers() {
-  if (!markerCloud || !markerIndex.length) return; const pos = markerGeo.attributes.position.array;
-  for (let i = 0; i < markerIndex.length; i++) { const n = markerIndex[i]; if (!Number.isFinite(n.x)) continue; pos[i * 3] = n.x; pos[i * 3 + 1] = n.y; pos[i * 3 + 2] = n.z || 0; }
+function updateMarkers(now) {
+  if (!markerCloud || !markerIndex.length) return;
+  const pos = markerGeo.attributes.position.array;
+  const alpha = markerGeo.attributes.aAlpha.array, size = markerGeo.attributes.size.array;
+  let live = false;
+  for (let i = 0; i < markerIndex.length; i++) {
+    const n = markerIndex[i]; if (Number.isFinite(n.x)) { pos[i * 3] = n.x; pos[i * 3 + 1] = n.y; pos[i * 3 + 2] = n.z || 0; }
+    const lv = markerLive[i]; if (!lv) continue;
+    const rec = hotLinks.get(n.id); if (!rec) continue;
+    live = true;
+    // Cool over the recognition's life, with a slow breath on top so a warm node reads as CURRENTLY known
+    // rather than merely decorated. Expands slightly as it fades — a ripple settling, not a light switching off.
+    const age = Math.max(0, Math.min(1, (now - rec.born) / HOT_TTL)), f = 1 - age;
+    const breath = 1 + Math.sin(now / 620 + i) * 0.10 * f;
+    alpha[i] = lv.a * (0.18 + 0.82 * f * f) * breath;
+    size[i] = lv.base * (1 + age * 0.45);
+  }
   markerGeo.attributes.position.needsUpdate = true;
+  if (live) { markerGeo.attributes.aAlpha.needsUpdate = true; markerGeo.attributes.size.needsUpdate = true; }
 }
 function updateNodeCloud() {
   if (!nodeCloud) return; const pos = nodeGeo.attributes.position.array;
@@ -505,24 +633,90 @@ function updateNodeCloud() {
 // click-to-walk via raycast against the Points cloud (default node meshes are hidden, so onNodeClick is dead).
 // A drag = orbit, a click (little movement) = pick. threshold is in world units ~ a node's screen footprint.
 const _ray = new THREE.Raycaster(); _ray.params.Points.threshold = 6;
+function pickAt(clientX, clientY) {
+  if (!nodeCloud) return null;
+  const cv = graphEl.querySelector('canvas'); if (!cv) return null; const rect = cv.getBoundingClientRect();
+  const m = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+  try { _ray.setFromCamera(m, Graph.camera()); const hits = _ray.intersectObject(nodeCloud); if (hits.length) return nodeIndex[hits[0].index] || null; } catch (err) {}
+  return null;
+}
 let _downXY = null;
 graphEl.addEventListener('pointerdown', (e) => { _downXY = [e.clientX, e.clientY]; });
 graphEl.addEventListener('pointerup', (e) => {
   const d = _downXY; _downXY = null;
-  if (!d || !nodeCloud) return;
+  if (!d) return;
   if (Math.hypot(e.clientX - d[0], e.clientY - d[1]) > 5) return;   // moved → it was an orbit drag
-  const cv = graphEl.querySelector('canvas'); if (!cv) return; const rect = cv.getBoundingClientRect();
-  const m = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
-  try {
-    _ray.setFromCamera(m, Graph.camera()); const hits = _ray.intersectObject(nodeCloud);
-    if (hits.length) {
-      const n = nodeIndex[hits[0].index]; if (!n || n.id == null) return;
-      // A personality mote is HER row, not a corpus entity — show it, don't try to ego-walk Echo for it.
-      if (n.zoe) { setOverlay((n.entityType || 'self') + ' — ' + (n.summary || n.id), 5200); return; }
-      focus(n.id);
-    }
-  } catch (err) {}
+  const n = pickAt(e.clientX, e.clientY);
+  if (!n || n.id == null) { hideCard(); return; }
+  showCard(n);                                   // every pick answers "what IS this?" first…
+  if (!n.zoe) focus(n.id);                       // …and a corpus/short-term node still walks its neighbourhood
 });
+
+// ---- HOVER: what a node is, at a glance (Lucas: "there's no information about what any of the nodes are").
+// Same raycast as picking, throttled to ~12Hz; an HTML tooltip follows the cursor. Zero scene cost.
+const tipEl = document.getElementById('tip');
+let _hoverAt = 0;
+graphEl.addEventListener('pointermove', (e) => {
+  const now = performance.now(); if (now - _hoverAt < 80) return; _hoverAt = now;
+  if (_downXY) { if (tipEl) tipEl.style.display = 'none'; return; }          // orbiting — no tooltip
+  const n = pickAt(e.clientX, e.clientY);
+  if (!n || n.id == null) { if (tipEl) tipEl.style.display = 'none'; return; }
+  if (tipEl) {
+    tipEl.querySelector('.nm').textContent = n.zoe ? ('Zoe — ' + (n.entityType || 'self')) : n.id;
+    tipEl.querySelector('.meta').textContent = tipLine(n);
+    tipEl.style.display = 'block';
+    const w = tipEl.offsetWidth, flip = e.clientX + w + 26 > window.innerWidth;
+    tipEl.style.left = (flip ? e.clientX - w - 14 : e.clientX + 14) + 'px';
+    tipEl.style.top = Math.min(e.clientY + 12, window.innerHeight - tipEl.offsetHeight - 8) + 'px';
+  }
+});
+graphEl.addEventListener('pointerleave', () => { if (tipEl) tipEl.style.display = 'none'; });
+function tipLine(n) {
+  if (n.zoe) return 'personality · importance ' + (n.importance != null ? n.importance.toFixed(2) : '—');
+  const bits = [(n.store === 'sidequest' ? 'short-term' : 'long-term'), n.entityType || 'untyped'];
+  if (typeof n.degree === 'number' && n.degree > 0) bits.push(n.degree + ' connections');
+  const p = n.prov;
+  if (p && p.encounters) bits.push(p.encounters + ' encounter' + (p.encounters > 1 ? 's' : '') + ' / ' + p.sources + ' source' + (p.sources > 1 ? 's' : ''));
+  else if (_provSupplied && n.store === 'sidequest') bits.push('no provenance on file');
+  if (p && p.refuted) bits.push('⚠ refuted claim on file');
+  return bits.join(' · ');
+}
+
+// ---- NODE CARD: the full answer, bottom-left. Fed entirely from data already on the node — name, type,
+// summary, and the evidence line the provenance sweep attached (encounters, independence, birth, refutations).
+const cardEl = document.getElementById('card');
+function hideCard() { if (cardEl) cardEl.style.display = 'none'; }
+function showCard(n) {
+  if (!cardEl) return;
+  cardEl.querySelector('.nm').textContent = n.zoe ? 'Zoe — her own ' + (n.entityType || 'self') : n.id;
+  const chips = [];
+  if (n.zoe) { chips.push(['personality', ZOE_COLOR[n.entityType] || ZOE_ROSE]); chips.push([n.entityType || 'self', null]); }
+  else {
+    chips.push([n.store === 'sidequest' ? 'short-term' : 'long-term', n.store === 'sidequest' ? SQ_VIOLET : ECHO_SKY]);
+    chips.push([n.entityType || 'untyped', nodeColor(n)]);
+    if (n.epistemic) chips.push([n.epistemic, null]);
+    if (n.prov && n.prov.strongId) chips.push(['strong id', '#fcd34d']);
+    if (n.prov && n.prov.refuted) chips.push(['refuted claim', '#f87171']);
+  }
+  const chipBox = cardEl.querySelector('.chips'); chipBox.textContent = '';
+  for (const [label, color] of chips) { const s = document.createElement('span'); s.className = 'chip'; s.textContent = label; if (color) s.style.color = color; chipBox.appendChild(s); }
+  cardEl.querySelector('.sum').textContent = n.summary || (n.zoe ? '' : 'No summary on file.');
+  const ev = cardEl.querySelector('.ev'); ev.textContent = '';
+  if (!n.zoe) {
+    const p = n.prov, line = (html) => { const d = document.createElement('div'); d.append(...html); ev.appendChild(d); };
+    const b = (t) => { const x = document.createElement('b'); x.textContent = t; return x; };
+    if (p && p.encounters) {
+      line([b(String(p.encounters)), ' encounter' + (p.encounters > 1 ? 's' : '') + ' across ', b(String(p.sources)), ' independent source' + (p.sources > 1 ? 's' : '') + (p.authoritative ? ' — ' + p.authoritative + ' authoritative' : ' — none authoritative')]);
+      if (p.bornLane) line([document.createTextNode('first encountered via ' + p.bornLane + (p.bornHost ? ' (' + p.bornHost + ')' : ''))]);
+    } else {
+      line([document.createTextNode(n.store === 'sidequest' ? 'No encounters on file — nothing records where this came from yet.' : 'No local encounters — its provenance lives in Echo’s own citations.')]);
+    }
+    if (p && p.refuted) { const d = document.createElement('div'); d.className = 'warn'; d.textContent = p.refuted + ' disproven claim' + (p.refuted > 1 ? 's' : '') + ' on file for this object (§7 — can never win again).'; ev.appendChild(d); }
+    if (typeof n.degree === 'number' && n.degree > 0) line([b(String(n.degree)), ' graph connections']);
+  }
+  cardEl.style.display = 'block';
+}
+(function () { const x = document.getElementById('cardClose'); if (x) x.addEventListener('click', hideCard); })();
 
 // ============================================================================================================
 // THE SHORT-TERM REGION (Lucas, 2026-07-22) — a REGION needs an edge, not just a statistical tendency. One
@@ -637,9 +831,126 @@ function gEdge(a, b, colorHex) {
   const ln = mkLine(colorHex, 0.8), pulse = mkSprite(colorHex, 0.9); pulse.scale.setScalar(3);
   addEffect([ln, pulse], 850, (p) => { const grow = Math.min(1, p / 0.7); ln.geometry.setFromPoints([a, a.clone().lerp(b, grow)]); ln.material.opacity = 0.8 * (1 - p * 0.4); const mp = Math.min(1, p / 0.85); pulse.position.copy(a.clone().lerp(b, mp)); pulse.material.opacity = 0.9 * (1 - p); });
 }
-function gMatch(a, b) {   // recognition arc: core → matched corpus node
-  const ln = mkLine(0xc4b5fd, 0.85), pulse = mkSprite(0xe9d5ff, 0.95), flash = mkSprite(SHEX, 0); pulse.scale.setScalar(3.5); flash.position.copy(b); flash.scale.setScalar(4);
-  addEffect([ln, pulse, flash], 1000, (p) => { const grow = Math.min(1, p / 0.45); ln.geometry.setFromPoints([a, a.clone().lerp(b, grow)]); ln.material.opacity = 0.85 * (1 - p * 0.4); const mp = Math.min(1, p / 0.5); pulse.position.copy(a.clone().lerp(b, mp)); pulse.material.opacity = 0.95 * (1 - p * 0.5); if (p >= 0.5) { const q = Math.sin((p - 0.5) / 0.5 * Math.PI); flash.scale.setScalar(4 + q * 10); flash.material.opacity = 0.7 * q; } });
+// ============================================================================================================
+// RECOGNITION (Lucas: "anytime we observe something she already knows it should ping long term and I would
+// like to see"). match.hit events were streaming — the resolver recognises known things constantly — but the
+// old gesture required BOTH endpoints to be drawn nodes, and the matched corpus object is almost never in the
+// overview slice. The moment Lucas asked to see was being discarded on arrival. Now: recognition MINTS the
+// known object into view at its deterministic shell position, the arc leaves the MEMBRANE toward it (the
+// region speaks — the mention text was never a node and never will be), the node flashes, and a federation
+// thread persists from her core to the recognised thing, cooling over 45s. The corpus visibly lights up with
+// what she is currently recognising.
+// ============================================================================================================
+// HOW RECOGNITION PERSISTS. First cut drew a federation thread from her core to every recognised object.
+// It was unmistakable and it did not scale: match.hit streams continuously, so 28 live recognitions became a
+// starburst of lines across the whole scene (Lucas: "might become overwhelming... something that looks as
+// obvious without overcrowding"). The signal is about the OBJECT, not about the space between — so it now
+// lives ON the object: a violet halo that lights the recognised node and cools over 45s. Same information,
+// no geometry crossing the field, and it rides the marker cloud that already exists — zero new draw calls.
+// (hotLinks/HOT_TTL are declared with the data model above — the marker cloud reads them on the first render.)
+//
+// Returns the OBJECT (already positioned by the seed), not the graphData node — so the gesture can fire on
+// this frame while the actual re-render is coalesced. match.hit streams continuously during a decompose
+// sweep; rendering per hit rebuilt the whole point cloud each time and dropped the surface to 17fps under a
+// 10-hit burst. Batching the rebuild keeps recognition instant and the frame rate flat.
+let _mintTimer = null;
+function scheduleMintRender() { if (_mintTimer) return; _mintTimer = setTimeout(() => { _mintTimer = null; render(); }, 240); }
+function mintEcho(name) {
+  if (name == null) return null;
+  const known = objs.get(name);
+  if (!known) {
+    const h1 = hashSeed(name + '#mx'), h2 = hashSeed(name + '#my'), h3 = hashSeed(name + '#mz');
+    const dir = new THREE.Vector3(h1 * 2 - 1, h2 * 2 - 1, h3 * 2 - 1); if (dir.lengthSq() < 1e-3) dir.set(0, 1, 0); dir.normalize();
+    ensureObj({ id: name, store: 'echo' }, { x: _coreCen.x + dir.x * CLOUD_SHELL, y: _coreCen.y + dir.y * CLOUD_SHELL, z: _coreCen.z + dir.z * CLOUD_SHELL });
+    hotSet.add(name);
+    if (hotSet.size > HOT_CAP) {                 // LRU by touch — the coolest thread yields
+      let oldest = null, ot = Infinity;
+      for (const id of hotSet) { const o = objs.get(id); const t = o ? o.touchedAt : 0; if (t < ot) { ot = t; oldest = id; } }
+      if (oldest != null) { hotSet.delete(oldest); hotLinks.delete(oldest); }
+    }
+    scheduleMintRender();
+  }
+  const o = objs.get(name);
+  return (o && Number.isFinite(o.x)) ? o : null;
+}
+let _hotDirty = false;
+function addHotLink(id) { if (id == null) return; const had = hotLinks.has(id); hotLinks.set(id, { born: performance.now() }); if (!had) _hotDirty = true; }
+// Expire cooled recognitions; a change in the SET (not the fade) is what needs a marker rebuild.
+function updateHotLinks(now) {
+  let changed = _hotDirty; _hotDirty = false;
+  for (const [id, v] of hotLinks) if (now - v.born > HOT_TTL) { hotLinks.delete(id); changed = true; }
+  if (changed) buildMarkers();
+}
+// ---- FIRING TRACES: the axon, not a wire ----
+// The permanent threads had to go, but deleting them outright threw away the thing worth keeping — Lucas
+// liked the BUILD-UP, just not that it never cleared. So a recognition now fires like a neuron: the path
+// lights from the membrane outward at speed, overshoots into a bright head, and the whole trace then decays
+// over ~9s. Recent firings accumulate into a living constellation and clear themselves; nothing is permanent
+// except the halo on the node. One fixed-size ring buffer, one draw call, no allocation per firing.
+const TRACE_CAP = 160, TRACE_FIRE = 620, TRACE_TTL = 9000;
+const traces = new Array(TRACE_CAP).fill(null);
+let traceHead = 0, traceGeo = null, traceLines = null;
+const TRACE_RGB = new THREE.Color(0xc4b5fd), TRACE_HOT = new THREE.Color(0xf5f3ff);
+(function buildTraceBuffer() {
+  try {
+    traceGeo = new THREE.BufferGeometry();
+    traceGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRACE_CAP * 6), 3));
+    traceGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(TRACE_CAP * 6), 3));
+    traceLines = new THREE.LineSegments(traceGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }));
+    traceLines.frustumCulled = false; scene.add(traceLines);
+  } catch (e) { console.warn('[kg3d] trace buffer failed:', e && e.message); }
+})();
+function addTrace(target) {
+  const c = new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z);
+  const dir = new THREE.Vector3(target.x - c.x, target.y - c.y, (target.z || 0) - c.z);
+  if (dir.lengthSq() < 1e-4) dir.set(0, 1, 0);
+  const a = c.clone().add(dir.clone().normalize().multiplyScalar(ORB_R * 1.18));
+  traces[traceHead] = { a, node: target, born: performance.now() };
+  traceHead = (traceHead + 1) % TRACE_CAP;
+}
+function updateTraces(now) {
+  if (!traceLines) return;
+  const pos = traceGeo.attributes.position.array, col = traceGeo.attributes.color.array;
+  for (let i = 0; i < TRACE_CAP; i++) {
+    const t = traces[i], o = i * 6;
+    if (!t) { col[o] = col[o + 1] = col[o + 2] = col[o + 3] = col[o + 4] = col[o + 5] = 0; continue; }
+    const age = now - t.born;
+    if (age > TRACE_TTL) { traces[i] = null; col[o] = col[o + 1] = col[o + 2] = col[o + 3] = col[o + 4] = col[o + 5] = 0; continue; }
+    const n = t.node, bx = n.x, by = n.y, bz = n.z || 0;
+    if (!Number.isFinite(bx)) continue;
+    // Phase 1 — the impulse races out, the line growing behind its head. Phase 2 — the full trace decays.
+    const fire = Math.min(1, age / TRACE_FIRE), e = 1 - Math.pow(1 - fire, 3);
+    const hx = t.a.x + (bx - t.a.x) * e, hy = t.a.y + (by - t.a.y) * e, hz = t.a.z + (bz - t.a.z) * e;
+    pos[o] = t.a.x; pos[o + 1] = t.a.y; pos[o + 2] = t.a.z;
+    pos[o + 3] = hx; pos[o + 4] = hy; pos[o + 5] = hz;
+    const decay = age <= TRACE_FIRE ? 1 : Math.pow(Math.max(0, 1 - (age - TRACE_FIRE) / (TRACE_TTL - TRACE_FIRE)), 1.7);
+    const tailK = decay * 0.16, headK = decay * (age <= TRACE_FIRE ? 1 : 0.85);   // dim at the membrane, hot at the head
+    const H = age <= TRACE_FIRE ? TRACE_HOT : TRACE_RGB;
+    col[o] = TRACE_RGB.r * tailK; col[o + 1] = TRACE_RGB.g * tailK; col[o + 2] = TRACE_RGB.b * tailK;
+    col[o + 3] = H.r * headK; col[o + 4] = H.g * headK; col[o + 5] = H.b * headK;
+  }
+  traceGeo.attributes.position.needsUpdate = true; traceGeo.attributes.color.needsUpdate = true;
+}
+function gMatch(bNode) {   // the firing itself: a hot head racing out, arriving in a burst on the known node
+  const b = V3(bNode);
+  addTrace(bNode);
+  const c = new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z);
+  const dir = b.clone().sub(c); if (dir.lengthSq() < 1e-4) dir.set(0, 1, 0); dir.normalize();
+  const a = c.clone().add(dir.multiplyScalar(ORB_R * 1.18));
+  const head = mkSprite(0xf5f3ff, 1.0), flash = mkSprite(0xc4b5fd, 0), ring = mkSprite(SHEX, 0);
+  head.scale.setScalar(5); head.position.copy(a); flash.position.copy(b); flash.scale.setScalar(4); ring.position.copy(b); ring.scale.setScalar(3);
+  addEffect([head, flash, ring], 1500, (p) => {
+    const fire = Math.min(1, p / (TRACE_FIRE / 1500)), e = 1 - Math.pow(1 - fire, 3);
+    head.position.copy(a.clone().lerp(b, e));
+    head.scale.setScalar(5 + Math.sin(fire * Math.PI) * 5);
+    head.material.opacity = fire < 1 ? 1 : Math.max(0, 1 - (p - TRACE_FIRE / 1500) / 0.35);
+    if (fire >= 1) {                                  // arrival: the node answers back
+      const q = Math.min(1, (p - TRACE_FIRE / 1500) / 0.62), s = Math.sin(q * Math.PI);
+      flash.scale.setScalar(4 + s * 22); flash.material.opacity = 0.9 * s;
+      ring.scale.setScalar(3 + q * 34); ring.material.opacity = 0.55 * (1 - q);
+    }
+  });
+  membraneShimmer();
 }
 function gRecall(a) {      // inward wave: corpus node → active core
   const c = coreCentroid3D(), ln = mkLine(SHEX, 0.5), pulse = mkSprite(0xbfe0ff, 0.85); pulse.scale.setScalar(3);
@@ -773,8 +1084,15 @@ function onActivity(evt) {
     const a = findNode(evt.anchor), b = evt.anchor2 != null ? findNode(evt.anchor2) : null;
     if (k === 'node.enrich') { if (a) gEnrich(V3(a), new THREE.Color(nodeColor(a)).getHex()); }
     else if (k === 'edge.born' || k === 'edge.promote') { if (a && b) gEdge(V3(a), V3(b), new THREE.Color(nodeColor(a)).getHex()); }
-    else if (k === 'match.hit') { if (a && b) gMatch(V3(a), V3(b)); }
-    else if (k === 'recall') { if (a) gRecall(V3(a)); }
+    else if (k === 'match.hit') {                 // she recognised a known thing — fire at it, halo it
+      const t = b || mintEcho(evt.anchor2); if (t) { addHotLink(t.id); gMatch(t); }
+    }
+    else if (k === 'recall') {                    // a memory pulled inward — same: the known thing must be visible
+      const t = a || mintEcho(evt.anchor); if (t) { addHotLink(t.id); gMatch(t); gRecall(V3(t)); }
+    }
+    else if (k === 'observe' && a && a.store !== 'sidequest') {   // an observation touched a drawn corpus node
+      gEnrich(V3(a), new THREE.Color(nodeColor(a)).getHex()); addHotLink(a.id);
+    }
     else if (k === 'promote') { if (a) gPromote(V3(a)); }
     else if (k === 'node.merge') { if (a) gAbsorb(V3(a), evt.count); }   // dedup absorb: duplicates collapse inward
     else if (k === 'think') { gThink(); }                                // ambient heartbeat (throttled upstream)
@@ -795,9 +1113,13 @@ function tick() {
   requestAnimationFrame(tick);
   const now = performance.now(); frames++;
   updateEffects(now);
-  updateNodeCloud();
-  updateMarkers();
-  updateTendrils();
+  // Position syncing only while the layout is actually moving. `_stillFrames` keeps a couple of frames of
+  // sync after it stops so the last motion lands, and any reheat (new data, a mint) restarts it.
+  if (engineRunning) { _stillFrames = 2; } else if (_stillFrames > 0) { _stillFrames--; }
+  if (engineRunning || _stillFrames > 0) { updateNodeCloud(); updateLinkCloud(); updateTendrils(); }
+  updateHotLinks(now);          // expire cooled recognitions BEFORE the markers paint this frame
+  updateMarkers(now);           // halos breathe and cool on their own clock, so these always run
+  updateTraces(now);
   updateRegion(now);
   if (_provDirty) { _provDirty = false; try { repaintNodeCloud(); } catch (e) {} }
   if (now - lastT >= 750) {
@@ -807,7 +1129,8 @@ function tick() {
     // number for a memory that claims things are real because they were encountered — and right now it is low.
     let sourced = 0; for (const n of d.nodes) if (n.prov && n.prov.encounters) sourced++;
     const pct = d.nodes.length ? Math.round(sourced * 100 / d.nodes.length) : 0;
-    if (hudEl) hudEl.textContent = `3D · ${d.nodes.length} nodes / ${d.links.length} links · ${pct}% sourced · ${fps} fps`;
+    const rec = hotLinks.size ? ` · ${hotLinks.size} recognised` : '';
+    if (hudEl) hudEl.textContent = `3D · ${d.nodes.length} nodes / ${d.links.length} links · ${pct}% sourced${rec} · ${fps} fps`;
   }
 }
 tick();
@@ -878,9 +1201,13 @@ setInterval(loadSelf, 300000);                   // identity moves slowly — re
 
 // ---- dev handle for CDP verification ----
 window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, tendrilN: () => tendrilSpecs.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z,
-  markerN: () => markerIndex.length, repaint: repaintNodeCloud, fit: fitView,
+  markerN: () => markerIndex.length, repaint: repaintNodeCloud, fit: fitView, rebuildLinks: buildLinkCloud,
+  linkN: () => linkIndex.length,
   zoe: () => ({ ring: zoeSet.size, feeling: zoeFeeling, anchor: !!zoeAnchor, membrane: !!membrane, center: { x: Math.round(_coreCen.x), y: Math.round(_coreCen.y), z: Math.round(_coreCen.z) } }),
   loadSelf,
+  recog: () => ({ minted: hotSet.size, halos: hotLinks.size, markers: markerIndex.length, ids: [...hotLinks.keys()].slice(0, 6) }),
+  card: () => (cardEl && cardEl.style.display === 'block') ? { name: cardEl.querySelector('.nm').textContent, chips: [...cardEl.querySelectorAll('.chip')].map(c => c.textContent), summary: cardEl.querySelector('.sum').textContent.slice(0, 90), evidence: cardEl.querySelector('.ev').textContent.slice(0, 220) } : null,
+  showCard, tip: (n) => tipLine(n),
   // Seed synthetic nodes straight into the object store. The evidence encoding is only provable with nodes
   // spanning every state (unsourced → authoritative, refuted, strong-id), and the live corpus rarely holds
   // all of them at once in one view — same reason kg:dev-activity exists for the bus.

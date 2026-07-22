@@ -51,6 +51,27 @@
     .logrow .k { flex: none; font-weight: 600; }
     /* elegant wrap: the anchor text takes the rest of the row and wraps onto indented continuation lines */
     .logrow .a { color: #8b98ad; flex: 1 1 100%; min-width: 0; margin-left: 24px; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+    /* hover tooltip: what a node IS, at a glance, following the cursor */
+    #tip { position: fixed; z-index: 18; display: none; max-width: 340px; pointer-events: none;
+           background: #0d1017f2; border: 1px solid #232a36; border-radius: 8px; padding: 7px 10px;
+           box-shadow: 0 10px 26px #000a; line-height: 1.4; }
+    #tip .nm { color: #e2e8f0; font-weight: 600; font-size: 12.5px; overflow-wrap: anywhere; }
+    #tip .meta { color: #64748b; font-size: 10.5px; margin-top: 1px; }
+    #tip .meta b { font-weight: 600; }
+    /* node card: everything known about the clicked node, bottom-left, out of the orbit path */
+    #card { position: fixed; left: 12px; bottom: 34px; z-index: 16; width: 330px; display: none;
+            background: #0c0f16f5; border: 1px solid #232a36; border-radius: 10px; padding: 11px 13px 10px;
+            box-shadow: 0 14px 36px #000b; }
+    #card .cx { position: absolute; top: 6px; right: 9px; color: #4a5568; cursor: pointer; font-size: 14px; }
+    #card .cx:hover { color: #9fb0c4; }
+    #card .nm { color: #e8eef7; font-weight: 650; font-size: 13.5px; padding-right: 18px; overflow-wrap: anywhere; }
+    #card .chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 7px 0 2px; }
+    #card .chip { font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+                  padding: 2px 7px; border-radius: 9px; background: #ffffff10; color: #9fb0c4; }
+    #card .sum { color: #93a1b5; font-size: 11.5px; margin-top: 7px; line-height: 1.5; max-height: 110px; overflow-y: auto; overflow-wrap: anywhere; }
+    #card .ev { margin-top: 8px; border-top: 1px solid #1c2330; padding-top: 7px; font-size: 11px; color: #7b8aa0; line-height: 1.55; }
+    #card .ev b { color: #a9b8cc; font-weight: 600; }
+    #card .ev .warn { color: #f87171; }
   </style>
 </head>
 <body>
@@ -65,6 +86,8 @@
   </div>
   <div id="overlay">Loading corpus…</div>
   <div id="hud"></div>
+  <div id="tip"><div class="nm"></div><div class="meta"></div></div>
+  <div id="card"><span class="cx" id="cardClose">&times;</span><div class="nm"></div><div class="chips"></div><div class="sum"></div><div class="ev"></div></div>
   <div id="logdock">
     <div class="lh"><span class="dot"></span>Memory activity<span class="lg"><span class="v"><b>ST</b> short</span><span class="s"><b>LT</b> long</span></span><span class="sp" id="logcount">0</span></div>
     <div id="logfeed"></div>
