@@ -71,20 +71,37 @@ function logActivity(evt) {
 // corpus settled at median radius 954 against a 320 target and the camera retreated to 4177 to see it, which
 // is how 552 of 1001 nodes ended up SMALLER THAN ONE PIXEL. The structure was never wrong — short-term orb
 // inside, corpus enveloping it — it was just inflated past the point of being visible.
-const CLOUD_SHELL = 420;
+//
+// THREE BANDS, not two (Lucas: "short term needs to be better defined as a separate region, that region is
+// also where Zoe personality lives"). Innermost: her personality ring — self_model rows on deterministic
+// orbits around the centroid, sprung hard so the ring holds its shape. Then the short-term orb, CAPPED at
+// ORB_R rather than merely pulled centreward, because a soft pull leaves stragglers at r≈318 while the corpus
+// starts at 377 — statistically separate, visually one continuous field. A hard-edged orb inside an empty
+// moat is what makes the region READ as a region; the membrane sphere draws that edge.
+const CLOUD_SHELL = 420, ORB_R = 175, ZOE_RING = 60;
+// The live centroid of the orb, written by the core force each tick — the membrane, the Zoe anchor and the
+// personality orbits all follow it, so the whole region drifts as one body when the sim breathes.
+const _coreCen = { x: 0, y: 0, z: 0, set(x, y, z) { this.x = x; this.y = y; this.z = z; } };
 function makeCore3D(strength = 0.05) {
   let ns = [];
   function force(alpha) {
     let cx = 0, cy = 0, cz = 0, c = 0;
-    for (const n of ns) if (n.store === 'sidequest' && Number.isFinite(n.x)) { cx += n.x; cy += n.y; cz += (n.z || 0); c++; }
+    for (const n of ns) if (n.store === 'sidequest' && !n.zoe && Number.isFinite(n.x)) { cx += n.x; cy += n.y; cz += (n.z || 0); c++; }
     if (c) { cx /= c; cy /= c; cz /= c; }
+    _coreCen.set(cx, cy, cz);                              // membrane + anchor follow the live centroid
     for (const n of ns) {
       if (!Number.isFinite(n.x)) continue;
       const dx = n.x - cx, dy = n.y - cy, dz = (n.z || 0) - cz, d = Math.hypot(dx, dy, dz) || 1;
-      if (n.store === 'sidequest') {                       // inner orb: pull hard to centre
+      if (n.zoe) {                                         // personality ring: spring to its own orbit point
+        const tx = cx + n.zoeOff.x, ty = cy + n.zoeOff.y, tz = cz + n.zoeOff.z, k = strength * 6 * alpha;
+        n.vx = (n.vx || 0) + (tx - n.x) * k;
+        n.vy = (n.vy || 0) + (ty - n.y) * k;
+        n.vz = (n.vz || 0) + (tz - (n.z || 0)) * k;
+      } else if (n.store === 'sidequest') {                // inner orb: pull to centre, HARD-capped at the membrane
         n.vx = (n.vx || 0) + (cx - n.x) * strength * 1.6 * alpha;
         n.vy = (n.vy || 0) + (cy - n.y) * strength * 1.6 * alpha;
         n.vz = (n.vz || 0) + (cz - (n.z || 0)) * strength * 1.6 * alpha;
+        if (d > ORB_R) { const f = (ORB_R - d) * strength * 3.2 * alpha; n.vx += (dx / d) * f; n.vy += (dy / d) * f; n.vz += (dz / d) * f; }
       } else {                                             // outer cloud: ease toward the shell radius, all directions
         const f = (CLOUD_SHELL - d) * strength * 1.1 * alpha;
         n.vx = (n.vx || 0) + (dx / d) * f;
@@ -119,6 +136,7 @@ const EV_GHOST = 0.34, EV_WEAK = 0.58, EV_ORDINARY = 0.84, EV_ELSEWHERE = 0.78, 
 // payload carries provenance — an older main process, a failed handler — nothing is ghosted at all.
 let _provSupplied = false;
 function evidenceAlpha(n) {
+  if (n && n.zoe) return EV_SOLID;                 // her own identity is not an encounter-graded claim about the world
   if (!_provSupplied) return EV_SOLID;
   const p = n && n.prov;
   if (p && p.encounters) {
@@ -146,7 +164,12 @@ let _provDirty = false;
 // answer ("nobody said") rather than a silent default, so it gets its own recessive slate in both stores.
 const UNKNOWN_GREY = '#6b7280';
 const isUnknownType = (t) => { const s = String(t || '').toLowerCase(); return s === 'unknown' || s === ''; };
+// Her personality by register — rose family anchored on the 'self' log colour, warm against the violet orb
+// and the sky corpus so the innermost ring reads as a different KIND of thing, not more data.
+const ZOE_ROSE = '#fda4af';
+const ZOE_COLOR = { identity: '#fda4af', value: '#fbbf24', opinion: '#22d3ee', preference: '#c4b5fd', taste: '#f472b6', trait: '#2dd4bf', insight: '#94a3b8' };
 function nodeColor(n) {
+  if (n.zoe) return ZOE_COLOR[n.entityType] || ZOE_ROSE;
   if (n.color) return n.color;
   if (isUnknownType(n.entityType)) return UNKNOWN_GREY;
   return n.store === 'sidequest' ? SQ_VIOLET : ECHO_SKY;
@@ -236,6 +259,7 @@ const full = new Set();                         // overview node ids
 const overviewLinks = [];                       // overview links
 const world = { nodes: new Set(), links: new Map() };   // ego-walked ids + accumulated links
 const shortTerm = { nodes: new Set(), links: new Map() };
+const zoeSet = new Set();                       // her self_model ring — outside shortTerm so the reconciler can't prune identity
 const WORLD_CAP = 320;
 
 function ensureObj(n, seed) {
@@ -264,6 +288,7 @@ function render() {
   const ids = new Set();
   for (const id of (mode === 'overview' ? full : world.nodes)) ids.add(id);
   for (const id of shortTerm.nodes) ids.add(id);
+  for (const id of zoeSet) ids.add(id);          // the personality ring is in every view — identity doesn't scope out
   let list = []; for (const id of ids) { const o = objs.get(id); if (o) list.push(o); }
   if (list.length > NODE_CAP) {
     const rank = (o) => (o.store === 'sidequest' || o.id === focalId) ? 1e9 : (o.degree || 0);   // never drop the core/focal
@@ -385,6 +410,7 @@ let nodeCloud = null, nodeGeo = null, nodeIndex = [];
 // different facts about a node and both belong on screen: a hub everyone links to but nobody sourced should
 // not look like a modest object forty documents independently agree on.
 function nodePointSize(n) {
+  if (n.zoe) return 4.5 + (n.importance || 0.6) * 4;      // personality motes: small, weighted by importance
   const base = n.store === 'sidequest' ? 7 : Math.max(5, Math.min(26, 6 + Math.log10((n.degree || 0) + 1) * 8));
   const enc = (n.prov && n.prov.encounters) || 0;
   return Math.min(34, base + (enc ? Math.log2(1 + enc) * 1.7 : 0));
@@ -486,8 +512,80 @@ graphEl.addEventListener('pointerup', (e) => {
   if (Math.hypot(e.clientX - d[0], e.clientY - d[1]) > 5) return;   // moved → it was an orbit drag
   const cv = graphEl.querySelector('canvas'); if (!cv) return; const rect = cv.getBoundingClientRect();
   const m = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
-  try { _ray.setFromCamera(m, Graph.camera()); const hits = _ray.intersectObject(nodeCloud); if (hits.length) { const n = nodeIndex[hits[0].index]; if (n && n.id != null) focus(n.id); } } catch (err) {}
+  try {
+    _ray.setFromCamera(m, Graph.camera()); const hits = _ray.intersectObject(nodeCloud);
+    if (hits.length) {
+      const n = nodeIndex[hits[0].index]; if (!n || n.id == null) return;
+      // A personality mote is HER row, not a corpus entity — show it, don't try to ego-walk Echo for it.
+      if (n.zoe) { setOverlay((n.entityType || 'self') + ' — ' + (n.summary || n.id), 5200); return; }
+      focus(n.id);
+    }
+  } catch (err) {}
 });
+
+// ============================================================================================================
+// THE SHORT-TERM REGION (Lucas, 2026-07-22) — a REGION needs an edge, not just a statistical tendency. One
+// translucent membrane sphere at ORB_R draws that edge; the orb force hard-caps its nodes inside it, leaving
+// an empty moat before the corpus shell starts at ~420. Inside, at the centroid, lives ZOE: an anchor mote
+// with a slow breathing pulse, orbited by her actual self_model rows (kg:self) as the innermost ring. Cost:
+// one 24×16 sphere mesh + two sprites — nothing per-node, nothing post-processed.
+// ============================================================================================================
+let membrane = null, zoeAnchor = null, zoeHalo = null;
+(function buildRegion() {
+  try {
+    const geo = new THREE.SphereGeometry(1, 24, 16);
+    const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(SQ_VIOLET), transparent: true, opacity: 0.045, side: THREE.BackSide, depthWrite: false, blending: THREE.AdditiveBlending });
+    // Drawn at 1.18× the cap: centre-pull against the cap makes the orb EQUILIBRATE at the rim (measured
+    // median 183 / p95 188 against ORB_R 175), so a membrane at exactly ORB_R would leave half the orb
+    // studding its outside. The skin belongs just beyond where the mass actually settles.
+    membrane = new THREE.Mesh(geo, mat); membrane.scale.setScalar(ORB_R * 1.18); membrane.renderOrder = 1; scene.add(membrane);
+    // a whisper of an outline so the edge reads even where no corpus sits behind it. First cut was 0.10 and
+    // the screenshot read as a geodesic scaffold, not a membrane — the wires were louder than the memory.
+    const rim = new THREE.Mesh(new THREE.SphereGeometry(1, 18, 10), new THREE.MeshBasicMaterial({ color: new THREE.Color(SQ_VIOLET), transparent: true, opacity: 0.028, wireframe: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    rim.scale.setScalar(1.002); membrane.add(rim);
+  } catch (e) { console.warn('[kg3d] membrane failed:', e && e.message); }
+  // NOTE: no ensureZoeAnchor() here — it needs SPARK_TEX/mkSprite, whose `const` bindings sit below this IIFE
+  // and are still in their temporal dead zone while it runs. The boot call at the bottom raises her instead.
+})();
+
+function zoeSprite(colorHex, opacity, scale) { const s = mkSprite(colorHex, opacity); s.scale.setScalar(scale); return s; }
+function ensureZoeAnchor() {
+  if (zoeAnchor) return;
+  zoeAnchor = zoeSprite(new THREE.Color(ZOE_ROSE).getHex(), 0.95, 9);
+  zoeHalo = zoeSprite(new THREE.Color(ZOE_ROSE).getHex(), 0.30, 22);
+  scene.add(zoeAnchor); scene.add(zoeHalo);
+}
+function updateRegion(now) {
+  if (membrane) membrane.position.set(_coreCen.x, _coreCen.y, _coreCen.z);
+  if (zoeAnchor) {
+    const b = 1 + Math.sin(now / 1400) * 0.12;             // slow breath, not a blink
+    zoeAnchor.position.set(_coreCen.x, _coreCen.y, _coreCen.z); zoeAnchor.scale.setScalar(9 * b);
+    zoeHalo.position.set(_coreCen.x, _coreCen.y, _coreCen.z); zoeHalo.scale.setScalar(22 * (2 - b) * 0.55 + 11);
+  }
+}
+
+// Her self_model rows as the innermost ring. Deterministic orbit points (hashSeed, like the tendrils) so the
+// ring is stable across reloads; category → colour; importance → size. They live OUTSIDE shortTerm.nodes
+// (declared with the data model above), and clicking one shows the row instead of ego-walking Echo.
+let zoeFeeling = null;
+async function loadSelf() {
+  try {
+    if (!(window.sq && window.sq.kg && typeof window.sq.kg.self === 'function')) return;   // pre-reboot main: region + anchor only
+    const r = await window.sq.kg.self();
+    if (!r || !r.ok || !Array.isArray(r.rows)) return;
+    zoeFeeling = r.feeling || null;
+    ensureZoeAnchor();
+    for (const row of r.rows) {
+      const id = 'zoe: ' + (row.category || 'self') + ' #' + row.id;
+      const h1 = hashSeed(id + '#a'), h2 = hashSeed(id + '#b'), h3 = hashSeed(id + '#c');
+      const dir = new THREE.Vector3(h1 * 2 - 1, h2 * 2 - 1, h3 * 2 - 1); if (dir.lengthSq() < 1e-3) dir.set(0, 1, 0); dir.normalize();
+      const o = ensureObj({ id, store: 'sidequest', entityType: row.category || 'insight', summary: row.content }, _coreCen);
+      o.zoe = true; o.importance = row.importance || 0.6; o.zoeOff = dir.multiplyScalar(ZOE_RING * (0.72 + 0.55 * h1));
+      zoeSet.add(id);
+    }
+    render();
+  } catch (e) { /* the self layer is an enrichment; the region stands without it */ }
+}
 
 const SPARK_TEX = (function () {
   const c = document.createElement('canvas'); c.width = c.height = 64;
@@ -651,6 +749,11 @@ function onActivity(evt) {
     else if (k === 'promote') { if (a) gPromote(V3(a)); }
     else if (k === 'node.merge') { if (a) gAbsorb(V3(a), evt.count); }   // dedup absorb: duplicates collapse inward
     else if (k === 'think') { gThink(); }                                // ambient heartbeat (throttled upstream)
+    else if (k === 'self' || k === 'reflect') {                          // her identity moved — flare the anchor, refresh the ring
+      const c = new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z);
+      gEnrich(c, new THREE.Color(ZOE_ROSE).getHex());
+      if (k === 'self') loadSelf();
+    }
     // doc.land / news → ambient inflow, deferred (no emitter fires them yet)
   } catch (e) { console.warn('[kg3d] activity', e && e.message); }
 }
@@ -664,6 +767,7 @@ function tick() {
   updateNodeCloud();
   updateMarkers();
   updateTendrils();
+  updateRegion(now);
   if (_provDirty) { _provDirty = false; try { repaintNodeCloud(); } catch (e) {} }
   if (now - lastT >= 750) {
     fps = Math.round(frames * 1000 / (now - lastT)); frames = 0; lastT = now;
@@ -737,10 +841,15 @@ if (followBtn) {
 }
 // (click-to-walk is handled by the raycast picker on the Points cloud above — default node meshes are hidden)
 setInterval(() => pollShortTerm(false), 5000);   // short-term reconciler (liveness + prune)
+ensureZoeAnchor();                               // she is present regardless of whether kg:self can deliver her rows yet
+loadSelf();                                      // the personality ring (kg:self); safe no-op on a pre-reboot main
+setInterval(loadSelf, 300000);                   // identity moves slowly — refresh occasionally, plus on 'self' events
 
 // ---- dev handle for CDP verification ----
 window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, tendrilN: () => tendrilSpecs.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z,
   markerN: () => markerIndex.length, repaint: repaintNodeCloud, fit: fitView,
+  zoe: () => ({ ring: zoeSet.size, feeling: zoeFeeling, anchor: !!zoeAnchor, membrane: !!membrane, center: { x: Math.round(_coreCen.x), y: Math.round(_coreCen.y), z: Math.round(_coreCen.z) } }),
+  loadSelf,
   // Seed synthetic nodes straight into the object store. The evidence encoding is only provable with nodes
   // spanning every state (unsourced → authoritative, refuted, strong-id), and the live corpus rarely holds
   // all of them at once in one view — same reason kg:dev-activity exists for the bus.
