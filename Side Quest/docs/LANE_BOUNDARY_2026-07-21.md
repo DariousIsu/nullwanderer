@@ -112,6 +112,19 @@ sit in the same set, so a naive "county + .com ⇒ government" rule over-grants 
 worse than under-granting, because authority feeds grading. If you land a shared helper, tell me its
 name and I will delete mine.
 
+### 3.4 Thin-frontier `db_query` needs an engine-side index — yours to land (added 2026-07-22)
+
+The graph-walk's frontier query (`lib/monologue.js:1689`) scans ~1.76M entities — `WHERE degree
+BETWEEN 2 AND 7 AND wikidata_qid IS NOT NULL ORDER BY degree DESC, id DESC` — with no covering
+index. It measured ~4.0–4.3s quiet; the comment above it already says raising `timeout_seconds` was
+a stopgap and the real fix is an index needing your sign-off. New data: on **both** boot38 and
+boot39 it now dies at the *transport* layer (`Echo call failed: fetch failed`) right after attach,
+when your three sidecars are spawning and the DB is under boot contention — so the thin tier of the
+idle frontier comes up empty every boot, deterministically. An index on
+`entities(degree, wikidata_qid)` (or whatever shape you prefer — it's your schema) fixes both the
+quiet-time near-misses and the boot-time hard failure. Consumer side needs no change; the caller
+already logs and degrades.
+
 ---
 
 ## 4. Two operational rules, because we collided today
