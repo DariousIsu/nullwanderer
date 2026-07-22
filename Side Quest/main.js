@@ -6657,6 +6657,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let replyWriter = MODEL;            // who actually wrote what Lucas reads — stored on the turn so the
                                       // truncation rate is measurable per writer against the 18% baseline
   let cloudComplete = false;          // the cloud stream ended normally (not stalled) — see below
+  let cloudThinking = '';             // the reasoning channel — scanned for tool tags, kept as interior, never spoken
   if (cloudWritesReply) {
     try {
       // GIVE THE CLOUD THE TOOL SURFACE. The suit is stripped from `messages` above on cloud-owned
@@ -6794,10 +6795,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       });
       if (r && r.text && r.text.trim()) {
         replyWriter = r.model;
+        // The reasoning channel, RAW. It never touches the tag parser (see ollama.js — feeding it
+        // through as <think>-wrapped text let the model's format narration hijack <say>, and every
+        // social reply on 2026-07-21 night became the literal "..."). It is scanned for tool tags
+        // below and kept as her interior; it is never spoken.
+        cloudThinking = r.thinking || '';
         // Did the GENERATION finish? That is what `truncated` is meant to mean, and for the cloud we
         // know it directly: the stream ended normally unless streamCloud flagged it partial.
         cloudComplete = !r.partial;
-        console.log(`[main] CLOUD wrote the reply — ${r.model}, ${r.tokens} tok in ${r.elapsedMs}ms${r.partial ? ' (PARTIAL — stream stalled)' : ''}`);
+        console.log(`[main] CLOUD wrote the reply — ${r.model}, ${r.tokens} tok in ${r.elapsedMs}ms${r.partial ? ' (PARTIAL — stream stalled)' : ''}${cloudThinking ? ` (+${cloudThinking.length}ch reasoning)` : ''}`);
       } else {
         console.warn('[main] cloud reply unavailable — falling back to the local voice');
       }
@@ -7016,7 +7022,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // existing; dispatch self-heals the connection if the warm-connect hasn't finished.
   const echoTagsToRun = (offClock || !echoSuit) ? [] : [
     ...echoSuitLib.parseEchoTags(thought || ''),
-    ...echoSuitLib.parseEchoTags(say || '')
+    ...echoSuitLib.parseEchoTags(say || ''),
+    // ⭐ The reasoning channel is where a reasoning model actually authors its tags (proven
+    // 2026-07-21: 450 of 633 generated tokens, tags included, were in message.thinking). Scanned
+    // RAW and only when the cloud wrote this turn — parseEchoTags needs a complete
+    // <echo-*>…</echo-*> pair, so format narration ("use <echo-find>") can't produce a dispatch.
+    ...(replyWriter !== MODEL ? echoSuitLib.parseEchoTags(cloudThinking || '') : [])
   ];
   // <recall ref="rID"/> — expand a memory marker (reflection/reading/note) to its full text on
   // demand. Always allowed (it's reading her own memory, not a work tool).
@@ -7031,7 +7042,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     ...require('./lib/vision').parseGenTags(say || '')
   ];
 
-  let thoughtStripped = (thought || '').replace(/<wonder>[\s\S]*?<\/wonder>/gi, '').trim();
+  // The cloud's native reasoning IS her interior on cloud-written turns — the content-side <think>
+  // block is often a stub while the real thinking rode the reasoning channel. Folded in ahead of the
+  // strip chain so tool tags inside it are stripped for display exactly like the contract-thought's.
+  const _fullThought = [thought || '', (replyWriter !== MODEL && cloudThinking) ? cloudThinking : ''].filter(Boolean).join('\n');
+  let thoughtStripped = _fullThought.replace(/<wonder>[\s\S]*?<\/wonder>/gi, '').trim();
   thoughtStripped = openThreadsLib.stripStatusTags(thoughtStripped);
   thoughtStripped = browserLib.stripTags(thoughtStripped);
   thoughtStripped = webLib.stripTags(thoughtStripped);
@@ -7912,6 +7927,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     // work: this is where the next <echo-do>/<echo-find> is authored. Same package, same parser, same
     // filter. Fail-safe: no cloud → writer stays local and this runs as before.
     let followupWriter = MODEL;
+    let followupThinking = '';   // reasoning channel — the hop chain's tags are authored HERE (see ollama.js)
     if (process.env.ZOE_CLOUD_WRITES_REPLY !== '0') {
       try {
         const r = await require('./lib/cloud_logic').streamCloud(messages, {
@@ -7920,17 +7936,21 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
         });
         if (r && r.text && r.text.trim()) {
           followupWriter = r.model;
-          console.log(`[main] CLOUD wrote the tool-followup (hop ${echoHop}) — ${r.model}, ${r.tokens} tok`);
+          followupThinking = r.thinking || '';
+          console.log(`[main] CLOUD wrote the tool-followup (hop ${echoHop}) — ${r.model}, ${r.tokens} tok${followupThinking ? ` (+${followupThinking.length}ch reasoning)` : ''}`);
         }
       } catch (e) { console.error('[main] cloud followup failed:', e.message); }
     }
     if (followupWriter === MODEL) await streamChat({ model: MODEL, messages, onToken: (c) => parser.feed(c) });
     try { _ff.flush(); } catch {}
     const { thought, say } = parser.finalize();
-    // Capture any follow-on Echo tag BEFORE stripping (the strip below removes all tags).
+    // Capture any follow-on Echo tag BEFORE stripping (the strip below removes all tags). The
+    // reasoning channel is scanned too — on a reasoning model that is where the next <echo-do> is
+    // actually written, and dropping it is how a build chain dies mid-document.
     const chainTags = canChain ? [
       ...echoSuitLib.parseEchoTags(thought || ''),
-      ...echoSuitLib.parseEchoTags(say || '')
+      ...echoSuitLib.parseEchoTags(say || ''),
+      ...echoSuitLib.parseEchoTags(followupThinking || '')
     ] : [];
     // Strip ALL tags from the follow-up output for DISPLAY — tags don't render.
     let sayOut = (say || '')

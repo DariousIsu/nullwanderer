@@ -6,7 +6,7 @@ const OLLAMA_BASE = process.env.OLLAMA_BASE || 'http://localhost:11434';
 // simply had no way to point this at it or to attach the bearer token. That mattered once the cloud
 // started writing the user-facing reply — a long generation with no token flow is indistinguishable
 // from a hang, and the stall watchdog below only works if tokens are actually arriving to reset it.
-async function streamChat({ model, messages, options = {}, onToken, signal, inactivityMs = 90000, think, base = OLLAMA_BASE, headers = {} }) {
+async function streamChat({ model, messages, options = {}, onToken, onThinking, signal, inactivityMs = 90000, think, base = OLLAMA_BASE, headers = {} }) {
   const body = {
     model,
     messages,
@@ -55,7 +55,6 @@ async function streamChat({ model, messages, options = {}, onToken, signal, inac
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
-    let _inThinking = false;   // are we mid-way through a reasoning run? (see the thinking block below)
 
     while (true) {
       const { done, value } = await reader.read();
@@ -70,37 +69,24 @@ async function streamChat({ model, messages, options = {}, onToken, signal, inac
         if (!line.trim()) continue;
         try {
           const obj = JSON.parse(line);
-          const _think = obj.message && obj.message.thinking;
-          const _content = obj.message && obj.message.content;
-          // Order matters: close the interior BEFORE any content of this chunk is emitted, or the
-          // first spoken token lands inside <think> and vanishes from the reply.
-          if (_think) {
-            if (!_inThinking) { _inThinking = true; onToken('<think>'); }
-            onToken(_think);
-          } else if (_inThinking) {
-            _inThinking = false; onToken('</think>');
+          if (obj.message && obj.message.content) {
+            onToken(obj.message.content);
           }
-          if (_content) onToken(_content);
-          // ⭐ A REASONING MODEL PUTS ITS OUTPUT IN `thinking`, AND WE WERE THROWING IT AWAY.
+          // ⭐ A REASONING MODEL PUTS MOST OF ITS GENERATION — INCLUDING HER TOOL TAGS — IN
+          // `message.thinking`, and the streaming path used to drop it on the floor (633 tokens
+          // generated, ~180 stored; the missing 450 were the tags. Live 2026-07-21, five runs).
           //
-          // The non-streaming path already knows this — pickText() falls back to message.thinking
-          // "so a reasoner never returns empty", and the response object carries `thinking` as "a
-          // safety net for callers". The STREAMING path forwarded only .content, silently.
-          //
-          // Live 2026-07-21, five runs of the same request: gpt-oss:120b-cloud generated 633 tokens
-          // and roughly 180 tokens' worth reached us. The missing ~450 were in `thinking` — and so
-          // were her tool tags. Every symptom traces here: "she planned it and never acted" four
-          // times, a tag severed mid-attribute (the fragment that happened to land in content), and
-          // a 209-token "stop" that was never a stop.
-          //
-          // ⚠️ WRAPPED IN <think>, NOT FORWARDED RAW. The parser salvages untagged leading text as
-          // PROSE, so piping reasoning straight into the same sink would publish her private
-          // reasoning as speech — the exact failure ("We need to emit a web search.") fixed earlier
-          // today. Wrapping routes it to her interior, where it belongs, while parseEchoTags still
-          // scans the full text and finds any tag inside it.
-          // A generation that ends while still reasoning must close its own tag, or the parser sits
-          // in `think` mode forever and the whole turn is reported truncated.
-          if (obj.done && _inThinking) { _inThinking = false; onToken('</think>'); }
+          // ⚠️ IT GOES TO ITS OWN CALLBACK, NEVER INTO THE TAG STREAM. The first fix wrapped it in
+          // <think> and fed it through onToken — and broke chat COMPLETELY for a night: a reasoning
+          // model NARRATES its own format ("We need to respond with <think> and <say>… the strict
+          // format: <think> ... </think><say> ... </say>"), and the parser read those MENTIONS as
+          // real tags. Every social reply became the literal "..." lifted from its format
+          // recitation (#9235/#9239/#9242/#9245/#9256, night of 2026-07-21). A payload that can
+          // contain tag-shaped text must never enter the tag stream — the caller gets it raw and
+          // decides: record it as her interior, scan it for tool tags, never speak it.
+          if (onThinking && obj.message && obj.message.thinking) {
+            onThinking(obj.message.thinking);
+          }
           if (obj.done) {
             try { const um = require('./usage_meter'); um.record(obj.model || (body && body.model), um.tokensOf({ prompt_eval_count: obj.prompt_eval_count, eval_count: obj.eval_count })); } catch {}   // meter real spend
             return;

@@ -109,6 +109,7 @@ async function streamCloud(messages, { temperature = 0.6, num_predict = null, mo
     model, base: cloud.base, token: cloud.token, deps,
   });
   let text = '';
+  let thinking = '';   // the reasoning channel, accumulated RAW — never fed into the tag stream (see ollama.js)
   let tokens = 0;
   const startedAt = Date.now();
   try {
@@ -122,13 +123,14 @@ async function streamCloud(messages, { temperature = 0.6, num_predict = null, mo
         text += t; tokens += 1;
         if (onToken) { try { onToken(t, { tokens, elapsedMs: Date.now() - startedAt }); } catch { /* a UI hiccup must not kill the stream */ } }
       },
+      onThinking: (t) => { thinking += t; tokens += 1; },
     });
-    return { text, model, tokens, elapsedMs: Date.now() - startedAt };
+    return { text, thinking, model, tokens, elapsedMs: Date.now() - startedAt };
   } catch (e) {
     console.error('[cloud_logic] cloud stream failed:', e.message);
     // Partial text is still worth returning — an answer cut off at 400 tokens beats discarding it
     // and falling back to nothing. The caller decides whether a partial is usable.
-    return text ? { text, model, tokens, elapsedMs: Date.now() - startedAt, partial: true } : null;
+    return text ? { text, thinking, model, tokens, elapsedMs: Date.now() - startedAt, partial: true } : null;
   }
 }
 

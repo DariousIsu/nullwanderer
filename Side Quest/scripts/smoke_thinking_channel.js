@@ -1,24 +1,24 @@
-/* smoke_thinking_channel.js — a reasoning model's output must not be thrown away.
+/* smoke_thinking_channel.js — the reasoning channel is captured RAW, and never enters the tag stream.
  *
- * ⭐ THE ROOT CAUSE OF FIVE FAILED RUNS, found 2026-07-21.
+ * TWO live failures, one day apart, define this contract:
  *
- * lib/ollama's STREAMING path forwarded only `message.content`. A reasoning model
- * (gpt-oss:120b-cloud) puts most of its generation in `message.thinking`, and that was dropped on
- * the floor — silently, with no error anywhere.
+ * 1. DROPPED (2026-07-21 day): ollama's streaming path forwarded only `message.content`. A reasoning
+ *    model (gpt-oss:120b-cloud) authors most of its generation — INCLUDING HER TOOL TAGS — in
+ *    `message.thinking`. 633 tokens generated, ~180 stored; five runs of "she planned it and never
+ *    acted".
  *
- * The non-streaming path had known this all along: pickText() falls back to message.thinking "so a
- * reasoner never returns empty", and the response object carries `thinking` as "a safety net for
- * callers". Only the streaming path was blind.
+ * 2. INJECTED (2026-07-21 night — the fix that broke chat COMPLETELY): thinking was wrapped in
+ *    <think> and fed through onToken into the TagStreamParser. But a reasoning model NARRATES its own
+ *    format — "We need to respond with <think> and <say>… the strict format: <think> ... </think>
+ *    <say> ... </say>" — and the parser read those MENTIONS as real tags. Every social reply became
+ *    the literal three-character "..." lifted from the format recitation (#9235/#9239/#9242/#9245/
+ *    #9256), while the real reply in `content` was orphaned. Lucas: "chat broke completely last
+ *    night."
  *
- * Measured on the last run: 633 tokens generated, the stored thought + reply totalling 716 chars
- * (~180 tokens). The missing ~450 tokens were her TOOL TAGS. Every symptom of the day traces here —
- * four runs of "she planned it and never acted", a tag severed mid-attribute (the fragment that
- * happened to land in `content`), and a 209-token "stop" that was never a stop.
- *
- * ⚠️ THE LOAD-BEARING TEST IS THAT REASONING DOES NOT BECOME SPEECH. The parser salvages untagged
- * leading text as PROSE, so forwarding `thinking` raw would publish her private reasoning to Lucas —
- * the exact failure ("We need to emit a web search.") fixed earlier the same day. It is wrapped in
- * <think> so it lands in her interior instead.
+ * THE CONTRACT: content → onToken → parser (the tag contract lives there). thinking → onThinking,
+ * RAW, accumulated by the caller — recorded as her interior, scanned for tool tags with
+ * parseEchoTags (which needs a complete <echo-*>…</echo-*> pair, so narration can't dispatch), and
+ * NEVER spoken. A payload that can contain tag-shaped text must never enter the tag stream.
  */
 'use strict';
 const fs = require('fs');
@@ -29,87 +29,89 @@ const es = require('../lib/echo_suit');
 let pass = 0, fail = 0;
 function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  FAIL:', msg); } }
 
-// Replays the exact chunk shape ollama streams, through the same logic as lib/ollama.
+// Replay the stream exactly as lib/ollama now routes it: content → parser, thinking → its own sink.
 function replay(chunks) {
-  let out = '';
-  let inThinking = false;
-  const emit = (t) => { out += t; };
-  for (const obj of chunks) {
-    const th = obj.message && obj.message.thinking;
-    const ct = obj.message && obj.message.content;
-    if (th) { if (!inThinking) { inThinking = true; emit('<think>'); } emit(th); }
-    else if (inThinking) { inThinking = false; emit('</think>'); }
-    if (ct) emit(ct);
-    if (obj.done && inThinking) { inThinking = false; emit('</think>'); }
-  }
   const p = new TagStreamParser({});
-  p.feed(out);
-  return { raw: out, say: p.say, mode: p.mode, tags: es.parseEchoTags(out) };
+  let thinking = '';
+  for (const obj of chunks) {
+    if (obj.message && obj.message.content) p.feed(obj.message.content);
+    if (obj.message && obj.message.thinking) thinking += obj.message.thinking;
+  }
+  return { say: p.say, think: p.thought, mode: p.mode, thinking, thinkingTags: es.parseEchoTags(thinking) };
 }
 
-// ── ⭐ the tags come back ───────────────────────────────────────────────────────────────────────
+// ── ⭐ THE LIVE HIJACK, replayed — format narration must not become the reply ────────────────────
 {
   const r = replay([
-    { message: { thinking: 'Plan: open the doc, add the contract. ' } },
-    { message: { thinking: '<echo-do name="saga_canvas_open_tab">{"tab_key":"k","title":"T"}</echo-do>' } },
+    { message: { thinking: 'We need to produce a response following the strict format: <think> reasoning </think><say> ... </say>. ' } },
+    { message: { thinking: 'He is tired; keep it warm and short.' } },
+    { message: { content: '<think>He needs warmth, not a status report.</think><say>Long days earn quiet evenings. I\'m here.</say>' } },
+    { done: true },
+  ]);
+  ok(r.say.trim() === "Long days earn quiet evenings. I'm here.",
+    'SAFETY: the reply is the CONTENT channel\'s <say> — never hijacked by format narration in thinking');
+  ok(r.say.trim() !== '...', 'REGRESSION: the reply is not the literal "..." from the format recitation (the night-of-07-21 bug)');
+  ok(/He needs warmth/.test(r.think), 'the contract-side interior still parses from content');
+  ok(/strict format/.test(r.thinking), 'the reasoning is captured raw for the record');
+  ok(r.mode === 'post', 'and the turn is not flagged truncated');
+}
+
+// ── ⭐ tags authored in the reasoning channel are recoverable ────────────────────────────────────
+{
+  const r = replay([
+    { message: { thinking: 'Open the doc first. <echo-do name="saga_canvas_open_tab">{"mode":"DOC","tab_key":"k","title":"T"}</echo-do>' } },
     { message: { thinking: '<echo-do name="saga_canvas_add_block">{"tab_key":"k","block_type":"paragraph","data":{"markdown":"Contract."}}</echo-do>' } },
     { message: { content: '<say>Opening the doc now.</say>' } },
     { done: true },
   ]);
-  ok(r.tags.length === 2, 'BOTH tags emitted in the thinking channel are recovered');
-  ok(r.tags.map((t) => t.name).join(',') === 'saga_canvas_open_tab,saga_canvas_add_block', 'in order, with their names');
-  ok(r.tags[1].args.data.markdown === 'Contract.', 'and their arguments intact');
+  ok(r.thinkingTags.length === 2, 'BOTH tool tags authored in thinking are recovered by the scan');
+  ok(r.thinkingTags[1].args.data.markdown === 'Contract.', 'with their arguments intact');
+  ok(r.say.trim() === 'Opening the doc now.', 'while the spoken reply stays clean');
 }
 
-// ── ⭐ SAFETY: reasoning must never become speech ───────────────────────────────────────────────
+// ── SAFETY: narration alone can never dispatch ──────────────────────────────────────────────────
 {
   const r = replay([
-    { message: { thinking: 'We need to emit a web search. The user probably wants Q3.' } },
-    { message: { content: '<say>Pulling that now.</say>' } },
+    { message: { thinking: 'Maybe I should use <echo-find> here, or emit an <echo-do name="db_query"> for the counts.' } },
+    { message: { content: '<say>Checking.</say>' } },
     { done: true },
   ]);
-  ok(r.say.trim() === 'Pulling that now.', 'SAFETY: only the <say> content is spoken');
-  ok(!/We need to emit/.test(r.say), 'SAFETY: the reasoning does NOT leak into the reply');
-  ok(/<think>/.test(r.raw) && /<\/think>/.test(r.raw), 'it is wrapped so the parser files it as interior');
-  ok(r.mode === 'post', 'and the turn is not falsely flagged truncated');
+  ok(r.thinkingTags.length === 0,
+    'SAFETY: MENTIONING a tag without a closing pair produces no dispatch — narration is not action');
 }
 
-// ── ordering: the interior closes before any spoken token ───────────────────────────────────────
-{
-  const r = replay([
-    { message: { thinking: 'thinking...' } },
-    { message: { content: '<say>Hello.</say>' } },
-    { done: true },
-  ]);
-  ok(r.raw.indexOf('</think>') < r.raw.indexOf('<say>'),
-    'SAFETY: </think> closes BEFORE content — else the first spoken token vanishes into the interior');
-  ok(r.say.trim() === 'Hello.', 'so the whole reply survives');
-}
-
-// ── a generation that ends mid-thought closes its own tag ───────────────────────────────────────
-{
-  const r = replay([{ message: { thinking: 'half a thought' } }, { done: true }]);
-  ok(/<\/think>/.test(r.raw), 'SAFETY: an interior left open at `done` is closed, or the parser never leaves think mode');
-  ok(r.say.trim() === '', 'a generation that only reasoned says nothing — correctly');
-}
-
-// ── content-only models are untouched ───────────────────────────────────────────────────────────
+// ── content-only models are byte-identical to the old behavior ──────────────────────────────────
 {
   const r = replay([
     { message: { content: '<think>t</think><say>Plain reply.</say>' } },
     { done: true },
   ]);
-  ok(r.say.trim() === 'Plain reply.', 'a non-reasoning model behaves exactly as before');
-  ok(!/<think><think>/.test(r.raw), 'and no spurious wrapper is added');
+  ok(r.say.trim() === 'Plain reply.' && r.thinking === '', 'a non-reasoning model is untouched');
 }
 
 // ── the wiring ──────────────────────────────────────────────────────────────────────────────────
 {
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'ollama.js'), 'utf8');
-  ok(/const _think = obj\.message && obj\.message\.thinking;/.test(src), 'the streaming path reads thinking');
-  ok(/if \(!_inThinking\) \{ _inThinking = true; onToken\('<think>'\); \}/.test(src), 'and opens an interior for it');
-  ok(/if \(obj\.done && _inThinking\)/.test(src), 'and closes it at done');
-  ok(/if \(_content\) onToken\(_content\);/.test(src), 'content is emitted AFTER the interior closes');
+  ok(/onThinking && obj\.message && obj\.message\.thinking/.test(src), 'the stream forwards thinking to its OWN callback');
+  ok(/onThinking\(obj\.message\.thinking\)/.test(src), 'raw, unwrapped');
+  ok(!/onToken\('<think>'\)/.test(src) && !/onToken\('<\/think>'\)/.test(src),
+    'REGRESSION: the <think>-wrapper injection is GONE — it let format narration hijack <say>');
+  ok(/onThinking,/.test(src.slice(0, src.indexOf('const reader'))), 'streamChat accepts the callback');
+
+  const cl = fs.readFileSync(path.join(__dirname, '..', 'lib', 'cloud_logic.js'), 'utf8');
+  ok(/onThinking: \(t\) => \{ thinking \+= t;/.test(cl), 'streamCloud accumulates the channel');
+  ok(/return \{ text, thinking, model/.test(cl), 'and returns it — including on the partial path');
+  ok(/return text \? \{ text, thinking, model/.test(cl), 'a partial still carries its reasoning');
+
+  const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/cloudThinking = r\.thinking \|\| '';/.test(m), 'the reply turn captures the channel');
+  ok(/replyWriter !== MODEL \? echoSuitLib\.parseEchoTags\(cloudThinking \|\| ''\) : \[\]/.test(m),
+    'and scans it for tool tags — only when the cloud actually wrote the turn');
+  ok(/followupThinking = r\.thinking \|\| '';/.test(m), 'the hop chain captures it too');
+  ok(/parseEchoTags\(followupThinking \|\| ''\)/.test(m),
+    'and scans it — the hop chain is where a document\'s next block is authored');
+  ok(/const _fullThought = \[thought \|\| '', \(replyWriter !== MODEL && cloudThinking\)/.test(m),
+    'the reasoning is folded into her stored interior, through the same tag-strip chain');
 }
 
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
