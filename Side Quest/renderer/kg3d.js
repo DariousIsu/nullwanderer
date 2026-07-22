@@ -42,6 +42,8 @@ const KIND_META = {
   'think': ['think', '#64748b'], 'doc.land': ['doc', '#a3e635'], 'news': ['news', '#f472b6'], 'observe': ['observe', '#a8a29e'],
   'audit.clean': ['clean', '#facc15'], 'note': ['note', '#cbd5e1'], 'reflect': ['reflect', '#f0abfc'], 'self': ['self', '#fda4af'],
   'hear': ['hear', '#a5b4fc'], 'say': ['say', '#fda4af'],
+  // the substrate itself, finally visible: an encounter landing, and a claim being disproven
+  'encounter': ['evidence', '#7dd3fc'], 'refute': ['refuted', '#f87171'],
 };
 const pad2 = (n) => (n < 10 ? '0' + n : '' + n);
 function logActivity(evt) {
@@ -1341,6 +1343,40 @@ function gThink() {                            // a thought: condenses in the or
   const s = mkSprite(VHEX, 0.34); s.scale.setScalar(2); s.position.copy(start);
   addEffect([s], 1700, (p) => { const e = 1 - (1 - p) * (1 - p); s.position.copy(start.clone().lerp(c, e * 0.82)); const q = Math.sin(p * Math.PI); s.material.opacity = 0.34 * q; s.scale.setScalar(2 + q * 2.5); });
 }
+// EVIDENCE ARRIVING — a throttled burst of encounters. Scaled by how many landed in the window, so a
+// decompose sweep chewing through a 1,500-encounter PDF reads as a downpour and a single stray filing reads
+// as one drop. Falls INWARD from outside the cloud: evidence comes from the world, not from her.
+let _tick = 0;                                 // varies the deterministic hashes between bursts
+function gEvidence(count) {
+  _tick++;
+  const c = new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z);
+  const k = Math.max(1, Math.min(9, Math.round(Math.log2(1 + count) * 1.6)));
+  for (let i = 0; i < k; i++) {
+    const h = hashSeed('ev' + i + count + _tick) * Math.PI * 2, v = Math.acos(2 * hashSeed('ew' + i + _tick) - 1);
+    const dir = new THREE.Vector3(Math.sin(v) * Math.cos(h), Math.sin(v) * Math.sin(h), Math.cos(v));
+    const from = c.clone().add(dir.clone().multiplyScalar(CLOUD_R * 1.45));
+    const to = c.clone().add(dir.multiplyScalar(CLOUD_R * (0.45 + 0.4 * hashSeed('ex' + i + _tick))));
+    const s = mkSprite(0x7dd3fc, 0.85); s.scale.setScalar(3); s.position.copy(from);
+    addEffect([s], 1250 + i * 60, (p) => {
+      const e = 1 - Math.pow(1 - p, 2.2);
+      s.position.copy(from.clone().lerp(to, e));
+      s.material.opacity = 0.85 * Math.sin(Math.min(1, p * 1.15) * Math.PI);
+      s.scale.setScalar(3 + p * 2);
+    });
+  }
+}
+// REFUTED — a red pulse that collapses INTO the object rather than radiating from it, then a dark ring.
+// Something she believed is being taken back, and it should not look like a discovery.
+function gRefute(pos) {
+  const ring = mkSprite(0xf87171, 0), core = mkSprite(0xfca5a5, 0.9);
+  ring.position.copy(pos); ring.scale.setScalar(26); core.position.copy(pos); core.scale.setScalar(2);
+  addEffect([ring, core], 1400, (p) => {
+    ring.scale.setScalar(26 * (1 - p * 0.82));            // collapses inward
+    ring.material.opacity = 0.75 * Math.sin(p * Math.PI);
+    core.scale.setScalar(2 + Math.max(0, p - 0.62) * 34);
+    core.material.opacity = p < 0.62 ? 0.9 : 0.9 * (1 - (p - 0.62) / 0.38);
+  });
+}
 function membraneShimmer() {                   // the boundary notices a crossing
   if (!membrane) return; const m = membrane.material, base = 0.045;
   addEffect([], 750, (p) => { m.opacity = base + Math.sin(p * Math.PI) * 0.05; });
@@ -1464,6 +1500,11 @@ function onActivity(evt) {
     }
     else if (k === 'hear') { gCross(true, HEAR_HEX); }                   // Lucas's words crossing IN to her
     else if (k === 'say') { gCross(false, SAY_HEX); }                    // her reply crossing OUT of the region
+    else if (k === 'encounter') { gEvidence(evt.count || 1); }           // evidence arriving — the substrate landing
+    else if (k === 'refute') {                                           // something she held, proven wrong
+      const t = a || mintEcho(evt.anchor);
+      if (t) { gRefute(V3(t)); addHotLink(t.id); } else { gRefute(new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z)); }
+    }
     // doc.land / news → ambient inflow, deferred (no emitter fires them yet)
   } catch (e) { console.warn('[kg3d] activity', e && e.message); }
 }

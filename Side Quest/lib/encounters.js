@@ -142,8 +142,48 @@ function record(enc) {
       origin, host, enc.content_hash || null, authority,
       Number.isFinite(enc.observed_at) ? enc.observed_at : null, Date.now()
     );
+    if (info.changes) _tapEncounter(key, enc.object_label);
     return info.changes ? info.lastInsertRowid : 0; // 0 = already recorded; not an error, and not a second vote
   } catch (e) { console.error('[encounters] record failed:', e.message); return null; }
+}
+
+// ── the KG surface tap (graph lane, cleared by Lucas 2026-07-22) ──────────────────────────────────
+//
+// The encounter log is the substrate everything else is derived from, and until now the knowledge-graph
+// panel could not see it at all — it drew objects and edges while the thing that MAKES them was invisible.
+// This is the only line added to this module; the write path above is untouched.
+//
+// THROTTLED ON PURPOSE. A decompose sweep calls record() hundreds of times in a burst (one PDF produced
+// 1,491 encounters), and an un-throttled emit would strobe the panel and bury every other event in the
+// activity log. So at most one pulse per window, carrying `count` = how many landed since the last one —
+// which is a truer reading anyway: what the surface should show is "evidence is pouring in", not 1,491
+// identical lines. Only NEW rows are counted (gated on info.changes above), so re-recording a known claim
+// stays silent, exactly as it casts no second vote.
+// LEADING EDGE + TRAILING FLUSH. A plain leading-edge throttle loses the burst: measured on 400 records, it
+// emitted once with count=1 and stranded the other 399 until some unrelated encounter happened to arrive
+// after the window — under-reporting a downpour at precisely the moment it was raining. So the first record
+// pulses immediately (the surface stays responsive) and a timer flushes the remainder when the window
+// closes, carrying the true count. The timer is unref'd so a pending flush can never hold the process open.
+const _TAP_MS = 2500;
+let _tapAt = 0, _tapN = 0, _tapLast = null, _tapTimer = null;
+function _tapFlush() {
+  _tapTimer = null;
+  if (!_tapN) return;
+  const n = _tapN; _tapN = 0; _tapAt = Date.now();
+  try {
+    require('./kg_activity').emit({ db: 'sidequest', kind: 'encounter', anchor: String(_tapLast).slice(0, 110), count: n });
+  } catch (e) { /* never disturb an append to the log */ }
+}
+function _tapEncounter(key, label) {
+  try {
+    _tapN += 1;
+    _tapLast = label || key;
+    if (_tapTimer) return;                                  // a flush is already scheduled
+    const wait = _TAP_MS - (Date.now() - _tapAt);
+    if (wait <= 0) { _tapFlush(); return; }
+    _tapTimer = setTimeout(_tapFlush, wait);
+    if (_tapTimer && typeof _tapTimer.unref === 'function') _tapTimer.unref();
+  } catch (e) { /* the tap must never disturb an append to the log */ }
 }
 
 function recordMany(list) {

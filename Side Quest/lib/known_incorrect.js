@@ -48,6 +48,18 @@ function record({ objectKey, claimClass, claimKey = null, claimValue, reason, re
     ).run(String(objectKey), String(claimClass), claimKey || null, String(claimValue),
       String(reason).slice(0, 500), refutedBy ? String(refutedBy) : null,
       Number.isFinite(refutedAt) ? refutedAt : Date.now());
+    // KG surface tap (graph lane, cleared by Lucas 2026-07-22). Refutations are rare by design — 508 rows
+    // against 102k encounters — so no throttle is needed and every one deserves to be seen: this is the
+    // moment something she held is proven wrong, which is the most consequential event in the whole store.
+    // Gated on info.changes, so re-testing a known-bad value stays silent. The write path above is untouched.
+    if (info.changes) {
+      try {
+        require('./kg_activity').emit({
+          db: 'sidequest', kind: 'refute',
+          anchor: String(objectKey).slice(0, 110), anchor2: String(claimValue).slice(0, 60),
+        });
+      } catch (e) { /* never disturb the refutation itself */ }
+    }
     return info.changes ? info.lastInsertRowid : 0;   // 0 = already known, not an error
   } catch (e) { console.error('[known_incorrect] record failed:', e.message); return null; }
 }
