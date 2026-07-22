@@ -1,0 +1,253 @@
+/**
+ * lib/autonomy.js — the idle tick DECIDES (docs/SUBCONSCIOUS_AUTONOMY_DESIGN.md, S1–S4).
+ *
+ * Lucas, 2026-07-20: "the cloud model should be getting enough to start making independent
+ * decisions … autonomously in the pursuit of growing and cleaning the database or building
+ * projects." And 2026-07-22: "she only looks up people for contact. She doesn't explore ideas,
+ * and she doesn't engage on her own."
+ *
+ * Before this module, code picked every idle move (beat round-robin, graph-walk gap ranking over
+ * proper nouns from recent chat) and the cloud only narrated. This is the inversion:
+ *   S1 buildManifest — the live state of her OWN stores as counts and keys (absence gaps,
+ *      cardinality universes, uncorroborated encounter clusters, her interests, her stalest
+ *      threads) + what the last N ticks chose. Counts and keys, never rows.
+ *   S2 decide — ONE structured cloud call: "given this state, what is the single highest-value
+ *      move right now?" Returns a TYPED plan. `nothing` is a first-class answer — a decision
+ *      layer that can never decline becomes a make-work generator.
+ *   S3 buildOperatorBrief — the plan becomes a bounded operator run (the executor lives in
+ *      main.js where the tools are). Reads wide, writes stay tier-gated (autonomous=true).
+ *   S4 build — a `build` move instructs a real markdown artifact into notes/autonomy/ (the
+ *      7-day audit measured 3,121 thoughts / 0 artifacts; this is the missing producer).
+ *
+ * Non-negotiables carried from the design: every tick emits a report line; never claim work
+ * that did not happen (history records OUTCOMES, not plans); a wrong choice is cheap (bounded
+ * steps/tokens, `nothing` always available); the tick's subject must never leak into chat
+ * (only the heavily rate-limited `engage` move may speak, through the announce door).
+ *
+ * Pure decision logic + deps-injected IO → offline-smokeable (scripts/smoke_autonomy.js).
+ */
+'use strict';
+
+const MOVES = ['research', 'fill-gap', 'corroborate', 'clean', 'build', 'engage', 'nothing'];
+const HISTORY_KEY = 'autonomy.history';
+const HISTORY_MAX = 12;
+
+// ---- S1: THE TICK MANIFEST -------------------------------------------------
+// Every source is independently guarded: a missing table or a failed query drops that section
+// (and logs), never the manifest. Counts and keys, never rows — same lever as lib/package.js.
+function _ago(now, ts) {
+  if (!ts) return 'never';
+  const d = Math.max(0, now - ts);
+  if (d < 3600e3) return Math.round(d / 60e3) + 'm ago';
+  if (d < 86400e3) return Math.round(d / 3600e3) + 'h ago';
+  return Math.round(d / 86400e3) + 'd ago';
+}
+
+function buildManifest({ db = null, now = Date.now() } = {}) {
+  const dbm = db || require('./db');
+  let d = null;
+  try { d = dbm.getDb(); } catch { /* no db → empty manifest, decide() will decline */ }
+  const sections = [];
+  const counts = {};
+  const grab = (label, fn) => {
+    try { const s = fn(); if (s) sections.push(s); }
+    catch (e) { console.error(`[autonomy] manifest source failed (${label}):`, e.message); }
+  };
+
+  grab('absence', () => {
+    const n = d.prepare('SELECT COUNT(*) n FROM absence').get().n;
+    counts.absence = n;
+    if (!n) return '';
+    const top = d.prepare('SELECT subject, predicate, attempts, last_attempt_ts FROM absence ORDER BY attempts ASC, last_attempt_ts ASC LIMIT 5').all();
+    return `• NAMED GAPS (absence): ${n.toLocaleString()} things we established we do NOT have. Least-tried:\n`
+      + top.map((r) => `   - ${r.subject} — ${r.predicate} (tried ${r.attempts}×, last ${_ago(now, r.last_attempt_ts)})`).join('\n');
+  });
+
+  grab('cardinality', () => {
+    const n = d.prepare('SELECT COUNT(*) n FROM cardinality').get().n;
+    const conflicts = d.prepare('SELECT COUNT(*) n FROM cardinality WHERE conflict_seats IS NOT NULL').get().n;
+    counts.cardinality = n; counts.cardinalityConflicts = conflicts;
+    if (!n) return '';
+    let line = `• COUNTABLE UNIVERSES (cardinality): ${n} bodies with a known denominator`;
+    if (conflicts) {
+      const c = d.prepare('SELECT body, seats, conflict_seats FROM cardinality WHERE conflict_seats IS NOT NULL LIMIT 3').all();
+      line += `; ${conflicts} carry a CONFLICT worth resolving:\n` + c.map((r) => `   - ${r.body}: ${r.seats} vs ${r.conflict_seats}`).join('\n');
+    }
+    return line;
+  });
+
+  grab('encounters', () => {
+    const n = d.prepare('SELECT COUNT(*) n FROM encounters').get().n;
+    counts.encounters = n;
+    if (!n) return '';
+    const unknown = d.prepare("SELECT COUNT(*) n FROM encounters WHERE authority = 'unknown'").get().n;
+    // Largest single-source object clusters = the best corroboration targets (one origin vouches
+    // for many claims and nothing else does).
+    const singles = d.prepare(`
+      SELECT object_label, COUNT(*) c FROM encounters
+      WHERE object_label IS NOT NULL AND object_key IN (
+        SELECT object_key FROM encounters GROUP BY object_key HAVING COUNT(DISTINCT COALESCE(origin_host, source_ref, 'x')) = 1
+      ) GROUP BY object_key ORDER BY c DESC LIMIT 3`).all();
+    return `• CLAIMS HELD (encounters): ${n.toLocaleString()}, ${unknown.toLocaleString()} with UNKNOWN authority.`
+      + (singles.length ? ` Largest single-source clusters (uncorroborated):\n` + singles.map((r) => `   - ${r.object_label} (${r.c} claims, one source)`).join('\n') : '');
+  });
+
+  grab('interests', () => {
+    const rows = d.prepare("SELECT topic, weight, mastery, visits, last_visited_ts FROM interests WHERE status='active' ORDER BY weight DESC LIMIT 10").all();
+    counts.interests = rows.length;
+    if (!rows.length) return '';
+    return `• YOUR OWN INTERESTS (ideas to explore, not contact lookups):\n`
+      + rows.map((r) => `   - ${r.topic} (weight ${(+r.weight).toFixed(2)}, mastery ${(+r.mastery).toFixed(2)}, ${r.visits} visits, last ${_ago(now, r.last_visited_ts)})`).join('\n');
+  });
+
+  grab('open_threads', () => {
+    const active = d.prepare("SELECT COUNT(*) n FROM open_threads WHERE status IN ('active','pending')").get().n;
+    counts.openThreads = active;
+    if (!active) return '';
+    const stale = d.prepare("SELECT content, last_touched_ts FROM open_threads WHERE status IN ('active','pending') ORDER BY last_touched_ts ASC LIMIT 5").all();
+    return `• YOUR OPEN THREADS (${active} active/pending; stalest first — commitments YOU made):\n`
+      + stale.map((r) => `   - "${String(r.content || '').replace(/\s+/g, ' ').slice(0, 140)}" (untouched ${_ago(now, r.last_touched_ts)})`).join('\n');
+  });
+
+  return { text: sections.join('\n'), counts };
+}
+
+// ---- history: what the last N ticks chose and what CAME OF IT --------------
+function historyRead(getMeta) {
+  try { const a = JSON.parse((getMeta && getMeta(HISTORY_KEY)) || '[]'); return Array.isArray(a) ? a : []; }
+  catch { return []; }
+}
+function historyPush({ getMeta, setMeta }, entry) {
+  const a = historyRead(getMeta);
+  a.push(entry);
+  while (a.length > HISTORY_MAX) a.shift();
+  try { setMeta(HISTORY_KEY, JSON.stringify(a)); } catch {}
+  return a;
+}
+function historyBlock(history, now = Date.now()) {
+  if (!history || !history.length) return '';
+  return 'YOUR RECENT TICKS (do not repeat a move that just ran or keeps yielding nothing):\n'
+    + history.slice(-8).map((h) => `   - ${_ago(now, h.ts)}: ${h.move}${h.target ? ` → ${String(h.target).slice(0, 80)}` : ''} → ${h.outcome || '?'}`).join('\n');
+}
+
+// ---- S2: THE CLOUD CHOOSES -------------------------------------------------
+const DECISION_WANT = `You are the autonomous work-chooser for Zoe — a dedicated research assistant with her own databases, ~100 public data sources, the open web, and her own interests. Nobody is prompting her right now; YOU decide what this idle tick does.
+
+Pick the SINGLE highest-value move and reply with ONLY strict JSON (no prose outside it):
+{"move":"research|fill-gap|corroborate|clean|build|engage|nothing",
+ "target":"<a key/name taken from the STATE — the gap, universe, cluster, interest, or thread>",
+ "why":"<one honest line>",
+ "steps":["<plain-language intent, e.g. 'search our own records for X', 'read the org's own site'>", "..."],
+ "expect":"<what success would concretely look like>",
+ "say":"<engage move ONLY: the exact 2-4 sentence message to send>"}
+
+The moves:
+- research: EXPLORE AN IDEA — one of her interests, an open thread, or a question the state raises. Depth over breadth; the point is understanding, not contact lookup.
+- fill-gap: go get a NAMED absence gap or missing members of a countable universe.
+- corroborate: take a single-source cluster and find an INDEPENDENT second source for its claims.
+- clean: inspect and report on duplicates/conflicts (writes are gated — your product is a precise report).
+- build: turn material she ALREADY HOLDS into a real markdown document (a brief, a gap report, a synthesis).
+- engage: say something to Lucas NOW — a genuine finding or a direction question. Use RARELY, only when you have something real; "say" must carry the exact message, grounded in the state above, no invented facts.
+- nothing: a first-class answer. If no move is clearly worth its cost, decline honestly.
+
+Rules: at most 4 steps. Never plan work you cannot check. Do not choose a target your recent ticks show as just-run or repeatedly dry. Variety matters across ticks — contacts are ALREADY covered by another lane, so prefer ideas, gaps, corroboration, and building over anything contact-shaped.`;
+
+function validateDecision(raw) {
+  try {
+    const m = String(raw || '').match(/\{[\s\S]*\}/);
+    if (!m) return { valid: false, error: 'no JSON object' };
+    const o = JSON.parse(m[0]);
+    if (!MOVES.includes(o.move)) return { valid: false, error: `move must be one of ${MOVES.join('|')}` };
+    const out = {
+      move: o.move,
+      target: String(o.target || '').replace(/\s+/g, ' ').slice(0, 200),
+      why: String(o.why || '').replace(/\s+/g, ' ').slice(0, 300),
+      steps: (Array.isArray(o.steps) ? o.steps : []).slice(0, 4).map((s) => String(s || '').replace(/\s+/g, ' ').slice(0, 200)).filter(Boolean),
+      expect: String(o.expect || '').replace(/\s+/g, ' ').slice(0, 240),
+      say: String(o.say || '').trim().slice(0, 900),
+    };
+    if (!out.why) return { valid: false, error: 'why is required' };
+    if (out.move !== 'nothing' && out.move !== 'engage' && !out.target) return { valid: false, error: 'target required for a work move' };
+    if (out.move === 'engage' && out.say.length < 40) return { valid: false, error: 'engage requires a real "say" message (≥40 chars)' };
+    return { valid: true, value: out };
+  } catch (e) { return { valid: false, error: e.message }; }
+}
+
+/**
+ * One structured decision call. deps.ask injectable (offline smoke); the live path goes through
+ * cloud_logic.ask → cached/budgeted/traced, on the deep reasoner with think:false + real headroom.
+ */
+async function decide({ manifestText = '', history = [], now = Date.now(), deps = {} } = {}) {
+  if (!manifestText || !manifestText.trim()) return null;   // nothing to choose from → no call
+  const ask = deps.ask || require('./cloud_logic').ask;
+  const model = (() => { try { return require('./config').deepReasonerModel(); } catch { return null; } })();
+  return ask({
+    task: 'autonomy_tick', v: 1,
+    input: { state: manifestText, history: historyBlock(history, now) },
+    want: DECISION_WANT,
+    validate: validateDecision,
+    model,
+    numPredict: 1500,      // the reasoner floor — below it the answer starves in hidden thinking
+    think: false,          // the decision is the OUTPUT, not the chain-of-thought
+  });
+}
+
+// ---- S3: the plan becomes a bounded operator brief -------------------------
+function slugify(s) {
+  return String(s || 'work').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'work';
+}
+
+const _HONESTY = `Report ONLY what your tools actually returned; if a lookup fails or comes back empty, say so plainly — an honest gap beats a confident guess. Never describe an action you did not take.`;
+
+function buildOperatorBrief(decision, { now = Date.now() } = {}) {
+  const d = decision || {};
+  const steps = (d.steps && d.steps.length) ? `\nSuggested path (adapt as the evidence leads):\n${d.steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}` : '';
+  const expect = d.expect ? `\nSuccess looks like: ${d.expect}` : '';
+  switch (d.move) {
+    case 'research':
+      return `AUTONOMOUS RESEARCH — explore this in depth: ${d.target}. ${d.why}${steps}${expect}\nGo deep, not wide: read what you open, connect it to what our own records hold, and finish with the 3-5 most substantive things you learned (cited to their sources). ${_HONESTY}`;
+    case 'fill-gap':
+      return `AUTONOMOUS GAP-FILL — we have established we DO NOT HAVE: ${d.target}. ${d.why}${steps}${expect}\nFind it from a citable source (our records first, then the open web). If it truly cannot be found, say exactly what you tried — that keeps the gap honest. ${_HONESTY}`;
+    case 'corroborate':
+      return `AUTONOMOUS CORROBORATION — these claims rest on ONE source: ${d.target}. ${d.why}${steps}${expect}\nFind an INDEPENDENT second source (different site/org, not a mirror of the first) that confirms or contradicts the core claims. State clearly which claims you could and could not corroborate. ${_HONESTY}`;
+    case 'clean':
+      return `AUTONOMOUS HYGIENE PASS — inspect: ${d.target}. ${d.why}${steps}${expect}\nUse localdb/echo READS to characterize the problem precisely (which rows, what pattern, how many). Writes are gated, so your product is a precise, actionable report of what should change. ${_HONESTY}`;
+    case 'build': {
+      const path = `notes/autonomy/${new Date(now).toISOString().slice(0, 10)}-${slugify(d.target)}.md`;
+      return `AUTONOMOUS BUILD — produce a real document about: ${d.target}. ${d.why}${steps}${expect}\nGather the material (our own records FIRST — this is a synthesis of what we hold, filled in from the web only where our records are thin), then SAVE the finished markdown with the file tool: {"op":"write","path":"${path}","content":"<the full document>"}. Plain markdown — headings, paragraphs, lists — no styling. End your answer with one line naming the saved path and what it contains. ${_HONESTY}`;
+    }
+    default:
+      return `AUTONOMOUS PASS — ${d.target || 'the chosen work'}. ${d.why}${steps}${expect}\n${_HONESTY}`;
+  }
+}
+
+// ---- outcome: record what HAPPENED, not what was planned -------------------
+function summarizeOutcome(decision, opRes, { now = Date.now() } = {}) {
+  const d = decision || {};
+  const artifacts = [];
+  let toolsUsed = [];
+  if (opRes && Array.isArray(opRes.steps)) {
+    toolsUsed = opRes.steps.map((s) => s.tool);
+    for (const s of opRes.steps) {
+      if (s.tool === 'file' && s.args && /^(write|append)$/i.test(String(s.args.op || '')) && s.args.path && !/^ERROR/i.test(String(s.result || ''))) {
+        artifacts.push(String(s.args.path));
+      }
+    }
+  }
+  const ok = !!(opRes && opRes.answer && String(opRes.answer).trim());
+  const outcome = !opRes ? 'no-run (cloud unavailable)' : ok
+    ? `ok — ${toolsUsed.length} tool step${toolsUsed.length === 1 ? '' : 's'}${artifacts.length ? `, artifact: ${artifacts.join(', ')}` : ''}`
+    : 'ran but produced no answer';
+  return {
+    entry: { ts: now, move: d.move, target: d.target, outcome },
+    report: `[autonomy] chose=${d.move} target="${String(d.target || '').slice(0, 60)}" steps=${toolsUsed.length} ok=${ok ? 1 : 0} artifacts=${artifacts.length}`,
+    artifacts, ok, toolsUsed,
+  };
+}
+
+module.exports = {
+  MOVES, HISTORY_KEY, HISTORY_MAX,
+  buildManifest, historyRead, historyPush, historyBlock,
+  decide, validateDecision, DECISION_WANT,
+  buildOperatorBrief, summarizeOutcome, slugify,
+};

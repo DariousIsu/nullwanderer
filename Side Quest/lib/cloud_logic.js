@@ -56,7 +56,7 @@ async function _resolveModel(models, cloud) {
   if (m) { _modelCache = m; _modelCacheAt = Date.now(); }
   return m;
 }
-async function _complete(messages, { temperature = 0.2, num_predict = 400, model: modelOverride = null } = {}) {
+async function _complete(messages, { temperature = 0.2, num_predict = 400, model: modelOverride = null, think = undefined } = {}) {
   let models, ollama;
   try { models = require('./models'); ollama = require('./ollama'); } catch { return null; }
   const cloud = (models.sources() || []).find(s => s.tier === 'cloud' && s.token);
@@ -70,6 +70,10 @@ async function _complete(messages, { temperature = 0.2, num_predict = 400, model
     const text = await ollama.complete({
       model, messages, base: cloud.base,
       headers: cloud.token ? { Authorization: `Bearer ${cloud.token}` } : {},
+      // `think` forwarded (audit 2026-07-22): an ask() task on a reasoning model (autonomy_tick,
+      // research_plan on gpt-oss) otherwise buries its structured answer in message.thinking and
+      // the validator parses chain-of-thought. undefined → transport default (unchanged).
+      ...(typeof think === 'boolean' ? { think } : {}),
       options: { temperature, top_p: 0.9, num_ctx: win.num_ctx, num_predict }
     });
     return { text: text || '', model };
@@ -223,7 +227,7 @@ function _budgetInc() {
  *   validate (raw)=>{valid,value,error}; omit for default-JSON parsing
  *   deps     { complete, now, dailyCap, maxInputChars, noCache, skipBudget } — test seams
  */
-async function ask({ task, v = 1, input = {}, want = '', validate = null, model = null, numPredict = null, deps = {} } = {}) {
+async function ask({ task, v = 1, input = {}, want = '', validate = null, model = null, numPredict = null, think = undefined, deps = {} } = {}) {
   if (!task) return null;
   const now = deps.now || Date.now();
   const complete = deps.complete || _complete;
@@ -232,6 +236,7 @@ async function ask({ task, v = 1, input = {}, want = '', validate = null, model 
   const cOpts = {};
   if (model) cOpts.model = model;
   if (numPredict) cOpts.num_predict = numPredict;
+  if (typeof think === 'boolean') cOpts.think = think;   // reasoning-model tasks pass think:false → clean structured output
   const cap = deps.dailyCap || dailyCap();
   const maxChars = deps.maxInputChars || DEFAULT_MAX_INPUT_CHARS;
   const inputStr = _packInput(input, maxChars);

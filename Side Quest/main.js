@@ -1347,6 +1347,11 @@ app.whenReady().then(() => {
   // autonomic research is diverse across beats yet deep within each. Yields to any user-assigned focus.
   try { startAutonomicScheduler(); } catch (e) { console.error('[main] autonomic scheduler start failed:', e.message); }
 
+  // AUTONOMY DRIVER (SUBCONSCIOUS_AUTONOMY_DESIGN S1–S4) — the idle tick that DECIDES: the cloud
+  // chooses each tick's work from her own stores (ideas, gaps, corroboration, hygiene, artifacts),
+  // instead of code round-robins choosing for it. Yields to chat, directed focuses, and meetings.
+  try { startAutonomyDriver(); } catch (e) { console.error('[main] autonomy driver start failed:', e.message); }
+
   // Email: surface a credential problem early rather than at first send.
   if (emailLib.isConfigured()) {
     emailLib.verify().then(r => {
@@ -8514,6 +8519,114 @@ function stopDirectedFocusDriver() {
 function kickDirectedFocusDriver() {
   startDirectedFocusDriver();
   directedFocusTick().catch(e => console.error('[directed] kick failed:', e.message));   // start NOW, don't wait a cadence
+}
+
+// === AUTONOMY DRIVER (docs/SUBCONSCIOUS_AUTONOMY_DESIGN.md S1–S4 — built 2026-07-22) ============
+// The idle tick that DECIDES. Before this, code picked every idle move (beat round-robin, graph-walk
+// gap ranking over chat nouns) and the cloud only narrated — measured over 7 days: 3,121 thoughts,
+// 0 artifacts, and the only autonomous product was contact lookups. Lucas: "she doesn't explore
+// ideas, and she doesn't engage on her own." Each tick here: manifest of her OWN stores (absence
+// gaps, cardinality universes, uncorroborated clusters, her interests, her stalest threads) → ONE
+// cloud decision (typed plan; `nothing` is first-class) → bounded operator execution (reads wide,
+// writes tier-gated) → honest history of what actually happened. Contact enrichment keeps its own
+// lanes; this lane is ideas, gaps, corroboration, hygiene, real documents, and (rarely, gated)
+// self-initiated engagement through the same door research announcements use.
+let autonomyTimer = null;
+let autonomyInFlight = false;
+const AUTONOMY_TICK_MS = 60 * 1000;                    // timer cadence; the real pace is the meta gap below
+function _autonomyCadenceMs() { return Math.max(2, _intMeta('autonomy.cadence_min', 10)) * 60 * 1000; }
+function _autonomyEnabled() {
+  if (/^(0|false|off)$/i.test(String(process.env.ZOE_AUTONOMY || '').trim())) return false;   // env kill-switch
+  try { return db.getMeta('autonomy.enabled') !== '0'; } catch { return true; }               // runtime kill-switch, no reboot
+}
+
+async function autonomyTick() {
+  if (autonomyInFlight || !_autonomyEnabled()) return;
+  const now = Date.now();
+  try {
+    // PACE — one decision per cadence window, however often the timer fires.
+    if (now - (parseInt(db.getMeta('autonomy.last_decide_at') || '0', 10) || 0) < _autonomyCadenceMs()) return;
+    // YIELD to live conversation: a turn in the last 3 minutes means Lucas is here — the idle lane
+    // must never contend with him for cloud slots or attention (subject-leak rule doubly so).
+    const recent = db.getRecentTurns(6) || [];
+    const lastTurnTs = recent.reduce((a, t) => Math.max(a, t && t.ts || 0), 0);
+    if (now - lastTurnTs < 3 * 60 * 1000) return;
+    // YIELD to assigned work: a directed focus (Lucas's assignment) owns the operator lane.
+    try { const fl = require('./lib/focus'); const f = fl.getCurrent(); if (f && fl.isDirected(f)) return; } catch {}
+    if (directedStepInFlight) return;
+    try { if (db.getMeta('scribe_active') === '1') return; } catch {}   // never during a live meeting
+    // THROTTLE — the same rolling session/weekly/concurrency brakes as every autonomous pass.
+    if (!_researchGateOk('autonomy', 'autonomy')) return;
+
+    autonomyInFlight = true;
+    _bgInFlight.add('autonomy');
+    try { db.setMeta('autonomy.last_decide_at', String(now)); } catch {}
+    const autonomy = require('./lib/autonomy');
+    const H = { getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v) };
+    const manifest = autonomy.buildManifest({ db, now });
+    if (!manifest.text) { console.log('[autonomy] empty manifest — nothing to choose from'); return; }
+    const decision = await autonomy.decide({ manifestText: manifest.text, history: autonomy.historyRead(H.getMeta), now });
+    if (!decision) {
+      autonomy.historyPush(H, { ts: now, move: 'nothing', outcome: 'no decision (cloud unavailable or invalid)' });
+      console.log('[autonomy] no decision (cloud unavailable/invalid) — tick ends');
+      return;
+    }
+    if (decision.move === 'nothing') {
+      autonomy.historyPush(H, { ts: now, move: 'nothing', outcome: `declined: ${decision.why}` });
+      console.log(`[autonomy] chose=nothing — ${decision.why}`);
+      return;
+    }
+    if (decision.move === 'engage') {
+      // ENGAGE — she speaks first. Heavily gated: never when Lucas is away, never more often than
+      // the engage cadence, only into a live session. Delivered through the SAME door as research
+      // announcements (insertTurn unprompted + chat:complete), so renderer routing is proven.
+      const gapMin = Math.max(10, _intMeta('autonomy.engage_min_gap_min', 45));
+      const lastEng = parseInt(db.getMeta('autonomy.last_engage_at') || '0', 10) || 0;
+      const away = (() => { try { return require('./lib/availability').isAway(); } catch { return false; } })();
+      if (away || (now - lastEng) < gapMin * 60 * 1000 || !currentSessionId) {
+        const skipWhy = away ? 'Lucas away' : (!currentSessionId ? 'no session' : 'engage cadence');
+        autonomy.historyPush(H, { ts: now, move: 'engage', target: decision.target, outcome: `skipped (${skipWhy})` });
+        console.log(`[autonomy] chose=engage → skipped (${skipWhy})`);
+        return;
+      }
+      const row = db.insertTurn({ sessionId: currentSessionId, speaker: 'ai_said', content: decision.say, model: 'autonomy', unprompted: 1 });
+      try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+      try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: decision.say }); } catch {}
+      try { require('./lib/blackboard').append({ source: 'autonomy', kind: 'utterance', refTable: 'turns', refId: row.id, content: decision.say }); } catch {}
+      try { db.setMeta('autonomy.last_engage_at', String(now)); } catch {}
+      autonomy.historyPush(H, { ts: now, move: 'engage', target: decision.target, outcome: 'spoke' });
+      console.log(`[autonomy] chose=engage → spoke (${decision.say.length}c)`);
+      return;
+    }
+    // WORK MOVES (research / fill-gap / corroborate / clean / build) → one bounded operator run.
+    // autonomous:true keeps Echo writes tier-gated; build gets the task budget (it produces a file).
+    const brief = autonomy.buildOperatorBrief(decision, { now });
+    const res = await runCloudOperator({ userMessage: brief, context: manifest.text, task: decision.move === 'build', autonomous: true });
+    const sum = autonomy.summarizeOutcome(decision, res, { now });
+    if (sum.ok) {
+      // The finding enters her stream as a reading (visible in the rail, recallable later). Web
+      // learnings already accreted inside runCloudOperator; this is the narrative record.
+      try {
+        const mono = db.insertMonologue({ content: `Autonomy (${decision.move} — ${decision.target}): ${String(res.answer).slice(0, 1500)}`, model: 'autonomy', type: 'reading', query: decision.target });
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: mono.id, ts: mono.ts, content: `(autonomy: ${decision.move} → ${String(decision.target).slice(0, 60)})`, type: 'reading', query: decision.target });
+      } catch {}
+    }
+    for (const p of sum.artifacts) { try { require('./lib/presence').notify('Zoe — autonomous artifact', `${String(decision.target).slice(0, 50)} → ${p}`); } catch {} }
+    autonomy.historyPush(H, sum.entry);
+    console.log(sum.report);
+  } catch (e) {
+    console.error('[autonomy] tick failed:', e.message);
+  } finally {
+    autonomyInFlight = false;
+    try { _bgInFlight.delete('autonomy'); } catch {}
+  }
+}
+
+function startAutonomyDriver() {
+  if (autonomyTimer) return;
+  if (!_autonomyEnabled()) { console.log('[autonomy] disabled (ZOE_AUTONOMY / autonomy.enabled) — driver not started'); return; }
+  autonomyTimer = setInterval(() => { autonomyTick().catch((e) => console.error('[autonomy] tick failed:', e.message)); }, AUTONOMY_TICK_MS);
+  console.log(`[autonomy] driver started — decides every ~${Math.round(_autonomyCadenceMs() / 60000)}min when idle`);
 }
 
 // AUTONOMIC BEAT RUN (autonomic-architecture Slice 1) — seed the EXISTING directed-research machinery with a
