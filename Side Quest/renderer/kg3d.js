@@ -114,7 +114,55 @@ const DEG_ECHO_MAX = 3.25, DEG_SQ_MAX = Math.log10(21);   // log-degree normalis
 // toward these, charge and links then push them off it, and the result reads as a cloud instead of a lattice.
 // Declared above targetPoint on purpose — this file has sprung the temporal-dead-zone trap four times now.
 const _midCen = { x: 0, y: 0, z: 0 };            // the middle of the whole cloud; the dividing plane runs through it
+// ============================================================================================================
+// SHAPE — switchable, because two unilateral picks were both rejected and this is a judgement call that
+// belongs to Lucas, not to me. `localStorage.kg3d.shape` or __kg3d.shape('name'). Each returns a target point
+// for a node, or null to mean "impose nothing and let the physics decide".
+//   halves  — one sphere split along an axis (current)
+//   corona  — dense short-term core, long-term falling off continuously outward. No band, no gap: the
+//             density gradient is the only boundary. This is closest to the arrangement Lucas liked before I
+//             started adding geometry to it.
+//   binary  — two separate cloud masses with a bridge between them. Cross-store nodes are drawn toward the
+//             midline, so the isthmus forms out of the DATA (the things that actually span both stores)
+//             rather than being drawn as scenery. Crossings read hardest here.
+//   free    — no positional prior at all. Charge and links alone; store is carried by colour and density.
+//             The shape becomes the actual connectivity, which is how the best-looking graph viz works.
+// ============================================================================================================
+let SHAPE = 'halves';
+try { SHAPE = localStorage.getItem('kg3d.shape') || 'halves'; } catch (e) {}
 const _tp = new THREE.Vector3();
+function nodeConnT(n) {                        // normalised connectivity, 0..1
+  const sq = n.store === 'sidequest';
+  const d = sq ? (n.localDeg || 0) : ((typeof n.degree === 'number' && n.degree > 0) ? n.degree : (n.localDeg || 0));
+  return Math.max(0, Math.min(1, Math.log10(1 + d) / (sq ? DEG_SQ_MAX : DEG_ECHO_MAX)));
+}
+function nodeSeed(n) {
+  if (!n._tp) {
+    const h1 = hashSeed(String(n.id) + '#r'), h2 = hashSeed(String(n.id) + '#a'), h3 = hashSeed(String(n.id) + '#u');
+    n._tp = { rf: Math.cbrt(0.10 + 0.90 * h1), ang: h2 * Math.PI * 2, jit: (h3 - 0.5) * 0.30, u: h3 };
+  }
+  return n._tp;
+}
+// CORONA: short-term is a tight bright core; the corpus is a continuous halo whose density thins outward,
+// with its best-connected material nearest the core. Crucially there is NO band edge and NO gap — the two
+// populations touch, and only the change in density marks where one becomes the other.
+function targetCorona(n) {
+  const s = nodeSeed(n), sq = n.store === 'sidequest', t = nodeConnT(n);
+  const r = sq ? CLOUD_R * 0.34 * s.rf : CLOUD_R * (0.30 + (1 - t) * 0.72) * (0.72 + 0.38 * s.rf);
+  const u = (s.u * 2 - 1) * 0.98, perp = r * Math.sqrt(Math.max(0, 1 - u * u));
+  return _tp.set(_midCen.x + r * u, _midCen.y + Math.cos(s.ang) * perp, _midCen.z + Math.sin(s.ang) * perp);
+}
+// BINARY: two masses, and the bridge is made of the nodes that genuinely span both stores — a node with
+// cross-store links is pulled toward the midline in proportion to how many it has, so the isthmus is DATA.
+function targetBinary(n) {
+  const s = nodeSeed(n), sq = n.store === 'sidequest';
+  const sep = CLOUD_R * 0.62, lobe = (sq ? 0.40 : 0.62) * CLOUD_R;
+  const pull = Math.max(0, Math.min(0.85, (n.crossDeg || 0) * 0.30));     // 0 = deep in its lobe, 1 = on the midline
+  const cx = _midCen.x + (sq ? -sep : sep) * (1 - pull);
+  const r = lobe * s.rf * (1 - pull * 0.45);
+  const u = (s.u * 2 - 1) * 0.98, perp = r * Math.sqrt(Math.max(0, 1 - u * u));
+  return _tp.set(cx + r * u * 0.55, _midCen.y + Math.cos(s.ang) * perp, _midCen.z + Math.sin(s.ang) * perp);
+}
 function targetPoint(n) {
   if (!n._tp) {
     const h1 = hashSeed(String(n.id) + '#r'), h2 = hashSeed(String(n.id) + '#a'), h3 = hashSeed(String(n.id) + '#u');
@@ -155,10 +203,12 @@ function makeCore3D(strength = 0.05) {
         n.vz = (n.vz || 0) + (tz - (n.z || 0)) * k;
         continue;
       }
-      // One soft spring toward the node's home point in its half of the sphere. Deliberately gentle — charge
-      // and links have to be able to pull clusters off it, or the cloud freezes into the lattice the target
-      // points describe. The shape comes from the targets; the LIFE comes from the forces fighting them.
-      const p = targetPoint(n), k = strength * 1.15 * alpha;
+      // One soft spring toward the node's home point. Deliberately gentle — charge and links have to be able
+      // to pull clusters off it, or the cloud freezes into the lattice the target points describe. The shape
+      // comes from the targets; the LIFE comes from the forces fighting them. `free` skips this entirely.
+      const p = SHAPE === 'corona' ? targetCorona(n) : SHAPE === 'binary' ? targetBinary(n) : SHAPE === 'free' ? null : targetPoint(n);
+      if (!p) continue;
+      const k = strength * 1.15 * alpha;
       n.vx = (n.vx || 0) + (p.x - n.x) * k;
       n.vy = (n.vy || 0) + (p.y - n.y) * k;
       n.vz = (n.vz || 0) + (p.z - (n.z || 0)) * k;
@@ -405,9 +455,14 @@ function render() {
   for (const m of shortTerm.links.values()) if (keep.has(m.s) && keep.has(m.t)) links.push({ source: m.s, target: m.t, category: m.category, relType: m.relType });
   // Local degree drives the short-term half of the gradient — those nodes carry no global `degree`, so how
   // connected a thing is HERE is the honest measure of how central it currently is to what she's working on.
-  for (const o of nodes) o.localDeg = 0;
+  for (const o of nodes) { o.localDeg = 0; o.crossDeg = 0; }
   const byId = new Map(nodes.map((o) => [o.id, o]));
-  for (const l of links) { const s = byId.get(l.source), t = byId.get(l.target); if (s) s.localDeg++; if (t) t.localDeg++; }
+  for (const l of links) {
+    const s = byId.get(l.source), t = byId.get(l.target); if (s) s.localDeg++; if (t) t.localDeg++;
+    // A link whose ends live in different stores is a real span between short and long term — the `binary`
+    // shape builds its bridge out of exactly these, so the isthmus is data rather than decoration.
+    if (s && t && (s.store === 'sidequest') !== (t.store === 'sidequest')) { s.crossDeg++; t.crossDeg++; }
+  }
   Graph.graphData({ nodes, links });
   engineRunning = true;                    // new data reheats the layout; resume position syncing
   try { Graph.d3Force('charge').strength(chargeFor(nodes.length)); } catch (e) {}   // spread must not grow with density
@@ -1373,6 +1428,19 @@ if (qEl) {
   document.addEventListener('mousedown', (e) => { if (ddEl && qEl.parentElement && !qEl.parentElement.contains(e.target)) ddEl.hidden = true; });
 }
 if (hopsEl) hopsEl.addEventListener('change', () => { if (mode === 'ego' && submitted) focus(submitted); });
+// Shape selector — Lucas picks the arrangement, live, without a reload. Re-seeds every node's home point and
+// reheats, so the cloud visibly reorganises into the new shape over a few seconds.
+const shapeEl = document.getElementById('shape');
+if (shapeEl) {
+  shapeEl.value = SHAPE;
+  shapeEl.addEventListener('change', () => {
+    SHAPE = shapeEl.value;
+    try { localStorage.setItem('kg3d.shape', SHAPE); } catch (e) {}
+    for (const n of objs.values()) n._tp = null;
+    try { Graph.d3ReheatSimulation(); } catch (e) {}
+    _fitOnCool = true;                       // re-frame once the new arrangement settles
+  });
+}
 if (backBtn) backBtn.addEventListener('click', () => { if (qEl) qEl.value = ''; loadOverview(); });
 if (followBtn) {
   const paint = () => { followBtn.classList.toggle('on', follow); followBtn.innerHTML = follow ? 'Following &#9209;' : 'Follow &#9654;'; };
@@ -1388,6 +1456,7 @@ setInterval(loadSelf, 300000);                   // identity moves slowly — re
 // ---- dev handle for CDP verification ----
 window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, tendrilN: () => tendrilSpecs.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z,
   markerN: () => markerIndex.length, repaint: repaintNodeCloud, fit: fitView, rebuildLinks: buildLinkCloud,
+  shape: (s) => { if (s) { SHAPE = s; try { localStorage.setItem('kg3d.shape', s); } catch (e) {} for (const n of objs.values()) n._tp = null; try { Graph.d3ReheatSimulation(); } catch (e) {} } return SHAPE; },
   linkN: () => linkIndex.length,
   zoe: () => ({ ring: zoeSet.size, feeling: zoeFeeling, anchor: !!zoeAnchor, membrane: !!membrane, center: { x: Math.round(_coreCen.x), y: Math.round(_coreCen.y), z: Math.round(_coreCen.z) } }),
   loadSelf,
