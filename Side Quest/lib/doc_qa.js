@@ -23,8 +23,11 @@ const DOC_REF_RE = /\b(meeting notes|the notes|these notes|those notes|the trans
 const EXTRACT_VERB_RE = /\b(pull|extract|list|summari[sz]e|give me|show me|tell me|find|get|grab|identify|highlight|recap|what(?:'s| are| were| is|'re)?|who(?:'s| are| is)?|which|how many|my (?:responsibilities|tasks|action items|to-?dos|assignments|takeaways))\b/i;
 
 // The user PROVIDING the doc ("I pulled the notes INTO the canvas", "here are the notes", "I dropped the
-// file") — the inverse direction. Must NOT be read as an extraction request.
-const PROVIDE_NEG_RE = /\b(?:pulled|put|dropped|added|loaded|uploaded|attached|placed|moved|brought|threw)\b[^.?!]{0,30}\b(?:into|onto|in|on|to|up (?:on|in))\b[^.?!]{0,20}\b(?:the )?(?:canvas|workspace|screen)\b|\b(?:here(?:'s| are| is)|i (?:gave|sent|shared|added|dropped|uploaded|attached|pulled in))\b[^.?!]{0,25}\b(?:notes|doc|document|file|transcript)\b/i;
+// file") — the inverse direction. Must NOT be read as an extraction request. TWO tenses: the past
+// provide above, and the FUTURE promise ("I'll find the notes for you in a minute") — the 2026-07-22
+// live miss: "find" matched the extract verbs, the future-provide wasn't known, and she "pulled up"
+// a random held PDF for a document that did not exist yet. He is the subject; she is the recipient.
+const PROVIDE_NEG_RE = /\b(?:pulled|put|dropped|added|loaded|uploaded|attached|placed|moved|brought|threw)\b[^.?!]{0,30}\b(?:into|onto|in|on|to|up (?:on|in))\b[^.?!]{0,20}\b(?:the )?(?:canvas|workspace|screen)\b|\b(?:here(?:'s| are| is)|i (?:gave|sent|shared|added|dropped|uploaded|attached|pulled in))\b[^.?!]{0,25}\b(?:notes|doc|document|file|transcript)\b|\bi(?:'?ll| will| can| am going to|'?m going to| need to| have to|'?m about to)\s+(?:find|get|grab|send|share|dig up|pull up|locate|look for|upload|drop|attach|forward)\b[^.?!]{0,40}\b(?:notes?|docs?|documents?|files?|transcripts?|pdf|minutes)\b/i;
 
 // Is this a request to EXTRACT FROM / ASK ABOUT a document she already holds?
 function isDocQuery(message) {

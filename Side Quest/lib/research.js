@@ -86,7 +86,25 @@ function facetsSummary(facets = []) {
 // think tank for example" was MISSED (no imperative keyword). Fix: hard-exclude social/gratitude/ack,
 // and broaden the refinement language to catch informative scope statements ("X is a …", "for example",
 // "as well", "counts", "consider").
-const REFINE_RE = /\b(also|as well|in addition|additionally|make sure|focus on|prioriti[sz]e|priority|include|exclude|only|don'?t|do not|instead|actually|i want|i'?d like|i need|should|besides|on top of|skip|ignore|add|plus|but also|prefer|narrow|broaden|limit (?:it )?to|make it|as well as|consider|note that|keep in mind|for example|e\.?g\.?|counts?|is (?:a|an|one)\b|are (?:also|one)\b|too\b)\b/i;
+// Refinement vocabulary, SPLIT by strength (2026-07-22, after the second live mis-capture in one
+// evening: "it ended up ONLY be me Devon and Joshua" — his meeting-attendance story — was captured as
+// Aiken County research guidance because "only" sat in one flat refinement list):
+//   STRONG = unambiguous task directives; they stand alone.
+//   WEAK   = words that also live in ordinary conversation ("only", "too", "is a"); they capture only
+//            when NOT past-tense narrative AND (when the focus goal is known) sharing ≥1 content token
+//            with it — "Rainey Center is a right-of-center THINK TANK" overlaps a think-tank goal;
+//            a story about who showed up to a meeting overlaps a county-government goal in nothing.
+const STRONG_REFINE_RE = /\b(make sure|focus on|prioriti[sz]e|priority|include|exclude|instead|skip|ignore|narrow|broaden|expand|stick to|limit (?:it )?to|make it|don'?t|do not|i want|i'?d like|i need|note that|keep in mind|besides|on top of|but also|prefer)\b/i;
+const WEAK_REFINE_RE = /\b(also|as well|in addition|additionally|only|actually|should|add|plus|consider|for example|e\.?g\.?|counts?|is (?:a|an|one)\b|are (?:also|one)\b|too)\b/i;
+// Past-tense narrative about people/events — reporting, not directing.
+const NARRATIVE_RE = /\b(it (?:ended up|turned out|was|went)|ended up|turned out|we (?:had|were|ended)|there (?:was|were)|showed up|couldn'?t make it|got pulled)\b/i;
+const _GOAL_STOP = new Set('the a an of for from and or with this that these those about into onto over under our your their his her its on in to at by as is are was be been do does did not no'.split(/\s+/));
+function _goalOverlap(message, goal) {
+  const tok = (x) => new Set(String(x || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length >= 3 && !_GOAL_STOP.has(w)));
+  const m = tok(message), g = tok(goal);
+  let n = 0; for (const w of m) if (g.has(w)) n++;
+  return n;
+}
 // Social / gratitude / greeting / pure-ack — NEVER a research clarification (optional trailing name).
 const SOCIAL_CLOSER_RE = /^(?:thanks?|thank you|ty|cheers|much appreciated|appreciate it|great|nice|cool|awesome|perfect|ok(?:ay)?|sounds good|got it|gotcha|sure|will do|hi|hey|hello|good (?:morning|night|evening|afternoon)|love you|you'?re the best)\b(?:\s+(?:zoe|so much|a lot|man|dude|babe|then))?[\s!.,]*$/i;
 // HER question was SOCIAL (how was your day / how are you / what have you been up to) — an answer to
@@ -98,11 +116,13 @@ const SOCIAL_QUESTION_RE = /\b(?:how (?:was|is|'s|are) (?:your|the|you)\b|how (?
 // An experiential SELF-REPORT reply ("Pretty ok…", "busy day", "tired") — his state, never task scope.
 // Checked AFTER REFINE_RE, so "good — but only include the federal ones" still captures.
 const SELF_REPORT_RE = /^(?:pretty\b|not (?:bad|great|too bad)|good\b|fine\b|ok(?:ay)?\b|great\b|busy\b|tired\b|exhausted\b|long day|lots of work|rough\b|hectic\b|slow day|same old)/i;
-function isClarification({ message = '', assistantAskedQuestion = false, assistantQuestion = '' } = {}) {
+function isClarification({ message = '', assistantAskedQuestion = false, assistantQuestion = '', focusGoal } = {}) {
   const s = String(message).trim();
   if (s.length < 6) return false;
   if (SOCIAL_CLOSER_RE.test(s)) return false;                 // gratitude/greeting/ack ≠ task guidance
-  if (REFINE_RE.test(s)) return true;                          // explicit refinement language stands alone
+  if (STRONG_REFINE_RE.test(s)) return true;                   // an unambiguous directive stands alone
+  // Weak refinement words capture only outside narrative, and (when the goal is known) on-topic.
+  if (WEAK_REFINE_RE.test(s) && !NARRATIVE_RE.test(s) && (focusGoal === undefined || _goalOverlap(s, focusGoal) >= 1)) return true;
   if (!assistantAskedQuestion) return false;
   // The answer-branch: an answer inherits its KIND from her question.
   if (SOCIAL_QUESTION_RE.test(String(assistantQuestion || ''))) return false;

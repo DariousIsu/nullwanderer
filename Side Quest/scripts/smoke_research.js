@@ -92,6 +92,15 @@ ok(r.isClarification({ message: 'good — but only include the federal ones', as
   'a directive INSIDE small talk still captures (refinement language stands alone)');
 ok(r.isClarification({ message: 'the state ones matter most to me', assistantAskedQuestion: true, assistantQuestion: 'Should I include state-level orgs or stay federal?' }) === true,
   'an answer to her TASK question still captures (the designed case survives)');
+// 2026-07-22 second live mis-capture, same evening: past-tense NARRATIVE with a weak word ("only").
+ok(r.isClarification({ message: 'it ended up only be me Devon and Joshua', focusGoal: 'the governing body of Aiken County, South Carolina' }) === false,
+  'past-tense narrative with a weak word ("it ended up only…") → NOT a clarification (the Devon/Joshua mis-capture)');
+ok(r.isClarification({ message: 'Rainey Center is a right of center think tank for example', focusGoal: 'right of center think tanks and their leadership' }) === true,
+  'a weak-worded scope statement ON TOPIC (goal overlap) still captures');
+ok(r.isClarification({ message: 'Rainey Center is a right of center think tank for example', focusGoal: 'the governing body of Aiken County, South Carolina' }) === false,
+  'the same weak-worded statement OFF topic does not capture (goal overlap gate)');
+ok(r.isClarification({ message: 'only include the federal ones', focusGoal: 'the governing body of Aiken County, South Carolina' }) === true,
+  'a STRONG directive ("include") captures regardless of goal overlap');
 ok(r.buildGuidanceBlock([]) === '', 'no clarifications → empty guidance block');
 const gb = r.buildGuidanceBlock(['include state-level ones', 'skip any already in our CRM']);
 ok(/ADDITIONAL GUIDANCE/i.test(gb) && /include state-level ones/.test(gb) && /skip any already/.test(gb), 'guidance block lists all clarifications');

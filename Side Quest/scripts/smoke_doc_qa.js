@@ -22,6 +22,12 @@ ok(dq.isDocQuery('what did the team decide on the canvas doc?') === true, 'quest
 ok(dq.isDocQuery('I pulled the notes into the canvas for you') === false, 'PROVIDING ("pulled the notes into the canvas") → NOT a doc query');
 ok(dq.isDocQuery('here are the notes from today\'s meeting') === false, '"here are the notes" (providing) → NOT a doc query');
 ok(dq.isDocQuery('I dropped the file on the canvas') === false, '"I dropped the file" (providing) → NOT a doc query');
+// The 2026-07-22 live miss: a FUTURE promise to provide fired the extract path ("find" + "the notes")
+// and she "pulled up" a random held PDF for a document that did not exist yet.
+ok(dq.isDocQuery("yea, Maddy is having some health issues and Bill got pulled into other meetings. And you were out because you were down for repairs. I'll find the notes for you in a minute") === false,
+  '"I\'ll find the notes for you in a minute" (future provide) → NOT a doc query (the reservists-PDF miss)');
+ok(dq.isDocQuery("I'm going to send you the transcript later tonight") === false, '"I\'m going to send you the transcript" → NOT a doc query');
+ok(dq.isDocQuery('can you find my action items in the notes?') === true, '"can YOU find … in the notes" (her doing the finding) STILL a doc query');
 ok(dq.isDocQuery('research the top 5 think tanks for their VPs') === false, 'a real research project → NOT a doc query');
 ok(dq.isDocQuery('how are you today?') === false, 'chit-chat → NOT a doc query');
 ok(dq.isDocQuery('what time is it') === false, 'no doc reference → NOT a doc query');
