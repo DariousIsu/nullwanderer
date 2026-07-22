@@ -205,22 +205,61 @@ function buildBrainLobes(nodes) {
     });
   });
 }
-const CORTEX_R = 0.92, CORTEX_T = 0.085;                  // mantle radius and its thickness, as fractions of R
+// THE ACTUAL FORM. My first pass was a sphere with blobs inside it, which is not what a brain looks like —
+// Lucas sent an anatomy plate to make the point. A cerebrum is an OVOID, longer front-to-back than it is
+// wide, flattened underneath, tapering at the front; it is split into two hemispheres by a deep longitudinal
+// fissure; and the cerebellum sits tucked beneath the back of it. All three of those are silhouette facts,
+// and none of them survive on a sphere.
+//
+// Axes: +X forward (frontal pole), +Y up, ±Z the two hemispheres.
+const CX_LONG = 1.20, CX_TALL = 0.84, CX_WIDE = 0.92;     // cerebrum ellipsoid
+const FISSURE = 0.10;                                     // half-width of the midline gap, as a fraction of R
+const CEREB_N = 0.17;                                     // share of cortex tissue that forms the cerebellum
+// Radius of the cerebral surface along a unit direction — the ellipsoid, then the two asymmetries that
+// actually make a brain profile recognisable: a flattened underside and a narrower frontal pole.
+function cerebrumR(dx, dy, dz) {
+  let r = 1 / Math.sqrt((dx * dx) / (CX_LONG * CX_LONG) + (dy * dy) / (CX_TALL * CX_TALL) + (dz * dz) / (CX_WIDE * CX_WIDE));
+  if (dy < 0) r *= 1 - 0.30 * (-dy);                      // flat base
+  if (dx > 0) r *= 1 - 0.13 * dx;                         // frontal taper
+  if (dx < 0) r *= 1 + 0.06 * (-dx);                      // fuller occipital pole
+  return r;
+}
 function targetBrain(n) {
   const s = nodeSeed(n);
+  const side = (hashSeed(String(n.id) + '#h') < 0.5) ? -1 : 1;   // which hemisphere this node belongs to
   if (n.store === 'sidequest') {
-    // The cortex: a thin shell, gently folded so it reads as tissue rather than a bald sphere. The fold is a
-    // low-frequency ripple on the two angles, which is cheap and looks like gyri at this scale.
-    const u = (s.u * 2 - 1) * 0.985, th = s.ang;
-    const fold = Math.sin(th * 5.0 + u * 7.0) * 0.5 + Math.sin(th * 2.0 - u * 4.0) * 0.5;
-    const r = CLOUD_R * (CORTEX_R + fold * CORTEX_T * 0.55 + (s.rf - 0.75) * CORTEX_T);
-    const perp = r * Math.sqrt(Math.max(0, 1 - u * u));
-    return _tp.set(_midCen.x + r * u, _midCen.y + Math.cos(th) * perp, _midCen.z + Math.sin(th) * perp);
+    // CORTEX — a thin folded mantle over the surface. Sampled by direction rather than by a single radius,
+    // so it takes the brain's shape instead of a ball's. Gyri come from a low-frequency ripple.
+    const isCereb = hashSeed(String(n.id) + '#c') < CEREB_N;
+    const u = (s.u * 2 - 1) * 0.96, th = s.ang;
+    let dx = u, dyz = Math.sqrt(Math.max(0, 1 - u * u));
+    let dy = Math.cos(th) * dyz, dz = Math.sin(th) * dyz;
+    dz = Math.abs(dz) * side;                              // mirror into this node's hemisphere
+    if (isCereb) {
+      // CEREBELLUM — its own small, much more finely folded body under the occipital pole.
+      const cx = -0.62, cy = -0.46, cr = 0.30;
+      const fold = Math.sin(th * 13.0 + u * 17.0) * 0.06;
+      const rr = CLOUD_R * cr * (0.72 + 0.30 * s.rf + fold);
+      return _tp.set(_midCen.x + CLOUD_R * cx + rr * dx * 0.85,
+        _midCen.y + CLOUD_R * cy + rr * dy * 0.7,
+        _midCen.z + rr * dz + side * CLOUD_R * 0.07);
+    }
+    // push off the midline so the longitudinal fissure stays open
+    if (Math.abs(dz) < FISSURE) dz = side * FISSURE;
+    const nrm = Math.hypot(dx, dy, dz) || 1; dx /= nrm; dy /= nrm; dz /= nrm;
+    const fold = Math.sin(th * 6.0 + u * 8.0) * 0.5 + Math.sin(th * 3.0 - u * 5.0) * 0.5;
+    const r = CLOUD_R * cerebrumR(dx, dy, dz) * (0.93 + fold * 0.035 + (s.rf - 0.75) * 0.05);
+    return _tp.set(_midCen.x + r * dx, _midCen.y + r * dy, _midCen.z + r * dz);
   }
+  // INTERIOR — the type lobes, mirrored into both hemispheres so the brain is symmetric, and kept clear of
+  // both the fissure and the mantle.
   const lobe = brainLobes.get(n.entityType || 'unknown');
   if (!lobe) return targetCorona(n);
   const u = (s.u * 2 - 1) * 0.98, perp = lobe.r * s.rf * Math.sqrt(Math.max(0, 1 - u * u));
-  return _tp.set(_midCen.x + lobe.x + lobe.r * s.rf * u, _midCen.y + lobe.y + Math.cos(s.ang) * perp, _midCen.z + lobe.z + Math.sin(s.ang) * perp);
+  const zc = (Math.abs(lobe.z) + CLOUD_R * (FISSURE + 0.06)) * side;
+  return _tp.set(_midCen.x + lobe.x * CX_LONG + lobe.r * s.rf * u,
+    _midCen.y + lobe.y * CX_TALL + Math.cos(s.ang) * perp * 0.85,
+    _midCen.z + zc + Math.sin(s.ang) * perp * 0.6);
 }
 function targetPoint(n) {
   if (!n._tp) {
@@ -730,14 +769,32 @@ function buildDust(ns) {
   const N = ns.length * per;
   const pos = new Float32Array(N * 3), col = new Float32Array(N * 3), size = new Float32Array(N), alpha = new Float32Array(N);
   const c = new THREE.Color(); let i = 0;
+  // A cortex is a SURFACE, and 480 short-term nodes spread over a whole brain cannot draw one — the mantle
+  // came out as a blob for want of points, not for want of shape. So in `brain` the cortex gets extra dust,
+  // scattered TANGENTIALLY (spread across the surface, held tight in the radial direction) so it thickens the
+  // sheet instead of blurring it inward. Dust is already declared non-semantic filler, so this adds tissue
+  // without inventing a single object she doesn't hold.
+  const brainCortex = SHAPE === 'brain';
   for (const n of ns) {
     if (!Number.isFinite(n.x) || n.zoe) continue;
-    c.set(nodeColor(n)); const sp = CLOUD_R * 0.085;
-    for (let d = 0; d < per; d++) {
+    c.set(nodeColor(n));
+    const cortex = brainCortex && n.store === 'sidequest';
+    const reps = cortex ? per * 3 : per;
+    const rad = Math.hypot(n.x - _midCen.x, n.y - _midCen.y, (n.z || 0) - _midCen.z) || 1;
+    const ux = (n.x - _midCen.x) / rad, uy = (n.y - _midCen.y) / rad, uz = ((n.z || 0) - _midCen.z) / rad;
+    for (let d = 0; d < reps; d++) {
+      if (i >= DUST_CAP) break;
       const h1 = hashSeed(n.id + '#d' + d), h2 = hashSeed(n.id + '#e' + d), h3 = hashSeed(n.id + '#f' + d);
-      pos[i * 3] = n.x + (h1 - 0.5) * 2 * sp; pos[i * 3 + 1] = n.y + (h2 - 0.5) * 2 * sp; pos[i * 3 + 2] = (n.z || 0) + (h3 - 0.5) * 2 * sp;
-      col[i * 3] = c.r * 0.55; col[i * 3 + 1] = c.g * 0.55; col[i * 3 + 2] = c.b * 0.55;   // pushed toward the background
-      size[i] = 1.8 + h1 * 2.0; alpha[i] = 0.30 + h2 * 0.45;
+      let ox = (h1 - 0.5) * 2, oy = (h2 - 0.5) * 2, oz = (h3 - 0.5) * 2;
+      if (cortex) {
+        const dot = ox * ux + oy * uy + oz * uz;            // strip the radial component → tangential scatter
+        ox -= dot * ux * 0.82; oy -= dot * uy * 0.82; oz -= dot * uz * 0.82;
+      }
+      const sp = CLOUD_R * (cortex ? 0.055 : 0.085);
+      pos[i * 3] = n.x + ox * sp; pos[i * 3 + 1] = n.y + oy * sp; pos[i * 3 + 2] = (n.z || 0) + oz * sp;
+      const dim = cortex ? 0.70 : 0.55;
+      col[i * 3] = c.r * dim; col[i * 3 + 1] = c.g * dim; col[i * 3 + 2] = c.b * dim;
+      size[i] = (cortex ? 1.5 : 1.8) + h1 * 2.0; alpha[i] = (cortex ? 0.38 : 0.30) + h2 * 0.45;
       i++;
     }
   }
