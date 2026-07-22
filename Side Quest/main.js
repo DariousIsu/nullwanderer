@@ -4692,6 +4692,75 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   }
 
+  // === PACKAGE VERB (doc-shapes wiring — Lucas's command, never hers) ===
+  // "package that (as a policy brief)" → the finished markdown (a canvas DOC tab or the last research
+  // dossier) is mapped into one of the four shapes (content preserved, never rewritten) and rendered
+  // through the ONE brand → data/packaged/<date>-<slug>.html (+PDF) + a pointer block on the source
+  // tab. Per Lucas 2026-07-22: cited research papers/briefs get a bounded source-reachability check
+  // first; op-eds and reports package immediately. Deterministic ACK now; completion arrives through
+  // the research-announce door. Detection is imperative-only ("how should we package…" answers normally).
+  {
+    const pkgLib = require('./lib/packaging');
+    const pkgCmd = pkgLib.detectCommand(userMessage);
+    if (pkgCmd) {
+      const target = pkgLib.resolveTarget({ message: userMessage });
+      let say;
+      if (!target) {
+        say = `I don't have a finished document to package yet — no canvas doc or research dossier with real content. Point me at one (or have me build it first) and I'll apply the house style.`;
+        const saidRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: say, model: 'package-verb' });
+        try { for (const ch of say) emit(ch); sendComplete({ saidId: saidRow.id, truncated: 0, packageVerb: true }); } catch {}
+        return { ok: true, say };
+      }
+      const type = pkgLib.inferType(target.markdown, pkgCmd.type);
+      const shapeLabel = (() => { try { return require('./studio/doc_shapes').shapeFor(type).label; } catch { return type; } })();
+      const cites = pkgLib.extractCitations(target.markdown);
+      const willVerify = (type === 'research_paper' || type === 'policy_brief') && cites.length > 0;
+      say = `On it — packaging "${String(target.title).slice(0, 80)}" as a ${shapeLabel}.`
+        + (willVerify ? ` It carries ${cites.length} cited link${cites.length === 1 ? '' : 's'}, so I'll run the source check first.` : '')
+        + ` The branded file lands in data/packaged/ in a moment.`;
+      const ackRow = db.insertTurn({ sessionId, speaker: 'ai_said', content: say, model: 'package-verb' });
+      try { for (const ch of say) emit(ch); sendComplete({ saidId: ackRow.id, truncated: 0, packageVerb: true }); } catch {}
+      // The work, async — completion through the announce door (same as research completions).
+      (async () => {
+        let done = `I couldn't finish packaging "${String(target.title).slice(0, 80)}" — the render failed. The markdown is untouched; say the word to retry.`;
+        try {
+          const verify = willVerify ? await pkgLib.verifySources(cites) : { note: '', checked: 0, ok: 0 };
+          const title = pkgLib.titleFrom(target.markdown, target.title);
+          const sections = await pkgLib.sectionize({ type, markdown: target.markdown, title });
+          const html = pkgLib.renderPackaged({ type, title, sections, verifyNote: verify.note });
+          const fsLocal = require('fs');
+          const outDir = path.join(__dirname, 'data', 'packaged');
+          try { fsLocal.mkdirSync(outDir, { recursive: true }); } catch {}
+          const base = pkgLib.fileSlug(title);
+          const htmlPath = path.join(outDir, `${base}.html`);
+          fsLocal.writeFileSync(htmlPath, html, 'utf8');
+          let finalPath = htmlPath;
+          try { const pdfPath = path.join(outDir, `${base}.pdf`); await htmlToPdfFile(html, pdfPath); finalPath = pdfPath; } catch (e) { console.error('[package] PDF render failed, keeping HTML:', e.message); }
+          const missing = (() => { try { return require('./studio/doc_shapes').missingSections(type, sections).map((s) => s.title); } catch { return []; } })();
+          // Canvas pointer on the SOURCE tab (his chosen landing: file + canvas pointer).
+          if (target.source === 'canvas' && target.tabKey) {
+            try { require('./lib/canvas_docs').recordBlock({ tabKey: target.tabKey, blockId: `pkg-${Date.now().toString(36)}`, blockType: 'paragraph', data: { markdown: `📦 **Packaged** as ${shapeLabel} → \`${path.relative(__dirname, finalPath)}\`${verify.note ? ` — ${verify.note}` : ''}` } }); } catch (e) { console.error('[package] canvas pointer failed:', e.message); }
+          }
+          try { require('./lib/presence').notify('Zoe — document packaged', `${shapeLabel}: ${title.slice(0, 60)} → ${path.basename(finalPath)}`); } catch {}
+          try { await shell.openPath(finalPath); } catch {}
+          done = `Packaged "${title.slice(0, 80)}" as a ${shapeLabel} → ${path.relative(__dirname, finalPath)}.`
+            + (verify.checked ? ` ${verify.note}` : '')
+            + (missing.length ? ` Honest gap: ${missing.length} required section${missing.length === 1 ? ' is' : 's are'} not written yet (${missing.join(', ')}) — the document says so rather than hiding it. Want me to fill ${missing.length === 1 ? 'it' : 'them'} in first?` : ` All required sections are present.`);
+          console.log(`[package] ${type} → ${finalPath}${verify.checked ? ` (sources ${verify.ok}/${verify.checked})` : ''}${missing.length ? ` (missing: ${missing.join(', ')})` : ''}`);
+        } catch (e) { console.error('[package] failed:', e.message); }
+        try {
+          const sid = currentSessionId;
+          if (sid) {
+            const row = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: done, model: 'package-verb', unprompted: 1 });
+            try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+            try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: done }); } catch {}
+          }
+        } catch (e) { console.error('[package] completion announce failed:', e.message); }
+      })().catch((e) => console.error('[package] async run failed:', e.message));
+      return { ok: true, say };
+    }
+  }
+
   // === SWARM-ON-COMMAND VERB (research-allocation S5) ===
   // Deterministic operator commands, handled BEFORE the LLM turn so they work even with the model/cloud down:
   //   "swarm on <X>"        → surge background workers onto one roster (parallel target partitions)

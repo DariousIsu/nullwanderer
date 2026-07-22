@@ -246,6 +246,7 @@ const smokes = [
   'smoke_tag_contract.js',
   'smoke_operator.js',
   'smoke_autonomy.js',
+  'smoke_packaging.js',
   'smoke_ner.js',
   'smoke_mention.js',
   'smoke_cognition.js',

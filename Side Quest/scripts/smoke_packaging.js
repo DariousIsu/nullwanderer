@@ -1,0 +1,77 @@
+/* Smoke: the "package that" command (lib/packaging + studio/doc_shapes render).
+ * Deterministic: injected canvas/meta/readFile/fetch/ask. No model/network/db.
+ *   ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_packaging.js
+ */
+'use strict';
+const pkg = require('../lib/packaging');
+
+let pass = 0, fail = 0;
+const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++; console.log('  ✗', t); } };
+
+(async () => {
+  // --- detection: imperative fires, interrogative does not (detectors-vs-comprehension) ---
+  ok(pkg.detectCommand('package that as a policy brief').type === 'policy_brief', '"package that as a policy brief" → policy_brief');
+  ok(pkg.detectCommand('can you package the dossier as an op-ed').type === 'op_ed', 'polite imperative + op-ed shape');
+  ok(pkg.detectCommand('apply the house style to this').type === null, '"apply the house style" fires with no shape (inferred later)');
+  ok(pkg.detectCommand('package it as a research paper').type === 'research_paper', 'research paper shape word');
+  ok(pkg.detectCommand('how should we package this?') === null, 'a QUESTION about packaging does not fire');
+  ok(pkg.detectCommand("don't package that yet") === null, 'a negation does not fire');
+  ok(pkg.detectCommand('the package arrived from Amazon yesterday and the driver left it by the door, which reminded me of the delivery saga') === null, 'ordinary "package" noun talk does not fire (no doc object → guard)');
+
+  // --- target resolution: title match beats recency; empty tabs are not packageable ---
+  const canvasAll = () => ([
+    { tabKey: 'a', mode: 'DOC', title: 'China AI Announcements', openedAt: 100, blocks: [{ blockType: 'paragraph', data: { markdown: '# China AI Announcements\n\n' + 'substance '.repeat(60) } }] },
+    { tabKey: 'b', mode: 'DOC', title: 'Bloomberg Government Brief', openedAt: 200, blocks: [{ blockType: 'paragraph', data: { markdown: '# Bloomberg Government AI Team\n\n' + 'newer substance '.repeat(60) } }] },
+    { tabKey: 'c', mode: 'DOC', title: 'Empty Tab', openedAt: 300, blocks: [] },
+  ]);
+  const getMeta = (k) => (k === 'research.last_dossier' ? JSON.stringify({ path: 'notes/directed-9-dossier.md', goal: 'right-of-center think tanks' }) : null);
+  const readFile = () => '# Think Tanks Dossier\n\n' + 'dossier body '.repeat(80);
+  const t1 = pkg.resolveTarget({ message: 'package the china announcements doc', deps: { canvasAll, getMeta, readFile } });
+  ok(t1 && t1.tabKey === 'a', 'title words in the command pick the NAMED tab over a newer one');
+  const t2 = pkg.resolveTarget({ message: 'package that as a brief', deps: { canvasAll, getMeta, readFile } });
+  ok(t2 && t2.tabKey === 'b', 'no name → most recent contentful canvas doc wins (empty tab skipped)');
+  const t3 = pkg.resolveTarget({ message: 'package the think tanks dossier', deps: { canvasAll, getMeta, readFile } });
+  ok(t3 && t3.source === 'dossier', 'dossier goal words pick the dossier');
+  ok(pkg.resolveTarget({ message: 'package it', deps: { canvasAll: () => [], getMeta: () => null } }) === null, 'nothing packageable → null (honest refusal upstream)');
+
+  // --- shape inference from content ---
+  ok(pkg.inferType('# T\n\n## Abstract\n…\n## Methodology\n…') === 'research_paper', 'abstract+methodology → research_paper');
+  ok(pkg.inferType('# T\n\n## Executive Summary\n…\n## Recommendations\n…') === 'policy_brief', 'exec summary → policy_brief');
+  ok(pkg.inferType('plain findings text') === 'report', 'no signals → report');
+  ok(pkg.inferType('anything', 'op_ed') === 'op_ed', 'an explicit command shape always wins');
+
+  // --- citations + bounded source check ---
+  const md = 'See [A](https://example.org/a) and https://example.com/b, plus https://example.com/b again.';
+  const urls = pkg.extractCitations(md);
+  ok(urls.length === 2, 'citations dedupe');
+  const fetchFn = async (u) => ({ status: /example\.org/.test(u) ? 200 : 404 });
+  const v = await pkg.verifySources(urls, { fetchFn, now: 1753200000000 });
+  ok(v.checked === 2 && v.ok === 1, 'source check counts reachable honestly');
+  ok(/1 of 2 cited links reachable/.test(v.note) && /1 did not respond/.test(v.note), 'footer note states the misses, never hides them');
+  ok((await pkg.verifySources([], {})).note === '', 'no citations → no note (op-ed/report path)');
+
+  // --- sectionize: validator preserves content; fallback is honest ---
+  const src = '# Title\n\n' + 'para one. '.repeat(30) + '\n\n' + 'para two. '.repeat(30);
+  const val = pkg.validateSectionize('policy_brief', src);
+  const goodJson = JSON.stringify({ executive_summary: 'para one. '.repeat(30), analysis: 'para two. '.repeat(30) });
+  ok(val(goodJson).valid, 'a full reorganization validates');
+  ok(!val(JSON.stringify({ executive_summary: 'tiny.' })).valid, 'a lossy "reorganization" (content dropped) is REJECTED');
+  ok(!val(JSON.stringify({ not_a_section: 'x '.repeat(200) })).valid, 'unknown-only keys are rejected');
+  const fb = pkg.fallbackSections('policy_brief', src);
+  ok(fb.analysis && fb.analysis.includes('para two.'), 'fallback carries the WHOLE document into the main section');
+  const s1 = await pkg.sectionize({ type: 'op_ed', markdown: src, deps: { ask: async () => null } });
+  ok(s1.body && s1.body.includes('para one.'), 'cloud down → deterministic fallback, content intact');
+
+  // --- render: brand + honest gaps + verify footer ---
+  const html = pkg.renderPackaged({ type: 'policy_brief', title: 'Parish Coverage', sections: fb, verifyNote: v.note, now: 1753200000000 });
+  ok(/Policy Brief/.test(html) && /Parish Coverage/.test(html), 'branded render carries shape label + title');
+  ok(/Incomplete\./.test(html) && /Executive Summary/.test(html), 'missing required sections are DECLARED in the document');
+  ok(/1 of 2 cited links reachable/.test(html), 'source-check note rides in the rendered artifact');
+  ok(/Joseph Rainey Center/.test(html), 'the one hardcoded brand is present');
+
+  // --- filenames ---
+  ok(/^\d{4}-\d{2}-\d{2}-parish-coverage$/.test(pkg.fileSlug('Parish Coverage', 1753200000000)), 'file slug is dated + slugged');
+
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
+  process.exit(fail === 0 ? 0 : 1);
+})();
