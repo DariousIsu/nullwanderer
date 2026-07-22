@@ -197,10 +197,10 @@ The contract (full doc in the module header):
 ## 8. (2026-07-22) Two one-liners in YOUR files — flagged, not fixed (both in-flight in your tree today)
 
 Lucas's directive: everything on Eastern days, no arbitrary caps on cloud calls. I moved every CLEAN
-file (list below); these two sit in files you have uncommitted changes in, so they're yours:
+file (list below). One item left, in a file you still have uncommitted changes in:
 
-1. **`cloud_logic.js:197`** `_todayKey` is UTC → your daily budget resets at 8pm Eastern.
-   `require('./tz').dayKey(now)` is the drop-in (same trap as the meeting day-key bug).
+1. ~~`cloud_logic.js:197` `_todayKey` UTC~~ — **taken by me after your commit landed and the file
+   went clean** (one line, suite green before and after). Only this one remains:
 2. **`main.js` ~9284** `cap: { entities: 40, relations: 40 }` — the parser now yields up to 120+120
    per 100k chunk. My side no longer *loses* the overflow (doc_decompose now HOLDS it for the upgrade
    pass instead of silently discarding — that `continue`/`break` was dropping entity 41+ with no

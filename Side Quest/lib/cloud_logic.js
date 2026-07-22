@@ -194,7 +194,7 @@ function _runValidate(validate, raw) {
 }
 
 // ---- budget (daily call cap, resets on date change) ----
-function _todayKey(now) { return new Date(now).toISOString().slice(0, 10); }
+function _todayKey(now) { return require('./tz').dayKey(now); }   // Eastern day — UTC reset the budget at 8pm
 function _budgetState(now) {
   const day = _todayKey(now);
   const storedDay = db.getMeta('cloud_logic_day');
