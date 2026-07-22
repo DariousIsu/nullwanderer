@@ -8443,7 +8443,7 @@ async function runCloudOperator(opts) {
   return require('./lib/lane').run({ autonomous: !!(opts && opts.autonomous) }, () => _runCloudOperator(opts || {}));
 }
 
-async function _runCloudOperator({ userMessage, context, task = false, autonomous = false, toolNames = null, model = null, toolSpec = null }) {
+async function _runCloudOperator({ userMessage, context, task = false, autonomous = false, maintain = false, toolNames = null, model = null, toolSpec = null }) {
   try {
     const operator = require('./lib/operator');
     // Per-tool timeout: a slow/hung capability (Echo down, a stalled page) can't block the turn —
@@ -8458,7 +8458,7 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
     // The curated read tools above are READ-only and need no flag. Interactive turns (autonomous=false)
     // keep full write/heavy access (Echo applies its own verification + Lucas gate on proposals).
     if (!toolNames || keys.includes('echo')) tools.echo = (a) => TO((async () => {
-      try { if (!echoSuit) return 'Echo is not available right now.'; const r = await echoSuit.routeNeed(String((a && a.need) || ''), { autonomous }); return (r && r.text) || 'no result from Echo'; }
+      try { if (!echoSuit) return 'Echo is not available right now.'; const r = await echoSuit.routeNeed(String((a && a.need) || ''), { autonomous, maintain }); return (r && r.text) || 'no result from Echo'; }
       catch (e) { return 'ERROR: ' + e.message; }
     })());
     // DIRECTED TASK → in-turn completion: more steps + a longer budget + a mandate to deliver the WHOLE
@@ -8764,6 +8764,15 @@ async function autonomyTick() {
       const topics = db.getDb().prepare("SELECT topic FROM interests WHERE status='active' ORDER BY weight DESC LIMIT 8").all().map((r) => r.topic);
       sf.autoFollowFromInterests(topics, { nowMs: now });
     } catch (e) { console.error('[autonomy] story-follow upkeep failed:', e.message); }
+    // Maintenance visibility (2d): cache Echo's pass status ~6h so the manifest can show which
+    // loops have gone stale — a stale loop is a maintain-move candidate.
+    try {
+      let cached = null; try { cached = JSON.parse(db.getMeta('autonomy.pass_status') || 'null'); } catch {}
+      if ((!cached || now - (cached.ts || 0) > 6 * 3600e3) && echoSuit && echoSuit.connected) {
+        const ps = await echoSuit.dispatch({ kind: 'do', name: 'get_pass_status', args: {} });
+        if (ps && ps.ok && !ps.isError && ps.text) db.setMeta('autonomy.pass_status', JSON.stringify({ ts: now, text: String(ps.text).slice(0, 1500) }));
+      }
+    } catch (e) { console.error('[autonomy] pass-status refresh failed:', e.message); }
     const manifest = autonomy.buildManifest({ db, now });
     if (!manifest.text) { console.log('[autonomy] empty manifest — nothing to choose from'); return; }
     const decision = await autonomy.decide({ manifestText: manifest.text, history: autonomy.historyRead(H.getMeta), now });
@@ -8821,8 +8830,24 @@ async function autonomyTick() {
     // Register on the workstream board (conductor 2a) — the run is visible to chat's "what are you
     // doing?", to the next tick's manifest, and (2b) to slot allocation. Board failure never blocks work.
     let boardId = null;
-    try { boardId = require('./lib/board').start({ lane: 'autonomy', kind: decision.move, target: decision.target, note: _autonomySlot ? `on ${_autonomySlot}` : null }).id; } catch {}
-    const res = await runCloudOperator({ userMessage: brief, context: manifest.text, task: decision.move === 'build', autonomous: true });
+    try {
+      const board = require('./lib/board');
+      // A maintain run takes the store's maintenance lock AS its registration (one decision, 2a):
+      // ≤1 maintenance pass per store, enforced here, not by prompt. Board failure → run unlocked
+      // (fail-open: Echo's own proposal queues are signature-deduped, so overlap degrades, not corrupts).
+      const reg = board.start({
+        lane: 'autonomy', kind: decision.move, target: decision.target,
+        note: _autonomySlot ? `on ${_autonomySlot}` : null,
+        resource: decision.move === 'maintain' ? board.dbMaintenance('echo') : null,
+      });
+      if (decision.move === 'maintain' && reg.blocked) {
+        autonomy.historyPush(H, { ts: now, move: 'maintain', target: decision.target, outcome: 'skipped (a maintenance pass already holds the store)' });
+        console.log('[autonomy] chose=maintain → skipped (db_maintenance:echo held)');
+        return;
+      }
+      boardId = reg.id;
+    } catch {}
+    const res = await runCloudOperator({ userMessage: brief, context: manifest.text, task: decision.move === 'build' || decision.move === 'maintain', autonomous: true, maintain: decision.move === 'maintain' });
     try { require('./lib/board').beat(boardId); } catch {}
     // S3 VERIFY — the run is judged against the plan's own `expect` before it is recorded. An
     // unmet expectation is written into history, where the next decision reads it as "this

@@ -441,7 +441,7 @@ class EchoSuit {
       else if (tag.kind === 'delegate') toolName = 'spawn_agent_async';
       // find / guide / recipe = navigation / read / curated procedure → not gated here.
       if (toolName) {
-        const pol = tier.policyFor(toolName, { autonomous: !!opts.autonomous });
+        const pol = tier.policyFor(toolName, { autonomous: !!opts.autonomous, maintain: !!opts.maintain });
         if (!pol.allow) {
           console.log(`[echo] tier-gate BLOCKED ${toolName} (${pol.tier}, autonomous=${!!opts.autonomous})`);
           return { ok: false, kind: tag.kind, isError: true, blocked: true, tier: pol.tier, text: `Echo tool "${toolName}" is a ${pol.tier} action — ${pol.reason}. ${opts.autonomous ? 'On the autonomous loop you may READ from Echo but not write to it or spawn agents — surface this to Lucas instead of doing it unattended.' : 'This one stays off by design.'}` };
@@ -470,7 +470,7 @@ class EchoSuit {
         // echo-do JSON. Falls back to returning the catalog LIST (below) if cloud is unavailable.
         if (echoCloudRouteEnabled()) {
           try {
-            const routed = await this.routeNeed(tag.query, { autonomous: !!opts.autonomous });
+            const routed = await this.routeNeed(tag.query, { autonomous: !!opts.autonomous, maintain: !!opts.maintain });
             if (routed && routed.routed) { if (routed.chose) console.log(`[echo] cloud-routed "${tag.query}" → ${routed.chose}`); return routed; }
           } catch (e) { console.error('[echo] cloud route failed, falling back to catalog list:', e.message); }
         }
@@ -486,7 +486,11 @@ class EchoSuit {
       if (tag.kind === 'do') {
         const shape = this.argShape(tag.name);
         if (tag.parseError) return { ok: false, kind: 'do', isError: true, text: `Your <echo-do name="${tag.name}"> args weren't valid JSON (${tag.parseError}). Re-emit with valid JSON args.${shape ? ` ${shape}` : ''}` };
-        const r = normalizeToolResult(await c.callTool(tag.name, tag.args || {}));
+        // MAINTENANCE FORCED ARGS (2d): on a maintain run, an allowlisted tool's safety args are
+        // merged OVER whatever the model wrote — dry_run/report mode is mechanical, never prompt-hoped.
+        let callArgs = tag.args || {};
+        if (opts.maintain) { try { const f = require('./echo_tier').maintainForcedArgs(tag.name); if (f) callArgs = { ...callArgs, ...f }; } catch {} }
+        const r = normalizeToolResult(await c.callTool(tag.name, callArgs));
         let text = r.text;
         // an argument-level rejection from Echo gets the signature appended too — same disease,
         // valid JSON but the wrong keys ({"name": ...} when db_query needs {"sql": ...})
@@ -532,7 +536,7 @@ class EchoSuit {
   // Echo tool-calling off the conversational front (which shouldn't author echo-do JSON) and onto
   // the cloud. Returns the executed result ({...,routed:true,chose}); fail-safe — any miss/empty
   // returns a plain message the front can voice (never throws). `ask` injectable for tests.
-  async routeNeed(query, { ask = null, autonomous = false } = {}) {
+  async routeNeed(query, { ask = null, autonomous = false, maintain = false } = {}) {
     const cloudAsk = ask || (() => { try { return require('./cloud_logic').ask; } catch { return null; } })();
     if (!cloudAsk) return { ok: false, kind: 'find', isError: true, routed: false, text: 'cloud router unavailable' };
     if (!this.connected) { await this.connect(); if (!this.connected) return { ok: false, kind: 'find', isError: true, routed: true, text: `Echo isn't connected right now (${this.lastError || 'offline'}). Tell Lucas you couldn't reach it.` }; }
@@ -562,7 +566,7 @@ class EchoSuit {
     // then fetch its schema + PASS 2 to write args.
     try {
       const tier = require('./echo_tier');
-      const pol = tier.policyFor(pick.name, { autonomous });
+      const pol = tier.policyFor(pick.name, { autonomous, maintain });
       if (!pol.allow) {
         console.log(`[echo] routeNeed tier-gate BLOCKED ${pick.name} (${pol.tier}, autonomous=${autonomous})`);
         return { ok: false, kind: 'find', isError: true, blocked: true, routed: true, text: `The best Echo match for "${query}" is "${pick.name}", a ${pol.tier} action — ${pol.reason}. ${autonomous ? 'On the autonomous loop you may READ from Echo but not write/spawn — note it for Lucas instead of doing it unattended.' : 'That one is off by design.'}` };
@@ -577,7 +581,7 @@ class EchoSuit {
       validate: (raw) => { const m = String(raw || '').match(/\{[\s\S]*\}/); if (!m) return { valid: false, error: 'no json' }; try { return { valid: true, value: JSON.parse(m[0]) }; } catch (e) { return { valid: false, error: e.message }; } }
     });
     let args = (argObj && typeof argObj === 'object') ? argObj : {};
-    let res = await this.dispatch({ kind: 'do', name: pick.name, args }, { autonomous });
+    let res = await this.dispatch({ kind: 'do', name: pick.name, args }, { autonomous, maintain });
     // ARG-VALIDATION RETRY — the cloud often writes args that violate the tool schema (a `query` key on a
     // tool that doesn't take one → pydantic "unexpected keyword argument"; a db_query on a hallucinated
     // table). Feed the error back ONCE and let it correct the args, then re-run — turning a hard miss into a
@@ -590,7 +594,7 @@ class EchoSuit {
           want: `The previous arguments for "${pick.name}" FAILED with the error shown. Output a CORRECTED JSON arguments object matching the schema EXACTLY — use ONLY keys the schema defines, drop any it doesn't, and fix any bad value (e.g. a wrong table/column name). Output ONLY the JSON object.`,
           validate: (raw) => { const m = String(raw || '').match(/\{[\s\S]*\}/); if (!m) return { valid: false, error: 'no json' }; try { return { valid: true, value: JSON.parse(m[0]) }; } catch (e) { return { valid: false, error: e.message }; } }
         });
-        if (fixed && typeof fixed === 'object') { args = fixed; res = await this.dispatch({ kind: 'do', name: pick.name, args }, { autonomous }); }
+        if (fixed && typeof fixed === 'object') { args = fixed; res = await this.dispatch({ kind: 'do', name: pick.name, args }, { autonomous, maintain }); }
       } catch {}
     }
     return { ...res, kind: 'find', routed: true, chose: `tool ${pick.name}` };

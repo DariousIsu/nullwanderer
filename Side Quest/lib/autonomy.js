@@ -28,7 +28,7 @@
  */
 'use strict';
 
-const MOVES = ['research', 'fill-gap', 'corroborate', 'clean', 'build', 'engage', 'nothing'];
+const MOVES = ['research', 'fill-gap', 'corroborate', 'clean', 'build', 'maintain', 'engage', 'nothing'];
 const HISTORY_KEY = 'autonomy.history';
 const HISTORY_MAX = 12;
 
@@ -138,6 +138,16 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
     return `• DEVELOPING STORIES YOU FOLLOW (what moved since you last saw it):\n${lines.join('\n')}`;
   });
 
+  grab('maintenance', () => {
+    // Echo pass status, cached by the driver (meta autonomy.pass_status, ~6h) — a stale loop is a
+    // maintain-move candidate. Facts + age only; the allowlist itself rides the maintain brief.
+    let cached = null;
+    try { cached = JSON.parse(dbm.getMeta('autonomy.pass_status') || 'null'); } catch {}
+    if (!cached || !cached.text) return '';
+    counts.passStatusAgeMs = now - (cached.ts || now);
+    return `• MAINTENANCE & ANALYSIS LOOPS (Echo pass status as of ${_ago(now, cached.ts)}):\n${String(cached.text).replace(/\s+$/g, '').slice(0, 700)}`;
+  });
+
   grab('board', () => {
     // The workstream board (lib/board, conductor 2a) — what is ALREADY running, so the decision never
     // starts a second run of a kind in flight and can see which resources are held.
@@ -185,6 +195,7 @@ The moves:
 - corroborate: take a single-source cluster and find an INDEPENDENT second source for its claims.
 - clean: inspect and report on duplicates/conflicts (writes are gated — your product is a precise report).
 - build: turn material she ALREADY HOLDS into a real markdown document (a brief, a gap report, a synthesis).
+- maintain: run ONE curated maintenance loop on her own stores (the brief names the allowlist — an integrity-audit report, a full-corpus dedup proposal sweep). Products are REPORTS and PROPOSALS; nothing applies unattended. Prefer it when MAINTENANCE & ANALYSIS LOOPS shows a loop gone stale.
 - engage: say something to Lucas NOW — a genuine finding or a direction question. Use RARELY, only when you have something real; "say" must carry the exact message, grounded in the state above, no invented facts.
 - nothing: a first-class answer. If no move is clearly worth its cost, decline honestly.
 
@@ -253,6 +264,11 @@ function buildOperatorBrief(decision, { now = Date.now() } = {}) {
     case 'build': {
       const path = `notes/autonomy/${new Date(now).toISOString().slice(0, 10)}-${slugify(d.target)}.md`;
       return `AUTONOMOUS BUILD — produce a real document about: ${d.target}. ${d.why}${steps}${expect}\nGather the material (our own records FIRST — this is a synthesis of what we hold, filled in from the web only where our records are thin), then SAVE the finished markdown with the file tool: {"op":"write","path":"${path}","content":"<the full document>"}. Plain markdown — headings, paragraphs, lists — no styling. End your answer with one line naming the saved path and what it contains. ${_HONESTY}`;
+    }
+    case 'maintain': {
+      let allow = '';
+      try { allow = require('./echo_tier').maintainSpec(); } catch {}
+      return `AUTONOMOUS MAINTENANCE — run this curated loop on our own stores: ${d.target}. ${d.why}${steps}${expect}\nThe ONLY loops allowed on this move (each is report-only or proposal-only unattended; safety args are forced mechanically, so run them plainly):\n${allow}\nUse the echo tool to run the loop, READ its result, and finish with a precise report: what it found, the counts (violations / proposals / oversized blocks), and what — if anything — is worth Lucas applying. ${_HONESTY}`;
     }
     default:
       return `AUTONOMOUS PASS — ${d.target || 'the chosen work'}. ${d.why}${steps}${expect}\n${_HONESTY}`;

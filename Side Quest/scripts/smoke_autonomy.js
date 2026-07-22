@@ -77,6 +77,11 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   const bCorr = auto.buildOperatorBrief({ move: 'corroborate', target: 'Acme PAC', why: 'one source', steps: ['find a second source'], expect: 'independent confirmation' });
   ok(/INDEPENDENT second source/.test(bCorr) && /1\. find a second source/.test(bCorr), 'corroborate brief demands independence + carries steps');
   ok(/writes are gated/i.test(auto.buildOperatorBrief({ move: 'clean', target: 'x', why: 'w' })), 'clean brief states the write gate honestly');
+  // maintain (conductor 2d): a first-class move whose brief names the curated allowlist
+  ok(auto.MOVES.includes('maintain') && auto.validateDecision('{"move":"maintain","target":"integrity audit — civic graph","why":"loop is stale"}').valid, 'maintain is a first-class, validatable move');
+  const bMaint = auto.buildOperatorBrief({ move: 'maintain', target: 'integrity audit — civic graph', why: 'stale', steps: [], expect: 'a violation report with counts' });
+  ok(/AUTONOMOUS MAINTENANCE/.test(bMaint) && /run_integrity_audit/.test(bMaint) && /run_blocking_dedup/.test(bMaint), 'maintain brief names the allowlisted loops');
+  ok(/report-only or proposal-only/i.test(bMaint) && /worth Lucas applying/i.test(bMaint), 'maintain brief states the unattended contract + the report product');
 
   // --- outcome: record what HAPPENED ---
   const opRes = { answer: 'Saved the report.', steps: [

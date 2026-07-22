@@ -106,14 +106,44 @@ function classifyTool(name) {
 // allowed unattended; direct WRITE / HEAVY / LOCKED are not.
 function allowedOnAuto(name) { const t = classifyTool(name); return t === 'read' || t === 'propose'; }
 
+// --- the curated MAINTENANCE allowlist (conductor slice 2d) ------------------------------------
+// The autonomous gate correctly blocks write/heavy — which also meant her own Python maintenance
+// loops were unreachable from the decision layer (why they sat underused). This is the deliberate
+// carve-out: NAMED tools only, each verified against its live schema, each entry stating WHY it is
+// safe unattended — and `force` args are merged MECHANICALLY at dispatch (lib/echo_suit), so
+// model-written args can never disarm the safety. Expansion is tool-by-tool with the same
+// verification, never by pattern — a family/verb heuristic is exactly how a mutating call slips in.
+const MAINTAIN_TOOLS = [
+  {
+    tool: 'run_integrity_audit',
+    desc: 'structural integrity audit of the civic graph (self-loops, dangling edges, contradiction merges) — REPORT ONLY on the auto loop',
+    why: 'dry_run=true forced: scans + reports, writes nothing (its live mode is reversible + backup-first, but unattended we take the report)',
+    force: { dry_run: true },
+  },
+  {
+    tool: 'run_blocking_dedup',
+    desc: 'full-corpus semantic dedup sweep — lands merge PROPOSALS in the gated queue, never applies them',
+    why: 'proposal-only by construction: apply stays a gated operator step (list/decide_resolution_proposal)',
+    force: {},
+  },
+];
+const MAINTAIN_NAMES = new Set(MAINTAIN_TOOLS.map((t) => t.tool));
+function maintainForcedArgs(name) { const t = MAINTAIN_TOOLS.find((x) => x.tool === String(name || '')); return t ? { ...t.force } : null; }
+function maintainSpec() { return MAINTAIN_TOOLS.map((t) => `- ${t.tool}: ${t.desc}`).join('\n'); }
+
 // The policy for one tool call. autonomous=true → the unattended research loop (read only).
 // autonomous=false → an interactive turn with Lucas present (read+write+heavy; locked still never).
-function policyFor(name, { autonomous = false } = {}) {
+// maintain=true (only meaningful with autonomous) → the curated maintenance allowlist above is
+// additionally admitted — its members run with forced-safe args.
+function policyFor(name, { autonomous = false, maintain = false } = {}) {
   const tier = classifyTool(name);
   if (tier === 'locked') return { allow: false, tier, reason: 'hard-locked (email-send / image-gen are off by design)' };
   if (autonomous) {
     if (tier === 'read') return { allow: true, tier, reason: 'read tool — allowed on the autonomous loop' };
     if (tier === 'propose') return { allow: true, tier, reason: 'propose tool — allowed on the autonomous loop (non-committing; Echo gates promotion)' };
+    if (maintain && MAINTAIN_NAMES.has(String(name || '').trim())) {
+      return { allow: true, tier, reason: 'curated maintenance allowlist — forced-safe args (report/proposal only)' };
+    }
     return { allow: false, tier, reason: `${tier} tool — blocked on the autonomous loop (needs Lucas present)` };
   }
   return { allow: true, tier, reason: 'interactive turn' };   // Lucas present: read+write+heavy ok
@@ -231,5 +261,6 @@ function readToolByOp(op) { return ALL_CURATED.find(t => t.op === String(op || '
 module.exports = {
   classifyTool, allowedOnAuto, policyFor, operatorReadSpec, readToolByOp,
   READ_TOOLS, WEB_TOOLS, ALL_CURATED, laneOf, laneToolNames, laneSpec,
+  MAINTAIN_TOOLS, maintainForcedArgs, maintainSpec,
   LOCKED_RE, HEAVY_RE, WRITE_RE, READ_RE, WEB_LANE_RE
 };

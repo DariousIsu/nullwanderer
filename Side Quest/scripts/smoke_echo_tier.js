@@ -74,12 +74,14 @@ ok(/web_fetch/.test(tier.operatorReadSpec()), 'single-lane operator menu now als
 
 // --- the GATE in echo_suit.dispatch, with a mock connected suit ---
 const calls = [];
+const argsSeen = {};
 const mkResult = (txt) => ({ content: [{ text: txt }] });
 const mockClient = {
   initialize: async () => ({ serverInfo: { name: 'mock' } }),
   listTools: async () => [{ name: 'x' }],
   callTool: async (name, args) => {
     calls.push(name);
+    argsSeen[name] = args;
     if (name === 'get_tool_map') return mkResult(JSON.stringify({ by_intent: { ingest: [{ name: 'ingest_file', description: 'ingest a file' }], search: [{ name: 'search_entities', description: 'search the graph' }] } }));
     if (name === 'list_recipes') return mkResult(JSON.stringify({ recipes: [] }));
     if (name === 'describe_tool') return mkResult(JSON.stringify({ schema: {} }));
@@ -126,6 +128,26 @@ async function run() {
   calls.length = 0;
   r = await suit.routeNeed('ingest this file', { ask: askPick, autonomous: false });
   ok(calls.includes('ingest_file'), 'interactive routeNeed: WRITE tool runs (Lucas present)');
+
+  // --- MAINTAIN (conductor 2d): the curated maintenance allowlist ---
+  ok(tier.policyFor('run_integrity_audit', { autonomous: true }).allow === false, 'auto WITHOUT maintain: an allowlisted loop stays blocked');
+  ok(tier.policyFor('run_integrity_audit', { autonomous: true, maintain: true }).allow === true, 'auto + maintain: run_integrity_audit admitted');
+  ok(tier.policyFor('run_blocking_dedup', { autonomous: true, maintain: true }).allow === true, 'auto + maintain: run_blocking_dedup admitted');
+  ok(tier.policyFor('ingest_file', { autonomous: true, maintain: true }).allow === false, 'maintain admits ONLY the named allowlist — write stays blocked');
+  ok(tier.policyFor('run_pass', { autonomous: true, maintain: true }).allow === false, 'run_pass (the generic heavy runner) is NOT on the allowlist');
+  ok(tier.policyFor('send_email', { autonomous: true, maintain: true }).allow === false, 'locked stays locked under maintain');
+  ok(tier.maintainForcedArgs('run_integrity_audit').dry_run === true, 'the integrity audit carries forced dry_run');
+  ok(tier.maintainForcedArgs('nope') === null, 'no forced args for a non-listed tool');
+  ok(/run_integrity_audit/.test(tier.maintainSpec()) && /run_blocking_dedup/.test(tier.maintainSpec()), 'maintainSpec names the loops for the brief');
+
+  // dispatch-level: forced args are merged OVER whatever the model wrote — mechanical, not prompt-hoped
+  calls.length = 0;
+  r = await suit.dispatch({ kind: 'do', name: 'run_integrity_audit', args: { dry_run: false, max_iters: 3 } }, { autonomous: true, maintain: true });
+  ok(calls.includes('run_integrity_audit') && argsSeen.run_integrity_audit.dry_run === true && argsSeen.run_integrity_audit.max_iters === 3,
+    'maintain dispatch: model-written dry_run:false is OVERRIDDEN to true; harmless args pass through');
+  calls.length = 0;
+  r = await suit.dispatch({ kind: 'do', name: 'run_integrity_audit', args: {} }, { autonomous: true });
+  ok(r.blocked === true && !calls.includes('run_integrity_audit'), 'the SAME dispatch without the maintain flag stays BLOCKED');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
