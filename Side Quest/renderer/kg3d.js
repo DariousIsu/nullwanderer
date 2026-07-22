@@ -66,7 +66,12 @@ function logActivity(evt) {
 // ---- 3D core force: the short-term store is a dense inner ORB pulled tight to the centre; the long-term
 // corpus is pushed radially OUTWARD toward a shell so it ENVELOPS the core as a diffuse 3D cloud (not a plane
 // behind it). Charge repulsion + links give the cloud its thickness/structure. SHELL is tunable. ----
-const CLOUD_SHELL = 320;
+// SHELL CONTAINMENT. The easing coefficient was 0.35 when the panel drew ~200 nodes. Charge repulsion is a
+// many-body sum that grows with N while this spring does not, so at 1001 nodes it lost: measured live, the
+// corpus settled at median radius 954 against a 320 target and the camera retreated to 4177 to see it, which
+// is how 552 of 1001 nodes ended up SMALLER THAN ONE PIXEL. The structure was never wrong — short-term orb
+// inside, corpus enveloping it — it was just inflated past the point of being visible.
+const CLOUD_SHELL = 420;
 function makeCore3D(strength = 0.05) {
   let ns = [];
   function force(alpha) {
@@ -81,7 +86,7 @@ function makeCore3D(strength = 0.05) {
         n.vy = (n.vy || 0) + (cy - n.y) * strength * 1.6 * alpha;
         n.vz = (n.vz || 0) + (cz - (n.z || 0)) * strength * 1.6 * alpha;
       } else {                                             // outer cloud: ease toward the shell radius, all directions
-        const f = (CLOUD_SHELL - d) * strength * 0.35 * alpha;
+        const f = (CLOUD_SHELL - d) * strength * 1.1 * alpha;
         n.vx = (n.vx || 0) + (dx / d) * f;
         n.vy = (n.vy || 0) + (dy / d) * f;
         n.vz = (n.vz || 0) + (dz / d) * f;
@@ -91,6 +96,9 @@ function makeCore3D(strength = 0.05) {
   force.initialize = (n) => { ns = n; };
   return force;
 }
+// Charge is the other half of the same problem: -40 per node is a sensible spread at 200 nodes and a blast at
+// 1000. Scale it down as the cloud fills so density can rise without the galaxy inflating with it.
+function chargeFor(n) { return -40 / Math.max(1, Math.sqrt(n / 250)); }
 
 // ============================================================================================================
 // EVIDENCE ENCODING — the object model says a thing is real because it has been ENCOUNTERED, and that each
@@ -194,6 +202,28 @@ try { follow = localStorage.getItem('kg3d.follow') === '1'; } catch (e) {}
 function setFollow(on) { follow = !!on; try { localStorage.setItem('kg3d.follow', on ? '1' : '0'); } catch (e) {} return follow; }
 function flyTo(pos, ms) { try { Graph.cameraPosition({ x: pos.x, y: pos.y, z: pos.z + 190 }, pos, ms || 1100); } catch (e) {} }
 
+// OWN FIT, because Graph.zoomToFit() is dead on this surface: it sizes the view from each node's
+// nodeThreeObject, and the lean rebuild made those empty Object3Ds with no geometry to measure. It fails
+// silently — it just leaves the camera wherever it was, which is why the corpus kept being viewed from 4177
+// units away. Same root cause as the missing hover labels: the library can't see nodes it doesn't draw.
+function fitView(ms) {
+  try {
+    const ns = Graph.graphData().nodes;
+    const c = coreCentroid3D();
+    let R = 0;
+    for (const n of ns) if (Number.isFinite(n.x)) R = Math.max(R, Math.hypot(n.x - c.x, n.y - c.y, (n.z || 0) - c.z));
+    if (!R) return;
+    const fov = (Graph.camera().fov || 75) * Math.PI / 180;
+    const D = Math.max(320, (R * 1.12) / Math.sin(fov / 2));      // fit the bounding sphere, with a little air
+    const cam = Graph.cameraPosition();
+    let dx = cam.x - c.x, dy = cam.y - c.y, dz = cam.z - c.z;
+    const L = Math.hypot(dx, dy, dz) || 1;
+    if (L < 1e-3) { dx = 0; dy = 0.35; dz = 1; }                  // keep the operator's current angle, change only range
+    const k = D / (Math.hypot(dx, dy, dz) || 1);
+    Graph.cameraPosition({ x: c.x + dx * k, y: c.y + dy * k, z: c.z + dz * k }, c, ms == null ? 900 : ms);
+  } catch (e) {}
+}
+
 // ============================================================================================================
 // DATA MODEL (Phase 4/5) — one object store keyed by id (positions persist across walks + mode switches), an
 // overview set, a persistent ego WORLD (accumulates walked neighbourhoods, LRU-capped), and the short-term
@@ -247,6 +277,7 @@ function render() {
   for (const l of linkSrc) if (keep.has(l.source) && keep.has(l.target)) links.push({ source: l.source, target: l.target, category: l.category, color: l.color, relType: l.relType });
   for (const m of shortTerm.links.values()) if (keep.has(m.s) && keep.has(m.t)) links.push({ source: m.s, target: m.t, category: m.category, relType: m.relType });
   Graph.graphData({ nodes, links });
+  try { Graph.d3Force('charge').strength(chargeFor(nodes.length)); } catch (e) {}   // spread must not grow with density
   try { buildNodeCloud(); } catch (e) {}   // rebuild the instanced Points cloud for the new node set
   try { buildTendrils(); } catch (e) {}    // refresh hidden-connection tendrils (throttled)
 }
@@ -264,7 +295,10 @@ async function loadOverview() {
   await pollShortTerm(true);                     // fold in the short-term core (render below paints both)
   setOverlay((full.size || shortTerm.nodes.size) ? null : 'No graph data (Echo engine not connected?)');
   render();
-  try { Graph.zoomToFit(600, 60); } catch (e) {}
+  // Fit once now and again once the sim has actually settled — at load the nodes are still flying outward,
+  // so a single early fit frames a cloud that no longer exists a few seconds later.
+  fitView(0);
+  setTimeout(() => { if (mode === 'overview') fitView(1200); }, 4500);
 }
 
 function mergeEgo(res) {
@@ -342,7 +376,7 @@ const NODE_TEX = (function () {
 })();
 const nodeMat = new THREE.ShaderMaterial({
   uniforms: { map: { value: NODE_TEX }, uOpacity: { value: 0.96 } },
-  vertexShader: 'attribute float size; attribute vec3 aColor; attribute float aAlpha; varying vec3 vColor; varying float vAlpha; void main(){ vColor=aColor; vAlpha=aAlpha; vec4 mv=modelViewMatrix*vec4(position,1.0); gl_PointSize=size*(330.0/max(1.0,-mv.z)); gl_Position=projectionMatrix*mv; }',
+  vertexShader: 'attribute float size; attribute vec3 aColor; attribute float aAlpha; varying vec3 vColor; varying float vAlpha; void main(){ vColor=aColor; vAlpha=aAlpha; vec4 mv=modelViewMatrix*vec4(position,1.0); gl_PointSize=size*(560.0/max(1.0,-mv.z)); gl_Position=projectionMatrix*mv; }',
   fragmentShader: 'uniform sampler2D map; uniform float uOpacity; varying vec3 vColor; varying float vAlpha; void main(){ vec4 t=texture2D(map, gl_PointCoord); if(t.a<0.02) discard; gl_FragColor=vec4(vColor, t.a*uOpacity*vAlpha); }',
   transparent: true, depthWrite: false, depthTest: true, blending: THREE.NormalBlending,
 });
@@ -399,7 +433,7 @@ const RING_TEX = (function () {
 })();
 const markerMat = new THREE.ShaderMaterial({
   uniforms: { map: { value: RING_TEX }, uOpacity: { value: 1.0 } },
-  vertexShader: 'attribute float size; attribute vec3 aColor; attribute float aAlpha; varying vec3 vColor; varying float vAlpha; void main(){ vColor=aColor; vAlpha=aAlpha; vec4 mv=modelViewMatrix*vec4(position,1.0); gl_PointSize=size*(330.0/max(1.0,-mv.z)); gl_Position=projectionMatrix*mv; }',
+  vertexShader: 'attribute float size; attribute vec3 aColor; attribute float aAlpha; varying vec3 vColor; varying float vAlpha; void main(){ vColor=aColor; vAlpha=aAlpha; vec4 mv=modelViewMatrix*vec4(position,1.0); gl_PointSize=size*(560.0/max(1.0,-mv.z)); gl_Position=projectionMatrix*mv; }',
   fragmentShader: 'uniform sampler2D map; uniform float uOpacity; varying vec3 vColor; varying float vAlpha; void main(){ vec4 t=texture2D(map, gl_PointCoord); if(t.a<0.02) discard; gl_FragColor=vec4(vColor, t.a*uOpacity*vAlpha); }',
   transparent: true, depthWrite: false, depthTest: true, blending: THREE.NormalBlending,
 });
@@ -706,7 +740,7 @@ setInterval(() => pollShortTerm(false), 5000);   // short-term reconciler (liven
 
 // ---- dev handle for CDP verification ----
 window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, tendrilN: () => tendrilSpecs.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z,
-  markerN: () => markerIndex.length, repaint: repaintNodeCloud,
+  markerN: () => markerIndex.length, repaint: repaintNodeCloud, fit: fitView,
   // Seed synthetic nodes straight into the object store. The evidence encoding is only provable with nodes
   // spanning every state (unsourced → authoritative, refuted, strong-id), and the live corpus rarely holds
   // all of them at once in one view — same reason kg:dev-activity exists for the bus.
