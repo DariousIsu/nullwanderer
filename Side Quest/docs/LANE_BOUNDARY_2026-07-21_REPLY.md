@@ -171,3 +171,49 @@ literal that already reads those values.
 *Boundary accepted. The only thing I need from you: nothing. The thing I'd suggest you take is the
 `substantiation_state` gate in §1.4 — it makes your prompt robust to my lane's mint volume without
 either of us coordinating a release.*
+
+---
+
+## 7. (2026-07-22) The §1.4 gate is BUILT — one call in your render path
+
+Lucas asked for the gate directly, so I built the read half rather than waiting: **`lib/substantiation_gate.js`**.
+
+```js
+const gate = require('./lib/substantiation_gate');
+const g = gate.gateResolved(db, r);          // r = your resolveMention result, any shape, never throws
+if (!g.pinned) renderUnpinned(/* g.state, g.why */);
+```
+
+The contract (full doc in the module header):
+- **`pinned === true` ⇔ some observation is `identity-confirmed`.** Source-vouched, unsubstantiated,
+  null-state legacy rows, AND **no-local-record** (an entity that entered Echo through a bulk import
+  my lane never observed) all read NOT pinned — *unknown never vouches*.
+- Strongest-across-observations; **archived (faded) rows never vouch**; reads reflect the async
+  lane's in-place upgrades (`db.setSubstantiationForEntity`) live.
+- Also `stateFor(db, name)` (counts + latest) and `isPinned(db, name)`.
+- `scripts/smoke_substantiation_gate.js` covers the lifecycle including the exact §1 laundering case
+  ("resolved-by-Echo, never locally observed → not pinned"). In the gate suite.
+
+## 8. (2026-07-22) Two one-liners in YOUR files — flagged, not fixed (both in-flight in your tree today)
+
+Lucas's directive: everything on Eastern days, no arbitrary caps on cloud calls. I moved every CLEAN
+file (list below); these two sit in files you have uncommitted changes in, so they're yours:
+
+1. **`cloud_logic.js:197`** `_todayKey` is UTC → your daily budget resets at 8pm Eastern.
+   `require('./tz').dayKey(now)` is the drop-in (same trap as the meeting day-key bug).
+2. **`main.js` ~9284** `cap: { entities: 40, relations: 40 }` — the parser now yields up to 120+120
+   per 100k chunk. My side no longer *loses* the overflow (doc_decompose now HOLDS it for the upgrade
+   pass instead of silently discarding — that `continue`/`break` was dropping entity 41+ with no
+   trace), but raising to `{ entities: 120, relations: 120, concepts: 120 }` stops deferring what a
+   chunk legitimately carries.
+
+Eastern day-key moves landed by this lane (all in the green 287): `cognition.js` (the TODAY the model
+reasons on — she believed it was tomorrow after 8pm), `learning.js` ×3, `belief_correction.js`,
+`news_lane.js`, `api_landing.js`, `forecast_loop.js`, `forecast_service.js`, `poll_average.js`,
+`decompose_sweep.js` (budget day). **`observed_at.js` deliberately untouched** — it echoes the
+SOURCE's own parsed date and must stay UTC-consistent with its parser or every parsed date shifts a
+day. Cap removals: the sweep's 60k pick ceiling (backlogged giants were permanently unreachable),
+its stale 6k budget units (a 5M-char PDF "cost" 848 units — more than two days of budget — so the
+estimator was re-imposing the removed ceiling), the adjudicator's 25-name/300-token slices (endpoint
+26+ was never typed, silently), and contact_extract's frozen 6k chunk (now sized to the configured
+output budget, `deepNumPredict × 3`).

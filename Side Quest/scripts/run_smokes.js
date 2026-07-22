@@ -128,6 +128,7 @@ const smokes = [
   'smoke_certainty.js',
   'smoke_puller_supersession.js',
   'smoke_decomp_lane.js',
+  'smoke_substantiation_gate.js',
   'smoke_contact_extract.js',
   'smoke_contact_card.js',
   'smoke_puller_walk.js',
