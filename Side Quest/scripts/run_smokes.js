@@ -249,6 +249,7 @@ const smokes = [
   'smoke_packaging.js',
   'smoke_week_context.js',
   'smoke_conversation_objects.js',
+  'smoke_story_follow.js',
   'smoke_ner.js',
   'smoke_mention.js',
   'smoke_cognition.js',

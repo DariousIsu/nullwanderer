@@ -3,6 +3,9 @@
  *   ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_autonomy.js
  */
 'use strict';
+// The stories manifest grab reaches the news bucket — point it at a temp file BEFORE any lib require
+// (news_db reads the env at module load) so an offline smoke can never create tables in prod data/.
+process.env.NEWS_DB_PATH = require('path').join(require('os').tmpdir(), `zoe-smoke-autonomy-news-${process.pid}.db`);
 const auto = require('../lib/autonomy');
 
 let pass = 0, fail = 0;

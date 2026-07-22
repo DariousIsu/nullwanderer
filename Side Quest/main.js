@@ -5495,6 +5495,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           .map(h => { const c = String((h && h.content) || '').replace(/\s+/g, ' ').trim().slice(0, 240); return c ? `  • [${h.source || 'stream'}] ${c}` : ''; })
           .filter(Boolean);
         if (sLines.length) { parts.push('From your live data streams (news + documents you hold on this):\n' + sLines.join('\n')); recallResult.streamHits.forEach(h => rkRows.unshift({ content: h.content, source: h.source })); }
+        // A news story that just rode into THIS conversation's grounding is now a story they DISCUSSED —
+        // the follow lane (lib/story_follow) remembers it, so a later development surfaces as a licensed
+        // engage opening instead of being indistinguishable from any other headline.
+        try {
+          const sf = require('./lib/story_follow');
+          for (const h of recallResult.streamHits.slice(0, 5)) if (h && h.source === 'news' && h.storyId) sf.follow(h.storyId, { reason: 'discussed' });
+        } catch (e) { console.error('[story-follow] discussed hook failed:', e.message); }
       }
       retrievedKnowledgeBlock = parts.length ? parts.join('\n\n') : null;
     } else {
@@ -8706,6 +8713,15 @@ async function autonomyTick() {
     const H = { getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v) };
     // Warm the calendar context so the manifest sees his week (TTL-guarded — usually a no-op).
     try { await require('./lib/week_context').refresh({ gcalOpts: gcalOpts(), now }); } catch {}
+    // Story-follow upkeep (lib/story_follow): retire wrapped stories, then auto-follow fresh
+    // corroborated stories matching her ACTIVE interests — so the manifest's DEVELOPING STORIES
+    // section reflects both what they discussed and what she genuinely tracks. Cheap SQL; fail-soft.
+    try {
+      const sf = require('./lib/story_follow');
+      sf.tidy({ nowMs: now });
+      const topics = db.getDb().prepare("SELECT topic FROM interests WHERE status='active' ORDER BY weight DESC LIMIT 8").all().map((r) => r.topic);
+      sf.autoFollowFromInterests(topics, { nowMs: now });
+    } catch (e) { console.error('[autonomy] story-follow upkeep failed:', e.message); }
     const manifest = autonomy.buildManifest({ db, now });
     if (!manifest.text) { console.log('[autonomy] empty manifest — nothing to choose from'); return; }
     const decision = await autonomy.decide({ manifestText: manifest.text, history: autonomy.historyRead(H.getMeta), now });
@@ -8737,6 +8753,12 @@ async function autonomyTick() {
       try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: decision.say }); } catch {}
       try { require('./lib/blackboard').append({ source: 'autonomy', kind: 'utterance', refTable: 'turns', refId: row.id, content: decision.say }); } catch {}
       try { db.setMeta('autonomy.last_engage_at', String(now)); } catch {}
+      // A spoken engage about a followed story re-baselines it (the [story #N] token in target is
+      // the machine handle) — one development is raised ONCE, never re-raised next tick.
+      try {
+        const sm = /\bstory #(\d+)/i.exec(String(decision.target || ''));
+        if (sm) require('./lib/story_follow').markRaised(parseInt(sm[1], 10), now);
+      } catch (e) { console.error('[autonomy] story markRaised failed:', e.message); }
       autonomy.historyPush(H, { ts: now, move: 'engage', target: decision.target, outcome: 'spoke' });
       console.log(`[autonomy] chose=engage → spoke (${decision.say.length}c)`);
       return;

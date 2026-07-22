@@ -553,7 +553,9 @@ function storiesAsNotes(stories, { max = 4 } = {}) {
     const when = s.last_ts ? require('./tz').dayKey(s.last_ts) : '';   // "as of" reads in Eastern, like every displayed time
     const body = `${displayClean(s.title)}${s.summary ? ' — ' + displayClean(s.summary).slice(0, 240) : ''}`;
     const tag = [when ? `as of ${when}` : '', corrob >= 2 ? `${corrob}-source` : ''].filter(Boolean).join(', ');
-    return { content: `${body}${tag ? ` (${tag})` : ''}`, source: 'news', ts: s.last_ts || 0 };
+    // storyId rides along so downstream consumers can act on the STORY (the follow lane marks a story
+    // 'discussed' when its note enters a chat turn) — grounding renderers ignore it.
+    return { content: `${body}${tag ? ` (${tag})` : ''}`, source: 'news', ts: s.last_ts || 0, storyId: s.id };
   });
 }
 

@@ -128,6 +128,16 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
     return `• HIS CALENDAR THIS WEEK (who he just met and is about to meet — knowing THESE people beats generic exploration):\n${wc.lines}`;
   });
 
+  grab('stories', () => {
+    // Developing stories she follows (lib/story_follow) — only the DELTA since each was last raised.
+    // Facts here; the engage licensing lives in the decision prompt. The [story #N] token is the
+    // machine handle an engage target carries so the driver can mark the story raised.
+    const lines = (deps.storyFollow || require('./story_follow')).manifestLines({ limit: 5, nowMs: now });
+    if (!lines || !lines.length) return '';
+    counts.developingStories = lines.length;
+    return `• DEVELOPING STORIES YOU FOLLOW (what moved since you last saw it):\n${lines.join('\n')}`;
+  });
+
   return { text: sections.join('\n'), counts };
 }
 
@@ -169,7 +179,7 @@ The moves:
 - engage: say something to Lucas NOW — a genuine finding or a direction question. Use RARELY, only when you have something real; "say" must carry the exact message, grounded in the state above, no invented facts.
 - nothing: a first-class answer. If no move is clearly worth its cost, decline honestly.
 
-Rules: at most 4 steps. Never plan work you cannot check. State "expect" as something CHECKABLE — the run is verified against it afterward, and a history line saying "expect NOT met" means that approach is not working: change it, don't repeat it. FINISHED DELEGATED WORK in the state is high-priority: absorb it (build from it, or engage Lucas about it) before starting new work of the same kind. Do not choose a target your recent ticks show as just-run or repeatedly dry. Variety matters across ticks — contacts are ALREADY covered by another lane, so prefer ideas, gaps, corroboration, and building over anything contact-shaped. The one exception: PEOPLE ON HIS CALENDAR. If the state shows an upcoming meeting whose attendees we hold little on, researching them before he walks in is among the highest-value moves available — and a past meeting is a natural, grounded engage ("how did X go?").`;
+Rules: at most 4 steps. Never plan work you cannot check. State "expect" as something CHECKABLE — the run is verified against it afterward, and a history line saying "expect NOT met" means that approach is not working: change it, don't repeat it. FINISHED DELEGATED WORK in the state is high-priority: absorb it (build from it, or engage Lucas about it) before starting new work of the same kind. Do not choose a target your recent ticks show as just-run or repeatedly dry. Variety matters across ticks — contacts are ALREADY covered by another lane, so prefer ideas, gaps, corroboration, and building over anything contact-shaped. The one exception: PEOPLE ON HIS CALENDAR. If the state shows an upcoming meeting whose attendees we hold little on, researching them before he walks in is among the highest-value moves available — and a past meeting is a natural, grounded engage ("how did X go?"). DEVELOPING STORIES YOU FOLLOW are the other licensed opening: a development in a story you two discussed is a real reason to speak, not padding — an engage there says what CHANGED (never re-narrate the story), and its target must be the exact [story #N] token from that line so the raise is recorded.`;
 
 function validateDecision(raw) {
   try {
