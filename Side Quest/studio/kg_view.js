@@ -15,9 +15,20 @@
 })(this, function () {
   'use strict';
 
+  // The lower block is the vocabulary the type ladder (T1-T5) put into circulation. Without it every one
+  // of these fell through to the single fallback, so a government body, a place and an honestly-unknown
+  // object all drew the same colour as the corpus itself — T1's whole point is that a government is NOT a
+  // company, and the palette was still saying they were the same thing.
+  //
+  // `unknown` is deliberately DARKER than `concept`: T5 stopped minting `concept` for things nobody typed,
+  // and the colour should let "nobody has said what this is" recede rather than pose as a decided type.
   const TYPE_COLOR = {
     legislation: '#F59E0B', person: '#14B8A6', event: '#A855F7', organization: '#22C55E', concept: '#94A3B8',
     bill: '#F59E0B', committee: '#22C55E', source: '#94A3B8',
+    unknown: '#64748B', thing: '#94A3B8',
+    government_body: '#3B82F6', gov: '#3B82F6', body: '#3B82F6',
+    location: '#EC4899', place: '#EC4899',
+    office_held: '#818CF8', work: '#22D3EE', document: '#A3E635', meeting: '#FB923C',
   };
   const colorFor = (t) => TYPE_COLOR[(t || '').toLowerCase()] || '#7dd3fc';
 

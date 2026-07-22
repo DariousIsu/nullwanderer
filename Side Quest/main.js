@@ -45,6 +45,7 @@ const feedsStore = require('./lib/feeds');                   // Monitors widget:
 let newsVideoLane = null;                                    // always-on video-caption capture lane (Data-Stream Phase A)
 const canvasLayoutStore = require('./lib/canvas_layout');    // Canvas freeform board: operator's saved block positions
 const kgView = require('./studio/kg_view');                  // Knowledge Graph surface: graph tool payloads → nodes/links
+const kgProv = require('./lib/kg_provenance');               // …and the evidence behind each node (encounter counts, birth, refutations)
 const docView = require('./studio/doc_view');                // Reader/Library surface: corpus doc payloads → reader view
 const docExtract = require('./lib/doc_extract');             // writing suite: local .docx/.pdf extractors (rich render)
 const creatorView = require('./studio/creator_view');        // Creator surface: block-model ⇄ ProseMirror bridge (Phase 3)
@@ -4171,8 +4172,13 @@ ipcMain.handle('kg:overview', async () => {
   try {
     if (!(await ensureEngine())) return { ok: false, error: 'Echo engine not connected' };
     const callTool = pollCallTool();
-    const payload = await callTool('graph_overview', { per_type_k: 14, recent_k: 80, recent_window_days: 30 });   // denser cloud, but bounded — the shared GPU process also drives video + the VRM avatar
+    // DENSITY. The 14/80 here was set while the surface still rendered a sphere mesh per node behind a
+    // full-screen bloom pass — the thing that crashed the shared GPU process. That renderer is gone: nodes
+    // are now ONE instanced Points cloud, and the measured limiter is the CPU force sim, not the draw. The
+    // panel was starving at the REQUEST while its own cap sat at 2000, so ask for the corpus properly.
+    const payload = await callTool('graph_overview', { per_type_k: 40, recent_k: 250, recent_window_days: 30 });
     const g = kgView.buildOverview(payload);
+    kgProv.attach(g.nodes);            // evidence per node: how many encounters, how independent, born where
     return { ok: true, nodes: g.nodes, links: g.links, availableTypes: kgView.availableTypes('overview', payload), legend: kgView.legend(),
       stats: { totalEntities: (payload && payload.total_entities) || g.nodes.length, totalRelations: (payload && payload.total_relations) || g.links.length } };
   } catch (e) { console.error('[kg] overview failed:', e.message); return { ok: false, error: e.message }; }
@@ -4196,6 +4202,7 @@ ipcMain.handle('kg:ego', async (_e, { entity, hops } = {}) => {
         for (const n of g.nodes) { const d = degOf.get(n.id); if (typeof d === 'number') n.degree = d; }
       }
     } catch (e) { /* degree is a nice-to-have; the ego view works without it */ }
+    kgProv.attach(g.nodes);
     return { ok: true, nodes: g.nodes, links: g.links, availableTypes: kgView.availableTypes('ego', payload), legend: kgView.legend(),
       stats: { related: (payload && payload.result_count) || g.links.length, hops: (payload && payload.hops) || hops } };
   } catch (e) { console.error('[kg] ego failed:', e.message); return { ok: false, error: e.message }; }
@@ -4218,14 +4225,17 @@ ipcMain.handle('kg:search', async (_e, { query } = {}) => {
 // render. Local DB only (no Echo dependency); tagged store:'sidequest' + epistemic for the layer styling.
 ipcMain.handle('kg:shortterm', async () => {
   try {
-    const ents = db.graphListEntities({ limit: 160 });              // most-recent local entities (id DESC) — denser core, bounded
+    const ents = db.graphListEntities({ limit: 400 });              // most-recent local entities (id DESC) — denser core, bounded
     const byId = new Map(ents.map(e => [e.id, e]));
     const rels = db.graphRelationsAmong([...byId.keys()]);
-    const docs = db.recentDocuments(40, { unpromotedOnly: true });  // fresh material still in the short-term buffer
+    const docs = db.recentDocuments(80, { unpromotedOnly: true });  // fresh material still in the short-term buffer
     const nodes = [], seen = new Set();
     for (const e of ents) {
       if (!e.name || seen.has(e.name)) continue; seen.add(e.name);
-      nodes.push({ id: e.name, store: 'sidequest', entityType: e.entity_type || 'concept', epistemic: e.epistemic || 'told', summary: e.summary || null });
+      // `unknown`, not `concept`. T5 stopped minting `concept` for things nobody typed precisely so that
+      // "we don't know what this is" would stop masquerading as a decided type — defaulting to `concept`
+      // at display time puts the lie back on the screen and hides the 566 honestly-unknown entities.
+      nodes.push({ id: e.name, store: 'sidequest', entityType: e.entity_type || 'unknown', epistemic: e.epistemic || 'told', summary: e.summary || null });
     }
     for (const d of docs) {
       const label = `doc: ${String(d.title || d.ref || ('#' + d.id)).slice(0, 42)}`;
@@ -4237,6 +4247,9 @@ ipcMain.handle('kg:shortterm', async () => {
       const s = byId.get(r.source_id), t = byId.get(r.target_id);
       if (s && t && s.name && t.name && s.name !== t.name) links.push({ source: s.name, target: t.name, relType: r.relation_type || 'related', category: 'derived' });
     }
+    // Entities only. A doc node's id is a truncated display label (`doc: Some Title…`), never an object key,
+    // so asking the encounter log about it is guaranteed misses — ~16% of the lookup for nothing.
+    kgProv.attach(nodes.filter(n => n.entityType !== 'document'));
     return { ok: true, nodes, links, counts: { entities: nodes.length, relations: links.length, documents: docs.length } };
   } catch (e) { console.error('[kg] shortterm failed:', e.message); return { ok: false, error: e.message }; }
 });

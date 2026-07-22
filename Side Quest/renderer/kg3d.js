@@ -92,8 +92,48 @@ function makeCore3D(strength = 0.05) {
   return force;
 }
 
+// ============================================================================================================
+// EVIDENCE ENCODING — the object model says a thing is real because it has been ENCOUNTERED, and that each
+// further independent source raises certainty. The surface used to draw all of that identically: a name one
+// stray filing mentioned once sat the same size and brightness as one forty documents agree on. These three
+// functions are where that stops. main attaches `prov` per node (lib/kg_provenance.js).
+//
+//   SIZE  = corroboration. Encounters make a node heavier, so the well-attested corpus reads as mass.
+//   ALPHA = how much anyone credible has actually vouched for it, in four honest steps.
+//
+// The ghost step matters most and is the uncomfortable one: ~61% of local entities have NO encounter at all
+// (the graph-walk mints them; nothing records where they came from). Drawing them at full strength was the
+// surface asserting a confidence the data has never had. Now they show as what they are — present, unsourced.
+// ============================================================================================================
+const EV_GHOST = 0.34, EV_WEAK = 0.58, EV_ORDINARY = 0.84, EV_SOLID = 1.0;
+// "The backend told us nothing about evidence" and "the evidence log says nothing about this node" are
+// different facts, and a surface built on that exact distinction must not collapse them. Until at least one
+// payload carries provenance — an older main process, a failed handler — nothing is ghosted at all.
+let _provSupplied = false;
+function evidenceAlpha(n) {
+  if (!_provSupplied) return EV_SOLID;
+  const p = n && n.prov;
+  if (!p || !p.encounters) return EV_GHOST;      // never encountered — no provenance on file
+  if (p.authoritative > 0) return EV_SOLID;      // an official/operator record vouched for it
+  if (p.ordinary > 0) return EV_ORDINARY;        // ordinary sources only
+  return EV_WEAK;                                // unknown/stated authority only — "go look" (encounters.js)
+}
+function provChanged(a, b) {
+  if (!a || !b) return a !== b;
+  return a.encounters !== b.encounters || a.authoritative !== b.authoritative || a.ordinary !== b.ordinary || a.refuted !== b.refuted;
+}
+let _provDirty = false;
+
 // ---- styling ----
-function nodeColor(n) { return n.color || (n.store === 'sidequest' ? SQ_VIOLET : ECHO_SKY); }
+// An honestly-unknown local object should not wear the confident core violet. T5 made `unknown` a real
+// answer ("nobody said") rather than a silent default, so it gets its own recessive slate in both stores.
+const UNKNOWN_GREY = '#6b7280';
+const isUnknownType = (t) => { const s = String(t || '').toLowerCase(); return s === 'unknown' || s === ''; };
+function nodeColor(n) {
+  if (n.color) return n.color;
+  if (isUnknownType(n.entityType)) return UNKNOWN_GREY;
+  return n.store === 'sidequest' ? SQ_VIOLET : ECHO_SKY;
+}
 function nodeVal(n) {                                   // sphere size ~ degree (mirrors nodeRadius's log scale)
   if (n.store === 'sidequest') return 2.4;
   const d = n.degree || 0;
@@ -168,10 +208,12 @@ function ensureObj(n, seed) {
     if (typeof n.degree === 'number') o.degree = n.degree;
     if (n.store) o.store = n.store;
     if (n.epistemic) o.epistemic = n.epistemic;
+    if (n.prov) { _provSupplied = true; if (provChanged(o.prov, n.prov)) _provDirty = true; o.prov = n.prov; }
     o.touchedAt = performance.now();
     return o;
   }
-  o = { id: n.id, store: n.store || 'echo', entityType: n.entityType, color: n.color, summary: n.summary, degree: n.degree, epistemic: n.epistemic, touchedAt: performance.now() };
+  if (n.prov) { _provSupplied = true; _provDirty = true; }
+  o = { id: n.id, store: n.store || 'echo', entityType: n.entityType, color: n.color, summary: n.summary, degree: n.degree, epistemic: n.epistemic, prov: n.prov, touchedAt: performance.now() };
   if (seed) { o.x = seed.x + (Math.random() - 0.5) * 40; o.y = seed.y + (Math.random() - 0.5) * 40; o.z = (seed.z || 0) + (Math.random() - 0.5) * 40; }
   objs.set(n.id, o);
   return o;
@@ -206,7 +248,7 @@ async function loadOverview() {
     const ov = await window.sq.kg.overview();
     full.clear(); overviewLinks.length = 0;
     if (ov && ov.ok) {
-      for (const n of (ov.nodes || [])) { ensureObj({ id: n.id, store: 'echo', entityType: n.entityType, degree: n.degree, color: n.color, summary: n.summary }); full.add(n.id); }
+      for (const n of (ov.nodes || [])) { ensureObj({ id: n.id, store: 'echo', entityType: n.entityType, degree: n.degree, color: n.color, summary: n.summary, prov: n.prov }); full.add(n.id); }
       for (const l of (ov.links || [])) { const s = linkEnd(l.source), t = linkEnd(l.target); if (s != null && t != null) overviewLinks.push({ source: s, target: t, category: l.category, color: l.color }); }
     }
   } catch (e) { console.warn('[kg3d] overview failed:', e && e.message); }
@@ -227,7 +269,7 @@ function mergeEgo(res) {
   for (const n of incoming) {
     let s = seed; const nbr = connectedTo.get(n.id), no = nbr && objs.get(nbr);
     if (no && Number.isFinite(no.x)) s = { x: no.x, y: no.y, z: no.z || 0 };
-    ensureObj({ id: n.id, store: n.store || 'echo', entityType: n.entityType, color: n.color, summary: n.summary, degree: n.degree }, objs.has(n.id) ? null : s);
+    ensureObj({ id: n.id, store: n.store || 'echo', entityType: n.entityType, color: n.color, summary: n.summary, degree: n.degree, prov: n.prov }, objs.has(n.id) ? null : s);
     world.nodes.add(n.id);
   }
   for (const l of incLinks) { const s = linkEnd(l.source), t = linkEnd(l.target); if (s == null || t == null) continue; const key = s + '→' + t + '::' + (l.relType || ''); if (!world.links.has(key)) world.links.set(key, { source: s, target: t, relType: l.relType, color: l.color, category: l.category }); }
@@ -258,7 +300,7 @@ async function pollShortTerm(initial) {
     if (!(window.sq && window.sq.kg && window.sq.kg.shortterm)) return false;
     const st = await window.sq.kg.shortterm(); if (!st || !st.ok) return false;
     const seen = new Set(); const c = coreCentroid3D(); let changed = false;
-    for (const n of (st.nodes || [])) { seen.add(n.id); const had = shortTerm.nodes.has(n.id); ensureObj({ id: n.id, store: 'sidequest', entityType: n.entityType, epistemic: n.epistemic, summary: n.summary }, objs.has(n.id) ? null : c); shortTerm.nodes.add(n.id); if (!had) changed = true; }
+    for (const n of (st.nodes || [])) { seen.add(n.id); const had = shortTerm.nodes.has(n.id); ensureObj({ id: n.id, store: 'sidequest', entityType: n.entityType, epistemic: n.epistemic, summary: n.summary, prov: n.prov }, objs.has(n.id) ? null : c); shortTerm.nodes.add(n.id); if (!had) changed = true; }
     for (const id of [...shortTerm.nodes]) if (!seen.has(id)) { shortTerm.nodes.delete(id); changed = true; if (!world.nodes.has(id) && !full.has(id)) objs.delete(id); }
     shortTerm.links.clear();
     for (const l of (st.links || [])) shortTerm.links.set(l.source + '>' + l.target, { s: l.source, t: l.target, relType: l.relType, category: l.category });
@@ -291,27 +333,99 @@ const NODE_TEX = (function () {
 })();
 const nodeMat = new THREE.ShaderMaterial({
   uniforms: { map: { value: NODE_TEX }, uOpacity: { value: 0.96 } },
-  vertexShader: 'attribute float size; attribute vec3 aColor; varying vec3 vColor; void main(){ vColor=aColor; vec4 mv=modelViewMatrix*vec4(position,1.0); gl_PointSize=size*(330.0/max(1.0,-mv.z)); gl_Position=projectionMatrix*mv; }',
-  fragmentShader: 'uniform sampler2D map; uniform float uOpacity; varying vec3 vColor; void main(){ vec4 t=texture2D(map, gl_PointCoord); if(t.a<0.02) discard; gl_FragColor=vec4(vColor, t.a*uOpacity); }',
+  vertexShader: 'attribute float size; attribute vec3 aColor; attribute float aAlpha; varying vec3 vColor; varying float vAlpha; void main(){ vColor=aColor; vAlpha=aAlpha; vec4 mv=modelViewMatrix*vec4(position,1.0); gl_PointSize=size*(330.0/max(1.0,-mv.z)); gl_Position=projectionMatrix*mv; }',
+  fragmentShader: 'uniform sampler2D map; uniform float uOpacity; varying vec3 vColor; varying float vAlpha; void main(){ vec4 t=texture2D(map, gl_PointCoord); if(t.a<0.02) discard; gl_FragColor=vec4(vColor, t.a*uOpacity*vAlpha); }',
   transparent: true, depthWrite: false, depthTest: true, blending: THREE.NormalBlending,
 });
 let nodeCloud = null, nodeGeo = null, nodeIndex = [];
-function nodePointSize(n) { if (n.store === 'sidequest') return 7; const d = n.degree || 0; return Math.max(5, Math.min(26, 6 + Math.log10(d + 1) * 8)); }
+// Base weight is structural (how connected), the bonus is evidential (how corroborated). They are genuinely
+// different facts about a node and both belong on screen: a hub everyone links to but nobody sourced should
+// not look like a modest object forty documents independently agree on.
+function nodePointSize(n) {
+  const base = n.store === 'sidequest' ? 7 : Math.max(5, Math.min(26, 6 + Math.log10((n.degree || 0) + 1) * 8));
+  const enc = (n.prov && n.prov.encounters) || 0;
+  return Math.min(34, base + (enc ? Math.log2(1 + enc) * 1.7 : 0));
+}
 function buildNodeCloud() {
   const ns = Graph.graphData().nodes; nodeIndex = ns; const N = ns.length;
   if (nodeCloud) { scene.remove(nodeCloud); nodeGeo.dispose(); nodeCloud = null; nodeGeo = null; }
   if (!N) return;
-  const pos = new Float32Array(N * 3), col = new Float32Array(N * 3), size = new Float32Array(N);
+  const pos = new Float32Array(N * 3), col = new Float32Array(N * 3), size = new Float32Array(N), alpha = new Float32Array(N);
   for (let i = 0; i < N; i++) {
     const n = ns[i], c = new THREE.Color(nodeColor(n));
-    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; size[i] = nodePointSize(n);
+    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; size[i] = nodePointSize(n); alpha[i] = evidenceAlpha(n);
     if (Number.isFinite(n.x)) { pos[i * 3] = n.x; pos[i * 3 + 1] = n.y; pos[i * 3 + 2] = n.z || 0; }
   }
   nodeGeo = new THREE.BufferGeometry();
   nodeGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   nodeGeo.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
   nodeGeo.setAttribute('size', new THREE.BufferAttribute(size, 1));
+  nodeGeo.setAttribute('aAlpha', new THREE.BufferAttribute(alpha, 1));
   nodeCloud = new THREE.Points(nodeGeo, nodeMat); nodeCloud.frustumCulled = false; scene.add(nodeCloud);
+  buildMarkers();
+}
+// Provenance arrives on a later poll than the node itself, and evidence accrues while the node just sits
+// there — so colour/size/alpha have to be able to change WITHOUT rebuilding the geometry (the old build was
+// paint-once, which quietly froze every node at whatever was known the moment it first appeared).
+function repaintNodeCloud() {
+  if (!nodeCloud || !nodeGeo) return;
+  const col = nodeGeo.attributes.aColor.array, size = nodeGeo.attributes.size.array, alpha = nodeGeo.attributes.aAlpha.array;
+  for (let i = 0; i < nodeIndex.length; i++) {
+    const n = nodeIndex[i], c = new THREE.Color(nodeColor(n));
+    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; size[i] = nodePointSize(n); alpha[i] = evidenceAlpha(n);
+  }
+  nodeGeo.attributes.aColor.needsUpdate = true; nodeGeo.attributes.size.needsUpdate = true; nodeGeo.attributes.aAlpha.needsUpdate = true;
+  buildMarkers();
+}
+
+// ---- MARKER RING (one extra draw call for both badges) ----
+// Two things are worth calling out on the node itself rather than behind a click. A REFUTATION is the §7
+// inoculation record: something we tested and disproved, and it must never quietly read as ordinary again —
+// so it gets a red scar. A STRONG ID is the opposite state, an object pinned to a real register (Wikidata,
+// FEC, bioguide); it is common (~20% of nodes), so it stays a faint gold hairline, present but never noisy.
+const RING_TEX = (function () {
+  const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d');
+  x.strokeStyle = 'rgba(255,255,255,1)'; x.lineWidth = 5; x.beginPath(); x.arc(32, 32, 24, 0, Math.PI * 2); x.stroke();
+  return new THREE.CanvasTexture(c);
+})();
+const markerMat = new THREE.ShaderMaterial({
+  uniforms: { map: { value: RING_TEX }, uOpacity: { value: 1.0 } },
+  vertexShader: 'attribute float size; attribute vec3 aColor; attribute float aAlpha; varying vec3 vColor; varying float vAlpha; void main(){ vColor=aColor; vAlpha=aAlpha; vec4 mv=modelViewMatrix*vec4(position,1.0); gl_PointSize=size*(330.0/max(1.0,-mv.z)); gl_Position=projectionMatrix*mv; }',
+  fragmentShader: 'uniform sampler2D map; uniform float uOpacity; varying vec3 vColor; varying float vAlpha; void main(){ vec4 t=texture2D(map, gl_PointCoord); if(t.a<0.02) discard; gl_FragColor=vec4(vColor, t.a*uOpacity*vAlpha); }',
+  transparent: true, depthWrite: false, depthTest: true, blending: THREE.NormalBlending,
+});
+const REFUTED_RGB = new THREE.Color('#f87171'), STRONGID_RGB = new THREE.Color('#fcd34d');
+let markerCloud = null, markerGeo = null, markerIndex = [];
+function markerOf(n) {                       // a scar outranks a badge — being wrong is the louder fact
+  const p = n && n.prov; if (!p) return null;
+  if (p.refuted) return { c: REFUTED_RGB, a: 0.95, k: 1.55 };
+  if (p.strongId) return { c: STRONGID_RGB, a: 0.34, k: 1.35 };
+  return null;
+}
+function buildMarkers() {
+  if (markerCloud) { scene.remove(markerCloud); markerGeo.dispose(); markerCloud = null; markerGeo = null; }
+  markerIndex = [];
+  const src = [];
+  for (const n of nodeIndex) { const m = markerOf(n); if (m) { src.push(n); markerIndex.push(m); } }
+  const N = src.length; if (!N) return;
+  const pos = new Float32Array(N * 3), col = new Float32Array(N * 3), size = new Float32Array(N), alpha = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const n = src[i], m = markerIndex[i];
+    col[i * 3] = m.c.r; col[i * 3 + 1] = m.c.g; col[i * 3 + 2] = m.c.b; size[i] = nodePointSize(n) * m.k; alpha[i] = m.a;
+    if (Number.isFinite(n.x)) { pos[i * 3] = n.x; pos[i * 3 + 1] = n.y; pos[i * 3 + 2] = n.z || 0; }
+  }
+  markerGeo = new THREE.BufferGeometry();
+  markerGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  markerGeo.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
+  markerGeo.setAttribute('size', new THREE.BufferAttribute(size, 1));
+  markerGeo.setAttribute('aAlpha', new THREE.BufferAttribute(alpha, 1));
+  markerCloud = new THREE.Points(markerGeo, markerMat); markerCloud.frustumCulled = false; markerCloud.renderOrder = 2; scene.add(markerCloud);
+  markerIndex = src;                          // positions sync from the nodes each frame
+}
+function updateMarkers() {
+  if (!markerCloud || !markerIndex.length) return; const pos = markerGeo.attributes.position.array;
+  for (let i = 0; i < markerIndex.length; i++) { const n = markerIndex[i]; if (!Number.isFinite(n.x)) continue; pos[i * 3] = n.x; pos[i * 3 + 1] = n.y; pos[i * 3 + 2] = n.z || 0; }
+  markerGeo.attributes.position.needsUpdate = true;
 }
 function updateNodeCloud() {
   if (!nodeCloud) return; const pos = nodeGeo.attributes.position.array;
@@ -472,7 +586,9 @@ function flushBorn() {
 }
 function mintBorn(batch) {
   const c = coreCentroid3D(); let minted = 0;
-  for (const e of batch) { const id = e.anchor; if (id == null || objs.has(id)) continue; ensureObj({ id, store: 'sidequest', entityType: 'concept', epistemic: e.epistemic || 'told' }, c); shortTerm.nodes.add(id); minted++; }
+  // 'unknown', not 'concept': the optimistic mint has not been told what this is, and T5 made that a real
+  // answer. Guessing `concept` here also disagreed with whatever the next kg:shortterm poll returned.
+  for (const e of batch) { const id = e.anchor; if (id == null || objs.has(id)) continue; ensureObj({ id, store: 'sidequest', entityType: 'unknown', epistemic: e.epistemic || 'told' }, c); shortTerm.nodes.add(id); minted++; }
   if (minted) render();
   return minted;
 }
@@ -503,11 +619,17 @@ function tick() {
   const now = performance.now(); frames++;
   updateEffects(now);
   updateNodeCloud();
+  updateMarkers();
   updateTendrils();
+  if (_provDirty) { _provDirty = false; try { repaintNodeCloud(); } catch (e) {} }
   if (now - lastT >= 750) {
     fps = Math.round(frames * 1000 / (now - lastT)); frames = 0; lastT = now;
     const d = Graph.graphData();
-    if (hudEl) hudEl.textContent = `3D · ${d.nodes.length} nodes / ${d.links.length} links · ${fps} fps`;
+    // "sourced" is the share of drawn nodes with at least one encounter on file. It is the honest headline
+    // number for a memory that claims things are real because they were encountered — and right now it is low.
+    let sourced = 0; for (const n of d.nodes) if (n.prov && n.prov.encounters) sourced++;
+    const pct = d.nodes.length ? Math.round(sourced * 100 / d.nodes.length) : 0;
+    if (hudEl) hudEl.textContent = `3D · ${d.nodes.length} nodes / ${d.links.length} links · ${pct}% sourced · ${fps} fps`;
   }
 }
 tick();
@@ -574,8 +696,16 @@ if (followBtn) {
 setInterval(() => pollShortTerm(false), 5000);   // short-term reconciler (liveness + prune)
 
 // ---- dev handle for CDP verification ----
-window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, tendrilN: () => tendrilSpecs.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z };
+window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, tendrilN: () => tendrilSpecs.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z,
+  markerN: () => markerIndex.length, repaint: repaintNodeCloud,
+  // Seed synthetic nodes straight into the object store. The evidence encoding is only provable with nodes
+  // spanning every state (unsourced → authoritative, refuted, strong-id), and the live corpus rarely holds
+  // all of them at once in one view — same reason kg:dev-activity exists for the bus.
+  seed: (list) => { for (const n of (list || [])) { const o = ensureObj(n); o.x = n.x; o.y = n.y; o.z = n.z || 0; full.add(n.id); } render(); return objs.size; },
+  prov: () => { const d = Graph.graphData().nodes; let sourced = 0, ghost = 0, weak = 0, refuted = 0, sid = 0, enc = 0, lo = Infinity, hi = 0;
+    for (const n of d) { const a = evidenceAlpha(n); if (a === EV_GHOST) ghost++; if (a === EV_WEAK) weak++; const p = n.prov; if (p && p.encounters) { sourced++; enc += p.encounters; } if (p && p.refuted) refuted++; if (p && p.strongId) sid++; const s = nodePointSize(n); if (s < lo) lo = s; if (s > hi) hi = s; }
+    return { supplied: _provSupplied, nodes: d.length, sourced, ghost, weak, refuted, strongId: sid, encounters: enc, size: d.length ? [+lo.toFixed(1), +hi.toFixed(1)] : [] }; } };
 
 loadOverview();
 try { window.__kg3d.logN = () => _logN; window.__kg3d.logRows = () => (logFeed ? logFeed.childElementCount : 0); } catch (e) {}
-console.info('[kg3d] surface build lean-2: + right-dock live memory-activity log (color-coded ST/LT, kg:activity feed)');
+console.info('[kg3d] surface build lean-3: + evidence encoding (size=corroboration, alpha=vouched-for, ring=refuted/strong-id) + denser corpus request');
