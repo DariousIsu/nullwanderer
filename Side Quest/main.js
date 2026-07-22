@@ -8693,6 +8693,24 @@ async function autonomyTick() {
       } catch {}
     }
     for (const p of sum.artifacts) { try { require('./lib/presence').notify('Zoe — autonomous artifact', `${String(decision.target).slice(0, 50)} → ${p}`); } catch {} }
+    // THINGS SHE BUILDS get a long-term home (Lucas 2026-07-22: memory has places for conversations,
+    // who she is, what she learns AND what she builds). Each artifact lands in doc_store, so the
+    // nightly promote carries it into Echo — the same arc research dossiers ride. Without this the
+    // file existed only on disk: invisible to recall, absent from her memory story.
+    for (const p of sum.artifacts) {
+      try {
+        const r = filesLib.fileReadFull(p);
+        if (r && r.text && r.text.trim().length > 80) {
+          const dl = require('./lib/doc_store').land({
+            title: `Autonomy — ${String(decision.target).slice(0, 100)}`,
+            body: r.text, source: 'autonomy',
+            ref: `autonomy-${new Date(now).toISOString().slice(0, 10)}-${autonomy.slugify(decision.target)}`,
+            understanding: decision.why,
+          });
+          if (dl && dl.landed) console.log(`[autonomy] artifact landed in doc_store (#${dl.id}) → promotes to long-term`);
+        }
+      } catch (e) { console.error('[autonomy] artifact land failed:', e.message); }
+    }
     autonomy.historyPush(H, sum.entry);
     console.log(sum.report);
   } catch (e) {
