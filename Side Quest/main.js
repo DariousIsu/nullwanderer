@@ -4497,6 +4497,39 @@ let _chatTurnGen = 0;   // monotonic per chat turn — used to discard a prior t
 // it is in there. The menu is delivered separately in the budgeted `tools` slot; leaving it in both
 // would print ~4,200 chars of tool listing twice, and leaving it ONLY in identity buries it at the
 // top of a 34k blob where the model demonstrably did not reach for it.
+/**
+ * ⭐ MIRROR HER OWN CANVAS WRITES TO THE DURABLE STORE.
+ *
+ * There are two paths onto the canvas and only one persisted. The app's internal writes
+ * (canvasEmit/canvasUpsertBlock) call the saga tools AND THEN canvasMirror() → lib/canvas_docs,
+ * which is what boot replays from. A tag SHE emits dispatched straight to the same tools with no
+ * mirror, so it rendered live and was never written down.
+ *
+ * ⚠️ CALLED FROM BOTH DISPATCH SITES. The first version lived inline in the initial tag loop, and a
+ * document is written from the FOLLOW-UP hops — she opens the tab in the reply, then adds blocks as
+ * the chain continues. Live 2026-07-21: `echo chain hop 2: saga_canvas_add_block → ok` while the
+ * durable store still held 0 blocks. Shared here so the two sites cannot drift apart again.
+ */
+function _mirrorCanvasWrite(t, r) {
+  if (!r || !r.ok || !t || t.kind !== 'do' || !/^saga_canvas_(open_tab|add_block)$/.test(t.name || '')) return;
+  try {
+    const a = t.args || {};
+    const key = a.tab_key || a.tabKey;
+    if (!key) return;
+    if (t.name === 'saga_canvas_open_tab') {
+      require('./lib/canvas_docs').recordTab({ tabKey: key, mode: a.mode || 'DOC', title: a.title || key });
+      console.log(`[canvas] mirrored her tab "${a.title || key}" → durable store`);
+    } else {
+      // dispatch() returns {ok,isError,text} — there is NO structured result to read a block_id back
+      // from, so use the one she pre-assigned or mint a unique one. The id only has to be stable
+      // enough for recordBlock's position/upsert logic.
+      const bid = a.block_id || `her-${Date.now().toString(36)}-${Math.floor(performance.now() % 1000)}`;
+      require('./lib/canvas_docs').recordBlock({ tabKey: key, blockId: bid, blockType: a.block_type, data: a.data || {} });
+      console.log(`[canvas] mirrored her ${a.block_type} block → durable store`);
+    }
+  } catch (e) { console.error('[canvas] mirror of her write failed:', e.message); }
+}
+
 function _identityWithoutSuit(messages, suit) {
   const text = (messages || []).map((m) => m.content).join('\n\n');
   if (!suit) return text;
@@ -7450,23 +7483,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           // (Last 9 months)" — Lucas could see the tab — while `docs` stayed at 42 and the brief
           // existed nowhere but the running renderer. That is the same class as the reply that was
           // correct in the DB and never reached him: right action, wrong side of the door.
-          if (r.ok && t.kind === 'do' && /^saga_canvas_(open_tab|add_block)$/.test(t.name || '')) {
-            try {
-              const a = t.args || {};
-              const key = a.tab_key || a.tabKey;
-              if (key && t.name === 'saga_canvas_open_tab') {
-                require('./lib/canvas_docs').recordTab({ tabKey: key, mode: a.mode || 'DOC', title: a.title || key });
-                console.log(`[canvas] mirrored her tab "${a.title || key}" → durable store`);
-              } else if (key && t.name === 'saga_canvas_add_block') {
-                // dispatch() returns {ok,isError,text} — there is NO structured result to read a
-                // block_id back from, so use the one she pre-assigned or mint a unique one. The id
-                // only has to be stable enough for recordBlock's position/upsert logic.
-                const bid = a.block_id || `her-${Date.now().toString(36)}-${Math.floor(performance.now() % 1000)}`;
-                require('./lib/canvas_docs').recordBlock({ tabKey: key, blockId: bid, blockType: a.block_type, data: a.data || {} });
-                console.log(`[canvas] mirrored her ${a.block_type} block → durable store`);
-              }
-            } catch (e) { console.error('[canvas] mirror of her write failed:', e.message); }
-          }
+          _mirrorCanvasWrite(t, r);
           console.log(`[main] ${label}: ${r.ok ? 'ok' : 'ERR'}`);
         } catch (err) { console.error('[main] echo dispatch error:', err.message); }
       }
@@ -7968,6 +7985,13 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
         const content = `I used the Echo suit (${label}):\n${(r.text || '').slice(0, require('./lib/config').toolResultChars())}`;
         try { db.insertMonologue({ content, model: 'echo-suit', type: 'reading', query: label }); } catch {}
         try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(${label}${r.isError ? ' ⚠' : ''})`, type: 'reading', query: label }); } catch {}
+        // ⭐ MIRROR HERE TOO. The canvas mirror was added to the FIRST dispatch site only, and a
+        // document is written from the FOLLOW-UP hops — she opens the tab in the reply, then adds
+        // blocks as the chain continues. Live 2026-07-21: `echo chain hop 2: saga_canvas_add_block →
+        // ok` while the durable store still held 0 blocks, because this path never mirrored. The tab
+        // rendered on Lucas's canvas and would have vanished at the next reboot — the same
+        // right-action-wrong-side-of-the-door failure the mirror exists to prevent.
+        _mirrorCanvasWrite(t, r);
         console.log(`[main] echo chain hop ${echoHop + 1}: ${label} → ${r.ok ? 'ok' : 'ERR'}`);
         await fireToolFollowup({ io, channel, sessionId, resultText: content + (r.isError ? '\n[That call errored — fix the args or pick another tool with <echo-find>.]' : ''), echoHop: echoHop + 1, prompted });
       } catch (e) { console.error('[main] echo chain hop failed:', e.message); }

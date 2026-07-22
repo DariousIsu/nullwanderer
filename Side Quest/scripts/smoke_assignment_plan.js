@@ -147,8 +147,16 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
     'her canvas tags are recognised at the dispatch site');
   ok(/require\('\.\/lib\/canvas_docs'\)\.recordTab\(\{ tabKey: key/.test(m), 'a tab she opens is written down');
   ok(/require\('\.\/lib\/canvas_docs'\)\.recordBlock\(\{ tabKey: key/.test(m), 'and so is every block she adds');
-  ok(/if \(r\.ok && t\.kind === 'do'/.test(m),
+  ok(/if \(!r \|\| !r\.ok \|\| !t \|\| t\.kind !== 'do'/.test(m),
     'SAFETY: only a SUCCESSFUL write is mirrored — a rejected block must not appear in the durable store');
+  // ⭐ Live 2026-07-21: the mirror lived inline in the FIRST dispatch loop only, and a document is
+  // written from the FOLLOW-UP hops — "echo chain hop 2: saga_canvas_add_block → ok" while the
+  // durable store still held 0 blocks. Shared now, so the two sites cannot drift apart again.
+  // Match CALL statements only — `function _mirrorCanvasWrite(t, r) {` also contains the call-shaped
+  // substring, so a bare count of 2 was wrong the moment the shared function existed.
+  ok((m.match(/^\s*_mirrorCanvasWrite\(t, r\);$/gm) || []).length === 2,
+    'BOTH dispatch sites mirror — the initial tag loop AND the follow-up hop chain');
+  ok(/function _mirrorCanvasWrite/.test(m), 'via one shared function, not two copies');
   ok(/catch \(e\) \{ console\.error\('\[canvas\] mirror of her write failed:'/.test(m),
     'SAFETY: a mirror failure is logged and never costs her the live block');
 
