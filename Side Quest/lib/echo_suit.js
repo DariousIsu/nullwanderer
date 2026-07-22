@@ -240,6 +240,7 @@ class EchoSuit {
     this.lastError = null;
     this.bootMs = null;
     this._suit = null;           // cached { guide, atlas }
+    this._toolIndex = null;      // name → MCP tool object (schema pinned at attach)
   }
 
   client() {
@@ -257,6 +258,7 @@ class EchoSuit {
       this.serverInfo = (init && init.serverInfo) || c.serverInfo || null;
       const tools = await c.listTools();
       this.toolCount = Array.isArray(tools) ? tools.length : 0;
+      this._toolIndex = new Map((Array.isArray(tools) ? tools : []).map((t) => [t.name, t]));
       let guide = '', atlas = '', recipes = '';
       try { guide = normalizeToolResult(await c.callTool('get_usage_guide', {})).text; } catch {}
       try { atlas = normalizeToolResult(await c.callTool('get_atlas', {})).text; } catch {}
@@ -272,6 +274,26 @@ class EchoSuit {
   }
 
   status() { return { connected: this.connected, tools: this.toolCount, server: this.serverInfo, bootMs: this.bootMs, lastError: this.lastError }; }
+
+  // One compact "what the args look like" line for a tool, from the schema pinned at attach.
+  // Live 2026-07-22 (Bloomberg brief): four straight db_query hops died on args — "…" placeholder,
+  // then a guessed {"name": ...} — because the error said "re-emit valid JSON" without ever saying
+  // WHAT the args are. The signature was sitting in listTools() all along; feeding it back turns a
+  // burned hop chain into a one-hop correction.
+  argShape(name) {
+    const t = this._toolIndex && this._toolIndex.get(name);
+    const s = t && (t.inputSchema || t.input_schema);
+    if (!s || !s.properties) return null;
+    const req = new Set(Array.isArray(s.required) ? s.required : []);
+    const field = ([k, v]) => {
+      let type = (v && v.type) || (v && Array.isArray(v.anyOf) ? v.anyOf.map((x) => x && x.type).filter(Boolean).join('|') : '') || 'any';
+      // one level into object-typed params — saga_canvas_add_block's `data` is where the shape lives
+      if (type === 'object' && v.properties) type = `object{${Object.keys(v.properties).join(',')}}`;
+      return `"${k}": ${type}${req.has(k) ? ' (REQUIRED)' : ''}`;
+    };
+    const parts = Object.entries(s.properties).map(field);
+    return parts.length ? `${name} args: { ${parts.join(', ')} }` : null;
+  }
 
   // The always-on context block pinned into her prompt when the suit is on — the contract + map
   // + the tag grammar, so the navigation surface is in front of her (Echo's "load this first").
@@ -462,9 +484,16 @@ class EchoSuit {
         return { ok: true, kind: 'find', text: [recipes, tools].filter(Boolean).join('\n\n') };
       }
       if (tag.kind === 'do') {
-        if (tag.parseError) return { ok: false, kind: 'do', isError: true, text: `Your <echo-do name="${tag.name}"> args weren't valid JSON (${tag.parseError}). Re-emit with valid JSON args.` };
+        const shape = this.argShape(tag.name);
+        if (tag.parseError) return { ok: false, kind: 'do', isError: true, text: `Your <echo-do name="${tag.name}"> args weren't valid JSON (${tag.parseError}). Re-emit with valid JSON args.${shape ? ` ${shape}` : ''}` };
         const r = normalizeToolResult(await c.callTool(tag.name, tag.args || {}));
-        return { ok: r.ok, kind: 'do', name: tag.name, isError: r.isError, text: r.text };
+        let text = r.text;
+        // an argument-level rejection from Echo gets the signature appended too — same disease,
+        // valid JSON but the wrong keys ({"name": ...} when db_query needs {"sql": ...})
+        if (r.isError && shape && /validation error|missing_argument|missing required|invalid arguments|unexpected keyword|extra_forbidden|invalid_type/i.test(text || '')) {
+          text = `${text}\n${shape}`;
+        }
+        return { ok: r.ok, kind: 'do', name: tag.name, isError: r.isError, text };
       }
       if (tag.kind === 'delegate') {
         const args = { prompt: tag.task };
