@@ -726,10 +726,13 @@ function buildLinkCloud() {
   linkGeo = new THREE.BufferGeometry();
   linkGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   linkGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  // NormalBlending, not additive: at this density thousands of overlapping edges would stack into a white
-  // haze over the core. Per-link alpha is folded into brightness instead, which on a near-black ground reads
-  // the same as transparency without ever accumulating.
-  linkLines = new THREE.LineSegments(linkGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.62, blending: THREE.NormalBlending, depthWrite: false }));
+  // ADDITIVE, and this is a real defect fix rather than a preference. Once edge brightness dropped to ~8.5%
+  // to sit under the nodes, NormalBlending meant every edge painted a NEAR-BLACK line at 62% opacity over
+  // whatever was behind it — so in dense clusters the links were DARKENING the nebula, which is why the
+  // bright regions had black scribbles scrawled across them. Additive can only ever add light: a lone edge is
+  // a faint thread, and overlap accumulates into a glowing filament. That accumulation is the point — it is
+  // how density draws the structure instead of individual strokes drawing it.
+  linkLines = new THREE.LineSegments(linkGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
   linkLines.frustumCulled = false; scene.add(linkLines);
 }
 function updateLinkCloud() {
