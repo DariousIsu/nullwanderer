@@ -125,6 +125,17 @@ idle frontier comes up empty every boot, deterministically. An index on
 quiet-time near-misses and the boot-time hard failure. Consumer side needs no change; the caller
 already logs and degrades.
 
+**Addendum, later 2026-07-22:** it is broader than the one scan. On boot39 `search_entities` and
+two other `db_query` shapes (3-param and 9-param) also failed — `fetch failed` at the connection
+level while `/health` stayed 200 and other calls landed in between — and one 9-param call got an
+Echo-side Python error: `attach-chain discovery failed: tuple index out of range` (hint blames the
+saga store, but the saga store answers fine). Process table at the time: the engine + 3 sidecars,
+plus BOTH sessions' stdio `echo.mcp_server` instances, all on the same SQLite files, while your
+database move runs. Reads like lock-contention stalls resetting pending connections, with the
+tuple-index error surfacing under the same churn — both Echo-side, so yours to judge. I considered
+and rejected killing the 13:21-era python processes: they are our two sessions' live MCP servers,
+not orphans.
+
 ---
 
 ## 4. Two operational rules, because we collided today
