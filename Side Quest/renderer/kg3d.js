@@ -105,7 +105,7 @@ function makeCore3D(strength = 0.05) {
 // (the graph-walk mints them; nothing records where they came from). Drawing them at full strength was the
 // surface asserting a confidence the data has never had. Now they show as what they are — present, unsourced.
 // ============================================================================================================
-const EV_GHOST = 0.34, EV_WEAK = 0.58, EV_ORDINARY = 0.84, EV_SOLID = 1.0;
+const EV_GHOST = 0.34, EV_WEAK = 0.58, EV_ORDINARY = 0.84, EV_ELSEWHERE = 0.78, EV_SOLID = 1.0;
 // "The backend told us nothing about evidence" and "the evidence log says nothing about this node" are
 // different facts, and a surface built on that exact distinction must not collapse them. Until at least one
 // payload carries provenance — an older main process, a failed handler — nothing is ghosted at all.
@@ -113,10 +113,19 @@ let _provSupplied = false;
 function evidenceAlpha(n) {
   if (!_provSupplied) return EV_SOLID;
   const p = n && n.prov;
-  if (!p || !p.encounters) return EV_GHOST;      // never encountered — no provenance on file
-  if (p.authoritative > 0) return EV_SOLID;      // an official/operator record vouched for it
-  if (p.ordinary > 0) return EV_ORDINARY;        // ordinary sources only
-  return EV_WEAK;                                // unknown/stated authority only — "go look" (encounters.js)
+  if (p && p.encounters) {
+    if (p.authoritative > 0) return EV_SOLID;    // an official/operator record vouched for it
+    if (p.ordinary > 0) return EV_ORDINARY;      // ordinary sources only
+    return EV_WEAK;                              // unknown/stated authority only — "go look" (encounters.js)
+  }
+  // NO LOCAL ENCOUNTER, and what that means depends entirely on which store the node is from. In the local
+  // short-term store it is the real defect: the graph-walk mints entities without recording where they came
+  // from, so a missing encounter genuinely means nobody knows why this exists — ghost it. For an Echo corpus
+  // node it means almost nothing: 1.76M entities were bulk-imported long before this log existed and carry
+  // their provenance in Echo's own citations, which this read has never looked at. Dimming those would be
+  // the surface asserting absence of evidence from evidence of absence — the exact error the object model
+  // exists to prevent. Measured live: it would have ghosted 473 of 525 corpus nodes on a false premise.
+  return (n && n.store === 'sidequest') ? EV_GHOST : EV_ELSEWHERE;
 }
 function provChanged(a, b) {
   if (!a || !b) return a !== b;

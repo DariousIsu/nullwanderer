@@ -29,6 +29,11 @@
     government_body: '#3B82F6', gov: '#3B82F6', body: '#3B82F6',
     location: '#EC4899', place: '#EC4899',
     office_held: '#818CF8', work: '#22D3EE', document: '#A3E635', meeting: '#FB923C',
+    // Measured against the live corpus (2026-07-22): these five carried 123 of 525 overview nodes — 23% of
+    // the cloud drawing as "no type we recognise" when Echo types them perfectly well. Grouped by family so
+    // the palette still reads: the legal/legislative work sits in the ambers beside legislation and bill.
+    decision: '#FACC15', legal_instrument: '#B45309',
+    poll: '#FB7185', network: '#D8B4FE', theme: '#FDE68A',
   };
   const colorFor = (t) => TYPE_COLOR[(t || '').toLowerCase()] || '#7dd3fc';
 
