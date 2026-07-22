@@ -8807,7 +8807,17 @@ async function autonomyTick() {
     }
     // WORK MOVES (research / fill-gap / corroborate / clean / build) → one bounded operator run.
     // autonomous:true keeps Echo writes tier-gated; build gets the task budget (it produces a file).
-    const brief = autonomy.buildOperatorBrief(decision, { now });
+    let brief = autonomy.buildOperatorBrief(decision, { now });
+    // PROCEDURAL MEMORY (2c): a proven procedure / learned constraints matching this run's shape
+    // ride the brief — the model executes a known recipe with its track record shown, instead of
+    // deriving the approach from scratch every time. No match → nothing appended (silence > filler).
+    let procMatch = null;
+    try {
+      const procs = require('./lib/procedures');
+      procMatch = procs.match({ move: decision.move, target: decision.target });
+      const pb = procs.briefBlock(procMatch);
+      if (pb) brief += '\n\n' + pb;
+    } catch (e) { console.error('[autonomy] procedure match failed:', e.message); }
     // Register on the workstream board (conductor 2a) — the run is visible to chat's "what are you
     // doing?", to the next tick's manifest, and (2b) to slot allocation. Board failure never blocks work.
     let boardId = null;
@@ -8821,6 +8831,19 @@ async function autonomyTick() {
     try { expectVerdict = await autonomy.verifyExpect({ decision, opRes: res }); } catch {}
     const sum = autonomy.summarizeOutcome(decision, res, { now, verify: expectVerdict });
     try { require('./lib/board').finish(boardId, { status: sum.ok ? 'done' : 'failed', note: String(sum.entry && sum.entry.outcome || '').slice(0, 160) }); } catch {}
+    // CRYSTALLIZE (2c): the verified run writes back into procedural memory — an injected
+    // procedure's track record updates either way; a met run drafts/folds a reusable procedure;
+    // an unmet one lands a durable constraint. The substrate gets stronger with use.
+    try {
+      const procs = require('./lib/procedures');
+      if (procMatch && procMatch.procedure && expectVerdict && typeof expectVerdict.met === 'boolean') {
+        procs.recordUse(procMatch.procedure.id, { met: expectVerdict.met, nowMs: now });
+      }
+      const cr = await procs.crystallize({ decision, opRes: res, verdict: expectVerdict, nowMs: now });
+      if (cr && cr.created) console.log(`[autonomy] procedure born: "${cr.created.name}" (#${cr.created.id})`);
+      else if (cr && cr.folded) console.log(`[autonomy] procedure reinforced: "${cr.folded.name}" (#${cr.folded.id})`);
+      else if (cr && cr.constraint) console.log(`[autonomy] constraint ${cr.confirmed ? 'confirmed' : 'learned'}: "${cr.constraint.name}"`);
+    } catch (e) { console.error('[autonomy] crystallize failed:', e.message); }
     if (sum.ok) {
       // The finding enters her stream as a reading (visible in the rail, recallable later). Web
       // learnings already accreted inside runCloudOperator; this is the narrative record.

@@ -94,6 +94,27 @@ const MIGRATIONS = [
     since_ts INTEGER NOT NULL,
     heartbeat_ts INTEGER NOT NULL
   )`,
+  // PROCEDURAL MEMORY (conductor slice 2c — lib/procedures.js). The "how to do things" store the
+  // harness thesis calls for: competence moves from model parameters into retrievable rows. kind
+  // 'procedure' = a proven method (trigger/steps/check, with its honest track record); 'constraint'
+  // = a durable "this did NOT work" that outlives the 12-entry autonomy history. Crystallized from
+  // her own expect-verified runs; injected into operator briefs when the trigger matches.
+  `CREATE TABLE IF NOT EXISTS procedures (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL DEFAULT 'procedure' CHECK(kind IN ('procedure','constraint')),
+    name TEXT NOT NULL,
+    trigger_text TEXT NOT NULL,
+    steps TEXT,
+    check_text TEXT,
+    applicability TEXT,
+    provenance TEXT,
+    met INTEGER NOT NULL DEFAULT 0,
+    unmet INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','retired')),
+    created_ts INTEGER NOT NULL,
+    last_used_ts INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_procedures_status ON procedures(status, kind)`,
   `CREATE INDEX IF NOT EXISTS idx_monologue_type_ts ON monologue(type, ts)`,
   `CREATE TABLE IF NOT EXISTS commitments (
     id INTEGER PRIMARY KEY,

@@ -252,6 +252,7 @@ const smokes = [
   'smoke_story_follow.js',
   'smoke_recall.js',
   'smoke_board.js',
+  'smoke_procedures.js',
   'smoke_ner.js',
   'smoke_mention.js',
   'smoke_cognition.js',
