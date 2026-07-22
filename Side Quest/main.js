@@ -8666,6 +8666,7 @@ function kickDirectedFocusDriver() {
 // self-initiated engagement through the same door research announcements use.
 let autonomyTimer = null;
 let autonomyInFlight = false;
+let _autonomySlot = null;          // the pool cloud slot the current tick holds (board, 2b)
 const AUTONOMY_TICK_MS = 60 * 1000;                    // timer cadence; the real pace is the meta gap below
 function _autonomyCadenceMs() { return Math.max(2, _intMeta('autonomy.cadence_min', 10)) * 60 * 1000; }
 function _autonomyEnabled() {
@@ -8723,15 +8724,29 @@ async function autonomyTick() {
     if (now - (parseInt(db.getMeta('autonomy.last_decide_at') || '0', 10) || 0) < _autonomyCadenceMs()) return;
     // YIELD to live conversation: a turn in the last 3 minutes means Lucas is here — the idle lane
     // must never contend with him for cloud slots or attention (subject-leak rule doubly so).
+    // ⭐CONDUCTOR RELAXATION (2b): his presence stops PAUSING her inner life. The old rule — any
+    // turn in the last 3 minutes silences the whole tick — existed because cloud slots were
+    // unmanaged. The chat's slot is now structurally reserved (board: cloud_slot_1 is never
+    // allocatable), so WORK proceeds while they talk. Two residues of the old rule survive:
+    // never START a decision mid-exchange (a turn in the last 20s = a reply is in flight), and
+    // ENGAGE still defers while the conversation is live — she works alongside him, she doesn't
+    // interject alongside him.
     const recent = db.getRecentTurns(6) || [];
     const lastTurnTs = recent.reduce((a, t) => Math.max(a, t && t.ts || 0), 0);
-    if (now - lastTurnTs < 3 * 60 * 1000) return;
-    // YIELD to assigned work: a directed focus (Lucas's assignment) owns the operator lane.
+    if (now - lastTurnTs < 20 * 1000) return;
+    const chatLive = now - lastTurnTs < 3 * 60 * 1000;
+    // YIELD to assigned work: a directed focus (Lucas's assignment) outranks idle exploration for
+    // the operator lane — deliberate priority, not a missing feature (his work first, hers after).
     try { const fl = require('./lib/focus'); const f = fl.getCurrent(); if (f && fl.isDirected(f)) return; } catch {}
     if (directedStepInFlight) return;
     try { if (db.getMeta('scribe_active') === '1') return; } catch {}   // never during a live meeting
     // THROTTLE — the same rolling session/weekly/concurrency brakes as every autonomous pass.
     if (!_researchGateOk('autonomy', 'autonomy')) return;
+    // CONDUCTOR (2b): the tick runs on an ALLOCATABLE cloud slot — by construction never the chat's.
+    // Pool exhausted → skip this tick; idle work never queues, contention resolves by cadence.
+    _autonomySlot = null;
+    try { _autonomySlot = require('./lib/board').acquireCloudSlot({ lane: 'autonomy', nowMs: now }); } catch {}
+    if (!_autonomySlot) { console.log('[autonomy] no free cloud slot — tick skipped'); return; }
 
     autonomyInFlight = true;
     _bgInFlight.add('autonomy');
@@ -8769,8 +8784,8 @@ async function autonomyTick() {
       const gapMin = Math.max(10, _intMeta('autonomy.engage_min_gap_min', 45));
       const lastEng = parseInt(db.getMeta('autonomy.last_engage_at') || '0', 10) || 0;
       const away = (() => { try { return require('./lib/availability').isAway(); } catch { return false; } })();
-      if (away || (now - lastEng) < gapMin * 60 * 1000 || !currentSessionId) {
-        const skipWhy = away ? 'Lucas away' : (!currentSessionId ? 'no session' : 'engage cadence');
+      if (away || chatLive || (now - lastEng) < gapMin * 60 * 1000 || !currentSessionId) {
+        const skipWhy = away ? 'Lucas away' : (chatLive ? 'conversation live — deferred' : (!currentSessionId ? 'no session' : 'engage cadence'));
         autonomy.historyPush(H, { ts: now, move: 'engage', target: decision.target, outcome: `skipped (${skipWhy})` });
         console.log(`[autonomy] chose=engage → skipped (${skipWhy})`);
         return;
@@ -8796,7 +8811,7 @@ async function autonomyTick() {
     // Register on the workstream board (conductor 2a) — the run is visible to chat's "what are you
     // doing?", to the next tick's manifest, and (2b) to slot allocation. Board failure never blocks work.
     let boardId = null;
-    try { boardId = require('./lib/board').start({ lane: 'autonomy', kind: decision.move, target: decision.target }).id; } catch {}
+    try { boardId = require('./lib/board').start({ lane: 'autonomy', kind: decision.move, target: decision.target, note: _autonomySlot ? `on ${_autonomySlot}` : null }).id; } catch {}
     const res = await runCloudOperator({ userMessage: brief, context: manifest.text, task: decision.move === 'build', autonomous: true });
     try { require('./lib/board').beat(boardId); } catch {}
     // S3 VERIFY — the run is judged against the plan's own `expect` before it is recorded. An
@@ -8840,6 +8855,7 @@ async function autonomyTick() {
   } finally {
     autonomyInFlight = false;
     try { _bgInFlight.delete('autonomy'); } catch {}
+    try { if (_autonomySlot) { require('./lib/board').release(_autonomySlot); _autonomySlot = null; } } catch {}
   }
 }
 
