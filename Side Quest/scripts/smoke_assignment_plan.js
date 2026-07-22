@@ -62,6 +62,12 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
     'the tab and its first block go out together — a later step never comes');
   ok(/An opened tab with nothing in it is worse than no tab/.test(a),
     'and an empty tab is named as worse than none: it looks like work that happened');
+  // ⭐ The first block that ever reached the durable store read {"markdown":"...plan..."} — perfect
+  // structure, placeholder substance. She stopped copying MY placeholders and minted her own.
+  ok(/EVERY BLOCK CARRIES ITS REAL CONTENT/.test(a), 'placeholder blocks are forbidden by name');
+  ok(/Never write "\.\.\.", "TBD", "plan goes here"/.test(a), 'with the exact junk she wrote quoted');
+  ok(/A block you do not yet have the content for is a block you do not write yet/.test(a),
+    'and the honest alternative stated: defer the block, never stub it');
   ok(/FILL IT IN as the material arrives/.test(a), 'stage 2 grows the same tab');
   ok(/An empty section with an honest "not researched yet" is information/.test(a),
     'a gap is declared rather than omitted');

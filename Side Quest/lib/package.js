@@ -161,6 +161,14 @@ function buildPlan({ intent = null, depth = {}, mustCite = false, unresolved = [
       + 'work that happened. The first block is what he asked for, in his words, and your plan for '
       + 'it — the sections you will cover and how you will get each — so he can correct the plan '
       + 'before you have spent an hour on the wrong thing.');
+    // ⭐ Live 2026-07-21, the first block that ever made it to the durable store read, in full:
+    // {"markdown":"...plan..."} — a heading titled "Research Contract / Plan" over a literal
+    // ellipsis. The structure was perfect and the substance was a placeholder she minted herself.
+    // A placeholder block is the empty-tab failure wearing the shape of success.
+    lines.push('   ⚠ EVERY BLOCK CARRIES ITS REAL CONTENT. Never write "...", "TBD", "plan goes '
+      + 'here" or any placeholder into a block — you already KNOW what he asked for and what your '
+      + 'sections are, so the contract block is written out in full, in sentences, in the same '
+      + 'breath. A block you do not yet have the content for is a block you do not write yet.');
     lines.push('   2. FILL IT IN as the material arrives — one heading + paragraph per section, added '
       + 'to the SAME tab. An empty section with an honest "not researched yet" is information; a '
       + 'missing section is not. Partial and cited beats complete and promised.');
