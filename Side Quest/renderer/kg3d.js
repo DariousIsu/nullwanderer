@@ -86,57 +86,82 @@ function logActivity(evt) {
 // corpus's biggest hubs press IN to meet it, and the thin tails of both fall away from the interface. A
 // recognition therefore fires between two dense surfaces rather than across a uniform gap — and it fills out
 // both bodies, since a uniform shell wasted its whole surface on nodes of every weight at one radius.
+// ONE CLOUD, TWO HALVES (Lucas, 2026-07-22: "we lost the cloud feel when we should have just felt a change in
+// the cloud density… what if instead of two nested spheres we did two halves of one sphere?").
+//
+// The nested-shell build was a mistake I can name precisely: I answered "make the region legible" by adding a
+// BOUNDARY OBJECT — a membrane mesh — and then hard-capped the orb inside it. A shaded sphere with a wireframe
+// on it reads as a planet, and the cap opened a dead moat around it, so the result was two solids in a void
+// instead of a cloud. Density was supposed to be the boundary and I made geometry the boundary.
+//
+// So: one body, split along an axis. Short-term fills one half, the corpus the other, both at the same scale,
+// interpenetrating at the middle — no shell, no moat, no membrane mesh. Lucas's connectivity gradient survives
+// intact and gets better: instead of grading toward a sphere's surface, each side grades toward the PLANE, so
+// the two dense faces meet across the middle and recognition fires straight through the interface.
 const ZOE_RING = 60;
-const ORB_IN = 72, ORB_R = 178;                  // short-term: sparse deep inside → dense at the membrane
-const SHELL_IN = 300, SHELL_OUT = 640;           // long-term: hubs at the inner face → thin tail far out
-const CLOUD_SHELL = SHELL_IN;                    // recognition mints land on the inner face
+const AX = { x: 1, y: 0, z: 0 };                 // the split axis: short-term −x, corpus +x
+const CLOUD_R = 430;                             // radius of the ONE cloud both halves belong to
+const R_SQ = 0.60;                               // her half is tighter — same-ish node count in less volume = DENSER
+const PLANE_MIN = 0.10;                          // hubs press this close to the dividing plane
+const PERP_SQ = CLOUD_R * R_SQ, PERP_EC = CLOUD_R;
+const CLOUD_SHELL = CLOUD_R * 0.55;              // recognition mints land inside the corpus half
 const DEG_ECHO_MAX = 3.25, DEG_SQ_MAX = Math.log10(21);   // log-degree normalisers (echo degrees reach ~1600)
-function bandRadius(n) {
-  if (n.store === 'sidequest') {
-    const t = Math.max(0, Math.min(1, Math.log10(1 + (n.localDeg || 0)) / DEG_SQ_MAX));
-    return ORB_IN + (ORB_R - ORB_IN) * t;        // more connected → nearer the membrane
+// A point inside this node's own half of the sphere. Constraining only the axial coordinate (the previous
+// attempt) never fills a volume — it pressed each half into a thin column, because nothing said where a node
+// belonged ACROSS the axis. Every node now gets a deterministic home in its hemisphere: cube-root radius so
+// the ball fills EVENLY rather than crowding the centre, a fixed angle around the axis, and an axial fraction
+// set by connectivity — hubs near the dividing plane, thin tails out toward the poles. Springs pull nodes
+// toward these, charge and links then push them off it, and the result reads as a cloud instead of a lattice.
+// Declared above targetPoint on purpose — this file has sprung the temporal-dead-zone trap four times now.
+const _midCen = { x: 0, y: 0, z: 0 };            // the middle of the whole cloud; the dividing plane runs through it
+const _tp = new THREE.Vector3();
+function targetPoint(n) {
+  if (!n._tp) {
+    const h1 = hashSeed(String(n.id) + '#r'), h2 = hashSeed(String(n.id) + '#a'), h3 = hashSeed(String(n.id) + '#u');
+    n._tp = { rf: Math.cbrt(0.10 + 0.90 * h1), ang: h2 * Math.PI * 2, jit: (h3 - 0.5) * 0.30 };
   }
-  const d = (typeof n.degree === 'number' && n.degree > 0) ? n.degree : (n.localDeg || 0);
-  const t = Math.max(0, Math.min(1, Math.log10(1 + d) / DEG_ECHO_MAX));
-  return SHELL_OUT - (SHELL_OUT - SHELL_IN) * t; // more connected → nearer the membrane, from the other side
+  const sq = n.store === 'sidequest';
+  const d = sq ? (n.localDeg || 0) : ((typeof n.degree === 'number' && n.degree > 0) ? n.degree : (n.localDeg || 0));
+  const t = Math.max(0, Math.min(1, Math.log10(1 + d) / (sq ? DEG_SQ_MAX : DEG_ECHO_MAX)));
+  const r = CLOUD_R * (sq ? R_SQ : 1) * n._tp.rf;
+  let u = PLANE_MIN + (1 - t) * (0.96 - PLANE_MIN) + n._tp.jit;      // |u| = how far toward its own pole
+  u = Math.max(PLANE_MIN * 0.5, Math.min(0.99, u)) * (sq ? -1 : 1);
+  const perp = r * Math.sqrt(Math.max(0, 1 - u * u));
+  // AX is +x, so the perpendicular plane is y/z.
+  return _tp.set(_midCen.x + AX.x * r * u, _midCen.y + Math.cos(n._tp.ang) * perp, _midCen.z + Math.sin(n._tp.ang) * perp);
 }
-// The live centroid of the orb, written by the core force each tick — the membrane, the Zoe anchor and the
-// personality orbits all follow it, so the whole region drifts as one body when the sim breathes.
+// The middle of the whole cloud, and the heart of her half — the Zoe anchor, her personality orbits, the
+// thinking motes and the firing origins all ride these, so everything moves as one body as the sim breathes.
 const _coreCen = { x: 0, y: 0, z: 0, set(x, y, z) { this.x = x; this.y = y; this.z = z; } };
 function makeCore3D(strength = 0.05) {
   let ns = [];
   function force(alpha) {
-    let cx = 0, cy = 0, cz = 0, c = 0;
-    for (const n of ns) if (n.store === 'sidequest' && !n.zoe && Number.isFinite(n.x)) { cx += n.x; cy += n.y; cz += (n.z || 0); c++; }
-    if (c) { cx /= c; cy /= c; cz /= c; }
-    _coreCen.set(cx, cy, cz);                              // membrane + anchor follow the live centroid
+    // The cloud's own middle — the interface plane passes through it, perpendicular to AX.
+    let mx = 0, my = 0, mz = 0, m = 0, sx = 0, sy = 0, sz = 0, s = 0;
+    for (const n of ns) {
+      if (n.zoe || !Number.isFinite(n.x)) continue;
+      mx += n.x; my += n.y; mz += (n.z || 0); m++;
+      if (n.store === 'sidequest') { sx += n.x; sy += n.y; sz += (n.z || 0); s++; }
+    }
+    if (m) { mx /= m; my /= m; mz /= m; }
+    _midCen.x = mx; _midCen.y = my; _midCen.z = mz;
+    if (s) _coreCen.set(sx / s, sy / s, sz / s); else _coreCen.set(mx, my, mz);
     for (const n of ns) {
       if (!Number.isFinite(n.x)) continue;
-      const dx = n.x - cx, dy = n.y - cy, dz = (n.z || 0) - cz, d = Math.hypot(dx, dy, dz) || 1;
       if (n.zoe) {                                         // personality ring: spring to its own orbit point
-        const tx = cx + n.zoeOff.x, ty = cy + n.zoeOff.y, tz = cz + n.zoeOff.z, k = strength * 6 * alpha;
+        const tx = _coreCen.x + n.zoeOff.x, ty = _coreCen.y + n.zoeOff.y, tz = _coreCen.z + n.zoeOff.z, k = strength * 6 * alpha;
         n.vx = (n.vx || 0) + (tx - n.x) * k;
         n.vy = (n.vy || 0) + (ty - n.y) * k;
         n.vz = (n.vz || 0) + (tz - (n.z || 0)) * k;
-      } else {
-        // Every non-personality node springs to ITS OWN radius, set by how connected it is (bandRadius).
-        // Short-term is held firmly so the orb keeps a hard edge; the corpus eases, so links can still pull
-        // clusters into shape around their band instead of freezing onto a perfect sphere.
-        const sq = n.store === 'sidequest';
-        const target = bandRadius(n);
-        // The corpus spring was 1.25 and lost to charge: its hub face settled at r≈473 against a 300 target,
-        // leaving a dead band twice the width of the orb between the two dense surfaces. Firm enough to hold
-        // its face near the membrane, still soft enough for link clusters to shape it.
-        const f = (target - d) * strength * (sq ? 3.0 : 2.6) * alpha;
-        n.vx = (n.vx || 0) + (dx / d) * f;
-        n.vy = (n.vy || 0) + (dy / d) * f;
-        n.vz = (n.vz || 0) + (dz / d) * f;
-        if (sq) {                                          // plus a gentle centre-pull so the orb stays a body
-          n.vx += (cx - n.x) * strength * 0.35 * alpha;
-          n.vy += (cy - n.y) * strength * 0.35 * alpha;
-          n.vz += (cz - (n.z || 0)) * strength * 0.35 * alpha;
-        }
+        continue;
       }
+      // One soft spring toward the node's home point in its half of the sphere. Deliberately gentle — charge
+      // and links have to be able to pull clusters off it, or the cloud freezes into the lattice the target
+      // points describe. The shape comes from the targets; the LIFE comes from the forces fighting them.
+      const p = targetPoint(n), k = strength * 1.15 * alpha;
+      n.vx = (n.vx || 0) + (p.x - n.x) * k;
+      n.vy = (n.vy || 0) + (p.y - n.y) * k;
+      n.vz = (n.vz || 0) + (p.z - (n.z || 0)) * k;
     }
   }
   force.initialize = (n) => { ns = n; };
@@ -246,7 +271,7 @@ try {
     // is the operator's — a surface that re-aims itself while you are reading it is worse than a loose fit.
     // (no mode test here on purpose — `mode` is declared below and this is the third temporal-dead-zone trap
     // this file has sprung on me. The one-shot flag is consumed by the initial overview cooldown anyway.)
-    if (_fitOnCool) { _fitOnCool = false; fitView(1000); }
+    if (_fitOnCool) { _fitOnCool = false; fitView(1000, true); }
   });
 } catch (e) {}
 Graph.d3Force('core', makeCore3D(0.05));
@@ -281,10 +306,10 @@ function flyTo(pos, ms) { try { Graph.cameraPosition({ x: pos.x, y: pos.y, z: po
 // nodeThreeObject, and the lean rebuild made those empty Object3Ds with no geometry to measure. It fails
 // silently — it just leaves the camera wherever it was, which is why the corpus kept being viewed from 4177
 // units away. Same root cause as the missing hover labels: the library can't see nodes it doesn't draw.
-function fitView(ms) {
+function fitView(ms, broadside) {
   try {
     const ns = Graph.graphData().nodes;
-    const c = coreCentroid3D();
+    const c = broadside ? new THREE.Vector3(_midCen.x, _midCen.y, _midCen.z) : coreCentroid3D();
     let R = 0;
     for (const n of ns) if (Number.isFinite(n.x)) R = Math.max(R, Math.hypot(n.x - c.x, n.y - c.y, (n.z || 0) - c.z));
     if (!R) return;
@@ -294,6 +319,10 @@ function fitView(ms) {
     let dx = cam.x - c.x, dy = cam.y - c.y, dz = cam.z - c.z;
     const L = Math.hypot(dx, dy, dz) || 1;
     if (L < 1e-3) { dx = 0; dy = 0.35; dz = 1; }                  // keep the operator's current angle, change only range
+    // BROADSIDE: view the split from the side, so the two halves sit left and right of each other. Left to its
+    // own devices the fit kept the camera looking straight DOWN the split axis, where the halves overlap into
+    // one blob and the whole structure is invisible — the layout was right and the viewpoint hid it.
+    if (broadside) { dx = AX.z * 0.06; dy = 0.34; dz = 1; }
     const k = D / (Math.hypot(dx, dy, dz) || 1);
     Graph.cameraPosition({ x: c.x + dx * k, y: c.y + dy * k, z: c.z + dz * k }, c, ms == null ? 900 : ms);
   } catch (e) {}
@@ -393,8 +422,8 @@ async function loadOverview() {
   render();
   // Fit once now and again once the sim has actually settled — at load the nodes are still flying outward,
   // so a single early fit frames a cloud that no longer exists a few seconds later.
-  fitView(0);
-  setTimeout(() => { if (mode === 'overview') fitView(1200); }, 4500);
+  fitView(0, true);
+  setTimeout(() => { if (mode === 'overview') fitView(1200, true); }, 4500);
 }
 
 function mergeEgo(res) {
@@ -725,23 +754,15 @@ function showCard(n) {
 // with a slow breathing pulse, orbited by her actual self_model rows (kg:self) as the innermost ring. Cost:
 // one 24×16 sphere mesh + two sprites — nothing per-node, nothing post-processed.
 // ============================================================================================================
+// THE MEMBRANE MESH IS GONE. It was the single thing that killed the cloud: a shaded sphere with a wireframe
+// on it is a planet, and everything else — the moat, the "two solids in a void" look — followed from having
+// built a boundary OBJECT at all. The interface is now just where the two halves meet, marked by an
+// exceedingly faint glow disc lying IN the plane rather than a skin wrapped around anything.
+// NO BOUNDARY OBJECT AT ALL. The membrane sphere made it a planet; replacing it with a disc in the interface
+// plane just made a black slab across the middle. The lesson finally landed: any solid I add to mark the
+// division stops the thing being a cloud. Density and colour ARE the boundary — which is what Lucas said in
+// the first place. Nothing is drawn here now; the interface exists only as the place the two halves meet.
 let membrane = null, zoeAnchor = null, zoeHalo = null;
-(function buildRegion() {
-  try {
-    const geo = new THREE.SphereGeometry(1, 24, 16);
-    const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(SQ_VIOLET), transparent: true, opacity: 0.045, side: THREE.BackSide, depthWrite: false, blending: THREE.AdditiveBlending });
-    // Drawn at 1.18× the cap: centre-pull against the cap makes the orb EQUILIBRATE at the rim (measured
-    // median 183 / p95 188 against ORB_R 175), so a membrane at exactly ORB_R would leave half the orb
-    // studding its outside. The skin belongs just beyond where the mass actually settles.
-    membrane = new THREE.Mesh(geo, mat); membrane.scale.setScalar(ORB_R * 1.18); membrane.renderOrder = 1; scene.add(membrane);
-    // a whisper of an outline so the edge reads even where no corpus sits behind it. First cut was 0.10 and
-    // the screenshot read as a geodesic scaffold, not a membrane — the wires were louder than the memory.
-    const rim = new THREE.Mesh(new THREE.SphereGeometry(1, 18, 10), new THREE.MeshBasicMaterial({ color: new THREE.Color(SQ_VIOLET), transparent: true, opacity: 0.028, wireframe: true, depthWrite: false, blending: THREE.AdditiveBlending }));
-    rim.scale.setScalar(1.002); membrane.add(rim);
-  } catch (e) { console.warn('[kg3d] membrane failed:', e && e.message); }
-  // NOTE: no ensureZoeAnchor() here — it needs SPARK_TEX/mkSprite, whose `const` bindings sit below this IIFE
-  // and are still in their temporal dead zone while it runs. The boot call at the bottom raises her instead.
-})();
 
 function zoeSprite(colorHex, opacity, scale) { const s = mkSprite(colorHex, opacity); s.scale.setScalar(scale); return s; }
 function ensureZoeAnchor() {
@@ -751,7 +772,6 @@ function ensureZoeAnchor() {
   scene.add(zoeAnchor); scene.add(zoeHalo);
 }
 function updateRegion(now) {
-  if (membrane) membrane.position.set(_coreCen.x, _coreCen.y, _coreCen.z);
   if (zoeAnchor) {
     const b = 1 + Math.sin(now / 1400) * 0.12;             // slow breath, not a blink
     zoeAnchor.position.set(_coreCen.x, _coreCen.y, _coreCen.z); zoeAnchor.scale.setScalar(9 * b);
@@ -900,12 +920,11 @@ const TRACE_RGB = new THREE.Color(0xc4b5fd), TRACE_HOT = new THREE.Color(0xf5f3f
     traceLines.frustumCulled = false; scene.add(traceLines);
   } catch (e) { console.warn('[kg3d] trace buffer failed:', e && e.message); }
 })();
+// A firing starts where she is and crosses the interface to the thing she recognised — so the origin is her
+// own centre, not a point on some surface. The trace therefore reads as passing THROUGH the middle.
+function traceOrigin() { return new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z); }
 function addTrace(target) {
-  const c = new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z);
-  const dir = new THREE.Vector3(target.x - c.x, target.y - c.y, (target.z || 0) - c.z);
-  if (dir.lengthSq() < 1e-4) dir.set(0, 1, 0);
-  const a = c.clone().add(dir.clone().normalize().multiplyScalar(ORB_R * 1.18));
-  traces[traceHead] = { a, node: target, born: performance.now() };
+  traces[traceHead] = { a: traceOrigin(), node: target, born: performance.now() };
   traceHead = (traceHead + 1) % TRACE_CAP;
 }
 function updateTraces(now) {
@@ -934,9 +953,7 @@ function updateTraces(now) {
 function gMatch(bNode) {   // the firing itself: a hot head racing out, arriving in a burst on the known node
   const b = V3(bNode);
   addTrace(bNode);
-  const c = new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z);
-  const dir = b.clone().sub(c); if (dir.lengthSq() < 1e-4) dir.set(0, 1, 0); dir.normalize();
-  const a = c.clone().add(dir.multiplyScalar(ORB_R * 1.18));
+  const a = traceOrigin();
   const head = mkSprite(0xf5f3ff, 1.0), flash = mkSprite(0xc4b5fd, 0), ring = mkSprite(SHEX, 0);
   head.scale.setScalar(5); head.position.copy(a); flash.position.copy(b); flash.scale.setScalar(4); ring.position.copy(b); ring.scale.setScalar(3);
   addEffect([head, flash, ring], 1500, (p) => {
@@ -983,7 +1000,7 @@ function gAbsorb(pos, count) {                 // dedup merge: duplicate motes c
 // anchor into the space between the stores — and the membrane itself shimmers at every crossing.
 function gThink() {                            // a thought: condenses in the orb, drifts toward her
   const c = new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z);
-  const h = Math.random() * Math.PI * 2, v = Math.acos(2 * Math.random() - 1), r = ORB_R * (0.45 + 0.5 * Math.random());
+  const h = Math.random() * Math.PI * 2, v = Math.acos(2 * Math.random() - 1), r = PERP_SQ * (0.30 + 0.45 * Math.random());
   const start = c.clone().add(new THREE.Vector3(r * Math.sin(v) * Math.cos(h), r * Math.sin(v) * Math.sin(h), r * Math.cos(v)));
   const s = mkSprite(VHEX, 0.34); s.scale.setScalar(2); s.position.copy(start);
   addEffect([s], 1700, (p) => { const e = 1 - (1 - p) * (1 - p); s.position.copy(start.clone().lerp(c, e * 0.82)); const q = Math.sin(p * Math.PI); s.material.opacity = 0.34 * q; s.scale.setScalar(2 + q * 2.5); });
@@ -997,7 +1014,7 @@ function gCross(inward, colorHex) {            // one communication: a pulse cro
   const c = new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z);
   const dir = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
   if (dir.lengthSq() < 1e-3) dir.set(0, 1, 0); dir.normalize();
-  const far = c.clone().add(dir.multiplyScalar(ORB_R * 2.5));
+  const far = c.clone().add(dir.multiplyScalar(PERP_SQ * 1.9));
   const from = inward ? far : c, to = inward ? c : far;
   const pulse = mkSprite(colorHex, 0.95), trail = mkLine(colorHex, 0.55); pulse.scale.setScalar(4); pulse.position.copy(from);
   addEffect([pulse, trail], 1150, (p) => {
