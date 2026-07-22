@@ -115,7 +115,13 @@ function pass({ deps = {}, gapMs = GAP_MS, maxLand = 10, scanLimit = 4000, nowMs
       const { title, body } = renderConversation(w);
       const r = land({ title, body, source: 'conversation', ref: refFor(w) });
       if (!r || r.id == null) { out.halted = true; break; }   // real failure — do not advance past it
-      if (r.landed) out.landed++; else out.duplicates++;
+      if (r.landed) {
+        out.landed++;
+        // Graph-lane contract (docs/LANE_BOUNDARY_2026-07-22_GRAPH.md §3A): a conversation becoming a
+        // real object is a node BIRTH — the panel draws it in the short-term region and "that talk
+        // last Tuesday" becomes clickable. emit() is a safe no-op headless and never throws.
+        require('./kg_activity').emit({ db: 'sidequest', kind: 'node.born', anchor: title });
+      } else out.duplicates++;
     } else out.skipped++;
     mark = w.turns[w.turns.length - 1].id;
   }

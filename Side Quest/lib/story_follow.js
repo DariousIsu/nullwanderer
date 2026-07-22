@@ -81,6 +81,12 @@ function markRaised(storyId, nowMs = Date.now()) {
     const info = newsdb.get().prepare(`
       UPDATE news_story_follow SET last_raised_ts = ?, last_seen_ts = COALESCE((SELECT last_ts FROM news_stories WHERE id = story_id), last_seen_ts)
       WHERE story_id = ?`).run(nowMs, Number(storyId) || 0);
+    if (info.changes > 0) {
+      // Graph-lane §3B: 'news' was the one colour with no emitter in the repo. A raise is the sparse,
+      // real "a followed story moved and she said so" moment — one pulse, never a per-tick strobe.
+      const s = _story(storyId);
+      require('./kg_activity').emit({ db: 'sidequest', kind: 'news', anchor: (s && s.title) || `story #${storyId}` });
+    }
     return info.changes > 0;
   } catch (e) { console.error('[story_follow] markRaised failed:', e.message); return false; }
 }
