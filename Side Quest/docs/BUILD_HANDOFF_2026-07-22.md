@@ -83,9 +83,27 @@ promise-say with no retrieval tag runs the lookup SHE announced (her say names t
 than his message) · 4e7b90a miss logs `searched-miss` (label) · fda812d format-teach line REMOVED
 (true no longer). DECIDER DIRECTION VISIBLE: chose=research on Fri Jul 24 BGOV meeting
 PARTICIPANTS (calendar-people move) instead of a county.
-WATCH boot59: `[main] promised-lookup net` on a promise-say · `[subc] synthesis next-step banked`
-· pinned beats outranking alphabetical sweeps · inquiry #1 finally landing evidence (the SoS Excel
-is now READABLE) · harvest-born homecoming · engage `BLOCKED ungrounded say`. The war-question retest is STILL OWED (last asking
+**BOOT59-61 (12:00-12:20)**: Phase 1 RE-PROVEN richer — the Bessent DATE question (fell twice on
+boot58) answered in ONE turn with dates verified against her own store's ingest stamps · the
+PROMISED-LOOKUP NET fired live on its first promise-say (chain ran search→open→read) · then the
+chain STALLED silently 3+ min → Lucas: "she looks hung" → 106005c THE CHAIN WATCHDOG (top-level
+lookup chains race a 180s deadline; on stall an honest close through the normal door + generation
+bump so the late result discards; extend to tag-dispatch chains = next slice) + pin fix (county
+beats carry NO title — the state name lives in beat.goal which the matcher never read; goal joins
+the match, hyphenated ids split).
+**⭐THE WALL BEHIND THE WALL (3b440d0)**: hand-mapped the Louisiana source. The SoS page's Excel
+link is TEMPLATE-BROKEN in static HTML (literal --environment-- placeholder, JS-substituted) — why
+10+ touches "could not locate" it; stripTags drops hrefs so runs could never extract the address.
+The real URL (electionstatistics.sos.la.gov/.../ElectedOfficials.xls) is 200/3.1MB/refreshed
+monthly and GENUINE OLE .xls with no csv/xlsx sibling (probed). SheetJS (xlsx@0.18.5 Apache-2.0,
+NEW DEP) parses BIFF; PROVEN against the real file: 6,695 rows, every LA elected official with
+office/parish/name/phone/party/terms. Verified direct URL appended to inquiry #3's open leads
+with honest provenance ("engineer-verified"). smoke_rehearsal flaked once under gate contention
+post-npm-install (green standalone; node_modules-intact assertion passed).
+WATCH boot61: the roster FETCH (`electionstatistics` in the log) → inquiry #1/#3 finally banking
+parish evidence → closes → the harvest-born homecoming announcing the answer to Lucas · [watchdog]
+closes · pinned Louisiana sweep outranking the alphabet · synthesis next-step banked · engage
+BLOCKED ungrounded say. The war-question retest is STILL OWED (last asking
 was 23:36 on boot48, pre-news-tier — the honest-miss proof, not the tier's test): "what's the
 latest on the war?" must answer from her own stream in one turn (`enriched:news` in the log).
 BOOT49/50 PROOFS: inquiry #1 advanced touches 2-4 (the direction loop holds across boots) · email
