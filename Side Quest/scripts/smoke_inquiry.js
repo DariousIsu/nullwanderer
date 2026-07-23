@@ -102,6 +102,16 @@ const NOW = 1753400000000;
       'heldSourceHint: a named file that is already a landed+decomposed doc → "you already hold the answer source"');
     ok(hint && /Henry Whitehorn/.test(hint) && /Chelsey Napoleon/.test(hint) && /CLOSE ANSWERED/.test(hint),
       'heldSourceHint: INJECTS the doc content into the brief (touch 27 ignored a pointer — the rows must be impossible to miss) + steers to close');
+    // TABLE STRUCTURE, not a raw head (boot76: the roster's first rows are party-committee NOISE, not
+    // the parish sheriffs — inject the office-title counts + "break down the WHOLE document").
+    const tbl = ['## Officials', '| Office Title | Parish | Name |', '| --- | --- | --- |',
+      '| Sheriff | Caddo | A |', '| Sheriff | Orleans | B |', '| Clerk of Court | Caddo | C |', '| DSCC Member | | D |'].join('\n');
+    const tdoc = db.insertDocument({ title: 'roster-table.csv', body: tbl, source: 'browser_download' });
+    const thint = I.heldSourceHint({ next_step: 'download roster-table.csv again', gist: '', open_leads: '[]', evidence: '[]' }, { deps: { db } });
+    ok(thint && /It is a TABLE/.test(thint) && /Sheriff ×2/.test(thint) && /Clerk of Court ×1/.test(thint),
+      'heldSourceHint: a TABLE doc → injects the office-title distribution (Sheriff ×2, …), not the raw head');
+    ok(thint && /break it ALL down/.test(thint) && /do not cherry-pick/.test(thint),
+      'heldSourceHint: instructs to break down the WHOLE document, not discard the rows this inquiry doesn\'t need (Lucas)');
     ok(I.heldSourceHint({ next_step: 'Search Ballotpedia for the Ohio governor race results', gist: '', evidence: '[]' }, { deps: { db } }) === null,
       'heldSourceHint: no file named / nothing held → silent (no false hint)');
     ok(I.heldSourceHint({ next_step: 'Download unheld-roster-9999.csv from the county site', gist: '', evidence: '[]' }, { deps: { db } }) === null,

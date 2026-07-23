@@ -126,17 +126,56 @@ function touchBrief(row) {
 // is already a landed document, tells the touch to READ its own copy instead of re-downloading. The
 // general lesson (check what you hold first) outlives this one inquiry. deps.db required; fail-soft.
 const _FILE_RE = /[\w()][\w()\-. ]{2,80}\.(?:xlsx?|csv|pdf|docx?|tsv|json)/gi;
-function _renderHeldHint(doc, deps) {
+// STRUCTURE, not a raw excerpt (boot76: the roster's first 2000 chars are party-committee rows —
+// DSCC/RPEC noise — NOT the parish sheriffs/clerks, so the injected head actively confused the
+// operator about what office titles exist). For a table doc, surface the HEADER + the distinct
+// values of the first column with counts: "Sheriff ×64, Clerk of Court ×64, President ×24…" tells
+// the operator exactly what to filter for. Pure; returns null for a non-table body.
+function _summarizeTable(body) {
+  try {
+    const rows = str(body).split(/\r?\n/).filter((l) => l.trim().startsWith('|'));
+    if (rows.length < 3) return null;
+    const cells = (l) => l.split('|').map((s) => s.trim());
+    const header = cells(rows[0]).filter(Boolean);
+    if (header.length < 2) return null;
+    const counts = new Map();
+    let data = 0;
+    for (const l of rows) {
+      if (/^\|\s*-{2,}/.test(l)) continue;            // separator row
+      const c = cells(l);
+      const v = c[1];                                  // first content column
+      if (!v || v === header[0]) continue;
+      counts.set(v, (counts.get(v) || 0) + 1);
+      data++;
+    }
+    if (!counts.size) return null;
+    const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 25);
+    return { header: header.join(' | '), col0: header[0], nRows: data, nDistinct: counts.size, top };
+  } catch { return null; }
+}
+function _renderHeldHint(doc, deps, summary) {
   let decomposed = false;
   try { decomposed = (deps.db || require('./db')).getDb().prepare('SELECT 1 FROM encounters WHERE source_ref = ? LIMIT 1').get(`doc:${doc.id}`) != null; } catch {}
-  // INJECT THE CONTENT, don't just point at it (boot73 touch 27: the operator SAW "query localdb
-  // WHERE id=8443" and ignored it — it pattern-matches "find officials" to web research and won't
-  // self-serve the held doc). Putting the actual rows in the brief makes them impossible to miss.
-  const excerpt = str(doc.head).replace(/\s+\n/g, '\n').slice(0, 2000);
-  return `⚠️ YOU ALREADY HOLD THE ANSWER SOURCE. "${doc.title}" is doc #${doc.id} in your OWN store (${Math.round((doc.len || 0) / 1000)}k chars${decomposed ? ', decomposed into your entity graph' : ''}) — do NOT re-download or re-scrape it. Here is the START of it; page the rest with localdb (SELECT substr(body, N, 3000) FROM documents WHERE id=${doc.id}) or query your graph for the entities it produced:\n--- doc #${doc.id} (first ${excerpt.length} chars) ---\n${excerpt}\n--- end excerpt ---\nUse THIS to answer. If it covers the question, CLOSE ANSWERED citing doc #${doc.id}. Re-fetching what you already hold is wasted work.`;
+  let sum = summary;
+  if (sum === undefined) sum = _summarizeTable(doc.head);
+  let inner;
+  if (sum) {
+    // Show the schema + what the key column actually CONTAINS, so the operator knows the whole
+    // shape (and isn't drowned by the party-committee rows that lead the file). Lucas: BREAK DOWN
+    // THE ENTIRE DOCUMENT — every row is a real elected official for the database; do NOT discard
+    // the rows this one inquiry doesn't need. The inquiry's ANSWER is a view over the full ingest.
+    inner = `It is a TABLE: ${sum.nRows} rows, columns [ ${sum.header} ]. EVERY row is a real elected official — the WHOLE document belongs in your database; break it ALL down, do not cherry-pick or discard the office types this question doesn't ask about. The "${sum.col0}" column holds these distinct values (value ×count):\n${sum.top.map(([v, n]) => `  ${v} ×${n}`).join('\n')}\nQuery your own copy: localdb SELECT body FROM documents WHERE id=${doc.id} (paged), grouping by the Parish column. To ANSWER THIS inquiry, read off the parish-government offices per parish (Sheriff, Clerk of Court, Assessor, and the governing body — President where the parish is home-rule, else Police Juror / Council) — while still ingesting the rest.`;
+  } else {
+    const excerpt = str(doc.head).replace(/\s+\n/g, '\n').slice(0, 1600);
+    inner = `Here is the start; page the rest with localdb (SELECT substr(body, N, 3000) FROM documents WHERE id=${doc.id}):\n--- first ${excerpt.length} chars ---\n${excerpt}\n--- end ---`;
+  }
+  return `⚠️ YOU ALREADY HOLD THE ANSWER SOURCE. "${doc.title}" is doc #${doc.id} in your OWN store (${Math.round((doc.len || 0) / 1000)}k chars${decomposed ? ', decomposed into your entity graph' : ''}) — do NOT re-download or re-scrape it.\n${inner}\nUse THIS to answer. If it covers the question, CLOSE ANSWERED citing doc #${doc.id}. Re-fetching what you already hold is wasted work.`;
 }
+// A wider sample than the 2400-char head — a table's meaningful variety often starts past the first
+// rows (the roster leads with 2,000+ party-committee rows before the parish offices). 40k chars is
+// enough to see every distinct office title while staying cheap.
 function _loadHeldDoc(d, id) {
-  try { return d.prepare('SELECT id, title, LENGTH(body) AS len, substr(body,1,2400) AS head FROM documents WHERE id = ?').get(Number(id) || 0) || null; } catch { return null; }
+  try { return d.prepare('SELECT id, title, LENGTH(body) AS len, substr(body,1,40000) AS head FROM documents WHERE id = ?').get(Number(id) || 0) || null; } catch { return null; }
 }
 function heldSourceHint(row, { deps = {} } = {}) {
   try {
