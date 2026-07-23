@@ -30,6 +30,11 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   mem.prepare("INSERT INTO encounters (object_key,object_label,claim_class,origin_host,authority,ingested_at) VALUES ('k1','Acme PAC','role','one-site.org','unknown',?)").run(NOW);
   mem.prepare("INSERT INTO interests (topic,weight,mastery,visits,last_visited_ts,created_ts) VALUES ('neuromorphic computing',1.4,0.2,3,?,?)").run(NOW - 2 * 86400e3, NOW);
   mem.prepare("INSERT INTO open_threads (content,status,created_ts,last_touched_ts) VALUES ('map the state AI task forces','active',?,?)").run(NOW - 5 * 86400e3, NOW - 5 * 86400e3);
+  // O0 surfaces: an open inquiry + a failed board row (§6 L4 — errors are results).
+  mem.exec(`CREATE TABLE inquiries (id INTEGER PRIMARY KEY, question TEXT, born_from TEXT, status TEXT DEFAULT 'active', evidence TEXT, gist TEXT, open_leads TEXT, next_step TEXT, touches INTEGER DEFAULT 0, expect_trail TEXT, created_ts INTEGER, last_touched_ts INTEGER, closed_ts INTEGER, answer TEXT);
+    CREATE TABLE workstreams (id INTEGER PRIMARY KEY, lane TEXT, kind TEXT, target TEXT, status TEXT, resource TEXT, note TEXT, started_ts INTEGER, heartbeat_ts INTEGER, finished_ts INTEGER)`);
+  mem.prepare("INSERT INTO inquiries (question,status,evidence,open_leads,expect_trail,next_step,touches,created_ts,last_touched_ts) VALUES ('Which states have standing AI task forces?','active','[]','[]','[]','work the NCSL tracker M-W',2,?,?)").run(NOW - 86400e3, NOW - 3600e3);
+  mem.prepare("INSERT INTO workstreams (lane,kind,target,status,note,started_ts,heartbeat_ts,finished_ts) VALUES ('autonomy','research','doomed run','failed','operator returned no answer',?,?,?)").run(NOW - 7200e3, NOW - 7200e3, NOW - 7000e3);
 
   const man = auto.buildManifest({ db: { getDb: () => mem }, now: NOW });
   ok(/Rainey Center — board members/.test(man.text), 'manifest names the absence gap');
@@ -38,6 +43,10 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(/neuromorphic computing \(weight 1.40/.test(man.text), 'manifest carries her interests as idea material');
   ok(/map the state AI task forces.*untouched 5d ago/.test(man.text), 'manifest lists the stalest open thread with age');
   ok(man.counts.absence === 1 && man.counts.encounters === 2, 'counts ride alongside the text');
+  ok(/OPEN LINES OF INQUIRY \(advancing one is the DEFAULT move\)/.test(man.text) && /\[inquiry #1\].*standing AI task forces.*next: work the NCSL tracker/.test(man.text),
+    'O0: the manifest carries open inquiries with their own next steps');
+  ok(/RECENT FAILURES/.test(man.text) && /doomed run.*operator returned no answer/.test(man.text),
+    '§6 L4: failed board rows finally have a reader');
 
   // A missing table drops its section, never the manifest.
   const mem2 = new Database(':memory:');
@@ -55,6 +64,14 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(auto.validateDecision('{"move":"engage","why":"found something","say":"I dug into the parish counts and two sources disagree on the total — 62 vs 64. Want me to chase the official list?"}').valid, 'engage with a grounded message is valid');
   ok(!auto.validateDecision('{"move":"conquer","why":"x","target":"y"}').valid, 'an unknown move is rejected');
   ok(auto.validateDecision('The plan: {"move":"clean","target":"encounters dupes","why":"x"} — done').valid, 'JSON is found inside surrounding prose');
+  // O0 continuity moves
+  ok(auto.validateDecision('{"move":"advance-inquiry","target":"inquiry #12","why":"lead open","expect":"3 more states confirmed"}').valid, 'advance-inquiry with its token validates');
+  ok(!auto.validateDecision('{"move":"advance-inquiry","target":"the AI question","why":"x"}').valid, 'advance-inquiry WITHOUT the token is rejected');
+  ok(auto.validateDecision('{"move":"open-inquiry","target":"Which counties in Georgia changed election boards since 2024?","why":"born from the encounters gap line"}').valid, 'open-inquiry with a full question validates');
+  ok(!auto.validateDecision('{"move":"open-inquiry","target":"counties?","why":"x"}').valid, 'open-inquiry with a stub is rejected');
+  ok(auto.validateDecision('{"move":"close-inquiry","target":"inquiry #12","why":"answered","expect":"Nine states; chairs in the trail."}').valid, 'close-inquiry validates');
+  ok(/THE DEFAULT IS CONTINUITY/.test(auto.DECISION_WANT) && /ACROSS inquiries, never WITHIN one/.test(auto.DECISION_WANT),
+    'the decision prompt states continue-first + the variety inversion');
 
   // --- decide(): empty manifest never calls the cloud; injected ask round-trips ---
   let askCalls = 0;

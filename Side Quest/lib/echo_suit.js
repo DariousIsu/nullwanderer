@@ -500,7 +500,10 @@ class EchoSuit {
         return { ok: r.ok, kind: 'do', name: tag.name, isError: r.isError, text };
       }
       if (tag.kind === 'delegate') {
-        const args = { prompt: tag.task };
+        // §6 L2: the envelope is defined at DISPATCH, not discovered at return — the agent is told
+        // its reply IS the return value, in the shape the drain can read. One sentence, mechanical.
+        const envelope = '\n\nYour final reply IS the return value — not a message to anyone. End with a compact summary in this shape: FOUND: <what you established, one line each> · NOT FOUND: <what you could not establish> · SOURCES: <the urls/records behind the found items>.';
+        const args = { prompt: String(tag.task || '') + envelope };
         if (tag.agent) args.name = tag.agent;
         const r = normalizeToolResult(await c.callTool('spawn_agent_async', args));
         return { ok: r.ok, kind: 'delegate', isError: r.isError, text: r.text };

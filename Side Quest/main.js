@@ -8764,13 +8764,14 @@ async function autonomyTick() {
     const lastTurnTs = recent.reduce((a, t) => Math.max(a, t && t.ts || 0), 0);
     if (now - lastTurnTs < 20 * 1000) { _logAutonomyDeferral('mid-exchange'); return; }
     const chatLive = now - lastTurnTs < 3 * 60 * 1000;
-    // YIELD to assigned work: a directed focus (Lucas's assignment) outranks idle exploration for
-    // the operator lane — deliberate priority, not a missing feature (his work first, hers after).
-    // ⚠️Boot40 measured the cost: #3542 ran all day and the driver made ZERO decisions. Softening
-    // this to slot-priority is proposed in catalog O0 and is LUCAS'S call — until then it defers
-    // AUDIBLY, so a starved day says why.
-    try { const fl = require('./lib/focus'); const f = fl.getCurrent(); if (f && fl.isDirected(f)) { _logAutonomyDeferral('directed-focus'); return; } } catch {}
-    if (directedStepInFlight) { _logAutonomyDeferral('directed-step'); return; }
+    // COEXISTENCE (O0 + Lucas's concurrency ruling 2026-07-23: same-model concurrency is
+    // unbounded; the constraint is ≤3 DISTINCT models in flight): a directed focus no longer
+    // SILENCES the driver — his assignment and her inquiry run alongside, the reserved chat slot
+    // stays untouchable, and the pool bounds everything else. Boot40 measured the old hard
+    // yield's cost: ZERO decisions in a full day behind #3542.
+    let alongsideDirected = false;
+    try { const fl = require('./lib/focus'); const f = fl.getCurrent(); alongsideDirected = !!(f && fl.isDirected(f)); } catch {}
+    if (directedStepInFlight) alongsideDirected = true;
     try { if (db.getMeta('scribe_active') === '1') { _logAutonomyDeferral('live-meeting'); return; } } catch {}
     // THROTTLE — the same rolling session/weekly/concurrency brakes as every autonomous pass.
     if (!_researchGateOk('autonomy', 'autonomy')) { _logAutonomyDeferral('research-throttle'); return; }
@@ -8779,6 +8780,10 @@ async function autonomyTick() {
     _autonomySlot = null;
     try { _autonomySlot = require('./lib/board').acquireCloudSlot({ lane: 'autonomy', nowMs: now }); } catch {}
     if (!_autonomySlot) { _logAutonomyDeferral('no-free-slot'); return; }
+    if (alongsideDirected) {
+      const k = 'alongside-directed'; const t = Date.now();
+      if (t - (_autonomyDeferLogAt[k] || 0) > 15 * 60 * 1000) { _autonomyDeferLogAt[k] = t; console.log('[autonomy] running ALONGSIDE the directed focus (slot coexistence, ruling 2026-07-23)'); }
+    }
 
     autonomyInFlight = true;
     _bgInFlight.add('autonomy');
@@ -8844,6 +8849,76 @@ async function autonomyTick() {
       } catch (e) { console.error('[autonomy] story markRaised failed:', e.message); }
       autonomy.historyPush(H, { ts: now, move: 'engage', target: decision.target, outcome: 'spoke' });
       console.log(`[autonomy] chose=engage → spoke (${decision.say.length}c)`);
+      return;
+    }
+    // LINES OF INQUIRY (O0) — the continuity moves. open = create + first touch NOW; advance =
+    // one bounded touch that ENDS with a validated write-back (the next touch starts where this
+    // one stopped); close = honest closure, answered lands the artifact. §6 L1: the return
+    // address is the question — everything this run learns writes back onto ITS inquiry.
+    if (decision.move === 'open-inquiry' || decision.move === 'advance-inquiry' || decision.move === 'close-inquiry') {
+      const inquiry = require('./lib/inquiry');
+      let inqId = null;
+      const idm = /inquiry #(\d+)/i.exec(String(decision.target || ''));
+      if (idm) inqId = parseInt(idm[1], 10);
+      if (decision.move === 'open-inquiry') {
+        const o = inquiry.open({ question: decision.target, bornFrom: decision.why, nowMs: now });
+        if (!o.id) { autonomy.historyPush(H, { ts: now, move: decision.move, target: decision.target, outcome: `open failed: ${o.reason}` }); return; }
+        inqId = o.id;
+        console.log(`[autonomy] chose=open-inquiry → #${inqId} "${String(decision.target).slice(0, 70)}"`);
+      }
+      const row = inquiry.get(inqId);
+      if (!row) { autonomy.historyPush(H, { ts: now, move: decision.move, target: decision.target, outcome: 'no such inquiry' }); return; }
+      if (decision.move === 'close-inquiry') {
+        const dead = /dead.?end|cannot be answered|unanswerable/i.test(`${decision.why} ${decision.expect}`);
+        const c = inquiry.close(inqId, { kind: dead ? 'dead_end' : 'answered', answer: decision.expect, nowMs: now });
+        autonomy.historyPush(H, { ts: now, move: 'close-inquiry', target: `inquiry #${inqId}`, outcome: c.closed ? `${c.status}${c.docId ? ` → doc #${c.docId}` : ''}` : `close failed: ${c.reason}` });
+        console.log(`[autonomy] chose=close-inquiry → #${inqId} ${c.status || 'FAILED'}`);
+        return;
+      }
+      // ADVANCE — the touch. Procedures ride the brief; the write-back envelope is the exit.
+      let brief = inquiry.touchBrief(row);
+      let procMatch = null;
+      try {
+        const procs = require('./lib/procedures');
+        procMatch = procs.match({ move: 'inquiry', target: row.question });
+        const pb = procs.briefBlock(procMatch);
+        if (pb) brief += '\n\n' + pb;
+      } catch {}
+      let boardId = null;
+      try { boardId = require('./lib/board').start({ lane: 'autonomy', kind: 'inquiry', target: `#${inqId} ${String(row.question).slice(0, 60)}`, note: _autonomySlot ? `on ${_autonomySlot}` : null }).id; } catch {}
+      const res = await runCloudOperator({ userMessage: brief, context: manifest.text, task: true, autonomous: true });
+      try { require('./lib/board').beat(boardId); } catch {}
+      let env = null;
+      if (res && res.answer) {
+        try {
+          env = await require('./lib/cloud_logic').ask({
+            task: 'inquiry_writeback', v: 1,
+            input: { question: row.question, run: String(res.answer).slice(0, 6000) },
+            want: inquiry.WRITEBACK_WANT, validate: inquiry.validateWriteback, numPredict: 900, think: false,
+          });
+        } catch (e) { console.error('[autonomy] inquiry write-back failed:', e.message); }
+      }
+      if (env) {
+        inquiry.writeBack(inqId, env, { nowMs: now });
+        if (env.status === 'answered' || env.status === 'dead_end') {
+          const c = inquiry.close(inqId, { kind: env.status === 'dead_end' ? 'dead_end' : 'answered', answer: env.learned, nowMs: now });
+          if (c.closed) console.log(`[autonomy] inquiry #${inqId} ${c.status} after touch ${row.touches + 1}${c.docId ? ` → doc #${c.docId}` : ''}`);
+        }
+      }
+      let expectVerdict = null;
+      try { expectVerdict = await autonomy.verifyExpect({ decision, opRes: res }); } catch {}
+      if (expectVerdict) { try { inquiry.expectTrailPush(inqId, expectVerdict); } catch {} }
+      try {
+        const procs = require('./lib/procedures');
+        if (procMatch && procMatch.procedure && expectVerdict && typeof expectVerdict.met === 'boolean') procs.recordUse(procMatch.procedure.id, { met: expectVerdict.met, nowMs: now });
+        await procs.crystallize({ decision: { ...decision, move: 'inquiry', target: row.question }, opRes: res, verdict: expectVerdict, nowMs: now });
+      } catch {}
+      const sum = autonomy.summarizeOutcome(decision, res, { now, verify: expectVerdict });
+      try { require('./lib/board').finish(boardId, { status: sum.ok ? 'done' : 'failed', note: `touch ${row.touches + 1}${env ? `; wrote back (${env.status})` : '; NO write-back — the trail carries the miss'}` }); } catch {}
+      sum.entry.target = `inquiry #${inqId}`;
+      sum.entry.outcome += env ? `; next: ${String(env.next_step || '').slice(0, 60)}` : '; no write-back';
+      autonomy.historyPush(H, sum.entry);
+      console.log(`[autonomy] chose=advance-inquiry → #${inqId} touch ${row.touches + 1} ${sum.ok ? 'ok' : 'no-answer'}${env ? ` (${env.status})` : ' (no write-back)'}`);
       return;
     }
     // WORK MOVES (research / fill-gap / corroborate / clean / build) → one bounded operator run.

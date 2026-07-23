@@ -28,7 +28,7 @@
  */
 'use strict';
 
-const MOVES = ['research', 'fill-gap', 'corroborate', 'clean', 'build', 'maintain', 'engage', 'nothing'];
+const MOVES = ['advance-inquiry', 'open-inquiry', 'close-inquiry', 'research', 'fill-gap', 'corroborate', 'clean', 'build', 'maintain', 'engage', 'nothing'];
 const HISTORY_KEY = 'autonomy.history';
 const HISTORY_MAX = 12;
 
@@ -138,6 +138,25 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
     return `• DEVELOPING STORIES YOU FOLLOW (what moved since you last saw it):\n${lines.join('\n')}`;
   });
 
+  grab('inquiries', () => {
+    // Lines of inquiry (lib/inquiry, O0) — the continuity surface: what is open, where each
+    // stands, what its own last touch said to do next. The decider's DEFAULT is advancing one.
+    const lines = (deps.inquiry || require('./inquiry')).manifestLines({ deps: { db: dbm }, nowMs: now });
+    if (!lines || !lines.length) return '';
+    counts.openInquiries = lines.length;
+    return `• OPEN LINES OF INQUIRY (advancing one is the DEFAULT move):\n${lines.join('\n')}`;
+  });
+
+  grab('failures', () => {
+    // §6 L4: errors are results — route them to the reader of successes. The board has written
+    // failed rows since 2a; this is their first reader.
+    const rows = d.prepare("SELECT lane, kind, target, note, finished_ts FROM workstreams WHERE status = 'failed' AND finished_ts > ? ORDER BY finished_ts DESC LIMIT 5").all(now - 24 * 3600e3);
+    if (!rows.length) return '';
+    counts.recentFailures = rows.length;
+    return `• RECENT FAILURES (last 24h — results, not noise; read before repeating an approach):\n`
+      + rows.map((r) => `   - [${r.lane}] ${r.kind || 'run'}${r.target ? ` "${String(r.target).slice(0, 60)}"` : ''} — ${String(r.note || 'failed').slice(0, 100)} (${_ago(now, r.finished_ts)})`).join('\n');
+  });
+
   grab('maintenance', () => {
     // Echo pass status, cached by the driver (meta autonomy.pass_status, ~6h) — a stale loop is a
     // maintain-move candidate. Facts + age only; the allowlist itself rides the maintain brief.
@@ -151,7 +170,7 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
   grab('board', () => {
     // The workstream board (lib/board, conductor 2a) — what is ALREADY running, so the decision never
     // starts a second run of a kind in flight and can see which resources are held.
-    const lines = (deps.board || require('./board')).manifestLines({ nowMs: now });
+    const lines = (deps.board || require('./board')).manifestLines({ deps: { db: dbm }, nowMs: now });
     if (!lines || !lines.length) return '';
     counts.boardLines = lines.length;
     return `• WHAT IS RUNNING IN YOU NOW (the workstream board — never start a duplicate of a running kind):\n${lines.join('\n')}`;
@@ -189,8 +208,13 @@ Pick the SINGLE highest-value move and reply with ONLY strict JSON (no prose out
  "expect":"<what success would concretely look like>",
  "say":"<engage move ONLY: the exact 2-4 sentence message to send>"}
 
-The moves:
-- research: EXPLORE AN IDEA — one of her interests, an open thread, or a question the state raises. Depth over breadth; the point is understanding, not contact lookup.
+⭐THE DEFAULT IS CONTINUITY. A LINE OF INQUIRY is a question that persists across ticks — evidence accretes, a next step carries, and each touch starts where the last stopped. If OPEN LINES OF INQUIRY shows live questions, ADVANCING one is the default move; opening and closing are the exceptions. Variety matters ACROSS inquiries, never WITHIN one: do not abandon a line merely because it ran last tick — DO change the approach inside it when its trail shows expect NOT met.
+- advance-inquiry: continue an open line. target MUST be its exact token from the state, e.g. "inquiry #12". steps/expect describe THIS touch.
+- open-inquiry: start a NEW line. target is the QUESTION ITSELF — full and specific — and "why" MUST name the state line that birthed it (an interest, a named gap, a developing story, a failure).
+- close-inquiry: end a line honestly. target its token; if ANSWERED, "expect" carries the answer in 1-2 sentences; if it cannot be answered, say dead-end in "why". Honest closure is first-class, like nothing.
+
+One-shot moves (work that is genuinely single-step):
+- research: EXPLORE AN IDEA — one of her interests, an open thread, or a question the state raises. Depth over breadth; the point is understanding, not contact lookup. If it would take more than one run, open an inquiry instead.
 - fill-gap: go get a NAMED absence gap or missing members of a countable universe.
 - corroborate: take a single-source cluster and find an INDEPENDENT second source for its claims.
 - clean: inspect and report on duplicates/conflicts (writes are gated — your product is a precise report).
@@ -199,7 +223,7 @@ The moves:
 - engage: say something to Lucas NOW — a genuine finding or a direction question. Use RARELY, only when you have something real; "say" must carry the exact message, grounded in the state above, no invented facts.
 - nothing: a first-class answer. If no move is clearly worth its cost, decline honestly.
 
-Rules: at most 4 steps. Never plan work you cannot check. State "expect" as something CHECKABLE — the run is verified against it afterward, and a history line saying "expect NOT met" means that approach is not working: change it, don't repeat it. FINISHED DELEGATED WORK in the state is high-priority: absorb it (build from it, or engage Lucas about it) before starting new work of the same kind. Do not choose a target your recent ticks show as just-run or repeatedly dry. Variety matters across ticks — contacts are ALREADY covered by another lane, so prefer ideas, gaps, corroboration, and building over anything contact-shaped. The one exception: PEOPLE ON HIS CALENDAR. If the state shows an upcoming meeting whose attendees we hold little on, researching them before he walks in is among the highest-value moves available — and a past meeting is a natural, grounded engage ("how did X go?"). DEVELOPING STORIES YOU FOLLOW are the other licensed opening: a development in a story you two discussed is a real reason to speak, not padding — an engage there says what CHANGED (never re-narrate the story), and its target must be the exact [story #N] token from that line so the raise is recorded.`;
+Rules: at most 4 steps. Never plan work you cannot check. State "expect" as something CHECKABLE — the run is verified against it afterward, and a history line saying "expect NOT met" means that approach is not working: change it, don't repeat it. FINISHED DELEGATED WORK in the state is high-priority: absorb it (build from it, or engage Lucas about it) before starting new work of the same kind. RECENT FAILURES in the state are results — read them before repeating a failed lane's approach. For ONE-SHOT moves only: do not pick a target your recent ticks show as just-run or repeatedly dry (an inquiry is exempt — advancing it IS the point). Contacts are ALREADY covered by another lane, so prefer ideas, gaps, corroboration, and building over anything contact-shaped. The one exception: PEOPLE ON HIS CALENDAR. If the state shows an upcoming meeting whose attendees we hold little on, researching them before he walks in is among the highest-value moves available — and a past meeting is a natural, grounded engage ("how did X go?"). DEVELOPING STORIES YOU FOLLOW are the other licensed opening: a development in a story you two discussed is a real reason to speak, not padding — an engage there says what CHANGED (never re-narrate the story), and its target must be the exact [story #N] token from that line so the raise is recorded.`;
 
 function validateDecision(raw) {
   try {
@@ -218,6 +242,8 @@ function validateDecision(raw) {
     if (!out.why) return { valid: false, error: 'why is required' };
     if (out.move !== 'nothing' && out.move !== 'engage' && !out.target) return { valid: false, error: 'target required for a work move' };
     if (out.move === 'engage' && out.say.length < 40) return { valid: false, error: 'engage requires a real "say" message (≥40 chars)' };
+    if ((out.move === 'advance-inquiry' || out.move === 'close-inquiry') && !/inquiry #\d+/i.test(out.target)) return { valid: false, error: 'advance/close-inquiry target must be the exact "inquiry #N" token from the state' };
+    if (out.move === 'open-inquiry' && out.target.length < 15) return { valid: false, error: 'open-inquiry target must be the full question itself' };
     return { valid: true, value: out };
   } catch (e) { return { valid: false, error: e.message }; }
 }
