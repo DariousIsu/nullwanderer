@@ -100,6 +100,10 @@ ok(PF.pageResult(null) === null, 'pageResult: no read → null');
     click: async () => ({ ok: true, url: 'x' }), back: async () => ({ ok: true, url: 'x' }),
   };
   ok((await PF.deepBrowse(pdfNav, 'Fresno county schools directory')).length === 0, 'deepBrowse: a PDF landing → [] (skipped; the layered fetch reads PDFs, the browser cannot)');
+  // …and the found artifact is BANKED, not discarded (Lucas: "logging the data or discarding it outright?")
+  const banked = [];
+  await PF.deepBrowse(pdfNav, 'Fresno county schools directory', { bankPdf: (u) => banked.push(u) });
+  ok(banked.length === 1 && /FCSS_Directory/.test(banked[0]), 'a caught PDF routes to the download lane via bankPdf — the spent search compute still pays');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);

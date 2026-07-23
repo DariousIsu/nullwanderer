@@ -9187,6 +9187,19 @@ async function autonomyTick() {
       try { require('./lib/board').beat(boardId); } catch {}
       let env = null;
       if (res && res.answer) {
+        // TOUCH FINDINGS PERSIST (2026-07-23): the write-back envelope caps evidence at 8 items and
+        // the gist is a summary — a COMPILED table (64 parish presidents, touch 13) evaporated
+        // between touches because the run's answer text had no home. A substantial answer lands as
+        // a doc: recallable, promotable, and the close can point at the real data.
+        try {
+          if (String(res.answer).length > 800) {
+            const tl = require('./lib/doc_store').land({
+              title: `Inquiry #${inqId} touch ${row.touches + 1} — ${String(row.question).slice(0, 70)}`,
+              body: String(res.answer), source: 'inquiry', ref: `inquiry-${inqId}-t${row.touches + 1}`,
+            });
+            if (tl && tl.landed) console.log(`[autonomy] inquiry #${inqId} touch findings landed → doc #${tl.id} (${String(res.answer).length}ch)`);
+          }
+        } catch (e) { console.error('[autonomy] touch-findings land failed:', e.message); }
         try {
           env = await require('./lib/cloud_logic').ask({
             task: 'inquiry_writeback', v: 1,

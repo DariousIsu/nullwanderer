@@ -126,7 +126,7 @@ function matchPhotoForPerson(name, images) {
 // bio, where the direct email/title lives). Returns to the index between hops so each click resolves
 // against a fresh element registry. Merges every layer as a browser source. `browser` = lib/web (injected:
 // open/openTopResult/read/click/back). Fail-soft: any hop that errors is skipped. Never throws.
-async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 200, log } = {}) {
+async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 200, log, bankPdf = null } = {}) {
   const rows = [];
   if (!browser) return rows;
   try {
@@ -143,7 +143,15 @@ async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 
     // logged "deep-browsed 0 layer(s)" and NOTHING remembered the failure, so the same dead PDF was
     // retried forever in the VISIBLE browser (live 2026-07-23: fcoe.org directory PDF on loop while
     // Lucas watched). Skip it; the caller falls back to the layered fetch, which CAN read PDFs.
-    if (/\.pdf(?:[?#]|$)/i.test(String(landingUrl || ''))) { log && log(`[browser] skipped PDF landing (deep-browse can't read it; layered fetch can): ${landingUrl}`); return rows; }
+    if (/\.pdf(?:[?#]|$)/i.test(String(landingUrl || ''))) {
+      // The search compute is already SPENT by the time we land here — discarding the found PDF
+      // wastes it (Lucas 2026-07-23: "logging the data … or spending the compute finding the wrong
+      // thing and then discarding it outright?"). BANK it through the download lane instead: it
+      // extracts, decomposes, and dedups (content-hash + cross-boot ledger) like any grabbed file.
+      log && log(`[browser] PDF landing → ${typeof bankPdf === 'function' ? 'banked to the download lane' : 'skipped'} (deep-browse can't read it): ${landingUrl}`);
+      if (typeof bankPdf === 'function') { try { Promise.resolve(bankPdf(landingUrl)).catch(() => {}); } catch {} }
+      return rows;
+    }
     // VISITED LEDGER (2026-07-23): an autonomous re-visit of a fresh-enough capture is the
     // 500-calls disease — reuse the capture instead of navigating again. Fail-soft: a ledger
     // error only PERMITS a navigation, never blocks one.
