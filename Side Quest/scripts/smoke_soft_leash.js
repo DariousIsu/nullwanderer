@@ -110,6 +110,25 @@ try {
   db.markOpenThreadStatus(4, 'resolved');
   db.markOpenThreadStatus(5, 'resolved');   // the plural-stem test thread
   ok(focus.domainLeashTokens() === null, 'no active/pending threads → domainLeashTokens null → leash inert (fresh-install safety)');
+
+  // OPEN-INQUIRY vocab (2026-07-23, boot69 doc #8443): an active inquiry keeps ITS domain in the leash even
+  // while a DIRECTED focus points at a different project. Live failure: focus = Alaska municipalities → leash
+  // was pure Alaska vocab → dl-ingest quarantined the Louisiana SoS roster inquiry #1 was explicitly waiting on.
+  const inquiry = require('C:/Users/azrae/Desktop/Side Quest/lib/inquiry');
+  const iq = inquiry.open({ question: 'Who currently holds each parish-level elected office across all 64 Louisiana parishes — sheriffs, clerks of court, assessors, police jurors?' });
+  ok(iq && iq.id, 'inquiry.open seeds an active inquiry');
+  const t3 = focus.domainLeashTokens();
+  ok(!!t3 && t3.has('parish') && t3.has('louisiana') && t3.has('sheriff'), 'active-inquiry vocab enters the leash (no focus, no threads needed)');
+  const aTurn = db.insertTurn({ sessionId: s, speaker: 'user', content: 'Compile municipal government for every incorporated city in Alaska' });
+  const th = db.insertOpenThread({ content: 'Compile and keep current the municipal government — mayor, council, and city-elected offices — for every incorporated city, town, and village in Alaska', sourceTurnId: aTurn.id });
+  focus.setCurrent(th.id, { directed: true });
+  const t4 = focus.domainLeashTokens();
+  ok(!!t4 && t4.has('alaska') && t4.has('municipal'), 'directed-focus vocab present while directed');
+  ok(!!t4 && t4.has('parish') && t4.has('louisiana'), 'inquiry vocab SURVIVES a directed focus on another project (the boot69 doc #8443 regression)');
+  ok(wordMatch('LA-parish-officials-2026.xls | Parish | Office Title | Name | Email |', t4), 'the quarantined roster doc now word-matches the leash');
+  inquiry.close(iq.id, { kind: 'answered', answer: 'roster consumed' });
+  const t5 = focus.domainLeashTokens();
+  ok(!!t5 && t5.has('alaska') && !t5.has('parish'), 'closed inquiry vocab LEAVES the leash (directed focus alone remains)');
 } catch (e) {
   fail++; console.error('  ✗ threw:', e.message);
 } finally {

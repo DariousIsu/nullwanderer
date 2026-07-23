@@ -2550,6 +2550,10 @@ function startDownloadsIngestWatcher() {
       // active directed focus ELSE recent civic threads). Titles/bodies with ZERO token overlap → quarantine
       // (doc still lands searchable in doc_store, just not decomposed into contacts). Empty leash (fresh
       // install, no civic work) → passes through (unleashed) so it never blocks a genuinely fresh start.
+      // provenance computed BEFORE the leash (2026-07-23): the authoritative-source bypass below needs it.
+      // ORIGIN comment block (what these mean, why NULL is expected for hand-drops) sits at the land() call.
+      const _prov = (() => { try { return require('./lib/web').provenanceForFile(fp); } catch { return { origin: null, fetchUrl: null }; } })();
+      const _dlOrigin = _takeDownloadOrigin(fp) || _prov.origin;
       let _leashPasses = true;
       try {
         const _lt = require('./lib/focus').domainLeashTokens();
@@ -2562,6 +2566,14 @@ function startDownloadsIngestWatcher() {
           for (const t of _lt) if (words.has(t)) { _leashPasses = true; break; }
         }
       } catch { _leashPasses = false; }   // FAIL CLOSED (2026-07-15): a leash-construction error must quarantine (doc still lands searchable), never fall through unleashed.
+      // AUTHORITATIVE CIVIC-SOURCE bypass — the SAME rule _docLeashOk applies one call later (2026-07-17
+      // fix): a .gov-origin download is on-mission regardless of token overlap. This gate is _docLeashOk's
+      // hand-copied sibling and had drifted without it — a gov roster downloaded while the focus pointed at
+      // another project quarantined HERE and never reached the bypass that would have passed it.
+      try {
+        const { isAuthoritativeSource } = require('./lib/curation_gate');
+        if (!_leashPasses && (isAuthoritativeSource(_dlOrigin) || isAuthoritativeSource(_prov.fetchUrl))) _leashPasses = true;
+      } catch { /* fail-soft: without the bypass the token verdict stands */ }
       // SLICE 5 HARD WALL (decision #5 hybrid): a NAMED-FLOOD frame (medical/legal directory dump) that is ALSO
       // off-domain (leash fail) is HARD-VETOED on this AUTONOMOUS download path — not even landed searchable —
       // so a repeat of the 2026-07-13 medical-directory flood can't happen even transiently. On-domain flood
@@ -2585,8 +2597,7 @@ function startDownloadsIngestWatcher() {
       // NULL remains correct and expected for a file dropped into the folder by hand.
       // ORIGIN IS THE FIRST HIGH-QUALITY SOURCE, so this is the PUBLISHER — the page that linked the
       // file — not the CDN or bucket the bytes sat on. Both are carried; see lib/origin.js pickOrigin.
-      const _prov = (() => { try { return require('./lib/web').provenanceForFile(fp); } catch { return { origin: null, fetchUrl: null }; } })();
-      const _dlOrigin = _takeDownloadOrigin(fp) || _prov.origin;
+      // (_prov/_dlOrigin are computed above the leash check, which consumes them for the gov bypass.)
       const landed = require('./lib/doc_store').land({ title, body: text, source: 'browser_download', ref: 'download:' + fp, origin: _dlOrigin, fetchUrl: _prov.fetchUrl });
       if (landed && landed.landed) {
         // record the content hash (bounded map, oldest-first trim) so the NEXT identical download skips

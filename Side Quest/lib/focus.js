@@ -377,6 +377,9 @@ const _LEASH_STOP = new Set([
   'direct', 'social', 'relevant', 'level', 'priority', 'project', 'monitor', 'match', 'summary', 'task', 'include', 'included', 'identified', 'named', 'higher', 'highest', 'lower', 'lowest', 'across', 'earlier', 'further', 'future', 'full', 'days', 'hour', 'hours', 'depth', 'digging', 'details', 'detail', 'findings', 'restate', 'restated', 'align', 'alignment', 'conduct', 'expand', 'deepen', 'deepens', 'focus', 'focusing', 'build', 'safety', 'prior', 'over', 'several', 'made', 'make', 'keep', 'next', 'just', 'life', 'world',
   // B. English filler (leaked past the 4+ char gate)
   'from', 'with', 'their', 'list', 'that', 'this', 'they', 'them', 'these', 'those', 'than', 'into', 'each', 'your', 'every',
+  // B2. interrogative filler — inquiry QUESTIONS feed the leash (2026-07-23), and "What/Which/Whose…
+  // currently holds…" phrasing would otherwise become pass-tokens present in nearly any English doc
+  'what', 'which', 'when', 'where', 'whose', 'currently', 'holds', 'other', 'against',
   // proper-noun leaks: people/named entities that show up in every thread but don't gate the domain
   'lucas', 'anthropic', 'linkedin',
 ]);
@@ -426,6 +429,18 @@ function domainLeashTokens() {
           .join(' ');
       } catch {}
     }
+    // OPEN-INQUIRY vocab joins the leash in BOTH branches (2026-07-23, boot69 doc #8443): an active
+    // inquiry is standing assigned work with the same rank as a directed focus. The live failure: the
+    // directed focus was Alaska municipalities, so the leash was pure Alaska vocab — and dl-ingest
+    // quarantined the Louisiana SoS roster that inquiry #1's next_step was explicitly waiting on. Two
+    // assigned lanes, one blind to the other. This is NOT the 2026-07-13 self-thread feedback loop
+    // reopening: inquiries are a small capped set (over-cap parks the stalest), surfaced by name in the
+    // manifest — nothing like the unbounded self-spawned thread pool that let wandering seed the filter.
+    // QUESTION only — next_step/open_leads are HOW-vocab ("search", "download", "excel", "google"…),
+    // measured live to add ~30 generic operational words that turn the filter into a rubber stamp.
+    try {
+      for (const q of (require('./inquiry').listActive() || [])) blob += ' ' + (q.question || '');
+    } catch {}
     if (!blob.trim()) return null;
     const toks = new Set();
     for (const w of (blob.toLowerCase().match(/[a-z]{4,}/g) || [])) _addToken(toks, w);
