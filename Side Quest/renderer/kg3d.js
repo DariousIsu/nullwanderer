@@ -408,7 +408,9 @@ function makeCore3D(strength = 0.05) {
       // One soft spring toward the node's home point. Deliberately gentle — charge and links have to be able
       // to pull clusters off it, or the cloud freezes into the lattice the target points describe. The shape
       // comes from the targets; the LIFE comes from the forces fighting them. `free` skips this entirely.
-      const p = SHAPE === 'brain' ? targetBrain(n) : SHAPE === 'corona' ? targetCorona(n) : SHAPE === 'binary' ? targetBinary(n) : SHAPE === 'free' ? null : targetPoint(n);
+      // `skin` takes no spring at all: updateSkin() pins every node to its vertex with fx/fy/fz, so there is
+      // no home point to pull toward — the model IS the layout.
+      const p = SHAPE === 'skin' ? null : SHAPE === 'brain' ? targetBrain(n) : SHAPE === 'corona' ? targetCorona(n) : SHAPE === 'binary' ? targetBinary(n) : SHAPE === 'free' ? null : targetPoint(n);
       if (!p) continue;
       const k = strength * 1.15 * alpha;
       n.vx = (n.vx || 0) + (p.x - n.x) * k;
@@ -1189,6 +1191,157 @@ function updateFace(now) {
       u.uMouthOpen.value = face.mouthOpen;
     }
   } catch (e) {}
+}
+// ============================================================================================================
+// VRM SKIN — her own model, wearing the graph as its surface.
+// ============================================================================================================
+// Lucas, 2026-07-22: "I wonder if we could replace the 'skin' of the avatar model with the node and
+// connections overlay." This is the answer to the thing I said was unsolvable three attempts running. My own
+// note read: "points have no edge and no occlusion, so a glowing cloud reads as a nebula regardless of
+// placement" — and every fix I tried was a way to make points imply a surface they could never imply. A MESH
+// already is one. data/avatars/zoe.vrm has the silhouette, the occlusion, the landmarks and the rig, all of
+// it authored, and the SDF/marching-cubes work I was heading toward was reinventing a worse version of a file
+// already sitting in the repo.
+//
+// What makes it a skin rather than a backdrop: each node BINDS to a vertex of the model and is pinned to that
+// vertex's DEFORMED position every frame. `getVertexPosition` applies morph targets and then bone skinning,
+// so when the 'aa' viseme fires, the 1,436 face vertices it moves carry their nodes with them — measured, not
+// assumed. Her links then span between bound nodes on their own, which is the "connections overlay": the
+// wireframe over her face is real memory structure, not decoration.
+//
+// The mesh itself is drawn as a DEPTH-ONLY occluder (colorWrite false). Invisible, but it writes depth, so
+// nodes on the far side of her head are hidden by the near side. That single line is the thing a point cloud
+// could never do for itself, and it is what makes the figure read as solid instead of as a swarm.
+const VRM_URL = '../data/avatars/zoe.vrm';
+let vrmModel = null, vrmReady = false, vrmOccluders = [], skinBinds = null, _vrmLoading = false, _skinT = 0;
+const _vrmOff = new THREE.Vector3();                // model-centre → origin correction, kept out of position
+// Face first and heavily over-weighted: the face mesh is 4,286 of ~30,000 vertices, so a proportional sample
+// would spend most of the graph on hair and put a handful of nodes where the whole read lives.
+const SKIN_WEIGHTS = [{ re: /^Face/, share: 0.46 }, { re: /^Body/, share: 0.34 }, { re: /^Hair/, share: 0.20 }];
+async function loadVRM() {
+  if (vrmModel || _vrmLoading) return vrmModel;
+  if (!window.GLTFLoader || !window.VRMLoaderPlugin) { console.warn('[kg3d] VRM loader absent — rebuild vendor/kg3d.bundle.js'); return null; }
+  _vrmLoading = true;
+  try {
+    const loader = new window.GLTFLoader();
+    loader.register((p) => new window.VRMLoaderPlugin(p));
+    const gltf = await loader.loadAsync(VRM_URL);
+    const vrm = gltf.userData.vrm;
+    if (!vrm) throw new Error('no VRM payload in the gltf');
+    // Same rest pose the companion uses: relax the default T-pose to arms-at-sides. Verified necessary — the
+    // first bound render put her arms straight out, which reads as a mannequin rather than a person, and the
+    // spread also wastes most of the frame's width on empty space between the arms and the body.
+    try {
+      const setBone = (name, z, x) => { const b = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode(name); if (b) b.rotation.set(x || 0, 0, z); };
+      setBone('leftUpperArm', -1.25); setBone('rightUpperArm', 1.25);
+      setBone('leftLowerArm', -0.15); setBone('rightLowerArm', 0.15);
+      vrm.update(0.016);                            // push the pose into the skeleton before anything is bound
+    } catch (e) {}
+    // Scale the 1.69-unit model into the graph's own world so she stands at cloud scale.
+    const box = new THREE.Box3().setFromObject(vrm.scene);
+    const h = Math.max(0.01, box.max.y - box.min.y);
+    const k = (CLOUD_R * 2.35) / h;
+    vrm.scene.scale.setScalar(k);
+    vrm.scene.updateMatrixWorld(true);
+    // Keep the centering offset rather than baking it into position — placeVRM rewrites position every time
+    // the cloud middle moves, and would otherwise throw the centering away and leave her standing ON the
+    // origin instead of centred in it.
+    const b2 = new THREE.Box3().setFromObject(vrm.scene);
+    _vrmOff.copy(b2.getCenter(new THREE.Vector3())).sub(vrm.scene.position).negate();
+    vrm.scene.visible = false;                      // hidden until the skin shape is actually chosen
+    // Depth-only occluders: one per unique geometry, so the far side of her is hidden by the near side.
+    const seen = new Set();
+    vrm.scene.traverse((o) => {
+      if (!o.isMesh && !o.isSkinnedMesh) return;
+      o.material = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true, depthTest: true });
+      o.renderOrder = -5;                           // depth laid down before the additive clouds draw
+      o.frustumCulled = false;
+      if (!seen.has(o.geometry.uuid)) { seen.add(o.geometry.uuid); vrmOccluders.push(o); }
+    });
+    scene.add(vrm.scene);
+    vrmModel = vrm; vrmReady = true;
+    console.log('[kg3d] VRM skin ready —', vrmOccluders.length, 'meshes, scale', k.toFixed(1));
+    return vrm;
+  } catch (e) { console.warn('[kg3d] VRM load failed:', e && e.message); return null; }
+  finally { _vrmLoading = false; }
+}
+function placeVRM() {                               // keep her centred on the live cloud middle
+  if (!vrmModel) return;
+  vrmModel.scene.position.set(_midCen.x + _vrmOff.x, _midCen.y + _vrmOff.y, _midCen.z + _vrmOff.z);
+  vrmModel.scene.updateMatrixWorld(true);
+}
+// Bind each node to a vertex. Deterministic from the node id, so an object keeps its place on her body across
+// reloads instead of the whole surface reshuffling every time the corpus refreshes.
+function buildSkinBinding() {
+  if (!vrmReady) { skinBinds = null; return 0; }
+  const nodes = Graph.graphData().nodes.filter((n) => !n.zoe);
+  if (!nodes.length) { skinBinds = null; return 0; }
+  const groups = SKIN_WEIGHTS.map((w) => ({ w, meshes: vrmOccluders.filter((m) => w.re.test(m.name || '')) })).filter((g) => g.meshes.length);
+  if (!groups.length) { skinBinds = null; return 0; }
+  const total = groups.reduce((s, g) => s + g.w.share, 0);
+  skinBinds = [];
+  for (const n of nodes) {
+    const h = hashSeed(n.id + '#skin');
+    let acc = 0, pick = groups[groups.length - 1];
+    for (const g of groups) { acc += g.w.share / total; if (h <= acc) { pick = g; break; } }
+    const m = pick.meshes[Math.floor(hashSeed(n.id + '#m') * pick.meshes.length) % pick.meshes.length];
+    const N = m.geometry.attributes.position.count;
+    // Only FACE binds get exaggerated. The morph targets live on the face mesh; hair and body move by bone
+    // skinning and VRM spring physics, which never settle exactly back to rest — measured 3.85 units of
+    // residual drift at rest, and amplifying that would give her permanently twitching hair. Magnify the
+    // expression, leave the physics honest.
+    skinBinds.push({ node: n, mesh: m, vi: Math.floor(hashSeed(n.id + '#v') * N) % N, rest: new THREE.Vector3(), exag: /^Face/.test(m.name || '') });
+  }
+  captureSkinRest();
+  return skinBinds.length;
+}
+// Rest pose per bound vertex, captured with every expression at zero. Deformation is then measured against
+// it and AMPLIFIED — because at true scale it does not read: measured, opening the mouth fully moves 221 of
+// 1,600 bound nodes by at most 4.6 units on a figure 1,007 units tall, which is about four screen pixels.
+// Anatomically correct and visually invisible. Exaggerating the delta keeps every node exactly where it
+// belongs at rest and only magnifies what MOVES, so she is still herself — just talking legibly.
+let SKIN_EXAG = 3.2;
+function captureSkinRest() {
+  if (!vrmReady || !skinBinds) return;
+  const em = vrmModel.expressionManager, saved = {};
+  if (em) for (const k of ['aa', 'blink', 'happy']) { try { saved[k] = em.getValue(k); em.setValue(k, 0); } catch (e) {} }
+  try { vrmModel.update(0.016); } catch (e) {}
+  vrmModel.scene.updateMatrixWorld(true);
+  for (const b of skinBinds) { try { b.mesh.getVertexPosition(b.vi, b.rest); } catch (e) {} }
+  if (em) for (const k of Object.keys(saved)) { try { em.setValue(k, saved[k]); } catch (e) {} }
+  try { vrmModel.update(0.016); } catch (e) {}
+}
+const _vtmp = new THREE.Vector3();
+// Pinned, not sprung: fx/fy/fz are d3-force's fixed-position fields, so the simulation stops fighting the
+// mesh and the features stay crisp. A soft spring here would blur her face into an approximate cloud again,
+// which is the whole failure this replaces.
+function updateSkin() {
+  if (SHAPE !== 'skin' || !vrmReady || !skinBinds) return;
+  vrmModel.scene.updateMatrixWorld(true);
+  for (const b of skinBinds) {
+    const n = b.node;
+    try { b.mesh.getVertexPosition(b.vi, _vtmp); } catch (e) { continue; }
+    // rest + (deformed − rest) × K, in the mesh's own space so it is unaffected by where she is placed
+    if (b.exag && SKIN_EXAG !== 1) _vtmp.sub(b.rest).multiplyScalar(SKIN_EXAG).add(b.rest);
+    _vtmp.applyMatrix4(b.mesh.matrixWorld);
+    n.x = n.fx = _vtmp.x; n.y = n.fy = _vtmp.y; n.z = n.fz = _vtmp.z;
+  }
+}
+function releaseSkin() {                            // let the forces have the nodes back
+  for (const n of Graph.graphData().nodes) { n.fx = null; n.fy = null; n.fz = null; }
+  if (vrmModel) vrmModel.scene.visible = false;
+}
+// Her expressions run through the VRM's own rig, from the same face state the painted face uses — so the
+// mouth on the model and the mouth on the cloud are the same mouth, moving on one signal.
+function updateVRMFace(now, dt) {
+  if (!vrmReady || SHAPE !== 'skin') return;
+  const em = vrmModel.expressionManager;
+  if (em) {
+    try { em.setValue('aa', Math.min(1, face.mouthOpen)); } catch (e) {}
+    try { em.setValue('blink', AS ? AS.blinkMultiplier(now) < 0.5 ? 1 : 0 : 0); } catch (e) {}
+    try { em.setValue('happy', Math.max(0, face.cur.mouthCurve)); } catch (e) {}
+  }
+  try { vrmModel.update(dt); } catch (e) {}
 }
 // Base weight is structural (how connected), the bonus is evidential (how corroborated). They are genuinely
 // different facts about a node and both belong on screen: a hub everyone links to but nobody sourced should
@@ -1981,16 +2134,21 @@ function onActivity(evt) {
 
 // ---- fps HUD ----
 let frames = 0, lastT = performance.now(), fps = 0;
-function tick() {
-  requestAnimationFrame(tick);
-  const now = performance.now(); frames++;
+function stepFrame(now) {
   updateEffects(now);
   updateFogBand();              // depth band + point scale follow the camera, so this holds through zooming
   updateFace(now);              // her face rides the same three materials — no geometry, no extra draw call
+  if (SHAPE === 'skin') {       // the model deforms, the bound nodes follow it, the links follow them
+    const dt = Math.min(0.05, (now - (_skinT || now)) / 1000); _skinT = now;
+    updateVRMFace(now, dt); updateSkin();
+  }
   // Position syncing only while the layout is actually moving. `_stillFrames` keeps a couple of frames of
   // sync after it stops so the last motion lands, and any reheat (new data, a mint) restarts it.
+  // `skin` ALWAYS syncs: every node is pinned with fx/fy/fz, so the simulation cools within a second and
+  // engineRunning goes false — and then the cloud would stop following the mesh and she would freeze
+  // mid-sentence while the model underneath kept talking. Her motion comes from the rig, not the sim.
   if (engineRunning) { _stillFrames = 2; } else if (_stillFrames > 0) { _stillFrames--; }
-  if (engineRunning || _stillFrames > 0) { updateNodeCloud(); updateLinkCloud(); updateTendrils(); }
+  if (engineRunning || _stillFrames > 0 || SHAPE === 'skin') { updateNodeCloud(); updateLinkCloud(); updateTendrils(); }
   updateHotLinks(now);          // expire cooled recognitions BEFORE the markers paint this frame
   updateMarkers(now);           // halos breathe and cool on their own clock, so these always run
   updateTraces(now);
@@ -2007,6 +2165,7 @@ function tick() {
     if (hudEl) hudEl.textContent = `3D · ${d.nodes.length} nodes / ${d.links.length} links · ${pct}% sourced${rec} · ${fps} fps`;
   }
 }
+function tick() { requestAnimationFrame(tick); frames++; stepFrame(performance.now()); }
 tick();
 
 // ---- resize ----
@@ -2080,15 +2239,33 @@ if (hopsEl) hopsEl.addEventListener('change', () => { if (mode === 'ego' && subm
 // Shape selector — Lucas picks the arrangement, live, without a reload. Re-seeds every node's home point and
 // reheats, so the cloud visibly reorganises into the new shape over a few seconds.
 const shapeEl = document.getElementById('shape');
+// Entering `skin` loads the model on demand (nothing is fetched unless she is actually asked for), binds the
+// nodes and shows the occluder. Leaving it releases every pin so the forces get the graph back — without
+// that, switching away would leave the whole cloud frozen in the shape of her body.
+async function applyShape(next) {
+  SHAPE = next;
+  try { localStorage.setItem('kg3d.shape', SHAPE); } catch (e) {}
+  for (const n of objs.values()) n._tp = null;
+  if (SHAPE === 'skin') {
+    setOverlay('Loading her model…');
+    const vrm = await loadVRM();
+    if (!vrm) { setOverlay('VRM unavailable — data/avatars/zoe.vrm missing or loader not built', 3200); SHAPE = 'brain'; if (shapeEl) shapeEl.value = SHAPE; return; }
+    placeVRM(); vrm.scene.visible = true;
+    const n = buildSkinBinding();
+    setOverlay(n ? null : 'no nodes to bind', n ? 0 : 2000);
+    updateSkin();
+  } else {
+    releaseSkin();
+  }
+  try { Graph.d3ReheatSimulation(); } catch (e) {}
+  _fitOnCool = true;                         // re-frame once the new arrangement settles
+}
 if (shapeEl) {
   shapeEl.value = SHAPE;
-  shapeEl.addEventListener('change', () => {
-    SHAPE = shapeEl.value;
-    try { localStorage.setItem('kg3d.shape', SHAPE); } catch (e) {}
-    for (const n of objs.values()) n._tp = null;
-    try { Graph.d3ReheatSimulation(); } catch (e) {}
-    _fitOnCool = true;                       // re-frame once the new arrangement settles
-  });
+  shapeEl.addEventListener('change', () => { applyShape(shapeEl.value); });
+  // If `skin` was the saved shape, it has to be APPLIED on boot, not just read — the model is loaded on
+  // demand, so restoring the string alone would leave the selector saying "skin" over an unbound cloud.
+  if (SHAPE === 'skin') setTimeout(() => applyShape('skin'), 1200);
 }
 if (backBtn) backBtn.addEventListener('click', () => { if (qEl) qEl.value = ''; loadOverview(); });
 if (followBtn) {
@@ -2116,7 +2293,41 @@ window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () =
   // bus delivered vs how many produced a gesture. Any row where drawn < seen names a real remaining gap.
   actStats: () => ({ seen: _act.seen, drawn: _act.drawn,
     kinds: [..._act.byKind.entries()].map(([k, v]) => ({ kind: k, seen: v.seen, drawn: v.drawn })).sort((a, b) => b.seen - a.seen) }),
-  shape: (s) => { if (s) { SHAPE = s; try { localStorage.setItem('kg3d.shape', s); } catch (e) {} for (const n of objs.values()) n._tp = null; try { Graph.d3ReheatSimulation(); } catch (e) {} } return SHAPE; },
+  shape: (s) => { if (s) { applyShape(s); if (shapeEl) shapeEl.value = s; } return SHAPE; },
+  skin: (o) => { if (o && o.exag != null) SKIN_EXAG = o.exag;
+    return { ready: vrmReady, bound: skinBinds ? skinBinds.length : 0, meshes: vrmOccluders.map((m) => m.name),
+      visible: !!(vrmModel && vrmModel.scene.visible), shape: SHAPE, exag: SKIN_EXAG }; },
+  // Drive N frames by hand and return a PNG of the result. requestAnimationFrame is suspended whenever the
+  // page is not compositing (a background tab, or a preview pane that is not on screen), which stops the
+  // whole loop — so without this the surface simply cannot be inspected headlessly. Renders explicitly and
+  // grabs the buffer in the same task, since preserveDrawingBuffer is off.
+  step: (n = 1) => { const t = performance.now(); for (let i = 0; i < (n || 1); i++) stepFrame(t + i * 16.7); },
+  // Renders into an offscreen target and reads the pixels back, rather than calling toDataURL on the canvas.
+  // The canvas route returns an EMPTY data URL here: preserveDrawingBuffer is off, so the drawing buffer is
+  // only valid for readback inside the compositing frame that drew it — and when nothing is compositing there
+  // is no such frame. A render target is owned memory and can always be read.
+  snap: (n = 3, w = 1280, h = 800) => {
+    try {
+      const t = performance.now();
+      for (let i = 0; i < (n || 1); i++) stepFrame(t + i * 16.7);
+      const r = Graph.renderer(), cam = Graph.camera();
+      const rt = new THREE.WebGLRenderTarget(w, h);
+      const oldA = cam.aspect; cam.aspect = w / h; cam.updateProjectionMatrix();
+      r.setRenderTarget(rt); r.render(Graph.scene(), cam); r.setRenderTarget(null);
+      cam.aspect = oldA; cam.updateProjectionMatrix();
+      const buf = new Uint8Array(w * h * 4);
+      r.readRenderTargetPixels(rt, 0, 0, w, h, buf);
+      rt.dispose();
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const ctx = c.getContext('2d'), img = ctx.createImageData(w, h);
+      for (let y = 0; y < h; y++) {                       // GL origin is bottom-left; flip into image order
+        const s = (h - 1 - y) * w * 4, d = y * w * 4;
+        img.data.set(buf.subarray(s, s + w * 4), d);
+      }
+      ctx.putImageData(img, 0, 0);
+      return c.toDataURL('image/png');
+    } catch (e) { return 'ERR ' + (e && e.message); }
+  },
   lobeOf, lobeStats: () => {                    // how much of the graph actually crosses between territories
     const d = Graph.graphData(), per = {}, pair = {}; let cross = 0, within = 0;
     for (const n of d.nodes) { const L = lobeOf(n); per[L] = (per[L] || 0) + 1; }
