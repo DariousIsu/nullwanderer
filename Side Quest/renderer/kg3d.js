@@ -207,60 +207,89 @@ function buildBrainLobes(nodes) {
     });
   });
 }
-// THE ACTUAL FORM. My first pass was a sphere with blobs inside it, which is not what a brain looks like —
-// Lucas sent an anatomy plate to make the point. A cerebrum is an OVOID, longer front-to-back than it is
-// wide, flattened underneath, tapering at the front; it is split into two hemispheres by a deep longitudinal
-// fissure; and the cerebellum sits tucked beneath the back of it. All three of those are silhouette facts,
-// and none of them survive on a sphere.
+// THE FORM, THIRD ATTEMPT — and a change of instrument, not another round of constants. Twice I tried to
+// describe a brain with one analytic radius (an ellipsoid, then an ellipsoid with a flattened base and a
+// frontal taper) and twice Lucas said it doesn't look like a brain. He is right, and the reason is structural:
+// a brain silhouette is NOT a deformed sphere. What makes the profile instantly recognisable is
+//   (1) the TEMPORAL LOBE — a separate mass jutting forward and down, with the sylvian notch above it, and
+//   (2) the CEREBELLUM — a distinct smaller body tucked under the occipital pole.
+// No single radius function can produce a re-entrant notch or a second body. So the shape is now a signed
+// distance field of smooth-unioned parts, and nodes are MARCHED onto its surface. The creases come free from
+// the smooth union, which is exactly where a real brain's fissures are.
 //
-// Axes: +X forward (frontal pole), +Y up, ±Z the two hemispheres.
-const CX_LONG = 1.20, CX_TALL = 0.84, CX_WIDE = 0.92;     // cerebrum ellipsoid
-const FISSURE = 0.10;                                     // half-width of the midline gap, as a fraction of R
-const CEREB_N = 0.17;                                     // share of cortex tissue that forms the cerebellum
-// Radius of the cerebral surface along a unit direction — the ellipsoid, then the two asymmetries that
-// actually make a brain profile recognisable: a flattened underside and a narrower frontal pole.
-function cerebrumR(dx, dy, dz) {
-  let r = 1 / Math.sqrt((dx * dx) / (CX_LONG * CX_LONG) + (dy * dy) / (CX_TALL * CX_TALL) + (dz * dz) / (CX_WIDE * CX_WIDE));
-  if (dy < 0) r *= 1 - 0.30 * (-dy);                      // flat base
-  if (dx > 0) r *= 1 - 0.13 * dx;                         // frontal taper
-  if (dx < 0) r *= 1 + 0.06 * (-dx);                      // fuller occipital pole
-  return r;
+// Axes: +X forward (frontal pole), +Y up, ±Z the two hemispheres. Units are fractions of CLOUD_R.
+const FISSURE = 0.085;                                    // half-width of the longitudinal midline gap
+function sdEllipsoid(px, py, pz, rx, ry, rz) {            // iq's bound: exact enough for a layout constraint
+  const k0 = Math.hypot(px / rx, py / ry, pz / rz);
+  if (k0 === 0) return -Math.min(rx, ry, rz);
+  const k1 = Math.hypot(px / (rx * rx), py / (ry * ry), pz / (rz * rz));
+  return k1 === 0 ? 0 : (k0 * (k0 - 1)) / k1;
+}
+function smin(a, b, k) {                                  // smooth union — this is what makes it one organ
+  const h = Math.max(0, k - Math.abs(a - b)) / k;
+  return Math.min(a, b) - h * h * k * 0.25;
+}
+// Negative inside, positive outside. Built from four parts, blended with different sharpness: the temporal
+// join is soft (it IS the brain) while the cerebellum keeps a tighter seam so it still reads as its own body.
+// Tuned against an ASCII cross-section of the field itself rather than by reloading the app — a 1-second
+// feedback loop instead of a 40-second one, which is the only reason iterating here was defensible after
+// twice being told the shape was wrong. The seam widths are doing the real work: a WIDE blend fuses parts
+// into one oval (which is what the first two attempts were), a TIGHT one leaves the crease that makes a
+// feature legible. Hence 0.045 on the cerebellum — it has to remain visibly its own body.
+function brainSDF(x, y, z) {
+  let d = sdEllipsoid(x + 0.06, y - 0.16, z, 0.80, 0.56, 0.56);              // cerebrum, parietal peak set back
+  d = smin(d, sdEllipsoid(x - 0.56, y + 0.02, z, 0.42, 0.44, 0.48), 0.26);   // frontal pole, below the peak
+  d = smin(d, sdEllipsoid(x - 0.10, y + 0.40, z, 0.60, 0.20, 0.40), 0.09);   // temporal lobe + sylvian notch
+  d = smin(d, sdEllipsoid(x + 0.62, y + 0.04, z, 0.36, 0.38, 0.44), 0.20);   // occipital
+  d = smin(d, sdEllipsoid(x + 0.56, y + 0.48, z, 0.33, 0.20, 0.37), 0.045);  // cerebellum, its own body
+  return d;
+}
+// Walk out along a direction until the field crosses zero — the surface point for that heading. Bisection is
+// plenty here (~18 steps to well under a pixel) and it runs once per node, cached in the node's seed.
+function brainSurface(dx, dy, dz) {
+  let lo = 0.05, hi = 1.9;
+  if (brainSDF(dx * hi, dy * hi, dz * hi) < 0) return hi;
+  for (let i = 0; i < 18; i++) {
+    const mid = (lo + hi) * 0.5;
+    if (brainSDF(dx * mid, dy * mid, dz * mid) < 0) lo = mid; else hi = mid;
+  }
+  return lo;
 }
 function targetBrain(n) {
   const s = nodeSeed(n);
   const side = (hashSeed(String(n.id) + '#h') < 0.5) ? -1 : 1;   // which hemisphere this node belongs to
-  if (n.store === 'sidequest') {
-    // CORTEX — a thin folded mantle over the surface. Sampled by direction rather than by a single radius,
-    // so it takes the brain's shape instead of a ball's. Gyri come from a low-frequency ripple.
-    const isCereb = hashSeed(String(n.id) + '#c') < CEREB_N;
-    const u = (s.u * 2 - 1) * 0.96, th = s.ang;
-    let dx = u, dyz = Math.sqrt(Math.max(0, 1 - u * u));
-    let dy = Math.cos(th) * dyz, dz = Math.sin(th) * dyz;
-    dz = Math.abs(dz) * side;                              // mirror into this node's hemisphere
-    if (isCereb) {
-      // CEREBELLUM — its own small, much more finely folded body under the occipital pole.
-      const cx = -0.62, cy = -0.46, cr = 0.30;
-      const fold = Math.sin(th * 13.0 + u * 17.0) * 0.06;
-      const rr = CLOUD_R * cr * (0.72 + 0.30 * s.rf + fold);
-      return _tp.set(_midCen.x + CLOUD_R * cx + rr * dx * 0.85,
-        _midCen.y + CLOUD_R * cy + rr * dy * 0.7,
-        _midCen.z + rr * dz + side * CLOUD_R * 0.07);
-    }
-    // push off the midline so the longitudinal fissure stays open
-    if (Math.abs(dz) < FISSURE) dz = side * FISSURE;
-    const nrm = Math.hypot(dx, dy, dz) || 1; dx /= nrm; dy /= nrm; dz /= nrm;
-    const fold = Math.sin(th * 6.0 + u * 8.0) * 0.5 + Math.sin(th * 3.0 - u * 5.0) * 0.5;
-    const r = CLOUD_R * cerebrumR(dx, dy, dz) * (0.93 + fold * 0.035 + (s.rf - 0.75) * 0.05);
-    return _tp.set(_midCen.x + r * dx, _midCen.y + r * dy, _midCen.z + r * dz);
+  if (!s.bs) {
+    // Direction is cached per node, and so is the marched surface distance — the bisection runs ONCE per
+    // node, not per tick, so the field costs nothing on the hot path.
+    const u = (s.u * 2 - 1) * 0.97, dyz = Math.sqrt(Math.max(0, 1 - u * u));
+    let dx = u, dy = Math.cos(s.ang) * dyz, dz = Math.sin(s.ang) * dyz;
+    dz = Math.abs(dz) * side;                                    // mirror into this node's hemisphere
+    if (Math.abs(dz) < FISSURE) dz = side * FISSURE;             // keep the longitudinal fissure open
+    const nrm = Math.hypot(dx, dy, dz) || 1;
+    s.dx = dx / nrm; s.dy = dy / nrm; s.dz = dz / nrm;
+    s.bs = brainSurface(s.dx, s.dy, s.dz);
   }
-  // INTERIOR — the type lobes, mirrored into both hemispheres so the brain is symmetric, and kept clear of
-  // both the fissure and the mantle.
+  if (n.store === 'sidequest') {
+    // CORTEX — a thin mantle laid ON the field's surface, so it inherits the notch and the cerebellum
+    // instead of approximating them. Gyri are a low-frequency ripple in the last few percent of depth.
+    const fold = Math.sin(s.ang * 6.0 + s.u * 8.0) * 0.5 + Math.sin(s.ang * 3.0 - s.u * 5.0) * 0.5;
+    const r = CLOUD_R * s.bs * (0.955 + fold * 0.030 + (s.rf - 0.75) * 0.045);
+    return _tp.set(_midCen.x + r * s.dx, _midCen.y + r * s.dy, _midCen.z + r * s.dz);
+  }
+  // INTERIOR — type lobes, mirrored into both hemispheres. Each lobe centroid is pulled along its own
+  // heading until it sits INSIDE the field, so no lobe can hang outside the skull the way it could when the
+  // interior and the surface were described by two unrelated formulas.
   const lobe = brainLobes.get(n.entityType || 'unknown');
   if (!lobe) return targetCorona(n);
+  if (lobe.bs == null) {
+    const L = Math.hypot(lobe.x, lobe.y, lobe.z) || 1;
+    lobe.bs = brainSurface(lobe.x / L, lobe.y / L, lobe.z / L) * CLOUD_R;
+    lobe.scale = Math.min(1, (lobe.bs * 0.62) / Math.max(1, L));
+  }
   const u = (s.u * 2 - 1) * 0.98, perp = lobe.r * s.rf * Math.sqrt(Math.max(0, 1 - u * u));
-  const zc = (Math.abs(lobe.z) + CLOUD_R * (FISSURE + 0.06)) * side;
-  return _tp.set(_midCen.x + lobe.x * CX_LONG + lobe.r * s.rf * u,
-    _midCen.y + lobe.y * CX_TALL + Math.cos(s.ang) * perp * 0.85,
+  const zc = (Math.abs(lobe.z * lobe.scale) + CLOUD_R * (FISSURE + 0.05)) * side;
+  return _tp.set(_midCen.x + lobe.x * lobe.scale + lobe.r * s.rf * u,
+    _midCen.y + lobe.y * lobe.scale + Math.cos(s.ang) * perp * 0.85,
     _midCen.z + zc + Math.sin(s.ang) * perp * 0.6);
 }
 function targetPoint(n) {
@@ -764,6 +793,52 @@ const haloMat = pointMaterial({ opacity: 0.11, sizeK: 4.0, intensity: 1.0, coreW
 const dustMat = pointMaterial({ opacity: 0.085, sizeK: 1.0, intensity: 0.85, coreW: 0.25, haloW: 0.55, blending: THREE.AdditiveBlending, depthTest: false });
 const DUST_PER_NODE = 5, DUST_CAP = 14000;
 let dustCloud = null, dustGeo = null;
+// ============================================================================================================
+// CORTEX SHELL — the fix for three failed brain attempts, and the diagnosis is the useful part: the FIELD was
+// right (an ASCII cross-section of brainSDF shows the sylvian notch and a separate cerebellum), but the
+// SURFACE was starved. ~500 short-term nodes cannot draw a silhouette however perfectly they are placed, so
+// every attempt produced a luminous blob with correct anatomy nobody could see.
+//
+// So the mantle stops being derived from node count. This is a dedicated shell of ~16k points sampled ON the
+// field's surface — pure tissue, carrying no data, exactly like the dust it reuses the material of. The real
+// short-term nodes still sit in that shell and stay brighter; this is the substance they sit IN. One extra
+// draw call, built once per shape change.
+const SHELL_N = 16000;
+let shellCloud = null, shellGeo = null, _shellSig = '';
+function buildCortexShell() {
+  const sig = SHAPE === 'brain' ? 'brain:' + Math.round(CLOUD_R) : 'off';
+  if (sig === _shellSig && shellCloud) return;
+  _shellSig = sig;
+  if (shellCloud) { scene.remove(shellCloud); shellGeo.dispose(); shellCloud = null; shellGeo = null; }
+  if (SHAPE !== 'brain') return;
+  const N = SHELL_N, pos = new Float32Array(N * 3), col = new Float32Array(N * 3), size = new Float32Array(N), alpha = new Float32Array(N);
+  const c = new THREE.Color(SQ_VIOLET), GA = Math.PI * (3 - Math.sqrt(5));
+  let i = 0;
+  for (let j = 0; j < N; j++) {
+    // Fibonacci sphere for even coverage — clumping would read as noise on a surface this dense.
+    const u = 1 - ((j + 0.5) / N) * 2, ring = Math.sqrt(Math.max(0, 1 - u * u)), th = GA * j;
+    const side = (j % 2) ? 1 : -1;
+    let dx = u, dy = Math.cos(th) * ring, dz = Math.abs(Math.sin(th) * ring) * side;
+    if (Math.abs(dz) < FISSURE) dz = side * FISSURE;                  // the midline stays open
+    const nrm = Math.hypot(dx, dy, dz) || 1; dx /= nrm; dy /= nrm; dz /= nrm;
+    const r0 = brainSurface(dx, dy, dz);
+    const h = hashSeed('sh' + j);
+    // gyri: a low-frequency ripple, plus a little depth scatter so it reads as tissue rather than a membrane
+    const fold = Math.sin(th * 7.0 + u * 9.0) * 0.5 + Math.sin(th * 4.0 - u * 6.0) * 0.5;
+    const r = CLOUD_R * r0 * (0.955 + fold * 0.028 + (h - 0.5) * 0.055);
+    pos[i * 3] = _midCen.x + r * dx; pos[i * 3 + 1] = _midCen.y + r * dy; pos[i * 3 + 2] = _midCen.z + r * dz;
+    const shade = 0.42 + 0.30 * h;
+    col[i * 3] = c.r * shade; col[i * 3 + 1] = c.g * shade; col[i * 3 + 2] = c.b * shade;
+    size[i] = 1.5 + h * 1.6; alpha[i] = 0.26 + h * 0.30;
+    i++;
+  }
+  shellGeo = new THREE.BufferGeometry();
+  shellGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  shellGeo.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
+  shellGeo.setAttribute('size', new THREE.BufferAttribute(size, 1));
+  shellGeo.setAttribute('aAlpha', new THREE.BufferAttribute(alpha, 1));
+  shellCloud = new THREE.Points(shellGeo, dustMat); shellCloud.frustumCulled = false; shellCloud.renderOrder = -2; scene.add(shellCloud);
+}
 function buildDust(ns) {
   if (dustCloud) { scene.remove(dustCloud); dustGeo.dispose(); dustCloud = null; dustGeo = null; }
   if (!ns || !ns.length) return;
@@ -858,6 +933,7 @@ function buildNodeCloud() {
   haloCloud = new THREE.Points(nodeGeo, haloMat); haloCloud.frustumCulled = false; haloCloud.renderOrder = -1; scene.add(haloCloud);
   buildMarkers();
   try { buildDust(nodeIndex); } catch (e) {}
+  try { buildCortexShell(); } catch (e) {}    // the mantle, independent of how many nodes exist
 }
 // Provenance arrives on a later poll than the node itself, and evidence accrues while the node just sits
 // there — so colour/size/alpha have to be able to change WITHOUT rebuilding the geometry (the old build was
