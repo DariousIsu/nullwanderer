@@ -295,6 +295,11 @@ function validateDecision(raw) {
     if (out.move === 'engage' && out.say.length < 40) return { valid: false, error: 'engage requires a real "say" message (≥40 chars)' };
     if ((out.move === 'advance-inquiry' || out.move === 'close-inquiry') && !/inquiry #\d+/i.test(out.target)) return { valid: false, error: 'advance/close-inquiry target must be the exact "inquiry #N" token from the state' };
     if (out.move === 'open-inquiry' && out.target.length < 15) return { valid: false, error: 'open-inquiry target must be the full question itself' };
+    // A RUN move without an expect silently skips verify → no verdict, no trail, no crystallization
+    // (the MET circuit starves invisibly — seen live, boot51 touch 1). The refusal teaches the shape.
+    if (['advance-inquiry', 'research', 'fill-gap', 'corroborate', 'clean', 'build', 'maintain'].includes(out.move) && !out.expect) {
+      return { valid: false, error: 'a run move requires "expect" — the ONE bounded increment this run will be judged against' };
+    }
     return { valid: true, value: out };
   } catch (e) { return { valid: false, error: e.message }; }
 }

@@ -80,7 +80,9 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(!auto.validateDecision('{"move":"engage","why":"x","say":"hi"}').valid, 'engage without a real message is invalid');
   ok(auto.validateDecision('{"move":"engage","why":"found something","say":"I dug into the parish counts and two sources disagree on the total — 62 vs 64. Want me to chase the official list?"}').valid, 'engage with a grounded message is valid');
   ok(!auto.validateDecision('{"move":"conquer","why":"x","target":"y"}').valid, 'an unknown move is rejected');
-  ok(auto.validateDecision('The plan: {"move":"clean","target":"encounters dupes","why":"x"} — done').valid, 'JSON is found inside surrounding prose');
+  ok(auto.validateDecision('The plan: {"move":"clean","target":"encounters dupes","why":"x","expect":"a count of dupes"} — done').valid, 'JSON is found inside surrounding prose');
+  ok(!auto.validateDecision('{"move":"clean","target":"encounters dupes","why":"x"}').valid, 'a run move WITHOUT expect is rejected (no expect → verify silently skips → MET starves invisibly)');
+  ok(!auto.validateDecision('{"move":"advance-inquiry","target":"inquiry #12","why":"lead open"}').valid, 'advance-inquiry without expect is rejected — the touch must name its bounded bite');
   // O0 continuity moves
   ok(auto.validateDecision('{"move":"advance-inquiry","target":"inquiry #12","why":"lead open","expect":"3 more states confirmed"}').valid, 'advance-inquiry with its token validates');
   ok(!auto.validateDecision('{"move":"advance-inquiry","target":"the AI question","why":"x"}').valid, 'advance-inquiry WITHOUT the token is rejected');
@@ -112,7 +114,7 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(/INDEPENDENT second source/.test(bCorr) && /1\. find a second source/.test(bCorr), 'corroborate brief demands independence + carries steps');
   ok(/writes are gated/i.test(auto.buildOperatorBrief({ move: 'clean', target: 'x', why: 'w' })), 'clean brief states the write gate honestly');
   // maintain (conductor 2d): a first-class move whose brief names the curated allowlist
-  ok(auto.MOVES.includes('maintain') && auto.validateDecision('{"move":"maintain","target":"integrity audit — civic graph","why":"loop is stale"}').valid, 'maintain is a first-class, validatable move');
+  ok(auto.MOVES.includes('maintain') && auto.validateDecision('{"move":"maintain","target":"integrity audit — civic graph","why":"loop is stale","expect":"the loop report with counts"}').valid, 'maintain is a first-class, validatable move');
   const bMaint = auto.buildOperatorBrief({ move: 'maintain', target: 'integrity audit — civic graph', why: 'stale', steps: [], expect: 'a violation report with counts' });
   ok(/AUTONOMOUS MAINTENANCE/.test(bMaint) && /run_integrity_audit/.test(bMaint) && /run_blocking_dedup/.test(bMaint), 'maintain brief names the allowlisted loops');
   ok(/report-only or proposal-only/i.test(bMaint) && /worth Lucas applying/i.test(bMaint), 'maintain brief states the unattended contract + the report product');
