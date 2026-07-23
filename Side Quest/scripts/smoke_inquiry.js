@@ -84,6 +84,14 @@ const NOW = 1753400000000;
   ok(/ONE bounded run/.test(I.touchBrief(I.get(a.id))) && /next concrete bite/.test(I.touchBrief(I.get(a.id))),
     'the touch brief tells the run to take a bite, not the whole remainder');
 
+  // --- CLOSE NUDGE (boot73: #1 ran 25 touches, never closed even with the answer in-graph) ---
+  ok(!/FIRST-CLASS outcome/.test(I.touchBrief({ id: 9, question: 'x'.repeat(20), touches: 2, evidence: '[{"gist":"a"}]' })),
+    'close nudge stays SILENT early (touch 2) — do not push a young line to close');
+  ok(!/FIRST-CLASS outcome/.test(I.touchBrief({ id: 9, question: 'x'.repeat(20), touches: 8, evidence: '[]' })),
+    'close nudge stays SILENT with no evidence (nothing to close ON), however many touches');
+  ok(/FIRST-CLASS outcome/.test(I.touchBrief({ id: 9, question: 'x'.repeat(20), touches: 6, evidence: '[{"gist":"real finding","cite":"doc #8443"}]' })),
+    'close nudge FIRES on a well-worn line (touch 6) that holds real evidence — answered beats a 12th continue');
+
   // --- close: answered lands the artifact; dead-end does not ---
   const landed = [];
   const c1 = I.close(a.id, { kind: 'answered', answer: 'Nine states have standing AI task forces; chairs listed in the evidence trail.', deps: { land: (d) => { landed.push(d); return { id: 42, landed: true }; } }, nowMs: NOW + 3000 });

@@ -106,6 +106,15 @@ function touchBrief(row) {
   if (leads.length) parts.push('OPEN LEADS you named:\n' + leads.map((l) => `- ${str(l).slice(0, 200)}`).join('\n'));
   if (row.next_step) parts.push(`YOUR OWN NEXT STEP from last touch — start here unless the evidence says otherwise: ${str(row.next_step).slice(0, 240)}`);
   if (trail.length) parts.push('EXPECT TRAIL: ' + trail.map((t) => (t.met ? 'met' : `NOT met (${str(t.why).slice(0, 60)})`)).join(' · '));
+  // CLOSE NUDGE (2026-07-23, boot73: inquiry #1 ran 25 touches and never closed even after its
+  // authoritative source landed in the graph). A "for each of the 64…" enumeration question never
+  // FEELS finished to a cautious model, so status defaults to "continue" forever — the 0-for-N
+  // disease in close form. Once a line has run several touches with real evidence, make CLOSING
+  // first-class: answerable-from-what-you-hold beats a 12th "continue". Model still decides; a
+  // specific named gap is always a legitimate "continue".
+  if ((row.touches || 0) >= 4 && ev.length) {
+    parts.push(`THIS LINE HAS RUN ${row.touches} TOUCHES. Closing is a FIRST-CLASS outcome, not a failure. If the question is answerable from what you already hold — especially any authoritative source named in your leads or next step — set status ANSWERED this touch and cite it; a comprehensive re-verification of every item is NOT required to close, and an honest "answered" beats another "continue". Only continue if a SPECIFIC, NAMED gap blocks the answer — and if so, name that gap as the next step.`);
+  }
   parts.push('Advance the question THIS touch — new evidence with sources, a lead run down, or a dead end named honestly. A touch is ONE bounded run: take the next concrete bite and COMPLETE it (open the source, record what it shows, cite it) rather than attempting the whole remainder. Do not restate what the evidence already holds. Work TOP-DOWN: establish the containing structure\'s FORM first — what body governs/houses this level and what shape it takes — THEN enumerate downward into its members (a country houses states, a state houses counties/parishes, those house municipalities, those house people and organizations). Never collect members of a container whose form you have not established.');
   return parts.join('\n\n');
 }
