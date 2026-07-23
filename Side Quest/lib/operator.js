@@ -93,7 +93,10 @@ TOOLS (call exactly ONE per step):
   Run localdb_map first if you don't know the tables; it lists every table QUALIFIED exactly as you must query it.
 - localdb_map {}                list her local stores' tables + row counts (all five databases)
 - web_search {"query":"…"}      search the open web + read the top result — for what our own data does NOT already cover (breaking news, prices, a page/video, anything genuinely new)
-- open_page {"url":"…"}         open a SPECIFIC page in her browser and read it in full — use this to go DEEPER into a good source instead of bouncing to a new search: follow a promising link you saw, or go straight to an org's own /team, /leadership, /about, or /contact page
+- open_page {"url":"…"}         open a SPECIFIC page in her browser and read it in full — use this to go DEEPER into a good source instead of bouncing to a new search: follow a promising link you saw, or go straight to an org's own /team, /leadership, /about, or /contact page. A blocked or JS-dead page AUTO-ESCALATES (plain fetch → archive snapshot → her vision) and the result is labeled with which door worked — so do NOT give up on a source just because the first open was walled
+- web_click {"handle":"L3"}     click an element on the OPEN page by its handle from the page's "Interactive elements" list — page through a directory, open a bio, dismiss an interstitial. Reads the new page for you
+- web_type {"handle":"I1","text":"…"}   type into an input on the open page — a site's OWN search box beats guessing URL shapes. Reads the result
+- page_back {}                  go back one page in her browser and read where you land
 - browser_read {}               read the page currently open in her browser
 - file {"op":"read|write|append|list","path":"notes/x.md","content":"…"}   her workspace files
 - puller_add {"company":"…","contacts":[{"name":"…","title":"…","email":"…","phone":"…","verified":true}]}   BANK the real people you found into Puller (our contact store) — it learns the company's email pattern + grades confidence. On a CONTACTS task, call this as you find each executive: name + title always; email/phone when found; verified:true ONLY if the email came from an official/public source (else it's treated as a pattern candidate)

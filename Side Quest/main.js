@@ -8539,11 +8539,46 @@ const operatorTools = {
   open_page: async ({ url } = {}) => {
     try {
       const o = await webLib.open(String(url || ''));
-      if (!o || !o.ok) return `could not open ${url}: ${(o && o.reason) || 'failed'}`;
-      if (o.blocker) return `${o.url} needs a human (sign-in/CAPTCHA/paywall) — skip it, don't retry`;
+      // BLOCKER ESCALATION (2026-07-23, Lucas: "very few websites she shouldn't be able to fully
+      // access"): a blocked/dead page no longer concedes — the ladder tries plain fetch → archive
+      // snapshot → her vision, and the result is LABELED with which door worked.
+      const _escalate = async (why) => {
+        const esc = await require('./lib/fetch_escalation').escalatedRead(String(url || ''), {
+          fetchPage: (u, opts) => require('./lib/web_search').fetchPage(u, opts),
+          seePage: async (u, focus) => { const r = await require('./lib/excavate').seePage(String(focus || ''), { url: u }); return r && r.ok ? { ok: true, text: r.text } : { ok: false }; },
+          log: (m) => console.log(m),
+        });
+        if (esc.ok) return `[${why} — read via ${esc.via}${esc.note ? '; ' + esc.note : ''}]\n${String(esc.text).replace(/\n{3,}/g, '\n\n').slice(0, 4000)}`;
+        return `${url} ${why}, and ${esc.error}`;
+      };
+      if (!o || !o.ok) return _escalate(`could not open in the browser (${(o && o.reason) || 'failed'})`);
+      if (o.blocker) return _escalate('is blocked in the browser (sign-in/CAPTCHA/paywall)');
       const r = await webLib.read();
-      return (r && r.ok && r.text) ? r.text.replace(/\n{3,}/g, '\n\n').slice(0, 4000) : `opened ${o.url} but no readable text`;
+      if (r && r.ok && r.text && r.text.trim().length >= 180) return r.text.replace(/\n{3,}/g, '\n\n').slice(0, 4000);
+      return _escalate('opened but served no readable text (likely a JS shell)');
     } catch (e) { return 'ERROR: ' + e.message; }
+  },
+  // INTERACTION TOOLS (2026-07-23): click/type/back existed in her web layer for a year and the
+  // research operator could not reach them — it could never page a directory or use a site's own
+  // search box. Each acts, then reads, so the model sees where it landed.
+  web_click: async ({ handle } = {}) => {
+    try {
+      const c = await webLib.click(String(handle || ''));
+      if (!c || !c.ok) return `could not click ${handle}: ${(c && c.reason) || 'failed'}`;
+      const r = await webLib.read();
+      return (r && r.ok && r.text) ? `clicked ${handle} → ${c.url}\n${r.text.replace(/\n{3,}/g, '\n\n').slice(0, 4000)}` : `clicked ${handle} (now on ${c.url}) but no readable text`;
+    } catch (e) { return 'ERROR: ' + e.message; }
+  },
+  web_type: async ({ handle, text } = {}) => {
+    try {
+      const t = await webLib.type(String(handle || ''), String(text || ''));
+      if (!t || !t.ok) return `could not type into ${handle}: ${(t && t.reason) || 'failed'}`;
+      const r = await webLib.read();
+      return (r && r.ok && r.text) ? `typed into ${handle}\n${r.text.replace(/\n{3,}/g, '\n\n').slice(0, 3000)}` : `typed "${String(text).slice(0, 40)}" into ${handle}`;
+    } catch (e) { return 'ERROR: ' + e.message; }
+  },
+  page_back: async () => {
+    try { await webLib.back(); const r = await webLib.read(); return (r && r.ok && r.text) ? r.text.replace(/\n{3,}/g, '\n\n').slice(0, 3500) : 'went back'; } catch (e) { return 'ERROR: ' + e.message; }
   },
   echo: async ({ need } = {}) => {
     try { if (!echoSuit) return 'Echo is not available right now.'; const r = await echoSuit.routeNeed(String(need || '')); return (r && r.text) || 'no result from Echo'; }
