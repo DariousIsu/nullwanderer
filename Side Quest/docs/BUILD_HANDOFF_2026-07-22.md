@@ -177,6 +177,11 @@ per-doc in-flight Set on decomposeLandedDoc (any two paths). ⚠️#8443 is PARK
 `decompose_sweep:attempted` (emergency stop before the race reached the 15-chunk roster) — after
 the boot that carries 50cfc03, REMOVE 8443 from that meta or the pull never reaches it.
 ⚠️Duplicate mints from #7704 (+~25) and possibly #8413 → nightly dedup/fusion should fuse; verify.
+**⭐SLICE R SHIPPED `a39232a` (boot72 era — NEEDS BOOT73)**: the need→rehearsal wire complete —
+capability_need detector/store/suiteFor (smoke 20), CAPABILITY GAPS state line + rehearse OPEN
+form (run-named needs only; suite auto-matched; watched files = the suite's own requires + the
+suite; green→proposed, stuck→parked). PLAN_MAP §1 acceptance = watch a live need → OPENED run →
+proposal card doc. SEQUENCING: let boot72 finish W1 (roster→close→homecoming) BEFORE boot73.
 **⭐⭐TOP-DOWN CONTAINMENT `02b1b57` (Lucas, generalizing the parish correction)**: "all systems
 function this way… the logical route for understanding a system" — container's FORM first, then
 descend (country→state→county/parish→municipal→people/orgs); forms varying across siblings makes
