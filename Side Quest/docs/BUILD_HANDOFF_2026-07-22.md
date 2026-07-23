@@ -1,6 +1,6 @@
 # Build handoff — engine/autonomy lane — 2026-07-22 (updated through 07-23 late evening)
 
-## ⓪⓪ CIRCUIT-PROVING STATE (2026-07-23 ~23:59) — READ THIS FIRST, it supersedes ⓪
+## ⓪⓪ CIRCUIT-PROVING STATE (2026-07-22 ~23:59; boot-log mtimes are the clock) — READ THIS FIRST, it supersedes ⓪
 ⭐THE DISCIPLINE PIVOT (Lucas: "we need a plan for actually getting this working"): organs shipped
 gate-green but the CIRCUITS between them had never fired live. NEW RULE: no new organ until its
 upstream circuit fires live. Slices 6/7 WAIT. The bar for "working" is Lucas-visible: real answers
@@ -14,13 +14,18 @@ honest miss · the Saudi-nuclear engage verified real against her own store · h
 the new moves (3rd hand-copied-list drift — a schema-obedient model could never emit open-inquiry;
 smoke now asserts MOVES ⊆ enum) · the harvest had NEVER RUN (promoted pre-harvest; one-shot
 catch-up + DIRECTION rule: his world outranks the bulk inventory) · a fusion confabulation banked
-as knowledge kind=verified_fact ("tariffs over Canadian wildfire smoke", row purged; write-back
-gating = open hardening candidate) · Echo refusals now TEACH THE LANE SWITCH ("do NOT retry Echo;
+as knowledge kind=verified_fact ("tariffs over Canadian wildfire smoke", row purged; ✅HARDENED
+`a2c780e` THE GROUNDING GATE: an answer must restate the page it cites — anchors [numbers + proper
+nouns] checked against the read text at BOTH banking doors, captureRecovered + maybeCaptureLearnings;
+ungrounded → blocked, no supersede, log names the door) · Echo refusals now TEACH THE LANE SWITCH ("do NOT retry Echo;
 <web-open> or say the miss") · the promise-guard's empty-final-say hole (lastSay threads the
 recursion) · envelope echo stripped from the thought rail · expect judge grades the INCREMENT.
-**PENDING BOOT49**: 07007bd NEWS TIER (her 189-feed stream joins the cognition ladder — the war
-question's real fix) + e921645 update-rows ride ("↳ latest"). Retest after boot49: "what's the
-latest on the war?" must answer from her own stream in one turn.
+**BOOT50 LIVE (07-23 ~00:45)**: runs EVERYTHING — 07007bd NEWS TIER + e921645 update-rows +
+a2c780e grounding gate. The war-question retest is STILL OWED (last asking was 23:36 on boot48,
+pre-news-tier — the honest-miss proof, not the tier's test): "what's the latest on the war?" must
+answer from her own stream in one turn (`enriched:news` in the log). BOOT49 PROOFS: inquiry #1
+advanced touch 2 AND touch 3 (the direction loop holds across boots) · email kill-switch pre-gate
+fired live ("autonomous email reply suppressed").
 **DATA-STREAM SWEEP (complete)**: 2 gotchas — news_story_updates (fixed) + inbound_messages
 13,620 emails unreadable from any answering surface (chip filed w/ the _enrichNews template).
 All other stores verified reachable or already-indexed defects.
