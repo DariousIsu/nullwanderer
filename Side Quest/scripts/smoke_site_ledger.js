@@ -45,6 +45,13 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
     SL.markDone('x.gov', 'https://x.gov/contact');
     ok(/3\/3 pages digested — complete/.test(SL.planLine('x.gov')), 'a finished plan says complete');
 
+    // --- SERPs: duplicate-search kill with a SHORT ttl (results change; only the immediate retry is waste) ---
+    ok(SL.isSerp('https://www.google.com/search?q=bonnie+whitney') && !SL.isSerp('https://x.gov/search-results'), 'isSerp: engines only, not a site\'s own /search page');
+    SL.record('https://www.google.com/search?q=bonnie+whitney', { now: T0 });
+    ok(SL.seen('https://www.google.com/search?q=bonnie+whitney').kind === 'serp', 'a SERP records as kind serp regardless of caller kind');
+    ok(SL.shouldSkip('https://www.google.com/search?q=bonnie+whitney', { now: T0 + 60000 }).skip, 'the duplicate identical search minutes later is skipped');
+    ok(!SL.shouldSkip('https://www.google.com/search?q=bonnie+whitney', { now: T0 + SL.SERP_TTL_MS + 1 }).skip, 'a fresh search re-earns after the short SERP ttl — tomorrow\'s retry is legitimate');
+
     // --- bounded ---
     const many = Array.from({ length: 60 }, (_, i) => `https://big.gov/p${i}`);
     const bp = SL.buildPlan('https://big.gov/index', many, { now: T0 });

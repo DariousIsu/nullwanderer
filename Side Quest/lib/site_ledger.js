@@ -23,7 +23,14 @@
 const db = require('./db');
 
 const DEFAULT_TTL_MS = 3 * 24 * 60 * 60 * 1000;   // a page re-earns a fetch after ~3 days
+const SERP_TTL_MS = 30 * 60 * 1000;                // a search-results page changes — only the DUPLICATE
+                                                   // search within minutes is waste (live: the same 4-H
+                                                   // contact query fired twice in one minute)
 const PLAN_MAX_URLS = 30;                          // a digest plan is bounded, never a full mirror
+
+// A search-engine results page is not content — it gets its own kind and a short TTL.
+const _SERP_RE = /^https?:\/\/(?:www\.)?(?:google\.[a-z.]+\/search|bing\.com\/search|duckduckgo\.com\/)/i;
+function isSerp(u) { return _SERP_RE.test(String(u || '')); }
 
 // #fragment never changes content; trailing slash is cosmetic; tracking params are noise.
 function normalizeUrl(u) {
@@ -53,6 +60,7 @@ function record(u, { kind = 'page', chars = null, docId = null, now = Date.now()
   if (!url) return false;
   const host = hostOf(url);
   if (!host) return false;
+  if (isSerp(url)) kind = 'serp';
   try {
     db.getDb().prepare(`INSERT INTO site_visits (url, host, kind, first_ts, last_ts, visits, chars, doc_id)
       VALUES (?, ?, ?, ?, ?, 1, ?, ?)
@@ -68,7 +76,8 @@ function record(u, { kind = 'page', chars = null, docId = null, now = Date.now()
 function shouldSkip(u, { ttlMs = DEFAULT_TTL_MS, now = Date.now() } = {}) {
   const row = seen(u);
   if (!row) return { skip: false };
-  if (now - row.last_ts >= ttlMs) return { skip: false, stale: row };
+  const ttl = row.kind === 'serp' ? Math.min(ttlMs, SERP_TTL_MS) : ttlMs;
+  if (now - row.last_ts >= ttl) return { skip: false, stale: row };
   return { skip: true, row, why: `read ${row.visits}× (last ${Math.round((now - row.last_ts) / 60000)}m ago${row.doc_id ? `, doc #${row.doc_id}` : ''})` };
 }
 
@@ -126,4 +135,4 @@ function planLine(host) {
   return `[site-digest] ${plan.host}: ${done}/${plan.urls.length} pages digested${done < plan.urls.length ? ' — still working through it' : ' — complete'}`;
 }
 
-module.exports = { normalizeUrl, hostOf, seen, record, shouldSkip, buildPlan, getPlan, markDone, nextPending, planLine, DEFAULT_TTL_MS, PLAN_MAX_URLS };
+module.exports = { normalizeUrl, hostOf, isSerp, seen, record, shouldSkip, buildPlan, getPlan, markDone, nextPending, planLine, DEFAULT_TTL_MS, SERP_TTL_MS, PLAN_MAX_URLS };
