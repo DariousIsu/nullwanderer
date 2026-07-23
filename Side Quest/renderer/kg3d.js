@@ -1450,6 +1450,16 @@ function buildRegions() {
     heartC = neckL.clone().lerp(chestL, 0.42);                    // high — just under the neckline
     heartC.add(frontDir.clone().multiplyScalar(0.075));           // out to the chest surface
   }
+  // THE SUIT'S CUT, TAKEN FROM THE RIG. The neckline sits just under the neck joint and the hem just under the
+  // hips, so the garment is skin-tight and correctly placed on ANY avatar rather than at guessed y fractions.
+  const hipsB = bone('hips') || bone('spine');
+  const hipsL = hipsB ? hipsB.clone().applyMatrix4(inv) : null;
+  if (neckL && chestL) {
+    shellUniforms.uSuitNeck.value = neckL.y - (neckL.y - chestL.y) * 0.30;     // collar, a little below the neck
+    shellUniforms.uSuitCen.value.copy(chestL);
+    if (frontDir) shellUniforms.uSuitFront.value.copy(frontDir);
+  }
+  if (hipsL) shellUniforms.uSuitHem.value = hipsL.y - (neckL ? (neckL.y - hipsL.y) * 0.10 : 0.06);
   const HEART_RX = 0.058, HEART_RY = 0.060;                       // half-width / half-height of the heart
   function inHeart(p) {
     if (!heartC) return false;
@@ -1471,9 +1481,13 @@ function buildRegions() {
     // part of her MEANS. 0 body/face · 1 hair (short-term) · 2 heart. One pass, two consumers: the binding picks
     // seats from the arrays, the shell reads the attribute — they can never disagree about which part is which.
     const reg = new Float32Array(N);
+    // …and her MODEL-space position per vertex, which is what lets the suit be cut by real body coordinates
+    // (a fixed neckline/hem that stays put while she moves, instead of anything screen- or world-relative).
+    const bod = new Float32Array(N * 3);
     for (let i = 0; i < N; i++) {
       try { m.getVertexPosition(i, v); } catch (e) { continue; }
       v.applyMatrix4(toLocal);
+      bod[i * 3] = v.x; bod[i * 3 + 1] = v.y; bod[i * 3 + 2] = v.z;
       // FACE = BODY COLOUR, HAIR = SHORT-TERM (Lucas: "the face is still the same colour as the hair and not the
       // body"). Only HAIR carries the short-term violet; every skin vertex — face included — is corpus/body sky.
       // The eye and mouth patches are still excluded from BINDING (no node sits in an eye socket) but they shade
@@ -1484,6 +1498,7 @@ function buildRegions() {
       reg[i] = 0; REGION.body.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z });                // ALL skin, face and body, is the corpus
     }
     m.geometry.setAttribute('aRegion', new THREE.BufferAttribute(reg, 1));
+    m.geometry.setAttribute('aBody', new THREE.BufferAttribute(bod, 3));
   }
   // SPATIALLY EVEN SEATS. The raw pools hold every classified vertex, so dense mesh (fingers, toes, face)
   // held far more seats than smooth mesh (thighs, upper arms) — random binding then packed nodes into hands,
@@ -1535,6 +1550,13 @@ const shellUniforms = {
   // angle) barely fires on it and it read much darker than the curved body. A higher ambient floor lifts the
   // face to match the body without washing out the rim.
   uBase: { value: 0.14 }, uRim: { value: 1.2 }, uPow: { value: 2.4 }, uPulse: { value: 0 }, uScan: { value: 1 },
+  // THE HOLOGRAM SUIT (Lucas, the Cortana trick): "stylize her to be naked while still looking clothed …
+  // lines and light … nothing flowing, just skin tight … it will help subtle out the nipples a little."
+  // Not geometry — the garment is PAINTED on her own surface, bounded by a real neckline and hem taken from
+  // the rig's own joints, so it is skin-tight by construction and moves with her.
+  uSuitOn: { value: 1 }, uSuitAmt: { value: 0.85 },
+  uSuitNeck: { value: 1.35 }, uSuitHem: { value: 0.78 }, uSuitScoop: { value: 0.055 },
+  uSuitFront: { value: new THREE.Vector3(0, 0, 1) }, uSuitCen: { value: new THREE.Vector3(0, 1.1, 0) },
 };
 // Each slice is shaded by WHAT IT IS, read off the VRoid material name. Skin takes the region colour and the
 // fresnel; hair goes solid so it reads as a mass and gives her a silhouette; the eyes are lit hard because a
@@ -1627,12 +1649,15 @@ function applyShellMaterial() {
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, shellUniforms);
       sh.uniforms.uKind = { value: kind };
+      // The TORSO is its own mesh (Std_Skin_Body) — arms and legs are separate. Scoping the suit to that mesh
+      // is exact, where any lateral-radius test would have painted the hem straight across her arms.
+      sh.uniforms.uSuitMesh = { value: /Std_Skin_Body/i.test(String((m.userData && m.userData.matName) || '')) ? 1 : 0 };
       sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\n attribute float aRegion;\n varying float vRegion;\n varying vec3 vVN;\n varying vec3 vVP;\n varying float vMY;')
-        .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\n vRegion = aRegion;\n vVN = transformedNormal;')
+        .replace('#include <common>', '#include <common>\n attribute float aRegion;\n attribute vec3 aBody;\n varying float vRegion;\n varying vec3 vBody;\n varying vec3 vVN;\n varying vec3 vVP;\n varying float vMY;')
+        .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\n vRegion = aRegion;\n vBody = aBody;\n vVN = transformedNormal;')
         .replace('#include <project_vertex>', '#include <project_vertex>\n vVP = mvPosition.xyz;\n vMY = (modelMatrix * vec4(transformed, 1.0)).y;');
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\n uniform vec3 uBody; uniform vec3 uHead; uniform vec3 uHeart;\n uniform float uBase; uniform float uRim; uniform float uPow; uniform float uPulse; uniform float uKind; uniform float uScan;\n varying float vRegion; varying vec3 vVN; varying vec3 vVP; varying float vMY;')
+        .replace('#include <common>', '#include <common>\n uniform vec3 uBody; uniform vec3 uHead; uniform vec3 uHeart;\n uniform float uBase; uniform float uRim; uniform float uPow; uniform float uPulse; uniform float uKind; uniform float uScan;\n uniform float uSuitOn; uniform float uSuitAmt; uniform float uSuitNeck; uniform float uSuitHem; uniform float uSuitScoop; uniform float uSuitMesh;\n uniform vec3 uSuitFront; uniform vec3 uSuitCen;\n varying float vRegion; varying vec3 vBody; varying vec3 vVN; varying vec3 vVP; varying float vMY;')
         .replace('#include <dithering_fragment>', `
           // heart is region 2 ONLY; region 3 (eye/mouth exclusion) must not read as heart or the CC face goes
           // maroon (its mouth morph moves a wide area, so ~400 face verts land in region 3).
@@ -1679,6 +1704,30 @@ function applyShellMaterial() {
           else if (uKind < 4.5) outc = vec3(0.9, 0.95, 1.0);                        // catchlight (VRoid highlight)
           else if (uKind < 5.5) outc = rc * 0.10;                                   // brow / lash / eyeline
           else                  outc = mix(rc, vec3(1.0, 0.62, 0.72), 0.65) * 0.85; // lips
+          // --- THE HOLOGRAM SUIT: clothes made of her own light (Lucas's Cortana note) ---
+          // A garment reads by its EDGES, so the neckline and hem are drawn as bright seams and the panel
+          // between them carries a fine contour weave. Torso mesh only; the heart (region 2) is left clear so
+          // her identity still burns through the cloth.
+          if (uKind < 0.5 && uSuitMesh > 0.5 && uSuitOn > 0.5 && vRegion < 0.5) {
+            vec3 rel = vBody - uSuitCen;
+            float fz = dot(normalize(vec3(rel.x, 0.0, rel.z) + vec3(1e-5)), uSuitFront);   // +1 front, -1 back
+            float neckY = uSuitNeck - max(0.0, fz) * uSuitScoop;                           // scooped at the front
+            float panel = smoothstep(uSuitHem - 0.010, uSuitHem + 0.010, vBody.y)
+                        * (1.0 - smoothstep(neckY - 0.010, neckY + 0.010, vBody.y));
+            if (panel > 0.001) {
+              float hb = abs(fract(vBody.y * 105.0) - 0.5) * 2.0;                          // contour weave
+              float hl = smoothstep(0.74, 1.0, hb);
+              float ang = atan(rel.x, rel.z);
+              float vb = abs(fract(ang * 2.2) - 0.5) * 2.0;                                // vertical seams
+              float vl = smoothstep(0.93, 1.0, vb);
+              float weave = max(hl * 0.65, vl);
+              vec3 suitC = mix(rc, vec3(0.60, 0.80, 1.0), 0.42);
+              outc = mix(outc, suitC * (0.50 + weave * 1.45), panel * uSuitAmt);
+            }
+            float edge = smoothstep(0.008, 0.0, abs(vBody.y - uSuitHem));
+            edge = max(edge, smoothstep(0.008, 0.0, abs(vBody.y - neckY)));
+            outc += vec3(0.55, 0.85, 1.0) * edge * 0.85 * uSuitAmt;                        // the seams
+          }
           // a slow horizontal banding, the one borrowed cue that reads instantly as "projected, not filmed"
           outc *= 1.0 + uScan * 0.16 * sin(vMY * 0.14);
           gl_FragColor = vec4(outc, 1.0);
@@ -3124,6 +3173,16 @@ window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () =
   actStats: () => ({ seen: _act.seen, drawn: _act.drawn,
     kinds: [..._act.byKind.entries()].map(([k, v]) => ({ kind: k, seen: v.seen, drawn: v.drawn })).sort((a, b) => b.seen - a.seen) }),
   shape: (s) => { if (s) { applyShape(s); if (shapeEl) shapeEl.value = s; } return SHAPE; },
+  // the hologram suit — tune it live (neckline/hem are model-space Y from the rig) without a reload
+  suit: (o) => { if (o && typeof o === 'object') {
+      if (o.on != null) shellUniforms.uSuitOn.value = o.on ? 1 : 0;
+      if (o.amt != null) shellUniforms.uSuitAmt.value = o.amt;
+      if (o.neck != null) shellUniforms.uSuitNeck.value = o.neck;
+      if (o.hem != null) shellUniforms.uSuitHem.value = o.hem;
+      if (o.scoop != null) shellUniforms.uSuitScoop.value = o.scoop; }
+    return { on: shellUniforms.uSuitOn.value, amt: +shellUniforms.uSuitAmt.value.toFixed(2),
+      neck: +shellUniforms.uSuitNeck.value.toFixed(3), hem: +shellUniforms.uSuitHem.value.toFixed(3),
+      scoop: +shellUniforms.uSuitScoop.value.toFixed(3) }; },
   skin: (o) => { if (o && o.exag != null) SKIN_EXAG = o.exag;
     return { ready: vrmReady, bound: skinBinds ? skinBinds.length : 0,
       regions: { head: REGION.head.length, heart: REGION.heart.length, body: REGION.body.length },
