@@ -76,7 +76,7 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   ok(g && g.enrichSource === 'wiki-verify' && /EPA/.test(g.say), 'currency-marked question verifies stale records via wiki-verify');
 
   // 8) currency-marked but NO fresh source → keep the grounded answer (never worse than before).
-  const h = await cog.answerGrounded({ userMessage: 'who is the CEO now?', grounding: 'Acme CEO is Jane Doe', object: { name: 'Acme' }, deps: { ask: async () => 'Jane Doe is the CEO.', wikiLookup: async () => [], excavate: async () => ({ found: false }), writeBack: async () => {} } });
+  const h = await cog.answerGrounded({ userMessage: 'who is the CEO now?', grounding: 'Acme CEO is Jane Doe', object: { name: 'Acme' }, deps: { ask: async () => 'Jane Doe is the CEO.', newsStories: () => [], wikiLookup: async () => [], excavate: async () => ({ found: false }), writeBack: async () => {} } });
   ok(h && h.enrichSource === null && /Jane/.test(h.say), 'currency-marked but no fresh source → keep the grounded answer');
 
   // 9) _enrichWiki unit — returns { text, url } (source url for the write-back).
@@ -228,12 +228,12 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   ok(cog._hasStaleGrounding('[VERIFIED as of 1973-02-16] Acme was founded in 1973.', NOW) === false, '_hasStaleGrounding: permanent fact (founding) → never stale');
   const staleG = '[VERIFIED as of 2026-01-01] The current chair of Acme is Old Person.';
   const stv = await cog.answerGrounded({ userMessage: 'who chairs Acme', grounding: staleG, object: { name: 'Acme' }, deps: {
-    now: NOW,
+    now: NOW, newsStories: () => [],
     ask: async ({ input }) => /New Person/i.test(String(input.grounding)) ? 'New Person chairs Acme.' : 'Old Person chairs Acme.',
     wikiLookup: async () => [{ title: 'Acme', extract: 'The current chair of Acme is New Person.' }], writeBack: async () => {} } });
   ok(stv && stv.enrichSource === 'wiki-verify' && /New Person/.test(stv.say), 'staleness: stale fact in grounding → re-verify → fresh answer (no currency word needed)');
   const frv = await cog.answerGrounded({ userMessage: 'who chairs Acme', grounding: '[VERIFIED as of 2026-07-05] The current chair of Acme is Person.', object: { name: 'Acme' }, deps: {
-    now: NOW, ask: async () => 'Person chairs Acme.', wikiLookup: async () => { throw new Error('wiki should not be called for a fresh fact'); } } });
+    now: NOW, newsStories: () => [], ask: async () => 'Person chairs Acme.', wikiLookup: async () => { throw new Error('wiki should not be called for a fresh fact'); } } });
   ok(frv && frv.enrichSource === null && /Person/.test(frv.say), 'staleness: a FRESH verified fact does not trigger re-verify');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

@@ -2509,7 +2509,10 @@ function startDownloadsIngestWatcher() {
   try { armDownloadOriginHook(); } catch (e) { console.error('[dl-origin] arm failed:', e.message); }
   const fsm = require('fs'); const pathm = require('path');
   const dir = webLib.DOWNLOADS_DIR;
-  const INGEST_EXT = new Set(['pdf', 'docx', 'txt', 'md', 'markdown', 'xlsx', 'xlsm', 'csv', 'tsv']);
+  // ⚠️THREE extension lists must agree: INGEST_EXT (this watcher), file_ingest.TEXT_DOC_EXT, and
+  // doc_extract.SHEET_EXT — the hand-copied-list drift bit again 2026-07-23: 'xls' was added to the
+  // other two and the WATCHER silently ignored the 3.1MB LA roster sitting in downloads.
+  const INGEST_EXT = new Set(['pdf', 'docx', 'txt', 'md', 'markdown', 'xlsx', 'xlsm', 'csv', 'tsv', 'xls']);
   const ingested = new Set();     // paths already handled this session
   const pending = new Map();      // path → debounce timer
   try { if (!fsm.existsSync(dir)) fsm.mkdirSync(dir, { recursive: true }); } catch {}
