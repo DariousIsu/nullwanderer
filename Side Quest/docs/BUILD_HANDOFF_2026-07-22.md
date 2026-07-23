@@ -119,9 +119,48 @@ LIVE PROGRESS: inquiry #1 banked 52/64 parish clerks from the CORA page (touch 1
 eating); the zombie guard REFUSED live; the PDF-skip fired on its exact loop within minutes;
 first synthesis-born lead banked (Florida DoS county scrape). ⚠️MISREAD ON RECORD: her reply
 inverted "finish Louisiana first / in the state" into "nationwide" (nothing actually started).
-Gate = 306 suites. WATCH boot63: ledger `already digested` skips + digest narration · escalation
-`read via …` labels · first post-fix `grabbed headshot` · `duplicate download` skips · roster
-fetch (open_page on the .xls now works via plain-fetch → spreadsheet lane) · harvest homecoming. The war-question retest is STILL OWED (last asking
+
+**THE LATE-AFTERNOON ARC (boots 64-68, ~13:30-14:30 — every fix reactive to Lucas watching live)**:
+d3eae86 TOUCH FINDINGS PERSIST (the 64-president table had evaporated — envelope caps evidence at
+8; substantial answers land as docs; FIRED live within minutes, docs #8418/8420/8426/8427/8429/8440)
+· a20a99c ledger-before-PDF-branch · 8aa7e00 ARCHIVED-SOURCE GATE (Lucas's screenshot: the 2013
+Maryland Manual archive read as a CURRENT roster — Rawlings-Blake "mayor" + 2013 emails headed for
+the contact store; isArchivedSource: dated-manual subdomains/wayback/digitization/past-edition
+banners; archived → historical knowledge, never contacts) · 3ccaf94 TOP-RESULT SKIP (the OJP scan
+magnet: DIFFERENT stale-name queries all ranked the same 1990s NCJRS scan #1 — 10 ledger visits;
+selection now consults the ledger, FIRED live) · 68d0338 SITE ACCESS PROFILES (Lucas: "if she hits
+a wall she should be studying the process" — per-host door outcomes, ladder leads with what worked,
+concessions carry the learned map) · 1b0674d PINNED FLOOR (Alaska outranked Louisiana: pin×staleness
+zeroed just-run his-world beats; floor 0.25×pin, no monopoly) + ACCRETING SUMMARY (the rolling
+rewrite ate "64/64 presidents" — carry-forward on the schema line) · b07c4bc + daede85 LEGACY .XLS
+END-TO-END (the roster touch DOWNLOADED the 3.1MB file then asked for "a tool that can read XLS
+files"; doc_extract gains BIFF via SheetJS; ⚠️4th hand-copied-list drift: THREE extension sets —
+INGEST_EXT/TEXT_DOC_EXT/SHEET_EXT — must agree) · promised-lookup net + watchdog + engage-gate all
+FIRED live · CULL SESSION running (Lucas's refinement relayed twice: retire from the HUNT, keep as
+MEMORY NODES era-marked — "we now know those people exist") · Louisiana standing: sheriffs 64/64,
+presidents 64/64 (in docs), clerks partial; the roster file is IN data/downloads
+(Louisiana-ElectedOfficials-roster.xls) — RE-TRIGGER the ingest on boot69 (the watcher ignored it
+pre-daede85; re-copy under a new name or touch it) → the full 6,695-row table lands as a doc.
+
+**⭐POST-COMPACT AGENDA (Lucas, verbatim intent — the next conversation's spine)**:
+1. "Why she wasn't able to add new tools to her own program" — the roster touch NAMED its need
+   ("a Python script with pandas") and had no path from need → capability. The designed path is
+   rehearsal (R1/O2) ending in a PROPOSAL CARD (R3: nothing self-adopts — Lucas+gate+commit only);
+   the gap: nothing connects a run's NAMED capability need to opening a rehearsal.
+2. "Why she isn't using sandbox tools" — rehearsal_create/edit/test/drive shipped in slice 5 and
+   the rehearse move EXISTS in the decider enum, but NO rehearsal has ever been chosen live (count
+   of firings: 0). Suspects: the decider's state never surfaces a reason to rehearse (no
+   capability-gap line), and DIRECTION outranks it while inquiries are open.
+3. "What's been left behind that still needs doing" — sweep the ledger: expect-MET on inquiry #1
+   (still 0 MET on the Louisiana line itself), the harvest-born homecoming (still unfired — needs
+   an answered close on a conversation-born inquiry), heartbeat worth-it calibration (Lucas's
+   call), reflection-vs-commitment provenance, smoke_cognition full hermeticity (7/18 calls
+   mocked), smoke_activity_coverage contention flake (graph lane's), the "which Trump" salience,
+   email-archive chip (task_04ef1301 pending), site-digest PLAN worker (storage+narration live;
+   no autonomous sweep worker yet), access-profile → touchBrief surfacing.
+4. "The next several steps ahead" — draft for discussion: capability-need → rehearsal wire (1+2
+   above), the site-sweep worker, inquiry #1 close + homecoming, cull application, Phase-4 beat
+   weighting review with the pin now live. The war-question retest is STILL OWED (last asking
 was 23:36 on boot48, pre-news-tier — the honest-miss proof, not the tier's test): "what's the
 latest on the war?" must answer from her own stream in one turn (`enriched:news` in the log).
 BOOT49/50 PROOFS: inquiry #1 advanced touches 2-4 (the direction loop holds across boots) · email
