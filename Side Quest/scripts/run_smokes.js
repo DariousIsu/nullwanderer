@@ -263,6 +263,7 @@ const smokes = [
   'smoke_site_ledger.js',
   'smoke_fetch_escalation.js',
   'smoke_rehearsal_driver.js',
+  'smoke_capability_need.js',
   'smoke_ner.js',
   'smoke_mention.js',
   'smoke_cognition.js',

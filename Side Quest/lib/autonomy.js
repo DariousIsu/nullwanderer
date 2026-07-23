@@ -138,6 +138,17 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
     return `• DEVELOPING STORIES YOU FOLLOW (what moved since you last saw it):\n${lines.join('\n')}`;
   });
 
+  grab('capabilityGaps', () => {
+    // SLICE R (PLAN_MAP §1): capability needs NAMED BY RUNS (lib/capability_need — the detector
+    // only reads run text, never idle musing). The [need #N] token is the machine handle the
+    // rehearse OPEN form consumes. Without this line the sandbox is unreachable: rehearse could
+    // only ever ADVANCE a run, and nothing opened one — zero firings, structurally.
+    const lines = (deps.capabilityNeed || require('./capability_need')).manifestLines({ nowMs: now, deps: { db: dbm } });
+    if (!lines || !lines.length) return '';
+    counts.capabilityGaps = lines.length;
+    return `• CAPABILITY GAPS SHE HAS NAMED (open a rehearsal with the rehearse move, target the [need #N]):\n${lines.join('\n')}`;
+  });
+
   grab('harvest', () => {
     // O0.h — materials mined from promoted conversations (his tangents are FEEDSTOCK, never
     // noise). Each entry carries the [dN] handle back to the conversation it came from; leads
@@ -272,7 +283,7 @@ One-shot moves (work that is genuinely single-step):
 - clean: inspect and report on duplicates/conflicts (writes are gated — your product is a precise report).
 - build: turn material she ALREADY HOLDS into a real markdown document (a brief, a gap report, a synthesis).
 - maintain: run ONE curated maintenance loop on her own stores (the brief names the allowlist — an integrity-audit report, a full-corpus dedup proposal sweep). Products are REPORTS and PROPOSALS; nothing applies unattended. Prefer it when MAINTENANCE & ANALYSIS LOOPS shows a loop gone stale.
-- rehearse: advance the ACTIVE REHEARSAL RUN one bounded iteration (only when the state shows one; a parked run resumes). target is its slug. The run edits a sandboxed COPY of her own code, judged by her own gate; green ends as a proposal-card document — nothing self-adopts, ever. Never starts a new run.
+- rehearse: the sandbox. With an ACTIVE REHEARSAL RUN in the state: advance it one bounded iteration (a parked run resumes); target is its slug. With NO run active and a CAPABILITY GAP named in the state: target that exact "need #N" token to OPEN a sandboxed run built from the need (the judging suite is matched automatically; if nothing fits, the need parks honestly). The run edits a sandboxed COPY of her own code, judged by her own gate; green ends as a proposal-card document — nothing self-adopts, ever. Only a need a RUN named may open one — never an idle inference.
 - engage: say something to Lucas NOW — a genuine finding or a direction question. Use RARELY, only when you have something real; "say" must carry the exact message, grounded in the state above, no invented facts.
 - nothing: a first-class answer. If no move is clearly worth its cost, decline honestly.
 

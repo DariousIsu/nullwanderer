@@ -9257,6 +9257,14 @@ async function autonomyTick() {
       }
       if (env) {
         inquiry.writeBack(inqId, env, { nowMs: now });
+        // SLICE R (PLAN_MAP §1): a run that NAMES its missing capability must not let the sentence
+        // die in prose (the roster's "a tool that can read XLS files" did exactly that) — land it
+        // as a typed need row; the decider's state surfaces it; the rehearse OPEN form consumes it.
+        try {
+          const capn = require('./lib/capability_need');
+          const named = capn.harvest(`${env.learned || ''} ${env.next_step || ''} ${(env.leads || []).join(' ')}`, { bornFrom: `inquiry-${inqId}-t${row.touches + 1}`, nowMs: now });
+          for (const n of named) if (!n.deduped) console.log(`[autonomy] capability need named → [need #${n.id}] "${String(n.need).slice(0, 80)}"`);
+        } catch {}
         let closedStatus = null;
         if (env.status === 'answered' || env.status === 'dead_end') {
           const c = inquiry.close(inqId, { kind: env.status === 'dead_end' ? 'dead_end' : 'answered', answer: env.learned, nowMs: now });
@@ -9306,6 +9314,48 @@ async function autonomyTick() {
       let run = driver.load();
       if (run && run.status === 'parked') { driver.resume(); run = driver.load(); }
       if (!run || run.status !== 'active') {
+        // SLICE R OPEN FORM (PLAN_MAP §1): no active run + a named capability gap → START one.
+        // Only run-named needs exist in the store (the detector's guard), so this can never open
+        // from idle inference. The judging suite is the best filename match for the need; the
+        // watched files are the libs that suite itself requires (its natural edit surface) plus
+        // the suite file, so the run may grow its own test first. No fit → park honestly.
+        const nm = String(decision.target || '').match(/need\s*#?(\d+)/i);
+        if (nm) {
+          try {
+            const capn = require('./lib/capability_need');
+            const need = capn.get(Number(nm[1]));
+            if (need && need.status === 'open') {
+              const fs2 = require('fs'), path2 = require('path');
+              const suites = fs2.readdirSync(path2.join(__dirname, 'scripts')).filter((f) => /^smoke_[a-z0-9_]+\.js$/.test(f));
+              const suite = capn.suiteFor(need.need, suites);
+              if (!suite) {
+                capn.setStatus(need.id, 'parked', { nowMs: now });
+                autonomy.historyPush(H, { ts: now, move: 'rehearse', target: `need #${need.id}`, outcome: 'parked: no existing suite fits — needs Lucas to name the bar' });
+                console.log(`[autonomy] chose=rehearse → need #${need.id} PARKED (no suite fits the need)`);
+                return;
+              }
+              let files = [];
+              try {
+                const body = fs2.readFileSync(path2.join(__dirname, 'scripts', suite), 'utf8');
+                const seen = new Set();
+                for (const m of body.matchAll(/require\(['"][^'"]*\/lib\/([a-z0-9_]+)(?:\.js)?['"]\)/g)) seen.add(`lib/${m[1]}.js`);
+                files = [...seen].slice(0, 3);
+              } catch {}
+              files.push(`scripts/${suite}`);
+              const slug = `need-${need.id}-${String(need.need).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)}`;
+              const st = driver.start({ slug, goal: `${need.need} (capability need #${need.id}, named by ${need.born_from || 'a run'})`, suite, files, nowMs: now });
+              if (st.ok) {
+                capn.setStatus(need.id, 'rehearsing', { nowMs: now });
+                autonomy.historyPush(H, { ts: now, move: 'rehearse', target: `need #${need.id}`, outcome: `OPENED run "${st.run.slug}" (suite ${suite})` });
+                console.log(`[autonomy] chose=rehearse → OPENED run "${st.run.slug}" from need #${need.id} (suite ${suite}; files ${files.join(', ')})`);
+                return;
+              }
+              autonomy.historyPush(H, { ts: now, move: 'rehearse', target: `need #${need.id}`, outcome: `open failed: ${String(st.reason).slice(0, 120)}` });
+              console.log(`[autonomy] chose=rehearse → open FAILED for need #${need.id}: ${st.reason}`);
+              return;
+            }
+          } catch (e) { console.error('[autonomy] rehearse open-form failed:', e.message); }
+        }
         autonomy.historyPush(H, { ts: now, move: 'rehearse', target: decision.target, outcome: `no active run (${run ? run.status : 'none'})` });
         console.log(`[autonomy] chose=rehearse → nothing to advance (${run ? run.status : 'no run'})`);
         return;
@@ -9323,6 +9373,15 @@ async function autonomyTick() {
       try { require('./lib/board').finish(boardId, { status: r && r.ok ? 'done' : 'failed', note: String((r && r.note) || 'iterate threw').slice(0, 160) }); } catch {}
       try { require('./lib/board').release(slot); } catch {}
       autonomy.historyPush(H, { ts: now, move: 'rehearse', target: run.slug, outcome: r ? `${r.status}: ${String(r.note).slice(0, 120)}` : 'iterate failed' });
+      // SLICE R: a need-born run's EXIT advances the need row too — green → proposed (the card is
+      // out for Lucas), stuck/discarded → parked (the lesson is crystallized, the need waits).
+      try {
+        const nb = /^need-(\d+)-/.exec(run.slug);
+        if (nb && r && ['green', 'stuck', 'discarded'].includes(r.status)) {
+          require('./lib/capability_need').setStatus(Number(nb[1]), r.status === 'green' ? 'proposed' : 'parked', { nowMs: now });
+          console.log(`[autonomy] need #${nb[1]} → ${r.status === 'green' ? 'proposed (card out)' : 'parked (run ' + r.status + ')'}`);
+        }
+      } catch {}
       console.log(`[autonomy] chose=rehearse → ${run.slug} ${r ? r.status : 'FAILED'}${r ? ` — ${String(r.note).slice(0, 100)}` : ''}`);
       return;
     }

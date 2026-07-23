@@ -40,6 +40,10 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   mem.exec(`CREATE TABLE procedures (id INTEGER PRIMARY KEY, kind TEXT, name TEXT, trigger_text TEXT, steps TEXT, check_text TEXT, applicability TEXT, provenance TEXT, met INTEGER DEFAULT 0, unmet INTEGER DEFAULT 0, status TEXT DEFAULT 'active', created_ts INTEGER, last_used_ts INTEGER)`);
   mem.prepare("INSERT INTO procedures (kind,name,trigger_text,status,created_ts) VALUES ('constraint','build: [legislative-analyst] result — ready to compile','legislative-analyst result','active',?)").run(NOW - 3600e3);
   mem.prepare("INSERT INTO procedures (kind,name,trigger_text,status,created_ts) VALUES ('constraint','retired lesson','x','retired',?)").run(NOW - 3600e3);
+  // SLICE R: a capability need a RUN named must reach the decider's state (else rehearse stays
+  // structurally unfireable — the zero-firings-ever hole).
+  mem.exec("CREATE TABLE capability_needs (id INTEGER PRIMARY KEY, need TEXT NOT NULL, born_from TEXT, status TEXT NOT NULL DEFAULT 'open', created_ts INTEGER NOT NULL, updated_ts INTEGER)");
+  mem.prepare("INSERT INTO capability_needs (need,born_from,status,created_ts) VALUES ('need a tool that can read XLS files','inquiry-1-t18','open',?)").run(NOW - 7200e3);
 
   const man = auto.buildManifest({ db: { getDb: () => mem }, now: NOW });
   ok(/Rainey Center — board members/.test(man.text), 'manifest names the absence gap');
@@ -54,6 +58,10 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     '§6 L4: failed board rows finally have a reader');
   ok(/LEARNED CONSTRAINTS/.test(man.text) && /legislative-analyst/.test(man.text) && !/retired lesson/.test(man.text),
     'constraints reach the DECIDER (active only) — the re-picked-bait fix');
+  ok(/CAPABILITY GAPS SHE HAS NAMED/.test(man.text) && /\[need #1\].*read XLS files.*named 2h ago.*inquiry-1-t18/.test(man.text),
+    'SLICE R: a run-named capability need reaches the decider state with its [need #N] handle');
+  ok(/OPEN a sandboxed run built from the need/.test(auto.DECISION_WANT) && /never an idle inference/.test(auto.DECISION_WANT),
+    'SLICE R: the rehearse bullet teaches the OPEN form, gated on run-named needs only');
   ok(/SIZED TO ONE BOUNDED RUN/.test(auto.DECISION_WANT) && /INPUT, not an order/.test(auto.DECISION_WANT),
     'DECISION_WANT calibrates expect to one run and de-baits delegated gists');
   ok(/ONE bounded bite/.test(auto.DECISION_WANT) && /NEVER the inquiry's finish line/.test(auto.DECISION_WANT),

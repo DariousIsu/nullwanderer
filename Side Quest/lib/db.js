@@ -188,6 +188,14 @@ const MIGRATIONS = [
     profile TEXT NOT NULL,
     updated_ts INTEGER NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS capability_needs (
+    id INTEGER PRIMARY KEY,
+    need TEXT NOT NULL,
+    born_from TEXT,
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','rehearsing','proposed','parked','retired')),
+    created_ts INTEGER NOT NULL,
+    updated_ts INTEGER
+  )`,
   `CREATE TABLE IF NOT EXISTS commitments (
     id INTEGER PRIMARY KEY,
     ts INTEGER NOT NULL,
