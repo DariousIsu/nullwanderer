@@ -92,6 +92,22 @@ function moveStory(id, ts, { source = 'AP', title = 'a new development' } = {}) 
   ok(af.followed >= 1 && f90 && f90.active === 1 && f90.reason === 'interest', 'a fresh corroborated interest match is auto-followed');
   ok(!f91 || !f91.active, 'a single-source story is NOT auto-followed (corroboration floor holds)');
 
+  // --- Slice E: license reason + the redirect write path (the hot-dog correction) ---
+  ok(sf.reasonFor(90) === 'interest', 'reasonFor: the engage license can read WHY a story is followed');
+  ok(sf.isRedirectAway('The hot dog chain story is really cute, but we should probably focus on work related news') === true,
+    'isRedirectAway: the LIVE correction lands');
+  ok(sf.isRedirectAway('That is fascinating, tell me more about the chain') === false,
+    'isRedirectAway: engagement is not a redirect');
+  ok(sf.isRedirectAway('canvas is perfect, thank you') === false,
+    'isRedirectAway: an approval is not a redirect');
+  // (time island at NOW+8h — an earlier test raised story #1 at NOW+3h and must stay out of window)
+  sf.markRaised(90, NOW + 8 * HOUR);
+  const lr = sf.lastRaisedActive({ withinMs: 2 * HOUR, nowMs: NOW + 8.5 * HOUR });
+  ok(lr && lr.story_id === 90 && /Neuromorphic/.test(lr.title), 'lastRaisedActive: binds to the story raised inside the window');
+  ok(sf.lastRaisedActive({ withinMs: 2 * HOUR, nowMs: NOW + 11 * HOUR }) === null, '…and to nothing once the window passes');
+  ok(sf.unfollow(90) === true && newsdb.get().prepare('SELECT active FROM news_story_follow WHERE story_id = 90').get().active === 0,
+    'unfollow: his redirect flips the row (active=0, provenance kept — never a delete)');
+
   newsdb.close();
   try { fs.unlinkSync(TMP); } catch {}
   try { fs.unlinkSync(TMP + '-wal'); fs.unlinkSync(TMP + '-shm'); } catch {}

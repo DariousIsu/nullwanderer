@@ -6495,6 +6495,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   } catch (e) { console.error('[main] interface poll failed:', e.message); }
 
+  // STORY REDIRECT WRITE PATH (Slice E2, 2026-07-23): Lucas answering a raise with a redirect
+  // ("really cute, but we should probably focus on work related news") must reach the FOLLOW STORE,
+  // not evaporate in chat — measured after exactly that correction: the hot-dog follow stayed
+  // active/interest. Bind to the story raised most recently (2h window), unfollow it, say so.
+  try {
+    const sf = require('./lib/story_follow');
+    if (sf.isRedirectAway(userMessage)) {
+      const raised = sf.lastRaisedActive({ withinMs: 2 * 3600 * 1000, nowMs: Date.now() });
+      if (raised && sf.unfollow(raised.story_id)) {
+        console.log(`[story-follow] redirect → unfollowed story #${raised.story_id} "${String(raised.title || '').slice(0, 60)}"`);
+      }
+    }
+  } catch (e) { console.error('[story-follow] redirect write failed:', e.message); }
+
   // MID-RUN CLARIFICATION — Lucas refining the standing task WHILE it runs (often answering a question
   // she just asked). Without this his guidance was dropped: a non-task-shaped clarification ("yes,
   // include state-level ones") fell through to a normal reply and the run kept going on the old goal.
@@ -9200,6 +9214,21 @@ async function autonomyTick() {
           autonomy.historyPush(H, { ts: now, move: 'engage', target: decision.target, outcome: `blocked — say not grounded in the state (missing: ${g.missing.slice(0, 5).join(', ')}); speak only what the state actually shows` });
           console.log(`[autonomy] chose=engage → BLOCKED ungrounded say (missing: ${g.missing.slice(0, 5).join(', ')})`);
           return;
+        }
+      } catch {}
+      // ENGAGE LICENSE GATE (Slice E1, the hot-dog raise): the say's CONTENT was grounded but its
+      // LICENSE was false — "six new articles since WE last checked" on a story followed for
+      // reason='interest' fabricated shared history the store never claimed. Only a 'discussed'
+      // follow may say "we"; an interest-follow is HER find and must be raised as one.
+      try {
+        const sm0 = /\bstory #(\d+)/i.exec(String(decision.target || ''));
+        if (sm0) {
+          const reason = require('./lib/story_follow').reasonFor(parseInt(sm0[1], 10));
+          if (reason && reason !== 'discussed' && /\b(?:we|you and i)\b[^.!?\n]{0,40}\b(?:discussed|talked|checked|looked|covered|last)\b|\bsince we\b|\bwe last\b/i.test(decision.say)) {
+            autonomy.historyPush(H, { ts: now, move: 'engage', target: decision.target, outcome: `blocked — the story is an INTEREST follow (never discussed together); raise it as YOUR find ("this matched your interests"), never as shared history` });
+            console.log(`[autonomy] chose=engage → BLOCKED false shared-history claim on interest-followed story #${sm0[1]}`);
+            return;
+          }
         }
       } catch {}
       const row = db.insertTurn({ sessionId: currentSessionId, speaker: 'ai_said', content: decision.say, model: 'autonomy', unprompted: 1 });

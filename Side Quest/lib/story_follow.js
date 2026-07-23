@@ -91,6 +91,40 @@ function markRaised(storyId, nowMs = Date.now()) {
   } catch (e) { console.error('[story_follow] markRaised failed:', e.message); return false; }
 }
 
+// ── the REDIRECT WRITE PATH (Slice E2, 2026-07-23) ───────────────────────────────────────────────
+// Lucas answered the hot-dog raise with "really cute, but we should probably focus on work related
+// news" — and the follow stayed active/interest: the correction evaporated in chat. A redirect
+// after a raise must reach the STORE. Conservative shapes only; a false unfollow is cheap (the
+// interest auto-follow can re-follow a story that keeps mattering).
+const _REDIRECT_RE = /\b(?:focus (?:on|more on)|stick to|let['’]?s (?:focus|stick)|(?:drop|skip|forget|ditch) (?:that|this|the)\b|less of (?:that|this|these)|not (?:really )?(?:interested|my thing)|stop (?:following|tracking|watching))\b/i;
+function isRedirectAway(text) { return _REDIRECT_RE.test(String(text == null ? '' : text)); }
+
+// The active follow raised most recently, within the binding window — the story his reply is about.
+function lastRaisedActive({ withinMs = 2 * 3600 * 1000, nowMs = Date.now() } = {}) {
+  ensureSchema();
+  try {
+    const r = newsdb.get().prepare(`
+      SELECT f.*, s.title FROM news_story_follow f LEFT JOIN news_stories s ON s.id = f.story_id
+      WHERE f.active = 1 AND f.last_raised_ts IS NOT NULL AND f.last_raised_ts >= ?
+      ORDER BY f.last_raised_ts DESC LIMIT 1`).get(nowMs - withinMs);
+    return r || null;
+  } catch { return null; }
+}
+
+// The follow's recorded reason ('discussed' | 'interest') — the engage license check reads this:
+// only a 'discussed' follow may be raised as shared history ("we…"); an interest-follow is HER find.
+function reasonFor(storyId) {
+  ensureSchema();
+  try { const r = newsdb.get().prepare('SELECT reason FROM news_story_follow WHERE story_id = ?').get(Number(storyId) || 0); return (r && r.reason) || null; } catch { return null; }
+}
+
+// Drop a follow on his word. active=0 with the row intact — provenance kept, never a delete.
+function unfollow(storyId) {
+  ensureSchema();
+  try { return newsdb.get().prepare('UPDATE news_story_follow SET active = 0 WHERE story_id = ?').run(Number(storyId) || 0).changes > 0; }
+  catch (e) { console.error('[story_follow] unfollow failed:', e.message); return false; }
+}
+
 // Retire follows whose story CLOSED and has been quiet past the window — a wrapped story is not a
 // developing one. Returns how many retired.
 function tidy({ nowMs = Date.now() } = {}) {
@@ -181,5 +215,6 @@ function autoFollowFromInterests(topics = [], { nowMs = Date.now(), minCorrobora
 module.exports = {
   MAX_ACTIVE, EXPIRE_QUIET_MS,
   ensureSchema, follow, markRaised, tidy, deltas, manifestLines, autoFollowFromInterests,
+  isRedirectAway, lastRaisedActive, unfollow, reasonFor,
   _resetForTest,
 };
