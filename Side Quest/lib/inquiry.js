@@ -82,7 +82,7 @@ const WRITEBACK_WANT = `The touch is over. Write back what the NEXT touch needs 
  "leads":["<open lead worth pursuing>", "..."],
  "next_step":"<ONE BOUNDED bite the next touch can COMPLETE in a single short run — a specific source to open, a named subset to fill (e.g. 'the 13 missing clerks'), one claim to verify. NEVER the whole remaining work>",
  "status":"continue|answered|dead_end"}
-Ground everything in what the run actually returned — an empty new_evidence with an honest learned beats invented findings. "answered"/"dead_end" only when the QUESTION itself is resolved or provably unanswerable.`;
+Ground everything in what the run actually returned — an empty new_evidence with an honest learned beats invented findings. If the step this touch ran failed the SAME way the EXPECT TRAIL already shows, next_step MUST switch to a DIFFERENT open lead — never re-pin a step that has now failed twice (a source your tools cannot consume stays unconsumable). "answered"/"dead_end" only when the QUESTION itself is resolved or provably unanswerable.`;
 
 function validateWriteback(raw) {
   try {

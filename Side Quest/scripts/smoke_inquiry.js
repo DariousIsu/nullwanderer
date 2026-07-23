@@ -54,6 +54,8 @@ const NOW = 1753400000000;
   // judge could never say MET — the sizing must live ON the schema line and in the brief) ---
   ok(/ONE BOUNDED bite/.test(I.WRITEBACK_WANT) && /NEVER the whole remaining work/.test(I.WRITEBACK_WANT),
     'WRITEBACK_WANT sizes next_step on the schema line itself (a schema-obedient model emits what the line shows)');
+  ok(/DIFFERENT open lead/.test(I.WRITEBACK_WANT) && /failed twice/.test(I.WRITEBACK_WANT),
+    'WRITEBACK_WANT pivots off a twice-failed step (live: the SoS Excel re-pinned 6 touches, 0 evidence)');
   ok(/ONE bounded run/.test(I.touchBrief(I.get(a.id))) && /next concrete bite/.test(I.touchBrief(I.get(a.id))),
     'the touch brief tells the run to take a bite, not the whole remainder');
 
