@@ -8746,6 +8746,35 @@ const operatorTools = {
   self_test: async ({ suite } = {}) => { try { return await require('./lib/self_source').selfTest({ suite: suite || null }); } catch (e) { return 'ERROR: ' + e.message; } },
   // REHEARSAL (R1, docs/REHEARSAL_SANDBOX_DESIGN.md) — try a change to her own code in a COPY,
   // judged by her own gate. NO adoption surface exists; a finished rehearsal exits as a report.
+  // FORECAST QUERY (Slice F, PLAN_MAP — Lucas: "all the probability models that should be in the
+  // forecasting workspace"): her own 2026 balance-of-power machine, readable at last from BOTH
+  // lanes. Measured before this tool: zero forecast mentions in operator.js and cognition.js —
+  // the models ran their loop and painted widgets, unreachable from anywhere she talks or decides.
+  // Reads the LAST completed run (lastForecast); never recomputes on the turn.
+  forecast_query: async ({ query } = {}) => {
+    try {
+      if (!lastForecast || !lastForecast.ok) return 'No forecast run has completed this boot yet — the loop recomputes on its own cadence; try again in a few minutes.';
+      const races = (((lastForecast.work || {}).inputs || {}).races) || [];
+      const chambers = ((lastForecast.work || {}).sim || {}).chambers || {};
+      const sim2 = require('./lib/forecast_sim');
+      const lines = [`FORECAST — her own balance-of-power model, as of ${lastForecast.as_of || 'this boot'}${lastForecast.illustrative ? ' (ILLUSTRATIVE: no polled margins yet)' : ''}. Party A = Dem-coded, B = Rep-coded.`];
+      for (const [ch, c] of Object.entries(chambers)) {
+        lines.push(`- ${ch}: P(A control) ${(100 * (c.pA_control || 0)).toFixed(1)}% · A seats ${Number(c.seatsA_mean || 0).toFixed(0)} (p10 ${c.seatsA_p10} / p90 ${c.seatsA_p90}) of ${c.total_seats} · ${c.n_races} races simmed`);
+      }
+      const toks = (String(query || '').toLowerCase().match(/[a-z0-9]{2,}/g) || []);
+      if (toks.length) {
+        const hits = races.filter((r) => { const hay = `${r.subject || ''} ${r.state || ''} ${r.chamber || ''} ${r.district || ''}`.toLowerCase(); return toks.every((t) => hay.includes(t)); }).slice(0, 8);
+        if (!hits.length) lines.push(`No race in the slate matches "${String(query).slice(0, 60)}" — name a state, chamber, or district.`);
+        for (const r of hits) {
+          const p = sim2.marginToWinProb(Number(r.margin) || 0, Number(r.sigma) || 5);
+          lines.push(`- ${String(r.subject || r.state || '?').slice(0, 70)}: margin ${Number(r.margin || 0).toFixed(1)} (${r.margin_source || 'prior'}${r.n_polls ? `, ${r.n_polls} polls` : ''}) → P(A win) ${(100 * p).toFixed(1)}%`);
+        }
+      } else {
+        lines.push(`(${races.length} races in the slate — pass query to pull specific races, e.g. "louisiana senate" or "PA-07".)`);
+      }
+      return lines.join('\n');
+    } catch (e) { return 'ERROR: ' + e.message; }
+  },
   rehearsal_create: async ({ slug } = {}) => { try { return require('./lib/rehearsal').create({ slug }); } catch (e) { return 'ERROR: ' + e.message; } },
   rehearsal_edit: async ({ slug, path: p, find, replace } = {}) => { try { return require('./lib/rehearsal').edit({ slug, path: p, find, replace }); } catch (e) { return 'ERROR: ' + e.message; } },
   rehearsal_test: async ({ slug, suite } = {}) => { try { return await require('./lib/rehearsal').test({ slug, suite: suite || null }); } catch (e) { return 'ERROR: ' + e.message; } },
