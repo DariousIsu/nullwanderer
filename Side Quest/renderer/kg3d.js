@@ -398,6 +398,7 @@ function makeCore3D(strength = 0.05) {
     if (s) _coreCen.set(sx / s, sy / s, sz / s); else _coreCen.set(mx, my, mz);
     for (const n of ns) {
       if (!Number.isFinite(n.x)) continue;
+      if (n.zoe && SHAPE === 'skin') continue;             // her identity is pinned in the heart, not orbiting
       if (n.zoe) {                                         // personality ring: spring to its own orbit point
         const tx = _coreCen.x + n.zoeOff.x, ty = _coreCen.y + n.zoeOff.y, tz = _coreCen.z + n.zoeOff.z, k = strength * 6 * alpha;
         n.vx = (n.vx || 0) + (tx - n.x) * k;
@@ -1108,7 +1109,11 @@ function updateFogBand() {
 // uses. That is what Lucas asked for literally — the avatar's facial motions, on the map — and it means the
 // two surfaces can never drift into being two different faces.
 const AS = (typeof window !== 'undefined' && window.AvatarState) || null;
-let FACE_ON = true; try { FACE_ON = localStorage.getItem('kg3d.face') !== '0'; } catch (e) {}
+// DEFAULT OFF. Lucas, on seeing it: "the face is actually terrifying." He is right — the painted face fills
+// the eye and mouth patches with additive light, and a filled bright eye is a skull, not a face. The VRM skin
+// supersedes it with drawn line-art features and a real head to hang them on. Kept behind the toggle because
+// it is the only face available when the model is absent, but it is no longer what anyone sees by default.
+let FACE_ON = false; try { FACE_ON = localStorage.getItem('kg3d.face') === '1'; } catch (e) {}
 const face = {
   strength: 0,            // 0..1 — how present she is; ramps up to speak, falls back to a resting trace
   target: 0,
@@ -1215,9 +1220,16 @@ function updateFace(now) {
 const VRM_URL = '../data/avatars/zoe.vrm';
 let vrmModel = null, vrmReady = false, vrmOccluders = [], skinBinds = null, _vrmLoading = false, _skinT = 0;
 const _vrmOff = new THREE.Vector3();                // model-centre → origin correction, kept out of position
-// Face first and heavily over-weighted: the face mesh is 4,286 of ~30,000 vertices, so a proportional sample
-// would spend most of the graph on hair and put a handful of nodes where the whole read lives.
-const SKIN_WEIGHTS = [{ re: /^Face/, share: 0.46 }, { re: /^Body/, share: 0.34 }, { re: /^Hair/, share: 0.20 }];
+// ANATOMY CARRIES MEANING (Lucas, 2026-07-22): "Short term memory can be the head, everything that is Zoe can
+// be the heart, and the rest of the body is everything else." That turns the figure from a shape the data
+// happens to sit on into a CLAIM about the data — the same principle as density-is-the-boundary, finally with
+// an anatomy to say it in. Where a node lands is now determined by what it IS, never by a hash:
+//   head  ← short-term memory (sq.db): what she is holding right now, behind the eyes
+//   heart ← every `zoe` row (self_model): her identity, and nothing else is allowed in there
+//   body  ← the Echo corpus: everything she knows, carried
+const REGION = { head: [], heart: [], body: [] };
+let featureAnchors = null;          // eye/mouth vertex sets, found from the model's OWN morph targets
+const HEART_R = 0.11;               // metres in model space — a fist, about right for a heart
 async function loadVRM() {
   if (vrmModel || _vrmLoading) return vrmModel;
   if (!window.GLTFLoader || !window.VRMLoaderPlugin) { console.warn('[kg3d] VRM loader absent — rebuild vendor/kg3d.bundle.js'); return null; }
@@ -1260,10 +1272,145 @@ async function loadVRM() {
     });
     scene.add(vrm.scene);
     vrmModel = vrm; vrmReady = true;
-    console.log('[kg3d] VRM skin ready —', vrmOccluders.length, 'meshes, scale', k.toFixed(1));
+    findFeatures(); buildRegions(); buildDrawnFeatures();
+    console.log('[kg3d] VRM skin ready —', vrmOccluders.length, 'meshes, scale', k.toFixed(1),
+      '| head', REGION.head.length, 'heart', REGION.heart.length, 'body', REGION.body.length);
     return vrm;
   } catch (e) { console.warn('[kg3d] VRM load failed:', e && e.message); return null; }
   finally { _vrmLoading = false; }
+}
+// WHERE HER EYES AND MOUTH ARE, ASKED OF THE MODEL RATHER THAN GUESSED. Fire an expression, diff every
+// vertex against rest, and the vertices that moved ARE the feature — 'aa' finds the mouth, 'blink' finds the
+// eyelids. No magic coordinates, no per-model tuning, and it stays correct if the avatar is ever replaced.
+function findFeatures() {
+  const em = vrmModel.expressionManager; if (!em) return;
+  const faces = vrmOccluders.filter((m) => /^Face/.test(m.name || ''));
+  if (!faces.length) return;
+  const mesh = faces[0], N = mesh.geometry.attributes.position.count;
+  const sample = (setup) => {
+    for (const k of ['aa', 'blink', 'happy']) { try { em.setValue(k, 0); } catch (e) {} }
+    if (setup) { try { em.setValue(setup, 1); } catch (e) {} }
+    try { vrmModel.update(0.016); } catch (e) {}
+    vrmModel.scene.updateMatrixWorld(true);
+    const out = new Float32Array(N * 3), v = new THREE.Vector3();
+    for (let i = 0; i < N; i++) { try { mesh.getVertexPosition(i, v); } catch (e) {} out[i * 3] = v.x; out[i * 3 + 1] = v.y; out[i * 3 + 2] = v.z; }
+    return out;
+  };
+  const rest = sample(null);
+  const pick = (expr, top) => {
+    const d = sample(expr), idx = [];
+    for (let i = 0; i < N; i++) {
+      const dx = d[i * 3] - rest[i * 3], dy = d[i * 3 + 1] - rest[i * 3 + 1], dz = d[i * 3 + 2] - rest[i * 3 + 2];
+      const m = dx * dx + dy * dy + dz * dz;
+      if (m > 1e-12) idx.push([i, m]);
+    }
+    idx.sort((a, b) => b[1] - a[1]);
+    return idx.slice(0, top).map((p) => p[0]);
+  };
+  const mouth = pick('aa', 40), lids = pick('blink', 80);
+  const cen = (ids) => { const c = new THREE.Vector3(); for (const i of ids) c.add(new THREE.Vector3(rest[i * 3], rest[i * 3 + 1], rest[i * 3 + 2])); return ids.length ? c.divideScalar(ids.length) : c; };
+  const mc = cen(mouth);
+  const left = lids.filter((i) => rest[i * 3] < mc.x), right = lids.filter((i) => rest[i * 3] >= mc.x);
+  const spread = (ids, c) => { let r = 0; for (const i of ids) r = Math.max(r, Math.hypot(rest[i * 3] - c.x, rest[i * 3 + 1] - c.y, rest[i * 3 + 2] - c.z)); return r; };
+  const lc = cen(left), rc = cen(right);
+  featureAnchors = {
+    mesh, mouth, left, right,
+    mouthR: spread(mouth, mc) || 0.02, eyeR: Math.max(spread(left, lc), spread(right, rc)) || 0.015,
+    rest: { mouth: mc, left: lc, right: rc },
+  };
+  for (const k of ['aa', 'blink', 'happy']) { try { em.setValue(k, 0); } catch (e) {} }
+  try { vrmModel.update(0.016); } catch (e) {}
+}
+// Classify every vertex once, in model space, using the RIG's own joints — the neck bone is where the head
+// starts and the chest bone is where the heart sits, both authored into the file. Deriving those from y
+// fractions of the bounding box would be a guess that breaks on any other avatar.
+function buildRegions() {
+  REGION.head.length = 0; REGION.heart.length = 0; REGION.body.length = 0;
+  const H = vrmModel.humanoid;
+  const bone = (n) => { try { const b = H && H.getNormalizedBoneNode(n); if (!b) return null; const p = new THREE.Vector3(); b.getWorldPosition(p); return p; } catch (e) { return null; } };
+  vrmModel.scene.updateMatrixWorld(true);
+  const neck = bone('neck') || bone('head');
+  const chest = bone('upperChest') || bone('chest') || bone('spine');
+  const inv = new THREE.Matrix4().copy(vrmModel.scene.matrixWorld).invert();
+  const neckL = neck ? neck.clone().applyMatrix4(inv) : null;
+  const chestL = chest ? chest.clone().applyMatrix4(inv) : null;
+  const toLocal = new THREE.Matrix4(), v = new THREE.Vector3();
+  // Exclusion zones around the drawn features, lifted into MODEL space so every mesh is tested in the same
+  // coordinate system. Testing only the face mesh in its own space left 9-15 nodes sitting inside each eye:
+  // HAIR hangs over the face, and hair vertices were never checked at all. Radii are generous — a node just
+  // outside the outline still reads as debris in her eye.
+  const fa = featureAnchors;
+  const ex = [];
+  if (fa) {
+    const f2m = new THREE.Matrix4().multiplyMatrices(inv, fa.mesh.matrixWorld);
+    ex.push([fa.rest.left.clone().applyMatrix4(f2m), fa.eyeR * 2.6],
+      [fa.rest.right.clone().applyMatrix4(f2m), fa.eyeR * 2.6],
+      [fa.rest.mouth.clone().applyMatrix4(f2m), fa.mouthR * 3.0]);
+  }
+  for (const m of vrmOccluders) {
+    const N = m.geometry.attributes.position.count;
+    toLocal.multiplyMatrices(inv, m.matrixWorld);
+    for (let i = 0; i < N; i++) {
+      try { m.getVertexPosition(i, v); } catch (e) { continue; }
+      v.applyMatrix4(toLocal);
+      if (ex.length && ex.some(([c, r]) => v.distanceTo(c) < r)) continue;   // eyes + mouth stay clear
+      const isHead = neckL ? v.y > neckL.y : false;
+      if (isHead) { REGION.head.push({ mesh: m, vi: i }); continue; }
+      if (chestL && v.distanceTo(chestL) < HEART_R) { REGION.heart.push({ mesh: m, vi: i }); continue; }
+      REGION.body.push({ mesh: m, vi: i });
+    }
+  }
+}
+// DRAWN, NOT BUILT OUT OF NODES (Lucas: "the face is actually terrifying — what if the eyes and the mouth are
+// not nodes, but just drawn to look like them"). He is right about the failure and right about the fix. Nodes
+// are bright blobs; two bright blobs where eyes belong is a skull, and no amount of tuning rescues that,
+// because the thing reading as wrong is the FILLED-NESS. A real eye is mostly dark with a lit edge.
+// So the features are LINE ART: lens-shaped outlines, drawn, with the node cloud excluded from those patches
+// entirely. Three line loops, no fill, nothing glowing where a pupil should be.
+let drawnFeatures = null;
+function lensLoop(segments, hOpen) {                // an eye/mouth outline: two arcs meeting at the corners
+  const pts = [];
+  for (let i = 0; i <= segments; i++) { const t = -1 + 2 * (i / segments); pts.push(new THREE.Vector3(t, Math.pow(Math.max(0, 1 - t * t), 0.65) * hOpen, 0)); }
+  for (let i = segments; i >= 0; i--) { const t = -1 + 2 * (i / segments); pts.push(new THREE.Vector3(t, -Math.pow(Math.max(0, 1 - t * t), 0.65) * hOpen * 0.62, 0)); }
+  const g = new THREE.BufferGeometry().setFromPoints(pts);
+  return g;
+}
+function buildDrawnFeatures() {
+  if (!featureAnchors || drawnFeatures) return;
+  const mk = (hex, w) => new THREE.LineBasicMaterial({ color: new THREE.Color(hex), transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, linewidth: w || 1 });
+  const eyeGeo = lensLoop(20, 0.62), mouthGeo = lensLoop(24, 1.0);
+  const eyeL = new THREE.Line(eyeGeo, mk(0xbfe4ff)), eyeR = new THREE.Line(eyeGeo.clone(), mk(0xbfe4ff));
+  const mouth = new THREE.Line(mouthGeo, mk(ZOE_ROSE));
+  for (const o of [eyeL, eyeR, mouth]) { o.frustumCulled = false; o.renderOrder = 6; o.visible = false; scene.add(o); }
+  drawnFeatures = { eyeL, eyeR, mouth };
+}
+// The features ride the mesh: their positions are the live average of the very vertices that define them, so
+// they follow head turn, skinning and morphs without a single hard-coded offset.
+const _fp = new THREE.Vector3(), _fq = new THREE.Quaternion();
+function anchorPos(ids, out) {
+  const m = featureAnchors.mesh; out.set(0, 0, 0);
+  if (!ids.length) return out;
+  for (const i of ids) { try { m.getVertexPosition(i, _fp); out.add(_fp); } catch (e) {} }
+  return out.divideScalar(ids.length).applyMatrix4(m.matrixWorld);
+}
+function updateDrawnFeatures(now) {
+  if (!drawnFeatures || !featureAnchors) return;
+  const show = SHAPE === 'skin' && !!(vrmModel && vrmModel.scene.visible);
+  for (const k of ['eyeL', 'eyeR', 'mouth']) drawnFeatures[k].visible = show;
+  if (!show) return;
+  const head = vrmModel.humanoid && vrmModel.humanoid.getNormalizedBoneNode('head');
+  if (head) head.getWorldQuaternion(_fq); else _fq.identity();
+  const s = (vrmModel.scene.scale.x || 1);
+  const blink = AS ? AS.blinkMultiplier(now) : 1;
+  const set = (obj, ids, baseR, openY) => {
+    anchorPos(ids, obj.position);
+    obj.quaternion.copy(_fq);
+    obj.scale.set(baseR * s * 2.0, Math.max(0.04, openY) * baseR * s * 2.0, 1);
+  };
+  set(drawnFeatures.eyeL, featureAnchors.left, featureAnchors.eyeR, Math.max(0.06, blink));
+  set(drawnFeatures.eyeR, featureAnchors.right, featureAnchors.eyeR, Math.max(0.06, blink));
+  // the mouth OPENS with her voice — the one feature that has to move to read as speech
+  set(drawnFeatures.mouth, featureAnchors.mouth, featureAnchors.mouthR, 0.12 + face.mouthOpen * 1.5);
 }
 function placeVRM() {                               // keep her centred on the live cloud middle
   if (!vrmModel) return;
@@ -1272,27 +1419,33 @@ function placeVRM() {                               // keep her centred on the l
 }
 // Bind each node to a vertex. Deterministic from the node id, so an object keeps its place on her body across
 // reloads instead of the whole surface reshuffling every time the corpus refreshes.
+// A node's REGION is decided by what it is; only its seat WITHIN that region is hashed. So an object cannot
+// drift from her head to her arm because the corpus reloaded — but it keeps a stable seat across reloads.
+function regionOf(n) {
+  if (n.zoe) return 'heart';                        // self_model — her identity, and only ever this
+  if (n.store === 'sidequest') return 'head';       // short-term: what she is holding right now
+  return 'body';                                    // the Echo corpus: everything she knows, carried
+}
 function buildSkinBinding() {
   if (!vrmReady) { skinBinds = null; return 0; }
-  const nodes = Graph.graphData().nodes.filter((n) => !n.zoe);
-  if (!nodes.length) { skinBinds = null; return 0; }
-  const groups = SKIN_WEIGHTS.map((w) => ({ w, meshes: vrmOccluders.filter((m) => w.re.test(m.name || '')) })).filter((g) => g.meshes.length);
-  if (!groups.length) { skinBinds = null; return 0; }
-  const total = groups.reduce((s, g) => s + g.w.share, 0);
+  const nodes = Graph.graphData().nodes;
+  if (!nodes.length || !REGION.body.length) { skinBinds = null; return 0; }
   skinBinds = [];
+  const counts = { head: 0, heart: 0, body: 0 };
   for (const n of nodes) {
-    const h = hashSeed(n.id + '#skin');
-    let acc = 0, pick = groups[groups.length - 1];
-    for (const g of groups) { acc += g.w.share / total; if (h <= acc) { pick = g; break; } }
-    const m = pick.meshes[Math.floor(hashSeed(n.id + '#m') * pick.meshes.length) % pick.meshes.length];
-    const N = m.geometry.attributes.position.count;
+    let r = regionOf(n);
+    let pool = REGION[r];
+    if (!pool || !pool.length) { r = 'body'; pool = REGION.body; }     // an empty region falls back, never drops a node
+    const v = pool[Math.floor(hashSeed(n.id + '#seat') * pool.length) % pool.length];
+    counts[r]++;
     // Only FACE binds get exaggerated. The morph targets live on the face mesh; hair and body move by bone
     // skinning and VRM spring physics, which never settle exactly back to rest — measured 3.85 units of
     // residual drift at rest, and amplifying that would give her permanently twitching hair. Magnify the
     // expression, leave the physics honest.
-    skinBinds.push({ node: n, mesh: m, vi: Math.floor(hashSeed(n.id + '#v') * N) % N, rest: new THREE.Vector3(), exag: /^Face/.test(m.name || '') });
+    skinBinds.push({ node: n, mesh: v.mesh, vi: v.vi, region: r, rest: new THREE.Vector3(), exag: /^Face/.test(v.mesh.name || '') });
   }
   captureSkinRest();
+  skinBinds._counts = counts;
   return skinBinds.length;
 }
 // Rest pose per bound vertex, captured with every expression at zero. Deformation is then measured against
@@ -2142,6 +2295,7 @@ function stepFrame(now) {
     const dt = Math.min(0.05, (now - (_skinT || now)) / 1000); _skinT = now;
     updateVRMFace(now, dt); updateSkin();
   }
+  updateDrawnFeatures(now);     // the drawn eyes/mouth hide themselves outside skin mode
   // Position syncing only while the layout is actually moving. `_stillFrames` keeps a couple of frames of
   // sync after it stops so the last motion lands, and any reheat (new data, a mint) restarts it.
   // `skin` ALWAYS syncs: every node is pinned with fx/fy/fz, so the simulation cools within a second and
@@ -2295,7 +2449,10 @@ window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () =
     kinds: [..._act.byKind.entries()].map(([k, v]) => ({ kind: k, seen: v.seen, drawn: v.drawn })).sort((a, b) => b.seen - a.seen) }),
   shape: (s) => { if (s) { applyShape(s); if (shapeEl) shapeEl.value = s; } return SHAPE; },
   skin: (o) => { if (o && o.exag != null) SKIN_EXAG = o.exag;
-    return { ready: vrmReady, bound: skinBinds ? skinBinds.length : 0, meshes: vrmOccluders.map((m) => m.name),
+    return { ready: vrmReady, bound: skinBinds ? skinBinds.length : 0,
+      regions: { head: REGION.head.length, heart: REGION.heart.length, body: REGION.body.length },
+      bound_by_region: (skinBinds && skinBinds._counts) || null,
+      features: featureAnchors ? { eyes: featureAnchors.left.length + featureAnchors.right.length, mouth: featureAnchors.mouth.length, eyeR: +featureAnchors.eyeR.toFixed(4), mouthR: +featureAnchors.mouthR.toFixed(4) } : null,
       visible: !!(vrmModel && vrmModel.scene.visible), shape: SHAPE, exag: SKIN_EXAG }; },
   // Drive N frames by hand and return a PNG of the result. requestAnimationFrame is suspended whenever the
   // page is not compositing (a background tab, or a preview pane that is not on screen), which stops the
