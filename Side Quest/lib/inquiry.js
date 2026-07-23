@@ -79,7 +79,7 @@ function touchBrief(row) {
 
 // §6 L2 — the envelope is defined at dispatch, validated at the drain.
 const WRITEBACK_WANT = `The touch is over. Write back what the NEXT touch needs to start where you stopped. Reply ONLY strict JSON:
-{"learned":"<1-3 sentences — where the question now stands (this replaces your standing summary)>",
+{"learned":"<1-3 sentences — where the question now stands. This REPLACES your standing summary, so it must CARRY FORWARD every coverage claim the old summary already held (a sub-list once completed stays completed — merge this touch's gains INTO the old standing, never restate only what THIS touch did)>",
  "new_evidence":[{"gist":"<one finding>","cite":"<source: url / doc / tool that showed it>"}],
  "leads":["<open lead worth pursuing>", "..."],
  "next_step":"<ONE BOUNDED bite the next touch can COMPLETE in a single short run — a specific source to open, a named subset to fill (e.g. 'the 13 missing clerks'), one claim to verify. NEVER the whole remaining work>",

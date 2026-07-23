@@ -56,6 +56,8 @@ const NOW = 1753400000000;
     'WRITEBACK_WANT sizes next_step on the schema line itself (a schema-obedient model emits what the line shows)');
   ok(/DIFFERENT open lead/.test(I.WRITEBACK_WANT) && /failed twice/.test(I.WRITEBACK_WANT),
     'WRITEBACK_WANT pivots off a twice-failed step (live: the SoS Excel re-pinned 6 touches, 0 evidence)');
+  ok(/CARRY FORWARD/.test(I.WRITEBACK_WANT) && /stays completed/.test(I.WRITEBACK_WANT),
+    'WRITEBACK_WANT: the standing summary accretes — the rolling rewrite ate 64/64 presidents live (the meeting-notes disease, inquiry edition)');
   ok(/ONE bounded run/.test(I.touchBrief(I.get(a.id))) && /next concrete bite/.test(I.touchBrief(I.get(a.id))),
     'the touch brief tells the run to take a bite, not the whole remainder');
 

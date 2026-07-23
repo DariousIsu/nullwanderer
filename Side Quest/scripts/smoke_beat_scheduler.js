@@ -90,6 +90,10 @@ ok(sc({ beat: {}, beatState: {}, inFlight: true }) < 0, 'score: in-flight penalt
 ok(sc({ beat: { maintenanceMs: 1000 }, beatState: {}, pinScore: 1 }) > sc({ beat: { maintenanceMs: 1000 }, beatState: {} }), 'score: a pinned due beat outranks an unpinned due beat');
 ok(sc({ beat: { maintenanceMs: 1000 }, beatState: { lastRun: 5000 }, pinScore: 1 }) < sc({ beat: { maintenanceMs: 1000 }, beatState: {} }), 'score: a JUST-RUN pinned beat sinks below a due bulk beat (pin amplifies staleness — starvation-free by construction)');
 ok('pin' in s.DEFAULT_ALLOC_WEIGHTS, 'pin weight ships in the defaults (runtime-tunable like the rest)');
+// PINNED STALENESS FLOOR: a just-run his-world beat re-enters rotation (score > 0), but a FULLY
+// stale bulk beat still outranks the floor — direction is a thumb on the scale, not a monopoly
+ok(sc({ beat: { maintenanceMs: 1000 }, beatState: { lastRun: 5000 }, pinScore: 1 }) > 0.5, 'floor: a just-run pinned beat keeps a real score (re-enters rotation quickly)');
+ok(sc({ beat: { maintenanceMs: 1000 }, beatState: {} }) > sc({ beat: { maintenanceMs: 1000 }, beatState: { lastRun: 5000 }, pinScore: 1 }), 'floor: a fully-stale bulk beat still outranks a just-run pinned one (no starvation, no monopoly)');
 ok(s.chooseNextByPriority({
   beats: [{ id: 'county-sweep-tn', maintenanceMs: 1000 }, { id: 'florida-counties', maintenanceMs: 1000 }],
   state: {}, now: 5000,

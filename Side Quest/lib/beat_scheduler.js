@@ -124,7 +124,14 @@ function scoreBeat({ beat = {}, beatState = {}, now = 0, newsScore = 0, inFlight
   const stale = stalenessTerm({ lastRun: beatState.lastRun, now, cadenceMs });
   const yld = yieldTerm({ yieldAvg: beatState.yieldAvg });
   const news = _clamp01(newsScore);
-  return w.stale * stale * (1 + w.pin * _clamp01(pinScore)) + w.news * news + w.yield * yld - w.inflight * (inFlight ? 1 : 0);
+  // PINNED STALENESS FLOOR (2026-07-23, Lucas watching Alaska outrank Louisiana): pin×staleness
+  // meant a JUST-RUN his-world beat scored ~0 and the rotation wandered to never-run bulk states.
+  // A pinned beat's staleness floors at 0.25×pin, so his-world work re-enters rotation quickly —
+  // while a FULLY stale bulk beat (1.0×w.stale) still outranks the floor (0.25×(1+w.pin) = 0.75
+  // at defaults), so nothing starves. Direction stays a thumb on the scale, never a monopoly.
+  const pin = _clamp01(pinScore);
+  const stale2 = pin > 0 ? Math.max(stale, 0.25 * pin) : stale;
+  return w.stale * stale2 * (1 + w.pin * pin) + w.news * news + w.yield * yld - w.inflight * (inFlight ? 1 : 0);
 }
 
 // Priority twin of chooseNext: pick the highest-scoring not-done beat. `signals(beat) → { newsScore,
