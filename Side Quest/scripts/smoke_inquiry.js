@@ -106,6 +106,15 @@ const NOW = 1753400000000;
       'heldSourceHint: no file named / nothing held → silent (no false hint)');
     ok(I.heldSourceHint({ next_step: 'Download unheld-roster-9999.csv from the county site', gist: '', evidence: '[]' }, { deps: { db } }) === null,
       'heldSourceHint: a file we do NOT hold → silent (only fires on what she actually has)');
+    // PIN: once discovered on a real inquiry (with an id), it re-fires even after the write-back
+    // scrubs the filename from the text (boot74: the operator rewrote away every roster reference).
+    const iq = I.open({ question: 'What are the LA parish officials for all 64 parishes across every office?', nowMs: NOW + 500 });
+    db.setMeta(`inquiry.${iq.id}.held_source_doc`, '');   // start unpinned
+    const rowNamed = { id: iq.id, next_step: 'Retrieve LA-parish-officials-2026.xls via its URL', gist: '', open_leads: '[]', evidence: '[]' };
+    ok(/doc #/.test(I.heldSourceHint(rowNamed, { deps: { db } }) || ''), 'held-hint fires + PINS when the inquiry first names the held file');
+    ok(db.getMeta(`inquiry.${iq.id}.held_source_doc`) === String(doc.id), '…and the held source is now pinned to the inquiry');
+    const rowScrubbed = { id: iq.id, next_step: 'Access the Louisiana Police Jury Association site and scrape presidents', gist: 'presidents complete', open_leads: '[]', evidence: '[]' };
+    ok(/doc #/.test(I.heldSourceHint(rowScrubbed, { deps: { db } }) || ''), 'PIN survives: the hint re-fires even after the text no longer names the file (the fragility fix)');
   }
 
   // --- close: answered lands the artifact; dead-end does not ---

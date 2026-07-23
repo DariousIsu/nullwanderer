@@ -126,10 +126,32 @@ function touchBrief(row) {
 // is already a landed document, tells the touch to READ its own copy instead of re-downloading. The
 // general lesson (check what you hold first) outlives this one inquiry. deps.db required; fail-soft.
 const _FILE_RE = /[\w()][\w()\-. ]{2,80}\.(?:xlsx?|csv|pdf|docx?|tsv|json)/gi;
+function _renderHeldHint(doc, deps) {
+  let decomposed = false;
+  try { decomposed = (deps.db || require('./db')).getDb().prepare('SELECT 1 FROM encounters WHERE source_ref = ? LIMIT 1').get(`doc:${doc.id}`) != null; } catch {}
+  // INJECT THE CONTENT, don't just point at it (boot73 touch 27: the operator SAW "query localdb
+  // WHERE id=8443" and ignored it — it pattern-matches "find officials" to web research and won't
+  // self-serve the held doc). Putting the actual rows in the brief makes them impossible to miss.
+  const excerpt = str(doc.head).replace(/\s+\n/g, '\n').slice(0, 2000);
+  return `⚠️ YOU ALREADY HOLD THE ANSWER SOURCE. "${doc.title}" is doc #${doc.id} in your OWN store (${Math.round((doc.len || 0) / 1000)}k chars${decomposed ? ', decomposed into your entity graph' : ''}) — do NOT re-download or re-scrape it. Here is the START of it; page the rest with localdb (SELECT substr(body, N, 3000) FROM documents WHERE id=${doc.id}) or query your graph for the entities it produced:\n--- doc #${doc.id} (first ${excerpt.length} chars) ---\n${excerpt}\n--- end excerpt ---\nUse THIS to answer. If it covers the question, CLOSE ANSWERED citing doc #${doc.id}. Re-fetching what you already hold is wasted work.`;
+}
+function _loadHeldDoc(d, id) {
+  try { return d.prepare('SELECT id, title, LENGTH(body) AS len, substr(body,1,2400) AS head FROM documents WHERE id = ?').get(Number(id) || 0) || null; } catch { return null; }
+}
 function heldSourceHint(row, { deps = {} } = {}) {
   try {
-    const d = (deps.db || require('./db')).getDb();
-    const hay = `${str(row && row.next_step)} ${str(row && row.gist)} ${jarr(row && row.evidence).slice(-3).map((e) => str(e.gist) + ' ' + str(e.cite)).join(' ')}`;
+    const dbm = deps.db || require('./db');
+    const d = dbm.getDb();
+    // PIN FIRST (boot74): the operator's write-back scrubs the roster filename out of next_step/gist/
+    // leads, so a text-scan trigger stops firing after one touch and the inquiry "forgets" it holds
+    // the answer. Once discovered, the held source is PINNED to the inquiry (meta) and re-emitted
+    // every touch thereafter — surviving every write-back rewrite.
+    const pinKey = row && row.id != null ? `inquiry.${row.id}.held_source_doc` : null;
+    if (pinKey) {
+      let pinned = null; try { pinned = dbm.getMeta(pinKey); } catch {}
+      if (pinned) { const doc = _loadHeldDoc(d, pinned); if (doc && doc.id) return _renderHeldHint(doc, deps); }
+    }
+    const hay = `${str(row && row.next_step)} ${str(row && row.gist)} ${jarr(row && row.open_leads).slice(0, 6).join(' ')} ${jarr(row && row.evidence).slice(-3).map((e) => str(e.gist) + ' ' + str(e.cite)).join(' ')}`;
     const seen = new Set();
     const names = (hay.match(_FILE_RE) || []).map((s) => s.trim()).filter((s) => { const k = s.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
     for (const name of names.slice(0, 4)) {
@@ -139,14 +161,8 @@ function heldSourceHint(row, { deps = {} } = {}) {
       // real title sits inside it). Prefer the most specific (longest) title.
       try { doc = d.prepare('SELECT id, title, LENGTH(body) AS len, substr(body,1,2400) AS head FROM documents WHERE title = ? OR (LENGTH(title) >= 8 AND ? LIKE \'%\' || title || \'%\') ORDER BY LENGTH(title) DESC LIMIT 1').get(name, name); } catch {}
       if (!doc || !doc.id) continue;
-      let decomposed = false;
-      try { decomposed = d.prepare('SELECT 1 FROM encounters WHERE source_ref = ? LIMIT 1').get(`doc:${doc.id}`) != null; } catch {}
-      // INJECT THE CONTENT, don't just point at it (boot73 touch 27: the operator SAW "query localdb
-      // WHERE id=8443" and ignored it — it pattern-matches "find officials" to web research and won't
-      // self-serve the held doc). Putting the actual rows in the brief makes them impossible to miss;
-      // the operator reads a source it can SEE, and pages the rest via localdb only if it needs more.
-      const excerpt = str(doc.head).replace(/\s+\n/g, '\n').slice(0, 2000);
-      return `⚠️ YOU ALREADY HOLD THE ANSWER SOURCE. "${doc.title}" is doc #${doc.id} in your OWN store (${Math.round((doc.len || 0) / 1000)}k chars${decomposed ? ', decomposed into your entity graph' : ''}) — do NOT re-download or re-scrape it. Here is the START of it; page the rest with localdb (SELECT substr(body, N, 3000) FROM documents WHERE id=${doc.id}) or query your graph for the entities it produced:\n--- doc #${doc.id} (first ${excerpt.length} chars) ---\n${excerpt}\n--- end excerpt ---\nUse THIS to answer. If it covers the question, CLOSE ANSWERED citing doc #${doc.id}. Re-fetching what you already hold is wasted work.`;
+      if (pinKey) { try { dbm.setMeta(pinKey, String(doc.id)); } catch {} }   // PIN on discovery — survives the next write-back
+      return _renderHeldHint(doc, deps);
     }
     return null;
   } catch { return null; }
