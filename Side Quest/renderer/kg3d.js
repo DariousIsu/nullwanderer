@@ -1238,13 +1238,13 @@ function updateFace(now) {
 // through the VRM addon and verified: visemes, humanoid and material names identical, geometry measured to
 // 0.1mm of the Blender numbers. The COMPANION window still loads zoe.vrm — swapping that shared file is
 // Lucas's call, and this constant keeps the two decisions separate. Falls back if v3 is ever removed.
-// v5 matches her torso to a MEASURED reference. The v4 chest rebuild (retag the under-clothing shell as skin,
-// since VRoid deletes the real torso) got hips and waist right by eye; v5 measured the bust-projection ratio
-// off a CC-BY adult-body reference (Claire Redfield, Sketchfab/Joey_Joe_Joe_Jun — used only as a proportion
-// yardstick, never grafted) and pushed Zoe's OWN mesh from 1.51 to 1.68 forward-projection to match it. Her
-// rig, visemes and VRM identity are untouched — she is still Zoe, just measured against an adult figure.
-const VRM_URL = '../data/avatars/zoe_v5.vrm';
-const VRM_FALLBACK = '../data/avatars/zoe.vrm';
+// NEW ZOE — a proper adult base (Reallusion Character Creator character "Beth") converted to VRM in Blender:
+// CC armature → VRM humanoid (21 bones), 148 CC morphs → VRM expressions (aa/ih/ou/ee/oh/blink/happy), naked
+// (shoes + underwear removed), her own rigged hair kept. Lucas: "proportion mapping isn't going to work…
+// convert the best of those two to what Zoe is supposed to look like." The deform-the-VRoid-mesh line (v1-v5)
+// is retired — the ceiling was the childish low-poly base itself. Fallback chain ends at the original VRoid.
+const VRM_URL = '../data/avatars/zoe_beth.vrm';
+const VRM_FALLBACK = '../data/avatars/zoe_v5.vrm';
 // ANATOMY CARRIES MEANING (Lucas, 2026-07-22): "Short term memory can be the head, everything that is Zoe can
 // be the heart, and the rest of the body is everything else." That turns the figure from a shape the data
 // happens to sit on into a CLAIM about the data — the same principle as density-is-the-boundary, finally with
@@ -1332,9 +1332,15 @@ async function loadVRM() {
 // Blender VRM exporter splits primitives into their own buffers (skin = 2,266 verts, mouth, iris, …), so a
 // feature now lives only on the mesh whose expression moves it — 'blink' moves nothing on the mouth primitive.
 // Sampling faces[0] against the v3 export returned eyes:0 and silently dropped the eye exclusion zones.
+// A "face mesh" is one the expressions actually deform. VRoid names them `Face_*`; CC merges the face into
+// `CC_Base_Body` and drives it with 148 morph targets. Detecting by MORPH COUNT catches both and needs no
+// per-avatar names — the >5 floor admits VRoid's 57 and CC's 148/114/119 rigs but rejects the 2-morph eyeball.
+function isFaceMesh(m) {
+  return /^Face/.test(m.name || '') || (m.morphTargetInfluences && m.morphTargetInfluences.length > 5);
+}
 function findFeatures() {
   const em = vrmModel.expressionManager; if (!em) return;
-  const faces = vrmOccluders.filter((m) => /^Face/.test(m.name || ''));
+  const faces = vrmOccluders.filter(isFaceMesh);
   if (!faces.length) return;
   const zero = () => { for (const k of ['aa', 'blink', 'happy']) { try { em.setValue(k, 0); } catch (e) {} } };
   const sample = (mesh, expr) => {
@@ -1458,15 +1464,19 @@ const shellUniforms = {
 // face without legible eyes is a mannequin; brow/lash/eyeline stay dark to draw the eye shape, which is the
 // job they already do in the model. This is the Cortana read: translucent body, structure showing through,
 // but a human face on top of it rather than a hole.
+// Handles BOTH the VRoid (`EyeIris`, `_HAIR`, `FaceMouth`) and the Reallusion CC (`Std_Cornea`, `Std_Eye_L`,
+// `Hair_Transparency`, `Std_Upper_Teeth`) naming, so the same shell shades either avatar. Order matters —
+// the specific eye-detail patterns are tested before the broad iris match so a lash isn't read as an iris.
 function matKind(name) {
   const n = String(name || '');
   if (/EyeHighlight/i.test(n)) return 4;
-  if (/EyeIris/i.test(n)) return 3;
-  if (/EyeWhite/i.test(n)) return 2;
-  if (/FaceBrow|FaceEyelash|FaceEyeline/i.test(n)) return 5;
-  if (/FaceMouth/i.test(n)) return 6;
-  if (/_HAIR/i.test(n)) return 1;
-  return 0;                                           // skin
+  if (/Cornea/i.test(n)) return 4;                                       // CC clear cornea → catchlight
+  if (/Eyelash|Eyebrow|Eyeline|Tearline|Eye_?Occlusion|FaceBrow|FaceEyelash|FaceEyeline/i.test(n)) return 5;
+  if (/EyeWhite|Sclera/i.test(n)) return 2;
+  if (/EyeIris|Std_Eye_[LR]/i.test(n)) return 3;                         // VRoid iris | CC eyeball
+  if (/Teeth|Tongue|FaceMouth/i.test(n)) return 6;
+  if (/_HAIR|Hair_|Scalp/i.test(n)) return 1;
+  return 0;                                           // skin (Std_Skin_*, Std_Nails, VRoid Body/Face SKIN)
 }
 function applyShellMaterial() {
   for (const m of vrmOccluders) {
@@ -1698,6 +1708,11 @@ function setRoutedVisible(on) {
 // everything downstream (binding, regions, features) measures the corrected body.
 const HEAD_K = 0.86;
 function reproportion() {
+  // VRoid-ONLY. This shrinks the head to fix VRoid's ~6.5-head child proportion; the CC/Beth body is already
+  // an adult 7.5-head figure, so shrinking her head would BREAK correct proportions. Gate on a VRoid face
+  // mesh being present (CC has none), so the same load path leaves an adult model untouched.
+  const isVRoid = vrmOccluders.some((m) => /^Face/.test(m.name || ''));
+  if (!isVRoid) return;
   // 1. HEAD. Scaling the head bone shrinks the skull and everything skinned to it (hair included) while the
   //    body keeps its length, which raises the head count without touching a single vertex.
   try {
@@ -1745,7 +1760,7 @@ function buildSkinBinding() {
     // skinning and VRM spring physics, which never settle exactly back to rest — measured 3.85 units of
     // residual drift at rest, and amplifying that would give her permanently twitching hair. Magnify the
     // expression, leave the physics honest.
-    skinBinds.push({ node: n, mesh: v.mesh, vi: v.vi, region: r, rest: new THREE.Vector3(), exag: /^Face/.test(v.mesh.name || '') });
+    skinBinds.push({ node: n, mesh: v.mesh, vi: v.vi, region: r, rest: new THREE.Vector3(), exag: isFaceMesh(v.mesh) });
   }
   captureSkinRest();
   skinBinds._counts = counts;
