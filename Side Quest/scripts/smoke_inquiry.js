@@ -49,6 +49,14 @@ const NOW = 1753400000000;
   I.expectTrailPush(a.id, { met: false, why: 'only 2 of the expected 6 confirmed' });
   ok(/NOT met/.test(I.touchBrief(I.get(a.id))), 'an unmet verdict rides the next brief');
 
+  // --- the BOUNDED BITE contract (the 0-for-N MET fix: inquiry #1's write-back authored
+  // "search all 64 parish websites" as next_step; no single run can clear that, so the honest
+  // judge could never say MET — the sizing must live ON the schema line and in the brief) ---
+  ok(/ONE BOUNDED bite/.test(I.WRITEBACK_WANT) && /NEVER the whole remaining work/.test(I.WRITEBACK_WANT),
+    'WRITEBACK_WANT sizes next_step on the schema line itself (a schema-obedient model emits what the line shows)');
+  ok(/ONE bounded run/.test(I.touchBrief(I.get(a.id))) && /next concrete bite/.test(I.touchBrief(I.get(a.id))),
+    'the touch brief tells the run to take a bite, not the whole remainder');
+
   // --- close: answered lands the artifact; dead-end does not ---
   const landed = [];
   const c1 = I.close(a.id, { kind: 'answered', answer: 'Nine states have standing AI task forces; chairs listed in the evidence trail.', deps: { land: (d) => { landed.push(d); return { id: 42, landed: true }; } }, nowMs: NOW + 3000 });

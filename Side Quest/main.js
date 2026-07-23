@@ -9105,7 +9105,7 @@ async function autonomyTick() {
       sum.entry.target = `inquiry #${inqId}`;
       sum.entry.outcome += env ? `; next: ${String(env.next_step || '').slice(0, 60)}` : '; no write-back';
       autonomy.historyPush(H, sum.entry);
-      console.log(`[autonomy] chose=advance-inquiry → #${inqId} touch ${row.touches + 1} ${sum.ok ? 'ok' : 'no-answer'}${env ? ` (${env.status})` : ' (no write-back)'}`);
+      console.log(`[autonomy] chose=advance-inquiry → #${inqId} touch ${row.touches + 1} ${sum.ok ? 'ok' : 'no-answer'}${env ? ` (${env.status})` : ' (no write-back)'}${expectVerdict ? `; expect ${expectVerdict.met ? 'MET' : 'NOT met'}` : ''}`);
       return;
     }
     // REHEARSE (O2, slice 5) — advance THE active rehearsal run one iteration on a pool slot.

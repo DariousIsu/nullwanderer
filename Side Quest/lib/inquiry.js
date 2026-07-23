@@ -71,7 +71,7 @@ function touchBrief(row) {
   if (leads.length) parts.push('OPEN LEADS you named:\n' + leads.map((l) => `- ${str(l).slice(0, 120)}`).join('\n'));
   if (row.next_step) parts.push(`YOUR OWN NEXT STEP from last touch — start here unless the evidence says otherwise: ${str(row.next_step).slice(0, 240)}`);
   if (trail.length) parts.push('EXPECT TRAIL: ' + trail.map((t) => (t.met ? 'met' : `NOT met (${str(t.why).slice(0, 60)})`)).join(' · '));
-  parts.push('Advance the question THIS touch — new evidence with sources, a lead run down, or a dead end named honestly. Do not restate what the evidence already holds.');
+  parts.push('Advance the question THIS touch — new evidence with sources, a lead run down, or a dead end named honestly. A touch is ONE bounded run: take the next concrete bite and COMPLETE it (open the source, record what it shows, cite it) rather than attempting the whole remainder. Do not restate what the evidence already holds.');
   return parts.join('\n\n');
 }
 
@@ -80,7 +80,7 @@ const WRITEBACK_WANT = `The touch is over. Write back what the NEXT touch needs 
 {"learned":"<1-3 sentences — where the question now stands (this replaces your standing summary)>",
  "new_evidence":[{"gist":"<one finding>","cite":"<source: url / doc / tool that showed it>"}],
  "leads":["<open lead worth pursuing>", "..."],
- "next_step":"<the single concrete step the next touch should take>",
+ "next_step":"<ONE BOUNDED bite the next touch can COMPLETE in a single short run — a specific source to open, a named subset to fill (e.g. 'the 13 missing clerks'), one claim to verify. NEVER the whole remaining work>",
  "status":"continue|answered|dead_end"}
 Ground everything in what the run actually returned — an empty new_evidence with an honest learned beats invented findings. "answered"/"dead_end" only when the QUESTION itself is resolved or provably unanswerable.`;
 

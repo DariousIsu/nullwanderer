@@ -56,6 +56,8 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     'constraints reach the DECIDER (active only) — the re-picked-bait fix');
   ok(/SIZED TO ONE BOUNDED RUN/.test(auto.DECISION_WANT) && /INPUT, not an order/.test(auto.DECISION_WANT),
     'DECISION_WANT calibrates expect to one run and de-baits delegated gists');
+  ok(/ONE bounded bite/.test(auto.DECISION_WANT) && /NEVER the inquiry's finish line/.test(auto.DECISION_WANT),
+    'advance-inquiry bullet sizes the expect to THIS touch, never the finish line (the 0-for-N MET fix)');
   ok(/DIRECTION: work should serve HIS WORLD first/.test(auto.DECISION_WANT) && /LAST-RESORT material/.test(auto.DECISION_WANT),
     'DIRECTION rule: his world outranks the bulk inventory (the random-pulls fix)');
   // ⭐DRIFT GUARD: the schema enum the model copies from must carry EVERY move. Live boot47: the
