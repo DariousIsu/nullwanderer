@@ -1968,23 +1968,18 @@ const markerMat = new THREE.ShaderMaterial({
   uniforms: { map: { value: RING_TEX }, uOpacity: { value: 1.0 } },
   vertexShader: 'attribute float size; attribute vec3 aColor; attribute float aAlpha; varying vec3 vColor; varying float vAlpha; void main(){ vColor=aColor; vAlpha=aAlpha; vec4 mv=modelViewMatrix*vec4(position,1.0); gl_PointSize=size*(560.0/max(1.0,-mv.z)); gl_Position=projectionMatrix*mv; }',
   fragmentShader: 'uniform sampler2D map; uniform float uOpacity; varying vec3 vColor; varying float vAlpha; void main(){ vec4 t=texture2D(map, gl_PointCoord); if(t.a<0.02) discard; gl_FragColor=vec4(vColor, t.a*uOpacity*vAlpha); }',
-  // depthTest OFF (Lucas: "the different completions of circles looks messy"). With it on, each ring sprite
-  // was clipped by the body's depth wherever its arc passed behind her surface, so every badge read as a
-  // different ragged fraction of a circle. He's fine with map marks floating free of her skin — so the rings
-  // now always draw COMPLETE, over the figure, as clean consistent circles.
-  transparent: true, depthWrite: false, depthTest: false, blending: THREE.NormalBlending,
+  transparent: true, depthWrite: false, depthTest: true, blending: THREE.NormalBlending,
 });
 const REFUTED_RGB = new THREE.Color('#f87171'), STRONGID_RGB = new THREE.Color('#fcd34d'), RECOG_RGB = new THREE.Color('#c4b5fd');
-// ONE size per kind, not per node (Lucas: "all the different sized circles… look odd"). The badge states a
-// STATUS — strong-id / refuted / recognised — not the node's degree, so scaling each ring by node importance
-// added noise. Three consistent tiers now.
-const MARKER_BASE = 12;
 let markerCloud = null, markerGeo = null, markerIndex = [], markerLive = [];
 function markerOf(n) {                       // a scar outranks a badge — being wrong is the louder fact
   if (n && hotLinks.has(n.id)) return { c: RECOG_RGB, a: 0.9, k: 2.1, live: true };   // …and a live recognition outranks both
   const p = n && n.prov; if (!p) return null;
   if (p.refuted) return { c: REFUTED_RGB, a: 0.95, k: 1.55 };
-  if (p.strongId) return { c: STRONGID_RGB, a: 0.34, k: 1.35 };
+  // strong-id gold badges are ~20% of nodes — on the abstract graph that's useful texture, but on the FIGURE
+  // they pepper her face and body with rings (Lucas hated it). The figure IS the visualisation there, so in
+  // skin mode only the RARE + LIVE marks survive: a refuted scar, a firing recognition. Gold is suppressed.
+  if (p.strongId && SHAPE !== 'skin') return { c: STRONGID_RGB, a: 0.34, k: 1.35 };
   return null;
 }
 function buildMarkers() {
@@ -1996,8 +1991,8 @@ function buildMarkers() {
   const pos = new Float32Array(N * 3), col = new Float32Array(N * 3), size = new Float32Array(N), alpha = new Float32Array(N);
   for (let i = 0; i < N; i++) {
     const n = src[i], m = mets[i];
-    col[i * 3] = m.c.r; col[i * 3 + 1] = m.c.g; col[i * 3 + 2] = m.c.b; size[i] = MARKER_BASE * m.k; alpha[i] = m.a;
-    markerLive.push(m.live ? { base: MARKER_BASE * m.k, a: m.a } : null);
+    col[i * 3] = m.c.r; col[i * 3 + 1] = m.c.g; col[i * 3 + 2] = m.c.b; size[i] = nodePointSize(n) * m.k; alpha[i] = m.a;
+    markerLive.push(m.live ? { base: nodePointSize(n) * m.k, a: m.a } : null);
     if (Number.isFinite(n.x)) { pos[i * 3] = n.x; pos[i * 3 + 1] = n.y; pos[i * 3 + 2] = n.z || 0; }
   }
   markerGeo = new THREE.BufferGeometry();
