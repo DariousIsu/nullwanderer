@@ -143,6 +143,15 @@ async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 
     // logged "deep-browsed 0 layer(s)" and NOTHING remembered the failure, so the same dead PDF was
     // retried forever in the VISIBLE browser (live 2026-07-23: fcoe.org directory PDF on loop while
     // Lucas watched). Skip it; the caller falls back to the layered fetch, which CAN read PDFs.
+    // VISITED LEDGER (2026-07-23): an autonomous re-visit of a fresh-enough capture is the
+    // 500-calls disease — reuse the capture instead of navigating again. Checked BEFORE the PDF
+    // branch so a repeat PDF landing reads "already digested" instead of re-firing the bank chain
+    // (live: two contact queries topped out at the same OJP scan 15 min apart). Fail-soft: a
+    // ledger error only PERMITS a navigation, never blocks one.
+    try {
+      const _lg = require('./site_ledger').shouldSkip(landingUrl);
+      if (_lg.skip) { log && log(`[browser] already digested — ${_lg.why}: ${landingUrl}`); return rows; }
+    } catch {}
     if (/\.pdf(?:[?#]|$)/i.test(String(landingUrl || ''))) {
       // The search compute is already SPENT by the time we land here — discarding the found PDF
       // wastes it (Lucas 2026-07-23: "logging the data … or spending the compute finding the wrong
@@ -152,13 +161,6 @@ async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 
       if (typeof bankPdf === 'function') { try { Promise.resolve(bankPdf(landingUrl)).catch(() => {}); } catch {} }
       return rows;
     }
-    // VISITED LEDGER (2026-07-23): an autonomous re-visit of a fresh-enough capture is the
-    // 500-calls disease — reuse the capture instead of navigating again. Fail-soft: a ledger
-    // error only PERMITS a navigation, never blocks one.
-    try {
-      const _lg = require('./site_ledger').shouldSkip(landingUrl);
-      if (_lg.skip) { log && log(`[browser] already digested — ${_lg.why}: ${landingUrl}`); return rows; }
-    } catch {}
     const imgsAt = async () => { try { return (typeof browser.pageImages === 'function') ? (await browser.pageImages()) || [] : []; } catch { return []; } };
     if (String(r.text || '').trim().length >= minText) { rows.push({ text: String(r.text).slice(0, 8000), url: landingUrl, source: 'browser', images: await imgsAt() }); }
     seenUrl.add(norm(landingUrl));
