@@ -41,8 +41,17 @@ in place with provenance — retire, never delete). The handler now refuses any 
 non-active inquiry (REFUSED line names the door, refusal rides history). Lesson: continuity bias
 needs a STATUS GATE at the handler — the model repeats what history rewarded, including targets
 that no longer exist.
-WATCH boot54: first harvest-born homecoming on an answered close (inquiry #1 Louisiana is the
-natural test) · REFUSED lines when continuity baits · war-question retest (Lucas). The war-question retest is STILL OWED (last asking
+**⭐THE MORNING RETEST FALL (07-23 09:47, fixed 32a6541, live on BOOT55 ~10:10)**: Lucas's "Just
+give me the latest new on Iran" → empty preamble + promise-say, news tier never ran. ROOT: an
+imperative retrieval ask (no '?', no interrogative word) classified 'other' → cloudOwnsAnswer
+false → the WHOLE grounded ladder dark while news_bucket held 1,676 Iran stories incl. the exact
+strait coverage. CURRENCY_OBJECT_RE: a current-state OBJECT (news/latest/updates) → factual
+whatever the sentence mood; after opinion/social, before the creative gate. Verified on shipped
+code: the live ask, verbatim, → factual. LESSON: every prior war-fall fix sat BEHIND this gate —
+a circuit is only as live as its shallowest router. (Overnight boot54 died with the machine;
+Lucas's 09:50 restart truncated boot54.log — forensics rode the turns table + code.)
+WATCH boot55: `cognition → enriched:news` on the Iran retest · harvest-born homecoming on an
+answered close (inquiry #1 Louisiana) · REFUSED lines when continuity baits. The war-question retest is STILL OWED (last asking
 was 23:36 on boot48, pre-news-tier — the honest-miss proof, not the tier's test): "what's the
 latest on the war?" must answer from her own stream in one turn (`enriched:news` in the log).
 BOOT49/50 PROOFS: inquiry #1 advanced touches 2-4 (the direction loop holds across boots) · email
