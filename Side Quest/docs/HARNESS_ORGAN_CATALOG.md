@@ -234,7 +234,7 @@ readings + toast + `meta autonomy.inbox_recent`. But: **`lib/package.js` (~line 
 layer contradicts the shipped wiring. Delegation is tier-HEAVY (interactive only). Delegated
 agents never appear on the workstream board, so "what are you doing?" omits them.
 
-**The transplant.**
+**The transplant** (the wiring half; §6 carries the full dispatcher's lessons).
 1. Fix the lie first (cheap): update the two guidance sites — assignments MAY delegate; returns
    drain within ~5 min.
 2. Origin-join: `<echo-delegate>` records `{origin: focus|beat|autonomy-run id}` beside the seen-
@@ -454,3 +454,63 @@ along wherever they fit; each sub-slice gate-green + committed per the standing 
 - Nothing self-adopts except the substrates built for it (procedures' track records; approved
   recipe proposals). Program code crosses only through Lucas + gate + commit. R3 stance holds
   everywhere, forever.
+
+---
+
+## 6. Last dig — the dispatcher's lessons (how my fan-out comes home)
+
+*Lucas's closing question for this catalog: the harness fans out to as many places as the
+program does, yet the answers always land back in one coherent piece — what transfers? Five
+mechanics. None of them are model intelligence; all of them are addressing discipline. Each
+verified against the program 2026-07-22.*
+
+**L1 — The return address is the QUESTION, not the program.** In this harness every fan-out
+result returns into the exact context that formulated the question — the asker still holds WHY,
+so integration is trivial and immediate. In Zoe, a delegated result returns to a GENERAL
+surface: `_drainAgentInbox` banks it in meta + a monologue reading + a toast; the focus/beat/
+tick that asked has died or moved on, so the manifest must NAG ("absorb it") — the answer became
+an obligation. Adoption = O3's origin-join, stated as the principle: record `origin` at
+dispatch; the drain delivers to that origin as material; only orphaned results fall back to a
+reading. An inbox is where answers go to be forgotten.
+
+**L2 — The envelope is defined at DISPATCH, not discovered at return.** Every subagent this
+harness spawns is told at send time exactly what shape to reply in — and the shape is enforced
+mechanically (a mis-shaped return is retried at the tool layer, invisibly to the caller).
+`<echo-delegate>` sends a task string and scrapes whatever prose returns (`parseAgentInbox`).
+Adoption: the dispatch template appends the envelope (`{found, not_found, sources, next}`) plus
+the sentence that changes everything — *"your reply IS the return value, not a message to
+Lucas"* — and the drain VALIDATES in code (2d's law: never prompt-hoped); unparseable →
+`[UNSATISFIED]` rides to the origin.
+
+**L3 — Every fan-out NAMES its join.** However many agents run here, exactly ONE context reads
+all the returns before anything is written — the synthesis point is designated before the
+fan-out starts. The program's swarm has an allocator (`partitionRoster`/`planSwarmSlots`) and
+release conditions — but `releaseSwarm` (main.js:9608) FREES the workers; nothing reads the
+parts together and writes the one artifact; findings just accrue wherever they landed.
+Adoption: a swarm/parallel run carries `join: {origin, artifact}` from the start; release
+triggers one synthesis pass (cloud, pool slot) that reads the parts and writes the named
+artifact. A fan-out without a named join is a scatter.
+
+**L4 — Errors are RESULTS; route them to the reader of successes.** A failed delegate here
+arrives in-band — same channel, labeled, with the failure text — and the caller decides (retry
+with the failure quoted, reroute, drop). In Zoe, failures fork OFF the result channel: lanes
+catch → `console.error` (a channel no model reads), and the board writes `status='failed'` rows
+that nothing anywhere queries (`board.running()`/`manifestLines` render running only — verified:
+no consumer of failed exists). The decider cannot see "graph-walk failed 6× tonight." Adoption:
+(a) the manifest gains RECENT FAILURES (counts + last note per lane, read from the failed rows
+the board already writes — a read-model, one query); (b) a failed delegated run returns THROUGH
+the drain with its error as the payload. 44f8052 generalized: every failure teaches, in the
+channel where the next decision is made.
+
+**L5 — Returns are GIST + HANDLES; partials land as they go.** The sweep agent for this very
+catalog read ~185k tokens of this repo and returned ~4k — but every claim carried file:line, so
+the caller could dereference at need. Summarize AND address: the [dN] law at the agent level —
+a return that only summarizes is a distiller. Zoe's inbox items already carry `canvasTab`
+(a handle): keep it and make it mandatory — no return without a pointer to its full material.
+And because partial work must be real work, long runs write back per touch (O0) so a death
+loses a step, never the run.
+
+*The through-line: the question keeps custody of its answer. That is the entire trick of
+"streams back in so perfectly" — not smarter models, but an address on every result, an
+envelope on every dispatch, a named join on every fan-out, failures in the same mailbox, and a
+handle on every summary.*
