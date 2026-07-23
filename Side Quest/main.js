@@ -8474,7 +8474,31 @@ async function liveLookupAndAnswer({ io, channel, sessionId, userName, query }) 
     content = `[You tried to look up "${query}" for ${userName} but couldn't reach a live source this moment. Tell him plainly you couldn't pull it right now and offer to try again — do NOT make up a number or a fact.]`;
   }
   try { resumeMonologue(); resumeHeartbeat(); } catch {}
-  await fireToolFollowup({ io, channel, sessionId, resultText: content });
+  await _withChainWatchdog(fireToolFollowup({ io, channel, sessionId, resultText: content }), { sessionId, label: `lookup "${String(query).slice(0, 50)}"` });
+}
+
+// CHAIN WATCHDOG (2026-07-23, Lucas: "she looks hung"): an in-flight tool chain had NO deadline —
+// a wedged page read or a stalled generation was indistinguishable from thinking, and the silence
+// had no end (live: "Checking the source…" at 12:01, still silent at 12:04). Race the top-level
+// chain against a hard deadline; on stall, close HONESTLY through the normal door and advance the
+// turn generation so the late result discards instead of double-answering. The app was never hung
+// — but Lucas couldn't know that. Now the silence is bounded.
+const CHAIN_DEADLINE_MS = 180 * 1000;
+async function _withChainWatchdog(chainPromise, { sessionId, label = 'the lookup' } = {}) {
+  let settled = false;
+  const outcome = await Promise.race([
+    chainPromise.then(() => { settled = true; return 'done'; }).catch((e) => { settled = true; console.error('[watchdog] chain errored:', e.message); return 'error'; }),
+    new Promise((resolve) => setTimeout(() => resolve('timeout'), CHAIN_DEADLINE_MS)),
+  ]);
+  if (outcome === 'timeout' && !settled) {
+    ++_chatTurnGen;   // stale-generation discard: the wedged chain's late render never double-answers
+    console.log(`[watchdog] chain stalled past ${CHAIN_DEADLINE_MS / 1000}s — closing honestly (${label})`);
+    try {
+      const msg = `That's taking longer than it should — the source read seems stuck, so I'm letting it go rather than leaving you hanging. Ask me again and I'll take a fresh run at it.`;
+      const t = db.insertTurn({ sessionId, speaker: 'ai_said', content: msg, model: 'watchdog', unprompted: 0 });
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: t.id, truncated: 0, say: msg });
+    } catch (e) { console.error('[watchdog] stall close failed:', e.message); }
+  }
 }
 
 // CLOUD OPERATOR executors — map the operator's small tool menu to her real capabilities. Each
@@ -9600,7 +9624,8 @@ function _newsScoreFor(bs, now) { const t = bs && bs.newsAt; if (!t) return 0; c
 // sweep whenever both are due. Token overlap, deterministic, fail-soft to 0.
 const _PIN_STOP = new Set(['the', 'and', 'every', 'each', 'with', 'from', 'that', 'this', 'their', 'officials', 'commission', 'commissions', 'county', 'counties', 'development']);
 function _pinTokens(s) {
-  return new Set(String(s || '').toLowerCase().match(/[a-z][a-z-]{3,}/g)?.filter((t) => !_PIN_STOP.has(t)) || []);
+  // plain word runs (no hyphens) so a beat id like "county-commissions-la" splits into words
+  return new Set(String(s || '').toLowerCase().match(/[a-z]{4,}/g)?.filter((t) => !_PIN_STOP.has(t)) || []);
 }
 function _directionTokens() {
   const out = new Set();
@@ -9611,7 +9636,8 @@ function _directionTokens() {
 function _pinScoreFor(beat, dirTokens) {
   if (!dirTokens || !dirTokens.size) return 0;
   let hits = 0;
-  for (const t of _pinTokens(`${beat.title || ''} ${beat.id || ''}`)) if (dirTokens.has(t)) hits++;
+  // goal included — county beats carry NO title, and the state name ("Louisiana") lives in goal
+  for (const t of _pinTokens(`${beat.title || ''} ${beat.goal || ''} ${beat.id || ''}`)) if (dirTokens.has(t)) hits++;
   return Math.min(1, hits / 2);
 }
 // Choose the next beat from a pool under the active allocator. `held` = beat ids currently worked (primary +
