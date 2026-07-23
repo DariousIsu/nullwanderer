@@ -119,6 +119,34 @@ function touchBrief(row) {
   return parts.join('\n\n');
 }
 
+// HELD-SOURCE HINT (2026-07-23, boot73: inquiry #1 ran 26 touches planning to "retrieve the
+// LA-parish-officials-2026.xls file via its direct download URL" — a file it ALREADY HELD as a
+// landed, decomposed doc). She has no reflex to check her own stores before re-fetching. This scans
+// the inquiry's own text (next_step/gist/recent evidence) for a filename it names, and if that file
+// is already a landed document, tells the touch to READ its own copy instead of re-downloading. The
+// general lesson (check what you hold first) outlives this one inquiry. deps.db required; fail-soft.
+const _FILE_RE = /[\w()][\w()\-. ]{2,80}\.(?:xlsx?|csv|pdf|docx?|tsv|json)/gi;
+function heldSourceHint(row, { deps = {} } = {}) {
+  try {
+    const d = (deps.db || require('./db')).getDb();
+    const hay = `${str(row && row.next_step)} ${str(row && row.gist)} ${jarr(row && row.evidence).slice(-3).map((e) => str(e.gist) + ' ' + str(e.cite)).join(' ')}`;
+    const seen = new Set();
+    const names = (hay.match(_FILE_RE) || []).map((s) => s.trim()).filter((s) => { const k = s.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+    for (const name of names.slice(0, 4)) {
+      let doc = null;
+      // Match either direction: the candidate IS a title, or a (>=8-char) title is CONTAINED in the
+      // candidate (the space-greedy match pulls leading words — "Retrieve the <file>.xls" — so the
+      // real title sits inside it). Prefer the most specific (longest) title.
+      try { doc = d.prepare("SELECT id, LENGTH(body) AS len FROM documents WHERE title = ? OR (LENGTH(title) >= 8 AND ? LIKE '%' || title || '%') ORDER BY LENGTH(title) DESC LIMIT 1").get(name, name); } catch {}
+      if (!doc || !doc.id) continue;
+      let decomposed = false;
+      try { decomposed = d.prepare('SELECT 1 FROM encounters WHERE source_ref = ? LIMIT 1').get(`doc:${doc.id}`) != null; } catch {}
+      return `⚠️ YOU ALREADY HOLD "${name}" as doc #${doc.id} (${Math.round((doc.len || 0) / 1000)}k chars${decomposed ? ', already decomposed into your entity graph' : ''}). READ YOUR OWN COPY — do NOT re-download it: query it with localdb (SELECT substr(body,1,3000) FROM documents WHERE id=${doc.id}, paged as needed) or search your graph for the entities it produced. Re-fetching a file you already ingested is wasted work and will not advance the question.`;
+    }
+    return null;
+  } catch { return null; }
+}
+
 // §6 L2 — the envelope is defined at dispatch, validated at the drain.
 const WRITEBACK_WANT = `The touch is over. Write back what the NEXT touch needs to start where you stopped. Reply ONLY strict JSON:
 {"learned":"<1-3 sentences — where the question now stands. This REPLACES your standing summary, so it must CARRY FORWARD every coverage claim the old summary already held (a sub-list once completed stays completed — merge this touch's gains INTO the old standing, never restate only what THIS touch did)>",
@@ -209,5 +237,5 @@ function manifestLines({ deps = {}, nowMs = Date.now() } = {}) {
 module.exports = {
   MAX_ACTIVE, EVIDENCE_MAX, WRITEBACK_WANT, DUP_THRESHOLD,
   open, get, listActive, touchBrief, validateWriteback, writeBack, expectTrailPush, close, manifestLines,
-  questionOverlap,
+  questionOverlap, heldSourceHint,
 };

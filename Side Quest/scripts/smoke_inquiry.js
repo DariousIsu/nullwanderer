@@ -92,6 +92,20 @@ const NOW = 1753400000000;
   ok(/FIRST-CLASS outcome/.test(I.touchBrief({ id: 9, question: 'x'.repeat(20), touches: 6, evidence: '[{"gist":"real finding","cite":"doc #8443"}]' })),
     'close nudge FIRES on a well-worn line (touch 6) that holds real evidence — answered beats a 12th continue');
 
+  // --- HELD-SOURCE HINT (boot73: #1 planned to re-download a roster it already held+decomposed) ---
+  {
+    const doc = db.insertDocument({ title: 'LA-parish-officials-2026.xls', body: 'Parish,Office,Name\nCaddo,Sheriff,Whitehorn', source: 'browser_download' });
+    // decomposed: give it an encounter
+    try { require('../lib/encounters').record({ object_type: 'gov', object_label: 'Caddo Sheriff', claim_class: 'existence', source_kind: 'document', source_ref: `doc:${doc.id}`, origin_host: 'x', content_hash: 'h' }); } catch {}
+    const hint = I.heldSourceHint({ next_step: 'Retrieve the LA-parish-officials-2026.xls file via its direct download URL and extract the missing rows', gist: '', evidence: '[]' }, { deps: { db } });
+    ok(hint && new RegExp(`doc #${doc.id}`).test(hint) && /READ YOUR OWN COPY/.test(hint) && /decomposed/.test(hint),
+      'heldSourceHint: a named file that is already a landed+decomposed doc → "read your own copy, do not re-download"');
+    ok(I.heldSourceHint({ next_step: 'Search Ballotpedia for the Ohio governor race results', gist: '', evidence: '[]' }, { deps: { db } }) === null,
+      'heldSourceHint: no file named / nothing held → silent (no false hint)');
+    ok(I.heldSourceHint({ next_step: 'Download unheld-roster-9999.csv from the county site', gist: '', evidence: '[]' }, { deps: { db } }) === null,
+      'heldSourceHint: a file we do NOT hold → silent (only fires on what she actually has)');
+  }
+
   // --- close: answered lands the artifact; dead-end does not ---
   const landed = [];
   const c1 = I.close(a.id, { kind: 'answered', answer: 'Nine states have standing AI task forces; chairs listed in the evidence trail.', deps: { land: (d) => { landed.push(d); return { id: 42, landed: true }; } }, nowMs: NOW + 3000 });

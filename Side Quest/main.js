@@ -9332,6 +9332,10 @@ async function autonomyTick() {
       }
       // ADVANCE — the touch. Procedures ride the brief; the write-back envelope is the exit.
       let brief = inquiry.touchBrief(row);
+      // HELD-SOURCE HINT (boot73): if this inquiry keeps naming a file it already holds as a landed,
+      // decomposed doc, tell the touch to read its own copy instead of re-downloading it (inquiry #1
+      // planned to re-fetch the roster it had already ingested + decomposed, 26 touches running).
+      try { const hs = inquiry.heldSourceHint(row, { deps: { db } }); if (hs) brief += '\n\n' + hs; } catch {}
       let procMatch = null;
       try {
         const procs = require('./lib/procedures');
