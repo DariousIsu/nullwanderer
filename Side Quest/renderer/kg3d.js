@@ -1259,8 +1259,11 @@ function updateFace(now) {
 // (shoes + underwear removed), her own rigged hair kept. Lucas: "proportion mapping isn't going to work…
 // convert the best of those two to what Zoe is supposed to look like." The deform-the-VRoid-mesh line (v1-v5)
 // is retired — the ceiling was the childish low-poly base itself. Fallback chain ends at the original VRoid.
-const VRM_URL = '../data/avatars/zoe_beth.vrm';
-const VRM_FALLBACK = '../data/avatars/zoe_v5.vrm';
+// zoe_beth_mod = the same model plus the MODESTY COVERAGE built as real geometry in Blender (two cups + briefs,
+// cut clear of the heart) carrying a baked edge-distance in COLOR_0 for its trace lines. Falls back to the
+// pre-coverage build if it is ever missing, so a bad export can never leave her without a body.
+const VRM_URL = '../data/avatars/zoe_beth_mod.vrm';
+const VRM_FALLBACK = '../data/avatars/zoe_beth.vrm';
 // ANATOMY CARRIES MEANING (Lucas, 2026-07-22): "Short term memory can be the head, everything that is Zoe can
 // be the heart, and the rest of the body is everything else." That turns the figure from a shape the data
 // happens to sit on into a CLAIM about the data — the same principle as density-is-the-boundary, finally with
@@ -1477,6 +1480,8 @@ function buildRegions() {
     // neck, so the y>neck test alone left the lower strands classified as body; force the whole hair mesh to
     // the head region.
     const isHair = matKind(m.userData && m.userData.matName) === 1;
+    // the coverage takes NO node seats — nodes stay on her skin and glow through it, which is the whole point
+    const isCover = matKind(m.userData && m.userData.matName) === 7;
     // The same classification is written as a per-vertex ATTRIBUTE, so her surface can be shaded by what each
     // part of her MEANS. 0 body/face · 1 hair (short-term) · 2 heart. One pass, two consumers: the binding picks
     // seats from the arrays, the shell reads the attribute — they can never disagree about which part is which.
@@ -1492,6 +1497,7 @@ function buildRegions() {
       // body"). Only HAIR carries the short-term violet; every skin vertex — face included — is corpus/body sky.
       // The eye and mouth patches are still excluded from BINDING (no node sits in an eye socket) but they shade
       // as body too, so the face reads as one skin surface instead of a violet mask seamed along the jaw.
+      if (isCover) { reg[i] = 0; continue; }                                                                // coverage: no seats
       if (isHair) { reg[i] = 1; REGION.head.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z }); continue; }   // hair = short-term
       if (ex.length && ex.some(([c, r]) => v.distanceTo(c) < r)) { reg[i] = 0; continue; }   // eyes + mouth: no bind, shade as face/body
       if (inHeart(v)) { reg[i] = 2; REGION.heart.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z }); continue; }   // heart, high on the chest
@@ -1578,6 +1584,7 @@ function matKind(name) {
   if (/EyeIris|Std_Eye_[LR]/i.test(n)) return 3;                         // VRoid iris | CC eyeball
   if (/Teeth|Tongue|FaceMouth/i.test(n)) return 6;
   if (/_HAIR|Hair_|Scalp/i.test(n)) return 1;
+  if (/Modesty/i.test(n)) return 7;                                      // the coverage geometry
   return 0;                                           // skin (Std_Skin_*, Std_Nails, VRoid Body/Face SKIN)
 }
 // THE REAL Reallusion eye + lash maps (Lucas: the procedural iris + node-art lashes read as lazy/terrible —
@@ -1642,12 +1649,42 @@ function makeLashMaterial(m) {
   mat.needsUpdate = true;
   return mat;
 }
+// THE MODESTY COVERAGE (Lucas: "that's perfect shape … integrated so it doesn't block nodes and connections
+// from view … good detail, maybe some trace lines on the edges"). Real geometry from Blender, shaded as LIGHT:
+// additive with NO depth write, so it can only ever add glow — a node or a routed link behind it still reads
+// straight through. Its trace lines come from a distance-to-edge baked into COLOR_0 in Blender, so they follow
+// the true boundary of the cut instead of a shader guess.
+function makeModestyMaterial() {
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true, transparent: true,
+    blending: THREE.AdditiveBlending, depthWrite: false, depthTest: true, side: THREE.DoubleSide });
+  mat.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\n varying vec3 vMN;\n varying vec3 vMP;')
+      .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\n vMN = transformedNormal;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\n vMP = mvPosition.xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\n varying vec3 vMN;\n varying vec3 vMP;')
+      .replace('#include <dithering_fragment>', `
+        float d = vColor.r;                                    // 0 at the cut edge → 1 at 16mm inside
+        float rim  = smoothstep(0.20, 0.0, d);                 // bright piping along the boundary
+        float line = smoothstep(0.055, 0.0, abs(d - 0.55));    // a finer second trace inside it
+        float fres = pow(1.0 - abs(dot(normalize(vMN), normalize(-vMP))), 2.2);
+        float glow = rim * 0.95 + line * 0.5 + fres * 0.30;
+        float fill = 0.085;                                    // barely-there body: nodes read straight through
+        vec3 col = vec3(0.40, 0.72, 1.0) * (fill + glow);
+        gl_FragColor = vec4(col, min(1.0, fill + glow));
+        #include <dithering_fragment>`);
+  };
+  mat.needsUpdate = true;
+  return mat;
+}
 function applyShellMaterial() {
   for (const m of vrmOccluders) {
     const kind = matKind(m.userData && m.userData.matName);
     // real textured facial features instead of the graph shell (the rest of her stays the shell)
     if (kind === 3) { m.material = makeEyeMaterial(m); m.material.colorWrite = SHELL_ON; continue; }
     if (kind === 5) { m.material = makeLashMaterial(m); m.material.colorWrite = SHELL_ON; continue; }
+    if (kind === 7) { m.material = makeModestyMaterial(); m.material.colorWrite = SHELL_ON; continue; }
     const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, shellUniforms);
