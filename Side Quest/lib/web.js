@@ -645,12 +645,30 @@ async function openTopResult(p = page) {
   if (!p) return { ok: false, reason: 'no page open' };
   try {
     const selectors = ['#rso a:has(h3)', '#search a:has(h3)', 'a:has(h3)'];
-    let link = null;
+    let links = null;
     for (const sel of selectors) {
-      const loc = p.locator(sel).first();
-      if (await loc.count().catch(() => 0)) { link = loc; break; }
+      const loc = p.locator(sel);
+      if (await loc.count().catch(() => 0)) { links = loc; break; }
     }
-    if (!link) return { ok: false, reason: 'no result links on page' };
+    if (!links) return { ok: false, reason: 'no result links on page' };
+    // OVER-VISITED SKIP (2026-07-23): DIFFERENT queries kept resolving to the SAME magnet document
+    // (a 1990s NCJRS directory scan, clicked 9× — every stale-name query ranked it #1). The landing
+    // guard absorbed each hit but the CLICK kept choosing it. Consult the ledger at selection: take
+    // the first of the top results that isn't already ground to dust (visits ≥ 3).
+    let link = null, skipped = 0;
+    try {
+      const n = Math.min(await links.count().catch(() => 1), 5);
+      for (let i = 0; i < n; i++) {
+        const cand = links.nth(i);
+        let href = null; try { href = await cand.getAttribute('href', { timeout: 1500 }); } catch {}
+        let over = false;
+        try { const row = href && require('./site_ledger').seen(href); over = !!(row && row.visits >= 3); } catch {}
+        if (over) { skipped++; continue; }
+        link = cand; break;
+      }
+    } catch {}
+    if (!link) link = links.first();   // every candidate over-visited → last resort, click #1 honestly
+    if (skipped) console.log(`[web] top-result skip: passed over ${skipped} over-visited result(s)`);
     await link.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
     await link.click({ timeout: 8000 });
     await p.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT }).catch(() => {});
