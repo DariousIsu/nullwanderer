@@ -30,6 +30,29 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
     'scaffolding is stripped and the REAL reply is kept');
 }
 
+// ── live leak #9335 (2026-07-23): fragments jammed WITHOUT spaces, retrieval-verb vocabulary ────
+{
+  const live = 'We need to use web search.We need to see the page content.We need to see the output.'
+    + 'Trump’s latest tariff threat is a provisional Section 301 action that would slap a 50 % duty on a swath of Canadian imports.';
+  ok(L.stripPlanningLeak(live) === 'Trump’s latest tariff threat is a provisional Section 301 action that would slap a 50 % duty on a swath of Canadian imports.',
+    'live #9335 — space-less scaffolding run is stripped, the real reply survives');
+  ok(L.stripPlanningLeak('We need to use web search.We need to see the output.') === '',
+    'live #9335 shape with no reply behind it removes entirely');
+  ok(L.stripPlanningLeak('We need to use web search.U.S. tariffs jumped 50 % this week.') === 'U.S. tariffs jumped 50 % this week.',
+    'the jam-splitter never breaks "U.S." apart');
+}
+
+// ── ⭐ SAFETY for the new pieces ────────────────────────────────────────────────────────────────
+{
+  ok(L.stripPlanningLeak('We need to see what the county publishes.') === 'We need to see what the county publishes.',
+    'SAFETY: a plan sentence without retrieval machinery is still just talk');
+  const jammed = 'Turnout was 12%.Not great, honestly.';
+  ok(L.stripPlanningLeak(jammed) === jammed,
+    'SAFETY: jammed ordinary prose is returned verbatim (no rejoin mutation when nothing strips)');
+  ok(L.stripPlanningLeak('We need to see the output of the seat model before the huddle.') === 'We need to see the output of the seat model before the huddle.',
+    'SAFETY: "the output" alone is NOT mechanics — they genuinely discuss model outputs');
+}
+
 // ── ⭐ SAFETY: real speech survives ─────────────────────────────────────────────────────────────
 {
   const keep = [

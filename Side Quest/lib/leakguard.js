@@ -52,7 +52,10 @@ function stripLeakedDirectives(text) {
 // machinery (emit, a tag, a tool name, echo-*). "I need to check the calendar" is not a leak — it is
 // a person talking — so the mechanics vocabulary is required, not just the planning verb.
 const _PLAN_LEAD = /^\s*(?:we|i)\s+(?:need to|should|must|will|have to|can)\s+|^\s*(?:let(?:'|’)?s|let me)\s+|^\s*(?:next|first|now),?\s+(?:we|i)\s+/i;
-const _MECHANICS = /\b(?:emit|emitting)\b|<[a-z-]+>|\becho-\w+|\becho tag\b|\btool tag\b|\bdb[ _-]?map\b|\b(?:call|invoke|run)\s+(?:the\s+)?(?:tool|recipe|echo)\b/i;
+// `web search` / `page content` joined the vocabulary from live leak #9335 (2026-07-23): "We need
+// to use web search.We need to see the page content." reached the screen — retrieval narration is
+// mechanics too. "the output" stays OUT deliberately: Lucas and Zoe genuinely discuss outputs.
+const _MECHANICS = /\b(?:emit|emitting)\b|<[a-z-]+>|\becho-\w+|\becho tag\b|\btool tag\b|\bdb[ _-]?map\b|\bweb\s+search\b|\bpage content\b|\b(?:call|invoke|run)\s+(?:the\s+)?(?:tool|recipe|echo)\b/i;
 
 /**
  * Remove leading planning sentences that describe emitting/calling machinery.
@@ -65,7 +68,11 @@ const _MAX_SCAFFOLD = 100;   // the three real leaks were 29, 34 and 42 chars; r
 function stripPlanningLeak(text) {
   const s = String(text || '');
   if (!s.trim()) return s;
-  const parts = s.split(/(?<=[.!?])\s+/);
+  // Streamed reasoning fragments concatenate WITHOUT spaces ("web search.We need" — live leak
+  // #9335), so the whole leak plus the real reply parsed as one giant "sentence" and sailed past
+  // the length guard. Also split where a sentence-ender sits jammed against a capital, but only
+  // after a lowercase letter — "U.S." and "3.5" stay whole.
+  const parts = s.split(/(?<=[.!?])\s+|(?<=[a-z][.!?])(?=[A-Z])/);
   // The leading RUN of short, plan-shaped sentences. Mechanics may appear in ANY of them — live, the
   // plan and the tool name were split across two ("We need to fetch Iowa state flower. Use
   // echo-find."), so requiring them in the same sentence missed a real leak.
