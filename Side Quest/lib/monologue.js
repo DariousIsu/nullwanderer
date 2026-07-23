@@ -1212,6 +1212,24 @@ async function _runOneTick() {
           pushSheep({ id: row.id, ts: row.ts, content: st, type: 'thought', importance: imp });
           try { blackboard.append({ source: 'monologue', kind: 'thought', refTable: 'monologue', refId: row.id, content: st }); } catch {}
           console.log('[subc] synthesis pass stored (cross-thought depth)');
+          // THOUGHT → WORK (2026-07-23, Lucas: "she is circling actually putting things together").
+          // A synthesis that names its own concrete next step used to evaporate into the thought
+          // rail — the decider never saw HER OWN plan, so she re-derived it forever. Bank it as a
+          // lead on the SAME surface conversation harvest uses (autonomy.harvest_recent); the
+          // DIRECTION rule already makes those first-class open-inquiry/build candidates.
+          try {
+            const pm = /\bnext steps?\b\s*[:—-]\s*([\s\S]{10,400}?)(?:<wonder>|$)/i.exec(st);
+            if (pm) {
+              const plan = pm[1].replace(/\s+/g, ' ').trim().slice(0, 250);
+              let bank = []; try { bank = JSON.parse(db.getMeta('autonomy.harvest_recent') || '[]'); } catch {}
+              const dup = bank.some((e) => (e.leads || []).some((l) => String(l).toLowerCase() === plan.toLowerCase()));
+              if (plan && !dup) {
+                bank.push({ ts: Date.now(), docRef: `monologue #${row.id}`, title: 'Her own synthesis named a next step', leads: [plan], seeds: [], decisions: [], claims: [] });
+                db.setMeta('autonomy.harvest_recent', JSON.stringify(bank.slice(-8)));
+                console.log(`[subc] synthesis next-step banked as a lead → "${plan.slice(0, 80)}"`);
+              }
+            }
+          } catch (e) { console.error('[subc] synthesis lead bank failed:', e.message); }
         }
       }
     } catch (e) { console.error('[subc] synthesis failed:', e.message); }

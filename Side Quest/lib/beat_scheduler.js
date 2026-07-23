@@ -87,7 +87,7 @@ function pickLane({ sliceIndex = 0, topicEvery = DEFAULT_TOPIC_EVERY, hasTopic =
 // PURE: main.js gathers the per-beat signals (news recency, in-flight set) and passes them in; this
 // module only scores and ranks, so it stays offline-testable.
 
-const DEFAULT_ALLOC_WEIGHTS = { stale: 1.0, news: 1.5, yield: 0.5, inflight: 2.0 };
+const DEFAULT_ALLOC_WEIGHTS = { stale: 1.0, news: 1.5, yield: 0.5, inflight: 2.0, pin: 2.0 };
 const YIELD_REF_CHARS = 4000;   // new-chars/pass that maps to yield≈1 (a very productive pass)
 
 function _clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
@@ -110,15 +110,21 @@ function yieldTerm({ yieldAvg = null } = {}) {
   return _clamp01(yieldAvg / YIELD_REF_CHARS);
 }
 
-// Score one beat. `beatState` = state.beats[id] ({ lastRun, yieldAvg, ... }); `newsScore`/`inFlight` are
-// the caller-supplied live signals. Higher = pull sooner. cadence comes from the beat's own maintenanceMs.
-function scoreBeat({ beat = {}, beatState = {}, now = 0, newsScore = 0, inFlight = false, weights = {} } = {}) {
+// Score one beat. `beatState` = state.beats[id] ({ lastRun, yieldAvg, ... }); `newsScore`/`inFlight`/
+// `pinScore` are the caller-supplied live signals. Higher = pull sooner.
+//
+// PIN (the his-world term, 2026-07-23 — Lucas: "no subc focus, still running counties alphabetically"):
+// pinScore ∈ [0,1] = how strongly this beat matches HIS world (active interests, open inquiries). It
+// AMPLIFIES staleness rather than adding a constant — direction picks among DUE work, it never
+// overrides being due — so the starvation-free property survives by construction: a just-run pinned
+// beat (stale≈0) scores ~0 while any ignored bulk beat climbs to stale=1 and gets its turn.
+function scoreBeat({ beat = {}, beatState = {}, now = 0, newsScore = 0, inFlight = false, pinScore = 0, weights = {} } = {}) {
   const w = { ...DEFAULT_ALLOC_WEIGHTS, ...weights };
   const cadenceMs = beat.maintenanceMs || DEFAULT_MAINTENANCE_MS;
   const stale = stalenessTerm({ lastRun: beatState.lastRun, now, cadenceMs });
   const yld = yieldTerm({ yieldAvg: beatState.yieldAvg });
   const news = _clamp01(newsScore);
-  return w.stale * stale + w.news * news + w.yield * yld - w.inflight * (inFlight ? 1 : 0);
+  return w.stale * stale * (1 + w.pin * _clamp01(pinScore)) + w.news * news + w.yield * yld - w.inflight * (inFlight ? 1 : 0);
 }
 
 // Priority twin of chooseNext: pick the highest-scoring not-done beat. `signals(beat) → { newsScore,
@@ -131,7 +137,7 @@ function chooseNextByPriority({ beats = [], state = {}, now = 0, signals = () =>
   let bestId = null, bestScore = -Infinity, bestIdx = -1;
   candidates.forEach((b, i) => {
     const sig = signals(b) || {};
-    const s = scoreBeat({ beat: b, beatState: stOf(b.id), now, newsScore: sig.newsScore || 0, inFlight: !!sig.inFlight, weights });
+    const s = scoreBeat({ beat: b, beatState: stOf(b.id), now, newsScore: sig.newsScore || 0, inFlight: !!sig.inFlight, pinScore: sig.pinScore || 0, weights });
     if (bestId == null || s > bestScore || (s === bestScore && i < bestIdx)) { bestId = b.id; bestScore = s; bestIdx = i; }
   });
   return bestId;

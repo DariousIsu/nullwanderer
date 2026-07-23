@@ -7905,6 +7905,25 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
     }
 
+    // PROMISED-LOOKUP NET (2026-07-23, the Bessent-date fall): her say PROMISED a retrieval ("I'm
+    // pulling the source that records when…") but no tag was emitted, and neither net above
+    // recognized the ask — a follow-up date question carries no live-info vocabulary (the
+    // detectors-vs-comprehension trap, keyed on HIS message). The PROMISE itself is the signal,
+    // and her say names the lookup's object better than his message does (she already resolved
+    // "this assertion" to the concrete thing). Run the lookup she announced, answer in this flow.
+    if (!followupFired && noRetrievalTag && require('./lib/leakguard').isUnkeptPromiseSay(finalSaid || '')) {
+      const q = String(finalSaid || '')
+        .replace(/^[^a-zA-Z0-9]*(?:i'?m|i am|i'?ll|i will|let me|just|now|okay|alright)\b\s*/i, '')
+        .replace(/\b(?:pulling|fetching|gathering|grabbing|retrieving|checking|looking(?:\s+(?:up|into|at))?)\b\s*/gi, '')
+        .replace(/\s+/g, ' ').trim().replace(/[.…]+$/, '').slice(0, 160);
+      if (q.length >= 12) {
+        followupFired = true;
+        console.log(`[main] promised-lookup net → running the lookup she announced: "${q.slice(0, 80)}"`);
+        liveLookupAndAnswer({ io, channel, sessionId, userName, query: q })
+          .catch(e => console.error('[main] promised-lookup failed:', e.message));
+      }
+    }
+
     // GENERAL TOOL ROUTER (Front/Cortex P3) — the cloud decides the surface for a lookup the front
     // didn't reach for and memory can't answer: open-web, OUR data (Echo), or nothing. Generalizes
     // the regex nets so the conversational front needn't emit the right tag. Fires only when she
@@ -9575,6 +9594,26 @@ function _allocWeights() {
 }
 // Decaying news score for a beat from its last-flagged stamp (0 = no recent news, →1 = just flagged).
 function _newsScoreFor(bs, now) { const t = bs && bs.newsAt; if (!t) return 0; const age = now - t; if (age < 0 || age >= NEWS_DECAY_MS) return 0; return 1 - age / NEWS_DECAY_MS; }
+// PIN — the his-world direction signal (2026-07-23, Lucas: "no subc focus, still running counties
+// alphabetically"). A beat that matches his ACTIVE INTERESTS or an OPEN INQUIRY gets its staleness
+// amplified in the priority scorer, so a Florida-counties beat outranks an alphabetical Tennessee
+// sweep whenever both are due. Token overlap, deterministic, fail-soft to 0.
+const _PIN_STOP = new Set(['the', 'and', 'every', 'each', 'with', 'from', 'that', 'this', 'their', 'officials', 'commission', 'commissions', 'county', 'counties', 'development']);
+function _pinTokens(s) {
+  return new Set(String(s || '').toLowerCase().match(/[a-z][a-z-]{3,}/g)?.filter((t) => !_PIN_STOP.has(t)) || []);
+}
+function _directionTokens() {
+  const out = new Set();
+  try { for (const r of require('./lib/interests').getActive()) for (const t of _pinTokens(r.topic)) out.add(t); } catch {}
+  try { for (const r of require('./lib/inquiry').listActive()) for (const t of _pinTokens(r.question)) out.add(t); } catch {}
+  return out;
+}
+function _pinScoreFor(beat, dirTokens) {
+  if (!dirTokens || !dirTokens.size) return 0;
+  let hits = 0;
+  for (const t of _pinTokens(`${beat.title || ''} ${beat.id || ''}`)) if (dirTokens.has(t)) hits++;
+  return Math.min(1, hits / 2);
+}
 // Choose the next beat from a pool under the active allocator. `held` = beat ids currently worked (primary +
 // workers) so the priority path can penalize piling on. Round-robin ignores signals (parity with before).
 function _chooseBeat(pool, state, now, held) {
@@ -9582,9 +9621,10 @@ function _chooseBeat(pool, state, now, held) {
   if (_allocMode() !== 'priority') return sched.chooseNext({ beats: pool, state });
   const heldSet = held instanceof Set ? held : new Set(held || []);
   const weights = _allocWeights();
+  const dirTokens = _directionTokens();
   return sched.chooseNextByPriority({
     beats: pool, state, now, weights,
-    signals: (b) => ({ newsScore: _newsScoreFor(state.beats[b.id], now), inFlight: heldSet.has(b.id) }),
+    signals: (b) => ({ newsScore: _newsScoreFor(state.beats[b.id], now), inFlight: heldSet.has(b.id), pinScore: _pinScoreFor(b, dirTokens) }),
   });
 }
 

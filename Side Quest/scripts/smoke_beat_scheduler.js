@@ -86,6 +86,16 @@ ok(sc({ beat: { maintenanceMs: 1000 }, beatState: {}, newsScore: 1 }) > sc({ bea
 ok(sc({ beat: { maintenanceMs: 1000 }, beatState: { lastRun: 5000 }, newsScore: 1 }) > sc({ beat: { maintenanceMs: 1000 }, beatState: {} }), 'score: news on a just-run beat outranks a never-run beat (surge)');
 ok(sc({ beat: {}, beatState: {}, inFlight: true }) < 0, 'score: in-flight penalty pushes a held beat below zero');
 
+// --- PIN (the his-world term, 2026-07-23): amplifies STALENESS, never overrides it ---
+ok(sc({ beat: { maintenanceMs: 1000 }, beatState: {}, pinScore: 1 }) > sc({ beat: { maintenanceMs: 1000 }, beatState: {} }), 'score: a pinned due beat outranks an unpinned due beat');
+ok(sc({ beat: { maintenanceMs: 1000 }, beatState: { lastRun: 5000 }, pinScore: 1 }) < sc({ beat: { maintenanceMs: 1000 }, beatState: {} }), 'score: a JUST-RUN pinned beat sinks below a due bulk beat (pin amplifies staleness — starvation-free by construction)');
+ok('pin' in s.DEFAULT_ALLOC_WEIGHTS, 'pin weight ships in the defaults (runtime-tunable like the rest)');
+ok(s.chooseNextByPriority({
+  beats: [{ id: 'county-sweep-tn', maintenanceMs: 1000 }, { id: 'florida-counties', maintenanceMs: 1000 }],
+  state: {}, now: 5000,
+  signals: (b) => (b.id === 'florida-counties' ? { pinScore: 1 } : {}),
+}) === 'florida-counties', 'priority: his-world pin beats registry order when both are due (the alphabetical-sweep fix)');
+
 // --- chooseNextByPriority: parity + signal behavior ---
 const bp = [{ id: 'a', maintenanceMs: 1000 }, { id: 'b', maintenanceMs: 1000 }, { id: 'c', maintenanceMs: 1000 }];
 ok(s.chooseNextByPriority({ beats: bp, state: {}, now: 5000 }) === 'a', 'priority: all never-run → first registry beat (tie → order)');
