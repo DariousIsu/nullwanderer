@@ -580,6 +580,21 @@ let follow = false;
 try { follow = localStorage.getItem('kg3d.follow') === '1'; } catch (e) {}
 function setFollow(on) { follow = !!on; try { localStorage.setItem('kg3d.follow', on ? '1' : '0'); } catch (e) {} return follow; }
 function flyTo(pos, ms) { try { Graph.cameraPosition({ x: pos.x, y: pos.y, z: pos.z + 190 }, pos, ms || 1100); } catch (e) {} }
+// LOOK CLOSER AT A POINT ON HER. The trackball pivot sits at the cloud centre (mid-torso), so zoom dollies
+// toward her belly and the head stays out of reach — "the camera is locked to zoom mid object". This re-aims
+// the pivot at exactly the point given and pulls in to head-scale along the CURRENT view direction, so the
+// operator's angle is preserved and the scroll wheel then zooms around THAT point. Never pushes out.
+function focusPoint(p, ms) {
+  try {
+    const cam = Graph.cameraPosition();
+    let dx = cam.x - p.x, dy = cam.y - p.y, dz = cam.z - p.z;
+    const L = Math.hypot(dx, dy, dz) || 1;
+    if (L < 1e-3) { dx = 0; dy = 0.2; dz = 1; }
+    const dist = Math.min(L, 220);                              // pull in for a close look, never zoom out
+    const k = dist / (Math.hypot(dx, dy, dz) || 1);
+    Graph.cameraPosition({ x: p.x + dx * k, y: p.y + dy * k, z: p.z + dz * k }, p, ms == null ? 650 : ms);
+  } catch (e) {}
+}
 
 // OWN FIT, because Graph.zoomToFit() is dead on this surface: it sizes the view from each node's
 // nodeThreeObject, and the lean rebuild made those empty Object3Ds with no geometry to measure. It fails
@@ -2114,7 +2129,31 @@ function pickAt(clientX, clientY) {
   try { _ray.setFromCamera(m, Graph.camera()); const hits = _ray.intersectObject(nodeCloud); if (hits.length) return nodeIndex[hits[0].index] || null; } catch (err) {}
   return null;
 }
-let _downXY = null;
+// Raycast against her actual SURFACE (the occluder meshes carry geometry even though they don't colour-write;
+// three applies morphs + bone skinning in the raycast, so the hit point is her DEFORMED surface). Used by the
+// double-click focus so the pivot lands exactly where the cursor is on her body.
+const _mray = new THREE.Raycaster();
+function _rayFrom(clientX, clientY) {
+  const cv = graphEl.querySelector('canvas'); if (!cv) return false; const rect = cv.getBoundingClientRect();
+  const m = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+  _mray.setFromCamera(m, Graph.camera()); return true;
+}
+function pickSurface(clientX, clientY) {
+  if (!_rayFrom(clientX, clientY)) return null;
+  // Exact skin point first (three applies morphs + skinning in the raycast).
+  if (vrmReady && vrmOccluders.length) {
+    try { const hits = _mray.intersectObjects(vrmOccluders, false); if (hits.length) return hits[0].point.clone(); } catch (e) {}
+  }
+  // Fallback that can never miss her: the bound node whose position is nearest the click ray. Nodes ARE her
+  // surface, so this always lands on her body even if the skinned-mesh raycast returns nothing.
+  if (nodeIndex && nodeIndex.length) {
+    let best = null, bd = Infinity; const v = new THREE.Vector3();
+    for (const n of nodeIndex) { if (!Number.isFinite(n.x)) continue; v.set(n.x, n.y, n.z || 0); const d = _mray.ray.distanceToPoint(v); if (d < bd) { bd = d; best = v.clone(); } }
+    if (best && bd < 120) return best;                          // only if the click was actually near her
+  }
+  return null;
+}
+let _downXY = null, _clickTimer = null, _lastDbl = 0;
 graphEl.addEventListener('pointerdown', (e) => { _downXY = [e.clientX, e.clientY]; });
 graphEl.addEventListener('pointerup', (e) => {
   const d = _downXY; _downXY = null;
@@ -2123,7 +2162,17 @@ graphEl.addEventListener('pointerup', (e) => {
   const n = pickAt(e.clientX, e.clientY);
   if (!n || n.id == null) { hideCard(); return; }
   showCard(n);                                   // every pick answers "what IS this?" first…
-  if (!n.zoe) focus(n.id);                       // …and a corpus/short-term node still walks its neighbourhood
+  // …and a corpus/short-term node still walks its neighbourhood — but DEFERRED, so a double-click (which fires
+  // two pointerups) can cancel the disruptive ego-walk and just re-aim the camera instead.
+  if (!n.zoe) { clearTimeout(_clickTimer); _clickTimer = setTimeout(() => { if (performance.now() - _lastDbl > 260) focus(n.id); }, 240); }
+});
+// DOUBLE-CLICK TO LOOK CLOSER (Lucas: "the camera is locked to zoom mid object … I can't get a close-up of the
+// head/face/eyes/hair"). Double-click on her re-centres the orbit pivot on that exact spot and pulls in; double
+// -click empty space reframes the whole figure. The scroll wheel then zooms around wherever you last looked.
+graphEl.addEventListener('dblclick', (e) => {
+  _lastDbl = performance.now(); clearTimeout(_clickTimer);
+  const p = pickSurface(e.clientX, e.clientY);
+  if (p) focusPoint(p, 650); else fitView(650, false);
 });
 
 // ---- HOVER: what a node is, at a glance (Lucas: "there's no information about what any of the nodes are").
