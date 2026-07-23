@@ -127,6 +127,13 @@ function isClarification({ message = '', assistantAskedQuestion = false, assista
   // The answer-branch: an answer inherits its KIND from her question.
   if (SOCIAL_QUESTION_RE.test(String(assistantQuestion || ''))) return false;
   if (SELF_REPORT_RE.test(s)) return false;
+  // …and its ADDRESS: the answer belongs to the focus only if HER QUESTION was about the focus.
+  // Live misroute (2026-07-23): she asked "pasted here or added to a Canvas document?" about the
+  // PARISH contact list (a conversation thread), Lucas answered "canvas is perfect, thank you" —
+  // and the capture bound it to the ACTIVE focus (#3549, Beaver County UT). Zero distinctive-token
+  // overlap between her question and the focus goal means the question came from ANOTHER thread;
+  // the answer routes to conversation, never onto the focus's clarification list.
+  if (focusGoal !== undefined && _goalOverlap(String(assistantQuestion || ''), focusGoal) < 1) return false;
   return true;
 }
 

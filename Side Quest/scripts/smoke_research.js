@@ -79,6 +79,14 @@ ok(r.isClarification({ message: 'the weather is nice' }) === false, 'unrelated c
 ok(r.isClarification({ message: 'lol' }) === false, 'too-short throwaway → not a clarification');
 // live mis-captures (2026-06-29): fix the false positive + false negative
 ok(r.isClarification({ message: 'Thank you Zoe', assistantAskedQuestion: true }) === false, '"Thank you Zoe" (after she asked a Q) → NOT a clarification (social, was wrongly captured)');
+ok(r.isClarification({ message: 'canvas is perfect, thank you', assistantAskedQuestion: true,
+  assistantQuestion: 'Do you want the list pasted here or added to a Canvas document?',
+  focusGoal: 'Compile and keep current the county-level governing board for Beaver County, Utah — members, seats, contact info' }) === false,
+  'ADDRESS gate: her question came from ANOTHER thread (parish list) → answer never lands on the Beaver County focus (live misroute 2026-07-23)');
+ok(r.isClarification({ message: 'yes, include the school board seats too', assistantAskedQuestion: true,
+  assistantQuestion: 'Should I include appointed county board seats for Beaver County as well?',
+  focusGoal: 'Compile and keep current the county-level governing board for Beaver County, Utah — members, seats, contact info' }) === true,
+  'ADDRESS gate: her question ABOUT the focus → the answer still captures');
 ok(r.isClarification({ message: 'thanks so much!', assistantAskedQuestion: true }) === false, 'gratitude → NOT a clarification');
 ok(r.isClarification({ message: 'good morning Zoe', assistantAskedQuestion: true }) === false, 'a greeting → NOT a clarification');
 ok(r.isClarification({ message: 'Rainey Center is a right of center think tank for example' }) === true, '"X is a … think tank for example" → clarification (scope steer, was wrongly MISSED)');

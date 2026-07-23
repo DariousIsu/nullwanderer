@@ -95,5 +95,22 @@ ok(lg._INTERNAL_TAG_RE.test('<think>') && lg._INTERNAL_TAG_RE.test('</web-open>'
     'a word starting with "read" outside a tag is untouched');
 }
 
+// --- deliveryPromise (Slice P3, the parish-canvas fiction) ---
+{
+  const LIVE = 'Glad the canvas looks good—I\'ll keep adding the Louisiana parish contacts there as we collect them.';
+  const d1 = lg.deliveryPromise(LIVE);
+  ok(d1 && /louisiana parish contacts/i.test(d1.topic), `the LIVE parish promise lands, topic="${d1 && d1.topic}"`);
+  ok(lg.deliveryPromise('I\'ll compile the clerk roster into a tracker document for you.') != null,
+    'a compile-into-document promise lands');
+  ok(lg.deliveryPromise('I\'ll keep adding detail as I learn more.') === null,
+    'no artifact surface named anywhere → not a delivery promise');
+  ok(lg.deliveryPromise('Should I keep adding the parish contacts to the canvas?') === null,
+    'a question is not a commitment');
+  ok(lg.deliveryPromise('The canvas already holds the parish contacts you asked about.') === null,
+    'a status statement without a commitment verb stays silent');
+  ok(lg.deliveryPromise('I\'m pulling the source that records when the strait closed.') === null,
+    'a retrieval promise stays the LOOKUP net\'s (no artifact surface)');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

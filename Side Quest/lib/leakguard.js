@@ -113,6 +113,30 @@ function isUnkeptPromiseSay(text) {
 // verbatim… No tool calls needed." Lucas reads that as her thoughts and it reads deranged. Sentence-
 // scoped drop of clear envelope narration; her actual reasoning about the QUESTION stays.
 const _ENVELOPE_ECHO_RE = /\b(?:the (?:prompt|instruction|directive)s? (?:says?|provides?|specifi|state)|answer to give|must be delivered verbatim|paraphrased? but|do not (?:add|contradict) (?:any )?(?:facts|extra|it)|no tool calls? (?:are )?needed|reply only (?:with )?strict json|the required answer is)\b/i;
+// DELIVERY PROMISE (2026-07-23, the parish-canvas fiction): a say that commits to producing or
+// growing an ARTIFACT — "I'll keep adding the Louisiana parish contacts there as we collect them"
+// with a canvas/document named earlier in the say. Distinct from isUnkeptPromiseSay (a retrieval
+// in progress): delivery is future-tense, which the lookup net's I'll-guard excludes by design.
+// Measured after that live promise: ZERO parish canvas tabs existed — the promise connected to
+// nothing. Returns { topic } (the artifact's subject, good enough to title a tab) or null.
+// Built via new RegExp from ASCII-escaped source (’ = curly apostrophe) — a regex literal
+// carrying the raw curly quote tripped the file parser here while the identical pattern compiled
+// fine standalone; the escape removes the ambiguity for good.
+const _DELIVERY_RE = new RegExp(
+  "\\b(?:i(?:['\\u2019]ll| will| am going to|['\\u2019]m going to)|let me)\\s+(?:keep\\s+)?" +
+  '(?:add(?:ing)?|put(?:ting)?|compil(?:e|ing)|creat(?:e|ing)|assembl(?:e|ing)|collect(?:ing)?|track(?:ing)?|maintain(?:ing)?|build(?:ing)?|updat(?:e|ing))\\s+([^.!?\\n]{4,120})', 'i');
+const _ARTIFACT_SURFACE_RE = /\b(canvas|document|docs?|file|tracker|brief|list)\b/i;
+function deliveryPromise(text) {
+  const s = String(text == null ? '' : text);
+  const m = s.match(_DELIVERY_RE);
+  if (!m) return null;
+  if (/\?\s*$/.test(m[0])) return null;                                   // a question is not a commitment
+  if (!_ARTIFACT_SURFACE_RE.test(s)) return null;                         // artifact surface named somewhere in the say
+  let topic = String(m[1]).split(/\b(?:there|to the|in the|on the|into the|as we|as they|so that)\b/i)[0];
+  topic = topic.replace(/^\s*(?:the|a|an|that|this)\s+/i, '').replace(/\s+/g, ' ').trim().replace(/[.,;:]+$/, '');
+  return topic.length >= 6 ? { topic: topic.slice(0, 80) } : null;
+}
+
 function stripEnvelopeEcho(text) {
   const s = String(text || '');
   if (!s.trim()) return s;
@@ -182,4 +206,4 @@ function makeStreamFilter(emit) {
   };
 }
 
-module.exports = { isLeakyDirective, stripLeakedDirectives, stripPlanningLeak, isUnkeptPromiseSay, stripEnvelopeEcho, makeStreamFilter, _DIRSIG, _METASIG, _INTERNAL_TAG_RE, _PLAN_LEAD, _MECHANICS };
+module.exports = { isLeakyDirective, stripLeakedDirectives, stripPlanningLeak, isUnkeptPromiseSay, deliveryPromise, stripEnvelopeEcho, makeStreamFilter, _DIRSIG, _METASIG, _INTERNAL_TAG_RE, _PLAN_LEAD, _MECHANICS };

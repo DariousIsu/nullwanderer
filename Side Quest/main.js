@@ -3904,6 +3904,21 @@ async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
   } catch (e) { console.error('[canvas] emit failed:', e.message); return false; }
 }
 
+// DELIVERY-PROMISE artifact (Slice P3, PLAN_MAP §2): a conversation promise materializes as its own
+// doc-mode tab (tab_key promise-<slug>, stable across turns — later promises on the same topic land
+// in the SAME tab). Separate from canvasEmit because there is no focus id: the promise is the anchor.
+async function promiseArtifactEmit({ slug, title, markdown }) {
+  try {
+    if (!(await ensureEngine())) return false;
+    const callTool = pollCallTool();
+    const tabKey = `promise-${slug}`;
+    await callTool('saga_canvas_open_tab', { mode: 'DOC', tab_key: tabKey, title: String(title || 'Promised document').slice(0, 60) });
+    const r = await callTool('saga_canvas_add_block', { tab_key: tabKey, block_type: 'paragraph', data: { markdown: String(markdown || '') } });
+    canvasMirror(tabKey, 'DOC', String(title || 'Promised document').slice(0, 60), (r && r.block_id) || null, 'paragraph', { markdown: String(markdown || '') });
+    return true;
+  } catch (e) { console.error('[canvas] promise-artifact emit failed:', e.message); return false; }
+}
+
 // Live-GROW a SINGLE canvas block in place (the "building-project document" that fleshes out as work
 // runs): pre-assign a stable block_id, add it once, then saga_canvas_update_block(patch) on each refresh.
 // _canvasBlocks tracks the ids created this session (reset on reboot — a re-add is harmless).
@@ -7968,6 +7983,25 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           .catch(e => console.error('[main] promised-lookup failed:', e.message));
       }
     }
+
+    // DELIVERY-PROMISE NET (2026-07-23, the parish-canvas fiction — Slice P3, PLAN_MAP §2): her
+    // say committed to a real ARTIFACT ("I'll keep adding the Louisiana parish contacts there as
+    // we collect them") and nothing in the turn created one — measured after that live promise:
+    // ZERO parish canvas tabs among 57 docs. No chat path writes the canvas, so there is no tag
+    // to check for: the promise alone is the signal, mirroring the promised-lookup net one block
+    // up. The artifact materializes NOW — a doc-mode tab titled from the promise, seeded with the
+    // promising reply; later turns and lanes address the same promise-<slug> tab. Independent of
+    // followupFired: this creates a document, it does not send a message.
+    try {
+      const dp = require('./lib/leakguard').deliveryPromise(finalSaid || '');
+      if (dp && dp.topic) {
+        const slug = dp.topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+        const md = `_Materialized from her promise in conversation:_\n\n> ${String(finalSaid || '').replace(/\s+/g, ' ').slice(0, 400)}`;
+        promiseArtifactEmit({ slug, title: dp.topic, markdown: md })
+          .then((created) => { if (created) console.log(`[main] delivery-promise net → canvas "${dp.topic}" materialized (tab promise-${slug})`); })
+          .catch(() => {});
+      }
+    } catch {}
 
     // GENERAL TOOL ROUTER (Front/Cortex P3) — the cloud decides the surface for a lookup the front
     // didn't reach for and memory can't answer: open-web, OUR data (Echo), or nothing. Generalizes
