@@ -1315,10 +1315,11 @@ async function loadVRM() {
     // hole across her face with two white ovals hovering in it. Torn, not stylised. Her real features are far
     // better than anything I can draw over them, they already blink and lip-sync on the rig, and the Cortana
     // reference is a fully readable human face. So the geometry stays and gets SHADED; only clothes go.
-    // Also drop the three EYE OVERLAYS whose look lived entirely in their (now-stripped) alpha textures: the
+    // Also drop the eye overlays whose look lived entirely in their (now-stripped) alpha textures: the
     // occlusion cup and tear line drew as opaque BLACK over the eyes and the cornea as an opaque WHITE dome —
-    // together the "black eyes / no eyeballs" Lucas saw. Dropped, the eyeball itself shades directly and reads.
-    const DROP = /_CLOTH|Eye_Occlusion|Tearline|Cornea/i;
+    // together the "black eyes / no eyeballs" Lucas saw. And the EYELASH mesh, which drew as heavy black wings
+    // ("part of it are the lashes") — replaced by fake lash node-art (buildFaceStyle): bright roots + wisps.
+    const DROP = /_CLOTH|Eye_Occlusion|Tearline|Cornea|Eyelash/i;
     const seen = new Set();
     vrm.scene.traverse((o) => {
       if (!o.isMesh && !o.isSkinnedMesh) return;
@@ -1336,7 +1337,7 @@ async function loadVRM() {
     // reproportion FIRST, so every anchor, exclusion radius and region downstream describes the corrected
     // body rather than the one that was in the file.
 
-    reproportion(); findFeatures(); buildRegions(); buildDrawnFeatures();
+    reproportion(); findFeatures(); buildRegions(); buildDrawnFeatures(); buildFaceStyle();
     console.log('[kg3d] VRM skin ready —', vrmOccluders.length, 'meshes, scale', k.toFixed(1),
       '| head', REGION.head.length, 'heart', REGION.heart.length, 'body', REGION.body.length);
     return vrm;
@@ -1586,14 +1587,26 @@ function applyShellMaterial() {
           // the geometry: the disc facing the viewer is the green iris with a dark pupil at its centre, the ring
           // around it is the hair-coloured white, and a glassy catchlight keeps the eye wet rather than dead.
           else if (uKind < 3.5) {
-            float facing = abs(dot(normalize(vVN), normalize(-vVP)));
-            vec3  sclera = uHead * 0.85;                                            // whites take the HAIR colour
-            vec3  irisC  = vec3(0.16, 0.82, 0.42);                                  // green iris
-            float iris   = smoothstep(0.80, 0.90, facing);                         // front disc
-            float pupil  = smoothstep(0.965, 0.99, facing);                        // small dark centre
-            outc = mix(sclera, irisC, iris);
-            outc = mix(outc, vec3(0.02, 0.04, 0.03), pupil);
-            outc += vec3(0.85, 0.92, 1.0) * pow(max(0.0, facing - 0.55), 5.0) * 0.30;
+            // Not a flat fill (Lucas: "the eyes look weird because they are just some color fill"). The iris is
+            // given real STRUCTURE from the eyeball geometry: radial fibres, a darker limbal ring at the edge,
+            // and a centre-to-rim gradient. facing is the radial coordinate (1 at the pupil, down to 0 at the
+            // rim); the view-normal screen angle drives the fibres. Green calmed down off the neon.
+            vec3  N = normalize(vVN);
+            float facing = abs(dot(N, normalize(-vVP)));
+            float ang = atan(N.y, N.x);
+            float rad = sqrt(max(0.0, 1.0 - facing * facing));                      // 0 centre → 1 rim
+            vec3  sclera = uHead * 0.80;                                            // whites take the HAIR colour
+            vec3  irisC  = vec3(0.16, 0.60, 0.40);                                  // green iris, calmer than neon
+            float fib   = 0.80 + 0.20 * sin(ang * 32.0 + rad * 7.0);               // radial fibres
+            float grad  = mix(1.12, 0.66, smoothstep(0.0, 1.0, rad));              // brighter mid, darker rim
+            vec3  iris  = irisC * fib * grad;
+            float limbal = smoothstep(0.90, 0.80, facing);                         // dark ring at the iris edge
+            iris *= (1.0 - limbal * 0.55);
+            float irisM = smoothstep(0.82, 0.90, facing);                          // where the iris disc sits
+            float pupil = smoothstep(0.965, 0.99, facing);                         // small dark centre
+            outc = mix(sclera, iris, irisM);
+            outc = mix(outc, vec3(0.015, 0.03, 0.02), pupil);
+            outc += vec3(0.85, 0.92, 1.0) * pow(max(0.0, facing - 0.62), 6.0) * 0.28;   // glassy catchlight
           }
           else if (uKind < 4.5) outc = vec3(0.9, 0.95, 1.0);                        // catchlight (VRoid highlight)
           else if (uKind < 5.5) outc = rc * 0.10;                                   // brow / lash / eyeline
@@ -1672,6 +1685,87 @@ function updateDrawnFeatures(now) {
   set(drawnFeatures.eyeR, featureAnchors.right, featureAnchors.eyeR * 1.35 / 2.0, Math.max(0.08, blink));
   // the mouth OPENS with her voice — the one feature that has to move to read as speech
   set(drawnFeatures.mouth, featureAnchors.mouth, featureAnchors.mouthR, 0.12 + face.mouthOpen * 1.5);
+}
+// ============================================================================================================
+// FAKE STYLE-NODES ON THE FACE — the lashes, made of nodes + connections like the rest of her (Lucas).
+// ============================================================================================================
+// The solid eyelash mesh is dropped (it drew as heavy black wings); the lash line is redrawn as node-art:
+// a bright mote at the base of each lash with a fine connection "wisp" that trails off to a dead end. It rides
+// the upper-lid vertices (found by the blink diff), so it blinks and turns WITH her. First of the north-star's
+// "fake nodes for style on the face" — and the same trick will seed the conversational ripple later.
+let faceStyle = null;
+const LASH_COL = new THREE.Color(0xc9b8ff);        // lash node-art: a light violet, tied to her hair/sclera
+function buildFaceStyle() {
+  if (faceStyle) { scene.remove(faceStyle.rootPts); scene.remove(faceStyle.wispLines); faceStyle.rootGeo.dispose(); faceStyle.wispGeo.dispose(); faceStyle = null; }
+  if (!featureAnchors) return;
+  const mesh = featureAnchors.eyeMesh || featureAnchors.mesh; if (!mesh) return;
+  const v = new THREE.Vector3();
+  const worldOf = (i) => { mesh.getVertexPosition(i, v); return v.clone().applyMatrix4(mesh.matrixWorld); };
+  const lashes = [];
+  for (const pair of [['L', featureAnchors.left], ['R', featureAnchors.right]]) {
+    const eye = pair[0], ids = pair[1]; if (!ids || !ids.length) continue;
+    const pts = ids.map((i) => ({ i, p: worldOf(i) }));
+    const cen = new THREE.Vector3(); for (const q of pts) cen.add(q.p); cen.divideScalar(pts.length);
+    const upper = pts.filter((q) => q.p.y >= cen.y).sort((a, b) => a.p.x - b.p.x);   // the upper lid = the lash line
+    const src = upper.length ? upper : pts;
+    const step = Math.max(1, Math.floor(src.length / 12));                            // ~12 lashes per eye, even along the lid
+    for (let k = 0; k < src.length; k += step) lashes.push({ i: src[k].i, eye });
+  }
+  const N = lashes.length; if (!N) return;
+  const rootGeo = new THREE.BufferGeometry(); rootGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+  const wispGeo = new THREE.BufferGeometry();
+  wispGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 6), 3));
+  wispGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(N * 6), 3));
+  const rootPts = new THREE.Points(rootGeo, new THREE.PointsMaterial({ map: SPARK_TEX, color: LASH_COL.getHex(), size: 8, sizeAttenuation: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }));
+  const wispLines = new THREE.LineSegments(wispGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }));
+  rootPts.frustumCulled = false; wispLines.frustumCulled = false; rootPts.renderOrder = 7; wispLines.renderOrder = 7;
+  scene.add(rootPts); scene.add(wispLines);
+  faceStyle = { lashes, mesh, rootGeo, rootPts, wispGeo, wispLines, N, _sized: 0 };
+  updateFaceStyle(performance.now());
+}
+const _fsV = new THREE.Vector3(), _fsQ = new THREE.Quaternion(), _fsUp = new THREE.Vector3(), _fsDir = new THREE.Vector3(), _fsRight = new THREE.Vector3(), _fsTmp = new THREE.Vector3();
+function updateFaceStyle() {
+  if (!faceStyle) return;
+  const on = SHAPE === 'skin' && vrmReady;
+  faceStyle.rootPts.visible = on; faceStyle.wispLines.visible = on;
+  if (!on) return;
+  const mesh = faceStyle.mesh, L = faceStyle.lashes;
+  const head = vrmModel.humanoid && vrmModel.humanoid.getNormalizedBoneNode('head');
+  if (head) head.getWorldQuaternion(_fsQ); else _fsQ.identity();
+  _fsUp.set(0, 1, 0).applyQuaternion(_fsQ);                                          // her up, so wisps splay up even when she turns
+  // live root world positions + per-eye centre
+  const world = new Array(L.length); const cenL = new THREE.Vector3(), cenR = new THREE.Vector3(); let nL = 0, nR = 0;
+  for (let k = 0; k < L.length; k++) {
+    mesh.getVertexPosition(L[k].i, _fsV); _fsV.applyMatrix4(mesh.matrixWorld); world[k] = _fsV.clone();
+    if (L[k].eye === 'L') { cenL.add(_fsV); nL++; } else { cenR.add(_fsV); nR++; }
+  }
+  if (nL) cenL.divideScalar(nL); if (nR) cenR.divideScalar(nR);
+  let eyeR = 1; for (let k = 0; k < world.length; k++) eyeR = Math.max(eyeR, world[k].distanceTo(L[k].eye === 'L' ? cenL : cenR));
+  const len = eyeR * 1.05;
+  // each eye's lashes sweep up-and-OUTWARD (toward the temple), never toward the nose — a consistent sweep reads
+  // as lashes where a radial fan from the eye centre read as a sunburst. `_fsRight` is her right in world space.
+  _fsRight.set(1, 0, 0).applyQuaternion(_fsQ);
+  const midX = cenL.clone().add(cenR).multiplyScalar(0.5);
+  const sideL = Math.sign(cenL.clone().sub(midX).dot(_fsRight)) || -1;
+  const sideR = Math.sign(cenR.clone().sub(midX).dot(_fsRight)) || 1;
+  const rp = faceStyle.rootGeo.attributes.position.array, wp = faceStyle.wispGeo.attributes.position.array, wc = faceStyle.wispGeo.attributes.color.array;
+  for (let k = 0; k < world.length; k++) {
+    const w = world[k], c = L[k].eye === 'L' ? cenL : cenR;
+    rp[k * 3] = w.x; rp[k * 3 + 1] = w.y; rp[k * 3 + 2] = w.z;
+    // up (0.92) + outward toward the temple (0.42) + a gentle fan from the lash's own offset (0.16)
+    _fsDir.copy(_fsUp).multiplyScalar(0.92).addScaledVector(_fsRight, (L[k].eye === 'L' ? sideL : sideR) * 0.42);
+    _fsTmp.copy(w).sub(c); if (_fsTmp.lengthSq() > 1e-6) _fsDir.addScaledVector(_fsTmp.normalize(), 0.16);
+    _fsDir.normalize();
+    const o = k * 6;
+    wp[o] = w.x; wp[o + 1] = w.y; wp[o + 2] = w.z;
+    wp[o + 3] = w.x + _fsDir.x * len; wp[o + 4] = w.y + _fsDir.y * len; wp[o + 5] = w.z + _fsDir.z * len;
+    wc[o] = LASH_COL.r; wc[o + 1] = LASH_COL.g; wc[o + 2] = LASH_COL.b;                // bright at the root…
+    wc[o + 3] = 0; wc[o + 4] = 0; wc[o + 5] = 0;                                        // …dead end at the tip
+  }
+  faceStyle.rootGeo.attributes.position.needsUpdate = true;
+  faceStyle.wispGeo.attributes.position.needsUpdate = true; faceStyle.wispGeo.attributes.color.needsUpdate = true;
+  const wantSize = Math.max(3, eyeR * 0.5);
+  if (Math.abs(faceStyle._sized - wantSize) > 0.5) { faceStyle.rootPts.material.size = wantSize; faceStyle._sized = wantSize; }
 }
 // ============================================================================================================
 // ROUTED LINKS — a connection travels along her, never across the gap beside her.
@@ -2783,6 +2877,7 @@ function stepFrame(now) {
     updateVRMFace(now, dt); updateSkin();
   }
   updateDrawnFeatures(now);     // the drawn eyes/mouth hide themselves outside skin mode
+  updateFaceStyle();            // the fake lash node-art rides the lids (hides itself outside skin mode)
   // Position syncing only while the layout is actually moving. `_stillFrames` keeps a couple of frames of
   // sync after it stops so the last motion lands, and any reheat (new data, a mint) restarts it.
   // `skin` ALWAYS syncs: every node is pinned with fx/fy/fz, so the simulation cools within a second and
