@@ -8552,12 +8552,23 @@ const operatorTools = {
   // follow a link it saw — instead of the only-move-is-a-new-search loop.
   open_page: async ({ url } = {}) => {
     try {
+      const _sl = require('./lib/site_ledger');
+      const _host = _sl.hostOf(String(url || ''));
+      // DEAD-HOST BREAKER (2026-07-23, akiak-ak.gov): a host whose profile shows a fresh streak of
+      // full-ladder failures and NO success on any door ever is skipped OUTRIGHT — the concession
+      // names the count and the retry time so the operator pivots to another lead instead of
+      // re-burning browser+fetch+wayback+vision on every page of a dead site. After the retry
+      // window the verdict clears and the full ladder probes again.
+      const _down = (() => { try { return _sl.hostDown(_host); } catch { return null; } })();
+      if (_down) {
+        const learned = (() => { try { return _sl.accessLine(_host); } catch { return null; } })();
+        console.log(`[site-access] breaker: ${_host} down (${_down.fails} door failures, 0 successes) — skipped, retry in ~${Math.max(1, Math.ceil((_down.retryAtTs - Date.now()) / 60000))} min`);
+        return `${url} SKIPPED — host ${_host} is unreachable right now (${_down.fails} straight door failures, no door has ever worked; automatic re-probe in ~${Math.max(1, Math.ceil((_down.retryAtTs - Date.now()) / 60000))} min). Work a DIFFERENT lead until then.${learned ? `\n${learned}` : ''}`;
+      }
       const o = await webLib.open(String(url || ''));
       // BLOCKER ESCALATION (2026-07-23, Lucas: "very few websites she shouldn't be able to fully
       // access"): a blocked/dead page no longer concedes — the ladder tries plain fetch → archive
       // snapshot → her vision, and the result is LABELED with which door worked.
-      const _sl = require('./lib/site_ledger');
-      const _host = _sl.hostOf(String(url || ''));
       // ACCESS PROFILE (Lucas: "factor the failures into mechanisms for planning"): every door's
       // outcome updates the host's learned map; the ladder leads with the door that worked last
       // time, and the concession carries the site notes so the next planner sees the mechanics.

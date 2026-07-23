@@ -67,6 +67,24 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
     const many = Array.from({ length: 60 }, (_, i) => `https://big.gov/p${i}`);
     const bp = SL.buildPlan('https://big.gov/index', many, { now: T0 });
     ok(bp.urls.length <= SL.PLAN_MAX_URLS, 'a plan is bounded — a checklist, never a full mirror');
+
+    // --- the DEAD-HOST BREAKER (2026-07-23, akiak-ak.gov: 6 straight pages × 4 doors burned) ---
+    ok(SL.hostDown('never-seen.example') === null, 'hostDown: unknown host → null (no verdict without a profile)');
+    for (let i = 0; i < 4; i++) {
+      SL.recordAccess(`https://deadtown-ak.gov/p${i}`, { door: 'browser', ok: false, now: T0 });
+      SL.recordAccess(`https://deadtown-ak.gov/p${i}`, { door: 'vision', ok: false, now: T0 });
+    }
+    const dd = SL.hostDown('deadtown-ak.gov', { now: T0 + 1000 });
+    ok(dd && dd.down === true && dd.fails === 8 && dd.retryAtTs === T0 + SL.DOWN_RETRY_MS,
+      'hostDown: ≥8 fresh failures, no success ever → DOWN, with the retry time named');
+    ok(SL.hostDown('deadtown-ak.gov', { now: T0 + SL.DOWN_RETRY_MS + 1000 }) === null,
+      'hostDown: the streak ages past the retry window → probe again (deferred, never gone)');
+    SL.recordAccess('https://deadtown-ak.gov/p9', { door: 'archive snapshot', ok: true, now: T0 });
+    ok(SL.hostDown('deadtown-ak.gov', { now: T0 + 1000 }) === null,
+      'hostDown: ANY door success ever → never down (bestDoor leads the ladder instead)');
+    for (let i = 0; i < 3; i++) SL.recordAccess('https://thin-fails.gov/x', { door: 'browser', ok: false, now: T0 });
+    ok(SL.hostDown('thin-fails.gov', { now: T0 }) === null,
+      'hostDown: below the fail floor → not down (one bad page is not a dead site)');
   } catch (e) {
     fail++; console.error('  ✗ threw:', e.stack || e.message);
   }

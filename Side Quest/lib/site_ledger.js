@@ -163,6 +163,30 @@ function bestDoor(host) {
   }
   return best;
 }
+// ── the DEAD-HOST BREAKER (2026-07-23, akiak-ak.gov): six straight pages, every door failed on
+// each — the ladder re-burned browser + plain fetch + wayback + VISION on every new page of a host
+// that had never once answered, and the profile knew the whole time. A host with ≥ DOWN_MIN_FAILS
+// recorded failures, ZERO successes on any door ever, and a FRESH newest failure is DOWN: callers
+// skip the ladder outright and say so honestly. DEFERRAL, NOT DISAPPEARANCE (no artificial caps):
+// once the newest failure ages past DOWN_RETRY_MS the verdict clears and the next visit probes the
+// full ladder again — a site that comes back up is found within the window.
+const DOWN_MIN_FAILS = 8;                       // two full page attempts (browser + 3 ladder doors each)
+const DOWN_RETRY_MS = 6 * 60 * 60 * 1000;
+function hostDown(host, { now = Date.now() } = {}) {
+  const p = profileFor(host);
+  if (!p || !p.doors) return null;
+  let fails = 0, newestFail = 0;
+  for (const d of Object.values(p.doors)) {
+    if (!d) continue;
+    if (d.last_ok_ts) return null;              // any door EVER worked → not down; bestDoor leads instead
+    fails += Number(d.fail) || 0;
+    if ((d.last_fail_ts || 0) > newestFail) newestFail = d.last_fail_ts;
+  }
+  if (fails < DOWN_MIN_FAILS) return null;
+  if (now - newestFail > DOWN_RETRY_MS) return null;   // stale streak → probe again (deferred, never gone)
+  return { down: true, fails, retryAtTs: newestFail + DOWN_RETRY_MS };
+}
+
 // One line of learned site mechanics for prompts/log — what worked, what keeps failing, the notes.
 function accessLine(host) {
   const p = profileFor(host);
@@ -183,4 +207,4 @@ function planLine(host) {
   return `[site-digest] ${plan.host}: ${done}/${plan.urls.length} pages digested${done < plan.urls.length ? ' — still working through it' : ' — complete'}`;
 }
 
-module.exports = { normalizeUrl, hostOf, isSerp, seen, record, shouldSkip, buildPlan, getPlan, markDone, nextPending, planLine, profileFor, recordAccess, bestDoor, accessLine, DEFAULT_TTL_MS, SERP_TTL_MS, PLAN_MAX_URLS };
+module.exports = { normalizeUrl, hostOf, isSerp, seen, record, shouldSkip, buildPlan, getPlan, markDone, nextPending, planLine, profileFor, recordAccess, bestDoor, accessLine, hostDown, DEFAULT_TTL_MS, SERP_TTL_MS, PLAN_MAX_URLS, DOWN_MIN_FAILS, DOWN_RETRY_MS };
