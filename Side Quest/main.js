@@ -7926,7 +7926,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // detectors-vs-comprehension trap, keyed on HIS message). The PROMISE itself is the signal,
     // and her say names the lookup's object better than his message does (she already resolved
     // "this assertion" to the concrete thing). Run the lookup she announced, answer in this flow.
-    if (!followupFired && noRetrievalTag && require('./lib/leakguard').isUnkeptPromiseSay(finalSaid || '')) {
+    // …but an ACKNOWLEDGMENT of future work ("Understood – I'll now target…") is a plan, not an
+    // in-progress retrieval claim — running a lookup on that sentence produced a junk query (live
+    // 12:37). The net fires only on the in-progress shape ("I'm pulling/checking/looking up…").
+    const _inProgressPromise = (s) => require('./lib/leakguard').isUnkeptPromiseSay(s)
+      && !/^\s*(understood|got it|okay|ok\b|great|sure|will do|sounds good)/i.test(s)
+      && !/\bi['']?ll\b/i.test(s.slice(0, 40));
+    if (!followupFired && noRetrievalTag && _inProgressPromise(finalSaid || '')) {
       const q = String(finalSaid || '')
         .replace(/^[^a-zA-Z0-9]*(?:i'?m|i am|i'?ll|i will|let me|just|now|okay|alright)\b\s*/i, '')
         .replace(/\b(?:pulling|fetching|gathering|grabbing|retrieving|checking|looking(?:\s+(?:up|into|at))?)\b\s*/gi, '')
