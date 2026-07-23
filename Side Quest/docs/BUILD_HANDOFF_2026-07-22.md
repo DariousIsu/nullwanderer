@@ -1,4 +1,23 @@
-# Build handoff — engine/autonomy lane — 2026-07-22 (pre-compact)
+# Build handoff — engine/autonomy lane — 2026-07-22 (updated through the night of 07-22→23)
+
+## ⓪ NIGHT-END STATE (2026-07-23 ~01:30) — read this first
+Everything through slice 4 + O0.h is COMMITTED, gate-green: slices 1-3a, rehearsal R1 (+the junction
+incident, disclosed in 68e9704), detector fixes (a086607/48950ea), the organ catalog complete
+(e9db165/03da2d1/19325e5/6567522 — O0-O9 + §6 dispatcher's lessons + §7 needs lens), audible
+deferrals (fc8e84f), LINES OF INQUIRY + coexistence + §6 wires (ae02ef1), conversation HARVEST
+(f89d0f2). ⭐STANDING RULE (§7): when engineering ranks and Lucas's needs conflict, the needs list
+wins (memory `how-lucas-works` carries his needs verbatim). ⭐CONCURRENCY RULING: ≤3 DISTINCT models
+in flight; same-model concurrency unbounded.
+**Boot42 runs pre-slice-4 code — boot43 brings inquiry/coexistence/harvest live.** Boot43 checklist:
+`[autonomy] chose=` AT LAST (boot40+42 measured ZERO decisions all day) · an inquiry opening then
+ADVANCING across touches under the same #N · `[autonomy] deferred: <reason>` on starved stretches ·
+`running ALONGSIDE the directed focus` · `[harvest] conversation #N → …` after the nightly promote.
+**NEXT BUILD = slice 4b, the mid-conversation dig** (catalog §7): a chat turn forks an inquiry touch
+whose origin is the conversation; the reply goes out normally; the finding returns minutes later
+addressed to the talk that asked. Touches the chat turn path — build it in a FRESH session with this
+handoff + the catalog + memories. ⚠️smoke_activity_coverage (graph lane's) flaked under gate
+contention twice tonight, green standalone both times — their result line ("SMOKE PASSED") may not
+match the gate regex dialect; flagged for their lane. ⚠️smoke_editor_roundtrip needs the app UP.
 
 Written by the build lane (took control from the conversation lane per
 `docs/AUDIT_HANDOFF_2026-07-22.md`) for the post-compact context. Deep design rationale lives in
