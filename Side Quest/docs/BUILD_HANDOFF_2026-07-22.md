@@ -154,12 +154,12 @@ interrogative filler into _LEASH_STOP; (b) main.js dl-ingest — the .gov author
 _docLeashOk has carried since 07-17 now guards this gate too (5th hand-copied-twin drift);
 (c) smoke_soft_leash 13→20 tests incl. the exact regression. Live-verified: leash 27→53 tokens,
 doc #8443 intersection empty→"parish".
-**BOOT70 FIRST ACTION (do this or the roster strands)**: boot69's OLD-code sweep will reach #8443
-(it sits at position 2 in findUndecomposed, not yet attempted as of this writing), leash-skip it,
-and markAttempted — which BLOCKS re-read forever. After the boot70 reboot, remove 8443 from meta
-`decompose_sweep:attempted` (JSON id array; small operational marker, not evidence) → the sweep
-decomposes it in its first ticks (budget 90/400 spent, ~fits) → inquiry #1's office lists complete
-→ close → the FIRST harvest-born homecoming.
+**BOOT70 FIRST ACTION — RESOLVED UNNEEDED (2026-07-23 ~14:5x)**: the boot69→70 shutdown beat the
+old-code sweep to #8443 — verified with the app down: `decompose_sweep:attempted` does NOT contain
+8443, no meta surgery needed. It sat at position 3 in findUndecomposed at boot70 launch → the
+fixed-leash sweep decomposes it within the first ~2 ticks (budget 94/400 spent, fits). WATCH FOR:
+`[decomp-sweep]` reading 8443 with a mint count (NOT a "[doc-decomp] SKIP off-domain doc #8443")
+→ inquiry #1's office lists complete → close → the FIRST harvest-born homecoming.
 
 **⭐POST-COMPACT AGENDA (Lucas, verbatim intent — the next conversation's spine)**:
 1. "Why she wasn't able to add new tools to her own program" — the roster touch NAMED its need
