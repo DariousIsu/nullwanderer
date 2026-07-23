@@ -15,16 +15,34 @@ ADVANCING across touches under the same #N · `[autonomy] deferred: <reason>` on
 **BOOT43 VERIFIED (07-23 ~01:50-02:40):** driver started · `chose=corroborate` then `chose=build`
 (both expect=NOT-met judged HONESTLY, constraints crystallized — 2c live) · `running ALONGSIDE the
 directed focus` · week 11 lines · conversation backfill 10/pass. No inquiry opened yet at cycle time.
-**✅SLICE 4b SHIPPED (`d2df2d3`, 07-23 ~02:30 — needs boot44): THE MID-CONVERSATION DIG** (catalog
-§7): `<dig>question</dig>` in a reply forks a LINE OF INQUIRY born from the asking turn (§6 L1: the
-return address rides the OBJECT); first touch on a pool slot NOW, or banked for the tick; the first
-real finding comes home through the announce door addressed to the talk, delivered once
-(inquiries.dig_delivered_ts); dry first touch reports honestly. Boot44 checklist adds: `[dig] forked
-from conversation turn #N` · `[dig] touch complete` · `[dig] returned to the conversation` ·
-`[dig] deferred: no-free-slot`. NEXT BUILD = slice 5 (O1 skill shelf + O2 rehearsal driver).
-⚠️smoke_activity_coverage (graph lane's) flaked under gate contention THREE times tonight, green
-standalone all three — their result line ("SMOKE PASSED") may not match the gate regex dialect;
-flagged for their lane. ⚠️smoke_editor_roundtrip needs the app UP.
+**✅SLICE 4b SHIPPED (`d2df2d3`, 07-23 ~02:30): THE MID-CONVERSATION DIG** (catalog §7): `<dig>` in
+a reply forks a LINE OF INQUIRY born from the asking turn; first touch on a pool slot or banked for
+the tick; the first real finding comes home addressed to the talk, delivered once
+(inquiries.dig_delivered_ts). Live on boot44+; no fork observed yet (every ask was answerable
+in-turn — correct restraint).
+**07-23 MORNING (post-watch): the REPAIR SWEEP + SLICE 5, on Lucas's "repair the findings and
+continue the build".** `dd7903e` planning-leak fix (space-less fragments + retrieval vocab) ·
+`86fdfb4` repair sweep: REFERENT GUARD (grow anchors — dossier-described kind vs stored/registry
+kind; mismatch holds everything), SALIENCE ANCHOR (wiki tier rides last-6-turns proper nouns — the
+Pasig fix), DECISION-TIME CONSTRAINTS + expect sized to one bounded run (the 0-for-4 gap), email
+kill-switch checked BEFORE the second poll · `807cb4e` guard v2 (FEC-tagged anchors asserted in the
+dossier prompt + entertainment-DB sources can never ground a committee claim — the
+Friends-of-Schumer hole, same hour it appeared) · `f58eb65` SLICE 5: O1 SKILL SHELF (lib/skills.js
+— registry over recipes/procedures/shapes; trigger lines ride manifest+briefs, bodies pull via
+<skill name/> chat tag or skill_pull operator tool; procedures self-promote at met≥3) + O2
+REHEARSAL DRIVER (lib/rehearsal_driver.js — one journaled run, park/resume, raw failure rides the
+next attempt; green = full sandbox gate → R2 proposal-card DOC, stuck crystallizes a constraint;
+autonomy 'rehearse' move advances, never starts). **Boot46 brings guard v2 + slice 5 live.**
+Boot46 checklist: `[skills] shelf synced — 5 flow recipe(s)` at boot · HER SKILLS in the manifest ·
+first `[autonomy] chose=rehearse → nothing to advance` (no run yet — correct) · REFERENT MISMATCH
+lines when collisions recur · expect-verify still 0-for-N? → the next lever is verifyExpect's
+"judge strictly" bar (soften to grade the INCREMENT against the sized expect).
+**NEXT BUILD = slice 6 (O3 structured returns + O4 approval surface).** OPEN COUNTERS: [truth]
+lookup failed @realDonaldTrump ×2 boots · decompose double-read (chip filed) · dry-PAC frontier
+waste (chip filed) · namesake-edge cleanup on 3 committees (chip filed).
+⚠️smoke_activity_coverage (graph lane's) flaked under gate contention SIX times over the night,
+green standalone every time — their result line ("SMOKE PASSED") may not match the gate regex
+dialect; flagged for their lane. ⚠️smoke_editor_roundtrip needs the app UP.
 
 Written by the build lane (took control from the conversation lane per
 `docs/AUDIT_HANDOFF_2026-07-22.md`) for the post-compact context. Deep design rationale lives in
