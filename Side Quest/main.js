@@ -9301,7 +9301,7 @@ async function seedBeatRun(beat, { background = false, targetsOverride = null } 
       focusRow = focusLib.setCurrent(adopted.id, { directed: true }) || adopted;
       fid = adopted.id;
     } else {
-      const r = await focusLib.setFromDirective(beat.goal);
+      const r = await focusLib.setFromDirective(beat.goal, null, { origin: 'beat' });
       if (!r || !r.focus) return { ok: false, reason: 'focus not set' };
       fid = r.focus.id; focusRow = r.focus;
     }

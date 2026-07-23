@@ -95,7 +95,9 @@ function isDirected(focus) {
 // directed assignment DISPLACES a self-spawned musing focus (user priority > her own wandering), but
 // is idempotent against an already-active directed focus on a near-identical goal (a follow-up like
 // "start now" must not spawn a duplicate). Returns { focus, goal } or null.
-async function setFromDirective(goal, sourceTurnId = null) {
+// origin: 'user' for a real directive; the beat scheduler passes 'beat' so the log tells the truth
+// about WHO seeded the focus (the directed MECHANICS — displacement, no refractory — are shared by design).
+async function setFromDirective(goal, sourceTurnId = null, { origin = 'user' } = {}) {
   const g = String(goal || '').trim();
   if (g.length < 6) return null;
   const active = getCurrent();
@@ -113,7 +115,7 @@ async function setFromDirective(goal, sourceTurnId = null) {
   }
   const row = db.insertOpenThread({ content: g, sourceTurnId });
   const focus = setCurrent(row.id, { directed: true });
-  console.log(`[focus] DIRECTED set from user → #${row.id}: ${g.slice(0, 80)}`);
+  console.log(`[focus] DIRECTED set from ${origin} → #${row.id}: ${g.slice(0, 80)}`);
   return { focus, goal: g };
 }
 
