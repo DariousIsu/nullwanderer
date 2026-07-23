@@ -12,12 +12,19 @@ in flight; same-model concurrency unbounded.
 `[autonomy] chose=` AT LAST (boot40+42 measured ZERO decisions all day) · an inquiry opening then
 ADVANCING across touches under the same #N · `[autonomy] deferred: <reason>` on starved stretches ·
 `running ALONGSIDE the directed focus` · `[harvest] conversation #N → …` after the nightly promote.
-**NEXT BUILD = slice 4b, the mid-conversation dig** (catalog §7): a chat turn forks an inquiry touch
-whose origin is the conversation; the reply goes out normally; the finding returns minutes later
-addressed to the talk that asked. Touches the chat turn path — build it in a FRESH session with this
-handoff + the catalog + memories. ⚠️smoke_activity_coverage (graph lane's) flaked under gate
-contention twice tonight, green standalone both times — their result line ("SMOKE PASSED") may not
-match the gate regex dialect; flagged for their lane. ⚠️smoke_editor_roundtrip needs the app UP.
+**BOOT43 VERIFIED (07-23 ~01:50-02:40):** driver started · `chose=corroborate` then `chose=build`
+(both expect=NOT-met judged HONESTLY, constraints crystallized — 2c live) · `running ALONGSIDE the
+directed focus` · week 11 lines · conversation backfill 10/pass. No inquiry opened yet at cycle time.
+**✅SLICE 4b SHIPPED (`d2df2d3`, 07-23 ~02:30 — needs boot44): THE MID-CONVERSATION DIG** (catalog
+§7): `<dig>question</dig>` in a reply forks a LINE OF INQUIRY born from the asking turn (§6 L1: the
+return address rides the OBJECT); first touch on a pool slot NOW, or banked for the tick; the first
+real finding comes home through the announce door addressed to the talk, delivered once
+(inquiries.dig_delivered_ts); dry first touch reports honestly. Boot44 checklist adds: `[dig] forked
+from conversation turn #N` · `[dig] touch complete` · `[dig] returned to the conversation` ·
+`[dig] deferred: no-free-slot`. NEXT BUILD = slice 5 (O1 skill shelf + O2 rehearsal driver).
+⚠️smoke_activity_coverage (graph lane's) flaked under gate contention THREE times tonight, green
+standalone all three — their result line ("SMOKE PASSED") may not match the gate regex dialect;
+flagged for their lane. ⚠️smoke_editor_roundtrip needs the app UP.
 
 Written by the build lane (took control from the conversation lane per
 `docs/AUDIT_HANDOFF_2026-07-22.md`) for the post-compact context. Deep design rationale lives in
