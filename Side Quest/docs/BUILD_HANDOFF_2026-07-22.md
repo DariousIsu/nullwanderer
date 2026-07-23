@@ -156,10 +156,17 @@ _docLeashOk has carried since 07-17 now guards this gate too (5th hand-copied-tw
 doc #8443 intersection empty→"parish".
 **BOOT70 FIRST ACTION — RESOLVED UNNEEDED (2026-07-23 ~14:5x)**: the boot69→70 shutdown beat the
 old-code sweep to #8443 — verified with the app down: `decompose_sweep:attempted` does NOT contain
-8443, no meta surgery needed. It sat at position 3 in findUndecomposed at boot70 launch → the
-fixed-leash sweep decomposes it within the first ~2 ticks (budget 94/400 spent, fits). WATCH FOR:
-`[decomp-sweep]` reading 8443 with a mint count (NOT a "[doc-decomp] SKIP off-domain doc #8443")
-→ inquiry #1's office lists complete → close → the FIRST harvest-born homecoming.
+8443, no meta surgery needed.
+**⭐SECOND STARVATION FOUND + FIXED `c141cc1` (boot70, ~15:3x)**: my "first ~2 ticks" claim was
+WRONG — it read findUndecomposed's id-order; nextBatch re-sorts CHEAPEST-FIRST, and #8443
+(1.47M ch) sat at cost-position 359/380 with fresh small landings outranking it forever. Same
+defect class as the leash, next organ over: the backlog reader was ALSO blind to assigned
+inquiries. Fix: focus.inquiryVocabTokens() (ONE definition, leash + sweep share it) + nextBatch
+pulls ONE inquiry-title-matched doc per batch to the front (budget still binds). Smokes 29+47.
+NEEDS BOOT71 to go live. Also: boot70's sweep IS healthy (first tick delayed past Echo attach —
+silence was innocent); smoke_cognition 11th call mocked (news-bucket time-bomb, 7 calls remain).
+WATCH ON BOOT71: `[decomp-sweep]` reads 8443 FIRST in its batch (NOT a "[doc-decomp] SKIP") →
+inquiry #1's office lists complete → close → the FIRST harvest-born homecoming.
 
 **⭐POST-COMPACT AGENDA (Lucas, verbatim intent — the next conversation's spine)**:
 1. "Why she wasn't able to add new tools to her own program" — the roster touch NAMED its need
