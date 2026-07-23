@@ -175,6 +175,7 @@ const smokes = [
   'smoke_estimate_correction.js',
   'smoke_poll.js',
   'smoke_activity.js',
+  'smoke_activity_coverage.js',   // every kg:activity kind must reach a gesture — catches log-without-visual
   'smoke_canvas_route.js',
   'smoke_leakguard.js',
   'smoke_research.js',

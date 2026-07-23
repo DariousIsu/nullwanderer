@@ -115,6 +115,28 @@ const MIGRATIONS = [
     last_used_ts INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS idx_procedures_status ON procedures(status, kind)`,
+  // LINES OF INQUIRY (catalog O0 — lib/inquiry.js). The unit of her autonomous work stops being a
+  // tick and becomes a QUESTION that persists: evidence appends (never rolling-rewritten), the
+  // model writes next_step at the end of every touch, and the next touch starts where this one
+  // stopped. Boot40 measured the disease this cures: zero model decisions against ~800 code-picked
+  // moves — continuity was structurally impossible, so the background read as a scan schedule.
+  `CREATE TABLE IF NOT EXISTS inquiries (
+    id INTEGER PRIMARY KEY,
+    question TEXT NOT NULL,
+    born_from TEXT,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','parked','closed_answered','closed_dead_end')),
+    evidence TEXT,
+    gist TEXT,
+    open_leads TEXT,
+    next_step TEXT,
+    touches INTEGER NOT NULL DEFAULT 0,
+    expect_trail TEXT,
+    created_ts INTEGER NOT NULL,
+    last_touched_ts INTEGER,
+    closed_ts INTEGER,
+    answer TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status, last_touched_ts)`,
   `CREATE INDEX IF NOT EXISTS idx_monologue_type_ts ON monologue(type, ts)`,
   `CREATE TABLE IF NOT EXISTS commitments (
     id INTEGER PRIMARY KEY,
@@ -2221,7 +2243,11 @@ function recordKgObservation({ feed, sourceEntity, relation = null, target = nul
        (feed, source_entity, relation, target, value, url, grade, confidence, kind, status, substantiation_state, frame, entity_type, obs_key, captured_at)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(feed, sourceEntity, relation, target, value, url, grade, confidence, kind, status, substantiationState, frame, entityType, obsKey, ts);
-  if (info.changes > 0) _kgTap('observe', sourceEntity + (relation ? ' ' + relation + (target ? ' ' + target : '') : ''));
+  // The anchor must be an OBJECT NAME, not a sentence. This tap used to concatenate subject+relation+target
+  // into one string, which no node id could ever equal — so the graph panel logged every observation and drew
+  // none of them. Subject and target ride their own fields now (the relation is carried alongside, for the
+  // log row), which lets the surface draw the LINK an observation actually asserts.
+  if (info.changes > 0) _kgTap('observe', sourceEntity, { anchor2: target || null, rel: relation || null });
   return { id: info.lastInsertRowid, inserted: info.changes > 0 };
 }
 function listKgObservations({ sourceEntity = null, feed = null, status = null, limit = 200 } = {}) {

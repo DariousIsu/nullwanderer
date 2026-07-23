@@ -49,6 +49,9 @@
     .logrow .db { flex: none; font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px; letter-spacing: .04em; }
     .logrow .db.st { color: #c4b5fd; background: #a78bfa26; } .logrow .db.lt { color: #7dd3fc; background: #38bdf826; }
     .logrow .k { flex: none; font-weight: 600; }
+    /* an event that produced no gesture is dimmed and says so, so the log never silently outruns the picture */
+    .logrow.nodraw { opacity: .48; }
+    .logrow .nd { flex: none; font-size: 9px; color: #6b7789; border: 1px solid #33405480; border-radius: 3px; padding: 0 3px; letter-spacing: .03em; }
     /* elegant wrap: the anchor text takes the rest of the row and wraps onto indented continuation lines */
     .logrow .a { color: #8b98ad; flex: 1 1 100%; min-width: 0; margin-left: 24px; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
     /* hover tooltip: what a node IS, at a glance, following the cursor */

@@ -46,23 +46,39 @@ const KIND_META = {
   'encounter': ['evidence', '#7dd3fc'], 'refute': ['refuted', '#f87171'],
 };
 const pad2 = (n) => (n < 10 ? '0' + n : '' + n);
-function logActivity(evt) {
+// THE LOG MUST NOT OUTRUN THE PICTURE SILENTLY (Lucas, 2026-07-22: "I am seeing so many more actions in the
+// log than are actually taking place on the visual"). He was right, and the honest half of the fix is here:
+// the dispatcher now returns a VERDICT, a row whose event drew nothing is dimmed and tagged, and the header
+// counts both. A gap between the two numbers is then a readable fact about how much of her memory is off
+// screen — not an unexplained mismatch between two panels that are supposed to agree.
+const _act = { seen: 0, drawn: 0, byKind: new Map() };
+function _tally(kind, drew) {
+  _act.seen++; if (drew) _act.drawn++;
+  let r = _act.byKind.get(kind); if (!r) { r = { seen: 0, drawn: 0 }; _act.byKind.set(kind, r); }
+  r.seen++; if (drew) r.drawn++;
+}
+function logActivity(evt, verdict) {
+  const drew = verdict !== 'miss' && verdict !== 'error';
+  try { _tally(evt && evt.kind ? evt.kind : '?', drew); } catch (e) {}
   if (!logFeed || !evt || !evt.kind) return;
   const meta = KIND_META[evt.kind] || [evt.kind, '#94a3b8'];
   const st = evt.db === 'sidequest';
   const d = new Date();
   const row = document.createElement('div');
-  row.className = 'logrow'; row.style.borderLeftColor = st ? '#a78bfa' : '#38bdf8';
+  row.className = 'logrow' + (drew ? '' : ' nodraw'); row.style.borderLeftColor = st ? '#a78bfa' : '#38bdf8';
   const mk = (cls, text, color) => { const s = document.createElement('span'); s.className = cls; s.textContent = text; if (color) s.style.color = color; return s; };
   row.appendChild(mk('t', pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds())));
   row.appendChild(mk('db ' + (st ? 'st' : 'lt'), st ? 'ST' : 'LT'));
   row.appendChild(mk('k', meta[0], meta[1]));
+  // an event that drew nothing says so on its own row, with the reason — 'off-screen' means it named an
+  // object the panel isn't holding, 'no target' means it named nothing to draw at.
+  if (!drew) row.appendChild(mk('nd', verdict === 'error' ? 'error' : 'no target'));
   let txt = evt.anchor != null ? String(evt.anchor) : '';
-  if (evt.anchor2 != null) txt += ' → ' + String(evt.anchor2);
+  if (evt.anchor2 != null) txt += (evt.rel ? ' —' + String(evt.rel) + '→ ' : ' → ') + String(evt.anchor2);
   if (evt.count && evt.count > 1) txt += ' ×' + evt.count;
   row.appendChild(mk('a', txt));
   logFeed.insertBefore(row, logFeed.firstChild);
-  _logN++; if (logCount) logCount.textContent = _logN;
+  _logN++; if (logCount) logCount.textContent = _act.drawn === _act.seen ? String(_logN) : (_act.drawn + '/' + _act.seen);
   while (logFeed.childElementCount > LOG_CAP) logFeed.removeChild(logFeed.lastChild);
 }
 
@@ -1536,21 +1552,48 @@ function gThink() {                            // a thought: condenses in the or
 // decompose sweep chewing through a 1,500-encounter PDF reads as a downpour and a single stray filing reads
 // as one drop. Falls INWARD from outside the cloud: evidence comes from the world, not from her.
 let _tick = 0;                                 // varies the deterministic hashes between bursts
-function gEvidence(count) {
+// Generalised so every kind of INFLOW shares one grammar and one draw budget: evidence (sky), a document
+// landing (lime), a followed story moving (pink, from further out), an audit sweep (amber). Anything that
+// arrives from the world falls inward; only her own activity originates inside.
+function gInflow(count, colorHex, reach) {
   _tick++;
   const c = new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z);
+  const far = CLOUD_R * 1.45 * (reach == null ? 1 : reach);
   const k = Math.max(1, Math.min(9, Math.round(Math.log2(1 + count) * 1.6)));
   for (let i = 0; i < k; i++) {
     const h = hashSeed('ev' + i + count + _tick) * Math.PI * 2, v = Math.acos(2 * hashSeed('ew' + i + _tick) - 1);
     const dir = new THREE.Vector3(Math.sin(v) * Math.cos(h), Math.sin(v) * Math.sin(h), Math.cos(v));
-    const from = c.clone().add(dir.clone().multiplyScalar(CLOUD_R * 1.45));
+    const from = c.clone().add(dir.clone().multiplyScalar(far));
     const to = c.clone().add(dir.multiplyScalar(CLOUD_R * (0.45 + 0.4 * hashSeed('ex' + i + _tick))));
-    const s = mkSprite(0x7dd3fc, 0.85); s.scale.setScalar(3); s.position.copy(from);
+    const s = mkSprite(colorHex, 0.85); s.scale.setScalar(3); s.position.copy(from);
     addEffect([s], 1250 + i * 60, (p) => {
       const e = 1 - Math.pow(1 - p, 2.2);
       s.position.copy(from.clone().lerp(to, e));
       s.material.opacity = 0.85 * Math.sin(Math.min(1, p * 1.15) * Math.PI);
       s.scale.setScalar(3 + p * 2);
+    });
+  }
+}
+function gEvidence(count) { gInflow(count, 0x7dd3fc, 1.0); }
+// A NOTE LANDING — memory being written. Unlike inflow this starts INSIDE: she is the one writing it. A few
+// motes condense in the orb and settle toward her, scaled by how many landed in the coalescing window, each
+// arriving with a small settle rather than a flash. Deliberately the quietest gesture in the vocabulary: it
+// is the highest-volume event on the bus and it should read as texture, not as news.
+function gNote(count) {
+  _tick++;
+  const c = new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z);
+  const k = Math.max(1, Math.min(7, Math.round(Math.log2(1 + count) * 1.9)));
+  for (let i = 0; i < k; i++) {
+    const h = hashSeed('nt' + i + _tick) * Math.PI * 2, v = Math.acos(2 * hashSeed('nu' + i + _tick) - 1);
+    const r = PERP_SQ * (0.42 + 0.5 * hashSeed('nr' + i + _tick));
+    const start = c.clone().add(new THREE.Vector3(r * Math.sin(v) * Math.cos(h), r * Math.sin(v) * Math.sin(h), r * Math.cos(v)));
+    const end = start.clone().lerp(c, 0.45);
+    const s = mkSprite(0xcbd5e1, 0.5); s.scale.setScalar(2); s.position.copy(start);
+    addEffect([s], 1400 + i * 70, (p) => {
+      const e = 1 - Math.pow(1 - p, 2.6);
+      s.position.copy(start.clone().lerp(end, e));
+      const q = Math.sin(p * Math.PI);
+      s.material.opacity = 0.5 * q; s.scale.setScalar(2 + q * 2.2);
     });
   }
 }
@@ -1660,42 +1703,106 @@ function mintBorn(batch) {
   return minted;
 }
 
-// --- dispatcher: route a kg:activity event to its gesture (find the node's world position) ---
+// ============================================================================================================
+// ACTIVITY DISPATCH — every kind on the bus gets an answer on screen, or says why it didn't.
+// ============================================================================================================
+// Lucas, 2026-07-22: "I am seeing so many more actions in the log than are actually taking place on the
+// visual." Measured against the emitters, the gap was structural in three separate ways — not one glitch:
+//
+//   1. THREE LIVE KINDS HAD NO BRANCH AT ALL. `note` (every insertMemory — the busiest emitter in the app),
+//      `doc.land` (every document landing) and `news` (a followed story she decides to raise). All three have
+//      entries in KIND_META, so they printed a coloured row and looked handled, and drew precisely nothing.
+//   2. FOUR KINDS DIED ON A MISSING ANCHOR. node.enrich / promote / node.merge / observe each fell through an
+//      `if (a)` when `findNode` missed — and it misses far more often than it hits, because the panel draws a
+//      ~2k sample of 1.76M objects. match.hit and recall were fixed weeks ago to MINT the named object rather
+//      than discard the event; the rest never got the same treatment.
+//   3. `edge.born` REQUIRED BOTH ENDS ALREADY DRAWN, which is that low probability squared — effectively
+//      never. That is the "connections being made" picture, and it was the most reliably invisible of all.
+//
+// The rule now: if the bus names an object, the object is brought into view and the gesture fires. If it names
+// nothing (an ambient pulse), an ambient gesture fires. Only a genuinely empty event returns 'miss', and the
+// log dims that row — so the remaining gap is a stated fact rather than a silent one.
+function mintLocal(name, evt) {   // a short-term anchor materialises in her core; the next kg:shortterm poll prunes it if the DB disagrees
+  if (objs.has(name)) return objs.get(name);
+  ensureObj({ id: name, store: 'sidequest', entityType: 'unknown', epistemic: (evt && evt.epistemic) || 'told' }, coreCentroid3D());
+  shortTerm.nodes.add(name);
+  scheduleMintRender();
+  return objs.get(name) || null;
+}
+// Route by store: her own material mints into the core half, corpus material onto the shell at its
+// deterministic seat (the same placement recognition has always used, so an object keeps one home).
+function nodeFor(evt, name) {
+  if (name == null || name === '') return null;
+  return findNode(name) || (evt && evt.db === 'sidequest' ? mintLocal(name, evt) : mintEcho(name));
+}
+// `note` is the one true firehose — insertMemory fires from focus, learning, reflection, revise, self_model,
+// meetings and research. Per-event motes would be a strobe and 40 draw calls; a coalesced burst scaled by how
+// many landed reads as what it is, at the cost of one.
+let _noteN = 0, _noteTimer = null;
+function queueNote() {
+  _noteN++;
+  if (_noteTimer) return;
+  _noteTimer = setTimeout(() => { const n = _noteN; _noteN = 0; _noteTimer = null; gNote(n); }, 900);
+}
+// Minting is LAZY and per-branch, never computed up front. Only some kinds carry an object NAME in `anchor`;
+// the rest carry prose — `hear`/`say` hold 110 characters of the actual conversation, `think` a monologue
+// rowid, `note` a "[kind] content" string. Resolving those eagerly would mint nodes whose ids are sentences,
+// which is worse than the invisibility it was meant to cure. So each branch asks for the object only when its
+// own anchor really is one.
+function dispatchActivity(evt) {
+  const k = evt.kind;
+  if (k === 'node.born') { queueBorn(evt); return 'queued'; }
+  const A = () => nodeFor(evt, evt.anchor), B = () => (evt.anchor2 != null ? nodeFor(evt, evt.anchor2) : null);
+  if (k === 'node.enrich') { const a = A(); if (!a) return 'miss'; gEnrich(V3(a), new THREE.Color(nodeColor(a)).getHex()); return 'drew'; }
+  if (k === 'edge.born' || k === 'edge.promote') {
+    const a = A(), b = B(); if (!a || !b) return 'miss';
+    gEdge(V3(a), V3(b), new THREE.Color(nodeColor(a)).getHex()); addHotLink(a.id); addHotLink(b.id); return 'drew';
+  }
+  if (k === 'match.hit') {                      // she recognised a known thing — fire at it, halo it.
+    const b = B(); if (!b) return 'miss';       // anchor is the MENTION TEXT and never a node; only anchor2 is real
+    addHotLink(b.id); gMatch(b); return 'drew';
+  }
+  if (k === 'recall') {                         // a memory pulled inward — same: the known thing must be visible
+    const a = A(); if (!a) return 'miss'; addHotLink(a.id); gMatch(a); gRecall(V3(a)); return 'drew';
+  }
+  if (k === 'observe') {                        // a graded observation LINKS two things — draw the link, not a blip
+    const a = A(); if (!a) return 'miss';
+    const b = B();
+    if (b) { gEdge(V3(a), V3(b), new THREE.Color(nodeColor(a)).getHex()); addHotLink(b.id); }
+    else { gEnrich(V3(a), new THREE.Color(nodeColor(a)).getHex()); }
+    addHotLink(a.id); return 'drew';
+  }
+  if (k === 'promote' || k === 'node.promote') { const a = A(); if (!a) return 'miss'; gPromote(V3(a)); addHotLink(a.id); return 'drew'; }
+  if (k === 'node.merge') { const a = A(); if (!a) return 'miss'; gAbsorb(V3(a), evt.count); return 'drew'; }   // dedup absorb: duplicates collapse inward
+  if (k === 'think') { gThink(); return 'drew'; }                        // ambient heartbeat (throttled upstream)
+  if (k === 'self' || k === 'reflect') {                                 // her identity moved — flare the anchor, refresh the ring
+    gEnrich(new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z), new THREE.Color(ZOE_ROSE).getHex());
+    if (k === 'self') loadSelf();
+    return 'drew';
+  }
+  if (k === 'hear') { gCross(true, HEAR_HEX); return 'drew'; }           // Lucas's words crossing IN to her
+  if (k === 'say') { gCross(false, SAY_HEX); return 'drew'; }            // her reply crossing OUT of the region
+  if (k === 'encounter') { gEvidence(evt.count || 1); return 'drew'; }   // evidence arriving — the substrate landing
+  if (k === 'note') { queueNote(); return 'drew'; }                      // a memory written — coalesced churn in the core
+  if (k === 'doc.land') { gInflow(evt.count || 1, 0xa3e635, 1.0); return 'drew'; }   // a document arrives from the world
+  if (k === 'news') { gInflow(evt.count || 1, 0xf472b6, 1.25); return 'drew'; }      // a followed story moved — comes in from further out
+  if (k === 'refute') {                                                  // something she held, proven wrong
+    const a = A();
+    if (a) { gRefute(V3(a)); addHotLink(a.id); } else { gRefute(new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z)); }
+    return 'drew';
+  }
+  if (k === 'node.degrade') { const a = A(); if (!a) return 'miss'; gRefute(V3(a)); return 'drew'; }   // confidence lost — same collapsing pulse, no halo
+  if (k === 'edge.prune') { const a = A(); if (!a) return 'miss'; gAbsorb(V3(a), 2); return 'drew'; }
+  if (k === 'audit.clean') { gInflow(evt.count || 1, 0xfacc15, 0.8); return 'drew'; }
+  return 'miss';                                 // an unknown kind draws nothing, and now admits it
+}
 function onActivity(evt) {
   if (!evt) return;
-  try { logActivity(evt); } catch (e) {}   // every event → the right-dock running log (independent of gesture routing)
-  try {
-    const k = evt.kind;
-    if (k === 'node.born') { queueBorn(evt); return; }
-    const a = findNode(evt.anchor), b = evt.anchor2 != null ? findNode(evt.anchor2) : null;
-    if (k === 'node.enrich') { if (a) gEnrich(V3(a), new THREE.Color(nodeColor(a)).getHex()); }
-    else if (k === 'edge.born' || k === 'edge.promote') { if (a && b) gEdge(V3(a), V3(b), new THREE.Color(nodeColor(a)).getHex()); }
-    else if (k === 'match.hit') {                 // she recognised a known thing — fire at it, halo it
-      const t = b || mintEcho(evt.anchor2); if (t) { addHotLink(t.id); gMatch(t); }
-    }
-    else if (k === 'recall') {                    // a memory pulled inward — same: the known thing must be visible
-      const t = a || mintEcho(evt.anchor); if (t) { addHotLink(t.id); gMatch(t); gRecall(V3(t)); }
-    }
-    else if (k === 'observe' && a && a.store !== 'sidequest') {   // an observation touched a drawn corpus node
-      gEnrich(V3(a), new THREE.Color(nodeColor(a)).getHex()); addHotLink(a.id);
-    }
-    else if (k === 'promote') { if (a) gPromote(V3(a)); }
-    else if (k === 'node.merge') { if (a) gAbsorb(V3(a), evt.count); }   // dedup absorb: duplicates collapse inward
-    else if (k === 'think') { gThink(); }                                // ambient heartbeat (throttled upstream)
-    else if (k === 'self' || k === 'reflect') {                          // her identity moved — flare the anchor, refresh the ring
-      const c = new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z);
-      gEnrich(c, new THREE.Color(ZOE_ROSE).getHex());
-      if (k === 'self') loadSelf();
-    }
-    else if (k === 'hear') { gCross(true, HEAR_HEX); }                   // Lucas's words crossing IN to her
-    else if (k === 'say') { gCross(false, SAY_HEX); }                    // her reply crossing OUT of the region
-    else if (k === 'encounter') { gEvidence(evt.count || 1); }           // evidence arriving — the substrate landing
-    else if (k === 'refute') {                                           // something she held, proven wrong
-      const t = a || mintEcho(evt.anchor);
-      if (t) { gRefute(V3(t)); addHotLink(t.id); } else { gRefute(new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z)); }
-    }
-    // doc.land / news → ambient inflow, deferred (no emitter fires them yet)
-  } catch (e) { console.warn('[kg3d] activity', e && e.message); }
+  let verdict = 'miss';
+  try { verdict = dispatchActivity(evt) || 'miss'; }
+  catch (e) { verdict = 'error'; console.warn('[kg3d] activity', e && e.message); }
+  try { logActivity(evt, verdict); } catch (e) {}   // the log records the verdict too, so a gap is visible
+  return verdict;
 }
 
 // ---- fps HUD ----
@@ -1807,6 +1914,10 @@ setInterval(loadSelf, 300000);                   // identity moves slowly — re
 // ---- dev handle for CDP verification ----
 window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, tendrilN: () => tendrilSpecs.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z,
   markerN: () => markerIndex.length, repaint: repaintNodeCloud, fit: fitView, rebuildLinks: buildLinkCloud,
+  // "more actions in the log than on the visual" — measurable now instead of arguable. Per kind: how many the
+  // bus delivered vs how many produced a gesture. Any row where drawn < seen names a real remaining gap.
+  actStats: () => ({ seen: _act.seen, drawn: _act.drawn,
+    kinds: [..._act.byKind.entries()].map(([k, v]) => ({ kind: k, seen: v.seen, drawn: v.drawn })).sort((a, b) => b.seen - a.seen) }),
   shape: (s) => { if (s) { SHAPE = s; try { localStorage.setItem('kg3d.shape', s); } catch (e) {} for (const n of objs.values()) n._tp = null; try { Graph.d3ReheatSimulation(); } catch (e) {} } return SHAPE; },
   lobeOf, lobeStats: () => {                    // how much of the graph actually crosses between territories
     const d = Graph.graphData(), per = {}, pair = {}; let cross = 0, within = 0;
