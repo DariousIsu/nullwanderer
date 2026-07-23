@@ -2526,6 +2526,14 @@ function startDownloadsIngestWatcher() {
       const { text, via } = await extractFileMarkdown(fp);
       const title = pathm.basename(fp);
       if (!text || text.length < 40) { console.log(`[dl-ingest] skipped ${title} (thin/${via})`); return; }
+      // DUPLICATE-DOWNLOAD GATE (2026-07-23, Lucas: "double-read was supposed to be fixed"): dbecd56
+      // dedup'd the decompose SWEEP; nothing dedup'd the LANDING. The browser saves repeat grabs as
+      // "name (13).pdf" and each content-identical file landed as a NEW doc and decomposed again —
+      // one training PDF thirteen times. Same extracted text already landed → skip, naming the doc.
+      const _dlHash = require('crypto').createHash('sha1').update(text).digest('hex');
+      let _hashMap = {};
+      try { _hashMap = JSON.parse(db.getMeta('dlingest.content_hashes') || '{}'); } catch {}
+      if (_hashMap[_dlHash]) { console.log(`[dl-ingest] duplicate download ${title} — content-identical to doc #${_hashMap[_dlHash]}, skipped`); return; }
       // RELEVANCE QUARANTINE: catch-all for whatever bypassed the harvest gate (manual drops, pre-gate
       // downloads). Off-domain docs still LAND (searchable in the doc store, marked) but are NOT decomposed
       // into the entity graph — keeping the flood of foreign-registry names out of the KG. Lenient: only a
@@ -2578,6 +2586,13 @@ function startDownloadsIngestWatcher() {
       const _dlOrigin = _takeDownloadOrigin(fp) || _prov.origin;
       const landed = require('./lib/doc_store').land({ title, body: text, source: 'browser_download', ref: 'download:' + fp, origin: _dlOrigin, fetchUrl: _prov.fetchUrl });
       if (landed && landed.landed) {
+        // record the content hash (bounded map, oldest-first trim) so the NEXT identical download skips
+        try {
+          _hashMap[_dlHash] = landed.id;
+          const keys = Object.keys(_hashMap);
+          if (keys.length > 500) for (const k of keys.slice(0, keys.length - 500)) delete _hashMap[k];
+          db.setMeta('dlingest.content_hashes', JSON.stringify(_hashMap));
+        } catch {}
         if (!_verdict.relevant || !_leashPasses) {
           const _reason = !_verdict.relevant ? _verdict.reason : 'off-domain (no leash-token overlap)';
           console.log(`[dl-ingest] QUARANTINED ${title} → doc ${landed.id} (${_reason}) — landed searchable, NOT decomposed`);
