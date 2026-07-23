@@ -1054,6 +1054,7 @@ function buildCortexShell() {
 }
 function buildDust(ns) {
   if (dustCloud) { scene.remove(dustCloud); dustGeo.dispose(); dustCloud = null; dustGeo = null; }
+  if (SHAPE === 'skin') return;                      // nothing beyond her — no haze scattered off her surface
   if (!ns || !ns.length) return;
   const per = Math.max(1, Math.min(DUST_PER_NODE, Math.floor(DUST_CAP / ns.length)));
   const N = ns.length * per;
@@ -1299,7 +1300,10 @@ async function loadVRM() {
     // hole across her face with two white ovals hovering in it. Torn, not stylised. Her real features are far
     // better than anything I can draw over them, they already blink and lip-sync on the rig, and the Cortana
     // reference is a fully readable human face. So the geometry stays and gets SHADED; only clothes go.
-    const DROP = /_CLOTH/i;
+    // Also drop the three EYE OVERLAYS whose look lived entirely in their (now-stripped) alpha textures: the
+    // occlusion cup and tear line drew as opaque BLACK over the eyes and the cornea as an opaque WHITE dome —
+    // together the "black eyes / no eyeballs" Lucas saw. Dropped, the eyeball itself shades directly and reads.
+    const DROP = /_CLOTH|Eye_Occlusion|Tearline|Cornea/i;
     const seen = new Set();
     vrm.scene.traverse((o) => {
       if (!o.isMesh && !o.isSkinnedMesh) return;
@@ -1448,23 +1452,20 @@ function buildRegions() {
     // the head region.
     const isHair = matKind(m.userData && m.userData.matName) === 1;
     // The same classification is written as a per-vertex ATTRIBUTE, so her surface can be shaded by what each
-    // part of her MEANS. 0 body · 1 head · 2 heart · 3 feature (eye/mouth, kept dark for the drawn outlines to
-    // read against). One pass, two consumers: the binding picks seats from the arrays, the shell reads the
-    // attribute — they can never disagree about which part of her is which.
+    // part of her MEANS. 0 body/face · 1 hair (short-term) · 2 heart. One pass, two consumers: the binding picks
+    // seats from the arrays, the shell reads the attribute — they can never disagree about which part is which.
     const reg = new Float32Array(N);
     for (let i = 0; i < N; i++) {
       try { m.getVertexPosition(i, v); } catch (e) { continue; }
       v.applyMatrix4(toLocal);
-      // Feature verts still get EXCLUDED from node binding (the continue), but they SHADE as head (value 1),
-      // not a distinct value 3. `vRegion` interpolates across triangles, so a 1↔3 edge passed through 2.0 and
-      // the heart-colour bracket painted a rose zigzag along every head/feature boundary — the seams Lucas saw
-      // on her jaw and neck. Collapsing feature to the head value removes the boundary entirely.
-      if (isHair) { reg[i] = 1; REGION.head.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z }); continue; }   // all hair = short-term
-      if (ex.length && ex.some(([c, r]) => v.distanceTo(c) < r)) { reg[i] = 1; continue; }   // eyes + mouth: no bind, shade as head
-      if (inHeart(v)) { reg[i] = 2; REGION.heart.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z }); continue; }   // heart before head: it sits below the neck
-      const isHead = neckL ? v.y > neckL.y : false;
-      if (isHead) { reg[i] = 1; REGION.head.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z }); continue; }
-      reg[i] = 0; REGION.body.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z });
+      // FACE = BODY COLOUR, HAIR = SHORT-TERM (Lucas: "the face is still the same colour as the hair and not the
+      // body"). Only HAIR carries the short-term violet; every skin vertex — face included — is corpus/body sky.
+      // The eye and mouth patches are still excluded from BINDING (no node sits in an eye socket) but they shade
+      // as body too, so the face reads as one skin surface instead of a violet mask seamed along the jaw.
+      if (isHair) { reg[i] = 1; REGION.head.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z }); continue; }   // hair = short-term
+      if (ex.length && ex.some(([c, r]) => v.distanceTo(c) < r)) { reg[i] = 0; continue; }   // eyes + mouth: no bind, shade as face/body
+      if (inHeart(v)) { reg[i] = 2; REGION.heart.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z }); continue; }   // heart, high on the chest
+      reg[i] = 0; REGION.body.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z });                // ALL skin, face and body, is the corpus
     }
     m.geometry.setAttribute('aRegion', new THREE.BufferAttribute(reg, 1));
   }
@@ -1564,9 +1565,22 @@ function applyShellMaterial() {
           // Eyes lit enough to READ (Lucas: "eyes might help") but not blown to skull-orbs: a soft blue-white
           // sclera, a brighter cyan iris, a crisp catchlight. At full-body scale they read as eyes; up close
           // they hold as eyes rather than glowing balls.
-          else if (uKind < 2.5) outc = vec3(0.55, 0.66, 0.82) * 0.62;               // sclera
-          else if (uKind < 3.5) outc = mix(rc, vec3(0.55, 0.88, 1.0), 0.75) * 0.85; // iris
-          else if (uKind < 4.5) outc = vec3(0.9, 0.95, 1.0);                        // catchlight
+          else if (uKind < 2.5) outc = uHead * 0.85;                                // sclera → hair colour
+          // THE EYEBALL, SHADED PROCEDURALLY (Lucas: "green iris like before and the whites would match the
+          // hair colour"). The stripped texture took the sclera/iris/pupil split with it, so it is rebuilt from
+          // the geometry: the disc facing the viewer is the green iris with a dark pupil at its centre, the ring
+          // around it is the hair-coloured white, and a glassy catchlight keeps the eye wet rather than dead.
+          else if (uKind < 3.5) {
+            float facing = abs(dot(normalize(vVN), normalize(-vVP)));
+            vec3  sclera = uHead * 0.85;                                            // whites take the HAIR colour
+            vec3  irisC  = vec3(0.16, 0.82, 0.42);                                  // green iris
+            float iris   = smoothstep(0.80, 0.90, facing);                         // front disc
+            float pupil  = smoothstep(0.965, 0.99, facing);                        // small dark centre
+            outc = mix(sclera, irisC, iris);
+            outc = mix(outc, vec3(0.02, 0.04, 0.03), pupil);
+            outc += vec3(0.85, 0.92, 1.0) * pow(max(0.0, facing - 0.55), 5.0) * 0.30;
+          }
+          else if (uKind < 4.5) outc = vec3(0.9, 0.95, 1.0);                        // catchlight (VRoid highlight)
           else if (uKind < 5.5) outc = rc * 0.10;                                   // brow / lash / eyeline
           else                  outc = mix(rc, vec3(1.0, 0.62, 0.72), 0.65) * 0.85; // lips
           // a slow horizontal banding, the one borrowed cue that reads instantly as "projected, not filmed"
@@ -1702,6 +1716,7 @@ function bonePath(a, b) {                           // a → common ancestor →
 }
 let routedGeo = null, routedLines = null;
 const ROUTE_SAMPLES = 12;                           // points per link; 11 segments
+const SKIN_LINK_BOOST = 5.0;                        // routed links on her body read at full presence, not hairball-dim
 function buildRoutedLinks() {
   if (routedLines) { scene.remove(routedLines); routedGeo.dispose(); routedLines.material.dispose(); routedLines = null; routedGeo = null; }
   if (SHAPE !== 'skin' || !vrmReady || !linkIndex || !linkIndex.length) return;
@@ -1734,7 +1749,11 @@ function buildRoutedLinks() {
     // colour carries over from the straight cloud, and long routes still fade — a path through her body
     // should read as a deep trace, not as the brightest thing on screen
     const cb = i * 6;
-    const kr = path.length > 2 ? 0.42 : 1.0;
+    // Bright enough to READ on her body (Lucas: "I see no edge connections"). The straight-cloud brightness
+    // (~0.085) is tuned for a dense hairball where overlap accumulates into filament; on her skin the routed
+    // links are sparse contour lines and need a real boost, or they vanish into the shell. Long interior routes
+    // still fade relative to short surface ones, just not to nothing.
+    const kr = (path.length > 2 ? 0.6 : 1.0) * SKIN_LINK_BOOST;
     for (let j = 0; j < segs; j++) {
       const p0 = sampled[j], p1 = sampled[j + 1];
       pos[w] = p0.x; pos[w + 1] = p0.y; pos[w + 2] = p0.z;
@@ -1746,7 +1765,11 @@ function buildRoutedLinks() {
   routedGeo = new THREE.BufferGeometry();
   routedGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   routedGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  routedLines = new THREE.LineSegments(routedGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
+  // depthTest OFF on purpose. The links route the long way THROUGH her body (Lucas), which put them behind her
+  // own front surface — so depth-testing hid every interior trace inside her and the connections vanished ("I
+  // see no edge connections"). Drawn without the depth test and added over the dark shell, they glow THROUGH
+  // her like a nervous system: the corpus's connections are visible running inside the body they compose.
+  routedLines = new THREE.LineSegments(routedGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }));
   routedLines.frustumCulled = false; scene.add(routedLines);
 }
 function setRoutedVisible(on) {
@@ -2524,7 +2547,9 @@ let tendrilSpecs = [], tendrilGeo = null, tendrilLines = null, _tendrilAt = 0;
 let TENDRILS_ON = false;
 try { TENDRILS_ON = localStorage.getItem('kg3d.tendrils') === '1'; } catch (e) {}
 function buildTendrils(force) {
-  if (!TENDRILS_ON) { if (tendrilLines) { scene.remove(tendrilLines); tendrilGeo.dispose(); tendrilLines.material.dispose(); tendrilLines = null; tendrilGeo = null; } tendrilSpecs = []; return; }
+  // NOTHING BEYOND HER (Lucas: "connecting nodes off in the void"). Tendrils spray random rays off every hub
+  // node into empty space — exactly the void-connections he means. Off entirely while she is the surface.
+  if (SHAPE === 'skin' || !TENDRILS_ON) { if (tendrilLines) { scene.remove(tendrilLines); tendrilGeo.dispose(); tendrilLines.material.dispose(); tendrilLines = null; tendrilGeo = null; } tendrilSpecs = []; return; }
   const now = performance.now(); if (!force && now - _tendrilAt < 700) return; _tendrilAt = now;
   const ns = Graph.graphData().nodes;
   const hubs = ns.filter((n) => (n.degree || 0) > 6).sort((a, b) => (b.degree || 0) - (a.degree || 0)).slice(0, 60);
@@ -2558,11 +2583,13 @@ function updateTendrils() {
   }
   tendrilGeo.attributes.position.needsUpdate = true;
 }
+let starfield = null;
 (function addStarfield() {
   const N = 1400, pos = new Float32Array(N * 3);
   for (let i = 0; i < N; i++) { const r = 700 + Math.random() * 1500, th = Math.random() * Math.PI * 2, ph = Math.acos(2 * Math.random() - 1); pos[i * 3] = r * Math.sin(ph) * Math.cos(th); pos[i * 3 + 1] = r * Math.sin(ph) * Math.sin(th); pos[i * 3 + 2] = r * Math.cos(ph); }
   const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0x5a6a85, size: 1.1, sizeAttenuation: false, transparent: true, opacity: 0.22, depthWrite: false })));
+  starfield = new THREE.Points(g, new THREE.PointsMaterial({ color: 0x5a6a85, size: 1.1, sizeAttenuation: false, transparent: true, opacity: 0.22, depthWrite: false }));
+  scene.add(starfield);
 })();
 
 // --- Slice 4 optimistic mint + coalesce, ported to 3D: a pushed birth MINTS its node into graphData near the
@@ -2831,6 +2858,12 @@ async function applyShape(next) {
   SHAPE = next;
   try { localStorage.setItem('kg3d.shape', SHAPE); } catch (e) {}
   for (const n of objs.values()) n._tp = null;
+  // HER BODY IS EVERYTHING; NOTHING BEYOND HER (Lucas). In skin mode the field dressing goes dark — starfield,
+  // the dust haze and the hub tendrils — so the only lit thing on screen is her, built from the corpus.
+  const beyond = SHAPE !== 'skin';
+  if (starfield) starfield.visible = beyond;
+  if (dustCloud) dustCloud.visible = beyond;
+  if (tendrilLines) tendrilLines.visible = beyond;
   if (SHAPE === 'skin') {
     setOverlay('Loading her model…');
     const vrm = await loadVRM();
