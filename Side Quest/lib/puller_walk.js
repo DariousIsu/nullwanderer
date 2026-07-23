@@ -293,7 +293,7 @@ function buildOrgProspectQuery(org) {
 //   getMeta/setMeta, now, log, maxNew
 async function runDiscoveryMove(deps = {}) {
   const { seedOrgs, filterNew, createTarget, web, extract, land, refresh, observe, attachPhoto,
-          getMeta, setMeta, now = () => Date.now(), log, maxNew = MAX_NEW_PER_ORG } = deps;
+          attachPhotoExisting, getMeta, setMeta, now = () => Date.now(), log, maxNew = MAX_NEW_PER_ORG } = deps;
   const nowTs = now();
   try {
     if (typeof web !== 'function' || typeof extract !== 'function' || typeof createTarget !== 'function') return { acted: false, reason: 'no-deps' };
@@ -319,6 +319,18 @@ async function runDiscoveryMove(deps = {}) {
 
     let fresh = people;
     try { if (typeof filterNew === 'function') fresh = (await filterNew(people)) || []; } catch { fresh = []; }
+    // PHOTO ON ENCOUNTER (2026-07-23): photos only attached on MINT, so once write-time dedup started
+    // resolving people to EXISTING contacts the photo lane starved (0 grabs since Jul 17; Lucas: "add
+    // to the master node… especially people"). Every KNOWN person on the page gets a photo chance on
+    // their existing node (the caller resolves the name; setPhoto never overwrites). Runs BEFORE the
+    // all-known early return — that return was where the starved photos died.
+    if (typeof attachPhotoExisting === 'function' && allImages.length) {
+      const freshNames = new Set((fresh || []).map((p) => String((p && p.name) || '').toLowerCase()));
+      for (const p of people.slice(0, 12)) {
+        if (!p || !p.name || freshNames.has(String(p.name).toLowerCase())) continue;
+        try { await attachPhotoExisting(p.name, allImages); } catch {}
+      }
+    }
     if (!fresh.length) return { acted: false, reason: 'no-new', org: seed.name };   // all already in CRM/Puller
 
     const created = [];

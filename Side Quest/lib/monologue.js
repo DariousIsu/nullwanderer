@@ -2044,8 +2044,18 @@ async function runPullerMove(_recentTurns, { mode = 'both', candidatesOverride =
     } catch {}
   };
 
+  // PHOTO ON ENCOUNTER: a KNOWN person seen on a page still gets their headshot attached to the
+  // EXISTING node (the master node keeps growing; setPhoto never overwrites an earlier photo).
+  const attachPhotoExisting = async (name, images) => {
+    try {
+      const t = pdb.findTargetByName(name);
+      if (!t || t.photo_url || t.photo_path) return;
+      await attachPhoto(t.id, name, images);
+    } catch {}
+  };
   const disc = await pullerWalk.runDiscoveryMove({
     seedOrgs, filterNew, createTarget: createTargetFn, web, extract, land, refresh, observe, attachPhoto,
+    attachPhotoExisting,
     getMeta: _gm, setMeta: _sm, now: () => Date.now(), log: (m) => console.log(m),
   });
   if (disc && disc.acted) {

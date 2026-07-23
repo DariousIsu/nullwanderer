@@ -180,6 +180,22 @@ ok(PW.orgVerified({ email: 'x@sub.duke-energy.com' }, { domain: 'duke-energy.com
   });
   ok(!discKnown.acted && discKnown.reason === 'no-new', 'runDiscoveryMove: every extracted person already known → no-new (mints nothing)');
 
+  // PHOTO ON ENCOUNTER (2026-07-23): a KNOWN person on a page with images still gets a photo chance
+  // on their EXISTING node — this ran 0 times since Jul 17 because photos were mint-gated and the
+  // fusion dedup starved the mints. Must fire even on the all-known path (before the no-new return).
+  const photoCalls = [];
+  const discPhoto = await PW.runDiscoveryMove({
+    seedOrgs: [{ name: 'Rainey Center' }],
+    web: async () => [{ text: 'Team page '.repeat(10), url: 'https://raineycenter.org/team', source: 'browser', images: [{ src: 'https://raineycenter.org/img/bob-known.jpg', alt: 'Bob Known headshot' }] }],
+    extract: async () => ({ people: [{ name: 'Bob Known' }], places: [], events: [] }),
+    filterNew: async () => [],
+    createTarget: async () => 1,
+    attachPhotoExisting: async (name, images) => photoCalls.push({ name, n: images.length }),
+    getMeta: (k) => null, setMeta: () => {}, now: () => 30000,
+  });
+  ok(!discPhoto.acted && photoCalls.length === 1 && photoCalls[0].name === 'Bob Known' && photoCalls[0].n === 1,
+    'photo on encounter: an all-known page still offers its images to the KNOWN person\'s existing node');
+
   // no seed org available → no-seed
   const discNoSeed = await PW.runDiscoveryMove({ seedOrgs: [], web: async () => [], extract: async () => ({}), createTarget: async () => 1, getMeta: (k) => null, setMeta: () => {}, now: () => 1 });
   ok(!discNoSeed.acted && discNoSeed.reason === 'no-seed', 'runDiscoveryMove: no seed org → no-seed');
