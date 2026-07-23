@@ -148,6 +148,12 @@ const _midCen = { x: 0, y: 0, z: 0 };            // the middle of the whole clou
 // ============================================================================================================
 let SHAPE = 'halves';
 try { SHAPE = localStorage.getItem('kg3d.shape') || 'halves'; } catch (e) {}
+// VRM skin state, declared UP HERE with the other early state rather than beside its own functions: render()
+// consults vrmReady to re-seat the binding, and render() lives above the VRM block. This file has sprung the
+// temporal-dead-zone trap five times now, always the same way — a const declared next to the code that feels
+// like it owns it, read by something that runs earlier.
+let vrmModel = null, vrmReady = false, vrmOccluders = [], skinBinds = null, _vrmLoading = false, _skinT = 0;
+const _vrmOff = new THREE.Vector3();                // model-centre → origin correction, kept out of position
 const _tp = new THREE.Vector3();
 function nodeConnT(n) {                        // normalised connectivity, 0..1
   const sq = n.store === 'sidequest';
@@ -690,6 +696,12 @@ function render() {
   try { buildNodeCloud(); } catch (e) {}   // rebuild the instanced Points cloud for the new node set
   try { buildLinkCloud(); } catch (e) {}   // …and the single-buffer edge cloud
   try { buildTendrils(); } catch (e) {}    // refresh hidden-connection tendrils (throttled)
+  // REBIND THE SKIN WHENEVER THE NODE SET CHANGES. Without this she binds once and never again — and the
+  // first bind almost always loses, because `skin` is applied at boot while kg:overview is still in flight
+  // (measured 4s warm, ~15s cold). Live evidence: bound 61, all of them the self_model rows, while 1,584
+  // corpus nodes stayed in the force layout. An invisible figure standing inside an unbound cloud, which is
+  // exactly what it looked like. Every reload, poll and mint now re-seats her.
+  if (SHAPE === 'skin' && vrmReady) { try { buildSkinBinding(); updateSkin(); } catch (e) {} }
 }
 
 async function loadOverview() {
@@ -1218,8 +1230,6 @@ function updateFace(now) {
 // nodes on the far side of her head are hidden by the near side. That single line is the thing a point cloud
 // could never do for itself, and it is what makes the figure read as solid instead of as a swarm.
 const VRM_URL = '../data/avatars/zoe.vrm';
-let vrmModel = null, vrmReady = false, vrmOccluders = [], skinBinds = null, _vrmLoading = false, _skinT = 0;
-const _vrmOff = new THREE.Vector3();                // model-centre → origin correction, kept out of position
 // ANATOMY CARRIES MEANING (Lucas, 2026-07-22): "Short term memory can be the head, everything that is Zoe can
 // be the heart, and the rest of the body is everything else." That turns the figure from a shape the data
 // happens to sit on into a CLAIM about the data — the same principle as density-is-the-boundary, finally with
@@ -1350,16 +1360,76 @@ function buildRegions() {
   for (const m of vrmOccluders) {
     const N = m.geometry.attributes.position.count;
     toLocal.multiplyMatrices(inv, m.matrixWorld);
+    // The same classification is written as a per-vertex ATTRIBUTE, so her surface can be shaded by what each
+    // part of her MEANS. 0 body · 1 head · 2 heart · 3 feature (eye/mouth, kept dark for the drawn outlines to
+    // read against). One pass, two consumers: the binding picks seats from the arrays, the shell reads the
+    // attribute — they can never disagree about which part of her is which.
+    const reg = new Float32Array(N);
     for (let i = 0; i < N; i++) {
       try { m.getVertexPosition(i, v); } catch (e) { continue; }
       v.applyMatrix4(toLocal);
-      if (ex.length && ex.some(([c, r]) => v.distanceTo(c) < r)) continue;   // eyes + mouth stay clear
+      if (ex.length && ex.some(([c, r]) => v.distanceTo(c) < r)) { reg[i] = 3; continue; }   // eyes + mouth stay clear
       const isHead = neckL ? v.y > neckL.y : false;
-      if (isHead) { REGION.head.push({ mesh: m, vi: i }); continue; }
-      if (chestL && v.distanceTo(chestL) < HEART_R) { REGION.heart.push({ mesh: m, vi: i }); continue; }
-      REGION.body.push({ mesh: m, vi: i });
+      if (isHead) { reg[i] = 1; REGION.head.push({ mesh: m, vi: i }); continue; }
+      if (chestL && v.distanceTo(chestL) < HEART_R) { reg[i] = 2; REGION.heart.push({ mesh: m, vi: i }); continue; }
+      reg[i] = 0; REGION.body.push({ mesh: m, vi: i });
     }
+    m.geometry.setAttribute('aRegion', new THREE.BufferAttribute(reg, 1));
   }
+  applyShellMaterial();
+}
+// ============================================================================================================
+// THE SHELL — her surface, coloured by the graph's own scheme instead of her skin and clothing textures.
+// ============================================================================================================
+// Lucas: "is it not possible to just make the avatar 3d and use the existing node and connection schemes to
+// color her instead of the skin cloths textures?" Yes, and it is the right call: 1,650 nodes spread over a
+// 30,000-vertex body is one point per eighteen vertices, which can never read as a solid figure however it is
+// tuned. The mesh should carry the FORM and the nodes should be the highlights on it, not the whole substance.
+//
+// Region colours come straight from the anatomy: her head glows short-term violet, her heart Zoe rose, her
+// body corpus sky — the same palette the cloud already uses, so the figure and the graph are visibly one
+// system. FRESNEL does the work: facing surfaces stay near black and glancing ones light up, so she reads as
+// a lit contour rather than a painted mannequin, and the eye and mouth patches are held dark on purpose so
+// the drawn outlines have something to read against.
+//
+// Built with onBeforeCompile on a stock material rather than a bare ShaderMaterial. A SkinnedMesh with 57
+// morph targets needs the whole skinning + morph pipeline in its vertex shader; three generates all of it for
+// its own materials and none of it for a hand-written one, so patching is both shorter and correct.
+const SHELL_COL = { body: 0x7dd3fc, head: 0xa78bfa, heart: 0xfda4af };
+let SHELL_ON = true; try { SHELL_ON = localStorage.getItem('kg3d.shell') !== '0'; } catch (e) {}
+const shellUniforms = {
+  uBody: { value: new THREE.Color(SHELL_COL.body) }, uHead: { value: new THREE.Color(SHELL_COL.head) },
+  uHeart: { value: new THREE.Color(SHELL_COL.heart) },
+  uBase: { value: 0.055 }, uRim: { value: 1.35 }, uPow: { value: 2.4 }, uPulse: { value: 0 },
+};
+function applyShellMaterial() {
+  for (const m of vrmOccluders) {
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    mat.onBeforeCompile = (sh) => {
+      Object.assign(sh.uniforms, shellUniforms);
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\n attribute float aRegion;\n varying float vRegion;\n varying vec3 vVN;\n varying vec3 vVP;')
+        .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\n vRegion = aRegion;\n vVN = transformedNormal;')
+        .replace('#include <project_vertex>', '#include <project_vertex>\n vVP = mvPosition.xyz;');
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\n uniform vec3 uBody; uniform vec3 uHead; uniform vec3 uHeart;\n uniform float uBase; uniform float uRim; uniform float uPow; uniform float uPulse;\n varying float vRegion; varying vec3 vVN; varying vec3 vVP;')
+        .replace('#include <dithering_fragment>', `
+          vec3 rc = vRegion > 2.5 ? vec3(0.0)                       // eyes + mouth: held dark for the outlines
+                  : vRegion > 1.5 ? uHeart * (1.0 + uPulse * 0.9)   // her identity, beating
+                  : vRegion > 0.5 ? uHead : uBody;
+          float fres = pow(1.0 - abs(dot(normalize(vVN), normalize(-vVP))), uPow);
+          gl_FragColor = vec4(rc * (uBase + fres * uRim), 1.0);
+          #include <dithering_fragment>`);
+    };
+    mat.needsUpdate = true;
+    m.material = mat;
+    m.material.colorWrite = SHELL_ON;                 // off → depth-only occluder, exactly as before
+  }
+}
+function setShell(on) {
+  SHELL_ON = !!on;
+  try { localStorage.setItem('kg3d.shell', SHELL_ON ? '1' : '0'); } catch (e) {}
+  for (const m of vrmOccluders) if (m.material) m.material.colorWrite = SHELL_ON;
 }
 // DRAWN, NOT BUILT OUT OF NODES (Lucas: "the face is actually terrifying — what if the eyes and the mouth are
 // not nodes, but just drawn to look like them"). He is right about the failure and right about the fix. Nodes
@@ -1370,16 +1440,20 @@ function buildRegions() {
 let drawnFeatures = null;
 function lensLoop(segments, hOpen) {                // an eye/mouth outline: two arcs meeting at the corners
   const pts = [];
-  for (let i = 0; i <= segments; i++) { const t = -1 + 2 * (i / segments); pts.push(new THREE.Vector3(t, Math.pow(Math.max(0, 1 - t * t), 0.65) * hOpen, 0)); }
-  for (let i = segments; i >= 0; i--) { const t = -1 + 2 * (i / segments); pts.push(new THREE.Vector3(t, -Math.pow(Math.max(0, 1 - t * t), 0.65) * hOpen * 0.62, 0)); }
+  for (let i = 0; i <= segments; i++) { const t = -1 + 2 * (i / segments); pts.push(new THREE.Vector3(t, Math.pow(Math.max(0, 1 - t * t), 0.55) * hOpen, 0)); }
+  for (let i = segments; i >= 0; i--) { const t = -1 + 2 * (i / segments); pts.push(new THREE.Vector3(t, -Math.pow(Math.max(0, 1 - t * t), 0.80) * hOpen * 0.34, 0)); }
   const g = new THREE.BufferGeometry().setFromPoints(pts);
   return g;
 }
 function buildDrawnFeatures() {
   if (!featureAnchors || drawnFeatures) return;
   const mk = (hex, w) => new THREE.LineBasicMaterial({ color: new THREE.Color(hex), transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, linewidth: w || 1 });
-  const eyeGeo = lensLoop(20, 0.62), mouthGeo = lensLoop(24, 1.0);
-  const eyeL = new THREE.Line(eyeGeo, mk(0xbfe4ff)), eyeR = new THREE.Line(eyeGeo.clone(), mk(0xbfe4ff));
+  // THEY READ AS SPECTACLES AT 0.62. A closed lens that tall is a circle, two of them side by side are
+  // glasses, and drawn in bright white they were the loudest thing on her face. An eye is WIDE and shallow
+  // with a lifted upper lid; 0.30 with the lower arc at a third of that gives the almond. Colour pulled well
+  // off white so they sit in the face instead of hovering in front of it.
+  const eyeGeo = lensLoop(22, 0.30), mouthGeo = lensLoop(24, 1.0);
+  const eyeL = new THREE.Line(eyeGeo, mk(0x8fd0ff)), eyeR = new THREE.Line(eyeGeo.clone(), mk(0x8fd0ff));
   const mouth = new THREE.Line(mouthGeo, mk(ZOE_ROSE));
   for (const o of [eyeL, eyeR, mouth]) { o.frustumCulled = false; o.renderOrder = 6; o.visible = false; scene.add(o); }
   drawnFeatures = { eyeL, eyeR, mouth };
@@ -1407,8 +1481,10 @@ function updateDrawnFeatures(now) {
     obj.quaternion.copy(_fq);
     obj.scale.set(baseR * s * 2.0, Math.max(0.04, openY) * baseR * s * 2.0, 1);
   };
-  set(drawnFeatures.eyeL, featureAnchors.left, featureAnchors.eyeR, Math.max(0.06, blink));
-  set(drawnFeatures.eyeR, featureAnchors.right, featureAnchors.eyeR, Math.max(0.06, blink));
+  // 1.35, not 2.0: the outline was drawn wider than the socket it sits in, which is most of why it read as
+  // eyewear rather than as an eye.
+  set(drawnFeatures.eyeL, featureAnchors.left, featureAnchors.eyeR * 1.35 / 2.0, Math.max(0.08, blink));
+  set(drawnFeatures.eyeR, featureAnchors.right, featureAnchors.eyeR * 1.35 / 2.0, Math.max(0.08, blink));
   // the mouth OPENS with her voice — the one feature that has to move to read as speech
   set(drawnFeatures.mouth, featureAnchors.mouth, featureAnchors.mouthR, 0.12 + face.mouthOpen * 1.5);
 }
@@ -1488,6 +1564,11 @@ function releaseSkin() {                            // let the forces have the n
 // mouth on the model and the mouth on the cloud are the same mouth, moving on one signal.
 function updateVRMFace(now, dt) {
   if (!vrmReady || SHAPE !== 'skin') return;
+  // Her heart beats — a real double-thump rather than a sine, because a sine reads as a pulsing lamp. It is
+  // the only part of her that moves without being told to, which is the point: identity is the thing that is
+  // there whether or not she is working.
+  const t = (now % 1150) / 1150;
+  shellUniforms.uPulse.value = Math.min(1, Math.exp(-t * 10) + 0.55 * Math.exp(-Math.max(0, t - 0.17) * 13));
   const em = vrmModel.expressionManager;
   if (em) {
     try { em.setValue('aa', Math.min(1, face.mouthOpen)); } catch (e) {}
@@ -1549,7 +1630,7 @@ function repaintNodeCloud() {
 // ---- LINK CLOUD: every edge in ONE LineSegments buffer (one draw call for the whole graph) ----
 // Colour is baked per-vertex at build time from the same linkColor() rules — a cross-store federation thread
 // stays bright violet, everything else its category colour. Positions re-sync each frame from the sim.
-let linkGeo = null, linkLines = null, linkIndex = [];
+let linkGeo = null, linkLines = null, linkIndex = [], linkBaseCol = null, _linkFadeAt = 0;
 const _lc = new THREE.Color();
 function parseLinkRGB(css) {
   const m = /rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s]+([\d.]+))?/i.exec(css || '');
@@ -1574,6 +1655,7 @@ function buildLinkCloud() {
     const k = cross ? 0.30 : 0.085;
     for (let v = 0; v < 2; v++) { const o = i * 6 + v * 3; col[o] = _lc.r * k; col[o + 1] = _lc.g * k; col[o + 2] = _lc.b * k; }
   }
+  linkBaseCol = col.slice();                                    // untouched original, for the skin-mode fade
   linkGeo = new THREE.BufferGeometry();
   linkGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   linkGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
@@ -1597,6 +1679,28 @@ function updateLinkCloud() {
     pos[o + 3] = t.x; pos[o + 4] = t.y; pos[o + 5] = t.z || 0;
   }
   linkGeo.attributes.position.needsUpdate = true;
+  if (SHAPE === 'skin') { const n = performance.now(); if (n - _linkFadeAt > 250) { _linkFadeAt = n; fadeSkinLinks(); } }
+}
+// A LINK BETWEEN TWO DISTANT BODY PARTS IS A CHORD, NOT A CONTOUR. Bound to her surface, an edge from a hand
+// to a knee draws a straight line straight THROUGH her — and with a couple of thousand of them the result was
+// a bright cone hanging off her hips that read as a skirt, hiding her legs entirely. It is the single thing
+// most wrong with the first live render, and it is not a colour problem: those lines are geometrically real
+// and simply do not belong to the form.
+// Fading by LENGTH keeps exactly the edges that hug her — near neighbours on the surface, which trace muscle
+// and contour — and drops the long-distance ones toward nothing. The graph is unchanged; what is drawn is the
+// part of it that describes her shape.
+const SKIN_LINK_NEAR = 55, SKIN_LINK_FAR = 210;
+function fadeSkinLinks() {
+  if (!linkGeo || !linkBaseCol || !linkIndex.length) return;
+  const pos = linkGeo.attributes.position.array, col = linkGeo.attributes.color.array;
+  for (let i = 0; i < linkIndex.length; i++) {
+    const o = i * 6;
+    const d = Math.hypot(pos[o + 3] - pos[o], pos[o + 4] - pos[o + 1], pos[o + 5] - pos[o + 2]);
+    const t = Math.max(0, Math.min(1, (SKIN_LINK_FAR - d) / (SKIN_LINK_FAR - SKIN_LINK_NEAR)));
+    const k = t * t * (3 - 2 * t);                              // smoothstep — no hard cut-off ring
+    for (let v = 0; v < 6; v++) col[o + v] = linkBaseCol[o + v] * k;
+  }
+  linkGeo.attributes.color.needsUpdate = true;
 }
 
 // ---- MARKER RING (one extra draw call for both badges) ----
@@ -2338,6 +2442,26 @@ try { if (window.sq && window.sq.kg && typeof window.sq.kg.onActivity === 'funct
 try { if (window.sq && window.sq.kg && typeof window.sq.kg.onFocusMove === 'function') window.sq.kg.onFocusMove(onFocusMove); } catch (e) {}
 // dedup/curation runs on the legacy kg:curation-move channel — fold it into the same stream (absorb gesture + log).
 try { if (window.sq && window.sq.kg && typeof window.sq.kg.onCurationMove === 'function') window.sq.kg.onCurationMove((p) => { if (p) onActivity({ db: 'echo', kind: 'node.merge', anchor: p.anchor, count: p.count || 1, tier: p.tier }); }); } catch (e) {}
+
+// ---- shell toggle + pop-out ----
+// Pop-out rides the companion window that already exists rather than minting a second one: main owns
+// `companion:toggle`, preload already exposes it, so this needs nothing main-side and works today. The
+// companion still renders her with her own textures — converting THAT surface to the shell palette is a
+// separate build, and this button is the honest half of it that can ship now.
+const shellBtn = document.getElementById('shellBtn'), popBtn = document.getElementById('popBtn');
+if (shellBtn) {
+  const paint = () => shellBtn.classList.toggle('on', SHELL_ON);
+  paint();
+  shellBtn.addEventListener('click', () => { setShell(!SHELL_ON); paint(); });
+}
+if (popBtn) {
+  popBtn.addEventListener('click', async () => {
+    try {
+      if (window.sq && typeof window.sq.companionToggle === 'function') { await window.sq.companionToggle(); setOverlay('her window toggled', 1400); }
+      else setOverlay('companion window unavailable', 2000);
+    } catch (e) { setOverlay(String((e && e.message) || e), 2000); }
+  });
+}
 
 // ---- face toggle: one click and the graph is byte-identical to what it was before she existed ----
 const faceBtn = document.getElementById('faceBtn');
