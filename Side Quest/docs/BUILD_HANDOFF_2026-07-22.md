@@ -50,8 +50,19 @@ whatever the sentence mood; after opinion/social, before the creative gate. Veri
 code: the live ask, verbatim, → factual. LESSON: every prior war-fall fix sat BEHIND this gate —
 a circuit is only as live as its shallowest router. (Overnight boot54 died with the machine;
 Lucas's 09:50 restart truncated boot54.log — forensics rode the turns table + code.)
-WATCH boot55: `cognition → enriched:news` on the Iran retest · harvest-born homecoming on an
-answered close (inquiry #1 Louisiana) · REFUSED lines when continuity baits. The war-question retest is STILL OWED (last asking
+**⭐THE FICTION ENGAGE (boot55 10:06, fixed 40d37bd, live BOOT56 ~10:15)**: an unprompted engage
+spoke a "June 2025 CSET Silicon Twist brief on memristor rollout … for today's 'Fault Lines of AI
+Safety' talk" — the brief is real but June 2022 and LUCAS's own canvas drop (claimed as her
+find); the memristor claim fuses his second drop into something the brief never says (the fusion
+disease in the SPEECH lane, invisible to the write-back gate); the talk exists NOWHERE (born in
+her own reflection, echoed by an agent event — the only real "fault lines" she holds are
+geological). ENGAGE GROUNDING GATE: say anchors must ground in manifest.text, missing NUMBER
+anchors block outright, the block writes history. 🚨DEEPER OPEN DEFECT: a reflection can invent a
+real-world commitment and re-enter state as fact (imagination-as-commitment). Also noted:
+[heartbeat][say] voiced a stock-newsletter email 3 min after the engage — grounded but chatty;
+the worth-it bar is Lucas's calibration call.
+WATCH boot56: `cognition → enriched:news` on the Iran retest · `BLOCKED ungrounded say` when the
+engage lane tries fiction again · harvest-born homecoming on an answered close · REFUSED lines. The war-question retest is STILL OWED (last asking
 was 23:36 on boot48, pre-news-tier — the honest-miss proof, not the tier's test): "what's the
 latest on the war?" must answer from her own stream in one turn (`enriched:news` in the log).
 BOOT49/50 PROOFS: inquiry #1 advanced touches 2-4 (the direction loop holds across boots) · email
