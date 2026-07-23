@@ -128,6 +128,17 @@ function typeKind(t) {
   for (const [kind, re] of _KIND_RES) if (re.test(s)) return kind;
   return 'other';
 }
+// Boot45, minutes after the guard shipped: "FRIENDS OF SCHUMER [FEC:C00346312]" still proposed the
+// Friends TV-show creator — the dossier extracted the show's facts while classifying the anchor as
+// an organization (the committee framing in the prompt won), so the kind-mismatch never fired. Two
+// tightenings: buildDossierPrompt now ASSERTS the registry kind for FEC-tagged anchors, and this
+// categorical backstop — an entertainment database can never ground a fact about a registered
+// political committee. Small, host-anchored, and true by category (not a relation-vocab blocklist).
+const _FEC_TAG_RE = /\[(?:FEC:)?C\d{6,}\]/i;
+const _ENTERTAINMENT_HOSTS = /(^|\.)(imdb\.com|disneyplus\.com|netflix\.com|fandom\.com|rottentomatoes\.com|tvguide\.com|hulu\.com|primevideo\.com|letterboxd\.com)$/i;
+function entertainmentSourced(url) {
+  try { return _ENTERTAINMENT_HOSTS.test(new URL(String(url || '')).hostname); } catch { return false; }
+}
 function referentGuard(gap, dossier) {
   const mention = String((gap && gap.mention) || '');
   // stored kind: the graph record's own type; an FEC committee tag in the name is an org even if
@@ -187,7 +198,9 @@ function buildDossierPrompt(mention, sources, { existing = null, neighbors = [] 
     // (0.88) is proposed but parked for corroboration. So citing all supporting sources is what makes an
     // edge LAND, not just enter the queue — hence "list every [S#] that states it", not just one.
     { role: 'system', content: 'You turn sources into a knowledge-graph object. Ground every claim in the sources; invent nothing. Output ONLY JSON of the shape {"entity_type":"person|organization|place|work|event|concept","summary":"2-4 dense factual sentences","related":[{"name":"Other Entity","type":"person|organization|...","relation":"short_relation_label","sources":["S#", ...],"when":"year or year-range the sources state this connection became/was true, e.g. 2023 or 2015-2019; empty if undated"}]}. `related` = up to 6 OTHER entities this one is genuinely connected to. For EACH related entity, set "sources" to the list of ALL [S#] labels whose text STATES this connection — cite EVERY source that independently supports it, not just one (independent corroboration is what confirms a fact). Set "when" ONLY from an explicit date in the sources — never guess. If a connection is your own INFERENCE beyond what the sources say, set "sources":[] (empty) — be honest: an inferred, uncited connection is HELD OUT, not added to the graph. Set "entity_type" to what the SOURCES actually describe — if they turn out to be about a DIFFERENT same-named thing than the entity asked about (a film or a person instead of a political committee), say so honestly: entity_type reflects the sources, and "related" is [] (facts about the namesake belong to the namesake, not this entity). No prose outside the JSON.' },
-    { role: 'user', content: `Entity: "${mention}"${have}${nbr}\n\nSources:\n${src || '(none)'}\n\nJSON:` }
+    // For a registry-tagged anchor the KIND is asserted outright — "FRIENDS OF SCHUMER" reads as a
+    // TV show to a model unless told it is a filing; sources about the namesake are contamination.
+    { role: 'user', content: `Entity: "${mention}"${/\[(?:FEC:)?C\d{6,}\]/i.test(String(mention)) ? ' — this is a REGISTERED U.S. POLITICAL COMMITTEE (the FEC id is in its name). Sources about a same-named show, film, band, or person are NOT about it; their facts belong to the namesake and must not appear in "related".' : ''}${have}${nbr}\n\nSources:\n${src || '(none)'}\n\nJSON:` }
   ];
 }
 
@@ -320,6 +333,7 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
   // REFERENT GUARD — the graph says one kind of thing, the sources describe another: same name,
   // wrong referent. Every claim below HOLDS (status 'held', reason in the log), nothing promotes.
   const _refG = referentGuard(gap, dossier);
+  const _isRegistryAnchor = _FEC_TAG_RE.test(mention) || _FEC_TAG_RE.test(canonical);
   if (!_refG.ok) log && log(`[grow] "${mention}" REFERENT MISMATCH — graph holds a ${_refG.stored}, sources describe a ${_refG.described}; all claims HELD`);
 
   // 1) the anchor object itself — only if MISSING. EXISTENCE gate: mint only if the web pull cites it as
@@ -368,9 +382,11 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
       if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: fg.url, grade: fg.grade, confidence: fg.confidence, status: 'held' }); } catch {} }
       continue;
     }
-    if (!_refG.ok) {
-      // WELL-CITED but about the WRONG same-named thing (referent guard above) — a cited claim
-      // from someone else's page is still someone else's fact. Held, never promoted.
+    if (!_refG.ok || (_isRegistryAnchor && entertainmentSourced(fg.url))) {
+      // WELL-CITED but about the WRONG same-named thing — a cited claim from someone else's page
+      // is still someone else's fact. Either the kind-mismatch guard fired, or (Friends-of-Schumer
+      // shape) a registry committee's claim is sourced to an entertainment DB, which can never
+      // ground it by category. Held, never promoted — and never landed short-term either.
       held++;
       if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: fg.url, grade: fg.grade, confidence: fg.confidence, status: 'held' }); } catch {} }
       continue;
@@ -619,7 +635,7 @@ async function runMove(deps = {}) {
 
 module.exports = {
   runMove, decayVisitedEdges, extractCandidates, assessGaps, growAround, fetchLayeredSources, sourceLabel, proposeEntity, proposeRelation,
-  parseJsonLoose, extractProperNouns, classifyObject, rankGaps, visitKey, normalizeRelType, typeKind, referentGuard,
+  parseJsonLoose, extractProperNouns, classifyObject, rankGaps, visitKey, normalizeRelType, typeKind, referentGuard, entertainmentSourced,
   loadVisited, visitedKeySet, recordVisited, buildCandidatePrompt, buildDossierPrompt,
   THIN_DEGREE, THIN_FACTS, WALK_MAX_NODES, WALK_MAX_CONNECTIONS, MAX_CANDIDATES, VISITED_TTL_MS, SATURATED_TTL_MS, VISITED_KEY
 };

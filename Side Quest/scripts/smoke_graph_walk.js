@@ -413,6 +413,33 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
     );
     ok(mGrown.built === false && mGrown.held === 1 && mObs.some((o) => o.relation === 'exists' && o.status === 'held'),
       'mismatched referent on a MISSING registry anchor: a committee is never born as a person');
+
+    // the Friends-of-Schumer shape (boot45, minutes after the guard shipped): the dossier keeps the
+    // COMMITTEE framing (entity_type organization → kind guard passes) while extracting the TV
+    // show's facts from IMDb. The categorical backstop: an entertainment DB can never ground a
+    // registered committee's claim → held; a wikipedia-cited claim on the same anchor still lands.
+    ok(G.entertainmentSourced('https://m.imdb.com/title/tt1094229/') && !G.entertainmentSourced('https://en.wikipedia.org/wiki/X'),
+      'entertainmentSourced: host-anchored, IMDb yes, Wikipedia no');
+    const fCalls = []; const fObs = [];
+    const fGrown = await G.growAround(
+      { mention: 'FRIENDS OF SCHUMER [FEC:C00346312]', kind: 'thin', object: { id: 4, degree: 2, facts: [], entity_type: 'organization' } },
+      { web: async () => [
+          { text: 'Friends is an American sitcom created by David Crane.', url: 'https://www.imdb.com/title/tt0108778/' },
+          { text: 'Friends of Schumer is the principal campaign committee of Senator Chuck Schumer.', url: 'https://en.wikipedia.org/wiki/Chuck_Schumer' },
+        ],
+        cloud: async () => JSON.stringify({
+          entity_type: 'organization', summary: 'A campaign committee.',
+          related: [
+            { name: 'David Crane', type: 'person', relation: 'creator', sources: ['S1'] },
+            { name: 'Chuck Schumer', type: 'person', relation: 'principal campaign committee of', sources: ['S2'] },
+          ],
+        }),
+        dispatch: async (tag) => { fCalls.push([tag.name, tag.args && tag.args.target_name]); return { ok: true, text: JSON.stringify({ action: tag.name === 'propose_relation' ? 'proposed' : 'created' }) }; },
+        observe: async (o) => fObs.push(o) }
+    );
+    ok(fGrown.held === 1 && fGrown.connections === 1, 'Friends shape: the IMDb-cited claim HOLDS, the Wikipedia-cited committee claim still lands');
+    ok(!fCalls.some((c) => c[0] === 'propose_relation' && c[1] === 'David Crane') && fCalls.some((c) => c[0] === 'propose_relation' && c[1] === 'Chuck Schumer'),
+      'Friends shape: the show creator never reaches propose_relation; the real committee edge does');
   }
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
