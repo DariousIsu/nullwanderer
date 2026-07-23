@@ -194,6 +194,31 @@ async function _enrichConvo(need, deps = {}) {
   return { text: 'From our own past conversation (this is what was actually said):\n' + lines.join('\n'), url: null };
 }
 
+// ENRICH tier — HER OWN NEWS STREAM (the 189-feed lane: hourly-compressed, corroborated, local).
+// Live boots 47/48: three turns of "what's the latest on the war?" promised and missed while
+// "Iran war live: US launches new attacks" sat CURRENT in data/news_bucket.db — the ladder had
+// graph/wiki/convo/web/excavate and never once read her own freshest source. A needs_fresh
+// question checks the stream FIRST now: zero network, already corroborated, updated hourly.
+async function _enrichNews(need, deps = {}) {
+  try {
+    const stories = (deps.newsStories ? deps.newsStories() : require('./news_lane').allStories()) || [];
+    const qt = new Set(String(need || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length >= 3));
+    if (!qt.size || !stories.length) return { text: '', url: null };
+    const scored = [];
+    for (const s of stories) {
+      const st = String((s.title || '') + ' ' + (s.summary || '')).toLowerCase();
+      let hit = 0; for (const t of qt) if (st.includes(t)) hit++;
+      if (hit >= 1) scored.push({ s, hit });
+    }
+    if (!scored.length) return { text: '', url: null };
+    scored.sort((a, b) => (b.hit - a.hit) || ((b.s.last_ts || 0) - (a.s.last_ts || 0)));
+    const day = (ts) => { try { return require('./tz').dayKey(ts); } catch { return ''; } };
+    const top = scored.slice(0, 3).map(({ s }) =>
+      `• ${s.title}${s.summary ? ' — ' + String(s.summary).slice(0, 280) : ''}${s.last_ts ? ` (as of ${day(s.last_ts)})` : ''}`);
+    return { text: 'From my own news stream (fresh, corroborated):\n' + top.join('\n'), url: null };
+  } catch { return { text: '', url: null }; }
+}
+
 // WIKI IS A LINKING STEP, NOT A GENERAL ANSWER SOURCE (Lucas, 2026-07-20):
 //   "The wiki search should only be for a newly minted object or an object that has no wiki link."
 //
@@ -347,19 +372,19 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
     // Fresh check escalates: Wikipedia lead/body first, then — for the current-office facts wiki can't
     // read off the page — EXCAVATION (her eyes on the infobox). Whichever confirms a fresh value writes
     // back (supersedes the stale one) and wins.
-    for (const tier of ['wiki', 'excavate']) {
+    for (const tier of ['news', 'wiki', 'excavate']) {
       let fresh = { text: '', url: null };
       // NOTE: `object` is deliberately NOT passed here. This is the CURRENCY-VERIFY path — "who is
       // president now?" — where wiki is checking whether a fact TURNED OVER, not linking an object.
       // The already-linked skip belongs to the enrichment ladder below; applying it here would mean a
       // linked object could never be re-verified, which is precisely the confidently-stale answer
       // (Echo still records Biden as president) this path exists to catch.
-      try { fresh = (tier === 'wiki' ? await _enrichWiki(topic, deps) : await _enrichExcavate(topic, deps)) || fresh; } catch {}
+      try { fresh = (tier === 'news' ? await _enrichNews(topic, deps) : tier === 'wiki' ? await _enrichWiki(topic, deps) : await _enrichExcavate(topic, deps)) || fresh; } catch {}
       if (!fresh.text) continue;
       const gv = [`Fresh check for the current fact (${topic}):\n${fresh.text}`, g].filter(Boolean).join('\n\n');   // fresh check LEADS so the draft cap keeps the verified value, not the stale grounding it's meant to override
       const v = await _draftOrNeed(userMessage, gv, deps);
       if (v && v.answer) {
-        const src = tier === 'wiki' ? 'wiki-verify' : 'excavate-verify';
+        const src = tier === 'news' ? 'news-verify' : tier === 'wiki' ? 'wiki-verify' : 'excavate-verify';
         _kickWriteBack({ query: userMessage, answer: v.answer, url: fresh.url, source: src, text: fresh.text, deps });
         return { say: v.answer, enriched: true, enrichSource: src };
       }
@@ -390,7 +415,7 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   // relevant source for anything WE said. It stays OUT of the office-holder ladder and comes late on
   // a fresh-fact question — an old remark of ours must never outrank a current-fact lookup.
   const _modes = it.kind === 'office_holder' ? ['wiki', 'web', 'excavate']
-    : it.needs_fresh ? ['wiki', 'graph', 'routed', 'convo', 'web', 'excavate']
+    : it.needs_fresh ? ['news', 'wiki', 'graph', 'routed', 'convo', 'web', 'excavate']
     : ['convo', 'graph', 'wiki', 'routed', 'web', 'excavate'];
   const _tried = [];   // what we ACTUALLY reached — the miss line must not overstate it
   for (const mode of _modes) {
@@ -400,7 +425,8 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
     // far cleaner lookup than the draft's raw NEED ("who runs the country" → the wiki "Country" article). Use
     // it.topic when the intent flagged fresh + gave one; otherwise the draft's need (entity Qs, no topic).
     const q = (it.needs_fresh && it.topic) ? it.topic : step.need;
-    const res = mode === 'convo' ? await _enrichConvo(q, deps)
+    const res = mode === 'news' ? await _enrichNews(q, deps)
+              : mode === 'convo' ? await _enrichConvo(q, deps)
               : mode === 'graph' ? await _enrichGraph(q, object, deps)
               : mode === 'wiki' ? await _enrichWiki(q, deps, { object })
               : mode === 'routed' ? await _enrichRouted(q, deps)
@@ -451,4 +477,4 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   return { say: `${where}, but I couldn't pin down ${need0}.`, enriched: true, missed: true, need: need0, tried: _tried };
 }
 
-module.exports = { answerGrounded, _draftOrNeed, _enrichConvo, _enrichGraph, _enrichWiki, _enrichRouted, _enrichWeb, _enrichExcavate, _kickWriteBack, _worthExcavating, _hasStaleGrounding, _entLine, NEED_RE };
+module.exports = { answerGrounded, _draftOrNeed, _enrichConvo, _enrichGraph, _enrichWiki, _enrichNews, _enrichRouted, _enrichWeb, _enrichExcavate, _kickWriteBack, _worthExcavating, _hasStaleGrounding, _entLine, NEED_RE };

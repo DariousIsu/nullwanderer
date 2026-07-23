@@ -63,7 +63,7 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   // 6) THE dying-question fix: graph empty → WIKIPEDIA tier recovers a fact no local tier held.
   const wikiMock = async () => [{ title: 'Lee Zeldin', extract: 'Lee Zeldin is the 17th administrator of the EPA since January 2025.' }];
   let wikiWb = null;
-  const f = await cog.answerGrounded({ userMessage: 'who is the head of the EPA?', grounding: '', deps: { ask: async ({ input }) => /Zeldin|EPA/i.test(input.grounding) ? 'Lee Zeldin is the head of the EPA.' : 'NEED: head of the EPA', dispatch: emptyGraph, wikiLookup: wikiMock, webSearch: async () => ({ results: [] }), writeBack: async (a) => { wikiWb = a; } } });
+  const f = await cog.answerGrounded({ userMessage: 'who is the head of the EPA?', grounding: '', deps: { ask: async ({ input }) => /Zeldin|EPA/i.test(input.grounding) ? 'Lee Zeldin is the head of the EPA.' : 'NEED: head of the EPA', dispatch: emptyGraph, wikiLookup: wikiMock, newsStories: () => [], webSearch: async () => ({ results: [] }), writeBack: async (a) => { wikiWb = a; } } });
   ok(f && f.enriched === true && f.enrichSource === 'wiki' && /Zeldin/.test(f.say), 'graph empty → WIKI tier recovers the answer (the dying-question fix)');
   await new Promise(r => setTimeout(r, 5));
   ok(wikiWb && /Zeldin/.test(wikiWb.answer) && /wikipedia\.org/.test(wikiWb.url) && wikiWb.source === 'wiki', 'write-back EXTENDED: a WIKI recovery also feeds the DB (source url + answer)');
@@ -71,7 +71,7 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   // 7) CURRENCY VERIFY: grounding gives a plausible (stale) answer, but the question asks "now" → verify
   // against a fresh source and correct it.
   const askStale = async ({ input }) => /EPA|administrator/i.test(String(input.grounding)) ? 'Lee Zeldin is the EPA Administrator, since 2025.' : 'Lee Zeldin is a U.S. Representative.';
-  const g = await cog.answerGrounded({ userMessage: 'what does Lee Zeldin do now?', grounding: 'Lee Zeldin — title: U.S. Representative', object: { name: 'Lee Zeldin' }, deps: { ask: askStale, wikiLookup: async () => [{ title: 'Lee Zeldin', extract: 'Lee Zeldin is the 17th administrator of the EPA since Jan 2025.' }], writeBack: async () => {} } });
+  const g = await cog.answerGrounded({ userMessage: 'what does Lee Zeldin do now?', grounding: 'Lee Zeldin — title: U.S. Representative', object: { name: 'Lee Zeldin' }, deps: { ask: askStale, newsStories: () => [], wikiLookup: async () => [{ title: 'Lee Zeldin', extract: 'Lee Zeldin is the 17th administrator of the EPA since Jan 2025.' }], writeBack: async () => {} } });
   ok(g && g.enrichSource === 'wiki-verify' && /EPA/.test(g.say), 'currency-marked question verifies stale records via wiki-verify');
 
   // 8) currency-marked but NO fresh source → keep the grounded answer (never worse than before).
@@ -99,6 +99,23 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   const _sSeen3 = [];
   await cog._enrichWiki('Ouachita Parish leadership', { wikiLookup: async (q) => { _sSeen3.push(q); return []; }, contextTerms: ['Ouachita Parish'] });
   ok(_sSeen3.length === 1 && _sSeen3[0] === 'Ouachita Parish leadership', 'SALIENCE: an anchor already inside the need never re-augments');
+
+  // 9c) HER OWN NEWS STREAM (boots 47/48: three turns promised "fetching…" while the Iran story sat
+  // current in her own bucket — the ladder had no news tier). A needs_fresh question reads it FIRST.
+  const _mockStories = () => [
+    { id: 1, title: 'Iran war live: US launches new attacks; Houthis attack 2 Saudi oil tankers', summary: 'Strikes resumed near Bandar Abbas; tanker traffic disrupted.', last_ts: Date.now() - 3600e3 },
+    { id: 2, title: 'Local bake sale raises funds', summary: 'A bake sale happened.', last_ts: Date.now() - 7200e3 },
+  ];
+  const nr = await cog._enrichNews('latest update on the Iran war', { newsStories: _mockStories });
+  ok(/From my own news stream/.test(nr.text) && /Bandar Abbas/.test(nr.text) && !/bake sale/.test(nr.text),
+    'NEWS tier: the matching story surfaces with its substance; unrelated stories stay out');
+  ok((await cog._enrichNews('quantum topology seminar', { newsStories: _mockStories })).text === '' || !/Iran/.test((await cog._enrichNews('quantum topology seminar', { newsStories: _mockStories })).text.split('\n')[1] || ''),
+    'NEWS tier: no real match → empty or weak (falls through to the next tier)');
+  const nf = await cog.answerGrounded({ userMessage: 'what is the latest update on the Iran war?', grounding: '', deps: {
+    ask: async ({ input }) => /Bandar Abbas|news stream/i.test(String(input.grounding)) ? 'Strikes resumed near Bandar Abbas and tanker traffic is disrupted.' : 'NEED: latest Iran war update',
+    newsStories: _mockStories, dispatch: emptyGraph, wikiLookup: async () => [], webSearch: async () => ({ results: [] }), excavate: async () => ({ found: false }), writeBack: async () => {} } });
+  ok(nf && nf.enriched === true && nf.enrichSource === 'news' && /Bandar Abbas/.test(nf.say),
+    'NEWS tier end-to-end: a needs_fresh war question answers from HER OWN stream');
 
   // 10) ALL cheaper tiers miss → FORENSIC EXCAVATION reads it off the rendered page AND kicks the write-back.
   let wbCall = null;
@@ -137,12 +154,12 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   const presAsk = async ({ input }) => /trump/i.test(String(input.grounding)) ? 'Donald Trump is the president.' : 'Joe Biden is the president.';
   // (A) fresh check AND every ladder tier fail → honest miss, NEVER the stale guess
   const pA = await cog.answerGrounded({ userMessage: 'who is the president of the united states?', grounding: '', deps: {
-    ask: presAsk, dispatch: emptyGraph, wikiLookup: async () => [], excavate: async () => ({ found: false }),
+    ask: presAsk, dispatch: emptyGraph, wikiLookup: async () => [], newsStories: () => [], excavate: async () => ({ found: false }),
     routeNeed: async () => ({ ok: false }), webSearch: async () => ({ results: [] }), writeBack: async () => {} } });
   ok(pA && pA.missed === true && !/Biden/i.test(pA.say), 'currency guard: unverifiable pure guess → honest miss, NOT the stale "Joe Biden"');
   // (B) fresh check fails but the WEB tier (which the verify loop lacks) recovers → correct current answer
   const pB = await cog.answerGrounded({ userMessage: 'who is the president of the united states?', grounding: '', deps: {
-    ask: presAsk, dispatch: emptyGraph, wikiLookup: async () => [], excavate: async () => ({ found: false }), routeNeed: async () => ({ ok: false }),
+    ask: presAsk, dispatch: emptyGraph, wikiLookup: async () => [], newsStories: () => [], excavate: async () => ({ found: false }), routeNeed: async () => ({ ok: false }),
     webSearch: async () => ({ results: [{ url: 'https://x/pres', title: 'President', snippet: 'Donald Trump' }] }),
     fetchPage: async () => ({ ok: true, title: 'President', text: 'The current president of the United States is Donald Trump, who assumed office on January 20, 2025. '.repeat(2) }),
     writeBack: async () => {} } });
