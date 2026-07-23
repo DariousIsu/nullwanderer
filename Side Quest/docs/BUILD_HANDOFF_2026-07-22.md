@@ -167,6 +167,12 @@ NEEDS BOOT71 to go live. Also: boot70's sweep IS healthy (first tick delayed pas
 silence was innocent); smoke_cognition 11th call mocked (news-bucket time-bomb, 7 calls remain).
 WATCH ON BOOT71: `[decomp-sweep]` reads 8443 FIRST in its batch (NOT a "[doc-decomp] SKIP") →
 inquiry #1's office lists complete → close → the FIRST harvest-born homecoming.
+**DEAD-HOST BREAKER `2bcbdf7` (boot70, ~16:0x)**: watched akiak-ak.gov take SIX all-doors ladder
+burns across six pages (profile 20 fails/0 oks; domain is ERR_NAME_NOT_RESOLVED — the concessions
+were honest, the REPETITION was the waste). site_ledger.hostDown: ≥8 door fails + zero successes
+ever + fresh streak → open_page skips OUTRIGHT, names the count + ~re-probe time, tells the
+operator to work a different lead; verdict self-clears after 6h (deferral, never disappearance).
+Live-verified: akiak + akhiok both trip. ALSO NEEDS BOOT71.
 
 **⭐POST-COMPACT AGENDA (Lucas, verbatim intent — the next conversation's spine)**:
 1. "Why she wasn't able to add new tools to her own program" — the roster touch NAMED its need
