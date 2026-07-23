@@ -1,6 +1,36 @@
-# Build handoff — engine/autonomy lane — 2026-07-22 (updated through the night of 07-22→23)
+# Build handoff — engine/autonomy lane — 2026-07-22 (updated through 07-23 late evening)
 
-## ⓪ NIGHT-END STATE (2026-07-23 ~01:30) — read this first
+## ⓪⓪ CIRCUIT-PROVING STATE (2026-07-23 ~23:59) — READ THIS FIRST, it supersedes ⓪
+⭐THE DISCIPLINE PIVOT (Lucas: "we need a plan for actually getting this working"): organs shipped
+gate-green but the CIRCUITS between them had never fired live. NEW RULE: no new organ until its
+upstream circuit fires live. Slices 6/7 WAIT. The bar for "working" is Lucas-visible: real answers
+or honest misses (never a dangling promise); every conversation leaves a trace in her work and she
+can say WHY; unprompted speech rare and worth it; the graph only grows what survives the gates.
+**PROVEN LIVE ON BOOT48**: first inquiry EVER opened (#1, born from Lucas's parish conversation)
+then ADVANCED (touch 1, validated write-back, continue) · the promise-guard fired and forced an
+honest miss · the Saudi-nuclear engage verified real against her own store · harvest catch-up mined
+5 conversations (3 leads/10 seeds/2 decisions).
+**ROOT CAUSES FOUND + FIXED TODAY** (each with its lesson): the decision schema ENUM never learned
+the new moves (3rd hand-copied-list drift — a schema-obedient model could never emit open-inquiry;
+smoke now asserts MOVES ⊆ enum) · the harvest had NEVER RUN (promoted pre-harvest; one-shot
+catch-up + DIRECTION rule: his world outranks the bulk inventory) · a fusion confabulation banked
+as knowledge kind=verified_fact ("tariffs over Canadian wildfire smoke", row purged; write-back
+gating = open hardening candidate) · Echo refusals now TEACH THE LANE SWITCH ("do NOT retry Echo;
+<web-open> or say the miss") · the promise-guard's empty-final-say hole (lastSay threads the
+recursion) · envelope echo stripped from the thought rail · expect judge grades the INCREMENT.
+**PENDING BOOT49**: 07007bd NEWS TIER (her 189-feed stream joins the cognition ladder — the war
+question's real fix) + e921645 update-rows ride ("↳ latest"). Retest after boot49: "what's the
+latest on the war?" must answer from her own stream in one turn.
+**DATA-STREAM SWEEP (complete)**: 2 gotchas — news_story_updates (fixed) + inbound_messages
+13,620 emails unreadable from any answering surface (chip filed w/ the _enrichNews template).
+All other stores verified reachable or already-indexed defects.
+**OPEN**: expect still 0-for-N pre-boot48-judge (watch for first MET → first procedure) · beat
+scheduler weighting by interests = Lucas's design call (its "[focus] DIRECTED set from user" line
+is MISLABELED when a beat seeds it) · [truth] @realDonaldTrump lookup dead ×2 boots · chips: email
+archive tier, namesake-edge cleanup, dry-frontier dampening, decompose double-read (3 running in
+parallel sessions — do not touch graph_walk/monologue/decomp lanes without checking their state).
+
+## ⓪ NIGHT-END STATE (2026-07-23 ~01:30) — superseded by ⓪⓪ above
 Everything through slice 4 + O0.h is COMMITTED, gate-green: slices 1-3a, rehearsal R1 (+the junction
 incident, disclosed in 68e9704), detector fixes (a086607/48950ea), the organ catalog complete
 (e9db165/03da2d1/19325e5/6567522 — O0-O9 + §6 dispatcher's lessons + §7 needs lens), audible
