@@ -8017,6 +8017,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       }
     } catch {}
 
+    // SLICE R intake #3 (chat lane): the ORIGINAL roster need was named in CONVERSATION — she told
+    // Lucas she needed an XLS reader before any inquiry existed — and the harvest only listened to
+    // write-backs. Her say runs the same detector; both interaction lanes now feed one need store.
+    try {
+      const capn = require('./lib/capability_need');
+      const named = capn.harvest(String(finalSaid || ''), { bornFrom: 'conversation', nowMs: Date.now() });
+      for (const n of named) if (!n.deduped) console.log(`[main] capability need named in chat → [need #${n.id}] "${String(n.need).slice(0, 80)}"`);
+    } catch {}
+
     // GENERAL TOOL ROUTER (Front/Cortex P3) — the cloud decides the surface for a lookup the front
     // didn't reach for and memory can't answer: open-web, OUR data (Echo), or nothing. Generalizes
     // the regex nets so the conversational front needn't emit the right tag. Fires only when she
@@ -9494,6 +9503,13 @@ async function autonomyTick() {
     try { expectVerdict = await autonomy.verifyExpect({ decision, opRes: res }); } catch {}
     const sum = autonomy.summarizeOutcome(decision, res, { now, verify: expectVerdict });
     try { require('./lib/board').finish(boardId, { status: sum.ok ? 'done' : 'failed', note: String(sum.entry && sum.entry.outcome || '').slice(0, 160) }); } catch {}
+    // SLICE R intake #2 (one-shot lane): a work move that NAMES its missing capability feeds the
+    // same need store the inquiry write-back does — both autonomy lanes reach the sandbox.
+    try {
+      const capn = require('./lib/capability_need');
+      const named = capn.harvest(String((res && res.answer) || ''), { bornFrom: `${decision.move}:${String(decision.target || '').slice(0, 60)}`, nowMs: now });
+      for (const n of named) if (!n.deduped) console.log(`[autonomy] capability need named → [need #${n.id}] "${String(n.need).slice(0, 80)}"`);
+    } catch {}
     // CRYSTALLIZE (2c): the verified run writes back into procedural memory — an injected
     // procedure's track record updates either way; a met run drafts/folds a reusable procedure;
     // an unmet one lands a durable constraint. The substrate gets stronger with use.
