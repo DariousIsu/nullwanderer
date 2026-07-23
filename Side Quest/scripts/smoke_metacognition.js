@@ -20,6 +20,16 @@ ok(m.classifyClaimType('explain how STDP works') === 'other', 'concept explanati
 ok(m.classifyClaimType('write me a short poem') === 'other', 'creative command → other');
 ok(m.classifyClaimType('what do you think about permitting reform') === 'other', 'opinion → other');
 
+// --- the imperative retrieval ask (live fall 2026-07-23: no '?', no interrogative word → 'other'
+// → the whole grounding ladder went dark while the store held 1,676 Iran stories) ---
+ok(m.classifyClaimType('Just give me the latest new on Iran, I know the other strait in the region got partially closed') === 'factual',
+  'the live Iran ask, verbatim (imperative, typo and all) → factual');
+ok(m.classifyClaimType('give me the latest on the war') === 'factual', 'imperative "the latest on X" → factual');
+ok(m.classifyClaimType('catch me up on the tariff situation') === 'factual', 'catch-me-up → factual');
+ok(m.classifyClaimType('summarize the news on Iran') === 'factual', 'currency object OUTRANKS the creative gate — summarizing news is retrieval');
+ok(m.classifyClaimType('write me a short poem about the sea') === 'other', 'creative stays creative when nothing current is asked for');
+ok(m.classifyClaimType('what do you think about the news coverage of you AIs') === 'other', 'opinion still outranks currency — her take is hers');
+
 // --- assessGrounding: rich / thin / none ---
 ok(m.assessGrounding({ knowledgeRows: [{ source: 'verified_fact', content: 'x' }] }).level === 'rich', 'a verified_fact → rich');
 ok(m.assessGrounding({ knowledgeRows: [{ source: 'personal_fact', content: 'Alice' }] }).level === 'rich', 'a personal_fact → rich');

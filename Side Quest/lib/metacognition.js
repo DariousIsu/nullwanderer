@@ -51,6 +51,15 @@ const SOCIAL_RE = /\b(how are you|how'?s it going|how was your|good morning|good
 const CREATIVE_CMD_RE = /\b(write|draft|compose|summari[sz]e|rewrite|edit|translate|generate|make me|create|brainstorm|outline|explain|describe how|walk me through|help me|give me a)\b/i;
 const FACTUAL_Q_RE = /\b(who|what|what'?s|when|when'?s|where|where'?s|which|whose|how many|how much|how old|how long|did|does|do|is|are|was|were|has|have|had|tell me about|remind me|look up)\b/i;
 
+// A retrieval ask names its OBJECT even when phrased as a command — "Just give me the latest new
+// on Iran" carries no '?' and no interrogative word, so the enumerated question shapes missed it
+// and the whole grounding ladder (news tier included) went dark while her store held 1,676 Iran
+// stories (live, 2026-07-23). The DISTINCTION, not another verb list: when the thing asked FOR is
+// current-state (news, the latest, updates, what's happening), the turn demands verifiable facts
+// whatever the sentence mood — and it outranks the creative gate ("summarize the news" is
+// retrieval, not creation).
+const CURRENCY_OBJECT_RE = /\b(news|headlines?|latest|updates? on|update me|current events?|what'?s (?:new|happening|going on)|catch me up|fill me in)\b/i;
+
 // A leading greeting/vocative ("Hey Zoe,", "Hi there —") was making real factual questions read as
 // SOCIAL, so the whole grounding/cognition pipeline was skipped ("Hey Zoe, who is X?" → deflection).
 // Strip it before classifying so the QUESTION decides the type, not the friendly opener.
@@ -60,7 +69,9 @@ function classifyClaimType(text) {
   if (s0.length < 4) return 'other';
   const stripped = s0.replace(_GREETING_PREFIX_RE, '').trim();
   const s = stripped.length >= 4 ? stripped : s0;
-  if (OPINION_RE.test(s) || SELF_INNER_RE.test(s) || SOCIAL_RE.test(s) || CREATIVE_CMD_RE.test(s)) return 'other';
+  if (OPINION_RE.test(s) || SELF_INNER_RE.test(s) || SOCIAL_RE.test(s)) return 'other';
+  if (CURRENCY_OBJECT_RE.test(s)) return 'factual';   // the object demands current facts, whatever the mood
+  if (CREATIVE_CMD_RE.test(s)) return 'other';
   const looksFactual = s.includes('?') || FACTUAL_Q_RE.test(s);
   return looksFactual ? 'factual' : 'other';
 }
