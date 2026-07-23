@@ -254,6 +254,7 @@ const smokes = [
   'smoke_board.js',
   'smoke_procedures.js',
   'smoke_self_source.js',
+  'smoke_rehearsal.js',
   'smoke_ner.js',
   'smoke_mention.js',
   'smoke_cognition.js',

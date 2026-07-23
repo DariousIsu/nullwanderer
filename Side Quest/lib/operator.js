@@ -100,7 +100,8 @@ TOOLS (call exactly ONE per step):
 - source_map {}                 HER OWN SOURCE CODE — the file map of the program she runs on, each module with its own description. Use for "how am I coded / where does X live"
 - source_read {"path":"lib/board.js"}   read one of her own source files (read-only; code + docs only — data, logs, and secrets are unreachable)
 - source_search {"pattern":"…"}         search her source for a string/regex ("where is X implemented", "who calls Y")
-- self_test {"suite":"smoke_board.js"}  run her own offline verification gate — ONE named suite in seconds, or omit suite for the FULL gate (minutes; use sparingly). The honest answer to "am I healthy?"`;
+- self_test {"suite":"smoke_board.js"}  run her own offline verification gate — ONE named suite in seconds, or omit suite for the FULL gate (minutes; use sparingly). The honest answer to "am I healthy?"
+- rehearsal_create {"slug":"my-idea"}   REHEARSE a change to her own code: a full working COPY of her source (the live program is never touched). Then rehearsal_edit {"slug","path","find","replace"} (find must match EXACTLY ONCE — read the file first), rehearsal_test {"slug","suite":"smoke_x.js"} to judge it with her own gate, rehearsal_diff {"slug"} for the honest change report, rehearsal_discard {"slug"} when done. NOTHING here can change the live program — a good rehearsal ends as a diff+verdict report for Lucas`;
 
 const TOOL_SPEC_TAIL = `To use a tool, reply with ONE JSON object and nothing else:
   {"thought":"why","action":{"tool":"echo","args":{"need":"…"}}}

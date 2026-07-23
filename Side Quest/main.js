@@ -8419,6 +8419,13 @@ const operatorTools = {
   source_read: async ({ path: p } = {}) => { try { return require('./lib/self_source').readSource(String(p || '')); } catch (e) { return 'ERROR: ' + e.message; } },
   source_search: async ({ pattern } = {}) => { try { return require('./lib/self_source').searchSource(String(pattern || '')); } catch (e) { return 'ERROR: ' + e.message; } },
   self_test: async ({ suite } = {}) => { try { return await require('./lib/self_source').selfTest({ suite: suite || null }); } catch (e) { return 'ERROR: ' + e.message; } },
+  // REHEARSAL (R1, docs/REHEARSAL_SANDBOX_DESIGN.md) — try a change to her own code in a COPY,
+  // judged by her own gate. NO adoption surface exists; a finished rehearsal exits as a report.
+  rehearsal_create: async ({ slug } = {}) => { try { return require('./lib/rehearsal').create({ slug }); } catch (e) { return 'ERROR: ' + e.message; } },
+  rehearsal_edit: async ({ slug, path: p, find, replace } = {}) => { try { return require('./lib/rehearsal').edit({ slug, path: p, find, replace }); } catch (e) { return 'ERROR: ' + e.message; } },
+  rehearsal_test: async ({ slug, suite } = {}) => { try { return await require('./lib/rehearsal').test({ slug, suite: suite || null }); } catch (e) { return 'ERROR: ' + e.message; } },
+  rehearsal_diff: async ({ slug } = {}) => { try { return require('./lib/rehearsal').diff({ slug }); } catch (e) { return 'ERROR: ' + e.message; } },
+  rehearsal_discard: async ({ slug } = {}) => { try { return require('./lib/rehearsal').discard({ slug }); } catch (e) { return 'ERROR: ' + e.message; } },
 };
 // CURATED ECHO READ TOOLS (first-class) — promote high-value structured reads (nonprofit 990s, our KG,
 // federal funding, FEC, bills) so the operator reaches for the right source deliberately instead of a
@@ -8463,7 +8470,7 @@ async function _runCloudOperator({ userMessage, context, task = false, autonomou
     const keys = (Array.isArray(toolNames) && toolNames.length) ? toolNames.filter(k => operatorTools[k]) : Object.keys(operatorTools);
     // self_test runs the offline gate (a full run takes minutes) — it gets its own budget instead of
     // the 20s per-tool default that every quick lookup keeps.
-    for (const k of keys) tools[k] = (a) => TO(operatorTools[k](a), k === 'self_test' ? 360000 : undefined);
+    for (const k of keys) tools[k] = (a) => TO(operatorTools[k](a), (k === 'self_test' || k === 'rehearsal_test') ? 360000 : k === 'rehearsal_create' ? 60000 : undefined);
     // TIER GATE on the generic `echo` need-router: on the AUTONOMOUS loop the cloud may pick ANY of the
     // 500+ tools, so pass `autonomous` so routeNeed blocks a write/heavy/locked pick (reads stay open).
     // The curated read tools above are READ-only and need no flag. Interactive turns (autonomous=false)

@@ -154,4 +154,4 @@ function selfTest({ suite = null, timeoutMs = null } = {}) {
   });
 }
 
-module.exports = { ROOT, ALLOW_DIRS, resolveSafe, sourceMap, readSource, searchSource, selfTest };
+module.exports = { ROOT, ALLOW_DIRS, resolveSafe, sourceMap, readSource, searchSource, selfTest, allSourceFiles: _allSourceFiles };
