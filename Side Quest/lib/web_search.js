@@ -101,6 +101,16 @@ async function fetchPage(url, { maxChars = 4000, timeoutMs = 8000, signal } = {}
     });
     if (!res.ok) return { ok: false, url, error: `HTTP ${res.status}` };
     const contentType = res.headers.get('content-type') || '';
+    // SPREADSHEET LANE (2026-07-23): a data source published as a spreadsheet used to die on the
+    // content-type wall below — inquiry #1 ground through 8 touches on exactly this. Parse it to a
+    // bounded text table shaped like any page read, so every consumer downstream is unchanged.
+    const sheetLib = require('./spreadsheet');
+    if (sheetLib.isSpreadsheet({ url, contentType })) {
+      const buf = Buffer.from(await res.arrayBuffer());
+      const parsed = await sheetLib.toBoundedText(buf, { url, cap: Math.max(maxChars, 4000) });
+      if (!parsed.ok) return { ok: false, url, error: parsed.error };
+      return { ok: true, url, title: parsed.title, text: parsed.text, truncated: parsed.truncated };
+    }
     if (!/text\/html|application\/xhtml/i.test(contentType)) {
       return { ok: false, url, error: `unsupported content-type: ${contentType}` };
     }
