@@ -1238,7 +1238,12 @@ function updateFace(now) {
 // through the VRM addon and verified: visemes, humanoid and material names identical, geometry measured to
 // 0.1mm of the Blender numbers. The COMPANION window still loads zoe.vrm — swapping that shared file is
 // Lucas's call, and this constant keeps the two decisions separate. Falls back if v3 is ever removed.
-const VRM_URL = '../data/avatars/zoe_v3.vrm';
+// v4 adds the REBUILT CHEST: VRoid deletes body geometry under clothing, so dropping the cloth exposed a
+// torso that never existed (1,474 boundary edges in the chest band — the red cavity in Lucas's profile shot
+// was the inside of her back). The shirt shell was already rigged and torso-shaped, so it was retagged
+// `Torso_01_SKIN (Rebuilt)` and sculpted to the REFERENCES (bust + waist, per Lucas: "use the reference
+// photos not the original avatar"), plus a real nose bridge and fuller lips for the profile.
+const VRM_URL = '../data/avatars/zoe_v4.vrm';
 const VRM_FALLBACK = '../data/avatars/zoe.vrm';
 // ANATOMY CARRIES MEANING (Lucas, 2026-07-22): "Short term memory can be the head, everything that is Zoe can
 // be the heart, and the rest of the body is everything else." That turns the figure from a shape the data
