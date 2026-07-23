@@ -1431,13 +1431,34 @@ function buildRegions() {
       // on her jaw and neck. Collapsing feature to the head value removes the boundary entirely.
       if (ex.length && ex.some(([c, r]) => v.distanceTo(c) < r)) { reg[i] = 1; continue; }   // eyes + mouth: no bind, shade as head
       const isHead = neckL ? v.y > neckL.y : false;
-      if (isHead) { reg[i] = 1; REGION.head.push({ mesh: m, vi: i }); continue; }
-      if (chestL && v.distanceTo(chestL) < HEART_R) { reg[i] = 2; REGION.heart.push({ mesh: m, vi: i }); continue; }
-      reg[i] = 0; REGION.body.push({ mesh: m, vi: i });
+      if (isHead) { reg[i] = 1; REGION.head.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z }); continue; }
+      if (chestL && v.distanceTo(chestL) < HEART_R) { reg[i] = 2; REGION.heart.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z }); continue; }
+      reg[i] = 0; REGION.body.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z });
     }
     m.geometry.setAttribute('aRegion', new THREE.BufferAttribute(reg, 1));
   }
+  // SPATIALLY EVEN SEATS. The raw pools hold every classified vertex, so dense mesh (fingers, toes, face)
+  // held far more seats than smooth mesh (thighs, upper arms) — random binding then packed nodes into hands,
+  // feet and head while the limbs stayed empty (measured: legs 20-32 nodes vs hips/hands 422). Voxel-downsample
+  // each pool so every ~2.5cm cell of her body offers a similar number of seats regardless of how finely it is
+  // modelled. Nodes now spread by SURFACE, not by vertex density — limbs fill in, extremities stop clustering.
+  REGION.body = voxelEven(REGION.body, 0.028, 2);
+  REGION.head = voxelEven(REGION.head, 0.020, 3);   // finer on the head — more surface detail to sit on
+  REGION.heart = REGION.heart;                       // heart is tiny; leave it dense
   applyShellMaterial();
+}
+// Keep up to `perCell` seats per spatial cell, chosen deterministically so the seat set is stable across
+// reloads. Cuts the over-dense clusters down to the same seat density as everywhere else.
+function voxelEven(pool, cell, perCell) {
+  if (!pool.length) return pool;
+  const cells = new Map();
+  for (const s of pool) {
+    const key = Math.round(s.x / cell) + ',' + Math.round(s.y / cell) + ',' + Math.round(s.z / cell);
+    let arr = cells.get(key); if (!arr) { arr = []; cells.set(key, arr); }
+    if (arr.length < perCell) arr.push(s);
+  }
+  const out = []; for (const arr of cells.values()) for (const s of arr) out.push(s);
+  return out;
 }
 // ============================================================================================================
 // THE SHELL — her surface, coloured by the graph's own scheme instead of her skin and clothing textures.
