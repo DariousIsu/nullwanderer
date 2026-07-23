@@ -308,7 +308,18 @@ async function runDiscoveryMove(deps = {}) {
     // ONLY mint from a REAL page her browser actually read (source:'browser') — NOT the wiki/corpus
     // fallback. The fallback is fine for reading a KNOWN entity, but for DISCOVERING an org's staff it
     // pulls Wikipedia noise (the "Reuben Dummy Stephenson at TC Energy" / hockey-coaches-at-Xcel junk).
-    const real = sources.filter(s => s && s.source === 'browser' && s.text);
+    let real = sources.filter(s => s && s.source === 'browser' && s.text);
+    // ARCHIVED-SOURCE GATE (2026-07-23): a 2013 Maryland Manual archive was being read as a CURRENT
+    // roster — stale officials with dead emails minted as contacts. An archived edition is history,
+    // never a contact source; the doc still lands via normal ingestion, just no minting from it.
+    try {
+      const pf = require('./prospect_fetch');
+      const dropped = real.filter(s => pf.isArchivedSource(s.url, s.text));
+      if (dropped.length) {
+        for (const d of dropped) log && log(`[puller-walk] archived source excluded from contact minting (historical, not current): ${d.url}`);
+        real = real.filter(s => !pf.isArchivedSource(s.url, s.text));
+      }
+    } catch {}
     if (!real.length) return { acted: false, reason: 'no-browser-source', org: seed.name };
     const text = real.map(s => s.text).join('\n\n').slice(0, 6000);
     const allImages = real.flatMap(s => Array.isArray(s.images) ? s.images : []);   // official headshots from the team/bio pages

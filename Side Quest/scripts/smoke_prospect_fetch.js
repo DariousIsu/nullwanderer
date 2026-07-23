@@ -105,6 +105,13 @@ ok(PF.pageResult(null) === null, 'pageResult: no read → null');
   await PF.deepBrowse(pdfNav, 'Fresno county schools directory', { bankPdf: (u) => banked.push(u) });
   ok(banked.length === 1 && /FCSS_Directory/.test(banked[0]), 'a caught PDF routes to the download lane via bankPdf — the spent search compute still pays');
 
+  // --- ARCHIVED-SOURCE detector (the 2013 Maryland Manual read as a CURRENT roster) ---
+  ok(PF.isArchivedSource('https://2013mdmanual.msa.maryland.gov/msa/mdmanual/36loc/bcity/html/bcitye.html', ''), 'archived: a dated-manual subdomain flags');
+  ok(PF.isArchivedSource('https://www.ojp.gov/pdffiles1/Digitization/17349NCJRS.pdf', ''), 'archived: a digitization scan path flags');
+  ok(PF.isArchivedSource('https://web.archive.org/web/2019/https://x.gov/team', ''), 'archived: a wayback copy flags');
+  ok(PF.isArchivedSource('https://msa.maryland.gov/page', 'Note: In this past edition of Maryland Manual, some links are to external sites. View the current Manual'), 'archived: the page\'s own past-edition banner flags');
+  ok(!PF.isArchivedSource('https://www.sos.la.gov/elections-voting/find-public-officials', 'The Elected Officials Database provides a current listing of all elected public officials.'), 'a live current roster does NOT flag');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

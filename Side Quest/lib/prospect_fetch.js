@@ -120,6 +120,17 @@ function matchPhotoForPerson(name, images) {
   return bestScore >= 2 ? best.src : null;   // ≥2 name tokens must match — the corroboration bar for a confident grab
 }
 
+// ARCHIVED-SOURCE DETECTOR (2026-07-23, Lucas's screenshot: the 2013 Maryland Manual archive being
+// read as a CURRENT roster — Rawlings-Blake "mayor" with 2013 staff emails). An archived edition is
+// legitimate HISTORICAL knowledge but must never mint current contacts. Signals: dated-archive URL
+// shapes (2013mdmanual…, /archive/, wayback, digitization scans) and the page's own banner language
+// ("past edition", "view the current…"). Pure → smokeable.
+const _ARCHIVED_URL_RE = /\b(19|20)\d{2}[a-z-]*manual|web\.archive\.org|\/archives?\/|wayback|digitization/i;
+const _ARCHIVED_TEXT_RE = /\b(past edition|archived (?:edition|version|page|copy)|historical (?:edition|version)|no longer (?:current|maintained|updated)|view the current (?:manual|version|edition|page))\b/i;
+function isArchivedSource(url, text) {
+  return _ARCHIVED_URL_RE.test(String(url || '')) || _ARCHIVED_TEXT_RE.test(String(text || '').slice(0, 3000));
+}
+
 // MULTI-LAYER browse (Lucas: "make sure we are actually clicking through multiple layers"). Land on the
 // top search result, read it, then CLICK THROUGH one layer deeper: up to `maxHops` relevant NAV links
 // (the real team page, a Contact page) AND up to `maxBios` individual PERSON-name links (each leader's
@@ -192,4 +203,4 @@ async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 
   return rows;
 }
 
-module.exports = { makeWebFetcher, pageResult, deepBrowse, matchPhotoForPerson, pickFollowLinks, pickPersonLinks, looksLikePersonLink, isBrokerUrl, parseHandles, RELEVANT_LINK };
+module.exports = { makeWebFetcher, pageResult, deepBrowse, matchPhotoForPerson, pickFollowLinks, pickPersonLinks, looksLikePersonLink, isBrokerUrl, isArchivedSource, parseHandles, RELEVANT_LINK };
