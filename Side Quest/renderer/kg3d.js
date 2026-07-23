@@ -1606,9 +1606,12 @@ function makeLashMaterial(m) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\n')
       .replace('#include <dithering_fragment>', `
+        // The strands are THIN and anti-aliased: the map has only 46 fully-opaque pixels, so a 0.30 cutoff
+        // discarded every lash. Cut only true background and lift the partial alpha so fine strands read.
         float la = texture2D(map, vMapUv).a;
-        if (la < 0.30) discard;
-        gl_FragColor = vec4(vec3(0.60, 0.66, 0.82) * la, la);              // soft cool lash strands
+        if (la < 0.04) discard;
+        float a = clamp(la * 1.7, 0.0, 1.0);
+        gl_FragColor = vec4(vec3(0.60, 0.66, 0.82) * a, a);                // soft cool lash strands
         #include <dithering_fragment>`);
   };
   mat.needsUpdate = true;
