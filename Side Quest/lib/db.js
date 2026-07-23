@@ -141,6 +141,21 @@ const MIGRATIONS = [
   // REAL finding is announced back into the chat that asked. NULL = the homecoming is still owed,
   // so a later tick-advanced finding still returns to the talk (§6 L1: the address rides the object).
   `ALTER TABLE inquiries ADD COLUMN dig_delivered_ts INTEGER`,
+  // THE SKILL SHELF (O1, slice 5 — lib/skills.js). A REGISTRY over the three procedure systems
+  // that already exist (flow recipes / crystallized procedures / instruction packs) — the trigger
+  // surface (name + one ≤140-char line) is permanent and cheap; the body dereferences on pull
+  // (<skill name="…"/>). Births: recipes/ sync at boot; a procedure crossing met≥3 self-promotes.
+  `CREATE TABLE IF NOT EXISTS skills (
+    name TEXT PRIMARY KEY,
+    trigger_desc TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('flow','procedure','shape','guide')),
+    body_ref TEXT,
+    applies TEXT,
+    provenance TEXT,
+    uses INTEGER NOT NULL DEFAULT 0,
+    last_used_ts INTEGER,
+    created_ts INTEGER NOT NULL
+  )`,
   `CREATE INDEX IF NOT EXISTS idx_monologue_type_ts ON monologue(type, ts)`,
   `CREATE TABLE IF NOT EXISTS commitments (
     id INTEGER PRIMARY KEY,

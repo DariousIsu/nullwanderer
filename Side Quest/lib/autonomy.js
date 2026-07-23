@@ -28,7 +28,7 @@
  */
 'use strict';
 
-const MOVES = ['advance-inquiry', 'open-inquiry', 'close-inquiry', 'research', 'fill-gap', 'corroborate', 'clean', 'build', 'maintain', 'engage', 'nothing'];
+const MOVES = ['advance-inquiry', 'open-inquiry', 'close-inquiry', 'research', 'fill-gap', 'corroborate', 'clean', 'build', 'maintain', 'rehearse', 'engage', 'nothing'];
 const HISTORY_KEY = 'autonomy.history';
 const HISTORY_MAX = 12;
 
@@ -188,6 +188,23 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
       + rows.map((r) => `   - ${String(r.name || r.trigger_text || '').slice(0, 110)} (${_ago(now, r.created_ts)})`).join('\n');
   });
 
+  grab('rehearsal', () => {
+    // O2: the run's continuity line — the tick can see (and choose to advance) the iterating change.
+    const line = require('./rehearsal_driver').manifestLine({ deps: { db: dbm } });
+    if (!line) return '';
+    counts.rehearsal = 1;
+    return `• ACTIVE REHEARSAL RUN (advance with the rehearse move; green exits as a proposal card):\n${line}`;
+  });
+
+  grab('skills', () => {
+    // O1: the shelf's trigger surface rides the manifest — counts + keys, never bodies. The pull
+    // is the operator's <skill name="…"/> tag; the brief carries turn-matched lines separately.
+    const lines = require('./skills').manifestLines({ deps: { db: dbm }, limit: 5 });
+    if (!lines.length) return '';
+    counts.skills = lines.length;
+    return `• HER SKILLS (know-how on the shelf; a body loads only on pull):\n${lines.join('\n')}`;
+  });
+
   grab('maintenance', () => {
     // Echo pass status, cached by the driver (meta autonomy.pass_status, ~6h) — a stale loop is a
     // maintain-move candidate. Facts + age only; the allowlist itself rides the maintain brief.
@@ -251,6 +268,7 @@ One-shot moves (work that is genuinely single-step):
 - clean: inspect and report on duplicates/conflicts (writes are gated — your product is a precise report).
 - build: turn material she ALREADY HOLDS into a real markdown document (a brief, a gap report, a synthesis).
 - maintain: run ONE curated maintenance loop on her own stores (the brief names the allowlist — an integrity-audit report, a full-corpus dedup proposal sweep). Products are REPORTS and PROPOSALS; nothing applies unattended. Prefer it when MAINTENANCE & ANALYSIS LOOPS shows a loop gone stale.
+- rehearse: advance the ACTIVE REHEARSAL RUN one bounded iteration (only when the state shows one; a parked run resumes). target is its slug. The run edits a sandboxed COPY of her own code, judged by her own gate; green ends as a proposal-card document — nothing self-adopts, ever. Never starts a new run.
 - engage: say something to Lucas NOW — a genuine finding or a direction question. Use RARELY, only when you have something real; "say" must carry the exact message, grounded in the state above, no invented facts.
 - nothing: a first-class answer. If no move is clearly worth its cost, decline honestly.
 

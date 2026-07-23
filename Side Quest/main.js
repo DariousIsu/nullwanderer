@@ -1359,6 +1359,10 @@ app.whenReady().then(() => {
   // instead of code round-robins choosing for it. Yields to chat, directed focuses, and meetings.
   try { startAutonomyDriver(); } catch (e) { console.error('[main] autonomy driver start failed:', e.message); }
 
+  // THE SKILL SHELF (O1, slice 5) — idempotent boot sync: the flow recipes on disk register their
+  // trigger lines. Crystallized procedures self-promote at met≥3 (procedures.recordUse).
+  try { const n = require('./lib/skills').syncFlows(); if (n) console.log(`[skills] shelf synced — ${n} flow recipe(s) registered`); } catch (e) { console.error('[skills] boot sync failed:', e.message); }
+
   // CONVERSATION OBJECTS (memory slice 1A) — closed chat windows become addressable documents
   // (lib/conversation_objects): landed in the short-term store now (same-day recall), promoted into Echo
   // nightly via save_conversation. First run 2 min after boot so windows closed before the reboot land
@@ -6922,6 +6926,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // touches) and its finding returns TO THIS CHAT addressed to what was asked, not to her
             // private stream. Answer what you can NOW in the same reply; the dig covers what you can't.
             { key: 'fork a dig (mid-conversation research)', label: 'ASYNC — when the talk raises a question worth real research that you cannot answer from what you hold, fork a line of inquiry: keep talking now (give what you have, say you are digging), and your finding returns to this conversation in a few minutes addressed to what was asked. Never for what Lucas is waiting on THIS turn', how: '<dig>the question, fully stated so it stands alone away from this chat</dig>' },
+            // THE SKILL SHELF (O1): her own proven know-how, trigger lines cheap, bodies on pull.
+            { key: 'pull a skill off the shelf', label: 'her stored know-how (proven procedures, replay flows) — the body returns as a tool result THIS turn; pull one only when its trigger matches what you are actually doing', how: '<skill name="the-skill-slug"/>' },
           ] });
         } catch (e) { console.error('[main] manifest failed:', e.message); }
         const plan = pkg.buildPlan({
@@ -7135,7 +7141,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // <say> tripped the blank-reply recovery below and generated a SECOND reply over the acting one.
   // Third drift of this hand-copied list; the leakguard smoke reads the vocabulary from this regex,
   // so extending here extends the gate too.
-  const _hasToolTag = /<(web-open|web-read|web-click|web-type|web-back|web-close|browse|file-write|file-append|file-read|file-list|observe-screen|read-inbox|email|discord-dm|schedule|notify|clipboard-read|clipboard-write|echo-find|echo-do|echo-delegate|echo-recipe|image-gen|draw|imagine|chat-send|navigate|recall|dig)\b/i.test(`${thought || ''}\n${say || ''}`);
+  const _hasToolTag = /<(web-open|web-read|web-click|web-type|web-back|web-close|browse|file-write|file-append|file-read|file-list|observe-screen|read-inbox|email|discord-dm|schedule|notify|clipboard-read|clipboard-write|echo-find|echo-do|echo-delegate|echo-recipe|image-gen|draw|imagine|chat-send|navigate|recall|dig|skill)\b/i.test(`${thought || ''}\n${say || ''}`);
   // Salvage runs on ANY real user turn (dropped the old `!pulledFromThought` guard — a turn where Lucas
   // snapped her out of a thought must ALSO not go silent; that's exactly when the reply lands in <think>).
   // `|| truncated`: a TRUNCATED thought that merely ECHOES a `<browse…>`/tool fragment (cut off mid-tag,
@@ -7281,6 +7287,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     ...require('./lib/dig').parseDigTags(say || ''),
     ...(replyWriter !== MODEL ? require('./lib/dig').parseDigTags(cloudThinking || '') : [])
   ];
+  // THE SKILL SHELF (O1, slice 5 — lib/skills.js): <skill name="…"/> pulls a skill BODY as a
+  // tool-result this turn (the echo-guide mechanic, generalized). Reading her own know-how is
+  // always allowed, like recall.
+  const skillTagsToRun = [
+    ...require('./lib/skills').parseSkillTags(thought || ''),
+    ...require('./lib/skills').parseSkillTags(say || ''),
+    ...(replyWriter !== MODEL ? require('./lib/skills').parseSkillTags(cloudThinking || '') : [])
+  ];
   // VISION OUT — <image-gen>/<draw>/<imagine> prompts she emitted → generate an image (gated OFF
   // until a provider key is set). Off the clock she still gets to make images (it's expressive).
   const imageGenToRun = [
@@ -7306,6 +7320,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   thoughtStripped = echoSuitLib.stripEchoTags(thoughtStripped);
   thoughtStripped = recallLib.stripRecallTags(thoughtStripped);
   thoughtStripped = require('./lib/dig').stripDigTags(thoughtStripped);
+  thoughtStripped = require('./lib/skills').stripSkillTags(thoughtStripped);
 
   if (thoughtStripped) {
     db.insertTurn({
@@ -7347,6 +7362,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   sayStripped = echoSuitLib.stripEchoTags(sayStripped);
   sayStripped = recallLib.stripRecallTags(sayStripped);
   sayStripped = require('./lib/dig').stripDigTags(sayStripped);
+  sayStripped = require('./lib/skills').stripSkillTags(sayStripped);
   sayStripped = require('./lib/vision').stripGenTags(sayStripped);   // <image-gen> tags don't render
   // LEAKED-DIRECTIVE GUARD: the injected instruction blocks ([ANSWER TO GIVE…], [DELIVER THIS…],
   // [Lucas asked for the list…]) are meant FOR her, not Lucas — but the 24B sometimes echoes them. The
@@ -7802,6 +7818,26 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         } catch (err) { console.error('[dig] fork error:', err.message); }
       }
     })().catch(err => console.error('[dig] async error:', err.message));
+  }
+
+  // Background: THE SKILL SHELF pull (O1, slice 5) — <skill name="…"/> dereferences a skill body
+  // and feeds it back via one tool-followup so she has the know-how THIS turn (the echo-guide
+  // mechanic, generalized). A miss is fed back honestly (the shelf says what it doesn't hold).
+  if (skillTagsToRun.length > 0) {
+    (async () => {
+      const skills = require('./lib/skills');
+      for (const t of skillTagsToRun.slice(0, 2)) {
+        try {
+          const r = skills.resolveBody(t.name);
+          try {
+            const mrow = db.insertMonologue({ content: `I pulled skill "${t.name}" off the shelf${r.ok ? '' : ' — not found'}`, model: 'skills', type: 'reading', query: `skill ${t.name}` });
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: mrow.id, ts: mrow.ts, content: `(skill: ${t.name}${r.ok ? '' : ' ⚠'})`, type: 'reading', query: `skill ${t.name}` });
+          } catch {}
+          if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: `SKILL "${t.name}":\n${r.text}` }); }
+          console.log(`[skills] pull "${t.name}": ${r.ok ? 'ok' : 'miss'}`);
+        } catch (err) { console.error('[skills] pull error:', err.message); }
+      }
+    })().catch(err => console.error('[skills] async error:', err.message));
   }
 
   // Background: VISION OUT — dispatch <image-gen> prompts → create an image (gated OFF until a
@@ -8498,6 +8534,26 @@ const operatorTools = {
   rehearsal_test: async ({ slug, suite } = {}) => { try { return await require('./lib/rehearsal').test({ slug, suite: suite || null }); } catch (e) { return 'ERROR: ' + e.message; } },
   rehearsal_diff: async ({ slug } = {}) => { try { return require('./lib/rehearsal').diff({ slug }); } catch (e) { return 'ERROR: ' + e.message; } },
   rehearsal_discard: async ({ slug } = {}) => { try { return require('./lib/rehearsal').discard({ slug }); } catch (e) { return 'ERROR: ' + e.message; } },
+  // THE SKILL SHELF (O1, slice 5) — the operator's pull. The briefs carry matched trigger lines;
+  // the body dereferences here (lib/skills — flow recipes / proven procedures / stored shapes).
+  skill_pull: async ({ name } = {}) => { try { const r = require('./lib/skills').resolveBody(String(name || '')); return r.text; } catch (e) { return 'ERROR: ' + e.message; } },
+  // THE REHEARSAL DRIVER (O2, slice 5) — the loop over the R1 hands. start journals THE run (one
+  // at a time); iterate = one bounded pick-edit-test step (the tick advances it too); status reads
+  // the journal. Nothing here adopts — green ends as a proposal-card document (R3 absolute).
+  rehearsal_drive_start: async ({ slug, goal, suite, files } = {}) => {
+    try { const r = require('./lib/rehearsal_driver').start({ slug, goal, suite, files: Array.isArray(files) ? files : (files ? [files] : []) }); return r.ok ? `run "${r.run.slug}" started — suite ${r.run.suite}; iterate with rehearsal_drive_iterate` : `cannot start: ${r.reason}`; } catch (e) { return 'ERROR: ' + e.message; }
+  },
+  rehearsal_drive_iterate: async () => {
+    try { const r = await require('./lib/rehearsal_driver').iterate({}); return `[${r.status}] ${r.note}`; } catch (e) { return 'ERROR: ' + e.message; }
+  },
+  rehearsal_drive_status: async () => {
+    try {
+      const d = require('./lib/rehearsal_driver');
+      const run = d.load();
+      if (!run) return 'no rehearsal run journaled';
+      return `${d.manifestLine()}\nlast result (tail):\n${String(run.lastResult || '(none)').slice(-800)}`;
+    } catch (e) { return 'ERROR: ' + e.message; }
+  },
 };
 // CURATED ECHO READ TOOLS (first-class) — promote high-value structured reads (nonprofit 990s, our KG,
 // federal funding, FEC, bills) so the operator reaches for the right source deliberately instead of a
@@ -8955,6 +9011,10 @@ async function autonomyTick() {
         const pb = procs.briefBlock(procMatch);
         if (pb) brief += '\n\n' + pb;
       } catch {}
+      try {
+        const sl = require('./lib/skills').matchLines({ text: row.question });
+        if (sl) brief += '\n\n' + sl;
+      } catch {}
       let boardId = null;
       try { boardId = require('./lib/board').start({ lane: 'autonomy', kind: 'inquiry', target: `#${inqId} ${String(row.question).slice(0, 60)}`, note: _autonomySlot ? `on ${_autonomySlot}` : null }).id; } catch {}
       const res = await runCloudOperator({ userMessage: brief, context: manifest.text, task: true, autonomous: true });
@@ -9003,6 +9063,35 @@ async function autonomyTick() {
       console.log(`[autonomy] chose=advance-inquiry → #${inqId} touch ${row.touches + 1} ${sum.ok ? 'ok' : 'no-answer'}${env ? ` (${env.status})` : ' (no write-back)'}`);
       return;
     }
+    // REHEARSE (O2, slice 5) — advance THE active rehearsal run one iteration on a pool slot.
+    // The driver owns the loop (pick-edit-test, failure rides the next attempt); the tick just
+    // gives it a bounded turn. Green already landed its proposal card inside iterate(); stuck
+    // already crystallized its constraint. Never starts a run (operator work starts runs).
+    if (decision.move === 'rehearse') {
+      const driver = require('./lib/rehearsal_driver');
+      let run = driver.load();
+      if (run && run.status === 'parked') { driver.resume(); run = driver.load(); }
+      if (!run || run.status !== 'active') {
+        autonomy.historyPush(H, { ts: now, move: 'rehearse', target: decision.target, outcome: `no active run (${run ? run.status : 'none'})` });
+        console.log(`[autonomy] chose=rehearse → nothing to advance (${run ? run.status : 'no run'})`);
+        return;
+      }
+      let slot = null, boardId = null;
+      try { slot = require('./lib/board').acquireCloudSlot({ lane: 'rehearsal-drive' }); } catch {}
+      if (!slot) {
+        autonomy.historyPush(H, { ts: now, move: 'rehearse', target: run.slug, outcome: 'deferred: no-free-slot' });
+        _logAutonomyDeferral('no-free-slot');
+        return;
+      }
+      try { boardId = require('./lib/board').start({ lane: 'rehearsal', kind: 'drive', target: run.slug, note: `iteration ${run.iteration + 1}; on ${slot}` }).id; } catch {}
+      let r = null;
+      try { r = await driver.iterate({}); } catch (e) { console.error('[autonomy] rehearse iterate failed:', e.message); }
+      try { require('./lib/board').finish(boardId, { status: r && r.ok ? 'done' : 'failed', note: String((r && r.note) || 'iterate threw').slice(0, 160) }); } catch {}
+      try { require('./lib/board').release(slot); } catch {}
+      autonomy.historyPush(H, { ts: now, move: 'rehearse', target: run.slug, outcome: r ? `${r.status}: ${String(r.note).slice(0, 120)}` : 'iterate failed' });
+      console.log(`[autonomy] chose=rehearse → ${run.slug} ${r ? r.status : 'FAILED'}${r ? ` — ${String(r.note).slice(0, 100)}` : ''}`);
+      return;
+    }
     // WORK MOVES (research / fill-gap / corroborate / clean / build) → one bounded operator run.
     // autonomous:true keeps Echo writes tier-gated; build gets the task budget (it produces a file).
     let brief = autonomy.buildOperatorBrief(decision, { now });
@@ -9016,6 +9105,10 @@ async function autonomyTick() {
       const pb = procs.briefBlock(procMatch);
       if (pb) brief += '\n\n' + pb;
     } catch (e) { console.error('[autonomy] procedure match failed:', e.message); }
+    try {
+      const sl = require('./lib/skills').matchLines({ text: `${decision.move} ${decision.target}` });
+      if (sl) brief += '\n\n' + sl;
+    } catch {}
     // Register on the workstream board (conductor 2a) — the run is visible to chat's "what are you
     // doing?", to the next tick's manifest, and (2b) to slot allocation. Board failure never blocks work.
     let boardId = null;

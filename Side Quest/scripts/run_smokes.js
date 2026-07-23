@@ -258,6 +258,8 @@ const smokes = [
   'smoke_rehearsal.js',
   'smoke_inquiry.js',
   'smoke_dig.js',
+  'smoke_skills.js',
+  'smoke_rehearsal_driver.js',
   'smoke_ner.js',
   'smoke_mention.js',
   'smoke_cognition.js',

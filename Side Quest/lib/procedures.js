@@ -82,6 +82,14 @@ function recordUse(id, { met = false, deps = {}, nowMs = Date.now() } = {}) {
     const d = _db(deps).getDb();
     d.prepare(`UPDATE procedures SET ${met ? 'met = met + 1' : 'unmet = unmet + 1'}, last_used_ts = ? WHERE id = ?`).run(nowMs, id);
     d.prepare(`UPDATE procedures SET status = 'retired' WHERE id = ? AND unmet >= 3 AND unmet > met`).run(id);
+    // O1 BIRTH (slice 5): competence that PROVED OUT earns a permanent trigger line on the skill
+    // shelf. met≥3 is the bar; promoteFromProcedures is idempotent, so re-crossing costs nothing.
+    if (met) {
+      const row = d.prepare('SELECT * FROM procedures WHERE id = ?').get(id);
+      if (row && row.met >= 3 && row.status === 'active') {
+        try { require('./skills').promoteFromProcedures(row, { deps, nowMs }); } catch (e) { console.error('[skills] promote failed:', e.message); }
+      }
+    }
   } catch (e) { console.error('[procedures] recordUse failed:', e.message); }
 }
 
