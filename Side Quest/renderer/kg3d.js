@@ -154,6 +154,9 @@ try { SHAPE = localStorage.getItem('kg3d.shape') || 'halves'; } catch (e) {}
 // like it owns it, read by something that runs earlier.
 let vrmModel = null, vrmReady = false, vrmOccluders = [], skinBinds = null, _vrmLoading = false, _skinT = 0;
 const _vrmOff = new THREE.Vector3();                // model-centre → origin correction, kept out of position
+// Link-cloud state lives up here for the same reason: the routed-link builder reads linkIndex/linkBaseCol and
+// is defined above the straight cloud that owns them.
+let linkGeo = null, linkLines = null, linkIndex = [], linkBaseCol = null, _linkFadeAt = 0;
 const _tp = new THREE.Vector3();
 function nodeConnT(n) {                        // normalised connectivity, 0..1
   const sq = n.store === 'sidequest';
@@ -701,7 +704,9 @@ function render() {
   // (measured 4s warm, ~15s cold). Live evidence: bound 61, all of them the self_model rows, while 1,584
   // corpus nodes stayed in the force layout. An invisible figure standing inside an unbound cloud, which is
   // exactly what it looked like. Every reload, poll and mint now re-seats her.
-  if (SHAPE === 'skin' && vrmReady) { try { buildSkinBinding(); updateSkin(); } catch (e) {} }
+  if (SHAPE === 'skin' && vrmReady) {
+    try { buildSkinBinding(); updateSkin(); buildRoutedLinks(); setRoutedVisible(true); } catch (e) {}
+  } else { setRoutedVisible(false); }
 }
 
 async function loadOverview() {
@@ -1272,9 +1277,24 @@ async function loadVRM() {
     _vrmOff.copy(b2.getCenter(new THREE.Vector3())).sub(vrm.scene.position).negate();
     vrm.scene.visible = false;                      // hidden until the skin shape is actually chosen
     // Depth-only occluders: one per unique geometry, so the far side of her is hidden by the near side.
+    // NAKED, BY MATERIAL NAME (Lucas: "you can drop the geometry of the clothing and shoes, just design
+    // naked"). The VRoid material names say exactly what each slice is, so this needs no geometry guessing:
+    // *_CLOTH is the tops, bottoms, one-piece and both shoe slices; the EYE/brow/lash/eyeline/mouth slices are
+    // the facial detail I already draw myself, and leaving them in put a second set of real eyes underneath my
+    // drawn ones. What survives is SKIN and HAIR — her form, and nothing worn over it.
+    // CLOTHING ONLY. My first pass also dropped the eye, brow, lash, eyeline and mouth slices on the theory
+    // that I was drawing those myself — and the close-up showed what that actually produces: a ragged black
+    // hole across her face with two white ovals hovering in it. Torn, not stylised. Her real features are far
+    // better than anything I can draw over them, they already blink and lip-sync on the rig, and the Cortana
+    // reference is a fully readable human face. So the geometry stays and gets SHADED; only clothes go.
+    const DROP = /_CLOTH/i;
     const seen = new Set();
     vrm.scene.traverse((o) => {
       if (!o.isMesh && !o.isSkinnedMesh) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      const name = (mats[0] && mats[0].name) || '';
+      o.userData.matName = name;
+      if (DROP.test(name)) { o.visible = false; return; }          // not drawn, not bound, not occluding
       o.material = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true, depthTest: true });
       o.renderOrder = -5;                           // depth laid down before the additive clouds draw
       o.frustumCulled = false;
@@ -1282,7 +1302,10 @@ async function loadVRM() {
     });
     scene.add(vrm.scene);
     vrmModel = vrm; vrmReady = true;
-    findFeatures(); buildRegions(); buildDrawnFeatures();
+    // reproportion FIRST, so every anchor, exclusion radius and region downstream describes the corrected
+    // body rather than the one that was in the file.
+
+    reproportion(); findFeatures(); buildRegions(); buildDrawnFeatures();
     console.log('[kg3d] VRM skin ready —', vrmOccluders.length, 'meshes, scale', k.toFixed(1),
       '| head', REGION.head.length, 'heart', REGION.heart.length, 'body', REGION.body.length);
     return vrm;
@@ -1400,25 +1423,55 @@ let SHELL_ON = true; try { SHELL_ON = localStorage.getItem('kg3d.shell') !== '0'
 const shellUniforms = {
   uBody: { value: new THREE.Color(SHELL_COL.body) }, uHead: { value: new THREE.Color(SHELL_COL.head) },
   uHeart: { value: new THREE.Color(SHELL_COL.heart) },
-  uBase: { value: 0.055 }, uRim: { value: 1.35 }, uPow: { value: 2.4 }, uPulse: { value: 0 },
+  uBase: { value: 0.055 }, uRim: { value: 1.35 }, uPow: { value: 2.4 }, uPulse: { value: 0 }, uScan: { value: 1 },
 };
+// Each slice is shaded by WHAT IT IS, read off the VRoid material name. Skin takes the region colour and the
+// fresnel; hair goes solid so it reads as a mass and gives her a silhouette; the eyes are lit hard because a
+// face without legible eyes is a mannequin; brow/lash/eyeline stay dark to draw the eye shape, which is the
+// job they already do in the model. This is the Cortana read: translucent body, structure showing through,
+// but a human face on top of it rather than a hole.
+function matKind(name) {
+  const n = String(name || '');
+  if (/EyeHighlight/i.test(n)) return 4;
+  if (/EyeIris/i.test(n)) return 3;
+  if (/EyeWhite/i.test(n)) return 2;
+  if (/FaceBrow|FaceEyelash|FaceEyeline/i.test(n)) return 5;
+  if (/FaceMouth/i.test(n)) return 6;
+  if (/_HAIR/i.test(n)) return 1;
+  return 0;                                           // skin
+}
 function applyShellMaterial() {
   for (const m of vrmOccluders) {
+    const kind = matKind(m.userData && m.userData.matName);
     const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, shellUniforms);
+      sh.uniforms.uKind = { value: kind };
       sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\n attribute float aRegion;\n varying float vRegion;\n varying vec3 vVN;\n varying vec3 vVP;')
+        .replace('#include <common>', '#include <common>\n attribute float aRegion;\n varying float vRegion;\n varying vec3 vVN;\n varying vec3 vVP;\n varying float vMY;')
         .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\n vRegion = aRegion;\n vVN = transformedNormal;')
-        .replace('#include <project_vertex>', '#include <project_vertex>\n vVP = mvPosition.xyz;');
+        .replace('#include <project_vertex>', '#include <project_vertex>\n vVP = mvPosition.xyz;\n vMY = (modelMatrix * vec4(transformed, 1.0)).y;');
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\n uniform vec3 uBody; uniform vec3 uHead; uniform vec3 uHeart;\n uniform float uBase; uniform float uRim; uniform float uPow; uniform float uPulse;\n varying float vRegion; varying vec3 vVN; varying vec3 vVP;')
+        .replace('#include <common>', '#include <common>\n uniform vec3 uBody; uniform vec3 uHead; uniform vec3 uHeart;\n uniform float uBase; uniform float uRim; uniform float uPow; uniform float uPulse; uniform float uKind; uniform float uScan;\n varying float vRegion; varying vec3 vVN; varying vec3 vVP; varying float vMY;')
         .replace('#include <dithering_fragment>', `
-          vec3 rc = vRegion > 2.5 ? vec3(0.0)                       // eyes + mouth: held dark for the outlines
-                  : vRegion > 1.5 ? uHeart * (1.0 + uPulse * 0.9)   // her identity, beating
+          vec3 rc = vRegion > 1.5 ? uHeart * (1.0 + uPulse * 0.9)   // her identity, beating
                   : vRegion > 0.5 ? uHead : uBody;
           float fres = pow(1.0 - abs(dot(normalize(vVN), normalize(-vVP))), uPow);
-          gl_FragColor = vec4(rc * (uBase + fres * uRim), 1.0);
+          float amt = uBase + fres * uRim;
+          vec3 outc;
+          if (uKind < 0.5)      outc = rc * amt;                                    // skin
+          else if (uKind < 1.5) outc = rc * (0.16 + fres * 0.75);                   // hair: a readable mass
+          // Kept deliberately dim. At full body framing an eye is a handful of pixels, and additive white at
+          // that size blooms into the same bright orb that read as a skull twice already. The eye should be
+          // the DARKEST part of the face with a small light in it, which is what a real one is.
+          else if (uKind < 2.5) outc = vec3(0.30, 0.40, 0.52) * 0.20;               // sclera
+          else if (uKind < 3.5) outc = mix(rc, vec3(0.45, 0.80, 1.0), 0.7) * 0.42;  // iris
+          else if (uKind < 4.5) outc = vec3(0.55, 0.62, 0.72);                      // catchlight
+          else if (uKind < 5.5) outc = rc * 0.10;                                   // brow / lash / eyeline
+          else                  outc = mix(rc, vec3(1.0, 0.62, 0.72), 0.65) * 0.85; // lips
+          // a slow horizontal banding, the one borrowed cue that reads instantly as "projected, not filmed"
+          outc *= 1.0 + uScan * 0.16 * sin(vMY * 0.14);
+          gl_FragColor = vec4(outc, 1.0);
           #include <dithering_fragment>`);
     };
     mat.needsUpdate = true;
@@ -1469,7 +1522,10 @@ function anchorPos(ids, out) {
 }
 function updateDrawnFeatures(now) {
   if (!drawnFeatures || !featureAnchors) return;
-  const show = SHAPE === 'skin' && !!(vrmModel && vrmModel.scene.visible);
+  // OFF. Her own eyes and mouth are back and they blink and lip-sync on the rig, so drawn outlines on top are
+  // a second set of features fighting the real ones. The anchor-finding stays — it is what keeps NODES out of
+  // her eye sockets, which was always the part that mattered.
+  const show = false;
   for (const k of ['eyeL', 'eyeR', 'mouth']) drawnFeatures[k].visible = show;
   if (!show) return;
   const head = vrmModel.humanoid && vrmModel.humanoid.getNormalizedBoneNode('head');
@@ -1487,6 +1543,149 @@ function updateDrawnFeatures(now) {
   set(drawnFeatures.eyeR, featureAnchors.right, featureAnchors.eyeR * 1.35 / 2.0, Math.max(0.08, blink));
   // the mouth OPENS with her voice — the one feature that has to move to read as speech
   set(drawnFeatures.mouth, featureAnchors.mouth, featureAnchors.mouthR, 0.12 + face.mouthOpen * 1.5);
+}
+// ============================================================================================================
+// ROUTED LINKS — a connection travels along her, never across the gap beside her.
+// ============================================================================================================
+// Lucas: "you'll need to plan the connection points on a curve to match the body contour and if something
+// connects across limbs you'll need to route it the long way through the body and not in the space between."
+// Exactly right, and it is two different problems wearing one coat:
+//
+//   NEAR pairs sit on the same part of her, and a straight segment between them cuts UNDER the surface —
+//   through the arm rather than along it. Bowing the midpoint out to the average surface radius puts the
+//   curve back on her skin, so short links read as contour lines.
+//
+//   FAR pairs are the ones that made a skirt. A straight hand-to-knee chord is a bright wire hanging in the
+//   air beside her body. Routed through the SKELETON instead — hand → forearm → upper arm → shoulder → chest
+//   → hips → thigh → knee — it becomes an interior path, which is both what he asked for and what a nerve
+//   actually does. The bones are already in the file; nothing here is invented geometry.
+const BONE_PARENT = {
+  hips: null, spine: 'hips', chest: 'spine', upperChest: 'chest', neck: 'upperChest', head: 'neck',
+  leftShoulder: 'upperChest', leftUpperArm: 'leftShoulder', leftLowerArm: 'leftUpperArm', leftHand: 'leftLowerArm',
+  rightShoulder: 'upperChest', rightUpperArm: 'rightShoulder', rightLowerArm: 'rightUpperArm', rightHand: 'rightLowerArm',
+  leftUpperLeg: 'hips', leftLowerLeg: 'leftUpperLeg', leftFoot: 'leftLowerLeg',
+  rightUpperLeg: 'hips', rightLowerLeg: 'rightUpperLeg', rightFoot: 'rightLowerLeg',
+};
+let bonePos = null;                                 // bone name → world position, refreshed with her
+function refreshBones() {
+  if (!vrmModel || !vrmModel.humanoid) { bonePos = null; return; }
+  bonePos = new Map();
+  for (const name of Object.keys(BONE_PARENT)) {
+    try {
+      const b = vrmModel.humanoid.getNormalizedBoneNode(name);
+      if (!b) continue;
+      const p = new THREE.Vector3(); b.getWorldPosition(p); bonePos.set(name, p);
+    } catch (e) {}
+  }
+  // A missing optional joint would silently break every path that crosses it; fall its children up instead.
+  for (const [k, par] of Object.entries(BONE_PARENT)) { if (bonePos.has(k) && par && !bonePos.has(par)) bonePos.set(par, bonePos.get(k).clone()); }
+}
+function nearestBone(p) {
+  if (!bonePos || !bonePos.size) return null;
+  let best = null, bd = Infinity;
+  for (const [n, bp] of bonePos) { const d = p.distanceToSquared(bp); if (d < bd) { bd = d; best = n; } }
+  return best;
+}
+function bonePath(a, b) {                           // a → common ancestor → b, the long way round
+  if (!a || !b) return [];
+  if (a === b) return [a];
+  const up = (n) => { const c = []; let x = n, guard = 0; while (x && guard++ < 12) { c.push(x); x = BONE_PARENT[x]; } return c; };
+  const ca = up(a), cb = up(b);
+  const set = new Set(cb);
+  let common = null;
+  for (const n of ca) if (set.has(n)) { common = n; break; }
+  if (!common) return [a, b];
+  const left = []; for (const n of ca) { left.push(n); if (n === common) break; }
+  const right = []; for (const n of cb) { if (n === common) break; right.push(n); }
+  right.reverse();
+  return left.concat(right);
+}
+let routedGeo = null, routedLines = null;
+const ROUTE_SAMPLES = 12;                           // points per link; 11 segments
+function buildRoutedLinks() {
+  if (routedLines) { scene.remove(routedLines); routedGeo.dispose(); routedLines.material.dispose(); routedLines = null; routedGeo = null; }
+  if (SHAPE !== 'skin' || !vrmReady || !linkIndex || !linkIndex.length) return;
+  refreshBones();
+  if (!bonePos || !bonePos.size) return;
+  const segs = ROUTE_SAMPLES - 1, N = linkIndex.length;
+  const pos = new Float32Array(N * segs * 6), col = new Float32Array(N * segs * 6);
+  const A = new THREE.Vector3(), B = new THREE.Vector3(), mid = new THREE.Vector3(), dir = new THREE.Vector3();
+  let w = 0;
+  for (let i = 0; i < N; i++) {
+    const l = linkIndex[i], s = l.source, t = l.target;
+    if (!s || !t || typeof s !== 'object' || !Number.isFinite(s.x) || !Number.isFinite(t.x)) { w += segs * 6; continue; }
+    A.set(s.x, s.y, s.z || 0); B.set(t.x, t.y, t.z || 0);
+    const ba = nearestBone(A), bb = nearestBone(B);
+    const path = bonePath(ba, bb);
+    const pts = [A.clone()];
+    if (path.length <= 1) {
+      // same bone: bow the midpoint out to the surface so the curve lies ON her, not inside her
+      const bp = bonePos.get(ba) || mid.set(0, 0, 0);
+      mid.addVectors(A, B).multiplyScalar(0.5);
+      dir.subVectors(mid, bp);
+      const r = (A.distanceTo(bp) + B.distanceTo(bp)) * 0.5;
+      if (dir.lengthSq() > 1e-6) pts.push(bp.clone().add(dir.normalize().multiplyScalar(r)));
+    } else {
+      for (const n of path) { const bp = bonePos.get(n); if (bp) pts.push(bp.clone()); }   // interior, through her
+    }
+    pts.push(B.clone());
+    const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.5);
+    const sampled = curve.getPoints(segs);
+    // colour carries over from the straight cloud, and long routes still fade — a path through her body
+    // should read as a deep trace, not as the brightest thing on screen
+    const cb = i * 6;
+    const kr = path.length > 2 ? 0.42 : 1.0;
+    for (let j = 0; j < segs; j++) {
+      const p0 = sampled[j], p1 = sampled[j + 1];
+      pos[w] = p0.x; pos[w + 1] = p0.y; pos[w + 2] = p0.z;
+      pos[w + 3] = p1.x; pos[w + 4] = p1.y; pos[w + 5] = p1.z;
+      for (let v = 0; v < 3; v++) { col[w + v] = (linkBaseCol ? linkBaseCol[cb + v] : 0.2) * kr; col[w + 3 + v] = (linkBaseCol ? linkBaseCol[cb + 3 + v] : 0.2) * kr; }
+      w += 6;
+    }
+  }
+  routedGeo = new THREE.BufferGeometry();
+  routedGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  routedGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  routedLines = new THREE.LineSegments(routedGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
+  routedLines.frustumCulled = false; scene.add(routedLines);
+}
+function setRoutedVisible(on) {
+  if (routedLines) routedLines.visible = on;
+  if (linkLines) linkLines.visible = !on;           // the straight cloud steps aside; both would double-draw
+}
+// ============================================================================================================
+// PROPORTIONS — reading as a woman rather than as a child.
+// ============================================================================================================
+// Lucas: "The original avatar looked ok in that childish anime way, this will need some real feature curves to
+// read woman and not child." The two signatures are measurable rather than a matter of taste, which is why
+// this is worth doing in code instead of arguing about:
+//
+//   HEAD-TO-BODY RATIO. Stylised anime sits near 6.5 heads tall; adult human figure drawing uses 7.5-8. That
+//   single number does more work than any facial detail, because it is read from the silhouette at any
+//   distance — including the full-body framing this surface actually uses.
+//   EYE SCALE. VRoid eyes are enormous by design; large eyes set low in a short face is the neotenous cue the
+//   eye reads as "child" before it reads anything else.
+//
+// Both are applied to the model at load — bone scale for the head, a geometry edit for the eyes — so
+// everything downstream (binding, regions, features) measures the corrected body.
+const HEAD_K = 0.86;
+function reproportion() {
+  // 1. HEAD. Scaling the head bone shrinks the skull and everything skinned to it (hair included) while the
+  //    body keeps its length, which raises the head count without touching a single vertex.
+  try {
+    const hb = vrmModel.humanoid && vrmModel.humanoid.getNormalizedBoneNode('head');
+    if (hb) hb.scale.setScalar(HEAD_K);
+  } catch (e) {}
+  // 2. EYES — ATTEMPTED AND REVERTED, and the failure is worth recording rather than retrying.
+  //    Scaling eye-region vertices toward each eye's centre (with the morph deltas scaled to match) collapsed
+  //    her eyes to two pinpricks and left a blank mask. The vertex maths was not obviously wrong; the problem
+  //    is that the eight Face slices do not share one vertex layout, so a centre measured on one slice pulls
+  //    the others toward the wrong point — and there is no way to SEE that from inside a renderer. Reshaping a
+  //    rigged, morph-targeted face by scripting vertex arithmetic, with no viewport, no symmetry, no
+  //    proportional falloff and no undo, is the wrong instrument for the job. It belongs in a modelling tool,
+  //    edited once and re-exported, not recomputed on every load. See the Blender note in the session summary.
+  try { vrmModel.update(0.016); } catch (e) {}
+  vrmModel.scene.updateMatrixWorld(true);
 }
 function placeVRM() {                               // keep her centred on the live cloud middle
   if (!vrmModel) return;
@@ -1630,7 +1829,6 @@ function repaintNodeCloud() {
 // ---- LINK CLOUD: every edge in ONE LineSegments buffer (one draw call for the whole graph) ----
 // Colour is baked per-vertex at build time from the same linkColor() rules — a cross-store federation thread
 // stays bright violet, everything else its category colour. Positions re-sync each frame from the sim.
-let linkGeo = null, linkLines = null, linkIndex = [], linkBaseCol = null, _linkFadeAt = 0;
 const _lc = new THREE.Color();
 function parseLinkRGB(css) {
   const m = /rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s]+([\d.]+))?/i.exec(css || '');
@@ -1679,7 +1877,8 @@ function updateLinkCloud() {
     pos[o + 3] = t.x; pos[o + 4] = t.y; pos[o + 5] = t.z || 0;
   }
   linkGeo.attributes.position.needsUpdate = true;
-  if (SHAPE === 'skin') { const n = performance.now(); if (n - _linkFadeAt > 250) { _linkFadeAt = n; fadeSkinLinks(); } }
+  // Only when the routed cloud ISN'T carrying the links — otherwise this is fading a hidden buffer.
+  if (SHAPE === 'skin' && !(routedLines && routedLines.visible)) { const n = performance.now(); if (n - _linkFadeAt > 250) { _linkFadeAt = n; fadeSkinLinks(); } }
 }
 // A LINK BETWEEN TWO DISTANT BODY PARTS IS A CHORD, NOT A CONTOUR. Bound to her surface, an edge from a hand
 // to a knee draws a straight line straight THROUGH her — and with a couple of thousand of them the result was
@@ -2531,9 +2730,9 @@ async function applyShape(next) {
     placeVRM(); vrm.scene.visible = true;
     const n = buildSkinBinding();
     setOverlay(n ? null : 'no nodes to bind', n ? 0 : 2000);
-    updateSkin();
+    updateSkin(); buildRoutedLinks(); setRoutedVisible(true);
   } else {
-    releaseSkin();
+    releaseSkin(); setRoutedVisible(false);
   }
   try { Graph.d3ReheatSimulation(); } catch (e) {}
   _fitOnCool = true;                         // re-frame once the new arrangement settles
