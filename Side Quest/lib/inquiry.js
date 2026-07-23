@@ -68,7 +68,9 @@ function touchBrief(row) {
   const parts = [`LINE OF INQUIRY #${row.id} (touch ${(row.touches || 0) + 1}) — the QUESTION you are answering across sessions:\n"${row.question}"`];
   if (row.gist) parts.push(`WHERE IT STANDS (your own summary from last touch): ${str(row.gist).slice(0, 700)}`);
   if (ev.length) parts.push('EVIDENCE SO FAR (cited; the full trail persists):\n' + ev.map((e) => `- ${str(e.gist).slice(0, 160)}${e.cite ? ` [${str(e.cite).slice(0, 80)}]` : ''}`).join('\n'));
-  if (leads.length) parts.push('OPEN LEADS you named:\n' + leads.map((l) => `- ${str(l).slice(0, 120)}`).join('\n'));
+  // 200, not 120: a lead carrying a direct URL is useless truncated — the address is the lead
+  // (live 2026-07-23: a verified file URL sat at char ~150 and the model kept guessing paths).
+  if (leads.length) parts.push('OPEN LEADS you named:\n' + leads.map((l) => `- ${str(l).slice(0, 200)}`).join('\n'));
   if (row.next_step) parts.push(`YOUR OWN NEXT STEP from last touch — start here unless the evidence says otherwise: ${str(row.next_step).slice(0, 240)}`);
   if (trail.length) parts.push('EXPECT TRAIL: ' + trail.map((t) => (t.met ? 'met' : `NOT met (${str(t.why).slice(0, 60)})`)).join(' · '));
   parts.push('Advance the question THIS touch — new evidence with sources, a lead run down, or a dead end named honestly. A touch is ONE bounded run: take the next concrete bite and COMPLETE it (open the source, record what it shows, cite it) rather than attempting the whole remainder. Do not restate what the evidence already holds.');
