@@ -56,6 +56,8 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     'constraints reach the DECIDER (active only) — the re-picked-bait fix');
   ok(/SIZED TO ONE BOUNDED RUN/.test(auto.DECISION_WANT) && /INPUT, not an order/.test(auto.DECISION_WANT),
     'DECISION_WANT calibrates expect to one run and de-baits delegated gists');
+  ok(/DIRECTION: work should serve HIS WORLD first/.test(auto.DECISION_WANT) && /LAST-RESORT material/.test(auto.DECISION_WANT),
+    'DIRECTION rule: his world outranks the bulk inventory (the random-pulls fix)');
 
   // A missing table drops its section, never the manifest.
   const mem2 = new Database(':memory:');

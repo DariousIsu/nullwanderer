@@ -67,6 +67,30 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
   for (const s of keep) ok(L.stripPlanningLeak(s) === s, `kept: "${s.slice(0, 48)}…"`);
 }
 
+// ── the unkept promise (live 9341→9344→9346: three status-says, zero answers) ──────────────────
+{
+  ok(L.isUnkeptPromiseSay('(Waiting for the latest reports…)'), 'live #9346 — a waiting-say is a promise');
+  ok(L.isUnkeptPromiseSay('Gathering the most recent reports…'), 'live #9341');
+  ok(L.isUnkeptPromiseSay('Fetching the latest news on the US-Israel-Iran war…'), 'live #9344');
+  ok(!L.isUnkeptPromiseSay('The strikes resumed on July 20 near Bandar Abbas, and Iran closed the strait to tanker traffic — here is where each front stands.'),
+    'SAFETY: a real answer that happens to be about events is never a promise');
+  ok(!L.isUnkeptPromiseSay('I looked for casualty figures and could not find a reliable count — the wire services disagree.'),
+    'SAFETY: an honest miss is an ANSWER, not a promise');
+  ok(!L.isUnkeptPromiseSay(''), 'empty is not a promise');
+}
+
+// ── envelope echo in the thought rail (live #9337: instructions narrated as her interior) ───────
+{
+  const crazed = 'The user asks for updates on the war. The prompt provides a precise answer that must be delivered verbatim (paraphrased but without adding extra facts). No tool calls needed.\nWe need to answer about the war status.';
+  const cleaned = L.stripEnvelopeEcho(crazed);
+  ok(/user asks for updates/.test(cleaned) && /answer about the war status/.test(cleaned),
+    'her actual reasoning about the question survives');
+  ok(!/delivered verbatim/.test(cleaned) && !/No tool calls needed/.test(cleaned) && !/prompt provides/.test(cleaned),
+    'the instruction narration is gone from the rail');
+  const sane = 'Lucas mentioned the tariff story again — he cares about the Canada angle. I should connect it to the HTS data we pulled last week.';
+  ok(L.stripEnvelopeEcho(sane) === sane, 'SAFETY: a genuinely sane thought passes untouched');
+}
+
 // ── edges ───────────────────────────────────────────────────────────────────────────────────────
 {
   ok(L.stripPlanningLeak('') === '' && L.stripPlanningLeak(null) === '', 'empty in, empty out');

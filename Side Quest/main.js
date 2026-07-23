@@ -7321,6 +7321,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   thoughtStripped = recallLib.stripRecallTags(thoughtStripped);
   thoughtStripped = require('./lib/dig').stripDigTags(thoughtStripped);
   thoughtStripped = require('./lib/skills').stripSkillTags(thoughtStripped);
+  // ENVELOPE ECHO (2026-07-23): the folded reasoning channel narrates its INSTRUCTIONS ("the
+  // prompt provides a precise answer that must be delivered verbatim… no tool calls needed") and
+  // Lucas reads that as her interior — "her thinking chunks are a little crazed". Sentence-scoped:
+  // instruction narration drops, her actual reasoning about the question stays.
+  thoughtStripped = require('./lib/leakguard').stripEnvelopeEcho(thoughtStripped);
 
   if (thoughtStripped) {
     db.insertTurn({
@@ -8204,7 +8209,7 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
 // runaway chain is a real failure — but 4 was set when a turn meant "look one thing up". Building a
 // document is open the tab, write the contract, then go and read; four hops cannot hold that.
 const MAX_ECHO_HOPS = require('./lib/config').maxEchoHops();
-async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 0, prompted = true }) {
+async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 0, prompted = true, finalNudge = false }) {
   // TURN ISOLATION — if a newer chat turn has started since this follow-up's turn, discard it: a prior
   // turn's fire-and-forget tool result must never render into the current turn (the cross-turn bleed).
   if (io && io._gen != null && io._gen !== _chatTurnGen) { console.log(`[main] stale tool-followup discarded (gen ${io._gen} vs ${_chatTurnGen})`); return; }
@@ -8357,9 +8362,18 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       }
       if (deferredTags > 0) hopParts.push(`[${deferredTags} more tag${deferredTags === 1 ? '' : 's'} you emitted this turn were DEFERRED (per-hop bound) — re-emit any that still matter.]`);
       if (hopParts.length) {
-        try { await fireToolFollowup({ io, channel, sessionId, resultText: hopParts.join('\n\n'), echoHop: echoHop + 1, prompted }); }
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: hopParts.join('\n\n'), echoHop: echoHop + 1, prompted, finalNudge }); }
         catch (e) { console.error('[main] echo chain follow-up failed:', e.message); }
       }
+    } else if (!finalNudge && sayOut && require('./lib/leakguard').isUnkeptPromiseSay(sayOut)) {
+      // THE UNKEPT PROMISE (live 9341→9344→9346): the chain is OVER — no tags to run — and her
+      // last word was "Fetching…/Waiting…". Nothing was ever going to arrive. One corrective pass,
+      // guarded against looping: answer from what returned, or say the miss plainly.
+      console.log('[main] follow-up ended on a promise-say with no further work — forcing answer-or-honest-miss');
+      try {
+        await fireToolFollowup({ io, channel, sessionId, echoHop: echoHop + 1, prompted, finalNudge: true,
+          resultText: '[THE TOOL CHAIN HAS ENDED — nothing more is running and no further results will arrive. Everything retrieved is already above. Answer Lucas NOW, in your own voice, from what is there. If it genuinely does not contain the answer, say plainly what you looked for and could not get. Do NOT say you are fetching, checking, gathering, or waiting.]' });
+      } catch (e) { console.error('[main] answer-now follow-up failed:', e.message); }
     }
   } catch (err) {
     console.error('[main] fireToolFollowup failed:', err.message);
@@ -8919,6 +8933,37 @@ async function autonomyTick() {
     const H = { getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v) };
     // Warm the calendar context so the manifest sees his week (TTL-guarded — usually a no-op).
     try { await require('./lib/week_context').refresh({ gcalOpts: gcalOpts(), now }); } catch {}
+    // O0.h HARVEST CATCH-UP (2026-07-23, one-shot): all 136 banked conversations were promoted by
+    // the pass that ran BEFORE the harvest existed, so the mine never ran once and the decider has
+    // never seen a conversation-born lead — the root of "she keeps pulling up the same random
+    // crap": with nothing born from HIS world in the manifest, the random backlog was all there
+    // was to choose. Mine the most recent 5 banked conversations now; the nightly promote harvests
+    // everything new from here on. Guarded by a meta flag — runs once, ever.
+    try {
+      if (db.getMeta('harvest.catchup_done') !== '1') {
+        let bank = []; try { bank = JSON.parse(db.getMeta('autonomy.harvest_recent') || '[]') || []; } catch {}
+        if (!bank.length) {
+          const co = require('./lib/conversation_objects');
+          const docs = db.getDb().prepare("SELECT id, title, body FROM documents WHERE source = 'conversation' ORDER BY id DESC LIMIT 5").all().reverse();
+          for (const doc of docs) {
+            try {
+              const h = await require('./lib/cloud_logic').ask({
+                task: 'conversation_harvest', v: 1,
+                input: { transcript: String(doc.body || '').slice(0, 60000) },
+                want: co.HARVEST_WANT, validate: co.validateHarvest, numPredict: 700, think: false,
+              });
+              if (h && !h.empty) {
+                bank.push(co.harvestBankEntry(doc.id, doc.title, h));
+                console.log(`[harvest] catch-up conversation #${doc.id} → ${h.leads.length} lead(s), ${h.seeds.length} seed(s), ${h.decisions.length} decision(s)`);
+              }
+            } catch (e) { console.error('[harvest] catch-up mine failed (non-fatal):', e.message); }
+          }
+          if (bank.length) db.setMeta('autonomy.harvest_recent', JSON.stringify(bank.slice(-8)));
+        }
+        db.setMeta('harvest.catchup_done', '1');
+        console.log(`[harvest] catch-up complete — ${(JSON.parse(db.getMeta('autonomy.harvest_recent') || '[]') || []).length} conversation(s) now in the bank`);
+      }
+    } catch (e) { console.error('[harvest] catch-up block failed:', e.message); }
     // Story-follow upkeep (lib/story_follow): retire wrapped stories, then auto-follow fresh
     // corroborated stories matching her ACTIVE interests — so the manifest's DEVELOPING STORIES
     // section reflects both what they discussed and what she genuinely tracks. Cheap SQL; fail-soft.

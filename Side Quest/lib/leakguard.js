@@ -95,6 +95,32 @@ function stripPlanningLeak(text) {
   return parts.slice(run).join(' ').trim();
 }
 
+// --- THE UNKEPT-PROMISE SAY (2026-07-23) --------------------------------------------------------
+// Live turns 9341→9344→9346: "Gathering the most recent reports…" → "Fetching the latest news…" →
+// "(Waiting for the latest reports…)" — three tool-followups, each PROMISING instead of answering,
+// and the chain ended on the last promise. This detects a short, content-free status-say so the
+// followup driver can force one final answer-or-honest-miss pass when no further work will run.
+const _PROMISE_RE = /\b(fetch|gather|grab|pull|retriev|check|look)(?:ing)?\b.{0,60}$|\bwait(?:ing)?\b|\bone (?:moment|sec(?:ond)?)\b|\bhold on\b|\bworking on it\b|\bbe right back\b/i;
+function isUnkeptPromiseSay(text) {
+  const s = String(text || '').trim();
+  if (!s || s.length > 160) return false;   // a real answer has substance; promises are short
+  return _PROMISE_RE.test(s);
+}
+
+// --- ENVELOPE ECHO in the THOUGHT rail (2026-07-23) ---------------------------------------------
+// On cloud-written turns the reasoning channel is folded into her displayed interior — and frontier
+// reasoning narrates its INSTRUCTIONS: "The prompt provides a precise answer that must be delivered
+// verbatim… No tool calls needed." Lucas reads that as her thoughts and it reads deranged. Sentence-
+// scoped drop of clear envelope narration; her actual reasoning about the QUESTION stays.
+const _ENVELOPE_ECHO_RE = /\b(?:the (?:prompt|instruction|directive)s? (?:says?|provides?|specifi|state)|answer to give|must be delivered verbatim|paraphrased? but|do not (?:add|contradict) (?:any )?(?:facts|extra|it)|no tool calls? (?:are )?needed|reply only (?:with )?strict json|the required answer is)\b/i;
+function stripEnvelopeEcho(text) {
+  const s = String(text || '');
+  if (!s.trim()) return s;
+  const parts = s.split(/(?<=[.!?])\s+|(?<=[a-z][.!?])(?=[A-Z])|\n+/);
+  const kept = parts.filter((p) => !_ENVELOPE_ECHO_RE.test(p));
+  return kept.join(' ').replace(/\s{2,}/g, ' ').trim();
+}
+
 // An angle-bracket run is an INTERNAL tag (her private cognition or a tool tag) if its name is in this set.
 // The TagStreamParser keeps well-formed <think> out of the stream already, but a stray/truncated think
 // fragment or a tool tag emitted INSIDE <say> used to flash in the live bubble and only vanish on reload
@@ -156,4 +182,4 @@ function makeStreamFilter(emit) {
   };
 }
 
-module.exports = { isLeakyDirective, stripLeakedDirectives, stripPlanningLeak, makeStreamFilter, _DIRSIG, _METASIG, _INTERNAL_TAG_RE, _PLAN_LEAD, _MECHANICS };
+module.exports = { isLeakyDirective, stripLeakedDirectives, stripPlanningLeak, isUnkeptPromiseSay, stripEnvelopeEcho, makeStreamFilter, _DIRSIG, _METASIG, _INTERNAL_TAG_RE, _PLAN_LEAD, _MECHANICS };
