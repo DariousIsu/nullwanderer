@@ -436,11 +436,21 @@ function domainLeashTokens() {
     // assigned lanes, one blind to the other. This is NOT the 2026-07-13 self-thread feedback loop
     // reopening: inquiries are a small capped set (over-cap parks the stalest), surfaced by name in the
     // manifest — nothing like the unbounded self-spawned thread pool that let wandering seed the filter.
-    // QUESTION only — next_step/open_leads are HOW-vocab ("search", "download", "excel", "google"…),
-    // measured live to add ~30 generic operational words that turn the filter into a rubber stamp.
-    try {
-      for (const q of (require('./inquiry').listActive() || [])) blob += ' ' + (q.question || '');
-    } catch {}
+    const toks = new Set();
+    for (const w of (blob.toLowerCase().match(/[a-z]{4,}/g) || [])) _addToken(toks, w);
+    try { const iv = inquiryVocabTokens(); if (iv) for (const t of iv) toks.add(t); } catch {}
+    return toks.size ? toks : null;
+  } catch { return null; }
+}
+
+// The open-inquiry vocabulary as its own set, through the SAME stop/stem pipeline as the leash — one
+// definition, so a consumer (dl-ingest leash, decompose-sweep inquiry pull) can never drift from it.
+// QUESTION only — next_step/open_leads are HOW-vocab ("search", "download", "excel", "google"…),
+// measured live to add ~30 generic operational words that turn a filter into a rubber stamp.
+function inquiryVocabTokens() {
+  try {
+    let blob = '';
+    for (const q of (require('./inquiry').listActive() || [])) blob += ' ' + (q.question || '');
     if (!blob.trim()) return null;
     const toks = new Set();
     for (const w of (blob.toLowerCase().match(/[a-z]{4,}/g) || [])) _addToken(toks, w);
@@ -451,7 +461,7 @@ function domainLeashTokens() {
 module.exports = {
   getCurrent, isActive, setCurrent, isDirected, setFromDirective, clear,
   setFromText, recentlyTombstoned, stripControlTags, parseControlTags,
-  isNovel, recordOutcome, domainLeashTokens,
+  isNovel, recordOutcome, domainLeashTokens, inquiryVocabTokens,
   setBackground, recordOutcomeBackground,
   MAX_TICKS, MAX_STRIKES, MAX_WALLCLOCK_MS,
   MAX_TICKS_DIRECTED, MAX_STRIKES_DIRECTED, MAX_WALLCLOCK_MS_DIRECTED,

@@ -121,5 +121,33 @@ ok(Array.isArray(sweep.findUndecomposed(db, { limit: 0 })), 'garbage bounds → 
   ok(sweep.estChunks(100000) === 1 && sweep.estChunks(250000) === 3, 'chunk estimation mirrors the extractor’s real slicing (100k)');
 }
 
+// ── THE INQUIRY PULL (2026-07-23, doc #8443) ─────────────────────────────────────────────────────
+// Cheapest-first starves exactly the document an open inquiry is WAITING on: the 1.47M-char LA
+// roster sat at cost-position 359/380 while inquiry touches burned against its absence, and every
+// fresh small landing outranks a giant. A title that word-matches an open inquiry's question vocab
+// jumps the queue — ONE per batch, budget still binding.
+{
+  const inquiry = require('../lib/inquiry');
+  const roster = db.insertDocument({ title: 'LA-parish-officials-2026.xls', body: 'r'.repeat(300000), source: 'browser_download' }).id;
+  const iq = inquiry.open({ question: 'Who currently holds each parish-level elected office across all 64 Louisiana parishes — sheriffs, clerks of court, assessors?' });
+  ok(iq && iq.id, 'inquiry.open seeds an active inquiry in the sweep smoke db');
+
+  const b1 = sweep.nextBatch(db, { limit: 2, dailyChunks: 99999 });
+  ok(b1.picks.length === 2 && b1.picks[0].id === roster,
+    'CRITICAL: an inquiry-matched giant JUMPS the cost queue (it would otherwise be picked dead last)');
+  ok(b1.picks[1] && b1.picks[1].chars <= b1.picks[0].chars,
+    '…and the rest of the batch resumes cheapest-first');
+
+  const clerks = db.insertDocument({ title: 'Louisiana-clerks-directory.pdf', body: 'c'.repeat(5000), source: 'browser_download' }).id;
+  const b2 = sweep.nextBatch(db, { limit: 2, dailyChunks: 99999 });
+  ok(b2.picks[0].id === clerks && !b2.picks.map((p) => p.id).includes(roster),
+    'ONE pull per batch — the cheapest match pulls, the other match waits its turn (scarce on purpose)');
+
+  inquiry.close(iq.id, { kind: 'answered', answer: 'roster consumed' });
+  const b3 = sweep.nextBatch(db, { limit: 2, dailyChunks: 99999 });
+  ok(b3.picks[0].id !== roster && b3.picks[0].chars <= b3.picks[1].chars,
+    'no open inquiry → pure cheapest-first restored (the pull leaves with the inquiry)');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

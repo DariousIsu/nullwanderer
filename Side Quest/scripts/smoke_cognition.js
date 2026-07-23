@@ -47,7 +47,7 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   // 4) graph empty → escalate to WEB via deps.webSearch (the app's own DDG, not Echo's keyless one)
   const emptyGraph = async () => ({ ok: true, text: '{"result":[]}' });
   const webMock = async (q) => ({ results: [{ title: 'Trump cabinet', snippet: 'Marco Rubio Secretary of State' }] });
-  const d = await cog.answerGrounded({ userMessage: 'latest on X?', grounding: '', deps: { ask: async ({ input }) => /Rubio|Secretary/.test(input.grounding) ? 'It is happening.' : 'NEED: latest on X', dispatch: emptyGraph, webSearch: webMock } });
+  const d = await cog.answerGrounded({ userMessage: 'latest on X?', grounding: '', deps: { ask: async ({ input }) => /Rubio|Secretary/.test(input.grounding) ? 'It is happening.' : 'NEED: latest on X', dispatch: emptyGraph, webSearch: webMock, newsStories: () => [] } });
   ok(d && d.enriched === true && d.enrichSource === 'web', 'empty graph → escalate to WEB (deps.webSearch) → answer');
 
   // 5) graph empty → cloud TOOL EXECUTOR (routeNeed) answers a count before falling to web

@@ -176,10 +176,36 @@ function nextBatch(db, { limit = 3, dailyChunks = DEFAULT_DAILY_CHUNKS, maxChars
     .filter((r) => r.chars >= minChars && r.chars <= maxChars)
     .sort((a, b) => a.chars - b.chars);
 
+  // INQUIRY PULL (2026-07-23, doc #8443): cheapest-first starves exactly the document an open inquiry
+  // is WAITING on — the 1.47M-char LA elected-officials roster sat at cost-position 359/380 while
+  // inquiry touches burned against its absence, and every fresh small landing outranks a giant, so
+  // "eventually" never arrives. A doc whose TITLE word-matches an open inquiry's question vocabulary
+  // (lib/focus.inquiryVocabTokens — the same stop/stem pipeline as the domain leash, so the two gates
+  // cannot drift) jumps the cost queue. ONE pulled doc per batch — the pull is scarce on purpose, and
+  // the daily budget still bounds the spend. Title-only match: candidate rows don't carry bodies, and
+  // pulling 400 bodies per tick to check them would cost more than the starvation it fixes.
+  let pulled = null;
+  try {
+    const iv = require('./focus').inquiryVocabTokens();
+    if (iv && iv.size) {
+      const matches = pool.filter((r) => {
+        const words = new Set((String(r.title || '').toLowerCase().match(/[a-z]{4,}/g) || []));
+        for (const t of iv) if (words.has(t)) return true;
+        return false;
+      });
+      pulled = matches[0] || null;                  // pool is cost-sorted → cheapest match pulls first
+    }
+  } catch { /* no inquiry store / no focus lib → pure cost order, as before */ }
+
   const picks = [];
   let cost = 0;
+  if (pulled) {
+    const c = estChunks(pulled.chars);
+    if (c <= budget.remaining) { picks.push(pulled); cost += c; }
+  }
   for (const r of pool) {
     if (picks.length >= Math.max(1, limit)) break;
+    if (pulled && r.id === pulled.id) continue;
     const c = estChunks(r.chars);
     if (cost + c > budget.remaining) continue;      // skip, do not stop — a smaller one may still fit
     picks.push(r); cost += c;
