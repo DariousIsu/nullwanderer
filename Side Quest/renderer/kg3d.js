@@ -1315,11 +1315,11 @@ async function loadVRM() {
     // hole across her face with two white ovals hovering in it. Torn, not stylised. Her real features are far
     // better than anything I can draw over them, they already blink and lip-sync on the rig, and the Cortana
     // reference is a fully readable human face. So the geometry stays and gets SHADED; only clothes go.
-    // Also drop the eye overlays whose look lived entirely in their (now-stripped) alpha textures: the
-    // occlusion cup and tear line drew as opaque BLACK over the eyes and the cornea as an opaque WHITE dome —
-    // together the "black eyes / no eyeballs" Lucas saw. And the EYELASH mesh, which drew as heavy black wings
-    // ("part of it are the lashes") — replaced by fake lash node-art (buildFaceStyle): bright roots + wisps.
-    const DROP = /_CLOTH|Eye_Occlusion|Tearline|Cornea|Eyelash/i;
+    // Drop the eye overlays whose look lived entirely in their (now-stripped) alpha textures: the occlusion cup
+    // and tear line drew opaque BLACK over the eyes and the cornea an opaque WHITE dome. The EYELASH mesh STAYS
+    // now — its real diffuse+opacity texture is restored (data/avatars/tex/eyelash.png), so it draws as real
+    // alpha lash strands instead of black wings; the node-art lashes are retired.
+    const DROP = /_CLOTH|Eye_Occlusion|Tearline|Cornea/i;
     const seen = new Set();
     vrm.scene.traverse((o) => {
       if (!o.isMesh && !o.isSkinnedMesh) return;
@@ -1337,7 +1337,7 @@ async function loadVRM() {
     // reproportion FIRST, so every anchor, exclusion radius and region downstream describes the corrected
     // body rather than the one that was in the file.
 
-    reproportion(); findFeatures(); buildRegions(); buildDrawnFeatures(); buildFaceStyle();
+    reproportion(); findFeatures(); buildRegions(); buildDrawnFeatures();   // buildFaceStyle retired — real lashes now
     console.log('[kg3d] VRM skin ready —', vrmOccluders.length, 'meshes, scale', k.toFixed(1),
       '| head', REGION.head.length, 'heart', REGION.heart.length, 'body', REGION.body.length);
     return vrm;
@@ -1555,9 +1555,71 @@ function matKind(name) {
   if (/_HAIR|Hair_|Scalp/i.test(n)) return 1;
   return 0;                                           // skin (Std_Skin_*, Std_Nails, VRoid Body/Face SKIN)
 }
+// THE REAL Reallusion eye + lash maps (Lucas: the procedural iris + node-art lashes read as lazy/terrible —
+// "fix it in Blender"). The VRM kept its UVs when its textures were stripped, so the full-res maps loaded
+// straight from the app map correctly onto the same geometry. flipY:false = the glTF/VRM UV origin.
+const _texLoader = new THREE.TextureLoader();
+function _loadTex(url, srgb) { const t = _texLoader.load(url); t.flipY = false; if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; }
+const EYE_TEX_L = _loadTex('../data/avatars/tex/eye_l.jpg', true);
+const EYE_TEX_R = _loadTex('../data/avatars/tex/eye_r.jpg', true);
+const LASH_TEX = _loadTex('../data/avatars/tex/eyelash.png', true);
+// THE EYEBALL — the real iris, tinted GREEN, on a CLEAN sclera. The eye texture is the whole eyeball UV (iris
+// centred, veiny sclera around it). We take the iris fibre detail from it but paint the sclera in her hair
+// colour instead of the bloodshot white (Lucas: "doesn't need the blood shot white"), and lay a subtle ring
+// of connection-NODES over the iris (Lucas: "circuit boards or mini connecting nodes could be good"). Built on
+// MeshBasicMaterial so the SkinnedMesh keeps its skinning + morph pipeline (a bare ShaderMaterial gets none).
+function makeEyeMaterial(m) {
+  const name = (m.userData && m.userData.matName) || '';
+  const tex = /Std_Eye_R|_R(_|$)/.test(name) ? EYE_TEX_R : EYE_TEX_L;
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, map: tex });
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uHead = shellUniforms.uHead;
+    sh.uniforms.uEyeTex = { value: tex };
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\n varying vec2 vEyeUv;')
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\n vEyeUv = uv;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\n uniform vec3 uHead;\n uniform sampler2D uEyeTex;\n varying vec2 vEyeUv;')
+      .replace('#include <dithering_fragment>', `
+        vec2 d = vEyeUv - vec2(0.5);
+        float rr = length(d);
+        float ang = atan(d.y, d.x);
+        float lum = dot(texture2D(uEyeTex, vEyeUv).rgb, vec3(0.299, 0.587, 0.114));
+        vec3 irisG = vec3(lum) * vec3(0.34, 1.05, 0.52) * 1.55;             // real fibres, tinted green
+        float ring = smoothstep(0.014, 0.0, abs(rr - 0.095));              // a ring inside the iris…
+        float nodes = ring * smoothstep(0.45, 0.96, 0.5 + 0.5 * sin(ang * 20.0));   // …studded with nodes
+        irisG += vec3(0.35, 1.0, 0.55) * nodes * 0.65;
+        float irisM = smoothstep(0.125, 0.100, rr);                        // iris disc vs sclera (matches the map)
+        vec3 col = mix(uHead * 0.9, irisG, irisM);                         // clean hair-colour sclera, no veins
+        gl_FragColor = vec4(col, 1.0);
+        #include <dithering_fragment>`);
+  };
+  mat.needsUpdate = true;
+  return mat;
+}
+// THE LASHES — the real alpha strands. The png's alpha channel is the lash mask; discard everything else and
+// paint the strands a soft cool tone so they READ as fine lashes on her dark, glowing face (a literal dark
+// lash would vanish). Blinks + head-turn come free: the mesh is skinned + morph-driven like the lids.
+function makeLashMaterial(m) {
+  const mat = new THREE.MeshBasicMaterial({ map: LASH_TEX, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+  mat.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\n')
+      .replace('#include <dithering_fragment>', `
+        float la = texture2D(map, vMapUv).a;
+        if (la < 0.30) discard;
+        gl_FragColor = vec4(vec3(0.60, 0.66, 0.82) * la, la);              // soft cool lash strands
+        #include <dithering_fragment>`);
+  };
+  mat.needsUpdate = true;
+  return mat;
+}
 function applyShellMaterial() {
   for (const m of vrmOccluders) {
     const kind = matKind(m.userData && m.userData.matName);
+    // real textured facial features instead of the graph shell (the rest of her stays the shell)
+    if (kind === 3) { m.material = makeEyeMaterial(m); m.material.colorWrite = SHELL_ON; continue; }
+    if (kind === 5) { m.material = makeLashMaterial(m); m.material.colorWrite = SHELL_ON; continue; }
     const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, shellUniforms);
