@@ -206,6 +206,18 @@ try {
   } else {
     console.log(`PASS: all ${ran} emitted kinds dispatched to a real gesture (executed, not just grepped).`);
   }
+
+  // VERSION SKEW. The renderer reloads independently of a main-process reboot, so for a window the old
+  // `observe` tap is still sending subject+relation+target as ONE string. Minting that would put a sentence
+  // in the graph as a node id. The old shape must stay invisible rather than corrupt the node set.
+  calls.length = 0;
+  const legacy = fn({ kind: 'observe', db: 'sidequest', anchor: 'Subject works_for Target' });
+  if (legacy !== 'miss' || calls.length) {
+    failed = true;
+    console.log(`FAIL: a legacy-shape 'observe' (no rel/anchor2) drew anyway — verdict '${legacy}', ${calls.length} gesture(s). That mints a sentence as a node id.`);
+  } else {
+    console.log("PASS: legacy-shape 'observe' returns miss and mints nothing (version-skew guard holds).");
+  }
 } catch (e) {
   failed = true;
   console.log('FAIL: could not execute dispatchActivity() — ' + (e && e.message));

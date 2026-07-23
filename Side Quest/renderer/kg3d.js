@@ -1766,6 +1766,13 @@ function dispatchActivity(evt) {
     const a = A(); if (!a) return 'miss'; addHotLink(a.id); gMatch(a); gRecall(V3(a)); return 'drew';
   }
   if (k === 'observe') {                        // a graded observation LINKS two things — draw the link, not a blip
+    // VERSION-SKEW GUARD. The renderer reloads on its own; lib/db.js only takes effect on a main-process
+    // reboot. In that window the old tap is still sending subject+relation+target mashed into one string as
+    // the anchor — and minting THAT would put a sentence in the graph as a node id, the exact failure the
+    // lazy-mint rule exists to prevent. The new payload always carries `rel`/`anchor2` fields (null is still
+    // present); the old one never did, so this discriminates exactly. Old shape stays invisible, as before,
+    // and the log row now says so instead of pretending.
+    if (!('rel' in evt) && !('anchor2' in evt)) return 'miss';
     const a = A(); if (!a) return 'miss';
     const b = B();
     if (b) { gEdge(V3(a), V3(b), new THREE.Color(nodeColor(a)).getHex()); addHotLink(b.id); }
