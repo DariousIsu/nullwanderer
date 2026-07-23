@@ -178,6 +178,32 @@ function targetBinary(n) {
 // Lobe centroids are placed on a Fibonacci sphere (even spacing, no clumping), largest types nearest the
 // middle. Radius goes as the CUBE ROOT of the count, so it is VOLUME that encodes quantity, not radius —
 // otherwise a type with 10× the nodes would look 1000× bigger.
+// ============================================================================================================
+// THE FOUR LOBES (Lucas, 2026-07-22): "put the Zoe Core and the Short term memory in the place of the
+// Temporal lobe. and then split frontal occipital parietal and temporal into different like coloured inputs
+// and then use the connections between same and across sections produce the shape. it can be noisy and messy
+// so long as it reads."
+//
+// This is the design that finally makes sense of the whole thing, and it inverts what I had been doing: stop
+// trying to SCULPT a brain out of points and instead give the graph four strongly-coloured territories in
+// anatomically right places, then let the EDGES do the modelling. Links inside a lobe pull it dense; links
+// across lobes become the tracts between them. The form comes out of the data's own connectivity, which is
+// why it can afford to be messy — it reads from the colour blocks and the fibre bundles, not from a clean
+// outline. Temporal holds her Core + short-term, which is also where the real one does memory formation.
+//
+// Positions are in the same unit space as brainSDF: +X forward, +Y up, ±Z hemispheres.
+const LOBES = {
+  frontal:   { x: 0.60, y: 0.14, z: 0, color: '#e879f9' },   // magenta — matches the plate's frontal
+  parietal:  { x: -0.06, y: 0.44, z: 0, color: '#4ade80' },  // green
+  occipital: { x: -0.68, y: 0.02, z: 0, color: '#a78bfa' },  // violet
+  temporal:  { x: 0.14, y: -0.40, z: 0, color: '#22d3ee' },  // cyan — Zoe Core + short-term live here
+};
+const LOBE_ORDER = ['frontal', 'parietal', 'occipital'];      // long-term is split across these three
+const typeLobe = new Map();                                   // entity type → lobe name
+function lobeOf(n) {
+  if (n.zoe || n.store === 'sidequest') return 'temporal';
+  return typeLobe.get(n.entityType || 'unknown') || 'occipital';
+}
 const brainLobes = new Map();
 let _lobeSig = '';
 function buildBrainLobes(nodes) {
@@ -190,6 +216,14 @@ function buildBrainLobes(nodes) {
   const types = [...counts.entries()].sort((a, b) => b[1] - a[1]);
   const sig = types.map(([t, c]) => t + ':' + c).join('|');
   if (sig === _lobeSig) return; _lobeSig = sig;          // only rebuild when the type mix actually changes
+  // Assign each entity type to one of the three long-term lobes, greedily filling whichever is lightest, so
+  // the three come out comparable in mass instead of one swallowing `person` and the others going bare.
+  typeLobe.clear();
+  const load = { frontal: 0, parietal: 0, occipital: 0 };
+  for (const [t, c] of types) {
+    const pick = LOBE_ORDER.reduce((a, b) => (load[a] <= load[b] ? a : b));
+    typeLobe.set(t, pick); load[pick] += c;
+  }
   brainLobes.clear();
   const total = types.reduce((s, [, c]) => s + c, 0) || 1, K = types.length || 1;
   const GA = Math.PI * (3 - Math.sqrt(5));
@@ -258,6 +292,25 @@ function brainSurface(dx, dy, dz) {
 function targetBrain(n) {
   const s = nodeSeed(n);
   const side = (hashSeed(String(n.id) + '#h') < 0.5) ? -1 : 1;   // which hemisphere this node belongs to
+  // A LOOSE anchor in the node's lobe — deliberately loose, because the point of this design is that the
+  // EDGES model the form. The anchor only says which territory a node belongs to; the link force decides
+  // where inside it, packs each lobe by its own internal connectivity, and stretches the cross-lobe tracts.
+  const L = LOBES[lobeOf(n)];
+  // Territories have to TOUCH or they read as four separate islands rather than one organ — which is what
+  // the first pass looked like. Centres pulled in and each lobe given enough spread that neighbours overlap
+  // at their edges; the cross-lobe links then stitch the seams, which is the whole point of the design.
+  const spread = (n.zoe ? 0.20 : 0.46) * CLOUD_R, pull = 0.82;
+  const zc = (Math.abs(s.dz0 == null ? (s.dz0 = (hashSeed(String(n.id) + '#lz') - 0.5) * 1.4) : s.dz0) + FISSURE + 0.05) * side;
+  return _tp.set(
+    _midCen.x + L.x * CLOUD_R * pull + (s.rf - 0.55) * spread * Math.cos(s.ang * 2.3),
+    _midCen.y + L.y * CLOUD_R * pull + (s.u - 0.5) * spread * 1.5,
+    _midCen.z + zc * CLOUD_R * 0.55 + Math.sin(s.ang) * spread * 0.5
+  );
+}
+// The previous surface-marched placement, kept for the `shell` variant of the brain (cortex-mantle style).
+function targetBrainShell(n) {
+  const s = nodeSeed(n);
+  const side = (hashSeed(String(n.id) + '#h') < 0.5) ? -1 : 1;
   if (!s.bs) {
     // Direction is cached per node, and so is the marched surface distance — the bisection runs ONCE per
     // node, not per tick, so the field costs nothing on the hot path.
@@ -406,7 +459,9 @@ function nodeColor(n) {
   // In the brain arrangement the colour split carries the anatomy, and it has to be read at a glance: the
   // cortex is ONE tissue (uniform violet, however its nodes happen to be typed) and the interior is a map of
   // types. Letting untyped short-term nodes fall through to grey mottled the mantle and destroyed that read.
-  if (SHAPE === 'brain' && n.store === 'sidequest') return SQ_VIOLET;
+  // In `brain`, colour IS the anatomy — four territories as four blocks, the way the plate reads. It
+  // overrides the type palette on purpose: which lobe a thing lives in is the thing to see here.
+  if (SHAPE === 'brain') { const L = LOBES[lobeOf(n)]; if (L) return L.color; }
   if (n.color) return n.color;
   if (isUnknownType(n.entityType)) return UNKNOWN_GREY;
   return n.store === 'sidequest' ? SQ_VIOLET : ECHO_SKY;
@@ -600,6 +655,15 @@ function render() {
   Graph.graphData({ nodes, links });
   engineRunning = true;                    // new data reheats the layout; resume position syncing
   try { Graph.d3Force('charge').strength(chargeFor(nodes.length)); } catch (e) {}   // spread must not grow with density
+  // EDGES MODEL THE FORM (Lucas's design). In `brain` the lobe anchors only say WHICH territory a node is
+  // in; the link force decides everything inside it — packing each lobe by its own connectivity and pulling
+  // the cross-lobe tracts taut. So the links are given real authority here rather than the token strength
+  // that was fine when a target point dictated every position.
+  try {
+    const lf = Graph.d3Force('link');
+    if (lf && lf.strength) lf.strength(SHAPE === 'brain' ? 0.55 : 0.16);
+    if (lf && lf.distance) lf.distance(SHAPE === 'brain' ? 26 : 40);
+  } catch (e) {}
   try { buildNodeCloud(); } catch (e) {}   // rebuild the instanced Points cloud for the new node set
   try { buildLinkCloud(); } catch (e) {}   // …and the single-buffer edge cloud
   try { buildTendrils(); } catch (e) {}    // refresh hidden-connection tendrils (throttled)
@@ -803,6 +867,41 @@ let dustCloud = null, dustGeo = null;
 // field's surface — pure tissue, carrying no data, exactly like the dust it reuses the material of. The real
 // short-term nodes still sit in that shell and stay brighter; this is the substance they sit IN. One extra
 // draw call, built once per shape change.
+// CORTEX MESH — the move to a real surface. Points can never give a silhouette: they have no edge and no
+// occlusion, and every glow sprite bleeds light past the outline, which is why four attempts at sculpting
+// one out of a cloud all read as a nebula. An icosphere displaced onto the field gives an actual skin.
+// Drawn BackSide + additive so it reads as an envelope you see the contents THROUGH — and additive
+// specifically because of the lesson the links taught: anything dim on NormalBlending paints black over the
+// glow behind it. This can only ever add.
+let cortexMesh = null, _meshSig = '';
+function buildCortexMesh() {
+  const sig = SHAPE === 'brain' ? 'brain:' + Math.round(CLOUD_R) : 'off';
+  if (sig === _meshSig && cortexMesh) return;
+  _meshSig = sig;
+  if (cortexMesh) { scene.remove(cortexMesh); cortexMesh.geometry.dispose(); cortexMesh.material.dispose(); cortexMesh = null; }
+  // OFF by default. Displaced onto the field it rendered as a large flat grey slab across the middle —
+  // worse than no skin at all — and a visible artifact is not worth shipping while the lobe colours are
+  // already carrying the read. Opt in with localStorage kg3d.mesh='1' while this is worked out.
+  let meshOn = false; try { meshOn = localStorage.getItem('kg3d.mesh') === '1'; } catch (e) {}
+  if (SHAPE !== 'brain' || !meshOn) return;
+  try {
+    const geo = new THREE.IcosahedronGeometry(1, 5);          // ~10k verts, even distribution, no poles
+    const p = geo.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const dx = p.getX(i), dy = p.getY(i), dz = p.getZ(i);
+      // gyri: displace slightly along the normal so the skin has relief instead of reading as a balloon
+      const fold = Math.sin(dx * 9.0 + dy * 7.0) * 0.5 + Math.sin(dz * 8.0 - dy * 6.0) * 0.5;
+      const r = brainSurface(dx, dy, dz) * CLOUD_R * (1.0 + fold * 0.022);
+      p.setXYZ(i, dx * r, dy * r, dz * r);
+    }
+    geo.computeVertexNormals();
+    cortexMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color: 0x93a7d6, transparent: true, opacity: 0.05, side: THREE.BackSide,
+      depthWrite: false, blending: THREE.AdditiveBlending,
+    }));
+    cortexMesh.renderOrder = -3; scene.add(cortexMesh);
+  } catch (e) { console.warn('[kg3d] cortex mesh failed:', e && e.message); }
+}
 const SHELL_N = 16000;
 let shellCloud = null, shellGeo = null, _shellSig = '';
 function buildCortexShell() {
@@ -934,6 +1033,7 @@ function buildNodeCloud() {
   buildMarkers();
   try { buildDust(nodeIndex); } catch (e) {}
   try { buildCortexShell(); } catch (e) {}    // the mantle, independent of how many nodes exist
+  try { buildCortexMesh(); } catch (e) {}     // …and the skin that actually carries a silhouette
 }
 // Provenance arrives on a later poll than the node itself, and evidence accrues while the node just sits
 // there — so colour/size/alpha have to be able to change WITHOUT rebuilding the geometry (the old build was
@@ -1186,6 +1286,8 @@ function ensureZoeAnchor() {
   scene.add(zoeAnchor); scene.add(zoeHalo);
 }
 function updateRegion(now) {
+  if (cortexMesh) cortexMesh.position.set(_midCen.x, _midCen.y, _midCen.z);
+  if (shellCloud) shellCloud.position.set(0, 0, 0);
   if (zoeAnchor) {
     const b = 1 + Math.sin(now / 1400) * 0.12;             // slow breath, not a blink
     zoeAnchor.position.set(_coreCen.x, _coreCen.y, _coreCen.z); zoeAnchor.scale.setScalar(9 * b);
