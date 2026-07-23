@@ -1492,7 +1492,9 @@ function applyShellMaterial() {
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', '#include <common>\n uniform vec3 uBody; uniform vec3 uHead; uniform vec3 uHeart;\n uniform float uBase; uniform float uRim; uniform float uPow; uniform float uPulse; uniform float uKind; uniform float uScan;\n varying float vRegion; varying vec3 vVN; varying vec3 vVP; varying float vMY;')
         .replace('#include <dithering_fragment>', `
-          vec3 rc = vRegion > 1.5 ? uHeart * (1.0 + uPulse * 0.9)   // her identity, beating
+          // heart is region 2 ONLY; region 3 (eye/mouth exclusion) must not read as heart or the CC face goes
+          // maroon (its mouth morph moves a wide area, so ~400 face verts land in region 3).
+          vec3 rc = (vRegion > 1.5 && vRegion < 2.5) ? uHeart * (1.0 + uPulse * 0.9)
                   : vRegion > 0.5 ? uHead : uBody;
           float fres = pow(1.0 - abs(dot(normalize(vVN), normalize(-vVP))), uPow);
           float amt = uBase + fres * uRim;
