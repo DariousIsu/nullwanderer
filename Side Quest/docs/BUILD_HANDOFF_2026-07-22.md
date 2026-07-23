@@ -64,8 +64,28 @@ email 3 min after the engage — grounded but chatty; the worth-it bar is Lucas'
 ⭐VERIFICATION RULE for this lane: before declaring any claim of hers ungrounded, sweep the
 AMBIENT surfaces too (calendar, week context, canvas) — never assert absence from text tables
 alone.
-WATCH boot56: `cognition → enriched:news` on the Iran retest · `BLOCKED ungrounded say` when the
-engage lane tries fiction again · harvest-born homecoming on an answered close · REFUSED lines. The war-question retest is STILL OWED (last asking
+**⭐⭐PHASE 1 PROVED LIVE (boot58 11:18)**: Lucas asked "any news about Trump threatening to ban US
+access to Chinese models?" → `cognition → enriched:news` → a real, substantive answer (Bessent /
+sanctions / IP theft) verified near-verbatim against news_stories #34690. The follow-up reasoned
+correctly (`enriched:convo`). THEN the Bessent-DATE follow-up fell: her say promised the lookup
+("I'm pulling the source…"), NO tag was emitted (her thinking planned tag-AFTER-say and it never
+materialized), and both safety nets key on HIS message vocabulary (a date follow-up has none —
+detectors-vs-comprehension #5).
+**THE 11:30-12:00 BLOCK (all banked, PENDING BOOT59)**: e7a48a0 SPREADSHEET LANE (fetchPage parses
+xlsx/csv/tsv to bounded text tables — exceljs/fast-csv already vendored; inquiry #1's 9-touch
+Excel wall dissolves; legacy .xls refuses naming the door; smoke_spreadsheet 16, gate now 304) ·
+9939c43 THE DIRECTION WIRES: (1) PIN — scoreBeat pinScore amplifies STALENESS (starvation-free by
+construction), matched from active interests + open inquiries; `research.alloc` FLIPPED TO
+'priority' LIVE in meta (the S1 allocator was built and left dark on roundrobin); (2) THOUGHT→WORK
+— a synthesis naming "Next step: …" banks that step as a lead on autonomy.harvest_recent (Lucas:
+"she is circling actually putting things together"); (3) PROMISED-LOOKUP NET — an unkept
+promise-say with no retrieval tag runs the lookup SHE announced (her say names the object better
+than his message) · 4e7b90a miss logs `searched-miss` (label) · fda812d format-teach line REMOVED
+(true no longer). DECIDER DIRECTION VISIBLE: chose=research on Fri Jul 24 BGOV meeting
+PARTICIPANTS (calendar-people move) instead of a county.
+WATCH boot59: `[main] promised-lookup net` on a promise-say · `[subc] synthesis next-step banked`
+· pinned beats outranking alphabetical sweeps · inquiry #1 finally landing evidence (the SoS Excel
+is now READABLE) · harvest-born homecoming · engage `BLOCKED ungrounded say`. The war-question retest is STILL OWED (last asking
 was 23:36 on boot48, pre-news-tier — the honest-miss proof, not the tier's test): "what's the
 latest on the war?" must answer from her own stream in one turn (`enriched:news` in the log).
 BOOT49/50 PROOFS: inquiry #1 advanced touches 2-4 (the direction loop holds across boots) · email
