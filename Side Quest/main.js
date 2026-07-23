@@ -9087,7 +9087,11 @@ async function autonomyTick() {
         // path that happened to produce the finding. Delivered once; later touches stay quiet.
         try {
           const digLib = require('./lib/dig');
-          if (digLib.isConversationBorn(row) && !row.dig_delivered_ts && digLib.hasRealFinding(env)) {
+          // A dig (forked minutes ago) homecomes on its FIRST real finding; a harvest-born inquiry
+          // (carried from an earlier talk) homecomes only when it CLOSES — a partial on a big
+          // question is not worth unprompted speech, the answer is.
+          if (digLib.isConversationBorn(row) && !row.dig_delivered_ts && digLib.hasRealFinding(env)
+              && (digLib.isDigBorn(row) || closedStatus)) {
             await announceDigReturn(inquiry.get(inqId) || row, env, { closedStatus });
           }
         } catch (e) { console.error('[dig] tick homecoming failed:', e.message); }
@@ -9098,7 +9102,11 @@ async function autonomyTick() {
       try {
         const procs = require('./lib/procedures');
         if (procMatch && procMatch.procedure && expectVerdict && typeof expectVerdict.met === 'boolean') procs.recordUse(procMatch.procedure.id, { met: expectVerdict.met, nowMs: now });
-        await procs.crystallize({ decision: { ...decision, move: 'inquiry', target: row.question }, opRes: res, verdict: expectVerdict, nowMs: now });
+        const cr = await procs.crystallize({ decision: { ...decision, move: 'inquiry', target: row.question }, opRes: res, verdict: expectVerdict, nowMs: now });
+        // the birth must be VISIBLE — procedure #13 was born on this path with no log line at all
+        if (cr && cr.created) console.log(`[autonomy] procedure born: "${cr.created.name}" (#${cr.created.id})`);
+        else if (cr && cr.folded) console.log(`[autonomy] procedure reinforced: "${cr.folded.name}" (#${cr.folded.id})`);
+        else if (cr && cr.constraint) console.log(`[autonomy] constraint ${cr.confirmed ? 'confirmed' : 'learned'}: "${cr.constraint.name}"`);
       } catch {}
       const sum = autonomy.summarizeOutcome(decision, res, { now, verify: expectVerdict });
       try { require('./lib/board').finish(boardId, { status: sum.ok ? 'done' : 'failed', note: `touch ${row.touches + 1}${env ? `; wrote back (${env.status})` : '; NO write-back — the trail carries the miss'}` }); } catch {}
@@ -10915,7 +10923,7 @@ async function announceDigReturn(row, env, { closedStatus = null } = {}) {
     let msg = digLib.returnFallback({ question: row.question, env, closedStatus });
     try {
       let persona = ''; try { persona = String(require('./lib/context').BASE_PERSONA || '').replaceAll('[user]', uname); } catch {}
-      const p = digLib.returnPromptParts({ question: row.question, env, uname });
+      const p = digLib.returnPromptParts({ question: row.question, env, uname, mode: digLib.isDigBorn(row) ? 'dig' : 'harvest' });
       const out = await condenseComplete([{ role: 'system', content: `${persona}\n\n${p.sys}` }, { role: 'user', content: p.user }], { numPredict: 400 });
       const cleaned = String(out || '').replace(/^\s*(okay|alright|sure|so)[,:]?\s*/i, '').replace(/<\/?[a-z_-]+>/gi, '').trim();
       if (cleaned.length > 40) msg = cleaned;

@@ -31,6 +31,19 @@ ok(dig.bornFrom(7, 'x'.repeat(400)).length <= 160, 'born_from respects the colum
 ok(dig.isConversationBorn({ born_from: bf }), 'a dig-born row reads as conversation-born');
 ok(!dig.isConversationBorn({ born_from: 'her own state' }) && !dig.isConversationBorn({}) && !dig.isConversationBorn(null),
   "the tick's own inquiries never read as conversation-born");
+// HARVEST-born shapes (the decider writes these free-form; the address rides the object however
+// written — inquiry #2's answered close had no homecoming because the matcher knew only the dig shape)
+ok(dig.isConversationBorn({ born_from: 'Born from conversation [d8269] where Lucas asked to verify claims about chip manufacturing' })
+  && dig.isConversationBorn({ born_from: 'Conversation harvest [d8271] asked for a comprehensive Louisiana parish leaders list' }),
+  'harvest-born shapes read as conversation-born (both live variants)');
+ok(!dig.isConversationBorn({ born_from: 'weekly beat sweep of SD counties' }), 'a beat-born inquiry still reads as her own');
+ok(dig.isDigBorn({ born_from: bf }) && !dig.isDigBorn({ born_from: 'Born from conversation [d8269] where Lucas asked' }),
+  'isDigBorn splits the minutes-ago dig from the carried-away harvest ask');
+// the voice frame is honest about WHEN the ask happened
+ok(/Minutes ago, mid-conversation/.test(dig.returnPromptParts({ question: 'q', env: null, mode: 'dig' }).sys),
+  'dig mode keeps the minutes-ago frame');
+const hSys = dig.returnPromptParts({ question: 'q', env: null, mode: 'harvest' }).sys;
+ok(/recent conversation/.test(hSys) && !/Minutes ago/.test(hSys), 'harvest mode never claims minutes-ago');
 
 // --- the header tells the touch where the question was born ---
 ok(/FORKED FROM A LIVE CONVERSATION/.test(dig.digHeader({ born_from: bf })) && dig.digHeader({ born_from: bf }).includes('#3542'),

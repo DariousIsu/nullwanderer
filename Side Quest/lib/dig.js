@@ -41,14 +41,22 @@ function stripDigTags(text) {
   return str(text).replace(DIG_RE, '').replace(/<\/?dig>/gi, '');
 }
 
-// §6 L1 — the return address, written into born_from at open. isConversationBorn() is the ONLY
-// reader of this convention; keep them together.
+// §6 L1 — the return address, written into born_from at open. TWO shapes carry a conversation
+// address: the DIG convention this module writes ("conversation turn #N — ..."), and the
+// HARVEST-born shape the decider writes when a mined conversation lead opens an inquiry
+// ("Born from conversation [d8269] where Lucas asked ...", "Conversation harvest [d8271] ...").
+// Both deserve the homecoming — the address rides the OBJECT, however it was written — but only
+// the dig shape may claim the minutes-ago frame (isDigBorn splits them for the voice).
 function bornFrom(turnId, userLine) {
   const snippet = str(userLine).replace(/\s+/g, ' ').trim().slice(0, 110);
   return `conversation turn #${Number(turnId) || 0} — "${snippet}"`.slice(0, 160);
 }
-function isConversationBorn(row) {
+function isDigBorn(row) {
   return /^conversation turn #\d+/i.test(str(row && row.born_from));
+}
+function isConversationBorn(row) {
+  const bf = str(row && row.born_from);
+  return /^conversation turn #\d+/i.test(bf) || /\bconversation\b[\s\S]{0,40}\[d\d+\]/i.test(bf);
 }
 
 // The touch preamble — tells the operator run WHERE this question was born and where the answer
@@ -88,9 +96,14 @@ function returnFallback({ question, env, closedStatus = null } = {}) {
 
 // The voice-written homecoming (condenseComplete in main.js; persona is prepended there). Grounded
 // HARD in the write-back — the same no-fabrication contract as the research-complete engagement gen.
-function returnPromptParts({ question, env, uname = 'Lucas' } = {}) {
+function returnPromptParts({ question, env, uname = 'Lucas', mode = 'dig' } = {}) {
   const ev = (env && env.new_evidence) || [];
-  const sys = `Minutes ago, mid-conversation, ${uname} raised a question and you forked a background dig on it while the talk went on. The dig just came back — speak to ${uname} now, IN YOUR OWN VOICE, returning to what was asked: (1) open by anchoring to the question ("about the X you asked…") so it lands in the right thread of the talk; (2) give what you actually found — the substance, not a status report; (3) if the evidence is thin or the question resolved as unanswerable, say so plainly. Ground EVERYTHING in the dig results below; do not invent findings, sources, or confidence you don't have. 2-4 sentences, warm and direct, no headings or bullets. Start directly with what you'd say.`;
+  // The frame must be HONEST about when the ask happened: a dig forked minutes ago mid-talk vs a
+  // harvest-born question carried from an earlier conversation and worked since.
+  const opening = mode === 'harvest'
+    ? `In a recent conversation, ${uname} asked for something you took away and have been working on since. The work just landed — speak to ${uname} now, IN YOUR OWN VOICE, bringing the answer back:`
+    : `Minutes ago, mid-conversation, ${uname} raised a question and you forked a background dig on it while the talk went on. The dig just came back — speak to ${uname} now, IN YOUR OWN VOICE, returning to what was asked:`;
+  const sys = `${opening} (1) open by anchoring to the question ("about the X you asked…") so it lands in the right thread of the talk; (2) give what you actually found — the substance, not a status report; (3) if the evidence is thin or the question resolved as unanswerable, say so plainly. Ground EVERYTHING in the dig results below; do not invent findings, sources, or confidence you don't have. 2-4 sentences, warm and direct, no headings or bullets. Start directly with what you'd say.`;
   const user = [
     `THE QUESTION (as forked): ${str(question).slice(0, 300)}`,
     `WHERE IT LANDED: ${str(env && env.learned).slice(0, 700) || '(no write-back — the run returned nothing usable)'}`,
@@ -100,4 +113,4 @@ function returnPromptParts({ question, env, uname = 'Lucas' } = {}) {
   return { sys, user };
 }
 
-module.exports = { parseDigTags, stripDigTags, bornFrom, isConversationBorn, digHeader, hasRealFinding, returnFallback, returnPromptParts };
+module.exports = { parseDigTags, stripDigTags, bornFrom, isDigBorn, isConversationBorn, digHeader, hasRealFinding, returnFallback, returnPromptParts };
