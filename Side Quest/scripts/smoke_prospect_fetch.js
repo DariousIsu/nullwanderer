@@ -92,6 +92,14 @@ ok(PF.pageResult(null) === null, 'pageResult: no read → null');
     click: async () => ({ ok: true, url: 'https://www.zoominfo.com/upgrade' }), back: async () => ({ ok: true, url: 'x' }),
   };
   ok((await PF.deepBrowse(brokerNav, 'Jane Roe Acme email')).length === 0, 'deepBrowse: a data-broker landing → [] (skipped, no broker CTA minted)');
+  // a PDF landing can never deep-browse — every attempt was "0 layer(s)" retried forever (live: fcoe.org loop)
+  const pdfNav = {
+    open: async () => ({ ok: true, url: 'ddg' }),
+    openTopResult: async () => ({ ok: true, url: 'https://www.fcoe.org/files/documents/FCSS_Directory_18-19-v2.pdf' }),
+    read: async () => ({ ok: true, url: 'https://www.fcoe.org/files/documents/FCSS_Directory_18-19-v2.pdf', text: '' }),
+    click: async () => ({ ok: true, url: 'x' }), back: async () => ({ ok: true, url: 'x' }),
+  };
+  ok((await PF.deepBrowse(pdfNav, 'Fresno county schools directory')).length === 0, 'deepBrowse: a PDF landing → [] (skipped; the layered fetch reads PDFs, the browser cannot)');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);

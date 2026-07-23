@@ -139,6 +139,11 @@ async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 
     // Skip a data-broker landing entirely (paywalled aggregator, not a real bio) → [] so the caller falls
     // back to the layered fetch instead of minting broker-CTA junk.
     if (isBrokerUrl(landingUrl)) { log && log(`[browser] skipped data-broker landing: ${landingUrl}`); return rows; }
+    // A PDF landing can never deep-browse (no links to click, read yields nothing) — every attempt
+    // logged "deep-browsed 0 layer(s)" and NOTHING remembered the failure, so the same dead PDF was
+    // retried forever in the VISIBLE browser (live 2026-07-23: fcoe.org directory PDF on loop while
+    // Lucas watched). Skip it; the caller falls back to the layered fetch, which CAN read PDFs.
+    if (/\.pdf(?:[?#]|$)/i.test(String(landingUrl || ''))) { log && log(`[browser] skipped PDF landing (deep-browse can't read it; layered fetch can): ${landingUrl}`); return rows; }
     const imgsAt = async () => { try { return (typeof browser.pageImages === 'function') ? (await browser.pageImages()) || [] : []; } catch { return []; } };
     if (String(r.text || '').trim().length >= minText) { rows.push({ text: String(r.text).slice(0, 8000), url: landingUrl, source: 'browser', images: await imgsAt() }); }
     seenUrl.add(norm(landingUrl));
