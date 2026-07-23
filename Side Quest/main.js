@@ -6053,7 +6053,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               const _rows = db.getDb().prepare(`SELECT content FROM turns WHERE session_id = ? AND speaker IN ('user','ai_said') ORDER BY id DESC LIMIT 6`).all(sessionId);
               _ctxTerms = require('./lib/graph_walk').extractProperNouns(_rows.map((r) => r.content).join('\n')).slice(0, 5);
             } catch {}
-            const res = await require('./lib/cognition').answerGrounded({ userMessage, grounding, object: recallResult && recallResult.object, userName, scope: _scope, deps: { contextTerms: _ctxTerms } });
+            const res = await require('./lib/cognition').answerGrounded({ userMessage, grounding, object: recallResult && recallResult.object, userName, scope: _scope, deps: { contextTerms: _ctxTerms, forecast: () => lastForecast } });
             if (res && res.say) {
               composedUserMessage = `${composedUserMessage}\n\n${ad.buildVoiceBlock(res.say, userName)}`;
               openThreads = [];   // grounded answer owns the turn — no standing-work primacy bleed

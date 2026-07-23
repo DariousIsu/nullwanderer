@@ -60,6 +60,18 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   ok((await cog._enrichRouted('x', { routeNeed: async () => ({ ok: false, routed: true, text: 'I looked for an Echo tool but nothing fit; this may be an open-web question.' }) })).text === '', '_enrichRouted: no-fit message → no grounding');
   ok(/42/.test((await cog._enrichRouted('x', { routeNeed: async () => ({ ok: true, text: 'John Curtis sponsored 42 bills in the 118th Congress.', chose: 'recipe count' }) })).text), '_enrichRouted: genuine success → grounding');
 
+  // 5b) FORECAST TIER (F2): an election-odds question leads with HER model, never a web guess.
+  ok(cog.isForecastQuestion('who wins the senate in 2026?') && cog.isForecastQuestion('what are the odds the house flips?') && cog.isForecastQuestion('balance of power forecast for congress'),
+    'isForecastQuestion: election odds/who-wins/balance-of-power questions detected');
+  ok(!cog.isForecastQuestion('who is the senate majority leader?') && !cog.isForecastQuestion('what time is the house vote?'),
+    'isForecastQuestion: a who-holds-office / logistics question is NOT a forecast question');
+  const fcSnap = { ok: true, as_of: '2026-07-23', illustrative: false, work: { sim: { chambers: { senate: { pA_control: 0.62, seatsA_mean: 51, seatsA_p10: 48, seatsA_p90: 54, total_seats: 100, n_races: 35 } } } } };
+  const efc = await cog._enrichForecast('senate 2026', { forecast: () => fcSnap });
+  ok(efc.text && /P\(A control\) 62/.test(efc.text) && /48–54/.test(efc.text) && efc.source === 'forecast', '_enrichForecast: formats her model\'s chamber topline (control %, seat band)');
+  ok((await cog._enrichForecast('x', { forecast: () => null })).text === '', '_enrichForecast: no run → empty (no-op, ladder falls through untouched)');
+  const fc = await cog.answerGrounded({ userMessage: 'who wins the senate in the 2026 election?', grounding: '', deps: { ask: async ({ input }) => /control|seats|band/i.test(input.grounding) ? 'Her model gives Party A a 62% chance of Senate control.' : 'NEED: 2026 senate control odds', dispatch: emptyGraph, forecast: () => fcSnap, newsStories: () => [], webSearch: async () => ({ results: [] }) } });
+  ok(fc && fc.enriched === true && fc.enrichSource === 'forecast' && /62%/.test(fc.say), 'forecast question → answered from HER model (leads the ladder, beats web)');
+
   // 6) THE dying-question fix: graph empty → WIKIPEDIA tier recovers a fact no local tier held.
   const wikiMock = async () => [{ title: 'Lee Zeldin', extract: 'Lee Zeldin is the 17th administrator of the EPA since January 2025.' }];
   let wikiWb = null;

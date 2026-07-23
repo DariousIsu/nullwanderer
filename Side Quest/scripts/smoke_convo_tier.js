@@ -54,7 +54,7 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
   {
     const fs = require('fs'), path = require('path');
     const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'cognition.js'), 'utf8');
-    const m = src.match(/const _modes = ([\s\S]{0,400}?);/);
+    const m = src.match(/(?:const|let) _modes = ([\s\S]{0,400}?);/);
     ok(!!m, 'found the ladder definition');
     const modes = m ? m[1] : '';
     const office = modes.match(/'office_holder' \? \[([^\]]*)\]/);

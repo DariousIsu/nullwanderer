@@ -199,6 +199,33 @@ async function _enrichConvo(need, deps = {}) {
 // "Iran war live: US launches new attacks" sat CURRENT in data/news_bucket.db — the ladder had
 // graph/wiki/convo/web/excavate and never once read her own freshest source. A needs_fresh
 // question checks the stream FIRST now: zero network, already corroborated, updated hourly.
+// FORECAST TIER (F2, PLAN_MAP §3b — Lucas: "the probability models in the forecasting workspace").
+// An election odds / who-wins / seat-count / chamber-control question must be answered from HER OWN
+// balance-of-power model, never a web guess or a stale training memory. Reads the last completed run
+// (deps.forecast() → the lastForecast snapshot); a total no-op when no run exists or the question
+// isn't forecast-shaped, so the normal ladder is untouched. Pairs with the forecast_query operator
+// tool (Slice F) — this is the FRONT's version, so a casual chat question reaches the model too.
+// Trigger cues are OUTCOME/PROBABILITY language only — NOT bare "majority"/"control"/"hold", which
+// name OFFICES ("senate majority leader") and would false-positive. A cue + a chamber/election noun
+// within 60 chars, either order.
+const _FC_CUE = 'who\\s+(?:wins?|will win|takes?)|win\\s+prob\\w*|\\bodds\\b|likelihood|chances?|forecast|projec\\w*|seat\\s+count|balance\\s+of\\s+power|\\bflip\\w*|take\\s+control|control\\s+of';
+const _FC_NOUN = 'senate|house|congress|chamber|midterm|2026\\s+election|the\\s+election|\\bseats?\\b';
+const _FORECAST_RE = new RegExp(`\\b(?:${_FC_CUE})\\b[\\s\\S]{0,60}\\b(?:${_FC_NOUN})\\b|\\b(?:${_FC_NOUN})\\b[\\s\\S]{0,60}\\b(?:${_FC_CUE})\\b`, 'i');
+function isForecastQuestion(text) { return _FORECAST_RE.test(String(text || '')); }
+async function _enrichForecast(need, deps = {}) {
+  try {
+    const snap = deps.forecast ? deps.forecast() : null;
+    if (!snap || !snap.ok) return { text: '', url: null };
+    const chambers = ((snap.work || {}).sim || {}).chambers || {};
+    if (!Object.keys(chambers).length) return { text: '', url: null };
+    const lines = [`Her own 2026 balance-of-power model (Monte-Carlo, as of ${snap.as_of || 'this run'}${snap.illustrative ? ', ILLUSTRATIVE — no polled margins yet' : ''}). Party A is Dem-coded, B Rep-coded:`];
+    for (const [ch, c] of Object.entries(chambers)) {
+      lines.push(`- ${ch}: P(A control) ${(100 * (c.pA_control || 0)).toFixed(1)}%; A seats ${Number(c.seatsA_mean || 0).toFixed(0)} (80% band ${c.seatsA_p10}–${c.seatsA_p90}) of ${c.total_seats}; ${c.n_races} races simulated.`);
+    }
+    return { text: lines.join('\n'), url: null, source: 'forecast' };
+  } catch { return { text: '', url: null }; }
+}
+
 async function _enrichNews(need, deps = {}) {
   try {
     const stories = (deps.newsStories ? deps.newsStories() : require('./news_lane').allStories()) || [];
@@ -423,9 +450,12 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   // 'convo' (our own past turns) leads the default ladder: cheapest tier, no network, and the most
   // relevant source for anything WE said. It stays OUT of the office-holder ladder and comes late on
   // a fresh-fact question — an old remark of ours must never outrank a current-fact lookup.
-  const _modes = it.kind === 'office_holder' ? ['wiki', 'web', 'excavate']
+  let _modes = it.kind === 'office_holder' ? ['wiki', 'web', 'excavate']
     : it.needs_fresh ? ['news', 'wiki', 'graph', 'routed', 'convo', 'web', 'excavate']
     : ['convo', 'graph', 'wiki', 'routed', 'web', 'excavate'];
+  // FORECAST LEADS on an election-odds question (F2): her own model outranks every external tier —
+  // it IS the answer, not a source to corroborate. No-ops through if no run exists (empty grounding).
+  if (isForecastQuestion(userMessage)) _modes = ['forecast', ..._modes.filter((m) => m !== 'forecast')];
   const _tried = [];   // what we ACTUALLY reached — the miss line must not overstate it
   for (const mode of _modes) {
     if (!step || !step.need) break;
@@ -434,7 +464,8 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
     // far cleaner lookup than the draft's raw NEED ("who runs the country" → the wiki "Country" article). Use
     // it.topic when the intent flagged fresh + gave one; otherwise the draft's need (entity Qs, no topic).
     const q = (it.needs_fresh && it.topic) ? it.topic : step.need;
-    const res = mode === 'news' ? await _enrichNews(q, deps)
+    const res = mode === 'forecast' ? await _enrichForecast(q, deps)
+              : mode === 'news' ? await _enrichNews(q, deps)
               : mode === 'convo' ? await _enrichConvo(q, deps)
               : mode === 'graph' ? await _enrichGraph(q, object, deps)
               : mode === 'wiki' ? await _enrichWiki(q, deps, { object })
@@ -486,4 +517,4 @@ async function answerGrounded({ userMessage, grounding = '', object = null, user
   return { say: `${where}, but I couldn't pin down ${need0}.`, enriched: true, missed: true, need: need0, tried: _tried };
 }
 
-module.exports = { answerGrounded, _draftOrNeed, _enrichConvo, _enrichGraph, _enrichWiki, _enrichNews, _enrichRouted, _enrichWeb, _enrichExcavate, _kickWriteBack, _worthExcavating, _hasStaleGrounding, _entLine, NEED_RE };
+module.exports = { answerGrounded, _draftOrNeed, _enrichConvo, _enrichGraph, _enrichWiki, _enrichNews, _enrichForecast, isForecastQuestion, _enrichRouted, _enrichWeb, _enrichExcavate, _kickWriteBack, _worthExcavating, _hasStaleGrounding, _entLine, NEED_RE };
