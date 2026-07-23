@@ -61,6 +61,54 @@ function normalizeAsOf(raw) {
   return m ? m[1] : null;
 }
 
+// ── GROUNDING GATE ──────────────────────────────────────────────────────────────────────
+// A claim banked AGAINST a source must restate that source: its anchors — numbers (statute
+// numbers, HTS codes, years) and proper nouns — must appear in the text that was actually
+// read. A fused answer that wraps a true headline in invented specifics fails here, and the
+// URL never gets stamped onto provenance the page didn't give. Deterministic, same
+// discipline as the claim gate: paraphrase survives (≥70% of anchors found), invention does
+// not. Source text absent or too thin to judge → uncheckable → caller keeps prior behavior.
+const GROUNDING_MIN_SRC = 200;        // below this the text can't vouch for anything
+const GROUNDING_FLOOR = 0.7;          // fraction of anchors that must appear in the source
+const _ANCHOR_STOP = new Set([
+  'the', 'this', 'that', 'these', 'those', 'there', 'then', 'they', 'their', 'them', 'its',
+  'has', 'have', 'had', 'was', 'were', 'are', 'and', 'but', 'for', 'not', 'all', 'any',
+  'what', 'when', 'where', 'which', 'who', 'why', 'how', 'his', 'her', 'our', 'your',
+  'with', 'from', 'into', 'over', 'under', 'after', 'before', 'during', 'since', 'until',
+  'while', 'however', 'although', 'though', 'because', 'according', 'also', 'currently'
+]);
+// Anchor extraction: digit runs of ≥2 (commas stripped so "1,202" ≡ "1202"; zero-padded
+// 2-digit runs excluded so an ISO date's "-07-" never demands a literal "07" of prose) +
+// capitalized words of ≥3 chars that aren't common sentence-starters.
+function _anchorsOf(text) {
+  const out = new Set();
+  const s = String(text || '');
+  for (const m of s.replace(/,/g, '').match(/\d+/g) || []) {
+    if (m.length >= 2 && !/^0\d$/.test(m)) out.add(m);
+  }
+  for (const m of s.match(/\b[A-Z][A-Za-z'’-]{2,}\b/g) || []) {
+    if (!_ANCHOR_STOP.has(m.toLowerCase())) out.add(m);
+  }
+  return [...out];
+}
+function groundedInSource(claim, sourceText) {
+  const src = String(sourceText || '');
+  if (src.length < GROUNDING_MIN_SRC) return { checked: false, grounded: true, missing: [], total: 0 };
+  const anchors = _anchorsOf(claim);
+  if (!anchors.length) return { checked: true, grounded: true, missing: [], total: 0 };
+  const numSrc = src.replace(/,/g, '');
+  const missing = [];
+  for (const a of anchors) {
+    const esc = a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const hit = /^\d/.test(a)
+      ? new RegExp('(?<!\\d)' + esc + '(?!\\d)').test(numSrc)
+      : new RegExp('\\b' + esc + '\\b', 'i').test(src);
+    if (!hit) missing.push(a);
+  }
+  const found = anchors.length - missing.length;
+  return { checked: true, grounded: found / anchors.length >= GROUNDING_FLOOR, missing, total: anchors.length };
+}
+
 function buildPrompt({ query, content }) {
   return [{
     role: 'user',
@@ -177,11 +225,21 @@ async function maybeCaptureLearnings({ query, content, urls, deps = {} } = {}) {
     }
     const candidates = await extractClaims({ query, content, deps: { ...deps, urls: [url], now } });
     if (!candidates.length) return { captured: 0, skipped: 'none-extracted' };
+    // GROUNDING GATE — an extracted claim is by definition a restatement of the TEXT; a claim whose
+    // anchors (numbers, proper nouns) are absent from the text was invented, not extracted.
+    let droppedUngrounded = 0;
+    const grounded = candidates.filter((c) => {
+      const g = groundedInSource(c.claim, content);
+      if (g.checked && !g.grounded) { droppedUngrounded++; return false; }
+      return true;
+    });
+    if (droppedUngrounded) console.warn(`[learning] dropped ${droppedUngrounded} ungrounded claim(s) — anchors absent from the read text (invented, not extracted; gate held)`);
+    if (!grounded.length) return { captured: 0, skipped: 'none-grounded', dropped_ungrounded: droppedUngrounded };
     const live = _liveLearnings();
     const storeFn = deps.storeFn || ((rec) => memory.store(rec));
     const captureDate = deps.captureDate || require('./tz').dayKey(now);   // Eastern day — a 9pm capture is TODAY's
     let verified = 0, learned = 0;
-    for (const c of candidates) {
+    for (const c of grounded) {
       const isVerified = !!c.asOf;                                            // source gave a real date → time-sensitive
       if (_isReplay(c, live, isVerified)) continue;
       await storeFn({
@@ -194,7 +252,7 @@ async function maybeCaptureLearnings({ query, content, urls, deps = {} } = {}) {
       live.push({ content: c.claim, provenance: JSON.stringify({ subject_key: c.subjectKey, as_of: c.asOf }) });
       if (isVerified) verified++; else learned++;
     }
-    return { captured: verified + learned, verified, learned };
+    return { captured: verified + learned, verified, learned, dropped_ungrounded: droppedUngrounded };
   } catch (e) { return { error: e.message }; }
 }
 
@@ -236,10 +294,19 @@ function retireVerifiedFact(id, { by = null, now = Date.now() } = {}) {
   } catch { return false; }
 }
 
-async function captureRecovered({ query, answer, url, source = 'excavation', now = null, storeFn = null, lookupFn = null } = {}) {
+async function captureRecovered({ query, answer, url, content = null, source = 'excavation', now = null, storeFn = null, lookupFn = null } = {}) {
   try {
     const q = String(query || '').trim(), a = String(answer || '').replace(/\s+/g, ' ').trim();
     if (!q || a.length < 3 || !url) return { skipped: 'incomplete' };
+    // GROUNDING GATE (boot47 root cause #3): the answer is the MODEL'S fusion, not the page's text —
+    // banking it under the page's URL manufactures provenance, and via reviseBelief a confabulated
+    // specific could even RETIRE a good incumbent. When the read text is available, the answer's
+    // anchors must appear in it or nothing banks.
+    const gchk = groundedInSource(a, content);
+    if (gchk.checked && !gchk.grounded) {
+      console.warn(`[learning] BLOCKED ungrounded write-back — ${gchk.missing.length}/${gchk.total} anchors absent from the read source (missing: ${gchk.missing.slice(0, 6).join(', ')}) — the answer does not restate the page; nothing banked`);
+      return { skipped: 'ungrounded', missing: gchk.missing };
+    }
     const store = storeFn || ((rec) => memory.store(rec));
     const ts = now || Date.now();
     const key = slugify(q).slice(0, 80);
@@ -303,8 +370,8 @@ async function seedIdentityFacts({ apply = true, facts = IDENTITY_FACTS, storeFn
 
 module.exports = {
   maybeCaptureLearnings, captureRecovered, buildPriorKnowledgeBlock, seedIdentityFacts, IDENTITY_FACTS,
-  verifiedFactBySlot, retireVerifiedFact,
+  verifiedFactBySlot, retireVerifiedFact, groundedInSource,
   // exported for unit tests
   parseClaims, slugify, normalizeAsOf, extractClaims, buildPrompt,
-  CAPTURE_MIN_GAP_MS, VERIFIED_IMPORTANCE, LEARNING_IMPORTANCE
+  CAPTURE_MIN_GAP_MS, VERIFIED_IMPORTANCE, LEARNING_IMPORTANCE, GROUNDING_FLOOR
 };

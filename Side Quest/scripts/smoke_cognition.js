@@ -67,6 +67,7 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   ok(f && f.enriched === true && f.enrichSource === 'wiki' && /Zeldin/.test(f.say), 'graph empty → WIKI tier recovers the answer (the dying-question fix)');
   await new Promise(r => setTimeout(r, 5));
   ok(wikiWb && /Zeldin/.test(wikiWb.answer) && /wikipedia\.org/.test(wikiWb.url) && wikiWb.source === 'wiki', 'write-back EXTENDED: a WIKI recovery also feeds the DB (source url + answer)');
+  ok(wikiWb && typeof wikiWb.content === 'string' && /Zeldin/.test(wikiWb.content), 'write-back carries the READ TEXT (content) — the grounding gate can check the answer against the page');
 
   // 7) CURRENCY VERIFY: grounding gives a plausible (stale) answer, but the question asks "now" → verify
   // against a fresh source and correct it.

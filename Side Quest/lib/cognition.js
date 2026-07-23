@@ -325,7 +325,9 @@ async function _enrichRouted(need, deps = {}) {
 function _kickWriteBack({ query, answer, url, source, text = null, deps = {} }) {
   if (!url || !answer || !query) return;
   const wb = deps.writeBack || ((a) => { try { return require('./learning').captureRecovered(a); } catch { return Promise.resolve(); } });
-  Promise.resolve().then(() => wb({ query, answer, url, source: source || 'browsing' })).catch(() => {});
+  // content = the text that was actually read — captureRecovered's grounding gate checks the answer's
+  // anchors against it, so a fused answer with invented specifics never banks under the page's URL.
+  Promise.resolve().then(() => wb({ query, answer, url, source: source || 'browsing', content: text })).catch(() => {});
   // …and MINT THE OBJECTS. captureRecovered banks a flat verified_fact keyed by subject slot; this is
   // the object half, in the same encounter vocabulary every other input lane uses. It is also what
   // makes the wiki gate pay: a fetch that happens leaves the link behind, so the next question about

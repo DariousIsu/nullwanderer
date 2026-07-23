@@ -2,7 +2,9 @@
  * Proves: provenance gate (URL required) + thin gate; the claim gate rejects hedged/pronoun lines;
  * a substantive read banks claims with NO interrogative-query gate; DATED claims → verified_fact,
  * UNDATED → learning; multiple distinct facts about ONE subject all accrue (no subject dedup for
- * learnings); an identical claim already live is skipped (replay).
+ * learnings); an identical claim already live is skipped (replay); the GROUNDING GATE — a claim or
+ * recovered answer whose anchors (numbers, proper nouns) are absent from the read text never banks
+ * (the fusion-confabulation fix: an invented statute number can't ride a real URL into the DB).
  * Run: ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_verified_capture.js
  */
 const path = require('path'), fs = require('fs'), os = require('os');
@@ -13,7 +15,9 @@ const learning = require('C:/Users/azrae/Desktop/Side Quest/lib/learning');
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++; console.log('  ✗', m); } };
-const LONG = 'The page states durable facts about the topic in detail. '.repeat(6); // > MIN_CONTENT_LEN
+// > MIN_CONTENT_LEN, and it STATES the mock claims' anchors (Tampa Bay, April) — extraction claims
+// are restatements of the text, and the grounding gate holds the smoke to the same honesty.
+const LONG = 'Florida Top Dog is a cheer team based in Tampa Bay; the squad holds tryouts in April and ranked #2 nationally in 2026. '.repeat(4);
 
 (async () => {
   try {
@@ -68,6 +72,44 @@ const LONG = 'The page states durable facts about the topic in detail. '.repeat(
         extract: async () => 'The team is based in Tampa Bay. | Florida Top Dog | UNKNOWN' }
     });
     ok(replay.captured === 0 && stored2.length === 0, 'identical claim already live → skipped (no re-bank)');
+
+    // --- GROUNDING GATE (boot47 root cause #3: the fusion-confabulation fix) ------------------
+    // A true headline wrapped in invented specifics (wrong statute, invented HTS code) was banked as a
+    // verified_fact with a real URL stamped on — the write-back manufactured provenance. The gate: a
+    // claim banked against a source must restate the source's ANCHORS (numbers + proper nouns).
+    const SRC338 = 'President Trump announced 50% tariffs on Canadian goods under Section 338 of the Trade Act of 1930, citing discrimination against U.S. commerce. '.repeat(2);
+    const gBad = learning.groundedInSource('Trump imposed the tariffs under Section 301 covering HTS code 1202.', SRC338);
+    ok(gBad.checked && !gBad.grounded && gBad.missing.includes('301') && gBad.missing.includes('1202'), 'grounding: invented statute + HTS code → NOT grounded (the confabulation shape is caught)');
+    const gPara = learning.groundedInSource('Trump hit Canada with 50% tariffs under Section 338 of the Trade Act.', SRC338);
+    ok(gPara.checked && gPara.grounded && gPara.missing.length <= 1, 'grounding: faithful paraphrase survives (≥70% of anchors found; "Canada" vs "Canadian" tolerated)');
+    ok(learning.groundedInSource('Anything At All 999', 'tiny').checked === false, 'grounding: source too thin to judge → uncheckable (no false block)');
+    ok(learning.groundedInSource('the sky is blue today.', SRC338).grounded === true, 'grounding: a claim with no anchors passes vacuously');
+    const SRCDATE = 'The measure took effect on July 21, 2026, according to the published notice in the register. '.repeat(3);
+    const gIso = learning.groundedInSource('The rule took effect on 2026-07-21.', SRCDATE);
+    ok(gIso.grounded === true, 'grounding: ISO date vs prose date tolerated (zero-padded month fragment never demanded)');
+
+    // captureRecovered: an ungrounded fused answer is BLOCKED — nothing banked, no supersede fired
+    const recB = [];
+    const wbBlocked = await learning.captureRecovered({ query: 'latest tariff action', answer: 'Trump imposed the tariffs under Section 301 covering HTS code 1202.', url: 'https://x/tariffs', content: SRC338, source: 'excavation', now: Date.parse('2026-07-02T12:00:00-04:00'), storeFn: async (r) => { recB.push(r); return { id: 9 }; } });
+    ok(wbBlocked.skipped === 'ungrounded' && recB.length === 0 && wbBlocked.missing.includes('301'), 'captureRecovered: fused answer with invented specifics → BLOCKED (skipped=ungrounded, nothing stored)');
+    // …and a faithful recovery still banks when the source text rides along
+    const recG = [];
+    const wbGood = await learning.captureRecovered({ query: 'current tariff statute', answer: 'Trump hit Canada with 50% tariffs under Section 338 of the Trade Act.', url: 'https://x/tariffs', content: SRC338, source: 'excavation', now: Date.parse('2026-07-02T12:00:00-04:00'), storeFn: async (r) => { recG.push(r); return { id: 10 }; } });
+    ok(wbGood.captured === 1 && recG.length === 1 && recG[0].source === 'verified_fact', 'captureRecovered: grounded answer + source text → banks as before');
+    // (backward compat — the earlier captureRecovered tests pass NO content and still bank: uncheckable → prior behavior)
+
+    // maybeCaptureLearnings: an extracted "claim" whose anchors are absent from the TEXT was invented,
+    // not extracted → dropped; the genuinely-stated claim still banks
+    const stored3 = [];
+    const capMix = await learning.maybeCaptureLearnings({
+      query: 'Florida Top Dog All-Stars', content: LONG, urls: ['https://src/team'],
+      deps: { skipThrottle: true, storeFn: async (rec2) => { stored3.push(rec2); return { id: 1 }; },
+        extract: async () => [
+          'The team holds tryouts in April. | Florida Top Dog | UNKNOWN',
+          'The program relocated to Orlando in 1999. | Florida Top Dog | 1999'
+        ].join('\n') }
+    });
+    ok(capMix.captured === 1 && capMix.dropped_ungrounded === 1 && stored3.length === 1 && /April/.test(stored3[0].content), 'extraction grounding: invented claim (Orlando/1999 not in text) dropped; stated claim banks');
 
     // R8 — identity seed: canonical facts stored as high-importance verified_facts, idempotent
     const idStored = [];
