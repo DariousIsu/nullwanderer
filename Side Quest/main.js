@@ -8542,19 +8542,31 @@ const operatorTools = {
       // BLOCKER ESCALATION (2026-07-23, Lucas: "very few websites she shouldn't be able to fully
       // access"): a blocked/dead page no longer concedes — the ladder tries plain fetch → archive
       // snapshot → her vision, and the result is LABELED with which door worked.
+      const _sl = require('./lib/site_ledger');
+      const _host = _sl.hostOf(String(url || ''));
+      // ACCESS PROFILE (Lucas: "factor the failures into mechanisms for planning"): every door's
+      // outcome updates the host's learned map; the ladder leads with the door that worked last
+      // time, and the concession carries the site notes so the next planner sees the mechanics.
       const _escalate = async (why) => {
+        try { _sl.recordAccess(String(url || ''), { door: 'browser', ok: false, note: why.slice(0, 120) }); } catch {}
         const esc = await require('./lib/fetch_escalation').escalatedRead(String(url || ''), {
           fetchPage: (u, opts) => require('./lib/web_search').fetchPage(u, opts),
           seePage: async (u, focus) => { const r = await require('./lib/excavate').seePage(String(focus || ''), { url: u }); return r && r.ok ? { ok: true, text: r.text } : { ok: false }; },
+          preferDoor: (() => { try { const b = _sl.bestDoor(_host); return b === 'browser' ? null : b; } catch { return null; } })(),
+          onAccess: (door, ok) => { try { _sl.recordAccess(String(url || ''), { door, ok }); } catch {} },
           log: (m) => console.log(m),
         });
         if (esc.ok) return `[${why} — read via ${esc.via}${esc.note ? '; ' + esc.note : ''}]\n${String(esc.text).replace(/\n{3,}/g, '\n\n').slice(0, 4000)}`;
-        return `${url} ${why}, and ${esc.error}`;
+        const learned = (() => { try { return _sl.accessLine(_host); } catch { return null; } })();
+        return `${url} ${why}, and ${esc.error}${learned ? `\n${learned}` : ''}`;
       };
       if (!o || !o.ok) return _escalate(`could not open in the browser (${(o && o.reason) || 'failed'})`);
       if (o.blocker) return _escalate('is blocked in the browser (sign-in/CAPTCHA/paywall)');
       const r = await webLib.read();
-      if (r && r.ok && r.text && r.text.trim().length >= 180) return r.text.replace(/\n{3,}/g, '\n\n').slice(0, 4000);
+      if (r && r.ok && r.text && r.text.trim().length >= 180) {
+        try { _sl.recordAccess(String(url || ''), { door: 'browser', ok: true }); } catch {}
+        return r.text.replace(/\n{3,}/g, '\n\n').slice(0, 4000);
+      }
       return _escalate('opened but served no readable text (likely a JS shell)');
     } catch (e) { return 'ERROR: ' + e.message; }
   },

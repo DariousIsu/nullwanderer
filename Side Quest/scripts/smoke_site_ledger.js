@@ -52,6 +52,17 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
     ok(SL.shouldSkip('https://www.google.com/search?q=bonnie+whitney', { now: T0 + 60000 }).skip, 'the duplicate identical search minutes later is skipped');
     ok(!SL.shouldSkip('https://www.google.com/search?q=bonnie+whitney', { now: T0 + SL.SERP_TTL_MS + 1 }).skip, 'a fresh search re-earns after the short SERP ttl — tomorrow\'s retry is legitimate');
 
+    // --- ACCESS PROFILES: the failure half (walls become learned mechanics) ---
+    SL.recordAccess('https://voterportal.sos.la.gov/X', { door: 'browser', ok: false, note: 'JS shell — no readable text', now: T0 });
+    SL.recordAccess('https://voterportal.sos.la.gov/Y', { door: 'vision', ok: true, now: T0 + 1000 });
+    const prof = SL.profileFor('voterportal.sos.la.gov');
+    ok(prof && prof.doors.browser.fail === 1 && prof.doors.vision.ok === 1, 'recordAccess: door outcomes accumulate per host');
+    ok(prof.notes.length === 1 && /JS shell/.test(prof.notes[0]), 'a wall\'s mechanics land as a note');
+    ok(SL.bestDoor('voterportal.sos.la.gov') === 'vision', 'bestDoor: the door that last WORKED leads the next attempt');
+    const al = SL.accessLine('voterportal.sos.la.gov');
+    ok(/browser ✗/.test(al) && /vision ✓/.test(al) && /JS shell/.test(al), 'accessLine renders the learned map (doors + notes) for prompts');
+    ok(SL.accessLine('never-seen.example') === null, 'no profile → no line');
+
     // --- bounded ---
     const many = Array.from({ length: 60 }, (_, i) => `https://big.gov/p${i}`);
     const bp = SL.buildPlan('https://big.gov/index', many, { now: T0 });

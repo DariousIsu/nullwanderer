@@ -127,6 +127,54 @@ function nextPending(host) {
   const e = plan.urls.find((x) => x.status === 'pending');
   return e ? e.url : null;
 }
+// ── site access profiles: THE FAILURE HALF (Lucas: "she should be studying the process") ──
+// Per-host memory of which access DOOR worked or failed. doors: browser | plain fetch | archive
+// snapshot | vision | spreadsheet. Each entry: { ok: n, fail: n, last_ok_ts, last_fail_ts }.
+// Notes carry site mechanics worth remembering ("excel link template-broken — fetch the direct
+// electionstatistics URL"). Bounded: 8 notes, newest kept.
+function profileFor(host) {
+  try {
+    const r = db.getDb().prepare('SELECT profile FROM site_access WHERE host = ?').get(String(host || '').toLowerCase());
+    return r ? JSON.parse(r.profile) : null;
+  } catch { return null; }
+}
+function recordAccess(u, { door = 'browser', ok = false, note = null, now = Date.now() } = {}) {
+  const host = hostOf(u) || String(u || '').toLowerCase();
+  if (!host) return false;
+  try {
+    const p = profileFor(host) || { doors: {}, notes: [] };
+    const d = p.doors[door] || { ok: 0, fail: 0 };
+    if (ok) { d.ok++; d.last_ok_ts = now; } else { d.fail++; d.last_fail_ts = now; }
+    p.doors[door] = d;
+    if (note) { p.notes = [String(note).slice(0, 200), ...(p.notes || []).filter((n) => n !== note)].slice(0, 8); }
+    db.getDb().prepare(`INSERT INTO site_access (host, profile, updated_ts) VALUES (?, ?, ?)
+      ON CONFLICT(host) DO UPDATE SET profile = excluded.profile, updated_ts = excluded.updated_ts`)
+      .run(host, JSON.stringify(p), now);
+    return true;
+  } catch { return false; }
+}
+// The door that most recently WORKED for this host — the ladder leads with it next time.
+function bestDoor(host) {
+  const p = profileFor(host);
+  if (!p || !p.doors) return null;
+  let best = null, bestTs = 0;
+  for (const [door, d] of Object.entries(p.doors)) {
+    if (d && d.last_ok_ts && d.last_ok_ts > bestTs) { best = door; bestTs = d.last_ok_ts; }
+  }
+  return best;
+}
+// One line of learned site mechanics for prompts/log — what worked, what keeps failing, the notes.
+function accessLine(host) {
+  const p = profileFor(host);
+  if (!p || !p.doors || !Object.keys(p.doors).length) return null;
+  const parts = Object.entries(p.doors).map(([door, d]) => {
+    const okish = d.last_ok_ts && (!d.last_fail_ts || d.last_ok_ts >= d.last_fail_ts);
+    return `${door} ${okish ? '✓' : '✗'}(${d.ok}/${d.ok + d.fail})`;
+  });
+  const notes = (p.notes || []).length ? ` — notes: ${p.notes.join(' · ')}` : '';
+  return `[site-access] ${String(host).toLowerCase()}: ${parts.join(', ')}${notes}`;
+}
+
 // The narration Lucas asked for: slowness EXPLAINED ("this site is taking longer to digest").
 function planLine(host) {
   const plan = getPlan(host);
@@ -135,4 +183,4 @@ function planLine(host) {
   return `[site-digest] ${plan.host}: ${done}/${plan.urls.length} pages digested${done < plan.urls.length ? ' — still working through it' : ' — complete'}`;
 }
 
-module.exports = { normalizeUrl, hostOf, isSerp, seen, record, shouldSkip, buildPlan, getPlan, markDone, nextPending, planLine, DEFAULT_TTL_MS, SERP_TTL_MS, PLAN_MAX_URLS };
+module.exports = { normalizeUrl, hostOf, isSerp, seen, record, shouldSkip, buildPlan, getPlan, markDone, nextPending, planLine, profileFor, recordAccess, bestDoor, accessLine, DEFAULT_TTL_MS, SERP_TTL_MS, PLAN_MAX_URLS };

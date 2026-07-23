@@ -178,6 +178,16 @@ const MIGRATIONS = [
     created_ts INTEGER NOT NULL,
     updated_ts INTEGER NOT NULL
   )`,
+  // SITE ACCESS PROFILES (2026-07-23, Lucas: "when hitting failures, factor the failures into
+  // mechanisms for planning and trying new approaches — no information should ever be out of
+  // reach"). Per-host memory of WHICH access door worked or failed (browser/plain-fetch/archive/
+  // vision) + free-text notes (a template-broken link, a JS shell). The escalation ladder leads
+  // with what worked last time; a known wall surfaces as site notes at the moment of retry.
+  `CREATE TABLE IF NOT EXISTS site_access (
+    host TEXT PRIMARY KEY,
+    profile TEXT NOT NULL,
+    updated_ts INTEGER NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS commitments (
     id INTEGER PRIMARY KEY,
     ts INTEGER NOT NULL,

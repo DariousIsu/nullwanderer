@@ -24,31 +24,45 @@ const MIN_TEXT = 180;   // below this a "success" is a shell/error page, not a r
 
 function _good(r) { return !!(r && r.ok && r.text && String(r.text).trim().length >= MIN_TEXT); }
 
-async function escalatedRead(url, { focus = '', fetchPage, seePage, maxChars = 4000, log } = {}) {
+// preferDoor: the door that WORKED for this host last time (site_ledger.bestDoor) — studying the
+// process means leading with what the map already learned, not re-deriving the ladder every visit.
+// onAccess(door, ok): the caller's recorder — every attempt updates the host's access profile.
+async function escalatedRead(url, { focus = '', fetchPage, seePage, maxChars = 4000, log, preferDoor = null, onAccess = null } = {}) {
   const u = String(url || '').trim();
   const tried = [];
   if (!u) return { ok: false, error: 'no url', tried };
+  const acc = (door, ok) => { try { typeof onAccess === 'function' && onAccess(door, ok); } catch {} };
 
-  if (typeof fetchPage === 'function') {
-    tried.push('plain fetch');
-    try {
-      const r = await fetchPage(u, { maxChars });
-      if (_good(r)) return { ok: true, text: r.text, via: 'plain fetch', note: null, tried };
-    } catch {}
-
-    tried.push('archive snapshot');
-    try {
-      const r = await fetchPage(ARCHIVE_PREFIX + u, { maxChars });
-      if (_good(r)) return { ok: true, text: r.text, via: 'archive snapshot', note: 'Wayback Machine copy — may be stale; say so if currency matters', tried };
-    } catch {}
+  const doors = {
+    'plain fetch': async () => {
+      if (typeof fetchPage !== 'function') return null;
+      const r = await fetchPage(u, { maxChars }).catch(() => null);
+      return _good(r) ? { ok: true, text: r.text, via: 'plain fetch', note: null } : null;
+    },
+    'archive snapshot': async () => {
+      if (typeof fetchPage !== 'function') return null;
+      const r = await fetchPage(ARCHIVE_PREFIX + u, { maxChars }).catch(() => null);
+      return _good(r) ? { ok: true, text: r.text, via: 'archive snapshot', note: 'Wayback Machine copy — may be stale; say so if currency matters' } : null;
+    },
+    'vision': async () => {
+      if (typeof seePage !== 'function') return null;
+      const r = await seePage(u, focus).catch(() => null);
+      return _good(r) ? { ok: true, text: r.text, via: 'vision', note: 'read with her eyes off the rendered page' } : null;
+    },
+  };
+  const order = ['plain fetch', 'archive snapshot', 'vision'];
+  if (preferDoor && doors[preferDoor] && order.includes(preferDoor)) {
+    order.splice(order.indexOf(preferDoor), 1);
+    order.unshift(preferDoor);
   }
 
-  if (typeof seePage === 'function') {
-    tried.push('vision');
-    try {
-      const r = await seePage(u, focus);
-      if (_good(r)) return { ok: true, text: r.text, via: 'vision', note: 'read with her eyes off the rendered page', tried };
-    } catch {}
+  for (const door of order) {
+    if ((door === 'plain fetch' || door === 'archive snapshot') && typeof fetchPage !== 'function') continue;
+    if (door === 'vision' && typeof seePage !== 'function') continue;
+    tried.push(door);
+    const r = await doors[door]();
+    acc(door, !!(r && r.ok));
+    if (r && r.ok) return { ...r, tried };
   }
 
   log && log(`[escalate] every door failed for ${u} (${tried.join(' → ')})`);

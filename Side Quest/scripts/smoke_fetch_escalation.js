@@ -50,7 +50,17 @@ const LONG = 'Real page content about parish officials and their contact details
     });
     ok(r5.ok && r5.via === 'vision', 'a shell page (thin text) falls through — length is the read bar');
 
-    // 6) the TOOL_SPEC teaches the interaction tools + the escalation (schema-line law)
+    // 6) preferDoor: a host whose map says vision worked leads with vision — studying the process
+    const seq = [];
+    const r6 = await FE.escalatedRead('https://x.gov/roster', {
+      fetchPage: async () => { seq.push('fetch'); return { ok: false }; },
+      seePage: async () => { seq.push('vision'); return { ok: true, text: LONG }; },
+      preferDoor: 'vision',
+      onAccess: (door, ok) => seq.push(`${door}:${ok}`),
+    });
+    ok(r6.ok && r6.via === 'vision' && seq[0] === 'vision' && seq[1] === 'vision:true', 'preferDoor leads with the learned door and onAccess records the outcome');
+
+    // 7) the TOOL_SPEC teaches the interaction tools + the escalation (schema-line law)
     ok(/web_click \{"handle"/.test(OP.TOOL_SPEC) && /web_type \{"handle"/.test(OP.TOOL_SPEC) && /page_back \{\}/.test(OP.TOOL_SPEC),
       'TOOL_SPEC carries web_click / web_type / page_back — the model can only use what the spec shows');
     ok(/AUTO-ESCALATES/.test(OP.TOOL_SPEC) && /do NOT give up on a source/.test(OP.TOOL_SPEC),
