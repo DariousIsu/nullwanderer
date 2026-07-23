@@ -177,6 +177,16 @@ per-doc in-flight Set on decomposeLandedDoc (any two paths). ⚠️#8443 is PARK
 `decompose_sweep:attempted` (emergency stop before the race reached the 15-chunk roster) — after
 the boot that carries 50cfc03, REMOVE 8443 from that meta or the pull never reaches it.
 ⚠️Duplicate mints from #7704 (+~25) and possibly #8413 → nightly dedup/fusion should fuse; verify.
+**⭐LUCAS'S STRUCTURE CORRECTION (boot71 ~20:1x)**: "Not all 64 parishes have presidents and not
+all have juries — all have SOME elected body; sheriff and auxiliary roles are extra fluff; she
+should be researching the structure to know — she already has, a few times." MEASURED: 284 docs
+mention police jury, 83 home-rule charter, 8+ hold both — yet ZERO of inquiry #1's 25 findings
+docs absorbed the distinction (awareness inversion again). SURGICAL (live, with provenance):
+structure rule prepended to inquiry #1 open_leads; next_step re-pointed from a STALE sheriff
+re-hunt (sheriffs are 64/64 done) to the structure-map bite off banked docs. PACKAGING RULE:
+the parish canvas must organize each parish under its ACTUAL governing body (roster Office
+Titles teach the per-parish form) — never a uniform president/jury schema. She even tried
+lpgov.org/page/ParishGovStructure this hour (every door failed — archived? just down?).
 **🚨TWO NEW DEFECTS (boot71 ~19:5x, Lucas's parish-canvas exchange)**: (1) DELIVERY-PROMISE HOLE —
 Zoe: "I'll keep adding the Louisiana parish contacts there [canvas]" with NO canvas action ever;
 measured: 0 LA/parish canvas tabs in canvas_docs.db (57 docs), 1 stray block. The promised-lookup
