@@ -142,6 +142,25 @@ presidents 64/64 (in docs), clerks partial; the roster file is IN data/downloads
 (Louisiana-ElectedOfficials-roster.xls) — RE-TRIGGER the ingest on boot69 (the watcher ignored it
 pre-daede85; re-copy under a new name or touch it) → the full 6,695-row table lands as a doc.
 
+**⭐BOOT69 QUARANTINE + FIX `7434ba9` (2026-07-23 post-compact — the roster's LAST blocker)**: the
+re-dropped roster DID ingest — and dl-ingest QUARANTINED it: "doc 8443 … off-domain (no leash-token
+overlap), landed searchable, NOT decomposed". Root cause MEASURED live: the directed focus is
+ALASKA municipalities (#3547), domainLeashTokens keys ONLY on the directed focus, so the leash was
+27 pure-Alaska tokens — the Louisiana INQUIRY lane (the other Lucas-assigned lane, the one waiting
+on this exact file) was invisible to it. Touch 19 ran against the missing doc → expect NOT met.
+Fix (gate-green, committed): (a) lib/focus.js — active-inquiry QUESTIONS join the leash in both
+branches (question only; next_step/leads are HOW-vocab, measured +30 rubber-stamp words) +
+interrogative filler into _LEASH_STOP; (b) main.js dl-ingest — the .gov authoritative bypass
+_docLeashOk has carried since 07-17 now guards this gate too (5th hand-copied-twin drift);
+(c) smoke_soft_leash 13→20 tests incl. the exact regression. Live-verified: leash 27→53 tokens,
+doc #8443 intersection empty→"parish".
+**BOOT70 FIRST ACTION (do this or the roster strands)**: boot69's OLD-code sweep will reach #8443
+(it sits at position 2 in findUndecomposed, not yet attempted as of this writing), leash-skip it,
+and markAttempted — which BLOCKS re-read forever. After the boot70 reboot, remove 8443 from meta
+`decompose_sweep:attempted` (JSON id array; small operational marker, not evidence) → the sweep
+decomposes it in its first ticks (budget 90/400 spent, ~fits) → inquiry #1's office lists complete
+→ close → the FIRST harvest-born homecoming.
+
 **⭐POST-COMPACT AGENDA (Lucas, verbatim intent — the next conversation's spine)**:
 1. "Why she wasn't able to add new tools to her own program" — the roster touch NAMED its need
    ("a Python script with pandas") and had no path from need → capability. The designed path is
