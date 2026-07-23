@@ -6004,7 +6004,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
               composedUserMessage = `${composedUserMessage}\n\n${ad.buildVoiceBlock(res.say, userName)}`;
               openThreads = [];   // grounded answer owns the turn — no standing-work primacy bleed
               drafted = true;
-              console.log(`[main] cognition → ${res.enriched ? 'enriched:' + res.enrichSource : (res.missed ? 'searched-miss' : 'grounded')} → "${res.say.slice(0, 70)}"`);
+              console.log(`[main] cognition → ${res.missed ? 'searched-miss' : res.enriched ? 'enriched:' + res.enrichSource : 'grounded'} → "${res.say.slice(0, 70)}"`);
             }
           } catch (e) { console.error('[main] cognition loop failed:', e.message); }
         }
