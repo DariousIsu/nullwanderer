@@ -167,6 +167,16 @@ NEEDS BOOT71 to go live. Also: boot70's sweep IS healthy (first tick delayed pas
 silence was innocent); smoke_cognition 11th call mocked (news-bucket time-bomb, 7 calls remain).
 WATCH ON BOOT71: `[decomp-sweep]` reads 8443 FIRST in its batch (NOT a "[doc-decomp] SKIP") →
 inquiry #1's office lists complete → close → the FIRST harvest-born homecoming.
+**⭐BOOT71 LIVE PROOFS + THE DUPLICATE-MINT RACE `50cfc03` (~17:xx)**: the INQUIRY PULL FIRED LIVE
+— pulled docs decomposed in order (clerk-of-court+registrar list #8413 → +40 clerks/registrars
+minted; LAPolicyLab #7704; QM papers; China PDF next). BUT the watch caught a race: a batch's
+cloud extraction outlasts the 5-min interval and the overlapping run RE-PICKED the same batch
+(markAttempted only landed after the batch) — #7704 decomposed TWICE (+25 then +28), budget line
+printed twice. Fix: in-flight flag on runDecomposeSweep + markAttempted per-doc inside the loop +
+per-doc in-flight Set on decomposeLandedDoc (any two paths). ⚠️#8443 is PARKED in
+`decompose_sweep:attempted` (emergency stop before the race reached the 15-chunk roster) — after
+the boot that carries 50cfc03, REMOVE 8443 from that meta or the pull never reaches it.
+⚠️Duplicate mints from #7704 (+~25) and possibly #8413 → nightly dedup/fusion should fuse; verify.
 **DEAD-HOST BREAKER `2bcbdf7` (boot70, ~16:0x)**: watched akiak-ak.gov take SIX all-doors ladder
 burns across six pages (profile 20 fails/0 oks; domain is ERR_NAME_NOT_RESOLVED — the concessions
 were honest, the REPETITION was the waste). site_ledger.hostDown: ≥8 door fails + zero successes
