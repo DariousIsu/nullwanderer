@@ -177,6 +177,11 @@ per-doc in-flight Set on decomposeLandedDoc (any two paths). ⚠️#8443 is PARK
 `decompose_sweep:attempted` (emergency stop before the race reached the 15-chunk roster) — after
 the boot that carries 50cfc03, REMOVE 8443 from that meta or the pull never reaches it.
 ⚠️Duplicate mints from #7704 (+~25) and possibly #8413 → nightly dedup/fusion should fuse; verify.
+**⭐⭐TOP-DOWN CONTAINMENT `02b1b57` (Lucas, generalizing the parish correction)**: "all systems
+function this way… the logical route for understanding a system" — container's FORM first, then
+descend (country→state→county/parish→municipal→people/orgs); forms varying across siblings makes
+the form the FIRST finding. Explicitly NOT a channel — one principle on the two universal schema
+lines (DECISION_WANT + touchBrief). Rides boot72.
 **⭐LUCAS'S STRUCTURE CORRECTION (boot71 ~20:1x)**: "Not all 64 parishes have presidents and not
 all have juries — all have SOME elected body; sheriff and auxiliary roles are extra fluff; she
 should be researching the structure to know — she already has, a few times." MEASURED: 284 docs
