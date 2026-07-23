@@ -41,12 +41,45 @@ function listActive({ deps = {} } = {}) {
   try { return _db(deps).getDb().prepare("SELECT * FROM inquiries WHERE status = 'active' ORDER BY last_touched_ts DESC").all(); } catch { return []; }
 }
 
+// Question similarity for the open-dedup guard (2026-07-23, boot73 measured: the decider opened
+// #6 as a near-verbatim copy of #1 — four inquiries became ONE Louisiana-parish-officials question
+// because a 25-touch line that never closed LOOKED stuck, so the model spawned fresh copies). Keys
+// on DISTINCTIVE content words (drop the interrogative + generic-inquiry vocabulary that every
+// question shares), then overlap over the smaller set — the same recipe as the domain leash + the
+// capability-need dedup, one family of matcher across the codebase.
+const _Q_STOP = new Set([
+  'what', 'which', 'who', 'whose', 'when', 'where', 'how', 'many', 'the', 'and', 'for', 'are', 'that',
+  'this', 'with', 'current', 'currently', 'list', 'lists', 'provides', 'provide', 'source', 'sources',
+  'official', 'officials', 'authoritative', 'obtain', 'each', 'other', 'key', 'their', 'from', 'into',
+  'get', 'find', 'compile', 'up', 'date', 'up-to-date', 'database', 'website', 'pdf', 'them', 'these',
+]);
+function _qTokens(q) {
+  return new Set((str(q).toLowerCase().match(/[a-z]{3,}/g) || []).filter((w) => !_Q_STOP.has(w)));
+}
+function questionOverlap(a, b) {
+  const ta = _qTokens(a), tb = _qTokens(b);
+  if (!ta.size || !tb.size) return 0;
+  let hit = 0; for (const w of ta) if (tb.has(w)) hit++;
+  return hit / Math.min(ta.size, tb.size);
+}
+const DUP_THRESHOLD = 0.6;
+
 // Open a line of inquiry. Over the cap, the stalest ACTIVE inquiry PARKS (resumable, never lost).
 function open({ question, bornFrom = null, deps = {}, nowMs = Date.now() } = {}) {
   const q = str(question).replace(/\s+/g, ' ').trim();
   if (q.length < 15) return { id: null, reason: 'a real question is at least a sentence' };
   try {
     const d = _db(deps).getDb();
+    // DEDUP GUARD: never open a near-duplicate of an inquiry that already exists. An ACTIVE twin →
+    // advance IT (continuity is the default anyway); an already-ANSWERED twin → the question is
+    // solved, opening it again would re-spend the whole line. Recently-parked twins count too.
+    let existing = [];
+    try { existing = d.prepare("SELECT id, question, status FROM inquiries WHERE status IN ('active','parked','closed_answered') ORDER BY last_touched_ts DESC").all(); } catch {}
+    for (const e of existing) {
+      if (questionOverlap(q, e.question) >= DUP_THRESHOLD) {
+        return { id: e.status === 'closed_answered' ? null : e.id, duplicate: true, existing: e.status, existingId: e.id, reason: `near-duplicate of inquiry #${e.id} (${e.status})` };
+      }
+    }
     const active = listActive({ deps });
     if (active.length >= MAX_ACTIVE) {
       const stalest = active[active.length - 1];
@@ -165,6 +198,7 @@ function manifestLines({ deps = {}, nowMs = Date.now() } = {}) {
 }
 
 module.exports = {
-  MAX_ACTIVE, EVIDENCE_MAX, WRITEBACK_WANT,
+  MAX_ACTIVE, EVIDENCE_MAX, WRITEBACK_WANT, DUP_THRESHOLD,
   open, get, listActive, touchBrief, validateWriteback, writeBack, expectTrailPush, close, manifestLines,
+  questionOverlap,
 };

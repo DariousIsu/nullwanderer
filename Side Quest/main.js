@@ -9295,9 +9295,23 @@ async function autonomyTick() {
       if (idm) inqId = parseInt(idm[1], 10);
       if (decision.move === 'open-inquiry') {
         const o = inquiry.open({ question: decision.target, bornFrom: decision.why, nowMs: now });
-        if (!o.id) { autonomy.historyPush(H, { ts: now, move: decision.move, target: decision.target, outcome: `open failed: ${o.reason}` }); return; }
-        inqId = o.id;
-        console.log(`[autonomy] chose=open-inquiry → #${inqId} "${String(decision.target).slice(0, 70)}"`);
+        // DEDUP (boot73): the decider tried to open a near-duplicate of an existing line (it spawned
+        // #6 as a copy of the 25-touch #1). An ANSWERED twin → decline, the question is solved. An
+        // ACTIVE twin → redirect this tick into ADVANCING it (continuity is the default anyway), so
+        // the sprawl collapses back to one line instead of four.
+        if (o.duplicate) {
+          if (o.existing === 'closed_answered') {
+            autonomy.historyPush(H, { ts: now, move: 'open-inquiry', target: decision.target, outcome: `declined — already answered by inquiry #${o.existingId}; do not re-open a solved question` });
+            console.log(`[autonomy] chose=open-inquiry → DECLINED (duplicate of answered #${o.existingId})`);
+            return;
+          }
+          inqId = o.existingId;
+          console.log(`[autonomy] chose=open-inquiry → DEDUPED onto active #${inqId} (advancing it instead of opening a copy)`);
+        } else {
+          if (!o.id) { autonomy.historyPush(H, { ts: now, move: decision.move, target: decision.target, outcome: `open failed: ${o.reason}` }); return; }
+          inqId = o.id;
+          console.log(`[autonomy] chose=open-inquiry → #${inqId} "${String(decision.target).slice(0, 70)}"`);
+        }
       }
       const row = inquiry.get(inqId);
       if (!row) { autonomy.historyPush(H, { ts: now, move: decision.move, target: decision.target, outcome: 'no such inquiry' }); return; }

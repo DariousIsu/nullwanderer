@@ -18,11 +18,34 @@ const NOW = 1753400000000;
   ok(I.open({ question: 'too short' }).id === null, 'a non-question refuses to open');
   const a = I.open({ question: 'Which states have standing AI task forces, and who chairs them?', bornFrom: 'interest: state AI policy', nowMs: NOW });
   ok(a.id != null, 'a real question opens a line of inquiry');
-  for (let i = 0; i < I.MAX_ACTIVE - 1; i++) I.open({ question: `Filler question number ${i} long enough to be real?`, nowMs: NOW + i + 1 });
+  // Distinct TOPICS (the dedup guard now collapses near-identical questions — see the dedup block).
+  const fillers = [
+    'How many offshore wind projects broke ground on the Atlantic coast in 2025?',
+    'What drove the copper price spike during the second quarter of this year?',
+    'Where are the largest lithium refineries being built across North America?',
+  ];
+  for (let i = 0; i < I.MAX_ACTIVE - 1; i++) I.open({ question: fillers[i], nowMs: NOW + i + 1 });
   ok(I.listActive().length === I.MAX_ACTIVE, 'active lines are bounded');
-  I.open({ question: 'One more question past the cap — who parks to make room?', nowMs: NOW + 99 });
+  const broadband = I.open({ question: 'Who benefits most from the new federal broadband subsidy rollout this year?', nowMs: NOW + 99 });
   ok(I.listActive().length === I.MAX_ACTIVE, 'opening past the cap keeps the bound…');
   ok(db.getDb().prepare("SELECT COUNT(*) n FROM inquiries WHERE status = 'parked'").get().n === 1, '…by PARKING the stalest (resumable, never lost)');
+
+  // --- DEDUP GUARD (boot73: #6 opened as a copy of the 25-touch #1) ---
+  {
+    // a near-verbatim copy of an ACTIVE line (broadband, the freshest) → deduped onto it, no new row
+    const before = db.getDb().prepare('SELECT COUNT(*) n FROM inquiries').get().n;
+    const dup = I.open({ question: 'Who gains the most from the federal broadband subsidy program rolling out this year?', nowMs: NOW + 200 });
+    ok(dup.duplicate === true && dup.existing === 'active' && dup.existingId === broadband.id, 'a near-duplicate of an ACTIVE line dedupes onto it (advance, do not copy)');
+    ok(db.getDb().prepare('SELECT COUNT(*) n FROM inquiries').get().n === before, '…and no new row is created');
+    // a genuinely different question still opens (the guard is not a wall)
+    const fresh = I.open({ question: 'What is the confirmed casualty count from the recent Gulf pipeline incident?', nowMs: NOW + 201 });
+    ok(fresh.id != null && !fresh.duplicate, 'a genuinely distinct question still opens');
+    // an ANSWERED twin → declined outright (the question is solved)
+    I.close(fresh.id, { kind: 'answered', answer: 'resolved', nowMs: NOW + 203 });
+    const ansDup = I.open({ question: 'What was the confirmed casualty count from that Gulf pipeline incident?', nowMs: NOW + 204 });
+    ok(ansDup.id === null && ansDup.duplicate === true && ansDup.existing === 'closed_answered', 'a near-duplicate of an ANSWERED line is DECLINED (question already solved)');
+    ok(I.questionOverlap('Louisiana parish sheriffs and clerks', 'the offshore wind project count') < I.DUP_THRESHOLD, 'questionOverlap: unrelated questions score below the dedup floor');
+  }
 
   // --- the touch brief carries the continuity ---
   const b0 = I.touchBrief(I.get(a.id));
