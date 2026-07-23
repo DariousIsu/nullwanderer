@@ -1554,7 +1554,10 @@ const shellUniforms = {
   // lines and light … nothing flowing, just skin tight … it will help subtle out the nipples a little."
   // Not geometry — the garment is PAINTED on her own surface, bounded by a real neckline and hem taken from
   // the rig's own joints, so it is skin-tight by construction and moves with her.
-  uSuitOn: { value: 1 }, uSuitAmt: { value: 0.85 },
+  // OFF. The shader-painted version was wrong (Lucas: "it's terrible, there's no way you set that up in
+  // blender") — a garment cut by y-planes and fract() math is the same fakery the eyes and lashes already
+  // failed at. The real suit is being built as GEOMETRY in Blender; this stays off until that lands.
+  uSuitOn: { value: 0 }, uSuitAmt: { value: 0.85 },
   uSuitNeck: { value: 1.35 }, uSuitHem: { value: 0.78 }, uSuitScoop: { value: 0.055 },
   uSuitFront: { value: new THREE.Vector3(0, 0, 1) }, uSuitCen: { value: new THREE.Vector3(0, 1.1, 0) },
 };
