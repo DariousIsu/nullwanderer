@@ -1405,18 +1405,48 @@ function buildRegions() {
   // outside the outline still reads as debris in her eye.
   const fa = featureAnchors;
   const ex = [];
+  let mouthL = null;
   if (fa) {
     // per-feature matrices: the mouth and the eyelids can live on DIFFERENT primitives (the v3 exporter
     // splits buffers per material), so each anchor is lifted through its own mesh's transform
     const mm = new THREE.Matrix4().multiplyMatrices(inv, fa.mesh.matrixWorld);
     const em2 = new THREE.Matrix4().multiplyMatrices(inv, (fa.eyeMesh || fa.mesh).matrixWorld);
+    mouthL = fa.rest.mouth.clone().applyMatrix4(mm);
     ex.push([fa.rest.left.clone().applyMatrix4(em2), fa.eyeR * 2.6],
       [fa.rest.right.clone().applyMatrix4(em2), fa.eyeR * 2.6],
-      [fa.rest.mouth.clone().applyMatrix4(mm), fa.mouthR * 3.0]);
+      [mouthL, fa.mouthR * 3.0]);
+  }
+  // THE HEART, PLACED PROPERLY (Lucas: "you don't know where the heart lives… center of her chest between the
+  // neck line and the top of the bust, shaped a little smarter to style"). Front direction comes from the
+  // mouth (it sits in front of the neck); the centre sits high, between neck and chest, pushed to the front
+  // surface. Then a real 2D HEART silhouette (the valentine implicit) in the chest plane, front-hemisphere
+  // only — a stylised heart on her sternum, not a fist-sized sphere sprawling down her belly.
+  const up = new THREE.Vector3(0, 1, 0);
+  let frontDir = null, rightDir = null, heartC = null;
+  if (neckL && chestL) {
+    frontDir = mouthL ? new THREE.Vector3(mouthL.x - neckL.x, 0, mouthL.z - neckL.z) : new THREE.Vector3(0, 0, 1);
+    if (frontDir.lengthSq() < 1e-6) frontDir.set(0, 0, 1); frontDir.normalize();
+    rightDir = new THREE.Vector3().crossVectors(frontDir, up).normalize();
+    heartC = neckL.clone().lerp(chestL, 0.42);                    // high — just under the neckline
+    heartC.add(frontDir.clone().multiplyScalar(0.075));           // out to the chest surface
+  }
+  const HEART_RX = 0.058, HEART_RY = 0.060;                       // half-width / half-height of the heart
+  function inHeart(p) {
+    if (!heartC) return false;
+    const dx = p.x - heartC.x, dy = p.y - heartC.y, dz = p.z - heartC.z;
+    if (dx * frontDir.x + dy * frontDir.y + dz * frontDir.z < -0.02) return false;   // front hemisphere only
+    const hx = (dx * rightDir.x + dy * rightDir.y + dz * rightDir.z) / HEART_RX;      // horizontal
+    const hy = (dy + HEART_RY * 0.30) / HEART_RY;                                     // vertical, shifted so the point sits low
+    const a = hx * hx + hy * hy - 1.0;
+    return a * a * a - hx * hx * hy * hy * hy < 0.0;               // valentine-heart implicit
   }
   for (const m of vrmOccluders) {
     const N = m.geometry.attributes.position.count;
     toLocal.multiplyMatrices(inv, m.matrixWorld);
+    // ALL hair is short-term (Lucas: "the head and hair are short term memory"). Long hair hangs below the
+    // neck, so the y>neck test alone left the lower strands classified as body; force the whole hair mesh to
+    // the head region.
+    const isHair = matKind(m.userData && m.userData.matName) === 1;
     // The same classification is written as a per-vertex ATTRIBUTE, so her surface can be shaded by what each
     // part of her MEANS. 0 body · 1 head · 2 heart · 3 feature (eye/mouth, kept dark for the drawn outlines to
     // read against). One pass, two consumers: the binding picks seats from the arrays, the shell reads the
@@ -1429,10 +1459,11 @@ function buildRegions() {
       // not a distinct value 3. `vRegion` interpolates across triangles, so a 1↔3 edge passed through 2.0 and
       // the heart-colour bracket painted a rose zigzag along every head/feature boundary — the seams Lucas saw
       // on her jaw and neck. Collapsing feature to the head value removes the boundary entirely.
+      if (isHair) { reg[i] = 1; REGION.head.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z }); continue; }   // all hair = short-term
       if (ex.length && ex.some(([c, r]) => v.distanceTo(c) < r)) { reg[i] = 1; continue; }   // eyes + mouth: no bind, shade as head
+      if (inHeart(v)) { reg[i] = 2; REGION.heart.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z }); continue; }   // heart before head: it sits below the neck
       const isHead = neckL ? v.y > neckL.y : false;
       if (isHead) { reg[i] = 1; REGION.head.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z }); continue; }
-      if (chestL && v.distanceTo(chestL) < HEART_R) { reg[i] = 2; REGION.heart.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z }); continue; }
       reg[i] = 0; REGION.body.push({ mesh: m, vi: i, x: v.x, y: v.y, z: v.z });
     }
     m.geometry.setAttribute('aRegion', new THREE.BufferAttribute(reg, 1));
@@ -1477,7 +1508,8 @@ function voxelEven(pool, cell, perCell) {
 // Built with onBeforeCompile on a stock material rather than a bare ShaderMaterial. A SkinnedMesh with 57
 // morph targets needs the whole skinning + morph pipeline in its vertex shader; three generates all of it for
 // its own materials and none of it for a hand-written one, so patching is both shorter and correct.
-const SHELL_COL = { body: 0x7dd3fc, head: 0xa78bfa, heart: 0xfda4af };
+// heart is a WARM, INVITING RED (Lucas), not the muddy rose it was. head short-term violet, body corpus sky.
+const SHELL_COL = { body: 0x7dd3fc, head: 0xa78bfa, heart: 0xff4d5e };
 let SHELL_ON = true; try { SHELL_ON = localStorage.getItem('kg3d.shell') !== '0'; } catch (e) {}
 const shellUniforms = {
   uBody: { value: new THREE.Color(SHELL_COL.body) }, uHead: { value: new THREE.Color(SHELL_COL.head) },
