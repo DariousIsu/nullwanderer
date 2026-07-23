@@ -1587,26 +1587,29 @@ function applyShellMaterial() {
           // the geometry: the disc facing the viewer is the green iris with a dark pupil at its centre, the ring
           // around it is the hair-coloured white, and a glassy catchlight keeps the eye wet rather than dead.
           else if (uKind < 3.5) {
-            // Not a flat fill (Lucas: "the eyes look weird because they are just some color fill"). The iris is
-            // given real STRUCTURE from the eyeball geometry: radial fibres, a darker limbal ring at the edge,
-            // and a centre-to-rim gradient. facing is the radial coordinate (1 at the pupil, down to 0 at the
-            // rim); the view-normal screen angle drives the fibres. Green calmed down off the neon.
+            // THE DATA-IRIS (Lucas's reference: a green iris made of glowing nodes + radial connections). Her
+            // eye is built from the graph like the rest of her: dense radial connection-fibres running out from
+            // the pupil, a ring of nodes near the rim, a centre-to-rim gradient and a dark limbal ring, a small
+            // round pupil and a bright catchlight. facing is the view-radial coordinate, ang the screen angle.
             vec3  N = normalize(vVN);
             float facing = abs(dot(N, normalize(-vVP)));
+            float rad = sqrt(max(0.0, 1.0 - facing * facing));                      // 0 at centre → grows to the rim
             float ang = atan(N.y, N.x);
-            float rad = sqrt(max(0.0, 1.0 - facing * facing));                      // 0 centre → 1 rim
             vec3  sclera = uHead * 0.80;                                            // whites take the HAIR colour
-            vec3  irisC  = vec3(0.16, 0.60, 0.40);                                  // green iris, calmer than neon
-            float fib   = 0.80 + 0.20 * sin(ang * 32.0 + rad * 7.0);               // radial fibres
-            float grad  = mix(1.12, 0.66, smoothstep(0.0, 1.0, rad));              // brighter mid, darker rim
-            vec3  iris  = irisC * fib * grad;
-            float limbal = smoothstep(0.90, 0.80, facing);                         // dark ring at the iris edge
-            iris *= (1.0 - limbal * 0.55);
-            float irisM = smoothstep(0.82, 0.90, facing);                          // where the iris disc sits
-            float pupil = smoothstep(0.965, 0.99, facing);                         // small dark centre
+            float irisM = smoothstep(0.70, 0.79, facing);                          // a LARGE iris, filling the eye
+            float pupil = smoothstep(0.958, 0.982, facing);                        // a small round pupil
+            float t = clamp((rad - 0.19) / 0.52, 0.0, 1.0);                        // 0 at the pupil edge → 1 at the iris rim
+            float fibre = 0.55 + 0.45 * sin(ang * 46.0);                           // fine radial connection-fibres
+            fibre = mix(0.62, 1.18, pow(max(0.0, fibre), 1.6));
+            float ring = smoothstep(0.11, 0.0, abs(t - 0.78));                     // a band near the rim…
+            float nodes = ring * smoothstep(0.15, 0.9, 0.5 + 0.5 * sin(ang * 22.0));   // …studded with nodes
+            float grad = mix(0.42, 1.15, smoothstep(0.0, 0.45, t)) * mix(1.0, 0.55, smoothstep(0.72, 1.0, t));
+            vec3  green = vec3(0.10, 0.80, 0.38);
+            vec3  iris = green * (grad * fibre) + green * nodes * 1.5;
+            iris *= 1.0 - smoothstep(0.86, 1.0, t) * 0.55;                          // dark limbal ring at the edge
             outc = mix(sclera, iris, irisM);
-            outc = mix(outc, vec3(0.015, 0.03, 0.02), pupil);
-            outc += vec3(0.85, 0.92, 1.0) * pow(max(0.0, facing - 0.62), 6.0) * 0.28;   // glassy catchlight
+            outc = mix(outc, vec3(0.01, 0.02, 0.02), pupil);
+            outc += vec3(0.92, 0.97, 1.0) * pow(max(0.0, facing - 0.55), 5.0) * 0.35;   // bright glassy catchlight
           }
           else if (uKind < 4.5) outc = vec3(0.9, 0.95, 1.0);                        // catchlight (VRoid highlight)
           else if (uKind < 5.5) outc = rc * 0.10;                                   // brow / lash / eyeline
@@ -1708,7 +1711,7 @@ function buildFaceStyle() {
     const cen = new THREE.Vector3(); for (const q of pts) cen.add(q.p); cen.divideScalar(pts.length);
     const upper = pts.filter((q) => q.p.y >= cen.y).sort((a, b) => a.p.x - b.p.x);   // the upper lid = the lash line
     const src = upper.length ? upper : pts;
-    const step = Math.max(1, Math.floor(src.length / 12));                            // ~12 lashes per eye, even along the lid
+    const step = Math.max(1, Math.floor(src.length / 18));                            // a fuller lash line, even along the lid
     for (let k = 0; k < src.length; k += step) lashes.push({ i: src[k].i, eye });
   }
   const N = lashes.length; if (!N) return;
