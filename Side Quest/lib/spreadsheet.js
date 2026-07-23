@@ -48,6 +48,25 @@ function _sniff(buf) {
   return 'text';
 }
 
+// Legacy BIFF .xls via SheetJS (added 2026-07-23: the Louisiana SoS roster — the file inquiry #1
+// ground 9 touches toward — is genuine OLE .xls, 3.1MB, refreshed monthly, with NO csv/xlsx
+// sibling on the server. exceljs reads only xlsx; SheetJS reads BIFF).
+function _xlsToLines(buf) {
+  const XLSX = require('xlsx');
+  const wb = XLSX.read(buf, { type: 'buffer' });
+  const lines = [];
+  let rowsTotal = 0;
+  for (const name of wb.SheetNames) {
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false, defval: '' })
+      .filter((r) => Array.isArray(r) && r.some((c) => String(c).trim() !== ''))
+      .map((r) => _rowLine(r));
+    rowsTotal += rows.length;
+    lines.push(`## Sheet: ${name} (${rows.length} rows)`);
+    lines.push(...rows);
+  }
+  return { lines, rowsTotal, sheets: wb.SheetNames.length };
+}
+
 async function _xlsxToLines(buf) {
   const ExcelJS = require('exceljs');
   const wb = new ExcelJS.Workbook();
@@ -87,11 +106,11 @@ function _csvToLines(buf, { delimiter }) {
 async function toBoundedText(buf, { url = '', cap = 14000 } = {}) {
   try {
     const kind = _sniff(buf);
-    if (kind === 'xls') {
-      return { ok: false, error: 'legacy binary .xls is not readable — look for an .xlsx/.csv download or a web page listing the same data' };
-    }
     let parsed;
-    if (kind === 'xlsx') {
+    if (kind === 'xls') {
+      try { parsed = _xlsToLines(buf); }
+      catch (e) { return { ok: false, error: `legacy .xls did not parse (${e.message}) — look for an .xlsx/.csv download or a web page listing the same data` }; }
+    } else if (kind === 'xlsx') {
       parsed = await _xlsxToLines(buf);
     } else {
       const isTsv = /\.tsv(?:[?#]|$)/i.test(url) || (String(buf.slice(0, 2000)).split('\n')[0] || '').split('\t').length > (String(buf.slice(0, 2000)).split('\n')[0] || '').split(',').length;

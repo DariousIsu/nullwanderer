@@ -45,11 +45,18 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
     ok(pb.ok && pb.truncated && /truncated — \d+ more line/.test(pb.text), 'over-cap → truncated with an honest marker naming what was dropped');
     ok(pb.text.length < 1000, 'the bounded text respects the cap');
 
-    // --- legacy .xls refuses while naming the door ---
-    const ole = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
-    ok(sheet._sniff(ole) === 'xls', 'OLE magic sniffs as legacy xls');
-    const pl = await sheet.toBoundedText(ole, { url: 'https://x.gov/old.xls' });
-    ok(!pl.ok && /\.xlsx\/\.csv|web page/i.test(pl.error), 'legacy .xls refusal NAMES THE DOOR (xlsx/csv/page alternative)');
+    // --- legacy BIFF .xls PARSES (SheetJS; the Louisiana SoS roster is genuine OLE .xls with no
+    // modern sibling on the server) — a corrupt OLE still refuses while naming the door ---
+    const XLSX = require('C:/Users/azrae/Desktop/Side Quest/node_modules/xlsx');
+    const xwb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(xwb, XLSX.utils.aoa_to_sheet([['Parish', 'Sheriff'], ['Caddo', 'Henry Whitehorn']]), 'Roster');
+    const xlsBuf = Buffer.from(XLSX.write(xwb, { type: 'buffer', bookType: 'xls' }));
+    ok(sheet._sniff(xlsBuf) === 'xls', 'OLE magic sniffs as legacy xls');
+    const pl = await sheet.toBoundedText(xlsBuf, { url: 'https://x.gov/old.xls' });
+    ok(pl.ok && /Caddo \| Henry Whitehorn/.test(pl.text) && /Sheet: Roster \(2 rows\)/.test(pl.text), 'legacy BIFF .xls parses to readable rows (the SoS-roster format)');
+    const corrupt = Buffer.concat([Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]), Buffer.alloc(64)]);
+    const pc2 = await sheet.toBoundedText(corrupt, { url: 'https://x.gov/broken.xls' });
+    ok(!pc2.ok && /\.xlsx\/\.csv|web page/i.test(pc2.error), 'a corrupt .xls still refuses while NAMING THE DOOR');
 
     // --- cell normalization ---
     ok(sheet._cellText({ result: 42 }) === '42' && sheet._cellText({ richText: [{ text: 'a' }, { text: 'b' }] }) === 'ab' && sheet._cellText(null) === '', 'formula results, rich text, and nulls normalize to plain text');
