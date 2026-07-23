@@ -9040,6 +9040,14 @@ async function autonomyTick() {
       }
       const row = inquiry.get(inqId);
       if (!row) { autonomy.historyPush(H, { ts: now, move: decision.move, target: decision.target, outcome: 'no such inquiry' }); return; }
+      // A CLOSED line cannot be touched. The validator can't see the DB, and history continuity can
+      // bait the decider into re-advancing an answered inquiry (live, boot53: zombie touch 3 on the
+      // closed #2 failed its expect and crystallized a MISLEADING constraint). Refuse and teach.
+      if (row.status !== 'active') {
+        autonomy.historyPush(H, { ts: now, move: decision.move, target: `inquiry #${inqId}`, outcome: `refused — inquiry #${inqId} is ${row.status}; a closed line cannot be touched. Choose only from OPEN LINES OF INQUIRY in the state.` });
+        console.log(`[autonomy] chose=${decision.move} → #${inqId} REFUSED (${row.status}) — the line is not open`);
+        return;
+      }
       if (decision.move === 'close-inquiry') {
         const dead = /dead.?end|cannot be answered|unanswerable/i.test(`${decision.why} ${decision.expect}`);
         const c = inquiry.close(inqId, { kind: dead ? 'dead_end' : 'answered', answer: decision.expect, nowMs: now });
