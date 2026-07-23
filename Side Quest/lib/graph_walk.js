@@ -103,6 +103,44 @@ function normalizeRelType(label) {
   return s || 'RELATED_TO';
 }
 
+// --- REFERENT GUARD (2026-07-23) -------------------------------------------
+// The web pull for an anchor never verified the sources are ABOUT the anchor. A committee named
+// after a famous thing gets the famous thing's pages, and the fact gate — which only checks that
+// claims cite the sources — promoted cross-entity facts. Live on boot44, three FEC committees
+// absorbed: an astronaut's biography ("GRISSOM FOR U.S. SENATE" ← Gus Grissom's Wikipedia), a TV
+// series' network+cast ("HEARTLAND RESURGENCE" ← Heartland (CBC)), a film's credits ("TOGETHER!"
+// ← Together (2025)). No token heuristic can catch these (the collision IS the shared name), but
+// the dossier already CLASSIFIES what the sources describe (entity_type) — person for the
+// astronaut, work for the show — while the graph's record says organization. The disagreement is
+// the signal (type is a CLAIM — object-type law), and it is deterministic to compare.
+// Mismatch → every claim is HELD (the enrichment queue keeps it; churn can re-grade), never
+// promoted. Both kinds unknown/other → guard stands down (never blocks on ignorance).
+const _KIND_RES = [
+  ['person', /person|people|politician|candidate|judge|officeholder|contact|human/],
+  ['org', /organi[sz]ation|committee|company|agency|party|pac\b|nonprofit|campaign|corporation|institution|body|union|club|association/],
+  ['place', /place|city|town|county|parish|state|country|district|location|region|municipality/],
+  ['work', /work|film|movie|series|show|book|album|song|media|publication|game/],
+  ['event', /event|election|meeting|conference|race\b/],
+];
+function typeKind(t) {
+  const s = String(t || '').toLowerCase().trim();
+  if (!s) return null;
+  for (const [kind, re] of _KIND_RES) if (re.test(s)) return kind;
+  return 'other';
+}
+function referentGuard(gap, dossier) {
+  const mention = String((gap && gap.mention) || '');
+  // stored kind: the graph record's own type; an FEC committee tag in the name is an org even if
+  // the record predates typed imports ("GRISSOM FOR U.S. SENATE [C00710780]", "[FEC:C00544551]").
+  const storedType = (gap && gap.object && (gap.object.entity_type || gap.object.type)) ||
+    (/\[(?:FEC:)?C\d{6,}\]/i.test(mention) ? 'organization' : null);
+  const sk = typeKind(storedType);
+  const dk = typeKind(dossier && dossier.entity_type);
+  if (!sk || !dk || sk === 'other' || dk === 'other') return { ok: true };
+  if (sk === dk) return { ok: true };
+  return { ok: false, stored: sk, described: dk };
+}
+
 // visited state (recently-worked anchors), TTL-pruned. getMeta/setMeta injected.
 function loadVisited(getMeta, now) {
   let arr = [];
@@ -148,7 +186,7 @@ function buildDossierPrompt(mention, sources, { existing = null, neighbors = [] 
     // A connection carried by two INDEPENDENT sources clears the promotion floor (0.94); a single source
     // (0.88) is proposed but parked for corroboration. So citing all supporting sources is what makes an
     // edge LAND, not just enter the queue — hence "list every [S#] that states it", not just one.
-    { role: 'system', content: 'You turn sources into a knowledge-graph object. Ground every claim in the sources; invent nothing. Output ONLY JSON of the shape {"entity_type":"person|organization|place|work|event|concept","summary":"2-4 dense factual sentences","related":[{"name":"Other Entity","type":"person|organization|...","relation":"short_relation_label","sources":["S#", ...],"when":"year or year-range the sources state this connection became/was true, e.g. 2023 or 2015-2019; empty if undated"}]}. `related` = up to 6 OTHER entities this one is genuinely connected to. For EACH related entity, set "sources" to the list of ALL [S#] labels whose text STATES this connection — cite EVERY source that independently supports it, not just one (independent corroboration is what confirms a fact). Set "when" ONLY from an explicit date in the sources — never guess. If a connection is your own INFERENCE beyond what the sources say, set "sources":[] (empty) — be honest: an inferred, uncited connection is HELD OUT, not added to the graph. No prose outside the JSON.' },
+    { role: 'system', content: 'You turn sources into a knowledge-graph object. Ground every claim in the sources; invent nothing. Output ONLY JSON of the shape {"entity_type":"person|organization|place|work|event|concept","summary":"2-4 dense factual sentences","related":[{"name":"Other Entity","type":"person|organization|...","relation":"short_relation_label","sources":["S#", ...],"when":"year or year-range the sources state this connection became/was true, e.g. 2023 or 2015-2019; empty if undated"}]}. `related` = up to 6 OTHER entities this one is genuinely connected to. For EACH related entity, set "sources" to the list of ALL [S#] labels whose text STATES this connection — cite EVERY source that independently supports it, not just one (independent corroboration is what confirms a fact). Set "when" ONLY from an explicit date in the sources — never guess. If a connection is your own INFERENCE beyond what the sources say, set "sources":[] (empty) — be honest: an inferred, uncited connection is HELD OUT, not added to the graph. Set "entity_type" to what the SOURCES actually describe — if they turn out to be about a DIFFERENT same-named thing than the entity asked about (a film or a person instead of a political committee), say so honestly: entity_type reflects the sources, and "related" is [] (facts about the namesake belong to the namesake, not this entity). No prose outside the JSON.' },
     { role: 'user', content: `Entity: "${mention}"${have}${nbr}\n\nSources:\n${src || '(none)'}\n\nJSON:` }
   ];
 }
@@ -279,10 +317,23 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
   let entities = 0, connections = 0, held = 0, rejected = 0, landedLocal = 0, sourceUrl = null; const related = []; const links = [];
   const _relRaw = Array.isArray(dossier.related) ? dossier.related.length : 0;
 
+  // REFERENT GUARD — the graph says one kind of thing, the sources describe another: same name,
+  // wrong referent. Every claim below HOLDS (status 'held', reason in the log), nothing promotes.
+  const _refG = referentGuard(gap, dossier);
+  if (!_refG.ok) log && log(`[grow] "${mention}" REFERENT MISMATCH — graph holds a ${_refG.stored}, sources describe a ${_refG.described}; all claims HELD`);
+
   // 1) the anchor object itself — only if MISSING. EXISTENCE gate: mint only if the web pull cites it as
   //    real (≥ C). No citable source → held, never minted (kills the hallucinated-object failure mode).
   if (gap.kind === 'missing') {
     const eg = CG.gateAnchorExistence(sources);
+    if (eg.mint && !_refG.ok) {
+      // The sources prove SOMETHING with this name exists — but not the kind of thing the graph
+      // (or the name's own registry tag) says this anchor is. Minting here is how a committee is
+      // born as a film. Held, with the trail carrying why.
+      if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: 'exists', target: null, url: eg.url, grade: eg.grade, confidence: eg.confidence, status: 'held' }); } catch {} }
+      log && log(`[grow] "${mention}" existence sources describe a ${_refG.described}, not the expected ${_refG.stored} → HELD, not minted`);
+      return { built: false, entities: 0, connections: 0, related: [], summary: String(dossier.summary || '').trim(), held: 1 };
+    }
     if (!eg.mint) {
       if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: 'exists', target: null, url: eg.url, grade: eg.grade, confidence: eg.confidence, status: 'held' }); } catch {} }
       log && log(`[grow] "${mention}" existence uncited (grade ${eg.grade}) → HELD, not minted`);
@@ -314,6 +365,13 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
     if (!fg.promote) {                            // uncited / inferred → does NOT enter the graph
       held++;
       // still record the HELD claim — the enrichment queue (what to chase a real citation for next).
+      if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: fg.url, grade: fg.grade, confidence: fg.confidence, status: 'held' }); } catch {} }
+      continue;
+    }
+    if (!_refG.ok) {
+      // WELL-CITED but about the WRONG same-named thing (referent guard above) — a cited claim
+      // from someone else's page is still someone else's fact. Held, never promoted.
+      held++;
       if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: fg.url, grade: fg.grade, confidence: fg.confidence, status: 'held' }); } catch {} }
       continue;
     }
@@ -561,7 +619,7 @@ async function runMove(deps = {}) {
 
 module.exports = {
   runMove, decayVisitedEdges, extractCandidates, assessGaps, growAround, fetchLayeredSources, sourceLabel, proposeEntity, proposeRelation,
-  parseJsonLoose, extractProperNouns, classifyObject, rankGaps, visitKey, normalizeRelType,
+  parseJsonLoose, extractProperNouns, classifyObject, rankGaps, visitKey, normalizeRelType, typeKind, referentGuard,
   loadVisited, visitedKeySet, recordVisited, buildCandidatePrompt, buildDossierPrompt,
   THIN_DEGREE, THIN_FACTS, WALK_MAX_NODES, WALK_MAX_CONNECTIONS, MAX_CANDIDATES, VISITED_TTL_MS, SATURATED_TTL_MS, VISITED_KEY
 };

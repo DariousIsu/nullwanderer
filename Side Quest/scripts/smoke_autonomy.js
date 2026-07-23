@@ -35,6 +35,11 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     CREATE TABLE workstreams (id INTEGER PRIMARY KEY, lane TEXT, kind TEXT, target TEXT, status TEXT, resource TEXT, note TEXT, started_ts INTEGER, heartbeat_ts INTEGER, finished_ts INTEGER)`);
   mem.prepare("INSERT INTO inquiries (question,status,evidence,open_leads,expect_trail,next_step,touches,created_ts,last_touched_ts) VALUES ('Which states have standing AI task forces?','active','[]','[]','[]','work the NCSL tracker M-W',2,?,?)").run(NOW - 86400e3, NOW - 3600e3);
   mem.prepare("INSERT INTO workstreams (lane,kind,target,status,note,started_ts,heartbeat_ts,finished_ts) VALUES ('autonomy','research','doomed run','failed','operator returned no answer',?,?,?)").run(NOW - 7200e3, NOW - 7200e3, NOW - 7000e3);
+  // Decision-time constraints (2026-07-23): the crystallized "this did NOT work" rows reach the
+  // DECIDER, not just the next run's brief — boot43/44 re-picked the same bait across boots.
+  mem.exec(`CREATE TABLE procedures (id INTEGER PRIMARY KEY, kind TEXT, name TEXT, trigger_text TEXT, steps TEXT, check_text TEXT, applicability TEXT, provenance TEXT, met INTEGER DEFAULT 0, unmet INTEGER DEFAULT 0, status TEXT DEFAULT 'active', created_ts INTEGER, last_used_ts INTEGER)`);
+  mem.prepare("INSERT INTO procedures (kind,name,trigger_text,status,created_ts) VALUES ('constraint','build: [legislative-analyst] result — ready to compile','legislative-analyst result','active',?)").run(NOW - 3600e3);
+  mem.prepare("INSERT INTO procedures (kind,name,trigger_text,status,created_ts) VALUES ('constraint','retired lesson','x','retired',?)").run(NOW - 3600e3);
 
   const man = auto.buildManifest({ db: { getDb: () => mem }, now: NOW });
   ok(/Rainey Center — board members/.test(man.text), 'manifest names the absence gap');
@@ -47,6 +52,10 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     'O0: the manifest carries open inquiries with their own next steps');
   ok(/RECENT FAILURES/.test(man.text) && /doomed run.*operator returned no answer/.test(man.text),
     '§6 L4: failed board rows finally have a reader');
+  ok(/LEARNED CONSTRAINTS/.test(man.text) && /legislative-analyst/.test(man.text) && !/retired lesson/.test(man.text),
+    'constraints reach the DECIDER (active only) — the re-picked-bait fix');
+  ok(/SIZED TO ONE BOUNDED RUN/.test(auto.DECISION_WANT) && /INPUT, not an order/.test(auto.DECISION_WANT),
+    'DECISION_WANT calibrates expect to one run and de-baits delegated gists');
 
   // A missing table drops its section, never the manifest.
   const mem2 = new Database(':memory:');

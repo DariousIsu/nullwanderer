@@ -1458,6 +1458,14 @@ app.whenReady().then(() => {
         // old "must have emailed them first" gate blocked every new direct email — the bug
         // behind "she isn't sending emails"). Dedup + one-per-poll prevent any cascade.
         if (!actionLoop.isActive()) {
+          // Kill-switch FIRST (2026-07-23): with sending off — the designed default — the old order
+          // still ran a second IMAP poll + candidate scan every cycle just to discard the result.
+          // Check the switch before any work; the suppressed line stays (it documents the switch
+          // holding) but now costs nothing. UIDs are never consumed here, so mail can still get its
+          // one reply if the switch is ever enabled.
+          if (!emailLib.isSendEnabled()) {
+            console.log('[action] autonomous email reply suppressed — send kill-switch active');
+          } else {
           const replied = JSON.parse(db.getMeta('auto_replied_uids') || '[]');
           const self = (config.emailConfig().user || '').toLowerCase();
           const rr = await inboxLib.pollUnread(replied, 6);
@@ -1465,11 +1473,7 @@ app.whenReady().then(() => {
             const candidate = [...rr.messages].reverse().find(m =>
               m.fromAddr && m.fromAddr.toLowerCase() !== self
               && !inboxLib.isJunkSender(m.fromAddr));
-            if (candidate && !emailLib.isSendEnabled()) {
-              // Kill-switch active — never auto-compose an outbound reply (the highest-risk,
-              // no-human-in-loop send path). Don't consume the uid, so it can reply once re-enabled.
-              console.log('[action] autonomous email reply suppressed — send kill-switch active');
-            } else if (candidate) {
+            if (candidate) {
               db.setMeta('auto_replied_uids', JSON.stringify([...replied, candidate.uid].slice(-300)));
               console.log('[action] autonomous reply → thread with', candidate.fromAddr, 'uid', candidate.uid);
               actionLoop.start(actionLoop.emailReplyAction({
@@ -1486,6 +1490,7 @@ app.whenReady().then(() => {
             } else {
               console.log('[action] no auto-reply candidate (cold/bulk senders only)');
             }
+          }
           }
         }
       } catch (e) { console.error('[inbox-poll]', e.message); }
@@ -5982,7 +5987,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // `_scope` is computed just above. Passing it lets the ladder distinguish "we should
             // hold this and don't" from "this is general knowledge the writer can simply answer" —
             // without it, a timeless question that resolves to no ENTITY came back as a refusal.
-            const res = await require('./lib/cognition').answerGrounded({ userMessage, grounding, object: recallResult && recallResult.object, userName, scope: _scope });
+            // SALIENCE (Pasig fix 2026-07-23): the ladder's wiki tier disambiguates a two-sense
+            // need ("parish leadership") with the conversation's own anchor entities — the last few
+            // turns' proper nouns, most recent first. Fail-soft to none.
+            let _ctxTerms = [];
+            try {
+              const _rows = db.getDb().prepare(`SELECT content FROM turns WHERE session_id = ? AND speaker IN ('user','ai_said') ORDER BY id DESC LIMIT 6`).all(sessionId);
+              _ctxTerms = require('./lib/graph_walk').extractProperNouns(_rows.map((r) => r.content).join('\n')).slice(0, 5);
+            } catch {}
+            const res = await require('./lib/cognition').answerGrounded({ userMessage, grounding, object: recallResult && recallResult.object, userName, scope: _scope, deps: { contextTerms: _ctxTerms } });
             if (res && res.say) {
               composedUserMessage = `${composedUserMessage}\n\n${ad.buildVoiceBlock(res.say, userName)}`;
               openThreads = [];   // grounded answer owns the turn — no standing-work primacy bleed

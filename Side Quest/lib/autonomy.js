@@ -176,6 +176,18 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
       + rows.map((r) => `   - [${r.lane}] ${r.kind || 'run'}${r.target ? ` "${String(r.target).slice(0, 60)}"` : ''} — ${String(r.note || 'failed').slice(0, 100)} (${_ago(now, r.finished_ts)})`).join('\n');
   });
 
+  grab('constraints', () => {
+    // DECISION-TIME CONSTRAINTS (2026-07-23): boot43/44 measured the gap this closes — a constraint
+    // crystallized from an unmet run reached the NEXT RUN's brief but never the DECIDER, so the same
+    // bait ("[legislative-analyst] result — ready to compile…") was re-picked across two boots. The
+    // constraint rows outlive the 12-entry history window; the decider reads them BEFORE choosing.
+    const rows = d.prepare("SELECT name, trigger_text, created_ts FROM procedures WHERE kind = 'constraint' AND status = 'active' ORDER BY created_ts DESC LIMIT 4").all();
+    if (!rows.length) return '';
+    counts.constraints = rows.length;
+    return `• LEARNED CONSTRAINTS (approaches that did NOT work — do not re-pick their shape):\n`
+      + rows.map((r) => `   - ${String(r.name || r.trigger_text || '').slice(0, 110)} (${_ago(now, r.created_ts)})`).join('\n');
+  });
+
   grab('maintenance', () => {
     // Echo pass status, cached by the driver (meta autonomy.pass_status, ~6h) — a stale loop is a
     // maintain-move candidate. Facts + age only; the allowlist itself rides the maintain brief.
@@ -242,7 +254,7 @@ One-shot moves (work that is genuinely single-step):
 - engage: say something to Lucas NOW — a genuine finding or a direction question. Use RARELY, only when you have something real; "say" must carry the exact message, grounded in the state above, no invented facts.
 - nothing: a first-class answer. If no move is clearly worth its cost, decline honestly.
 
-Rules: at most 4 steps. Never plan work you cannot check. State "expect" as something CHECKABLE — the run is verified against it afterward, and a history line saying "expect NOT met" means that approach is not working: change it, don't repeat it. FINISHED DELEGATED WORK in the state is high-priority: absorb it (build from it, or engage Lucas about it) before starting new work of the same kind. RECENT FAILURES in the state are results — read them before repeating a failed lane's approach. For ONE-SHOT moves only: do not pick a target your recent ticks show as just-run or repeatedly dry (an inquiry is exempt — advancing it IS the point). Contacts are ALREADY covered by another lane, so prefer ideas, gaps, corroboration, and building over anything contact-shaped. The one exception: PEOPLE ON HIS CALENDAR. If the state shows an upcoming meeting whose attendees we hold little on, researching them before he walks in is among the highest-value moves available — and a past meeting is a natural, grounded engage ("how did X go?"). DEVELOPING STORIES YOU FOLLOW are the other licensed opening: a development in a story you two discussed is a real reason to speak, not padding — an engage there says what CHANGED (never re-narrate the story), and its target must be the exact [story #N] token from that line so the raise is recorded.`;
+Rules: at most 4 steps. Never plan work you cannot check. State "expect" as something CHECKABLE and SIZED TO ONE BOUNDED RUN (a handful of tool steps): the increment THIS run can prove — a named list found and cited, one section drafted from material already held — never a finished "comprehensive" product (an expect sized to a whole project is how every run fails its own bar and nothing ever crystallizes). The run is verified against it afterward; a history line saying "expect NOT met" — and every LEARNED CONSTRAINTS line — means that approach is not working: change it, don't repeat it. FINISHED DELEGATED WORK in the state is high-priority: absorb it (build from it, or engage Lucas about it) before starting new work of the same kind — but its gist is INPUT, not an order: size the expect to one run's increment, not to whatever "comprehensive" product the gist advertises. RECENT FAILURES in the state are results — read them before repeating a failed lane's approach. For ONE-SHOT moves only: do not pick a target your recent ticks show as just-run or repeatedly dry (an inquiry is exempt — advancing it IS the point). Contacts are ALREADY covered by another lane, so prefer ideas, gaps, corroboration, and building over anything contact-shaped. The one exception: PEOPLE ON HIS CALENDAR. If the state shows an upcoming meeting whose attendees we hold little on, researching them before he walks in is among the highest-value moves available — and a past meeting is a natural, grounded engage ("how did X go?"). DEVELOPING STORIES YOU FOLLOW are the other licensed opening: a development in a story you two discussed is a real reason to speak, not padding — an engage there says what CHANGED (never re-narrate the story), and its target must be the exact [story #N] token from that line so the raise is recorded.`;
 
 function validateDecision(raw) {
   try {

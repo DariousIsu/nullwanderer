@@ -365,6 +365,56 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
     ok(mv.reverify === 1 && rmObs.some((o) => o.status === 'reverify' && o.sourceEntity === 'Focus Node [Q7]'), 'runMove: decay-checks the anchor edges inline (move.reverify) — build + decay in one move');
   }
 
+  // --- REFERENT GUARD (2026-07-23): same name, wrong referent — live, three FEC committees absorbed
+  //     an astronaut's biography, a TV series' cast, and a film's credits because nothing checked the
+  //     sources are ABOUT the anchor. The dossier's own entity_type (what the sources describe) vs the
+  //     graph's stored kind is the deterministic signal; a mismatch HOLDS every claim. ---
+  {
+    ok(G.typeKind('organization') === 'org' && G.typeKind('fec_committee') === 'org' && G.typeKind('person') === 'person'
+      && G.typeKind('film') === 'work' && G.typeKind('tv series') === 'work' && G.typeKind(null) === null,
+      'typeKind: maps stored + dossier types onto comparable kinds');
+    ok(G.referentGuard({ mention: 'HEARTLAND RESURGENCE [FEC:C00544551]', object: null }, { entity_type: 'work' }).ok === false,
+      'referentGuard: an FEC-tagged name is an org even without a typed record — a "work" dossier mismatches');
+    ok(G.referentGuard({ mention: 'Some Name', object: { entity_type: 'organization' } }, { entity_type: 'person' }).ok === false,
+      'referentGuard: stored org vs described person → mismatch (the Grissom shape)');
+    ok(G.referentGuard({ mention: 'Some Name', object: { entity_type: 'organization' } }, { entity_type: 'organization' }).ok === true,
+      'referentGuard: kinds agree → guard stands down');
+    ok(G.referentGuard({ mention: 'Plain Name', object: null }, { entity_type: 'work' }).ok === true,
+      'referentGuard: no stored kind and no registry tag → never blocks on ignorance');
+
+    // live shape end-to-end: a thin FEC committee whose web sources are a TV series → dossier says
+    // "work" with well-cited cast edges → EVERYTHING holds, nothing proposes, nothing promotes.
+    const gCalls = []; const gObs = [];
+    const gDispatch = async (tag) => { gCalls.push(tag.name); return { ok: true, text: JSON.stringify({ action: tag.name === 'propose_relation' ? 'proposed' : 'created' }) }; };
+    const tvWeb = async () => [{ text: 'Heartland is a Canadian television series broadcast on CBC Television, starring Michelle Morgan.', url: 'https://en.wikipedia.org/wiki/Heartland_(Canadian_TV_series)' }];
+    const tvCloud = async () => JSON.stringify({
+      entity_type: 'work', summary: 'A Canadian family drama television series.',
+      related: [
+        { name: 'CBC Television', type: 'organization', relation: 'broadcast network', sources: ['S1'] },
+        { name: 'Michelle Morgan', type: 'person', relation: 'cast member', sources: ['S1'] },
+      ],
+    });
+    const gGrown = await G.growAround(
+      { mention: 'HEARTLAND RESURGENCE [FEC:C00544551]', kind: 'thin', object: { id: 9, degree: 1, facts: [], entity_type: 'organization' } },
+      { web: tvWeb, cloud: tvCloud, dispatch: gDispatch, observe: async (o) => gObs.push(o) }
+    );
+    ok(gGrown.connections === 0 && gGrown.entities === 0, 'mismatched referent: NOTHING promotes — no entities, no edges');
+    ok(gGrown.held === 2, 'mismatched referent: every well-cited claim is HELD (the namesake keeps its own facts)');
+    ok(!gCalls.includes('propose_relation') && !gCalls.includes('propose_entity'), 'mismatched referent: no propose_* ever dispatched');
+    ok(gObs.length === 2 && gObs.every((o) => o.status === 'held'), 'mismatched referent: the observation trail records the holds');
+
+    // a MISSING anchor with a registry-tagged name is not MINTED from wrong-referent sources
+    const mObs = [];
+    const mGrown = await G.growAround(
+      { mention: 'GRISSOM FOR U.S. SENATE [C00710780]', kind: 'missing', object: null },
+      { web: async () => [{ text: 'Virgil Ivan Gus Grissom was an American astronaut born in Mitchell, Indiana.', url: 'https://en.wikipedia.org/wiki/Gus_Grissom' }],
+        cloud: async () => JSON.stringify({ entity_type: 'person', summary: 'An American astronaut.', related: [] }),
+        dispatch: gDispatch, observe: async (o) => mObs.push(o) }
+    );
+    ok(mGrown.built === false && mGrown.held === 1 && mObs.some((o) => o.relation === 'exists' && o.status === 'held'),
+      'mismatched referent on a MISSING registry anchor: a committee is never born as a person');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

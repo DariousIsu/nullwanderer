@@ -210,8 +210,18 @@ async function _enrichWiki(need, deps = {}, { object = null } = {}) {
     return { text: '', url: null, skipped: 'already-linked' };
   }
   const wiki = deps.wikiLookup || ((q) => { try { return require('./echo_suit').wikiLookup(q); } catch { return Promise.resolve([]); } });
+  // SALIENCE (2026-07-23 — the Pasig Cathedral miss): "parish leadership" searched BARE resolved to
+  // a Philippine cathedral while the conversation had JUST established Ouachita Parish, Louisiana.
+  // A two-sense term is disambiguated by the talk it came from: when the caller supplies recent
+  // conversation anchors (deps.contextTerms, most-salient first) and none is already part of the
+  // need, search WITH the first one; an empty result falls back to the bare need — never worse
+  // than before. Wiki-only for now (the observed miss); the other tiers carry their own context.
+  const _ctx = (Array.isArray(deps.contextTerms) ? deps.contextTerms : []).map((t) => String(t || '').trim()).filter((t) => t.length >= 3);
+  const _needLc = String(need || '').toLowerCase();
+  const _anchor = _ctx.find((t) => !_needLc.includes(t.toLowerCase()) && t.toLowerCase() !== _needLc);
   let pages = [];
-  try { pages = (await wiki(need)) || []; } catch {}
+  if (_anchor) { try { pages = (await wiki(`${need} ${_anchor}`)) || []; } catch {} }
+  if (!pages.length) { try { pages = (await wiki(need)) || []; } catch {} }
   if (!pages.length) return { text: '', url: null };
   const url = pages[0] && pages[0].title ? 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String(pages[0].title).replace(/ /g, '_')) : null;
   return { text: 'From Wikipedia:\n' + pages.map(p => `• ${p.title}: ${p.extract}`).join('\n'), url };

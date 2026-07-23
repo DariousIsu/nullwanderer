@@ -83,6 +83,23 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
   ok(/From Wikipedia/.test(wr.text) && /wikipedia\.org\/wiki\/Lee_Zeldin/.test(wr.url), '_enrichWiki returns {text, source url}');
   ok((await cog._enrichWiki('x', { wikiLookup: async () => [] })).text === '', '_enrichWiki no pages → empty');
 
+  // 9b) SALIENCE (the Pasig Cathedral miss, 2026-07-23): "parish leadership" searched bare resolved
+  // to a Philippine cathedral while the talk had just established Ouachita Parish. The conversation's
+  // anchor entities (deps.contextTerms) ride the wiki search; empty anchored result falls back bare.
+  const _sSeen = [];
+  const _twoSense = async (q) => { _sSeen.push(q); return /Ouachita/.test(q)
+    ? [{ title: 'Ouachita Parish, Louisiana', extract: 'A parish in Louisiana; seat: Monroe.' }]
+    : [{ title: 'Pasig Cathedral', extract: 'A Roman Catholic parish church in the Philippines.' }]; };
+  const _sr = await cog._enrichWiki('parish leadership', { wikiLookup: _twoSense, contextTerms: ['Ouachita Parish', 'Monroe'] });
+  ok(/Ouachita Parish, Louisiana/.test(_sr.text) && _sSeen[0] === 'parish leadership Ouachita Parish',
+    'SALIENCE: the conversation anchor rides the wiki search — the talked-about sense wins');
+  const _sSeen2 = [];
+  const _sr2 = await cog._enrichWiki('plain need', { wikiLookup: async (q) => { _sSeen2.push(q); return /Anchorville/.test(q) ? [] : [{ title: 'Plain', extract: 'E' }]; }, contextTerms: ['Anchorville'] });
+  ok(/Plain/.test(_sr2.text) && _sSeen2.length === 2, 'SALIENCE: an empty anchored search falls back to the bare need (never worse)');
+  const _sSeen3 = [];
+  await cog._enrichWiki('Ouachita Parish leadership', { wikiLookup: async (q) => { _sSeen3.push(q); return []; }, contextTerms: ['Ouachita Parish'] });
+  ok(_sSeen3.length === 1 && _sSeen3[0] === 'Ouachita Parish leadership', 'SALIENCE: an anchor already inside the need never re-augments');
+
   // 10) ALL cheaper tiers miss → FORENSIC EXCAVATION reads it off the rendered page AND kicks the write-back.
   let wbCall = null;
   const excavateMock = async () => ({ found: true, answer: 'Pete Hegseth is the U.S. Secretary of Defense.', url: 'https://en.wikipedia.org/wiki/United_States_Secretary_of_Defense' });
