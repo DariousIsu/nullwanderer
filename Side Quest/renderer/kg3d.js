@@ -1234,7 +1234,12 @@ function updateFace(now) {
 // The mesh itself is drawn as a DEPTH-ONLY occluder (colorWrite false). Invisible, but it writes depth, so
 // nodes on the far side of her head are hidden by the near side. That single line is the thing a point cloud
 // could never do for itself, and it is what makes the figure read as solid instead of as a swarm.
-const VRM_URL = '../data/avatars/zoe.vrm';
+// v3 = the Blender face-shape pass (cheeks −6.5% round→oval, chin +4mm, eyes/nose/mouth untouched), exported
+// through the VRM addon and verified: visemes, humanoid and material names identical, geometry measured to
+// 0.1mm of the Blender numbers. The COMPANION window still loads zoe.vrm — swapping that shared file is
+// Lucas's call, and this constant keeps the two decisions separate. Falls back if v3 is ever removed.
+const VRM_URL = '../data/avatars/zoe_v3.vrm';
+const VRM_FALLBACK = '../data/avatars/zoe.vrm';
 // ANATOMY CARRIES MEANING (Lucas, 2026-07-22): "Short term memory can be the head, everything that is Zoe can
 // be the heart, and the rest of the body is everything else." That turns the figure from a shape the data
 // happens to sit on into a CLAIM about the data — the same principle as density-is-the-boundary, finally with
@@ -1252,7 +1257,9 @@ async function loadVRM() {
   try {
     const loader = new window.GLTFLoader();
     loader.register((p) => new window.VRMLoaderPlugin(p));
-    const gltf = await loader.loadAsync(VRM_URL);
+    let gltf;
+    try { gltf = await loader.loadAsync(VRM_URL); }
+    catch (e) { console.warn('[kg3d] VRM v3 missing, falling back:', e && e.message); gltf = await loader.loadAsync(VRM_FALLBACK); }
     const vrm = gltf.userData.vrm;
     if (!vrm) throw new Error('no VRM payload in the gltf');
     // Same rest pose the companion uses: relax the default T-pose to arms-at-sides. Verified necessary — the
@@ -1315,43 +1322,56 @@ async function loadVRM() {
 // WHERE HER EYES AND MOUTH ARE, ASKED OF THE MODEL RATHER THAN GUESSED. Fire an expression, diff every
 // vertex against rest, and the vertices that moved ARE the feature — 'aa' finds the mouth, 'blink' finds the
 // eyelids. No magic coordinates, no per-model tuning, and it stays correct if the avatar is ever replaced.
+// Searches EVERY face mesh, not the first one. The original file shared one 4,286-vert buffer across all
+// eight face primitives, so any of them contained every vertex and sampling faces[0] worked by accident. The
+// Blender VRM exporter splits primitives into their own buffers (skin = 2,266 verts, mouth, iris, …), so a
+// feature now lives only on the mesh whose expression moves it — 'blink' moves nothing on the mouth primitive.
+// Sampling faces[0] against the v3 export returned eyes:0 and silently dropped the eye exclusion zones.
 function findFeatures() {
   const em = vrmModel.expressionManager; if (!em) return;
   const faces = vrmOccluders.filter((m) => /^Face/.test(m.name || ''));
   if (!faces.length) return;
-  const mesh = faces[0], N = mesh.geometry.attributes.position.count;
-  const sample = (setup) => {
-    for (const k of ['aa', 'blink', 'happy']) { try { em.setValue(k, 0); } catch (e) {} }
-    if (setup) { try { em.setValue(setup, 1); } catch (e) {} }
+  const zero = () => { for (const k of ['aa', 'blink', 'happy']) { try { em.setValue(k, 0); } catch (e) {} } };
+  const sample = (mesh, expr) => {
+    zero();
+    if (expr) { try { em.setValue(expr, 1); } catch (e) {} }
     try { vrmModel.update(0.016); } catch (e) {}
     vrmModel.scene.updateMatrixWorld(true);
+    const N = mesh.geometry.attributes.position.count;
     const out = new Float32Array(N * 3), v = new THREE.Vector3();
     for (let i = 0; i < N; i++) { try { mesh.getVertexPosition(i, v); } catch (e) {} out[i * 3] = v.x; out[i * 3 + 1] = v.y; out[i * 3 + 2] = v.z; }
     return out;
   };
-  const rest = sample(null);
-  const pick = (expr, top) => {
-    const d = sample(expr), idx = [];
-    for (let i = 0; i < N; i++) {
-      const dx = d[i * 3] - rest[i * 3], dy = d[i * 3 + 1] - rest[i * 3 + 1], dz = d[i * 3 + 2] - rest[i * 3 + 2];
-      const m = dx * dx + dy * dy + dz * dz;
-      if (m > 1e-12) idx.push([i, m]);
+  // For one expression: the mesh where it moves the MOST total distance owns the feature.
+  const findOn = (expr, top) => {
+    let best = null;
+    for (const mesh of faces) {
+      const rest = sample(mesh, null), d = sample(mesh, expr), idx = [];
+      let sum = 0;
+      const N = mesh.geometry.attributes.position.count;
+      for (let i = 0; i < N; i++) {
+        const dx = d[i * 3] - rest[i * 3], dy = d[i * 3 + 1] - rest[i * 3 + 1], dz = d[i * 3 + 2] - rest[i * 3 + 2];
+        const m = dx * dx + dy * dy + dz * dz;
+        if (m > 1e-12) { idx.push([i, m]); sum += Math.sqrt(m); }
+      }
+      if (!best || sum > best.sum) { idx.sort((a, b) => b[1] - a[1]); best = { mesh, rest, ids: idx.slice(0, top).map((p) => p[0]), sum }; }
     }
-    idx.sort((a, b) => b[1] - a[1]);
-    return idx.slice(0, top).map((p) => p[0]);
+    return best;
   };
-  const mouth = pick('aa', 40), lids = pick('blink', 80);
-  const cen = (ids) => { const c = new THREE.Vector3(); for (const i of ids) c.add(new THREE.Vector3(rest[i * 3], rest[i * 3 + 1], rest[i * 3 + 2])); return ids.length ? c.divideScalar(ids.length) : c; };
-  const mc = cen(mouth);
-  const left = lids.filter((i) => rest[i * 3] < mc.x), right = lids.filter((i) => rest[i * 3] >= mc.x);
-  const spread = (ids, c) => { let r = 0; for (const i of ids) r = Math.max(r, Math.hypot(rest[i * 3] - c.x, rest[i * 3 + 1] - c.y, rest[i * 3 + 2] - c.z)); return r; };
-  const lc = cen(left), rc = cen(right);
+  const M = findOn('aa', 40), L = findOn('blink', 80);
+  if (!M || !M.ids.length) return;
+  const cen = (b, ids) => { const c = new THREE.Vector3(); for (const i of ids) c.add(new THREE.Vector3(b.rest[i * 3], b.rest[i * 3 + 1], b.rest[i * 3 + 2])); return ids.length ? c.divideScalar(ids.length) : c; };
+  const mc = cen(M, M.ids);
+  const lids = L ? L.ids : [];
+  const left = lids.filter((i) => L.rest[i * 3] < mc.x), right = lids.filter((i) => L.rest[i * 3] >= mc.x);
+  const spread = (b, ids, c) => { let r = 0; for (const i of ids) r = Math.max(r, Math.hypot(b.rest[i * 3] - c.x, b.rest[i * 3 + 1] - c.y, b.rest[i * 3 + 2] - c.z)); return r; };
+  const lc = cen(L || M, left), rc = cen(L || M, right);
   featureAnchors = {
-    mesh, mouth, left, right,
-    mouthR: spread(mouth, mc) || 0.02, eyeR: Math.max(spread(left, lc), spread(right, rc)) || 0.015,
+    mesh: M.mesh, eyeMesh: L ? L.mesh : M.mesh, mouth: M.ids, left, right,
+    mouthR: spread(M, M.ids, mc) || 0.02, eyeR: Math.max(spread(L || M, left, lc), spread(L || M, right, rc)) || 0.015,
     rest: { mouth: mc, left: lc, right: rc },
   };
-  for (const k of ['aa', 'blink', 'happy']) { try { em.setValue(k, 0); } catch (e) {} }
+  zero();
   try { vrmModel.update(0.016); } catch (e) {}
 }
 // Classify every vertex once, in model space, using the RIG's own joints — the neck bone is where the head
@@ -1375,10 +1395,13 @@ function buildRegions() {
   const fa = featureAnchors;
   const ex = [];
   if (fa) {
-    const f2m = new THREE.Matrix4().multiplyMatrices(inv, fa.mesh.matrixWorld);
-    ex.push([fa.rest.left.clone().applyMatrix4(f2m), fa.eyeR * 2.6],
-      [fa.rest.right.clone().applyMatrix4(f2m), fa.eyeR * 2.6],
-      [fa.rest.mouth.clone().applyMatrix4(f2m), fa.mouthR * 3.0]);
+    // per-feature matrices: the mouth and the eyelids can live on DIFFERENT primitives (the v3 exporter
+    // splits buffers per material), so each anchor is lifted through its own mesh's transform
+    const mm = new THREE.Matrix4().multiplyMatrices(inv, fa.mesh.matrixWorld);
+    const em2 = new THREE.Matrix4().multiplyMatrices(inv, (fa.eyeMesh || fa.mesh).matrixWorld);
+    ex.push([fa.rest.left.clone().applyMatrix4(em2), fa.eyeR * 2.6],
+      [fa.rest.right.clone().applyMatrix4(em2), fa.eyeR * 2.6],
+      [fa.rest.mouth.clone().applyMatrix4(mm), fa.mouthR * 3.0]);
   }
   for (const m of vrmOccluders) {
     const N = m.geometry.attributes.position.count;
