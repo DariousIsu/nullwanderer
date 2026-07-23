@@ -1425,7 +1425,11 @@ function buildRegions() {
     for (let i = 0; i < N; i++) {
       try { m.getVertexPosition(i, v); } catch (e) { continue; }
       v.applyMatrix4(toLocal);
-      if (ex.length && ex.some(([c, r]) => v.distanceTo(c) < r)) { reg[i] = 3; continue; }   // eyes + mouth stay clear
+      // Feature verts still get EXCLUDED from node binding (the continue), but they SHADE as head (value 1),
+      // not a distinct value 3. `vRegion` interpolates across triangles, so a 1↔3 edge passed through 2.0 and
+      // the heart-colour bracket painted a rose zigzag along every head/feature boundary — the seams Lucas saw
+      // on her jaw and neck. Collapsing feature to the head value removes the boundary entirely.
+      if (ex.length && ex.some(([c, r]) => v.distanceTo(c) < r)) { reg[i] = 1; continue; }   // eyes + mouth: no bind, shade as head
       const isHead = neckL ? v.y > neckL.y : false;
       if (isHead) { reg[i] = 1; REGION.head.push({ mesh: m, vi: i }); continue; }
       if (chestL && v.distanceTo(chestL) < HEART_R) { reg[i] = 2; REGION.heart.push({ mesh: m, vi: i }); continue; }
@@ -1457,7 +1461,10 @@ let SHELL_ON = true; try { SHELL_ON = localStorage.getItem('kg3d.shell') !== '0'
 const shellUniforms = {
   uBody: { value: new THREE.Color(SHELL_COL.body) }, uHead: { value: new THREE.Color(SHELL_COL.head) },
   uHeart: { value: new THREE.Color(SHELL_COL.heart) },
-  uBase: { value: 0.055 }, uRim: { value: 1.35 }, uPow: { value: 2.4 }, uPulse: { value: 0 }, uScan: { value: 1 },
+  // uBase raised 0.055→0.14: the face is a flat, forward-facing surface, so fresnel (which needs a grazing
+  // angle) barely fires on it and it read much darker than the curved body. A higher ambient floor lifts the
+  // face to match the body without washing out the rim.
+  uBase: { value: 0.14 }, uRim: { value: 1.2 }, uPow: { value: 2.4 }, uPulse: { value: 0 }, uScan: { value: 1 },
 };
 // Each slice is shaded by WHAT IT IS, read off the VRoid material name. Skin takes the region colour and the
 // fresnel; hair goes solid so it reads as a mass and gives her a silhouette; the eyes are lit hard because a
@@ -1501,12 +1508,12 @@ function applyShellMaterial() {
           vec3 outc;
           if (uKind < 0.5)      outc = rc * amt;                                    // skin
           else if (uKind < 1.5) outc = rc * (0.16 + fres * 0.75);                   // hair: a readable mass
-          // Kept deliberately dim. At full body framing an eye is a handful of pixels, and additive white at
-          // that size blooms into the same bright orb that read as a skull twice already. The eye should be
-          // the DARKEST part of the face with a small light in it, which is what a real one is.
-          else if (uKind < 2.5) outc = vec3(0.30, 0.40, 0.52) * 0.20;               // sclera
-          else if (uKind < 3.5) outc = mix(rc, vec3(0.45, 0.80, 1.0), 0.7) * 0.42;  // iris
-          else if (uKind < 4.5) outc = vec3(0.55, 0.62, 0.72);                      // catchlight
+          // Eyes lit enough to READ (Lucas: "eyes might help") but not blown to skull-orbs: a soft blue-white
+          // sclera, a brighter cyan iris, a crisp catchlight. At full-body scale they read as eyes; up close
+          // they hold as eyes rather than glowing balls.
+          else if (uKind < 2.5) outc = vec3(0.55, 0.66, 0.82) * 0.62;               // sclera
+          else if (uKind < 3.5) outc = mix(rc, vec3(0.55, 0.88, 1.0), 0.75) * 0.85; // iris
+          else if (uKind < 4.5) outc = vec3(0.9, 0.95, 1.0);                        // catchlight
           else if (uKind < 5.5) outc = rc * 0.10;                                   // brow / lash / eyeline
           else                  outc = mix(rc, vec3(1.0, 0.62, 0.72), 0.65) * 0.85; // lips
           // a slow horizontal banding, the one borrowed cue that reads instantly as "projected, not filmed"
@@ -1961,9 +1968,17 @@ const markerMat = new THREE.ShaderMaterial({
   uniforms: { map: { value: RING_TEX }, uOpacity: { value: 1.0 } },
   vertexShader: 'attribute float size; attribute vec3 aColor; attribute float aAlpha; varying vec3 vColor; varying float vAlpha; void main(){ vColor=aColor; vAlpha=aAlpha; vec4 mv=modelViewMatrix*vec4(position,1.0); gl_PointSize=size*(560.0/max(1.0,-mv.z)); gl_Position=projectionMatrix*mv; }',
   fragmentShader: 'uniform sampler2D map; uniform float uOpacity; varying vec3 vColor; varying float vAlpha; void main(){ vec4 t=texture2D(map, gl_PointCoord); if(t.a<0.02) discard; gl_FragColor=vec4(vColor, t.a*uOpacity*vAlpha); }',
-  transparent: true, depthWrite: false, depthTest: true, blending: THREE.NormalBlending,
+  // depthTest OFF (Lucas: "the different completions of circles looks messy"). With it on, each ring sprite
+  // was clipped by the body's depth wherever its arc passed behind her surface, so every badge read as a
+  // different ragged fraction of a circle. He's fine with map marks floating free of her skin — so the rings
+  // now always draw COMPLETE, over the figure, as clean consistent circles.
+  transparent: true, depthWrite: false, depthTest: false, blending: THREE.NormalBlending,
 });
 const REFUTED_RGB = new THREE.Color('#f87171'), STRONGID_RGB = new THREE.Color('#fcd34d'), RECOG_RGB = new THREE.Color('#c4b5fd');
+// ONE size per kind, not per node (Lucas: "all the different sized circles… look odd"). The badge states a
+// STATUS — strong-id / refuted / recognised — not the node's degree, so scaling each ring by node importance
+// added noise. Three consistent tiers now.
+const MARKER_BASE = 12;
 let markerCloud = null, markerGeo = null, markerIndex = [], markerLive = [];
 function markerOf(n) {                       // a scar outranks a badge — being wrong is the louder fact
   if (n && hotLinks.has(n.id)) return { c: RECOG_RGB, a: 0.9, k: 2.1, live: true };   // …and a live recognition outranks both
@@ -1981,8 +1996,8 @@ function buildMarkers() {
   const pos = new Float32Array(N * 3), col = new Float32Array(N * 3), size = new Float32Array(N), alpha = new Float32Array(N);
   for (let i = 0; i < N; i++) {
     const n = src[i], m = mets[i];
-    col[i * 3] = m.c.r; col[i * 3 + 1] = m.c.g; col[i * 3 + 2] = m.c.b; size[i] = nodePointSize(n) * m.k; alpha[i] = m.a;
-    markerLive.push(m.live ? { base: nodePointSize(n) * m.k, a: m.a } : null);
+    col[i * 3] = m.c.r; col[i * 3 + 1] = m.c.g; col[i * 3 + 2] = m.c.b; size[i] = MARKER_BASE * m.k; alpha[i] = m.a;
+    markerLive.push(m.live ? { base: MARKER_BASE * m.k, a: m.a } : null);
     if (Number.isFinite(n.x)) { pos[i * 3] = n.x; pos[i * 3 + 1] = n.y; pos[i * 3 + 2] = n.z || 0; }
   }
   markerGeo = new THREE.BufferGeometry();
