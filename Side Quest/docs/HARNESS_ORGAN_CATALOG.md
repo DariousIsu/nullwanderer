@@ -56,6 +56,88 @@ These are the codebase's own laws, restated so no organ ships without them:
 
 ## 3. The catalog
 
+### O0 ⭐⭐ THE LINE OF INQUIRY — why the background still isn't logical
+
+*Added same-day, after Lucas's observation: "the background research is still non logical, the
+models aren't driving the lanes." Run to ground against boot40/41 + the code before writing.*
+
+**The observation, measured.** Three mechanisms produce exactly what he's seeing:
+
+1. **The one model-driven lane made ZERO decisions in boot40.** A full day, not one
+   `[autonomy] chose=` line — the driver deferred throughout (directed #3542 resumed at boot and
+   outranked it all day; `_researchGateOk` pacing/caps; free-slot requirement; boot40's slice-1
+   yields). Worse, deferrals at `_researchGateOk` (main.js:8614) are SILENT — `return false`, no
+   log — so a zero-decision day looks identical to a working one. boot41 so far: driver started,
+   inbox drained, still no decision.
+2. **The volume that DID run is code-enumerated.** boot40 background: 454 [graph-walk] +
+   153 [idle-anchors] + 119 [pipeline] + 42 [puller-walk] + 44 [doc-decomp] moves. Every target
+   was picked by constants — tier cascades (`idle_anchors`: news→frontier→convo, MAX_PER_TIER=6),
+   degree thresholds (`graph_walk`: THIN_DEGREE=8, WALK_MAX_NODES=5), roster order (puller).
+   The model is called INSIDE each move to interpret and extract; it never chooses the object,
+   the moment to move on, or what "done" means. Each move is locally fine; the SEQUENCE is a
+   scan schedule, and a scan schedule reads as a random walk. (`engine-starvation-audit` named
+   it: code enumerates, model fills templates.)
+3. **Where the model does decide, continuity is against the rules.** One decision → one bounded
+   operator run → a one-line history entry; the next tick re-decides from counts + 8 one-liners.
+   No leads carry, no "what I learned," no next step. And DECISION_WANT instructs: *"Do not
+   choose a target your recent ticks show as just-run… Variety matters across ticks."* Written
+   to kill repetition-noise, it also forbids follow-through — a run that surfaces a promising
+   lead may not be followed next tick. In this harness the default is the inverse: continue until
+   answered or blocked; variety is the exception. That inversion, more than any gate, is why the
+   lanes don't feel driven.
+
+**In the harness.** The unit of my autonomous work is not a step or a tick — it is an
+INVESTIGATION: a question that persists, accretes evidence, revises after every observation, and
+decides its own next step, until answered, dead-ended, or blocked. My context window IS that
+persistence. Zoe can't hold a window for hours — so the investigation must be an object. This is
+the program-not-context move applied to the driver itself.
+
+**Landing sites.** The persistence machinery already exists — for HIS work: a directed focus
+accretes into a dossier, parks, and resumes across reboots (#3542 proved it on boot40 — the very
+run that starved the driver). Her self-chosen work gets amnesia by design. Also on hand:
+expect-vs-actual verdicts (895c2fc), procedures (2c), the board (2a), doc_store artifact landing
+(530c51b), the tick manifest.
+
+**The transplant.**
+- `inquiries` table: `question` (model-authored), `born_from` (interest / gap / story / lead —
+  the state line it came from), `status` (active | parked | closed_answered | closed_dead_end),
+  accreted `evidence` (cited — reuse the focus/dossier accretion shape, don't invent a second
+  one), `open_leads`, `next_step` (model-written at the end of every touch), `touches`,
+  `last_touched_ts`, and the expect-verdict trail.
+- **The decision flips to continue-first.** The manifest carries OPEN INQUIRIES (question +
+  next_step + verdict trail). The tick chooses: ADVANCE one (the default) · OPEN one (the
+  exception, born from a named state line) · CLOSE one (answered or dead — honest closure is
+  first-class, like `nothing`) · or the existing one-shot moves. The variety rule survives
+  ACROSS inquiries and dies WITHIN one.
+- **Write-back per touch.** A touch's brief = question + evidence gist + next_step + matched
+  procedures; the run ENDS by writing back learned / leads / next_step (structured, validated —
+  the O3 envelope). The next touch starts where this one stopped: retry-with-context at day
+  scale. Ticks become steps IN something.
+- **Feeders feed.** graph-walk / idle-anchors / news principals / absence gaps become LEAD
+  emitters into the decider's view (candidate inquiries), and their autonomous volume rebalances
+  downward once inquiries carry the depth — the conductor stance already says old pickers become
+  streams the conductor allocates.
+- **Un-starve the driver, audibly.** Every deferral logs its reason
+  (`[autonomy] deferred: directed-focus | pacing | caps | no-slot`) — a zero-decision day must
+  be visible in one grep. And the deliberate 2b lockout ("his assignment outranks idle" = total
+  yield) softens to SLOT priority: a directed focus holds one pool slot, the driver may take the
+  other. ⚠️That relaxation reverses a decision 2b kept on purpose — it is Lucas's call, flagged
+  here, not assumed.
+
+**Do NOT port**: unbounded time-slicing (a touch is still one bounded run on a pool slot);
+inquiry spam (opening requires naming its born_from state line; open count bounded, oldest
+parks); rolling-rewrite evidence (append + gist — the meeting-notes lesson); deleting the
+code-enumerated lanes (they are her reflexes; the inquiry is her attention — demote, don't
+amputate).
+
+**Proof.** Smoke: a seeded inquiry advances across 3 simulated ticks, each brief carrying the
+prior evidence, close writes the answer artifact to doc_store. Live — the test Lucas actually
+set: read a day's log and the background reads as LINES OF WORK (`[inquiry #N] touch 3 …`
+advancing the same question) rather than a shuffle; "what are you working on?" answers with a
+question and its progress; a starved day says why.
+
+---
+
 ### O1 ⭐ THE SKILL SHELF — trigger surface small, bodies out of context
 
 **In the harness.** A skill is a file: name + a one-line *trigger description* + a body of steps/
@@ -342,6 +424,7 @@ block is being emitted. Rank last; skip freely.
 
 | Rank | Organ | Why here |
 |---|---|---|
+| **0** | O0 line of inquiry | The diagnosis organ (boot40: 0 model decisions vs ~800 code-picked moves). The others serve it: the shelf feeds its briefs, O2 is its code twin, O3's returns join it |
 | A | O1 skill shelf | The existence-proof organ; fixes retrieval-is-the-bottleneck; O5 shapes and Echo recipes plug into it |
 | B | O2 rehearsal driver | Completes the driver's-seat set; R2 proposal cards become real; the self-grow ladder gets its motor |
 | C | O3 structured returns | Closes a live guidance-vs-wiring contradiction; small, mostly wiring |
@@ -352,10 +435,11 @@ block is being emitted. Rank last; skip freely.
 | H | O8 history handles | Slice-1 machinery makes it one wire; user-visible memory depth |
 | I | O9 themes | Only if a second brand ever exists |
 
-Suggested slicing when the time comes: **slice 4 = A+B** (shelf + driver — the crystallization
-write path meets its retrieval surface), **slice 5 = C+D** (the legibility pair), **slice 6 =
-E+F** (deliverable hardening). G/H ride along wherever they fit; each sub-slice gate-green +
-committed per the standing process.
+Suggested slicing when the time comes: **slice 4 = O0** (the inquiry substrate + continue-first
+decision + audible deferrals — the slot-priority relaxation inside it is Lucas's explicit call),
+**slice 5 = A+B** (shelf + driver — the crystallization write path meets its retrieval surface),
+**slice 6 = C+D** (the legibility pair), **slice 7 = E+F** (deliverable hardening). G/H ride
+along wherever they fit; each sub-slice gate-green + committed per the standing process.
 
 ## 5. Standing refusals (the context-model traps, in one place)
 
