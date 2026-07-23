@@ -34,7 +34,15 @@ carried-away frame, never claims minutes-ago); inquiry-path crystallize now LOGS
 invisible wire on that path — the path re-lost the shared circuit's visibility one wire at a
 time). Boot52 chain also carries e1c520b honest beat-origin label. Inquiry #2's own answer
 predates the fix — reported to Lucas directly; future closes deliver themselves.
-WATCH boot53: first harvest-born homecoming on an answered close · war-question retest (Lucas). The war-question retest is STILL OWED (last asking
+**BOOT53 first tick = THE ZOMBIE TOUCH (fixed 73831ca, live boot54)**: history continuity baited
+the decider into advancing the CLOSED #2; the wasted touch failed its expect against an
+already-answered question and crystallized a misleading constraint (procedures #14, soft-retired
+in place with provenance — retire, never delete). The handler now refuses any touch of a
+non-active inquiry (REFUSED line names the door, refusal rides history). Lesson: continuity bias
+needs a STATUS GATE at the handler — the model repeats what history rewarded, including targets
+that no longer exist.
+WATCH boot54: first harvest-born homecoming on an answered close (inquiry #1 Louisiana is the
+natural test) · REFUSED lines when continuity baits · war-question retest (Lucas). The war-question retest is STILL OWED (last asking
 was 23:36 on boot48, pre-news-tier — the honest-miss proof, not the tier's test): "what's the
 latest on the war?" must answer from her own stream in one turn (`enriched:news` in the log).
 BOOT49/50 PROOFS: inquiry #1 advanced touches 2-4 (the direction loop holds across boots) · email
