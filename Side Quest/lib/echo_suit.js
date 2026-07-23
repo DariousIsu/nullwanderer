@@ -557,7 +557,11 @@ class EchoSuit {
       validate: (raw) => { const m = String(raw || '').match(/\{[\s\S]*\}/); if (!m) return { valid: false, error: 'no json' }; try { const o = JSON.parse(m[0]); return o && o.type ? { valid: true, value: o } : { valid: false, error: 'no type' }; } catch (e) { return { valid: false, error: e.message }; } }
     });
     if (!pick || pick.type === 'none' || !pick.name) {
-      return { ok: false, kind: 'find', isError: false, routed: true, text: `I looked for an Echo tool for "${query}" but nothing fit${pick && pick.reason ? ` (${pick.reason})` : ''}. Tell Lucas, or this may be an open-web question.` };
+      // ⭐TEACH THE LANE SWITCH AT THE FAILURE POINT (live boot47: eight echo-finds in a row for
+      // live war news, every refusal ignored, the answer never came). Echo is INTERNAL data — a
+      // current-events need belongs to the WEB lane, and the refusal must name the door or the
+      // model just tries Echo again (44f8052: the failure teaches the shape).
+      return { ok: false, kind: 'find', isError: false, routed: true, text: `I looked for an Echo tool for "${query}" but nothing fit${pick && pick.reason ? ` (${pick.reason})` : ''}. Echo holds our INTERNAL data — do NOT retry Echo for this. If it needs the open web (news, current events, live facts), emit <web-open>https://…</web-open> with a real news/search URL now; otherwise tell Lucas plainly what you could not find.` };
     }
     // 3a) Recipe → run directly (one plain arg). Recipes are curated read/compile procedures → allowed
     // even on the autonomous loop.

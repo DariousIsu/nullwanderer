@@ -8209,7 +8209,7 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
 // runaway chain is a real failure — but 4 was set when a turn meant "look one thing up". Building a
 // document is open the tab, write the contract, then go and read; four hops cannot hold that.
 const MAX_ECHO_HOPS = require('./lib/config').maxEchoHops();
-async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 0, prompted = true, finalNudge = false }) {
+async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 0, prompted = true, finalNudge = false, lastSay = '' }) {
   // TURN ISOLATION — if a newer chat turn has started since this follow-up's turn, discard it: a prior
   // turn's fire-and-forget tool result must never render into the current turn (the cross-turn bleed).
   if (io && io._gen != null && io._gen !== _chatTurnGen) { console.log(`[main] stale tool-followup discarded (gen ${io._gen} vs ${_chatTurnGen})`); return; }
@@ -8362,10 +8362,10 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       }
       if (deferredTags > 0) hopParts.push(`[${deferredTags} more tag${deferredTags === 1 ? '' : 's'} you emitted this turn were DEFERRED (per-hop bound) — re-emit any that still matter.]`);
       if (hopParts.length) {
-        try { await fireToolFollowup({ io, channel, sessionId, resultText: hopParts.join('\n\n'), echoHop: echoHop + 1, prompted, finalNudge }); }
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: hopParts.join('\n\n'), echoHop: echoHop + 1, prompted, finalNudge, lastSay: sayOut || lastSay }); }
         catch (e) { console.error('[main] echo chain follow-up failed:', e.message); }
       }
-    } else if (!finalNudge && sayOut && require('./lib/leakguard').isUnkeptPromiseSay(sayOut)) {
+    } else if (!finalNudge && (sayOut || lastSay) && require('./lib/leakguard').isUnkeptPromiseSay(sayOut || lastSay)) {
       // THE UNKEPT PROMISE (live 9341→9344→9346): the chain is OVER — no tags to run — and her
       // last word was "Fetching…/Waiting…". Nothing was ever going to arrive. One corrective pass,
       // guarded against looping: answer from what returned, or say the miss plainly.
