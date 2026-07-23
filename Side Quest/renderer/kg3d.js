@@ -299,7 +299,11 @@ function targetBrain(n) {
   // Territories have to TOUCH or they read as four separate islands rather than one organ — which is what
   // the first pass looked like. Centres pulled in and each lobe given enough spread that neighbours overlap
   // at their edges; the cross-lobe links then stitch the seams, which is the whole point of the design.
-  const spread = (n.zoe ? 0.20 : 0.46) * CLOUD_R, pull = 0.82;
+  // The constant overstated the real extent: the offsets below are bounded by (rf−0.55) and (u−0.5), so a
+  // "0.46" spread only ever reached ~±0.45 of it in x and ~±0.75 in y — the lobes stayed islands with dark
+  // water between them. Raised, and the centres pulled further in, so neighbours genuinely interpenetrate
+  // and the cross-lobe links have something to stitch. Messy is fine; four separate blobs is not.
+  const spread = (n.zoe ? 0.34 : 0.86) * CLOUD_R, pull = 0.62;
   const zc = (Math.abs(s.dz0 == null ? (s.dz0 = (hashSeed(String(n.id) + '#lz') - 0.5) * 1.4) : s.dz0) + FISSURE + 0.05) * side;
   return _tp.set(
     _midCen.x + L.x * CLOUD_R * pull + (s.rf - 0.55) * spread * Math.cos(s.ang * 2.3),
