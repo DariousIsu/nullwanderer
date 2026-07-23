@@ -177,6 +177,17 @@ per-doc in-flight Set on decomposeLandedDoc (any two paths). ⚠️#8443 is PARK
 `decompose_sweep:attempted` (emergency stop before the race reached the 15-chunk roster) — after
 the boot that carries 50cfc03, REMOVE 8443 from that meta or the pull never reaches it.
 ⚠️Duplicate mints from #7704 (+~25) and possibly #8413 → nightly dedup/fusion should fuse; verify.
+**🚨TWO NEW DEFECTS (boot71 ~19:5x, Lucas's parish-canvas exchange)**: (1) DELIVERY-PROMISE HOLE —
+Zoe: "I'll keep adding the Louisiana parish contacts there [canvas]" with NO canvas action ever;
+measured: 0 LA/parish canvas tabs in canvas_docs.db (57 docs), 1 stray block. The promised-lookup
+net catches RETRIEVAL promises only; a DELIVERY promise ("I'll add it to a canvas/document") needs
+its own net → route through the packaging pipeline (7f6184d "package that" already builds canvas
+docs). (2) CLARIFY MISROUTE — Lucas's "canvas is perfect, thank you" was captured as a
+clarification for focus #3549 (Beaver County, UT) — the clarify capture binds to the ACTIVE FOCUS
+regardless of what the reply was actually about (detectors-vs-comprehension class, routing edition).
+THE LIST ITSELF: her graph holds sheriffs 64/64 + presidents 64/64 + today's +40 clerks/registrars;
+the roster (parked #8443) completes it one boot after 50cfc03 — then package the parish-contacts
+canvas FOR REAL (harvest homecoming or "package that").
 **DEAD-HOST BREAKER `2bcbdf7` (boot70, ~16:0x)**: watched akiak-ak.gov take SIX all-doors ladder
 burns across six pages (profile 20 fails/0 oks; domain is ERR_NAME_NOT_RESOLVED — the concessions
 were honest, the REPETITION was the waste). site_ledger.hostDown: ≥8 door fails + zero successes
