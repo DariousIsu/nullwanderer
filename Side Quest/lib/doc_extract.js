@@ -263,7 +263,7 @@ async function rasterizePdf(filePath, { maxPages = 10, scale = 2.0, only = null 
 }
 
 const TEXT_EXT = new Set(['md', 'markdown', 'txt', 'text']);
-const SHEET_EXT = new Set(['xlsx', 'xlsm', 'csv', 'tsv']);   // .xls (legacy BIFF) is NOT read by exceljs — unsupported
+const SHEET_EXT = new Set(['xlsx', 'xlsm', 'csv', 'tsv', 'xls']);   // .xls legacy BIFF via SheetJS (added 2026-07-23 — the LA SoS roster is .xls-only)
 
 // --- spreadsheets → markdown table (so a dropped roster/contact sheet flows through the doc pipeline) ---
 // A minimal RFC-4180-ish delimited parse (quoted fields, escaped "", CRLF). Returns rows of string cells.
@@ -297,6 +297,19 @@ function rowsToMarkdownTable(rows) {
 async function extractSpreadsheet(filePath) {
   const ext = path.extname(filePath).replace(/^\./, '').toLowerCase();
   if (ext === 'csv' || ext === 'tsv') return { markdown: rowsToMarkdownTable(parseCsv(fs.readFileSync(filePath, 'utf8'), ext === 'tsv' ? '\t' : ',')), format: ext };
+  // legacy BIFF .xls → SheetJS (2026-07-23): the LA SoS 6,695-row roster the inquiry downloaded is
+  // .xls-only; her own next_step literally asked for "a tool that can read XLS files".
+  if (ext === 'xls') {
+    const XLSX = require('xlsx');
+    const wb = XLSX.read(fs.readFileSync(filePath), { type: 'buffer' });
+    const parts = [];
+    for (const name of wb.SheetNames) {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false, defval: '' });
+      const table = rowsToMarkdownTable(rows);
+      if (table) { parts.push(`## ${name}`); parts.push(table); }
+    }
+    return { markdown: parts.join('\n\n'), format: 'xls' };
+  }
   const ExcelJS = require('exceljs');
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(filePath);

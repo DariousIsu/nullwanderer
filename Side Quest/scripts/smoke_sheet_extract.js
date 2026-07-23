@@ -28,6 +28,22 @@ ok(DE.rowsToMarkdownTable([['', '  '], []]) === '', 'rowsToMarkdownTable: all-em
 
 // --- SHEET_EXT registered ---
 ok(DE.SHEET_EXT.has('xlsx') && DE.SHEET_EXT.has('csv') && DE.SHEET_EXT.has('tsv'), 'SHEET_EXT: xlsx/csv/tsv recognized');
+ok(DE.SHEET_EXT.has('xls'), 'SHEET_EXT: legacy .xls recognized (the LA SoS roster format)');
 
-console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// --- legacy .xls extracts via SheetJS (fixture written in-memory, real BIFF bytes) ---
+(async () => {
+  try {
+    const fs = require('fs'), os = require('os'), path = require('path');
+    const XLSX = require('C:/Users/azrae/Desktop/Side Quest/node_modules/xlsx');
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Parish', 'Sheriff', 'Email'], ['Caddo', 'Henry Whitehorn', 'sheriff@caddo.gov']]), 'Officials');
+    const fp = path.join(os.tmpdir(), `sq_smoke_biff_${process.pid}.xls`);
+    fs.writeFileSync(fp, Buffer.from(XLSX.write(wb, { type: 'buffer', bookType: 'xls' })));
+    const r = await DE.extractSpreadsheet(fp);
+    ok(r.format === 'xls' && /## Officials/.test(r.markdown) && /\| Caddo \| Henry Whitehorn \| sheriff@caddo\.gov \|/.test(r.markdown),
+      'legacy .xls → markdown table with sheet heading (her own asked-for capability)');
+    try { fs.unlinkSync(fp); } catch {}
+  } catch (e) { fail++; console.error('  ✗ xls extract threw:', e.message); }
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();
