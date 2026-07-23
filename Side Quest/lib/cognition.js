@@ -213,8 +213,15 @@ async function _enrichNews(need, deps = {}) {
     if (!scored.length) return { text: '', url: null };
     scored.sort((a, b) => (b.hit - a.hit) || ((b.s.last_ts || 0) - (a.s.last_ts || 0)));
     const day = (ts) => { try { return require('./tz').dayKey(ts); } catch { return ''; } };
-    const top = scored.slice(0, 3).map(({ s }) =>
-      `• ${s.title}${s.summary ? ' — ' + String(s.summary).slice(0, 280) : ''}${s.last_ts ? ` (as of ${day(s.last_ts)})` : ''}`);
+    // THE LATEST lives in the UPDATE rows, not the story header (sweep 2026-07-23: 55k updates and
+    // the first cut of this tier never read them — "what's the latest" answered from the headline).
+    const updatesFor = deps.newsUpdates || ((id) => { try { return require('./news_lane').storyDeltas(id, { limit: 50 }); } catch { return []; } });
+    const top = scored.slice(0, 3).map(({ s }) => {
+      const head = `• ${s.title}${s.summary ? ' — ' + String(s.summary).slice(0, 280) : ''}${s.last_ts ? ` (as of ${day(s.last_ts)})` : ''}`;
+      const ups = (updatesFor(s.id) || []).slice(-2).map((u) =>
+        `\n  ↳ latest: ${u.title || u.summary || ''}${u.ts ? ` (${day(u.ts)})` : ''}`).join('');
+      return head + ups;
+    });
     return { text: 'From my own news stream (fresh, corroborated):\n' + top.join('\n'), url: null };
   } catch { return { text: '', url: null }; }
 }

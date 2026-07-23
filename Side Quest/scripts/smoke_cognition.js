@@ -106,9 +106,14 @@ const emptyDispatch = async () => ({ ok: true, text: '{"result":[]}' });
     { id: 1, title: 'Iran war live: US launches new attacks; Houthis attack 2 Saudi oil tankers', summary: 'Strikes resumed near Bandar Abbas; tanker traffic disrupted.', last_ts: Date.now() - 3600e3 },
     { id: 2, title: 'Local bake sale raises funds', summary: 'A bake sale happened.', last_ts: Date.now() - 7200e3 },
   ];
-  const nr = await cog._enrichNews('latest update on the Iran war', { newsStories: _mockStories });
+  const nr = await cog._enrichNews('latest update on the Iran war', { newsStories: _mockStories, newsUpdates: (id) => id === 1 ? [
+    { title: 'Hormuz strait closed to tanker traffic', ts: Date.now() - 7200e3 },
+    { title: 'US carrier group repositioned to the Gulf of Oman', ts: Date.now() - 1800e3 },
+  ] : [] });
   ok(/From my own news stream/.test(nr.text) && /Bandar Abbas/.test(nr.text) && !/bake sale/.test(nr.text),
     'NEWS tier: the matching story surfaces with its substance; unrelated stories stay out');
+  ok(/↳ latest: US carrier group repositioned/.test(nr.text) && /Hormuz strait closed/.test(nr.text),
+    'NEWS tier: THE LATEST rides from the update rows, not just the story header (the 55k-updates sweep find)');
   ok((await cog._enrichNews('quantum topology seminar', { newsStories: _mockStories })).text === '' || !/Iran/.test((await cog._enrichNews('quantum topology seminar', { newsStories: _mockStories })).text.split('\n')[1] || ''),
     'NEWS tier: no real match → empty or weak (falls through to the next tier)');
   const nf = await cog.answerGrounded({ userMessage: 'what is the latest update on the Iran war?', grounding: '', deps: {
