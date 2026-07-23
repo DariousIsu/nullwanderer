@@ -6904,6 +6904,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // DELEGATED WORK in the tick manifest). Still async — never material for THIS turn, so
             // an assignment Lucas is waiting on stays in-canvas, in-turn.
             { key: 'background agent', label: 'ASYNC — results return to your stream within ~5 minutes (never this turn); use it for background gathering, never for what Lucas is waiting on right now', how: '<echo-delegate name="AGENT">the full task spec</echo-delegate>' },
+            // MID-CONVERSATION DIG (slice 4b): the talk itself can fork research. Distinct from the
+            // delegate above — a dig is HER line of inquiry (persists, accretes evidence across
+            // touches) and its finding returns TO THIS CHAT addressed to what was asked, not to her
+            // private stream. Answer what you can NOW in the same reply; the dig covers what you can't.
+            { key: 'fork a dig (mid-conversation research)', label: 'ASYNC — when the talk raises a question worth real research that you cannot answer from what you hold, fork a line of inquiry: keep talking now (give what you have, say you are digging), and your finding returns to this conversation in a few minutes addressed to what was asked. Never for what Lucas is waiting on THIS turn', how: '<dig>the question, fully stated so it stands alone away from this chat</dig>' },
           ] });
         } catch (e) { console.error('[main] manifest failed:', e.message); }
         const plan = pkg.buildPlan({
@@ -7117,7 +7122,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // <say> tripped the blank-reply recovery below and generated a SECOND reply over the acting one.
   // Third drift of this hand-copied list; the leakguard smoke reads the vocabulary from this regex,
   // so extending here extends the gate too.
-  const _hasToolTag = /<(web-open|web-read|web-click|web-type|web-back|web-close|browse|file-write|file-append|file-read|file-list|observe-screen|read-inbox|email|discord-dm|schedule|notify|clipboard-read|clipboard-write|echo-find|echo-do|echo-delegate|echo-recipe|image-gen|draw|imagine|chat-send|navigate|recall)\b/i.test(`${thought || ''}\n${say || ''}`);
+  const _hasToolTag = /<(web-open|web-read|web-click|web-type|web-back|web-close|browse|file-write|file-append|file-read|file-list|observe-screen|read-inbox|email|discord-dm|schedule|notify|clipboard-read|clipboard-write|echo-find|echo-do|echo-delegate|echo-recipe|image-gen|draw|imagine|chat-send|navigate|recall|dig)\b/i.test(`${thought || ''}\n${say || ''}`);
   // Salvage runs on ANY real user turn (dropped the old `!pulledFromThought` guard — a turn where Lucas
   // snapped her out of a thought must ALSO not go silent; that's exactly when the reply lands in <think>).
   // `|| truncated`: a TRUNCATED thought that merely ECHOES a `<browse…>`/tool fragment (cut off mid-tag,
@@ -7254,6 +7259,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     ...recallLib.parseRecallTags(thought || ''),
     ...recallLib.parseRecallTags(say || '')
   ];
+  // MID-CONVERSATION DIG (slice 4b — lib/dig.js): <dig>question</dig> forks a LINE OF INQUIRY born
+  // from THIS conversation while the reply goes out normally; the finding returns to the chat in
+  // minutes through the announce door. Work → gated off the clock like the echo tags; scanned in the
+  // reasoning channel too on cloud-written turns (where a reasoning model actually authors its tags).
+  const digTagsToRun = offClock ? [] : [
+    ...require('./lib/dig').parseDigTags(thought || ''),
+    ...require('./lib/dig').parseDigTags(say || ''),
+    ...(replyWriter !== MODEL ? require('./lib/dig').parseDigTags(cloudThinking || '') : [])
+  ];
   // VISION OUT — <image-gen>/<draw>/<imagine> prompts she emitted → generate an image (gated OFF
   // until a provider key is set). Off the clock she still gets to make images (it's expressive).
   const imageGenToRun = [
@@ -7278,6 +7292,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   thoughtStripped = discordLib.stripTags(thoughtStripped);
   thoughtStripped = echoSuitLib.stripEchoTags(thoughtStripped);
   thoughtStripped = recallLib.stripRecallTags(thoughtStripped);
+  thoughtStripped = require('./lib/dig').stripDigTags(thoughtStripped);
 
   if (thoughtStripped) {
     db.insertTurn({
@@ -7318,6 +7333,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   sayStripped = discordLib.stripTags(sayStripped);
   sayStripped = echoSuitLib.stripEchoTags(sayStripped);
   sayStripped = recallLib.stripRecallTags(sayStripped);
+  sayStripped = require('./lib/dig').stripDigTags(sayStripped);
   sayStripped = require('./lib/vision').stripGenTags(sayStripped);   // <image-gen> tags don't render
   // LEAKED-DIRECTIVE GUARD: the injected instruction blocks ([ANSWER TO GIVE…], [DELIVER THIS…],
   // [Lucas asked for the list…]) are meant FOR her, not Lucas — but the 24B sometimes echoes them. The
@@ -7738,6 +7754,41 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         } catch (err) { console.error('[main] recall error:', err.message); }
       }
     })().catch(err => console.error('[main] recall async error:', err.message));
+  }
+
+  // Background: MID-CONVERSATION DIG (catalog §7, slice 4b) — each <dig> she emitted becomes a
+  // LINE OF INQUIRY born from the turn that asked (§6 L1: the return address rides the OBJECT).
+  // The first touch runs NOW on a pool slot if one is free — the reply already went out on the
+  // reserved slot, so chat never contends (concurrency ruling 2026-07-23: same-model unbounded).
+  // No free slot → the inquiry is BANKED and the autonomy tick advances it; the homecoming still
+  // fires on the first real finding (a cap may defer, never disappear). No tool-followup here —
+  // her reply already spoke; a dig is never material for THIS turn.
+  if (digTagsToRun.length > 0) {
+    (async () => {
+      const digLib = require('./lib/dig');
+      const inquiry = require('./lib/inquiry');
+      if (digTagsToRun.length > 2) console.log(`[dig] ${digTagsToRun.length} dig tags in one turn — forking the first 2 (degenerate-output guard; dropped questions are mined by the nightly harvest)`);
+      // Recent talk rides the touch as context — the dig researches the asked thing, disambiguated
+      // by the conversation it was born in. Bounded; fail-soft to no context.
+      let convoContext = '';
+      try {
+        const rows = db.getDb().prepare(`SELECT speaker, content FROM turns WHERE session_id = ? AND speaker IN ('user','ai_said') ORDER BY id DESC LIMIT 10`).all(sessionId).reverse();
+        convoContext = 'THE CONVERSATION THIS DIG WAS FORKED FROM (most recent turns):\n' +
+          rows.map((t) => `${t.speaker === 'user' ? 'Lucas' : 'Zoe'}: ${String(t.content).slice(0, 300)}`).join('\n').slice(0, 2600);
+      } catch {}
+      for (const t of digTagsToRun.slice(0, 2)) {
+        try {
+          const o = inquiry.open({ question: t.question, bornFrom: digLib.bornFrom(userTurnRow && userTurnRow.id, userMessage) });
+          if (!o.id) { console.log(`[dig] open refused: ${o.reason}`); continue; }
+          try {
+            const mrow = db.insertMonologue({ content: `I forked a dig from the conversation — inquiry #${o.id}: ${t.question}`, model: 'dig', type: 'reading', query: `dig #${o.id}` });
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: mrow.id, ts: mrow.ts, content: `(forked a dig — inquiry #${o.id})`, type: 'reading', query: `dig #${o.id}` });
+          } catch {}
+          console.log(`[dig] forked from conversation turn #${userTurnRow && userTurnRow.id} → inquiry #${o.id} "${t.question.slice(0, 70)}"`);
+          runConversationDig(o.id, { convoContext }).catch((e) => console.error('[dig] async run failed:', e.message));
+        } catch (err) { console.error('[dig] fork error:', err.message); }
+      }
+    })().catch(err => console.error('[dig] async error:', err.message));
   }
 
   // Background: VISION OUT — dispatch <image-gen> prompts → create an image (gated OFF until a
@@ -8907,10 +8958,21 @@ async function autonomyTick() {
       }
       if (env) {
         inquiry.writeBack(inqId, env, { nowMs: now });
+        let closedStatus = null;
         if (env.status === 'answered' || env.status === 'dead_end') {
           const c = inquiry.close(inqId, { kind: env.status === 'dead_end' ? 'dead_end' : 'answered', answer: env.learned, nowMs: now });
-          if (c.closed) console.log(`[autonomy] inquiry #${inqId} ${c.status} after touch ${row.touches + 1}${c.docId ? ` → doc #${c.docId}` : ''}`);
+          if (c.closed) { closedStatus = c.status; console.log(`[autonomy] inquiry #${inqId} ${c.status} after touch ${row.touches + 1}${c.docId ? ` → doc #${c.docId}` : ''}`); }
         }
+        // 4b HOMECOMING FROM THE TICK: a conversation-born inquiry whose fork found no free slot
+        // (or whose first touch came up dry) was banked here — its first REAL finding still
+        // returns to the talk that asked. The address rides the OBJECT (born_from), not the code
+        // path that happened to produce the finding. Delivered once; later touches stay quiet.
+        try {
+          const digLib = require('./lib/dig');
+          if (digLib.isConversationBorn(row) && !row.dig_delivered_ts && digLib.hasRealFinding(env)) {
+            await announceDigReturn(inquiry.get(inqId) || row, env, { closedStatus });
+          }
+        } catch (e) { console.error('[dig] tick homecoming failed:', e.message); }
       }
       let expectVerdict = null;
       try { expectVerdict = await autonomy.verifyExpect({ decision, opRes: res }); } catch {}
@@ -10633,6 +10695,90 @@ async function announceResearchComplete(focus, done) {
     try { require('./lib/blackboard').append({ source: 'research', kind: 'utterance', refTable: 'turns', refId: row.id, content: msg }); } catch {}
     console.log(`[directed] announced research completion to chat (#${focus && focus.id}, ${n} sections, ${msg.length}c)`);
   } catch (e) { console.error('[directed] announce failed:', e.message); }
+}
+
+// MID-CONVERSATION DIG, the run (slice 4b) — one bounded inquiry touch on a POOL slot, mirroring
+// the tick's advance-inquiry mechanics (touchBrief → operator → validated write-back → honest
+// close), then the homecoming. The reserved chat slot is never touched; no free pool slot → the
+// inquiry is already open, the tick advances it, and its first real finding still comes home
+// (announceDigReturn is called from BOTH paths — the address rides the object, not the code path).
+async function runConversationDig(inqId, { convoContext = '' } = {}) {
+  const inquiry = require('./lib/inquiry');
+  const board = require('./lib/board');
+  const digLib = require('./lib/dig');
+  let slot = null, boardId = null;
+  const row = inquiry.get(inqId);
+  if (!row) return;
+  try {
+    try { slot = board.acquireCloudSlot({ lane: 'dig' }); } catch {}
+    if (!slot) {
+      console.log(`[dig] deferred: no-free-slot — inquiry #${inqId} banked; the tick will advance it and the finding still comes home`);
+      return;
+    }
+    try { boardId = board.start({ lane: 'dig', kind: 'inquiry', target: `#${inqId} ${String(row.question).slice(0, 60)}`, note: `forked from the conversation; on ${slot}` }).id; } catch {}
+    const brief = digLib.digHeader(row) + '\n\n' + inquiry.touchBrief(row);
+    const res = await runCloudOperator({ userMessage: brief, context: convoContext, task: true, autonomous: true });
+    try { board.beat(boardId); } catch {}
+    let env = null;
+    if (res && res.answer) {
+      try {
+        env = await require('./lib/cloud_logic').ask({
+          task: 'inquiry_writeback', v: 1,
+          input: { question: row.question, run: String(res.answer).slice(0, 6000) },
+          want: inquiry.WRITEBACK_WANT, validate: inquiry.validateWriteback, numPredict: 900, think: false,
+        });
+      } catch (e) { console.error('[dig] write-back failed:', e.message); }
+    }
+    let closedStatus = null;
+    if (env) {
+      inquiry.writeBack(inqId, env, { nowMs: Date.now() });
+      if (env.status === 'answered' || env.status === 'dead_end') {
+        const c = inquiry.close(inqId, { kind: env.status === 'dead_end' ? 'dead_end' : 'answered', answer: env.learned, nowMs: Date.now() });
+        if (c.closed) closedStatus = c.status;
+      }
+    }
+    // The homecoming — ALWAYS from this path (she forked it because the talk asked; coming back
+    // empty-handed audibly beats the old disease of finishing work silently). A dry continue
+    // leaves dig_delivered_ts unset, so the first REAL finding from a later tick still returns.
+    await announceDigReturn(inquiry.get(inqId) || row, env, { closedStatus });
+    try { board.finish(boardId, { status: env ? 'done' : 'failed', note: env ? `touch wrote back (${env.status})` : 'no write-back — the trail carries the miss' }); } catch {}
+    console.log(`[dig] touch complete — inquiry #${inqId}${env ? ` (${env.status})` : ' (no write-back)'}`);
+  } catch (e) {
+    console.error('[dig] run failed:', e.message);
+    try { board.finish(boardId, { status: 'failed', note: String(e.message).slice(0, 120) }); } catch {}
+  } finally {
+    try { if (slot) board.release(slot); } catch {}
+  }
+}
+
+// The dig's return to the talk that asked — same proven door as research announcements (insertTurn
+// unprompted + chat:complete). Voice-written when the cloud is reachable, grounded HARD in the
+// write-back; deterministic fallback otherwise. Marks delivery ONLY on a real finding/closure, so
+// a "still digging" return keeps the homecoming owed. Fully fail-soft.
+async function announceDigReturn(row, env, { closedStatus = null } = {}) {
+  try {
+    const sid = currentSessionId;
+    if (!sid || !row) return false;
+    const digLib = require('./lib/dig');
+    const uname = (() => { try { return db.getMeta('user_name') || 'Lucas'; } catch { return 'Lucas'; } })();
+    let msg = digLib.returnFallback({ question: row.question, env, closedStatus });
+    try {
+      let persona = ''; try { persona = String(require('./lib/context').BASE_PERSONA || '').replaceAll('[user]', uname); } catch {}
+      const p = digLib.returnPromptParts({ question: row.question, env, uname });
+      const out = await condenseComplete([{ role: 'system', content: `${persona}\n\n${p.sys}` }, { role: 'user', content: p.user }], { numPredict: 400 });
+      const cleaned = String(out || '').replace(/^\s*(okay|alright|sure|so)[,:]?\s*/i, '').replace(/<\/?[a-z_-]+>/gi, '').trim();
+      if (cleaned.length > 40) msg = cleaned;
+    } catch (e) { console.error('[dig] return voice gen failed:', e.message); }
+    const t = db.insertTurn({ sessionId: sid, speaker: 'ai_said', content: msg, model: 'dig', unprompted: 1 });
+    try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
+    try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: t.id, truncated: 0, unprompted: true, say: msg }); } catch {}
+    try { require('./lib/blackboard').append({ source: 'dig', kind: 'utterance', refTable: 'turns', refId: t.id, content: msg }); } catch {}
+    if (digLib.hasRealFinding(env)) {
+      try { db.getDb().prepare('UPDATE inquiries SET dig_delivered_ts = ? WHERE id = ?').run(Date.now(), row.id); } catch (e) { console.error('[dig] delivery mark failed:', e.message); }
+    }
+    console.log(`[dig] returned to the conversation — inquiry #${row.id} (${msg.length}c${closedStatus ? `, ${closedStatus}` : env ? `, ${env.status}` : ', no write-back'})`);
+    return true;
+  } catch (e) { console.error('[dig] return failed:', e.message); return false; }
 }
 
 // Build the CURRENT-or-last research Track for the deliverable-query path (Slice 1): the active directed

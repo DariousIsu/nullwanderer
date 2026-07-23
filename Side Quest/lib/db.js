@@ -137,6 +137,10 @@ const MIGRATIONS = [
     answer TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status, last_touched_ts)`,
+  // MID-CONVERSATION DIG (slice 4b — lib/dig.js). Set when a conversation-born inquiry's first
+  // REAL finding is announced back into the chat that asked. NULL = the homecoming is still owed,
+  // so a later tick-advanced finding still returns to the talk (§6 L1: the address rides the object).
+  `ALTER TABLE inquiries ADD COLUMN dig_delivered_ts INTEGER`,
   `CREATE INDEX IF NOT EXISTS idx_monologue_type_ts ON monologue(type, ts)`,
   `CREATE TABLE IF NOT EXISTS commitments (
     id INTEGER PRIMARY KEY,
