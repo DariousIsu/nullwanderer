@@ -1220,7 +1220,7 @@ async function _runOneTick() {
           try {
             const pm = /\bnext steps?\b\s*[:—-]\s*([\s\S]{10,400}?)(?:<wonder>|$)/i.exec(st);
             if (pm) {
-              const plan = pm[1].replace(/\s+/g, ' ').trim().slice(0, 250);
+              const plan = pm[1].replace(/\s+/g, ' ').replace(/^[*#>\s]+/, '').trim().slice(0, 250);
               let bank = []; try { bank = JSON.parse(db.getMeta('autonomy.harvest_recent') || '[]'); } catch {}
               const dup = bank.some((e) => (e.leads || []).some((l) => String(l).toLowerCase() === plan.toLowerCase()));
               if (plan && !dup) {
