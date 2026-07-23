@@ -514,3 +514,56 @@ loses a step, never the run.
 "streams back in so perfectly" — not smarter models, but an address on every result, an
 envelope on every dispatch, a named join on every fan-out, failures in the same mailbox, and a
 handle on every summary.*
+
+---
+
+## 7. The needs lens (Lucas, 2026-07-23) — the program re-read against what it is FOR
+
+His words (saved verbatim in auto-memory `how-lucas-works`): brainstorming and tangents are
+normal — *"the help I need is taking all of it and pulling real materials out of it"*; connect
+the dots and tell the bigger story; *forecast into the future* with the interconnected thought;
+*better smarter reports*; *learning conversations where the AI is actively searching and growing
+as we talk*; the program *taking better care of its own memory and dedicating resources in a
+logical and organized way*.
+
+**The one diagnosis, across all six needs: the program is magnificent at TAKING IN and KEEPING,
+and thin at PULLING OUT and HANDING BACK.** Intake ≫ harvest, storage ≫ synthesis, record ≫
+return. Each need, measured:
+
+| Need | Strongest today | The gap | Serves it |
+|---|---|---|---|
+| N1 brainstorm → materials | The riff is protected (`lib/brainstorm.js` explicit-commit + muse detection); conversations become durable objects; `lib/track.js` answers deliverable queries — for DIRECTED runs | Nothing HARVESTS a filed conversation. Tangents are gated as noise in the room and then never mined in the record; the transcript is kept, the YIELD isn't | **O0.h below** + O5 |
+| N2 dots → bigger story | The deepest machinery in the program (KG, fusion gate, corroboration, wells, temporal substrate) | The BRIDGES: ST↔LT joined by 1 edge, 67.5k isolated nodes, zero org research lane, contacts trapped short-term — dots connect within silos, and the bigger story lives on bridges. And nothing WALKS a subgraph and writes its story | bridge defects (memory index) · O0 inquiries close WITH a story artifact · O5 |
+| N3 forecast from thought | The election vertical is genuinely strong (435+35 chain, Brier 0.115) | The graph→forecast wire is thin: encounters/events don't feed features; scenario engine designed, not built; a general "what happens next on X" has no path | O0 (forecast-shaped inquiry closes) · scenario engine |
+| N4 smarter reports | packaging + brand + source-reachability + the editor's two lanes | A report REORGANIZES a markdown doc; it never QUERIES the graph (corroboration status, timeline, opposing sources) — the "smarter" half is N2's synthesis gap wearing a suit | O5 + O6 + N2 |
+| N5 learning conversations | Turn retrieval ladder; mentions land in the graph DURING chat; brainstorm pulls one grounded bit into the riff | Mid-chat search is crammed into turn latency (operator 4 steps/45s); she cannot fork a dig and keep talking; what she learns rarely loops back into talk | **MID-CONVERSATION DIG below** |
+| N6 memory self-care + logical resources | Passes, dedup lanes, decay, the board, the maintain move | Resources are dedicated by TIMERS, not value (boot40: ~800 code-picked moves, 0 reasoned choices); failures invisible (§6 L4); 24.6k dedup stalled; .gov promotion starved | O0 conductor + L4 + maintain expansion |
+
+### O0.h — CONVERSATION HARVEST (new sub-organ of O0; the need he named)
+
+Ride the EXISTING nightly conversation promote: each filed window gets one structured pass →
+MATERIALS, each with a [dN] handle back to the window: inquiry leads (→ O0, `born_from:
+conversation`), report seeds (→ tracks/canvas), decisions and instructions (→ directives,
+conservative detection — its header's over-capture warning stands), factual claims (→ the
+existing decompose/encounter path). The anti-tangent gates stay exactly as they are — they
+protect the ROOM; the harvest runs later, on the OBJECT. The rule in one line: **a tangent is
+feedstock, not noise — gate it in the room, mine it in the record.** Proof: a rambling evening
+session yields, by morning, 2-3 named materials on the board ("from last night: lead X, seed Y")
+— each traceable to the minute it was said.
+
+### MID-CONVERSATION DIG (new; unlocked by his 2026-07-23 concurrency ruling)
+
+The ruling (recorded in `program-not-context`): ≤3 DISTINCT models in flight; same-model
+concurrency unbounded. That dissolves the old constraint that made mid-chat search cram into
+turn latency. The organ: a chat turn may FORK a bounded same-model dig — mechanically an O0
+inquiry touch with `origin = this conversation` — while the reply goes out on the reserved slot.
+The return lands minutes later through the open-question/engage surface, addressed to the
+conversation object (§6 L1): *"about the X you asked — here's what I found."* This is N5 whole:
+she keeps talking AND goes looking, and the finding comes home to the talk that asked. The
+ruling also answers O0's flagged slot-priority call — his focus, her inquiry, and chat may
+coexist.
+
+**Needs re-rank:** O0 + O0.h serve N1/N2/N3/N5/N6 — rank 0 confirmed, harvest joins slice 4;
+MID-DIG = slice 4b (needs O0's origin machinery); O5 rises for N4; the shelf stays
+infrastructure for all. The catalog's engineering ranks (§4) stand; this section is the
+tiebreaker whenever they conflict: **the needs list wins.**
