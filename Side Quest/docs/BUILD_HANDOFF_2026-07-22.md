@@ -50,17 +50,20 @@ whatever the sentence mood; after opinion/social, before the creative gate. Veri
 code: the live ask, verbatim, → factual. LESSON: every prior war-fall fix sat BEHIND this gate —
 a circuit is only as live as its shallowest router. (Overnight boot54 died with the machine;
 Lucas's 09:50 restart truncated boot54.log — forensics rode the turns table + code.)
-**⭐THE FICTION ENGAGE (boot55 10:06, fixed 40d37bd, live BOOT56 ~10:15)**: an unprompted engage
-spoke a "June 2025 CSET Silicon Twist brief on memristor rollout … for today's 'Fault Lines of AI
-Safety' talk" — the brief is real but June 2022 and LUCAS's own canvas drop (claimed as her
-find); the memristor claim fuses his second drop into something the brief never says (the fusion
-disease in the SPEECH lane, invisible to the write-back gate); the talk exists NOWHERE (born in
-her own reflection, echoed by an agent event — the only real "fault lines" she holds are
-geological). ENGAGE GROUNDING GATE: say anchors must ground in manifest.text, missing NUMBER
-anchors block outright, the block writes history. 🚨DEEPER OPEN DEFECT: a reflection can invent a
-real-world commitment and re-enter state as fact (imagination-as-commitment). Also noted:
-[heartbeat][say] voiced a stock-newsletter email 3 min after the engage — grounded but chatty;
-the worth-it bar is Lucas's calibration call.
+**⭐THE 10:06 ENGAGE (gate 40d37bd; diagnosis CORRECTED by Lucas 10:50)**: the unprompted engage
+pinned a CSET brief to "today's 'Fault Lines of AI Safety' talk". THE TALK IS REAL — Lucas's
+gcal, that day 13:00-13:45; she read it OFF HIS CALENDAR (ambient awareness working as designed).
+The original "fiction" verdict was MY sweep failure: I searched only sq.db text tables and
+asserted absence — the calendar is its own surface and the project rule is calendar FIRST. The
+"reflection invents commitments" defect is RETRACTED (the reflection tracked a real event).
+WHAT STANDS: the brief is June 2022 not 2025 and was Lucas's own canvas drop claimed as "I just
+found" (provenance inversion); the memristor claim fuses his second drop into the brief's mouth.
+The ENGAGE GROUNDING GATE stands — it still blocks this exact say correctly ("2025" grounds
+nowhere; the date is genuinely false). Also noted: [heartbeat][say] voiced a stock-newsletter
+email 3 min after the engage — grounded but chatty; the worth-it bar is Lucas's calibration call.
+⭐VERIFICATION RULE for this lane: before declaring any claim of hers ungrounded, sweep the
+AMBIENT surfaces too (calendar, week context, canvas) — never assert absence from text tables
+alone.
 WATCH boot56: `cognition → enriched:news` on the Iran retest · `BLOCKED ungrounded say` when the
 engage lane tries fiction again · harvest-born homecoming on an answered close · REFUSED lines. The war-question retest is STILL OWED (last asking
 was 23:36 on boot48, pre-news-tier — the honest-miss proof, not the tier's test): "what's the
