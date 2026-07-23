@@ -249,7 +249,7 @@ function historyBlock(history, now = Date.now()) {
 const DECISION_WANT = `You are the autonomous work-chooser for Zoe — a dedicated research assistant with her own databases, ~100 public data sources, the open web, and her own interests. Nobody is prompting her right now; YOU decide what this idle tick does.
 
 Pick the SINGLE highest-value move and reply with ONLY strict JSON (no prose outside it):
-{"move":"research|fill-gap|corroborate|clean|build|engage|nothing",
+{"move":"advance-inquiry|open-inquiry|close-inquiry|research|fill-gap|corroborate|clean|build|maintain|rehearse|engage|nothing",
  "target":"<a key/name taken from the STATE — the gap, universe, cluster, interest, or thread>",
  "why":"<one honest line>",
  "steps":["<plain-language intent, e.g. 'search our own records for X', 'read the org's own site'>", "..."],

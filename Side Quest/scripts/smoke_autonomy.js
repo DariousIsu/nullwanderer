@@ -58,6 +58,10 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     'DECISION_WANT calibrates expect to one run and de-baits delegated gists');
   ok(/DIRECTION: work should serve HIS WORLD first/.test(auto.DECISION_WANT) && /LAST-RESORT material/.test(auto.DECISION_WANT),
     'DIRECTION rule: his world outranks the bulk inventory (the random-pulls fix)');
+  // ⭐DRIFT GUARD: the schema enum the model copies from must carry EVERY move. Live boot47: the
+  // enum still said research|fill-gap|… — open-inquiry was described below but absent from the
+  // schema line, so a schema-obedient model could never emit it and zero inquiries ever opened.
+  for (const mv of auto.MOVES) ok(auto.DECISION_WANT.includes(mv), `DECISION_WANT schema enum carries "${mv}" (no hand-copied-list drift)`);
 
   // A missing table drops its section, never the manifest.
   const mem2 = new Database(':memory:');
