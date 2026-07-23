@@ -129,4 +129,36 @@ function pass({ deps = {}, gapMs = GAP_MS, maxLand = 10, scanLimit = 4000, nowMs
   return out;
 }
 
-module.exports = { GAP_MS, WATERMARK_KEY, MIN_TURNS, MIN_CHARS, findClosedWindows, worthLanding, refFor, renderConversation, pass };
+// ---- O0.h: THE HARVEST (catalog §7 — "gate it in the room, mine it in the record") -----------------
+// Lucas, verbatim: "brainstorming and tangents are normal for me — the help I need is taking all of
+// it and pulling real materials out of it." The room-side gates (brainstorm.js) correctly keep a
+// musing from detonating a research run — but the record side never mined the transcript, so the
+// yield died with the gating. This is the mining half: when a conversation object PROMOTES, one
+// structured call pulls the materials out — inquiry leads, report seeds, decisions, claims — each
+// banked with the conversation's [dN] handle back to the minute he said it. An honest empty is
+// first-class: most conversations yield nothing, and inventing materials would poison the feedstock.
+const HARVEST_WANT = `Mine this conversation transcript for REAL MATERIALS — things worth acting on later. Reply ONLY strict JSON:
+{"leads":["<a question worth a standing line of inquiry — full and specific>"],
+ "seeds":["<a report/paper/deliverable this conversation sketched or asked for>"],
+ "decisions":["<a decision or preference Lucas stated that should bind future work>"],
+ "claims":["<a factual claim worth verifying or banking>"]}
+Rules: only what is ACTUALLY in the transcript — his words, not your extrapolation. Small talk, status chat, and pleasantries yield {"leads":[],"seeds":[],"decisions":[],"claims":[]} — an honest empty beats invented materials. At most 4 per list.`;
+
+function validateHarvest(raw) {
+  try {
+    const m = str(raw).match(/\{[\s\S]*\}/);
+    if (!m) return { valid: false, error: 'no JSON object' };
+    const o = JSON.parse(m[0]);
+    const take = (a) => (Array.isArray(a) ? a : []).slice(0, 4).map((x) => str(x).replace(/\s+/g, ' ').trim().slice(0, 200)).filter((x) => x.length >= 8);
+    const out = { leads: take(o.leads), seeds: take(o.seeds), decisions: take(o.decisions), claims: take(o.claims) };
+    out.empty = !out.leads.length && !out.seeds.length && !out.decisions.length && !out.claims.length;
+    return { valid: true, value: out };
+  } catch (e) { return { valid: false, error: e.message }; }
+}
+
+// One banked entry per harvested conversation (rides meta autonomy.harvest_recent, rolling ≤8).
+function harvestBankEntry(docId, title, h, nowMs = Date.now()) {
+  return { ts: nowMs, docRef: docId, title: str(title).slice(0, 90), leads: h.leads, seeds: h.seeds, decisions: h.decisions, claims: h.claims };
+}
+
+module.exports = { GAP_MS, WATERMARK_KEY, MIN_TURNS, MIN_CHARS, HARVEST_WANT, findClosedWindows, worthLanding, refFor, renderConversation, pass, validateHarvest, harvestBankEntry };

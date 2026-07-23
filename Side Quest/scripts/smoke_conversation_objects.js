@@ -108,6 +108,16 @@ const turn = (id, ts, speaker, content) => ({ id, session_id: 1, ts, speaker, co
   const p6 = co.pass({ deps: { db: db6, land: goodLand }, nowMs: T0 + 400 * MIN });
   ok(p6.landed === 2 && p6.skipped === 1 && db6.meta.get(co.WATERMARK_KEY) === '5', 'unworthy window is skipped, not landed — and the pass moves on');
 
+  // --- O0.h: the harvest validator (honest empties are first-class) ---
+  const hv = co.validateHarvest('{"leads":["Which counties changed election boards since 2024?"],"seeds":[],"decisions":["the needs list wins over engineering ranks"],"claims":["Colorado task force sunset in 2024"]}');
+  ok(hv.valid && hv.value.leads.length === 1 && hv.value.decisions.length === 1 && !hv.value.empty, 'a real harvest validates with its materials');
+  const hvEmpty = co.validateHarvest('{"leads":[],"seeds":[],"decisions":[],"claims":[]}');
+  ok(hvEmpty.valid && hvEmpty.value.empty === true, 'an honest EMPTY harvest is first-class (small talk yields nothing)');
+  ok(co.validateHarvest('no json here').valid === false, 'garbage refuses');
+  ok(co.validateHarvest('{"leads":["hm"]}').valid && co.validateHarvest('{"leads":["hm"]}').value.empty === true, 'a too-short scrap is dropped, not banked');
+  const hb = co.harvestBankEntry(512, 'Conversation — Tue', hv.value, T0);
+  ok(hb.docRef === 512 && hb.ts === T0 && hb.leads.length === 1, 'the bank entry carries the [dN] handle + materials');
+
   // --- promotion recipe routes the new source ---
   ok(promote.recipeFor({ source: 'conversation' }).kind === 'conversation', "source 'conversation' → the save_conversation recipe");
   ok(promote.recipeFor({ source: 'research' }).kind === 'deliverable' && promote.recipeFor({ source: 'canvas_drop' }).kind === 'document',

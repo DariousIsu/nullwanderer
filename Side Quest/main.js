@@ -10334,6 +10334,24 @@ async function promoteDocumentsPass({ limit = 20 } = {}) {
           promoted++;
           try { emitKgActivity({ db: 'sidequest', kind: 'promote', anchor: String(doc.title || ('doc #' + doc.id)), count: 1 }); } catch (e) {}
           console.log(`[promote] conversation #${doc.id} "${String(doc.title || '').slice(0, 40)}" → Echo${echoDocId ? ` doc ${echoDocId}` : ' archive'}`);
+          // O0.h THE HARVEST (catalog §7) — mine the promoted conversation for MATERIALS: inquiry
+          // leads, report seeds, decisions, claims — each banked with the [dN] handle back to the
+          // conversation itself. An honest empty banks nothing. Fail-soft: a harvest miss never
+          // blocks promotion.
+          try {
+            const co = require('./lib/conversation_objects');
+            const h = await require('./lib/cloud_logic').ask({
+              task: 'conversation_harvest', v: 1,
+              input: { transcript: String(doc.body || '').slice(0, 60000) },
+              want: co.HARVEST_WANT, validate: co.validateHarvest, numPredict: 700, think: false,
+            });
+            if (h && !h.empty) {
+              let bank = []; try { bank = JSON.parse(db.getMeta('autonomy.harvest_recent') || '[]') || []; } catch {}
+              bank.push(co.harvestBankEntry(doc.id, doc.title, h));
+              db.setMeta('autonomy.harvest_recent', JSON.stringify(bank.slice(-8)));
+              console.log(`[harvest] conversation #${doc.id} → ${h.leads.length} lead(s), ${h.seeds.length} seed(s), ${h.decisions.length} decision(s), ${h.claims.length} claim(s)`);
+            }
+          } catch (e) { console.error('[harvest] failed (non-fatal):', e.message); }
         } else { failed++; console.error(`[promote] conversation #${doc.id} save_conversation failed:`, String((res && (res.text || res.error)) || '').slice(0, 160)); }
       } catch (e) { failed++; console.error(`[promote] conversation #${doc.id} failed:`, e.message); }
       continue;

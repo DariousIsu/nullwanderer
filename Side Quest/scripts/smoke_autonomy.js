@@ -134,6 +134,15 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   const man3 = auto.buildManifest({ db: memDb3, now: NOW });
   ok(/FINISHED DELEGATED WORK/.test(man3.text) && /LAMP roster brief/.test(man3.text), 'returned delegated work rides the tick manifest');
 
+  // --- O0.h: the conversation harvest rides the manifest with its [dN] handle ---
+  const harvestBank = JSON.stringify([{ ts: NOW, docRef: 512, title: 'Conversation — Tue, Jul 22', leads: ['Which states have standing AI task forces?'], seeds: ['hardware-evolution paper section on harness augmentation'], decisions: ['needs list outranks engineering ranks'], claims: [] }]);
+  const memDb4 = { getDb: () => mem2, getMeta: (k) => (k === 'autonomy.harvest_recent' ? harvestBank : null) };
+  const man4 = auto.buildManifest({ db: memDb4, now: NOW });
+  ok(/CONVERSATION HARVEST/.test(man4.text) && /\[d512\]/.test(man4.text) && /standing AI task forces/.test(man4.text),
+    'O0.h: mined materials ride the manifest with the [dN] handle back to the talk');
+  ok(/report seeds: hardware-evolution/.test(man4.text) && /his decisions: needs list outranks/.test(man4.text),
+    'seeds and decisions surface labeled');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

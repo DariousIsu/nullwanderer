@@ -138,6 +138,25 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
     return `• DEVELOPING STORIES YOU FOLLOW (what moved since you last saw it):\n${lines.join('\n')}`;
   });
 
+  grab('harvest', () => {
+    // O0.h — materials mined from promoted conversations (his tangents are FEEDSTOCK, never
+    // noise). Each entry carries the [dN] handle back to the conversation it came from; leads
+    // here are prime open-inquiry material with born_from naming the handle.
+    let items = [];
+    try { items = JSON.parse(dbm.getMeta('autonomy.harvest_recent') || '[]') || []; } catch {}
+    if (!Array.isArray(items) || !items.length) return '';
+    counts.harvestItems = items.length;
+    return `• CONVERSATION HARVEST (materials mined from your talks with Lucas — leads are prime open-inquiry material; cite the [dN] as born_from):\n`
+      + items.slice(-4).map((it) => {
+        const bits = [];
+        if (it.leads && it.leads.length) bits.push(`leads: ${it.leads.map((l) => `"${l}"`).join(' · ')}`);
+        if (it.seeds && it.seeds.length) bits.push(`report seeds: ${it.seeds.join(' · ')}`);
+        if (it.decisions && it.decisions.length) bits.push(`his decisions: ${it.decisions.join(' · ')}`);
+        if (it.claims && it.claims.length) bits.push(`claims to verify: ${it.claims.join(' · ')}`);
+        return `   - [d${it.docRef}] ${it.title}: ${bits.join(' | ')}`;
+      }).join('\n');
+  });
+
   grab('inquiries', () => {
     // Lines of inquiry (lib/inquiry, O0) — the continuity surface: what is open, where each
     // stands, what its own last touch said to do next. The decider's DEFAULT is advancing one.
