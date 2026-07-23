@@ -20,12 +20,21 @@ nouns] checked against the read text at BOTH banking doors, captureRecovered + m
 ungrounded → blocked, no supersede, log names the door) · Echo refusals now TEACH THE LANE SWITCH ("do NOT retry Echo;
 <web-open> or say the miss") · the promise-guard's empty-final-say hole (lastSay threads the
 recursion) · envelope echo stripped from the thought rail · expect judge grades the INCREMENT.
-**BOOT50 LIVE (07-23 ~00:45)**: runs EVERYTHING — 07007bd NEWS TIER + e921645 update-rows +
-a2c780e grounding gate. The war-question retest is STILL OWED (last asking was 23:36 on boot48,
-pre-news-tier — the honest-miss proof, not the tier's test): "what's the latest on the war?" must
-answer from her own stream in one turn (`enriched:news` in the log). BOOT49 PROOFS: inquiry #1
-advanced touch 2 AND touch 3 (the direction loop holds across boots) · email kill-switch pre-gate
-fired live ("autonomous email reply suppressed").
+**BOOT51 LIVE (07-23 ~00:30)**: runs EVERYTHING — 07007bd NEWS TIER + e921645 update-rows +
+a2c780e grounding gate + 624b3e0 BOUNDED BITE. The war-question retest is STILL OWED (last asking
+was 23:36 on boot48, pre-news-tier — the honest-miss proof, not the tier's test): "what's the
+latest on the war?" must answer from her own stream in one turn (`enriched:news` in the log).
+BOOT49/50 PROOFS: inquiry #1 advanced touches 2-4 (the direction loop holds across boots) · email
+kill-switch pre-gate fired live ("autonomous email reply suppressed").
+**⭐PHASE 3 DIAGNOSIS (`624b3e0`)**: the MET circuit WAS firing on inquiry touches — INVISIBLY
+(the chose= line never printed the verdict; now it does) — and inquiry #1's trail held 3 honest
+NOT-mets. The judge wasn't the bug: the write-back authored "search all 64 parish websites" as
+next_step, the decider echoed that scale into expect, and no single 4-12 step run can clear it.
+The 0-for-N disease had moved UPSTREAM from the judge to the expectation's SOURCE. Fix = the
+bounded bite, on the schema line (WRITEBACK_WANT next_step + touchBrief + DECISION_WANT bullet).
+Also explains evidence=[] after 3 touches: whole-remainder briefs invite memorized-table dumps
+with no sources; a bite makes opening-the-source feasible in-budget. WATCH: touch 5+ should land
+the first `expect MET` → first procedure born.
 **DATA-STREAM SWEEP (complete)**: 2 gotchas — news_story_updates (fixed) + inbound_messages
 13,620 emails unreadable from any answering surface (chip filed w/ the _enrichNews template).
 All other stores verified reachable or already-indexed defects.
