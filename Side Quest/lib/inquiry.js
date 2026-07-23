@@ -137,11 +137,16 @@ function heldSourceHint(row, { deps = {} } = {}) {
       // Match either direction: the candidate IS a title, or a (>=8-char) title is CONTAINED in the
       // candidate (the space-greedy match pulls leading words — "Retrieve the <file>.xls" — so the
       // real title sits inside it). Prefer the most specific (longest) title.
-      try { doc = d.prepare("SELECT id, LENGTH(body) AS len FROM documents WHERE title = ? OR (LENGTH(title) >= 8 AND ? LIKE '%' || title || '%') ORDER BY LENGTH(title) DESC LIMIT 1").get(name, name); } catch {}
+      try { doc = d.prepare('SELECT id, title, LENGTH(body) AS len, substr(body,1,2400) AS head FROM documents WHERE title = ? OR (LENGTH(title) >= 8 AND ? LIKE \'%\' || title || \'%\') ORDER BY LENGTH(title) DESC LIMIT 1').get(name, name); } catch {}
       if (!doc || !doc.id) continue;
       let decomposed = false;
       try { decomposed = d.prepare('SELECT 1 FROM encounters WHERE source_ref = ? LIMIT 1').get(`doc:${doc.id}`) != null; } catch {}
-      return `⚠️ YOU ALREADY HOLD "${name}" as doc #${doc.id} (${Math.round((doc.len || 0) / 1000)}k chars${decomposed ? ', already decomposed into your entity graph' : ''}). READ YOUR OWN COPY — do NOT re-download it: query it with localdb (SELECT substr(body,1,3000) FROM documents WHERE id=${doc.id}, paged as needed) or search your graph for the entities it produced. Re-fetching a file you already ingested is wasted work and will not advance the question.`;
+      // INJECT THE CONTENT, don't just point at it (boot73 touch 27: the operator SAW "query localdb
+      // WHERE id=8443" and ignored it — it pattern-matches "find officials" to web research and won't
+      // self-serve the held doc). Putting the actual rows in the brief makes them impossible to miss;
+      // the operator reads a source it can SEE, and pages the rest via localdb only if it needs more.
+      const excerpt = str(doc.head).replace(/\s+\n/g, '\n').slice(0, 2000);
+      return `⚠️ YOU ALREADY HOLD THE ANSWER SOURCE. "${doc.title}" is doc #${doc.id} in your OWN store (${Math.round((doc.len || 0) / 1000)}k chars${decomposed ? ', decomposed into your entity graph' : ''}) — do NOT re-download or re-scrape it. Here is the START of it; page the rest with localdb (SELECT substr(body, N, 3000) FROM documents WHERE id=${doc.id}) or query your graph for the entities it produced:\n--- doc #${doc.id} (first ${excerpt.length} chars) ---\n${excerpt}\n--- end excerpt ---\nUse THIS to answer. If it covers the question, CLOSE ANSWERED citing doc #${doc.id}. Re-fetching what you already hold is wasted work.`;
     }
     return null;
   } catch { return null; }

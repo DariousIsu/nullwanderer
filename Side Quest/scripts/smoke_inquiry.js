@@ -94,12 +94,14 @@ const NOW = 1753400000000;
 
   // --- HELD-SOURCE HINT (boot73: #1 planned to re-download a roster it already held+decomposed) ---
   {
-    const doc = db.insertDocument({ title: 'LA-parish-officials-2026.xls', body: 'Parish,Office,Name\nCaddo,Sheriff,Whitehorn', source: 'browser_download' });
+    const doc = db.insertDocument({ title: 'LA-parish-officials-2026.xls', body: 'Parish,Office,Name\nCaddo,Sheriff,Henry Whitehorn\nOrleans,Clerk,Chelsey Napoleon', source: 'browser_download' });
     // decomposed: give it an encounter
     try { require('../lib/encounters').record({ object_type: 'gov', object_label: 'Caddo Sheriff', claim_class: 'existence', source_kind: 'document', source_ref: `doc:${doc.id}`, origin_host: 'x', content_hash: 'h' }); } catch {}
     const hint = I.heldSourceHint({ next_step: 'Retrieve the LA-parish-officials-2026.xls file via its direct download URL and extract the missing rows', gist: '', evidence: '[]' }, { deps: { db } });
-    ok(hint && new RegExp(`doc #${doc.id}`).test(hint) && /READ YOUR OWN COPY/.test(hint) && /decomposed/.test(hint),
-      'heldSourceHint: a named file that is already a landed+decomposed doc → "read your own copy, do not re-download"');
+    ok(hint && new RegExp(`doc #${doc.id}`).test(hint) && /ALREADY HOLD THE ANSWER SOURCE/.test(hint) && /decomposed/.test(hint),
+      'heldSourceHint: a named file that is already a landed+decomposed doc → "you already hold the answer source"');
+    ok(hint && /Henry Whitehorn/.test(hint) && /Chelsey Napoleon/.test(hint) && /CLOSE ANSWERED/.test(hint),
+      'heldSourceHint: INJECTS the doc content into the brief (touch 27 ignored a pointer — the rows must be impossible to miss) + steers to close');
     ok(I.heldSourceHint({ next_step: 'Search Ballotpedia for the Ohio governor race results', gist: '', evidence: '[]' }, { deps: { db } }) === null,
       'heldSourceHint: no file named / nothing held → silent (no false hint)');
     ok(I.heldSourceHint({ next_step: 'Download unheld-roster-9999.csv from the county site', gist: '', evidence: '[]' }, { deps: { db } }) === null,
