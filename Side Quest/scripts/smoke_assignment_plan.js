@@ -84,10 +84,11 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
     'and she is told what to say instead');
   ok(/Partial and cited beats complete and promised/.test(a), 'partial-and-real beats whole-and-imaginary');
 
-  // SAFETY: delegation is a one-way door — nothing polls agent_inbox, so a delegated assignment
-  // leaves and never returns. Recommending it would manufacture the very failure this fixes.
+  // SAFETY (updated 2026-07-22): delegation RETURNS now (_drainAgentInbox, 895c2fc) — but async
+  // (~5 min), and an assignment is this-turn in-canvas work. The plan still must not hand the
+  // deliverable itself to a background agent.
   ok(!/echo-delegate/.test(a),
-    'SAFETY: the assignment plan does NOT send work to <echo-delegate> — nothing collects its results');
+    'SAFETY: the assignment plan does NOT send the deliverable to <echo-delegate> — returns are async, assignments are this-turn');
 
   ok(!/THIS IS AN ASSIGNMENT/.test(q), 'an ordinary question gets none of this');
   ok(a.length > q.length, 'the assignment plan is strictly additive');
@@ -108,8 +109,8 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
     'and duplication is solved by lifting it OUT of identity, not by withholding it');
   ok(/assignment: turnRoute && \(turnRoute\.route === 'task' \|\| isAssignment\)/.test(m),
     'the router\'s existing assignment signal now reaches the plan');
-  ok(/does NOT report back, so never use it for something Lucas is waiting on/.test(m),
-    'SAFETY: the manifest labels the background agent honestly as fire-and-forget');
+  ok(/results return to your stream within ~5 minutes \(never this turn\)/.test(m),
+    'the manifest labels the background agent honestly: ASYNC returns, never this-turn material');
 
   // ⭐ THE BLOCK CONTRACT. Live 2026-07-21: given the tools and an assignment plan she DID open a
   // canvas tab — then guessed the block. `block_type:"text"` → "invalid block_type: text", the retry

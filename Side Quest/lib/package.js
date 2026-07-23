@@ -145,9 +145,10 @@ function buildPlan({ intent = null, depth = {}, mustCite = false, unresolved = [
     lines.push('• GO DEEP, NOT WIDE. One search that you actually READ beats five you only opened. '
       + 'When a source is on-point, open it and pull the substance out; a link you did not read is '
       + 'not research.');
-    // Deliberately does NOT recommend <echo-delegate>: nothing in this codebase polls agent_inbox, so
-    // a delegated run is a one-way door — the work leaves and no result ever returns. Sending an
-    // assignment there would manufacture exactly the invisible-work failure this block exists to fix.
+    // Deliberately does NOT recommend <echo-delegate> for ASSIGNMENTS — not because results vanish
+    // (that was true once; _drainAgentInbox has polled agent_inbox since 895c2fc and returns land as
+    // readings + manifest items) but because returns are ASYNC (~5 min) and an assignment is
+    // this-turn, in-canvas work. Background side-gathering may delegate; the deliverable may not.
     // ⭐ THE DOCUMENT IS BUILT IN THREE STAGES, which is how the autonomous research runs already
     // work (a `contract` block stating the task and plan, then section blocks that fill in as work
     // lands). An assignment from Lucas gets the same treatment — with the third stage, the finished

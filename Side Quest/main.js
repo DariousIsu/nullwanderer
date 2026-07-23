@@ -6892,10 +6892,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // a half-finished document gets dressed up as a finished one — so the entry exists to say
             // "not yours", not to offer it.
             { key: 'packaging / branding', label: 'NOT YOURS TO DO — write plain markdown and stop. Lucas asks for packaging when the content is right, and the house style is applied then. Say it is ready for packaging; never format or brand it yourself', how: '(operator-triggered — no tag)' },
-            // Listed honestly: nothing polls agent_inbox, so a delegated run never reports back.
-            // Offering it as an equal option to the canvas is how an assignment gets "handed off"
-            // into silence and then described as underway.
-            { key: 'background agent', label: 'fire-and-forget only — it does NOT report back, so never use it for something Lucas is waiting on', how: '<echo-delegate name="AGENT">the full task spec</echo-delegate>' },
+            // Listed honestly — and the honesty CHANGED (895c2fc): _drainAgentInbox now polls
+            // agent_inbox (~5 min), so a delegated run's results DO come home (readings + FINISHED
+            // DELEGATED WORK in the tick manifest). Still async — never material for THIS turn, so
+            // an assignment Lucas is waiting on stays in-canvas, in-turn.
+            { key: 'background agent', label: 'ASYNC — results return to your stream within ~5 minutes (never this turn); use it for background gathering, never for what Lucas is waiting on right now', how: '<echo-delegate name="AGENT">the full task spec</echo-delegate>' },
           ] });
         } catch (e) { console.error('[main] manifest failed:', e.message); }
         const plan = pkg.buildPlan({
