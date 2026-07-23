@@ -157,6 +157,27 @@ const MIGRATIONS = [
     created_ts INTEGER NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_monologue_type_ts ON monologue(type, ts)`,
+  // THE SITE LEDGER (2026-07-23, Lucas: "doesn't she capture the page on first land anyway?…
+  // I would rather get explained that a site is taking longer to digest than realize we took 500
+  // calls to interact with the landing page"). Every successful capture RECORDS here; autonomous
+  // navigation CONSULTS it before re-fetching. site_plans holds the per-host digest checklist.
+  `CREATE TABLE IF NOT EXISTS site_visits (
+    url TEXT PRIMARY KEY,
+    host TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'page',
+    first_ts INTEGER NOT NULL,
+    last_ts INTEGER NOT NULL,
+    visits INTEGER NOT NULL DEFAULT 1,
+    chars INTEGER,
+    doc_id INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_site_visits_host ON site_visits(host)`,
+  `CREATE TABLE IF NOT EXISTS site_plans (
+    host TEXT PRIMARY KEY,
+    plan TEXT NOT NULL,
+    created_ts INTEGER NOT NULL,
+    updated_ts INTEGER NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS commitments (
     id INTEGER PRIMARY KEY,
     ts INTEGER NOT NULL,

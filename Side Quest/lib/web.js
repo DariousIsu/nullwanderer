@@ -551,7 +551,10 @@ async function read() {
     // FULLY-AUTO PDF harvest: grab any PDF links found on this page (deduped, capped) → the
     // DOWNLOADS_DIR watcher ingests them into her memory. Fire-and-forget so read() stays fast.
     if (process.env.ZOE_AUTO_GRAB_PDFS !== '0') { grabPdfs().catch(() => {}); }
-    return { ok: true, url: page.url(), title: await page.title().catch(() => ''), text: text + handleList };
+    const _out = { ok: true, url: page.url(), title: await page.title().catch(() => ''), text: text + handleList };
+    // SITE LEDGER: every successful read records — the visited memory autonomous lanes consult.
+    try { require('./site_ledger').record(_out.url, { kind: 'page', chars: _out.text.length }); } catch {}
+    return _out;
   } catch (err) { return { ok: false, reason: err.message }; }
 }
 
@@ -1074,6 +1077,9 @@ async function downloadPdf(url, via = null) {
   const u = String(url || '').trim();
   if (!/^https?:\/\//i.test(u)) return { ok: false, reason: 'not http(s)' };
   if (grabbedUrls.has(u)) return { ok: false, reason: 'already grabbed', dedup: true };
+  // CROSS-BOOT dedup (the "(14).pdf" disease): grabbedUrls dies with the process — nine boots today
+  // each re-grabbed the same PDFs. The site ledger remembers across boots.
+  try { const _lg = require('./site_ledger').shouldSkip(u, { ttlMs: 7 * 24 * 60 * 60 * 1000 }); if (_lg.skip) return { ok: false, reason: `already grabbed (${_lg.why})`, dedup: true }; } catch {}
   try {
     await ensure();
     const resp = await context.request.get(u, { timeout: 20000, failOnStatusCode: false });
@@ -1095,6 +1101,7 @@ async function downloadPdf(url, via = null) {
     // the bytes happen to be hosted. Both are kept; pickOrigin decides which one is the origin.
     _rememberProvenance(dest, u, via);
     console.log(`[web] pdf grabbed → ${dest} (${Math.round(buf.length / 1024)}KB) from ${u}`);
+    try { require('./site_ledger').record(u, { kind: 'pdf', chars: buf.length }); } catch {}
     return { ok: true, savedAs: dest, bytes: buf.length, url: u };
   } catch (err) { return { ok: false, reason: err.message }; }
 }

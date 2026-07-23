@@ -109,6 +109,7 @@ async function fetchPage(url, { maxChars = 4000, timeoutMs = 8000, signal } = {}
       const buf = Buffer.from(await res.arrayBuffer());
       const parsed = await sheetLib.toBoundedText(buf, { url, cap: Math.max(maxChars, 4000) });
       if (!parsed.ok) return { ok: false, url, error: parsed.error };
+      try { require('./site_ledger').record(url, { kind: 'spreadsheet', chars: parsed.text.length }); } catch {}
       return { ok: true, url, title: parsed.title, text: parsed.text, truncated: parsed.truncated };
     }
     if (!/text\/html|application\/xhtml/i.test(contentType)) {
@@ -141,6 +142,7 @@ async function fetchPage(url, { maxChars = 4000, timeoutMs = 8000, signal } = {}
 
     const text = stripTags(content).replace(/\s+/g, ' ').trim();
     const truncated = text.length > maxChars;
+    try { require('./site_ledger').record(url, { kind: 'fetch', chars: text.length }); } catch {}
     return {
       ok: true,
       url,

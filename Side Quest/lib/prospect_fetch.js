@@ -144,6 +144,13 @@ async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 
     // retried forever in the VISIBLE browser (live 2026-07-23: fcoe.org directory PDF on loop while
     // Lucas watched). Skip it; the caller falls back to the layered fetch, which CAN read PDFs.
     if (/\.pdf(?:[?#]|$)/i.test(String(landingUrl || ''))) { log && log(`[browser] skipped PDF landing (deep-browse can't read it; layered fetch can): ${landingUrl}`); return rows; }
+    // VISITED LEDGER (2026-07-23): an autonomous re-visit of a fresh-enough capture is the
+    // 500-calls disease — reuse the capture instead of navigating again. Fail-soft: a ledger
+    // error only PERMITS a navigation, never blocks one.
+    try {
+      const _lg = require('./site_ledger').shouldSkip(landingUrl);
+      if (_lg.skip) { log && log(`[browser] already digested — ${_lg.why}: ${landingUrl}`); return rows; }
+    } catch {}
     const imgsAt = async () => { try { return (typeof browser.pageImages === 'function') ? (await browser.pageImages()) || [] : []; } catch { return []; } };
     if (String(r.text || '').trim().length >= minText) { rows.push({ text: String(r.text).slice(0, 8000), url: landingUrl, source: 'browser', images: await imgsAt() }); }
     seenUrl.add(norm(landingUrl));
@@ -163,6 +170,14 @@ async function deepBrowse(browser, query, { maxHops = 2, maxBios = 4, minText = 
       try { await browser.back(); await browser.read(); } catch {}   // back to the index + rebuild the registry for the next hop
     }
     log && log(`[browser] deep-browsed ${rows.length} layer(s) from ${landingUrl}${follow.length ? ' (via ' + follow.map(f => f.name).join(', ') + ')' : ''}`);
+    // SITE DIGEST PLAN: the pages this browse actually reached extend the host's checklist, and the
+    // coverage line NARRATES progress — slowness explained, never silent (Lucas 2026-07-23).
+    try {
+      const sl = require('./site_ledger');
+      sl.buildPlan(landingUrl, rows.map((x) => x && x.url).filter(Boolean));
+      const pl = sl.planLine(sl.hostOf(landingUrl));
+      if (pl) log && log(pl);
+    } catch {}
   } catch (e) { log && log(`[browser] deepBrowse failed: ${e && e.message}`); }
   return rows;
 }
