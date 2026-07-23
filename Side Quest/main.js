@@ -8686,6 +8686,16 @@ function kickDirectedFocusDriver() {
 let autonomyTimer = null;
 let autonomyInFlight = false;
 let _autonomySlot = null;          // the pool cloud slot the current tick holds (board, 2b)
+// AUDIBLE DEFERRALS (catalog O0, measured on boot40: a full day with ZERO decisions was invisible —
+// every gate returned silently, so a starved day read identical to a working one). Each deferral
+// reason logs at most once per 15 min: a starved day is now visible in one grep, never a flood.
+const _autonomyDeferLogAt = {};
+function _logAutonomyDeferral(reason) {
+  const now = Date.now();
+  if (now - (_autonomyDeferLogAt[reason] || 0) < 15 * 60 * 1000) return;
+  _autonomyDeferLogAt[reason] = now;
+  console.log(`[autonomy] deferred: ${reason}`);
+}
 const AUTONOMY_TICK_MS = 60 * 1000;                    // timer cadence; the real pace is the meta gap below
 function _autonomyCadenceMs() { return Math.max(2, _intMeta('autonomy.cadence_min', 10)) * 60 * 1000; }
 function _autonomyEnabled() {
@@ -8752,20 +8762,23 @@ async function autonomyTick() {
     // interject alongside him.
     const recent = db.getRecentTurns(6) || [];
     const lastTurnTs = recent.reduce((a, t) => Math.max(a, t && t.ts || 0), 0);
-    if (now - lastTurnTs < 20 * 1000) return;
+    if (now - lastTurnTs < 20 * 1000) { _logAutonomyDeferral('mid-exchange'); return; }
     const chatLive = now - lastTurnTs < 3 * 60 * 1000;
     // YIELD to assigned work: a directed focus (Lucas's assignment) outranks idle exploration for
     // the operator lane — deliberate priority, not a missing feature (his work first, hers after).
-    try { const fl = require('./lib/focus'); const f = fl.getCurrent(); if (f && fl.isDirected(f)) return; } catch {}
-    if (directedStepInFlight) return;
-    try { if (db.getMeta('scribe_active') === '1') return; } catch {}   // never during a live meeting
+    // ⚠️Boot40 measured the cost: #3542 ran all day and the driver made ZERO decisions. Softening
+    // this to slot-priority is proposed in catalog O0 and is LUCAS'S call — until then it defers
+    // AUDIBLY, so a starved day says why.
+    try { const fl = require('./lib/focus'); const f = fl.getCurrent(); if (f && fl.isDirected(f)) { _logAutonomyDeferral('directed-focus'); return; } } catch {}
+    if (directedStepInFlight) { _logAutonomyDeferral('directed-step'); return; }
+    try { if (db.getMeta('scribe_active') === '1') { _logAutonomyDeferral('live-meeting'); return; } } catch {}
     // THROTTLE — the same rolling session/weekly/concurrency brakes as every autonomous pass.
-    if (!_researchGateOk('autonomy', 'autonomy')) return;
+    if (!_researchGateOk('autonomy', 'autonomy')) { _logAutonomyDeferral('research-throttle'); return; }
     // CONDUCTOR (2b): the tick runs on an ALLOCATABLE cloud slot — by construction never the chat's.
     // Pool exhausted → skip this tick; idle work never queues, contention resolves by cadence.
     _autonomySlot = null;
     try { _autonomySlot = require('./lib/board').acquireCloudSlot({ lane: 'autonomy', nowMs: now }); } catch {}
-    if (!_autonomySlot) { console.log('[autonomy] no free cloud slot — tick skipped'); return; }
+    if (!_autonomySlot) { _logAutonomyDeferral('no-free-slot'); return; }
 
     autonomyInFlight = true;
     _bgInFlight.add('autonomy');
