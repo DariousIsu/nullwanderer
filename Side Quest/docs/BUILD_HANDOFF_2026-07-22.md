@@ -20,13 +20,21 @@ nouns] checked against the read text at BOTH banking doors, captureRecovered + m
 ungrounded → blocked, no supersede, log names the door) · Echo refusals now TEACH THE LANE SWITCH ("do NOT retry Echo;
 <web-open> or say the miss") · the promise-guard's empty-final-say hole (lastSay threads the
 recursion) · envelope echo stripped from the thought rail · expect judge grades the INCREMENT.
-**BOOT52 LIVE (07-23 ~01:15)**: runs EVERYTHING — 07007bd NEWS TIER + e921645 update-rows +
-a2c780e grounding gate + 624b3e0 BOUNDED BITE + d1fe838 REQUIRED EXPECT (a run move without an
-expect silently skipped verify→trail→crystallize — seen live boot51 touch 1; the validator now
-refuses and the refusal teaches the shape) + e1c520b honest beat-origin label ("DIRECTED set from
-beat", the mislabel half of the Phase 4 item — the weighting design call stays Lucas's).
-BOOT51 PROOFS: inquiry #2 OPENED conversation-born ("Lucas asked to verify claims about Chinese
-chip manufacturing" [d8269]) + advanced touch 1 — the second conversation-born open. The war-question retest is STILL OWED (last asking
+**⭐⭐PHASE 3 PROVEN ON BOOT52 (07-23 ~01:30)**: inquiry #2 (conversation-born, the chip claim
+Lucas asked to verify [d8269]) closed ANSWERED on touch 2 → doc #8347, with a REAL ITIF citation
+(verified live against the page — "1 million more wafers a month than in 2023" verbatim), the
+FIRST `expect MET` ever, and procedure #13 "Verify Quantitative Claim" crystallized (constraints
+#11/#12 landed from the Louisiana NOT-mets — both sides of the loop work). One touch after the
+bounded bite (624b3e0) + required expect (d1fe838) went live: those fixes WERE the blockers.
+**BOOT53 brings c4aba70 THE HARVEST-BORN HOMECOMING**: the answered close exposed the next wire —
+doc #8347 exists and nobody tells Lucas (the homecoming matched only the dig born_from shape; a
+closed inquiry vanishes from the decider state). isConversationBorn now reads the harvest shapes;
+isDigBorn splits the voice frames (dig = first-finding + minutes-ago; harvest = CLOSE-only +
+carried-away frame, never claims minutes-ago); inquiry-path crystallize now LOGS its result (3rd
+invisible wire on that path — the path re-lost the shared circuit's visibility one wire at a
+time). Boot52 chain also carries e1c520b honest beat-origin label. Inquiry #2's own answer
+predates the fix — reported to Lucas directly; future closes deliver themselves.
+WATCH boot53: first harvest-born homecoming on an answered close · war-question retest (Lucas). The war-question retest is STILL OWED (last asking
 was 23:36 on boot48, pre-news-tier — the honest-miss proof, not the tier's test): "what's the
 latest on the war?" must answer from her own stream in one turn (`enriched:news` in the log).
 BOOT49/50 PROOFS: inquiry #1 advanced touches 2-4 (the direction loop holds across boots) · email
