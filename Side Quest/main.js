@@ -9008,6 +9008,20 @@ async function autonomyTick() {
         console.log(`[autonomy] chose=engage → skipped (${skipWhy})`);
         return;
       }
+      // ENGAGE GROUNDING GATE (live 2026-07-23): an unprompted say fused two canvas drops into a
+      // "June 2025 CSET brief on memristor rollout" (real brief is June 2022) pinned to a talk that
+      // exists NOWHERE — self-authored fiction spoken as fact. The say's anchors must appear in the
+      // STATE that licensed the speech; a missing NUMBER anchor (a date, a code — the confabulation
+      // signature) blocks outright, prose tolerates paraphrase at the helper's floor.
+      try {
+        const g = require('./lib/learning').groundedInSource(decision.say, (manifest && manifest.text) || '');
+        const numMissing = (g.missing || []).filter((a) => /^\d/.test(a));
+        if (g.checked && (!g.grounded || numMissing.length)) {
+          autonomy.historyPush(H, { ts: now, move: 'engage', target: decision.target, outcome: `blocked — say not grounded in the state (missing: ${g.missing.slice(0, 5).join(', ')}); speak only what the state actually shows` });
+          console.log(`[autonomy] chose=engage → BLOCKED ungrounded say (missing: ${g.missing.slice(0, 5).join(', ')})`);
+          return;
+        }
+      } catch {}
       const row = db.insertTurn({ sessionId: currentSessionId, speaker: 'ai_said', content: decision.say, model: 'autonomy', unprompted: 1 });
       try { db.setMeta('last_ai_utterance_at', String(Date.now())); } catch {}
       try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:complete', { saidId: row.id, truncated: 0, unprompted: true, say: decision.say }); } catch {}
