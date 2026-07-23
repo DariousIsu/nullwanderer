@@ -378,7 +378,10 @@ async function verifyExpect({ decision, opRes, deps = {} } = {}) {
         actual: String(opRes.answer).slice(0, 4000),
         artifacts: (opRes.steps || []).filter((s) => s.tool === 'file').map((s) => s.args && s.args.path).filter(Boolean),
       },
-      want: `Did the ACTUAL result genuinely meet the EXPECTED outcome? Judge strictly — a partial or hedged result that dodges the expectation is NOT met. Reply ONLY strict JSON: {"met": true|false, "why": "<one honest line>"}.`,
+      // "Judge strictly" was a bar no bounded run could clear: 0-for-5 across boots 43-45, so no
+      // procedure ever crystallized and the whole competence loop starved. The expect is SIZED to
+      // one run's increment now (DECISION_WANT) — so judge THE INCREMENT, honestly.
+      want: `Did the ACTUAL result deliver the EXPECTED increment? The expectation names ONE bounded run's step, not a finished project. met=true when the run genuinely produced that step — the thing found and cited, the section drafted, an absence established honestly — even if more work remains beyond it. met=false when the result is empty, dodges the expectation, or narrates effort without the increment. Reply ONLY strict JSON: {"met": true|false, "why": "<one honest line>"}.`,
       validate: _validateExpectVerdict,
       numPredict: 200, think: false,
     });
