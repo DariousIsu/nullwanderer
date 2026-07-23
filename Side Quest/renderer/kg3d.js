@@ -1001,6 +1001,13 @@ function updateFogBand() {
       if (!m) continue;
       m.uniforms.uNear.value = near; m.uniforms.uFar.value = far; m.uniforms.uFitDist.value = dist;
     }
+    // ZOOM-OUT BLOWOUT. Halos are additive, so pulling the camera back packs more of them into every pixel
+    // and the whole graph flares into a white blob — the glow that reads beautifully up close is exactly
+    // what destroys it at range. Fade the halo and the dust as the view widens; the node cores keep their
+    // brightness, so structure survives while the haze backs off.
+    const zoom = Math.max(0.28, Math.min(1, (CLOUD_R * 2.3) / Math.max(1, dist)));
+    haloMat.uniforms.uOpacity.value = 0.11 * zoom;
+    dustMat.uniforms.uOpacity.value = 0.085 * (0.45 + 0.55 * zoom);
   } catch (e) {}
 }
 // Base weight is structural (how connected), the bonus is evidential (how corroborated). They are genuinely
@@ -1801,6 +1808,19 @@ setInterval(loadSelf, 300000);                   // identity moves slowly — re
 window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, tendrilN: () => tendrilSpecs.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z,
   markerN: () => markerIndex.length, repaint: repaintNodeCloud, fit: fitView, rebuildLinks: buildLinkCloud,
   shape: (s) => { if (s) { SHAPE = s; try { localStorage.setItem('kg3d.shape', s); } catch (e) {} for (const n of objs.values()) n._tp = null; try { Graph.d3ReheatSimulation(); } catch (e) {} } return SHAPE; },
+  lobeOf, lobeStats: () => {                    // how much of the graph actually crosses between territories
+    const d = Graph.graphData(), per = {}, pair = {}; let cross = 0, within = 0;
+    for (const n of d.nodes) { const L = lobeOf(n); per[L] = (per[L] || 0) + 1; }
+    for (const l of d.links) {
+      const a = typeof l.source === 'object' ? l.source : objs.get(l.source);
+      const b = typeof l.target === 'object' ? l.target : objs.get(l.target);
+      if (!a || !b) continue;
+      const la = lobeOf(a), lb = lobeOf(b);
+      if (la === lb) { within++; continue; }
+      cross++; const key = [la, lb].sort().join('↔'); pair[key] = (pair[key] || 0) + 1;
+    }
+    return { nodesPerLobe: per, within, cross, crossPct: +(cross * 100 / Math.max(1, within + cross)).toFixed(1), pairs: pair };
+  },
   linkN: () => linkIndex.length,
   zoe: () => ({ ring: zoeSet.size, feeling: zoeFeeling, anchor: !!zoeAnchor, membrane: !!membrane, center: { x: Math.round(_coreCen.x), y: Math.round(_coreCen.y), z: Math.round(_coreCen.z) } }),
   loadSelf,
