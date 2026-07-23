@@ -1612,7 +1612,14 @@ app.whenReady().then(() => {
   // exactly as a landed one and the two can never drift apart.
   {
     const SWEEP_MS = 5 * 60 * 1000;
+    // IN-FLIGHT GUARD (2026-07-23, boot71 measured): a batch's cloud extraction can outlast the 5-min
+    // interval, and an overlapping run re-picked the SAME batch (markAttempted lands only after the
+    // batch) — doc #7704 decomposed twice (+25 then +28 mints), doc #8413 logged two passes, and the
+    // budget line printed twice (104, 106). One run at a time; a tick that finds one in flight skips.
+    let _sweepInFlight = false;
     const runDecomposeSweep = async () => {
+      if (_sweepInFlight) return;
+      _sweepInFlight = true;
       try {
         if (String(process.env.ZOE_AUTO_INGEST || '1').trim() === '0') return;
         if (!echoSuit || !echoSuit.connected) return;              // no resolver → every entity would skip
@@ -1622,15 +1629,18 @@ app.whenReady().then(() => {
         const done = [];
         for (const p of batch.picks) {
           const row = db.getDocument(p.id);
-          if (!row || !String(row.body || '').trim()) { done.push(p.id); continue; }
+          if (!row || !String(row.body || '').trim()) { sweepLib.markAttempted(db, [p.id]); done.push(p.id); continue; }
           await decomposeLandedDoc({ id: row.id, title: row.title, body: row.body, source: row.source, sourceUrl: row.origin || undefined });
+          // mark EACH doc the moment it completes (not after the batch): even a mid-batch crash or
+          // restart must never re-read a document already spent on. An honest nothing stays marked too.
+          sweepLib.markAttempted(db, [p.id]);
           done.push(p.id);
         }
-        sweepLib.markAttempted(db, done);                          // an honest nothing must not be re-read forever
         sweepLib.spendBudget(db, batch.estChunks);
         const b = sweepLib.budgetState(db);
         console.log(`[decomp-sweep] read ${done.length} backlog doc(s) — budget ${b.spent}/${b.limit} chunks today`);
       } catch (e) { console.error('[decomp-sweep]', e.message); }
+      finally { _sweepInFlight = false; }
     };
     setTimeout(() => { runDecomposeSweep().catch(() => {}); }, 90000);   // after boot settles
     setInterval(() => { runDecomposeSweep().catch(() => {}); }, SWEEP_MS).unref?.();
@@ -10242,7 +10252,13 @@ function _docLeashOk(doc) {
   } catch { return false; }   // FAIL CLOSED (2026-07-15): on a leash error, quarantine (doc lands searchable, not decomposed) rather than decompose everything.
 }
 
+// PER-DOC IN-FLIGHT GUARD (2026-07-23, boot71): two callers reaching the same doc concurrently
+// (overlapping sweep runs; sweep + a re-landing) each ran the full extract→mint pipeline and minted
+// the same people twice. Whoever starts a doc owns it; a concurrent second caller returns quietly.
+const _decompInFlight = new Set();
 async function decomposeLandedDoc(doc) {
+  if (doc && doc.id != null && _decompInFlight.has(doc.id)) { console.log(`[doc-decomp] SKIP doc #${doc.id} — already decomposing (in-flight guard)`); return; }
+  if (doc && doc.id != null) _decompInFlight.add(doc.id);
   try {
     if (String(process.env.ZOE_AUTO_INGEST || '1').trim() === '0') { return; }   // KILL SWITCH — see ingestFile
     if (!echoSuit || !echoSuit.connected) return;
@@ -10313,6 +10329,7 @@ async function decomposeLandedDoc(doc) {
     }
     if (chunks.length) console.log(`[doc-decomp] landing #${doc.id} ${chunks.length} pass(es) → +${minted} mint / ${reused} reuse / +${connections} conn (${held} held)`);
   } catch (e) { console.error('[doc-decomp] landing decompose failed:', e.message); }
+  finally { try { if (doc && doc.id != null) _decompInFlight.delete(doc.id); } catch {} }
 }
 
 // CONTACT INTELLIGENCE (Puller) — the sibling of decomposeLandedDoc for the OTHER facet: the same landed
