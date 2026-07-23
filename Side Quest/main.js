@@ -424,6 +424,13 @@ async function speakThroughCompanion(text) {
     if (!res || !res.ok) { if (res && res.error) console.error('[companion] tts failed:', res.error); return; }
     const fileUrl = require('url').pathToFileURL(res.out).href;
     if (companionWindow && !companionWindow.isDestroyed()) companionWindow.webContents.send('companion:speak', { url: fileUrl });
+    // Fan the same wav out to every other surface so anything that wants to lip-sync can. The 3D graph paints
+    // her face across the point cloud and needs the real amplitude envelope to move the mouth; the companion
+    // stays the only one that AUDIBLY plays it (every other listener analyses without connecting to
+    // destination). Additive and safe with no receiver — a surface that ignores the channel is unaffected.
+    for (const wc of require('electron').webContents.getAllWebContents()) {
+      try { if (!wc.isDestroyed() && (!companionWindow || companionWindow.isDestroyed() || wc.id !== companionWindow.webContents.id)) wc.send('companion:speak', { url: fileUrl, silent: true }); } catch (e) {}
+    }
   } catch (e) { console.error('[companion] speak failed:', e.message); }
 }
 

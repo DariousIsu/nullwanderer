@@ -86,6 +86,7 @@
     <label class="lbl">shape <select id="shape" title="How the two memories are arranged in space"><option value="brain">brain</option><option value="corona">corona</option><option value="halves">halves</option><option value="binary">binary</option><option value="free">free</option></select></label>
     <button class="btn" id="backBtn" hidden>&larr; overview</button>
     <button class="btn" id="followBtn" title="Follow — fly to eruptions + the idle graph-walk">Follow &#9654;</button>
+    <button class="btn on" id="faceBtn" title="Her face, painted across the cloud in light — the map talks when she talks">Face</button>
     <button class="btn on" id="logBtn" title="Toggle the live memory-activity log">Log</button>
   </div>
   <div id="overlay">Loading corpus…</div>
@@ -97,6 +98,9 @@
     <div id="logfeed"></div>
   </div>
   <script src="vendor/kg3d.bundle.js"></script>
+  <!-- the SAME face model the avatar runs (UMD → window.AvatarState): expression presets, the amplitude→mouth
+       lip-sync curve and the blink clock. One source of truth, so the two faces can never drift apart. -->
+  <script src="../lib/avatar_state.js"></script>
   <script src="kg3d.js"></script>
 </body>
 </html>

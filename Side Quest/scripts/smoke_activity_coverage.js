@@ -95,6 +95,8 @@ function loadDispatcher(src) {
     nodeColor: () => '#ffffff',
     _coreCen: V(0, 0, 0), ZOE_ROSE: '#f9a8d4', HEAR_HEX: 1, SAY_HEX: 2,
     addHotLink: spy('addHotLink'), loadSelf: spy('loadSelf'),
+    // her face on the cloud: hear/say/think move it, so the dispatcher reaches these too
+    faceExpression: spy('faceExpression'), faceSpeak: spy('faceSpeak'), face: { target: 0 },
   };
   for (const g of ['queueBorn', 'queueNote', 'gEnrich', 'gEdge', 'gMatch', 'gRecall', 'gPromote', 'gAbsorb',
     'gThink', 'gCross', 'gEvidence', 'gInflow', 'gRefute']) deps[g] = spy(g);

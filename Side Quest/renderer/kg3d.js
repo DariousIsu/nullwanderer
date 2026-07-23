@@ -816,10 +816,33 @@ const NODE_TEX = (function () {
 // points never actually recede and dense far regions accumulate a grey wash. Scaling rgb AND alpha is the
 // additive-safe form. Plus a blue-shift, the chromatic half of aerial perspective.
 const FOG_STRENGTH = 0.86;
+// ============================================================================================================
+// THE FACE (Lucas, 2026-07-22: "we use the avatar facial motions to give the cloud a face, its almost there
+// anyway then the map can talk when she talks instead of the avatar").
+// ============================================================================================================
+// This is the one idea in this whole thread that plays to what a point cloud is actually GOOD at, and it is
+// worth being precise about why — because the brain silhouette failed here repeatedly and this is the same
+// surface. A brain needs an OUTLINE, and an outline needs a dense edge and occlusion, which points do not
+// have. A FACE needs neither. Faces are read from LANDMARKS in the right relative positions — three dots and
+// the visual system locks on before you can stop it. A cloud can do landmarks perfectly, because a landmark
+// is just brightness, and brightness is per-point.
+//
+// So the rule that makes this safe: THE FACE MOVES NOTHING. It is additive light evaluated in SCREEN space
+// and added on top of whatever each point already was. No node is displaced, no layout constant changes, and
+// turning it off restores a byte-identical graph. That is the opposite of every rejected shape attempt,
+// which all worked by moving data until it made a picture.
+//
+// Screen space, not object space, for the same reason: pareidolia happens on the retina. The face is painted
+// where the eye is, so it reads at any camera angle and she keeps looking at you as the graph turns.
+//
+// It rides the SAME shader pair as nodes, halos and dust (one pointMaterial factory), so the dust — which is
+// evenly spread — carries most of the face while the nodes, which are clumpy, carry the sparkle. That split
+// matters: uneven cloud density is the main thing that could break the read.
 const NODE_VERT = `
   attribute float size; attribute vec3 aColor; attribute float aAlpha;
   uniform float uFitDist; uniform float uSizeK;
-  varying vec3 vColor; varying float vAlpha; varying float vDepth;
+  uniform vec2 uFaceCen; uniform float uFaceR; uniform float uAspect;
+  varying vec3 vColor; varying float vAlpha; varying float vDepth; varying vec2 vFaceP;
   void main(){
     vColor = aColor; vAlpha = aAlpha;
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
@@ -829,11 +852,33 @@ const NODE_VERT = `
     // shimmer as the camera moves, which is precisely what read as "scattered debris".
     gl_PointSize = clamp(size * uSizeK * (uFitDist / max(1.0, -mvPosition.z)), 1.6, 96.0);
     gl_Position = projectionMatrix * mvPosition;
+    // where this point falls on her face, in aspect-corrected screen space centred on the cloud
+    vec2 ndc = gl_Position.xy / max(1e-4, abs(gl_Position.w));
+    vFaceP = vec2((ndc.x - uFaceCen.x) * uAspect, ndc.y - uFaceCen.y) / max(1e-4, uFaceR);
   }`;
 const NODE_FRAG = `
   uniform float uOpacity; uniform float uNear; uniform float uFar; uniform float uFogK;
   uniform float uIntensity; uniform float uCoreW; uniform float uHaloW;
-  varying vec3 vColor; varying float vAlpha; varying float vDepth;
+  uniform float uFaceOn; uniform float uEye; uniform float uBrow; uniform float uMouthOpen;
+  uniform float uMouthCurve; uniform float uFaceGain; uniform vec3 uFaceTint;
+  varying vec3 vColor; varying float vAlpha; varying float vDepth; varying vec2 vFaceP;
+  // Two eyes, two brows, one mouth — soft fields, no edges anywhere. The mouth's HEIGHT is the lip-sync
+  // (amplitude → open) and its CENTRELINE bends with mouthCurve, so a smile lifts the corners rather than
+  // recolouring anything. The eye wells squash vertically as they close, which is what makes a blink read.
+  float faceField(vec2 p) {
+    float w = 0.0;
+    float eo = max(0.10, uEye);                                     // openness, blink already folded in
+    vec2 e = vec2(abs(p.x) - 0.38, (p.y - 0.22) / eo);
+    w = max(w, smoothstep(0.19, 0.015, length(e)));
+    float by = 0.50 + uBrow * 0.07;                                 // brows ride above the eyes
+    vec2 b = vec2((abs(p.x) - 0.38) / 0.24, (p.y - by) / 0.05);
+    w = max(w, smoothstep(1.0, 0.55, length(b)) * 0.62);
+    float mw = 0.34, mh = 0.032 + uMouthOpen * 0.26;                // <- she speaks here
+    float cy = -0.34 + uMouthCurve * 0.11 * clamp(p.x * p.x / (mw * mw), 0.0, 1.0);
+    vec2 m = vec2(p.x / mw, (p.y - cy) / mh);
+    w = max(w, smoothstep(1.0, 0.45, length(m)));
+    return w;
+  }
   void main(){
     float r = length(gl_PointCoord - vec2(0.5)) * 2.0;
     if (r > 1.0) discard;
@@ -849,6 +894,27 @@ const NODE_FRAG = `
     gl_FragColor = vec4(rgb * uIntensity * (1.0 + core * 2.0), a * uOpacity * vAlpha);
     gl_FragColor.rgb *= (1.0 - f * uFogK);                    // additive-safe fog
     gl_FragColor.a   *= (1.0 - f * uFogK);
+    // THE FACE — added AFTER fog on purpose. She is a screen-space object, not a depth object, so a far node
+    // must contribute to her as much as a near one or the features dissolve into the depth gradient. Never
+    // subtractive (the lesson from a2f75d4: anything that dims paints black over the bright regions).
+    //
+    // MULTIPLICATIVE FIRST, and that is the whole difference between this reading as a face and reading as
+    // three white slabs. The first cut ADDED flat light, which filled every feature to saturation and threw
+    // away the cloud's own texture inside it — a decal laid over the graph. Scaling what is ALREADY there
+    // means a bright node inside her eye gets brighter, faint dust gets a little brighter, and empty space
+    // stays empty: the features come out made of the cloud, with all its grain and sparkle intact. She is the
+    // graph lighting up in the shape of a face, not a face drawn on top of the graph.
+    // ALPHA IS THE LEVER, not rgb — and getting that backwards cost a tuning round. Dust is drawn at 0.085
+    // opacity, so under additive blending its contribution is rgb*alpha ≈ 0.04 whatever the colour is:
+    // multiplying a near-black fragment cannot CREATE a feature, it can only deepen one that already exists.
+    // Raising alpha is what makes the dust THICKEN into her features, and it is also what keeps the grain —
+    // it is still the cloud's own points, just more present. rgb scaling then shapes the highlight inside it.
+    if (uFaceOn > 0.002) {
+      float fw = faceField(vFaceP) * uFaceOn;
+      gl_FragColor.rgb *= (1.0 + fw * uFaceGain * 0.55);
+      gl_FragColor.rgb += uFaceTint * fw * a * uFaceGain * 0.16;   // a little colour of her own
+      gl_FragColor.a    = min(1.0, gl_FragColor.a * (1.0 + fw * uFaceGain * 0.75) + fw * a * 0.05);
+    }
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
   }`;
@@ -856,7 +922,12 @@ function pointMaterial(o) {
   return new THREE.ShaderMaterial({
     uniforms: { uOpacity: { value: o.opacity }, uFitDist: { value: 900.0 }, uSizeK: { value: o.sizeK },
       uNear: { value: 100.0 }, uFar: { value: 2000.0 }, uFogK: { value: FOG_STRENGTH },
-      uIntensity: { value: o.intensity }, uCoreW: { value: o.coreW }, uHaloW: { value: o.haloW } },
+      uIntensity: { value: o.intensity }, uCoreW: { value: o.coreW }, uHaloW: { value: o.haloW },
+      // face state — one set per material, all written together by updateFace() each frame
+      uFaceCen: { value: new THREE.Vector2(0, 0) }, uFaceR: { value: 0.6 }, uAspect: { value: 1.6 },
+      uFaceOn: { value: 0 }, uEye: { value: 1 }, uBrow: { value: 0 }, uMouthOpen: { value: 0 },
+      uMouthCurve: { value: 0.12 }, uFaceGain: { value: o.faceGain == null ? 2.0 : o.faceGain },
+      uFaceTint: { value: new THREE.Color(0xffc8e4) } },
     vertexShader: NODE_VERT, fragmentShader: NODE_FRAG,
     transparent: true, depthWrite: false, depthTest: o.depthTest !== false, blending: o.blending,
   });
@@ -864,17 +935,20 @@ function pointMaterial(o) {
 // Additive for the cloud: THREE.Points does not sort points within one object, so NormalBlending would blend
 // in arbitrary buffer order. Additive is commutative, therefore order-independent, therefore correct here —
 // and with tone mapping handling the accumulation there is no white wash to fear.
-const nodeMat = pointMaterial({ opacity: 1.0, sizeK: 1.0, intensity: 1.35, coreW: 1.0, haloW: 0.22, blending: THREE.AdditiveBlending });
+// faceGain per layer: the DUST carries her (it is evenly spread, so the features come out smooth), the halo
+// gives the features their bloom, and the NODES are deliberately the weakest — they are clumpy, and letting
+// them dominate would make the face a map of cloud density instead of a face.
+const nodeMat = pointMaterial({ opacity: 1.0, sizeK: 1.0, intensity: 1.35, coreW: 1.0, haloW: 0.22, blending: THREE.AdditiveBlending, faceGain: 1.9 });
 // GLOW: a second pass over the SAME geometry, much larger and very faint. Overlapping halos accumulate into
 // a soft haze exactly where nodes are dense — which is what makes a point cloud read as a continuous
 // luminous VOLUME instead of a scatter of dots. One extra draw call, zero extra memory, no render targets.
-const haloMat = pointMaterial({ opacity: 0.11, sizeK: 4.0, intensity: 1.0, coreW: 0.0, haloW: 1.0, blending: THREE.AdditiveBlending, depthTest: false });
+const haloMat = pointMaterial({ opacity: 0.11, sizeK: 4.0, intensity: 1.0, coreW: 0.0, haloW: 1.0, blending: THREE.AdditiveBlending, depthTest: false, faceGain: 4.2 });
 // DUST — the biggest single lever for the cloud read, and nearly free. Several faint non-semantic points are
 // scattered around every real node, sampled from the same spatial density. They give the space BETWEEN nodes
 // substance; without them no amount of glow on a thousand points fills a volume — you just get a thousand
 // glowing points. This is what Wikiverse/WikiGalaxy are actually doing: the stars you notice are a small
 // fraction of the points on screen. One draw call, tiny sizes, alpha so low it never competes with data.
-const dustMat = pointMaterial({ opacity: 0.085, sizeK: 1.0, intensity: 0.85, coreW: 0.25, haloW: 0.55, blending: THREE.AdditiveBlending, depthTest: false });
+const dustMat = pointMaterial({ opacity: 0.085, sizeK: 1.0, intensity: 0.85, coreW: 0.25, haloW: 0.55, blending: THREE.AdditiveBlending, depthTest: false, faceGain: 7.0 });
 const DUST_PER_NODE = 5, DUST_CAP = 14000;
 let dustCloud = null, dustGeo = null;
 // ============================================================================================================
@@ -1024,6 +1098,96 @@ function updateFogBand() {
     const zoom = Math.max(0.28, Math.min(1, (CLOUD_R * 2.3) / Math.max(1, dist)));
     haloMat.uniforms.uOpacity.value = 0.11 * zoom;
     dustMat.uniforms.uOpacity.value = 0.085 * (0.45 + 0.55 * zoom);
+  } catch (e) {}
+}
+// ---- HER FACE: state, driven by the SAME module the avatar runs ------------------------------------------
+// `lib/avatar_state.js` is UMD and already smoke-tested, so loading it here gives the graph the identical
+// expression presets, the identical amplitude→mouth smoothing and the identical blink clock the avatar face
+// uses. That is what Lucas asked for literally — the avatar's facial motions, on the map — and it means the
+// two surfaces can never drift into being two different faces.
+const AS = (typeof window !== 'undefined' && window.AvatarState) || null;
+let FACE_ON = true; try { FACE_ON = localStorage.getItem('kg3d.face') !== '0'; } catch (e) {}
+const face = {
+  strength: 0,            // 0..1 — how present she is; ramps up to speak, falls back to a resting trace
+  target: 0,
+  mouthOpen: 0,
+  cur: { brow: 0, eye: 1, mouthCurve: 0.12, gazeY: 0 },
+  tgt: (AS && AS.expressionPreset('neutral')) || { brow: 0, eye: 1, mouthCurve: 0.12, gazeY: 0 },
+  speakUntil: 0, speakFrom: 0, analyser: null, buf: null, audioEl: null, audioCtx: null,
+};
+const FACE_REST = 0.16;   // she is faintly there when idle; speaking brings her forward
+function faceExpression(name) { if (AS) face.tgt = AS.expressionPreset(name); }
+// REAL lip-sync when the TTS wav is reachable, a synthesised envelope when it is not — and the fallback is
+// not a stopgap: `speakThroughCompanion` bails out entirely unless the companion window is VISIBLE, so with
+// the avatar hidden (which Lucas has explicitly put on the table for compute) there is no audio to analyse
+// and the envelope is the only signal there will ever be.
+function faceSpeak(text) {
+  const ms = Math.max(900, Math.min(18000, String(text || '').length * 62));
+  face.speakFrom = performance.now(); face.speakUntil = face.speakFrom + ms;
+  face.target = 1;
+}
+function faceAttachAudio(url) {
+  try {
+    if (!url) return false;
+    const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return false;
+    face.audioCtx = face.audioCtx || new Ctx();
+    const el = new Audio(url); el.crossOrigin = 'anonymous';
+    const src = face.audioCtx.createMediaElementSource(el);
+    const an = face.audioCtx.createAnalyser(); an.fftSize = 512;
+    src.connect(an);                       // NOT connected to destination — the companion is the one speaking
+    face.analyser = an; face.buf = new Uint8Array(an.fftSize); face.audioEl = el;
+    el.muted = true;                       // belt and braces: this element must never be audible
+    el.play().catch(() => {});
+    el.addEventListener('ended', () => { face.analyser = null; face.buf = null; });
+    face.target = 1; face.speakFrom = performance.now(); face.speakUntil = face.speakFrom + 60000;
+    return true;
+  } catch (e) { return false; }
+}
+const _faceCen = new THREE.Vector3(), _faceTint = new THREE.Color();
+function updateFace(now) {
+  try {
+    if (!FACE_ON) {
+      if (nodeMat && nodeMat.uniforms.uFaceOn.value !== 0) for (const m of [nodeMat, haloMat, dustMat]) if (m) m.uniforms.uFaceOn.value = 0;
+      return;
+    }
+    // --- mouth: real amplitude if we have the wav, otherwise a syllable-rate envelope over the estimate ---
+    let rms = 0;
+    if (face.analyser) {
+      face.analyser.getByteTimeDomainData(face.buf);
+      let s = 0; for (let i = 0; i < face.buf.length; i++) { const v = (face.buf[i] - 128) / 128; s += v * v; }
+      rms = Math.sqrt(s / face.buf.length);
+    } else if (now < face.speakUntil) {
+      const t = (now - face.speakFrom) / 1000;
+      // ~4.6 syllables/sec with a wobble, so it never falls into a mechanical rhythm
+      rms = 0.30 + 0.34 * Math.abs(Math.sin(t * 14.5)) * (0.6 + 0.4 * Math.abs(Math.sin(t * 2.3 + 1.1)));
+    }
+    face.mouthOpen = AS ? AS.amplitudeToMouth(rms, face.mouthOpen) : Math.max(0, face.mouthOpen * 0.8 + rms * 0.2);
+    const speaking = now < face.speakUntil || !!face.analyser;
+    if (!speaking) face.target = FACE_REST;
+    face.strength += (face.target - face.strength) * (face.target > face.strength ? 0.10 : 0.022);
+    // --- expression easing + blink, from the avatar's own model ---
+    for (const k of ['brow', 'eye', 'mouthCurve', 'gazeY']) face.cur[k] += ((face.tgt[k] || 0) - face.cur[k]) * 0.09;
+    const blink = AS ? AS.blinkMultiplier(now) : 1;
+    // --- where she sits on screen: project the cloud centre, size her to its extent, so she stays on the
+    // cloud through pan and zoom instead of floating in a fixed screen box ---
+    _faceCen.set(_midCen.x, _midCen.y, _midCen.z);
+    const cam = Graph.camera(); if (!cam) return;
+    const ndc = _faceCen.clone().project(cam);
+    const camPos = Graph.cameraPosition();
+    const dist = Math.hypot(camPos.x - _midCen.x, camPos.y - _midCen.y, camPos.z - _midCen.z) || 900;
+    const fovR = (cam.fov || 50) * Math.PI / 180;
+    const halfH = Math.tan(fovR / 2) * dist;                 // world half-height of the viewport at the cloud
+    const faceR = Math.max(0.12, (CLOUD_R * 0.92) / Math.max(1, halfH));   // in NDC-y units
+    const aspect = (window.innerWidth || 1) / (window.innerHeight || 1);
+    for (const m of [nodeMat, haloMat, dustMat]) {
+      if (!m) continue;
+      const u = m.uniforms;
+      u.uFaceOn.value = face.strength;
+      u.uFaceCen.value.set(ndc.x, ndc.y); u.uFaceR.value = faceR; u.uAspect.value = aspect;
+      u.uEye.value = Math.max(0.06, face.cur.eye * blink);
+      u.uBrow.value = face.cur.brow; u.uMouthCurve.value = face.cur.mouthCurve;
+      u.uMouthOpen.value = face.mouthOpen;
+    }
   } catch (e) {}
 }
 // Base weight is structural (how connected), the bonus is evidential (how corroborated). They are genuinely
@@ -1781,14 +1945,17 @@ function dispatchActivity(evt) {
   }
   if (k === 'promote' || k === 'node.promote') { const a = A(); if (!a) return 'miss'; gPromote(V3(a)); addHotLink(a.id); return 'drew'; }
   if (k === 'node.merge') { const a = A(); if (!a) return 'miss'; gAbsorb(V3(a), evt.count); return 'drew'; }   // dedup absorb: duplicates collapse inward
-  if (k === 'think') { gThink(); return 'drew'; }                        // ambient heartbeat (throttled upstream)
+  if (k === 'think') { faceExpression('thinking'); gThink(); return 'drew'; }   // ambient heartbeat (throttled upstream)
   if (k === 'self' || k === 'reflect') {                                 // her identity moved — flare the anchor, refresh the ring
     gEnrich(new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z), new THREE.Color(ZOE_ROSE).getHex());
     if (k === 'self') loadSelf();
     return 'drew';
   }
-  if (k === 'hear') { gCross(true, HEAR_HEX); return 'drew'; }           // Lucas's words crossing IN to her
-  if (k === 'say') { gCross(false, SAY_HEX); return 'drew'; }            // her reply crossing OUT of the region
+  // COMMUNICATION ALSO MOVES HER FACE. `say` is the one that matters — it is emitted from insertTurn at the
+  // moment the reply lands, which is the same moment speakThroughCompanion starts the wav, so the mouth opens
+  // in step with her actually talking. `hear` looks up and attends; `think` narrows the brow.
+  if (k === 'hear') { faceExpression('warm'); face.target = 0.72; gCross(true, HEAR_HEX); return 'drew'; }
+  if (k === 'say') { faceExpression('warm'); faceSpeak(evt.anchor); gCross(false, SAY_HEX); return 'drew'; }
   if (k === 'encounter') { gEvidence(evt.count || 1); return 'drew'; }   // evidence arriving — the substrate landing
   if (k === 'note') { queueNote(); return 'drew'; }                      // a memory written — coalesced churn in the core
   if (k === 'doc.land') { gInflow(evt.count || 1, 0xa3e635, 1.0); return 'drew'; }   // a document arrives from the world
@@ -1819,6 +1986,7 @@ function tick() {
   const now = performance.now(); frames++;
   updateEffects(now);
   updateFogBand();              // depth band + point scale follow the camera, so this holds through zooming
+  updateFace(now);              // her face rides the same three materials — no geometry, no extra draw call
   // Position syncing only while the layout is actually moving. `_stillFrames` keeps a couple of frames of
   // sync after it stops so the last motion lands, and any reheat (new data, a mint) restarts it.
   if (engineRunning) { _stillFrames = 2; } else if (_stillFrames > 0) { _stillFrames--; }
@@ -1857,6 +2025,22 @@ try { if (window.sq && window.sq.kg && typeof window.sq.kg.onActivity === 'funct
 try { if (window.sq && window.sq.kg && typeof window.sq.kg.onFocusMove === 'function') window.sq.kg.onFocusMove(onFocusMove); } catch (e) {}
 // dedup/curation runs on the legacy kg:curation-move channel — fold it into the same stream (absorb gesture + log).
 try { if (window.sq && window.sq.kg && typeof window.sq.kg.onCurationMove === 'function') window.sq.kg.onCurationMove((p) => { if (p) onActivity({ db: 'echo', kind: 'node.merge', anchor: p.anchor, count: p.count || 1, tier: p.tier }); }); } catch (e) {}
+
+// ---- face toggle: one click and the graph is byte-identical to what it was before she existed ----
+const faceBtn = document.getElementById('faceBtn');
+if (faceBtn) {
+  const paintFace = () => faceBtn.classList.toggle('on', FACE_ON);
+  paintFace();
+  faceBtn.addEventListener('click', () => {
+    FACE_ON = !FACE_ON;
+    try { localStorage.setItem('kg3d.face', FACE_ON ? '1' : '0'); } catch (e) {}
+    if (!FACE_ON) face.strength = 0;
+    paintFace();
+  });
+}
+// The TTS wav, when it is reachable, so the mouth runs on real amplitude instead of the estimate. Main only
+// sends this once the broadcast lands (reboot-gated); until then faceSpeak's envelope carries her.
+try { if (window.sq && window.sq.onCompanionSpeak) window.sq.onCompanionSpeak((info) => { if (info && info.url) faceAttachAudio(info.url); }); } catch (e) {}
 
 // ---- log dock toggle ----
 const logDock = document.getElementById('logdock'), logBtn = document.getElementById('logBtn');
@@ -1921,6 +2105,13 @@ setInterval(loadSelf, 300000);                   // identity moves slowly — re
 // ---- dev handle for CDP verification ----
 window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, tendrilN: () => tendrilSpecs.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z,
   markerN: () => markerIndex.length, repaint: repaintNodeCloud, fit: fitView, rebuildLinks: buildLinkCloud,
+  // her face — drive it directly to judge the look without waiting for her to say something
+  face: (o) => { if (o && typeof o === 'object') { if (o.on != null) { FACE_ON = !!o.on; if (!FACE_ON) face.strength = 0; }
+      if (o.expression) faceExpression(o.expression); if (o.say != null) faceSpeak(o.say);
+      if (o.strength != null) { face.target = o.strength; face.strength = o.strength; }
+      if (o.mouthOpen != null) face.mouthOpen = o.mouthOpen; }
+    return { on: FACE_ON, model: !!AS, strength: +face.strength.toFixed(3), mouthOpen: +face.mouthOpen.toFixed(3),
+      speaking: performance.now() < face.speakUntil || !!face.analyser, realAudio: !!face.analyser, cur: face.cur }; },
   // "more actions in the log than on the visual" — measurable now instead of arguable. Per kind: how many the
   // bus delivered vs how many produced a gesture. Any row where drawn < seen names a real remaining gap.
   actStats: () => ({ seen: _act.seen, drawn: _act.drawn,
