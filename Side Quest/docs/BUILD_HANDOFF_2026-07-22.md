@@ -100,10 +100,28 @@ NEW DEP) parses BIFF; PROVEN against the real file: 6,695 rows, every LA elected
 office/parish/name/phone/party/terms. Verified direct URL appended to inquiry #3's open leads
 with honest provenance ("engineer-verified"). smoke_rehearsal flaked once under gate contention
 post-npm-install (green standalone; node_modules-intact assertion passed).
-WATCH boot61: the roster FETCH (`electionstatistics` in the log) → inquiry #1/#3 finally banking
-parish evidence → closes → the harvest-born homecoming announcing the answer to Lucas · [watchdog]
-closes · pinned Louisiana sweep outranking the alphabet · synthesis next-step banked · engage
-BLOCKED ungrounded say. The war-question retest is STILL OWED (last asking
+**THE AFTERNOON BLOCK (boots 62-63, ~12:30-13:10 — Lucas's directives, all shipped)**:
+· 0bfba1e promised-lookup net fires on IN-PROGRESS claims only (an "Understood – I'll…"
+acknowledgment produced a junk lookup) · e84a333 DUPLICATE-DOWNLOAD GATE (sha1 of extracted text at
+dl-ingest landing — one training PDF had landed 13×; dbecd56 had only fixed the sweep-overlap
+variant) · f192225 PHOTO ON ENCOUNTER (0 headshot grabs since Jul 17 — the grab was MINT-gated and
+the fusion dedup starved the mints; known people on a page now offer images to their EXISTING node,
+before the all-known early return) · e723443 lead slice 120→200 (a verified URL sat at char ~150,
+truncated out of the brief — the model kept guessing paths) · 21fd32c PDF landings never
+deep-browse (the fcoe.org visible-browser loop) · f241eea THE SITE LEDGER (site_visits records
+every successful capture; shouldSkip + TTL consulted by autonomous lanes, chat opens never consult;
+downloadPdf dedups CROSS-BOOT — nine boots each re-grabbed the same PDFs; site_plans = bounded
+digest checklist; planLine narrates "host: 12/30 pages digested" — Lucas: "I would rather get
+explained that a site is taking longer to digest") · 071bf66 INTERACTION TOOLS + ESCALATION
+(web_click/web_type/page_back reach the operator at last; open_page auto-escalates plain fetch →
+Wayback → vision, labeled; TOOL_SPEC teaches it all — Lucas: "the stack is going to waste").
+LIVE PROGRESS: inquiry #1 banked 52/64 parish clerks from the CORA page (touch 12 — finally
+eating); the zombie guard REFUSED live; the PDF-skip fired on its exact loop within minutes;
+first synthesis-born lead banked (Florida DoS county scrape). ⚠️MISREAD ON RECORD: her reply
+inverted "finish Louisiana first / in the state" into "nationwide" (nothing actually started).
+Gate = 306 suites. WATCH boot63: ledger `already digested` skips + digest narration · escalation
+`read via …` labels · first post-fix `grabbed headshot` · `duplicate download` skips · roster
+fetch (open_page on the .xls now works via plain-fetch → spreadsheet lane) · harvest homecoming. The war-question retest is STILL OWED (last asking
 was 23:36 on boot48, pre-news-tier — the honest-miss proof, not the tier's test): "what's the
 latest on the war?" must answer from her own stream in one turn (`enriched:news` in the log).
 BOOT49/50 PROOFS: inquiry #1 advanced touches 2-4 (the direction loop holds across boots) · email
