@@ -53,6 +53,7 @@ function makeDeps(capScript = [], opts = {}) {
       inMeeting: async () => state.inMeeting,
       inLobby: async () => state.inLobby,
       leaveMeeting: async () => { calls.leave++; return { ok: true }; },
+      dumpDom: async () => 'url: https://login.live.com/oauth20_authorize.srf\nsignals: joinBtn=false loginPage=true',
       preClear: async () => {},
       postChat: async (_w, msg) => { calls.postChat++; return state.postChatOk ? { ok: true } : { ok: false, reason: 'composer not found' }; },
       retrieve: async () => [], webLookup: async () => '',
@@ -161,6 +162,19 @@ function makeDeps(capScript = [], opts = {}) {
     for (let k = 0; k < 3; k++) { CLOCK += 10_000; await teams.runTick(ctx); }
     ok('advanced to observing despite chat being blocked (perception continues)', teams.get() === 'observing');
     ok('told Lucas LOUDLY the room was not told she is here', surfacedOut.some(t => /could NOT post my introduction|not been told|disclose/i.test(t)));
+    teams.reset();
+  }
+
+  console.log('\njoin not confirmed (wrong selectors / stuck on login) → strikes, never falsely advances:');
+  {
+    const { ctx } = makeDeps();   // inMeeting=false, inLobby=false throughout (recipe still returns ok)
+    teams.start(U1);
+    CLOCK += 10_000; await teams.runTick(ctx);
+    ok('tick 1: still joining (recipe-ok alone does NOT advance to intro)', teams.get() === 'joining');
+    CLOCK += 10_000; await teams.runTick(ctx);
+    ok('tick 2: still joining', teams.get() === 'joining');
+    CLOCK += 10_000; await teams.runTick(ctx);
+    ok('tick 3: 3rd strike → gave up (reset to none), never faked a join', teams.get() === 'none');
     teams.reset();
   }
 

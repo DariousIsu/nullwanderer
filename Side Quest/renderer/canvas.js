@@ -439,7 +439,19 @@ function mountMeeting(info, partition, defaultTitle) {
   meetpane.hidden = false; meetpane.classList.remove('minimized'); $('meetMin').textContent = '–';
 }
 function mountMeet(info) { mountMeeting(info, 'persist:zoe-google', 'Google Meet'); }
-function mountTeams(info) { mountMeeting(info, 'persist:zoe-teams', 'Microsoft Teams'); }
+// Teams needs a WARMUP: a cold load of the meeting URL triggered a silent-SSO iframe that Microsoft's
+// CSP blocked, so she never authenticated in. Load Teams home first (the ported cookies establish the
+// session there cleanly), then navigate the SAME pane to the meeting URL once it has settled.
+let teamsTarget = null;
+function mountTeams(info) {
+  const url = info && info.url; if (!url) return;
+  teamsTarget = url;
+  mountMeeting({ ...info, url: 'https://teams.microsoft.com/v2/' }, 'persist:zoe-teams', (info && info.title) || 'Microsoft Teams');
+  if (!meetWV) return;
+  const go = () => { if (teamsTarget === url) { const t = teamsTarget; teamsTarget = null; try { meetWV.src = t; } catch {} } };
+  // Fire after the home page's first load settles (gives auth a moment); { once } so it only swaps once.
+  meetWV.addEventListener('did-finish-load', () => setTimeout(go, 3500), { once: true });
+}
 function closeMeet() { if (meetWV) { try { meetWV.src = 'about:blank'; } catch {} meetWV.remove(); meetWV = null; } meetpane.hidden = true; meetpane.classList.remove('minimized'); }
 $('meetClose').addEventListener('click', closeMeet);
 $('meetReload').addEventListener('click', () => { if (meetWV) { try { meetWV.reload(); } catch {} } });

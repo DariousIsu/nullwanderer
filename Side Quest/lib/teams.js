@@ -243,8 +243,9 @@ async function runTick(ctx = {}) {
   if (stage === 'joining') {
     await d.preClear(d.web).catch(() => {});
     const r = await d.web.runRecipe('teams_join', { url: url() }, { expectLogin: true });
-    // SOURCE OF TRUTH: am I actually in, or in the lobby? (Lucas may have admitted me; the driver may
-    // have partly worked.) The DOM decides, not the recipe result.
+    // SOURCE OF TRUTH: the DOM decides, NOT the recipe result. With provisional selectors, a recipe that
+    // "clicked something" (r.ok) is NOT proof she's in — trusting it advanced her to intro against an
+    // un-joined page (the false positive seen live). Only an actual in-call / lobby signal advances.
     const inside = await d.inMeeting(d.web).catch(() => false);
     if (inside) { _clear(); set('intro'); surface('I joined the Teams meeting (muted).', '(teams) joined'); return { stage, ok: true, note: 'joined → intro' }; }
     const lobby = d.inLobby ? await d.inLobby(d.web).catch(() => false) : false;
@@ -255,10 +256,13 @@ async function runTick(ctx = {}) {
       surface('I reached the Teams lobby — waiting to be admitted.', '(teams) in lobby');
       return { stage, ok: true, note: 'reached lobby → waiting' };
     }
-    if (r && r.ok) { _clear(); set('intro'); surface('I joined the Teams meeting (muted).', '(teams) joined'); return { stage, ok: true, note: 'join recipe ok → intro' }; }
+    // NOT confirmed in. DUMP the live controls + page state (heal signal) so the real Teams join DOM can
+    // be mapped from the log — this is how Meet's selectors were healed. The dump tells us whether she's
+    // stuck on a login page (auth/CSP), a "continue on browser" gate, or a prejoin with wrong selectors.
+    try { if (d.dumpDom) { const dom = await d.dumpDom(d.web); if (dom) console.log('[teams] JOIN DOM (heal signal) ↓\n' + String(dom).slice(0, 2500)); } } catch {}
     const gv = _strike();
-    if (gv) { try { ctx.onSurface && ctx.onSurface(`I couldn't get into the Teams meeting (${(r && r.reason) || "the join screen didn't cooperate — Teams may not accept the in-app browser"}). ${ctx.userName || 'Lucas'}, could you check the link or let me in?`); } catch {} }
-    return { stage, ok: false, note: `join failed: ${r && r.reason}${gv ? ' (asked Lucas)' : ''}` };
+    if (gv) { try { ctx.onSurface && ctx.onSurface(`I couldn't get into the Teams meeting (${(r && r.reason) || "the join screen didn't cooperate — Teams may not accept the in-app browser, or I'm not signed in"}). ${ctx.userName || 'Lucas'}, could you check the link or let me in?`); } catch {} }
+    return { stage, ok: false, note: `join not confirmed (recipe ${r && r.ok ? 'clicked but no in-call/lobby signal' : 'failed: ' + (r && r.reason)})${gv ? ' — asked Lucas' : ''}` };
   }
 
   if (stage === 'waiting') {

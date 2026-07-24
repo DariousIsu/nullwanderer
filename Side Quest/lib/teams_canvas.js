@@ -92,6 +92,30 @@ const ATTENDEES_JS = `(() => {
   } catch (e) { return ''; }
 })()`;
 
+// --- DOM HEAL SIGNAL — dump the live clickable controls + key state so the REAL Teams join DOM can be
+// mapped from a failed join (exactly how Meet's selectors were healed). This is what turns a live test
+// into a selector-mapping session instead of a guess. ---
+const DOM_SNAPSHOT_JS = `(() => {
+  try {
+    const out = ['url: ' + location.href];
+    const els = Array.from(document.querySelectorAll('button,[role="button"],a[href],[data-tid]')).slice(0, 60);
+    for (const e of els) {
+      const tid = e.getAttribute('data-tid') || '';
+      const al = (e.getAttribute('aria-label') || '').replace(/\\s+/g,' ').trim().slice(0, 50);
+      const tx = (e.textContent || '').replace(/\\s+/g,' ').trim().slice(0, 40);
+      if (!tid && !al && !tx) continue;
+      out.push('· ' + e.tagName.toLowerCase() + (tid ? ' data-tid=' + tid : '') + (al ? ' aria="' + al + '"' : '') + (tx ? ' text="' + tx + '"' : ''));
+    }
+    const body = (document.body.innerText || '').toLowerCase();
+    out.push('signals: joinBtn=' + !!document.querySelector('[data-tid="prejoin-join-button"],button[aria-label*="Join now" i]')
+      + ' hangup=' + !!document.querySelector('[data-tid="hangup-main-btn"],[data-tid="call-hangup"],#hangup-button')
+      + ' continueOnBrowser=' + /continue on this browser|join on the web/i.test(body)
+      + ' lobbyText=' + /let you in|in the lobby|when the meeting starts/i.test(body)
+      + ' loginPage=' + /login\\.live\\.com|login\\.microsoftonline/i.test(location.href));
+    return out.join('\\n');
+  } catch (e) { return 'dump failed: ' + (e && e.message); }
+})()`;
+
 // Click the first button/link matching any of the given aria-label / text / data-tid fragments.
 function clickByLabelJS(fragments) {
   const arr = JSON.stringify(fragments.map(f => f.toLowerCase()));
@@ -197,7 +221,10 @@ function createTeamsDriver(getWC) {
     return { ok: true, via: via || 'leave-button' };
   }
 
-  return { inMeeting, inLobby, continueOnBrowser, navigate, preClear, joinNow, enableCaptions, scrapeCaptions, scrapeAttendees, postChat, leave };
+  // Heal signal — the live control inventory + key state, for mapping the real join DOM.
+  async function dumpDom() { return (await exec(DOM_SNAPSHOT_JS)) || ''; }
+
+  return { inMeeting, inLobby, continueOnBrowser, navigate, preClear, joinNow, enableCaptions, scrapeCaptions, scrapeAttendees, postChat, leave, dumpDom };
 }
 
 // The live driver, registered by main once the Canvas window exists. canvasTeamsDeps() reads it.
@@ -231,6 +258,7 @@ function canvasTeamsDeps() {
     inLobby: () => driver ? driver.inLobby() : false,
     continueOnBrowser: () => driver ? driver.continueOnBrowser() : '',
     leaveMeeting: () => driver ? driver.leave() : { ok: false },
+    dumpDom: () => driver ? driver.dumpDom() : '',
     preClear: () => driver ? driver.preClear() : undefined,
     postChat: (_web, message) => driver ? driver.postChat(message) : { ok: false, reason: 'no driver' },
     storeMeeting: async (content, opts = {}) => { try { return await require('./memory').store({ kind: opts.kind || 'meeting', content, source: opts.source || 'teams', importance: opts.importance == null ? 0.75 : opts.importance }); } catch { return null; } },
