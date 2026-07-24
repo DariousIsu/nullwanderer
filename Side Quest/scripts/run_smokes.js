@@ -8,6 +8,7 @@
  */
 const { execFileSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const electron = require('electron');              // in plain Node this resolves to the binary path
@@ -263,6 +264,7 @@ const smokes = [
   'smoke_site_ledger.js',
   'smoke_fetch_escalation.js',
   'smoke_rehearsal_driver.js',
+  'smoke_rehearsal_py.js',
   'smoke_capability_need.js',
   'smoke_ner.js',
   'smoke_mention.js',
@@ -336,6 +338,41 @@ const smokes = [
   'smoke_api_bulk.js',
 ];
 
+// SWEEP THE TEMP DATABASES THE SMOKES CANNOT DELETE THEMSELVES.
+//
+// Every db-backed smoke ends with `try { fs.unlinkSync(tmp); } catch {}` — and on Windows that
+// ALWAYS throws EBUSY, because the better-sqlite3 handle is still open when the process exits. The
+// error is swallowed, so the failure is invisible and all three WAL-mode files (.db, -wal, -shm)
+// survive every run. Measured 2026-07-23: 3,192 orphaned files.
+//
+// That was not merely untidy. The paths were keyed on `process.pid`, PIDs recycle, and a later smoke
+// landing on a recycled PID opened its predecessor's database believing it was empty — so
+// smoke_covered_union intermittently saw the focus.* rows ITS OWN previous run had written and
+// failed its first assertion while the other ten passed. A gate that reports red for a reason that
+// has nothing to do with the code is worse than no gate: it teaches you to read past red. The paths
+// now carry a random suffix so a leftover can never be adopted; this sweep stops them accumulating.
+function sweepOrphanedTempDbs(label) {
+  try {
+    const tmpDir = os.tmpdir();
+    // Smokes leave temp state in BOTH shapes: loose files (`sq_apibulk_<uniq>.db` plus its -wal/-shm)
+    // and whole directories (`sq_personaltest_<uniq>/sq.db`). Matching only the files left 3,289
+    // directories behind on the first pass.
+    const FILE_RE = /^(?:sq_|ss_)[\w-]*\.(?:db|json)(?:-wal|-shm)?$/;
+    const DIR_RE = /^(?:sq_|ss_)[\w-]+$/;
+    let swept = 0;
+    for (const e of fs.readdirSync(tmpDir, { withFileTypes: true })) {
+      const isDir = e.isDirectory();
+      if (!(isDir ? DIR_RE : FILE_RE).test(e.name)) continue;
+      try { fs.rmSync(path.join(tmpDir, e.name), { force: true, recursive: isDir }); swept++; } catch { /* still locked by a live run */ }
+    }
+    if (swept) console.log(`swept ${swept} orphaned smoke temp file(s) ${label}`);
+  } catch { /* never let housekeeping block the gate */ }
+}
+// BEFORE: nothing from an earlier run can be adopted or counted. AFTER: the children have exited, so
+// their handles are released and this run's own files can finally be removed — sweeping only at the
+// start would leave a full run's residue (~1,000 files) sitting on the machine until next time.
+sweepOrphanedTempDbs('before the run\n');
+
 let passed = 0, failed = 0;
 const failures = [];
 for (const s of smokes) {
@@ -352,9 +389,15 @@ for (const s of smokes) {
   // refactored without one gated test running.
   const m = out.match(/(ALL PASS|FAILURES|PASS|FAIL) — (\d+) (?:ok|passed), (\d+) failed/);
   if (m && /^(ALL )?PASS$/.test(m[1])) { passed++; console.log(`PASS  ${s.padEnd(30)} (${m[2]} ok)`); }
+  // THIRD dialect: a suite that prints a bare "SMOKE PASSED"/"SMOKE FAILED" with no counts (e.g.
+  // smoke_activity_coverage). It was reported as a FAILURE for want of a matching regex — the same
+  // bug the comment above describes, one dialect later. A green suite counted as red is not the safe
+  // direction it looks like: it trains everyone to read past a red gate.
+  else if (!m && /^\s*SMOKE PASSED\s*$/m.test(out)) { passed++; console.log(`PASS  ${s.padEnd(30)} (no count reported)`); }
   else { failed++; failures.push(s); console.log(`FAIL  ${s.padEnd(30)} ${m ? `(${m[3]} failed)` : '(no result line — crashed?)'}`); }
 }
 
+sweepOrphanedTempDbs('after the run');
 console.log(`\n${failed === 0 ? '✅ ALL GREEN' : '❌ FAILURES'} — ${passed} suites passed, ${failed} failed`);
 if (failures.length) console.log('   failed:', failures.join(', '));
 process.exit(failed === 0 ? 0 : 1);

@@ -36,6 +36,15 @@ function _marker(dir) { return path.join(dir, '.rehearsal.json'); }
 function _readMarker(dir) { try { return JSON.parse(fs.readFileSync(_marker(dir), 'utf8')); } catch { return null; } }
 function _touch(dir) { const m = _readMarker(dir) || {}; m.touchedTs = Date.now(); try { fs.writeFileSync(_marker(dir), JSON.stringify(m)); } catch {} }
 
+// R2 — the Echo venv interpreter, resolved EXACTLY as main.js does for the gcal bridge (env override
+// wins, else the venv under ECHO_CWD). A python tool in the sandbox is judged by a JS harness smoke
+// that SHELLS this interpreter; test() hands the harness this path as ZOE_PY so the harness never
+// has to guess where python lives. Pure — safe to call from a smoke without a live engine.
+function pyInterp() {
+  const cwd = process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo';
+  return process.env.ECHO_PYTHON || path.join(cwd, '.venv', 'Scripts', 'python.exe');
+}
+
 function list() {
   let out = [];
   try {
@@ -108,6 +117,31 @@ function edit({ slug, path: rel, find, replace } = {}) {
   } catch (e) { return `edit failed: ${e.message}`; }
 }
 
+// R2 — CREATE a NEW file in the sandbox (her first authoring primitive beyond editing existing copies).
+// DELIBERATELY NARROW: only a python tool (tools/<name>.py) or its harness (scripts/smoke_<name>.js).
+// Everything else stays edit-only — writeFile can never plant a .js the live loader would run, only the
+// new tool tree the sandbox owns. Create-only: changing a file that exists is rehearsal_edit's exact-
+// match-once contract, never a blind overwrite. Same jail as edit (_sandboxFile blocks escapes + the
+// node_modules junction); the pattern whitelist is the extra R2 fence.
+const _NEW_FILE_OK = [/^tools\/[a-z0-9_-]+(?:\/[a-z0-9_-]+)*\.py$/i, /^scripts\/smoke_[a-z0-9_]+\.js$/i];
+function writeFile({ slug, path: rel, content } = {}) {
+  const f = _sandboxFile(slug, rel);
+  if (!f.abs) return `cannot write: ${f.reason}`;
+  const r = String(rel || '').trim().replace(/\\/g, '/');
+  if (!_NEW_FILE_OK.some((re) => re.test(r))) return 'cannot write: a NEW file may only be a python tool (tools/<name>.py) or its harness (scripts/smoke_<name>.js) — change existing source with rehearsal_edit';
+  if (fs.existsSync(f.abs)) return `cannot write: ${r} already exists in sandbox "${f.slug}" — change it with rehearsal_edit (exact-match-once), not a blind overwrite`;
+  const body = String(content == null ? '' : content);
+  if (body.length < 1) return 'cannot write: give the file content';
+  if (body.length > 200000) return 'cannot write: file too large (>200KB) — a tool this big is not a bounded rehearsal';
+  try {
+    fs.mkdirSync(path.dirname(f.abs), { recursive: true });
+    fs.writeFileSync(f.abs, body);
+    _touch(f.dir);
+    const isPy = /\.py$/i.test(r);
+    return `wrote ${r} (${body.length} chars) in sandbox "${f.slug}". ${isPy ? 'Write a harness (scripts/smoke_<name>.js) that shells it via process.env.ZOE_PY, then judge with rehearsal_test.' : 'This harness shells your python tool through process.env.ZOE_PY when rehearsal_test runs it.'}`;
+  } catch (e) { return `write failed: ${e.message}`; }
+}
+
 // Judge the changed copy with HER OWN gate, cwd = the sandbox. Registers on the board.
 function test({ slug, suite = null, timeoutMs = null } = {}) {
   return new Promise((resolve) => {
@@ -126,7 +160,8 @@ function test({ slug, suite = null, timeoutMs = null } = {}) {
     const { execFile } = require('child_process');
     execFile(process.execPath, [script], {
       cwd: d.dir, timeout: ms, maxBuffer: 16 * 1024 * 1024, windowsHide: true,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      // ZOE_PY = the Echo venv interpreter, so a JS harness can SHELL a sandbox python tool (R2).
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ZOE_PY: pyInterp() },
     }, (err, stdout, stderr) => {
       _touch(d.dir);
       const out = `${stdout || ''}${stderr ? '\n' + stderr : ''}`.trim();
@@ -207,4 +242,4 @@ function tidy({ nowMs = Date.now() } = {}) {
   return n;
 }
 
-module.exports = { REHEARSAL_ROOT, MAX_SANDBOXES, STALE_MS, create, edit, test, diff, discard, tidy, list };
+module.exports = { REHEARSAL_ROOT, MAX_SANDBOXES, STALE_MS, create, edit, writeFile, test, diff, discard, tidy, list, pyInterp };

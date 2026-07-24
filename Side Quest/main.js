@@ -8882,6 +8882,7 @@ const operatorTools = {
   },
   rehearsal_create: async ({ slug } = {}) => { try { return require('./lib/rehearsal').create({ slug }); } catch (e) { return 'ERROR: ' + e.message; } },
   rehearsal_edit: async ({ slug, path: p, find, replace } = {}) => { try { return require('./lib/rehearsal').edit({ slug, path: p, find, replace }); } catch (e) { return 'ERROR: ' + e.message; } },
+  rehearsal_write: async ({ slug, path: p, content } = {}) => { try { return require('./lib/rehearsal').writeFile({ slug, path: p, content }); } catch (e) { return 'ERROR: ' + e.message; } },
   rehearsal_test: async ({ slug, suite } = {}) => { try { return await require('./lib/rehearsal').test({ slug, suite: suite || null }); } catch (e) { return 'ERROR: ' + e.message; } },
   rehearsal_diff: async ({ slug } = {}) => { try { return require('./lib/rehearsal').diff({ slug }); } catch (e) { return 'ERROR: ' + e.message; } },
   rehearsal_discard: async ({ slug } = {}) => { try { return require('./lib/rehearsal').discard({ slug }); } catch (e) { return 'ERROR: ' + e.message; } },

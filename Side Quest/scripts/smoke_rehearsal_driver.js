@@ -9,7 +9,7 @@ const Database = require('better-sqlite3');
 let pass = 0, fail = 0;
 const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++; console.log('  ✗', t); } };
 
-function freshDeps({ picks = [], testResults = [], editResults = [], diffs = [] } = {}) {
+function freshDeps({ picks = [], testResults = [], editResults = [], writeResults = [], diffs = [] } = {}) {
   const mem = new Database(':memory:');
   mem.exec(`CREATE TABLE procedures (id INTEGER PRIMARY KEY, kind TEXT, name TEXT, trigger_text TEXT, steps TEXT,
     check_text TEXT, applicability TEXT, provenance TEXT, met INTEGER DEFAULT 0, unmet INTEGER DEFAULT 0,
@@ -21,6 +21,7 @@ function freshDeps({ picks = [], testResults = [], editResults = [], diffs = [] 
     rehearsal: {
       create: ({ slug }) => `sandbox "${slug}" created — 120 source files copied to a working COPY (the live program is untouched).`,
       edit: () => (editResults.length ? editResults.shift() : 'edited lib/x.js in sandbox "t" (one exact match replaced).'),
+      writeFile: ({ path: p }) => (writeResults.length ? writeResults.shift() : `wrote ${p} (42 chars) in sandbox "t".`),
       test: async () => (testResults.length ? testResults.shift() : '[sandbox "t" gate passed]\nPASS — 1 ok, 0 failed'),
       diff: () => (diffs.length ? diffs.shift() : 'sandbox "t" — 1 file(s) changed vs live:\n=== lib/x.js\n- old\n+ new'),
       discard: () => 'discarded',
@@ -50,6 +51,31 @@ function freshDeps({ picks = [], testResults = [], editResults = [], diffs = [] 
   ok(drv.validateEditPick('{"action":"give_up","why":"the suite tests a live socket"}').valid, 'give_up is first-class');
   ok(!drv.validateEditPick('{"action":"edit","path":"lib/x.js","find":"same","replace":"same"}').valid, 'find===replace refuses');
   ok(!drv.validateEditPick('no json').valid, 'garbage refuses');
+  // --- R2: new_file is a first-class action (build a python tool that doesn't exist yet) ---
+  ok(drv.validateEditPick('{"action":"new_file","path":"tools/parse.py","content":"import sys\\nprint(42)","why":"the tool"}').valid, 'a new_file pick validates (path + content)');
+  ok(!drv.validateEditPick('{"action":"new_file","path":"tools/parse.py","content":""}').valid, 'new_file with empty content refuses');
+
+  // --- R2 iterate: a new_file creates the file and stays active (not yet judged) ---
+  {
+    const { deps } = freshDeps({ picks: [{ action: 'new_file', path: 'tools/parse.py', content: 'print(1)', why: 'the tool' }] });
+    drv.start({ slug: 't', goal: 'build a python tool that parses the fine schedule table', suite: 'smoke_parse.js', files: ['tools/parse.py'], deps });
+    const r = await drv.iterate({ deps });
+    ok(r.ok && r.status === 'active' && /created tools\/parse\.py/.test(r.note), 'a new_file creates the tool and keeps the run active for the next step');
+    const run = drv.load({ deps });
+    ok(run.edits.length === 1 && run.edits[0].kind === 'new_file' && run.edits[0].ok === true, 'the journal records the new_file honestly');
+    ok(/wrote tools\/parse\.py/.test(run.lastResult), 'the write confirmation rides into the next attempt');
+  }
+  // --- R2 iterate: a refused new_file rides the next attempt (same contract as a failed edit) ---
+  {
+    const { deps } = freshDeps({
+      picks: [{ action: 'new_file', path: 'lib/x.js', content: 'evil', why: 'nope' }],
+      writeResults: ['cannot write: a NEW file may only be a python tool (tools/<name>.py) or its harness (scripts/smoke_<name>.js) — change existing source with rehearsal_edit'],
+    });
+    drv.start({ slug: 't', goal: 'a goal long enough to pass the start contract check', suite: 'smoke_x.js', deps });
+    const r = await drv.iterate({ deps });
+    ok(r.status === 'active' && /new_file refused/.test(r.note), 'a new_file outside the tool tree is refused, run stays active');
+    ok(/NEW_FILE FAILED/.test(drv.load({ deps }).lastResult), 'the refusal rides the next attempt verbatim');
+  }
 
   // --- iterate: the failure rides the next attempt (44f8052, the load-bearing mechanic) ---
   {

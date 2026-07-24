@@ -65,9 +65,10 @@ function start({ slug, goal, suite, files = [], deps = {}, nowMs = Date.now() } 
 // The edit-picker envelope — defined at dispatch, validated in code (§6 L2).
 const EDIT_WANT = `You are iterating on a REHEARSAL — a sandboxed copy of your own source, judged by your own smoke gate. Decide the SINGLE next action. Reply ONLY strict JSON, one of:
 {"action":"edit","path":"lib/x.js","find":"<exact text currently in the file — copy it verbatim, it must occur EXACTLY ONCE>","replace":"<the replacement>","why":"<one line>"}
+{"action":"new_file","path":"tools/x.py","content":"<the FULL new file — a python tool (tools/<name>.py), or its harness (scripts/smoke_<name>.js) which shells the tool via process.env.ZOE_PY and prints PASS/FAIL>","why":"<one line>"}
 {"action":"test","why":"<the edits look complete — run the suite>"}
 {"action":"give_up","why":"<honest: why this goal cannot be reached this way>"}
-Ground the edit in the FILE CONTENT shown — never guess at text you cannot see. If the last test output shows a failure, fix THAT failure. Small, surgical edits win; rewrites lose.`;
+Ground the edit in the FILE CONTENT shown — never guess at text you cannot see. new_file is ONLY for a python tool or its harness that do not exist yet (build the tool, then the harness, then test); to CHANGE a file that exists, use edit. If the last test output shows a failure, fix THAT failure. Small, surgical edits win; rewrites lose.`;
 
 function validateEditPick(raw) {
   try {
@@ -75,7 +76,12 @@ function validateEditPick(raw) {
     if (!m) return { valid: false, error: 'no JSON object' };
     const o = JSON.parse(m[0]);
     if (o.action === 'test' || o.action === 'give_up') return { valid: true, value: { action: o.action, why: str(o.why).slice(0, 240) } };
-    if (o.action !== 'edit') return { valid: false, error: 'action must be edit|test|give_up' };
+    if (o.action === 'new_file') {
+      const nf = { action: 'new_file', path: str(o.path).trim(), content: str(o.content), why: str(o.why).slice(0, 240) };
+      if (!nf.path || nf.content.length < 1) return { valid: false, error: 'new_file needs path + content' };
+      return { valid: true, value: nf };
+    }
+    if (o.action !== 'edit') return { valid: false, error: 'action must be edit|new_file|test|give_up' };
     const out = { action: 'edit', path: str(o.path).trim(), find: str(o.find), replace: str(o.replace), why: str(o.why).slice(0, 240) };
     if (!out.path || !out.find || out.find === out.replace) return { valid: false, error: 'edit needs path + find + a real replacement' };
     return { valid: true, value: out };
@@ -128,6 +134,23 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
     run.status = 'stuck'; _save(run, deps);
     _crystallizeStuck(run, pick.why, deps, nowMs);
     return { ok: true, status: 'stuck', note: `gave up honestly: ${pick.why}` };
+  }
+
+  if (pick.action === 'new_file') {
+    // R2 — originate a python tool or its harness (tools/*.py, scripts/smoke_*.js). A fresh file is
+    // not yet judged; record it and let the NEXT iteration write its harness / edit / test. Refusals
+    // ride the next attempt verbatim, same contract as a failed edit.
+    const wr = str(R.writeFile({ slug: run.slug, path: pick.path, content: pick.content }));
+    const wrote = /^wrote /.test(wr);
+    run.edits.push({ i: run.iteration, path: pick.path, ok: wrote, why: pick.why, kind: 'new_file' });
+    if (!wrote) {
+      run.lastResult = `NEW_FILE FAILED (${pick.path}): ${wr}\nNew files may only be tools/<name>.py or scripts/smoke_<name>.js — change an existing file with an edit instead.`;
+      _save(run, deps);
+      return { ok: true, status: 'active', note: `new_file refused (${wr.slice(0, 60)}) — the refusal rides the next attempt` };
+    }
+    run.lastResult = `${wr}\n(build the rest, then pick "test" to run ${run.suite})`;
+    _save(run, deps);
+    return { ok: true, status: 'active', note: `created ${pick.path} — next iteration writes the harness / edits / tests` };
   }
 
   if (pick.action === 'edit') {
