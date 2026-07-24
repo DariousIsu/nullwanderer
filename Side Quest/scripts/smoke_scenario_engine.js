@@ -97,5 +97,16 @@ ok(two.two_sided === true && two.positive && two.negative, 'an ambiguous shock r
 ok(two.positive.delta.chambers.house.dP_control > 0 && two.negative.delta.chambers.house.dP_control < 0, '⭐the two signs straddle zero — read as a RANGE, never one confident number');
 ok(approx(byId(two.positive.applied, 'OH-13:us-representative').margin, 1) && approx(byId(two.negative.applied, 'OH-13:us-representative').margin, -5), 'the two signs are ±the same magnitude (OH-13: −2±3 → +1 / −5)');
 
+console.log('waterfall (stacked futures — cumulative delta compounds):');
+// Stack the western wildfire (Rep-ward, fire-west competitive) THEN a national Rep-ward shock. Each stage's
+// cumulative delta should push P(Dem) further down, and a western competitive seat carries BOTH deltas.
+const nationalRep = E.makeScenario({ id: 'national-rep-drift', name: 'National Rep drift', description: 'A uniform Rep-ward shift in competitive seats.', effects: [{ selector: { scope: 'national', competitiveOnly: true }, margin_delta: -2, sigma_add: 0, rationale: 'uniform drift', confidence: 0.4 }] });
+const wf = E.runScenario ? E.runWaterfall(baseRaces, [wildfire, nationalRep], SIM) : null;
+ok(wf && wf.stages.length === 2, 'runWaterfall emits one stage per stacked scenario');
+ok(wf.stages[0].cumulativeDelta.chambers.house.dP_control < 0 && wf.stages[1].cumulativeDelta.chambers.house.dP_control < wf.stages[0].cumulativeDelta.chambers.house.dP_control, '⭐each stacked shock compounds — stage 2 lowers P(Dem House) further than stage 1');
+const wfCA = wf.stages[1].applied.find((r) => r.id === 'CA-01:us-representative');
+ok(approx(wfCA.margin, 2 - 4 - 2), '⭐a western competitive seat carries BOTH stacked shocks (CA-01: +2 −4 −2 = −4)');
+ok(byId(baseRaces, 'CA-01:us-representative').margin === 2, 'ISOLATION holds through a waterfall — the baseline slate is still unmutated');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

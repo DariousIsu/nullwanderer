@@ -207,8 +207,34 @@ function runScenario(races, scenario, opts = {}) {
   return { status: SCENARIO_STATUS, scenario_id: scenario.id, two_sided: false, base, applied, sim, delta: buildScenarioDelta(base, sim, { baseRaces: races, appliedRaces: applied }) };
 }
 
+/**
+ * runWaterfall(races, scenarios, opts) → apply scenarios in SEQUENCE, emitting the CUMULATIVE delta vs. the
+ * original baseline after each stage ("possible futures" stacked, design §6/§8 Slice 2). Each stage applies
+ * its scenario's effects ON TOP OF the previous stage's races, then sims (same seed). A two-sided scenario in
+ * a stack is applied at its POSITIVE sign for the cumulative narrative path (a stack is one coherent future);
+ * its standalone two-sided RANGE is still available via runScenario individually. PURE.
+ */
+function runWaterfall(races, scenarios, opts = {}) {
+  const applyOpts = {
+    competitiveThreshold: opts.competitiveThreshold != null ? opts.competitiveThreshold : DEFAULT_COMPETITIVE_PTS,
+    defaultSigma: opts.defaultSigma != null ? opts.defaultSigma : DEFAULT_SIGMA,
+  };
+  const base = simulate(races, { ...opts });
+  const stages = [];
+  let cur = races;
+  for (const scn of (Array.isArray(scenarios) ? scenarios : [])) {
+    cur = applyScenario(cur, scn, applyOpts);                 // stack on top of the previous stage's slate
+    const sim = simulate(cur, { ...opts });
+    stages.push({
+      scenario_id: scn && scn.id, applied: cur, sim,
+      cumulativeDelta: buildScenarioDelta(base, sim, { baseRaces: races, appliedRaces: cur }),
+    });
+  }
+  return { status: SCENARIO_STATUS, base, stages };
+}
+
 module.exports = {
   SCENARIO_STATUS, DEFAULT_COMPETITIVE_PTS,
   stateAbbrOf, raceIsCompetitive, matchesSelector, normalizeEffect, makeScenario,
-  applyScenario, buildScenarioDelta, runScenario,
+  applyScenario, buildScenarioDelta, runScenario, runWaterfall,
 };
