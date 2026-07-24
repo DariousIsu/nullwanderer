@@ -49,8 +49,12 @@ function ingestRows(db, rows, opts = {}) {
   const source = opts.source || 'handoff sheet';
   const sourceUrl = opts.sourceUrl || null;   // CITATION: the document/page these contacts came from (Lucas's cite mandate)
   const obsKind = opts.obsKind || 'handoff';  // evidence kind for the non-email attrs (a doc drop passes 'doc')
+  // Build the (name, company) → id dedup set from the EXISTING store. ⭐Stream only the 3 dedup columns via
+  // eachTargetKey — never listTargets({limit:1e7}), which SELECT *'d the whole ~271k-target population into
+  // memory synchronously and pegged the main thread ~16s on every doc-decomp ingest (profiler-confirmed).
   const seen = new Map();
-  for (const t of db.listTargets({ limit: 1e7 })) seen.set(key(t.name, t.company), t.id);
+  if (typeof db.eachTargetKey === 'function') db.eachTargetKey((t) => seen.set(key(t.name, t.company), t.id));
+  else for (const t of db.listTargets({ limit: 1e7 })) seen.set(key(t.name, t.company), t.id);   // fallback: test doubles / older db instances
   const patternStates = new Map();   // domain -> pure belief state
   const landed = [];   // every row mapped to a target ({name, company, targetId, created}) — feeds the People rail
   const stats = { rows: 0, targets: 0, skippedDup: 0, noName: 0, observations: 0, beliefs: 0,

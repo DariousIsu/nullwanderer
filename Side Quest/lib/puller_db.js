@@ -210,6 +210,15 @@ function listTargets({ status = null, domain = null, limit = 200, offset = 0, in
                ORDER BY last_accessed_at DESC LIMIT ? OFFSET ?`;
   return _db().prepare(sql).all(...args, limit, offset);
 }
+// Stream just the dedup KEYS (id, name, company) for non-merged targets — the ingest seen-set builder.
+// ⭐NEVER SELECT * the whole population here: loading FULL rows for the ~271k-target store synchronously pegged
+// the main thread ~16s on every doc-decomp ingest (profiler-confirmed: puller_ingest.ingestRows → listTargets;
+// same disease as the F4-dedup freeze). .iterate() streams one lean row at a time, so no giant array is ever
+// materialized and only 3 small columns are read.
+function eachTargetKey(cb) {
+  const stmt = _db().prepare(`SELECT id, name, company FROM targets WHERE merged_into IS NULL`);
+  for (const r of stmt.iterate()) cb(r);
+}
 // Resolve a target by one of its email values (held belief first, then any observation) — the bridge
 // for ingesting a vendor bounce file keyed only by email. Case-insensitive. null if no match.
 function findTargetByEmail(email) {
@@ -545,7 +554,7 @@ function splitTarget(fromId, { obsIds = [], name, company = null, domain = null,
 
 module.exports = {
   init, close,
-  createTarget, getTarget, liveTarget, listTargets, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName,
+  createTarget, getTarget, liveTarget, listTargets, eachTargetKey, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName,
   addObservation, listObservations, observationCounts, failedAddresses,
   upsertBelief, getBelief, beliefValuesByType, listBeliefs, markSendState, listBeliefsBySendState,
   getPatternState, savePatternState,

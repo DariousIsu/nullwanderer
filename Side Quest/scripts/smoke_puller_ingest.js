@@ -81,6 +81,20 @@ ok('contactsToRows → one verified NewCo row', bridged.length === 1 && bridged[
 const s3 = I.ingestRows(DB, bridged, { source: 'research:NewCo' });
 ok('bridged verified contact credits the newco.io first.last pattern', s3.targets === 1 && s3.patternHits === 1 && !!DB.getPatternState('newco.io').patterns['first.last']);
 
+// ⭐REGRESSION (the ~16s main-thread freeze): ingestRows rebuilds its (name,company)→id dedup set from the
+// WHOLE store on every call — fires on every doc-decomp. It MUST stream only the 3 lean columns via
+// eachTargetKey, NEVER listTargets({limit:1e7}) which SELECT *'d the entire ~271k-target population
+// synchronously and pegged the main thread (profiler-confirmed). Spy on which path runs.
+{
+  let usedEach = 0, usedFullList = 0;
+  const spy = { ...DB,
+    eachTargetKey: (cb) => { usedEach++; return DB.eachTargetKey(cb); },
+    listTargets: (o) => { if (o && (o.limit || 0) >= 1e6) usedFullList++; return DB.listTargets(o); },
+  };
+  I.ingestRows(spy, [{ confidence: '95%', name: 'Spy One', company: 'SpyCo', email: 's@spyco.io' }], { source: 'spy' });
+  ok('ingest builds its dedup set via eachTargetKey (lean stream), never a full-population SELECT *', usedEach === 1 && usedFullList === 0);
+}
+
 DB.close();
 console.log(`\nsmoke_puller_ingest: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
