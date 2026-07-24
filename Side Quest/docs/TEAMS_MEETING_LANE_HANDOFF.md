@@ -4,6 +4,14 @@
 Reference-style: it points at the real files to mirror and the exact shared surface — not a spec to
 follow line by line.
 
+> **UPDATE 2026-07-24 (Lucas):** Zoe now has her OWN Teams account — so the plan flips from anonymous
+> guest-join to **authenticated join**, mirroring the Meet path exactly. Touchpoint 1 and the
+> "Authenticated join flow" unknown below are already revised for this: DO port her session (a
+> `portZoeTeamsSession` analog of `portZoeGoogleSession`), do NOT guest-join. Prereq: sign her Teams
+> account into her DEDICATED browser once (that's the cookie-port source — MS, like Google, blocks
+> interactive sign-in inside an embedded webview). Confirm live whether it's an Entra/org or a personal
+> MS account (affects lobby + the login domain: `login.microsoftonline.com` vs `login.live.com`).
+
 ## Goal
 Let Zoe join + observe **Microsoft Teams** meetings the way she already does Google Meet. Lucas's work
 life (Rainey Center) runs on Teams — e.g. the BGOV meeting (`BGOV | People Agent and Grants`, today
@@ -33,8 +41,12 @@ helpers** rather than duplicating or refactoring them (keeps this lane collision
 These are all far from the chat/answer region I'm editing, so no hunk overlap — but coordinate that
 only ONE of us edits main.js at a time:
 1. `startCanvasMeeting` ([main.js:2362](../main.js)) — add a Teams branch: mount into a
-   `persist:zoe-teams` partition, **guest-join** (no `portZoeGoogleSession` — see unknowns), kick
-   `teams.start()`. Consider a `startCanvasMeeting(url, title, {platform})` param over a fork.
+   `persist:zoe-teams` partition, **authenticated join** — add a `portZoeTeamsSession()` mirroring
+   `portZoeGoogleSession` ([main.js:2341](../main.js)) that copies her Microsoft/Teams cookies
+   (`login.microsoftonline.com` / `login.live.com` / `teams.microsoft.com`) from her dedicated browser
+   into `persist:zoe-teams` BEFORE the pane loads, then kick `teams.start()`. (She's signed into Teams on
+   her dedicated browser; MS blocks interactive sign-in inside a webview, same as Google — port the authed
+   cookies, don't sign in in-pane.) Consider a `startCanvasMeeting(url, title, {platform})` param over a fork.
 2. join-detect wire ([main.js:5020](../main.js)) — add `detectTeamsUrl(userMessage)` beside
    `detectMeetUrl`; route a `teams.microsoft.com` link to the Teams branch.
 3. driver register + idle-loop advance — `meetDriverInst` ([main.js:2324](../main.js)), the runTick
@@ -61,9 +73,11 @@ only ONE of us edits main.js at a time:
   Lucas (companion in use).
 
 ## Teams-specific unknowns (the real risk — resolve these live)
-- **Guest join flow**: Teams web → "Join on the web instead" → the "continue on this browser" gate →
-  prejoin screen → type a name → "Join now". Likely needs NO MS account IF the meeting allows guests
-  (org policy). Confirm on a real invite; if guests are blocked, Zoe needs an MS identity (bigger).
+- **Authenticated join flow** (she has her own Teams account now): Teams web → "continue on this
+  browser" gate → prejoin screen (already signed in as her — no name to type) → "Join now" → possibly a
+  lobby (host admits). Prereq: her Teams account signed into her DEDICATED browser once, so
+  `portZoeTeamsSession` has cookies to copy. Confirm live: Entra/org vs personal MS account — an org
+  account in a tenant she belongs to may skip the lobby; an external/personal account will hit it.
 - **URL forms** (both appear in the real BGOV invite): `https://teams.microsoft.com/meet/<id>?p=<pass>`
   and `https://teams.microsoft.com/l/meetup-join/19%3ameeting_…%40thread.v2/0?context=…`.
   `detectTeamsUrl` must match both.
