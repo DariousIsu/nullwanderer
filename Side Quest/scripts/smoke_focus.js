@@ -173,6 +173,19 @@ async function run() {
   const dup = await focus.setFromDirective('catalog every right-of-center energy think tank');
   ok('a near-identical follow-up does NOT spawn a duplicate (idempotent)', dup.focus.id === disp.focus.id);
 
+  // --- ORIGIN persistence (autonomic-canvas gate, Slice P): who seeded the focus is remembered per
+  // id, so the canvas gate can suppress an autonomic county BEAT run while a real USER directive still
+  // renders. Both carry directed:true, so `directed` alone can't tell them apart — origin can. ---
+  console.log('\nfocus origin (user vs autonomic beat — the canvas-flood gate):');
+  reset();
+  const uOrig = await focus.setFromDirective('study every right-of-center think tank');
+  ok('a USER directive persists origin=user', focus.originOf(uOrig.focus.id) === 'user');
+  ok('originOf accepts a focus object too', focus.originOf(uOrig.focus) === 'user');
+  const bOrig = await focus.setFromDirective('Compile the county-level governing board for Adams County, Wisconsin', null, { origin: 'beat' });
+  ok('a BEAT-seeded focus persists origin=beat (the per-county canvas-flood source)', focus.originOf(bOrig.focus.id) === 'beat');
+  ok('the beat focus is STILL mechanically directed (directed alone cannot gate it)', focus.isDirected(focus.getCurrent()) === true);
+  ok('an unknown/legacy focus id defaults to user (canvas never suppresses a real run)', focus.originOf(999999) === 'user');
+
   // --- BACKGROUND research workers (parallelism): must NEVER touch the primary pointer ---
   console.log('\nbackground workers (parallelism) — isolation from the primary focus:');
   reset();

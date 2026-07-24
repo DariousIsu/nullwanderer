@@ -3954,9 +3954,30 @@ function canvasMirror(tabKey, mode, title, blockId, blockType, data) {
   } catch (e) { console.error('[canvas] mirror failed:', e.message); }
 }
 
+// AUTONOMIC-CANVAS GATE (Slice P — "I get a canvas doc every time she starts a new county, but never
+// when I ask") — an autonomic county BEAT focus (origin 'beat') is MECHANICALLY directed but Lucas
+// never asked for it, so it must NOT flood the workspace with a tab per county (the canvas_docs store
+// had ~40 `directed-35xx` county tabs). Its research still lands in the graph + the deliverable FILE
+// (the durable artifacts, per the CHAT-ONLY note above), so NOTHING is thrown away — only the live
+// canvas render is withheld for beat runs. Numeric research focus ids only; meeting-*/promise-* tabs
+// are non-numeric → never gated. A directed USER run (origin 'user'/unmarked) renders as before.
+const _beatCanvasLogged = new Set();
+function _canvasBeatGated(focusId) {
+  try {
+    if (!/^\d+$/.test(String(focusId))) return false;
+    if (require('./lib/focus').originOf(focusId) !== 'beat') return false;
+    if (!_beatCanvasLogged.has(String(focusId))) {
+      _beatCanvasLogged.add(String(focusId));
+      console.log(`[canvas] beat focus #${focusId} — canvas render suppressed (autonomic county work stays in graph+file, off the workspace)`);
+    }
+    return true;
+  } catch { return false; }
+}
+
 async function canvasEmit({ focusId, title, tabMode, blockType, data }) {
   try {
     if (!blockType) return false;
+    if (_canvasBeatGated(focusId)) return false;
     if (!(await ensureEngine())) return false;
     const ce = require('./studio/canvas_emit');
     const callTool = pollCallTool();
@@ -3992,7 +4013,9 @@ async function promiseArtifactEmit({ slug, title, markdown }) {
 const _canvasBlocks = new Set();
 async function canvasUpsertBlock({ focusId, blockId, title, tabMode = 'DOC', blockType = 'paragraph', data }) {
   try {
-    if (!blockId || !(await ensureEngine())) return false;
+    if (!blockId) return false;
+    if (_canvasBeatGated(focusId)) return false;
+    if (!(await ensureEngine())) return false;
     const ce = require('./studio/canvas_emit');
     const callTool = pollCallTool();
     const tabKey = ce.tabKeyForFocus(focusId);

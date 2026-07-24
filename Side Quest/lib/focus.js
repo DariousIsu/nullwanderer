@@ -71,14 +71,28 @@ function isActive() { return !!getCurrent(); }
 
 // Promote an existing open_thread to the current focus. opts.directed marks it as a Lucas-assigned
 // task (overnight caps + driven by the directed-focus driver in main.js rather than the monologue).
-function setCurrent(threadId, { directed = false } = {}) {
+function setCurrent(threadId, { directed = false, origin = 'user' } = {}) {
   const t = db.getOpenThread(threadId);
   if (!t) return null;
   db.setMeta(CURRENT_KEY, String(threadId));
   _saveState({ id: threadId, ticks: 0, strikes: 0, startedTs: Date.now(), directed: !!directed });
+  // WHO seeded this focus — 'user' (a real directive), 'beat' (the autonomic scheduler), 'self' (a
+  // musing) — persisted per id so the canvas gate can tell a Lucas-asked run from an autonomic county
+  // beat (both carry directed:true, so `directed` alone can't). Default 'user' = never suppress.
+  try { db.setMeta(`focus.${threadId}.origin`, origin || 'user'); } catch {}
   db.touchOpenThread(threadId);  // pending → active
   try { blackboard.append({ source: 'monologue', kind: 'focus_set', focusId: threadId, content: t.content }); } catch {}
   return db.getOpenThread(threadId);
+}
+
+// WHO seeded a focus — 'user' (a real directive), 'beat' (the autonomic scheduler), or 'self' (a
+// musing). Persisted per focus id by setCurrent. Defaults to 'user' for any unmarked/legacy focus, so
+// a consumer (the canvas gate) only ever treats an EXPLICITLY autonomic 'beat' run specially, never a
+// real request. Takes a focus id (or a focus object).
+function originOf(focusOrId) {
+  const id = (focusOrId && typeof focusOrId === 'object') ? focusOrId.id : focusOrId;
+  if (id == null) return 'user';
+  try { return db.getMeta(`focus.${id}.origin`) || 'user'; } catch { return 'user'; }
 }
 
 // Is the currently-served focus a Lucas-assigned (directed) task? Reads the per-run state, so it's
@@ -114,7 +128,7 @@ async function setFromDirective(goal, sourceTurnId = null, { origin = 'user' } =
     }
   }
   const row = db.insertOpenThread({ content: g, sourceTurnId });
-  const focus = setCurrent(row.id, { directed: true });
+  const focus = setCurrent(row.id, { directed: true, origin });
   console.log(`[focus] DIRECTED set from ${origin} → #${row.id}: ${g.slice(0, 80)}`);
   return { focus, goal: g };
 }
@@ -459,7 +473,7 @@ function inquiryVocabTokens() {
 }
 
 module.exports = {
-  getCurrent, isActive, setCurrent, isDirected, setFromDirective, clear,
+  getCurrent, isActive, setCurrent, isDirected, originOf, setFromDirective, clear,
   setFromText, recentlyTombstoned, stripControlTags, parseControlTags,
   isNovel, recordOutcome, domainLeashTokens, inquiryVocabTokens,
   setBackground, recordOutcomeBackground,
