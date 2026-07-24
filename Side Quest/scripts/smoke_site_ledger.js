@@ -21,6 +21,11 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
     // --- normalization ---
     ok(SL.normalizeUrl('https://X.gov/a/?utm_source=t#frag') === 'https://x.gov/a/', 'normalize: hash + tracking params dropped, host lowercased');
     ok(SL.normalizeUrl('https://x.gov/') === 'https://x.gov', 'normalize: bare-root trailing slash dropped');
+    // ?ref= dedup (PLAN_MAP §5): the same page under different referrers → one visited URL
+    ok(SL.normalizeUrl('https://x.gov/board?ref=twitter&id=5') === SL.normalizeUrl('https://x.gov/board?ref=fb&id=5'),
+      'normalize: ?ref= stripped so different referrers dedupe to one page');
+    ok(SL.normalizeUrl('https://x.gov/board?ref=twitter&id=5') === 'https://x.gov/board?id=5', 'normalize: ?ref= dropped, real param (id) kept');
+    ok(/s=sheriff/.test(SL.normalizeUrl('https://x.gov/search?s=sheriff')), 'normalize: content param ?s= is NOT stripped (real query, not tracking)');
     ok(SL.hostOf('https://Sub.X.gov/p') === 'sub.x.gov', 'hostOf lowercases');
 
     // --- record + repeat counting ---

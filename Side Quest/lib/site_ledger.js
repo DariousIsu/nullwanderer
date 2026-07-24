@@ -39,7 +39,12 @@ function normalizeUrl(u) {
   try {
     const url = new URL(s);
     url.hash = '';
-    for (const k of [...url.searchParams.keys()]) if (/^(utm_|fbclid|gclid|mc_cid|mc_eid)/i.test(k)) url.searchParams.delete(k);
+    // Tracking/campaign params carry no content — the SAME page under different ?ref=/utm_/igshid must
+    // dedupe to ONE visited URL, or a page is re-visited + re-digested once per referrer (the ?ref=
+    // debt). `s`/`si`/`source` are deliberately NOT stripped — they can be real content params
+    // (e.g. WordPress ?s=<search query>), which the source-independence key in origin.js can afford to
+    // collapse but a visited-page ledger must not.
+    for (const k of [...url.searchParams.keys()]) if (/^(?:utm_|fbclid$|gclid$|mc_[ce]id$|_hs|ref$|ref_src$|igshid$|campaign)/i.test(k)) url.searchParams.delete(k);
     let out = url.toString();
     if (out.endsWith('/') && url.pathname === '/') out = out.slice(0, -1);
     return out;
