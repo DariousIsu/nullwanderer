@@ -96,5 +96,32 @@ ok(postureFromTurn({ kind: 'hear', enriched: false, enrichSource: null }) === nu
 const pm = buildMessages({ kind: 'say', text: 'hi', clips: CLIPS, posture: { clip: 'speak_soft', why: 'enriched:web' } });
 ok(pm[1].content.includes('speak_soft') && pm[1].content.includes('enriched:web'), 'prompt carries the posture', pm[1].content);
 
-console.log(fail ? `\n${fail} FAILURES` : '\nPASS — off-menu rejected, junk never throws, values clamped, and the turn signal sets the posture (a miss reads as a miss)');
-process.exit(fail ? 1 : 0);
+/* ---- SIGNAL-ONLY IS THE DEFAULT. Measured: the posture floor alone was right 4/4 while local gemma4:12b
+   managed 0/4 and hermes3:8b changed one case for the worse. So with no ZOE_AVATAR_MODEL set, chooseClip
+   must answer from the signal WITHOUT a network call — that is what "save the delay" actually buys. ---- */
+const { chooseClip, directorModel } = require('../lib/avatar_director');
+delete process.env.ZOE_AVATAR_MODEL;
+ok(directorModel() === null, 'no model configured by default', directorModel());
+
+(async () => {
+  const t0 = Date.now();
+  const web = await chooseClip({ kind: 'say', text: 'The amendment failed 211-217.', clips: CLIPS,
+                                 turn: { enriched: true, enrichSource: 'web' } });
+  const dt = Date.now() - t0;
+  ok(web.source === 'signal' && web.clip === 'speak_soft', 'no model → posture answers directly', web);
+  ok(dt < 100, 'answered without a network call (<100ms)', dt);
+
+  const miss = await chooseClip({ kind: 'say', text: 'x', clips: CLIPS, turn: { missed: true } });
+  ok(miss.source === 'signal' && miss.clip === 'shake', 'miss still decisive with no model', miss);
+
+  const hear = await chooseClip({ kind: 'hear', text: 'can you check that?', clips: CLIPS });
+  ok(hear.clip === 'listen', 'no posture and no model → deterministic map still holds', hear);
+
+  // opting a model back in must still route through the model path
+  process.env.ZOE_AVATAR_MODEL = 'some-model';
+  ok(directorModel() === 'some-model', 'ZOE_AVATAR_MODEL opts the model back in');
+  delete process.env.ZOE_AVATAR_MODEL;
+
+  console.log(fail ? `\n${fail} FAILURES` : '\nPASS — off-menu rejected, junk never throws, values clamped, a miss reads as a miss, and with no model configured the signal answers in 0ms');
+  process.exit(fail ? 1 : 0);
+})();

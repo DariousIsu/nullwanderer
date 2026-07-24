@@ -70,9 +70,24 @@ function postureFromTurn(turn) {
   return { clip: SOURCE_POSTURE[src], decisive: false, why: 'enriched:' + src };
 }
 
-// Small + cheap by design. Overridable so the fleet can be re-pointed without a code edit.
+/*
+ * OPT-IN, and OFF by default — because the signal already decides.
+ *
+ * MEASURED 2026-07-23 on the real decision (4 turns, live models):
+ *   cloud gemma4:31b   457-732ms   honored the posture exactly
+ *   local gemma4:12b     1638ms    0/4 usable — restates the prompt as a bulleted analysis, never JSON,
+ *                                  then truncates; at num_predict 400 it times out instead
+ *   local hermes3:8b     1131ms    3/4 — and the miss OVERRODE a soft posture to emphatic on a freshly
+ *                                  dug-up web fact, i.e. it made the one case it changed worse
+ *   SIGNAL ALONE            0ms    4/4 (that gemma row IS the posture floor, with the model contributing
+ *                                  nothing — it was right every time)
+ *
+ * Local is SLOWER than cloud here (it competes with the app for the GPU), so "use a small local model to
+ * save the delay" does not hold. The delay is saved by not making the call. A model is now a refinement
+ * you switch on, not a dependency in the path: set ZOE_AVATAR_MODEL to opt in.
+ */
 function directorModel() {
-  return process.env.ZOE_AVATAR_MODEL || process.env.ZOE_EXTRACT_MODEL || 'gemma4:31b-cloud';
+  return process.env.ZOE_AVATAR_MODEL || null;
 }
 
 function buildMessages({ kind, text, clips, mood, posture }) {
@@ -134,10 +149,16 @@ async function chooseClip({ kind, text, clips, mood, turn, model, timeoutMs = 40
   if (posture && posture.decisive && menu.includes(posture.clip)) {
     return { clip: posture.clip, intensity: 0.6, hold: 3, source: 'signal', why: posture.why };
   }
+  // NO MODEL CONFIGURED = the normal case. The floor is already the posture the turn earned, so answering
+  // from it costs 0ms and measured better than either local model. A call would only add latency and risk.
+  const useModel = model || directorModel();
+  if (!useModel) {
+    return { clip: floor, intensity: 0.6, hold: 4, source: 'signal', why: (posture && posture.why) || 'no-model' };
+  }
   let raw;
   try {
     raw = await complete({
-      model: model || directorModel(),
+      model: useModel,
       messages: buildMessages({ kind, text, clips: menu, mood, posture }),
       options: { temperature: 0.4, num_predict: 60 },
       timeoutMs,
