@@ -1361,6 +1361,15 @@ async function loadVRM() {
 function isFaceMesh(m) {
   return /^Face/.test(m.name || '') || (m.morphTargetInfluences && m.morphTargetInfluences.length > 5);
 }
+// …but that morph-count test is far too broad to decide EXAGGERATION. On the CC model every body slice carries
+// the same 148 morphs, so arms, legs, hair and nails all read as "face" and had their motion amplified 3.2x.
+// Static, that was invisible; once the body ANIMATED, measured arm-bound nodes were flung up to 4.8 units off
+// her surface — the glowing columns hanging beside her arms. Exaggeration exists to make lip-sync legible, so
+// gate it on the mesh that actually carries the face.
+function isFaceSkin(m) {
+  const n = String((m.userData && m.userData.matName) || m.name || '');
+  return /Std_Skin_Head|^Face/i.test(n);
+}
 function findFeatures() {
   const em = vrmModel.expressionManager; if (!em) return;
   const faces = vrmOccluders.filter(isFaceMesh);
@@ -2114,7 +2123,7 @@ function buildSkinBinding() {
     // skinning and VRM spring physics, which never settle exactly back to rest — measured 3.85 units of
     // residual drift at rest, and amplifying that would give her permanently twitching hair. Magnify the
     // expression, leave the physics honest.
-    skinBinds.push({ node: n, mesh: v.mesh, vi: v.vi, region: r, rest: new THREE.Vector3(), exag: isFaceMesh(v.mesh) });
+    skinBinds.push({ node: n, mesh: v.mesh, vi: v.vi, region: r, rest: new THREE.Vector3(), exag: isFaceSkin(v.mesh) });
   }
   captureSkinRest();
   skinBinds._counts = counts;
