@@ -29,7 +29,7 @@ helpers** rather than duplicating or refactoring them (keeps this lane collision
 - **Recipe**: `recipes/teams_join.json` (mirror `recipes/gmeet_join.json`) — join/leave selectors in
   DATA so the fragile Teams DOM heals like Meet's.
 
-## Shared file = main.js (3 touchpoints — YOURS to edit)
+## Shared file = main.js (4 touchpoints — YOURS to edit)
 These are all far from the chat/answer region I'm editing, so no hunk overlap — but coordinate that
 only ONE of us edits main.js at a time:
 1. `startCanvasMeeting` ([main.js:2362](../main.js)) — add a Teams branch: mount into a
@@ -42,9 +42,16 @@ only ONE of us edits main.js at a time:
    — register + advance the Teams driver + finalize its notes.
    Renderer: a Teams webview mount alongside the Meet pane (IPC `canvas:teams-join`, mirroring
    `canvas:meet-join` — [preload.js:45](../preload.js)).
+4. **partition permissions (easy to miss — load-bearing)** — `configureZoeMeetPartition`
+   ([main.js:293](../main.js)) grants `media`/`audioCapture`/`videoCapture`/`display-capture` to the
+   `persist:zoe-google` session so `getUserMedia` works inside the webview. The `persist:zoe-teams`
+   partition needs the SAME grant (add a `configureZoeTeamsPartition`, or generalize this one to take a
+   partition name), wired BEFORE the Teams webview loads. Miss it and Teams' prejoin device access hangs
+   **silently** — a webview has no chrome to click "Allow", so there's no manual fallback, and even
+   muted the prejoin screen requests devices to render the mic/cam preview.
 
 ## Lane boundary (so the two contexts don't collide)
-- **You own:** every new `teams*` file, `recipes/teams_join.json`, the renderer Teams mount, and the 3
+- **You own:** every new `teams*` file, `recipes/teams_join.json`, the renderer Teams mount, and the 4
   main.js meeting-orchestration spots above.
 - **You do NOT touch:** the chat/answer path in main.js (~lines 5490–6150), `lib/gmeet.js`,
   `lib/meet_canvas.js`, `lib/answer_draft.js`, `lib/week_context.js`, `lib/cognition.js` — that's my
