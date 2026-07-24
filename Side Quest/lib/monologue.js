@@ -1690,8 +1690,16 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
   const newsObjects = require('./news_objects');
   const recentNews = async () => { try { return newsObjects.recentNewsObjects({ sinceMs: nowTs - 24 * 3600 * 1000, limit: 20, minCorroboration: 2 }); } catch { return []; } };
   const FRONTIER_WINDOW = 200;
+  const THIN_COOLDOWN_MS = 10 * 60 * 1000;   // after a failure, stop hammering the 20s scan for 10 min
   const thinNodes = async () => {
     try {
+      // FAILURE BACKOFF (2026-07-23, the Echo-overload freeze): this ~1.76M-row unindexed scan
+      // reliably times out under load, and re-firing a 20s query EVERY tick that reliably fails is
+      // itself a heavy, cascading load on Echo. When it fails, skip it for THIN_COOLDOWN_MS instead of
+      // retrying immediately — the thin tier just goes quiet (the other tiers still feed the walk), and
+      // Echo gets breathing room. The real fix is an engine-side index (owner's call); this stops the
+      // caller from making a struggling engine worse.
+      try { const until = parseInt(_gm('graphwalk.thin_cooldown_until') || '0', 10) || 0; if (Date.now() < until) return []; } catch {}
       // degree DESC: prefer the MOST-connectable underdeveloped nodes (degree 6-7 = world-notable
       // entities our graph barely links, e.g. General Motors/Reagan) over rock-bottom degree-1 stubs.
       // ROTATING WINDOW (cursor OFFSET): the query is deterministic, so a fixed top-N gets fully visited
@@ -1707,7 +1715,7 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
       const r = await dispatch({ kind: 'do', name: 'db_query', args: { sql: `SELECT id, name, degree FROM entities WHERE degree BETWEEN 2 AND 7 AND wikidata_qid IS NOT NULL ORDER BY degree DESC, id DESC LIMIT ${FRONTIER_WINDOW} OFFSET ${cursor}`, params: [], timeout_seconds: 20 } });
       // Log the failure instead of returning a bare [] — an empty thin tier and a BROKEN thin tier
       // looked identical before, which is how this hid.
-      if (!r || !r.ok) { console.error('[graph-walk] thin-frontier query FAILED →', String((r && r.text) || 'no response').slice(0, 160)); return []; }
+      if (!r || !r.ok) { try { _sm('graphwalk.thin_cooldown_until', String(Date.now() + THIN_COOLDOWN_MS)); } catch {} console.error('[graph-walk] thin-frontier query FAILED →', String((r && r.text) || 'no response').slice(0, 160), `— backing off ${THIN_COOLDOWN_MS / 60000}min`); return []; }
       let j; try { j = JSON.parse(r.text); } catch { return []; }
       const rows = (j && j.rows) || j;
       const arr = Array.isArray(rows) ? rows : [];
