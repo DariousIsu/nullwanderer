@@ -9797,26 +9797,46 @@ async function autonomyTick() {
     // memorialized as fact. A local sim (ms), so no operator turn / board slot. Floored via last_scenario_run_at.
     if (decision.move === 'scenario') {
       const catalog = require('./lib/scenario_catalog');
-      const scn = catalog.get(decision.target);
-      if (!scn) {
-        autonomy.historyPush(H, { ts: now, move: 'scenario', target: decision.target, outcome: `no such scenario "${decision.target}" — choose an id listed under YOUR 2026 FORECAST` });
-        console.log(`[autonomy] chose=scenario → REFUSED (unknown id "${decision.target}")`);
-        return;
-      }
       const fcInputs = (((lastForecast || {}).work || {}).inputs) || {};
       const races = fcInputs.races || [];
       if (!lastForecast || !lastForecast.ok || !races.length) {
-        autonomy.historyPush(H, { ts: now, move: 'scenario', target: scn.id, outcome: 'no baseline slate yet this boot — the forecast loop recomputes on its own cadence' });
+        autonomy.historyPush(H, { ts: now, move: 'scenario', target: decision.target, outcome: 'no baseline slate yet this boot — the forecast loop recomputes on its own cadence' });
         console.log('[autonomy] chose=scenario → no baseline slate yet');
         return;
+      }
+      // Resolve the scenario: a catalog id runs a canned, AUDITED what-if; anything else is treated as a
+      // free-text description and ESTIMATED into effects on the fly (Slice 1, gpt-oss). Estimation is a cloud
+      // call (async → never blocks the main thread); a failed estimate declines honestly, never a phantom run.
+      let scn = catalog.get(decision.target);
+      let estimated = false;
+      if (!scn) {
+        const target = String(decision.target || '').trim();
+        if (target.length < 12) {
+          autonomy.historyPush(H, { ts: now, move: 'scenario', target: decision.target, outcome: 'not a catalog id and too short to estimate — pick a listed id or describe the what-if in a phrase' });
+          console.log(`[autonomy] chose=scenario → REFUSED (unknown/short target "${decision.target}")`);
+          return;
+        }
+        try {
+          const est = await require('./lib/scenario_estimate').buildScenarioFromDescription({ description: target, races, ask: require('./lib/cloud_logic').ask });
+          if (!est.scenario) {
+            autonomy.historyPush(H, { ts: now, move: 'scenario', target: decision.target, outcome: `estimator produced no effects (${est.error || 'unknown'})` });
+            console.log(`[autonomy] chose=scenario → estimate produced nothing (${est.error})`);
+            return;
+          }
+          scn = est.scenario; estimated = true;
+        } catch (e) {
+          autonomy.historyPush(H, { ts: now, move: 'scenario', target: decision.target, outcome: `estimate error: ${e.message}` });
+          console.error('[autonomy] scenario estimate failed:', e.message);
+          return;
+        }
       }
       try {
         const run = require('./lib/scenario_engine').runScenario(races, scn, fcInputs.config || {});   // baseline+scenario share the seed → the delta is the shock, not noise
         const mono = db.insertMonologue({ content: catalog.summarize(scn, run), model: 'scenario', type: 'reading', query: scn.name });
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: mono.id, ts: mono.ts, content: `(hypothetical what-if: ${scn.name})`, type: 'reading', query: scn.name });
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: mono.id, ts: mono.ts, content: `(hypothetical what-if${estimated ? ', estimated' : ''}: ${scn.name})`, type: 'reading', query: scn.name });
         db.setMeta('last_scenario_run_at', String(now));   // floor — keeps the illustrative move occasional
-        autonomy.historyPush(H, { ts: now, move: 'scenario', target: scn.id, outcome: catalog.outcomeLine(scn, run) });
-        console.log(`[autonomy] chose=scenario → ${scn.id} (illustrative; ${run.two_sided ? 'two-sided range' : `${run.delta.flips.length} flip(s)`}; not memorialized)`);
+        autonomy.historyPush(H, { ts: now, move: 'scenario', target: scn.id, outcome: `${estimated ? '[estimated] ' : ''}${catalog.outcomeLine(scn, run)}` });
+        console.log(`[autonomy] chose=scenario → ${scn.id}${estimated ? ' (estimated on the fly)' : ''} (illustrative; ${run.two_sided ? 'two-sided range' : `${run.delta.flips.length} flip(s)`}; not memorialized)`);
       } catch (e) {
         autonomy.historyPush(H, { ts: now, move: 'scenario', target: scn.id, outcome: `scenario run failed: ${e.message}` });
         console.error('[autonomy] scenario run failed:', e.message);
