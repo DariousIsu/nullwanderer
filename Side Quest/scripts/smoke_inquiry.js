@@ -92,6 +92,19 @@ const NOW = 1753400000000;
   ok(/FIRST-CLASS outcome/.test(I.touchBrief({ id: 9, question: 'x'.repeat(20), touches: 6, evidence: '[{"gist":"real finding","cite":"doc #8443"}]' })),
     'close nudge FIRES on a well-worn line (touch 6) that holds real evidence — answered beats a 12th continue');
 
+  // --- ACCESS HINT (§5: learned door-order for sites the inquiry references reaches the touch) ---
+  {
+    const fakeSL = {
+      hostOf: (u) => { try { return new URL(u).hostname.toLowerCase().replace(/^www\./, ''); } catch { return ''; } },
+      accessLine: (h) => h === 'voterportal.sos.la.gov' ? 'voterportal.sos.la.gov: browser ✗ · vision ✓ · JS shell needed' : null,
+    };
+    const withUrl = { id: 7, question: 'x'.repeat(20), touches: 2, next_step: 'open https://voterportal.sos.la.gov/candidates and read', open_leads: '[]', evidence: '[]' };
+    const ah = I.accessHint(withUrl, { deps: { siteLedger: fakeSL } });
+    ok(/voterportal\.sos\.la\.gov/.test(ah) && /vision ✓/.test(ah) && /try the doors/i.test(ah), 'accessHint: surfaces the learned door-order for a host the inquiry references');
+    ok(I.accessHint({ id: 8, question: 'x'.repeat(20), touches: 1, next_step: 'think about the parishes', open_leads: '[]', evidence: '[]' }, { deps: { siteLedger: fakeSL } }) === '', 'accessHint: no URL in the row → empty');
+    ok(I.accessHint({ id: 9, question: 'x'.repeat(20), touches: 1, next_step: 'open https://never-seen.example/x', open_leads: '[]', evidence: '[]' }, { deps: { siteLedger: fakeSL } }) === '', 'accessHint: a host with no learned profile → empty');
+  }
+
   // --- HELD-SOURCE HINT (boot73: #1 planned to re-download a roster it already held+decomposed) ---
   {
     const doc = db.insertDocument({ title: 'LA-parish-officials-2026.xls', body: 'Parish,Office,Name\nCaddo,Sheriff,Henry Whitehorn\nOrleans,Clerk,Chelsey Napoleon', source: 'browser_download' });

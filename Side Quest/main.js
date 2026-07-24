@@ -9578,6 +9578,8 @@ async function autonomyTick() {
       // decomposed doc, tell the touch to read its own copy instead of re-downloading it (inquiry #1
       // planned to re-fetch the roster it had already ingested + decomposed, 26 touches running).
       try { const hs = inquiry.heldSourceHint(row, { deps: { db } }); if (hs) brief += '\n\n' + hs; } catch {}
+      // ACCESS HINT (§5): the learned door-order for any site this inquiry references (site ledger).
+      try { const ah = inquiry.accessHint(row); if (ah) brief += '\n\n' + ah; } catch {}
       let procMatch = null;
       try {
         const procs = require('./lib/procedures');
@@ -11545,7 +11547,8 @@ async function runConversationDig(inqId, { convoContext = '' } = {}) {
       return;
     }
     try { boardId = board.start({ lane: 'dig', kind: 'inquiry', target: `#${inqId} ${String(row.question).slice(0, 60)}`, note: `forked from the conversation; on ${slot}` }).id; } catch {}
-    const brief = digLib.digHeader(row) + '\n\n' + inquiry.touchBrief(row);
+    let brief = digLib.digHeader(row) + '\n\n' + inquiry.touchBrief(row);
+    try { const ah = inquiry.accessHint(row); if (ah) brief += '\n\n' + ah; } catch {}   // §5: learned door-order for referenced sites
     const res = await runCloudOperator({ userMessage: brief, context: convoContext, task: true, autonomous: true });
     try { board.beat(boardId); } catch {}
     let env = null;

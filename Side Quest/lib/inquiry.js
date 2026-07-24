@@ -119,6 +119,26 @@ function touchBrief(row) {
   return parts.join('\n\n');
 }
 
+// ACCESS HINT (PLAN_MAP §5: "the map exists; the touch prompt doesn't see it") — an inquiry's
+// next_step / leads / evidence often name specific sites (a .gov portal, a county page). The host's
+// LEARNED access profile — which door worked, in what order, concessions noted — lives in the site
+// ledger but never reached the touch, so each touch re-learned the doors from scratch. This scans the
+// row's own text for URLs and surfaces accessLine() for the hosts it references, so the operator tries
+// the doors in the order that WORKED last time. Kept OUT of the pure touchBrief (which stays hermetic,
+// like heldSourceHint) and appended at the brief-assembly site. Fail-soft: '' when no host has a profile.
+const _ACCESS_URL_RE = /https?:\/\/[^\s"'<>)\]]+/gi;
+function accessHint(row, { deps = {} } = {}) {
+  if (!row) return '';
+  try {
+    const sl = (deps && deps.siteLedger) || require('./site_ledger');
+    const blob = [row.next_step, ...jarr(row.open_leads), ...jarr(row.evidence).map((e) => `${(e && e.gist) || ''} ${(e && e.cite) || ''}`)].map(str).join(' ');
+    const hosts = [...new Set((blob.match(_ACCESS_URL_RE) || []).map((u) => { try { return sl.hostOf(u); } catch { return ''; } }).filter(Boolean))].slice(0, 4);
+    const lines = hosts.map((h) => { try { return sl.accessLine(h); } catch { return null; } }).filter(Boolean);
+    if (!lines.length) return '';
+    return 'ACCESS NOTES — how these sites let you in last time (try the doors in this order; ✓ worked, ✗ did not):\n' + lines.join('\n');
+  } catch { return ''; }
+}
+
 // HELD-SOURCE HINT (2026-07-23, boot73: inquiry #1 ran 26 touches planning to "retrieve the
 // LA-parish-officials-2026.xls file via its direct download URL" — a file it ALREADY HELD as a
 // landed, decomposed doc). She has no reflex to check her own stores before re-fetching. This scans
@@ -356,6 +376,6 @@ function manifestLines({ deps = {}, nowMs = Date.now() } = {}) {
 
 module.exports = {
   MAX_ACTIVE, EVIDENCE_MAX, WRITEBACK_WANT, DUP_THRESHOLD,
-  open, get, listActive, touchBrief, validateWriteback, writeBack, expectTrailPush, close, manifestLines,
+  open, get, listActive, touchBrief, accessHint, validateWriteback, writeBack, expectTrailPush, close, manifestLines,
   questionOverlap, heldSourceHint, heldAnswerExhausted, heldAnswerText, FORCE_CLOSE_TOUCHES,
 };
