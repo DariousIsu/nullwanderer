@@ -9792,6 +9792,37 @@ async function autonomyTick() {
       console.log(`[autonomy] chose=rehearse → ${run.slug} ${r ? r.status : 'FAILED'}${r ? ` — ${String(r.note).slice(0, 100)}` : ''}`);
       return;
     }
+    // SCENARIO WORK-MOVE (F3's other half): run ONE hand-authored what-if from the catalog against the live
+    // forecast slate and land it as a LABELED HYPOTHETICAL reading — never merged into the baseline, never
+    // memorialized as fact. A local sim (ms), so no operator turn / board slot. Floored via last_scenario_run_at.
+    if (decision.move === 'scenario') {
+      const catalog = require('./lib/scenario_catalog');
+      const scn = catalog.get(decision.target);
+      if (!scn) {
+        autonomy.historyPush(H, { ts: now, move: 'scenario', target: decision.target, outcome: `no such scenario "${decision.target}" — choose an id listed under YOUR 2026 FORECAST` });
+        console.log(`[autonomy] chose=scenario → REFUSED (unknown id "${decision.target}")`);
+        return;
+      }
+      const fcInputs = (((lastForecast || {}).work || {}).inputs) || {};
+      const races = fcInputs.races || [];
+      if (!lastForecast || !lastForecast.ok || !races.length) {
+        autonomy.historyPush(H, { ts: now, move: 'scenario', target: scn.id, outcome: 'no baseline slate yet this boot — the forecast loop recomputes on its own cadence' });
+        console.log('[autonomy] chose=scenario → no baseline slate yet');
+        return;
+      }
+      try {
+        const run = require('./lib/scenario_engine').runScenario(races, scn, fcInputs.config || {});   // baseline+scenario share the seed → the delta is the shock, not noise
+        const mono = db.insertMonologue({ content: catalog.summarize(scn, run), model: 'scenario', type: 'reading', query: scn.name });
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: mono.id, ts: mono.ts, content: `(hypothetical what-if: ${scn.name})`, type: 'reading', query: scn.name });
+        db.setMeta('last_scenario_run_at', String(now));   // floor — keeps the illustrative move occasional
+        autonomy.historyPush(H, { ts: now, move: 'scenario', target: scn.id, outcome: catalog.outcomeLine(scn, run) });
+        console.log(`[autonomy] chose=scenario → ${scn.id} (illustrative; ${run.two_sided ? 'two-sided range' : `${run.delta.flips.length} flip(s)`}; not memorialized)`);
+      } catch (e) {
+        autonomy.historyPush(H, { ts: now, move: 'scenario', target: scn.id, outcome: `scenario run failed: ${e.message}` });
+        console.error('[autonomy] scenario run failed:', e.message);
+      }
+      return;
+    }
     // WORK MOVES (research / fill-gap / corroborate / clean / build) → one bounded operator run.
     // autonomous:true keeps Echo writes tier-gated; build gets the task budget (it produces a file).
     let brief = autonomy.buildOperatorBrief(decision, { now });

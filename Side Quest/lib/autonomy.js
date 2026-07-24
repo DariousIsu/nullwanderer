@@ -28,9 +28,12 @@
  */
 'use strict';
 
-const MOVES = ['advance-inquiry', 'open-inquiry', 'close-inquiry', 'research', 'fill-gap', 'corroborate', 'clean', 'build', 'maintain', 'rehearse', 'engage', 'nothing'];
+const MOVES = ['advance-inquiry', 'open-inquiry', 'close-inquiry', 'research', 'fill-gap', 'corroborate', 'clean', 'build', 'maintain', 'rehearse', 'scenario', 'engage', 'nothing'];
 const HISTORY_KEY = 'autonomy.history';
 const HISTORY_MAX = 12;
+// SCENARIO work-move (F3's other half): keep the illustrative what-if OCCASIONAL — only offered once the
+// floor since the last run has elapsed, so the decider can't spam it. Override: ZOE_SCENARIO_FLOOR_H.
+const SCENARIO_FLOOR_H = parseFloat(process.env.ZOE_SCENARIO_FLOOR_H) || 3;
 
 // ---- S1: THE TICK MANIFEST -------------------------------------------------
 // Every source is independently guarded: a missing table or a failed query drops that section
@@ -245,7 +248,17 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
       return `   - ${ch}: P(Dem control) ${(100 * pA).toFixed(0)}%, Dem seats ${Number(c.seatsA_mean || 0).toFixed(0)} (80% band ${c.seatsA_p10}–${c.seatsA_p90}) of ${c.total_seats}${tight ? ' — TIGHT: the pivotal races are prime deepening targets' : ''}`;
     });
     const stale = snap.illustrative ? ' — ILLUSTRATIVE (no polled margins yet; getting real margins into the pivotal races would sharpen it)' : '';
-    return `• YOUR 2026 FORECAST (your own balance-of-power Monte-Carlo, as of ${snap.as_of || 'this boot'}${stale}). A TIGHT chamber or an illustrative run is a real move — deepen a pivotal race or refresh its margins:\n${rows.join('\n')}`;
+    // SCENARIO offer (F3's other half): when the floor has elapsed, list the hand-authored what-ifs the
+    // decider can RUN against this baseline (move "scenario"). Illustrative only — never touches the baseline.
+    let scnOffer = '';
+    try {
+      const lastAt = parseInt((dbm.getMeta && dbm.getMeta('last_scenario_run_at')) || '0', 10) || 0;
+      if (now - lastAt >= SCENARIO_FLOOR_H * 3600e3) {
+        const cat = require('./scenario_catalog').list();
+        if (cat.length) scnOffer = `\n   OR run a hypothetical what-if (move "scenario", target one id — ILLUSTRATIVE only, isolated from this baseline, never memorialized): ${cat.map((s) => s.id).join(', ')}`;
+      }
+    } catch { /* catalog optional — no offer on error */ }
+    return `• YOUR 2026 FORECAST (your own balance-of-power Monte-Carlo, as of ${snap.as_of || 'this boot'}${stale}). A TIGHT chamber or an illustrative run is a real move — deepen a pivotal race or refresh its margins:\n${rows.join('\n')}${scnOffer}`;
   });
 
   grab('board', () => {
@@ -282,7 +295,7 @@ function historyBlock(history, now = Date.now()) {
 const DECISION_WANT = `You are the autonomous work-chooser for Zoe — a dedicated research assistant with her own databases, ~100 public data sources, the open web, and her own interests. Nobody is prompting her right now; YOU decide what this idle tick does.
 
 Pick the SINGLE highest-value move and reply with ONLY strict JSON (no prose outside it):
-{"move":"advance-inquiry|open-inquiry|close-inquiry|research|fill-gap|corroborate|clean|build|maintain|rehearse|engage|nothing",
+{"move":"advance-inquiry|open-inquiry|close-inquiry|research|fill-gap|corroborate|clean|build|maintain|rehearse|scenario|engage|nothing",
  "target":"<a key/name taken from the STATE — the gap, universe, cluster, interest, or thread>",
  "why":"<one honest line>",
  "steps":["<plain-language intent, e.g. 'search our own records for X', 'read the org's own site'>", "..."],
@@ -304,6 +317,7 @@ One-shot moves (work that is genuinely single-step):
 - corroborate: take a single-source cluster and find an INDEPENDENT second source for its claims.
 - clean: inspect and report on duplicates/conflicts (writes are gated — your product is a precise report).
 - build: turn material she ALREADY HOLDS into a real markdown document (a brief, a gap report, a synthesis).
+- scenario: run ONE hypothetical what-if from the catalog against your live forecast (the runnable ids appear under YOUR 2026 FORECAST when a run is available). target is the exact scenario id. ILLUSTRATIVE ONLY — a labeled hypothetical that never changes the baseline and is never memorialized as fact; a genuinely ambiguous shock is shown as a RANGE, not a point. Pick it when a chamber is TIGHT and a named what-if would sharpen what could move it — never as filler.
 - maintain: run ONE curated maintenance loop on her own stores (the brief names the allowlist — an integrity-audit report, a full-corpus dedup proposal sweep). Products are REPORTS and PROPOSALS; nothing applies unattended. Prefer it when MAINTENANCE & ANALYSIS LOOPS shows a loop gone stale.
 - rehearse: the sandbox. With an ACTIVE REHEARSAL RUN in the state: advance it one bounded iteration (a parked run resumes); target is its slug. With NO run active and a CAPABILITY GAP named in the state: target that exact "need #N" token to OPEN a sandboxed run built from the need (the judging suite is matched automatically; if nothing fits, the need parks honestly). The run edits a sandboxed COPY of her own code, judged by her own gate; green ends as a proposal-card document — nothing self-adopts, ever. Only a need a RUN named may open one — never an idle inference.
 - engage: say something to Lucas NOW — a genuine finding or a direction question. Use RARELY, only when you have something real; "say" must carry the exact message, grounded in the state above, no invented facts.
