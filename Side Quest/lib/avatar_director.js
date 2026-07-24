@@ -24,51 +24,10 @@
  */
 
 const { complete } = require('./ollama');
-
-// What the deterministic layer already does. Also the answer whenever the model is unavailable or wrong.
-const FALLBACK = { hear: 'listen', say: 'speak', think: 'think' };
-
-/*
- * WHAT THE PROGRAM ALREADY KNOWS — the signal that beats reading prose for tone.
- *
- * cognition.answerGrounded already returns { say, enriched, enrichSource, missed, need, tried }, and main.js
- * resolves it into a log line ("searched-miss" / "enriched:<src>" / "grounded") and throws it away. That is
- * strictly better evidence than the text: whether she FOUND anything, and WHERE it came from, are facts, not
- * inferences. A model re-deriving them from the wording is guessing at something already known.
- *
- * So the source decides the POSTURE and the model only refines it. Her own settled memory reads as home
- * ground; a fresh outside pull is newer and less settled and should carry less body behind it.
- */
-const SOURCE_POSTURE = {
-  forecast: 'speak_emphatic',   // her OWN model — the strongest ground she has
-  graph: 'speak',               // our KG: settled, already hers
-  convo: 'speak',               // what was actually said here before
-  news: 'speak',                // her own stream, corroborated
-  routed: 'speak',              // a tool she drove herself
-  wiki: 'speak_soft',           // outside, and only just now looked up
-  'wiki-verify': 'speak_soft',
-  web: 'speak_soft',
-  excavate: 'speak_soft',       // had to dig for it — least settled of all
-};
-
-/*
- * PURE. Turn a cognition result into a posture. Returns null when the turn carries no usable signal, so the
- * caller falls through to the model (or to FALLBACK). `decisive` means the program is surer than a model
- * could be — the caller must NOT spend a cloud call second-guessing it.
- */
-function postureFromTurn(turn) {
-  if (!turn || typeof turn !== 'object') return null;
-  const kind = String(turn.kind || 'say');
-  // An honest miss: she checked her records, searched, and came back empty. There is nothing for a model to
-  // read here — the body should say "no" because that is what happened. Never confident, never emphatic.
-  if (turn.missed === true) return { clip: 'shake', decisive: true, why: 'searched-miss' };
-  if (kind !== 'say') return null;                       // posture is about how she ANSWERS
-  // Answered with no enrichment at all = it was already in hand. That is her most settled state.
-  if (turn.enriched === false && !turn.enrichSource) return { clip: 'speak', decisive: false, why: 'grounded' };
-  const src = String(turn.enrichSource || '');
-  if (!src || !SOURCE_POSTURE[src]) return null;
-  return { clip: SOURCE_POSTURE[src], decisive: false, why: 'enriched:' + src };
-}
+// The posture map is SHARED with the kg3d renderer (UMD, same trick as lib/avatar_state.js). It has to be one
+// source: if main and the renderer each kept a copy, her body would eventually disagree with the log about
+// what just happened. Everything about WHERE an answer came from lives there; this file only adds the model.
+const { SOURCE_POSTURE, FALLBACK, postureFromTurn } = require('./avatar_posture');
 
 /*
  * OPT-IN, and OFF by default — because the signal already decides.

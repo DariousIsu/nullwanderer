@@ -2336,11 +2336,22 @@ function animUpdate(dt) {
   }
 }
 // the deterministic half of the menu: what she is doing decides how her body moves
-function animOnActivity(kind) {
+// An event may carry the cognition verdict main-side (missed / enriched / enrichSource). When it does, WHERE
+// the answer came from picks the clip — a searched-miss shakes her head, something she had to dig off a web
+// page is carried more softly than something already hers. When it doesn't, this is the old event map exactly.
+function animOnActivity(evt) {
+  const e = (evt && typeof evt === 'object') ? evt : { kind: evt };
+  const kind = e.kind;
+  if (kind !== 'hear' && kind !== 'say' && kind !== 'think') return false;
+  const P = (typeof window !== 'undefined' && window.AvatarPosture) || null;
+  if (P) {
+    // `has` is the live menu, so a posture can never name a clip this player does not own.
+    const c = P.clipForTurn(e, (n) => !!ANIM_CLIPS[n]);
+    if (c) return animPlay(c.clip, c.decisive ? 3 : (kind === 'say' ? 5 : kind === 'hear' ? 4 : 3.5));
+  }
   if (kind === 'hear') return animPlay('listen', 4);
   if (kind === 'say') return animPlay('speak', 5);
-  if (kind === 'think') return animPlay('think', 3.5);
-  return false;
+  return animPlay('think', 3.5);
 }
 function updateVRMFace(now, dt) {
   if (!vrmReady || SHAPE !== 'skin') return;
@@ -3204,7 +3215,7 @@ function dispatchActivity(evt) {
 }
 function onActivity(evt) {
   // her BODY answers the same events her face does — deterministic half of the animation menu
-  try { animOnActivity(evt && evt.kind); } catch (e) {}
+  try { animOnActivity(evt); } catch (e) {}   // the WHOLE event — it may carry the turn's cognition verdict
   if (!evt) return;
   let verdict = 'miss';
   try { verdict = dispatchActivity(evt) || 'miss'; }

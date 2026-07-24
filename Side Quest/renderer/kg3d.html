@@ -103,6 +103,9 @@
   <!-- the SAME face model the avatar runs (UMD → window.AvatarState): expression presets, the amplitude→mouth
        lip-sync curve and the blink clock. One source of truth, so the two faces can never drift apart. -->
   <script src="../lib/avatar_state.js"></script>
+  <!-- the SAME posture map main-side cognition uses (UMD → window.AvatarPosture): where an answer came from
+       decides how her body carries it, so the figure and the activity log can never tell different stories. -->
+  <script src="../lib/avatar_posture.js"></script>
   <!-- file:// caches JS HARD: a plain reload serves a STALE kg3d.js, so edits appear to "not take" on the live
        surface (Lucas: "nothing changed on my end"). document.write keeps the load SYNCHRONOUS and in-order
        (kg3d.js still runs after the bundle + avatar_state), while the per-load ?v= buster guarantees every
