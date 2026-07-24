@@ -1135,6 +1135,19 @@ async function _resolveMentionCore(name, { preferType = null, dispatch = null, c
         if (obj) return { status: 'resolved', mention: n, object: obj, via: 'fuzzy' };
       }
     }
+    // SALIENCE DOMINANCE — the "which Trump?" fix. Several distinct same-name PEOPLE is not always a
+    // genuine "which one?": a public figure whose record dwarfs the others (Donald Trump, degree in the
+    // hundreds, beside thin same-name records — a dead relative, an obscure local namesake) has one
+    // obvious referent. Asking Lucas to pick a president out of a family tree is the failure. Resolve
+    // to the top candidate ONLY when it clears the richness bar AND overwhelmingly dominates the
+    // runner-up (≥4×); a true peer-collision (two comparably-prominent people) still asks. distinct[]
+    // is degree-ranked, so [0] is the candidate to test — a STRICTER bar than the single-record case
+    // (this is picking one of several DISTINCT people, not the richest record of one).
+    try {
+      const top = await recallObject(distinct[0].name, { preferType, dispatch: d });
+      const rn = distinct[1] ? await recallObject(distinct[1].name, { preferType, dispatch: d }) : null;
+      if (_salienceDominant(top, rn)) return { status: 'resolved', mention: n, object: top, via: 'salience' };
+    } catch { /* fall through to ambiguous — never let a recall hiccup force a wrong pick */ }
     return { status: 'ambiguous', mention: n, candidates: distinct.slice(0, 4).map(c => c.name), candidateObjs: distinct.slice(0, 4).map(c => ({ name: c.name, type: c.type || null })) };
   }
   // single ENTITY — resolve its RICHEST record (distinct[0] is already the richest by degree). Using the
@@ -1149,6 +1162,22 @@ async function _resolveMentionCore(name, { preferType = null, dispatch = null, c
   const dominant = obj.degree >= 8 || (obj.facts || []).length >= 4 || (obj.committees || []).length >= 1;
   if (!dominant) return { status: 'ambiguous', mention: n, reason: 'low-confidence', candidates: distinct.map(c => c.name), candidateObjs: distinct.slice(0, 4).map(c => ({ name: c.name, type: c.type || null })) };
   return { status: 'resolved', mention: n, object: obj };
+}
+// PURE (the "which Trump?" fix): among distinct same-name candidates, does the TOP one so dominate the
+// runner-up that "which one?" has an obvious answer? Prominence is a COMPOSITE of the record's richness
+// (graph degree + facts + committee memberships), not degree alone — a heavily-documented figure with
+// few raw edges still dominates a bare namesake. True only when the top is a real public figure AND its
+// prominence is ≥4× the runner-up's (≥12 absolute). A genuine peer-collision — two comparably-prominent
+// people — returns false and stays a real ASK. Exported for tests.
+function _prominence(o) {
+  if (!o) return 0;
+  return (Number(o.degree) || 0) + (Array.isArray(o.facts) ? o.facts.length * 3 : 0) + (Array.isArray(o.committees) ? o.committees.length * 5 : 0);
+}
+function _salienceDominant(top, runnerUp) {
+  if (!top) return false;
+  const pt = _prominence(top), pr = _prominence(runnerUp);
+  const rich = pt >= 20 || (Array.isArray(top.committees) && top.committees.length >= 1);
+  return rich && pt >= Math.max(12, pr * 4);
 }
 // match.hit — when a local mention RESOLVES to an existing Echo entity, the active core shoots a recognition
 // thread to the matched corpus node ("I know this"). One tap over every resolved return of the core; the
@@ -1419,5 +1448,5 @@ function routeCacheStats() {
 module.exports = {
   routeCacheStats,
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
-  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _distinctEntities, _nameCompatible, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates
+  setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _distinctEntities, _nameCompatible, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates, _salienceDominant
 };

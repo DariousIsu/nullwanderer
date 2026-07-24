@@ -241,6 +241,15 @@ function dispatch({ sibling = true } = {}) {
   const rmNo = await echo.resolveMention('Rainey Center', { dispatch: rmDispatch });
   ok(rmNo.status === 'ambiguous' && rmNo.candidates.length === 2, 'resolveMention: NO context → ambiguous (unchanged behavior)');
 
+  // ── SALIENCE DOMINANCE (the "which Trump?" fix) — a dominant public figure resolves; a peer-collision asks.
+  ok(echo._salienceDominant({ degree: 300 }, { degree: 2 }) === true, '_salienceDominant: Donald Trump (deg 300) vs a dead relative (deg 2) → RESOLVE, do not ask');
+  ok(echo._salienceDominant({ degree: 50 }, { degree: 45 }) === false, '_salienceDominant: two comparably-prominent people (50 vs 45) → still a real ASK (no popularity guess)');
+  ok(echo._salienceDominant({ degree: 5 }, { degree: 1 }) === false, '_salienceDominant: a thin top record (deg 5) is not a public figure → ASK (richness bar holds)');
+  ok(echo._salienceDominant({ degree: 25 }, null) === true, '_salienceDominant: one rich candidate, no runner-up → RESOLVE');
+  ok(echo._salienceDominant({ facts: new Array(9) }, { degree: 1 }) === true, '_salienceDominant: rich by facts (9) dominates a degree-1 namesake → RESOLVE');
+  ok(echo._salienceDominant({ degree: 100 }, { degree: 30 }) === false, '_salienceDominant: 100 vs 30 (only ~3.3×) → not dominant enough → ASK (≥4× required)');
+  ok(echo._salienceDominant(null, { degree: 5 }) === false, '_salienceDominant: no top object → ASK (fail-safe)');
+
   // ── STRUCTURAL AFFILIATION (R3) — a c4 arm + its c3 (legally distinct, one org) → generic resolves to primary.
   const PRIMARY = 'Joseph Rainey Center for Public Policy', ARM = 'RAINEY CENTER FREEDOM PROJECT, INC.';
   const orgCands = [{ name: PRIMARY, entity_type: 'organization' }, { name: ARM, entity_type: 'organization' }, { name: 'Rainey Center Happy Hour', entity_type: 'event' }];
