@@ -58,6 +58,7 @@ function makeDeps(capScript = [], opts = {}) {
       postChat: async (_w, msg) => { calls.postChat++; return state.postChatOk ? { ok: true } : { ok: false, reason: 'composer not found' }; },
       retrieve: async () => [], webLookup: async () => '',
       storeMeeting: async (c) => { calls.store++; calls.stored.push(c); return 1; },
+      joinConfirmMs: 0,   // no real sleep in the join-confirmation poll under test
       now,
     },
   };

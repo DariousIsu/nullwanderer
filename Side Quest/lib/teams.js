@@ -246,9 +246,19 @@ async function runTick(ctx = {}) {
     // SOURCE OF TRUTH: the DOM decides, NOT the recipe result. With provisional selectors, a recipe that
     // "clicked something" (r.ok) is NOT proof she's in — trusting it advanced her to intro against an
     // un-joined page (the false positive seen live). Only an actual in-call / lobby signal advances.
-    const inside = await d.inMeeting(d.web).catch(() => false);
+    // ...and clicking Join → connecting → in-call/lobby is NOT instant. POLL for the transition instead
+    // of judging on the same tick (the intermittent "clicked but no signal" flake the profiler flagged).
+    // Delay is injectable (d.joinConfirmMs) so the offline smoke stays fast.
+    const pollMs = d.joinConfirmMs != null ? d.joinConfirmMs : 1200;
+    let inside = false, lobby = false;
+    for (let i = 0; i < 4; i++) {
+      inside = await d.inMeeting(d.web).catch(() => false);
+      if (inside) break;
+      lobby = d.inLobby ? await d.inLobby(d.web).catch(() => false) : false;
+      if (lobby) break;
+      if (i < 3) await new Promise((res) => setTimeout(res, pollMs));
+    }
     if (inside) { _clear(); set('intro'); surface('I joined the Teams meeting (muted).', '(teams) joined'); return { stage, ok: true, note: 'joined → intro' }; }
-    const lobby = d.inLobby ? await d.inLobby(d.web).catch(() => false) : false;
     if (lobby) {
       _clear(); set('waiting');
       db.setMeta('teams_lobby_since', String(nowMs())); db.setMeta('teams_lobby_told', '0');
