@@ -28,12 +28,54 @@ const { complete } = require('./ollama');
 // What the deterministic layer already does. Also the answer whenever the model is unavailable or wrong.
 const FALLBACK = { hear: 'listen', say: 'speak', think: 'think' };
 
+/*
+ * WHAT THE PROGRAM ALREADY KNOWS — the signal that beats reading prose for tone.
+ *
+ * cognition.answerGrounded already returns { say, enriched, enrichSource, missed, need, tried }, and main.js
+ * resolves it into a log line ("searched-miss" / "enriched:<src>" / "grounded") and throws it away. That is
+ * strictly better evidence than the text: whether she FOUND anything, and WHERE it came from, are facts, not
+ * inferences. A model re-deriving them from the wording is guessing at something already known.
+ *
+ * So the source decides the POSTURE and the model only refines it. Her own settled memory reads as home
+ * ground; a fresh outside pull is newer and less settled and should carry less body behind it.
+ */
+const SOURCE_POSTURE = {
+  forecast: 'speak_emphatic',   // her OWN model — the strongest ground she has
+  graph: 'speak',               // our KG: settled, already hers
+  convo: 'speak',               // what was actually said here before
+  news: 'speak',                // her own stream, corroborated
+  routed: 'speak',              // a tool she drove herself
+  wiki: 'speak_soft',           // outside, and only just now looked up
+  'wiki-verify': 'speak_soft',
+  web: 'speak_soft',
+  excavate: 'speak_soft',       // had to dig for it — least settled of all
+};
+
+/*
+ * PURE. Turn a cognition result into a posture. Returns null when the turn carries no usable signal, so the
+ * caller falls through to the model (or to FALLBACK). `decisive` means the program is surer than a model
+ * could be — the caller must NOT spend a cloud call second-guessing it.
+ */
+function postureFromTurn(turn) {
+  if (!turn || typeof turn !== 'object') return null;
+  const kind = String(turn.kind || 'say');
+  // An honest miss: she checked her records, searched, and came back empty. There is nothing for a model to
+  // read here — the body should say "no" because that is what happened. Never confident, never emphatic.
+  if (turn.missed === true) return { clip: 'shake', decisive: true, why: 'searched-miss' };
+  if (kind !== 'say') return null;                       // posture is about how she ANSWERS
+  // Answered with no enrichment at all = it was already in hand. That is her most settled state.
+  if (turn.enriched === false && !turn.enrichSource) return { clip: 'speak', decisive: false, why: 'grounded' };
+  const src = String(turn.enrichSource || '');
+  if (!src || !SOURCE_POSTURE[src]) return null;
+  return { clip: SOURCE_POSTURE[src], decisive: false, why: 'enriched:' + src };
+}
+
 // Small + cheap by design. Overridable so the fleet can be re-pointed without a code edit.
 function directorModel() {
   return process.env.ZOE_AVATAR_MODEL || process.env.ZOE_EXTRACT_MODEL || 'gemma4:31b-cloud';
 }
 
-function buildMessages({ kind, text, clips, mood }) {
+function buildMessages({ kind, text, clips, mood, posture }) {
   const menu = clips.join(', ');
   const said = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 400);
   return [
@@ -43,9 +85,12 @@ function buildMessages({ kind, text, clips, mood }) {
       'clip MUST be exactly one of: ' + menu + '\n' +
       'Guidance: pick the variant that fits the CONTENT, not just the event. Emphatic for strong or ' +
       'surprising material, soft for tentative or uncertain, lean for genuine interest, deep for a hard ' +
-      'problem. Use nod/shake/perk only as a brief reaction. Prefer subtle; she is a calm presence.' },
+      'problem. Use nod/shake/perk only as a brief reaction. Prefer subtle; she is a calm presence.\n' +
+      'If a suggested posture is given it comes from where the answer actually CAME FROM, which you cannot ' +
+      'read off the wording — keep it unless the content clearly calls for another.' },
     { role: 'user', content:
       'event: ' + String(kind || 'idle') + (mood ? ('\nmood: ' + mood) : '') +
+      (posture && posture.clip ? ('\nsuggested posture: ' + posture.clip + ' (' + posture.why + ')') : '') +
       (said ? ('\ncontent: "' + said + '"') : '') + '\nJSON:' },
   ];
 }
@@ -76,15 +121,24 @@ function parseChoice(raw, clips) {
  * Ask the model which clip to play. Resolves to a choice, or to the deterministic fallback — never rejects.
  * `clips` is the live menu from the renderer (__kg3d.anim().clips).
  */
-async function chooseClip({ kind, text, clips, mood, model, timeoutMs = 4000 } = {}) {
+async function chooseClip({ kind, text, clips, mood, turn, model, timeoutMs = 4000 } = {}) {
   const menu = Array.isArray(clips) && clips.length ? clips : Object.values(FALLBACK);
-  const safe = (why) => ({ clip: FALLBACK[kind] || 'idle', intensity: 0.6, hold: 4, source: 'fallback', why });
-  if (!menu.includes(FALLBACK[kind] || 'idle') && !menu.length) return safe('no-menu');
+  // The posture from the cognition result outranks FALLBACK: it is what actually happened this turn, not a
+  // guess keyed on the event name. Only fall back to the crude map when the turn told us nothing.
+  const posture = postureFromTurn(Object.assign({ kind }, turn || {}));
+  const floor = posture && menu.includes(posture.clip) ? posture.clip : (FALLBACK[kind] || 'idle');
+  const safe = (why) => ({ clip: floor, intensity: 0.6, hold: 4, source: 'fallback', why });
+  if (!menu.length) return safe('no-menu');
+  // DECISIVE: an honest miss is a fact, not a reading. Spending a cloud call to second-guess it would only
+  // add latency and a chance of being talked out of the truth.
+  if (posture && posture.decisive && menu.includes(posture.clip)) {
+    return { clip: posture.clip, intensity: 0.6, hold: 3, source: 'signal', why: posture.why };
+  }
   let raw;
   try {
     raw = await complete({
       model: model || directorModel(),
-      messages: buildMessages({ kind, text, clips: menu, mood }),
+      messages: buildMessages({ kind, text, clips: menu, mood, posture }),
       options: { temperature: 0.4, num_predict: 60 },
       timeoutMs,
     });
@@ -96,4 +150,4 @@ async function chooseClip({ kind, text, clips, mood, model, timeoutMs = 4000 } =
   return Object.assign(choice, { source: 'model' });
 }
 
-module.exports = { chooseClip, parseChoice, buildMessages, directorModel, FALLBACK };
+module.exports = { chooseClip, parseChoice, buildMessages, postureFromTurn, directorModel, FALLBACK, SOURCE_POSTURE };

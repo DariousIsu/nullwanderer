@@ -5,7 +5,7 @@
  * provable offline. An off-menu clip name reaching the renderer would try to play an animation that does not
  * exist; that is the failure this exists to make impossible.
  */
-const { parseChoice, buildMessages, FALLBACK } = require('../lib/avatar_director');
+const { parseChoice, buildMessages, postureFromTurn, FALLBACK, SOURCE_POSTURE } = require('../lib/avatar_director');
 
 const CLIPS = ['idle', 'listen', 'speak', 'think', 'idle_settle', 'listen_lean',
                'speak_soft', 'speak_emphatic', 'think_deep', 'nod', 'shake', 'perk'];
@@ -52,5 +52,49 @@ const msgs = buildMessages({ kind: 'say', text: 'hello', clips: CLIPS });
 ok(msgs.length === 2 && CLIPS.every((n) => msgs[0].content.includes(n)), 'prompt lists every clip');
 ok(msgs[1].content.includes('say'), 'prompt carries the event');
 
-console.log(fail ? `\n${fail} FAILURES` : '\nPASS — off-menu names rejected, junk never throws, values clamped, fallbacks real');
+/* ---- POSTURE FROM THE TURN. These are the shapes cognition.answerGrounded actually returns; the point is
+   that WHERE the answer came from is a fact the program owns, and the body must not contradict it. ---- */
+
+// THE ONE THAT MATTERS MOST: an honest miss must read as a miss, and must not spend a cloud call to be
+// talked out of it. She checked, she searched, she found nothing — the body says no.
+let p = postureFromTurn({ kind: 'say', missed: true, enriched: true, need: 'the vote count', tried: ['graph', 'web'] });
+ok(p && p.clip === 'shake' && p.decisive === true, 'searched-miss → shake, decisively', p);
+ok(CLIPS.includes(p.clip), 'miss posture is a real clip', p);
+
+// a miss is a miss regardless of event kind — it is about the outcome, not the trigger
+ok((postureFromTurn({ kind: 'think', missed: true }) || {}).clip === 'shake', 'miss outranks the event kind');
+
+// answered with nothing fetched = it was already in hand: her most settled state
+p = postureFromTurn({ kind: 'say', enriched: false, enrichSource: null });
+ok(p && p.clip === 'speak' && p.decisive === false, 'grounded → settled speak, model may still refine', p);
+
+// her OWN model is the strongest ground she has; a dug-up web page is the weakest
+ok((postureFromTurn({ kind: 'say', enriched: true, enrichSource: 'forecast' }) || {}).clip === 'speak_emphatic',
+   'her own forecast → emphatic');
+ok((postureFromTurn({ kind: 'say', enriched: true, enrichSource: 'graph' }) || {}).clip === 'speak',
+   'our own KG → settled');
+ok((postureFromTurn({ kind: 'say', enriched: true, enrichSource: 'excavate' }) || {}).clip === 'speak_soft',
+   'had to dig for it → soft');
+ok((postureFromTurn({ kind: 'say', enriched: true, enrichSource: 'wiki-verify' }) || {}).clip === 'speak_soft',
+   'hyphenated source name resolves (wiki-verify)');
+
+// every posture in the table must be a clip that exists, or the director points at nothing
+for (const s of Object.keys(SOURCE_POSTURE)) ok(CLIPS.includes(SOURCE_POSTURE[s]), 'posture is a real clip: ' + s, SOURCE_POSTURE[s]);
+
+// no signal → null, so the caller falls through to the model instead of inventing certainty
+for (const t of [null, undefined, {}, 'nope', { kind: 'say' }, { kind: 'say', enriched: true, enrichSource: 'martian' }]) {
+  let r; let threw = false;
+  try { r = postureFromTurn(t); } catch (e) { threw = true; }
+  ok(!threw, 'posture never throws', t);
+  ok(r === null, 'no usable signal → null', t);
+}
+
+// a listening turn is not an answer — posture is about how she ANSWERS
+ok(postureFromTurn({ kind: 'hear', enriched: false, enrichSource: null }) === null, 'hear carries no posture');
+
+// the suggested posture must reach the model, or passing it changed nothing
+const pm = buildMessages({ kind: 'say', text: 'hi', clips: CLIPS, posture: { clip: 'speak_soft', why: 'enriched:web' } });
+ok(pm[1].content.includes('speak_soft') && pm[1].content.includes('enriched:web'), 'prompt carries the posture', pm[1].content);
+
+console.log(fail ? `\n${fail} FAILURES` : '\nPASS — off-menu rejected, junk never throws, values clamped, and the turn signal sets the posture (a miss reads as a miss)');
 process.exit(fail ? 1 : 0);
