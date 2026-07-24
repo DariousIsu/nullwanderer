@@ -166,4 +166,25 @@ function actionHonestyDirective({ userMessage, userName = 'Lucas' } = {}) {
   return `[ACTION HONESTY — ${userName} asked you to ${what}. Emitting the actual tool tag is the ONLY way to do it; words alone do nothing and you will NOT have results in THIS reply. Do NOT describe scenes, clips, captions, search results, or findings as if you watched or found them — inventing first-hand experience is fabrication, the worst thing you can do. If you have a tool for it, emit the tag and just say you're on it. If you do NOT (e.g. you cannot search YouTube and watch on your own), say that plainly and offer what you genuinely CAN do — follow a link ${userName} pastes (with CC on), or speak from what you actually know — without pretending you did more.]`;
 }
 
-module.exports = { classifyClaimType, groundingScope, assessGrounding, buildDirective, groundingDirective, detectActionRequest, actionHonestyDirective, DATETIME_SELF_RE, ELECTION_RECENCY_RE };
+// MEETING-ACTION HONESTY — the OTHER confab class, and the one the request-keyed guard above misses:
+// she claims to be JOINING / IN a meeting when nothing was asked and no join fired. Live 2026-07-24:
+// Lucas said "The BGov meeting you just need to be ready to show off a little" (a DESCRIPTIVE remark,
+// no ask) and she replied "Joining the Google Meet now" — no Meet link, no join dispatched, and BGOV
+// is a Teams call anyway. detectActionRequest can't catch it (no imperative). So this is STATE-keyed:
+// she referenced a meeting but is not in/joining one → bar the fabricated join. The reply streams live
+// so we can't un-say it after; the cloud writer obeys this directive, and claimsMeetingAction() is the
+// log-only backstop that flags any slip. All pure.
+const _MEETING_MENTION_RE = /\b(meeting|meet|call|zoom|teams|standup|stand-?up|sync|huddle|webinar|hangout|conference call|google meet)\b/i;
+function mentionsMeeting(text) { return _MEETING_MENTION_RE.test(String(text || '')); }
+
+// A first-person claim to be joining / hopping on / in a live meeting or call — for the backstop.
+const _MEETING_CLAIM_RE = /(^|\b)(joining|i'?m joining|i am joining|i'?ll join|i will join|hopping (on|in)|jumping (on|in)|i'?m (on|in) the (call|meeting)|(on|in) the (call|meeting) now)\b/i;
+function claimsMeetingAction(text) { return _MEETING_CLAIM_RE.test(String(text || '')); }
+
+// The constraint injected when she references a meeting but is NOT in/joining one — keeps her honest
+// without stopping her from talking the meeting through with him.
+function meetingActionHonestyDirective(userName = 'Lucas') {
+  return `[REALITY CHECK — you are NOT in a meeting or call right now, and you have NOT joined or started one this turn. Do NOT say you are "joining", "in", or "on" a meeting or call, and do not narrate any action (joining, opening, searching, pulling up) you are not actually taking. You can talk with ${userName} about the meeting normally — help him get ready, answer about it, note who's in it — but never claim to be doing something that isn't happening. If he wants you to join, say plainly you'll need the link (and that a Teams meeting isn't something you can join yet).]`;
+}
+
+module.exports = { classifyClaimType, groundingScope, assessGrounding, buildDirective, groundingDirective, detectActionRequest, actionHonestyDirective, mentionsMeeting, claimsMeetingAction, meetingActionHonestyDirective, DATETIME_SELF_RE, ELECTION_RECENCY_RE };

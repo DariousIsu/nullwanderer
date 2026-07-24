@@ -112,5 +112,22 @@ ok(adir && /fabrication|do NOT describe/i.test(adir), 'media action → directiv
 ok(/cannot search YouTube|paste|link/i.test(adir), 'directive offers the honest alternative (paste a link)');
 ok(m.actionHonestyDirective({ userMessage: 'how are you today' }) === null, 'non-action turn → no action directive');
 
+// --- MEETING-ACTION HONESTY (the "Joining the Google Meet now" confab, 2026-07-24) ---
+ok(m.mentionsMeeting('The BGov meeting you just need to be ready to show off a little'), 'mentionsMeeting: the live confab trigger ("...meeting...")');
+ok(m.mentionsMeeting('when is my call with Sam?'), 'mentionsMeeting: "call"');
+ok(m.mentionsMeeting('are we still on for the Teams sync?'), 'mentionsMeeting: teams/sync');
+ok(!m.mentionsMeeting('what is the price of oil today'), 'mentionsMeeting: unrelated → false');
+ok(!m.mentionsMeeting('good morning'), 'mentionsMeeting: greeting → false');
+// the exact confab that shipped this morning
+ok(m.claimsMeetingAction('Joining the Google Meet now.'), 'claimsMeetingAction: the exact confab "Joining the Google Meet now"');
+ok(m.claimsMeetingAction("I'm hopping on the call."), 'claimsMeetingAction: hopping on the call');
+ok(m.claimsMeetingAction('Jumping in now.'), 'claimsMeetingAction: jumping in');
+ok(m.claimsMeetingAction("I'm in the meeting now."), 'claimsMeetingAction: in the meeting now');
+ok(!m.claimsMeetingAction('The meeting is at 10:00 on Teams.'), 'claimsMeetingAction: stating a fact ≠ claiming to join');
+ok(!m.claimsMeetingAction('Want me to join when you send the link?'), 'claimsMeetingAction: offering ≠ claiming');
+const mdir = m.meetingActionHonestyDirective('Lucas');
+ok(/NOT in a meeting|not (in|joining)/i.test(mdir) && /Lucas/.test(mdir), 'directive: states she is not in/joining, addressed to Lucas');
+ok(/Teams meeting isn'?t something you can join yet|link/i.test(mdir), 'directive: honest alternative (needs a link; Teams not joinable yet)');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

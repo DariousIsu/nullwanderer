@@ -5014,13 +5014,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // GOOGLE MEET — a meet.google.com link from Lucas means "join this". Start the
   // join → mandatory-intro → observe stepper (advances in the idle loop). The normal
   // turn still runs so she acknowledges.
+  let meetJoinStarted = false;   // a real join dispatched THIS turn → the meeting-confab guard stays silent (she IS joining)
   try {
     const gmeetLib = require('./lib/gmeet');
     if (!gmeetLib.active()) {
       const meetUrl = gmeetLib.detectMeetUrl(userMessage);
       // ALL ROADS → CANVAS: a Meet link now runs the full meeting flow IN the canvas pane (she joins
       // as herself), freeing her dedicated browser. startCanvasMeeting mounts the pane + kicks gmeet.
-      if (meetUrl) { startCanvasMeeting(meetUrl, 'Google Meet'); console.log(`[main] gmeet (canvas) join started: ${meetUrl}`); }
+      if (meetUrl) { startCanvasMeeting(meetUrl, 'Google Meet'); meetJoinStarted = true; console.log(`[main] gmeet (canvas) join started: ${meetUrl}`); }
     }
   } catch (e) { console.error('[main] gmeet start detect failed:', e.message); }
 
@@ -6033,6 +6034,19 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       if (adir) { composedUserMessage = `${composedUserMessage}\n\n${adir}`; console.log('[main] action-honesty directive injected'); }
     }
   } catch (e) { console.error('[main] action-honesty directive failed:', e.message); }
+
+  // MEETING-ACTION HONESTY (the "Joining the Google Meet now" confab, 2026-07-24) — she referenced a
+  // meeting but is NOT in one and did not start a join this turn. The request-keyed ACTION HONESTY
+  // above can't catch it (Lucas made a DESCRIPTIVE remark, no ask). Bar the fabricated join/in-call
+  // claim; she can still talk the meeting through. Rides the cloud writer (which obeys); the log-only
+  // backstop after finalize flags any slip so the guard is verifiable in the log.
+  try {
+    const meta = require('./lib/metacognition');
+    if (!require('./lib/gmeet').active() && !meetJoinStarted && meta.mentionsMeeting(userMessage)) {
+      composedUserMessage = `${composedUserMessage}\n\n${meta.meetingActionHonestyDirective(userName)}`;
+      console.log('[main] meeting-action honesty directive injected (not in a meeting)');
+    }
+  } catch (e) { console.error('[main] meeting-action honesty failed:', e.message); }
 
   // WATCHING-QUESTION GROUND — "what are you watching?" while a video is active. Dans tends to read
   // the leading "what are you…" as an identity prompt and recite her self-narrative. Force the answer
@@ -7270,6 +7284,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   }
 
   let { thought, say, truncated } = parser.finalize();
+
+  // MEETING-CONFAB BACKSTOP (log-only) — the reply already streamed, so we don't rewrite it; but if a
+  // join/in-call claim slipped past the directive with no meeting active, flag it so the confab is
+  // visible in the log (the "Joining the Google Meet now" class). Counting firings > trusting a prompt.
+  try {
+    if (say && !require('./lib/gmeet').active() && !meetJoinStarted && require('./lib/metacognition').claimsMeetingAction(say)) {
+      console.warn(`[main] WARN meeting-confab? reply claims a join/in-call with NO meeting active: "${String(say).replace(/\s+/g, ' ').slice(0, 90)}"`);
+    }
+  } catch {}
 
   // ⭐ THE TAG CONTRACT IS A PROXY — AND FOR THE CLOUD WE HAVE THE REAL SIGNAL.
   //
