@@ -48,21 +48,64 @@
 
   // Locate the most claim-relevant window of a large source so the model reads the RIGHT passage, not
   // the first 6k chars. Paragraph-chunk, score by embedding cosine (if injected) else lexical overlap.
-  function locatePassage(text, claim, opts = {}) {
+  // ⚠️ ASYNC, and it must be awaited (fixed 2026-07-23, found in a live run). `opts.embed` is an
+  // async embedder; this used to call `opts.cosine(opts.embed(claim), opts.embed(chunk))` with no
+  // await, so cosine received two PROMISES and scored every chunk 0. Every chunk tying means the
+  // "ranking" collapses to document order and the judge is handed THE FIRST N CHARACTERS of the
+  // source instead of the relevant ones. Live consequence: a cited 202,673-char state literacy PDF
+  // does contain "a 29-point gap between…", the exact figure under review, and the judge was shown
+  // the front matter and correctly reported that what it could see did not support the claim — a
+  // wrong verdict against a good citation, produced by a missing `await`.
+  async function locatePassage(text, claim, opts = {}) {
     const body = String(text || '');
     if (body.length <= (opts.maxPassage || MAX_PASSAGE)) return body;
     const chunks = body.split(/\n{2,}/).filter(c => c.trim().length > 0);
     if (chunks.length <= 1) return clip(body, opts.maxPassage || MAX_PASSAGE);
-    const score = (chunk) => {
-      if (typeof opts.embed === 'function' && typeof opts.cosine === 'function') {
-        try { return opts.cosine(opts.embed(claim), opts.embed(chunk)); } catch { /* fall through */ }
-      }
-      return VM ? VM.contentOverlap(claim, chunk) : 0;
-    };
-    const ranked = chunks.map((c, i) => ({ c, i, s: score(c) })).sort((a, b) => b.s - a.s);
-    // stitch the top chunks (in original order) up to the cap → keeps context around the best match
+    const lexical = (chunk) => (VM ? VM.contentOverlap(claim, chunk) : 0);
+    // Score every chunk lexically first — free, synchronous — then EMBED ONLY THE TOP FEW. A real
+    // cited source runs to thousands of paragraphs (the state literacy PDF is 202,673 chars), and one
+    // await per chunk turns a 6-claim audit into minutes of embedding. The lexical pass is a recall
+    // filter, not the verdict: factual claims share their distinctive tokens (figures, proper nouns)
+    // with the passage that supports them, so the right window is virtually always in the top slice —
+    // and embeddings then decide the ORDER within it, which is what actually picks the window.
+    // TRADEOFF, asserted rather than hidden: a passage that supports the claim with NO shared
+    // content word can fall outside the candidate set and never be embedded.
+    const topK = opts.embedTopK != null ? opts.embedTopK : 40;
+    let scored = chunks.map((c, i) => ({ c, i, s: lexical(c) }));
+    if (typeof opts.embed === 'function' && typeof opts.cosine === 'function') {
+      const candidates = scored.slice().sort((a, b) => b.s - a.s).slice(0, topK);
+      try {
+        const qv = await opts.embed(claim);
+        for (const cand of candidates) {
+          try { const s = opts.cosine(qv, await opts.embed(cand.c)); if (Number.isFinite(s)) cand.s = 1 + s; }
+          catch { /* keep the lexical score */ }
+        }
+        // +1 above keeps any embedded candidate ranked above every un-embedded chunk, so the
+        // embedding decides the winner while the lexical tail still provides a deterministic order.
+      } catch { /* embedder unavailable → pure lexical ranking */ }
+    }
+    const ranked = scored.sort((a, b) => b.s - a.s);
+    // Stitch the top chunks (in original order) → context around the best match.
+    //
+    // ⚠️ BOUNDED BY CHUNK COUNT, NOT JUST BYTES (fixed 2026-07-23, second live run). The old loop
+    // filled to 80% of the byte cap and stopped, which is fine at the 6,000-char default but became
+    // actively harmful once the cap was sized from the model's real context (100,000): a 202,673-char
+    // literacy PDF has 1,636 paragraphs averaging ~124 chars, so "as many as fit" kept ~800 of them
+    // and handed the judge 80,000 chars of mostly-irrelevant document. The chunk carrying the figure
+    // under review ranked #0 and was still in there — and the judge missed it and reported the
+    // citation unsupported. **A bigger window is not better when retrieval fills it with noise;**
+    // locating a passage means keeping the RELEVANT chunks, not the maximum number of them.
+    const maxChunks = opts.maxChunks != null ? opts.maxChunks : 40;
+    const cap = opts.maxPassage || MAX_PASSAGE;
     const keep = new Set(); let size = 0;
-    for (const r of ranked) { if (size + r.c.length > (opts.maxPassage || MAX_PASSAGE)) continue; keep.add(r.i); size += r.c.length; if (size >= (opts.maxPassage || MAX_PASSAGE) * 0.8) break; }
+    for (const r of ranked) {
+      if (keep.size >= maxChunks) break;
+      // +2 for the '\n\n' this chunk will be joined with — otherwise the returned string overruns
+      // the cap the caller sized against the model's window.
+      const cost = r.c.length + (keep.size ? 2 : 0);
+      if (size + cost > cap) continue;
+      keep.add(r.i); size += cost;
+    }
     if (!keep.size) keep.add(ranked[0].i);
     return chunks.filter((_, i) => keep.has(i)).join('\n\n');
   }
@@ -75,7 +118,7 @@
     if (passage.length < MIN_BODY && url && typeof opts.fetch === 'function') {
       try { const body = String(await opts.fetch(url) || '').trim(); if (body.length >= MIN_BODY) passage = body; } catch { /* keep what we had */ }
     }
-    passage = locatePassage(passage, unit.claim || unit.text || '', opts);
+    passage = await locatePassage(passage, unit.claim || unit.text || '', opts);
     return { passage, sourceUrl: url };
   }
 
@@ -93,14 +136,22 @@
     const q = clip(unit.quote || unit.claim || unit.text || '', 200);
     let results = [];
     try { results = await opts.search(q, { kind: unit.kind }); } catch { return null; }
-    const list = Array.isArray(results) ? results : (results && (results.results || results.items || results.hits) || []);
+    // Same envelope trap as the fact-check lane: callTool returns {content:[{text:'…json…'}]}, which
+    // has no `results` key, so a hand-rolled parse silently sees zero hits and the cross-check
+    // quietly never happens. verify_resolve.readSearchResults already unwraps every shape.
+    let list = [];
+    try { list = require('./verify_resolve').readSearchResults(results); } catch { /* browser build */ }
+    if (!list.length) {
+      const raw = Array.isArray(results) ? results : (results && (results.results || results.items || results.hits) || []);
+      list = Array.isArray(raw) ? raw : [];
+    }
     const citedHost = hostOf(unit.sourceUrl || unit.url);
-    for (const r of (Array.isArray(list) ? list : []).slice(0, opts.searchTopN || DEFAULT_TOPN)) {
+    for (const r of list.slice(0, opts.searchTopN || DEFAULT_TOPN)) {
       const u = r && (r.url || r.link || r.source_url); if (!u) continue;
       if (citedHost && hostOf(u) === citedHost) continue;   // want an INDEPENDENT source
       try {
         const body = String(await opts.fetch(u) || '').trim();
-        if (body.length >= MIN_BODY) return { url: u, title: r.title || r.name || u, passage: locatePassage(body, unit.claim || unit.text || '', opts) };
+        if (body.length >= MIN_BODY) return { url: u, title: r.title || r.name || u, passage: await locatePassage(body, unit.claim || unit.text || '', opts) };
       } catch { /* try next hit */ }
     }
     return null;
@@ -119,14 +170,21 @@
     '{"status_code":"<CODE>","caveat":"<short precision caveat, or empty>","evidence_quote":"<the exact line from a source that decides it>","confidence":<0..1>}',
     'CODE ∈ V (source clearly supports), VC (verified but with a caveat), VP (verified but paraphrased),',
     'QO (quote present, minor omission), QP (quotation is actually a paraphrase), A (attribution issue),',
-    'M (mismatch / source contradicts the claim), NK (not supported / not found in the sources).',
+    'M (mismatch / source contradicts the claim), NS (the cited source does not support the claim —',
+    'it is silent on it, or discusses something adjacent but different).',
+    'Do NOT emit NK: that code means "no record in an internal knowledge base", which is not a judgement',
+    'you are being asked to make. If the cited source simply does not support the claim, that is NS.',
   ].join('\n');
 
-  function buildJudgePrompt(unit, primary, independent) {
+  // `cap` is a parameter, not the module constant. It used to clip to MAX_PASSAGE unconditionally,
+  // which meant opts.maxPassage governed how much text locatePassage SELECTED and then this threw
+  // the surplus away again — a truncation no caller could turn off, sized for a window we no longer
+  // run in. The caller now sizes it from the model's actual context (lib/cloud_window).
+  function buildJudgePrompt(unit, primary, independent, cap = MAX_PASSAGE) {
     const parts = [`CLAIM: ${unit.claim || unit.text || ''}`];
     if (unit.quote) parts.push(`QUOTED AS: ${unit.quote}`);
-    parts.push(`\nCITED SOURCE PASSAGE:\n${primary && primary.trim() ? clip(primary, MAX_PASSAGE) : '(no source text could be retrieved)'}`);
-    if (independent && independent.trim()) parts.push(`\nINDEPENDENT SOURCE PASSAGE:\n${clip(independent, MAX_PASSAGE)}`);
+    parts.push(`\nCITED SOURCE PASSAGE:\n${primary && primary.trim() ? clip(primary, cap) : '(no source text could be retrieved)'}`);
+    if (independent && independent.trim()) parts.push(`\nINDEPENDENT SOURCE PASSAGE:\n${clip(independent, cap)}`);
     return parts.join('\n');
   }
 
@@ -152,8 +210,14 @@
       if (!code && VC) code = VC.parseStatusCode(raw);
       const cm = raw.match(/CAVEAT\s*=\s*(.+)$/im); if (cm) caveat = cm[1].trim();
     }
+    // A model that emitted NK is answering the OLD rubric (or reaching for a familiar code); in this
+    // lane the only thing it can mean is "the cited source doesn't support it" → NS.
+    if (code === 'NK') code = 'NS';
     return {
-      status_code: code || 'NK',
+      // No parseable code ⇒ ERR, never a verdict. This used to default to NK, which the contract
+      // graded `info`, so a truncated or unparseable judge reply was indistinguishable from a clean
+      // result and quietly helped clear the document. ERR grades as warn and says what happened.
+      status_code: code || 'ERR',
       caveat: caveat || '',
       evidence_quote: evidence || '',
       confidence: conf != null ? conf : (code ? 0.75 : 0.2),
@@ -164,7 +228,7 @@
   // Deterministic stub when NO model is injected (offline end-to-end, like verify_classify's stub).
   function stubJudge(unit, primary) {
     const overlap = VM ? VM.contentOverlap(unit.claim || unit.text || '', primary || '') : 0;
-    const code = overlap >= 0.7 ? 'V' : (overlap >= 0.4 ? 'VP' : 'NK');
+    const code = overlap >= 0.7 ? 'V' : (overlap >= 0.4 ? 'VP' : 'NS');
     return { status_code: code, caveat: '', evidence_quote: '', confidence: 0.3, note: `deep-stub: overlap=${Math.round(overlap * 100) / 100}`, valid: true, stub: true };
   }
 
@@ -181,11 +245,13 @@
         // 4000, not 1200: a frontier reasoner spends most of its budget on hidden reasoning before
         // it emits the verdict object, and a cap that clips mid-JSON degrades silently to NK.
         options: { num_predict: opts.numPredict || 4000, num_ctx: opts.numCtx || 32768 },
-        messages: [{ role: 'system', content: RUBRIC_SYS }, { role: 'user', content: buildJudgePrompt(unit, primary, independent) }],
+        messages: [{ role: 'system', content: RUBRIC_SYS },
+          { role: 'user', content: buildJudgePrompt(unit, primary, independent, opts.maxPassage || MAX_PASSAGE) }],
       });
     } catch { text = ''; }
     const v = parseVerdict(text);
-    v.note = v.caveat || v.evidence_quote || (v.valid ? '' : 'model output unparseable');
+    v.note = v.caveat || v.evidence_quote
+      || (v.valid ? '' : `no usable verdict from the judge — ${text ? 'reply did not parse (often a truncated verdict: check num_predict/num_ctx)' : 'the model returned nothing'}`);
     return v;
   }
 

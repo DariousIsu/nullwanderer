@@ -32,10 +32,11 @@
   const req = (typeof require !== 'undefined') ? require : null;
   const deep = req ? req('./verify_deepcheck') : root.VerifyDeepcheck;
   const match = req ? req('./verify_match') : root.VerifyMatch;
-  const api = factory(deep, match);
+  const resolve = req ? req('./verify_resolve') : root.VerifyResolve;
+  const api = factory(deep, match, resolve);
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof window !== 'undefined') window.VerifyFactcheck = api;
-})(this, function (DEEP, VM) {
+})(this, function (DEEP, VM, VR) {
   'use strict';
 
   const MIN_BODY = 40;            // below this a fetched "source" is too thin to weigh
@@ -51,11 +52,36 @@
   }
   function clip(s, n) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n) : s; }
 
+  // ⚠️ A PAGE THAT CANNOT BEAR ON A CLAIM MUST NEVER BE OFFERED AS EVIDENCE ABOUT IT.
+  // Searching a short claim sentence returns reference pages for its WORDS, not sources for its
+  // substance: "Only 25 percent of eighth graders do." returned merriam-webster.com/dictionary/only
+  // and match.com on a live run, and both were fetched with the browser and handed to the model to
+  // rule on. This is the same defect cert CFC-2026-07-20-01 hit from the other lane (a quote became
+  // the query and two Cambridge Dictionary entries were reported as consulted sources) and the one
+  // left open there — "rung 4 can still land on a company HOMEPAGE and judge a claim against it".
+  // Refusing the source outright kills the whole class: a dictionary entry, a bare homepage, or a
+  // storefront can corroborate nothing, so there is no verdict worth asking for.
+  const REFERENCE_HOST = /(?:^|\.)(?:merriam-webster|dictionary|thefreedictionary|vocabulary|wordnik|thesaurus|wiktionary|urbandictionary)\.(?:com|org)$/i;
+  const REFERENCE_PATH = /\/(?:dictionary|thesaurus|define|definition|spelling|synonyms?)(?:\/|$)/i;
+  function isUsableSource(url) {
+    let u; try { u = new URL(String(url)); } catch { return false; }
+    const host = u.hostname.replace(/^www\./i, '').toLowerCase();
+    if (REFERENCE_HOST.test(host)) return false;
+    if (REFERENCE_PATH.test(u.pathname)) return false;
+    // A bare homepage is not a source for anything: it carries whatever the site is showing today,
+    // which is exactly how a verdict about a claim gets reached against unrelated content.
+    const path = u.pathname.replace(/\/+$/, '');
+    if (!path || path === '/index.html' || path === '/index.php') return false;
+    return true;
+  }
+
   // Reuse the citation lane's passage locator when available (embedding-ranked windowing of a big
   // document); fall back to a head clip so this module works standalone.
-  function locate(body, claim, opts) {
+  async function locate(body, claim, opts) {
     if (DEEP && typeof DEEP.locatePassage === 'function') {
-      return DEEP.locatePassage(body, claim, Object.assign({ maxPassage: MAX_PASSAGE }, opts));
+      // AWAITED: locatePassage is async (it embeds each chunk). Without the await this returned a
+      // Promise, which `clip()` downstream stringifies to "[object Promise]".
+      return await DEEP.locatePassage(body, claim, Object.assign({ maxPassage: MAX_PASSAGE }, opts));
     }
     return clip(body, MAX_PASSAGE);
   }
@@ -76,29 +102,68 @@
    * cited — corroboration from the same site is not corroboration. Uses the claim SENTENCE as the
    * query, never a bare quoted name (searching "Camaro Dragon" alone returns a Chevrolet).
    */
-  async function gatherSources(unit, opts = {}) {
-    if (typeof opts.search !== 'function' || typeof opts.fetch !== 'function') return [];
-    const want = opts.sources || DEFAULT_SOURCES;
-    const q = clip(unit.claim || unit.text || '', 300);
-    if (!q) return [];
-    let results = [];
-    try { results = await opts.search(q, { kind: unit.kind }); } catch { return []; }
+  // Read a search result into [{url,title}] whatever the transport handed back. Reuses the citation
+  // lane's reader, which already handles the MCP envelope ({content:[{text:'…json…'}]}) that
+  // callTool returns — this module used to hand-roll `results||items||hits`, which sees no `results`
+  // key on an envelope and quietly yields ZERO hits. Every claim then reports "no independent source
+  // addressed this claim", which reads as a finding about the record rather than a dead lane.
+  function readHits(results) {
+    if (VR && typeof VR.readSearchResults === 'function') {
+      const viaLadder = VR.readSearchResults(results);
+      if (viaLadder.length) return viaLadder;
+    }
     const list = Array.isArray(results) ? results : (results && (results.results || results.items || results.hits)) || [];
+    return (Array.isArray(list) ? list : [])
+      .map(r => ({ url: (r && (r.url || r.link || r.source_url)) || '', title: (r && (r.title || r.name)) || '' }))
+      .filter(r => r.url);
+  }
+
+  // A SENTENCE IS NOT ALWAYS A QUERY. "Only 25 percent of eighth graders do." names no subject, no
+  // place and no measure — searching it returns pages about the word "only". A claim that leans on
+  // its paragraph for meaning has to be searched with that paragraph, or the lane spends a browser
+  // read and a model call on results that could never have addressed it. Below the bar we prepend the
+  // surrounding block (which verify_harness attaches as `context`), giving the query the subject the
+  // sentence borrowed. Same bar the citation lane uses for "is this a real quotation": 6+ content
+  // words is a searchable assertion; fewer is a fragment.
+  const MIN_QUERY_CONTENT_WORDS = 6;
+  function searchQueryFor(unit) {
+    const claim = String((unit && (unit.claim || unit.text)) || '').trim();
+    if (!claim) return '';
+    const content = VM && typeof VM.contentWords === 'function' ? VM.contentWords(claim) : claim.split(/\s+/);
+    const ctx = String((unit && unit.context) || '').trim();
+    if (content.length >= MIN_QUERY_CONTENT_WORDS || !ctx) return clip(claim, 300);
+    // Claim first so its own terms dominate the query; context follows to supply the subject.
+    return clip(`${claim} ${ctx.replace(claim, ' ').replace(/\s+/g, ' ').trim()}`, 300);
+  }
+
+  /** @returns {{sources: Array, hits: number, fetchFailed: number, sameHost: number, unusable: number}} */
+  async function gatherSources(unit, opts = {}) {
+    const empty = { sources: [], hits: 0, fetchFailed: 0, sameHost: 0 };
+    if (typeof opts.search !== 'function' || typeof opts.fetch !== 'function') return empty;
+    const want = opts.sources || DEFAULT_SOURCES;
+    const q = searchQueryFor(unit);
+    if (!q) return empty;
+    let results = [];
+    try { results = await opts.search(q, { kind: unit.kind }); } catch { return empty; }
+    const list = readHits(results);
     const citedHost = hostOf(unit.sourceUrl || unit.url);
     const out = [];
-    for (const r of (Array.isArray(list) ? list : []).slice(0, opts.searchTopN || DEFAULT_TOPN)) {
+    let fetchFailed = 0, sameHost = 0, unusable = 0;
+    for (const r of list.slice(0, opts.searchTopN || DEFAULT_TOPN)) {
       if (out.length >= want) break;
-      const u = r && (r.url || r.link || r.source_url);
-      if (!u) continue;
-      if (citedHost && hostOf(u) === citedHost) continue;          // must be INDEPENDENT
-      if (out.some(s => hostOf(s.url) === hostOf(u))) continue;    // one voice per outlet
+      const u = r.url;
+      // Rejected BEFORE the fetch — a dictionary entry or a homepage is not worth a browser read,
+      // let alone a model call, and must never reach the author's report as a considered source.
+      if (!isUsableSource(u)) { unusable++; continue; }
+      if (citedHost && hostOf(u) === citedHost) { sameHost++; continue; }   // must be INDEPENDENT
+      if (out.some(s => hostOf(s.url) === hostOf(u))) continue;             // one voice per outlet
       try {
         const body = String(await opts.fetch(u) || '').trim();
-        if (body.length < MIN_BODY) continue;
-        out.push({ url: u, title: r.title || r.name || u, passage: locate(body, unit.claim || unit.text || '', opts) });
-      } catch { /* try the next hit */ }
+        if (body.length < MIN_BODY) { fetchFailed++; continue; }
+        out.push({ url: u, title: r.title || u, passage: await locate(body, unit.claim || unit.text || '', opts) });
+      } catch { fetchFailed++; }
     }
-    return out;
+    return { sources: out, hits: list.length, fetchFailed, sameHost, unusable };
   }
 
   // The model's ONLY job here: read one independent source and say how it bears on the claim. It is
@@ -178,9 +243,26 @@
    * unit: { uid, claim|text, kind?, url?/sourceUrl? }  (sourceUrl = what the document cited, excluded)
    * opts: { search, fetch, complete, model, base, headers, embed, cosine, sources, searchTopN }
    */
+  // A "no independent source" result has four very different causes and they are not the author's
+  // business in the same way. "Nothing in the record addresses this" is a finding; "search returned
+  // nothing" and "we could not open any of the pages we found" are OUR failures, and printing our
+  // failure in the record's voice is how a lane can be dead for an entire run without anyone
+  // noticing. Say which one it was.
+  function nothingFoundNote(searched, diag) {
+    if (!searched) return 'fact-check search unavailable (no search/fetch tool wired)';
+    if (!diag.hits) return 'search returned no results for this claim';
+    if (!diag.hits - diag.sameHost && diag.sameHost) return `the only results were from the cited source's own site (${diag.sameHost}) — not independent corroboration`;
+    if (!diag.sources && diag.unusable && diag.unusable >= diag.hits - diag.sameHost) {
+      return `no usable independent source — the ${diag.unusable} result${diag.unusable === 1 ? '' : 's'} returned were reference pages or site homepages, which cannot bear on this claim`;
+    }
+    if (!diag.sources && diag.fetchFailed) return `found ${diag.hits} result${diag.hits === 1 ? '' : 's'} but could not read ${diag.fetchFailed === 1 ? 'it' : 'any of them'}`;
+    return `read ${diag.sources} independent source${diag.sources === 1 ? '' : 's'}; none addressed this claim`;
+  }
+
   async function factCheckOne(unit, opts = {}) {
     const u = unit || {};
-    const found = await gatherSources(u, opts);
+    const g = await gatherSources(u, opts);
+    const found = g.sources;
     const searched = typeof opts.search === 'function' && typeof opts.fetch === 'function';
     const rated = [];
     for (const src of found) {
@@ -194,8 +276,9 @@
       uid: u.uid, claim: u.claim || u.text || '', stance,
       supporting, countering, consulted: dedupe(rated),
       searched,
+      diagnostics: { hits: g.hits, read: found.length, unreadable: g.fetchFailed, sameHost: g.sameHost, unusable: g.unusable },
       note: stance === 'no-independent-source'
-        ? (searched ? 'no independent source addressed this claim' : 'fact-check search unavailable')
+        ? nothingFoundNote(searched, { hits: g.hits, sources: found.length, fetchFailed: g.fetchFailed, sameHost: g.sameHost, unusable: g.unusable })
         : `${supporting.length} supporting · ${countering.length} countering`,
     };
   }
@@ -221,5 +304,5 @@
     return out;
   }
 
-  return { factCheckOne, factCheckAll, gatherSources, classifySource, parseStance, aggregate, FACTCHECK_SYS, STANCES, MIN_BODY, MAX_PASSAGE };
+  return { factCheckOne, factCheckAll, gatherSources, classifySource, parseStance, aggregate, readHits, nothingFoundNote, isUsableSource, searchQueryFor, FACTCHECK_SYS, STANCES, MIN_BODY, MAX_PASSAGE };
 });

@@ -87,7 +87,7 @@ function mockComplete(reply) {
   // 8) no model injected → deterministic stub
   {
     const r = await D.deepVerifyOne({ uid: 's', claim: 'the sky is blue today', sourceText: 'the sky is blue today and clear' }, {});
-    ok('no model → deep-stub tier', r.tier === 'deep-stub' && ['V', 'VP', 'NK'].includes(r.status_code), JSON.stringify(r));
+    ok('no model → deep-stub tier', r.tier === 'deep-stub' && ['V', 'VP', 'NS'].includes(r.status_code), JSON.stringify(r));
   }
 
   // 9) parseVerdict robustness (raw JSON, fenced JSON, STATUS= fallback)
@@ -95,14 +95,44 @@ function mockComplete(reply) {
     ok('parseVerdict: raw JSON', D.parseVerdict('{"status_code":"VC","caveat":"tight"}').status_code === 'VC');
     ok('parseVerdict: fenced JSON', D.parseVerdict('```json\n{"status_code":"M"}\n```').status_code === 'M');
     ok('parseVerdict: STATUS= fallback', D.parseVerdict('STATUS=V | some prose').status_code === 'V');
-    ok('parseVerdict: garbage → NK invalid', (() => { const v = D.parseVerdict('completely unparseable ~~~'); return v.status_code === 'NK' && v.valid === false; })());
+    ok('parseVerdict: garbage → ERR invalid (NEVER a verdict)', (() => { const v = D.parseVerdict('completely unparseable ~~~'); return v.status_code === 'ERR' && v.valid === false; })());
+    ok('parseVerdict: a stale NK from the model reads as NS, not "no internal record"', D.parseVerdict('{"status_code":"NK"}').status_code === 'NS');
   }
 
   // 10) locatePassage returns the claim-relevant window of a large source, under the cap
   {
     const big = ('filler paragraph about unrelated things.\n\n').repeat(200) + 'THE KEY FACT: China emitted 13 billion tons.\n\n' + ('more filler.\n\n').repeat(200);
-    const loc = D.locatePassage(big, 'China emitted 13 billion tons', { maxPassage: 1000 });
+    const loc = await D.locatePassage(big, 'China emitted 13 billion tons', { maxPassage: 1000 });
     ok('locatePassage keeps the relevant window', /THE KEY FACT/.test(loc) && loc.length <= 1000, `len=${loc.length}`);
+
+    // REGRESSION (live defect, 2026-07-23): with an ASYNC embedder injected, the ranking used to
+    // score `cosine(Promise, Promise)` → 0 for every chunk. Every chunk tying collapses the ranking
+    // to document order, so the judge is handed THE FIRST N CHARS of a large source rather than the
+    // relevant ones — it then reports a good citation as unsupported because it never saw the line.
+    // The real case was a 202,673-char state literacy PDF containing the exact figure under review.
+    {
+      // A deliberately BAD async embedder: it ranks the key chunk top only if it is actually awaited.
+      const embed = async (t) => (/THE KEY FACT/.test(t) || /13 billion/.test(t)) ? [1, 0] : [0, 1];
+      const cosine = (a, b) => (a && b && a.length === b.length) ? a[0] * b[0] + a[1] * b[1] : 0;
+      const withEmbed = await D.locatePassage(big, 'China emitted 13 billion tons', { maxPassage: 1000, embed, cosine });
+      ok('an ASYNC embedder is awaited, so the relevant chunk actually wins',
+        /THE KEY FACT/.test(withEmbed), `got: ${String(withEmbed).slice(0, 80)}`);
+      ok('locatePassage resolves to a string, never a Promise', typeof withEmbed === 'string');
+    }
+
+    // REGRESSION (live defect, 2026-07-23): "locate" must keep the RELEVANT chunks, not as many as
+    // fit. Once maxPassage was sized from the model's real context (100,000), the old byte-only loop
+    // kept ~800 of a 1,636-paragraph PDF's chunks — the right one included, ranked #0 — and the judge
+    // missed the line in 80,000 chars of surrounding document and called a good citation unsupported.
+    {
+      // Must exceed the 100,000 cap or locatePassage correctly short-circuits and returns it whole.
+      const filler = (tag) => Array.from({ length: 1500 }, (_, i) => `${tag} paragraph number ${i} concerning unrelated municipal zoning and procurement topics.`).join('\n\n');
+      const many = filler('early') + '\n\nTHE KEY FACT: China emitted 13 billion tons.\n\n' + filler('late');
+      const loc = await D.locatePassage(many, 'China emitted 13 billion tons', { maxPassage: 100000 });
+      ok('a huge cap does not drown the relevant chunk in the whole document',
+        /THE KEY FACT/.test(loc) && loc.length < 8000, `len=${loc.length}`);
+      ok('the chunk budget is respected', loc.split('\n\n').length <= 40, `chunks=${loc.split('\n\n').length}`);
+    }
   }
 
   // 11) deepVerifyAll preserves order

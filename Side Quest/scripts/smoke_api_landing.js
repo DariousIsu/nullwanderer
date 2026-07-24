@@ -4,7 +4,7 @@
  *   ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_api_landing.js */
 'use strict';
 const os = require('os'), path = require('path'), fs = require('fs');
-const tmp = path.join(os.tmpdir(), `sq_apiland_${process.pid}.db`);
+const tmp = path.join(os.tmpdir(), `sq_apiland_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.db`);
 try { fs.unlinkSync(tmp); } catch {}
 process.env.API_DB_PATH = tmp;
 

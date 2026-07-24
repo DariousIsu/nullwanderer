@@ -8,7 +8,7 @@ const path = require('path');
 const fs = require('fs');
 
 // MUST precede any lib require — news_db reads the env at module load.
-const TMP = path.join(os.tmpdir(), `zoe-smoke-story-follow-${process.pid}.db`);
+const TMP = path.join(os.tmpdir(), `zoe-smoke-story-follow-${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.db`);
 process.env.NEWS_DB_PATH = TMP;
 
 const newsdb = require('../lib/news_db');

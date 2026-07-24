@@ -4,7 +4,7 @@
  * Run: ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_swirl_iterate.js
  */
 const path = require('path'), fs = require('fs'), os = require('os');
-const tmp = path.join(os.tmpdir(), `sq_smoke_swirl_${process.pid}.db`);
+const tmp = path.join(os.tmpdir(), `sq_smoke_swirl_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.db`);
 process.env.SQ_DB_PATH = tmp;
 const db = require('C:/Users/azrae/Desktop/Side Quest/lib/db');
 const mono = require('C:/Users/azrae/Desktop/Side Quest/lib/monologue');

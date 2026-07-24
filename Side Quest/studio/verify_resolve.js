@@ -45,6 +45,48 @@
   });
 
   const MIN_BODY = 40;                       // shorter than this ⇒ treat as empty (blocked)
+  // A reader can return HTTP 200 with a long body that is still NOT THE DOCUMENT. Observed live
+  // through Echo's web_extract (2026-07-23): a cited PDF came back as RAW BYTES ("%PDF-1.7 %…
+  // /L 2431168 … endobj") and a cited news article came back as its HTML METADATA ONLY
+  // ("headline: … description: …"). Both cleared status, length and the bot/paywall checks, so both
+  // became THE SOURCE PASSAGE — and the judge, reading binary or a meta tag, correctly reported that
+  // it did not support the claim. Five of eight claims on a real op-ed were faulted this way against
+  // citations that were fine. ⭐This is the cert CFC-2026-07-20-01 lesson again: WRONG-source is far
+  // worse than no-source, because it produces a confident, fabricated indictment of the author.
+  const BINARY_BODY = /^\s*(?:%PDF-|PK\x03\x04|\x89PNG|GIF8|\xFF\xD8\xFF|%!PS-)/;
+
+  // ⭐ THE POSITIVE TEST. Everything above this line is a BLACKLIST — paywall, bot-block, binary
+  // magic — and a blacklist is why this kept breaking: each rule was added after an incident and
+  // each was defeated by the next payload shape. A length floor died the same way, to a page's
+  // <head> plus its JSON-LD schema, which is long AND useless.
+  //
+  // So ask the question directly instead: IS THIS THE DOCUMENT'S TEXT, OR ITS CONTAINER? Markup,
+  // PDF bytes and JSON-LD are all container. Measured on the two readers that disagreed live —
+  //   Echo web_extract → `<title data-next-head="">…</title>` + article schema : dense <>, ~0 sentences
+  //   browser          → 2,547 chars, 0 markup characters, 17 sentences
+  // — which a shape test separates cleanly and a size test cannot.
+  //
+  // SHAPE IS THE GATE, LENGTH IS ONLY A PREFERENCE. Conflating them is the bug I shipped earlier
+  // today: a 120-character prose snippet is a real (if thin) source, while 4KB of markup is not a
+  // source at all. Callers pick the LONGEST passing text; they never accept failing text.
+  const MARKUP_RATIO_MAX = 0.01;   // prose carries ~0 angle brackets; markup is full of them
+  // The module's ONE emptiness floor, deliberately reusing MIN_BODY rather than inventing a second
+  // number: "there is nothing here" and "there is not much here" are different questions, and only
+  // the first is a gate. Two independent floors is how the size-based thinking crept back in.
+  const MIN_PROSE_CHARS = MIN_BODY;
+  function isProse(text) {
+    const t = String(text == null ? '' : text).trim();
+    if (t.length < MIN_PROSE_CHARS) return { ok: false, why: `too short (${t.length} chars)` };
+    if (BINARY_BODY.test(t)) return { ok: false, why: 'binary payload — the reader returned the file, not its text' };
+    const markup = (t.match(/[<>]/g) || []).length;
+    const ratio = markup / t.length;
+    if (ratio > MARKUP_RATIO_MAX) return { ok: false, why: `markup, not prose (${markup} angle brackets in ${t.length} chars)` };
+    // Real prose ends sentences. A metadata dump ("headline: …; description: …") and a JSON-LD blob
+    // do not, which is what separates them from a genuinely short extract.
+    const sentences = (t.match(/[.!?]["'”’)\]]?(?:\s|$)/g) || []).length;
+    if (sentences < 2) return { ok: false, why: `no sentence structure (${sentences} terminators)` };
+    return { ok: true, why: null, chars: t.length, sentences, markupRatio: ratio };
+  }
   const PAYWALL = /(subscribe to (?:continue|read)|metered paywall|this article is for subscribers|subscribers only|create a free account to|sign in to (?:read|continue)|to continue reading)/i;
   // BOT/WAF INTERSTITIALS. These return HTTP 200 with a full body, so the status and length checks
   // both pass and the block page is handed to the judge AS THE SOURCE. That is the worst outcome in
@@ -95,6 +137,10 @@
     if (fr.status != null && (fr.status < 200 || fr.status >= 300)) return { blocked: true, reason: `http-${fr.status}` };
     const body = (fr.body || '').trim();
     if (body.length < MIN_BODY) return { blocked: true, reason: 'empty-body' };
+    // Raw bytes are not a readable source. A reader that hands back the FILE instead of its text has
+    // failed, however many bytes it returned — judging a claim against "%PDF-1.7 … endobj" can only
+    // ever produce a false "not supported".
+    if (BINARY_BODY.test(body)) return { blocked: true, reason: 'binary-body (reader returned the file, not its text)' };
     if (PAYWALL.test(body)) return { blocked: true, reason: 'paywall' };
     if (BOT_BLOCK.test(body)) return { blocked: true, reason: 'bot-block' };
     if (fr.finalUrl && LOGIN_PATH.test(fr.finalUrl)) return { blocked: true, reason: 'login-redirect' };
@@ -191,12 +237,60 @@
       archive_url: extra.archive_url || null, reason: null, trail,
     });
 
+    // A LADDER OF READERS, not one reader. `tools.fetch` may be a single tool name or a list tried in
+    // order, plus an optional injected `opts.readerFn(url)` last rung for anything a plain text tool
+    // cannot open (a PDF, a JS-rendered page). One reader is why a live document's cited government
+    // PDF and its cited interactive data page both came back "inaccessible" while both were, in fact,
+    // perfectly reachable — the report blamed the author's sourcing for our missing capability.
+    // Every attempt is recorded on the trail so a failure says WHICH readers were tried and why each
+    // one gave up, instead of a bare "inaccessible".
+    const fetchTools = Array.isArray(tools.fetch) ? tools.fetch.filter(Boolean) : [tools.fetch];
+
+    // ⭐ ONE QUESTION, ONE ANSWER: "give me this source's readable text".
+    //
+    // `opts.readSource(url)` — built by lib/source_reader in production — OWNS that question: it
+    // routes by resource TYPE (a .pdf never goes to an HTML text extractor) and returns prose or an
+    // honest failure. When it is absent (the offline smokes, which mock callTool), the tool loop
+    // below stands in. Both paths apply the SAME acceptance test, `isProse`, so there is exactly one
+    // definition of "usable source" in the system rather than a rule per incident.
     const tryFetch = async (url, step) => {
-      const raw = await callTool(tools.fetch, Object.assign({ url }, opts.fetchArgs || {}));
-      const fr = readFetch(raw);
-      const b = isBlocked(fr);
-      trail.push({ step, tool: tools.fetch, url, ok: !b.blocked, reason: b.reason });
-      return { fr, blocked: b.blocked };
+      if (typeof opts.readSource === 'function') {
+        let res = null;
+        try { res = await opts.readSource(url); } catch (e) { res = { ok: false, why: `reader threw: ${e && e.message}` }; }
+        for (const a of ((res && res.attempts) || [])) trail.push({ step, tool: a.reader, url, ok: !!a.ok, reason: a.why || null, chars: a.chars || 0 });
+        if (res && res.ok && res.text) {
+          trail.push({ step, tool: `source_reader:${res.reader || res.kind || 'ok'}`, url, ok: true, reason: null, chars: res.text.length });
+          return { fr: { status: res.status || 200, body: res.text, finalUrl: url }, blocked: false };
+        }
+        trail.push({ step, tool: 'source_reader', url, ok: false, reason: (res && res.why) || 'no readable text' });
+        return { fr: null, blocked: true };
+      }
+
+      // Fallback acquisition (offline/mocked): try each text tool, keep the LONGEST that is prose.
+      // Shape gates; length only ranks. Both are `isProse` — see its note.
+      let best = null, bestLen = -1, last = { fr: null, blocked: true };
+      const consider = (fr, tool) => {
+        const b = isBlocked(fr);
+        const p = b.blocked ? { ok: false, why: b.reason } : isProse(fr && fr.body);
+        trail.push({ step, tool, url, ok: !!p.ok, reason: p.why || null, chars: ((fr && fr.body) || '').length });
+        if (!p.ok) { last = { fr, blocked: true }; return; }
+        const len = (fr.body || '').trim().length;
+        if (len > bestLen) { best = fr; bestLen = len; }
+      };
+
+      for (const tool of fetchTools) {
+        let fr = null;
+        try { fr = readFetch(await callTool(tool, Object.assign({ url }, opts.fetchArgs || {}))); }
+        catch (e) { trail.push({ step, tool, url, ok: false, reason: `tool-error: ${(e && e.message) || 'threw'}` }); continue; }
+        consider(fr, tool);
+      }
+      if (typeof opts.readerFn === 'function') {
+        let body = '';
+        try { body = String(await opts.readerFn(url) || ''); } catch (e) { body = ''; }
+        consider({ status: 200, body, finalUrl: url }, 'reader(injected)');
+      }
+      if (best) return { fr: best, blocked: false };
+      return last;
     };
 
     // Rung 0 — ATTACHED in-house source. When the operator has tagged an in-hand document to THIS
@@ -212,22 +306,50 @@
       };
     }
 
-    // Rung 1 — direct fetch.
-    if (unit && unit.url) {
-      const { fr, blocked } = await tryFetch(unit.url, 'fetch');
-      if (!blocked) return done('fetch', fr);
+    // EVERY url this unit cites, primary first. A citation that names several sources gets all of
+    // them tried — keeping only the first is how a note's supporting source got discarded unread.
+    const citedUrls = [];
+    const pushUrl = (u) => { if (u && !citedUrls.includes(u)) citedUrls.push(u); };
+    if (unit) { pushUrl(unit.url); (Array.isArray(unit.urls) ? unit.urls : []).forEach(pushUrl); }
 
-      // Rung 2 — archive (wayback, then verify_url_history).
+    // The terminal verdict distinguishes UNCITED from INACCESSIBLE. "You gave no source" and "we
+    // could not reach your source" are different facts and an author acts on them differently;
+    // collapsing both into `inaccessible` made the report apologise for a fetch that never had a
+    // target. Computed at the END, not up front — a unit with no url is precisely what rung 4's
+    // search-by-quote exists for, so it must still get there when search is enabled.
+    const nothingCited = !citedUrls.length && !(unit && unit.doi);
+    const terminal = () => (nothingCited
+      ? { uid, resolved: false, tier: 'uncited', source_text: '', source_url: null, archive_url: null, reason: 'uncited', trail }
+      : { uid, resolved: false, tier: 'inaccessible', source_text: '', source_url: (unit && unit.url) || null, archive_url: null, reason: 'inaccessible', trail });
+
+    // Rung 1 — direct fetch. Every cited url is fetched, not just the first that works: when a note
+    // cites two sources, which one actually carries the claim is a question for the MATCH stage, and
+    // it can only answer it if it is handed both. Extras ride on `alternates`; the primary keeps the
+    // top-level shape every existing caller reads.
+    const maxUrls = opts.maxCitedUrls != null ? opts.maxCitedUrls : 4;
+    const fetched = [];
+    for (const cu of citedUrls.slice(0, maxUrls)) {
+      const { fr, blocked } = await tryFetch(cu, 'fetch');
+      if (!blocked) fetched.push(done('fetch', fr, { source_url: cu }));
+    }
+    if (fetched.length) {
+      const primary = fetched[0];
+      if (fetched.length > 1) primary.alternates = fetched.slice(1);
+      return primary;
+    }
+
+    // Rung 2 — archive (wayback, then verify_url_history), again across every cited url.
+    for (const cu of citedUrls) {
       for (const toolKey of ['waybackHistory', 'urlHistory']) {
         let archiveUrl = '';
         try {
-          const raw = await callTool(tools[toolKey], { url: unit.url });
+          const raw = await callTool(tools[toolKey], { url: cu });
           archiveUrl = readArchiveUrl(raw);
         } catch (e) { /* tool unavailable → next */ }
-        trail.push({ step: 'archive', tool: tools[toolKey], url: unit.url, ok: !!archiveUrl, reason: archiveUrl ? null : 'no-snapshot' });
+        trail.push({ step: 'archive', tool: tools[toolKey], url: cu, ok: !!archiveUrl, reason: archiveUrl ? null : 'no-snapshot' });
         if (archiveUrl) {
           const { fr, blocked } = await tryFetch(archiveUrl, 'archive-fetch');
-          if (!blocked) return done('archive', fr, { archive_url: archiveUrl, source_url: unit.url });
+          if (!blocked) return done('archive', fr, { archive_url: archiveUrl, source_url: cu });
         }
       }
     }
@@ -255,7 +377,7 @@
     // the author's citation.
     if (!opts.allowSearch) {
       trail.push({ step: 'search', ok: false, reason: 'search-disabled (citation lane: cited source only)' });
-      return { uid, resolved: false, tier: 'inaccessible', source_text: '', source_url: unit && unit.url || null, archive_url: null, reason: 'inaccessible', trail };
+      return terminal();
     }
     const kind = sourceKind(unit);
     const stool = tools[searchToolKey(kind)];
@@ -271,8 +393,8 @@
       if (!blocked) return done('search', fr, { source_url: r.url });
     }
 
-    // Rung 5 — deterministic terminal.
-    return { uid, resolved: false, tier: 'inaccessible', source_text: '', source_url: unit && unit.url || null, archive_url: null, reason: 'inaccessible', trail };
+    // Rung 5 — deterministic terminal (uncited vs inaccessible, per `terminal()` above).
+    return terminal();
   }
 
   /**
@@ -298,6 +420,6 @@
     resolveUnit, resolveUnits,
     isBlocked, readFetch, readResult, readSearchResults, readArchiveUrl, readOaUrl,
     sourceKind, searchToolKey, hostOf, searchQueryFor,
-    DEFAULT_TOOLS, MIN_BODY, PAYWALL, LOGIN_PATH, BOT_BLOCK,
+    DEFAULT_TOOLS, MIN_BODY, PAYWALL, LOGIN_PATH, BOT_BLOCK, BINARY_BODY, isProse, MARKUP_RATIO_MAX, MIN_PROSE_CHARS,
   };
 });

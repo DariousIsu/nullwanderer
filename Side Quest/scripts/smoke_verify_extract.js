@@ -289,5 +289,70 @@ ok('empty working copy → no units', extractUnits({ blocks: [] }).units.length 
 ok('null working copy → no units, no throw', extractUnits(null).units.length === 0);
 ok('findReferenceSection tolerates junk', VE.findReferenceSection(null) === null && VE.findReferenceSection([]) === null);
 
+// --- CLAIM SELECTION (live defects, 2026-07-23) -------------------------------------------------
+// All three were found by extracting the real Arizona ESA op-ed, not by reading the code.
+
+// 1) A citation marker must not weld two sentences into one unit. The terminator class allowed ONE
+// optional closing char, so "[1]" (three chars) blocked every split after a cited sentence — and the
+// judge was handed a claim fused to whatever followed it. Live cost: "Nobody serious defends ESA
+// dollars going to diamond rings.[4]", which its source supports outright, was fused with the
+// argument sentence after it and the whole unit came back NOT SUPPORTED.
+{
+  const s = VE.splitSentences('Proficiency is below average.[1] Only 26 percent read at grade level. Only 25 percent of eighth graders do.');
+  ok('a marker does not fuse the next sentence into the claim', s.length === 3, JSON.stringify(s));
+  ok('the marker stays with the sentence it cites', /\[1\]$/.test(s[0]) && !/\[1\]/.test(s[1]), JSON.stringify(s));
+  const multi = VE.splitSentences('Costs rose sharply.[2,3] The board disagreed.');
+  ok('multi-ordinal markers split too', multi.length === 2 && /\[2,3\]$/.test(multi[0]), JSON.stringify(multi));
+  // …without breaking an ordinary bracketed sentence or a decimal.
+  ok('a bare bracket is still not a split point', VE.splitSentences('See figure [a] for detail. Then continue.').length === 2);
+}
+
+// 2) A note covers the sentences that DEPEND on it. Authors mark the first of a run; the rest
+// inherit. Footnote 1 on the op-ed is explicitly a source for fourth AND eighth grade, yet "Only 25
+// percent of eighth graders do." was reported to the author as carrying no citation at all.
+{
+  const doc = { blocks: [
+    { anchor: 'a1', type: 'paragraph', text: 'Reading proficiency is below average.[1] Only 26 percent read at grade level. Only 25 percent of eighth graders do.' },
+    { anchor: 'a2', type: 'paragraph', text: 'Spending rose 12 percent last year.' },
+    { anchor: 'r1', type: 'list_item', text: '1. NAEP results, https://nationsreportcard.gov/x' },
+    { anchor: 'r2', type: 'list_item', text: '2. Budget office, https://budget.example/y' },
+  ] };
+  const u = extractUnits(doc).units;
+  const byUid = Object.fromEntries(u.map(x => [x.uid, x]));
+  ok('the marked sentence keeps its own marker', byUid['a1.s0'] && byUid['a1.s0'].marker === '[1]');
+  ok('a later sentence in the SAME paragraph inherits the citation',
+    byUid['a1.s2'] && byUid['a1.s2'].url === 'https://nationsreportcard.gov/x', JSON.stringify(u.map(x => [x.uid, x.url, x.inheritedMarker])));
+  ok('an inherited citation is RECORDED as inherited, never passed off as the claim\'s own',
+    byUid['a1.s2'].inheritedMarker === '[1]' && !byUid['a1.s2'].marker);
+  ok('inheritance STOPS at the paragraph edge (a citation does not cross a block)',
+    byUid['a2.s0'] && !byUid['a2.s0'].url && !byUid['a2.s0'].inheritedMarker, JSON.stringify(byUid['a2.s0']));
+}
+
+// 3) Inheritance supplies a SOURCE; it must never manufacture a unit. A signal-less sentence after a
+// cited one stays out of the audit — otherwise every line of argument following a citation would be
+// dragged in and judged against a source that was never meant to cover it.
+{
+  const doc = { blocks: [
+    { anchor: 'a1', type: 'paragraph', text: 'Fraud cost the program 4 percent.[1] But eligibility and fraud are different problems entirely.' },
+    { anchor: 'r1', type: 'list_item', text: '1. Auditor report, https://audit.example/a' },
+    { anchor: 'r2', type: 'list_item', text: '2. Other, https://other.example/b' },
+  ] };
+  const u = extractUnits(doc).units;
+  ok('an argument sentence after a citation is not mined as a claim',
+    u.length === 1 && u[0].uid === 'a1.s0', JSON.stringify(u.map(x => [x.uid, x.text])));
+}
+
+// 4) A statistic written in words is still a statistic. Every numeric pattern keyed on a DIGIT, so
+// the op-ed's own restatement of its headline figure was not a unit at all.
+{
+  ok('spelled-out ratios are detected', VE.detectNumbers('is failing three out of every four students in reading').length === 1);
+  ok('digit ratios too', VE.detectNumbers('roughly 1 in 5 households qualify').length >= 1);
+  ok('ordinary prose does not trip the ratio pattern',
+    VE.detectNumbers('one of the reasons cited in the report was staffing').length === 0);
+  ok('a ratio makes the sentence a verification unit', extractUnits({ blocks: [
+    { anchor: 'a1', type: 'paragraph', text: 'The system is failing three out of every four students in reading.' },
+  ] }).units.length === 1);
+}
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

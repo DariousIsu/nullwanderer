@@ -4,7 +4,7 @@
  *   ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_news_objects.js */
 'use strict';
 const os = require('os'), path = require('path'), fs = require('fs');
-const tmp = path.join(os.tmpdir(), `sq_newsobj_${process.pid}.db`);
+const tmp = path.join(os.tmpdir(), `sq_newsobj_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.db`);
 try { fs.unlinkSync(tmp); } catch {}
 process.env.NEWS_DB_PATH = tmp;
 

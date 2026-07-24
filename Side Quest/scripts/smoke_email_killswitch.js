@@ -6,7 +6,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const tmp = path.join(os.tmpdir(), `sq_smoke_email_${process.pid}.db`);
+const tmp = path.join(os.tmpdir(), `sq_smoke_email_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.db`);
 process.env.SQ_DB_PATH = tmp;
 // Deterministic env: fake creds so isConfigured() is true (lets us inspect the prompt blocks),
 // and the switch starts OFF. Fake creds never send — no test calls sendEmail with the switch on.

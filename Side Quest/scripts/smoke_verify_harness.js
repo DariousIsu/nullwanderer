@@ -7,6 +7,7 @@
 const { importText } = require('../lib/editor_import');
 const { runHarness } = require('../studio/verify_harness');
 const { contentWords } = require('../studio/verify_match');
+const cert = require('../studio/cert_template');           // gradeFor — a held batch must not "clear"
 
 let pass = 0, fail = 0;
 function ok(name, cond, detail = '') {
@@ -68,7 +69,37 @@ const DOC = [
     ok('contract strict: zero schema violations', r.summary.invalid === 0, JSON.stringify(r.summary));
     ok('verified auto-resolves (≥2) + a contradiction surfaced bad', r.summary.resolved >= 2 && r.findings.some(f => f.verdict === 'bad'));
     ok('inaccessible surfaced info', r.findings.some(f => f.verdict === 'info'));
-    ok('residue classified by stub (valid enum)', r.stages.classified.every(c => /^(V|VC|VP|QO|QP|A|M|NK)$/.test(c.status_code)));
+    ok('residue classified by stub (valid enum)', r.stages.classified.every(c => /^(V|VC|VP|QO|QP|A|M|NS|NK|ERR)$/.test(c.status_code)));
+
+    // DOCUMENT ORDER (live defect, 2026-07-23). Findings are assembled in three stage-ordered
+    // batches — settled-at-match, judged, then held — and both the rail and the report print
+    // "Claims listed in document order" above them. On the Arizona ESA op-ed that printed the
+    // document's opening sentence fifth of six. Stage of processing is not the author's reading order.
+    const rank = (loc) => { const m = /^a(\d+)\.s(\d+)$/.exec(loc || ''); return m ? +m[1] * 1e4 + +m[2] : Infinity; };
+    const order = r.findings.map(f => f.locator);
+    ok('findings really are in document order, not stage order',
+      order.every((loc, i) => i === 0 || rank(order[i - 1]) <= rank(loc)), order.join(' → '));
+    // The batches must genuinely be interleaved, or the assertion above proves nothing.
+    const judged = new Set(r.stages.classified.map(c => c.uid));
+    const firstJudged = order.findIndex(l => judged.has(l));
+    ok('a judged claim really does sort among the settled ones (order is not batch order)',
+      firstJudged > 0 && firstJudged < order.length - 1, `judged at ${firstJudged} of ${order.length}: ${order.join(',')}`);
+
+    // Every finding a source was read for must be able to name it — not just the deep-judged ones.
+    ok('findings carry the source that was actually read',
+      r.findings.filter(f => (f.sources_consulted || []).length).length >= 2,
+      JSON.stringify(r.findings.map(f => (f.sources_consulted || []).length)));
+
+    // REGRESSION (live defect, 2026-07-23): candidates must carry the FULL cited source, not just
+    // the matcher's single best sentence. editor_checks feeds this to the deep judge as sourceText;
+    // when it was only the snippet, the "reads the primary source deeply" verifier ruled on one
+    // sentence chosen by the cheap pass it exists to second-guess, and called a good citation
+    // unsupported because the sentence it was handed genuinely did not support the claim.
+    const withSource = r.stages.candidates.filter(c => c.source_text);
+    ok('candidates carry the FULL cited source for the judge', withSource.length >= 2,
+      JSON.stringify(r.stages.candidates.map(c => ({ uid: c.uid, full: (c.source_text || '').length, snip: (c.passage || '').length }))));
+    ok('the full source really is longer than the match snippet',
+      withSource.some(c => (c.source_text || '').length > (c.passage || '').length));
   }
 
   // --- gate ABORTS: held residue surfaced (NK/info), never dropped, none classified ---
@@ -81,6 +112,27 @@ const DOC = [
     ok('nothing classified when gate aborts', r.stages.classified.length === 0);
     ok('held residue still surfaced as findings (6 total, none lost)', r.findings.length === 6);
     ok('held items flagged not-checked', r.findings.some(f => /preflight held/.test(f.ev)));
+    // A batch nothing ever read cannot be a clean bill of health.
+    ok('an aborted gate withholds clearance (held ≠ benign info)',
+      cert.gradeFor(r.summary).key !== 'clear', JSON.stringify(r.summary.byVerdict));
+  }
+
+  // --- gate aborts by THROWING / returning junk: the two paths that lost claims outright ---------
+  // Found in a live run, not by reading code: only the tidy "verdicts say no" path set heldResidue.
+  // The throw path and the no-usable-verdicts path left it undefined while leaving `residue`
+  // populated, so `gate.heldResidue || []` surfaced nothing and those claims DISAPPEARED — the run
+  // extracted 6 units, rendered 4 findings, and issued a ruling over them as though the document had
+  // 4 claims. Silent loss on the failure path is the worst place for it: nothing else says the batch
+  // went unchecked.
+  for (const [label, homeworkCheck] of [
+    ['throws', async () => { throw new Error('model not found'); }],
+    ['returns junk', async () => [{ nope: true }]],
+  ]) {
+    const r = await runHarness(wc, { callTool, embed: async (t) => stubEmbed(t), homeworkCheck });
+    ok(`gate ${label} → still aborts`, r.gate.proceed === false, r.gate.reason);
+    ok(`gate ${label} → EVERY claim still reported (6, none lost)`, r.findings.length === 6, `${r.findings.length}`);
+    ok(`gate ${label} → the unchecked claims say so`, r.findings.some(f => /not checked/.test(f.ev)));
+    ok(`gate ${label} → does not read as cleared`, cert.gradeFor(r.summary).key !== 'clear', cert.gradeFor(r.summary).ruling);
   }
 
   // --- injected classifyModel is used over the stub ---

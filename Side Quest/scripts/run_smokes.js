@@ -232,6 +232,7 @@ const smokes = [
   'smoke_editor_checks.js',
   'smoke_editor_cert.js',
   'smoke_verify_extract.js',
+  'smoke_source_reader.js',            // the ONE owner of "is this the document's text, or its container?"
   'smoke_verify_resolve.js',
   'smoke_verify_match.js',
   'smoke_verify_preflight.js',

@@ -4,7 +4,7 @@
  */
 'use strict';
 const os = require('os'), path = require('path'), fs = require('fs');
-const TMPDIR = path.join(os.tmpdir(), `sq_inq_${process.pid}`);
+const TMPDIR = path.join(os.tmpdir(), `sq_inq_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`);
 process.env.SQ_DB_PATH = path.join(TMPDIR, 'sq.db');
 const db = require('../lib/db'); db.init();
 const I = require('../lib/inquiry');

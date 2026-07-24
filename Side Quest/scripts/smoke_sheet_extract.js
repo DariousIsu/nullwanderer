@@ -37,7 +37,7 @@ ok(DE.SHEET_EXT.has('xls'), 'SHEET_EXT: legacy .xls recognized (the LA SoS roste
     const XLSX = require('C:/Users/azrae/Desktop/Side Quest/node_modules/xlsx');
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Parish', 'Sheriff', 'Email'], ['Caddo', 'Henry Whitehorn', 'sheriff@caddo.gov']]), 'Officials');
-    const fp = path.join(os.tmpdir(), `sq_smoke_biff_${process.pid}.xls`);
+    const fp = path.join(os.tmpdir(), `sq_smoke_biff_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.xls`);
     fs.writeFileSync(fp, Buffer.from(XLSX.write(wb, { type: 'buffer', bookType: 'xls' })));
     const r = await DE.extractSpreadsheet(fp);
     ok(r.format === 'xls' && /## Officials/.test(r.markdown) && /\| Caddo \| Henry Whitehorn \| sheriff@caddo\.gov \|/.test(r.markdown),

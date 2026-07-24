@@ -44,6 +44,9 @@
   const ZERO_EMBED = 0.25;     // … AND embed sim below this ⇒ Unsupported (Layer-0)
   const MIN_SOURCE = 40;       // shorter source text ⇒ treat as empty
   const NUM_TOL = 0.005;       // 0.5% relative tolerance for numeric equality (rounding)
+  // How much of the claim must reappear IN THE SENTENCE that carries the matching number before a
+  // numeric hit is allowed to settle the unit without the judge. See numericMatch.
+  const NUM_CONTEXT = 0.45;
 
   const STOPWORDS = new Set(('a an the of to in on at for and or but is are was were be been being as by ' +
     'with from that this these those it its he she they we you i not no than then over under into out up down ' +
@@ -104,22 +107,60 @@
   }
   const valEq = (a, b) => Math.abs(a - b) <= Math.max(1e-9, Math.abs(a) * NUM_TOL);
 
-  // Deterministic numeric verdict. → null (inconclusive, fall through) | {verdict, matched}.
-  function numericMatch(claimText, sourceText) {
-    const claim = parseStats(claimText);
+  /**
+   * Deterministic numeric verdict. → null (inconclusive, fall through) | {verdict, matched, passage}.
+   *
+   * ⚠️ CO-LOCATION IS THE WHOLE POINT (fixed 2026-07-23). This used to parse stats from the ENTIRE
+   * source and verify if any comparable magnitude matched anywhere on the page — so a number was
+   * treated as evidence purely for existing somewhere near the claim's subject. Proven on the live
+   * Arizona ESA op-ed: the claim "Cap ESAs at families making under $150,000 a year" scored 1.0
+   * `verified` against a real-estate page reading "a three-bedroom home in Mesa listed at $150,000".
+   * That was the only "Verified" in the author's report, it never reached the judge (needs_model
+   * false ends the cascade), and the rendered evidence was "match: verified (score 1)" — a verdict
+   * with nothing behind it that an author could check.
+   *
+   * A number is evidence only in the sentence that USES it. So: find the sentence carrying a
+   * comparable value, and require that sentence to restate enough of the claim (NUM_CONTEXT) before
+   * this fast path may settle the unit. Below the bar we return null and the unit falls through to
+   * lexical → embeddings → the judge, which is the correct home for anything ambiguous. The winning
+   * sentence is returned so the finding can quote it.
+   */
+  function numericMatch(claimText, sourceText, opts = {}) {
+    // Measure the CLAIM, not its citation apparatus. A trailing url and a "[3]" marker are not
+    // things the source has to restate, but they count as claim words — which both deflates the
+    // context ratio (a url contributes 4-5 tokens no source will ever match) and, worse, can
+    // manufacture a statistic outright: a percent-encoded path like ".../AZ%20State%20Plan.pdf"
+    // parses as "20 %".
+    const claimCore = String(claimText == null ? '' : claimText)
+      .replace(/https?:\/\/\S+/gi, ' ')
+      .replace(/\[\d{1,3}(?:\s*[-,]\s*\d{1,3})*\]/g, ' ');
+    const claim = parseStats(claimCore);
     if (!claim.length) return null;
-    const src = parseStats(sourceText);
-    for (const c of claim) {
-      const comparable = src.filter(s => s.unit === c.unit);
-      if (comparable.some(s => valEq(s.val, c.val))) return { verdict: 'verified', matched: c.raw };
-    }
-    // Single, unambiguous claim stat with comparable-but-different source values ⇒ contradiction.
-    if (claim.length === 1) {
-      const comparable = src.filter(s => s.unit === claim[0].unit);
-      if (comparable.length && !comparable.some(s => valEq(s.val, claim[0].val))) {
-        return { verdict: 'contradicted', matched: comparable.map(s => s.raw).join(', ') };
+    const floor = opts.numContext != null ? opts.numContext : NUM_CONTEXT;
+    const sents = splitPassages(sourceText, 2000);
+    const scan = sents.length ? sents : [String(sourceText || '')];
+
+    let agree = null, disagree = null, anyAgree = false;
+    for (const s of scan) {
+      const stats = parseStats(s);
+      if (!stats.length) continue;
+      const ctx = contentOverlap(claimCore, s);
+      for (const c of claim) {
+        const comparable = stats.filter(x => x.unit === c.unit);
+        if (!comparable.length) continue;
+        if (comparable.some(x => valEq(x.val, c.val))) {
+          anyAgree = true;
+          if (ctx >= floor && (!agree || ctx > agree.context)) agree = { context: ctx, matched: c.raw, passage: s };
+        } else if (claim.length === 1 && ctx >= floor && (!disagree || ctx > disagree.context)) {
+          disagree = { context: ctx, matched: comparable.map(x => x.raw).join(', '), passage: s };
+        }
       }
     }
+    if (agree) return { verdict: 'verified', matched: agree.matched, passage: agree.passage, context: agree.context };
+    // Only call it a contradiction when NOTHING in the source agrees — otherwise a document that
+    // states the figure in one sentence and a different figure in another would be reported as
+    // contradicting itself on the strength of whichever sentence we happened to score higher.
+    if (disagree && !anyAgree) return { verdict: 'contradicted', matched: disagree.matched, passage: disagree.passage, context: disagree.context };
     return null;
   }
 
@@ -149,6 +190,12 @@
     const srcText = (source && source.source_text) || '';
 
     // Layer-0 guards (never escalate).
+    // UNCITED is not INACCESSIBLE. "We could not reach your source" and "you gave no source" are
+    // different facts and the author acts on them differently; collapsing them made the report
+    // apologise for a fetch that never had a target.
+    if (source && source.resolved === false && source.tier === 'uncited') {
+      return { score: 0, tier: 'guard', band: 'uncited', needs_model: false, rubric: { method: 'guard', reason: 'uncited' } };
+    }
     if (!source || source.resolved === false) return { score: 0, tier: 'guard', band: 'inaccessible', needs_model: false, rubric: { method: 'guard', reason: 'unresolved' } };
     if (srcText.trim().length < MIN_SOURCE) return { score: 0, tier: 'guard', band: 'unsupported', needs_model: false, rubric: { method: 'guard', reason: 'empty-source' } };
     if (BOILERPLATE.test(srcText)) return { score: 0, tier: 'guard', band: 'unsupported', needs_model: false, rubric: { method: 'guard', reason: 'boilerplate' } };
@@ -156,9 +203,11 @@
 
     // numeric deterministic win (or contradiction).
     if (unit.kind === 'numeric' || (unit.numbers && unit.numbers.length)) {
-      const nm = numericMatch(unit.text, srcText);
-      if (nm && nm.verdict === 'verified') return { score: 1, tier: 'numeric', band: 'verified', needs_model: false, rubric: { method: 'numeric', matched: nm.matched } };
-      if (nm && nm.verdict === 'contradicted') return { score: 0, tier: 'numeric', band: 'contradicted', needs_model: false, rubric: { method: 'numeric', source_values: nm.matched } };
+      const nm = numericMatch(unit.text, srcText, opts);
+      // The winning sentence rides along as best_passage so the finding can QUOTE the evidence.
+      // A deterministic verdict with no quotable passage behind it is unauditable by the author.
+      if (nm && nm.verdict === 'verified') return { score: 1, tier: 'numeric', band: 'verified', needs_model: false, rubric: { method: 'numeric', matched: nm.matched, best_passage: nm.passage, context: nm.context } };
+      if (nm && nm.verdict === 'contradicted') return { score: 0, tier: 'numeric', band: 'contradicted', needs_model: false, rubric: { method: 'numeric', source_values: nm.matched, best_passage: nm.passage, context: nm.context } };
       // inconclusive → fall through to lexical/embeddings
     }
 
@@ -207,13 +256,15 @@
     const sources = Array.isArray(resolved) ? resolved : [resolved];
     const required = opts.citeFloor != null ? opts.citeFloor : 1;
 
-    let best = null, bestSourceUrl = null;
+    let best = null, bestSourceUrl = null, bestTrail = null;
     const confirmDomains = new Set();
     for (const src of sources) {
       const r = await scoreAgainstSource(unit, src, opts);
       if (r.band === 'verified' && src && src.source_url) confirmDomains.add(canonicalDomain(src.source_url));
       if (!best || r.score > best.score || (best.band === 'inaccessible' && r.band !== 'inaccessible')) {
         best = r; bestSourceUrl = src && src.source_url || null;
+        // Carry the resolution trail so a downstream "inaccessible" can say which readers were tried.
+        bestTrail = (src && Array.isArray(src.trail)) ? src.trail : null;
       }
     }
 
@@ -232,6 +283,7 @@
       band,
       needs_model,
       rubric: Object.assign({ source_url: bestSourceUrl }, best.rubric),
+      trail: bestTrail,
       cite_floor,
     };
   }
@@ -251,6 +303,6 @@
     matchUnit, matchUnits, scoreAgainstSource,
     lexicalScore, contentOverlap, numericMatch, parseStats, splitPassages, bandFromScore,
     canonicalDomain, cosineOf, normalize, words, contentWords,
-    NEAR, GRAY, WEAK, ZERO_OVERLAP, ZERO_EMBED, MIN_SOURCE,
+    NEAR, GRAY, WEAK, ZERO_OVERLAP, ZERO_EMBED, MIN_SOURCE, NUM_CONTEXT,
   };
 });

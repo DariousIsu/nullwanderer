@@ -154,9 +154,18 @@ async function runHarnessChecks({
   classifyModelName = null, classifyBase = null, classifyHeaders = null,
   cheapModel = null, cheapBase = null, cheapHeaders = null,
   frontierModel = null, frontierBase = null, frontierHeaders = null,
-  deep = false, deepModelName = null, deepBase = null, deepHeaders = null, deepNumPredict = 1200,
+  // ⚠️ deepNumPredict/deepNumCtx/deepMaxPassage DEFAULT TO NULL ON PURPOSE (2026-07-23). This used to
+  // default deepNumPredict to 1200 while main.js never passed a value — so verify_deepcheck's
+  // `opts.numPredict || 4000` never fired and the judge was capped at 1200 output tokens. A frontier
+  // reasoner spends most of that on hidden reasoning before it emits the verdict object, so the JSON
+  // clipped mid-object, failed to parse, and (before the ERR split) degraded silently to a benign
+  // code. A truncation cap set in the wrong module is invisible: nothing errors, the verdict just
+  // gets worse. Null here means "let the module's own floor apply, or the window the caller measured".
+  deep = false, deepModelName = null, deepBase = null, deepHeaders = null,
+  deepNumPredict = null, deepNumCtx = null, deepMaxPassage = null,
   // FACT CHECK lane (always on): defaults to the same model/endpoint as the deep citation judge.
   factCheckEnabled = true, factCheckModelName = null, factCheckBase = null, factCheckHeaders = null, factCheckSources = 3,
+  factCheckNumPredict = null, factCheckNumCtx = null,
   embed = null, cosine = null, tier = 'harness', onStage = null,
   // Echo's fetch rung → web_extract (trafilatura clean text + status), not web_fetch (raw-HTML
   // preview). The ladder reads the body from `text_preview` (see verify_resolve.readFetch).
@@ -183,8 +192,51 @@ async function runHarnessChecks({
   // checks an independent source, and judges precision. Web tools are the SAME ones the resolver uses
   // (fetch via the injected fetch tool → readFetch's tolerant body reader; search via resolveOpts.search
   // or web_search). Fail-soft: no deep model → the classify leaf still runs.
-  const fetchTool = (resolveOpts.tools && resolveOpts.tools.fetch) || 'web_extract';
-  const fetchUrl = async (url) => { try { return readFetch(await callTool(fetchTool, { url })).body || ''; } catch { return ''; } };
+  // ONE reader chain for BOTH lanes. This used to be a single tool call, so a page web_extract could
+  // not open was simply unreadable to the deep judge and to the fact-check lane — and the fact-check
+  // lane's way of saying so was "no independent source addressed this claim", i.e. our missing
+  // capability reported as the record's silence. It now walks the same ladder the resolver walks:
+  // every configured fetch tool, then the injected readerFn (plain HTTP → a real browser).
+  // BOTH MODEL LANES READ THROUGH THE SAME OWNER as the resolver. When `resolveOpts.readSource` is
+  // supplied (production, lib/source_reader) the deep judge and the fact-check lane get its
+  // type-routing and its prose test for free; without it we fall back to the raw tool list, which is
+  // what the offline smokes mock.
+  const fetchTools = (resolveOpts.tools && Array.isArray(resolveOpts.tools.fetch))
+    ? resolveOpts.tools.fetch.filter(Boolean)
+    : [(resolveOpts.tools && resolveOpts.tools.fetch) || 'web_extract'];
+
+  // ONE FETCH PER URL PER RUN. Several claims routinely cite the SAME source — and now that a note's
+  // citation carries forward to the sentences depending on it, three sentences in one paragraph all
+  // resolve to one url. Unmemoised, each re-ran the whole ladder, including the browser rung: the
+  // live run read the same Axios page three times over. The cache is per-run (built here, discarded
+  // with the closure), so a re-run still re-reads the web and nothing goes stale between audits.
+  // In-flight promises are cached too, so concurrent claims on one url wait rather than duplicate.
+  const readerCache = new Map();
+  const memo = (key, fn) => {
+    if (readerCache.has(key)) return readerCache.get(key);
+    const p = fn().catch(() => '');
+    readerCache.set(key, p);
+    return p;
+  };
+  const readerFn = typeof resolveOpts.readerFn === 'function'
+    ? (url) => memo(`reader:${url}`, async () => String(await resolveOpts.readerFn(url) || ''))
+    : null;
+
+  const fetchUrl = (url) => memo(`fetch:${url}`, async () => {
+    if (typeof resolveOpts.readSource === 'function') {
+      try { const r = await resolveOpts.readSource(url); return (r && r.ok && r.text) ? r.text : ''; }
+      catch { return ''; }
+    }
+    for (const tool of fetchTools) {
+      try { const body = readFetch(await callTool(tool, { url })).body || ''; if (body.trim().length >= 40) return body; }
+      catch { /* next reader */ }
+    }
+    if (readerFn) {
+      try { const body = String(await readerFn(url) || ''); if (body.trim().length >= 40) return body; }
+      catch { /* fall through */ }
+    }
+    return '';
+  });
   const searchFn = typeof resolveOpts.search === 'function'
     ? (q, o) => resolveOpts.search(q, o)
     : async (q) => { try { return await callTool((resolveOpts.tools && resolveOpts.tools.webSearch) || 'web_search', { query: q, q }); } catch { return []; } };
@@ -192,12 +244,17 @@ async function runHarnessChecks({
   let deepVerify = null;
   if (deep && deepModelName) {
     deepVerify = (residue) => deepcheck.deepVerifyAll(
-      (residue || []).map(c => ({ uid: c.uid, claim: c.claim, text: c.claim, quote: c.quote || null, kind: c.kind || null, url: c.source_url || null, sourceText: c.passage || '' })),
+      // sourceText = the FULL cited source when we have it, falling back to the match snippet. Passing
+      // only `c.passage` (the matcher's single best sentence) meant the deep judge never read the
+      // document it was ruling on — see the note in verify_harness where source_text is attached.
+      (residue || []).map(c => ({ uid: c.uid, claim: c.claim, text: c.claim, quote: c.quote || null, kind: c.kind || null, url: c.source_url || null, sourceText: c.source_text || c.passage || '' })),
       // crossCheck FALSE: this is the CITATION lane, and it judges the claim against the source the
       // document CITED — nothing else. Pulling in an independent source here is fact-checking, which
       // is now its own lane below, where a second source is offered to the author rather than used to
       // rule on their citation. No `search` is injected for the same reason.
-      { complete, model: deepModelName, base: deepBase, headers: deepHeaders, numPredict: deepNumPredict, fetch: fetchUrl, crossCheck: false, embed, cosine, concurrency: 3 }
+      { complete, model: deepModelName, base: deepBase, headers: deepHeaders,
+        numPredict: deepNumPredict, numCtx: deepNumCtx, maxPassage: deepMaxPassage,
+        fetch: fetchUrl, crossCheck: false, embed, cosine, concurrency: 3 }
     );
   }
 
@@ -210,11 +267,15 @@ async function runHarnessChecks({
       complete, model: factCheckModelName || deepModelName || classifyModelName,
       base: factCheckBase || deepBase || classifyBase, headers: factCheckHeaders || deepHeaders || classifyHeaders,
       fetch: fetchUrl, search: searchFn, embed, cosine,
+      numPredict: factCheckNumPredict, numCtx: factCheckNumCtx,
       sources: factCheckSources, concurrency: 3,
     });
   }
 
-  const result = await runHarness(workingCopy, { callTool, embed, cosine, homeworkCheck, classifyModel, classifyFrontier, deepVerify, factCheck, resolveOpts, onStage });
+  // The resolver gets the MEMOISED readerFn too, so the browser rung is shared with the two model
+  // lanes rather than each re-reading the same cited page.
+  const resolveOptsMemo = readerFn ? Object.assign({}, resolveOpts, { readerFn }) : resolveOpts;
+  const result = await runHarness(workingCopy, { callTool, embed, cosine, homeworkCheck, classifyModel, classifyFrontier, deepVerify, factCheck, resolveOpts: resolveOptsMemo, onStage });
 
   if (checkRunId != null) {
     registry.updateCheckRun(checkRunId, {

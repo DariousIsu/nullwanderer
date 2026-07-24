@@ -39,6 +39,35 @@ const src = (text, url = 'https://a.example/x') => ({ resolved: true, source_url
   ok('numericMatch equal → verified', numericMatch('rose 15% last year', 'the index rose 15% in 2021').verdict === 'verified');
   ok('numericMatch single differ → contradicted', numericMatch('rose 15%', 'the index rose 5% only').verdict === 'contradicted');
   ok('numericMatch no source number → inconclusive (null)', numericMatch('rose 15%', 'it increased a lot that year') === null);
+  ok('numericMatch returns the deciding SENTENCE, not just the figure',
+    /the index rose 15% in 2021/i.test(numericMatch('rose 15% last year', 'Markets were calm. The index rose 15% in 2021.').passage || ''));
+
+  // ---- REGRESSION (live defect, 2026-07-23): a number is evidence only in the sentence that USES
+  // it. The Arizona ESA op-ed's ONLY "Verified" was produced by a bare $150,000 collision — the
+  // claim never reached the judge, and the same score came back against a real-estate listing.
+  {
+    const claim = 'Cap ESAs at families making under $150,000 a year.';
+    const realEstate = 'A three-bedroom home in Mesa listed at $150,000 this week, agents said, as '
+      + 'inventory rose across the Phoenix metro area and mortgage rates held steady.';
+    ok('a number in an UNRELATED sentence is not a verification', numericMatch(claim, realEstate) === null,
+      JSON.stringify(numericMatch(claim, realEstate)));
+
+    // Same number, right topic, OPPOSITE direction — the case the judge exists to catch. It must not
+    // settle deterministically; it has to fall through so a model reads the direction.
+    const opposite = 'The initiative would bar households earning more than $150,000 per year from '
+      + 'future ESA participation, with an exception for students with disabilities.';
+    ok('same figure but reversed sense does NOT settle without the judge', numericMatch(claim, opposite) === null,
+      JSON.stringify(numericMatch(claim, opposite)));
+
+    // The fast path must still work when the source really does restate the claim.
+    const restates = 'Under the measure, ESAs would be capped for families making under $150,000 a year.';
+    const good = numericMatch(claim, restates);
+    ok('a sentence that restates the claim still verifies cheaply', good && good.verdict === 'verified', JSON.stringify(good));
+
+    // …and a bare collision must not manufacture a CONTRADICTION either.
+    ok('an unrelated differing figure is not a contradiction',
+      numericMatch('rose 15% in treated basins', 'Unrelated: the parking levy rose 5% downtown last spring.') === null);
+  }
   ok('contentOverlap ignores stopwords', contentOverlap('alpha beta gamma', 'the alpha and beta or gamma') === 1);
 
   // ---- Tier A: verbatim quote → Verified, no model -------------------------------------------

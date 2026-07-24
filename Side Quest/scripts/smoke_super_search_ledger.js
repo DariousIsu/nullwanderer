@@ -14,7 +14,7 @@ const { makeIngestor } = require('../studio/super_search_ingest');
 let pass = 0, fail = 0;
 function ok(name, cond, detail = '') { if (cond) { pass++; console.log(`  PASS ${name}`); } else { fail++; console.log(`  FAIL ${name}${detail ? ' — ' + detail : ''}`); } }
 
-const tmp = path.join(os.tmpdir(), `ss_ledger_${process.pid}.json`);
+const tmp = path.join(os.tmpdir(), `ss_ledger_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.json`);
 try { fs.unlinkSync(tmp); } catch (e) {}
 
 (async () => {

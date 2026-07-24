@@ -10,7 +10,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const tmp = path.join(os.tmpdir(), `sq_smoke_softleash_${process.pid}.db`);
+const tmp = path.join(os.tmpdir(), `sq_smoke_softleash_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.db`);
 process.env.SQ_DB_PATH = tmp;
 
 const db = require('C:/Users/azrae/Desktop/Side Quest/lib/db');

@@ -6,7 +6,7 @@
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
-const tmp = path.join(os.tmpdir(), `sq_vidcap_smoke_${process.pid}.db`);
+const tmp = path.join(os.tmpdir(), `sq_vidcap_smoke_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.db`);
 try { fs.unlinkSync(tmp); } catch {}
 process.env.NEWS_DB_PATH = tmp;
 
@@ -66,7 +66,7 @@ const caps = vc.recentCaptures({ sinceMs: T - 1 });
 ok(caps.length === 1 && caps[0].cue === 'music' && /candlestick/.test(caps[0].description), 'recentCaptures returns the row incl. the vision description');
 
 // ===== captures retention (prune old rows + their PNG files) =====
-const capDir = path.join(os.tmpdir(), `sq_vidcap_png_${process.pid}`);
+const capDir = path.join(os.tmpdir(), `sq_vidcap_png_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`);
 try { fs.mkdirSync(capDir, { recursive: true }); } catch {}
 const oldPng = path.join(capDir, 'old.png'), newPng = path.join(capDir, 'new.png');
 fs.writeFileSync(oldPng, 'x'); fs.writeFileSync(newPng, 'y');

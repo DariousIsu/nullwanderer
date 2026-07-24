@@ -49,9 +49,14 @@
         claim: u.quote || u.text || '',
         kind: u.kind || null,                        // carried for deep-verify cross-check gating (numeric → cross-check)
         quote: u.quote || null,
+        // The sentence did not carry this citation itself — it inherited the paragraph's. A verdict
+        // reached on an inherited source has to say so, or the author reads a fault against a
+        // citation they never actually attached to that sentence.
+        inherited_marker: u.inheritedMarker || null,
         passage: rubric.best_passage || '',
         source_url: rubric.source_url || u.url || null,
         match_score: m.match_score != null ? m.match_score : null,
+        trail: m.trail || null,                      // why resolution failed, for a legible finding
       };
     });
   }
@@ -122,17 +127,27 @@
         sample: { size: samples.length, checked: 0, passed: 0, passRate: null, threshold, gated: false, verdicts: [] } };
     }
 
+    // ⚠️ EVERY `proceed:false` RETURN MUST CARRY heldResidue (fixed 2026-07-23, found in a live run).
+    // The normal path below sets it; these two abort paths did not, and they left `residue` populated
+    // instead. The harness surfaces held claims via `gate.heldResidue || []` — so on an aborted gate
+    // that list was empty and the un-judged claims VANISHED FROM THE REPORT: a live run on the
+    // Arizona ESA op-ed extracted 6 units and rendered 4 findings, then issued a ruling over them as
+    // if the document had 4 claims. The failure path is exactly where silent loss is least
+    // affordable, because nothing else tells you the batch was never checked.
+    const heldAbort = (reason) => ({
+      proceed: false, reason, decided, residue: [], heldResidue: residue, layer0,
+      sample: { size: samples.length, checked: 0, passed: 0, passRate: 0, threshold, gated: true, verdicts: [] },
+    });
+
     let raw = [];
     try { raw = await opts.homeworkCheck(samples, buildHomeworkPrompt(samples)); } catch (e) {
-      return { proceed: false, reason: `homework-check threw: ${e.message}`, decided, residue, layer0,
-        sample: { size: samples.length, checked: 0, passed: 0, passRate: 0, threshold, gated: true, verdicts: [] } };
+      return heldAbort(`homework-check threw: ${e.message}`);
     }
     const verdicts = (Array.isArray(raw) ? raw : []).filter(validVerdict);
 
     // A broken/empty gate must NOT release the batch (fail-safe: protect the frontier spend).
     if (verdicts.length === 0) {
-      return { proceed: false, reason: 'homework-check returned no usable verdicts', decided, residue, layer0,
-        sample: { size: samples.length, checked: 0, passed: 0, passRate: 0, threshold, gated: true, verdicts: [] } };
+      return heldAbort('homework-check returned no usable verdicts');
     }
 
     const passed = verdicts.filter(v => v.ok).length;

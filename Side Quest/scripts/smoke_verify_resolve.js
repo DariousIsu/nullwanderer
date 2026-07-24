@@ -14,7 +14,15 @@ function ok(name, cond, detail = '') {
   if (cond) { pass++; console.log(`  PASS ${name}`); }
   else { fail++; console.log(`  FAIL ${name}${detail ? ' — ' + detail : ''}`); }
 }
-const body = (n) => 'x'.repeat(n);                 // a body of n chars (passes MIN_BODY when big)
+// A body of at least n chars that LOOKS LIKE EXTRACTED PROSE. It used to be 'x'.repeat(n), which was
+// fine when acceptance was a length floor — but the gate is now shape (verify_resolve.isProse), and a
+// wall of 'x' is not a document. A fixture that cannot pass the real gate tests nothing.
+const body = (n) => {
+  const s = 'The committee reviewed the report and published its findings. ';
+  let out = '';
+  while (out.length < n || (out.match(/\./g) || []).length < 2) out += s;
+  return out;
+};
 const run = (p) => p;                              // tiny await helper for readability
 
 // Build a mock callTool from a routing table: { toolName: (args) => result }.
@@ -98,6 +106,91 @@ function mock(table) {
     ok('rung1 trail has exactly one ok fetch', r.trail.length === 1 && r.trail[0].ok === true);
   }
 
+  // ---- MULTI-SOURCE CITATIONS (live defect, 2026-07-23) --------------------------------------
+  // One endnote routinely names several sources. Keeping only the first discarded the one that
+  // actually carried the claim: on the Arizona ESA op-ed, note 1 cites NAEP's interactive trends
+  // page AND an Axios write-up stating the claimed 26%/25% — only the trends page was ever read, so
+  // the judge reported the author's own citation as unsupported.
+  {
+    const ct = mock({
+      web_fetch: ({ url }) => url.includes('axios')
+        ? { status: 200, body: 'Arizona fourth graders scored 26% proficient in reading. ' + body(80), final_url: url }
+        : { status: 200, body: 'State comparison trends for 2022 to 2024. ' + body(80), final_url: url },
+    });
+    const u = { uid: 'a1.s0', kind: 'citation', text: 'Only 26 percent of Arizona fourth graders read at grade level.',
+      url: 'https://nationsreportcard.gov/trends', urls: ['https://nationsreportcard.gov/trends', 'https://axios.com/phoenix/reading'] };
+    const r = await run(resolveUnit(u, ct));
+    ok('every cited url in the note is fetched, not just the first',
+      ct.calls.filter(c => c.name === 'web_fetch').length === 2, JSON.stringify(ct.calls.map(c => c.args && c.args.url)));
+    ok('the note\'s extra sources ride along as alternates', Array.isArray(r.alternates) && r.alternates.length === 1);
+    ok('the alternate carries its OWN url and text',
+      r.alternates[0].source_url === 'https://axios.com/phoenix/reading' && /26% proficient/.test(r.alternates[0].source_text));
+    ok('the primary is still the first cited source (existing callers unchanged)', r.source_url === 'https://nationsreportcard.gov/trends');
+
+    // A dead primary must not bury a working second source.
+    const ct2 = mock({
+      web_fetch: ({ url }) => url.includes('axios')
+        ? { status: 200, body: 'Arizona fourth graders scored 26% proficient. ' + body(80), final_url: url }
+        : { status: 404, body: '' },
+      wayback_history: () => ({ snapshots: [] }), verify_url_history: () => ({}),
+    });
+    const r2 = await run(resolveUnit(u, ct2));
+    ok('a dead first url falls through to the note\'s next source', r2.resolved && r2.source_url === 'https://axios.com/phoenix/reading', JSON.stringify(r2.trail.map(t => [t.step, t.ok])));
+  }
+
+  // ---- A 200 IS NOT A SOURCE (live defect, 2026-07-23, found by running the real studio button) --
+  // Echo's web_extract returned the cited PDF as RAW BYTES and the cited news article as its HTML
+  // METADATA ONLY. Both cleared status/length/bot/paywall, so both became THE SOURCE PASSAGE, the
+  // browser rung that could actually read them never ran, and the judge — handed "%PDF-1.7 … endobj"
+  // and a meta tag — faulted FIVE of eight claims whose citations were fine.
+  {
+    ok('raw PDF bytes are not a readable source',
+      VR.isBlocked({ status: 200, body: '%PDF-1.7 %âã 3803 0 obj <</Linearized 1/L 2431168/O 3805>> endobj ' + body(200) }).blocked === true);
+    ok('…and it says WHY, so the trail names the real failure',
+      /binary-body/.test(VR.isBlocked({ status: 200, body: '%PDF-1.7 ' + body(200) }).reason));
+    ok('a zip/image payload is refused too', VR.isBlocked({ status: 200, body: 'PK' + body(200) }).blocked === true);
+    ok('prose merely MENTIONING a pdf is fine', VR.isBlocked({ status: 200, body: 'The report was published as a %PDF file. ' + body(200) }).blocked === false);
+
+    // A thin metadata stub must not END the ladder while a better reader is still untried.
+    const meta = 'headline: "Reading scores for Arizona 4th and 8th graders fell"; description: "A decline follows a national trend."';
+    const ct = mock({
+      web_extract: ({ url }) => /azed/.test(url) ? { status: 200, body: '%PDF-1.7 % 3803 0 obj <</Linearized 1/L 2431168>> endobj' } : { status: 200, body: meta },
+      web_fetch: () => ({ status: 200, body: meta }),
+    });
+    const reader = async () => 'Arizona fourth graders scored 26% proficient in reading in 2024, below the national average. ' + body(600);
+    const r = await run(resolveUnit({ uid: 'a1.s0', kind: 'citation', text: 'Only 26 percent read at grade level.', url: 'https://news.example/story' },
+      ct, { tools: { fetch: ['web_extract', 'web_fetch'] }, readerFn: reader }));
+    ok('a metadata stub does NOT stop the ladder — the real reader still runs',
+      r.resolved && /26% proficient/.test(r.source_text), JSON.stringify(r.trail.map(t => [t.tool, t.ok, t.chars])));
+    ok('every reader attempt is on the trail with its size', r.trail.filter(t => t.chars != null).length >= 3);
+
+    // The binary case: web_extract "succeeds" with bytes, so the injected reader must still be reached.
+    const r2 = await run(resolveUnit({ uid: 'a2.s1', kind: 'citation', text: 'a 30-point gap', url: 'https://www.azed.gov/plan.pdf' },
+      ct, { tools: { fetch: ['web_extract', 'web_fetch'] }, readerFn: async () => 'a 29-point gap between FRL vs. Non-FRL in fourth grade. ' + body(600) }));
+    ok('a PDF returned as bytes falls through to the reader that can extract it',
+      r2.resolved && /29-point gap/.test(r2.source_text), JSON.stringify(r2.trail.map(t => [t.tool, t.ok, t.reason])));
+
+    // ⚠️ CORRECTED BELIEF (same day): I first asserted "a thin body is accepted as a last resort".
+    // That conflated SIZE with SHAPE. The stub above is not a thin document — it is the document's
+    // CONTAINER, and handing container to the judge is the exact harm this lane exists to prevent.
+    // When every reader returns container the honest answer is `inaccessible`, WITH the reason.
+    const stubOnly = mock({ web_extract: () => ({ status: 200, body: meta }), web_fetch: () => ({ status: 200, body: meta }) });
+    const r3 = await run(resolveUnit({ uid: 'a1.s9', kind: 'citation', text: 'x', url: 'https://news.example/story' },
+      stubOnly, { tools: { fetch: ['web_extract', 'web_fetch'] } }));
+    ok('container from every reader → inaccessible, never judged as the source',
+      r3.resolved === false && r3.tier === 'inaccessible' && !r3.source_text, JSON.stringify(r3.trail.map(t => t.reason)));
+    ok('…and the trail says WHY it was refused, not just that it failed',
+      r3.trail.some(t => /sentence structure|markup/.test(t.reason || '')), JSON.stringify(r3.trail.map(t => t.reason)));
+
+    // A genuinely SHORT but real extract is still a source — shape gates, length only ranks.
+    const shortProse = 'The board voted 5-2 to approve the measure. It takes effect in July of next year.';
+    const brief = mock({ web_extract: () => ({ status: 200, body: shortProse }) });
+    const r4 = await run(resolveUnit({ uid: 'a1.s8', kind: 'citation', text: 'x', url: 'https://news.example/brief' },
+      brief, { tools: { fetch: ['web_extract'] } }));
+    ok('a short but real extract IS accepted (size is not the gate)',
+      r4.resolved === true && /voted 5-2/.test(r4.source_text), JSON.stringify(r4));
+  }
+
   // ---- RUNG 2: fetch blocked (paywall) → archive succeeds ------------------------------------
   {
     const ct = mock({
@@ -136,8 +229,17 @@ function mock(table) {
       web_fetch: ({ url }) => ({ status: 200, body: 'plausible but unrelated text ' + body(80), final_url: url }),
     });
     const r = await run(resolveUnit({ uid: 'a3.s0', kind: 'quote', quote: 'committee rejected the amendment', text: 'the committee rejected the amendment' }, ct));
-    ok('citation lane: unreachable cited source → inaccessible, NOT a substitute', r.resolved === false && r.tier === 'inaccessible', JSON.stringify(r.trail.map(t => t.step)));
+    // This unit cites NOTHING (a quote with no url), so the honest terminal is `uncited` — we did not
+    // fail to reach a source, there was none to reach. Either way the lane must not substitute one.
+    ok('citation lane: an UNCITED claim terminates as uncited, NOT a substitute', r.resolved === false && r.tier === 'uncited', JSON.stringify(r.trail.map(t => t.step)));
     ok('citation lane: no search tool was even called', !ct.calls.some(c => c.name === 'web_search'), JSON.stringify(ct.calls.map(c => c.name)));
+    // …and a claim that DOES cite a source we cannot reach stays `inaccessible`. The two must not
+    // collapse: one is the author's gap, the other is ours.
+    {
+      const dead = mock({ web_fetch: () => ({ status: 404, body: '' }) });
+      const d = await run(resolveUnit({ uid: 'a3.s9', kind: 'citation', text: 'a cited claim', url: 'https://dead.example/gone' }, dead));
+      ok('citation lane: a CITED but unreachable source → inaccessible', d.resolved === false && d.tier === 'inaccessible', JSON.stringify(d));
+    }
     ok('citation lane: trail records why', (r.trail.find(t => t.step === 'search') || {}).reason === 'search-disabled (citation lane: cited source only)');
   }
 

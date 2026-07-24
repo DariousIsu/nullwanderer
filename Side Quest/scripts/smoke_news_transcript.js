@@ -4,7 +4,7 @@
  */
 'use strict';
 const os = require('os'), path = require('path'), fs = require('fs');
-const tmp = path.join(os.tmpdir(), `sq_newstranscript_${process.pid}.db`);
+const tmp = path.join(os.tmpdir(), `sq_newstranscript_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.db`);
 for (const f of [tmp, tmp + '-wal', tmp + '-shm']) { try { fs.unlinkSync(f); } catch {} }
 process.env.NEWS_DB_PATH = tmp;
 

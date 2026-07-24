@@ -44,7 +44,12 @@ const GOLD = [
     primary: 'She said the policy was "a complete and total success, at least in the three counties we surveyed."' },
   { id: 'misattribution', want: 'A', claim: 'Senator Thune introduced the SPEED Act.',
     primary: 'Senator Mike Lee introduced the SPEED Act. Majority Leader John Thune later spoke in support of it on the floor.' },
-  { id: 'not-in-source', want: 'NK', claim: "Nevada's Question 7 passed with 73% support in 2024.",
+  // want NS, not NK (2026-07-23): the rubric's "the cited source does not support the claim" code
+  // was split out of NK. NK now means only what the Rainey agents meant by it — no record in the
+  // internal KDB — and grades as advisory `info`; NS is a defect and holds the document. Leaving
+  // these two cases on NK would have scored every model 2/16 low against a rubric that no longer
+  // offers the code, and the bench is what picks the judge model.
+  { id: 'not-in-source', want: 'NS', claim: "Nevada's Question 7 passed with 73% support in 2024.",
     primary: "Nevada's ballot in 2024 featured several constitutional amendments concerning election administration and judicial selection." },
   { id: 'plain-support', want: 'V', claim: 'Turnout in Florida did not fall after the 2005 photo ID law.',
     primary: "Following the 2005 statute, Florida's presidential-year participation showed no measurable decline in subsequent cycles." },
@@ -58,7 +63,7 @@ const GOLD = [
     primary: "In the pilot's best-performing region, the program cut emissions by 30%; across all regions the average reduction was 8%." },
   { id: 'invented-attribution', want: 'A', claim: 'The EPA concluded the method was unproven.',
     primary: 'The Government Accountability Office concluded the method was unproven. EPA has not reviewed it.' },
-  { id: 'source-silent-on-number', want: 'NK', claim: 'More than 2,000 judges attended the training.',
+  { id: 'source-silent-on-number', want: 'NS', claim: 'More than 2,000 judges attended the training.',
     primary: 'The institute has run judicial education programs on climate science for several years, expanding steadily since 2018.' },
   { id: 'exact-quote-with-attrib', want: 'V', claim: 'Moolenaar called the arrangement "a serious national security concern."',
     primary: 'Rep. John Moolenaar, chairman of the House Select Committee on the CCP, said the arrangement was "a serious national security concern."' },

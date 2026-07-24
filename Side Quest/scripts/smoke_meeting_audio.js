@@ -5,7 +5,7 @@
  */
 'use strict';
 const os = require('os'), path = require('path'), fs = require('fs');
-const tmp = path.join(os.tmpdir(), `sq_meetaudio_smoke_${process.pid}.db`);
+const tmp = path.join(os.tmpdir(), `sq_meetaudio_smoke_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.db`);
 try { fs.unlinkSync(tmp); } catch {}
 process.env.SQ_DB_PATH = tmp;
 // clear any inherited config

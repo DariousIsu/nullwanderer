@@ -28,20 +28,69 @@
   function fmtDate(ms) { const d = new Date(ms); return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`; }
 
   // Deterministic ruling from the verdict tally — the cert's verdict is a pure function of counts.
+  //
+  // `info` counts claims we did NOT manage to check (source unreachable, no citation given, no
+  // internal record). They are not defects, so they cannot force a hold — but they are also not
+  // evidence of soundness, and "no outstanding issues" over a pile of unchecked claims reads as one.
+  // A pass with unchecked claims now SAYS how many, so the ruling can never overstate its own
+  // coverage. (The three `key`s are unchanged — they are persisted on the cert record.)
   function gradeFor(summary) {
-    const v = (summary && summary.byVerdict) || {};
-    const bad = v.bad || 0, warn = v.warn || 0;
+    const s = summary || {};
+    const v = s.byVerdict || {};
+    const bad = v.bad || 0, warn = v.warn || 0, info = v.info || 0;
+    const unchecked = info ? ` · ${info} claim${info > 1 ? 's' : ''} could not be checked` : '';
+    // A conditional pass leads with WHAT STOOD UP. "Cleared — 7 revisions recommended" over a
+    // document whose every claim was borne out by its source reads as a document in trouble; the
+    // revisions are wording notes, and the author needs both halves to size the work.
+    const ver = s.verified != null ? s.verified : (v.ok || 0);
+    const tot = s.total != null ? s.total : 0;
+    const stood = tot ? `${ver} of ${tot} claims verified — ` : '';
     if (bad > 0) return { key: 'hold', cls: 'fail', stamp: 'Hold — corrections required', label: 'Hold',
-      ruling: `Not cleared — ${bad} material issue${bad > 1 ? 's' : ''} must be corrected before publication` };
+      ruling: `Not cleared — ${bad} material issue${bad > 1 ? 's' : ''} must be corrected before publication${unchecked}` };
     if (warn > 0) return { key: 'conditional', cls: 'warn', stamp: 'Cleared — w/ corrections', label: 'Cleared w/ corrections',
-      ruling: `Cleared for publication — ${warn} revision${warn > 1 ? 's' : ''} recommended` };
+      ruling: `Cleared for publication — ${stood}${warn} revision${warn > 1 ? 's' : ''} recommended${unchecked}` };
+    if (info > 0) return { key: 'clear', cls: 'pass', stamp: 'Cleared for publication', label: 'Cleared',
+      ruling: `Cleared for publication — no issues found, but ${info} claim${info > 1 ? 's' : ''} could not be checked` };
     return { key: 'clear', cls: 'pass', stamp: 'Cleared for publication', label: 'Cleared',
       ruling: 'Cleared for publication — no outstanding issues' };
   }
 
+  // Two axes, read in the order an author cares about: how much stands up, what still needs doing,
+  // what is actually wrong, what we could not check. A claim verified WITH a caveat is counted as
+  // verified — because it is — and the caveat is named alongside rather than replacing it. The old
+  // line read the `ok` bucket as "verified", so a document whose every claim was borne out by its
+  // source but carried a wording note printed "0 verified · 7 caveat".
   function scorelineOf(summary) {
-    const v = (summary && summary.byVerdict) || {};
-    return `${v.ok || 0} verified · ${v.warn || 0} caveat · ${v.bad || 0} issue${(v.bad || 0) === 1 ? '' : 's'} · ${v.info || 0} info`;
+    const s = summary || {};
+    const v = s.byVerdict || {};
+    const total = s.total != null ? s.total : 0;
+    const verified = s.verified != null ? s.verified : (v.ok || 0);
+    const clean = s.verifiedClean != null ? s.verifiedClean : verified;
+    const caveats = Math.max(0, verified - clean);
+    const bad = s.notSupported != null ? s.notSupported : (v.bad || 0);
+    const unchecked = s.unchecked != null ? s.unchecked : (v.info || 0);
+    // "of N" only when the caller gave a total (a legacy byVerdict-only summary has none).
+    const parts = [`${verified}${total ? ` of ${total}` : ''} verified${caveats ? ` (${caveats} with caveats)` : ''}`];
+    if (bad) parts.push(`${bad} not supported`);
+    if (unchecked) parts.push(`${unchecked} not checked`);
+    const revisions = v.warn || 0;
+    if (revisions) parts.push(`${revisions} revision${revisions === 1 ? '' : 's'} recommended`);
+    return parts.join(' · ');
+  }
+
+  // KPI numbers on the SUPPORT axis, with a graceful fall back to the verdict tally for any caller
+  // still passing a pre-two-axis summary (the Rainey agent path, an old stored check_run).
+  function kpisOf(summary) {
+    const s = summary || {};
+    const v = s.byVerdict || {};
+    const verified = s.verified != null ? s.verified : (v.ok || 0);
+    const clean = s.verifiedClean != null ? s.verifiedClean : verified;
+    return {
+      verified,
+      caveats: Math.max(0, verified - clean),
+      notSupported: s.notSupported != null ? s.notSupported : (v.bad || 0),
+      unchecked: s.unchecked != null ? s.unchecked : (v.info || 0),
+    };
   }
 
   const STYLE = `
@@ -176,6 +225,7 @@
     const summary = a.summary || { byVerdict: {} };
     const v = summary.byVerdict || {};
     const g = gradeFor(summary);
+    const kpi = kpisOf(summary);
     const issued = a.issuedAt != null ? a.issuedAt : Date.now();
     const method = a.method || 'Deterministic verification harness — source resolution, lexical + local-embedding match, caged model classification';
     const auditor = a.auditor || 'Zoe — Editor Studio (processed with AI assistance)';
@@ -212,14 +262,14 @@
   <div class="ruling-card">
     <div class="ruling-stamp"><div class="check">${g.key === 'hold' ? '!' : '&#10003;'}</div><div class="grade">${esc(g.label)}</div></div>
     <div class="ruling-body"><div class="ruling">${esc(g.ruling)}</div>
-      <div class="scoreline"><b>${v.ok || 0}</b> verified &nbsp; <b>${v.warn || 0}</b> caveat &nbsp; <b>${v.bad || 0}</b> issue${(v.bad || 0) === 1 ? '' : 's'} &nbsp; <b>${v.info || 0}</b> info${summary.invalid ? ` &nbsp; <b>${summary.invalid}</b> schema-flagged` : ''}</div></div>
+      <div class="scoreline">${esc(scorelineOf(summary))}${summary.invalid ? ` &nbsp; <b>${summary.invalid}</b> schema-flagged` : ''}</div></div>
   </div>
 
   <div class="kpis">
     <div class="kpi"><div class="n">${esc(total)}</div><div class="lbl">Claims audited</div></div>
-    <div class="kpi gold"><div class="n">${v.ok || 0}</div><div class="lbl">Verified</div></div>
-    <div class="kpi warn"><div class="n">${v.warn || 0}</div><div class="lbl">Caveat / revise</div></div>
-    <div class="kpi fail"><div class="n">${v.bad || 0}</div><div class="lbl">Issues</div></div>
+    <div class="kpi gold"><div class="n">${kpi.verified}</div><div class="lbl">Verified${kpi.caveats ? ` &middot; ${kpi.caveats} w/ caveat` : ''}</div></div>
+    <div class="kpi warn"><div class="n">${v.warn || 0}</div><div class="lbl">Revisions recommended</div></div>
+    <div class="kpi fail"><div class="n">${kpi.notSupported}</div><div class="lbl">Not supported</div></div>
   </div>
 
   <h2><span class="num">1</span>Per-claim findings</h2>
@@ -259,6 +309,7 @@
     const findings = a.findings || [];
     const summary = a.summary || { byVerdict: {} };
     const v = summary.byVerdict || {};
+    const kpi = kpisOf(summary);
     const gen = a.generatedAt != null ? a.generatedAt : Date.now();
     const method = a.method || 'Deterministic verification harness — source resolution, lexical + local-embedding match, caged model classification';
     const title = doc.title || 'Untitled document';
@@ -292,9 +343,9 @@
 
   <div class="kpis">
     <div class="kpi"><div class="n">${esc(total)}</div><div class="lbl">Claims reviewed</div></div>
-    <div class="kpi gold"><div class="n">${v.ok || 0}</div><div class="lbl">Verified</div></div>
-    <div class="kpi warn"><div class="n">${v.warn || 0}</div><div class="lbl">Caveat / revise</div></div>
-    <div class="kpi fail"><div class="n">${v.bad || 0}</div><div class="lbl">Issues</div></div>
+    <div class="kpi gold"><div class="n">${kpi.verified}</div><div class="lbl">Verified${kpi.caveats ? ` &middot; ${kpi.caveats} w/ caveat` : ''}</div></div>
+    <div class="kpi warn"><div class="n">${v.warn || 0}</div><div class="lbl">Revisions recommended</div></div>
+    <div class="kpi fail"><div class="n">${kpi.notSupported}</div><div class="lbl">Not supported</div></div>
   </div>
 
   <h2><span class="num">1</span>Per-claim findings</h2>
@@ -321,5 +372,5 @@
   // rather than a copy of the palette. Lucas, 2026-07-21: "make the branding hardcoded universal…
   // I dont want the hard code base to be wrong." Two copies of a brand is exactly that kind of
   // wrong: they drift, and nothing tells you which one is the house style.
-  return { renderCertificate, renderReport, gradeFor, scorelineOf, fmtDate, esc, PILL, STYLE, ORG_NAME: 'Joseph Rainey Center for Public Policy' };
+  return { renderCertificate, renderReport, gradeFor, scorelineOf, kpisOf, fmtDate, esc, PILL, STYLE, ORG_NAME: 'Joseph Rainey Center for Public Policy' };
 });

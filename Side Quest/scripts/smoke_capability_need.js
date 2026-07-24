@@ -5,7 +5,7 @@
  * Run: ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_capability_need.js
  */
 const path = require('path'), os = require('os'), fs = require('fs');
-const tmp = path.join(os.tmpdir(), `sq_smoke_capneed_${process.pid}.db`);
+const tmp = path.join(os.tmpdir(), `sq_smoke_capneed_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.db`);
 process.env.SQ_DB_PATH = tmp;
 const db = require('C:/Users/azrae/Desktop/Side Quest/lib/db');
 const CN = require('C:/Users/azrae/Desktop/Side Quest/lib/capability_need');

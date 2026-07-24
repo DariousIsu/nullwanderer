@@ -4,7 +4,7 @@
  * Run: ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_iterate_block.js
  */
 const path = require('path'), fs = require('fs'), os = require('os');
-const tmp = path.join(os.tmpdir(), `sq_smoke_iter_${process.pid}.db`);
+const tmp = path.join(os.tmpdir(), `sq_smoke_iter_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.db`);
 process.env.SQ_DB_PATH = tmp;
 const learning = require('C:/Users/azrae/Desktop/Side Quest/lib/learning');
 

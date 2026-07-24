@@ -42,7 +42,7 @@ const now = () => clock;
 const r1 = issueCertificate({ docId, mapped, checkRunId: crId, certsDir, now });
 ok('cert number scheme CFC-YYYY-MM-DD-NN', r1.certNumber === 'CFC-2026-06-24-01', r1.certNumber);
 ok('grade derived from a bad verdict → hold', r1.grade === 'hold');
-ok('scoreline computed', /1 verified · 1 caveat · 1 issue · 1 info/.test(r1.scoreline) === false && /1 verified/.test(r1.scoreline), r1.scoreline);
+ok('scoreline computed on the SUPPORT axis', /verified/.test(r1.scoreline) && /not supported/.test(r1.scoreline), r1.scoreline);
 ok('cert HTML written to disk', fs.existsSync(r1.certDocRef) && fs.readFileSync(r1.certDocRef, 'utf8').includes(r1.certNumber));
 ok('certDocRef is <certsDir>/<num>.html', r1.certDocRef === path.join(certsDir, 'CFC-2026-06-24-01.html'));
 
@@ -113,6 +113,41 @@ ok('report renders a "Sources consulted" section', /Sources consulted/.test(repo
   };
 
   ok('grade is a pure function of the CITATION lane (counters do not move it)', T.gradeFor(clean.summary).key === 'clear');
+
+  // ---- REGRESSION (live defect, 2026-07-23): "the cited source does not support this claim" must
+  // HOLD the document. It used to be code NK, which the contract graded `info`, which gradeFor
+  // ignores — so the Arizona ESA op-ed, whose judge correctly found that a cited NAEP page did not
+  // state the rate attributed to it AND that a cited case study never mentioned the story it backed,
+  // came back "Cleared for publication — no outstanding issues".
+  {
+    const C = require('../studio/checks_contract');
+    const live = C.mapCheckResult({ claims: [
+      { id: 'a5.s1', label: 'Cap ESAs at families making under $150,000 a year.[3]', status: 'verified', match_score: 1, locator: 'a5.s1' },
+      { id: 'a1.s1', label: 'Only 25 percent of eighth graders do.', status: 'inaccessible', match_score: 0, locator: 'a1.s1' },
+      { id: 'a1.s0', label: 'Arizona fourth graders have below-average reading proficiency.', status_code: 'NS', locator: 'a1.s0',
+        finding: 'The cited passage discusses 2022-2024 score trends, not the proficiency rate.' },
+      { id: 'a13.s2', label: 'Nobody serious defends ESA dollars going to diamond rings.[4]', status_code: 'NS', locator: 'a13.s2',
+        finding: 'The cited passage never mentions diamond rings.' },
+    ] }, { strict: true });
+    const g = T.gradeFor(live.summary);
+    ok('NS (cited source does not support) grades BAD, not info', live.summary.byVerdict.bad === 2, JSON.stringify(live.summary.byVerdict));
+    ok('a document with unsupported claims is HELD, never cleared', g.key === 'hold', g.ruling);
+    ok('the ruling names the unsupported claims', /2 material issues/.test(g.ruling), g.ruling);
+    ok('the ruling also admits what it could NOT check', /could not be checked/.test(g.ruling), g.ruling);
+
+    // An unparseable/truncated judge reply is a HOLE in the audit, not a pass.
+    const broken = C.mapCheckResult({ claims: [
+      { id: 'a1.s0', label: 'some claim', status_code: 'ERR', locator: 'a1.s0', finding: 'no usable verdict from the judge' },
+    ] }, { strict: true });
+    ok('ERR (judge produced no verdict) withholds clearance', T.gradeFor(broken.summary).key === 'conditional',
+      JSON.stringify(broken.summary.byVerdict));
+    ok('ERR is never labelled as a clean result', broken.findings[0].vlabel === 'Not checked — judge error');
+
+    // The legacy Rainey code keeps its original, correct meaning: no LOCAL record says nothing
+    // about the claim, so it stays advisory.
+    const kdb = C.mapCheckResult({ claims: [{ id: 'x', label: 'y', status_code: 'NK', locator: 'x' }] }, { strict: true });
+    ok('NK still means "no internal record" and stays info', kdb.summary.byVerdict.info === 1 && kdb.findings[0].vlabel === 'No internal record');
+  }
 
   for (const [name, html] of [
     ['cert', T.renderCertificate(Object.assign({ doc: doc2, factcheck, certNumber: 'CFC-TEST-01', issuedAt: Date.now() }, clean))],

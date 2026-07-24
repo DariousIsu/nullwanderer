@@ -61,7 +61,7 @@ function stubEmbed(text) {
 const homeworkCheck = async (samples) => samples.map(s => ({ uid: s.uid, ok: true, reason: 'on-topic' }));
 
 // band (decided) → contract status word
-const BAND_STATUS = { verified: 'verified', unsupported: 'unverified', contradicted: 'contradicted', inaccessible: 'inaccessible', gray: 'unverified', weak: 'unverified' };
+const BAND_STATUS = { verified: 'verified', unsupported: 'unverified', contradicted: 'contradicted', inaccessible: 'inaccessible', uncited: 'uncited', gray: 'unverified', weak: 'unverified' };
 
 // Claims that should be JUDGED carry the source they cite. The citation lane reads the CITED source
 // and nothing else — it never substitutes one found by search — so an uncited claim resolves to
@@ -74,6 +74,12 @@ const DOC = [
   'The program cost $5 billion overall, the report says (https://corpus.example/doc).',
   'The water office described modest seasonal improvement in several treated areas (https://corpus.example/doc).',
   'See https://void.example/x for the phlogiston index figures.',
+  // BLANK LINE = its own paragraph, which is what "this claim names no source" looks like in a real
+  // document. Citations carry forward WITHIN a paragraph (a note covers the sentences that depend on
+  // it), so a genuinely uncited claim has to stand outside the cited one's paragraph or it inherits —
+  // correctly. Without the break this sentence picks up the dead void.example link above it and the
+  // case under test becomes "inaccessible" rather than "uncited".
+  '',
   'The phrase "alpha the of beta the of gamma" appears in the official record.',
 ].join('\n');
 
@@ -94,9 +100,12 @@ const DOC = [
   const bands = matched.map(m => m.band);
   ok('match: ≥2 verified (verbatim quote + numeric)', bands.filter(b => b === 'verified').length >= 2, bands.join(','));
   ok('match: exactly 1 contradicted ($5B vs $3B)', bands.filter(b => b === 'contradicted').length === 1, bands.join(','));
-  // TWO now, and both are correct: the dead link, and the claim that cites no source at all. Neither
-  // gets a substitute found by search — that is the citation lane's contract.
-  ok('match: 2 inaccessible (dead link + uncited claim)', bands.filter(b => b === 'inaccessible').length === 2, bands.join(','));
+  // Both are correct, and they are DIFFERENT failures: a dead link we could not reach, and a claim
+  // that names no source at all. Neither gets a substitute found by search — that is the citation
+  // lane's contract — but the report must not tell the author we failed to fetch a source they never
+  // gave, so they carry distinct bands.
+  ok('match: 1 inaccessible (the dead link we could not reach)', bands.filter(b => b === 'inaccessible').length === 1, bands.join(','));
+  ok('match: 1 uncited (the claim that names no source)', bands.filter(b => b === 'uncited').length === 1, bands.join(','));
   ok('match: ≥1 escalatable residue (gray|weak, needs_model)', matched.filter(m => m.needs_model).length >= 1, bands.join(','));
 
   // 4) preflight gate
@@ -107,7 +116,7 @@ const DOC = [
 
   // 5) classify the released residue (STUB — no cloud)
   const classified = await classifyAll(gate.residue);
-  ok('classify ran on residue → valid enum codes, tier stub', classified.length === 1 && classified.every(c => c.tier === 'stub' && /^(V|VC|VP|QO|QP|A|M|NK)$/.test(c.status_code)));
+  ok('classify ran on residue → valid enum codes, tier stub', classified.length === 1 && classified.every(c => c.tier === 'stub' && /^(V|VC|VP|QO|QP|A|M|NS|NK|ERR)$/.test(c.status_code)));
 
   // 6) assemble contract items (decided bands + classified residue) → render model (STRICT)
   const byUid = Object.fromEntries(candidates.map(c => [c.uid, c]));

@@ -39,7 +39,10 @@ function ok(name, cond, detail = '') { if (cond) { pass++; console.log(`  PASS $
 
     // ---- verify_resolve rung 0: attached citation resolves from the doc, no web call ----
     let webCalls = 0;
-    const callTool = async () => { webCalls++; return { text: JSON.stringify({ status: 200, text_preview: 'x'.repeat(120) }) }; };
+    // The web fixture must look like EXTRACTED PROSE: acceptance is now shape (verify_resolve.isProse),
+    // not length, so a wall of 'x' no longer resolves and the ladder would report inaccessible.
+    const WEB_TEXT = 'The agency published its quarterly review this week. It records the figure under dispute. ';
+    const callTool = async () => { webCalls++; return { text: JSON.stringify({ status: 200, text_preview: WEB_TEXT.repeat(3) }) }; };
     const attachments = { 'a0.s0': { title: 'In-house report', text: 'The claim is directly supported by this in-house passage of prose. '.repeat(2) } };
 
     const r0 = await R.resolveUnit({ uid: 'a0.s0', text: 'a claim', url: 'https://example.com/x' }, callTool, { attachments });

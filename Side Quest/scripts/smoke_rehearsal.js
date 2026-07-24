@@ -5,7 +5,7 @@
  */
 'use strict';
 const os = require('os'), path = require('path'), fs = require('fs');
-const TMP = path.join(os.tmpdir(), `zoe-rehearsal-${process.pid}`);
+const TMP = path.join(os.tmpdir(), `zoe-rehearsal-${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`);
 process.env.ZOE_REHEARSAL_DIR = path.join(TMP, 'rehearsal');
 process.env.SQ_DB_PATH = path.join(TMP, 'sq.db');
 require('../lib/db').init();

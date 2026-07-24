@@ -19,6 +19,8 @@ function ok(name, cond, detail = '') {
   // ---- schema + enum mapping -----------------------------------------------------------------
   ok('parseStatusCode passes enum through', parseStatusCode('VP') === 'VP' && parseStatusCode(' m ') === 'M');
   ok('parseStatusCode maps synonyms', parseStatusCode('verified') === 'V' && parseStatusCode('mismatch') === 'M' && parseStatusCode('not in kdb') === 'NK');
+  ok('parseStatusCode: "not supported" is NS (a defect), not NK (an absence of local knowledge)',
+    parseStatusCode('not supported') === 'NS' && parseStatusCode('unsupported') === 'NS' && parseStatusCode('not found in the sources') === 'NS');
   ok('parseStatusCode rejects junk', parseStatusCode('banana') === null);
   ok('validateInput requires non-empty claim', !validateInput({ claim: '' }).ok && validateInput({ claim: 'x', passage: 'y' }).ok);
   ok('validateOutput maps + rejects', validateOutput({ status_code: 'verified', note: 'n' }).status_code === 'V' && !validateOutput({ status_code: 'zzz' }).ok);
@@ -29,7 +31,7 @@ function ok(name, cond, detail = '') {
     const hi = await classify({ claim: 'the panel rejected the amendment', passage: 'records show the panel rejected the amendment on a vote' });
     ok('stub high-overlap → VP, tier stub', hi.status_code === 'VP' && hi.tier === 'stub' && hi.valid === true, JSON.stringify(hi));
     const lo = await classify({ claim: 'unrelated zeppelin marmalade', passage: 'a passage about municipal water board staffing' });
-    ok('stub low-overlap → NK', lo.status_code === 'NK' && lo.tier === 'stub');
+    ok('stub low-overlap → NS', lo.status_code === 'NS' && lo.tier === 'stub');
     const a = await classify({ claim: 'x y z', passage: 'p' }), b = await classify({ claim: 'x y z', passage: 'p' });
     ok('stub is deterministic', JSON.stringify(a) === JSON.stringify(b));
   }
@@ -54,19 +56,19 @@ function ok(name, cond, detail = '') {
   {
     const model = async () => ({ status_code: 'WAT', note: 'garbage' });
     const r = await classify({ claim: 'c', passage: 'p' }, { model });
-    ok('invalid local output (no frontier) → NK valid:false', r.status_code === 'NK' && r.valid === false && /invalid/.test(r.note));
+    ok('invalid local output (no frontier) → ERR valid:false', r.status_code === 'ERR' && r.valid === false && /invalid/.test(r.note));
   }
   // invalid local → frontier also invalid → NK valid:false
   {
     const model = async () => ({ status_code: 'nope' });
     const frontier = async () => ({ status_code: 'also-bad' });
     const r = await classify({ claim: 'c', passage: 'p' }, { model, frontier });
-    ok('invalid both tiers → NK valid:false (frontier)', r.status_code === 'NK' && r.valid === false && r.tier === 'frontier');
+    ok('invalid both tiers → ERR valid:false (frontier)', r.status_code === 'ERR' && r.valid === false && r.tier === 'frontier');
   }
   // model throws → handled (escalates / falls back), never crashes
   {
     const r = await classify({ claim: 'c', passage: 'p' }, { model: async () => { throw new Error('boom'); } });
-    ok('local throw → graceful NK valid:false', r.valid === false && r.status_code === 'NK');
+    ok('local throw → graceful ERR valid:false', r.valid === false && r.status_code === 'ERR');
   }
 
   // ---- classifyAll over residue --------------------------------------------------------------

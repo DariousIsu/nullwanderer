@@ -5,7 +5,7 @@
  * Run: node scripts/smoke_cert_template.js
  */
 const CT = require('../studio/cert_template');
-const { renderCertificate, gradeFor, scorelineOf } = CT;
+const { renderCertificate, gradeFor, scorelineOf, kpisOf } = CT;
 
 let pass = 0, fail = 0;
 function ok(name, cond, detail = '') {
@@ -19,7 +19,24 @@ ok('warn but no bad → conditional', gradeFor({ byVerdict: { warn: 2, ok: 5 } }
 ok('no bad/warn → clear', gradeFor({ byVerdict: { ok: 4, info: 1 } }).key === 'clear');
 ok('hold ruling names the issue count', /2 material issues/.test(gradeFor({ byVerdict: { bad: 2 } }).ruling));
 ok('conditional singular revision', /1 revision recommended/.test(gradeFor({ byVerdict: { warn: 1 } }).ruling));
-ok('scoreline tallies', scorelineOf({ byVerdict: { ok: 3, warn: 2, bad: 1, info: 1 } }) === '3 verified · 2 caveat · 1 issue · 1 info');
+// A legacy byVerdict-only summary still reads sensibly (no `verified` field to lean on).
+ok('scoreline tallies (legacy summary)', scorelineOf({ byVerdict: { ok: 3, warn: 2, bad: 1, info: 1 } })
+  === '3 verified · 1 not supported · 1 not checked · 2 revisions recommended', scorelineOf({ byVerdict: { ok: 3, warn: 2, bad: 1, info: 1 } }));
+// ⭐ TWO AXES (Lucas, 2026-07-23: "just because something has a caveat doesn't mean it shouldn't be
+// verified"). A claim its source bore out is VERIFIED even when the wording still needs a note. The
+// scoreline used to read the `ok` bucket alone, so the live Arizona op-ed — five claims verified
+// against their sources, each with a caveat — printed "0 verified · 7 caveat".
+ok('a verified-with-caveat claim COUNTS as verified',
+  scorelineOf({ total: 3, verified: 3, verifiedClean: 1, notSupported: 0, unchecked: 0, byVerdict: { ok: 1, warn: 2 } })
+    === '3 of 3 verified (2 with caveats) · 2 revisions recommended',
+  scorelineOf({ total: 3, verified: 3, verifiedClean: 1, notSupported: 0, unchecked: 0, byVerdict: { ok: 1, warn: 2 } }));
+ok('the KPI tile shows the same number the scoreline does',
+  kpisOf({ total: 3, verified: 3, verifiedClean: 1, notSupported: 0, unchecked: 0, byVerdict: { ok: 1, warn: 2 } }).verified === 3);
+ok('a conditional ruling leads with what stood up',
+  /3 of 3 claims verified/.test(gradeFor({ total: 3, verified: 3, verifiedClean: 1, byVerdict: { warn: 2 } }).ruling),
+  gradeFor({ total: 3, verified: 3, verifiedClean: 1, byVerdict: { warn: 2 } }).ruling);
+ok('caveats never turn into "not supported"',
+  kpisOf({ total: 3, verified: 3, verifiedClean: 1, notSupported: 0, unchecked: 0, byVerdict: { ok: 1, warn: 2 } }).notSupported === 0);
 
 // ---- a representative mapped result -----------------------------------------------------------
 const mapped = {

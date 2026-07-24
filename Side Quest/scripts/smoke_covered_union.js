@@ -11,7 +11,7 @@
  */
 'use strict';
 const path = require('path'), fs = require('fs'), os = require('os');
-const tmp = path.join(os.tmpdir(), `sq_smoke_covunion_${process.pid}.db`);
+const tmp = path.join(os.tmpdir(), `sq_smoke_covunion_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.db`);
 process.env.SQ_DB_PATH = tmp;
 const db = require(path.join(__dirname, '..', 'lib', 'db'));
 

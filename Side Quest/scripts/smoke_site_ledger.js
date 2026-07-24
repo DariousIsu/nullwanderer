@@ -6,7 +6,7 @@
  * Run: ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_site_ledger.js
  */
 const path = require('path'), os = require('os');
-process.env.SQ_DB_PATH = path.join(os.tmpdir(), `sq_smoke_ledger_${process.pid}.db`);
+process.env.SQ_DB_PATH = path.join(os.tmpdir(), `sq_smoke_ledger_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.db`);
 const db = require('C:/Users/azrae/Desktop/Side Quest/lib/db');
 const SL = require('C:/Users/azrae/Desktop/Side Quest/lib/site_ledger');
 

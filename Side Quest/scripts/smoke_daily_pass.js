@@ -3,7 +3,7 @@
  * failing stage is isolated (the pass continues). Run via ELECTRON_RUN_AS_NODE.
  */
 const path = require('path'), fs = require('fs'), os = require('os');
-const tmp = path.join(os.tmpdir(), `sq_smoke_pass_${process.pid}.db`);
+const tmp = path.join(os.tmpdir(), `sq_smoke_pass_${process.pid}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.db`);
 process.env.SQ_DB_PATH = tmp;
 const db = require('C:/Users/azrae/Desktop/Side Quest/lib/db');
 const gm = require('C:/Users/azrae/Desktop/Side Quest/lib/graph_memory');

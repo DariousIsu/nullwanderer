@@ -49,7 +49,19 @@
       .replace(new RegExp('\\b(' + ABBREV + ')\\.', 'gi'), '$1∯')      // known abbreviations
       .replace(/(\d)\.(\d)/g, '$1∯$2')                                 // decimals
       .replace(/\.{3,}/g, m => '∯'.repeat(m.length));                  // ellipses
-    const parts = prot.split(/(?<=[.?!])["'”’)\]]?\s+(?=[A-Z0-9"'“‘(\[])/);
+    // ⚠️ A CITATION MARKER MUST NOT WELD TWO SENTENCES TOGETHER (fixed 2026-07-23).
+    // The terminator class allows ONE optional closing character, so "…nation.[1] Only 26 percent…"
+    // never split: `[1]` is three characters. Every sentence carrying a marker therefore SWALLOWED
+    // the sentence after it, and the verifier was handed a two-sentence unit whose second half the
+    // citation was never meant to cover. Live cost on the Arizona ESA op-ed: "Nobody serious defends
+    // ESA dollars going to diamond rings.[4]" — which its source supports outright — was fused with
+    // "But fraud prevention and eligibility restriction are two different problems…", pure argument,
+    // and the whole unit came back NOT SUPPORTED. The marker stays with the sentence it cites: it is
+    // matched inside the LOOKBEHIND (variable-length lookbehind is supported), so only the following
+    // whitespace is consumed as the separator.
+    const MARKER_RUN = String.raw`(?:\[\d{1,3}(?:\s*[-,]\s*\d{1,3})*\])*`;
+    const splitter = new RegExp(`(?<=[.?!]${MARKER_RUN})["'”’)\\]]?\\s+(?=[A-Z0-9"'“‘(\\[])`);
+    const parts = prot.split(splitter);
     return parts.map(s => s.replace(/∯/g, '.').trim()).filter(Boolean);
   }
 
@@ -120,14 +132,25 @@
 
   // Statistics worth verifying: percentages, currency, and scale-word magnitudes. Bare integers
   // and years are intentionally NOT captured — too noisy to be useful verification targets.
+  // Spelled-out ratios ("three out of every four students", "one in five households"). A statistic
+  // does not stop being a statistic for being written in words, but every pattern above keys on a
+  // DIGIT — so the Arizona op-ed's "failing three out of every four students in reading", which is
+  // the piece's own restatement of its headline figure, was not a verification unit at all. Bounded
+  // to the small-number words a ratio is actually written with, so ordinary prose ("one of the
+  // reasons") cannot trip it: the `out of` / `in` frame is required.
+  const RATIO_WORD = 'one|two|three|four|five|six|seven|eight|nine|ten';
+  const RATIO_RE = new RegExp(
+    String.raw`\b(?:${RATIO_WORD}|\d{1,3})\s+(?:out\s+of|in)\s+(?:every\s+)?(?:${RATIO_WORD}|\d{1,3})\b`, 'gi');
+
   function detectNumbers(text) {
     const out = [];
     const patterns = [
       /\$\s?\d[\d,]*(?:\.\d+)?\s?(?:billion|million|trillion|thousand|bn|m|k)?\b/gi,   // currency
       /\b\d[\d,]*(?:\.\d+)?\s?(?:percentage points?|percent|bps|%)/gi,                 // percentages (no trailing \b — "%" is non-word)
       /\b\d[\d,]*(?:\.\d+)?\s?(?:billion|million|trillion|thousand)\b/gi,              // magnitudes
+      RATIO_RE,                                                                        // "three out of every four"
     ];
-    for (const rx of patterns) { let m; while ((m = rx.exec(text))) out.push(m[0].trim()); }
+    for (const rx of patterns) { let m; rx.lastIndex = 0; while ((m = rx.exec(text))) out.push(m[0].trim()); }
     return out;
   }
 
@@ -232,8 +255,15 @@
       const m = text.match(LEADING_ORDINAL_RE);
       const ordinal = m ? parseInt(m[1], 10) : i + 1;
       if (!(ordinal > 0) || entries[ordinal]) return;      // never let a later entry clobber an earlier one
-      const url = first(detectUrls(text)) || null;
-      entries[ordinal] = { anchor: b.anchor, url, text: m ? text.slice(m[0].length) : text };
+      // EVERY url in the note, not just the first. A single endnote routinely cites several sources
+      // ("…NCES, <url>; Rezal, Axios, <url>"), and keeping only the first silently discards the rest.
+      // Observed live on the Arizona ESA op-ed: note 1's first url is NAEP's interactive state-trends
+      // page (whose text layer carries no state figures), while the Axios piece it also cites states
+      // the claimed 26%/25% outright — the supporting source was thrown away before anything read it,
+      // and the judge then reported the author's own citation as unsupported. `url` stays the first
+      // for every existing caller; `urls` carries the full list for the resolver to work through.
+      const urls = detectUrls(text);
+      entries[ordinal] = { anchor: b.anchor, url: urls[0] || null, urls, text: m ? text.slice(m[0].length) : text };
     });
     return Object.keys(entries).length ? { startIndex, endIndex, entries } : null;
   }
@@ -298,6 +328,14 @@
       if (block.type === 'heading' && !includeHeadings) continue;
       if (refs && bi >= refs.startIndex && bi <= refs.endIndex) continue;   // a source, not a claim
 
+      // A note covers the sentences that DEPEND on it, not only the one carrying the digit. Authors
+      // mark the first sentence of a run and let the rest inherit — footnote 1 here is explicitly a
+      // source for fourth AND eighth grade, yet "Only 25 percent of eighth graders do." carried no
+      // marker and was reported to the author as uncited. Carried forward within ONE BLOCK (a
+      // paragraph) and reset at its edge, because a citation does not reach across a paragraph break.
+      // Recorded as `inheritedMarker` rather than silently becoming the unit's own: a claim verified
+      // — or faulted — on a citation it does not itself carry has to say so.
+      let carried = null;
       const candidates = splitCandidates(block);
       candidates.forEach((text, si) => {
         candidateCount++;
@@ -327,6 +365,8 @@
         // is the strong query here, and the host is kept for scoping/display.
         if (sig.domain) unit.domain = sig.domain;
         if (numbers.length) unit.numbers = numbers;
+        // A sentence may cite several sources inline, exactly as an endnote may.
+        if (urls.length > 1) unit.urls = urls.slice();
 
         // Dereference "[n]" against the endnote list so the resolver can fetch the source the
         // document actually cited (ladder rung 1) instead of blind-searching the web (rung 4).
@@ -335,9 +375,26 @@
           const ref = ord != null ? refs.entries[ord] : null;
           if (ref && ref.url) {
             unit.url = ref.url;
+            if (ref.urls && ref.urls.length > 1) unit.urls = ref.urls.slice();
             unit.refOrdinal = ord;
             unit.refAnchor = ref.anchor;
           }
+        }
+
+        // This sentence carries its own citation → it becomes what the rest of the paragraph
+        // inherits. Otherwise, inherit the paragraph's last one (if any). Runs AFTER kindOf, so an
+        // inherited citation can never turn a signal-less sentence into a unit — only supply the
+        // source for a sentence that was already checkable on its own.
+        if (sig.marker || sig.url || sig.doi) {
+          carried = (unit.url || unit.doi)
+            ? { marker: sig.marker || null, url: unit.url || null, urls: unit.urls || null, doi: unit.doi || null, ordinal: unit.refOrdinal != null ? unit.refOrdinal : null }
+            : null;
+        } else if (carried && !unit.url && !unit.doi) {
+          if (carried.url) unit.url = carried.url;
+          if (carried.urls) unit.urls = carried.urls.slice();
+          if (carried.doi) unit.doi = carried.doi;
+          if (carried.ordinal != null) unit.refOrdinal = carried.ordinal;
+          unit.inheritedMarker = carried.marker || (carried.ordinal != null ? `[${carried.ordinal}]` : null);
         }
         units.push(unit);
       });

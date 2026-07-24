@@ -165,6 +165,100 @@ async function search(query, { signal } = {}) {
   });
 }
 
+/**
+ * READ one url with the REAL browser — the last resort when plain HTTP cannot get the page.
+ *
+ * Some sources simply are not reachable by `fetch`. A live editor run took HTTP 403 from azed.gov
+ * on a cited PDF with both a bot UA and full browser headers: the host wants a real browser (TLS
+ * fingerprint, JS challenge, cf_clearance cookie), and this lane already IS one, on a warm profile
+ * that has solved those challenges before. Without this rung the studio reports a perfectly good
+ * citation as unreachable, which reads to the author as THEIR sourcing failing.
+ *
+ * Returns { ok, kind:'pdf'|'html', text?, buffer?, title?, status, url }.
+ * PDFs come back as BYTES (from the navigation response — the browser's own network stack, so the
+ * WAF has already been satisfied) for the caller to run through a PDF extractor; Chrome's built-in
+ * viewer renders a PDF into a plugin whose text `innerText` cannot see.
+ *
+ * Shares the lane's single page and its lock, so a read can never race a search.
+ */
+async function read(url, { timeoutMs = NAV_TIMEOUT } = {}) {
+  const target = String(url || '').trim();
+  if (!/^https?:\/\//i.test(target)) return { ok: false, url: target, error: 'not http(s)' };
+  return withLock(async () => {
+    const p = await ensure();
+    const isPdfBytes = (b) => !!(b && b.length > 4 && b.slice(0, 5).toString('latin1') === '%PDF-');
+
+    // A PDF is fetched, never navigated to. Navigating hands it to Chrome's viewer extension and
+    // the navigation body becomes the viewer shell. Instead: land on the ORIGIN (an ordinary page,
+    // which is what satisfies the WAF and banks its cookie), then run a SAME-ORIGIN fetch inside
+    // the page — the browser's own network stack, cookies and TLS fingerprint included. The
+    // context's `request` client is NOT equivalent: it is a separate HTTP stack and azed.gov 403s
+    // it exactly as it 403s node's fetch.
+    if (/\.pdf(?:[?#]|$)/i.test(target)) {
+      let origin = ''; try { origin = new URL(target).origin; } catch { origin = ''; }
+      if (origin) {
+        try {
+          await p.goto(origin, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+          const b64 = await withTimeout(p.evaluate(async (u) => {
+            try {
+              const r = await fetch(u, { credentials: 'include' });
+              if (!r.ok) return null;
+              const bytes = new Uint8Array(await r.arrayBuffer());
+              if (bytes.length > 40 * 1024 * 1024) return null;      // don't marshal a huge blob
+              let s = '', CH = 0x8000;
+              for (let i = 0; i < bytes.length; i += CH) s += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+              return btoa(s);
+            } catch { return null; }
+          }, target), Math.max(timeoutMs, 30000), null);
+          if (b64) {
+            const buf = Buffer.from(b64, 'base64');
+            if (isPdfBytes(buf)) return { ok: true, kind: 'pdf', buffer: buf, status: 200, url: target };
+          }
+        } catch { /* fall through to the plain navigation path below */ }
+      }
+    }
+
+    let resp = null;
+    try { resp = await p.goto(target, { waitUntil: 'domcontentloaded', timeout: timeoutMs }); }
+    catch (e) { return { ok: false, url: target, error: `goto failed: ${e.message}` }; }
+    const status = resp ? resp.status() : 0;
+    const ctype = (resp && (resp.headers()['content-type'] || '')) || '';
+    const looksPdf = /application\/pdf/i.test(ctype) || /\.pdf(?:[?#]|$)/i.test(target);
+
+    if (looksPdf) {
+      // ⚠️ `resp.body()` on a PDF navigation does NOT return the PDF. Chrome hands the URL to its
+      // built-in viewer extension, so the navigation body is 536 bytes of viewer-shell HTML
+      // ("<!doctype html>…chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_embedder.css").
+      // Handing THAT to a PDF extractor would put fabricated content under a real citation — the
+      // same wrong-source failure this whole lane exists to prevent. So: navigate first (that is
+      // what satisfies the WAF and banks the cookie), then pull the bytes with the context's HTTP
+      // client, which inherits this profile's cookies — and REQUIRE the %PDF magic before believing
+      // any of it.
+      let buffer = null;
+      try {
+        const r = await context.request.get(target, { timeout: timeoutMs });
+        if (r.ok()) { const b = await r.body(); if (isPdfBytes(b)) buffer = b; }
+      } catch { /* fall through to the navigation body */ }
+      if (!buffer) { try { const b = await resp.body(); if (isPdfBytes(b)) buffer = b; } catch { /* none */ } }
+      if (buffer) return { ok: true, kind: 'pdf', buffer, status, url: target };
+      return { ok: false, url: target, status, error: 'pdf bytes unavailable (viewer shell only)' };
+    }
+
+    if (status && (status < 200 || status >= 300)) return { ok: false, url: target, status, error: `HTTP ${status}` };
+    /* eslint-disable no-undef -- this callback is serialized into the PAGE, where `document` exists */
+    const got = await withTimeout(p.evaluate(() => {
+      const pick = document.querySelector('article') || document.querySelector('main') || document.body;
+      for (const sel of ['script', 'style', 'noscript', 'nav', 'header', 'footer', 'aside', 'form']) {
+        for (const n of (pick ? pick.querySelectorAll(sel) : [])) n.remove();
+      }
+      return { title: document.title || '', text: (pick && (pick.innerText || pick.textContent) || '').replace(/\s+/g, ' ').trim() };
+    }), 8000, null);
+    /* eslint-enable no-undef */
+    if (!got || !got.text) return { ok: false, url: target, status, error: 'no readable text' };
+    return { ok: true, kind: 'html', text: got.text, title: got.title, status, url: target };
+  });
+}
+
 async function close() {
   try { if (context) await context.close(); } catch {}
   context = null; page = null;
@@ -173,4 +267,4 @@ async function close() {
 
 function isConnected() { return !!(context && page); }
 
-module.exports = { search, close, ensure, isConnected, cleanQuery, PROFILE_DIR, SEARCH_URL };
+module.exports = { search, read, close, ensure, isConnected, cleanQuery, PROFILE_DIR, SEARCH_URL };

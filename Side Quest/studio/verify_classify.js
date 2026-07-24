@@ -31,7 +31,15 @@
   'use strict';
 
   // The frozen per-claim status-code enum (mirrors checks_contract STATUS_CODE + the Rainey TOMLs).
-  const STATUS_CODES = Object.freeze(['V', 'VC', 'VP', 'QO', 'QP', 'A', 'M', 'NK']);
+  // NS and ERR were split OUT of NK (2026-07-23). NK is the Rainey agents' "no record in the internal
+  // KDB" — an absence of local knowledge, correctly graded `info`. The deep verifier's rubric had
+  // quietly redefined NK as "not supported by the sources", so its strongest negative verdict short of
+  // a contradiction rendered as harmless blue info and a document with unsupported claims certified as
+  // "Cleared for publication — no outstanding issues". They are different facts about the world and
+  // now carry different codes: NS = we read the cited source and it does not support this claim.
+  // ERR = we never got a usable verdict (unparseable/truncated model output) — NOT a finding about the
+  // claim, and never something that can clear a document by being counted as benign.
+  const STATUS_CODES = Object.freeze(['V', 'VC', 'VP', 'QO', 'QP', 'A', 'M', 'NS', 'NK', 'ERR']);
   const CODE_SET = new Set(STATUS_CODES);
   const MIN_CONFIDENCE = 0.65;   // local-tier confidence below this ⇒ escalate to frontier
 
@@ -45,7 +53,16 @@
     if (/omission/.test(t)) return 'QO';
     if (/attribution/.test(t)) return 'A';
     if (/mismatch|contradict/.test(t)) return 'M';
-    if (/not[_\s-]?in|unknown|no[_\s-]?(?:kdb|source)/.test(t)) return 'NK';
+    // "not supported" / "unsupported" / "not found in the sources" is a verdict ABOUT THE CLAIM and
+    // must be graded as a defect (NS). It is tested BEFORE the NK branch because "not supported" also
+    // matches that branch's `not[_\s-]?in`-adjacent shapes, and the old ordering swallowed it into
+    // the benign "no internal record" bucket.
+    if (/unsupported|not[_\s-]?supported|not[_\s-]?found[_\s-]?in/.test(t)) return 'NS';
+    // NO fuzzy synonym for ERR on purpose. ERR means "the harness never got a verdict", which is a
+    // fact about the CALL, not something a model can assert — and a loose pattern here would let any
+    // prose containing "unparseable" become a status code. The exact token still round-trips via
+    // CODE_SET above; everything else falls through to null, which is what makes the caller emit ERR.
+    if (/not[_\s-]?in|unknown|no[_\s-]?(?:kdb|record|source)/.test(t)) return 'NK';
     return null;
   }
 
@@ -69,7 +86,7 @@
   // output offline. Clearly marked tier:'stub' / low confidence so production tiering would escalate.
   function stubClassify(input) {
     const overlap = VM ? VM.contentOverlap(input.claim, input.passage || '') : 0;
-    const code = overlap >= 0.7 ? 'VP' : (overlap >= 0.4 ? 'QP' : 'NK');
+    const code = overlap >= 0.7 ? 'VP' : (overlap >= 0.4 ? 'QP' : 'NS');
     return { status_code: code, note: `stub: content-overlap=${Math.round(overlap * 100) / 100}`, confidence: 0.3 };
   }
 
@@ -99,7 +116,9 @@
       // low-confidence OR invalid local output → escalate if a frontier is available
       if (typeof opts.frontier !== 'function') {
         if (vo.ok) return { status_code: vo.status_code, note: vo.note, tier: 'local', confidence: conf, valid: true };
-        return { status_code: 'NK', note: `local output invalid: ${vo.error}`, tier: 'local', confidence: 0, valid: false };
+        // ERR, not NK: we failed to obtain a verdict. NK grades as `info` and would let a broken
+        // judge quietly count toward "no outstanding issues".
+        return { status_code: 'ERR', note: `local output invalid: ${vo.error}`, tier: 'local', confidence: 0, valid: false };
       }
     }
 
@@ -110,7 +129,7 @@
       const conf = fr && typeof fr.confidence === 'number' ? fr.confidence : 1;
       return { status_code: vof.status_code, note: vof.note, tier: 'frontier', confidence: conf, valid: true };
     }
-    return { status_code: 'NK', note: `frontier output invalid: ${vof.error}`, tier: 'frontier', confidence: 0, valid: false };
+    return { status_code: 'ERR', note: `frontier output invalid: ${vof.error}`, tier: 'frontier', confidence: 0, valid: false };
   }
 
   /**
