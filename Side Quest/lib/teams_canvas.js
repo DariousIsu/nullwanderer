@@ -98,13 +98,17 @@ const ATTENDEES_JS = `(() => {
 const DOM_SNAPSHOT_JS = `(() => {
   try {
     const out = ['url: ' + location.href];
-    const els = Array.from(document.querySelectorAll('button,[role="button"],a[href],[data-tid]')).slice(0, 60);
-    for (const e of els) {
+    // Interactive controls FIRST (buttons/switches/inputs) so the Join button + mic/cam toggles always
+    // show; then other tagged elements. Include aria-checked so we can see the mic/cam on/off state.
+    const controls = Array.from(document.querySelectorAll('button,[role="button"],[role="switch"],input,a[href]')).slice(0, 45);
+    const tagged = Array.from(document.querySelectorAll('[data-tid]')).filter(e => controls.indexOf(e) < 0).slice(0, 20);
+    for (const e of controls.concat(tagged)) {
       const tid = e.getAttribute('data-tid') || '';
       const al = (e.getAttribute('aria-label') || '').replace(/\\s+/g,' ').trim().slice(0, 50);
       const tx = (e.textContent || '').replace(/\\s+/g,' ').trim().slice(0, 40);
+      const chk = e.getAttribute('aria-checked');
       if (!tid && !al && !tx) continue;
-      out.push('· ' + e.tagName.toLowerCase() + (tid ? ' data-tid=' + tid : '') + (al ? ' aria="' + al + '"' : '') + (tx ? ' text="' + tx + '"' : ''));
+      out.push('· ' + e.tagName.toLowerCase() + (tid ? ' data-tid=' + tid : '') + (al ? ' aria="' + al + '"' : '') + (chk != null ? ' checked=' + chk : '') + (tx ? ' text="' + tx + '"' : ''));
     }
     const body = (document.body.innerText || '').toLowerCase();
     out.push('signals: joinBtn=' + !!document.querySelector('[data-tid="prejoin-join-button"],button[aria-label*="Join now" i]')
@@ -162,15 +166,62 @@ function createTeamsDriver(getWC) {
   // Dismiss any device-permission / "get the best of Teams" overlay covering the prejoin controls.
   async function preClear() { nudge(); for (let i = 0; i < 2; i++) { key('Escape'); await sleep(250); } await exec(clickByLabelJS(['close', 'dismiss', 'not now', 'continue without']), true); }
 
-  // Pre-join: mute mic + camera, then click Join now. Returns { ok, via }.
+  // Fill the prejoin display-name input. LIVE FINDING (boot87): the "Join now" button stays absent/
+  // disabled until a name is set, so this is REQUIRED, not optional. Disclosive name so the roster
+  // identifies her even if in-meeting chat is blocked for externals.
+  async function fillName(name) {
+    const nm = name || "Zoe — Lucas's AI";
+    const js = `(() => {
+      try {
+        const el = document.querySelector('input[data-tid="prejoin-display-name-input"], input[placeholder*="name" i], input[aria-label*="name" i]');
+        if (!el) return false;
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        setter.call(el, ${JSON.stringify(nm)});
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      } catch (e) { return false; }
+    })()`;
+    return await exec(js, true);
+  }
+
+  // Ensure muted + camera OFF without toggling an already-off control ON (the live bug: a blind
+  // toggle turned the camera on). SAFETY-CRITICAL: joining with mic/cam on would broadcast Lucas's
+  // real webcam+mic into the room. The prejoin controls are pill SWITCHES (aria-checked) — click a
+  // switch only when it is currently ON (checked) and its accessible name is camera/mic/audio; plus a
+  // button fallback matched on a "currently-on" aria-label ("Mute" / "Turn camera off").
+  async function ensureMutedCameraOff() {
+    return await exec(`(() => {
+      try {
+        const acted = [];
+        const nameOf = (e) => ((e.getAttribute('aria-label') || '') + ' ' + ((e.closest('[aria-label]') && e.closest('[aria-label]').getAttribute('aria-label')) || '')).toLowerCase();
+        for (const s of Array.from(document.querySelectorAll('[role="switch"],button[aria-pressed],input[type="checkbox"]'))) {
+          const on = s.getAttribute('aria-checked') === 'true' || s.getAttribute('aria-pressed') === 'true' || s.checked === true;
+          if (!on) continue;
+          if (/camera|video|microphone|\\bmic\\b|\\bmute\\b|audio/.test(nameOf(s))) { s.click(); acted.push(nameOf(s).trim().slice(0, 24)); }
+        }
+        const btns = Array.from(document.querySelectorAll('button,[role="button"]'));
+        const mic = btns.find(b => /^mute\\b|^turn off (the )?microphone/i.test((b.getAttribute('aria-label') || '').trim()));
+        if (mic) { mic.click(); acted.push('mic-btn'); }
+        const cam = btns.find(b => /^turn camera off|^turn off (the )?camera/i.test((b.getAttribute('aria-label') || '').trim()));
+        if (cam) { cam.click(); acted.push('cam-btn'); }
+        return acted.join(', ') || 'nothing-on';
+      } catch (e) { return 'err:' + (e && e.message); }
+    })()`, true);
+  }
+
+  // Pre-join sequence (verified against the live prejoin DOM, boot87): launcher gate → wait for the
+  // prejoin screen → FILL NAME (unlocks Join) → mute + camera off (state-aware) → Join now.
   async function joinNow() {
-    await continueOnBrowser(); await sleep(400);
-    nudge(); await sleep(200);
-    // Teams prejoin toggles are ON→OFF; only click when currently unmuted / camera-on (best-effort).
-    await exec(clickByLabelJS(['mute microphone', 'toggle-mute', 'turn off microphone', 'mute']), true);
-    await exec(clickByLabelJS(['turn camera off', 'toggle-video', 'turn off camera']), true);
-    await sleep(150);
-    const via = await exec(clickByLabelJS(['prejoin-join-button', 'join now', 'join meeting', 'join']), true);
+    await continueOnBrowser(); await sleep(1200);
+    for (let i = 0; i < 6; i++) {
+      if ((await exec(`!!document.querySelector('[data-tid="calling-prejoin-screen"], input[data-tid="prejoin-display-name-input"], button[data-tid="prejoin-join-button"]')`)) === true) break;
+      await sleep(700);
+    }
+    nudge();
+    await fillName(); await sleep(250);
+    await ensureMutedCameraOff(); await sleep(200);
+    const via = await exec(clickByLabelJS(['prejoin-join-button', 'join now', 'join meeting']), true);
     return { ok: !!via, via: via || '' };
   }
 
