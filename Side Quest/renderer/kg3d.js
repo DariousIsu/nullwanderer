@@ -2375,6 +2375,36 @@ function animOnActivity(evt) {
   if (kind === 'say') return animPlay('speak', 5);
   return animPlay('think', 3.5);
 }
+/*
+ * THE JAW, DRIVEN DIRECTLY — because the `aa` viseme alone barely moves it.
+ *
+ * `aa` is bound to Reallusion's V_Open, and on this model that displaces the mouth by 0.0081 at full weight.
+ * Jaw_Open displaces it 0.0221 over 2,110 vertices — 2.7x the travel, measured through getVertexPosition so
+ * it is the real deformed result, not the raw delta. That is not a bug in the conversion so much as how CC
+ * rigs work: V_Open is a LIP shape and assumes the jaw is animated on its own channel, so binding the viseme
+ * alone gives a mouth that changes shape without ever opening. At this figure's on-screen size, 8mm of travel
+ * is nothing — the same "true-scale lip motion is invisible" problem SKIN_EXAG solved for nodes, except no
+ * amplification reaches here (and the mouth patch is deliberately node-free, so there is nothing to amplify).
+ *
+ * Jaw_Open is bound to no VRM expression, so the expressionManager never touches it and a direct write holds.
+ * Set AFTER vrm.update() but BEFORE updateSkin(), so bound nodes see the same pose the mesh is in. The cache
+ * keys on the model itself, so swapping avatars rebuilds it; a model without the morph is simply a no-op and
+ * the viseme carries on alone.
+ */
+let _jaw = { model: null, targets: [] };
+function setJawOpen(v) {
+  if (_jaw.model !== vrmModel) {
+    _jaw = { model: vrmModel, targets: [] };
+    try {
+      vrmModel.scene.traverse((o) => {
+        const d = o.morphTargetDictionary;
+        if (d && d.Jaw_Open != null && o.morphTargetInfluences) _jaw.targets.push({ inf: o.morphTargetInfluences, i: d.Jaw_Open });
+      });
+    } catch (e) {}
+  }
+  const w = Math.max(0, Math.min(1, v));
+  for (const t of _jaw.targets) t.inf[t.i] = w;
+}
 function updateVRMFace(now, dt) {
   if (!vrmReady || SHAPE !== 'skin') return;
   // Her heart beats — a real double-thump rather than a sine, because a sine reads as a pulsing lamp. It is
@@ -2390,6 +2420,7 @@ function updateVRMFace(now, dt) {
   }
   animUpdate(dt);                     // body clips first — vrm.update() normalises them into the raw bones
   try { vrmModel.update(dt); } catch (e) {}
+  setJawOpen(face.mouthOpen);         // the viseme shapes the lips; THIS is what actually opens her mouth
 }
 // Base weight is structural (how connected), the bonus is evidential (how corroborated). They are genuinely
 // different facts about a node and both belong on screen: a hub everyone links to but nobody sourced should

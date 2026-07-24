@@ -76,5 +76,57 @@ if (envM && smM) {
   ok(oMin > 0.15, 'NON-VACUOUS: the old envelope would fail the closes-check', oMin);
 }
 
-console.log(fail ? `\n${fail} FAILURES` : '\nPASS — mouth state survives the painted-face toggle, and she opens AND closes at a conversational rate');
+/* ---- THE JAW. `aa` is bound to V_Open, a LIP shape that on this CC rig travels 0.0081 at full weight;
+   Jaw_Open travels 0.0221 over 2110 verts. Binding the viseme alone gives a mouth that changes shape without
+   opening, which is what "her mouth doesnt open at all" looked like. Lift setJawOpen and RUN it. ---- */
+const jStart = src.indexOf('let _jaw = {');
+let jd = 0, jEnd = -1;
+for (let i = src.indexOf('{', src.indexOf('function setJawOpen')); i < src.length; i++) {
+  if (src[i] === '{') jd++;
+  else if (src[i] === '}') { jd--; if (jd === 0) { jEnd = i + 1; break; } }
+}
+ok(jStart > 0 && jEnd > jStart, 'lifted setJawOpen out of the renderer');
+
+// it must be driven from mouthOpen, AFTER vrm.update() (so the expressionManager cannot clobber it) and
+// BEFORE updateSkin() (so bound nodes see the same pose the mesh is in)
+const vf = src.slice(src.indexOf('function updateVRMFace'), src.indexOf('function nodePointSize'));
+ok(/setJawOpen\(face\.mouthOpen\)/.test(vf), 'jaw is driven from face.mouthOpen');
+ok(vf.indexOf('vrmModel.update(dt)') < vf.indexOf('setJawOpen(face.mouthOpen)'), 'jaw is set AFTER vrm.update()');
+ok(src.indexOf('updateVRMFace(now, dt); updateSkin()') > 0, 'updateSkin still runs after updateVRMFace');
+
+if (jStart > 0 && jEnd > jStart) {
+  const REF = { m: null };
+  // eslint-disable-next-line no-new-func
+  const setJawOpen = new Function('REF',
+    'let vrmModel;' + src.slice(jStart, jEnd) + '; return function(v){ vrmModel = REF.m; return setJawOpen(v); };')(REF);
+
+  const mkModel = (dicts) => ({ scene: { traverse(cb) { for (const d of dicts) cb(d); } } });
+  const meshWith = (idx) => ({ morphTargetDictionary: { Jaw_Open: idx, V_Open: 0 }, morphTargetInfluences: new Array(148).fill(0) });
+
+  const a = meshWith(127), b = meshWith(127);
+  REF.m = mkModel([a, b, { morphTargetDictionary: { V_Open: 0 }, morphTargetInfluences: new Array(148).fill(0) }]);
+  setJawOpen(0.5);
+  ok(a.morphTargetInfluences[127] === 0.5 && b.morphTargetInfluences[127] === 0.5, 'writes the jaw on every mesh carrying it');
+
+  setJawOpen(3);   ok(a.morphTargetInfluences[127] === 1, 'clamps high');
+  setJawOpen(-1);  ok(a.morphTargetInfluences[127] === 0, 'clamps low');
+
+  // a swapped avatar must rebuild the cache, not keep writing into the old model
+  const c = meshWith(90);
+  REF.m = mkModel([c]);
+  setJawOpen(0.7);
+  ok(c.morphTargetInfluences[90] === 0.7, 'rebuilds on model swap (new index honoured)', c.morphTargetInfluences[90]);
+  ok(a.morphTargetInfluences[127] === 0, 'the OLD model is no longer written to');
+
+  // a model without the morph (e.g. a VRoid avatar) must be a safe no-op, leaving the viseme to carry alone
+  let threw = false;
+  REF.m = mkModel([{ morphTargetDictionary: { V_Open: 0 }, morphTargetInfluences: new Array(10).fill(0) }]);
+  try { setJawOpen(0.5); } catch (e) { threw = true; }
+  ok(!threw, 'no Jaw_Open morph → no throw');
+  REF.m = { scene: { traverse() { throw new Error('broken scene'); } } };
+  try { setJawOpen(0.5); threw = false; } catch (e) { threw = true; }
+  ok(!threw, 'a broken scene never throws into the frame loop');
+}
+
+console.log(fail ? `\n${fail} FAILURES` : '\nPASS — mouth state survives the painted-face toggle, she opens AND closes at a conversational rate, and the JAW is driven (not just the lip viseme)');
 process.exit(fail ? 1 : 0);
