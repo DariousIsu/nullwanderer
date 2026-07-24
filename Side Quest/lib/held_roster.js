@@ -47,7 +47,7 @@ function recognize(text, { deps = {} } = {}) {
         `YOU ALREADY HOLD THIS LIST — it is doc #${r.id} ("${str(r.title)}") in your own store, and it is extracted below (${ans.groups} ${str(ans.groupCol).toLowerCase()}s). Present THIS as the answer and cite doc #${r.id}. Do NOT say the list is empty, and do NOT start a new empty document — you already have it.`,
         ans.text,
       ].join('\n');
-      return { docId: r.id, title: r.title, groups: ans.groups, groupCol: ans.groupCol, block };
+      return { docId: r.id, title: r.title, groups: ans.groups, groupCol: ans.groupCol, text: ans.text, block };
     }
   }
   return null;

@@ -8236,9 +8236,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const dp = require('./lib/leakguard').deliveryPromise(finalSaid || '', { context: _promiseCtx });
       if (dp && dp.topic) {
         const slug = dp.topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
-        const md = `_Materialized from her promise in conversation:_\n\n> ${String(finalSaid || '').replace(/\s+/g, ' ').slice(0, 400)}`;
-        promiseArtifactEmit({ slug, title: dp.topic, markdown: md })
-          .then((created) => { if (created) console.log(`[main] delivery-promise net → canvas "${dp.topic}" materialized (tab promise-${slug})`); })
+        // P2 (PLAN_MAP §2, step 2): if the promise names a roster she ALREADY HOLDS, materialize the
+        // tab with the REAL extracted content — organized by governing body, cited to the roster doc
+        // (via held_roster→table_extract) — not just the promise sentence (the "parish-canvas fiction",
+        // a hollow tab). Falls back to the promise text when no held roster matches the topic.
+        let title = dp.topic, md = null, held = null;
+        try {
+          held = require('./lib/held_roster').recognize(dp.topic);
+          if (held && held.text) {
+            title = held.title || dp.topic;
+            md = `${held.text}\n\n_Compiled from the roster you already hold (doc #${held.docId}); materialized here from your promise in conversation._`;
+          }
+        } catch (e) { console.error('[main] delivery-promise held-roster lookup failed:', e.message); }
+        if (!md) md = `_Materialized from her promise in conversation:_\n\n> ${String(finalSaid || '').replace(/\s+/g, ' ').slice(0, 400)}`;
+        promiseArtifactEmit({ slug, title, markdown: md })
+          .then((created) => { if (created) console.log(`[main] delivery-promise net → canvas "${title}" materialized (tab promise-${slug})${held && held.text ? ` — REAL roster from doc #${held.docId} (${held.groups} ${held.groupCol})` : ' — promise placeholder'}`); })
           .catch(() => {});
       }
     } catch {}

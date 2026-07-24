@@ -35,6 +35,13 @@ ok(hit && /Al Adams/.test(hit.block) && /Di Doe/.test(hit.block) && !/Party Pers
 ok(hit && /do NOT say the list is empty/i.test(hit.block) && new RegExp(`cite doc #${rdoc.id}`).test(hit.block), 'recognize: steers to present + cite + never "empty"');
 ok(hit && hit.groups === 3, 'recognize: all 3 parishes grouped');
 
+// --- P2 (PLAN_MAP §2): recognize exposes the CLEAN extracted roster TEXT for the canvas product ---
+ok(hit && hit.text && /Al Adams/.test(hit.text) && /Di Doe/.test(hit.text), 'recognize: .text carries the organized roster names (for the canvas doc)');
+ok(hit && hit.text && !/do NOT say the list is empty/i.test(hit.text) && !/YOU ALREADY HOLD/i.test(hit.text), 'recognize: .text is CLEAN — no chat-only framing, ready to seed a canvas doc');
+// a bare delivery-promise TOPIC resolves the same held roster (the P3 net → P2 product hand-off)
+const viaTopic = HR.recognize('Louisiana parish contacts', { deps: { db } });
+ok(viaTopic && viaTopic.docId === rdoc.id && !!viaTopic.text, 'recognize: a bare promise topic ("Louisiana parish contacts") resolves the held roster + exposes its text');
+
 // --- guards: no false positives ---
 ok(HR.recognize('what is the weather in Baton Rouge today?', { deps: { db } }) === null, 'recognize: a plain question (not a list request) → null');
 ok(HR.recognize('list my meetings for February', { deps: { db } }) === null, 'recognize: a list request whose only match is a NON-roster table → null (body verification gates it)');
