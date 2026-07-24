@@ -1291,8 +1291,8 @@ async function loadVRM() {
     // spread also wastes most of the frame's width on empty space between the arms and the body.
     try {
       const setBone = (name, z, x) => { const b = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode(name); if (b) b.rotation.set(x || 0, 0, z); };
-      setBone('leftUpperArm', -1.25); setBone('rightUpperArm', 1.25);
-      setBone('leftLowerArm', -0.15); setBone('rightLowerArm', 0.15);
+      // one source of truth with the animation player: clips ADD onto exactly this resting pose
+      for (const [bn, r] of Object.entries(BASE_POSE)) setBone(bn, r[2], r[0]);
       vrm.update(0.016);                            // push the pose into the skeleton before anything is bound
     } catch (e) {}
     // Scale the 1.69-unit model into the graph's own world so she stands at cloud scale.
@@ -2155,6 +2155,122 @@ function releaseSkin() {                            // let the forces have the n
 }
 // Her expressions run through the VRM's own rig, from the same face state the painted face uses — so the
 // mouth on the model and the mouth on the cloud are the same mouth, moving on one signal.
+// ============================================================================================================
+// ANIMATION TRACKS — a menu of body clips, deterministically triggered and drivable from outside.
+// ============================================================================================================
+// Lucas's stated path: "a full menu of animations that can be both deterministically triggered and taken over
+// completely by a small cloud LLM giving the program more interactive control of the body."
+//
+// So a clip is DATA, not code: a named set of per-bone keyframes the player blends. Anything that can name a
+// clip can move her — the activity bus today, a cloud call tomorrow — with no new code per animation.
+//
+// Rotations are in the VRM NORMALIZED humanoid space (the canonical rest where every bone is identity at
+// T-pose). That is the same space her resting A-pose is written in, so clips ADD onto that base instead of
+// redefining her arms. Blender-authored VRMA lands in this same space, so it can be loaded straight into this
+// player later — that needs @pixiv/three-vrm-animation in the bundle, which is why the player is deliberately
+// format-agnostic rather than built around any one clip source.
+const BASE_POSE = {
+  leftUpperArm: [0, 0, -1.25], rightUpperArm: [0, 0, 1.25],
+  leftLowerArm: [0, 0, -0.15], rightLowerArm: [0, 0, 0.15],
+};
+// keyframes are [timeSeconds, [x,y,z] radians]; the player eases between them and loops on `dur`
+const ANIM_CLIPS = {
+  // BREATHING — the one that matters most: a still figure reads as a mannequin. Chest lifts, shoulders follow
+  // a beat later, spine counter-settles, head drifts. 5.2s ≈ a resting respiratory rate.
+  idle: { loop: true, dur: 5.2, tracks: {
+    chest:         [[0, [0, 0, 0]], [2.1, [-0.045, 0, 0]], [5.2, [0, 0, 0]]],
+    spine:         [[0, [0, 0, 0]], [2.2, [0.022, 0, 0]],  [5.2, [0, 0, 0]]],
+    leftShoulder:  [[0, [0, 0, 0]], [2.4, [0, 0, -0.055]], [5.2, [0, 0, 0]]],
+    rightShoulder: [[0, [0, 0, 0]], [2.4, [0, 0, 0.055]],  [5.2, [0, 0, 0]]],
+    head:          [[0, [0, 0, 0]], [2.6, [0.018, 0.030, 0]], [5.2, [0, 0, 0]]],
+    neck:          [[0, [0, 0, 0]], [2.6, [0.012, -0.018, 0]], [5.2, [0, 0, 0]]],
+  } },
+  // LISTENING — she settles and tips toward the speaker: less motion, not more.
+  listen: { loop: true, dur: 6.0, tracks: {
+    chest:         [[0, [0, 0, 0]], [2.4, [-0.030, 0, 0]], [6.0, [0, 0, 0]]],
+    head:          [[0, [0.05, 0.10, 0.06]], [3.0, [0.07, 0.13, 0.08]], [6.0, [0.05, 0.10, 0.06]]],
+    neck:          [[0, [0.03, 0.05, 0.03]], [3.0, [0.04, 0.07, 0.04]], [6.0, [0.03, 0.05, 0.03]]],
+  } },
+  // SPEAKING — the body talks too: small head punctuation and a shoulder that carries the phrase.
+  speak: { loop: true, dur: 2.6, tracks: {
+    head:          [[0, [0, 0, 0]], [0.6, [-0.035, -0.045, 0]], [1.4, [0.030, 0.040, 0]], [2.6, [0, 0, 0]]],
+    neck:          [[0, [0, 0, 0]], [0.7, [-0.020, -0.025, 0]], [1.5, [0.018, 0.022, 0]], [2.6, [0, 0, 0]]],
+    chest:         [[0, [0, 0, 0]], [1.3, [-0.030, 0, 0]], [2.6, [0, 0, 0]]],
+    leftShoulder:  [[0, [0, 0, 0]], [1.3, [0, 0, -0.035]], [2.6, [0, 0, 0]]],
+    rightShoulder: [[0, [0, 0, 0]], [1.3, [0, 0, 0.035]],  [2.6, [0, 0, 0]]],
+  } },
+  // THINKING — head tilts up and away, and she goes quieter than idle.
+  think: { loop: true, dur: 7.0, tracks: {
+    head:          [[0, [-0.06, -0.12, -0.05]], [3.5, [-0.09, -0.16, -0.07]], [7.0, [-0.06, -0.12, -0.05]]],
+    neck:          [[0, [-0.03, -0.06, -0.02]], [3.5, [-0.05, -0.08, -0.03]], [7.0, [-0.03, -0.06, -0.02]]],
+    chest:         [[0, [0, 0, 0]], [3.5, [-0.020, 0, 0]], [7.0, [0, 0, 0]]],
+  } },
+};
+let animCur = 'idle', animPrev = null, animT = 0, animPrevT = 0, animMix = 1, animFadeDur = 0.45, animHoldUntil = 0;
+// sample one clip's track at time t (linear between keys, eased so nothing starts or stops abruptly)
+function animSample(clip, bone, t) {
+  const ks = clip.tracks[bone]; if (!ks || !ks.length) return null;
+  if (t <= ks[0][0]) return ks[0][1];
+  for (let i = 1; i < ks.length; i++) {
+    if (t <= ks[i][0]) {
+      const a = ks[i - 1], b = ks[i];
+      const span = (b[0] - a[0]) || 1e-6;
+      let u = (t - a[0]) / span; u = u * u * (3 - 2 * u);                 // smoothstep ease
+      return [a[1][0] + (b[1][0] - a[1][0]) * u,
+              a[1][1] + (b[1][1] - a[1][1]) * u,
+              a[1][2] + (b[1][2] - a[1][2]) * u];
+    }
+  }
+  return ks[ks.length - 1][1];
+}
+// Play a clip. `hold` keeps it from being overridden by a lower-priority trigger for that long, so a spoken
+// line is not stomped by the next idle tick.
+function animPlay(name, hold, fade) {
+  if (!ANIM_CLIPS[name]) return false;
+  const now = performance.now();
+  if (name !== animCur) {
+    if (now < animHoldUntil && name === 'idle') return false;            // a held clip outranks a fall-back
+    animPrev = animCur; animPrevT = animT; animCur = name; animT = 0; animMix = 0;
+    animFadeDur = fade == null ? 0.45 : fade;
+  }
+  animHoldUntil = now + (hold || 0) * 1000;
+  return true;
+}
+// Evaluate + apply. Runs BEFORE vrmModel.update(dt) so the humanoid normalises these into the raw bones.
+function animUpdate(dt) {
+  if (!vrmReady || !vrmModel.humanoid) return;
+  const H = vrmModel.humanoid;
+  const cur = ANIM_CLIPS[animCur], prv = animPrev ? ANIM_CLIPS[animPrev] : null;
+  animT += dt; if (cur && cur.loop && cur.dur) animT %= cur.dur;
+  if (animMix < 1) { animMix = Math.min(1, animMix + dt / Math.max(0.01, animFadeDur)); if (animMix >= 1) animPrev = null; }
+  if (prv) { animPrevT += dt; if (prv.loop && prv.dur) animPrevT %= prv.dur; }
+  // fall back to idle once a held clip has expired
+  if (animCur !== 'idle' && performance.now() > animHoldUntil) animPlay('idle', 0, 0.7);
+  const bones = new Set(Object.keys(BASE_POSE));
+  if (cur) for (const b of Object.keys(cur.tracks)) bones.add(b);
+  if (prv) for (const b of Object.keys(prv.tracks)) bones.add(b);
+  for (const name of bones) {
+    let node = null;
+    try { node = H.getNormalizedBoneNode(name); } catch (e) {}
+    if (!node) continue;
+    const base = BASE_POSE[name] || [0, 0, 0];
+    const a = cur ? animSample(cur, name, animT) : null;
+    const b = prv ? animSample(prv, name, animPrevT) : null;
+    let ox = 0, oy = 0, oz = 0;
+    if (a && b) { const m = animMix, n = 1 - m;
+      ox = a[0] * m + b[0] * n; oy = a[1] * m + b[1] * n; oz = a[2] * m + b[2] * n; }
+    else if (a) { const m = prv ? animMix : 1; ox = a[0] * m; oy = a[1] * m; oz = a[2] * m; }
+    else if (b) { const n = 1 - animMix; ox = b[0] * n; oy = b[1] * n; oz = b[2] * n; }
+    node.rotation.set(base[0] + ox, base[1] + oy, base[2] + oz);
+  }
+}
+// the deterministic half of the menu: what she is doing decides how her body moves
+function animOnActivity(kind) {
+  if (kind === 'hear') return animPlay('listen', 4);
+  if (kind === 'say') return animPlay('speak', 5);
+  if (kind === 'think') return animPlay('think', 3.5);
+  return false;
+}
 function updateVRMFace(now, dt) {
   if (!vrmReady || SHAPE !== 'skin') return;
   // Her heart beats — a real double-thump rather than a sine, because a sine reads as a pulsing lamp. It is
@@ -2168,6 +2284,7 @@ function updateVRMFace(now, dt) {
     try { em.setValue('blink', AS ? AS.blinkMultiplier(now) < 0.5 ? 1 : 0 : 0); } catch (e) {}
     try { em.setValue('happy', Math.max(0, face.cur.mouthCurve)); } catch (e) {}
   }
+  animUpdate(dt);                     // body clips first — vrm.update() normalises them into the raw bones
   try { vrmModel.update(dt); } catch (e) {}
 }
 // Base weight is structural (how connected), the bonus is evidential (how corroborated). They are genuinely
@@ -3015,6 +3132,8 @@ function dispatchActivity(evt) {
   return 'miss';                                 // an unknown kind draws nothing, and now admits it
 }
 function onActivity(evt) {
+  // her BODY answers the same events her face does — deterministic half of the animation menu
+  try { animOnActivity(evt && evt.kind); } catch (e) {}
   if (!evt) return;
   let verdict = 'miss';
   try { verdict = dispatchActivity(evt) || 'miss'; }
@@ -3213,6 +3332,12 @@ window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () =
   actStats: () => ({ seen: _act.seen, drawn: _act.drawn,
     kinds: [..._act.byKind.entries()].map(([k, v]) => ({ kind: k, seen: v.seen, drawn: v.drawn })).sort((a, b) => b.seen - a.seen) }),
   shape: (s) => { if (s) { applyShape(s); if (shapeEl) shapeEl.value = s; } return SHAPE; },
+  // THE ANIMATION MENU — the takeover surface. Anything that can name a clip can drive her body, which is the
+  // hook a small cloud model plugs into: `anim()` lists what exists, `anim({play:'think', hold:6})` moves her.
+  anim: (o) => { if (o && typeof o === 'object' && o.play) animPlay(o.play, o.hold, o.fade);
+    return { clips: Object.keys(ANIM_CLIPS), playing: animCur, blendingFrom: animPrev,
+      mix: +animMix.toFixed(2), t: +animT.toFixed(2),
+      heldFor: Math.max(0, +((animHoldUntil - performance.now()) / 1000).toFixed(1)) }; },
   // the hologram suit — tune it live (neckline/hem are model-space Y from the rig) without a reload
   suit: (o) => { if (o && typeof o === 'object') {
       if (o.on != null) shellUniforms.uSuitOn.value = o.on ? 1 : 0;
