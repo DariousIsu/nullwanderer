@@ -1642,6 +1642,7 @@ app.whenReady().then(() => {
     let _sweepInFlight = false;
     const runDecomposeSweep = async () => {
       if (_sweepInFlight) return;
+      if (_conversationActive()) { _logLoadDeferral('decomp-sweep'); return; }        // heavy synchronous doc decomposition — yield the main thread while he types
       _sweepInFlight = true;
       try {
         if (String(process.env.ZOE_AUTO_INGEST || '1').trim() === '0') return;
@@ -3738,6 +3739,26 @@ function _lagNote() {
   _loopLag.reset();                                  // per-window, so the number describes THIS failure
   if (!Number.isFinite(maxMs) || maxMs < 1000) return ` [main thread ok: lag max ${maxMs}ms]`;
   return ` [MAIN THREAD STALLED: lag max ${maxMs}ms, mean ${meanMs}ms — the network is not the problem]`;
+}
+
+// MAIN-THREAD LOAD GOVERNOR (Lucas 2026-07-24 — "the freezes are getting to where its hard to type in
+// the chat ... we need to better balance the load"). The cloud-slot board (lib/board) reserves a CLOUD
+// slot for the reply, but NOTHING reserved MAIN-THREAD time: heavy synchronous background work
+// (doc-decomp on a large PDF, package builds, graph writes) blocks the event loop, so keystrokes and
+// reply IPC stall even though a cloud slot is free — the measured symptom is a /canvas GET with an 8s
+// deadline returning elapsed 13.5s (≈5s the loop was wedged). This gate is ORTHOGONAL to the board AND
+// to the cloud-slot coexistence ruling (that governs which MODELS run concurrently; this governs the
+// CPU/event loop): while Lucas is actively conversing, the heavy BACKGROUND driver ticks yield the main
+// thread so typing stays responsive. They resume the instant there's a ~30s lull; idle (overnight) they
+// run at full tilt — the balance, not a silence. Window overridable via ZOE_CONVO_ACTIVE_SEC.
+const CONVO_ACTIVE_MS = (parseFloat(process.env.ZOE_CONVO_ACTIVE_SEC) || 30) * 1000;
+function _conversationActive() { return Date.now() - lastUserTurnTs < CONVO_ACTIVE_MS; }
+const _loadDeferLogAt = {};
+function _logLoadDeferral(lane) {                       // audible (once / 5min per lane) so a yielded lane is greppable, never invisible
+  const now = Date.now();
+  if (now - (_loadDeferLogAt[lane] || 0) < 5 * 60 * 1000) return;
+  _loadDeferLogAt[lane] = now;
+  console.log(`[load] ${lane} yielded to live conversation — main-thread balance (typing stays responsive)`);
 }
 
 let _canvasSnapReason = null, _canvasSnapLoggedAt = 0;
@@ -10657,6 +10678,7 @@ async function _directedFocusTick() {
   if (!focus || !focusLib.isDirected(focus)) { stopDirectedFocusDriver(); return; }   // nothing assigned → idle off
   if ((db.getMeta('operator.mode') || 'full').trim() === 'off') return;
   if (!_researchGateOk('primary', focus.id)) return;                                  // operator throttle — skip this cycle entirely
+  if (_conversationActive()) { _logLoadDeferral('directed'); return; }                // main-thread balance: don't START a directed pass (web grab → PDF decomp → package build) while he types
   directedStepInFlight = true;
   try {
     const outcome = await runDirectedResearchPass(focus);   // depth-first state machine; records the focus outcome

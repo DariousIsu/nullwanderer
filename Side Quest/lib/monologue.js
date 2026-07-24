@@ -34,6 +34,13 @@ const MODEL = require('./config').frontModel();   // her VOICE model (front)
 const TICK_INTERVAL_MS = 10 * 1000;     // 10s between ticks while idle
 const CAPTION_INTERVAL_MS = Math.max(2000, Math.round(TICK_INTERVAL_MS / 2));  // half-tick caption heartbeat
 const TICK_INTERVAL_BUSY_MS = 30 * 1000; // back off when conversation is active
+// "Conversation warm" window (Lucas 2026-07-24 — "hard to type in the chat ... better balance the
+// load"). TICK_INTERVAL_BUSY_MS was declared to back off during conversation but never wired: the idle
+// tick — which runs graph-walk + the contact pipeline, real synchronous main-thread work — fired every
+// 10s even between his keystrokes, so each burst landed on the event loop while he typed. Wire it via
+// _nextTickMs(): a user turn in the last BUSY_WINDOW_MS keeps the tick at the slow BUSY cadence (3× less
+// often) so typing keeps the thread; once he's quiet it returns to the fast 10s builder cadence. Override: ZOE_MONOLOGUE_BUSY_SEC.
+const BUSY_WINDOW_MS = (parseFloat(process.env.ZOE_MONOLOGUE_BUSY_SEC) || 45) * 1000;
 const RECENT_MONOLOGUE_WINDOW = 6;
 const ANTI_LOOP_RECENT = 10;            // last N monologue lines checked for repetition
 const ANTI_LOOP_THRESHOLD = 0.30;       // Jaccard similarity above this = skip
@@ -709,7 +716,7 @@ function stopMonologueScheduler() {
 function pause() { paused = true; }
 function resume() {
   paused = false;
-  if (!timer) schedule(TICK_INTERVAL_MS);
+  if (!timer) schedule(_nextTickMs());   // just resumed after a turn → likely warm → BUSY cadence, so his next keystrokes keep the thread
 }
 
 // Hard recall: abort an in-flight thought generation so the chat reply gets the
@@ -725,6 +732,18 @@ function isBusy() { return inFlight; }
 
 function markUserActivity() {
   lastUserActivityTs = Date.now();
+}
+
+// The activity-aware steady-state interval: slow (BUSY) while a turn is warm, fast otherwise. See BUSY_WINDOW_MS.
+// Logs on TRANSITION only (never per-tick) so the backoff is greppable + provable without flooding the stream.
+let _lastTickBusy = null;
+function _nextTickMs() {
+  const busy = (Date.now() - lastUserActivityTs < BUSY_WINDOW_MS);
+  if (busy !== _lastTickBusy) {
+    _lastTickBusy = busy;
+    try { console.log(`[monologue] idle-tick cadence → ${busy ? 'BUSY 30s (conversation warm — main-thread headroom for typing)' : 'idle 10s (builder pace)'}`); } catch {}
+  }
+  return busy ? TICK_INTERVAL_BUSY_MS : TICK_INTERVAL_MS;
 }
 
 function schedule(delayMs) {
@@ -823,7 +842,7 @@ async function tick() {
     console.error('[monologue] tick error:', err.message || err);
   } finally {
     inFlight = false;
-    if (!paused) schedule(TICK_INTERVAL_MS);
+    if (!paused) schedule(_nextTickMs());   // steady-state cadence: BUSY while a turn is warm (typing headroom), fast 10s once idle
   }
 }
 
