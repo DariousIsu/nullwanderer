@@ -9553,26 +9553,34 @@ async function autonomyTick() {
               const fs2 = require('fs'), path2 = require('path');
               const suites = fs2.readdirSync(path2.join(__dirname, 'scripts')).filter((f) => /^smoke_[a-z0-9_]+\.js$/.test(f));
               const suite = capn.suiteFor(need.need, suites);
-              if (!suite) {
-                capn.setStatus(need.id, 'parked', { nowMs: now });
-                autonomy.historyPush(H, { ts: now, move: 'rehearse', target: `need #${need.id}`, outcome: 'parked: no existing suite fits — needs Lucas to name the bar' });
-                console.log(`[autonomy] chose=rehearse → need #${need.id} PARKED (no suite fits the need)`);
-                return;
-              }
-              let files = [];
-              try {
-                const body = fs2.readFileSync(path2.join(__dirname, 'scripts', suite), 'utf8');
-                const seen = new Set();
-                for (const m of body.matchAll(/require\(['"][^'"]*\/lib\/([a-z0-9_]+)(?:\.js)?['"]\)/g)) seen.add(`lib/${m[1]}.js`);
-                files = [...seen].slice(0, 3);
-              } catch {}
-              files.push(`scripts/${suite}`);
               const slug = `need-${need.id}-${String(need.need).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)}`;
-              const st = driver.start({ slug, goal: `${need.need} (capability need #${need.id}, named by ${need.born_from || 'a run'})`, suite, files, nowMs: now });
+              let files = [], useSuite = suite, goal, bornHarness = false;
+              if (suite) {
+                // an existing smoke judges it — watch the libs that suite itself requires (its edit surface).
+                try {
+                  const body = fs2.readFileSync(path2.join(__dirname, 'scripts', suite), 'utf8');
+                  const seen = new Set();
+                  for (const m of body.matchAll(/require\(['"][^'"]*\/lib\/([a-z0-9_]+)(?:\.js)?['"]\)/g)) seen.add(`lib/${m[1]}.js`);
+                  files = [...seen].slice(0, 3);
+                } catch {}
+                files.push(`scripts/${suite}`);
+                goal = `${need.need} (capability need #${need.id}, named by ${need.born_from || 'a run'})`;
+              } else {
+                // TEST-FIRST HARNESS BIRTH (R2, PLAN_MAP §1b): no existing smoke fits → she AUTHORS the
+                // bar instead of parking. The suite name does not exist yet; the driver's new_file action
+                // originates the python tool + this harness (rehearsal.test reports "no such suite" until
+                // it is written, which rides the next attempt). "No smoke matches" is no longer an
+                // unjudgeable need — parking now happens only if the ATTEMPT gets stuck (exit → need parked).
+                useSuite = `smoke_${String(need.need).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32) || 'need_' + need.id}.js`;
+                files = [`scripts/${useSuite}`];
+                goal = `Build a NEW python tool for this capability gap, test-first, then iterate to green: ${need.need}. Create tools/<pick-a-short-name>.py, then create scripts/${useSuite} that shells it via process.env.ZOE_PY and asserts PASS. (capability need #${need.id}, named by ${need.born_from || 'a run'})`;
+                bornHarness = true;
+              }
+              const st = driver.start({ slug, goal, suite: useSuite, files, nowMs: now });
               if (st.ok) {
                 capn.setStatus(need.id, 'rehearsing', { nowMs: now });
-                autonomy.historyPush(H, { ts: now, move: 'rehearse', target: `need #${need.id}`, outcome: `OPENED run "${st.run.slug}" (suite ${suite})` });
-                console.log(`[autonomy] chose=rehearse → OPENED run "${st.run.slug}" from need #${need.id} (suite ${suite}; files ${files.join(', ')})`);
+                autonomy.historyPush(H, { ts: now, move: 'rehearse', target: `need #${need.id}`, outcome: `OPENED run "${st.run.slug}" (suite ${useSuite}${bornHarness ? ', test-first harness birth' : ''})` });
+                console.log(`[autonomy] chose=rehearse → OPENED run "${st.run.slug}" from need #${need.id} (suite ${useSuite}${bornHarness ? ', TEST-FIRST harness birth' : ''}; files ${files.join(', ')})`);
                 return;
               }
               autonomy.historyPush(H, { ts: now, move: 'rehearse', target: `need #${need.id}`, outcome: `open failed: ${String(st.reason).slice(0, 120)}` });

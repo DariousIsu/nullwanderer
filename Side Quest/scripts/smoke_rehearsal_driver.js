@@ -76,6 +76,18 @@ function freshDeps({ picks = [], testResults = [], editResults = [], writeResult
     ok(r.status === 'active' && /new_file refused/.test(r.note), 'a new_file outside the tool tree is refused, run stays active');
     ok(/NEW_FILE FAILED/.test(drv.load({ deps }).lastResult), 'the refusal rides the next attempt verbatim');
   }
+  // --- R2 test-first birth: a harness suite that does not exist yet reports missing and RIDES (so
+  // the picker knows to write it) — this is what makes "no smoke matches → author the bar" driveable ---
+  {
+    const { deps } = freshDeps({
+      picks: [{ action: 'test', why: 'try the born suite' }],
+      testResults: ['no such suite in the sandbox: scripts/smoke_born.js'],
+    });
+    drv.start({ slug: 't', goal: 'build a python tool test-first and originate its harness smoke_born.js', suite: 'smoke_born.js', deps });
+    const r = await drv.iterate({ deps });
+    ok(r.status === 'active' && /still failing/.test(r.note), 'a not-yet-written harness suite reports missing and rides the next attempt');
+    ok(/no such suite/.test(drv.load({ deps }).lastResult), 'the "no such suite" signal rides so the picker knows to write the harness');
+  }
 
   // --- iterate: the failure rides the next attempt (44f8052, the load-bearing mechanic) ---
   {
