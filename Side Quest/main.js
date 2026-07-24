@@ -10613,11 +10613,16 @@ async function decomposeLandedDoc(doc) {
     let minted = 0, reused = 0, connections = 0, held = 0;
     for (const chunk of chunks) {
       try {
-        // cap 40→150 (2026-07-23, Lucas "process the ENTIRE document"): 40 mint/chunk held row 41+
-        // of a dense authoritative roster at confidence 0. The cap only bounds how many EXTRACTED
-        // entities mint vs. hold — it does NOT enlarge the cloud extraction call, so raising it is
-        // safe (no bigger prompts, no freeze risk) and lets a doc's real rows land instead of stranding.
-        const r = await decompLane.decomposeLanding({ id: doc.id, title: doc.title, body: chunk, ref: _cite }, { extract, resolve, dispatch, observe, cap: { entities: 150, relations: 150 }, log: (m) => console.log(m) });
+        // Per-chunk mint cap (env-tunable). I briefly set this to 150 to "process the entire
+        // document" (Lucas) — but that ~4×'d the entity proposals per chunk and FLOODED Echo: the
+        // Python engine ballooned to ~3.8GB, failed the app's db_query calls (fetch failed), and the
+        // window janked (the boot77 "freeze"). Back to the stable 40 (env-overridable). Full ingest of
+        // a dense roster is real (Lucas: nothing discarded) but must be PACED — the proper fix is
+        // smaller chunks for structured docs + a throttled proposal rate, NOT one 150-wide Echo burst.
+        // The anchored-mint fix stays: within the cap, an anchored named person now mints instead of
+        // stranding at confidence 0. Completeness beyond the cap is a paced follow-up, not a flood.
+        const _decompCap = parseInt(process.env.ZOE_DECOMP_CHUNK_CAP || '', 10) || 40;
+        const r = await decompLane.decomposeLanding({ id: doc.id, title: doc.title, body: chunk, ref: _cite }, { extract, resolve, dispatch, observe, cap: { entities: _decompCap, relations: _decompCap }, log: (m) => console.log(m) });
         if (r && !r.skipped) { minted += r.minted || 0; reused += r.reused || 0; connections += r.connections || 0; held += r.held || 0; }
       } catch (e) { console.error('[doc-decomp] chunk failed:', e.message); }
     }
