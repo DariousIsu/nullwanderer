@@ -19,6 +19,7 @@
 
 const engine = require('./scenario_engine');
 const regions = require('./regions');
+const analogs = require('./scenario_analogs');
 
 const MODEL = 'gpt-oss:120b-cloud';   // the reasoning model (forecast_assess convention)
 const NUM_PREDICT = 1500;             // gpt-oss reliability floor — never the default 400
@@ -61,11 +62,12 @@ backlash), set "direction_uncertain":true and keep magnitude modest — do NOT p
 
 Respond with ONLY a JSON ARRAY of 1..${MAX_EFFECTS} effects, nothing else:
 [{"scope":"national|region|state|seatType","value":"<region/zone name, 2-letter state, or chamber; omit for national>",
-  "competitiveOnly":true|false,"margin_delta":<points, between -${MARGIN_CAP} and ${MARGIN_CAP}>,"sigma_add":<0..${SIGMA_CAP}>,
-  "direction_uncertain":true|false,"rationale":"<one clause>","confidence":<0..1>}]
+  "competitiveOnly":true|false,"margin_delta":<points, signed toward Dem+ / Rep−>,"sigma_add":<added σ, ≥0>,
+  "analog":"<the closest historical-analog category>","direction_uncertain":true|false,"rationale":"<one clause>","confidence":<0..1>}]
 - Prefer competitiveOnly:true — a shock changes control through the CLOSE seats.
 - A "region" value MUST be one of: __GROUPS__. A "state" value is a 2-letter USPS code. "seatType" is house|senate.
-- Magnitudes are WIDE-UNCERTAINTY PRIORS — keep them modest and provisional, never precise.`;
+__ANALOGS__
+- Magnitudes are WIDE-UNCERTAINTY PRIORS — modest, provisional, and bounded by the analog above; never precise.`;
 
 // PURE — parse/validate the model output → { valid, value: Effect[] } (cloud_logic.ask contract). Drops any
 // malformed/invalid effect (bad scope, invented region, no-op); caps magnitudes; fails if nothing survives.
@@ -84,15 +86,16 @@ function validateEffects(raw) {
       if (scope === 'region' && !regions.statesIn(value).size) continue;            // must name a REAL region/zone
       if (scope === 'state' && !regions.regionOf(value)) continue;                  // must be a valid USPS abbr
       if (scope === 'seatType' && !['house', 'senate', 'governor'].includes(String(value).toLowerCase())) continue;
-      const md = Math.max(-MARGIN_CAP, Math.min(MARGIN_CAP, Number(e.margin_delta) || 0));
-      const sa = Math.max(0, Math.min(SIGMA_CAP, Number(e.sigma_add) || 0));
-      if (md === 0 && sa === 0) continue;                                           // a no-op effect
+      // Slice 4: cap magnitudes to the effect's HISTORICAL ANALOG ceiling (unknown/absent → 'generic'
+      // fallback), so the model can't assert an implausible swing. capMagnitude never leaves one uncapped.
+      const cap = analogs.capMagnitude(e.margin_delta, e.sigma_add, e.analog);
+      if (cap.margin_delta === 0 && cap.sigma_add === 0) continue;                   // a no-op effect
       const norm = engine.normalizeEffect({
         selector: { scope, value: scope === 'national' ? null : value, competitiveOnly: !!e.competitiveOnly },
-        margin_delta: md, sigma_add: sa, direction_uncertain: !!e.direction_uncertain,
+        margin_delta: cap.margin_delta, sigma_add: cap.sigma_add, direction_uncertain: !!e.direction_uncertain,
         rationale: String(e.rationale || '').slice(0, 200), confidence: e.confidence,
       });
-      if (norm) effects.push(norm);
+      if (norm) { norm.analog = cap.analog; norm.capped = cap.capped; effects.push(norm); }
     }
     if (!effects.length) return { valid: false, error: 'no usable effects after validation' };
     return { valid: true, value: effects };
@@ -104,7 +107,7 @@ async function estimateEffects({ description, races = [], ask, competitiveThresh
   if (typeof ask !== 'function') return { effects: [], error: 'no ask (cloud unavailable)' };
   const desc = String(description == null ? '' : description).trim();
   if (!desc) return { effects: [], error: 'no description' };
-  const want = ESTIMATE_WANT.replace('__GROUPS__', KNOWN_GROUPS.join(', '));
+  const want = ESTIMATE_WANT.replace('__GROUPS__', KNOWN_GROUPS.join(', ')).replace('__ANALOGS__', analogs.promptGuidance());
   try {
     const v = await ask({
       task: 'scenario_estimate_effects', v: 1,

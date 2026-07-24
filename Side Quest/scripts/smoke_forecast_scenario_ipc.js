@@ -44,7 +44,7 @@ async function handleScenario(opts = {}, ask = null) {
   const cfg = { ...(fcInputs.config || {}), ...(opts.seed != null ? { seed: opts.seed } : {}) };
   const run = engine.runScenario(r, scn, cfg);
   const meta = { id: scn.id, name: scn.name, description: scn.description, estimated, two_sided: run.two_sided,
-    effects: scn.effects.map((e) => ({ scope: e.selector.scope, value: e.selector.value, competitiveOnly: e.selector.competitiveOnly, margin_delta: e.margin_delta, sigma_add: e.sigma_add, correlated: !!(e.correlation && e.correlation.key), direction_uncertain: e.direction_uncertain, rationale: e.rationale, confidence: e.confidence })) };
+    effects: scn.effects.map((e) => ({ scope: e.selector.scope, value: e.selector.value, competitiveOnly: e.selector.competitiveOnly, margin_delta: e.margin_delta, sigma_add: e.sigma_add, correlated: !!(e.correlation && e.correlation.key), direction_uncertain: e.direction_uncertain, analog: e.analog || null, capped: !!e.capped, rationale: e.rationale, confidence: e.confidence })) };
   if (run.two_sided) return { ok: true, scenario: meta, two_sided: true, positive: { delta: run.positive.delta }, negative: { delta: run.negative.delta } };
   return { ok: true, scenario: meta, two_sided: false, delta: run.delta };
 }
@@ -70,10 +70,11 @@ async function handleScenario(opts = {}, ask = null) {
   ok(r2.positive.delta.chambers.house && r2.negative.delta.chambers.house, 'both signs carry house chamber deltas for the range render');
 
   console.log('typed what-if → estimator path (mocked ask):');
-  const MOCK = JSON.stringify([{ scope: 'region', value: 'fire-west', competitiveOnly: true, margin_delta: -3, sigma_add: 2, rationale: 'west', confidence: 0.4 }]);
+  const MOCK = JSON.stringify([{ scope: 'region', value: 'fire-west', competitiveOnly: true, margin_delta: -3, sigma_add: 2, analog: 'disaster-penalty', rationale: 'west', confidence: 0.4 }]);
   const mockAsk = async ({ validate }) => { const v = validate(MOCK); return v.valid ? v.value : null; };
   const r3 = await handleScenario({ description: 'A western wildfire crisis late in the cycle' }, mockAsk);
   ok(r3.ok && r3.scenario.estimated === true && r3.delta.chambers.house, 'a typed description is estimated on the fly and runs → estimated:true payload');
+  ok(r3.scenario.effects[0].analog === 'disaster-penalty' && 'capped' in r3.scenario.effects[0], '⭐Slice 4: the effect carries its {analog, capped} through to the drawer glass-box');
 
   console.log('honesty + guards:');
   const r4 = await handleScenario({ description: 'x' });

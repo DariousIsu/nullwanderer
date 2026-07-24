@@ -297,7 +297,8 @@
         if (e.sigma_add) bits.push(`+${e.sigma_add}σ`);
         if (e.correlated) bits.push('correlated');
         if (e.direction_uncertain) bits.push('two-sided');
-        list.appendChild(el('div', null, `• ${bits.join(', ') || 'volatility'} — ${where}${e.competitiveOnly ? ' (competitive only)' : ''}${e.rationale ? ' · ' + e.rationale : ''}`));
+        const analog = (e.analog && e.analog !== 'generic') ? ` [${e.analog}${e.capped ? ', capped' : ''}]` : '';
+        list.appendChild(el('div', null, `• ${bits.join(', ') || 'volatility'} — ${where}${e.competitiveOnly ? ' (competitive only)' : ''}${analog}${e.rationale ? ' · ' + e.rationale : ''}`));
       });
       es.appendChild(list); out.appendChild(es);
     }

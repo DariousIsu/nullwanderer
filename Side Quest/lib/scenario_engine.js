@@ -81,6 +81,8 @@ function normalizeEffect(e) {
     sigma_add: Math.max(0, Number(e.sigma_add) || 0),
     correlation: e.correlation || null,          // carried through; the correlated-swing wiring is Slice 2
     direction_uncertain: !!e.direction_uncertain,
+    analog: e.analog || null,                    // Slice 4: the historical-analog category its magnitude was bounded to
+    capped: !!e.capped,                          // Slice 4: whether that bound actually clamped the estimate
     rationale: e.rationale || '',
     confidence: e.confidence != null ? _clamp01(e.confidence) : null,
   };

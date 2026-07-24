@@ -2177,7 +2177,7 @@ ipcMain.handle('forecast:scenario', async (_e, opts = {}) => {
     const run = engine.runScenario(races, scn, cfg);
     const meta = {
       id: scn.id, name: scn.name, description: scn.description, estimated, two_sided: run.two_sided,
-      effects: scn.effects.map((e) => ({ scope: e.selector.scope, value: e.selector.value, competitiveOnly: e.selector.competitiveOnly, margin_delta: e.margin_delta, sigma_add: e.sigma_add, correlated: !!(e.correlation && e.correlation.key), direction_uncertain: e.direction_uncertain, rationale: e.rationale, confidence: e.confidence })),
+      effects: scn.effects.map((e) => ({ scope: e.selector.scope, value: e.selector.value, competitiveOnly: e.selector.competitiveOnly, margin_delta: e.margin_delta, sigma_add: e.sigma_add, correlated: !!(e.correlation && e.correlation.key), direction_uncertain: e.direction_uncertain, analog: e.analog || null, capped: !!e.capped, rationale: e.rationale, confidence: e.confidence })),
     };
     if (run.two_sided) return { ok: true, scenario: meta, two_sided: true, positive: { delta: run.positive.delta }, negative: { delta: run.negative.delta } };
     return { ok: true, scenario: meta, two_sided: false, delta: run.delta };
