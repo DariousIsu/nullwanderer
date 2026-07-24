@@ -265,6 +265,7 @@ const smokes = [
   'smoke_fetch_escalation.js',
   'smoke_rehearsal_driver.js',
   'smoke_rehearsal_py.js',
+  'smoke_analysis_lane.js',
   'smoke_capability_need.js',
   'smoke_ner.js',
   'smoke_mention.js',

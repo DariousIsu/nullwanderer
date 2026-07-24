@@ -2754,76 +2754,41 @@ ipcMain.handle('editor:detach-source', (_e, { docId, uid } = {}) => {
   } catch (e) { console.error('[editor] detach-source failed:', e.message); return { ok: false, error: e.message }; }
 });
 
-// LAST-RUNG READER for a cited source no text tool can open. The verification ladder's readers are
-// HTML-shaped (web_extract/web_fetch); a citation pointed at a PDF — the ordinary shape of a
-// government or think-tank source — returns nothing from both, and the studio then reports the
-// author's perfectly good citation as unreachable. The app already knows how to read a PDF
-// (lib/doc_extract.extractPdf, the same path a drag-drop import uses); it was simply never offered
-// to the resolver. Downloads to the temp dir, extracts, deletes. Returns '' on anything unexpected —
-// this is a fallback rung, so a failure here must degrade to "inaccessible", never throw.
-// PDF bytes → text, via the same extractor a drag-drop import uses. '' on anything unexpected.
-async function pdfBytesToText(buf, url) {
+// Build the ONE source reader (lib/source_reader) with this app's real capabilities plugged in. It
+// owns routing-by-type and the single "is this prose or is it the container?" test; main.js only
+// supplies the I/O. Replaces the hand-rolled ladder that lived here, which tried readers in a fixed
+// order regardless of resource type and accepted anything not on a blacklist.
+function buildSourceReader(callTool) {
   const fs = require('fs');                    // main.js has no module-level `fs` binding
-  if (!buf || !buf.length) return '';
-  const tmp = path.join(app.getPath('temp'), `zoe-cite-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`);
-  try {
-    fs.writeFileSync(tmp, buf);
-    const out = await docExtract.extractPdf(tmp);
-    const text = typeof out === 'string' ? out : (out && (out.markdown || out.text)) || '';
-    if (text) console.log(`[editor] read a cited PDF (${text.length} chars) — ${url}`);
-    return text;
-  } catch (e) { console.warn('[editor] pdf extract failed:', e.message); return ''; }
-  finally { try { fs.unlinkSync(tmp); } catch {} }
-}
-
-async function readCitedDocument(url) {
-  if (!/^https?:\/\//i.test(String(url || ''))) return '';
-  const isPdfUrl = /\.pdf(?:[?#]|$)/i.test(url);
-
-  // RUNG A — plain HTTP with a browser's headers. Cheap, no browser process. Handles the ordinary
-  // case: a PDF on a host that does not screen its clients.
-  try {
-    const res = await fetch(url, {
-      redirect: 'follow',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-        'Accept': 'application/pdf,text/html;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-    });
-    if (res.ok) {
-      const ctype = (res.headers.get('content-type') || '').toLowerCase();
-      if (/application\/pdf/.test(ctype) || isPdfUrl) {
-        const buf = Buffer.from(await res.arrayBuffer());
-        // %PDF or it is not a PDF, whatever the headers claim — an error page served as
-        // application/pdf must never reach the extractor and become "the source".
-        if (buf.length > 4 && buf.slice(0, 5).toString('latin1') === '%PDF-') {
-          const text = await pdfBytesToText(buf, url);
-          if (text) return text;
-        }
-      }
-    } else {
-      console.warn(`[editor] cited-document reader: HTTP ${res.status} on plain fetch — escalating to the browser — ${url}`);
-    }
-  } catch (e) { console.warn('[editor] cited-document plain fetch failed:', e.message); }
-
-  // RUNG B — a REAL BROWSER (lib/search_lane: patchright Chrome, off-screen, its own warm profile).
-  // The last resort, and the only one that works on a host that screens clients: azed.gov 403s node
-  // `fetch` with any headers, and 403s Playwright's HTTP client too, but serves the browser its
-  // 2.4 MB literacy plan without complaint. Without this rung the studio reports a live, correct,
-  // load-bearing citation as unreachable — blaming the author for our missing capability. It runs
-  // only after every cheaper reader has failed, and it shares the lane's lock so it can never race
-  // one of Zoe's own searches.
-  try {
-    const r = await require('./lib/search_lane').read(url);
-    if (r && r.ok && r.kind === 'pdf') return await pdfBytesToText(r.buffer, url);
-    if (r && r.ok && r.kind === 'html' && r.text) {
-      console.log(`[editor] read a cited page with the browser that HTTP could not (${r.text.length} chars) — ${url}`);
-      return r.text;
-    }
-    console.warn(`[editor] browser reader could not read it either: ${(r && r.error) || 'unknown'} — ${url}`);
-  } catch (e) { console.warn('[editor] browser reader failed:', e.message); }
-  return '';
+  return require('./lib/source_reader').makeReader({
+    readFetch: require('./studio/verify_resolve').readFetch,
+    callTool,
+    // Echo's text extractors — HTML only now; source_reader never sends them a PDF.
+    textTools: ['web_extract', 'web_fetch'],
+    httpGet: async (url) => {
+      const res = await fetch(url, {
+        redirect: 'follow',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          'Accept': 'application/pdf,text/html;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+      });
+      return { status: res.status, contentType: res.headers.get('content-type') || '', buffer: Buffer.from(await res.arrayBuffer()) };
+    },
+    // A REAL BROWSER (lib/search_lane: patchright Chrome, off-screen, own warm profile). The only
+    // reader that works on a host screening clients — azed.gov 403s node fetch with any headers and
+    // 403s Playwright's HTTP client, yet serves the browser its 2.4 MB plan without complaint.
+    browserRead: (url) => require('./lib/search_lane').read(url),
+    pdfToText: async (buf) => {
+      const tmp = path.join(app.getPath('temp'), `zoe-cite-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`);
+      try {
+        fs.writeFileSync(tmp, buf);
+        const out = await docExtract.extractPdf(tmp);
+        return typeof out === 'string' ? out : (out && (out.markdown || out.text)) || '';
+      } finally { try { fs.unlinkSync(tmp); } catch {} }
+    },
+  });
 }
 
 // Run checks → drives the DETERMINISTIC verification harness (studio/verify_harness via
@@ -2909,14 +2874,11 @@ ipcMain.handle('editor:run-checks', async (_e, docId) => {
       // no-URL claims resolve without an engine-side search-provider key. ATTACHMENTS (uid → in-hand
       // source text) let the resolve ladder's rung 0 resolve tagged citations from the operator's own
       // document instead of the web.
-      // READERS, plural. web_extract (trafilatura clean text) then web_fetch (raw body) — they fail
-      // differently, so a page one cannot open the other often can. `readerFn` is the last rung for
-      // documents no text tool opens at all: on the Arizona ESA op-ed a cited azed.gov PDF came back
-      // "inaccessible" and the report implied the author's citation was unreachable when the file was
-      // served fine — we simply had no PDF reader on this path, though the app has one.
+      // ONE READER (lib/source_reader) owns "give me this source's readable text" — routing by
+      // resource type and applying the single is-this-prose test. It replaces the fixed tool ladder
+      // that sent a cited PDF to an HTML text extractor and accepted a page's <head> as the article.
       resolveOpts: {
-        tools: { fetch: ['web_extract', 'web_fetch'] },
-        readerFn: readCitedDocument,
+        readSource: buildSourceReader(callTool),
         search: (q) => webSearch(q),
         attachments: editorRegistry.getAttachmentMap(docId, doc.current_version),
       },
@@ -8886,6 +8848,9 @@ const operatorTools = {
   rehearsal_test: async ({ slug, suite } = {}) => { try { return await require('./lib/rehearsal').test({ slug, suite: suite || null }); } catch (e) { return 'ERROR: ' + e.message; } },
   rehearsal_diff: async ({ slug } = {}) => { try { return require('./lib/rehearsal').diff({ slug }); } catch (e) { return 'ERROR: ' + e.message; } },
   rehearsal_discard: async ({ slug } = {}) => { try { return require('./lib/rehearsal').discard({ slug }); } catch (e) { return 'ERROR: ' + e.message; } },
+  // R3 (2026-07-23) — the ONE-OFF analysis lane: run throwaway python READ-ONLY over her own data
+  // and get the RESULT. Ephemeral, no adoption; the DBs open mode=ro so writes are rejected.
+  analyze_data: async ({ code } = {}) => { try { return await require('./lib/analysis_lane').run({ code }); } catch (e) { return 'ERROR: ' + e.message; } },
   // THE SKILL SHELF (O1, slice 5) — the operator's pull. The briefs carry matched trigger lines;
   // the body dereferences here (lib/skills — flow recipes / proven procedures / stored shapes).
   skill_pull: async ({ name } = {}) => { try { const r = require('./lib/skills').resolveBody(String(name || '')); return r.text; } catch (e) { return 'ERROR: ' + e.message; } },
