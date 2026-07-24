@@ -418,20 +418,28 @@ const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
 const meetpane = $('meetpane'), meetHead = $('meetHead'), meetBody = $('meetBody'), meetTitle = $('meetTitle');
 let meetWV = null, meetPlaced = false;
 
-function mountMeet(info) {
+let meetPartition = null;
+// ONE meeting pane, reused per platform (only one meeting at a time). Meet and Teams both mount here,
+// each on its own session partition. A <webview>'s partition is fixed at creation, so switching
+// platforms rebuilds the element. Meet's behavior is unchanged (mountMeet → this with zoe-google).
+function mountMeeting(info, partition, defaultTitle) {
   const url = info && info.url; if (!url) return;
-  meetTitle.textContent = (info && info.title) || 'Google Meet';
+  meetTitle.textContent = (info && info.title) || defaultTitle;
+  if (meetWV && meetPartition !== partition) { try { meetWV.remove(); } catch {} meetWV = null; }
   if (!meetWV) {
     meetWV = document.createElement('webview');
-    meetWV.setAttribute('partition', 'persist:zoe-google');   // Zoe's own Google session
+    meetWV.setAttribute('partition', partition);              // Zoe's own Google / Teams session
     meetWV.setAttribute('allowpopups', '');
-    meetWV.setAttribute('useragent', CHROME_UA);              // present as Chrome (avoid Meet "unsupported browser")
+    meetWV.setAttribute('useragent', CHROME_UA);              // present as Chrome (avoid Meet AND Teams "unsupported browser")
     meetBody.appendChild(meetWV);
+    meetPartition = partition;
   }
   meetWV.src = url;
   if (!meetPlaced) { meetpane.style.left = Math.max(20, window.innerWidth - 844) + 'px'; meetpane.style.top = '58px'; meetPlaced = true; }
   meetpane.hidden = false; meetpane.classList.remove('minimized'); $('meetMin').textContent = '–';
 }
+function mountMeet(info) { mountMeeting(info, 'persist:zoe-google', 'Google Meet'); }
+function mountTeams(info) { mountMeeting(info, 'persist:zoe-teams', 'Microsoft Teams'); }
 function closeMeet() { if (meetWV) { try { meetWV.src = 'about:blank'; } catch {} meetWV.remove(); meetWV = null; } meetpane.hidden = true; meetpane.classList.remove('minimized'); }
 $('meetClose').addEventListener('click', closeMeet);
 $('meetReload').addEventListener('click', () => { if (meetWV) { try { meetWV.reload(); } catch {} } });
@@ -454,6 +462,7 @@ window.addEventListener('mousemove', (e) => {
 window.addEventListener('mouseup', () => { if (mDrag) { meetHead.classList.remove('dragging'); mDrag = null; } if (mResize) mResize = null; meetpane.classList.remove('interacting'); });
 
 if (window.sq && window.sq.onMeetJoin) window.sq.onMeetJoin(mountMeet);
+if (window.sq && window.sq.onTeamsJoin) window.sq.onTeamsJoin(mountTeams);
 
 /* ---- Full-ingestion video pane (own pane, AUDIO ON) — the gate for deep-watching a video/live for
    full ingestion (soundtrack → transcription; needed for content without CCs). Mirrors the Meet pane

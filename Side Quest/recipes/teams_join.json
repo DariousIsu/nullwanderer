@@ -1,0 +1,26 @@
+{
+  "site": "teams.microsoft.com",
+  "task": "join",
+  "verified": false,
+  "_note": "PROVISIONAL — heal against a live Teams meeting (like gmeet_join was). Teams pushes the desktop app first: click 'Continue on this browser' / 'Join on the web instead' BEFORE the prejoin screen. Then mute mic + camera (OPTIONAL — may already be off/absent), then 'Join now'. As an external personal account she then lands in a LOBBY until the host admits her — the stage machine (lib/teams.js) handles that wait, not this recipe. NB: the CANVAS route uses lib/teams_canvas.js's driver.joinNow(), not this JSON; this exists for the dedicated-browser fallback + as the healable selector record.",
+  "fingerprint": { "url_pattern": "teams.microsoft.com|teams.live.com" },
+  "steps": [
+    { "action": "navigate", "url": "{{url}}", "expectLogin": true },
+    { "action": "click", "optional": true,
+      "locator": { "method": "getByRole", "role": "link", "name": "Continue on this browser" },
+      "fallbacks": [ { "method": "getByRole", "role": "button", "name": "Continue on this browser" }, { "text": "Join on the web instead" }, { "text": "Continue on this browser" }, { "css": "[data-tid='joinOnWeb']" } ] },
+    { "action": "waitFor",
+      "locator": { "method": "getByRole", "role": "button", "name": "Join now" },
+      "fallbacks": [ { "css": "button[data-tid='prejoin-join-button']" }, { "text": "Join now" } ] },
+    { "action": "click", "optional": true,
+      "locator": { "method": "getByRole", "role": "button", "name": "Mute microphone" },
+      "fallbacks": [ { "css": "[data-tid='toggle-mute']" }, { "css": "[aria-label*='microphone' i]" } ] },
+    { "action": "click", "optional": true,
+      "locator": { "method": "getByRole", "role": "button", "name": "Turn camera off" },
+      "fallbacks": [ { "css": "[data-tid='toggle-video']" }, { "css": "[aria-label*='camera' i]" } ] },
+    { "action": "click",
+      "locator": { "method": "getByRole", "role": "button", "name": "Join now" },
+      "fallbacks": [ { "css": "button[data-tid='prejoin-join-button']" }, { "text": "Join now" } ],
+      "mayNavigate": true }
+  ]
+}

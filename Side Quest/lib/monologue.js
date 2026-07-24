@@ -928,6 +928,29 @@ async function _runOneTick() {
     return;
   }
 
+  // MICROSOFT TEAMS — the Teams parallel of the Google Meet block above. Canvas-hosted only (single
+  // meeting pane), so its deps always come from the Teams canvas driver. Same precedence: a live meeting
+  // outranks every other work mode; advance ONE stage per tick (join → lobby → intro → observe).
+  const teamsLib = require('./teams');
+  if (!personalMode && teamsLib.active()) {
+    try {
+      const deps = (() => { try { return require('./teams_canvas').canvasTeamsDeps(); } catch { return undefined; } })();
+      const res = await teamsLib.runTick({
+        userName,
+        deps,
+        onReading: (content, label) => {
+          try { const rr = db.insertMonologue({ content, model: 'teams', type: 'reading' }); pushSheep({ id: rr.id, ts: rr.ts, content: label || content, type: 'reading' }); } catch (e) { console.error('[teams] reading insert failed:', e.message); }
+        },
+        onSurface: (text) => {
+          try { require('./presence').notify('Zoe — Microsoft Teams', text); } catch {}
+          try { const rr = db.insertMonologue({ content: text, model: 'teams', type: 'reading' }); pushSheep({ id: rr.id, ts: rr.ts, content: `(teams) ${text.slice(0, 80)}`, type: 'reading' }); } catch {}
+        }
+      });
+      console.log(`[teams] ${res.stage}: ${res.note}`);
+    } catch (e) { console.error('[monologue] teams tick failed:', e.message); }
+    return;
+  }
+
   // SCRIBE tick + finalize + artifact-landing moved to main.scribeHeartbeatTick — its OWN heartbeat owns
   // the meeting-scribe lane (started on canvas-meeting begin), so it runs truly parallel to this idle tick.
 

@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('sq', {
   // calendar surface calls joinMeet; the Canvas window listens via onMeetJoin to mount the webview.
   joinMeet: (url, title) => ipcRenderer.invoke('meet:join', { url, title }),
   onMeetJoin: (cb) => ipcRenderer.on('canvas:meet-join', (_e, info) => cb(info)),
+  onTeamsJoin: (cb) => ipcRenderer.on('canvas:teams-join', (_e, info) => cb(info)),   // Teams reuses the SINGLE meeting pane, Teams partition
   meetProbe: () => ipcRenderer.invoke('meet:probe'),   // P1 verification: read live Meet-pane state
   // Full-ingestion gate: launch a YouTube video in its own canvas pane with audio ON (for transcription).
   ingestVideo: (url, title) => ipcRenderer.invoke('video:ingest', { url, title }),

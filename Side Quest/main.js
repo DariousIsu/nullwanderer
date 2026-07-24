@@ -280,10 +280,13 @@ function createWorkspaceWindow() {
 
 let canvasWindow = null;
 let meetWebContents = null;   // the Meet <webview>'s guest webContents (captured on attach) — the driver's handle
+let teamsWebContents = null;  // the Teams <webview>'s guest webContents (same single canvas pane, Teams partition) — the Teams driver's handle
 let ingestWebContents = null; // the full-ingestion video pane's guest webContents — transcription attach point (Zoe-builder)
 let zoeMeetPartitionReady = false;
+let zoeTeamsPartitionReady = false;
 // The driver (lib/meet_canvas) operates the Meet pane from main via this live guest webContents.
 function getMeetWebContents() { return (meetWebContents && !meetWebContents.isDestroyed()) ? meetWebContents : null; }
+function getTeamsWebContents() { return (teamsWebContents && !teamsWebContents.isDestroyed()) ? teamsWebContents : null; }
 // The full-ingestion video pane's webContents (audio ON) — the Zoe-builder attaches transcription here.
 function getIngestWebContents() { return (ingestWebContents && !ingestWebContents.isDestroyed()) ? ingestWebContents : null; }
 // The Meet-in-canvas pane hosts Google Meet in a <webview partition="persist:zoe-google"> — ZOE's
@@ -300,6 +303,19 @@ function configureZoeMeetPartition() {
     zoeMeetPartitionReady = true;
   } catch (e) { console.error('[meet] partition config failed:', e.message); }
 }
+// The Teams meeting pane hosts Microsoft Teams in the SAME canvas <webview> but on the persist:zoe-teams
+// partition (her own personal Teams session). Grant camera/mic to THAT partition too (scoped) so
+// getUserMedia works inside the pane — without this the Teams prejoin device access hangs silently.
+function configureZoeTeamsPartition() {
+  if (zoeTeamsPartitionReady) return;
+  try {
+    const sess = session.fromPartition('persist:zoe-teams');
+    const ALLOW = new Set(['media', 'audioCapture', 'videoCapture', 'fullscreen', 'notifications', 'display-capture']);
+    sess.setPermissionRequestHandler((_wc, permission, cb) => cb(ALLOW.has(permission)));
+    sess.setPermissionCheckHandler((_wc, permission) => ALLOW.has(permission));
+    zoeTeamsPartitionReady = true;
+  } catch (e) { console.error('[teams] partition config failed:', e.message); }
+}
 
 // Zoe's Canvas — the THIRD window of the model, distinct from the operator workbench: ZOE's own
 // surface for large deliverables + visual aids (she populates it; the saga store is the system of
@@ -308,6 +324,7 @@ function configureZoeMeetPartition() {
 function createCanvasWindow() {
   if (canvasWindow && !canvasWindow.isDestroyed()) { canvasWindow.focus(); return canvasWindow; }
   configureZoeMeetPartition();
+  configureZoeTeamsPartition();
   const windowState = require('./lib/window_state');
   canvasWindow = new BrowserWindow({
     ...windowState.options('canvas', { width: 1280, height: 860 }),
@@ -346,6 +363,12 @@ function createCanvasWindow() {
         // physical speakers stay silent because that cable isn't them. The config flag = "I've routed it."
         const muteIt = !(() => { try { return require('./lib/config').meetingAudioConfig().enabled; } catch { return false; } })();
         try { guest.setAudioMuted(muteIt); } catch {}
+      } else if (/teams\.(?:microsoft|live)\.com/i.test(url)) {
+        // The Teams meeting pane — the SAME single canvas pane, just on the Teams partition. Same
+        // mute-unless-Echo-audio-fusion rule as Meet.
+        teamsWebContents = guest;
+        const muteIt = !(() => { try { return require('./lib/config').meetingAudioConfig().enabled; } catch { return false; } })();
+        try { guest.setAudioMuted(muteIt); } catch {}
       } else if (/[?&]a=1(&|$)/.test(url) && /\/yt\b/.test(url)) {
         // The full-INGESTION video pane (player URL carries a=1). Expose its webContents so the
         // Zoe-builder can attach transcription/caption-follow. Audio stays ON (ingestion needs sound).
@@ -353,7 +376,7 @@ function createCanvasWindow() {
       }
     };
     try { guest.on('did-navigate', tag); guest.on('did-finish-load', tag); } catch {}
-    try { guest.once('destroyed', () => { if (meetWebContents === guest) meetWebContents = null; if (ingestWebContents === guest) ingestWebContents = null; }); } catch {}
+    try { guest.once('destroyed', () => { if (meetWebContents === guest) meetWebContents = null; if (teamsWebContents === guest) teamsWebContents = null; if (ingestWebContents === guest) ingestWebContents = null; }); } catch {}
   });
   canvasWindow.loadFile(path.join(__dirname, 'renderer', 'canvas.html'));
   windowState.track(canvasWindow, 'canvas');
@@ -2329,6 +2352,17 @@ function meetDriverInst() {
   }
   return meetDriver;
 }
+// The canvas Teams driver (lib/teams_canvas) — operates the Teams pane via its captured guest
+// webContents. Registered as the live driver so teams.canvasTeamsDeps() reaches it from the idle loop.
+let teamsDriver = null;
+function teamsDriverInst() {
+  if (!teamsDriver) {
+    const tc = require('./lib/teams_canvas');
+    teamsDriver = tc.createTeamsDriver(getTeamsWebContents);
+    tc.setLiveDriver(teamsDriver);
+  }
+  return teamsDriver;
+}
 
 // START A CANVAS-HOSTED MEETING — the one path all join routes funnel through (calendar "Zoe: Join",
 // a Meet link in chat, autonomous). Opens/focuses the Canvas, mounts the Meet pane, marks the meeting
@@ -2359,19 +2393,56 @@ async function portZoeGoogleSession() {
   } catch (e) { console.error('[meet] cookie port failed:', e.message); return { ok: false, count: 0, error: e.message }; }
 }
 
-async function startCanvasMeeting(url, title) {
+// PORT Zoe's Microsoft/Teams session into the canvas Teams partition — copy her live Microsoft cookies
+// from her already-signed-in dedicated browser into persist:zoe-teams, so Teams loads signed-in AS HER.
+// (Personal MS account; MS blocks interactive sign-in inside embedded webviews, so an already-authed
+// cookie session is the way in — same trick as Google.) Fetch ALL cookies + filter to MS hosts so a
+// token on any of the login/teams/office domains comes across. Best-effort + idempotent.
+async function portZoeTeamsSession() {
+  try {
+    const cks = await require('./lib/web').cookies();
+    if (!cks || !cks.length) return { ok: false, count: 0 };
+    const sess = session.fromPartition('persist:zoe-teams');
+    const SS = { None: 'no_restriction', Lax: 'lax', Strict: 'strict' };
+    const MS_HOST = /(^|\.)(live\.com|microsoftonline\.com|microsoft\.com|office\.com|office365\.com|skype\.com|teams\.live\.com)$/i;
+    let n = 0;
+    for (const c of cks) {
+      const host = String(c.domain || '').replace(/^\./, '');
+      if (!MS_HOST.test(host)) continue;
+      const set = { url: `https://${host}${c.path || '/'}`, name: c.name, value: c.value, path: c.path || '/', secure: !!c.secure, httpOnly: !!c.httpOnly };
+      if (String(c.domain || '').startsWith('.')) set.domain = c.domain;
+      if (Number.isFinite(c.expires) && c.expires > 0) set.expirationDate = c.expires;
+      if (SS[c.sameSite]) set.sameSite = SS[c.sameSite];
+      try { await sess.cookies.set(set); n++; } catch { /* skip a cookie Electron rejects */ }
+    }
+    console.log(`[teams] ported ${n} Microsoft cookie(s) into the canvas partition`);
+    return { ok: n > 0, count: n };
+  } catch (e) { console.error('[teams] cookie port failed:', e.message); return { ok: false, count: 0, error: e.message }; }
+}
+
+// START A CANVAS-HOSTED MEETING — the one path all join routes funnel through, now platform-aware.
+// opts.platform 'teams' mounts Microsoft Teams (persist:zoe-teams, portZoeTeamsSession, teams driver,
+// canvas:teams-join, lib/teams stage machine); default 'meet' is the unchanged Google Meet path. Same
+// single canvas pane either way — the dedicated browser stays free during BOTH.
+async function startCanvasMeeting(url, title, opts = {}) {
   if (!url || !/^https?:\/\//i.test(String(url))) return false;
+  const platform = (opts.platform === 'teams') ? 'teams' : 'meet';
   const win = createCanvasWindow();
-  meetDriverInst();   // ensure the live driver is registered before the idle loop ticks
-  await portZoeGoogleSession();   // sign the partition in AS HER before the webview loads Meet
-  const payload = { url: String(url), title: title || 'Google Meet' };
-  const send = () => { try { win.webContents.send('canvas:meet-join', payload); } catch {} };
+  // Register the platform's live driver + sign its partition in AS HER before the webview loads.
+  if (platform === 'teams') { teamsDriverInst(); await portZoeTeamsSession(); }
+  else { meetDriverInst(); await portZoeGoogleSession(); }
+  const channel = platform === 'teams' ? 'canvas:teams-join' : 'canvas:meet-join';
+  const payload = { url: String(url), title: title || (platform === 'teams' ? 'Microsoft Teams' : 'Google Meet') };
+  const send = () => { try { win.webContents.send(channel, payload); } catch {} };
   if (win.webContents.isLoading()) win.webContents.once('did-finish-load', send); else send();
   win.focus();
-  try { db.setMeta('gmeet_host', 'canvas'); require('./lib/gmeet').start(String(url)); } catch (e) { console.error('[meet] gmeet start failed:', e.message); }
+  try {
+    if (platform === 'teams') { db.setMeta('teams_host', 'canvas'); require('./lib/teams').start(String(url)); }
+    else { db.setMeta('gmeet_host', 'canvas'); require('./lib/gmeet').start(String(url)); }
+  } catch (e) { console.error(`[${platform}] meeting start failed:`, e.message); }
   try { startScribeHeartbeat(); } catch (e) { console.error('[scribe] heartbeat start failed:', e.message); }
   // MEETING AUDIO (Lucas's virtual-cable path) — start Echo transcription of the meeting audio when enabled
-  // + a device is configured. OFF by default (captions stand in); fully fail-safe.
+  // + a device is configured. OFF by default (captions stand in); fully fail-safe. Platform-agnostic.
   try {
     const r = await require('./lib/meeting_audio').start({ dispatch: (t) => echoSuit.dispatch(t) });
     if (r && r.ok) console.log(`[meet-audio] Echo capture started (source=${r.source}${r.deviceIndex != null ? ` dev=${r.deviceIndex}` : ''}, session ${r.sessionId})${r.isolated ? '' : ' [UNISOLATED — default mix; other meetings will bleed in]'}`);
@@ -5047,6 +5118,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       if (meetUrl) { startCanvasMeeting(meetUrl, 'Google Meet'); meetJoinStarted = true; console.log(`[main] gmeet (canvas) join started: ${meetUrl}`); }
     }
   } catch (e) { console.error('[main] gmeet start detect failed:', e.message); }
+
+  // MICROSOFT TEAMS — a teams.microsoft.com / teams.live.com meeting link runs the SAME canvas-pane flow
+  // (single meeting pane, Teams partition), so her dedicated browser stays free just like Meet. Guarded
+  // so a Teams join can't start while a Meet or Teams meeting is already live (one meeting at a time).
+  try {
+    const teamsLib = require('./lib/teams');
+    if (!teamsLib.active() && !require('./lib/gmeet').active()) {
+      const teamsUrl = teamsLib.detectTeamsUrl(userMessage);
+      if (teamsUrl) { startCanvasMeeting(teamsUrl, 'Microsoft Teams', { platform: 'teams' }); meetJoinStarted = true; console.log(`[main] teams (canvas) join started: ${teamsUrl}`); }
+    }
+  } catch (e) { console.error('[main] teams start detect failed:', e.message); }
 
   // MEDIA WATCH — "watch/play this video <url>" starts her caption-follow stepper (open →
   // captions on → follow the live caption stream, advanced in the idle loop). Requires an

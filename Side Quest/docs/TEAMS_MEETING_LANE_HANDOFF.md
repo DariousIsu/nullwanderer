@@ -58,8 +58,9 @@ only ONE of us edits main.js at a time:
 3. driver register + idle-loop advance — `meetDriverInst` ([main.js:2324](../main.js)), the runTick
    advance (~[main.js:4146](../main.js)), and the canvas-hosted deps wire ([monologue.js:912](../lib/monologue.js))
    — register + advance the Teams driver + finalize its notes.
-   Renderer: a Teams webview mount alongside the Meet pane (IPC `canvas:teams-join`, mirroring
-   `canvas:meet-join` — [preload.js:45](../preload.js)).
+   Renderer: a Teams webview mount reusing the SINGLE meeting pane, parameterized by platform (one
+   meeting at a time — pick partition + URL + driver per platform; do NOT add a 2nd parallel pane). IPC
+   `canvas:teams-join`, mirroring `canvas:meet-join` — [preload.js:45](../preload.js).
 4. **partition permissions (easy to miss — load-bearing)** — `configureZoeMeetPartition`
    ([main.js:293](../main.js)) grants `media`/`audioCapture`/`videoCapture`/`display-capture` to the
    `persist:zoe-google` session so `getUserMedia` works inside the webview. The `persist:zoe-teams`
@@ -94,6 +95,11 @@ only ONE of us edits main.js at a time:
 - **Captions**: off by default — must be enabled (More ⋯ → Language and speech → Turn on live
   captions), then scraped from Teams' own caption DOM. No Meet analog; build fresh.
 - **Leave**: Teams "Leave" control selector (its own aria-label).
+- **Embedded-webview UA (test this FIRST — "does Teams kick the pane")**: Teams web is fussier than Meet
+  about browser support — an Electron `<webview>` may hit "your browser isn't supported / get the app".
+  Set the webview's `useragent` to a current Chrome/Edge string so Teams accepts it. Meet needs no such
+  override; Teams likely does. If even a UA override won't load it, the canvas route is blocked and Teams
+  falls back to her dedicated browser (lib/web.js) — the thing we're trying to avoid.
 
 ## Verify like gmeet
 - Pure helpers → offline smoke (`scripts/smoke_gmeet.js` is the template → `scripts/smoke_teams.js`),
