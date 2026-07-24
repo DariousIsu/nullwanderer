@@ -100,6 +100,54 @@ The CRM is not a rival store of truth; it is the flattened, queryable face of th
 
 ## 4. The identity crosswalk (the "internal documentation system")
 
+> ## 🚨 CORRECTION 2026-07-24 — **THE CROSSWALK ALREADY EXISTS. DO NOT BUILD A NEW TABLE.**
+>
+> §4 as originally written claimed "the contact↔node join does not exist today." **That was wrong.**
+> `electoral.fact__c` (**4,459,000 rows**) already implements exactly this design, built by the
+> background resolution passes (`proposed_by='pass28a:v1'` etc.):
+>
+> ```
+> entity_id        1529111      ← the graph node
+> predicate        bioguide_id  ← the system
+> predicate_family 'identity'   ← the crosswalk marker
+> object_value     'B000546'    ← the value
+> source_table     'Contact'    ← WHICH LIST said it   ← the multi-list merge story
+> source_row_id    28443        ← the CRM contact id
+> confidence       1.0
+> proposed_by      'pass28a:v1' ← which pass produced it
+> ```
+>
+> It is *better* than my design: `object_type`/`object_entity_id` let one table carry **both** fact
+> shapes (attribute-facts as literals, edge-facts as entity references), and it is **object-generic**
+> — not person-only — which is exactly Lucas's "apply it to all objects."
+>
+> **`predicate_family` distribution** (4.46M facts): identity 3,051,048 · context 1,247,581 ·
+> role 71,405 · bio 38,708 · money 37,795 · affiliation 9,569 · peer 2,108 · behavior 786.
+>
+> **🚨 THE REAL GAP IS COVERAGE, NOT MECHANISM:**
+> | | |
+> |---|---|
+> | CRM contacts with an `entity_id` link | **12,737 of 110,319 = 11.5%** (clean 1:1, no fan-out) |
+> | CRM contacts with **NO** node link | **97,582 = 88.5%** |
+> | person identity predicates | bioguide 12,737 · govtrack 12,737 · wikidata_qid 12,736 · icpsr 12,277 · fec 1,884 · opensecrets 1,493 · ballotpedia 1,145 · cspan 892 · **ocd_person_id only 677** |
+>
+> The linked 11.5% is the **federal legislator core**. Every state, county-parish and municipal
+> official — including all 1,179 LA parish people — is outside it.
+>
+> **⭐ SLICE 1 IS THEREFORE REWRITTEN (see §8):** *not* "create `contact_identifier`" but
+> **"extend the existing `fact__c` identity layer to the 88.5% of contacts that lack it."**
+> **No schema change to Echo is required** — strictly additive rows in an existing, indexed table,
+> using its established vocabulary. Everything §4 says below about *shape and purpose* still holds;
+> only the "build a new table" instruction is void.
+>
+> **Also already built and populated** (do not duplicate): `alias__c` 42,447 (name aliases —
+> nickname/maiden/initials, *not* external ids), `membership` 71,987 (Popolo!),
+> `committee_membership__c` 39,294, `donation__c` 828,222, `vote_record__c` 16,119,
+> `contact_merge_log` 3,811, `enrichment_finding` 193,632 / `enrichment_job` 71,449,
+> `social_handle__c` 2,925, `campaign`/`campaign_member` 1/442 (**LAMP**).
+> Designed-but-empty: `post`, `endorsement__c`, `field_value`, `known_associate__c`.
+
+
 ### The problem it solves
 17 of `contact`'s ~92 columns are external identifiers:
 
@@ -263,7 +311,7 @@ Puller stops being a destination and becomes the completion engine:
 | # | Slice | Proves | Writes to Echo? |
 |---|---|---|---|
 | **0** | **Measure + gate, read-only.** Real-person classifier over the 328k; overlap report vs the CRM's 110k; dedup-collision estimate. Output = a report, no writes. | The drain's assumptions are true *before* touching the ultimate store | **No** |
-| **1** | **Crosswalk table + backfill** from the 17 identity columns. Add `system='entity'` links where derivable. | The join exists; nothing else can proceed without it | schema + backfill |
+| **1** | ~~Crosswalk table~~ → **REWRITTEN (see §4 correction): extend the EXISTING `fact__c` identity layer** to the 97,582 contacts (88.5%) with no `entity_id` link, backfilling from the 17 identity columns using the established `predicate_family='identity'` vocabulary. | Every person is linked to its node, not just the federal 11.5% | **rows only — NO schema change** |
 | **2** | **`upsertPersonObject`** — the one door. Unit-tested against fixtures, then a **small real batch (the 1,150 LA parish records)**. | The feed works end-to-end on the exact case that failed | yes, bounded |
 | **3** | **Tag derivation** (`sector` + `level`) + the indexed read path. | `sector:government-elected + level:county-parish + LA` returns the sheet in one query | yes |
 | **4** | **The full drain**, batched/resumable, with the real-person gate live. | 328k installed and cleaned | yes, large |
