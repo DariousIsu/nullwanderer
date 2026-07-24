@@ -322,6 +322,24 @@ function close(id, { kind = 'answered', answer = '', deps = {}, nowMs = Date.now
   } catch (e) { console.error('[inquiry] close failed:', e.message); return { closed: false, reason: e.message }; }
 }
 
+// HELD-SOURCE EXHAUSTED → CLOSE (boot80). When a COMPLETE answer has been extracted from the held
+// authoritative source (heldSourceHint pinned `held_answer`) and the line has re-derived it across
+// several touches without the write-back conceding "answered", the source is exhausted — close it.
+// Root it fixes: expect-bar DRIFT. #1 held the full 64-parish roster and produced it every touch, but
+// the expect bar ratcheted to demand per-official website URLs the roster never carried, so the touch
+// kept framing a complete answer as "remaining to fill" and never set status=answered. The pinned
+// digest IS the deliverable; an unmeetable bar must not keep a line grinding forever. Pure read.
+const FORCE_CLOSE_TOUCHES = 4;
+function heldAnswerExhausted(row, { deps = {} } = {}) {
+  if (!row || row.id == null || row.status !== 'active') return false;
+  if ((row.touches || 0) < FORCE_CLOSE_TOUCHES) return false;
+  try { const v = (deps.db || require('./db')).getMeta(`inquiry.${row.id}.held_answer`); return !!(v && String(v).length > 40); } catch { return false; }
+}
+// The extracted digest text (the actual answer table) to store on the forced close, else null.
+function heldAnswerText(id, { deps = {} } = {}) {
+  try { const j = (deps.db || require('./db')).getMeta(`inquiry.${id}.held_answer`); const o = JSON.parse(j || 'null'); return o && o.text ? String(o.text) : null; } catch { return null; }
+}
+
 // Manifest lines — the decider's continuity surface: what is OPEN, where each stands, what's next.
 function manifestLines({ deps = {}, nowMs = Date.now() } = {}) {
   const rows = listActive({ deps });
@@ -339,5 +357,5 @@ function manifestLines({ deps = {}, nowMs = Date.now() } = {}) {
 module.exports = {
   MAX_ACTIVE, EVIDENCE_MAX, WRITEBACK_WANT, DUP_THRESHOLD,
   open, get, listActive, touchBrief, validateWriteback, writeBack, expectTrailPush, close, manifestLines,
-  questionOverlap, heldSourceHint,
+  questionOverlap, heldSourceHint, heldAnswerExhausted, heldAnswerText, FORCE_CLOSE_TOUCHES,
 };

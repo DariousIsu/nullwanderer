@@ -126,6 +126,14 @@ const NOW = 1753400000000;
       'heldSourceHint: injected answer carries the real names, party-committee row excluded');
     ok(rhint && /PRESENT this/.test(rhint) && /CLOSE ANSWERED/.test(rhint) && /SQL query.*is NOT the deliverable/.test(rhint) && !/It is a TABLE/.test(rhint),
       'heldSourceHint: steers to PRESENT+CLOSE and explicitly rejects "a SQL query" (the touch-30 failure) — not the old summary');
+    // HELD-SOURCE EXHAUSTED → force close (boot80, the expect-bar-drift fix): a worn line holding a
+    // COMPLETE extracted answer closes even when the write-back never conceded "answered".
+    db.setMeta('inquiry.777.held_answer', JSON.stringify({ text: '- **ACADIA**: Sheriff — K.P. Gibson\n- **ALLEN**: Sheriff — Doug Hebert\n- **ASCENSION**: Parish President — Clint Cointment', groups: 3, groupCol: 'Parish' }));
+    ok(I.heldAnswerExhausted({ id: 777, status: 'active', touches: 5 }, { deps: { db } }) === true, 'heldAnswerExhausted: worn line (≥4 touches) + a pinned complete answer → force-close');
+    ok(I.heldAnswerExhausted({ id: 777, status: 'active', touches: 2 }, { deps: { db } }) === false, 'heldAnswerExhausted: a young line is NOT force-closed (room to work first)');
+    ok(I.heldAnswerExhausted({ id: 888, status: 'active', touches: 9 }, { deps: { db } }) === false, 'heldAnswerExhausted: no pinned answer → no force-close (never invents a close)');
+    ok(I.heldAnswerExhausted({ id: 777, status: 'closed_answered', touches: 9 }, { deps: { db } }) === false, 'heldAnswerExhausted: an already-closed line is never re-closed');
+    ok(/ASCENSION/.test(I.heldAnswerText(777, { deps: { db } }) || ''), 'heldAnswerText: returns the extracted digest as the close answer');
     ok(I.heldSourceHint({ next_step: 'Search Ballotpedia for the Ohio governor race results', gist: '', evidence: '[]' }, { deps: { db } }) === null,
       'heldSourceHint: no file named / nothing held → silent (no false hint)');
     ok(I.heldSourceHint({ next_step: 'Download unheld-roster-9999.csv from the county site', gist: '', evidence: '[]' }, { deps: { db } }) === null,

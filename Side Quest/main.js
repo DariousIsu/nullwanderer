@@ -9475,6 +9475,21 @@ async function autonomyTick() {
           const c = inquiry.close(inqId, { kind: env.status === 'dead_end' ? 'dead_end' : 'answered', answer: env.learned, nowMs: now });
           if (c.closed) { closedStatus = c.status; console.log(`[autonomy] inquiry #${inqId} ${c.status} after touch ${row.touches + 1}${c.docId ? ` → doc #${c.docId}` : ''}`); }
         }
+        // HELD-SOURCE EXHAUSTED → CLOSE (boot80): the write-back kept saying "continue" because the
+        // expect bar drifted past the source (demanding per-official website URLs the roster never
+        // had). But a COMPLETE answer was extracted from the authoritative held source and re-derived
+        // every touch — the source is exhausted, so close on the pinned digest. Unmeetable bars must
+        // not grind a line forever; answered beats another continue.
+        if (!closedStatus) {
+          try {
+            const freshRow = inquiry.get(inqId) || row;
+            if (inquiry.heldAnswerExhausted(freshRow, { deps: { db } })) {
+              const answer = inquiry.heldAnswerText(inqId, { deps: { db } }) || env.learned;
+              const c = inquiry.close(inqId, { kind: 'answered', answer, nowMs: now });
+              if (c.closed) { closedStatus = c.status; console.log(`[autonomy] inquiry #${inqId} FORCE-CLOSED answered (held source exhausted; expect bar drifted past the source) after touch ${row.touches + 1}${c.docId ? ` → doc #${c.docId}` : ''}`); }
+            }
+          } catch (e) { console.error('[autonomy] held-source close check failed:', e.message); }
+        }
         // 4b HOMECOMING FROM THE TICK: a conversation-born inquiry whose fork found no free slot
         // (or whose first touch came up dry) was banked here — its first REAL finding still
         // returns to the talk that asked. The address rides the OBJECT (born_from), not the code
