@@ -1666,12 +1666,15 @@ function makeModestyMaterial() {
       .replace('#include <common>', '#include <common>\n varying vec3 vMN;\n varying vec3 vMP;')
       .replace('#include <dithering_fragment>', `
         float d = vColor.r;                                    // 0 at the cut edge → 1 at 16mm inside
-        float rim  = smoothstep(0.20, 0.0, d);                 // bright piping along the boundary
-        float line = smoothstep(0.055, 0.0, abs(d - 0.55));    // a finer second trace inside it
-        float fres = pow(1.0 - abs(dot(normalize(vMN), normalize(-vMP))), 2.2);
-        float glow = rim * 0.95 + line * 0.5 + fres * 0.30;
-        float fill = 0.085;                                    // barely-there body: nodes read straight through
-        vec3 col = vec3(0.40, 0.72, 1.0) * (fill + glow);
+        float rim  = smoothstep(0.34, 0.0, d);                 // piping along the boundary
+        float line = smoothstep(0.070, 0.0, abs(d - 0.55));    // a finer second trace inside it
+        float fres = pow(1.0 - abs(dot(normalize(vMN), normalize(-vMP))), 2.0);
+        float glow = rim * 1.15 + line * 0.65 + fres * 0.45;
+        // It has to actually READ as coverage — at 0.085 it was invisible against her already-bright body and
+        // she just looked nude with stray lines. Brightness costs nothing here: additive + no depth write means
+        // nodes and links still come through it whatever this is set to.
+        float fill = 0.34;
+        vec3 col = vec3(0.46, 0.74, 1.0) * (fill + glow);
         gl_FragColor = vec4(col, min(1.0, fill + glow));
         #include <dithering_fragment>`);
   };
