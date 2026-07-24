@@ -97,7 +97,7 @@ function parseEchoTags(text) {
 function parseArgs(body) {
   const t = (body || '').trim();
   if (!t) return { args: {} };
-  try { return { args: JSON.parse(t) }; } catch (e) { return { args: {}, parseError: e.message }; }
+  try { return { args: JSON.parse(t) }; } catch (e) { return { args: {}, parseError: placeholderComplaint(t) || e.message }; }
 }
 
 /**
@@ -150,7 +150,74 @@ function parseArgsList(body) {
     }
   }
   if (out.length) return { list: out, parseError: null };
-  return { list: [], parseError: (() => { try { JSON.parse(t); return null; } catch (e) { return e.message; } })() };
+  return { list: [], parseError: (() => { const ph = placeholderComplaint(t); if (ph) return ph; try { JSON.parse(t); return null; } catch (e) { return e.message; } })() };
+}
+
+// ---------- deterministic dispatch guards (Slice A, 2026-07-24) ----------
+// A weak model handed the raw <echo-do>/<echo-recipe> grammar fumbles it the same few ways every boot
+// (boot94): a literal "…" placeholder where JSON args go, an unescaped ' that breaks FTS5, a hallucinated
+// recipe name that is really a tool, a db_query with no timeout that dies on the 5s default. These guards
+// catch each deterministically at the ONE dispatch chokepoint, so the correction is mechanical, not
+// prompt-hoped. All pure + exported so smoke_dispatch_guards can prove them without a live Echo.
+
+// The Unicode ellipsis (U+2026) and a bare "..." are the placeholder a model emits for "fill this in" —
+// as JSON args they always fail to parse, and the generic "invalid JSON" hint never named the cause, so
+// the model re-emitted the same "…" (four dead hops, live 2026-07-22). Name it precisely instead.
+const PLACEHOLDER_ARGS_RE = /^[\s{}[\]"']*(?:…|\.\.\.)[\s{}[\]"']*$/;
+function placeholderComplaint(body) {
+  const t = String(body == null ? '' : body).trim();
+  if (!t) return null;
+  if (t === '…' || t === '...' || PLACEHOLDER_ARGS_RE.test(t)) {
+    return 'you emitted a placeholder ("…") instead of real arguments — write the actual JSON object';
+  }
+  return null;
+}
+
+// FTS5 MATCH treats ' " ( ) : ^ as syntax; a bare apostrophe ("O'Brien", "don't") throws
+// `fts5: syntax error near "'"`. The default unicode61 tokenizer already SPLITS on those characters, so
+// replacing them with spaces matches how the text was indexed — the query then succeeds and finds the same
+// rows. Only touch a query that actually carries a breaker, so ordinary queries pass through byte-identical.
+const FTS_QUERY_TOOLS = new Set([
+  'search_entities', 'search', 'search_knowledge', 'search_documents_semantic',
+  'search_contacts', 'search_bills', 'search_facts', 'search_poll_questions', 'find_mentions',
+]);
+const FTS_BREAKER_RE = /['"():^]/;
+function sanitizeFtsQuery(q) {
+  const s = String(q == null ? '' : q);
+  if (!FTS_BREAKER_RE.test(s)) return s;                 // clean → untouched (byte-identical)
+  return s.replace(/['"():^]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// db_query's default budget is 5s; the app's OWN queries pass timeout_seconds:20 for the multi-million-row
+// tables. A model-authored db_query almost never sets it and dies on a big table (every "5.0s budget
+// exceeded" in boot94). Echo runs the query in its own process — async, never blocking Zoe's main thread —
+// so raising the ceiling is safe: a fast query still returns fast. Inject only when the model left it absent.
+const DB_QUERY_DEFAULT_TIMEOUT = 20;
+
+// Prepare the args for a raw <echo-do> before dispatch (PURE; never mutates the input): sanitize an FTS
+// query, inject a db_query timeout. A no-op for every other tool and for already-set values.
+function prepareDoArgs(name, args) {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return args;
+  let out = args;
+  if (FTS_QUERY_TOOLS.has(name) && typeof args.query === 'string') {
+    const q = sanitizeFtsQuery(args.query);
+    if (q !== args.query) out = { ...out, query: q };
+  }
+  if (name === 'db_query' && out.timeout_seconds == null) {
+    out = { ...out, timeout_seconds: DB_QUERY_DEFAULT_TIMEOUT };
+  }
+  return out;
+}
+
+// A <echo-recipe name="X"> where X is actually a TOOL, not a recipe (boot94: recipe:search_documents_semantic,
+// a real tool called as a recipe) would just get "unknown recipe". Catch it and redirect to the right grammar
+// in ONE hop. `isTool`/`argShape` are injected so this stays pure + smoke-testable; returns a corrective
+// string, or null to let the normal recipe path run.
+function recipeMisrouteHint(name, { isTool, argShape } = {}) {
+  const n = String(name == null ? '' : name).trim();
+  if (!n || typeof isTool !== 'function' || !isTool(n)) return null;
+  const shape = (typeof argShape === 'function' && argShape(n)) || '';
+  return `"${n}" is a TOOL, not a recipe — call it as <echo-do name="${n}">{json}</echo-do>${shape ? ` (${shape})` : ''}, or just <echo-find>what you need</echo-find> and the right tool is picked and run for you.`;
 }
 
 // Remove all echo-suit tags from a block of her output, so they don't persist in stored turns
@@ -488,7 +555,9 @@ class EchoSuit {
         if (tag.parseError) return { ok: false, kind: 'do', isError: true, text: `Your <echo-do name="${tag.name}"> args weren't valid JSON (${tag.parseError}). Re-emit with valid JSON args.${shape ? ` ${shape}` : ''}` };
         // MAINTENANCE FORCED ARGS (2d): on a maintain run, an allowlisted tool's safety args are
         // merged OVER whatever the model wrote — dry_run/report mode is mechanical, never prompt-hoped.
-        let callArgs = tag.args || {};
+        // GUARDS 2+4: sanitize an FTS query (unescaped ' → fts5 syntax error) and inject a db_query timeout
+        // (5s default kills a big-table scan). Pure + deterministic; a no-op for every other tool.
+        let callArgs = prepareDoArgs(tag.name, tag.args || {});
         if (opts.maintain) { try { const f = require('./echo_tier').maintainForcedArgs(tag.name); if (f) callArgs = { ...callArgs, ...f }; } catch {} }
         const r = normalizeToolResult(await c.callTool(tag.name, callArgs));
         let text = r.text;
@@ -515,6 +584,10 @@ class EchoSuit {
       }
       if (tag.kind === 'recipe') {
         if (!tag.name) return { ok: false, kind: 'recipe', isError: true, text: `<echo-recipe> needs name="..." from your recipe menu — e.g. <echo-recipe name="search-vault" arg="weather modification"/>.` };
+        // GUARD 3: a <echo-recipe> whose name is actually a TOOL (boot94: recipe:search_documents_semantic)
+        // would only get "unknown recipe" back — redirect it to the right grammar in one hop instead.
+        const _mis = recipeMisrouteHint(tag.name, { isTool: (n) => !!(this._toolIndex && this._toolIndex.has(n)), argShape: (n) => this.argShape(n) });
+        if (_mis) return { ok: false, kind: 'recipe', name: tag.name, isError: true, text: _mis };
         const args = { name: tag.name };
         if (tag.arg) args.arg = tag.arg;
         if (tag.limit) args.limit = tag.limit;
@@ -1448,5 +1521,6 @@ function routeCacheStats() {
 module.exports = {
   routeCacheStats,
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
+  placeholderComplaint, sanitizeFtsQuery, prepareDoArgs, recipeMisrouteHint,
   setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _distinctEntities, _nameCompatible, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates, _salienceDominant
 };
