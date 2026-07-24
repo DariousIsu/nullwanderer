@@ -251,7 +251,18 @@ async function read(url, { timeoutMs = NAV_TIMEOUT } = {}) {
       for (const sel of ['script', 'style', 'noscript', 'nav', 'header', 'footer', 'aside', 'form']) {
         for (const n of (pick ? pick.querySelectorAll(sel) : [])) n.remove();
       }
-      return { title: document.title || '', text: (pick && (pick.innerText || pick.textContent) || '').replace(/\s+/g, ' ').trim() };
+      // KEEP THE LINE STRUCTURE. This used to end `.replace(/\s+/g, ' ')`, which is fine for a search
+      // snippet and wrong for a cited source: `\s` eats newlines, so a 23,859-char page arrived as one
+      // unbroken line and every downstream consumer that chunks on paragraphs saw a single chunk.
+      // Collapse only HORIZONTAL whitespace; keep one break per block and cap blank runs at one.
+      const raw = (pick && (pick.innerText || pick.textContent)) || '';
+      const text = raw
+        .replace(/\r\n?/g, '\n')
+        .replace(/[^\S\n]+/g, ' ')
+        .replace(/ *\n */g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+      return { title: document.title || '', text };
     }), 8000, null);
     /* eslint-enable no-undef */
     if (!got || !got.text) return { ok: false, url: target, status, error: 'no readable text' };

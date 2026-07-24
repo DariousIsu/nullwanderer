@@ -46,8 +46,47 @@
     return out;
   }
 
+  // Cut a body into rankable units. A LADDER, because "paragraph" is a property of the READER, not of
+  // the source, and retrieval must not depend on one.
+  //
+  // ⚠️ THE SILENT-HEAD DEFECT (live, 2026-07-23, third run). This used to be a bare
+  // `body.split(/\n{2,}/)`, and locatePassage returned `clip(body, cap)` whenever that yielded one
+  // chunk. lib/search_lane's browser reader finishes with `.replace(/\s+/g, ' ')` — `\s` matches
+  // newlines — so EVERY page it returns has zero line breaks and always hit that branch. The judge
+  // was then handed the first N characters of the document while the call still looked like it had
+  // "located a passage". A cited 23,859-char case study that plainly says ESA money bought
+  // "diamonds, lingerie, big screen TVs, iPhones, and Kenmore appliances" — 57.6% of the way in, far
+  // past any 6,000-char head — was judged against its introduction, and the studio ruled NOT
+  // SUPPORTED against a citation that was exactly right.
+  //
+  // A reader's whitespace habits must never be able to manufacture a verdict, so the fallbacks below
+  // are ordered from most to least structure and the last one always succeeds. Retrieval runs on
+  // every body larger than the cap — there is no path that silently returns the head.
+  const CHUNK_TARGET = 700;                 // chars per synthesized window when the text has no line structure
+  function packWindows(body, target = CHUNK_TARGET) {
+    // Sentence-aware first so a window rarely splits mid-fact; hard-cut only if there are no sentences.
+    const parts = body.split(/(?<=[.!?]["'”’)\]]?)\s+/).filter(s => s.trim().length > 0);
+    const out = [];
+    let cur = '';
+    for (const s of parts) {
+      if (cur && cur.length + 1 + s.length > target) { out.push(cur); cur = s; } else cur = cur ? `${cur} ${s}` : s;
+    }
+    if (cur) out.push(cur);
+    if (out.length > 1) return out;
+    const hard = [];
+    for (let i = 0; i < body.length; i += target) hard.push(body.slice(i, i + target));
+    return hard.filter(c => c.trim().length > 0);
+  }
+  function chunkBody(body) {
+    let chunks = body.split(/\n{2,}/).filter(c => c.trim().length > 0);      // blank-line paragraphs
+    if (chunks.length > 1) return chunks;
+    chunks = body.split(/\n+/).filter(c => c.trim().length > 0);             // one break per block
+    if (chunks.length > 1) return chunks;
+    return packWindows(body);                                               // no line structure at all
+  }
+
   // Locate the most claim-relevant window of a large source so the model reads the RIGHT passage, not
-  // the first 6k chars. Paragraph-chunk, score by embedding cosine (if injected) else lexical overlap.
+  // the first 6k chars. Chunk (see chunkBody), score by embedding cosine (if injected) else lexical overlap.
   // ⚠️ ASYNC, and it must be awaited (fixed 2026-07-23, found in a live run). `opts.embed` is an
   // async embedder; this used to call `opts.cosine(opts.embed(claim), opts.embed(chunk))` with no
   // await, so cosine received two PROMISES and scored every chunk 0. Every chunk tying means the
@@ -59,7 +98,7 @@
   async function locatePassage(text, claim, opts = {}) {
     const body = String(text || '');
     if (body.length <= (opts.maxPassage || MAX_PASSAGE)) return body;
-    const chunks = body.split(/\n{2,}/).filter(c => c.trim().length > 0);
+    const chunks = chunkBody(body);
     if (chunks.length <= 1) return clip(body, opts.maxPassage || MAX_PASSAGE);
     const lexical = (chunk) => (VM ? VM.contentOverlap(claim, chunk) : 0);
     // Score every chunk lexically first — free, synchronous — then EMBED ONLY THE TOP FEW. A real

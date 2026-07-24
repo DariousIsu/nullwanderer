@@ -135,7 +135,36 @@ function mockComplete(reply) {
     }
   }
 
-  // 11) deepVerifyAll preserves order
+  // 11) A SOURCE WITH NO BLANK LINES MUST STILL BE SEARCHED (live defect, 2026-07-23, third run).
+  // lib/search_lane's browser reader ends with `.replace(/\s+/g, ' ')`, so every page it returns has
+  // ZERO newlines. locatePassage chunked on /\n{2,}/ only, so such a body produced ONE chunk, hit the
+  // `chunks.length <= 1` branch, and returned clip(body, cap) — THE FIRST N CHARACTERS, with no
+  // retrieval at all, while still presenting itself as a located passage.
+  // Live consequence: a cited 13,000-word case study that says ESA money bought "diamonds, lingerie,
+  // big screen TVs, iPhones, and Kenmore appliances" was judged against its INTRODUCTION, and the
+  // studio ruled "not supported by cited source" against a citation that was exactly right — a
+  // fabricated indictment of the author produced by a whitespace regex two modules away.
+  {
+    const sentence = (i) => `Paragraph ${i} discusses enrollment procedures and district budgeting at length. `;
+    const collapsed = Array.from({ length: 600 }, (_, i) => sentence(i)).join('')
+      + 'ESA funds were spent on diamonds, lingerie, big screen TVs, iPhones, and Kenmore appliances. '
+      + Array.from({ length: 600 }, (_, i) => sentence(600 + i)).join('');
+    ok('the fixture really is the shape the browser returns (no newlines at all)', !/\n/.test(collapsed));
+
+    const loc = await D.locatePassage(collapsed, 'Nobody serious defends ESA dollars going to diamond rings.', { maxPassage: 2000 });
+    ok('a newline-free source is still SEARCHED, not truncated to its head',
+      /diamonds, lingerie/.test(loc), `got head instead: ${String(loc).slice(0, 90)}…`);
+    ok('…and the located window still respects the cap', loc.length <= 2000, `len=${loc.length}`);
+
+    // The same trap one step less extreme: single newlines, no blank lines (many text extractors).
+    const singleNl = Array.from({ length: 400 }, (_, i) => sentence(i)).join('\n')
+      + '\nESA funds were spent on diamonds and lingerie.\n'
+      + Array.from({ length: 400 }, (_, i) => sentence(400 + i)).join('\n');
+    const loc2 = await D.locatePassage(singleNl, 'ESA dollars going to diamond rings', { maxPassage: 2000 });
+    ok('single-newline text is searched too', /diamonds and lingerie/.test(loc2), `got: ${String(loc2).slice(0, 90)}…`);
+  }
+
+  // 12) deepVerifyAll preserves order
   {
     const c = mockComplete('{"status_code":"V","confidence":0.9}');
     const rs = await D.deepVerifyAll([{ uid: 'u0', claim: 'a', sourceText: 'aaaa long enough passage here to judge' }, { uid: 'u1', claim: 'b', sourceText: 'bbbb long enough passage here to judge' }], { complete: c });
