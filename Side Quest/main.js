@@ -2149,6 +2149,40 @@ ipcMain.handle('forecast:balance', (_e, opts = {}) => {
     return require('./lib/forecast_service').balanceWidget(opts || {});
   } catch (e) { return { ok: false, model: 'balance_of_power', error: e.message }; }
 });
+// CONDITIONAL SCENARIO (Slice 3): the glass-box what-if drawer. Runs the scenario engine against the LIVE
+// baseline slate and returns the delta — ILLUSTRATIVE only, never merged into lastForecast, never memorialized.
+// `forecast:scenario-list` = the hand-authored catalog; `forecast:scenario` runs a catalog id OR a typed
+// what-if (estimated on the fly via gpt-oss). Read-only; a failure returns {ok:false} and the drawer shows it.
+ipcMain.handle('forecast:scenario-list', () => {
+  try { return { ok: true, scenarios: require('./lib/scenario_catalog').list() }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('forecast:scenario', async (_e, opts = {}) => {
+  try {
+    const fcInputs = (((lastForecast || {}).work || {}).inputs) || {};
+    const races = fcInputs.races || [];
+    if (!lastForecast || !lastForecast.ok || !races.length) return { ok: false, error: 'no baseline forecast yet — the model recomputes on its own cadence; try again shortly' };
+    const engine = require('./lib/scenario_engine');
+    const catalog = require('./lib/scenario_catalog');
+    let scn = opts.id ? catalog.get(opts.id) : null;
+    let estimated = false;
+    if (!scn) {
+      const desc = String(opts.description || '').trim();
+      if (desc.length < 8) return { ok: false, error: 'pick a catalog scenario or describe a what-if in a phrase' };
+      const est = await require('./lib/scenario_estimate').buildScenarioFromDescription({ description: desc, races, ask: require('./lib/cloud_logic').ask });
+      if (!est.scenario) return { ok: false, error: `couldn't estimate that what-if (${est.error || 'no effects'})` };
+      scn = est.scenario; estimated = true;
+    }
+    const cfg = { ...(fcInputs.config || {}), ...(opts.seed != null ? { seed: opts.seed } : {}) };
+    const run = engine.runScenario(races, scn, cfg);
+    const meta = {
+      id: scn.id, name: scn.name, description: scn.description, estimated, two_sided: run.two_sided,
+      effects: scn.effects.map((e) => ({ scope: e.selector.scope, value: e.selector.value, competitiveOnly: e.selector.competitiveOnly, margin_delta: e.margin_delta, sigma_add: e.sigma_add, correlated: !!(e.correlation && e.correlation.key), direction_uncertain: e.direction_uncertain, rationale: e.rationale, confidence: e.confidence })),
+    };
+    if (run.two_sided) return { ok: true, scenario: meta, two_sided: true, positive: { delta: run.positive.delta }, negative: { delta: run.negative.delta } };
+    return { ok: true, scenario: meta, two_sided: false, delta: run.delta };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
 // CALIBRATION — the trust readout: the structural model's full-chain backtest vs real presidential history
 // (Brier / skill / ECE / interval coverage + reliability curve + tuned σ). Static (backtest of the model, not
 // the live run), cached. The glass box surfaces it so trust is visible, not just in a script.

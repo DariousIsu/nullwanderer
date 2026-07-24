@@ -224,6 +224,118 @@
     insp.appendChild(b); host.appendChild(insp);
   }
 
+  // ---- CONDITIONAL WHAT-IF (Slice 3): run a hypothetical against the live baseline, show the delta ----
+  let whatIfCatalog = null;
+  const getScenarioList = () => bridge ? window.sq.forecast.scenarioList() : Promise.resolve({ ok: true, scenarios: SAMPLE_SCEN_LIST });
+  const runScenario = (opts) => bridge ? window.sq.forecast.scenario(opts) : Promise.resolve(SAMPLE_SCENARIO);
+
+  function deltaBadge(dP) {
+    const pts = dP * 100, flat = Math.abs(pts) < 0.05;
+    const b = el('span', 'dd', (pts > 0 ? '+' : '') + pts.toFixed(1) + ' pts');
+    b.style.color = flat ? C.muted : (pts > 0 ? C.dem : C.rep);
+    b.style.background = flat ? 'transparent' : (pts > 0 ? 'var(--dem-dim)' : 'var(--rep-dim)');
+    return b;
+  }
+  function chamberDeltaEl(name, ch) {   // ch = { dP_control, base_pA_control, scn_pA_control }
+    const row = el('div', 'wi-cham');
+    row.appendChild(el('span', 'cn', name));
+    row.appendChild(el('span', 'from', Math.round((ch.base_pA_control || 0) * 100) + '%'));
+    row.appendChild(el('span', 'arrow', '→'));
+    const to = el('span', 'to', Math.round((ch.scn_pA_control || 0) * 100) + '%'); to.style.color = (ch.scn_pA_control >= 0.5 ? C.dem : C.rep); row.appendChild(to);
+    row.appendChild(el('span', 'from', 'P(D)'));
+    row.appendChild(deltaBadge(ch.dP_control || 0));
+    return row;
+  }
+  function chamberRangeEl(name, pos, neg) {
+    const row = el('div', 'wi-cham');
+    const lo = Math.min(pos.scn_pA_control, neg.scn_pA_control), hi = Math.max(pos.scn_pA_control, neg.scn_pA_control);
+    row.appendChild(el('span', 'cn', name));
+    row.appendChild(el('span', 'from', Math.round((pos.base_pA_control || 0) * 100) + '%'));
+    row.appendChild(el('span', 'arrow', '→'));
+    row.appendChild(el('span', 'to', Math.round(lo * 100) + '–' + Math.round(hi * 100) + '%'));
+    row.appendChild(el('span', 'from', 'P(D) range'));
+    return row;
+  }
+  function renderScenarioResult(out, r) {
+    out.innerHTML = '';
+    if (!r || r.ok === false) { out.appendChild(el('div', 'w-error', (r && r.error) || 'no result')); return; }
+    const s = r.scenario || {};
+    const hdr = el('div', 'wi-hdr'); hdr.appendChild(el('span', null, s.name || 'What-if'));
+    if (s.estimated) hdr.appendChild(el('span', 'wi-est', 'estimated'));
+    if (r.two_sided) hdr.appendChild(el('span', 'wi-est', 'two-sided range'));
+    out.appendChild(hdr);
+    if (s.description) out.appendChild(el('div', 'wi-desc', s.description));
+    const cd = el('div'); cd.style.cssText = 'display:flex;flex-direction:column;gap:7px';
+    if (r.two_sided) {
+      const ph = r.positive.delta.chambers, nh = r.negative.delta.chambers;
+      if (ph.house && nh.house) cd.appendChild(chamberRangeEl('House', ph.house, nh.house));
+      if (ph.senate && nh.senate) cd.appendChild(chamberRangeEl('Senate', ph.senate, nh.senate));
+    } else {
+      const ch = (r.delta && r.delta.chambers) || {};
+      if (ch.house) cd.appendChild(chamberDeltaEl('House', ch.house));
+      if (ch.senate) cd.appendChild(chamberDeltaEl('Senate', ch.senate));
+    }
+    out.appendChild(cd);
+    if (!r.two_sided) {
+      const flips = (r.delta && r.delta.flips) || [];
+      const fl = el('div'); fl.appendChild(el('div', 'wi-sec-l', flips.length ? `Seats that flip (${flips.length})` : 'Seats that flip'));
+      if (flips.length) {
+        const box = el('div', 'wi-flips');
+        flips.slice(0, 24).forEach((f) => { const towardR = /Rep|B\//.test(f.toward || ''); const c = el('div', 'wi-flip'); c.innerHTML = `${String(f.id).split(':')[0]} <b style="color:${towardR ? C.rep : C.dem}">→ ${towardR ? 'R' : 'D'}</b>`; box.appendChild(c); });
+        fl.appendChild(box);
+      } else { fl.appendChild(el('div', 'wi-desc', 'None cross at the point estimate — the shock moves probabilities, not the tipping seats.')); }
+      out.appendChild(fl);
+    } else { out.appendChild(el('div', 'wi-desc', 'Direction is genuinely ambiguous, so the outcome is a band — which seats cross depends on which way it breaks.')); }
+    const eff = s.effects || [];
+    if (eff.length) {
+      const es = el('div'); es.appendChild(el('div', 'wi-sec-l', 'What it applied'));
+      const list = el('div', 'wi-eff');
+      eff.forEach((e) => {
+        const where = e.scope === 'national' ? 'nationally' : `${e.scope}:${e.value}`;
+        const bits = [];
+        if (e.margin_delta) bits.push(`${e.margin_delta > 0 ? '+' : ''}${e.margin_delta} pts`);
+        if (e.sigma_add) bits.push(`+${e.sigma_add}σ`);
+        if (e.correlated) bits.push('correlated');
+        if (e.direction_uncertain) bits.push('two-sided');
+        list.appendChild(el('div', null, `• ${bits.join(', ') || 'volatility'} — ${where}${e.competitiveOnly ? ' (competitive only)' : ''}${e.rationale ? ' · ' + e.rationale : ''}`));
+      });
+      es.appendChild(list); out.appendChild(es);
+    }
+  }
+  function renderWhatIf(host) {
+    if (!host) return;
+    host.innerHTML = '';
+    const card = el('div', 'card');
+    const head = el('div', 'w-head'); head.appendChild(el('span', 'tag illus', 'Hypothetical')); head.appendChild(el('h2', null, 'Conditional what-if'));
+    card.appendChild(head);
+    const body = el('div', 'w-body');
+    const ctrl = el('div', 'wi-ctrl');
+    const sel = el('select', 'wi-sel'); sel.appendChild(new Option('— pick a scenario —', ''));
+    (whatIfCatalog || []).forEach((sc) => sel.appendChild(new Option(sc.name + (sc.two_sided ? '  (±)' : ''), sc.id)));
+    const txt = el('input', 'wi-txt'); txt.type = 'text'; txt.placeholder = 'or describe one: "Iran war hot on election day"';
+    const run = el('button', 'btn', 'Run');
+    ctrl.appendChild(sel); ctrl.appendChild(txt); ctrl.appendChild(run);
+    body.appendChild(ctrl);
+    const out = el('div', 'wi-out'); body.appendChild(out);
+    card.appendChild(body); host.appendChild(card);
+    const go = () => {
+      const id = sel.value, description = txt.value.trim();
+      if (!id && description.length < 8) { out.innerHTML = ''; out.appendChild(el('div', 'w-error', 'Pick a scenario, or type a what-if (a phrase).')); return; }
+      run.disabled = true; out.innerHTML = ''; out.appendChild(el('div', 'w-loading', id ? 'Running the counterfactual…' : 'Estimating the shock, then running it…'));
+      Promise.resolve().then(() => runScenario(id ? { id } : { description })).then((r) => renderScenarioResult(out, r))
+        .catch((e) => { out.innerHTML = ''; out.appendChild(el('div', 'w-error', 'Error — ' + e.message)); })
+        .finally(() => { run.disabled = false; });
+    };
+    run.addEventListener('click', go);
+    txt.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    sel.addEventListener('change', () => { if (sel.value) { txt.value = ''; go(); } });
+  }
+  function loadWhatIf() {
+    return Promise.resolve().then(() => getScenarioList())
+      .then((r) => { whatIfCatalog = (r && r.ok !== false && r.scenarios) || []; renderWhatIf($('#whatif-col')); })
+      .catch(() => { whatIfCatalog = []; renderWhatIf($('#whatif-col')); });
+  }
+
   function markActive() { document.querySelectorAll('.card').forEach((c) => c.classList.toggle('active', c.dataset.id === active)); }
   function setActive(id) { active = id; markActive(); renderInspector(id); }
 
@@ -233,6 +345,7 @@
 
   function mount() {
     loadPoll(); loadBalance({}).then(() => { setActive('balance_of_power'); });
+    loadWhatIf();
     (bridge ? window.sq.forecast.calibration() : Promise.resolve(SAMPLE_CAL))
       .then((c) => { calData = c; if (active === 'balance_of_power' && cache.balance_of_power) renderInspector('balance_of_power'); }).catch(() => {});
   }
@@ -244,6 +357,8 @@
   });
 
   // ---- embedded samples (standalone preview only) ----
+  const SAMPLE_SCEN_LIST = [{ id: 'wildfire-brownouts', name: 'Wildfire brownouts break through the heat', two_sided: false }, { id: 'iran-war-hot', name: 'Iran war hot during voting', two_sided: true }];
+  const SAMPLE_SCENARIO = { ok: true, two_sided: false, scenario: { id: 'wildfire-brownouts', name: 'Wildfire brownouts', description: 'Western grid strain punishes the incumbent party in competitive western seats.', estimated: false, effects: [{ scope: 'region', value: 'fire-west', competitiveOnly: true, margin_delta: -4, sigma_add: 2, correlated: true, rationale: 'competence/incumbent penalty' }] }, delta: { chambers: { house: { dP_control: -0.07, base_pA_control: 0.68, scn_pA_control: 0.61 }, senate: { dP_control: -0.05, base_pA_control: 0.57, scn_pA_control: 0.52 } }, flips: [{ id: 'CA-01:us-representative', toward: 'B/Rep' }, { id: 'NV-03:us-representative', toward: 'B/Rep' }, { id: 'AZ:us-senator', toward: 'B/Rep' }] } };
   const SAMPLE_POLL = { ok: true, as_of: '2026-07-03', subject: 'Donald Trump', choices: [{ choice: 'Disapprove', pct: 57.2 }, { choice: 'Approve', pct: 39.8 }], leader: 'Disapprove', margin: 17.4, n_polls: 1015, n_pollsters: 91, applied: { choiceSet: 'approve|disapprove' } };
   const SB_RACES = Array.from({ length: 6 }, (_, i) => ({ id: 'house-' + i, chamber: 'house', margin: (i - 2.5), sigma: 6 })).concat(Array.from({ length: 3 }, (_, i) => ({ id: 'senate-' + i, chamber: 'senate', margin: (i - 1) - 1, sigma: 6 })));
   const SAMPLE_BALANCE = { ok: true, illustrative: true, as_of: 'illustrative', payload: { house: { need: 218, total: 435, pD_control: .383, pR_control: .617, dSeats_mean: 215.4, dSeats_p10: 207, dSeats_p90: 224, competitive: 37, tipping: [{ id: 'house-19', margin: -0.2 }, { id: 'house-20', margin: 0.2 }, { id: 'house-21', margin: 0.5 }] }, senate: { need: 51, total: 100, pD_control: .241, pR_control: .759, dSeats_mean: 48.7, dSeats_p10: 46, dSeats_p90: 52, competitive: 11, tipping: [{ id: 'senate-7', margin: 0.4 }, { id: 'senate-6', margin: -0.5 }] }, scenarios: [{ label: 'House R | Senate R', prob: .575 }, { label: 'House D | Senate D', prob: .199 }, { label: 'House D | Senate R', prob: .184 }, { label: 'House R | Senate D', prob: .042 }] }, work: { inputs: { config: { nationalSigma: 3.4, iterations: 40000, seed: 2026, majority: { house: 218, senate: 51 } }, races: SB_RACES }, sim: { chambers: { house: { pA_control: .383, seatsA_mean: 215.4, seatsA_p10: 207, seatsA_p90: 224 }, senate: { pA_control: .241, seatsA_mean: 48.7, seatsA_p10: 46, seatsA_p90: 52 } }, iterations: 40000 }, timing_ms: 42 } };

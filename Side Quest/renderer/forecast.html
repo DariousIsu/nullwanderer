@@ -114,6 +114,23 @@
   .pulse{animation:pulse .6s ease}
   @keyframes pulse{0%{background:rgba(67,184,159,.14)}100%{background:transparent}}
 
+  /* ---- conditional what-if drawer (Slice 3) ---- */
+  .wi-ctrl{display:flex; gap:8px; flex-wrap:wrap; align-items:center}
+  .wi-sel,.wi-txt{font-family:var(--sans); font-size:.8rem; color:var(--ink); background:var(--panel-2); border:1px solid var(--line-2); padding:6px 10px; border-radius:8px}
+  .wi-sel{min-width:150px} .wi-txt{flex:1; min-width:170px}
+  .wi-out{margin-top:4px; display:flex; flex-direction:column; gap:13px}
+  .wi-hdr{font-family:var(--serif); font-size:1.02rem; font-weight:600; display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+  .wi-est{font-family:var(--mono); font-size:.54rem; letter-spacing:.08em; text-transform:uppercase; color:var(--accent); border:1px solid #4a3d1e; background:#22200f; padding:2px 6px; border-radius:100px}
+  .wi-desc{font-size:.77rem; color:var(--muted)}
+  .wi-cham{display:flex; align-items:center; gap:9px; font-variant-numeric:tabular-nums; font-size:.82rem}
+  .wi-cham .cn{width:54px; font-weight:600}
+  .wi-cham .from{color:var(--muted)} .wi-cham .arrow{color:var(--faint)}
+  .wi-cham .to{font-weight:600; font-family:var(--serif); font-size:1.02rem}
+  .wi-cham .dd{font-family:var(--mono); font-size:.72rem; padding:1px 6px; border-radius:5px; margin-left:auto}
+  .wi-sec-l{font-family:var(--mono); font-size:.56rem; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); margin-bottom:6px}
+  .wi-flips{display:flex; flex-wrap:wrap; gap:6px}
+  .wi-flip{font-size:.7rem; background:var(--panel-2); border:1px solid var(--line); padding:3px 7px; border-radius:6px; font-variant-numeric:tabular-nums}
+  .wi-eff{font-size:.72rem; color:var(--muted); line-height:1.65}
   .foot{padding:6px 20px 34px; max-width:1600px; margin:0 auto; color:var(--faint); font-size:.74rem; line-height:1.6}
   :focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:6px}
   @media(prefers-reduced-motion:reduce){*{animation:none!important}}
@@ -135,6 +152,8 @@
     <section>
       <div class="col-label">Balance of Power · 2026 Midterms</div>
       <div id="balance-col"></div>
+      <div class="col-label" style="margin-top:20px">Conditional what-if · illustrative</div>
+      <div id="whatif-col"></div>
     </section>
     <aside class="inspector">
       <div class="col-label">The Work · live reads</div>
