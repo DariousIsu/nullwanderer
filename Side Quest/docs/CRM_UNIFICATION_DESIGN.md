@@ -124,7 +124,30 @@ The CRM is not a rival store of truth; it is the flattened, queryable face of th
 > **`predicate_family` distribution** (4.46M facts): identity 3,051,048 · context 1,247,581 ·
 > role 71,405 · bio 38,708 · money 37,795 · affiliation 9,569 · peer 2,108 · behavior 786.
 >
-> **🚨 THE REAL GAP IS COVERAGE, NOT MECHANISM:**
+> ### 🚨🚨 SECOND CORRECTION (same day, later) — THE NODE LINK IS 96.6% COMPLETE, NOT 11.5%
+> Caught one command before running `pass13a --commit`. **Two DIFFERENT linkage mechanisms exist and I
+> conflated them:**
+> 1. **`entities.contact_id`** — the actual node↔contact FK, added idempotently by `store.py`'s
+>    `_ensure_contact_link_and_external_id()` at every boot. **115,804 entity rows carry one, covering
+>    106,520 of 110,319 live contacts = 96.6%. Only 3,799 contacts are genuinely unlinked.**
+> 2. **`fact__c` `predicate_family='identity'`** — the *external-ID crosswalk* (bioguide/wikidata/ocd/…),
+>    a sparser and separate layer at 12,737 contacts. **This is the 11.5% figure below. It is NOT the
+>    node link.**
+>
+> **🚨 `pass13a` MUST NOT BE RUN AS-IS.** Its schema gate is resolved (contact_id + external_id both
+> exist), but the pass is **stale**: it matches only by OCD/bioguide/wikidata index and **never checks
+> `contact_id`**, so its plan says CREATE **48,679** against a population that is already 96.6% linked —
+> i.e. ~48k **duplicate person entities** in a 1.76M-node graph. Required first: a
+> `contact_id IS NOT NULL` short-circuit (LINK/skip instead of CREATE), plus an `inbox` table in
+> civic_graph.db (its INBOX path writes `target_id`/`metadata`; on Saga's union mount `inbox` lives in the
+> tenant attach, so a direct civic_graph connection has none). Re-dry-run should then show a workload in
+> the low thousands — **if it still shows ~48k, do not commit.**
+>
+> **UNAFFECTED AND STILL THE REAL PROBLEM:** the 328,665 stranded Puller targets and the 1,179 LA parish
+> people absent from the CRM entirely. No amount of contact↔entity linking reaches people who were never
+> made contacts. §7 (the feed), the drain, and the inverted Puller all still stand.
+>
+> **🚨 The gap figures immediately below describe the `fact__c` crosswalk layer, NOT the node link:**
 > | | |
 > |---|---|
 > | CRM contacts with an `entity_id` link | **12,737 of 110,319 = 11.5%** (clean 1:1, no fan-out) |
