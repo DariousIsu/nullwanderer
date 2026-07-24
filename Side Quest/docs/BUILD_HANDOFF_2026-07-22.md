@@ -177,6 +177,17 @@ per-doc in-flight Set on decomposeLandedDoc (any two paths). ⚠️#8443 is PARK
 `decompose_sweep:attempted` (emergency stop before the race reached the 15-chunk roster) — after
 the boot that carries 50cfc03, REMOVE 8443 from that meta or the pull never reaches it.
 ⚠️Duplicate mints from #7704 (+~25) and possibly #8413 → nightly dedup/fusion should fuse; verify.
+**⭐⭐SESSION 2026-07-23 (boots 72-79) — the authoritative recap lives in `docs/PLAN_MAP_2026-07-23.md`
+(read its top SESSION-END STATE block first).** Highlights: the full-document-ingest arc — Lucas
+"everything in any document should be taken and processed, linked to the doc, always available."
+The roster minted only 187 of ~5,668 (rest held at confidence-0, below the 0.90 promote floor);
+fix = ANCHORED-ENTITY MINT (`2e75e36`, safer+universal: a held person mints unsubstantiated when an
+edge anchors it to a concrete non-person AND its name is substantial — bare names still hold).
+Held-source hint evolved pin→content-inject→table-structure and FLIPPED #1 off web-scraping onto its
+own roster. THE FREEZE (boots 75-77): root = ECHO overload, NOT the JS lane (ruled out graph-walk
+loop + regex by elimination); my cap 150→40 over-correction reverted (`bafc168`); thin-frontier
+backoff (`6da0cb8`). Watchdog pattern that caught it: poll electron Responding + echo python mem
+(~4GB is NORMAL, not bloat). PENDING boot79 makes the backoff live.
 **⭐SLICE R SHIPPED `a39232a` (boot72 era — NEEDS BOOT73)**: the need→rehearsal wire complete —
 capability_need detector/store/suiteFor (smoke 20), CAPABILITY GAPS state line + rehearse OPEN
 form (run-named needs only; suite auto-matched; watched files = the suite's own requires + the
