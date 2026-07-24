@@ -309,6 +309,10 @@ async function runTick(ctx = {}) {
       surface(`I introduced myself in the Teams meeting chat: "${intro}"`, '(teams) introduced');
       return { stage, ok: true, note: 'posted intro → observing', intro };
     }
+    // IN-CALL heal signal — she IS in the meeting now (past join + lobby + admit), so this dump shows the
+    // real in-call DOM: the meeting chat button/composer AND the "More"/captions controls. This is how we
+    // map the chat + caption clicks (the last unhealed piece), same as the prejoin dump mapped the join.
+    try { if (d.dumpDom) { const dom = await d.dumpDom(d.web); if (dom) console.log('[teams] IN-CALL DOM (heal signal — chat/captions) ↓\n' + String(dom).slice(0, 3000)); } } catch {}
     // CHAT MAY BE BLOCKED FOR EXTERNALS (the doc's flagged risk). She could not post the MANDATORY
     // disclosure — surface it LOUDLY. She still observes (captions are her perception), but Lucas must
     // know the room was not told she's present, so he can disclose for her or reconsider.

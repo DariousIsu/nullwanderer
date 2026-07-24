@@ -29,6 +29,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const CAPTIONS_JS = `(() => {
   try {
     const region =
+      document.querySelector('[data-tid="closed-caption-v2-window-wrapper"]') ||
+      document.querySelector('[data-tid="closed-caption-v2-container"]') ||
       document.querySelector('[data-tid="closed-caption-renderer"]') ||
       document.querySelector('[data-tid="closed-captions-renderer"]') ||
       document.querySelector('[class*="closedCaption" i]') ||
@@ -106,7 +108,8 @@ const DOM_SNAPSHOT_JS = `(() => {
       const tid = e.getAttribute('data-tid') || '';
       const al = (e.getAttribute('aria-label') || '').replace(/\\s+/g,' ').trim().slice(0, 50);
       const tx = (e.textContent || '').replace(/\\s+/g,' ').trim().slice(0, 40);
-      const chk = e.getAttribute('aria-checked');
+      let chk = e.getAttribute('aria-checked');
+      if (chk == null && e.tagName === 'INPUT' && (e.type === 'checkbox' || e.type === 'radio')) chk = String(e.checked);
       if (!tid && !al && !tx) continue;
       out.push('· ' + e.tagName.toLowerCase() + (tid ? ' data-tid=' + tid : '') + (al ? ' aria="' + al + '"' : '') + (chk != null ? ' checked=' + chk : '') + (tx ? ' text="' + tx + '"' : ''));
     }
@@ -205,6 +208,12 @@ function createTeamsDriver(getWC) {
         if (mic) { mic.click(); acted.push('mic-btn'); }
         const cam = btns.find(b => /^turn camera off|^turn off (the )?camera/i.test((b.getAttribute('aria-label') || '').trim()));
         if (cam) { cam.click(); acted.push('cam-btn'); }
+        // teams.live.com prejoin toggles are bare <input>s (data-tid, no aria) — the name-matched loop
+        // above can't catch them. Both ON (checked) = device LIVE (the purple pills in the UI) → click OFF.
+        const vid = document.querySelector('input[data-tid="toggle-video"]');
+        if (vid && vid.checked === true) { vid.click(); acted.push('video-off(tid)'); }
+        const mmic = document.querySelector('input[data-tid="toggle-mute"]');
+        if (mmic && mmic.checked === true) { mmic.click(); acted.push('mic-off(tid)'); }
         return acted.join(', ') || 'nothing-on';
       } catch (e) { return 'err:' + (e && e.message); }
     })()`, true);
