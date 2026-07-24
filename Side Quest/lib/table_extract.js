@@ -73,4 +73,25 @@ function digestByGroup(map, { roleOrder = [], maxNames = 3, cite = null } = {}) 
   return { lines, text: lines.join('\n'), groups: map.size };
 }
 
-module.exports = { parseMarkdownTable, pivot, digestByGroup };
+// ── officialsAnswer — the shared "roster table → grouped leadership answer" (used by the inquiry
+// homecoming AND the chat-path homecoming). Detects the group/role/name columns, drops party
+// committees (not government), orders the governing body first. Returns { text, groups, groupCol } or
+// null when the body is not a recognizable officials roster. THE single source of truth for the extract.
+const PARTY_COMMITTEE = /committee member|\b[DR][PS](?:EC|CC) member\b/i;
+const OFFICIALS_ROLE_ORDER = ['Parish President', 'Police Juror', 'Council Member', 'Councilman', 'Councilmember', 'Council Member at Large', 'Councilman at Large', 'Councilmember at Large', 'Mayor', 'Sheriff', 'Clerk of Court', 'Assessor', 'Coroner', 'District Attorney'];
+function detectCol(headers, re) { return (headers || []).find((h) => re.test(str(h))) || null; }
+function officialsAnswer(body, { cite = null, roleOrder = OFFICIALS_ROLE_ORDER, excludeRole = PARTY_COMMITTEE, minGroups = 3 } = {}) {
+  const parsed = parseMarkdownTable(body);
+  if (!parsed.rows || parsed.rows.length < 5) return null;
+  const groupCol = detectCol(parsed.headers, /parish|county|borough|municipalit|district/i);
+  const roleCol = detectCol(parsed.headers, /office title|^title$|position|\brole\b/i);
+  const nameCol = detectCol(parsed.headers, /candidate name|^name$|official|incumbent|member name/i);
+  if (!groupCol || !roleCol || !nameCol) return null;
+  const map = pivot({ rows: parsed.rows, groupCol, roleCol, nameCol, excludeRole });
+  if (map.size < minGroups) return null;
+  const dig = digestByGroup(map, { roleOrder, maxNames: 3, cite });
+  if (!dig.lines || !dig.lines.length) return null;
+  return { text: dig.text, groups: dig.groups, groupCol };
+}
+
+module.exports = { parseMarkdownTable, pivot, digestByGroup, officialsAnswer, detectCol, PARTY_COMMITTEE, OFFICIALS_ROLE_ORDER };

@@ -53,5 +53,13 @@ ok(/Parish President — Clint Cointment/.test(ascension) && ascension.indexOf('
 const digNarrow = T.digestByGroup(map, { roleOrder: ['Sheriff'], maxNames: 3 });
 ok(digNarrow.lines.every((l) => !/Police Juror|Council Member/.test(l)), 'digest: roleOrder is the include filter — unlisted roles drop from the answer view');
 
+// --- officialsAnswer: the shared end-to-end roster extractor (column detect → pivot → digest) ---
+const oa = T.officialsAnswer(TABLE, { cite: 'doc #99', minGroups: 2 });
+ok(oa && oa.groups === 2 && /ACADIA/.test(oa.text) && /ASCENSION/.test(oa.text), 'officialsAnswer: detects the columns and groups both parishes');
+ok(oa && /Parish President — Clint Cointment/.test(oa.text) && !/DSCC/.test(oa.text), 'officialsAnswer: governing body led, party committee dropped');
+ok(T.officialsAnswer(TABLE, { minGroups: 3 }) === null, 'officialsAnswer: minGroups gate holds — a 2-group table under the default floor → null');
+ok(T.officialsAnswer('| Date | Topic |\n| --- | --- |\n| x | y |\n| a | b |\n| c | d |', {}) === null, 'officialsAnswer: a non-officials table → null (no group/role/name columns)');
+ok(T.officialsAnswer('just some prose, not a table', {}) === null, 'officialsAnswer: non-table body → null');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

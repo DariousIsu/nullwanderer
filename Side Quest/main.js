@@ -5685,6 +5685,21 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // relays over the live truth. The grounded answer must DOMINATE, not compete.
   if (activityQ || deliverableAggQ) { retrievedKnowledgeBlock = null; rkRows = []; }
 
+  // HELD-ROSTER HOMECOMING (chat, boot80): a "list/roster of X" request we can answer from a roster
+  // she ALREADY HOLDS → inject the extracted answer so she presents her own data instead of "the list
+  // is empty" + an empty Canvas (the parish-contacts confabulation, measured live). Content-matched
+  // AND body-verified (only a real officials roster answers). When it fires, the empty-contacts
+  // short-circuit below is skipped so the operator answers from the roster.
+  let heldRosterBlock = null;
+  try {
+    const hr = require('./lib/held_roster').recognize(userMessage, { deps: { db } });
+    if (hr && hr.block) {
+      heldRosterBlock = hr.block;
+      retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${hr.block}\n\n${retrievedKnowledgeBlock}` : hr.block;
+      console.log(`[held-roster] recognized doc #${hr.docId} for a list request (${hr.groups} ${hr.groupCol}) — answering from her held roster, not the empty contacts store`);
+    }
+  } catch (e) { console.error('[held-roster] recognize failed:', e.message); }
+
   // PROMINENCE / IDENTITY note (R1) — a bare famous name resolved (in our civic KG) to a low-prominence
   // same-name record; recall() declined the namesake and surfaced who is actually meant (Wikidata-verified).
   // Prepend so the grounded answer is ABOUT the prominent referent and only footnotes the record we hold.
@@ -5845,7 +5860,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // safe to short-circuit here. The canvas emit is local IPC; only the voice line (fireToolFollowup) uses
   // the model, and it runs AFTER the table lands + is wrapped, so a cloud outage still leaves the list.
   let contactsHandled = false;
-  if (routerOn && turnRoute.route === 'contacts' && !followupFired) {
+  if (routerOn && turnRoute.route === 'contacts' && !followupFired && !heldRosterBlock) {
     try {
       const cq = require('./lib/contacts_query');
       const ask = _contactsQ && _contactsQ.isQuery ? _contactsQ : cq.detect(userMessage);

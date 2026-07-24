@@ -187,24 +187,10 @@ function _loadHeldDoc(d, id) {
 // government) drop; the governing body leads (home-rule President+Council, else the Police Jury), then
 // the constitutional officers — the parish-leadership VIEW over the full ingest. Config, not a channel:
 // a generic table digest (lib/table_extract) ordered by what governs the container (top-down).
-const _PARTY_COMMITTEE = /committee member|\b[DR][PS](?:EC|CC) member\b/i;
-const _PARISH_ROLE_ORDER = ['Parish President', 'Police Juror', 'Council Member', 'Councilman', 'Councilmember', 'Council Member at Large', 'Councilman at Large', 'Councilmember at Large', 'Sheriff', 'Clerk of Court', 'Assessor', 'Coroner', 'District Attorney'];
-function _detectCol(headers, re) { return (headers || []).find((h) => re.test(str(h))) || null; }
+// Delegate to the shared roster extractor (lib/table_extract) — one implementation for the inquiry
+// homecoming and the chat-path homecoming both.
 function _extractHeldAnswer(body, { cite } = {}) {
-  try {
-    const T = require('./table_extract');
-    const parsed = T.parseMarkdownTable(body);
-    if (!parsed.rows || parsed.rows.length < 5) return null;
-    const groupCol = _detectCol(parsed.headers, /parish|county|borough/i);
-    const roleCol = _detectCol(parsed.headers, /office title|^title$|position|\brole\b/i);
-    const nameCol = _detectCol(parsed.headers, /candidate name|^name$|official|incumbent/i);
-    if (!groupCol || !roleCol || !nameCol) return null;
-    const map = T.pivot({ rows: parsed.rows, groupCol, roleCol, nameCol, excludeRole: _PARTY_COMMITTEE });
-    if (map.size < 3) return null;
-    const dig = T.digestByGroup(map, { roleOrder: _PARISH_ROLE_ORDER, maxNames: 3, cite });
-    if (!dig.lines || !dig.lines.length) return null;
-    return { text: dig.text, groups: dig.groups, groupCol };
-  } catch { return null; }
+  try { return require('./table_extract').officialsAnswer(body, { cite }); } catch { return null; }
 }
 function _renderExtractedHint(doc, deps, digest) {
   let decomposed = false;
