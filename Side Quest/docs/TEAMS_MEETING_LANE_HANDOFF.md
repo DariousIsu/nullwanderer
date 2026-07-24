@@ -9,8 +9,13 @@ follow line by line.
 > "Authenticated join flow" unknown below are already revised for this: DO port her session (a
 > `portZoeTeamsSession` analog of `portZoeGoogleSession`), do NOT guest-join. Prereq: sign her Teams
 > account into her DEDICATED browser once (that's the cookie-port source — MS, like Google, blocks
-> interactive sign-in inside an embedded webview). Confirm live whether it's an Entra/org or a personal
-> MS account (affects lobby + the login domain: `login.microsoftonline.com` vs `login.live.com`).
+> interactive sign-in inside an embedded webview).
+>
+> **Settled 2026-07-24:** it's a **personal** MS account and it's ALREADY signed into her dedicated
+> browser — so `portZoeTeamsSession` has cookies to copy today (source domains `login.live.com` /
+> `teams.live.com` / `teams.microsoft.com`), no setup step. Because it's a personal (external) account,
+> she WILL land in the **lobby** on Lucas's org meetings (e.g. BGOV) and wait for the host to admit — so
+> the Teams stage machine needs a **waiting/lobby stage gmeet has no analog for**.
 
 ## Goal
 Let Zoe join + observe **Microsoft Teams** meetings the way she already does Google Meet. Lucas's work
@@ -27,9 +32,10 @@ helpers** rather than duplicating or refactoring them (keeps this lane collision
   `extractDirective`, `validateIntro`, `ensureIntro`, `introPrompt`, `parseMeetingAction`,
   `ledgerAdd`/`ledgerRows`/`renderLedger`, `meetChatOpen`/`meetIntroOn`.
 - **Build new in `lib/teams.js`**: the stage machine (`start`/`get`/`set`/`runTick`/`synthesizeMeeting`)
-  — it can be near-identical to gmeet's; the only real difference is the DOM layer below and the
-  join/guest flow. Use its OWN meta keys (`teams_stage`, `teams_url`, …) so a Teams and a Meet session
-  can't clobber each other's state.
+  — mostly parallels gmeet's, but with three real differences: the DOM layer below, the auth/join flow,
+  and a NEW **lobby/waiting stage** (joining → waiting → intro → …) gmeet has no analog for — Teams drops
+  her (an external personal account) in a lobby until the host admits her. Use its OWN meta keys
+  (`teams_stage`, `teams_url`, …) so a Teams and a Meet session can't clobber each other's state.
 - **DOM layer**: mirror [lib/meet_canvas.js](../lib/meet_canvas.js) → `lib/teams_canvas.js`. That's
   where the platform-specific automation lives (`CAPTIONS_JS`, `IN_MEETING_JS`, `ATTENDEES_JS`,
   `clickByLabelJS`, the driver). Teams' live-caption / attendee / "Leave" DOM is entirely different
@@ -43,8 +49,8 @@ only ONE of us edits main.js at a time:
 1. `startCanvasMeeting` ([main.js:2362](../main.js)) — add a Teams branch: mount into a
    `persist:zoe-teams` partition, **authenticated join** — add a `portZoeTeamsSession()` mirroring
    `portZoeGoogleSession` ([main.js:2341](../main.js)) that copies her Microsoft/Teams cookies
-   (`login.microsoftonline.com` / `login.live.com` / `teams.microsoft.com`) from her dedicated browser
-   into `persist:zoe-teams` BEFORE the pane loads, then kick `teams.start()`. (She's signed into Teams on
+   (personal MS account → `login.live.com` / `teams.live.com` / `teams.microsoft.com`) from her dedicated
+   browser into `persist:zoe-teams` BEFORE the pane loads, then kick `teams.start()`. (She's signed into Teams on
    her dedicated browser; MS blocks interactive sign-in inside a webview, same as Google — port the authed
    cookies, don't sign in in-pane.) Consider a `startCanvasMeeting(url, title, {platform})` param over a fork.
 2. join-detect wire ([main.js:5020](../main.js)) — add `detectTeamsUrl(userMessage)` beside
@@ -73,11 +79,15 @@ only ONE of us edits main.js at a time:
   Lucas (companion in use).
 
 ## Teams-specific unknowns (the real risk — resolve these live)
-- **Authenticated join flow** (she has her own Teams account now): Teams web → "continue on this
-  browser" gate → prejoin screen (already signed in as her — no name to type) → "Join now" → possibly a
-  lobby (host admits). Prereq: her Teams account signed into her DEDICATED browser once, so
-  `portZoeTeamsSession` has cookies to copy. Confirm live: Entra/org vs personal MS account — an org
-  account in a tenant she belongs to may skip the lobby; an external/personal account will hit it.
+- **Authenticated join flow** (personal MS account, already signed into her dedicated browser): Teams web
+  → "continue on this browser" gate → prejoin screen (already signed in as her — no name to type) →
+  "Join now" → **lobby** (external to Lucas's tenant → the host must admit her; build the waiting stage —
+  gmeet has no analog). `portZoeTeamsSession` can copy her cookies today; no setup outstanding.
+- **In-meeting chat policy for external participants** (gates the MANDATORY disclosure intro): some org
+  meeting policies disable or restrict chat for external/guest participants. If chat is off for her, she
+  CANNOT post the required "I'm an AI here on Lucas's behalf" disclosure — so that must gate whether she
+  joins at all, NOT silently observe undisclosed. Confirm on a real org invite; audio-loopback perception
+  ([lib/meeting_audio.js](../lib/meeting_audio.js)) still works, but presence-without-disclosure does not.
 - **URL forms** (both appear in the real BGOV invite): `https://teams.microsoft.com/meet/<id>?p=<pass>`
   and `https://teams.microsoft.com/l/meetup-join/19%3ameeting_…%40thread.v2/0?context=…`.
   `detectTeamsUrl` must match both.
