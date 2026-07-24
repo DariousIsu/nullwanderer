@@ -2217,6 +2217,65 @@ const ANIM_CLIPS = {
     neck:          [[0, [-0.03, -0.06, -0.02]], [3.5, [-0.05, -0.08, -0.03]], [7.0, [-0.03, -0.06, -0.02]]],
     chest:         [[0, [0, 0, 0]], [3.5, [-0.020, 0, 0]], [7.0, [0, 0, 0]]],
   } },
+
+  // ---- VARIANTS. A director model choosing between four obvious options buys only latency; RANGE is what
+  // makes it earn its place. These are the same four intents at different weights, plus real gestures, so
+  // "how she says it" becomes a decision rather than a lookup. ----
+
+  // a slower, emptier breath — so a long idle does not loop visibly identically
+  idle_settle: { loop: true, dur: 6.8, tracks: {
+    chest:         [[0, [0, 0, 0]], [2.9, [-0.030, 0, 0]], [6.8, [0, 0, 0]]],
+    spine:         [[0, [0, 0, 0]], [3.0, [0.014, 0, 0]],  [6.8, [0, 0, 0]]],
+    leftShoulder:  [[0, [0, 0, 0]], [3.2, [0, 0, -0.032]], [6.8, [0, 0, 0]]],
+    rightShoulder: [[0, [0, 0, 0]], [3.2, [0, 0, 0.032]],  [6.8, [0, 0, 0]]],
+    head:          [[0, [0, 0, 0]], [3.4, [0.010, -0.026, 0]], [6.8, [0, 0, 0]]],
+  } },
+  // interested: she comes forward instead of just going still
+  listen_lean: { loop: true, dur: 5.4, tracks: {
+    spine:         [[0, [-0.045, 0, 0]], [2.7, [-0.060, 0, 0]], [5.4, [-0.045, 0, 0]]],
+    chest:         [[0, [-0.030, 0, 0]], [2.7, [-0.048, 0, 0]], [5.4, [-0.030, 0, 0]]],
+    head:          [[0, [0.075, 0.115, 0.070]], [2.7, [0.095, 0.140, 0.085]], [5.4, [0.075, 0.115, 0.070]]],
+    neck:          [[0, [0.040, 0.060, 0.035]], [2.7, [0.055, 0.075, 0.045]], [5.4, [0.040, 0.060, 0.035]]],
+  } },
+  // tentative — smaller, slower, less shoulder
+  speak_soft: { loop: true, dur: 3.2, tracks: {
+    head:          [[0, [0, 0, 0]], [0.8, [-0.018, -0.024, 0]], [1.8, [0.015, 0.020, 0]], [3.2, [0, 0, 0]]],
+    neck:          [[0, [0, 0, 0]], [0.9, [-0.010, -0.013, 0]], [1.9, [0.009, 0.011, 0]], [3.2, [0, 0, 0]]],
+    chest:         [[0, [0, 0, 0]], [1.6, [-0.018, 0, 0]], [3.2, [0, 0, 0]]],
+  } },
+  // emphatic — bigger punctuation, both shoulders carrying it
+  speak_emphatic: { loop: true, dur: 2.2, tracks: {
+    head:          [[0, [0, 0, 0]], [0.5, [-0.070, -0.085, 0.020]], [1.2, [0.060, 0.075, -0.018]], [2.2, [0, 0, 0]]],
+    neck:          [[0, [0, 0, 0]], [0.55, [-0.038, -0.045, 0]], [1.25, [0.032, 0.040, 0]], [2.2, [0, 0, 0]]],
+    chest:         [[0, [0, 0, 0]], [1.1, [-0.055, 0, 0]], [2.2, [0, 0, 0]]],
+    leftShoulder:  [[0, [0, 0, 0]], [1.1, [0, 0, -0.070]], [2.2, [0, 0, 0]]],
+    rightShoulder: [[0, [0, 0, 0]], [1.1, [0, 0, 0.070]],  [2.2, [0, 0, 0]]],
+  } },
+  // further away, slower — a longer problem
+  think_deep: { loop: true, dur: 8.5, tracks: {
+    head:          [[0, [-0.10, -0.18, -0.08]], [4.2, [-0.14, -0.23, -0.11]], [8.5, [-0.10, -0.18, -0.08]]],
+    neck:          [[0, [-0.05, -0.09, -0.04]], [4.2, [-0.07, -0.12, -0.05]], [8.5, [-0.05, -0.09, -0.04]]],
+    chest:         [[0, [0.020, 0, 0]], [4.2, [0.032, 0, 0]], [8.5, [0.020, 0, 0]]],
+  } },
+
+  // ---- one-shot GESTURES: loop:false, so they play once, settle back to neutral, and the hold returns
+  // her to whatever idle she was in. These are the beats a director actually wants to place. ----
+  nod:   { loop: false, dur: 1.15, tracks: {
+    head: [[0, [0, 0, 0]], [0.26, [0.130, 0, 0]], [0.56, [-0.040, 0, 0]], [0.86, [0.060, 0, 0]], [1.15, [0, 0, 0]]],
+    neck: [[0, [0, 0, 0]], [0.26, [0.060, 0, 0]], [0.56, [-0.018, 0, 0]], [0.86, [0.028, 0, 0]], [1.15, [0, 0, 0]]],
+  } },
+  shake: { loop: false, dur: 1.30, tracks: {
+    head: [[0, [0, 0, 0]], [0.30, [0, 0.150, 0]], [0.66, [0, -0.130, 0]], [0.98, [0, 0.065, 0]], [1.30, [0, 0, 0]]],
+    neck: [[0, [0, 0, 0]], [0.30, [0, 0.070, 0]], [0.66, [0, -0.060, 0]], [0.98, [0, 0.030, 0]], [1.30, [0, 0, 0]]],
+  } },
+  // a quick lift — noticing something
+  perk:  { loop: false, dur: 1.25, tracks: {
+    head:  [[0, [0, 0, 0]], [0.32, [-0.095, 0.030, 0]], [1.25, [0, 0, 0]]],
+    neck:  [[0, [0, 0, 0]], [0.32, [-0.048, 0.015, 0]], [1.25, [0, 0, 0]]],
+    chest: [[0, [0, 0, 0]], [0.32, [-0.048, 0, 0]], [1.25, [0, 0, 0]]],
+    leftShoulder:  [[0, [0, 0, 0]], [0.32, [0, 0, -0.050]], [1.25, [0, 0, 0]]],
+    rightShoulder: [[0, [0, 0, 0]], [0.32, [0, 0, 0.050]],  [1.25, [0, 0, 0]]],
+  } },
 };
 let animCur = 'idle', animPrev = null, animT = 0, animPrevT = 0, animMix = 1, animFadeDur = 0.45, animHoldUntil = 0;
 // sample one clip's track at time t (linear between keys, eased so nothing starts or stops abruptly)
