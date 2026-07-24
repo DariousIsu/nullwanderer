@@ -33,13 +33,20 @@ const STALE_MS = 3600e3;   // an analysis dir older than an hour is a straggler
 
 function _pyInterp() { try { return require('./rehearsal').pyInterp(); } catch { return process.env.ECHO_PYTHON || 'python'; } }
 
-// The read-only DATA databases this lane exposes. sq.db = her short-term memory (Side Quest's own
-// data DB). Echo's graph engine is reachable through its MCP read tools (db_query, kg_*), not raw
-// files — deliberately out of this v1 whitelist. Only files that EXIST are offered; secrets never.
+// The read-only DATA databases this lane exposes. Only files that EXIST are offered; secrets never.
+//  • sq  = her short-term memory (Side Quest's own data DB).
+//  • graph = Echo's LIVE civic knowledge graph (R3 v2) — entities/relations/facts, the store her
+//    research builds into (v1 reached it only through Echo's MCP read tools). ONLY the graph file is
+//    whitelisted — NOT Echo's saga.db (operational/session data) and NEVER the keychain/.env. Verified:
+//    61 tables, zero secret-shaped. The helper's mode=ro makes every write SQLite-rejected; a runaway
+//    query is bounded by the run timeout + output cap. Override the path with ZOE_ECHO_GRAPH_DB.
 function dbWhitelist() {
   const out = {};
   const sq = process.env.SQ_DB_PATH || path.join(DATA_DIR, 'sq.db');
   if (fs.existsSync(sq)) out.sq = sq;
+  const echoCwd = process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo';
+  const graph = process.env.ZOE_ECHO_GRAPH_DB || path.join(echoCwd, 'data', 'foundations', 'civic_graph.db');
+  if (fs.existsSync(graph)) out.graph = graph;
   return out;
 }
 

@@ -11,6 +11,9 @@ const TMP = path.join(os.tmpdir(), `zoe-analysis-${process.pid}_${Date.now().toS
 process.env.SQ_DB_PATH = path.join(TMP, 'sq.db');
 process.env.ZOE_DATA_DIR = TMP;
 process.env.ZOE_ANALYSIS_DIR = path.join(TMP, 'analysis');
+// R3 v2: point the Echo-graph whitelist entry at a TEMP fake graph so the smoke never touches the real
+// 7.8GB civic_graph.db (and passes on a box without Echo installed).
+process.env.ZOE_ECHO_GRAPH_DB = path.join(TMP, 'graph.db');
 fs.mkdirSync(TMP, { recursive: true });
 
 const db = require('../lib/db');
@@ -31,9 +34,22 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   try { d.pragma('wal_checkpoint(TRUNCATE)'); } catch {}
   const rowCount = () => d.prepare('SELECT COUNT(*) n FROM zoe_probe').get().n;
 
+  // Seed a fake Echo GRAPH db (R3 v2) at ZOE_ECHO_GRAPH_DB — an `entities` table, checkpointed to the
+  // main file so a mode=ro reader sees it. Stands in for civic_graph.db; the smoke stays hermetic.
+  {
+    const Database = require('better-sqlite3');
+    const g = new Database(process.env.ZOE_ECHO_GRAPH_DB);
+    g.exec('CREATE TABLE entities (id INTEGER PRIMARY KEY, name TEXT)');
+    const gi = g.prepare('INSERT INTO entities (name) VALUES (?)');
+    for (const n of ['Ouachita Parish', 'Caddo Parish']) gi.run(n);
+    try { g.pragma('wal_checkpoint(TRUNCATE)'); } catch {}
+    g.close();
+  }
+
   // --- whitelist: only existing DATA dbs, never secrets ---
   const wl = A.dbWhitelist();
   ok(wl.sq && /sq\.db$/.test(wl.sq), "the whitelist exposes 'sq' (her short-term memory)");
+  ok(wl.graph && /graph\.db$/.test(wl.graph), "R3 v2: the whitelist exposes 'graph' (Echo's civic KG, read-only)");
   ok(!Object.keys(wl).some((k) => /env|key|secret|cred/i.test(k)), 'no secret-shaped name is ever whitelisted');
   ok(!A._helperSource(wl).includes('.env'), 'the generated helper never references .env');
 
@@ -49,13 +65,19 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
 
     // --- dbs() lists the whitelist ---
     const dl = await A.run({ code: "import zoe_data\nprint('DBS=' + ','.join(zoe_data.dbs()))\n" });
-    ok(/DBS=sq/.test(dl), 'zoe_data.dbs() lists the reachable databases');
+    ok(/\bsq\b/.test(dl) && /\bgraph\b/.test(dl) && /^DBS=/m.test(dl), 'zoe_data.dbs() lists the reachable databases (sq + graph)');
 
     // --- ⭐WRITE REJECTED + the live DB is unchanged ---
     const before = rowCount();
     const wr = await A.run({ code: "import zoe_data\nzoe_data.query('sq', 'DELETE FROM zoe_probe')\nprint('DELETED')\n" });
     ok(/readonly|read-only/i.test(wr) && !/DELETED/.test(wr), '⭐a write is REJECTED by SQLite (mode=ro) — never silently applied');
     ok(rowCount() === before && before === 3, '⭐the live DB is unchanged after the rejected write (no corruption, no loss)');
+
+    // --- R3 v2: the Echo GRAPH reads read-only, and a write to it is rejected the same way ---
+    const grd = await A.run({ code: "import zoe_data\ncols, rows = zoe_data.query('graph', 'SELECT name FROM entities ORDER BY id')\nprint('GRAPH=' + ','.join(r[0] for r in rows))\n" });
+    ok(/GRAPH=Ouachita Parish,Caddo Parish/.test(grd), '⭐R3 v2: a read-only query returns Echo-graph data (entities)');
+    const gwr = await A.run({ code: "import zoe_data\nzoe_data.query('graph', 'DELETE FROM entities')\nprint('GDELETED')\n" });
+    ok(/readonly|read-only/i.test(gwr) && !/GDELETED/.test(gwr), '⭐R3 v2: a write to the GRAPH is REJECTED (mode=ro) — the live KG can never be mutated');
 
     // --- a non-whitelisted db name is refused inside the helper ---
     const bad = await A.run({ code: "import zoe_data\nzoe_data.query('secrets', 'SELECT 1')\n" });
