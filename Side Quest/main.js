@@ -9456,7 +9456,7 @@ async function autonomyTick() {
         if (ps && ps.ok && !ps.isError && ps.text) db.setMeta('autonomy.pass_status', JSON.stringify({ ts: now, text: String(ps.text).slice(0, 1500) }));
       }
     } catch (e) { console.error('[autonomy] pass-status refresh failed:', e.message); }
-    const manifest = autonomy.buildManifest({ db, now });
+    const manifest = autonomy.buildManifest({ db, now, deps: { forecast: () => lastForecast } });
     if (!manifest.text) { console.log('[autonomy] empty manifest — nothing to choose from'); return; }
     const decision = await autonomy.decide({ manifestText: manifest.text, history: autonomy.historyRead(H.getMeta), now });
     if (!decision) {

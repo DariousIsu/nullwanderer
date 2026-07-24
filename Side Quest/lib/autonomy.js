@@ -226,6 +226,28 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
     return `• MAINTENANCE & ANALYSIS LOOPS (Echo pass status as of ${_ago(now, cached.ts)}):\n${String(cached.text).replace(/\s+$/g, '').slice(0, 700)}`;
   });
 
+  grab('forecast', () => {
+    // F3 (PLAN_MAP §3b): her OWN 2026 balance-of-power model was reachable from chat (forecast_query)
+    // but invisible to the DECIDER — so an idle tick could never choose to deepen a pivotal race or
+    // refresh an illustrative run. Surface the chamber toplines + a TIGHT/ILLUSTRATIVE nudge so acting
+    // on her own model is a first-class move. Reads the last completed run (deps.forecast → lastForecast);
+    // no run → no line (a total no-op). Party A = Dem-coded, B = Rep-coded (the model's convention).
+    const snap = (typeof deps.forecast === 'function') ? deps.forecast() : (deps.forecast || null);
+    if (!snap || !snap.ok) return '';
+    const chambers = (((snap.work || {}).sim || {}).chambers) || {};
+    const chNames = Object.keys(chambers);
+    if (!chNames.length) return '';
+    counts.forecastChambers = chNames.length;
+    const rows = chNames.map((ch) => {
+      const c = chambers[ch] || {};
+      const pA = Number(c.pA_control || 0);
+      const tight = pA >= 0.40 && pA <= 0.60;
+      return `   - ${ch}: P(Dem control) ${(100 * pA).toFixed(0)}%, Dem seats ${Number(c.seatsA_mean || 0).toFixed(0)} (80% band ${c.seatsA_p10}–${c.seatsA_p90}) of ${c.total_seats}${tight ? ' — TIGHT: the pivotal races are prime deepening targets' : ''}`;
+    });
+    const stale = snap.illustrative ? ' — ILLUSTRATIVE (no polled margins yet; getting real margins into the pivotal races would sharpen it)' : '';
+    return `• YOUR 2026 FORECAST (your own balance-of-power Monte-Carlo, as of ${snap.as_of || 'this boot'}${stale}). A TIGHT chamber or an illustrative run is a real move — deepen a pivotal race or refresh its margins:\n${rows.join('\n')}`;
+  });
+
   grab('board', () => {
     // The workstream board (lib/board, conductor 2a) — what is ALREADY running, so the decision never
     // starts a second run of a kind in flight and can see which resources are held.

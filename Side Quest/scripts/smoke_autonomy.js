@@ -47,6 +47,15 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
 
   const man = auto.buildManifest({ db: { getDb: () => mem }, now: NOW });
   ok(/Rainey Center — board members/.test(man.text), 'manifest names the absence gap');
+
+  // FORECAST line (F3): her balance-of-power model reaches the DECIDER when a run exists.
+  const fcSnap = { ok: true, as_of: '2026-07-24', illustrative: false, work: { sim: { chambers: {
+    senate: { pA_control: 0.52, seatsA_mean: 51, seatsA_p10: 48, seatsA_p90: 54, total_seats: 100, n_races: 35 },
+    house: { pA_control: 0.31, seatsA_mean: 205, seatsA_p10: 198, seatsA_p90: 214, total_seats: 435, n_races: 435 } } } } };
+  const manF = auto.buildManifest({ db: { getDb: () => mem }, now: NOW, deps: { forecast: () => fcSnap } });
+  ok(/YOUR 2026 FORECAST/.test(manF.text) && /senate: P\(Dem control\) 52%/.test(manF.text), 'forecast line surfaces the chamber toplines to the decider');
+  ok(/senate.*TIGHT/.test(manF.text) && !/house.*TIGHT/.test(manF.text), 'a chamber near 50% is flagged TIGHT (a deepening target); a lopsided one is not');
+  ok(!/YOUR 2026 FORECAST/.test(auto.buildManifest({ db: { getDb: () => mem }, now: NOW, deps: { forecast: () => null } }).text), 'no forecast run → no forecast line (a clean no-op)');
   ok(/Louisiana Parishes: 64 vs 62/.test(man.text), 'manifest surfaces the cardinality CONFLICT');
   ok(/Acme PAC \(2 claims, one source\)/.test(man.text), 'manifest finds the single-source encounter cluster');
   ok(/neuromorphic computing \(weight 1.40/.test(man.text), 'manifest carries her interests as idea material');
