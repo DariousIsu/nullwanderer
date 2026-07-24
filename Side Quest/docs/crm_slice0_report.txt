@@ -1,0 +1,101 @@
+==============================================================================
+CRM UNIFICATION — SLICE 0 REPORT (read-only)
+generated: 2026-07-24T19:20:02.971Z
+puller: C:\Users\azrae\Desktop\Side Quest\data\puller.db
+crm:    C:/Users/azrae/Desktop/NX ECHO/nx-echo/data/foundations/electoral.db
+==============================================================================
+
+── building CRM index ──
+CRM live contacts: 110,319 · indexed on last+first-initial: 110,028 · distinct keys: 67,463
+⚠ CRM keys that ALREADY hold >1 contact: 18,593 (27.6%) — a name-only merge is unsafe on these
+
+── A. REAL-PERSON GATE (Puller, streamed) ──
+Puller live targets: 329,923
+  person                 278,398   84.4%
+      · Casey Street — AECOM
+      · Tom Tilas — AECOM
+      · Mark Miller — AES Corporation
+  caps-person             34,161   10.4%
+      · TED ALEXANDER — North Carolina
+      · BRAD OVERCASH — North Carolina
+      · SARAH HUNT — Rainey Center
+  single-token            16,136    4.9%
+      · Josh
+      · Sean
+      · Tracy
+  likely-organization        818    0.2%
+      · The Joseph Rainey Center for Public Policy
+      · Vernon Utley Jr., CPA, CISA, MPA — Auditor
+      · John "Big John" Illg , Jr. — State House
+  organization               410    0.1%
+      · Brantley County Board of Elections and Registrations — Brantley County
+      · Bulloch County Board of Elections — Bulloch County
+      · Candler County Board of Registration — Candler County
+
+⭐ GATE VERDICT: 1,228 (0.4%) route to ORG, not the person CRM.
+   'caps-person' = 34,161 — ALL-CAPS but person-shaped (design-doc open question #2):
+      · TED ALEXANDER — North Carolina
+      · BRAD OVERCASH — North Carolina
+      · SARAH HUNT — Rainey Center
+      · JAKE JOHNSON
+      · JEFF ZENGER
+      · JASON SAINE
+      · PETER H. LEDFORD — Ward and Smith, P.A
+      · JOSH BROOKS — NC Sustainable Energy Association
+      · MATT CONRAD — Tract
+      · TOM HASSENBOEHLER — COEFFICIENT
+      · RACHEL WILSON — Google
+      · KEVIN MARTIN — Carolina Utility Customers Association (CUCA)
+
+── B. DEDUP COLLISION vs the CRM ──
+unusable name (no 2-token key): 7,598
+NEW to the CRM (no key match):  220,491  (68.4% of usable) → these MINT
+matched exactly ONE contact:     27,389  (8.5%) → candidate merges
+  …of those, state corroborates: 352 · unverified by state: 27,037
+⚠ matched MANY contacts:         74,445  (23.1%) → MUST be held, never auto-merged
+      · Casey Street → 4 CRM contacts share key "street|c"
+      · Mark Miller → 38 CRM contacts share key "miller|m"
+      · Amanda Smith → 47 CRM contacts share key "smith|a"
+      · Chad Rogers → 14 CRM contacts share key "rogers|c"
+      · Evan Hays → 3 CRM contacts share key "hays|e"
+      · Julie Klein → 13 CRM contacts share key "klein|j"
+      · Megan Schrader → 2 CRM contacts share key "schrader|m"
+      · Blair Anderson → 14 CRM contacts share key "anderson|b"
+      · Daniel O'Connor → 2 CRM contacts share key "connor|d"
+      · David Ross → 15 CRM contacts share key "ross|d"
+
+⭐ SAFETY: 101,482 of 322,325 (31.5%) cannot be safely
+   auto-merged on name alone. This is why Slice 1's crosswalk (strong ids) comes FIRST.
+
+── C. ENRICHMENT VALUE (Puller beliefs → empty CRM columns) ──
+beliefs: 497,196  (status vocabulary is a single value, 'active' — confidence is the quality signal)
+by type — observed vs pattern-inferred:
+  role       total   281,530 │ OBSERVED   281,530 │ inferred        0 (0.0%) │ conf≥0.7 278,968
+  phone      total    85,651 │ OBSERVED    85,651 │ inferred        0 (0.0%) │ conf≥0.7 85,182
+  email      total    72,693 │ OBSERVED     2,407 │ inferred   70,286 (96.7%) │ conf≥0.7 71,372
+  address    total    57,322 │ OBSERVED    57,322 │ inferred        0 (0.0%) │ conf≥0.7 57,322
+  top derivations:
+    role      doc                            277,658
+    phone     doc                            84,877
+    email     doc:pattern                    69,398
+    address   doc                            57,230
+    role      web-prospect                   2,073
+    role      handoff                        1,799
+    email     qualified:B                    985
+    email     pattern:first.last             576
+
+CRM gaps the beliefs target: no Email 96,993 · no Phone 97,260 · no Org 88,482
+
+── D. LA PARISH SUBSET (Slice 2 payoff input) ──
+Puller parish-related targets: 1,179
+  person                1,112
+  caps-person              54
+  single-token              8
+  likely-organization       4
+  organization              1
+  with a title/role in notes: 1,110 (94.1%) — name+title+parish is the sheet Lucas asked for
+  …same people currently in the CRM: 0
+
+==============================================================================
+SLICE 0 COMPLETE — nothing was written to any store.
+==============================================================================

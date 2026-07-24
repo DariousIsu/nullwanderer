@@ -274,6 +274,61 @@ is answerable from our own records, which is the request that started this.
 
 ---
 
+## 8b. SLICE 0 RESULTS (run 2026-07-24 — `scripts/crm_slice0_report.js`, read-only)
+
+Full output: `docs/crm_slice0_report.txt`. Four findings, three of which change later slices.
+
+### ✅ The backlog is genuinely people — the gate is cheap
+| classification | count | share |
+|---|---|---|
+| person | 278,350 | 84.4% |
+| **caps-person** | **34,029** | **10.3%** |
+| single-token (mononym/fragment) | 16,136 | 4.9% |
+| likely-organization | 818 | 0.2% |
+| organization | 410 | 0.1% |
+
+**Only 1,228 (0.4%) route to ORG.** The feared contamination isn't there.
+
+**⭐ Open question #2 is ANSWERED: the ALL-CAPS rows are REAL PEOPLE, not orgs** — `TED ALEXANDER — North
+Carolina`, `SARAH HUNT — Rainey Center`, `RACHEL WILSON — Google`. They need **name-case normalization on
+the way in**, not rejection. (Add to the feed: title-case a name that arrives fully upper-case.)
+
+### 🚨 Name-only merging is unsafe for a third of the backlog
+- NEW to the CRM (no key match): **220,381 (68.4%)** → these MINT cleanly
+- matched exactly ONE contact: **27,374 (8.5%)** → candidate merges
+- ⚠ matched **MANY** contacts: **74,390 (23.1%)** → `Amanda Smith → 47 CRM contacts`, `Mark Miller → 38`
+- The CRM *already* has **18,593 (27.6%)** of its own name-keys holding more than one contact.
+
+**⭐ 101,412 of 322,145 (31.5%) cannot be safely auto-merged on name alone.** This is the empirical case
+for Slice 1 (crosswalk) preceding Slice 4 (drain), and for the rail "auto-merge ONLY on a strong id."
+
+### 🚨🚨 96.7% of Puller's emails are GUESSES — and they carry high confidence
+| type | total | **observed** | **pattern-inferred** | conf ≥ 0.7 |
+|---|---|---|---|---|
+| role | 281,530 | **281,530** | 0 | 278,968 |
+| phone | 85,651 | **85,651** | 0 | 85,182 |
+| address | 57,322 | **57,322** | 0 | 57,322 |
+| **email** | 72,693 | **2,407** | **70,286 (96.7%)** | 71,372 |
+
+`email` derivations are `doc:pattern` (69,398) and `pattern:first.last` (576) — values **synthesized from a
+company's email shape**, not read off any source. And the trap: **their confidence is high** (samples at
+0.976), so a confidence-only gate would launder 70,286 guesses into the ultimate store — a store we send
+mail from. **Only `derivation` distinguishes them.**
+
+**⭐ RAIL (amends §7b step 3):** the drain promotes **observed** facts to real columns. Pattern-inferred
+emails land as **candidates only** — `Email_Quality_Score__c` populated, `Email` left NULL,
+`Email_Validated_At__c` NULL — using columns that already exist. Confidence is NOT sufficient authority;
+provenance is. *(Consistent with the substantiation-gate principle: an inference never vouches for itself.)*
+
+**The good news is large:** role (281,530), phone (85,651) and address (57,322) are **100% observed**,
+`doc`-derived. Against CRM gaps of 97,260 missing phones and 88,482 missing orgs, that is the real payload.
+
+### ✅ Slice 2's input is ready
+Puller parish targets **1,179** — 1,112 person + 54 caps-person, only 5 org-ish. **94.1% carry a title/role
+in notes**, which is exactly *name + title + parish*. Currently in the CRM: **0**.
+
+---
+
 ## 9. Risks and rails
 
 - **False identity merges.** The single worst outcome — two people fused into one. Memory records a
@@ -299,8 +354,8 @@ is answerable from our own records, which is the request that started this.
    `elected|staff|judge|candidate`. Does `sector` *supersede* it (and we backfill + deprecate), or do
    they coexist as coarse-vs-fine? Recommendation: supersede, since `sector` is derived and
    multi-valued while `Contact_Kind__c` is single and hand-set.
-2. **The 35,273 ALL-CAPS rows** — bulk-load signature. Sample before deciding: some are FEC committee
-   names (orgs), some may be legitimately-cased-badly people. Slice 0 answers this.
+2. ~~**The 35,273 ALL-CAPS rows**~~ — **ANSWERED by Slice 0 (§8b): they are REAL PEOPLE** (34,029 of them),
+   not orgs. They need name-case normalization in the feed, not rejection.
 3. **Salesforce direction** — is `system='salesforce'` inbound-only for now, or do we eventually push
    back out? Affects whether the crosswalk needs a dirty/sync-state flag.
 4. **Level for non-government sectors** — does a corporate VP get a `level` tag at all, or is `level`
