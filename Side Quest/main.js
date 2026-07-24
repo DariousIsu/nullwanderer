@@ -5559,6 +5559,15 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let activityQ = false;
   try { activityQ = require('./lib/activity').isActivityQuestion(userMessage); } catch (e) { console.error('[main] activity detect failed:', e.message); }
 
+  // SCHEDULE ("when is the BGov meeting", "my next meeting", "what's on my calendar") — answerable
+  // from the events she ALREADY holds (HIS WEEK), not the records/web ladder. Detected here so the
+  // cognition gate below can (a) always run for it and (b) inject the held calendar as grounding.
+  // Live 2026-07-24: "when is the BGov meeting today?" hit cognition with NO calendar in grounding,
+  // was treated as a new entity to research, missed → "I couldn't pin down the BGov meeting" while
+  // BGOV 10:00 Teams sat in HIS WEEK. This routes the schedule question home.
+  let scheduleQ = false;
+  try { scheduleQ = require('./lib/week_context').isScheduleQuestion(userMessage); } catch (e) { console.error('[main] schedule detect failed:', e.message); }
+
   // DELIVERABLE aggregate (Slice I) — count/list/facet/status are answered by the deliverable poll off
   // the Track's live artifact; suppress the competing RAG for those too, so a STALE dossier node
   // ("(5 orgs)" from an earlier run) can't override the live count (the "5 vs 12" miss, caught live).
@@ -6110,10 +6119,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // memory (closes both confabulation AND over-hedging where she actually has the facts). Only fires
     // when real grounding exists — no grounding → normal flow (general knowledge / admit-the-gap).
     if (!drafted && !socialTurn && !followupFired && !_isStatusReq) {
-      if (cloudOwnsAnswer || personalFactQ) {
+      if (cloudOwnsAnswer || personalFactQ || scheduleQ) {
         // Grounding sources: her object/knowledge block + relevant past turns + READINGS she holds (the
-        // article/page the question is about).
-        const grounding = ad.factualGrounding({ knowledgeBlock: retrievedKnowledgeBlock, pastTurns: relevantPastTurns, readings: recentReadings });
+        // article/page the question is about) + HIS CALENDAR when it's a schedule question — the held
+        // HIS WEEK events, so "when is the BGov meeting" answers FROM them, not a records/web search.
+        let _calGrounding = null;
+        if (scheduleQ) { try { _calGrounding = await require('./lib/week_context').scheduleGrounding({ gcalOpts: gcalOpts() }); } catch (e) { console.error('[main] schedule grounding failed:', e.message); } }
+        const grounding = ad.factualGrounding({ knowledgeBlock: retrievedKnowledgeBlock, pastTurns: relevantPastTurns, readings: recentReadings, calendar: _calGrounding });
         // ENRICH/RECOVERY loop (lib/cognition, turn→object Phase 2+4): draft from grounding, OR go FIND
         // what's missing (our graph → web) then draft — so a wall becomes "let me find out", never a
         // dead-end ("records don't specify") or a confabulation. Runs when the turn is about an object we
@@ -6121,7 +6133,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // with no object stays on the model's own knowledge. Fail-safe: cloud/Echo down → null → local flow.
         let _scope = 'general';
         try { _scope = require('./lib/metacognition').groundingScope(userMessage); } catch {}
-        const _runEnrich = cloudOwnsAnswer || personalFactQ || !!(recallResult && recallResult.object) || !!(grounding && grounding.length) || _scope !== 'general';
+        const _runEnrich = cloudOwnsAnswer || personalFactQ || scheduleQ || !!(recallResult && recallResult.object) || !!(grounding && grounding.length) || _scope !== 'general';
         if (_runEnrich) {
           try {
             // `_scope` is computed just above. Passing it lets the ladder distinguish "we should

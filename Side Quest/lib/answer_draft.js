@@ -80,8 +80,11 @@ async function draft({ userMessage, grounding, kind = 'general', deps = {} } = {
 // (knowledge block + relevant past turns). Returns '' when there isn't enough REAL grounding — the
 // caller then uses the normal flow (general knowledge from training, or the admit-the-gap directive)
 // rather than drafting from thin air. Pure → testable; the >40-char floor keeps thin blocks out.
-function factualGrounding({ knowledgeBlock = null, pastTurns = [], readings = [] } = {}) {
+function factualGrounding({ knowledgeBlock = null, pastTurns = [], readings = [], calendar = null } = {}) {
   const parts = [];
+  // CALENDAR leads — a schedule question ("when is the BGov meeting") is answered from the events she
+  // already holds, not the records/web ladder. Put it first so it's the primary source the draft uses.
+  if (calendar && String(calendar).trim()) parts.push(String(calendar).trim());
   if (knowledgeBlock && String(knowledgeBlock).trim()) parts.push(String(knowledgeBlock).trim());
   // READINGS — pages/articles SHE looked up (full text, not the 120-char prompt markers). This is the
   // grounding that was missing: "what companies are in the article" / "summarize the article" hold the

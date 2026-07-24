@@ -69,6 +69,37 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(/HIS CALENDAR THIS WEEK/.test(man.text) && /Bloomberg Government sync/.test(man.text), 'autonomy manifest carries the calendar facts');
   ok(!/connect to them naturally/i.test(man.text), 'chat-voice guidance stays OUT of the manifest');
 
+  // --- schedule-question detection + calendar grounding (the BGov homecoming, 2026-07-24) ---
+  const sq = wk.isScheduleQuestion;
+  ok(sq('when is the BGov meeting today?'), 'schedule: "when is the BGov meeting today?" (the live miss)');
+  ok(sq("what's on my calendar today?"), 'schedule: what\'s on my calendar');
+  ok(sq('when is my next meeting?'), 'schedule: my next meeting');
+  ok(sq('what time is the standup?'), 'schedule: what time is the standup');
+  ok(sq('do I have any meetings this week?'), 'schedule: do I have meetings this week');
+  ok(sq('am I free at 3?'), 'schedule: am I free');
+  ok(sq('when is my call with the Bloomberg team?'), 'schedule: my call with the Bloomberg team');
+  ok(!sq('when did the Civil War start?'), 'NOT schedule: general history "when did X start"');
+  ok(!sq('when is the next US election?'), 'NOT schedule: current-events, no my/meeting/calendar anchor');
+  ok(!sq('what is photosynthesis?'), 'NOT schedule: general knowledge');
+  ok(!sq('good morning'), 'NOT schedule: greeting');
+
+  // grounding pulls the held HIS WEEK lines (fresh cache from gcalFake → no refetch)
+  wk._resetCache();
+  await wk.refresh({ deps: { gcal: gcalFake }, now: NOW });
+  const grd = await wk.scheduleGrounding({ gcalOpts: {}, now: NOW });
+  ok(/Bloomberg Government sync/.test(grd) && /authoritative source/i.test(grd), 'scheduleGrounding hands the held calendar lines as authoritative grounding');
+  ok(!/connect to them naturally/i.test(grd), 'schedule grounding carries FACTS (lines), not the chat-voice guidance');
+  // empty calendar → '' (caller degrades to normal grounding), no throw
+  wk._resetCache();
+  const grd0 = await wk.scheduleGrounding({ gcalOpts: {}, now: NOW, deps: { gcal: { isConnected: () => true, listEvents: async () => ({ items: [] }) } } });
+  ok(grd0 === '', 'no events → scheduleGrounding returns empty, never a broken block');
+
+  // factualGrounding threads the calendar source through, first
+  const ad = require('../lib/answer_draft');
+  const fg = ad.factualGrounding({ knowledgeBlock: 'some entity note that is definitely long enough to pass the floor', calendar: grd });
+  ok(fg.indexOf('Bloomberg Government sync') > -1 && fg.indexOf('authoritative source') > -1, 'factualGrounding includes the calendar source');
+  ok(fg.indexOf('authoritative') < fg.indexOf('some entity note'), 'calendar leads the grounding (prioritized over the knowledge block)');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

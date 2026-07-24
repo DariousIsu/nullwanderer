@@ -109,7 +109,11 @@ async function refresh({ gcalOpts = {}, deps = {}, now = Date.now(), force = fal
   _refreshing = true;
   try {
     const gcal = deps.gcal || require('./gcal');
-    if (!gcal.isConnected(gcalOpts)) { _cache = { text: '', lines: '', at: now }; return _cache; }
+    // NOT CONNECTED (cold boot: Echo token bridge not warm yet) → empty, but back off only ~1min and
+    // retry, mirroring the fetch-error branch below. Stamping `at: now` here (the old bug) marked the
+    // empty block FRESH for the full 15-min TTL, so blockFor kept serving '' and HIS WEEK stayed blank
+    // for 15 minutes after boot — contradicting this file's "self-heals every stale read" promise.
+    if (!gcal.isConnected(gcalOpts)) { _cache = { text: '', lines: '', at: now - TTL_MS + 60e3 }; return _cache; }
     const r = await gcal.listEvents({
       calendarId: 'primary',
       timeMin: new Date(now - PAST_DAYS * 86400e3).toISOString(),
@@ -135,4 +139,54 @@ function blockFor({ gcalOpts = {}, now = Date.now() } = {}) {
 function cached() { return _cache; }
 function _resetCache() { _cache = { text: '', lines: '', at: 0 }; }   // tests
 
-module.exports = { formatWeek, refresh, blockFor, cached, _resetCache, TTL_MS };
+/**
+ * Is this message a question about HIS schedule/calendar — one answerable from the events she
+ * already holds (HIS WEEK), NOT a records/web lookup? "when is the BGov meeting", "my next
+ * meeting", "what's on my calendar", "what do I have today", "what time is the standup". Pure.
+ *
+ * Why this exists: without it, "when is the BGov meeting today?" fell through to the cognition
+ * ladder (records → web excavation), which has no calendar in its grounding — so it treated the
+ * meeting as a NEW ENTITY to research, missed, and said "I couldn't pin down the BGov meeting"
+ * while the answer (BGOV 10:00 Teams) sat right there in HIS WEEK. This routes it home.
+ *
+ * Tuned to fire on a PERSONAL schedule ask (anchored on "my"/a meeting noun/a calendar noun) and
+ * stay quiet on a general "when did X happen" history/current-events question ("when is the next
+ * election" has no meeting/my/calendar anchor → false).
+ */
+function isScheduleQuestion(text) {
+  const t = String(text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!t) return false;
+  // His calendar/schedule as a whole ("what's on my calendar", "today's schedule", "my agenda").
+  if (/\b(my|the|today'?s|tomorrow'?s|this week'?s)\s+(schedule|calendar|agenda|itinerary)\b/.test(t)) return true;
+  // His meetings/calls as possessions ("my next meeting", "my meetings", "my call with Sam").
+  if (/\bmy\s+(next\s+|last\s+|first\s+|1st\s+)?(meeting|call|appointment|standup|sync|huddle|interview|demo|briefing)s?\b/.test(t)) return true;
+  if (/\bnext\s+meeting\b/.test(t)) return true;
+  // Availability.
+  if (/\bam i\s+(free|busy|booked|available|open)\b/.test(t)) return true;
+  if (/\bdo i have\b.*\b(meeting|call|appointment|anything|plans|scheduled|standup|sync|today|tomorrow|this (morning|afternoon|evening|week)|on my (calendar|schedule))\b/.test(t)) return true;
+  // "when / what time is <the … meeting/call/standup/…>" — a scheduled-event TIME ask.
+  if (/\b(when'?s|when is|when are|when do i|what time( is|'?s| does| do)?)\b.*\b(meeting|call|appointment|standup|sync|huddle|demo|interview|briefing|session)\b/.test(t)) return true;
+  // "what meetings / what do I have … today / this week / on my calendar".
+  if (/\bwhat\b.*\b(meetings?|do i have|going on|happening|planned|scheduled)\b.*\b(today|tomorrow|this (week|morning|afternoon)|on my (calendar|schedule))\b/.test(t)) return true;
+  return false;
+}
+
+/**
+ * Grounding block for a schedule question — the held HIS WEEK event LINES (facts, no chat guidance),
+ * framed as the authoritative source so the cognition draft answers FROM them instead of searching.
+ * Async so it can fetch when the cache is stale OR force through a fresh-but-empty (cold-boot) cache;
+ * a schedule question is worth the one round-trip to be right. Fail-soft: no calendar → '' (caller
+ * degrades to normal grounding, no worse than before). gcalOpts carries Echo's token bridge.
+ */
+async function scheduleGrounding({ gcalOpts = {}, now = Date.now(), deps = {} } = {}) {
+  let lines = String((_cache && _cache.lines) || '').trim();
+  if (!lines || (now - _cache.at) >= TTL_MS) {
+    try { const c = await refresh({ gcalOpts, now, force: !lines, deps }); lines = String((c && c.lines) || '').trim(); } catch {}
+  }
+  if (!lines) return '';
+  return 'His calendar — live, the authoritative source for his schedule (all times Eastern). Answer '
+    + 'his schedule question from THESE events; pick the one he means by name/day/time, and give the '
+    + 'time (and place/platform if shown). Do not say you could not find it — it is here:\n' + lines;
+}
+
+module.exports = { formatWeek, refresh, blockFor, cached, _resetCache, isScheduleQuestion, scheduleGrounding, TTL_MS };
