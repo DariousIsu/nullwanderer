@@ -347,6 +347,7 @@ async function mergeNearDupKnowledge({ apply = false, sim = NEARDUP_SIM, relateF
   const vecs = rows.map(r => { try { return JSON.parse(r.embedding); } catch { return null; } });
   const used = new Array(rows.length).fill(false);
   let clusters = [];
+  let _yieldAt = Date.now();
   for (let i = 0; i < rows.length; i++) {
     if (used[i] || !vecs[i]) continue;
     const group = [i]; used[i] = true;
@@ -354,6 +355,12 @@ async function mergeNearDupKnowledge({ apply = false, sim = NEARDUP_SIM, relateF
       if (used[j] || !vecs[j]) continue;
       if (memory.cosine(vecs[i], vecs[j]) >= sim) { group.push(j); used[j] = true; }
     }
+    // FREEZE FIX (boot81): this pairwise cosine sweep is O(n²) over the WHOLE knowledge table and grew
+    // to a 39s MAIN-THREAD STALL (watchdog: "MAIN THREAD STALLED: lag max 39192ms") as the decompose
+    // flood grew n. The fn is already async — yield the event loop on a ~40ms budget so the SAME
+    // clustering runs WITHOUT blocking the UI. Behavior-identical (rows/vecs are snapshotted up front);
+    // only the scheduling changes. (Deeper follow-up: bound the O(n²) itself — cap n or bucket by LSH.)
+    if (Date.now() - _yieldAt > 40) { await new Promise((r) => setImmediate(r)); _yieldAt = Date.now(); }
     if (group.length > 1) {
       const members = group.map(k => rows[k]);
       const keep = members.reduce((a, b) =>
