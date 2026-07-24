@@ -113,17 +113,19 @@ function applyScenario(races, scenario, opts = {}) {
   const effects = (scenario && Array.isArray(scenario.effects)) ? scenario.effects : [];
   return (races || []).map((r0) => {
     const r = { ...r0 };
-    let mDelta = 0, sAdd = 0, hit = 0;
+    let mDelta = 0, sAdd = 0, hit = 0, corrKey = null;
     for (const e of effects) {
       if (!matchesSelector(r0, e.selector, { competitiveThreshold })) continue;
       mDelta += (Number(e.margin_delta) || 0) * intensity * sign;
       sAdd += Math.max(0, Number(e.sigma_add) || 0) * intensity;
+      if (!corrKey && e.correlation && e.correlation.key) corrKey = String(e.correlation.key);   // this seat joins a correlated cohort
       hit++;
     }
     if (hit) {
       if (mDelta !== 0) r.margin = Number(((Number(r0.margin) || 0) + mDelta).toFixed(3));
       if (sAdd > 0) r.sigma = Number((((r0.sigma != null ? Number(r0.sigma) : defaultSigma)) + sAdd).toFixed(3));
-      r._scenario = { margin_delta: Number(mDelta.toFixed(3)), sigma_add: Number(sAdd.toFixed(3)), effects: hit };
+      if (corrKey) r.region = corrKey;   // tag → the sim swings this cohort TOGETHER each iteration (see runScenario's regionKeys)
+      r._scenario = { margin_delta: Number(mDelta.toFixed(3)), sigma_add: Number(sAdd.toFixed(3)), effects: hit, correlated: corrKey || null };
     }
     return r;
   });
@@ -182,8 +184,21 @@ function buildScenarioDelta(baseSim, scnSim, { baseRaces = [], appliedRaces = []
  * a two-sided result to be read as a RANGE (§6 honesty). opts is passed straight to simulate (seed, iterations,
  * nationalSigma, holdovers, majority, defaultSigma) plus competitiveThreshold for selector resolution.
  */
+// Collect a scenario's correlated-swing groups → { regionKeys, regionSigma } handed to BOTH the baseline and
+// scenario sims. Identical keys+sigma → seed-parity (the sim draws the same swings in the same order for both);
+// only the scenario's TAGGED seats (applyScenario set r.region) actually feel the swing, so the delta stays
+// purely the shock. null when the scenario declares no correlation. Sigma scales with intensity like every magnitude.
+function _correlationOpts(scenario) {
+  const effs = (scenario && Array.isArray(scenario.effects)) ? scenario.effects.filter((e) => e && e.correlation && e.correlation.key) : [];
+  if (!effs.length) return null;
+  const regionKeys = [...new Set(effs.map((e) => String(e.correlation.key)))].sort();
+  const intensity = _clamp01(scenario.assumptions && scenario.assumptions.intensity != null ? scenario.assumptions.intensity : 1);
+  const regionSigma = Math.max(0, ...effs.map((e) => Math.max(0, Number(e.correlation.sigma) || 0))) * intensity;
+  return { regionKeys, regionSigma };
+}
+
 function runScenario(races, scenario, opts = {}) {
-  const simOpts = { ...opts };
+  const simOpts = { ...opts, ...(_correlationOpts(scenario) || {}) };   // correlated groups ride into every sim of this run (seed-parity)
   const applyOpts = {
     competitiveThreshold: opts.competitiveThreshold != null ? opts.competitiveThreshold : DEFAULT_COMPETITIVE_PTS,
     defaultSigma: opts.defaultSigma != null ? opts.defaultSigma : DEFAULT_SIGMA,

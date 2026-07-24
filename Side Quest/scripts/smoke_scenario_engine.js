@@ -108,5 +108,19 @@ const wfCA = wf.stages[1].applied.find((r) => r.id === 'CA-01:us-representative'
 ok(approx(wfCA.margin, 2 - 4 - 2), '⭐a western competitive seat carries BOTH stacked shocks (CA-01: +2 −4 −2 = −4)');
 ok(byId(baseRaces, 'CA-01:us-representative').margin === 2, 'ISOLATION holds through a waterfall — the baseline slate is still unmutated');
 
+console.log('correlation (a regional shock swings its seats TOGETHER — fatter tails):');
+// 6 western house toss-ups. Compare a PURE-correlation shock (a shared fire-west swing, no margin shift) vs.
+// the SAME volatility applied INDEPENDENTLY per seat. Correlated → the seats flip together → a much wider
+// seat-count distribution, the load-bearing property of correlation (design §5).
+const westRaces = ['CA', 'OR', 'WA', 'AZ', 'NV', 'CA'].map((st, i) => ({ id: `${st}-1${i}:us-representative`, chamber: 'house', state: st, geo: `${st}-1${i}`, margin: 0, sigma: 5 }));
+const corrScn = E.makeScenario({ id: 'fw-corr', name: 'fire-west correlated', description: 'a shared western swing', effects: [{ selector: { scope: 'region', value: 'fire-west' }, margin_delta: 0, sigma_add: 0, correlation: { key: 'fire-west', sigma: 6 }, rationale: 'shared', confidence: 0.4 }] });
+const indScn = E.makeScenario({ id: 'fw-ind', name: 'fire-west independent', description: 'independent western volatility', effects: [{ selector: { scope: 'region', value: 'fire-west' }, margin_delta: 0, sigma_add: 6, rationale: 'independent', confidence: 0.4 }] });
+const CSIM = { seed: 3, iterations: 6000, nationalSigma: 0.01 };
+const rc = E.runScenario(westRaces, corrScn, CSIM);
+const ri = E.runScenario(westRaces, indScn, CSIM);
+ok(rc.applied.every((r) => r.region === 'fire-west'), 'applyScenario tags the whole cohort with r.region = the correlation key');
+ok(westRaces[0].region === undefined, 'ISOLATION: the correlation tag lives on the applied slate, never the baseline');
+ok(rc.sim.chambers.house.seatsA_sd > ri.sim.chambers.house.seatsA_sd * 1.4, `⭐correlation FATTENS the tail — shared-swing seat SD ${rc.sim.chambers.house.seatsA_sd} ≫ independent ${ri.sim.chambers.house.seatsA_sd}`);
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

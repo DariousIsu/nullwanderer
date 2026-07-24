@@ -58,5 +58,18 @@ const sen = S.simulate([1, 2, 3].map((i) => ({ id: 's' + i, chamber: 'senate', m
 ok('holdovers+majority: 48 held + 3 won = 51 ≥ threshold → A controls', sen.chambers.senate.pA_control > 0.95, String(sen.chambers.senate.pA_control));
 ok('total_seats counts holdovers (3 up + 97 held = 100)', sen.chambers.senate.total_seats === 100, String(sen.chambers.senate.total_seats));
 
+// --- REGRESSION GOLDEN (Slice 2b correlation change): the live-forecast path (regionSigma=0, no r.region,
+// no regionKeys) must be BYTE-IDENTICAL after the sim's regional-swing rework. Captured pre-change; any drift
+// here means the correlation change leaked into the baseline forecast. ---
+{
+  const golden = '{"iterations":4000,"chambers":{"house":{"pA_control":0.5695,"seatsA_mean":1.64,"seatsA_sd":0.95,"seatsA_p10":0,"seatsA_p90":3,"n_races":3,"total_seats":3},"senate":{"pA_control":0,"seatsA_mean":46.2,"seatsA_sd":0.7,"seatsA_p10":45,"seatsA_p90":47,"n_races":2,"total_seats":95}},"scenarios":[{"label":"house:A | senate:B","prob":0.5695},{"label":"house:B | senate:B","prob":0.4305}]}';
+  const got = JSON.stringify(S.simulate([
+    { id: 'h1', chamber: 'house', margin: 3, sigma: 5 }, { id: 'h2', chamber: 'house', margin: -2, sigma: 5 },
+    { id: 'h3', chamber: 'house', margin: 1, sigma: 6 }, { id: 's1', chamber: 'senate', margin: -1, sigma: 5 },
+    { id: 's2', chamber: 'senate', margin: 4, sigma: 5 },
+  ], { seed: 42, iterations: 4000, nationalSigma: 3, holdovers: { senate: { A: 45, B: 48 } }, majority: { senate: 51 } }));
+  ok('REGRESSION: regionSigma=0 / no-region path is byte-identical (baseline forecast untouched)', got === golden, `\n    got:  ${got}\n    want: ${golden}`);
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

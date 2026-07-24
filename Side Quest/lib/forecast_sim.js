@@ -80,6 +80,14 @@ function simulate(races, opts = {}) {
   const holdovers = opts.holdovers || {};
   const majority = opts.majority || {};
   const rng = mulberry32(seed);
+  // Regional correlation groups, drawn each iteration. To keep SEED-PARITY between two slates compared at the
+  // same seed (a baseline vs. a scenario that TAGS some seats with r.region — see lib/scenario_engine), the
+  // draw COUNT + ORDER must be identical for both runs: callers comparing slates pass the SAME `regionKeys` to
+  // both, so swings are drawn for a fixed key list UP FRONT (below), never lazily in seat order. Default (no
+  // regionKeys, regionSigma=0) → null → NO region draws, byte-identical to the pre-correlation baseline path.
+  const regionKeys = opts.regionKeys != null
+    ? opts.regionKeys
+    : (regionSigma > 0 ? [...new Set((races || []).map((r) => r && r.region).filter(Boolean))].sort() : null);
 
   const byCh = {};
   for (const r of (races || [])) { if (r && r.chamber) (byCh[r.chamber] = byCh[r.chamber] || []).push(r); }
@@ -91,14 +99,16 @@ function simulate(races, opts = {}) {
 
   for (let i = 0; i < iterations; i++) {
     const natSwing = normal(rng) * nationalSigma;
-    const regionSwing = {};   // drawn lazily per region per iteration
+    // Draw a swing per region key UP FRONT, in fixed order (deterministic → seed-parity across slates). Null
+    // regionKeys (the default path) draws nothing, so the baseline forecast's RNG stream is untouched.
+    let regionSwing = null;
+    if (regionKeys && regionKeys.length) { regionSwing = {}; for (const k of regionKeys) regionSwing[k] = normal(rng) * regionSigma; }
     const ctrl = {};
     for (const ch of chNames) {
       const hv = holdovers[ch] || {};
       let aSeats = hv.A || 0;
       for (const r of byCh[ch]) {
-        let rs = 0;
-        if (regionSigma > 0 && r.region) { if (!(r.region in regionSwing)) regionSwing[r.region] = normal(rng) * regionSigma; rs = regionSwing[r.region]; }
+        const rs = (regionSwing && r.region != null && (r.region in regionSwing)) ? regionSwing[r.region] : 0;
         const m = r.margin + natSwing + rs + normal(rng) * (r.sigma != null ? r.sigma : defaultSigma);
         if (m > 0) aSeats++;
       }

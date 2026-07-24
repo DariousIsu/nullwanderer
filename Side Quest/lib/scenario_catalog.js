@@ -37,7 +37,8 @@ const _RAW = [
     intensity: 1,
     effects: [
       { selector: { scope: 'region', value: 'fire-west', competitiveOnly: true }, margin_delta: -4, sigma_add: 2,
-        rationale: 'competence/incumbent penalty concentrated in the affected western footprint', confidence: 0.4 },
+        correlation: { key: 'fire-west', sigma: 3 },
+        rationale: 'competence/incumbent penalty across the western footprint — the seats move TOGETHER (correlated)', confidence: 0.4 },
     ],
   },
   {
@@ -46,8 +47,8 @@ const _RAW = [
     intensity: 1,
     effects: [
       { selector: { scope: 'region', value: 'rust-belt', competitiveOnly: true }, margin_delta: -3, sigma_add: 1.5,
-        direction_uncertain: true,
-        rationale: 'economic pain punishes the incumbent party, but which party owns the plants is contested → two-sided', confidence: 0.35 },
+        direction_uncertain: true, correlation: { key: 'rust-belt', sigma: 2.5 },
+        rationale: 'economic pain punishes the incumbent party, but which party owns the plants is contested → two-sided; the belt swings together', confidence: 0.35 },
     ],
   },
 ];
