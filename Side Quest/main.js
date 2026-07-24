@@ -2754,6 +2754,78 @@ ipcMain.handle('editor:detach-source', (_e, { docId, uid } = {}) => {
   } catch (e) { console.error('[editor] detach-source failed:', e.message); return { ok: false, error: e.message }; }
 });
 
+// LAST-RUNG READER for a cited source no text tool can open. The verification ladder's readers are
+// HTML-shaped (web_extract/web_fetch); a citation pointed at a PDF — the ordinary shape of a
+// government or think-tank source — returns nothing from both, and the studio then reports the
+// author's perfectly good citation as unreachable. The app already knows how to read a PDF
+// (lib/doc_extract.extractPdf, the same path a drag-drop import uses); it was simply never offered
+// to the resolver. Downloads to the temp dir, extracts, deletes. Returns '' on anything unexpected —
+// this is a fallback rung, so a failure here must degrade to "inaccessible", never throw.
+// PDF bytes → text, via the same extractor a drag-drop import uses. '' on anything unexpected.
+async function pdfBytesToText(buf, url) {
+  const fs = require('fs');                    // main.js has no module-level `fs` binding
+  if (!buf || !buf.length) return '';
+  const tmp = path.join(app.getPath('temp'), `zoe-cite-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`);
+  try {
+    fs.writeFileSync(tmp, buf);
+    const out = await docExtract.extractPdf(tmp);
+    const text = typeof out === 'string' ? out : (out && (out.markdown || out.text)) || '';
+    if (text) console.log(`[editor] read a cited PDF (${text.length} chars) — ${url}`);
+    return text;
+  } catch (e) { console.warn('[editor] pdf extract failed:', e.message); return ''; }
+  finally { try { fs.unlinkSync(tmp); } catch {} }
+}
+
+async function readCitedDocument(url) {
+  if (!/^https?:\/\//i.test(String(url || ''))) return '';
+  const isPdfUrl = /\.pdf(?:[?#]|$)/i.test(url);
+
+  // RUNG A — plain HTTP with a browser's headers. Cheap, no browser process. Handles the ordinary
+  // case: a PDF on a host that does not screen its clients.
+  try {
+    const res = await fetch(url, {
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'Accept': 'application/pdf,text/html;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+    if (res.ok) {
+      const ctype = (res.headers.get('content-type') || '').toLowerCase();
+      if (/application\/pdf/.test(ctype) || isPdfUrl) {
+        const buf = Buffer.from(await res.arrayBuffer());
+        // %PDF or it is not a PDF, whatever the headers claim — an error page served as
+        // application/pdf must never reach the extractor and become "the source".
+        if (buf.length > 4 && buf.slice(0, 5).toString('latin1') === '%PDF-') {
+          const text = await pdfBytesToText(buf, url);
+          if (text) return text;
+        }
+      }
+    } else {
+      console.warn(`[editor] cited-document reader: HTTP ${res.status} on plain fetch — escalating to the browser — ${url}`);
+    }
+  } catch (e) { console.warn('[editor] cited-document plain fetch failed:', e.message); }
+
+  // RUNG B — a REAL BROWSER (lib/search_lane: patchright Chrome, off-screen, its own warm profile).
+  // The last resort, and the only one that works on a host that screens clients: azed.gov 403s node
+  // `fetch` with any headers, and 403s Playwright's HTTP client too, but serves the browser its
+  // 2.4 MB literacy plan without complaint. Without this rung the studio reports a live, correct,
+  // load-bearing citation as unreachable — blaming the author for our missing capability. It runs
+  // only after every cheaper reader has failed, and it shares the lane's lock so it can never race
+  // one of Zoe's own searches.
+  try {
+    const r = await require('./lib/search_lane').read(url);
+    if (r && r.ok && r.kind === 'pdf') return await pdfBytesToText(r.buffer, url);
+    if (r && r.ok && r.kind === 'html' && r.text) {
+      console.log(`[editor] read a cited page with the browser that HTTP could not (${r.text.length} chars) — ${url}`);
+      return r.text;
+    }
+    console.warn(`[editor] browser reader could not read it either: ${(r && r.error) || 'unknown'} — ${url}`);
+  } catch (e) { console.warn('[editor] browser reader failed:', e.message); }
+  return '';
+}
+
 // Run checks → drives the DETERMINISTIC verification harness (studio/verify_harness via
 // editor_checks.runHarnessChecks) over the doc's normalized working copy. One pathway:
 // extract→resolve→match→preflight→classify→contract. Resolution + match are ~0-token; the model
@@ -2798,6 +2870,26 @@ ipcMain.handle('editor:run-checks', async (_e, docId) => {
     if (useDeep) console.log(`[editor] deep verify — ${deepModel}`);
     else console.warn('[editor] deep verify unavailable (no cloud) — degrading to local classify');
 
+    // SIZE THE CALL TO THE MODEL, don't assume. The judge was running at num_predict 1200 / num_ctx
+    // 32768 — the first a stale default in editor_checks that main.js never overrode (so the module's
+    // own 4000 floor never applied), the second a guess. Both are truncation sources that fail
+    // SILENTLY: a clipped verdict just parses worse. lib/cloud_window asks the endpoint what the
+    // model's window actually is, caches it, and falls back to the old floor if discovery fails.
+    // num_predict takes the LARGER of the account default and the judge's floor: a reasoning model
+    // spends most of its output budget on hidden reasoning before it emits the verdict object.
+    const JUDGE_MIN_PREDICT = 4000;
+    let deepWindow = { num_ctx: null, num_predict: null, maxPassage: null };
+    if (useDeep) {
+      try {
+        const w = await require('./lib/cloud_window').resolve({ model: deepModel, base: cloud.base, token: cloud.token });
+        // Source passages are the bulk of the prompt; give them a share of the real window rather
+        // than the module's 6,000-char constant (~2% of a 131k-token context).
+        const maxPassage = Math.max(6000, Math.min(w.num_ctx * 2, 100000));
+        deepWindow = { num_ctx: w.num_ctx, num_predict: Math.max(w.num_predict || 0, JUDGE_MIN_PREDICT), maxPassage };
+        console.log(`[editor] judge window — num_ctx ${w.num_ctx.toLocaleString()} (${w.source}), num_predict ${deepWindow.num_predict}, passage ${maxPassage.toLocaleString()} chars`);
+      } catch (e) { console.warn('[editor] cloud window discovery failed — using module defaults:', e.message); }
+    }
+
     const res = await editorChecks.runHarnessChecks({
       callTool, workingCopy, complete, docId,
       sourceDocPath: doc.echo_doc_path || null, author: doc.author, sourceVersion: doc.current_version,
@@ -2808,13 +2900,26 @@ ipcMain.handle('editor:run-checks', async (_e, docId) => {
       deepModelName: useDeep ? deepModel : null,
       deepBase: useDeep ? cloud.base : null,
       deepHeaders: useDeep ? { Authorization: `Bearer ${cloud.token}` } : null,
+      deepNumPredict: deepWindow.num_predict, deepNumCtx: deepWindow.num_ctx, deepMaxPassage: deepWindow.maxPassage,
+      // The fact-check leaf reads a full independent article per source — same window, same reasoning.
+      factCheckNumPredict: deepWindow.num_predict, factCheckNumCtx: deepWindow.num_ctx,
       cheapModel: MODEL,                              // homework-check stays local/cheap (coherence gate)
       embed: memoryLib.embed, cosine: memoryLib.cosine,
       // fetch via Echo web_extract (clean text); SEARCH via Zoe's own DuckDuckGo provider so
       // no-URL claims resolve without an engine-side search-provider key. ATTACHMENTS (uid → in-hand
       // source text) let the resolve ladder's rung 0 resolve tagged citations from the operator's own
       // document instead of the web.
-      resolveOpts: { tools: { fetch: 'web_extract' }, search: (q) => webSearch(q), attachments: editorRegistry.getAttachmentMap(docId, doc.current_version) },
+      // READERS, plural. web_extract (trafilatura clean text) then web_fetch (raw body) — they fail
+      // differently, so a page one cannot open the other often can. `readerFn` is the last rung for
+      // documents no text tool opens at all: on the Arizona ESA op-ed a cited azed.gov PDF came back
+      // "inaccessible" and the report implied the author's citation was unreachable when the file was
+      // served fine — we simply had no PDF reader on this path, though the app has one.
+      resolveOpts: {
+        tools: { fetch: ['web_extract', 'web_fetch'] },
+        readerFn: readCitedDocument,
+        search: (q) => webSearch(q),
+        attachments: editorRegistry.getAttachmentMap(docId, doc.current_version),
+      },
       onStage: (name, payload) => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('editor:check-progress', { name, payload }); } catch {} },
     });
     return { ok: true, gate: res.gate, mapped: res.mapped };
@@ -10508,7 +10613,11 @@ async function decomposeLandedDoc(doc) {
     let minted = 0, reused = 0, connections = 0, held = 0;
     for (const chunk of chunks) {
       try {
-        const r = await decompLane.decomposeLanding({ id: doc.id, title: doc.title, body: chunk, ref: _cite }, { extract, resolve, dispatch, observe, cap: { entities: 40, relations: 40 }, log: (m) => console.log(m) });
+        // cap 40→150 (2026-07-23, Lucas "process the ENTIRE document"): 40 mint/chunk held row 41+
+        // of a dense authoritative roster at confidence 0. The cap only bounds how many EXTRACTED
+        // entities mint vs. hold — it does NOT enlarge the cloud extraction call, so raising it is
+        // safe (no bigger prompts, no freeze risk) and lets a doc's real rows land instead of stranding.
+        const r = await decompLane.decomposeLanding({ id: doc.id, title: doc.title, body: chunk, ref: _cite }, { extract, resolve, dispatch, observe, cap: { entities: 150, relations: 150 }, log: (m) => console.log(m) });
         if (r && !r.skipped) { minted += r.minted || 0; reused += r.reused || 0; connections += r.connections || 0; held += r.held || 0; }
       } catch (e) { console.error('[doc-decomp] chunk failed:', e.message); }
     }

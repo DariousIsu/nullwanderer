@@ -230,6 +230,35 @@ function mockResolver(map) {
   ok(D.targetTypeFor('WORKS_FOR', 'Acme Corp') === 'organization', 'sig: WORKS_FOR a generic org → organization (unchanged)');
   ok(D.targetTypeFor('CONTRIBUTED_TO', 'House Swing State Fund') === null, 'sig: a donation predicate is NOT membership → untyped, so a PAC still resolves normally as organization (PACs keep working)');
   ok(D.normalizedRelation('MEMBER_OF', 'Ohio State Senate') === 'HELD_OFFICE', 'sig: body membership normalizes to the canonical HELD_OFFICE predicate');
+
+  // ── ANCHORED-ENTITY MINT (Lucas: ingest the WHOLE document — the roster dropped ~5,500 officials) ──
+  // A held (ambiguous) FULL-NAME person wired by an edge to a concrete non-person mints unsubstantiated
+  // (the edge is the identity anchor); an UNANCHORED one still holds; a BARE name stays held even anchored.
+  const _mintOK = async () => ({ ok: true, text: '{"action":"proposed","entity_id":1}' });
+  {
+    const r = await D.decomposeDoc({ title: 'roster', url: 'https://sos.la.gov/x', text: 'x'.repeat(80) }, {
+      extract: async () => ({ entities: [{ name: 'Henry Whitehorn', type: 'person' }, { name: 'Caddo Parish Sheriff', type: 'government_body' }],
+        relations: [{ source: 'Henry Whitehorn', relation: 'HELD_OFFICE', target: 'Caddo Parish Sheriff' }] }),
+      resolve: mockResolver({ 'Henry Whitehorn': { status: 'ambiguous', candidates: ['a', 'b'] } }),   // → hold; the office nil → unsub
+      dispatch: _mintOK, observe: () => {} });
+    ok((r.minted_anchored || 0) >= 1 && r.minted_unsub >= 1,
+      'ANCHORED MINT: an ambiguous FULL-NAME person wired to an office mints unsubstantiated (was held at confidence 0)');
+  }
+  {
+    const r = await D.decomposeDoc({ title: 'roster', url: 'https://sos.la.gov/x', text: 'x'.repeat(80) }, {
+      extract: async () => ({ entities: [{ name: 'Henry Whitehorn', type: 'person' }], relations: [] }),   // NO anchoring edge
+      resolve: mockResolver({ 'Henry Whitehorn': { status: 'ambiguous', candidates: ['a', 'b'] } }),
+      dispatch: _mintOK, observe: () => {} });
+    ok(!r.minted_anchored && r.held >= 1, 'UNANCHORED: the same person with no edge still HOLDS (the anchor is required, not the name)');
+  }
+  {
+    const r = await D.decomposeDoc({ title: 'roster', url: 'https://sos.la.gov/x', text: 'x'.repeat(80) }, {
+      extract: async () => ({ entities: [{ name: 'Tracy', type: 'person' }, { name: 'Caddo Parish Sheriff', type: 'government_body' }],
+        relations: [{ source: 'Tracy', relation: 'HELD_OFFICE', target: 'Caddo Parish Sheriff' }] }),
+      resolve: mockResolver({ 'Tracy': { status: 'ambiguous', candidates: ['a', 'b'] } }),
+      dispatch: _mintOK, observe: () => {} });
+    ok(!r.minted_anchored, 'BARE NAME: a single-token "Tracy" stays held even WITH an office edge — the attractor guard is intact');
+  }
   ok(D.normalizedRelation('MEMBER_OF', 'Senate Judiciary Committee') === 'MEMBER_OF', 'sig: committee membership stays MEMBER_OF');
 
   // e2e: an official → chamber edge resolves TYPED to office_held and proposes HELD_OFFICE → the real office

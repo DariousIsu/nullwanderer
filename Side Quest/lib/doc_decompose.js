@@ -550,6 +550,28 @@ async function decomposeDoc(doc = {}, deps = {}) {
   const context = resolvable.map(e => e.name);
   const plan = await planEntities(resolvable, { resolve, context });
 
+  // ANCHORED-ENTITY MINT (2026-07-23, Lucas: "everything in any document should be taken and
+  // processed, linked to the document, always available"). The attractor guard HOLDS a bare person /
+  // untyped 'other' — because a bare "Tracy" with no context is a guess. But a held person who is
+  // wired by an EDGE to a concrete non-person (Henry Whitehorn → HELD_OFFICE → Sheriff, → LOCATED_IN
+  // → Caddo Parish) is NOT bare: the edge IS the disambiguating context. This universally (any doc)
+  // lets an ANCHORED held entity mint UNSUBSTANTIATED (prove-or-fade, doc-linked) instead of dying as
+  // a confidence-0 held row no promote pass will ever touch — the roster dropped ~5,500 real officials
+  // exactly here. Un-anchored bare names still HOLD: the guard is intact, just no longer over-broad.
+  const _ANCHOR_TYPES = new Set(['office_held', 'committee', 'government_body', 'organization', 'location']);
+  const _substantialName = (n) => (String(n || '').trim().match(/[A-Za-z][A-Za-z.'’-]{1,}/g) || []).length >= 2;   // 2+ word tokens — a real full name, not a bare "Tracy"
+  const _typeOfKey = new Map();
+  for (const e of merged) { const k = coreKey(e.name) || String(e.name).toLowerCase(); if (!_typeOfKey.has(k)) _typeOfKey.set(k, canonType(e.type)); }
+  const anchoredNames = new Set();
+  for (const r of relations) {
+    const sk = r && r.source ? (coreKey(r.source) || String(r.source).toLowerCase()) : null;
+    const tk = r && r.target ? (coreKey(r.target) || String(r.target).toLowerCase()) : null;
+    if (!sk || !tk) continue;
+    const st = _typeOfKey.get(sk), tt = _typeOfKey.get(tk);
+    if (_ANCHOR_TYPES.has(tt) && (st === 'person' || st === 'other' || st === undefined)) anchoredNames.add(sk);   // source anchored by concrete target
+    if (_ANCHOR_TYPES.has(st) && (tt === 'person' || tt === 'other' || tt === undefined)) anchoredNames.add(tk);   // target anchored by concrete source
+  }
+
   // 3) entities: mint (existence-gated by the doc) / reuse / hold (fall-through) / skip
   const usable = new Map();   // coreKey → the canonical name to use in an edge
   // …and its TYPE. An edge observation that omits the type makes the encounter log key the same
@@ -594,8 +616,15 @@ async function decomposeDoc(doc = {}, deps = {}) {
       // or an untyped 'other' endpoint stays HELD — minting a bare/ambiguous person is the "Tracy the finance
       // lady" attractor the identity gate exists to prevent, and 'other' is the type a bare edge-endpoint
       // gets, so it too could be a person. Bias-to-clarify: never guess a node for something we can't type.
-      if (UNSUB_MINTABLE_TYPES.has(d.type) && out.minted < maxEnt && await _mintUnsubstantiated(dispatch, observe, d.name, d.type, url)) {
+      // A concrete non-person type mints unsubstantiated as before; a person/'other' mints too WHEN
+      // an edge anchors it AND its name is SUBSTANTIAL (2+ word tokens — a real full name like every
+      // roster official). A bare single-token "Tracy", even with an office edge, still HOLDS — the
+      // attractor guard is fully intact for bare names; the doc's relational structure only lifts it
+      // for a named entity the edge disambiguates.
+      const _anchored = anchoredNames.has(key) && _substantialName(d.name);
+      if ((UNSUB_MINTABLE_TYPES.has(d.type) || _anchored) && out.minted < maxEnt && await _mintUnsubstantiated(dispatch, observe, d.name, d.type, url)) {
         usable.set(key, d.name); usableType.set(key, d.type); out.minted++; out.minted_unsub++;
+        if (_anchored && !UNSUB_MINTABLE_TYPES.has(d.type)) out.minted_anchored = (out.minted_anchored || 0) + 1;
       } else {
         out.held++;
         await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: 'D', confidence: 0, status: 'held', type: d.type });
@@ -675,7 +704,7 @@ async function decomposeDoc(doc = {}, deps = {}) {
       await _observe(observe, { sourceEntity: r.source, relation: r.relation, target: r.target, url, grade: 'D', confidence: 0, status: 'held' });
     }
   }
-  log && log(`[doc-decomp] "${doc.title || url}" → +${out.minted} mint / ${out.reused} reuse / +${out.connections} conn (${out.held} held: ${out.ambiguous} ambiguous, ${out.skipped} skipped${out.cap_deferred ? `, ${out.cap_deferred} cap-deferred` : ''}${out.concepts_dropped ? `, ${out.concepts_dropped} concepts dropped` : ''})`);
+  log && log(`[doc-decomp] "${doc.title || url}" → +${out.minted} mint${out.minted_anchored ? ` (${out.minted_anchored} anchored)` : ''} / ${out.reused} reuse / +${out.connections} conn (${out.held} held: ${out.ambiguous} ambiguous, ${out.skipped} skipped${out.cap_deferred ? `, ${out.cap_deferred} cap-deferred` : ''}${out.concepts_dropped ? `, ${out.concepts_dropped} concepts dropped` : ''})`);
   return out;
 }
 
