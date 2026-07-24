@@ -112,6 +112,20 @@ const NOW = 1753400000000;
       'heldSourceHint: a TABLE doc → injects the office-title distribution (Sheriff ×2, …), not the raw head');
     ok(thint && /break it ALL down/.test(thint) && /do not cherry-pick/.test(thint),
       'heldSourceHint: instructs to break down the WHOLE document, not discard the rows this inquiry doesn\'t need (Lucas)');
+    // EXTRACT-AND-INJECT (boot80): a roster-shaped table (Parish/Office Title/Candidate Name, ≥3
+    // parishes) → the hint EXTRACTS the grouped answer and injects it with "present + close", instead
+    // of telling the operator to "query your copy" (which produced a SQL query expect kept rejecting).
+    const roster = ['| Office Title | Parish | Candidate Name |', '| --- | --- | --- |',
+      '| Sheriff | Acadia | Al Adams |', '| Police Juror | Acadia | Bo Best |', '| Sheriff | Allen | Cy Cole |',
+      '| Parish President | Ascension | Di Doe |', '| Sheriff | Ascension | Ed Eng |', '| DSCC Member | | Party Person |'].join('\n');
+    const rdoc = db.insertDocument({ title: 'LA-roster-full.csv', body: roster, source: 'browser_download' });
+    const rhint = I.heldSourceHint({ id: 4242, next_step: 'download LA-roster-full.csv again', gist: '', open_leads: '[]', evidence: '[]' }, { deps: { db } });
+    ok(rhint && /THE ANSWER/.test(rhint) && /groups \(by Parish\)/.test(rhint) && new RegExp(`doc #${rdoc.id}`).test(rhint),
+      'heldSourceHint: a roster table → EXTRACTS the grouped answer (not a structure summary)');
+    ok(rhint && /Al Adams/.test(rhint) && /Di Doe/.test(rhint) && !/Party Person/.test(rhint),
+      'heldSourceHint: injected answer carries the real names, party-committee row excluded');
+    ok(rhint && /PRESENT this/.test(rhint) && /CLOSE ANSWERED/.test(rhint) && /SQL query.*is NOT the deliverable/.test(rhint) && !/It is a TABLE/.test(rhint),
+      'heldSourceHint: steers to PRESENT+CLOSE and explicitly rejects "a SQL query" (the touch-30 failure) — not the old summary');
     ok(I.heldSourceHint({ next_step: 'Search Ballotpedia for the Ohio governor race results', gist: '', evidence: '[]' }, { deps: { db } }) === null,
       'heldSourceHint: no file named / nothing held → silent (no false hint)');
     ok(I.heldSourceHint({ next_step: 'Download unheld-roster-9999.csv from the county site', gist: '', evidence: '[]' }, { deps: { db } }) === null,

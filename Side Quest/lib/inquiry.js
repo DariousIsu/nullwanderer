@@ -177,6 +177,62 @@ function _renderHeldHint(doc, deps, summary) {
 function _loadHeldDoc(d, id) {
   try { return d.prepare('SELECT id, title, LENGTH(body) AS len, substr(body,1,40000) AS head FROM documents WHERE id = ?').get(Number(id) || 0) || null; } catch { return null; }
 }
+
+// ── EXTRACT-AND-INJECT (boot80 fix): a plan is NOT the deliverable ────────────────────────────────
+// #1 stalled at touch 30 because the hint told the operator to "query your own copy … grouping by
+// Parish", so the operator kept emitting a SQL QUERY as its answer — which expect correctly rejects
+// ("the actual output is a SQL query, not a markdown table"). The fix: when the held doc IS a
+// structured table that answers the question, EXTRACT the grouped answer here and inject THAT, so the
+// operator presents+cites+closes instead of writing a query it never runs. Party committees (not
+// government) drop; the governing body leads (home-rule President+Council, else the Police Jury), then
+// the constitutional officers — the parish-leadership VIEW over the full ingest. Config, not a channel:
+// a generic table digest (lib/table_extract) ordered by what governs the container (top-down).
+const _PARTY_COMMITTEE = /committee member|\b[DR][PS](?:EC|CC) member\b/i;
+const _PARISH_ROLE_ORDER = ['Parish President', 'Police Juror', 'Council Member', 'Councilman', 'Councilmember', 'Council Member at Large', 'Councilman at Large', 'Councilmember at Large', 'Sheriff', 'Clerk of Court', 'Assessor', 'Coroner', 'District Attorney'];
+function _detectCol(headers, re) { return (headers || []).find((h) => re.test(str(h))) || null; }
+function _extractHeldAnswer(body, { cite } = {}) {
+  try {
+    const T = require('./table_extract');
+    const parsed = T.parseMarkdownTable(body);
+    if (!parsed.rows || parsed.rows.length < 5) return null;
+    const groupCol = _detectCol(parsed.headers, /parish|county|borough/i);
+    const roleCol = _detectCol(parsed.headers, /office title|^title$|position|\brole\b/i);
+    const nameCol = _detectCol(parsed.headers, /candidate name|^name$|official|incumbent/i);
+    if (!groupCol || !roleCol || !nameCol) return null;
+    const map = T.pivot({ rows: parsed.rows, groupCol, roleCol, nameCol, excludeRole: _PARTY_COMMITTEE });
+    if (map.size < 3) return null;
+    const dig = T.digestByGroup(map, { roleOrder: _PARISH_ROLE_ORDER, maxNames: 3, cite });
+    if (!dig.lines || !dig.lines.length) return null;
+    return { text: dig.text, groups: dig.groups, groupCol };
+  } catch { return null; }
+}
+function _renderExtractedHint(doc, deps, digest) {
+  let decomposed = false;
+  try { decomposed = (deps.db || require('./db')).getDb().prepare('SELECT 1 FROM encounters WHERE source_ref = ? LIMIT 1').get(`doc:${doc.id}`) != null; } catch {}
+  return [
+    `⚠️ YOU ALREADY HOLD THE ANSWER — and it is EXTRACTED below. "${doc.title}" is doc #${doc.id} in your own store${decomposed ? ' (decomposed into your entity graph)' : ''}. Do NOT re-download, re-scrape, or write a query — the rows are already pulled from your own copy.`,
+    `THE ANSWER — ${digest.groups} groups (by ${digest.groupCol}), extracted from the roster and cited to doc #${doc.id}:`,
+    digest.text,
+    `PRESENT this as your answer table (it already cites doc #${doc.id}) and CLOSE ANSWERED. A SQL query or a "plan to parse" is NOT the deliverable — this table IS. The whole document stays ingested; this is the leadership VIEW over it.`,
+  ].join('\n');
+}
+// Prefer the EXTRACTED answer; compute once from the FULL body and pin it (re-parsing 1.5MB every
+// touch is waste), fall back to the structure-summary hint for a non-table held doc.
+function _hintFor(doc, deps, dbm, row) {
+  const answerKey = row && row.id != null ? `inquiry.${row.id}.held_answer` : null;
+  let digest = null;
+  if (answerKey) { try { const p = dbm.getMeta(answerKey); if (p) digest = JSON.parse(p); } catch {} }
+  if (!digest) {
+    let full = null;
+    try { full = dbm.getDb().prepare('SELECT body FROM documents WHERE id = ?').get(doc.id); } catch {}
+    if (full && full.body) {
+      const ex = _extractHeldAnswer(full.body, { cite: `doc #${doc.id}` });
+      if (ex) { digest = ex; if (answerKey) { try { dbm.setMeta(answerKey, JSON.stringify(ex)); } catch {} } }
+    }
+  }
+  if (digest && digest.text) return _renderExtractedHint(doc, deps, digest);
+  return _renderHeldHint(doc, deps);
+}
 function heldSourceHint(row, { deps = {} } = {}) {
   try {
     const dbm = deps.db || require('./db');
@@ -188,7 +244,7 @@ function heldSourceHint(row, { deps = {} } = {}) {
     const pinKey = row && row.id != null ? `inquiry.${row.id}.held_source_doc` : null;
     if (pinKey) {
       let pinned = null; try { pinned = dbm.getMeta(pinKey); } catch {}
-      if (pinned) { const doc = _loadHeldDoc(d, pinned); if (doc && doc.id) return _renderHeldHint(doc, deps); }
+      if (pinned) { const doc = _loadHeldDoc(d, pinned); if (doc && doc.id) return _hintFor(doc, deps, dbm, row); }
     }
     const hay = `${str(row && row.next_step)} ${str(row && row.gist)} ${jarr(row && row.open_leads).slice(0, 6).join(' ')} ${jarr(row && row.evidence).slice(-3).map((e) => str(e.gist) + ' ' + str(e.cite)).join(' ')}`;
     const seen = new Set();
@@ -201,7 +257,7 @@ function heldSourceHint(row, { deps = {} } = {}) {
       try { doc = d.prepare('SELECT id, title, LENGTH(body) AS len, substr(body,1,2400) AS head FROM documents WHERE title = ? OR (LENGTH(title) >= 8 AND ? LIKE \'%\' || title || \'%\') ORDER BY LENGTH(title) DESC LIMIT 1').get(name, name); } catch {}
       if (!doc || !doc.id) continue;
       if (pinKey) { try { dbm.setMeta(pinKey, String(doc.id)); } catch {} }   // PIN on discovery — survives the next write-back
-      return _renderHeldHint(doc, deps);
+      return _hintFor(doc, deps, dbm, row);
     }
     return null;
   } catch { return null; }
