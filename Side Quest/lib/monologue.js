@@ -1822,7 +1822,14 @@ async function runGraphWalkMove(recentTurns, { force = false } = {}) {
   if (move && move.acted && move.anchor && opts.emitFocusMove) {
     try { opts.emitFocusMove({ anchor: move.anchor, canonical: move.canonical || move.anchor, source: move.source || 'convo', kind: move.kind, entities: move.entities, connections: move.connections, at: Date.now() }); } catch {}
   }
-  return true;   // a move ran (or was deliberately quiet) — the tick should NOT free-associate
+  // RETURN THE ACTED STATUS (2026-07-23, freeze diagnostic — the main lane found the main process
+  // pegging one core on a repeating "assessed → no move (no-gap)" block). This value is consumed ONLY
+  // by the same-tick BURST loop (the graphLane closure): it used to return `true` even on a no-gap,
+  // so the burst kept issuing MORE force-moves — each re-running the expensive frontier assess
+  // (a 1.76M-row db scan) for nothing. Returning acted-status makes the burst STOP the instant there
+  // is no gap: the diagnostic's "exit condition on the no-gap path". Free-association is gated upstream
+  // by the tick's own `return`, never by this value, so narrowing it is safe.
+  return !!(move && move.acted);
 }
 
 // PULLER LANE — the sibling of runGraphWalkMove. Where the graph-walk enriches a node's KG facts, this
