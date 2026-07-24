@@ -125,13 +125,22 @@ const _ENVELOPE_ECHO_RE = /\b(?:the (?:prompt|instruction|directive)s? (?:says?|
 const _DELIVERY_RE = new RegExp(
   "\\b(?:i(?:['\\u2019]ll| will| am going to|['\\u2019]m going to)|let me)\\s+(?:keep\\s+)?" +
   '(?:add(?:ing)?|put(?:ting)?|compil(?:e|ing)|creat(?:e|ing)|assembl(?:e|ing)|collect(?:ing)?|track(?:ing)?|maintain(?:ing)?|build(?:ing)?|updat(?:e|ing))\\s+([^.!?\\n]{4,120})', 'i');
-const _ARTIFACT_SURFACE_RE = /\b(canvas|document|docs?|file|tracker|brief|list)\b/i;
-function deliveryPromise(text) {
+const _ARTIFACT_SURFACE_RE = /\b(canvas|document|docs?|file|tracker|brief|list|dossier|sheet|board|page)\b/i;
+// A DEICTIC destination standing in for the artifact ("…adding them THERE / to it / onto it"). The
+// artifact was named in an EARLIER turn, not this say — the measured live miss ("I'll keep adding the
+// parish contacts THERE") referred to the canvas by pronoun, so the literal-word-only test never fired
+// and the net was dead (0 firings ever). Counts as an artifact surface ONLY when recent context
+// actually established one, so a plain "meet you there" can't manufacture a promise tab.
+const _DEICTIC_DEST_RE = /\b(there|to it|onto it|to that|in that|on that)\b/i;
+function deliveryPromise(text, opts = {}) {
   const s = String(text == null ? '' : text);
   const m = s.match(_DELIVERY_RE);
   if (!m) return null;
   if (/\?\s*$/.test(m[0])) return null;                                   // a question is not a commitment
-  if (!_ARTIFACT_SURFACE_RE.test(s)) return null;                         // artifact surface named somewhere in the say
+  const ctx = String((opts && opts.context) || '');
+  const hasArtifact = _ARTIFACT_SURFACE_RE.test(s)                        // named in the say, OR
+    || (_DEICTIC_DEST_RE.test(s) && _ARTIFACT_SURFACE_RE.test(ctx));      // a deictic + an artifact named in recent context
+  if (!hasArtifact) return null;
   let topic = String(m[1]).split(/\b(?:there|to the|in the|on the|into the|as we|as they|so that)\b/i)[0];
   topic = topic.replace(/^\s*(?:the|a|an|that|this)\s+/i, '').replace(/\s+/g, ' ').trim().replace(/[.,;:]+$/, '');
   return topic.length >= 6 ? { topic: topic.slice(0, 80) } : null;

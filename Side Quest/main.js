@@ -8147,7 +8147,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // promising reply; later turns and lanes address the same promise-<slug> tab. Independent of
     // followupFired: this creates a document, it does not send a message.
     try {
-      const dp = require('./lib/leakguard').deliveryPromise(finalSaid || '');
+      // Recent conversation as context so a DEICTIC promise ("I'll keep adding them THERE") resolves —
+      // the artifact (canvas/doc) is usually named a turn or two earlier, not in this say. Her prior
+      // says + his recent messages both count (either could have named the canvas).
+      const _promiseCtx = [userMessage, ...((db.getRecentTurns(6) || []).map(t => t && t.content))].filter(Boolean).join(' ');
+      const dp = require('./lib/leakguard').deliveryPromise(finalSaid || '', { context: _promiseCtx });
       if (dp && dp.topic) {
         const slug = dp.topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
         const md = `_Materialized from her promise in conversation:_\n\n> ${String(finalSaid || '').replace(/\s+/g, ' ').slice(0, 400)}`;

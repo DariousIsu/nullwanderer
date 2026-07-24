@@ -110,6 +110,19 @@ ok(lg._INTERNAL_TAG_RE.test('<think>') && lg._INTERNAL_TAG_RE.test('</web-open>'
     'a status statement without a commitment verb stays silent');
   ok(lg.deliveryPromise('I\'m pulling the source that records when the strait closed.') === null,
     'a retrieval promise stays the LOOKUP net\'s (no artifact surface)');
+
+  // THE DEICTIC MISS — why the net fired 0x live. The artifact (canvas) was named a PRIOR turn; the
+  // promise refers to it by pronoun ("there"), so the old literal-word-only test in the SAY missed it.
+  const DEICTIC = 'I\'ll keep adding the Louisiana parish contacts there as we collect them.';
+  ok(lg.deliveryPromise(DEICTIC) === null,
+    'deictic promise with NO context → still null (a bare "there" can\'t manufacture a promise tab)');
+  const d2 = lg.deliveryPromise(DEICTIC, { context: 'The canvas is perfect for the parish work.' });
+  ok(d2 && /louisiana parish contacts/i.test(d2.topic),
+    `deictic "there" + context that names the canvas → lands, topic="${d2 && d2.topic}"`);
+  ok(lg.deliveryPromise('I\'ll meet you there at noon.', { context: 'the canvas has the docs' }) === null,
+    'a non-delivery "there" (no add/put/compile verb) never fires, even with an artifact in context');
+  ok(lg.deliveryPromise('I\'ll keep adding them there.', { context: 'no artifact mentioned at all here' }) === null,
+    'deictic + context WITHOUT an artifact word → still null (context must actually name one)');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
