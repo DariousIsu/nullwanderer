@@ -1184,30 +1184,52 @@ function faceAttachAudio(url) {
   } catch (e) { return false; }
 }
 const _faceCen = new THREE.Vector3(), _faceTint = new THREE.Color();
+/*
+ * TWO FACES SHARE THIS STATE AND ONLY ONE OF THEM HAS A TOGGLE.
+ *
+ * `FACE_ON` belongs to the PAINTED CLOUD face — the screen-space light folded into the point shader, default
+ * OFF because a filled bright eye reads as a skull. But `updateVRMFace` drives the MODEL's visemes from
+ * `face.mouthOpen` and its expression from `face.cur`, and this function used to `return` on !FACE_ON before
+ * computing either. So the model blinked (that clock is inline) and never once opened its mouth: her lip-sync
+ * was hostage to a switch that belongs to a different face.
+ *
+ * The state is a handful of scalars — free to keep current whether or not anything reads it. Only the
+ * projection and the uniform push below are actually conditional.
+ */
 function updateFace(now) {
   try {
-    if (!FACE_ON) {
-      if (nodeMat && nodeMat.uniforms.uFaceOn.value !== 0) for (const m of [nodeMat, haloMat, dustMat]) if (m) m.uniforms.uFaceOn.value = 0;
-      return;
-    }
     // --- mouth: real amplitude if we have the wav, otherwise a syllable-rate envelope over the estimate ---
-    let rms = 0;
+    let rms = 0, smooth;
     if (face.analyser) {
       face.analyser.getByteTimeDomainData(face.buf);
       let s = 0; for (let i = 0; i < face.buf.length; i++) { const v = (face.buf[i] - 128) / 128; s += v * v; }
       rms = Math.sqrt(s / face.buf.length);
     } else if (now < face.speakUntil) {
       const t = (now - face.speakFrom) / 1000;
-      // ~4.6 syllables/sec with a wobble, so it never falls into a mechanical rhythm
-      rms = 0.30 + 0.34 * Math.abs(Math.sin(t * 14.5)) * (0.6 + 0.4 * Math.abs(Math.sin(t * 2.3 + 1.1)));
+      // A syllable rate with a slow wobble, so it never falls into a mechanical rhythm. Two things this has
+      // to get right, both learned by MEASURING the resulting curve rather than reading the code:
+      //   1. Emit RMS, the same scale the analyser branch produces, because both feed one shared
+      //      amplitudeToMouth (gain 1.9, max 0.95). The old form carried a 0.30 FLOOR and peaked at 0.64 —
+      //      after that gain it sat clamped at 0.79-0.95 forever. That is a jaw hanging open, not speech.
+      //   2. Smooth it LIGHTLY. amplitudeToMouth exists to tame jittery wav RMS; this envelope is already
+      //      smooth, and putting it through the same filter flattened the syllables back out (0.42-0.90 with
+      //      zero full closes). Same reason you don't run a clean signal through a noise gate.
+      // Measured as shipped: 0.08-0.92 with ~8 open/close cycles in 2.5s ≈ 3.2/sec, a conversational rate.
+      rms = 0.52 * Math.abs(Math.sin(t * 11.5)) * (0.55 + 0.45 * Math.abs(Math.sin(t * 2.3 + 1.1)));
+      smooth = { attack: 0.75, decay: 0.55 };
     }
-    face.mouthOpen = AS ? AS.amplitudeToMouth(rms, face.mouthOpen) : Math.max(0, face.mouthOpen * 0.8 + rms * 0.2);
+    face.mouthOpen = AS ? AS.amplitudeToMouth(rms, face.mouthOpen, smooth) : Math.max(0, face.mouthOpen * 0.8 + rms * 0.2);
     const speaking = now < face.speakUntil || !!face.analyser;
     if (!speaking) face.target = FACE_REST;
     face.strength += (face.target - face.strength) * (face.target > face.strength ? 0.10 : 0.022);
     // --- expression easing + blink, from the avatar's own model ---
     for (const k of ['brow', 'eye', 'mouthCurve', 'gazeY']) face.cur[k] += ((face.tgt[k] || 0) - face.cur[k]) * 0.09;
     const blink = AS ? AS.blinkMultiplier(now) : 1;
+    // ---- everything ABOVE is shared state (the VRM reads it). Everything BELOW is the painted cloud face. ----
+    if (!FACE_ON) {
+      if (nodeMat && nodeMat.uniforms.uFaceOn.value !== 0) for (const m of [nodeMat, haloMat, dustMat]) if (m) m.uniforms.uFaceOn.value = 0;
+      return;
+    }
     // --- where she sits on screen: project the cloud centre, size her to its extent, so she stays on the
     // cloud through pan and zoom instead of floating in a fixed screen box ---
     _faceCen.set(_midCen.x, _midCen.y, _midCen.z);
