@@ -2682,13 +2682,21 @@ graphEl.addEventListener('dblclick', (e) => {
 // Same raycast as picking, throttled to ~12Hz; an HTML tooltip follows the cursor. Zero scene cost.
 const tipEl = document.getElementById('tip');
 let _hoverAt = 0;
+// Display-only. Echo names are UNIQUE across every entity_type, so when a name is already taken by another
+// object it is disambiguated with its Wikidata id — "England [wd:Q21]", "United States [wd:Q30]" (2,511
+// places carry one as of the 2026-07-25 DB handoff). That suffix is IDENTITY, not something to read, so it is
+// stripped for any human-facing label. NEVER strip it where the name is used to look a node up (focus, vertex
+// binding, id match): the full string IS the node id, and a stripped one would resolve to nothing.
+function entityLabel(name) {
+  return String(name == null ? '' : name).replace(/\s*\[wd:Q\d+\]\s*$/i, '');
+}
 graphEl.addEventListener('pointermove', (e) => {
   const now = performance.now(); if (now - _hoverAt < 80) return; _hoverAt = now;
   if (_downXY) { if (tipEl) tipEl.style.display = 'none'; return; }          // orbiting — no tooltip
   const n = pickAt(e.clientX, e.clientY);
   if (!n || n.id == null) { if (tipEl) tipEl.style.display = 'none'; return; }
   if (tipEl) {
-    tipEl.querySelector('.nm').textContent = n.zoe ? ('Zoe — ' + (n.entityType || 'self')) : n.id;
+    tipEl.querySelector('.nm').textContent = n.zoe ? ('Zoe — ' + (n.entityType || 'self')) : entityLabel(n.id);
     tipEl.querySelector('.meta').textContent = tipLine(n);
     tipEl.style.display = 'block';
     const w = tipEl.offsetWidth, flip = e.clientX + w + 26 > window.innerWidth;
@@ -2714,7 +2722,7 @@ const cardEl = document.getElementById('card');
 function hideCard() { if (cardEl) cardEl.style.display = 'none'; }
 function showCard(n) {
   if (!cardEl) return;
-  cardEl.querySelector('.nm').textContent = n.zoe ? 'Zoe — her own ' + (n.entityType || 'self') : n.id;
+  cardEl.querySelector('.nm').textContent = n.zoe ? 'Zoe — her own ' + (n.entityType || 'self') : entityLabel(n.id);
   const chips = [];
   if (n.zoe) { chips.push(['personality', ZOE_COLOR[n.entityType] || ZOE_ROSE]); chips.push([n.entityType || 'self', null]); }
   else {
@@ -3384,7 +3392,7 @@ function renderDropdown() {
   if (!ddEl) return;
   if (!hits.length) { ddEl.hidden = true; return; }
   ddEl.hidden = false;
-  ddEl.innerHTML = hits.map((h, i) => `<div class="hit${i === activeIdx ? ' on' : ''}" data-i="${i}"><span class="swatch" style="background:${h.color || '#7dd3fc'}"></span><span class="nm">${esc(h.name)}</span><span class="ty">${esc(h.entity_type)}</span></div>`).join('');
+  ddEl.innerHTML = hits.map((h, i) => `<div class="hit${i === activeIdx ? ' on' : ''}" data-i="${i}"><span class="swatch" style="background:${h.color || '#7dd3fc'}"></span><span class="nm">${esc(entityLabel(h.name))}</span><span class="ty">${esc(h.entity_type)}</span></div>`).join('');
   ddEl.querySelectorAll('.hit').forEach((el) => el.addEventListener('mousedown', (e) => { e.preventDefault(); focus(hits[Number(el.dataset.i)].name); }));
 }
 if (qEl) {
