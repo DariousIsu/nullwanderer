@@ -84,6 +84,28 @@ const unp2 = db.listUnpromotedDocuments(100);
 ok(unp2.length === 2, 'markDocumentPromoted removes one from the un-promoted set');
 ok(db.getDocument(unp1[0].id).promoted === 1 && db.getDocument(unp1[0].id).promoted_ref === 'echo-doc-123', 'promoted doc carries promoted=1 + the Echo ref');
 
+// --- PROMOTION PRIORITY: memory-event classes jump the FIFO (2026-07-25 starvation fix) ---
+// Live measurement: 152 conversations landed, 0 promoted — 3,879 lower-id bulk docs (browser_download
+// / news / canvas_drop) sat ahead of them in a pure id-ASC queue, ~194 days deep at 20/pass. A
+// conversation that lands AFTER a pile of bulk docs must still promote FIRST, or chat memory never
+// reaches long-term.
+{
+  const pendingBulk = db.listUnpromotedDocuments(100).map(d => d.id);   // the 2 older canvas_drops
+  const convo = store.land({ title: 'Conversation — chat', body: 'Lucas: hi there\n\nZoe: hey, good to see you', source: 'conversation', ref: 'conversation-1-2' });
+  const meet = store.land({ title: 'Meeting notes', body: 'standup notes with action items for the week', source: 'meeting', ref: 'meeting-xyz' });
+  ok(convo.landed && meet.landed && convo.id > Math.max(...pendingBulk),
+    'the conversation lands with a HIGHER id than the pending bulk docs (the starvation setup)');
+  const q = db.listUnpromotedDocuments(100);
+  const firstTwo = q.slice(0, 2).map(d => d.source).sort().join(',');
+  ok(firstTwo === 'conversation,meeting', 'conversation + meeting promote FIRST despite their higher ids');
+  ok(q[q.length - 1].source === 'canvas_drop', 'the older bulk canvas_drop is pushed to the BACK of the queue');
+  const conv2 = store.land({ title: 'Conversation 2', body: 'Lucas: another thread here\n\nZoe: sure, tell me more', source: 'conversation', ref: 'conversation-3-4' });
+  const convQ = db.listUnpromotedDocuments(100).filter(d => d.source === 'conversation');
+  ok(convQ.length === 2 && convQ[0].id < convQ[1].id, 'within the memory-event tier, still oldest-first (FIFO)');
+  // clean up so the fail-safe counts below are unaffected
+  for (const id of [convo.id, meet.id, conv2.id]) db.getDb().prepare('DELETE FROM documents WHERE id = ?').run(id);
+}
+
 // --- fail-safe ---
 ok(store.land({ body: '' }).landed === false, 'empty body → not landed (no throw)');
 ok(store.toCandidates(null).length === 0, 'toCandidates(null) → [] (no throw)');
