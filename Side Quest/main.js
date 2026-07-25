@@ -7215,7 +7215,51 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
                                       // truncation rate is measurable per writer against the 18% baseline
   let cloudComplete = false;          // the cloud stream ended normally (not stalled) — see below
   let cloudThinking = '';             // the reasoning channel — scanned for tool tags, kept as interior, never spoken
-  if (cloudWritesReply) {
+  // ── KEYSTONE S2b — CONVERSATION AS AN AGENT LOOP (flagged conv.agentloop, default OFF) ───────────
+  // Reason about intent, dereference coordinates for depth, answer as herself. Runs BEFORE the cloud
+  // one-shot; on success it feeds <say> to the parser and marks the turn written so both the cloud block
+  // below AND the local generation are skipped. Fail-soft: any miss falls straight through to the existing
+  // pipeline — this can only ADD a path, never remove one. Flag off ⇒ zero behavior change.
+  let agentWrote = false;
+  try {
+    const _ca = require('./lib/conversation_agent');
+    if (_ca.isOn()) {
+      const _mani = require('./lib/manifest');
+      const _ow = require('./lib/owner_world');
+      const _ctx = (recentTurns || []).slice(-4).map((t) => `${t.speaker || '?'}: ${String(t.content || '').replace(/\s+/g, ' ').slice(0, 160)}`).join('\n');
+      const _man = await _mani.buildManifest(userMessage, { userName, context: _ctx });
+      const _byCoord = new Map((_man.objects || []).map((o) => [o.coord, o]));
+      const _fmtHood = (g) => {
+        const edges = (g.edges || []).map((e) => `${e.rel} ${e.src === g.coord ? e.dst : e.src}`).join('; ');
+        return `${g.name}${g.summary ? ' — ' + g.summary : ''}${edges ? ' | ' + edges : ''}`;
+      };
+      const _res = await _ca.run({
+        userMessage, manifestText: _mani.render(_man), context: _ctx,
+        deps: {
+          complete: async (prompt) => {
+            const r = await require('./lib/cloud_logic').streamCloud([{ role: 'user', content: prompt }], {
+              model: (() => { try { return db.getMeta('model.replier') || null; } catch { return null; } })(),
+              inactivityMs: 180000, think: false, temperature: 0.6,
+            });
+            return (r && r.text) || '';
+          },
+          deref: async (coord) => {
+            try { const g = _ow.get(coord); if (g) return _fmtHood(g); } catch {}
+            const row = _byCoord.get(coord);
+            return (row && row.gloss) ? `${row.surface}: ${row.gloss}` : 'no additional detail held for that coordinate';
+          },
+          // web left null for v1 → an honest gap admission ("I don't hold that yet"); web deref is next.
+        },
+      });
+      if (_res && _res.reply && _res.reply.trim()) {
+        parser.feed('<say>' + _res.reply.trim() + '</say>');
+        replyWriter = 'conversation_agent';
+        agentWrote = true;
+        console.log(`[conv-agent] wrote the reply — ${_res.steps} step(s), ${_res.derefs} deref(s)`);
+      }
+    }
+  } catch (e) { console.error('[conv-agent] failed, falling back to pipeline:', e.message); }
+  if (cloudWritesReply && !agentWrote) {
     try {
       // GIVE THE CLOUD THE TOOL SURFACE. The suit is stripped from `messages` above on cloud-owned
       // turns — correct while the local 12b wrote, because it fumbled tool JSON and the hard-coded
