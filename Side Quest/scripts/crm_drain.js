@@ -92,7 +92,17 @@ function main() {
       ready ||= client.initialize();
       await ready;
       const res = await client.callTool(name, args);
+      // Prefer structuredContent: it is already the decoded object. content[0].text is the same
+      // payload re-encoded as a string, so parsing it is a second chance to fail for no benefit.
+      if (res && res.structuredContent && typeof res.structuredContent === 'object') {
+        if (process.env.DRAIN_TRACE) console.log('   [trace]', name, JSON.stringify(res.structuredContent).slice(0, 200));
+        return res.structuredContent;
+      }
       const txt = res && res.content && res.content[0] && res.content[0].text;
+      if (process.env.DRAIN_TRACE) {
+        console.log('   [trace]', name, 'isError=', res && res.isError,
+                    'text=', String(txt).slice(0, 220));
+      }
       try { return txt ? JSON.parse(txt) : res; } catch { return res; }
     };
   } else {
