@@ -37,7 +37,13 @@
 // object. Anything not here is carried as a note rather than silently dropped.
 const SPINE = ['FirstName', 'LastName', 'Suffix', 'Title', 'Email', 'Phone', 'MobilePhone',
   'MailingStreet', 'MailingCity', 'MailingState', 'MailingPostalCode',
-  'Jurisdiction__c', 'Chamber__c', 'Party__c', 'Active_Elected__c', 'Notes_Public__c'];
+  'Jurisdiction__c', 'Chamber__c', 'Party__c', 'District__c', 'Active_Elected__c',
+  // AccountId is THE org edge — the column that points a person at the body they serve. It was
+  // missing here at first, so toFields() silently dropped it and every edgeFact naming an
+  // organisation went nowhere. A column absent from SPINE is not rejected, it VANISHES, which is
+  // the quietest possible failure; keep this list in step with Echo's write whitelist.
+  'AccountId',
+  'Notes_Public__c'];
 
 const STRONG_IDS = ['Bioguide_Id__c', 'Wikidata_Qid__c', 'OCD_Person_Id__c',
   'FEC_Candidate_Id__c', 'PCC_Account_Id__c'];

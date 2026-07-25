@@ -101,6 +101,21 @@ async function main() {
     ok(c.args.source_url === 'puller://target/18286', 'provenance travelled with the write');
   }
 
+  // ---- 4b. the ORG EDGE survives toFields ------------------------------------------------------
+  // Regression: AccountId was missing from SPINE, so every edgeFact naming an organisation was
+  // silently DROPPED rather than rejected — the quietest possible failure.
+  {
+    const h = harness();
+    await h.upsertPersonObject({
+      name: 'Walter Adams',
+      edgeFacts: { AccountId: 4242, Jurisdiction__c: 'US-LA', Title: 'Police Juror Member' },
+    });
+    const c = h.calls.find((x) => x.name === 'create_contact');
+    ok(c.args.fields.AccountId === 4242, '⭐⭐ AccountId — the org edge — reaches the write');
+    ok(Object.prototype.hasOwnProperty.call(c.args.fields, 'District__c') === false,
+       'and an absent edge is simply absent, not null-written');
+  }
+
   // ---- 5. refusals -----------------------------------------------------------------------------
   {
     const h = harness();

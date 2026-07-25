@@ -31,6 +31,7 @@ const ELECTORAL = process.env.CRM_DB_PATH
 const argv = process.argv.slice(2);
 const flag = (n, d = null) => { const i = argv.indexOf(n); return i >= 0 ? (argv[i + 1] ?? true) : d; };
 const COMMIT = argv.includes('--commit');
+const RELINK = argv.includes('--relink');
 const COHORT = flag('--cohort', 'parish');
 const LIMIT = parseInt(flag('--limit', '0'), 10) || 0;
 
@@ -111,14 +112,42 @@ function main() {
 
   const { upsertPersonObject } = createCrmUpserter({ callTool, readCrm });
 
+  // Org edge: company string -> account id. Cached, because a parish police jury shows up once
+  // per member and upsert_account is a round-trip. In dry-run we only report whether the account
+  // already exists — creating organisations is a write like any other.
+  let accountsCreated = 0;
+  const accountCache = new Map();
+  const accByName = crm.prepare(
+    `SELECT id FROM account WHERE LOWER(TRIM(Name)) = LOWER(TRIM(?)) AND COALESCE(deleted,0)=0 LIMIT 1`);
+  async function resolveAccount(rawName) {
+    const nm = String(rawName || '').trim();
+    if (!nm) return null;
+    if (accountCache.has(nm)) return accountCache.get(nm);
+    let id = (accByName.get(nm) || {}).id || null;
+    if (!id && COMMIT) {
+      const res = await callTool('upsert_account', {
+        name: nm, jurisdiction: 'US-LA',
+        fields: { Account_Kind__c: 'government_body', Type: 'Government body',
+                  BillingState: 'LA', Description: 'Louisiana parish body (drained from Puller)' },
+      });
+      id = (res && res.account_id) || null;
+      if (res && res.action === 'created') accountsCreated++;
+    }
+    accountCache.set(nm, id);
+    return id;
+  }
+
   // ---- the work list ---------------------------------------------------------------------------
   const where = COHORT === 'parish'
     ? `(LOWER(company) LIKE '%parish%' OR LOWER(name) LIKE '%parish%')`
     : `1=1`;
+  // --relink revisits targets ALREADY linked to a contact, to attach an edge that did not exist
+  // when they were drained (AccountId). Identity is already settled for these, so it updates the
+  // known contact directly rather than re-resolving — re-resolution could only introduce error.
   const rows = puller.prepare(
-    `SELECT id, kind, name, company, domain, function
+    `SELECT id, kind, name, company, domain, function, crm_id
        FROM targets
-      WHERE crm_id IS NULL AND ${where}
+      WHERE crm_id IS ${RELINK ? 'NOT NULL' : 'NULL'} AND ${where}
       ORDER BY id ${LIMIT ? 'LIMIT ' + LIMIT : ''}`).all();
 
   // beliefs carries status ('active' is the current answer per (target,type)) -- there is no
@@ -145,18 +174,37 @@ function main() {
         const col = BELIEF_TO_COLUMN[b.type];
         if (col && b.value) (col === 'Title' ? edgeFacts : attributeFacts)[col] = b.value;
       }
-      // The parish/company string IS the edge — it names the body this person serves.
+      // The company string names the BODY this person serves. That is an edge-fact pointing at
+      // another object, so it belongs in AccountId — not squeezed into Title, which is the ROLE.
+      // (Earlier rows got Title=company as a fallback when no role belief existed; --relink adds
+      // the edge to those without rewriting their Title, since the edge is the truth either way.)
       if (t.company) {
         edgeFacts.Jurisdiction__c = 'US-LA';
         edgeFacts.MailingState = 'LA';
-        if (!edgeFacts.Title) edgeFacts.Title = t.company;
+        const accId = await resolveAccount(t.company);
+        if (accId) edgeFacts.AccountId = accId;
+        else if (!edgeFacts.Title) edgeFacts.Title = t.company;
       }
 
-      const r = await upsertPersonObject(
-        { name: t.name, attributeFacts, edgeFacts, identifiers: {}, jurisdiction: 'US-LA',
-          org: t.company },
-        { dryRun: !COMMIT, source: `puller://target/${t.id}`,
-          notes: `drained from Puller target ${t.id}${t.company ? ' — ' + t.company : ''}` });
+      let r;
+      if (RELINK) {
+        // Identity already settled — attach the edge to the known contact, nothing else.
+        if (!edgeFacts.AccountId) { tally['no-account'] = (tally['no-account'] || 0) + 1; continue; }
+        if (!COMMIT) { tally['would-relink'] = (tally['would-relink'] || 0) + 1; continue; }
+        const res = await callTool('update_contact', {
+          contact_id: t.crm_id, fields: { AccountId: edgeFacts.AccountId },
+          finding_notes: `org edge from Puller target ${t.id} — ${t.company}`,
+          source_url: `puller://target/${t.id}` });
+        const changed = (res && res.updated_fields) || [];
+        r = { action: changed.includes('AccountId') ? 'edge-added' : 'edge-present',
+              contactId: t.crm_id };
+      } else {
+        r = await upsertPersonObject(
+          { name: t.name, attributeFacts, edgeFacts, identifiers: {}, jurisdiction: 'US-LA',
+            org: t.company },
+          { dryRun: !COMMIT, source: `puller://target/${t.id}`,
+            notes: `drained from Puller target ${t.id}${t.company ? ' — ' + t.company : ''}` });
+      }
 
       tally[r.action] = (tally[r.action] || 0) + 1;
       if (r.action === 'held') held.push({ id: t.id, name: t.name, candidates: r.candidates });
@@ -164,7 +212,8 @@ function main() {
       if (COMMIT && r.contactId) promote.run(r.contactId, Math.floor(Date.now() / 1000), t.id);
     }
 
-    console.log('\noutcome:');
+    console.log(`\naccounts created: ${accountsCreated}   distinct orgs seen: ${accountCache.size}`);
+    console.log('outcome:');
     for (const [k, v] of Object.entries(tally).sort((a, b) => b[1] - a[1])) {
       console.log(`   ${k.padEnd(16)} ${String(v).padStart(6)}`);
     }
