@@ -84,26 +84,45 @@ const unp2 = db.listUnpromotedDocuments(100);
 ok(unp2.length === 2, 'markDocumentPromoted removes one from the un-promoted set');
 ok(db.getDocument(unp1[0].id).promoted === 1 && db.getDocument(unp1[0].id).promoted_ref === 'echo-doc-123', 'promoted doc carries promoted=1 + the Echo ref');
 
-// --- PROMOTION PRIORITY: memory-event classes jump the FIFO (2026-07-25 starvation fix) ---
-// Live measurement: 152 conversations landed, 0 promoted — 3,879 lower-id bulk docs (browser_download
-// / news / canvas_drop) sat ahead of them in a pure id-ASC queue, ~194 days deep at 20/pass. A
-// conversation that lands AFTER a pile of bulk docs must still promote FIRST, or chat memory never
-// reaches long-term.
+// --- PROMOTION FAIR-SHARE: no lane starves (2026-07-25, "we leave nothing behind") ---
+// Live measurement: a global id-ASC FIFO at 20/pass starved every young/low-volume lane behind the
+// bulk — conversation 152 landed / 0 promoted, inquiry 155/0, meeting 9/0, while browser_download
+// (460/day) and news held the head. Round-robin: one pass must advance EVERY source, taking rank-1
+// (each source's oldest) from all before any source's rank-2. Memory-event classes lead each round.
 {
-  const pendingBulk = db.listUnpromotedDocuments(100).map(d => d.id);   // the 2 older canvas_drops
-  const convo = store.land({ title: 'Conversation — chat', body: 'Lucas: hi there\n\nZoe: hey, good to see you', source: 'conversation', ref: 'conversation-1-2' });
-  const meet = store.land({ title: 'Meeting notes', body: 'standup notes with action items for the week', source: 'meeting', ref: 'meeting-xyz' });
-  ok(convo.landed && meet.landed && convo.id > Math.max(...pendingBulk),
-    'the conversation lands with a HIGHER id than the pending bulk docs (the starvation setup)');
-  const q = db.listUnpromotedDocuments(100);
-  const firstTwo = q.slice(0, 2).map(d => d.source).sort().join(',');
-  ok(firstTwo === 'conversation,meeting', 'conversation + meeting promote FIRST despite their higher ids');
-  ok(q[q.length - 1].source === 'canvas_drop', 'the older bulk canvas_drop is pushed to the BACK of the queue');
-  const conv2 = store.land({ title: 'Conversation 2', body: 'Lucas: another thread here\n\nZoe: sure, tell me more', source: 'conversation', ref: 'conversation-3-4' });
-  const convQ = db.listUnpromotedDocuments(100).filter(d => d.source === 'conversation');
-  ok(convQ.length === 2 && convQ[0].id < convQ[1].id, 'within the memory-event tier, still oldest-first (FIFO)');
-  // clean up so the fail-safe counts below are unaffected
-  for (const id of [convo.id, meet.id, conv2.id]) db.getDb().prepare('DELETE FROM documents WHERE id = ?').run(id);
+  // Clear the 2 pending canvas_drops so this block controls the whole queue.
+  for (const d of db.listUnpromotedDocuments(100)) db.getDb().prepare('DELETE FROM documents WHERE id=?').run(d.id);
+
+  // A bulk lane FLOODS the queue first (lowest ids), then low-volume lanes land AFTER (higher ids) —
+  // the exact starvation setup. 6 browser_downloads, then 1 each of the small lanes.
+  const ids = {};
+  for (let i = 0; i < 6; i++) store.land({ title: `dl ${i}`, body: `downloaded web page number ${i} with enough body`, source: 'browser_download', ref: `dl-${i}` });
+  for (const src of ['conversation', 'inquiry', 'meeting', 'research', 'canvas_drop']) {
+    const r = store.land({ title: `${src} A`, body: `first ${src} document with a real body of text here`, source: src, ref: `${src}-A` });
+    ids[src] = r.id;
+  }
+
+  const q = db.listUnpromotedDocuments(6);   // one pass of 6
+  const srcs = q.map(d => d.source);
+  ok(new Set(srcs).size === 6, `a 6-doc pass touches 6 DISTINCT sources, not 6 of one lane — got: ${srcs.join(',')}`);
+  ok(!srcs.includes('browser_download') || srcs.filter(s => s === 'browser_download').length === 1,
+    'the flooding bulk lane takes at most ONE slot in the round, never crowding the others out');
+  ok(srcs[0] === 'conversation' || srcs[0] === 'meeting',
+    `a memory-event class leads the round (got "${srcs[0]}")`);
+  for (const src of ['conversation', 'inquiry', 'meeting', 'research', 'canvas_drop']) {
+    ok(srcs.includes(src), `low-volume lane "${src}" is served in the SAME pass as the bulk (never starved)`);
+  }
+
+  // Within a source, still oldest-first: a second conversation ranks behind the first.
+  const c2 = store.land({ title: 'conv B', body: 'second conversation document, later in time than the first', source: 'conversation', ref: 'conversation-B' });
+  const convOrder = db.listUnpromotedDocuments(100).filter(d => d.source === 'conversation').map(d => d.id);
+  ok(convOrder[0] === ids['conversation'] && convOrder[1] === c2.id, 'within a lane, FIFO (oldest of that lane first)');
+
+  // reset for the fail-safe block below
+  for (const d of db.listUnpromotedDocuments(200)) db.getDb().prepare('DELETE FROM documents WHERE id=?').run(d.id);
+  store.land({ title: 'Rainey Weekly Huddle', body: '# Notes\nLucas Overby — deliver publishing materials to Sydney.', source: 'canvas_drop', ref: 'drop-rainey-abc' });
+  store.land({ title: 'Rainey Weekly Huddle (v2)', body: '# Notes\nUPDATED — added action items.', source: 'canvas_drop', ref: 'drop-rainey-abc' });
+  store.land({ title: 'Budget Q3', body: 'spreadsheet figures for Q3', source: 'canvas_drop', ref: 'drop-budget-xyz' });
 }
 
 // --- fail-safe ---

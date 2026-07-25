@@ -1711,22 +1711,30 @@ function recentDocuments(n = 20, { unpromotedOnly = false } = {}) {
   return getDb().prepare(`SELECT * FROM documents ${where} ORDER BY id DESC LIMIT ?`).all(Math.max(1, n | 0));
 }
 
-// Un-promoted documents for the nightly promotion pass (Slice 2). MEMORY-EVENT classes first, then
-// FIFO within each tier.
+// Un-promoted documents for the promotion pass (Slice 2). FAIR-SHARE across sources so NO LANE
+// STARVES — "we leave nothing behind" (Lucas, 2026-07-25).
 //
-// Why not plain id-ASC (measured 2026-07-25): a pure FIFO STARVES the chat lane. The store held
-// ~5,300 unpromoted docs — mostly bulk browser_download / news / canvas_drop — and the promotion
-// pointer was at id ~4270 while the OLDEST conversation was id 8085: 3,879 lower-id docs ahead of
-// it, draining 20/pass on the ~20h cadence ≈ 194 days before a single conversation would even be
-// looked at. Result: 152 conversations landed, 0 promoted — conversational memory never reached
-// long-term at all. conversation_objects.js calls the landing "the memory event"; a bulk web-archive
-// backlog must not sit in front of it. Conversations are low-volume (~5/day) so this can never
-// starve the bulk in return — they take a few of the 20-doc budget and the rest still drains FIFO.
-const _PROMOTE_PRIORITY = "CASE source WHEN 'conversation' THEN 0 WHEN 'meeting' THEN 0 "
+// Why not plain id-ASC (measured 2026-07-25): a global FIFO starves every young/low-volume lane
+// behind the bulk. The store held ~5,300 unpromoted docs; the promotion pointer sat at id ~4270
+// while the oldest conversation was id 8085 (3,879 bulk docs ahead ≈ 194 days out). Result across
+// lanes: conversation 152 landed / 0 promoted, inquiry 155/0, meeting 9/0, research 59 pending,
+// while browser_download (460/day inflow) and news dominated the head of the queue.
+//
+// Fair-share = round-robin: rank each source's own backlog oldest-first (ROW_NUMBER per source),
+// then take rank 1 from EVERY source before any source's rank 2. So one pass advances all ~13 lanes,
+// not just whoever holds the oldest ids. Within a rank the MEMORY-EVENT classes (conversation /
+// meeting) go first — conversation_objects.js calls that landing "the memory event". A high-volume
+// lane (browser_download) still gets exactly its one-per-round share, so it can't crowd the others
+// out; its own backlog is a separate throughput/triage question, not a starvation of the rest.
+const _MEMORY_EVENT_FIRST = "CASE source WHEN 'conversation' THEN 0 WHEN 'meeting' THEN 0 "
   + "WHEN 'meeting_transcript' THEN 0 ELSE 1 END";
 function listUnpromotedDocuments(limit = 100) {
-  return getDb().prepare(`SELECT * FROM documents WHERE promoted = 0 AND ${LIVE} `
-    + `ORDER BY ${_PROMOTE_PRIORITY}, id ASC LIMIT ?`).all(Math.max(1, limit | 0));
+  return getDb().prepare(
+    `SELECT * FROM (
+       SELECT *, ROW_NUMBER() OVER (PARTITION BY source ORDER BY id ASC) AS _rr
+       FROM documents WHERE promoted = 0 AND ${LIVE}
+     ) ORDER BY _rr ASC, ${_MEMORY_EVENT_FIRST}, id ASC LIMIT ?`
+  ).all(Math.max(1, limit | 0));
 }
 
 // Keyword search over title+body (simple LIKE; embedding search can layer on later). Newest first.

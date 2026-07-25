@@ -641,8 +641,14 @@ app.whenReady().then(() => {
       // DECOUPLED onto its own fast, write-triggered tick: maybeRunAudit / AUDIT_CHECK_MS below.)
       // PROMOTION (short-term → long-term): consolidate the day's new short-term documents into Echo
       // long-term (vault doc + KG entities), on the SAME nightly cadence as curation.
+      // Limit raised 20→150 (2026-07-25): at 20/pass on the ~20h cadence the pass moved ~20 docs/day
+      // against ~60 docs/day of non-bulk inflow (conversation/inquiry/meeting/canvas/research/api) — it
+      // could never keep up, let alone drain a backlog. With round-robin fairness in
+      // listUnpromotedDocuments, 150/pass clears every low-volume lane and keeps it current; the one
+      // lane it still can't absorb is browser_download (~460/day) — a throughput/triage question, not a
+      // starvation of the rest. Env-overridable for tuning.
       try {
-        const pr = await promoteDocumentsPass({});
+        const pr = await promoteDocumentsPass({ limit: parseInt(process.env.ZOE_PROMOTE_LIMIT, 10) || 150 });
         const beat = require('./lib/promote').promotionBeat(pr);
         if (beat) {
           const text = `[Memory consolidation] I ${beat} — they're part of my long-term memory now.`;
