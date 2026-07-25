@@ -20,6 +20,7 @@ const dir = __dirname;
 // list is the regression suite for the memory / curation / retrieval / resilience work. Add a
 // smoke here only once it's confirmed to pass offline with no external dependency.
 const smokes = [
+  'smoke_manifest.js',
   'smoke_unprompted.js',
   'smoke_greenlight.js',
   'smoke_soft_leash.js',
