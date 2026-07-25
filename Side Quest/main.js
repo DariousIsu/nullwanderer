@@ -1412,6 +1412,29 @@ app.whenReady().then(() => {
   setTimeout(runConversationPass, 2 * 60 * 1000);
   setInterval(runConversationPass, 15 * 60 * 1000);
 
+  // ROUTE-OBS DRAIN (2026-07-25) — route_obs was a write-only pool nothing consumed; it grew to 2.6M
+  // rows and stalled the main thread on every sync insert (lag with no CPU spike). This turns it into a
+  // draining QUEUE: fold each batch into the durable route_health aggregates, then DELETE the consumed
+  // rows so the table stays small and inserts stay cheap. Loops until the backlog is caught up, then
+  // idles on the tail. Bounded batch + fail-soft; the DELETE is on a small tail so it never itself
+  // stalls. ~470k/day inflow vs 8k/2min ≈ 5.7M/day capacity, so it keeps pace with wide margin.
+  const runRouteDrain = () => {
+    try {
+      const rd = require('./lib/route_drain');
+      let total = 0, guard = 0;
+      // catch up a backlog in a few bounded batches per tick, but never spin: stop when a batch drains
+      // less than a full window (nothing left) or after a hard guard.
+      for (;;) {
+        const r = rd.drainPass({});
+        total += r.pruned;
+        if (r.processed < rd.DEFAULT_BATCH || ++guard >= 6) break;
+      }
+      if (total) console.log(`[route-drain] folded + pruned ${total.toLocaleString()} observation(s) → route_health`);
+    } catch (e) { console.error('[route-drain] pass failed:', e.message); }
+  };
+  setTimeout(runRouteDrain, 60 * 1000);          // first drain ~1m after boot
+  setInterval(runRouteDrain, 2 * 60 * 1000);     // then every 2m — keeps route_obs a small tail
+
   // Email: surface a credential problem early rather than at first send.
   if (emailLib.isConfigured()) {
     emailLib.verify().then(r => {

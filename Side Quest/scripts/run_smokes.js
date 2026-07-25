@@ -59,6 +59,7 @@ const smokes = [
   'smoke_beat_scheduler.js',
   'smoke_swarm.js',
   'smoke_route_obs.js',
+  'smoke_route_drain.js',
   'smoke_coalesce.js',
   'smoke_memo.js',
   'smoke_lane.js',

@@ -751,6 +751,22 @@ const MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_route_obs_parent ON route_obs(parent_id)`,
   `CREATE INDEX IF NOT EXISTS idx_route_obs_focus_seq ON route_obs(focus_id, seq)`,
 
+  // route_health — the DURABLE distillate of route_obs (2026-07-25). The raw observation log was a
+  // WRITE-ONLY pool nothing consumed: it grew to 2.6M rows / 470k a day, bloated the DB to 2.1 GB, and
+  // stalled the main thread on every sync insert (the "lag with no CPU spike"). lib/route_derive folds
+  // the raw rows into these per-tool rolling aggregates — the self-correction signal (what's slow, what
+  // fails) — then PRUNES the consumed rows, so route_obs stays a small draining queue instead of an
+  // unbounded pile. This table IS the retained value; the raw log is disposable once folded here.
+  `CREATE TABLE IF NOT EXISTS route_health (
+    tool TEXT PRIMARY KEY,
+    calls INTEGER NOT NULL DEFAULT 0,
+    errors INTEGER NOT NULL DEFAULT 0,
+    misses INTEGER NOT NULL DEFAULT 0,
+    latency_sum INTEGER NOT NULL DEFAULT 0,
+    latency_n INTEGER NOT NULL DEFAULT 0,
+    updated_ts INTEGER
+  )`,
+
   // ABSENCE MODEL (memory path mapping, P3) — three-valued, after Wikidata snaks. A failed lookup
   // lands here as `somevalue` (a GAP: a value exists, we haven't found it) and feeds research.
   // `novalue` (no value exists in the world) is a CLAIM and requires evidence_kind/evidence_ref —
@@ -2105,6 +2121,24 @@ function getMetaKeysLike(like) {
   return getDb().prepare('SELECT key FROM meta WHERE key LIKE ?').all(String(like)).map((r) => r.key);
 }
 
+// ROUTE HEALTH — additive per-tool rolling aggregates (the durable distillate of route_obs). `d` is a
+// delta { calls, errors, misses, latencySum, latencyN } folded from a batch of raw observations by
+// lib/route_derive. One row per tool; upsert adds the deltas. See the route_health table comment.
+function bumpRouteHealth(tool, d = {}, now = Date.now()) {
+  if (!tool) return false;
+  getDb().prepare(`INSERT INTO route_health (tool, calls, errors, misses, latency_sum, latency_n, updated_ts)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(tool) DO UPDATE SET
+        calls = calls + excluded.calls, errors = errors + excluded.errors, misses = misses + excluded.misses,
+        latency_sum = latency_sum + excluded.latency_sum, latency_n = latency_n + excluded.latency_n,
+        updated_ts = excluded.updated_ts`)
+    .run(tool, d.calls | 0, d.errors | 0, d.misses | 0, d.latencySum | 0, d.latencyN | 0, now);
+  return true;
+}
+function getRouteHealth() {
+  try { return getDb().prepare('SELECT * FROM route_health ORDER BY calls DESC').all(); } catch { return []; }
+}
+
 // EVERYTHING WE HAVE COVERED FOR A BEAT — across every focus thread that ever ran it, not just the one
 // the scheduler currently points at.
 //
@@ -2601,6 +2635,8 @@ module.exports = {
   getAssistantAliases,
   seedOwnerIdentity,
   getMetaKeysLike,
+  bumpRouteHealth,
+  getRouteHealth,
   coveredForBeat,
   // graph memory (anti-glob relational store)
   graphInsertEntity,
