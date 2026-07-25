@@ -599,6 +599,16 @@ async function read() {
     // RE-SPIN CACHE: remember this reading so an autonomous re-open within the window is served
     // without another goto (see respinHit / open()).
     try { _cacheReading(_out.url, _out.title, _out.text); } catch {}
+    // SITE TREE — NEED-SCOPED PATH CAPTURE (2026-07-25): grow the host's map from this read — the page
+    // marked traversed (done), its same-host outlinks recorded as pending BRANCHES for a future need
+    // ("we can return to that page in future for another answer"). Recording is NOT crawling: the tree
+    // is a map, not an instruction to dig — depth still follows the search reason. Fire-and-forget on a
+    // single $$eval so read() latency is unchanged; a page that navigates away mid-eval just no-ops.
+    try {
+      page.$$eval('a[href]', (els) => els.map((e) => e.href).filter(Boolean).slice(0, 400))
+        .then((hrefs) => { try { require('./site_ledger').buildPlan(_out.url, hrefs); } catch {} })
+        .catch(() => {});
+    } catch {}
     return _out;
   } catch (err) { return { ok: false, reason: err.message }; }
 }

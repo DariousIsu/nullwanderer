@@ -26,7 +26,12 @@ const DEFAULT_TTL_MS = 3 * 24 * 60 * 60 * 1000;   // a page re-earns a fetch aft
 const SERP_TTL_MS = 30 * 60 * 1000;                // a search-results page changes — only the DUPLICATE
                                                    // search within minutes is waste (live: the same 4-H
                                                    // contact query fired twice in one minute)
-const PLAN_MAX_URLS = 30;                          // a digest plan is bounded, never a full mirror
+// A per-host frontier bound. Was 30 — an artificial cap (Lucas: "no artificial caps ... we are still
+// not hitting full depth and leaving a ton behind"). Raised to a generous, env-overridable 200 so a
+// real directory/index page's links all enter the frontier instead of being truncated at 30. Still
+// bounded for sanity (a single wiki page can link thousands); need-scoped crawling walks only what a
+// question requires, so the bound caps the MAP, never the depth reached for an answer.
+const PLAN_MAX_URLS = parseInt(process.env.ZOE_PLAN_MAX_URLS, 10) || 200;
 
 // A search-engine results page is not content — it gets its own kind and a short TTL.
 const _SERP_RE = /^https?:\/\/(?:www\.)?(?:google\.[a-z.]+\/search|bing\.com\/search|duckduckgo\.com\/)/i;
@@ -94,6 +99,16 @@ function buildPlan(landingUrl, links, { now = Date.now(), max = PLAN_MAX_URLS } 
   if (!host) return null;
   let plan = getPlan(host) || { host, urls: [], created_ts: now };
   const have = new Set(plan.urls.map((e) => e.url));
+  // PATH CAPTURE (2026-07-25): the landing page IS a page we traversed — record it as `done`, not
+  // just its outlinks. Without this a read page never appears in its own host tree unless it happened
+  // to link to itself, so "capture the answer AND all the layers it took to get there" (Lucas) lost
+  // the layers. Every read grows the tree: this page done, its same-host outlinks pending.
+  const landing = normalizeUrl(landingUrl);
+  if (landing && hostOf(landing) === host) {
+    const e = plan.urls.find((x) => x.url === landing);
+    if (e) e.status = 'done';
+    else { plan.urls.push({ url: landing, status: 'done' }); have.add(landing); }
+  }
   for (const l of (links || [])) {
     const url = normalizeUrl(typeof l === 'string' ? l : l && l.url);
     if (!url || have.has(url) || hostOf(url) !== host) continue;

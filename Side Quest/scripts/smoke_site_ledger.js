@@ -50,6 +50,19 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
     SL.markDone('x.gov', 'https://x.gov/contact');
     ok(/3\/3 pages digested — complete/.test(SL.planLine('x.gov')), 'a finished plan says complete');
 
+    // --- PATH CAPTURE (2026-07-25): the landing page is recorded as traversed even if it never links
+    // to itself, so "the answer AND all the layers it took" keeps the layers. ---
+    const p2 = SL.buildPlan('https://y.gov/roster', ['https://y.gov/member-a', 'https://y.gov/member-b'], { now: T0 });
+    const landingEntry = p2.urls.find((e) => e.url === 'https://y.gov/roster');
+    ok(landingEntry && landingEntry.status === 'done', 'path capture: the READ page itself enters its host tree as done (not just its outlinks)');
+    ok(p2.urls.filter((e) => e.status === 'pending').length === 2, 'its same-host outlinks enter as pending branches for a future need');
+    ok(SL.nextPending('y.gov') === 'https://y.gov/member-a', 'the frontier stays walkable for a later return (another answer)');
+    // a second read of a deeper page flips it done and adds ITS branches — the path accumulates
+    SL.buildPlan('https://y.gov/member-a', ['https://y.gov/member-a/bio'], { now: T0 + 1000 });
+    ok(SL.getPlan('y.gov').urls.find((e) => e.url === 'https://y.gov/member-a').status === 'done', 'walking a branch marks it done and grows the tree deeper');
+    // --- the 30-url artificial cap is lifted (Lucas: leaving a ton behind) ---
+    ok(SL.PLAN_MAX_URLS >= 200, `the artificial 30-url plan cap is lifted (now ${SL.PLAN_MAX_URLS})`);
+
     // --- SERPs: duplicate-search kill with a SHORT ttl (results change; only the immediate retry is waste) ---
     ok(SL.isSerp('https://www.google.com/search?q=bonnie+whitney') && !SL.isSerp('https://x.gov/search-results'), 'isSerp: engines only, not a site\'s own /search page');
     SL.record('https://www.google.com/search?q=bonnie+whitney', { now: T0 });
