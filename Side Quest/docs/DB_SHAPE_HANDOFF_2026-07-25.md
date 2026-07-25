@@ -32,6 +32,21 @@ one file and never ATTACH.
 
 **1,764,775 entities / 17 types · 8,631,016 live edges / 551 types.**
 
+> ⚠️ **THE EDGE-TYPE COUNT IS STALE AND MOVING — re-read it, do not cache this number.** The
+> substantiation inversion (below, §3e) began draining ~17,700 parked proposals on 2026-07-25 and
+> the relation vocabulary went **551 → 1,619 in 25 minutes**, still climbing. **1,215 of those types
+> have exactly ONE edge** (`3RD_PRESIDENT`, `47TH_TREASURER`) because `allow_open_type` keeps the
+> LLM's own label verbatim. Nothing merges the synonyms yet (task #31), so the tail keeps growing.
+>
+> **If the renderer keys colour, legend, or filtering off `relation_type`, it will break.** Colour by
+> the ~52 types with 50+ edges and bucket the rest as "other", or key off the endpoint TYPES instead
+> — those are stable at 17. The stems are heavily redundant: 101 variants of `PRECEDED*`, 85 of
+> `SUCCEEDED*`, 68 of `SERVED*`.
+> ```sql
+> SELECT relation_type, COUNT(*) n FROM relations WHERE COALESCE(deleted,0)=0
+> GROUP BY 1 HAVING n >= 50 ORDER BY n DESC;   -- the ~52 that are worth naming
+> ```
+
 | entity_type | count | | entity_type | count |
 |---|---:|---|---|---:|
 | bill | 1,492,837 | | place | **5,973** |
@@ -129,6 +144,29 @@ citation 691 · government_body **409** · poll 287 · source 2 · theme 2 · ne
 `District Judge [wd:Q5283340]`, `list of speakers of the Massachusetts House [wd:Q6597942]`. Those
 are wrong LINKS, not wrong types, and were deliberately left alone. If the UI ever renders a
 Wikidata link from `wikidata_qid`, these 13 will go somewhere useless.
+
+### 3e. The substantiation inversion — LIVE, and the graph is still moving
+
+Confidence used to be a **door**: Echo's grounded gate refused anything under 0.90, so ~17,700 cited
+edges sat parked in tenant staging (the oldest since 2026-07-03) and **exactly zero could promote**.
+Per Lucas, confidence is meant to be a **priority score, not a gate** — "an uncertain object is just
+an object that needs more details." Echo's gate never got that inversion; it landed 2026-07-25.
+
+**What this means for the render:** the graph is actively growing while you read this. As of the last
+sample, **+4,700 edges** and dropping the isolated counts materially:
+
+| | before | during |
+|---|---:|---:|
+| isolated persons | 23,918 | **22,525** |
+| isolated organizations | 16,166 | **15,508** |
+
+~2,050 previously-orphaned nodes joined the graph. If the layout drops zero-degree nodes, a visible
+chunk of the person and organization lobes will *appear* for the first time — that is new data, not a
+bug. The edges arriving are `SPOUSE`, `BIRTHPLACE`, `ALMA_MATER`, `MEMBER_OF`, `PRECEDED_BY` — dense
+person↔person and person↔org tissue, so those lobes should knit visibly tighter.
+
+⚠️ Edges promoted before `af529e9` carry **no `relation_metadata`** — promotion used to drop the
+citation. Do not treat a missing citation as "unsourced"; it is a provenance bug being backfilled.
 
 ### 3d. CRM side (does not affect the KG directly)
 
