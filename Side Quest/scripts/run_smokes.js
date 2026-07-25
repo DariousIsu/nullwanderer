@@ -21,6 +21,7 @@ const dir = __dirname;
 // smoke here only once it's confirmed to pass offline with no external dependency.
 const smokes = [
   'smoke_manifest.js',
+  'smoke_owner_world.js',
   'smoke_unprompted.js',
   'smoke_greenlight.js',
   'smoke_soft_leash.js',

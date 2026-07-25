@@ -109,6 +109,21 @@ ok(ambMan.objects[0].status === 'ambiguous' && ambMan.objects[0].candidates.leng
   ok(bs['Disney'].status === 'minted-new', 'buildManifest: op=create skips resolve → minted short-term');
   ok(built.gaps.length === 1 && built.gaps[0].surface === 'Disney', 'buildManifest: Disney is the honest gap');
 
+  // ── OWNER-WORLD PRIOR: "Alice" in a turn binds to the daughter, not a civic namesake ───────────
+  const ownerBuilt = await M.buildManifest('is Alice excited for cheer', {
+    userName: 'Lucas',
+    deps: {
+      decompose: async () => ({ intent: 'chat', objects: [{ mention: 'Alice', type: 'person', op: 'resolve', salient: true }], relations: [], constraints: [] }),
+      // civic resolve would return a legislator — owner-world must WIN before this is ever consulted
+      resolve: async () => ({ status: 'resolved', object: { id: 1366690, entity_type: 'person', summary: 'Alice Miller (VT) — legislator' } }),
+      ownerResolve: (n) => (/^alice$/i.test(n) ? { status: 'resolved', object: { id: 'person:owner/alice', entity_type: 'person', summary: "Lucas's youngest daughter, 12, competitive cheer", namespace: 'owner', ownerWorld: true } } : null),
+      isSelfName: () => false, isOwnerName: () => false,
+    },
+  });
+  const aliceRow = ownerBuilt.objects[0];
+  ok(aliceRow.coord === 'person:owner/alice', 'owner-world prior: "Alice" → the daughter coordinate, NOT the civic legislator resolve');
+  ok(aliceRow.status === 'held' && /cheer/i.test(aliceRow.gloss), 'owner-world prior: carries the daughter gloss, civic resolve never consulted');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

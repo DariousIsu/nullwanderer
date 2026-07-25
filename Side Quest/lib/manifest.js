@@ -34,7 +34,7 @@ const CANON_TYPE = {
   place: 'place', location: 'place', gpe: 'place', city: 'place', country: 'place', state: 'place',
   event: 'event', bill: 'bill', committee: 'committee', government_body: 'gov', gov: 'gov',
   document: 'document', doc: 'document', concept: 'concept', topic: 'concept', idea: 'concept',
-  work: 'work', claim: 'claim', other: 'thing', thing: 'thing',
+  work: 'work', claim: 'claim', other: 'thing', thing: 'thing', self: 'self',
 };
 function canonType(t) {
   const k = String(t || '').toLowerCase().replace(/[\s-]+/g, '_').replace(/[^a-z_]/g, '');
@@ -76,6 +76,13 @@ const STATUS = {
 // echo_suit.resolveMention / intake.resolvePlan return: { status, object?, candidates? }. `flags` carries
 // the cheap self/owner determination the caller made with db.isSelfName/isOwnerName.
 function classify(object, resolution, { isSelf = false, isOwner = false } = {}) {
+  // OWNER-WORLD wins first: a mention resolved against the owner-world store (Alice → the daughter, Zo →
+  // Zoe self) carries its own namespace and IS held — it must never be reclassified as a civic namesake.
+  const obj0 = object || (resolution && resolution.object);
+  if (obj0 && obj0.ownerWorld) {
+    const t = String(obj0.entity_type || '').toLowerCase();
+    return { namespace: obj0.namespace || 'owner', status: t === 'self' ? STATUS.SELF : STATUS.HELD };
+  }
   if (isSelf) return { namespace: 'zoe', status: STATUS.SELF };
   if (isOwner) return { namespace: 'owner', status: STATUS.OWNER };
   const rs = resolution && resolution.status;
@@ -103,8 +110,15 @@ function assembleManifest(plan, resolutions, { userName = 'Lucas', selfFlags = [
     const resolved = (res && res.object) || null;
     const cls = classify(resolved, res, { isSelf: !!selfFlags[i], isOwner: !!ownerFlags[i] });
     const type = canonType(resolved && resolved.entity_type ? resolved.entity_type : o.type);
-    const id = resolved && resolved.id != null ? resolved.id : null;
-    const coord = toCoordinate({ type, namespace: cls.namespace, id, name: o.mention });
+    // Owner-world ids ARE coordinates already (e.g. 'person:owner/alice') — use them directly rather than
+    // re-wrapping. Everything else composes type:namespace/id from its parts.
+    let coord;
+    if (resolved && resolved.ownerWorld && typeof resolved.id === 'string' && resolved.id.includes(':')) {
+      coord = resolved.id;
+    } else {
+      const id = resolved && resolved.id != null ? resolved.id : null;
+      coord = toCoordinate({ type, namespace: cls.namespace, id, name: o.mention });
+    }
     const row = {
       surface: o.mention,
       coord,
@@ -161,6 +175,9 @@ async function buildManifest(text, { userName = 'Lucas', context = '', deps = {}
 
   const decompose = deps.decompose || ((m, o) => require('./intake').decompose(m, o));
   const resolve = deps.resolve || ((m, o) => require('./echo_suit').resolveMention(m, o));
+  // OWNER-WORLD PRIOR: the tiny high-precision personal store is consulted BEFORE civic resolution, so a
+  // bare "Alice" binds to the daughter, not a legislator (the whole point of the owner-world).
+  const ownerResolve = deps.ownerResolve || ((n) => { try { return require('./owner_world').resolve(n); } catch { return null; } });
   const isSelfName = deps.isSelfName || ((n) => { try { return require('./db').isSelfName(n); } catch { return false; } });
   const isOwnerName = deps.isOwnerName || ((n) => { try { return require('./db').isOwnerName(n); } catch { return false; } });
 
@@ -178,6 +195,9 @@ async function buildManifest(text, { userName = 'Lucas', context = '', deps = {}
   const resolutions = [];
   for (let i = 0; i < objects.length; i++) {
     const o = objects[i];
+    // owner-world FIRST — wins over civic and even over op=create (if we already hold Alice, she isn't new)
+    let ow = null; try { ow = ownerResolve(o.mention); } catch {}
+    if (ow && ow.object) { resolutions.push(ow); continue; }
     if (selfFlags[i] || ownerFlags[i] || o.op === 'create') { resolutions.push({ status: 'skip', mention: o.mention }); continue; }
     let r; try { r = await resolve(o.mention, { preferType: o.type || null }); } catch { r = { status: 'error', mention: o.mention }; }
     resolutions.push(r || { status: 'no-match', mention: o.mention });
