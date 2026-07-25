@@ -196,6 +196,7 @@ const smokes = [
   'smoke_echo_batch_args.js',
   'smoke_arg_feedback.js',
   'smoke_dispatch_guards.js',
+  'smoke_crm_upsert.js',
   'smoke_doc_shapes.js',
   'smoke_tz.js',
   'smoke_directives.js',
