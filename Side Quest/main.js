@@ -460,6 +460,9 @@ async function speakThroughCompanion(text) {
 app.whenReady().then(() => {
   config.loadEnv();
   db.init();
+  // Owner-world: seed Lucas's family / org / Zoe's self-region as first-class objects (idempotent) so
+  // self:zoe/* and person:owner/* coordinates dereference to real neighborhoods (KEYSTONE Slice 0).
+  try { require('./lib/owner_world').seed(); } catch (e) { console.error('[owner-world] seed failed:', e.message); }
   try { editorRegistry.init(); } catch (e) { console.error('[main] editor registry init failed:', e.message); }
   // Curator: deterministic hygiene at session start — age long-stalled threads to
   // 'abandoned', and aggressively prune spiral/prude/junk thoughts + search-junk readings
