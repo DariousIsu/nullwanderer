@@ -254,10 +254,172 @@ function countyIntegritySubBeats(snapshotFn) {
   return Object.keys(US_COUNTIES).sort().map((c) => countyIntegrityBeat(c, snapshotFn));
 }
 
+// ---------------------------------------------------------------------------------------------
+// THE EXECUTOR — the half that makes this autonomous rather than merely observant.
+//
+// `enumerate()` produces repair targets; this consumes them through Echo's MCP write surface.
+// INJECTABLE like lib/crm_upsert.js: `callTool` is passed in, so the module still performs no I/O
+// of its own and every branch below is provable offline.
+//
+// Echo's write path lands most writes as a TENANT PROPOSAL awaiting promotion, so the happy path is
+// two calls: propose_entity → promote_proposal. The return shapes are the trap, and news_lane.js
+// learned them the hard way:
+//   proposed / already_proposed → a proposal id, needs promotion   (NOT a failure)
+//   created / already_exists    → already public                   (NOT a failure)
+//   merge_suggested + similar_to → Echo already holds it; adopt that id (NOT a failure)
+// Only a genuine error or a missing id is a failure. Reporting a success as a failure is what made
+// the CRM drain claim "780 failed" while creating 780 contacts, and it broke idempotency because the
+// follow-up step never ran.
+// ---------------------------------------------------------------------------------------------
+
+function _parse(res) {
+  if (!res) return {};
+  if (res.structuredContent && typeof res.structuredContent === 'object') return res.structuredContent;
+  try { return JSON.parse(res.text); } catch { return {}; }
+}
+
+function createGraphRepairer({ callTool, log = () => {} } = {}) {
+  if (typeof callTool !== 'function') throw new Error('createGraphRepairer needs callTool');
+
+  async function mintPlace({ name, summary }) {
+    const res = await callTool('propose_entity', { name, entity_type: 'place', summary: summary || '' });
+    if (!res || res.ok === false) {
+      // Surface the ACTUAL error. A generic "failed" sent me hunting a client bug for several rounds
+      // when the real message was `no such table: main.contact_search_content`.
+      return { ok: false, error: (res && (res.error || res.text)) || 'propose_entity dispatch failed' };
+    }
+    const p = _parse(res);
+    const action = p.action || null;
+    let id = p.entity_id != null ? p.entity_id : (p.result && p.result.entity_id);
+    if (action === 'merge_suggested' && p.similar_to && p.similar_to.id != null) {
+      return { ok: true, id: p.similar_to.id, action, created: false };
+    }
+    if (id == null) return { ok: false, action, error: `no entity_id (action=${action || 'unparsed'})` };
+    if (action === 'proposed' || action === 'already_proposed') {
+      const pr = await callTool('promote_proposal', { proposal_id: id });
+      if (!pr || pr.ok === false) {
+        return { ok: false, error: (pr && (pr.error || pr.text)) || 'promote_proposal failed' };
+      }
+      // promote_proposal's real return is {ok, promoted_id} or {ok, merged_into} when the public
+      // entity already existed — NOT entity_id. Parsed against the live tool signature; the first
+      // cut guessed entity_id/public_id and would have failed every promotion with a confusing
+      // "no public entity_id".
+      const q = _parse(pr);
+      if (q.ok === false) return { ok: false, error: q.error || 'promote_proposal rejected' };
+      const pub = [q.promoted_id, q.merged_into, q.entity_id, q.public_id]
+        .find((v) => v != null);
+      if (pub == null) return { ok: false, error: 'no id in promote_proposal response' };
+      id = pub;
+    }
+    return { ok: true, id, action, created: action !== 'already_exists' };
+  }
+
+  /**
+   * Write child -LOCATED_IN-> parent, by the only route that actually reaches the public graph.
+   *
+   * CIRCUIT-PROVED 2026-07-25 against live Echo, after two dead ends:
+   *   add_manual_relation  → REJECTED: "relation_type 'LOCATED_IN' not in whitelist". The core
+   *                          62-type whitelist in config.toml omits LOCATED_IN even though the graph
+   *                          holds 5,825 of them — passes write straight to SQLite and bypass it, so
+   *                          the vocabulary and the write surface had drifted apart.
+   *   propose_relation     → lands in TENANT STAGING, not the graph. 18,577 proposals are queued
+   *                          there; adding to that pile is not a repair.
+   * What works: propose_relation(allow_open_type) WITH a citation, then promote_grounded_one.
+   *
+   * ⚠️ THE CITATION IS LOAD-BEARING. Without a `url` the grounded gate answers
+   * `{ok:false, skipped:"ungrounded"}` and the edge sits in staging forever — a silent no-op that
+   * looks like success. So an uncited call is refused HERE rather than left to pile up invisibly.
+   */
+  async function link(childName, parentName, citation) {
+    if (!citation || !citation.url) {
+      return { ok: false, error: 'refusing to propose an uncited edge — promote_grounded_one would '
+        + 'skip it as "ungrounded" and it would sit in tenant staging forever' };
+    }
+    const meta = JSON.stringify({
+      url: citation.url,
+      source_set: [citation.url],
+      grade: citation.grade || 'A',
+      title: citation.title || '',
+      asserted_by: 'graph-integrity beat',
+      corroboration: 1,
+    });
+    const res = await callTool('propose_relation', {
+      source_name: childName, target_name: parentName,
+      relation_type: 'LOCATED_IN', confidence: 0.95,
+      allow_open_type: true, relation_metadata: meta,
+    });
+    if (!res || res.ok === false) {
+      return { ok: false, error: (res && (res.error || res.text)) || 'propose_relation failed' };
+    }
+    const p = _parse(res);
+    if (p.action === 'rejected') return { ok: false, error: p.error || 'relation rejected' };
+    // 'proposed' | 'enriched' (citation attached to an existing proposal) | 'already_exists'
+    if (p.action === 'already_exists') return { ok: true, action: p.action };
+
+    const id = p.proposal_id != null ? p.proposal_id
+      : (p.relation && p.relation.proposal_id != null ? p.relation.proposal_id : null);
+    if (id == null) {
+      // No id came back, so we cannot target the promotion. Say so — do NOT report success.
+      return { ok: false, action: p.action, error: 'proposed but no proposal_id to promote' };
+    }
+    const pr = await callTool('promote_grounded_one',
+      { kind: 'relation', proposal_id: id, min_confidence: 0.9 });
+    const q = _parse(pr);
+    if (q.ok === false) {
+      return { ok: false, error: q.skipped ? `promotion skipped: ${q.skipped}` : (q.error || 'promotion failed') };
+    }
+    return { ok: true, action: p.action, promotedId: q.promoted_id };
+  }
+
+  /**
+   * Apply a worklist from countyIntegrityBeat().enumerate().
+   *
+   * @param targets  [{ action:'mint'|'parent'|'verify', ... }]
+   * @param stateNameOf  code -> full state name, the LOCATED_IN parent
+   * @param dryRun   plan only
+   * @param limit    how many to attempt THIS tick. Not a cap on the answer — the worklist is
+   *                 recomputed from the live graph each run, so whatever is skipped is simply the
+   *                 next tick's work, and `remaining` says exactly how much. Never silently drop.
+   */
+  async function apply(targets, { stateNameOf = {}, dryRun = true, limit = Infinity,
+                                  citation = null } = {}) {
+    const out = { minted: 0, parented: 0, held: [], failed: [], attempted: 0, remaining: 0 };
+    let i = 0;
+    for (const t of targets) {
+      // A `verify` target is a REFUSAL the diff already made — an object with this name exists but
+      // could not be placed. Acting on it is exactly how a duplicate is born.
+      if (t.action === 'verify') { out.held.push({ target: t, why: t.why }); continue; }
+      if (i >= limit) { out.remaining++; continue; }
+      i++; out.attempted++;
+      const parentName = stateNameOf[t.stateCode];
+      if (!parentName) { out.failed.push({ target: t, error: `no state name for ${t.stateCode}` }); continue; }
+      if (dryRun) { if (t.action === 'mint') out.minted++; else out.parented++; continue; }
+      if (t.action === 'mint') {
+        const m = await mintPlace({ name: t.name, summary: '' });
+        if (!m.ok) { out.failed.push({ target: t, error: m.error }); continue; }
+        const l = await link(t.name, parentName, citation);
+        if (!l.ok) { out.failed.push({ target: t, error: l.error }); continue; }
+        out.minted++;
+      } else if (t.action === 'parent') {
+        const l = await link(t.name, parentName, citation);
+        if (!l.ok) { out.failed.push({ target: t, error: l.error }); continue; }
+        out.parented++;
+      }
+    }
+    log(`[graph-integrity] ${dryRun ? 'DRY RUN' : 'applied'} `
+      + `mint ${out.minted} · parent ${out.parented} · held ${out.held.length} `
+      + `· failed ${out.failed.length} · remaining ${out.remaining}`);
+    return out;
+  }
+
+  return { apply, mintPlace, link };
+}
+
 module.exports = {
   stripQid,
   normName,
   countyKey,
+  createGraphRepairer,
   expectedCounties,
   diffCounties,
   rankTypeHealth,

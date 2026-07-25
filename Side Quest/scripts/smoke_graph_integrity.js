@@ -121,5 +121,163 @@ ok(after === before - 1, 'landing a repair removes it from the worklist (coverag
 
 ok(G.countyIntegritySubBeats(null).length === 51, 'one sub-beat per county-governing state');
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// --- the executor ------------------------------------------------------------------------------
+// callTool is injected, so every Echo return shape is exercised without Echo running.
+function fakeEcho(script) {
+  const calls = [];
+  return {
+    calls,
+    callTool: async (name, args) => {
+      calls.push({ name, args });
+      const r = script[name];
+      return typeof r === 'function' ? r(args, calls) : r;
+    },
+  };
+}
+const SN = { LA: 'Louisiana' };
+const CIT = { url: 'https://www2.census.gov/geo/docs/reference/codes2020/national_county2020.txt',
+              grade: 'A', title: 'Census national county file 2020' };
+const mintTarget = { action: 'mint', name: 'Bienville Parish, Louisiana', stateCode: 'LA' };
+const parentTarget = { action: 'parent', id: 3, name: 'Ascension Parish, Louisiana', stateCode: 'LA' };
+
+(async () => {
+  // dry run touches nothing
+  let F = fakeEcho({});
+  let R = G.createGraphRepairer({ callTool: F.callTool });
+  let r = await R.apply([mintTarget, parentTarget], { stateNameOf: SN, dryRun: true });
+  ok(F.calls.length === 0, 'dry run makes no tool calls');
+  ok(r.minted === 1 && r.parented === 1, 'dry run still reports the plan');
+
+  // the two-step happy path: propose -> promote -> link
+  F = fakeEcho({
+    propose_entity: { ok: true, text: JSON.stringify({ action: 'proposed', entity_id: 77 }) },
+    // the REAL shape: {ok, promoted_id, tenant_proposal_id, name}
+    promote_proposal: { ok: true, text: JSON.stringify({ ok: true, promoted_id: 900 }) },
+    propose_relation: { ok: true, text: JSON.stringify({ action: 'proposed', proposal_id: 42 }) },
+    promote_grounded_one: { ok: true, text: JSON.stringify({ ok: true, promoted_id: 8740103 }) },
+  });
+  R = G.createGraphRepairer({ callTool: F.callTool });
+  r = await R.apply([mintTarget], { stateNameOf: SN, dryRun: false, citation: CIT });
+  ok(r.minted === 1 && r.failed.length === 0, 'proposed -> promoted -> linked counts as minted');
+  ok(F.calls.map((c) => c.name).join(',') === 'propose_entity,promote_proposal,propose_relation,promote_grounded_one',
+     'calls in order');
+  ok(F.calls[2].args.relation_type === 'LOCATED_IN' && F.calls[2].args.allow_open_type === true,
+     'links with LOCATED_IN via the open-type route (the whitelist rejects it)');
+  ok(F.calls[2].args.target_name === 'Louisiana', 'links to the STATE, by name');
+
+  // promote_proposal's OTHER real shape: the public entity already existed.
+  F = fakeEcho({
+    propose_entity: { ok: true, text: JSON.stringify({ action: 'proposed', entity_id: 7 }) },
+    promote_proposal: { ok: true, text: JSON.stringify({ ok: true, merged_into: 55 }) },
+    propose_relation: { ok: true, text: JSON.stringify({ action: 'proposed', proposal_id: 42 }) },
+    promote_grounded_one: { ok: true, text: JSON.stringify({ ok: true, promoted_id: 8740103 }) },
+  });
+  R = G.createGraphRepairer({ callTool: F.callTool });
+  r = await R.apply([mintTarget], { stateNameOf: SN, dryRun: false, citation: CIT });
+  ok(r.minted === 1 && r.failed.length === 0, 'promote returning merged_into is a success');
+
+  // and a rejected promotion is a failure with its own reason
+  F = fakeEcho({
+    propose_entity: { ok: true, text: JSON.stringify({ action: 'proposed', entity_id: 7 }) },
+    promote_proposal: { ok: true, text: JSON.stringify({ ok: false, error: 'gate closed' }) },
+  });
+  R = G.createGraphRepairer({ callTool: F.callTool });
+  r = await R.apply([mintTarget], { stateNameOf: SN, dryRun: false, citation: CIT });
+  ok(r.failed.length === 1 && /gate closed/.test(r.failed[0].error), 'ok:false inside the body is a failure');
+
+  // merge_suggested is Echo saying "already have it" — a SUCCESS, not a failure.
+  F = fakeEcho({
+    propose_entity: { ok: true, text: JSON.stringify({ action: 'merge_suggested', similar_to: { id: 5 } }) },
+    propose_relation: { ok: true, text: JSON.stringify({ action: 'proposed', proposal_id: 42 }) },
+    promote_grounded_one: { ok: true, text: JSON.stringify({ ok: true, promoted_id: 8740103 }) },
+  });
+  R = G.createGraphRepairer({ callTool: F.callTool });
+  r = await R.apply([mintTarget], { stateNameOf: SN, dryRun: false, citation: CIT });
+  ok(r.minted === 1 && r.failed.length === 0, 'merge_suggested is a success, not a failure');
+  ok(!F.calls.some((c) => c.name === 'promote_proposal'), 'already public -> no promotion attempted');
+
+  // already_exists likewise — this is what makes a re-run idempotent.
+  F = fakeEcho({
+    propose_entity: { ok: true, text: JSON.stringify({ action: 'already_exists', entity_id: 12 }) },
+    propose_relation: { ok: true, text: JSON.stringify({ action: 'proposed', proposal_id: 42 }) },
+    promote_grounded_one: { ok: true, text: JSON.stringify({ ok: true, promoted_id: 8740103 }) },
+  });
+  R = G.createGraphRepairer({ callTool: F.callTool });
+  r = await R.apply([mintTarget], { stateNameOf: SN, dryRun: false, citation: CIT });
+  ok(r.minted === 1 && r.failed.length === 0, 'already_exists is a success (re-run safe)');
+
+  // a real error must surface its own text, never a generic "failed"
+  F = fakeEcho({ propose_entity: { ok: false, error: 'no such table: main.entity_search_content' } });
+  R = G.createGraphRepairer({ callTool: F.callTool });
+  r = await R.apply([mintTarget], { stateNameOf: SN, dryRun: false, citation: CIT });
+  ok(r.minted === 0 && r.failed.length === 1, 'a real error is a failure');
+  ok(/no such table/.test(r.failed[0].error), 'the ACTUAL error text is surfaced');
+
+  // a failed link must not be counted as a mint — a half-done repair is not a repair
+  F = fakeEcho({
+    propose_entity: { ok: true, text: JSON.stringify({ action: 'created', entity_id: 4 }) },
+    propose_relation: { ok: false, error: 'nope' },
+  });
+  R = G.createGraphRepairer({ callTool: F.callTool });
+  r = await R.apply([mintTarget], { stateNameOf: SN, dryRun: false, citation: CIT });
+  ok(r.minted === 0 && r.failed.length === 1, 'minted-but-unlinked counts as failed, not minted');
+
+  // verify targets are never acted on
+  F = fakeEcho({ propose_entity: { ok: true, text: '{"action":"created","entity_id":1}' } });
+  R = G.createGraphRepairer({ callTool: F.callTool });
+  r = await R.apply([{ action: 'verify', name: 'Allen Parish, Louisiana', stateCode: 'LA', why: 'collision' }],
+                    { stateNameOf: SN, dryRun: false, citation: CIT });
+  ok(F.calls.length === 0 && r.held.length === 1, 'a verify target is HELD, never written');
+
+  // limit slices the tick but never hides the rest
+  F = fakeEcho({
+    propose_entity: { ok: true, text: '{"action":"created","entity_id":1}' },
+    propose_relation: { ok: true, text: JSON.stringify({ action: 'proposed', proposal_id: 42 }) },
+    promote_grounded_one: { ok: true, text: JSON.stringify({ ok: true, promoted_id: 8740103 }) },
+  });
+  R = G.createGraphRepairer({ callTool: F.callTool });
+  r = await R.apply([mintTarget, mintTarget, mintTarget], { stateNameOf: SN, dryRun: false, limit: 1, citation: CIT });
+  ok(r.attempted === 1 && r.remaining === 2, 'limit is a tick slice, and remaining is reported');
+
+  // THE LOAD-BEARING CITATION. Without a url, promote_grounded_one answers
+  // {ok:false, skipped:"ungrounded"} and the edge sits in tenant staging forever — a silent no-op
+  // that reads as success. There are already 18,577 proposals queued there. So refuse up front.
+  F = fakeEcho({
+    propose_entity: { ok: true, text: '{"action":"created","entity_id":4}' },
+    propose_relation: { ok: true, text: '{"action":"proposed","proposal_id":1}' },
+  });
+  R = G.createGraphRepairer({ callTool: F.callTool });
+  r = await R.apply([mintTarget], { stateNameOf: SN, dryRun: false, citation: null });
+  ok(F.calls.every((c) => c.name !== 'propose_relation'), 'an uncited edge is never even proposed');
+  ok(r.failed.length === 1 && /uncited/.test(r.failed[0].error), 'and it fails loudly, not silently');
+
+  // a promotion that is skipped as ungrounded is a FAILURE, not a success
+  F = fakeEcho({
+    propose_entity: { ok: true, text: '{"action":"created","entity_id":4}' },
+    propose_relation: { ok: true, text: '{"action":"proposed","proposal_id":9}' },
+    promote_grounded_one: { ok: true, text: '{"ok":false,"skipped":"ungrounded"}' },
+  });
+  R = G.createGraphRepairer({ callTool: F.callTool });
+  r = await R.apply([mintTarget], { stateNameOf: SN, dryRun: false, citation: CIT });
+  ok(r.minted === 0 && /ungrounded/.test(r.failed[0].error),
+     'a proposal left in staging is reported as failed, never as repaired');
+
+  // `enriched` — the real reply when a citation is attached to an existing proposal
+  F = fakeEcho({
+    propose_entity: { ok: true, text: '{"action":"created","entity_id":4}' },
+    propose_relation: { ok: true, text: '{"action":"enriched","proposal_id":20419}' },
+    promote_grounded_one: { ok: true, text: '{"ok":true,"promoted_id":8740103}' },
+  });
+  R = G.createGraphRepairer({ callTool: F.callTool });
+  r = await R.apply([mintTarget], { stateNameOf: SN, dryRun: false, citation: CIT });
+  ok(r.minted === 1, 'action=enriched then promoted counts as repaired');
+
+  // an unknown state is a failure, not a silent skip
+  F = fakeEcho({});
+  R = G.createGraphRepairer({ callTool: F.callTool });
+  r = await R.apply([{ ...mintTarget, stateCode: 'ZZ' }], { stateNameOf: SN, dryRun: false, citation: CIT });
+  ok(r.failed.length === 1 && /no state name/.test(r.failed[0].error), 'unknown state fails loudly');
+
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();
