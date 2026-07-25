@@ -2352,7 +2352,9 @@ async function runProfileConfirmMove(preferIds = null) {
       const landed = [];
       for (const m of res.matches) {
         let text = '';
-        try { const o = await ownBrowser.open(m.url); if (o && o.ok) { const rd = await ownBrowser.read(); text = (rd && rd.text) || ''; } } catch {}
+        // autonomous content fetch → re-spin brake serves a just-read page from cache (no re-fetch);
+        // o.reading is the cached body on a dedup hit, else a normal web-read.
+        try { const o = await ownBrowser.open(m.url, { autonomous: true }); if (o && o.ok) { const rd = o.dedup ? { text: o.reading } : await ownBrowser.read(); text = (rd && rd.text) || ''; } } catch {}
         if (!text) continue;
         for (const f of emailHarvest.extractEmails(text, { name: pick.name, orgDomain: pick.domain || '' }).slice(0, 3)) {
           if (already.has(f.email)) continue; already.add(f.email);

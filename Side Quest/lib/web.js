@@ -357,9 +357,51 @@ function cleanQuery(s) {
   return q || String(s || '').trim();
 }
 
-async function open(target) {
+// RE-SPIN BRAKE (2026-07-25, Lucas: "just stop spinning the same landing pages over and over").
+// Autonomous lanes re-opened the same landing page dozens of times per session (measured:
+// alamosa.gov 36× in 44m; ~40% of ALL fetches were re-fetches), because open() never consulted the
+// visited memory — every re-open paid a full goto+render. A short in-memory cache of recent reads
+// lets an AUTONOMOUS re-open of a page we just read serve that read back with NO network fetch, so
+// the lane still GETS the content (Lucas: "we can return to that page in future for another answer")
+// without spinning it. Short-windowed on purpose: this kills intra-session spin, it is NOT the 3-day
+// content-freshness TTL — a genuine later return still fetches. OPT-IN: only a caller passing
+// { autonomous: true } is braked, so a human ask always navigates and interaction flows that CLICK
+// after open (excavate) are never served a dead page.
+const RESPIN_WINDOW_MS = (parseFloat(process.env.ZOE_RESPIN_WINDOW_MIN) || 15) * 60 * 1000;
+const RESPIN_CACHE_MAX = 300;
+const _recentReads = new Map();   // normUrl → { text, url, title, ts }; insertion-order = LRU
+function _cacheReading(rawUrl, title, text, now = Date.now()) {
+  try {
+    const key = require('./site_ledger').normalizeUrl(rawUrl);
+    if (!key || !String(text || '').trim()) return;
+    _recentReads.delete(key);                 // re-insert to move it to the LRU tail
+    _recentReads.set(key, { text, url: rawUrl, title: title || '', ts: now });
+    while (_recentReads.size > RESPIN_CACHE_MAX) { _recentReads.delete(_recentReads.keys().next().value); }
+  } catch {}
+}
+// The pure decision: a fresh cached read for this URL, but ONLY for an autonomous caller. Exposed for
+// tests. Chat / un-flagged callers get null → they navigate exactly as before.
+function respinHit(rawUrl, { autonomous = false, now = Date.now() } = {}) {
+  if (!autonomous) return null;
+  try {
+    const key = require('./site_ledger').normalizeUrl(rawUrl);
+    const e = key && _recentReads.get(key);
+    if (e && now - e.ts < RESPIN_WINDOW_MS) return e;
+  } catch {}
+  return null;
+}
+
+async function open(target, { autonomous = false } = {}) {
   const url = toUrl(target);
   if (!url) return { ok: false, reason: 'empty target' };
+  // RE-SPIN BRAKE: an autonomous re-open of a page read within the window is served from cache with
+  // no goto. Returns the reading so the caller uses o.reading instead of a second web-read.
+  const _hit = respinHit(url, { autonomous });
+  if (_hit) {
+    const mins = Math.round((Date.now() - _hit.ts) / 60000);
+    console.log(`[web] re-spin brake — served cached read of ${url} (${mins}m old, no fetch)`);
+    return { ok: true, url: _hit.url, title: _hit.title, dedup: true, reading: _hit.text, why: `already read ${mins}m ago` };
+  }
   console.log(`[web] open target=${JSON.stringify(target)} → goto ${JSON.stringify(url)}`);
   try {
     const p = await ensure();
@@ -554,6 +596,9 @@ async function read() {
     const _out = { ok: true, url: page.url(), title: await page.title().catch(() => ''), text: text + handleList };
     // SITE LEDGER: every successful read records — the visited memory autonomous lanes consult.
     try { require('./site_ledger').record(_out.url, { kind: 'page', chars: _out.text.length }); } catch {}
+    // RE-SPIN CACHE: remember this reading so an autonomous re-open within the window is served
+    // without another goto (see respinHit / open()).
+    try { _cacheReading(_out.url, _out.title, _out.text); } catch {}
     return _out;
   } catch (err) { return { ok: false, reason: err.message }; }
 }
@@ -1317,5 +1362,6 @@ module.exports = {
   forward, reload, listTabs, newTab, switchTab, closeTab, waitFor, dialog, getEl, evalJs, drag,
   downloadPdf, grabPdfs, pdfLinksOnPage, isPdfUrl, sourceUrlForFile, provenanceForFile, _focusLeashTokens, _pdfMatchesLeash,
   parseTags, stripTags, dispatch, buildPromptBlock, toUrl, cleanQuery, WEB_TAG_RE, PROFILE_DIR,
-  DOWNLOADS_DIR, downloadDest
+  DOWNLOADS_DIR, downloadDest,
+  respinHit, _cacheReading, _recentReads, RESPIN_WINDOW_MS
 };
