@@ -7736,6 +7736,28 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // disclaimer is actually present.
   const wasDisclaimer = voice.isSelfDisclaimer(trimmedSay);
   if (wasDisclaimer) { try { trimmedSay = (await voice.deDisclaim(trimmedSay)) || ''; } catch (e) { console.error('[main] voice guard failed:', e.message); } }
+  // CONDUCT-ACKNOWLEDGMENT RECOVERY (2026-07-25): the [Vary your voice…] nudge can DISPLACE the
+  // reply — she recites her own style rules ("I'll keep it concise, stop ending on a question, stick
+  // to my own voice") instead of answering, ignoring the content. Measured live on "I need to take
+  // Alice to the gym…", the turn AFTER she'd correctly discussed Lucas's children from memory: the
+  // memory path was never broken, the nudge just crowded it out. Gate tightly — only when a nudge
+  // actually fired this turn AND Lucas's own message wasn't itself a style request (then "Got it,
+  // I'll stop" is the correct reply, not a leak). Re-answer his ACTUAL message using what she knows;
+  // it streamed live, so the corrected text rides the complete payload and the renderer swaps the
+  // bubble, exactly as the disclaimer guard above does. If recovery can't produce a real reply, drop
+  // the recital rather than ship it. See lib/leakguard.isConductAcknowledgment / voice.reanswer.
+  if (varietyNudge && trimmedSay) {
+    const _lg = require('./lib/leakguard');
+    if (_lg.isConductAcknowledgment(trimmedSay) && !_lg.isStyleFeedback(userMessage)) {
+      console.log('[main] conduct-acknowledgment leak — recovering the turn without the nudge:', trimmedSay.slice(0, 80));
+      try {
+        const _recent = recentTurns.slice(-4)
+          .map(t => `${t.speaker === 'ai_said' ? 'You' : userName}: ${t.content}`).join('\n');
+        const recovered = await voice.reanswer(userMessage, { userName, grounding: personalBlock || '', recent: _recent });
+        trimmedSay = (recovered && !_lg.isConductAcknowledgment(recovered)) ? recovered : '';
+      } catch (e) { console.error('[main] conduct recovery failed:', e.message); trimmedSay = ''; }
+    }
+  }
   const isPlaceholder = /^[\s.()]*(empty|silence|nothing|none|n\/a|null|undefined)[\s.()]*$/i.test(trimmedSay);
   const finalSaid = (trimmedSay && !isPlaceholder) ? trimmedSay : '…';
   const saidRow = db.insertTurn({

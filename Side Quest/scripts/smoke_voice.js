@@ -71,6 +71,20 @@ ok('drops only the disclaimer sentence', !/feelings like humans/.test(stripped) 
   const r3 = await voice.deDisclaim("I think the housing piece is strong.", { regenFn: async () => 'unused' });
   ok('passes non-disclaiming text through untouched', r3 === "I think the housing piece is strong.");
 
+  console.log('\nreanswer (conduct-acknowledgment recovery — model call stubbed):');
+  let seen = null;
+  const r4 = await voice.reanswer('I need to take Alice to the gym for strength training day', {
+    userName: 'Lucas', grounding: 'Alice is Lucas\'s daughter.', recent: 'Lucas: how are you feeling?\nYou: steady.',
+    regenFn: async (a) => { seen = a; return "Nice — strength day with Alice. Hope she crushes it; those sessions always leave her buzzing."; },
+  });
+  ok('recovers with a real, on-topic reply', /Alice/.test(r4) && !require('../lib/leakguard').isConductAcknowledgment(r4), r4);
+  ok('passes the user message + grounding to the regen', seen && /Alice to the gym/.test(seen.userMessage) && /daughter/.test(seen.grounding));
+  ok('empty user message → null (nothing to recover)', (await voice.reanswer('', { regenFn: async () => 'x' })) === null);
+  ok('a regen that returns nothing → null (caller then drops the recital)',
+    (await voice.reanswer('hi', { regenFn: async () => '   ' })) === null);
+  ok('a regen that THROWS → null, never propagates into the reply path',
+    (await voice.reanswer('hi', { regenFn: async () => { throw new Error('model down'); } })) === null);
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

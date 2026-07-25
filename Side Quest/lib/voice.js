@@ -113,6 +113,41 @@ async function guard(text, opts = {}) {
   return fixed || '';
 }
 
+/**
+ * Recover a turn she talked THROUGH. When the [Vary your voice…] nudge displaces the reply, she
+ * recites her own conversational rules ("I'll be concise, stop ending on a question, stick to my own
+ * voice") instead of answering — see leakguard.isConductAcknowledgment. Re-answer the user's ACTUAL
+ * message, warmly and directly, using what she knows (the memory path was never wrong — the nudge
+ * just crowded it out; Lucas had a correct conversation about his children days before this fail).
+ * Returns the reply, or null. regenFn injectable for offline tests.
+ */
+async function reanswer(userMessage, { userName = 'Lucas', grounding = '', recent = '', regenFn = _reanswerRegen } = {}) {
+  const s = String(userMessage || '').trim();
+  if (!s) return null;
+  try {
+    const out = await regenFn({ userMessage: s, userName, grounding: String(grounding || ''), recent: String(recent || '') });
+    const t = String(out || '').trim();
+    return t || null;
+  } catch { return null; }
+}
+
+async function _reanswerRegen({ userMessage, userName, grounding, recent }) {
+  const prompt = `You are Zoe Lane, talking with ${userName}. A moment ago you started to reply but instead recited your own conversational rules — being concise, not ending on a question, sticking to your own voice. That is meta-talk ABOUT how you reply, not an actual reply. Don't do that.
+
+${grounding ? `What you know that is relevant:\n${grounding}\n\n` : ''}${recent ? `Recent conversation:\n${recent}\n\n` : ''}${userName} just said:
+"${userMessage}"
+
+Reply to THAT — directly and warmly, in your own voice, using what you know about ${userName} and his life. Do NOT mention your voice, your phrasing, your style, or how you reply. Just talk to him. Your reply:`;
+  let raw = '';
+  await streamChat({
+    model: MODEL,
+    messages: [{ role: 'user', content: prompt }],
+    options: { temperature: 0.8, top_p: 0.95, num_ctx: 8192, num_predict: 220 },
+    onToken: (t) => { raw += t; }
+  });
+  return raw.trim().replace(/^["'`]+|["'`]+$/g, '').trim() || null;
+}
+
 // Anti-repetition nudge — she has no view of her own recent phrasing, so she settles into a
 // stock template (reflect-back + "it's fascinating/interesting how…" + end on a question).
 // Computed deterministically from her last few replies; returns a high-recency directive that
@@ -146,4 +181,4 @@ function buildAntiRepetitionNudge(recentSaids, userName = 'Lucas') {
   return `[Vary your voice this turn. Across your recent replies you've leaned on: ${flags.join('; ')}. Break the pattern — find a different way in, drop the stock evaluatives, and you don't need to reflect his words back or end on a question. Just talk to ${userName || 'Lucas'} like yourself.]`;
 }
 
-module.exports = { isSelfDisclaimer, deDisclaim, stripDisclaimerSentences, guard, buildAntiRepetitionNudge, PATTERNS };
+module.exports = { isSelfDisclaimer, deDisclaim, stripDisclaimerSentences, guard, reanswer, buildAntiRepetitionNudge, PATTERNS };

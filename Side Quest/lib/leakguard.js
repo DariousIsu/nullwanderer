@@ -154,6 +154,70 @@ function stripEnvelopeEcho(text) {
   return kept.join(' ').replace(/\s{2,}/g, ' ').trim();
 }
 
+// --- CONDUCT-ACKNOWLEDGMENT leak (2026-07-25) --------------------------------------------------
+//
+// Live fail: Lucas said "I need to take Alice to the gym for strength training day" and the reply
+// was "Got it. I'll skip the 'I wasn't able…' line, keep things concise, and stop ending replies
+// with a question. I'll stick to my own voice moving forward." — the model reciting the STYLE
+// GUIDANCE in its prompt (the [Vary your voice…] nudge from lib/voice, plus the anti-disclaimer and
+// conciseness rules) back as a first-person compliance statement, and ignoring the actual content.
+// Lucas had held a correct conversation about his children days earlier, so the memory path works —
+// the nudge DISPLACED it. This is the same shape as stripPlanningLeak (scaffolding-as-reply) one
+// level up: instead of narrating machinery, she narrates her own conversational conduct.
+//
+// None of the strippers above fire: no bracket, no tag, no mechanics vocabulary. So this needs its
+// own detector. It keys on SHAPE, not source strings, because the model CONFABULATES the
+// acknowledgment (it drew "I wasn't able" and "concise" from prompt rules the nudge never mentioned)
+// — matching the nudge text would miss it.
+//
+// FALSE POSITIVES are the real danger (suppressing a real reply), so the bar is deliberately high:
+//   1. it must LEAD with an acknowledgment ("Got it"/"Understood") or a first-person commitment
+//      ("I'll"/"from now on"), and
+//   2. it must stack ≥2 DISTINCT conduct signals. The leak recites several rules at once; a genuine
+//      reply that merely mentions style ("I'll keep it concise: Heritage, Cato, AEI") carries one,
+//      and a normal reply carries none.
+const _LEADS_ACK = /^\s*(?:got it|understood|noted|okay|ok|sure|alright|all right|will do|fair(?: enough)?|point taken|you'?re right|good (?:point|call)|makes sense|agreed|absolutely|of course)\b/i;
+const _LEADS_COMMIT = /^\s*(?:i(?:'|’)?ll|i will|i(?:'|’)?m going to|i am going to|let me|from now on|going forward|moving forward)\b/i;
+// Each entry is ONE dimension of "how she replies" — voice, question-habit, length, the disclaimer
+// line, stock moves, variation. Distinct patterns so stacking is counted, not double-counted.
+const _CONDUCT_SIGNALS = [
+  /\b(?:my )?own voice\b|\bmy voice\b|\blike (?:myself|yourself)\b/i,
+  /\bend(?:ing)?[^.?!]{0,14}(?:on|with)[^.?!]{0,6}a question\b|\basking[^.?!]{0,24}questions?\b|\b(?:fewer|too many|no more) questions?\b/i,
+  /\bconcise\b|\bkeep it short\b|\bkeep things short\b|\bbe brief\b|\bless wordy\b|\bwordy\b|\btrim(?:ming)?\b/i,
+  /\bi wasn'?t able\b|\bi couldn'?t\b|\bdisclaim(?:ers?|ing)?\b|\bcaveats?\b|\bhedg(?:es?|ing)\b/i,
+  /\bstock (?:evaluative|phrase|template|line|expression)s?\b|\bpreamble\b|\bfiller\b|\breflect(?:ing)?[^.?!]{0,20}back\b|\breflect(?:ing)? (?:his|your) words\b/i,
+  /\bvary my\b|\bvariety\b|\bmix it up\b|\bbreak the pattern\b|\brepetiti\w+\b|\brephras\w+\b|\breword\w*\b|\bmy phrasing\b|\bmy tone\b/i,
+];
+
+/**
+ * True when a reply is a self-directed acknowledgment of conversational CONDUCT with nothing else —
+ * the model reciting its style guidance instead of answering. SHAPE-based and conservative.
+ *
+ * Pure. Standalone it only DETECTS; the caller gates suppression/recovery on there having been a
+ * style nudge this turn AND the user's own message NOT being a style request (see isStyleFeedback),
+ * so an appropriate "Got it, I'll stop doing that" after Lucas asks for it is never eaten.
+ */
+function isConductAcknowledgment(text) {
+  const s = String(text || '').trim();
+  if (!s || s.length > 400) return false;                 // a real answer carries substance
+  if (!(_LEADS_ACK.test(s) || _LEADS_COMMIT.test(s))) return false;
+  const hits = _CONDUCT_SIGNALS.reduce((n, re) => n + (re.test(s) ? 1 : 0), 0);
+  return hits >= 2;
+}
+
+/**
+ * True when LUCAS's own message is asking her to change how she talks — so a conduct-acknowledgment
+ * in reply is appropriate, not a leak. Aimed-at-her + at least one conduct signal.
+ */
+function isStyleFeedback(userMessage) {
+  const s = String(userMessage || '').trim();
+  if (!s) return false;
+  const aimed = /\byou(?:'|’)?re\b|\byou\b|\byour\b|\byourself\b/i.test(s)
+    || /^\s*(?:stop|don'?t|please|try to|keep|be|quit|no more|less|more)\b/i.test(s);
+  if (!aimed) return false;
+  return _CONDUCT_SIGNALS.some((re) => re.test(s));
+}
+
 // An angle-bracket run is an INTERNAL tag (her private cognition or a tool tag) if its name is in this set.
 // The TagStreamParser keeps well-formed <think> out of the stream already, but a stray/truncated think
 // fragment or a tool tag emitted INSIDE <say> used to flash in the live bubble and only vanish on reload
@@ -215,4 +279,4 @@ function makeStreamFilter(emit) {
   };
 }
 
-module.exports = { isLeakyDirective, stripLeakedDirectives, stripPlanningLeak, isUnkeptPromiseSay, deliveryPromise, stripEnvelopeEcho, makeStreamFilter, _DIRSIG, _METASIG, _INTERNAL_TAG_RE, _PLAN_LEAD, _MECHANICS };
+module.exports = { isLeakyDirective, stripLeakedDirectives, stripPlanningLeak, isUnkeptPromiseSay, deliveryPromise, stripEnvelopeEcho, isConductAcknowledgment, isStyleFeedback, makeStreamFilter, _DIRSIG, _METASIG, _INTERNAL_TAG_RE, _PLAN_LEAD, _MECHANICS, _CONDUCT_SIGNALS };

@@ -125,5 +125,42 @@ ok(lg._INTERNAL_TAG_RE.test('<think>') && lg._INTERNAL_TAG_RE.test('</web-open>'
     'deictic + context WITHOUT an artifact word → still null (context must actually name one)');
 }
 
+// --- isConductAcknowledgment (2026-07-25 live fail) ---------------------------------------------
+{
+  // THE LIVE LEAK, verbatim: reply to "I need to take Alice to the gym for strength training day".
+  const LEAK = "Got it. I'll skip the 'I wasn't able…' line, keep things concise, and stop ending replies with a question. I'll stick to my own voice moving forward.";
+  ok(lg.isConductAcknowledgment(LEAK), 'THE LIVE LEAK is caught (4 conduct signals, leads with "Got it")');
+
+  // Other real shapes of the same failure
+  ok(lg.isConductAcknowledgment("Understood — I'll vary my phrasing and stop reflecting your words back."),
+    'variation + reflect-back recital caught');
+  ok(lg.isConductAcknowledgment("I'll keep it concise and won't end on a question this time."),
+    'leading commitment + concise + question-habit caught');
+  ok(lg.isConductAcknowledgment("Noted. Going forward I'll drop the disclaimers and be less wordy."),
+    'disclaimer + length recital caught');
+
+  // ⚠️ FALSE-POSITIVE GUARDS — a real reply must NEVER be eaten
+  ok(!lg.isConductAcknowledgment('Got it — how did Alice do at her last session?'),
+    'an acknowledgment that then ENGAGES the topic is not a recital (0 conduct signals)');
+  ok(!lg.isConductAcknowledgment("I'll keep it concise: Heritage, Cato, and AEI."),
+    'one conduct word beside a real answer → NOT flagged (needs >=2 signals)');
+  ok(!lg.isConductAcknowledgment("I'll pull the Iowa numbers now."),
+    'a real action commitment with no conduct vocabulary → not flagged');
+  ok(!lg.isConductAcknowledgment("Sure, that's a fascinating question about the voice actors in that film."),
+    'topic words that brush "voice"/"question" without being about HER conduct → not flagged');
+  ok(!lg.isConductAcknowledgment("Nice, strength day. Hope the session goes well and you both enjoy it."),
+    'a warm, on-topic reply (the RIGHT answer) is untouched');
+  ok(!lg.isConductAcknowledgment(''), 'empty → false');
+  ok(!lg.isConductAcknowledgment('x'.repeat(500)), 'a long substantive reply is never a recital');
+
+  // isStyleFeedback — when LUCAS asks for the change, the ack is appropriate (Slice 2 won't recover)
+  ok(lg.isStyleFeedback("you're ending every reply with a question — stop that"),
+    'an explicit style request from Lucas is recognised');
+  ok(lg.isStyleFeedback('please be less wordy'), 'imperative style request recognised');
+  ok(!lg.isStyleFeedback('I need to take Alice to the gym for strength training day'),
+    'the ambient personal share is NOT a style request → a conduct ack to it IS a leak');
+  ok(!lg.isStyleFeedback('what do you know about my kids?'), 'a normal question is not a style request');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
