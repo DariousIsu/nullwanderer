@@ -11401,8 +11401,7 @@ async function gatherHeldContacts(state = null) {
       // param) because the db_query tool did not bind the `?` positional params — it silently returned zero.
       // Safe: _stSafe is validated to exactly two uppercase letters from the closed state allowlist.
       const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql, params: [] } });
-      let j = null, _jerr = null; if (r && r.ok) { try { j = JSON.parse(r.text); } catch (e) { _jerr = e.message; } }
-      console.log(`[contacts-query][diag] crm db_query ok=${!!(r && r.ok)} textLen=${r && r.text ? String(r.text).length : 0} parsed=${(j && j.rows) ? j.rows.length : (j ? 'no-rows' : 'null')} jerr=${_jerr || '-'} state=${_stSafe || '-'}`);
+      let j = null; if (r && r.ok) { try { j = JSON.parse(r.text); } catch {} }
       for (const row of ((j && j.rows) || [])) {
         if (row.id != null && heldCrmIds.has(Number(row.id))) continue;   // the Puller already holds this person
         const name = `${String(row.FirstName || '').trim()} ${String(row.LastName || '').trim()}`.trim();

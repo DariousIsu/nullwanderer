@@ -97,6 +97,9 @@ function companyFrom(message) {
     let cand = m[1].replace(/\b(the|contacts?|people|list|our|their)\b/gi, '').replace(/\s+/g, ' ').trim();
     // the greedy capture can swallow a trailing "… in Texas" / "… from X" — cut at the next connective.
     cand = cand.replace(/\s+(?:in|at|from|for|with)\s+.*$/i, '').trim();
+    // …and a trailing question filler ("in Louisiana YET", "for Texas NOW/PLEASE/ALREADY"), which otherwise
+    // made "Louisiana yet" a bogus company filter that zeroed a valid state query (live 2026-07-26).
+    cand = cand.replace(/\b(yet|now|today|please|already|still|too|also|then|there)\b\s*$/gi, '').trim();
     if (cand && !_STATES[cand.toLowerCase()]) return cand;
   }
   return null;
