@@ -8220,7 +8220,10 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           const r = await echoSuit.dispatch(t);
           const label = t.kind === 'do' ? `echo ${t.name}` : `echo ${t.kind}`;
           const content = `I used the Echo suit (${label}):\n${(r.text || '').slice(0, require('./lib/config').toolResultChars())}`;
-          const row = db.insertMonologue({ content, model: 'echo-suit', type: 'reading', query: label });
+          // MONOLOGUE stores a COMPACT summary, not the raw payload — a recipe/list result is hundreds of
+          // JSON rows, which dumped a wall of {"id":..,"FirstName":..} into the activity feed (Lucas,
+          // 2026-07-26). The cloud still gets the full `content` below; only the displayed/stored line shrinks.
+          const row = db.insertMonologue({ content: _echoResultSummary(label, r), model: 'echo-suit', type: 'reading', query: label });
           try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(${label}${r.isError ? ' ⚠' : ''})`, type: 'reading', query: label }); } catch {}
           if (!followupFired) {
             followupFired = true;
@@ -8882,7 +8885,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
           const r = await echoSuit.dispatch(t);
           const label = t.kind === 'do' ? `echo ${t.name}` : `echo ${t.kind}`;
           const content = `I used the Echo suit (${label}):\n${(r.text || '').slice(0, require('./lib/config').toolResultChars())}`;
-          try { db.insertMonologue({ content, model: 'echo-suit', type: 'reading', query: label }); } catch {}
+          try { db.insertMonologue({ content: _echoResultSummary(label, r), model: 'echo-suit', type: 'reading', query: label }); } catch {}   // compact for display; cloud still gets `content` in hopParts
           try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(${label}${r.isError ? ' ⚠' : ''})`, type: 'reading', query: label }); } catch {}
           // ⭐ MIRROR HERE TOO. The canvas mirror was added to the FIRST dispatch site only, and a
           // document is written from the FOLLOW-UP hops — she opens the tab in the reply, then adds
@@ -11349,6 +11352,23 @@ async function runSocialEnrich(targetName) {
 // Fossil Energy", "Idaho National Laboratory"), so the sector filter in contacts_query.select matches it.
 // Puller targets that reference a crm_id are de-duped against the CRM rows (skip the CRM twin). Returns
 // [{ name, email, phone, company, title, confidence }]. Fail-safe: Echo down → Puller-only (prior behavior).
+// A COMPACT one-line summary of an Echo tool/recipe result for the activity feed + monologue memory —
+// so a recipe returning hundreds of rows shows "(echo run_recipe — officials-in-state) → 178 row(s)"
+// instead of dumping the whole JSON payload into the log (Lucas, 2026-07-26). The cloud still gets the
+// full bounded result on the followup path; only what's stored/displayed shrinks.
+function _echoResultSummary(label, r) {
+  const raw = String((r && r.text) || '');
+  const err = r && r.isError ? ' ⚠' : '';
+  try {
+    const j = JSON.parse(raw);
+    if (j && Array.isArray(j.rows)) return `I used the Echo suit (${label}${j.recipe ? ` — ${j.recipe}` : ''}) → ${j.rows.length} row(s)${err}`;
+    if (Array.isArray(j)) return `I used the Echo suit (${label}) → ${j.length} item(s)${err}`;
+    if (j && typeof j === 'object' && 'ok' in j) return `I used the Echo suit (${label}) → ${j.ok === false ? 'not ok' : 'ok'}${err}`;
+  } catch { /* not JSON — fall through to a trimmed one-liner */ }
+  const one = raw.replace(/\s+/g, ' ').trim();
+  return `I used the Echo suit (${label}) → ${one.length > 160 ? one.slice(0, 160) + '…' : (one || 'done')}${err}`;
+}
+
 async function gatherHeldContacts(state = null) {
   const out = [];
   const heldCrmIds = new Set();
