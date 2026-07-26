@@ -7228,6 +7228,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       const _ow = require('./lib/owner_world');
       const _ctx = (recentTurns || []).slice(-4).map((t) => `${t.speaker || '?'}: ${String(t.content || '').replace(/\s+/g, ' ').slice(0, 160)}`).join('\n');
       const _man = await _mani.buildManifest(userMessage, { userName, context: _ctx });
+      try { console.log('[conv-agent] manifest ↓\n' + _mani.render(_man)); } catch {}   // DIAGNOSTIC (S2b live-tune)
       const _byCoord = new Map((_man.objects || []).map((o) => [o.coord, o]));
       const _fmtHood = (g) => {
         const edges = (g.edges || []).map((e) => `${e.rel} ${e.src === g.coord ? e.dst : e.src}`).join('; ');
@@ -7256,6 +7257,8 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         replyWriter = 'conversation_agent';
         agentWrote = true;
         console.log(`[conv-agent] wrote the reply — ${_res.steps} step(s), ${_res.derefs} deref(s)`);
+        try { console.log('[conv-agent] reply ↓ ' + _res.reply.replace(/\s+/g, ' ').slice(0, 300)); } catch {}   // DIAGNOSTIC
+
       }
     }
   } catch (e) { console.error('[conv-agent] failed, falling back to pipeline:', e.message); }

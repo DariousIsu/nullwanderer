@@ -56,7 +56,7 @@ const man = M.assembleManifest(plan, resolutions, {
 
 const bySurface = Object.fromEntries(man.objects.map(o => [o.surface, o]));
 ok(man.objects.length === 5, 'assemble: every named object gets a row (coverage, not just the salient one)');
-ok(bySurface['Zoe'].coord.startsWith('person:zoe/') && bySurface['Zoe'].status === 'self', 'assemble: Zoe → self namespace, not a civic lookup');
+ok(bySurface['Zoe'].coord === 'self:zoe/core' && bySurface['Zoe'].status === 'self', 'assemble: Zoe → the canonical self coordinate, not a civic lookup');
 ok(bySurface['Rainey Center'].coord === 'org:graph/387' && bySurface['Rainey Center'].status === 'held', 'assemble: Rainey → held graph coordinate');
 ok(bySurface['LAMP'].coord === 'org:echo/1519651' && bySurface['LAMP'].gloss.includes('Perfect Union'), 'assemble: LAMP → held echo coordinate + gloss (disambiguated to the Alliance)');
 ok(bySurface['LAMP summit'].status === 'minted-new' && bySurface['LAMP summit'].coord.startsWith('event:short/'), 'assemble: LAMP summit → minted short-term event coordinate');
@@ -103,11 +103,22 @@ ok(ambMan.objects[0].status === 'ambiguous' && ambMan.objects[0].candidates.leng
     },
   });
   const bs = Object.fromEntries(built.objects.map(o => [o.surface, o]));
-  ok(built.objects.length === 3, 'buildManifest: orchestrates decompose → resolve → assemble');
-  ok(bs['Zoe'].status === 'self', 'buildManifest: self mention not looked up (no civic namesake collision)');
+  ok(built.objects.length === 3, 'buildManifest: orchestrates decompose → resolve → assemble (Zoe folds into the mounted self, no dup)');
+  ok(bs['Zoe'].coord === 'self:zoe/core' && bs['Zoe'].status === 'self', 'buildManifest: self mention → canonical self coordinate');
   ok(bs['Rainey Center'].status === 'held' && bs['Rainey Center'].coord === 'org:graph/387', 'buildManifest: resolved via mock resolve → held coordinate');
   ok(bs['Disney'].status === 'minted-new', 'buildManifest: op=create skips resolve → minted short-term');
   ok(built.gaps.length === 1 && built.gaps[0].surface === 'Disney', 'buildManifest: Disney is the honest gap');
+
+  // ── ALWAYS-MOUNT SELF: a turn with NO self mention still carries self:zoe/core ──────────────────
+  const noSelf = await M.buildManifest('what are the Louisiana parishes', {
+    deps: {
+      decompose: async () => ({ intent: 'answer', objects: [{ mention: 'Louisiana', type: 'place', op: 'resolve', salient: true }], relations: [], constraints: [] }),
+      resolve: async () => ({ status: 'no-match' }),
+      ownerResolve: (n) => (/^zoe$/i.test(n) ? { status: 'resolved', object: { id: 'self:zoe/core', entity_type: 'self', summary: 'You — the companion', namespace: 'zoe', ownerWorld: true } } : null),
+      isSelfName: () => false, isOwnerName: () => false,
+    },
+  });
+  ok(noSelf.objects.some(o => o.coord === 'self:zoe/core' && o.status === 'self'), 'always-mount: self:zoe/core is present even when the turn never named her');
 
   // ── OWNER-WORLD PRIOR: "Alice" in a turn binds to the daughter, not a civic namesake ───────────
   const ownerBuilt = await M.buildManifest('is Alice excited for cheer', {
@@ -120,8 +131,8 @@ ok(ambMan.objects[0].status === 'ambiguous' && ambMan.objects[0].candidates.leng
       isSelfName: () => false, isOwnerName: () => false,
     },
   });
-  const aliceRow = ownerBuilt.objects[0];
-  ok(aliceRow.coord === 'person:owner/alice', 'owner-world prior: "Alice" → the daughter coordinate, NOT the civic legislator resolve');
+  const aliceRow = ownerBuilt.objects.find(o => o.surface === 'Alice');
+  ok(aliceRow && aliceRow.coord === 'person:owner/alice', 'owner-world prior: "Alice" → the daughter coordinate, NOT the civic legislator resolve');
   ok(aliceRow.status === 'held' && /cheer/i.test(aliceRow.gloss), 'owner-world prior: carries the daughter gloss, civic resolve never consulted');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

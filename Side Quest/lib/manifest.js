@@ -110,10 +110,12 @@ function assembleManifest(plan, resolutions, { userName = 'Lucas', selfFlags = [
     const resolved = (res && res.object) || null;
     const cls = classify(resolved, res, { isSelf: !!selfFlags[i], isOwner: !!ownerFlags[i] });
     const type = canonType(resolved && resolved.entity_type ? resolved.entity_type : o.type);
-    // Owner-world ids ARE coordinates already (e.g. 'person:owner/alice') — use them directly rather than
-    // re-wrapping. Everything else composes type:namespace/id from its parts.
+    // A self mention (Zoe/Zo) is always the canonical self coordinate. Owner-world ids ARE coordinates
+    // already (e.g. 'person:owner/alice') — use them directly. Everything else composes type:namespace/id.
     let coord;
-    if (resolved && resolved.ownerWorld && typeof resolved.id === 'string' && resolved.id.includes(':')) {
+    if (cls.status === STATUS.SELF) {
+      coord = 'self:zoe/core';
+    } else if (resolved && resolved.ownerWorld && typeof resolved.id === 'string' && resolved.id.includes(':')) {
       coord = resolved.id;
     } else {
       const id = resolved && resolved.id != null ? resolved.id : null;
@@ -203,7 +205,17 @@ async function buildManifest(text, { userName = 'Lucas', context = '', deps = {}
     resolutions.push(r || { status: 'no-match', mention: o.mention });
   }
 
-  return assembleManifest(plan, resolutions, { userName, selfFlags, ownerFlags });
+  const man = assembleManifest(plan, resolutions, { userName, selfFlags, ownerFlags });
+
+  // ALWAYS MOUNT SELF: she is present on every turn, so her self-coordinate must never depend on the
+  // decomposer happening to extract "Zo". Without this, a "are YOU excited?" turn had no self to deref
+  // and she chased logistics instead of answering as herself (live, 2026-07-25). Prepended if absent.
+  if (!man.objects.some((o) => o.coord === 'self:zoe/core')) {
+    let selfGloss = null;
+    try { const s = ownerResolve('Zoe'); if (s && s.object) selfGloss = s.object.summary; } catch {}
+    man.objects.unshift({ surface: 'you', coord: 'self:zoe/core', type: 'self', status: STATUS.SELF, salient: false, gloss: selfGloss, candidates: undefined });
+  }
+  return man;
 }
 
 module.exports = {
