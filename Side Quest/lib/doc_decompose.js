@@ -656,7 +656,7 @@ async function decomposeDoc(doc = {}, deps = {}) {
   // corroboration; the 2nd promotes the concept to civic + attaches it to its nearest focal well.
   out.concepts_minted = 0; out.concepts_promoted = 0; out.concepts_seen = 0;
   {
-    const seenC = new Set(); const maxConcepts = cap.concepts || 12;
+    const seenC = new Set(); const maxConcepts = cap.concepts || parseInt(process.env.ZOE_DECOMP_CONCEPT_CAP || '', 10) || 40;
     for (const c of conceptCands) {
       // NO SILENT CAPS: count what the cap drops so the log shows it (the lazy concept lane will see
       // these names again on the next doc that mentions them — deferral is cheap here, invisibility isn't).

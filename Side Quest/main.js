@@ -10998,7 +10998,12 @@ async function decomposeLandedDoc(doc) {
         // The anchored-mint fix stays: within the cap, an anchored named person now mints instead of
         // stranding at confidence 0. Completeness beyond the cap is a paced follow-up, not a flood.
         const _decompCap = parseInt(process.env.ZOE_DECOMP_CHUNK_CAP || '', 10) || 40;
-        const r = await decompLane.decomposeLanding({ id: doc.id, title: doc.title, body: chunk, ref: _cite }, { extract, resolve, dispatch, observe, cap: { entities: _decompCap, relations: _decompCap }, log: (m) => console.log(m) });
+        // concepts share the same per-chunk budget as entities — the full-spectrum extractor (Slice 3)
+        // yields 20-30 concepts from a rich paper, and the old default of 12 DROPPED them (live: dac23-pruek
+        // "21 concepts dropped"). The concept lane (resolve_or_mint_concept) is lighter than propose_entity,
+        // so this does not reintroduce the entity flood. Env-tunable via ZOE_DECOMP_CONCEPT_CAP.
+        const _conceptCap = parseInt(process.env.ZOE_DECOMP_CONCEPT_CAP || '', 10) || _decompCap;
+        const r = await decompLane.decomposeLanding({ id: doc.id, title: doc.title, body: chunk, ref: _cite }, { extract, resolve, dispatch, observe, cap: { entities: _decompCap, relations: _decompCap, concepts: _conceptCap }, log: (m) => console.log(m) });
         if (r && !r.skipped) { minted += r.minted || 0; reused += r.reused || 0; connections += r.connections || 0; held += r.held || 0; }
       } catch (e) { console.error('[doc-decomp] chunk failed:', e.message); }
     }
