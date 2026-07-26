@@ -42,6 +42,15 @@ const TYPE_SYNONYM = {
   subcommittee: 'committee',
   // Phase C: topical concepts/subjects/ideas → the lazy concept lane (buffer→corroborate→promote+attach)
   topic: 'concept', subject: 'concept', theme: 'concept', idea: 'concept', field: 'concept', policy: 'concept', issue: 'concept', movement: 'concept',
+  // Slice 3 (full-spectrum): the INTELLECTUAL layer — a research paper is mostly these, and they were
+  // being dropped (a glass-interposer paper extracted thing:1). Land them as `concept` (Echo-accepted, so
+  // no federation/proposal-reject risk) rather than losing them; dedicated tech/material/method types are
+  // a later Echo-side vocab slice.
+  technology: 'concept', tech: 'concept', material: 'concept', substance: 'concept', compound: 'concept',
+  method: 'concept', methodology: 'concept', technique: 'concept', process: 'concept', algorithm: 'concept',
+  approach: 'concept', science: 'concept', phenomenon: 'concept', property: 'concept', effect: 'concept',
+  metric: 'concept', measurement: 'concept', discipline: 'concept', standard: 'concept', protocol: 'concept',
+  system: 'concept', model: 'concept', framework: 'concept', theory: 'concept',
 };
 function canonType(t) {
   const raw = String(t == null ? '' : t).toLowerCase().trim();
@@ -91,17 +100,21 @@ function buildTypedPrompt(text, { title = null, maxLines = 120, maxChars = 12000
   return [{
     role: 'user',
     content:
-`From the document BELOW, extract the real-world OBJECTS it names and the relationships it STATES between them.
+`From the document BELOW, extract EVERY real-world OBJECT it names and the relationships it STATES between them. Break the whole document down — not just who and where, but WHAT IT IS ABOUT.
 Output ONLY these two line kinds, nothing else:
-ENTITY: <name> :: <type>
+ENTITY: <name> :: <type> :: <one-line what-it-is>
 REL: <source> | <RELATION> | <target> | <when>
 
-<type> is one of: ${ENTITY_TYPES.join(', ')} (use "other" if unsure).
-Use "concept" for an abstract topic, policy area, field, or named idea/movement (e.g. "artificial intelligence", "permitting reform", "monetary policy", "election security") — NEVER for a person, organization, or place.
-<RELATION> is UPPER_SNAKE from: ${REL_VOCAB.join(', ')} (use RELATED_TO if none fit).
-<when> is the year or year-range the text says this became/was true (e.g. "2023", "2015–2019", "since 2020"). Leave it EMPTY if the text gives no date — never guess a date.
-Names must be CONCRETE NAMED ENTITIES (a person, org, place, event, bill) — never a pronoun, never a whole sentence.
-Only what the text STATES — do NOT infer, generalize, or invent. Every REL's source and target should also appear as an ENTITY line.
+Extract ALL of these kinds of objects — a document is more than its people:
+• PEOPLE, ORGANIZATIONS, PLACES, EVENTS, BILLS — the who/where/when (type: person, organization, location, event, bill).
+• The SUBJECT MATTER — technologies, materials, methods, scientific/technical concepts, fields, findings, and named ideas. USE type "concept" for all of these. Examples across domains: "glass interposer", "through-glass via", "borosilicate glass", "coefficient of thermal expansion", "advanced packaging", "EUV lithography", "quantitative easing", "election security". A research paper is MOSTLY these — do not skip them.
+• DOCUMENTS/WORKS it cites — type: document or work.
+
+<type> is one of: ${ENTITY_TYPES.join(', ')} (use "other" only if genuinely none fit).
+<one-line what-it-is> is a SHORT factual gloss from the text (≤ 12 words) — what this object is or does. Leave it empty only if the text gives nothing.
+<RELATION> is UPPER_SNAKE from: ${REL_VOCAB.join(', ')} (use RELATED_TO if none fit). Capture the CLAIMS the document makes — e.g. "glass interposer ENABLES chiplet integration", "borosilicate PART_OF glass substrate".
+<when> is the year or year-range the text says this became/was true (e.g. "2023", "2015–2019"). Leave EMPTY if the text gives no date — never guess.
+A name is a CONCRETE OBJECT (a person, org, place, event, bill, technology, material, method, or named concept) — never a pronoun, never a whole sentence. Only what the text STATES — do NOT infer, generalize, or invent. Every REL's source and target should also appear as an ENTITY line.
 Max ${maxLines} ENTITY lines and ${maxLines} REL lines. If there are none, output exactly: NONE
 
 ${head}DOCUMENT:
@@ -138,14 +151,19 @@ function parseTypedExtraction(raw, { maxEntities = 120, maxRelations = 120 } = {
     const L = line.trim();
     if (!L) continue;
     let m;
-    if ((m = /^ENTITY\s*:\s*(.+?)\s*::\s*(.+)$/i.exec(L))) {
+    if (/^ENTITY\s*:/i.test(L)) {
       if (entities.length >= maxEntities) continue;
-      const name = stripLead(m[1]);
+      // Split the body on '::' into name / type / gloss. The gloss (3rd field, Slice 3) is OPTIONAL, so a
+      // legacy 2-field line still parses. Anything past the 3rd '::' rejoins the gloss.
+      const parts = L.slice(L.indexOf(':') + 1).split('::').map((s) => s.trim());
+      if (parts.length < 2) continue;
+      const name = stripLead(parts[0]);
       if (badField(name)) continue;
       const k = name.toLowerCase();
       if (seenE.has(k)) continue;
       seenE.add(k);
-      entities.push({ name, type: canonType(m[2]) });
+      const gloss = parts.length >= 3 ? parts.slice(2).join(' :: ').trim().slice(0, 140) : null;
+      entities.push({ name, type: canonType(parts[1]), gloss: gloss || null });
     } else if ((m = /^REL\s*:\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*(?:\|\s*(.*))?$/i.exec(L))) {
       if (relations.length >= maxRelations) continue;
       const source = stripLead(m[1]);

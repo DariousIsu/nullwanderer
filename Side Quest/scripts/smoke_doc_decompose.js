@@ -470,6 +470,21 @@ function mockResolver(map) {
   const gz2 = D.normalizeStateAliases([], [{ source: 'Indianapolis', relation: 'LOCATED_IN', target: 'IN' }]);
   ok(gz2.relations[0].target === 'Indiana', 'normalizeStateAliases: "…LOCATED_IN IN" → Indiana (place context makes it safe)');
 
+  // --- Slice 3 (full-spectrum): the intellectual layer maps to concept + the optional gloss field ---
+  ok(D.canonType('technology') === 'concept' && D.canonType('material') === 'concept' && D.canonType('method') === 'concept', 'canonType: tech/material/method → concept (Echo-accepted, not dropped)');
+  ok(D.canonType('phenomenon') === 'concept' && D.canonType('framework') === 'concept', 'canonType: more intellectual-layer synonyms → concept');
+  const s3 = D.parseTypedExtraction([
+    'ENTITY: Glass Interposer :: technology :: a glass layer between logic and memory chiplets',
+    'ENTITY: Borosilicate :: material :: low-CTE glass used for substrates',
+    'ENTITY: Woodrow Wilson :: person',                                   // legacy 2-field still parses
+    'REL: Glass Interposer | ENABLES | Chiplet Integration',
+  ].join('\n'));
+  const gi = s3.entities.find(e => e.name === 'Glass Interposer');
+  ok(gi && gi.type === 'concept', 'parse: a "technology" entity lands as concept (the ideas are no longer dropped)');
+  ok(gi && /chiplets/.test(gi.gloss || ''), 'parse: the one-line gloss is captured (objects are filled, not bare names)');
+  ok(s3.entities.find(e => e.name === 'Borosilicate').type === 'concept', 'parse: a "material" entity lands as concept');
+  ok(s3.entities.find(e => e.name === 'Woodrow Wilson') && s3.entities.find(e => e.name === 'Woodrow Wilson').gloss === null, 'parse: legacy 2-field line still parses (gloss null)');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
