@@ -7223,7 +7223,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   let agentWrote = false;
   try {
     const _ca = require('./lib/conversation_agent');
-    if (_ca.isOn()) {
+    // The agent loop handles CONVERSATION (talk, feel, brainstorm, answer-from-memory). It DEFERS work it
+    // cannot do in-loop — a URL to FETCH, a directed task, a contacts/research pull — to the existing
+    // pipeline, which owns the web + operator lanes. Without this it refused "process this URL and give me
+    // a rundown" for lack of a fetch tool (live, 2026-07-25). Defer = leave agentWrote false → pipeline runs.
+    const _agentDefer = /https?:\/\/|\bwww\./i.test(userMessage) || _isDirectedTaskR
+      || (routerOn && ['task', 'contacts', 'research'].includes(turnRoute.route));
+    if (_ca.isOn() && !_agentDefer) {
       const _mani = require('./lib/manifest');
       const _ow = require('./lib/owner_world');
       const _ctx = (recentTurns || []).slice(-4).map((t) => `${t.speaker || '?'}: ${String(t.content || '').replace(/\s+/g, ' ').slice(0, 160)}`).join('\n');
