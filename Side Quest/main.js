@@ -5902,6 +5902,20 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   } catch (e) { console.error('[held-roster] recognize failed:', e.message); }
 
+  // CANVAS AWARENESS — "what did I just drop on your canvas / did you process those papers?" Surface the
+  // recent canvas drops (title + understanding) by RECENCY so she speaks about the documents in front of
+  // her instead of going blind to them (semantic retrieval can't match "what's on my canvas" to a paper).
+  try {
+    const _cw = require('./lib/canvas_awareness');
+    if (_cw.recognize(userMessage)) {
+      const block = _cw.buildBlock({ userName });
+      if (block) {
+        retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${block}\n\n${retrievedKnowledgeBlock}` : block;
+        console.log('[canvas-awareness] surfaced recent canvas drops');
+      }
+    }
+  } catch (e) { console.error('[canvas-awareness] failed:', e.message); }
+
   // PROMINENCE / IDENTITY note (R1) — a bare famous name resolved (in our civic KG) to a low-prominence
   // same-name record; recall() declined the namesake and surfaced who is actually meant (Wikidata-verified).
   // Prepend so the grounded answer is ABOUT the prominent referent and only footnotes the record we hold.
