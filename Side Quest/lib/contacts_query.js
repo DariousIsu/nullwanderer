@@ -36,6 +36,15 @@ const RESEARCH_INTENT = /\b(research|find (?:new|more)|discover|dig up|go get ne
 // missed being ASKED WHAT SHE HAS.
 const COUNT_INTENT = /\b(how many|how much|number of|count of|do we (?:have|hold|got)|have we got|d'?you have|do you have|what .{0,30}(?:do|have) we (?:have|hold|got)|any\s+(?:contacts?|e-?mails?|people|names))\b/i;
 
+// COVERAGE / PROGRESS — "have you finished collecting X", "are we done gathering X", "status of the X
+// collection", "did you get all the X". A question about HOW COMPLETE our held set is — the same data as a
+// COUNT, answered with a number/coverage, not a research run. This phrasing was the live 2026-07-25 miss:
+// "have you finished collecting the contact information for every Louisiana official?" matched neither
+// LIST nor COUNT, so it fell to the ENTITY RESOLVER, which minted the plural "officials in Louisiana" as
+// ONE phantom person, found no such individual, marked it a GAP, and the anti-confab rail made her report
+// ZERO while holding 1,426 CRM + 603 Puller-with-email Louisiana contacts.
+const COVERAGE_INTENT = /\b(?:(?:finish|done|complet|wrap|through)\w*\s+(?:with\s+)?(?:collect|gather|compil|pull|assembl|build)|(?:collect|gather|compil|assembl)(?:ed|ing)|status\b[^?.!]{0,30}\b(?:collect|contact|roster|list|officials?)|how (?:far along|much progress)|got\s+(?:all|every|the (?:full|complete))|have\s+(?:all|every|the (?:full|complete))\b|are we (?:done|finished)|is\b[^?.!]{0,30}\b(?:list|collection|roster) (?:done|finished|complete))/i;
+
 // Sector filters — reuse the operator's prospecting sectors. Each maps a request keyword → a company-name
 // matcher, so "energy contacts" filters to energy-industry companies we hold.
 const SECTORS = {
@@ -115,7 +124,7 @@ function detect(message) {
   // research — while "build a sheet with all the Contacts we HAVE generated" is a list of what we hold.
   const HELD = /\b(we (?:have|hold|already have|generated|got|pulled|already got)|we'?ve (?:got|generated|pulled)|(?:our|the) (?:existing|current|held)|on hand|in (?:our|the) (?:records|database|crm|files)|that we (?:have|hold))\b/i;
   if (RESEARCH_INTENT.test(m) && !HELD.test(m)) return { isQuery: false };   // research NEW (not about what we hold) → not a list
-  const counting = COUNT_INTENT.test(m);
+  const counting = COUNT_INTENT.test(m) || COVERAGE_INTENT.test(m);          // a coverage/progress ask counts as a count
   if (!LIST_INTENT.test(m) && !WHO_HAVE.test(m) && !counting) return { isQuery: false };
   const g = gradeFrom(m);
   return { isQuery: true, sectors: sectorsFrom(m), company: companyFrom(m), limit: countFrom(m),

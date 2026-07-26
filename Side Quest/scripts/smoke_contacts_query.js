@@ -176,5 +176,16 @@ ok(!CQ.detect('how many parishes are in Louisiana?').isQuery, 'SAFETY: a count w
 ok(!CQ.detect('research new contacts for Louisiana parishes').isQuery, 'SAFETY: research phrasing still excluded');
 ok(!CQ.detect('how are you doing?').isQuery, 'SAFETY: ordinary chat is not a contacts query');
 
+// COVERAGE / PROGRESS phrasing — the live 2026-07-25 miss that made her report ZERO Louisiana contacts.
+// These must be recognized as contacts (count) queries so they route to the CRM count, not the entity
+// resolver that minted "officials in Louisiana" as one phantom person.
+ok(CQ.detect('have you finished collecting the contact information for every single official in Louisiana yet?').isQuery, 'COVERAGE: "have you finished collecting … Louisiana officials" is a contacts query');
+ok(CQ.detect('have you finished collecting the contact information for every official in Louisiana?').state === 'LA', 'COVERAGE: the state (LA) is captured');
+ok(CQ.detect('are we done gathering the Louisiana officials?').isQuery, 'COVERAGE: "are we done gathering …" fires');
+ok(CQ.detect('what is the status of the Louisiana contact collection?').isQuery, 'COVERAGE: "status of the … collection" fires');
+ok(CQ.detect('did you get all the parish officials?').isQuery, 'COVERAGE: "did you get all the …" fires');
+ok(CQ.detect('have you finished collecting the Louisiana officials?').countOnly === true, 'COVERAGE: a coverage ask is countOnly (a number/coverage, not 200 rows)');
+ok(!CQ.detect('how is the weather in Louisiana today?').isQuery, 'SAFETY: a non-contacts Louisiana question is NOT a contacts query');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);
