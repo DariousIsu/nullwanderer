@@ -120,6 +120,23 @@ ok(ambMan.objects[0].status === 'ambiguous' && ambMan.objects[0].candidates.leng
   });
   ok(noSelf.objects.some(o => o.coord === 'self:zoe/core' && o.status === 'self'), 'always-mount: self:zoe/core is present even when the turn never named her');
 
+  // ── SUB-MENTION ENRICHMENT: a folded "Rainey LAMP Summit" surfaces Rainey (owner) + LAMP (civic) ──
+  const folded = await M.buildManifest('we are going to the Rainey LAMP Summit', {
+    deps: {
+      // decompose folds it all into ONE event object (the real-world behavior we observed live)
+      decompose: async () => ({ intent: 'social', objects: [{ mention: 'Rainey LAMP Summit', type: 'event', op: 'create', salient: true }], relations: [], constraints: [] }),
+      // civic resolve knows LAMP-the-network but not the whole phrase
+      resolve: async (m) => (/^lamp$/i.test(m) ? { status: 'resolved', object: { id: 1519651, entity_type: 'organization', summary: 'Leadership Alliance for a More Perfect Union' } } : { status: 'no-match' }),
+      ownerResolve: (n) => (/^rainey$/i.test(n) ? { status: 'resolved', object: { id: 'org:work/rainey-center', entity_type: 'org', summary: 'Rainey Center — employer', namespace: 'work', ownerWorld: true } } : null),
+      isSelfName: () => false, isOwnerName: () => false,
+    },
+  });
+  const coords = folded.objects.map(o => o.coord);
+  ok(coords.includes('event:short/rainey-lamp-summit'), 'enrichment: the folded event itself is still present (minted-new)');
+  ok(coords.includes('org:work/rainey-center'), 'enrichment: Rainey surfaced from inside the compound name (owner-world)');
+  ok(coords.includes('org:echo/1519651'), 'enrichment: LAMP-the-network surfaced from inside the compound name (civic)');
+  ok(!coords.some(c => /\/summit$/.test(c)), 'enrichment: the generic word "Summit" is stopworded, not resolved');
+
   // ── OWNER-WORLD PRIOR: "Alice" in a turn binds to the daughter, not a civic namesake ───────────
   const ownerBuilt = await M.buildManifest('is Alice excited for cheer', {
     userName: 'Lucas',

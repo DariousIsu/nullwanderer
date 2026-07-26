@@ -41,6 +41,12 @@ function canonType(t) {
   return CANON_TYPE[k] || (k ? 'thing' : 'thing');
 }
 
+// Sub-mention scan stopwords — generic words that appear inside compound entity names ("Rainey LAMP
+// SUMMIT", "the CENTER for X") but are not themselves entities to resolve.
+const _SUB_STOP = new Set(['summit', 'center', 'centre', 'the', 'and', 'for', 'of', 'at', 'in', 'on', 'to',
+  'conference', 'meeting', 'event', 'group', 'team', 'annual', 'this', 'year', 'inc', 'llc', 'foundation',
+  'institute', 'council', 'committee', 'association', 'alliance', 'network', 'summit’s', 'day', 'week']);
+
 // Slugify a mention/name into the id component of a coordinate: lowercase, ascii words joined by '-'.
 // Bounded so a whole-sentence mention can't become a monstrous id (the resolver upstream should have
 // caught that, but the slug is the last guard).
@@ -215,6 +221,43 @@ async function buildManifest(text, { userName = 'Lucas', context = '', deps = {}
     try { const s = ownerResolve('Zoe'); if (s && s.object) selfGloss = s.object.summary; } catch {}
     man.objects.unshift({ surface: 'you', coord: 'self:zoe/core', type: 'self', status: STATUS.SELF, salient: false, gloss: selfGloss, candidates: undefined });
   }
+
+  // SUB-MENTION ENRICHMENT: decompose returns the MOST COMPLETE identifier ("Rainey LAMP Summit"), which
+  // BURIES embedded known objects — so the org (Rainey), the network (LAMP), and the place (Disney) never
+  // surface as their own coordinates and their neighborhoods stay unreachable (live, 2026-07-25: she could
+  // not reach her LAMP-rolls history because LAMP was folded into one event). Scan each mention's proper-
+  // name sub-tokens, resolve them (owner-world first, civic second), and surface any HELD one not already
+  // present. Bounded to a few sub-tokens per turn; best-effort — never breaks the manifest.
+  try {
+    const present = new Set(man.objects.map((o) => o.coord));
+    const seen = new Set(man.objects.map((o) => String(o.surface || '').toLowerCase()));
+    const subs = [];
+    for (const o of objects) {
+      const whole = String(o.mention || '');
+      for (const tk of (whole.match(/\b[A-Z][A-Za-z][\w.&'’-]*\b/g) || [])) {
+        const low = tk.toLowerCase();
+        if (low.length < 3 || _SUB_STOP.has(low) || seen.has(low) || low === whole.toLowerCase()) continue;
+        seen.add(low); subs.push(tk);
+      }
+    }
+    for (const sub of subs.slice(0, 5)) {
+      let res = null;
+      try { res = ownerResolve(sub); } catch {}
+      if (!(res && res.object)) { try { res = await resolve(sub, { preferType: null }); } catch {} }
+      const obj = res && res.object;
+      if (!obj || (res.status && res.status !== 'resolved')) continue;   // only SURFACE what actually resolved
+      const cls = classify(obj, res, {});
+      const type = canonType(obj.entity_type);
+      let coord;
+      if (cls.status === STATUS.SELF) coord = 'self:zoe/core';
+      else if (obj.ownerWorld && typeof obj.id === 'string' && obj.id.includes(':')) coord = obj.id;
+      else coord = toCoordinate({ type, namespace: cls.namespace, id: obj.id != null ? obj.id : null, name: sub });
+      if (present.has(coord)) continue;
+      present.add(coord);
+      man.objects.push({ surface: sub, coord, type, status: cls.status, salient: false, gloss: obj.summary ? String(obj.summary).slice(0, 140) : null });
+    }
+  } catch { /* enrichment is best-effort */ }
+
   return man;
 }
 
