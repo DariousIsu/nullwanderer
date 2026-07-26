@@ -242,6 +242,11 @@ function stateFrom(message) {
   return null;
 }
 
+// Reverse: 'LA' → 'louisiana'. Lets a state-aware contact gather infer a Puller row's state from its org
+// name (Puller targets carry no state field), so a state query can reach the parish/municipal contacts.
+const _ABBR_TO_NAME = Object.fromEntries(Object.entries(_STATES).map(([n, a]) => [a, n]));
+function stateNameOf(abbr) { return _ABBR_TO_NAME[String(abbr || '').toUpperCase()] || null; }
+
 // UNMET-FILTER honesty (now narrow): grade/type/state ARE applied. The one dimension the held data can't
 // resolve is COUNTY — there is no county field on the contact rows (state yes, county no). If the request
 // asks to narrow by county, the caller discloses it instead of silently ignoring it.
@@ -437,4 +442,4 @@ function label({ sectors = [], company = null, grade = null, gradeDir = 'gte', t
   return parts.length ? `${parts.join(' ')} ${noun}`.replace(/\s+/g, ' ').trim() : 'Contacts';
 }
 
-module.exports = { detect, select, toTable, withEvidence, evidenceCell, evidenceSummary, label, unmetFilters, gradeFrom, typeFrom, stateFrom, isGovernmentCompany, isNonprofitCompany, domainKind, sectorsFrom, companyFrom, matchesSectors, GRADE_CAP, SECTORS };
+module.exports = { detect, select, toTable, withEvidence, evidenceCell, evidenceSummary, label, unmetFilters, gradeFrom, typeFrom, stateFrom, stateNameOf, isGovernmentCompany, isNonprofitCompany, domainKind, sectorsFrom, companyFrom, matchesSectors, GRADE_CAP, SECTORS };

@@ -6080,7 +6080,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     try {
       const cq = require('./lib/contacts_query');
       const ask = _contactsQ && _contactsQ.isQuery ? _contactsQ : cq.detect(userMessage);
-      const rows = await gatherHeldContacts();
+      const rows = await gatherHeldContacts(ask.state);   // state-aware: reach the CRM+Puller rows for that state
       const sel = cq.select(rows, { sectors: ask.sectors, company: ask.company, limit: ask.limit || 200,
         grade: ask.grade, gradeDir: ask.gradeDir, type: ask.type, state: ask.state });
       const lbl = cq.label(ask);
@@ -11345,9 +11345,10 @@ async function runSocialEnrich(targetName) {
 // Fossil Energy", "Idaho National Laboratory"), so the sector filter in contacts_query.select matches it.
 // Puller targets that reference a crm_id are de-duped against the CRM rows (skip the CRM twin). Returns
 // [{ name, email, phone, company, title, confidence }]. Fail-safe: Echo down → Puller-only (prior behavior).
-async function gatherHeldContacts() {
+async function gatherHeldContacts(state = null) {
   const out = [];
   const heldCrmIds = new Set();
+  const _stU = state ? String(state).toUpperCase() : null;   // state-aware gather (2026-07-26): a state ask
   // 1) PULLER — discovered targets + their beliefs (email/phone/role), carrying real per-attr confidence.
   try {
     const pdb = require('./lib/puller_db'); pdb.init();
@@ -11356,11 +11357,20 @@ async function gatherHeldContacts() {
       const bl = pdb.listBeliefs(t.id) || [];
       const b = (type) => bl.find((x) => x.type === type) || null;
       const email = b('email');
-      // src:'puller' = a DISCOVERED private-sector contact (the "corporate" type); Puller targets rarely
-      // carry a state, so state stays null (they won't match a state filter — honest).
+      // src:'puller' = a DISCOVERED contact (often gov/municipal). Puller targets carry no state field, so on
+      // a STATE ask, infer it from the org name — the full state name, or (for LA) "Parish", which is
+      // unambiguously Louisiana. Without this the 603 LA parish contacts (real emails) were dropped as
+      // stateless and she reported zero (live 2026-07-26). No state asked → stays null.
+      let _pstate = null;
+      if (_stU) {
+        const _hay = `${String(t.company || '')} ${String(t.name || '')}`.toLowerCase();
+        const _full = require('./lib/contacts_query').stateNameOf(_stU);
+        if (_full && new RegExp(`\\b${_full}\\b`).test(_hay)) _pstate = _stU;
+        else if (_stU === 'LA' && /\bparish\b/.test(_hay)) _pstate = 'LA';
+      }
       out.push({ name: t.name, email: email && email.value, phone: (b('phone') || {}).value || null, company: t.company, title: (b('role') || {}).value || null,
                  confidence: email && typeof email.confidence === 'number' ? email.confidence : ((b('phone') || {}).confidence || 0),
-                 src: 'puller', state: null, elected: false, domain: t.domain || null });   // domain = the corporate/gov signal (contacts_query.domainKind)
+                 src: 'puller', state: _pstate, elected: false, domain: t.domain || null });   // domain = the corporate/gov signal (contacts_query.domainKind)
     }
   } catch (e) { console.error('[contacts-query] puller gather failed:', e.message); }
   // 2) CRM — every emailed contact + its org (account) name, most-complete first. Bounded safety cap. The
@@ -11375,12 +11385,15 @@ async function gatherHeldContacts() {
             c.State_Represented AS state_rep, c.MailingState AS mail_state, c.Contact_Kind__c AS ckind, a.Name AS account_name
           FROM electoral.contact c
           LEFT JOIN electoral.account a ON a.id = c.AccountId
-          WHERE c.deleted=0 AND c.Email IS NOT NULL AND TRIM(c.Email) <> ''
+          WHERE c.deleted=0 AND c.Email IS NOT NULL AND TRIM(c.Email) <> ''${_stU ? ' AND (UPPER(TRIM(c.State_Represented))=? OR UPPER(TRIM(c.MailingState))=?)' : ''}
           ORDER BY (c.Phone IS NOT NULL AND TRIM(c.Phone) <> '') DESC,
                    (c.AccountId IS NOT NULL) DESC,
                    (c.Title IS NOT NULL AND TRIM(c.Title) <> '') DESC
-          LIMIT 20000`;
-      const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql, params: [] } });
+          LIMIT ${_stU ? 50000 : 20000}`;
+      // When a state is asked, filter it in SQL and raise the cap — otherwise the global 20k head (ordered
+      // by phone/account/title) can exclude an entire state's rows, which is why "Louisiana officials"
+      // returned zero while the CRM held 1,426 of them (live 2026-07-26).
+      const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql, params: _stU ? [_stU, _stU] : [] } });
       let j = null; if (r && r.ok) { try { j = JSON.parse(r.text); } catch {} }
       for (const row of ((j && j.rows) || [])) {
         if (row.id != null && heldCrmIds.has(Number(row.id))) continue;   // the Puller already holds this person
