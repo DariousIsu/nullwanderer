@@ -7243,7 +7243,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     // a rundown" for lack of a fetch tool (live, 2026-07-25). Defer = leave agentWrote false → pipeline runs.
     const _agentDefer = /https?:\/\/|\bwww\./i.test(userMessage) || _isDirectedTaskR
       || (routerOn && ['task', 'contacts', 'research'].includes(turnRoute.route));
-    if (_ca.isOn() && !_agentDefer) {
+    // DON'T double-answer: if another handler already produced the reply (contacts list, ambiguity ask,
+    // social-enrich, deliverable poll…), stand down. The contacts handler routes 'contacts' but the route
+    // can be reassigned downstream, so gate on the handled flags too, not just the route (live 2026-07-26:
+    // the contacts handler answered AND the agent loop wrote a second, wrong reply over it).
+    if (_ca.isOn() && !_agentDefer && !followupFired && !contactsHandled) {
       const _mani = require('./lib/manifest');
       const _ow = require('./lib/owner_world');
       const _ctx = (recentTurns || []).slice(-4).map((t) => `${t.speaker || '?'}: ${String(t.content || '').replace(/\s+/g, ' ').slice(0, 160)}`).join('\n');
@@ -11349,6 +11353,7 @@ async function gatherHeldContacts(state = null) {
   const out = [];
   const heldCrmIds = new Set();
   const _stU = state ? String(state).toUpperCase() : null;   // state-aware gather (2026-07-26): a state ask
+  const _stSafe = (_stU && /^[A-Z]{2}$/.test(_stU)) ? _stU : null;   // safe to inline into SQL (2-letter allowlist)
   // 1) PULLER — discovered targets + their beliefs (email/phone/role), carrying real per-attr confidence.
   try {
     const pdb = require('./lib/puller_db'); pdb.init();
@@ -11385,15 +11390,17 @@ async function gatherHeldContacts(state = null) {
             c.State_Represented AS state_rep, c.MailingState AS mail_state, c.Contact_Kind__c AS ckind, a.Name AS account_name
           FROM electoral.contact c
           LEFT JOIN electoral.account a ON a.id = c.AccountId
-          WHERE c.deleted=0 AND c.Email IS NOT NULL AND TRIM(c.Email) <> ''${_stU ? ' AND (UPPER(TRIM(c.State_Represented))=? OR UPPER(TRIM(c.MailingState))=?)' : ''}
+          WHERE c.deleted=0 AND c.Email IS NOT NULL AND TRIM(c.Email) <> ''${_stSafe ? ` AND (UPPER(TRIM(c.State_Represented))='${_stSafe}' OR UPPER(TRIM(c.MailingState))='${_stSafe}')` : ''}
           ORDER BY (c.Phone IS NOT NULL AND TRIM(c.Phone) <> '') DESC,
                    (c.AccountId IS NOT NULL) DESC,
                    (c.Title IS NOT NULL AND TRIM(c.Title) <> '') DESC
-          LIMIT ${_stU ? 50000 : 20000}`;
+          LIMIT ${_stSafe ? 50000 : 20000}`;
       // When a state is asked, filter it in SQL and raise the cap — otherwise the global 20k head (ordered
       // by phone/account/title) can exclude an entire state's rows, which is why "Louisiana officials"
-      // returned zero while the CRM held 1,426 of them (live 2026-07-26).
-      const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql, params: _stU ? [_stU, _stU] : [] } });
+      // returned zero while the CRM held 1,426 of them (live 2026-07-26). The state is INLINED (not a bound
+      // param) because the db_query tool did not bind the `?` positional params — it silently returned zero.
+      // Safe: _stSafe is validated to exactly two uppercase letters from the closed state allowlist.
+      const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql, params: [] } });
       let j = null; if (r && r.ok) { try { j = JSON.parse(r.text); } catch {} }
       for (const row of ((j && j.rows) || [])) {
         if (row.id != null && heldCrmIds.has(Number(row.id))) continue;   // the Puller already holds this person
