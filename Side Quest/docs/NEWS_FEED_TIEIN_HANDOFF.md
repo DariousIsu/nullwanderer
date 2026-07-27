@@ -42,9 +42,10 @@ The news lane compresses in time. A consumer taps whichever granularity fits the
 news.raw({ sinceMs, limit = 500, sourceKind })
 //   → [ { id, source, source_kind, title, summary, url_or_guid, ts, entities, ... } ]
 
-// RAW, per-entity VOLUME (sentiment is a null placeholder until the tone pass lands).
+// RAW, per-entity VOLUME + TONE. sentiment ∈ [-1,1] (deterministic lexicon tone aggregated over the
+// mentioning items; null when no polar tokens). sentiment_n = polar-token sample size (confidence — gate on it).
 news.momentum({ sinceMs, entities: ['JD Vance', 'Ohio Senate'] })
-//   → [ { entity, mentions, by_source_kind:{rss,video,...}, video_mentions, first_ts, last_ts, sentiment:null } ]
+//   → [ { entity, mentions, by_source_kind:{rss,video,...}, video_mentions, first_ts, last_ts, sentiment, sentiment_n } ]
 
 // COMPRESSED event-shocks — corroboration-gated (min(outlets,reports) ≥ minCorroboration), most-corroborated first.
 news.events({ startMs, entities, minCorroboration = 2, limit = 200 })
