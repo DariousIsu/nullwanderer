@@ -25,6 +25,7 @@ const smokes = [
   'smoke_boot_grace.js',
   'smoke_event_lane.js',
   'smoke_echo_tier_desktop.js',
+  'smoke_dispatch_timeout.js',
   'smoke_canvas_awareness.js',
   'smoke_unprompted.js',
   'smoke_greenlight.js',

@@ -294,6 +294,30 @@ function echoCloudRouteEnabled() {
   } catch { return false; }
 }
 
+// PER-TOOL DISPATCH TIMEOUT — the missing first line beneath the 150s turn-watchdog. Every Echo tool
+// call funnels through EchoSuit.dispatch → callTool, and callTool has NO client-side timeout: the only
+// per-tool budget anywhere is db_query's 20s. So a research/browse/spawn tool that hangs (a page that
+// never loads, a stuck agent, an unbounded op) stalls the WHOLE turn until the watchdog trips — with no
+// record (route_obs writes in a finally that never runs) and no name. This races the real call against a
+// timer and, on timeout, RESOLVES with a soft error (not a throw) so the agent-loop keeps going and can
+// answer without that tool — and LOGS the tool name so a recurring stall finally names its door. The
+// orphaned call keeps running (MCP callTool isn't abortable here) but its late settle is swallowed.
+// Generous by default (90s: above the ~32s slowest observed legit tool, below the 150s watchdog),
+// env-tunable via ZOE_TOOL_DISPATCH_TIMEOUT_MS (0 = off).
+function _raceTimeout(core, ms, name) {
+  if (!(ms > 0)) return core;
+  try { core.catch(() => {}); } catch {}   // swallow a LATE rejection after the race settles on timeout
+  let timer;
+  const guard = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      try { console.error(`[dispatch-timeout] tool=${name} exceeded ${ms}ms — abandoned; turn continues with a soft error`); } catch {}
+      resolve({ ok: false, isError: true, timedOut: true, tool: name,
+        text: `Tool "${name}" timed out after ${Math.round(ms / 1000)}s and was abandoned. Continue without it or try another approach.` });
+    }, ms);
+  });
+  return Promise.race([core, guard]).finally(() => { try { clearTimeout(timer); } catch {} });
+}
+
 // ---------- the suit (stateful connection wrapper) ----------
 
 class EchoSuit {
@@ -399,8 +423,10 @@ class EchoSuit {
   async dispatch(tag, opts = {}) {
     const _t0 = Date.now();
     let _res = null;
+    const _toName = (tag && (tag.name || tag.kind || tag.tag || tag.query)) || 'tool';
+    const _TMO = process.env.ZOE_TOOL_DISPATCH_TIMEOUT_MS != null ? Number(process.env.ZOE_TOOL_DISPATCH_TIMEOUT_MS) : 90000;
     try {
-      _res = await this._maybeMemoized(tag, opts);
+      _res = await _raceTimeout(this._maybeMemoized(tag, opts), _TMO, _toName);
       return _res;
     } catch (e) {
       _res = { ok: false, isError: true, text: String((e && e.message) || e) };
@@ -1519,7 +1545,7 @@ function routeCacheStats() {
 }
 
 module.exports = {
-  routeCacheStats,
+  routeCacheStats, _raceTimeout,
   EchoSuit, createSuit, parseEchoTags, parseArgs, stripEchoTags, normalizeToolResult, resultText, filterToolMap, buildRecipeMenu, filterRecipes, echoCloudRouteEnabled,
   placeholderComplaint, sanitizeFtsQuery, prepareDoArgs, recipeMisrouteHint,
   setLiveSuit, liveReady, liveStatus, recallKnowledge, recallObject, resolveMention, normalizeObject, normalizeNeighbors, dispatch, liveDispatch, routeNeed, wikiLookup, expandNeighbors, relatedEntities, officeHolders, prominenceProbe, prominenceCheck, _coreNameKey, _distinctNames, _distinctEntities, _nameCompatible, _nameGate, _cleanMention, _sameEntity, _relevanceGate, _isBareOfficeTitle, _isCivicLocalNamesake, _identityNote, _setLiveForTest, _contextScore, _pickByContext, _disambiguateByContext, _entitySignature, _entityRelations, _affiliatedPrimary, _levenshtein, _tokenSim, _fuzzyNameMatch, _fuzzyCandidates, _salienceDominant
