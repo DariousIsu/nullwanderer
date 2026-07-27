@@ -144,6 +144,39 @@ ok(intake.subsetTopN('') === null, 'empty → null');
   ok(dcalled === false && dshort.intent === 'chat', 'decompose: <6 chars short-circuits to inert chat (no cloud call)');
   ok((await intake.decompose('who is the senator from utah', { deps: { ask: async () => null } })) === null, 'decompose: cloud down → null (caller falls back)');
 
+  // ── COMPOUND-NAME DECOMPOSITION (chat-path richness) ───────────────────────────────────────────
+  // The prompt must TELL the model to explode a compound proper name, and routeDecomposition must
+  // preserve every object + edge the model returns (never collapse "Rainey LAMP Summit at Disney").
+  {
+    const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'intake.js'), 'utf8');
+    ok(/DECOMPOSE COMPOUND NAMES/.test(src) && /Rainey LAMP Summit at Disney/.test(src),
+      'decompose prompt instructs the model to explode a compound name into whole + parts + relations');
+
+    // scripted parse: the model returns the whole event + its 3 embedded objects + 3 edges
+    const COMPOUND = {
+      intent: 'chat',
+      objects: [
+        { mention: 'Rainey LAMP Summit', type: 'event', op: 'resolve', salient: true },
+        { mention: 'Rainey Center', type: 'organization', op: 'resolve', salient: false },
+        { mention: 'LAMP', type: 'organization', op: 'resolve', salient: false },
+        { mention: 'Walt Disney World', type: 'place', op: 'resolve', salient: false },
+      ],
+      relations: [
+        { source: 'Rainey LAMP Summit', type: 'located_in', target: 'Walt Disney World' },
+        { source: 'Rainey LAMP Summit', type: 'hosted_by', target: 'Rainey Center' },
+        { source: 'Rainey LAMP Summit', type: 'about', target: 'LAMP' },
+      ],
+      constraints: [], deliverable: null, clarify: [],
+    };
+    const raw = await intake.decompose('we are going to the Rainey LAMP Summit at Disney', { deps: { ask: async () => COMPOUND } });
+    const plan = intake.routeDecomposition(raw);
+    ok(plan.objects.length === 4, 'routeDecomposition keeps ALL 4 objects (the whole + 3 embedded parts), not just the compound');
+    ok(plan.objects.some(o => o.mention === 'LAMP') && plan.objects.some(o => o.mention === 'Walt Disney World'),
+      'the embedded org (LAMP) and place (Disney) survive as their own objects');
+    ok(plan.relations.length === 3 && plan.relations.some(r => r.type === 'located_in' && r.target === 'Walt Disney World'),
+      'the compound→part edges survive (event located_in Disney) — the richness the regex enrichment could not add');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
