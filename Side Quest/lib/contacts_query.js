@@ -113,6 +113,52 @@ function countFrom(message) {
   const n = m ? parseInt(m[1], 10) : null;
   return (n && n >= 1 && n <= 5000) ? n : null;
 }
+// PARTY → the canonical code the CRM stores (Party_Canonical: 'R'/'D'). null = no party filter.
+function partyFrom(message) {
+  const m = String(message || '');
+  if (/\b(republicans?|gop|conservatives?)\b/i.test(m)) return 'R';
+  if (/\b(democrats?|democratic|dnc)\b/i.test(m)) return 'D';
+  return null;
+}
+// GOVERNMENT LEVEL → 'state' | 'federal' | 'local' | null, mapped to Office_Role_Canonical families
+// (grounded in the real vocabulary: state_*/governor; us_*/fed_*; county_commission/city_council).
+function levelFrom(message) {
+  const m = String(message || '');
+  if (/\b(federal|congress(?:ional)?|u\.?s\.?\s+(?:rep(?:resentative)?|senator|house|senate|congress)|capitol hill)\b/i.test(m)) return 'federal';
+  if (/\b(state[-\s]?level|state (?:official\w*|legislat\w*|rep\w*|senators?|house|senate|assembly)|in the (?:state )?legislature)\b/i.test(m)) return 'state';
+  if (/\b(local|municipal|county|parish|city council|alderman|councilmember)\b/i.test(m)) return 'local';
+  return null;
+}
+const _LEVEL_SQL = {
+  state: "(Office_Role_Canonical LIKE 'state\\_%' ESCAPE '\\' OR Office_Role_Canonical IN ('governor','lt_governor'))",
+  federal: "(Office_Role_Canonical LIKE 'us\\_%' ESCAPE '\\' OR Office_Role_Canonical LIKE 'fed\\_%' ESCAPE '\\')",
+  local: "(Office_Role_Canonical IN ('county_commission','city_council','dc_council'))",
+};
+
+// THE ACCURATE COVERAGE COUNT. Builds a DIRECT COUNT over electoral.contact honoring the parsed filters, so
+// "how many republican state officials in LA" returns the REAL number on file — not the emailed-gather
+// subset (which under-reported 203 vs a true 1,410). Returns { applies, sql, filters } — applies=false when
+// the ask targets CORPORATE contacts (those live in the Puller, not this civic CRM) so the caller falls
+// back to the gather. Injection-safe: only validated codes are inlined (state 2-letter, party R/D, level +
+// kind from fixed maps). The count also splits withEmail + noLocation so the reply can be exact.
+function buildCoverageCountSql(ask = {}) {
+  if (ask.type === 'corporate') return { applies: false };   // corporate contacts aren't in electoral.contact
+  const w = ['deleted=0'];
+  const filters = [];
+  const st = ask.state && /^[A-Za-z]{2}$/.test(String(ask.state)) ? String(ask.state).toUpperCase() : null;
+  if (st) { w.push(`(UPPER(TRIM(State_Represented))='${st}' OR UPPER(TRIM(MailingState))='${st}')`); filters.push(st); }
+  const party = (ask.party === 'R' || ask.party === 'D') ? ask.party : null;
+  if (party) { w.push(`UPPER(TRIM(Party_Canonical))='${party}'`); filters.push(party === 'R' ? 'Republican' : 'Democrat'); }
+  if (_LEVEL_SQL[ask.level]) { w.push(_LEVEL_SQL[ask.level]); filters.push(`${ask.level}-level`); }
+  if (ask.type === 'elected') { w.push("(Contact_Kind__c='elected' OR Active_Elected__c=1)"); filters.push('elected'); }
+  const where = w.join(' AND ');
+  const sql = `SELECT COUNT(*) AS total, `
+    + `SUM(CASE WHEN Email IS NOT NULL AND TRIM(Email)<>'' THEN 1 ELSE 0 END) AS with_email, `
+    + `SUM(CASE WHEN (State_Represented IS NULL OR TRIM(State_Represented)='') AND (MailingState IS NULL OR TRIM(MailingState)='') THEN 1 ELSE 0 END) AS no_location `
+    + `FROM electoral.contact WHERE ${where}`;
+  return { applies: true, sql, filters };
+}
+
 // Detect a list-the-contacts-we-hold request. Returns { isQuery, sectors, company, limit }.
 function detect(message) {
   const m = String(message == null ? '' : message);
@@ -139,6 +185,7 @@ function detect(message) {
   const parishFilter = /\bparish(?:es)?\b/i.test(m) ? 'parish' : null;
   return { isQuery: true, sectors: sectorsFrom(m), company: companyFrom(m) || parishFilter, limit: countFrom(m),
            grade: g ? g.grade : null, gradeDir: g ? g.dir : 'gte', type: typeFrom(m), state: stateFrom(m),
+           party: partyFrom(m), level: levelFrom(m),
            // "How many do we have?" wants a NUMBER, not 200 rows. Only when there is no retrieval verb
            // alongside it — "list how many we have" is still a list ask.
            countOnly: counting && !LIST_INTENT.test(m) };
@@ -455,4 +502,4 @@ function label({ sectors = [], company = null, grade = null, gradeDir = 'gte', t
   return parts.length ? `${parts.join(' ')} ${noun}`.replace(/\s+/g, ' ').trim() : 'Contacts';
 }
 
-module.exports = { detect, select, toTable, withEvidence, evidenceCell, evidenceSummary, label, unmetFilters, gradeFrom, typeFrom, stateFrom, stateNameOf, isGovernmentCompany, isNonprofitCompany, domainKind, sectorsFrom, companyFrom, matchesSectors, GRADE_CAP, SECTORS };
+module.exports = { detect, select, toTable, withEvidence, evidenceCell, evidenceSummary, label, unmetFilters, gradeFrom, typeFrom, stateFrom, stateNameOf, partyFrom, levelFrom, buildCoverageCountSql, isGovernmentCompany, isNonprofitCompany, domainKind, sectorsFrom, companyFrom, matchesSectors, GRADE_CAP, SECTORS };

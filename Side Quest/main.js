@@ -6150,6 +6150,24 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           console.log(`[contacts-query] GEO GAP ${geoGap} (${ask.state}) → floated an enrichment offer`);
         } catch (e) { console.error('[contacts-query] gap offer set failed:', e.message); }
       }
+      // ACCURATE COVERAGE (2026-07-27): a count question is answered from a DIRECT DB COUNT over the CRM
+      // honoring the parsed filters (state / party / government-level / elected) — NOT the emailed gather,
+      // which under-reported (it showed 203 while the DB holds 1,410 LA contacts, because it only gathers
+      // rows that carry an email). buildCoverageCountSql returns the real total + with-email + no-location;
+      // override sel so the coverage line states the truth. applies=false (corporate) keeps the gather count.
+      let _covFilters = null;
+      if (ask.countOnly) {
+        try {
+          const _cc = cq.buildCoverageCountSql(ask);
+          if (_cc.applies && echoSuit && echoSuit.connected) {
+            const _rr = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql: _cc.sql, params: [] } });
+            if (_rr && _rr.ok) {
+              const _j = JSON.parse(_rr.text); const _row = _j && _j.rows && _j.rows[0];
+              if (_row) { sel.total = Number(_row.total) || 0; sel.withEmail = Number(_row.with_email) || 0; sel.noLocation = Number(_row.no_location) || 0; _covFilters = _cc.filters || []; }
+            }
+          }
+        } catch (e) { console.error('[contacts-query] accurate coverage count failed:', e.message); }
+      }
       if (ask.countOnly && sel.total > 0) {
         // COVERAGE / "have you finished collecting X?" — a count question wants a NUMBER FIRST, not a
         // 200-row canvas dump and not a hedge. The live 2026-07-26 miss: "have you finished collecting
@@ -6158,7 +6176,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         followupFired = true; contactsHandled = true;
         const _stateNm = ask.state ? (cq.stateNameOf(ask.state) || ask.state) : null;
         console.log(`[contacts-query] COVERAGE "${lbl}" → hold ${sel.total} (${sel.withEmail} w/ email)`);
-        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked a COVERAGE/count question about ${lbl}. LEAD WITH THE NUMBER, first sentence: you hold ${sel.total} ${lbl}${sel.withEmail ? ` (${sel.withEmail} with an email on file)` : ''}. ${sel.total} is a real, substantial holding — do NOT open with "I don't have" or hedge as if you have nothing. Then be honest about the BOUND: you can't certify it's EVERY ${_stateNm ? _stateNm + ' ' : ''}official (you have no authoritative master roster to check completeness against), so it's what you hold, not a guaranteed-complete set — and offer to keep filling gaps if he wants. Your voice, the number FIRST, one or two sentences.]` }); }
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked a COVERAGE/count question about ${lbl}. LEAD WITH THE NUMBER, first sentence: you hold ${sel.total} ${lbl}${_covFilters && _covFilters.length ? ` (scoped to ${_covFilters.join(', ')} — state that scope so the number isn't mistaken for a broader set)` : ''}${sel.withEmail ? ` (${sel.withEmail} with an email on file)` : ''}. ${sel.total} is a real, substantial holding — do NOT open with "I don't have" or hedge as if you have nothing. Then be honest about the BOUND: you can't certify it's EVERY ${_stateNm ? _stateNm + ' ' : ''}official (you have no authoritative master roster to check completeness against), so it's what you hold, not a guaranteed-complete set — and offer to keep filling gaps if he wants. Your voice, the number FIRST, one or two sentences.]` }); }
         catch (e) { console.error('[contacts-query] coverage voice line failed:', e.message); }
       } else if (sel.total > 0) {
         // EVIDENCE (R1) — what the encounter log can actually support for each name. The Puller's own
