@@ -99,6 +99,81 @@ function resolveReferent(turns, { maxBack = 12 } = {}) {
   return null;
 }
 
+// ── DEMONSTRATIVE ANAPHORA ("that Trump story", "this video", "the deal you mentioned") ──────────
+//
+// A second, distinct failure (live, 2026-07-26). Lucas: "What is that Trump story about?" — the prior
+// turn had established the story (a video tying Trump to a Colorado election). She answered with a
+// grab-bag of THREE UNRELATED Trump items, and her own reasoning showed why: "multiple recent
+// Trump-related stories exist … list the three known ones." The demonstrative "THAT" points to one
+// specific thing already in the conversation, but the message is NOT elliptical (it carries the subject
+// words "trump", "story"), so the ellipsis guard above never fires — and broad retrieval then resolves
+// the bare noun to whatever the ambient news beat is loudest about, not to the one just discussed.
+//
+// The tell is a demonstrative determiner (that/this/those/these) binding a REFERENCE NOUN — a word that
+// names a piece of discourse rather than a fresh subject (story, video, article, deal, bill, point…).
+// "that story" means "the specific story we were on", and its content lives in a recent turn, not in a
+// fresh retrieval. So we resolve it to that turn and anchor there, exactly like the elliptical case.
+// DELIBERATELY CONSERVATIVE: only fires on demonstrative + reference-noun AND only when a recent turn
+// actually mentions the distinctive modifier — otherwise it falls through and behaves as today.
+const DEMONSTRATIVES = new Set(['that', 'this', 'those', 'these']);
+const REF_NOUNS = new Set([
+  'story', 'stories', 'video', 'videos', 'clip', 'clips', 'article', 'articles', 'report', 'reports',
+  'piece', 'pieces', 'paper', 'papers', 'brief', 'deal', 'bill', 'thing', 'point', 'points', 'issue',
+  'issues', 'topic', 'news', 'item', 'items', 'quote', 'quotes', 'stat', 'stats', 'number', 'numbers',
+  'figure', 'figures', 'chart', 'doc', 'document', 'meeting', 'email', 'project', 'announcement',
+  'headline', 'headlines', 'claim', 'claims', 'situation', 'thread',
+]);
+
+// Detect a demonstrative reference and return { refNoun, keys } — `keys` are the distinctive modifier
+// words between the demonstrative and the reference noun ("that TRUMP story" → keys ['trump']), or the
+// reference noun itself when there is no modifier ("what's that about" is caught by ellipsis, not here).
+function demonstrativeReference(text) {
+  const toks = words(text);
+  for (let i = 0; i < toks.length; i++) {
+    if (!DEMONSTRATIVES.has(toks[i])) continue;
+    for (let j = i + 1; j <= Math.min(i + 3, toks.length - 1); j++) {
+      if (!REF_NOUNS.has(toks[j])) continue;
+      const mods = toks.slice(i + 1, j).map((w) => w.replace(/'s$/, '')).filter((w) => w.length >= 3 && !META_WORDS.has(w));
+      return { refNoun: toks[j], keys: mods.length ? mods : [toks[j]] };
+    }
+  }
+  return null;
+}
+
+// Resolve a demonstrative reference to the most recent prior turn (user OR assistant — she usually TOLD
+// him the thing) that mentions one of the distinctive keys. Returns { text, index, speaker, refNoun } or
+// null. `turns` is oldest-first { speaker, content }.
+function resolveDemonstrative(text, turns, { maxBack = 12 } = {}) {
+  const ref = demonstrativeReference(text);
+  if (!ref) return null;
+  const list = Array.isArray(turns) ? turns : [];
+  const self = String(text || '').trim();
+  let scanned = 0;
+  for (let i = list.length - 1; i >= 0 && scanned < maxBack; i--) {
+    const t = list[i];
+    if (!t || !t.content) continue;
+    // Skip the current message itself — recent-turn history usually includes the just-asked question,
+    // whose "that Trump story" would otherwise match its own key and resolve to itself.
+    if (String(t.content).trim() === self) continue;
+    scanned++;
+    const c = String(t.content).toLowerCase();
+    if (ref.keys.some((k) => c.includes(k))) return { text: String(t.content).trim(), index: i, speaker: t.speaker, refNoun: ref.refNoun };
+  }
+  return null;
+}
+
+// The prompt block for a demonstrative reference. Names the specific thing and forbids substituting a
+// different instance from the ambient news/notes — the exact failure (three other Trump stories).
+function buildDemonstrativeBlock(referentText, refNoun, userName = 'Lucas') {
+  const r = String(referentText || '').trim();
+  if (!r) return null;
+  return `WHAT "THAT ${String(refNoun || '').toUpperCase()}" REFERS TO — ${userName} is asking about the specific ${refNoun || 'thing'} you were both just discussing, NOT a new one. It is this, from a moment ago:
+
+  "${r.slice(0, 500)}"
+
+Answer about THAT specific ${refNoun || 'thing'} and nothing else. Do NOT substitute a different ${refNoun || 'one'} from your recent research, the news beat, or anything else in this prompt — if several similar items exist, the one he means is the one above. If you truly cannot tell which he means, ASK.`;
+}
+
 // The prompt block. States the referent and, just as importantly, forbids substituting a different one —
 // the observed failure was not a vague answer, it was a confident answer about the wrong subject.
 function buildBlock(referentText, userName = 'Lucas') {
@@ -111,4 +186,7 @@ function buildBlock(referentText, userName = 'Lucas') {
 Answer about THAT and nothing else. Do NOT substitute a different topic from your notes, your recent research, or anything else in this prompt — if material here is about some other subject, it is not what ${userName} asked for. If you genuinely cannot tell what is being referred to, ASK rather than picking one.`;
 }
 
-module.exports = { META_WORDS, isElliptical, subjectWords, resolveReferent, buildBlock, MAX_ELLIPTICAL_WORDS };
+module.exports = {
+  META_WORDS, isElliptical, subjectWords, resolveReferent, buildBlock, MAX_ELLIPTICAL_WORDS,
+  DEMONSTRATIVES, REF_NOUNS, demonstrativeReference, resolveDemonstrative, buildDemonstrativeBlock,
+};

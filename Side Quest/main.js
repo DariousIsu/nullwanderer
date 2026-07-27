@@ -5878,6 +5878,22 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         retrievedKnowledgeBlock = null; rkRows = [];
         console.log('[referent] elliptical follow-up with no resolvable referent → retrieval suppressed');
       }
+    } else {
+      // DEMONSTRATIVE ANAPHORA ("what is that Trump story about?"): not elliptical (it carries subject
+      // words), so the guard above skips it — but "THAT story" points to one specific thing already in
+      // the conversation. Broad retrieval resolves the bare noun to the loudest ambient news beat (live
+      // 2026-07-26: "that Trump story" → three UNRELATED Trump items instead of the one just discussed).
+      // Resolve it to the recent turn that actually raised it and anchor there. Only fires when a turn
+      // truly matches the distinctive key — otherwise it falls through and behaves as before.
+      const dem = ref.resolveDemonstrative(userMessage, db.getRecentTurns(30) || []);
+      if (dem) {
+        const block = ref.buildDemonstrativeBlock(dem.text, dem.refNoun, userName);
+        if (block) {
+          retrievedKnowledgeBlock = block;   // REPLACES the flooding retrieval with the specific referent
+          rkRows = [];
+          console.log(`[referent] demonstrative "that ${dem.refNoun}" → anchored to ${dem.speaker} turn: ${dem.text.slice(0, 70)}`);
+        }
+      }
     }
   } catch (e) { console.error('[main] referent resolve failed:', e.message); }
 

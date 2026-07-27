@@ -75,5 +75,37 @@ ok(r.subjectWords('more on Calcasieu').includes('calcasieu'), 'a proper noun sur
   ok(r.buildBlock('') === null && r.buildBlock(null) === null, 'no referent → no block');
 }
 
+// ── DEMONSTRATIVE ANAPHORA ("what is that Trump story about?") ─────────────────────────────────
+{
+  // the live failure: carries subject words, so it is NOT elliptical — the demonstrative path must own it
+  ok(r.isElliptical('what is that Trump story about?') === false,
+    'demonstrative question is NOT elliptical (has subject words) — ellipsis guard correctly skips it');
+  const d = r.demonstrativeReference('what is that Trump story about?');
+  ok(d && d.refNoun === 'story', 'detects the reference noun "story"');
+  ok(d && d.keys.includes('trump'), 'extracts the distinctive modifier "trump" as the search key');
+
+  ok(r.demonstrativeReference('what is the weather today') === null, 'no demonstrative+ref-noun → null (fresh subject left alone)');
+  ok(r.demonstrativeReference('tell me about the LAMP summit') === null, 'a plain "the X" without a demonstrative → null');
+
+  // resolve against a conversation where SHE told him the specific story
+  const convo = [
+    { speaker: 'user', content: 'anything major in the news?' },
+    { speaker: 'ai_said', content: 'A video surfaced tying Trump to the Melat Kiros election in Colorado.' },
+    { speaker: 'user', content: 'what is that Trump story about?' },
+  ];
+  const got = r.resolveDemonstrative('what is that Trump story about?', convo);
+  ok(got && /Melat Kiros/.test(got.text), 'anchors to the ASSISTANT turn that raised the specific story, not ambient news');
+  ok(got && got.speaker === 'ai_said', 'resolves across assistant turns (she usually told him the thing)');
+
+  // no matching prior turn → null (falls through, behaves as today — conservative)
+  ok(r.resolveDemonstrative('what is that Trump story about?', [{ speaker: 'user', content: 'hello there' }]) === null,
+    'no turn mentions the key → null (never suppresses retrieval on a guess)');
+
+  const b = r.buildDemonstrativeBlock('A video surfaced tying Trump to the Melat Kiros election.', 'story', 'Lucas');
+  ok(/Melat Kiros/.test(b), 'demonstrative block names the specific referent');
+  ok(/Do NOT substitute a different story/i.test(b), 'CRITICAL: forbids substituting another instance from the news beat — the observed failure');
+  ok(r.buildDemonstrativeBlock('', 'story') === null, 'no referent → no block');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);
