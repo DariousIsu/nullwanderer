@@ -9550,6 +9550,16 @@ async function autonomyTick() {
     const recent = db.getRecentTurns(6) || [];
     const lastTurnTs = recent.reduce((a, t) => Math.max(a, t && t.ts || 0), 0);
     if (now - lastTurnTs < 20 * 1000) { _logAutonomyDeferral('mid-exchange'); return; }
+    // MAIN-THREAD LOAD GOVERNOR — completing task #15 (2026-07-26). 2b reserved the CLOUD slot so her
+    // inner life proceeds while they talk, but NOTHING reserved MAIN-THREAD time — and this tick's LOCAL
+    // work (the manifest of her own stores: absence gaps, cardinality universes, uncorroborated clusters,
+    // plus graph-walk gap-ranking) is synchronous better-sqlite3 that MEASURED a ~3s event-loop stall
+    // mid-conversation (2026-07-26 lag sweep: stalls persisted inside the active window because this lane —
+    // the heaviest LOCAL one — never checked the governor, unlike decomp-sweep and directed which do).
+    // Yield it while he's actively conversing (30s window, ZOE_CONVO_ACTIVE_SEC); the lull resumes it. This
+    // is ORTHOGONAL to 2b (that governs cloud slots; this governs the event loop), and the inbox drain
+    // above already ran, so finished delegated work still returns on every tick.
+    if (_conversationActive()) { _logAutonomyDeferral('live-conversation (main-thread governor)'); return; }
     const chatLive = now - lastTurnTs < 3 * 60 * 1000;
     // COEXISTENCE (O0 + Lucas's concurrency ruling 2026-07-23: same-model concurrency is
     // unbounded; the constraint is ≤3 DISTINCT models in flight): a directed focus no longer
