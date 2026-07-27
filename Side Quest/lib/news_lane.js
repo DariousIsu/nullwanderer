@@ -1060,7 +1060,24 @@ async function runDailyPass({ dispatch, landDoc, extract, now = Date.now(), limi
   const eventRefs = stories.map((s) => s.event_ref).filter((x) => x != null);
   recordDayMarker({ dayStart, dayEnd: now, briefing: buildBriefing(stories, {}), storyCount: stories.length, promoted, eventRefs, now });
   if (log) log(`[news-daily] pass: ${promoted} new event objects, ${updated} updated, ${docs} docs, ${edges} edges${rejected ? `, ${rejected} reconcile-rejected` : ''} over ${stories.length} stories`);
-  return { promoted, updated, docs, edges, rejected, stories: stories.length, dayMarker: dayStart };
+
+  // EVENT INGEST (#24): ride this nightly cadence to land REAL convenings (Legistar civic calendars / the
+  // operator's gcal) as FUTURE-DATED `event` objects — the lane that fills the "1,810 events, 0 future-dated"
+  // gap (every existing event object is a news HEADLINE). Source-gated + DEFAULT OFF (ZOE_EVENT_LEGISTAR_CLIENTS
+  // / ZOE_EVENT_GCAL): a pure no-op until a source is configured, so this never changes behavior for anyone who
+  // hasn't opted in. Fail-soft — an event-ingest failure never touches the news result. Reuses the injected
+  // dispatch/landDoc + lives here (not main.js) to avoid a live main.js edit; hoist to its own lane later.
+  let eventsLanded = 0;
+  try {
+    const event_lane = require('./event_lane');
+    if (event_lane.eventSourcesConfigured()) {
+      const es = await event_lane.runEventPass({ dispatch, landDoc, now, log,
+        fetchConvenings: (a) => event_lane.liveFetchConvenings({ dispatch, now: (a && a.now) || now, log }) });
+      eventsLanded = (es && es.landed) || 0;
+    }
+  } catch (e) { if (log) log('[news-daily] event-ingest step failed (non-blocking): ' + (e && e.message)); }
+
+  return { promoted, updated, docs, edges, rejected, stories: stories.length, dayMarker: dayStart, eventsLanded };
 }
 
 module.exports = {

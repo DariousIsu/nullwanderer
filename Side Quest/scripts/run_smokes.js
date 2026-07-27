@@ -23,6 +23,7 @@ const smokes = [
   'smoke_manifest.js',
   'smoke_owner_world.js',
   'smoke_boot_grace.js',
+  'smoke_event_lane.js',
   'smoke_canvas_awareness.js',
   'smoke_unprompted.js',
   'smoke_greenlight.js',
