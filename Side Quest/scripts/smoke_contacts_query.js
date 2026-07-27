@@ -187,5 +187,16 @@ ok(CQ.detect('did you get all the parish officials?').isQuery, 'COVERAGE: "did y
 ok(CQ.detect('have you finished collecting the Louisiana officials?').countOnly === true, 'COVERAGE: a coverage ask is countOnly (a number/coverage, not 200 rows)');
 ok(!CQ.detect('how is the weather in Louisiana today?').isQuery, 'SAFETY: a non-contacts Louisiana question is NOT a contacts query');
 
+// COVERAGE-ANSWER FRAMING (main.js wiring): a countOnly coverage ask must LEAD WITH THE NUMBER, not hedge.
+{
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/if \(ask\.countOnly && sel\.total > 0\)/.test(src),
+    'main.js: a coverage/count ask has its own count-first branch (before the canvas-dump branch)');
+  ok(/LEAD WITH THE NUMBER/.test(src) && /do NOT open with "I don't have"/.test(src),
+    'main.js: the coverage answer leads with the held count and forbids the "I don\'t have" hedge');
+  ok(/can't certify it's EVERY/.test(src),
+    'main.js: the coverage answer states the honest completeness BOUND (held count is not a certified-complete roster)');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

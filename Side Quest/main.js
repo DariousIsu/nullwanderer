@@ -6121,7 +6121,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           console.log(`[contacts-query] GEO GAP ${geoGap} (${ask.state}) → floated an enrichment offer`);
         } catch (e) { console.error('[contacts-query] gap offer set failed:', e.message); }
       }
-      if (sel.total > 0) {
+      if (ask.countOnly && sel.total > 0) {
+        // COVERAGE / "have you finished collecting X?" — a count question wants a NUMBER FIRST, not a
+        // 200-row canvas dump and not a hedge. The live 2026-07-26 miss: "have you finished collecting
+        // every Louisiana official?" → "I don't have the complete list yet" while she actually held 178.
+        // Lead with the real count; be honest that a held count is not a certified-complete roster.
+        followupFired = true; contactsHandled = true;
+        const _stateNm = ask.state ? (cq.stateNameOf(ask.state) || ask.state) : null;
+        console.log(`[contacts-query] COVERAGE "${lbl}" → hold ${sel.total} (${sel.withEmail} w/ email)`);
+        try { await fireToolFollowup({ io, channel, sessionId, resultText: `[${userName} asked a COVERAGE/count question about ${lbl}. LEAD WITH THE NUMBER, first sentence: you hold ${sel.total} ${lbl}${sel.withEmail ? ` (${sel.withEmail} with an email on file)` : ''}. ${sel.total} is a real, substantial holding — do NOT open with "I don't have" or hedge as if you have nothing. Then be honest about the BOUND: you can't certify it's EVERY ${_stateNm ? _stateNm + ' ' : ''}official (you have no authoritative master roster to check completeness against), so it's what you hold, not a guaranteed-complete set — and offer to keep filling gaps if he wants. Your voice, the number FIRST, one or two sentences.]` }); }
+        catch (e) { console.error('[contacts-query] coverage voice line failed:', e.message); }
+      } else if (sel.total > 0) {
         // EVIDENCE (R1) — what the encounter log can actually support for each name. The Puller's own
         // confidence answers "how sure is the extractor"; this answers "how many independent sources
         // say so", which is a different question and frequently a much less flattering one.
