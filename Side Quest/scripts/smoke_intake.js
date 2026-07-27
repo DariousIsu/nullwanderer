@@ -151,6 +151,10 @@ ok(intake.subsetTopN('') === null, 'empty → null');
     const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'intake.js'), 'utf8');
     ok(/DECOMPOSE COMPOUND NAMES/.test(src) && /Rainey LAMP Summit at Disney/.test(src),
       'decompose prompt instructs the model to explode a compound name into whole + parts + relations');
+    ok(/NEVER fragment a SINGLE multi-word proper name/.test(src) && /Walt Disney World" is ONE place/.test(src),
+      'prompt forbids fragmenting a single proper name (the stray-"Walt" guard)');
+    ok(/you MUST also emit the relations/.test(src),
+      'prompt requires the connecting edges when a compound is split (objects without edges are half the answer)');
 
     // scripted parse: the model returns the whole event + its 3 embedded objects + 3 edges
     const COMPOUND = {
