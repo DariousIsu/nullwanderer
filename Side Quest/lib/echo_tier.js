@@ -88,6 +88,20 @@ const READ_FAMILY_RE = new RegExp('^(?:' + [
   'mozilla_observatory',
 ].join('|') + ')', 'i');
 
+// DESKTOP CONTROL — os_* (perception + actuation via UIA/SendInput) and gui_do (vision-grounded
+// control). These stay classified 'write' (so nothing changes on interactive turns), but are
+// EXPLICITLY admitted on the autonomous loop per operator authorization (2026-07-27, "Zoe should
+// see and touch everything — this machine is a dev scape").
+//
+// Two tools are deliberately EXCLUDED from the carve so the autonomous loop cannot escalate its own
+// authority: os_set_policy (would let her widen/relax capability grants) and os_approval_resolve
+// (would let her self-approve a sensitive-target confirmation). Both remain 'write' → blocked on
+// auto. The Echo-side gate still runs underneath everything here: os_* permission checks +
+// permissions.decide()'s SENSITIVE_TARGETS backstop (bank/login/credentials/regedit/…) still force
+// an operator confirmation even on the autonomous loop, so a sensitive action pauses rather than
+// firing unattended.
+const DESKTOP_CONTROL_RE = /^(?:os_(?!set_policy\b|approval_resolve\b)|gui_do)/i;
+
 // What kind of tool is this? Pure. Order: LOCKED → HEAVY → WRITE → READ → (unknown ⇒ write).
 function classifyTool(name) {
   const n = String(name || '').trim();
@@ -104,7 +118,7 @@ function classifyTool(name) {
 
 // May the autonomous loop use this tool? READ (lookups) and PROPOSE (gated, non-committing) are
 // allowed unattended; direct WRITE / HEAVY / LOCKED are not.
-function allowedOnAuto(name) { const t = classifyTool(name); return t === 'read' || t === 'propose'; }
+function allowedOnAuto(name) { const t = classifyTool(name); return t === 'read' || t === 'propose' || DESKTOP_CONTROL_RE.test(name); }
 
 // --- the curated MAINTENANCE allowlist (conductor slice 2d) ------------------------------------
 // The autonomous gate correctly blocks write/heavy — which also meant her own Python maintenance
@@ -141,6 +155,9 @@ function policyFor(name, { autonomous = false, maintain = false } = {}) {
   if (autonomous) {
     if (tier === 'read') return { allow: true, tier, reason: 'read tool — allowed on the autonomous loop' };
     if (tier === 'propose') return { allow: true, tier, reason: 'propose tool — allowed on the autonomous loop (non-committing; Echo gates promotion)' };
+    if (DESKTOP_CONTROL_RE.test(name)) {
+      return { allow: true, tier, reason: 'desktop control — operator-authorized on the autonomous loop 2026-07-27 (Echo os_* permission gate + sensitive-target confirmation still apply)' };
+    }
     if (maintain && MAINTAIN_NAMES.has(String(name || '').trim())) {
       return { allow: true, tier, reason: 'curated maintenance allowlist — forced-safe args (report/proposal only)' };
     }
