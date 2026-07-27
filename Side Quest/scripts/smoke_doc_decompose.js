@@ -365,6 +365,28 @@ function mockResolver(map) {
   ok(obs.filter(o => o.status === 'promoted').length === 5, '2c: 5 promoted observations (3 mints + 2 edges)');
   ok(obs.filter(o => o.status === 'held').length === 2, '2c: 2 held observations (the fall-through queue)');
   ok(obs.filter(o => o.status === 'promoted').every(o => o.grade === 'B' && o.url === DOC.url), '2c: every promoted claim is grade B, cited to the doc url');
+
+  // ── SLICE 3: the one-line gloss threads to the node SUMMARY (mint an object "fairly well filled out") ──
+  {
+    const gExtract = async () => ({
+      entities: [
+        { name: 'Acme Labs', type: 'organization', gloss: 'a semiconductor research firm in Ohio' },
+        { name: 'glass interposer', type: 'technology', gloss: 'a glass layer that routes signals in chip packaging' },
+        { name: 'Bare Org', type: 'organization' },   // no gloss → summary must be '' (no crash)
+      ],
+      relations: [],
+    });
+    const gResolve = mockResolver({ 'Acme Labs': { status: 'nil' }, 'Bare Org': { status: 'nil' } });   // concept skips resolve
+    const gCalls = [];
+    const gDispatch = async (tag) => { gCalls.push([tag.name, tag.args]); return { ok: true, text: '{"action":"created","status":"minted"}' }; };
+    await D.decomposeDoc({ title: 't', url: 'https://ex.com/paper', text: 'x'.repeat(50) }, { extract: gExtract, resolve: gResolve, dispatch: gDispatch, observe: () => {} });
+    const ent = gCalls.find(c => c[0] === 'propose_entity' && c[1].name === 'Acme Labs');
+    ok(ent && /semiconductor research firm/.test(ent[1].summary), 'Slice3: a minted ENTITY carries its gloss as the node summary');
+    const con = gCalls.find(c => c[0] === 'resolve_or_mint_concept' && c[1].name === 'glass interposer');
+    ok(con && /routes signals in chip packaging/.test(con[1].summary), 'Slice3: a minted CONCEPT carries its gloss as the concept summary');
+    const bare = gCalls.find(c => c[0] === 'propose_entity' && c[1].name === 'Bare Org');
+    ok(bare && bare[1].summary === '', 'Slice3: a gloss-less entity mints with an empty summary (no crash, no undefined)');
+  }
   const heldEdith = obs.find(o => o.sourceEntity === 'Edith Wilson' && o.status === 'held');
   ok(heldEdith && heldEdith.relation === 'exists', '2c: the ambiguous entity is held as an existence fall-through');
 

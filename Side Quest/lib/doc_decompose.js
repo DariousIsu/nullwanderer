@@ -238,12 +238,13 @@ function mergeCandidates(local = [], echo = []) {
     const type = canonType(e && e.type);
     const existing = byKey.get(key);
     if (!existing) {
-      byKey.set(key, { name, type, via: src });
+      byKey.set(key, { name, type, via: src, gloss: (e && e.gloss) || null });   // Slice 3: carry the one-line gloss through
       return;
     }
     // merge: prefer a specific type; prefer the longer/fuller surface name; mark seen-by-both
     if (existing.type === 'other' && type !== 'other') existing.type = type;
     if (name.length > existing.name.length) existing.name = name;
+    if (!existing.gloss && e && e.gloss) existing.gloss = e.gloss;   // fill a missing gloss from either candidate source
     if (existing.via !== src) existing.via = 'both';
   };
   for (const e of (Array.isArray(local) ? local : [])) add(e, 'local');
@@ -335,6 +336,7 @@ async function planEntities(entities, { resolve, context = null } = {}) {
   const tally = { reuse: 0, mint: 0, hold: 0, skip: 0 };
   for (const e of (Array.isArray(entities) ? entities : [])) {
     const d = await resolveExtracted(e, { resolve, context });
+    if (d && d.gloss == null && e && e.gloss) d.gloss = e.gloss;   // Slice 3: the one-line gloss rides to the mint as the node summary
     decisions.push(d);
     byKey.set(coreKey(d.name) || d.name.toLowerCase(), d);
     tally[d.action] = (tally[d.action] || 0) + 1;
@@ -408,9 +410,9 @@ function normalizeStateAliases(entities, relations) {
 
 // Phase C: lazy concept mint via the Echo resolve_or_mint_concept tool. Returns the status string
 // (minted|already_seen|corroborating|promoted|existing_live) or null on failure. Fail-soft.
-async function _mintConcept(dispatch, name, source) {
+async function _mintConcept(dispatch, name, source, gloss) {
   try {
-    const r = await dispatch({ kind: 'do', name: 'resolve_or_mint_concept', args: { name, source: source || 'doc', summary: '' } });
+    const r = await dispatch({ kind: 'do', name: 'resolve_or_mint_concept', args: { name, source: source || 'doc', summary: gloss || '' } });
     if (!r || !r.ok) return null;
     const obj = JSON.parse(r.text || '{}');
     return (obj && obj.status) || null;
@@ -499,8 +501,8 @@ async function _observe(observe, o) { if (typeof observe === 'function') { try {
 // against wiki/web (→ identity-confirmed, promotes) or it fades (Slice 6, TTL→archive). This is what lets a
 // "…WORKS_FOR Sheriff's Office" edge form now, with the office marked not-yet-substantiated, rather than
 // dropping the whole relation. Returns true when the node was proposed (caller adds it to `usable`).
-async function _mintUnsubstantiated(dispatch, observe, name, type, url) {
-  if (!await _proposeEntity(dispatch, name, type, '')) return false;
+async function _mintUnsubstantiated(dispatch, observe, name, type, url, gloss) {
+  if (!await _proposeEntity(dispatch, name, type, gloss || '')) return false;
   // THE TYPE MUST TRAVEL. This function takes `type`, proposes the entity WITH it, and then observed
   // without it — so every unsubstantiated mint produced a type-less observation, and decomp_encounters
   // refuses an untyped one by design (the type is part of the identity key; guessing it is a wrong
@@ -614,14 +616,14 @@ async function decomposeDoc(doc = {}, deps = {}) {
       // office (→ identity-confirmed) or it fades. The anti-dup intent is preserved by the state tag + churn,
       // not a permanent hold. (Reference types are never persons → no attractor risk.)
       if (REFERENCE_TYPES.has(d.type)) {
-        if (await _mintUnsubstantiated(dispatch, observe, d.name, d.type, url)) { usable.set(key, d.name); usableType.set(key, d.type); out.minted++; out.minted_unsub++; }
+        if (await _mintUnsubstantiated(dispatch, observe, d.name, d.type, url, d.gloss)) { usable.set(key, d.name); usableType.set(key, d.type); out.minted++; out.minted_unsub++; }
         else { out.held++; await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: 'D', confidence: 0, status: 'held', type: d.type }); }
         continue;
       }
       // NO topic gate — the graph absorbs every entity a cited doc yields; topic is not a
       // reality/quality axis (the existence gate below is). Off-domain ≠ untrue.
       const eg = CG.gateExistence('S1', docSources);         // doc-cited → grade B ≥ C floor → mint
-      if (eg.mint && await _proposeEntity(dispatch, d.name, d.type, '')) {
+      if (eg.mint && await _proposeEntity(dispatch, d.name, d.type, d.gloss || '')) {   // Slice 3: gloss → node summary
         usable.set(key, d.name); usableType.set(key, d.type); out.minted++;
         await _observe(observe, { sourceEntity: d.name, relation: 'exists', target: null, url, grade: eg.grade, confidence: eg.confidence, status: 'promoted', type: d.type });
       }
@@ -640,7 +642,7 @@ async function decomposeDoc(doc = {}, deps = {}) {
       // attractor guard is fully intact for bare names; the doc's relational structure only lifts it
       // for a named entity the edge disambiguates.
       const _anchored = anchoredNames.has(key) && _substantialName(d.name);
-      if ((UNSUB_MINTABLE_TYPES.has(d.type) || _anchored) && out.minted < maxEnt && await _mintUnsubstantiated(dispatch, observe, d.name, d.type, url)) {
+      if ((UNSUB_MINTABLE_TYPES.has(d.type) || _anchored) && out.minted < maxEnt && await _mintUnsubstantiated(dispatch, observe, d.name, d.type, url, d.gloss)) {
         usable.set(key, d.name); usableType.set(key, d.type); out.minted++; out.minted_unsub++;
         if (_anchored && !UNSUB_MINTABLE_TYPES.has(d.type)) out.minted_anchored = (out.minted_anchored || 0) + 1;
       } else {
@@ -663,7 +665,7 @@ async function decomposeDoc(doc = {}, deps = {}) {
       if (out.concepts_minted + out.concepts_promoted >= maxConcepts) { out.concepts_dropped = (out.concepts_dropped || 0) + 1; continue; }
       const nm = String((c && c.name) || '').trim(); const ck = nm.toLowerCase();
       if (!nm || seenC.has(ck)) continue; seenC.add(ck);
-      const st = await _mintConcept(dispatch, nm, url);
+      const st = await _mintConcept(dispatch, nm, url, c && c.gloss);   // Slice 3: gloss → concept summary
       if (st === 'minted') out.concepts_minted++;
       else if (st === 'promoted') out.concepts_promoted++;
       else if (st) out.concepts_seen++;
