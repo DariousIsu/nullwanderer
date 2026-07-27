@@ -48,6 +48,14 @@ const SEED_OBJECTS = [
     aliases: ['faith in elections', 'faith in elections team'],
     summary: 'The team Lucas reports to.',
     attrs: { relation: 'reports_to' }, source: 'k#8137' },
+  // LAMP — the Rainey-orbit network Lucas is in the rolls of (the "Rainey LAMP Summit" is its convening).
+  // In owner-world specifically so a bare "LAMP" in his world resolves HERE, not to a civic namesake or the
+  // Japanese indie band of the same name (a real confab that landed in his notes). Members live in the graph
+  // via Echo's LAMP-network CSV import; this is the owner-world anchor + his own membership edge.
+  { coord: 'org:work/lamp', type: 'org', ns: 'work', name: 'LAMP',
+    aliases: ['lamp', 'lamp network', 'the lamp network', 'lamp rolls'],
+    summary: 'The LAMP network in the Rainey Center\'s orbit — the policy/legislative network Lucas is in the rolls of; the "Rainey LAMP Summit" is its convening. NOT the Japanese indie band of the same name.',
+    attrs: { relation: 'network', context: 'rainey' }, source: 'owner_context, lamp_network_import' },
 ];
 
 // The owner-world edge structure — the neighborhood a coordinate dereferences into.
@@ -58,6 +66,8 @@ const SEED_EDGES = [
   ['person:owner/lucas', 'REPORTS_TO', 'org:work/faith-in-elections'],
   ['self:zoe/core', 'COMPANION_OF', 'person:owner/lucas'],
   ['self:zoe/core', 'WORKS_AT', 'org:work/rainey-center'],
+  ['org:work/rainey-center', 'RUNS', 'org:work/lamp'],       // LAMP is a Rainey-orbit network
+  ['person:owner/lucas', 'MEMBER_OF', 'org:work/lamp'],      // "I've been in the LAMP rolls"
 ];
 
 function _db(deps) { return (deps && deps.db) || require('./db'); }

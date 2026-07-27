@@ -17,9 +17,9 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
 
 // ── seed mints the core ──────────────────────────────────────────────────────────────────────────
 const r = ow.seed({});
-ok(r.objects === 6 && r.edges === 6, 'seed: mints the 6 core objects + 6 edges');
+ok(r.objects === 7 && r.edges === 8, 'seed: mints the 7 core objects + 8 edges (incl. LAMP)');
 const n = db.getDb().prepare('SELECT COUNT(*) c FROM owner_world').get().c;
-ok(n === 6, 'seed: rows landed in owner_world');
+ok(n === 7, 'seed: rows landed in owner_world');
 
 // ── resolution WINS on a bare first name (the Alice problem, solved) ──────────────────────────────
 const alice = ow.resolve('Alice', {});
@@ -29,6 +29,16 @@ ok(ow.resolve('Zo', {}).object.id === 'self:zoe/core', 'resolve: "Zo" → Zoe se
 ok(ow.resolve('Jay', {}).object.id === 'person:owner/raegan', 'resolve: alias "Jay" → Raegan');
 ok(ow.resolve('the Rainey Center', {}).object.id === 'org:work/rainey-center', 'resolve: multi-word alias with article');
 ok(ow.resolve('Alicia Vermont', {}) === null, 'resolve: a non-owner name returns null → caller falls through to civic');
+// LAMP (#41): a bare "LAMP" in his world → the Rainey-orbit network, NOT the civic namesake or the band.
+ok(ow.resolve('LAMP', {}) && ow.resolve('LAMP', {}).object.id === 'org:work/lamp', 'resolve: bare "LAMP" → the owner-world network coordinate');
+ok(ow.resolve('the LAMP network', {}) && ow.resolve('the LAMP network', {}).object.id === 'org:work/lamp', 'resolve: multi-word LAMP alias');
+ok(/NOT the Japanese/i.test(ow.resolve('LAMP', {}).object.summary), 'resolve: the LAMP summary explicitly disambiguates from the band confab');
+{
+  const lamp = ow.get('org:work/lamp');
+  const lrels = new Set((lamp.edges || []).map(e => `${e.rel}:${e.src === 'org:work/lamp' ? e.dst : e.src}`));
+  ok([...lrels].some(x => x === 'MEMBER_OF:person:owner/lucas'), 'get: LAMP → Lucas MEMBER_OF edge ("in the LAMP rolls")');
+  ok([...lrels].some(x => x === 'RUNS:org:work/rainey-center'), 'get: LAMP ← Rainey Center RUNS edge');
+}
 
 // ── a coordinate dereferences to its NEIGHBORHOOD ────────────────────────────────────────────────
 const lucas = ow.get('person:owner/lucas', {});
@@ -41,8 +51,8 @@ ok(zoe.edges.some(e => e.rel === 'COMPANION_OF' && e.dst === 'person:owner/lucas
 
 // ── seed is idempotent (safe to run every boot) ──────────────────────────────────────────────────
 ow.seed({});
-ok(db.getDb().prepare('SELECT COUNT(*) c FROM owner_world').get().c === 6, 'seed: idempotent — no duplicate objects on re-seed');
-ok(db.getDb().prepare('SELECT COUNT(*) c FROM owner_world_edges').get().c === 6, 'seed: idempotent — no duplicate edges');
+ok(db.getDb().prepare('SELECT COUNT(*) c FROM owner_world').get().c === 7, 'seed: idempotent — no duplicate objects on re-seed');
+ok(db.getDb().prepare('SELECT COUNT(*) c FROM owner_world_edges').get().c === 8, 'seed: idempotent — no duplicate edges');
 
 try { fs.unlinkSync(tmp); } catch {}
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
