@@ -16,6 +16,7 @@
  */
 'use strict';
 const B = require('./puller_beliefs');
+const { isJunkPersonName } = require('./puller_name_gate');   // #43: don't mint role/org/mailbox "people"
 
 const clean = (s) => String(s == null ? '' : s).trim();
 const key = (name, company) => `${clean(name).toLowerCase()}|${clean(company).toLowerCase()}`;
@@ -57,7 +58,7 @@ function ingestRows(db, rows, opts = {}) {
   else for (const t of db.listTargets({ limit: 1e7 })) seen.set(key(t.name, t.company), t.id);   // fallback: test doubles / older db instances
   const patternStates = new Map();   // domain -> pure belief state
   const landed = [];   // every row mapped to a target ({name, company, targetId, created}) — feeds the People rail
-  const stats = { rows: 0, targets: 0, skippedDup: 0, noName: 0, observations: 0, beliefs: 0,
+  const stats = { rows: 0, targets: 0, skippedDup: 0, noName: 0, junkName: 0, observations: 0, beliefs: 0,
                   patternHits: 0, generic: 0, domains: 0 };
 
   for (const r of (rows || [])) {
@@ -67,6 +68,10 @@ function ingestRows(db, rows, opts = {}) {
     const conf = parseConfidence(r.confidence);
     const kind = tierKind(conf);
     if (!name) { stats.noName++; continue; }
+    // #43 NAME-QUALITY GATE: a role ("Finance Director"), an org ("Smith Family Trust"), or a mailbox
+    // ("General Inquiries") is not a person — minting it as a person target burns a web pull on a human
+    // who does not exist. Drop it here (counted), before it ever reaches createTarget.
+    if (isJunkPersonName(name)) { stats.junkName = (stats.junkName || 0) + 1; continue; }
     const k = key(name, company);
     if (seen.has(k)) { stats.skippedDup++; landed.push({ name, company, targetId: seen.get(k), created: false }); continue; }
 

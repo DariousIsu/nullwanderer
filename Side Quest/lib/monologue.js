@@ -2080,6 +2080,9 @@ async function runPullerMove(_recentTurns, { mode = 'both', candidatesOverride =
   };
   const createTargetFn = ({ name, company, domain, title, sourceUrl }) => {
     try {
+      // #43 NAME-QUALITY GATE: web discovery surfaces roles/orgs/mailboxes as "people"; minting them
+      // burns the next pull on a non-existent human. Reject junk here (the walk treats null as "skip").
+      if (require('../studio/puller_name_gate').isJunkPersonName(name)) return null;
       const t = pdb.createTarget({ kind: 'person', name, company: company || null, domain: domain || null, notes: title || null });
       if (t && title) { try { pdb.addObservation(t.id, { attr: 'role', value: title, kind: 'web', source: 'web-prospect', sourceUrl }); pdb.upsertBelief(t.id, 'role', { value: title, confidence: 0.6, derivation: 'web-prospect' }); } catch {} }
       return t ? t.id : null;

@@ -124,6 +124,7 @@ const smokes = [
   'smoke_email_prefilter.js',
   'smoke_bounce_normalizer.js',
   'smoke_puller_bounce_ingest.js',
+  'smoke_puller_name_gate.js',
   'smoke_puller_revise.js',
   'smoke_puller_migration.js',
   'smoke_owner_identity.js',

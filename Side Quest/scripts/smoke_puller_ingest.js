@@ -37,10 +37,12 @@ const rows = [
   { confidence: '30%', name: 'Press Team', company: 'Acme', email: 'press@acme.com' },
   { confidence: '95%', name: 'Mark Miller', company: 'AES', email: 'mark.miller@aes.com' }, // dup (name|company)
   { confidence: '80%', name: '', company: 'X', email: 'a@x.com' },                          // no name
+  { confidence: '95%', name: 'Finance Director', company: 'AES', email: 'finance@aes.com' }, // #43: a ROLE, not a person → dropped
 ];
 
 const s = I.ingestRows(DB, rows, { source: 'test' });
-ok('targets created = 5', s.targets === 5);
+ok('targets created = 5', s.targets === 5);   // the role row does NOT become a 6th target
+ok('#43 junkName = 1 (role dropped before createTarget)', s.junkName === 1);
 ok('skippedDup = 1', s.skippedDup === 1);
 ok('noName = 1', s.noName === 1);
 ok('generic counted = 1', s.generic === 1);

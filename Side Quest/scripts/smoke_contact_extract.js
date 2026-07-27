@@ -91,7 +91,10 @@ ok(fr.length === 2, `flyer: exactly the 2 people, 0 places (got ${fr.length})`);
 pdb.init({ path: ':memory:' });
 const url = 'docstore:4242';
 const stats = ingest.ingestRows(pdb, rows, { source: 'doc:Faith in Elections roster', sourceUrl: url, obsKind: 'doc' });
-ok(stats.targets === 4, `ingestRows: minted 4 new targets — the "new objects" (got ${stats.targets})`);
+// #43 NAME-QUALITY GATE: "Rainey Center" is an ORG, not a person — it is dropped from the person store
+// (an org minted as a person would burn a web pull on a human who doesn't exist). Brad, Jane Doe, Ted land.
+ok(stats.targets === 3, `ingestRows: minted 3 PEOPLE targets — the org "Rainey Center" is gated out (got ${stats.targets})`);
+ok(stats.junkName === 1, `ingestRows: #43 gate dropped the 1 org-name ("Rainey Center") — junkName=${stats.junkName}`);
 ok(stats.observations >= 7 && stats.beliefs >= 7, `ingestRows: landed observations + beliefs (obs=${stats.observations}, beliefs=${stats.beliefs})`);
 
 const bt = pdb.findTargetByEmail('brad.overcash@ncleg.gov');
@@ -106,7 +109,7 @@ ok(bbeliefs.some(b => b.type === 'role' && b.value === 'State Senator'), 'ingest
 
 // --- idempotent: re-dropping the same doc doesn't double-count ---
 const again = ingest.ingestRows(pdb, rows, { source: 'doc:Faith in Elections roster', sourceUrl: url, obsKind: 'doc' });
-ok(again.targets === 0 && again.skippedDup === 4, 'ingestRows: re-drop is idempotent (0 new, 4 already tracked)');
+ok(again.targets === 0 && again.skippedDup === 3, 'ingestRows: re-drop is idempotent (0 new, 3 already tracked; the org re-gated)');
 
 // --- findTargetByName (Slice B — meeting mention → known target) ---
 ok(pdb.findTargetByName('Ted Alexander') && pdb.findTargetByName('Ted Alexander').name === 'Ted Alexander', 'findTargetByName: exact full name');
