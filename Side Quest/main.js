@@ -7229,62 +7229,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
                                       // truncation rate is measurable per writer against the 18% baseline
   let cloudComplete = false;          // the cloud stream ended normally (not stalled) — see below
   let cloudThinking = '';             // the reasoning channel — scanned for tool tags, kept as interior, never spoken
-  // ── KEYSTONE S2b — CONVERSATION AS AN AGENT LOOP (flagged conv.agentloop, default OFF) ───────────
-  // Reason about intent, dereference coordinates for depth, answer as herself. Runs BEFORE the cloud
-  // one-shot; on success it feeds <say> to the parser and marks the turn written so both the cloud block
-  // below AND the local generation are skipped. Fail-soft: any miss falls straight through to the existing
-  // pipeline — this can only ADD a path, never remove one. Flag off ⇒ zero behavior change.
-  let agentWrote = false;
-  try {
-    const _ca = require('./lib/conversation_agent');
-    // The agent loop handles CONVERSATION (talk, feel, brainstorm, answer-from-memory). It DEFERS work it
-    // cannot do in-loop — a URL to FETCH, a directed task, a contacts/research pull — to the existing
-    // pipeline, which owns the web + operator lanes. Without this it refused "process this URL and give me
-    // a rundown" for lack of a fetch tool (live, 2026-07-25). Defer = leave agentWrote false → pipeline runs.
-    const _agentDefer = /https?:\/\/|\bwww\./i.test(userMessage) || _isDirectedTaskR
-      || (routerOn && ['task', 'contacts', 'research'].includes(turnRoute.route));
-    // DON'T double-answer: if another handler already produced the reply (contacts list, ambiguity ask,
-    // social-enrich, deliverable poll…), stand down. The contacts handler routes 'contacts' but the route
-    // can be reassigned downstream, so gate on the handled flags too, not just the route (live 2026-07-26:
-    // the contacts handler answered AND the agent loop wrote a second, wrong reply over it).
-    if (_ca.isOn() && !_agentDefer && !followupFired && !contactsHandled) {
-      const _mani = require('./lib/manifest');
-      const _ow = require('./lib/owner_world');
-      const _ctx = (recentTurns || []).slice(-4).map((t) => `${t.speaker || '?'}: ${String(t.content || '').replace(/\s+/g, ' ').slice(0, 160)}`).join('\n');
-      const _man = await _mani.buildManifest(userMessage, { userName, context: _ctx });
-      const _byCoord = new Map((_man.objects || []).map((o) => [o.coord, o]));
-      const _fmtHood = (g) => {
-        const edges = (g.edges || []).map((e) => `${e.rel} ${e.src === g.coord ? e.dst : e.src}`).join('; ');
-        return `${g.name}${g.summary ? ' — ' + g.summary : ''}${edges ? ' | ' + edges : ''}`;
-      };
-      const _res = await _ca.run({
-        userMessage, manifestText: _mani.render(_man), context: _ctx,
-        deps: {
-          complete: async (prompt) => {
-            const r = await require('./lib/cloud_logic').streamCloud([{ role: 'user', content: prompt }], {
-              model: (() => { try { return db.getMeta('model.replier') || null; } catch { return null; } })(),
-              inactivityMs: 180000, think: false, temperature: 0.6,
-            });
-            return (r && r.text) || '';
-          },
-          deref: async (coord) => {
-            try { const g = _ow.get(coord); if (g) return _fmtHood(g); } catch {}
-            const row = _byCoord.get(coord);
-            return (row && row.gloss) ? `${row.surface}: ${row.gloss}` : 'no additional detail held for that coordinate';
-          },
-          // web left null for v1 → an honest gap admission ("I don't hold that yet"); web deref is next.
-        },
-      });
-      if (_res && _res.reply && _res.reply.trim()) {
-        parser.feed('<say>' + _res.reply.trim() + '</say>');
-        replyWriter = 'conversation_agent';
-        agentWrote = true;
-        console.log(`[conv-agent] wrote the reply — ${_res.steps} step(s), ${_res.derefs} deref(s)`);
-
-      }
-    }
-  } catch (e) { console.error('[conv-agent] failed, falling back to pipeline:', e.message); }
-  if (cloudWritesReply && !agentWrote) {
+  // ── THE MERGE (2026-07-26) — ONE agent loop, driven by the coordinate manifest ───────────────────
+  // KEYSTONE S2b briefly ran conversation through a SEPARATE local mini-loop (lib/conversation_agent)
+  // with a starved toolbox — deref + gloss only, no db/contacts/canvas/web. That was the "two loops
+  // that fight" bug: local ran badly instead of just PACKAGING. It is retired. There is now ONE loop —
+  // the cloud tool-followup loop below, which already has the full 549-tool surface — and the manifest
+  // it reasons over rides in the package's `references` slot (see the manifest wiring above), with the
+  // owner-world/self coordinates dereferenceable via <recall coord="…"/>. Local packages, the cloud runs.
+  if (cloudWritesReply) {
     try {
       // GIVE THE CLOUD THE TOOL SURFACE. The suit is stripped from `messages` above on cloud-owned
       // turns — correct while the local 12b wrote, because it fumbled tool JSON and the hard-coded
@@ -7383,29 +7335,44 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // was wrong: that meta is unset, a null model returns the 8192 floor, and the package was
         // cut to 22,118 chars while the real call ran at 131,072 — the manifest and tool menu were
         // trimmed to their own trim-markers and the cloud answered with no tools.
-        // REFERENCES — what the NAMES in his message point at. intake.decompose already returns the
-        // full {objects, relations, constraints} plan; the chat path used to collapse it to a single
-        // mention (mention._pickObject) and drop the rest, so "the Rainey all-hands, then Electrify
-        // America at 1630" resolved at most one of four references and the prompt had nowhere to put
-        // a second one. Owner vocabulary leads the resolver because the graph is measurably WRONG on
-        // his own shorthand — "Rainey" best-ranks to a summit event.
+        // REFERENCES — what the NAMES in his message point at, as the COORDINATE MANIFEST (THE MERGE,
+        // 2026-07-26). Every object Lucas named is resolved to a stable coordinate (<type>:<ns>/<id>)
+        // that addresses its whole neighborhood — self:zoe/core is always mounted, the owner-world
+        // (Alice→daughter, Rainey→his employer) wins over civic namesakes, and unresolved mentions are
+        // surfaced as honest GAPS instead of silently guessed. The cloud reasons over the addresses and
+        // DEREFERENCES depth on demand (<recall coord="…"/>). This replaces the prose reference list and
+        // is the single "what the names mean" surface for BOTH conversation and work — the former
+        // conversation_agent mini-loop (S2b) is retired; local packages, the cloud runs the one loop.
         //
-        // Cost control: decomposition is a cloud call, so it runs only when the message plausibly
-        // NAMES something (a capitalized run or a meeting word). "ok thanks" pays nothing.
+        // Cost control: buildManifest runs a decompose (cloud call), so it only fires when the message
+        // plausibly NAMES something (a capitalized run or a meeting word). "ok thanks" pays nothing.
         let references = '';
         try {
-          if (/(?:^|\s)[A-Z][A-Za-z'&.-]+(?:\s+[A-Z][A-Za-z'&.-]+)*/.test(userMessage) || require('./lib/references').MEETING_RE.test(userMessage)) {
-            const intake = require('./lib/intake');
-            const raw = await intake.decompose(userMessage, { recent: (recentTurns || []).slice(-4).map((t) => `${t.speaker || '?'}: ${String(t.content || '').replace(/\s+/g, ' ').slice(0, 160)}`).join('\n') });
-            const objects = (raw && Array.isArray(raw.objects)) ? raw.objects.filter((o) => o && o.op === 'resolve') : [];
-            // gcalOpts carries Echo's venv bridge — it is how a Meet code becomes "Rainey Weekly
-            // Huddle". Passed in rather than reached for, so references stays offline-testable and a
-            // disconnected Google costs the meeting NAMES and nothing else.
-            const rb = await require('./lib/references').build(userMessage, { objects, deps: { gcalOpts: gcalOpts() } });
-            references = rb.text || '';
-            if (references) console.log(`[references] ${rb.refs.filter((r) => r.status === 'resolved').length} resolved / ${rb.refs.filter((r) => r.status !== 'resolved').length} open${rb.series.length ? ` · ${rb.series.length} recurring series` : ''}`);
+          const _namesSomething = /(?:^|\s)[A-Z][A-Za-z'&.-]+(?:\s+[A-Z][A-Za-z'&.-]+)*/.test(userMessage);
+          const _isMeetingTurn = require('./lib/references').MEETING_RE.test(userMessage);
+          if (_namesSomething || _isMeetingTurn) {
+            const _mani = require('./lib/manifest');
+            const _ctx = (recentTurns || []).slice(-4).map((t) => `${t.speaker || '?'}: ${String(t.content || '').replace(/\s+/g, ' ').slice(0, 160)}`).join('\n');
+            const _man = await _mani.buildManifest(userMessage, { userName, context: _ctx });
+            references = _mani.render(_man);
+            const _held = (_man.objects || []).filter((o) => o.status === 'held' || o.status === 'self').length;
+            if (references) console.log(`[manifest] ${(_man.objects || []).length} coord(s), ${_held} held, ${(_man.gaps || []).length} gap(s)`);
+            // MEETING SIDECAR — the recurring-series + roster block the coordinate manifest does not
+            // build: encounter-grade "who I've sat with", labelled from the calendar (gcalOpts carries
+            // Echo's venv bridge). Meeting turns only; any failure costs the sidecar, never the turn.
+            if (_isMeetingTurn) {
+              try {
+                const _ref = require('./lib/references');
+                let _series = _ref.meetingSeries() || [];
+                let _labels = new Map();
+                try { _labels = await _ref.meetingLabels({ gcalOpts: gcalOpts() }); } catch {}
+                _series = _series.map((s) => { const l = _labels.get(s.code); return l ? { ...s, title: l.title || null, invited: l.invited || [] } : s; });
+                const _seriesText = _ref.render([], _series, { includeSeries: true });
+                if (_seriesText) { references += (references ? '\n\n' : '') + _seriesText; console.log(`[manifest] + ${_series.length} recurring meeting series`); }
+              } catch (e) { console.error('[main] meeting sidecar failed:', e.message); }
+            }
           }
-        } catch (e) { console.error('[main] references failed:', e.message); }
+        } catch (e) { console.error('[main] manifest/references failed:', e.message); }
         // GROUNDING + MEMORY SECTIONS (audit 2026-07-22) — the RAW material, sized by the package's
         // own budgeter, not by the distiller. The distilled brief exists to protect the 8k LOCAL
         // voice, but it also replaced what the CLOUD writer saw: the 131k window measured 9-10% fit
@@ -7719,10 +7686,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     ...(replyWriter !== MODEL ? echoSuitLib.parseEchoTags(cloudThinking || '') : [])
   ];
   // <recall ref="rID"/> — expand a memory marker (reflection/reading/note) to its full text on
-  // demand. Always allowed (it's reading her own memory, not a work tool).
+  // demand. <recall coord="type:ns/id"/> — dereference an OBJECT COORDINATE from the turn manifest to
+  // its neighborhood (THE MERGE). Always allowed (it's reading her own memory, not a work tool). Scanned
+  // in the reasoning channel too on cloud-written turns — a reasoning model authors its tags there, and
+  // the coord deref is how the cloud goes deep on a manifest address, so it MUST be seen there.
   const recallTagsToRun = [
     ...recallLib.parseRecallTags(thought || ''),
-    ...recallLib.parseRecallTags(say || '')
+    ...recallLib.parseRecallTags(say || ''),
+    ...(replyWriter !== MODEL ? recallLib.parseRecallTags(cloudThinking || '') : [])
   ];
   // MID-CONVERSATION DIG (slice 4b — lib/dig.js): <dig>question</dig> forks a LINE OF INQUIRY born
   // from THIS conversation while the reply goes out normally; the finding returns to the chat in
@@ -8245,19 +8216,39 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     })().catch(err => console.error('[main] echo async error:', err.message));
   }
 
-  // Background: expand any <recall ref="rID"/> memory markers she emitted → the full reflection /
-  // reading / note, fed back via one tool-followup so she has it THIS turn and can use it.
+  // Background: expand any <recall ref="rID"/> memory markers AND <recall coord="type:ns/id"/> object
+  // coordinates she emitted → the full reflection/reading/note or the coordinate's neighborhood, fed
+  // back so she has it THIS turn. ALL derefs are batched into ONE tool-followup: the merge turn commonly
+  // derefs several coords at once (self:zoe/core + person:owner/alice), and the old first-tag-only gate
+  // silently dropped every deref after the first.
   if (recallTagsToRun.length > 0) {
     (async () => {
-      for (const ref of recallTagsToRun.slice(0, 3)) {
+      const _ownerGet = (c) => { try { return require('./lib/owner_world').get(c); } catch { return null; } };
+      const _cap = require('./lib/config').toolResultChars();
+      const parts = [];
+      for (const ref of recallTagsToRun.slice(0, 4)) {
         try {
-          const r = recallLib.resolveRecall(db, ref);
-          const content = `Recalled ${ref.ref}:\n${(r.text || '').slice(0, require('./lib/config').toolResultChars())}`;
-          try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(recalled ${ref.ref})${r.ok ? '' : ' ⚠'}`, type: 'reading', query: ref.ref }); } catch {}
-          if (!followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: content }); }
-          console.log(`[main] recall ${ref.ref}: ${r.ok ? 'ok' : 'miss'}`);
-        } catch (err) { console.error('[main] recall error:', err.message); }
+          let r;
+          if (ref.kind === 'coord') {
+            // OWNER-WORLD first (local, authoritative — nothing else reaches self/family/org).
+            r = recallLib.resolveCoord(ref.coord, { ownerGet: _ownerGet });
+            // CIVIC coordinate → best-effort graph pull via the suit (the id is the coord's tail).
+            if (!r.ok && echoSuit && echoSuit.connected) {
+              try {
+                const id = ref.coord.split('/').pop();
+                const er = await echoSuit.dispatch({ kind: 'do', name: 'get_entity', args: { name: id } });
+                if (er && er.ok && er.text && String(er.text).trim()) r = { ok: true, ref: ref.coord, text: String(er.text).slice(0, _cap) };
+              } catch {}
+            }
+          } else {
+            r = recallLib.resolveRecall(db, ref);
+          }
+          parts.push(`${ref.kind === 'coord' ? 'Coordinate' : 'Recalled'} ${ref.ref}:\n${String(r.text || '').slice(0, _cap)}`);
+          try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: Date.now(), ts: Date.now(), content: `(${ref.kind === 'coord' ? 'deref' : 'recalled'} ${ref.ref})${r.ok ? '' : ' ⚠'}`, type: 'reading', query: ref.ref }); } catch {}
+          console.log(`[main] ${ref.kind === 'coord' ? 'deref' : 'recall'} ${ref.ref}: ${r.ok ? 'ok' : 'miss'}`);
+        } catch (err) { console.error('[main] recall/deref error:', err.message); }
       }
+      if (parts.length && !followupFired) { followupFired = true; fireToolFollowup({ io, channel, sessionId, resultText: parts.join('\n\n') }); }
     })().catch(err => console.error('[main] recall async error:', err.message));
   }
 

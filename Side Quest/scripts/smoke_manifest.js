@@ -67,7 +67,8 @@ ok(man.relations.length === 1 && man.relations[0].type === 'ATTENDING', 'assembl
 
 // ── render is deterministic + carries the contract ──────────────────────────────────────────────
 const txt = M.render(man);
-ok(/state as fact ONLY what has a coordinate/i.test(txt), 'render: carries the anti-confab contract');
+ok(/state as fact ONLY what a coordinate or a tool result/i.test(txt), 'render: carries the anti-confab contract');
+ok(/<recall coord="the-coordinate"\/>/.test(txt), 'render: documents the coord-deref tag syntax');
 ok(/GAPS \(you hold nothing yet/.test(txt) && /place:short\/disney/.test(txt), 'render: names the gaps explicitly so the cloud admits them');
 
 // ── AMBIGUOUS path: bare "LAMP" with no work-context collides ────────────────────────────────────

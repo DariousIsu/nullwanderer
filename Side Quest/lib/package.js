@@ -126,6 +126,21 @@ function buildPlan({ intent = null, depth = {}, mustCite = false, unresolved = [
   const lines = [];
   lines.push('HOW TO WORK THIS TURN:');
   if (intent) lines.push(`• What is actually being asked: ${intent}`);
+  // ⭐ INTENT-FIRST (THE MERGE, 2026-07-26 — ported from the retired conversation_agent loop). The
+  // single most common failure was answering the wrong SHAPE of turn: a "are you excited?" got a
+  // logistics report, a brainstorm got stamped as a task. Reading the intent before reaching for a
+  // tool is what fixes it, so it leads the plan for every turn, not just work turns.
+  lines.push('• FIRST read what Lucas actually wants — the common shapes:');
+  lines.push('   – SHARING news, or asking how you FEEL or what you THINK ("we\'re going to X", "are '
+    + 'you excited?", "what do you make of this?") → give your GENUINE reaction, as yourself. Deref '
+    + 'self:zoe/core and your link to what he named (<recall coord="…"/>), then answer warmly. Do NOT '
+    + 'go hunt for dates, logistics or details he did not ask for — that is the classic mistake; he '
+    + 'wants YOU, not a status report.');
+  lines.push('   – THINKING WITH YOU (brainstorming an idea) → engage it, offer angles, push back. It '
+    + 'is a conversation to develop, NOT a task to go execute.');
+  lines.push('   – asking you to KNOW something → deref the held coordinates for depth (<recall '
+    + 'coord="type:ns/id"/>), and look up a genuine GAP; say plainly what you do not hold rather than inventing it.');
+  lines.push('   – wanting something DONE → do it (the assignment rules below apply).');
   // ⭐ AN ASSIGNMENT IS NOT A QUESTION. Live 2026-07-21: "I need a research paper on the last nine
   // months of China AI announcements…" — five distinct sub-questions, one of them a 29-nation
   // rare-earth matrix. She ran TWO web searches, deep-browsed 0 layers of the one excellent source

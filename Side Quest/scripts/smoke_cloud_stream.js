@@ -96,7 +96,7 @@ function fakeStream(tokens, { throwAfter = -1 } = {}) {
       'the writer gate is its own flag, defaulting ON and still kill-switchable');
     ok(/[^\n]*if \(cloudWritesReply\) \{/.test(src),
       'EVERY reply routes to the cloud writer, not just the factual ones');
-    ok(/if \(cloudOwnsAnswer \|\| personalFactQ\) \{/.test(src),
+    ok(/if \(cloudOwnsAnswer \|\| personalFactQ(?: \|\| scheduleQ)?\) \{/.test(src),
       'the retrieval ladder stays gated — five tiers against "good morning" is what broke 2026-07-21');
     ok(/streamCloud\(messages,/.test(src), 'the cloud is handed the SAME package the local side assembled');
     ok(/onToken: \(chunk\) => parser\.feed\(chunk\)/.test(src), 'cloud tokens go through the same parser/leak-filter/emit');

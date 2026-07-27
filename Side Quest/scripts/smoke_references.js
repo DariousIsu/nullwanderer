@@ -250,12 +250,16 @@ const GRAPH = async (mention) => {
       'SAFETY: under starvation the section is dropped whole — a half-list is what she then guesses at');
   }
 
-  // ── the wiring survives in main.js ────────────────────────────────────────────────────────────
+  // ── the wiring survives in main.js (THE MERGE, 2026-07-26) ────────────────────────────────────
+  // The package's object surface is now the COORDINATE MANIFEST (lib/manifest), not references.build.
+  // references the LIBRARY still feeds the MEETING SIDECAR into the same `references` package slot on
+  // meeting turns — so the slot survives, the object resolution moved to the manifest.
   {
     const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-    ok(/sections: \{ identity:[^\n]*references,/.test(src), 'the turn passes references into the package');
-    ok(/intake\.decompose\(userMessage/.test(src), 'built from the FULL decomposition, not a single mention');
-    ok(/\[references\]/.test(src), 'and it reports what it resolved — an unmeasured section is assumed fine');
+    ok(/sections: \{ identity:[^\n]*references,/.test(src), 'the turn passes the references slot into the package');
+    ok(/_mani\.buildManifest\(userMessage/.test(src), 'object surface built from the coordinate manifest (full decomposition inside it)');
+    ok(/_ref\.meetingSeries\(\)/.test(src), 'references lib still feeds the meeting-series sidecar on meeting turns');
+    ok(/\[manifest\]/.test(src), 'and it reports what it resolved — an unmeasured section is assumed fine');
   }
 
   console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);

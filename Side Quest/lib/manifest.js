@@ -156,7 +156,10 @@ function render(manifest) {
   const lines = [];
   lines.push(`USER: ${manifest.user}`);
   lines.push(`INTENT: ${manifest.intent}`);
-  lines.push('OBJECTS (state as fact ONLY what has a coordinate; deref for depth):');
+  lines.push('OBJECTS — every name Lucas used, resolved to a COORDINATE that addresses its whole '
+    + 'neighborhood. self:zoe/core is you, always available. State as fact ONLY what a coordinate or a '
+    + 'tool result gives you. To go DEEP on one, emit <recall coord="the-coordinate"/> and its '
+    + 'neighborhood (summary + edges) comes back to you THIS turn:');
   for (const o of manifest.objects) {
     const g = o.gloss ? `  ${o.gloss}` : '';
     const amb = o.candidates ? `  [ambiguous: ${o.candidates.join(' | ')}]` : '';

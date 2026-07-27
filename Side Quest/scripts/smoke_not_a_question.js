@@ -81,7 +81,7 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
     ok(!/if \(cloudOwnsAnswer && process\.env\.ZOE_CLOUD_WRITES_REPLY/.test(m),
       'REGRESSION: the old conjunction (factual-only writing) is gone');
     // the ladder must STAY gated — this is the half that costs five retrieval tiers
-    ok(/if \(cloudOwnsAnswer \|\| personalFactQ\) \{/.test(m),
+    ok(/if \(cloudOwnsAnswer \|\| personalFactQ(?: \|\| scheduleQ)?\) \{/.test(m),
       'the grounding ladder is still gated on cloudOwnsAnswer, not on the writer');
     ok(/mustCite: cloudOwnsAnswer/.test(m),
       'citation duty still tracks the FACTUAL turn, not the writer');
