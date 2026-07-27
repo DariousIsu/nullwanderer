@@ -130,32 +130,40 @@ function levelFrom(message) {
   return null;
 }
 const _LEVEL_SQL = {
-  state: "(Office_Role_Canonical LIKE 'state\\_%' ESCAPE '\\' OR Office_Role_Canonical IN ('governor','lt_governor'))",
-  federal: "(Office_Role_Canonical LIKE 'us\\_%' ESCAPE '\\' OR Office_Role_Canonical LIKE 'fed\\_%' ESCAPE '\\')",
-  local: "(Office_Role_Canonical IN ('county_commission','city_council','dc_council'))",
+  state: "(c.Office_Role_Canonical LIKE 'state\\_%' ESCAPE '\\' OR c.Office_Role_Canonical IN ('governor','lt_governor'))",
+  federal: "(c.Office_Role_Canonical LIKE 'us\\_%' ESCAPE '\\' OR c.Office_Role_Canonical LIKE 'fed\\_%' ESCAPE '\\')",
+  // LOCAL: role-coding for local government is almost entirely absent (county_commission=3, city_council=2),
+  // so parish/county bodies are reachable ONLY by ACCOUNT NAME — 788 contacts carry "Parish" in the account
+  // with no role code (the Richland Parish miss). Match role codes OR the parish/county account.
+  local: "(c.Office_Role_Canonical IN ('county_commission','city_council','dc_council') OR LOWER(a.Name) LIKE '%parish%' OR LOWER(a.Name) LIKE '%county%')",
 };
+// Escape a value for a LIKE literal: backslash the LIKE metacharacters and double single-quotes (injection-safe).
+function _likeSafe(s) { return String(s == null ? '' : s).toLowerCase().replace(/[\\%_]/g, (x) => '\\' + x).replace(/'/g, "''").trim(); }
 
-// THE ACCURATE COVERAGE COUNT. Builds a DIRECT COUNT over electoral.contact honoring the parsed filters, so
-// "how many republican state officials in LA" returns the REAL number on file — not the emailed-gather
-// subset (which under-reported 203 vs a true 1,410). Returns { applies, sql, filters } — applies=false when
-// the ask targets CORPORATE contacts (those live in the Puller, not this civic CRM) so the caller falls
-// back to the gather. Injection-safe: only validated codes are inlined (state 2-letter, party R/D, level +
-// kind from fixed maps). The count also splits withEmail + noLocation so the reply can be exact.
+// THE ACCURATE COVERAGE COUNT. A DIRECT COUNT over electoral.contact (LEFT JOIN account) honoring the parsed
+// filters, so "how many republican state officials in LA" returns the REAL number — not the emailed-gather
+// subset (203 vs a true 1,410). Returns { applies, sql, filters }; applies=false for CORPORATE asks (those
+// live in the Puller, not this civic CRM) so the caller falls back to the gather. Injection-safe: validated
+// codes inlined; account-name matches escaped. A NAMED ORG / parish ("Richland Parish", company='parish') is
+// reached by account name and is the GEOGRAPHIC ANCHOR — parish contacts are frequently stateless, so a
+// strict state filter would drop them (why "we don't have anything for that Parish" was false).
 function buildCoverageCountSql(ask = {}) {
   if (ask.type === 'corporate') return { applies: false };   // corporate contacts aren't in electoral.contact
-  const w = ['deleted=0'];
+  const w = ['c.deleted=0'];
   const filters = [];
+  const comp = ask.company ? _likeSafe(ask.company) : '';
   const st = ask.state && /^[A-Za-z]{2}$/.test(String(ask.state)) ? String(ask.state).toUpperCase() : null;
-  if (st) { w.push(`(UPPER(TRIM(State_Represented))='${st}' OR UPPER(TRIM(MailingState))='${st}')`); filters.push(st); }
+  if (comp) { w.push(`LOWER(a.Name) LIKE '%${comp}%' ESCAPE '\\'`); filters.push(String(ask.company)); }
+  else if (st) { w.push(`(UPPER(TRIM(c.State_Represented))='${st}' OR UPPER(TRIM(c.MailingState))='${st}')`); filters.push(st); }
   const party = (ask.party === 'R' || ask.party === 'D') ? ask.party : null;
-  if (party) { w.push(`UPPER(TRIM(Party_Canonical))='${party}'`); filters.push(party === 'R' ? 'Republican' : 'Democrat'); }
-  if (_LEVEL_SQL[ask.level]) { w.push(_LEVEL_SQL[ask.level]); filters.push(`${ask.level}-level`); }
-  if (ask.type === 'elected') { w.push("(Contact_Kind__c='elected' OR Active_Elected__c=1)"); filters.push('elected'); }
+  if (party) { w.push(`UPPER(TRIM(c.Party_Canonical))='${party}'`); filters.push(party === 'R' ? 'Republican' : 'Democrat'); }
+  if (_LEVEL_SQL[ask.level]) { w.push(_LEVEL_SQL[ask.level]); filters.push(ask.level === 'local' ? 'local/parish' : `${ask.level}-level`); }
+  if (ask.type === 'elected') { w.push("(c.Contact_Kind__c='elected' OR c.Active_Elected__c=1)"); filters.push('elected'); }
   const where = w.join(' AND ');
   const sql = `SELECT COUNT(*) AS total, `
-    + `SUM(CASE WHEN Email IS NOT NULL AND TRIM(Email)<>'' THEN 1 ELSE 0 END) AS with_email, `
-    + `SUM(CASE WHEN (State_Represented IS NULL OR TRIM(State_Represented)='') AND (MailingState IS NULL OR TRIM(MailingState)='') THEN 1 ELSE 0 END) AS no_location `
-    + `FROM electoral.contact WHERE ${where}`;
+    + `SUM(CASE WHEN c.Email IS NOT NULL AND TRIM(c.Email)<>'' THEN 1 ELSE 0 END) AS with_email, `
+    + `SUM(CASE WHEN (c.State_Represented IS NULL OR TRIM(c.State_Represented)='') AND (c.MailingState IS NULL OR TRIM(c.MailingState)='') THEN 1 ELSE 0 END) AS no_location `
+    + `FROM electoral.contact c LEFT JOIN electoral.account a ON a.id=c.AccountId WHERE ${where}`;
   return { applies: true, sql, filters };
 }
 
