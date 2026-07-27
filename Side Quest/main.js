@@ -522,6 +522,7 @@ app.whenReady().then(() => {
   };
   const maybeRunCuration = async () => {
     if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_CURATION_ENABLED || '').trim())) return;
+    if (_bootGraceActive()) { _logBootDefer('curation'); return; }   // cold-boot stutter: let the app warm first
     if (curationRunning) return;
     if (Date.now() - parseInt(db.getMeta('last_curation_pass_at') || '0', 10) < CURATION_MIN_GAP_MS) return;
     if (Date.now() - lastUserTurnTs < CURATION_IDLE_MS) return;    // not while recently active
@@ -720,6 +721,7 @@ app.whenReady().then(() => {
   // + regression-auto-kill. Pull the plug LIVE (no reboot): audit_state.autopilot='off'.
   const maybeRunAudit = async () => {
     if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_CURATION_ENABLED || '').trim())) return;  // same master switch
+    if (_bootGraceActive()) { _logBootDefer('audit'); return; }   // cold-boot stutter: let the app + engine warm first
     if (auditRunning) return;
     if (!echoSuit || !echoSuit.connected) return;
     if (Date.now() - parseInt(db.getMeta('last_audit_dispatch_at') || '0', 10) < AUDIT_MIN_GAP_MS) return;  // floor
@@ -781,6 +783,7 @@ app.whenReady().then(() => {
   let ingestRunning = false;
   const maybeDrainIngest = async () => {
     if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_INGEST_ENABLED || '').trim())) return;  // gate-less lane: OFF until armed
+    if (_bootGraceActive()) { _logBootDefer('ingest'); return; }   // cold-boot stutter: hold catch-up drain while warming
     if (ingestRunning) return;
     if (!echoSuit || !echoSuit.connected) return;
     if (Date.now() - parseInt(db.getMeta('last_ingest_drain_at') || '0', 10) < INGEST_MIN_GAP_MS) return;  // floor
@@ -964,6 +967,7 @@ app.whenReady().then(() => {
   let kgDedupRunning = false;
   const maybeRunKgDedup = async () => {
     if (!/^(1|true|yes|on)$/i.test(String(process.env.ZOE_KG_DEDUP_ENABLED || '').trim())) return;  // arm deliberately
+    if (_bootGraceActive()) { _logBootDefer('kg-dedup'); return; }   // cold-boot stutter: hold the dedup sweep while warming
     if (kgDedupRunning) return;
     if (!echoSuit || !echoSuit.connected) return;
     if (Date.now() - parseInt(db.getMeta('last_kg_dedup_at') || '0', 10) < KGDEDUP_MIN_GAP_MS) return;  // floor
@@ -1674,6 +1678,7 @@ app.whenReady().then(() => {
     let _sweepInFlight = false;
     const runDecomposeSweep = async () => {
       if (_sweepInFlight) return;
+      if (_bootGraceActive()) { _logBootDefer('decomp-sweep'); return; }              // cold-boot stutter: heaviest LOCAL-sync lane — hold while the app warms
       if (_conversationActive()) { _logLoadDeferral('decomp-sweep'); return; }        // heavy synchronous doc decomposition — yield the main thread while he types
       _sweepInFlight = true;
       try {
@@ -3825,6 +3830,24 @@ function _logLoadDeferral(lane) {                       // audible (once / 5min 
   if (now - (_loadDeferLogAt[lane] || 0) < 5 * 60 * 1000) return;
   _loadDeferLogAt[lane] = now;
   console.log(`[load] ${lane} yielded to live conversation — main-thread balance (typing stays responsive)`);
+}
+
+// BOOT GRACE — the cold-boot stutter (profiled 2026-07-26/27): a fresh boot after downtime accrues a
+// catch-up backlog, and every heavy lane wants to run AT ONCE while the app + Echo are still warming
+// (models loading, MCP attaching, first render). Their synchronous better-sqlite3 traffic (~25-30% of
+// main-thread time, get+all) then BUNCHES into intermittent multi-second event-loop stalls — the freeze
+// Lucas felt. No single villain; the trigger is the simultaneous cold-start surge. Hold the heavy
+// catch-up lanes for the first BOOT_GRACE window so the app settles first, then they resume at full tilt.
+// Steady-state behavior is unchanged (the grace is a one-time boot window). Overridable / disable-able
+// via ZOE_BOOT_GRACE_SEC (0 = off).
+const _bootAt = Date.now();
+const BOOT_GRACE_MS = (parseFloat(process.env.ZOE_BOOT_GRACE_SEC) || 90) * 1000;
+function _bootGraceActive() { return BOOT_GRACE_MS > 0 && (Date.now() - _bootAt) < BOOT_GRACE_MS; }
+const _bootDeferLogged = {};
+function _logBootDefer(lane) {
+  if (_bootDeferLogged[lane]) return;
+  _bootDeferLogged[lane] = true;
+  console.log(`[boot-grace] ${lane} held for the first ${Math.round(BOOT_GRACE_MS / 1000)}s — letting the app + engine warm before catch-up churn`);
 }
 
 let _canvasSnapReason = null, _canvasSnapLoggedAt = 0;
