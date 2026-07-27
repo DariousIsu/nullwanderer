@@ -27,6 +27,7 @@ const smokes = [
   'smoke_echo_tier_desktop.js',
   'smoke_dispatch_timeout.js',
   'smoke_coverage_count.js',
+  'smoke_meeting_grounding.js',
   'smoke_canvas_awareness.js',
   'smoke_unprompted.js',
   'smoke_greenlight.js',

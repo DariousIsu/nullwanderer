@@ -49,14 +49,33 @@ function _endMs(ev) {
   return Number.isFinite(ms) ? ms : _startMs(ev);
 }
 
-function _people(ev, max = 6) {
+function _attendeeNames(ev) {
   const raw = (ev && ev.attendees) || [];
-  const names = raw
+  return raw
     .filter((a) => a && !a.self && !a.resource && a.responseStatus !== 'declined')
     .map((a) => (a.displayName || String(a.email || '').split('@')[0] || '').trim())
     .filter(Boolean);
+}
+function _people(ev, max = 6) {
+  const names = _attendeeNames(ev);
   if (!names.length) return '';
   const shown = names.slice(0, max);
+  return shown.join(', ') + (names.length > max ? ` (+${names.length - max} more)` : '');
+}
+// GROUNDED attendees for an UPCOMING meeting: each name carries what we actually HOLD on them, so the
+// model can't invent a bio. heldLookup(name) → a short held string ("Comms Dir, House — crm") or null
+// (we hold nothing → mark NOT IN OUR RECORDS, an explicit licence to research, never to assert). When no
+// lookup is wired, mark UNVERIFIED (still forbids assertion). This is the anti-confabulation grounding:
+// the Laila Pirnazar miss was the lane inventing a Rainey-Center profile for a person we hold nothing on.
+function _peopleGrounded(ev, heldLookup, max = 6) {
+  const names = _attendeeNames(ev);
+  if (!names.length) return '';
+  const tag = (nm) => {
+    if (typeof heldLookup !== 'function') return `${nm} [unverified — hold nothing unless our records say so]`;
+    let h = null; try { h = heldLookup(nm); } catch { h = null; }
+    return h ? `${nm} [held: ${String(h).slice(0, 80)}]` : `${nm} [NOT IN OUR RECORDS — research before stating anything]`;
+  };
+  const shown = names.slice(0, max).map(tag);
   return shown.join(', ') + (names.length > max ? ` (+${names.length - max} more)` : '');
 }
 
@@ -72,7 +91,7 @@ function _venue(ev) {
 
 /** PURE: Google events → { lines, text }. lines = the facts; text = lines + the conversational
  *  guidance (chat gets text; the autonomy manifest gets lines — no chat-voice in a manifest). */
-function formatWeek(items, { now = Date.now() } = {}) {
+function formatWeek(items, { now = Date.now(), heldLookup = null } = {}) {
   const evs = (items || [])
     .filter((e) => e && e.status !== 'cancelled' && _startMs(e) != null)
     .map((e) => ({ ev: e, start: _startMs(e), end: _endMs(e) }))
@@ -83,22 +102,28 @@ function formatWeek(items, { now = Date.now() } = {}) {
 
   const line = (x, isPast) => {
     const e = x.ev;
-    const who = _people(e);
+    const who = isPast ? _people(e) : _peopleGrounded(e, heldLookup);   // upcoming attendees carry HELD grounding
     const where = _venue(e);
     const allDay = !((e.start || {}).dateTime);
     return `  ${isPast ? 'Past' : 'Coming'}: ${_fmt(x.start, { withTime: !allDay, utcDate: allDay })} — "${String(e.summary || '(untitled)').slice(0, 80)}"`
       + (where ? ` (${where})` : '') + (who ? `, with ${who}` : '');
   };
+  // The anti-confabulation rule travels WITH the calendar facts (into the autonomy manifest too, not just
+  // chat guidance): an attendee tag is the ONLY licence to state facts about them.
+  const groundRule = upcoming.some((x) => _attendeeNames(x.ev).length)
+    ? `\n  ⚠️ GROUNDING: state a fact about a meeting attendee ONLY from their [held: …] tag or a live search THIS run. `
+      + `An attendee tagged [NOT IN OUR RECORDS] / [unverified] means you hold NOTHING on them — do NOT invent an employer, role, publication, or link; research them or tell him you don't have anything on them yet.`
+    : '';
   const lines = [
     ...past.map((x) => line(x, true)),
     ...upcoming.map((x) => line(x, false)),
-  ].join('\n');
+  ].join('\n') + groundRule;
 
   const text = `HIS WEEK (live from his calendar — you can see this):\n${lines}\n`
     + `When he talks about his day or week, these are the real events behind it — connect to them naturally: `
     + `ask how a past one went, or about the substance or people of a coming one. One thread at a time, `
     + `conversationally; never recite the list. A person or meeting here you know nothing about is a real `
-    + `question worth asking him.`;
+    + `question worth asking him — never a bio to invent.`;
   return { lines, text };
 }
 
@@ -120,7 +145,7 @@ async function refresh({ gcalOpts = {}, deps = {}, now = Date.now(), force = fal
       timeMax: new Date(now + AHEAD_DAYS * 86400e3).toISOString(),
       maxResults: 50,
     }, gcalOpts);
-    const { lines, text } = formatWeek((r && r.items) || [], { now });
+    const { lines, text } = formatWeek((r && r.items) || [], { now, heldLookup: deps.heldLookup || null });
     _cache = { text, lines, at: now };
     if (text) console.log(`[week] calendar context refreshed — ${lines.split('\n').length} event line(s)`);
   } catch (e) {
