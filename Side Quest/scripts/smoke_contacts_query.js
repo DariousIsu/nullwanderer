@@ -149,8 +149,8 @@ ok(CQ.select(rows, { company: 'duke' }).total === 1, 'select: company filter →
 
 // --- toTable + label ---
 const tbl = CQ.toTable(energy);
-ok(tbl.headers.length === 5 && tbl.headers[4] === 'Confidence' && tbl.rows.length === 3 && tbl.rows[0][0] === 'Hi Conf' && /with email/.test(tbl.caption), 'toTable: headers (incl. Confidence) + rows sorted by confidence + caption');
-ok(tbl.rows[0][4] === '96%', 'toTable: confidence rendered as a %');
+ok(tbl.headers.length === 6 && tbl.headers[4] === 'Puller conf.' && tbl.headers[5] === 'Evidence' && tbl.rows.length === 3 && tbl.rows[0][0] === 'Hi Conf' && /with email/.test(tbl.caption), 'toTable: 6 headers (Puller conf. + Evidence, one per rendered column) + rows sorted by confidence + caption');
+ok(tbl.rows[0].length === 6 && tbl.rows[0][4] === '96%' && tbl.rows[0][5] === 'not in evidence log', 'toTable: every row has a cell under every header — confidence as %, evidence label last');
 ok(CQ.label({ sectors: ['energy'] }) === 'energy contacts' && CQ.label({ company: 'Duke Energy' }) === 'Duke Energy contacts', 'label: sector / company titles');
 ok(CQ.label({ sectors: ['thinktank'] }) === 'think tank contacts', 'label: thinktank → "think tank contacts"');
 

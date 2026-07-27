@@ -130,7 +130,14 @@ function detect(message) {
   const counting = COUNT_INTENT.test(m) || COVERAGE_INTENT.test(m);          // a coverage/progress ask counts as a count
   if (!LIST_INTENT.test(m) && !WHO_HAVE.test(m) && !counting) return { isQuery: false };
   const g = gradeFrom(m);
-  return { isQuery: true, sectors: sectorsFrom(m), company: companyFrom(m), limit: countFrom(m),
+  // PARISH — Louisiana's county-equivalent. "parish"/"parishes" is an ORG filter: every LA parish
+  // government account carries "Parish" in its name, and select() matches `company` as a substring of
+  // the account name, so company='parish' narrows to parish-affiliated contacts. Without this,
+  // "Louisiana parish contacts" set only state=LA and returned the ENTIRE Louisiana book (the
+  // precision miss diagnosed 2026-07-27). A specifically-named company ("at Cameron Parish") still
+  // wins — this only fills in when no explicit company was extracted.
+  const parishFilter = /\bparish(?:es)?\b/i.test(m) ? 'parish' : null;
+  return { isQuery: true, sectors: sectorsFrom(m), company: companyFrom(m) || parishFilter, limit: countFrom(m),
            grade: g ? g.grade : null, gradeDir: g ? g.dir : 'gte', type: typeFrom(m), state: stateFrom(m),
            // "How many do we have?" wants a NUMBER, not 200 rows. Only when there is no retrieval verb
            // alongside it — "list how many we have" is still a list ask.
@@ -338,7 +345,10 @@ function select(rows, { sectors = [], company = null, limit = 200, grade = null,
   }
   const total = deduped.length;
   const shown = deduped.slice(0, Math.max(1, limit || 200));
-  return { rows: shown, total, shown: shown.length, withEmail: deduped.filter(r => r.email).length, geoGap, headers: ['Name', 'Email', 'Company', 'Title', 'Confidence'] };
+  // Headers must describe the SIX columns toTable() renders (name, email, company, title, puller
+  // confidence, evidence). Returning five here left the final "Evidence" column headerless on the
+  // canvas and mislabeled the puller-confidence column as the generic "Confidence".
+  return { rows: shown, total, shown: shown.length, withEmail: deduped.filter(r => r.email).length, geoGap, headers: ['Name', 'Email', 'Company', 'Title', 'Puller conf.', 'Evidence'] };
 }
 
 // ── EVIDENCE (R1) ────────────────────────────────────────────────────────────────────────────────
