@@ -3108,7 +3108,7 @@ function buildExportDocHtml(title, inner) {
 // Export a canvas document to a real file the operator can keep: Markdown is done in the renderer (Blob);
 // PDF (Electron printToPDF, no dep) and Word (.docx via html-to-docx) render the doc's HTML here, write to
 // data/exports/, and open it. Renderer passes the already-sanitized display HTML + the title + a format.
-ipcMain.handle('canvas:export-doc', async (_e, { title = 'Document', html = '', markdown = '', format = 'pdf' } = {}) => {
+ipcMain.handle('canvas:export-doc', async (_e, { title = 'Document', html = '', markdown = '', csv = '', format = 'pdf' } = {}) => {
   try {
     const fs = require('fs');
     const exportsDir = path.join(__dirname, 'data', 'exports');
@@ -3126,6 +3126,12 @@ ipcMain.handle('canvas:export-doc', async (_e, { title = 'Document', html = '', 
       const buf = await require('./lib/md_to_docx').buildDocxBuffer({ title, markdown });
       outPath = path.join(exportsDir, `${safe}-${stamp}.docx`);
       fs.writeFileSync(outPath, buf);
+    } else if (format === 'csv') {
+      // CSV ← already-serialized table text from the renderer. Written here (not via a renderer
+      // blob-anchor, which this Electron build silently drops) with a UTF-8 BOM so Excel opens it
+      // in the right encoding; shell.openPath then hands it to the OS default (Excel/Sheets).
+      outPath = path.join(exportsDir, `${safe}-${stamp}.csv`);
+      fs.writeFileSync(outPath, '﻿' + String(csv || ''), 'utf8');
     } else return { ok: false, error: `unsupported format: ${format}` };
     try { await shell.openPath(outPath); } catch (e) { console.error('[canvas] open export failed:', e.message); }
     console.log(`[canvas] exported "${title}" → ${outPath}`);
@@ -8768,14 +8774,38 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
 
 // Thin IPC wrapper — the renderer's chat turn. Streams say-tokens + UI events
 // to the sender; the shared runChatTurn does the work.
+// TURN WATCHDOG ceiling. runChatTurn PAUSES the background loops (monologue/heartbeat/continuity/
+// reflection/self-dialogue) at the top and RESUMES them at each of ~20 branch exits. A turn that
+// stalls on an unbounded await (wedged Echo suit / stuck model stream) reaches none of those exits,
+// so the loops used to stay paused FOREVER — the observed "she froze mid-turn, ELECTRIC SHEEP panel
+// stopped ticking, typing indicator never cleared" hang (2026-07-27). Generous: normal chat turns
+// finish in seconds; deep-dives ACK fast and run on a separate lane. 2.5 min.
+const CHAT_TURN_WATCHDOG_MS = 150000;
+
 ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
   let sayBuf = '';   // accumulate her spoken tokens so the companion can voice the whole reply on complete
-  return runChatTurn(userMessage, attachments, {
-    emit: (t) => { sayBuf += t; try { event.sender.send('chat:say-token', t); } catch {} },
-    onComplete: (info) => { try { event.sender.send('chat:complete', info); } catch {} try { speakThroughCompanion(sayBuf); } catch {} sayBuf = ''; },
-    onError: (e) => { try { event.sender.send('chat:error', e); } catch {} },
-    busy: (text) => { try { event.sender.send('chat:busy', text); } catch {} }
-  });
+  // Safety net for a stalled turn: force-resume the background loops (idempotent — a normal turn has
+  // already resumed and clears the timer below) and surface an error so the typing indicator clears.
+  // It does NOT cancel the turn (that would break legitimate streaming); it only guarantees recovery.
+  const _forceResume = () => { try { resumeMonologue(); resumeHeartbeat(); resumeContinuity(); resumeReflection(); selfDialogue.resume(); } catch {} };
+  const _watchdog = setTimeout(() => {
+    _forceResume();
+    console.error(`[chat] turn watchdog (${CHAT_TURN_WATCHDOG_MS}ms) fired — force-resumed background loops after a stalled turn`);
+    try { event.sender.send('chat:error', "That turn stalled on my end — I've reset and I'm listening again."); } catch {}
+  }, CHAT_TURN_WATCHDOG_MS);
+  try {
+    return await runChatTurn(userMessage, attachments, {
+      emit: (t) => { sayBuf += t; try { event.sender.send('chat:say-token', t); } catch {} },
+      onComplete: (info) => { try { event.sender.send('chat:complete', info); } catch {} try { speakThroughCompanion(sayBuf); } catch {} sayBuf = ''; },
+      onError: (e) => { try { event.sender.send('chat:error', e); } catch {} },
+      busy: (text) => { try { event.sender.send('chat:busy', text); } catch {} }
+    });
+  } catch (e) {
+    _forceResume();   // an outright throw must also recover the loops
+    throw e;
+  } finally {
+    clearTimeout(_watchdog);
+  }
 });
 
 // Auto-continuation: a chat-initiated tool (observe-screen / browse-read / file-read /

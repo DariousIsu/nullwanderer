@@ -294,7 +294,7 @@ board.addEventListener('click', (e) => {
 
 // Download a table block as CSV (Excel/Sheets-openable). Serialized from the rendered rows so it
 // matches exactly what the operator sees; BOM + CRLF for Excel, RFC-4180 quoting.
-board.addEventListener('click', (e) => {
+board.addEventListener('click', async (e) => {
   const dl = e.target.closest('.tbl-dl'); if (!dl) return;
   e.stopPropagation();
   const table = dl.closest('.b-tablewrap') && dl.closest('.b-tablewrap').querySelector('table');
@@ -306,12 +306,19 @@ board.addEventListener('click', (e) => {
     }).join(',')
   ).join('\r\n');
   const card = dl.closest('.doc'), titleEl = card && card.querySelector('.dtitle');
-  const name = ((titleEl && titleEl.textContent) || 'contacts').trim().replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || 'contacts';
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
-  a.download = name + '.csv';
-  document.body.appendChild(a); a.click();
-  setTimeout(() => { try { URL.revokeObjectURL(a.href); } catch {} a.remove(); }, 0);
+  const name = ((titleEl && titleEl.textContent) || 'contacts').trim() || 'contacts';
+  // Route through the main process: renderer blob-anchor downloads are silently dropped in this
+  // Electron build (the doc-level ⬇ export uses this same IPC path). Main writes the .csv to
+  // data/exports/ and opens it in the OS default (Excel/Sheets).
+  dl.disabled = true;
+  try {
+    const res = await window.sq.canvas.exportDoc({ title: name, csv, format: 'csv' });
+    if (!res || !res.ok) console.error('[canvas] CSV export failed:', res && res.error);
+  } catch (err) {
+    console.error('[canvas] CSV export error:', err);
+  } finally {
+    dl.disabled = false;
+  }
 });
 
 surface.addEventListener('mousedown', (e) => {
