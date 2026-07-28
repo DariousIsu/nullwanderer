@@ -28,6 +28,7 @@ const smokes = [
   'smoke_dispatch_timeout.js',
   'smoke_coverage_count.js',
   'smoke_meeting_grounding.js',
+  'smoke_crm_door.js',
   'smoke_canvas_awareness.js',
   'smoke_unprompted.js',
   'smoke_greenlight.js',

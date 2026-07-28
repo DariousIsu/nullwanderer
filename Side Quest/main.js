@@ -11188,7 +11188,20 @@ async function surfaceDocCards(doc) {
         const s = ingest.ingestRows(pdb, people, { source: `doc:${String(doc.title || doc.id || 'drop').slice(0, 60)}`, sourceUrl, obsKind: 'doc' });
         const crmByName = await lookupCrmContacts((s.landed || []).map(L => L.name));
         for (const L of (s.landed || [])) {
-          try { const beliefs = pdb.listBeliefs(L.targetId); push(contactCard.cardFromTarget({ id: L.targetId, name: L.name, company: L.company, kind: 'person', last_accessed_at: now }, beliefs, crmByName.get(String(L.name).toLowerCase()) || {})); } catch (e) {}
+          let beliefs = [];
+          try { beliefs = pdb.listBeliefs(L.targetId); push(contactCard.cardFromTarget({ id: L.targetId, name: L.name, company: L.company, kind: 'person', last_accessed_at: now }, beliefs, crmByName.get(String(L.name).toLowerCase()) || {})); } catch (e) {}
+          // #2/#3 RECORD AUTO-ADD: land the discovered person in the CRM NOW (auto-commit) through THE ONE
+          // DOOR — identity-safe (strong-id -> name+jurisdiction block -> mint), so "research X" makes them
+          // present next time instead of stranded in the Puller until a batch drain. Fail-soft.
+          try {
+            const _crmDoor = require('./lib/crm_door');
+            const _door = _crmDoor.getDoor(echoSuit);
+            if (_door) {
+              const _r = await _door.upsertPersonObject(_crmDoor.personObjectFromCard(L, beliefs),
+                { source: sourceUrl, notes: L.company ? `Discovered via research — affiliation: ${L.company}` : null });
+              if (_r && (_r.action === 'created' || _r.action === 'updated')) console.log(`[crm-door] ${_r.action} ${L.name}${_r.contactId ? ' (#' + _r.contactId + ')' : ''}`);
+            }
+          } catch (e) { console.error('[crm-door] land failed:', e && e.message); }
         }
         totPeople += s.targets;
       }
