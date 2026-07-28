@@ -145,7 +145,20 @@ async function refresh({ gcalOpts = {}, deps = {}, now = Date.now(), force = fal
       timeMax: new Date(now + AHEAD_DAYS * 86400e3).toISOString(),
       maxResults: 50,
     }, gcalOpts);
-    const { lines, text } = formatWeek((r && r.items) || [], { now, heldLookup: deps.heldLookup || null });
+    // GROUNDING: resolve what we HOLD on each UPCOMING attendee (async, batched, EXACT full-name match)
+    // so formatWeek tags a known attendee [held: …] and an unknown [NOT IN OUR RECORDS]. Exact match only:
+    // a fuzzy match could attach the WRONG person's facts — its own confabulation. No lookup wired →
+    // heldLookup stays null → attendees read [unverified] (assertion still forbidden). Map keyed lowercase.
+    let heldMap = null;
+    if (typeof deps.crmLookup === 'function') {
+      try {
+        const names = new Set();
+        for (const ev of ((r && r.items) || [])) { if (_endMs(ev) >= now) for (const nm of _attendeeNames(ev)) names.add(nm); }
+        heldMap = names.size ? ((await deps.crmLookup([...names])) || {}) : {};
+      } catch (e) { console.error('[week] attendee held lookup failed:', e.message); heldMap = {}; }
+    }
+    const heldLookup = heldMap ? ((nm) => heldMap[String(nm).toLowerCase().trim()] || null) : (deps.heldLookup || null);
+    const { lines, text } = formatWeek((r && r.items) || [], { now, heldLookup });
     _cache = { text, lines, at: now };
     if (text) console.log(`[week] calendar context refreshed — ${lines.split('\n').length} event line(s)`);
   } catch (e) {

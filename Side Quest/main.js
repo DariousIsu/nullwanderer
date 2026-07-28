@@ -9684,8 +9684,26 @@ async function autonomyTick() {
     try { db.setMeta('autonomy.last_decide_at', String(now)); } catch {}
     const autonomy = require('./lib/autonomy');
     const H = { getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v) };
-    // Warm the calendar context so the manifest sees his week (TTL-guarded — usually a no-op).
-    try { await require('./lib/week_context').refresh({ gcalOpts: gcalOpts(), now }); } catch {}
+    // Warm the calendar context so the manifest sees his week (TTL-guarded — usually a no-op). Pass a
+    // crmLookup so an upcoming attendee carries their REAL held facts (exact full-name match; an unknown
+    // resolves to [NOT IN OUR RECORDS]) — the anti-confabulation grounding (the Laila Pirnazar miss).
+    const _crmLookup = async (names) => {
+      const out = {};
+      try {
+        if (!echoSuit || !echoSuit.connected || !Array.isArray(names) || !names.length) return out;
+        const vals = names.slice(0, 16).map((n) => `'${String(n).replace(/'/g, "''").toLowerCase().trim()}'`).join(',');
+        const sql = `SELECT LOWER(TRIM(c.FirstName||' '||c.LastName)) AS k, c.Title AS t, `
+          + `(SELECT a.Name FROM electoral.account a WHERE a.id=c.AccountId) AS acct `
+          + `FROM electoral.contact c WHERE c.deleted=0 AND LOWER(TRIM(c.FirstName||' '||c.LastName)) IN (${vals}) LIMIT 40`;
+        const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql, params: [] } });
+        if (r && r.ok) { const j = JSON.parse(r.text); for (const row of (j.rows || [])) {
+          if (!row.k) continue; const desc = [row.t, row.acct].filter(Boolean).join(', ');
+          out[row.k] = (desc || 'on file') + ' — crm';
+        } }
+      } catch (e) { console.error('[main] attendee held lookup failed:', e.message); }
+      return out;
+    };
+    try { await require('./lib/week_context').refresh({ gcalOpts: gcalOpts(), now, deps: { crmLookup: _crmLookup } }); } catch {}
     // O0.h HARVEST CATCH-UP (2026-07-23, one-shot): all 136 banked conversations were promoted by
     // the pass that ran BEFORE the harvest existed, so the mine never ran once and the decider has
     // never seen a conversation-born lead — the root of "she keeps pulling up the same random
