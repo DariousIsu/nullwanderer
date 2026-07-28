@@ -135,7 +135,7 @@ const _LEVEL_SQL = {
   // LOCAL: role-coding for local government is almost entirely absent (county_commission=3, city_council=2),
   // so parish/county bodies are reachable ONLY by ACCOUNT NAME — 788 contacts carry "Parish" in the account
   // with no role code (the Richland Parish miss). Match role codes OR the parish/county account.
-  local: "(c.Office_Role_Canonical IN ('county_commission','city_council','dc_council') OR LOWER(a.Name) LIKE '%parish%' OR LOWER(a.Name) LIKE '%county%')",
+  local: "(c.Office_Role_Canonical IN ('county_commission','city_council','dc_council','parish_local') OR LOWER(a.Name) LIKE '%parish%' OR LOWER(a.Name) LIKE '%county%')",
 };
 // Escape a value for a LIKE literal: backslash the LIKE metacharacters and double single-quotes (injection-safe).
 function _likeSafe(s) { return String(s == null ? '' : s).toLowerCase().replace(/[\\%_]/g, (x) => '\\' + x).replace(/'/g, "''").trim(); }
