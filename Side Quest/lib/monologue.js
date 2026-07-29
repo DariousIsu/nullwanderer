@@ -60,6 +60,7 @@ const PULLER_BUDGET_KEY = 'pullerwalk.budget.window';
 // than contact: minting is cheaper to under- than over-do (backpressure already caps the backlog).
 const DISCOVER_MIN_INTERVAL_MS = 60 * 1000;
 const DISCOVER_LAST_KEY = 'pullerwalk.discover.lastAt';
+const _PROC_START_TS = Date.now();   // the idle-gate's floor when no user-turn stamp exists yet
 // Audible idle-deferral for the puller lanes — deduped per reason so the idle tick can't spam it.
 const _pullerDeferLogAt = {};
 function _logPullerDefer(reason) {
@@ -1143,7 +1144,9 @@ async function _runOneTick() {
       const busy = (require('./board').running() || []).some((w) => w && (w.lane === 'autonomy' || w.lane === 'dig' || w.lane === 'rehearsal'));
       _pullerGate = require('./beat_scheduler').beatPassGate({
         origin: 'beat', now: Date.now(),
-        lastUserTurnTs: parseInt(db.getMeta('user.last_turn_at') || '0', 10) || Date.now(),
+        // Meta absent (no chat turn since the stamp shipped) → fall back to BOOT time, not now():
+        // a now() fallback reads as permanently-not-idle and the lanes would never run again.
+        lastUserTurnTs: parseInt(db.getMeta('user.last_turn_at') || '0', 10) || _PROC_START_TS,
         lastBeatPassTs: parseInt(db.getMeta('pipeline.last_pass_at') || '0', 10) || 0,
         autonomyInFlight: busy,
         idleMs: Math.max(1, parseInt(db.getMeta('research.beat_idle_min') || '10', 10)) * 60 * 1000,
