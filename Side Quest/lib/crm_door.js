@@ -16,14 +16,16 @@ const fs = require('fs');
 const ECHO_DIR = process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo';
 const ELECTORAL = process.env.CRM_DB_PATH || path.join(ECHO_DIR, 'data', 'foundations', 'electoral.db');
 
-let _door = null, _crm = null, _failed = false;
+let _door = null, _crm = null, _failed = false, _warnedMissing = false;
 
 function getDoor(echoSuit) {
   if (_door) return _door;
-  if (_failed) return null;                       // don't retry-spam a bad path
+  if (_failed) return null;                       // don't retry-spam a bad init error
   if (!echoSuit || !echoSuit.connected) return null;   // Echo not warm yet — try again next call
   try {
-    if (!fs.existsSync(ELECTORAL)) { console.error('[crm-door] electoral.db not found:', ELECTORAL); _failed = true; return null; }
+    // A missing file is TRANSIENT (Echo may still be laying the store down) — warn once, never latch.
+    // The permanent _failed latch is reserved for hard init errors (require/open), where retrying spams.
+    if (!fs.existsSync(ELECTORAL)) { if (!_warnedMissing) { console.error('[crm-door] electoral.db not found (will retry):', ELECTORAL); _warnedMissing = true; } return null; }
     const Database = require('better-sqlite3');
     _crm = new Database(ELECTORAL, { readonly: true });
     const strongStmt = {};
@@ -33,12 +35,30 @@ function getDoor(echoSuit) {
         const r = strongStmt[col].get(val);
         return r ? r.id : null;
       },
-      findByBlock(key, { jurisdiction } = {}) {
+      findByBlock(key, { jurisdiction, org } = {}) {
+        // IDENTITY SAFETY (2026-07-29): "a name alone NEVER matches" is crm_upsert's own invariant,
+        // but this wiring ran the block bare — personObjectFromCard carries no jurisdiction and `org`
+        // was ignored — so ONE same-surname row anywhere in the 113k-row CRM "matched" and a
+        // discovered email/phone landed on a stranger. A block candidate now needs a CORROBORATOR:
+        // jurisdiction, or account-name overlap with the discovered org. No corroborator → [] → the
+        // door MINTS instead (Echo's strong-id dedupe still guards true re-adds) — a duplicate row is
+        // recoverable, a false merge is not ([[resolver-false-identification]]).
         const [last, fi] = String(key).split('|');
+        if (!jurisdiction && !org) return [];
+        // Compare the surname as blockKey normalized it (letters only) — the raw LOWER(TRIM())
+        // compare could never equal the stripped key for O'Brien / hyphenated / spaced surnames,
+        // which silently forced a duplicate mint for every such person.
+        const lastNorm = "REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(c.LastName)),'''',''),'-',''),'.',''),' ','')";
+        const where = ['COALESCE(c.deleted,0)=0', `${lastNorm} = ?`];
+        const params = [last];
+        if (jurisdiction) { where.push('(c.Jurisdiction__c = ? OR c.MailingState = ?)'); params.push(jurisdiction, String(jurisdiction).replace(/^US-/, '')); }
+        if (org) {
+          const like = String(org).toLowerCase().replace(/[\\%_]/g, (x) => '\\' + x).trim();
+          where.push("LOWER(COALESCE(a.Name,'')) LIKE ? ESCAPE '\\'"); params.push(`%${like}%`);
+        }
         const rows = _crm.prepare(
-          `SELECT id, FirstName FROM contact WHERE COALESCE(deleted,0)=0 AND LOWER(TRIM(LastName)) = ?`
-          + (jurisdiction ? ` AND (Jurisdiction__c = ? OR MailingState = ?)` : ``) + ` LIMIT 50`
-        ).all(...(jurisdiction ? [last, jurisdiction, String(jurisdiction).replace(/^US-/, '')] : [last]));
+          `SELECT c.id, c.FirstName FROM contact c LEFT JOIN account a ON a.id = c.AccountId WHERE ${where.join(' AND ')} LIMIT 500`
+        ).all(...params);
         return rows.filter((r) => !fi || String(r.FirstName || '').toLowerCase().startsWith(fi)).map((r) => r.id);
       },
     };
@@ -66,6 +86,6 @@ function personObjectFromCard(landed, beliefs = []) {
   return { name: landed.name, attributeFacts, edgeFacts: {}, identifiers: {}, org: landed.company || null };
 }
 
-function _resetForTest() { _door = null; _crm = null; _failed = false; }
+function _resetForTest() { try { if (_crm) _crm.close(); } catch {} _door = null; _crm = null; _failed = false; _warnedMissing = false; }
 
 module.exports = { getDoor, personObjectFromCard, ELECTORAL, _resetForTest };
