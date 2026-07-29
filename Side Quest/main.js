@@ -113,6 +113,26 @@ function readEchoConfig(dir) {
   if (!Number.isNaN(envPort)) port = envPort;
   return { url: process.env.ECHO_MCP_URL || `http://${host}:${port}/mcp/`, token, host, port };
 }
+// ATTENDEE HELD-LOOKUP (hoisted 2026-07-29): the anti-confabulation grounding for HIS WEEK — an
+// upcoming attendee carries their REAL held facts (exact full-name match; duplicates name their
+// ambiguity via foldHeldRows; an unknown resolves to [NOT IN OUR RECORDS]). Hoisted from the
+// autonomy tick so CHAT-path refreshes carry it too — the tick-local version left every chat-
+// triggered refresh grounding-blind for a 15-minute TTL window.
+const _attendeeCrmLookup = async (names) => {
+  const out = {};
+  try {
+    if (!echoSuit || !echoSuit.connected || !Array.isArray(names) || !names.length) return out;
+    // Cap 40 (was 16): a name past the cap was never queried, yet rendered [NOT IN OUR RECORDS] —
+    // a FALSE absence claim. LIMIT rises with it (duplicates eat rows).
+    const vals = names.slice(0, 40).map((n) => `'${String(n).replace(/'/g, "''").toLowerCase().trim()}'`).join(',');
+    const sql = `SELECT LOWER(TRIM(c.FirstName||' '||c.LastName)) AS k, c.Title AS t, `
+      + `(SELECT a.Name FROM electoral.account a WHERE a.id=c.AccountId) AS acct `
+      + `FROM electoral.contact c WHERE c.deleted=0 AND LOWER(TRIM(c.FirstName||' '||c.LastName)) IN (${vals}) LIMIT 120`;
+    const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql, params: [] } });
+    if (r && r.ok) { const j = JSON.parse(r.text); Object.assign(out, require('./lib/week_context').foldHeldRows(j.rows)); }
+  } catch (e) { console.error('[main] attendee held lookup failed:', e.message); }
+  return out;
+};
 const openThreadsLib = require('./lib/open_threads');
 const protocolsLib = require('./lib/protocols');
 const browserLib = require('./lib/browser');
@@ -5814,7 +5834,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // HIS WEEK (lib/week_context) — his calendar as ambient context, so a casual "how's your day"
   // turn already knows about last week's DC meeting and Thursday's Teams call and who's in them.
   // Cached read, zero latency: a stale cache refreshes in the background for the NEXT turn.
-  try { const wk = require('./lib/week_context').blockFor({ gcalOpts: gcalOpts() }); if (wk) awareness += '\n\n' + wk; } catch (e) { console.error('[main] week block failed:', e.message); }
+  try { const wk = require('./lib/week_context').blockFor({ gcalOpts: gcalOpts(), deps: { crmLookup: _attendeeCrmLookup } }); if (wk) awareness += '\n\n' + wk; } catch (e) { console.error('[main] week block failed:', e.message); }
 
   // SCOPED RETRIEVAL (Phase 1) — classify the question, then retrieve to fit it:
   //  • narrow/factual (a specific bill, a who/what question) → hybrid semantic+FTS (exact
@@ -6422,7 +6442,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // article/page the question is about) + HIS CALENDAR when it's a schedule question — the held
         // HIS WEEK events, so "when is the BGov meeting" answers FROM them, not a records/web search.
         let _calGrounding = null;
-        if (scheduleQ) { try { _calGrounding = await require('./lib/week_context').scheduleGrounding({ gcalOpts: gcalOpts() }); } catch (e) { console.error('[main] schedule grounding failed:', e.message); } }
+        if (scheduleQ) { try { _calGrounding = await require('./lib/week_context').scheduleGrounding({ gcalOpts: gcalOpts(), deps: { crmLookup: _attendeeCrmLookup } }); } catch (e) { console.error('[main] schedule grounding failed:', e.message); } }
         const grounding = ad.factualGrounding({ knowledgeBlock: retrievedKnowledgeBlock, pastTurns: relevantPastTurns, readings: recentReadings, calendar: _calGrounding });
         // ENRICH/RECOVERY loop (lib/cognition, turn→object Phase 2+4): draft from grounding, OR go FIND
         // what's missing (our graph → web) then draft — so a wall becomes "let me find out", never a
@@ -8862,7 +8882,7 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
       working: _workingNow(),
     });
     // Same HIS-WEEK calendar context as the main turn — a tool follow-up is still conversation.
-    try { const wk = require('./lib/week_context').blockFor({ gcalOpts: gcalOpts() }); if (wk) awareness += '\n\n' + wk; } catch {}
+    try { const wk = require('./lib/week_context').blockFor({ gcalOpts: gcalOpts(), deps: { crmLookup: _attendeeCrmLookup } }); if (wk) awareness += '\n\n' + wk; } catch {}
     const protocols = db.getActiveProtocols();
     // Echo chaining: while hops remain and the suit is connected, let her emit ONE more echo tag
     // to continue a find→do flow (this is the fix for the find→do stall — the followup used to
@@ -9689,25 +9709,9 @@ async function autonomyTick() {
     try { db.setMeta('autonomy.last_decide_at', String(now)); } catch {}
     const autonomy = require('./lib/autonomy');
     const H = { getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v) };
-    // Warm the calendar context so the manifest sees his week (TTL-guarded — usually a no-op). Pass a
-    // crmLookup so an upcoming attendee carries their REAL held facts (exact full-name match; an unknown
-    // resolves to [NOT IN OUR RECORDS]) — the anti-confabulation grounding (the Laila Pirnazar miss).
-    const _crmLookup = async (names) => {
-      const out = {};
-      try {
-        if (!echoSuit || !echoSuit.connected || !Array.isArray(names) || !names.length) return out;
-        // Cap 16→40 (2026-07-29): a name past the cap was never queried, yet rendered
-        // [NOT IN OUR RECORDS] — a FALSE absence claim. LIMIT rises with it (duplicates eat rows).
-        const vals = names.slice(0, 40).map((n) => `'${String(n).replace(/'/g, "''").toLowerCase().trim()}'`).join(',');
-        const sql = `SELECT LOWER(TRIM(c.FirstName||' '||c.LastName)) AS k, c.Title AS t, `
-          + `(SELECT a.Name FROM electoral.account a WHERE a.id=c.AccountId) AS acct `
-          + `FROM electoral.contact c WHERE c.deleted=0 AND LOWER(TRIM(c.FirstName||' '||c.LastName)) IN (${vals}) LIMIT 120`;
-        const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql, params: [] } });
-        if (r && r.ok) { const j = JSON.parse(r.text); Object.assign(out, require('./lib/week_context').foldHeldRows(j.rows)); }
-      } catch (e) { console.error('[main] attendee held lookup failed:', e.message); }
-      return out;
-    };
-    try { await require('./lib/week_context').refresh({ gcalOpts: gcalOpts(), now, deps: { crmLookup: _crmLookup } }); } catch {}
+    // Warm the calendar context so the manifest sees his week (TTL-guarded — usually a no-op). The
+    // hoisted attendee lookup rides EVERY refresh path now, not just this tick's.
+    try { await require('./lib/week_context').refresh({ gcalOpts: gcalOpts(), now, deps: { crmLookup: _attendeeCrmLookup } }); } catch {}
     // O0.h HARVEST CATCH-UP (2026-07-23, one-shot): all 136 banked conversations were promoted by
     // the pass that ran BEFORE the harvest existed, so the mine never ran once and the decider has
     // never seen a conversation-born lead — the root of "she keeps pulling up the same random
@@ -10992,6 +10996,33 @@ function startAutonomicScheduler() {
   autonomicTimer = setInterval(() => { autonomicSchedulerTick().catch((e) => console.error('[autonomic] tick failed:', e.message)); }, AUTONOMIC_CADENCE_MS);
   setTimeout(() => { autonomicSchedulerTick().catch(() => {}); }, 8000);            // first pass shortly after boot
   console.log('[autonomic] beat scheduler started');
+  // GRAPH-INTEGRITY SCHEDULER (2026-07-29) — the organ built 07-25 finally gets a caller ("nothing
+  // schedules the beat yet" ends here). Idle-tier under the ONE leash policy; budgeted + kill-
+  // switched inside runTick; writes are code-enumerated repairs from Census data through Echo's
+  // clean cited path, dispatched DELIBERATE ({autonomous:false}, the crm_door precedent) because no
+  // model authors these args.
+  const GRAPH_INTEGRITY_TICK_MS = 15 * 60 * 1000;
+  setInterval(() => {
+    (async () => {
+      if (!echoSuit || !echoSuit.connected) return;
+      const bg = require('./lib/beat_scheduler').beatPassGate({
+        origin: 'beat', now: Date.now(), lastUserTurnTs, autonomyInFlight,
+        lastBeatPassTs: parseInt(db.getMeta('graph_integrity.last_tick_at') || '0', 10) || 0,
+        idleMs: Math.max(1, _intMeta('research.beat_idle_min', 10)) * 60 * 1000,
+        cadenceMs: GRAPH_INTEGRITY_TICK_MS,
+      });
+      if (!bg.ok) return;   // the sweep gates already narrate idle state — no second narrator
+      db.setMeta('graph_integrity.last_tick_at', String(Date.now()));
+      const r = await require('./lib/graph_integrity_tick').runTick({
+        dispatch: (msg) => echoSuit.dispatch(msg, { autonomous: false }),
+        getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v),
+        log: (m) => console.log(`[graph-integrity] ${m}`),
+      });
+      if (r && r.ran) console.log(`[graph-integrity] ${r.code}: applied ${r.applied} repair(s) — minted ${r.res.minted}, parented ${r.res.parented}, held ${r.res.held.length}, failed ${r.res.failed.length}, remaining ${r.res.remaining}`);
+      else if (r && r.why) console.log(`[graph-integrity] deferred: ${r.why}`);
+    })().catch((e) => console.error('[graph-integrity] tick failed:', e && e.message));
+  }, GRAPH_INTEGRITY_TICK_MS).unref?.();
+  console.log('[graph-integrity] scheduler started (idle-tier, daily cap via meta graph_integrity.daily_cap)');
 }
 try { global.__autonomicTick = () => autonomicSchedulerTick(); } catch {}           // inspector-driven validation
 

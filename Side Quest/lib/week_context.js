@@ -169,8 +169,11 @@ async function refresh({ gcalOpts = {}, deps = {}, now = Date.now(), force = fal
 }
 
 /** Zero-latency read for the chat turn: cached text now; stale → background refresh, next turn has it. */
-function blockFor({ gcalOpts = {}, now = Date.now() } = {}) {
-  if ((now - _cache.at) >= TTL_MS) refresh({ gcalOpts, now }).catch(() => {});
+function blockFor({ gcalOpts = {}, now = Date.now(), deps = {} } = {}) {
+  // deps forwards to refresh (2026-07-29): a chat-path blockFor crossing the TTL used to refresh
+  // WITHOUT crmLookup, silently degrading every attendee to [unverified] for the next 15 minutes —
+  // whichever caller crossed the TTL first decided whether HIS WEEK carried grounding.
+  if ((now - _cache.at) >= TTL_MS) refresh({ gcalOpts, now, deps }).catch(() => {});
   return _cache.text;
 }
 
