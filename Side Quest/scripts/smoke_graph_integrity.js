@@ -278,6 +278,8 @@ const parentTarget = { action: 'parent', id: 3, name: 'Ascension Parish, Louisia
   r = await R.apply([{ ...mintTarget, stateCode: 'ZZ' }], { stateNameOf: SN, dryRun: false, citation: CIT });
   ok(r.failed.length === 1 && /no state name/.test(r.failed[0].error), 'unknown state fails loudly');
 
-  console.log(`\n${pass} passed, ${fail} failed`);
+  // The runner regex requires the `ALL PASS — N passed` dialect — a bare result line counts as
+  // "(no result line — crashed?)" and this suite reads red in every gate run while passing solo.
+  console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
