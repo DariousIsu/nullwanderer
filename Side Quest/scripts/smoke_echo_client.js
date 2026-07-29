@@ -72,6 +72,39 @@ function mockTransport() {
   ok('sends MCP Accept header (json + sse)', /application\/json/.test(captured.opts.headers['Accept']) && /text\/event-stream/.test(captured.opts.headers['Accept']));
   ok('captures + echoes the session id', http.sessionId === 'sess-123');
 
+  console.log('\nsession lifecycle (the boot97 reattach poison — 2026-07-29):');
+  // After a session is latched, a NEW initialize must go out WITHOUT the stale id (initialize
+  // STARTS a session), and a mid-session 404 must drop the latch AND un-ready the client so the
+  // next call re-runs the handshake instead of failing forever behind the 60s heartbeat.
+  {
+    const reqs = [];
+    let mode = 'ok';
+    const ff = async (url, opts) => {
+      reqs.push(opts);
+      if (mode === 'gone') return { ok: false, status: 404, headers: { get: () => null }, text: async () => '{"error":"Session not found"}' };
+      const sent = JSON.parse(opts.body);
+      const body = JSON.stringify({ jsonrpc: '2.0', id: sent.id == null ? 0 : sent.id, result: { serverInfo: { name: 'nx-echo' }, protocolVersion: echo.PROTOCOL_VERSION } });
+      return { ok: true, status: 200, headers: { get: (k) => (String(k).toLowerCase() === 'mcp-session-id' ? 'sess-A' : 'application/json') }, text: async () => body };
+    };
+    const tr2 = echo.httpTransport({ url: 'http://127.0.0.1:9000/mcp/', fetchImpl: ff });
+    const c2 = new echo.EchoClient({ transport: tr2 });
+    await c2.initialize();
+    ok('session latched after first handshake', tr2.sessionId === 'sess-A');
+    await c2.initialize();
+    const lastInit = reqs.filter(o => JSON.parse(o.body).method === 'initialize').pop();
+    ok('re-initialize goes out WITHOUT the stale session id', !('Mcp-Session-Id' in lastInit.headers));
+    mode = 'gone';
+    let died = false;
+    try { await c2.callTool('x', {}); } catch (e) { died = /404/.test(e.message); }
+    ok('mid-session 404 surfaces as an error', died);
+    ok('…and drops the session latch', tr2.sessionId === null);
+    ok('…and un-readies the client', c2.ready === false);
+    mode = 'ok';
+    await c2.callTool('x', {});
+    const methods = reqs.map(o => JSON.parse(o.body).method);
+    ok('next call re-runs the handshake first', methods.slice(-3)[0] === 'initialize' && methods.slice(-3)[2] === 'tools/call');
+  }
+
   console.log('\nparseStreamableBody handles both shapes:');
   ok('bare JSON body', echo.parseStreamableBody('application/json', '{"jsonrpc":"2.0","id":2,"result":{"x":1}}').result.x === 1);
   ok('SSE body (last data line)', echo.parseStreamableBody('text/event-stream', 'data: {"result":{"x":1}}\ndata: {"result":{"x":2}}\n').result.x === 2);

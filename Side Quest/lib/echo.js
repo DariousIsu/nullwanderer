@@ -47,6 +47,11 @@ function httpTransport({ url, token = null, fetchImpl = (typeof fetch !== 'undef
   return {
     kind: 'http',
     async send(message) {
+      // An `initialize` STARTS a session — it must never carry a previous one. Without this reset a
+      // stale latched id (Echo restarted / session GC'd) poisons every reconnect: initialize + old
+      // Mcp-Session-Id → 404 "Session not found", and the 60s attach heartbeat can retry forever
+      // without ever landing (live failure, boot97 2026-07-29).
+      if (message && message.method === 'initialize') sessionId = null;
       const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' };
       if (token) headers['Authorization'] = `Bearer ${token}`;
       if (sessionId) headers['Mcp-Session-Id'] = sessionId;
@@ -55,6 +60,9 @@ function httpTransport({ url, token = null, fetchImpl = (typeof fetch !== 'undef
       if (sid) sessionId = sid;
       if (res.status === 202 || res.status === 204) return null;   // notification/ack, no body
       if (!res.ok) {
+        // 404 = the server no longer knows this session (restart / GC) — drop the latch so the
+        // next handshake starts clean instead of re-presenting the dead id.
+        if (res.status === 404) sessionId = null;
         const errText = await res.text().catch(() => '');
         throw new Error(`echo http ${res.status}: ${errText.slice(0, 200) || res.statusText}`);
       }
@@ -144,7 +152,15 @@ class EchoClient {
 
   async _request(method, params = {}) {
     const id = ++this._id;
-    const resp = await this.transport.send({ jsonrpc: '2.0', id, method, params });
+    let resp;
+    try {
+      resp = await this.transport.send({ jsonrpc: '2.0', id, method, params });
+    } catch (e) {
+      // A dead session must also un-latch the CLIENT: `ready` stays true after a mid-session 404,
+      // so without this every later call would skip the handshake and die the same way.
+      if (/echo http 404\b/.test(String(e && e.message))) this.ready = false;
+      throw e;
+    }
     if (!resp) throw new Error(`echo: empty response to ${method}`);
     if (resp.error) throw new Error(`echo ${method} error ${resp.error.code}: ${resp.error.message}`);
     return resp.result;

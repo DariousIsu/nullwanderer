@@ -1248,7 +1248,9 @@ app.whenReady().then(() => {
     onLog: (m) => console.log('[engine]', m),
   });
   const pushEchoStatus = (r) => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('echo:status', { connected: !!(r && r.ok), tools: (r && r.tools) || 0 }); } catch {} };
-  const tryEchoAttach = () => echoSuit.connect().then(r => { if (r.ok) console.log(`[main] echo suit attached: ${r.tools} tools`); pushEchoStatus(r); return !!r.ok; }).catch(() => { pushEchoStatus(null); return false; });
+  // A failed attach NAMES ITS DOOR — the heartbeat retried a poisoned session for 25 minutes on
+  // boot97 with zero log evidence because this catch was silent.
+  const tryEchoAttach = () => echoSuit.connect().then(r => { if (r.ok) console.log(`[main] echo suit attached: ${r.tools} tools`); pushEchoStatus(r); return !!r.ok; }).catch((e) => { console.error('[main] echo suit attach failed:', (e && e.message) ? e.message : String(e)); pushEchoStatus(null); return false; });
   setTimeout(() => {
     // Adopt the running engine, or spawn + own one, THEN attach the suit. If ensure can't bring an
     // engine up (e.g. ECHO_CWD/ECHO_PYTHON wrong on the spawn path), still try to attach in case one
