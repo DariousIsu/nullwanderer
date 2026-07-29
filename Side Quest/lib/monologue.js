@@ -60,6 +60,14 @@ const PULLER_BUDGET_KEY = 'pullerwalk.budget.window';
 // than contact: minting is cheaper to under- than over-do (backpressure already caps the backlog).
 const DISCOVER_MIN_INTERVAL_MS = 60 * 1000;
 const DISCOVER_LAST_KEY = 'pullerwalk.discover.lastAt';
+// Audible idle-deferral for the puller lanes — deduped per reason so the idle tick can't spam it.
+const _pullerDeferLogAt = {};
+function _logPullerDefer(reason) {
+  const now = Date.now();
+  if (now - (_pullerDeferLogAt[reason] || 0) < 15 * 60 * 1000) return;
+  _pullerDeferLogAt[reason] = now;
+  console.log(`[pipeline] idle-defer: ${reason}`);
+}
 // Social-enrich idle lane (Lane C, maigret). Slow + low-yield → infrequent; each known-handle target is
 // processed ~once/month (the web presence won't change fast). No cloud-token budget (maigret is a local
 // sidecar + network, not a model call), so cadence + a per-target cooldown are the only gates.
@@ -1123,6 +1131,32 @@ async function _runOneTick() {
     // orphaned by the 2026-07-01 graph-builder refactor's early return. It self-gates (interval ~10min +
     // hourly token budget) so running it every idle tick self-limits and leaves the graph-walk cadence untouched.
     const synthLane = maybeSynthesize().catch((e) => console.error('[subc] synthesis lane error:', e && e.message));
+    // IDLE-TIER LEASH (Lucas 2026-07-29 — the beat-gate policy applied to the PULLER lanes): the
+    // pipeline/puller/social lanes were hunting person emails minutes after boot while her ACTUAL
+    // outstanding work (open inquiries, capability needs) waited on the autonomy cadence and then
+    // queued behind them for the browser. Same pure gate, same knobs as the beat sweep: real user
+    // idle + none of her reasoned work in flight (read from the BOARD, the substrate for "what is
+    // running in me") + idle cadence. Graph-walk/synthesis stay unleashed — local, budget-gated,
+    // not the burner. Gate error → old behavior (fail-open: liveness over leash).
+    let _pullerGate = { ok: true, reason: 'gate-error' };
+    try {
+      const busy = (require('./board').running() || []).some((w) => w && (w.lane === 'autonomy' || w.lane === 'dig' || w.lane === 'rehearsal'));
+      _pullerGate = require('./beat_scheduler').beatPassGate({
+        origin: 'beat', now: Date.now(),
+        lastUserTurnTs: parseInt(db.getMeta('user.last_turn_at') || '0', 10) || Date.now(),
+        lastBeatPassTs: parseInt(db.getMeta('pipeline.last_pass_at') || '0', 10) || 0,
+        autonomyInFlight: busy,
+        idleMs: Math.max(1, parseInt(db.getMeta('research.beat_idle_min') || '10', 10)) * 60 * 1000,
+        cadenceMs: Math.max(1, parseInt(db.getMeta('research.beat_cadence_min') || '5', 10)) * 60 * 1000,
+      });
+    } catch { /* fail-open */ }
+    if (!_pullerGate.ok) {
+      _logPullerDefer(_pullerGate.reason);
+      if (_cfg.subcConcurrentLanes()) { await Promise.allSettled([graphLane, synthLane]); }
+      else { try { await graphLane; } catch {} try { await synthLane; } catch {} }
+      return;
+    }
+    try { db.setMeta('pipeline.last_pass_at', String(Date.now())); } catch {}
     if (_cfg.pipelineOn()) {
       // SLICE 3 — the Puller lanes become ONE staged pipeline (DISCOVER→CONTACT→ENRICH, concurrent stages
       // with backpressure). Runs alongside the graph-walk lane. ZOE_PIPELINE=0 reverts to the legacy lanes.

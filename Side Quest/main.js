@@ -4975,6 +4975,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   // means Lucas is "back", which is when a capability proposal may surface.
   const idleSinceLastTurn = Date.now() - lastUserTurnTs;
   lastUserTurnTs = Date.now();
+  // Substrate copy of the activity clock — idle-tier gates outside main.js (the puller lanes in
+  // monologue) read it; a hand-passed copy would be another drift-prone list.
+  try { db.setMeta('user.last_turn_at', String(Date.now())); } catch {}
 
   markUserActivity();
   markMonologueActivity();
