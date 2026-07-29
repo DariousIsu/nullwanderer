@@ -128,5 +128,17 @@ ok(s.chooseNextByPriority({ beats: bp, state: { beats: { a: { lastRun: 5000, yie
   ok(order.slice(3, 6).sort().join('') === 'abc', `priority: second cycle repeats all three (got ${order.slice(3, 6).join(',')})`);
 }
 
+// --- beatPassGate: beat-origin sweep = IDLE TIER (Lucas 2026-07-29); user-origin untouched ---
+{
+  const T = 100 * 60 * 1000;   // an arbitrary "now" well past every window
+  ok(s.beatPassGate({ origin: 'user', now: T, lastUserTurnTs: T - 1000, autonomyInFlight: true }).ok === true, 'gate: user-origin focus passes regardless of idle/in-flight');
+  ok(s.beatPassGate({ origin: 'beat', now: T, lastUserTurnTs: T - 1000 }).reason === 'not-idle', 'gate: beat + recent user turn → not-idle');
+  ok(s.beatPassGate({ origin: 'beat', now: T, lastUserTurnTs: 0, autonomyInFlight: true }).reason === 'her-work-in-flight', 'gate: beat + autonomy in flight → her reasoned work outranks the sweep');
+  ok(s.beatPassGate({ origin: 'beat', now: T, lastUserTurnTs: 0, lastBeatPassTs: T - 60 * 1000 }).reason === 'idle-cadence', 'gate: beat + recent sweep pass → idle-cadence (5-min default, not 45s)');
+  ok(s.beatPassGate({ origin: 'beat', now: T, lastUserTurnTs: 0, lastBeatPassTs: 0 }).ok === true, 'gate: beat + truly idle + cadence clear → passes');
+  ok(s.beatPassGate({ origin: 'beat', now: T, lastUserTurnTs: T - 11 * 60 * 1000, lastBeatPassTs: T - 6 * 60 * 1000 }).ok === true, 'gate: 11-min user idle + 6-min since last sweep pass → passes (defaults 10/5)');
+  ok(s.beatPassGate({ origin: 'beat', now: T, lastUserTurnTs: T - 9 * 60 * 1000, lastBeatPassTs: 0 }).reason === 'not-idle', 'gate: 9-min user idle under the 10-min default → still not idle');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

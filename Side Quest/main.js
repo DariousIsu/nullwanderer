@@ -10999,6 +10999,16 @@ async function directedFocusTick() {
   return require('./lib/lane').run({ autonomous: true }, () => _directedFocusTick());
 }
 
+// Audible idle-deferral for the beat sweep — deduped per reason (the 45s tick would spam otherwise).
+// A zero-pass stretch must be visible in one grep, never silent.
+const _beatDeferLogAt = {};
+function _logBeatIdleDefer(reason) {
+  const now = Date.now();
+  if (now - (_beatDeferLogAt[reason] || 0) < 15 * 60 * 1000) return;
+  _beatDeferLogAt[reason] = now;
+  console.log(`[directed] beat-origin idle-defer: ${reason}`);
+}
+
 async function _directedFocusTick() {
   if (directedStepInFlight) return;
   const focusLib = require('./lib/focus');
@@ -11006,9 +11016,24 @@ async function _directedFocusTick() {
   try { focus = focusLib.getCurrent(); } catch {}
   if (!focus || !focusLib.isDirected(focus)) { stopDirectedFocusDriver(); return; }   // nothing assigned → idle off
   if ((db.getMeta('operator.mode') || 'full').trim() === 'off') return;
+  // BEAT-ORIGIN = IDLE TIER (Lucas 2026-07-29): a beat-seeded sweep carries directed:true and was
+  // running at his-order priority — a pass every 45s, 30s after his last keystroke, owning the
+  // browser. It yields to real idle + her reasoned work + idle cadence; user-origin foci untouched.
+  const _focusOrigin = focusLib.originOf(focus);
+  {
+    const bg = require('./lib/beat_scheduler').beatPassGate({
+      origin: _focusOrigin, now: Date.now(), lastUserTurnTs,
+      lastBeatPassTs: parseInt(db.getMeta('research.beat_last_pass_at') || '0', 10) || 0,
+      autonomyInFlight,
+      idleMs: Math.max(1, _intMeta('research.beat_idle_min', 10)) * 60 * 1000,
+      cadenceMs: Math.max(1, _intMeta('research.beat_cadence_min', 5)) * 60 * 1000,
+    });
+    if (!bg.ok) { _logBeatIdleDefer(bg.reason); return; }
+  }
   if (!_researchGateOk('primary', focus.id)) return;                                  // operator throttle — skip this cycle entirely
   if (_conversationActive()) { _logLoadDeferral('directed'); return; }                // main-thread balance: don't START a directed pass (web grab → PDF decomp → package build) while he types
   directedStepInFlight = true;
+  if (_focusOrigin === 'beat') { try { db.setMeta('research.beat_last_pass_at', String(Date.now())); } catch {} }
   try {
     const outcome = await runDirectedResearchPass(focus);   // depth-first state machine; records the focus outcome
     if (outcome && outcome.action && outcome.action !== 'continue') {

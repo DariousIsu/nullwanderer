@@ -150,4 +150,22 @@ function chooseNextByPriority({ beats = [], state = {}, now = 0, signals = () =>
   return bestId;
 }
 
-module.exports = { DEFAULT_SLICE_BUDGET, DEFAULT_MAINTENANCE_MS, DEFAULT_TOPIC_EVERY, DEFAULT_ALLOC_WEIGHTS, YIELD_REF_CHARS, chooseNext, shouldRotate, allDone, dueForMaintenance, pickLane, stalenessTerm, yieldTerm, scoreBeat, chooseNextByPriority };
+// ─── BEAT-ORIGIN IDLE TIER (Lucas, 2026-07-29) ──────────────────────────────────────────────────
+// A beat-seeded focus (the government-coverage sweep) shares the directed driver's MECHANICS by
+// design — but it must never share its PRIORITY. Measured harm: the sweep ran a pass every 45s,
+// resuming 30s after his last keystroke, at his-order rank, owning the browser — direct requests
+// and long research (inquiries, idea exploration, test iterations) queued behind an endless
+// township walk. The sweep is an IDLE task: it passes only after real user idle, never while her
+// reasoned work is in flight, and at idle cadence. User-origin foci are untouched — his real
+// orders keep full cadence. Pure decision: main.js supplies the clock and flags.
+const DEFAULT_BEAT_IDLE_MS = 10 * 60 * 1000;      // user quiet this long before a sweep pass may start
+const DEFAULT_BEAT_CADENCE_MS = 5 * 60 * 1000;    // min gap between sweep passes (his orders run at 45s)
+function beatPassGate({ origin, now, lastUserTurnTs = 0, lastBeatPassTs = 0, autonomyInFlight = false, idleMs = DEFAULT_BEAT_IDLE_MS, cadenceMs = DEFAULT_BEAT_CADENCE_MS } = {}) {
+  if (origin !== 'beat') return { ok: true, reason: 'user-origin' };
+  if (autonomyInFlight) return { ok: false, reason: 'her-work-in-flight' };
+  if (now - lastUserTurnTs < idleMs) return { ok: false, reason: 'not-idle' };
+  if (now - lastBeatPassTs < cadenceMs) return { ok: false, reason: 'idle-cadence' };
+  return { ok: true, reason: 'idle' };
+}
+
+module.exports = { DEFAULT_SLICE_BUDGET, DEFAULT_MAINTENANCE_MS, DEFAULT_TOPIC_EVERY, DEFAULT_ALLOC_WEIGHTS, YIELD_REF_CHARS, DEFAULT_BEAT_IDLE_MS, DEFAULT_BEAT_CADENCE_MS, chooseNext, shouldRotate, allDone, dueForMaintenance, pickLane, stalenessTerm, yieldTerm, scoreBeat, chooseNextByPriority, beatPassGate };
