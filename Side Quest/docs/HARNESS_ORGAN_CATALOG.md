@@ -567,3 +567,66 @@ coexist.
 MID-DIG = slice 4b (needs O0's origin machinery); O5 rises for N4; the shelf stays
 infrastructure for all. The catalog's engineering ranks (§4) stand; this section is the
 tiebreaker whenever they conflict: **the needs list wins.**
+
+---
+
+## 8. Status ledger — the full transplant map, verified live (2026-07-29 review)
+
+Method: BUILT is not the bar — WIRED and FIRING are. Every verdict below is evidence-backed
+(code caller + boot-log firing count or DB state), from the 4-agent program review + the live
+repairs of 2026-07-29 (boots 97–105). "Quiet" = on-demand organ with no recent trigger; "dark"
+= zero firings ever, wire unproven.
+
+### Existing (transplanted + verified)
+
+| Organ | Verdict | Evidence |
+|---|---|---|
+| Board + resource locks (§1) | LIVE | rows per inquiry touch / rehearse / dig / promote; RECENT FAILURES reads failed rows |
+| Procedures + crystallization (§1) | LIVE, COMPOUNDING | "procedure reinforced #53" (was #13 on 07-23); constraints land from NOT-mets |
+| MAINTAIN allowlist + forced args (§1) | SHIPPED-BUT-UNCHOSEN | move exists; `chose=maintain` = 0 across boots 94/96 — decider never prefers it |
+| Self-source / self_test (§1) | QUIET (on-demand) | no recent invocations; code path intact |
+| Rehearsal sandbox R1 (§1) | LIVE-PENDING | consumer (O2 driver) unblocked 2026-07-29; first real run still owed |
+| Directives prose layer (§1) | LIVE | always rendered; enforce half is O7 (not built) |
+| [dN] dereference (§1) | LIVE (d-half) | coord-half was DEAD (unexported resolveCoord) — fixed 86d7985; first live coord deref still owed |
+| Inbox drain (§1) | LIVE, QUIET | drains when delegates return; origin-join still missing (O3) |
+| echo-guide pack (§1) | QUIET (on-demand) | the O1 generalization exists (skill_pull) but has never fired |
+| O0 line of inquiry | ⭐LIVE, DOMINANT | `chose=advance-inquiry` is the top move (26 of 49); touches 13→35 on one inquiry; expect MET fires |
+| O0.h conversation harvest | LIVE | 169 conversations promoted; bank turns over daily (verified in DB — the "starved" read was a severed-log artifact) |
+| Mid-conversation dig | DARK | zero `<dig>` emissions ever — model never reaches for it; needs prompt-side surfacing review |
+| O1 skill shelf | HALF-LIVE | shelf syncs (6 flows); pull + births + chat trigger-lines: zero firings |
+| O2 rehearsal driver | UNBLOCKED 2026-07-29 | 14 `chose=rehearse` across two boots = real demand; 18/18 died on the slug (fixed 2ad33b0); first live iteration owed |
+| §6 L4 failures-visible | LIVE (manifest half) | RECENT FAILURES section ships; failures-through-the-drain half missing |
+| Beat/puller IDLE TIER (new, 2026-07-29) | LIVE, PROVEN | both burners defer audibly; `idle-defer: her-work-in-flight` on boot105 first tick |
+
+### Pending (catalogued, not built) — rank order stands
+
+| Organ | State | Next move |
+|---|---|---|
+| O3 structured returns | HALF (lie fixed + envelope-at-dispatch) | origin-join at dispatch, drain validation + [UNSATISFIED], delegate board rows, failures through the drain |
+| O4 approval surface | NOT BUILT | lib/approvals.js read-model + AWAITING LUCAS section (~a day) |
+| O5 doc shapes + self-check | NOT BUILT | shapes→rows, branded docx, post-render self-check |
+| O6 adversarial verify | NOT BUILT | rides O2's proposal cards — sequenced behind the first real rehearsal run |
+| O7 directive enforce | NOT BUILT | closed verb vocabulary compiled to echo_suit dispatch; primitive proven (maintainForcedArgs) |
+| O8 history handles | NOT BUILT | one wire: aged-out turns → `(earlier: gist — recall ref=dN)` |
+| O9 themes | SKIP | unchanged — only if a second brand exists |
+| §6 L3 named join | NOT ADOPTED | releaseSwarm still frees without a synthesis pass |
+| graph_integrity scheduling | DARK | beats exist, smoke-proven, zero scheduled callers; now inherits the idle tier for free |
+
+### Newly identified (the 07-22 catalog predates these harness organs)
+
+**O10 — TOOL-SCHEMA PROGRESSIVE DISCLOSURE.** The harness now keeps most tool schemas OUT of
+context entirely (deferred tools + a ToolSearch that loads schemas on demand by query). Zoe's
+suit mounts all 551 tool docs into the operator surface — part of why `[package] fit` sits at
+9–14%. This is O1's trick (trigger surface small, bodies out of context) applied to TOOLS: a
+compact tool INDEX rides every prompt; full schemas load per-turn on request. Direct attack on
+the engine-starvation finding — rank it with A.
+
+**O11 — CONDITION WATCHERS.** The harness arms background watchers ("notify when this log line /
+condition appears") that re-invoke the agent with the event; used all through this review's
+boot-verification loop. Zoe's watchdogs RECOVER; nothing lets her ARM a watcher on a condition
+and be woken by it (heartbeat polls instead). Natural fit: inquiry next_steps of the form
+"when X lands, do Y" — currently impossible. Rank ~C.
+
+Not new (already covered): structured-output-at-tool-layer = O3 · compaction handles = O8 ·
+plan/permission surface = O4 · worktree isolation = R1 · subagent fan-out lessons = §6 ·
+scheduled wakeups ≈ reawaken/commitments (adequate today).
