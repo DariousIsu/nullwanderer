@@ -100,6 +100,18 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(fg.indexOf('Bloomberg Government sync') > -1 && fg.indexOf('authoritative source') > -1, 'factualGrounding includes the calendar source');
   ok(fg.indexOf('authoritative') < fg.indexOf('some entity note'), 'calendar leads the grounding (prioritized over the knowledge block)');
 
+  // --- foldHeldRows: duplicate names name their ambiguity, never a namesake's facts (2026-07-29) ---
+  const wc2 = require('../lib/week_context');
+  const folded = wc2.foldHeldRows([
+    { k: 'laila pirnazar', t: 'Fellow', acct: 'Stanford University' },
+    { k: 'john smith', t: 'Clerk', acct: 'Acme Parish' },
+    { k: 'john smith', t: 'Senator', acct: 'US Senate' },
+  ]);
+  ok(folded['laila pirnazar'] === 'Fellow, Stanford University — crm', 'unique name → real held facts');
+  ok(/2 CRM records share this name/.test(folded['john smith']) && /do not assert/.test(folded['john smith']), 'duplicated name → ambiguity named, no namesake facts (was last-row-wins)');
+  ok(!/Senator|Clerk/.test(folded['john smith']), 'neither record\'s facts leak into the ambiguous tag');
+  ok(wc2.foldHeldRows([{ k: 'bare row' }])['bare row'] === 'on file — crm', 'row with no title/org → honest "on file"');
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

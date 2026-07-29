@@ -227,4 +227,20 @@ async function scheduleGrounding({ gcalOpts = {}, now = Date.now(), deps = {} } 
     + 'time (and place/platform if shown). Do not say you could not find it — it is here:\n' + lines;
 }
 
-module.exports = { formatWeek, refresh, blockFor, cached, _resetCache, isScheduleQuestion, scheduleGrounding, TTL_MS };
+// Fold CRM lookup rows into the held map — PURE so the ambiguity rule is gate-testable. The CRM
+// carries 4,522 duplicate-name groups; the old inline fold was last-row-wins, so a namesake's
+// title/org could ride an attendee's [held: …] tag — the exact confabulation the exact-match rule
+// exists to prevent. A duplicated name now names its ambiguity instead of asserting either record.
+function foldHeldRows(rows) {
+  const out = {}, seen = {};
+  for (const row of (rows || [])) {
+    if (!row || !row.k) continue;
+    seen[row.k] = (seen[row.k] || 0) + 1;
+    if (seen[row.k] > 1) { out[row.k] = `${seen[row.k]} CRM records share this name — identity ambiguous, do not assert either`; continue; }
+    const desc = [row.t, row.acct].filter(Boolean).join(', ');
+    out[row.k] = (desc || 'on file') + ' — crm';
+  }
+  return out;
+}
+
+module.exports = { formatWeek, refresh, blockFor, cached, _resetCache, isScheduleQuestion, scheduleGrounding, foldHeldRows, TTL_MS };

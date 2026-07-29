@@ -9693,15 +9693,14 @@ async function autonomyTick() {
       const out = {};
       try {
         if (!echoSuit || !echoSuit.connected || !Array.isArray(names) || !names.length) return out;
-        const vals = names.slice(0, 16).map((n) => `'${String(n).replace(/'/g, "''").toLowerCase().trim()}'`).join(',');
+        // Cap 16→40 (2026-07-29): a name past the cap was never queried, yet rendered
+        // [NOT IN OUR RECORDS] — a FALSE absence claim. LIMIT rises with it (duplicates eat rows).
+        const vals = names.slice(0, 40).map((n) => `'${String(n).replace(/'/g, "''").toLowerCase().trim()}'`).join(',');
         const sql = `SELECT LOWER(TRIM(c.FirstName||' '||c.LastName)) AS k, c.Title AS t, `
           + `(SELECT a.Name FROM electoral.account a WHERE a.id=c.AccountId) AS acct `
-          + `FROM electoral.contact c WHERE c.deleted=0 AND LOWER(TRIM(c.FirstName||' '||c.LastName)) IN (${vals}) LIMIT 40`;
+          + `FROM electoral.contact c WHERE c.deleted=0 AND LOWER(TRIM(c.FirstName||' '||c.LastName)) IN (${vals}) LIMIT 120`;
         const r = await echoSuit.dispatch({ kind: 'do', name: 'db_query', args: { sql, params: [] } });
-        if (r && r.ok) { const j = JSON.parse(r.text); for (const row of (j.rows || [])) {
-          if (!row.k) continue; const desc = [row.t, row.acct].filter(Boolean).join(', ');
-          out[row.k] = (desc || 'on file') + ' — crm';
-        } }
+        if (r && r.ok) { const j = JSON.parse(r.text); Object.assign(out, require('./lib/week_context').foldHeldRows(j.rows)); }
       } catch (e) { console.error('[main] attendee held lookup failed:', e.message); }
       return out;
     };
