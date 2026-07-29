@@ -6930,7 +6930,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     const focusLib = require('./lib/focus');
     const f = (() => { try { return focusLib.getCurrent(); } catch { return null; } })();
-    if (f && focusLib.isDirected(f) && !directedStopHandled && !expandHandled && !statusHandled && !socialTurn && !followupFired) {
+    // NEVER onto a beat-origin sweep (2026-07-29 live miss): isDirected is true for the autonomic
+    // county sweeps too, so "lets focus on that research for a while" — meant for the AI-safety
+    // dossier he'd just been told about — was captured as guidance on the INDIANA TOWNSHIP sweep.
+    // A user's mid-stream steering never targets an autonomic beat; let the turn fall through to
+    // the normal reply/assignment path instead, where the referent can land on real work.
+    if (f && focusLib.isDirected(f) && focusLib.originOf(f) !== 'beat' && !directedStopHandled && !expandHandled && !statusHandled && !socialTurn && !followupFired) {
       const lastAssistant = [...recentTurns].reverse().find(t => t.speaker !== 'user');
       const askedQ = !!(lastAssistant && /\?/.test(String(lastAssistant.content || '')));
       // Her question TEXT rides along so the classifier can tell a social question's answer ("how was
@@ -7524,15 +7529,28 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         cloudMessages = built.messages;
         console.log(`[package] ${pkg.describe(built.report)}`);
       } catch (e) { console.error('[main] package build failed — sending the plain prompt:', e.message); }
-      const r = await require('./lib/cloud_logic').streamCloud(cloudMessages, {
+      let _cloudChunks = 0;
+      const _cloudOpts = {
         model: (() => { try { return db.getMeta('model.replier') || null; } catch { return null; } })(),
-        onToken: (chunk) => parser.feed(chunk),
+        onToken: (chunk) => { _cloudChunks++; parser.feed(chunk); },
         inactivityMs: 180000,
         think: false,       // same tag-contract reason as the local call below
         // num_predict deliberately unset — lib/cloud_window sizes it to the model, so a complete
         // thought isn't clipped at the local model's old 900-token budget.
         temperature: 0.7,   // her voice, not a classifier
-      });
+      };
+      let r = null;
+      try { r = await require('./lib/cloud_logic').streamCloud(cloudMessages, _cloudOpts); }
+      catch (e) { console.error('[main] cloud reply failed:', e.message); }
+      // ONE bounded retry, only when NOTHING streamed — a pure connection failure (the boot-window
+      // hiccup that sent three of his replies to the weak local voice on 2026-07-29). A partial
+      // stream is NEVER retried: replaying tokens would double-feed the parser.
+      if (!(r && r.text && r.text.trim()) && _cloudChunks === 0) {
+        console.warn('[main] cloud reply empty — one retry before the local fallback');
+        await new Promise((res) => setTimeout(res, 2500));
+        try { r = await require('./lib/cloud_logic').streamCloud(cloudMessages, _cloudOpts); }
+        catch (e) { console.error('[main] cloud reply failed (retry):', e.message); }
+      }
       if (r && r.text && r.text.trim()) {
         replyWriter = r.model;
         // The reasoning channel, RAW. It never touches the tag parser (see ollama.js — feeding it
