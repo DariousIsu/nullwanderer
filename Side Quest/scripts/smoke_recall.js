@@ -39,5 +39,24 @@ ok('resolves d-ref to the DOCUMENT itself (title + full body)', (() => { const r
 ok('missing d-ref → graceful miss', R.resolveRecall(mockDb, { kind: 'd', id: 999, ref: 'd999' }).ok === false);
 ok('resolver never throws on a broken db getter', (() => { const r = R.resolveRecall({ getDocumentById: () => { throw new Error('boom'); } }, { kind: 'd', id: 1, ref: 'd1' }); return r.ok === false; })());
 
+// ─── COORDINATE DEREF — through the seam, not around it (2026-07-29) ───────────────────────────
+// resolveCoord shipped UN-EXPORTED and every <recall coord=…/> threw into a swallowed catch for
+// three days while this suite stayed green — because nothing here called the function main.js calls.
+ok('resolveCoord is exported (the live failure: it was not)', typeof R.resolveCoord === 'function');
+ok('parses a coord tag', (() => { const t = R.parseRecallTags('hm <recall coord="person:owner/alice"/> ok'); return t.length === 1 && t[0].kind === 'coord' && t[0].coord === 'person:owner/alice'; })());
+ok('owner-world coord resolves with edges', (() => {
+  const r = R.resolveCoord('person:owner/alice', { ownerGet: (c) => ({ name: 'Alice', summary: 'the daughter', edges: [{ src: c, rel: 'DAUGHTER_OF', dst: 'Lucas' }] }) });
+  return r.ok && /Alice/.test(r.text) && /DAUGHTER_OF Lucas/.test(r.text);
+})());
+ok('non-owner coord falls through to the graph', (() => {
+  const r = R.resolveCoord('place:civic/zavala-tx', { ownerGet: () => null, graphGet: () => 'Zavala County, Texas → Texas → United States' });
+  return r.ok && /Zavala/.test(r.text);
+})());
+ok('unresolvable coord → honest gap, never invention', (() => { const r = R.resolveCoord('org:civic/nowhere', {}); return r.ok === false && /gap/.test(r.text); })());
+ok('a throwing ownerGet falls through, never throws out', (() => {
+  const r = R.resolveCoord('self:zoe/core', { ownerGet: () => { throw new Error('boom'); }, graphGet: () => null });
+  return r.ok === false;
+})());
+
 console.log('\n' + (fail === 0 ? 'ALL PASS' : 'FAILURES') + ` — ${pass} passed, ${fail} failed`);   // em-dash: the gate's result-line regex requires it
 process.exit(fail === 0 ? 0 : 1);

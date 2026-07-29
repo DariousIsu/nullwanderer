@@ -94,4 +94,7 @@ function resolveRecall(db, ref) {
 }
 function miss(ref) { return { ok: false, ref: ref.ref, text: `No memory found for ${ref.ref}.` }; }
 
-module.exports = { parseRecallTags, stripRecallTags, resolveRecall, RECALL_RE };
+// resolveCoord MUST ride the exports: it shipped un-exported (THE MERGE, 2026-07-26 → found 2026-07-29),
+// so every <recall coord=…/> threw "resolveCoord is not a function" into a swallowed catch and the
+// coordinate deref — the manifest's whole point — was a silent no-op in production for three days.
+module.exports = { parseRecallTags, stripRecallTags, resolveRecall, resolveCoord, RECALL_RE, COORD_RE };
