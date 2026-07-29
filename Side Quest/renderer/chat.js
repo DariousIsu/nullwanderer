@@ -230,6 +230,30 @@ function renderHistoricalAiPair(thoughtText, saidText) {
 // if the think ran long and truncated, "…"). Show pulsing dots the moment a message is sent;
 // clear them on the first streamed token, on complete, or on error.
 let thinkingNode = null;
+let liveSayBuffer = '';
+
+// RUN STATUS (harness transplant, Lucas 2026-07-29): a running reply shows its elapsed time, and —
+// once say-tokens stream — an approximate token count (chars/4; the think phase is invisible to
+// this renderer, so the count starts when the say does). The stat rides the thinking dots, moves
+// onto the streaming turn with the first token, and the finished turn keeps a muted stamp.
+let runStartTs = 0, runStatNode = null, runStatTimer = null;
+function _runStatText() {
+  const secs = Math.max(0, (Date.now() - runStartTs) / 1000);
+  const t = liveSayBuffer ? ` · ~${Math.max(1, Math.round(liveSayBuffer.length / 4))} tok` : '';
+  return `${secs < 10 ? secs.toFixed(1) : Math.round(secs)}s${t}`;
+}
+function startRunStat() {
+  runStartTs = Date.now();
+  if (!runStatNode) { runStatNode = document.createElement('span'); runStatNode.className = 'runstat'; }
+  runStatNode.textContent = '0.0s';
+  if (runStatTimer) clearInterval(runStatTimer);
+  runStatTimer = setInterval(() => { if (runStatNode) runStatNode.textContent = _runStatText(); }, 250);
+}
+function stopRunStat() {
+  if (runStatTimer) { clearInterval(runStatTimer); runStatTimer = null; }
+  if (runStatNode) runStatNode.remove();
+}
+
 function showThinking() {
   if (thinkingNode) return;
   thinkingNode = document.createElement('div');
@@ -240,14 +264,14 @@ function showThinking() {
     d.className = 'dot';
     thinkingNode.appendChild(d);
   }
+  startRunStat();
+  thinkingNode.appendChild(runStatNode);
   transcript.appendChild(thinkingNode);
   scrollMaybe();
 }
 function hideThinking() {
   if (thinkingNode) { thinkingNode.remove(); thinkingNode = null; }
 }
-
-let liveSayBuffer = '';
 
 function cleanLiveSay(s) {
   return (s || '')
@@ -293,6 +317,8 @@ window.sq.onSayToken((token) => {
       currentAiTurnDiv = makeAiTurn();
       currentAiSaidNode = makeSaidNode('');
       currentAiTurnDiv.appendChild(currentAiSaidNode);
+      // The run stat survives the dots (hideThinking removed its parent) — ride the streaming turn.
+      if (runStatNode && runStatTimer) currentAiTurnDiv.appendChild(runStatNode);
       transcript.appendChild(currentAiTurnDiv);
       liveSayBuffer = '';
     } else {
@@ -330,6 +356,15 @@ window.sq.onComplete((info) => {
   hideThinking();
   const turnDiv = currentAiTurnDiv;
   const saidNode = currentAiSaidNode;
+  // Freeze the run stat into a permanent muted stamp on the finished turn (only if tokens streamed —
+  // a silent completion leaves no stamp), then clear the live counter.
+  if (turnDiv && liveSayBuffer && runStartTs) {
+    const stamp = document.createElement('div');
+    stamp.className = 'turnstat';
+    stamp.textContent = _runStatText();
+    turnDiv.appendChild(stamp);
+  }
+  stopRunStat();
   if (turnDiv && saidNode) {
     // If the backend rewrote the say (voice guard de-disclaimed it), the corrected
     // text rides the complete payload — use it to replace what streamed. Otherwise
@@ -380,6 +415,7 @@ async function routeThoughtToSheep() {
 
 window.sq.onError((err) => {
   hideThinking();
+  stopRunStat();
   renderEphemeral(`— ${err} —`);
   currentAiTurnDiv = null;
   currentAiSaidNode = null;
@@ -507,6 +543,7 @@ async function send() {
     await window.sq.sendMessage(text || '(see attachments)', attachmentsToSend);
   } catch (err) {
     renderEphemeral(`— ${err.message || err} —`);
+    stopRunStat();
     sending = false;
     input.disabled = false;
     input.focus();

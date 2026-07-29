@@ -111,6 +111,19 @@ html, body {
 }
 .thinking .dot:nth-child(2) { animation-delay: 0.18s; }
 .thinking .dot:nth-child(3) { animation-delay: 0.36s; }
+/* RUN STATUS — elapsed + ~tokens on a running reply; a muted permanent stamp on the finished turn. */
+.runstat {
+  font-size: 10px;
+  color: #6a6a73;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+.turnstat {
+  font-size: 10px;
+  color: #6a6a73;
+  opacity: 0.7;
+  margin-top: 4px;
+}
 
 @keyframes thinkPulse {
   0%, 65%, 100% { opacity: 0.2; transform: translateY(0); }
