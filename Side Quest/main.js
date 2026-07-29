@@ -9659,7 +9659,20 @@ async function autonomyTick() {
     // return even on ticks that decide nothing.
     try { await _drainAgentInbox(now); } catch (e) { console.error('[autonomy] inbox drain failed:', e.message); }
     // PACE — one decision per cadence window, however often the timer fires.
-    if (now - (parseInt(db.getMeta('autonomy.last_decide_at') || '0', 10) || 0) < _autonomyCadenceMs()) return;
+    // ⭐DRAIN MODE (Lucas 2026-07-29, "full tilt draining real research"): a successful inquiry
+    // touch / rehearse iteration opens a bounded 30-min window during which the NEXT decision
+    // follows at the drain gap (default 45s, meta autonomy.drain_gap_sec) instead of the calm
+    // cadence — her real work chains back-to-back while the window holds, and a dry spell falls
+    // back to the calm pace by itself (the window only re-arms on another successful step). Every
+    // other gate still binds: mid-exchange, main-thread governor, research throttle, slot pool —
+    // full tilt never means unthrottled. Kill: ZOE_AUTONOMY_DRAIN=0 or meta autonomy.drain='0'.
+    const _drainEnvOff = /^(0|false|off)$/i.test(String(process.env.ZOE_AUTONOMY_DRAIN || '').trim());
+    const _drainOn = !_drainEnvOff && db.getMeta('autonomy.drain') !== '0';
+    const _drainUntil = parseInt(db.getMeta('autonomy.drain_until') || '0', 10) || 0;
+    const _paceMs = (_drainOn && now < _drainUntil)
+      ? Math.max(15, _intMeta('autonomy.drain_gap_sec', 45)) * 1000
+      : _autonomyCadenceMs();
+    if (now - (parseInt(db.getMeta('autonomy.last_decide_at') || '0', 10) || 0) < _paceMs) return;
     // YIELD to live conversation: a turn in the last 3 minutes means Lucas is here — the idle lane
     // must never contend with him for cloud slots or attention (subject-leak rule doubly so).
     // ⭐CONDUCTOR RELAXATION (2b): his presence stops PAUSING her inner life. The old rule — any
@@ -9986,6 +9999,9 @@ async function autonomyTick() {
       sum.entry.outcome += env ? `; next: ${String(env.next_step || '').slice(0, 60)}` : '; no write-back';
       autonomy.historyPush(H, sum.entry);
       console.log(`[autonomy] chose=advance-inquiry → #${inqId} touch ${row.touches + 1} ${sum.ok ? 'ok' : 'no-answer'}${env ? ` (${env.status})` : ' (no write-back)'}${expectVerdict ? `; expect ${expectVerdict.met ? 'MET' : 'NOT met'}` : ''}`);
+      // A successful touch arms/renews the drain window — the next decision follows at the drain
+      // gap, so an inquiry with momentum keeps it (see the PACE gate above).
+      if (sum.ok) { try { db.setMeta('autonomy.drain_until', String(Date.now() + 30 * 60 * 1000)); } catch {} }
       return;
     }
     // REHEARSE (O2, slice 5) — advance THE active rehearsal run one iteration on a pool slot.
@@ -10074,6 +10090,9 @@ async function autonomyTick() {
         }
       } catch {}
       console.log(`[autonomy] chose=rehearse → ${run.slug} ${r ? r.status : 'FAILED'}${r ? ` — ${String(r.note).slice(0, 100)}` : ''}`);
+      // An advancing rehearsal arms the drain window too — the tight edit-test loop is exactly
+      // where back-to-back iterations beat one step per calm cadence.
+      if (r && r.ok) { try { db.setMeta('autonomy.drain_until', String(Date.now() + 30 * 60 * 1000)); } catch {} }
       return;
     }
     // SCENARIO WORK-MOVE (F3's other half): run ONE hand-authored what-if from the catalog against the live
