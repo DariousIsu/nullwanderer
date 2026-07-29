@@ -67,5 +67,16 @@ ok(/x''; drop table/.test(inj.sql) && !/'; DROP TABLE contact;--'/.test(inj.sql)
 const none = cq.buildCoverageCountSql({});
 ok(none.applies === true && /WHERE c\.deleted=0/.test(none.sql), 'no filters → valid total over the CRM');
 
+// --- HONESTY GUARD (2026-07-29): a filter the COUNT can't honor must refuse, never miscount ---
+ok(cq.buildCoverageCountSql({ grade: 'B' }).applies === false, 'grade filter → applies:false (gather path honors it)');
+ok(cq.buildCoverageCountSql({ sectors: ['energy'] }).applies === false, 'sector filter → applies:false ("how many energy contacts" must not count the whole CRM)');
+ok(cq.buildCoverageCountSql({ sectors: [] }).applies === true, 'empty sectors array is no filter — still counts');
+
+// --- company + state: the anchor keeps stateless rows, the gate drops other states' rows ---
+const both = cq.buildCoverageCountSql({ company: 'Jefferson Parish', state: 'LA' });
+ok(both.applies === true && /jefferson parish/.test(both.sql) && /'LA'/.test(both.sql), 'company+state → both ride the WHERE');
+ok(/State_Represented IS NULL OR TRIM\(c\.State_Represented\)=''/.test(both.sql), 'company+state → stateless rows still ride the parish anchor');
+ok(both.filters.includes('LA') && both.filters.includes('Jefferson Parish'), 'company+state → both named in the scope note');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

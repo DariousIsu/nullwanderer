@@ -149,11 +149,24 @@ function _likeSafe(s) { return String(s == null ? '' : s).toLowerCase().replace(
 // strict state filter would drop them (why "we don't have anything for that Parish" was false).
 function buildCoverageCountSql(ask = {}) {
   if (ask.type === 'corporate') return { applies: false };   // corporate contacts aren't in electoral.contact
+  // HONESTY GUARD (2026-07-29): any parsed filter this COUNT cannot honor → applies:false, so the
+  // caller stays on the gather path (which honors grade + sectors). Without this, "how many energy
+  // contacts?" relayed the count of the ENTIRE CRM number-first. Slow-and-honest beats fast-and-wrong.
+  if (ask.grade || (Array.isArray(ask.sectors) && ask.sectors.length)) return { applies: false };
   const w = ['c.deleted=0'];
   const filters = [];
   const comp = ask.company ? _likeSafe(ask.company) : '';
   const st = ask.state && /^[A-Za-z]{2}$/.test(String(ask.state)) ? String(ask.state).toUpperCase() : null;
-  if (comp) { w.push(`LOWER(a.Name) LIKE '%${comp}%' ESCAPE '\\'`); filters.push(String(ask.company)); }
+  if (comp) {
+    w.push(`LOWER(a.Name) LIKE '%${comp}%' ESCAPE '\\'`); filters.push(String(ask.company));
+    // The named org/parish stays the GEOGRAPHIC ANCHOR (parish rows are frequently stateless), but a
+    // state named ALONGSIDE it still gates: a row that CARRIES a state must match it; only stateless
+    // rows ride the anchor. "Jefferson Parish in Louisiana" no longer counts other states' parishes.
+    if (st) {
+      w.push(`(UPPER(TRIM(COALESCE(c.State_Represented,'')))='${st}' OR UPPER(TRIM(COALESCE(c.MailingState,'')))='${st}' OR ((c.State_Represented IS NULL OR TRIM(c.State_Represented)='') AND (c.MailingState IS NULL OR TRIM(c.MailingState)='')))`);
+      filters.push(st);
+    }
+  }
   else if (st) { w.push(`(UPPER(TRIM(c.State_Represented))='${st}' OR UPPER(TRIM(c.MailingState))='${st}')`); filters.push(st); }
   const party = (ask.party === 'R' || ask.party === 'D') ? ask.party : null;
   if (party) { w.push(`UPPER(TRIM(c.Party_Canonical))='${party}'`); filters.push(party === 'R' ? 'Republican' : 'Democrat'); }
