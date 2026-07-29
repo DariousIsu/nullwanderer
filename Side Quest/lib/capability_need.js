@@ -135,4 +135,13 @@ function manifestLines({ deps = {}, nowMs = Date.now(), limit = 4 } = {}) {
   });
 }
 
-module.exports = { detect, record, listOpen, get, setStatus, harvest, suiteFor, manifestLines };
+// Rehearsal-legal slug for a need-born run — the WHOLE slug capped to rehearsal's 40-char limit.
+// Live failure (boots 90-96, 18/18 refusals): the cap was applied to the need-text suffix only, so
+// `need-<id>-` + 40 chars of text overflowed SLUG_RE and every rehearse open died at the door. The
+// id stays (uniqueness); the text gets whatever room remains.
+function slugFor(id, needText) {
+  const base = `need-${id}-${String(needText || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`;
+  return base.slice(0, 40).replace(/-+$/, '') || `need-${id}`;
+}
+
+module.exports = { detect, record, listOpen, get, setStatus, harvest, suiteFor, slugFor, manifestLines };

@@ -70,6 +70,12 @@ try {
   const lines = CN.manifestLines({ nowMs: T0 + 7200000 });
   ok(lines.length === 3 && /\[need #\d+\]/.test(lines[0]) && /named 2h ago/.test(lines[0]),
     'manifestLines: open needs render with id, text, age, and born_from (3 open: crawler, re-landed xls, roster-diff)');
+  // ─── slugFor: the WHOLE slug obeys rehearsal's 40-char law (boots 90-96: 18/18 refusals) ───
+  const SLUG_RE = /^[a-z0-9-]{1,40}$/;
+  ok((() => { const s = CN.slugFor(1, 'read and parse legacy .XLS spreadsheet files from state election rosters'); return SLUG_RE.test(s) && s.startsWith('need-1-'); })(), 'slugFor: long need text → total ≤40 and rehearsal-legal');
+  ok(!/-$/.test(CN.slugFor(12, 'x'.repeat(30) + ' y'.repeat(20))), 'slugFor: never ends on a dash after the cap');
+  ok(SLUG_RE.test(CN.slugFor(7, '')), 'slugFor: empty need text still yields a legal slug');
+  ok(CN.slugFor(3, 'Fetch C-SPAN captions!') === 'need-3-fetch-c-span-captions', 'slugFor: uppercase + punctuation normalize');
 } catch (e) {
   fail++; console.error('  ✗ threw:', e.stack || e.message);
 } finally {

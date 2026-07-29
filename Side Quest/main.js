@@ -10005,7 +10005,7 @@ async function autonomyTick() {
               const fs2 = require('fs'), path2 = require('path');
               const suites = fs2.readdirSync(path2.join(__dirname, 'scripts')).filter((f) => /^smoke_[a-z0-9_]+\.js$/.test(f));
               const suite = capn.suiteFor(need.need, suites);
-              const slug = `need-${need.id}-${String(need.need).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)}`;
+              const slug = capn.slugFor(need.id, need.need);   // whole-slug 40-cap — the suffix-only cap refused 18/18 rehearse opens
               let files = [], useSuite = suite, goal, bornHarness = false;
               if (suite) {
                 // an existing smoke judges it — watch the libs that suite itself requires (its edit surface).
