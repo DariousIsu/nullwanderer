@@ -55,5 +55,17 @@ keep('Li Wei');
 keep('Henry Whitehorn');
 keep('Dr. Angela Merkel');
 
+// ENTITY-TYPE PLACEHOLDERS (2026-07-29 live flood): a doc carrying literal annotation tokens minted
+// ~190 CRM contacts named "- PERSON" in minutes — the gate knew roles/orgs/mailboxes but not the
+// extractor's own type vocabulary.
+junk('- PERSON');
+junk('PERSON');
+junk('Organization');
+junk('- LOCATION');
+junk('Full Name');
+junk('Attendee');
+keep('Persephone Larkin');       // a real name CONTAINING a placeholder-ish stem still passes
+keep('Persia Nunez');
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

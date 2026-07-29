@@ -11225,8 +11225,9 @@ async function surfaceDocCards(doc) {
           try {
             const _crmDoor = require('./lib/crm_door');
             const _door = _crmDoor.getDoor(echoSuit);
-            if (_door) {
-              const _r = await _door.upsertPersonObject(_crmDoor.personObjectFromCard(L, beliefs),
+            const _obj = _door ? _crmDoor.personObjectFromCard(L, beliefs) : null;   // null = the door refused the name
+            if (_door && _obj) {
+              const _r = await _door.upsertPersonObject(_obj,
                 { source: sourceUrl, notes: L.company ? `Discovered via research — affiliation: ${L.company}` : null });
               if (_r && (_r.action === 'created' || _r.action === 'updated')) console.log(`[crm-door] ${_r.action} ${L.name}${_r.contactId ? ' (#' + _r.contactId + ')' : ''}`);
             }

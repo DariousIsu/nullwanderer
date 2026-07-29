@@ -43,6 +43,15 @@ const GENERIC = new Set([
   'press', 'communications', 'comms',
 ]);
 
+// ENTITY-TYPE PLACEHOLDER tokens (2026-07-29 live flood): a document carrying literal annotation
+// tokens ("- PERSON", "ORGANIZATION") sailed through this gate and the crm_door minted ~190 CRM
+// contacts named "- PERSON" in minutes. A name that IS an entity-type label is an extraction
+// artifact, never a person. (A real surname "Person" exists but is unusable as a lone token anyway.)
+const PLACEHOLDER = new Set([
+  'person', 'people', 'persons', 'individual', 'name', 'fullname', 'full', 'entity', 'entities',
+  'organization', 'organisation', 'org', 'place', 'location', 'event', 'date', 'company', 'attendee',
+]);
+
 // Structural / grammar tokens that carry no name signal.
 const STOP = new Set(['the', 'of', 'and', 'for', 'a', 'an', '&', 'at', 'in', 'on', 'to', 'by', 'or', 'de', 'la', 'el']);
 
@@ -65,11 +74,11 @@ function isJunkPersonName(name) {
   // Every content token is a ROLE or ORG word → not a person ("Executive Director", "Board of Trustees").
   // NOTE: deliberately NOT including GENERIC here — a multi-word mailbox persona ("Press Team") is handled
   // by the ingest tier system (30%-generic), not this gate. #43 is scoped to ROLE / ORG-ENTITY junk.
-  if (content.every((t) => ROLE_TAIL.has(t) || ORG_TAIL.has(t))) return true;
+  if (content.every((t) => ROLE_TAIL.has(t) || ORG_TAIL.has(t) || PLACEHOLDER.has(t))) return true;
 
-  // A single content token that is a role/generic word → junk ("Director", "Contact", "Various"). A lone
-  // real given name (rare in a roster) is left alone unless it is a known meta word.
-  if (content.length === 1 && (ROLE_TAIL.has(content[0]) || GENERIC.has(content[0]))) return true;
+  // A single content token that is a role/generic/placeholder word → junk ("Director", "Contact",
+  // "PERSON"). A lone real given name (rare in a roster) is left alone unless it is a known meta word.
+  if (content.length === 1 && (ROLE_TAIL.has(content[0]) || GENERIC.has(content[0]) || PLACEHOLDER.has(content[0]))) return true;
 
   // The name ENDS in an org tail or a role word → an org or a role, not a person ("Smith Family Trust",
   // "Finance Director", "Advisory Board"). The tail is where the entity/role type lives.
@@ -82,4 +91,4 @@ function isJunkPersonName(name) {
   return false;                                                    // looks like a real person name → keep
 }
 
-module.exports = { isJunkPersonName, ORG_TAIL, ROLE_TAIL, GENERIC };
+module.exports = { isJunkPersonName, ORG_TAIL, ROLE_TAIL, GENERIC, PLACEHOLDER };

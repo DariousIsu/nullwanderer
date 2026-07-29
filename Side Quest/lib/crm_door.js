@@ -78,12 +78,19 @@ function getDoor(echoSuit) {
 // text-grounded attributes are carried (email/phone/role); org travels as a note (AccountId edge is a
 // later slice). DISCOVERY-not-invention: nothing is guessed — the beliefs came from the source text.
 function personObjectFromCard(landed, beliefs = []) {
+  // THE DOOR TRUSTS NO FEEDER (2026-07-29 live flood): the doc-cards extractor handed ~190 people
+  // named "- PERSON" (literal annotation tokens in the source doc) and every one landed in the CRM
+  // before the upstream gate learned the pattern. The one door re-checks name validity itself:
+  // null = refuse (the wire skips), never a junk row.
+  const name = String((landed && landed.name) || '').trim();
+  if (!name || !/[a-z]/i.test(name)) return null;
+  try { if (require('../studio/puller_name_gate').isJunkPersonName(name)) return null; } catch { /* gate unavailable → fall through */ }
   const b = (t) => { const x = (beliefs || []).find((y) => y && y.type === t); return x && x.value; };
   const attributeFacts = {};
   const email = b('email'); if (email) attributeFacts.Email = email;
   const phone = b('phone'); if (phone) attributeFacts.Phone = phone;
   const role = b('role'); if (role) attributeFacts.Title = role;
-  return { name: landed.name, attributeFacts, edgeFacts: {}, identifiers: {}, org: landed.company || null };
+  return { name, attributeFacts, edgeFacts: {}, identifiers: {}, org: (landed && landed.company) || null };
 }
 
 function _resetForTest() { try { if (_crm) _crm.close(); } catch {} _door = null; _crm = null; _failed = false; _warnedMissing = false; }

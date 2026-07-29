@@ -27,6 +27,13 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(obj.attributeFacts.Phone === '318-555-1212', 'phone → attributeFacts.Phone');
   ok(obj.org === 'Richland Parish School Board', 'company → org (for the block match + note)');
 
+  // 1b. THE DOOR TRUSTS NO FEEDER (2026-07-29 flood): a placeholder "name" is refused AT the door —
+  // null out, the wire skips — even if an upstream gate missed it.
+  ok(door.personObjectFromCard({ name: '- PERSON', company: 'Anywhere' }, []) === null, 'placeholder name "- PERSON" refused at the door (the ~190-row flood)');
+  ok(door.personObjectFromCard({ name: '   ', company: 'X' }, []) === null, 'blank name refused');
+  ok(door.personObjectFromCard({ name: 'Finance Director', company: 'X' }, []) === null, 'role-word name refused at the door too');
+  ok(door.personObjectFromCard({ name: 'Talya', company: 'X' }, []) !== null, 'a real mononym still passes');
+
   // 2. DISCOVERY-not-invention: no beliefs → no invented contact fields.
   const bare = door.personObjectFromCard({ name: 'Garth Sullivan', company: 'Richland Parish 911' }, []);
   ok(Object.keys(bare.attributeFacts).length === 0, 'no beliefs → empty attributeFacts (nothing guessed)');
