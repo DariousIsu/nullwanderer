@@ -210,6 +210,7 @@ const smokes = [
   'smoke_dispatch_guards.js',
   'smoke_crm_upsert.js',
   'smoke_graph_integrity.js',
+  'smoke_graph_integrity_tick.js',
   'smoke_doc_shapes.js',
   'smoke_tz.js',
   'smoke_directives.js',
