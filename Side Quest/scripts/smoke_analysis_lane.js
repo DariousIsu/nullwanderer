@@ -110,6 +110,19 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   const src = A._helperSource({ sq: 'x' });
   ok(/def tables\(db\):/.test(src), 'helper ships tables(db) discovery');
   ok(/def schema\(db, table\):/.test(src), 'helper ships schema(db, table) discovery');
+  ok(/def atlas\(\):/.test(src), 'helper ships atlas() (the whole-world view)');
+})();
+
+// THE WORKBENCH (2026-07-29): python writes that PERSIST between calls — the iterate loop.
+await (async () => {
+  const slug = `smoke-wb-${process.pid.toString(36)}`;
+  const r1 = await A.run({ code: 'with open("state.txt","w") as f: f.write("iteration-1")\nprint("wrote")', workbench: slug });
+  ok(/wrote/.test(r1), 'workbench run 1: python WRITES a file in its jail');
+  const r2 = await A.run({ code: 'print(open("state.txt").read())', workbench: slug });
+  ok(/iteration-1/.test(r2), 'workbench run 2: the file SURVIVED — iteration builds on prior work');
+  ok((await A.run({ code: 'print(1)', workbench: '../escape' })).includes('cannot run'), 'workbench slug jail: a path-shaped slug is refused');
+  const fs2 = require('fs'), path2 = require('path');
+  try { fs2.rmSync(path2.join(require('../lib/analysis_lane').ANALYSIS_ROOT, '..', 'workbench', slug), { recursive: true, force: true }); } catch {}
 })();
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

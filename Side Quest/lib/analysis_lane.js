@@ -106,21 +106,38 @@ function _newDir() {
   return { id, dir };
 }
 
-// Run a one-off python analysis READ-ONLY over the whitelisted data DBs. Returns the captured output
-// (her result), or an honest refusal/verdict string. Ephemeral: the dir is discarded after.
-function run({ code, timeoutMs = null } = {}) {
+// THE WORKBENCH (Lucas 2026-07-29, "autonomous python writes to solve problems and iterate — the
+// meat of the shell branch"): pass `workbench: '<slug>'` and the run's cwd becomes a PER-PROBLEM
+// directory under data/workbench/ that PERSISTS between calls — python writes intermediate files
+// there freely and the next call builds on them: write → run → read the failure → fix → re-run,
+// the same loop I use. The DB layer stays SQLite-ro exactly as before (writes there are still
+// rejected by the engine); the jail is the slug dir; nothing outside it is offered. Ephemeral
+// remains the default for plain one-off analyses.
+const WORKBENCH_ROOT = path.join(DATA_DIR, 'workbench');
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+// Run a python analysis READ-ONLY over the whitelisted data DBs. Returns the captured output
+// (her result), or an honest refusal/verdict string. Ephemeral by default; workbench persists.
+function run({ code, timeoutMs = null, workbench = null } = {}) {
   return new Promise((resolve) => {
     const src = String(code == null ? '' : code);
     if (src.trim().length < 1) return resolve('cannot run: give the python analysis code');
     if (src.length > CODE_CAP) return resolve(`cannot run: code too large (>${CODE_CAP} chars) — a one-off analysis should be bounded`);
     const whitelist = dbWhitelist();
     if (!Object.keys(whitelist).length) return resolve('cannot run: no data databases are available to analyze');
-    let dir, id;
-    try { ({ dir, id } = _newDir()); } catch (e) { return resolve(`cannot run: ${e.message}`); }
+    let dir, id, persistent = false;
+    if (workbench != null && String(workbench).trim() !== '') {
+      const slug = String(workbench).trim().toLowerCase();
+      if (!SLUG_RE.test(slug)) return resolve(`cannot run: workbench slug must match ${SLUG_RE} — got "${String(workbench).slice(0, 60)}"`);
+      dir = path.join(WORKBENCH_ROOT, slug); id = slug; persistent = true;
+      try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { return resolve(`cannot run: ${e.message}`); }
+    } else {
+      try { ({ dir, id } = _newDir()); } catch (e) { return resolve(`cannot run: ${e.message}`); }
+    }
     try {
       fs.writeFileSync(path.join(dir, 'zoe_data.py'), _helperSource(whitelist));
       fs.writeFileSync(path.join(dir, 'analysis.py'), src);
-    } catch (e) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} return resolve(`cannot run: ${e.message}`); }
+    } catch (e) { if (!persistent) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} } return resolve(`cannot run: ${e.message}`); }
     const ms = Math.min(MAX_TIMEOUT_MS, Math.max(1000, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));
     const { execFile } = require('child_process');
     // env carries NO db paths (baked into the helper) — only what python needs to start.
@@ -128,7 +145,7 @@ function run({ code, timeoutMs = null } = {}) {
       cwd: dir, timeout: ms, maxBuffer: 16 * 1024 * 1024, windowsHide: true,
       env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
     }, (err, stdout, stderr) => {
-      try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+      if (!persistent) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} }
       const out = `${stdout || ''}${stderr ? '\n' + stderr : ''}`.trim();
       const tail = out.length > OUTPUT_CAP ? out.slice(0, OUTPUT_CAP) + '\n…(output truncated)' : out;
       if (err && err.killed) return resolve(`[analysis timed out after ${Math.round(ms / 1000)}s]\n${tail}`);
