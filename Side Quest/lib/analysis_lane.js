@@ -47,6 +47,16 @@ function dbWhitelist() {
   const echoCwd = process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo';
   const graph = process.env.ZOE_ECHO_GRAPH_DB || path.join(echoCwd, 'data', 'foundations', 'civic_graph.db');
   if (fs.existsSync(graph)) out.graph = graph;
+  // FINISHING THE TRANSPLANT (Lucas 2026-07-29 — "that never finished"): real analysis needs her
+  // WORKING stores, not just memory+graph. Same SQLite-enforced ro jail; existence-gated; secrets
+  // still never. news = the isolated news bucket · puller = the contact completion store ·
+  // electoral = the CRM (the store her coverage questions are really about).
+  const news = path.join(DATA_DIR, 'news_bucket.db');
+  if (fs.existsSync(news)) out.news = news;
+  const puller = path.join(DATA_DIR, 'puller.db');
+  if (fs.existsSync(puller)) out.puller = puller;
+  const electoral = process.env.CRM_DB_PATH || path.join(echoCwd, 'data', 'foundations', 'electoral.db');
+  if (fs.existsSync(electoral)) out.electoral = electoral;
   return out;
 }
 
@@ -71,6 +81,15 @@ function _helperSource(whitelist) {
     '        return cols, cur.fetchall()',
     '    finally:',
     '        con.close()',
+    // DISCOVERY (2026-07-29): the lane failed live for want of these — the doc example taught a
+    // table that does not exist, and with no way to LOOK, every guess errored and the tool read as
+    // broken. Discover first, then query — never guess a schema.
+    'def tables(db):',
+    "    cols, rows = query(db, \"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name\")",
+    '    return [r[0] for r in rows]',
+    'def schema(db, table):',
+    '    cols, rows = query(db, "SELECT sql FROM sqlite_master WHERE name=?", (str(table),))',
+    '    return rows[0][0] if rows else None',
     '',
   ].join('\n');
 }

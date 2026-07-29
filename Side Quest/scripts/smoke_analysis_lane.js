@@ -104,7 +104,15 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   const old = Date.now() + 2 * 3600e3;  // pretend "now" is 2h ahead → the fresh dir looks stale
   ok(A.tidy({ nowMs: old }) === 1, 'tidy removes a stale analysis straggler');
 
-  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
+  // FINISHING THE TRANSPLANT (2026-07-29): discovery must exist — the lane failed live for a week
+// because the doc example taught a nonexistent table and there was no way to LOOK.
+(() => {
+  const src = A._helperSource({ sq: 'x' });
+  ok(/def tables\(db\):/.test(src), 'helper ships tables(db) discovery');
+  ok(/def schema\(db, table\):/.test(src), 'helper ships schema(db, table) discovery');
+})();
+
+console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   try { db.getDb().close(); } catch {}
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}
   process.exit(fail === 0 ? 0 : 1);
