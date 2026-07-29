@@ -90,6 +90,10 @@ function _helperSource(whitelist) {
     'def schema(db, table):',
     '    cols, rows = query(db, "SELECT sql FROM sqlite_master WHERE name=?", (str(table),))',
     '    return rows[0][0] if rows else None',
+    // The whole-world view in one call (Lucas 2026-07-29: "use yours as a filler") — generated from
+    // the live stores at run time, never a hand-written copy that drifts.
+    'def atlas():',
+    '    return {db: tables(db) for db in dbs()}',
     '',
   ].join('\n');
 }
