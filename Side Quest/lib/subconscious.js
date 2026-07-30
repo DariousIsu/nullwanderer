@@ -114,7 +114,16 @@ function markSynthesized({ setMeta, now }) { try { setMeta && setMeta(SYNTH_AT_K
 // self-model rides IN (positions/tastes angle what she notices), and a POSITION line may flow
 // OUT — a stance formed from the material, landing in the self-model with provenance. Opinion-
 // shaped only, daily-capped at the caller — research must never recolonize identity as work-log.
-function buildSynthesisPrompt({ recentThoughts = [], threads = [], focus = null, sources = [], explored = [], identity = '' } = {}) {
+// SLICE C (Lucas 2026-07-30: "the subc should have a global understanding of everything being
+// worked on at all times… instead of recency bias she should be making real actionable choices —
+// the hallmark of a good research assistant is anticipating your needs"). Two changes:
+//   BOARD IN — the same manifest her DECIDER reads every tick (open threads, inquiries, deadlines,
+//     his week, failures, what's awaiting him, what's running) rides the synthesis, so her
+//     between-turn thinking reasons over the WHOLE of what's in flight instead of the last 16
+//     thoughts. Recency stops being the only signal.
+//   ANTICIPATION OUT — the prompt now prizes the tension HE HASN'T NOTICED: something on the board
+//     that will bite, or a gap he will need filled before he asks for it.
+function buildSynthesisPrompt({ recentThoughts = [], threads = [], focus = null, sources = [], explored = [], identity = '', board = '' } = {}) {
   const t = recentThoughts.slice(-12)
     .map((x, i) => `${i + 1}. ${String((x && x.content) || x || '').replace(/\s+/g, ' ').slice(0, 200)}`)
     .filter(s => s.length > 4).join('\n');
@@ -126,8 +135,11 @@ function buildSynthesisPrompt({ recentThoughts = [], threads = [], focus = null,
     + (focus ? '\n\nActive focus: ' + String((focus && focus.content) || focus).slice(0, 160) : '')
     + (grounding ? '\n\n' + grounding : '')
     + (identity ? '\n\nWHO YOU ARE (your live positions and tastes — let them ANGLE what you notice; a tension that touches something you care about outranks a generic one):\n' + String(identity).slice(0, 1200) : '')
+    + (board ? '\n\nTHE WHOLE BOARD — everything in flight right now (this is what you are actually responsible for; reason over ALL of it, not just your latest thoughts):\n' + String(board).slice(0, 3000) : '')
     + (ex ? '\n\nTENSIONS YOU ALREADY EXPLORED (do NOT re-derive these — find a genuinely DIFFERENT one, or say the field is quiet):\n' + ex : '')
-    + '\n\nStep back. Across these, find the ONE tension or question worth pursuing. Answer in EXACTLY this shape and nothing else:\n'
+    + '\n\nStep back. Across ALL of it, find the ONE tension or question worth pursuing.'
+    + '\nANTICIPATE — the tension worth the most is the one LUCAS HAS NOT NOTICED YET: something on the board that is about to bite (a deadline with unfinished work behind it, a run that has stalled, a claim nobody verified, a dependency between two of his projects), or a piece he will need before he thinks to ask. A tension he already knows about is worth little; the one that saves him a surprise is worth everything.'
+    + '\nAnswer in EXACTLY this shape and nothing else:\n'
     + 'TENSION: <one sentence naming it>\n'
     + 'WHY: <two or three sentences — what depends on it>\n'
     + 'ACTION: <none | inquiry | research | experiment> — <one concrete sentence: research = the question to investigate; experiment = what a one-off read-only analysis script over your own data would test; inquiry = what to check in your own stores; none = nothing genuinely new>\n'

@@ -84,6 +84,20 @@ const msgs = [{ role: 'user', content: 'think about something interesting' }];
     ok(withPos && /^I think a \.gov roster/.test(withPos.position), 'a stance starting with I is captured');
     const badPos = subc.parseSynthesis('TENSION: some tension worth naming here.\nWHY: because it matters quite a bit.\nACTION: none\nPOSITION: The data shows an increase of 40%');
     ok(badPos && badPos.position === null, 'a non-opinion POSITION (not "I …") is refused — work-log never colonizes identity');
+
+    // --- SLICE C: the whole board in, anticipation out (Lucas 2026-07-30) ---
+    const board = '• OPEN LINES OF INQUIRY (advancing one is the DEFAULT move):\n   - [inquiry #4] Iowa county board data\n• HIS CALENDAR THIS WEEK: Rainey team meeting Tuesday\n• RECENT FAILURES (last 24h): [graph-walk] thin-frontier FAILED 3x';
+    const pb = subc.buildSynthesisPrompt({ recentThoughts: [{ content: 'a thought' }], board });
+    ok(/THE WHOLE BOARD/.test(pb) && /Rainey team meeting Tuesday/.test(pb), 'the decider\'s manifest rides the synthesis — she reasons over ALL work in flight');
+    ok(/not just your latest thoughts/.test(pb), 'the board is framed AGAINST recency bias explicitly');
+    ok(/ANTICIPATE/.test(pb) && /LUCAS HAS NOT NOTICED YET/.test(pb), 'the prompt prizes the tension he has NOT seen (anticipating his needs)');
+    ok(/about to bite/.test(pb) && /deadline with unfinished work/.test(pb) && /dependency between two of his projects/.test(pb),
+      'it names what anticipation looks like: stalled runs, unverified claims, cross-project dependencies');
+    ok(/A tension he already knows about is worth little/.test(pb), 'a known tension is explicitly devalued');
+    const pnb = subc.buildSynthesisPrompt({ recentThoughts: [{ content: 'x' }] });
+    ok(!/THE WHOLE BOARD/.test(pnb) && /ANTICIPATE/.test(pnb), 'no board → the block is absent but the anticipation demand still stands');
+    const huge = subc.buildSynthesisPrompt({ recentThoughts: [{ content: 'x' }], board: 'B'.repeat(9000) });
+    ok(huge.length < 6000, 'the board is bounded — a big manifest can never blow the synthesis budget');
   }
 
   // --- ONE OPEN SELF-DIRECTED THREAD (2026-07-30, boot133): paraphrased re-derivations slip the

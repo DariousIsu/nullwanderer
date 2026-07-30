@@ -1290,9 +1290,15 @@ async function _runOneTick() {
         // SLICE B: her LIVE identity rides in — positions/tastes angle what she notices, so the
         // subconscious differentiates over time instead of thinking from a static persona alone.
         let _idBlock = ''; try { _idBlock = require('./self_model').buildPromptBlock(6) || ''; } catch {}
+        // SLICE C: the SAME board her decider reads every tick — open threads, inquiries, his week,
+        // deadlines, failures, what awaits him, what is running. Her between-turn thinking now
+        // reasons over everything in flight, not just her most recent thoughts (recency bias was
+        // the only signal; Lucas: "a good research assistant anticipates your needs").
+        let _boardBlock = '';
+        try { _boardBlock = (require('./autonomy').buildManifest({ db, now: Date.now() }) || {}).text || ''; } catch {}
         const synthMessages = [
           { role: 'system', content: BASE_PERSONA },
-          { role: 'user', content: subc2.buildSynthesisPrompt({ recentThoughts: synthThoughts, threads: synthThreads, focus: null, sources, explored: _synthRecent, identity: _idBlock }) }
+          { role: 'user', content: subc2.buildSynthesisPrompt({ recentThoughts: synthThoughts, threads: synthThreads, focus: null, sources, explored: _synthRecent, identity: _idBlock, board: _boardBlock }) }
         ];
         const synth = await generateThought({
           messages: synthMessages,
