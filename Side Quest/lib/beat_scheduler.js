@@ -150,6 +150,34 @@ function chooseNextByPriority({ beats = [], state = {}, now = 0, signals = () =>
   return bestId;
 }
 
+// ─── STATE LADDER (leash slice B — Lucas, 2026-07-29) ───────────────────────────────────────────
+// "Every state should be mapped from the state government down including capitals and large cities."
+// Each state-scoped beat carries a ladderRung (1 state legislature → 2 capital+major cities →
+// 3 counties → 4 remaining municipalities → 5 towns/townships → 6 school boards). A state's beat is
+// eligible only while NO lower not-done rung exists for that state in the pool — so the sweep walks
+// each state top-down instead of walking one tier through every state in the country. IN-FLIGHT beats
+// (held by the primary or a worker) still BLOCK their state's lower rungs: working rung N does not
+// unlock rung N+1, converging it does — which also spreads parallel workers across states, strict
+// ladder within each. Unrunged beats (federal, topics) pass through; a state missing a rung entirely
+// (no data → dropped from the schedulable pool) is skipped naturally: the min is taken over what is
+// actually schedulable. Pure; the caller supplies pool + scheduler state + the held set.
+function ladderFilter(pool = [], state = {}, held = null) {
+  const heldSet = held instanceof Set ? held : new Set(held || []);
+  const stOf = (id) => (state.beats && state.beats[id]) || {};
+  const minRung = new Map();   // stateCode → lowest rung still not converged
+  for (const b of pool) {
+    if (!b || !b.stateCode || !b.ladderRung) continue;
+    if (stOf(b.id).status === 'done' && !heldSet.has(b.id)) continue;   // converged → no longer blocks
+    const cur = minRung.get(b.stateCode);
+    if (cur == null || b.ladderRung < cur) minRung.set(b.stateCode, b.ladderRung);
+  }
+  return pool.filter((b) => {
+    if (!b || !b.stateCode || !b.ladderRung) return true;
+    const min = minRung.get(b.stateCode);
+    return min == null || b.ladderRung <= min;
+  });
+}
+
 // ─── BEAT-ORIGIN IDLE TIER (Lucas, 2026-07-29) ──────────────────────────────────────────────────
 // A beat-seeded focus (the government-coverage sweep) shares the directed driver's MECHANICS by
 // design — but it must never share its PRIORITY. Measured harm: the sweep ran a pass every 45s,
@@ -168,4 +196,4 @@ function beatPassGate({ origin, now, lastUserTurnTs = 0, lastBeatPassTs = 0, aut
   return { ok: true, reason: 'idle' };
 }
 
-module.exports = { DEFAULT_SLICE_BUDGET, DEFAULT_MAINTENANCE_MS, DEFAULT_TOPIC_EVERY, DEFAULT_ALLOC_WEIGHTS, YIELD_REF_CHARS, DEFAULT_BEAT_IDLE_MS, DEFAULT_BEAT_CADENCE_MS, chooseNext, shouldRotate, allDone, dueForMaintenance, pickLane, stalenessTerm, yieldTerm, scoreBeat, chooseNextByPriority, beatPassGate };
+module.exports = { DEFAULT_SLICE_BUDGET, DEFAULT_MAINTENANCE_MS, DEFAULT_TOPIC_EVERY, DEFAULT_ALLOC_WEIGHTS, YIELD_REF_CHARS, DEFAULT_BEAT_IDLE_MS, DEFAULT_BEAT_CADENCE_MS, chooseNext, shouldRotate, allDone, dueForMaintenance, pickLane, stalenessTerm, yieldTerm, scoreBeat, chooseNextByPriority, beatPassGate, ladderFilter };

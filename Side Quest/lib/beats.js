@@ -38,6 +38,10 @@ const US_SUBDIVISIONS = require('./us_subdivisions.json');
 // scripts/gen_us_school_districts.js from the Census national school-district file (every public LEA; the
 // board of education is elected in the large majority — the dossier surfaces the few that are appointed).
 const US_SCHOOL_DISTRICTS = require('./us_school_districts.json');
+// The LADDER HEAD: each state's capital + largest cities (authored from model knowledge — provenance
+// in that module's header, slice B 2026-07-29). Resolved against US_PLACES at use, so a name that
+// isn't a real incorporated place simply drops out (Honolulu: HI has no incorporated places).
+const US_CAPITAL_CITIES = require('./us_capitals_cities');
 
 // Back-compat: the Slice-1 exports were STATE_COUNTIES/STATE_NAMES. Derive them from the gazetteer so anything
 // still importing them keeps working (STATE_COUNTIES now carries the full official names, not bare tokens).
@@ -93,6 +97,28 @@ function bodyLabel(name) {
   return 'the governing body';
 }
 
+// ─── VALIDATION SHAPE (leash slice B — Lucas 2026-07-29) ─────────────────────────────────────────
+// "The pass should be validating all government officials at all levels and should be more of an idle
+// task." The autonomic sweep's job is ROSTER VALIDATION: confirm who currently holds every elected
+// office, corroborate once, flag what changed — never the per-person A-grade-contact dossier grind
+// that owned the browser for days per state. One shared facet plan + one goal builder so every
+// elected tier validates the same way (drift-proof). The deep-dossier machinery still exists for
+// DIRECTED asks (main.js single-target dossier path) — it just is not the idle sweep's default.
+const VALIDATION_FACETS = [
+  'the CURRENT ROSTER — every elected official of this jurisdiction by NAME and office/seat (the governing board AND the other elected offices, e.g. a county\'s sheriff / clerk / assessor / treasurer / district attorney), confirmed against the official government source',
+  'CORROBORATION — the roster cross-checked once against an independent source (news, a ballotpedia-class reference, or the state election authority); note any disagreement between the two',
+  'CHANGES — vacancies, resignations, appointments, recalls, and recent or upcoming elections that alter who holds any seat',
+  'the OFFICIAL CONTACT POINT — the body\'s public office address, main phone, and official website contact page (the office\'s door, not a per-person contact hunt)',
+];
+
+function validationGoal(scope) {
+  return `VALIDATE the elected officials of ${scope} — confirm WHO currently holds every elected office `
+    + `against the official government source, cross-check once against an independent source, and flag `
+    + `vacancies, changes, and discrepancies. This is a roster VALIDATION sweep, not a dossier: capture `
+    + `officeholder names, offices, and the body's official contact point, then MOVE ON. Anything ambiguous `
+    + `or contested gets flagged for deeper follow-up rather than ground out here.`;
+}
+
 // Enumerate the county-commission worklist for a state → researchable target strings. Each names the
 // JURISDICTION and describes its governing body functionally ("the governing body of Alachua County,
 // Florida") rather than asserting a title we have not verified; the pass researches that body and reports
@@ -118,25 +144,14 @@ function countyCommissionBeat(stateCode) {
     parentBeat: 'elected-officials',
     kind: 'entity',                          // roster of governing bodies + their members
     stateCode: code,
-    // DOSSIER depth (Lucas 2026-07-18): don't waste a single search — every board gets a COMPLETE dossier,
-    // not a shallow roster. The fixed facet plan below drives the deepen pass through members+A-grade contacts,
-    // meetings/minutes, biographies, the governing charter, history, and committees; main.js takes the facet-
-    // aware DEEP path per target (keeps deepening while facets are uncovered, up to the deep ceiling), and the
-    // scheduler supplies diversity by rotating states — depth is never cut for speed.
-    depth: 'dossier',
-    facets: [
-      'current members and their seats, each with FULL contact info — direct email, phone, office address, term dates — taken from the official .gov roster AND corroborated by a second independent source so each contact reaches an A-grade citation',
-      'how each member is elected + term length + district vs at-large + the district map/boundaries',
-      'meeting schedule + agendas + minutes (recent and archived) + how the public accesses the records',
-      'member biographies — background, prior offices held, occupation, notable positions and votes',
-      'the governing charter / enabling statute / bylaws and the board\'s formal powers and duties',
-      'committees, subcommittees, and the board\'s appointments to other bodies',
-      'ALL OTHER county-elected offices and their current holders + full contact info — sheriff, clerk of court / circuit clerk, property assessor / appraiser, tax collector / treasurer, district / state\'s attorney, coroner / medical examiner, supervisor of elections, surveyor, and elected judges',
-      'jurisdiction history + notable recent actions, controversies, and decisions',
-    ],
-    goal: `Compile and keep current the county-level governing board for every ${noun} in ${stateName} — `
-      + `all ${targets.length} ${nounPlural}, with each board's current members. Corroborate against independent `
-      + `sources; official rosters are leads, not facts.`,
+    ladderRung: 3,                           // state ladder: after the legislature + capital/major cities
+    // VALIDATE depth (slice B — was 'dossier'): confirm the board + county row offices, corroborate, flag
+    // changes, move on. The dossier grind (2026-07-18) is what walked every county in the country and
+    // owned the browser; directed asks still get full dossiers via the single-target path.
+    depth: 'validate',
+    facets: VALIDATION_FACETS,
+    goal: validationGoal(`every ${noun} in ${stateName} — all ${targets.length} ${nounPlural}, each with its `
+      + `governing board and county-elected offices`),
     enumerate: () => targets,
     universeSize: () => targets.length,
   };
@@ -162,18 +177,90 @@ function placeBodyLabel(name) {
   return 'the municipal governing body';
 }
 // Strip the trailing Census type word from a place name for display ("Birmingham city" → "Birmingham").
+// "(balance)" is Census bookkeeping on the consolidated-government rows ("Indianapolis city (balance)")
+// — never part of the government's name, so it goes first, then the type word behind it can strip too.
 function placeDisplayName(name) {
-  return String(name || '').replace(/\s+(city|town|village|borough|township|municipality|pueblo)$/i, '').trim();
+  return String(name || '')
+    .replace(/\s*\(balance\)$/i, '')
+    .replace(/\s+(city|town|village|borough|township|municipality|pueblo)$/i, '').trim();
+}
+
+// Resolve a plain city name ("Louisville") to its Census gazetteer entry ("Louisville/Jefferson County
+// metro government (balance)"). Exact display/raw match wins; else the first name that CONTINUES the
+// sought city with a separator (space / "/" / "-") — which is how the consolidated-government and
+// "(balance)" forms appear — so "Charleston" never absorbs "North Charleston". Null = not an
+// incorporated place in this state (the caller drops it; research would corroborate anyway).
+function matchPlace(stateCode, cityName) {
+  const st = US_PLACES[String(stateCode || '').toUpperCase()];
+  const want = String(cityName || '').toLowerCase().trim();
+  if (!st || !st.places || !want) return null;
+  let prefix = null;
+  for (const name of st.places) {
+    const raw = String(name).toLowerCase();
+    const disp = placeDisplayName(name).toLowerCase();
+    if (raw === want || disp === want) return name;
+    if (!prefix && [raw, disp].some((c) => c.startsWith(`${want} `) || c.startsWith(`${want}/`) || c.startsWith(`${want}-`))) prefix = name;
+  }
+  return prefix;
+}
+
+// The LADDER-HEAD gazetteer names for a state: capital first (the seat of the government the ladder
+// descends from), then the largest cities, resolved + deduped. These are CLAIMED by the capital-cities
+// rung, and municipalTargets excludes them so the two worklists stay disjoint (no double coverage).
+function ladderHeadNames(stateCode) {
+  const code = String(stateCode || '').toUpperCase();
+  const def = US_CAPITAL_CITIES[code];
+  if (!def) return [];
+  const seen = new Set(), out = [];
+  for (const w of [def.capital, ...(def.large || [])].filter(Boolean)) {
+    const m = matchPlace(code, w);
+    if (m && !seen.has(m)) { seen.add(m); out.push(m); }
+  }
+  return out;
 }
 
 // Enumerate the municipal worklist for a state → "<body> of <place>, <state>" (e.g. "City Council of
-// Birmingham, Alabama", "Town Council of Autaugaville, Alabama").
+// Birmingham, Alabama", "Town Council of Autaugaville, Alabama"). EXCLUDES the ladder head (capital +
+// major cities) — those belong to the capital-cities rung, walked first.
 function municipalTargets(stateCode) {
   const code = String(stateCode || '').toUpperCase();
   const st = US_PLACES[code];
   if (!st || !st.places || !st.places.length) return [];
-  return st.places.map((name) => `${placeBodyLabel(name)} of ${placeDisplayName(name)}, ${st.name}`);
+  const head = new Set(ladderHeadNames(code));
+  return st.places.filter((name) => !head.has(name)).map((name) => `${placeBodyLabel(name)} of ${placeDisplayName(name)}, ${st.name}`);
 }
+
+// --- CAPITAL + MAJOR CITIES rung (the ladder head — walked right after the state government) ------
+
+function capitalCityTargets(stateCode) {
+  const code = String(stateCode || '').toUpperCase();
+  const st = US_PLACES[code];
+  if (!st) return [];
+  return ladderHeadNames(code).map((name) => `${placeBodyLabel(name)} of ${placeDisplayName(name)}, ${st.name}`);
+}
+
+function capitalCityBeat(stateCode) {
+  const code = String(stateCode || '').toUpperCase();
+  const st = US_PLACES[code];
+  const stateName = (st && st.name) || code;
+  const targets = capitalCityTargets(code);
+  const cities = ladderHeadNames(code).map((n) => placeDisplayName(n));
+  return {
+    id: `capital-cities-${code.toLowerCase()}`,
+    parentBeat: 'elected-officials',
+    kind: 'entity',
+    stateCode: code,
+    ladderRung: 2,                           // right after the state legislature, before the counties
+    depth: 'validate',
+    facets: VALIDATION_FACETS,
+    goal: validationGoal(`the capital and major cities of ${stateName} — ${cities.join(', ') || 'none on record'} `
+      + `(${targets.length} city government(s): mayor, council, and city-elected offices)`),
+    enumerate: () => targets,
+    universeSize: () => targets.length,
+  };
+}
+
+function capitalCitySubBeats() { return listPlaceStates().map((code) => capitalCityBeat(code)); }
 
 // A municipal-government beat descriptor for a state (dossier depth, like county). Covers the city's elected
 // council + mayor + the other city-elected offices, with the same A-grade-contact + meetings/charter/history
@@ -188,19 +275,12 @@ function municipalBeat(stateCode) {
     parentBeat: 'elected-officials',
     kind: 'entity',
     stateCode: code,
-    depth: 'dossier',
-    facets: [
-      'the mayor and every city/town/village council (or commission) member — each with FULL contact info (direct email, phone, office address, term) from the official municipal .gov site AND corroborated by a second independent source for an A-grade citation',
-      'the form of government (mayor-council / council-manager / commission), how each seat is elected, terms, and wards vs at-large + ward map',
-      'council meeting schedule + agendas + minutes (recent and archived) + how the public accesses records',
-      'ALL OTHER city-elected or appointed principals + contacts — city manager/administrator, clerk, attorney, treasurer/finance director, police chief, fire chief',
-      'the municipal charter / code of ordinances and the council\'s powers',
-      'biographies of the elected officials + notable recent actions and votes',
-    ],
-    goal: `Compile and keep current the municipal government — mayor, council, and city-elected offices — for `
-      + `every incorporated city, town, and village in ${stateName} (all ${targets.length} municipalities), each `
-      + `with current officeholders and A-grade contacts. Corroborate against independent sources; official `
-      + `rosters are leads, not facts.`,
+    ladderRung: 4,                           // the long municipal tail, after the counties
+    depth: 'validate',
+    facets: VALIDATION_FACETS,
+    goal: validationGoal(`every remaining incorporated city, town, and village in ${stateName} — `
+      + `${targets.length} municipalities beyond the capital/major-cities rung, each with its mayor, `
+      + `council, and city-elected offices`),
     enumerate: () => targets,
     universeSize: () => targets.length,
   };
@@ -247,18 +327,11 @@ function subdivisionBeat(stateCode) {
     parentBeat: 'elected-officials',
     kind: 'entity',
     stateCode: code,
-    depth: 'dossier',
-    facets: [
-      'the town/township governing board — every elected member (selectmen / trustees / town board) with FULL contact info (office address, phone, email) to an A-grade cited standard from the official town .gov AND corroborated',
-      'the form of government (open town meeting / representative town meeting / town council / township trustees), how each seat is elected, and terms',
-      'meeting schedule + agendas + minutes (recent and archived) + how the public accesses records',
-      'ALL OTHER elected town offices + holders — town clerk, treasurer/tax collector, assessor(s), moderator, constable, highway commissioner',
-      'the town charter / bylaws / ordinances and the board\'s powers',
-      'biographies of the elected officials + notable recent actions',
-    ],
-    goal: `Compile and keep current the town/township government for every functioning town and township in `
-      + `${stateName} (all ${targets.length}), each with its elected board and A-grade contacts. Corroborate `
-      + `against independent sources; official rosters are leads, not facts.`,
+    ladderRung: 5,                           // sub-county governments, after the municipal tail
+    depth: 'validate',
+    facets: VALIDATION_FACETS,
+    goal: validationGoal(`every functioning town and township in ${stateName} (all ${targets.length}), `
+      + `each with its elected board and other elected town offices`),
     enumerate: () => targets,
     universeSize: () => targets.length,
   };
@@ -293,18 +366,12 @@ function schoolBoardBeat(stateCode) {
     parentBeat: 'elected-officials',
     kind: 'entity',
     stateCode: code,
-    depth: 'dossier',
-    facets: [
-      'every board-of-education / school-board member with FULL contact info (email, phone, term, seat/zone) to an A-grade cited standard from the official district .gov AND corroborated',
-      'how the board is selected — ELECTED (most) vs appointed — plus term length, number of seats, and any zones/at-large split',
-      'the superintendent and senior administration + how the board is reached',
-      'board meeting schedule + agendas + minutes (recent and archived) + how the public participates',
-      'district profile — enrollment, schools, budget, and boundaries',
-      'board policies, notable recent votes, and controversies',
-    ],
-    goal: `Compile and keep current the elected board of education for every public school district in `
-      + `${stateName} (all ${targets.length}), each with current members and A-grade contacts. Corroborate `
-      + `against independent sources; official rosters are leads, not facts.`,
+    ladderRung: 6,                           // the bottom ladder rung
+    depth: 'validate',
+    facets: VALIDATION_FACETS,
+    goal: validationGoal(`every public school district's elected board in ${stateName} (all `
+      + `${targets.length} districts), including how each board is selected (elected vs appointed) `
+      + `and its superintendent`),
     enumerate: () => targets,
     universeSize: () => targets.length,
   };
@@ -455,18 +522,11 @@ function federalBeat() {
     id: 'federal-officials',
     parentBeat: 'elected-officials',
     kind: 'entity',
-    depth: 'dossier',
-    facets: [
-      'the current officeholder with FULL contact info — Washington DC office (address, phone), every district/state office, official webform and social — to an A-grade cited standard from the official .gov (senate.gov / house.gov / whitehouse.gov) AND corroborated by a second independent source',
-      'committee and subcommittee assignments + any leadership, caucus, or party roles',
-      'biography — background, prior offices, profession, education, military service',
-      'term dates, seat class / next election, and electoral history + margins',
-      'signature legislation, key votes, and stated policy positions',
-      'senior staff (chief of staff, district director) and how constituents reach the office',
-    ],
-    goal: 'Compile and keep current every elected FEDERAL official — the President and Vice President, all 100 '
-      + 'US Senators, all 435 Representatives, and the territorial delegates — each with current officeholder, '
-      + 'A-grade contacts, committees, and record. Corroborate against independent sources; official pages are leads.',
+    // No ladderRung / stateCode — federal is the global head of the map, never gated behind a state.
+    depth: 'validate',
+    facets: VALIDATION_FACETS,
+    goal: validationGoal('the FEDERAL government — the President and Vice President, all 100 US Senators, '
+      + 'all 435 Representatives, and the territorial delegates'),
     enumerate: () => targets,
     universeSize: () => targets.length,
   };
@@ -503,18 +563,11 @@ function stateLegBeat(stateCode) {
     parentBeat: 'elected-officials',
     kind: 'entity',
     stateCode: code,
-    depth: 'dossier',
-    facets: [
-      'the COMPLETE current membership roster — every member with district number, party, and FULL contact info (capitol office, district office, phone, email) to an A-grade cited standard from the official legislature .gov AND corroborated',
-      'chamber leadership — presiding officer, majority and minority leaders, whips',
-      'standing committees + their chairs and membership',
-      'how members are elected, term length, chamber size, and the district map',
-      'the current session — key bills, calendar, and how the public accesses proceedings and records',
-      'member biographies and notable positions and votes',
-    ],
-    goal: `Compile and keep current every member of the ${stateName} state legislature — both chambers' complete `
-      + `rosters with district, party, and A-grade contacts, plus leadership and committees. Corroborate against `
-      + `independent sources; official rosters are leads, not facts.`,
+    ladderRung: 1,                           // the TOP of each state's ladder — the state government itself
+    depth: 'validate',
+    facets: VALIDATION_FACETS,
+    goal: validationGoal(`the ${stateName} state legislature — the COMPLETE membership of every chamber `
+      + `(each member by name, district, and party), plus chamber leadership`),
     enumerate: () => targets,
     universeSize: () => targets.length,
   };
@@ -524,12 +577,15 @@ function stateLegBeat(stateCode) {
 function listLegislatureStates() { return Object.keys(HOUSE_SEATS).sort(); }
 function stateLegSubBeats() { return listLegislatureStates().map((code) => stateLegBeat(code)); }
 
-// The full elected-officials decomposition the scheduler rotates over, top down: FEDERAL → STATE LEGISLATURE →
-// COUNTY (commission + row offices) → MUNICIPAL. (School-board, special-district, and New-England-town tiers
-// are future additions to this list.) Registry order = rotation priority for never-run beats.
+// The full elected-officials decomposition the scheduler rotates over, top down: FEDERAL → STATE
+// LEGISLATURE → CAPITAL+MAJOR CITIES → COUNTY (commission + row offices) → MUNICIPAL tail → TOWNSHIPS →
+// SCHOOL BOARDS. Registry order = rotation priority for never-run beats; the STATE LADDER
+// (beat_scheduler.ladderFilter, keyed on each beat's ladderRung) additionally gates each state's lower
+// rungs until the rung above converges — "every state mapped from the state government down".
 function electedOfficialsSubBeats() {
   return [federalBeat()]
     .concat(stateLegSubBeats())
+    .concat(capitalCitySubBeats())
     .concat(countyCommissionSubBeats())
     .concat(municipalSubBeats())
     .concat(subdivisionSubBeats())
@@ -561,6 +617,7 @@ function targetPlaceKey(target) {
 // material to be a reliable signal, and a false match would answer confidently about the wrong tier —
 // the exact failure mode as the bare portfolio number. No match → callers fall back to the portfolio.
 const TIER_WORDS = [
+  { re: /\b(?:capitals?|major cities|large cities|biggest cities)\b/i, prefix: 'capital-cities-' },
   { re: /\b(?:count(?:y|ies)|parish(?:es)?|borough|boroughs|municipio|municipios)\b/i, prefix: 'county-commissions-' },
   { re: /\b(?:legislature|legislative|senate|house|chamber|assembly|delegates|lawmakers?|legislators?)\b/i, prefix: 'state-legislature-' },
   { re: /\b(?:school|schools|district|districts|board of education)\b/i, prefix: 'school-boards-' },
@@ -580,6 +637,7 @@ function beatLabel(beat) {
   const plural = noun === 'parish' ? 'parishes' : noun === 'municipio' ? 'municipios'
     : noun === 'borough' ? 'boroughs' : 'counties';
   if (beat.id.startsWith('county-commissions-')) return `${stateName} ${plural}`;
+  if (beat.id.startsWith('capital-cities-')) return `${stateName} capital and major cities`;
   if (beat.id.startsWith('state-legislature-')) return `${stateName} state legislature`;
   if (beat.id.startsWith('municipalities-')) return `${stateName} municipalities`;
   if (beat.id.startsWith('townships-')) return `${stateName} towns and townships`;
@@ -684,6 +742,8 @@ module.exports = {
   listCountyStates, listPlaceStates, placeKey, bodyLabel, targetPlaceKey,
   placeBodyLabel, placeDisplayName,
   countyCommissionTargets, countyCommissionBeat, countyCommissionSubBeats,
+  matchPlace, ladderHeadNames, capitalCityTargets, capitalCityBeat, capitalCitySubBeats,
+  VALIDATION_FACETS, validationGoal,
   municipalTargets, municipalBeat, municipalSubBeats,
   listSubdivisionStates, subdivisionBodyLabel, subdivisionDisplayName, subdivisionTargets, subdivisionBeat, subdivisionSubBeats,
   listSchoolStates, schoolBoardTargets, schoolBoardBeat, schoolBoardSubBeats,

@@ -47,6 +47,14 @@ ok(r.decideAdvance({ passes: 3, newChars: 10 }).reason === 'diminishing returns'
   'a near-empty pass (after a couple) → diminishing returns → advance');
 ok(r.decideAdvance({ passes: 1, newChars: 10 }).advance === false, 'a thin FIRST pass does NOT advance prematurely (give it a chance)');
 
+// --- VALIDATE mode (leash slice B): roster + corroborator + change check, then MOVE ON ---
+ok(r.decideAdvance({ passes: 1, newChars: 900, validate: true }).advance === false, 'validate: overview pass → keep validating');
+ok(r.decideAdvance({ passes: 2, newChars: 900, validate: true }).advance === false, 'validate: productive corroboration pass → one more allowed');
+ok(r.decideAdvance({ passes: r.MAX_PASSES_VALIDATE, newChars: 900, validate: true }).reason === 'validated (pass cap)', `validate: hard cap at ${r.MAX_PASSES_VALIDATE} passes — NEVER a dossier grind`);
+ok(r.decideAdvance({ passes: 2, newChars: 10, validate: true }).reason === 'validated (nothing new)', 'validate: nothing new after corroboration → done early');
+ok(r.decideAdvance({ passes: 1, saturated: true, validate: true }).advance === true, 'validate: model says saturated → advance');
+ok(r.MAX_PASSES_VALIDATE < r.MAX_PASSES_PER_TARGET, 'validate cap sits BELOW the ordinary per-target cap (it is the light shape)');
+
 // --- newContentChars: repeat detection ---
 ok(r.newContentChars('', 'Brand new finding about the org leadership here.') > 0, 'against empty → all new');
 ok(r.newContentChars('Jane Doe is the President of the org.', 'Jane Doe is the President of the org.') === 0, 'exact repeat → no new content');

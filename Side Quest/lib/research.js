@@ -14,6 +14,7 @@
 const MAX_PASSES_PER_TARGET = 6;   // depth cap per org in a MULTI-org run — "a decent percentage", not infinite
 const MAX_PASSES_DEEP_TARGET = 12; // a SINGLE bounded deep target may work each facet (6-facet brief needs >6); throttled 18→12 so one target can't grind endlessly
 const MAX_PASSES_REFUSAL = 16;     // REFUSAL mode (dossier beats) deep-dives to exhaustion, but a SOFT per-target cap (throughput tune) so one never-drying office can't monopolize the serial single-focus engine — 16 passes is still a deep dossier (~16k+ chars); the 2-dry-pass "well is dry" signal advances most finite rosters far sooner, and news-maintenance re-visits later
+const MAX_PASSES_VALIDATE = 3;     // VALIDATION mode (leash slice B): official roster + one corroborator + change check, then MOVE ON — the sweep validates officials, it never grinds dossiers
 const MIN_NEW_CHARS = 220;         // a deepen pass adding less than this = diminishing returns (one "dry" pass)
 
 // Parse one research pass. The prompts make the operator end with a control line:
@@ -56,8 +57,16 @@ function newContentChars(existing, body) {
 // (up to MAX_PASSES_DEEP_TARGET) as long as passes stay productive — a 6-facet brief needs more than 6
 // passes, and the flat cap was force-finalizing a half-covered doc (#3364). Diminishing-returns still
 // self-limits, so a genuinely sparse 1-person company bows out early instead of grinding "not found".
-function decideAdvance({ passes = 1, newChars = 0, saturated = false, uncovered = 0, deep = false, refusal = false, dryStreak = 0, maxPasses = MAX_PASSES_PER_TARGET, minNew = MIN_NEW_CHARS } = {}) {
+function decideAdvance({ passes = 1, newChars = 0, saturated = false, uncovered = 0, deep = false, refusal = false, validate = false, dryStreak = 0, maxPasses = MAX_PASSES_PER_TARGET, minNew = MIN_NEW_CHARS } = {}) {
   if (saturated) return { advance: true, reason: 'saturated' };
+  // VALIDATION mode (leash slice B, Lucas 2026-07-29): the autonomic elected sweep confirms WHO holds
+  // every office and flags changes — it does not build per-person dossiers. One overview pass + up to
+  // two confirm/corroborate passes; a pass that adds nothing after the corroboration means we're done.
+  if (validate) {
+    if (passes >= MAX_PASSES_VALIDATE) return { advance: true, reason: 'validated (pass cap)' };
+    if (passes >= 2 && newChars < minNew) return { advance: true, reason: 'validated (nothing new)' };
+    return { advance: false, reason: 'keep validating' };
+  }
   // REFUSAL mode (dossier beats, Lucas 2026-07-18): deep-dive a board to genuine EXHAUSTION — never advance on
   // a facet-touched-once or an arbitrary pass ceiling, only when the well is truly dry. "Dry" = TWO consecutive
   // passes that each add < minNew new chars (one thin pass might just be a bad search; two in a row = refusal),
@@ -372,5 +381,5 @@ module.exports = {
   facetToolset, buildCoveragePlan, searchSignature,
   pickEnrichTarget, facetLabel, buildEnrichPrompt, buildOrganizeEnrichPrompt,
   buildWebLanePrompt, buildDeepLanePrompt, buildMergeLanesPrompt,
-  MAX_PASSES_PER_TARGET, MAX_PASSES_DEEP_TARGET, MAX_PASSES_REFUSAL, MIN_NEW_CHARS
+  MAX_PASSES_PER_TARGET, MAX_PASSES_DEEP_TARGET, MAX_PASSES_REFUSAL, MAX_PASSES_VALIDATE, MIN_NEW_CHARS
 };

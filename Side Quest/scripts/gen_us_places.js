@@ -3,9 +3,17 @@
  * Pipe-delimited: STATE|STATEFP|COUNTYFP|COUNTYNAME|PLACEFP|PLACENS|PLACENAME|TYPE|CLASSFP|FUNCSTAT
  *
  * The MUNICIPAL tier of the elected-officials completeness beat. We keep only INCORPORATED PLACES (they have
- * an elected government — city/town/village/borough council) with FUNCSTAT=A (active), and DEDUP a place that
+ * an elected government — city/town/village/borough council) with an ACTIVE government, and DEDUP a place that
  * spans multiple counties (the file is place-by-county, so it repeats) by its stable PLACENS id within state.
- * Census Designated Places (CDPs) are statistical only — no government — and are excluded. Run:
+ * Census Designated Places (CDPs) are statistical only — no government — and are excluded.
+ *
+ * ACTIVE means FUNCSTAT A, plus (2026-07-29 slice-B finding — the first cut dropped Nashville, Louisville,
+ * Indianapolis, Baton Rouge, Athens, and Augusta from the entire municipal map):
+ *   - FUNCSTAT F + CLASSFP C8 — the consolidated city-county "(balance)" entries. Census marks the balance
+ *     "fictitious" as a GEOGRAPHY, but it is the only row carrying the real metro/unified government
+ *     (Nashville-Davidson metropolitan government, Louisville/Jefferson County metro government, …).
+ *   - FUNCSTAT B — an active government partially consolidated with another (Baton Rouge, Lafayette LA).
+ * FUNCSTAT N/I (nonfunctioning/inactive — e.g. the pre-merger "Louisville city" husk) stay excluded. Run:
  *   node scripts/gen_us_places.js <national_place_by_county2020.txt>
  */
 'use strict';
@@ -38,10 +46,11 @@ const out = {};
 const seen = {};   // state → Set(placeNS) to dedup multi-county places
 let kept = 0, skipped = 0;
 for (const line of lines) {
-  const [st, , , , , placeNS, name, type, , funcstat] = line.split('|');
+  const [st, , , , , placeNS, name, type, classfp, funcstat] = line.split('|');
   if (!st || !name) { skipped += 1; continue; }
   if (type !== 'INCORPORATED PLACE') { skipped += 1; continue; }   // CDPs have no government
-  if (funcstat !== 'A') { skipped += 1; continue; }                 // active government only
+  const active = funcstat === 'A' || funcstat === 'B' || (funcstat === 'F' && classfp === 'C8');
+  if (!active) { skipped += 1; continue; }                          // active government only (see header)
   if (!STATE_NAMES[st]) { skipped += 1; continue; }
   if (!seen[st]) seen[st] = new Set();
   if (seen[st].has(placeNS)) { skipped += 1; continue; }            // same place, another county → dedup

@@ -22,16 +22,19 @@ ok(b.id === 'county-commissions-fl', 'beat id');
 ok(b.parentBeat === 'elected-officials', 'rolls up under elected-officials');
 ok(b.kind === 'entity', 'entity kind');
 ok(b.universeSize() === 67, 'universe size 67');
-ok(/67 counties/.test(b.goal) && /corroborate/i.test(b.goal), 'goal states the universe + corroboration discipline');
+ok(/67 counties/.test(b.goal) && /cross-check|corroborat/i.test(b.goal), 'goal states the universe + corroboration discipline');
 ok(b.enumerate().length === 67, 'enumerate() returns the worklist');
 
-// --- deep-DOSSIER depth: every board gets a complete dossier, not a shallow roster ---
-ok(b.depth === 'dossier', 'beat is dossier-depth (deep-dive every board, do not waste a search)');
-ok(Array.isArray(b.facets) && b.facets.length >= 6, `dossier facet plan is comprehensive (${(b.facets || []).length} facets)`);
-ok(b.facets.some(f => /contact/i.test(f) && /A-grade/i.test(f)), 'dossier pursues A-grade contact info');
-ok(b.facets.some(f => /minutes|agenda|meeting/i.test(f)), 'dossier pursues meetings / minutes / agendas');
-ok(b.facets.some(f => /biograph/i.test(f)), 'dossier pursues member biographies');
-ok(b.facets.some(f => /charter|statute|bylaw/i.test(f)), 'dossier pursues the governing charter / statute');
+// --- VALIDATION shape (leash slice B — Lucas 2026-07-29): the idle sweep VALIDATES rosters, it does
+// not grind per-person dossiers. That is what walked every county in the country and owned the browser.
+ok(b.depth === 'validate', 'beat is validate-depth (roster validation, not a dossier grind)');
+ok(Array.isArray(b.facets) && b.facets.length <= 5, `validation facet plan is SHORT (${(b.facets || []).length} facets — 2-3 passes per body, then move on)`);
+ok(b.facets.some(f => /CURRENT ROSTER/i.test(f)), 'validation confirms the current roster by name and office');
+ok(b.facets.some(f => /CORROBORATION/i.test(f)), 'validation cross-checks once against an independent source');
+ok(b.facets.some(f => /CHANGES/i.test(f)), 'validation flags vacancies/appointments/elections');
+ok(!b.facets.some(f => /A-grade/i.test(f)), 'CRITICAL: no per-person A-grade contact hunt in the idle sweep');
+ok(b.facets.some(f => /not a per-person contact hunt/i.test(f)), 'contact facet targets the OFFICE door, not the people');
+ok(/VALIDATE/i.test(b.goal) && /not a dossier/i.test(b.goal), 'goal states the validation-not-dossier contract');
 
 // --- coverage: fuzzy-match covered names to worklist targets ---
 const c0 = beats.coverageOf(t, []);
@@ -103,23 +106,53 @@ ok(mStates.length >= 50, `municipal tier enumerates 50 states (got ${mStates.len
 const flCities = beats.municipalTargets('FL');
 ok(flCities.length > 100, `FL enumerates its incorporated municipalities (got ${flCities.length})`);
 ok(flCities.every(x => / of .+, Florida$/.test(x)), 'every municipal target is "<body> of <place>, Florida"');
-ok(flCities.some(x => /^the municipal governing body of Miami, Florida$/.test(x)), 'FL includes Miami, named as the jurisdiction');
+// Miami belongs to the CAPITAL/MAJOR-CITIES rung now — the municipal tail excludes the ladder head.
+ok(!flCities.some(x => /^the municipal governing body of Miami, Florida$/.test(x)), 'Miami is NOT in the municipal tail (claimed by the capital-cities rung)');
+ok(beats.capitalCityTargets('FL').some(x => /^the municipal governing body of Miami, Florida$/.test(x)), 'Miami IS in the FL capital/major-cities rung');
 // Municipal titles vary as much as county ones (City Council / Board of Aldermen / Common Council /
 // City Commission, and New England towns run Select Boards) — describe the tier, never the title.
 ok(!flCities.some(x => /City Council|Town Council|Board of Aldermen|Village Board/i.test(x)),
   'CRITICAL: no municipal target asserts a body title');
 const mBeat = beats.municipalBeat('TX');
-ok(mBeat.id === 'municipalities-tx' && mBeat.parentBeat === 'elected-officials' && mBeat.depth === 'dossier', 'TX municipal beat descriptor (dossier depth, elected-officials parent)');
+ok(mBeat.id === 'municipalities-tx' && mBeat.parentBeat === 'elected-officials' && mBeat.depth === 'validate', 'TX municipal beat descriptor (validate depth, elected-officials parent)');
 ok(mBeat.universeSize() > 1000, `TX has >1000 municipalities (got ${mBeat.universeSize()})`);
-ok(mBeat.facets.some(f => /mayor/i.test(f)) && mBeat.facets.some(f => /charter|ordinance/i.test(f)) && mBeat.facets.some(f => /A-grade/i.test(f)), 'municipal dossier covers mayor/council + charter + A-grade contacts');
+ok(mBeat.ladderRung === 4 && /mayor/i.test(mBeat.goal), 'municipal tail is ladder rung 4, goal covers mayor + council');
 // display name strips the Census type word; coverage still matches
 ok(beats.placeDisplayName('Birmingham city') === 'Birmingham' && beats.placeDisplayName('Autaugaville town') === 'Autaugaville', 'placeDisplayName strips the Census type suffix');
 ok(beats.coverageOf(flCities.slice(0, 10), flCities.slice(0, 10)).pct === 100, 'municipal coverage matches (first 10 → 100%)');
 // the combined elected-officials decomposition = county tier + municipal tier
 const all = beats.electedOfficialsSubBeats();
 ok(all.some(b => b.id.startsWith('county-commissions-')) && all.some(b => b.id.startsWith('municipalities-')), 'combined roster carries county + municipal tiers');
-// county dossier now also pursues the OTHER county-elected offices (sheriff, clerk, assessor, DA, judges)
-ok(beats.countyCommissionBeat('FL').facets.some(f => /sheriff/i.test(f) && /clerk/i.test(f)), 'county dossier now pursues sheriff/clerk/assessor/DA/judges (all county-elected offices)');
+// validation still reaches the OTHER county-elected offices (sheriff, clerk, assessor, DA) — by NAME
+ok(beats.countyCommissionBeat('FL').facets.some(f => /sheriff/i.test(f) && /clerk/i.test(f)), 'county validation still confirms sheriff/clerk/assessor/DA (all elected offices, by name)');
+
+// --- CAPITAL + MAJOR CITIES rung (the ladder head) + the STATE LADDER structure ---
+{
+  const cc = beats.capitalCityBeat('LA');
+  ok(cc.id === 'capital-cities-la' && cc.depth === 'validate' && cc.ladderRung === 2, 'LA capital-cities beat: validate depth, ladder rung 2');
+  const t0 = cc.enumerate()[0] || '';
+  ok(/Baton Rouge/.test(t0), `the CAPITAL leads the rung (got "${t0.slice(0, 60)}")`);
+  ok(cc.enumerate().some(x => /New Orleans/.test(x)) && cc.enumerate().some(x => /Shreveport/.test(x)), 'major cities ride behind the capital');
+  // CONSOLIDATED GOVERNMENTS (the 2026-07-29 gazetteer fix): Nashville, Louisville, Indianapolis,
+  // Baton Rouge, Augusta were absent from the ENTIRE municipal map — Census types their one real
+  // government CONSOLIDATED "(balance)" / FUNCSTAT B and the generator dropped both.
+  ok(beats.ladderHeadNames('TN').some(n => /Nashville-Davidson/.test(n)), 'CRITICAL: Nashville-Davidson metropolitan government resolves (was missing from the map)');
+  ok(beats.ladderHeadNames('KY').some(n => /Louisville\/Jefferson/.test(n)), 'CRITICAL: Louisville/Jefferson County metro government resolves');
+  ok(beats.ladderHeadNames('IN').some(n => /Indianapolis/.test(n)), 'CRITICAL: Indianapolis resolves');
+  ok(beats.ladderHeadNames('LA').some(n => /Baton Rouge/.test(n)), 'CRITICAL: Baton Rouge (FUNCSTAT B) resolves');
+  ok(beats.placeDisplayName('Indianapolis city (balance)') === 'Indianapolis', 'placeDisplayName strips "(balance)" + the type word');
+  // matchPlace never lets a short name absorb a longer one
+  ok(beats.matchPlace('SC', 'Charleston') === 'Charleston city', 'matchPlace: "Charleston" → Charleston city, never North Charleston');
+  ok(beats.matchPlace('FL', 'Nowhere Ville') === null, 'matchPlace: unknown city → null (drops out, never invented)');
+  // DISJOINT worklists: a head city never appears in the municipal tail (no double coverage)
+  const heads = new Set(beats.ladderHeadNames('TX').map(n => beats.placeDisplayName(n).toLowerCase()));
+  ok(heads.size >= 5 && !beats.municipalTargets('TX').some(t => heads.has(beats.targetPlaceKey(t))), 'CRITICAL: capital/major-city rung and municipal tail are DISJOINT');
+  // the ladder rungs are declared tier-wide
+  ok(beats.stateLegBeat('TX').ladderRung === 1 && beats.countyCommissionBeat('TX').ladderRung === 3
+    && beats.subdivisionBeat('MI').ladderRung === 5 && beats.schoolBoardBeat('TX').ladderRung === 6, 'ladder rungs: leg=1 capital=2 county=3 municipal=4 township=5 school=6');
+  ok(!beats.federalBeat().ladderRung, 'federal carries NO rung (global head, never gated behind a state)');
+  ok(beats.beatLabel(cc) === 'Louisiana capital and major cities', 'capital beat label is speakable');
+}
 
 // --- FEDERAL tier (President/VP + full Congress) ---
 const fed = beats.federalTargets();
@@ -130,7 +163,7 @@ ok(fed.some(t => /At-Large Congressional District/.test(t)), 'single-district st
 ok(fed.some(t => /California's 52nd Congressional District/.test(t)), 'ordinal district phrasing (California 52nd)');
 ok(fed.some(t => /Delegate to the United States House.*District of Columbia|Resident Commissioner.*Puerto Rico/.test(t)), 'territorial delegates included');
 const fb = beats.federalBeat();
-ok(fb.id === 'federal-officials' && fb.parentBeat === 'elected-officials' && fb.depth === 'dossier', 'federal beat descriptor');
+ok(fb.id === 'federal-officials' && fb.parentBeat === 'elected-officials' && fb.depth === 'validate', 'federal beat descriptor (validate depth)');
 ok(fb.universeSize() === 2 + 100 + 435 + 6, `federal universe = 543 (got ${fb.universeSize()})`);
 
 // --- STATE LEGISLATURE tier ---
@@ -141,7 +174,7 @@ ok(beats.stateLegTargets('CA').some(t => /California State Assembly/.test(t)), '
 ok(beats.stateLegTargets('VA').some(t => /House of Delegates/.test(t)), 'VA lower chamber = House of Delegates');
 ok(beats.stateLegTargets('NE').length === 1 && /unicameral/i.test(beats.stateLegTargets('NE')[0]), 'NE is unicameral (single chamber target)');
 const slb = beats.stateLegBeat('NY');
-ok(slb.id === 'state-legislature-ny' && slb.depth === 'dossier' && slb.facets.some(f => /COMPLETE current membership/i.test(f)), 'state-leg beat pursues the complete roster');
+ok(slb.id === 'state-legislature-ny' && slb.depth === 'validate' && /COMPLETE membership/i.test(slb.goal), 'state-leg beat validates the complete roster (rung 1 — the ladder top)');
 
 // --- TOWN / TOWNSHIP tier (New England towns + Midwest townships) ---
 const subStates = beats.listSubdivisionStates();
@@ -157,7 +190,7 @@ ok(!beats.subdivisionTargets('CT').some(t => /Select Board|Board of Trustees|Tow
   'CRITICAL: no township/town target asserts a body title, and none hedges with a slash');
 ok(beats.subdivisionDisplayName('Bloomfield charter township') === 'Bloomfield' && beats.subdivisionDisplayName('Hartford town') === 'Hartford', 'subdivisionDisplayName strips town/charter-township suffixes');
 const tb = beats.subdivisionBeat('MA');
-ok(tb.id === 'townships-ma' && tb.depth === 'dossier' && tb.facets.some(f => /selectmen|trustees|town board/i.test(f)), 'MA township beat descriptor (dossier, selectmen/trustees)');
+ok(tb.id === 'townships-ma' && tb.depth === 'validate' && /town and township/i.test(tb.goal), 'MA township beat descriptor (validate depth)');
 ok(!subStates.includes('CA') && !subStates.includes('TX'), 'non-MCD states (CA/TX) have no township tier');
 
 // --- SCHOOL-BOARD tier ---
@@ -173,13 +206,13 @@ ok(!caSchools.some(t => /Board of Education|Board of Trustees|Board of Directors
 // coverage key lands on the DISTRICT (after the last " of "), not "Education"
 ok(beats.targetPlaceKey('Board of Education of Los Angeles Unified School District, California').includes('los angeles'), 'school coverage key lands on the district name, not "education"');
 const sbb = beats.schoolBoardBeat('TX');
-ok(sbb.id === 'school-boards-tx' && sbb.depth === 'dossier' && sbb.facets.some(f => /superintendent/i.test(f)) && sbb.facets.some(f => /ELECTED.*appointed/i.test(f)), 'school-board beat pursues members + elected-vs-appointed + superintendent');
+ok(sbb.id === 'school-boards-tx' && sbb.depth === 'validate' && /superintendent/i.test(sbb.goal) && /elected vs appointed/i.test(sbb.goal), 'school-board beat validates members + elected-vs-appointed + superintendent');
 
-// --- combined elected-officials roster now spans six tiers, federal first ---
+// --- combined elected-officials roster now spans seven tiers, federal first ---
 const roster = beats.electedOfficialsSubBeats();
 ok(roster[0].id === 'federal-officials', 'federal beat is first (rotation priority)');
-ok(['state-legislature-', 'county-commissions-', 'municipalities-', 'townships-', 'school-boards-'].every(p => roster.some(b => b.id.startsWith(p))), 'roster spans all six tiers (federal, state-leg, county, municipal, township, school)');
-ok(roster.length === 1 + beats.stateLegSubBeats().length + beats.countyCommissionSubBeats().length + beats.municipalSubBeats().length + beats.subdivisionSubBeats().length + beats.schoolBoardSubBeats().length, 'roster = federal(1) + state-leg + county + municipal + township + school tiers');
+ok(['state-legislature-', 'capital-cities-', 'county-commissions-', 'municipalities-', 'townships-', 'school-boards-'].every(p => roster.some(b => b.id.startsWith(p))), 'roster spans all seven tiers (federal, state-leg, capital-cities, county, municipal, township, school)');
+ok(roster.length === 1 + beats.stateLegSubBeats().length + beats.capitalCitySubBeats().length + beats.countyCommissionSubBeats().length + beats.municipalSubBeats().length + beats.subdivisionSubBeats().length + beats.schoolBoardSubBeats().length, 'roster = federal(1) + state-leg + capital + county + municipal + township + school tiers');
 
 // --- TOPIC / CONCEPT beats (AI, power, datacenters) ---
 const topics = beats.topicBeats();

@@ -140,5 +140,33 @@ ok(s.chooseNextByPriority({ beats: bp, state: { beats: { a: { lastRun: 5000, yie
   ok(s.beatPassGate({ origin: 'beat', now: T, lastUserTurnTs: T - 9 * 60 * 1000, lastBeatPassTs: 0 }).reason === 'not-idle', 'gate: 9-min user idle under the 10-min default → still not idle');
 }
 
+// --- ladderFilter: the STATE LADDER (slice B) — each state walks state-govt → capital → counties → … ---
+{
+  const mk = (id, st, rung) => ({ id, stateCode: st, ladderRung: rung });
+  const pool = [
+    { id: 'federal-officials' },                        // unrunged → always eligible
+    mk('state-legislature-al', 'AL', 1), mk('capital-cities-al', 'AL', 2), mk('county-commissions-al', 'AL', 3),
+    mk('state-legislature-tx', 'TX', 1), mk('county-commissions-tx', 'TX', 3),
+  ];
+  const ids = (st, held) => s.ladderFilter(pool, st, held).map((b) => b.id);
+  ok(ids({ beats: {} }).join(',') === 'federal-officials,state-legislature-al,state-legislature-tx',
+    'ladder: fresh states expose ONLY rung 1 (+ the unrunged federal)');
+  ok(ids({ beats: { 'state-legislature-al': { status: 'done' } } }).includes('capital-cities-al'),
+    'ladder: converging the legislature unlocks the capital/major-cities rung');
+  ok(!ids({ beats: { 'state-legislature-al': { status: 'done' } } }).includes('county-commissions-al'),
+    'ladder: counties stay locked until the capital rung converges too');
+  ok(ids({ beats: { 'state-legislature-al': { status: 'done' }, 'capital-cities-al': { status: 'done' } } }).includes('county-commissions-al'),
+    'ladder: rung 3 unlocks once rungs 1+2 converge');
+  // IN-FLIGHT blocks: a held (worker-masked-done) beat still gates its state's lower rungs — working
+  // rung N does not unlock rung N+1, converging it does. This also spreads workers ACROSS states.
+  ok(!ids({ beats: { 'state-legislature-al': { status: 'done' } } }, new Set(['state-legislature-al'])).includes('capital-cities-al'),
+    'CRITICAL: a held/in-flight rung still blocks — masked-done never unlocks the next rung');
+  // TX has NO capital-cities beat in this pool (data gap) — the min is over what is schedulable, so
+  // counties unlock straight after the legislature instead of deadlocking on a missing rung.
+  ok(ids({ beats: { 'state-legislature-tx': { status: 'done' } } }).includes('county-commissions-tx'),
+    'ladder: a state missing a rung skips it (no deadlock on absent data)');
+  ok(s.ladderFilter([], {}).length === 0 && s.ladderFilter(pool).length >= 3, 'ladder: empty pool / omitted state never throw');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

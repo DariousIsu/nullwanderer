@@ -10627,14 +10627,28 @@ function _pinScoreFor(beat, dirTokens) {
 // workers) so the priority path can penalize piling on. Round-robin ignores signals (parity with before).
 function _chooseBeat(pool, state, now, held) {
   const sched = require('./lib/beat_scheduler');
-  if (_allocMode() !== 'priority') return sched.chooseNext({ beats: pool, state });
   const heldSet = held instanceof Set ? held : new Set(held || []);
+  // STATE LADDER (slice B): each state walks state-govt → capital+major cities → counties → municipal
+  // tail → townships → school boards. Applied to the pool BEFORE either allocator, so both round-robin
+  // and priority modes honor the top-down structure; held (in-flight) beats still block their state's
+  // lower rungs — see beat_scheduler.ladderFilter.
+  const laddered = sched.ladderFilter(pool, state, heldSet);
+  if (_allocMode() !== 'priority') return sched.chooseNext({ beats: laddered, state });
   const weights = _allocWeights();
   const dirTokens = _directionTokens();
   return sched.chooseNextByPriority({
-    beats: pool, state, now, weights,
+    beats: laddered, state, now, weights,
     signals: (b) => ({ newsScore: _newsScoreFor(state.beats[b.id], now), inFlight: heldSet.has(b.id), pinScore: _pinScoreFor(b, dirTokens) }),
   });
+}
+
+// A resumed thread predates any change to its beat's SHAPE (depth + facet plan) — the old shape rides
+// the focus meta, not the registry. Slice B turned the elected sweep from dossier-grind into
+// validation passes; without this refresh, every already-live thread would keep grinding 16-pass
+// dossiers forever. Idempotent, cheap, applied at every resume.
+function _refreshBeatShape(beat, threadId) {
+  try { if (beat && beat.depth) db.setMeta(`focus.${threadId}.depth`, beat.depth); } catch {}
+  try { if (beat && Array.isArray(beat.facets) && beat.facets.length) db.setMeta(`focus.${threadId}.plan`, JSON.stringify({ facets: beat.facets, targets: [] })); } catch {}
 }
 
 // MAINTENANCE SWEEP (Slice 2d) — a completeness beat is never "done forever": rosters change. Two re-verify
@@ -10754,6 +10768,7 @@ async function _autonomicSchedulerTick() {
     if (t && ['pending', 'active'].includes(t.status)) {
       try { db.setMeta(`focus.${bs.thread}.background`, ''); } catch {}   // primary owns it now (clear any worker flag)
       try { focusLib.setCurrent(bs.thread, { directed: true }); } catch {}
+      _refreshBeatShape(beat, bs.thread);   // live thread adopts the beat's CURRENT depth/facets (validation shape)
       bs.sliceStartCovered = _coveredCount(bs.thread);
       bs.lastRun = Date.now();
       state.sliceIndex = (state.sliceIndex || 0) + 1;   // a new slice started → advance the lane counter
@@ -10817,6 +10832,7 @@ function _fillBackgroundWorkers(state, electedPool, topicPool, primaryBeatId) {
       if (t && ['pending', 'active'].includes(t.status)) {
         try { db.setMeta(`focus.${bs.thread}.background`, '1'); } catch {}
         try { require('./lib/focus').setBackground(bs.thread); } catch {}
+        _refreshBeatShape(beat, bs.thread);   // live thread adopts the beat's CURRENT depth/facets (validation shape)
         bs.lastRun = Date.now(); state.beats[pickId] = bs; state.workers[slot] = { beatId: pickId };
         console.log(`[worker#${slot}] resumed ${pickId} → focus #${bs.thread}`);
       } else {
@@ -12433,9 +12449,12 @@ async function runDirectedResearchPass(focus) {
     // progresses through its whole worklist instead of grinding one sub-topic forever (20-min audit finding).
     const depthMode = (() => { try { return (db.getMeta(`focus.${focus.id}.depth`) || '').trim(); } catch { return ''; } })();
     const refusal = depthMode === 'dossier';
+    // VALIDATE (leash slice B): the autonomic elected sweep confirms rosters + flags changes in 2-3
+    // passes per body and moves on — never the refusal-mode dossier grind (that stays for directed asks).
+    const validateMode = depthMode === 'validate';
     if (refusal) target.dryPasses = (newChars < rs.MIN_NEW_CHARS) ? ((target.dryPasses || 0) + 1) : 0;
     const deepTarget = refusal || depthMode === 'concept' || (scope === 'bounded' && Array.isArray(intended) && intended.length <= 1);
-    const adv = rs.decideAdvance({ passes: target.passes, newChars, saturated: p.saturated, uncovered: uncovered.length, deep: deepTarget, refusal, dryStreak: target.dryPasses || 0 });
+    const adv = rs.decideAdvance({ passes: target.passes, newChars, saturated: p.saturated, uncovered: uncovered.length, deep: deepTarget, refusal, validate: validateMode, dryStreak: target.dryPasses || 0 });
     if (adv.advance) {
       // CLOUD ORGANIZE this target → one clean section (the usable DRAFT), appended to the deliverable NOW.
       let section = '';
@@ -12464,9 +12483,10 @@ async function runDirectedResearchPass(focus) {
       // whether the roster inside it is finished. We ask for that number once per body, as its own
       // narrow cited question — never scraped out of `target.raw`, which is many passes of synthesis
       // blended with page text and cannot tell us where a number came from. See lib/cardinality_capture.js.
-      // Dossier depth only (finite elected bodies); a concept beat has no seat count to hold it to.
+      // Dossier + validate depths (finite elected bodies — the seat count IS the validation
+      // denominator); a concept beat has no seat count to hold it to.
       // Once per body: an answer we already have is not re-litigated on every future visit.
-      if (refusal) {
+      if (refusal || validateMode) {
         try {
           const cardinality = require('./lib/cardinality');
           const cap = require('./lib/cardinality_capture');
