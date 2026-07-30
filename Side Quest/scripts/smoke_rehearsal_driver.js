@@ -165,6 +165,20 @@ function freshDeps({ picks = [], testResults = [], editResults = [], writeResult
     ok(drv.discard({ deps }).ok && drv.load({ deps }) === null, 'discard clears the run and the sandbox');
   }
 
+  // BUDGET REFUND (boot110 live): a failed cloud pick does NO work — it must not spend an
+  // iteration, or a flaky stretch parks the run without it ever actually iterating.
+  {
+    const { deps, meta } = freshDeps();
+    deps.ask = async () => null;   // cloud unavailable
+    const s = drv.start({ slug: 'refund-probe', goal: 'prove a no-op iteration refunds its budget spend', suite: 'smoke_board.js', files: ['lib/board.js'], deps });
+    ok(s.ok, 'refund: run opens');
+    const before = JSON.parse(meta.get('rehearsal_driver.run')).iteration;
+    const r = await drv.iterate({ deps });
+    const after = JSON.parse(meta.get('rehearsal_driver.run')).iteration;
+    ok(r.ok === false && r.status === 'active' && /refunded/.test(r.note), 'refund: cloud-unavailable stays active and says refunded');
+    ok(after === before, `refund: iteration unchanged (${before} → ${after})`);
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

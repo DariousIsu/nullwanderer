@@ -57,6 +57,13 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓', m); } else { fail++
   ok(!!meta['graph_integrity.cursor'], 'cursor advances so states rotate across ticks');
   ok(r.applied <= T.BITE_PER_TICK, 'the per-tick bite is bounded');
 
+  // THE CITATION CONTRACT (boot110 live: all 5 first-tick repairs failed): link() requires the
+  // {url, grade, title} OBJECT — a bare URL string reads as citation.url === undefined and the
+  // organ's own uncited-edge guard refuses every link. dryRun never reaches link(), so only this
+  // shape assertion stands between the wire and a silent all-fail tick.
+  ok(T.CITATION && typeof T.CITATION === 'object' && /^https:\/\//.test(String(T.CITATION.url || '')) && !!T.CITATION.grade,
+    'CITATION is the {url, grade, title} object link() requires — never a bare string');
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

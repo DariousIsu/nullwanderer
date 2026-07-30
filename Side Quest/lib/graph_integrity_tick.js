@@ -24,7 +24,15 @@ const PLACES_SQL = "SELECT e.id, e.name, (SELECT p.name FROM relations r JOIN en
   + "WHERE r.source_id=e.id AND r.relation_type='LOCATED_IN' LIMIT 1) AS parent "
   + "FROM entities e WHERE e.entity_type='place' AND (e.name LIKE '%county%' OR e.name LIKE '%parish%' "
   + "OR e.name LIKE '%borough%' OR e.name LIKE '%census area%')";
-const CITATION = 'https://www2.census.gov/geo/docs/reference/codes2020/national_county2020.txt';
+// The OBJECT shape link() requires ({url, grade, title}) — the first live tick (boot110, AK)
+// failed all 5 repairs because a bare URL string was passed: citation.url was undefined and the
+// organ's own uncited-edge guard correctly refused every link. The smoke's dryRun never reaches
+// link(), which is how the shape slipped — tested around the seam, again.
+const CITATION = {
+  url: 'https://www2.census.gov/geo/docs/reference/codes2020/national_county2020.txt',
+  grade: 'A',
+  title: 'US Census Bureau — 2020 FIPS county codes (national_county2020)',
+};
 const DEFAULT_DAILY_CAP = 25;
 const BITE_PER_TICK = 5;
 

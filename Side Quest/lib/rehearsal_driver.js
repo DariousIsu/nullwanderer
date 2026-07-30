@@ -128,7 +128,14 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
       want: EDIT_WANT, validate: validateEditPick, numPredict: 1400, think: false,
     });
   } catch (e) { console.error('[rehearsal-driver] edit pick failed:', e.message); }
-  if (!pick) { _save(run, deps); return { ok: false, status: 'active', note: 'cloud unavailable — iteration counted, run stays active' }; }
+  if (!pick) {
+    // A failed cloud pick did NO work (no edit, no test) — it must not spend budget: a flaky
+    // cloud stretch could park the run without it ever actually iterating (live, boot110).
+    // Refund the increment and stay active; the next tick tries again at full budget.
+    run.iteration--;
+    _save(run, deps);
+    return { ok: false, status: 'active', note: 'cloud unavailable — budget refunded, run stays active' };
+  }
 
   if (pick.action === 'give_up') {
     run.status = 'stuck'; _save(run, deps);
