@@ -219,6 +219,16 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
     return `• HER SKILLS (know-how on the shelf; a body loads only on pull):\n${lines.join('\n')}`;
   });
 
+  grab('approvals', () => {
+    // O4 — AWAITING LUCAS, cached by the driver (meta approvals.snapshot, ~1h): the decider must
+    // know what is stuck waiting on HIM, so "surface it to Lucas" beats re-proposing a duplicate.
+    let cached = null;
+    try { cached = JSON.parse(dbm.getMeta('approvals.snapshot') || 'null'); } catch {}
+    if (!cached || !Array.isArray(cached.sections) || !cached.sections.length) return '';
+    counts.approvals = cached.total || cached.sections.length;
+    return `• ${require('./approvals').buildBlock(cached).replace(/^\[|\]$/g, '')} (as of ${_ago(now, cached.ts)})`;
+  });
+
   grab('maintenance', () => {
     // Echo pass status, cached by the driver (meta autonomy.pass_status, ~6h) — a stale loop is a
     // maintain-move candidate. Facts + age only; the allowlist itself rides the maintain brief.

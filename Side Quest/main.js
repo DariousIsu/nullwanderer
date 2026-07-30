@@ -6062,6 +6062,18 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     } catch (e) { console.error('[main] self-state block failed:', e.message); }
   }
 
+  // O4 — "what's waiting on me?" gets THE approvals read-model, live-gathered (a direct question
+  // deserves fresh counts; every source is fail-soft so a cold store just drops out). The empty
+  // state is an answer too — "nothing is waiting" beats inventing a queue.
+  try {
+    const approvals = require('./lib/approvals');
+    if (approvals.detectApprovalsQuestion(userMessage)) {
+      const block = approvals.buildBlock(await approvals.snapshot({ echoSuit }), userName);
+      retrievedKnowledgeBlock = retrievedKnowledgeBlock ? `${block}\n\n${retrievedKnowledgeBlock}` : block;
+      console.log('[approvals] AWAITING-LUCAS block surfaced for a sign-off question');
+    }
+  } catch (e) { console.error('[approvals] block failed:', e.message); }
+
   // SELF-MODEL block — query-relevant self entries (so a question about a specific
   // taste/preference surfaces THAT entry, e.g. "favorite flower" → her ranunculus)
   // plus her always-on core self. Async (embeds the query).
@@ -9831,6 +9843,16 @@ async function autonomyTick() {
         if (ps && ps.ok && !ps.isError && ps.text) db.setMeta('autonomy.pass_status', JSON.stringify({ ts: now, text: String(ps.text).slice(0, 1500) }));
       }
     } catch (e) { console.error('[autonomy] pass-status refresh failed:', e.message); }
+    // O4 — refresh the AWAITING-LUCAS snapshot ~1h so the manifest (and a quick chat answer) read
+    // a warm cache instead of fanning out to four stores per tick.
+    try {
+      let cachedA = null; try { cachedA = JSON.parse(db.getMeta('approvals.snapshot') || 'null'); } catch {}
+      if (!cachedA || now - (cachedA.ts || 0) > 3600e3) {
+        const snap = await require('./lib/approvals').snapshot({ echoSuit });
+        db.setMeta('approvals.snapshot', JSON.stringify(snap));
+        if (snap.sections.length) console.log(`[approvals] snapshot: ${snap.total} item(s) across ${snap.sections.length} queue(s)`);
+      }
+    } catch (e) { console.error('[approvals] snapshot refresh failed:', e.message); }
     const manifest = autonomy.buildManifest({ db, now, deps: { forecast: () => lastForecast } });
     if (!manifest.text) { console.log('[autonomy] empty manifest — nothing to choose from'); return; }
     const decision = await autonomy.decide({ manifestText: manifest.text, history: autonomy.historyRead(H.getMeta), now });

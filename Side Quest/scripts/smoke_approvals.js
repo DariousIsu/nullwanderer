@@ -1,0 +1,50 @@
+/* Smoke: lib/approvals — O4 ONE APPROVAL SURFACE (the read-model over the propose-shaped stores).
+ * Pure/offline: sections are injected; the Echo list parse runs on fixtures.
+ * Run: ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/smoke_approvals.js
+ */
+'use strict';
+const ap = require('../lib/approvals');
+let pass = 0, fail = 0;
+const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++; console.log('  ✗', t); } };
+
+(async () => {
+  // --- snapshot with injected sources (the aggregate is pure given its sources) ---
+  const snap = await ap.snapshot({ sources: [
+    { key: 'puller-revisions', label: 'Puller belief revisions', count: 3, top: 'amazon.com: email_pattern first.last → flast' },
+    null,   // a broken store yields null — it must simply drop out
+    { key: 'rehearsal-card', label: 'Rehearsal proposal card', count: 1, top: 'systematic method to locate page controls' },
+  ] });
+  ok(snap.sections.length === 2 && snap.total === 4, `null sources drop out; total sums counts (${snap.total} across ${snap.sections.length})`);
+
+  // --- buildBlock: the one block, grounded + honest about the empty state ---
+  const block = ap.buildBlock(snap, 'Lucas');
+  ok(/AWAITING LUCAS — 4 item\(s\) across 2 queue\(s\)/.test(block), 'block leads with the total + queue count');
+  ok(/Puller belief revisions: 3 pending — top: amazon\.com/.test(block), 'each queue names its count + top item');
+  ok(/never invent a queue or a count/.test(block), 'block carries the grounding instruction');
+  ok(/nothing is waiting on your sign-off/.test(ap.buildBlock({ sections: [] })), 'empty state is an ANSWER, not silence');
+  ok(/nothing is waiting/.test(ap.buildBlock(null)), 'null snapshot never throws');
+  const capped = ap.buildBlock(await ap.snapshot({ sources: [{ key: 'x', label: 'Echo dedup', count: ap.CAP, top: 'a ↔ b' }] }));
+  ok(new RegExp(`Echo dedup: ${ap.CAP}\\+ pending`).test(capped), `a count at the cap displays as ${ap.CAP}+ (never a false exact)`);
+
+  // --- detector: the questions this surface exists for; near-misses stay quiet ---
+  for (const q of ["what's waiting on me?", 'anything I need to approve?', 'does anything need my sign-off',
+    'what do I need to sign off on', 'is anything awaiting my approval', "what's pending for me"]) {
+    ok(ap.detectApprovalsQuestion(q), `detects: "${q}"`);
+  }
+  for (const q of ['approve of her plan?', 'what is pending in the queue for the crawler', 'I signed off already', 'review the op-ed draft']) {
+    ok(!ap.detectApprovalsQuestion(q), `stays quiet on: "${q}"`);
+  }
+
+  // --- parseProposalList: tolerant of Echo's shapes; unparseable → null (say nothing, not wrong) ---
+  const arr = ap.parseProposalList('[{"id":9,"name":"Baton Rouge dedup"},{"id":10,"name":"x"}]');
+  ok(arr && arr.count === 2 && /Baton Rouge/.test(arr.top), 'bare JSON array parses (count + top name)');
+  const wrapped = ap.parseProposalList('{"proposals":[{"source_name":"J. Smith","target_name":"John Smith"}]}');
+  ok(wrapped && wrapped.count === 1 && /J\. Smith ↔ John Smith/.test(wrapped.top), 'wrapped {proposals} parses; pair names render');
+  const noisy = ap.parseProposalList('Result: 1 rows\n[{"title":"merge A into B"}]\n(done)');
+  ok(noisy && /merge A into B/.test(noisy.top), 'JSON embedded in prose still parses');
+  ok(ap.parseProposalList('no proposals pending') === null && ap.parseProposalList('') === null && ap.parseProposalList(null) === null,
+    'prose/empty/null → null, never a throw and never a fake count');
+
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
+  process.exit(fail === 0 ? 0 : 1);
+})();

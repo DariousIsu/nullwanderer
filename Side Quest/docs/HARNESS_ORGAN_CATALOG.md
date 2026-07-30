@@ -602,8 +602,8 @@ repairs of 2026-07-29 (boots 97–105). "Quiet" = on-demand organ with no recent
 
 | Organ | State | Next move |
 |---|---|---|
-| O3 structured returns | HALF (lie fixed + envelope-at-dispatch) | origin-join at dispatch, drain validation + [UNSATISFIED], delegate board rows, failures through the drain |
-| O4 approval surface | NOT BUILT | lib/approvals.js read-model + AWAITING LUCAS section (~a day) |
+| O3 structured returns | BUILT (98ecf2b, 2026-07-30) | live proof pending: delegate during a focus → result accretes to THAT thread; board row visible in-flight |
+| O4 approval surface | BUILT (lib/approvals.js, 2026-07-30) | read-model + AWAITING-LUCAS manifest section + chat detector; live proof pending: "anything need my sign-off?" with real pending rows (all queues were honestly empty at build time) |
 | O5 doc shapes + self-check | NOT BUILT | shapes→rows, branded docx, post-render self-check |
 | O6 adversarial verify | NOT BUILT | rides O2's proposal cards — sequenced behind the first real rehearsal run |
 | O7 directive enforce | NOT BUILT | closed verb vocabulary compiled to echo_suit dispatch; primitive proven (maintainForcedArgs) |
