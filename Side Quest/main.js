@@ -7022,14 +7022,30 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           || /\b(look ?up|search|find|pull ?up|fetch|what'?s the|how much|how many|latest|current|when (is|was|did|does)|where (is|was)|who (is|was|are)|our (data|records|numbers|polling|crm|bills|contacts|knowledge))\b/i.test(userMessage);
       } catch { return false; }
     })();
-    if (opMode !== 'off' && routeAllowsAny('lookup', 'task') && (needsExternal || isAssignment) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && userMessage && userMessage.trim().length > 6) {
-      // directed (in-turn completion mode) when this is an assignment (intake gate, or regex fallback).
-      const directed = isAssignment;
+    // CANVAS-SET ANALYSIS (lib/doc_set, 2026-07-30 — "I need the program to be able to generate
+    // it"): an analytical ask over dropped documents gets the SET manifest + the analyze_data
+    // route. The 07-28 roster ask died reaching for canvas tabs while all nine bodies sat durable
+    // in doc_store — and she asked Lucas for files she already held.
+    let docSetBlock = '';
+    try {
+      const dsl = require('./lib/doc_set');
+      if (dsl.detectSetAnalysisAsk(userMessage)) {
+        const set = dsl.dropSet(db);
+        if (set.length) {
+          docSetBlock = dsl.buildBlock(set);
+          console.log(`[doc-set] analytical ask over ${set.length} dropped doc(s) → manifest + analyze_data route`);
+        }
+      }
+    } catch (e) { console.error('[doc-set] manifest failed:', e.message); }
+    if (opMode !== 'off' && routeAllowsAny('lookup', 'task') && (needsExternal || isAssignment || docSetBlock) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && userMessage && userMessage.trim().length > 6) {
+      // directed (in-turn completion mode) when this is an assignment (intake gate, or regex
+      // fallback) — or a set-analysis ask, which needs the multi-step script budget.
+      const directed = isAssignment || !!docSetBlock;
       // Immediate feedback — the agent loop can take a few seconds. Use a REQUEST-SERVING placeholder
       // ("on it — starting on that now"), NOT the self-focused "I'm in the middle of something" busy
       // line, which reads as brushing Lucas off the instant he hands her a task.
       try { sendBusy(require('./lib/snapback').pickWorkingLine(Date.now(), { task: directed })); } catch {}
-      const opRes = await runCloudOperator({ userMessage, context: distilledBrief || retrievedKnowledgeBlock || '', task: directed });
+      const opRes = await runCloudOperator({ userMessage, context: (docSetBlock ? `${docSetBlock}\n\n` : '') + (distilledBrief || retrievedKnowledgeBlock || ''), task: directed });
       if (directed) console.log('[operator] directed TASK → in-turn completion mode (8 steps / 90s)');
       if (opRes && opRes.answer) {
         operatorAnswer = opRes.answer;
