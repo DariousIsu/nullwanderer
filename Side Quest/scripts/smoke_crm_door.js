@@ -63,6 +63,26 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   const r4 = await d.upsertPersonObject({ name: 'John Smith', attributeFacts: {}, edgeFacts: {}, identifiers: {}, org: null }, dry);
   ok(r4.action === 'would-create', 'no corroborator at all → a name alone NEVER matches → mint');
 
+  // 3b. SESSION MEMORY (boot111: Edson Beall ×3): a repeat discovery of a person the door just
+  // created must land on the SAME row — one create, then updates — even though the new contact has
+  // no account row for the org-corroborator to match.
+  {
+    const calls = { create: 0, update: 0 };
+    const suit2 = { connected: true, dispatch: async (msg) => {
+      if (msg.name === 'create_contact') { calls.create++; return { ok: true, text: JSON.stringify({ action: 'created', contact_id: 777 }) }; }
+      if (msg.name === 'update_contact') { calls.update++; return { ok: true, text: JSON.stringify({ updated_fields: ['Email'] }) }; }
+      return { ok: true, text: '{}' };
+    } };
+    door._resetForTest();
+    const d2 = door.getDoor(suit2);
+    const card = { name: 'Zed Qorvax', company: 'Voidly Blockworks' };   // no such row in the temp CRM
+    const r1 = await d2.upsertPersonObject(door.personObjectFromCard(card, []));
+    ok(r1.action === 'created' && r1.contactId === 777, `repeat: first discovery creates (${r1.action} #${r1.contactId})`);
+    const r2 = await d2.upsertPersonObject(door.personObjectFromCard(card, [{ type: 'email', value: 'zq@voidly.example' }]));
+    ok(r2.contactId === 777 && r2.action !== 'created', `repeat: second discovery lands on the SAME row (${r2.action} #${r2.contactId})`);
+    ok(calls.create === 1, `repeat: create_contact called exactly once (${calls.create})`);
+  }
+
   // 4. Graceful gating: no Echo / not connected → null (a safe no-op, never a throw).
   door._resetForTest();
   ok(door.getDoor(null) === null, 'no echoSuit → null (no-op)');

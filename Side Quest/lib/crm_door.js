@@ -17,6 +17,11 @@ const ECHO_DIR = process.env.ECHO_CWD || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo
 const ELECTORAL = process.env.CRM_DB_PATH || path.join(ECHO_DIR, 'data', 'foundations', 'electoral.db');
 
 let _door = null, _crm = null, _failed = false, _warnedMissing = false;
+// SESSION MEMORY (boot111: Edson Beall minted 3× from one multi-chunk doc): a research-created
+// contact has no account row yet, so org-corroboration can never match the row THIS DOOR just
+// created — every chunk re-discovered the person and re-minted. The door remembers its own
+// creations for the session; a repeat resolves to the remembered row and lands as an update.
+const _sessionCreates = new Map();   // `${blockKey}|${org}` → contactId
 
 function getDoor(echoSuit) {
   if (_door) return _door;
@@ -44,6 +49,8 @@ function getDoor(echoSuit) {
         // door MINTS instead (Echo's strong-id dedupe still guards true re-adds) — a duplicate row is
         // recoverable, a false merge is not ([[resolver-false-identification]]).
         const [last, fi] = String(key).split('|');
+        const ck = `${key}|${String(org || '').toLowerCase().trim()}`;
+        if (_sessionCreates.has(ck)) return [_sessionCreates.get(ck)];
         if (!jurisdiction && !org) return [];
         // Compare the surname as blockKey normalized it (letters only) — the raw LOWER(TRIM())
         // compare could never equal the stripped key for O'Brien / hyphenated / spaced surnames,
@@ -69,7 +76,25 @@ function getDoor(echoSuit) {
       if (r && r.ok) { try { return JSON.parse(r.text); } catch { return r; } }
       return { error: (r && (r.error || r.text)) || 'dispatch failed' };
     };
-    _door = require('./crm_upsert').createCrmUpserter({ callTool, readCrm });
+    const raw = require('./crm_upsert').createCrmUpserter({ callTool, readCrm });
+    _door = {
+      ...raw,
+      // The wrapper remembers what the door lands, so findByBlock's session cache can resolve a
+      // repeat discovery to the SAME row instead of re-minting (best-effort — a cache miss only
+      // costs Echo's own strong-id guard a look).
+      async upsertPersonObject(obj, opts) {
+        const r = await raw.upsertPersonObject(obj, opts);
+        try {
+          if (r && r.contactId && ['created', 'updated', 'unchanged'].includes(r.action)) {
+            const U = require('./crm_upsert');
+            const parts = U.splitName((obj && obj.name) || '');
+            const k = U.blockKey(parts.FirstName, parts.LastName);
+            if (k) _sessionCreates.set(`${k}|${String((obj && obj.org) || '').toLowerCase().trim()}`, r.contactId);
+          }
+        } catch { /* cache is best-effort */ }
+        return r;
+      },
+    };
     return _door;
   } catch (e) { console.error('[crm-door] init failed:', e && e.message); _failed = true; return null; }
 }
@@ -93,6 +118,6 @@ function personObjectFromCard(landed, beliefs = []) {
   return { name, attributeFacts, edgeFacts: {}, identifiers: {}, org: (landed && landed.company) || null };
 }
 
-function _resetForTest() { try { if (_crm) _crm.close(); } catch {} _door = null; _crm = null; _failed = false; _warnedMissing = false; }
+function _resetForTest() { try { if (_crm) _crm.close(); } catch {} _door = null; _crm = null; _failed = false; _warnedMissing = false; _sessionCreates.clear(); }
 
 module.exports = { getDoor, personObjectFromCard, ELECTORAL, _resetForTest };
