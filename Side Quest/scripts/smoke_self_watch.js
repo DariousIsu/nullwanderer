@@ -71,6 +71,20 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   const st = statuses[statuses.length - 1];
   ok(st && st.data && st.data.counts && st.data.counts.caption === 2, 'status event carries the per-lane counters');
 
+  // --- A RESTART IS NOT A DEFECT (measured: 7 operator reboots in one evening, each killing
+  // in-flight Echo queries → "fetch failed" anomalies indistinguishable from a broken lane) ---
+  {
+    sw._reset();
+    sw.install({ nowMs: T0 });                      // marks the boot window open
+    ok(sw.inBootWindow(T0 + 1000) && !sw.inBootWindow(T0 + sw.BOOT_GRACE_MS + 1), 'the boot window opens at install and closes on schedule');
+    const before = cn.listOpen().length;
+    for (let i = 0; i < 4; i++) sw.observe('[graph-walk] query FAILED → Echo call failed: fetch failed', 'error', { nowMs: T0 + i * 100 });
+    obs.flush();
+    ok(cn.listOpen().length === before, 'boot-window anomalies NEVER mint — the loop cannot spend a sandbox on restart damage');
+    const evts = obs.recent({ sinceId: 0, kinds: ['anomaly'] });
+    ok(evts.some((e) => e.data && e.data.boot === true), 'they still LAND on the bus, flagged boot:true — visible, just not actionable');
+  }
+
   // --- EXHAUST AUDIT (build plan 1.5): the DB-side intake of the same organ ---
   {
     sw._reset();

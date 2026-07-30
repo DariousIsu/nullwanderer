@@ -36,6 +36,11 @@ const MINT_THRESHOLD = 3;
 const MAX_OPEN_WATCH_NEEDS = 2;
 const AUDIT_EVERY_MS = 12 * 3600e3; // the DB-exhaust audit cadence (build plan 1.5)
 const AUDIT_TS_KEY = 'watch.last_audit_ts';
+// A RESTART IS NOT A DEFECT (measured 2026-07-30: seven operator reboots in one evening, each
+// killing in-flight Echo queries → "fetch failed" anomalies that look exactly like a broken lane).
+// Boot-window anomalies still LAND on the bus (Lucas sees everything) but do not count toward the
+// mint threshold — the self-repair loop must never spend a sandbox on damage the operator caused.
+const BOOT_GRACE_MS = 120e3;
 
 function _dbm(deps) { return (deps && deps.db) || require('./db'); }
 
@@ -89,8 +94,12 @@ let _sigs = new Map();            // signature → { firstTs, lastStoredTs, hits
 let _lastStatusTs = 0;
 let _installed = false;
 let _inObserve = false;
+let _installedAt = 0;
 
-function _reset() { _counts = new Map(); _observed = 0; _sigs = new Map(); _lastStatusTs = 0; _inObserve = false; }
+function _reset() { _counts = new Map(); _observed = 0; _sigs = new Map(); _lastStatusTs = 0; _inObserve = false; _installedAt = 0; }
+
+// True while the app is still coming up — in-flight failures here are restart damage, not defects.
+function inBootWindow(nowMs) { return !!(_installedAt && nowMs - _installedAt < BOOT_GRACE_MS); }
 
 // ── the observer ──────────────────────────────────────────────────────────────────────────────
 function observe(line, level = 'info', { deps = {}, nowMs = Date.now() } = {}) {
@@ -110,10 +119,10 @@ function observe(line, level = 'info', { deps = {}, nowMs = Date.now() } = {}) {
       let st = _sigs.get(sig);
       if (!st) { st = { firstTs: nowMs, lastStoredTs: 0, hits: [] }; _sigs.set(sig, st); }
       st.hits = st.hits.filter((t) => t >= nowMs - SIG_WINDOW_MS);
-      st.hits.push(nowMs);
+      if (!inBootWindow(nowMs)) st.hits.push(nowMs);   // restart damage is visible, never mintable
       if (!st.lastStoredTs || nowMs - st.lastStoredTs >= SIG_RESTORE_MS) {
         st.lastStoredTs = nowMs;
-        obs.emit({ lane: c.lane, kind: 'anomaly', level: level === 'error' ? 'error' : 'warn', text: line, ref: c.ref, data: { sig, hits24h: st.hits.length } }, { deps, nowMs });
+        obs.emit({ lane: c.lane, kind: 'anomaly', level: level === 'error' ? 'error' : 'warn', text: line, ref: c.ref, data: { sig, hits24h: st.hits.length, boot: inBootWindow(nowMs) || undefined } }, { deps, nowMs });
       } else {
         _counts.set(`${c.prefix}!`, (_counts.get(`${c.prefix}!`) || 0) + 1);
       }
@@ -201,9 +210,10 @@ function _flushStatus({ deps = {}, nowMs = Date.now() } = {}) {
 }
 
 // ── the console hook (installed once, at boot, in main.js) ────────────────────────────────────
-function install({ deps = {} } = {}) {
+function install({ deps = {}, nowMs = Date.now() } = {}) {
   if (_installed) return false;
   _installed = true;
+  _installedAt = nowMs;
   const util = require('util');
   for (const [name, level] of [['log', 'info'], ['warn', 'warn'], ['error', 'error']]) {
     const orig = console[name].bind(console);
@@ -216,4 +226,4 @@ function install({ deps = {} } = {}) {
   return true;
 }
 
-module.exports = { classify, signatureOf, observe, install, runExhaustAudit, _reset, MINT_THRESHOLD, MAX_OPEN_WATCH_NEEDS, AUDIT_EVERY_MS, SIGNAL_LANES };
+module.exports = { classify, signatureOf, observe, install, runExhaustAudit, inBootWindow, _reset, MINT_THRESHOLD, MAX_OPEN_WATCH_NEEDS, AUDIT_EVERY_MS, BOOT_GRACE_MS, SIGNAL_LANES };
