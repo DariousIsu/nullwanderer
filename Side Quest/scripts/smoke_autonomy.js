@@ -179,6 +179,28 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(/report seeds: hardware-evolution/.test(man4.text) && /his decisions: needs list outranks/.test(man4.text),
     'seeds and decisions surface labeled');
 
+  // ---- O3 origin-join: envelope parse + pending-dispatch match (the return path's pure halves) --
+  {
+    const env = auto.parseEnvelope('Report done. FOUND: LA parish clerk emails verified · council roster confirmed NOT FOUND: the Caddo treasurer\'s direct line SOURCES: https://caddo.gov/clerk · https://sos.la.gov');
+    ok(env.ok && env.found.length === 2 && /clerk emails/.test(env.found[0]), 'envelope: FOUND items split on the dot separator');
+    ok(env.notFound.length === 1 && /treasurer/.test(env.notFound[0]), 'envelope: NOT FOUND parsed (and not swallowed into FOUND)');
+    ok(env.sources.length === 2 && /caddo\.gov/.test(env.sources[0]), 'envelope: SOURCES parsed');
+    ok(auto.parseEnvelope('NOT FOUND: anything at all').ok && auto.parseEnvelope('NOT FOUND: x').found.length === 0, 'envelope: a NOT-FOUND-only return is still a valid envelope, with FOUND empty');
+    ok(auto.parseEnvelope('here is a long prose summary of what I did').ok === false, 'envelope: free prose → ok=false (the [UNSATISFIED] marker rides)');
+    ok(auto.parseEnvelope('').ok === false && auto.parseEnvelope(null).ok === false, 'envelope: empty/null never throw');
+
+    const pending = [
+      { task: 'gather the Richland Parish school board roster and contacts', agent: 'historical_researcher', focusId: 11, board: 1 },
+      { task: 'compile datacenter siting fights in Northern Virginia', agent: null, focusId: 22, board: 2 },
+    ];
+    const hit = auto.matchPendingDelegate({ title: 'Richland Parish school board roster', summary: 'FOUND: 7 members …', agent: 'historical_researcher' }, pending);
+    ok(hit && hit.focusId === 11, 'match: agent + task-token overlap joins the right dispatch');
+    const hit2 = auto.matchPendingDelegate({ title: 'Datacenter siting opposition — Northern Virginia', summary: '', agent: 'press_monitor' }, pending);
+    ok(hit2 && hit2.focusId === 22, 'match: token overlap alone joins (≥2) even when the agent differs');
+    ok(auto.matchPendingDelegate({ title: 'weekly weather report', summary: 'sunny', agent: 'other' }, pending) === null, 'match: an unrelated return joins NOTHING (no origin beats the wrong origin)');
+    ok(auto.matchPendingDelegate({ title: 'Richland roster', summary: '' }, []) === null, 'match: empty pending → null, never throws');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

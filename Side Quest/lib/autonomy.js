@@ -493,10 +493,54 @@ function inboxSeenKey(item) {
   return `${(item && item.title) || ''}::${(item && item.createdAt) || ''}`.slice(0, 200);
 }
 
+// ---- O3 ORIGIN-JOIN (the other half of the return path) --------------------
+// A delegate that returns as only a passive reading is a toast, not a result. At DISPATCH the suit
+// records {task, agent, focusId, board} in meta autonomy.delegate_pending; at DRAIN the returned
+// item is matched back to that record so the result lands ON its origin (the focus thread that
+// asked) and the board row closes. These are the pure halves, so both ends stay smokeable.
+
+// Parse the dispatch envelope out of a returned item's text: "FOUND: … · NOT FOUND: … · SOURCES: …".
+// ok=false when neither FOUND nor NOT FOUND is present — the agent ignored the contract and the
+// reader must treat the text as unshaped prose (the [UNSATISFIED] marker rides at the drain).
+function parseEnvelope(text) {
+  const s = String(text || '');
+  const grab = (re) => { const m = s.match(re); return m ? m[1].trim() : null; };
+  const found = grab(/(?<!NOT\s)\bFOUND:\s*([\s\S]*?)(?=\bNOT\s+FOUND:|\bSOURCES:|$)/i);
+  const notFound = grab(/\bNOT\s+FOUND:\s*([\s\S]*?)(?=\bSOURCES:|$)/i);
+  const sources = grab(/\bSOURCES:\s*([\s\S]*?)$/i);
+  const split = (x) => (x ? x.split(/\s*[·;\n]\s*/).map((v) => v.trim()).filter((v) => v && !/^(none|n\/a|-)$/i.test(v)).slice(0, 12) : []);
+  return { ok: found != null || notFound != null, found: split(found), notFound: split(notFound), sources: split(sources) };
+}
+
+const _DELEG_STOP = new Set(['the', 'and', 'for', 'with', 'from', 'that', 'this', 'into', 'about', 'their', 'find', 'research', 'gather', 'report', 'back', 'delegated', 'work', 'finished', 'agent', 'task', 'please', 'every', 'each']);
+function _delegTokens(s) {
+  return new Set(String(s || '').toLowerCase().match(/[a-z0-9]{4,}/g)?.filter((t) => !_DELEG_STOP.has(t)) || []);
+}
+// Match a returned inbox item to a pending dispatch record. Agent-name equality is a strong prior
+// but never sufficient alone (one agent serves many dispatches) — the task must share tokens with
+// the returned title/summary: ≥2 content tokens, or ≥1 when the agent also matches. Best score
+// wins; below threshold → null (an unmatched return still surfaces as a reading — it just cannot
+// claim an origin, which beats claiming the WRONG one).
+function matchPendingDelegate(item, pending = []) {
+  const it = _delegTokens(`${(item && item.title) || ''} ${(item && item.summary) || ''}`);
+  let best = null, bestScore = 0;
+  for (const p of (Array.isArray(pending) ? pending : [])) {
+    if (!p) continue;
+    const agentHit = !!(p.agent && item && item.agent && String(p.agent).toLowerCase() === String(item.agent).toLowerCase());
+    let overlap = 0;
+    for (const t of _delegTokens(p.task)) if (it.has(t)) overlap++;
+    if (overlap < (agentHit ? 1 : 2)) continue;
+    const score = overlap + (agentHit ? 2 : 0);
+    if (score > bestScore) { best = p; bestScore = score; }
+  }
+  return best;
+}
+
 module.exports = {
   MOVES, HISTORY_KEY, HISTORY_MAX,
   buildManifest, historyRead, historyPush, historyBlock,
   decide, validateDecision, DECISION_WANT,
   buildOperatorBrief, summarizeOutcome, slugify,
   verifyExpect, _validateExpectVerdict, parseAgentInbox, inboxSeenKey,
+  parseEnvelope, matchPendingDelegate,
 };

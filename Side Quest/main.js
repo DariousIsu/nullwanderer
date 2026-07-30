@@ -9637,9 +9637,29 @@ function _autonomyEnabled() {
 // Own pace (autonomy.inbox_check_min, default 5m) — runs even when the decide cadence is out.
 async function _drainAgentInbox(now) {
   if (!echoSuit || !echoSuit.connected) return;
+  // O3: keep pending delegates' board rows alive EVERY tick (the board sweeper fails rows silent
+  // for 5 min, and an external run can take longer than that) — before the drain's own gap gate.
+  let _pending = [];
+  try { _pending = JSON.parse(db.getMeta('autonomy.delegate_pending') || '[]') || []; } catch {}
+  if (_pending.length) { try { const board = require('./lib/board'); for (const p of _pending) if (p && p.board) board.beat(p.board); } catch {} }
   const gapMin = Math.max(1, _intMeta('autonomy.inbox_check_min', 5));
   if (now - (parseInt(db.getMeta('autonomy.inbox_last_at') || '0', 10) || 0) < gapMin * 60 * 1000) return;
   try { db.setMeta('autonomy.inbox_last_at', String(now)); } catch {}
+  // O3 failures through the drain: a dispatch nothing ever answered is a FAILURE, not silence —
+  // after 24h the board row fails with the reason and the pending entry drops. Runs on every
+  // drain pass (a quiet inbox must still expire its dead, or their rows heartbeat forever).
+  {
+    const _before = _pending.length;
+    _pending = _pending.filter((p) => {
+      const stale = now - ((p && p.at) || 0) > 24 * 3600 * 1000;
+      if (stale) {
+        if (p.board) { try { require('./lib/board').finish(p.board, { status: 'failed', note: 'delegate never returned (24h)' }); } catch {} }
+        console.log(`[autonomy] delegate never returned (24h): ${String((p && p.task) || '').slice(0, 80)}`);
+      }
+      return !stale;
+    });
+    if (_pending.length !== _before) { try { db.setMeta('autonomy.delegate_pending', JSON.stringify(_pending)); } catch {} }
+  }
   const autonomy = require('./lib/autonomy');
   let r;
   try { r = await echoSuit.dispatch({ kind: 'do', name: 'agent_inbox', args: { include_surfaced: false, limit: 5 } }); }
@@ -9654,15 +9674,34 @@ async function _drainAgentInbox(now) {
   if (!fresh.length) return;
   let recent = [];
   try { recent = JSON.parse(db.getMeta('autonomy.inbox_recent') || '[]') || []; } catch {}
+  let _pendingDirty = false;
   for (const it of fresh) {
     seen.push(autonomy.inboxSeenKey(it));
     recent.push(it);
+    // O3: validate the dispatch envelope + JOIN THE ORIGIN. An unshaped return still surfaces,
+    // but marked — the [UNSATISFIED] rides so the decision layer sees the contract failure
+    // (expect-vs-actual, 895c2fc). A matched return closes its board row and lands as material
+    // ON the focus thread that asked — a result, not a toast.
+    const env = autonomy.parseEnvelope(`${it.title}\n${it.summary}`);
+    const marker = env.ok ? '' : '[UNSATISFIED envelope — no FOUND/NOT FOUND summary came back; treat as unshaped prose] ';
+    const match = autonomy.matchPendingDelegate(it, _pending);
+    if (match) {
+      _pending = _pending.filter((p) => p !== match); _pendingDirty = true;
+      if (match.board) { try { require('./lib/board').finish(match.board, { status: 'done', note: it.title.slice(0, 120) }); } catch {} }
+      if (match.focusId) {
+        try {
+          db.touchOpenThread(match.focusId, `delegated work returned: ${it.title.slice(0, 100)} — ${(env.found[0] || it.summary || 'see reading').slice(0, 160)}`);
+          console.log(`[autonomy] delegate return joined its origin — thread #${match.focusId}`);
+        } catch {}
+      }
+    }
     try {
-      const mono = db.insertMonologue({ content: `Delegated work finished — ${it.agent || 'an agent'}: ${it.title}${it.summary ? `. ${it.summary}` : ''}`, model: 'agent-inbox', type: 'reading', query: it.title });
+      const mono = db.insertMonologue({ content: `${marker}Delegated work finished — ${it.agent || 'an agent'}: ${it.title}${it.summary ? `. ${it.summary}` : ''}`, model: 'agent-inbox', type: 'reading', query: it.title });
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: mono.id, ts: mono.ts, content: `(delegated work returned: ${it.title.slice(0, 60)})`, type: 'reading', query: it.title });
     } catch {}
     try { require('./lib/presence').notify('Zoe — delegated work returned', it.title.slice(0, 60)); } catch {}
   }
+  if (_pendingDirty) { try { db.setMeta('autonomy.delegate_pending', JSON.stringify(_pending)); } catch {} }
   while (seen.length > 50) seen.shift();
   while (recent.length > 8) recent.shift();
   try { db.setMeta('autonomy.inbox_seen', JSON.stringify(seen)); db.setMeta('autonomy.inbox_recent', JSON.stringify(recent)); } catch {}

@@ -601,6 +601,20 @@ class EchoSuit {
         const args = { prompt: String(tag.task || '') + envelope };
         if (tag.agent) args.name = tag.agent;
         const r = normalizeToolResult(await c.callTool('spawn_agent_async', args));
+        // O3 ORIGIN-JOIN at dispatch: record WHERE this run came from (the active focus, if any)
+        // plus a board row, so the drain can land the result ON its origin and "what are you
+        // doing?" lists the in-flight delegate. Fail-soft — bookkeeping never breaks the dispatch.
+        if (r.ok && !r.isError) {
+          try {
+            const db = require('./db');
+            let focusId = null; try { const f = require('./focus').getCurrent(); if (f && f.id) focusId = f.id; } catch {}
+            let boardId = null; try { boardId = require('./board').start({ lane: 'delegate', kind: 'external', target: String(tag.task || '').slice(0, 120) }).id; } catch {}
+            let pending = []; try { pending = JSON.parse(db.getMeta('autonomy.delegate_pending') || '[]') || []; } catch {}
+            pending.push({ task: String(tag.task || '').slice(0, 200), agent: tag.agent || null, focusId, board: boardId, at: Date.now() });
+            while (pending.length > 20) pending.shift();
+            db.setMeta('autonomy.delegate_pending', JSON.stringify(pending));
+          } catch (e) { console.error('[echo] delegate origin-join bookkeeping failed:', e.message); }
+        }
         return { ok: r.ok, kind: 'delegate', isError: r.isError, text: r.text };
       }
       if (tag.kind === 'propose') {
