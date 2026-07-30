@@ -162,5 +162,26 @@ if (DB) {
   } catch (e) { console.error('  ✗ db round-trip threw: ' + e.message); fail++; }
 }
 
+// ---- VALUE-SCOPED DRAW (leash slice B, 2026-07-29) -----------------------------------------------
+// The idle contact walk must draw CRM-linked work first and never fill on bulk-roster ingests
+// (measured live: 135k of 606k targets sit in 82 payroll-style mega-companies holding 3 CRM rows).
+if (DB) {
+  try {
+    DB.close(); DB.init({ path: ':memory:' });
+    for (let i = 0; i < 60; i++) DB.createTarget({ name: `Bulk Person ${i}`, company: 'Mega Payroll Dept' });
+    const crm = DB.createTarget({ name: 'Cee Person', company: 'Rainey Center' });
+    DB.promoteTarget(crm.id, 'crm-9');
+    const tail = DB.createTarget({ name: 'Tail Person', company: 'Small Shop' });
+    const scoped = DB.listValueScopedTargets({ limit: 10, crmShare: 5, bulkMin: 50 });
+    ok('value-scope: CRM-linked/promoted target leads the draw', scoped[0] && scoped[0].id === crm.id);
+    ok('value-scope: small-company tail still included', scoped.some(r => r.id === tail.id));
+    ok('value-scope: bulk-roster rows excluded from the idle draw', !scoped.some(r => r.company === 'Mega Payroll Dept'));
+    ok('value-scope: bulkCompanies names the mega-company', DB.bulkCompanies({ min: 50 }).has('Mega Payroll Dept'));
+    ok('value-scope: a below-threshold company is NOT bulk', !DB.bulkCompanies({ min: 50 }).has('Small Shop'));
+    ok('value-scope: limit honored', DB.listValueScopedTargets({ limit: 1, crmShare: 1, bulkMin: 50 }).length === 1);
+    DB.close();
+  } catch (e) { console.error('  ✗ value-scope threw: ' + e.message); fail++; }
+}
+
 console.log(`\nsmoke_puller: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

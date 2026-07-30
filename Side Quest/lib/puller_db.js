@@ -183,7 +183,7 @@ function init(opts = {}) {
   return db;
 }
 function _db() { return db || init(); }
-function close() { if (db) { try { db.close(); } catch {} db = null; } }
+function close() { if (db) { try { db.close(); } catch {} db = null; } _bulkCache = { at: 0, set: null }; }
 const now = () => Date.now();
 const j = (v) => (v == null ? null : JSON.stringify(v));
 const pj = (s, dflt) => { if (s == null) return dflt; try { return JSON.parse(s); } catch { return dflt; } };
@@ -210,6 +210,51 @@ function listTargets({ status = null, domain = null, limit = 200, offset = 0, in
                ORDER BY last_accessed_at DESC LIMIT ? OFFSET ?`;
   return _db().prepare(sql).all(...args, limit, offset);
 }
+// ─── VALUE-SCOPED DRAW (leash slice B — Lucas 2026-07-29) ─────────────────────────────────────────
+// The idle contact walk drew "the 500 most-recently-accessed of the whole store" — self-reinforcing
+// wander with no value dimension. Measured 2026-07-29: 606,316 targets, ALL person-kind, priority and
+// function NEVER set; 135,023 of them (22%) sit in 82 mega-companies — bulk roster ingests (DC Public
+// Schools 17.9k, Metropolitan PD 11.3k, …) holding just THREE CRM-linked rows. The Puller is the CRM's
+// COMPLETION ENGINE, so the draw is value-tiered:
+//   A — CRM-linked or promoted targets (his actual people; completing them is the job), then
+//   C — the recency-ordered tail EXCLUDING bulk-roster companies (they are data, not idle work —
+//       a directed ask can still reach them via listTargets/domain).
+// Bulk membership = company with ≥ BULK_COMPANY_MIN live targets, cached (the GROUP BY costs ~220ms
+// on 606k rows; a 10-min TTL keeps the tick cheap). Nothing is deleted or demoted — this scopes the
+// DRAW, not the store.
+const BULK_COMPANY_MIN = 300;
+const BULK_CACHE_MS = 10 * 60 * 1000;
+let _bulkCache = { at: 0, set: null };
+function bulkCompanies({ min = BULK_COMPANY_MIN } = {}) {
+  const now = Date.now();
+  if (_bulkCache.set && (now - _bulkCache.at) < BULK_CACHE_MS) return _bulkCache.set;
+  const rows = _db().prepare(
+    `SELECT company FROM targets WHERE merged_into IS NULL AND company IS NOT NULL GROUP BY company HAVING COUNT(*) >= ?`
+  ).all(min);
+  _bulkCache = { at: now, set: new Set(rows.map((r) => r.company)) };
+  return _bulkCache.set;
+}
+function listValueScopedTargets({ limit = 500, crmShare = 300, bulkMin = BULK_COMPANY_MIN } = {}) {
+  // Tier A — CRM-linked / promoted. Disjoint from the tail query below by construction (the tail
+  // requires crm_id IS NULL AND status='adhoc'), so no dedup pass is needed.
+  const a = _db().prepare(
+    `SELECT * FROM targets WHERE merged_into IS NULL AND (crm_id IS NOT NULL OR status = 'promoted')
+     ORDER BY last_accessed_at DESC LIMIT ?`
+  ).all(Math.max(0, Math.min(crmShare, limit)));
+  const rest = Math.max(0, limit - a.length);
+  if (rest === 0) return a;
+  // Tier C — the recency tail, with the bulk companies excluded IN SQL: a scan-then-filter bound can
+  // be exhausted entirely by a bulk-dominated recency head (exactly the state a bulk walk leaves
+  // behind), starving the tail. ~82 bulk companies → a parameterized NOT IN stays cheap.
+  const bulk = [...bulkCompanies({ min: bulkMin })];
+  const notBulk = bulk.length ? `AND (company IS NULL OR company NOT IN (${bulk.map(() => '?').join(',')}))` : '';
+  const c = _db().prepare(
+    `SELECT * FROM targets WHERE merged_into IS NULL AND crm_id IS NULL AND status = 'adhoc' ${notBulk}
+     ORDER BY last_accessed_at DESC LIMIT ?`
+  ).all(...bulk, rest);
+  return a.concat(c);
+}
+
 // Stream just the dedup KEYS (id, name, company) for non-merged targets — the ingest seen-set builder.
 // ⭐NEVER SELECT * the whole population here: loading FULL rows for the ~271k-target store synchronously pegged
 // the main thread ~16s on every doc-decomp ingest (profiler-confirmed: puller_ingest.ingestRows → listTargets;
@@ -554,7 +599,7 @@ function splitTarget(fromId, { obsIds = [], name, company = null, domain = null,
 
 module.exports = {
   init, close,
-  createTarget, getTarget, liveTarget, listTargets, eachTargetKey, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName,
+  createTarget, getTarget, liveTarget, listTargets, listValueScopedTargets, bulkCompanies, eachTargetKey, promoteTarget, setPhoto, setFaceEmbedding, getFaceEmbedding, findTargetByEmail, findTargetByName,
   addObservation, listObservations, observationCounts, failedAddresses,
   upsertBelief, getBelief, beliefValuesByType, listBeliefs, markSendState, listBeliefsBySendState,
   getPatternState, savePatternState,

@@ -2180,7 +2180,14 @@ function _pullerCandidateSnapshot({ limit = 500 } = {}) {
   const pdb = require('./puller_db');
   const out = [];
   try {
-    for (const t of pdb.listTargets({ limit })) {
+    // VALUE-SCOPED draw (leash slice B): CRM-linked/promoted targets first (the Puller is the CRM's
+    // completion engine), then the recency tail minus the bulk-roster mega-companies — the plain
+    // most-recently-accessed draw wandered a 606k store with no value dimension. ZOE_PULLER_VALUESCOPE=0
+    // reverts to the legacy draw.
+    const scoped = String(process.env.ZOE_PULLER_VALUESCOPE || '1').trim() !== '0';
+    const rows = (scoped && typeof pdb.listValueScopedTargets === 'function')
+      ? pdb.listValueScopedTargets({ limit }) : pdb.listTargets({ limit });
+    for (const t of rows) {
       let hasEmail = false, hasDeep = false, grounded = false;
       try { hasEmail = !!pdb.getBelief(t.id, 'email'); } catch {}
       try { hasDeep = pdb.listObservations(t.id, { attr: 'social' }).length > 0; } catch {}
