@@ -144,6 +144,21 @@ ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: N
   const hit = uw.matchThreadToTopic('China AI and materials research', pool);
   ok(hit && hit.id === 3525, 'the existing China-materials thread is promoted (2+ shared topic tokens)');
   ok(uw.matchThreadToTopic('quantum biology of bird navigation', pool) === null, 'a genuinely new topic promotes nothing → a fresh thread is born');
+
+  // --- CLASSIFIER-PRIMARY (relearned live 21:04-21:07: three real steerings evaded the regex) ---
+  ok(uw.REDIRECT_TRIGGER_RE.test('Clarifying: Map Arizona elected officials now and then pivot your attention to the AI and materials China research'), 'trigger fires on "pivot your attention to" (regex missed it)');
+  ok(uw.REDIRECT_TRIGGER_RE.test('can you gather these now and then move to the china research?'), 'trigger fires on "move to the X research"');
+  ok(uw.REDIRECT_TRIGGER_RE.test('Complete any research related to China first'), 'trigger fires on "complete X first"');
+  ok(!uw.REDIRECT_TRIGGER_RE.test('good morning, how did the evening go'), 'small talk never reaches the classifier');
+  const spec = uw.buildRedirectAsk('move to the china research');
+  ok(spec.task === 'redirect_intent' && /STEERING WHAT SHE WORKS ON/.test(spec.want), 'the prompt states the DISTINCTION, not a phrase list');
+  ok(/NOT steering when he asks a question, plans HIS OWN work/.test(spec.want), 'the prompt names the non-steering shapes (direction grid)');
+  ok(/immediate=false when he queued it AFTER current work/.test(spec.want), 'immediate-vs-queued is part of the contract');
+  const v1 = spec.validate('{"redirect": true, "immediate": false, "topic": "the the China AI and materials research"}');
+  ok(v1.valid && v1.value.topic === 'China AI and materials research' && v1.value.immediate === false, 'a queued redirect parses; leading "the the" is cleaned');
+  ok(!spec.validate('{"redirect": "yes", "topic": "x"}').valid, 'a non-boolean verdict is refused (schema, not vibes)');
+  ok(!spec.validate('{"redirect": true, "topic": ""}').valid, 'a redirect without a topic is refused');
+  ok(spec.validate('{"redirect": false, "topic": ""}').valid, 'a clean "not a redirect" verdict parses');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

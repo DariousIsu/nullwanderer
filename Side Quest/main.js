@@ -6589,12 +6589,27 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     if (!directedStopHandled) {
       const uw = require('./lib/user_work');
-      const red = uw.detectRedirect(userMessage);
-      if (red) {
+      // CLASSIFIER-PRIMARY (the contacts_intent lesson, relearned live the same hour the regex
+      // shipped: "pivot your attention to…", "move to the china research", "complete any research
+      // related to China first" — three real steerings, zero regex fires). Wide cheap trigger →
+      // cloud classifies against the DISTINCTION → the regex decides only when the cloud is
+      // unreachable. A cloud "not a redirect" verdict is final (no regex second-guess).
+      let red = null;
+      if (uw.REDIRECT_TRIGGER_RE.test(userMessage)) {
+        try {
+          const c = await require('./lib/cloud_logic').ask(uw.buildRedirectAsk(userMessage));
+          if (c && c.redirect === true) red = { topic: c.topic, immediate: c.immediate };
+          else if (c && c.redirect === false) red = false;
+        } catch {}
+        if (red === null) { const f = uw.detectRedirect(userMessage); if (f) red = { topic: f.topic, immediate: true }; }
+      }
+      if (red && red.topic) {
         const focusLib = require('./lib/focus');
         const f = focusLib.getCurrent();
         let parkedNote = '';
-        if (f && focusLib.isDirected(f) && !(db.getMeta(`focus.${f.id}.beat`) || '').trim()) {
+        // IMMEDIATE steering parks the live focus; a QUEUED one ("finish Y first, then X") lets
+        // the current work conclude — the seed preference below still guarantees X goes next.
+        if (red.immediate && f && focusLib.isDirected(f) && !(db.getMeta(`focus.${f.id}.beat`) || '').trim()) {
           try {
             const _pk = uw.parkDeliverable({
               focusId: f.id, reason: 'user-redirect',
@@ -6613,8 +6628,9 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         if (target) {
           db.setMeta('user_work.next_seed', String(target.id));
           directedStopHandled = true;   // this turn is fully handled — downstream setup blocks skip
-          composedUserMessage += `\n\n[${userName} just REDIRECTED your working focus to: "${red.topic}". This IS registered in your program: thread #${target.id} is queued as the very next driven focus and will start within minutes.${parkedNote} Say plainly that the pivot is registered${parkedNote ? ' and what was parked' : ''} — do NOT promise any actions beyond this.]`;
-          console.log(`[user-work] REDIRECT registered → next seed = thread #${target.id} ("${String(target.content).slice(0, 60)}")${parkedNote ? ' · previous focus parked' : ''}`);
+          const when = red.immediate ? 'is queued as the very next driven focus and will start within minutes' : 'is queued to start as soon as the current work concludes';
+          composedUserMessage += `\n\n[${userName} just REDIRECTED your working focus to: "${red.topic}". This IS registered in your program: thread #${target.id} ${when}.${parkedNote} Say plainly that the pivot is registered${parkedNote ? ' and what was parked' : ''} — do NOT promise any actions beyond this.]`;
+          console.log(`[user-work] REDIRECT registered (${red.immediate ? 'immediate' : 'queued'}) → next seed = thread #${target.id} ("${String(target.content).slice(0, 60)}")${parkedNote ? ' · previous focus parked' : ''}`);
         }
       }
     }
