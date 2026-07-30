@@ -18,6 +18,12 @@ const { completeDetailed, isReasoningModel } = require('./ollama');
 
 const DEFAULT_MAX_STEPS = 4;       // keep the loop snappy for chat latency
 const DEFAULT_MAX_MS = 45000;      // hard wall-clock budget so a turn can NEVER block for minutes
+// MULTI-ACTION STEPS (build plan 2.4). A step is one MODEL ROUND-TRIP, and round-trips — not tool
+// executions — are what the 4-step budget was really rationing. Letting one step carry several
+// independent lookups is a direct engine-starvation lever: the same budget now buys up to 4× the
+// evidence. Distinct from model fan-out, which stays refused; this spends TOOL calls, not tokens
+// on parallel models.
+const MAX_BATCH = 4;
 
 // The agent LOOP wants speed (several quick "which tool next" decisions), not deep single-shot
 // reasoning — so default to the fast utility model, not the 120B reasoner (which made turns take
@@ -113,6 +119,9 @@ TOOLS (call exactly ONE per step):
 
 const TOOL_SPEC_TAIL = `To use a tool, reply with ONE JSON object and nothing else:
   {"thought":"why","action":{"tool":"echo","args":{"need":"…"}}}
+When several lookups DON'T DEPEND ON EACH OTHER, ask for them together in one step — you get all the results back at once and it costs you one step instead of ${MAX_BATCH}:
+  {"thought":"why","actions":[{"tool":"echo","args":{"need":"…"}},{"tool":"recall","args":{"query":"…"}}]}
+Up to ${MAX_BATCH} per step. Batch ONLY when no action needs another's result — if step B's arguments depend on what A returns, they are two steps, and pretending otherwise just wastes a lookup on arguments you had to guess.
 When you're ready to answer, do NOT use JSON — just write the COMPLETE answer as plain text (this is what lets a long list or write-up come through whole and untruncated; never cut it short).
 Ground every claim in what the tools returned. If a tool errors or finds nothing, say so honestly — never invent. Prefer answering once you have enough; don't over-search.`;
 
@@ -163,7 +172,7 @@ function parseAction(text) {
     if (end === -1) return null;                       // no balanced close ahead → nothing left to try
     try {
       const o = JSON.parse(s.slice(i, end + 1));
-      if (o && (o.action || o.final !== undefined)) return o;
+      if (o && (o.action || o.actions || o.final !== undefined)) return o;
       i = s.indexOf('{', end + 1);                     // parsed but not a step → skip it whole
     } catch {
       i = s.indexOf('{', i + 1);                       // unparseable candidate → next '{'
@@ -175,7 +184,56 @@ function parseAction(text) {
 // Did this text ATTEMPT a JSON step (vs. being a deliberate plain-prose final answer)? Prose-as-answer
 // is the contract; a malformed attempted step is not — it earns one repair reprompt before we give up.
 function looksLikeJsonStep(text) {
-  return /"action"\s*:|"final"\s*:/.test(String(text || ''));
+  return /"actions?"\s*:|"final"\s*:/.test(String(text || ''));
+}
+
+/**
+ * The step's action list, normalised. One `action` and a list of `actions` become the same thing so
+ * the loop below has exactly one shape to execute. Over-long batches are TRIMMED rather than
+ * refused — the first MAX_BATCH are real work and dropping them to punish a formatting excess helps
+ * nobody — and the drop is reported in history so the model can re-ask for what it lost.
+ */
+function actionsOf(parsed) {
+  const raw = Array.isArray(parsed && parsed.actions) ? parsed.actions
+    : (parsed && parsed.action ? [parsed.action] : []);
+  const list = raw.filter((a) => a && typeof a.tool === 'string' && a.tool.trim())
+    .map((a) => ({ tool: a.tool.trim(), args: (a.args && typeof a.args === 'object') ? a.args : {} }));
+  return { list: list.slice(0, MAX_BATCH), dropped: Math.max(0, list.length - MAX_BATCH) };
+}
+
+// Tools that are side-effect-free and safe to run AT THE SAME TIME. This is the operator's own
+// small menu, so naming it here is the module describing its own surface — not a guess about
+// Echo's 500-tool catalog, which `echo` reaches through its own tier gate.
+//
+// `echo` is deliberately ABSENT even though it is the most-used tool: routeNeed may pick a WRITE
+// on an interactive turn, and a maybe-write has no business in a parallel batch. It still batches
+// fine — just sequentially — and the round-trip saving, which is the actual lever, is banked either
+// way. Concurrency is only the latency bonus.
+const READ_SAFE = new Set([
+  'web_search', 'web_fetch', 'web_extract', 'news_search', 'browser_read', 'see_page',
+  'recall', 'localdb', 'localdb_map', 'source_map', 'source_read', 'source_search',
+  'kg_search', 'kg_neighborhood', 'knowledge_search', 'gov_funding', 'fec_lookup',
+  'bill_lookup', 'nonprofit_lookup', 'forecast_query', 'skill_pull',
+  'rehearsal_diff', 'rehearsal_drive_status',
+]);
+
+// Tools that must be the LAST thing in their step, because the next sensible decision depends on
+// seeing what they did. All four drive the one shared browser page: batching two clicks without
+// looking in between is blind clicking, and no prompt instruction reliably prevents a model from
+// trying it. Anything after one of these is dropped and reported, so the model re-asks having
+// actually seen the page.
+const OBSERVE_AFTER = new Set(['open_page', 'web_click', 'web_type', 'page_back']);
+
+/** Trim a batch at the first action whose result must be observed before the next is chosen. */
+function cutAtObservePoint(list) {
+  const i = list.findIndex((a) => OBSERVE_AFTER.has(a.tool));
+  if (i === -1 || i === list.length - 1) return { list, deferred: [] };
+  return { list: list.slice(0, i + 1), deferred: list.slice(i + 1) };
+}
+
+/** May these run CONCURRENTLY? Only when every one of them is known side-effect-free. */
+function batchIsReadOnly(list) {
+  return list.length > 1 && list.every((a) => READ_SAFE.has(a.tool));
 }
 
 function _finalize(steps, answer) {
@@ -258,7 +316,7 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
         const r2 = await complete([
           ..._buildPrompt({ userMessage, context, history, stepsLeft: maxSteps - i, toolSpec }),
           { role: 'assistant', content: text },
-          { role: 'user', content: 'That was not a parseable step. Re-emit it as EXACTLY ONE valid JSON object — {"thought":"…","action":{"tool":"…","args":{…}}} or {"thought":"…","final":"…"} — and nothing else.' }
+          { role: 'user', content: 'That was not a parseable step. Re-emit it as EXACTLY ONE valid JSON object — {"thought":"…","action":{"tool":"…","args":{…}}}, or {"thought":"…","actions":[{"tool":"…","args":{…}},…]} for independent lookups, or {"thought":"…","final":"…"} — and nothing else.' }
         ], cOpts);
         const t2 = (typeof r2 === 'string') ? r2 : ((r2 && r2.text) || '');
         const p2 = parseAction(t2);
@@ -267,26 +325,55 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
     }
     if (!parsed) return _finalize(steps, text.trim() || null);              // plain prose → treat as the answer
     if (parsed.final !== undefined) return _finalize(steps, parsed.final);
-    const tool = parsed.action && parsed.action.tool;
-    const args = (parsed.action && parsed.action.args) || {};
-    const fn = tools[tool];
-    let result;
-    if (typeof fn !== 'function') result = `ERROR: no tool named "${tool}".`;
-    else { try { result = await fn(args); } catch (e) { result = 'ERROR: ' + (e && e.message || e); } }
-    // Sized to the same knob the chat-tag lane got in the cap purge (was 3000, then re-sliced to
-    // 1200 in history — the agent "read" every tool result through a 1,200-char keyhole while the
-    // chat lane read 24k). One cap, applied once; history carries the same text the step stored.
-    result = String(result == null ? '' : result).slice(0, capChars);
-    // EXPECT-VS-ACTUAL, mechanically: an empty or failed result is a SIGNAL, not an answer. Without
-    // this the loop treated "no rows" as information gathered and moved on — absence read as the
-    // answer. The marker makes the next step confront it: adjust, switch tools, or say plainly it
-    // was not found (which is itself an honest finding — never a silent shrug).
-    const _flat = result.trim();
-    if (!_flat || /^ERROR/i.test(_flat) || /^(no rows|no result|none|not found|nothing|\[\]|\{\}|null)\.?$/i.test(_flat) || /returned nothing|no result from/i.test(_flat.slice(0, 80))) {
-      result += `\n[UNSATISFIED: this result did not answer the need. Change approach — different args, a different tool — or state plainly that it was not found. Do not treat absence as the answer.]`;
+
+    // ── MULTI-ACTION STEP (2.4). One round-trip may carry several INDEPENDENT lookups. ──────────
+    const { list: asked, dropped } = actionsOf(parsed);
+    if (!asked.length) return _finalize(steps, text.trim() || null);   // a step object with no runnable tool
+    const { list: batch, deferred } = cutAtObservePoint(asked);
+
+    // Run ONE action and shape its result. Factored out so the concurrent and sequential paths
+    // cannot drift — the UNSATISFIED marker in particular must apply identically to both.
+    const runOne = async ({ tool, args }) => {
+      const fn = tools[tool];
+      let result;
+      if (typeof fn !== 'function') result = `ERROR: no tool named "${tool}".`;
+      else { try { result = await fn(args); } catch (e) { result = 'ERROR: ' + (e && e.message || e); } }
+      // Sized to the same knob the chat-tag lane got in the cap purge (was 3000, then re-sliced to
+      // 1200 in history — the agent "read" every tool result through a 1,200-char keyhole while the
+      // chat lane read 24k). One cap, applied once; history carries the same text the step stored.
+      result = String(result == null ? '' : result).slice(0, capChars);
+      // EXPECT-VS-ACTUAL, mechanically: an empty or failed result is a SIGNAL, not an answer. Without
+      // this the loop treated "no rows" as information gathered and moved on — absence read as the
+      // answer. The marker makes the next step confront it: adjust, switch tools, or say plainly it
+      // was not found (which is itself an honest finding — never a silent shrug).
+      const _flat = result.trim();
+      if (!_flat || /^ERROR/i.test(_flat) || /^(no rows|no result|none|not found|nothing|\[\]|\{\}|null)\.?$/i.test(_flat) || /returned nothing|no result from/i.test(_flat.slice(0, 80))) {
+        result += `\n[UNSATISFIED: this result did not answer the need. Change approach — different args, a different tool — or state plainly that it was not found. Do not treat absence as the answer.]`;
+      }
+      return { tool, args, result };
+    };
+
+    let done;
+    if (batchIsReadOnly(batch)) {
+      done = await Promise.all(batch.map(runOne));            // side-effect-free → run them together
+    } else {
+      done = [];
+      for (const a of batch) done.push(await runOne(a));      // declared order, one at a time
     }
-    steps.push({ tool, args, result });
-    history += `\n• step ${i + 1}: ${tool}(${JSON.stringify(args).slice(0, 300)}) → ${result}`;
+    for (const d of done) steps.push(d);
+
+    // History labels a batch as ONE step with lettered parts, so the model reads its own request
+    // back in the shape it sent — and a result it never got is NAMED rather than silently missing.
+    if (done.length === 1) {
+      history += `\n• step ${i + 1}: ${done[0].tool}(${JSON.stringify(done[0].args).slice(0, 300)}) → ${done[0].result}`;
+    } else {
+      history += `\n• step ${i + 1} (${done.length} together):`;
+      done.forEach((d, k) => { history += `\n  ${String.fromCharCode(97 + k)}. ${d.tool}(${JSON.stringify(d.args).slice(0, 300)}) → ${d.result}`; });
+    }
+    if (deferred.length) {
+      history += `\n  [NOT RUN: ${deferred.map((d) => d.tool).join(', ')} — "${batch[batch.length - 1].tool}" changes what is on the page, so decide those again now that you can see its result.]`;
+    }
+    if (dropped) history += `\n  [NOT RUN: ${dropped} action(s) over the ${MAX_BATCH}-per-step limit — ask again for the ones you still need.]`;
   }
   // out of steps → force a final answer from what we gathered
   try {
@@ -296,4 +383,4 @@ async function runOperator({ userMessage, context = '', deps = {}, maxSteps = DE
   } catch { return _finalize(steps, null); }
 }
 
-module.exports = { runOperator, parseAction, looksLikeJsonStep, isDirectedTask, parseSliceResult, operatorModel, _operatorComplete, TOOL_SPEC, TOOL_SPEC_CORE, TOOL_SPEC_TAIL, DEFAULT_MAX_STEPS };
+module.exports = { runOperator, parseAction, looksLikeJsonStep, isDirectedTask, parseSliceResult, operatorModel, _operatorComplete, TOOL_SPEC, TOOL_SPEC_CORE, TOOL_SPEC_TAIL, DEFAULT_MAX_STEPS, actionsOf, batchIsReadOnly, cutAtObservePoint, MAX_BATCH, READ_SAFE, OBSERVE_AFTER };

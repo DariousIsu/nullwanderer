@@ -117,6 +117,60 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(op.parseSliceResult('ALL-COVERED', []).done === false, 'ALL-COVERED on an EMPTY set → NOT done (can\'t finish before starting)');
   ok(op.parseSliceResult('## Some Org\n…(no covered line)…', []).org === '' && op.parseSliceResult('…', []).isNew === false, 'a missing COVERED line → no org, not progress (no phantom advance)');
 
+  // ── MULTI-ACTION STEPS (build plan 2.4) ─────────────────────────────────────────────────────
+  // A step is one MODEL ROUND-TRIP. Several independent lookups may ride one, so the same 4-step
+  // budget buys up to 4× the evidence.
+  console.log('\nMULTI-ACTION STEPS');
+  {
+    ok(op.parseAction('{"thought":"x","actions":[{"tool":"recall","args":{"query":"a"}},{"tool":"web_search","args":{"query":"b"}}]}').actions.length === 2, 'parses an actions LIST');
+    ok(op.looksLikeJsonStep('{"actions":[]}'), 'a malformed actions list still earns the repair reprompt (not voiced as prose)');
+    ok(op.actionsOf({ action: { tool: 'recall', args: { q: 1 } } }).list.length === 1, 'a single action normalises to a one-item list — one shape for the loop');
+    ok(op.actionsOf({ actions: [{ tool: 'a' }, { bad: 1 }, { tool: '' }] }).list.length === 1, 'entries with no tool name are dropped, not run as undefined');
+    const over = op.actionsOf({ actions: Array.from({ length: 7 }, () => ({ tool: 'recall' })) });
+    ok(over.list.length === op.MAX_BATCH && over.dropped === 3, 'an over-long batch is TRIMMED and the drop is COUNTED (never silently truncated)');
+
+    ok(op.batchIsReadOnly([{ tool: 'recall' }, { tool: 'localdb' }]), 'two side-effect-free reads may run concurrently');
+    ok(!op.batchIsReadOnly([{ tool: 'recall' }, { tool: 'puller_add' }]), 'a WRITE in the batch forces sequential — no racing writes for a latency win');
+    ok(!op.batchIsReadOnly([{ tool: 'recall' }, { tool: 'echo' }]), 'echo is NOT concurrency-safe (routeNeed may pick a write on an interactive turn)');
+    ok(!op.batchIsReadOnly([{ tool: 'recall' }, { tool: 'not_a_real_tool' }]), 'an unknown tool is treated as unsafe — never assumed read-only');
+
+    const cut = op.cutAtObservePoint([{ tool: 'recall' }, { tool: 'web_click' }, { tool: 'web_click' }, { tool: 'localdb' }]);
+    ok(cut.list.length === 2 && cut.deferred.length === 2, 'a batch is CUT after an action whose result must be seen — no blind second click');
+    ok(op.cutAtObservePoint([{ tool: 'recall' }, { tool: 'localdb' }]).deferred.length === 0, 'a pure-read batch is never cut');
+
+    // The end-to-end saving, measured: 3 lookups, ONE model round-trip.
+    let calls = 0; const ran = [];
+    const script = ['{"thought":"gather","actions":[{"tool":"recall","args":{"query":"a"}},{"tool":"localdb","args":{"sql":"SELECT 1"}},{"tool":"web_search","args":{"query":"c"}}]}', 'the grounded answer'];
+    const r4 = await op.runOperator({
+      userMessage: 'x', maxSteps: 4,
+      deps: {
+        complete: async () => ({ text: script[calls++] }),
+        tools: {
+          recall: async () => { ran.push('recall'); return 'memory hit'; },
+          localdb: async () => { ran.push('localdb'); return 'row'; },
+          web_search: async () => { ran.push('web_search'); return 'page'; },
+        },
+      },
+    });
+    ok(ran.length === 3, 'all three actions in the batch actually RAN');
+    ok(calls === 2, 'and cost ONE round-trip to gather + one to answer (the round-trip saving, measured)');
+    ok(r4.steps.length === 3, 'each action is its own step record — provenance per tool, not per batch');
+    ok(r4.answer === 'the grounded answer', 'the loop finishes normally after a batch');
+
+    // A tool that fails inside a batch must not poison its siblings.
+    let c2 = 0; const script2b = ['{"thought":"g","actions":[{"tool":"recall","args":{}},{"tool":"web_search","args":{}}]}', 'done'];
+    const r5 = await op.runOperator({
+      userMessage: 'x', maxSteps: 3,
+      deps: {
+        complete: async () => ({ text: script2b[c2++] }),
+        tools: { recall: async () => { throw new Error('boom'); }, web_search: async () => 'still fine' },
+      },
+    });
+    ok(r5.steps.length === 2 && /ERROR/.test(r5.steps[0].result) && /still fine/.test(r5.steps[1].result),
+      'one action throwing does not lose the others — the batch reports per-action');
+    ok(/UNSATISFIED/.test(r5.steps[0].result), 'and the failed one still gets the UNSATISFIED marker (same treatment as a solo step)');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
