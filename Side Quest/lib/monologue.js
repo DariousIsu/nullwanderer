@@ -809,6 +809,10 @@ async function generateThought({ messages, options = {}, signal, deps = {} } = {
           model: subModel, messages, base: cloud.base,
           headers: cloud.token ? { Authorization: `Bearer ${cloud.token}` } : {},
           options: { temperature: options.temperature ?? 0.9, top_p: options.top_p ?? 0.95, num_ctx: require('./config').deepNumCtx(), num_predict: Math.max(options.num_predict || 200, 1500) },
+          // think:false forwarded (2026-07-30 giant-blocks fix): without it a reasoner (gpt-oss:120b)
+          // buries its answer in the thinking channel and the salvage stores CHAIN-OF-THOUGHT as the
+          // thought — measured: synthesis num_predict 360 but 2,750ch average stored. Callers opt in.
+          think: options.think,
           signal, timeoutMs: 120000
         });
         // completeDetailed → { text, usage }; an injected string-returning complete (smokes) → string.
@@ -1271,13 +1275,18 @@ async function _runOneTick() {
         const synthThreads = pickDistinctByTopic(openThreads, { max: 4, simThr: 0.4, window: (openThreads || []).length });
         const seed = ((synthThoughts.length ? synthThoughts : recentThoughts).map(t => (t && t.content) || '').join(' ').slice(0, 300)) || userName;
         const sources = await subc2.retrieveSources(seed, { search: (q, k) => memoryLib.retrieve(q, { k }), k: 4 });
+        // SLICE A (2026-07-30): explored tensions ride the prompt (no re-derivation — measured: 80
+        // essays/day circling ONE Georgia-boards tension) and the output is a TYPED SHAPE.
+        let _synthRecent = []; try { _synthRecent = JSON.parse(_gm('subc.synth_recent') || '[]'); } catch {}
         const synthMessages = [
           { role: 'system', content: BASE_PERSONA },
-          { role: 'user', content: subc2.buildSynthesisPrompt({ recentThoughts: synthThoughts, threads: synthThreads, focus: null, sources }) }
+          { role: 'user', content: subc2.buildSynthesisPrompt({ recentThoughts: synthThoughts, threads: synthThreads, focus: null, sources, explored: _synthRecent }) }
         ];
         const synth = await generateThought({
           messages: synthMessages,
-          options: { temperature: 0.85, top_p: 0.95, num_ctx: 8192, num_predict: 360 },
+          // think:false — the reasoner's scratch work stays internal; the SHAPE is the output (the
+          // giant-block fix: CoT-salvage stored 2,750ch average against a 360-token ask).
+          options: { temperature: 0.85, top_p: 0.95, num_ctx: 8192, num_predict: 500, think: false },
           deps: {
             subModel: cfg2.subconsciousModel(),
             onUsage: (usage) => { try { const tok = (usage && ((usage.prompt_tokens || 0) + (usage.eval_tokens || 0))) || subc2.estimateTokens(synthMessages, ''); subc2.recordSpend({ getMeta: _gm, setMeta: _sm, now: Date.now(), tokens: tok }); } catch {} }
@@ -1286,29 +1295,64 @@ async function _runOneTick() {
         subc2.markSynthesized({ setMeta: _sm, now: Date.now() });
         const st = (synth || '').trim();
         if (st) {
-          let imp = 0.6; try { imp = await importanceLib.score(st, { userName, kind: 'thought' }); } catch {}
-          const row = db.insertMonologue({ content: st, model: cfg2.subconsciousModel(), type: 'synthesis', importance: imp });
-          pushSheep({ id: row.id, ts: row.ts, content: st, type: 'thought', importance: imp });
-          try { blackboard.append({ source: 'monologue', kind: 'thought', refTable: 'monologue', refId: row.id, content: st }); } catch {}
-          console.log('[subc] synthesis pass stored (cross-thought depth)');
-          // THOUGHT → WORK (2026-07-23, Lucas: "she is circling actually putting things together").
-          // A synthesis that names its own concrete next step used to evaporate into the thought
-          // rail — the decider never saw HER OWN plan, so she re-derived it forever. Bank it as a
-          // lead on the SAME surface conversation harvest uses (autonomy.harvest_recent); the
-          // DIRECTION rule already makes those first-class open-inquiry/build candidates.
-          try {
-            const pm = /\bnext steps?\b\s*[:—-]\s*([\s\S]{10,400}?)(?:<wonder>|$)/i.exec(st);
-            if (pm) {
-              const plan = pm[1].replace(/\s+/g, ' ').replace(/^[*#>\s]+/, '').trim().slice(0, 250);
-              let bank = []; try { bank = JSON.parse(db.getMeta('autonomy.harvest_recent') || '[]'); } catch {}
-              const dup = bank.some((e) => (e.leads || []).some((l) => String(l).toLowerCase() === plan.toLowerCase()));
-              if (plan && !dup) {
-                bank.push({ ts: Date.now(), docRef: `monologue #${row.id}`, title: 'Her own synthesis named a next step', leads: [plan], seeds: [], decisions: [], claims: [] });
-                db.setMeta('autonomy.harvest_recent', JSON.stringify(bank.slice(-8)));
-                console.log(`[subc] synthesis next-step banked as a lead → "${plan.slice(0, 80)}"`);
-              }
+          const parsed = subc2.parseSynthesis(st);
+          // NOVELTY GATE (run_closure's ledger, ported): a tension already explored is not stored,
+          // not voiced, not banked — the log carries the skip so a quiet field stays visible.
+          if (parsed) {
+            const rc2 = require('./run_closure');
+            let _led = []; try { _led = JSON.parse(_gm('subc.synth_ledger') || '[]'); } catch {}
+            if (!rc2.isNovelQuestion(parsed.tension, _led)) {
+              console.log(`[subc] synthesis re-derived an explored tension ("${parsed.tension.slice(0, 70)}") — skipped, nothing stored`);
+            } else {
+              const { ledger } = rc2.filterNovel([parsed.tension], _led);
+              try { _sm('subc.synth_ledger', JSON.stringify(ledger)); } catch {}
+              try { _sm('subc.synth_recent', JSON.stringify([..._synthRecent, parsed.tension].slice(-6))); } catch {}
+              let imp = 0.6; try { imp = await importanceLib.score(st, { userName, kind: 'thought' }); } catch {}
+              const row = db.insertMonologue({ content: st, model: cfg2.subconsciousModel(), type: 'synthesis', importance: imp });
+              pushSheep({ id: row.id, ts: row.ts, content: st, type: 'thought', importance: imp });
+              try { blackboard.append({ source: 'monologue', kind: 'thought', refTable: 'monologue', refId: row.id, content: st }); } catch {}
+              console.log(`[subc] synthesis stored — tension: "${parsed.tension.slice(0, 70)}" → action: ${parsed.action.kind}`);
+              // THE STITCH BECOMES WORK (slice A): typed routing through EXISTING doors — research
+              // spawns a driver-ordered thread (depth-capped via spawned_from); inquiry/experiment
+              // bank as first-class leads on the decider's harvest surface; none is honest quiet.
+              try {
+                const act = parsed.action;
+                if (act.kind === 'research' && (act.text || parsed.tension).length > 12) {
+                  const r = db.insertOpenThread({ content: `Investigate: ${(act.text || parsed.tension).replace(/\s+/g, ' ').trim()}` });
+                  if (r && r.id) { try { db.setMeta(`thread.${r.id}.spawned_from`, 'subc'); } catch {} console.log(`[subc] synthesis → research thread #${r.id}`); }
+                } else if ((act.kind === 'inquiry' || act.kind === 'experiment') && act.text.length > 12) {
+                  let bank = []; try { bank = JSON.parse(db.getMeta('autonomy.harvest_recent') || '[]'); } catch {}
+                  const dup = bank.some((e) => (e.leads || []).some((l) => String(l).toLowerCase() === act.text.toLowerCase()));
+                  if (!dup) {
+                    bank.push({ ts: Date.now(), docRef: `monologue #${row.id}`, title: `Her synthesis proposes an ${act.kind.toUpperCase()}`, leads: [act.text], seeds: [], decisions: [], claims: [] });
+                    db.setMeta('autonomy.harvest_recent', JSON.stringify(bank.slice(-8)));
+                    console.log(`[subc] synthesis → ${act.kind} lead banked: "${act.text.slice(0, 70)}"`);
+                  }
+                }
+              } catch (e) { console.error('[subc] synthesis routing failed:', e.message); }
             }
-          } catch (e) { console.error('[subc] synthesis lead bank failed:', e.message); }
+          } else {
+            // Shape absent — keep the raw thought (never lose it), route via the legacy next-step
+            // regex, and say so: an unparsed synthesis is a visible fact, not a silent one.
+            let imp = 0.6; try { imp = await importanceLib.score(st, { userName, kind: 'thought' }); } catch {}
+            const row = db.insertMonologue({ content: st, model: cfg2.subconsciousModel(), type: 'synthesis', importance: imp });
+            pushSheep({ id: row.id, ts: row.ts, content: st, type: 'thought', importance: imp });
+            try { blackboard.append({ source: 'monologue', kind: 'thought', refTable: 'monologue', refId: row.id, content: st }); } catch {}
+            console.log('[subc] synthesis stored UNSHAPED (parse miss) — legacy next-step routing only');
+            try {
+              const pm = /\bnext steps?\b\s*[:—-]\s*([\s\S]{10,400}?)(?:<wonder>|$)/i.exec(st);
+              if (pm) {
+                const plan = pm[1].replace(/\s+/g, ' ').replace(/^[*#>\s]+/, '').trim().slice(0, 250);
+                let bank = []; try { bank = JSON.parse(db.getMeta('autonomy.harvest_recent') || '[]'); } catch {}
+                const dup = bank.some((e) => (e.leads || []).some((l) => String(l).toLowerCase() === plan.toLowerCase()));
+                if (plan && !dup) {
+                  bank.push({ ts: Date.now(), docRef: `monologue #${row.id}`, title: 'Her own synthesis named a next step', leads: [plan], seeds: [], decisions: [], claims: [] });
+                  db.setMeta('autonomy.harvest_recent', JSON.stringify(bank.slice(-8)));
+                  console.log(`[subc] synthesis next-step banked as a lead → "${plan.slice(0, 80)}"`);
+                }
+              }
+            } catch (e) { console.error('[subc] synthesis lead bank failed:', e.message); }
+          }
         }
       }
     } catch (e) { console.error('[subc] synthesis failed:', e.message); }

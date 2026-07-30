@@ -60,6 +60,23 @@ const msgs = [{ role: 'user', content: 'think about something interesting' }];
   catch (e) { threw = (e.name === 'AbortError'); }
   ok(threw, 'AbortError propagates (snap-back interrupts the thought)');
 
+  // --- SLICE A (2026-07-30): the typed synthesis shape — dynamic, focused, routable ---
+  {
+    const subc = require('../lib/subconscious');
+    const p = subc.buildSynthesisPrompt({ recentThoughts: [{ content: 'a thought' }], threads: [], sources: [], explored: ['the Georgia boards data-upkeep paradox'] });
+    ok(/TENSION: /.test(p) && /ACTION: <none \| inquiry \| research \| experiment>/.test(p), 'the prompt demands the typed shape (no essay)');
+    ok(/ALREADY EXPLORED/.test(p) && /Georgia boards/.test(p), 'explored tensions ride the prompt — no re-derivation');
+    ok(/ACTION: none is the honest answer/.test(p), 'a quiet field is a first-class answer');
+
+    const good = subc.parseSynthesis('TENSION: county data decays faster than any sweep re-validates it.\nWHY: Every roster is stale the day after capture. The map needs a decay model.\nACTION: experiment — a read-only script measuring staleness distribution across captured rosters');
+    ok(good && /decays faster/.test(good.tension) && good.action.kind === 'experiment' && /staleness distribution/.test(good.action.text), 'a shaped synthesis parses: tension + why + typed action');
+    const bold = subc.parseSynthesis('**TENSION**: X happens more than Y in the ledger rows.\n**WHY**: because of Z reasons entirely.\n**ACTION**: research — how X propagates through Y systems');
+    ok(bold && bold.action.kind === 'research', 'markdown-bold labels still parse');
+    ok(subc.parseSynthesis('a rambling essay with no shape at all, many words long') === null, 'shapeless output → null (caller keeps the raw thought)');
+    const noneAct = subc.parseSynthesis('TENSION: everything here is already explored territory.\nWHY: the field is quiet today for real.\nACTION: none');
+    ok(noneAct && noneAct.action.kind === 'none', 'ACTION: none parses as honest quiet');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   try { require('../lib/db').getDb().close(); } catch {}
   try { require('fs').unlinkSync(process.env.SQ_DB_PATH); } catch {}

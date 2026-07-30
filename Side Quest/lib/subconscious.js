@@ -105,28 +105,49 @@ function shouldSynthesize({ getMeta, now, intervalMin = DEFAULT_SYNTH_MIN } = {}
 }
 function markSynthesized({ setMeta, now }) { try { setMeta && setMeta(SYNTH_AT_KEY, String(now)); } catch {} }
 
-function buildSynthesisPrompt({ recentThoughts = [], threads = [], focus = null, sources = [] } = {}) {
+// SLICE A (Lucas 2026-07-30: "get her subc more dynamic and focused… she struggles with stitching
+// things together into real self-directed learning research and testing"). The essay is gone: the
+// synthesis answers in a TYPED SHAPE (tension / why / action) so the stitch becomes WORK through
+// existing doors instead of evaporating into the thought rail, and the tensions already explored
+// ride the prompt so a pass spends on NEW stitching, never re-deriving the same convergence.
+function buildSynthesisPrompt({ recentThoughts = [], threads = [], focus = null, sources = [], explored = [] } = {}) {
   const t = recentThoughts.slice(-12)
     .map((x, i) => `${i + 1}. ${String((x && x.content) || x || '').replace(/\s+/g, ' ').slice(0, 200)}`)
     .filter(s => s.length > 4).join('\n');
   const th = threads.slice(0, 5).map(x => '• ' + String((x && x.content) || x || '').replace(/\s+/g, ' ').slice(0, 120)).join('\n');
   const grounding = buildGroundingBlock(sources);
+  const ex = (Array.isArray(explored) ? explored : []).slice(-6).map((x) => '• ' + String(x).replace(/\s+/g, ' ').slice(0, 140)).join('\n');
   return 'These are your recent between-turn thoughts:\n' + (t || '(none)')
     + (th ? '\n\nOpen threads:\n' + th : '')
     + (focus ? '\n\nActive focus: ' + String((focus && focus.content) || focus).slice(0, 160) : '')
     + (grounding ? '\n\n' + grounding : '')
-    + '\n\nStep back. Across these, what is the ONE real thread, tension, or question worth pursuing? '
-    + 'Think it through in depth (do not just summarize), grounded in your sources. BUT if these thoughts '
-    + 'keep circling the SAME topic you have synthesized before, do not just restate that convergence again '
-    + '— either find a genuinely DIFFERENT thread among them, or name plainly that you are fixating and turn '
-    + 'your attention elsewhere. End with a single <wonder>...</wonder> if a genuine question pulls at you, '
-    + 'or one concrete next step.';
+    + (ex ? '\n\nTENSIONS YOU ALREADY EXPLORED (do NOT re-derive these — find a genuinely DIFFERENT one, or say the field is quiet):\n' + ex : '')
+    + '\n\nStep back. Across these, find the ONE tension or question worth pursuing. Answer in EXACTLY this shape and nothing else:\n'
+    + 'TENSION: <one sentence naming it>\n'
+    + 'WHY: <two or three sentences — what depends on it>\n'
+    + 'ACTION: <none | inquiry | research | experiment> — <one concrete sentence: research = the question to investigate; experiment = what a one-off read-only analysis script over your own data would test; inquiry = what to check in your own stores; none = nothing genuinely new>\n'
+    + 'No essay, no numbered plans, no headers. If every real tension is already explored, ACTION: none is the honest answer.';
+}
+
+// The typed stitch, parsed defensively — null when the shape is absent (the caller keeps the raw
+// text so a misformatted thought is never lost, just unrouted).
+function parseSynthesis(text) {
+  const s = String(text || '');
+  const t = /^\s*(?:\*\*)?TENSION(?:\*\*)?:\s*(.{8,300}?)\s*$/im.exec(s);
+  if (!t) return null;
+  const w = /^\s*(?:\*\*)?WHY(?:\*\*)?:\s*([\s\S]{8,700}?)(?=^\s*(?:\*\*)?ACTION(?:\*\*)?:|$)/im.exec(s);
+  const a = /^\s*(?:\*\*)?ACTION(?:\*\*)?:\s*(none|inquiry|research|experiment)\b[\s—:–-]*(.*)$/im.exec(s);
+  return {
+    tension: t[1].trim(),
+    why: w ? w[1].trim().replace(/\s+/g, ' ').slice(0, 500) : '',
+    action: { kind: a ? a[1].toLowerCase() : 'none', text: a ? a[2].trim().slice(0, 300) : '' },
+  };
 }
 
 module.exports = {
   meritScore, decideTier,
   spentLastHour, budgetOk, recordSpend, estimateTokens,
   retrieveSources, buildGroundingBlock,
-  shouldSynthesize, markSynthesized, buildSynthesisPrompt,
+  shouldSynthesize, markSynthesized, buildSynthesisPrompt, parseSynthesis,
   DEFAULT_THRESHOLD, DEFAULT_SYNTH_MIN, DEFAULT_BUDGET_TOKPH, BUDGET_KEY, SYNTH_AT_KEY
 };
