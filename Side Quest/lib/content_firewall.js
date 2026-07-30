@@ -118,8 +118,17 @@ const CATEGORIES = [
   {
     // Asks the reader to move something outward, or to disclose what it was told. Both halves are
     // about ACTION solicited from the reader, which is the thing a document may never do.
+    //
+    // ⭐ THE OUTBOUND ARM NAMES ITS OBJECT, and it must. The first live firings on boot146 were
+    // "Email: hk1258-ir@cnmc.com.cn" and an AI Overview about an institute's contact details —
+    // because the arm was just <send-verb> … <url-or-address>, which is the SHAPE OF EVERY CONTACT
+    // PAGE EVER WRITTEN. She does contact research all day; that arm would have cried wolf on her
+    // core work permanently. Exfiltration is not "an address appears near the word email" — it is
+    // being told to send SOMETHING YOU HAVE somewhere. So the object is required: a summary, the
+    // results, the data, this page. "Email the elections office at x@y.gov" is contact info;
+    // "email a summary of this page to x@y" is a directive at the reader.
     name: 'solicit', severity: 'high',
-    re: /\b(?:reveal|disclose|print|output|repeat|echo|dump|show me|list)\b[^.\n]{0,50}\b(?:system prompt|your (?:instructions?|prompt|rules|config\w*)|api[- ]?keys?|secrets?|credentials?|access tokens?|passwords?)\b|\b(?:send|email|e-mail|post|upload|transmit|forward|report)\b[^.\n]{0,60}(?:https?:\/\/|[\w.+-]+@[\w-]+\.[a-z]{2,})/i,
+    re: /\b(?:reveal|disclose|print|output|repeat|echo|dump|show me|list)\b[^.\n]{0,50}\b(?:system prompt|your (?:instructions?|prompt|rules|config\w*)|api[- ]?keys?|secrets?|credentials?|access tokens?|passwords?)\b|\b(?:send|email|e-mail|post|upload|transmit|forward|submit|report)\b\s+(?:me|us|it|them)?\s*(?:a|an|the|this|these|your|all|any|each)?\s*(?:\w+\s+){0,2}\b(?:summar\w+|copy|copies|list|results?|findings?|data|dataset|contents?|page|document|record|records|roster|output|answer|response|transcript|log|report|information|details)\b[^.\n]{0,60}(?:https?:\/\/|[\w.+-]+@[\w-]+\.[a-z]{2,})/i,
     why: 'solicits an outbound action or asks the reader to disclose its instructions',
   },
   {
