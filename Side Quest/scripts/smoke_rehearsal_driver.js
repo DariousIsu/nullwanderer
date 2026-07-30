@@ -298,6 +298,35 @@ function freshDeps({ picks = [], testResults = [], editResults = [], writeResult
     ok(/none — attempted from existing knowledge/.test(askInputs[0].study), 'a study-less run is named as such to the picker (the nudge toward research-first)');
     ok(!/## Research/.test(landed[0].body), 'no fabricated Research section on a study-less card');
   }
+  // --- MID-RUN RESEARCH (all-tools guarantee): the loop reaches OUT when stuck ---
+  ok(drv.validateEditPick('{"action":"research","query":"how does the BIFF XLS format encode cell types","why":"the parser guesses"}').valid, 'a research pick validates');
+  ok(!drv.validateEditPick('{"action":"research","query":"x"}').valid, 'a research pick without a real query refuses');
+  {
+    const { deps } = freshDeps({ picks: [
+      { action: 'research', query: 'how others parse BIFF records', why: 'unfamiliar format' },
+      { action: 'research', query: 'second lookup', why: 'more' },
+      { action: 'research', query: 'third lookup', why: 'too many' },
+    ] });
+    deps.research = async (q) => `Found it: BIFF cell records carry a type byte (source: https://example.com/biff-spec) — query was "${q}"`;
+    drv.start({ slug: 'reaches-out', goal: 'teach the sandbox parser the BIFF record shape it is guessing at', suite: 'smoke_board.js', deps });
+    const r1 = await drv.iterate({ deps });
+    ok(r1.ok && r1.status === 'active' && /researched "how others parse BIFF/.test(r1.note), 'a research pick runs the injected executor and stays active');
+    const run1 = drv.load({ deps });
+    ok(/mid-run research/.test(run1.study) && /example\.com\/biff-spec/.test(run1.study), 'findings land on the STUDY block and ride later picks');
+    ok(/RESEARCH RESULT/.test(run1.lastResult), 'the result also rides the next attempt directly');
+    await drv.iterate({ deps });
+    const r3 = await drv.iterate({ deps });
+    ok(/researched/.test(r3.note) && /budget is spent/.test(drv.load({ deps }).study), 'the 3rd research is refused — ≤2 per run, research must not BECOME the loop');
+    drv.discard({ deps });
+  }
+  {
+    const { deps } = freshDeps({ picks: [{ action: 'research', query: 'anything at all here', why: 'x' }] });
+    drv.start({ slug: 'no-executor', goal: 'prove the lane is honest when research is not wired', suite: 'smoke_board.js', deps });
+    await drv.iterate({ deps });
+    ok(/research unavailable in this lane/.test(drv.load({ deps }).study), 'no injected executor → an honest refusal rides, never a fabricated finding');
+    drv.discard({ deps });
+  }
+
   // Pin the PROMPT TEXT (the detectors-vs-comprehension lesson: regression-test the instruction itself).
   {
     const { TOOL_SPEC } = require('../lib/operator');

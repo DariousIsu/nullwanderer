@@ -112,8 +112,9 @@ const EDIT_WANT = `You are iterating on a REHEARSAL — a sandboxed copy of your
 {"action":"edit","path":"lib/x.js","find":"<exact text currently in the file — copy it verbatim, it must occur EXACTLY ONCE>","replace":"<the replacement>","why":"<one line>"}
 {"action":"new_file","path":"tools/x.py","content":"<the FULL new file — a python tool (tools/<name>.py), or its harness (scripts/smoke_<name>.js) which shells the tool via process.env.ZOE_PY and prints PASS/FAIL>","why":"<one line>"}
 {"action":"test","why":"<the edits look complete — run the suite>"}
+{"action":"research","query":"<what to look up on the web: how others implement this, an API's real shape, what an error means>","why":"<one line>"}
 {"action":"give_up","why":"<honest: why this goal cannot be reached this way>"}
-Ground the edit in the FILE CONTENT shown — never guess at text you cannot see. new_file is ONLY for a python tool or its harness that do not exist yet (build the tool, then the harness, then test); to CHANGE a file that exists, use edit. If the last test output shows a failure, fix THAT failure. Small, surgical edits win; rewrites lose.`;
+Ground the edit in the FILE CONTENT shown — never guess at text you cannot see. new_file is ONLY for a python tool or its harness that do not exist yet (build the tool, then the harness, then test); to CHANGE a file that exists, use edit. If the last test output shows a failure, fix THAT failure. Reach for research when a failure suggests OUTSIDE knowledge you lack (an unfamiliar error, a format you're guessing at) — the findings ride your STUDY block; ≤2 per run, and what you find is reading material only. Small, surgical edits win; rewrites lose.`;
 
 function validateEditPick(raw) {
   try {
@@ -121,12 +122,17 @@ function validateEditPick(raw) {
     if (!m) return { valid: false, error: 'no JSON object' };
     const o = JSON.parse(m[0]);
     if (o.action === 'test' || o.action === 'give_up') return { valid: true, value: { action: o.action, why: str(o.why).slice(0, 240) } };
+    if (o.action === 'research') {
+      const rq = { action: 'research', query: str(o.query).replace(/\s+/g, ' ').trim().slice(0, 200), why: str(o.why).slice(0, 240) };
+      if (rq.query.length < 4) return { valid: false, error: 'research needs a real query' };
+      return { valid: true, value: rq };
+    }
     if (o.action === 'new_file') {
       const nf = { action: 'new_file', path: str(o.path).trim(), content: str(o.content), why: str(o.why).slice(0, 240) };
       if (!nf.path || nf.content.length < 1) return { valid: false, error: 'new_file needs path + content' };
       return { valid: true, value: nf };
     }
-    if (o.action !== 'edit') return { valid: false, error: 'action must be edit|new_file|test|give_up' };
+    if (o.action !== 'edit') return { valid: false, error: 'action must be edit|new_file|research|test|give_up' };
     const out = { action: 'edit', path: str(o.path).trim(), find: str(o.find), replace: str(o.replace), why: str(o.why).slice(0, 240) };
     if (!out.path || !out.find || out.find === out.replace) return { valid: false, error: 'edit needs path + find + a real replacement' };
     return { valid: true, value: out };
@@ -219,6 +225,28 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
     run.status = 'stuck'; _save(run, deps);
     _crystallizeStuck(run, pick.why, deps, nowMs);
     return { ok: true, status: 'stuck', note: `gave up honestly: ${pick.why}` };
+  }
+
+  // MID-RUN RESEARCH (Lucas 2026-07-30: "her self-correction systems should utilize ALL tools —
+  // she should be able to find a solution to pretty much anything"): the loop can reach OUT when
+  // a failure needs outside knowledge. The executor is deps-injected (live: a bounded RESEARCH
+  // ONLY operator pass); findings append to the run's STUDY block and ride every later pick.
+  // ≤2 per run — research informs the loop, it must not BECOME the loop. Reading material only.
+  if (pick.action === 'research') {
+    run.researchCount = (run.researchCount || 0) + 1;
+    let found = '';
+    if (run.researchCount > 2) {
+      found = 'RESEARCH REFUSED: the 2-per-run research budget is spent — act on what you hold (edit / test / give_up).';
+    } else if (typeof deps.research === 'function') {
+      try { found = str(await deps.research(pick.query)).trim().slice(0, 1500); } catch (e) { found = 'research failed: ' + e.message; }
+      if (!found) found = 'research returned nothing — act on what you hold.';
+    } else {
+      found = 'research unavailable in this lane — act on what you hold.';
+    }
+    run.study = (str(run.study) + `\n\n[mid-run research: "${pick.query.slice(0, 120)}"]\n${found}`).slice(-4000);
+    run.lastResult = `RESEARCH RESULT (now riding your STUDY block):\n${found.slice(0, 1200)}`;
+    _save(run, deps);
+    return { ok: true, status: 'active', note: `researched "${pick.query.slice(0, 60)}" — findings ride the study block` };
   }
 
   if (pick.action === 'new_file') {

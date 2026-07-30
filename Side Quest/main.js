@@ -6580,6 +6580,46 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   } catch (e) { console.error('[main] directed-stop check failed:', e.message); }
 
+  // REDIRECT — "I'd rather you focus on X" (turn 10275, 2026-07-30: she SAID "I'm pivoting
+  // focus to China AI…" and NOTHING registered — no thread, no park; the driver rolled on
+  // finishing Georgia counties. The pivot is now CODE): park-land the current focus exactly
+  // like a stop, then queue the named topic as the EXPLICIT next seed — an existing matching
+  // thread is promoted (even an already-driven one), else a fresh thread is born. The reply is
+  // grounded in what ACTUALLY registered, so even a local-fallback voice tells the truth.
+  try {
+    if (!directedStopHandled) {
+      const uw = require('./lib/user_work');
+      const red = uw.detectRedirect(userMessage);
+      if (red) {
+        const focusLib = require('./lib/focus');
+        const f = focusLib.getCurrent();
+        let parkedNote = '';
+        if (f && focusLib.isDirected(f) && !(db.getMeta(`focus.${f.id}.beat`) || '').trim()) {
+          try {
+            const _pk = uw.parkDeliverable({
+              focusId: f.id, reason: 'user-redirect',
+              readFile: (p) => filesLib.fileReadFull(p), getMeta: (k) => db.getMeta(k),
+              getThread: (id) => db.getOpenThread(id), land: (d) => require('./lib/doc_store').land(d),
+            });
+            if (_pk) console.log(`[user-work] parked deliverable landed → doc #${_pk.id} (user-redirect)`);
+          } catch (e) { console.error('[user-work] redirect park-landing failed:', e.message); }
+          focusLib.clear('user-redirect');
+          try { stopDirectedFocusDriver(); } catch {}
+          parkedNote = ` The previous focus ("${String(f.content).slice(0, 60)}") is parked with its work saved.`;
+        }
+        let target = null;
+        try { target = uw.matchThreadToTopic(red.topic, db.getActiveOpenThreads(60, { includeStalled: true }) || []); } catch {}
+        if (!target) { try { const r = db.insertOpenThread({ content: red.topic }); if (r && r.id) target = { id: r.id, content: red.topic }; } catch {} }
+        if (target) {
+          db.setMeta('user_work.next_seed', String(target.id));
+          directedStopHandled = true;   // this turn is fully handled — downstream setup blocks skip
+          composedUserMessage += `\n\n[${userName} just REDIRECTED your working focus to: "${red.topic}". This IS registered in your program: thread #${target.id} is queued as the very next driven focus and will start within minutes.${parkedNote} Say plainly that the pivot is registered${parkedNote ? ' and what was parked' : ''} — do NOT promise any actions beyond this.]`;
+          console.log(`[user-work] REDIRECT registered → next seed = thread #${target.id} ("${String(target.content).slice(0, 60)}")${parkedNote ? ' · previous focus parked' : ''}`);
+        }
+      }
+    }
+  } catch (e) { console.error('[main] redirect check failed:', e.message); }
+
   // WRAP-UP / FINALIZE — distinct from STOP (which abandons + saves). "Wrap up / finish / finalize the
   // research" means CONCLUDE it into its deliverable: halt the driver, condense the run into the lossless
   // dossier (→ Canvas via condenseRun's canvasEmit), resolve the focus, and POINT chat at the Canvas with
@@ -7644,6 +7684,16 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         temperature: 0.7,   // her voice, not a classifier
       };
       let r = null;
+      // CLOUD-MISS BACKOFF (2026-07-30: six empty cloud replies in one evening, each costing the
+      // full wait before the local fallback — lib/backoff, the graph-walk cooldown shape made a
+      // shared organ). Consecutive pure misses open an exponential cooldown; during it the local
+      // voice takes the turn IMMEDIATELY (a fast honest reply beats a slow degraded one), and the
+      // cloud is probed again only once it expires. One success resets the streak.
+      const _bk = require('./lib/backoff');
+      let _bkState = null; try { _bkState = JSON.parse(db.getMeta('cloud_reply.backoff') || 'null'); } catch {}
+      if (_bk.shouldSkip(_bkState, Date.now())) {
+        console.log(`[main] cloud writer cooling down (${Math.ceil((_bkState.until - Date.now()) / 1000)}s left, miss streak ${_bkState.streak}) — the local voice takes this turn immediately`);
+      } else {
       try { r = await require('./lib/cloud_logic').streamCloud(cloudMessages, _cloudOpts); }
       catch (e) { console.error('[main] cloud reply failed:', e.message); }
       // ONE bounded retry, only when NOTHING streamed — a pure connection failure (the boot-window
@@ -7655,7 +7705,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         try { r = await require('./lib/cloud_logic').streamCloud(cloudMessages, _cloudOpts); }
         catch (e) { console.error('[main] cloud reply failed (retry):', e.message); }
       }
+      if (!(r && r.text && r.text.trim()) && _cloudChunks === 0) {
+        _bkState = _bk.onFailure(_bkState, Date.now());
+        try { db.setMeta('cloud_reply.backoff', JSON.stringify(_bkState)); } catch {}
+        console.warn(`[main] cloud writer miss #${_bkState.streak} — cooling down ${Math.round(_bk.next(_bkState.streak) / 1000)}s before the next attempt`);
+      }
+      }
       if (r && r.text && r.text.trim()) {
+        if (_bkState && _bkState.streak) { try { db.setMeta('cloud_reply.backoff', JSON.stringify(_bk.onSuccess())); } catch {} }
         replyWriter = r.model;
         // The reasoning channel, RAW. It never touches the tag parser (see ollama.js — feeding it
         // through as <think>-wrapped text let the model's format narration hijack <say>, and every
@@ -10319,7 +10376,14 @@ async function autonomyTick() {
       }
       try { boardId = require('./lib/board').start({ lane: 'rehearsal', kind: 'drive', target: run.slug, note: `iteration ${run.iteration + 1}; on ${slot}` }).id; } catch {}
       let r = null;
-      try { r = await driver.iterate({}); } catch (e) { console.error('[autonomy] rehearse iterate failed:', e.message); }
+      // The loop's OUT-reach (all-tools guarantee): a research pick runs the same bounded
+      // RESEARCH ONLY operator pass the study-first open uses — web through her full tool
+      // surface, reading material only, findings riding the run's study block.
+      const _rehearseResearch = (q) => runCloudOperator({
+        userMessage: `RESEARCH ONLY — do not build anything. ${String(q).slice(0, 200)}. Search the web / your own stores and READ what you find (never run it). Reply in at most 1000 chars: what you learned + source URLs.`,
+        autonomous: true,
+      }).then((sp) => String((sp && sp.answer) || ''));
+      try { r = await driver.iterate({ deps: { research: _rehearseResearch } }); } catch (e) { console.error('[autonomy] rehearse iterate failed:', e.message); }
       try { require('./lib/board').finish(boardId, { status: r && r.ok ? 'done' : 'failed', note: String((r && r.note) || 'iterate threw').slice(0, 160) }); } catch {}
       try { require('./lib/board').release(slot); } catch {}
       autonomy.historyPush(H, { ts: now, move: 'rehearse', target: run.slug, outcome: r ? `${r.status}: ${String(r.note).slice(0, 120)}` : 'iterate failed' });
@@ -10973,7 +11037,19 @@ async function _autonomicSchedulerTick() {
         // from 210h ago won over the fresh grid cluster).
         const threads = (db.getUnstartedUserThreads(60) || [])
           .filter((t) => t && !(db.getMeta(`focus.${t.id}.beat`) || '').trim() && String(db.getMeta(`focus.${t.id}.background`) || '') !== '1');
-        const cand = uw.pickUserThread(threads, {
+        // EXPLICIT REDIRECT SEED (the user-redirect wire): a chat-registered pivot names the
+        // next focus outright — it outranks the recency ordering ONCE, then clears. Any live
+        // status qualifies (a redirect may re-promote an already-driven thread).
+        let cand = null;
+        try {
+          const ns = parseInt(db.getMeta('user_work.next_seed') || '0', 10) || 0;
+          if (ns) {
+            db.setMeta('user_work.next_seed', '');
+            const t = db.getOpenThread(ns);
+            if (t && ['pending', 'active', 'stalled'].includes(t.status)) { cand = t; console.log(`[user-work] redirect seed honored → thread #${t.id}`); }
+          }
+        } catch {}
+        if (!cand) cand = uw.pickUserThread(threads, {
           now: Date.now(),
           newsAtOf: (id) => parseInt(db.getMeta(`thread.${id}.news_at`) || '0', 10) || 0,
         });

@@ -124,5 +124,27 @@ const g3 = uw.augmentGuidance('', { focusId: 9, content: 'need this within an ho
 ok(/DEADLINE: PASSED — stop hunting/.test(g3), 'a passed deadline stops the hunt honestly');
 ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: NOW, now: NOW, getMeta: () => null }) === 'G', 'no news + no deadline → guidance untouched');
 
+// --- REDIRECT DETECTION (turn 10275: the false pivot — "I'm pivoting focus" registered NOTHING) ---
+{
+  const r = uw.detectRedirect('The next state we need is actually Arizona. But I would honestly rather have you focus on the the China AI and materials research');
+  ok(r && r.topic === 'China AI and materials research', `the REAL 20:38 message fires and extracts the topic ("${r && r.topic}")`);
+  ok(uw.detectRedirect('Please focus on the parish clerk verification for now') !== null, 'clause-start imperative "focus on X" fires');
+  ok(uw.detectRedirect("let's focus on the forecast calibration") !== null, "\"let's focus on X\" fires");
+  ok(uw.detectRedirect('Should we focus on the China AI research?') === null, 'a QUESTION never fires (direction grid)');
+  ok(uw.detectRedirect("I'll work on the deck tonight and focus on the intro") === null, 'HIS own work plans never fire (bare "work on" is not a redirect of HER focus)');
+  ok(uw.detectRedirect('The team decided to focus on retention metrics last quarter') === null, 'narrative about others never fires');
+  ok(uw.detectRedirect('') === null && uw.detectRedirect(null) === null, 'empty input never throws');
+
+  // --- thread promotion: the 2-token topic rule finds the existing China thread ---
+  const pool = [
+    { id: 3533, content: 'provide a metallurgical breakdown of China chip manufacturing needs by AI partners', created_ts: 100 },
+    { id: 3525, content: "ingest research materials on China's next-generation hardware and Global South relations", created_ts: 200 },
+    { id: 3632, content: 'Investigate: locate each county’s official government website', created_ts: 300 },
+  ];
+  const hit = uw.matchThreadToTopic('China AI and materials research', pool);
+  ok(hit && hit.id === 3525, 'the existing China-materials thread is promoted (2+ shared topic tokens)');
+  ok(uw.matchThreadToTopic('quantum biology of bird navigation', pool) === null, 'a genuinely new topic promotes nothing → a fresh thread is born');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

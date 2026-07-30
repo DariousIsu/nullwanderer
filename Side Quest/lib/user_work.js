@@ -174,4 +174,43 @@ function augmentGuidance(guidance, { focusId, content, createdTs, getMeta = () =
   return parts.filter(Boolean).join('\n\n');
 }
 
-module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, parkDeliverable, scoreThread, pickUserThread, augmentGuidance };
+// REDIRECT DETECTION (turn 10275, 2026-07-30: "I would honestly rather have you focus on the
+// China AI and materials research" → she SAID "I'm pivoting focus" and NOTHING registered — no
+// thread, no park; the driver rolled on. The pivot must be CODE, not a promise). Conservative
+// by design (the directives over-capture warning): preference/imperative shapes only — a
+// question never fires, and bare "work on" never fires (direction grid: HIS work is not a
+// redirect of HERS).
+const _REDIRECT_RES = [
+  /\bi(?:'d| would)(?: honestly| really)? rather (?:have you |you )?(?:focus|work) on\s+(.{4,140}?)(?:\s+(?:instead|for now|next))?[.!]?\s*$/i,
+  /(?:^|[.!?]\s+)(?:please\s+)?(?:focus on|switch to|pivot to|prioriti[sz]e)\s+(.{4,140}?)(?:\s+(?:instead|for now|next))?[.!]?\s*$/i,
+  /\blet'?s focus on\s+(.{4,140}?)(?:\s+(?:instead|for now|next))?[.!]?\s*$/i,
+];
+function detectRedirect(message) {
+  const t = String(message || '').trim();
+  if (!t || /\?\s*$/.test(t)) return null;                              // a question is not a redirect
+  for (const re of _REDIRECT_RES) {
+    const m = re.exec(t);
+    if (m) {
+      const topic = m[1].replace(/^(?:the\s+)+/i, '').replace(/\s+/g, ' ').trim();
+      if (topic.length >= 4 && !/^(it|that|this|them|him|her)$/i.test(topic)) return { topic };
+    }
+  }
+  return null;
+}
+
+// Match a redirect topic to an EXISTING thread (any live status — an already-driven thread can
+// be re-promoted) by the same 2-token topic rule as news vigilance. Null = genuinely new topic.
+function matchThreadToTopic(topic, threads) {
+  const toks = threadTokens(topic);
+  if (toks.size < 1) return null;
+  let best = null, bestHits = 0;
+  for (const t of (Array.isArray(threads) ? threads : [])) {
+    const tt = threadTokens(t && t.content);
+    let hits = 0;
+    for (const w of tt) if (toks.has(w)) hits++;
+    if (hits >= 2 && (hits > bestHits || (hits === bestHits && (t.created_ts || 0) > ((best && best.created_ts) || 0)))) { best = t; bestHits = hits; }
+  }
+  return best;
+}
+
+module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, parkDeliverable, scoreThread, pickUserThread, augmentGuidance, detectRedirect, matchThreadToTopic };
