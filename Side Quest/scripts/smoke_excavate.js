@@ -98,6 +98,20 @@ function fakeWeb({ shots }) {
   const spFail = await excavate.seePage('x', { url: 'https://x', deps: { web: { open: async () => ({ ok: false, reason: 'nav timeout' }) }, vision: seeVision } });
   ok(spFail.ok === false && /open failed/.test(spFail.reason), 'seePage: open failure → graceful not-ok');
 
+  // A MISSING FOCUS IS NOT A PLACEHOLDER (boot143 live: the literal "the topic" fallback made the
+  // vision model narrate 'Since "the topic" was not specified…' instead of reading the page).
+  {
+    const withFocus = excavate._seePrompt('China AI and materials research');
+    ok(/relevant to:\n"China AI and materials research"/.test(withFocus), 'a real focus rides as the relevance filter');
+    ok(/reply exactly "\(nothing relevant\)"/.test(withFocus), 'the focused prompt keeps its off-topic escape');
+    const noFocus = excavate._seePrompt('');
+    ok(!/the topic/.test(noFocus), 'NO placeholder topic — the model never reasons about a stand-in');
+    ok(/extract its OWN substance/.test(noFocus), 'no focus → a REAL instruction: read what the page itself is');
+    ok(/Never discuss this instruction/.test(noFocus) && /Never discuss this instruction/.test(withFocus),
+      'both forms forbid narrating the prompt — extract or say nothing relevant');
+    ok(excavate._seePrompt(null) === excavate._seePrompt(''), 'null focus behaves exactly like empty');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

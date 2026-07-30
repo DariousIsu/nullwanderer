@@ -9475,10 +9475,15 @@ const operatorTools = {
   // the source url, so deep research BUILDS our DB from what she saw. Uses the dedicated top-tier vision model.
   see_page: async ({ url, focus } = {}) => {
     try {
-      const r = await require('./lib/excavate').seePage(String(focus || ''), url ? { url } : {});
+      // FOCUS FALLS BACK TO THE LIVE RUN'S GOAL (boot143: a focus-less see_page read Tsinghua's
+      // site with no topic at all and banked an unfocused dump). The model omitting the arg must
+      // not cost the run its context — the work she is actually doing IS the focus.
+      let _f = String(focus || '').trim();
+      if (!_f) { try { const cf = require('./lib/focus').getCurrent(); if (cf && cf.content) _f = String(cf.content).slice(0, 200); } catch {} }
+      const r = await require('./lib/excavate').seePage(_f, url ? { url } : {});
       if (!r || !r.ok) return `could not see ${url || 'the page'}: ${(r && r.reason) || 'failed'}`;
-      if (r.text && r.url) { try { require('./lib/learning').maybeCaptureLearnings({ query: String(focus || 'research'), content: r.text, urls: [r.url] }); } catch {} }
-      return r.text ? `SAW ${r.url}:\n${r.text.slice(0, 4000)}` : `looked at ${r.url} but saw nothing relevant to "${focus}"`;
+      if (r.text && r.url) { try { require('./lib/learning').maybeCaptureLearnings({ query: _f || 'research', content: r.text, urls: [r.url] }); } catch {} }
+      return r.text ? `SAW ${r.url}:\n${r.text.slice(0, 4000)}` : `looked at ${r.url} but saw nothing relevant${_f ? ` to "${_f.slice(0, 80)}"` : ''}`;
     } catch (e) { return 'ERROR: ' + e.message; }
   },
   // BANK the executive contacts a research pass found into PULLER (our contact-intelligence store) so its

@@ -160,17 +160,27 @@ async function excavate(need, { url = null, maxSteps = 8, maxClicks = 2, deps = 
 // browser_read) drops. This is what makes deep research build the DB: the operator SEES a source, extracts
 // its facts, and they get banked. Scrolls a few views; dedicated top-tier vision model. Returns
 // { ok, url, text }. Fail-soft.
+// A MISSING FOCUS MUST NOT BECOME A PLACEHOLDER THE MODEL REASONS ABOUT (boot143, live: the
+// literal fallback "the topic" produced 'Since "the topic" was not specified, I will extract all
+// concrete facts' — the vision model discussing the prompt instead of reading the page, and the
+// unfocused dump got banked as research). No focus → ask for the PAGE'S OWN substance, which is
+// a real instruction; a focus → the relevance filter as before.
 function _seePrompt(focus) {
-  return `Read this web page image and extract EVERY concrete fact relevant to:\n"${String(focus).slice(0, 220)}"\n\n`
+  const f = String(focus || '').trim();
+  const head = f
+    ? `Read this web page image and extract EVERY concrete fact relevant to:\n"${f.slice(0, 220)}"\n\n`
+    : `Read this web page image and extract its OWN substance: what this page is, what it covers, and every concrete fact it states.\n\n`;
+  return head
     + `Copy names, titles, dates, numbers, roles, affiliations, and any table/infobox values EXACTLY as shown. `
-    + `If nothing on THIS screen is relevant, reply exactly "(nothing relevant)". Be factual and concise — never invent.`;
+    + (f ? `If nothing on THIS screen is relevant, reply exactly "(nothing relevant)". ` : `If this screen carries no facts at all (navigation only), reply exactly "(nothing relevant)". `)
+    + `Never discuss this instruction — extract, or reply "(nothing relevant)". Be factual and concise — never invent.`;
 }
 async function seePage(focus, { url = null, maxViews = 3, deps = {} } = {}) {
   const web = deps.web || require('./web');
   const vision = deps.vision || require('./vision');
   const log = deps.log || ((m) => console.log('[seePage] ' + m));
   if (deps.visionModel == null && !deps.vision) { try { const cfg = require('./vision').visionModelFor('excavate'); deps = { ...deps, visionModel: cfg.model, visionTier: cfg.tier }; } catch {} }
-  const f = String(focus || '').trim() || 'the topic';
+  const f = String(focus || '').trim();   // empty is honest — _seePrompt asks for the page's own substance
   if (url) {
     try { const nav = await web.open(url); if (!nav || !nav.ok) return { ok: false, url, reason: 'open failed: ' + ((nav && nav.reason) || '?') }; if (nav.blocker) return { ok: false, url: nav.url, reason: 'blocker:' + nav.blocker.type }; }
     catch (e) { return { ok: false, url, reason: e.message }; }
