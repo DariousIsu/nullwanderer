@@ -18,7 +18,8 @@ contextBridge.exposeInMainWorld('sq', {
   onInboundArrived: (cb) => ipcRenderer.on('inbound:arrived', (_e, info) => cb(info)),
   onInboundTimeout: (cb) => ipcRenderer.on('inbound:timeout', (_e, info) => cb(info)),
 
-  onSayToken: (cb) => ipcRenderer.on('chat:say-token', (_e, token) => cb(token)),
+  // Stream-discriminated tokens ({t, s}) forward as (token, stream); legacy bare strings still pass.
+  onSayToken: (cb) => ipcRenderer.on('chat:say-token', (_e, p) => { if (p && typeof p === 'object') cb(String(p.t || ''), p.s); else cb(p); }),
   onComplete: (cb) => ipcRenderer.on('chat:complete', (_e, info) => cb(info)),
   onImage: (cb) => ipcRenderer.on('chat:image', (_e, info) => cb(info)),
   onError: (cb) => ipcRenderer.on('chat:error', (_e, err) => cb(err)),

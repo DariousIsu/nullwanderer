@@ -160,7 +160,8 @@ let sending = false;
 // the transcript; her UNPROMPTED utterances (heartbeat/autonomous) are diverted to the
 // sheep panel instead — until real autonomous chatting is good enough to promote back.
 let promptedReplyPending = false;  // true between a user send() and that reply's complete
-let unpromptedActive = false;      // the in-flight stream is an autonomous utterance
+let unpromptedActive = false;      // the in-flight stream is an autonomous utterance (LEGACY heuristic)
+let sheepBufs = {};                // per-stream buffers for DISCRIMINATED autonomous streams
 let unpromptedBuffer = '';         // accumulates an autonomous utterance for the sheep panel
 let lastSheepThoughtId = null;     // dedup guard so a thought isn't filed to sheep twice
 
@@ -289,7 +290,30 @@ function cleanLiveSay(s) {
     .replace(/[ \t]+/g, ' ');
 }
 
-window.sq.onSayToken((token) => {
+window.sq.onSayToken((token, stream) => {
+  // STREAM DISCRIMINATOR (2026-07-30, the reply-delivery-path root fix): every emitter now stamps
+  // its tokens — 'reply' (the prompted turn + its tool-followups) vs the autonomous lanes
+  // ('heartbeat' | 'continuity' | 'auto'). A stamped token routes by FACT; the latch heuristics
+  // below survive ONLY for legacy/unstamped emitters, where they can no longer misfile a reply.
+  if (stream && stream !== 'reply') {
+    sheepBufs[stream] = (sheepBufs[stream] || '') + token;
+    return;
+  }
+  if (stream === 'reply') {
+    if (!currentAiTurnDiv) {
+      hideThinking();
+      currentAiTurnDiv = makeAiTurn();
+      currentAiSaidNode = makeSaidNode('');
+      currentAiTurnDiv.appendChild(currentAiSaidNode);
+      if (runStatNode && runStatTimer) currentAiTurnDiv.appendChild(runStatNode);
+      transcript.appendChild(currentAiTurnDiv);
+      liveSayBuffer = '';
+    }
+    liveSayBuffer += token;
+    currentAiSaidNode.textContent = cleanLiveSay(liveSayBuffer);
+    scrollMaybe();
+    return;
+  }
   // ⭐ A REPLY LUCAS IS WAITING FOR ALWAYS WINS.
   //
   // `unpromptedActive` is a LATCH: set on the first token of an autonomous stream and cleared only by
@@ -333,6 +357,15 @@ window.sq.onSayToken((token) => {
 });
 
 window.sq.onComplete((info) => {
+  // Discriminated autonomous completion → flush ITS stream buffer to the sheep rail; the
+  // prompted-reply state is never touched (this can no longer shunt or reset a pending reply).
+  if (info && info.s && info.s !== 'reply') {
+    const text = (typeof info.say === 'string' && info.say.trim())
+      ? info.say.trim() : cleanLiveSay(sheepBufs[info.s] || '').trim();
+    if (text && !info.silent) appendSheep({ ts: Date.now(), content: text, type: 'utterance' });
+    sheepBufs[info.s] = '';
+    return;
+  }
   // Autonomous utterance → sheep panel, never the dialogue transcript. Leave the user's
   // input state untouched (an unprompted completion isn't a reply to anything they sent).
   // GATE on !currentAiTurnDiv, NOT on !promptedReplyPending. A racing idle completion (heartbeat/
@@ -345,7 +378,7 @@ window.sq.onComplete((info) => {
   // answer streamed into the transcript turn) — so `!currentAiTurnDiv` distinguishes it cleanly and it
   // still falls through to finish. A racing idle completion has currentAiTurnDiv === null → handled here,
   // and promptedReplyPending is preserved for the real reply.
-  if (!currentAiTurnDiv && (unpromptedActive || (info && (info.unprompted || info.silent)))) {
+  if (!(info && info.s === 'reply') && !currentAiTurnDiv && (unpromptedActive || (info && (info.unprompted || info.silent)))) {
     const text = (info && typeof info.say === 'string' && info.say.trim())
       ? info.say.trim() : cleanLiveSay(unpromptedBuffer).trim();
     if (text) appendSheep({ ts: Date.now(), content: text, type: 'utterance' });
@@ -374,6 +407,14 @@ window.sq.onComplete((info) => {
     } else {
       saidNode.textContent = cleanLiveSay(liveSayBuffer).trim();
     }
+  }
+  // HONEST CUT (the clipped-table class): a stream that genuinely ended mid-generation says so
+  // on screen instead of silently stopping — a cut you can SEE is a cut you can re-ask about.
+  if (turnDiv && info && info.truncated) {
+    const cut = document.createElement('div');
+    cut.className = 'turnstat';
+    cut.textContent = '— that reply was cut off mid-stream —';
+    turnDiv.appendChild(cut);
   }
   routeThoughtToSheep();   // her <think> is filed to the sheep panel, not the transcript
   currentAiTurnDiv = null;

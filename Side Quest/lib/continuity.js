@@ -205,7 +205,7 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
 
     const parser = new TagStreamParser({
       onSayToken: (token) => {
-        try { win.webContents.send('chat:say-token', token); } catch {}
+        try { win.webContents.send('chat:say-token', { t: token, s: 'continuity' }); } catch {}
       }
     });
 
@@ -291,8 +291,8 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
       db.setMeta('last_ai_utterance_at', String(Date.now()));
       try {
         win.webContents.send('chat:complete', continuityDisclaimed
-          ? { saidId: saidRow.id, truncated, unprompted: true, continuity: true, say: trimmedSay }
-          : { saidId: saidRow.id, truncated, unprompted: true, continuity: true });
+          ? { saidId: saidRow.id, truncated, unprompted: true, continuity: true, s: 'continuity', say: trimmedSay }
+          : { saidId: saidRow.id, truncated, unprompted: true, continuity: true, s: 'continuity' });
       } catch {}
     } else {
       // She chose silence — still bump the challenge timestamp so we don't
@@ -303,7 +303,7 @@ Surface this to ${userName || 'them'} as a natural unsolicited utterance — "I'
       });
       try {
         win.webContents.send('chat:complete', {
-          saidId: null, truncated: 0, unprompted: true, silent: true, continuity: true
+          saidId: null, truncated: 0, unprompted: true, silent: true, continuity: true, s: 'continuity'
         });
       } catch {}
     }

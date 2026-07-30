@@ -1602,8 +1602,8 @@ app.whenReady().then(() => {
               // exactly like a heartbeat utterance (stream tokens + finalize).
               const autoIo = {
                 channel: 'desktop',
-                emit: (token) => { try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('chat:say-token', token); } catch {} },
-                onComplete: (payload) => { try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('chat:complete', { ...payload, unprompted: true }); } catch {} }
+                emit: (token) => { try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('chat:say-token', { t: token, s: 'auto' }); } catch {} },
+                onComplete: (payload) => { try { mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('chat:complete', { ...payload, unprompted: true, s: 'auto' }); } catch {} }
               };
               setTimeout(() => { runActionStep(autoIo, 0).catch(() => {}); }, 1500);
             } else {
@@ -8973,8 +8973,11 @@ ipcMain.handle('chat:send', async (event, userMessage, attachments = []) => {
   }, CHAT_TURN_WATCHDOG_MS);
   try {
     return await runChatTurn(userMessage, attachments, {
-      emit: (t) => { sayBuf += t; try { event.sender.send('chat:say-token', t); } catch {} },
-      onComplete: (info) => { try { event.sender.send('chat:complete', info); } catch {} try { speakThroughCompanion(sayBuf); } catch {} sayBuf = ''; },
+      // STREAM DISCRIMINATOR (2026-07-30, reply-delivery-path root fix): every say-token now names
+      // its stream — the renderer routes by FACT, not by the promptedReplyPending/latch heuristics
+      // that misfiled real answers into the sheep rail when a suppressed autonomous stream leaked.
+      emit: (t) => { sayBuf += t; try { event.sender.send('chat:say-token', { t, s: 'reply' }); } catch {} },
+      onComplete: (info) => { try { event.sender.send('chat:complete', { ...(info || {}), s: 'reply' }); } catch {} try { speakThroughCompanion(sayBuf); } catch {} sayBuf = ''; },
       onError: (e) => { try { event.sender.send('chat:error', e); } catch {} },
       busy: (text) => { try { event.sender.send('chat:busy', text); } catch {} }
     });
@@ -10863,9 +10866,13 @@ function _maintenanceSweep(state, beats) {
           if (!uw.isResearchShaped(t.content)) continue;
           const hits = uw.matchNewsToThread(t.content, headlines);
           if (hits.length) {
+            // Log only when the hit-SET changes — the same 5 stories re-announcing every sweep
+            // was the noisiest line in the boot log (dozens of identical lines per evening).
+            const hitsJson = JSON.stringify(hits);
+            const changed = hitsJson !== (db.getMeta(`thread.${t.id}.news_recent`) || '');
             db.setMeta(`thread.${t.id}.news_at`, String(now));
-            db.setMeta(`thread.${t.id}.news_recent`, JSON.stringify(hits));
-            console.log(`[user-work] news vigilance: ${hits.length} story(ies) touch thread #${t.id} — "${String(t.content).slice(0, 50)}"`);
+            db.setMeta(`thread.${t.id}.news_recent`, hitsJson);
+            if (changed) console.log(`[user-work] news vigilance: ${hits.length} story(ies) touch thread #${t.id} — "${String(t.content).slice(0, 50)}"`);
           }
         }
       } catch (e) { console.error('[user-work] news match failed:', e.message); }

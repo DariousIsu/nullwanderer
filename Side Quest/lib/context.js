@@ -562,8 +562,12 @@ function fitToWindow(messages, { numCtx = 8192, numPredict = 1200 } = {}) {
   const midCut = (text, keepTotal, headShare) => {
     const s = String(text || '');
     if (s.length <= keepTotal) return { text: s, cut: 0 };
-    const head = Math.floor(keepTotal * headShare), tail = keepTotal - head;
-    return { text: s.slice(0, head) + MARK + s.slice(-tail), cut: s.length - keepTotal };
+    // The marker itself spends budget: keep MARK.length less than the target so the result is
+    // ≤ keepTotal. (Live boot136: a 1-char cut ADDED the 46-char marker and the fitted prompt
+    // overshot budget by 47ch — bounded, but the report claimed a fit it hadn't achieved.)
+    const keep = Math.max(0, keepTotal - MARK.length);
+    const head = Math.floor(keep * headShare), tail = keep - head;
+    return { text: s.slice(0, head) + MARK + s.slice(-tail), cut: s.length - keep };
   };
   if (size() > budget && list.length >= 1) {
     const sys = list[0];

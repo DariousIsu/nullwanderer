@@ -265,7 +265,7 @@ async function maybeHeartbeat() {
   try {
     const parser = new TagStreamParser({
       onSayToken: (token) => {
-        try { win.webContents.send('chat:say-token', token); } catch {}
+        try { win.webContents.send('chat:say-token', { t: token, s: 'heartbeat' }); } catch {}
       }
     });
 
@@ -533,12 +533,12 @@ async function maybeHeartbeat() {
       // the heartbeat repeating the same surfaced line, and lets the monologue see
       // what was just said.
       try { blackboard.append({ source: 'heartbeat', kind: 'utterance', refTable: 'turns', refId: saidRow.id, content: trimmedSay }); } catch (e) { console.error('[heartbeat] blackboard append failed:', e.message); }
-      try { win.webContents.send('chat:complete', heartbeatDisclaimed ? { saidId: saidRow.id, truncated, unprompted: true, say: trimmedSay } : { saidId: saidRow.id, truncated, unprompted: true }); } catch {}
+      try { win.webContents.send('chat:complete', heartbeatDisclaimed ? { saidId: saidRow.id, truncated, unprompted: true, s: 'heartbeat', say: trimmedSay } : { saidId: saidRow.id, truncated, unprompted: true, s: 'heartbeat' }); } catch {}
     } else {
       // Empty say — she chose silence. Reset the gap timer so we don't spam-check.
       db.setMeta('last_ai_utterance_at', String(Date.now()));
       // Tell renderer to clear any partial state from the streaming (no tokens were emitted anyway)
-      try { win.webContents.send('chat:complete', { saidId: null, truncated: 0, unprompted: true, silent: true }); } catch {}
+      try { win.webContents.send('chat:complete', { saidId: null, truncated: 0, unprompted: true, silent: true, s: 'heartbeat' }); } catch {}
     }
 
     // If Stheno's heartbeat included a <wonder>, fire self-dialogue async

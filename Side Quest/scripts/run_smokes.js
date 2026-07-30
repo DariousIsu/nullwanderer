@@ -58,6 +58,7 @@ const smokes = [
   'smoke_doc_set.js',
   'smoke_obs_bus.js',
   'smoke_self_watch.js',
+  'smoke_stream_discriminator.js',
   'smoke_double_reply.js',
   'smoke_self_question.js',
   'smoke_stage_direction.js',
