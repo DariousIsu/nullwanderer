@@ -24,6 +24,20 @@ async function streamChat({ model, messages, options = {}, onToken, onThinking, 
   // scribe disables thinking so its whole budget goes to the minutes, not hidden reasoning.
   if (typeof think === 'boolean') body.think = think;
 
+  // TRUTH-IN-LOGGING (2026-07-30): a prompt beyond the window is SILENT data loss — the daemon
+  // keeps the LAST half-window and drops the front (measured live: a 72,048-token prompt cut to
+  // 4,099, 94% gone, zero app-side error). Estimate cheap and NAME THE CALLER, so the next
+  // offender is one grep away instead of a forensic hunt. Conservative 3.2 chars/token — only
+  // real overflows warn.
+  try {
+    const _chars = (messages || []).reduce((n, m) => n + String((m && m.content) || '').length, 0);
+    const _ctx = (body.options && body.options.num_ctx) || 8192;
+    if (_chars / 3.2 > _ctx) {
+      const _at = String((new Error().stack || '').split('\n').slice(2, 5).join(' | ')).replace(/\s+/g, ' ').slice(0, 300);
+      console.warn(`[window] ${model} prompt ~${_chars}ch ≈ ${Math.round(_chars / 3.6)}tok vs num_ctx ${_ctx} — the daemon will SILENTLY truncate; fit the prompt upstream. at: ${_at}`);
+    }
+  } catch { /* estimation must never block a call */ }
+
   // WATCHDOG: abort if the stream STALLS (no token for inactivityMs). Without this a hung
   // generation blocks the awaiting caller forever — and since there's one local model
   // instance, that freezes BOTH the idle loop AND chat (observed: a 15-min wedge). The timer

@@ -531,6 +531,59 @@ Examples:
 }
 
 /**
+ * FIT TO THE LOCAL WINDOW (2026-07-30, Lucas: "everything in the thinking and in the chat seems
+ * to be getting truncated"). The front voice runs at an honest num_ctx 8192, and the chat prompt
+ * grew to straddle it: a prompt just UNDER the window leaves a 30-90 token sliver for the reply
+ * (daemon stops at n_tokens=8191 mid-word — a dozen tasks pinned there in server.log); a prompt
+ * just OVER gets silently cut to HALF the window from the FRONT (WARN "truncating input prompt"
+ * limit=4099), destroying the protocols + identity + tag contract that live at the system head.
+ *
+ * This is the cloud package's fit discipline (lib/package.js inputBudgetChars) applied to the
+ * local lane, with the pressure released where the design already says it should be:
+ *   1. drop OLDEST history turns first — the WHERE-WE-ARE summary carries the older arc;
+ *   2. still over → cut the system MIDDLE with an honest marker (head = protocols/identity,
+ *      tail = HOW-TO-REPLY + nudges; both must survive);
+ *   3. pathological final message → cut ITS middle last (his words head the message; nudges tail it).
+ * WE choose what falls out and say so in the report — ollama chooses blindly and says nothing.
+ */
+function fitToWindow(messages, { numCtx = 8192, numPredict = 1200 } = {}) {
+  const list = Array.isArray(messages) ? messages.slice() : [];
+  if (list.length === 0) return { messages: list, report: null };
+  const budget = require('./package').inputBudgetChars({ num_ctx: numCtx, num_predict: numPredict });
+  const size = () => list.reduce((n, m) => n + String((m && m.content) || '').length, 0);
+  const before = size();
+  if (before <= budget) return { messages: list, report: null };
+  let droppedTurns = 0, systemCut = 0, finalCut = 0;
+  // 1) oldest history first: everything between the system head and the final message is history.
+  while (size() > budget && list.length > 2) { list.splice(1, 1); droppedTurns++; }
+  // 2) system middle-cut: keep the head (protocols/identity/permissions) and the tail (HOW TO
+  //    REPLY + recency nudges), drop from between with a marker the model can see.
+  const MARK = '\n[… context trimmed to fit the local window …]\n';
+  const midCut = (text, keepTotal, headShare) => {
+    const s = String(text || '');
+    if (s.length <= keepTotal) return { text: s, cut: 0 };
+    const head = Math.floor(keepTotal * headShare), tail = keepTotal - head;
+    return { text: s.slice(0, head) + MARK + s.slice(-tail), cut: s.length - keepTotal };
+  };
+  if (size() > budget && list.length >= 1) {
+    const sys = list[0];
+    const others = size() - String(sys.content || '').length;
+    const keep = Math.max(2400, budget - others);
+    const r = midCut(sys.content, keep, 0.65);
+    sys.content = r.text; systemCut = r.cut;
+  }
+  // 3) last resort — a single oversized final message (giant paste / inbound flood).
+  if (size() > budget && list.length >= 2) {
+    const fin = list[list.length - 1];
+    const others = size() - String(fin.content || '').length;
+    const keep = Math.max(1200, budget - others);
+    const r = midCut(fin.content, keep, 0.6);
+    fin.content = r.text; finalCut = r.cut;
+  }
+  return { messages: list, report: { before, after: size(), budget, droppedTurns, systemCut, finalCut } };
+}
+
+/**
  * Build the reflection message array. Single user-role message containing the
  * full reflection instruction with the transcript inlined.
  */
@@ -550,4 +603,4 @@ function buildReflectionPrompt({ userName, turnsSinceLastReflection }) {
   return [{ role: 'user', content: promptText }];
 }
 
-module.exports = { buildChatPrompt, buildReflectionPrompt, buildAwarenessBlock, BOOTSTRAP, REFLECTION, BASE_PERSONA };
+module.exports = { buildChatPrompt, buildReflectionPrompt, buildAwarenessBlock, fitToWindow, BOOTSTRAP, REFLECTION, BASE_PERSONA };

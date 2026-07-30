@@ -7591,11 +7591,24 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     } catch (e) { console.error('[main] cloud reply failed:', e.message); }
   }
 
+  // FIT THE LOCAL WINDOW (2026-07-30): the chat prompt grew to straddle num_ctx 8192 — a prompt
+  // just under it leaves a 30-90 token sliver (every reply from 10:48 stored truncated=1, one say
+  // was 29 chars); just over it, ollama silently keeps the LAST half-window and the protocols/
+  // identity/tag-contract at the system HEAD are what die. Fit is OURS: oldest turns fall first
+  // (WHERE-WE-ARE carries the arc), the system middle cuts with a visible marker, and the log
+  // says exactly what fell. num_predict below makes the generation reserve real.
+  let _localMessages = messages;
+  const LOCAL_NUM_PREDICT = 1200;
+  try {
+    const fit = require('./lib/context').fitToWindow(messages, { numCtx: 8192, numPredict: LOCAL_NUM_PREDICT });
+    _localMessages = fit.messages;
+    if (fit.report) console.warn(`[fit] local prompt ${fit.report.before}ch > ${fit.report.budget}ch budget — dropped ${fit.report.droppedTurns} old turn(s), system -${fit.report.systemCut}ch, final -${fit.report.finalCut}ch → ${fit.report.after}ch`);
+  } catch (e) { console.error('[fit] local fit failed — sending unfitted:', e.message); }
   try {
     if (replyWriter !== MODEL) { /* the cloud already wrote it — skip the local generation entirely */ }
     else await streamChat({
       model: MODEL,
-      messages,
+      messages: _localMessages,
       onToken: (chunk) => parser.feed(chunk),
       inactivityMs: 180000,   // generous: a cold model load under GPU pressure can delay the first token
       // think:false — the front model is a VOICE-RENDERER bound to the <think>/<say> tag contract. A
@@ -7609,7 +7622,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       // so the reply MUST too. ollama fixes num_ctx at load time → a mismatched ctx cold-reloads the model
       // (the 23–38s VRAM churn). Long deliverables live in the dossier file, not the chat reply, so 8192
       // is plenty here; raising it is the front-num_ctx centralization slice. One size ⇒ loads once, stays warm.
-      options: { num_ctx: 8192 }
+      options: { num_ctx: 8192, num_predict: LOCAL_NUM_PREDICT }
     });
   } catch (err) {
     // A stall BEFORE the first token is almost always the local model cold-loading (evict/reload
@@ -7621,7 +7634,7 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
       console.warn('[main] reply stalled before first token (model cold-load?) — retrying once');
       parser = new TagStreamParser({ onSayToken: (token) => { try { _streamFilter.feed(token); } catch {} } });
       try {
-        await streamChat({ model: MODEL, messages, onToken: (chunk) => parser.feed(chunk), inactivityMs: 180000, think: false, options: { num_ctx: 8192 } });
+        await streamChat({ model: MODEL, messages: _localMessages, onToken: (chunk) => parser.feed(chunk), inactivityMs: 180000, think: false, options: { num_ctx: 8192, num_predict: LOCAL_NUM_PREDICT } });
       } catch (err2) {
         console.error('[main] reply retry failed:', err2.message);
         try { sendError('Sorry — that hung on me for a second. Mind saying that again?'); } catch {}
