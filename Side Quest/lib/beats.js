@@ -104,19 +104,27 @@ function bodyLabel(name) {
 // that owned the browser for days per state. One shared facet plan + one goal builder so every
 // elected tier validates the same way (drift-proof). The deep-dossier machinery still exists for
 // DIRECTED asks (main.js single-target dossier path) — it just is not the idle sweep's default.
+// Facets are SHORT, content-shaped labels on purpose (boot118 finding): the coverage detector
+// (canvas_emit.coveredFacets) credits a facet only when ≥50% of its keywords appear in the
+// deliverable — a facet written as an INSTRUCTION ("ballotpedia-class reference", county-only
+// examples) can never be credited by correct city prose, so real work was logged as FALSE
+// ABSENCE (CT 1 → RI 3 unfound, climbing). The discipline lives in validationGoal below, which
+// rides every pass prompt; the facet text is what the RESULT will actually talk about.
 const VALIDATION_FACETS = [
-  'the CURRENT ROSTER — every elected official of this jurisdiction by NAME and office/seat (the governing board AND the other elected offices, e.g. a county\'s sheriff / clerk / assessor / treasurer / district attorney), confirmed against the official government source',
-  'CORROBORATION — the roster cross-checked once against an independent source (news, a ballotpedia-class reference, or the state election authority); note any disagreement between the two',
-  'CHANGES — vacancies, resignations, appointments, recalls, and recent or upcoming elections that alter who holds any seat',
-  'the OFFICIAL CONTACT POINT — the body\'s public office address, main phone, and official website contact page (the office\'s door, not a per-person contact hunt)',
+  'current roster — every officeholder named, with office and seat',
+  'corroborated against an independent source',
+  'changes — vacancies, appointments, upcoming elections',
+  'official contact point — office address, phone, website',
 ];
 
 function validationGoal(scope) {
   return `VALIDATE the elected officials of ${scope} — confirm WHO currently holds every elected office `
-    + `against the official government source, cross-check once against an independent source, and flag `
-    + `vacancies, changes, and discrepancies. This is a roster VALIDATION sweep, not a dossier: capture `
-    + `officeholder names, offices, and the body's official contact point, then MOVE ON. Anything ambiguous `
-    + `or contested gets flagged for deeper follow-up rather than ground out here.`;
+    + `against the official government source, cross-check once against an independent source (news, a `
+    + `ballotpedia-class reference, or the state election authority), and flag vacancies, changes, and `
+    + `discrepancies. This is a roster VALIDATION sweep, not a dossier: capture officeholder names, `
+    + `offices, and the body's public contact point (the office's door — address, phone, website — `
+    + `never a per-person contact hunt), then MOVE ON. Anything ambiguous or contested gets flagged `
+    + `for deeper follow-up rather than ground out here.`;
 }
 
 // Enumerate the county-commission worklist for a state → researchable target strings. Each names the
@@ -151,7 +159,8 @@ function countyCommissionBeat(stateCode) {
     depth: 'validate',
     facets: VALIDATION_FACETS,
     goal: validationGoal(`every ${noun} in ${stateName} — all ${targets.length} ${nounPlural}, each with its `
-      + `governing board and county-elected offices`),
+      + `governing board AND the other county-elected offices (sheriff, clerk, assessor, treasurer, `
+      + `district attorney, elected judges)`),
     enumerate: () => targets,
     universeSize: () => targets.length,
   };

@@ -29,12 +29,25 @@ ok(b.enumerate().length === 67, 'enumerate() returns the worklist');
 // not grind per-person dossiers. That is what walked every county in the country and owned the browser.
 ok(b.depth === 'validate', 'beat is validate-depth (roster validation, not a dossier grind)');
 ok(Array.isArray(b.facets) && b.facets.length <= 5, `validation facet plan is SHORT (${(b.facets || []).length} facets — 2-3 passes per body, then move on)`);
-ok(b.facets.some(f => /CURRENT ROSTER/i.test(f)), 'validation confirms the current roster by name and office');
-ok(b.facets.some(f => /CORROBORATION/i.test(f)), 'validation cross-checks once against an independent source');
-ok(b.facets.some(f => /CHANGES/i.test(f)), 'validation flags vacancies/appointments/elections');
+ok(b.facets.some(f => /current roster/i.test(f)), 'validation confirms the current roster by name and office');
+ok(b.facets.some(f => /corroborat/i.test(f)), 'validation cross-checks once against an independent source');
+ok(b.facets.some(f => /changes/i.test(f)), 'validation flags vacancies/appointments/elections');
 ok(!b.facets.some(f => /A-grade/i.test(f)), 'CRITICAL: no per-person A-grade contact hunt in the idle sweep');
-ok(b.facets.some(f => /not a per-person contact hunt/i.test(f)), 'contact facet targets the OFFICE door, not the people');
+ok(/never a per-person contact hunt/i.test(b.goal), 'the goal targets the OFFICE door, not the people');
 ok(/VALIDATE/i.test(b.goal) && /not a dossier/i.test(b.goal), 'goal states the validation-not-dossier contract');
+// DETECTOR FIT (boot118: climbing false absences — CT 1 → RI 3 unfound): every validation facet
+// must be CREDITABLE by the coverage detector from realistic result prose, or correct work gets
+// logged as absence. This binds beats' facet text to canvas_emit.coveredFacets THROUGH the seam.
+{
+  const ce = require('../studio/canvas_emit');
+  const prose = `## City of Example\nThe current roster: Mayor Jane Doe and every officeholder named below with office and seat — `
+    + `council members A. Smith (Seat 1), B. Jones (Seat 2). Corroborated against an independent source (AL.com coverage of the `
+    + `swearing-in). Changes: no vacancies; two appointments in March; upcoming elections November 2026. Official contact point: `
+    + `office address 710 20th St N, phone (205) 254-2000, website example.gov.`;
+  const credited = ce.coveredFacets(prose, beats.VALIDATION_FACETS);
+  ok(credited.length === beats.VALIDATION_FACETS.length,
+    `CRITICAL: realistic validation prose credits ALL ${beats.VALIDATION_FACETS.length} facets (got ${credited.length} — an uncreditable facet manufactures false absences)`);
+}
 
 // --- coverage: fuzzy-match covered names to worklist targets ---
 const c0 = beats.coverageOf(t, []);
@@ -123,8 +136,8 @@ ok(beats.coverageOf(flCities.slice(0, 10), flCities.slice(0, 10)).pct === 100, '
 // the combined elected-officials decomposition = county tier + municipal tier
 const all = beats.electedOfficialsSubBeats();
 ok(all.some(b => b.id.startsWith('county-commissions-')) && all.some(b => b.id.startsWith('municipalities-')), 'combined roster carries county + municipal tiers');
-// validation still reaches the OTHER county-elected offices (sheriff, clerk, assessor, DA) — by NAME
-ok(beats.countyCommissionBeat('FL').facets.some(f => /sheriff/i.test(f) && /clerk/i.test(f)), 'county validation still confirms sheriff/clerk/assessor/DA (all elected offices, by name)');
+// validation still reaches the OTHER county-elected offices (sheriff, clerk, assessor, DA) — via the goal
+ok(/sheriff/i.test(beats.countyCommissionBeat('FL').goal) && /clerk/i.test(beats.countyCommissionBeat('FL').goal), 'county validation still names sheriff/clerk/assessor/DA (in the goal, where instruction lives)');
 
 // --- CAPITAL + MAJOR CITIES rung (the ladder head) + the STATE LADDER structure ---
 {
