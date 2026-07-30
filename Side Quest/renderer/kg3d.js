@@ -3385,6 +3385,69 @@ if (logBtn && logDock) {
   logBtn.addEventListener('click', () => { logOpen = !logOpen; try { localStorage.setItem('kg3d.log', logOpen ? '1' : '0'); } catch (e) {} paintLog(); });
 }
 
+// ---- SELF-DEVELOPMENT FEED (left dock, the memory log's matched column): the obs bus — the autonomous
+// system observing itself (docs/OBS_INTERFACE_HOOKS.md). Backfill WALKS the id cursor over obs:recent
+// (sinceId:0 returns the OLDEST rows, so one poll is never the recent tail; ids are authoritative), then
+// rides the live obs:event push (push events carry no id — display only). Live events arriving during the
+// walk are buffered and flushed after it, deduped by ts+text against what the poll already rendered.
+// Same discipline as the memory log: textContent only (XSS-safe), capped ring. Unknown lanes/kinds render
+// generically rather than being dropped — the contract says new lanes will appear. ----
+const selfDock = document.getElementById('selfdock'), selfFeed = document.getElementById('selffeed');
+const selfBtn = document.getElementById('selfBtn'), selfCount = document.getElementById('selfcount');
+const SELF_CAP = 250;
+const LANE_COLOR = { subc: '#c4b5fd', directed: '#7dd3fc', research: '#34d399', window: '#fbbf24', rehearsal: '#fb923c',
+                     analysis: '#2dd4bf', 'doc-set': '#a3e635', harvest: '#f472b6', watch: '#facc15', anomaly: '#f87171' };
+const OBS_KIND_COLOR = { need: '#fda4af', anomaly: '#f87171', status: '#facc15' };
+let _selfN = 0, _obsLastId = 0;
+function selfRow(evt) {
+  if (!selfFeed || !evt || !evt.text) return;
+  if (evt.id != null) { if (evt.id <= _obsLastId) return; _obsLastId = evt.id; }
+  const laneCol = LANE_COLOR[evt.lane] || '#94a3b8';
+  const d = new Date(evt.ts || Date.now());
+  const row = document.createElement('div');
+  row.className = 'logrow';
+  row.style.borderLeftColor = evt.level === 'error' ? '#f87171' : evt.level === 'warn' ? '#fbbf24' : laneCol;
+  const mk = (cls, text, color) => { const s = document.createElement('span'); s.className = cls; s.textContent = text; if (color) s.style.color = color; return s; };
+  row.appendChild(mk('t', pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds())));
+  const lane = mk('db', evt.lane || '?', laneCol); lane.style.background = laneCol + '26'; row.appendChild(lane);
+  if (evt.kind && evt.kind !== 'line') row.appendChild(mk('k', evt.kind, OBS_KIND_COLOR[evt.kind] || '#94a3b8'));
+  if (evt.level === 'warn' || evt.level === 'error') {
+    const tag = mk('nd', evt.level, row.style.borderLeftColor); tag.style.borderColor = row.style.borderLeftColor; row.appendChild(tag);
+  }
+  row.appendChild(mk('a', evt.text + (evt.ref ? ' · ' + evt.ref : '')));
+  selfFeed.insertBefore(row, selfFeed.firstChild);
+  _selfN++; if (selfCount) selfCount.textContent = String(_selfN);
+  while (selfFeed.childElementCount > SELF_CAP) selfFeed.removeChild(selfFeed.lastChild);
+}
+let _selfReady = false; const _selfPre = [];
+try { if (window.sq && window.sq.obs && typeof window.sq.obs.onEvent === 'function') window.sq.obs.onEvent((evt) => { _selfReady ? selfRow(evt) : _selfPre.push(evt); }); } catch (e) {}
+(async () => {
+  const sigs = new Set();
+  try {
+    if (window.sq && window.sq.obs && typeof window.sq.obs.recent === 'function') {
+      const all = [];
+      for (let page = 0, cursor = 0; page < 50; page++) {          // whole store is bounded at 20k rows — 50×500 covers it
+        const r = await window.sq.obs.recent({ sinceId: cursor, limit: 500 });
+        const evs = (r && r.ok && Array.isArray(r.events)) ? r.events : [];
+        if (!evs.length) break;
+        for (const e of evs) all.push(e);
+        cursor = evs[evs.length - 1].id;
+        if (evs.length < 500) break;
+      }
+      for (const e of all.slice(-SELF_CAP)) { selfRow(e); sigs.add(e.ts + '|' + e.text); }
+      if (all.length) _obsLastId = Math.max(_obsLastId, all[all.length - 1].id);
+    }
+  } catch (e) {}
+  for (const e of _selfPre) if (!sigs.has(e.ts + '|' + e.text)) selfRow(e);
+  _selfPre.length = 0; _selfReady = true;
+})();
+if (selfBtn && selfDock) {
+  let selfOpen = true; try { selfOpen = localStorage.getItem('kg3d.self') !== '0'; } catch (e) {}
+  const paintSelf = () => { selfDock.classList.toggle('hidden', !selfOpen); selfBtn.classList.toggle('on', selfOpen); document.body.classList.toggle('selfopen', selfOpen); };
+  paintSelf();
+  selfBtn.addEventListener('click', () => { selfOpen = !selfOpen; try { localStorage.setItem('kg3d.self', selfOpen ? '1' : '0'); } catch (e) {} paintSelf(); });
+}
+
 // ---- search dropdown + navigation wiring ----
 const esc = (s) => String(s == null ? '' : s).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
 let hits = [], activeIdx = 0, _searchT = null;

@@ -184,6 +184,14 @@ contextBridge.exposeInMainWorld('sq', {
     devActivity: (payload) => ipcRenderer.invoke('kg:dev-activity', payload)
   },
 
+  // Observability bus — the self-development feed (docs/OBS_INTERFACE_HOOKS.md): the autonomous system
+  // observing itself. Read-only from here: catch-up poll on the id cursor + the live obs:event push
+  // (push events carry NO id — display only; ids are authoritative on the poll path).
+  obs: {
+    recent: (opts) => ipcRenderer.invoke('obs:recent', opts || {}),
+    onEvent: (cb) => { const h = (_e, evt) => { try { cb(evt); } catch (e) {} }; ipcRenderer.on('obs:event', h); return () => ipcRenderer.removeListener('obs:event', h); },
+  },
+
   // Reader / Library — read-only corpus reader on the document substrate.
   reader: {
     projects: () => ipcRenderer.invoke('reader:projects'),

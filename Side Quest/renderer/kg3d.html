@@ -33,16 +33,27 @@
     /* right-side dock: a live, color-coded running log of every memory (short + long term) DB action */
     #logdock { position: fixed; top: 0; right: 0; width: 340px; height: 100vh; z-index: 14; display: flex; flex-direction: column;
                background: linear-gradient(#0a0c12f7, #0a0c12ee); border-left: 1px solid #1c2330; box-shadow: -14px 0 34px #0007; }
-    #logdock.hidden { display: none; }
-    #logdock .lh { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #1c2330;
+    /* left-side dock (the matched column): the SELF-DEVELOPMENT feed — the obs bus watching the autonomous
+       system (docs/OBS_INTERFACE_HOOKS.md): her log lines, anomaly calls, need minting, rehearsal/analysis runs */
+    #selfdock { position: fixed; top: 0; left: 0; width: 340px; height: 100vh; z-index: 14; display: flex; flex-direction: column;
+                background: linear-gradient(#0a0c12f7, #0a0c12ee); border-right: 1px solid #1c2330; box-shadow: 14px 0 34px #0007; }
+    /* the fixed head + bottom-left hud/card slide right so the left dock never buries them */
+    body.selfopen .head { left: 348px; }
+    body.selfopen #hud { left: 352px; }
+    body.selfopen #card { left: 352px; }
+    #logdock.hidden, #selfdock.hidden { display: none; }
+    #logdock .lh, #selfdock .lh { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #1c2330;
                    font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: #8395ad; }
-    #logdock .lh .dot { width: 7px; height: 7px; border-radius: 50%; background: #34d399; box-shadow: 0 0 7px #34d399; animation: lpulse 2s ease-in-out infinite; }
+    #logdock .lh .dot, #selfdock .lh .dot { width: 7px; height: 7px; border-radius: 50%; background: #34d399; box-shadow: 0 0 7px #34d399; animation: lpulse 2s ease-in-out infinite; }
+    #selfdock .lh .dot { background: #a78bfa; box-shadow: 0 0 7px #a78bfa; }
     @keyframes lpulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
-    #logdock .lh .sp { margin-left: auto; color: #4a5568; font-size: 10px; text-transform: none; letter-spacing: 0; }
-    #logdock .lh .lg { display: flex; gap: 9px; font-size: 9px; text-transform: none; letter-spacing: 0; }
-    #logdock .lh .lg b { font-weight: 700; } #logdock .lh .lg .v { color: #c4b5fd; } #logdock .lh .lg .s { color: #7dd3fc; }
-    #logfeed { flex: 1; overflow-y: auto; padding: 3px 0; font: 11.5px ui-monospace, SFMono-Regular, monospace; }
-    #logfeed::-webkit-scrollbar { width: 8px; } #logfeed::-webkit-scrollbar-thumb { background: #232a36; border-radius: 4px; }
+    #logdock .lh .sp, #selfdock .lh .sp { margin-left: auto; color: #4a5568; font-size: 10px; text-transform: none; letter-spacing: 0; }
+    #logdock .lh .lg, #selfdock .lh .lg { display: flex; gap: 9px; font-size: 9px; text-transform: none; letter-spacing: 0; }
+    #logdock .lh .lg b, #selfdock .lh .lg b { font-weight: 700; } #logdock .lh .lg .v { color: #c4b5fd; } #logdock .lh .lg .s { color: #7dd3fc; }
+    #selfdock .lh .lg .w { color: #fbbf24; } #selfdock .lh .lg .e { color: #f87171; }
+    #logfeed, #selffeed { flex: 1; overflow-y: auto; padding: 3px 0; font: 11.5px ui-monospace, SFMono-Regular, monospace; }
+    #logfeed::-webkit-scrollbar, #selffeed::-webkit-scrollbar { width: 8px; }
+    #logfeed::-webkit-scrollbar-thumb, #selffeed::-webkit-scrollbar-thumb { background: #232a36; border-radius: 4px; }
     .logrow { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 3px 7px; padding: 3px 12px 4px 10px; border-left: 2px solid transparent; line-height: 1.45; }
     .logrow:hover { background: #ffffff08; }
     .logrow .t { color: #47526a; font-size: 10px; flex: none; padding-top: 1px; }
@@ -90,6 +101,7 @@
     <button class="btn" id="popBtn" title="Pop her out into her own window">Pop out &#8599;</button>
     <button class="btn" id="faceBtn" title="Face painted across the cloud in light (superseded by the skin shape)">Face</button>
     <button class="btn on" id="logBtn" title="Toggle the live memory-activity log">Log</button>
+    <button class="btn on" id="selfBtn" title="Toggle the self-development feed — the program observing itself (obs bus)">Self</button>
   </div>
   <div id="overlay">Loading corpus…</div>
   <div id="hud"></div>
@@ -98,6 +110,10 @@
   <div id="logdock">
     <div class="lh"><span class="dot"></span>Memory activity<span class="lg"><span class="v"><b>ST</b> short</span><span class="s"><b>LT</b> long</span></span><span class="sp" id="logcount">0</span></div>
     <div id="logfeed"></div>
+  </div>
+  <div id="selfdock">
+    <div class="lh"><span class="dot"></span>Self development<span class="lg"><span class="w"><b>W</b> warn</span><span class="e"><b>E</b> err</span></span><span class="sp" id="selfcount">0</span></div>
+    <div id="selffeed"></div>
   </div>
   <script src="vendor/kg3d.bundle.js"></script>
   <!-- the SAME face model the avatar runs (UMD → window.AvatarState): expression presets, the amplitude→mouth
