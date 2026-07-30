@@ -86,6 +86,26 @@ const msgs = [{ role: 'user', content: 'think about something interesting' }];
     ok(badPos && badPos.position === null, 'a non-opinion POSITION (not "I …") is refused — work-log never colonizes identity');
   }
 
+  // --- ONE OPEN SELF-DIRECTED THREAD (2026-07-30, boot133): paraphrased re-derivations slip the
+  // lexical ledger (3 wordings of one Georgia-boards tension, overlap ~0.3 vs 0.6 gate), so the
+  // routing throttles behaviorally: while a subc-spawned thread is open, the next spawn defers. ---
+  {
+    const dbm = require('../lib/db');
+    const a = dbm.insertOpenThread({ content: 'Investigate: paraphrase one of the tension' });
+    dbm.setMeta(`thread.${a.id}.spawned_from`, 'subc');
+    const hit = dbm.getOpenSpawnedThread('subc');
+    ok(hit && hit.id === a.id, 'an open subc-spawned thread is visible to the spawn guard');
+    ok(!dbm.getOpenSpawnedThread('3617'), 'the guard scopes by source — run-closure spawns do not block subc');
+    const c = dbm.insertOpenThread({ content: 'Investigate: a second self-directed angle' });
+    dbm.setMeta(`thread.${c.id}.spawned_from`, 'subc');
+    dbm.markOpenThreadStatus(a.id, 'stalled');
+    const hit2 = dbm.getOpenSpawnedThread('subc');
+    ok(hit2 && hit2.id === c.id, 'a stalled (parked) thread stops blocking — throttle is to completion, not failure');
+    const umbrella = dbm.insertOpenThread({ content: 'Investigate: the umbrella thread' });
+    dbm.mergeOpenThread(c.id, umbrella.id, { reason: 'duplicate phrasing (smoke)' });
+    ok(!dbm.getOpenSpawnedThread('subc'), 'a merged (parented) duplicate no longer blocks the next spawn');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   try { require('../lib/db').getDb().close(); } catch {}
   try { require('fs').unlinkSync(process.env.SQ_DB_PATH); } catch {}

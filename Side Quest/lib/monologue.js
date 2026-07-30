@@ -1321,8 +1321,15 @@ async function _runOneTick() {
               try {
                 const act = parsed.action;
                 if (act.kind === 'research' && (act.text || parsed.tension).length > 12) {
-                  const r = db.insertOpenThread({ content: `Investigate: ${(act.text || parsed.tension).replace(/\s+/g, ' ').trim()}` });
-                  if (r && r.id) { try { db.setMeta(`thread.${r.id}.spawned_from`, 'subc'); } catch {} console.log(`[subc] synthesis → research thread #${r.id}`); }
+                  // One self-directed thread at a time: paraphrased re-derivations slip the lexical
+                  // ledger, so the spawn throttles to her own completion rate (db.getOpenSpawnedThread).
+                  const prior = db.getOpenSpawnedThread('subc');
+                  if (prior) {
+                    console.log(`[subc] research deferred — self-directed thread #${prior.id} still open (one at a time)`);
+                  } else {
+                    const r = db.insertOpenThread({ content: `Investigate: ${(act.text || parsed.tension).replace(/\s+/g, ' ').trim()}` });
+                    if (r && r.id) { try { db.setMeta(`thread.${r.id}.spawned_from`, 'subc'); } catch {} console.log(`[subc] synthesis → research thread #${r.id}`); }
+                  }
                 } else if ((act.kind === 'inquiry' || act.kind === 'experiment') && act.text.length > 12) {
                   let bank = []; try { bank = JSON.parse(db.getMeta('autonomy.harvest_recent') || '[]'); } catch {}
                   const dup = bank.some((e) => (e.leads || []).some((l) => String(l).toLowerCase() === act.text.toLowerCase()));

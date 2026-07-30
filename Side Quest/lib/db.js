@@ -1265,6 +1265,20 @@ function setOpenThreadParent(id, parentId) {
   return { id, parentId };
 }
 
+// ONE OPEN SELF-DIRECTED THREAD AT A TIME (boot133): the synthesis re-derives one tension in
+// fresh wording faster than any lexical ledger catches it (three paraphrases of the Georgia
+// county-boards gap in one evening; token overlap ~0.3 against a 0.6 gate), so the throttle is
+// behavioral — while a spawned thread of this source is still open, the next spawn defers, and
+// her spawn rate is bounded by her completion rate. Stalled threads are PARKED, not open: a
+// spawn throttles to completion, never to failure.
+function getOpenSpawnedThread(source) {
+  return getDb().prepare(`
+    SELECT t.* FROM open_threads t
+    JOIN meta m ON m.key = 'thread.' || t.id || '.spawned_from' AND m.value = ?
+    WHERE t.status IN ('pending','active') AND t.parent_id IS NULL
+    ORDER BY t.id ASC LIMIT 1`).get(String(source));
+}
+
 function markOpenThreadStatus(id, status, { reason = null } = {}) {
   const now = Date.now();
   const cur = getDb().prepare('SELECT progress_notes FROM open_threads WHERE id = ?').get(id);
@@ -2561,6 +2575,7 @@ module.exports = {
   incrementThreadMention,
   incrementThreadAction,
   mergeOpenThread,
+  getOpenSpawnedThread,
   insertOpenQuestion,
   getPendingOpenQuestions,
   resolveOpenQuestions,
