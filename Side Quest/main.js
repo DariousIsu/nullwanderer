@@ -12593,7 +12593,14 @@ async function runDirectedResearchPass(focus) {
     // and inventing is forbidden, so the model honestly fell back to "(gathered notes)" on
     // everything. Stamp the pages THIS pass read into the notes stream, right above its material.
     let _passPages = [];
-    try { const v2 = JSON.parse(db.getMeta(`focus.${focus.id}.visited`) || '[]'); _passPages = v2.slice(visited.length).filter((u) => /^https?:/i.test(String(u))); } catch {}
+    try {
+      // Delta by SET-difference, not length: visited caps at 40, so once a long run hits the cap
+      // the length never grows and a length-based slice is empty forever (SPP: 20 fallbacks, 0
+      // URLs bound — the markers never stamped).
+      const _preVisited = new Set(visited);
+      const v2 = JSON.parse(db.getMeta(`focus.${focus.id}.visited`) || '[]');
+      _passPages = v2.filter((u) => !_preVisited.has(u) && /^https?:/i.test(String(u)));
+    } catch {}
     if (p.body) target.raw = `${target.raw}\n\n${_passPages.length ? `[pages read this pass: ${_passPages.slice(0, 4).join(' · ')}]\n` : ''}${p.body}`.slice(-16000);
     if (p.facet) target.facets = (target.facets || []).concat(p.facet).slice(-12);
     // ONE live-growing canvas block per target (the "building-project document"): stable block_id so the
