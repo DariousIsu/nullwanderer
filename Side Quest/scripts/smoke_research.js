@@ -61,6 +61,16 @@ ok(r.MAX_PASSES_VALIDATE < r.MAX_PASSES_PER_TARGET, 'validate cap sits BELOW the
   const sys = p[0].content, usr = p[1].content;
   ok(/how it works/i.test(sys) && /causal link/i.test(sys), 'understanding prompt demands mechanism + causal link, not a contact card');
   ok(/Tensions & unknowns/i.test(sys) && /OPEN: /.test(sys), 'it demands tensions + OPEN questions');
+  // AN OPEN QUESTION IS A GAP IN UNDERSTANDING, NOT AN ERRAND (Lucas 2026-07-30: "she will need to
+  // discover what she doesn't know to even begin"). Measured on the county runs: 9/9 and 27/27
+  // ledger questions were locate-shaped ("where is the roster published", "which page lists staff")
+  // — retrieval errands wearing the question form, so the run could never deepen, only fetch.
+  ok(/what you now realize you DON'T KNOW/.test(sys), 'the OPEN line asks for the gap in her own understanding');
+  ok(/HOW something works/.test(sys) && /WHY it is that way/.test(sys) && /HOW MUCH/.test(sys) && /WHAT DEPENDS ON IT/.test(sys),
+    'it names the learning shapes: mechanism, cause, quantity, dependency');
+  ok(/is a FETCH, not an open question/.test(sys) && /where is X published/.test(sys),
+    'it REFUSES the locate-shaped question by name (the measured failure mode)');
+  ok(/write no OPEN line at all/.test(sys), 'no genuine gap → no question (an honest quiet beats a manufactured errand)');
   ok(/never invent a name or number/i.test(sys) && /read as inference/i.test(sys), 'grounding survives translated: notes faithful, inference MARKED as inference');
   ok(/THE GOAL: grid pressure memo/.test(usr) && /ALREADY IN OUR GRAPH/.test(usr), 'goal + prior knowledge ride the synthesis');
   const oq = r.parseOpenQuestions('## X\nbody\nOPEN: does the queue reform bind before 2027?\nOPEN: which states bear the cost?\nOPEN: a\nOPEN: fourth question that must be dropped by the cap');
