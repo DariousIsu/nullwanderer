@@ -72,6 +72,36 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   // --- filenames ---
   ok(/^\d{4}-\d{2}-\d{2}-parish-coverage$/.test(pkg.fileSlug('Parish Coverage', 1753200000000)), 'file slug is dated + slugged');
 
+  // --- O5 SELF-CHECK: re-open what was just produced (an artifact you didn't re-open is a guess) ---
+  {
+    const os = require('os'); const fsn = require('fs'); const path = require('path');
+    const dir = fsn.mkdtempSync(path.join(os.tmpdir(), 'pkg_check_'));
+    const src = 'Analysis with a citation: https://example.com/roster and more prose here to carry weight.';
+    const sections = { analysis: src };
+    const goodHtml = pkg.renderPackaged({ type: 'policy_brief', title: 'Check Me', sections, now: 1753200000000 });
+    const htmlPath = path.join(dir, 'doc.html');
+    fsn.writeFileSync(htmlPath, goodHtml, 'utf8');
+    const pdfPath = path.join(dir, 'doc.pdf');
+    fsn.writeFileSync(pdfPath, '%PDF-1.4\n' + '/Type /Page\n'.repeat(2) + 'x'.repeat(1200));
+    const good = pkg.selfCheck({ type: 'policy_brief', sections, sourceMarkdown: src, htmlPath, pdfPath });
+    ok(good.ok, `a healthy artifact passes every check (${good.summary})`);
+    // Mutilated render: the section title deleted → the check catches what the announce would have hidden.
+    fsn.writeFileSync(htmlPath, goodHtml.replace(/Analysis/g, ''), 'utf8');
+    const mut = pkg.selfCheck({ type: 'policy_brief', sections, sourceMarkdown: src, htmlPath, pdfPath });
+    ok(!mut.ok && /section/.test(mut.summary), 'a render missing its section title FAILS honestly');
+    // Lost citation: the package dropped the URL → a rewrite, not a packaging.
+    fsn.writeFileSync(htmlPath, goodHtml.replace(/https:\/\/example\.com\/roster/g, ''), 'utf8');
+    const lost = pkg.selfCheck({ type: 'policy_brief', sections, sourceMarkdown: src, htmlPath, pdfPath });
+    ok(!lost.ok && /citations/.test(lost.summary), 'a render that lost a cited link FAILS honestly');
+    // Pageless PDF → fail.
+    fsn.writeFileSync(htmlPath, goodHtml, 'utf8');
+    fsn.writeFileSync(pdfPath, '%PDF-1.4\n' + 'x'.repeat(1200));
+    const nopg = pkg.selfCheck({ type: 'policy_brief', sections, sourceMarkdown: src, htmlPath, pdfPath });
+    ok(!nopg.ok && /pdf/.test(nopg.summary), 'a pageless PDF FAILS the re-open');
+    ok(!pkg.selfCheck({ type: 'policy_brief', sections, sourceMarkdown: src, htmlPath: path.join(dir, 'missing.html') }).ok, 'a missing file can never announce success');
+    try { fsn.rmSync(dir, { recursive: true, force: true }); } catch {}
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

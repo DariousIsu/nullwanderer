@@ -204,8 +204,55 @@ function renderPackaged({ type, title, sections, verifyNote = '', now = Date.now
   return html;
 }
 
+/** POST-RENDER SELF-CHECK (O5 — the harness rule: an artifact you didn't re-open is a guess).
+ *  Deterministic re-open of what was JUST produced: the files exist and are non-trivial, the PDF
+ *  actually has pages, every section the sectionizer produced appears in the rendered HTML by its
+ *  title, and every cited link from the SOURCE survived into the render (a package that lost its
+ *  citations is a rewrite). Pure verdict — the caller decides what the announce says; a failed
+ *  check must report the MISS, never success. */
+function selfCheck({ type, sections = {}, sourceMarkdown = '', htmlPath = null, pdfPath = null, deps = {} } = {}) {
+  const fs = deps.fs || require('fs');
+  const checks = [];
+  const add = (name, ok, note = '') => checks.push({ name, ok: !!ok, note: String(note).slice(0, 120) });
+  let html = '';
+  try {
+    if (htmlPath) {
+      const st = fs.statSync(htmlPath);
+      html = String(fs.readFileSync(htmlPath, 'utf8'));
+      add('html file', st.size > 500 && html.length > 500, `${st.size} bytes`);
+    } else add('html file', false, 'no html path');
+  } catch (e) { add('html file', false, e.message); }
+  const H = html.replace(/&amp;/g, '&');
+  if (pdfPath) {
+    try {
+      const st = fs.statSync(pdfPath);
+      const pages = (fs.readFileSync(pdfPath).toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
+      add('pdf', st.size > 1000 && pages > 0, `${st.size} bytes, ${pages} page(s)`);
+    } catch (e) { add('pdf', false, e.message); }
+  }
+  try {
+    const shape = require('../studio/doc_shapes').shapeFor(type);
+    for (const s of shape.sections) {
+      if (!sections[s.key] || !String(sections[s.key]).trim()) continue;   // absent input = missingSections' report, not a render failure
+      add(`section "${s.title}"`, H.includes(s.title), H.includes(s.title) ? '' : 'title not in the render');
+    }
+  } catch (e) { add('sections', false, e.message); }
+  const cites = extractCitations(sourceMarkdown).slice(0, 20);
+  if (cites.length) {
+    const lost = cites.filter((u) => !H.includes(u));
+    add('citations survive', lost.length === 0, lost.length ? `${lost.length}/${cites.length} lost (first: ${lost[0].slice(0, 60)})` : `${cites.length}/${cites.length} present`);
+  }
+  const failed = checks.filter((c) => !c.ok);
+  return {
+    ok: failed.length === 0, checks, failed,
+    summary: failed.length
+      ? `${failed.map((c) => `${c.name}${c.note ? ` (${c.note})` : ''}`).join('; ')}`
+      : `${checks.length} check(s) green (file, render, sections, citations)`,
+  };
+}
+
 module.exports = {
   detectCommand, resolveTarget, inferType, extractCitations, verifySources,
   sectionize, sectionizeWant, validateSectionize, fallbackSections, FALLBACK_MAIN,
-  titleFrom, fileSlug, renderPackaged, SHAPE_WORDS,
+  titleFrom, fileSlug, renderPackaged, selfCheck, SHAPE_WORDS,
 };

@@ -5194,15 +5194,25 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           let finalPath = htmlPath;
           try { const pdfPath = path.join(outDir, `${base}.pdf`); await htmlToPdfFile(html, pdfPath); finalPath = pdfPath; } catch (e) { console.error('[package] PDF render failed, keeping HTML:', e.message); }
           const missing = (() => { try { return require('./studio/doc_shapes').missingSections(type, sections).map((s) => s.title); } catch { return []; } })();
+          // O5 SELF-CHECK: re-open what was JUST produced (deterministic — file, pdf pages,
+          // section titles in the render, citations surviving). A failed check reports the MISS.
+          let check = null;
+          try { check = pkgLib.selfCheck({ type, sections, sourceMarkdown: target.markdown, htmlPath, pdfPath: finalPath !== htmlPath ? finalPath : null }); } catch (e) { console.error('[package] self-check threw:', e.message); }
+          console.log(`[package-doc] self-check ${check ? (check.ok ? 'ok' : 'FAILED') : 'unavailable'} — ${check ? check.summary : 'threw'}`);
           // Canvas pointer on the SOURCE tab (his chosen landing: file + canvas pointer).
           if (target.source === 'canvas' && target.tabKey) {
             try { require('./lib/canvas_docs').recordBlock({ tabKey: target.tabKey, blockId: `pkg-${Date.now().toString(36)}`, blockType: 'paragraph', data: { markdown: `📦 **Packaged** as ${shapeLabel} → \`${path.relative(__dirname, finalPath)}\`${verify.note ? ` — ${verify.note}` : ''}` } }); } catch (e) { console.error('[package] canvas pointer failed:', e.message); }
           }
           try { require('./lib/presence').notify('Zoe — document packaged', `${shapeLabel}: ${title.slice(0, 60)} → ${path.basename(finalPath)}`); } catch {}
           try { await shell.openPath(finalPath); } catch {}
+          if (check && !check.ok) {
+            done = `Packaged "${title.slice(0, 80)}" as a ${shapeLabel}, but re-opening the artifact FAILED its self-check: ${check.summary}. The file is at ${path.relative(__dirname, finalPath)} — treat it as unverified; say the word and I'll re-render.`;
+          } else {
           done = `Packaged "${title.slice(0, 80)}" as a ${shapeLabel} → ${path.relative(__dirname, finalPath)}.`
             + (verify.checked ? ` ${verify.note}` : '')
+            + (check ? ` Self-check: re-opened the artifact — ${check.summary}.` : '')
             + (missing.length ? ` Honest gap: ${missing.length} required section${missing.length === 1 ? ' is' : 's are'} not written yet (${missing.join(', ')}) — the document says so rather than hiding it. Want me to fill ${missing.length === 1 ? 'it' : 'them'} in first?` : ` All required sections are present.`);
+          }
           console.log(`[package] ${type} → ${finalPath}${verify.checked ? ` (sources ${verify.ok}/${verify.checked})` : ''}${missing.length ? ` (missing: ${missing.join(', ')})` : ''}`);
         } catch (e) { console.error('[package] failed:', e.message); }
         try {
