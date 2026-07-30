@@ -51,8 +51,14 @@ function looksLikeName(s) {
   if (/\d/.test(n)) return false;                                  // "District 3" is a seat, not a person
   if (/[@/:]|https?/i.test(n)) return false;                       // an address or URL
   const words = n.split(' ').filter(Boolean);
-  if (words.length < 2 || words.length > 5) return false;          // mononyms are almost always furniture
-  return words.every((w) => /^[A-Za-z][A-Za-z'’.\-]*$/.test(w));
+  if (words.length < 2 || words.length > 6) return false;          // mononyms are almost always furniture
+  // UNICODE LETTERS, not [A-Za-z] (the backfill dry run caught this before it wrote anything:
+  // "Josué Estrada", "José Jaime Villalobos", "Meia Chita‑Tegmark" (U+2011), "Andrew (Shan)
+  // Shanahan", and Russell “Scott” McCaw were ALL refused as page furniture). An ASCII-only screen
+  // does not filter noise — it filters non-Anglo names, which is a correctness bug and a bad one.
+  // Allowed inside a word: apostrophes (all forms), hyphens (all forms), periods, and the
+  // parens/quotes that wrap a nickname.
+  return words.every((w) => /^[("'“‘]*\p{L}[\p{L}'’‘“”".\-‑–—()]*$/u.test(w));
 }
 
 // The narrow question. One roster, one shape, an explicit escape hatch, and the reason the escape

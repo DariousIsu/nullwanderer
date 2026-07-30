@@ -16,6 +16,14 @@ const VISITED = ['https://fultoncountyga.gov/elections/board', 'search: fulton c
 ok(cc.looksLikeName('Cathy Woolard') && cc.looksLikeName('Mark A. Wingate') && cc.looksLikeName("Aaron O'Brien-Diaz"),
   'real names pass: plain, with an initial, hyphenated/apostrophed');
 ok(cc.looksLikeName('Vincent van der Berg'), 'particles and 4-word names pass');
+// REAL NAMES THE FIRST (ASCII-only) SCREEN REFUSED — caught by the backfill dry run before it
+// wrote anything. An ASCII screen does not filter noise, it filters non-Anglo names.
+ok(cc.looksLikeName('Josué Estrada') && cc.looksLikeName('José Jaime Villalobos'),
+  'diacritics pass — an ASCII-only screen was refusing real people');
+ok(cc.looksLikeName('Meia Chita‑Tegmark'), 'a non-breaking hyphen (U+2011) is still a hyphen');
+ok(cc.looksLikeName('Andrew (Shan) Shanahan') && cc.looksLikeName('Russell “Scott” McCaw'),
+  'a parenthesised or quoted nickname is part of the name');
+ok(cc.looksLikeName('Müller Schmidt') && cc.looksLikeName('Ngô Đình Diệm'), 'non-Latin-1 letters pass too');
 ok(!cc.looksLikeName('Board Members') && !cc.looksLikeName('Contact Us') && !cc.looksLikeName('Meeting Minutes'),
   'HEADINGS are refused — the furniture that sits exactly where a name would');
 ok(!cc.looksLikeName('Fulton County') && !cc.looksLikeName('Elections Department'), 'places and departments are not people');
