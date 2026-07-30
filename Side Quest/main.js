@@ -10744,6 +10744,22 @@ function _maintenanceSweep(state, beats) {
     try { stories = require('./lib/news_lane').storiesActiveInWindow(now - 48 * 3600 * 1000, { limit: 200 }) || []; } catch {}
     if (stories.length) {
       const headlines = stories.map((s) => ({ title: s && (s.title || s.headline) || '', summary: s && (s.summary || s.gist) || '' }));
+      // NEWS VIGILANCE on HIS working topics (Lucas 2026-07-30): a story/paper in progress must
+      // see related news. Match headlines to user-origin research threads; stamp the heat (read
+      // by the user-thread driver's ordering) + cache titles for the pass guidance.
+      try {
+        const uw = require('./lib/user_work');
+        for (const t of (db.getActiveOpenThreads(60, { includeStalled: false }) || [])) {
+          if (!t || (db.getMeta(`focus.${t.id}.beat`) || '').trim()) continue;
+          if (!uw.isResearchShaped(t.content)) continue;
+          const hits = uw.matchNewsToThread(t.content, headlines);
+          if (hits.length) {
+            db.setMeta(`thread.${t.id}.news_at`, String(now));
+            db.setMeta(`thread.${t.id}.news_recent`, JSON.stringify(hits));
+            console.log(`[user-work] news vigilance: ${hits.length} story(ies) touch thread #${t.id} — "${String(t.content).slice(0, 50)}"`);
+          }
+        }
+      } catch (e) { console.error('[user-work] news match failed:', e.message); }
       for (const b of touched) {
         if (!b.stateCode) continue;
         let flagged = [];
@@ -10790,6 +10806,39 @@ async function _autonomicSchedulerTick() {
   const electedPool = _electedBeats(), topicPool = _topicBeats();
 
   const focus = (() => { try { return focusLib.getCurrent(); } catch { return null; } })();
+  // ── HIS WORK OUTRANKS THE SWEEP (user-thread driver, Lucas 2026-07-30) ─────────────────────
+  // Measured: 8 user-origin research threads pending with 0 actions while the state map filled
+  // every idle window — the guard below only protects a user focus that already HOLDS the slot;
+  // nothing promoted an unstarted user thread INTO it. Before any beat is considered (and
+  // preempting a RUNNING beat, never his own focus), seed his best unstarted research thread as
+  // a directed USER focus — full cadence, browser-owning, never idle-tiered. Ordering: deadline
+  // urgency > working-topic news heat > recency (his newest ask is usually the live one).
+  {
+    const _curBeatId = (focus && focusLib.isDirected(focus)) ? ((() => { try { return (db.getMeta(`focus.${focus.id}.beat`) || '').trim(); } catch { return ''; } })()) : null;
+    if (!focus || _curBeatId) {
+      try {
+        const uw = require('./lib/user_work');
+        const threads = (db.getActiveOpenThreads(60, { includeStalled: false }) || [])
+          .filter((t) => t && !(db.getMeta(`focus.${t.id}.beat`) || '').trim() && String(db.getMeta(`focus.${t.id}.background`) || '') !== '1');
+        const cand = uw.pickUserThread(threads, {
+          now: Date.now(),
+          newsAtOf: (id) => parseInt(db.getMeta(`thread.${id}.news_at`) || '0', 10) || 0,
+        });
+        if (cand) {
+          if (_curBeatId) { try { focusLib.clear('user-work-preempt'); } catch {} console.log(`[user-work] sweep yields — ${_curBeatId} paused for his thread #${cand.id}`); }
+          let f = null; try { f = focusLib.setCurrent(cand.id, { directed: true }); } catch {}
+          if (!db.getMeta(`focus.${cand.id}.plan`)) {
+            try { await generateResearchPlan(f || cand, { goal: cand.content, targets: [], facet: '', deep: true, kind: 'entity' }); }
+            catch (e) { console.error('[user-work] plan gen failed:', e.message); }
+          }
+          kickDirectedFocusDriver();
+          console.log(`[user-work] seeded HIS research thread #${cand.id} at user cadence — "${String(cand.content).slice(0, 70)}"`);
+          _saveSchedState(state);
+          return;
+        }
+      } catch (e) { console.error('[user-work] driver failed:', e.message); }
+    }
+  }
   if (focus && focusLib.isDirected(focus)) {
     const beatId = (() => { try { return (db.getMeta(`focus.${focus.id}.beat`) || '').trim(); } catch { return ''; } })();
     if (!beatId) return;                                                            // Lucas's own task → never preempt
@@ -12386,7 +12435,18 @@ async function runDirectedResearchPass(focus) {
   try { db.setMeta('research.last_focus_id', String(focus.id)); } catch {}
   // Mid-run clarifications Lucas gave → guidance folded into EVERY pass from here on.
   let clar = []; try { clar = JSON.parse(db.getMeta(`focus.${focus.id}.clarifications`) || '[]'); } catch {}
-  const guidance = rs.buildGuidanceBlock(clar);
+  let guidance = rs.buildGuidanceBlock(clar);
+  // USER-WORK addenda (2026-07-30): related news riding the pass keeps a working story current,
+  // and a named deadline ("within an hour" vs "next 6 hours") turns the pass toward
+  // assemble-inside-the-window. Beat foci get neither (their freshness is the maintenance sweep).
+  try {
+    if (!(db.getMeta(`focus.${focus.id}.beat`) || '').trim()) {
+      guidance = require('./lib/user_work').augmentGuidance(guidance, {
+        focusId: focus.id, content: focus.content, createdTs: focus.created_ts,
+        getMeta: (k) => db.getMeta(k), now: Date.now(),
+      });
+    }
+  } catch { /* additive, never blocking */ }
 
   // DURABILITY: re-emit this run's canvas blocks from the persisted deliverable on the first tick of the
   // process (an engine/app restart wiped the in-memory canvas). No-op after the first call per run.

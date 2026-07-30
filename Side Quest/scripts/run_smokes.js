@@ -266,6 +266,7 @@ const smokes = [
   'smoke_operator.js',
   'smoke_autonomy.js',
   'smoke_approvals.js',
+  'smoke_user_work.js',
   'smoke_packaging.js',
   'smoke_week_context.js',
   'smoke_conversation_objects.js',
