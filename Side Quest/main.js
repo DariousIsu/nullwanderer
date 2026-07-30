@@ -1660,8 +1660,21 @@ app.whenReady().then(() => {
             try { landed = require('./lib/doc_store').land({ title: label, body: markdown, source: 'canvas_drop', ref: t.tabKey, understanding }); } catch (e) { console.error('[canvas-ingest] doc land failed:', e.message); }
             // ACCRETE — a reading in her stream + a durable memory + captured learnings/entities.
             try {
-              const row = db.insertMonologue({ content: `I read the document Lucas dropped on my canvas — "${label}":\n${understanding || markdown.slice(0, 400)}`, model: 'canvas_ingest', type: 'reading', query: label, docRef: (landed && landed.id) || null });
-              if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(read drop) ${label}`, type: 'reading', query: label });
+              // RECOGNITION (Lucas 2026-07-30: "this is like the 3rd or 4th time these have been
+              // dropped — why doesn't she recognize them?"): the data layer always knew (re-drop
+              // refresh, content-hash dedup, second-encounter ledger) but the stream worded every
+              // drop as a FIRST meeting. A re-encounter now SAYS so — familiarity reaches her voice.
+              let _recog = '';
+              try {
+                if (landed && (landed.duplicateOf || !landed.landed) && landed.id) {
+                  const prior = db.getDocumentById(landed.duplicateOf || landed.id);
+                  if (prior && prior.created_ts && prior.created_ts < Date.now() - 10 * 60e3) {
+                    _recog = `I KNOW this document — Lucas has dropped "${label}" before (doc #${prior.id}, first held ${new Date(prior.created_ts).toLocaleDateString()}). Re-read fresh in case it changed; if he asks about it, I already hold it and should say so.`;
+                  }
+                }
+              } catch { /* recognition is additive */ }
+              const row = db.insertMonologue({ content: _recog || `I read the document Lucas dropped on my canvas — "${label}":\n${understanding || markdown.slice(0, 400)}`, model: 'canvas_ingest', type: 'reading', query: label, docRef: (landed && landed.id) || null });
+              if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `${_recog ? '(recognized re-drop)' : '(read drop)'} ${label}`, type: 'reading', query: label });
             } catch {}
             try { await memoryLib.store({ kind: 'reference', content: note, source: 'canvas_drop', importance: 0.6, embedText: `${label}\n${markdown.slice(0, 800)}` }); } catch (e) { console.error('[canvas-ingest] memory store failed:', e.message); }
             try { require('./lib/learning').maybeCaptureLearnings({ query: label, content: markdown, urls: null }); } catch {}
