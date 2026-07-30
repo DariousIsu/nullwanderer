@@ -253,6 +253,27 @@ function freshDeps({ picks = [], testResults = [], editResults = [], writeResult
     ok(/1 open capability need/.test(line2) && /NEW run/.test(line2), 'an open need keeps the lane choosable — a new run could start');
   }
 
+  // --- SLOT RECLAIM (boot132: need #2 refused — leftovers squatted both sandbox slots) ---
+  {
+    const { deps } = freshDeps();
+    let created = 0, discarded = null;
+    deps.rehearsal.create = ({ slug }) => (++created === 1
+      ? 'cannot create: already 2 live sandboxes (max 2) — discard one first'
+      : `sandbox "${slug}" created — 120 source files copied to a working COPY (the live program is untouched).`);
+    deps.rehearsal.list = () => [{ slug: 'old-parked', createdTs: 100 }, { slug: 'newer-parked', createdTs: 200 }];
+    deps.rehearsal.discard = ({ slug }) => { discarded = slug; return 'discarded'; };
+    const s = drv.start({ slug: 'fresh-need', goal: 'prove leftovers are reclaimed so a new need can open', suite: 'smoke_board.js', deps });
+    ok(s.ok && discarded === 'old-parked', `the OLDEST leftover is reclaimed and the new run opens (discarded: ${discarded})`);
+  }
+  {
+    const { deps } = freshDeps();
+    deps.rehearsal.create = () => 'cannot create: already 2 live sandboxes (max 2) — discard one first';
+    deps.rehearsal.list = () => [{ slug: 'x', createdTs: 1 }];
+    deps.rehearsal.discard = () => 'discarded';
+    const s = drv.start({ slug: 'still-blocked', goal: 'prove a persistent cap refusal stays an honest refusal', suite: 'smoke_board.js', deps });
+    ok(!s.ok && /already 2 live sandboxes/.test(s.reason), 'reclaim retried once, still capped → honest refusal, never a loop');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

@@ -48,6 +48,8 @@ const old = land('ancient drop', 'w'.repeat(200), 'canvas_drop', NOW - 30 * 864e
   ok(/analyze_data/.test(block) && /zoe_data\.query\('sq'/.test(block), 'the compute route is taught by name (analyze_data + zoe_data.query)');
   ok(/SCRIPT job, never a from-memory estimate/.test(block), 'counting is named a script job');
   ok(/Do NOT ask Lucas to re-share/.test(block), 'the never-re-ask discipline rides (she asked him for files she already held)');
+  ok(/FILTER artifacts/.test(block) && /STATE the counting method/.test(block) && /SAVED IN FULL/.test(block),
+    'first-live-run lessons ride: artifact filtering, stated method, save-the-full-table (chat clipped her table)');
   ok(ds.buildBlock([]) === '' && ds.buildBlock(null) === '', 'an empty set builds nothing');
 }
 

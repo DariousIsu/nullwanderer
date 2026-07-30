@@ -72,8 +72,24 @@ function start({ slug, goal, suite, files = [], deps = {}, nowMs = Date.now() } 
   }
   // rehearsal.js speaks in operator-facing STRINGS — success is the created-sentence, anything
   // else is the honest refusal, passed through verbatim.
-  const c = str(_rehearsal(deps).create({ slug }));
-  const cm = /^sandbox "([^"]+)" created/.exec(c);
+  let c = str(_rehearsal(deps).create({ slug }));
+  let cm = /^sandbox "([^"]+)" created/.exec(c);
+  // SLOT RECLAIM (boot132: need #2's open refused — "already 2 live sandboxes" — while both
+  // squatters were stuck/parked LEFTOVERS whose lessons live in the run journal, not the working
+  // copy). Discard the OLDEST leftover and retry once. Safe: start() already refused above if a
+  // run is ACTIVE, so every listed sandbox here is a leftover.
+  if (!cm && /already \d+ live sandboxes/.test(c)) {
+    try {
+      const R = _rehearsal(deps);
+      const live = (R.list() || []).slice().sort((a, b) => (a.createdTs || 0) - (b.createdTs || 0));
+      if (live.length) {
+        R.discard({ slug: live[0].slug });
+        c = str(R.create({ slug }));
+        cm = /^sandbox "([^"]+)" created/.exec(c);
+        if (cm) console.log(`[rehearsal] reclaimed sandbox "${live[0].slug}" (stuck/parked leftover) so "${slug}" could open`);
+      }
+    } catch { /* fall through to the honest refusal */ }
+  }
   if (!cm) return { ok: false, reason: c };
   const run = {
     slug: cm[1], goal: g, suite: s,

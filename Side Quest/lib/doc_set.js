@@ -48,6 +48,10 @@ function buildBlock(set) {
     '  import zoe_data',
     `  cols, rows = zoe_data.query('sq', "SELECT id, title, body FROM documents WHERE id IN (${ids})")`,
     '  # parse the bodies, compute, print the finished table',
+    'Report discipline (learned from the first live run):',
+    '  - FILTER artifacts: CSV header rows ("First Name Last Name"), column labels, and 1-2 letter tokens are NOT people — drop them before counting.',
+    '  - STATE the counting method in the report header (once per document vs total row occurrences — default to once per document).',
+    '  - A long table gets SAVED IN FULL with the file tool (a notes/… path) — chat carries the top ~20 rows + where the full table lives. The chat pipe clips long tables.',
     'Do NOT ask Lucas to re-share files listed here — you already hold them. Deliver the computed table itself.',
   ].join('\n');
 }
