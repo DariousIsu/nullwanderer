@@ -1205,6 +1205,28 @@ app.whenReady().then(() => {
           if (prep && prep.pruned != null) pruned = prep.pruned || 0;
         } catch (e) { console.error('[kg-nightly] prune failed:', e.message); }
       }
+      // 6) ENTITY-ANN INDEX FRESHNESS (inventory §2 follow-through, 2026-07-30): the ingest-time ANN
+      //    resolver (Graph._find_similar fast path) TRUSTS a clean miss — so an index built July 10
+      //    makes every entity minted since invisible to it, and new-name dupes sail past at ingest.
+      //    Weekly full rebuild on this idle slot (atomic dir swap; the warm handle picks it up next
+      //    Echo process). Long-running (~90min full corpus) — start/finish logged so a client-side
+      //    timeout is VISIBLE, never silent. ZOE_ANN_REBUILD_DAYS=0 disables.
+      const _annDays = parseInt(process.env.ZOE_ANN_REBUILD_DAYS ?? '7', 10);
+      if (Number.isFinite(_annDays) && _annDays > 0
+          && Date.now() - (parseInt(db.getMeta('last_ann_rebuild_at') || '0', 10)) > _annDays * 864e5) {
+        try {
+          console.log('[kg-nightly] entity ANN index rebuild starting (weekly freshness — the resolver trusts clean misses)');
+          const br = await echoSuit.dispatch({ kind: 'do', name: 'build_entity_ann_index', args: {} });
+          let brep = null; try { brep = JSON.parse(br && br.text); } catch {}
+          db.setMeta('last_ann_rebuild_at', String(Date.now()));
+          console.log(`[kg-nightly] entity ANN index rebuilt${brep && brep.indexed != null ? ` — ${brep.indexed} names indexed` : ' (result unparsed — check Echo logs)'}`);
+        } catch (e) {
+          // The build may outlive the dispatch window — Echo keeps building server-side; stamp the
+          // attempt so the slot isn't re-burned nightly, and say what happened.
+          db.setMeta('last_ann_rebuild_at', String(Date.now()));
+          console.error(`[kg-nightly] ANN rebuild dispatch ended early (${e.message}) — the Echo-side build may still complete; index freshness verified next week`);
+        }
+      }
       const conceptTotal = conceptNormalized + conceptApplied;
       const total = anchoredApplied + strongApplied + conceptTotal;
       console.log(`[kg-nightly] full sweep: +${swept} proposals; drained ${anchoredApplied} anchored + ${strongApplied} name-strong + ${conceptNormalized} concept-normalize + ${conceptApplied} concept-llm = ${total} merges; +${linkGrounded} grounded links; ${pruned} pruned`);
