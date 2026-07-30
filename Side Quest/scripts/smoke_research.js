@@ -78,6 +78,7 @@ ok(r.MAX_PASSES_VALIDATE < r.MAX_PASSES_PER_TARGET, 'validate cap sits BELOW the
   ok(/LIVING DOCUMENT ALREADY CONCLUDED/.test(p2[1].content) && /PJM queue is the bottleneck/.test(p2[1].content), 'prior conclusions ride the user message');
   ok(/SOURCES \(the pages this run actually visited/.test(p2[1].content) && /miso\.org\/planning/.test(p2[1].content), 'visited pages ride as the citable source list');
   ok(/chosen ONLY from the SOURCES list/.test(p2[0].content) && /NEVER invent a URL/.test(p2[0].content), 'source binding: cite from visited only, never invent');
+  ok(/pages read this pass/.test(p2[0].content), 'the prompt teaches the claim→page markers (40 URLs offered, 0 bound until the notes carried traceability)');
   const p3 = r.buildUnderstandTargetPrompt({ goal: 'g', target: 'X', raw: 'n' });
   ok(!/LIVING DOCUMENT/.test(p3[1].content) && !/SOURCES \(/.test(p3[1].content), 'no prior doc / no sources → blocks simply absent');
 }

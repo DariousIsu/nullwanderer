@@ -12588,7 +12588,13 @@ async function runDirectedResearchPass(focus) {
     const p = rs.parsePass(ans);
     const newChars = rs.newContentChars(target.raw, p.body);
     target.passes = (target.passes || 1) + 1;
-    if (p.body) target.raw = `${target.raw}\n\n${p.body}`.slice(-16000);
+    // CLAIM→PAGE TRACEABILITY (2026-07-30): the synthesis's source binding starved — 40 visited
+    // URLs offered, zero bound — because nothing in the notes said WHICH page a claim came from,
+    // and inventing is forbidden, so the model honestly fell back to "(gathered notes)" on
+    // everything. Stamp the pages THIS pass read into the notes stream, right above its material.
+    let _passPages = [];
+    try { const v2 = JSON.parse(db.getMeta(`focus.${focus.id}.visited`) || '[]'); _passPages = v2.slice(visited.length).filter((u) => /^https?:/i.test(String(u))); } catch {}
+    if (p.body) target.raw = `${target.raw}\n\n${_passPages.length ? `[pages read this pass: ${_passPages.slice(0, 4).join(' · ')}]\n` : ''}${p.body}`.slice(-16000);
     if (p.facet) target.facets = (target.facets || []).concat(p.facet).slice(-12);
     // ONE live-growing canvas block per target (the "building-project document"): stable block_id so the
     // draft FLESHES OUT in place as passes run, then finalizes into the cloud-organized section on advance.
