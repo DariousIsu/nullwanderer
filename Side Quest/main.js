@@ -9906,10 +9906,26 @@ async function autonomyTick() {
         const c = inquiry.close(inqId, { kind: dead ? 'dead_end' : 'answered', answer: decision.expect, nowMs: now });
         autonomy.historyPush(H, { ts: now, move: 'close-inquiry', target: `inquiry #${inqId}`, outcome: c.closed ? `${c.status}${c.docId ? ` → doc #${c.docId}` : ''}` : `close failed: ${c.reason}` });
         console.log(`[autonomy] chose=close-inquiry → #${inqId} ${c.status || 'FAILED'}`);
+        try { db.setMeta(`inquiry.${inqId}.met_streak`, '0'); } catch {}
+        return;
+      }
+      // MET-STREAK GOVERNOR (boot112: #42 ran FOUR consecutive MET touches without closing — the
+      // continuity bias re-runs a solved question, and drain mode makes the victory lap fast).
+      // ≥3 straight METs → the brief demands closure-or-name-the-gap; ≥5 → refuse the touch and
+      // teach (the boot53 zombie-guard shape: the model repeats what history rewarded, so the
+      // refusal must ride history and name the door).
+      const _streakKey = `inquiry.${inqId}.met_streak`;
+      const _metStreak = parseInt(db.getMeta(_streakKey) || '0', 10) || 0;
+      if (_metStreak >= 5) {
+        autonomy.historyPush(H, { ts: now, move: decision.move, target: `inquiry #${inqId}`, outcome: `refused — expectation MET ${_metStreak} consecutive touches; the question reads ANSWERED. CLOSE it (the close writes the answer artifact) or open a NEW inquiry for whatever genuinely remains.` });
+        console.log(`[autonomy] chose=${decision.move} → #${inqId} REFUSED (met-streak ${_metStreak}) — close it or name what remains`);
         return;
       }
       // ADVANCE — the touch. Procedures ride the brief; the write-back envelope is the exit.
       let brief = inquiry.touchBrief(row);
+      if (_metStreak >= 3) {
+        brief += `\n\n[CLOSURE CHECK: your expectation has been MET ${_metStreak} touches in a row on this question. If it is answered, this touch MUST end with status "answered" and the answer — do NOT continue. Continue ONLY if you name, concretely, what is still missing.]`;
+      }
       // HELD-SOURCE HINT (boot73): if this inquiry keeps naming a file it already holds as a landed,
       // decomposed doc, tell the touch to read its own copy instead of re-downloading it (inquiry #1
       // planned to re-fetch the roster it had already ingested + decomposed, 26 touches running).
@@ -10020,6 +10036,12 @@ async function autonomyTick() {
       // A successful touch arms/renews the drain window — the next decision follows at the drain
       // gap, so an inquiry with momentum keeps it (see the PACE gate above).
       if (sum.ok) { try { db.setMeta('autonomy.drain_until', String(Date.now() + 30 * 60 * 1000)); } catch {} }
+      // MET-streak accounting for the governor above: a MET that still says "continue" extends the
+      // streak; an answered/NOT-met/no-write-back touch resets it.
+      try {
+        if (expectVerdict && expectVerdict.met && env && env.status === 'continue') db.setMeta(_streakKey, String(_metStreak + 1));
+        else db.setMeta(_streakKey, '0');
+      } catch {}
       return;
     }
     // REHEARSE (O2, slice 5) — advance THE active rehearsal run one iteration on a pool slot.
