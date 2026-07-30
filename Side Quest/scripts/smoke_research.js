@@ -67,6 +67,19 @@ ok(r.MAX_PASSES_VALIDATE < r.MAX_PASSES_PER_TARGET, 'validate cap sits BELOW the
   ok(oq.length === 2 || oq.length === 3, `OPEN lines parse (${oq.length}) — the too-short "a" is rejected`);
   ok(oq[0].includes('queue reform'), 'first open question survives verbatim');
   ok(r.parseOpenQuestions('no open lines here').length === 0 && r.parseOpenQuestions(null).length === 0, 'no OPEN lines / null → empty, never throws');
+
+  // THE LIVING DOCUMENT + SOURCE BINDING ride the synthesis
+  const p2 = r.buildUnderstandTargetPrompt({
+    goal: 'g', target: 'MISO', raw: 'notes',
+    priorDoc: { title: 'Research — grid pressure', extract: 'PJM queue is the bottleneck' },
+    sources: ['https://miso.org/planning', 'https://ferc.gov/order-1920'],
+  });
+  ok(/DEEPEN, REVISE, or CONTRADICT/.test(p2[0].content) && /never restate/i.test(p2[0].content), 'living doc: bounce-off contract in the system prompt');
+  ok(/LIVING DOCUMENT ALREADY CONCLUDED/.test(p2[1].content) && /PJM queue is the bottleneck/.test(p2[1].content), 'prior conclusions ride the user message');
+  ok(/SOURCES \(the pages this run actually visited/.test(p2[1].content) && /miso\.org\/planning/.test(p2[1].content), 'visited pages ride as the citable source list');
+  ok(/chosen ONLY from the SOURCES list/.test(p2[0].content) && /NEVER invent a URL/.test(p2[0].content), 'source binding: cite from visited only, never invent');
+  const p3 = r.buildUnderstandTargetPrompt({ goal: 'g', target: 'X', raw: 'n' });
+  ok(!/LIVING DOCUMENT/.test(p3[1].content) && !/SOURCES \(/.test(p3[1].content), 'no prior doc / no sources → blocks simply absent');
 }
 
 // --- newContentChars: repeat detection ---

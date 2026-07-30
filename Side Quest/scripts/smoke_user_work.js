@@ -63,6 +63,20 @@ ok(uw.pickUserThread([threads[3]], { now: NOW }) === null, 'an already-driven th
 ok(uw.pickUserThread([threads[4]], { now: NOW }) === null, 'a non-research commitment never steals the primary');
 ok(uw.pickUserThread([], { now: NOW }) === null && uw.pickUserThread(null, { now: NOW }) === null, 'empty/null → null (the sweep may run)');
 
+// --- the living document: a new task bounces off the doc a prior run landed ---
+{
+  const docs = [
+    { id: 7, title: 'Research — US power grid and data center impacts', markdown: 'PJM interconnection queue transmission congestion…', openedAt: 100, source: 'research' },
+    { id: 8, title: 'Research — grid pressure by region', markdown: 'transmission constraints and grid pressure in ERCOT', openedAt: 200, source: 'research' },
+    { id: 9, title: 'random web capture about grids', markdown: 'grid transmission', openedAt: 300, source: 'web' },
+  ];
+  const hit = uw.matchDocToTopic('understand transmission and grid pressure needs for each power grid region', docs);
+  ok(hit && hit.id === 8, `topic matches the strongest research doc (got #${hit && hit.id})`);
+  ok(uw.matchDocToTopic('research the history of Louisiana levee boards', docs) === null, 'unrelated topic → null (a fresh document is right)');
+  ok(uw.matchDocToTopic('grid stuff', [docs[2]]) === null, 'a non-research doc never anchors a run');
+  ok(uw.matchDocToTopic('', docs) === null && uw.matchDocToTopic('x', null) === null, 'empty/null never throw');
+}
+
 // --- guidance addenda ---
 const g = uw.augmentGuidance('BASE', {
   focusId: 9, content: 'compile a report on parish clerks — I need this report within an hour',

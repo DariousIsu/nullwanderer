@@ -106,6 +106,26 @@ function pickUserThread(threads, { now = 0, newsAtOf = () => 0 } = {}) {
   return best;
 }
 
+// THE LIVING DOCUMENT (Lucas 2026-07-30: "a concept built as an actionable living document —
+// the task bounces off that document over time"): match a new research thread to an EXISTING
+// landed research doc so the run CONTINUES it instead of restarting at zero. Same 2-token topic
+// rule as news vigilance (one shared word is coincidence, two is a topic); research-source docs
+// only; newest wins ties. Null = genuinely new ground → a fresh document is right.
+function matchDocToTopic(topic, docs) {
+  const toks = threadTokens(topic);
+  if (toks.size < 2) return null;
+  let best = null, bestHits = 0;
+  for (const d of (Array.isArray(docs) ? docs : [])) {
+    if (!d || (d.source && d.source !== 'research')) continue;
+    const text = `${d.title || ''} ${String(d.markdown || '').slice(0, 4000)}`.toLowerCase();
+    let hits = 0;
+    for (const t of toks) { if (text.includes(t)) hits++; }
+    if (hits < 2) continue;
+    if (hits > bestHits || (hits === bestHits && (d.openedAt || 0) > ((best && best.openedAt) || 0))) { best = d; bestHits = hits; }
+  }
+  return best;
+}
+
 // Per-pass guidance addenda: related news (so the working story stays current) + deadline pacing
 // (an hour left means ASSEMBLE, six hours means depth that finishes inside the window).
 function augmentGuidance(guidance, { focusId, content, createdTs, getMeta = () => null, now = 0 } = {}) {
@@ -127,4 +147,4 @@ function augmentGuidance(guidance, { focusId, content, createdTs, getMeta = () =
   return parts.filter(Boolean).join('\n\n');
 }
 
-module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, scoreThread, pickUserThread, augmentGuidance };
+module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, scoreThread, pickUserThread, augmentGuidance };

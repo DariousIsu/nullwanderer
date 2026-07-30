@@ -10834,6 +10834,16 @@ async function _autonomicSchedulerTick() {
         if (cand) {
           if (_curBeatId) { try { focusLib.clear('user-work-preempt'); } catch {} console.log(`[user-work] sweep yields — ${_curBeatId} paused for his thread #${cand.id}`); }
           let f = null; try { f = focusLib.setCurrent(cand.id, { directed: true }); } catch {}
+          // THE LIVING DOCUMENT: if a landed research doc already covers this topic, the run
+          // CONTINUES it — the doc rides every synthesis as "what we already concluded" and the
+          // deliverable header names its lineage. Compounding depth, not restarting.
+          try {
+            if (!db.getMeta(`focus.${cand.id}.base_doc`)) {
+              const docs = require('./lib/doc_store').candidates(40);
+              const hit = uw.matchDocToTopic(cand.content, docs);
+              if (hit) { db.setMeta(`focus.${cand.id}.base_doc`, String(hit.id)); console.log(`[user-work] continuing living document #${hit.id} — "${String(hit.title).slice(0, 60)}"`); }
+            }
+          } catch (e) { console.error('[user-work] living-doc match failed:', e.message); }
           if (!db.getMeta(`focus.${cand.id}.plan`)) {
             try { await generateResearchPlan(f || cand, { goal: cand.content, targets: [], facet: '', deep: true, kind: 'entity' }); }
             catch (e) { console.error('[user-work] plan gen failed:', e.message); }
@@ -12611,10 +12621,21 @@ async function runDirectedResearchPass(focus) {
       // the run's facet plan so the next passes chase what the synthesis couldn't answer.
       let section = '';
       const _isBeatRun = !!(() => { try { return (db.getMeta(`focus.${focus.id}.beat`) || '').trim(); } catch { return ''; } })();
+      // THE LIVING DOCUMENT rides the synthesis: prior conclusions to deepen/revise/contradict
+      // (never restate), and the run's actually-visited pages so load-bearing facts bind to real
+      // sources — "(source: <url>)" from the visited list only, never an invented one.
+      const _baseDoc = (() => {
+        try {
+          const id = parseInt(db.getMeta(`focus.${focus.id}.base_doc`) || '0', 10);
+          if (!id) return null;
+          const d = db.getDocumentById(id);
+          return d ? { title: d.title, extract: String(d.body || '').slice(-3000) } : null;
+        } catch { return null; }
+      })();
       try {
         section = _isBeatRun
           ? await condenseComplete(rs.buildOrganizeTargetPrompt({ target: target.name, raw: target.raw }), { numPredict: config.sectionNumPredict() })
-          : await condenseComplete(rs.buildUnderstandTargetPrompt({ goal, target: target.name, raw: target.raw, known: target.known || '' }), { numPredict: Math.max(1200, config.sectionNumPredict()) });
+          : await condenseComplete(rs.buildUnderstandTargetPrompt({ goal, target: target.name, raw: target.raw, known: target.known || '', priorDoc: _baseDoc, sources: visited.slice(-20) }), { numPredict: Math.max(1200, config.sectionNumPredict()) });
       } catch {}
       if (!_isBeatRun && section) {
         try {
@@ -12628,7 +12649,9 @@ async function runDirectedResearchPass(focus) {
         } catch { /* steering is additive */ }
       }
       section = (section && section.trim()) ? section.trim() : `## ${target.name}\n${target.raw.slice(0, 1500)}`;
-      const header = covered.length === 0 ? `# Directed research deliverable\n\n**Task:** ${goal}\n\n---\n\n` : '';
+      const header = covered.length === 0
+        ? `# Directed research deliverable\n\n**Task:** ${goal}\n\n${_baseDoc ? `_Continues living document #${db.getMeta(`focus.${focus.id}.base_doc`)}: ${String(_baseDoc.title || '').slice(0, 100)}_\n\n` : ''}---\n\n`
+        : '';
       try { await filesLib.dispatch({ tag: 'file-append', attrs: { path: file }, body: `${header}${section}\n\n` }); }
       catch (e) { console.error('[directed] append failed:', e.message); }
       // FINALIZE the live block in place with the organized draft (same block_id → replaces the raw draft).
