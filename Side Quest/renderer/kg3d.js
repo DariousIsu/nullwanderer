@@ -527,12 +527,12 @@ const Graph = window.ForceGraph3D()(graphEl)
   .linkOpacity(0.5)
   .warmupTicks(20)
   .cooldownTime(15000);
-// COMPUTE BUDGET (Lucas approved trading refresh for detail). A hard 30fps cap isn't available — this bundled
-// 3d-force-graph exposes pauseAnimation but no tickFrame, so there's no way to drive the loop by hand without
-// reimplementing its layout stepping. The bigger saving doesn't need one: once the layout COOLS, every node
-// position is static, yet the node/link/marker buffers were still being rewritten 60 times a second — tens of
-// thousands of pointless writes per second at this density. Syncing only while the engine is actually moving
-// frees that entirely, and it scales with the density rather than against it.
+// COMPUTE BUDGET (Lucas approved trading refresh for detail). TWO savings stack here. First, once the layout
+// COOLS every node position is static, yet the node/link/marker buffers were still being rewritten 60×/sec —
+// so syncing runs only while the engine is actually moving (or the alive budget is), scaling with density
+// rather than against it. Second, the whole loop is now CAPPED (default 30fps, see the tick() takeover below):
+// the bundled 3d-force-graph DOES expose tickFrame + pause/resumeAnimation — the old note here that a cap
+// "wasn't available" was wrong — so its 60fps auto-loop is paused and driven by hand at the cap instead.
 let engineRunning = true, _stillFrames = 0, _fitOnCool = true;
 try {
   Graph.onEngineStop(() => {
@@ -3473,8 +3473,26 @@ function stepFrame(now) {
     if (hudEl) hudEl.textContent = `3D · ${d.nodes.length} nodes / ${d.links.length} links · ${pct}% sourced${rec} · ${fps} fps`;
   }
 }
-function tick() { requestAnimationFrame(tick); frames++; stepFrame(performance.now()); }
-tick();
+// ONE capped loop (Lucas: "lower the fps to 30 to save on processing and help with the stutter"). Before this,
+// the library ran its OWN 60fps rAF (physics tick + render) and this file ran a SECOND 60fps rAF (stepFrame) —
+// two unsynced loops, double the wake-ups. Now the library's auto-loop is paused and BOTH are driven from here
+// at FPS_CAP: stepFrame syncs the buffers, then one library cycle (resume→pause) runs its physics tick and its
+// REAL render path (controls damping, composer, labels — nothing reimplemented; resumeAnimation runs one cycle
+// synchronously and self-schedules a follow-up, which the immediate pause cancels). localStorage kg3d.fps sets
+// the cap (1–120); default 30. At 30 this halves render calls, physics ticks and per-frame CPU alike.
+let FPS_CAP = 30; try { const v = parseInt(localStorage.getItem('kg3d.fps'), 10); if (v >= 1 && v <= 120) FPS_CAP = v; } catch (e) {}
+const _frameGap = 1000 / FPS_CAP; let _lastFrame = -1e9;
+try { Graph.pauseAnimation(); } catch (e) {}
+function tick(now) {
+  requestAnimationFrame(tick);
+  // -1ms slack so a 30fps cap on a 60Hz display lands on every 2nd frame instead of rounding down to 20.
+  if (now - _lastFrame < _frameGap - 1) return;
+  _lastFrame = now;
+  frames++;
+  stepFrame(now);                                    // sync buffers + face + effects from the current positions…
+  try { Graph.resumeAnimation(); Graph.pauseAnimation(); } catch (e) {}   // …then ONE library cycle: physics tick + render
+}
+requestAnimationFrame(tick);
 
 // ---- resize ----
 window.addEventListener('resize', () => { Graph.width(window.innerWidth).height(window.innerHeight); });
@@ -3726,7 +3744,7 @@ window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () =
   // page is not compositing (a background tab, or a preview pane that is not on screen), which stops the
   // whole loop — so without this the surface simply cannot be inspected headlessly. Renders explicitly and
   // grabs the buffer in the same task, since preserveDrawingBuffer is off.
-  step: (n = 1) => { const t = performance.now(); for (let i = 0; i < (n || 1); i++) stepFrame(t + i * 16.7); },
+  step: (n = 1) => { const t = performance.now(); for (let i = 0; i < (n || 1); i++) { stepFrame(t + i * 16.7); try { Graph.resumeAnimation(); Graph.pauseAnimation(); } catch (e) {} } },
   // Renders into an offscreen target and reads the pixels back, rather than calling toDataURL on the canvas.
   // The canvas route returns an EMPTY data URL here: preserveDrawingBuffer is off, so the drawing buffer is
   // only valid for readback inside the compositing frame that drew it — and when nothing is compositing there
