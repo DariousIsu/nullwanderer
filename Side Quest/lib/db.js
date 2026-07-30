@@ -1185,6 +1185,18 @@ function insertOpenThread({ content, parentId = null, sourceTurnId = null }) {
 // Excludes MERGED CHILDREN (parent_id IS NOT NULL) — a thread linked under another is a duplicate
 // phrasing of the same commitment, not a second thing she is carrying. Without this filter one
 // request from Lucas showed up in her prompt as 7 separate standing threads.
+// The user-thread driver's population (lib/user_work): NEVER-DRIVEN pending threads, NEWEST
+// first. Deliberately its own accessor — getActiveOpenThreads orders by last_touched_ts ASC
+// (stalest first, for the leash), which INVERTED the driver's recency bias on boot121: the
+// 60-row window filled with ancient threads and his newest asks never entered the pool.
+function getUnstartedUserThreads(limit = 60) {
+  return getDb()
+    .prepare(`SELECT * FROM open_threads
+      WHERE status = 'pending' AND COALESCE(action_count, 0) = 0 AND parent_id IS NULL
+      ORDER BY created_ts DESC LIMIT ?`)
+    .all(limit);
+}
+
 function getActiveOpenThreads(limit = 10, { includeStalled = true } = {}) {
   const statuses = includeStalled ? `('pending','active','stalled')` : `('pending','active')`;
   return getDb()
@@ -2538,6 +2550,7 @@ module.exports = {
   confirmCommitment,
   insertOpenThread,
   getActiveOpenThreads,
+  getUnstartedUserThreads,
   recentThreadGoals,
   pendingUserAssignedThread,
   getAllOpenThreads,

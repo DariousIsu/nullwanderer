@@ -10749,7 +10749,11 @@ function _maintenanceSweep(state, beats) {
       // by the user-thread driver's ordering) + cache titles for the pass guidance.
       try {
         const uw = require('./lib/user_work');
-        for (const t of (db.getActiveOpenThreads(60, { includeStalled: false }) || [])) {
+        // Watch his NEWEST unstarted asks + whatever is being DRIVEN right now (the working
+        // story needs vigilance most) — not getActiveOpenThreads' stalest-first window.
+        const watch = (db.getUnstartedUserThreads(60) || []);
+        try { const cf = require('./lib/focus').getCurrent(); if (cf && !watch.some((t) => t.id === cf.id)) watch.push(cf); } catch {}
+        for (const t of watch) {
           if (!t || (db.getMeta(`focus.${t.id}.beat`) || '').trim()) continue;
           if (!uw.isResearchShaped(t.content)) continue;
           const hits = uw.matchNewsToThread(t.content, headlines);
@@ -10818,7 +10822,10 @@ async function _autonomicSchedulerTick() {
     if (!focus || _curBeatId) {
       try {
         const uw = require('./lib/user_work');
-        const threads = (db.getActiveOpenThreads(60, { includeStalled: false }) || [])
+        // getUnstartedUserThreads, NOT getActiveOpenThreads: the latter orders stalest-first (for
+        // the leash) and its window buried his newest asks under ancient threads (boot121: #3529
+        // from 210h ago won over the fresh grid cluster).
+        const threads = (db.getUnstartedUserThreads(60) || [])
           .filter((t) => t && !(db.getMeta(`focus.${t.id}.beat`) || '').trim() && String(db.getMeta(`focus.${t.id}.background`) || '') !== '1');
         const cand = uw.pickUserThread(threads, {
           now: Date.now(),
