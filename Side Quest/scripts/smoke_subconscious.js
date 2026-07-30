@@ -75,6 +75,15 @@ const msgs = [{ role: 'user', content: 'think about something interesting' }];
     ok(subc.parseSynthesis('a rambling essay with no shape at all, many words long') === null, 'shapeless output → null (caller keeps the raw thought)');
     const noneAct = subc.parseSynthesis('TENSION: everything here is already explored territory.\nWHY: the field is quiet today for real.\nACTION: none');
     ok(noneAct && noneAct.action.kind === 'none', 'ACTION: none parses as honest quiet');
+
+    // --- SLICE B: identity in, position out ---
+    const pid = subc.buildSynthesisPrompt({ recentThoughts: [{ content: 'x' }], identity: 'WHO YOU ARE: values ground-truth over polish' });
+    ok(/WHO YOU ARE/.test(pid) && /ANGLE what you notice/.test(pid), 'her live identity rides the synthesis input');
+    ok(/POSITION: <optional/.test(pid) && /starting \"I \"/.test(pid), 'the shape invites an optional opinion-shaped stance');
+    const withPos = subc.parseSynthesis('TENSION: single-source records stall forever at the gate.\nWHY: authority is weighted nowhere at all.\nACTION: research — how official-record classes should weight corroboration\nPOSITION: I think a .gov roster deserves more trust than the floor gives it');
+    ok(withPos && /^I think a \.gov roster/.test(withPos.position), 'a stance starting with I is captured');
+    const badPos = subc.parseSynthesis('TENSION: some tension worth naming here.\nWHY: because it matters quite a bit.\nACTION: none\nPOSITION: The data shows an increase of 40%');
+    ok(badPos && badPos.position === null, 'a non-opinion POSITION (not "I …") is refused — work-log never colonizes identity');
   }
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

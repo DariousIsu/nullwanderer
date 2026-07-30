@@ -110,7 +110,11 @@ function markSynthesized({ setMeta, now }) { try { setMeta && setMeta(SYNTH_AT_K
 // synthesis answers in a TYPED SHAPE (tension / why / action) so the stitch becomes WORK through
 // existing doors instead of evaporating into the thought rail, and the tensions already explored
 // ride the prompt so a pass spends on NEW stitching, never re-deriving the same convergence.
-function buildSynthesisPrompt({ recentThoughts = [], threads = [], focus = null, sources = [], explored = [] } = {}) {
+// SLICE B (the personality loop, additive half of the deferred inner-life rebalance): her LIVE
+// self-model rides IN (positions/tastes angle what she notices), and a POSITION line may flow
+// OUT — a stance formed from the material, landing in the self-model with provenance. Opinion-
+// shaped only, daily-capped at the caller — research must never recolonize identity as work-log.
+function buildSynthesisPrompt({ recentThoughts = [], threads = [], focus = null, sources = [], explored = [], identity = '' } = {}) {
   const t = recentThoughts.slice(-12)
     .map((x, i) => `${i + 1}. ${String((x && x.content) || x || '').replace(/\s+/g, ' ').slice(0, 200)}`)
     .filter(s => s.length > 4).join('\n');
@@ -121,11 +125,13 @@ function buildSynthesisPrompt({ recentThoughts = [], threads = [], focus = null,
     + (th ? '\n\nOpen threads:\n' + th : '')
     + (focus ? '\n\nActive focus: ' + String((focus && focus.content) || focus).slice(0, 160) : '')
     + (grounding ? '\n\n' + grounding : '')
+    + (identity ? '\n\nWHO YOU ARE (your live positions and tastes — let them ANGLE what you notice; a tension that touches something you care about outranks a generic one):\n' + String(identity).slice(0, 1200) : '')
     + (ex ? '\n\nTENSIONS YOU ALREADY EXPLORED (do NOT re-derive these — find a genuinely DIFFERENT one, or say the field is quiet):\n' + ex : '')
     + '\n\nStep back. Across these, find the ONE tension or question worth pursuing. Answer in EXACTLY this shape and nothing else:\n'
     + 'TENSION: <one sentence naming it>\n'
     + 'WHY: <two or three sentences — what depends on it>\n'
     + 'ACTION: <none | inquiry | research | experiment> — <one concrete sentence: research = the question to investigate; experiment = what a one-off read-only analysis script over your own data would test; inquiry = what to check in your own stores; none = nothing genuinely new>\n'
+    + 'POSITION: <optional — ONE sentence starting "I " stating a stance or taste this material has actually formed in you; omit the line entirely if nothing shifted>\n'
     + 'No essay, no numbered plans, no headers. If every real tension is already explored, ACTION: none is the honest answer.';
 }
 
@@ -137,10 +143,12 @@ function parseSynthesis(text) {
   if (!t) return null;
   const w = /^\s*(?:\*\*)?WHY(?:\*\*)?:\s*([\s\S]{8,700}?)(?=^\s*(?:\*\*)?ACTION(?:\*\*)?:|$)/im.exec(s);
   const a = /^\s*(?:\*\*)?ACTION(?:\*\*)?:\s*(none|inquiry|research|experiment)\b[\s—:–-]*(.*)$/im.exec(s);
+  const p = /^\s*(?:\*\*)?POSITION(?:\*\*)?:\s*(I\s.{8,280}?)\s*$/im.exec(s);
   return {
     tension: t[1].trim(),
     why: w ? w[1].trim().replace(/\s+/g, ' ').slice(0, 500) : '',
     action: { kind: a ? a[1].toLowerCase() : 'none', text: a ? a[2].trim().slice(0, 300) : '' },
+    position: p ? p[1].trim() : null,   // opinion-shaped only: must start "I " — anything else is not a stance
   };
 }
 

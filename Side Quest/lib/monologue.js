@@ -1278,9 +1278,12 @@ async function _runOneTick() {
         // SLICE A (2026-07-30): explored tensions ride the prompt (no re-derivation — measured: 80
         // essays/day circling ONE Georgia-boards tension) and the output is a TYPED SHAPE.
         let _synthRecent = []; try { _synthRecent = JSON.parse(_gm('subc.synth_recent') || '[]'); } catch {}
+        // SLICE B: her LIVE identity rides in — positions/tastes angle what she notices, so the
+        // subconscious differentiates over time instead of thinking from a static persona alone.
+        let _idBlock = ''; try { _idBlock = require('./self_model').buildPromptBlock(6) || ''; } catch {}
         const synthMessages = [
           { role: 'system', content: BASE_PERSONA },
-          { role: 'user', content: subc2.buildSynthesisPrompt({ recentThoughts: synthThoughts, threads: synthThreads, focus: null, sources, explored: _synthRecent }) }
+          { role: 'user', content: subc2.buildSynthesisPrompt({ recentThoughts: synthThoughts, threads: synthThreads, focus: null, sources, explored: _synthRecent, identity: _idBlock }) }
         ];
         const synth = await generateThought({
           messages: synthMessages,
@@ -1330,6 +1333,18 @@ async function _runOneTick() {
                   }
                 }
               } catch (e) { console.error('[subc] synthesis routing failed:', e.message); }
+              // SLICE B out-flow: a stance the material actually formed lands in the self-model —
+              // provenance-marked, opinion-shaped ("I …" enforced at parse), ONE per day, and only
+              // on a NOVEL tension. record()'s own guardrails (leak gate, dedup) still apply.
+              try {
+                if (parsed.position) {
+                  const _pd = new Date(); const _day = `${_pd.getFullYear()}-${_pd.getMonth() + 1}-${_pd.getDate()}`;
+                  if (_gm('subc.position_day') !== _day) {
+                    const pr = await require('./self_model').record(`${parsed.position} (formed thinking about: ${parsed.tension.slice(0, 80)})`, { category: 'insight', importance: 0.55, epistemic: 'speculated' });
+                    if (pr && !pr.skipped) { _sm('subc.position_day', _day); console.log(`[subc] position formed → self-model: "${parsed.position.slice(0, 70)}"`); }
+                  }
+                }
+              } catch (e) { console.error('[subc] position landing failed:', e.message); }
             }
           } else {
             // Shape absent — keep the raw thought (never lose it), route via the legacy next-step
