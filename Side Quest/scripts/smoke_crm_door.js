@@ -32,7 +32,11 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(door.personObjectFromCard({ name: '- PERSON', company: 'Anywhere' }, []) === null, 'placeholder name "- PERSON" refused at the door (the ~190-row flood)');
   ok(door.personObjectFromCard({ name: '   ', company: 'X' }, []) === null, 'blank name refused');
   ok(door.personObjectFromCard({ name: 'Finance Director', company: 'X' }, []) === null, 'role-word name refused at the door too');
-  ok(door.personObjectFromCard({ name: 'Talya', company: 'X' }, []) !== null, 'a real mononym still passes');
+  // FULL NAME OR HOLD (boot113: bare "Trump" minted): the auto-add door mints only full names —
+  // a mononym stays in the Puller for enrichment until its full name arrives.
+  ok(door.personObjectFromCard({ name: 'Talya', company: 'X' }, []) === null, 'a mononym is HELD at the auto-add door (unactionable + famous-surname noise)');
+  ok(door.personObjectFromCard({ name: 'Trump', company: 'News Corp' }, []) === null, 'a bare famous surname never mints');
+  ok(door.personObjectFromCard({ name: 'Talya Whyte', company: 'X' }, []) !== null, 'the full name mints the moment it exists');
 
   // 2. DISCOVERY-not-invention: no beliefs → no invented contact fields.
   const bare = door.personObjectFromCard({ name: 'Garth Sullivan', company: 'Richland Parish 911' }, []);

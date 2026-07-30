@@ -110,6 +110,12 @@ function personObjectFromCard(landed, beliefs = []) {
   const name = String((landed && landed.name) || '').trim();
   if (!name || !/[a-z]/i.test(name)) return null;
   try { if (require('../studio/puller_name_gate').isJunkPersonName(name)) return null; } catch { /* gate unavailable → fall through */ }
+  // FULL NAME OR HOLD (boot113: bare "Trump" minted as a contact): a research-discovered CONTACT
+  // with one name token is unactionable (no one to email) and famous-surname extraction noise is
+  // indistinguishable from a real mononym. The AUTO-ADD door requires two alphabetic name tokens
+  // to MINT; the Puller keeps the mononym target for enrichment, and the person lands here the
+  // moment a full name exists. (Puller-drain and manual paths are unchanged.)
+  if ((name.match(/[a-z]+/gi) || []).length < 2) return null;
   const b = (t) => { const x = (beliefs || []).find((y) => y && y.type === t); return x && x.value; };
   const attributeFacts = {};
   const email = b('email'); if (email) attributeFacts.Email = email;
