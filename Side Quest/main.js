@@ -12600,7 +12600,12 @@ async function runDirectedResearchPass(focus) {
         target = { name: p.target, passes: 1, raw: (known ? `PRIOR KNOWLEDGE (already in our graph):\n${known}\n\n` : '') + (p.body || ans), facets: ['overview'], known };
         try { db.setMeta(targetKey, JSON.stringify(target)); } catch {}
         progressed = !!(p.body && usedTool); sig = p.target.toLowerCase(); note = `started ${p.target}`;
-      } else { note = p.target ? `(repeat target) ${p.target}` : 'no new target found'; sig = String(p.target || '').toLowerCase(); }
+        try { db.setMeta(`focus.${focus.id}.dry_streak`, '0'); } catch {}
+      } else {
+        note = p.target ? `(repeat target) ${p.target}` : 'no new target found'; sig = String(p.target || '').toLowerCase();
+        // Discovery came up empty (or re-offered a covered target) — one tick of frontier dryness.
+        try { db.setMeta(`focus.${focus.id}.dry_streak`, String(parseInt(db.getMeta(`focus.${focus.id}.dry_streak`) || '0', 10) + 1)); } catch {}
+      }
     }
   } else if (!done) {
     // DEEPEN the current target — next missing facet. A grounded target carries its graph dossier as `known`,
@@ -12697,12 +12702,24 @@ async function runDirectedResearchPass(focus) {
       } catch {}
       if (!_isBeatRun && section) {
         try {
+          // QUESTION LEDGER (run closure, Lucas 2026-07-30): every OPEN question is recorded;
+          // only NOVEL ones steer the facet plan. When syntheses stop raising novel questions,
+          // the frontier is closing — that streak is one of the doors the run concludes through.
+          const rc = require('./lib/run_closure');
           const oq = rs.parseOpenQuestions(section);
-          if (oq.length) {
+          let _led = []; try { _led = JSON.parse(db.getMeta(`focus.${focus.id}.q_ledger`) || '[]'); } catch {}
+          const { novel, ledger } = rc.filterNovel(oq, _led);
+          try { db.setMeta(`focus.${focus.id}.q_ledger`, JSON.stringify(ledger)); } catch {}
+          const _nnKey = `focus.${focus.id}.no_novel_streak`;
+          try { db.setMeta(_nnKey, String(novel.length ? 0 : (parseInt(db.getMeta(_nnKey) || '0', 10) + 1))); } catch {}
+          try { db.setMeta(`focus.${focus.id}.last_open_qs`, JSON.stringify(oq.slice(0, 3))); } catch {}
+          if (novel.length) {
             const plan = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || '{}');
-            plan.facets = [...new Set([...(Array.isArray(plan.facets) ? plan.facets : []), ...oq])].slice(-14);
+            plan.facets = [...new Set([...(Array.isArray(plan.facets) ? plan.facets : []), ...novel])].slice(-14);
             db.setMeta(`focus.${focus.id}.plan`, JSON.stringify(plan));
-            console.log(`[user-work] ${oq.length} open question(s) from the synthesis now steer the run`);
+            console.log(`[user-work] ${novel.length} novel open question(s) from the synthesis now steer the run${oq.length > novel.length ? ` (${oq.length - novel.length} already asked)` : ''}`);
+          } else if (oq.length) {
+            console.log(`[closure] synthesis raised ${oq.length} question(s), all already asked — frontier narrowing (streak ${parseInt(db.getMeta(_nnKey) || '0', 10)})`);
           }
         } catch { /* steering is additive */ }
       }
@@ -12775,6 +12792,43 @@ async function runDirectedResearchPass(focus) {
       note = `deepening ${target.name}: +${p.facet || 'detail'} (${newChars} new chars${repeats ? `, ${repeats} repeat-search skipped` : ''}) → canvas`;
     }
   }
+
+  // RUN CLOSURE (Lucas 2026-07-30: "I do not want this to spin forever… find new concepts…
+  // without never-ending loops"). USER runs only — beats end through their own ladder/bounded
+  // doors. Counts only passes that PROGRESSED (no-ops refund), and concludes through a named
+  // door: pass budget (deadline-scaled), discovery dry, or frontier closed (no novel questions).
+  // Discovered concepts SPAWN new pending threads for the driver to order — never extend this run.
+  try {
+    const _userRun = !((db.getMeta(`focus.${focus.id}.beat`) || '').trim()) && db.getMeta(`focus.${focus.id}.background`) !== '1';
+    if (_userRun && !done) {
+      const rc = require('./lib/run_closure');
+      const _pKey = `focus.${focus.id}.passes_used`;
+      const passesUsed = parseInt(db.getMeta(_pKey) || '0', 10) + (progressed ? 1 : 0);
+      if (progressed) { try { db.setMeta(_pKey, String(passesUsed)); } catch {} }
+      const budget = rc.passBudgetFor({ content: String(focus.content || ''), createdTs: focus.created_ts || 0 });
+      const verdict = rc.shouldConclude({
+        passesUsed, budget,
+        dryStreak: parseInt(db.getMeta(`focus.${focus.id}.dry_streak`) || '0', 10),
+        noNovelStreak: parseInt(db.getMeta(`focus.${focus.id}.no_novel_streak`) || '0', 10),
+      });
+      if (verdict.conclude) {
+        done = true;
+        note = `run concluded — ${verdict.reason}`;
+        // DISCOVERED CONCEPTS → new pending research-shaped threads (depth cap 1 inside buildSpawns:
+        // a spawned run never spawns again). Lineage rides meta, not parent_id — the user-work
+        // driver's pool filters parent_id IS NULL, and these are meant to be DRIVER-ORDERED work.
+        try {
+          let lastQs = []; try { lastQs = JSON.parse(db.getMeta(`focus.${focus.id}.last_open_qs`) || '[]'); } catch {}
+          const spawns = rc.buildSpawns({ questions: lastQs, spawnedFrom: db.getMeta(`thread.${focus.id}.spawned_from`) || null });
+          for (const s of spawns) {
+            const r = db.insertOpenThread({ content: s });
+            if (r && r.id) { try { db.setMeta(`thread.${r.id}.spawned_from`, String(focus.id)); } catch {} }
+          }
+          console.log(`[closure] #${focus.id} ${note}${spawns.length ? ` → spawned ${spawns.length} discovered thread(s)` : ''}`);
+        } catch (e) { console.error('[closure] spawn failed:', e.message); }
+      }
+    }
+  } catch (e) { console.error('[closure] decision failed:', e.message); }
 
   // CONTRACT TODO (Slice 2): reflect what the deliverable now covers → the facet checklist fills in live.
   try { await refreshContractTodo(); } catch {}
