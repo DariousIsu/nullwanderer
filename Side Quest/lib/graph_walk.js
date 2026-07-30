@@ -152,6 +152,78 @@ function referentGuard(gap, dossier) {
   return { ok: false, stored: sk, described: dk };
 }
 
+// PERSON IDENTITY GUARD (2026-07-30) — referentGuard catches person-vs-ORG, but a person anchor
+// enriched from a same-named STRANGER's page passes it clean: watched live on boot128, the graph's
+// "Richard Anderson" (the graph holds only politicians by that name) was grafted with the ACTOR's
+// spouses + child from Wikipedia at grade B. Name-match is a lottery — rare names hit (Jennifer
+// Dunn, all accurate), common names contaminate. The substantiation gate's rule applied to
+// enrichment: for a person the graph already KNOWS things about, the fetched material must
+// corroborate at least ONE non-name attribute (office words, state, party) before bio facts
+// graft. A node the graph knows nothing about has nothing to check — it passes; the guard
+// refuses on missing corroboration of KNOWN facts, it never demands facts that were never held.
+const _OFFICE_TERMS = {
+  us_representative: ['representative', 'congress', 'congressional'],
+  us_senator: ['senator', 'senate', 'congress'],
+  state_representative: ['representative', 'legislat', 'assembly', 'delegate'],
+  state_senator: ['senator', 'legislat'],
+  governor: ['governor'], mayor: ['mayor'], judge: ['judge', 'court'],
+};
+function personIdentityTerms(obj = {}) {
+  const terms = new Set();
+  const sub = String(obj.entity_subtype || '').toLowerCase();
+  for (const [k, words] of Object.entries(_OFFICE_TERMS)) if (sub === k || sub.includes(k)) for (const w of words) terms.add(w);
+  const summary = String(obj.summary || '');
+  if (/\brepublican\b/i.test(summary)) terms.add('republican');
+  if (/\bdemocrat/i.test(summary)) terms.add('democrat');
+  if (/US_House/i.test(summary)) { terms.add('congress'); terms.add('representative'); }
+  if (/US_Senate/i.test(summary)) { terms.add('congress'); terms.add('senator'); }
+  for (const w of ['governor', 'senator', 'representative', 'legislat', 'mayor', 'council', 'commissioner', 'sheriff', 'judge']) if (summary.toLowerCase().includes(w)) terms.add(w);
+  // State identity: stored summaries carry "(IA)" / "State: WA" shapes — match the FULL state
+  // name in the fetched material, never a bare 2-letter code (codes false-hit inside prose).
+  try {
+    const SN = require('./beats').STATE_NAMES || {};
+    const codes = new Set([
+      ...(summary.match(/\(([A-Z]{2})\)/g) || []).map((s) => s.slice(1, 3)),
+      ...(summary.match(/State:\s*([A-Z]{2})\b/g) || []).map((s) => s.slice(-2)),
+    ]);
+    for (const c of codes) if (SN[c]) terms.add(String(SN[c]).toLowerCase());
+  } catch { /* state list unavailable → office/party terms still stand */ }
+  return [...terms];
+}
+function personIdentityGuard(gap, dossier, sources = []) {
+  if (!gap || gap.kind === 'missing') return { ok: true };
+  const stored = (gap.object && (gap.object.entity_type || gap.object.type)) || null;
+  if (typeKind(stored) !== 'person') return { ok: true };
+  const terms = personIdentityTerms(gap.object || {});
+  if (!terms.length) return { ok: true, unchecked: true };
+  let hay = '';
+  try {
+    hay = (String((dossier && dossier.summary) || '') + ' ' + String((dossier && dossier.entity_subtype) || '') + ' '
+      + JSON.stringify((dossier && dossier.related) || []) + ' '
+      + (sources || []).map((s) => `${(s && s.title) || ''} ${(s && s.snippet) || ''} ${(s && s.url) || ''}`).join(' ')).toLowerCase();
+  } catch { hay = ''; }
+  // left word-boundary only, so 'legislat' still stems to legislature/legislative/legislator
+  const hit = terms.find((t) => new RegExp('\\b' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(hay));
+  return hit ? { ok: true, matched: hit } : { ok: false, expected: terms.slice(0, 6) };
+}
+
+// DISAMBIGUATION SCREEN — "Daniel Evans [E000236] → namesake → Dan Evans (baseball)/(cricketer)/
+// (tennis)" (live, boot128): the extractor ate a disambiguation/hatnote list and offered
+// same-named strangers as relations. A namesake is BY DEFINITION not a real-world relation, and
+// a shared-surname target with a trailing parenthetical qualifier IS the disambiguation shape.
+function disambiguationClaim(anchorName, r) {
+  const rel = String((r && r.relation) || '').toLowerCase();
+  if (/namesake|not to be confused|may refer to|disambiguation/.test(rel)) return true;
+  const target = String((r && r.name) || '');
+  if (!/\([^)]+\)\s*$/.test(target)) return false;
+  const surname = (w) => {
+    const p = String(w).replace(/\([^)]*\)/g, '').replace(/\[[^\]]*\]/g, '').trim().split(/\s+/);
+    return (p[p.length - 1] || '').toLowerCase();
+  };
+  const a = surname(anchorName), t = surname(target);
+  return !!a && a.length > 2 && a === t;
+}
+
 // visited state (recently-worked anchors), TTL-pruned. getMeta/setMeta injected.
 function loadVisited(getMeta, now) {
   let arr = [];
@@ -335,6 +407,11 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
   const _refG = referentGuard(gap, dossier);
   const _isRegistryAnchor = _FEC_TAG_RE.test(mention) || _FEC_TAG_RE.test(canonical);
   if (!_refG.ok) log && log(`[grow] "${mention}" REFERENT MISMATCH — graph holds a ${_refG.stored}, sources describe a ${_refG.described}; all claims HELD`);
+  // Same-name-wrong-PERSON: the graph knows offices/state/party for this anchor — the fetched
+  // material must corroborate at least one of them before any bio fact grafts (boot128: the
+  // actor's family landed on a politician's node at grade B through this exact door).
+  const _idG = personIdentityGuard(gap, dossier, sources);
+  if (_refG.ok && !_idG.ok) log && log(`[grow] "${mention}" IDENTITY UNCONFIRMED — graph knows: ${_idG.expected.join(', ')}; the fetched material corroborates none of them; all claims HELD`);
 
   // 1) the anchor object itself — only if MISSING. EXISTENCE gate: mint only if the web pull cites it as
   //    real (≥ C). No citable source → held, never minted (kills the hallucinated-object failure mode).
@@ -375,6 +452,14 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
     if (!rname || visitKey(rname) === visitKey(mention)) continue;
     const rcanon = await canonResolve(rname);   // S3b: canonicalize the related endpoint before proposing (fail-soft → rname)
     if (nbrKeys.has(visitKey(rname))) continue;   // edge already in the graph — skip
+    // Disambiguation-shaped claim (namesake / same-surname-with-qualifier): never a real-world
+    // relation, whatever its citation — held with the reason, before the fact gate spends a look.
+    if (disambiguationClaim(canonical, r) || disambiguationClaim(mention, r)) {
+      held++;
+      if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: null, grade: 'D', confidence: 0.2, status: 'held' }); } catch {} }
+      log && log(`[grow] edge "${canonical}" -[${(r && r.relation) || 'related_to'}]→ "${rname}": held — disambiguation-shaped (same-name stranger, not a relation)`);
+      continue;
+    }
     const fg = CG.gateFact(r && (r.sources != null ? r.sources : r.source), sources);   // list-aware (multi-cite) w/ legacy single fallback
     if (!fg.promote) {                            // uncited / inferred → does NOT enter the graph
       held++;
@@ -382,11 +467,12 @@ async function growAround(gap, { web, cloud, dispatch, kgNeighbors, observe, pro
       if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: fg.url, grade: fg.grade, confidence: fg.confidence, status: 'held' }); } catch {} }
       continue;
     }
-    if (!_refG.ok || (_isRegistryAnchor && entertainmentSourced(fg.url))) {
+    if (!_refG.ok || !_idG.ok || (_isRegistryAnchor && entertainmentSourced(fg.url))) {
       // WELL-CITED but about the WRONG same-named thing — a cited claim from someone else's page
-      // is still someone else's fact. Either the kind-mismatch guard fired, or (Friends-of-Schumer
-      // shape) a registry committee's claim is sourced to an entertainment DB, which can never
-      // ground it by category. Held, never promoted — and never landed short-term either.
+      // is still someone else's fact. Either the kind-mismatch guard fired, the person-identity
+      // guard found no corroborated attribute, or (Friends-of-Schumer shape) a registry
+      // committee's claim is sourced to an entertainment DB, which can never ground it by
+      // category. Held, never promoted — and never landed short-term either.
       held++;
       if (typeof observe === 'function') { try { await observe({ sourceEntity: canonical, relation: (r && r.relation) || 'related_to', target: rname, url: fg.url, grade: fg.grade, confidence: fg.confidence, status: 'held' }); } catch {} }
       continue;
@@ -636,6 +722,7 @@ async function runMove(deps = {}) {
 module.exports = {
   runMove, decayVisitedEdges, extractCandidates, assessGaps, growAround, fetchLayeredSources, sourceLabel, proposeEntity, proposeRelation,
   parseJsonLoose, extractProperNouns, classifyObject, rankGaps, visitKey, normalizeRelType, typeKind, referentGuard, entertainmentSourced,
+  personIdentityGuard, personIdentityTerms, disambiguationClaim,
   loadVisited, visitedKeySet, recordVisited, buildCandidatePrompt, buildDossierPrompt,
   THIN_DEGREE, THIN_FACTS, WALK_MAX_NODES, WALK_MAX_CONNECTIONS, MAX_CANDIDATES, VISITED_TTL_MS, SATURATED_TTL_MS, VISITED_KEY
 };

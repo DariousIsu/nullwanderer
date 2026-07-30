@@ -442,6 +442,39 @@ ok(rankedV[0].mention === 'Thin C', 'rankGaps: a visited anchor is skipped');
       'Friends shape: the show creator never reaches propose_relation; the real committee edge does');
   }
 
+  // --- PERSON IDENTITY GUARD (2026-07-30): the actor-onto-politician graft, pinned ---
+  {
+    const repNode = { entity_type: 'person', entity_subtype: 'us_representative', summary: 'Richard Anderson [A000230]\n  Chamber: US_House\n  Party: R\n  State: US' };
+    const actorDossier = { entity_type: 'person', summary: 'Richard Anderson was an American film and television actor best known for The Six Million Dollar Man.', related: [{ name: 'Carol Lee Ladd', relation: 'spouse' }] };
+    const actorSources = [{ title: 'Richard Anderson - Wikipedia', snippet: 'American actor (1926-2017)', url: 'https://en.wikipedia.org/wiki/Richard_Anderson' }];
+    const g1 = G.personIdentityGuard({ kind: 'thin', object: repNode }, actorDossier, actorSources);
+    ok(g1.ok === false && g1.expected.length > 0, `the actor's page cannot vouch for a congressman's node (expected: ${(g1.expected || []).join(', ')})`);
+
+    const politicianDossier = { entity_type: 'person', summary: 'Jennifer Dunn was a U.S. Representative for Washington, a Republican member of Congress.', related: [] };
+    const g2 = G.personIdentityGuard({ kind: 'thin', object: { entity_type: 'person', entity_subtype: 'us_representative', summary: 'Jennifer Dunn [D000549]\n  Chamber: US_House\n  Party: R' } }, politicianDossier, []);
+    ok(g2.ok === true && g2.matched, `the right person's page corroborates and passes (matched: ${g2.matched})`);
+
+    const stateRep = { entity_type: 'person', entity_subtype: 'state_representative', summary: "Richard Anderson (IA)\n  party: [{'name': 'Republican'}]" };
+    const g3 = G.personIdentityGuard({ kind: 'thin', object: stateRep }, actorDossier, actorSources);
+    ok(g3.ok === false, 'an IA legislator node refuses the actor page (no Iowa, no legislature, no Republican)');
+    const g3b = G.personIdentityGuard({ kind: 'thin', object: stateRep }, { entity_type: 'person', summary: 'Richard Anderson served in the Iowa House of Representatives.', related: [] }, []);
+    ok(g3b.ok === true, 'the Iowa legislator page corroborates via the full state name');
+
+    ok(G.personIdentityGuard({ kind: 'missing', object: null }, actorDossier, []).ok === true, 'a MISSING anchor has nothing to check — passes');
+    ok(G.personIdentityGuard({ kind: 'thin', object: { entity_type: 'organization', summary: 'x' } }, actorDossier, []).ok === true, 'non-person anchors are referentGuard territory, not this guard');
+    ok(G.personIdentityGuard({ kind: 'thin', object: { entity_type: 'person', summary: 'someone we know nothing about' } }, actorDossier, []).ok === true, 'a person with NO known attributes passes — the guard refuses on contradiction, never on ignorance');
+    ok(G.personIdentityGuard(null, null, null).ok === true, 'null input never throws');
+  }
+
+  // --- DISAMBIGUATION SCREEN: the senator-namesake-athletes shape, pinned ---
+  {
+    ok(G.disambiguationClaim('Daniel Evans [E000236]', { name: 'Dan Evans (baseball)', relation: 'namesake' }) === true, 'namesake relation is never a real-world relation');
+    ok(G.disambiguationClaim('Daniel Evans [E000236]', { name: 'Dan Evans (tennis)', relation: 'related to' }) === true, 'same surname + parenthetical qualifier = the disambiguation shape');
+    ok(G.disambiguationClaim('Daniel Evans', { name: 'Christine Gregoire', relation: 'successor' }) === false, 'a real successor claim is untouched');
+    ok(G.disambiguationClaim('Daniel Evans', { name: 'Puget Sound (body of water)', relation: 'represented area including' }) === false, 'a qualified NON-namesake target is untouched');
+    ok(G.disambiguationClaim('', null) === false && G.disambiguationClaim(null, {}) === false, 'null input never throws');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
