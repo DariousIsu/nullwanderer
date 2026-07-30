@@ -66,7 +66,9 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(S.shouldSynthesize({ getMeta: gm2, now: T0 + 5 * 60000, intervalMin: 20 }) === false, 'not due 5min later');
   ok(S.shouldSynthesize({ getMeta: gm2, now: T0 + 21 * 60000, intervalMin: 20 }) === true, 'due again after interval');
   const sp = S.buildSynthesisPrompt({ recentThoughts: [{ content: 'thinking about entropy' }, { content: 'and 6G channels' }], threads: [{ content: 'finish the memory work' }], sources: srcs });
-  ok(/entropy/.test(sp) && /Open threads/.test(sp) && /\[S1\]/.test(sp) && /<wonder>/.test(sp), 'synthesis prompt packs thoughts + threads + grounding + wonder ask');
+  // 2026-07-30 slice A: the free-essay wonder ask became the TYPED SHAPE (TENSION/WHY/ACTION) —
+  // the pin follows the intent: thoughts + threads + grounding still pack; the ask is now routable.
+  ok(/entropy/.test(sp) && /Open threads/.test(sp) && /\[S1\]/.test(sp) && /TENSION: /.test(sp) && /ACTION: <none \| inquiry \| research \| experiment>/.test(sp), 'synthesis prompt packs thoughts + threads + grounding + the typed shape');
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
