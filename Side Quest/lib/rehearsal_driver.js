@@ -63,7 +63,12 @@ function _save(run, deps) { try { _dbm(deps).setMeta(RUN_KEY, JSON.stringify(run
 // Start (or restart) THE run — one at a time, deliberately: rehearsal sandboxes are bounded (≤2)
 // and a queue of self-modification ideas is not a backlog worth holding. An existing active run
 // must finish/park/discard first.
-function start({ slug, goal, suite, files = [], deps = {}, nowMs = Date.now() } = {}) {
+// `study` (Lucas 2026-07-30: "learn how to make a change before trying to write one — always
+// research and verify"): the RESEARCHED technique — what existing projects/docs say about how to
+// build this, WITH source URLs — passed in by the caller who did the research. It rides every
+// edit pick and the proposal card cites it. Study material is READING ONLY: foreign code teaches
+// the pattern, her own hands write the implementation; nothing external ever executes.
+function start({ slug, goal, suite, files = [], study = '', deps = {}, nowMs = Date.now() } = {}) {
   const cur = load({ deps });
   if (cur && cur.status === 'active') return { ok: false, reason: `run "${cur.slug}" is already active — iterate, park, or discard it first` };
   const g = str(goal).trim(); const s = str(suite).trim();
@@ -94,6 +99,7 @@ function start({ slug, goal, suite, files = [], deps = {}, nowMs = Date.now() } 
   const run = {
     slug: cm[1], goal: g, suite: s,
     files: (Array.isArray(files) ? files : []).map((f) => str(f)).filter(Boolean).slice(0, 4),
+    study: str(study).trim().slice(0, 2500),
     iteration: 0, edits: [], lastResult: '', lastDiffSig: null, sameFailStreak: 0,
     status: 'active', startedTs: nowMs,
   };
@@ -180,6 +186,7 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
       task: 'rehearsal_iterate', v: 1,
       input: {
         goal: run.goal, suite: run.suite, iteration: run.iteration,
+        study: run.study || '(none — attempted from existing knowledge; prefer runs opened with researched study material)',
         files: _fileBlock(run, deps),
         diff_so_far: (() => { try { return str(R.diff({ slug: run.slug })).slice(0, 2500); } catch { return '(diff unavailable)'; } })(),
         last_test_output: _squeezeTestOutput(run.lastResult) || '(no test run yet)',
@@ -284,10 +291,11 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
     const body = [
       `_Rehearsal run "${run.slug}" · ${run.iteration} iteration(s) · suite ${run.suite} · FULL GATE GREEN_`,
       `## Goal\n${run.goal}`,
+      run.study ? `## Research (studied before writing — sources are reading material, never executed)\n${run.study}` : null,
       `## The change (sandbox diff)\n\`\`\`\n${diff.slice(0, 8000)}\n\`\`\``,
       `## Gate verdict\n\`\`\`\n${gateOut.slice(-1200)}\n\`\`\``,
       `## Adoption\nNothing self-adopts (R3). If this earns it: apply by hand, run the gate on the live tree, commit. The sandbox holds until discarded.`,
-    ].join('\n\n');
+    ].filter(Boolean).join('\n\n');
     const r = land({ title: `Rehearsal proposal — ${run.goal.slice(0, 80)}`, body, source: 'rehearsal', ref: `rehearsal-${run.slug}-${run.startedTs}` });
     docId = r && r.id;
   } catch (e) { console.error('[rehearsal-driver] proposal card failed:', e.message); }

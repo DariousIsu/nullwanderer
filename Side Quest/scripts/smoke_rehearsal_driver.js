@@ -274,6 +274,39 @@ function freshDeps({ picks = [], testResults = [], editResults = [], writeResult
     ok(!s.ok && /already 2 live sandboxes/.test(s.reason), 'reclaim retried once, still capped → honest refusal, never a loop');
   }
 
+  // --- RESEARCH-FIRST (2026-07-30, Lucas: "learn how to make a change before trying to write one") ---
+  // The researched technique rides the run: stored at start, seen by every edit pick, cited on the card.
+  {
+    const askInputs = [];
+    const { deps, landed } = freshDeps({ picks: [{ action: 'test', why: 'study said the shape is right' }] });
+    const baseAsk = deps.ask;
+    deps.ask = async (o) => { askInputs.push(o.input); return baseAsk(o); };
+    const s = drv.start({ slug: 'studied', goal: 'apply the researched retry-with-backoff shape to the fetch lane', suite: 'smoke_board.js', study: 'Studied: exponential backoff with jitter (source: https://example.com/aws-backoff; https://example.com/impl-notes). Pattern: cap retries, full-jitter sleep, retry only idempotent ops.', deps });
+    ok(s.ok && /exponential backoff/.test(drv.load({ deps }).study), 'start() stores the researched study material on the run');
+    await drv.iterate({ deps });
+    ok(askInputs.length === 1 && /jitter/.test(askInputs[0].study), 'every edit pick SEES the study — the change is written from research, not memory');
+    ok(landed.length === 1 && /## Research \(studied before writing/.test(landed[0].body) && /example\.com\/aws-backoff/.test(landed[0].body),
+      'the green proposal card cites the study sources for Lucas to review');
+  }
+  {
+    const askInputs = [];
+    const { deps, landed } = freshDeps({ picks: [{ action: 'test', why: 'done' }] });
+    const baseAsk = deps.ask;
+    deps.ask = async (o) => { askInputs.push(o.input); return baseAsk(o); };
+    drv.start({ slug: 'unstudied', goal: 'a run opened without research still works but is nudged', suite: 'smoke_board.js', deps });
+    await drv.iterate({ deps });
+    ok(/none — attempted from existing knowledge/.test(askInputs[0].study), 'a study-less run is named as such to the picker (the nudge toward research-first)');
+    ok(!/## Research/.test(landed[0].body), 'no fabricated Research section on a study-less card');
+  }
+  // Pin the PROMPT TEXT (the detectors-vs-comprehension lesson: regression-test the instruction itself).
+  {
+    const { TOOL_SPEC } = require('../lib/operator');
+    ok(/RESEARCH FIRST, like any other claim/.test(TOOL_SPEC), 'the operator spec demands research before a rehearsal starts');
+    ok(/reading material ONLY/.test(TOOL_SPEC) && /nothing you found ever executes/.test(TOOL_SPEC),
+      'the spec draws the safety line: external code teaches, never executes');
+    ok(/"study":"<what you RESEARCHED/.test(TOOL_SPEC), 'the study param is documented in the tool signature');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
