@@ -126,6 +126,33 @@ function matchDocToTopic(topic, docs) {
   return best;
 }
 
+// The living-document CANDIDATE POOL. The recency window alone starves the anchor — measured on
+// boot128, the newest-40 docs were 100% news/inquiry/browser_download and the 15k grid dossier
+// (two days old) could never match, so #3617 seeded blind. Union the recency window with
+// per-token recall over the WHOLE store; searchDocuments is whole-string LIKE, so recall must
+// ride one token at a time, never the full sentence.
+function docPoolForTopic(topic, { candidates = () => [], recall = () => [] } = {}) {
+  const pool = [].concat(candidates(40) || []);
+  for (const t of [...threadTokens(topic)].slice(0, 8)) pool.push(...(recall(t, 8) || []));
+  return pool;
+}
+
+// PARK-LANDING: a stopped or preempted user run must still enter the living-document pool.
+// Only the condense path (run COMPLETION) landed the deliverable, and his biggest research is
+// exactly the kind that gets stopped mid-flight — directed-3618 accreted 15k across days of
+// passes and was invisible to the next seed. Beat foci re-derive from the sweep and stay out.
+// land() is idempotent on ref+body, so repeated stops of an unchanged deliverable are free.
+function parkDeliverable({ focusId, reason = 'parked', readFile = () => null, getMeta = () => null, getThread = () => null, land = () => null } = {}) {
+  if (!focusId) return null;
+  if (String(getMeta(`focus.${focusId}.beat`) || '').trim()) return null;
+  const r = readFile(`notes/directed-${focusId}.md`);
+  const body = (r && r.text) || '';
+  if (String(body).trim().length < 400) return null;   // a header-only shell isn't a living document
+  let goal = ''; try { const t = getThread(focusId); goal = (t && t.content) || ''; } catch { /* title falls back below */ }
+  const dl = land({ title: `Research — ${String(goal || `directed run #${focusId}`).slice(0, 100)}`, body, source: 'research', ref: `directed-${focusId}`, understanding: String(goal).slice(0, 300) });
+  return (dl && dl.landed) ? { id: dl.id, reason } : null;
+}
+
 // Per-pass guidance addenda: related news (so the working story stays current) + deadline pacing
 // (an hour left means ASSEMBLE, six hours means depth that finishes inside the window).
 function augmentGuidance(guidance, { focusId, content, createdTs, getMeta = () => null, now = 0 } = {}) {
@@ -147,4 +174,4 @@ function augmentGuidance(guidance, { focusId, content, createdTs, getMeta = () =
   return parts.filter(Boolean).join('\n\n');
 }
 
-module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, scoreThread, pickUserThread, augmentGuidance };
+module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, parkDeliverable, scoreThread, pickUserThread, augmentGuidance };

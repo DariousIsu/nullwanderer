@@ -77,6 +77,38 @@ ok(uw.pickUserThread([], { now: NOW }) === null && uw.pickUserThread(null, { now
   ok(uw.matchDocToTopic('', docs) === null && uw.matchDocToTopic('x', null) === null, 'empty/null never throw');
 }
 
+// --- living-document POOL: recall reaches past the churned recency window (boot128: newest-40
+// were 100% news/inquiry/downloads and the grid dossier could never match) ---
+{
+  const churn = Array.from({ length: 40 }, (_, i) => ({ id: 100 + i, title: `news item ${i}`, markdown: 'headline body', openedAt: 900 + i, source: 'news' }));
+  const dossier = { id: 11530, title: 'Research — Deepen and EXPAND prior research', markdown: 'PJM grid operators… data centers drive interconnection queues…', openedAt: 50, source: 'research' };
+  const recalls = [];
+  const pool = uw.docPoolForTopic('substantiate that the grid was destined to fail without data centers', {
+    candidates: () => churn,
+    recall: (q) => { recalls.push(q); return q === 'grid' || q === 'data' ? [dossier] : []; },
+  });
+  ok(recalls.length >= 2 && recalls.includes('grid'), `recall rides per-token, never the sentence (asked: ${recalls.join(',')})`);
+  const hit = uw.matchDocToTopic('substantiate that the grid was destined to fail without data centers', pool);
+  ok(hit && hit.id === 11530, `a dossier outside the recency window still anchors the run (got #${hit && hit.id})`);
+  ok(uw.docPoolForTopic('grid research', { candidates: () => null, recall: () => null }).length === 0, 'null-tolerant pool never throws');
+}
+
+// --- park-landing: a stopped run enters the living-document pool; beats and shells stay out ---
+{
+  const landed = [];
+  const deps = {
+    readFile: (p) => ({ text: p === 'notes/directed-3618.md' ? 'x'.repeat(500) : '' }),
+    getMeta: () => '', getThread: (id) => ({ id, content: 'substantiate the grid claim' }),
+    land: (d) => { landed.push(d); return { id: 42, landed: true }; },
+  };
+  const r = uw.parkDeliverable({ focusId: 3618, reason: 'user-stop', ...deps });
+  ok(r && r.id === 42 && landed[0].ref === 'directed-3618' && landed[0].source === 'research', 'a stopped run lands as a research doc under its directed ref');
+  ok(/substantiate the grid/.test(landed[0].title), 'the thread goal names the landed doc');
+  ok(uw.parkDeliverable({ focusId: 3622, ...deps, getMeta: () => 'state-leg:MS' }) === null, 'a beat focus never park-lands (the sweep re-derives)');
+  ok(uw.parkDeliverable({ focusId: 9, ...deps, readFile: () => ({ text: 'short' }) }) === null, 'a header-only shell is not a living document');
+  ok(uw.parkDeliverable({ focusId: 0 }) === null && uw.parkDeliverable({}) === null, 'missing focus never throws');
+}
+
 // --- guidance addenda ---
 const g = uw.augmentGuidance('BASE', {
   focusId: 9, content: 'compile a report on parish clerks — I need this report within an hour',

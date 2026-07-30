@@ -6500,6 +6500,17 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     const f = focusLib.getCurrent();
     if (f && focusLib.isDirected(f) && /\b(stop|drop|cancel|forget|abandon|pause|quit|never ?mind|that'?s enough|enough (?:for now|of that))\b/i.test(userMessage)
         && /\b(task|project|research|focus|working|that|it|this)\b/i.test(userMessage)) {
+      // Park-land BEFORE clearing so "what you gathered so far is saved" (the line she says below)
+      // is true of the living-document pool, not just the notes file — the next topic-matched seed
+      // continues this work instead of restarting at zero.
+      try {
+        const _pk = require('./lib/user_work').parkDeliverable({
+          focusId: f.id, reason: 'user-stop',
+          readFile: (p) => filesLib.fileReadFull(p), getMeta: (k) => db.getMeta(k),
+          getThread: (id) => db.getOpenThread(id), land: (d) => require('./lib/doc_store').land(d),
+        });
+        if (_pk) console.log(`[user-work] parked deliverable landed → doc #${_pk.id} (user-stop)`);
+      } catch (e) { console.error('[user-work] park-landing failed:', e.message); }
       focusLib.clear('user-stop');
       try { stopDirectedFocusDriver(); } catch {}
       directedStopHandled = true;
@@ -10839,7 +10850,8 @@ async function _autonomicSchedulerTick() {
           // deliverable header names its lineage. Compounding depth, not restarting.
           try {
             if (!db.getMeta(`focus.${cand.id}.base_doc`)) {
-              const docs = require('./lib/doc_store').candidates(40);
+              const _ds = require('./lib/doc_store');
+              const docs = uw.docPoolForTopic(cand.content, { candidates: (n) => _ds.candidates(n), recall: (q, n) => _ds.recall(q, n) });
               const hit = uw.matchDocToTopic(cand.content, docs);
               if (hit) { db.setMeta(`focus.${cand.id}.base_doc`, String(hit.id)); console.log(`[user-work] continuing living document #${hit.id} — "${String(hit.title).slice(0, 60)}"`); }
             }
@@ -12604,6 +12616,14 @@ async function runDirectedResearchPass(focus) {
     } catch {}
     if (p.body) target.raw = `${target.raw}\n\n${_passPages.length ? `[pages read this pass: ${_passPages.slice(0, 4).join(' · ')}]\n` : ''}${p.body}`.slice(-16000);
     if (p.facet) target.facets = (target.facets || []).concat(p.facet).slice(-12);
+    // STOP GUARD — a user-stop mid-pass must not ride the expensive tail. Measured on boot128: a full
+    // zombie pass (browse + synthesis + canvas, "+1088 new chars") landed AFTER "[focus] #3618 stopped
+    // by user" while #3617 already held the slot. Notes above are kept (cheap, already gathered);
+    // canvas + advance + synthesis below are skipped the moment this run no longer owns the focus.
+    if (String(db.getMeta('current_focus_id') || '') !== String(focus.id)) {
+      console.log(`[directed] #${focus.id} → focus changed mid-pass — tail skipped, notes kept`);
+      return;
+    }
     // ONE live-growing canvas block per target (the "building-project document"): stable block_id so the
     // draft FLESHES OUT in place as passes run, then finalizes into the cloud-organized section on advance.
     const secBlockId = `sec-${focus.id}-${String(target.name).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 32)}`;
