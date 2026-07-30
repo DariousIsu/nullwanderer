@@ -12600,6 +12600,7 @@ async function runDirectedResearchPass(focus) {
       const _preVisited = new Set(visited);
       const v2 = JSON.parse(db.getMeta(`focus.${focus.id}.visited`) || '[]');
       _passPages = v2.filter((u) => !_preVisited.has(u) && /^https?:/i.test(String(u)));
+      if (_passPages.length) console.log(`[cite] ${_passPages.length} page(s) marked into "${target.name}" notes`);
     } catch {}
     if (p.body) target.raw = `${target.raw}\n\n${_passPages.length ? `[pages read this pass: ${_passPages.slice(0, 4).join(' · ')}]\n` : ''}${p.body}`.slice(-16000);
     if (p.facet) target.facets = (target.facets || []).concat(p.facet).slice(-12);
@@ -12646,9 +12647,16 @@ async function runDirectedResearchPass(focus) {
         } catch { return null; }
       })();
       try {
+        if (!_isBeatRun) {
+          // Truth-in-logging for the citation chain: how much traceability does this synthesis
+          // actually HAVE? 0 markers = the notes can't support URL bindings, whatever the model does.
+          const _nMarkers = (String(target.raw || '').match(/\[pages read this pass/g) || []).length;
+          const _urls = visited.filter((u) => /^https?:/i.test(String(u)));
+          console.log(`[cite] synthesis "${target.name}": ${_nMarkers} page-marker(s) in notes, ${_urls.length} url(s) in SOURCES`);
+        }
         section = _isBeatRun
           ? await condenseComplete(rs.buildOrganizeTargetPrompt({ target: target.name, raw: target.raw }), { numPredict: config.sectionNumPredict() })
-          : await condenseComplete(rs.buildUnderstandTargetPrompt({ goal, target: target.name, raw: target.raw, known: target.known || '', priorDoc: _baseDoc, sources: visited.slice(-20) }), { numPredict: Math.max(1200, config.sectionNumPredict()) });
+          : await condenseComplete(rs.buildUnderstandTargetPrompt({ goal, target: target.name, raw: target.raw, known: target.known || '', priorDoc: _baseDoc, sources: visited.filter((u) => /^https?:/i.test(String(u))).slice(-20) }), { numPredict: Math.max(1200, config.sectionNumPredict()) });
       } catch {}
       if (!_isBeatRun && section) {
         try {
