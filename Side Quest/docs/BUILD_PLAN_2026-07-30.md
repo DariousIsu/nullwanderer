@@ -14,6 +14,11 @@ hooks for the visual-log lane (docs/OBS_INTERFACE_HOOKS.md — the parallel cont
 
 ## Phase 1 — finish and PROVE (cheap, high trust)
 
+> **STATUS 2026-07-30 late: 1.1-1.5 BUILT + committed** (cd8357e stream discriminator + honest
+> cut + news dedup + fit marker accounting; 7e9cf3b study pass + subc-reads-health + exhaust
+> audit). 1.1/1.2 live on boot137 (fit landing budget-exact, proven twice); 1.3-1.5 await the
+> next reboot (held while Lucas's chat is active). 1.6 live proofs remain the watch items.
+
 | # | Item | Size | Notes |
 |---|---|---|---|
 | 1.1 | Renderer latch — 2 symptoms: chat stall stamps, clipped chat tables | M | oldest user-facing wart |
