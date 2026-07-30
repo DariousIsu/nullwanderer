@@ -7037,7 +7037,11 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         }
       }
     } catch (e) { console.error('[doc-set] manifest failed:', e.message); }
-    if (opMode !== 'off' && routeAllowsAny('lookup', 'task') && (needsExternal || isAssignment || docSetBlock) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && userMessage && userMessage.trim().length > 6) {
+    // docSetBlock overrides the ROUTE gate too (live miss, boot131 acceptance test: the turn-router
+    // classified "can you do a frequency analysis of everyone in those documents" as route=answer,
+    // so the operator never ran and her "give me a moment to process" dangled forever). A detected
+    // set-analysis ask IS a task by construction.
+    if (opMode !== 'off' && (routeAllowsAny('lookup', 'task') || docSetBlock) && (needsExternal || isAssignment || docSetBlock) && !socialTurn && !followupFired && !directedStopHandled && !expandHandled && !clarificationCaptured && !statusHandled && !correctionHandled && !docQaHandled && userMessage && userMessage.trim().length > 6) {
       // directed (in-turn completion mode) when this is an assignment (intake gate, or regex
       // fallback) — or a set-analysis ask, which needs the multi-step script budget.
       const directed = isAssignment || !!docSetBlock;
