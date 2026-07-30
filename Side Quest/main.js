@@ -4134,6 +4134,12 @@ ipcMain.handle('canvas:drop-doc', async (_e, { path: filePath, x, y } = {}) => {
       console.log(`[canvas] re-drop of "${title}" — refreshing the existing document in place`);
     }
     await callTool('saga_canvas_open_tab', { mode, tab_key: tabKey, title });
+    // A DROP MEANS SHOW ME THIS (2026-07-30, "documents still don't open on the canvas"): layout
+    // state persists hidden-by-tabKey and re-drops reuse the tabKey by design — so a card hidden
+    // once could NEVER appear again, however many times he dropped the file (measured: 57 of 60
+    // layout rows hidden, all 45 drop tabs among them). Dropping is the operator's explicit
+    // intent to see the document: force it visible.
+    try { canvasLayoutStore.update(tabKey, { hidden: false, minimized: false }); } catch (e) { console.error('[canvas] unhide on drop failed:', e.message); }
     const PREVIEW_CHUNK = 40000;   // a large text doc renders one chunk at a time from the top so it never hangs
     if (blockType === 'paragraph' && data && typeof data.markdown === 'string' && data.markdown.length > PREVIEW_CHUNK) {
       // RECURSIVE BUILD (Lucas): split on line boundaries and add the FIRST chunk now (instant top-of-doc
