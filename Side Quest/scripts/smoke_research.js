@@ -55,6 +55,20 @@ ok(r.decideAdvance({ passes: 2, newChars: 10, validate: true }).reason === 'vali
 ok(r.decideAdvance({ passes: 1, saturated: true, validate: true }).advance === true, 'validate: model says saturated → advance');
 ok(r.MAX_PASSES_VALIDATE < r.MAX_PASSES_PER_TARGET, 'validate cap sits BELOW the ordinary per-target cap (it is the light shape)');
 
+// --- COMPREHENSION over collation (Lucas 2026-07-30): user runs synthesize, never card-collate ---
+{
+  const p = r.buildUnderstandTargetPrompt({ goal: 'grid pressure memo', target: 'PJM Interconnection', raw: 'notes here', known: '[PJM] operates 13 states' });
+  const sys = p[0].content, usr = p[1].content;
+  ok(/how it works/i.test(sys) && /causal link/i.test(sys), 'understanding prompt demands mechanism + causal link, not a contact card');
+  ok(/Tensions & unknowns/i.test(sys) && /OPEN: /.test(sys), 'it demands tensions + OPEN questions');
+  ok(/never invent a name or number/i.test(sys) && /read as inference/i.test(sys), 'grounding survives translated: notes faithful, inference MARKED as inference');
+  ok(/THE GOAL: grid pressure memo/.test(usr) && /ALREADY IN OUR GRAPH/.test(usr), 'goal + prior knowledge ride the synthesis');
+  const oq = r.parseOpenQuestions('## X\nbody\nOPEN: does the queue reform bind before 2027?\nOPEN: which states bear the cost?\nOPEN: a\nOPEN: fourth question that must be dropped by the cap');
+  ok(oq.length === 2 || oq.length === 3, `OPEN lines parse (${oq.length}) — the too-short "a" is rejected`);
+  ok(oq[0].includes('queue reform'), 'first open question survives verbatim');
+  ok(r.parseOpenQuestions('no open lines here').length === 0 && r.parseOpenQuestions(null).length === 0, 'no OPEN lines / null → empty, never throws');
+}
+
 // --- newContentChars: repeat detection ---
 ok(r.newContentChars('', 'Brand new finding about the org leadership here.') > 0, 'against empty → all new');
 ok(r.newContentChars('Jane Doe is the President of the org.', 'Jane Doe is the President of the org.') === 0, 'exact repeat → no new content');

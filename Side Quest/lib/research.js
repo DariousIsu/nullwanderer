@@ -374,8 +374,31 @@ function buildOrganizeTargetPrompt({ target = '', raw = '' } = {}) {
   ];
 }
 
+// COMPREHENSION over collation (Lucas 2026-07-30: "the papers do not match the depth and
+// understanding I would expect"). The card template above is right for the roster sweep and
+// DEADLY for his research: it instructs the big model to reorganize-not-think, so a working
+// paper's targets come out as contact sheets. A USER research run synthesizes UNDERSTANDING —
+// mechanism, the causal link to the goal, tensions in the evidence, and the open questions the
+// next passes should chase. Grounding discipline survives translated: notes stay faithful to
+// notes; the model's own reasoning is welcome but must READ as reasoning, never as sourced fact.
+function buildUnderstandTargetPrompt({ goal = '', target = '', raw = '', known = '' } = {}) {
+  return [
+    { role: 'system', content: `You are the research brain synthesizing ONE target into UNDERSTANDING for a working paper. The gathered notes are evidence, not the deliverable — your job is what they MEAN for the goal.\nOutput EXACTLY this Markdown and nothing else:\n## ${target || '<target>'}\n**What it is & how it works:** <the mechanism in your own words, grounded in the notes>\n**Why it matters to the goal:** <the causal link — what depends on what, and which way it cuts>\n**Key facts & numbers:** <the load-bearing specifics from the notes; never invent a name or number — "not found" for anything missing>\n**Tensions & unknowns:** <where sources disagree; what the notes cannot yet answer>\nThen up to 3 lines, each starting exactly "OPEN: " — the questions research should chase next to close the unknowns.\nDiscipline: claims from the notes stay faithful to the notes; your own inference must read as inference ("this implies…", "likely because…"), never as sourced fact. Drop any leaked JSON or tool/control text.` },
+    { role: 'user', content: `THE GOAL: ${goal}\n\n${known ? `ALREADY IN OUR GRAPH:\n${String(known).slice(0, 2000)}\n\n` : ''}GATHERED NOTES ON ${target}:\n"""\n${String(raw).slice(0, 16000)}\n"""\n\nSynthesize the understanding section now.` }
+  ];
+}
+
+// The "OPEN: " lines out of a synthesized section — they feed the run's facet plan so the next
+// passes chase what the synthesis could not answer (research that closes its own gaps).
+function parseOpenQuestions(text) {
+  const out = [];
+  for (const m of String(text || '').matchAll(/^OPEN:\s*(.{8,220})$/gim)) out.push(m[1].trim());
+  return out.slice(0, 3);
+}
+
 module.exports = {
   parsePass, newContentChars, decideAdvance, facetsSummary,
+  buildUnderstandTargetPrompt, parseOpenQuestions,
   isClarification, buildGuidanceBlock, isStatusRequest,
   buildNewTargetPrompt, buildTopicalPrompt, buildDeepenPrompt, buildOrganizeTargetPrompt, pickSeedTarget, allTargetsCovered, isConcreteTarget, coverageLine,
   facetToolset, buildCoveragePlan, searchSignature,

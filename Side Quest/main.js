@@ -12604,8 +12604,29 @@ async function runDirectedResearchPass(focus) {
     const adv = rs.decideAdvance({ passes: target.passes, newChars, saturated: p.saturated, uncovered: uncovered.length, deep: deepTarget, refusal, validate: validateMode, dryStreak: target.dryPasses || 0 });
     if (adv.advance) {
       // CLOUD ORGANIZE this target → one clean section (the usable DRAFT), appended to the deliverable NOW.
+      // COMPREHENSION over collation (Lucas 2026-07-30: "papers do not match the depth I'd
+      // expect"): the card template (Focus/Key people/Contact) is right for the roster sweep and
+      // deadly for his research — it instructs the big model to reorganize-not-think. A user run
+      // SYNTHESIZES understanding (mechanism, causal link, tensions), and its OPEN questions feed
+      // the run's facet plan so the next passes chase what the synthesis couldn't answer.
       let section = '';
-      try { section = await condenseComplete(rs.buildOrganizeTargetPrompt({ target: target.name, raw: target.raw }), { numPredict: config.sectionNumPredict() }); } catch {}
+      const _isBeatRun = !!(() => { try { return (db.getMeta(`focus.${focus.id}.beat`) || '').trim(); } catch { return ''; } })();
+      try {
+        section = _isBeatRun
+          ? await condenseComplete(rs.buildOrganizeTargetPrompt({ target: target.name, raw: target.raw }), { numPredict: config.sectionNumPredict() })
+          : await condenseComplete(rs.buildUnderstandTargetPrompt({ goal, target: target.name, raw: target.raw, known: target.known || '' }), { numPredict: Math.max(1200, config.sectionNumPredict()) });
+      } catch {}
+      if (!_isBeatRun && section) {
+        try {
+          const oq = rs.parseOpenQuestions(section);
+          if (oq.length) {
+            const plan = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || '{}');
+            plan.facets = [...new Set([...(Array.isArray(plan.facets) ? plan.facets : []), ...oq])].slice(-14);
+            db.setMeta(`focus.${focus.id}.plan`, JSON.stringify(plan));
+            console.log(`[user-work] ${oq.length} open question(s) from the synthesis now steer the run`);
+          }
+        } catch { /* steering is additive */ }
+      }
       section = (section && section.trim()) ? section.trim() : `## ${target.name}\n${target.raw.slice(0, 1500)}`;
       const header = covered.length === 0 ? `# Directed research deliverable\n\n**Task:** ${goal}\n\n---\n\n` : '';
       try { await filesLib.dispatch({ tag: 'file-append', attrs: { path: file }, body: `${header}${section}\n\n` }); }
