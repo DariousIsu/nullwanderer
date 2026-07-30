@@ -29,6 +29,25 @@ const ITER_BUDGET = 6;          // per sitting; parked runs resume with a fresh 
 const FILE_CAP = 6000;          // chars of each watched file the edit-picker sees
 const RESULT_CAP = 3000;        // chars of raw test output that ride the next attempt
 
+// Squeeze a test/gate dump to its SIGNAL for the pick brief: a full-gate tail is ~3000 chars of
+// PASS-table noise with the failing-suite names buried at the very end — the model drowned in it
+// and returned schema-invalid picks three boots running (mislabeled "cloud unavailable"). Keep the
+// head line, every failure-ish line, and the closing tally; drop the green wall.
+function _squeezeTestOutput(s, cap = RESULT_CAP) {
+  const raw = str(s);
+  if (!raw.trim()) return '';
+  const lines = raw.split(/\r?\n/);
+  if (raw.length <= cap && lines.length <= 30) return raw;
+  const keep = [];
+  if (lines[0]) keep.push(lines[0]);
+  for (const ln of lines) {
+    if (/FAIL|failed:|✗|Error|error TS|Cannot|Traceback|✖/i.test(ln) && !/0 failed/.test(ln)) keep.push(ln);
+  }
+  for (const ln of lines.slice(-4)) if (!keep.includes(ln) && ln.trim()) keep.push(ln);
+  const out = keep.join('\n');
+  return (out.length > cap ? out.slice(0, cap) : out) || raw.slice(-cap);
+}
+
 function _dbm(deps) { return (deps && deps.db) || require('./db'); }
 function _rehearsal(deps) { return (deps && deps.rehearsal) || require('./rehearsal'); }
 
@@ -115,7 +134,7 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
   }
   run.iteration++;
   const ask = (deps.ask) || require('./cloud_logic').ask;
-  let pick = null;
+  let pick = null, _pickThrew = null;
   try {
     pick = await ask({
       task: 'rehearsal_iterate', v: 1,
@@ -123,18 +142,21 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
         goal: run.goal, suite: run.suite, iteration: run.iteration,
         files: _fileBlock(run, deps),
         diff_so_far: (() => { try { return str(R.diff({ slug: run.slug })).slice(0, 2500); } catch { return '(diff unavailable)'; } })(),
-        last_test_output: str(run.lastResult).slice(0, RESULT_CAP) || '(no test run yet)',
+        last_test_output: _squeezeTestOutput(run.lastResult) || '(no test run yet)',
       },
       want: EDIT_WANT, validate: validateEditPick, numPredict: 1400, think: false,
     });
-  } catch (e) { console.error('[rehearsal-driver] edit pick failed:', e.message); }
+  } catch (e) { _pickThrew = e; console.error('[rehearsal-driver] edit pick failed:', e.message); }
   if (!pick) {
     // A failed cloud pick did NO work (no edit, no test) — it must not spend budget: a flaky
     // cloud stretch could park the run without it ever actually iterating (live, boot110).
-    // Refund the increment and stay active; the next tick tries again at full budget.
+    // Refund the increment and stay active. NAME THE TRUE DOOR (boot113: three "cloud
+    // unavailable" notes were really schema-invalid picks — nothing had thrown at all).
     run.iteration--;
     _save(run, deps);
-    return { ok: false, status: 'active', note: 'cloud unavailable — budget refunded, run stays active' };
+    return { ok: false, status: 'active', note: _pickThrew
+      ? 'cloud unavailable — budget refunded, run stays active'
+      : 'edit pick returned but FAILED VALIDATION (schema) — budget refunded; the squeezed test output rides the next attempt' };
   }
 
   if (pick.action === 'give_up') {
@@ -258,4 +280,4 @@ function manifestLine({ deps = {} } = {}) {
   return `   - [rehearsal ${run.slug}] ${run.status} at iteration ${run.iteration} — "${run.goal.slice(0, 80)}" (suite ${run.suite})`;
 }
 
-module.exports = { RUN_KEY, ITER_BUDGET, EDIT_WANT, load, start, validateEditPick, iterate, resume, discard, manifestLine };
+module.exports = { RUN_KEY, ITER_BUDGET, EDIT_WANT, load, start, validateEditPick, iterate, resume, discard, manifestLine, _squeezeTestOutput };

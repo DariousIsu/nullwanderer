@@ -177,6 +177,23 @@ function freshDeps({ picks = [], testResults = [], editResults = [], writeResult
     const after = JSON.parse(meta.get('rehearsal_driver.run')).iteration;
     ok(r.ok === false && r.status === 'active' && /refunded/.test(r.note), 'refund: cloud-unavailable stays active and says refunded');
     ok(after === before, `refund: iteration unchanged (${before} → ${after})`);
+    // TRUE-DOOR NAMING (boot113): ask RETURNING null (validation) must not read "cloud unavailable"
+    ok(/VALIDATION/.test(r.note), 'a schema-invalid pick names ITS door, not the cloud\'s');
+    deps.ask = async () => { throw new Error('ECONNREFUSED'); };
+    const r2 = await drv.iterate({ deps });
+    ok(/cloud unavailable/.test(r2.note), 'a thrown ask still names the cloud door');
+  }
+
+  // SQUEEZE (boot113: the pick drowned in a 3000-char PASS wall; the failing names sat in the tail)
+  {
+    const wall = ['SUITE GREEN but the FULL GATE failed:']
+      .concat(Array.from({ length: 200 }, (_, i) => `PASS  smoke_thing_${i}.js  (12 ok)`))
+      .concat(['FAIL  smoke_broken.js  (2 failed)', '❌ FAILURES — 325 suites passed, 4 failed', 'failed: smoke_broken.js, smoke_other.js']).join('\n');
+    const sq = drv._squeezeTestOutput(wall);
+    ok(/smoke_broken\.js/.test(sq) && /4 failed/.test(sq), 'squeeze keeps the failing names + tally');
+    ok(!/smoke_thing_50\.js/.test(sq), 'squeeze drops the green wall');
+    ok(sq.length <= 3000, 'squeeze respects the cap');
+    ok(drv._squeezeTestOutput('short output\nPASS — 1 ok') === 'short output\nPASS — 1 ok', 'short output passes through untouched');
   }
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
