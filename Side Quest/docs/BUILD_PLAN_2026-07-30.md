@@ -56,6 +56,16 @@ hooks for the visual-log lane (docs/OBS_INTERFACE_HOOKS.md — the parallel cont
 | 3.5 | **§6 L3** named join (swarm release triggers one synthesis pass → named artifact) | S | a fan-out without a named join is a scatter |
 | 3.6 | Org-research lane | L | genuinely new; own design sitting first |
 
+## Landed after the plan was written (2026-07-30 late — chat-audit + research-quality arc)
+
+Redirect classifier-primary (07f96eb) · deferred-agenda capture (ac9f8da, Fulton → task #88) ·
+O5 self-check (0db5613) · O6 refuter (7317936) · **OPEN questions must be gaps in UNDERSTANDING,
+not fetch errands** (4b16f23 — measured 9/9 and 27/27 locate-shaped before; SAIS afterwards asked
+how budget is allocated, how model accuracies compare, how strategy fits the national roadmap) ·
+vision focus is never a placeholder (21cdab9) · subc slice C, board+anticipation (31edec2) ·
+liveDigest so inventory can't crowd out live work (74d8e30) · restart ≠ defect (8eff2ef) ·
+**civic body store + roster capture + backfill** (4cef009/5c75a8d/65e4805 → [[civic-body-store]]).
+
 ## Standing (no build)
 
 Watch: quick_lookup "no such column: FEC_Ca…" (mints a need at 3×) · ANN nightly rebuild firing ·
