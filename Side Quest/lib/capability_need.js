@@ -66,13 +66,16 @@ function _similar(a, b) {
 
 // Land a need. Dedupes against OPEN/REHEARSING rows (a need already being worked must not fork);
 // a retired/parked twin does NOT block — a need that comes back is a need again.
-function record(need, { bornFrom = null, deps = {}, nowMs = Date.now() } = {}) {
+// similarFloor: callers whose need text carries a fixed boilerplate (self-watch's "recurring
+// failure in my own program: <sig>") raise the floor so the shared preamble alone can't merge
+// DISTINCT failures into one need. Default unchanged for every existing caller.
+function record(need, { bornFrom = null, deps = {}, nowMs = Date.now(), similarFloor = 0.55 } = {}) {
   const n = str(need).replace(/\s+/g, ' ').trim();
   if (n.length < 12) return { id: null, reason: 'too short to be a real need' };
   try {
     const d = _db(deps).getDb();
     for (const row of d.prepare("SELECT id, need FROM capability_needs WHERE status IN ('open','rehearsing')").all()) {
-      if (_similar(row.need, n) >= 0.55) return { id: row.id, deduped: true };
+      if (_similar(row.need, n) >= similarFloor) return { id: row.id, deduped: true };
     }
     const info = d.prepare('INSERT INTO capability_needs (need, born_from, status, created_ts, updated_ts) VALUES (?, ?, ?, ?, ?)')
       .run(n, str(bornFrom).slice(0, 160) || null, 'open', nowMs, nowMs);

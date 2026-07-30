@@ -480,6 +480,18 @@ async function speakThroughCompanion(text) {
 app.whenReady().then(() => {
   config.loadEnv();
   db.init();
+  // SELF-WATCH (Lucas 2026-07-30: "can she read her own watchdogs and suggest repairs?"):
+  // the log stream gets an INTERNAL reader — every console line is classified onto the obs bus
+  // (lib/obs_bus: signal lanes stored, noise counted, anomalies signature-capped), and a
+  // RECURRING anomaly opens a capability need through the existing rehearse door. The visual-log
+  // interface reads the same bus live via 'obs:event' + polls 'obs:recent'
+  // (contract: docs/OBS_INTERFACE_HOOKS.md).
+  try {
+    require('./lib/self_watch').install({});
+    require('./lib/obs_bus').subscribe((evt) => {
+      try { for (const wc of require('electron').webContents.getAllWebContents()) { try { if (!wc.isDestroyed()) wc.send('obs:event', evt); } catch {} } } catch {}
+    });
+  } catch (e) { console.error('[main] self-watch install failed:', e.message); }
   // Owner-world: seed Lucas's family / org / Zoe's self-region as first-class objects (idempotent) so
   // self:zoe/* and person:owner/* coordinates dereference to real neighborhoods (KEYSTONE Slice 0).
   try { require('./lib/owner_world').seed(); } catch (e) { console.error('[owner-world] seed failed:', e.message); }
@@ -2198,6 +2210,14 @@ app.on('window-all-closed', async () => {
 });
 
 // --- IPC ----------------------------------------------------------------
+
+// OBSERVABILITY BUS — the visual-log interface's poll surface (docs/OBS_INTERFACE_HOOKS.md).
+// Live events ride the 'obs:event' broadcast installed at boot; this handler is the catch-up
+// tail: pass the last seen id as sinceId and render what returns.
+ipcMain.handle('obs:recent', (_e, opts = {}) => {
+  try { return { ok: true, events: require('./lib/obs_bus').recent(opts || {}) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
 
 // Editor Studio — open the window + the registry/import surface (runs in main; renderer invokes).
 ipcMain.handle('editor:open', () => { createEditorWindow(); return { ok: true }; });
@@ -9437,8 +9457,8 @@ const operatorTools = {
   // THE REHEARSAL DRIVER (O2, slice 5) — the loop over the R1 hands. start journals THE run (one
   // at a time); iterate = one bounded pick-edit-test step (the tick advances it too); status reads
   // the journal. Nothing here adopts — green ends as a proposal-card document (R3 absolute).
-  rehearsal_drive_start: async ({ slug, goal, suite, files } = {}) => {
-    try { const r = require('./lib/rehearsal_driver').start({ slug, goal, suite, files: Array.isArray(files) ? files : (files ? [files] : []) }); return r.ok ? `run "${r.run.slug}" started — suite ${r.run.suite}; iterate with rehearsal_drive_iterate` : `cannot start: ${r.reason}`; } catch (e) { return 'ERROR: ' + e.message; }
+  rehearsal_drive_start: async ({ slug, goal, suite, files, study } = {}) => {
+    try { const r = require('./lib/rehearsal_driver').start({ slug, goal, suite, files: Array.isArray(files) ? files : (files ? [files] : []), study }); return r.ok ? `run "${r.run.slug}" started — suite ${r.run.suite}; iterate with rehearsal_drive_iterate` : `cannot start: ${r.reason}`; } catch (e) { return 'ERROR: ' + e.message; }
   },
   rehearsal_drive_iterate: async () => {
     try { const r = await require('./lib/rehearsal_driver').iterate({}); return `[${r.status}] ${r.note}`; } catch (e) { return 'ERROR: ' + e.message; }
