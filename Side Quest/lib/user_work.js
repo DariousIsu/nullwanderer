@@ -55,7 +55,10 @@ function parseDeadline(text, anchorTs) {
 
 // Working-topic news vigilance: match recent headlines to a thread's content by token overlap.
 // ≥2 distinct content-token hits — one shared word ("grid") is coincidence, two is a topic.
-const _STOP = new Set(['research', 'substantiate', 'identify', 'compile', 'investigate', 'verify', 'gather', 'understand', 'document', 'catalog', 'survey', 'trace', 'analyze', 'analyse', 'that', 'this', 'with', 'from', 'into', 'about', 'their', 'each', 'every', 'lucas', 'help', 'find', 'right', 'needs', 'need', 'cases', 'where', 'would', 'could', 'should', 'been', 'have', 'more', 'most', 'what', 'when', 'were', 'will']);
+// Work-shape and time-filler words are NOT topics (boot122 first-fire: "…over coming weeks"
+// matched 3 unrelated stories on "coming"+"weeks" — ordinary news prose — and the false heat
+// would have outranked his real grid cluster at the next pick).
+const _STOP = new Set(['research', 'substantiate', 'identify', 'compile', 'investigate', 'verify', 'gather', 'understand', 'document', 'catalog', 'survey', 'trace', 'analyze', 'analyse', 'that', 'this', 'with', 'from', 'into', 'onto', 'about', 'their', 'each', 'every', 'lucas', 'help', 'find', 'right', 'needs', 'need', 'cases', 'where', 'would', 'could', 'should', 'been', 'have', 'more', 'most', 'what', 'when', 'were', 'will', 'coming', 'weeks', 'week', 'days', 'months', 'years', 'over', 'next', 'upcoming', 'topic', 'topics', 'provided', 'write', 'writing', 'written', 'report', 'reports', 'story', 'stories', 'paper', 'papers', 'draft', 'memo']);
 function threadTokens(content) {
   return new Set(String(content || '').toLowerCase().match(/[a-z][a-z0-9-]{3,}/g)?.filter((w) => !_STOP.has(w)) || []);
 }

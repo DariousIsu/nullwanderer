@@ -42,6 +42,10 @@ const hits = uw.matchNewsToThread('understand transmission and grid pressure nee
 ok(hits.length === 2, `grid/transmission thread matches 2 stories (got ${hits.length})`);
 ok(!hits.some((h) => /juice/i.test(h.title)), 'orange juice never matches a grid thread');
 ok(uw.matchNewsToThread('x', heads).length === 0, 'a threadbare thread matches nothing');
+// boot122 first-fire regression: generic work-shape phrasing must never match news prose
+ok(uw.matchNewsToThread('research and write on the provided topic over coming weeks',
+  [{ title: 'Senate to vote in coming weeks', summary: 'over the next weeks lawmakers write the report' }]).length === 0,
+  'CRITICAL: "over coming weeks"-style filler never matches (work-shape words are not topics)');
 
 // --- the ordering: deadline > news heat > recency ---
 const threads = [
