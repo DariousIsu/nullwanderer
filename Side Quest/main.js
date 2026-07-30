@@ -10736,11 +10736,25 @@ async function _autonomicSchedulerTick() {
     // whether to rotate. `lastRun` is bumped every tick so the running beat stays "newest" and isn't re-picked.
     const bs = state.beats[beatId] || {};
     bs.thread = focus.id;
-    if (bs.sliceStartCovered == null) bs.sliceStartCovered = _coveredCount(focus.id);   // adopt an already-running slice
+    if (bs.sliceStartCovered == null) {
+      bs.sliceStartCovered = _coveredCount(focus.id);   // adopt an already-running slice
+      // First adoption after a boot: the running thread's depth/facets predate this boot's registry —
+      // refresh here too, or a thread adopted mid-slice grinds the OLD shape until its first rotation.
+      const runningBeat = beats.find((b) => b && b.id === beatId);
+      if (runningBeat) _refreshBeatShape(runningBeat, focus.id);
+    }
     const sliceCovered = _coveredCount(focus.id) - bs.sliceStartCovered;
     bs.lastRun = Date.now();
     state.beats[beatId] = bs;
-    if (!sched.shouldRotate({ sliceCovered })) { _fillBackgroundWorkers(state, electedPool, topicPool, beatId); _saveSchedState(state); return; }   // under budget → keep this beat deep (but keep workers busy)
+    // LADDER PREEMPTION (slice B, boot115 finding): a beat adopted from an earlier boot can sit on a
+    // rung the ladder no longer exposes (townships-ks rode in from the tier-major era while KS rung 1
+    // was untouched) — and since sweep passes are idle-tiered, it would hold the primary for HOURS
+    // before covering its slice budget. An out-of-rung beat rotates off NOW; thread + progress survive.
+    const _pool0 = electedPool.concat(topicPool);
+    const _outOfRung = _pool0.some((b) => b && b.id === beatId)
+      && !sched.ladderFilter(_pool0, state, null).some((b) => b && b.id === beatId);
+    if (_outOfRung) console.log(`[autonomic] ladder: ${beatId} is below its state's unconverged rung → rotating off`);
+    if (!_outOfRung && !sched.shouldRotate({ sliceCovered })) { _fillBackgroundWorkers(state, electedPool, topicPool, beatId); _saveSchedState(state); return; }   // under budget → keep this beat deep (but keep workers busy)
     _saveSchedState(state);
     try { focusLib.clear('autonomic-rotate'); } catch {}                            // PAUSE — thread + progress survive
     console.log(`[autonomic] rotated off ${beatId} (covered ${sliceCovered} this slice) → picking next`);

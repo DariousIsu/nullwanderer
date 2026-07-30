@@ -547,7 +547,10 @@ const UNICAMERAL = { NE: 'Nebraska Legislature (unicameral)' };
 // current membership (every seat), so this is granular in content without assuming a district-numbering scheme.
 function stateLegTargets(stateCode) {
   const code = String(stateCode || '').toUpperCase();
-  const stateName = STATE_NAMES[code];
+  // STATE_NAMES derives from the COUNTY gazetteer, which correctly lacks CT/RI (no county
+  // governments) — but their LEGISLATURES are real. Fall back to the place gazetteer's state name
+  // so no state's rung-1 beat is an empty worklist (boot115 finding: both were silently dropped).
+  const stateName = STATE_NAMES[code] || (US_PLACES[code] && US_PLACES[code].name);
   if (!stateName) return [];
   if (UNICAMERAL[code]) return [UNICAMERAL[code]];
   const lower = STATE_LOWER_CHAMBER[code] || 'House of Representatives';
@@ -556,7 +559,7 @@ function stateLegTargets(stateCode) {
 
 function stateLegBeat(stateCode) {
   const code = String(stateCode || '').toUpperCase();
-  const stateName = STATE_NAMES[code] || code;
+  const stateName = STATE_NAMES[code] || (US_PLACES[code] && US_PLACES[code].name) || code;
   const targets = stateLegTargets(code);
   return {
     id: `state-legislature-${code.toLowerCase()}`,
