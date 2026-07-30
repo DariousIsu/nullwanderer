@@ -45,6 +45,27 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(ap.parseProposalList('no proposals pending') === null && ap.parseProposalList('') === null && ap.parseProposalList(null) === null,
     'prose/empty/null → null, never a throw and never a fake count');
 
+  // --- TENANT BACKLOG section (inventory §3): visibility, never a timer — the charter's rule ---
+  {
+    const fs = require('fs'), path = require('path'), os = require('os');
+    const Database = require('better-sqlite3');
+    const tmp = path.join(os.tmpdir(), `smoke_tenant_${process.pid}.db`);
+    const d = new Database(tmp);
+    d.exec('CREATE TABLE entity_proposals (id INTEGER PRIMARY KEY, confidence REAL); CREATE TABLE relation_proposals (id INTEGER PRIMARY KEY)');
+    d.prepare('INSERT INTO entity_proposals (confidence) VALUES (0.95), (0.85), (0.5)').run();
+    d.prepare('INSERT INTO relation_proposals DEFAULT VALUES').run();
+    d.close();
+    process.env.ZOE_TENANT_DB = tmp;
+    const snap = await ap.snapshot({ echoSuit: null });
+    const sec = snap.sections.find((s) => s.key === 'tenant-backlog');
+    ok(sec && sec.count === 4 && /2 entity proposal\(s\) at\/above the 0.8 floor/.test(sec.top), 'the tenant backlog rides the manifest with honest counts');
+    ok(/YOUR explicit call/.test(sec.label), 'the label says the drain is his call — never a timer (the charter)');
+    process.env.ZOE_TENANT_DB = path.join(os.tmpdir(), 'definitely-missing-tenant.db');
+    const snap2 = await ap.snapshot({ echoSuit: null });
+    ok(!snap2.sections.some((s) => s.key === 'tenant-backlog'), 'a missing tenant DB drops the section — never a fake zero');
+    try { fs.unlinkSync(tmp); } catch {}
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

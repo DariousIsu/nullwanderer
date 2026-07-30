@@ -142,6 +142,20 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
     run.status = 'parked'; _save(run, deps);
     return { ok: true, status: 'parked', note: `iteration budget spent at ${run.iteration} — resumable (a bound defers, never disappears)` };
   }
+  // SANDBOX SELF-HEAL (boot128: need-1 burned 4 sittings against "no sandbox — create it first").
+  // start() created the sandbox, but a reboot or tidy() prune can take it out from under an ACTIVE
+  // run — after which EVERY file action refuses until the budget parks it. A live run re-creates
+  // its sandbox once per sitting; only an unrecreatable sandbox parks the run, honestly named.
+  try {
+    if (!R.list().some((s) => s.slug === run.slug)) {
+      const cr = str(R.create({ slug: run.slug }));
+      if (/^sandbox "/.test(cr)) console.log(`[rehearsal] sandbox "${run.slug}" was lost — re-created for the active run`);
+      else {
+        run.status = 'parked'; _save(run, deps);
+        return { ok: true, status: 'parked', note: `sandbox lost and not recreatable (${cr.slice(0, 80)}) — parked, resumable` };
+      }
+    }
+  } catch { /* self-heal is best-effort; the normal refusal path still rides */ }
   run.iteration++;
   const ask = (deps.ask) || require('./cloud_logic').ask;
   let pick = null, _pickThrew = null;

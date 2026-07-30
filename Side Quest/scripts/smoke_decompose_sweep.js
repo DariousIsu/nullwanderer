@@ -149,5 +149,18 @@ ok(Array.isArray(sweep.findUndecomposed(db, { limit: 0 })), 'garbage bounds → 
     'no open inquiry → pure cheapest-first restored (the pull leaves with the inquiry)');
 }
 
+// ── INVERSION 2026-07-30 (inventory §8): every lane decomposes by default; only self-keyed lanes stay out ──
+{
+  const inq = land('Inquiry finding', 'The parish presidents table compiled at touch 13.', 'inquiry');
+  const auto = land('Autonomy artifact', 'A real document she built during an idle tick.', 'autonomy');
+  const news = land('News item', 'Data centers strain the Texas grid, ERCOT warns.', 'news');
+  const meet = land('Meeting notes', 'The board discussed the levee appropriation.', 'meeting');
+  const found = sweep.findUndecomposed(db, { limit: 50 }).map((r) => r.id);
+  ok(found.includes(inq) && found.includes(auto), 'CRITICAL: lanes outside the old allowlist (inquiry, autonomy) are READ by default now');
+  ok(!found.includes(news) && !found.includes(meet), 'self-keyed lanes (news, meeting) stay out — they write their own encounter refs');
+  const only = sweep.findUndecomposed(db, { limit: 50, sources: ['inquiry'] }).map((r) => r.id);
+  ok(only.includes(inq) && !only.includes(auto), 'an explicit sources filter still narrows to one lane');
+}
+
 console.log(`\n${fail ? 'FAIL' : 'PASS'} — ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

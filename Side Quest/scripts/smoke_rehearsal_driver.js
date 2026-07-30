@@ -220,6 +220,26 @@ function freshDeps({ picks = [], testResults = [], editResults = [], writeResult
     ok(drv._squeezeTestOutput('short output\nPASS — 1 ok') === 'short output\nPASS — 1 ok', 'short output passes through untouched');
   }
 
+  // --- SANDBOX SELF-HEAL (boot128: need-1 burned 4 sittings on "no sandbox — create it first") ---
+  {
+    const { deps } = freshDeps({ picks: [{ action: 'test', why: 'judge' }] });
+    deps.rehearsal.list = () => [];   // the sandbox vanished (reboot / tidy prune) under an ACTIVE run
+    drv.start({ slug: 'healme', goal: 'prove a lost sandbox self-heals instead of burning sittings', suite: 'smoke_board.js', deps });
+    deps.rehearsal.list = () => [];   // still gone at iterate time
+    let recreated = 0; const _c = deps.rehearsal.create;
+    deps.rehearsal.create = (a) => { recreated++; return _c(a); };
+    const r = await drv.iterate({ deps });
+    ok(recreated === 1 && r.ok && r.status !== 'parked', 'a lost sandbox is re-created once and the sitting proceeds');
+  }
+  {
+    const { deps } = freshDeps();
+    drv.start({ slug: 'deadbox', goal: 'prove an unrecreatable sandbox parks the run honestly', suite: 'smoke_board.js', deps });
+    deps.rehearsal.list = () => [];
+    deps.rehearsal.create = () => 'cannot create: already 3 live sandboxes (max 3) — discard one first';
+    const r = await drv.iterate({ deps });
+    ok(r.ok && r.status === 'parked' && /sandbox lost and not recreatable/.test(r.note), 'an unrecreatable sandbox parks with the reason named — never a refusal loop');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

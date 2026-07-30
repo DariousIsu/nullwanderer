@@ -42,6 +42,17 @@ const META_KEY = 'decompose_sweep:attempted';
  */
 const DECOMPOSE_LANES = ['browser_download', 'canvas_drop', 'research', 'org_research'];
 
+/**
+ * INVERTED 2026-07-30 (shortcomings inventory §8): the allowlist above made every NEW lane invisible
+ * by default — inquiry findings, autonomy artifacts, editor attachments, conversation docs all landed
+ * and were never read. The honest key is "no lane of its own reads it": EXCLUDE only the lanes
+ * MEASURED to write encounters under their own refs (news → `news:<id>`, legislation → its own path,
+ * meeting → meeting_encounters); every other arrival route decomposes by default. A new lane is READ
+ * unless it demonstrably reads itself — let-it-in semantics, with the NOT-EXISTS doc: check and the
+ * attempted set still preventing any re-read.
+ */
+const SELF_KEYED_LANES = ['news', 'legislation', 'meeting'];
+
 // The attempted set, as ids. Stored in meta rather than a new table: it is a small operational marker,
 // not evidence, and it must not look like knowledge.
 function attemptedSet(db) {
@@ -75,15 +86,19 @@ function markAttempted(db, ids = []) {
  */
 function findUndecomposed(db, { limit = 50, sinceId = 0, sources = null } = {}) {
   const attempted = attemptedSet(db);
-  // Default to the lanes that actually decompose. An explicit `sources` still wins, so a caller can
-  // deliberately sweep something unusual — but the DEFAULT must not re-read four thousand news rows.
-  const lanes = (Array.isArray(sources) && sources.length) ? sources : DECOMPOSE_LANES;
+  // Default: every lane EXCEPT the self-keyed ones (see SELF_KEYED_LANES — inverted 2026-07-30).
+  // An explicit `sources` still wins, so a caller can deliberately sweep one lane.
   let rows = [];
   try {
     const where = ['d.body IS NOT NULL', "TRIM(d.body) <> ''", 'd.id > ?'];
     const args = [Number(sinceId) || 0];
-    where.push(`d.source IN (${lanes.map(() => '?').join(',')})`);
-    args.push(...lanes);
+    if (Array.isArray(sources) && sources.length) {
+      where.push(`d.source IN (${sources.map(() => '?').join(',')})`);
+      args.push(...sources);
+    } else {
+      where.push(`(d.source IS NULL OR d.source NOT IN (${SELF_KEYED_LANES.map(() => '?').join(',')}))`);
+      args.push(...SELF_KEYED_LANES);
+    }
     rows = db.getDb().prepare(
       `SELECT d.id, d.title, d.source, d.origin_host, LENGTH(d.body) AS chars
          FROM documents d

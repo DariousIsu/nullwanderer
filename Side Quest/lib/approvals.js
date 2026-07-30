@@ -73,13 +73,40 @@ async function _echoSection(echoSuit) {
   } catch { return null; }
 }
 
+// TENANT BULK-PROMOTE AWAITS THE OPERATOR (2026-07-30, inventory §3): ~146k proposals sit in the
+// rainey tenant store behind the Option-B review gate — the chain that turned 8,508 documents into
+// 14 promoted entities strangles exactly here. promote_tenant_proposals' own charter forbids timer
+// wiring ("no silent auto-promotion"), so the ONLY correct build is VISIBILITY: the count rides
+// the AWAITING-LUCAS manifest and the drain fires on HIS explicit word. Read-only count over the
+// tenant DB file; fail-soft — a missing/locked DB drops the section, it never fakes a zero.
+function _tenantSection() {
+  try {
+    const p = process.env.ZOE_TENANT_DB || 'C:/Users/azrae/Desktop/NX ECHO/nx-echo/data/mcps/rainey/isolated.db';
+    if (!require('fs').existsSync(p)) return null;
+    const Database = require('better-sqlite3');
+    const d = new Database(p, { readonly: true });
+    let ents = 0, rels = 0, ready = 0;
+    try { ents = d.prepare('SELECT COUNT(*) c FROM entity_proposals').get().c; } catch {}
+    try { rels = d.prepare('SELECT COUNT(*) c FROM relation_proposals').get().c; } catch {}
+    try { ready = d.prepare('SELECT COUNT(*) c FROM entity_proposals WHERE confidence >= 0.8').get().c; } catch {}
+    try { d.close(); } catch {}
+    if (!(ents + rels)) return null;
+    return {
+      key: 'tenant-backlog',
+      label: 'Rainey tenant backlog (bulk-promote is YOUR explicit call — say "promote the tenant backlog")',
+      count: ents + rels,
+      top: `${ready} entity proposal(s) at/above the 0.8 floor would ride one promote_tenant_proposals call`,
+    };
+  } catch { return null; }
+}
+
 // ---- the read-model -----------------------------------------------------------------------------
 
 // `sources` is injectable for smokes; production callers omit it.
 async function snapshot({ echoSuit = null, sources = null } = {}) {
   const secs = Array.isArray(sources)
     ? sources.slice()
-    : [_pullerSection(), _gapsSection(), _rehearsalSection(), await _echoSection(echoSuit)];
+    : [_pullerSection(), _gapsSection(), _rehearsalSection(), _tenantSection(), await _echoSection(echoSuit)];
   const sections = secs.filter(Boolean);
   return { ts: Date.now(), sections, total: sections.reduce((n, s) => n + (s.count || 0), 0) };
 }
