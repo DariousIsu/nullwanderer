@@ -269,10 +269,22 @@ async function maybeHeartbeat() {
       }
     });
 
+    // FIT THE WINDOW (boot134 live: this prompt measured ~8.1k tok vs num_ctx 8192 and GROWING —
+    // past the line the daemon silently front-drops the system head, protocols first). Same organ
+    // and numbers as the chat sites in main.js; the num_predict below makes the reserve real.
+    const HB_NUM_PREDICT = 1200;
+    let _hbMessages = messages;
+    try {
+      const fit = require('./context').fitToWindow(messages, { numCtx: 8192, numPredict: HB_NUM_PREDICT });
+      _hbMessages = fit.messages;
+      if (fit.report) console.warn(`[fit] heartbeat prompt ${fit.report.before}ch > ${fit.report.budget}ch budget — dropped ${fit.report.droppedTurns} old turn(s), system -${fit.report.systemCut}ch, final -${fit.report.finalCut}ch → ${fit.report.after}ch`);
+    } catch (e) { console.error('[fit] heartbeat fit failed — sending unfitted:', e.message); }
+
     await streamChat({
       model: MODEL,
-      messages,
-      onToken: (chunk) => parser.feed(chunk)
+      messages: _hbMessages,
+      onToken: (chunk) => parser.feed(chunk),
+      options: { num_ctx: 8192, num_predict: HB_NUM_PREDICT }
     });
 
     const { thought, say, truncated } = parser.finalize();
