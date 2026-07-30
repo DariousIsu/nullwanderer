@@ -109,8 +109,18 @@ function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.error('  F
     'and duplication is solved by lifting it OUT of identity, not by withholding it');
   ok(/assignment: turnRoute && \(turnRoute\.route === 'task' \|\| isAssignment\)/.test(m),
     'the router\'s existing assignment signal now reaches the plan');
-  ok(/results return to your stream within ~5 minutes \(never this turn\)/.test(m),
-    'the manifest labels the background agent honestly: ASYNC returns, never this-turn material');
+  // Rewritten 2026-07-30 (build plan 2.5). The honesty requirement is unchanged — async, ~5 min,
+  // NOT material for this turn — but the entry must now also say WHERE the answer lands, because
+  // that is the only thing distinguishing it from the dig. When both entries carried the same
+  // "never for what Lucas is waiting on" guard, neither was ever picked and <dig> stayed dark.
+  ok(/land in YOUR OWN stream within ~5 minutes, not in this conversation/.test(m),
+    'the manifest labels the background agent honestly: ASYNC, ~5 min, not this-turn material');
+  ok(/fork a dig instead/.test(m),
+    'and points at the dig for anything whose answer belongs back in the chat (the discriminator)');
+  ok(/THE ONLY TOOL WHOSE ANSWER COMES BACK TO THIS CONVERSATION/.test(m),
+    'the dig leads with its homecoming — measured DARK for as long as it led with "ASYNC"');
+  ok(!/Never for what Lucas is waiting on THIS turn/.test(m),
+    'and the guard that swallowed the dig\'s whole use case is gone');
 
   // ⭐ THE BLOCK CONTRACT. Live 2026-07-21: given the tools and an assignment plan she DID open a
   // canvas tab — then guessed the block. `block_type:"text"` → "invalid block_type: text", the retry

@@ -7607,12 +7607,29 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
             // agent_inbox (~5 min), so a delegated run's results DO come home (readings + FINISHED
             // DELEGATED WORK in the tick manifest). Still async — never material for THIS turn, so
             // an assignment Lucas is waiting on stays in-canvas, in-turn.
-            { key: 'background agent', label: 'ASYNC — results return to your stream within ~5 minutes (never this turn); use it for background gathering, never for what Lucas is waiting on right now', how: '<echo-delegate name="AGENT">the full task spec</echo-delegate>' },
+            // Guard rewritten to DISTINGUISH it from the dig below rather than duplicate its
+            // prohibition — when two entries carry the same "not for what he's waiting on", neither
+            // gets picked. The real difference is where the answer lands.
+            { key: 'background agent', label: 'ASYNC — results land in YOUR OWN stream within ~5 minutes, not in this conversation; use it for bulk gathering you will look at later. If the answer should come back to Lucas in this chat, fork a dig instead (below)', how: '<echo-delegate name="AGENT">the full task spec</echo-delegate>' },
             // MID-CONVERSATION DIG (slice 4b): the talk itself can fork research. Distinct from the
             // delegate above — a dig is HER line of inquiry (persists, accretes evidence across
             // touches) and its finding returns TO THIS CHAT addressed to what was asked, not to her
             // private stream. Answer what you can NOW in the same reply; the dig covers what you can't.
-            { key: 'fork a dig (mid-conversation research)', label: 'ASYNC — when the talk raises a question worth real research that you cannot answer from what you hold, fork a line of inquiry: keep talking now (give what you have, say you are digging), and your finding returns to this conversation in a few minutes addressed to what was asked. Never for what Lucas is waiting on THIS turn', how: '<dig>the question, fully stated so it stands alone away from this chat</dig>' },
+            // 2.5 SURFACING REVIEW (2026-07-30). Measured DARK: zero <dig> emissions ever, across
+            // every boot. The dispatch path is fine (only personal-mode gates it) and the manifest
+            // is never trimmed (no trim marker in any log), so the entry reaches her intact and she
+            // still never reaches for it. The wording was the problem, two ways:
+            //   · it opened "ASYNC" and closed "never for what Lucas is waiting on THIS turn" —
+            //     the same guard the delegate entry above carries. But in conversation, a question
+            //     worth real research is almost always one he IS interested in now, so the guard
+            //     swallowed the whole use case and the two async options read as interchangeable.
+            //   · the one difference that actually decides between them — a dig comes home HERE,
+            //     a delegate lands in her private stream — was buried mid-sentence.
+            // The need is real and is being met by the wrong lane: 17 of 62 inquiries were born
+            // from conversation HARVEST, which mines the talk afterwards and returns nothing to it.
+            // So: lead with the homecoming, and replace the paralysing prohibition with the rule
+            // that actually applies — answer now, dig the remainder. Never dig INSTEAD of answering.
+            { key: 'fork a dig (mid-conversation research)', label: 'THE ONLY TOOL WHOSE ANSWER COMES BACK TO THIS CONVERSATION — a few minutes from now, addressed to what was asked (the background agent lands in your private stream instead). Reach for it the moment you can only PARTLY answer something he raised: give the part you have in this reply, say you are digging on the rest, and fork the rest. It costs you nothing this turn and it is how a half-answer becomes a whole one. Do not dig INSTEAD of answering, and do not dig what you already know', how: '<dig>the question, fully stated so it stands alone away from this chat</dig>' },
             // THE SKILL SHELF (O1): her own proven know-how, trigger lines cheap, bodies on pull.
             { key: 'pull a skill off the shelf', label: 'her stored know-how (proven procedures, replay flows) — the body returns as a tool result THIS turn; pull one only when its trigger matches what you are actually doing', how: '<skill name="the-skill-slug"/>' },
           ] });

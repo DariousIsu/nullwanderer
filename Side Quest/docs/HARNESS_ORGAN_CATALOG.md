@@ -589,11 +589,11 @@ repairs of 2026-07-29 (boots 97–105). "Quiet" = on-demand organ with no recent
 | Directives prose layer (§1) | LIVE | always rendered; enforce half is O7 (not built) |
 | [dN] dereference (§1) | LIVE (d-half) | coord-half was DEAD (unexported resolveCoord) — fixed 86d7985; first live coord deref still owed |
 | Inbox drain (§1) | LIVE, QUIET | drains when delegates return; origin-join still missing (O3) |
-| echo-guide pack (§1) | QUIET (on-demand) | the O1 generalization exists (skill_pull) but has never fired |
+| echo-guide pack (§1) | QUIET (on-demand) | ~~never fired~~ — its O1 generalization `skill_pull` is now the busiest read on the shelf (see O1) |
 | O0 line of inquiry | ⭐LIVE, DOMINANT | `chose=advance-inquiry` is the top move (26 of 49); touches 13→35 on one inquiry; expect MET fires |
 | O0.h conversation harvest | LIVE | 169 conversations promoted; bank turns over daily (verified in DB — the "starved" read was a severed-log artifact) |
-| Mid-conversation dig | DARK | zero `<dig>` emissions ever — model never reaches for it; needs prompt-side surfacing review |
-| O1 skill shelf | HALF-LIVE | shelf syncs (6 flows); pull + births + chat trigger-lines: zero firings |
+| Mid-conversation dig | DARK — **surfaced 2026-07-30** | still zero `<dig>` ever, and the cause is NOT plumbing: only personal-mode gates dispatch, and the manifest has never once trimmed (no trim marker in any boot log), so the entry reaches her intact. It read as interchangeable with the background agent — both opened "ASYNC" and both closed "never for what Lucas is waiting on", a guard that swallows the whole use case, while the one deciding difference (a dig comes home to THIS chat) sat buried mid-sentence. The NEED is real and the wrong lane is serving it: **17 of 62 inquiries are conversation-HARVEST-born**, mined after the fact and returning nothing to the talk. Both entries rewritten to lead with where the answer lands. **Watch: the first `<dig>` emission.** |
+| O1 skill shelf | ⭐LIVE — **remeasured 2026-07-30** | ~~zero firings~~ was STALE. **20 skills, 80 pulls, 10 distinct skills pulled**, most recent the same day; top procedure 23×. Births are live too (skills born 07-24 … 07-30). `uses` increments only in `resolveBody`, i.e. only on a real pull — so these are pulls, not syncs. The organ converged; the ledger simply never caught up. |
 | O2 rehearsal driver | UNBLOCKED 2026-07-29 | 14 `chose=rehearse` across two boots = real demand; 18/18 died on the slug (fixed 2ad33b0); first live iteration owed |
 | §6 L4 failures-visible | LIVE (manifest half) | RECENT FAILURES section ships; failures-through-the-drain half missing |
 | Beat/puller IDLE TIER (new, 2026-07-29) | LIVE, PROVEN | both burners defer audibly; `idle-defer: her-work-in-flight` on boot105 first tick |
