@@ -13046,6 +13046,38 @@ async function runDirectedResearchPass(focus) {
             }
           }
         } catch (e) { console.error('[cardinality] capture failed:', e.message); }
+        // CIVIC ROSTER CAPTURE (docs/CIVIC_BODY_SCHEMA_DESIGN.md slice 2). The seat count says how
+        // many; this says WHO — the structured half of the same completion, so a researched board
+        // lands somewhere queryable instead of only as prose. Same anti-fabrication doctrine as the
+        // count (lib/civic_capture): asked as its own narrow cited question, never extracted from
+        // target.raw, and every member vetted against the hosts this run actually visited.
+        // Runs on the SAME gate as cardinality (finite elected bodies), once per body.
+        try {
+          const civic = require('./lib/civic_store');
+          const ccap = require('./lib/civic_capture');
+          if (!civic.roster(target.name).length) {
+            const { ans: rAns } = await runPass(ccap.buildPrompt(target.name));
+            let vis2 = []; try { vis2 = JSON.parse(db.getMeta(`focus.${focus.id}.visited`) || '[]'); } catch {}
+            const cap2 = ccap.parseCapture(rAns, { visited: vis2 });
+            if (cap2.ok) {
+              const ub = civic.upsertBody({ title: target.name, level: cap2.level, function: cap2.function });
+              let stored = 0;
+              if (ub.ok) {
+                for (const m of cap2.members) {
+                  const r = civic.recordMembership({ bodyKey: ub.bodyKey, ...m });
+                  if (r.ok && !r.skipped) stored++;
+                }
+              }
+              const comp = civic.completeness(ub.bodyKey || target.name);
+              console.log(`[civic] ${target.name}: ${stored} seat(s) stored${cap2.rejected && cap2.rejected.length ? `, ${cap2.rejected.length} line(s) refused` : ''}`
+                + ` — ${comp.seats != null ? `${comp.filled}/${comp.seats} filled${comp.complete ? ' (COMPLETE)' : ''}` : `${comp.filled} filled, seat count unknown`}`);
+            } else {
+              // Same rule as cardinality: a silent skip is indistinguishable from "this body
+              // publishes no roster", which is the ambiguity the store exists to end.
+              console.log(`[civic] ${target.name}: no roster recorded — ${cap2.reason}`);
+            }
+          }
+        } catch (e) { console.error('[civic] roster capture failed:', e.message); }
       }
       note = `completed ${target.name} (${target.passes} passes, ${adv.reason}) + organized → canvas`; sig = target.name.toLowerCase(); progressed = true;
       target = null; try { db.setMeta(targetKey, ''); } catch {}

@@ -61,6 +61,7 @@ const smokes = [
   'smoke_stream_discriminator.js',
   'smoke_backoff.js',
   'smoke_civic_store.js',
+  'smoke_civic_capture.js',
   'smoke_double_reply.js',
   'smoke_self_question.js',
   'smoke_stage_direction.js',
