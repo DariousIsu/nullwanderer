@@ -12614,7 +12614,11 @@ async function runDirectedResearchPass(focus) {
       _passPages = v2.filter((u) => !_preVisited.has(u) && /^https?:/i.test(String(u)));
       if (_passPages.length) console.log(`[cite] ${_passPages.length} page(s) marked into "${target.name}" notes`);
     } catch {}
-    if (p.body) target.raw = `${target.raw}\n\n${_passPages.length ? `[pages read this pass: ${_passPages.slice(0, 4).join(' · ')}]\n` : ''}${p.body}`.slice(-16000);
+    // A giant pass body used to eat its own marker: the tail-keep slice kept the body's END while
+    // "[pages read this pass]" sat at its FRONT (NERC: 6 pages marked, synthesis saw 0; EPRI same).
+    // Cap the body's tail, never its front — the front carries the identity-bearing content, and the
+    // marker above it must survive the outer slice for claim→page binding.
+    if (p.body) target.raw = `${target.raw}\n\n${_passPages.length ? `[pages read this pass: ${_passPages.slice(0, 4).join(' · ')}]\n` : ''}${String(p.body).slice(0, 15000)}`.slice(-16000);
     if (p.facet) target.facets = (target.facets || []).concat(p.facet).slice(-12);
     // STOP GUARD — a user-stop mid-pass must not ride the expensive tail. Measured on boot128: a full
     // zombie pass (browse + synthesis + canvas, "+1088 new chars") landed AFTER "[focus] #3618 stopped
