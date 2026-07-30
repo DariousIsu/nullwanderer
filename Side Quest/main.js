@@ -10259,7 +10259,41 @@ async function autonomyTick() {
                 goal = `Build a NEW python tool for this capability gap, test-first, then iterate to green: ${need.need}. Create tools/<pick-a-short-name>.py, then create scripts/${useSuite} that shells it via process.env.ZOE_PY and asserts PASS. (capability need #${need.id}, named by ${need.born_from || 'a run'})`;
                 bornHarness = true;
               }
-              const st = driver.start({ slug, goal, suite: useSuite, files, nowMs: now });
+              // RESEARCH FIRST (Lucas 2026-07-30, the autonomous half — operator-path opens got
+              // this in 863e5f9; need-born opens get it here): before her FIRST attempt at a
+              // need, ONE bounded study pass — search + READ how existing implementations solve
+              // it (reading material ONLY; nothing found ever executes). Cached on the need so a
+              // re-opened run never re-spends the pass; rides the run and the proposal card.
+              // No free slot → the OPEN defers (a bound defers); a pass that ran and came back
+              // empty → open unstudied (a failed study must not wall the rehearse door), and the
+              // picker is told "(none — attempted from existing knowledge)".
+              let study = '';
+              try { study = db.getMeta(`need.${need.id}.study`) || ''; } catch {}
+              if (!study) {
+                let studySlot = null;
+                try { studySlot = require('./lib/board').acquireCloudSlot({ lane: 'rehearsal-study' }); } catch {}
+                if (!studySlot) {
+                  autonomy.historyPush(H, { ts: now, move: 'rehearse', target: `need #${need.id}`, outcome: 'deferred: study-first needs a free cloud slot' });
+                  _logAutonomyDeferral('no-free-slot');
+                  console.log(`[autonomy] need #${need.id} open deferred — study-first needs a free cloud slot`);
+                  return;
+                }
+                try {
+                  const sp = await runCloudOperator({
+                    userMessage: `RESEARCH ONLY — do not build anything. Find how existing projects, libraries, or docs implement: "${need.need}". Search the web and READ what you find (never run or copy-execute it). Reply in at most 1200 chars: the pattern to follow, the pitfalls, and 2-4 source URLs.`,
+                    autonomous: true,
+                  });
+                  study = String((sp && sp.answer) || '').trim().slice(0, 2500);
+                } catch (e) { console.error('[autonomy] study pass failed:', e.message); }
+                finally { try { require('./lib/board').release(studySlot); } catch {} }
+                if (study) {
+                  try { db.setMeta(`need.${need.id}.study`, study); } catch {}
+                  console.log(`[autonomy] need #${need.id} study pass → ${study.length}ch, ${(study.match(/https?:\/\//g) || []).length} url(s)`);
+                } else {
+                  console.log(`[autonomy] need #${need.id} study pass came back empty — opening unstudied (named as such to the picker)`);
+                }
+              }
+              const st = driver.start({ slug, goal, suite: useSuite, files, study, nowMs: now });
               if (st.ok) {
                 capn.setStatus(need.id, 'rehearsing', { nowMs: now });
                 autonomy.historyPush(H, { ts: now, move: 'rehearse', target: `need #${need.id}`, outcome: `OPENED run "${st.run.slug}" (suite ${useSuite}${bornHarness ? ', test-first harness birth' : ''})` });

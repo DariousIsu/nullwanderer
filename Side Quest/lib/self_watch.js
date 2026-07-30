@@ -34,6 +34,10 @@ const SIG_WINDOW_MS = 24 * 3600e3;
 const SIG_RESTORE_MS = 3600e3;      // a recurring signature re-lands on the bus at most 1/hr
 const MINT_THRESHOLD = 3;
 const MAX_OPEN_WATCH_NEEDS = 2;
+const AUDIT_EVERY_MS = 12 * 3600e3; // the DB-exhaust audit cadence (build plan 1.5)
+const AUDIT_TS_KEY = 'watch.last_audit_ts';
+
+function _dbm(deps) { return (deps && deps.db) || require('./db'); }
 
 // The autonomy lanes whose lines are stored as first-class events (everything else is counted).
 const SIGNAL_LANES = {
@@ -115,25 +119,76 @@ function observe(line, level = 'info', { deps = {}, nowMs = Date.now() } = {}) {
       }
       if (st.hits.length >= MINT_THRESHOLD && !st.minted) _maybeMintNeed(sig, line, st, { deps, nowMs });
     }
-    if (nowMs - _lastStatusTs >= STATUS_FLUSH_MS) _flushStatus({ deps, nowMs });
+    if (nowMs - _lastStatusTs >= STATUS_FLUSH_MS) {
+      _flushStatus({ deps, nowMs });
+      // The exhaust audit rides the status clock (never per-line — the console hook stays cheap),
+      // every AUDIT_EVERY_MS, persisted across reboots.
+      try {
+        const last = parseInt(_dbm(deps).getMeta(AUDIT_TS_KEY) || '0', 10) || 0;
+        if (nowMs - last >= AUDIT_EVERY_MS) {
+          _dbm(deps).setMeta(AUDIT_TS_KEY, String(nowMs));
+          runExhaustAudit({ deps, nowMs });
+        }
+      } catch {}
+    }
     return c;
   } catch { return null; } finally { _inObserve = false; }
 }
 
-// A recurring anomaly becomes WORK through the existing door: a named capability need → the
-// decider manifest → the rehearse sandbox → a proposal card. Bounded and deduped downstream.
-function _maybeMintNeed(sig, line, st, { deps = {}, nowMs = Date.now() } = {}) {
+// The one minting door (shared by the log watcher and the exhaust audit): a finding becomes WORK
+// through the existing path — a named capability need → the decider manifest → the rehearse
+// sandbox → a proposal card. Bounded (≤ MAX_OPEN_WATCH_NEEDS) and deduped downstream.
+// Returns {id, deduped} or null (cap reached / failed).
+function _mintNeed(findingText, bornFrom, { deps = {}, nowMs = Date.now() } = {}) {
   try {
     const cn = (deps && deps.capabilityNeed) || require('./capability_need');
     const open = cn.listOpen({ deps }).filter((r) => String(r.born_from || '').startsWith('self-watch'));
-    if (open.length >= MAX_OPEN_WATCH_NEEDS) return;
-    const r = cn.record(`I need a fix for a recurring failure in my own program: ${sig}`, { bornFrom: `self-watch: recurred ${st.hits.length}x/24h`, deps, nowMs, similarFloor: 0.75 });
-    if (r && r.id != null && !r.deduped) {
-      st.minted = r.id;
-      obs.emit({ lane: 'watch', kind: 'need', level: 'warn', text: `recurring anomaly → opened need #${r.id}: ${sig}`, ref: `need:${r.id}`, data: { sig, hits24h: st.hits.length } }, { deps, nowMs });
-      try { console.log(`[watch] recurring anomaly (${st.hits.length}x/24h) → opened need #${r.id}: ${sig.slice(0, 80)}`); } catch {}
-    } else if (r && r.deduped) { st.minted = r.id; }
-  } catch {}
+    if (open.length >= MAX_OPEN_WATCH_NEEDS) return null;
+    return cn.record(`I need a fix for a recurring failure in my own program: ${findingText}`, { bornFrom, deps, nowMs, similarFloor: 0.75 });
+  } catch { return null; }
+}
+
+function _maybeMintNeed(sig, line, st, { deps = {}, nowMs = Date.now() } = {}) {
+  const r = _mintNeed(sig, `self-watch: recurred ${st.hits.length}x/24h`, { deps, nowMs });
+  if (r && r.id != null && !r.deduped) {
+    st.minted = r.id;
+    obs.emit({ lane: 'watch', kind: 'need', level: 'warn', text: `recurring anomaly → opened need #${r.id}: ${sig}`, ref: `need:${r.id}`, data: { sig, hits24h: st.hits.length } }, { deps, nowMs });
+    try { console.log(`[watch] recurring anomaly (${st.hits.length}x/24h) → opened need #${r.id}: ${sig.slice(0, 80)}`); } catch {}
+  } else if (r && r.deduped) { st.minted = r.id; }
+}
+
+// THE EXHAUST AUDIT (build plan 1.5 — the DB-side intake of the same organ): the log watcher
+// sees what her program SAYS; this reads what her stores RECORD — failing lanes on the
+// workstream board and the pass-cap vs saturation split her directed runs leave on the bus.
+// One 'audit' event per pass (visibility first); a finding past threshold mints through the
+// same capped door. Deterministic, read-only, fail-soft.
+function runExhaustAudit({ deps = {}, nowMs = Date.now() } = {}) {
+  try {
+    const d = _dbm(deps).getDb();
+    let fails = [];
+    try { fails = d.prepare("SELECT lane, COUNT(*) c FROM workstreams WHERE status = 'failed' AND finished_ts > ? GROUP BY lane ORDER BY c DESC").all(nowMs - 7 * 24 * 3600e3); } catch {}
+    let capN = 0, satN = 0;
+    try {
+      capN = d.prepare("SELECT COUNT(*) c FROM obs_events WHERE lane = 'directed' AND text LIKE '%pass cap%'").get().c;
+      satN = d.prepare("SELECT COUNT(*) c FROM obs_events WHERE lane = 'directed' AND text LIKE '%saturated%'").get().c;
+    } catch {}
+    const findings = [];
+    for (const f of fails) if (f.c >= 10) findings.push(`the ${f.lane} lane failed ${f.c}x in 7 days`);
+    if (capN + satN >= 8 && capN / (capN + satN) > 0.8) findings.push(`research targets end at the pass cap ${capN}/${capN + satN} — saturation is rarely detected before the budget`);
+    obs.emit({
+      lane: 'audit', kind: 'status', level: findings.length ? 'warn' : 'info',
+      text: findings.length ? `exhaust audit: ${findings.join(' · ')}` : `exhaust audit: clean (${fails.length} failing lane(s), all under threshold; cap/sat ${capN}/${satN})`,
+      data: { fails, capN, satN, findings },
+    }, { deps, nowMs });
+    for (const f of findings.slice(0, 1)) {   // at most one mint per audit pass — the cap does the rest
+      const r = _mintNeed(f, 'self-watch: exhaust audit', { deps, nowMs });
+      if (r && r.id != null && !r.deduped) {
+        obs.emit({ lane: 'watch', kind: 'need', level: 'warn', text: `exhaust audit finding → opened need #${r.id}: ${f}`, ref: `need:${r.id}` }, { deps, nowMs });
+        try { console.log(`[watch] exhaust audit → opened need #${r.id}: ${f}`); } catch {}
+      }
+    }
+    return { findings, fails, capN, satN };
+  } catch { return null; }
 }
 
 function _flushStatus({ deps = {}, nowMs = Date.now() } = {}) {
@@ -161,4 +216,4 @@ function install({ deps = {} } = {}) {
   return true;
 }
 
-module.exports = { classify, signatureOf, observe, install, _reset, MINT_THRESHOLD, MAX_OPEN_WATCH_NEEDS, SIGNAL_LANES };
+module.exports = { classify, signatureOf, observe, install, runExhaustAudit, _reset, MINT_THRESHOLD, MAX_OPEN_WATCH_NEEDS, AUDIT_EVERY_MS, SIGNAL_LANES };

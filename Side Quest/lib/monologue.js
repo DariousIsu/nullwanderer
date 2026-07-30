@@ -1275,6 +1275,15 @@ async function _runOneTick() {
         const synthThreads = pickDistinctByTopic(openThreads, { max: 4, simThr: 0.4, window: (openThreads || []).length });
         const seed = ((synthThoughts.length ? synthThoughts : recentThoughts).map(t => (t && t.content) || '').join(' ').slice(0, 300)) || userName;
         const sources = await subc2.retrieveSources(seed, { search: (q, k) => memoryLib.retrieve(q, { k }), k: 4 });
+        // HER OWN HEALTH IS SOURCE MATERIAL (build plan 1.4): the newest anomalies/needs from the
+        // obs bus ride the synthesis grounding, so a tension can form about her own program and
+        // route through the same typed doors (experiment/inquiry) as any other tension — the
+        // cognitive half of the self-improvement loop. Marked like every other source.
+        try {
+          for (const a of require('./obs_bus').latest({ kinds: ['anomaly', 'need'], limit: 3 })) {
+            sources.push({ ref: 'W' + (sources.length + 1), content: `your own program logged: ${String(a.text || '').replace(/\s+/g, ' ').slice(0, 220)}`, source: 'self-watch' });
+          }
+        } catch {}
         // SLICE A (2026-07-30): explored tensions ride the prompt (no re-derivation — measured: 80
         // essays/day circling ONE Georgia-boards tension) and the output is a TYPED SHAPE.
         let _synthRecent = []; try { _synthRecent = JSON.parse(_gm('subc.synth_recent') || '[]'); } catch {}

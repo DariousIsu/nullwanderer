@@ -53,6 +53,13 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   const clamped = obs.recent({ sinceId: 0, lanes: ['x'] });
   ok(clamped.length === 1 && clamped[0].text.length <= 500, 'oversized text is clamped, never stored raw');
 
+  // --- latest(): the newest-n reader (the parallel UI lane hit exactly this gap on day one) ---
+  const newest = obs.latest({ limit: 2 });
+  ok(newest.length === 2 && newest[0].id < newest[1].id && newest[1].lane === 'x',
+    'latest() returns the NEWEST rows in ascending order (no cursor walk needed)');
+  const newestLine = obs.latest({ kinds: ['line'], limit: 1 });
+  ok(newestLine.length === 1 && newestLine[0].lane === 'x', 'latest() honors kind filters');
+
   // --- age prune: an ancient event falls out ---
   obs.emit({ lane: 'old', kind: 'line', text: 'ancient event' }, { nowMs: Date.now() - 8 * 24 * 3600e3 });
   obs.flush();

@@ -123,7 +123,25 @@ function recent({ sinceId = 0, lanes = null, kinds = null, limit = 200 } = {}, {
   } catch { return []; }
 }
 
+// The NEWEST n events (ascending order after the cut) — the "what just happened" reader.
+// recent() is the tail-poll cursor (oldest-first from sinceId — a backfill walks it); this is
+// for consumers that want the last few things regardless of cursor (the subc's anomaly sources,
+// the exhaust audit). The parallel UI lane hit exactly this gap on day one.
+function latest({ lanes = null, kinds = null, limit = 20 } = {}, { deps = {} } = {}) {
+  try {
+    const d = _ensure(deps);
+    const cap = Math.max(1, Math.min(200, Number(limit) || 20));
+    const where = ['1=1']; const args = [];
+    const laneList = Array.isArray(lanes) ? lanes.filter(Boolean).map(String) : null;
+    if (laneList && laneList.length) { where.push(`lane IN (${laneList.map(() => '?').join(',')})`); args.push(...laneList); }
+    const kindList = Array.isArray(kinds) ? kinds.filter(Boolean).map(String) : null;
+    if (kindList && kindList.length) { where.push(`kind IN (${kindList.map(() => '?').join(',')})`); args.push(...kindList); }
+    const rows = d.prepare(`SELECT * FROM obs_events WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT ${cap}`).all(...args).reverse();
+    return rows.map((r) => { let data = null; try { data = r.data ? JSON.parse(r.data) : null; } catch {} return { ...r, data }; });
+  } catch { return []; }
+}
+
 // Test/shutdown helper — stop the timer so a smoke's process can exit clean.
 function _stop() { if (_timer) { clearInterval(_timer); _timer = null; } }
 
-module.exports = { emit, subscribe, flush, prune, recent, _stop, MAX_ROWS, MAX_AGE_MS };
+module.exports = { emit, subscribe, flush, prune, recent, latest, _stop, MAX_ROWS, MAX_AGE_MS };

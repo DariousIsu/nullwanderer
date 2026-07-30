@@ -71,6 +71,28 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   const st = statuses[statuses.length - 1];
   ok(st && st.data && st.data.counts && st.data.counts.caption === 2, 'status event carries the per-lane counters');
 
+  // --- EXHAUST AUDIT (build plan 1.5): the DB-side intake of the same organ ---
+  {
+    sw._reset();
+    const d = require('../lib/db').getDb();
+    for (let i = 0; i < 11; i++) d.prepare("INSERT INTO workstreams (lane, status, started_ts, heartbeat_ts, finished_ts) VALUES ('graph-walk', 'failed', ?, ?, ?)").run(T0 - 1000, T0 - 1000, T0 - 500);
+    for (let i = 0; i < 9; i++) obs.emit({ lane: 'directed', kind: 'line', text: '[directed] #3632 → completed X (6 passes, pass cap) + organized' }, { nowMs: T0 });
+    obs.flush();
+    const beforeN = obs.recent({ sinceId: 0, lanes: ['audit'] }).length;   // the observe() clock may have already run one
+    const res = sw.runExhaustAudit({ nowMs: T0 });
+    ok(res && res.findings.length >= 2, `the audit reads both exhaust intakes (${res && res.findings.length} finding(s): board failures + pass-cap ratio)`);
+    obs.flush();
+    const audits = obs.recent({ sinceId: 0, lanes: ['audit'] });
+    ok(audits.length === beforeN + 1 && audits[audits.length - 1].data && audits[audits.length - 1].data.capN >= 9,
+      'ONE audit event per pass, carrying the measured numbers');
+    ok(cn.listOpen().length === 2, 'audit minting respects the same watch-born cap (2 already open → no third)');
+    cn.setStatus(cn.listOpen()[0].id, 'retired');
+    sw.runExhaustAudit({ nowMs: T0 + 1000 });
+    obs.flush();
+    ok(cn.listOpen().length === 2 && cn.listOpen().some((n) => /graph-walk lane failed/.test(n.need)),
+      'with a free slot the audit finding mints through the shared door');
+  }
+
   obs._stop();
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   try { require('../lib/db').getDb().close(); } catch {}
