@@ -546,7 +546,19 @@ async function _readText(p) {
     if (parts.length) text = parts.join('\n\n').slice(0, MAX_TEXT);
   }
   if (text == null) text = (await p.innerText('body', { timeout: 5000 }).catch(() => '')).replace(/\n{3,}/g, '\n\n').slice(0, MAX_TEXT);
-  return text;
+  // CONTENT FIREWALL — the visible lane's single text door, so the boundary goes on here and both
+  // read() and researchInTab() inherit it. read() appends its handle list AFTER this returns, which
+  // is correct: the handles are OUR generated index of the page, not the page's own words, and they
+  // belong outside the box. Page bytes are never altered — only wrapped.
+  try {
+    const fw = require('./content_firewall');
+    const f = fw.frame(text, { url: p.url(), kind: SERP_RE.test(p.url()) ? 'search' : 'page' });
+    if (f.findings.length) {
+      console.log(`[firewall] page ${f.host}: ${f.findings.length} directive-shaped line(s) framed — ${f.findings[0].why}`);
+      try { require('./obs_bus').emit({ lane: 'firewall', kind: 'flagged', level: 'warn', text: `page ${f.host}: ${f.findings[0].why} — "${f.findings[0].line}"`, ref: f.host, data: { n: f.findings.length, cats: f.findings.map((x) => x.category) } }); } catch {}
+    }
+    return f.text;
+  } catch { return text; }
 }
 
 // Read the current page: capped body text + a handle list of interactive elements.

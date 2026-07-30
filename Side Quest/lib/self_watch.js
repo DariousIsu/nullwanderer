@@ -58,6 +58,7 @@ const SIGNAL_LANES = {
   'rehearsal': 'rehearsal',
   'analysis': 'analysis',
   'harvest': 'harvest',
+  'firewall': 'firewall',   // fetched content flagged / a laundered need refused — a signal, never noise
 };
 const ANOMALY_RES = [/Traceback \(most recent/i, /\bUncaught\b/, /\bFAILED\b/, /\bUnhandled(?:PromiseRejection)?\b/i];
 const SELF_PREFIXES = ['[watch]', '[obs]'];

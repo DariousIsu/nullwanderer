@@ -35,7 +35,9 @@ hooks for the visual-log lane (docs/OBS_INTERFACE_HOOKS.md — the parallel cont
 > card carries a SURVIVES/REFUTED verdict, advisory never a gate). Also landed off-plan from the
 > chat audit: redirect classifier-primary (07f96eb), deferred-agenda capture (ac9f8da, Fulton item
 > registered as task #88 → 2026-08-05). O5's remaining halves (shapes→rows, branded docx) open.
-> Live boot142. NEXT: 2.3 content firewall (fresh sitting — design-sensitive).
+> **2.3 CONTENT FIREWALL BUILT** — lib/content_firewall.js, 3 layers (unconditional frame · advisory
+> flag · a refusal at the need store), wired at all four doors. Measured: 0 false positives across
+> 600 real fetched articles / 1M chars, 32/32 buried attacks caught. NEXT: 2.4 multi-action steps.
 
 | # | Item | Size | Baseline feature it ports |
 |---|---|---|---|

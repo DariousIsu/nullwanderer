@@ -677,7 +677,19 @@ async function extractA11y(page) {
     interactivesText = parts.join('\n');
   }
 
-  return bodyText + interactivesText;
+  // CONTENT FIREWALL — the stealth lane's text door. Only the PAGE's words go in the box; the
+  // interactive-element list below it is our own index of the page and stays outside, exactly as
+  // in the visible lane (lib/web.js _readText).
+  try {
+    const fw = require('./content_firewall');
+    const url = (() => { try { return page.url(); } catch { return ''; } })();
+    const f = fw.frame(bodyText, { url, kind: 'page' });
+    if (f.findings.length) {
+      console.log(`[firewall] browse ${f.host}: ${f.findings.length} directive-shaped line(s) framed — ${f.findings[0].why}`);
+      try { require('./obs_bus').emit({ lane: 'firewall', kind: 'flagged', level: 'warn', text: `browse ${f.host}: ${f.findings[0].why} — "${f.findings[0].line}"`, ref: f.host, data: { n: f.findings.length, cats: f.findings.map((x) => x.category) } }); } catch {}
+    }
+    return f.text + interactivesText;
+  } catch { return bodyText + interactivesText; }
 }
 
 /**

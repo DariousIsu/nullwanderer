@@ -101,6 +101,20 @@ function harvest(text, { bornFrom = null, deps = {}, nowMs = Date.now() } = {}) 
   const found = detect(text);
   const ids = [];
   for (const f of found) {
+    // THE CONTENT FIREWALL'S SINK (layer 3). This store is the ONE her fetched text can reach: a
+    // page's words ride a research run into the cloud write-back, come back as `learned`/`next_step`,
+    // and land here as a named need — which then reaches the decider and can open a rehearsal. By
+    // this point the data frame is long gone (the model rewrote the words), so framing does not
+    // protect transitively and the guard has to sit at the door. A need is her program describing
+    // its own gap; anything phrased as an instruction to an actor came through her, not from her.
+    try {
+      const s = require('./content_firewall').screenNeed(f.need);
+      if (!s.ok) {
+        console.log(`[firewall] REFUSED a capability need from ${bornFrom || 'an unnamed run'} — ${s.why}: "${String(f.need).slice(0, 80)}"`);
+        try { require('./obs_bus').emit({ lane: 'firewall', kind: 'need-refused', level: 'warn', text: `refused need from ${bornFrom || 'unnamed'} — ${s.why}: "${String(f.need).slice(0, 90)}"`, ref: String(bornFrom || ''), data: { category: s.category } }); } catch {}
+        continue;
+      }
+    } catch {}
     const r = record(f.need, { bornFrom, deps, nowMs });
     if (r.id != null) ids.push({ id: r.id, deduped: !!r.deduped, need: f.need });
   }

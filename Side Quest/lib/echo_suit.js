@@ -587,6 +587,28 @@ class EchoSuit {
         if (opts.maintain) { try { const f = require('./echo_tier').maintainForcedArgs(tag.name); if (f) callArgs = { ...callArgs, ...f }; } catch {} }
         const r = normalizeToolResult(await c.callTool(tag.name, callArgs));
         let text = r.text;
+        // CONTENT FIREWALL (lib/content_firewall) — a web-lane result is text somebody else wrote,
+        // so it arrives inside a data boundary naming its origin. Scoped by the lane classifier
+        // echo_tier ALREADY owns (WEB_LANE_RE) rather than a second list of tool names that would
+        // drift out of step with it. Her own stores (db_query, get_entity, the CRM) are not framed:
+        // that text is hers, and wrapping it would make the marker mean nothing through sheer
+        // repetition. Deep-lane readers that carry stranger-authored prose (arxiv abstracts,
+        // court opinions) are a NAMED follow-up, not covered here.
+        if (!r.isError && text) {
+          try {
+            if (require('./echo_tier').WEB_LANE_RE.test(String(tag.name || ''))) {
+              const fw = require('./content_firewall');
+              if (!fw.isFramed(text)) {
+                const f = fw.frame(text, { url: (callArgs && (callArgs.url || callArgs.query)) || tag.name, kind: 'tool' });
+                text = f.text;
+                if (f.findings.length) {
+                  console.log(`[firewall] ${tag.name} ${f.host}: ${f.findings.length} directive-shaped line(s) framed — ${f.findings[0].why}`);
+                  try { require('./obs_bus').emit({ lane: 'firewall', kind: 'flagged', level: 'warn', text: `${tag.name} ${f.host}: ${f.findings[0].why} — "${f.findings[0].line}"`, ref: f.host, data: { n: f.findings.length, cats: f.findings.map((x) => x.category) } }); } catch {}
+                }
+              }
+            }
+          } catch {}
+        }
         // an argument-level rejection from Echo gets the signature appended too — same disease,
         // valid JSON but the wrong keys ({"name": ...} when db_query needs {"sql": ...})
         if (r.isError && shape && /validation error|missing_argument|missing required|invalid arguments|unexpected keyword|extra_forbidden|invalid_type/i.test(text || '')) {
