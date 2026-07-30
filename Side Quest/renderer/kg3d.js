@@ -420,6 +420,7 @@ function makeCore3D(strength = 0.05) {
       // comes from the targets; the LIFE comes from the forces fighting them. `free` skips this entirely.
       // `skin` takes no spring at all: updateSkin() pins every node to its vertex with fx/fy/fz, so there is
       // no home point to pull toward — the model IS the layout.
+      if (n.fx != null) continue;                        // settled+pinned nodes take no spring — only the live budget moves
       const p = SHAPE === 'skin' ? null : SHAPE === 'brain' ? targetBrain(n) : SHAPE === 'corona' ? targetCorona(n) : SHAPE === 'binary' ? targetBinary(n) : SHAPE === 'free' ? null : targetPoint(n);
       if (!p) continue;
       const k = strength * 1.15 * alpha;
@@ -542,8 +543,80 @@ try {
     // (no mode test here on purpose — `mode` is declared below and this is the third temporal-dead-zone trap
     // this file has sprung on me. The one-shot flag is consumed by the initial overview cooldown anyway.)
     if (_fitOnCool) { _fitOnCool = false; fitView(1000, true); }
+    settleLayout();                        // the cloud cooled — freeze it + drop the heavy forces (block below)
   });
 } catch (e) {}
+
+// ============================================================================================================
+// THE ALIVE BUDGET — why the graph lagged, and the fix Lucas proposed. The drawing was never the cost; the SIM
+// was. Every live mint called render() → Graph.graphData() → a full reheat, and because mints arrive faster
+// than the 15s cooldown the layout NEVER cooled — so d3's O(N·logN) charge force ran EVERY frame over the whole
+// graph, forever. His fix, applied at the right layer: once the layout has cooled ONCE, PIN the graph and DROP
+// the heavy forces so the sim goes quiet, and keep only a bounded, decaying set of recently-touched nodes live
+// — a rolling budget capped at ACTIVE_CAP (the "limit"), each member decaying back to frozen. A live mint no
+// longer reheats the cloud; it seats its node into that budget where it eases in and then re-freezes. Per-frame
+// cost falls from O(N)-physics to O(active).
+let _settled = false;
+let _chargeForce = null, _linkForce = null;   // the dropped forces, kept so a later relayout can re-attach them
+const activeNodes = new Set();             // the live budget: recently-touched nodes that still sync + sway
+const ACTIVE_CAP = 160;                    // the LIMIT — at most this many nodes stay live in any frame
+const ACT_LIFE = 5200;                     // ms a touch stays live before it decays back to frozen
+const SWAY_AMP = 1.7;                      // px of "alive" drift at full activation (display-only; graph data untouched)
+function _pinnable(n) { return n && !n.zoe && Number.isFinite(n.x); }   // zoe ring keeps its own orbit; skin owns its pins
+function pinNode(n) { if (n) { n.fx = n.x; n.fy = n.y; n.fz = (n.z || 0); } }
+function unpinNode(n) { if (n) { n.fx = null; n.fy = null; n.fz = null; } }
+// touch a node into the budget: full activation, unpinned so it can move, deterministic sway phase. If the
+// budget overflows, the coldest member is evicted back to frozen — that cap is what bounds the per-frame work.
+function touchActive(n, now) {
+  if (!n || n.zoe || SHAPE === 'skin') return;           // skin binds every node to a vertex; never unpin there
+  if (n._sw == null) n._sw = hashSeed(String(n.id)) * 6.283;
+  n._act = 1; n._actAt = now || performance.now();
+  if (_settled) unpinNode(n);
+  if (!activeNodes.has(n)) {
+    activeNodes.add(n);
+    if (activeNodes.size > ACTIVE_CAP) {
+      let cold = null, min = Infinity;
+      for (const m of activeNodes) { const a = m._act || 0; if (a < min) { min = a; cold = m; } }
+      if (cold) { activeNodes.delete(cold); cold._act = 0; cold._sox = cold._soy = cold._soz = 0; if (_settled) pinNode(cold); }
+    }
+  }
+}
+// The layout cooled: freeze it. Pin every node except the live budget + the zoe ring, and drop the two costly
+// forces — charge is the O(N·logN) killer; the link force is wasted once positions are pinned (drawing is our
+// own LineSegments). The gentle core/shape spring stays but now skips pinned nodes, so it too is O(active).
+function settleLayout() {
+  if (SHAPE === 'skin') return;                          // skin pins to the mesh + wants its own look
+  _settled = true;
+  for (const n of Graph.graphData().nodes) if (_pinnable(n) && !activeNodes.has(n)) pinNode(n);
+  // SAVE the force instances before dropping them — d3Force(name, null) removes the object, and a plain
+  // .strength() later can't resurrect it, so a subsequent relayout would have no charge-driven spread.
+  try { if (!_chargeForce) _chargeForce = Graph.d3Force('charge') || null; Graph.d3Force('charge', null); } catch (e) {}
+  try { if (!_linkForce) _linkForce = Graph.d3Force('link') || null; Graph.d3Force('link', null); } catch (e) {}
+}
+// A deliberate relayout (fresh load, ego-walk, shape change) wants a real physical settle: unfreeze everything
+// and restore the forces at their shape-appropriate strengths.
+function unsettleLayout(nodes) {
+  _settled = false; activeNodes.clear();
+  for (const n of nodes) { if (!n.zoe) unpinNode(n); n._act = 0; n._sox = n._soy = n._soz = 0; }
+  // re-attach any force settleLayout dropped, THEN set its strength (a dropped force can't be strength'd back).
+  try { if (_chargeForce && !Graph.d3Force('charge')) Graph.d3Force('charge', _chargeForce); } catch (e) {}
+  try { if (_linkForce && !Graph.d3Force('link')) Graph.d3Force('link', _linkForce); } catch (e) {}
+  try { Graph.d3Force('charge').strength(chargeFor(nodes.length)); } catch (e) {}   // spread must not grow with density
+  // EDGES MODEL THE FORM: in brain the link force packs each lobe by its own connectivity and pulls the
+  // cross-lobe tracts taut, so it's given real authority there; elsewhere it stays a gentle influence.
+  try { const lf = Graph.d3Force('link'); if (lf) { if (lf.strength) lf.strength(SHAPE === 'brain' ? 0.55 : 0.16); if (lf.distance) lf.distance(SHAPE === 'brain' ? 26 : 40); } } catch (e) {}
+}
+// Per-frame decay of the budget (bounded by ACTIVE_CAP). A member that fades to nothing re-freezes; the live
+// ones get a slow per-node wander scaled by activation — the "subtly alive" drift, stored as a display offset.
+function updateActive(now) {
+  if (!activeNodes.size) return;
+  for (const n of activeNodes) {
+    n._act = Math.max(0, 1 - (now - (n._actAt || now)) / ACT_LIFE);
+    if (n._act <= 0.002) { activeNodes.delete(n); n._act = 0; n._sox = n._soy = n._soz = 0; if (_settled) pinNode(n); continue; }
+    const a = n._act * SWAY_AMP, ph = n._sw || 0;
+    n._sox = Math.sin(now / 900 + ph) * a; n._soy = Math.cos(now / 1100 + ph) * a; n._soz = Math.sin(now / 1000 + ph) * a;
+  }
+}
 // TONE MAPPING = the bloom I was never allowed to have. ACES is NOT a postprocess pass — it compiles into
 // each fragment shader (no render targets, ~15 ALU ops), so it cannot repeat the UnrealBloom crash that took
 // down the shared GPU process. It lets node cores exceed 1.0 and roll off to warm white instead of clipping,
@@ -670,7 +743,7 @@ function ensureObj(n, seed) {
 // live 2026-07-22: 1,804 nodes held a flat 60fps with no dip, and the only thing stopping more was this
 // constant — the cap, not the machine. Raised so the corpus request can actually fill the sky.
 const NODE_CAP = 5000;
-function render() {
+function render(opts) {
   const ids = new Set();
   for (const id of (mode === 'overview' ? full : world.nodes)) ids.add(id);
   for (const id of shortTerm.nodes) ids.add(id);
@@ -700,17 +773,18 @@ function render() {
   }
   try { buildBrainLobes(nodes); } catch (e) {}   // anatomy follows the live type mix
   Graph.graphData({ nodes, links });
-  engineRunning = true;                    // new data reheats the layout; resume position syncing
-  try { Graph.d3Force('charge').strength(chargeFor(nodes.length)); } catch (e) {}   // spread must not grow with density
-  // EDGES MODEL THE FORM (Lucas's design). In `brain` the lobe anchors only say WHICH territory a node is
-  // in; the link force decides everything inside it — packing each lobe by its own connectivity and pulling
-  // the cross-lobe tracts taut. So the links are given real authority here rather than the token strength
-  // that was fine when a target point dictated every position.
-  try {
-    const lf = Graph.d3Force('link');
-    if (lf && lf.strength) lf.strength(SHAPE === 'brain' ? 0.55 : 0.16);
-    if (lf && lf.distance) lf.distance(SHAPE === 'brain' ? 26 : 40);
-  } catch (e) {}
+  // A DELIBERATE relayout (fresh load, ego-walk) reheats and physically resettles. A LIVE MINT does NOT — that
+  // was the whole lag: reheating the entire cloud for one new node, endlessly. Instead the mint's new nodes
+  // (just seated near the core by ensureObj) join the alive budget and ease into place while the settled graph
+  // stays frozen and the sim stays quiet.
+  const _reheat = !opts || opts.reheat !== false;
+  if (_reheat) {
+    unsettleLayout(nodes);                 // new data reheats: unpin + restore forces
+    engineRunning = true;                  // resume position syncing until it cools again
+  } else if (SHAPE !== 'skin') {
+    const _now = performance.now();
+    for (const n of nodes) if (_pinnable(n) && n.fx == null && !activeNodes.has(n)) touchActive(n, _now);   // brand-new nodes only
+  }
   try { buildNodeCloud(); } catch (e) {}   // rebuild the instanced Points cloud for the new node set
   try { buildLinkCloud(); } catch (e) {}   // …and the single-buffer edge cloud
   try { buildTendrils(); } catch (e) {}    // refresh hidden-connection tendrils (throttled)
@@ -2519,8 +2593,9 @@ function updateLinkCloud() {
     const l = linkIndex[i], s = l.source, t = l.target;
     if (!s || !t || typeof s !== 'object' || typeof t !== 'object' || !Number.isFinite(s.x) || !Number.isFinite(t.x)) continue;
     const o = i * 6;
-    pos[o] = s.x; pos[o + 1] = s.y; pos[o + 2] = s.z || 0;
-    pos[o + 3] = t.x; pos[o + 4] = t.y; pos[o + 5] = t.z || 0;
+    // an edge follows its endpoints' alive-budget drift, so a live node and its connections move as one.
+    pos[o] = s.x + (s._sox || 0); pos[o + 1] = s.y + (s._soy || 0); pos[o + 2] = (s.z || 0) + (s._soz || 0);
+    pos[o + 3] = t.x + (t._sox || 0); pos[o + 4] = t.y + (t._soy || 0); pos[o + 5] = (t.z || 0) + (t._soz || 0);
   }
   linkGeo.attributes.position.needsUpdate = true;
   // Only when the routed cloud ISN'T carrying the links — otherwise this is fading a hidden buffer.
@@ -2619,7 +2694,8 @@ function updateMarkers(now) {
 }
 function updateNodeCloud() {
   if (!nodeCloud) return; const pos = nodeGeo.attributes.position.array;
-  for (let i = 0; i < nodeIndex.length; i++) { const n = nodeIndex[i]; if (!Number.isFinite(n.x)) continue; pos[i * 3] = n.x; pos[i * 3 + 1] = n.y; pos[i * 3 + 2] = n.z || 0; }
+  // n._sox/_soy/_soz is the alive-budget drift (0 / undefined for frozen nodes — the `|| 0` costs nothing).
+  for (let i = 0; i < nodeIndex.length; i++) { const n = nodeIndex[i]; if (!Number.isFinite(n.x)) continue; pos[i * 3] = n.x + (n._sox || 0); pos[i * 3 + 1] = n.y + (n._soy || 0); pos[i * 3 + 2] = (n.z || 0) + (n._soz || 0); }
   nodeGeo.attributes.position.needsUpdate = true;
 }
 // click-to-walk via raycast against the Points cloud (default node meshes are hidden, so onNodeClick is dead).
@@ -2888,7 +2964,7 @@ function gEdge(a, b, colorHex) {
 // sweep; rendering per hit rebuilt the whole point cloud each time and dropped the surface to 17fps under a
 // 10-hit burst. Batching the rebuild keeps recognition instant and the frame rate flat.
 let _mintTimer = null;
-function scheduleMintRender() { if (_mintTimer) return; _mintTimer = setTimeout(() => { _mintTimer = null; render(); }, 240); }
+function scheduleMintRender() { if (_mintTimer) return; _mintTimer = setTimeout(() => { _mintTimer = null; render({ reheat: false }); }, 240); }
 function mintEcho(name) {
   if (name == null) return null;
   const known = objs.get(name);
@@ -3237,12 +3313,13 @@ function flushBorn() {
   if (uniq.length >= 8) { gSupernova(coreCentroid3D(), uniq.length); }
   else { for (const id of uniq) { const n = findNode(id); if (n) gBorn(V3(n), VHEX); } }
 }
+// mintBorn's own render (below) is on the mint path too — new nodes join the alive budget, no full reheat.
 function mintBorn(batch) {
   const c = coreCentroid3D(); let minted = 0;
   // 'unknown', not 'concept': the optimistic mint has not been told what this is, and T5 made that a real
   // answer. Guessing `concept` here also disagreed with whatever the next kg:shortterm poll returned.
   for (const e of batch) { const id = e.anchor; if (id == null || objs.has(id)) continue; ensureObj({ id, store: 'sidequest', entityType: 'unknown', epistemic: e.epistemic || 'told' }, c); shortTerm.nodes.add(id); minted++; }
-  if (minted) render();
+  if (minted) render({ reheat: false });   // a mint eases new nodes into the alive budget; it never reheats the whole cloud
   return minted;
 }
 
@@ -3377,8 +3454,9 @@ function stepFrame(now) {
   // `skin` ALWAYS syncs: every node is pinned with fx/fy/fz, so the simulation cools within a second and
   // engineRunning goes false — and then the cloud would stop following the mesh and she would freeze
   // mid-sentence while the model underneath kept talking. Her motion comes from the rig, not the sim.
+  updateActive(now);            // decay the alive budget; live members keep syncing even after the sim has cooled
   if (engineRunning) { _stillFrames = 2; } else if (_stillFrames > 0) { _stillFrames--; }
-  if (engineRunning || _stillFrames > 0 || SHAPE === 'skin') { updateNodeCloud(); updateLinkCloud(); updateTendrils(); }
+  if (engineRunning || _stillFrames > 0 || SHAPE === 'skin' || activeNodes.size) { updateNodeCloud(); updateLinkCloud(); updateTendrils(); }
   updateHotLinks(now);          // expire cooled recognitions BEFORE the markers paint this frame
   updateMarkers(now);           // halos breathe and cool on their own clock, so these always run
   updateTraces(now);
@@ -3406,7 +3484,7 @@ Graph.width(window.innerWidth).height(window.innerHeight);
 function onFocusMove(p) {
   if (!p || !p.anchor) return;
   const n = findNode(p.anchor);
-  if (n) { gEnrich(V3(n), new THREE.Color(nodeColor(n)).getHex()); if (follow) flyTo(V3(n)); }
+  if (n) { touchActive(n, performance.now()); gEnrich(V3(n), new THREE.Color(nodeColor(n)).getHex()); if (follow) flyTo(V3(n)); }   // her walk keeps a node briefly alive
 }
 
 // ---- subscribe the live channels (same broadcasts main.js sends to every webContents) ----
@@ -3579,6 +3657,8 @@ async function applyShape(next) {
     updateSkin(); buildRoutedLinks(); setRoutedVisible(true);
   } else {
     releaseSkin(); setRoutedVisible(false);
+    try { unsettleLayout(Graph.graphData().nodes); } catch (e) {}   // a new shape must physically resettle — unfreeze + restore forces
+    engineRunning = true;
   }
   try { Graph.d3ReheatSimulation(); } catch (e) {}
   _fitOnCool = true;                         // re-frame once the new arrangement settles
@@ -3605,6 +3685,9 @@ setInterval(loadSelf, 300000);                   // identity moves slowly — re
 // ---- dev handle for CDP verification ----
 window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, obsGesture, effectsN: () => effects.length, tendrilN: () => tendrilSpecs.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z,
   markerN: () => markerIndex.length, repaint: repaintNodeCloud, fit: fitView, rebuildLinks: buildLinkCloud,
+  // the alive budget — verify the lag fix: settled?, how many nodes are live, how many are pinned/frozen
+  active: () => { let pinned = 0; for (const n of nodeIndex) if (n.fx != null) pinned++; return { settled: _settled, live: activeNodes.size, cap: ACTIVE_CAP, pinned, total: nodeIndex.length }; },
+  touch: (id) => { const n = findNode(id); if (n) touchActive(n, performance.now()); return activeNodes.size; },
   // her face — drive it directly to judge the look without waiting for her to say something
   face: (o) => { if (o && typeof o === 'object') { if (o.on != null) { FACE_ON = !!o.on; if (!FACE_ON) face.strength = 0; }
       if (o.expression) faceExpression(o.expression); if (o.say != null) faceSpeak(o.say);
