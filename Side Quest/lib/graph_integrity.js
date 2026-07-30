@@ -292,7 +292,10 @@ function createGraphRepairer({ callTool, log = () => {} } = {}) {
     const action = p.action || null;
     let id = p.entity_id != null ? p.entity_id : (p.result && p.result.entity_id);
     if (action === 'merge_suggested' && p.similar_to && p.similar_to.id != null) {
-      return { ok: true, id: p.similar_to.id, action, created: false };
+      // Carry the ADOPTED entity's real name — the caller must link THAT, not the requested name
+      // (first live tick, boot110: "Anchorage Municipality, Alaska" adopted "Anchorage, AK" and the
+      // name-based link then failed "source entity not found" on a name that never existed).
+      return { ok: true, id: p.similar_to.id, name: (p.similar_to.name || null), action, created: false };
     }
     if (id == null) return { ok: false, action, error: `no entity_id (action=${action || 'unparsed'})` };
     if (action === 'proposed' || action === 'already_proposed') {
@@ -356,11 +359,30 @@ function createGraphRepairer({ callTool, log = () => {} } = {}) {
     // 'proposed' | 'enriched' (citation attached to an existing proposal) | 'already_exists'
     if (p.action === 'already_exists') return { ok: true, action: p.action };
 
-    const id = p.proposal_id != null ? p.proposal_id
+    let id = p.proposal_id != null ? p.proposal_id
       : (p.relation && p.relation.proposal_id != null ? p.relation.proposal_id : null);
     if (id == null) {
-      // No id came back, so we cannot target the promotion. Say so — do NOT report success.
-      return { ok: false, action: p.action, error: 'proposed but no proposal_id to promote' };
+      // The live propose_relation returns NO id at all ({action:'proposed', relation:{names…}}) —
+      // found on the organ's first scheduled ticks (boot110). Recover it by CONTENT, not guesswork:
+      // the newest matching staged proposal joined by entity NAMES (content keys survive what
+      // surrogate keys do not — the 15,508-false-citation lesson). Read-only; a miss falls through
+      // to the honest no-id failure below.
+      try {
+        const rq = await callTool('db_query', {
+          sql: 'SELECT p.id FROM tenant_rainey.relation_proposals p '
+            + 'JOIN entities s ON s.id = p.source_id JOIN entities t ON t.id = p.target_id '
+            + "WHERE p.relation_type='LOCATED_IN' AND p.deleted=0 AND s.name=? AND t.name=? "
+            + 'ORDER BY p.id DESC LIMIT 1',
+          params: [childName, parentName],
+        });
+        const rj = _parse(rq);
+        const row = rj && rj.rows && rj.rows[0];
+        if (row && row.id != null) id = row.id;
+      } catch { /* fall through to the honest failure */ }
+    }
+    if (id == null) {
+      // No id came back and none could be recovered — we cannot target the promotion. Say so.
+      return { ok: false, action: p.action, error: 'proposed but no proposal_id to promote (and content recovery found none)' };
     }
     const pr = await callTool('promote_grounded_one',
       { kind: 'relation', proposal_id: id, min_confidence: 0.9 });
@@ -397,7 +419,8 @@ function createGraphRepairer({ callTool, log = () => {} } = {}) {
       if (t.action === 'mint') {
         const m = await mintPlace({ name: t.name, summary: '' });
         if (!m.ok) { out.failed.push({ target: t, error: m.error }); continue; }
-        const l = await link(t.name, parentName, citation);
+        // Link the entity that actually EXISTS: a merge-adopted mint lives under its own name.
+        const l = await link(m.name || t.name, parentName, citation);
         if (!l.ok) { out.failed.push({ target: t, error: l.error }); continue; }
         out.minted++;
       } else if (t.action === 'parent') {
