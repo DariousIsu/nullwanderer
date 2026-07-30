@@ -621,6 +621,15 @@ suit mounts all 551 tool docs into the operator surface — part of why `[packag
 compact tool INDEX rides every prompt; full schemas load per-turn on request. Direct attack on
 the engine-starvation finding — rank it with A.
 
+> **MEASURED 2026-07-30 — the premise above is STALE; O10 is effectively DONE.** The 551-doc
+> mount is not current reality: the suit context block is capped (guide 1400 + atlas 1200 +
+> recipe menu), `routeNeed` already discloses progressively (catalog filtered to ~20 by the
+> need → cloud picks ONE → that tool's schema alone is fetched for the args pass), `<echo-find>`
+> filters the same way, and the local operator's TOOL_SPEC is a curated ~10.8k-char spec of
+> ~15 named tools, not a dump. The engine-starvation number (`fit` 9–14%) means the cloud
+> package UNDER-fills its budget — the lever is PACKAGE RICHNESS (the roadmap/retrieval-ladder
+> lane, docs/CLOUD_PACKAGE design), not tool-doc dieting. Do not spend here again.
+
 **O11 — CONDITION WATCHERS.** The harness arms background watchers ("notify when this log line /
 condition appears") that re-invoke the agent with the event; used all through this review's
 boot-verification loop. Zoe's watchdogs RECOVER; nothing lets her ARM a watcher on a condition
