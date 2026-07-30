@@ -2768,6 +2768,9 @@ function showCard(n) {
 // division stops the thing being a cloud. Density and colour ARE the boundary — which is what Lucas said in
 // the first place. Nothing is drawn here now; the interface exists only as the place the two halves meet.
 let membrane = null, zoeAnchor = null, zoeHalo = null;
+// a decaying brightening the region loop reads on every self-development beat (declared here, before
+// updateRegion; the pulseZoeHalo setter and its callers live down in the gesture vocabulary).
+let _haloPulse = 0;
 
 function zoeSprite(colorHex, opacity, scale) { const s = mkSprite(colorHex, opacity); s.scale.setScalar(scale); return s; }
 function ensureZoeAnchor() {
@@ -2781,8 +2784,12 @@ function updateRegion(now) {
   if (shellCloud) shellCloud.position.set(0, 0, 0);
   if (zoeAnchor) {
     const b = 1 + Math.sin(now / 1400) * 0.12;             // slow breath, not a blink
-    zoeAnchor.position.set(_coreCen.x, _coreCen.y, _coreCen.z); zoeAnchor.scale.setScalar(9 * b);
-    zoeHalo.position.set(_coreCen.x, _coreCen.y, _coreCen.z); zoeHalo.scale.setScalar(22 * (2 - b) * 0.55 + 11);
+    // a self-development beat leaves a decaying brightening on the identity halo — her core's "I'm working on
+    // myself" tell. Rose stays rose (the lane hue rides the gesture motes); only scale + opacity swell.
+    const boost = _haloPulse; if (_haloPulse > 0) _haloPulse = Math.max(0, _haloPulse - 0.045);
+    zoeAnchor.position.set(_coreCen.x, _coreCen.y, _coreCen.z); zoeAnchor.scale.setScalar(9 * b * (1 + boost * 0.5));
+    zoeHalo.position.set(_coreCen.x, _coreCen.y, _coreCen.z); zoeHalo.scale.setScalar(22 * (2 - b) * 0.55 + 11 + boost * 16);
+    zoeHalo.material.opacity = 0.30 + boost * 0.34;
   }
 }
 
@@ -3093,6 +3100,74 @@ function gCross(inward, colorHex) {            // one communication: a pulse cro
     if (inward && p > 0.86 && zoeHalo) zoeHalo.material.opacity = 0.3 + Math.sin((p - 0.86) / 0.14 * Math.PI) * 0.3;
   });
   membraneShimmer();
+}
+
+// ============================================================================================================
+// SELF-DEVELOPMENT, ON HER — the graph as a window into Zoe and the program (Lucas, 2026-07-30). The same obs
+// stream that fills the left dock also plays out on her IDENTITY region: her subconscious working, her watching
+// herself, a capability need being born. The distinction from memory-activity is spatial and it is the whole
+// point — memory gestures range across the graph (objects in the world); self-development stays at the CORE,
+// because it is about HER, not the corpus. LIVE events only: the backfill is a week of history and must never
+// strobe the figure with past thought. Volume is safe by construction — the obs bus is throttled/capped at the
+// source (subc one open thread, anomalies 1/sig/hr, noise counted into digests), so this can't become a strobe.
+const OBS_LANE_HEX = { subc: 0xc4b5fd, directed: 0x7dd3fc, research: 0x34d399, window: 0xfbbf24,
+                       rehearsal: 0xfb923c, analysis: 0x2dd4bf, 'doc-set': 0xa3e635, harvest: 0xf472b6,
+                       watch: 0xfacc15, anomaly: 0xf87171 };
+// The identity halo brightens on EVERY self-development beat (via _haloPulse, declared up by zoeAnchor so the
+// region loop can read it), so even at a glance her core tells you the program is alive and working on itself.
+function pulseZoeHalo(amt) { _haloPulse = Math.min(1.5, _haloPulse + (amt || 0)); }
+// A capability being BORN (watch → need minting — the signature event of the self-improvement loop): a bright
+// rose mote rises OUT of the core and blooms toward the ring — a new facet of her. The personality ring is not
+// permanently grown here: a need is not yet a self_model row, and manufacturing an unbacked node would drift
+// from the data (the discipline this whole file holds). This is the MOMENT of minting, drawn as honest,
+// transient growth; if the need later becomes a real self_model row, loadSelf() seats it for real.
+function gGrow(hue) {
+  const c = new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z);
+  const dir = new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.6 + 0.2, Math.random() - 0.5);
+  if (dir.lengthSq() < 1e-3) dir.set(0, 1, 0); dir.normalize();
+  const tgt = c.clone().add(dir.multiplyScalar(ZOE_RING * 1.15));
+  const seed = mkSprite(hue, 0.95), trail = mkLine(hue, 0.5), bloom = mkSprite(hue, 0);
+  seed.scale.setScalar(3); seed.position.copy(c); bloom.position.copy(tgt); bloom.scale.setScalar(3);
+  addEffect([seed, trail, bloom], 1500, (p) => {
+    const rise = Math.min(1, p / 0.7), e = 1 - Math.pow(1 - rise, 3), at = c.clone().lerp(tgt, e);
+    seed.position.copy(at); seed.material.opacity = 0.95 * (1 - rise * 0.4); seed.scale.setScalar(3 + rise * 2);
+    trail.geometry.setFromPoints([c, at]); trail.material.opacity = 0.5 * (1 - p);
+    if (p >= 0.62) { const q = Math.sin((p - 0.62) / 0.38 * Math.PI); bloom.scale.setScalar(3 + q * 16); bloom.material.opacity = 0.85 * q; }
+  });
+  pulseZoeHalo(1.1);
+}
+// A self-directed BEAT inside the core — subconscious synthesis, a directed target moving, a citation
+// grounding, a self-watch digest. One grammar, lane-tinted, intensity by whether it's a load-bearing beat: it
+// condenses toward her like a thought (originating INSIDE, unlike inflow which falls in from the world).
+function gSelfBeat(hue, strong) {
+  const c = new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z);
+  const h = Math.random() * Math.PI * 2, v = Math.acos(2 * Math.random() - 1), r = PERP_SQ * (0.34 + 0.4 * Math.random());
+  const start = c.clone().add(new THREE.Vector3(r * Math.sin(v) * Math.cos(h), r * Math.sin(v) * Math.sin(h), r * Math.cos(v)));
+  const a0 = strong ? 0.7 : 0.42, sc = strong ? 3 : 2;
+  const s = mkSprite(hue, a0); s.scale.setScalar(sc); s.position.copy(start);
+  addEffect([s], 1500, (p) => { const e = 1 - (1 - p) * (1 - p); s.position.copy(start.clone().lerp(c, e * 0.85)); const q = Math.sin(p * Math.PI); s.material.opacity = a0 * q; s.scale.setScalar(sc + q * sc); });
+  pulseZoeHalo(strong ? 0.5 : 0.25);
+}
+// CONCERN — she noticed something off in HERSELF (a warn, or an error-level anomaly). A soft flush at the core,
+// not gRefute: gRefute collapses a disproven belief about the world; this is a flicker of self-attention.
+function gConcern(hue) {
+  const c = new THREE.Vector3(_coreCen.x, _coreCen.y, _coreCen.z);
+  const ring = mkSprite(hue, 0); ring.position.copy(c); ring.scale.setScalar(8);
+  addEffect([ring], 1100, (p) => { const q = Math.sin(p * Math.PI); ring.scale.setScalar(8 + q * 20); ring.material.opacity = 0.6 * q; });
+  pulseZoeHalo(0.7);
+}
+// Route ONE live obs event onto her figure. kind (need/error) wins first, then level (warn), then lane. All of
+// it happens at the core; the face nudges too, so when she is showing she visibly thinks/brightens with it.
+let _selfGestureOn = true;
+function obsGesture(evt) {
+  if (!_selfGestureOn || !evt) return;
+  const laneHue = OBS_LANE_HEX[evt.lane] != null ? OBS_LANE_HEX[evt.lane] : 0x94a3b8;
+  if (evt.kind === 'need') { gGrow(0xfda4af); faceExpression('happy'); return; }         // a capability is born — her own rose
+  if (evt.level === 'error') { gConcern(0xf87171); faceExpression('thinking'); return; }  // caught a fault in herself
+  if (evt.level === 'warn') { gConcern(laneHue); return; }                                // a self-regulation flag
+  if (evt.lane === 'subc') { gSelfBeat(laneHue, true); faceExpression('thinking'); return; }  // her subconscious working
+  if (evt.lane === 'rehearsal') { gSelfBeat(0xfb923c, true); return; }                    // practicing a change in the sandbox
+  gSelfBeat(laneHue, false);   // directed / research / watch / analysis / doc-set / harvest / unknown — a quiet self-beat
 }
 
 // --- neuron aesthetic (Phase 6): hidden-connection TENDRILS from hubs + a distant STARFIELD. GPU-cheap in 3D
@@ -3419,8 +3494,11 @@ function selfRow(evt) {
   _selfN++; if (selfCount) selfCount.textContent = String(_selfN);
   while (selfFeed.childElementCount > SELF_CAP) selfFeed.removeChild(selfFeed.lastChild);
 }
+// a LIVE event both fills the dock row AND plays on her figure (obsGesture). The backfill below is HISTORY and
+// calls selfRow only — a week of past thought must never strobe the core.
+function liveObs(evt) { selfRow(evt); try { obsGesture(evt); } catch (e) {} }
 let _selfReady = false; const _selfPre = [];
-try { if (window.sq && window.sq.obs && typeof window.sq.obs.onEvent === 'function') window.sq.obs.onEvent((evt) => { _selfReady ? selfRow(evt) : _selfPre.push(evt); }); } catch (e) {}
+try { if (window.sq && window.sq.obs && typeof window.sq.obs.onEvent === 'function') window.sq.obs.onEvent((evt) => { _selfReady ? liveObs(evt) : _selfPre.push(evt); }); } catch (e) {}
 (async () => {
   const sigs = new Set();
   try {
@@ -3434,16 +3512,17 @@ try { if (window.sq && window.sq.obs && typeof window.sq.obs.onEvent === 'functi
         cursor = evs[evs.length - 1].id;
         if (evs.length < 500) break;
       }
-      for (const e of all.slice(-SELF_CAP)) { selfRow(e); sigs.add(e.ts + '|' + e.text); }
+      for (const e of all.slice(-SELF_CAP)) { selfRow(e); sigs.add(e.ts + '|' + e.text); }   // history: dock only, no gesture
       if (all.length) _obsLastId = Math.max(_obsLastId, all[all.length - 1].id);
     }
   } catch (e) {}
-  for (const e of _selfPre) if (!sigs.has(e.ts + '|' + e.text)) selfRow(e);
+  for (const e of _selfPre) if (!sigs.has(e.ts + '|' + e.text)) liveObs(e);   // buffered-live: dock + figure
   _selfPre.length = 0; _selfReady = true;
 })();
 if (selfBtn && selfDock) {
   let selfOpen = true; try { selfOpen = localStorage.getItem('kg3d.self') !== '0'; } catch (e) {}
-  const paintSelf = () => { selfDock.classList.toggle('hidden', !selfOpen); selfBtn.classList.toggle('on', selfOpen); document.body.classList.toggle('selfopen', selfOpen); };
+  // the Self toggle governs the WHOLE self-development layer — the dock AND her on-figure gestures.
+  const paintSelf = () => { selfDock.classList.toggle('hidden', !selfOpen); selfBtn.classList.toggle('on', selfOpen); document.body.classList.toggle('selfopen', selfOpen); _selfGestureOn = selfOpen; };
   paintSelf();
   selfBtn.addEventListener('click', () => { selfOpen = !selfOpen; try { localStorage.setItem('kg3d.self', selfOpen ? '1' : '0'); } catch (e) {} paintSelf(); });
 }
@@ -3524,7 +3603,7 @@ loadSelf();                                      // the personality ring (kg:sel
 setInterval(loadSelf, 300000);                   // identity moves slowly — refresh occasionally, plus on 'self' events
 
 // ---- dev handle for CDP verification ----
-window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, effectsN: () => effects.length, tendrilN: () => tendrilSpecs.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z,
+window.__kg3d = { Graph, reload: loadOverview, focus, fps: () => fps, data: () => Graph.graphData(), onActivity, onFocusMove, obsGesture, effectsN: () => effects.length, tendrilN: () => tendrilSpecs.length, setFollow, mode: () => mode, worldN: () => world.nodes.size, camZ: () => Graph.cameraPosition().z,
   markerN: () => markerIndex.length, repaint: repaintNodeCloud, fit: fitView, rebuildLinks: buildLinkCloud,
   // her face — drive it directly to judge the look without waiting for her to say something
   face: (o) => { if (o && typeof o === 'object') { if (o.on != null) { FACE_ON = !!o.on; if (!FACE_ON) face.strength = 0; }
