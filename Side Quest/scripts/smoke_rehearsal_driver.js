@@ -26,7 +26,9 @@ function freshDeps({ picks = [], testResults = [], editResults = [], writeResult
       diff: () => (diffs.length ? diffs.shift() : 'sandbox "t" — 1 file(s) changed vs live:\n=== lib/x.js\n- old\n+ new'),
       discard: () => 'discarded',
     },
-    ask: async () => (picks.length ? picks.shift() : { action: 'test', why: 'looks done' }),
+    ask: async (o) => ((o && o.task === 'rehearsal_refute')
+      ? { verdict: 'survives', scenario: 'hardest case tried: empty input — the guard holds' }
+      : (picks.length ? picks.shift() : { action: 'test', why: 'looks done' })),
     land: (doc) => { landed.push(doc); return { id: 42, landed: true }; },
     fs: { readFileSync: () => 'the current sandbox file content' },
     sandboxDir: 'X:/nonexistent-covered-by-fs-injection',
@@ -284,9 +286,32 @@ function freshDeps({ picks = [], testResults = [], editResults = [], writeResult
     const s = drv.start({ slug: 'studied', goal: 'apply the researched retry-with-backoff shape to the fetch lane', suite: 'smoke_board.js', study: 'Studied: exponential backoff with jitter (source: https://example.com/aws-backoff; https://example.com/impl-notes). Pattern: cap retries, full-jitter sleep, retry only idempotent ops.', deps });
     ok(s.ok && /exponential backoff/.test(drv.load({ deps }).study), 'start() stores the researched study material on the run');
     await drv.iterate({ deps });
-    ok(askInputs.length === 1 && /jitter/.test(askInputs[0].study), 'every edit pick SEES the study — the change is written from research, not memory');
+    ok(askInputs.length >= 1 && /jitter/.test(askInputs[0].study), 'every edit pick SEES the study — the change is written from research, not memory');
     ok(landed.length === 1 && /## Research \(studied before writing/.test(landed[0].body) && /example\.com\/aws-backoff/.test(landed[0].body),
       'the green proposal card cites the study sources for Lucas to review');
+    // O6: the refuter's verdict rides the card (advisory — status stayed green regardless).
+    ok(/## Adversarial verify/.test(landed[0].body) && /SURVIVES/.test(landed[0].body) && /empty input/.test(landed[0].body),
+      "the refuter's verdict + scenario ride the card as a labeled field");
+  }
+  // O6: a REFUTED verdict still ships the card (advisory, never a gate) — labeled for Lucas.
+  {
+    const { deps, landed } = freshDeps({ picks: [{ action: 'test', why: 'done' }] });
+    deps.ask = async (o) => ((o && o.task === 'rehearsal_refute')
+      ? { verdict: 'refuted', scenario: 'a null focus id reaches line 3 and throws' }
+      : { action: 'test', why: 'done' });
+    drv.start({ slug: 'refuted-run', goal: 'a change the refuter can break for the smoke case', suite: 'smoke_board.js', deps });
+    const r = await drv.iterate({ deps });
+    ok(r.status === 'green' && landed.length === 1 && /REFUTED\*\* — a null focus id/.test(landed[0].body),
+      'a REFUTED verdict ships labeled on a still-green card — advisory, never a gate');
+  }
+  // O6: an unreachable refuter never blocks the card.
+  {
+    const { deps, landed } = freshDeps({ picks: [{ action: 'test', why: 'done' }] });
+    deps.ask = async (o) => ((o && o.task === 'rehearsal_refute') ? (() => { throw new Error('cloud down'); })() : { action: 'test', why: 'done' });
+    drv.start({ slug: 'no-refuter', goal: 'prove the card ships when the refuter is unreachable', suite: 'smoke_board.js', deps });
+    const r = await drv.iterate({ deps });
+    ok(r.status === 'green' && landed.length === 1 && !/Adversarial verify/.test(landed[0].body),
+      'refuter unreachable → the card ships WITHOUT the field, never blocked');
   }
   {
     const askInputs = [];

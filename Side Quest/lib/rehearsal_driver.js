@@ -315,6 +315,28 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
   let docId = null;
   try {
     const diff = (() => { try { return str(R.diff({ slug: run.slug })); } catch { return '(diff unavailable)'; } })();
+    // O6 ADVERSARIAL VERIFY (advisory, NEVER a gate — the smoke gate stays the only code oracle):
+    // a separate call whose only job is to BREAK the change. Generation and verification are
+    // different postures; a model asked to defend its own diff won't find the input that kills
+    // it. The verdict rides the card as a labeled field so Lucas knows where to look first.
+    let refuter = null;
+    try {
+      refuter = await ask({
+        task: 'rehearsal_refute', v: 1, think: false,
+        input: { goal: run.goal, diff: diff.slice(0, 6000) },
+        want: `You are a REFUTER. Your ONLY job is to BREAK this change: name the concrete input, state, or code path that makes the diff wrong or leaves the goal unmet. Do not praise it. Default to "refuted" when uncertain.
+Reply ONLY: {"verdict": "survives"|"refuted", "scenario": "<the concrete failure scenario — or, for survives, the hardest case you tried and why it held>"}`,
+        validate: (raw) => {
+          try {
+            const m = String(raw || '').match(/\{[\s\S]*\}/);
+            if (!m) return { valid: false, error: 'no JSON object' };
+            const o = JSON.parse(m[0]);
+            if (o.verdict !== 'survives' && o.verdict !== 'refuted') return { valid: false, error: 'verdict must be survives|refuted' };
+            return { valid: true, value: { verdict: o.verdict, scenario: str(o.scenario).slice(0, 400) } };
+          } catch (e) { return { valid: false, error: e.message }; }
+        },
+      });
+    } catch (e) { console.error('[rehearsal-driver] refuter failed (card ships without the field):', e.message); }
     const land = deps.land || require('./doc_store').land;
     const body = [
       `_Rehearsal run "${run.slug}" · ${run.iteration} iteration(s) · suite ${run.suite} · FULL GATE GREEN_`,
@@ -322,6 +344,7 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
       run.study ? `## Research (studied before writing — sources are reading material, never executed)\n${run.study}` : null,
       `## The change (sandbox diff)\n\`\`\`\n${diff.slice(0, 8000)}\n\`\`\``,
       `## Gate verdict\n\`\`\`\n${gateOut.slice(-1200)}\n\`\`\``,
+      refuter ? `## Adversarial verify (advisory — a separate call tried to BREAK this)\n**${refuter.verdict.toUpperCase()}**${refuter.scenario ? ` — ${refuter.scenario}` : ''}` : null,
       `## Adoption\nNothing self-adopts (R3). If this earns it: apply by hand, run the gate on the live tree, commit. The sandbox holds until discarded.`,
     ].filter(Boolean).join('\n\n');
     const r = land({ title: `Rehearsal proposal — ${run.goal.slice(0, 80)}`, body, source: 'rehearsal', ref: `rehearsal-${run.slug}-${run.startedTs}` });
