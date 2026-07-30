@@ -12529,6 +12529,18 @@ async function runDirectedResearchPass(focus) {
       // VISITED MEMORY — record the URLs opened + searches run this step, so the NEXT pass is told not to
       // repeat them (the "same websites over and over" fix). Steps carry the tool + args.
       let repeats = 0;
+      // HELD-KNOWLEDGE REFS (inventory §4): an echo-first pass opens no pages, so its notes carried
+      // no traceability and every claim fell back to "(source: gathered notes)". Harvest doc refs
+      // from the MEASURED echo step results — never from model claims — for the marker stamp below.
+      const heldRefs = [];
+      try {
+        if (r && Array.isArray(r.steps)) {
+          for (const s of r.steps) {
+            if (s.tool !== 'echo') continue;
+            for (const m of String(s.result || '').matchAll(/\b(doc|news)[:#]\s?(\d{2,7})\b/gi)) heldRefs.push(`${m[1].toLowerCase()}:${m[2]}`);
+          }
+        }
+      } catch {}
       try {
         if (r && Array.isArray(r.steps)) {
           let vis = []; try { vis = JSON.parse(db.getMeta(`focus.${focus.id}.visited`) || '[]'); } catch {}
@@ -12552,8 +12564,8 @@ async function runDirectedResearchPass(focus) {
         }
       } catch {}
       _toolUseBump(r && r.toolsUsed);   // measure DB-first vs web-first (echo/recall/localdb vs web_search/open_page)
-      return { ans: (r && r.answer ? String(r.answer).trim() : ''), usedTool: !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.some(t => ['web_search', 'browser_read', 'echo'].includes(t))), repeats };
-    } catch (e) { return { ans: '', usedTool: false, repeats: 0 }; }
+      return { ans: (r && r.answer ? String(r.answer).trim() : ''), usedTool: !!(r && Array.isArray(r.toolsUsed) && r.toolsUsed.some(t => ['web_search', 'browser_read', 'echo'].includes(t))), repeats, heldRefs: [...new Set(heldRefs)].slice(0, 4) };
+    } catch (e) { return { ans: '', usedTool: false, repeats: 0, heldRefs: [] }; }
   };
 
   let progressed = false, done = false, note = '', sig = '';
@@ -12614,7 +12626,7 @@ async function runDirectedResearchPass(focus) {
     // re-searching one it has (paired with the fuzzy repeat-detection in runPass).
     const _cov = (() => { try { return require('./studio/canvas_emit').coveredFacets(target.raw || '', planFacets); } catch { return []; } })();
     const uncovered = planFacets.filter(f => !_cov.includes(f));
-    const { ans, usedTool, repeats } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance, known: target.known || '', visited, coveragePlan, uncovered, covered, expected: _expectedCount(focus.id) }));
+    const { ans, usedTool, repeats, heldRefs } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance, known: target.known || '', visited, coveragePlan, uncovered, covered, expected: _expectedCount(focus.id) }));
     const p = rs.parsePass(ans);
     const newChars = rs.newContentChars(target.raw, p.body);
     target.passes = (target.passes || 1) + 1;
@@ -12636,7 +12648,16 @@ async function runDirectedResearchPass(focus) {
     // "[pages read this pass]" sat at its FRONT (NERC: 6 pages marked, synthesis saw 0; EPRI same).
     // Cap the body's tail, never its front — the front carries the identity-bearing content, and the
     // marker above it must survive the outer slice for claim→page binding.
-    if (p.body) target.raw = `${target.raw}\n\n${_passPages.length ? `[pages read this pass: ${_passPages.slice(0, 4).join(' · ')}]\n` : ''}${String(p.body).slice(0, 15000)}`.slice(-16000);
+    // TWO markers now ride: pages read (web passes) AND held-knowledge refs harvested from measured
+    // echo results (inventory §4 — an echo-first pass used to leave zero traceability). And the
+    // stamp no longer hides behind p.body: an empty-body pass still records what it consulted
+    // (EPSA live on boot129: "3 page(s) marked" logged, 0 markers reached the synthesis).
+    const _mk = [
+      _passPages.length ? `[pages read this pass: ${_passPages.slice(0, 4).join(' · ')}]` : '',
+      (heldRefs && heldRefs.length) ? `[held knowledge this pass: ${heldRefs.join(' · ')}]` : '',
+    ].filter(Boolean).join('\n');
+    if (heldRefs && heldRefs.length) console.log(`[cite] ${heldRefs.length} held ref(s) marked into "${target.name}" notes`);
+    if (p.body || _mk) target.raw = `${target.raw}\n\n${_mk ? `${_mk}\n` : ''}${String(p.body || '').slice(0, 15000)}`.slice(-16000);
     if (p.facet) target.facets = (target.facets || []).concat(p.facet).slice(-12);
     // STOP GUARD — a user-stop mid-pass must not ride the expensive tail. Measured on boot128: a full
     // zombie pass (browse + synthesis + canvas, "+1088 new chars") landed AFTER "[focus] #3618 stopped
@@ -12693,8 +12714,9 @@ async function runDirectedResearchPass(focus) {
           // Truth-in-logging for the citation chain: how much traceability does this synthesis
           // actually HAVE? 0 markers = the notes can't support URL bindings, whatever the model does.
           const _nMarkers = (String(target.raw || '').match(/\[pages read this pass/g) || []).length;
+          const _nHeld = (String(target.raw || '').match(/\[held knowledge this pass/g) || []).length;
           const _urls = visited.filter((u) => /^https?:/i.test(String(u)));
-          console.log(`[cite] synthesis "${target.name}": ${_nMarkers} page-marker(s) in notes, ${_urls.length} url(s) in SOURCES`);
+          console.log(`[cite] synthesis "${target.name}": ${_nMarkers} page-marker(s) + ${_nHeld} held-marker(s) in notes, ${_urls.length} url(s) in SOURCES`);
         }
         section = _isBeatRun
           ? await condenseComplete(rs.buildOrganizeTargetPrompt({ target: target.name, raw: target.raw }), { numPredict: config.sectionNumPredict() })
