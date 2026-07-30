@@ -240,6 +240,19 @@ function freshDeps({ picks = [], testResults = [], editResults = [], writeResult
     ok(r.ok && r.status === 'parked' && /sandbox lost and not recreatable/.test(r.note), 'an unrecreatable sandbox parks with the reason named — never a refusal loop');
   }
 
+  // --- A DEAD LANE SAYS SO (boot130: 4 wasted rehearse picks on a stuck run in one boot) ---
+  {
+    const { deps, mem } = freshDeps({ picks: [{ action: 'give_up', why: 'the suite tests a live socket' }] });
+    drv.start({ slug: 'deadlane', goal: 'prove a stuck run with no open needs reads as not-actionable', suite: 'smoke_board.js', deps });
+    await drv.iterate({ deps });   // give_up → stuck
+    const line1 = drv.manifestLine({ deps });
+    ok(/NOTHING ACTIONABLE/.test(line1) && /do NOT choose rehearse/.test(line1), 'stuck run + no open needs → the manifest tells the decider to skip');
+    mem.exec(`CREATE TABLE capability_needs (id INTEGER PRIMARY KEY, need TEXT, status TEXT, born_from TEXT, created_ts INT, updated_ts INT)`);
+    mem.prepare("INSERT INTO capability_needs (need, status, created_ts, updated_ts) VALUES ('a tool that reads XLS files', 'open', 1, 1)").run();
+    const line2 = drv.manifestLine({ deps });
+    ok(/1 open capability need/.test(line2) && /NEW run/.test(line2), 'an open need keeps the lane choosable — a new run could start');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

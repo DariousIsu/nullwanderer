@@ -310,6 +310,15 @@ function discard({ deps = {} } = {}) {
 function manifestLine({ deps = {} } = {}) {
   const run = load({ deps });
   if (!run) return '';
+  // A DEAD LANE MUST SAY SO (boot130: the decider chose rehearse 4× in one boot and every pick
+  // no-oped — a stuck run's line read like work). When the run can't advance AND no open need
+  // could start a new one, the line tells the decider plainly not to spend a pick here.
+  if (run.status !== 'active') {
+    let openNeeds = 0;
+    try { openNeeds = require('./capability_need').listOpen({ deps }).length; } catch {}
+    if (!openNeeds) return `   - [rehearsal ${run.slug}] ${run.status} — NOTHING ACTIONABLE (no open capability needs); do NOT choose rehearse this tick`;
+    return `   - [rehearsal ${run.slug}] ${run.status} — but ${openNeeds} open capability need(s) could start a NEW run`;
+  }
   return `   - [rehearsal ${run.slug}] ${run.status} at iteration ${run.iteration} — "${run.goal.slice(0, 80)}" (suite ${run.suite})`;
 }
 
