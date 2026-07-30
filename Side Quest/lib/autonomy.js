@@ -283,6 +283,35 @@ function buildManifest({ db = null, now = Date.now(), deps = {} } = {}) {
   return { text: sections.join('\n'), counts };
 }
 
+// THE LIVE DIGEST — what is IN FLIGHT right now, for a reader who cannot take the whole manifest
+// (the subconscious, whose synthesis budget is a few thousand chars). Measured 2026-07-30: handing
+// the raw manifest to the subc produced four consecutive syntheses about county backlog while the
+// live focus was China AI research — not recency bias, as first assumed, but SECTION ORDER: the
+// manifest opens with static inventory (1,251 absence gaps, 329k held claims), so a 3000-char cut
+// never reached the sections about actual work. This selects the in-flight sections in priority
+// order and drops the standing inventory, so "what is happening" survives any budget.
+const LIVE_SECTIONS = [
+  'YOUR OPEN THREADS', 'OPEN LINES OF INQUIRY', 'HIS CALENDAR THIS WEEK', 'AWAITING',
+  'WHAT IS RUNNING IN YOU NOW', 'RECENT FAILURES', 'ACTIVE REHEARSAL RUN',
+  'CAPABILITY GAPS SHE HAS NAMED', 'FINISHED DELEGATED WORK', 'DEVELOPING STORIES YOU FOLLOW',
+  'CONVERSATION HARVEST', 'LEARNED CONSTRAINTS',
+];
+function liveDigest({ db = null, now = Date.now(), maxChars = 3000, deps = {} } = {}) {
+  let text = '';
+  const build = deps.buildManifest || buildManifest;   // injectable → offline-smokeable
+  try { text = (build({ db, now, deps }) || {}).text || ''; } catch { return ''; }
+  if (!text) return '';
+  const blocks = text.split(/\n(?=• )/).filter(Boolean);
+  const out = [];
+  for (const want of LIVE_SECTIONS) {
+    const b = blocks.find((x) => x.slice(0, 60).includes(want));
+    if (!b) continue;
+    if (out.join('\n').length + b.length > maxChars) break;
+    out.push(b.trim());
+  }
+  return out.join('\n');
+}
+
 // ---- history: what the last N ticks chose and what CAME OF IT --------------
 function historyRead(getMeta) {
   try { const a = JSON.parse((getMeta && getMeta(HISTORY_KEY)) || '[]'); return Array.isArray(a) ? a : []; }
@@ -548,7 +577,7 @@ function matchPendingDelegate(item, pending = []) {
 
 module.exports = {
   MOVES, HISTORY_KEY, HISTORY_MAX,
-  buildManifest, historyRead, historyPush, historyBlock,
+  buildManifest, liveDigest, LIVE_SECTIONS, historyRead, historyPush, historyBlock,
   decide, validateDecision, DECISION_WANT,
   buildOperatorBrief, summarizeOutcome, slugify,
   verifyExpect, _validateExpectVerdict, parseAgentInbox, inboxSeenKey,

@@ -1294,8 +1294,11 @@ async function _runOneTick() {
         // deadlines, failures, what awaits him, what is running. Her between-turn thinking now
         // reasons over everything in flight, not just her most recent thoughts (recency bias was
         // the only signal; Lucas: "a good research assistant anticipates your needs").
+        // liveDigest, NOT the raw manifest: the manifest opens with standing INVENTORY (absence
+        // gaps, held claims) and the subc's slice never reached the in-flight sections — four
+        // straight syntheses about county backlog while the live focus was China research.
         let _boardBlock = '';
-        try { _boardBlock = (require('./autonomy').buildManifest({ db, now: Date.now() }) || {}).text || ''; } catch {}
+        try { _boardBlock = require('./autonomy').liveDigest({ db, now: Date.now(), maxChars: 3000 }) || ''; } catch {}
         const synthMessages = [
           { role: 'system', content: BASE_PERSONA },
           { role: 'user', content: subc2.buildSynthesisPrompt({ recentThoughts: synthThoughts, threads: synthThreads, focus: null, sources, explored: _synthRecent, identity: _idBlock, board: _boardBlock }) }

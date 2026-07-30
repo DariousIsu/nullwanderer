@@ -201,6 +201,32 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
     ok(auto.matchPendingDelegate({ title: 'Richland roster', summary: '' }, []) === null, 'match: empty pending → null, never throws');
   }
 
+  // --- liveDigest: WHAT IS IN FLIGHT survives any budget (2026-07-30) ---
+  // Measured: handing the raw manifest to the subconscious produced four straight syntheses about
+  // county backlog while the live focus was China research. Not recency — SECTION ORDER: the
+  // manifest opens with standing inventory (1,251 absence gaps, 329k held claims) and a 3000-char
+  // cut never reached the in-flight sections. The digest selects live work and drops inventory.
+  {
+    const fakeText = [
+      '• NAMED GAPS (absence): 1,251 things we do NOT have.\n   - ' + 'x'.repeat(2600),
+      '• CLAIMS HELD (encounters): 329,160 claims',
+      '• YOUR OPEN THREADS (120 active/pending):\n   - "compile Delaware county boards" (untouched 10d ago)',
+      '• HIS CALENDAR THIS WEEK: Rainey team meeting Tuesday',
+      '• OPEN LINES OF INQUIRY (advancing one is the DEFAULT move):\n   - [inquiry #60] robots.txt audit',
+      '• RECENT FAILURES (last 24h): graph-walk failed 3x',
+    ].join('\n');
+    const deps = { buildManifest: () => ({ text: fakeText, counts: {} }) };
+    const d = auto.liveDigest({ db: null, now: Date.now(), maxChars: 3000, deps });
+    ok(!/NAMED GAPS/.test(d) && !/CLAIMS HELD/.test(d), 'standing INVENTORY is dropped — it can never crowd out live work');
+    ok(/YOUR OPEN THREADS/.test(d) && /OPEN LINES OF INQUIRY/.test(d) && /HIS CALENDAR THIS WEEK/.test(d),
+      'the in-flight sections all survive: his threads, her inquiries, his week');
+    ok(/RECENT FAILURES/.test(d), 'recent failures ride too — the anticipation surface includes what is breaking');
+    ok(d.indexOf('YOUR OPEN THREADS') < d.indexOf('RECENT FAILURES'), 'priority order holds (threads before failures)');
+    ok(auto.liveDigest({ db: null, now: Date.now(), maxChars: 60, deps }).length <= 260, 'a tiny budget truncates by WHOLE sections, never mid-fact');
+    ok(auto.liveDigest({ db: null, now: Date.now(), deps: { buildManifest: () => { throw new Error('db down'); } } }) === '', 'a failed manifest yields an empty digest, never a throw');
+    ok(auto.LIVE_SECTIONS.includes('AWAITING'), 'what awaits Lucas is part of the live surface');
+  }
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
