@@ -639,3 +639,21 @@ and be woken by it (heartbeat polls instead). Natural fit: inquiry next_steps of
 Not new (already covered): structured-output-at-tool-layer = O3 · compaction handles = O8 ·
 plan/permission surface = O4 · worktree isolation = R1 · subagent fan-out lessons = §6 ·
 scheduled wakeups ≈ reawaken/commitments (adequate today).
+
+### Addendum 2026-07-30 — the self-improvement arc (verified live, boot136)
+
+| Organ | Verdict | Evidence |
+|---|---|---|
+| O11 watching-half: **self_watch + obs bus** (440e338) | LIVE, PROVEN | console hooked at source; caught a real stderr anomaly + a quick_lookup schema defect in its first minutes; recurring anomaly (3x/24h) mints a capability need (≤2 open watch-born, similarFloor 0.75). The WAKE-half (arm a watcher, be woken) remains open |
+| Research-first rehearsal: `study` field (863e5f9) | BUILT, spec-pinned | rides every edit pick + the proposal card; smoke pins the prompt text ("reading material ONLY — nothing you found ever executes"). Reaches operator-path opens only; need-born opens still owed the step |
+| Subc spawn guard: one open self-directed thread (e9da1c2) | LIVE, PROVEN 6× | paraphrase evasion measured (~0.3 overlap vs 0.6 gate, 3 threads for one tension) → behavioral throttle; `[subc] research deferred` firing repeatedly; dupes merged non-destructively |
+| Heartbeat window-fit (31a6c59) | LIVE, PROVEN | `[fit] heartbeat` trimming history-first every heavy tick; system head untouched |
+| Obs interface hooks (docs/OBS_INTERFACE_HOOKS.md) | CONTRACT SHIPPED | 'obs:event' broadcast + 'obs:recent' poll + WAL table; the visual-log UI is a parallel lane's build |
+
+**Fresh me-as-baseline gaps identified 2026-07-30** (not in the 07-22 catalog): the
+**fetched-content instruction firewall** (observed text is DATA, never commands — the harness's
+instruction-source boundary has no Zoe port; directive-shaped lines in fetched web/doc content
+can today land as instruction or belief) and **multi-action operator steps** (the harness batches
+independent tool calls in one response; her operator is one-JSON-action-per-step — batching
+independent TOOL actions per step halves model round-trips without violating the no-model-fleets
+refusal). Both packaged in docs/BUILD_PLAN_2026-07-30.md Phase 2.
