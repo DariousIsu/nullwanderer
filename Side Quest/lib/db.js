@@ -806,6 +806,55 @@ const MIGRATIONS = [
     conflict_ts INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS idx_cardinality_conflict ON cardinality(conflict_ts)`,
+  // civic_bodies / civic_memberships — THE STRUCTURED HOME for researched governing bodies
+  // (docs/CIVIC_BODY_SCHEMA_DESIGN.md, Lucas-approved 2026-07-30). Measured before building: 120
+  // open county threads and hundreds of researched boards had NO queryable store — prose
+  // deliverables and graph nodes only — which is why roster/contact-sheet deliverables never
+  // worked and why db_query(county_election_boards) errored. Keyed on lib/body_key so a roster,
+  // its seat denominator (cardinality) and its gap record (absence) all line up.
+  // LEVEL and FUNCTION are orthogonal on purpose: an elections board and a commission share a
+  // level and differ in function — one enum would repeat the ROLE-became-TYPE trap.
+  `CREATE TABLE IF NOT EXISTS civic_bodies (
+    body_key TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    level TEXT NOT NULL,
+    function TEXT NOT NULL,
+    state TEXT,
+    place TEXT,
+    official_url TEXT,
+    selection TEXT,
+    term_years INTEGER,
+    notes TEXT,
+    first_seen_ts INTEGER NOT NULL,
+    updated_ts INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_civic_bodies_state ON civic_bodies(state, level, function)`,
+  // ONE ROW PER SEAT-HELD-BY-A-PERSON-OVER-A-PERIOD. Not a person store — the CRM stays
+  // authoritative; this owns SEATS and points at the person. person_name is what the source
+  // actually printed, kept verbatim even when unresolved. Supersede, never overwrite.
+  `CREATE TABLE IF NOT EXISTS civic_memberships (
+    id INTEGER PRIMARY KEY,
+    body_key TEXT NOT NULL REFERENCES civic_bodies(body_key),
+    person_name TEXT NOT NULL,
+    role TEXT,
+    district TEXT,
+    party TEXT,
+    term_start TEXT,
+    term_end TEXT,
+    crm_id TEXT,
+    puller_id INTEGER,
+    email TEXT,
+    phone TEXT,
+    source_url TEXT,
+    source_kind TEXT,
+    doc_ref INTEGER,
+    confidence REAL DEFAULT 0.5,
+    observed_ts INTEGER NOT NULL,
+    superseded_by INTEGER,
+    UNIQUE(body_key, person_name, role, observed_ts)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_civic_mem_body ON civic_memberships(body_key, superseded_by)`,
+  `CREATE INDEX IF NOT EXISTS idx_civic_mem_crm ON civic_memberships(crm_id)`,
 
   // DOC CONTACTS — people extracted from SHORT-TERM research documents, so the contacts query can see
   // what her own research already found.
