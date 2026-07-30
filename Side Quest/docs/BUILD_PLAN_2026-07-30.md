@@ -30,6 +30,13 @@ hooks for the visual-log lane (docs/OBS_INTERFACE_HOOKS.md — the parallel cont
 
 ## Phase 2 — the features review's picks (new organs, me-as-baseline)
 
+> **STATUS (late 07-30): 2.1's self-check slice + 2.2 BUILT** (0db5613 O5 self-check — packaging
+> re-opens what it produced, a failed check reports the miss; 7317936 O6 refuter — every proposal
+> card carries a SURVIVES/REFUTED verdict, advisory never a gate). Also landed off-plan from the
+> chat audit: redirect classifier-primary (07f96eb), deferred-agenda capture (ac9f8da, Fulton item
+> registered as task #88 → 2026-08-05). O5's remaining halves (shapes→rows, branded docx) open.
+> Live boot142. NEXT: 2.3 content firewall (fresh sitting — design-sensitive).
+
 | # | Item | Size | Baseline feature it ports |
 |---|---|---|---|
 | 2.1 | **O5** doc shapes as data + post-render self-check | M | "open what you produced — an artifact you didn't re-open is a guess"; N4 smarter reports |
