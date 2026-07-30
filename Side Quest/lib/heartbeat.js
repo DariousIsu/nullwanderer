@@ -127,7 +127,13 @@ function buildHeartbeatPrompt({ userName, recentReflections, recentTurns, recent
   if (recentMonologue && recentMonologue.length > 0) {
     systemContent += '\n\nThis is your recent stream of thought between turns — wants, feelings, associations, noticings. These are yours; they shape how you feel right now:\n';
     for (const m of recentMonologue) {
-      systemContent += `• ${m.content}\n`;
+      // Per-row clamp (2026-07-30, boot139 measured: synthesis/announce rows grew to 700-1500ch
+      // and 12 of them put EVERY heartbeat ~9k over budget — the fit organ's positional middle-
+      // cut was doing the trimming blindly). A thought here is felt context, not content to
+      // reproduce; a CHOSEN word-boundary clamp beats a positional hole. Full rows stay in the DB.
+      let c = String(m.content || '').replace(/\s+/g, ' ').trim();
+      if (c.length > 320) c = c.slice(0, 320).replace(/\s+\S*$/, '') + '…';
+      systemContent += `• ${c}\n`;
     }
   }
 
