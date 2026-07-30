@@ -159,6 +159,18 @@ ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: N
   ok(!spec.validate('{"redirect": "yes", "topic": "x"}').valid, 'a non-boolean verdict is refused (schema, not vibes)');
   ok(!spec.validate('{"redirect": true, "topic": ""}').valid, 'a redirect without a topic is refused');
   ok(spec.validate('{"redirect": false, "topic": ""}').valid, 'a clean "not a redirect" verdict parses');
+
+  // --- DEFERRED-AGENDA CAPTURE (audit 10278: "saved for the meeting" with nothing behind it) ---
+  ok(uw.AGENDA_TRIGGER_RE.test("Save that elections news for next week's Rainey team meeting. If the story has more development we can bring it up to the elections team"), 'the REAL 10278 message reaches the classifier');
+  ok(uw.AGENDA_TRIGGER_RE.test('remind me about the parish list on friday'), '"remind me … friday" reaches the classifier');
+  ok(!uw.AGENDA_TRIGGER_RE.test('how are the county boards structured in Georgia'), 'plain research questions never reach it');
+  const ag = uw.buildAgendaAsk('Save that for the meeting', 'ai_said: The Fulton County elections board has a vacancy…');
+  ok(/HOLD something for a FUTURE moment/.test(ag.want) && /NOT a hold when he asks a question/.test(ag.want), 'the prompt states the hold DISTINCTION, not a phrase list');
+  ok(/resolved from the recent turns/.test(ag.want) && /recent_turns/.test(JSON.stringify(ag.input)), '"that" resolves against the recent turns riding the input');
+  const av = ag.validate('{"defer": true, "item": "Fulton County elections board vacancy story", "when": "next week\'s Rainey team meeting", "days": 7}');
+  ok(av.valid && av.value.days === 7 && /Fulton County/.test(av.value.item), 'a concrete hold parses with its timing');
+  ok(!ag.validate('{"defer": true, "item": "that", "when": "later", "days": 3}').valid, 'an unresolved "that" is refused — the item must be concrete');
+  ok(ag.validate('{"defer": false, "item": "", "when": "", "days": 0}').valid, 'a clean "not a hold" verdict parses');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

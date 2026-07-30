@@ -240,4 +240,32 @@ function matchThreadToTopic(topic, threads) {
   return best;
 }
 
-module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, parkDeliverable, scoreThread, pickUserThread, augmentGuidance, detectRedirect, matchThreadToTopic, REDIRECT_TRIGGER_RE, buildRedirectAsk };
+// DEFERRED-AGENDA CAPTURE (chat audit 10278/10280, 2026-07-30: "Save that elections news for
+// next week's Rainey team meeting" → she said "saved / will be on the agenda" and NOTHING
+// registered — no note, no task, no track. A hold-for-later ask must become a REAL row on her
+// own clock. Classifier-primary, same contract as the redirect; the recent turns ride the input
+// so "that" resolves to what was actually being discussed.
+const AGENDA_TRIGGER_RE = /\b(remind|agenda|meeting|next (?:week|month)|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|save (?:that|this|it)|bring (?:that|this|it|up)|keep (?:that|this|it)|flag (?:that|this|it)|later)\b/i;
+function buildAgendaAsk(message, context = '') {
+  return {
+    task: 'agenda_intent', v: 1, think: false,
+    input: { message: String(message || '').slice(0, 800), recent_turns: String(context || '').slice(0, 900) },
+    want: `Lucas is talking to his research assistant. Decide: is he asking her to HOLD something for a FUTURE moment — save/bring up/remind/flag an item for a later meeting, day, or event? It is NOT a hold when he asks a question, gives an immediate task, or just mentions a meeting in passing.
+Reply ONLY: {"defer": true|false, "item": "<WHAT to hold, resolved from the recent turns — a concrete phrase, not 'that'>", "when": "<his words for when>", "days": <estimated days from now until it's needed, e.g. 7 for next week>}
+When defer is false, item/when may be empty and days 0.`,
+    validate: (raw) => {
+      try {
+        const m = String(raw || '').match(/\{[\s\S]*\}/);
+        if (!m) return { valid: false, error: 'no JSON object' };
+        const o = JSON.parse(m[0]);
+        if (typeof o.defer !== 'boolean') return { valid: false, error: 'defer must be true|false' };
+        const item = String(o.item || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+        if (o.defer && (item.length < 6 || /^that\b/i.test(item))) return { valid: false, error: 'a hold needs a CONCRETE item (resolve "that" from the recent turns)' };
+        const days = Number(o.days);
+        return { valid: true, value: { defer: o.defer, item, whenText: String(o.when || '').slice(0, 80), days: isFinite(days) ? days : 7 } };
+      } catch (e) { return { valid: false, error: e.message }; }
+    },
+  };
+}
+
+module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, parkDeliverable, scoreThread, pickUserThread, augmentGuidance, detectRedirect, matchThreadToTopic, REDIRECT_TRIGGER_RE, buildRedirectAsk, AGENDA_TRIGGER_RE, buildAgendaAsk };

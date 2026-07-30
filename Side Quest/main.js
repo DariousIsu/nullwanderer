@@ -6636,6 +6636,31 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     }
   } catch (e) { console.error('[main] redirect check failed:', e.message); }
 
+  // DEFERRED-AGENDA CAPTURE (chat audit 10278/10280: "Save that elections news for next week's
+  // Rainey team meeting" → she said "saved / on the agenda" and NOTHING registered). A hold-for-
+  // later ask becomes a REAL row on her own clock — the existing ticker surfaces it as a reading
+  // and kicks the heartbeat when due. Classifier-primary; the recent turns ride the input so
+  // "that" resolves to what was actually discussed. The reply is grounded in the registration.
+  try {
+    const uw = require('./lib/user_work');
+    if (uw.AGENDA_TRIGGER_RE.test(userMessage)) {
+      let _agCtx = '';
+      try {
+        const rows = db.getDb().prepare(`SELECT speaker, substr(content, 1, 240) c FROM turns WHERE speaker IN ('user','ai_said') ORDER BY id DESC LIMIT 3`).all().reverse();
+        _agCtx = rows.map((r) => `${r.speaker}: ${r.c}`).join('\n');
+      } catch {}
+      let ag = null;
+      try { const c = await require('./lib/cloud_logic').ask(uw.buildAgendaAsk(userMessage, _agCtx)); if (c && c.defer === true) ag = c; } catch {}
+      if (ag && ag.item) {
+        const days = Math.max(0.1, Math.min(60, Number(ag.days) || 7));
+        const fireAt = Date.now() + Math.round(days * 86400e3);
+        const st = db.insertScheduledTask({ kind: 'once', note: `AGENDA (Lucas asked to hold this): ${ag.item}${ag.whenText ? ` — for: ${ag.whenText}` : ''}`.slice(0, 400), fireAt, source: 'agenda-capture' });
+        composedUserMessage += `\n\n[${userName} asked you to HOLD something for later: "${ag.item}" (${ag.whenText || `in ~${Math.round(days)} day(s)`}). This IS registered: reminder #${st.id} on your own clock will surface it then. Confirm plainly what is held and for when — do NOT claim any other saving happened.]`;
+        console.log(`[agenda] deferred item registered → task #${st.id} fires ${new Date(fireAt).toISOString().slice(0, 10)} — "${String(ag.item).slice(0, 60)}"`);
+      }
+    }
+  } catch (e) { console.error('[main] agenda capture failed:', e.message); }
+
   // WRAP-UP / FINALIZE — distinct from STOP (which abandons + saves). "Wrap up / finish / finalize the
   // research" means CONCLUDE it into its deliverable: halt the driver, condense the run into the lossless
   // dossier (→ Canvas via condenseRun's canvasEmit), resolve the focus, and POINT chat at the Canvas with
