@@ -192,6 +192,22 @@ function freshDeps({ picks = [], testResults = [], editResults = [], writeResult
     ok(res.ok && res.run.noopStreak === 0, 'resume clears the no-op streak (fresh sitting, fresh streak)');
   }
 
+  // ---- _fileBlock: the picker must SEE what it edits (boot117: FILE_CAP=6000 showed 34% of a
+  // 17.8k file — every edit against the unseen 66% was refused as inexact, 5/5 failed) ----------
+  {
+    const fs = require('fs'), os = require('os'), path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq_rehearse_fb_'));
+    fs.writeFileSync(path.join(dir, 'whole.js'), 'A'.repeat(10000));
+    fs.writeFileSync(path.join(dir, 'monster.js'), 'B'.repeat(drv.FILE_CAP + 500));
+    const block = drv._fileBlock({ files: ['whole.js', 'monster.js'] }, { sandboxDir: dir });
+    ok(drv.FILE_CAP >= 20000, `FILE_CAP sized to the window (${drv.FILE_CAP}), not to thrift`);
+    ok(block.includes('A'.repeat(10000)), 'a file within the cap rides WHOLE (the 17.8k case now fits)');
+    ok(/TRUNCATED — 500 more chars exist/.test(block), 'an over-cap file names its truncation where the model reads it');
+    ok(/NEVER propose an edit quoting text you cannot see/.test(block), 'the marker forbids editing unseen text');
+    ok(!block.split('whole.js')[1].split('monster.js')[0].includes('TRUNCATED'), 'a whole file carries NO truncation marker');
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
   // SQUEEZE (boot113: the pick drowned in a 3000-char PASS wall; the failing names sat in the tail)
   {
     const wall = ['SUITE GREEN but the FULL GATE failed:']

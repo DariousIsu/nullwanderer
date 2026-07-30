@@ -27,7 +27,10 @@ const str = (v) => (v == null ? '' : String(v));
 const RUN_KEY = 'rehearsal_driver.run';
 const ITER_BUDGET = 6;          // per sitting; parked runs resume with a fresh budget
 const NOOP_STREAK_CAP = 4;      // consecutive REFUNDED picks (schema/cloud) before the run parks — a refund is a free spin, and an unbounded streak retries at drain pace forever
-const FILE_CAP = 6000;          // chars of each watched file the edit-picker sees
+const FILE_CAP = 24000;         // chars of each watched file the edit-picker sees — sized TO the window
+                                // ([[artificial-caps-truncate]]): at 6000 the picker saw 34% of need-1's
+                                // lib/intent.js (17.8k) and every edit against the unseen 66% was refused
+                                // as inexact (5/5 failed, boot117). The cap is a runaway guard, not a budget.
 const RESULT_CAP = 3000;        // chars of raw test output that ride the next attempt
 
 // Squeeze a test/gate dump to its SIGNAL for the pick brief: a full-gate tail is ~3000 chars of
@@ -117,8 +120,14 @@ function _fileBlock(run, deps) {
     path.join(process.env.ZOE_REHEARSAL_DIR || path.join(__dirname, '..', 'data', 'rehearsal'), run.slug);
   const parts = [];
   for (const f of (run.files || [])) {
-    try { parts.push(`── ${f} (sandbox, current) ──\n${str(fs.readFileSync(path.join(base, f), 'utf8')).slice(0, FILE_CAP)}`); }
-    catch { parts.push(`── ${f} — unreadable in the sandbox ──`); }
+    try {
+      const raw = str(fs.readFileSync(path.join(base, f), 'utf8'));
+      const cut = raw.length > FILE_CAP;
+      // A silent cut makes the model quote text it cannot see — the exact-match applier then refuses
+      // every edit. If we must truncate, SAY SO where the model will read it.
+      parts.push(`── ${f} (sandbox, current) ──\n${raw.slice(0, FILE_CAP)}`
+        + (cut ? `\n…[TRUNCATED — ${raw.length - FILE_CAP} more chars exist below this point; NEVER propose an edit quoting text you cannot see above]` : ''));
+    } catch { parts.push(`── ${f} — unreadable in the sandbox ──`); }
   }
   return parts.join('\n\n');
 }
@@ -290,4 +299,4 @@ function manifestLine({ deps = {} } = {}) {
   return `   - [rehearsal ${run.slug}] ${run.status} at iteration ${run.iteration} — "${run.goal.slice(0, 80)}" (suite ${run.suite})`;
 }
 
-module.exports = { RUN_KEY, ITER_BUDGET, NOOP_STREAK_CAP, EDIT_WANT, load, start, validateEditPick, iterate, resume, discard, manifestLine, _squeezeTestOutput };
+module.exports = { RUN_KEY, ITER_BUDGET, NOOP_STREAK_CAP, FILE_CAP, EDIT_WANT, load, start, validateEditPick, iterate, resume, discard, manifestLine, _squeezeTestOutput, _fileBlock };
