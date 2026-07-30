@@ -10831,8 +10831,9 @@ async function _autonomicSchedulerTick() {
   const now = Date.now();
   const heldByWorkers = new Set(Object.values(state.workers || {}).map((x) => x && x.beatId).filter(Boolean));   // don't hand the primary a beat a worker already holds (priority mode)
   let pool = lane === 'topic' ? topicPool : electedPool;
+  let laneUsed = lane;
   let nextId = _chooseBeat(pool, state, now, heldByWorkers);
-  if (!nextId) { pool = lane === 'topic' ? electedPool : topicPool; nextId = _chooseBeat(pool, state, now, heldByWorkers); }   // this lane all-done → fall back to the other
+  if (!nextId) { pool = lane === 'topic' ? electedPool : topicPool; laneUsed = lane === 'topic' ? 'elected' : 'topic'; nextId = _chooseBeat(pool, state, now, heldByWorkers); }   // this lane all-done → fall back to the other
   if (!nextId) return;                                                              // everything converged; maintenance re-activates later
   const beat = beats.find((b) => b.id === nextId);
   const bs = state.beats[nextId] || {};
@@ -10850,14 +10851,14 @@ async function _autonomicSchedulerTick() {
       state.beats[nextId] = bs; _saveSchedState(state);
       kickDirectedFocusDriver();
       _fillBackgroundWorkers(state, electedPool, topicPool, nextId);   // keep the parallel workers busy too
-      console.log(`[autonomic] resumed ${lane}:${nextId} → focus #${bs.thread} (${bs.sliceStartCovered}/${beat.universeSize()} covered)`);
+      console.log(`[autonomic] resumed ${laneUsed}:${nextId} → focus #${bs.thread} (${bs.sliceStartCovered}/${beat.universeSize()} covered)`);
       return;
     }
     if (t && t.status === 'resolved') { bs.status = 'done'; bs.doneAt = Date.now(); state.beats[nextId] = bs; _saveSchedState(state); return; }
   }
   // SEED a fresh run.
   const r = await seedBeatRun(beat);
-  if (r && r.ok) { bs.thread = r.focusId; bs.sliceStartCovered = 0; bs.lastRun = Date.now(); state.sliceIndex = (state.sliceIndex || 0) + 1; state.beats[nextId] = bs; _saveSchedState(state); console.log(`[autonomic] seeded ${lane}:${nextId}`); }
+  if (r && r.ok) { bs.thread = r.focusId; bs.sliceStartCovered = 0; bs.lastRun = Date.now(); state.sliceIndex = (state.sliceIndex || 0) + 1; state.beats[nextId] = bs; _saveSchedState(state); console.log(`[autonomic] seeded ${laneUsed}:${nextId}`); }
   else if (r && r.reason === 'user-focus-active') { /* a user task appeared — yield, try next tick */ }
   _fillBackgroundWorkers(state, electedPool, topicPool, nextId);       // fill/advance the parallel research workers
 }
@@ -11168,8 +11169,12 @@ function startAutonomicScheduler() {
         getMeta: (k) => db.getMeta(k), setMeta: (k, v) => db.setMeta(k, v),
         log: (m) => console.log(`[graph-integrity] ${m}`),
       });
-      if (r && r.ran) console.log(`[graph-integrity] ${r.code}: applied ${r.applied} repair(s) — minted ${r.res.minted}, parented ${r.res.parented}, held ${r.res.held.length}, failed ${r.res.failed.length}, remaining ${r.res.remaining}`);
-      else if (r && r.why) console.log(`[graph-integrity] deferred: ${r.why}`);
+      if (r && r.ran) {
+        console.log(`[graph-integrity] ${r.code}: applied ${r.applied} repair(s) — minted ${r.res.minted}, parented ${r.res.parented}, held ${r.res.held.length}, failed ${r.res.failed.length}, remaining ${r.res.remaining}`);
+        // A failure that doesn't name its door is invisible (boot118: "AS failed 2" with no why).
+        // Bite is ≤5, so this is bounded by construction.
+        for (const f of (r.res.failed || [])) console.log(`[graph-integrity] ${r.code} FAILED ${(f.target && (f.target.name || f.target.action)) || '?'}: ${String(f.error || '?').slice(0, 180)}`);
+      } else if (r && r.why) console.log(`[graph-integrity] deferred: ${r.why}`);
     })().catch((e) => console.error('[graph-integrity] tick failed:', e && e.message));
   }, GRAPH_INTEGRITY_TICK_MS).unref?.();
   console.log('[graph-integrity] scheduler started (idle-tier, daily cap via meta graph_integrity.daily_cap)');
