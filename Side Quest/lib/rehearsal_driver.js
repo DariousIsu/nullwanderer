@@ -26,6 +26,7 @@
 const str = (v) => (v == null ? '' : String(v));
 const RUN_KEY = 'rehearsal_driver.run';
 const ITER_BUDGET = 6;          // per sitting; parked runs resume with a fresh budget
+const NOOP_STREAK_CAP = 4;      // consecutive REFUNDED picks (schema/cloud) before the run parks — a refund is a free spin, and an unbounded streak retries at drain pace forever
 const FILE_CAP = 6000;          // chars of each watched file the edit-picker sees
 const RESULT_CAP = 3000;        // chars of raw test output that ride the next attempt
 
@@ -152,12 +153,21 @@ async function iterate({ deps = {}, nowMs = Date.now() } = {}) {
     // cloud stretch could park the run without it ever actually iterating (live, boot110).
     // Refund the increment and stay active. NAME THE TRUE DOOR (boot113: three "cloud
     // unavailable" notes were really schema-invalid picks — nothing had thrown at all).
+    // …but a refund is a FREE SPIN, and an unbounded streak of them retries at drain pace
+    // forever (boot117: schema-invalid picks recurring across boots). A streak cap PARKS the
+    // run — the same deferral as budget-spent, resumable, never a silent kill.
     run.iteration--;
+    run.noopStreak = (run.noopStreak || 0) + 1;
+    if (run.noopStreak >= NOOP_STREAK_CAP) {
+      run.status = 'parked'; _save(run, deps);
+      return { ok: true, status: 'parked', note: `${run.noopStreak} consecutive no-op picks (schema-invalid or cloud) — parked to stop the free spin; resumable` };
+    }
     _save(run, deps);
     return { ok: false, status: 'active', note: _pickThrew
       ? 'cloud unavailable — budget refunded, run stays active'
       : 'edit pick returned but FAILED VALIDATION (schema) — budget refunded; the squeezed test output rides the next attempt' };
   }
+  run.noopStreak = 0;   // a pick landed — the free-spin streak is over
 
   if (pick.action === 'give_up') {
     run.status = 'stuck'; _save(run, deps);
@@ -260,7 +270,7 @@ function _crystallizeStuck(run, why, deps, nowMs) {
 function resume({ deps = {} } = {}) {
   const run = load({ deps });
   if (!run || run.status !== 'parked') return { ok: false, reason: 'no parked run' };
-  run.status = 'active'; run.iteration = 0; run.sameFailStreak = 0;
+  run.status = 'active'; run.iteration = 0; run.sameFailStreak = 0; run.noopStreak = 0;
   _save(run, deps);
   return { ok: true, run };
 }
@@ -280,4 +290,4 @@ function manifestLine({ deps = {} } = {}) {
   return `   - [rehearsal ${run.slug}] ${run.status} at iteration ${run.iteration} — "${run.goal.slice(0, 80)}" (suite ${run.suite})`;
 }
 
-module.exports = { RUN_KEY, ITER_BUDGET, EDIT_WANT, load, start, validateEditPick, iterate, resume, discard, manifestLine, _squeezeTestOutput };
+module.exports = { RUN_KEY, ITER_BUDGET, NOOP_STREAK_CAP, EDIT_WANT, load, start, validateEditPick, iterate, resume, discard, manifestLine, _squeezeTestOutput };

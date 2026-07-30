@@ -182,6 +182,14 @@ function freshDeps({ picks = [], testResults = [], editResults = [], writeResult
     deps.ask = async () => { throw new Error('ECONNREFUSED'); };
     const r2 = await drv.iterate({ deps });
     ok(/cloud unavailable/.test(r2.note), 'a thrown ask still names the cloud door');
+    // NO-OP STREAK CAP (boot117): refunds are free spins — an unbounded streak retries at drain
+    // pace forever. At NOOP_STREAK_CAP consecutive refunds the run PARKS (resumable), door named.
+    let last = r2, spins = 0;
+    while (last.status === 'active' && spins++ < 10) last = await drv.iterate({ deps });
+    ok(last.status === 'parked' && /consecutive no-op/.test(last.note), `free-spin streak parks at cap (${drv.NOOP_STREAK_CAP}) with the door named (after ${spins} more spins)`);
+    ok(JSON.parse(meta.get('rehearsal_driver.run')).iteration === 0, 'parked-by-streak spent NO budget (all refunded)');
+    const res = drv.resume({ deps });
+    ok(res.ok && res.run.noopStreak === 0, 'resume clears the no-op streak (fresh sitting, fresh streak)');
   }
 
   // SQUEEZE (boot113: the pick drowned in a 3000-char PASS wall; the failing names sat in the tail)
