@@ -14,7 +14,7 @@
  */
 'use strict';
 const models = require('./models');
-const { completeDetailed, isReasoningModel } = require('./ollama');
+const { completeDetailed } = require('./ollama');
 
 const DEFAULT_MAX_STEPS = 4;       // keep the loop snappy for chat latency
 const DEFAULT_MAX_MS = 45000;      // hard wall-clock budget so a turn can NEVER block for minutes
@@ -52,10 +52,17 @@ async function _operatorComplete(messages, opts = {}) {
   return completeDetailed({
     model, messages, base: src.base,
     headers: src.token ? { Authorization: `Bearer ${src.token}` } : {},
-    // think:false on a reasoning model — the step contract is ONE clean JSON object (or plain prose
-    // for the final answer); without it the model buries the step in message.thinking and the
-    // parsed .text is chain-of-thought (the condenseComplete disease, same door).
-    ...(isReasoningModel(model) ? { think: false } : {}),
+    // think:false UNCONDITIONALLY — the step contract is ONE clean JSON object (or plain prose for
+    // the final answer); without it the model buries the step in message.thinking and the parsed
+    // .text is chain-of-thought (the condenseComplete disease, same door).
+    // ⭐ This was `isReasoningModel(model) ? …` and that name-list is exactly the wrong shape of
+    // guard. Measured live 2026-07-31: model.operator = "deepseek-v4-flash", which the regex misses
+    // (it knows "deepseek-r1"), so EVERY research gathering pass ran with thinking ENABLED and
+    // pickText handed the chain-of-thought back as the answer. No operator step ever wants CoT as
+    // its output, for any model, so the flag does not belong behind a model name — enumerating
+    // reasoners means the next one silently reopens this. Safe on non-reasoners: decomp_lane sends
+    // think:false unconditionally to gemma4:31b-cloud and runs clean all boot.
+    think: false,
     // repeat_penalty dropped to the transport default (1.1): 1.3 on a JSON-emitting agent penalizes
     // the very braces/quotes the contract requires and was degrading step parses.
     options: { temperature: 0.4, top_p: 0.9, repeat_penalty: 1.1, num_ctx, num_predict: opts.num_predict || 700 }

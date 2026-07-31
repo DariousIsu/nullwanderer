@@ -132,6 +132,22 @@ function pickText(message) {
   const c = (m.content != null ? String(m.content) : '').trim();
   return c || (m.thinking != null ? String(m.thinking) : '');
 }
+
+// TRUTH IN LOGGING — the fallback above is a SALVAGE, not an answer, and it was silent. Live
+// 2026-07-31 the operator lane ran on a reasoner that isReasoningModel didn't know, so every
+// research pass answered from chain-of-thought; one such pass reported "+26,164 new chars" and
+// scored as the most productive pass of the run, because nothing distinguished CoT from findings.
+// A caller that meant to get content and got deliberation instead should be able to SEE it, so the
+// door names itself. First hit per model, then every 50th (visible without flooding the log).
+const _thinkSalvage = new Map();
+function _noteThinkingSalvage(model) {
+  const k = String(model || '?');
+  const n = (_thinkSalvage.get(k) || 0) + 1;
+  _thinkSalvage.set(k, n);
+  if (n === 1 || n % 50 === 0) {
+    console.warn(`[ollama] ${k}: EMPTY content → answering from message.thinking (chain-of-thought salvaged as the answer)${n > 1 ? ` ×${n}` : ''} — this caller should pass think:false`);
+  }
+}
 const _REASONING_RE = /(?:^|[\/:_-])(?:gpt-oss|qwen3|qwq|kimi|deepseek-r1|magistral|o1|o3)\b|:think\b/i;
 function isReasoningModel(name) { return _REASONING_RE.test(String(name || '')); }
 
@@ -165,6 +181,10 @@ async function completeDetailed({ model, messages, options = {}, base = OLLAMA_B
     // eval_count = output.
     const usage = { prompt_tokens: (obj && obj.prompt_eval_count) || 0, eval_tokens: (obj && obj.eval_count) || 0 };
     try { const um = require('./usage_meter'); um.record((obj && obj.model) || model, um.tokensOf(usage)); } catch {}   // meter real spend (canvas usage pill)
+    try {
+      const _m = (obj && obj.message) || {};
+      if (!(_m.content != null ? String(_m.content) : '').trim() && _m.thinking) _noteThinkingSalvage(model);
+    } catch {}
     return {
       text: pickText(obj && obj.message),   // content, else thinking (a reasoner never returns empty — Slice 2)
       thinking: (obj && obj.message && obj.message.thinking) || '',   // reasoning models stash output here; a safety net for callers
