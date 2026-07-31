@@ -182,6 +182,33 @@ function mockClient(overrides = {}) {
     ok('disconnected suit → graceful "not connected" (no throw)', r.isError === true && /isn't connected/.test(r.text));
   }
 
+  // --- ⭐ DELIBERATIVE tags: contemplation is not a call (live regression 2026-07-31) -------------
+  {
+    // The exact reasoning that shipped twelve failing db_query hops and then had her tell Lucas
+    // "Your db_query call needs a proper JSON payload" — her own musing, handed back as his mistake.
+    // The body regex is non-greedy, so the EARLIER mention of <echo-find> paired with the LATER real
+    // close and the whole paragraph between them became the search query.
+    const musing = 'I could use <echo-find> here.\nwith a query like "tenant proposals" or "bulk promote". Let\'s try that.\n\nWe need to emit exactly one Echo tag. So we will do <echo-find>tenant proposals bulk promotion</echo-find>';
+    const loose = S.parseEchoTags(musing);
+    ok('the old bar accepts the deliberation as a real tag (the bug)', loose.length === 1 && /Let's try that/.test(loose[0].query));
+    const strict = S.parseEchoTags(musing, { deliberative: true });
+    ok('⭐ deliberative bar REJECTS a payload that spans lines — contemplation is not a call', strict.length === 0);
+
+    // …and it must not become a blanket "reject everything from reasoning": a real tag authored in
+    // the reasoning channel is exactly why that channel is scanned at all.
+    const real = S.parseEchoTags('Let me look this up. <echo-find>Rainey Center 990 revenue</echo-find>', { deliberative: true });
+    ok('⭐ a COMMITTED single-line tag in the reasoning channel still dispatches', real.length === 1 && real[0].query === 'Rainey Center 990 revenue');
+
+    const bigDo = S.parseEchoTags('<echo-do name="db_query">{"sql":"SELECT 1"}</echo-do>', { deliberative: true });
+    ok('a well-formed echo-do with valid JSON survives the bar', bigDo.length === 1 && bigDo[0].name === 'db_query');
+    const badDo = S.parseEchoTags('<echo-do name="db_query">maybe something like SELECT ...</echo-do>', { deliberative: true });
+    ok('an echo-do whose args do not parse is dropped in deliberative mode', badDo.length === 0);
+    const para = S.parseEchoTags(`<echo-find>${'x'.repeat(300)}</echo-find>`, { deliberative: true });
+    ok('a paragraph-length query is not a query', para.length === 0);
+    // the default path is untouched — only the reasoning channel opts in
+    ok('non-deliberative parsing is unchanged', S.parseEchoTags(`<echo-find>${'x'.repeat(300)}</echo-find>`).length === 1);
+  }
+
   console.log('\n' + (fail === 0 ? 'ALL PASS' : 'FAILURES') + ` - ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

@@ -8043,9 +8043,12 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
     ...echoSuitLib.parseEchoTags(say || ''),
     // ⭐ The reasoning channel is where a reasoning model actually authors its tags (proven
     // 2026-07-21: 450 of 633 generated tokens, tags included, were in message.thinking). Scanned
-    // RAW and only when the cloud wrote this turn — parseEchoTags needs a complete
-    // <echo-*>…</echo-*> pair, so format narration ("use <echo-find>") can't produce a dispatch.
-    ...(replyWriter !== MODEL ? echoSuitLib.parseEchoTags(cloudThinking || '') : [])
+    // RAW and only when the cloud wrote this turn.
+    // ⚠ This used to argue that requiring a complete <echo-*>…</echo-*> pair meant format narration
+    // ("use <echo-find>") could not produce a dispatch. That was disproven live 2026-07-31: the body
+    // regex is non-greedy, so an EARLIER mention of the tag pairs with a LATER real close and the
+    // deliberation between them becomes the payload. `deliberative` holds these to the committed bar.
+    ...(replyWriter !== MODEL ? echoSuitLib.parseEchoTags(cloudThinking || '', { deliberative: true }) : [])
   ];
   // <recall ref="rID"/> — expand a memory marker (reflection/reading/note) to its full text on
   // demand. <recall coord="type:ns/id"/> — dereference an OBJECT COORDINATE from the turn manifest to
@@ -9196,7 +9199,10 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     const chainTags = canChain ? [
       ...echoSuitLib.parseEchoTags(thought || ''),
       ...echoSuitLib.parseEchoTags(say || ''),
-      ...echoSuitLib.parseEchoTags(followupThinking || '')
+      // The reasoning channel is DELIBERATION, so its tags are held to the committed bar — see
+      // _isCommittedTag. Harvesting it at all is a workaround for reasoning models that author the
+      // real tag there; the bar is what keeps "we will do <echo-find>…" from becoming a live call.
+      ...echoSuitLib.parseEchoTags(followupThinking || '', { deliberative: true })
     ] : [];
     // Strip ALL tags from the follow-up output for DISPLAY — tags don't render.
     let sayOut = (say || '')

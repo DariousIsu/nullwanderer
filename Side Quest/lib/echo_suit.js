@@ -46,7 +46,47 @@ function normalizeToolResult(raw) {
 }
 
 // Parse her output for echo-suit tags, preserving document order (dispatch order can matter).
-function parseEchoTags(text) {
+// The payload a tag would actually ACT on — what gets searched, run, or delegated.
+function _tagPayload(t) {
+  if (!t) return '';
+  if (t.kind === 'find') return t.query || '';
+  if (t.kind === 'delegate') return t.task || '';
+  if (t.kind === 'recipe') return t.arg || '';
+  if (t.kind === 'do') { try { return JSON.stringify(t.args || {}); } catch { return ''; } }
+  if (t.kind === 'propose') { try { return JSON.stringify(t.payload || {}); } catch { return ''; } }
+  return '';
+}
+
+/**
+ * Is this a tag she COMMITTED to, or one she was thinking about writing?
+ *
+ * Only asked of tags harvested from the REASONING channel, which is deliberation by construction:
+ * the model talks ABOUT emitting a tag before emitting one. Live 2026-07-31 that difference was
+ * invisible. The reasoning read "…Let's try that.\n\nWe need to emit exactly one Echo tag. So we
+ * will do <echo-find>tenant proposals bulk promotion", and because the body regex is non-greedy it
+ * spanned from an EARLIER mention of the tag to the later real close — so the whole paragraph of
+ * deliberation became the search query. That routed to db_query and failed twelve hops running,
+ * after which she told Lucas "Your db_query call needs a proper JSON payload" — her own contemplation
+ * handed back to him as his mistake.
+ *
+ * The test is structural, not a phrase list: a call's payload is one line and short; prose wraps and
+ * runs on. Nothing here inspects WORDS, so a new way of musing about tags cannot slip past it.
+ */
+function _isCommittedTag(t) {
+  if (!t) return false;
+  if (t.kind === 'guide') return true;                       // no payload to judge
+  if ((t.kind === 'do' || t.kind === 'propose') && t.parseError) return false;
+  const p = _tagPayload(t);
+  if (/[\r\n]/.test(p)) return false;                        // deliberation wraps; a call does not
+  if (p.length > 240) return false;                          // a query is a query, not a paragraph
+  return true;
+}
+
+/**
+ * @param {string} text
+ * @param {boolean} opts.deliberative  text is a REASONING channel — hold tags to the committed bar
+ */
+function parseEchoTags(text, { deliberative = false } = {}) {
   if (!text) return [];
   const found = [];
   // `make` may return ONE tag or an array of them (a batched <echo-do> expands to one tag per
@@ -92,7 +132,18 @@ function parseEchoTags(text) {
   if (lastOpen >= 0 && text.indexOf('</echo-do>', lastOpen) < 0) {
     console.error(`[echo-suit] UNCLOSED <echo-do> — generation stopped mid-tag, that action was LOST: ${text.slice(lastOpen, lastOpen + 120)}`);
   }
-  return found.sort((a, b) => a.index - b.index).map(x => x.tag);
+  const out = found.sort((a, b) => a.index - b.index).map(x => x.tag);
+  if (!deliberative) return out;
+  // Name the door: a dropped tag is a real event. Silence here is how twelve failing hops looked
+  // like the model simply choosing to search badly.
+  const kept = out.filter(_isCommittedTag);
+  if (kept.length !== out.length) {
+    for (const t of out) {
+      if (_isCommittedTag(t)) continue;
+      console.error(`[echo-suit] REASONING-CHANNEL tag looked deliberative, NOT executed (${t.kind}): ${String(_tagPayload(t)).replace(/\s+/g, ' ').slice(0, 140)}`);
+    }
+  }
+  return kept;
 }
 function parseArgs(body) {
   const t = (body || '').trim();

@@ -105,11 +105,19 @@ function replay(chunks) {
 
   const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   ok(/cloudThinking = r\.thinking \|\| '';/.test(m), 'the reply turn captures the channel');
-  ok(/replyWriter !== MODEL \? echoSuitLib\.parseEchoTags\(cloudThinking \|\| ''\) : \[\]/.test(m),
+  ok(/replyWriter !== MODEL \? echoSuitLib\.parseEchoTags\(cloudThinking \|\| '', \{ deliberative: true \}\) : \[\]/.test(m),
     'and scans it for tool tags — only when the cloud actually wrote the turn');
   ok(/followupThinking = r\.thinking \|\| '';/.test(m), 'the hop chain captures it too');
-  ok(/parseEchoTags\(followupThinking \|\| ''\)/.test(m),
+  ok(/parseEchoTags\(followupThinking \|\| '', \{ deliberative: true \}\)/.test(m),
     'and scans it — the hop chain is where a document\'s next block is authored');
+  // ⭐ BOTH reasoning-channel scans must pass `deliberative` (live 2026-07-31). The channel is
+  // deliberation by construction, and without the bar "we will do <echo-find>…" became a live call:
+  // twelve failing db_query hops, then she reported her own musing to Lucas as HIS malformed call.
+  // Pinned as a PAIR so a future edit cannot quietly drop the bar from one of the two sites.
+  ok((m.match(/parseEchoTags\((?:cloudThinking|followupThinking) \|\| '', \{ deliberative: true \}\)/g) || []).length === 2,
+    '⭐ BOTH reasoning-channel scans hold tags to the committed bar');
+  ok(!/parseEchoTags\((?:cloudThinking|followupThinking) \|\| ''\)/.test(m),
+    '…and neither one scans the reasoning channel unguarded');
   ok(/const _fullThought = \[thought \|\| '', \(replyWriter !== MODEL && cloudThinking\)/.test(m),
     'the reasoning is folded into her stored interior, through the same tag-strip chain');
 }
