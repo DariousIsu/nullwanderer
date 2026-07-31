@@ -79,7 +79,14 @@ const _DIRECTIVE = /\b(?:must|should|shall|will need|needs? to|ought to|have to|
 // addressed to the machine rather than describing machines, and it is what keeps the ordinary
 // AI-research prose she reads all day ("models must be trained on diverse data") out of the net.
 const _READER_REF = /\b(?:read|reading|process|processing|view|viewing|crawl|crawling|scrap|scraping|summari[sz]|compil|index|pars|analy[sz]|encounter|ingest)\w*\s+(?:this|these|the (?:following|above|present))\b/i;
-const _VOCATIVE = new RegExp(`^\\s*(?:hey |dear |attention[,:]? |note to (?:any |all |the )?|to (?:any |all |the )?)?(?:${_AGENT.source.slice(2, -2)})\\b\\s*[,:—-]`, 'i');
+// Vocative address — "Claude, do X" / "AI: do X" / "language model — do X".
+// ⚠ THE PUNCTUATION CLASS MUST NOT ACCEPT A BARE HYPHEN. Live on boot149 this flagged the paper
+// titles "Artificial intelligence-driven materials discovery" and "AI-Accelerated Materials
+// Discovery…", because `AI-` read as an address. A hyphen glued to the next word is a compound
+// adjective, which is how half of AI-research prose is written; an address needs a comma, a colon,
+// or a SPACED dash. The arm also now requires a directive in the same span — a vocative with
+// nothing asked of the reader is a title, not an instruction.
+const _VOCATIVE = new RegExp(`^\\s*(?:hey |dear |attention[,:]? |note to (?:any |all |the )?|to (?:any |all |the )?)?(?:${_AGENT.source.slice(2, -2)})\\b(?:[,:]\\s|\\s+[-–—]\\s)`, 'i');
 
 // Sentence-ish spans inside one line. An extracted paragraph is routinely 2000 characters with no
 // newline in it, so "same line" is far too loose a proximity claim for a multi-condition test.
@@ -155,7 +162,7 @@ const CATEGORIES = [
     test: (line) => _sentences(line).some((s) => _AGENT.test(s) && (
       /\byou(?:r)?\b[^.\n]{0,40}\b(?:must|should|shall|will|need to|have to|are (?:to|required)|task|instructions?|goal|job|directive)/i.test(s)
       || (_READER_REF.test(s) && _DIRECTIVE.test(s))
-      || _VOCATIVE.test(s)
+      || (_VOCATIVE.test(s) && _DIRECTIVE.test(s))
     )),
     why: 'addresses an AI reader directly and tells it what to do',
   },
