@@ -35,9 +35,15 @@ hooks for the visual-log lane (docs/OBS_INTERFACE_HOOKS.md — the parallel cont
 > card carries a SURVIVES/REFUTED verdict, advisory never a gate). Also landed off-plan from the
 > chat audit: redirect classifier-primary (07f96eb), deferred-agenda capture (ac9f8da, Fulton item
 > registered as task #88 → 2026-08-05). O5's remaining halves (shapes→rows, branded docx) open.
-> **2.3 CONTENT FIREWALL BUILT** — lib/content_firewall.js, 3 layers (unconditional frame · advisory
-> flag · a refusal at the need store), wired at all four doors. Measured: 0 false positives across
-> 600 real fetched articles / 1M chars, 32/32 buried attacks caught. NEXT: 2.4 multi-action steps.
+> **⭐ PHASE 2 COMPLETE (2026-07-30 night).** 2.3 CONTENT FIREWALL (02950b0 + ec1735f) — 3 layers,
+> four doors; measured 0 false positives on 600 fetched articles AND 1,632 of her own deliverables
+> (3.47M chars), 32/32 buried attacks caught; circuit fired live within minutes and its first three
+> firings were all wrong, all fixed. 2.4 MULTI-ACTION STEPS (b82743d) — one round-trip may carry 4
+> independent lookups; concurrency only for known reads; observe-after tools cut the batch. 2.5
+> SURFACING REVIEW (d492d37) — O1 remeasured **LIVE** (80 pulls; the ledger was stale, not the
+> organ); the dig stayed dark because its guard duplicated the delegate's and swallowed its own use
+> case — both entries rewritten to lead with where the answer lands.
+> STILL OPEN from 2.1: O5's other halves (shapes→rows, branded docx). NEXT: Phase 3.
 
 | # | Item | Size | Baseline feature it ports |
 |---|---|---|---|
