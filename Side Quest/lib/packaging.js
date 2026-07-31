@@ -210,7 +210,7 @@ function renderPackaged({ type, title, sections, verifyNote = '', now = Date.now
  *  title, and every cited link from the SOURCE survived into the render (a package that lost its
  *  citations is a rewrite). Pure verdict — the caller decides what the announce says; a failed
  *  check must report the MISS, never success. */
-function selfCheck({ type, sections = {}, sourceMarkdown = '', htmlPath = null, pdfPath = null, deps = {} } = {}) {
+function selfCheck({ type, sections = {}, sourceMarkdown = '', htmlPath = null, pdfPath = null, subject = '', deps = {} } = {}) {
   const fs = deps.fs || require('fs');
   const checks = [];
   const add = (name, ok, note = '') => checks.push({ name, ok: !!ok, note: String(note).slice(0, 120) });
@@ -242,6 +242,23 @@ function selfCheck({ type, sections = {}, sourceMarkdown = '', htmlPath = null, 
     const lost = cites.filter((u) => !H.includes(u));
     add('citations survive', lost.length === 0, lost.length ? `${lost.length}/${cites.length} lost (first: ${lost[0].slice(0, 60)})` : `${cites.length}/${cites.length} present`);
   }
+  // TIER GATE (S2) — the epistemic half of the self-check. Every other check above asks whether the
+  // document RENDERED; this one asks whether it should go out at all. A figure with no source is
+  // Tier 3 and must not print; a figure from an interested party that the prose does not attribute
+  // is Tier 2 with its condition unmet. Reports only — it never edits the draft, and it never
+  // touches the store (her memory keeps weak claims on purpose; this is about what gets PRINTED).
+  try {
+    const tg = require('./tier_gate');
+    const t = tg.checkDraft({ markdown: sourceMarkdown, subject });
+    if (t.counts.loadBearing > 0 || !t.ok) {
+      add('every figure is sourced', t.counts.uncited === 0,
+        t.counts.uncited ? `${t.counts.uncited} uncited of ${t.counts.loadBearing} — Tier 3, must not print` : `${t.counts.loadBearing} load-bearing, all cited`);
+      if (subject) {
+        add('interested figures are attributed', t.counts.unattributed === 0,
+          t.counts.unattributed ? `${t.counts.unattributed} sourced to ${subject} without saying so` : 'attributed where interested');
+      }
+    }
+  } catch (e) { add('tier gate', false, e.message); }
   const failed = checks.filter((c) => !c.ok);
   return {
     ok: failed.length === 0, checks, failed,
