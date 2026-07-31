@@ -197,7 +197,7 @@ const CATEGORIES = [
     //   U+202D LEFT-TO-RIGHT OVERRIDE · U+202E RIGHT-TO-LEFT OVERRIDE  → the attack
     //   U+200B-200D zero-width space/non-joiner/joiner · U+FEFF BOM  → hidden only in a RUN
     name: 'hidden_text', severity: 'low',
-    re: /[\u202D\u202E]|[\u200B-\u200D\uFEFF]{4,}/,
+    re: /[\u202D\u202E]|\p{L}(?:[\u200B-\u200D\uFEFF]+\p{L}){3,}/u,
     why: 'carries a bidi OVERRIDE or a run of hidden zero-width characters',
   },
 ];
