@@ -98,6 +98,58 @@ function _sandboxFile(slug, rel) {
   return { abs, dir: d.dir, slug: d.slug, reason: null };
 }
 
+// ── WHAT A REFUSED EDIT HANDS BACK ────────────────────────────────────────────────────────────
+// Both helpers are bounded on purpose: this text lands in her context on a failed tick, so it must
+// be enough to fix the call and no more. Line numbers are 1-based to match every editor and every
+// source_read she has already done.
+const _CTX_LINES = 3;        // lines of context either side of an occurrence
+const _MAX_SHOWN = 4;        // occurrences quoted before we stop and say how many remain
+const _MAX_CHARS = 1400;     // hard ceiling on the whole appendix
+
+function _lineOf(text, index) { return text.slice(0, index).split('\n').length; }
+
+function _span(lines, at, label) {
+  const from = Math.max(0, at - 1 - _CTX_LINES), to = Math.min(lines.length, at + _CTX_LINES);
+  const body = lines.slice(from, to).map((l, i) => `    ${String(from + i + 1).padStart(4)} | ${l.length > 120 ? l.slice(0, 119) + '…' : l}`).join('\n');
+  return `\n  ${label} line ${at}:\n${body}`;
+}
+
+// Every place the find-text matched, with context — so ONE of them can be copied verbatim.
+function _occurrenceContexts(text, findS) {
+  const lines = text.split('\n');
+  const out = [];
+  let from = 0, i, count = 0;
+  while ((i = text.indexOf(findS, from)) !== -1) {
+    count++;
+    if (out.length < _MAX_SHOWN) out.push(_span(lines, _lineOf(text, i), `[${count}]`));
+    from = i + findS.length;
+  }
+  let s = out.join('');
+  if (count > out.length) s += `\n  … and ${count - out.length} more occurrence(s).`;
+  return s.length > _MAX_CHARS ? s.slice(0, _MAX_CHARS) + '\n  …(cut)' : s;
+}
+
+// Nothing matched. Almost always whitespace, indentation, or a line she reconstructed from memory
+// rather than read — so show the file's own version of the most distinctive line she asked for.
+function _nearMiss(text, findS) {
+  const lines = text.split('\n');
+  const wanted = String(findS).split('\n').map((l) => l.trim()).filter((l) => l.length >= 8);
+  if (!wanted.length) return ' Read the file first (source_read the live one, or your sandbox copy) and copy the text EXACTLY.';
+  // The longest asked-for line is the most distinctive; match on a trimmed prefix so indentation
+  // and trailing-whitespace differences — the usual culprits — still find it.
+  const probe = wanted.sort((a, b) => b.length - a.length)[0].slice(0, 40);
+  const hits = [];
+  for (let i = 0; i < lines.length && hits.length < _MAX_SHOWN; i++) {
+    if (lines[i].includes(probe)) hits.push(_span(lines, i + 1, '•'));
+  }
+  if (!hits.length) {
+    return ` Nothing in this ${lines.length}-line file contains "${probe.slice(0, 50)}" either, so this is not a`
+      + ` whitespace slip — the code you are editing may not live in this file at all. Read it before the next attempt.`;
+  }
+  const s = ` The file DOES contain that text — with different whitespace or indentation. Here it is as the file actually has it; copy from this:${hits.join('')}`;
+  return s.length > _MAX_CHARS ? s.slice(0, _MAX_CHARS) + '\n  …(cut)' : s;
+}
+
 // Her Edit primitive — sandbox-only, exact-match-once (the mechanical grounding contract).
 function edit({ slug, path: rel, find, replace } = {}) {
   const f = _sandboxFile(slug, rel);
@@ -108,8 +160,13 @@ function edit({ slug, path: rel, find, replace } = {}) {
   let text = '';
   try { text = fs.readFileSync(f.abs, 'utf8'); } catch (e) { return `cannot edit: ${e.message}`; }
   const n = text.split(findS).length - 1;
-  if (n === 0) return `cannot edit: the find-text does not appear in ${rel} — read the file (source_read of the live one, or your sandbox copy) and match it EXACTLY`;
-  if (n > 1) return `cannot edit: the find-text appears ${n} times in ${rel} — include more surrounding context so it matches exactly once`;
+  // A REFUSAL MUST HAND BACK WHAT IT TOOK. Both of these used to state the problem and stop:
+  // "include more surrounding context" leaves the model guessing WHICH occurrence and what
+  // distinguishes them, and "match it EXACTLY" does not say what the file actually contains. Each
+  // guess costs a whole rehearsal tick, and need-born runs are capped at two open at a time — so a
+  // refusal that cannot be acted on is close to a dead run. Show the file instead of describing it.
+  if (n === 0) return `cannot edit: the find-text does not appear in ${rel}.${_nearMiss(text, findS)}`;
+  if (n > 1) return `cannot edit: the find-text appears ${n} times in ${rel}. Copy ONE of these spans verbatim — the surrounding lines are what make it unique:${_occurrenceContexts(text, findS)}`;
   try {
     fs.writeFileSync(f.abs, text.replace(findS, String(replace == null ? '' : replace)));
     _touch(f.dir);

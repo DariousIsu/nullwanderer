@@ -30,6 +30,27 @@ const ok = (c, t) => { if (c) { pass++; console.log('  ✓', t); } else { fail++
   ok(/cannot edit/.test(R.edit({ slug: 'test-idea', path: 'node_modules/x.js', find: 'x'.repeat(8), replace: 'y' })), 'the junction is not editable');
   ok(/does not appear/.test(R.edit({ slug: 'test-idea', path: 'lib/recall.js', find: 'THIS_TEXT_IS_NOWHERE', replace: 'y' })), 'an absent find refuses — read the file first');
   ok(/appears \d+ times/.test(R.edit({ slug: 'test-idea', path: 'lib/recall.js', find: 'function ', replace: 'fn ' })), 'an ambiguous find refuses — more context required');
+
+  // ── A REFUSAL MUST HAND BACK WHAT IT TOOK ───────────────────────────────────────────────────
+  // Both refusals used to state the problem and stop. "Include more surrounding context" leaves
+  // the model guessing WHICH occurrence and what distinguishes them; "match it EXACTLY" never says
+  // what the file contains. Each guess burns a whole rehearsal tick, and need-born runs are capped
+  // at two open — so a refusal that cannot be acted on is close to a dead run.
+  {
+    const amb = R.edit({ slug: 'test-idea', path: 'lib/recall.js', find: 'function ', replace: 'fn ' });
+    ok(/Copy ONE of these spans verbatim/.test(amb), 'the ambiguous refusal says exactly what to do next');
+    ok(/\[1\] line \d+:/.test(amb) && /\[2\] line \d+:/.test(amb), 'and SHOWS each occurrence with its line number');
+    ok(/\d+ \| /.test(amb), 'with numbered surrounding lines — the thing that makes a span unique');
+    ok(amb.length <= 1700, 'bounded: this lands in her context on a failed tick, so it stays small');
+
+    // Whitespace is the usual cause of a miss — the file HAS the text, differently indented.
+    const ws = R.edit({ slug: 'test-idea', path: 'lib/recall.js', find: '      function parseRecallTags(text) {', replace: 'x' });
+    ok(/does not appear/.test(ws), 'a whitespace-mangled find still refuses');
+    ok(/different whitespace or indentation|not a whitespace slip/.test(ws), 'and the refusal diagnoses WHICH kind of miss it is');
+
+    const nowhere = R.edit({ slug: 'test-idea', path: 'lib/recall.js', find: 'ZZZ_NOT_IN_ANY_FILE_ANYWHERE_12345', replace: 'x' });
+    ok(/not a whitespace slip/.test(nowhere) && /\d+-line file/.test(nowhere), 'a genuine absence says so plainly and names the file size, rather than implying a typo');
+  }
   const liveRecall = fs.readFileSync(path.join(ss.ROOT, 'lib', 'recall.js'), 'utf8');
   // Break the d-ref branch INSIDE the sandbox only.
   const e1 = R.edit({ slug: 'test-idea', path: 'lib/recall.js', find: `if (ref.kind === 'd') {`, replace: `if (ref.kind === 'd-BROKEN') {` });
