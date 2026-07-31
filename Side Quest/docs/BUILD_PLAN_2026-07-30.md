@@ -90,6 +90,29 @@ every defect worth fixing came from WATCHING HER RUN:
 **The rule that paid all night: measure the premise before building, and let the live stream pick
 the work.** A docket item with no instance is a hypothesis; a log line is a fact.
 
+## ⚠ MIN_NEW_CHARS IS DEAD CODE — measured 2026-07-31, needs a number chosen
+
+`lib/research.js:18` `MIN_NEW_CHARS = 220` is the mechanical diminishing-returns door: a deepen
+pass adding fewer than 220 new chars (after pass 2) ends the target. **It has never fired.**
+Measured across 31 live deepen passes:
+
+    min 247 · p25 505 · median 1,097 · p75 1,615 · max 5,110
+    passes below 220: ZERO        passes in the 220-500 "exhausted" band: 6
+
+A model asked to write something always writes SOMETHING — ~250 chars of hedging even when the
+sources are dry. The threshold was calibrated against zero instead of against the model's floor
+output, so every target runs to the pass cap and the termination reason carries no information.
+
+This is why the saturation-prompt fix (5ecd92d) did not change behaviour: I tuned the door the
+MODEL declares while the door that actually fires is this constant. ASU AI Cloud Innovation Center
+ran entirely under the fix and still hit the cap with passes of 265/426/373/256.
+
+**Candidate: raise to ~500 (p25)** — catches the 6 exhausted passes, leaves the median untouched.
+NOT changed here: too low burns tokens (status quo), too high truncates real research, and one
+thin pass currently ends a target outright (`passes >= 2 && newChars < minNew`), so raising the
+number also makes a single modest pass decisive. Consider requiring TWO consecutive dry passes if
+the threshold rises. Wants a deliberate call, not an end-of-session guess.
+
 ## Awaiting Lucas — two structural findings, deliberately NOT acted on
 
 Both are one-line changes that would re-route live behaviour across ~200 threads. Measured, named,
