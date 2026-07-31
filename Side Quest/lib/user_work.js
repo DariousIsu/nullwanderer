@@ -174,13 +174,20 @@ const _ORG_GENERIC = new Set([
  * all-caps acronym and "AI" is below the length floor. So a facet asking what compute the ELLER lab
  * has was pursued against the Arizona AI Alliance. A name does not need an acronym to be a name.
  */
-function _marks(name) {
+// The ACRONYM half on its own — a high-precision identifier. "CRES" or "AI2S" in a facet names that
+// body and nothing else, which is what lets a facet mentioning two orgs still belong to the one it
+// actually asks about.
+function _acronyms(name) {
   const out = new Set();
-  const s = String(name || '');
-  for (const m of s.match(_DISTINCTIVE) || []) {
+  for (const m of String(name || '').match(_DISTINCTIVE) || []) {
     const t = m.replace(/[^A-Za-z0-9]/g, '');
     if (t.length >= 3 && t.length <= 8) out.add(t.toUpperCase());
   }
+  return out;
+}
+function _marks(name) {
+  const out = _acronyms(name);
+  const s = String(name || '');
   // Distinctive proper nouns — "Eller", "Tsinghua", "Fulton". Capitalised, not org vocabulary,
   // and not a place/word so common it identifies nothing.
   for (const m of s.match(/\b[A-Z][a-z]{3,}\b/g) || []) {
@@ -194,13 +201,52 @@ function facetAppliesTo(facet, targetName, otherNames = []) {
   const mine = _marks(targetName);
   const inFacet = _marks(f);
   if (!inFacet.size) return true;                       // no org marker at all → generic, applies
-  for (const t of inFacet) if (mine.has(t)) return true; // names THIS target → applies
-  const theirs = new Set();
+
+  // An acronym names one body and nothing else, so it settles ownership outright — including for a
+  // facet that legitimately mentions two orgs ("how does AI2S collaborate with Mayo Clinic").
+  for (const a of _acronyms(targetName)) if (inFacet.has(a)) return true;
+
+  // THE PREFIX IS OWNERSHIP, STATED OUTRIGHT. The generator writes "<org> – <question>", so the
+  // leading segment says who the facet was raised for. Scoring the whole string ignores that and
+  // loses on questions that mention another body more often than their own subject: "U.S.
+  // Department of Energy – What internal DOE drafts have cited The Green Grid's standards" is DOE's
+  // question, but names The Green Grid twice and DOE once. Decide on the prefix when there is one.
+  const lead = f.split(/\s+[–—-]\s+/)[0];
+  if (lead && lead !== f && lead.length <= 90) {
+    const leadMarks = _marks(lead);
+    if (leadMarks.size) {
+      let myLead = 0;
+      for (const t of leadMarks) if (mine.has(t)) myLead++;
+      let bestLead = 0;
+      for (const n of (Array.isArray(otherNames) ? otherNames : [])) {
+        if (String(n) === String(targetName)) continue;
+        let s = 0;
+        for (const t of _marks(n)) if (leadMarks.has(t)) s++;
+        if (s > bestLead) bestLead = s;
+      }
+      if (myLead > 0 && myLead >= bestLead) return true;   // the prefix names ME → mine
+      if (bestLead > myLead) return false;                 // the prefix names another body → theirs
+    }
+  }
+
+  // COMPARATIVE, not membership. This used to return true on ANY shared mark, and a single ordinary
+  // word was enough: _marks counts every capitalised non-stoplist word as identifying, so
+  // "Conservative Energy Network" claimed a facet about the Bipartisan Policy Center's ENERGY
+  // Advisory Council, and "State Policy Network" claimed one about Manhattan Institute for POLICY
+  // Research. Measured 2026-07-31 on focus.3631: 13 of 168 cross-target facets survived.
+  // Extending _ORG_GENERIC with "policy"/"energy"/"conservative" is the trap — in this domain every
+  // org is BUILT from those words and the list can never catch up. So ask the discriminating
+  // question instead: does the facet name someone else MORE specifically than it names me?
+  // Ties and near-misses still keep the facet — a wrongly-kept facet costs one pass, a wrongly
+  // dropped one loses a real question permanently.
+  let myScore = 0;
+  for (const t of inFacet) if (mine.has(t)) myScore++;
   for (const n of (Array.isArray(otherNames) ? otherNames : [])) {
     if (String(n) === String(targetName)) continue;
-    for (const t of _marks(n)) if (!mine.has(t)) theirs.add(t);
+    let theirScore = 0;
+    for (const t of _marks(n)) if (inFacet.has(t)) theirScore++;
+    if (theirScore > myScore) return false;             // names ANOTHER covered org better → not ours
   }
-  for (const t of inFacet) if (theirs.has(t)) return false;   // names ANOTHER covered org → not ours
   return true;                                          // an unrecognised marker is not evidence
 }
 

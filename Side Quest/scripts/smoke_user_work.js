@@ -275,6 +275,36 @@ ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: N
     ok(uw.facetAppliesTo('What does NASA fund here?', tgt, covered), 'an UNRECOGNISED marker is not evidence — the facet stays');
     ok(uw.facetAppliesTo('anything', tgt, []), 'with nothing covered yet, every facet applies');
     ok(!uw.facetAppliesTo('', tgt, covered), 'an empty facet is not a facet');
+
+    // ⭐ ONE SHARED ORDINARY WORD IS NOT IDENTIFICATION (measured 2026-07-31 on focus.3631: 13 of
+    // 168 cross-target facets survived). _marks counts every capitalised non-stoplist word, so an
+    // org whose NAME is built from common vocabulary claimed everyone else's questions. The cure is
+    // comparative — name me better than you name anyone else — because extending the stoplist with
+    // "policy"/"energy"/"conservative" can never keep up in a domain built from those words.
+    const cov3631 = ['Conservative Energy Network', 'Bipartisan Policy Center',
+      'Conservative Climate Foundation', 'State Policy Network', 'Manhattan Institute for Policy Research'];
+    ok(!uw.facetAppliesTo("How does the Bipartisan Policy Center's Energy Advisory Council operate day-to-day?", 'Conservative Energy Network', cov3631),
+      '⭐ sharing only "Energy" does not make BPC\'s council question belong to Conservative Energy Network');
+    ok(!uw.facetAppliesTo('Manhattan Institute for Policy Research – what is its annual budget?', 'State Policy Network', cov3631),
+      '⭐ sharing only "Policy" does not hand Manhattan\'s budget question to State Policy Network');
+    ok(!uw.facetAppliesTo('Conservative Climate Foundation – what are its primary funding sources?', 'Conservative Energy Network', cov3631),
+      '⭐ sharing only "Conservative" does not hand CCF\'s funding question to Conservative Energy Network');
+    ok(uw.facetAppliesTo('What is the annual budget of the Bipartisan Policy Center?', 'Bipartisan Policy Center', cov3631),
+      'the org that the facet actually names still keeps it');
+
+    // THE PREFIX IS OWNERSHIP. Scoring the whole string lost these: the question names another body
+    // more often than its own subject, yet the generator stamped the owner on the front.
+    const covEnergy = ['The Green Grid', 'U.S. Department of Energy', 'Environmental Protection Agency',
+      'California Energy Commission', 'ASHRAE'];
+    ok(uw.facetAppliesTo("U.S. Department of Energy – What internal DOE policy drafts have cited The Green Grid's standards?", 'U.S. Department of Energy', covEnergy),
+      '⭐ a facet PREFIXED with the target keeps it even when it names another body more often');
+    ok(!uw.facetAppliesTo("U.S. Department of Energy – What internal DOE policy drafts have cited The Green Grid's standards?", 'The Green Grid', covEnergy),
+      '…and the body it merely mentions does not also claim it');
+    ok(uw.facetAppliesTo('California Energy Commission – Which specific CEC regulatory actions cite these standards?', 'California Energy Commission', covEnergy),
+      'a prefix naming the target survives a body full of other orgs');
+    // An acronym is high-precision: it settles a genuinely two-org question.
+    ok(uw.facetAppliesTo('How does AI2S collaborate with the Mayo Clinic on shared compute?', 'Arizona Institute for AI and Society (AI2S)', ['Mayo Clinic']),
+      "an ACRONYM naming the target holds a two-org facet, even though Mayo Clinic scores more marks");
   }
   ok(uw.priorSectionFor(deliverable, 'Institute') === null, 'a single generic shared word is coincidence, not a topic match');
   ok(uw.priorSectionFor('', 'AISI') === null && uw.priorSectionFor(deliverable, '') === null, 'empty inputs are null, never a throw');
