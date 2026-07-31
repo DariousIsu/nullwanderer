@@ -13022,7 +13022,11 @@ async function runDirectedResearchPass(focus) {
     // VALIDATE (leash slice B): the autonomic elected sweep confirms rosters + flags changes in 2-3
     // passes per body and moves on — never the refusal-mode dossier grind (that stays for directed asks).
     const validateMode = depthMode === 'validate';
-    if (refusal) target.dryPasses = (newChars < rs.MIN_NEW_CHARS) ? ((target.dryPasses || 0) + 1) : 0;
+    // Tracked for EVERY mode, not just refusal. The comment above has always said "two consecutive
+    // sub-threshold passes", but this counter was gated to refusal, so in the default path dryStreak
+    // was permanently 0 and decideAdvance fell through to its one-thin-pass rule — a single bad
+    // search (a SERP that returned nothing, a page that timed out) ended the target outright.
+    target.dryPasses = (newChars < rs.MIN_NEW_CHARS) ? ((target.dryPasses || 0) + 1) : 0;
     const deepTarget = refusal || depthMode === 'concept' || (scope === 'bounded' && Array.isArray(intended) && intended.length <= 1);
     const adv = rs.decideAdvance({ passes: target.passes, newChars, saturated: p.saturated, uncovered: uncovered.length, deep: deepTarget, refusal, validate: validateMode, dryStreak: target.dryPasses || 0 });
     if (adv.advance) {
@@ -13157,7 +13161,11 @@ async function runDirectedResearchPass(focus) {
           }
         } catch (e) { console.error('[civic] roster capture failed:', e.message); }
       }
-      note = `completed ${target.name} (${target.passes} passes, ${adv.reason}) + organized → canvas`; sig = target.name.toLowerCase(); progressed = true;
+      // The FINAL pass's yield belongs in this line. Only the continuing passes logged "N new chars",
+      // so every pass that ENDED a target was invisible — the exact number the advance rule turns on.
+      // Tuning MIN_NEW_CHARS off that sample measured a censored distribution (boot161 showed min=249
+      // over 88 passes, all of them survivors, while the terminating passes went unrecorded).
+      note = `completed ${target.name} (${target.passes} passes, ${adv.reason}, last +${newChars}ch, dry ${target.dryPasses || 0}) + organized → canvas`; sig = target.name.toLowerCase(); progressed = true;
       target = null; try { db.setMeta(targetKey, ''); } catch {}
     } else {
       try { db.setMeta(targetKey, JSON.stringify(target)); } catch {}

@@ -43,9 +43,20 @@ ok(r.decideAdvance({ passes: 1, newChars: 900 }).advance === false, 'pass 1 with
 ok(r.decideAdvance({ passes: 3, newChars: 900 }).advance === false, 'still adding material → keep deepening');
 ok(r.decideAdvance({ passes: 2, saturated: true }).advance === true, 'model says SATURATED → advance');
 ok(r.decideAdvance({ passes: r.MAX_PASSES_PER_TARGET, newChars: 900 }).advance === true, 'hit the per-target pass cap → advance');
-ok(r.decideAdvance({ passes: 3, newChars: 10 }).reason === 'diminishing returns' && r.decideAdvance({ passes: 3, newChars: 10 }).advance === true,
-  'a near-empty pass (after a couple) → diminishing returns → advance');
+ok(r.decideAdvance({ passes: 3, newChars: 10, dryStreak: 2 }).reason === 'diminishing returns' && r.decideAdvance({ passes: 3, newChars: 10, dryStreak: 2 }).advance === true,
+  'TWO consecutive near-empty passes → diminishing returns → advance');
 ok(r.decideAdvance({ passes: 1, newChars: 10 }).advance === false, 'a thin FIRST pass does NOT advance prematurely (give it a chance)');
+// REGRESSION (2026-07-31): the default path required only ONE thin pass, because dryPasses was
+// tracked in refusal mode alone so dryStreak arrived here as 0 forever. A single failed search
+// (empty SERP, timed-out page) then ended a target that still had material in it.
+ok(r.decideAdvance({ passes: 3, newChars: 10, dryStreak: 1 }).advance === false,
+  'ONE thin pass mid-target does NOT advance — a bad search is not an exhausted subject');
+ok(r.decideAdvance({ passes: 3, newChars: 900, dryStreak: 0 }).advance === false,
+  'a productive pass resets the streak → keep deepening');
+// The two modes now agree on what "dry" means; only the ceilings differ.
+ok(r.decideAdvance({ passes: 3, newChars: 10, dryStreak: 2, refusal: true }).advance === true
+  && r.decideAdvance({ passes: 3, newChars: 10, dryStreak: 2 }).advance === true,
+  'refusal and default agree: two dry passes = exhausted');
 
 // --- VALIDATE mode (leash slice B): roster + corroborator + change check, then MOVE ON ---
 ok(r.decideAdvance({ passes: 1, newChars: 900, validate: true }).advance === false, 'validate: overview pass → keep validating');
@@ -223,13 +234,13 @@ ok(r.decideAdvance({ passes: 6, newChars: 800, saturated: false }).advance === t
 ok(r.decideAdvance({ passes: 6, newChars: 800, uncovered: 3, deep: true }).advance === false, 'decideAdvance: deep target + uncovered facets + productive → KEEP deepening past 6 (was force-finalizing)');
 ok(r.decideAdvance({ passes: 18, newChars: 800, uncovered: 3, deep: true }).advance === true && r.decideAdvance({ passes: 18, newChars: 800, uncovered: 3, deep: true }).reason === 'deep cap', 'decideAdvance: deep target hits the deep ceiling → advance (deep cap)');
 ok(r.decideAdvance({ passes: 6, newChars: 800, uncovered: 0, deep: true }).advance === true, 'decideAdvance: deep target with ALL facets covered → base cap (do not over-work)');
-ok(r.decideAdvance({ passes: 3, newChars: 100, uncovered: 5, deep: true }).advance === true && r.decideAdvance({ passes: 3, newChars: 100, uncovered: 5, deep: true }).reason === 'diminishing returns', 'decideAdvance: diminishing returns still self-limits a deep run (sparse 1-person company bows out)');
+ok(r.decideAdvance({ passes: 3, newChars: 100, uncovered: 5, deep: true, dryStreak: 2 }).advance === true && r.decideAdvance({ passes: 3, newChars: 100, uncovered: 5, deep: true, dryStreak: 2 }).reason === 'diminishing returns', 'decideAdvance: diminishing returns still self-limits a deep run (sparse 1-person company bows out after TWO dry passes)');
 ok(r.decideAdvance({ passes: 2, newChars: 900, saturated: true }).advance === true, 'decideAdvance: SATURATED always advances');
 // DOSSIER depth (autonomic elected-officials) — deep=true keeps every board deepening across its full facet
 // set (members+contacts, meetings, minutes, bios, charter, history) past the base cap, until facets run out.
 ok(r.decideAdvance({ passes: 8, newChars: 900, uncovered: 4, deep: true }).advance === false, 'decideAdvance: dossier target with uncovered facets + material → keep deep-diving past the base cap');
 ok(r.decideAdvance({ passes: 8, newChars: 900, uncovered: 0, deep: true }).advance === true, 'decideAdvance: dossier target with ALL facets covered → advance (do not over-work)');
-ok(r.decideAdvance({ passes: 3, newChars: 10, uncovered: 4, deep: true }).advance === true, 'decideAdvance: a genuinely dry facet still self-limits (diminishing returns) even in dossier depth');
+ok(r.decideAdvance({ passes: 3, newChars: 10, uncovered: 4, deep: true, dryStreak: 2 }).advance === true, 'decideAdvance: a genuinely dry facet (two dry passes) still self-limits even in dossier depth');
 // REFUSAL mode (Lucas 2026-07-18): deep-dive to EXHAUSTION — advance only on a 2-pass dry streak or saturation,
 // never on facet-touched or an arbitrary ceiling, with a high runaway guard.
 ok(r.decideAdvance({ refusal: true, passes: 10, newChars: 900, dryStreak: 0 }).advance === false, 'refusal: still pulling material below the soft cap → keep deep-diving');

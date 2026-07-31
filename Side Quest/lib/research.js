@@ -76,7 +76,10 @@ function decideAdvance({ passes = 1, newChars = 0, saturated = false, uncovered 
     if (passes >= MAX_PASSES_REFUSAL) return { advance: true, reason: 'soft depth cap' };
     return { advance: false, reason: 'keep deepening' };
   }
-  if (passes >= 2 && newChars < minNew) return { advance: true, reason: 'diminishing returns' };
+  // TWO consecutive dry passes, matching refusal mode above — one thin pass is a bad search, not an
+  // exhausted subject, and this rule was ending targets on it. dryStreak is now maintained in every
+  // mode (it used to be refusal-only, so this branch always saw 0 and fired on the single pass).
+  if (passes >= 2 && dryStreak >= 2) return { advance: true, reason: 'diminishing returns' };
   const cap = (deep && uncovered > 0) ? Math.max(maxPasses, MAX_PASSES_DEEP_TARGET) : maxPasses;
   if (passes >= cap) return { advance: true, reason: cap > maxPasses ? 'deep cap' : 'pass cap' };
   return { advance: false, reason: 'keep deepening' };
