@@ -12809,6 +12809,15 @@ async function runDirectedResearchPass(focus) {
   };
   // What the inherited document ALREADY establishes about this target — handed to the deepen pass
   // through the same `known` channel the graph dossier uses ("treat as GIVEN, do NOT re-derive").
+  // The inherited document's OWN organizations — the anchor that stops discovery opening a
+  // namesake. #3644 carried its parent's acronym ("AISI") but not the entity, searched it cold,
+  // and opened UC Irvine's institute instead of the Chinese one the document is about.
+  const _priorOrgs = () => {
+    try {
+      const row = _resolveBaseDoc();
+      return row ? require('./lib/user_work').priorOrgsIn(row.body) : [];
+    } catch { return []; }
+  };
   const _priorOnTarget = (name) => {
     try {
       const row = _resolveBaseDoc();
@@ -12914,7 +12923,7 @@ async function runDirectedResearchPass(focus) {
       // OPEN A NEW TARGET — discovery overview pass (open scope only). Ground the pick in Echo too.
       // `expected` gives the pass its DENOMINATOR — without it a run has no idea whether it is
       // 9-of-64 or finished, which is how a partial run got reported as complete.
-      const { ans, usedTool } = await runPass(rs.buildNewTargetPrompt({ goal, covered, guidance, expected: _expectedCount(focus.id) }));
+      const { ans, usedTool } = await runPass(rs.buildNewTargetPrompt({ goal, covered, guidance, expected: _expectedCount(focus.id), priorOrgs: _priorOrgs() }));
       const p = rs.parsePass(ans);
       if (p.allCovered && covered.length) { done = true; note = `all organizations covered (${covered.length})`; }
       else if (p.target && !covered.some(c => lc(c) === p.target.toLowerCase())) {

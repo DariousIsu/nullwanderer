@@ -116,13 +116,31 @@ function pickUserThread(threads, { now = 0, newsAtOf = () => 0 } = {}) {
  * research passes are where the tokens go.
  *
  * Deliverables are written as `## <Target>` sections, so this is a deterministic slice of markdown
- * she already wrote — no model, nothing inferred. Matching is CONTAINMENT both ways plus a 2-token
- * overlap rule (one shared word is coincidence, two is a topic — the same rule news vigilance and
- * the doc matcher already use), because a heading reads "AI for Science Institute (AISI)" while the
- * target reads "AI for Science Institute". Null when nothing matches: handing a run the WRONG
- * section as established fact is far worse than handing it none.
+ * she already wrote — no model, nothing inferred. Matching is EXACT or CONTAINMENT (plus two shared
+ * significant words), because a heading reads "AI for Science Institute (AISI)" while the target
+ * may read "AI for Science Institute". Token overlap alone is NOT enough and the live proof is in
+ * the scoring comment below. Null when nothing matches: handing a run the WRONG section as
+ * established fact is far worse than handing it none.
  */
 const _norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+/**
+ * The organizations an inherited deliverable is ABOUT — its `## ` section headings.
+ *
+ * Handed to the discovery pass as the disambiguator for a namesake. A spawned thread inherits its
+ * parent's QUESTION, which routinely names the subject only by acronym ("AISI's computing
+ * resources"), and an acronym is exactly where collisions live: #3644 searched it cold and opened
+ * UC Irvine's institute instead of the Chinese one its parent had researched.
+ */
+function priorOrgsIn(docBody, { max = 20 } = {}) {
+  const out = [];
+  for (const chunk of String(docBody || '').split(/^##\s+/m).slice(1)) {
+    const h = chunk.split('\n')[0].replace(/\s+/g, ' ').trim().replace(/[*_`]/g, '');
+    if (h.length >= 3 && h.length <= 120 && !out.includes(h)) out.push(h);
+    if (out.length >= max) break;
+  }
+  return out;
+}
 function priorSectionFor(docBody, targetName, { maxChars = 2500 } = {}) {
   const body = String(docBody || '');
   const want = _norm(targetName);
@@ -132,16 +150,26 @@ function priorSectionFor(docBody, targetName, { maxChars = 2500 } = {}) {
   for (const chunk of body.split(/^##\s+/m).slice(1)) {
     const heading = _norm(chunk.split('\n')[0]);
     if (!heading) continue;
-    // TWO SHARED SIGNIFICANT WORDS IN EVERY CASE BUT EXACT EQUALITY. Containment alone was not
-    // safe: a generically-named target ("Institute", "Board", "the governing body") is CONTAINED
-    // in half the headings in a deliverable, so it would hand a neighbouring organization's
-    // section over as established fact about this one — the precise failure this function's null
-    // return exists to avoid. Caught by the smoke before it ran anywhere.
+    // EXACT OR CONTAINMENT ONLY — token overlap is NOT enough, and this was proved live.
+    //
+    // A spawned thread drifted to a NAMESAKE: #3640 researched the Chinese "AI for Science
+    // Institute (AISI)", and its follow-up #3644 opened "UCI Artificial Intelligence in Science
+    // Institute (AISI)" — University of California, Irvine. The two names share three tokens
+    // (science · institute · aisi), which cleared the two-shared-words bar, so this function handed
+    // the CHINESE institute's 2,513-character section to a run about the AMERICAN one, labelled as
+    // already established. Cross-contamination between two real organizations, in the one channel
+    // whose whole promise is "treat this as GIVEN".
+    //
+    // Shared generic words cannot carry organizational identity — "science", "institute",
+    // "research", "national" are what org names are MADE of, and an acronym is exactly where
+    // collisions live. So the heading must be the same name or literally contain it. The true
+    // positives are unaffected because a legitimate target name came from this very document's own
+    // discovery pass and matches it exactly.
     let hits = 0;
     for (const t of new Set(heading.split(' '))) if (wantToks.has(t)) hits++;
     let score = 0;
     if (heading === want) score = 100;
-    else if (hits >= 2) score = (heading.includes(want) || want.includes(heading)) ? 50 + hits : hits;
+    else if (hits >= 2 && (heading.includes(want) || want.includes(heading))) score = 50 + hits;
     if (score > bestScore) { bestScore = score; best = chunk; }
   }
   if (!best) return null;
@@ -348,4 +376,4 @@ When defer is false, item/when may be empty and days 0.`,
   };
 }
 
-module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, inheritedBaseDocId, priorSectionFor, parkDeliverable, scoreThread, pickUserThread, augmentGuidance, detectRedirect, matchThreadToTopic, REDIRECT_TRIGGER_RE, buildRedirectAsk, AGENDA_TRIGGER_RE, buildAgendaAsk };
+module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, inheritedBaseDocId, priorSectionFor, priorOrgsIn, parkDeliverable, scoreThread, pickUserThread, augmentGuidance, detectRedirect, matchThreadToTopic, REDIRECT_TRIGGER_RE, buildRedirectAsk, AGENDA_TRIGGER_RE, buildAgendaAsk };

@@ -220,6 +220,26 @@ ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: N
   ok(uw.priorSectionFor(deliverable, 'CNRI') === null || /alloy design/.test(uw.priorSectionFor(deliverable, 'CNRI')), 'an acronym-only target either matches its own section or honestly returns nothing');
 
   ok(uw.priorSectionFor(deliverable, 'Tsinghua AI Chemistry Institute') === null, 'a target the document does NOT cover returns null — never a wrong section handed over as fact');
+
+  // ⭐⭐ THE NAMESAKE. Live 2026-07-31 and it FIRED before I caught it: #3640 researched the Chinese
+  // "AI for Science Institute (AISI)"; its follow-up #3644 opened "UCI Artificial Intelligence in
+  // Science Institute (AISI)" — University of California, Irvine — and this function handed the
+  // CHINESE section over as established fact about the AMERICAN institute. Three shared tokens
+  // (science · institute · aisi) cleared a two-token bar. Shared generic words cannot carry
+  // organizational identity: "science", "institute", "research", "national" are what org names are
+  // MADE of, and an acronym is exactly where collisions live.
+  ok(uw.priorSectionFor(deliverable, 'UCI Artificial Intelligence in Science Institute (AISI)') === null,
+    '⭐ a NAMESAKE sharing an acronym gets NOTHING — no cross-contamination between two real orgs');
+  ok(uw.priorSectionFor(deliverable, 'Shanghai Institute of Science') === null,
+    'and a different org sharing two generic words gets nothing either');
+
+  // priorOrgsIn: the disambiguator handed to discovery so the namesake is never opened at all.
+  const orgs = uw.priorOrgsIn(deliverable);
+  ok(orgs.length === 3 && orgs[0] === 'Shanghai Academy of AI for Science (SAIS)', 'priorOrgsIn lists the document\'s own organizations, in order');
+  ok(orgs.includes('AI for Science Institute (AISI)'), 'including the one an acronym would collide with');
+  ok(uw.priorOrgsIn('').length === 0 && uw.priorOrgsIn(null).length === 0, 'priorOrgsIn is null-safe');
+  ok(uw.priorOrgsIn(Array.from({ length: 50 }, (_, i) => `## Institute Number ${i}\ntext\n`).join(''), { max: 5 }).length === 5, 'and bounded');
+  ok(uw.priorOrgsIn('## AB\n## Real Institute Name\n').length === 1, 'a too-short heading is not an organization name');
   ok(uw.priorSectionFor(deliverable, 'Institute') === null, 'a single generic shared word is coincidence, not a topic match');
   ok(uw.priorSectionFor('', 'AISI') === null && uw.priorSectionFor(deliverable, '') === null, 'empty inputs are null, never a throw');
   const long = '## AISI\n' + 'x'.repeat(9000);

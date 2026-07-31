@@ -190,13 +190,25 @@ function coverageLine(covered, expected) {
   return `\nCOVERAGE: ${have} of ${n} documented; ${n - have} STILL MISSING. This run is NOT complete until all ${n} are covered — keep going, and never describe what you have as the complete set.\n`;
 }
 
-function buildNewTargetPrompt({ goal = '', covered = [], guidance = '', expected = 0 } = {}) {
+function buildNewTargetPrompt({ goal = '', covered = [], guidance = '', expected = 0, priorOrgs = [] } = {}) {
   const done = (covered && covered.length)
     ? `ORGANIZATIONS ALREADY FULLY DOCUMENTED (do NOT pick any of these again):\n${covered.map(c => `- ${c}`).join('\n')}`
     : 'None documented yet.';
   const g = guidance ? `\n\n${guidance}` : '';
   const cov = coverageLine(covered, expected);
-  return `You are researching a standing task for Lucas, ONE organization at a time, in DEPTH.\n\nTASK: ${goal}${g}\n${cov}\n${done}\n\nTHIS PASS: pick ONE specific organization that fits the task and is NOT already documented, and write an OVERVIEW — full name, what it is, its main focus areas — grounded ONLY in what web_search / browser_read / echo / recall actually return (never invent). You will deepen it (staff, contacts, positions) over the next passes, so just establish it now.\nIf EVERY relevant organization is already documented, reply with exactly ALL-COVERED.\nEnd with a final line: TARGET: <the organization name>`;
+  // ⭐ THE INHERITED DOCUMENT'S OWN ORGANIZATIONS — the anchor that stops a NAMESAKE.
+  // Live 2026-07-31: #3640 researched the Chinese "AI for Science Institute (AISI)" and spawned a
+  // follow-up asking about "AISI's computing resources". That thread carried the ACRONYM but not
+  // the entity, so discovery searched it cold and opened "UCI Artificial Intelligence in Science
+  // Institute (AISI)" — University of California, Irvine. A whole run pointed at the wrong
+  // organization on the wrong continent, whose findings would have landed as answers about the
+  // Chinese one. An acronym is precisely where collisions live, so when a run continues a document,
+  // that document's own names are the disambiguator and must be in front of the picker.
+  const prior = (Array.isArray(priorOrgs) ? priorOrgs.filter(Boolean).slice(0, 20) : []);
+  const pri = prior.length
+    ? `\n\nTHIS RUN CONTINUES AN EXISTING DOCUMENT, which is about these specific organizations:\n${prior.map(o => `- ${o}`).join('\n')}\nIf the task names one of them — including by acronym or short form — it means THAT organization, not a similarly-named one elsewhere. Two institutes can share an acronym; picking the wrong one produces confident findings about the wrong body. When in doubt, prefer the one already in this list and say which you chose.`
+    : '';
+  return `You are researching a standing task for Lucas, ONE organization at a time, in DEPTH.\n\nTASK: ${goal}${g}\n${cov}\n${done}${pri}\n\nTHIS PASS: pick ONE specific organization that fits the task and is NOT already documented, and write an OVERVIEW — full name, what it is, its main focus areas — grounded ONLY in what web_search / browser_read / echo / recall actually return (never invent). You will deepen it over the next passes, so just establish it now.\nIf EVERY relevant organization is already documented, reply with exactly ALL-COVERED.\nEnd with a final line: TARGET: <the organization name>`;
 }
 
 // Object-first open (Slice 2c): the next SEED object to OPEN as a target — one we were handed (resolved
