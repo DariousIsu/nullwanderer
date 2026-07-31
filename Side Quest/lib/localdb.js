@@ -125,6 +125,58 @@ function inventory() {
   return out;
 }
 
+// ── WHAT THE MANIFEST SHOULD ACTUALLY LIST ────────────────────────────────────────────────────
+//
+// The manifest used to take the 14 biggest tables. Measured 2026-07-31 and every one of the 14 was
+// EXHAUST — puller.observations (969k), kg_observations (684k), encounters (332k), recent_cards,
+// agent_events, cloud_traces. Meanwhile the stores built specifically to ANSWER something ranked
+// #34, #44, #55 and #65, and so were invisible:
+//
+//     absence 1,315 · civic_memberships 337 · cardinality 134 · civic_bodies 24
+//
+// The cost of that is not abstract. She needed county board data 21 times in one day, did not know
+// `civic_bodies` existed, invented a plausible name — `county_election_boards` — and the query
+// failed every time. A store she cannot see is a store she does not have, and ranking by row count
+// guarantees the curated ones lose to the firehoses. (This is the measured form of the standing
+// "awareness is INVERTED vs volume" problem.)
+//
+// So: answer-bearing tables are PINNED and carry the question they answer, the remaining slots go
+// to the largest of the rest, and pure exhaust is excluded — nobody ever needed to be told that
+// route_obs has 2.6 million rows.
+const CURATED = [
+  ['civic_bodies', 'governing bodies she has RESEARCHED — level, function, official url'],
+  ['civic_memberships', 'who holds their seats, with the source each name came from'],
+  ['cardinality', 'how many seats a body HAS — the denominator for completeness'],
+  ['absence', 'what she looked for and did NOT find (so it is not re-hunted)'],
+  ['capability_needs', 'tools/skills her own runs named as missing'],
+  ['directives', "Lucas's standing instructions"],
+  ['skills', 'her proven procedures — pull a body with skill_pull'],
+  ['open_threads', 'live work: research threads and their status'],
+  ['self_model', 'her own stated preferences, opinions and identity'],
+  ['knowledge', 'facts she has kept, with provenance'],
+];
+// Accumulating logs. Real data, but nothing a question is ever answered FROM — listing them spends
+// the manifest's scarcest bytes telling her about her own exhaust.
+const EXHAUST_RE = /^(?:route_obs|obs_events|cloud_traces|agent_events|recent_cards|encounters|kg_observations|puller\.observations|.*_log|.*_audit)$/i;
+
+/**
+ * The manifest's table list: pinned answer-bearing stores first (each with what it is FOR), then
+ * the biggest of whatever else has rows. A pinned table that is EMPTY is dropped like any other —
+ * offering an empty shelf invites a wasted hop.
+ */
+function manifestTables(limit = 16, rows = null) {
+  const all = (rows || inventory()).filter((t) => t && t.rows > 0);
+  const by = new Map(all.map((t) => [t.table, t]));
+  const out = [];
+  for (const [name, label] of CURATED) {
+    const t = by.get(name);
+    if (t) { out.push({ table: t.table, rows: t.rows, purpose: label }); by.delete(name); }
+  }
+  const rest = [...by.values()].filter((t) => !EXHAUST_RE.test(t.table)).sort((a, b) => b.rows - a.rows);
+  for (const t of rest) { if (out.length >= limit) break; out.push({ table: t.table, rows: t.rows, purpose: '' }); }
+  return out.slice(0, Math.max(limit, CURATED.length));
+}
+
 // Column schema for one table (name + type). Accepts a qualified `alias.table`; both halves sanitized.
 function schema(table) {
   const raw = String(table || '');
@@ -140,4 +192,4 @@ function schema(table) {
 // Which of the other databases are actually live right now (for the tool description / diagnostics).
 function attachedDbs() { _readerConn(); return _attached.slice(); }
 
-module.exports = { query, inventory, schema, attachedDbs, ATTACHED, _reset, MAX_ROWS, WRITE_KW_RE };
+module.exports = { query, inventory, manifestTables, schema, attachedDbs, ATTACHED, CURATED, EXHAUST_RE, _reset, MAX_ROWS, WRITE_KW_RE };

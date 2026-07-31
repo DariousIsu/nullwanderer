@@ -7567,10 +7567,14 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
         // pre-dumped into the prompt on the chance it turns out to be relevant.
         let manifest = '';
         try {
-          const inv = require('./lib/localdb').inventory()
-            .filter((t) => t.rows > 0)
-            .sort((a, b) => b.rows - a.rows).slice(0, 14)
-            .map((t) => ({ key: t.table, label: 'rows', count: t.rows, how: `<echo-do name="db_query">{"sql":"SELECT … FROM ${t.table} …"}</echo-do>` }));
+          // PINNED-FIRST, not biggest-first (lib/localdb.manifestTables). Taking the top 14 by row
+          // count listed nothing but exhaust, while the stores built to ANSWER something — civic
+          // bodies, their rosters, seat counts, absence — ranked #34-#65 and were invisible. She
+          // then needed board data 21 times in a day, invented `county_election_boards`, and failed
+          // every time. Each pinned row now carries WHAT IT IS FOR, because a table name alone does
+          // not tell her that civic_bodies is where researched boards live.
+          const inv = require('./lib/localdb').manifestTables(16)
+            .map((t) => ({ key: t.table, label: t.purpose ? `rows — ${t.purpose}` : 'rows', count: t.rows, how: `<echo-do name="db_query">{"sql":"SELECT … FROM ${t.table} …"}</echo-do>` }));
           // …and what she can PRODUCE. Without these keys the model knew a canvas existed but had no
           // way to reach it, so it described the outcome instead — "I've added the 28,721 contacts to
           // your canvas" when no canvas write ever happened. A capability with no key is a capability

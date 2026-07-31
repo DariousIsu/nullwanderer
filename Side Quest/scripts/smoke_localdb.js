@@ -42,5 +42,41 @@ ok(inv.every(t => typeof t.rows === 'number'), 'inventory carries row counts');
 ok(ldb.schema('meta').length > 0, 'schema lists columns for a table');
 ok(ldb.schema('meta; DROP TABLE meta').length >= 0, 'schema sanitizes the table name (no injection)');
 
+// ── WHAT THE MANIFEST LISTS: pinned-first, not biggest-first ─────────────────────────────────
+// Measured 2026-07-31: taking the top 14 by row count listed nothing but exhaust
+// (puller.observations 969k, kg_observations 684k, encounters 332k, cloud_traces…), while the
+// stores built to ANSWER something ranked #34/#44/#55/#65 and were invisible. She then needed
+// county board data 21 times in one day, did not know civic_bodies existed, invented
+// `county_election_boards`, and failed every time. A store she cannot see is a store she does not have.
+console.log('\nMANIFEST TABLE SELECTION');
+{
+  const fake = [
+    { table: 'puller.observations', rows: 969268 }, { table: 'kg_observations', rows: 684102 },
+    { table: 'encounters', rows: 332235 }, { table: 'recent_cards', rows: 199536 },
+    { table: 'cloud_traces', rows: 47276 }, { table: 'route_obs', rows: 2600000 },
+    { table: 'puller.beliefs', rows: 967062 }, { table: 'news.news_items', rows: 147503 },
+    { table: 'civic_bodies', rows: 24 }, { table: 'civic_memberships', rows: 337 },
+    { table: 'cardinality', rows: 134 }, { table: 'absence', rows: 1315 },
+    { table: 'skills', rows: 20 }, { table: 'an_empty_curated_one', rows: 0 },
+  ];
+  const got = ldb.manifestTables(10, fake);
+  const names = got.map((t) => t.table);
+
+  ok(names.indexOf('civic_bodies') < names.indexOf('puller.beliefs'), '⭐ a 24-row answer-bearing store outranks a 967,062-row one');
+  ok(['civic_bodies', 'civic_memberships', 'cardinality', 'absence', 'skills'].every((n) => names.includes(n)), 'every curated store present in the data is listed');
+  ok(got.find((t) => t.table === 'civic_bodies').purpose.length > 10, 'and carries WHAT IT IS FOR — a bare table name never taught her that boards live there');
+
+  for (const ex of ['route_obs', 'cloud_traces', 'agent_events', 'recent_cards', 'kg_observations', 'puller.observations', 'encounters']) {
+    ok(!names.includes(ex), `exhaust excluded: ${ex} — nothing is ever answered FROM it`);
+  }
+  ok(names.includes('puller.beliefs') && names.includes('news.news_items'), 'genuine big data stores still make the list after the pinned ones');
+  ok(!names.includes('an_empty_curated_one'), 'a curated table with ZERO rows is dropped — an empty shelf invites a wasted hop');
+  ok(got.every((t) => t.rows > 0), 'nothing empty is ever listed');
+  ok(new Set(names).size === names.length, 'no table is listed twice (pinned then re-added as filler)');
+
+  const live = ldb.manifestTables(16);
+  ok(live.length > 0 && live.every((t) => typeof t.table === 'string' && t.rows > 0), 'runs against the real inventory without throwing');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
