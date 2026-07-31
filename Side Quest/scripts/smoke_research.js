@@ -261,6 +261,26 @@ ok(r.coverageLine(9, 64).includes('9 of 64'), 'coverageLine: accepts a raw count
   ok(!/COVERAGE/.test(n0), 'buildNewTargetPrompt: no expected → omitted');
 }
 
+// ── AN OPEN QUESTION MUST NAME ITS SUBJECT (2026-07-31) ────────────────────────────────────────
+// OPEN questions go into the run's SHARED plan and are pursued later, against whichever target is
+// current then. A question that says "the lab" silently rebinds. Measured live: "the total dollar
+// amounts … supporting THE LAB", written about the Eller AI Lab, was re-asked against three
+// unrelated institutes in a row — one wasted pass each. No name-matching filter can catch a
+// pronoun, so the fix has to be at the generator.
+{
+  const sys = (t) => r.buildUnderstandTargetPrompt({ goal: 'map Arizona AI', target: t, raw: 'notes', sources: ['https://x.edu'] })
+    .find((m) => m.role === 'system').content;
+  const s = sys('Eller Artificial Intelligence Laboratory');
+  ok(/NAME THE SUBJECT IN EVERY OPEN LINE/.test(s), 'the OPEN rule demands the subject be named');
+  ok(/write "Eller Artificial Intelligence Laboratory" in full/.test(s),
+    '⭐ and inlines the ACTUAL target name — concrete beats abstract in a prompt');
+  ok(/NEVER "the lab", "the institute", "the center", "it", "this organization" or "they"/.test(s),
+    'the specific anaphora that caused it are named and forbidden');
+  ok(/OUTLIVE this target/.test(s), 'and the REASON rides along — a rule with its why survives editing');
+  ok(/write "the organization" in full/.test(sys(undefined)), 'no target → a safe fallback, never a literal "undefined"');
+  ok(!/undefined/.test(sys(undefined)), 'and nothing leaks "undefined" into the prompt');
+}
+
 // ── THE RUN'S OWN QUESTIONS OUTRANK THE GENERIC LADDER (2026-07-30) ─────────────────────────────
 // Lucas: "this topic is about LEARNING about the topics… more than scrape contact information."
 // The deepen pass used to close with a fixed (1) leadership (2) contacts (3) positions … order,
