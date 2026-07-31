@@ -546,6 +546,45 @@ Examples:
  *   3. pathological final message → cut ITS middle last (his words head the message; nudges tail it).
  * WE choose what falls out and say so in the report — ollama chooses blindly and says nothing.
  */
+// ── O8 HISTORY HANDLES ────────────────────────────────────────────────────────────────────────
+//
+// What replaces the turns the window could not hold. Deliberately tiny: this block exists to buy
+// back a behaviour, not to reconstruct the conversation. The behaviour is "you and Lucas already
+// went over this" — without it, aged-out turns are indistinguishable from turns that never
+// happened, and the visible symptom is her asking him something he already answered.
+//
+// Only the USER's lines are listed. His asks are what a re-ask would step on; her own replies are
+// reconstructible from them and would double the cost for a fraction of the value.
+const HANDLE_MAX = 700;
+const HANDLE_ITEMS = 8;
+
+function historyHandle(droppedMessages, maxChars = HANDLE_MAX) {
+  const asks = [];
+  for (const m of (Array.isArray(droppedMessages) ? droppedMessages : [])) {
+    if (!m || m.role !== 'user') continue;
+    const t = String(m.content || '').replace(/\s+/g, ' ').trim();
+    if (t.length < 3) continue;
+    asks.push(t.length > 90 ? t.slice(0, 89).replace(/\s+\S*$/, '') + '…' : t);
+  }
+  if (!asks.length) return '';
+  // Newest of the dropped span first — the ones nearest the live conversation are likeliest to
+  // still matter. The count is stated in full even when the list is cut, because "and 9 more" is
+  // the part that stops her treating the listed few as the whole history.
+  const shown = asks.slice(-HANDLE_ITEMS).reverse();
+  const more = asks.length - shown.length;
+  const head = `[EARLIER IN THIS CONVERSATION — ${asks.length} message(s) of his that no longer fit the window. This DID happen; if any of it bears on what he is asking now, recall it rather than asking him to repeat himself:`;
+  const lines = [];
+  let used = head.length + 2;
+  for (const a of shown) {
+    const line = `\n  • "${a}"`;
+    if (used + line.length > maxChars - 30) break;
+    lines.push(line); used += line.length;
+  }
+  if (!lines.length) return '';
+  const tail = more > 0 ? `\n  … and ${more} earlier message(s) before those.]` : ']';
+  return head + lines.join('') + tail;
+}
+
 function fitToWindow(messages, { numCtx = 8192, numPredict = 1200 } = {}) {
   const list = Array.isArray(messages) ? messages.slice() : [];
   if (list.length === 0) return { messages: list, report: null };
@@ -555,7 +594,20 @@ function fitToWindow(messages, { numCtx = 8192, numPredict = 1200 } = {}) {
   if (before <= budget) return { messages: list, report: null };
   let droppedTurns = 0, systemCut = 0, finalCut = 0;
   // 1) oldest history first: everything between the system head and the final message is history.
-  while (size() > budget && list.length > 2) { list.splice(1, 1); droppedTurns++; }
+  //    ⭐ O8 HISTORY HANDLES. This used to splice turns out leaving NO TRACE, so a conversation
+  //    she genuinely had simply stopped existing for her — measured across 95 live fit events,
+  //    every one dropping 3 to 16 turns. The failure that causes is not "forgetting"; it is
+  //    asking Lucas something he already answered, which reads as not listening. So the dropped
+  //    span is replaced by ONE compact block naming what was asked, with the instruction to
+  //    recall rather than re-ask. Budget is reserved for the block BEFORE dropping, so the
+  //    handle can never be what pushes the prompt back over the window.
+  const dropped = [];
+  const dropBudget = Math.max(Math.floor(budget * 0.5), budget - HANDLE_MAX);
+  while (size() > dropBudget && list.length > 2) { dropped.push(list.splice(1, 1)[0]); droppedTurns++; }
+  if (dropped.length) {
+    const handle = historyHandle(dropped, HANDLE_MAX);
+    if (handle) list.splice(1, 0, { role: 'system', content: handle });
+  }
   // 2) system middle-cut: keep the head (protocols/identity/permissions) and the tail (HOW TO
   //    REPLY + recency nudges), drop from between with a marker the model can see.
   const MARK = '\n[… context trimmed to fit the local window …]\n';
@@ -584,7 +636,7 @@ function fitToWindow(messages, { numCtx = 8192, numPredict = 1200 } = {}) {
     const r = midCut(fin.content, keep, 0.6);
     fin.content = r.text; finalCut = r.cut;
   }
-  return { messages: list, report: { before, after: size(), budget, droppedTurns, systemCut, finalCut } };
+  return { messages: list, report: { before, after: size(), budget, droppedTurns, systemCut, finalCut, handled: dropped.length > 0 } };
 }
 
 /**
@@ -607,4 +659,4 @@ function buildReflectionPrompt({ userName, turnsSinceLastReflection }) {
   return [{ role: 'user', content: promptText }];
 }
 
-module.exports = { buildChatPrompt, buildReflectionPrompt, buildAwarenessBlock, fitToWindow, BOOTSTRAP, REFLECTION, BASE_PERSONA };
+module.exports = { buildChatPrompt, buildReflectionPrompt, buildAwarenessBlock, fitToWindow, historyHandle, HANDLE_MAX, BOOTSTRAP, REFLECTION, BASE_PERSONA };
