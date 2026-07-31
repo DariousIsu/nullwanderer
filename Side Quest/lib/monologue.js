@@ -809,10 +809,15 @@ async function generateThought({ messages, options = {}, signal, deps = {} } = {
           model: subModel, messages, base: cloud.base,
           headers: cloud.token ? { Authorization: `Bearer ${cloud.token}` } : {},
           options: { temperature: options.temperature ?? 0.9, top_p: options.top_p ?? 0.95, num_ctx: require('./config').deepNumCtx(), num_predict: Math.max(options.num_predict || 200, 1500) },
-          // think:false forwarded (2026-07-30 giant-blocks fix): without it a reasoner (gpt-oss:120b)
-          // buries its answer in the thinking channel and the salvage stores CHAIN-OF-THOUGHT as the
-          // thought — measured: synthesis num_predict 360 but 2,750ch average stored. Callers opt in.
-          think: options.think,
+          // think:false is the DEFAULT, and a caller must opt IN to reasoning. This read
+          // `options.think`, so a caller that simply didn't mention it got `undefined` — thinking
+          // stayed ON and the salvage stored CHAIN-OF-THOUGHT as the thought (measured 2026-07-30:
+          // synthesis num_predict 360, 2,750ch average stored). "Callers opt in" put the burden on
+          // every future call site to remember a flag whose absence fails silently, and boot171
+          // proved it does not hold: `[ollama] gpt-oss:120b-cloud: EMPTY content → answering from
+          // message.thinking` fired within the first minute. Same correction as the operator lane —
+          // no caller here wants deliberation as its answer, so that cannot be the default.
+          think: options.think ?? false,
           signal, timeoutMs: 120000
         });
         // completeDetailed → { text, usage }; an injected string-returning complete (smokes) → string.
