@@ -275,14 +275,22 @@ function recipeMisrouteHint(name, { isTool, argShape } = {}) {
 // (mirrors every other tool lib's stripTags). Idempotent; null-safe.
 function stripEchoTags(text) {
   if (!text) return text;
+  // Tags are removed to a SINGLE SPACE, not to nothing, and the seam is then closed up. Live
+  // 2026-07-31 she wrote tags inline mid-sentence and the empty replacement left the damage in the
+  // user's face: "Then I can re-emit the  with a valid JSON object" (a hole), and "I'll fire off the
+  // proper  with validJSON" (two words fused where the tag had separated them). Removing to a space
+  // fixes the fusion; collapsing runs and pulling punctuation back fixes the hole.
   return String(text)
-    .replace(/<echo-guide\s*\/>/g, '')
-    .replace(/<echo-guide>\s*<\/echo-guide>/g, '')
-    .replace(/<echo-find>[\s\S]*?<\/echo-find>/g, '')
-    .replace(/<echo-do\b[\s\S]*?<\/echo-do>/g, '')
-    .replace(/<echo-delegate\b[\s\S]*?<\/echo-delegate>/g, '')
-    .replace(/<echo-propose\b[\s\S]*?<\/echo-propose>/g, '')
-    .replace(/<echo-recipe\b[\s\S]*?(?:\/>|<\/echo-recipe>)/g, '')
+    .replace(/<echo-guide\s*\/>/g, ' ')
+    .replace(/<echo-guide>\s*<\/echo-guide>/g, ' ')
+    .replace(/<echo-find>[\s\S]*?<\/echo-find>/g, ' ')
+    .replace(/<echo-do\b[\s\S]*?<\/echo-do>/g, ' ')
+    .replace(/<echo-delegate\b[\s\S]*?<\/echo-delegate>/g, ' ')
+    .replace(/<echo-propose\b[\s\S]*?<\/echo-propose>/g, ' ')
+    .replace(/<echo-recipe\b[\s\S]*?(?:\/>|<\/echo-recipe>)/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')            // the seam the removal just opened
+    .replace(/[ \t]+([,.;:!?)\]])/g, '$1') // …and don't leave it stranded before punctuation
+    .replace(/([(\[])[ \t]+/g, '$1')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();

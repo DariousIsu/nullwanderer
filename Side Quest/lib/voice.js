@@ -181,4 +181,21 @@ function buildAntiRepetitionNudge(recentSaids, userName = 'Lucas') {
   return `[Vary your voice this turn. Across your recent replies you've leaned on: ${flags.join('; ')}. Break the pattern — find a different way in, drop the stock evaluatives, and you don't need to reflect his words back or end on a question. Just talk to ${userName || 'Lucas'} like yourself.]`;
 }
 
-module.exports = { isSelfDisclaimer, deDisclaim, stripDisclaimerSentences, guard, reanswer, buildAntiRepetitionNudge, PATTERNS };
+/**
+ * Is there anything here worth showing a person?
+ *
+ * The reply path gated on `if (sayOut)`, which is a TRUTHY test, and "…" is truthy. Live 2026-07-31,
+ * turn #10384: Lucas said "Yea you can run a bulk promotion", her reasoning channel worked the
+ * problem at length and ended "I'll perform the action now" — and what he saw was a single ellipsis.
+ * A reply made entirely of punctuation is the model having said nothing while looking like it spoke,
+ * which is worse than silence because silence is at least legible.
+ *
+ * Structural: at least one letter or digit, any script. No phrase list, so there is no new way to be
+ * empty that slips past. Note this also treats an emoji-only reply as empty — deliberate; a bare
+ * reaction is not an answer to a work instruction.
+ */
+function isSubstantive(text) {
+  return /[\p{L}\p{N}]/u.test(String(text == null ? '' : text));
+}
+
+module.exports = { isSelfDisclaimer, deDisclaim, stripDisclaimerSentences, guard, reanswer, buildAntiRepetitionNudge, isSubstantive, PATTERNS };

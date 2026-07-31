@@ -8561,7 +8561,13 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
           try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('monologue:tick', { id: row.id, ts: row.ts, content: `(${label}${r.isError ? ' ⚠' : ''})`, type: 'reading', query: label }); } catch {}
           if (!followupFired) {
             followupFired = true;
-            const tail = r.isError ? '\n[That call errored — read the message, fix the args or run <echo-find> to pick a better tool, then try again.]' : '';
+            // The retry instruction was here; the prohibition was not, and the gap showed. Live
+            // 2026-07-31 a db_query failed and she asked Lucas for the SQL four times in 35 seconds
+            // ("Could you share the exact SQL you'd like to run"), then invented a table name
+            // (`promotion_queue`) — while the error's own hint was telling her to call get_db_map().
+            // A schema question is never a question for him: he would have to look it up in the
+            // same place she can.
+            const tail = r.isError ? '\n[That call errored — read the message, fix the args or run <echo-find> to pick a better tool, then try again. Do NOT ask Lucas for a table, column, or tool name, and never guess one: get_db_map / get_schema / describe_tool answer those and you can call them right now. Ask him only for something ONLY HE knows — what he wants, not what the database contains.]' : '';
             fireToolFollowup({ io, channel, sessionId, resultText: content + tail });
           }
           // ⭐ MIRROR HER OWN CANVAS WRITES. There are two paths onto the canvas and only one of
@@ -9217,10 +9223,14 @@ async function fireToolFollowup({ io, channel, sessionId, resultText, echoHop = 
     sayOut = require('./lib/leakguard').stripPlanningLeak(sayOut);
     // Deliver her words (the visible step — "I'll run db_query…" or the final answer). May be
     // empty when she emitted only a tag — that's fine; the Echo chain below still runs.
-    if (sayOut) {
+    // SUBSTANCE, not truthiness. "…" is truthy, and that is exactly what Lucas got for a reply on
+    // 2026-07-31 (#10384) after telling her to run the promotion. A punctuation-only reply is the
+    // model having said nothing while appearing to speak; stay silent instead and let the chain run.
+    if (voice.isSubstantive(sayOut)) {
       const followupDisclaimed = voice.isSelfDisclaimer(sayOut);
       if (followupDisclaimed) { try { sayOut = (await voice.deDisclaim(sayOut)) || ''; } catch (e) { console.error('[main] followup voice guard failed:', e.message); } }
-      if (sayOut) {
+      // deDisclaim can hollow a reply out to punctuation, so re-test SUBSTANCE rather than truthiness.
+      if (voice.isSubstantive(sayOut)) {
         // MARK THE TURN AS ANSWERED. A follow-up delivers a complete, user-facing reply, but the
         // main turn does not know that: `followupFired` gates fifteen downstream blocks and never
         // the reply generation itself, so the turn went on to generate a SECOND reply. Live, that

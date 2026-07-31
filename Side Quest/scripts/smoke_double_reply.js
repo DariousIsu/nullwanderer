@@ -47,8 +47,19 @@ const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   ok(spokeSet.length === 1, '_spoke is set in exactly one place');
   // …and that place must be inside the branch that actually delivered text.
   const at = src.indexOf('if (io) io._spoke = true;');
-  const before = src.slice(Math.max(0, at - 600), at);
-  ok(/if \(sayOut\) \{/.test(before), '_spoke is set only where sayOut is non-empty — i.e. she actually spoke');
+  // Window widened 2026-07-31: the guard sits 608 chars back, and a 600-char window failed by eight.
+  // A distance-sensitive assertion is a bad guard for a stable fact, so the real check is the
+  // absence test below — this one just locates the nearest enclosing branch.
+  const before = src.slice(Math.max(0, at - 1400), at);
+  // ⭐ Tightened 2026-07-31: the guard was `if (sayOut)`, a TRUTHY test, and "…" is truthy — she
+  // marked the turn as spoken having shown Lucas a single ellipsis (#10384). SUBSTANCE, not
+  // truthiness: at least one letter or digit.
+  ok(/if \(voice\.isSubstantive\(sayOut\)\) \{/.test(before),
+    '_spoke is set only where she said something SUBSTANTIVE — punctuation alone is not speaking');
+  // Distance-independent, and the one that actually matters: the truthy guard must be GONE, or a
+  // punctuation-only reply can mark the turn spoken again from some other branch.
+  ok(!/if \(sayOut\) \{/.test(src),
+    '⭐ no reply branch gates on truthiness — "…" must never count as having spoken');
 }
 
 // ── ⭐ the early return resumes the idle loops ───────────────────────────────────────────────────

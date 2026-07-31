@@ -85,6 +85,18 @@ ok('drops only the disclaimer sentence', !/feelings like humans/.test(stripped) 
   ok('a regen that THROWS → null, never propagates into the reply path',
     (await voice.reanswer('hi', { regenFn: async () => { throw new Error('model down'); } })) === null);
 
+  // --- ⭐ isSubstantive: "…" is truthy, and that is what Lucas got for a reply -------------------
+  // Live 2026-07-31 (#10384): he said "Yea you can run a bulk promotion", her reasoning worked the
+  // problem and ended "I'll perform the action now", and the reply path's `if (sayOut)` shipped a
+  // single ellipsis. Saying nothing while appearing to speak is worse than silence.
+  ok('⭐ a lone ellipsis is NOT a reply', voice.isSubstantive('…') === false);
+  ok('nor three dots', voice.isSubstantive('...') === false);
+  ok('nor punctuation and whitespace', voice.isSubstantive('  —  .  ') === false);
+  ok('nor an empty string or null', voice.isSubstantive('') === false && voice.isSubstantive(null) === false);
+  ok('a single word IS a reply', voice.isSubstantive('Done.') === true);
+  ok('a bare number IS a reply', voice.isSubstantive('488') === true);
+  ok('non-Latin script counts (no ASCII assumption)', voice.isSubstantive('好') === true);
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();

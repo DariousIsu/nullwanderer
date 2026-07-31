@@ -209,6 +209,21 @@ function mockClient(overrides = {}) {
     ok('non-deliberative parsing is unchanged', S.parseEchoTags(`<echo-find>${'x'.repeat(300)}</echo-find>`).length === 1);
   }
 
+  // --- ⭐ STRIPPING A TAG MUST NOT DAMAGE THE SENTENCE AROUND IT (live 2026-07-31) --------------
+  {
+    // She writes tags inline mid-sentence. Removing them to '' left the damage in the user's face.
+    // The sentence still reads oddly — the tag WAS the object of "the" — but that is the model's
+    // phrasing, not the stripper's job. What the stripper owes is a clean seam.
+    const hole = S.stripEchoTags('Then I can re-emit the <echo-do name="db_query">{"sql":"SELECT 1"}</echo-do> with a valid JSON object.');
+    ok('⭐ no double-space hole where the tag was', hole === 'Then I can re-emit the with a valid JSON object.');
+    ok('…and the seam is a single space', !/ {2,}/.test(hole));
+    const fused = S.stripEchoTags('I\'ll fire off the proper<echo-do name="db_query">{}</echo-do>JSON now.');
+    ok('⭐ two words separated only by a tag do not fuse ("validJSON")', /proper JSON now\./.test(fused));
+    const punct = S.stripEchoTags('Let me look that up <echo-find>rainey 990</echo-find>.');
+    ok('the seam is not stranded before punctuation', /up\.$/.test(punct) && !/ \.$/.test(punct));
+    ok('a tag-only message still strips to empty', S.stripEchoTags('<echo-find>x</echo-find>') === '');
+  }
+
   console.log('\n' + (fail === 0 ? 'ALL PASS' : 'FAILURES') + ` - ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })();
