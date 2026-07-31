@@ -12795,13 +12795,21 @@ async function runDirectedResearchPass(focus) {
     _baseDocResolved = true;
     try {
       let id = parseInt(db.getMeta(`focus.${focus.id}.base_doc`) || '0', 10);
-      if (!id) {
-        const inh = require('./lib/user_work').inheritedBaseDocId(focus.id, { deps: { db } });
-        if (inh) {
-          id = inh.docId;
-          db.setMeta(`focus.${focus.id}.base_doc`, String(id));
-          console.log(`[user-work] #${focus.id} inherits its parent run's document — doc #${id} from #${inh.parentId} ("${String(inh.title).slice(0, 60)}")`);
-        }
+      // ⭐ LINEAGE OUTRANKS A TOPIC MATCH — and the first version of this had it backwards.
+      // base_doc is written by TWO paths: the user-work driver's fuzzy topic matcher (which runs at
+      // seed time) and this exact parent lookup. Resolving only `if (!id)` let the GUESS win purely
+      // by running first. Live 2026-07-31: #3645, spawned from #3639 (Arizona mapping, doc #11827,
+      // 33.6k chars incl. CoRAL), was handed doc #11756 instead — ref=directed-3643, the CHINA AISI
+      // budget deliverable — because its "how much total funding" task topic-matched a funding
+      // document from an unrelated thread. It then researched Arizona's CoRAL while building past
+      // China's AISI. A parent id is exact; a topic match is a guess, and the guess must never
+      // outrank it (the same lesson [[civic-body-store]] and the namesake fix both paid for).
+      const inh = require('./lib/user_work').inheritedBaseDocId(focus.id, { deps: { db } });
+      if (inh && inh.docId !== id) {
+        if (id) console.log(`[user-work] #${focus.id} base_doc CORRECTED — a topic match had assigned doc #${id}, but its parent is #${inh.parentId} (doc #${inh.docId}); lineage wins`);
+        else console.log(`[user-work] #${focus.id} inherits its parent run's document — doc #${inh.docId} from #${inh.parentId} ("${String(inh.title).slice(0, 60)}")`);
+        id = inh.docId;
+        db.setMeta(`focus.${focus.id}.base_doc`, String(id));
       }
       if (id) _baseDocRow = db.getDocumentById(id) || null;
     } catch { _baseDocRow = null; }
