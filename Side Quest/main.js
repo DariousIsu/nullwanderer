@@ -10665,6 +10665,22 @@ function startAutonomyDriver() {
 // yields to an already-active DIRECTED (user-assigned) focus so a beat never preempts Lucas's own work.
 async function seedBeatRun(beat, { background = false, targetsOverride = null } = {}) {
   try {
+    // ⭐ THE PAUSE CONTROL for the mapping sweep (Lucas, thread #3639: "finish mapping Arizona then
+    // pause the mapping project"). That clause was resolved as a thread and read by NOTHING, so the
+    // sweep simply kept going — measured 2026-07-31, it was still marching the states
+    // alphabetically (Alaska, Arizona, California, Colorado, Delaware, Georgia, Hawaii, Iowa in a
+    // single day). "The mapping project" is THIS: the autonomic elected-officials roster sweep.
+    //
+    // The gate lives here because seedBeatRun starts every BEAT run and nothing else — a directed
+    // ask of Lucas's goes through setFromDirective and is untouched. So this pauses the sweep
+    // without muting her.
+    //
+    // It stops NEW runs only; anything in flight finishes, which is what "finish X then pause" asks
+    // for. One meta key, so resuming is `mapping.paused=0` and nothing has been lost meanwhile.
+    if ((() => { try { return (db.getMeta('mapping.paused') || '') === '1'; } catch { return false; } })()) {
+      console.log(`[beat] ${beat && beat.id}: NOT seeded — the mapping sweep is PAUSED (meta mapping.paused=1). In-flight runs finish; set it to 0 to resume.`);
+      return { ok: false, reason: 'mapping-paused' };
+    }
     const focusLib = require('./lib/focus');
     if (!background) {
       const active = focusLib.getCurrent();
