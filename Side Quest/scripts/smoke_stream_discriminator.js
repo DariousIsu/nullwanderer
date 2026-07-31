@@ -56,8 +56,22 @@ ok(/unpromptedActive = false;\s*unpromptedBuffer = '';\s*\}/.test(chat) && /stal
   'the legacy latch + its self-heal survive for unstamped emitters only');
 
 // --- 5. the honest cut ---
-ok(/that reply was cut off mid-stream/.test(chat) && /info\.truncated/.test(chat),
-  'a truncated prompted reply is visibly stamped on the turn (a cut you can SEE)');
+ok(/that reply was cut off mid-stream/.test(chat),
+  'a genuinely cut reply is visibly stamped on the turn (a cut you can SEE)');
+// ⭐ …and ONLY a genuine one. The stamp keyed on the RAW `truncated` flag, which means only that the
+// stream ended without a closing </say> — main.js measured 3 of 18 cloud replies carrying it with
+// ZERO actually cut. So finished answers were announced to Lucas as broken, repeatedly. The stamp now
+// keys on `cutOff`, the backend's real verdict (ollama.sayLooksCutOff), which is the same test that
+// decides whether to regenerate — so the screen and the recovery path can no longer disagree.
+ok(/typeof info\.cutOff === 'boolean' \? info\.cutOff : !!info\.truncated/.test(chat),
+  '⭐ the stamp keys on cutOff, falling back to truncated only for an older payload');
+ok(!/if \(turnDiv && info && info\.truncated\)/.test(chat),
+  '…and never on the raw truncated flag again');
+{
+  const m = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
+  ok(/cutOff: _cutOff/.test(m) && /sayLooksCutOff\(finalSaid \|\| say, truncated\)/.test(m),
+    'the backend computes cutOff with the SAME predicate that gates regeneration');
+}
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

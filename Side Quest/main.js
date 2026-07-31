@@ -8217,7 +8217,19 @@ async function runChatTurn(userMessage, attachments = [], io = {}) {
   try {
     // Include the corrected say ONLY when we rewrote it, so the renderer replaces the
     // streamed text; normal replies keep rendering from the live stream untouched.
-    sendComplete(wasDisclaimer ? { saidId: saidRow.id, truncated, say: finalSaid } : { saidId: saidRow.id, truncated });
+    // ⭐ `truncated` and "CUT OFF" are not the same thing, and the renderer was treating them as one.
+    // truncated=1 means only that the stream ended without a closing </say> — this file already
+    // measured that 3 of 18 cloud replies carried the flag and ZERO were actually cut mid-sentence.
+    // The renderer stamped "— that reply was cut off mid-stream —" on the RAW flag, so complete
+    // answers that merely dropped a tag were announced to Lucas as broken. He reported seeing it
+    // constantly, which is exactly what a false-positive stamp looks like from the other side.
+    // sayLooksCutOff is the real test (truncated AND short-or-unterminated) and already gates the
+    // regeneration path a few hundred lines up; send its verdict so the screen says what the backend
+    // actually believes rather than re-deciding it from a weaker signal.
+    const _cutOff = (() => { try { return require('./lib/ollama').sayLooksCutOff(finalSaid || say, truncated); } catch { return !!truncated; } })();
+    sendComplete(wasDisclaimer
+      ? { saidId: saidRow.id, truncated, cutOff: _cutOff, say: finalSaid }
+      : { saidId: saidRow.id, truncated, cutOff: _cutOff });
   } catch {}
 
   db.setMeta('last_ai_utterance_at', String(Date.now()));

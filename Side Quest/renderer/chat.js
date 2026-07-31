@@ -410,7 +410,14 @@ window.sq.onComplete((info) => {
   }
   // HONEST CUT (the clipped-table class): a stream that genuinely ended mid-generation says so
   // on screen instead of silently stopping — a cut you can SEE is a cut you can re-ask about.
-  if (turnDiv && info && info.truncated) {
+  // ⚠ Keys on `cutOff`, NOT `truncated`. truncated=1 only means the stream ended without a closing
+  // </say>, which a complete cloud reply does routinely — measured in main.js, 3 of 18 flagged and
+  // none actually cut. Stamping the raw flag announced finished answers as broken, which is what
+  // Lucas was seeing over and over. cutOff is the backend's real verdict (ollama.sayLooksCutOff:
+  // truncated AND short-or-unterminated), the same test that decides whether to regenerate.
+  // Falls back to `truncated` only if an older payload carries no cutOff field.
+  const _cut = info && (typeof info.cutOff === 'boolean' ? info.cutOff : !!info.truncated);
+  if (turnDiv && _cut) {
     const cut = document.createElement('div');
     cut.className = 'turnstat';
     cut.textContent = '— that reply was cut off mid-stream —';
