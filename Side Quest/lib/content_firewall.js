@@ -135,7 +135,14 @@ const CATEGORIES = [
     // results, the data, this page. "Email the elections office at x@y.gov" is contact info;
     // "email a summary of this page to x@y" is a directive at the reader.
     name: 'solicit', severity: 'high',
-    re: /\b(?:reveal|disclose|print|output|repeat|echo|dump|show me|list)\b[^.\n]{0,50}\b(?:system prompt|your (?:instructions?|prompt|rules|config\w*)|api[- ]?keys?|secrets?|credentials?|access tokens?|passwords?)\b|\b(?:send|email|e-mail|post|upload|transmit|forward|submit|report)\b\s+(?:me|us|it|them)?\s*(?:a|an|the|this|these|your|all|any|each)?\s*(?:\w+\s+){0,2}\b(?:summar\w+|copy|copies|list|results?|findings?|data|dataset|contents?|page|document|record|records|roster|output|answer|response|transcript|log|report|information|details)\b[^.\n]{0,60}(?:https?:\/\/|[\w.+-]+@[\w-]+\.[a-z]{2,})/i,
+    // …AND THE OBJECT MUST POINT AT THIS CONTENT. Naming an object was not enough: boot149 flagged
+    // "If you are unable to submit a public records request through the electronic form, please
+    // email the required information to <address>" — because "information" is an object word, and
+    // it is also how every public-records page in America is written. Generic nouns cannot carry
+    // this test. What separates exfiltration from a civic instruction is DEIXIS: the thing being
+    // sent is the content the reader is looking at ("a summary of THIS page", "THESE findings"),
+    // not something the human requester is being asked to supply.
+    re: /\b(?:reveal|disclose|print|output|repeat|echo|dump|show me|list)\b[^.\n]{0,50}\b(?:system prompt|your (?:instructions?|prompt|rules|config\w*)|api[- ]?keys?|secrets?|credentials?|access tokens?|passwords?)\b|\b(?:send|email|e-mail|post|upload|transmit|forward|submit|report)\b[^.\n]{0,40}(?:\b(?:this|these|your|the above|the foregoing)\s+(?:\w+\s+){0,2}(?:summar\w+|results?|findings?|data|dataset|contents?|page|analysis|output|response|transcript|log|records?|roster|list|table|document)\b|\b(?:summar\w+|results?|findings?|data|dataset|contents?|page|analysis|output|response|transcript|log|records?|roster|list|table|document)s?\s+(?:of|from)\s+(?:this|these|the above)\b)[^.\n]{0,60}(?:https?:\/\/|[\w.+-]+@[\w-]+\.[a-z]{2,})/i,
     why: 'solicits an outbound action or asks the reader to disclose its instructions',
   },
   {
