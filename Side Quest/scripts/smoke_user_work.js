@@ -255,6 +255,20 @@ ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: N
       '⭐ a facet naming a PREVIOUSLY COVERED org is not pursued against the current one');
     ok(!uw.facetAppliesTo('What are the primary funding streams for AI2S?', tgt, covered), 'and again for its funding question');
     ok(uw.facetAppliesTo('What compute does ICDI operate?', tgt, covered), 'a facet naming THIS target still applies');
+
+    // ⚠ ACRONYMS ALONE WERE NOT ENOUGH — missed live within the hour of shipping the filter.
+    // "Eller Artificial Intelligence Laboratory" has no all-caps acronym and "AI" is below the
+    // length floor, so a facet asking what compute the ELLER lab has was pursued against the
+    // Arizona AI Alliance. A name does not need an acronym to be a name.
+    const az = 'Arizona Artificial Intelligence Alliance';
+    const azCov = ['Eller Artificial Intelligence Laboratory', 'Institute for Computation and Data-Enabled Insight (ICDI)'];
+    ok(!uw.facetAppliesTo('What high-performance computing resources does the Eller AI Lab operate?', az, azCov),
+      '⭐ a distinctive PROPER NOUN identifies an org even with no acronym');
+    ok(uw.facetAppliesTo('Geographic focus within Arizona', az, azCov),
+      'a place the CURRENT target also carries is not exclusionary');
+    ok(uw.facetAppliesTo('What role does the University of Arizona play?', az, azCov),
+      'generic org vocabulary (University, Institute, Laboratory…) identifies nobody');
+    ok(uw.facetAppliesTo('Leadership & key staff', az, azCov), 'and generic facets still apply');
     // Conservative direction: only EXCLUDE on strong evidence (the opposite of the namesake fix,
     // which refused to CLAIM identity on weak evidence). A wrongly-kept facet costs one pass; a
     // wrongly-dropped one loses a real question permanently.

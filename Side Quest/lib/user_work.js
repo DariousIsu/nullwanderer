@@ -143,11 +143,48 @@ const _norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').
  * question permanently.
  */
 const _DISTINCTIVE = /\b[A-Z][A-Za-z]*\d?[A-Z]{1,}\d?\b/g;   // AI2S, ICDI, MGI, SAIS, CNRI, AI-RSL
+// Words that org names are MADE of — they identify nobody. Without this list "Institute" or
+// "Arizona" would look like a name and start excluding facets wholesale.
+const _ORG_GENERIC = new Set([
+  'institute', 'institutes', 'laboratory', 'laboratories', 'lab', 'labs', 'center', 'centre',
+  'centers', 'university', 'college', 'school', 'department', 'division', 'office', 'academy',
+  'alliance', 'coalition', 'council', 'committee', 'commission', 'board', 'foundation', 'society',
+  'association', 'consortium', 'network', 'group', 'program', 'programme', 'project', 'initiative',
+  'artificial', 'intelligence', 'science', 'sciences', 'scientific', 'research', 'technology',
+  'technologies', 'computing', 'computation', 'computational', 'data', 'national', 'international',
+  'state', 'federal', 'american', 'united', 'states', 'the', 'and', 'for', 'of', 'at', 'in', 'on',
+  // ⚠ PLACES ARE NOT ORGANIZATIONS. Adding proper-noun extraction immediately over-excluded:
+  // "Arizona" is the leading word of "Arizona Institute for AI and Society", so the perfectly
+  // general facet "Geographic focus within Arizona" was dropped as belonging to another org. On a
+  // run whose whole job is mapping one state, the state name appears everywhere and identifies
+  // nobody. A closed, well-defined set — not a hack: these are the jurisdictions her work covers.
+  'alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado', 'connecticut', 'delaware',
+  'florida', 'georgia', 'hawaii', 'idaho', 'illinois', 'indiana', 'iowa', 'kansas', 'kentucky',
+  'louisiana', 'maine', 'maryland', 'massachusetts', 'michigan', 'minnesota', 'mississippi',
+  'missouri', 'montana', 'nebraska', 'nevada', 'hampshire', 'jersey', 'mexico', 'york', 'carolina',
+  'dakota', 'ohio', 'oklahoma', 'oregon', 'pennsylvania', 'rhode', 'island', 'tennessee', 'texas',
+  'utah', 'vermont', 'virginia', 'washington', 'wisconsin', 'wyoming', 'columbia', 'america',
+  'china', 'chinese', 'shanghai', 'beijing', 'county', 'parish', 'city', 'town', 'district',
+]);
+/**
+ * The tokens that actually IDENTIFY an organization: its acronym, and any distinctive proper noun.
+ *
+ * ⚠ Acronyms alone were not enough, and it missed live within the hour: the filter caught AI2S and
+ * ICDI but sailed past "Eller AI Lab", because "Eller Artificial Intelligence Laboratory" has no
+ * all-caps acronym and "AI" is below the length floor. So a facet asking what compute the ELLER lab
+ * has was pursued against the Arizona AI Alliance. A name does not need an acronym to be a name.
+ */
 function _marks(name) {
   const out = new Set();
-  for (const m of String(name || '').match(_DISTINCTIVE) || []) {
+  const s = String(name || '');
+  for (const m of s.match(_DISTINCTIVE) || []) {
     const t = m.replace(/[^A-Za-z0-9]/g, '');
     if (t.length >= 3 && t.length <= 8) out.add(t.toUpperCase());
+  }
+  // Distinctive proper nouns — "Eller", "Tsinghua", "Fulton". Capitalised, not org vocabulary,
+  // and not a place/word so common it identifies nothing.
+  for (const m of s.match(/\b[A-Z][a-z]{3,}\b/g) || []) {
+    if (!_ORG_GENERIC.has(m.toLowerCase())) out.add(m.toUpperCase());
   }
   return out;
 }
