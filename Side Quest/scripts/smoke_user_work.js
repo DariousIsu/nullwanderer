@@ -202,6 +202,29 @@ ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: N
   ok(uw.inheritedBaseDocId(3643, { deps: boom }) === null, 'a failing db yields null, never an exception into the run');
   const boom2 = { db: { getMeta: () => '3640', getDocumentByRef: () => { throw new Error('gone'); } } };
   ok(uw.inheritedBaseDocId(3643, { deps: boom2 }) === null, 'a failing doc lookup yields null too');
+
+  // …AND THE INHERITED DOCUMENT MUST REACH THE RESEARCH PASSES, not just the write-up. Inheriting
+  // it only fed synthesis at first, so a spawned thread still re-researched its target from
+  // scratch and merely avoided restating it at the end — the wrong half of the saving.
+  const deliverable = [
+    '# Research — China AI and materials research', '',
+    '## Shanghai Academy of AI for Science (SAIS)', 'SAIS runs the Materials Galaxy platform.', '',
+    '## AI for Science Institute (AISI)', 'AISI operates AI4S infrastructure across three campuses.', 'Founded 2021 under the Ministry of Science and Technology.', '',
+    '## China National Research Institute of Nonferrous Metals (CNRI)', 'CNRI focuses on alloy design.', '',
+  ].join('\n');
+
+  const sec = uw.priorSectionFor(deliverable, 'AI for Science Institute');
+  ok(sec && /AI4S infrastructure across three campuses/.test(sec), '⭐ the section ABOUT this target is sliced out of the inherited deliverable');
+  ok(sec && !/Materials Galaxy|alloy design/.test(sec), 'and ONLY that section — a neighbouring org never leaks in as established fact');
+  ok(/^## AI for Science Institute/.test(uw.priorSectionFor(deliverable, 'AI for Science Institute (AISI)') || ''), 'a heading with a trailing acronym still matches the bare target name');
+  ok(uw.priorSectionFor(deliverable, 'CNRI') === null || /alloy design/.test(uw.priorSectionFor(deliverable, 'CNRI')), 'an acronym-only target either matches its own section or honestly returns nothing');
+
+  ok(uw.priorSectionFor(deliverable, 'Tsinghua AI Chemistry Institute') === null, 'a target the document does NOT cover returns null — never a wrong section handed over as fact');
+  ok(uw.priorSectionFor(deliverable, 'Institute') === null, 'a single generic shared word is coincidence, not a topic match');
+  ok(uw.priorSectionFor('', 'AISI') === null && uw.priorSectionFor(deliverable, '') === null, 'empty inputs are null, never a throw');
+  const long = '## AISI\n' + 'x'.repeat(9000);
+  const cut = uw.priorSectionFor(long, 'AISI', { maxChars: 500 });
+  ok(cut.length <= 520 && /truncated/.test(cut), 'a huge section is capped and SAYS it was cut');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);

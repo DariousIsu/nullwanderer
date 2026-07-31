@@ -107,6 +107,49 @@ function pickUserThread(threads, { now = 0, newsAtOf = () => 0 } = {}) {
 }
 
 /**
+ * The slice of a prior deliverable that is ABOUT this target — so a run can be handed what is
+ * already established and build past it.
+ *
+ * Inheriting the parent document only got its conclusions into the WRITE-UP: `base_doc` was read
+ * at synthesis time and nowhere else, so a spawned thread still re-researched its target from
+ * scratch and only avoided restating it at the end. That is the wrong half of the saving. The
+ * research passes are where the tokens go.
+ *
+ * Deliverables are written as `## <Target>` sections, so this is a deterministic slice of markdown
+ * she already wrote — no model, nothing inferred. Matching is CONTAINMENT both ways plus a 2-token
+ * overlap rule (one shared word is coincidence, two is a topic — the same rule news vigilance and
+ * the doc matcher already use), because a heading reads "AI for Science Institute (AISI)" while the
+ * target reads "AI for Science Institute". Null when nothing matches: handing a run the WRONG
+ * section as established fact is far worse than handing it none.
+ */
+const _norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+function priorSectionFor(docBody, targetName, { maxChars = 2500 } = {}) {
+  const body = String(docBody || '');
+  const want = _norm(targetName);
+  if (!body.trim() || want.length < 3) return null;
+  const wantToks = new Set(want.split(' ').filter((w) => w.length >= 4));
+  let best = null, bestScore = 0;
+  for (const chunk of body.split(/^##\s+/m).slice(1)) {
+    const heading = _norm(chunk.split('\n')[0]);
+    if (!heading) continue;
+    // TWO SHARED SIGNIFICANT WORDS IN EVERY CASE BUT EXACT EQUALITY. Containment alone was not
+    // safe: a generically-named target ("Institute", "Board", "the governing body") is CONTAINED
+    // in half the headings in a deliverable, so it would hand a neighbouring organization's
+    // section over as established fact about this one — the precise failure this function's null
+    // return exists to avoid. Caught by the smoke before it ran anywhere.
+    let hits = 0;
+    for (const t of new Set(heading.split(' '))) if (wantToks.has(t)) hits++;
+    let score = 0;
+    if (heading === want) score = 100;
+    else if (hits >= 2) score = (heading.includes(want) || want.includes(heading)) ? 50 + hits : hits;
+    if (score > bestScore) { bestScore = score; best = chunk; }
+  }
+  if (!best) return null;
+  const text = ('## ' + best).trim();
+  return text.length > maxChars ? text.slice(0, maxChars) + '\n…(truncated)' : text;
+}
+
+/**
  * ⭐ A SPAWNED THREAD INHERITS ITS PARENT RUN'S DELIVERABLE — by LINEAGE, not by matching.
  *
  * Measured 2026-07-31, minutes after it happened: #3640 concluded, wrote a 43,324-character
@@ -305,4 +348,4 @@ When defer is false, item/when may be empty and days 0.`,
   };
 }
 
-module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, inheritedBaseDocId, parkDeliverable, scoreThread, pickUserThread, augmentGuidance, detectRedirect, matchThreadToTopic, REDIRECT_TRIGGER_RE, buildRedirectAsk, AGENDA_TRIGGER_RE, buildAgendaAsk };
+module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, inheritedBaseDocId, priorSectionFor, parkDeliverable, scoreThread, pickUserThread, augmentGuidance, detectRedirect, matchThreadToTopic, REDIRECT_TRIGGER_RE, buildRedirectAsk, AGENDA_TRIGGER_RE, buildAgendaAsk };

@@ -12780,6 +12780,41 @@ async function runDirectedResearchPass(focus) {
   let planFacets = [];
   try { const pl = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || 'null'); planFacets = (pl && Array.isArray(pl.facets) && pl.facets.length) ? pl.facets : (pl && Array.isArray(pl.targets) ? pl.targets : []); } catch {}
   const coveragePlan = (() => { try { return rs.buildCoveragePlan(planFacets); } catch { return ''; } })();
+  // THE LIVING DOCUMENT, resolved ONCE for the whole pass. Hoisted here because it was previously
+  // read only inside the synthesis block — so a spawned thread got its parent's conclusions at
+  // WRITE-UP time and still re-researched the target from scratch first. That is the wrong half of
+  // the saving; the research passes are where the tokens go. Memoized in meta by the inheritance
+  // step, so the lookup and its log line happen once per run.
+  let _baseDocRow = null, _baseDocResolved = false;
+  const _resolveBaseDoc = () => {
+    if (_baseDocResolved) return _baseDocRow;
+    _baseDocResolved = true;
+    try {
+      let id = parseInt(db.getMeta(`focus.${focus.id}.base_doc`) || '0', 10);
+      if (!id) {
+        const inh = require('./lib/user_work').inheritedBaseDocId(focus.id, { deps: { db } });
+        if (inh) {
+          id = inh.docId;
+          db.setMeta(`focus.${focus.id}.base_doc`, String(id));
+          console.log(`[user-work] #${focus.id} inherits its parent run's document — doc #${id} from #${inh.parentId} ("${String(inh.title).slice(0, 60)}")`);
+        }
+      }
+      if (id) _baseDocRow = db.getDocumentById(id) || null;
+    } catch { _baseDocRow = null; }
+    return _baseDocRow;
+  };
+  // What the inherited document ALREADY establishes about this target — handed to the deepen pass
+  // through the same `known` channel the graph dossier uses ("treat as GIVEN, do NOT re-derive").
+  const _priorOnTarget = (name) => {
+    try {
+      const row = _resolveBaseDoc();
+      if (!row || !name) return '';
+      const sec = require('./lib/user_work').priorSectionFor(row.body, name);
+      if (!sec) return '';
+      console.log(`[user-work] #${focus.id} builds PAST the inherited document on "${String(name).slice(0, 50)}" (${sec.length}ch already established)`);
+      return sec;
+    } catch { return ''; }
+  };
   const refreshContractTodo = async () => {
     if (!planFacets.length) return;
     try {
@@ -12897,7 +12932,11 @@ async function runDirectedResearchPass(focus) {
     // re-searching one it has (paired with the fuzzy repeat-detection in runPass).
     const _cov = (() => { try { return require('./studio/canvas_emit').coveredFacets(target.raw || '', planFacets); } catch { return []; } })();
     const uncovered = planFacets.filter(f => !_cov.includes(f));
-    const { ans, usedTool, repeats, heldRefs } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance, known: target.known || '', visited, coveragePlan, uncovered, covered, expected: _expectedCount(focus.id) }));
+    // The graph dossier AND whatever the inherited document already establishes about this target,
+    // both delivered as GIVEN. #3643 asked for AISI's budget while a 43k-char deliverable covering
+    // AISI — written by its own parent six minutes earlier — went unread by the research passes.
+    const _knownForPass = [target.known || '', _priorOnTarget(target.name)].filter(Boolean).join('\n\n');
+    const { ans, usedTool, repeats, heldRefs } = await runPass(rs.buildDeepenPrompt({ goal, target: target.name, facets: target.facets, guidance, known: _knownForPass, visited, coveragePlan, uncovered, covered, expected: _expectedCount(focus.id) }));
     const p = rs.parsePass(ans);
     const newChars = rs.newContentChars(target.raw, p.body);
     target.passes = (target.passes || 1) + 1;
@@ -12973,28 +13012,8 @@ async function runDirectedResearchPass(focus) {
       // (never restate), and the run's actually-visited pages so load-bearing facts bind to real
       // sources — "(source: <url>)" from the visited list only, never an invented one.
       const _baseDoc = (() => {
-        try {
-          let id = parseInt(db.getMeta(`focus.${focus.id}.base_doc`) || '0', 10);
-          // LINEAGE INHERITANCE. base_doc used to be set in exactly ONE place — the user-work
-          // driver, which only handles Lucas's own threads — so a thread the program spawned for
-          // itself could never have one. Measured live: #3640 concluded with a 43,324-char
-          // deliverable and spawned three follow-ups; #3643 went active and started researching
-          // AISI from scratch six minutes after the document covering AISI was written. 8 of 8
-          // spawned threads had none. Resolving it HERE (lazily, at the read) covers every seed
-          // path at once instead of patching each one. Memoized so the lookup and its log line
-          // happen once per run, not once per synthesis.
-          if (!id) {
-            const inh = require('./lib/user_work').inheritedBaseDocId(focus.id, { deps: { db } });
-            if (inh) {
-              id = inh.docId;
-              db.setMeta(`focus.${focus.id}.base_doc`, String(id));
-              console.log(`[user-work] #${focus.id} inherits its parent run's document — doc #${id} from #${inh.parentId} ("${String(inh.title).slice(0, 60)}")`);
-            }
-          }
-          if (!id) return null;
-          const d = db.getDocumentById(id);
-          return d ? { title: d.title, extract: String(d.body || '').slice(-3000) } : null;
-        } catch { return null; }
+        const d = _resolveBaseDoc();
+        return d ? { title: d.title, extract: String(d.body || '').slice(-3000) } : null;
       })();
       try {
         if (!_isBeatRun) {
