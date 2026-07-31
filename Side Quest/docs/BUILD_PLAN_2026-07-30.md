@@ -90,6 +90,27 @@ every defect worth fixing came from WATCHING HER RUN:
 **The rule that paid all night: measure the premise before building, and let the live stream pick
 the work.** A docket item with no instance is a hypothesis; a log line is a fact.
 
+## ⚠ OPEN QUESTIONS MUST NAME THEIR SUBJECT — anaphora defeats the facet filter (2026-07-31)
+
+The facet-scope filter (3a4c7d6/d1f01c0) stops a facet that NAMES another org. It cannot stop one
+that refers to its subject by pronoun. Live on #3639:
+
+    "What are the total dollar amounts and any matching funds associated with the
+     NSF CICI and SFS grants supporting THE LAB?"
+
+Written while researching the Eller AI Lab. It names no organization, so the filter correctly
+allows it — and "the lab" silently rebound first to the ASU Cloud Innovation Center, then to SAIL.
+The answer lands attributed to whichever target happened to be current.
+
+**No name-matching filter can fix this — the fix belongs in the question GENERATOR**
+(lib/research.js, the OPEN-question instruction): a question must name its subject explicitly and
+never say "the lab", "the institute", "it", or "this organization". The codebase already states
+exactly this rule for a different surface — lib/dig.js: *"the question, fully stated so it stands
+alone away from this chat"* — so the discipline exists and simply was not applied here.
+
+NOT changed: a generator-prompt edit at the end of a long session is how tonight's four
+self-inflicted regressions happened. Small, well-understood, and worth doing deliberately.
+
 ## ⚠ MIN_NEW_CHARS IS DEAD CODE — measured 2026-07-31, needs a number chosen
 
 `lib/research.js:18` `MIN_NEW_CHARS = 220` is the mechanical diminishing-returns door: a deepen
