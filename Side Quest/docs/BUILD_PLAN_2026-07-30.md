@@ -58,10 +58,10 @@ hooks for the visual-log lane (docs/OBS_INTERFACE_HOOKS.md — the parallel cont
 | # | Item | Size | Notes |
 |---|---|---|---|
 | 3.1 | **PARTLY BUILT 2026-07-31 — the gap was real, the APPROACH was wrong** | S | Topic-MATCHING was the stale half (fires ~1 thread in 18; guessing which of 92 deliverables covers a topic is hard). The live half is SPAWNED THREADS: #3640 concluded with a 43,324-char deliverable and spawned 3 follow-ups; #3643 went active and re-researched AISI from scratch 6 minutes later. **8 of 8 spawned threads had base_doc=NONE.** Fixed by LINEAGE (0a238e0): a spawned thread has its parent id, and the deliverable sits at ref `directed-<parentId>` — a lookup, not a heuristic. Resolved lazily at the read site so every seed path is covered. **STILL OPEN:** raising the match rate for threads with no parent (Lucas's own new threads), where topic matching is the only option. |
-| 3.2 | **O7** directive enforce (closed verb vocabulary compiled to dispatch) | M | rules that BIND — cannot be argued with or "outgrown" |
-| 3.3 | **O8** history handles (aged-out turns → gist + recall ref) | S | one wire; user-visible memory depth |
-| 3.4 | **O11** wake-half (arm a watcher, be WOKEN by it — inquiry next_steps "when X lands, do Y") | M | self_watch built the watching half tonight |
-| 3.5 | **§6 L3** named join (swarm release triggers one synthesis pass → named artifact) | S | a fan-out without a named join is a scatter |
+| 3.2 | ~~**O7** directive enforce~~ **NO LIVE INSTANCE — measured 2026-07-31** | — | Exactly **1** active directive, and it is a disposition ("Always be looking for those kinds of connections"), not a verb-object rule you could compile to dispatch. Compiling a closed verb vocabulary for one non-compilable rule is machinery for nothing. Revisit when the directive count is real. |
+| 3.3 | ✅ **O8** history handles — **BUILT 137855a** | S | Measured 95 live fit events, every one dropping 3-16 turns with no trace. Aged-out turns now leave a 700-char handle naming his asks + "recall it rather than asking him to repeat himself". Handle is paid for BEFORE dropping. Awaits a long conversation to fire. |
+| 3.4 | ~~**O11** wake-half~~ **NO LIVE INSTANCE — measured 2026-07-31** | — | **Zero** genuine wake triggers: 30 inquiries carry a `next_step`, 1 matched a conditional regex and on reading it is an imperative ("Open data.idaho.gov and search…"), not "when X lands, do Y". Nothing is waiting to be woken. |
+| 3.5 | ~~**§6 L3** named join~~ **NO LIVE INSTANCE — measured 2026-07-31** | — | The swarm has **never fired** in any boot log. It is operator-triggered ("swarm on \<X\>") and Lucas has never typed it. No fan-out exists to join. |
 | 3.6 | Org-research lane | L | genuinely new; own design sitting first |
 
 ## Landed after the plan was written (2026-07-30 late — chat-audit + research-quality arc)
@@ -73,6 +73,22 @@ how budget is allocated, how model accuracies compare, how strategy fits the nat
 vision focus is never a placeholder (21cdab9) · subc slice C, board+anticipation (31edec2) ·
 liveDigest so inventory can't crowd out live work (74d8e30) · restart ≠ defect (8eff2ef) ·
 **civic body store + roster capture + backfill** (4cef009/5c75a8d/65e4805 → [[civic-body-store]]).
+
+## Where the night's work actually came from (2026-07-31)
+
+**Four of six Phase 3 items had no live instance.** They were written from the catalog's design gaps,
+not from demand — and measuring each took minutes where building would have taken hours. Meanwhile
+every defect worth fixing came from WATCHING HER RUN:
+
+- the deepen ladder overriding her own researched questions (contact-first, forever)
+- the civic store invisible for a day — built, never wired to discovery
+- a spawned thread researching the wrong continent on an acronym collision
+- **seven** firewall false positives, not one of which any offline corpus showed
+- the rehearse door refusing an edit without saying how to fix it
+- 95 fit events silently dropping 3-16 turns each
+
+**The rule that paid all night: measure the premise before building, and let the live stream pick
+the work.** A docket item with no instance is a hypothesis; a log line is a fact.
 
 ## Awaiting Lucas — two structural findings, deliberately NOT acted on
 
@@ -87,8 +103,19 @@ and left alone: which machine his research runs on is his call, not mine.
    topical run that walked the entity machine institute-by-institute. That is DEFENSIBLE — walking
    the institutes is a fine way to learn a field, and it now asks the right questions of each — which
    is exactly why this is a judgement call and not a bug to quietly fix.
-2. **The living-document lane fires at ~5%** (see 3.1 above). "Runs are mortal, the document is
-   eternal" is the design; in practice each new run starts from scratch beside 92 prior deliverables.
+2. **The living-document lane fires at ~5%** for threads with NO PARENT (see 3.1 above). Spawned
+   threads are now covered by lineage (0a238e0); a brand-new thread of his still relies on topic
+   matching, which is the hard case.
+3. **ECHO LANE, NOT MINE — two `contact` tables** (see the `two-contact-tables` memory).
+   `foundations/civic_graph.db` holds a **41-row** `contact` stub that shadows
+   `foundations/electoral.db`'s real **149,040-row** CRM. `research_assistant.py` joins
+   `Contact × entities` on the graph connection, so all four of its sites (286, 304, 322, 524) hit
+   the stub. Two fail loudly (`FEC_Candidate_Id__c`, `Wikidata_Qid__c` — absent from the stub); the
+   third, **`Bioguide_Id__c`, IS in the stub and so fails SILENTLY** — every member-of-Congress
+   lookup returns a clean "no match" against 41 rows. Contained fix (qualify the table, or attach
+   electoral under an alias) but it needs someone holding Echo's ATTACH topology; another agent had
+   a worktree open there. Only `research_assistant.py` uses capital `Contact`; every CRM module uses
+   lowercase and is correctly on the electoral connection.
 
 ## Standing (no build)
 
