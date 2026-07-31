@@ -57,7 +57,7 @@ hooks for the visual-log lane (docs/OBS_INTERFACE_HOOKS.md — the parallel cont
 
 | # | Item | Size | Notes |
 |---|---|---|---|
-| 3.1 | Base-doc-aware discovery (2 live instances of re-walking base-doc ground) | M | token payback every run |
+| 3.1 | ~~Base-doc-aware discovery~~ **PREMISE STALE — measured 2026-07-30, do not build yet** | — | The "2 live instances" are gone: **exactly ONE thread has ever had a `base_doc`** (#3617, now resolved). 92 research deliverables sit as continuation candidates and 18 research threads have started since the living-doc feature landed — **1 got a base_doc (~5%)**. Making discovery base-doc-aware optimizes a path that fires once in eighteen. THE REAL GAP IS UPSTREAM: `base_doc` is set in exactly one place (main.js ~11136, inside the user-work driver's `if (cand)`), so a self-directed or redirect-born thread can never get one at all. Fix the match rate first, then this becomes worth building. |
 | 3.2 | **O7** directive enforce (closed verb vocabulary compiled to dispatch) | M | rules that BIND — cannot be argued with or "outgrown" |
 | 3.3 | **O8** history handles (aged-out turns → gist + recall ref) | S | one wire; user-visible memory depth |
 | 3.4 | **O11** wake-half (arm a watcher, be WOKEN by it — inquiry next_steps "when X lands, do Y") | M | self_watch built the watching half tonight |
@@ -73,6 +73,22 @@ how budget is allocated, how model accuracies compare, how strategy fits the nat
 vision focus is never a placeholder (21cdab9) · subc slice C, board+anticipation (31edec2) ·
 liveDigest so inventory can't crowd out live work (74d8e30) · restart ≠ defect (8eff2ef) ·
 **civic body store + roster capture + backfill** (4cef009/5c75a8d/65e4805 → [[civic-body-store]]).
+
+## Awaiting Lucas — two structural findings, deliberately NOT acted on
+
+Both are one-line changes that would re-route live behaviour across ~200 threads. Measured, named,
+and left alone: which machine his research runs on is his call, not mine.
+
+1. **`kind` is HARDCODED to `'entity'`** where the user-work driver generates a plan (main.js ~11144,
+   also ~6253). `lib/intake` classifies `entity | topical | forecast` and the classification is simply
+   never consulted here — so **195 of 201** focus threads are `entity`, `topical` has 5, and `kind` is
+   a single hard branch (main.js 12734: topical/forecast → `runTopicalResearchPass`). The topical
+   machine is therefore near-dead code. #3640 ("China AI and materials research") is a textbook
+   topical run that walked the entity machine institute-by-institute. That is DEFENSIBLE — walking
+   the institutes is a fine way to learn a field, and it now asks the right questions of each — which
+   is exactly why this is a judgement call and not a bug to quietly fix.
+2. **The living-document lane fires at ~5%** (see 3.1 above). "Runs are mortal, the document is
+   eternal" is the design; in practice each new run starts from scratch beside 92 prior deliverables.
 
 ## Standing (no build)
 
