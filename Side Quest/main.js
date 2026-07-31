@@ -12757,7 +12757,11 @@ async function runDirectedResearchPass(focus) {
   // SUBJECT across its aspects. (forecast rides this same subject-research path for now; Part B adds the
   // actual forecast engine.) entity kind falls through to the discovery/deepen org walk below, unchanged.
   const kind = (() => { try { return (db.getMeta(`focus.${focus.id}.kind`) || 'entity').trim(); } catch { return 'entity'; } })();
-  if (kind === 'topical' || kind === 'forecast') return runTopicalResearchPass(focus);
+  // 'argument' rides the facet-by-facet pass too, and that is not a compromise — for an argument run
+  // the plan's facets ARE the vulnerabilities, so covering them one at a time IS "one dossier per
+  // weak point in the case". Falling through to the org walk below would be the wrong shape entirely:
+  // it would go profile organizations for a question about whether a claim survives.
+  if (kind === 'topical' || kind === 'forecast' || kind === 'argument') return runTopicalResearchPass(focus);
 
   const focusLib = require('./lib/focus');
   const blackboard = require('./lib/blackboard');
@@ -13432,7 +13436,16 @@ async function runTopicalResearchPass(focus) {
   const guidance = rs.buildGuidanceBlock(clar);
   // The aspects to cover = the plan's facets (kind-shaped in A2 — subject aspects, not org/contact facets).
   let planFacets = [];
-  try { const pl = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || 'null'); planFacets = (pl && Array.isArray(pl.facets)) ? pl.facets : []; } catch {}
+  // THE ARGUMENT rides the pass (S0). Read from the same stored plan as the facets, so the thesis and
+  // the adversary are in front of the model while it researches — a vulnerability researched without
+  // knowing who is attacking it is just another topic, and the record would be page-1 decoration.
+  let _thesis = '', _hostile = '';
+  try {
+    const pl = JSON.parse(db.getMeta(`focus.${focus.id}.plan`) || 'null');
+    planFacets = (pl && Array.isArray(pl.facets)) ? pl.facets : [];
+    _thesis = (pl && pl.thesis) ? String(pl.thesis) : '';
+    _hostile = (pl && pl.hostile_reader) ? String(pl.hostile_reader) : '';
+  } catch {}
   if (!planFacets.length) planFacets = ['Current state & key developments', 'Drivers & causes', 'Implications & what to watch', 'Sources & evidence'];
   let covered = []; try { covered = JSON.parse(db.getMeta(`focus.${focus.id}.topical_covered`) || '[]'); } catch {}
 
@@ -13443,7 +13456,7 @@ async function runTopicalResearchPass(focus) {
   } else {
     let ans = '';
     try {
-      const r = await runCloudOperator({ userMessage: rs.buildTopicalPrompt({ goal, facet: nextFacet, covered, guidance }), context: '', task: true, autonomous: true });
+      const r = await runCloudOperator({ userMessage: rs.buildTopicalPrompt({ goal, facet: nextFacet, covered, guidance, thesis: _thesis, hostileReader: _hostile }), context: '', task: true, autonomous: true });
       ans = (r && r.answer) ? String(r.answer).trim() : '';
     } catch (e) { console.error('[topical] pass failed:', e.message); }
     const p = rs.parsePass(ans);
@@ -13462,7 +13475,7 @@ async function runTopicalResearchPass(focus) {
       section = `## ${nextFacet}\n${body.slice(0, 1200) || '_not found this pass_'}`;
     }
     section = section.trim();
-    const header = covered.length === 0 ? `# ${kind === 'forecast' ? 'Forecast' : 'Briefing'}: ${goal}\n\n---\n\n` : '';
+    const header = covered.length === 0 ? `# ${kind === 'forecast' ? 'Forecast' : kind === 'argument' ? 'The case' : 'Briefing'}: ${goal}\n\n---\n\n` : '';
     try { await filesLib.dispatch({ tag: 'file-append', attrs: { path: file }, body: `${header}${section}\n\n` }); }
     catch (e) { console.error('[topical] append failed:', e.message); }
     // Mirror the section onto the Canvas as a live-growing block, and check the aspect off the TODO.
@@ -13470,7 +13483,9 @@ async function runTopicalResearchPass(focus) {
     covered.push(nextFacet); try { db.setMeta(`focus.${focus.id}.topical_covered`, JSON.stringify(covered.slice(-40))); } catch {}
     try { const ce = require('./studio/canvas_emit'); await canvasUpsertBlock({ focusId: focus.id, blockId: ce.todoBlockId(focus.id), title: goal, tabMode: 'RESEARCH', blockType: 'paragraph', data: { markdown: ce.facetTodoMarkdown({ facets: planFacets }, covered) } }); } catch {}
     progressed = !!(section && section.length > 40);
-    note = `${kind === 'forecast' ? 'forecast' : 'brief'}: covered "${nextFacet}" (${covered.length}/${planFacets.length})`;
+    // An argument run is covering VULNERABILITIES, so say so — "brief: covered X" would hide that the
+    // run is working through where the case is weakest rather than through topic coverage.
+    note = `${kind === 'forecast' ? 'forecast' : kind === 'argument' ? 'case' : 'brief'}: covered "${nextFacet}" (${covered.length}/${planFacets.length})`;
     sig = `topical:${String(nextFacet).toLowerCase().slice(0, 40)}`;
   }
 

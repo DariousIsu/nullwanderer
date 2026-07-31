@@ -171,11 +171,19 @@ function buildGuidanceBlock(clarifications = []) {
 // TOPICAL pass (research kind='topical'/'forecast'): research ONE aspect of a SUBJECT for a briefing —
 // NOT an org roster, NOT contact hunting. `facet` is the aspect this pass covers; `covered` are the
 // aspects already done. The driver advances through the plan's aspects one pass at a time.
-function buildTopicalPrompt({ goal = '', facet = '', covered = [], guidance = '' } = {}) {
+function buildTopicalPrompt({ goal = '', facet = '', covered = [], guidance = '', thesis = '', hostileReader = '' } = {}) {
   const g = guidance ? `\n\n${guidance}` : '';
   const done = (covered && covered.length)
     ? `\n\nASPECTS ALREADY COVERED (do NOT repeat these): ${covered.map(c => String(c)).join('; ')}.`
     : '';
+  // ⭐ ARGUMENT MODE (S0). The thesis and the adversary must reach the PASS, not just page 1 — a
+  // vulnerability researched without knowing who is attacking it is just another topic. The posture
+  // inverts here: this pass is trying to find out whether the case SURVIVES, which means actively
+  // hunting the evidence that would sink it rather than the evidence that would decorate it.
+  if (String(thesis || '').trim()) {
+    const hr = String(hostileReader || '').trim();
+    return `You are researching ONE VULNERABILITY in a case Lucas is building, so that the case can survive a hostile reader.\n\nTHE THESIS BEING DEFENDED: ${thesis}\n${hr ? `THE HOSTILE READER: ${hr}\n` : ''}\nTASK CONTEXT: ${goal}${g}${done}\n\nTHIS PASS: research this ONE vulnerability and nothing else — "${facet}".\nYour posture is a CHECK, not a defence. Go looking for what would SINK this claim, not what would decorate it:\n- Find the strongest evidence AGAINST the thesis on this point and state it at full strength. Never soften it and never leave it out.\n- Find the best number or finding the opposition would cite here, and say so plainly — it is more useful conceded than hidden.\n- If a claim we might want to make does NOT survive scrutiny, say so explicitly and label it DOES NOT SURVIVE, even when it flatters the thesis. Especially then.\n- Separate what is CONFIRMED by an independent source from what is only reported by a party with an interest in it. Name which is which; a figure from an organisation about itself is not independent.\nUse web_search / browser_read / echo / recall. Ground EVERY claim in what the tools actually return, name the source inline, and never invent.\nWrite 1-3 tight paragraphs. If this vulnerability is already well covered by what we hold, reply with exactly COVERED.\nEnd with a final line: ASPECT: ${facet}`;
+  }
   return `You are researching a SUBJECT for Lucas to produce a BRIEFING. You are NOT profiling organizations and NOT gathering anyone's personal contact details (emails/phones) — this is a subject brief.\n\nSUBJECT / TASK: ${goal}${g}${done}\n\nTHIS PASS: research this ONE aspect of the subject and nothing else — "${facet}". Use web_search / browser_read / echo / recall. Ground EVERY claim in what the tools actually return, name the source inline, and never invent. Write 1-3 tight, substantive paragraphs on this aspect (do NOT compile a leadership roster or chase emails/phones unless the aspect itself is explicitly about contacts).\nIf this aspect is already well covered by what we hold, reply with exactly COVERED.\nEnd with a final line: ASPECT: ${facet}`;
 }
 

@@ -43,15 +43,22 @@ function _arr(v, max = 40) {
 // The compact, ID-light input handed to the cloud planner. Small payload = cheap call.
 // Default facets PER RESEARCH KIND. entity = the org/people profiling set (contacts included). topical =
 // aspects of a SUBJECT (no contact hunting). forecast = the components of an actual prediction.
+// ⭐ ARGUMENT (methodology parity, docs/METHODOLOGY_PARITY_SCOPE.md). The other three kinds organise a
+// run around a SUBJECT — targets and the aspects to gather. An argument run is organised around a CLAIM
+// TO BE DEFENDED and the READER WHO WILL ATTACK IT, which is the one primitive her research had no
+// representation for. Its facets are not topic coverage: each one is a dossier answering a specific
+// VULNERABILITY in the case, so the research is driven by where the argument is weakest rather than by
+// what is easy to gather. These defaults apply only when the planner names no vulnerabilities of its own.
 const KIND_FACETS = {
   entity: ['Leadership & key staff (full names + roles)', 'Direct contacts (work email, phone, LinkedIn)', 'Policy positions / notable work', 'Funding & affiliations'],
   topical: ['Current state & key developments', 'Drivers & causes', 'Timeline of key events', 'Positions of the main actors', 'Implications & what to watch', 'Sources & evidence'],
   forecast: ['The question & how it resolves (outcome + horizon)', 'Base rate / reference class', 'Key drivers & their current signals', 'Scenarios & their probabilities', 'The estimate — probability + range', 'What would change the forecast', 'Sources & evidence'],
+  argument: ['The thesis stated precisely, and what would falsify it', "The hostile reader's strongest objection, at full strength", 'Counter-evidence that cuts against the thesis', 'Claims that do NOT survive scrutiny (named so they stay out of every draft)', 'The load-bearing facts and where each one comes from', 'Sources & evidence'],
 };
-const normKind = (k) => (['entity', 'topical', 'forecast'].includes(k) ? k : 'entity');
+const normKind = (k) => (['entity', 'topical', 'forecast', 'argument'].includes(k) ? k : 'entity');
 
-function planInput({ goal = '', targets = [], facet = '', deep = false, estimate = '', kind = 'entity', databases = DEFAULT_DATABASES } = {}) {
-  return {
+function planInput({ goal = '', targets = [], facet = '', deep = false, estimate = '', kind = 'entity', databases = DEFAULT_DATABASES, thesis = '', hostileReader = '' } = {}) {
+  const o = {
     goal: oneLine(goal, 800),
     kind: normKind(kind),
     knownTargets: _arr(targets, 60),
@@ -60,6 +67,11 @@ function planInput({ goal = '', targets = [], facet = '', deep = false, estimate
     estimate: oneLine(estimate, 120),
     databasesAvailable: _arr(databases, 12),
   };
+  // Only sent when the operator already framed the case — a re-plan must not lose the thesis or the
+  // adversary it was built against. Omitted entirely otherwise, so the payload stays small.
+  if (oneLine(thesis, 400)) o.thesis = oneLine(thesis, 400);
+  if (oneLine(hostileReader, 300)) o.hostileReader = oneLine(hostileReader, 300);
+  return o;
 }
 
 // The response contract (the `want` for cloud_logic.ask). JSON only — keep it terse. KIND-SPECIFIC so a
@@ -83,6 +95,21 @@ function planWant(kind = 'entity') {
 - targets: the key DRIVERS / factors that determine the outcome (NOT organizations to profile).
 - facets: the components of the forecast — the question & resolution (outcome + horizon), base rate, drivers & signals, scenarios & their probabilities, the estimate (a PROBABILITY with a range), and what would change it. Produce an actual probability with honest uncertainty, never a bare guess and never a contact roster.`;
   }
+  if (k === 'argument') {
+    // The ONE contract that asks for more than the six common fields. The adversary is requested FIRST
+    // because everything downstream is derived from it: a vulnerability is a weak point in a case as a
+    // particular reader will attack it, and "counter-evidence" is undefined without a thesis to cut
+    // against. Facets are the vulnerabilities, so the run researches where it is weakest.
+    return `${common}
+- approach: 2-3 sentences on HOW you'll build the case — verify the facts FIRST and only then draft, grounding in what we already hold (known→unknown) before searching outward. Facts before prose, never a persuasive sentence hunting for support afterwards.
+- targets: the key CLAIMS the case rests on (NOT a roster of organizations to profile).
+- ALSO produce these three fields:
+  "thesis": the single claim this work will defend, stated in one sentence, precisely enough that it could be shown false.
+  "hostile_reader": WHO will attack this and what they already believe — a specific sceptic, not "a general audience". Name what would make THEM concede.
+  "vulnerabilities": [string] — the 3-6 places this case is weakest AGAINST THAT READER. Be honest and specific: the claim that will not survive scrutiny, the number the opposition will cite, the causal story that is actually reversed, the evidence we do not yet have.
+- facets: ONE PER VULNERABILITY — each facet is the dossier that answers it. Do not pad with generic coverage; a facet that defends nothing does not belong here.
+Discipline for the whole run: carry counter-evidence at FULL STRENGTH and never omit it, concede the opposition's best number out loud rather than hiding it, and name any claim that does not survive scrutiny so it stays out of every draft EVEN IF IT FLATTERS THE THESIS.`;
+  }
   return `${common}
 - approach: 2-3 sentences on HOW you'll proceed — depth-first per entity, grounding in what we already know first (known→unknown), and a two-lane web+structured pass when the task is deep.
 - targets: the named organizations/people to profile. Use knownTargets if given; if empty, ["To be identified during discovery"].
@@ -103,30 +130,51 @@ function planValidator(raw) {
 
 // Coerce ANY plan-ish object into the canonical shape, filling gaps from what we already know. Used on
 // both the cloud result and the fallback so page 1 is uniform regardless of source.
-function normalizePlan(obj = {}, { goal = '', targets = [], facet = '', deep = false, estimate = '', kind = 'entity', databases = DEFAULT_DATABASES } = {}) {
+// `kind` defaults to '' rather than 'entity' so an ABSENT context kind can fall through to the plan's
+// own — with 'entity' as the default, `kind || o.kind` never reached o.kind and the fix below was inert.
+// normKind('') is still 'entity', so a caller that passes nothing gets exactly the old behaviour.
+function normalizePlan(obj = {}, { goal = '', targets = [], facet = '', deep = false, estimate = '', kind = '', databases = DEFAULT_DATABASES, thesis = '', hostileReader = '' } = {}) {
   const o = obj && typeof obj === 'object' ? obj : {};
-  const k = normKind(kind);
+  // The context wins, but an ALREADY-NORMALIZED plan carries its own kind and must not lose it. This
+  // read was `normKind(kind)`, so renderPlanPage — which calls normalizePlan(plan, {}) to tolerate a
+  // partial plan — collapsed every plan back to 'entity'. A topical plan has been rendering under the
+  // heading "Gathered on each target" ever since kinds were added, and an argument plan would have
+  // dropped its thesis on the way to page 1.
+  const k = normKind(kind || o.kind);
   const knownTargets = _arr(targets, 60);
   let tgts = _arr(o.targets, 60);
   // default target phrasing depends on kind — topical/forecast are NOT "entities to discover"
   const defaultTarget = k === 'topical' ? 'To be scoped from the subject'
     : k === 'forecast' ? 'The key drivers of the outcome'
-      : 'To be identified during discovery';
+      : k === 'argument' ? 'The claims the case rests on'
+        : 'To be identified during discovery';
   if (!tgts.length) tgts = knownTargets.length ? knownTargets : [defaultTarget];
   let dbs = _arr(o.databases, 12);
   if (!dbs.length) dbs = _arr(databases, 12);
+  // THE ARGUMENT (S0). Accepted on every kind so a plan can never silently drop a thesis the operator
+  // set, but only ever REQUESTED for kind='argument' — the other three stay exactly as they were.
+  const _thesis = oneLine(o.thesis, 400) || oneLine(thesis, 400);
+  const _hostile = oneLine(o.hostile_reader || o.hostileReader, 300) || oneLine(hostileReader, 300);
+  const _vulns = _arr(o.vulnerabilities, 8);
   let facets = _arr(o.facets, 24);
   if (!facets.length) {
-    facets = facet ? [oneLine(facet, 160)] : KIND_FACETS[k].slice();
+    // ⭐ ONE DOSSIER PER VULNERABILITY. This is the whole point of the kind: research driven by where
+    // the case is weakest, not by what is easy to gather. A named vulnerability outranks both the
+    // single-facet shorthand and the generic defaults, because the generic list defends nothing.
+    if (k === 'argument' && _vulns.length) facets = _vulns.slice();
+    else facets = facet ? [oneLine(facet, 160)] : KIND_FACETS[k].slice();
   }
   const defObjective = k === 'topical' ? 'Produce a clear, sourced briefing on the requested subject.'
     : k === 'forecast' ? 'Produce a calibrated forecast — a probability with an honest range — for the requested question.'
-      : 'Produce a complete, sourced research dossier for the requested task.';
+      : k === 'argument' ? 'Build a case that survives a hostile reader — facts verified first, every claim carrying its provenance.'
+        : 'Produce a complete, sourced research dossier for the requested task.';
   const defApproach = k === 'topical'
     ? `Research the subject — ground first in what we already hold (known→unknown), then reputable web sources — and synthesize a briefing. Every claim is sourced.`
     : k === 'forecast'
       ? `Frame the question and how it resolves, establish a base rate, gather the key drivers and their current signals, then estimate a probability with an honest range. Every input is sourced.`
-      : `Work each target in depth, one at a time, grounding first in what we already hold (known→unknown) before searching outward${deep ? ', running a parallel web + structured-data pass on each' : ''}. Every claim is sourced.`;
+      : k === 'argument'
+        ? `Verify the facts BEFORE drafting anything, one dossier per vulnerability, grounding first in what we already hold (known→unknown). Carry counter-evidence at full strength, concede the opposition's best number rather than hiding it, and keep any claim that does not survive scrutiny out of every draft.`
+        : `Work each target in depth, one at a time, grounding first in what we already hold (known→unknown) before searching outward${deep ? ', running a parallel web + structured-data pass on each' : ''}. Every claim is sourced.`;
   return {
     objective: oneLine(o.objective, 1200) || oneLine(goal, 1200) || defObjective,
     approach: oneLine(o.approach, 1200) || defApproach,
@@ -134,6 +182,9 @@ function normalizePlan(obj = {}, { goal = '', targets = [], facet = '', deep = f
     targets: tgts,
     databases: dbs,
     facets,
+    thesis: _thesis,
+    hostile_reader: _hostile,
+    vulnerabilities: _vulns,
     estimate: oneLine(o.estimate, 160) || oneLine(estimate, 160) || 'to be determined as the run develops',
     deep: !!deep,
   };
@@ -146,6 +197,22 @@ function fallbackPlan(ctx = {}) { return normalizePlan({}, ctx); }
 function renderPlanPage(plan = {}) {
   const p = normalizePlan(plan, {});   // tolerate a raw/partial plan
   const list = (arr) => (arr.length ? arr.map(x => `- ${x}`).join('\n') : '- (none)');
+  // THE CASE, stated on page 1 before anything else. A reader (and a fact-checker) should be able to
+  // see what is being argued and who it is being defended against before they see a single finding —
+  // and a thesis printed up front is one that can be held to.
+  const argBlock = (p.thesis || p.hostile_reader || p.vulnerabilities.length) ? [
+    `**Thesis** — ${p.thesis || '(not yet stated)'}`,
+    ``,
+    `**Hostile reader** — ${p.hostile_reader || '(not yet named)'}`,
+    ``,
+    `**Vulnerabilities this research must answer** (${p.vulnerabilities.length})`,
+    list(p.vulnerabilities),
+    ``,
+  ] : [];
+  const facetHeading = p.kind === 'topical' ? 'Aspects covered'
+    : p.kind === 'forecast' ? 'Forecast components'
+      : p.kind === 'argument' ? 'Dossiers — one per vulnerability'
+        : 'Gathered on each target';
   return [
     `# Research plan`,
     ``,
@@ -153,13 +220,14 @@ function renderPlanPage(plan = {}) {
     ``,
     `**Approach** — ${p.approach}`,
     ``,
-    `**Targets** (${p.targets.length})`,
+    ...argBlock,
+    `**${p.kind === 'argument' ? 'Claims the case rests on' : 'Targets'}** (${p.targets.length})`,
     list(p.targets),
     ``,
     `**Databases & sources checked first** (known→unknown)`,
     list(p.databases),
     ``,
-    `**${p.kind === 'topical' ? 'Aspects covered' : p.kind === 'forecast' ? 'Forecast components' : 'Gathered on each target'}**`,
+    `**${facetHeading}**`,
     list(p.facets),
     ``,
     `**Estimated time to a complete deliverable** — ${p.estimate}`,

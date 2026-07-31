@@ -73,5 +73,58 @@ ok(/- Org A/.test(page) && /- Org B/.test(page), 'page 1 lists the targets');
 // renderPlanPage tolerates a raw/partial plan (no throw, still renders)
 ok(/# Research plan/.test(rp.renderPlanPage({ objective: 'just an objective' })), 'renderPlanPage tolerates a partial plan');
 
+// --- ⭐ ARGUMENT kind (S0, methodology parity) -------------------------------------------------
+// The other three kinds organise a run around a SUBJECT. This one organises it around a claim to be
+// defended and the reader who will attack it — the primitive that "counter-evidence", "vulnerability"
+// and the tier rule are all undefined without.
+{
+  const aw = rp.planWant('argument');
+  ok(/thesis/.test(aw) && /hostile_reader/.test(aw) && /vulnerabilities/.test(aw), 'planWant(argument) asks for thesis + hostile reader + vulnerabilities');
+  ok(/ONE PER VULNERABILITY/.test(aw), 'planWant(argument) makes each facet a dossier answering one vulnerability');
+  ok(/EVEN IF IT FLATTERS THE THESIS/.test(aw), 'planWant(argument) demands claims that fail scrutiny be named even when flattering');
+  ok(!/thesis/.test(rp.planWant('entity')) && !/thesis/.test(rp.planWant('topical')), 'the other kinds are untouched — no thesis requested');
+
+  // facets ARE the vulnerabilities: research driven by where the case is weakest
+  const ap = rp.normalizePlan({
+    objective: 'Defend the buildout claim.',
+    thesis: 'The grid was underbuilt for a decade before data centers arrived.',
+    hostile_reader: 'A utility regulator who believes data centers caused the price spike.',
+    vulnerabilities: ['The PJM capacity number the opposition will cite', 'The reverse-causation siting claim'],
+  }, { kind: 'argument', goal: 'g' });
+  ok(ap.kind === 'argument', 'normalize keeps the argument kind');
+  ok(ap.facets.length === 2 && /PJM capacity/.test(ap.facets[0]), '⭐ facets are DERIVED from the vulnerabilities, one dossier each');
+  ok(ap.thesis && ap.hostile_reader, 'the thesis and the hostile reader survive normalization');
+  ok(/verify the facts BEFORE drafting/i.test(ap.approach), 'the default approach is facts-before-prose');
+
+  // an argument plan with no vulnerabilities still gets defensible defaults
+  const bare = rp.normalizePlan({}, { kind: 'argument', goal: 'g' });
+  ok(bare.facets.length > 0 && /falsif/i.test(bare.facets[0]), 'a bare argument plan defaults to argument-shaped facets, not org profiling');
+  ok(!/Direct contacts/.test(bare.facets.join(' ')), 'an argument run never defaults to contact gathering');
+
+  // page 1 states the case before any finding
+  const apage = rp.renderPlanPage(ap);
+  ok(/\*\*Thesis\*\*/.test(apage) && /\*\*Hostile reader\*\*/.test(apage), 'page 1 states the thesis and names the adversary');
+  ok(/Vulnerabilities this research must answer\*\* \(2\)/.test(apage), 'page 1 lists the vulnerabilities with a count');
+  ok(/Dossiers — one per vulnerability/.test(apage), 'page 1 labels the facets as dossiers, not "gathered on each target"');
+
+  // ⚠ REGRESSION (2026-07-31): normalizePlan read `kind` from the CONTEXT only, and renderPlanPage
+  // calls normalizePlan(plan, {}) to tolerate a partial plan — so every rendered plan collapsed back
+  // to 'entity'. A topical plan had been rendering under "Gathered on each target" since kinds were
+  // added, and an argument plan would have dropped its thesis on the way to page 1.
+  ok(/Aspects covered/.test(rp.renderPlanPage(rp.normalizePlan({}, { kind: 'topical', goal: 'g' }))),
+    '⭐ renderPlanPage honours the plan\'s OWN kind (topical renders as "Aspects covered")');
+  ok(/Forecast components/.test(rp.renderPlanPage(rp.normalizePlan({}, { kind: 'forecast', goal: 'g' }))),
+    '…and a forecast plan renders as "Forecast components"');
+  ok(/Gathered on each target/.test(rp.renderPlanPage(rp.normalizePlan({}, { kind: 'entity', goal: 'g' }))),
+    '…and entity still renders as before');
+
+  // an entity/topical plan carries no argument block (the section is argument-only)
+  ok(!/\*\*Thesis\*\*/.test(rp.renderPlanPage(fb)), 'a non-argument plan shows no thesis block');
+
+  // planInput only ships the argument fields when they exist (small payload otherwise)
+  ok(rp.planInput({ goal: 'g' }).thesis === undefined, 'planInput omits thesis when there is none');
+  ok(rp.planInput({ goal: 'g', thesis: 'T', hostileReader: 'H' }).hostileReader === 'H', 'planInput carries a thesis + hostile reader when set');
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
