@@ -11145,23 +11145,7 @@ async function _autonomicSchedulerTick() {
             }
           } catch (e) { console.error('[user-work] living-doc match failed:', e.message); }
           if (!db.getMeta(`focus.${cand.id}.plan`)) {
-            // CLASSIFY THE KIND — do not assume it. This path seeds HIS research threads, which are
-            // arbitrary questions, yet it hardcoded 'entity' and never wrote focus.<id>.kind at all,
-            // so the routing read at runDirectedResearchPass fell through to its 'entity' default
-            // too. Result on disk: 195 entity / 5 topical / 1 forecast, and the topical machine was
-            // effectively dead code. intake.classify already decides this well — its prompt even
-            // says "do NOT default to entity" — it simply was never consulted here.
-            // This is also the mechanism behind the one-gear behaviour: kind='entity' asks the
-            // planner for "the named organizations/people to profile", so a question whose answer
-            // is an explanation or a relationship became a roster walk.
-            let _kind = 'entity';   // cloud-down fallback = prior behaviour, no surprise
-            try {
-              const _d = await require('./lib/intake').classify(cand.content);
-              if (_d && ['entity', 'topical', 'forecast'].includes(_d.kind)) _kind = _d.kind;
-            } catch (e) { console.error('[user-work] kind classify failed:', e.message); }
-            try { db.setMeta(`focus.${cand.id}.kind`, _kind); } catch {}
-            console.log(`[user-work] #${cand.id} kind=${_kind}${_kind === 'entity' ? '' : ' (was hardcoded entity)'}`);
-            try { await generateResearchPlan(f || cand, { goal: cand.content, targets: [], facet: '', deep: true, kind: _kind }); }
+            try { await generateResearchPlan(f || cand, { goal: cand.content, targets: [], facet: '', deep: true, kind: 'entity' }); }
             catch (e) { console.error('[user-work] plan gen failed:', e.message); }
           }
           kickDirectedFocusDriver();
@@ -12297,12 +12281,6 @@ function retentionPass({ limit = 200, windowMs = null } = {}) {
 // Reasoner cloud call for the condense pass — uses the deeper subconscious model (gpt-oss:120b), not
 // the fast operator, because consolidation is a quality/judgment job. Returns text or '' (fail-safe).
 async function condenseComplete(messages, { numPredict = 2500 } = {}) {
-  // A bare string is a valid ask — wrap it. Every other caller hands in a built message ARRAY, and
-  // the one that didn't (the topical pass's "rewrite these notes into clean sourced paragraphs")
-  // sent a string straight to /api/chat, which rejects it. Its result was discarded by a silent
-  // catch, so every topical section fell back to raw notes truncated at 1200 chars and nothing
-  // ever said so. Dormant rather than harmless: the topical path had not run in recent boots.
-  if (typeof messages === 'string') messages = [{ role: 'user', content: messages }];
   try {
     const models = require('./lib/models');
     const src = (models.sources() || []).find(s => s.tier === 'cloud' && s.token);
@@ -13454,13 +13432,8 @@ async function runTopicalResearchPass(focus) {
       if (body && !/^COVERED$/i.test(body)) {
         section = await condenseComplete(`Rewrite the following research notes into 1-3 clean, sourced paragraphs under a bold heading "${nextFacet}". Keep every fact and its source; drop any tool/JSON/control noise; never add anything not present in the notes.\n\n${body.slice(0, 6000)}`, { numPredict: config.sectionNumPredict() });
       }
-    } catch (e) { console.error('[topical] section organize failed:', e.message); }
-    // Falling back to raw notes is fine; falling back SILENTLY is how the string-vs-array bug above
-    // survived. Say when the clean section was not produced.
-    if (!section || !section.trim()) {
-      console.log(`[topical] "${nextFacet}" → organize produced nothing, landing raw notes (${body.length}ch)`);
-      section = `## ${nextFacet}\n${body.slice(0, 1200) || '_not found this pass_'}`;
-    }
+    } catch {}
+    if (!section || !section.trim()) section = `## ${nextFacet}\n${body.slice(0, 1200) || '_not found this pass_'}`;
     section = section.trim();
     const header = covered.length === 0 ? `# ${kind === 'forecast' ? 'Forecast' : 'Briefing'}: ${goal}\n\n---\n\n` : '';
     try { await filesLib.dispatch({ tag: 'file-append', attrs: { path: file }, body: `${header}${section}\n\n` }); }
