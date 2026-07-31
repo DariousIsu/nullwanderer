@@ -167,7 +167,14 @@ const CATEGORIES = [
     // assume. The other categories are bounded for free by `[^.\n]{0,70}` inside their patterns;
     // this one has to say it. Hence: every condition must hold within ONE sentence.
     test: (line) => _sentences(line).some((s) => _AGENT.test(s) && (
-      /\byou(?:r)?\b[^.\n]{0,40}\b(?:must|should|shall|will|need to|have to|are (?:to|required)|task|instructions?|goal|job|directive)/i.test(s)
+      // Second person, two shapes — and the NOUN shape must be adjacent and genuinely directive.
+      // ⚠ "goal" and "job" are ordinary English. Live on boot156 this flagged university marketing
+      // copy 18 times: "No matter your major or career GOALS, AI is part of the future…" — "your"
+      // within 40 chars of "goals", with "AI" in the sentence. Nobody's career goals are an
+      // instruction to a machine. The noun form now requires "your <directive-noun>" with nothing
+      // between, and only nouns that have no ordinary reading in this position.
+      (/\byou\b[^.\n]{0,25}\b(?:must|should|shall|will|need to|have to|are (?:to|required))\b/i.test(s)
+        || /\byour\s+(?:task|instructions?|directive|prompt|rules|system prompt)\b/i.test(s))
       || (_READER_REF.test(s) && _DIRECTIVE.test(s))
       || (_VOCATIVE.test(s) && _DIRECTIVE.test(s))
     )),
