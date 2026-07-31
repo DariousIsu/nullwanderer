@@ -261,5 +261,43 @@ ok(r.coverageLine(9, 64).includes('9 of 64'), 'coverageLine: accepts a raw count
   ok(!/COVERAGE/.test(n0), 'buildNewTargetPrompt: no expected → omitted');
 }
 
+// ── THE RUN'S OWN QUESTIONS OUTRANK THE GENERIC LADDER (2026-07-30) ─────────────────────────────
+// Lucas: "this topic is about LEARNING about the topics… more than scrape contact information."
+// The deepen pass used to close with a fixed (1) leadership (2) contacts (3) positions … order,
+// stated as THE instruction for the pass — so it beat the run's own researched facets, which sat
+// above it as a mere bulleted list. Live proof on the China run: pass after pass logged "+named
+// leadership & key staff with their roles, and direct contact details" while its plan held
+// "Which specific AI/ML algorithms and model architectures does MGI employ…".
+{
+  const askedQs = [
+    'Which specific AI/ML algorithms and model architectures does MGI employ in its high-throughput materials discovery workflow?',
+    'How is MGI formally linked to China\'s national AI-for-Science roadmap?',
+  ];
+  const withPlan = r.buildDeepenPrompt({ goal: 'learn China AI materials research', target: 'MGI', uncovered: askedQs });
+  ok(/take the single highest-value question from FACETS STILL MISSING/.test(withPlan),
+    'a run WITH its own questions is told to answer THOSE this pass');
+  ok(/outrank any generic checklist/.test(withPlan),
+    'and told explicitly that they outrank a checklist');
+  ok(!/in priority order: \(1\) named leadership/.test(withPlan),
+    '⭐ the generic contact-first ladder is GONE when the run has its own plan (the defect)');
+  ok(/do not substitute a leadership roster or a contact hunt/.test(withPlan),
+    'the specific substitution that was happening is named and refused');
+  ok(/a roster and a contact page do NOT make a run saturated/.test(withPlan),
+    'SATURATION is judged against the run\'s own questions, not against having found people');
+
+  // The ladder is still RIGHT for a cold prospecting target — it was only ever wrong as an override.
+  const noPlan = r.buildDeepenPrompt({ goal: 'profile this firm', target: 'Acme Corp' });
+  ok(/in priority order: \(1\) named leadership/.test(noPlan),
+    'with NO plan the contact-first ladder remains (unchanged for cold prospecting)');
+  ok(/what it is, its people, how to reach it/.test(noPlan),
+    'and so does its saturation test');
+
+  // Orthogonal discipline must survive BOTH paths — these are what keep the pass grounded.
+  for (const [p, label] of [[withPlan, 'plan'], [noPlan, 'no-plan']]) {
+    ok(/EXHAUST a good source/.test(p) && /NEVER use initials/.test(p) && /FACET: <the facet you added this pass>/.test(p),
+      `source-exhaustion, the no-initials rule and the FACET line all survive (${label} path)`);
+  }
+}
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

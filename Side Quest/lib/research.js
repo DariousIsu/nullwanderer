@@ -285,7 +285,29 @@ function buildDeepenPrompt({ goal = '', target = '', facets = [], guidance = '',
   // used this run and push toward DEPTH (a new page on a site, a followed link) or a NEW source.
   const v = (Array.isArray(visited) && visited.length)
     ? `\nALREADY VISITED THIS RUN — do NOT open these again or re-run these searches; a RE-WORDED version of a listed search counts as the SAME search — do not run it again in any phrasing. Instead go DEEPER (open a NEW page/section on a site you've seen, or follow a link from it), OPEN the org's own /contact or /team page directly, or switch to a facet you have NOT covered:\n${visited.slice(-18).map(u => `- ${u}`).join('\n')}\n` : '';
-  return `You are DEEP-researching ONE organization for Lucas's task, staying on it until it is well covered.\n\nTASK: ${goal}${runCov}\nCURRENT ORGANIZATION: ${target}\nFacets already gathered on it: ${facetsSummary(facets)}\n${k}${v}${uc}${cp}${g}\nTHIS PASS: pursue the NEXT most valuable facet you do NOT yet have on ${target}, in priority order: (1) named leadership & key staff with their roles, (2) direct contact details (work emails, phone numbers, mailing address, key social/LinkedIn) — check the org's own /contact or /about page, (3) detailed policy positions / notable work, (4) funding & affiliations, (5) recent activity / publications. EXHAUST a good source before moving on: when you land on the organization's OWN site, use open_page to go straight into its /team, /leadership, /about and /contact pages (and follow promising links) — do NOT bounce to a fresh web_search until you've actually used the site you're on. Ground EVERY detail in what the tools return — never invent a name, email, or number. If you cannot verify a real, FULL name, write "not found" — NEVER use initials, abbreviations, or any placeholder (e.g. "R. Z." or "VP") in place of a real name.\nIf you have already gathered a solid, well-rounded picture of ${target} (what it is, its people, how to reach it, its positions), reply with exactly SATURATED and nothing else.\nEnd with a final line: FACET: <the facet you added this pass>`;
+  // ⭐ THE RUN'S OWN QUESTIONS OUTRANK THE GENERIC LADDER (2026-07-30, Lucas: "this topic is about
+  // LEARNING about the topics… more than scrape contact information").
+  //
+  // This pass used to end with a fixed order — (1) leadership (2) contact details (3) positions
+  // (4) funding (5) recent activity — stated as THE instruction for the pass, immediately after the
+  // FACETS STILL MISSING list. A numbered, concrete ladder beats a bulleted list every time, so the
+  // ladder won, and the monitor showed exactly that on the China run: pass after pass logging
+  // "+named leadership & key staff with their roles, and direct contact details".
+  //
+  // What made it costly is that the run's OWN plan was already excellent. #3640 had accumulated
+  // "Which specific AI/ML algorithms and model architectures does MGI employ in its high-throughput
+  // materials discovery workflow?" and "How is MGI formally linked to China's national AI-for-Science
+  // roadmap?" — and those were being outranked by a generic contact hunt. Targets saturate in 3-4
+  // passes, so facets (3)(4)(5) were frequently never reached at all: the ladder's ORDER was the
+  // outcome.
+  //
+  // So the ladder is now the FALLBACK, used only when the run has no plan of its own. It is still
+  // right for a cold prospecting target (who they are, how to reach them) — it was only ever wrong
+  // as an override of researched questions.
+  const thisPass = uc
+    ? `THIS PASS: take the single highest-value question from FACETS STILL MISSING above and actually ANSWER it. Those are this run's OWN researched questions and they outrank any generic checklist — do not substitute a leadership roster or a contact hunt for a question about how something works, what it costs, or how it connects. If a listed question turns out to be unanswerable from available sources, say so plainly and take the next one.`
+    : `THIS PASS: pursue the NEXT most valuable facet you do NOT yet have on ${target}, in priority order: (1) named leadership & key staff with their roles, (2) direct contact details (work emails, phone numbers, mailing address, key social/LinkedIn) — check the org's own /contact or /about page, (3) detailed policy positions / notable work, (4) funding & affiliations, (5) recent activity / publications.`;
+  return `You are DEEP-researching ONE organization for Lucas's task, staying on it until it is well covered.\n\nTASK: ${goal}${runCov}\nCURRENT ORGANIZATION: ${target}\nFacets already gathered on it: ${facetsSummary(facets)}\n${k}${v}${uc}${cp}${g}\n${thisPass} EXHAUST a good source before moving on: when you land on the organization's OWN site, use open_page to go straight into its /team, /leadership, /about and /contact pages (and follow promising links) — do NOT bounce to a fresh web_search until you've actually used the site you're on. Ground EVERY detail in what the tools return — never invent a name, email, or number. If you cannot verify a real, FULL name, write "not found" — NEVER use initials, abbreviations, or any placeholder (e.g. "R. Z." or "VP") in place of a real name.\n${uc ? `If every question in FACETS STILL MISSING has been answered or honestly ruled unanswerable, reply with exactly SATURATED and nothing else — a roster and a contact page do NOT make a run saturated while its own questions are still open.` : `If you have already gathered a solid, well-rounded picture of ${target} (what it is, its people, how to reach it, its positions), reply with exactly SATURATED and nothing else.`}\nEnd with a final line: FACET: <the facet you added this pass>`;
 }
 
 // --- ENRICH / FACET-FILL mode -----------------------------------------------
