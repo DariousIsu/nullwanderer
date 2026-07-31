@@ -65,6 +65,7 @@ const smokes = [
   'smoke_content_firewall.js',
   'smoke_stake.js',
   'smoke_tier_gate.js',
+  'smoke_quota.js',
   'smoke_double_reply.js',
   'smoke_self_question.js',
   'smoke_stage_direction.js',
