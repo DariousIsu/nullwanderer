@@ -12944,7 +12944,12 @@ async function runDirectedResearchPass(focus) {
     // Anti-loop steer: tell the pass which facets are STILL missing so it pursues a new one instead of
     // re-searching one it has (paired with the fuzzy repeat-detection in runPass).
     const _cov = (() => { try { return require('./studio/canvas_emit').coveredFacets(target.raw || '', planFacets); } catch { return []; } })();
-    const uncovered = planFacets.filter(f => !_cov.includes(f));
+    const uncovered = planFacets.filter(f => !_cov.includes(f))
+      // …and only those that belong to THIS target. Entity-specific facets accumulate in the
+      // run-level plan, so on a multi-target run the pass was answering a question about the
+      // PREVIOUS org while researching the current one (live: #3639 researched ICDI to answer
+      // "does AI2S have a formal governance structure").
+      .filter((f) => { try { return require('./lib/user_work').facetAppliesTo(f, target.name, covered); } catch { return true; } });
     // The graph dossier AND whatever the inherited document already establishes about this target,
     // both delivered as GIVEN. #3643 asked for AISI's budget while a 43k-char deliverable covering
     // AISI — written by its own parent six minutes earlier — went unread by the research passes.

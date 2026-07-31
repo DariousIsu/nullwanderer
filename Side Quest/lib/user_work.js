@@ -125,6 +125,49 @@ function pickUserThread(threads, { now = 0, newsAtOf = () => 0 } = {}) {
 const _norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
 
 /**
+ * Does this plan facet belong to the target currently being researched?
+ *
+ * ⚠ A REGRESSION I CAUSED, caught live 2026-07-31. Making the run's own questions outrank the
+ * generic ladder (a44be2f) is right when the questions are ABOUT the current target — which holds
+ * for a spawned single-target thread. On a MULTI-TARGET discovery run it is wrong: the open-question
+ * generator writes entity-specific facets ("What are the primary funding streams for AI2S…") while
+ * researching AI2S, they stay in the run-level plan after the run moves on, and the deepen pass then
+ * dutifully researched ICDI in order to answer a question about AI2S. Measured on #3639: 3 of its 9
+ * plan facets named a specific org.
+ *
+ * Conservative by construction, and deliberately the opposite direction from the namesake fix: that
+ * one refused to CLAIM identity on weak evidence; this one only EXCLUDES on strong evidence. A facet
+ * is dropped only when it names a distinctive token belonging to another org this run has covered
+ * AND does not name the current target. Generic facets ("Leadership & key staff") always apply, and
+ * anything ambiguous stays — a wrongly-kept facet costs one pass, a wrongly-dropped one loses a real
+ * question permanently.
+ */
+const _DISTINCTIVE = /\b[A-Z][A-Za-z]*\d?[A-Z]{1,}\d?\b/g;   // AI2S, ICDI, MGI, SAIS, CNRI, AI-RSL
+function _marks(name) {
+  const out = new Set();
+  for (const m of String(name || '').match(_DISTINCTIVE) || []) {
+    const t = m.replace(/[^A-Za-z0-9]/g, '');
+    if (t.length >= 3 && t.length <= 8) out.add(t.toUpperCase());
+  }
+  return out;
+}
+function facetAppliesTo(facet, targetName, otherNames = []) {
+  const f = String(facet || '');
+  if (!f.trim()) return false;
+  const mine = _marks(targetName);
+  const inFacet = _marks(f);
+  if (!inFacet.size) return true;                       // no org marker at all → generic, applies
+  for (const t of inFacet) if (mine.has(t)) return true; // names THIS target → applies
+  const theirs = new Set();
+  for (const n of (Array.isArray(otherNames) ? otherNames : [])) {
+    if (String(n) === String(targetName)) continue;
+    for (const t of _marks(n)) if (!mine.has(t)) theirs.add(t);
+  }
+  for (const t of inFacet) if (theirs.has(t)) return false;   // names ANOTHER covered org → not ours
+  return true;                                          // an unrecognised marker is not evidence
+}
+
+/**
  * The organizations an inherited deliverable is ABOUT — its `## ` section headings.
  *
  * Handed to the discovery pass as the disambiguator for a namesake. A spawned thread inherits its
@@ -376,4 +419,4 @@ When defer is false, item/when may be empty and days 0.`,
   };
 }
 
-module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, inheritedBaseDocId, priorSectionFor, priorOrgsIn, parkDeliverable, scoreThread, pickUserThread, augmentGuidance, detectRedirect, matchThreadToTopic, REDIRECT_TRIGGER_RE, buildRedirectAsk, AGENDA_TRIGGER_RE, buildAgendaAsk };
+module.exports = { RESEARCH_RE, isResearchShaped, parseDeadline, threadTokens, matchNewsToThread, matchDocToTopic, docPoolForTopic, inheritedBaseDocId, priorSectionFor, priorOrgsIn, facetAppliesTo, parkDeliverable, scoreThread, pickUserThread, augmentGuidance, detectRedirect, matchThreadToTopic, REDIRECT_TRIGGER_RE, buildRedirectAsk, AGENDA_TRIGGER_RE, buildAgendaAsk };

@@ -240,6 +240,28 @@ ok(uw.augmentGuidance('G', { focusId: 1, content: 'plain research', createdTs: N
   ok(uw.priorOrgsIn('').length === 0 && uw.priorOrgsIn(null).length === 0, 'priorOrgsIn is null-safe');
   ok(uw.priorOrgsIn(Array.from({ length: 50 }, (_, i) => `## Institute Number ${i}\ntext\n`).join(''), { max: 5 }).length === 5, 'and bounded');
   ok(uw.priorOrgsIn('## AB\n## Real Institute Name\n').length === 1, 'a too-short heading is not an organization name');
+
+  // ⭐ A REGRESSION I CAUSED, caught live on #3639. Making the run's own questions outrank the
+  // generic ladder is right for a single-target spawned thread and WRONG on a multi-target
+  // discovery run: entity-specific facets accumulate in the run-level plan, so after the run moved
+  // from AI2S to ICDI the deepen pass researched ICDI in order to answer "does AI2S have a formal
+  // governance structure". 3 of #3639's 9 plan facets named a specific org.
+  {
+    const covered = ['Arizona Institute for AI and Society (AI2S)'];
+    const tgt = 'Institute for Computation and Data-Enabled Insight (ICDI)';
+    ok(uw.facetAppliesTo('Leadership & key staff', tgt, covered), 'a generic facet applies to any target');
+    ok(uw.facetAppliesTo('Geographic focus within Arizona', tgt, covered), 'a place name is not an org marker');
+    ok(!uw.facetAppliesTo('Does AI2S have a formal governance structure?', tgt, covered),
+      '⭐ a facet naming a PREVIOUSLY COVERED org is not pursued against the current one');
+    ok(!uw.facetAppliesTo('What are the primary funding streams for AI2S?', tgt, covered), 'and again for its funding question');
+    ok(uw.facetAppliesTo('What compute does ICDI operate?', tgt, covered), 'a facet naming THIS target still applies');
+    // Conservative direction: only EXCLUDE on strong evidence (the opposite of the namesake fix,
+    // which refused to CLAIM identity on weak evidence). A wrongly-kept facet costs one pass; a
+    // wrongly-dropped one loses a real question permanently.
+    ok(uw.facetAppliesTo('What does NASA fund here?', tgt, covered), 'an UNRECOGNISED marker is not evidence — the facet stays');
+    ok(uw.facetAppliesTo('anything', tgt, []), 'with nothing covered yet, every facet applies');
+    ok(!uw.facetAppliesTo('', tgt, covered), 'an empty facet is not a facet');
+  }
   ok(uw.priorSectionFor(deliverable, 'Institute') === null, 'a single generic shared word is coincidence, not a topic match');
   ok(uw.priorSectionFor('', 'AISI') === null && uw.priorSectionFor(deliverable, '') === null, 'empty inputs are null, never a throw');
   const long = '## AISI\n' + 'x'.repeat(9000);
