@@ -111,6 +111,22 @@ alone away from this chat"* — so the discipline exists and simply was not appl
 NOT changed: a generator-prompt edit at the end of a long session is how tonight's four
 self-inflicted regressions happened. Small, well-understood, and worth doing deliberately.
 
+## ✅ CORRECTION — the saturation fix DOES work; I judged it from n=1
+
+I recorded below (and in fecadd4) that the saturation fix "did not work", on the strength of ONE
+clean post-fix target hitting the pass cap. Wrong call. The very next clean target saturated:
+
+    ASU AI Cloud Innovation Center   6 passes, pass cap      (clean post-fix)
+    Sociotechnical AI Lab (SAIL)     4 passes, SATURATED     (clean post-fix)
+
+Two clean tests, one saturation — against 1-in-6 in the pre-fix window. The door opens; it is not
+unreachable any more. Judging a probabilistic behaviour from a single sample is the same error as
+retiring 3.1 and O11 on measurements aimed at the wrong object: the measurement has to be able to
+SEE the thing before its absence means anything.
+
+The MIN_NEW_CHARS finding below stands independently and is unaffected — 0 of 31 passes fell below
+220 is a fact about the constant, not about the prompt.
+
 ## ⚠ MIN_NEW_CHARS IS DEAD CODE — measured 2026-07-31, needs a number chosen
 
 `lib/research.js:18` `MIN_NEW_CHARS = 220` is the mechanical diminishing-returns door: a deepen
